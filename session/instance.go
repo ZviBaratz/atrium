@@ -60,6 +60,9 @@ type Instance struct {
 	AutoYes bool
 	// Prompt is the initial prompt to pass to the instance on startup
 	Prompt string
+	// PromptQueuedAt records when Prompt was set; used to enforce a delivery timeout
+	// so chatty-startup agents that never reach an idle pane don't stall the first message.
+	PromptQueuedAt time.Time
 
 	// DiffStats stores the current git diff statistics
 	diffStats *git.DiffStats

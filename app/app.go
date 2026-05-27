@@ -1390,11 +1390,17 @@ func deliverReadyPrompts(results []instanceMetaResult) []tea.Cmd {
 		if r.readyForPrompt && r.instance.Prompt != "" {
 			prompt := r.instance.Prompt
 			r.instance.Prompt = ""
+			r.instance.PromptQueuedAt = time.Time{}
 			cmds = append(cmds, sendPromptCmd(r.instance, prompt))
 		}
 	}
 	return cmds
 }
+
+// promptDeliveryTimeout is the maximum time to wait for an agent to reach an idle pane
+// before force-delivering a queued startup prompt. Chatty agents that write continuously
+// on boot would otherwise stall the first message indefinitely.
+const promptDeliveryTimeout = 60 * time.Second
 
 // lostSessionRecoverThreshold is how many consecutive ticks an instance must be seen
 // with a dead tmux session before it is recovered to Paused. Recovery commits any WIP
@@ -1514,7 +1520,10 @@ func tickUpdateMetadataCmd(active []*session.Instance, selected *session.Instanc
 				// Require the pane to not be mid-work to avoid the post-trust
 				// "loading" transition window.
 				if instance.Prompt != "" {
-					r.readyForPrompt = r.state != tmux.PaneWorking && instance.IsReadyForPrompt()
+					timedOut := !instance.PromptQueuedAt.IsZero() &&
+						time.Since(instance.PromptQueuedAt) > promptDeliveryTimeout
+					r.readyForPrompt = timedOut ||
+						(r.state != tmux.PaneWorking && instance.IsReadyForPrompt())
 				}
 				if instance == selected {
 					r.diffStats = instance.ComputeDiff()
@@ -1677,6 +1686,7 @@ func (m *home) createSessionFromForm(prompt string) tea.Cmd {
 		instance.SetBaseBranch(branch)
 	}
 	instance.Prompt = prompt
+	instance.PromptQueuedAt = time.Now()
 	instance.SetStatus(session.Loading)
 	finalizer()
 
