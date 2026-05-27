@@ -112,6 +112,14 @@ func (l *List) groupNeedsInputCount(start, end int) int {
 	return n
 }
 
+// filterBarStyle renders the incremental search bar that appears below the list header
+// when a filter is active.
+var filterBarStyle = lipgloss.NewStyle().
+	Foreground(lipgloss.AdaptiveColor{Light: "#555555", Dark: "#aaaaaa"})
+
+var filterBarActiveStyle = lipgloss.NewStyle().
+	Foreground(lipgloss.AdaptiveColor{Light: "#1a1a1a", Dark: "#ffffff"})
+
 type List struct {
 	items         []*session.Instance
 	selectedIdx   int
@@ -123,6 +131,14 @@ type List struct {
 	// derived from items. All reads go through effectiveCollapsed so the "only meaningful
 	// with >1 repo" rule is enforced in exactly one place.
 	collapsed map[string]bool
+
+	// filterQuery is the current incremental filter string. Items whose DisplayName and
+	// Branch both fail a case-insensitive contains check are hidden exactly like collapsed
+	// group members — isHidden returns true for them. An empty string disables filtering.
+	filterQuery string
+	// filterActive is true while the user is actively typing the filter (stateFilter in
+	// app.go). It controls the cursor indicator in the filter bar.
+	filterActive bool
 }
 
 func NewList(spinner *spinner.Model, autoYes bool) *List {
@@ -132,6 +148,38 @@ func NewList(spinner *spinner.Model, autoYes bool) *List {
 		autoyes:   autoYes,
 		collapsed: map[string]bool{},
 	}
+}
+
+// SetFilter updates the incremental filter query and clamps the selection to the
+// nearest still-visible item. Pass an empty string to disable filtering.
+func (l *List) SetFilter(query string) {
+	l.filterQuery = query
+	l.clampSelectionToNavigable()
+}
+
+// ClearFilter resets both the filter query and the active state.
+func (l *List) ClearFilter() {
+	l.filterQuery = ""
+	l.filterActive = false
+	l.clampSelectionToNavigable()
+}
+
+// FilterQuery returns the current filter string.
+func (l *List) FilterQuery() string { return l.filterQuery }
+
+// SetFilterActive sets whether the user is currently typing the filter. This drives
+// the cursor indicator in the rendered filter bar.
+func (l *List) SetFilterActive(active bool) { l.filterActive = active }
+
+// filterMatches reports whether an instance should be shown given the current filter.
+// The match is a case-insensitive substring check against DisplayName and Branch.
+func (l *List) filterMatches(i *session.Instance) bool {
+	if l.filterQuery == "" {
+		return true
+	}
+	q := strings.ToLower(l.filterQuery)
+	return strings.Contains(strings.ToLower(i.DisplayName()), q) ||
+		strings.Contains(strings.ToLower(i.Branch), q)
 }
 
 // SetSize sets the OUTER height and width of the list (including its panel
@@ -328,6 +376,21 @@ func (l *List) String() string {
 		start := len(lines)
 		lines = append(lines, strings.Split(s, "\n")...)
 		return start
+	}
+
+	// Render the filter bar as the first line(s) when a query is present or the user is
+	// actively typing. Appending here keeps appendBlock's selStart/selH bookkeeping correct
+	// for the rows that follow.
+	if l.filterQuery != "" || l.filterActive {
+		cursor := ""
+		if l.filterActive {
+			cursor = "▌"
+		}
+		style := filterBarStyle
+		if l.filterActive {
+			style = filterBarActiveStyle
+		}
+		lines = append(lines, style.Render(" / "+l.filterQuery+cursor), "")
 	}
 
 	// Render the list group by group, in the user's existing (reorderable) order. Headers are
@@ -614,9 +677,13 @@ func (l *List) effectiveCollapsed(key string) bool {
 	return l.distinctRepoCount() > 1 && l.collapsed[key]
 }
 
-// isHidden reports whether the item at idx is suppressed from view: a member of a collapsed
-// group other than its first item (the anchor), which stands in for the whole group.
+// isHidden reports whether the item at idx is suppressed from view. An item is hidden
+// when it is a non-anchor member of a collapsed group, OR when the active filter query
+// does not match the item's DisplayName or Branch.
 func (l *List) isHidden(idx int) bool {
+	if l.filterQuery != "" && !l.filterMatches(l.items[idx]) {
+		return true
+	}
 	if !l.effectiveCollapsed(repoKey(l.items[idx])) {
 		return false
 	}

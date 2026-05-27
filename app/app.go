@@ -51,6 +51,9 @@ const (
 	stateConfirm
 	// stateRename is the state when the user is editing a session's display label.
 	stateRename
+	// stateFilter is the state when the user is typing an incremental filter query
+	// to narrow the session list by DisplayName / Branch.
+	stateFilter
 )
 
 type home struct {
@@ -141,6 +144,10 @@ type home struct {
 	// generatingName guards against launching a second auto-name request while one
 	// is already in flight, and drives the "Generating name…" hint-bar state.
 	generatingName bool
+
+	// filterQuery is the current incremental session-list filter string. It is maintained
+	// here and kept in sync with list.SetFilter so that Esc can restore it correctly.
+	filterQuery string
 }
 
 func newHome(ctx context.Context, program string, autoYes bool) *home {
@@ -449,7 +456,7 @@ func (m *home) handleMenuHighlighting(msg tea.KeyMsg) (cmd tea.Cmd, returnEarly 
 		m.keySent = false
 		return nil, false
 	}
-	if m.state == statePrompt || m.state == stateHelp || m.state == stateConfirm || m.state == stateRename {
+	if m.state == statePrompt || m.state == stateHelp || m.state == stateConfirm || m.state == stateRename || m.state == stateFilter {
 		return nil, false
 	}
 	// If it's in the global keymap, we should try to highlight it.
@@ -688,6 +695,41 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		return m, m.instanceChanged()
 	}
 
+	// Handle filter state. This must run before the global quit handling so that
+	// printable keys and Esc update the filter instead of quitting.
+	if m.state == stateFilter {
+		switch msg.String() {
+		case "esc":
+			// Esc clears the filter and returns to default.
+			m.filterQuery = ""
+			m.list.ClearFilter()
+			m.state = stateDefault
+			m.menu.SetState(ui.StateDefault)
+			return m, m.instanceChanged()
+		case "enter", "down", "j":
+			// Accept the current query and move focus to the filtered list.
+			m.list.SetFilterActive(false)
+			m.state = stateDefault
+			m.menu.SetState(ui.StateDefault)
+			return m, m.instanceChanged()
+		case "backspace", "ctrl+h":
+			if len(m.filterQuery) > 0 {
+				// Remove the last rune (handles multi-byte correctly).
+				runes := []rune(m.filterQuery)
+				m.filterQuery = string(runes[:len(runes)-1])
+				m.list.SetFilter(m.filterQuery)
+			}
+			return m, m.instanceChanged()
+		default:
+			// Append printable characters to the filter query.
+			if len(msg.Runes) > 0 {
+				m.filterQuery += string(msg.Runes)
+				m.list.SetFilter(m.filterQuery)
+			}
+			return m, m.instanceChanged()
+		}
+	}
+
 	// Exit scrolling mode when ESC is pressed and preview pane is in scrolling mode
 	// Check if Escape key was pressed and we're not in the diff tab (meaning we're in preview tab)
 	// Always check for escape key first to ensure it doesn't get intercepted elsewhere
@@ -849,6 +891,13 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		// Show confirmation modal
 		message := fmt.Sprintf("[!] Kill session '%s'?", selected.DisplayName())
 		return m, m.confirmAction(message, killAction)
+	case keys.KeyFilter:
+		m.filterQuery = ""
+		m.list.SetFilter("")
+		m.list.SetFilterActive(true)
+		m.state = stateFilter
+		m.menu.SetState(ui.StatePrompt)
+		return m, m.instanceChanged()
 	case keys.KeyRename:
 		selected := m.list.GetSelectedInstance()
 		if selected == nil || selected.Status == session.Loading {
