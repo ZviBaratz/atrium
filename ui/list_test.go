@@ -5,6 +5,7 @@ import (
 	"github.com/ZviBaratz/atrium/session/git"
 	"github.com/ZviBaratz/atrium/ui/theme"
 	"testing"
+	"time"
 
 	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/stretchr/testify/require"
@@ -175,4 +176,37 @@ func TestList_RendersDisplayLabel(t *testing.T) {
 	// Once a cosmetic label is set, the list shows it in place of the Title.
 	l.items[0].SetDisplayName("renamed")
 	require.Contains(t, l.String(), "renamed", "shows the custom label when set")
+}
+
+func TestFmtAge(t *testing.T) {
+	require.Equal(t, "", fmtAge(time.Time{}), "zero time returns empty string")
+	require.Equal(t, "", fmtAge(time.Now().Add(-30*time.Second)), "sub-minute returns empty string")
+	require.Equal(t, "5m", fmtAge(time.Now().Add(-5*time.Minute)), "minutes label")
+	require.Equal(t, "2h", fmtAge(time.Now().Add(-2*time.Hour)), "hours label")
+	require.Equal(t, "3d", fmtAge(time.Now().Add(-72*time.Hour)), "days label")
+}
+
+func TestRender_SessionAge(t *testing.T) {
+	t.Cleanup(theme.Set("unicode"))
+	s := spinner.New()
+	r := &InstanceRenderer{spinner: &s}
+	r.setWidth(80)
+
+	inst, err := session.NewInstance(session.InstanceOptions{Title: "t", Path: ".", Program: "echo"})
+	require.NoError(t, err)
+	inst.Branch = "feat/x"
+
+	// Brand-new session (CreatedAt = time.Now()) → no age label.
+	out := r.Render(inst, 0, false)
+	require.NotContains(t, out, "m", "fresh session should not show age")
+
+	// Simulate a 3-hour-old session.
+	inst.CreatedAt = time.Now().Add(-3 * time.Hour)
+	out = r.Render(inst, 0, false)
+	require.Contains(t, out, "3h", "3-hour-old session should show '3h'")
+
+	// Simulate a 2-day-old session.
+	inst.CreatedAt = time.Now().Add(-48 * time.Hour)
+	out = r.Render(inst, 0, false)
+	require.Contains(t, out, "2d", "2-day-old session should show '2d'")
 }

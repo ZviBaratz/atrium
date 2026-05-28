@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
@@ -242,6 +243,25 @@ func (r *InstanceRenderer) setWidth(width int) {
 	r.width = width
 }
 
+// fmtAge formats a time.Time as a compact elapsed-time label: "<N>m", "<N>h", or "<N>d".
+// Sub-minute and zero times return "" so very fresh sessions stay uncluttered.
+func fmtAge(t time.Time) string {
+	if t.IsZero() {
+		return ""
+	}
+	d := time.Since(t)
+	switch {
+	case d < time.Minute:
+		return ""
+	case d < time.Hour:
+		return fmt.Sprintf("%dm", int(d.Minutes()))
+	case d < 24*time.Hour:
+		return fmt.Sprintf("%dh", int(d.Hours()))
+	default:
+		return fmt.Sprintf("%dd", int(d.Hours()/24))
+	}
+}
+
 // stateParts returns the glyph, word, and color describing an instance's status.
 // Running/Loading use the animated spinner frame; the others use theme glyphs.
 func (r *InstanceRenderer) stateParts(i *session.Instance, th *theme.Theme) (glyph, word string, color lipgloss.Color) {
@@ -377,8 +397,17 @@ func (r *InstanceRenderer) Render(i *session.Instance, idx int, selected bool) s
 		}
 		line2 = seg(th.Palette.FgDim).Render(label) + pad(W-runewidth.StringWidth(label))
 	} else {
+		// Faint session-age label (e.g. "2h", "3d") appended after the diff stat.
+		// agePlain carries the leading gap (for width budgeting); ageStyled renders
+		// that gap as a bg-aware pad so the selected-row fill doesn't drop out.
+		var agePlain, ageStyled string
+		if age := fmtAge(i.CreatedAt); age != "" {
+			agePlain = " " + age
+			ageStyled = pad(1) + seg(th.Palette.FgDim).Render(age)
+		}
+
 		// Budget the branch (the only variable-length part) so the line fits W.
-		fixedW := runewidth.StringWidth(g.Branch+" ") + runewidth.StringWidth(gctxPlain) + runewidth.StringWidth(diffPlain)
+		fixedW := runewidth.StringWidth(g.Branch+" ") + runewidth.StringWidth(gctxPlain) + runewidth.StringWidth(diffPlain) + runewidth.StringWidth(agePlain)
 		branchBudget := W - fixedW - 1 // 1 = min gap before the diff stat
 		branch := i.Branch
 		if branchBudget < 1 {
@@ -388,11 +417,12 @@ func (r *InstanceRenderer) Render(i *session.Instance, idx int, selected bool) s
 		}
 		leftPlain := g.Branch + " " + branch + gctxPlain
 		leftStyled := seg(th.Palette.FgDim).Render(g.Branch+" "+branch) + gctxStyled
-		gap2 := W - runewidth.StringWidth(leftPlain) - runewidth.StringWidth(diffPlain)
+		rightPlain2 := diffPlain + agePlain
+		gap2 := W - runewidth.StringWidth(leftPlain) - runewidth.StringWidth(rightPlain2)
 		if gap2 < 1 {
 			gap2 = 1
 		}
-		line2 = leftStyled + pad(gap2) + diffStyled
+		line2 = leftStyled + pad(gap2) + diffStyled + ageStyled
 	}
 
 	// --- Left marker (accent bar when selected) + compose ---
