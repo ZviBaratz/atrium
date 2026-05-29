@@ -512,6 +512,12 @@ func (t *TmuxSession) Attach() (chan struct{}, error) {
 		}
 	}()
 
+	// Snapshot ptmx before the loop so the goroutine writes through a local copy instead
+	// of re-reading the shared t.ptmx field on every keypress. DetachSafely (called by
+	// lost-session recovery) can set t.ptmx = nil from another goroutine while this one is
+	// blocked on os.Stdin.Read; reading the field in the loop would be a data race on that
+	// pointer. (os.File.Write is nil-safe, so the original code raced rather than panicked.)
+	attachedPtmx := t.ptmx
 	go func() {
 		// Close the channel after 50ms
 		timeoutCh := make(chan struct{})
@@ -552,8 +558,10 @@ func (t *TmuxSession) Attach() (chan struct{}, error) {
 				return
 			}
 
-			// Forward other input to tmux
-			_, _ = t.ptmx.Write(buf[:nr])
+			// Forward other input to tmux. If DetachSafely closed the pty, this write
+			// returns a "file already closed" error (discarded) rather than racing on
+			// t.ptmx. attachedPtmx is captured live at Attach time, so it is never nil.
+			_, _ = attachedPtmx.Write(buf[:nr])
 		}
 	}()
 
