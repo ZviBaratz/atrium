@@ -105,9 +105,7 @@ func TestResolveClaudeCandidate(t *testing.T) {
 	claudePath := filepath.Join(tempDir, "claude")
 	require.NoError(t, os.WriteFile(claudePath, []byte("#!/bin/sh\n"), 0o755))
 
-	originalPath := os.Getenv("PATH")
-	os.Setenv("PATH", tempDir+string(os.PathListSeparator)+originalPath)
-	t.Cleanup(func() { os.Setenv("PATH", originalPath) })
+	t.Setenv("PATH", tempDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 
 	// The multi-line body `which claude` prints when `claude` is a zsh function.
 	// The alias regex captures "$?" from `local ret=$?`; that token is not a
