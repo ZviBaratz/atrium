@@ -9,6 +9,7 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/muesli/reflow/truncate"
 )
 
 // Overlay styles read the active theme at render time (package-level style vars
@@ -564,7 +565,7 @@ func (t *TextInputOverlay) Render() string {
 	divider := tiDividerStyle().Render(strings.Repeat("─", innerWidth))
 
 	if t.isCreateForm {
-		return t.renderCreateForm(divider)
+		return t.fitOverlay(t.renderCreateForm(divider), innerWidth)
 	}
 
 	// Plain prompt overlay (the `p` flow): no pickers — just a title, the prompt textarea,
@@ -578,7 +579,59 @@ func (t *TextInputOverlay) Render() string {
 	}
 	content += t.renderEnterButton()
 
-	return tiStyle().Render(content)
+	return t.fitOverlay(content, innerWidth)
+}
+
+// fitOverlay constrains the assembled inner content to the overlay's terminal share
+// before drawing the bordered box. Two invariants matter: the composed View() must
+// never be wider or taller than the terminal, or PlaceOverlay spills past the screen
+// and bubbletea's line-diffing desyncs (stale fragments, a mis-placed popup).
+//
+//   - Width: every line is truncated to innerWidth, so a long value (e.g. a deep
+//     project path or profile command) can never widen the box past t.width. The
+//     dividers, already innerWidth wide, anchor the box to a stable width.
+//   - Height: the create form's constant-height sections can total a row or two more
+//     than a short terminal (an 80×24 screen with a profile section needs 25 rows).
+//     Blank filler lines are dropped — never real content like the Create button —
+//     until the box fits t.height, so the form compacts instead of scrolling.
+func (t *TextInputOverlay) fitOverlay(content string, innerWidth int) string {
+	lines := strings.Split(content, "\n")
+	for i, l := range lines {
+		if lipgloss.Width(l) > innerWidth {
+			lines[i] = truncate.StringWithTail(l, uint(innerWidth), "…")
+		}
+	}
+	// The bordered, padded box adds 4 rows (border top/bottom + vertical padding),
+	// so the inner content must fit within t.height-4 for the box to fit the screen.
+	if budget := t.height - 4; budget > 0 {
+		lines = dropBlankLinesToFit(lines, budget)
+	}
+	return tiStyle().Render(strings.Join(lines, "\n"))
+}
+
+// dropBlankLinesToFit removes interior blank lines (and only blank lines — leading,
+// trailing, and any line carrying visible content are preserved) until the slice is
+// at most budget lines long or no removable blanks remain. It is the graceful
+// degradation for terminals too short to hold the form at its natural spacing.
+//
+// It never drops visible content, so a terminal shorter than the form's irreducible
+// height (its content rows plus the few unavoidable blanks) still overflows by the
+// residual rows. The supported floor is 24 rows: at 80×24 the create form has enough
+// removable blanks to fit, which TestViewFitsTerminalBounds and the unit tests pin.
+func dropBlankLinesToFit(lines []string, budget int) []string {
+	excess := len(lines) - budget
+	if excess <= 0 {
+		return lines
+	}
+	out := make([]string, 0, len(lines))
+	for i, l := range lines {
+		if excess > 0 && i > 0 && i < len(lines)-1 && lipgloss.Width(l) == 0 {
+			excess--
+			continue
+		}
+		out = append(out, l)
+	}
+	return out
 }
 
 // renderCreateForm renders the unified new-session form. Every section is constant-height
@@ -610,7 +663,7 @@ func (t *TextInputOverlay) renderCreateForm(divider string) string {
 	b.WriteString(tiHintStyle().Render(createFormHelp) + "\n")
 	b.WriteString(t.renderEnterButton())
 
-	return tiStyle().Render(b.String())
+	return b.String()
 }
 
 // renderEnterButton renders the submit button, highlighted when it holds focus.

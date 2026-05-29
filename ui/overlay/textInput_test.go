@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -139,4 +140,107 @@ func TestSessionCreateOverlay_FitsShortTerminal(t *testing.T) {
 			assert.LessOrEqual(t, got, h, "h=%d focus=%d: overlay rendered %d lines, must fit", h, stop, got)
 		}
 	}
+}
+
+// dropBlankLinesToFit is the height-degradation primitive: it must shed interior blank
+// lines down to the budget, but never the first line, the last line, or any line that
+// carries visible content. These invariants are what keep the title and the submit
+// button on screen when the form is compacted.
+func TestDropBlankLinesToFit(t *testing.T) {
+	tests := []struct {
+		name   string
+		lines  []string
+		budget int
+		want   []string
+	}{
+		{
+			name:   "already fits is returned unchanged",
+			lines:  []string{"a", "", "b"},
+			budget: 5,
+			want:   []string{"a", "", "b"},
+		},
+		{
+			name:   "drops interior blanks until it fits",
+			lines:  []string{"title", "", "body", "", "button"},
+			budget: 3,
+			want:   []string{"title", "body", "button"},
+		},
+		{
+			name:   "stops once the budget is met, keeping later blanks",
+			lines:  []string{"title", "", "", "body", "button"},
+			budget: 4,
+			want:   []string{"title", "", "body", "button"},
+		},
+		{
+			name:   "never drops the first or last line even when blank",
+			lines:  []string{"", "body", ""},
+			budget: 1,
+			want:   []string{"", "body", ""},
+		},
+		{
+			name:   "only width-zero lines are removable, never whitespace content",
+			lines:  []string{"title", "   ", "", "button"},
+			budget: 2,
+			want:   []string{"title", "   ", "button"},
+		},
+		{
+			name:   "no removable blanks leaves the slice over budget",
+			lines:  []string{"a", "b", "c", "d"},
+			budget: 2,
+			want:   []string{"a", "b", "c", "d"},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, dropBlankLinesToFit(tc.lines, tc.budget))
+		})
+	}
+}
+
+// fitOverlay's width pass is the second line of defense behind each picker's own
+// SetWidth: a line wider than innerWidth (e.g. a deep project path or profile command
+// the picker did not pre-trim) must be truncated with an ellipsis so the bordered box
+// can never spill past t.width. The integration bounds test cannot provoke this branch
+// because the pickers usually pre-trim, so it is pinned directly here.
+func TestFitOverlay_TruncatesWideLinesToInnerWidth(t *testing.T) {
+	o := NewQuickSendOverlay("Send to foo")
+	o.SetSize(80, 40) // innerWidth = 80 - 6 = 74
+
+	const innerWidth = 74
+	wide := strings.Repeat("x", 200)
+	short := "kept intact"
+	got := o.fitOverlay(wide+"\n"+short, innerWidth)
+
+	// The box is anchored to t.width: no rendered line may exceed it, and the long
+	// line must have been ellipsized rather than passed through whole.
+	for i, l := range strings.Split(got, "\n") {
+		assert.LessOrEqualf(t, lipgloss.Width(l), 80, "line %d wider than terminal", i)
+	}
+	assert.Contains(t, got, "…", "the over-wide line should be ellipsized")
+	assert.NotContains(t, got, wide, "the untruncated 200-char line must not survive")
+	assert.Contains(t, got, short, "a line within innerWidth must pass through untouched")
+}
+
+// fitOverlay's height pass must compact a too-tall body down to t.height by shedding
+// only blank lines, leaving the bordered box within the terminal.
+func TestFitOverlay_CompactsHeightWithinTerminal(t *testing.T) {
+	o := NewQuickSendOverlay("Send to foo")
+	o.SetSize(80, 24) // budget = 24 - 4 = 20 inner rows
+
+	// 30 lines, alternating content and droppable blanks, with content at both ends.
+	parts := []string{"TITLE"}
+	for i := 0; i < 28; i++ {
+		if i%2 == 0 {
+			parts = append(parts, "row")
+		} else {
+			parts = append(parts, "")
+		}
+	}
+	parts = append(parts, "BUTTON")
+
+	got := o.fitOverlay(strings.Join(parts, "\n"), 74)
+
+	assert.LessOrEqual(t, strings.Count(got, "\n")+1, 24, "compacted box must fit the terminal height")
+	assert.Contains(t, got, "TITLE", "first content line must be preserved")
+	assert.Contains(t, got, "BUTTON", "last content line (the action) must be preserved")
 }
