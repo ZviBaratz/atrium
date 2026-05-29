@@ -420,168 +420,135 @@ func TestConfirmationFlowSimulation(t *testing.T) {
 	assert.Contains(t, rendered, "Kill session 'test-session'?")
 }
 
-// TestConfirmActionWithDifferentTypes tests that confirmAction works with different action types
+// TestConfirmActionWithDifferentTypes verifies that confirming an action routes
+// whatever message it returns — nil, an error, or a custom msg — back through the
+// runtime via the command handleKeyPress returns, so Update can dispatch on it.
 func TestConfirmActionWithDifferentTypes(t *testing.T) {
-	h := &home{
-		ctx:       context.Background(),
-		state:     stateDefault,
-		appConfig: config.DefaultConfig(),
+	newHome := func() *home {
+		return &home{
+			ctx:       context.Background(),
+			state:     stateDefault,
+			appConfig: config.DefaultConfig(),
+			menu:      ui.NewMenu(),
+		}
 	}
 
-	t.Run("works with simple action returning nil", func(t *testing.T) {
-		actionCalled := false
-		action := func() tea.Msg {
-			actionCalled = true
+	// confirmAndCollect drives the real flow: stash the action, press the confirm
+	// key, and return the message carried by the resulting command (if any).
+	confirmAndCollect := func(t *testing.T, h *home) tea.Msg {
+		t.Helper()
+		_, cmd := h.handleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("y")})
+		assert.Equal(t, stateDefault, h.state)
+		assert.Nil(t, h.pendingConfirmAction)
+		if cmd == nil {
 			return nil
 		}
+		return cmd()
+	}
 
-		// Set up callback to track action execution
-		actionExecuted := false
-		h.confirmationOverlay = overlay.NewConfirmationOverlay("Test action?")
-		h.confirmationOverlay.OnConfirm = func() {
-			h.state = stateDefault
-			actionExecuted = true
-			action() // Execute the action
-		}
-		h.state = stateConfirm
-
-		// Verify state was set
-		assert.Equal(t, stateConfirm, h.state)
-		assert.NotNil(t, h.confirmationOverlay)
-		assert.False(t, h.confirmationOverlay.Dismissed)
-		assert.NotNil(t, h.confirmationOverlay.OnConfirm)
-
-		// Execute the confirmation callback
-		h.confirmationOverlay.OnConfirm()
-		assert.True(t, actionCalled)
-		assert.True(t, actionExecuted)
+	t.Run("nil result yields a command carrying a nil message", func(t *testing.T) {
+		h := newHome()
+		actionCalled := false
+		_ = h.confirmAction("Test action?", func() tea.Msg {
+			actionCalled = true
+			return nil
+		})
+		msg := confirmAndCollect(t, h)
+		assert.True(t, actionCalled, "action should run on confirm")
+		assert.Nil(t, msg)
 	})
 
-	t.Run("works with action returning error", func(t *testing.T) {
+	t.Run("error result is routed back through the runtime", func(t *testing.T) {
+		h := newHome()
 		expectedErr := fmt.Errorf("test error")
-		action := func() tea.Msg {
-			return expectedErr
-		}
-
-		// Set up callback to track action execution
-		var receivedMsg tea.Msg
-		h.confirmationOverlay = overlay.NewConfirmationOverlay("Error action?")
-		h.confirmationOverlay.OnConfirm = func() {
-			h.state = stateDefault
-			receivedMsg = action() // Execute the action and capture result
-		}
-		h.state = stateConfirm
-
-		// Verify state was set
-		assert.Equal(t, stateConfirm, h.state)
-		assert.NotNil(t, h.confirmationOverlay)
-		assert.False(t, h.confirmationOverlay.Dismissed)
-		assert.NotNil(t, h.confirmationOverlay.OnConfirm)
-
-		// Execute the confirmation callback
-		h.confirmationOverlay.OnConfirm()
-		assert.Equal(t, expectedErr, receivedMsg)
+		_ = h.confirmAction("Error action?", func() tea.Msg { return expectedErr })
+		msg := confirmAndCollect(t, h)
+		err, ok := msg.(error)
+		require.True(t, ok, "expected an error message, got %T", msg)
+		assert.Equal(t, expectedErr, err)
 	})
 
-	t.Run("works with action returning custom message", func(t *testing.T) {
-		action := func() tea.Msg {
-			return instanceChangedMsg{}
-		}
-
-		// Set up callback to track action execution
-		var receivedMsg tea.Msg
-		h.confirmationOverlay = overlay.NewConfirmationOverlay("Custom message action?")
-		h.confirmationOverlay.OnConfirm = func() {
-			h.state = stateDefault
-			receivedMsg = action() // Execute the action and capture result
-		}
-		h.state = stateConfirm
-
-		// Verify state was set
-		assert.Equal(t, stateConfirm, h.state)
-		assert.NotNil(t, h.confirmationOverlay)
-		assert.False(t, h.confirmationOverlay.Dismissed)
-		assert.NotNil(t, h.confirmationOverlay.OnConfirm)
-
-		// Execute the confirmation callback
-		h.confirmationOverlay.OnConfirm()
-		_, ok := receivedMsg.(instanceChangedMsg)
-		assert.True(t, ok, "Expected instanceChangedMsg but got %T", receivedMsg)
+	t.Run("custom message result is routed back through the runtime", func(t *testing.T) {
+		h := newHome()
+		_ = h.confirmAction("Custom message action?", func() tea.Msg { return instanceChangedMsg{} })
+		msg := confirmAndCollect(t, h)
+		_, ok := msg.(instanceChangedMsg)
+		assert.True(t, ok, "expected instanceChangedMsg but got %T", msg)
 	})
 }
 
-// TestMultipleConfirmationsDontInterfere tests that multiple confirmations don't interfere with each other
+// TestMultipleConfirmationsDontInterfere verifies that the single model-owned
+// pendingConfirmAction slot is managed correctly across confirmations: cancelling
+// clears it, and opening a new confirmation replaces any prior pending action so
+// confirming only ever runs the most recently requested one.
 func TestMultipleConfirmationsDontInterfere(t *testing.T) {
-	h := &home{
-		ctx:       context.Background(),
-		state:     stateDefault,
-		appConfig: config.DefaultConfig(),
+	newHome := func() *home {
+		return &home{
+			ctx:       context.Background(),
+			state:     stateDefault,
+			appConfig: config.DefaultConfig(),
+			menu:      ui.NewMenu(),
+		}
 	}
 
-	// First confirmation
-	action1Called := false
-	action1 := func() tea.Msg {
-		action1Called = true
-		return nil
-	}
+	t.Run("cancelling then confirming a new action runs only the second", func(t *testing.T) {
+		h := newHome()
 
-	// Set up first confirmation
-	h.confirmationOverlay = overlay.NewConfirmationOverlay("First action?")
-	firstOnConfirm := func() {
-		h.state = stateDefault
-		action1()
-	}
-	h.confirmationOverlay.OnConfirm = firstOnConfirm
-	h.state = stateConfirm
+		action1Called := false
+		_ = h.confirmAction("First action?", func() tea.Msg {
+			action1Called = true
+			return nil
+		})
+		require.NotNil(t, h.pendingConfirmAction)
 
-	// Verify first confirmation
-	assert.Equal(t, stateConfirm, h.state)
-	assert.NotNil(t, h.confirmationOverlay)
-	assert.False(t, h.confirmationOverlay.Dismissed)
-	assert.NotNil(t, h.confirmationOverlay.OnConfirm)
+		// Cancel the first confirmation: its action must not run.
+		_, cmd := h.handleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("n")})
+		assert.Nil(t, cmd)
+		assert.False(t, action1Called, "cancelled action must not run")
+		assert.Equal(t, stateDefault, h.state)
+		assert.Nil(t, h.pendingConfirmAction)
 
-	// Cancel first confirmation (simulate pressing 'n')
-	keyMsg := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("n")}
-	shouldClose := h.confirmationOverlay.HandleKeyPress(keyMsg)
-	if shouldClose {
-		h.state = stateDefault
-		h.confirmationOverlay = nil
-	}
+		// A second, independent confirmation, this time confirmed.
+		action2Called := false
+		_ = h.confirmAction("Second action?", func() tea.Msg {
+			action2Called = true
+			return fmt.Errorf("action2 error")
+		})
+		require.NotNil(t, h.pendingConfirmAction)
 
-	// Second confirmation with different action
-	action2Called := false
-	action2 := func() tea.Msg {
-		action2Called = true
-		return fmt.Errorf("action2 error")
-	}
+		_, cmd = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("y")})
+		require.NotNil(t, cmd)
+		err, ok := cmd().(error)
+		require.True(t, ok)
+		assert.Equal(t, "action2 error", err.Error())
+		assert.True(t, action2Called)
+		assert.False(t, action1Called, "first action must never run")
+	})
 
-	// Set up second confirmation
-	h.confirmationOverlay = overlay.NewConfirmationOverlay("Second action?")
-	var secondResult tea.Msg
-	secondOnConfirm := func() {
-		h.state = stateDefault
-		secondResult = action2()
-	}
-	h.confirmationOverlay.OnConfirm = secondOnConfirm
-	h.state = stateConfirm
+	t.Run("opening a second confirmation replaces the first pending action", func(t *testing.T) {
+		h := newHome()
 
-	// Verify second confirmation
-	assert.Equal(t, stateConfirm, h.state)
-	assert.NotNil(t, h.confirmationOverlay)
-	assert.False(t, h.confirmationOverlay.Dismissed)
-	assert.NotNil(t, h.confirmationOverlay.OnConfirm)
+		firstCalled := false
+		_ = h.confirmAction("First action?", func() tea.Msg {
+			firstCalled = true
+			return nil
+		})
 
-	// Execute second action to verify it's the correct one
-	h.confirmationOverlay.OnConfirm()
-	err, ok := secondResult.(error)
-	assert.True(t, ok)
-	assert.Equal(t, "action2 error", err.Error())
-	assert.True(t, action2Called)
-	assert.False(t, action1Called, "First action should not have been called")
+		// Replace it before confirming — the second action overwrites the slot.
+		secondCalled := false
+		_ = h.confirmAction("Second action?", func() tea.Msg {
+			secondCalled = true
+			return nil
+		})
+		require.NotNil(t, h.pendingConfirmAction)
 
-	// Test that cancelled action can still be executed independently
-	firstOnConfirm()
-	assert.True(t, action1Called, "First action should be callable after being replaced")
+		_, cmd := h.handleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("y")})
+		if cmd != nil {
+			cmd()
+		}
+		assert.True(t, secondCalled, "the replacement action should run")
+		assert.False(t, firstCalled, "the replaced action must not run")
+	})
 }
 
 // TestConfirmActionSurfacesActionResult locks in the fix for silently-swallowed
