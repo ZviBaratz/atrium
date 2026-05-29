@@ -1,8 +1,14 @@
 package ui
 
-import "github.com/charmbracelet/lipgloss"
+import (
+	"github.com/ZviBaratz/atrium/ui/theme"
 
-var FallBackText = lipgloss.JoinVertical(lipgloss.Center, `
+	"github.com/charmbracelet/lipgloss"
+)
+
+// fallbackArt is the raw "CLAUDE SQUAD" wordmark shown in empty preview/terminal
+// panes. It is colored at render time by FallbackBanner so it follows the theme.
+var fallbackArt = lipgloss.JoinVertical(lipgloss.Center, `
 ░█████╗░██╗░░░░░░█████╗░██╗░░░██╗██████╗░███████╗
 ██╔══██╗██║░░░░░██╔══██╗██║░░░██║██╔══██╗██╔════╝
 ██║░░╚═╝██║░░░░░███████║██║░░░██║██║░░██║█████╗░░
@@ -16,3 +22,8 @@ var FallBackText = lipgloss.JoinVertical(lipgloss.Center, `
 ░╚═══██╗╚██████╔╝██║░░░██║██╔══██║██║░░██║
 ██████╔╝░╚═██╔═╝░╚██████╔╝██║░░██║██████╔╝
 `)
+
+// FallbackBanner returns the wordmark colored in the active theme's accent hue.
+func FallbackBanner() string {
+	return theme.Current().PurpleStyle().Render(fallbackArt)
+}

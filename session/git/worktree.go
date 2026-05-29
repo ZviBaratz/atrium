@@ -1,10 +1,11 @@
 package git
 
 import (
-	"claude-squad/config"
-	"claude-squad/log"
 	"fmt"
+	"github.com/ZviBaratz/atrium/config"
+	"github.com/ZviBaratz/atrium/log"
 	"path/filepath"
+	"sync"
 	"time"
 )
 
@@ -19,6 +20,10 @@ func getWorktreeDirectory() (string, error) {
 
 // GitWorktree manages git worktree operations for a session
 type GitWorktree struct {
+	// mu guards the fields a deep Rename mutates (worktreePath, branchName, sessionName)
+	// against the metadata poll loop, which reads them from a background goroutine. Held
+	// for writes only during the in-place field swap, never across a git subprocess.
+	mu sync.RWMutex
 	// Path to the repository
 	repoPath string
 	// Path to the worktree
@@ -118,11 +123,15 @@ func (g *GitWorktree) IsExistingBranch() bool {
 
 // GetWorktreePath returns the path to the worktree
 func (g *GitWorktree) GetWorktreePath() string {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
 	return g.worktreePath
 }
 
 // GetBranchName returns the name of the branch associated with this worktree
 func (g *GitWorktree) GetBranchName() string {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
 	return g.branchName
 }
 

@@ -1,135 +1,119 @@
 package app
 
 import (
-	"claude-squad/log"
-	"claude-squad/session"
-	"claude-squad/ui"
-	"claude-squad/ui/overlay"
-	"fmt"
+	"github.com/ZviBaratz/atrium/log"
+	"github.com/ZviBaratz/atrium/ui"
+	"github.com/ZviBaratz/atrium/ui/overlay"
+	"github.com/ZviBaratz/atrium/ui/theme"
+	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/mattn/go-runewidth"
 )
 
 type helpText interface {
 	// toContent returns the help UI content.
 	toContent() string
-	// mask returns the bit mask for this help text. These are used to track which help screens
-	// have been seen in the config and app state.
+	// mask returns the bit mask used to track which one-time screens have been
+	// seen (persisted in app state). Screens with alwaysShow ignore it.
 	mask() uint32
 }
 
+// helpTypeGeneral is the on-demand cheatsheet (opened with '?').
 type helpTypeGeneral struct{}
 
-type helpTypeInstanceStart struct {
-	instance *session.Instance
-}
+// helpTypeWelcome is the one-time welcome shown on first launch ever.
+type helpTypeWelcome struct{}
 
-type helpTypeInstanceAttach struct{}
+// Help styles read the active theme at render time.
+func helpTitleStyle() lipgloss.Style  { return theme.Current().PurpleStyle().Bold(true).Underline(true) }
+func helpHeaderStyle() lipgloss.Style { return theme.Current().CyanStyle().Bold(true) }
+func helpKeyStyle() lipgloss.Style    { return theme.Current().AttentionStyle().Bold(true) }
+func helpDescStyle() lipgloss.Style   { return theme.Current().FgStyle() }
+func helpDimStyle() lipgloss.Style    { return theme.Current().DimStyle() }
 
-type helpTypeInstanceCheckout struct{}
-
-func helpStart(instance *session.Instance) helpText {
-	return helpTypeInstanceStart{instance: instance}
+// helpRow formats a "key   description" line with the key column padded to a
+// fixed width so descriptions align.
+func helpRow(key, desc string) string {
+	const keyCol = 12
+	pad := keyCol - runewidth.StringWidth(key)
+	if pad < 1 {
+		pad = 1
+	}
+	return helpKeyStyle().Render(key) + strings.Repeat(" ", pad) + helpDescStyle().Render(desc)
 }
 
 func (h helpTypeGeneral) toContent() string {
-	content := lipgloss.JoinVertical(lipgloss.Left,
-		titleStyle.Render("Claude Squad"),
-		"",
-		"A terminal UI that manages multiple Claude Code (and other local agents) in separate workspaces.",
-		"",
-		headerStyle.Render("Managing:"),
-		keyStyle.Render("n")+descStyle.Render("         - Create a new session"),
-		keyStyle.Render("N")+descStyle.Render("         - Create a new session with a prompt"),
-		keyStyle.Render("D")+descStyle.Render("         - Kill (delete) the selected session"),
-		keyStyle.Render("↑/j, ↓/k")+descStyle.Render("  - Navigate between sessions"),
-		keyStyle.Render("J/K")+descStyle.Render("       - Reorder sessions"),
-		keyStyle.Render("↵/o")+descStyle.Render("       - Attach to the selected session"),
-		keyStyle.Render("ctrl-q")+descStyle.Render("    - Detach from session"),
-		"",
-		headerStyle.Render("Handoff:"),
-		keyStyle.Render("p")+descStyle.Render("         - Commit and push branch to github"),
-		keyStyle.Render("c")+descStyle.Render("         - Checkout: commit changes and pause session"),
-		keyStyle.Render("r")+descStyle.Render("         - Resume a paused session"),
-		"",
-		headerStyle.Render("Other:"),
-		keyStyle.Render("tab")+descStyle.Render("       - Switch between preview, diff, and terminal tabs"),
-		keyStyle.Render("shift-↓/↑")+descStyle.Render(" - Scroll in preview/diff/terminal view"),
-		keyStyle.Render("q")+descStyle.Render("         - Quit the application"),
+	g := theme.Current().Glyphs
+	legend := helpDimStyle().Render(
+		theme.Current().SuccessStyle().Render(g.Ready) + " ready    " +
+			theme.Current().AttentionStyle().Render(g.Waiting) + " waiting on you    " +
+			theme.Current().BadgeStyle().Render(" "+g.AutoBadge+"AUTO ") + " auto-accepting",
 	)
-	return content
-}
 
-func (h helpTypeInstanceStart) toContent() string {
-	content := lipgloss.JoinVertical(lipgloss.Left,
-		titleStyle.Render("Instance Created"),
+	return lipgloss.JoinVertical(lipgloss.Left,
+		helpTitleStyle().Render("Claude Squad — Keys"),
 		"",
-		descStyle.Render("New session created:"),
-		descStyle.Render(fmt.Sprintf("• Git branch: %s (isolated worktree)",
-			lipgloss.NewStyle().Bold(true).Render(h.instance.Branch))),
-		descStyle.Render(fmt.Sprintf("• %s running in background tmux session",
-			lipgloss.NewStyle().Bold(true).Render(h.instance.Program))),
+		helpHeaderStyle().Render("Navigate"),
+		helpRow("↑/k ↓/j", "move selection"),
+		helpRow("tab / shift-tab", "next / prev pane"),
+		helpRow("shift-↑↓", "scroll the active pane"),
+		helpRow("esc", "exit scroll mode"),
 		"",
-		headerStyle.Render("Managing:"),
-		keyStyle.Render("↵/o")+descStyle.Render("   - Attach to the session to interact with it directly"),
-		keyStyle.Render("tab")+descStyle.Render("   - Switch preview panes to view session diff"),
-		keyStyle.Render("D")+descStyle.Render("     - Kill (delete) the selected session"),
+		helpHeaderStyle().Render("Manage"),
+		helpRow("n", "new session (inline)"),
+		helpRow("N", "new session with a prompt"),
+		helpRow("R", "rename session (label only)"),
+		helpRow("A", "auto-name session (via claude)"),
+		helpRow("D", "kill session"),
 		"",
-		headerStyle.Render("Handoff:"),
-		keyStyle.Render("c")+descStyle.Render("     - Checkout this instance's branch"),
-		keyStyle.Render("p")+descStyle.Render("     - Push branch to GitHub to create a PR"),
+		helpHeaderStyle().Render("Handoff"),
+		helpRow("↵/o", "attach   (ctrl-q to detach)"),
+		helpRow("→", "send a message (without attaching)"),
+		helpRow("c", "checkout: commit changes + pause"),
+		helpRow("p", "commit & push branch"),
+		helpRow("r", "resume a paused session"),
+		"",
+		helpHeaderStyle().Render("Groups"),
+		helpRow("J / K", "reorder within a repo group"),
+		helpRow("{ / }", "move a whole group up / down"),
+		helpRow("space", "collapse / expand group"),
+		helpRow("Z", "collapse / expand all"),
+		"",
+		helpHeaderStyle().Render("Other"),
+		helpRow("?", "toggle this cheatsheet"),
+		helpRow("q", "quit"),
+		"",
+		legend,
+		"",
+		helpDimStyle().Render("press any key to close"),
 	)
-	return content
 }
 
-func (h helpTypeInstanceAttach) toContent() string {
-	content := lipgloss.JoinVertical(lipgloss.Left,
-		titleStyle.Render("Attaching to Instance"),
+func (h helpTypeWelcome) toContent() string {
+	return lipgloss.JoinVertical(lipgloss.Left,
+		helpTitleStyle().Render("Welcome to Claude Squad"),
 		"",
-		descStyle.Render("To detach from a session, press ")+keyStyle.Render("ctrl-q"),
+		helpDescStyle().Render("Run multiple coding agents in parallel — each in its own"),
+		helpDescStyle().Render("git worktree and tmux session, managed from one place."),
+		"",
+		helpRow("n", "start your first session"),
+		helpRow("?", "show all keys, any time"),
+		"",
+		helpDimStyle().Render("press any key to begin"),
 	)
-	return content
 }
 
-func (h helpTypeInstanceCheckout) toContent() string {
-	content := lipgloss.JoinVertical(lipgloss.Left,
-		titleStyle.Render("Checkout Instance"),
-		"",
-		"Changes will be committed locally. The branch name has been copied to your clipboard for you to checkout.",
-		"",
-		"Feel free to make changes to the branch and commit them. When resuming, the session will continue from where you left off.",
-		"",
-		headerStyle.Render("Commands:"),
-		keyStyle.Render("c")+descStyle.Render(" - Checkout: commit changes locally and pause session"),
-		keyStyle.Render("r")+descStyle.Render(" - Resume a paused session"),
-	)
-	return content
-}
-func (h helpTypeGeneral) mask() uint32 {
-	return 1
-}
+func (h helpTypeGeneral) mask() uint32 { return 1 }
 
-func (h helpTypeInstanceStart) mask() uint32 {
-	return 1 << 1
-}
-func (h helpTypeInstanceAttach) mask() uint32 {
-	return 1 << 2
-}
-func (h helpTypeInstanceCheckout) mask() uint32 {
-	return 1 << 3
-}
+// helpTypeWelcome uses bit 4; bits 1-3 belonged to retired teaching modals.
+func (h helpTypeWelcome) mask() uint32 { return 1 << 4 }
 
-var (
-	titleStyle  = lipgloss.NewStyle().Bold(true).Underline(true).Foreground(lipgloss.Color("#7D56F4"))
-	headerStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#36CFC9"))
-	keyStyle    = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#FFCC00"))
-	descStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("#FFFFFF"))
-)
-
-// showHelpScreen displays the help screen overlay if it hasn't been shown before
+// showHelpScreen displays a help overlay. The cheatsheet (helpTypeGeneral)
+// always shows on demand; one-time screens (welcome) show only until their seen
+// bit is set. onDismiss is retained for compatibility but is now always nil.
 func (m *home) showHelpScreen(helpType helpText, onDismiss func()) (tea.Model, tea.Cmd) {
-	// Get the flag for this help type
 	var alwaysShow bool
 	switch helpType.(type) {
 	case helpTypeGeneral:
@@ -138,28 +122,30 @@ func (m *home) showHelpScreen(helpType helpText, onDismiss func()) (tea.Model, t
 
 	flag := helpType.mask()
 
-	// Check if this help screen has been seen before
-	// Only show if we're showing the general help screen or the corresponding flag is not set
-	// in the seen bitmask.
 	if alwaysShow || (m.appState.GetHelpScreensSeen()&flag) == 0 {
-		// Mark this help screen as seen and save state
 		if err := m.appState.SetHelpScreensSeen(m.appState.GetHelpScreensSeen() | flag); err != nil {
 			log.WarningLog.Printf("Failed to save help screen state: %v", err)
 		}
 
-		content := helpType.toContent()
-
-		m.textOverlay = overlay.NewTextOverlay(content)
+		m.textOverlay = overlay.NewTextOverlay(helpType.toContent())
 		m.textOverlay.OnDismiss = onDismiss
 		m.state = stateHelp
 		return m, nil
 	}
 
-	// Skip displaying the help screen
 	if onDismiss != nil {
 		onDismiss()
 	}
 	return m, nil
+}
+
+// maybeShowWelcome shows the one-time welcome overlay on first launch ever.
+func (m *home) maybeShowWelcome() {
+	if m.welcomeChecked {
+		return
+	}
+	m.welcomeChecked = true
+	m.showHelpScreen(helpTypeWelcome{}, nil)
 }
 
 // handleHelpState handles key events when in help state

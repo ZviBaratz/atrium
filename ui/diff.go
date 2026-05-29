@@ -1,24 +1,24 @@
 package ui
 
 import (
-	"claude-squad/session"
-	"claude-squad/session/git"
 	"fmt"
+	"github.com/ZviBaratz/atrium/session"
+	"github.com/ZviBaratz/atrium/session/git"
+	"github.com/ZviBaratz/atrium/ui/theme"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/viewport"
 	"github.com/charmbracelet/lipgloss"
 )
 
-var (
-	AdditionStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#22c55e"))
-	DeletionStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#ef4444"))
-	HunkStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("#0ea5e9"))
-	// MetaStyle is muted: progress/status segments shouldn't compete for attention.
-	MetaStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#888888"))
-	// BehindStyle (amber) is the lone attention color — being behind base implies a rebase.
-	BehindStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#d79921"))
-)
+// Diff styles read the active theme at render time. additions are success
+// (green), deletions danger (red), hunk headers cyan, meta/status muted, and
+// "behind base" the lone attention color (amber) since it implies a rebase.
+func additionStyle() lipgloss.Style   { return theme.Current().SuccessStyle() }
+func deletionStyle() lipgloss.Style   { return theme.Current().DangerStyle() }
+func hunkStyle() lipgloss.Style       { return theme.Current().CyanStyle() }
+func metaStyle() lipgloss.Style       { return theme.Current().DimStyle() }
+func diffBehindStyle() lipgloss.Style { return theme.Current().AttentionStyle() }
 
 type DiffPane struct {
 	viewport viewport.Model
@@ -91,8 +91,8 @@ func (d *DiffPane) SetDiff(instance *session.Instance) {
 		d.diff = ""
 		d.viewport.SetContent(centeredFallbackMessage)
 	} else {
-		additions := AdditionStyle.Render(fmt.Sprintf("%d additions(+)", stats.Added))
-		deletions := DeletionStyle.Render(fmt.Sprintf("%d deletions(-)", stats.Removed))
+		additions := additionStyle().Render(fmt.Sprintf("%d additions(+)", stats.Added))
+		deletions := deletionStyle().Render(fmt.Sprintf("%d deletions(-)", stats.Removed))
 		lineStats := lipgloss.JoinHorizontal(lipgloss.Center, additions, " ", deletions)
 		if header := gitContextHeader(instance, stats); header != "" {
 			d.stats = lipgloss.JoinVertical(lipgloss.Left, header, lineStats)
@@ -116,28 +116,28 @@ func gitContextHeader(instance *session.Instance, stats *git.DiffStats) string {
 	var segs []string
 	if branch := instance.Branch; branch != "" {
 		if baseRef != "" {
-			segs = append(segs, MetaStyle.Render(fmt.Sprintf("%s ← %s", baseRef, branch)))
+			segs = append(segs, metaStyle().Render(fmt.Sprintf("%s ← %s", baseRef, branch)))
 		} else {
-			segs = append(segs, MetaStyle.Render(branch))
+			segs = append(segs, metaStyle().Render(branch))
 		}
 	}
 	if stats.FilesChanged > 0 {
-		segs = append(segs, MetaStyle.Render(fmt.Sprintf("%s changed", pluralize(stats.FilesChanged, "file"))))
+		segs = append(segs, metaStyle().Render(fmt.Sprintf("%s changed", pluralize(stats.FilesChanged, "file"))))
 	}
 	if stats.Commits > 0 {
-		segs = append(segs, MetaStyle.Render(fmt.Sprintf("⇡%s", pluralize(stats.Commits, "commit"))))
+		segs = append(segs, metaStyle().Render(fmt.Sprintf("⇡%s", pluralize(stats.Commits, "commit"))))
 	}
 	if stats.Behind > 0 {
-		segs = append(segs, BehindStyle.Render(fmt.Sprintf("⇣%d behind", stats.Behind)))
+		segs = append(segs, diffBehindStyle().Render(fmt.Sprintf("⇣%d behind", stats.Behind)))
 	}
 	if stats.Dirty {
-		segs = append(segs, MetaStyle.Render("uncommitted"))
+		segs = append(segs, metaStyle().Render("uncommitted"))
 	}
 
 	if len(segs) == 0 {
 		return ""
 	}
-	return strings.Join(segs, MetaStyle.Render("  ·  "))
+	return strings.Join(segs, metaStyle().Render("  ·  "))
 }
 
 // pluralize formats a count with a singular/plural noun (e.g. "1 file", "3 files").
@@ -170,13 +170,13 @@ func colorizeDiff(diff string) string {
 		if len(line) > 0 {
 			if strings.HasPrefix(line, "@@") {
 				// Color hunk headers cyan
-				coloredOutput.WriteString(HunkStyle.Render(line) + "\n")
+				coloredOutput.WriteString(hunkStyle().Render(line) + "\n")
 			} else if line[0] == '+' && (len(line) == 1 || line[1] != '+') {
 				// Color added lines green, excluding metadata like '+++'
-				coloredOutput.WriteString(AdditionStyle.Render(line) + "\n")
+				coloredOutput.WriteString(additionStyle().Render(line) + "\n")
 			} else if line[0] == '-' && (len(line) == 1 || line[1] != '-') {
 				// Color removed lines red, excluding metadata like '---'
-				coloredOutput.WriteString(DeletionStyle.Render(line) + "\n")
+				coloredOutput.WriteString(deletionStyle().Render(line) + "\n")
 			} else {
 				// Print metadata and unchanged lines without color
 				coloredOutput.WriteString(line + "\n")

@@ -1,7 +1,8 @@
 package overlay
 
 import (
-	"claude-squad/config"
+	"github.com/ZviBaratz/atrium/config"
+	"github.com/ZviBaratz/atrium/ui/theme"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -72,39 +73,34 @@ func (pp *ProfilePicker) HasMultiple() bool {
 	return len(pp.profiles) > 1
 }
 
-var (
-	ppLabelStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("62")).
-			Bold(true)
-
-	ppSelectedStyle = lipgloss.NewStyle().
-			Background(lipgloss.Color("62")).
-			Foreground(lipgloss.Color("0"))
-
-	ppDimStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("240"))
-)
+func ppLabelStyle() lipgloss.Style { return theme.Current().AccentStyle().Bold(true) }
+func ppSelectedStyle() lipgloss.Style {
+	return lipgloss.NewStyle().
+		Background(theme.Current().Palette.Accent).
+		Foreground(theme.Current().Palette.Bg)
+}
+func ppDimStyle() lipgloss.Style { return theme.Current().DimStyle() }
 
 // Render renders the profile picker.
 func (pp *ProfilePicker) Render() string {
 	var s strings.Builder
-	s.WriteString(ppLabelStyle.Render("Profile"))
+	s.WriteString(ppLabelStyle().Render("Profile"))
 
 	if pp.HasMultiple() && pp.focused {
-		s.WriteString(ppDimStyle.Render("  ↑↓ to change"))
+		s.WriteString(ppDimStyle().Render("  ↑↓ to change"))
 	}
 	s.WriteString("\n\n")
 
 	for i, p := range pp.profiles {
 		if i == pp.cursor && pp.focused {
-			s.WriteString(ppSelectedStyle.Render(" " + p.Name + " "))
+			s.WriteString(ppSelectedStyle().Render(" " + p.Name + " "))
 		} else if i == pp.cursor {
 			s.WriteString(" " + p.Name + " ")
 		} else {
-			s.WriteString(ppDimStyle.Render(" " + p.Name + " "))
+			s.WriteString(ppDimStyle().Render(" " + p.Name + " "))
 		}
 		if i < len(pp.profiles)-1 {
-			s.WriteString(ppDimStyle.Render(" | "))
+			s.WriteString(ppDimStyle().Render(" | "))
 		}
 	}
 

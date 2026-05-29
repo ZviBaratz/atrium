@@ -1,16 +1,22 @@
 package ui
 
 import (
-	"claude-squad/session"
 	"fmt"
+	"github.com/ZviBaratz/atrium/session"
+	"github.com/ZviBaratz/atrium/ui/theme"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/viewport"
 	"github.com/charmbracelet/lipgloss"
 )
 
-var previewPaneStyle = lipgloss.NewStyle().
-	Foreground(lipgloss.AdaptiveColor{Light: "#1a1a1a", Dark: "#dddddd"})
+// previewPaneStyle reads the active theme at render time.
+func previewPaneStyle() lipgloss.Style { return theme.Current().FgStyle() }
+
+// scrollExitFooter is the dim hint shown at the bottom of the scroll viewport.
+func scrollExitFooter() string {
+	return theme.Current().DimStyle().Render("ESC to exit scroll mode")
+}
 
 type PreviewPane struct {
 	width  int
@@ -45,7 +51,7 @@ func (p *PreviewPane) SetSize(width, maxHeight int) {
 func (p *PreviewPane) setFallbackState(message string) {
 	p.previewState = previewState{
 		fallback: true,
-		text:     lipgloss.JoinVertical(lipgloss.Center, FallBackText, "", message),
+		text:     lipgloss.JoinVertical(lipgloss.Center, FallbackBanner(), "", message),
 	}
 }
 
@@ -62,11 +68,7 @@ func (p *PreviewPane) UpdateContent(instance *session.Instance) error {
 		p.setFallbackState(lipgloss.JoinVertical(lipgloss.Center,
 			"Session is paused. Press 'r' to resume.",
 			"",
-			lipgloss.NewStyle().
-				Foreground(lipgloss.AdaptiveColor{
-					Light: "#FFD700",
-					Dark:  "#FFD700",
-				}).
+			theme.Current().AttentionStyle().
 				Render(fmt.Sprintf(
 					"The instance can be checked out at '%s' (copied to your clipboard)",
 					instance.Branch,
@@ -87,9 +89,7 @@ func (p *PreviewPane) UpdateContent(instance *session.Instance) error {
 		}
 
 		// Set content in the viewport
-		footer := lipgloss.NewStyle().
-			Foreground(lipgloss.AdaptiveColor{Light: "#808080", Dark: "#808080"}).
-			Render("ESC to exit scroll mode")
+		footer := scrollExitFooter()
 
 		p.viewport.SetContent(lipgloss.JoinVertical(lipgloss.Left, content, footer))
 	} else if !p.isScrolling {
@@ -148,7 +148,7 @@ func (p *PreviewPane) String() string {
 		}
 
 		// Center both vertically and horizontally
-		return previewPaneStyle.
+		return previewPaneStyle().
 			Width(p.width).
 			Align(lipgloss.Center).
 			Render(strings.Join(lines, ""))
@@ -178,7 +178,7 @@ func (p *PreviewPane) String() string {
 	}
 
 	content := strings.Join(lines, "\n")
-	rendered := previewPaneStyle.Width(p.width).Render(content)
+	rendered := previewPaneStyle().Width(p.width).Render(content)
 	return rendered
 }
 
@@ -196,9 +196,7 @@ func (p *PreviewPane) ScrollUp(instance *session.Instance) error {
 		}
 
 		// Set content in the viewport
-		footer := lipgloss.NewStyle().
-			Foreground(lipgloss.AdaptiveColor{Light: "#808080", Dark: "#808080"}).
-			Render("ESC to exit scroll mode")
+		footer := scrollExitFooter()
 
 		contentWithFooter := lipgloss.JoinVertical(lipgloss.Left, content, footer)
 		p.viewport.SetContent(contentWithFooter)
@@ -229,9 +227,7 @@ func (p *PreviewPane) ScrollDown(instance *session.Instance) error {
 		}
 
 		// Set content in the viewport
-		footer := lipgloss.NewStyle().
-			Foreground(lipgloss.AdaptiveColor{Light: "#808080", Dark: "#808080"}).
-			Render("ESC to exit scroll mode")
+		footer := scrollExitFooter()
 
 		contentWithFooter := lipgloss.JoinVertical(lipgloss.Left, content, footer)
 		p.viewport.SetContent(contentWithFooter)

@@ -1,11 +1,11 @@
 package app
 
 import (
-	"claude-squad/config"
-	"claude-squad/session"
-	"claude-squad/session/git"
-	"claude-squad/ui"
 	"context"
+	"github.com/ZviBaratz/atrium/config"
+	"github.com/ZviBaratz/atrium/session"
+	"github.com/ZviBaratz/atrium/session/git"
+	"github.com/ZviBaratz/atrium/ui"
 	"os"
 	"path/filepath"
 	"testing"

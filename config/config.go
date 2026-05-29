@@ -1,9 +1,9 @@
 package config
 
 import (
-	"claude-squad/log"
 	"encoding/json"
 	"fmt"
+	"github.com/ZviBaratz/atrium/log"
 	"os"
 	"os/exec"
 	"os/user"
@@ -17,13 +17,27 @@ const (
 	defaultProgram = "claude"
 )
 
-// GetConfigDir returns the path to the application's configuration directory
+// GetConfigDir returns the path to the application's data/config directory.
+//
+// It prefers the new ~/.atrium layout, falls back to an existing legacy
+// ~/.claude-squad directory without moving it, and otherwise defaults to
+// ~/.atrium for fresh installs. The directory holds config.json, state.json, and
+// the worktrees/ tree; the worktree and tmux paths recorded inside are absolute,
+// so a legacy install must keep using its existing directory rather than be
+// migrated. See RuntimeName for the matching tmux/socket identifiers.
 func GetConfigDir() (string, error) {
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
 		return "", fmt.Errorf("failed to get config home directory: %w", err)
 	}
-	return filepath.Join(homeDir, ".claude-squad"), nil
+	newDir := filepath.Join(homeDir, configDirName)
+	if dirExists(newDir) {
+		return newDir, nil
+	}
+	if legacy := filepath.Join(homeDir, legacyConfigDirName); dirExists(legacy) {
+		return legacy, nil
+	}
+	return newDir, nil
 }
 
 // Profile represents a named program configuration
@@ -44,6 +58,25 @@ type Config struct {
 	BranchPrefix string `json:"branch_prefix"`
 	// Profiles is a list of named program profiles.
 	Profiles []Profile `json:"profiles,omitempty"`
+	// TmuxConfigOverride, when set to an existing file path, is used as the tmux
+	// config for cs sessions instead of the bundled managed config. When empty,
+	// cs materializes and uses its own config.
+	TmuxConfigOverride string `json:"tmux_config_override,omitempty"`
+	// AutoAttach, when true, automatically attaches to a new session as soon as it
+	// starts (and has no initial prompt). nil means use the default (on), so the
+	// feature stays enabled for config files written before it existed.
+	AutoAttach *bool `json:"auto_attach,omitempty"`
+	// Theme selects the UI color/glyph theme by name (see ui/theme registry:
+	// "tokyo-night", "catppuccin-mocha", "unicode"). Empty falls back to the
+	// default. The "unicode" theme avoids Nerd-Font glyphs for terminals
+	// without a patched font.
+	Theme string `json:"theme,omitempty"`
+}
+
+// GetAutoAttach reports whether new sessions should auto-attach on creation.
+// A nil AutoAttach (e.g. an older config file with no such key) defaults to on.
+func (c *Config) GetAutoAttach() bool {
+	return c.AutoAttach == nil || *c.AutoAttach
 }
 
 // GetProgram returns the program to run. If Profiles is non-empty and
@@ -89,10 +122,12 @@ func DefaultConfig() *Config {
 		program = defaultProgram
 	}
 
+	autoAttach := true
 	return &Config{
 		DefaultProgram:     program,
 		AutoYes:            false,
 		DaemonPollInterval: 1000,
+		Theme:              "tokyo-night",
 		BranchPrefix: func() string {
 			user, err := user.Current()
 			if err != nil || user == nil || user.Username == "" {
@@ -101,6 +136,7 @@ func DefaultConfig() *Config {
 			}
 			return fmt.Sprintf("%s/", strings.ToLower(user.Username))
 		}(),
+		AutoAttach: &autoAttach,
 	}
 }
 

@@ -46,3 +46,13 @@ func TestState_RecentPathsRoundTrip(t *testing.T) {
 	loaded := LoadState()
 	assert.Equal(t, []string{"/y", "/x"}, loaded.GetRecentPaths())
 }
+
+func TestState_CollapsedReposRoundTrip(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	s := DefaultState()
+	require.NoError(t, s.SetCollapsedRepos([]string{"repoA", "repoB"}))
+
+	loaded := LoadState()
+	assert.Equal(t, []string{"repoA", "repoB"}, loaded.GetCollapsedRepos())
+}

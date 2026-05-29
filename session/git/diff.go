@@ -36,14 +36,19 @@ func (d *DiffStats) IsEmpty() bool {
 func (g *GitWorktree) Diff() *DiffStats {
 	stats := &DiffStats{}
 
+	// Snapshot the worktree path under the lock so a concurrent deep Rename (which moves
+	// the worktree and swaps the field) can't tear the read. Subsequent git calls run
+	// against the local without holding the lock.
+	wt := g.snapshotWorktreePath()
+
 	// -N stages untracked files (intent to add), including them in the diff
-	_, err := g.runGitCommand(g.worktreePath, "add", "-N", ".")
+	_, err := g.runGitCommand(wt, "add", "-N", ".")
 	if err != nil {
 		stats.Error = err
 		return stats
 	}
 
-	content, err := g.runGitCommand(g.worktreePath, "--no-pager", "diff", g.GetBaseCommitSHA())
+	content, err := g.runGitCommand(wt, "--no-pager", "diff", g.GetBaseCommitSHA())
 	if err != nil {
 		stats.Error = err
 		return stats
@@ -59,7 +64,7 @@ func (g *GitWorktree) Diff() *DiffStats {
 	stats.Content = content
 	stats.FilesChanged = countDiffFiles(content)
 
-	g.computeRepoStats(stats)
+	g.computeRepoStats(stats, wt)
 	return stats
 }
 
@@ -69,14 +74,17 @@ func (g *GitWorktree) Diff() *DiffStats {
 func (g *GitWorktree) DiffNumstat() *DiffStats {
 	stats := &DiffStats{}
 
+	// See Diff: snapshot the worktree path so a concurrent rename can't tear the read.
+	wt := g.snapshotWorktreePath()
+
 	// -N stages untracked files (intent to add), including them in the diff
-	_, err := g.runGitCommand(g.worktreePath, "add", "-N", ".")
+	_, err := g.runGitCommand(wt, "add", "-N", ".")
 	if err != nil {
 		stats.Error = err
 		return stats
 	}
 
-	out, err := g.runGitCommand(g.worktreePath, "--no-pager", "diff", "--numstat", g.GetBaseCommitSHA())
+	out, err := g.runGitCommand(wt, "--no-pager", "diff", "--numstat", g.GetBaseCommitSHA())
 	if err != nil {
 		stats.Error = err
 		return stats
@@ -84,33 +92,45 @@ func (g *GitWorktree) DiffNumstat() *DiffStats {
 
 	stats.Added, stats.Removed, stats.FilesChanged = parseNumstat(out)
 
-	g.computeRepoStats(stats)
+	g.computeRepoStats(stats, wt)
 	return stats
+}
+
+// snapshotWorktreePath reads worktreePath under the read lock so background diff
+// computation can't race the in-place field swap a deep Rename performs.
+func (g *GitWorktree) snapshotWorktreePath() string {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+	return g.worktreePath
 }
 
 // computeRepoStats fills in the commit/behind/dirty fields on stats. It is
 // best-effort: any failure leaves the corresponding field at its zero value and
 // never sets stats.Error, so a hiccup in a cosmetic counter can't blank the diff.
-func (g *GitWorktree) computeRepoStats(stats *DiffStats) {
+// wt is the worktree path snapshotted by the caller under the read lock; baseRef and
+// baseCommitSHA are not mutated by Rename, so they're read directly.
+func (g *GitWorktree) computeRepoStats(stats *DiffStats, wt string) {
 	// A single rev-list gives both "ahead" (session commits) and "behind" (base
 	// advanced) when the base ref is known; fall back to ahead-only otherwise.
 	if g.baseRef != "" {
-		if out, err := g.runGitCommand(g.worktreePath, "rev-list", "--left-right", "--count", g.baseRef+"...HEAD"); err == nil {
+		if out, err := g.runGitCommand(wt, "rev-list", "--left-right", "--count", g.baseRef+"...HEAD"); err == nil {
 			if behind, ahead, ok := parseLeftRightCount(out); ok {
 				stats.Behind = behind
 				stats.Commits = ahead
 			}
 		}
 	} else if g.baseCommitSHA != "" {
-		if out, err := g.runGitCommand(g.worktreePath, "rev-list", "--count", g.baseCommitSHA+"..HEAD"); err == nil {
+		if out, err := g.runGitCommand(wt, "rev-list", "--count", g.baseCommitSHA+"..HEAD"); err == nil {
 			if ahead, aerr := strconv.Atoi(strings.TrimSpace(out)); aerr == nil {
 				stats.Commits = ahead
 			}
 		}
 	}
 
-	if dirty, err := g.IsDirty(); err == nil {
-		stats.Dirty = dirty
+	// Inline the dirtiness check against the snapshotted path rather than calling IsDirty
+	// (which reads g.worktreePath) so this background path never touches the mutable field.
+	if out, err := g.runGitCommand(wt, "status", "--porcelain"); err == nil {
+		stats.Dirty = len(out) > 0
 	}
 }
 

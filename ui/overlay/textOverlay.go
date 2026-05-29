@@ -1,6 +1,8 @@
 package overlay
 
 import (
+	"github.com/ZviBaratz/atrium/ui/theme"
+
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 )
@@ -41,8 +43,8 @@ func (t *TextOverlay) HandleKeyPress(msg tea.KeyMsg) bool {
 func (t *TextOverlay) Render(opts ...WhitespaceOption) string {
 	// Create styles
 	style := lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color("62")).
+		Border(theme.Current().Borders.Style).
+		BorderForeground(theme.Current().Palette.Accent).
 		Padding(1, 2).
 		Width(t.width)
 

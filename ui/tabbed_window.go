@@ -1,8 +1,10 @@
 package ui
 
 import (
-	"claude-squad/log"
-	"claude-squad/session"
+	"github.com/ZviBaratz/atrium/log"
+	"github.com/ZviBaratz/atrium/session"
+	"github.com/ZviBaratz/atrium/ui/theme"
+
 	"github.com/charmbracelet/lipgloss"
 )
 
@@ -14,21 +16,31 @@ func tabBorderWithBottom(left, middle, right string) lipgloss.Border {
 	return border
 }
 
-var (
-	inactiveTabBorder = tabBorderWithBottom("┴", "─", "┴")
-	activeTabBorder   = tabBorderWithBottom("┘", " ", "└")
-	highlightColor    = lipgloss.AdaptiveColor{Light: "#874BFD", Dark: "#7D56F4"}
-	inactiveTabStyle  = lipgloss.NewStyle().
-				Border(inactiveTabBorder, true).
-				BorderForeground(highlightColor).
-				AlignHorizontal(lipgloss.Center)
-	activeTabStyle = inactiveTabStyle.
-			Border(activeTabBorder, true).
-			AlignHorizontal(lipgloss.Center)
-	windowStyle = lipgloss.NewStyle().
-			BorderForeground(highlightColor).
-			Border(lipgloss.NormalBorder(), false, true, true, true)
-)
+// Tab/window styles read the active theme at render time. The active tab and
+// the window border use the accent color; inactive tabs recede (faint border,
+// dim label).
+func inactiveTabStyle() lipgloss.Style {
+	return lipgloss.NewStyle().
+		Border(tabBorderWithBottom("┴", "─", "┴"), true).
+		BorderForeground(theme.Current().Palette.FgFaint).
+		Foreground(theme.Current().Palette.FgDim).
+		AlignHorizontal(lipgloss.Center)
+}
+
+func activeTabStyle() lipgloss.Style {
+	return lipgloss.NewStyle().
+		Border(tabBorderWithBottom("┘", " ", "└"), true).
+		BorderForeground(theme.Current().Palette.Accent).
+		Foreground(theme.Current().Palette.Accent).
+		Bold(true).
+		AlignHorizontal(lipgloss.Center)
+}
+
+func windowStyle() lipgloss.Style {
+	return lipgloss.NewStyle().
+		BorderForeground(theme.Current().Palette.Accent).
+		Border(lipgloss.RoundedBorder(), false, true, true, true)
+}
 
 const (
 	PreviewTab int = iota
@@ -73,22 +85,21 @@ func (w *TabbedWindow) SetInstance(instance *session.Instance) {
 	w.instance = instance
 }
 
-// AdjustPreviewWidth adjusts the width of the preview pane to be 90% of the provided width.
-func AdjustPreviewWidth(width int) int {
-	return int(float64(width) * 0.9)
-}
-
 func (w *TabbedWindow) SetSize(width, height int) {
-	w.width = AdjustPreviewWidth(width)
+	// w.width is the inner (pre-border) width; the window border adds its
+	// horizontal frame back, so the pane's total rendered width equals the given
+	// width and the right pane fills its column exactly.
+	w.width = width - windowStyle().GetHorizontalFrameSize()
 	w.height = height
 
 	// Calculate the content height by subtracting:
-	// 1. Tab height (including border and padding)
-	// 2. Window style vertical frame size
-	// 3. Additional padding/spacing (2 for the newline and spacing)
-	tabHeight := activeTabStyle.GetVerticalFrameSize() + 1
-	contentHeight := height - tabHeight - windowStyle.GetVerticalFrameSize() - 2
-	contentWidth := w.width - windowStyle.GetHorizontalFrameSize()
+	// 1. Tab height (tab border top+bottom + 1 label row)
+	// 2. Window style vertical frame size (bottom border)
+	// The tab strip's top border is the pane's visual top edge, so it aligns
+	// with the list panel's top border at row 0 — no leading blank rows.
+	tabHeight := activeTabStyle().GetVerticalFrameSize() + 1
+	contentHeight := height - tabHeight - windowStyle().GetVerticalFrameSize()
+	contentWidth := w.width - windowStyle().GetHorizontalFrameSize()
 
 	w.preview.SetSize(contentWidth, contentHeight)
 	w.diff.SetSize(contentWidth, contentHeight)
@@ -101,6 +112,13 @@ func (w *TabbedWindow) GetPreviewSize() (width, height int) {
 
 func (w *TabbedWindow) Toggle() {
 	w.activeTab = (w.activeTab + 1) % len(w.tabs)
+}
+
+// ToggleReverse cycles to the previous tab, wrapping from the first tab to the
+// last. It is the complement of Toggle. The + len(w.tabs) term keeps the
+// operand non-negative, since Go's % can return a negative result.
+func (w *TabbedWindow) ToggleReverse() {
+	w.activeTab = (w.activeTab - 1 + len(w.tabs)) % len(w.tabs)
 }
 
 // UpdatePreview updates the content of the preview pane. instance may be nil.
@@ -221,10 +239,10 @@ func (w *TabbedWindow) String() string {
 
 	var renderedTabs []string
 
-	totalTabWidth := w.width + windowStyle.GetHorizontalFrameSize()
+	totalTabWidth := w.width + windowStyle().GetHorizontalFrameSize()
 	tabWidth := totalTabWidth / len(w.tabs)
 	lastTabWidth := totalTabWidth - tabWidth*(len(w.tabs)-1)
-	tabHeight := activeTabStyle.GetVerticalFrameSize() + 1 // get padding border margin size + 1 for character height
+	tabHeight := activeTabStyle().GetVerticalFrameSize() + 1 // get padding border margin size + 1 for character height
 
 	for i, t := range w.tabs {
 		width := tabWidth
@@ -235,9 +253,9 @@ func (w *TabbedWindow) String() string {
 		var style lipgloss.Style
 		isFirst, isLast, isActive := i == 0, i == len(w.tabs)-1, i == w.activeTab
 		if isActive {
-			style = activeTabStyle
+			style = activeTabStyle()
 		} else {
-			style = inactiveTabStyle
+			style = inactiveTabStyle()
 		}
 		border, _, _, _, _ := style.GetBorder()
 		if isFirst && isActive {
@@ -264,10 +282,10 @@ func (w *TabbedWindow) String() string {
 	case TerminalTab:
 		content = w.terminal.String()
 	}
-	window := windowStyle.Render(
+	window := windowStyle().Render(
 		lipgloss.Place(
-			w.width, w.height-2-windowStyle.GetVerticalFrameSize()-tabHeight,
+			w.width, w.height-windowStyle().GetVerticalFrameSize()-tabHeight,
 			lipgloss.Left, lipgloss.Top, content))
 
-	return lipgloss.JoinVertical(lipgloss.Left, "\n", row, window)
+	return lipgloss.JoinVertical(lipgloss.Left, row, window)
 }

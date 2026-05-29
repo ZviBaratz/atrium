@@ -1,7 +1,7 @@
 package ui
 
 import (
-	"claude-squad/session"
+	"github.com/ZviBaratz/atrium/session"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -39,12 +39,13 @@ func TestRepoKey_FallsBackToPathBaseWhenUnstarted(t *testing.T) {
 	require.Equal(t, "repoA", repoKey(inst))
 }
 
+// Repo headers are derived from the repos actually present in the list, so a multi-repo list
+// always shows them. newGroupList adds instances without running the start finalizer, which
+// mirrors the churn/migration window where the old incrementally-maintained l.repos counter
+// stayed empty (RepoName errors for not-yet-started instances) and headers wrongly vanished
+// even though the list plainly spanned multiple repos. This is the regression guard for that.
 func TestList_RendersRepoHeadersWhenMultipleRepos(t *testing.T) {
 	l := newGroupList(t, "/tmp/repoA", "/tmp/repoA", "/tmp/repoB")
-	// Simulate two distinct started repos so grouping activates (repos map is normally
-	// populated by the start finalizer).
-	l.repos["repoA"] = 2
-	l.repos["repoB"] = 1
 
 	out := l.String()
 	// Headers are uppercased as section dividers.
@@ -54,12 +55,11 @@ func TestList_RendersRepoHeadersWhenMultipleRepos(t *testing.T) {
 
 func TestList_NoHeadersForSingleRepo(t *testing.T) {
 	l := newGroupList(t, "/tmp/repoA", "/tmp/repoA")
-	l.repos["repoA"] = 2 // single distinct repo → grouping inactive
 
 	out := l.String()
 	// With a single repo no header is emitted, so the uppercased header token must
 	// not appear.
-	require.NotContains(t, out, repoHeaderStyle.Render("REPOA"))
+	require.NotContains(t, out, repoHeaderStyle().Render("REPOA"))
 	_ = strings.TrimSpace(out)
 }
 
@@ -74,8 +74,6 @@ func TestAddInstance_InsertsUnderExistingGroup(t *testing.T) {
 // would emit its header twice; grouped insertion keeps it to one.
 func TestList_NoDuplicateHeaderForInterleavedRepo(t *testing.T) {
 	l := newGroupList(t, "/tmp/repoA", "/tmp/repoB", "/tmp/repoA")
-	l.repos["repoA"] = 2
-	l.repos["repoB"] = 1
 
 	require.Equal(t, 1, strings.Count(l.String(), "REPOA"))
 	require.Equal(t, 1, strings.Count(l.String(), "REPOB"))

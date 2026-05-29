@@ -1,6 +1,8 @@
 package overlay
 
 import (
+	"github.com/ZviBaratz/atrium/ui/theme"
+
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 )
@@ -9,14 +11,12 @@ import (
 type ConfirmationOverlay struct {
 	// Whether the overlay has been dismissed
 	Dismissed bool
+	// Confirmed reports whether the overlay was dismissed by confirming (vs cancelling)
+	Confirmed bool
 	// Message to display in the overlay
 	message string
 	// Width of the overlay
 	width int
-	// Callback function to be called when the user confirms (presses 'y')
-	OnConfirm func()
-	// Callback function to be called when the user cancels (presses 'n' or 'esc')
-	OnCancel func()
 	// Custom confirm key (defaults to 'y')
 	ConfirmKey string
 	// Custom cancel key (defaults to 'n')
@@ -33,7 +33,7 @@ func NewConfirmationOverlay(message string) *ConfirmationOverlay {
 		width:       50, // Default width
 		ConfirmKey:  "y",
 		CancelKey:   "n",
-		borderColor: lipgloss.Color("#de613e"), // Red color for confirmations
+		borderColor: theme.Current().Palette.Danger, // attention/destructive color
 	}
 }
 
@@ -43,15 +43,10 @@ func (c *ConfirmationOverlay) HandleKeyPress(msg tea.KeyMsg) bool {
 	switch msg.String() {
 	case c.ConfirmKey:
 		c.Dismissed = true
-		if c.OnConfirm != nil {
-			c.OnConfirm()
-		}
+		c.Confirmed = true
 		return true
 	case c.CancelKey, "esc":
 		c.Dismissed = true
-		if c.OnCancel != nil {
-			c.OnCancel()
-		}
 		return true
 	default:
 		// Ignore other keys in confirmation state
@@ -62,7 +57,7 @@ func (c *ConfirmationOverlay) HandleKeyPress(msg tea.KeyMsg) bool {
 // Render renders the confirmation overlay
 func (c *ConfirmationOverlay) Render(opts ...WhitespaceOption) string {
 	style := lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
+		Border(theme.Current().Borders.Style).
 		BorderForeground(c.borderColor).
 		Padding(1, 2).
 		Width(c.width)

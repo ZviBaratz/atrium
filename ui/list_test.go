@@ -1,8 +1,9 @@
 package ui
 
 import (
-	"claude-squad/session"
-	"claude-squad/session/git"
+	"github.com/ZviBaratz/atrium/session"
+	"github.com/ZviBaratz/atrium/session/git"
+	"github.com/ZviBaratz/atrium/ui/theme"
 	"testing"
 
 	"github.com/charmbracelet/bubbles/spinner"
@@ -10,9 +11,11 @@ import (
 )
 
 // renderRow renders a single instance row with the given diff stats at a width
-// wide enough that the git-context cluster is never dropped for space.
+// wide enough that the git-context cluster is never dropped for space. It pins
+// the unicode theme so glyph assertions (⇣ ⇡ *) are stable across themes.
 func renderRow(t *testing.T, branch string, stats *git.DiffStats) string {
 	t.Helper()
+	t.Cleanup(theme.Set("unicode"))
 	s := spinner.New()
 	r := &InstanceRenderer{spinner: &s}
 	r.setWidth(80)
@@ -101,4 +104,16 @@ func TestMoveWithSingleItem(t *testing.T) {
 
 	require.False(t, l.MoveUp())
 	require.False(t, l.MoveDown())
+}
+
+func TestList_RendersDisplayLabel(t *testing.T) {
+	l := newTestList("original")
+	l.SetSize(80, 20)
+
+	// With no label set, the list shows the Title.
+	require.Contains(t, l.String(), "original", "shows Title when no label is set")
+
+	// Once a cosmetic label is set, the list shows it in place of the Title.
+	l.items[0].SetDisplayName("renamed")
+	require.Contains(t, l.String(), "renamed", "shows the custom label when set")
 }

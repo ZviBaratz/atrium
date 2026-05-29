@@ -1,0 +1,37 @@
+# golangci-lint v2 configuration. See https://golangci-lint.run/usage/configuration/
+version: "2"
+
+run:
+  timeout: 5m
+
+linters:
+  # The "standard" set: errcheck, govet, ineffassign, staticcheck, unused.
+  default: standard
+  # Curated additions on top of the standard set. gosec and revive are tracked
+  # for a separate triage pass (they need #nosec annotations / rule tuning for a
+  # tool that intentionally spawns tmux/git/PTY subprocesses) and are not enabled
+  # here yet.
+  enable:
+    - bodyclose   # unclosed HTTP response bodies
+    - errorlint   # %w wrapping / errors.As correctness
+    - misspell    # common spelling mistakes
+    - nolintlint  # malformed or unexplained //nolint directives
+    - unconvert   # unnecessary type conversions
+  exclusions:
+    generated: lax
+    paths:
+      - web
+    rules:
+      # QF1003 ("could use tagged switch") is an opinionated quickfix, not a
+      # correctness issue; converting the Bubble Tea state if-chains to switches
+      # is a larger refactor tracked separately. Suppress just this check.
+      - linters:
+          - staticcheck
+        text: 'QF1003'
+
+formatters:
+  enable:
+    - gofmt
+  exclusions:
+    paths:
+      - web

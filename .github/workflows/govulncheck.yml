@@ -1,0 +1,45 @@
+name: govulncheck
+
+# Go vulnerability scanning. govulncheck is symbol-level: it only fails when a
+# known-vulnerable function is actually reachable from this code, so it is
+# low-noise. The scheduled run matters — new advisories land in the Go vuln DB
+# after code is written and merged.
+on:
+  pull_request:
+    branches: [ main ]
+    paths:
+      - '**.go'
+      - 'go.mod'
+      - 'go.sum'
+      - '.github/workflows/govulncheck.yml'
+  push:
+    branches: [ main ]
+    paths:
+      - '**.go'
+      - 'go.mod'
+      - 'go.sum'
+      - '.github/workflows/govulncheck.yml'
+  schedule:
+    - cron: '17 5 * * 1'  # Mondays 05:17 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: govulncheck-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  govulncheck:
+    name: govulncheck
+    runs-on: ubuntu-latest
+    steps:
+      # Default 'text' output makes the job fail when a reachable vulnerability
+      # is found (the action follows govulncheck's exit code). The action checks
+      # out the repo itself (repo-checkout defaults to true).
+      - name: Run govulncheck
+        uses: golang/govulncheck-action@b625fbe08f3bccbe446d94fbf87fcc875a4f50ee  # v1
+        with:
+          go-version-file: go.mod
+          go-package: ./...

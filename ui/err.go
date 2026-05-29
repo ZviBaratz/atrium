@@ -3,6 +3,8 @@ package ui
 import (
 	"strings"
 
+	"github.com/ZviBaratz/atrium/ui/theme"
+
 	"github.com/charmbracelet/lipgloss"
 	"github.com/mattn/go-runewidth"
 )
@@ -11,11 +13,6 @@ type ErrBox struct {
 	height, width int
 	err           error
 }
-
-var errStyle = lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{
-	Light: "#FF0000",
-	Dark:  "#FF0000",
-})
 
 func NewErrBox() *ErrBox {
 	return &ErrBox{}
@@ -29,20 +26,28 @@ func (e *ErrBox) Clear() {
 	e.err = nil
 }
 
+// HasError reports whether an error is currently set. The layout uses this to
+// decide whether to allot the error box a row.
+func (e *ErrBox) HasError() bool {
+	return e.err != nil
+}
+
 func (e *ErrBox) SetSize(width, height int) {
 	e.width = width
 	e.height = height
 }
 
 func (e *ErrBox) String() string {
-	var err string
-	if e.err != nil {
-		err = e.err.Error()
-		lines := strings.Split(err, "\n")
-		err = strings.Join(lines, "//")
-		if runewidth.StringWidth(err) > e.width-3 && e.width-3 >= 0 {
-			err = runewidth.Truncate(err, e.width-3, "...")
-		}
+	// No error means no row: returning "" keeps the caller from joining a blank
+	// line beneath the help bar (lipgloss.JoinVertical counts "" as one line).
+	if e.err == nil {
+		return ""
 	}
-	return lipgloss.Place(e.width, e.height, lipgloss.Center, lipgloss.Center, errStyle.Render(err))
+	err := e.err.Error()
+	lines := strings.Split(err, "\n")
+	err = strings.Join(lines, "//")
+	if runewidth.StringWidth(err) > e.width-3 && e.width-3 >= 0 {
+		err = runewidth.Truncate(err, e.width-3, "...")
+	}
+	return lipgloss.Place(e.width, e.height, lipgloss.Center, lipgloss.Center, theme.Current().DangerStyle().Render(err))
 }

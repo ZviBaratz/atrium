@@ -1,6 +1,7 @@
 package overlay
 
 import (
+	"github.com/ZviBaratz/atrium/ui/theme"
 	"os"
 	"path/filepath"
 	"strings"
@@ -16,7 +17,7 @@ import (
 // "/", "~" or ".") offers that path as a selectable entry. Validation that the
 // chosen path is a git repo happens at the call site, on selection/submit.
 type DirectoryPicker struct {
-	candidates []string // absolute candidate repo paths, deduped; candidates[0] is the default
+	candidates  []string // absolute candidate repo paths, deduped; candidates[0] is the default
 	filter      string
 	cursor      int
 	focused     bool
@@ -171,24 +172,15 @@ func (dp *DirectoryPicker) GetSelectedPath() string {
 	return items[dp.cursor]
 }
 
-var (
-	dpLabelStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("62")).
-			Bold(true)
-
-	dpFilterStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("7"))
-
-	dpSelectedStyle = lipgloss.NewStyle().
-			Background(lipgloss.Color("62")).
-			Foreground(lipgloss.Color("0"))
-
-	dpDimStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("240"))
-
-	dpInvalidStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("203"))
-)
+func dpLabelStyle() lipgloss.Style  { return theme.Current().AccentStyle().Bold(true) }
+func dpFilterStyle() lipgloss.Style { return theme.Current().FgStyle() }
+func dpSelectedStyle() lipgloss.Style {
+	return lipgloss.NewStyle().
+		Background(theme.Current().Palette.Accent).
+		Foreground(theme.Current().Palette.Bg)
+}
+func dpDimStyle() lipgloss.Style     { return theme.Current().DimStyle() }
+func dpInvalidStyle() lipgloss.Style { return theme.Current().DangerStyle() }
 
 // Render renders the directory picker at a constant height (one header line, a blank
 // line, then visibleRows item rows) so the surrounding overlay never changes size
@@ -198,24 +190,24 @@ func (dp *DirectoryPicker) Render() string {
 	var s strings.Builder
 
 	if !dp.focused {
-		s.WriteString(dpLabelStyle.Render("Project: "))
+		s.WriteString(dpLabelStyle().Render("Project: "))
 		if sel := dp.GetSelectedPath(); sel != "" {
 			s.WriteString(dp.displayPath(sel))
 		} else {
-			s.WriteString(dpDimStyle.Render("(none)"))
+			s.WriteString(dpDimStyle().Render("(none)"))
 		}
 		if dp.validityChecked && !dp.selectionValid {
-			s.WriteString(dpInvalidStyle.Render("  (not a git repo)"))
+			s.WriteString(dpInvalidStyle().Render("  (not a git repo)"))
 		}
 		s.WriteString("\n\n")
-		s.WriteString(renderPickerRows(nil, 0, dp.visibleRows, false, "", dpSelectedStyle, dpDimStyle))
+		s.WriteString(renderPickerRows(nil, 0, dp.visibleRows, false, "", dpSelectedStyle(), dpDimStyle()))
 		return s.String()
 	}
 
-	s.WriteString(dpLabelStyle.Render("Project"))
-	s.WriteString(dpFilterStyle.Render(" (filter/path: " + dp.filter + "█)"))
+	s.WriteString(dpLabelStyle().Render("Project"))
+	s.WriteString(dpFilterStyle().Render(" (filter/path: " + dp.filter + "█)"))
 	if dp.validityChecked && !dp.selectionValid {
-		s.WriteString(dpInvalidStyle.Render("  (not a git repo)"))
+		s.WriteString(dpInvalidStyle().Render("  (not a git repo)"))
 	}
 	s.WriteString("\n\n")
 
@@ -224,7 +216,7 @@ func (dp *DirectoryPicker) Render() string {
 	for i, it := range items {
 		labels[i] = dp.displayPath(it)
 	}
-	s.WriteString(renderPickerRows(labels, dp.cursor, dp.visibleRows, true, "no matches — type a path (/, ~, .)", dpSelectedStyle, dpDimStyle))
+	s.WriteString(renderPickerRows(labels, dp.cursor, dp.visibleRows, true, "no matches — type a path (/, ~, .)", dpSelectedStyle(), dpDimStyle()))
 	return s.String()
 }
 

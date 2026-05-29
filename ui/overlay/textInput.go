@@ -1,44 +1,43 @@
 package overlay
 
 import (
-	"claude-squad/config"
+	"github.com/ZviBaratz/atrium/config"
+	"github.com/ZviBaratz/atrium/ui/theme"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/muesli/reflow/truncate"
 )
 
-var (
-	tiStyle = lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color("62")).
+// Overlay styles read the active theme at render time (package-level style vars
+// would capture the default theme at import, before config selects one).
+func tiStyle() lipgloss.Style {
+	return lipgloss.NewStyle().
+		Border(theme.Current().Borders.Style).
+		BorderForeground(theme.Current().Palette.Accent).
 		Padding(1, 2)
+}
 
-	tiTitleStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("62")).
-			Bold(true).
-			MarginBottom(1)
+func tiTitleStyle() lipgloss.Style {
+	return theme.Current().AccentStyle().Bold(true).MarginBottom(1)
+}
 
-	tiButtonStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("7"))
+func tiButtonStyle() lipgloss.Style { return theme.Current().FgStyle() }
 
-	tiFocusedButtonStyle = lipgloss.NewStyle().
-				Background(lipgloss.Color("62")).
-				Foreground(lipgloss.Color("0"))
+func tiFocusedButtonStyle() lipgloss.Style {
+	return lipgloss.NewStyle().
+		Background(theme.Current().Palette.Accent).
+		Foreground(theme.Current().Palette.Bg)
+}
 
-	tiDividerStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("240"))
+func tiDividerStyle() lipgloss.Style { return theme.Current().DimStyle() }
 
-	tiLabelStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("62")).
-			Bold(true)
+func tiLabelStyle() lipgloss.Style { return theme.Current().AccentStyle().Bold(true) }
 
-	tiHintStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("240")).
-			Italic(true)
-)
+func tiHintStyle() lipgloss.Style { return theme.Current().DimStyle().Italic(true) }
 
 // defaultPickerRows / defaultPromptRows are the preferred number of list rows the directory
 // and branch pickers render and the preferred prompt-textarea height. They are also the
@@ -135,6 +134,7 @@ type TextInputOverlay struct {
 	branchPicker    *BranchPicker
 	stops           []focusStop // ordered focusable stops actually present
 	isCreateForm    bool        // true for the new-session form (has a title field)
+	submitOnEnter   bool        // true for the quick-send overlay: Enter submits, Alt+Enter is a newline
 }
 
 // NewTextInputOverlay creates a new text input overlay with the given title and initial value.
@@ -147,6 +147,16 @@ func NewTextInputOverlay(title string, initialValue string) *TextInputOverlay {
 	}
 	overlay.focusStop(stopTextarea)
 	return overlay
+}
+
+// NewQuickSendOverlay creates the compose-and-send overlay used to fire an ad-hoc message at
+// the selected running session without attaching. It is the same single textarea + submit button
+// as NewTextInputOverlay, but Enter submits immediately (Alt+Enter inserts a newline) so a short
+// reply is one keystroke away — see HandleKeyPress and the submitOnEnter hint in Render.
+func NewQuickSendOverlay(title string) *TextInputOverlay {
+	o := NewTextInputOverlay(title, "")
+	o.submitOnEnter = true
+	return o
 }
 
 // NewSessionCreateOverlay creates the unified new-session form: a title field, a prompt
@@ -383,8 +393,22 @@ func (t *TextInputOverlay) HandleKeyPress(msg tea.KeyMsg) (bool, bool) {
 			}
 			return true, false
 		}
-		// In the prompt textarea, Enter inserts a newline.
 		if t.isTextarea() {
+			// Quick-send: bare Enter sends, Alt+Enter is the newline. The textarea's newline
+			// binding matches the literal "enter", so an Alt-modified Enter would be ignored if
+			// forwarded — insert the newline explicitly instead.
+			if t.submitOnEnter {
+				if msg.Alt {
+					t.textarea.InsertRune('\n')
+					return false, false
+				}
+				t.Submitted = true
+				if t.OnSubmit != nil {
+					t.OnSubmit()
+				}
+				return true, false
+			}
+			// In the create-form prompt, Enter inserts a newline.
 			t.textarea, _ = t.textarea.Update(msg)
 			return false, false
 		}
@@ -538,21 +562,76 @@ func (t *TextInputOverlay) Render() string {
 	t.titleInput.Width = innerWidth
 
 	// Build a horizontal divider line
-	divider := tiDividerStyle.Render(strings.Repeat("─", innerWidth))
+	divider := tiDividerStyle().Render(strings.Repeat("─", innerWidth))
 
 	if t.isCreateForm {
-		return t.renderCreateForm(divider)
+		return t.fitOverlay(t.renderCreateForm(divider), innerWidth)
 	}
 
 	// Plain prompt overlay (the `p` flow): no pickers — just a title, the prompt textarea,
 	// and the submit button.
 	var content string
-	content += tiTitleStyle.Render(t.Title) + "\n"
+	content += tiTitleStyle().Render(t.Title) + "\n"
 	content += t.textarea.View() + "\n\n"
 	content += divider + "\n\n"
+	if t.submitOnEnter {
+		content += tiHintStyle().Render("enter send · ⌥enter newline · esc cancel") + "\n"
+	}
 	content += t.renderEnterButton()
 
-	return tiStyle.Render(content)
+	return t.fitOverlay(content, innerWidth)
+}
+
+// fitOverlay constrains the assembled inner content to the overlay's terminal share
+// before drawing the bordered box. Two invariants matter: the composed View() must
+// never be wider or taller than the terminal, or PlaceOverlay spills past the screen
+// and bubbletea's line-diffing desyncs (stale fragments, a mis-placed popup).
+//
+//   - Width: every line is truncated to innerWidth, so a long value (e.g. a deep
+//     project path or profile command) can never widen the box past t.width. The
+//     dividers, already innerWidth wide, anchor the box to a stable width.
+//   - Height: the create form's constant-height sections can total a row or two more
+//     than a short terminal (an 80×24 screen with a profile section needs 25 rows).
+//     Blank filler lines are dropped — never real content like the Create button —
+//     until the box fits t.height, so the form compacts instead of scrolling.
+func (t *TextInputOverlay) fitOverlay(content string, innerWidth int) string {
+	lines := strings.Split(content, "\n")
+	for i, l := range lines {
+		if lipgloss.Width(l) > innerWidth {
+			lines[i] = truncate.StringWithTail(l, uint(innerWidth), "…")
+		}
+	}
+	// The bordered, padded box adds 4 rows (border top/bottom + vertical padding),
+	// so the inner content must fit within t.height-4 for the box to fit the screen.
+	if budget := t.height - 4; budget > 0 {
+		lines = dropBlankLinesToFit(lines, budget)
+	}
+	return tiStyle().Render(strings.Join(lines, "\n"))
+}
+
+// dropBlankLinesToFit removes interior blank lines (and only blank lines — leading,
+// trailing, and any line carrying visible content are preserved) until the slice is
+// at most budget lines long or no removable blanks remain. It is the graceful
+// degradation for terminals too short to hold the form at its natural spacing.
+//
+// It never drops visible content, so a terminal shorter than the form's irreducible
+// height (its content rows plus the few unavoidable blanks) still overflows by the
+// residual rows. The supported floor is 24 rows: at 80×24 the create form has enough
+// removable blanks to fit, which TestViewFitsTerminalBounds and the unit tests pin.
+func dropBlankLinesToFit(lines []string, budget int) []string {
+	excess := len(lines) - budget
+	if excess <= 0 {
+		return lines
+	}
+	out := make([]string, 0, len(lines))
+	for i, l := range lines {
+		if excess > 0 && i > 0 && i < len(lines)-1 && lipgloss.Width(l) == 0 {
+			excess--
+			continue
+		}
+		out = append(out, l)
+	}
+	return out
 }
 
 // renderCreateForm renders the unified new-session form. Every section is constant-height
@@ -568,9 +647,9 @@ func (t *TextInputOverlay) renderCreateForm(divider string) string {
 		b.WriteString(divider + "\n")
 	}
 
-	b.WriteString(tiTitleStyle.Render(t.Title) + "\n")
-	section(tiLabelStyle.Render("Title") + "  " + t.titleInput.View())
-	section(tiLabelStyle.Render("Prompt") + "\n" + t.textarea.View())
+	b.WriteString(tiTitleStyle().Render(t.Title) + "\n")
+	section(tiLabelStyle().Render("Title") + "  " + t.titleInput.View())
+	section(tiLabelStyle().Render("Prompt") + "\n" + t.textarea.View())
 	if t.directoryPicker != nil {
 		section(t.directoryPicker.Render())
 	}
@@ -581,17 +660,20 @@ func (t *TextInputOverlay) renderCreateForm(divider string) string {
 		section(t.branchPicker.Render())
 	}
 
-	b.WriteString(tiHintStyle.Render(createFormHelp) + "\n")
+	b.WriteString(tiHintStyle().Render(createFormHelp) + "\n")
 	b.WriteString(t.renderEnterButton())
 
-	return tiStyle.Render(b.String())
+	return b.String()
 }
 
 // renderEnterButton renders the submit button, highlighted when it holds focus.
 func (t *TextInputOverlay) renderEnterButton() string {
 	enterButton := " Enter "
-	if t.isEnterButton() {
-		return tiFocusedButtonStyle.Render(enterButton)
+	if t.isCreateForm {
+		enterButton = " Create " // matches the ⌃S create hint in the footer
 	}
-	return tiButtonStyle.Render(enterButton)
+	if t.isEnterButton() {
+		return tiFocusedButtonStyle().Render(enterButton)
+	}
+	return tiButtonStyle().Render(enterButton)
 }

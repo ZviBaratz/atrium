@@ -3,7 +3,7 @@
 package tmux
 
 import (
-	"claude-squad/log"
+	"github.com/ZviBaratz/atrium/log"
 	"os"
 	"time"
 

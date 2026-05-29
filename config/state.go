@@ -1,9 +1,9 @@
 package config
 
 import (
-	"claude-squad/log"
 	"encoding/json"
 	"fmt"
+	"github.com/ZviBaratz/atrium/log"
 	"os"
 	"path/filepath"
 )
@@ -33,6 +33,10 @@ type AppState interface {
 	GetRecentPaths() []string
 	// AddRecentPath records a project directory as most-recently-used
 	AddRecentPath(path string) error
+	// GetCollapsedRepos returns the repo group keys that should render folded
+	GetCollapsedRepos() []string
+	// SetCollapsedRepos replaces the set of folded repo group keys
+	SetCollapsedRepos(repos []string) error
 }
 
 // maxRecentPaths caps how many recently-used project directories are retained.
@@ -52,6 +56,8 @@ type State struct {
 	InstancesData json.RawMessage `json:"instances"`
 	// RecentPaths is the list of recently-used project directories, most-recent-first
 	RecentPaths []string `json:"recent_paths"`
+	// CollapsedRepos is the set of repo group keys the session list should render folded
+	CollapsedRepos []string `json:"collapsed_repos"`
 }
 
 // DefaultState returns the default state
@@ -60,6 +66,7 @@ func DefaultState() *State {
 		HelpScreensSeen: 0,
 		InstancesData:   json.RawMessage("[]"),
 		RecentPaths:     []string{},
+		CollapsedRepos:  []string{},
 	}
 }
 
@@ -170,5 +177,16 @@ func (s *State) AddRecentPath(path string) error {
 		}
 	}
 	s.RecentPaths = deduped
+	return SaveState(s)
+}
+
+// GetCollapsedRepos returns the repo group keys that should render folded.
+func (s *State) GetCollapsedRepos() []string {
+	return s.CollapsedRepos
+}
+
+// SetCollapsedRepos replaces the set of folded repo group keys and persists it.
+func (s *State) SetCollapsedRepos(repos []string) error {
+	s.CollapsedRepos = repos
 	return SaveState(s)
 }

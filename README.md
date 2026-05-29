@@ -1,9 +1,8 @@
-# Claude Squad [![CI](https://github.com/smtg-ai/claude-squad/actions/workflows/build.yml/badge.svg)](https://github.com/smtg-ai/claude-squad/actions/workflows/build.yml) [![GitHub Release](https://img.shields.io/github/v/release/smtg-ai/claude-squad)](https://github.com/smtg-ai/claude-squad/releases/latest)
+# Atrium [![Website](https://img.shields.io/badge/website-zvibaratz.github.io%2Fatrium-2ea44f)](https://zvibaratz.github.io/atrium/) [![CI](https://github.com/ZviBaratz/atrium/actions/workflows/build.yml/badge.svg)](https://github.com/ZviBaratz/atrium/actions/workflows/build.yml) [![GitHub Release](https://img.shields.io/github/v/release/ZviBaratz/atrium)](https://github.com/ZviBaratz/atrium/releases/latest) [![Go Report Card](https://goreportcard.com/badge/github.com/ZviBaratz/atrium)](https://goreportcard.com/report/github.com/ZviBaratz/atrium) [![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](LICENSE.md) [![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/ZviBaratz/atrium/badge)](https://securityscorecards.dev/viewer/?uri=github.com/ZviBaratz/atrium)
 
-[Claude Squad](https://smtg-ai.github.io/claude-squad/) is a terminal app that manages multiple [Claude Code](https://github.com/anthropics/claude-code), [Codex](https://github.com/openai/codex), [Gemini](https://github.com/google-gemini/gemini-cli) (and other local agents including [Aider](https://github.com/Aider-AI/aider)) in separate workspaces, allowing you to work on multiple tasks simultaneously.
+Atrium is a terminal command center for orchestrating multiple AI coding agents — [Claude Code](https://github.com/anthropics/claude-code), [Codex](https://github.com/openai/codex), [Gemini](https://github.com/google-gemini/gemini-cli), and other local agents including [Aider](https://github.com/Aider-AI/aider) — each in its own isolated git worktree, so you can drive several tasks at once from a single panel.
 
-
-![Claude Squad Screenshot](assets/screenshot.png)
+![Atrium Screenshot](assets/screenshot.png)
 
 ### Highlights
 - Complete tasks in the background (including yolo / auto-accept mode!)
@@ -13,35 +12,26 @@
 
 <br />
 
-https://github.com/user-attachments/assets/aef18253-e58f-4525-9032-f5a3d66c975a
-
-<br />
-
 ### Installation
 
-Both Homebrew and manual installation will install Claude Squad as `cs` on your system.
+Atrium installs as `atrium` on your system. The installer also sets up `atr` as a short alias.
 
-#### Homebrew
+#### Quick install (curl)
 
 ```bash
-brew install claude-squad
-ln -s "$(brew --prefix)/bin/claude-squad" "$(brew --prefix)/bin/cs"
+curl -fsSL https://raw.githubusercontent.com/ZviBaratz/atrium/main/install.sh | bash
 ```
 
-#### Manual
-
-Claude Squad can also be installed by running the following command:
+This puts the `atrium` binary in `~/.local/bin`. To use a custom name for the binary:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/smtg-ai/claude-squad/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/ZviBaratz/atrium/main/install.sh | bash -s -- --name <your-binary-name>
 ```
 
-This puts the `cs` binary in `~/.local/bin`.
-
-To use a custom name for the binary:
+#### go install
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/smtg-ai/claude-squad/main/install.sh | bash -s -- --name <your-binary-name>
+go install github.com/ZviBaratz/atrium@latest
 ```
 
 ### Prerequisites
@@ -53,43 +43,43 @@ curl -fsSL https://raw.githubusercontent.com/smtg-ai/claude-squad/main/install.s
 
 ```
 Usage:
-  cs [flags]
-  cs [command]
+  atrium [flags]
+  atrium [command]
 
 Available Commands:
   completion  Generate the autocompletion script for the specified shell
   debug       Print debug information like config paths
   help        Help about any command
   reset       Reset all stored instances
-  version     Print the version number of claude-squad
+  version     Print the version number of atrium
 
 Flags:
   -y, --autoyes          [experimental] If enabled, all instances will automatically accept prompts for claude code & aider
-  -h, --help             help for claude-squad
+  -h, --help             help for atrium
   -p, --program string   Program to run in new instances (e.g. 'aider --model ollama_chat/gemma3:1b')
 ```
 
 Run the application with:
 
 ```bash
-cs
+atrium
 ```
 NOTE: The default program is `claude` and we recommend using the latest version.
 
 <br />
 
-<b>Using Claude Squad with other AI assistants:</b>
+<b>Using Atrium with other AI assistants:</b>
 - For [Codex](https://github.com/openai/codex): Set your API key with `export OPENAI_API_KEY=<your_key>`
 - Launch with specific assistants:
-   - Codex: `cs -p "codex"`
-   - Aider: `cs -p "aider ..."`
-   - Gemini: `cs -p "gemini"`
-- Make this the default, by modifying the config file (locate with `cs debug`)
+   - Codex: `atrium -p "codex"`
+   - Aider: `atrium -p "aider ..."`
+   - Gemini: `atrium -p "gemini"`
+- Make this the default, by modifying the config file (locate with `atrium debug`)
 
 <br />
 
 #### Menu
-The menu at the bottom of the screen shows available commands: 
+The menu at the bottom of the screen shows available commands:
 
 ##### Instance/Session Management
 - `n` - Create a new session
@@ -112,7 +102,19 @@ The menu at the bottom of the screen shows available commands:
 
 ### Configuration
 
-Claude Squad stores its configuration in `~/.claude-squad/config.json`. You can find the exact path by running `cs debug`.
+Atrium stores its configuration in `~/.atrium/config.json`. You can find the exact path by running `atrium debug`. Installs that predate the rename keep using their existing `~/.claude-squad` directory automatically.
+
+#### Auto-attach
+
+By default, Atrium attaches you to a new session as soon as it starts, so you land directly in the agent. Detach with `ctrl-q` to return to the session list. When you create a session with the `N` form and provide an initial prompt, auto-attach is skipped — the session stays in the list so the prompt is delivered automatically once the agent is ready, and you can attach with `↵`/`o` whenever you like.
+
+To disable auto-attach and always return to the list after creating a session, set `auto_attach` to `false`:
+
+```json
+{
+  "auto_attach": false
+}
+```
 
 #### Profiles
 
@@ -138,7 +140,7 @@ Each profile has two fields:
 | `name`    | Display name shown in the profile picker                 |
 | `program` | Shell command used to launch the agent for that profile  |
 
-If no profiles are defined, Claude Squad uses `default_program` directly as the launch command (the default is `claude`).
+If no profiles are defined, Atrium uses `default_program` directly as the launch command (the default is `claude`).
 
 ### FAQs
 
@@ -146,6 +148,18 @@ If no profiles are defined, Claude Squad uses `default_program` directly as the 
 
 If you get an error like `failed to start new session: timed out waiting for tmux session`, update the
 underlying program (ex. `claude`) to the latest version.
+
+### Security & verifying releases
+
+Releases ship with SLSA build provenance and a keyless Sigstore signature over
+the checksums file, plus a per-archive SBOM. To confirm a download is genuine:
+
+```bash
+gh attestation verify atrium_<version>_<os>_<arch>.tar.gz --repo ZviBaratz/atrium
+```
+
+See [SECURITY.md](SECURITY.md) for full verification steps (including `cosign`)
+and how to report a vulnerability privately.
 
 ### How It Works
 
@@ -157,6 +171,4 @@ underlying program (ex. `claude`) to the latest version.
 
 [AGPL-3.0](LICENSE.md)
 
-### Star History
-
-[![Star History Chart](https://api.star-history.com/svg?repos=smtg-ai/claude-squad&type=Date)](https://www.star-history.com/#smtg-ai/claude-squad&Date)
+Atrium is a derivative work of [Claude Squad](https://github.com/smtg-ai/claude-squad) and remains licensed under the AGPL-3.0. See [NOTICE](NOTICE) for attribution.

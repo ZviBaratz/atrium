@@ -169,6 +169,51 @@ func TestSetupFromExistingBranch_RemovesOrphanedDirectory(t *testing.T) {
 	}
 }
 
+// removeOrphanedWorktreeDir is Cleanup's fallback when git can no longer manage a
+// worktree (e.g. the project repo was renamed/removed). It must delete the dir when
+// it lives under the managed worktrees/ tree and refuse anything outside it.
+func TestRemoveOrphanedWorktreeDir(t *testing.T) {
+	tempHome := t.TempDir()
+	t.Setenv("HOME", tempHome)
+
+	root, err := getWorktreeDirectory()
+	if err != nil {
+		t.Fatalf("getWorktreeDirectory: %v", err)
+	}
+
+	// Inside the managed tree → removed, contents and all.
+	inside := filepath.Join(root, "sess_abc")
+	if err := os.MkdirAll(filepath.Join(inside, "sub"), 0755); err != nil {
+		t.Fatalf("mkdir inside: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(inside, "f.txt"), []byte("x"), 0644); err != nil {
+		t.Fatalf("write inside: %v", err)
+	}
+	if err := removeOrphanedWorktreeDir(inside); err != nil {
+		t.Fatalf("expected removal of managed worktree dir, got %v", err)
+	}
+	if _, err := os.Stat(inside); !os.IsNotExist(err) {
+		t.Fatalf("managed worktree dir still exists, err = %v", err)
+	}
+
+	// Outside the managed tree → refused, dir left intact.
+	outside := filepath.Join(t.TempDir(), "important")
+	if err := os.MkdirAll(outside, 0755); err != nil {
+		t.Fatalf("mkdir outside: %v", err)
+	}
+	if err := removeOrphanedWorktreeDir(outside); err == nil {
+		t.Fatal("expected refusal to remove path outside the managed tree")
+	}
+	if _, err := os.Stat(outside); err != nil {
+		t.Fatalf("outside dir must be left intact, got %v", err)
+	}
+
+	// The worktrees root itself must never be wiped.
+	if err := removeOrphanedWorktreeDir(root); err == nil {
+		t.Fatal("expected refusal to remove the worktrees root itself")
+	}
+}
+
 func mustRunGit(t *testing.T, dir string, args ...string) string {
 	t.Helper()
 

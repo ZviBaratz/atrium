@@ -2,19 +2,24 @@ package log
 
 import (
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"path/filepath"
 	"time"
 )
 
+// Loggers default to discarding output so they are safe to use before
+// Initialize() runs (which only happens from main()). Tests and early-startup
+// code log without Initialize; a nil logger there panics with a nil-pointer
+// dereference. Initialize() reassigns these to the file-backed loggers.
 var (
-	WarningLog *log.Logger
-	InfoLog    *log.Logger
-	ErrorLog   *log.Logger
+	WarningLog = log.New(io.Discard, "WARNING: ", log.LstdFlags)
+	InfoLog    = log.New(io.Discard, "INFO: ", log.LstdFlags)
+	ErrorLog   = log.New(io.Discard, "ERROR: ", log.LstdFlags)
 )
 
-var logFileName = filepath.Join(os.TempDir(), "claudesquad.log")
+var logFileName = filepath.Join(os.TempDir(), "atrium.log")
 
 var globalLogFile *os.File
 

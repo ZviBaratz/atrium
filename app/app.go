@@ -1,15 +1,17 @@
 package app
 
 import (
-	"claude-squad/config"
-	"claude-squad/keys"
-	"claude-squad/log"
-	"claude-squad/session"
-	"claude-squad/session/git"
-	"claude-squad/ui"
-	"claude-squad/ui/overlay"
 	"context"
 	"fmt"
+	"github.com/ZviBaratz/atrium/config"
+	"github.com/ZviBaratz/atrium/keys"
+	"github.com/ZviBaratz/atrium/log"
+	"github.com/ZviBaratz/atrium/session"
+	"github.com/ZviBaratz/atrium/session/git"
+	"github.com/ZviBaratz/atrium/session/tmux"
+	"github.com/ZviBaratz/atrium/ui"
+	"github.com/ZviBaratz/atrium/ui/overlay"
+	"github.com/ZviBaratz/atrium/ui/theme"
 	"os"
 	"path/filepath"
 	"strings"
@@ -47,6 +49,8 @@ const (
 	stateHelp
 	// stateConfirm is the state when a confirmation modal is displayed.
 	stateConfirm
+	// stateRename is the state when the user is editing a session's display label.
+	stateRename
 )
 
 type home struct {
@@ -59,6 +63,9 @@ type home struct {
 
 	// storage is the interface for saving/loading data to/from the app's state
 	storage *session.Storage
+	// lostStrikes counts consecutive ticks each instance has been seen with a dead
+	// tmux session, debouncing auto-recovery to Paused (see recoverLostInstances).
+	lostStrikes map[*session.Instance]int
 	// appConfig stores persistent application configuration
 	appConfig *config.Config
 	// appState stores persistent application state like seen help screens
@@ -88,11 +95,20 @@ type home struct {
 	// keySent is used to manage underlining menu items
 	keySent bool
 
+	// welcomeChecked guards the one-time first-launch welcome so it is only
+	// attempted once per process (its seen-bit handles persistence across runs).
+	welcomeChecked bool
+
 	// instanceStarting is true while a background instance start is in progress.
 	// Prevents double-submission and guards against interacting with a not-yet-started instance.
 	instanceStarting bool
 	// startingInstance holds a reference to the instance being started in the background.
 	startingInstance *session.Instance
+
+	// windowWidth/windowHeight cache the last terminal size so the layout can be
+	// recomputed off a synthesized size event — e.g. when an error appears or
+	// clears and the panes must give up or reclaim the error box's row.
+	windowWidth, windowHeight int
 
 	// -- UI Components --
 
@@ -112,11 +128,28 @@ type home struct {
 	textOverlay *overlay.TextOverlay
 	// confirmationOverlay displays confirmation modals
 	confirmationOverlay *overlay.ConfirmationOverlay
+	// pendingConfirmAction is the action to run if the confirmation overlay is
+	// confirmed. It is executed on the main loop and its returned message is fed
+	// back through Update so errors surface in the error box.
+	pendingConfirmAction tea.Cmd
+	// renameOverlay handles editing a session's display label
+	renameOverlay *overlay.RenameOverlay
+	// renameTarget is the instance the rename overlay was opened for. It is captured
+	// when the overlay opens so the new label lands on the right session even if the
+	// list selection moves while the overlay is open (e.g. during async auto-naming).
+	renameTarget *session.Instance
+	// generatingName guards against launching a second auto-name request while one
+	// is already in flight, and drives the "Generating name…" hint-bar state.
+	generatingName bool
 }
 
 func newHome(ctx context.Context, program string, autoYes bool) *home {
 	// Load application config
 	appConfig := config.LoadConfig()
+
+	// Activate the configured UI theme before any component is constructed, so
+	// theme.Current() is correct everywhere it's read. Set once, never mutated.
+	theme.Set(appConfig.Theme)
 
 	// Load application state
 	appState := config.LoadState()
@@ -129,12 +162,16 @@ func newHome(ctx context.Context, program string, autoYes bool) *home {
 	}
 
 	h := &home{
-		ctx:          ctx,
-		spinner:      spinner.New(spinner.WithSpinner(spinner.MiniDot)),
+		ctx: ctx,
+		spinner: spinner.New(spinner.WithSpinner(spinner.Spinner{
+			Frames: theme.Current().Glyphs.SpinnerFrames,
+			FPS:    theme.Current().Glyphs.SpinnerFPS,
+		})),
 		menu:         ui.NewMenu(),
 		tabbedWindow: ui.NewTabbedWindow(ui.NewPreviewPane(), ui.NewDiffPane(), ui.NewTerminalPane()),
 		errBox:       ui.NewErrBox(),
 		storage:      storage,
+		lostStrikes:  make(map[*session.Instance]int),
 		appConfig:    appConfig,
 		program:      program,
 		autoYes:      autoYes,
@@ -158,6 +195,9 @@ func newHome(ctx context.Context, program string, autoYes bool) *home {
 			instance.AutoYes = true
 		}
 	}
+	// Restore folded groups only after every instance is loaded — AddInstance auto-expands the
+	// group it inserts into, so applying persisted folds earlier would be undone by the loop.
+	h.list.SetCollapsedRepos(appState.GetCollapsedRepos())
 
 	return h
 }
@@ -169,10 +209,20 @@ func (m *home) updateHandleWindowSizeEvent(msg tea.WindowSizeMsg) {
 	listWidth := int(float32(msg.Width) * 0.3)
 	tabsWidth := msg.Width - listWidth
 
-	// Menu takes 10% of height, list and window take 90%
-	contentHeight := int(float32(msg.Height) * 0.9)
-	menuHeight := msg.Height - contentHeight - 1     // minus 1 for error box
-	m.errBox.SetSize(int(float32(msg.Width)*0.9), 1) // error box takes 1 row
+	m.windowWidth, m.windowHeight = msg.Width, msg.Height
+
+	// The menu always takes one row at the bottom; the error box takes a row only
+	// while an error is showing. With no error the help bar sits flush on the last
+	// row. When an error appears the panes give up a row for it (and reclaim it once
+	// the error clears via recomputeLayout), so the composed frame is always exactly
+	// msg.Height tall and never floats in a centered band.
+	menuHeight := 1
+	errHeight := 0
+	if m.errBox.HasError() {
+		errHeight = 1
+	}
+	contentHeight := max(1, msg.Height-menuHeight-errHeight)
+	m.errBox.SetSize(int(float32(msg.Width)*0.9), errHeight)
 
 	m.tabbedWindow.SetSize(tabsWidth, contentHeight)
 	m.list.SetSize(listWidth, contentHeight)
@@ -194,6 +244,16 @@ func (m *home) updateHandleWindowSizeEvent(msg tea.WindowSizeMsg) {
 	m.menu.SetSize(msg.Width, menuHeight)
 }
 
+// recomputeLayout re-runs the size calculation off the cached terminal size. Use
+// it when something other than a resize changes the vertical budget — e.g. an
+// error appearing or clearing toggles whether the error box claims a row.
+func (m *home) recomputeLayout() {
+	if m.windowWidth == 0 || m.windowHeight == 0 {
+		return
+	}
+	m.updateHandleWindowSizeEvent(tea.WindowSizeMsg{Width: m.windowWidth, Height: m.windowHeight})
+}
+
 func (m *home) Init() tea.Cmd {
 	// Upon starting, we want to start the spinner. Whenever we get a spinner.TickMsg, we
 	// update the spinner, which sends a new spinner.TickMsg. I think this lasts forever lol.
@@ -211,6 +271,7 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case hideErrMsg:
 		m.errBox.Clear()
+		m.recomputeLayout() // reclaim the error row; panes grow back by one
 	case previewTickMsg:
 		cmd := m.instanceChanged()
 		return m, tea.Batch(
@@ -240,22 +301,35 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.recordRecentPath(inst.Path)
 
-		m.showHelpScreen(helpStart(inst), nil)
-
 		return m, tea.Batch(tea.WindowSize(), m.instanceChanged())
+	case autoNameDoneMsg:
+		m.generatingName = false
+		if msg.err != nil {
+			// Restore the normal hint bar and surface the failure; leave the name
+			// untouched rather than applying a fallback or junk value.
+			m.menu.SetState(ui.StateDefault)
+			return m, m.handleError(msg.err)
+		}
+		// Offer the generated name through the existing rename overlay so the user
+		// can confirm or edit it before it commits.
+		m.renameTarget = msg.instance
+		m.renameOverlay = overlay.NewRenameOverlay(msg.name)
+		m.state = stateRename
+		m.menu.SetState(ui.StatePrompt)
+		return m, nil
 	case metadataUpdateDoneMsg:
+		if recoverLostInstances(msg.results, m.lostStrikes) {
+			if err := m.storage.SaveInstances(m.list.GetInstances()); err != nil {
+				log.ErrorLog.Printf("failed to persist recovered sessions: %v", err)
+			}
+		}
 		for _, r := range msg.results {
-			// Skip instances that were paused while metadata was being computed
-			if r.instance.Status == session.Paused {
+			// Skip instances that were paused while metadata was being computed, or
+			// that were just recovered to Paused above because their session died.
+			if r.sessionLost || r.instance.Status == session.Paused {
 				continue
 			}
-			if r.updated {
-				r.instance.SetStatus(session.Running)
-			} else if r.hasPrompt {
-				r.instance.TapEnter()
-			} else {
-				r.instance.SetStatus(session.Ready)
-			}
+			applyPaneState(r.instance, r.state)
 			if r.diffStats != nil && r.diffStats.Error != nil {
 				if !strings.Contains(r.diffStats.Error.Error(), "base commit SHA not set") {
 					log.WarningLog.Printf("could not update diff stats: %v", r.diffStats.Error)
@@ -304,6 +378,8 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.handleKeyPress(msg)
 	case tea.WindowSizeMsg:
 		m.updateHandleWindowSizeEvent(msg)
+		// First launch ever: show the one-time welcome once the size is known.
+		m.maybeShowWelcome()
 		return m, nil
 	case error:
 		// Handle errors from confirmation actions
@@ -334,7 +410,21 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// (see deliverReadyPrompts). Sending here races the agent's boot and lands
 		// keystrokes in the trust dialog instead of the input box.
 		m.menu.SetState(ui.StateDefault)
-		m.showHelpScreen(helpStart(msg.instance), nil)
+
+		if m.shouldAutoOpen(msg.instance) {
+			// Drop straight into the new session, mirroring the KeyEnter attach path.
+			// Attach msg.instance directly rather than via m.list.Attach(): a background
+			// instanceStartedMsg from another freshly-created session could have moved
+			// the list selection by now. Attaching blocks until the user detaches
+			// (ctrl-q); the hint bar carries the detach reminder, so no teaching modal.
+			ch, err := msg.instance.Attach()
+			if err != nil {
+				return m, m.handleError(err)
+			}
+			<-ch
+			m.state = stateDefault
+			return m, tea.Batch(tea.WindowSize(), m.instanceChanged())
+		}
 
 		return m, tea.Batch(tea.WindowSize(), m.instanceChanged())
 	case spinner.TickMsg:
@@ -359,7 +449,7 @@ func (m *home) handleMenuHighlighting(msg tea.KeyMsg) (cmd tea.Cmd, returnEarly 
 		m.keySent = false
 		return nil, false
 	}
-	if m.state == statePrompt || m.state == stateHelp || m.state == stateConfirm {
+	if m.state == statePrompt || m.state == stateHelp || m.state == stateConfirm || m.state == stateRename {
 		return nil, false
 	}
 	// If it's in the global keymap, we should try to highlight it.
@@ -502,7 +592,8 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 				return m, m.createSessionFromForm(prompt)
 			}
 
-			// Plain prompt overlay: send the prompt to the selected running session.
+			// Quick-send overlay: fire the message at the selected running session and drop
+			// straight back to the list (no new-session help — the session is already up).
 			selected := m.list.GetSelectedInstance()
 			if selected == nil {
 				m.textInputOverlay = nil
@@ -514,14 +605,8 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 			}
 			m.textInputOverlay = nil
 			m.state = stateDefault
-			return m, tea.Sequence(
-				tea.WindowSize(),
-				func() tea.Msg {
-					m.menu.SetState(ui.StateDefault)
-					m.showHelpScreen(helpStart(selected), nil)
-					return nil
-				},
-			)
+			m.menu.SetState(ui.StateDefault)
+			return m, tea.Sequence(tea.WindowSize(), m.instanceChanged())
 		}
 
 		// If the target directory changed in the picker, re-scope the branch search to
@@ -550,11 +635,57 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 	if m.state == stateConfirm {
 		shouldClose := m.confirmationOverlay.HandleKeyPress(msg)
 		if shouldClose {
+			confirmed := m.confirmationOverlay.Confirmed
+			action := m.pendingConfirmAction
 			m.state = stateDefault
 			m.confirmationOverlay = nil
+			m.pendingConfirmAction = nil
+			if confirmed && action != nil {
+				// Run the action here, on the main loop, because it mutates shared
+				// model state (list, terminals); a tea.Cmd would run it in a
+				// goroutine and race Update. Feed only the resulting message back
+				// through the runtime so a returned error reaches the error box.
+				resultMsg := action()
+				return m, func() tea.Msg { return resultMsg }
+			}
 			return m, nil
 		}
 		return m, nil
+	}
+
+	// Handle rename state. This must run before the global q/ctrl+c quit handling below so
+	// those keys edit (or cancel) the label instead of quitting the app.
+	if m.state == stateRename {
+		shouldClose := m.renameOverlay.HandleKeyPress(msg)
+		if !shouldClose {
+			return m, nil
+		}
+
+		submitted := m.renameOverlay.IsSubmitted()
+		value := m.renameOverlay.Value()
+		deep := m.renameOverlay.IsDeep()
+		// Apply to the instance the overlay was opened for, not the currently
+		// selected one — they can differ if the selection moved while the overlay
+		// was open (notably during async auto-naming).
+		target := m.renameTarget
+		m.renameOverlay = nil
+		m.renameTarget = nil
+		m.state = stateDefault
+		m.menu.SetState(ui.StateDefault)
+
+		if submitted && target != nil {
+			if deep {
+				if err := m.deepRename(target, value); err != nil {
+					return m, m.handleError(err)
+				}
+			} else {
+				target.SetDisplayName(value)
+				if err := m.storage.SaveInstances(m.list.GetInstances()); err != nil {
+					return m, m.handleError(err)
+				}
+			}
+		}
+		return m, m.instanceChanged()
 	}
 
 	// Exit scrolling mode when ESC is pressed and preview pane is in scrolling mode
@@ -649,6 +780,18 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		m.menu.SetNewInstanceHint(filepath.Base(m.newSessionPath))
 
 		return m, nil
+	case keys.KeyQuickSend:
+		// Open a compose box to fire an ad-hoc message at the selected running session
+		// without attaching. Only meaningful when the agent is up and accepting input, so
+		// this is a no-op for an empty/loading/paused selection.
+		selected := m.list.GetSelectedInstance()
+		if selected == nil || !selected.Started() || selected.Paused() || selected.Status == session.Loading {
+			return m, nil
+		}
+		m.state = statePrompt
+		m.menu.SetState(ui.StatePrompt)
+		m.textInputOverlay = overlay.NewQuickSendOverlay("Send to " + selected.DisplayName())
+		return m, tea.WindowSize()
 	case keys.KeyUp:
 		m.list.Up()
 		return m, m.instanceChanged()
@@ -665,6 +808,10 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		m.tabbedWindow.Toggle()
 		m.menu.SetActiveTab(m.tabbedWindow.GetActiveTab())
 		return m, m.instanceChanged()
+	case keys.KeyShiftTab:
+		m.tabbedWindow.ToggleReverse()
+		m.menu.SetActiveTab(m.tabbedWindow.GetActiveTab())
+		return m, m.instanceChanged()
 	case keys.KeyKill:
 		selected := m.list.GetSelectedInstance()
 		if selected == nil || selected.Status == session.Loading {
@@ -673,19 +820,17 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 
 		// Create the kill action as a tea.Cmd
 		killAction := func() tea.Msg {
-			// Get worktree and check if branch is checked out
-			worktree, err := selected.GetGitWorktree()
-			if err != nil {
-				return err
-			}
-
-			checkedOut, err := worktree.IsBranchCheckedOut()
-			if err != nil {
-				return err
-			}
-
-			if checkedOut {
-				return fmt.Errorf("instance %s is currently checked out", selected.Title)
+			// Refuse to kill only when we can positively confirm the branch is
+			// checked out in its primary repo (removing it would be destructive).
+			// This is a teardown path: if the worktree or its repo is unreachable
+			// — e.g. the user renamed/removed the project directory — fail open and
+			// proceed, otherwise an orphaned session can never be deleted.
+			if worktree, err := selected.GetGitWorktree(); err != nil {
+				log.WarningLog.Printf("kill %s: cannot resolve worktree, proceeding: %v", selected.Title, err)
+			} else if checkedOut, cerr := worktree.IsBranchCheckedOut(); cerr != nil {
+				log.WarningLog.Printf("kill %s: cannot verify branch checkout, proceeding: %v", selected.Title, cerr)
+			} else if checkedOut {
+				return fmt.Errorf("instance %s is currently checked out", selected.DisplayName())
 			}
 
 			// Clean up terminal session for this instance
@@ -702,8 +847,28 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		}
 
 		// Show confirmation modal
-		message := fmt.Sprintf("[!] Kill session '%s'?", selected.Title)
+		message := fmt.Sprintf("[!] Kill session '%s'?", selected.DisplayName())
 		return m, m.confirmAction(message, killAction)
+	case keys.KeyRename:
+		selected := m.list.GetSelectedInstance()
+		if selected == nil || selected.Status == session.Loading {
+			return m, nil
+		}
+		m.renameTarget = selected
+		m.renameOverlay = overlay.NewRenameOverlay(selected.DisplayName())
+		m.state = stateRename
+		m.menu.SetState(ui.StatePrompt)
+		return m, nil
+	case keys.KeyAutoName:
+		selected := m.list.GetSelectedInstance()
+		if selected == nil || selected.Status == session.Loading || m.generatingName {
+			return m, nil
+		}
+		// The model call (and the full diff it needs) happen in the background Cmd so
+		// the UI stays responsive; only the instance and prompt are captured here.
+		m.generatingName = true
+		m.menu.SetState(ui.StateGeneratingName)
+		return m, runAutoNameCmd(m.ctx, selected, selected.Prompt)
 	case keys.KeySubmit:
 		selected := m.list.GetSelectedInstance()
 		if selected == nil || selected.Status == session.Loading {
@@ -713,7 +878,7 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		// Create the push action as a tea.Cmd
 		pushAction := func() tea.Msg {
 			// Default commit message with timestamp
-			commitMsg := fmt.Sprintf("[claudesquad] update from '%s' on %s", selected.Title, time.Now().Format(time.RFC822))
+			commitMsg := fmt.Sprintf("[atrium] update from '%s' on %s", selected.DisplayName(), time.Now().Format(time.RFC822))
 			worktree, err := selected.GetGitWorktree()
 			if err != nil {
 				return err
@@ -725,7 +890,7 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		}
 
 		// Show confirmation modal
-		message := fmt.Sprintf("[!] Push changes from session '%s'?", selected.Title)
+		message := fmt.Sprintf("[!] Push changes from session '%s'?", selected.DisplayName())
 		return m, m.confirmAction(message, pushAction)
 	case keys.KeyCheckout:
 		selected := m.list.GetSelectedInstance()
@@ -733,15 +898,13 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 			return m, nil
 		}
 
-		// Show help screen before pausing
-		m.showHelpScreen(helpTypeInstanceCheckout{}, func() {
-			if err := selected.Pause(); err != nil {
-				m.handleError(err)
-			}
-			m.tabbedWindow.CleanupTerminalForInstance(selected.Title)
-			m.instanceChanged()
-		})
-		return m, nil
+		// Checkout: commit changes and pause. The branch name is copied to the
+		// clipboard inside Pause(); the always-on hint bar carries the reminder.
+		if err := selected.Pause(); err != nil {
+			return m, m.handleError(err)
+		}
+		m.tabbedWindow.CleanupTerminalForInstance(selected.Title)
+		return m, m.instanceChanged()
 	case keys.KeyMoveUp:
 		if m.list.MoveUp() {
 			if err := m.storage.SaveInstances(m.list.GetInstances()); err != nil {
@@ -753,6 +916,38 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 	case keys.KeyMoveDown:
 		if m.list.MoveDown() {
 			if err := m.storage.SaveInstances(m.list.GetInstances()); err != nil {
+				return m, m.handleError(err)
+			}
+			return m, m.instanceChanged()
+		}
+		return m, nil
+	case keys.KeyMoveGroupUp:
+		if m.list.MoveGroupUp() {
+			if err := m.storage.SaveInstances(m.list.GetInstances()); err != nil {
+				return m, m.handleError(err)
+			}
+			return m, m.instanceChanged()
+		}
+		return m, nil
+	case keys.KeyMoveGroupDown:
+		if m.list.MoveGroupDown() {
+			if err := m.storage.SaveInstances(m.list.GetInstances()); err != nil {
+				return m, m.handleError(err)
+			}
+			return m, m.instanceChanged()
+		}
+		return m, nil
+	case keys.KeyCollapseToggle:
+		if m.list.ToggleCollapse() {
+			if err := m.appState.SetCollapsedRepos(m.list.CollapsedRepos()); err != nil {
+				return m, m.handleError(err)
+			}
+			return m, m.instanceChanged()
+		}
+		return m, nil
+	case keys.KeyCollapseAll:
+		if m.list.ToggleCollapseAll() {
+			if err := m.appState.SetCollapsedRepos(m.list.CollapsedRepos()); err != nil {
 				return m, m.handleError(err)
 			}
 			return m, m.instanceChanged()
@@ -775,31 +970,24 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		if selected == nil || selected.Paused() || selected.Status == session.Loading || !selected.TmuxAlive() {
 			return m, nil
 		}
-		// Terminal tab: attach to terminal session
+		// Terminal tab: attach to terminal session. Attaching blocks until the
+		// user detaches (ctrl-q); the hint bar carries the detach reminder.
 		if m.tabbedWindow.IsInTerminalTab() {
-			m.showHelpScreen(helpTypeInstanceAttach{}, func() {
-				ch, err := m.tabbedWindow.AttachTerminal()
-				if err != nil {
-					m.handleError(err)
-					return
-				}
-				<-ch
-				m.state = stateDefault
-			})
-			return m, nil
-		}
-		// Show help screen before attaching
-		m.showHelpScreen(helpTypeInstanceAttach{}, func() {
-			ch, err := m.list.Attach()
+			ch, err := m.tabbedWindow.AttachTerminal()
 			if err != nil {
-				m.handleError(err)
-				return
+				return m, m.handleError(err)
 			}
 			<-ch
 			m.state = stateDefault
-			m.instanceChanged()
-		})
-		return m, nil
+			return m, nil
+		}
+		ch, err := m.list.Attach()
+		if err != nil {
+			return m, m.handleError(err)
+		}
+		<-ch
+		m.state = stateDefault
+		return m, m.instanceChanged()
 	default:
 		return m, nil
 	}
@@ -807,6 +995,27 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 
 // instanceChanged updates the preview pane, menu, and diff pane based on the selected instance. It returns an error
 // Cmd if there was any error.
+// deepRename renames the selected instance's title, git branch, worktree directory, and tmux
+// session to value, then clears the cosmetic label so the list shows the corrected name. It
+// rejects an empty title or one already used by another instance (Title is the storage key).
+// Runs synchronously on the main event loop — the rename is a handful of instant subprocesses,
+// and the git/tmux structs guard the fields the background poll loop reads.
+func (m *home) deepRename(selected *session.Instance, value string) error {
+	if value == "" {
+		return fmt.Errorf("session name cannot be empty")
+	}
+	for _, inst := range m.list.GetInstances() {
+		if inst != selected && inst.Title == value {
+			return fmt.Errorf("a session named %q already exists", value)
+		}
+	}
+	if err := selected.Rename(value); err != nil {
+		return err
+	}
+	selected.SetDisplayName("")
+	return m.storage.SaveInstances(m.list.GetInstances())
+}
+
 func (m *home) instanceChanged() tea.Cmd {
 	// selected may be nil
 	selected := m.list.GetSelectedInstance()
@@ -852,6 +1061,17 @@ type instanceChangedMsg struct{}
 type instanceStartedMsg struct {
 	instance *session.Instance
 	err      error
+}
+
+// shouldAutoOpen reports whether a freshly started session should be attached
+// automatically. It is gated by the auto_attach config flag and skipped when the
+// instance carries an initial prompt (delivered asynchronously by the metadata tick,
+// which is paused while attached). The Started/TmuxAlive guards avoid attaching a
+// session that did not come up — and, because Started() short-circuits before
+// TmuxAlive() (which dereferences tmuxSession), keep unstarted instances (e.g. in
+// tests) off both the panic and the attach path.
+func (m *home) shouldAutoOpen(inst *session.Instance) bool {
+	return m.appConfig.GetAutoAttach() && inst.Prompt == "" && inst.Started() && inst.TmuxAlive()
 }
 
 // branchSearchDebounceMsg fires after the debounce interval to trigger a search.
@@ -901,10 +1121,32 @@ func (m *home) runBranchSearch(filter string, version uint64) tea.Cmd {
 // computed in a background goroutine.
 type instanceMetaResult struct {
 	instance       *session.Instance
-	updated        bool
-	hasPrompt      bool
+	state          tmux.PaneState
 	readyForPrompt bool
-	diffStats      *git.DiffStats
+	// sessionLost is set when a started, non-paused instance's tmux pane no longer
+	// exists. The main thread recovers it to Paused (see recoverLostInstances).
+	sessionLost bool
+	diffStats   *git.DiffStats
+}
+
+// applyPaneState maps a polled pane state onto an instance's status. Prompt handling
+// depends on AutoYes: with it on, auto-answer (TapEnter is a no-op otherwise); with it
+// off the session is blocked on the user, so surface NeedsInput rather than a spinner.
+// PaneUnknown (an unreadable pane) leaves the status untouched.
+func applyPaneState(inst *session.Instance, state tmux.PaneState) {
+	switch state {
+	case tmux.PaneWorking:
+		inst.SetStatus(session.Running)
+	case tmux.PanePrompt:
+		if inst.AutoYes {
+			inst.TapEnter()
+		} else {
+			inst.SetStatus(session.NeedsInput)
+		}
+	case tmux.PaneIdle:
+		inst.SetStatus(session.Ready)
+	case tmux.PaneUnknown:
+	}
 }
 
 // sendPromptCmd submits a queued initial prompt to an instance off the UI thread,
@@ -933,6 +1175,38 @@ func deliverReadyPrompts(results []instanceMetaResult) []tea.Cmd {
 	return cmds
 }
 
+// lostSessionRecoverThreshold is how many consecutive ticks an instance must be seen
+// with a dead tmux session before it is recovered to Paused. Recovery commits any WIP
+// and removes the worktree, so a single transient `tmux has-session` miss (server
+// blip, load spike) must not trigger it — require confirmation across ticks.
+const lostSessionRecoverThreshold = 2
+
+// recoverLostInstances moves instances whose tmux session has died (flagged
+// sessionLost by the metadata tick) into Paused, so they stop being polled and can be
+// brought back with Resume. It debounces using strikes (a per-instance count of
+// consecutive dead observations, owned by the caller): a session is only recovered
+// after lostSessionRecoverThreshold consecutive misses; any live observation resets
+// the count. Returns whether any instance was recovered so the caller can persist.
+// Runs on the main thread — the only place model state may be mutated.
+func recoverLostInstances(results []instanceMetaResult, strikes map[*session.Instance]int) (recovered bool) {
+	for _, r := range results {
+		if !r.sessionLost || r.instance.Paused() {
+			delete(strikes, r.instance) // alive (or already paused): clear any prior strikes
+			continue
+		}
+		strikes[r.instance]++
+		if strikes[r.instance] < lostSessionRecoverThreshold {
+			continue // not yet confirmed dead; re-check next tick
+		}
+		delete(strikes, r.instance)
+		if err := r.instance.RecoverLostSession(); err != nil {
+			log.ErrorLog.Printf("failed to recover lost session %q: %v", r.instance.Title, err)
+		}
+		recovered = true
+	}
+	return recovered
+}
+
 // metadataUpdateDoneMsg is sent when the background metadata update completes.
 type metadataUpdateDoneMsg struct {
 	results []instanceMetaResult
@@ -944,12 +1218,33 @@ type instanceStartDoneMsg struct {
 	err      error
 }
 
-// runInstanceStartCmd returns a Cmd that performs the expensive instance.Start(true)
-// in a background goroutine so the main event loop stays responsive.
-func runInstanceStartCmd(instance *session.Instance) tea.Cmd {
+// autoNameDoneMsg is sent when a background name generation completes. instance
+// identifies which session the name was generated for, so the result lands on the
+// right one even if the selection moved meanwhile.
+type autoNameDoneMsg struct {
+	instance *session.Instance
+	name     string
+	err      error
+}
+
+// runAutoNameCmd returns a Cmd that generates a display name in a background
+// goroutine (the claude subprocess can take a few seconds) so the UI stays
+// responsive.
+func runAutoNameCmd(ctx context.Context, instance *session.Instance, prompt string) tea.Cmd {
 	return func() tea.Msg {
-		err := instance.Start(true)
-		return instanceStartDoneMsg{instance: instance, err: err}
+		// Compute the full diff here, off the UI thread. The cached stats are often the
+		// lightweight numstat form (Content empty) — that's all that's kept for a
+		// session unless it is the selected one during a diff poll — which would starve
+		// the namer of signal and yield a confabulated name. ComputeDiff is
+		// goroutine-safe; fall back to the cached stats if it can't run (e.g. paused).
+		stats := instance.ComputeDiff()
+		if stats == nil || stats.Content == "" {
+			if cached := instance.GetDiffStats(); cached != nil {
+				stats = cached
+			}
+		}
+		name, err := session.GenerateName(ctx, prompt, stats)
+		return autoNameDoneMsg{instance: instance, name: name, err: err}
 	}
 }
 
@@ -991,13 +1286,20 @@ func tickUpdateMetadataCmd(active []*session.Instance, selected *session.Instanc
 				defer wg.Done()
 				r := &results[i]
 				r.instance = instance
-				r.updated, r.hasPrompt = instance.HasUpdated()
+				// A started session whose tmux pane has died would fail every probe
+				// (capture, diff) and flood the log/error box. Detect it once here
+				// (read-only) and skip polling; the main thread recovers it to Paused.
+				if instance.Started() && !instance.Paused() && !instance.TmuxAlive() {
+					r.sessionLost = true
+					return
+				}
+				r.state = instance.Poll()
 				// Only probe readiness while a prompt is actually queued (a brief
 				// window after a new session), so the extra pane capture is rare.
-				// Require one stable tick (!updated) to avoid the post-trust
+				// Require the pane to not be mid-work to avoid the post-trust
 				// "loading" transition window.
 				if instance.Prompt != "" {
-					r.readyForPrompt = !r.updated && instance.IsReadyForPrompt()
+					r.readyForPrompt = r.state != tmux.PaneWorking && instance.IsReadyForPrompt()
 				}
 				if instance == selected {
 					r.diffStats = instance.ComputeDiff()
@@ -1017,6 +1319,7 @@ func tickUpdateMetadataCmd(active []*session.Instance, selected *session.Instanc
 func (m *home) handleError(err error) tea.Cmd {
 	log.ErrorLog.Printf("%v", err)
 	m.errBox.SetError(err)
+	m.recomputeLayout() // give the error its row; panes shrink by one
 	return func() tea.Msg {
 		select {
 		case <-m.ctx.Done():
@@ -1174,42 +1477,33 @@ func (m *home) killNewInstance() {
 	m.newInstance = nil
 }
 
-// confirmAction shows a confirmation modal and stores the action to execute on confirm
+// confirmAction shows a confirmation modal and stores the action to execute on
+// confirm. The action is run (and its result dispatched) by the stateConfirm key
+// handler, not here, so its returned message — including any error — flows through
+// Update instead of being discarded.
 func (m *home) confirmAction(message string, action tea.Cmd) tea.Cmd {
 	m.state = stateConfirm
+	m.pendingConfirmAction = action
 
 	// Create and show the confirmation overlay using ConfirmationOverlay
 	m.confirmationOverlay = overlay.NewConfirmationOverlay(message)
 	// Set a fixed width for consistent appearance
 	m.confirmationOverlay.SetWidth(50)
 
-	// Set callbacks for confirmation and cancellation
-	m.confirmationOverlay.OnConfirm = func() {
-		m.state = stateDefault
-		// Execute the action if it exists
-		if action != nil {
-			_ = action()
-		}
-	}
-
-	m.confirmationOverlay.OnCancel = func() {
-		m.state = stateDefault
-	}
-
 	return nil
 }
 
 func (m *home) View() string {
-	listWithPadding := lipgloss.NewStyle().PaddingTop(1).Render(m.list.String())
-	previewWithPadding := lipgloss.NewStyle().PaddingTop(1).Render(m.tabbedWindow.String())
-	listAndPreview := lipgloss.JoinHorizontal(lipgloss.Top, listWithPadding, previewWithPadding)
+	listAndPreview := lipgloss.JoinHorizontal(lipgloss.Top, m.list.String(), m.tabbedWindow.String())
 
-	mainView := lipgloss.JoinVertical(
-		lipgloss.Center,
-		listAndPreview,
-		m.menu.String(),
-		m.errBox.String(),
-	)
+	parts := []string{listAndPreview, m.menu.String()}
+	// The error box only claims a row while it has something to show; otherwise the
+	// help bar is the last row and there is no trailing blank line. (JoinVertical
+	// treats an empty string as a blank line, so it must be omitted, not just empty.)
+	if m.errBox.HasError() {
+		parts = append(parts, m.errBox.String())
+	}
+	mainView := lipgloss.JoinVertical(lipgloss.Left, parts...)
 
 	if m.state == statePrompt {
 		if m.textInputOverlay == nil {
@@ -1226,6 +1520,11 @@ func (m *home) View() string {
 			log.ErrorLog.Printf("confirmation overlay is nil")
 		}
 		return overlay.PlaceOverlay(0, 0, m.confirmationOverlay.Render(), mainView, true, true)
+	} else if m.state == stateRename {
+		if m.renameOverlay == nil {
+			log.ErrorLog.Printf("rename overlay is nil")
+		}
+		return overlay.PlaceOverlay(0, 0, m.renameOverlay.Render(), mainView, true, true)
 	}
 
 	return mainView

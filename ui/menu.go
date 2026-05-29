@@ -1,36 +1,25 @@
 package ui
 
 import (
-	"claude-squad/keys"
+	"github.com/ZviBaratz/atrium/keys"
+	"github.com/ZviBaratz/atrium/ui/theme"
 	"strings"
 
-	"claude-squad/session"
+	"github.com/ZviBaratz/atrium/session"
 
 	"github.com/charmbracelet/lipgloss"
 )
 
-var keyStyle = lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{
-	Light: "#655F5F",
-	Dark:  "#7F7A7A",
-})
-
-var descStyle = lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{
-	Light: "#7A7474",
-	Dark:  "#9C9494",
-})
-
-var sepStyle = lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{
-	Light: "#DDDADA",
-	Dark:  "#3C3C3C",
-})
-
-var actionGroupStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("99"))
+// Hint-bar styles read the active theme at render time: keys in primary text,
+// descriptions dim, the primary action group in accent, separators faint.
+func keyStyle() lipgloss.Style         { return theme.Current().FgStyle() }
+func descStyle() lipgloss.Style        { return theme.Current().DimStyle() }
+func sepStyle() lipgloss.Style         { return theme.Current().FaintStyle() }
+func actionGroupStyle() lipgloss.Style { return theme.Current().AccentStyle().Bold(true) }
+func menuStyle() lipgloss.Style        { return lipgloss.NewStyle() }
 
 var separator = " • "
 var verticalSeparator = " │ "
-
-var menuStyle = lipgloss.NewStyle().
-	Foreground(lipgloss.Color("205"))
 
 // MenuState represents different states the menu can be in
 type MenuState int
@@ -40,6 +29,9 @@ const (
 	StateEmpty
 	StateNewInstance
 	StatePrompt
+	// StateGeneratingName is shown while a session name is being generated in the
+	// background; the hint bar reports progress instead of the usual options.
+	StateGeneratingName
 )
 
 type Menu struct {
@@ -91,8 +83,9 @@ func (m *Menu) SetNewInstanceHint(repo string) {
 // SetInstance updates the current instance and refreshes menu options
 func (m *Menu) SetInstance(instance *session.Instance) {
 	m.instance = instance
-	// Only change the state if we're not in a special state (NewInstance or Prompt)
-	if m.state != StateNewInstance && m.state != StatePrompt {
+	// Only change the state if we're not in a special state (NewInstance, Prompt,
+	// or GeneratingName) — those persist across the periodic instanceChanged ticks.
+	if m.state != StateNewInstance && m.state != StatePrompt && m.state != StateGeneratingName {
 		if m.instance != nil {
 			m.state = StateDefault
 		} else {
@@ -125,6 +118,8 @@ func (m *Menu) updateOptions() {
 		m.options = newInstanceMenuOptions
 	case StatePrompt:
 		m.options = promptMenuOptions
+	case StateGeneratingName:
+		m.options = nil
 	}
 }
 
@@ -136,7 +131,7 @@ func (m *Menu) addInstanceOptions() {
 	}
 
 	// Instance management group
-	options := []keys.KeyName{keys.KeyNew, keys.KeyKill}
+	options := []keys.KeyName{keys.KeyNew, keys.KeyKill, keys.KeyRename}
 
 	// Action group
 	actionGroup := []keys.KeyName{keys.KeyEnter, keys.KeySubmit}
@@ -168,6 +163,13 @@ func (m *Menu) SetSize(width, height int) {
 }
 
 func (m *Menu) String() string {
+	// While generating a name, the hint bar shows a single status line rather than
+	// the usual option groups.
+	if m.state == StateGeneratingName {
+		msg := actionGroupStyle().Render("✨ Generating name…")
+		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, msg)
+	}
+
 	var s strings.Builder
 
 	// Define group boundaries
@@ -175,18 +177,18 @@ func (m *Menu) String() string {
 		start int
 		end   int
 	}{
-		{0, 2}, // Instance management group (n, d)
-		{2, 5}, // Action group (enter, submit, pause/resume)
-		{6, 8}, // System group (tab, help, q)
+		{0, 3}, // Instance management group (n, D, R)
+		{3, 6}, // Action group (enter, submit, pause/resume)
+		{7, 9}, // System group (tab, help, q)
 	}
 
 	for i, k := range m.options {
 		binding := keys.GlobalkeyBindings[k]
 
 		var (
-			localActionStyle = actionGroupStyle
-			localKeyStyle    = keyStyle
-			localDescStyle   = descStyle
+			localActionStyle = actionGroupStyle()
+			localKeyStyle    = keyStyle()
+			localDescStyle   = descStyle()
 		)
 		if m.keyDown == k {
 			localActionStyle = localActionStyle.Underline(true)
@@ -219,24 +221,24 @@ func (m *Menu) String() string {
 			isGroupEnd := false
 			for _, group := range groups {
 				if i == group.end-1 {
-					s.WriteString(sepStyle.Render(verticalSeparator))
+					s.WriteString(sepStyle().Render(verticalSeparator))
 					isGroupEnd = true
 					break
 				}
 			}
 			if !isGroupEnd {
-				s.WriteString(sepStyle.Render(separator))
+				s.WriteString(sepStyle().Render(separator))
 			}
 		}
 	}
 
 	// While naming a new session, show which repo it will be created in.
 	if m.state == StateNewInstance && m.newInstanceHint != "" {
-		s.WriteString(sepStyle.Render(verticalSeparator))
-		s.WriteString(keyStyle.Render("in "))
-		s.WriteString(descStyle.Render(m.newInstanceHint))
+		s.WriteString(sepStyle().Render(verticalSeparator))
+		s.WriteString(keyStyle().Render("in "))
+		s.WriteString(descStyle().Render(m.newInstanceHint))
 	}
 
-	centeredMenuText := menuStyle.Render(s.String())
+	centeredMenuText := menuStyle().Render(s.String())
 	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, centeredMenuText)
 }

@@ -18,6 +18,7 @@ const (
 	KeySubmit
 
 	KeyTab        // Tab is a special keybinding for switching between panes.
+	KeyShiftTab   // ShiftTab cycles between panes in reverse order.
 	KeySubmitName // SubmitName is a special keybinding for submitting the name of a new instance.
 
 	KeyCheckout
@@ -32,6 +33,20 @@ const (
 	// Reorder keybindings
 	KeyMoveUp
 	KeyMoveDown
+
+	// Whole-group reorder keybindings
+	KeyMoveGroupUp
+	KeyMoveGroupDown
+
+	// Group collapse keybindings
+	KeyCollapseToggle
+	KeyCollapseAll
+
+	KeyRename // Rename the selected session's display label
+
+	KeyQuickSend // Open a compose box to send a message to the selected session without attaching
+
+	KeyAutoName // Auto-generate a display name for the selected session via claude
 )
 
 // GlobalKeyStringsMap is a global, immutable map string to keybinding.
@@ -44,13 +59,21 @@ var GlobalKeyStringsMap = map[string]KeyName{
 	"shift+down": KeyShiftDown,
 	"J":          KeyMoveDown,
 	"K":          KeyMoveUp,
+	"{":          KeyMoveGroupUp,
+	"}":          KeyMoveGroupDown,
+	" ":          KeyCollapseToggle,
+	"Z":          KeyCollapseAll,
 	"N":          KeyPrompt,
 	"enter":      KeyEnter,
 	"o":          KeyEnter,
 	"n":          KeyNew,
 	"D":          KeyKill,
+	"R":          KeyRename,
+	"A":          KeyAutoName,
+	"right":      KeyQuickSend,
 	"q":          KeyQuit,
 	"tab":        KeyTab,
+	"shift+tab":  KeyShiftTab,
 	"c":          KeyCheckout,
 	"r":          KeyResume,
 	"p":          KeySubmit,
@@ -87,6 +110,18 @@ var GlobalkeyBindings = map[KeyName]key.Binding{
 		key.WithKeys("D"),
 		key.WithHelp("D", "kill"),
 	),
+	KeyRename: key.NewBinding(
+		key.WithKeys("R"),
+		key.WithHelp("R", "rename"),
+	),
+	KeyAutoName: key.NewBinding(
+		key.WithKeys("A"),
+		key.WithHelp("A", "auto-name"),
+	),
+	KeyQuickSend: key.NewBinding(
+		key.WithKeys("right"),
+		key.WithHelp("→", "send"),
+	),
 	KeyHelp: key.NewBinding(
 		key.WithKeys("?"),
 		key.WithHelp("?", "help"),
@@ -111,6 +146,10 @@ var GlobalkeyBindings = map[KeyName]key.Binding{
 		key.WithKeys("tab"),
 		key.WithHelp("tab", "switch tab"),
 	),
+	KeyShiftTab: key.NewBinding(
+		key.WithKeys("shift+tab"),
+		key.WithHelp("shift+tab", "prev tab"),
+	),
 	KeyResume: key.NewBinding(
 		key.WithKeys("r"),
 		key.WithHelp("r", "resume"),
@@ -123,6 +162,23 @@ var GlobalkeyBindings = map[KeyName]key.Binding{
 	KeyMoveDown: key.NewBinding(
 		key.WithKeys("J"),
 		key.WithHelp("J", "move down"),
+	),
+
+	KeyMoveGroupUp: key.NewBinding(
+		key.WithKeys("{"),
+		key.WithHelp("{", "move group up"),
+	),
+	KeyMoveGroupDown: key.NewBinding(
+		key.WithKeys("}"),
+		key.WithHelp("}", "move group down"),
+	),
+	KeyCollapseToggle: key.NewBinding(
+		key.WithKeys(" "),
+		key.WithHelp("space", "collapse/expand group"),
+	),
+	KeyCollapseAll: key.NewBinding(
+		key.WithKeys("Z"),
+		key.WithHelp("Z", "collapse/expand all"),
 	),
 
 	// -- Special keybindings --

@@ -7,6 +7,7 @@ on:
       - '**.go'
       - 'go.mod'
       - 'go.sum'
+      - '.golangci.yml'
       - '.github/workflows/lint.yml'
   pull_request:
     branches: [ main ]
@@ -14,35 +15,53 @@ on:
       - '**.go'
       - 'go.mod'
       - 'go.sum'
+      - '.golangci.yml'
       - '.github/workflows/lint.yml'
 
+permissions:
+  contents: read
+
+concurrency:
+  group: lint-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
-  golangci:
-    name: lint
+  # gofmt is deterministic and trivially fixable (`just fmt`), so it is a hard gate.
+  format:
+    name: gofmt
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff  # v5
         with:
-          go-version: '1.23'
+          go-version-file: go.mod
           cache: false
-
-      - name: golangci-lint
-        uses: golangci/golangci-lint-action@v6
-        with:
-          version: v1.60.1
-          args: --timeout=3m --out-format=line-number --fast --max-issues-per-linter=0 --max-same-issues=0
-          skip-cache: false
-          only-new-issues: true
-
       - name: Check formatting
         run: |
-          if [ -n "$(gofmt -l .)" ]; then
-            echo "The following files are not formatted correctly:"
-            gofmt -l .
-            echo "Fix these issues"
-            gofmt -d .
+          unformatted="$(gofmt -l . | grep -v '^web/' || true)"
+          if [ -n "$unformatted" ]; then
+            echo "These files are not gofmt-clean (run \`just fmt\`):"
+            echo "$unformatted"
+            # Word-splitting is intentional: pass each file as a separate arg.
+            # shellcheck disable=SC2086
+            gofmt -d $unformatted
             exit 1
           fi
+
+  # golangci-lint is a hard gate over the whole repository. The curated linter set
+  # lives in .golangci.yml. gosec/revive are tracked separately for a triage pass.
+  lint:
+    name: golangci-lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+      - name: Set up Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff  # v5
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@9fae48acfc02a90574d7c304a1758ef9895495fa  # v7
+        with:
+          version: latest

@@ -1,6 +1,7 @@
 package overlay
 
 import (
+	"github.com/ZviBaratz/atrium/ui/theme"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -183,21 +184,14 @@ func (bp *BranchPicker) GetSelectedBranch() string {
 	return selected
 }
 
-var (
-	bpLabelStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("62")).
-			Bold(true)
-
-	bpFilterStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("7"))
-
-	bpSelectedStyle = lipgloss.NewStyle().
-			Background(lipgloss.Color("62")).
-			Foreground(lipgloss.Color("0"))
-
-	bpDimStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("240"))
-)
+func bpLabelStyle() lipgloss.Style  { return theme.Current().AccentStyle().Bold(true) }
+func bpFilterStyle() lipgloss.Style { return theme.Current().FgStyle() }
+func bpSelectedStyle() lipgloss.Style {
+	return lipgloss.NewStyle().
+		Background(theme.Current().Palette.Accent).
+		Foreground(theme.Current().Palette.Bg)
+}
+func bpDimStyle() lipgloss.Style { return theme.Current().DimStyle() }
 
 // Render renders the branch picker at a constant height (one header line, a blank line,
 // then visibleRows item rows) so the surrounding overlay never changes size as
@@ -208,25 +202,25 @@ func (bp *BranchPicker) Render() string {
 	var s strings.Builder
 
 	if !bp.focused {
-		s.WriteString(bpLabelStyle.Render("Base: "))
+		s.WriteString(bpLabelStyle().Render("Base: "))
 		if sel := bp.selectedLabel(); sel != "" {
 			s.WriteString(sel)
 		} else {
-			s.WriteString(bpDimStyle.Render("(none)"))
+			s.WriteString(bpDimStyle().Render("(none)"))
 		}
 		s.WriteString("\n\n")
-		s.WriteString(renderPickerRows(nil, 0, bp.visibleRows, false, "", bpSelectedStyle, bpDimStyle))
+		s.WriteString(renderPickerRows(nil, 0, bp.visibleRows, false, "", bpSelectedStyle(), bpDimStyle()))
 		return s.String()
 	}
 
-	s.WriteString(bpLabelStyle.Render("Base branch"))
-	s.WriteString(bpFilterStyle.Render(" (filter: " + bp.filter + "█)"))
+	s.WriteString(bpLabelStyle().Render("Base branch"))
+	s.WriteString(bpFilterStyle().Render(" (filter: " + bp.filter + "█)"))
 	if bp.loading {
-		s.WriteString(bpDimStyle.Render("  searching…"))
+		s.WriteString(bpDimStyle().Render("  searching…"))
 	}
 	s.WriteString("\n\n")
 
-	s.WriteString(renderPickerRows(bp.visibleItems(), bp.cursor, bp.visibleRows, true, "no matching branches", bpSelectedStyle, bpDimStyle))
+	s.WriteString(renderPickerRows(bp.visibleItems(), bp.cursor, bp.visibleRows, true, "no matching branches", bpSelectedStyle(), bpDimStyle()))
 	return s.String()
 }
 

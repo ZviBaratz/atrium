@@ -1,10 +1,11 @@
 package ui
 
 import (
-	"claude-squad/log"
-	"claude-squad/session"
-	"claude-squad/session/tmux"
 	"fmt"
+	"github.com/ZviBaratz/atrium/log"
+	"github.com/ZviBaratz/atrium/session"
+	"github.com/ZviBaratz/atrium/session/tmux"
+	"github.com/ZviBaratz/atrium/ui/theme"
 	"os"
 	"strings"
 	"sync"
@@ -13,11 +14,9 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
-var terminalPaneStyle = lipgloss.NewStyle().
-	Foreground(lipgloss.AdaptiveColor{Light: "#1a1a1a", Dark: "#dddddd"})
-
-var terminalFooterStyle = lipgloss.NewStyle().
-	Foreground(lipgloss.AdaptiveColor{Light: "#808080", Dark: "#808080"})
+// terminalPaneStyle / terminalFooterStyle read the active theme at render time.
+func terminalPaneStyle() lipgloss.Style   { return theme.Current().FgStyle() }
+func terminalFooterStyle() lipgloss.Style { return theme.Current().DimStyle() }
 
 // terminalSession holds a cached tmux session for a specific instance.
 type terminalSession struct {
@@ -65,7 +64,7 @@ func (t *TerminalPane) SetSize(width, height int) {
 // Caller must hold t.mu.
 func (t *TerminalPane) setFallbackState(message string) {
 	t.fallback = true
-	t.fallbackText = lipgloss.JoinVertical(lipgloss.Center, FallBackText, "", message)
+	t.fallbackText = lipgloss.JoinVertical(lipgloss.Center, FallbackBanner(), "", message)
 	t.content = ""
 }
 
@@ -113,15 +112,8 @@ func (t *TerminalPane) UpdateContent(instance *session.Instance) error {
 	return nil
 }
 
-// ensureSession creates or reuses a cached terminal tmux session for the given instance.
-func (t *TerminalPane) ensureSession(instance *session.Instance) error {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	return t.ensureSessionLocked(instance)
-}
-
-// ensureSessionLocked is the lock-free implementation of ensureSession.
-// Caller must hold t.mu.
+// ensureSessionLocked creates or reuses a cached terminal tmux session for the
+// given instance. Caller must hold t.mu.
 func (t *TerminalPane) ensureSessionLocked(instance *session.Instance) error {
 	if instance == nil || !instance.Started() || instance.Status == session.Paused {
 		return nil
@@ -277,7 +269,7 @@ func (t *TerminalPane) String() string {
 			lines = append(lines, strings.Repeat("\n", bottomPadding))
 		}
 
-		return terminalPaneStyle.
+		return terminalPaneStyle().
 			Width(width).
 			Align(lipgloss.Center).
 			Render(strings.Join(lines, ""))
@@ -296,7 +288,7 @@ func (t *TerminalPane) String() string {
 	}
 
 	contentStr := strings.Join(lines, "\n")
-	return terminalPaneStyle.Width(width).Render(contentStr)
+	return terminalPaneStyle().Width(width).Render(contentStr)
 }
 
 // enterScrollMode captures the full terminal history and enters scroll mode.
@@ -312,7 +304,7 @@ func (t *TerminalPane) enterScrollMode() error {
 		return fmt.Errorf("terminal pane: failed to capture full history: %w", err)
 	}
 
-	footer := terminalFooterStyle.Render("ESC to exit scroll mode")
+	footer := terminalFooterStyle().Render("ESC to exit scroll mode")
 	contentWithFooter := lipgloss.JoinVertical(lipgloss.Left, content, footer)
 	t.viewport.SetContent(contentWithFooter)
 	t.viewport.GotoBottom()

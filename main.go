@@ -1,32 +1,36 @@
 package main
 
 import (
-	"claude-squad/app"
-	cmd2 "claude-squad/cmd"
-	"claude-squad/config"
-	"claude-squad/daemon"
-	"claude-squad/log"
-	"claude-squad/session"
-	"claude-squad/session/git"
-	"claude-squad/session/tmux"
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/ZviBaratz/atrium/app"
+	cmd2 "github.com/ZviBaratz/atrium/cmd"
+	"github.com/ZviBaratz/atrium/config"
+	"github.com/ZviBaratz/atrium/daemon"
+	"github.com/ZviBaratz/atrium/log"
+	"github.com/ZviBaratz/atrium/session"
+	"github.com/ZviBaratz/atrium/session/git"
+	"github.com/ZviBaratz/atrium/session/tmux"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/spf13/cobra"
 )
 
 var (
-	version     = "1.0.18"
+	// version is overridden at build time via -ldflags "-X main.version=...".
+	// GoReleaser injects the tag (e.g. 0.1.0); the justfile injects git describe.
+	// Unstamped builds (plain `go build`) report "dev".
+	version     = "dev"
 	programFlag string
 	autoYesFlag bool
 	daemonFlag  bool
 	binName     string
 	rootCmd     = &cobra.Command{
-		Use:   "claude-squad",
-		Short: "Claude Squad - Manage multiple AI agents like Claude Code, Aider, Codex, and Amp.",
+		Use:   "atrium",
+		Short: "Atrium - A command center for orchestrating multiple AI coding agents like Claude Code, Aider, Codex, and Amp.",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := context.Background()
 			log.Initialize(daemonFlag)
@@ -34,6 +38,9 @@ var (
 
 			if daemonFlag {
 				cfg := config.LoadConfig()
+				if err := tmux.Init(cfg.TmuxConfigOverride); err != nil {
+					log.WarningLog.Printf("failed to initialize tmux config: %v", err)
+				}
 				err := daemon.RunDaemon(cfg)
 				log.ErrorLog.Printf("failed to start daemon %v", err)
 				return err
@@ -45,6 +52,9 @@ var (
 			// any project. When there is no repo context, session creation guides you to
 			// pick one rather than failing at startup.
 			cfg := config.LoadConfig()
+			if err := tmux.Init(cfg.TmuxConfigOverride); err != nil {
+				log.WarningLog.Printf("failed to initialize tmux config: %v", err)
+			}
 
 			// Program flag overrides config
 			program := cfg.GetProgram()
@@ -135,7 +145,12 @@ var (
 		Short: "Print the version number",
 		Run: func(cmd *cobra.Command, args []string) {
 			fmt.Printf("%s version %s\n", binName, version)
-			fmt.Printf("https://github.com/smtg-ai/claude-squad/releases/tag/v%s\n", version)
+			// Only link to a release for a clean release version. Dev builds report
+			// "dev" or a `git describe` string (e.g. 0.1.0-5-gabc-dirty) that has no
+			// corresponding release page.
+			if version != "dev" && !strings.Contains(version, "-") {
+				fmt.Printf("https://github.com/ZviBaratz/atrium/releases/tag/v%s\n", version)
+			}
 		},
 	}
 )

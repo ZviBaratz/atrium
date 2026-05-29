@@ -1,33 +1,35 @@
 package config
 
 import (
-	"claude-squad/log"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
 
+	"github.com/ZviBaratz/atrium/internal/testutil"
+	"github.com/ZviBaratz/atrium/log"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-// TestMain runs before all tests to set up the test environment
+// TestMain initializes the logger and sandboxes HOME so config tests resolve the
+// data dir under a throwaway directory — never the developer's real ~/.atrium or
+// legacy ~/.claude-squad. Tests that need a specific layout override HOME locally.
 func TestMain(m *testing.M) {
-	// Initialize the logger before any tests run
 	log.Initialize(false)
-	defer log.Close()
-
-	exitCode := m.Run()
-	os.Exit(exitCode)
+	code := testutil.SandboxHomeMain(m)
+	log.Close()
+	os.Exit(code)
 }
 
 func TestGetClaudeCommand(t *testing.T) {
 	originalShell := os.Getenv("SHELL")
 	originalPath := os.Getenv("PATH")
 	defer func() {
-		os.Setenv("SHELL", originalShell)
-		os.Setenv("PATH", originalPath)
+		_ = os.Setenv("SHELL", originalShell)
+		_ = os.Setenv("PATH", originalPath)
 	}()
 
 	t.Run("finds claude in PATH", func(t *testing.T) {
@@ -40,8 +42,8 @@ func TestGetClaudeCommand(t *testing.T) {
 		require.NoError(t, err)
 
 		// Set PATH to include our temp directory
-		os.Setenv("PATH", tempDir+":"+originalPath)
-		os.Setenv("SHELL", "/bin/bash")
+		_ = os.Setenv("PATH", tempDir+":"+originalPath)
+		_ = os.Setenv("SHELL", "/bin/bash")
 
 		result, err := GetClaudeCommand()
 
@@ -52,8 +54,8 @@ func TestGetClaudeCommand(t *testing.T) {
 	t.Run("handles missing claude command", func(t *testing.T) {
 		// Set PATH to a directory that doesn't contain claude
 		tempDir := t.TempDir()
-		os.Setenv("PATH", tempDir)
-		os.Setenv("SHELL", "/bin/bash")
+		_ = os.Setenv("PATH", tempDir)
+		_ = os.Setenv("SHELL", "/bin/bash")
 
 		result, err := GetClaudeCommand()
 
@@ -72,8 +74,8 @@ func TestGetClaudeCommand(t *testing.T) {
 		require.NoError(t, err)
 
 		// Set PATH and unset SHELL
-		os.Setenv("PATH", tempDir+":"+originalPath)
-		os.Unsetenv("SHELL")
+		_ = os.Setenv("PATH", tempDir+":"+originalPath)
+		_ = os.Unsetenv("SHELL")
 
 		result, err := GetClaudeCommand()
 
@@ -181,7 +183,7 @@ func TestGetConfigDir(t *testing.T) {
 
 		assert.NoError(t, err)
 		assert.NotEmpty(t, configDir)
-		assert.True(t, strings.HasSuffix(configDir, ".claude-squad"))
+		assert.True(t, strings.HasSuffix(configDir, ".atrium"))
 
 		// Verify it's an absolute path
 		assert.True(t, filepath.IsAbs(configDir))
@@ -193,8 +195,8 @@ func TestLoadConfig(t *testing.T) {
 		// Use a temporary home directory to avoid interfering with real config
 		originalHome := os.Getenv("HOME")
 		tempHome := t.TempDir()
-		os.Setenv("HOME", tempHome)
-		defer os.Setenv("HOME", originalHome)
+		_ = os.Setenv("HOME", tempHome)
+		defer func() { _ = os.Setenv("HOME", originalHome) }()
 
 		config := LoadConfig()
 
@@ -225,8 +227,8 @@ func TestLoadConfig(t *testing.T) {
 
 		// Override HOME environment
 		originalHome := os.Getenv("HOME")
-		os.Setenv("HOME", tempHome)
-		defer os.Setenv("HOME", originalHome)
+		_ = os.Setenv("HOME", tempHome)
+		defer func() { _ = os.Setenv("HOME", originalHome) }()
 
 		config := LoadConfig()
 
@@ -252,8 +254,8 @@ func TestLoadConfig(t *testing.T) {
 
 		// Override HOME environment
 		originalHome := os.Getenv("HOME")
-		os.Setenv("HOME", tempHome)
-		defer os.Setenv("HOME", originalHome)
+		_ = os.Setenv("HOME", tempHome)
+		defer func() { _ = os.Setenv("HOME", originalHome) }()
 
 		config := LoadConfig()
 
@@ -338,8 +340,8 @@ func TestSaveConfig(t *testing.T) {
 
 		// Override HOME environment
 		originalHome := os.Getenv("HOME")
-		os.Setenv("HOME", tempHome)
-		defer os.Setenv("HOME", originalHome)
+		_ = os.Setenv("HOME", tempHome)
+		defer func() { _ = os.Setenv("HOME", originalHome) }()
 
 		// Create a test config
 		testConfig := &Config{
@@ -352,8 +354,8 @@ func TestSaveConfig(t *testing.T) {
 		err := SaveConfig(testConfig)
 		assert.NoError(t, err)
 
-		// Verify the file was created
-		configDir := filepath.Join(tempHome, ".claude-squad")
+		// Verify the file was created (fresh HOME → new ~/.atrium layout)
+		configDir := filepath.Join(tempHome, ".atrium")
 		configPath := filepath.Join(configDir, ConfigFileName)
 
 		assert.FileExists(t, configPath)
@@ -364,5 +366,22 @@ func TestSaveConfig(t *testing.T) {
 		assert.Equal(t, testConfig.AutoYes, loadedConfig.AutoYes)
 		assert.Equal(t, testConfig.DaemonPollInterval, loadedConfig.DaemonPollInterval)
 		assert.Equal(t, testConfig.BranchPrefix, loadedConfig.BranchPrefix)
+	})
+}
+
+func TestGetAutoAttach(t *testing.T) {
+	t.Run("default config is on", func(t *testing.T) {
+		assert.True(t, DefaultConfig().GetAutoAttach())
+	})
+	t.Run("nil field (older config) defaults on", func(t *testing.T) {
+		assert.True(t, (&Config{}).GetAutoAttach())
+	})
+	t.Run("explicit true", func(t *testing.T) {
+		v := true
+		assert.True(t, (&Config{AutoAttach: &v}).GetAutoAttach())
+	})
+	t.Run("explicit false", func(t *testing.T) {
+		v := false
+		assert.False(t, (&Config{AutoAttach: &v}).GetAutoAttach())
 	})
 }
