@@ -584,6 +584,55 @@ func TestMultipleConfirmationsDontInterfere(t *testing.T) {
 	assert.True(t, action1Called, "First action should be callable after being replaced")
 }
 
+// TestConfirmActionSurfacesActionResult locks in the fix for silently-swallowed
+// confirmation errors: confirmAction stashes the action (it does not run it), and
+// confirming runs it on the main loop and routes its result message — including an
+// error — back through the runtime so Update's `case error` handler can display it.
+func TestConfirmActionSurfacesActionResult(t *testing.T) {
+	h := &home{
+		ctx:       context.Background(),
+		state:     stateDefault,
+		appConfig: config.DefaultConfig(),
+		menu:      ui.NewMenu(),
+	}
+
+	wantErr := fmt.Errorf("kill failed")
+	_ = h.confirmAction("Kill it?", func() tea.Msg { return wantErr })
+
+	assert.Equal(t, stateConfirm, h.state)
+	require.NotNil(t, h.pendingConfirmAction, "confirmAction must stash the action")
+
+	_, cmd := h.handleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("y")})
+	require.NotNil(t, cmd, "confirming must return a command carrying the action result")
+	assert.Equal(t, stateDefault, h.state)
+	assert.Nil(t, h.pendingConfirmAction)
+	assert.Nil(t, h.confirmationOverlay)
+
+	msg := cmd()
+	err, ok := msg.(error)
+	require.True(t, ok, "expected an error message, got %T", msg)
+	assert.Equal(t, wantErr, err)
+}
+
+// TestConfirmActionCancelDoesNotRun verifies cancelling never executes the action.
+func TestConfirmActionCancelDoesNotRun(t *testing.T) {
+	h := &home{
+		ctx:       context.Background(),
+		state:     stateDefault,
+		appConfig: config.DefaultConfig(),
+		menu:      ui.NewMenu(),
+	}
+
+	ran := false
+	_ = h.confirmAction("Kill it?", func() tea.Msg { ran = true; return nil })
+
+	_, cmd := h.handleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("n")})
+	assert.Nil(t, cmd)
+	assert.False(t, ran, "cancelled action must not run")
+	assert.Equal(t, stateDefault, h.state)
+	assert.Nil(t, h.pendingConfirmAction)
+}
+
 // TestConfirmationModalVisualAppearance tests that confirmation modal has distinct visual appearance
 func TestConfirmationModalVisualAppearance(t *testing.T) {
 	h := &home{

@@ -136,7 +136,16 @@ func (g *GitWorktree) Cleanup() error {
 	if _, err := os.Stat(g.worktreePath); err == nil {
 		// Remove the worktree using git command
 		if _, err := g.runGitCommand(g.repoPath, "worktree", "remove", "-f", g.worktreePath); err != nil {
-			errs = append(errs, err)
+			// The git removal can fail when the repo itself is unreachable — e.g.
+			// the user renamed or deleted the project directory the session was
+			// created from. Fall back to deleting the directory outright so an
+			// orphaned worktree is never left behind, guarding the path to the
+			// managed worktrees/ tree so a bug can't RemoveAll something arbitrary.
+			if rmErr := removeOrphanedWorktreeDir(g.worktreePath); rmErr != nil {
+				errs = append(errs, err, rmErr)
+			} else {
+				log.WarningLog.Printf("git worktree remove failed for %s, removed directory directly: %v", g.worktreePath, err)
+			}
 		}
 	} else if !os.IsNotExist(err) {
 		// Only append error if it's not a "not exists" error
@@ -162,6 +171,33 @@ func (g *GitWorktree) Cleanup() error {
 		return g.combineErrors(errs)
 	}
 
+	return nil
+}
+
+// removeOrphanedWorktreeDir deletes worktreePath, but only when it lives under the
+// managed worktrees/ tree. The containment check is a safety belt: Cleanup calls
+// this as a fallback when git can no longer manage the worktree, and we never want
+// an unexpected path to turn into a recursive delete of something important.
+func removeOrphanedWorktreeDir(worktreePath string) error {
+	root, err := getWorktreeDirectory()
+	if err != nil {
+		return fmt.Errorf("failed to resolve worktrees directory: %w", err)
+	}
+	absRoot, err := filepath.Abs(root)
+	if err != nil {
+		return fmt.Errorf("failed to resolve worktrees directory: %w", err)
+	}
+	absPath, err := filepath.Abs(worktreePath)
+	if err != nil {
+		return fmt.Errorf("failed to resolve worktree path: %w", err)
+	}
+	rel, err := filepath.Rel(absRoot, absPath)
+	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return fmt.Errorf("refusing to remove worktree path outside managed tree: %s", absPath)
+	}
+	if err := os.RemoveAll(absPath); err != nil {
+		return fmt.Errorf("failed to remove orphaned worktree directory %s: %w", absPath, err)
+	}
 	return nil
 }
 

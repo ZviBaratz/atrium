@@ -128,6 +128,10 @@ type home struct {
 	textOverlay *overlay.TextOverlay
 	// confirmationOverlay displays confirmation modals
 	confirmationOverlay *overlay.ConfirmationOverlay
+	// pendingConfirmAction is the action to run if the confirmation overlay is
+	// confirmed. It is executed on the main loop and its returned message is fed
+	// back through Update so errors surface in the error box.
+	pendingConfirmAction tea.Cmd
 	// renameOverlay handles editing a session's display label
 	renameOverlay *overlay.RenameOverlay
 	// renameTarget is the instance the rename overlay was opened for. It is captured
@@ -631,8 +635,19 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 	if m.state == stateConfirm {
 		shouldClose := m.confirmationOverlay.HandleKeyPress(msg)
 		if shouldClose {
+			confirmed := m.confirmationOverlay.Confirmed
+			action := m.pendingConfirmAction
 			m.state = stateDefault
 			m.confirmationOverlay = nil
+			m.pendingConfirmAction = nil
+			if confirmed && action != nil {
+				// Run the action here, on the main loop, because it mutates shared
+				// model state (list, terminals); a tea.Cmd would run it in a
+				// goroutine and race Update. Feed only the resulting message back
+				// through the runtime so a returned error reaches the error box.
+				resultMsg := action()
+				return m, func() tea.Msg { return resultMsg }
+			}
 			return m, nil
 		}
 		return m, nil
@@ -801,18 +816,16 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 
 		// Create the kill action as a tea.Cmd
 		killAction := func() tea.Msg {
-			// Get worktree and check if branch is checked out
-			worktree, err := selected.GetGitWorktree()
-			if err != nil {
-				return err
-			}
-
-			checkedOut, err := worktree.IsBranchCheckedOut()
-			if err != nil {
-				return err
-			}
-
-			if checkedOut {
+			// Refuse to kill only when we can positively confirm the branch is
+			// checked out in its primary repo (removing it would be destructive).
+			// This is a teardown path: if the worktree or its repo is unreachable
+			// — e.g. the user renamed/removed the project directory — fail open and
+			// proceed, otherwise an orphaned session can never be deleted.
+			if worktree, err := selected.GetGitWorktree(); err != nil {
+				log.WarningLog.Printf("kill %s: cannot resolve worktree, proceeding: %v", selected.Title, err)
+			} else if checkedOut, cerr := worktree.IsBranchCheckedOut(); cerr != nil {
+				log.WarningLog.Printf("kill %s: cannot verify branch checkout, proceeding: %v", selected.Title, cerr)
+			} else if checkedOut {
 				return fmt.Errorf("instance %s is currently checked out", selected.DisplayName())
 			}
 
@@ -1469,27 +1482,18 @@ func (m *home) killNewInstance() {
 	m.newInstance = nil
 }
 
-// confirmAction shows a confirmation modal and stores the action to execute on confirm
+// confirmAction shows a confirmation modal and stores the action to execute on
+// confirm. The action is run (and its result dispatched) by the stateConfirm key
+// handler, not here, so its returned message — including any error — flows through
+// Update instead of being discarded.
 func (m *home) confirmAction(message string, action tea.Cmd) tea.Cmd {
 	m.state = stateConfirm
+	m.pendingConfirmAction = action
 
 	// Create and show the confirmation overlay using ConfirmationOverlay
 	m.confirmationOverlay = overlay.NewConfirmationOverlay(message)
 	// Set a fixed width for consistent appearance
 	m.confirmationOverlay.SetWidth(50)
-
-	// Set callbacks for confirmation and cancellation
-	m.confirmationOverlay.OnConfirm = func() {
-		m.state = stateDefault
-		// Execute the action if it exists
-		if action != nil {
-			_ = action()
-		}
-	}
-
-	m.confirmationOverlay.OnCancel = func() {
-		m.state = stateDefault
-	}
 
 	return nil
 }

@@ -80,11 +80,9 @@ func (s *Storage) SaveInstances(instances []*Instance) error {
 
 // LoadInstances loads the list of instances from disk
 func (s *Storage) LoadInstances() ([]*Instance, error) {
-	jsonData := s.state.GetInstances()
-
-	var instancesData []InstanceData
-	if err := json.Unmarshal(jsonData, &instancesData); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal instances: %w", err)
+	instancesData, err := s.loadInstanceData()
+	if err != nil {
+		return nil, err
 	}
 
 	instances := make([]*Instance, len(instancesData))
@@ -99,34 +97,61 @@ func (s *Storage) LoadInstances() ([]*Instance, error) {
 	return instances, nil
 }
 
-// DeleteInstance removes an instance from storage
+// loadInstanceData reads the persisted instances as raw serialized data, without
+// reconstructing live Instance objects. Mutating storage (delete/update) goes
+// through this path so a stored entry whose repo/worktree no longer exists on
+// disk cannot block the operation or be corrupted by a reconstruct round-trip.
+func (s *Storage) loadInstanceData() ([]InstanceData, error) {
+	jsonData := s.state.GetInstances()
+
+	var instancesData []InstanceData
+	if err := json.Unmarshal(jsonData, &instancesData); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal instances: %w", err)
+	}
+	return instancesData, nil
+}
+
+// saveInstanceData persists raw serialized instance data as-is. Unlike
+// SaveInstances it does not filter on Started(): callers operate on data already
+// read from disk, so every entry was persisted before and must round-trip intact.
+func (s *Storage) saveInstanceData(data []InstanceData) error {
+	jsonData, err := json.Marshal(data)
+	if err != nil {
+		return fmt.Errorf("failed to marshal instances: %w", err)
+	}
+	return s.state.SaveInstances(jsonData)
+}
+
+// DeleteInstance removes an instance from storage. It operates on the serialized
+// data directly so an orphaned entry (repo/worktree gone) can always be removed
+// and unrelated siblings are left byte-for-byte intact.
 func (s *Storage) DeleteInstance(title string) error {
-	instances, err := s.LoadInstances()
+	instances, err := s.loadInstanceData()
 	if err != nil {
 		return fmt.Errorf("failed to load instances: %w", err)
 	}
 
 	found := false
-	newInstances := make([]*Instance, 0)
-	for _, instance := range instances {
-		data := instance.ToInstanceData()
-		if data.Title != title {
-			newInstances = append(newInstances, instance)
-		} else {
+	newInstances := make([]InstanceData, 0, len(instances))
+	for _, data := range instances {
+		if data.Title == title {
 			found = true
+			continue
 		}
+		newInstances = append(newInstances, data)
 	}
 
 	if !found {
 		return fmt.Errorf("instance not found: %s", title)
 	}
 
-	return s.SaveInstances(newInstances)
+	return s.saveInstanceData(newInstances)
 }
 
-// UpdateInstance updates an existing instance in storage
+// UpdateInstance updates an existing instance in storage. Only the target entry
+// is replaced; other entries are preserved exactly as stored (no reconstruct).
 func (s *Storage) UpdateInstance(instance *Instance) error {
-	instances, err := s.LoadInstances()
+	instances, err := s.loadInstanceData()
 	if err != nil {
 		return fmt.Errorf("failed to load instances: %w", err)
 	}
@@ -134,9 +159,8 @@ func (s *Storage) UpdateInstance(instance *Instance) error {
 	data := instance.ToInstanceData()
 	found := false
 	for i, existing := range instances {
-		existingData := existing.ToInstanceData()
-		if existingData.Title == data.Title {
-			instances[i] = instance
+		if existing.Title == data.Title {
+			instances[i] = data
 			found = true
 			break
 		}
@@ -146,7 +170,7 @@ func (s *Storage) UpdateInstance(instance *Instance) error {
 		return fmt.Errorf("instance not found: %s", data.Title)
 	}
 
-	return s.SaveInstances(instances)
+	return s.saveInstanceData(instances)
 }
 
 // DeleteAllInstances removes all stored instances
