@@ -160,6 +160,16 @@ func resolveClaudeCandidate(whichOutput string) (string, bool) {
 		return "", false
 	}
 
+	// A shell function prints its entire multi-line body through `which`; that is
+	// never a usable program path, and running the alias regex over it can capture
+	// a stray token that happens to resolve (e.g. a binary name from an inline
+	// "VAR=cmd" prefix, or "$?" from "local ret=$?"). Anything spanning multiple
+	// lines is not a path, so reject it here and let the caller fall back to the
+	// direct PATH lookup.
+	if strings.ContainsAny(path, "\n\r") {
+		return "", false
+	}
+
 	// Extract the target if the output is an alias definition.
 	// Handle formats like "claude: aliased to /path/to/claude" or other shell-specific formats.
 	aliasRegex := regexp.MustCompile(`(?:aliased to|->|=)\s*([^\s]+)`)

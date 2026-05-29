@@ -125,6 +125,15 @@ func TestResolveClaudeCandidate(t *testing.T) {
 		"\tfi\n" +
 		"}"
 
+	// A function body whose first `=` assignment has a right-hand side that is a
+	// real binary on PATH (here, `claude` itself). The alias regex captures that
+	// token; without the multi-line guard it would resolve via exec.LookPath and
+	// be wrongly accepted as the program to launch.
+	functionBodyResolvable := "claude () {\n" +
+		"\tlocal helper=claude\n" +
+		"\tcommand claude \"$@\"\n" +
+		"}"
+
 	tests := []struct {
 		name     string
 		output   string
@@ -135,6 +144,7 @@ func TestResolveClaudeCandidate(t *testing.T) {
 		{"alias definition", "claude: aliased to " + claudePath, true, claudePath},
 		{"bare name resolved via PATH", "claude", true, claudePath},
 		{"shell function body is rejected", functionBody, false, ""},
+		{"function body whose first assignment resolves on PATH is rejected", functionBodyResolvable, false, ""},
 		{"empty output", "   \n\t", false, ""},
 		{"non-executable alias target", "claude=/nonexistent/definitely/not/here", false, ""},
 	}
