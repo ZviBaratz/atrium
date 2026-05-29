@@ -219,8 +219,61 @@ func (g *GitWorktree) Prune() error {
 	return nil
 }
 
-// CleanupWorktrees removes all worktrees and their associated branches
-func CleanupWorktrees() error {
+// parseWorktreeList parses `git worktree list --porcelain` output into a map of
+// worktree-path → branch-name. Detached-HEAD worktrees map to an empty branch.
+func parseWorktreeList(output string) map[string]string {
+	result := make(map[string]string)
+	current := ""
+	for _, line := range strings.Split(output, "\n") {
+		switch {
+		case strings.HasPrefix(line, "worktree "):
+			current = strings.TrimPrefix(line, "worktree ")
+		case strings.HasPrefix(line, "branch ") && current != "":
+			branchPath := strings.TrimPrefix(line, "branch ")
+			result[current] = strings.TrimPrefix(branchPath, "refs/heads/")
+		}
+	}
+	return result
+}
+
+// resolvePath returns the symlink-resolved absolute path, falling back to the
+// cleaned input when resolution fails (e.g. the path no longer exists). It lets
+// the worktree-prefix check below match even when git reports a path through a
+// different symlink than getWorktreeDirectory() returns — e.g. macOS resolves
+// the temp dir /var/... to /private/var/....
+func resolvePath(p string) string {
+	if resolved, err := filepath.EvalSymlinks(p); err == nil {
+		return resolved
+	}
+	return filepath.Clean(p)
+}
+
+// uniqueNonEmptyStrings returns the input with empty strings and duplicates
+// removed, preserving first-seen order.
+func uniqueNonEmptyStrings(ss []string) []string {
+	seen := make(map[string]bool, len(ss))
+	var out []string
+	for _, s := range ss {
+		if s != "" && !seen[s] {
+			seen[s] = true
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+// CleanupWorktrees removes every worktree managed by atrium and its associated
+// session branch. repoPaths must be the git repository roots that had active
+// sessions: each git command runs with `git -C <repoPath>` so cleanup succeeds
+// even when the caller's working directory is not a git repository (e.g.
+// `atrium reset` from a home directory) or when sessions span multiple repos.
+//
+// The order is dictated by git: `git worktree list` only reports a worktree's
+// branch while it is still registered, so branches are collected first; and
+// `git branch -D` refuses to delete a branch checked out in a live worktree, so
+// the directories are removed and pruned (detaching the branches) before the
+// branches are finally deleted.
+func CleanupWorktrees(repoPaths []string) error {
 	worktreesDir, err := getWorktreeDirectory()
 	if err != nil {
 		return fmt.Errorf("failed to get worktree directory: %w", err)
@@ -228,60 +281,58 @@ func CleanupWorktrees() error {
 
 	entries, err := os.ReadDir(worktreesDir)
 	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
 		return fmt.Errorf("failed to read worktree directory: %w", err)
 	}
 
-	// Get a list of all branches associated with worktrees
-	cmd := exec.Command("git", "worktree", "list", "--porcelain")
-	output, err := cmd.Output()
-	if err != nil {
-		return fmt.Errorf("failed to list worktrees: %w", err)
-	}
+	worktreePrefix := resolvePath(worktreesDir) + string(filepath.Separator)
+	repos := uniqueNonEmptyStrings(repoPaths)
 
-	// Parse the output to extract branch names
-	worktreeBranches := make(map[string]string)
-	currentWorktree := ""
-	lines := strings.Split(string(output), "\n")
-	for _, line := range lines {
-		if strings.HasPrefix(line, "worktree ") {
-			currentWorktree = strings.TrimPrefix(line, "worktree ")
-		} else if strings.HasPrefix(line, "branch ") {
-			branchPath := strings.TrimPrefix(line, "branch ")
-			// Extract branch name from refs/heads/branch-name
-			branchName := strings.TrimPrefix(branchPath, "refs/heads/")
-			if currentWorktree != "" {
-				worktreeBranches[currentWorktree] = branchName
+	// Collect the session branch of every worktree that lives under our managed
+	// worktrees directory, remembering which repo owns it. Worktree directories
+	// are nested under a branch-prefix subdir, so match by path prefix rather
+	// than by top-level directory name.
+	type repoBranch struct{ repo, branch string }
+	var branchesToDelete []repoBranch
+	for _, repoPath := range repos {
+		output, err := exec.Command("git", "-C", repoPath, "worktree", "list", "--porcelain").Output()
+		if err != nil {
+			log.ErrorLog.Printf("failed to list worktrees for repo %s: %v", repoPath, err)
+			continue
+		}
+		for wtPath, branch := range parseWorktreeList(string(output)) {
+			if branch == "" || !strings.HasPrefix(resolvePath(wtPath), worktreePrefix) {
+				continue
 			}
+			branchesToDelete = append(branchesToDelete, repoBranch{repo: repoPath, branch: branch})
 		}
 	}
 
+	// Remove the physical worktree directories before pruning and deleting
+	// branches, so git no longer treats the branches as checked out.
 	for _, entry := range entries {
-		if entry.IsDir() {
-			worktreePath := filepath.Join(worktreesDir, entry.Name())
-
-			// Delete the branch associated with this worktree if found
-			for path, branch := range worktreeBranches {
-				if strings.Contains(path, entry.Name()) {
-					// Delete the branch
-					deleteCmd := exec.Command("git", "branch", "-D", branch)
-					if err := deleteCmd.Run(); err != nil {
-						// Log the error but continue with other worktrees
-						log.ErrorLog.Printf("failed to delete branch %s: %v", branch, err)
-					}
-					break
-				}
-			}
-
-			// Remove the worktree directory
-			_ = os.RemoveAll(worktreePath)
+		if !entry.IsDir() {
+			continue
+		}
+		if err := removeOrphanedWorktreeDir(filepath.Join(worktreesDir, entry.Name())); err != nil {
+			log.ErrorLog.Printf("failed to remove worktree dir %s: %v", entry.Name(), err)
 		}
 	}
 
-	// You have to prune the cleaned up worktrees.
-	cmd = exec.Command("git", "worktree", "prune")
-	_, err = cmd.Output()
-	if err != nil {
-		return fmt.Errorf("failed to prune worktrees: %w", err)
+	// Prune git's internal worktree tracking now that the directories are gone.
+	for _, repoPath := range repos {
+		if err := exec.Command("git", "-C", repoPath, "worktree", "prune").Run(); err != nil {
+			log.ErrorLog.Printf("failed to prune worktrees for repo %s: %v", repoPath, err)
+		}
+	}
+
+	// Finally delete the session branches; they are no longer checked out.
+	for _, rb := range branchesToDelete {
+		if err := exec.Command("git", "-C", rb.repo, "branch", "-D", rb.branch).Run(); err != nil {
+			log.ErrorLog.Printf("failed to delete branch %s in %s: %v", rb.branch, rb.repo, err)
+		}
 	}
 
 	return nil

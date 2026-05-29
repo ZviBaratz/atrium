@@ -94,6 +94,19 @@ var (
 			if err != nil {
 				return fmt.Errorf("failed to initialize storage: %w", err)
 			}
+
+			// Capture the repo paths before deleting instances so CleanupWorktrees
+			// can run its git commands in the correct repositories regardless of the
+			// current working directory.
+			instances, err := storage.LoadInstances()
+			if err != nil {
+				return fmt.Errorf("failed to load instances: %w", err)
+			}
+			repoPaths := make([]string, 0, len(instances))
+			for _, inst := range instances {
+				repoPaths = append(repoPaths, inst.GetRepoPath())
+			}
+
 			if err := storage.DeleteAllInstances(); err != nil {
 				return fmt.Errorf("failed to reset storage: %w", err)
 			}
@@ -104,7 +117,7 @@ var (
 			}
 			fmt.Println("Tmux sessions have been cleaned up")
 
-			if err := git.CleanupWorktrees(); err != nil {
+			if err := git.CleanupWorktrees(repoPaths); err != nil {
 				return fmt.Errorf("failed to cleanup worktrees: %w", err)
 			}
 			fmt.Println("Worktrees have been cleaned up")

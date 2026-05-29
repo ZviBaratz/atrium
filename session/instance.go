@@ -476,6 +476,14 @@ func (i *Instance) GetWorktreePath() string {
 	return i.gitWorktree.GetWorktreePath()
 }
 
+// GetRepoPath returns the git repository root for the instance, or empty string if unavailable
+func (i *Instance) GetRepoPath() string {
+	if i.gitWorktree == nil {
+		return ""
+	}
+	return i.gitWorktree.GetRepoPath()
+}
+
 func (i *Instance) Started() bool {
 	return i.started
 }
