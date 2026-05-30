@@ -17,18 +17,23 @@ import (
 )
 
 // TestStatusAccessorsAreRaceFree exercises the lifecycle-field accessors from two
-// goroutines at once: the background start goroutine mutates status while the
-// metadata-poll / UI readers query it. Before the RWMutex was added this raced
-// (writer = Start's SetStatus(Running); readers = the poll loop's
-// Started/Paused/TmuxAlive), which under `go test -race` is a hard failure and at
-// runtime could leave a session pinned at Loading. It must pass under -race.
+// goroutines at once: a writer mutating the mu-guarded fields (status, tmuxSession)
+// while the metadata-poll / UI readers query them. Before the RWMutex was added this
+// raced (writer = Start's SetStatus(Running) + tmuxSession assignment; readers = the
+// poll loop and the UI methods below), which under `go test -race` is a hard failure
+// and at runtime could leave a session pinned at Loading. Every method exercised by the
+// reader goroutine must read the guarded fields through the locked accessors, not the
+// bare struct fields, so this also guards against a regression that reintroduces a
+// direct read. It must pass under -race.
 func TestStatusAccessorsAreRaceFree(t *testing.T) {
 	mockExec := cmd_test.MockCmdExec{
 		RunFunc:    func(*exec.Cmd) error { return nil },
 		OutputFunc: func(*exec.Cmd) ([]byte, error) { return []byte(""), nil },
 	}
-	ts := tmux.NewTmuxSessionWithDeps("race", "claude", tmux.MakePtyFactory(), mockExec)
-	inst := &Instance{Title: "race", status: Loading, started: true, tmuxSession: ts}
+	newSession := func() *tmux.TmuxSession {
+		return tmux.NewTmuxSessionWithDeps("race", "claude", tmux.MakePtyFactory(), mockExec)
+	}
+	inst := &Instance{Title: "race", status: Loading, started: true, tmuxSession: newSession()}
 
 	var wg sync.WaitGroup
 	wg.Add(2)
@@ -36,6 +41,7 @@ func TestStatusAccessorsAreRaceFree(t *testing.T) {
 		defer wg.Done()
 		for i := 0; i < 1000; i++ {
 			inst.SetStatus(Running)
+			inst.SetTmuxSession(newSession())
 			inst.SetStatus(Ready)
 		}
 	}()
@@ -46,6 +52,10 @@ func TestStatusAccessorsAreRaceFree(t *testing.T) {
 			_ = inst.Started()
 			_ = inst.Paused()
 			_ = inst.TmuxAlive()
+			_ = inst.IsReadyForPrompt()
+			_ = inst.SetPreviewSize(80, 24)
+			_, _ = inst.PreviewFullHistory()
+			_ = inst.SendKeys("x")
 		}
 	}()
 	wg.Wait()
