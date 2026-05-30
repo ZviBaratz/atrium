@@ -18,6 +18,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/atotto/clipboard"
 	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -36,6 +37,10 @@ func Run(ctx context.Context, program string, autoYes bool) error {
 	_, err := p.Run()
 	return err
 }
+
+// copyToClipboard writes text to the system clipboard. It is a package var so tests
+// can substitute a fake without touching the host clipboard.
+var copyToClipboard = clipboard.WriteAll
 
 type state int
 
@@ -836,6 +841,19 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		m.menu.SetState(ui.StatePrompt)
 		m.textInputOverlay = overlay.NewQuickSendOverlay("Send to " + selected.DisplayName())
 		return m, tea.WindowSize()
+	case keys.KeyCopyBranch:
+		// Yank the selected session's branch name to the system clipboard for handoff
+		// to a PR, a teammate, or a git command. No-op when nothing is selected or the
+		// branch is not yet known; a clipboard failure is a host-env issue, so it is
+		// logged rather than surfaced as a TUI error.
+		selected := m.list.GetSelectedInstance()
+		if selected == nil || selected.Branch == "" {
+			return m, nil
+		}
+		if err := copyToClipboard(selected.Branch); err != nil {
+			log.ErrorLog.Printf("copy branch: %v", err)
+		}
+		return m, nil
 	case keys.KeyUp:
 		m.list.Up()
 		return m, m.instanceChanged()

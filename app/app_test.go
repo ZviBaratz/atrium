@@ -693,9 +693,12 @@ func TestStateNew_TypingSurvivesSelectionHijack(t *testing.T) {
 	h.list.SelectInstance(trailing)
 	require.Same(t, trailing, h.list.GetSelectedInstance(), "precondition: selection moved off the new instance")
 
-	h.handleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("y")})
+	// Type a plain character that is NOT a global keybinding so it is treated as title
+	// input rather than intercepted by handleMenuHighlighting (which does not exclude
+	// stateNew). 'x' is unmapped; 'y' is now KeyCopyBranch, so don't use it here.
+	h.handleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("x")})
 
-	require.Equal(t, "y", newInst.Title, "title must follow the tracked new instance, not the selection")
+	require.Equal(t, "x", newInst.Title, "title must follow the tracked new instance, not the selection")
 	require.Equal(t, "b", trailing.Title, "the now-selected instance must be untouched")
 }
 

@@ -76,6 +76,7 @@ func (h helpTypeGeneral) toContent() string {
 		helpRow("c", "checkout: commit changes + pause"),
 		helpRow("p", "commit & push branch"),
 		helpRow("r", "resume a paused session"),
+		helpRow("y", "copy branch name to clipboard"),
 		"",
 		helpHeaderStyle().Render("Groups"),
 		helpRow("J / K", "reorder within a repo group"),
