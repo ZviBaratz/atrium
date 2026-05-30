@@ -99,6 +99,18 @@ func (l *List) renderRepoHeader(key string, collapsed bool, count, needsInput in
 	return line
 }
 
+// visibleCount returns how many items in the half-open range [start, end) are not hidden.
+// Used to decide whether a (non-collapsed) group has any rows to render under the active filter.
+func (l *List) visibleCount(start, end int) int {
+	n := 0
+	for j := start; j < end; j++ {
+		if !l.isHidden(j) {
+			n++
+		}
+	}
+	return n
+}
+
 // groupNeedsInputCount returns how many sessions in the half-open item range [start, end) are
 // blocked on user input. Used to badge a collapsed repo-group header, whose member rows would
 // otherwise carry the per-row waiting glyph.
@@ -397,14 +409,24 @@ func (l *List) String() string {
 	// shown only with more than one repo, and are not selectable rows for expanded groups, so
 	// selectedIdx stays a flat index into l.items. A collapsed group renders only its header
 	// (which doubles as its anchor's row) and suppresses its members.
+	// An active filter is the sole visibility gate and overrides collapse (see isHidden), so a
+	// folded group expands to reveal its matches while filtering.
+	filtering := l.filterQuery != ""
 	showRepos := l.distinctRepoCount() > 1
 	first := true
 	for i := 0; i < len(l.items); {
 		key := repoKey(l.items[i])
 		start, end := l.groupBounds(i)
-		collapsed := showRepos && l.collapsed[key]
+		collapsed := showRepos && l.collapsed[key] && !filtering
 
-		// Looser spacing before each group (one blank line); items within a group are adjacent.
+		// A filter can hide every member of a group; such a group renders neither its header nor
+		// a separating blank line. A collapsed group is always represented (by its header).
+		if !collapsed && l.visibleCount(start, end) == 0 {
+			i = end
+			continue
+		}
+
+		// Looser spacing before each rendered group (one blank line); items within a group are adjacent.
 		if !first {
 			lines = append(lines, "")
 		}
@@ -420,6 +442,9 @@ func (l *List) String() string {
 		}
 		if !collapsed {
 			for j := start; j < end; j++ {
+				if l.isHidden(j) {
+					continue
+				}
 				at := appendBlock(l.renderer.Render(l.items[j], j+1, j == l.selectedIdx))
 				if j == l.selectedIdx {
 					selStart, selH = at, len(lines)-at
@@ -427,6 +452,12 @@ func (l *List) String() string {
 			}
 		}
 		i = end
+	}
+
+	// `first` is still set only if no group rendered any row, i.e. the query matched nothing.
+	// Show an explicit hint so the empty list is not mistaken for "no sessions exist".
+	if filtering && first {
+		lines = append(lines, filterBarStyle.Render("   no matches"))
 	}
 
 	// Inner content area inside the panel border (2 cols / 2 rows of chrome).
@@ -677,12 +708,13 @@ func (l *List) effectiveCollapsed(key string) bool {
 	return l.distinctRepoCount() > 1 && l.collapsed[key]
 }
 
-// isHidden reports whether the item at idx is suppressed from view. An item is hidden
-// when it is a non-anchor member of a collapsed group, OR when the active filter query
-// does not match the item's DisplayName or Branch.
+// isHidden reports whether the item at idx is suppressed from view. While a filter query is
+// active it is the sole visibility gate — an item is hidden iff it does not match — and it
+// takes precedence over collapse so matches buried inside a folded group still surface.
+// With no active filter, an item is hidden when it is a non-anchor member of a collapsed group.
 func (l *List) isHidden(idx int) bool {
-	if l.filterQuery != "" && !l.filterMatches(l.items[idx]) {
-		return true
+	if l.filterQuery != "" {
+		return !l.filterMatches(l.items[idx])
 	}
 	if !l.effectiveCollapsed(repoKey(l.items[idx])) {
 		return false
@@ -692,8 +724,8 @@ func (l *List) isHidden(idx int) bool {
 }
 
 // clampSelectionToNavigable enforces the invariant that the selection always rests on a
-// visible item. It snaps an out-of-bounds or hidden selectedIdx to its group anchor. This is
-// the single place that invariant is maintained, so every mutation just calls it afterward.
+// visible item. This is the single place that invariant is maintained, so every mutation just
+// calls it afterward.
 func (l *List) clampSelectionToNavigable() {
 	if len(l.items) == 0 {
 		l.selectedIdx = 0
@@ -704,9 +736,36 @@ func (l *List) clampSelectionToNavigable() {
 	} else if l.selectedIdx >= len(l.items) {
 		l.selectedIdx = len(l.items) - 1
 	}
-	if l.isHidden(l.selectedIdx) {
-		l.selectedIdx, _ = l.groupBounds(l.selectedIdx)
+	if !l.isHidden(l.selectedIdx) {
+		return
 	}
+	// Prefer the group anchor: for a collapsed group it is always visible and stands in for the
+	// whole group. Under an active filter the anchor may itself be filtered out, so fall back to
+	// the nearest visible item in either direction. If nothing matches, leave the selection put.
+	if anchor, _ := l.groupBounds(l.selectedIdx); !l.isHidden(anchor) {
+		l.selectedIdx = anchor
+		return
+	}
+	if idx := l.nearestNavigable(l.selectedIdx); idx >= 0 {
+		l.selectedIdx = idx
+	}
+}
+
+// nearestNavigable returns the index of the closest non-hidden item to from, searching outward
+// in both directions (preferring the item below on ties), or -1 when every item is hidden.
+func (l *List) nearestNavigable(from int) int {
+	for d := 1; d < len(l.items); d++ {
+		if i := from + d; i < len(l.items) && !l.isHidden(i) {
+			return i
+		}
+		if i := from - d; i >= 0 && !l.isHidden(i) {
+			return i
+		}
+	}
+	if !l.isHidden(from) {
+		return from
+	}
+	return -1
 }
 
 // ToggleCollapse folds or unfolds the selected session's repo group. It is a no-op (returns

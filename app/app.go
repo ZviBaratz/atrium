@@ -144,10 +144,6 @@ type home struct {
 	// generatingName guards against launching a second auto-name request while one
 	// is already in flight, and drives the "Generating name…" hint-bar state.
 	generatingName bool
-
-	// filterQuery is the current incremental session-list filter string. It is maintained
-	// here and kept in sync with list.SetFilter so that Esc can restore it correctly.
-	filterQuery string
 }
 
 func newHome(ctx context.Context, program string, autoYes bool) *home {
@@ -695,36 +691,35 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		return m, m.instanceChanged()
 	}
 
-	// Handle filter state. This must run before the global quit handling so that
-	// printable keys and Esc update the filter instead of quitting.
+	// Handle filter state. This must run before the global quit handling so that printable keys
+	// and Esc update the filter instead of quitting. The list holds the query (single source of
+	// truth); note that letter keys must reach the default case, so we cannot reserve "j"/"k"
+	// (vim navigation elsewhere) as commit keys — they have to be typeable into the query.
 	if m.state == stateFilter {
 		switch msg.String() {
 		case "esc":
 			// Esc clears the filter and returns to default.
-			m.filterQuery = ""
 			m.list.ClearFilter()
 			m.state = stateDefault
 			m.menu.SetState(ui.StateDefault)
 			return m, m.instanceChanged()
-		case "enter", "down", "j":
+		case "enter", "down":
 			// Accept the current query and move focus to the filtered list.
 			m.list.SetFilterActive(false)
 			m.state = stateDefault
 			m.menu.SetState(ui.StateDefault)
 			return m, m.instanceChanged()
 		case "backspace", "ctrl+h":
-			if len(m.filterQuery) > 0 {
+			if q := m.list.FilterQuery(); q != "" {
 				// Remove the last rune (handles multi-byte correctly).
-				runes := []rune(m.filterQuery)
-				m.filterQuery = string(runes[:len(runes)-1])
-				m.list.SetFilter(m.filterQuery)
+				runes := []rune(q)
+				m.list.SetFilter(string(runes[:len(runes)-1]))
 			}
 			return m, m.instanceChanged()
 		default:
 			// Append printable characters to the filter query.
 			if len(msg.Runes) > 0 {
-				m.filterQuery += string(msg.Runes)
-				m.list.SetFilter(m.filterQuery)
+				m.list.SetFilter(m.list.FilterQuery() + string(msg.Runes))
 			}
 			return m, m.instanceChanged()
 		}
@@ -892,7 +887,6 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		message := fmt.Sprintf("[!] Kill session '%s'?", selected.DisplayName())
 		return m, m.confirmAction(message, killAction)
 	case keys.KeyFilter:
-		m.filterQuery = ""
 		m.list.SetFilter("")
 		m.list.SetFilterActive(true)
 		m.state = stateFilter
