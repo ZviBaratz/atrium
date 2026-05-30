@@ -11,7 +11,7 @@
   "dependencies": {
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
-    "next": "15.3.2"
+    "next": "15.5.18"
   },
   "devDependencies": {
     "typescript": "^5",
@@ -19,7 +19,13 @@
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "eslint": "^9",
-    "eslint-config-next": "15.3.2",
+    "eslint-config-next": "15.5.18",
     "@eslint/eslintrc": "^3"
+  },
+  "overrides": {
+    "postcss": "^8.5.10",
+    "@eslint/eslintrc": {
+      "brace-expansion": "^1.1.15"
+    }
   }
 }
