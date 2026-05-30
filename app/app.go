@@ -753,7 +753,14 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 
 	name, ok := keys.GlobalKeyStringsMap[msg.String()]
 	if !ok {
-		return m, nil
+		if msg.String() != "ctrl+q" {
+			return m, nil
+		}
+		// ctrl+q mirrors the in-session detach key (session/tmux/tmux.go): on the
+		// list it re-attaches the selected session, making ctrl+q a symmetric
+		// attach/detach toggle. This path is reached only in stateDefault (every
+		// other state returns above), so it never confirms a dialog or name field.
+		name = keys.KeyEnter
 	}
 
 	switch name {
