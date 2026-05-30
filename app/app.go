@@ -18,6 +18,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/atotto/clipboard"
 	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -37,6 +38,10 @@ func Run(ctx context.Context, program string, autoYes bool) error {
 	return err
 }
 
+// copyToClipboard writes text to the system clipboard. It is a package var so tests
+// can substitute a fake without touching the host clipboard.
+var copyToClipboard = clipboard.WriteAll
+
 type state int
 
 const (
@@ -51,6 +56,9 @@ const (
 	stateConfirm
 	// stateRename is the state when the user is editing a session's display label.
 	stateRename
+	// stateFilter is the state when the user is typing an incremental filter query
+	// to narrow the session list by DisplayName / Branch.
+	stateFilter
 )
 
 type home struct {
@@ -98,12 +106,6 @@ type home struct {
 	// welcomeChecked guards the one-time first-launch welcome so it is only
 	// attempted once per process (its seen-bit handles persistence across runs).
 	welcomeChecked bool
-
-	// instanceStarting is true while a background instance start is in progress.
-	// Prevents double-submission and guards against interacting with a not-yet-started instance.
-	instanceStarting bool
-	// startingInstance holds a reference to the instance being started in the background.
-	startingInstance *session.Instance
 
 	// windowWidth/windowHeight cache the last terminal size so the layout can be
 	// recomputed off a synthesized size event — e.g. when an error appears or
@@ -284,24 +286,6 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case keyupMsg:
 		m.menu.ClearKeydown()
 		return m, nil
-	case instanceStartDoneMsg:
-		m.instanceStarting = false
-		inst := msg.instance
-		m.startingInstance = nil
-
-		if msg.err != nil {
-			// Start failed — remove the instance from the list and show the error.
-			m.list.Kill()
-			return m, tea.Batch(tea.WindowSize(), m.instanceChanged(), m.handleError(msg.err))
-		}
-
-		// Save after successful start.
-		if err := m.storage.SaveInstances(m.list.GetInstances()); err != nil {
-			return m, m.handleError(err)
-		}
-		m.recordRecentPath(inst.Path)
-
-		return m, tea.Batch(tea.WindowSize(), m.instanceChanged())
 	case autoNameDoneMsg:
 		m.generatingName = false
 		if msg.err != nil {
@@ -326,7 +310,7 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		for _, r := range msg.results {
 			// Skip instances that were paused while metadata was being computed, or
 			// that were just recovered to Paused above because their session died.
-			if r.sessionLost || r.instance.Status == session.Paused {
+			if r.sessionLost || r.instance.Paused() {
 				continue
 			}
 			applyPaneState(r.instance, r.state)
@@ -347,7 +331,7 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.Action == tea.MouseActionPress {
 			if msg.Button == tea.MouseButtonWheelDown || msg.Button == tea.MouseButtonWheelUp {
 				selected := m.list.GetSelectedInstance()
-				if selected == nil || selected.Status == session.Paused {
+				if selected == nil || selected.Paused() {
 					return m, nil
 				}
 
@@ -395,6 +379,14 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.list.Kill()
 			return m, tea.Batch(m.handleError(msg.err), m.instanceChanged())
 		}
+
+		// Own the Loading -> Running transition here, on the main thread. Start()
+		// deliberately no longer sets Running from its background goroutine (that
+		// raced the UI/poll readers and could leave the session stuck on the
+		// "Setting up workspace..." splash); this message arrives after Start()
+		// completed, so the write is race-free. applyPaneState refines it to
+		// Ready/NeedsInput on later ticks.
+		msg.instance.SetStatus(session.Running)
 
 		// Save after successful start
 		if err := m.storage.SaveInstances(m.list.GetInstances()); err != nil {
@@ -457,7 +449,7 @@ func (m *home) handleMenuHighlighting(msg tea.KeyMsg) (cmd tea.Cmd, returnEarly 
 		m.keySent = false
 		return nil, false
 	}
-	if m.state == statePrompt || m.state == stateHelp || m.state == stateConfirm || m.state == stateRename {
+	if m.state == statePrompt || m.state == stateHelp || m.state == stateConfirm || m.state == stateRename || m.state == stateFilter {
 		return nil, false
 	}
 	// If it's in the global keymap, we should try to highlight it.
@@ -696,6 +688,40 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		return m, m.instanceChanged()
 	}
 
+	// Handle filter state. This must run before the global quit handling so that printable keys
+	// and Esc update the filter instead of quitting. The list holds the query (single source of
+	// truth); note that letter keys must reach the default case, so we cannot reserve "j"/"k"
+	// (vim navigation elsewhere) as commit keys — they have to be typeable into the query.
+	if m.state == stateFilter {
+		switch msg.String() {
+		case "esc":
+			// Esc clears the filter and returns to default.
+			m.list.ClearFilter()
+			m.state = stateDefault
+			m.menu.SetState(ui.StateDefault)
+			return m, m.instanceChanged()
+		case "enter", "down":
+			// Accept the current query and move focus to the filtered list.
+			m.list.SetFilterActive(false)
+			m.state = stateDefault
+			m.menu.SetState(ui.StateDefault)
+			return m, m.instanceChanged()
+		case "backspace", "ctrl+h":
+			if q := m.list.FilterQuery(); q != "" {
+				// Remove the last rune (handles multi-byte correctly).
+				runes := []rune(q)
+				m.list.SetFilter(string(runes[:len(runes)-1]))
+			}
+			return m, m.instanceChanged()
+		default:
+			// Append printable characters to the filter query.
+			if len(msg.Runes) > 0 {
+				m.list.SetFilter(m.list.FilterQuery() + string(msg.Runes))
+			}
+			return m, m.instanceChanged()
+		}
+	}
+
 	// Exit scrolling mode when ESC is pressed and preview pane is in scrolling mode
 	// Check if Escape key was pressed and we're not in the diff tab (meaning we're in preview tab)
 	// Always check for escape key first to ensure it doesn't get intercepted elsewhere
@@ -724,7 +750,14 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 
 	name, ok := keys.GlobalKeyStringsMap[msg.String()]
 	if !ok {
-		return m, nil
+		if msg.String() != "ctrl+q" {
+			return m, nil
+		}
+		// ctrl+q mirrors the in-session detach key (session/tmux/tmux.go): on the
+		// list it re-attaches the selected session, making ctrl+q a symmetric
+		// attach/detach toggle. This path is reached only in stateDefault (every
+		// other state returns above), so it never confirms a dialog or name field.
+		name = keys.KeyEnter
 	}
 
 	switch name {
@@ -793,13 +826,26 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		// without attaching. Only meaningful when the agent is up and accepting input, so
 		// this is a no-op for an empty/loading/paused selection.
 		selected := m.list.GetSelectedInstance()
-		if selected == nil || !selected.Started() || selected.Paused() || selected.Status == session.Loading {
+		if selected == nil || !selected.Started() || selected.Paused() || selected.GetStatus() == session.Loading {
 			return m, nil
 		}
 		m.state = statePrompt
 		m.menu.SetState(ui.StatePrompt)
 		m.textInputOverlay = overlay.NewQuickSendOverlay("Send to " + selected.DisplayName())
 		return m, tea.WindowSize()
+	case keys.KeyCopyBranch:
+		// Yank the selected session's branch name to the system clipboard for handoff
+		// to a PR, a teammate, or a git command. No-op when nothing is selected or the
+		// branch is not yet known; a clipboard failure is a host-env issue, so it is
+		// logged rather than surfaced as a TUI error.
+		selected := m.list.GetSelectedInstance()
+		if selected == nil || selected.Branch == "" {
+			return m, nil
+		}
+		if err := copyToClipboard(selected.Branch); err != nil {
+			log.ErrorLog.Printf("copy branch: %v", err)
+		}
+		return m, nil
 	case keys.KeyUp:
 		m.list.Up()
 		return m, m.instanceChanged()
@@ -822,9 +868,15 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		return m, m.instanceChanged()
 	case keys.KeyKill:
 		return m, m.confirmKill(m.list.GetSelectedInstance())
+	case keys.KeyFilter:
+		m.list.SetFilter("")
+		m.list.SetFilterActive(true)
+		m.state = stateFilter
+		m.menu.SetState(ui.StatePrompt)
+		return m, m.instanceChanged()
 	case keys.KeyRename:
 		selected := m.list.GetSelectedInstance()
-		if selected == nil || selected.Status == session.Loading {
+		if selected == nil || selected.GetStatus() == session.Loading {
 			return m, nil
 		}
 		m.renameTarget = selected
@@ -834,7 +886,7 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		return m, nil
 	case keys.KeyAutoName:
 		selected := m.list.GetSelectedInstance()
-		if selected == nil || selected.Status == session.Loading || m.generatingName {
+		if selected == nil || selected.GetStatus() == session.Loading || m.generatingName {
 			return m, nil
 		}
 		// The model call (and the full diff it needs) happen in the background Cmd so
@@ -844,7 +896,7 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		return m, runAutoNameCmd(m.ctx, selected, selected.Prompt)
 	case keys.KeySubmit:
 		selected := m.list.GetSelectedInstance()
-		if selected == nil || selected.Status == session.Loading {
+		if selected == nil || selected.GetStatus() == session.Loading {
 			return m, nil
 		}
 
@@ -867,7 +919,7 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		return m, m.confirmAction(message, pushAction)
 	case keys.KeyCheckout:
 		selected := m.list.GetSelectedInstance()
-		if selected == nil || selected.Status == session.Loading {
+		if selected == nil || selected.GetStatus() == session.Loading {
 			return m, nil
 		}
 
@@ -928,7 +980,7 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		return m, nil
 	case keys.KeyResume:
 		selected := m.list.GetSelectedInstance()
-		if selected == nil || selected.Status == session.Loading {
+		if selected == nil || selected.GetStatus() == session.Loading {
 			return m, nil
 		}
 		if err := selected.Resume(); err != nil {
@@ -940,7 +992,7 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 			return m, nil
 		}
 		selected := m.list.GetSelectedInstance()
-		if selected == nil || selected.Paused() || selected.Status == session.Loading || !selected.TmuxAlive() {
+		if selected == nil || selected.Paused() || selected.GetStatus() == session.Loading || !selected.TmuxAlive() {
 			return m, nil
 		}
 		// Terminal tab: attach to terminal session. Attaching blocks until the
@@ -1188,21 +1240,6 @@ func recoverLostInstances(results []instanceMetaResult, strikes map[*session.Ins
 // metadataUpdateDoneMsg is sent when the background metadata update completes.
 type metadataUpdateDoneMsg struct {
 	results []instanceMetaResult
-}
-
-// instanceStartDoneMsg is sent when the background instance start completes.
-type instanceStartDoneMsg struct {
-	instance *session.Instance
-	err      error
-}
-
-// runInstanceStartCmd returns a Cmd that performs the expensive instance.Start(true)
-// in a background goroutine so the main event loop stays responsive.
-func runInstanceStartCmd(instance *session.Instance) tea.Cmd {
-	return func() tea.Msg {
-		err := instance.Start(true)
-		return instanceStartDoneMsg{instance: instance, err: err}
-	}
 }
 
 // autoNameDoneMsg is sent when a background name generation completes. instance
@@ -1470,7 +1507,7 @@ func (m *home) killNewInstance() {
 // the current list selection, so the action keys on inst (and KillInstance)
 // rather than on whatever happens to be selected when the user confirms.
 func (m *home) confirmKill(inst *session.Instance) tea.Cmd {
-	if inst == nil || inst.Status == session.Loading {
+	if inst == nil || inst.GetStatus() == session.Loading {
 		return nil
 	}
 

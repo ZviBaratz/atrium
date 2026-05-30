@@ -167,7 +167,7 @@ func prepareNamingHome(credsPath string) (homeDir string, cleanup func(), err er
 	if err != nil {
 		return "", noop, err
 	}
-	cleanup = func() { os.RemoveAll(dir) }
+	cleanup = func() { _ = os.RemoveAll(dir) }
 
 	claudeDir := filepath.Join(dir, ".claude")
 	if err := os.Mkdir(claudeDir, 0o700); err != nil {
@@ -302,7 +302,7 @@ func diffDigest(content string) string {
 		if strings.HasPrefix(line, "+++") || strings.HasPrefix(line, "---") {
 			continue
 		}
-		if !(strings.HasPrefix(line, "+") || strings.HasPrefix(line, "-")) {
+		if !strings.HasPrefix(line, "+") && !strings.HasPrefix(line, "-") {
 			continue
 		}
 		if perFile >= maxDigestLinesPerFile {

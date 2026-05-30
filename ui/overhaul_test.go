@@ -19,7 +19,7 @@ func instWithStatus(t *testing.T, title string, st session.Status) *session.Inst
 	t.Helper()
 	inst, err := session.NewInstance(session.InstanceOptions{Title: title, Path: ".", Program: "echo"})
 	require.NoError(t, err)
-	inst.Status = st
+	inst.SetStatus(st)
 	return inst
 }
 

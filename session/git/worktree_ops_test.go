@@ -229,3 +229,76 @@ func mustRunGit(t *testing.T, dir string, args ...string) string {
 	}
 	return string(output)
 }
+
+// TestCleanupWorktrees_DeletesBranchFromNonGitCWD is the regression test for the
+// repo-aware fix: CleanupWorktrees must remove the worktree directory AND delete
+// the session branch even when invoked from a directory that is not a git repo
+// (the bug was that the bare git commands resolved against the CWD and silently
+// failed, leaving stale branches behind).
+func TestCleanupWorktrees_DeletesBranchFromNonGitCWD(t *testing.T) {
+	repoPath := newTestRepo(t)
+
+	wt, branch, err := NewGitWorktree(repoPath, "cleanup-test")
+	if err != nil {
+		t.Fatalf("NewGitWorktree: %v", err)
+	}
+	if err := wt.Setup(); err != nil {
+		t.Fatalf("Setup: %v", err)
+	}
+	worktreePath := wt.GetWorktreePath()
+
+	// Sanity-check the starting state: the worktree dir and its branch both exist.
+	if _, err := os.Stat(worktreePath); err != nil {
+		t.Fatalf("worktree dir missing before cleanup: %v", err)
+	}
+	if out := mustRunGit(t, repoPath, "branch", "--list", branch); !strings.Contains(out, branch) {
+		t.Fatalf("branch %q not found before cleanup", branch)
+	}
+
+	// Run cleanup from a non-git directory; the fix relies on `git -C <repoPath>`
+	// rather than the working directory. Restore the CWD afterward so this test
+	// does not leak its directory change into the shared test process.
+	origWD, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(origWD) })
+	if err := os.Chdir(t.TempDir()); err != nil {
+		t.Fatalf("chdir to non-git dir: %v", err)
+	}
+
+	if err := CleanupWorktrees([]string{repoPath}); err != nil {
+		t.Fatalf("CleanupWorktrees: %v", err)
+	}
+
+	if _, err := os.Stat(worktreePath); !os.IsNotExist(err) {
+		t.Errorf("worktree dir still exists after cleanup: %v", err)
+	}
+	if out := strings.TrimSpace(mustRunGit(t, repoPath, "branch", "--list", branch)); out != "" {
+		t.Errorf("branch %q still exists after cleanup: %q", branch, out)
+	}
+}
+
+// TestCleanupWorktrees_EmptyRepoPathsStillRemovesDirs verifies that passing no
+// repo paths is safe and still removes leftover worktree directories (it just
+// cannot delete branches, since it has no repo to run git in).
+func TestCleanupWorktrees_EmptyRepoPathsStillRemovesDirs(t *testing.T) {
+	repoPath := newTestRepo(t)
+
+	wt, _, err := NewGitWorktree(repoPath, "orphan-test")
+	if err != nil {
+		t.Fatalf("NewGitWorktree: %v", err)
+	}
+	if err := wt.Setup(); err != nil {
+		t.Fatalf("Setup: %v", err)
+	}
+	worktreePath := wt.GetWorktreePath()
+
+	if err := CleanupWorktrees(nil); err != nil {
+		t.Fatalf("CleanupWorktrees(nil): %v", err)
+	}
+
+	if _, err := os.Stat(worktreePath); !os.IsNotExist(err) {
+		t.Errorf("worktree dir still exists after cleanup: %v", err)
+	}
+}

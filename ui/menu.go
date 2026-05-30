@@ -125,7 +125,7 @@ func (m *Menu) updateOptions() {
 
 func (m *Menu) addInstanceOptions() {
 	// Loading instances only get minimal options
-	if m.instance != nil && m.instance.Status == session.Loading {
+	if m.instance != nil && m.instance.GetStatus() == session.Loading {
 		m.options = []keys.KeyName{keys.KeyNew, keys.KeyHelp, keys.KeyQuit}
 		return
 	}
@@ -135,7 +135,7 @@ func (m *Menu) addInstanceOptions() {
 
 	// Action group
 	actionGroup := []keys.KeyName{keys.KeyEnter, keys.KeySubmit}
-	if m.instance.Status == session.Paused {
+	if m.instance.Paused() {
 		actionGroup = append(actionGroup, keys.KeyResume)
 	} else {
 		actionGroup = append(actionGroup, keys.KeyCheckout)

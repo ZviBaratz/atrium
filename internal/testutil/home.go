@@ -24,7 +24,7 @@ func SandboxHomeMain(m *testing.M) int {
 	if err != nil {
 		panic("testutil: failed to create sandbox HOME: " + err.Error())
 	}
-	defer os.RemoveAll(tmp)
+	defer func() { _ = os.RemoveAll(tmp) }()
 	if err := os.Setenv("HOME", tmp); err != nil {
 		panic("testutil: failed to set sandbox HOME: " + err.Error())
 	}

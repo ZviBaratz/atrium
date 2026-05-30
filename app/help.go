@@ -53,7 +53,7 @@ func (h helpTypeGeneral) toContent() string {
 	)
 
 	return lipgloss.JoinVertical(lipgloss.Left,
-		helpTitleStyle().Render("Claude Squad — Keys"),
+		helpTitleStyle().Render("Atrium — Keys"),
 		"",
 		helpHeaderStyle().Render("Navigate"),
 		helpRow("↑/k ↓/j", "move selection"),
@@ -66,14 +66,18 @@ func (h helpTypeGeneral) toContent() string {
 		helpRow("N", "new session with a prompt"),
 		helpRow("R", "rename session (label only)"),
 		helpRow("A", "auto-name session (via claude)"),
+		helpRow("/", "filter sessions"),
 		helpRow("D", "kill session"),
 		"",
 		helpHeaderStyle().Render("Handoff"),
-		helpRow("↵/o", "attach   (ctrl-q detach · ctrl-x kill)"),
+		helpRow("↵/o", "attach to the selected session"),
+		helpRow("ctrl-q", "toggle attach/detach (detach when in, attach from the list)"),
+		helpRow("ctrl-x", "kill the session you're attached to"),
 		helpRow("→", "send a message (without attaching)"),
 		helpRow("c", "checkout: commit changes + pause"),
 		helpRow("p", "commit & push branch"),
 		helpRow("r", "resume a paused session"),
+		helpRow("y", "copy branch name to clipboard"),
 		"",
 		helpHeaderStyle().Render("Groups"),
 		helpRow("J / K", "reorder within a repo group"),
@@ -93,7 +97,7 @@ func (h helpTypeGeneral) toContent() string {
 
 func (h helpTypeWelcome) toContent() string {
 	return lipgloss.JoinVertical(lipgloss.Left,
-		helpTitleStyle().Render("Welcome to Claude Squad"),
+		helpTitleStyle().Render("Welcome to Atrium"),
 		"",
 		helpDescStyle().Render("Run multiple coding agents in parallel — each in its own"),
 		helpDescStyle().Render("git worktree and tmux session, managed from one place."),

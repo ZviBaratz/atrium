@@ -139,7 +139,7 @@ func TestRename_RollbackWhenMoveFails(t *testing.T) {
 
 	// Locking the worktree makes `git worktree move` refuse, exercising the rollback path.
 	mustRunGit(t, repoPath, "worktree", "lock", oldPath)
-	defer func() { _ = exec_unlock(repoPath, oldPath) }()
+	defer func() { _ = execUnlock(repoPath, oldPath) }()
 
 	if err := wt.Rename("alpha-fixed"); err == nil {
 		t.Fatal("Rename() expected an error when the worktree move fails")
@@ -156,8 +156,8 @@ func TestRename_RollbackWhenMoveFails(t *testing.T) {
 	}
 }
 
-// exec_unlock unlocks a worktree, ignoring errors (best-effort test cleanup).
-func exec_unlock(repoPath, worktreePath string) error {
+// execUnlock unlocks a worktree, ignoring errors (best-effort test cleanup).
+func execUnlock(repoPath, worktreePath string) error {
 	g := &GitWorktree{repoPath: repoPath}
 	_, err := g.runGitCommand(repoPath, "worktree", "unlock", worktreePath)
 	return err

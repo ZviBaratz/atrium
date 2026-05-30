@@ -148,9 +148,8 @@ func TestPreviewScrolling(t *testing.T) {
 			if strings.Contains(cmdStr, "has-session") {
 				if sessionCreated {
 					return nil // Session exists
-				} else {
-					return fmt.Errorf("session does not exist")
 				}
+				return fmt.Errorf("session does not exist")
 			}
 
 			// Handle session creation
@@ -328,9 +327,8 @@ func TestPreviewContentWithoutScrolling(t *testing.T) {
 			if strings.Contains(cmdStr, "has-session") {
 				if sessionCreated {
 					return nil // Session exists
-				} else {
-					return fmt.Errorf("session does not exist")
 				}
+				return fmt.Errorf("session does not exist")
 			}
 
 			// Handle session creation
@@ -380,10 +378,52 @@ func TestPreviewContentWithoutScrolling(t *testing.T) {
 	require.Contains(t, renderedString, "test", "Rendered preview should contain the test content")
 }
 
-// Helper function for max
-func max(a, b int) int {
-	if a > b {
-		return a
+// TestPreviewDoesNotPinLoadingSplashForLiveSession reproduces the reported bug: a
+// session whose status is (stale) Loading but whose tmux pane is alive and started
+// must render the live pane, never the "Setting up workspace..." splash. This guards
+// the preview defense-in-depth that complements the main-thread Running transition.
+func TestPreviewDoesNotPinLoadingSplashForLiveSession(t *testing.T) {
+	const expectedContent = "agent is working"
+	sessionCreated := false
+	cmdExec := cmd_test.MockCmdExec{
+		RunFunc: func(cmd *exec.Cmd) error {
+			cmdStr := cmd.String()
+			if strings.Contains(cmdStr, "has-session") {
+				if sessionCreated {
+					return nil // session is alive
+				}
+				return fmt.Errorf("session does not exist")
+			}
+			if strings.Contains(cmdStr, "new-session") {
+				sessionCreated = true
+			}
+			return nil
+		},
+		OutputFunc: func(cmd *exec.Cmd) ([]byte, error) {
+			if strings.Contains(cmd.String(), "capture-pane") {
+				return []byte(expectedContent), nil
+			}
+			return []byte(""), nil
+		},
 	}
-	return b
+
+	setup := setupTestEnvironment(t, cmdExec)
+	defer setup.cleanupFn()
+
+	// Pin the instance at Loading even though it is started with a live tmux pane —
+	// the exact stuck state the user hit (list shows the session, preview was frozen).
+	setup.instance.SetStatus(session.Loading)
+	require.True(t, setup.instance.Started())
+	require.True(t, setup.instance.TmuxAlive())
+
+	pane := NewPreviewPane()
+	pane.SetSize(80, 30)
+	require.NoError(t, pane.UpdateContent(setup.instance))
+
+	require.False(t, pane.previewState.fallback,
+		"a started, tmux-alive session must not fall back to the setup splash")
+	rendered := pane.String()
+	require.NotContains(t, rendered, "Setting up workspace",
+		"the Loading splash must never pin for a live session")
+	require.Contains(t, rendered, expectedContent, "the live pane content must be shown")
 }

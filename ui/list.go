@@ -53,32 +53,84 @@ func (l *List) distinctRepoCount() int {
 // member count when collapsed), and a dim rule filling the rest of the panel width, so it
 // reads as a section divider. A collapsed group's header doubles as its selectable row, so it
 // gets the same left accent bar as a selected item when selected is true.
-func (l *List) renderRepoHeader(key string, collapsed bool, count int, selected bool) string {
+//
+// needsInput is how many sessions in the group are blocked on user input. When the group is
+// collapsed (so its member rows — and their per-row waiting glyphs — are hidden) and the count
+// is non-zero, a "◆N" badge is appended in the attention color so the group still signals that
+// it needs attention without being expanded.
+func (l *List) renderRepoHeader(key string, collapsed bool, count, needsInput int, selected bool) string {
 	g := theme.Current().Glyphs
 	marker := g.FoldOpen + " "
 	if collapsed {
 		marker = g.FoldClosed + " "
 	}
 	name := marker + strings.ToUpper(key)
+	badge := ""
 	if collapsed {
 		name = fmt.Sprintf("%s (%d)", name, count)
+		if needsInput > 0 {
+			badge = fmt.Sprintf("%s%d", g.Waiting, needsInput)
+		}
 	}
 	header := repoHeaderStyle().Render(name)
 	// repoHeaderStyle pads the name with one space on each side; a selected header also gains
-	// a one-cell left accent bar, so reserve for both when sizing the trailing rule.
+	// a one-cell left accent bar, so reserve for both when sizing the trailing rule (hence -2,
+	// and an extra -1 when selected). The badge sits in the padding's right space and is
+	// followed by one separator space before the rule, so it consumes its plain-text width
+	// (its ANSI styling adds no columns) plus that one space.
 	ruleLen := l.renderer.width - runewidth.StringWidth(name) - 2
+	if badge != "" {
+		ruleLen -= runewidth.StringWidth(badge) + 1
+	}
 	if selected {
 		ruleLen--
 	}
 	if ruleLen < 0 {
 		ruleLen = 0
 	}
-	line := header + repoRuleStyle().Render(strings.Repeat("─", ruleLen))
+	line := header
+	if badge != "" {
+		line += theme.Current().AttentionStyle().Render(badge) + " "
+	}
+	line += repoRuleStyle().Render(strings.Repeat("─", ruleLen))
 	if selected {
 		return selectedItemStyle().Render(line)
 	}
 	return line
 }
+
+// visibleCount returns how many items in the half-open range [start, end) are not hidden.
+// Used to decide whether a (non-collapsed) group has any rows to render under the active filter.
+func (l *List) visibleCount(start, end int) int {
+	n := 0
+	for j := start; j < end; j++ {
+		if !l.isHidden(j) {
+			n++
+		}
+	}
+	return n
+}
+
+// groupNeedsInputCount returns how many sessions in the half-open item range [start, end) are
+// blocked on user input. Used to badge a collapsed repo-group header, whose member rows would
+// otherwise carry the per-row waiting glyph.
+func (l *List) groupNeedsInputCount(start, end int) int {
+	n := 0
+	for _, item := range l.items[start:end] {
+		if item.GetStatus() == session.NeedsInput {
+			n++
+		}
+	}
+	return n
+}
+
+// filterBarStyle renders the incremental search bar that appears below the list header
+// when a filter is active.
+var filterBarStyle = lipgloss.NewStyle().
+	Foreground(lipgloss.AdaptiveColor{Light: "#555555", Dark: "#aaaaaa"})
+
+var filterBarActiveStyle = lipgloss.NewStyle().
+	Foreground(lipgloss.AdaptiveColor{Light: "#1a1a1a", Dark: "#ffffff"})
 
 type List struct {
 	items         []*session.Instance
@@ -91,6 +143,14 @@ type List struct {
 	// derived from items. All reads go through effectiveCollapsed so the "only meaningful
 	// with >1 repo" rule is enforced in exactly one place.
 	collapsed map[string]bool
+
+	// filterQuery is the current incremental filter string. Items whose DisplayName and
+	// Branch both fail a case-insensitive contains check are hidden exactly like collapsed
+	// group members — isHidden returns true for them. An empty string disables filtering.
+	filterQuery string
+	// filterActive is true while the user is actively typing the filter (stateFilter in
+	// app.go). It controls the cursor indicator in the filter bar.
+	filterActive bool
 }
 
 func NewList(spinner *spinner.Model, autoYes bool) *List {
@@ -100,6 +160,38 @@ func NewList(spinner *spinner.Model, autoYes bool) *List {
 		autoyes:   autoYes,
 		collapsed: map[string]bool{},
 	}
+}
+
+// SetFilter updates the incremental filter query and clamps the selection to the
+// nearest still-visible item. Pass an empty string to disable filtering.
+func (l *List) SetFilter(query string) {
+	l.filterQuery = query
+	l.clampSelectionToNavigable()
+}
+
+// ClearFilter resets both the filter query and the active state.
+func (l *List) ClearFilter() {
+	l.filterQuery = ""
+	l.filterActive = false
+	l.clampSelectionToNavigable()
+}
+
+// FilterQuery returns the current filter string.
+func (l *List) FilterQuery() string { return l.filterQuery }
+
+// SetFilterActive sets whether the user is currently typing the filter. This drives
+// the cursor indicator in the rendered filter bar.
+func (l *List) SetFilterActive(active bool) { l.filterActive = active }
+
+// filterMatches reports whether an instance should be shown given the current filter.
+// The match is a case-insensitive substring check against DisplayName and Branch.
+func (l *List) filterMatches(i *session.Instance) bool {
+	if l.filterQuery == "" {
+		return true
+	}
+	q := strings.ToLower(l.filterQuery)
+	return strings.Contains(strings.ToLower(i.DisplayName()), q) ||
+		strings.Contains(strings.ToLower(i.Branch), q)
 }
 
 // SetSize sets the OUTER height and width of the list (including its panel
@@ -120,7 +212,7 @@ func (l *List) SetSessionPreviewSize(width, height int) (err error) {
 
 		if innerErr := item.SetPreviewSize(width, height); innerErr != nil {
 			err = errors.Join(
-				err, fmt.Errorf("could not set preview size for instance %d: %v", i, innerErr))
+				err, fmt.Errorf("could not set preview size for instance %d: %w", i, innerErr))
 		}
 	}
 	return
@@ -146,7 +238,7 @@ func (r *InstanceRenderer) setWidth(width int) {
 // stateParts returns the glyph, word, and color describing an instance's status.
 // Running/Loading use the animated spinner frame; the others use theme glyphs.
 func (r *InstanceRenderer) stateParts(i *session.Instance, th *theme.Theme) (glyph, word string, color lipgloss.Color) {
-	switch i.Status {
+	switch i.GetStatus() {
 	case session.Running:
 		return r.spinner.View(), "working", th.Palette.Working
 	case session.Loading:
@@ -201,14 +293,14 @@ func (r *InstanceRenderer) Render(i *session.Instance, idx int, selected bool) s
 	rightStyled := seg(stateColor).Render(glyph) + pad(1) + seg(stateColor).Render(word)
 
 	// Per-session AUTO badge (not while paused) so "yolo" state is unmistakable.
-	if i.AutoYes && i.Status != session.Paused {
+	if i.AutoYes && !i.Paused() {
 		badge := " " + g.AutoBadge + "AUTO "
 		rightPlain = badge + " " + rightPlain
 		rightStyled = th.BadgeStyle().Render(badge) + pad(1) + rightStyled
 	}
 
 	nameColor := th.Palette.Fg
-	if i.Status == session.NeedsInput {
+	if i.GetStatus() == session.NeedsInput {
 		nameColor = th.Palette.Attention // the one state that wants attention
 	}
 	nameStyle := seg(nameColor)
@@ -298,18 +390,43 @@ func (l *List) String() string {
 		return start
 	}
 
+	// Render the filter bar as the first line(s) when a query is present or the user is
+	// actively typing. Appending here keeps appendBlock's selStart/selH bookkeeping correct
+	// for the rows that follow.
+	if l.filterQuery != "" || l.filterActive {
+		cursor := ""
+		if l.filterActive {
+			cursor = "▌"
+		}
+		style := filterBarStyle
+		if l.filterActive {
+			style = filterBarActiveStyle
+		}
+		lines = append(lines, style.Render(" / "+l.filterQuery+cursor), "")
+	}
+
 	// Render the list group by group, in the user's existing (reorderable) order. Headers are
 	// shown only with more than one repo, and are not selectable rows for expanded groups, so
 	// selectedIdx stays a flat index into l.items. A collapsed group renders only its header
 	// (which doubles as its anchor's row) and suppresses its members.
+	// An active filter is the sole visibility gate and overrides collapse (see isHidden), so a
+	// folded group expands to reveal its matches while filtering.
+	filtering := l.filterQuery != ""
 	showRepos := l.distinctRepoCount() > 1
 	first := true
 	for i := 0; i < len(l.items); {
 		key := repoKey(l.items[i])
 		start, end := l.groupBounds(i)
-		collapsed := showRepos && l.collapsed[key]
+		collapsed := showRepos && l.collapsed[key] && !filtering
 
-		// Looser spacing before each group (one blank line); items within a group are adjacent.
+		// A filter can hide every member of a group; such a group renders neither its header nor
+		// a separating blank line. A collapsed group is always represented (by its header).
+		if !collapsed && l.visibleCount(start, end) == 0 {
+			i = end
+			continue
+		}
+
+		// Looser spacing before each rendered group (one blank line); items within a group are adjacent.
 		if !first {
 			lines = append(lines, "")
 		}
@@ -317,13 +434,17 @@ func (l *List) String() string {
 
 		if showRepos {
 			headerSelected := collapsed && l.selectedIdx == start
-			at := appendBlock(l.renderRepoHeader(key, collapsed, end-start, headerSelected))
+			ni := l.groupNeedsInputCount(start, end)
+			at := appendBlock(l.renderRepoHeader(key, collapsed, end-start, ni, headerSelected))
 			if headerSelected {
 				selStart, selH = at, len(lines)-at
 			}
 		}
 		if !collapsed {
 			for j := start; j < end; j++ {
+				if l.isHidden(j) {
+					continue
+				}
 				at := appendBlock(l.renderer.Render(l.items[j], j+1, j == l.selectedIdx))
 				if j == l.selectedIdx {
 					selStart, selH = at, len(lines)-at
@@ -331,6 +452,12 @@ func (l *List) String() string {
 			}
 		}
 		i = end
+	}
+
+	// `first` is still set only if no group rendered any row, i.e. the query matched nothing.
+	// Show an explicit hint so the empty list is not mistaken for "no sessions exist".
+	if filtering && first {
+		lines = append(lines, filterBarStyle.Render("   no matches"))
 	}
 
 	// Inner content area inside the panel border (2 cols / 2 rows of chrome).
@@ -605,9 +732,14 @@ func (l *List) effectiveCollapsed(key string) bool {
 	return l.distinctRepoCount() > 1 && l.collapsed[key]
 }
 
-// isHidden reports whether the item at idx is suppressed from view: a member of a collapsed
-// group other than its first item (the anchor), which stands in for the whole group.
+// isHidden reports whether the item at idx is suppressed from view. While a filter query is
+// active it is the sole visibility gate — an item is hidden iff it does not match — and it
+// takes precedence over collapse so matches buried inside a folded group still surface.
+// With no active filter, an item is hidden when it is a non-anchor member of a collapsed group.
 func (l *List) isHidden(idx int) bool {
+	if l.filterQuery != "" {
+		return !l.filterMatches(l.items[idx])
+	}
 	if !l.effectiveCollapsed(repoKey(l.items[idx])) {
 		return false
 	}
@@ -616,8 +748,8 @@ func (l *List) isHidden(idx int) bool {
 }
 
 // clampSelectionToNavigable enforces the invariant that the selection always rests on a
-// visible item. It snaps an out-of-bounds or hidden selectedIdx to its group anchor. This is
-// the single place that invariant is maintained, so every mutation just calls it afterward.
+// visible item. This is the single place that invariant is maintained, so every mutation just
+// calls it afterward.
 func (l *List) clampSelectionToNavigable() {
 	if len(l.items) == 0 {
 		l.selectedIdx = 0
@@ -628,9 +760,36 @@ func (l *List) clampSelectionToNavigable() {
 	} else if l.selectedIdx >= len(l.items) {
 		l.selectedIdx = len(l.items) - 1
 	}
-	if l.isHidden(l.selectedIdx) {
-		l.selectedIdx, _ = l.groupBounds(l.selectedIdx)
+	if !l.isHidden(l.selectedIdx) {
+		return
 	}
+	// Prefer the group anchor: for a collapsed group it is always visible and stands in for the
+	// whole group. Under an active filter the anchor may itself be filtered out, so fall back to
+	// the nearest visible item in either direction. If nothing matches, leave the selection put.
+	if anchor, _ := l.groupBounds(l.selectedIdx); !l.isHidden(anchor) {
+		l.selectedIdx = anchor
+		return
+	}
+	if idx := l.nearestNavigable(l.selectedIdx); idx >= 0 {
+		l.selectedIdx = idx
+	}
+}
+
+// nearestNavigable returns the index of the closest non-hidden item to from, searching outward
+// in both directions (preferring the item below on ties), or -1 when every item is hidden.
+func (l *List) nearestNavigable(from int) int {
+	for d := 1; d < len(l.items); d++ {
+		if i := from + d; i < len(l.items) && !l.isHidden(i) {
+			return i
+		}
+		if i := from - d; i >= 0 && !l.isHidden(i) {
+			return i
+		}
+	}
+	if !l.isHidden(from) {
+		return from
+	}
+	return -1
 }
 
 // ToggleCollapse folds or unfolds the selected session's repo group. It is a no-op (returns

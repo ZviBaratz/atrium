@@ -28,8 +28,8 @@ func TestGetClaudeCommand(t *testing.T) {
 	originalShell := os.Getenv("SHELL")
 	originalPath := os.Getenv("PATH")
 	defer func() {
-		os.Setenv("SHELL", originalShell)
-		os.Setenv("PATH", originalPath)
+		_ = os.Setenv("SHELL", originalShell)
+		_ = os.Setenv("PATH", originalPath)
 	}()
 
 	t.Run("finds claude in PATH", func(t *testing.T) {
@@ -42,8 +42,8 @@ func TestGetClaudeCommand(t *testing.T) {
 		require.NoError(t, err)
 
 		// Set PATH to include our temp directory
-		os.Setenv("PATH", tempDir+":"+originalPath)
-		os.Setenv("SHELL", "/bin/bash")
+		_ = os.Setenv("PATH", tempDir+":"+originalPath)
+		_ = os.Setenv("SHELL", "/bin/bash")
 
 		result, err := GetClaudeCommand()
 
@@ -54,8 +54,8 @@ func TestGetClaudeCommand(t *testing.T) {
 	t.Run("handles missing claude command", func(t *testing.T) {
 		// Set PATH to a directory that doesn't contain claude
 		tempDir := t.TempDir()
-		os.Setenv("PATH", tempDir)
-		os.Setenv("SHELL", "/bin/bash")
+		_ = os.Setenv("PATH", tempDir)
+		_ = os.Setenv("SHELL", "/bin/bash")
 
 		result, err := GetClaudeCommand()
 
@@ -74,8 +74,8 @@ func TestGetClaudeCommand(t *testing.T) {
 		require.NoError(t, err)
 
 		// Set PATH and unset SHELL
-		os.Setenv("PATH", tempDir+":"+originalPath)
-		os.Unsetenv("SHELL")
+		_ = os.Setenv("PATH", tempDir+":"+originalPath)
+		_ = os.Unsetenv("SHELL")
 
 		result, err := GetClaudeCommand()
 
@@ -98,6 +98,69 @@ func TestGetClaudeCommand(t *testing.T) {
 		matches = aliasRegex.FindStringSubmatch(output)
 		assert.Len(t, matches, 0)
 	})
+}
+
+func TestResolveClaudeCandidate(t *testing.T) {
+	// Provide a real, executable `claude` on PATH so the candidates that are
+	// expected to resolve can succeed.
+	tempDir := t.TempDir()
+	claudePath := filepath.Join(tempDir, "claude")
+	require.NoError(t, os.WriteFile(claudePath, []byte("#!/bin/sh\n"), 0o755))
+
+	t.Setenv("PATH", tempDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	// The multi-line body `which claude` prints when `claude` is a zsh function.
+	// The alias regex captures "$?" from `local ret=$?`; that token is not a
+	// runnable program, so resolution must report no match.
+	functionBody := "claude () {\n" +
+		"\tif [[ -n \"$TMUX\" ]]\n" +
+		"\tthen\n" +
+		"\t\ttmux setw monitor-activity off\n" +
+		"\t\tcommand claude \"$@\"\n" +
+		"\t\tlocal ret=$?\n" +
+		"\t\ttmux setw monitor-activity on\n" +
+		"\t\treturn $ret\n" +
+		"\telse\n" +
+		"\t\tcommand claude \"$@\"\n" +
+		"\tfi\n" +
+		"}"
+
+	// A function body whose first `=` assignment has a right-hand side that is a
+	// real binary on PATH (here, `claude` itself). The alias regex captures that
+	// token; without the multi-line guard it would resolve via exec.LookPath and
+	// be wrongly accepted as the program to launch.
+	functionBodyResolvable := "claude () {\n" +
+		"\tlocal helper=claude\n" +
+		"\tcommand claude \"$@\"\n" +
+		"}"
+
+	tests := []struct {
+		name     string
+		output   string
+		wantOK   bool
+		wantPath string
+	}{
+		{"plain absolute path", claudePath, true, claudePath},
+		{"alias definition", "claude: aliased to " + claudePath, true, claudePath},
+		{"bare name resolved via PATH", "claude", true, claudePath},
+		{"shell function body is rejected", functionBody, false, ""},
+		{"function body whose first assignment resolves on PATH is rejected", functionBodyResolvable, false, ""},
+		{"empty output", "   \n\t", false, ""},
+		{"non-executable alias target", "claude=/nonexistent/definitely/not/here", false, ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, ok := resolveClaudeCandidate(tt.output)
+			assert.Equal(t, tt.wantOK, ok)
+			if tt.wantOK {
+				assert.Equal(t, tt.wantPath, got)
+			} else {
+				assert.Empty(t, got)
+				assert.NotEqual(t, "$?", got, "must never return the mis-parsed function-body token")
+			}
+		})
+	}
 }
 
 func TestDefaultConfig(t *testing.T) {
@@ -132,8 +195,8 @@ func TestLoadConfig(t *testing.T) {
 		// Use a temporary home directory to avoid interfering with real config
 		originalHome := os.Getenv("HOME")
 		tempHome := t.TempDir()
-		os.Setenv("HOME", tempHome)
-		defer os.Setenv("HOME", originalHome)
+		_ = os.Setenv("HOME", tempHome)
+		defer func() { _ = os.Setenv("HOME", originalHome) }()
 
 		config := LoadConfig()
 
@@ -164,8 +227,8 @@ func TestLoadConfig(t *testing.T) {
 
 		// Override HOME environment
 		originalHome := os.Getenv("HOME")
-		os.Setenv("HOME", tempHome)
-		defer os.Setenv("HOME", originalHome)
+		_ = os.Setenv("HOME", tempHome)
+		defer func() { _ = os.Setenv("HOME", originalHome) }()
 
 		config := LoadConfig()
 
@@ -191,8 +254,8 @@ func TestLoadConfig(t *testing.T) {
 
 		// Override HOME environment
 		originalHome := os.Getenv("HOME")
-		os.Setenv("HOME", tempHome)
-		defer os.Setenv("HOME", originalHome)
+		_ = os.Setenv("HOME", tempHome)
+		defer func() { _ = os.Setenv("HOME", originalHome) }()
 
 		config := LoadConfig()
 
@@ -277,8 +340,8 @@ func TestSaveConfig(t *testing.T) {
 
 		// Override HOME environment
 		originalHome := os.Getenv("HOME")
-		os.Setenv("HOME", tempHome)
-		defer os.Setenv("HOME", originalHome)
+		_ = os.Setenv("HOME", tempHome)
+		defer func() { _ = os.Setenv("HOME", originalHome) }()
 
 		// Create a test config
 		testConfig := &Config{

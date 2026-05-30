@@ -44,7 +44,7 @@ func TestViewFitsTerminalBounds_ManyInstances(t *testing.T) {
 				Title: fmt.Sprintf("sess-%02d", i), Path: t.TempDir(), Program: "echo",
 			})
 			require.NoError(t, err)
-			inst.Status = statuses[i%len(statuses)]
+			inst.SetStatus(statuses[i%len(statuses)])
 			home.list.AddInstance(inst)()
 		}
 		home.updateHandleWindowSizeEvent(tea.WindowSizeMsg{Width: w, Height: h})

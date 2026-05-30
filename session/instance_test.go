@@ -9,11 +9,57 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// TestStatusAccessorsAreRaceFree exercises the lifecycle-field accessors from two
+// goroutines at once: a writer mutating the mu-guarded fields (status, tmuxSession)
+// while the metadata-poll / UI readers query them. Before the RWMutex was added this
+// raced (writer = Start's SetStatus(Running) + tmuxSession assignment; readers = the
+// poll loop and the UI methods below), which under `go test -race` is a hard failure
+// and at runtime could leave a session pinned at Loading. Every method exercised by the
+// reader goroutine must read the guarded fields through the locked accessors, not the
+// bare struct fields, so this also guards against a regression that reintroduces a
+// direct read. It must pass under -race.
+func TestStatusAccessorsAreRaceFree(t *testing.T) {
+	mockExec := cmd_test.MockCmdExec{
+		RunFunc:    func(*exec.Cmd) error { return nil },
+		OutputFunc: func(*exec.Cmd) ([]byte, error) { return []byte(""), nil },
+	}
+	newSession := func() *tmux.TmuxSession {
+		return tmux.NewTmuxSessionWithDeps("race", "claude", tmux.MakePtyFactory(), mockExec)
+	}
+	inst := &Instance{Title: "race", status: Loading, started: true, tmuxSession: newSession()}
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 1000; i++ {
+			inst.SetStatus(Running)
+			inst.SetTmuxSession(newSession())
+			inst.SetStatus(Ready)
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 1000; i++ {
+			_ = inst.GetStatus()
+			_ = inst.Started()
+			_ = inst.Paused()
+			_ = inst.TmuxAlive()
+			_ = inst.IsReadyForPrompt()
+			_ = inst.SetPreviewSize(80, 24)
+			_, _ = inst.PreviewFullHistory()
+			_ = inst.SendKeys("x")
+		}
+	}()
+	wg.Wait()
+}
 
 // TestPreviewSkipsCaptureWhenSessionDead asserts that previewing a started instance
 // whose tmux session has died returns empty (not an error) without running
@@ -25,7 +71,7 @@ func TestPreviewSkipsCaptureWhenSessionDead(t *testing.T) {
 		OutputFunc: func(*exec.Cmd) ([]byte, error) { captured = true; return nil, fmt.Errorf("capture fail") },
 	}
 	ts := tmux.NewTmuxSessionWithDeps("dead", "claude", tmux.MakePtyFactory(), mockExec)
-	inst := &Instance{Title: "dead", Status: Running, started: true, tmuxSession: ts}
+	inst := &Instance{Title: "dead", status: Running, started: true, tmuxSession: ts}
 
 	content, err := inst.Preview()
 	require.NoError(t, err)
@@ -65,7 +111,7 @@ func TestRecoverLostSessionTransitionsToPaused(t *testing.T) {
 		OutputFunc: func(*exec.Cmd) ([]byte, error) { return nil, fmt.Errorf("dead") },
 	}
 	ts := tmux.NewTmuxSessionWithDeps("sess", "claude", tmux.MakePtyFactory(), deadExec)
-	inst := &Instance{Title: "sess", Status: Running, started: true, gitWorktree: wt, tmuxSession: ts}
+	inst := &Instance{Title: "sess", status: Running, started: true, gitWorktree: wt, tmuxSession: ts}
 
 	require.False(t, inst.TmuxAlive())
 	require.NoError(t, inst.RecoverLostSession())

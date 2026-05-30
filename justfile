@@ -68,6 +68,14 @@ release tag:
     git tag -a "v{{tag}}" -m "Release v{{tag}}"
     git push origin "v{{tag}}"
 
+# Install git hooks (pre-commit + pre-push) via pre-commit.
+hooks:
+    pre-commit install --install-hooks
+    pre-commit install --hook-type pre-push
+
+# Run the local gate sequence mirroring CI (CI also runs race + a macOS job).
+ci: build vet fmt-check lint test cover
+
 # Remove build artifacts.
 clean:
     rm -rf bin dist coverage.out

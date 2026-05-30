@@ -1,4 +1,4 @@
-# Atrium [![CI](https://github.com/ZviBaratz/atrium/actions/workflows/build.yml/badge.svg)](https://github.com/ZviBaratz/atrium/actions/workflows/build.yml) [![GitHub Release](https://img.shields.io/github/v/release/ZviBaratz/atrium)](https://github.com/ZviBaratz/atrium/releases/latest)
+# Atrium [![Website](https://img.shields.io/badge/website-zvibaratz.github.io%2Fatrium-2ea44f)](https://zvibaratz.github.io/atrium/) [![CI](https://github.com/ZviBaratz/atrium/actions/workflows/build.yml/badge.svg)](https://github.com/ZviBaratz/atrium/actions/workflows/build.yml) [![GitHub Release](https://img.shields.io/github/v/release/ZviBaratz/atrium)](https://github.com/ZviBaratz/atrium/releases/latest) [![Go Report Card](https://goreportcard.com/badge/github.com/ZviBaratz/atrium)](https://goreportcard.com/report/github.com/ZviBaratz/atrium) [![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](LICENSE.md) [![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/ZviBaratz/atrium/badge)](https://securityscorecards.dev/viewer/?uri=github.com/ZviBaratz/atrium)
 
 Atrium is a terminal command center for orchestrating multiple AI coding agents — [Claude Code](https://github.com/anthropics/claude-code), [Codex](https://github.com/openai/codex), [Gemini](https://github.com/google-gemini/gemini-cli), and other local agents including [Aider](https://github.com/Aider-AI/aider) — each in its own isolated git worktree, so you can drive several tasks at once from a single panel.
 
@@ -79,7 +79,7 @@ NOTE: The default program is `claude` and we recommend using the latest version.
 <br />
 
 #### Menu
-The menu at the bottom of the screen shows available commands: 
+The menu at the bottom of the screen shows available commands:
 
 ##### Instance/Session Management
 - `n` - Create a new session
@@ -148,6 +148,18 @@ If no profiles are defined, Atrium uses `default_program` directly as the launch
 
 If you get an error like `failed to start new session: timed out waiting for tmux session`, update the
 underlying program (ex. `claude`) to the latest version.
+
+### Security & verifying releases
+
+Releases ship with SLSA build provenance and a keyless Sigstore signature over
+the checksums file, plus a per-archive SBOM. To confirm a download is genuine:
+
+```bash
+gh attestation verify atrium_<version>_<os>_<arch>.tar.gz --repo ZviBaratz/atrium
+```
+
+See [SECURITY.md](SECURITY.md) for full verification steps (including `cosign`)
+and how to report a vulnerability privately.
 
 ### How It Works
 

@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/atotto/clipboard"
@@ -45,8 +46,6 @@ type Instance struct {
 	Path string
 	// Branch is the branch of the instance.
 	Branch string
-	// Status is the status of the instance.
-	Status Status
 	// Program is the program to run in the instance.
 	Program string
 	// Height is the height of the instance.
@@ -69,7 +68,15 @@ type Instance struct {
 	// The session always gets its own branch; baseBranch only chooses the start point.
 	baseBranch string
 
-	// The below fields are initialized upon calling Start().
+	// mu guards the live-state fields below (status, started, tmuxSession, gitWorktree),
+	// which the background Start() goroutine writes while the metadata-poll goroutines and
+	// the UI thread read them. Always access these through the locked accessors
+	// (GetStatus/SetStatus/isStarted/tmux/worktree); never hold mu across tmux/git I/O.
+	mu sync.RWMutex
+	// status is the status of the instance. Guarded by mu.
+	status Status
+
+	// The below fields are initialized upon calling Start(). Guarded by mu.
 
 	started bool
 	// tmuxSession is the tmux session for the instance.
@@ -85,7 +92,7 @@ func (i *Instance) ToInstanceData() InstanceData {
 		DisplayName: i.displayName,
 		Path:        i.Path,
 		Branch:      i.Branch,
-		Status:      i.Status,
+		Status:      i.GetStatus(),
 		Height:      i.Height,
 		Width:       i.Width,
 		CreatedAt:   i.CreatedAt,
@@ -95,15 +102,15 @@ func (i *Instance) ToInstanceData() InstanceData {
 	}
 
 	// Only include worktree data if gitWorktree is initialized
-	if i.gitWorktree != nil {
+	if wt := i.worktree(); wt != nil {
 		data.Worktree = GitWorktreeData{
-			RepoPath:         i.gitWorktree.GetRepoPath(),
-			WorktreePath:     i.gitWorktree.GetWorktreePath(),
+			RepoPath:         wt.GetRepoPath(),
+			WorktreePath:     wt.GetWorktreePath(),
 			SessionName:      i.Title,
-			BranchName:       i.gitWorktree.GetBranchName(),
-			BaseCommitSHA:    i.gitWorktree.GetBaseCommitSHA(),
-			BaseRef:          i.gitWorktree.GetBaseRef(),
-			IsExistingBranch: i.gitWorktree.IsExistingBranch(),
+			BranchName:       wt.GetBranchName(),
+			BaseCommitSHA:    wt.GetBaseCommitSHA(),
+			BaseRef:          wt.GetBaseRef(),
+			IsExistingBranch: wt.IsExistingBranch(),
 		}
 	}
 
@@ -130,7 +137,7 @@ func FromInstanceData(data InstanceData) (*Instance, error) {
 		displayName: data.DisplayName,
 		Path:        data.Path,
 		Branch:      data.Branch,
-		Status:      data.Status,
+		status:      data.Status,
 		Height:      data.Height,
 		Width:       data.Width,
 		CreatedAt:   data.CreatedAt,
@@ -165,34 +172,79 @@ func FromInstanceData(data InstanceData) (*Instance, error) {
 		switch {
 		case sess.DoesSessionExist():
 			// Normal case: the session survived (cs detaches, it doesn't kill),
-			// so reattach to it.
+			// so reattach to it. If the attach (Restore) fails the session is
+			// wedged — kill it and recover in place rather than aborting the
+			// load of every other session. Start() no longer sets Running itself
+			// (that is owned by the caller), so mark a successfully-reattached
+			// session Running here; recoverInPlace sets its own status otherwise.
 			if err := instance.Start(false); err != nil {
-				return nil, err
+				log.ErrorLog.Printf("failed to restore session %s, recovering: %v", instance.Title, err)
+				if closeErr := sess.Close(); closeErr != nil {
+					log.ErrorLog.Printf("failed to close stale session %s: %v", instance.Title, closeErr)
+				}
+				instance.recoverInPlace()
+			} else {
+				instance.SetStatus(Running)
 			}
 		default:
 			// The tmux session is gone — e.g. after a reboot, or the one-time
 			// migration to cs's dedicated socket. Don't crash on the failed
-			// attach (which previously aborted startup). If the worktree is
-			// intact, restart the session in place: this preserves uncommitted
-			// work (Resume would force-recreate the worktree and lose it) and
-			// keeps the instance usable. If the worktree is also gone, leave it
-			// Paused so the branch is preserved and Resume can recover it.
-			if valid, err := instance.gitWorktree.IsValidWorktree(); err == nil && valid {
-				// The agent process died with the tmux session, so resume its prior
-				// conversation rather than starting blank (no-op for non-claude agents).
-				if err := sess.StartContinue(instance.gitWorktree.GetWorktreePath()); err != nil {
-					return nil, err
-				}
-				instance.started = true
-				instance.SetStatus(Running)
-			} else {
-				instance.started = true
-				instance.SetStatus(Paused)
-			}
+			// attach (which previously aborted startup); recover in place.
+			instance.recoverInPlace()
 		}
 	}
 
 	return instance, nil
+}
+
+// recoverInPlace brings a loaded instance back online after its tmux session
+// could not be restored (the session was wedged, or gone entirely). If the
+// worktree is intact it recreates the session in place, resuming the agent's
+// prior conversation (StartContinue, a no-op for non-claude agents) and marks
+// the instance Running. If the worktree is gone, or the restart fails, it
+// degrades to Paused so the branch is preserved and Resume can recover it
+// later — a single bad session must never abort loading the rest.
+//
+// Recreating in place (rather than via Resume) deliberately preserves any
+// uncommitted work: Resume would force-recreate the worktree and lose it.
+func (i *Instance) recoverInPlace() {
+	i.started = true
+
+	valid, err := i.gitWorktree.IsValidWorktree()
+	if err != nil {
+		log.ErrorLog.Printf("failed to validate worktree for %s, leaving paused: %v", i.Title, err)
+	}
+	if err != nil || !valid {
+		i.SetStatus(Paused)
+		return
+	}
+
+	if err := i.tmuxSession.StartContinue(i.gitWorktree.GetWorktreePath()); err != nil {
+		log.ErrorLog.Printf("failed to restart session %s in place, leaving paused: %v", i.Title, err)
+		i.SetStatus(Paused)
+		return
+	}
+	i.SetStatus(Running)
+}
+
+// recreateSession starts a fresh tmux session for an already-set-up worktree,
+// resuming the agent's prior conversation (StartContinue, a no-op for
+// non-claude agents). On failure it tears down the worktree and returns a
+// wrapped error. Callers must ensure no session with the same name still exists
+// — Start guards against duplicates — so a stale session has to be closed first.
+func (i *Instance) recreateSession() error {
+	ts := i.tmux()
+	wt := i.worktree()
+	if err := ts.StartContinue(wt.GetWorktreePath()); err != nil {
+		log.ErrorLog.Print(err)
+		// Cleanup git worktree if tmux session creation fails.
+		if cleanupErr := wt.Cleanup(); cleanupErr != nil {
+			err = fmt.Errorf("%w (cleanup error: %w)", err, cleanupErr)
+			log.ErrorLog.Print(err)
+		}
+		return fmt.Errorf("failed to start new session: %w", err)
+	}
+	return nil
 }
 
 // Options for creating a new instance
@@ -220,7 +272,7 @@ func NewInstance(opts InstanceOptions) (*Instance, error) {
 
 	return &Instance{
 		Title:      opts.Title,
-		Status:     Ready,
+		status:     Ready,
 		Path:       absPath,
 		Program:    opts.Program,
 		Height:     0,
@@ -233,17 +285,17 @@ func NewInstance(opts InstanceOptions) (*Instance, error) {
 }
 
 func (i *Instance) RepoName() (string, error) {
-	if !i.started {
+	if !i.isStarted() {
 		return "", fmt.Errorf("cannot get repo name for instance that has not been started")
 	}
-	return i.gitWorktree.GetRepoName(), nil
+	return i.worktree().GetRepoName(), nil
 }
 
 // SetPath sets the repo path for a not-yet-started instance, resolving it to an
 // absolute path (mirroring NewInstance). The worktree is created from this path on
 // Start, so it must be called before the instance is started.
 func (i *Instance) SetPath(path string) error {
-	if i.started {
+	if i.isStarted() {
 		return fmt.Errorf("cannot change path after instance has started")
 	}
 	absPath, err := filepath.Abs(path)
@@ -254,8 +306,42 @@ func (i *Instance) SetPath(path string) error {
 	return nil
 }
 
+// GetStatus returns the instance status under the read lock.
+func (i *Instance) GetStatus() Status {
+	i.mu.RLock()
+	defer i.mu.RUnlock()
+	return i.status
+}
+
+// SetStatus updates the instance status under the write lock.
 func (i *Instance) SetStatus(status Status) {
-	i.Status = status
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	i.status = status
+}
+
+// isStarted reports whether Start() has completed, under the read lock.
+func (i *Instance) isStarted() bool {
+	i.mu.RLock()
+	defer i.mu.RUnlock()
+	return i.started
+}
+
+// tmux returns the tmux session pointer under the read lock. Callers invoke methods
+// on the returned session outside the lock (TmuxSession guards its own fields), so
+// mu is never held across tmux I/O.
+func (i *Instance) tmux() *tmux.TmuxSession {
+	i.mu.RLock()
+	defer i.mu.RUnlock()
+	return i.tmuxSession
+}
+
+// worktree returns the git worktree pointer under the read lock. As with tmux(),
+// callers run git I/O on the returned worktree outside the lock.
+func (i *Instance) worktree() *git.GitWorktree {
+	i.mu.RLock()
+	defer i.mu.RUnlock()
+	return i.gitWorktree
 }
 
 // SetBaseBranch sets the existing branch the session branch will be based on when the
@@ -270,15 +356,17 @@ func (i *Instance) Start(firstTimeSetup bool) error {
 		return fmt.Errorf("instance title cannot be empty")
 	}
 
-	var tmuxSession *tmux.TmuxSession
-	if i.tmuxSession != nil {
-		// Use existing tmux session (useful for testing)
-		tmuxSession = i.tmuxSession
-	} else {
+	i.mu.RLock()
+	existing := i.tmuxSession
+	i.mu.RUnlock()
+	tmuxSession := existing
+	if tmuxSession == nil {
 		// Create new tmux session
 		tmuxSession = tmux.NewTmuxSession(i.Title, i.Program)
 	}
+	i.mu.Lock()
 	i.tmuxSession = tmuxSession
+	i.mu.Unlock()
 
 	if firstTimeSetup {
 		// The session always gets its own branch. baseBranch (if set) only chooses the start
@@ -294,7 +382,9 @@ func (i *Instance) Start(firstTimeSetup bool) error {
 		if err != nil {
 			return fmt.Errorf("failed to create git worktree: %w", err)
 		}
+		i.mu.Lock()
 		i.gitWorktree = gitWorktree
+		i.mu.Unlock()
 		i.Branch = branchName
 	}
 
@@ -303,10 +393,12 @@ func (i *Instance) Start(firstTimeSetup bool) error {
 	defer func() {
 		if setupErr != nil {
 			if cleanupErr := i.Kill(); cleanupErr != nil {
-				setupErr = fmt.Errorf("%v (cleanup error: %v)", setupErr, cleanupErr)
+				setupErr = fmt.Errorf("%w (cleanup error: %w)", setupErr, cleanupErr)
 			}
 		} else {
+			i.mu.Lock()
 			i.started = true
+			i.mu.Unlock()
 		}
 	}()
 
@@ -317,31 +409,35 @@ func (i *Instance) Start(firstTimeSetup bool) error {
 			return setupErr
 		}
 	} else {
-		// Setup git worktree first
-		if err := i.gitWorktree.Setup(); err != nil {
+		// Setup git worktree first. wt is the worktree this goroutine just stored above.
+		wt := i.worktree()
+		if err := wt.Setup(); err != nil {
 			setupErr = fmt.Errorf("failed to setup git worktree: %w", err)
 			return setupErr
 		}
 
 		// Create new session
-		if err := i.tmuxSession.Start(i.gitWorktree.GetWorktreePath()); err != nil {
+		if err := tmuxSession.Start(wt.GetWorktreePath()); err != nil {
 			// Cleanup git worktree if tmux session creation fails
-			if cleanupErr := i.gitWorktree.Cleanup(); cleanupErr != nil {
-				err = fmt.Errorf("%v (cleanup error: %v)", err, cleanupErr)
+			if cleanupErr := wt.Cleanup(); cleanupErr != nil {
+				err = fmt.Errorf("%w (cleanup error: %w)", err, cleanupErr)
 			}
 			setupErr = fmt.Errorf("failed to start new session: %w", err)
 			return setupErr
 		}
 	}
 
-	i.SetStatus(Running)
+	// NOTE: the transition out of Loading is owned by the caller on the main thread,
+	// not set here from the background start goroutine, so it can never race with the
+	// UI/poll readers. The new-session flow sets Running in the instanceStartedMsg
+	// handler; the reattach path (FromInstanceData) sets it after Start(false) returns.
 
 	return nil
 }
 
 // Kill terminates the instance and cleans up all resources
 func (i *Instance) Kill() error {
-	if !i.started {
+	if !i.isStarted() {
 		// If instance was never started, just return success
 		return nil
 	}
@@ -350,15 +446,15 @@ func (i *Instance) Kill() error {
 
 	// Always try to cleanup both resources, even if one fails
 	// Clean up tmux session first since it's using the git worktree
-	if i.tmuxSession != nil {
-		if err := i.tmuxSession.Close(); err != nil {
+	if ts := i.tmux(); ts != nil {
+		if err := ts.Close(); err != nil {
 			errs = append(errs, fmt.Errorf("failed to close tmux session: %w", err))
 		}
 	}
 
 	// Then clean up git worktree
-	if i.gitWorktree != nil {
-		if err := i.gitWorktree.Cleanup(); err != nil {
+	if wt := i.worktree(); wt != nil {
+		if err := wt.Cleanup(); err != nil {
 			errs = append(errs, fmt.Errorf("failed to cleanup git worktree: %w", err))
 		}
 	}
@@ -383,38 +479,42 @@ func (i *Instance) combineErrors(errs []error) error {
 }
 
 func (i *Instance) Preview() (string, error) {
-	if !i.started || i.Status == Paused {
+	if !i.isStarted() || i.Paused() {
 		return "", nil
 	}
 	// A started session whose tmux pane has died (server restart, the agent
 	// process exited, an external kill) would fail capture every refresh and
 	// escalate to the error box. Treat a missing session as empty; the metadata
 	// loop detects it via TmuxAlive() and recovers the instance to Paused.
-	if !i.TmuxAlive() {
+	ts := i.tmux()
+	if ts == nil || !ts.DoesSessionExist() {
 		return "", nil
 	}
-	return i.tmuxSession.CapturePaneContent()
+	return ts.CapturePaneContent()
 }
 
 func (i *Instance) HasUpdated() (updated bool, hasPrompt bool) {
-	if !i.started {
+	ts := i.tmux()
+	if !i.isStarted() || ts == nil {
 		return false, false
 	}
-	return i.tmuxSession.HasUpdated()
+	return ts.HasUpdated()
 }
 
 // Poll classifies the agent's current pane state. Returns PaneUnknown for a not-yet-started
 // instance so callers leave its status untouched.
 func (i *Instance) Poll() tmux.PaneState {
-	if !i.started {
+	ts := i.tmux()
+	if !i.isStarted() || ts == nil {
 		return tmux.PaneUnknown
 	}
-	return i.tmuxSession.Poll()
+	return ts.Poll()
 }
 
 // CheckAndHandleTrustPrompt checks for and dismisses the trust prompt for supported programs.
 func (i *Instance) CheckAndHandleTrustPrompt() bool {
-	if !i.started || i.tmuxSession == nil {
+	ts := i.tmux()
+	if !i.isStarted() || ts == nil {
 		return false
 	}
 	program := i.Program
@@ -423,74 +523,86 @@ func (i *Instance) CheckAndHandleTrustPrompt() bool {
 		!strings.HasSuffix(program, tmux.ProgramGemini) {
 		return false
 	}
-	return i.tmuxSession.CheckAndHandleTrustPrompt()
+	return ts.CheckAndHandleTrustPrompt()
 }
 
 // IsReadyForPrompt reports whether the agent has finished booting and is past any
 // startup gate, so a queued initial prompt can be submitted into its input box.
 func (i *Instance) IsReadyForPrompt() bool {
-	if !i.started || i.tmuxSession == nil {
+	ts := i.tmux()
+	if !i.isStarted() || ts == nil {
 		return false
 	}
-	return i.tmuxSession.IsReadyForPrompt()
+	return ts.IsReadyForPrompt()
 }
 
 // TapEnter sends an enter key press to the tmux session if AutoYes is enabled.
 func (i *Instance) TapEnter() {
-	if !i.started || !i.AutoYes {
+	if !i.isStarted() || !i.AutoYes {
 		return
 	}
-	if err := i.tmuxSession.TapEnter(); err != nil {
+	if err := i.tmux().TapEnter(); err != nil {
 		log.ErrorLog.Printf("error tapping enter: %v", err)
 	}
 }
 
 func (i *Instance) Attach() (chan struct{}, error) {
-	if !i.started {
+	if !i.isStarted() {
 		return nil, fmt.Errorf("cannot attach instance that has not been started")
 	}
-	return i.tmuxSession.Attach(true)
+	return i.tmux().Attach(true)
 }
 
 // AttachKillRequested reports whether the user pressed the in-session kill key
 // (Ctrl+X) during the most recent attach. The app reads this right after the
 // attach returns to decide whether to run the kill-confirmation flow.
 func (i *Instance) AttachKillRequested() bool {
-	return i.tmuxSession != nil && i.tmuxSession.KillRequested()
+	ts := i.tmux()
+	return ts != nil && ts.KillRequested()
 }
 
 func (i *Instance) SetPreviewSize(width, height int) error {
-	if !i.started || i.Status == Paused {
+	if !i.isStarted() || i.Paused() {
 		return fmt.Errorf("cannot set preview size for instance that has not been started or " +
 			"is paused")
 	}
-	return i.tmuxSession.SetDetachedSize(width, height)
+	return i.tmux().SetDetachedSize(width, height)
 }
 
 // GetGitWorktree returns the git worktree for the instance
 func (i *Instance) GetGitWorktree() (*git.GitWorktree, error) {
-	if !i.started {
+	if !i.isStarted() {
 		return nil, fmt.Errorf("cannot get git worktree for instance that has not been started")
 	}
-	return i.gitWorktree, nil
+	return i.worktree(), nil
 }
 
 // GetWorktreePath returns the worktree path for the instance, or empty string if unavailable
 func (i *Instance) GetWorktreePath() string {
-	if i.gitWorktree == nil {
+	wt := i.worktree()
+	if wt == nil {
 		return ""
 	}
-	return i.gitWorktree.GetWorktreePath()
+	return wt.GetWorktreePath()
+}
+
+// GetRepoPath returns the git repository root for the instance, or empty string if unavailable
+func (i *Instance) GetRepoPath() string {
+	wt := i.worktree()
+	if wt == nil {
+		return ""
+	}
+	return wt.GetRepoPath()
 }
 
 func (i *Instance) Started() bool {
-	return i.started
+	return i.isStarted()
 }
 
 // SetTitle sets the title of the instance. Returns an error if the instance has started.
 // We cant change the title once it's been used for a tmux session etc.
 func (i *Instance) SetTitle(title string) error {
-	if i.started {
+	if i.isStarted() {
 		return fmt.Errorf("cannot change title of a started instance")
 	}
 	i.Title = title
@@ -510,21 +622,23 @@ func (i *Instance) Rename(newTitle string) error {
 	if newTitle == "" {
 		return fmt.Errorf("cannot rename to an empty title")
 	}
-	if !i.started {
+	if !i.isStarted() {
 		return fmt.Errorf("cannot deep-rename an instance that has not been started")
 	}
 
 	oldTitle := i.Title
+	ts := i.tmux()
+	wt := i.worktree()
 
 	// 1. Rename the tmux session first: atomic and exactly reversible by name.
-	if err := i.tmuxSession.Rename(newTitle); err != nil {
+	if err := ts.Rename(newTitle); err != nil {
 		return fmt.Errorf("failed to rename tmux session: %w", err)
 	}
 
 	// 2. Rename the git branch + move the worktree. On failure (incl. its own internal
 	// rollback of a half-done branch rename), roll the tmux session back to its old name.
-	if err := i.gitWorktree.Rename(newTitle); err != nil {
-		if rbErr := i.tmuxSession.Rename(oldTitle); rbErr != nil {
+	if err := wt.Rename(newTitle); err != nil {
+		if rbErr := ts.Rename(oldTitle); rbErr != nil {
 			log.ErrorLog.Printf("failed to roll back tmux rename %q->%q: %v", newTitle, oldTitle, rbErr)
 		}
 		return fmt.Errorf("failed to rename git worktree: %w", err)
@@ -532,7 +646,7 @@ func (i *Instance) Rename(newTitle string) error {
 
 	// 3. Adopt the corrected identity.
 	i.Title = newTitle
-	i.Branch = i.gitWorktree.GetBranchName()
+	i.Branch = wt.GetBranchName()
 	return nil
 }
 
@@ -554,12 +668,13 @@ func (i *Instance) SetDisplayName(name string) {
 }
 
 func (i *Instance) Paused() bool {
-	return i.Status == Paused
+	return i.GetStatus() == Paused
 }
 
 // TmuxAlive returns true if the tmux session is alive. This is a sanity check before attaching.
 func (i *Instance) TmuxAlive() bool {
-	return i.tmuxSession.DoesSessionExist()
+	ts := i.tmux()
+	return ts != nil && ts.DoesSessionExist()
 }
 
 // Pause stops the tmux session and removes the worktree, preserving the branch.
@@ -579,52 +694,55 @@ func (i *Instance) RecoverLostSession() error {
 
 // pause stops the tmux session and removes the worktree, preserving the branch.
 func (i *Instance) pause(copyBranchToClipboard bool) error {
-	if !i.started {
+	if !i.isStarted() {
 		return fmt.Errorf("cannot pause instance that has not been started")
 	}
-	if i.Status == Paused {
+	if i.Paused() {
 		return fmt.Errorf("instance is already paused")
 	}
+
+	ts := i.tmux()
+	wt := i.worktree()
 
 	var errs []error
 
 	// If the worktree is orphaned (path or .git missing), git cannot operate
 	// on it. Skip dirty check and Remove, prune any lingering metadata, then
 	// transition to Paused so the user can recover via Resume.
-	if valid, err := i.gitWorktree.IsValidWorktree(); err != nil {
+	if valid, err := wt.IsValidWorktree(); err != nil {
 		errs = append(errs, fmt.Errorf("failed to validate worktree: %w", err))
 		log.ErrorLog.Print(err)
 	} else if !valid {
 		log.WarningLog.Printf("worktree at %s is orphaned; skipping dirty check and remove",
-			i.gitWorktree.GetWorktreePath())
-		if err := i.tmuxSession.DetachSafely(); err != nil {
+			wt.GetWorktreePath())
+		if err := ts.DetachSafely(); err != nil {
 			errs = append(errs, fmt.Errorf("failed to detach tmux session: %w", err))
 			log.ErrorLog.Print(err)
 		}
 		// Drop any leftover directory so a future Resume's `git worktree add` won't conflict.
-		if err := os.RemoveAll(i.gitWorktree.GetWorktreePath()); err != nil {
+		if err := os.RemoveAll(wt.GetWorktreePath()); err != nil {
 			errs = append(errs, fmt.Errorf("failed to remove orphaned worktree directory: %w", err))
 			log.ErrorLog.Print(err)
 		}
-		if err := i.gitWorktree.Prune(); err != nil {
+		if err := wt.Prune(); err != nil {
 			errs = append(errs, fmt.Errorf("failed to prune git worktrees: %w", err))
 			log.ErrorLog.Print(err)
 		}
 		i.SetStatus(Paused)
 		if copyBranchToClipboard {
-			_ = clipboard.WriteAll(i.gitWorktree.GetBranchName())
+			_ = clipboard.WriteAll(wt.GetBranchName())
 		}
 		return i.combineErrors(errs)
 	}
 
 	// Check if there are any changes to commit
-	if dirty, err := i.gitWorktree.IsDirty(); err != nil {
+	if dirty, err := wt.IsDirty(); err != nil {
 		errs = append(errs, fmt.Errorf("failed to check if worktree is dirty: %w", err))
 		log.ErrorLog.Print(err)
 	} else if dirty {
 		// Commit changes locally (without pushing to GitHub)
 		commitMsg := fmt.Sprintf("[atrium] update from '%s' on %s (paused)", i.Title, time.Now().Format(time.RFC822))
-		if err := i.gitWorktree.CommitChanges(commitMsg); err != nil {
+		if err := wt.CommitChanges(commitMsg); err != nil {
 			errs = append(errs, fmt.Errorf("failed to commit changes: %w", err))
 			log.ErrorLog.Print(err)
 			// Return early if we can't commit changes to avoid corrupted state
@@ -633,23 +751,23 @@ func (i *Instance) pause(copyBranchToClipboard bool) error {
 	}
 
 	// Detach from tmux session instead of closing to preserve session output
-	if err := i.tmuxSession.DetachSafely(); err != nil {
+	if err := ts.DetachSafely(); err != nil {
 		errs = append(errs, fmt.Errorf("failed to detach tmux session: %w", err))
 		log.ErrorLog.Print(err)
 		// Continue with pause process even if detach fails
 	}
 
 	// Check if worktree exists before trying to remove it
-	if _, err := os.Stat(i.gitWorktree.GetWorktreePath()); err == nil {
+	if _, err := os.Stat(wt.GetWorktreePath()); err == nil {
 		// Remove worktree but keep branch
-		if err := i.gitWorktree.Remove(); err != nil {
+		if err := wt.Remove(); err != nil {
 			errs = append(errs, fmt.Errorf("failed to remove git worktree: %w", err))
 			log.ErrorLog.Print(err)
 			return i.combineErrors(errs)
 		}
 
 		// Only prune if remove was successful
-		if err := i.gitWorktree.Prune(); err != nil {
+		if err := wt.Prune(); err != nil {
 			errs = append(errs, fmt.Errorf("failed to prune git worktrees: %w", err))
 			log.ErrorLog.Print(err)
 			return i.combineErrors(errs)
@@ -658,7 +776,7 @@ func (i *Instance) pause(copyBranchToClipboard bool) error {
 
 	i.SetStatus(Paused)
 	if copyBranchToClipboard {
-		_ = clipboard.WriteAll(i.gitWorktree.GetBranchName())
+		_ = clipboard.WriteAll(wt.GetBranchName())
 	}
 
 	if err := i.combineErrors(errs); err != nil {
@@ -670,15 +788,18 @@ func (i *Instance) pause(copyBranchToClipboard bool) error {
 
 // Resume recreates the worktree and restarts the tmux session
 func (i *Instance) Resume() error {
-	if !i.started {
+	if !i.isStarted() {
 		return fmt.Errorf("cannot resume instance that has not been started")
 	}
-	if i.Status != Paused {
+	if !i.Paused() {
 		return fmt.Errorf("can only resume paused instances")
 	}
 
+	ts := i.tmux()
+	wt := i.worktree()
+
 	// Check if branch is checked out
-	if checked, err := i.gitWorktree.IsBranchCheckedOut(); err != nil {
+	if checked, err := wt.IsBranchCheckedOut(); err != nil {
 		log.ErrorLog.Print(err)
 		return fmt.Errorf("failed to check if branch is checked out: %w", err)
 	} else if checked {
@@ -686,38 +807,30 @@ func (i *Instance) Resume() error {
 	}
 
 	// Setup git worktree
-	if err := i.gitWorktree.Setup(); err != nil {
+	if err := wt.Setup(); err != nil {
 		log.ErrorLog.Print(err)
 		return fmt.Errorf("failed to setup git worktree: %w", err)
 	}
 
 	// Check if tmux session still exists from pause, otherwise create new one
-	if i.tmuxSession.DoesSessionExist() {
-		// Session exists, just restore PTY connection to it
-		if err := i.tmuxSession.Restore(); err != nil {
+	if ts.DoesSessionExist() {
+		// Session exists, just restore the PTY connection to it.
+		if err := ts.Restore(); err != nil {
 			log.ErrorLog.Print(err)
-			// If restore fails, fall back to creating new session
-			if err := i.tmuxSession.Start(i.gitWorktree.GetWorktreePath()); err != nil {
-				log.ErrorLog.Print(err)
-				// Cleanup git worktree if tmux session creation fails
-				if cleanupErr := i.gitWorktree.Cleanup(); cleanupErr != nil {
-					err = fmt.Errorf("%v (cleanup error: %v)", err, cleanupErr)
-					log.ErrorLog.Print(err)
-				}
-				return fmt.Errorf("failed to start new session: %w", err)
+			// Restore failed — the stale session must be killed before we can
+			// recreate it (Start guards against duplicate session names).
+			if closeErr := ts.Close(); closeErr != nil {
+				log.ErrorLog.Printf("failed to close stale session %s: %v", i.Title, closeErr)
+			}
+			if err := i.recreateSession(); err != nil {
+				return err
 			}
 		}
 	} else {
-		// The tmux session is gone, so the agent process died with it: resume its prior
-		// conversation rather than starting blank (no-op for non-claude agents).
-		if err := i.tmuxSession.StartContinue(i.gitWorktree.GetWorktreePath()); err != nil {
-			log.ErrorLog.Print(err)
-			// Cleanup git worktree if tmux session creation fails
-			if cleanupErr := i.gitWorktree.Cleanup(); cleanupErr != nil {
-				err = fmt.Errorf("%v (cleanup error: %v)", err, cleanupErr)
-				log.ErrorLog.Print(err)
-			}
-			return fmt.Errorf("failed to start new session: %w", err)
+		// The tmux session is gone, so the agent process died with it; recreate
+		// it, resuming the prior conversation rather than starting blank.
+		if err := i.recreateSession(); err != nil {
+			return err
 		}
 	}
 
@@ -727,17 +840,17 @@ func (i *Instance) Resume() error {
 
 // UpdateDiffStats updates the git diff statistics for this instance
 func (i *Instance) UpdateDiffStats() error {
-	if !i.started {
+	if !i.isStarted() {
 		i.diffStats = nil
 		return nil
 	}
 
-	if i.Status == Paused {
+	if i.Paused() {
 		// Keep the previous diff stats if the instance is paused
 		return nil
 	}
 
-	stats := i.gitWorktree.Diff()
+	stats := i.worktree().Diff()
 	if stats.Error != nil {
 		if strings.Contains(stats.Error.Error(), "base commit SHA not set") {
 			// Worktree is not fully set up yet, not an error
@@ -754,10 +867,11 @@ func (i *Instance) UpdateDiffStats() error {
 // ComputeDiff runs the expensive git diff I/O and returns the result without
 // mutating instance state. Safe to call from a background goroutine.
 func (i *Instance) ComputeDiff() *git.DiffStats {
-	if !i.started || i.Status == Paused {
+	wt := i.worktree()
+	if !i.isStarted() || i.Paused() || wt == nil {
 		return nil
 	}
-	return i.gitWorktree.Diff()
+	return wt.Diff()
 }
 
 // ComputeDiffNumstat runs a lightweight git diff --numstat and returns only the
@@ -765,10 +879,11 @@ func (i *Instance) ComputeDiff() *git.DiffStats {
 // background goroutine. Use this for instances whose full diff content is not
 // currently needed so we avoid keeping large diffs in memory.
 func (i *Instance) ComputeDiffNumstat() *git.DiffStats {
-	if !i.started || i.Status == Paused {
+	wt := i.worktree()
+	if !i.isStarted() || i.Paused() || wt == nil {
 		return nil
 	}
-	return i.gitWorktree.DiffNumstat()
+	return wt.DiffNumstat()
 }
 
 // SetDiffStats sets the diff statistics on the instance. Should be called from
@@ -784,19 +899,20 @@ func (i *Instance) GetDiffStats() *git.DiffStats {
 
 // SendPrompt sends a prompt to the tmux session
 func (i *Instance) SendPrompt(prompt string) error {
-	if !i.started {
+	ts := i.tmux()
+	if !i.isStarted() {
 		return fmt.Errorf("instance not started")
 	}
-	if i.tmuxSession == nil {
+	if ts == nil {
 		return fmt.Errorf("tmux session not initialized")
 	}
-	if err := i.tmuxSession.SendKeys(prompt); err != nil {
+	if err := ts.SendKeys(prompt); err != nil {
 		return fmt.Errorf("error sending keys to tmux session: %w", err)
 	}
 
 	// Brief pause to prevent carriage return from being interpreted as newline
 	time.Sleep(100 * time.Millisecond)
-	if err := i.tmuxSession.TapEnter(); err != nil {
+	if err := ts.TapEnter(); err != nil {
 		return fmt.Errorf("error tapping enter: %w", err)
 	}
 
@@ -805,21 +921,23 @@ func (i *Instance) SendPrompt(prompt string) error {
 
 // PreviewFullHistory captures the entire tmux pane output including full scrollback history
 func (i *Instance) PreviewFullHistory() (string, error) {
-	if !i.started || i.Status == Paused {
+	if !i.isStarted() || i.Paused() {
 		return "", nil
 	}
-	return i.tmuxSession.CapturePaneContentWithOptions("-", "-")
+	return i.tmux().CapturePaneContentWithOptions("-", "-")
 }
 
 // SetTmuxSession sets the tmux session for testing purposes
 func (i *Instance) SetTmuxSession(session *tmux.TmuxSession) {
+	i.mu.Lock()
+	defer i.mu.Unlock()
 	i.tmuxSession = session
 }
 
 // SendKeys sends keys to the tmux session
 func (i *Instance) SendKeys(keys string) error {
-	if !i.started || i.Status == Paused {
+	if !i.isStarted() || i.Paused() {
 		return fmt.Errorf("cannot send keys to instance that has not been started or is paused")
 	}
-	return i.tmuxSession.SendKeys(keys)
+	return i.tmux().SendKeys(keys)
 }

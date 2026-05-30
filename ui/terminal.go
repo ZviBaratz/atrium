@@ -77,7 +77,7 @@ func (t *TerminalPane) UpdateContent(instance *session.Instance) error {
 		t.setFallbackState("Select an instance to open a terminal")
 		return nil
 	}
-	if instance.Status == session.Paused {
+	if instance.Paused() {
 		t.setFallbackState("Session is paused. Resume to use terminal.")
 		return nil
 	}
@@ -112,17 +112,10 @@ func (t *TerminalPane) UpdateContent(instance *session.Instance) error {
 	return nil
 }
 
-// ensureSession creates or reuses a cached terminal tmux session for the given instance.
-func (t *TerminalPane) ensureSession(instance *session.Instance) error {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	return t.ensureSessionLocked(instance)
-}
-
-// ensureSessionLocked is the lock-free implementation of ensureSession.
-// Caller must hold t.mu.
+// ensureSessionLocked creates or reuses a cached terminal tmux session for the
+// given instance. Caller must hold t.mu.
 func (t *TerminalPane) ensureSessionLocked(instance *session.Instance) error {
-	if instance == nil || !instance.Started() || instance.Status == session.Paused {
+	if instance == nil || !instance.Started() || instance.Paused() {
 		return nil
 	}
 
