@@ -1683,17 +1683,20 @@ func (m *home) confirmKill(inst *session.Instance) tea.Cmd {
 	}
 
 	killAction := func() tea.Msg {
-		// Refuse to kill only when we can positively confirm the branch is
-		// checked out in its primary repo (removing it would be destructive).
-		// This is a teardown path: if the worktree or its repo is unreachable
-		// — e.g. the user renamed/removed the project directory — fail open and
-		// proceed, otherwise an orphaned session can never be deleted.
+		// Refuse to kill only when the branch is checked out in the primary repo
+		// itself (deleting it would strand the user's main checkout on a dangling
+		// branch). A live session's branch is always checked out in the session's
+		// OWN worktree, so we must NOT use IsBranchCheckedOut here — that any-worktree
+		// check would refuse every running session. IsBranchHeldByBaseRepo is the
+		// base-repo-only predicate. This is a teardown path: if the worktree or its
+		// repo is unreachable — e.g. the user renamed/removed the project directory —
+		// fail open and proceed, otherwise an orphaned session can never be deleted.
 		if worktree, err := inst.GetGitWorktree(); err != nil {
 			log.WarningLog.Printf("kill %s: cannot resolve worktree, proceeding: %v", inst.Title, err)
-		} else if checkedOut, cerr := worktree.IsBranchCheckedOut(); cerr != nil {
+		} else if heldByBase, cerr := worktree.IsBranchHeldByBaseRepo(); cerr != nil {
 			log.WarningLog.Printf("kill %s: cannot verify branch checkout, proceeding: %v", inst.Title, cerr)
-		} else if checkedOut {
-			return fmt.Errorf("instance %s is currently checked out", inst.DisplayName())
+		} else if heldByBase {
+			return fmt.Errorf("branch for %s is checked out in the main repo; switch it away before deleting", inst.DisplayName())
 		}
 
 		// Clean up terminal session for this instance

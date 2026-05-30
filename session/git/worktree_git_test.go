@@ -57,6 +57,24 @@ func TestBranchCheckoutPath_SiblingWorktree(t *testing.T) {
 	}
 }
 
+// A live session's branch lives in its OWN worktree (not the base repo). Killing
+// it must be allowed: IsBranchHeldByBaseRepo is the kill guard's predicate and must
+// be false here, even though IsBranchCheckedOut (the old, buggy predicate) is true.
+func TestSessionOwnWorktreeIsKillable(t *testing.T) {
+	repoPath := newTestRepo(t) // base repo stays on its default branch
+	sessionWT := filepath.Join(t.TempDir(), "session")
+	mustRunGit(t, repoPath, "worktree", "add", "-b", "session/test", sessionWT)
+
+	g := &GitWorktree{repoPath: repoPath, branchName: "session/test", worktreePath: sessionWT}
+
+	if held, err := g.IsBranchHeldByBaseRepo(); err != nil || held {
+		t.Fatalf("IsBranchHeldByBaseRepo() = %v, %v; want false, nil (kill must be allowed)", held, err)
+	}
+	if checked, err := g.IsBranchCheckedOut(); err != nil || !checked {
+		t.Fatalf("IsBranchCheckedOut() = %v, %v; want true, nil (old predicate wrongly blocked)", checked, err)
+	}
+}
+
 // A branch that exists but is not checked out anywhere is free.
 func TestBranchCheckoutPath_Free(t *testing.T) {
 	repoPath := newTestRepo(t)
