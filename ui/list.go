@@ -535,27 +535,51 @@ func (l *List) Down() {
 	}
 }
 
-// Kill selects the next item in the list.
+// Kill tears down the selected instance and removes it from the list.
 func (l *List) Kill() {
 	if len(l.items) == 0 {
 		return
 	}
-	targetInstance := l.items[l.selectedIdx]
+	l.KillInstance(l.items[l.selectedIdx])
+}
 
-	// Kill the tmux session
-	if err := targetInstance.Kill(); err != nil {
+// KillInstance tears down target and removes it from the list, keeping the
+// selection pointing at the same logical instance where possible. Unlike Kill,
+// target need not be the selected item — the in-session kill path (Ctrl+X) and
+// the auto-open path target a specific instance regardless of current selection.
+func (l *List) KillInstance(target *session.Instance) {
+	idx := -1
+	for i, item := range l.items {
+		if item == target {
+			idx = i
+			break
+		}
+	}
+	if idx == -1 {
+		return
+	}
+
+	// Kill the tmux session and clean up the worktree.
+	if err := target.Kill(); err != nil {
 		log.ErrorLog.Printf("could not kill instance: %v", err)
 	}
 
-	// If you delete the last one in the list, select the previous one.
-	if l.selectedIdx == len(l.items)-1 {
+	// If the selected item is the last one and we're removing it, select the
+	// previous one so the selection doesn't fall off the end.
+	if l.selectedIdx == idx && idx == len(l.items)-1 {
 		defer l.Up()
 	}
 
-	// Since there's items after this, the selectedIdx can stay the same.
-	l.items = append(l.items[:l.selectedIdx], l.items[l.selectedIdx+1:]...)
-	// Removing an item can shift the selection onto a now-hidden index (or off the end), so
-	// re-establish the navigable-selection invariant.
+	l.items = append(l.items[:idx], l.items[idx+1:]...)
+
+	// Removing an item before the selection shifts every later index down by one;
+	// follow the selection so it keeps pointing at the same instance.
+	if idx < l.selectedIdx {
+		l.selectedIdx--
+	}
+
+	// Removing an item can still shift the selection onto a now-hidden index (or
+	// off the end), so re-establish the navigable-selection invariant.
 	l.clampSelectionToNavigable()
 }
 

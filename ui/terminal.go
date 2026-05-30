@@ -188,7 +188,8 @@ func (t *TerminalPane) Attach() (chan struct{}, error) {
 	}
 	ts := s.tmuxSession
 	t.mu.Unlock()
-	return ts.Attach()
+	// Terminal-tab shell: do not intercept Ctrl+X — it's a normal editing key here.
+	return ts.Attach(false)
 }
 
 // Close kills all cached terminal tmux sessions and cleans up.
