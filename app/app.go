@@ -1112,6 +1112,11 @@ func (a attachCommand) Run() error {
 	if fd := int(os.Stdin.Fd()); term.IsTerminal(fd) {
 		if oldState, err := term.MakeRaw(fd); err == nil {
 			defer func() { _ = term.Restore(fd, oldState) }()
+		} else {
+			// Stay in cooked mode where IXON swallows Ctrl+Q, so detach won't work and
+			// the attach looks like a hang. Log a breadcrumb (to the file, not the
+			// tmux-owned terminal) instead of failing silently.
+			log.WarningLog.Printf("failed to set raw mode for attach; Ctrl+Q detach may not work: %v", err)
 		}
 	}
 	ch, err := a.attach()
