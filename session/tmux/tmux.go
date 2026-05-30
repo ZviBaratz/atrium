@@ -10,6 +10,7 @@ import (
 	"github.com/ZviBaratz/atrium/config"
 	"github.com/ZviBaratz/atrium/log"
 	"io"
+	"math"
 	"os"
 	"os/exec"
 	"regexp"
@@ -251,7 +252,7 @@ func (t *TmuxSession) start(workDir string, program string) error {
 		if t.DoesSessionExist() {
 			cleanupCmd := tmuxCommand("kill-session", "-t", t.sanitizedName)
 			if cleanupErr := t.cmdExec.Run(cleanupCmd); cleanupErr != nil {
-				err = fmt.Errorf("%v (cleanup error: %v)", err, cleanupErr)
+				err = fmt.Errorf("%w (cleanup error: %w)", err, cleanupErr)
 			}
 		}
 		return fmt.Errorf("error starting tmux session: %w", err)
@@ -264,9 +265,9 @@ func (t *TmuxSession) start(workDir string, program string) error {
 		select {
 		case <-timeout:
 			if cleanupErr := t.Close(); cleanupErr != nil {
-				err = fmt.Errorf("%v (cleanup error: %v)", err, cleanupErr)
+				err = fmt.Errorf("%w (cleanup error: %w)", err, cleanupErr)
 			}
-			return fmt.Errorf("timed out waiting for tmux session %s: %v", t.sanitizedName, err)
+			return fmt.Errorf("timed out waiting for tmux session %s: %w", t.sanitizedName, err)
 		default:
 			time.Sleep(sleepDuration)
 			// Exponential backoff up to 50ms max
@@ -275,7 +276,7 @@ func (t *TmuxSession) start(workDir string, program string) error {
 			}
 		}
 	}
-	ptmx.Close()
+	_ = ptmx.Close()
 
 	// history-limit and mouse are set server-globally by the bundled managed
 	// config, so no per-session set-option is needed here.
@@ -283,7 +284,7 @@ func (t *TmuxSession) start(workDir string, program string) error {
 	err = t.Restore()
 	if err != nil {
 		if cleanupErr := t.Close(); cleanupErr != nil {
-			err = fmt.Errorf("%v (cleanup error: %v)", err, cleanupErr)
+			err = fmt.Errorf("%w (cleanup error: %w)", err, cleanupErr)
 		}
 		return fmt.Errorf("error restoring tmux session: %w", err)
 	}
@@ -511,6 +512,12 @@ func (t *TmuxSession) Attach() (chan struct{}, error) {
 		}
 	}()
 
+	// Snapshot ptmx before the loop so the goroutine writes through a local copy instead
+	// of re-reading the shared t.ptmx field on every keypress. DetachSafely (called by
+	// lost-session recovery) can set t.ptmx = nil from another goroutine while this one is
+	// blocked on os.Stdin.Read; reading the field in the loop would be a data race on that
+	// pointer. (os.File.Write is nil-safe, so the original code raced rather than panicked.)
+	attachedPtmx := t.ptmx
 	go func() {
 		// Close the channel after 50ms
 		timeoutCh := make(chan struct{})
@@ -551,8 +558,10 @@ func (t *TmuxSession) Attach() (chan struct{}, error) {
 				return
 			}
 
-			// Forward other input to tmux
-			_, _ = t.ptmx.Write(buf[:nr])
+			// Forward other input to tmux. If DetachSafely closed the pty, this write
+			// returns a "file already closed" error (discarded) rather than racing on
+			// t.ptmx. attachedPtmx is captured live at Attach time, so it is never nil.
+			_, _ = attachedPtmx.Write(buf[:nr])
 		}
 	}()
 
@@ -673,11 +682,24 @@ func (t *TmuxSession) SetDetachedSize(width, height int) error {
 	return t.updateWindowSize(width, height)
 }
 
+// clampUint16 bounds an int into the uint16 range. PTY winsize fields are
+// uint16; terminal dimensions are always small and positive in practice, but
+// clamping makes the conversion provably safe (and satisfies gosec G115).
+func clampUint16(n int) uint16 {
+	if n < 0 {
+		return 0
+	}
+	if n > math.MaxUint16 {
+		return math.MaxUint16
+	}
+	return uint16(n)
+}
+
 // updateWindowSize updates the window size of the PTY.
 func (t *TmuxSession) updateWindowSize(cols, rows int) error {
 	return pty.Setsize(t.ptmx, &pty.Winsize{
-		Rows: uint16(rows),
-		Cols: uint16(cols),
+		Rows: clampUint16(rows),
+		Cols: clampUint16(cols),
 		X:    0,
 		Y:    0,
 	})
@@ -703,7 +725,7 @@ func (t *TmuxSession) CapturePaneContent() (string, error) {
 	cmd := tmuxCommand("capture-pane", "-p", "-e", "-J", "-t", t.snapshotName())
 	output, err := t.cmdExec.Output(cmd)
 	if err != nil {
-		return "", fmt.Errorf("error capturing pane content: %v", err)
+		return "", fmt.Errorf("error capturing pane content: %w", err)
 	}
 	return string(output), nil
 }
@@ -715,7 +737,7 @@ func (t *TmuxSession) CapturePaneContentWithOptions(start, end string) (string, 
 	cmd := tmuxCommand("capture-pane", "-p", "-e", "-J", "-S", start, "-E", end, "-t", t.snapshotName())
 	output, err := t.cmdExec.Output(cmd)
 	if err != nil {
-		return "", fmt.Errorf("failed to capture tmux pane content with options: %v", err)
+		return "", fmt.Errorf("failed to capture tmux pane content with options: %w", err)
 	}
 	return string(output), nil
 }
@@ -729,10 +751,11 @@ func CleanupSessions(cmdExec cmd.Executor) error {
 	// If there's an error and it's because no server is running, that's fine
 	// Exit code 1 typically means no sessions exist
 	if err != nil {
-		if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 1 {
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) && exitErr.ExitCode() == 1 {
 			return nil // No sessions to clean up
 		}
-		return fmt.Errorf("failed to list tmux sessions: %v", err)
+		return fmt.Errorf("failed to list tmux sessions: %w", err)
 	}
 
 	re := regexp.MustCompile(fmt.Sprintf(`%s.*:`, TmuxPrefix()))
@@ -744,7 +767,7 @@ func CleanupSessions(cmdExec cmd.Executor) error {
 	for _, match := range matches {
 		log.InfoLog.Printf("cleaning up session: %s", match)
 		if err := cmdExec.Run(tmuxCommand("kill-session", "-t", match)); err != nil {
-			return fmt.Errorf("failed to kill tmux session %s: %v", match, err)
+			return fmt.Errorf("failed to kill tmux session %s: %w", match, err)
 		}
 	}
 	return nil

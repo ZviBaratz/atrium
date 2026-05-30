@@ -1,22 +1,20 @@
 name: Lint
 
 on:
+  # No paths filter on purpose: golangci-lint and gofmt are required by branch
+  # protection, so they must report on every PR. A path-filtered required check
+  # never reports on a docs/web-only PR and blocks the merge (see build.yml).
   push:
     branches: [ main ]
-    paths:
-      - '**.go'
-      - 'go.mod'
-      - 'go.sum'
-      - '.golangci.yml'
-      - '.github/workflows/lint.yml'
   pull_request:
     branches: [ main ]
-    paths:
-      - '**.go'
-      - 'go.mod'
-      - 'go.sum'
-      - '.golangci.yml'
-      - '.github/workflows/lint.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: lint-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   # gofmt is deterministic and trivially fixable (`just fmt`), so it is a hard gate.
@@ -24,9 +22,9 @@ jobs:
     name: gofmt
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff  # v5
         with:
           go-version-file: go.mod
           cache: false
@@ -36,26 +34,25 @@ jobs:
           if [ -n "$unformatted" ]; then
             echo "These files are not gofmt-clean (run \`just fmt\`):"
             echo "$unformatted"
+            # Word-splitting is intentional: pass each file as a separate arg.
+            # shellcheck disable=SC2086
             gofmt -d $unformatted
             exit 1
           fi
 
-  # golangci-lint runs in report mode: it annotates findings but does not block
-  # merges (report-don't-block), so autonomous/agent-driven changes aren't gated
-  # on style. Tighten to a hard gate later if desired.
+  # golangci-lint is a hard gate over the whole repository. The curated linter set
+  # lives in .golangci.yml. gosec/revive are tracked separately for a triage pass.
   lint:
     name: golangci-lint
     runs-on: ubuntu-latest
-    continue-on-error: true
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff  # v5
         with:
           go-version-file: go.mod
           cache: false
       - name: golangci-lint
-        uses: golangci/golangci-lint-action@v7
+        uses: golangci/golangci-lint-action@9fae48acfc02a90574d7c304a1758ef9895495fa  # v7
         with:
           version: latest
-          only-new-issues: true
