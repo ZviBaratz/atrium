@@ -12,6 +12,7 @@ import (
 	"github.com/ZviBaratz/atrium/ui"
 	"github.com/ZviBaratz/atrium/ui/overlay"
 	"github.com/ZviBaratz/atrium/ui/theme"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -23,6 +24,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/mattn/go-runewidth"
+	"golang.org/x/term"
 )
 
 const GlobalInstanceLimit = 10
@@ -398,6 +400,15 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case instanceChangedMsg:
 		// Handle instance changed after confirmation action
 		return m, m.instanceChanged()
+	case attachFinishedMsg:
+		// A tea.Exec terminal attach returned (the user detached, or it failed to
+		// start). tea.Exec's RestoreTerminal has already repainted the frame; refine
+		// the layout and selection-derived panes from here.
+		m.state = stateDefault
+		if msg.err != nil {
+			return m, m.handleError(msg.err)
+		}
+		return m, tea.Batch(tea.WindowSize(), m.instanceChanged())
 	case instanceStartedMsg:
 		// Select the instance that just started (or failed)
 		m.list.SelectInstance(msg.instance)
@@ -434,15 +445,10 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// Drop straight into the new session, mirroring the KeyEnter attach path.
 			// Attach msg.instance directly rather than via m.list.Attach(): a background
 			// instanceStartedMsg from another freshly-created session could have moved
-			// the list selection by now. Attaching blocks until the user detaches
-			// (ctrl-q); the hint bar carries the detach reminder, so no teaching modal.
-			ch, err := msg.instance.Attach()
-			if err != nil {
-				return m, m.handleError(err)
-			}
-			<-ch
-			m.state = stateDefault
-			return m, tea.Batch(tea.WindowSize(), m.instanceChanged())
+			// the list selection by now. The attach runs through tea.Exec, which hands
+			// the terminal to tmux and repaints on detach; post-detach handling lands in
+			// the attachFinishedMsg handler.
+			return m, m.attachExec(msg.instance.Attach)
 		}
 
 		return m, tea.Batch(tea.WindowSize(), m.instanceChanged())
@@ -1053,24 +1059,13 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		if selected == nil || selected.Paused() || selected.GetStatus() == session.Loading || !selected.TmuxAlive() {
 			return m, nil
 		}
-		// Terminal tab: attach to terminal session. Attaching blocks until the
-		// user detaches (ctrl-q); the hint bar carries the detach reminder.
+		// Attach to the session (or its terminal tab) via tea.Exec, which hands the
+		// terminal to tmux and repaints on detach; the hint bar carries the ctrl-q
+		// detach reminder. Post-detach handling lands in the attachFinishedMsg handler.
 		if m.tabbedWindow.IsInTerminalTab() {
-			ch, err := m.tabbedWindow.AttachTerminal()
-			if err != nil {
-				return m, m.handleError(err)
-			}
-			<-ch
-			m.state = stateDefault
-			return m, nil
+			return m, m.attachExec(m.tabbedWindow.AttachTerminal)
 		}
-		ch, err := m.list.Attach()
-		if err != nil {
-			return m, m.handleError(err)
-		}
-		<-ch
-		m.state = stateDefault
-		return m, m.instanceChanged()
+		return m, m.attachExec(m.list.Attach)
 	default:
 		return m, nil
 	}
@@ -1097,6 +1092,46 @@ func (m *home) deepRename(selected *session.Instance, value string) error {
 	}
 	selected.SetDisplayName("")
 	return m.storage.SaveInstances(m.list.GetInstances())
+}
+
+// attachCommand adapts a blocking tmux attach into a tea.ExecCommand so Bubble
+// Tea releases the terminal before the attach and restores+repaints it after —
+// on the event loop, via execMsg, which is the framework's supported path for a
+// blocking terminal takeover. (Calling ReleaseTerminal/RestoreTerminal directly
+// from inside Update blocks the event loop for the whole attach and leaves the
+// renderer/input reader wedged.) Run also puts stdin in raw mode for the
+// duration: ReleaseTerminal restores cooked mode, where Ctrl+Q (ASCII 17 = XON)
+// is swallowed by IXON flow control and never reaches the detach reader. The
+// Set* methods are no-ops because the attach copies os.Stdin/os.Stdout directly
+// rather than through the streams Bubble Tea would inject.
+type attachCommand struct {
+	attach func() (chan struct{}, error)
+}
+
+func (a attachCommand) Run() error {
+	if fd := int(os.Stdin.Fd()); term.IsTerminal(fd) {
+		if oldState, err := term.MakeRaw(fd); err == nil {
+			defer func() { _ = term.Restore(fd, oldState) }()
+		}
+	}
+	ch, err := a.attach()
+	if err != nil {
+		return err
+	}
+	<-ch
+	return nil
+}
+
+func (a attachCommand) SetStdin(io.Reader)  {}
+func (a attachCommand) SetStdout(io.Writer) {}
+func (a attachCommand) SetStderr(io.Writer) {}
+
+// attachExec hands the terminal to a tmux attach via tea.Exec and reports the
+// outcome as an attachFinishedMsg once the user detaches.
+func (m *home) attachExec(attach func() (chan struct{}, error)) tea.Cmd {
+	return tea.Exec(attachCommand{attach: attach}, func(err error) tea.Msg {
+		return attachFinishedMsg{err: err}
+	})
 }
 
 func (m *home) instanceChanged() tea.Cmd {
@@ -1140,6 +1175,13 @@ type hideErrMsg struct{}
 type previewTickMsg struct{}
 
 type instanceChangedMsg struct{}
+
+// attachFinishedMsg is delivered after a tea.Exec terminal attach returns (the
+// user detached or the attach errored). It carries the attach error, if any, so
+// the post-detach handler can surface it.
+type attachFinishedMsg struct {
+	err error
+}
 
 type instanceStartedMsg struct {
 	instance *session.Instance
