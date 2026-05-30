@@ -178,13 +178,91 @@ func (g *GitWorktree) IsValidWorktree() (bool, error) {
 	return true, nil
 }
 
-// IsBranchCheckedOut checks if the instance branch is currently checked out
-func (g *GitWorktree) IsBranchCheckedOut() (bool, error) {
-	output, err := g.runGitCommand(g.repoPath, "branch", "--show-current")
-	if err != nil {
-		return false, fmt.Errorf("failed to get current branch: %w", err)
+// BranchCheckedOutError reports that the session branch is already checked out
+// in another worktree (the base repo or a sibling), which blocks recreating the
+// session worktree on resume. It is a typed error so callers can recognise the
+// busy-branch case with errors.As — far more durable than substring-matching the
+// message across package boundaries. Path names the holding worktree when git
+// revealed it, and is "" when only the conflict (not the holder) is known.
+type BranchCheckedOutError struct {
+	Branch string
+	Path   string
+}
+
+func (e *BranchCheckedOutError) Error() string {
+	if e.Path != "" {
+		return fmt.Sprintf("cannot resume: branch %q is checked out at %s", e.Branch, e.Path)
 	}
-	return strings.TrimSpace(output) == g.branchName, nil
+	return fmt.Sprintf("cannot resume: branch %q is already checked out elsewhere", e.Branch)
+}
+
+// BranchCheckoutPath returns the path of the worktree (the base repo or any
+// sibling) that currently has g.branchName checked out, or "" if the branch is
+// free. It parses `git worktree list --porcelain` (via parseWorktreeList) so it
+// sees ALL worktrees, not just the base repo; detached-HEAD and bare records
+// carry no branch line and therefore never match.
+func (g *GitWorktree) BranchCheckoutPath() (string, error) {
+	output, err := g.runGitCommand(g.repoPath, "worktree", "list", "--porcelain")
+	if err != nil {
+		return "", fmt.Errorf("failed to list worktrees: %w", err)
+	}
+	for path, branch := range parseWorktreeList(output) {
+		if branch == g.branchName {
+			return path, nil
+		}
+	}
+	return "", nil
+}
+
+// IsBranchCheckedOut reports whether the instance branch is checked out anywhere
+// (the base repo or a sibling worktree). It is a thin wrapper over
+// BranchCheckoutPath; callers that need the location should use that directly.
+func (g *GitWorktree) IsBranchCheckedOut() (bool, error) {
+	path, err := g.BranchCheckoutPath()
+	if err != nil {
+		return false, err
+	}
+	return path != "", nil
+}
+
+// IsBranchHeldByBaseRepo reports whether g.branchName is checked out in the base
+// repo itself (as opposed to a sibling worktree). This distinguishes the
+// auto-recoverable case (detach the base repo) from a branch held by another
+// live worktree, which must not be touched automatically.
+func (g *GitWorktree) IsBranchHeldByBaseRepo() (bool, error) {
+	path, err := g.BranchCheckoutPath()
+	if err != nil {
+		return false, err
+	}
+	if path == "" {
+		return false, nil
+	}
+	// git prints canonical absolute paths; resolvePath (EvalSymlinks+Clean) lets
+	// the comparison hold even when repoPath reaches the same tree through a
+	// different symlink (e.g. macOS /var vs /private/var temp dirs).
+	return resolvePath(path) == resolvePath(g.repoPath), nil
+}
+
+// DetachBranchInBaseRepo detaches the base repo's HEAD from g.branchName at its
+// current commit, freeing the branch so the session worktree can re-check it
+// out. It refuses when the base repo has uncommitted changes, to avoid stranding
+// the user's work on a detached HEAD. Callers should confirm the branch is
+// actually held by the base repo (IsBranchHeldByBaseRepo) before calling.
+func (g *GitWorktree) DetachBranchInBaseRepo() error {
+	// Use the base repo's own working tree for the dirty check — IsDirty inspects
+	// the session worktree, which is the wrong target here.
+	status, err := g.runGitCommand(g.repoPath, "status", "--porcelain")
+	if err != nil {
+		return fmt.Errorf("failed to check base repo status: %w", err)
+	}
+	if strings.TrimSpace(status) != "" {
+		return fmt.Errorf("base repo has uncommitted changes; commit or stash in %s and retry", g.repoPath)
+	}
+	// `switch --detach` with no ref detaches at the current HEAD commit.
+	if _, err := g.runGitCommand(g.repoPath, "switch", "--detach"); err != nil {
+		return fmt.Errorf("failed to detach base repo from branch %s: %w", g.branchName, err)
+	}
+	return nil
 }
 
 // OpenBranchURL opens the branch URL in the default browser

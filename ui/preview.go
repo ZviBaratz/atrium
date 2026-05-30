@@ -77,6 +77,8 @@ func (p *PreviewPane) UpdateContent(instance *session.Instance) error {
 					"The instance can be checked out at '%s' (copied to your clipboard)",
 					instance.Branch,
 				)),
+			theme.Current().AttentionStyle().
+				Render("Switch your main repo off this branch before resuming."),
 		))
 		return nil
 	}

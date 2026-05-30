@@ -140,6 +140,12 @@ type TmuxSession struct {
 	ctx    context.Context
 	cancel func()
 	wg     *sync.WaitGroup
+
+	// killRequested is set by the attach stdin reader when the user presses the
+	// in-session kill key (Ctrl+X). It is reset at the start of every Attach and
+	// read once after the attach returns; the channel close in Detach provides the
+	// happens-before edge to the reader.
+	killRequested bool
 }
 
 // TmuxPrefix is the prefix applied to every Atrium-managed tmux session name. It
@@ -484,8 +490,49 @@ func (t *TmuxSession) HasUpdated() (updated bool, hasPrompt bool) {
 	return s == PaneWorking, s == PanePrompt
 }
 
-func (t *TmuxSession) Attach() (chan struct{}, error) {
+// attachInputAction is the outcome of classifying a chunk of attach stdin: keep
+// forwarding it to the pty, detach, or detach-and-request-kill.
+type attachInputAction int
+
+const (
+	attachForward attachInputAction = iota
+	attachDetach
+	attachKill
+)
+
+// Control bytes intercepted while attached.
+const (
+	ctrlQ = 17 // detach
+	ctrlX = 24 // kill (detach + request teardown)
+)
+
+// classifyAttachInput decides what a single stdin read means while attached.
+// Ctrl+Q detaches; Ctrl+X requests a kill but only when allowKill is set (agent
+// sessions, not the Terminal-tab shell, where Ctrl+X is a normal editing key).
+// A control byte is only honored when it arrives alone (a single-byte read) so
+// it isn't mistaken for part of a longer escape sequence or paste. Everything
+// else is forwarded to the pty unchanged.
+func classifyAttachInput(in []byte, allowKill bool) attachInputAction {
+	if len(in) == 1 {
+		switch in[0] {
+		case ctrlQ:
+			return attachDetach
+		case ctrlX:
+			if allowKill {
+				return attachKill
+			}
+		}
+	}
+	return attachForward
+}
+
+// Attach connects the terminal to the tmux session and blocks (via the returned
+// channel) until the user detaches. When allowKill is true, the in-session kill
+// key (Ctrl+X) detaches and sets KillRequested so the caller can tear the session
+// down; the Terminal-tab shell passes false so Ctrl+X stays a normal shell key.
+func (t *TmuxSession) Attach(allowKill bool) (chan struct{}, error) {
 	t.attachCh = make(chan struct{})
+	t.killRequested = false
 
 	t.wg = &sync.WaitGroup{}
 	t.wg.Add(1)
@@ -551,22 +598,34 @@ func (t *TmuxSession) Attach() (chan struct{}, error) {
 				continue
 			}
 
-			// Check for Ctrl+q (ASCII 17)
-			if nr == 1 && buf[0] == 17 {
-				// Detach from the session
+			switch classifyAttachInput(buf[:nr], allowKill) {
+			case attachDetach:
 				t.Detach()
 				return
+			case attachKill:
+				// Detach and request a kill; the caller reads KillRequested after
+				// the attach returns and runs the teardown confirmation.
+				t.killRequested = true
+				t.Detach()
+				return
+			default:
+				// Forward other input to tmux. If DetachSafely closed the pty, this
+				// write returns a "file already closed" error (discarded) rather than
+				// racing on t.ptmx. attachedPtmx is captured live at Attach time, so
+				// it is never nil.
+				_, _ = attachedPtmx.Write(buf[:nr])
 			}
-
-			// Forward other input to tmux. If DetachSafely closed the pty, this write
-			// returns a "file already closed" error (discarded) rather than racing on
-			// t.ptmx. attachedPtmx is captured live at Attach time, so it is never nil.
-			_, _ = attachedPtmx.Write(buf[:nr])
 		}
 	}()
 
 	t.monitorWindowSize()
 	return t.attachCh, nil
+}
+
+// KillRequested reports whether the most recent attach ended with the user
+// pressing the in-session kill key (Ctrl+X). It is reset at the start of Attach.
+func (t *TmuxSession) KillRequested() bool {
+	return t.killRequested
 }
 
 // DetachSafely disconnects from the current tmux session without panicking

@@ -550,7 +550,15 @@ func (i *Instance) Attach() (chan struct{}, error) {
 	if !i.isStarted() {
 		return nil, fmt.Errorf("cannot attach instance that has not been started")
 	}
-	return i.tmux().Attach()
+	return i.tmux().Attach(true)
+}
+
+// AttachKillRequested reports whether the user pressed the in-session kill key
+// (Ctrl+X) during the most recent attach. The app reads this right after the
+// attach returns to decide whether to run the kill-confirmation flow.
+func (i *Instance) AttachKillRequested() bool {
+	ts := i.tmux()
+	return ts != nil && ts.KillRequested()
 }
 
 func (i *Instance) SetPreviewSize(width, height int) error {
@@ -790,12 +798,14 @@ func (i *Instance) Resume() error {
 	ts := i.tmux()
 	wt := i.worktree()
 
-	// Check if branch is checked out
-	if checked, err := wt.IsBranchCheckedOut(); err != nil {
+	// Check if branch is checked out elsewhere (base repo or a sibling worktree).
+	// Naming the holding path makes the error actionable and lets the app layer
+	// offer to detach the base repo automatically.
+	if heldBy, err := wt.BranchCheckoutPath(); err != nil {
 		log.ErrorLog.Print(err)
 		return fmt.Errorf("failed to check if branch is checked out: %w", err)
-	} else if checked {
-		return fmt.Errorf("cannot resume: branch is checked out, please switch to a different branch")
+	} else if heldBy != "" {
+		return &git.BranchCheckedOutError{Branch: wt.GetBranchName(), Path: heldBy}
 	}
 
 	// Setup git worktree

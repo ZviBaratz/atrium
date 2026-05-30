@@ -56,6 +56,9 @@ func (g *GitWorktree) setupFromExistingBranch() error {
 		}
 		// Create a local tracking branch via worktree add -b
 		if _, err := g.runGitCommand(g.repoPath, "worktree", "add", "-b", g.branchName, g.worktreePath, fmt.Sprintf("origin/%s", g.branchName)); err != nil {
+			if busyErr := g.busyBranchError(err); busyErr != nil {
+				return busyErr
+			}
 			return fmt.Errorf("failed to create worktree from remote branch %s: %w", g.branchName, err)
 		}
 		return nil
@@ -63,10 +66,53 @@ func (g *GitWorktree) setupFromExistingBranch() error {
 
 	// Create a new worktree from the existing local branch
 	if _, err := g.runGitCommand(g.repoPath, "worktree", "add", g.worktreePath, g.branchName); err != nil {
+		// Defense in depth: the Resume pre-check frees the branch first, but the
+		// branch can become busy again between that check and here (another
+		// session/manual checkout). Translate git's raw "already used by
+		// worktree" output into the same friendly, path-named message.
+		if busyErr := g.busyBranchError(err); busyErr != nil {
+			return busyErr
+		}
 		return fmt.Errorf("failed to create worktree from branch %s: %w", g.branchName, err)
 	}
 
 	return nil
+}
+
+// busyBranchError returns a *BranchCheckedOutError when err is git's "branch
+// already used by another worktree" failure, or nil otherwise. It shares the
+// typed error the Resume pre-check returns so the app layer detects both origins
+// with a single errors.As — including the path-less fallback, which the app
+// recovers via IsBranchHeldByBaseRepo regardless.
+func (g *GitWorktree) busyBranchError(err error) error {
+	path, busy := busyBranchHolder(err)
+	if !busy {
+		return nil
+	}
+	return &BranchCheckedOutError{Branch: g.branchName, Path: path}
+}
+
+// busyBranchHolder scans a git error for the "already used by worktree" /
+// "already checked out" signatures (wording varies across git versions) and
+// returns the worktree path git named, plus whether the error was a busy-branch
+// conflict at all. A marker match with an unparseable path yields ("", true).
+func busyBranchHolder(err error) (string, bool) {
+	if err == nil {
+		return "", false
+	}
+	msg := err.Error()
+	for _, marker := range []string{"is already used by worktree at '", "is already checked out at '"} {
+		idx := strings.Index(msg, marker)
+		if idx < 0 {
+			continue
+		}
+		rest := msg[idx+len(marker):]
+		if end := strings.IndexByte(rest, '\''); end >= 0 {
+			return rest[:end], true
+		}
+		return "", true
+	}
+	return "", false
 }
 
 // setupNewWorktree creates a new worktree on a fresh session branch, started from g.baseRef
