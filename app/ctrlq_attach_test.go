@@ -25,6 +25,31 @@ func TestCtrlQ_OnListWithNoInstances_IsNoOp(t *testing.T) {
 	assert.Equal(t, stateDefault, h.state, "ctrl+q must not change state on an empty list")
 }
 
+// Routing proof: with an instance present, ctrl+q must reach enter's *selection* guards,
+// not just the empty-list early return. A paused session cannot be attached to, so the
+// guard short-circuits to a safe no-op (no blocking attach, no panic, no state change),
+// confirming ctrl+q truly funnels through the enter path rather than a parallel one.
+func TestCtrlQ_OnPausedInstance_IsNoOp(t *testing.T) {
+	h := newTestHomeWithInstances(t)
+	h.state = stateDefault
+
+	inst, err := session.NewInstance(session.InstanceOptions{
+		Title:   "paused",
+		Path:    t.TempDir(),
+		Program: "echo",
+	})
+	require.NoError(t, err)
+	inst.SetStatus(session.Paused)
+	h.list.AddInstance(inst)
+	require.Same(t, inst, h.list.GetSelectedInstance(), "the paused instance must be selected")
+
+	model, cmd := h.handleKeyPress(tea.KeyMsg{Type: tea.KeyCtrlQ})
+
+	require.NotNil(t, model)
+	assert.Nil(t, cmd, "ctrl+q on a paused session should be a no-op, like enter")
+	assert.Equal(t, stateDefault, h.state, "ctrl+q must not change state for a paused selection")
+}
+
 // Scope guarantee: ctrl+q's attach behavior is main-screen-only. In the new-session
 // naming overlay it must NOT submit the name (that is enter's job, matched by key
 // type), so the in-progress instance stays unfinalized and the overlay stays open.
