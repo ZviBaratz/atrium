@@ -49,6 +49,8 @@ const (
 	KeyAutoName // Auto-generate a display name for the selected session via claude
 
 	KeyFilter // Enter incremental filter mode to narrow the session list
+
+	KeyCopyBranch // Copy the selected session's branch name to the clipboard
 )
 
 // GlobalKeyStringsMap is a global, immutable map string to keybinding.
@@ -73,6 +75,7 @@ var GlobalKeyStringsMap = map[string]KeyName{
 	"R":          KeyRename,
 	"A":          KeyAutoName,
 	"right":      KeyQuickSend,
+	"y":          KeyCopyBranch,
 	"q":          KeyQuit,
 	"tab":        KeyTab,
 	"shift+tab":  KeyShiftTab,
@@ -186,6 +189,10 @@ var GlobalkeyBindings = map[KeyName]key.Binding{
 	KeyFilter: key.NewBinding(
 		key.WithKeys("/"),
 		key.WithHelp("/", "filter sessions"),
+	),
+	KeyCopyBranch: key.NewBinding(
+		key.WithKeys("y"),
+		key.WithHelp("y", "copy branch name"),
 	),
 
 	// -- Special keybindings --
