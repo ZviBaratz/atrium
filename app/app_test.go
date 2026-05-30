@@ -139,6 +139,46 @@ func TestRecoverLostInstances(t *testing.T) {
 	// by session.TestRecoverLostSessionTransitionsToPaused.
 }
 
+// TestInstanceStartedMsgSetsRunning pins the authoritative fix: the Loading -> Running
+// transition is owned by the main-thread instanceStartedMsg handler, not the background
+// Start() goroutine. A successful start message must flip the instance to Running so it
+// can never stay stuck on the "Setting up workspace..." splash.
+func TestInstanceStartedMsgSetsRunning(t *testing.T) {
+	spin := spinner.New(spinner.WithSpinner(spinner.MiniDot))
+	list := ui.NewList(&spin, false)
+
+	inst, err := session.NewInstance(session.InstanceOptions{
+		Title: "started", Path: t.TempDir(), Program: "echo",
+	})
+	require.NoError(t, err)
+	list.AddInstance(inst)
+	list.SelectInstance(inst)
+	inst.SetStatus(session.Loading) // the state the new-session flow leaves it in pre-start
+
+	appState := config.DefaultState()
+	storage, err := session.NewStorage(appState)
+	require.NoError(t, err)
+	noAutoAttach := false
+	cfg := config.DefaultConfig()
+	cfg.AutoAttach = &noAutoAttach
+
+	h := &home{
+		ctx:          context.Background(),
+		state:        stateDefault,
+		appConfig:    cfg,
+		appState:     appState,
+		storage:      storage,
+		list:         list,
+		menu:         ui.NewMenu(),
+		tabbedWindow: ui.NewTabbedWindow(ui.NewPreviewPane(), ui.NewDiffPane(), ui.NewTerminalPane()),
+	}
+
+	_, _ = h.Update(instanceStartedMsg{instance: inst})
+
+	require.Equal(t, session.Running, inst.GetStatus(),
+		"a completed start must transition the instance out of Loading on the main thread")
+}
+
 func TestApplyPaneState(t *testing.T) {
 	newInst := func(autoYes bool) *session.Instance {
 		inst, err := session.NewInstance(session.InstanceOptions{
@@ -153,31 +193,31 @@ func TestApplyPaneState(t *testing.T) {
 	t.Run("working → Running", func(t *testing.T) {
 		inst := newInst(false)
 		applyPaneState(inst, tmux.PaneWorking)
-		require.Equal(t, session.Running, inst.Status)
+		require.Equal(t, session.Running, inst.GetStatus())
 	})
 
 	t.Run("idle → Ready", func(t *testing.T) {
 		inst := newInst(false)
 		applyPaneState(inst, tmux.PaneIdle)
-		require.Equal(t, session.Ready, inst.Status)
+		require.Equal(t, session.Ready, inst.GetStatus())
 	})
 
 	t.Run("prompt with AutoYes off → NeedsInput", func(t *testing.T) {
 		inst := newInst(false)
 		applyPaneState(inst, tmux.PanePrompt)
-		require.Equal(t, session.NeedsInput, inst.Status)
+		require.Equal(t, session.NeedsInput, inst.GetStatus())
 	})
 
 	t.Run("prompt with AutoYes on → not NeedsInput (auto-answered)", func(t *testing.T) {
 		inst := newInst(true)
 		applyPaneState(inst, tmux.PanePrompt)
-		require.NotEqual(t, session.NeedsInput, inst.Status)
+		require.NotEqual(t, session.NeedsInput, inst.GetStatus())
 	})
 
 	t.Run("unknown → status unchanged", func(t *testing.T) {
 		inst := newInst(false)
 		applyPaneState(inst, tmux.PaneUnknown)
-		require.Equal(t, session.Loading, inst.Status, "an unreadable pane must not flip the status")
+		require.Equal(t, session.Loading, inst.GetStatus(), "an unreadable pane must not flip the status")
 	})
 }
 

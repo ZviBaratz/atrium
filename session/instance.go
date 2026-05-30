@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/atotto/clipboard"
@@ -45,8 +46,6 @@ type Instance struct {
 	Path string
 	// Branch is the branch of the instance.
 	Branch string
-	// Status is the status of the instance.
-	Status Status
 	// Program is the program to run in the instance.
 	Program string
 	// Height is the height of the instance.
@@ -69,7 +68,15 @@ type Instance struct {
 	// The session always gets its own branch; baseBranch only chooses the start point.
 	baseBranch string
 
-	// The below fields are initialized upon calling Start().
+	// mu guards the live-state fields below (status, started, tmuxSession, gitWorktree),
+	// which the background Start() goroutine writes while the metadata-poll goroutines and
+	// the UI thread read them. Always access these through the locked accessors
+	// (getStatus/setStatus/isStarted/tmux/worktree); never hold mu across tmux/git I/O.
+	mu sync.RWMutex
+	// status is the status of the instance. Guarded by mu.
+	status Status
+
+	// The below fields are initialized upon calling Start(). Guarded by mu.
 
 	started bool
 	// tmuxSession is the tmux session for the instance.
@@ -85,7 +92,7 @@ func (i *Instance) ToInstanceData() InstanceData {
 		DisplayName: i.displayName,
 		Path:        i.Path,
 		Branch:      i.Branch,
-		Status:      i.Status,
+		Status:      i.GetStatus(),
 		Height:      i.Height,
 		Width:       i.Width,
 		CreatedAt:   i.CreatedAt,
@@ -130,7 +137,7 @@ func FromInstanceData(data InstanceData) (*Instance, error) {
 		displayName: data.DisplayName,
 		Path:        data.Path,
 		Branch:      data.Branch,
-		Status:      data.Status,
+		status:      data.Status,
 		Height:      data.Height,
 		Width:       data.Width,
 		CreatedAt:   data.CreatedAt,
@@ -165,10 +172,12 @@ func FromInstanceData(data InstanceData) (*Instance, error) {
 		switch {
 		case sess.DoesSessionExist():
 			// Normal case: the session survived (cs detaches, it doesn't kill),
-			// so reattach to it.
+			// so reattach to it. Start() no longer sets Running itself (that is owned by
+			// the caller), so mark the reattached, live session Running here.
 			if err := instance.Start(false); err != nil {
 				return nil, err
 			}
+			instance.SetStatus(Running)
 		default:
 			// The tmux session is gone — e.g. after a reboot, or the one-time
 			// migration to cs's dedicated socket. Don't crash on the failed
@@ -220,7 +229,7 @@ func NewInstance(opts InstanceOptions) (*Instance, error) {
 
 	return &Instance{
 		Title:      opts.Title,
-		Status:     Ready,
+		status:     Ready,
 		Path:       absPath,
 		Program:    opts.Program,
 		Height:     0,
@@ -254,8 +263,42 @@ func (i *Instance) SetPath(path string) error {
 	return nil
 }
 
+// GetStatus returns the instance status under the read lock.
+func (i *Instance) GetStatus() Status {
+	i.mu.RLock()
+	defer i.mu.RUnlock()
+	return i.status
+}
+
+// SetStatus updates the instance status under the write lock.
 func (i *Instance) SetStatus(status Status) {
-	i.Status = status
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	i.status = status
+}
+
+// isStarted reports whether Start() has completed, under the read lock.
+func (i *Instance) isStarted() bool {
+	i.mu.RLock()
+	defer i.mu.RUnlock()
+	return i.started
+}
+
+// tmux returns the tmux session pointer under the read lock. Callers invoke methods
+// on the returned session outside the lock (TmuxSession guards its own fields), so
+// mu is never held across tmux I/O.
+func (i *Instance) tmux() *tmux.TmuxSession {
+	i.mu.RLock()
+	defer i.mu.RUnlock()
+	return i.tmuxSession
+}
+
+// worktree returns the git worktree pointer under the read lock. As with tmux(),
+// callers run git I/O on the returned worktree outside the lock.
+func (i *Instance) worktree() *git.GitWorktree {
+	i.mu.RLock()
+	defer i.mu.RUnlock()
+	return i.gitWorktree
 }
 
 // SetBaseBranch sets the existing branch the session branch will be based on when the
@@ -270,15 +313,17 @@ func (i *Instance) Start(firstTimeSetup bool) error {
 		return fmt.Errorf("instance title cannot be empty")
 	}
 
-	var tmuxSession *tmux.TmuxSession
-	if i.tmuxSession != nil {
-		// Use existing tmux session (useful for testing)
-		tmuxSession = i.tmuxSession
-	} else {
+	i.mu.RLock()
+	existing := i.tmuxSession
+	i.mu.RUnlock()
+	tmuxSession := existing
+	if tmuxSession == nil {
 		// Create new tmux session
 		tmuxSession = tmux.NewTmuxSession(i.Title, i.Program)
 	}
+	i.mu.Lock()
 	i.tmuxSession = tmuxSession
+	i.mu.Unlock()
 
 	if firstTimeSetup {
 		// The session always gets its own branch. baseBranch (if set) only chooses the start
@@ -294,7 +339,9 @@ func (i *Instance) Start(firstTimeSetup bool) error {
 		if err != nil {
 			return fmt.Errorf("failed to create git worktree: %w", err)
 		}
+		i.mu.Lock()
 		i.gitWorktree = gitWorktree
+		i.mu.Unlock()
 		i.Branch = branchName
 	}
 
@@ -306,7 +353,9 @@ func (i *Instance) Start(firstTimeSetup bool) error {
 				setupErr = fmt.Errorf("%v (cleanup error: %v)", setupErr, cleanupErr)
 			}
 		} else {
+			i.mu.Lock()
 			i.started = true
+			i.mu.Unlock()
 		}
 	}()
 
@@ -334,7 +383,10 @@ func (i *Instance) Start(firstTimeSetup bool) error {
 		}
 	}
 
-	i.SetStatus(Running)
+	// NOTE: the transition out of Loading is owned by the caller on the main thread,
+	// not set here from the background start goroutine, so it can never race with the
+	// UI/poll readers. The new-session flow sets Running in the instanceStartedMsg
+	// handler; the reattach path (FromInstanceData) sets it after Start(false) returns.
 
 	return nil
 }
@@ -383,33 +435,36 @@ func (i *Instance) combineErrors(errs []error) error {
 }
 
 func (i *Instance) Preview() (string, error) {
-	if !i.started || i.Status == Paused {
+	if !i.isStarted() || i.Paused() {
 		return "", nil
 	}
 	// A started session whose tmux pane has died (server restart, the agent
 	// process exited, an external kill) would fail capture every refresh and
 	// escalate to the error box. Treat a missing session as empty; the metadata
 	// loop detects it via TmuxAlive() and recovers the instance to Paused.
-	if !i.TmuxAlive() {
+	ts := i.tmux()
+	if ts == nil || !ts.DoesSessionExist() {
 		return "", nil
 	}
-	return i.tmuxSession.CapturePaneContent()
+	return ts.CapturePaneContent()
 }
 
 func (i *Instance) HasUpdated() (updated bool, hasPrompt bool) {
-	if !i.started {
+	ts := i.tmux()
+	if !i.isStarted() || ts == nil {
 		return false, false
 	}
-	return i.tmuxSession.HasUpdated()
+	return ts.HasUpdated()
 }
 
 // Poll classifies the agent's current pane state. Returns PaneUnknown for a not-yet-started
 // instance so callers leave its status untouched.
 func (i *Instance) Poll() tmux.PaneState {
-	if !i.started {
+	ts := i.tmux()
+	if !i.isStarted() || ts == nil {
 		return tmux.PaneUnknown
 	}
-	return i.tmuxSession.Poll()
+	return ts.Poll()
 }
 
 // CheckAndHandleTrustPrompt checks for and dismisses the trust prompt for supported programs.
@@ -429,10 +484,11 @@ func (i *Instance) CheckAndHandleTrustPrompt() bool {
 // IsReadyForPrompt reports whether the agent has finished booting and is past any
 // startup gate, so a queued initial prompt can be submitted into its input box.
 func (i *Instance) IsReadyForPrompt() bool {
-	if !i.started || i.tmuxSession == nil {
+	ts := i.tmux()
+	if !i.isStarted() || ts == nil {
 		return false
 	}
-	return i.tmuxSession.IsReadyForPrompt()
+	return ts.IsReadyForPrompt()
 }
 
 // TapEnter sends an enter key press to the tmux session if AutoYes is enabled.
@@ -453,7 +509,7 @@ func (i *Instance) Attach() (chan struct{}, error) {
 }
 
 func (i *Instance) SetPreviewSize(width, height int) error {
-	if !i.started || i.Status == Paused {
+	if !i.started || i.Paused() {
 		return fmt.Errorf("cannot set preview size for instance that has not been started or " +
 			"is paused")
 	}
@@ -477,7 +533,7 @@ func (i *Instance) GetWorktreePath() string {
 }
 
 func (i *Instance) Started() bool {
-	return i.started
+	return i.isStarted()
 }
 
 // SetTitle sets the title of the instance. Returns an error if the instance has started.
@@ -547,12 +603,13 @@ func (i *Instance) SetDisplayName(name string) {
 }
 
 func (i *Instance) Paused() bool {
-	return i.Status == Paused
+	return i.GetStatus() == Paused
 }
 
 // TmuxAlive returns true if the tmux session is alive. This is a sanity check before attaching.
 func (i *Instance) TmuxAlive() bool {
-	return i.tmuxSession.DoesSessionExist()
+	ts := i.tmux()
+	return ts != nil && ts.DoesSessionExist()
 }
 
 // Pause stops the tmux session and removes the worktree, preserving the branch.
@@ -575,7 +632,7 @@ func (i *Instance) pause(copyBranchToClipboard bool) error {
 	if !i.started {
 		return fmt.Errorf("cannot pause instance that has not been started")
 	}
-	if i.Status == Paused {
+	if i.Paused() {
 		return fmt.Errorf("instance is already paused")
 	}
 
@@ -666,7 +723,7 @@ func (i *Instance) Resume() error {
 	if !i.started {
 		return fmt.Errorf("cannot resume instance that has not been started")
 	}
-	if i.Status != Paused {
+	if !i.Paused() {
 		return fmt.Errorf("can only resume paused instances")
 	}
 
@@ -725,7 +782,7 @@ func (i *Instance) UpdateDiffStats() error {
 		return nil
 	}
 
-	if i.Status == Paused {
+	if i.Paused() {
 		// Keep the previous diff stats if the instance is paused
 		return nil
 	}
@@ -747,10 +804,11 @@ func (i *Instance) UpdateDiffStats() error {
 // ComputeDiff runs the expensive git diff I/O and returns the result without
 // mutating instance state. Safe to call from a background goroutine.
 func (i *Instance) ComputeDiff() *git.DiffStats {
-	if !i.started || i.Status == Paused {
+	wt := i.worktree()
+	if !i.isStarted() || i.Paused() || wt == nil {
 		return nil
 	}
-	return i.gitWorktree.Diff()
+	return wt.Diff()
 }
 
 // ComputeDiffNumstat runs a lightweight git diff --numstat and returns only the
@@ -758,10 +816,11 @@ func (i *Instance) ComputeDiff() *git.DiffStats {
 // background goroutine. Use this for instances whose full diff content is not
 // currently needed so we avoid keeping large diffs in memory.
 func (i *Instance) ComputeDiffNumstat() *git.DiffStats {
-	if !i.started || i.Status == Paused {
+	wt := i.worktree()
+	if !i.isStarted() || i.Paused() || wt == nil {
 		return nil
 	}
-	return i.gitWorktree.DiffNumstat()
+	return wt.DiffNumstat()
 }
 
 // SetDiffStats sets the diff statistics on the instance. Should be called from
@@ -798,7 +857,7 @@ func (i *Instance) SendPrompt(prompt string) error {
 
 // PreviewFullHistory captures the entire tmux pane output including full scrollback history
 func (i *Instance) PreviewFullHistory() (string, error) {
-	if !i.started || i.Status == Paused {
+	if !i.started || i.Paused() {
 		return "", nil
 	}
 	return i.tmuxSession.CapturePaneContentWithOptions("-", "-")
@@ -811,7 +870,7 @@ func (i *Instance) SetTmuxSession(session *tmux.TmuxSession) {
 
 // SendKeys sends keys to the tmux session
 func (i *Instance) SendKeys(keys string) error {
-	if !i.started || i.Status == Paused {
+	if !i.started || i.Paused() {
 		return fmt.Errorf("cannot send keys to instance that has not been started or is paused")
 	}
 	return i.tmuxSession.SendKeys(keys)

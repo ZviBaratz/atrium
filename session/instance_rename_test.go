@@ -48,7 +48,7 @@ func TestInstanceRename_RenamesBranchWorktreeAndTitle(t *testing.T) {
 
 	inst := &Instance{
 		Title:       "formalize-packaing",
-		Status:      Running,
+		status:      Running,
 		started:     true,
 		gitWorktree: wt,
 		tmuxSession: liveTmux(t, "formalize-packaing"),
@@ -95,7 +95,7 @@ func TestInstanceRename_RollsBackTmuxOnGitFailure(t *testing.T) {
 	ts := tmux.NewTmuxSessionWithDeps("alpha", "claude", tmux.MakePtyFactory(), tmuxExec)
 	inst := &Instance{
 		Title:       "alpha",
-		Status:      Running,
+		status:      Running,
 		started:     true,
 		gitWorktree: wt,
 		tmuxSession: ts,

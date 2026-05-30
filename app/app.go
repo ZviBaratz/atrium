@@ -99,12 +99,6 @@ type home struct {
 	// attempted once per process (its seen-bit handles persistence across runs).
 	welcomeChecked bool
 
-	// instanceStarting is true while a background instance start is in progress.
-	// Prevents double-submission and guards against interacting with a not-yet-started instance.
-	instanceStarting bool
-	// startingInstance holds a reference to the instance being started in the background.
-	startingInstance *session.Instance
-
 	// windowWidth/windowHeight cache the last terminal size so the layout can be
 	// recomputed off a synthesized size event — e.g. when an error appears or
 	// clears and the panes must give up or reclaim the error box's row.
@@ -284,24 +278,6 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case keyupMsg:
 		m.menu.ClearKeydown()
 		return m, nil
-	case instanceStartDoneMsg:
-		m.instanceStarting = false
-		inst := msg.instance
-		m.startingInstance = nil
-
-		if msg.err != nil {
-			// Start failed — remove the instance from the list and show the error.
-			m.list.Kill()
-			return m, tea.Batch(tea.WindowSize(), m.instanceChanged(), m.handleError(msg.err))
-		}
-
-		// Save after successful start.
-		if err := m.storage.SaveInstances(m.list.GetInstances()); err != nil {
-			return m, m.handleError(err)
-		}
-		m.recordRecentPath(inst.Path)
-
-		return m, tea.Batch(tea.WindowSize(), m.instanceChanged())
 	case autoNameDoneMsg:
 		m.generatingName = false
 		if msg.err != nil {
@@ -326,7 +302,7 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		for _, r := range msg.results {
 			// Skip instances that were paused while metadata was being computed, or
 			// that were just recovered to Paused above because their session died.
-			if r.sessionLost || r.instance.Status == session.Paused {
+			if r.sessionLost || r.instance.Paused() {
 				continue
 			}
 			applyPaneState(r.instance, r.state)
@@ -347,7 +323,7 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.Action == tea.MouseActionPress {
 			if msg.Button == tea.MouseButtonWheelDown || msg.Button == tea.MouseButtonWheelUp {
 				selected := m.list.GetSelectedInstance()
-				if selected == nil || selected.Status == session.Paused {
+				if selected == nil || selected.Paused() {
 					return m, nil
 				}
 
@@ -395,6 +371,14 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.list.Kill()
 			return m, tea.Batch(m.handleError(msg.err), m.instanceChanged())
 		}
+
+		// Own the Loading -> Running transition here, on the main thread. Start()
+		// deliberately no longer sets Running from its background goroutine (that
+		// raced the UI/poll readers and could leave the session stuck on the
+		// "Setting up workspace..." splash); this message arrives after Start()
+		// completed, so the write is race-free. applyPaneState refines it to
+		// Ready/NeedsInput on later ticks.
+		msg.instance.SetStatus(session.Running)
 
 		// Save after successful start
 		if err := m.storage.SaveInstances(m.list.GetInstances()); err != nil {
@@ -785,7 +769,7 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		// without attaching. Only meaningful when the agent is up and accepting input, so
 		// this is a no-op for an empty/loading/paused selection.
 		selected := m.list.GetSelectedInstance()
-		if selected == nil || !selected.Started() || selected.Paused() || selected.Status == session.Loading {
+		if selected == nil || !selected.Started() || selected.Paused() || selected.GetStatus() == session.Loading {
 			return m, nil
 		}
 		m.state = statePrompt
@@ -814,7 +798,7 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		return m, m.instanceChanged()
 	case keys.KeyKill:
 		selected := m.list.GetSelectedInstance()
-		if selected == nil || selected.Status == session.Loading {
+		if selected == nil || selected.GetStatus() == session.Loading {
 			return m, nil
 		}
 
@@ -851,7 +835,7 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		return m, m.confirmAction(message, killAction)
 	case keys.KeyRename:
 		selected := m.list.GetSelectedInstance()
-		if selected == nil || selected.Status == session.Loading {
+		if selected == nil || selected.GetStatus() == session.Loading {
 			return m, nil
 		}
 		m.renameTarget = selected
@@ -861,7 +845,7 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		return m, nil
 	case keys.KeyAutoName:
 		selected := m.list.GetSelectedInstance()
-		if selected == nil || selected.Status == session.Loading || m.generatingName {
+		if selected == nil || selected.GetStatus() == session.Loading || m.generatingName {
 			return m, nil
 		}
 		// The model call (and the full diff it needs) happen in the background Cmd so
@@ -871,7 +855,7 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		return m, runAutoNameCmd(m.ctx, selected, selected.Prompt)
 	case keys.KeySubmit:
 		selected := m.list.GetSelectedInstance()
-		if selected == nil || selected.Status == session.Loading {
+		if selected == nil || selected.GetStatus() == session.Loading {
 			return m, nil
 		}
 
@@ -894,7 +878,7 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		return m, m.confirmAction(message, pushAction)
 	case keys.KeyCheckout:
 		selected := m.list.GetSelectedInstance()
-		if selected == nil || selected.Status == session.Loading {
+		if selected == nil || selected.GetStatus() == session.Loading {
 			return m, nil
 		}
 
@@ -955,7 +939,7 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		return m, nil
 	case keys.KeyResume:
 		selected := m.list.GetSelectedInstance()
-		if selected == nil || selected.Status == session.Loading {
+		if selected == nil || selected.GetStatus() == session.Loading {
 			return m, nil
 		}
 		if err := selected.Resume(); err != nil {
@@ -967,7 +951,7 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 			return m, nil
 		}
 		selected := m.list.GetSelectedInstance()
-		if selected == nil || selected.Paused() || selected.Status == session.Loading || !selected.TmuxAlive() {
+		if selected == nil || selected.Paused() || selected.GetStatus() == session.Loading || !selected.TmuxAlive() {
 			return m, nil
 		}
 		// Terminal tab: attach to terminal session. Attaching blocks until the
@@ -1210,21 +1194,6 @@ func recoverLostInstances(results []instanceMetaResult, strikes map[*session.Ins
 // metadataUpdateDoneMsg is sent when the background metadata update completes.
 type metadataUpdateDoneMsg struct {
 	results []instanceMetaResult
-}
-
-// instanceStartDoneMsg is sent when the background instance start completes.
-type instanceStartDoneMsg struct {
-	instance *session.Instance
-	err      error
-}
-
-// runInstanceStartCmd returns a Cmd that performs the expensive instance.Start(true)
-// in a background goroutine so the main event loop stays responsive.
-func runInstanceStartCmd(instance *session.Instance) tea.Cmd {
-	return func() tea.Msg {
-		err := instance.Start(true)
-		return instanceStartDoneMsg{instance: instance, err: err}
-	}
 }
 
 // autoNameDoneMsg is sent when a background name generation completes. instance
