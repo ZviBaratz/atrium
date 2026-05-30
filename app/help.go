@@ -69,7 +69,7 @@ func (h helpTypeGeneral) toContent() string {
 		helpRow("D", "kill session"),
 		"",
 		helpHeaderStyle().Render("Handoff"),
-		helpRow("↵/o", "attach   (ctrl-q to detach)"),
+		helpRow("↵/o", "attach   (ctrl-q detach · ctrl-x kill)"),
 		helpRow("→", "send a message (without attaching)"),
 		helpRow("c", "checkout: commit changes + pause"),
 		helpRow("p", "commit & push branch"),

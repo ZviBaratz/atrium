@@ -423,6 +423,11 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			<-ch
 			m.state = stateDefault
+			// Honor an in-session kill (Ctrl+X) requested from the freshly-opened
+			// session; key on msg.instance since the selection may have drifted.
+			if msg.instance.AttachKillRequested() {
+				return m, m.confirmKill(msg.instance)
+			}
 			return m, tea.Batch(tea.WindowSize(), m.instanceChanged())
 		}
 
@@ -813,42 +818,7 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		m.menu.SetActiveTab(m.tabbedWindow.GetActiveTab())
 		return m, m.instanceChanged()
 	case keys.KeyKill:
-		selected := m.list.GetSelectedInstance()
-		if selected == nil || selected.Status == session.Loading {
-			return m, nil
-		}
-
-		// Create the kill action as a tea.Cmd
-		killAction := func() tea.Msg {
-			// Refuse to kill only when we can positively confirm the branch is
-			// checked out in its primary repo (removing it would be destructive).
-			// This is a teardown path: if the worktree or its repo is unreachable
-			// — e.g. the user renamed/removed the project directory — fail open and
-			// proceed, otherwise an orphaned session can never be deleted.
-			if worktree, err := selected.GetGitWorktree(); err != nil {
-				log.WarningLog.Printf("kill %s: cannot resolve worktree, proceeding: %v", selected.Title, err)
-			} else if checkedOut, cerr := worktree.IsBranchCheckedOut(); cerr != nil {
-				log.WarningLog.Printf("kill %s: cannot verify branch checkout, proceeding: %v", selected.Title, cerr)
-			} else if checkedOut {
-				return fmt.Errorf("instance %s is currently checked out", selected.DisplayName())
-			}
-
-			// Clean up terminal session for this instance
-			m.tabbedWindow.CleanupTerminalForInstance(selected.Title)
-
-			// Delete from storage first
-			if err := m.storage.DeleteInstance(selected.Title); err != nil {
-				return err
-			}
-
-			// Then kill the instance
-			m.list.Kill()
-			return instanceChangedMsg{}
-		}
-
-		// Show confirmation modal
-		message := fmt.Sprintf("[!] Kill session '%s'?", selected.DisplayName())
-		return m, m.confirmAction(message, killAction)
+		return m, m.confirmKill(m.list.GetSelectedInstance())
 	case keys.KeyRename:
 		selected := m.list.GetSelectedInstance()
 		if selected == nil || selected.Status == session.Loading {
@@ -987,6 +957,11 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		}
 		<-ch
 		m.state = stateDefault
+		// If the user pressed the in-session kill key (Ctrl+X) before detaching,
+		// run the normal kill-confirmation flow on the session they just left.
+		if selected.AttachKillRequested() {
+			return m, m.confirmKill(selected)
+		}
 		return m, m.instanceChanged()
 	default:
 		return m, nil
@@ -1490,6 +1465,47 @@ func (m *home) killNewInstance() {
 // confirm. The action is run (and its result dispatched) by the stateConfirm key
 // handler, not here, so its returned message — including any error — flows through
 // Update instead of being discarded.
+// confirmKill shows the kill-confirmation overlay for inst and stashes the
+// teardown action. inst need not be the selected instance: the in-session kill
+// key (Ctrl+X) and the auto-open path target a specific session regardless of
+// the current list selection, so the action keys on inst (and KillInstance)
+// rather than on whatever happens to be selected when the user confirms.
+func (m *home) confirmKill(inst *session.Instance) tea.Cmd {
+	if inst == nil || inst.Status == session.Loading {
+		return nil
+	}
+
+	killAction := func() tea.Msg {
+		// Refuse to kill only when we can positively confirm the branch is
+		// checked out in its primary repo (removing it would be destructive).
+		// This is a teardown path: if the worktree or its repo is unreachable
+		// — e.g. the user renamed/removed the project directory — fail open and
+		// proceed, otherwise an orphaned session can never be deleted.
+		if worktree, err := inst.GetGitWorktree(); err != nil {
+			log.WarningLog.Printf("kill %s: cannot resolve worktree, proceeding: %v", inst.Title, err)
+		} else if checkedOut, cerr := worktree.IsBranchCheckedOut(); cerr != nil {
+			log.WarningLog.Printf("kill %s: cannot verify branch checkout, proceeding: %v", inst.Title, cerr)
+		} else if checkedOut {
+			return fmt.Errorf("instance %s is currently checked out", inst.DisplayName())
+		}
+
+		// Clean up terminal session for this instance
+		m.tabbedWindow.CleanupTerminalForInstance(inst.Title)
+
+		// Delete from storage first
+		if err := m.storage.DeleteInstance(inst.Title); err != nil {
+			return err
+		}
+
+		// Then kill the instance
+		m.list.KillInstance(inst)
+		return instanceChangedMsg{}
+	}
+
+	message := fmt.Sprintf("[!] Kill session '%s'?", inst.DisplayName())
+	return m.confirmAction(message, killAction)
+}
+
 func (m *home) confirmAction(message string, action tea.Cmd) tea.Cmd {
 	m.state = stateConfirm
 	m.pendingConfirmAction = action

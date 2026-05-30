@@ -449,7 +449,14 @@ func (i *Instance) Attach() (chan struct{}, error) {
 	if !i.started {
 		return nil, fmt.Errorf("cannot attach instance that has not been started")
 	}
-	return i.tmuxSession.Attach()
+	return i.tmuxSession.Attach(true)
+}
+
+// AttachKillRequested reports whether the user pressed the in-session kill key
+// (Ctrl+X) during the most recent attach. The app reads this right after the
+// attach returns to decide whether to run the kill-confirmation flow.
+func (i *Instance) AttachKillRequested() bool {
+	return i.tmuxSession != nil && i.tmuxSession.KillRequested()
 }
 
 func (i *Instance) SetPreviewSize(width, height int) error {

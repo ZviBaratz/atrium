@@ -139,6 +139,12 @@ type TmuxSession struct {
 	ctx    context.Context
 	cancel func()
 	wg     *sync.WaitGroup
+
+	// killRequested is set by the attach stdin reader when the user presses the
+	// in-session kill key (Ctrl+X). It is reset at the start of every Attach and
+	// read once after the attach returns; the channel close in Detach provides the
+	// happens-before edge to the reader.
+	killRequested bool
 }
 
 // TmuxPrefix is the prefix applied to every Atrium-managed tmux session name. It
@@ -483,8 +489,13 @@ func (t *TmuxSession) HasUpdated() (updated bool, hasPrompt bool) {
 	return s == PaneWorking, s == PanePrompt
 }
 
-func (t *TmuxSession) Attach() (chan struct{}, error) {
+// Attach connects the terminal to the tmux session and blocks (via the returned
+// channel) until the user detaches. When allowKill is true, the in-session kill
+// key (Ctrl+X) detaches and sets KillRequested so the caller can tear the session
+// down; the Terminal-tab shell passes false so Ctrl+X stays a normal shell key.
+func (t *TmuxSession) Attach(allowKill bool) (chan struct{}, error) {
 	t.attachCh = make(chan struct{})
+	t.killRequested = false
 
 	t.wg = &sync.WaitGroup{}
 	t.wg.Add(1)
@@ -551,6 +562,16 @@ func (t *TmuxSession) Attach() (chan struct{}, error) {
 				return
 			}
 
+			// Check for Ctrl+x (ASCII 24): detach and request a kill. The caller
+			// (after the attach returns) reads KillRequested and runs the teardown
+			// confirmation. Only honored when allowKill is set (agent sessions),
+			// not for the Terminal-tab shell where Ctrl+X is a normal editing key.
+			if allowKill && nr == 1 && buf[0] == 24 {
+				t.killRequested = true
+				t.Detach()
+				return
+			}
+
 			// Forward other input to tmux
 			_, _ = t.ptmx.Write(buf[:nr])
 		}
@@ -558,6 +579,12 @@ func (t *TmuxSession) Attach() (chan struct{}, error) {
 
 	t.monitorWindowSize()
 	return t.attachCh, nil
+}
+
+// KillRequested reports whether the most recent attach ended with the user
+// pressing the in-session kill key (Ctrl+X). It is reset at the start of Attach.
+func (t *TmuxSession) KillRequested() bool {
+	return t.killRequested
 }
 
 // DetachSafely disconnects from the current tmux session without panicking
