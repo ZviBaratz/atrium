@@ -53,31 +53,63 @@ func (l *List) distinctRepoCount() int {
 // member count when collapsed), and a dim rule filling the rest of the panel width, so it
 // reads as a section divider. A collapsed group's header doubles as its selectable row, so it
 // gets the same left accent bar as a selected item when selected is true.
-func (l *List) renderRepoHeader(key string, collapsed bool, count int, selected bool) string {
+//
+// needsInput is how many sessions in the group are blocked on user input. When the group is
+// collapsed (so its member rows — and their per-row waiting glyphs — are hidden) and the count
+// is non-zero, a "◆N" badge is appended in the attention color so the group still signals that
+// it needs attention without being expanded.
+func (l *List) renderRepoHeader(key string, collapsed bool, count, needsInput int, selected bool) string {
 	g := theme.Current().Glyphs
 	marker := g.FoldOpen + " "
 	if collapsed {
 		marker = g.FoldClosed + " "
 	}
 	name := marker + strings.ToUpper(key)
+	badge := ""
 	if collapsed {
 		name = fmt.Sprintf("%s (%d)", name, count)
+		if needsInput > 0 {
+			badge = fmt.Sprintf("%s%d", g.Waiting, needsInput)
+		}
 	}
 	header := repoHeaderStyle().Render(name)
 	// repoHeaderStyle pads the name with one space on each side; a selected header also gains
-	// a one-cell left accent bar, so reserve for both when sizing the trailing rule.
+	// a one-cell left accent bar, so reserve for both when sizing the trailing rule (hence -2,
+	// and an extra -1 when selected). The badge sits in the padding's right space and is
+	// followed by one separator space before the rule, so it consumes its plain-text width
+	// (its ANSI styling adds no columns) plus that one space.
 	ruleLen := l.renderer.width - runewidth.StringWidth(name) - 2
+	if badge != "" {
+		ruleLen -= runewidth.StringWidth(badge) + 1
+	}
 	if selected {
 		ruleLen--
 	}
 	if ruleLen < 0 {
 		ruleLen = 0
 	}
-	line := header + repoRuleStyle().Render(strings.Repeat("─", ruleLen))
+	line := header
+	if badge != "" {
+		line += theme.Current().AttentionStyle().Render(badge) + " "
+	}
+	line += repoRuleStyle().Render(strings.Repeat("─", ruleLen))
 	if selected {
 		return selectedItemStyle().Render(line)
 	}
 	return line
+}
+
+// groupNeedsInputCount returns how many sessions in the half-open item range [start, end) are
+// blocked on user input. Used to badge a collapsed repo-group header, whose member rows would
+// otherwise carry the per-row waiting glyph.
+func (l *List) groupNeedsInputCount(start, end int) int {
+	n := 0
+	for _, item := range l.items[start:end] {
+		if item.Status == session.NeedsInput {
+			n++
+		}
+	}
+	return n
 }
 
 type List struct {
@@ -317,7 +349,8 @@ func (l *List) String() string {
 
 		if showRepos {
 			headerSelected := collapsed && l.selectedIdx == start
-			at := appendBlock(l.renderRepoHeader(key, collapsed, end-start, headerSelected))
+			ni := l.groupNeedsInputCount(start, end)
+			at := appendBlock(l.renderRepoHeader(key, collapsed, end-start, ni, headerSelected))
 			if headerSelected {
 				selStart, selH = at, len(lines)-at
 			}
