@@ -65,7 +65,7 @@ func (p *PreviewPane) UpdateContent(instance *session.Instance) error {
 	// Once it is started with a live tmux pane, render the real pane even if the status
 	// write hasn't landed yet — defense-in-depth so a stale Loading can never pin the
 	// splash (the authoritative fix sets Running on the main thread when Start completes).
-	case instance.GetStatus() == session.Loading && !(instance.Started() && instance.TmuxAlive()):
+	case instance.GetStatus() == session.Loading && (!instance.Started() || !instance.TmuxAlive()):
 		p.setFallbackState("Setting up workspace...")
 		return nil
 	case instance.Paused():
