@@ -178,6 +178,24 @@ func (g *GitWorktree) IsValidWorktree() (bool, error) {
 	return true, nil
 }
 
+// BranchCheckedOutError reports that the session branch is already checked out
+// in another worktree (the base repo or a sibling), which blocks recreating the
+// session worktree on resume. It is a typed error so callers can recognise the
+// busy-branch case with errors.As — far more durable than substring-matching the
+// message across package boundaries. Path names the holding worktree when git
+// revealed it, and is "" when only the conflict (not the holder) is known.
+type BranchCheckedOutError struct {
+	Branch string
+	Path   string
+}
+
+func (e *BranchCheckedOutError) Error() string {
+	if e.Path != "" {
+		return fmt.Sprintf("cannot resume: branch %q is checked out at %s", e.Branch, e.Path)
+	}
+	return fmt.Sprintf("cannot resume: branch %q is already checked out elsewhere", e.Branch)
+}
+
 // BranchCheckoutPath returns the path of the worktree (the base repo or any
 // sibling) that currently has g.branchName checked out, or "" if the branch is
 // free. It parses `git worktree list --porcelain` (via parseWorktreeList) so it

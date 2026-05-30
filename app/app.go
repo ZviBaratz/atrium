@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"github.com/ZviBaratz/atrium/config"
 	"github.com/ZviBaratz/atrium/keys"
@@ -1407,7 +1408,8 @@ func (m *home) resumeSelected(selected *session.Instance) tea.Cmd {
 	}
 
 	// Only a branch-busy failure is recoverable; surface anything else as-is.
-	if !strings.Contains(err.Error(), "is checked out at ") {
+	var busy *git.BranchCheckedOutError
+	if !errors.As(err, &busy) {
 		return m.handleError(err)
 	}
 

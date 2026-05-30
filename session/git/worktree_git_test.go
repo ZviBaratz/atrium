@@ -1,6 +1,7 @@
 package git
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -113,6 +114,15 @@ func TestSetup_BusyBranchFriendlyError(t *testing.T) {
 	err := g.Setup()
 	if err == nil {
 		t.Fatal("Setup() succeeded, want busy-branch error")
+	}
+	// The app layer recognises the busy-branch case with errors.As, so the type —
+	// not just the wording — is the contract that must hold across the boundary.
+	var busy *BranchCheckedOutError
+	if !errors.As(err, &busy) {
+		t.Fatalf("Setup() error = %q, want a *BranchCheckedOutError", err.Error())
+	}
+	if busy.Path == "" {
+		t.Errorf("BranchCheckedOutError.Path is empty, want the sibling worktree path")
 	}
 	if !strings.Contains(err.Error(), "is checked out at") {
 		t.Fatalf("Setup() error = %q, want it to mention 'is checked out at'", err.Error())

@@ -79,19 +79,17 @@ func (g *GitWorktree) setupFromExistingBranch() error {
 	return nil
 }
 
-// busyBranchError returns a friendly, path-named error when err is git's
-// "branch already used by another worktree" failure, or nil otherwise. The
-// returned message shares the "is checked out at" phrasing used by the Resume
-// pre-check so the app layer can detect both origins with a single substring.
+// busyBranchError returns a *BranchCheckedOutError when err is git's "branch
+// already used by another worktree" failure, or nil otherwise. It shares the
+// typed error the Resume pre-check returns so the app layer detects both origins
+// with a single errors.As — including the path-less fallback, which the app
+// recovers via IsBranchHeldByBaseRepo regardless.
 func (g *GitWorktree) busyBranchError(err error) error {
 	path, busy := busyBranchHolder(err)
 	if !busy {
 		return nil
 	}
-	if path != "" {
-		return fmt.Errorf("cannot resume: branch %q is checked out at %s", g.branchName, path)
-	}
-	return fmt.Errorf("cannot resume: branch %q is already checked out elsewhere", g.branchName)
+	return &BranchCheckedOutError{Branch: g.branchName, Path: path}
 }
 
 // busyBranchHolder scans a git error for the "already used by worktree" /

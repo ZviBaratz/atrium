@@ -797,7 +797,7 @@ func (i *Instance) Resume() error {
 		log.ErrorLog.Print(err)
 		return fmt.Errorf("failed to check if branch is checked out: %w", err)
 	} else if heldBy != "" {
-		return fmt.Errorf("cannot resume: branch %q is checked out at %s", wt.GetBranchName(), heldBy)
+		return &git.BranchCheckedOutError{Branch: wt.GetBranchName(), Path: heldBy}
 	}
 
 	// Setup git worktree

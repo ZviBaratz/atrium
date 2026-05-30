@@ -158,3 +158,31 @@ func TestRecreateSession_ResumesConversationAndCleansUpOnFailure(t *testing.T) {
 	require.NoError(t, vErr)
 	require.False(t, valid, "the worktree must be cleaned up after a failed launch")
 }
+
+// Resume must surface a typed *git.BranchCheckedOutError when the session branch
+// is already checked out elsewhere — the app layer keys its detach-and-recover
+// offer off errors.As against that type, so the type is the cross-package
+// contract (a reworded message must not silently break recovery).
+func TestResume_BranchCheckedOutReturnsTypedError(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	repoPath := filepath.Join(t.TempDir(), "repo")
+	runGit(t, "", "init", repoPath)
+	runGit(t, repoPath, "config", "user.email", "test@example.com")
+	runGit(t, repoPath, "config", "user.name", "Test User")
+	require.NoError(t, os.WriteFile(filepath.Join(repoPath, "README.md"), []byte("hi\n"), 0644))
+	runGit(t, repoPath, "add", ".")
+	runGit(t, repoPath, "commit", "-m", "initial")
+	// The base repo itself holds the session branch — the common Checkout case.
+	runGit(t, repoPath, "switch", "-c", "session/sess")
+
+	wt := git.NewGitWorktreeFromStorage(
+		repoPath, filepath.Join(t.TempDir(), "wt"),
+		"sess", "session/sess", "", "main", true)
+	inst := &Instance{Title: "sess", status: Paused, started: true, gitWorktree: wt}
+
+	err := inst.Resume()
+	require.Error(t, err)
+	var busy *git.BranchCheckedOutError
+	require.ErrorAs(t, err, &busy, "Resume must return a *git.BranchCheckedOutError")
+	require.NotEmpty(t, busy.Path, "the error should name the holding worktree")
+}
