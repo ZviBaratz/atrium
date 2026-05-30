@@ -790,12 +790,14 @@ func (i *Instance) Resume() error {
 	ts := i.tmux()
 	wt := i.worktree()
 
-	// Check if branch is checked out
-	if checked, err := wt.IsBranchCheckedOut(); err != nil {
+	// Check if branch is checked out elsewhere (base repo or a sibling worktree).
+	// Naming the holding path makes the error actionable and lets the app layer
+	// offer to detach the base repo automatically.
+	if heldBy, err := wt.BranchCheckoutPath(); err != nil {
 		log.ErrorLog.Print(err)
 		return fmt.Errorf("failed to check if branch is checked out: %w", err)
-	} else if checked {
-		return fmt.Errorf("cannot resume: branch is checked out, please switch to a different branch")
+	} else if heldBy != "" {
+		return fmt.Errorf("cannot resume: branch %q is checked out at %s", wt.GetBranchName(), heldBy)
 	}
 
 	// Setup git worktree

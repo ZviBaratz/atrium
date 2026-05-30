@@ -59,6 +59,10 @@ const (
 	// stateFilter is the state when the user is typing an incremental filter query
 	// to narrow the session list by DisplayName / Branch.
 	stateFilter
+	// stateInfo is the state when a dismissible information modal is displayed
+	// (an actionable error that must persist until the user reads and dismisses it,
+	// rather than auto-vanishing like the transient error box).
+	stateInfo
 )
 
 type home struct {
@@ -371,6 +375,10 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case instanceChangedMsg:
 		// Handle instance changed after confirmation action
 		return m, m.instanceChanged()
+	case infoMsg:
+		// An action requested a dismissible info modal (e.g. an actionable resume
+		// error). Unlike handleError's transient box, this persists until dismissed.
+		return m, m.showInfo(string(msg))
 	case instanceStartedMsg:
 		// Select the instance that just started (or failed)
 		m.list.SelectInstance(msg.instance)
@@ -441,7 +449,7 @@ func (m *home) handleMenuHighlighting(msg tea.KeyMsg) (cmd tea.Cmd, returnEarly 
 		m.keySent = false
 		return nil, false
 	}
-	if m.state == statePrompt || m.state == stateHelp || m.state == stateConfirm || m.state == stateRename || m.state == stateFilter {
+	if m.state == statePrompt || m.state == stateHelp || m.state == stateConfirm || m.state == stateRename || m.state == stateFilter || m.state == stateInfo {
 		return nil, false
 	}
 	// If it's in the global keymap, we should try to highlight it.
@@ -476,6 +484,10 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 
 	if m.state == stateHelp {
 		return m.handleHelpState(msg)
+	}
+
+	if m.state == stateInfo {
+		return m.handleInfoState(msg)
 	}
 
 	if m.state == stateNew {
@@ -1010,10 +1022,7 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		if selected == nil || selected.GetStatus() == session.Loading {
 			return m, nil
 		}
-		if err := selected.Resume(); err != nil {
-			return m, m.handleError(err)
-		}
-		return m, tea.WindowSize()
+		return m, m.resumeSelected(selected)
 	case keys.KeyEnter:
 		if m.list.NumInstances() == 0 {
 			return m, nil
@@ -1109,6 +1118,11 @@ type hideErrMsg struct{}
 type previewTickMsg struct{}
 
 type instanceChangedMsg struct{}
+
+// infoMsg requests a dismissible information modal carrying actionable text.
+// Confirmation-action callbacks return it to surface a message that must persist
+// until the user dismisses it, instead of the auto-hiding transient error box.
+type infoMsg string
 
 type instanceStartedMsg struct {
 	instance *session.Instance
@@ -1376,6 +1390,82 @@ func (m *home) handleError(err error) tea.Cmd {
 	}
 }
 
+// resumeSelected resumes a paused instance and persists the new running state
+// (Resume itself only mutates in-memory status, so without this a crash before
+// the next save would leave the session stamped Paused). When resume is blocked
+// because the session branch is checked out in the BASE repo — the common result
+// of the Checkout action — it offers to detach the base repo and retry. When the
+// branch is held by a sibling worktree it surfaces a dismissible modal naming the
+// holder rather than auto-touching another live worktree.
+func (m *home) resumeSelected(selected *session.Instance) tea.Cmd {
+	err := selected.Resume()
+	if err == nil {
+		if serr := m.storage.SaveInstances(m.list.GetInstances()); serr != nil {
+			log.WarningLog.Printf("failed to persist resumed instance %s: %v", selected.Title, serr)
+		}
+		return tea.WindowSize()
+	}
+
+	// Only a branch-busy failure is recoverable; surface anything else as-is.
+	if !strings.Contains(err.Error(), "is checked out at ") {
+		return m.handleError(err)
+	}
+
+	wt, gerr := selected.GetGitWorktree()
+	if gerr != nil {
+		return m.handleError(err)
+	}
+	heldByBase, herr := wt.IsBranchHeldByBaseRepo()
+	if herr != nil || !heldByBase {
+		// Held by a sibling worktree (or undeterminable): report where it lives in
+		// a dismissible modal; never auto-detach another live worktree.
+		return m.showInfo(err.Error())
+	}
+
+	message := fmt.Sprintf("[!] Branch '%s' is checked out in the main repo. Detach it and resume?", wt.GetBranchName())
+	action := func() tea.Msg {
+		if derr := wt.DetachBranchInBaseRepo(); derr != nil {
+			// e.g. the dirty-repo refusal — show it in a modal the user can read.
+			return infoMsg(derr.Error())
+		}
+		if rerr := selected.Resume(); rerr != nil {
+			return rerr
+		}
+		if serr := m.storage.SaveInstances(m.list.GetInstances()); serr != nil {
+			log.WarningLog.Printf("failed to persist resumed instance %s: %v", selected.Title, serr)
+		}
+		return instanceChangedMsg{}
+	}
+	return m.confirmAction(message, action)
+}
+
+// showInfo displays an actionable message in a dismissible modal (reusing the
+// TextOverlay the help screen uses). Unlike handleError's 3-second box, it stays
+// until the user presses a key — appropriate for errors that require the user to
+// read and act (e.g. "branch is checked out at <path>"). It reuses m.textOverlay,
+// which is safe because only one modal state is active at a time.
+func (m *home) showInfo(text string) tea.Cmd {
+	log.ErrorLog.Printf("%s", text)
+	m.textOverlay = overlay.NewTextOverlay(text)
+	m.state = stateInfo
+	return nil
+}
+
+// handleInfoState dismisses the info modal on any key press.
+func (m *home) handleInfoState(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if m.textOverlay.HandleKeyPress(msg) {
+		m.state = stateDefault
+		return m, tea.Sequence(
+			tea.WindowSize(),
+			func() tea.Msg {
+				m.menu.SetState(ui.StateDefault)
+				return nil
+			},
+		)
+	}
+	return m, nil
+}
+
 // newSessionFormOverlay builds the unified new-session form (title, project, optional
 // profile, branch, prompt) for the `N` flow.
 func (m *home) newSessionFormOverlay() *overlay.TextInputOverlay {
@@ -1556,7 +1646,7 @@ func (m *home) View() string {
 			log.ErrorLog.Printf("text input overlay is nil")
 		}
 		return overlay.PlaceOverlay(0, 0, m.textInputOverlay.Render(), mainView, true, true)
-	} else if m.state == stateHelp {
+	} else if m.state == stateHelp || m.state == stateInfo {
 		if m.textOverlay == nil {
 			log.ErrorLog.Printf("text overlay is nil")
 		}
