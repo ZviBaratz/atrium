@@ -287,5 +287,11 @@ func (w *TabbedWindow) String() string {
 			w.width, w.height-windowStyle().GetVerticalFrameSize()-tabHeight,
 			lipgloss.Left, lipgloss.Top, content))
 
-	return lipgloss.JoinVertical(lipgloss.Left, row, window)
+	// Defensive height cap: lipgloss.Place aligns content but does not truncate, so
+	// an over-tall tab body (e.g. wrapped capture/diff lines) would make this column
+	// taller than its budget. View joins it against the list with JoinHorizontal, so
+	// any excess overflows the terminal and scrolls the whole frame. Bound it to
+	// w.height so the right column always matches the list column.
+	return lipgloss.NewStyle().MaxHeight(w.height).Render(
+		lipgloss.JoinVertical(lipgloss.Left, row, window))
 }

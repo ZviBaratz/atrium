@@ -182,8 +182,15 @@ func (p *PreviewPane) String() string {
 	}
 
 	content := strings.Join(lines, "\n")
-	rendered := previewPaneStyle().Width(p.width).Render(content)
-	return rendered
+	// Clamp the rendered block to the pane box. Using .Width() here would soft-wrap
+	// any captured line wider than the pane — common mid-resize, when capture-pane
+	// still reflects the pane's previous (wider) size — and those extra wrapped rows
+	// push the block past p.height. Since View composes the right pane against the
+	// list with JoinHorizontal, an over-tall preview makes the whole frame exceed the
+	// terminal height and scroll upward (then snap back once capture settles). The
+	// line-count truncation above does not account for wrapping, so cap both axes:
+	// MaxWidth truncates each line instead of wrapping, MaxHeight bounds the rows.
+	return previewPaneStyle().MaxWidth(p.width).MaxHeight(p.height).Render(content)
 }
 
 // ScrollUp scrolls up in the viewport
