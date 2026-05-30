@@ -425,8 +425,11 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.state = stateDefault
 			// Honor an in-session kill (Ctrl+X) requested from the freshly-opened
 			// session; key on msg.instance since the selection may have drifted.
+			// Keep tea.WindowSize() so the confirmation overlay redraws at the
+			// correct dimensions after the full-screen attach (confirmKill only
+			// mutates state and returns nil).
 			if msg.instance.AttachKillRequested() {
-				return m, m.confirmKill(msg.instance)
+				return m, tea.Batch(tea.WindowSize(), m.confirmKill(msg.instance))
 			}
 			return m, tea.Batch(tea.WindowSize(), m.instanceChanged())
 		}
@@ -1461,10 +1464,6 @@ func (m *home) killNewInstance() {
 	m.newInstance = nil
 }
 
-// confirmAction shows a confirmation modal and stores the action to execute on
-// confirm. The action is run (and its result dispatched) by the stateConfirm key
-// handler, not here, so its returned message — including any error — flows through
-// Update instead of being discarded.
 // confirmKill shows the kill-confirmation overlay for inst and stashes the
 // teardown action. inst need not be the selected instance: the in-session kill
 // key (Ctrl+X) and the auto-open path target a specific session regardless of
@@ -1506,6 +1505,10 @@ func (m *home) confirmKill(inst *session.Instance) tea.Cmd {
 	return m.confirmAction(message, killAction)
 }
 
+// confirmAction shows a confirmation modal and stores the action to execute on
+// confirm. The action is run (and its result dispatched) by the stateConfirm key
+// handler, not here, so its returned message — including any error — flows through
+// Update instead of being discarded.
 func (m *home) confirmAction(message string, action tea.Cmd) tea.Cmd {
 	m.state = stateConfirm
 	m.pendingConfirmAction = action

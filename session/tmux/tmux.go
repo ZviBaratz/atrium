@@ -489,6 +489,42 @@ func (t *TmuxSession) HasUpdated() (updated bool, hasPrompt bool) {
 	return s == PaneWorking, s == PanePrompt
 }
 
+// attachInputAction is the outcome of classifying a chunk of attach stdin: keep
+// forwarding it to the pty, detach, or detach-and-request-kill.
+type attachInputAction int
+
+const (
+	attachForward attachInputAction = iota
+	attachDetach
+	attachKill
+)
+
+// Control bytes intercepted while attached.
+const (
+	ctrlQ = 17 // detach
+	ctrlX = 24 // kill (detach + request teardown)
+)
+
+// classifyAttachInput decides what a single stdin read means while attached.
+// Ctrl+Q detaches; Ctrl+X requests a kill but only when allowKill is set (agent
+// sessions, not the Terminal-tab shell, where Ctrl+X is a normal editing key).
+// A control byte is only honored when it arrives alone (a single-byte read) so
+// it isn't mistaken for part of a longer escape sequence or paste. Everything
+// else is forwarded to the pty unchanged.
+func classifyAttachInput(in []byte, allowKill bool) attachInputAction {
+	if len(in) == 1 {
+		switch in[0] {
+		case ctrlQ:
+			return attachDetach
+		case ctrlX:
+			if allowKill {
+				return attachKill
+			}
+		}
+	}
+	return attachForward
+}
+
 // Attach connects the terminal to the tmux session and blocks (via the returned
 // channel) until the user detaches. When allowKill is true, the in-session kill
 // key (Ctrl+X) detaches and sets KillRequested so the caller can tear the session
@@ -555,25 +591,20 @@ func (t *TmuxSession) Attach(allowKill bool) (chan struct{}, error) {
 				continue
 			}
 
-			// Check for Ctrl+q (ASCII 17)
-			if nr == 1 && buf[0] == 17 {
-				// Detach from the session
+			switch classifyAttachInput(buf[:nr], allowKill) {
+			case attachDetach:
 				t.Detach()
 				return
-			}
-
-			// Check for Ctrl+x (ASCII 24): detach and request a kill. The caller
-			// (after the attach returns) reads KillRequested and runs the teardown
-			// confirmation. Only honored when allowKill is set (agent sessions),
-			// not for the Terminal-tab shell where Ctrl+X is a normal editing key.
-			if allowKill && nr == 1 && buf[0] == 24 {
+			case attachKill:
+				// Detach and request a kill; the caller reads KillRequested after
+				// the attach returns and runs the teardown confirmation.
 				t.killRequested = true
 				t.Detach()
 				return
+			default:
+				// Forward other input to tmux.
+				_, _ = t.ptmx.Write(buf[:nr])
 			}
-
-			// Forward other input to tmux
-			_, _ = t.ptmx.Write(buf[:nr])
 		}
 	}()
 
