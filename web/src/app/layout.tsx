@@ -23,11 +23,11 @@ export const metadata: Metadata = {
   title: "Atrium - Manage Multiple AI Code Assistants",
   description: "A terminal app that manages multiple AI code assistants (Claude Code, Codex, Aider, etc.) in separate workspaces, allowing you to work on multiple tasks simultaneously.",
   keywords: ["atrium", "ai", "code assistant", "terminal", "tmux", "claude code", "codex", "aider"],
-  authors: [{ name: "ZviBaratz" }],
+  authors: [{ name: "Zvi Baratz" }],
   openGraph: {
     title: "Atrium",
     description: "A terminal app that manages multiple AI code assistants in separate workspaces",
-    url: "https://github.com/ZviBaratz/atrium",
+    url: "https://zvibaratz.github.io/atrium/",
     type: "website",
   },
   twitter: {

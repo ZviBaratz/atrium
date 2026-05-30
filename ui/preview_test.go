@@ -148,9 +148,8 @@ func TestPreviewScrolling(t *testing.T) {
 			if strings.Contains(cmdStr, "has-session") {
 				if sessionCreated {
 					return nil // Session exists
-				} else {
-					return fmt.Errorf("session does not exist")
 				}
+				return fmt.Errorf("session does not exist")
 			}
 
 			// Handle session creation
@@ -328,9 +327,8 @@ func TestPreviewContentWithoutScrolling(t *testing.T) {
 			if strings.Contains(cmdStr, "has-session") {
 				if sessionCreated {
 					return nil // Session exists
-				} else {
-					return fmt.Errorf("session does not exist")
 				}
+				return fmt.Errorf("session does not exist")
 			}
 
 			// Handle session creation
@@ -378,12 +376,4 @@ func TestPreviewContentWithoutScrolling(t *testing.T) {
 	// Verify the rendered string contains the content
 	renderedString := previewPane.String()
 	require.Contains(t, renderedString, "test", "Rendered preview should contain the test content")
-}
-
-// Helper function for max
-func max(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
 }

@@ -5,34 +5,48 @@ on:
     tags:
       - 'v*'
 
+# Default to read-only; the release job widens to exactly what it needs.
+permissions:
+  contents: read
+
 jobs:
-  build:
-    permissions: write-all
+  release:
     name: Build Release
     runs-on: ubuntu-latest
+    permissions:
+      contents: write       # create the GitHub release and upload assets
+      id-token: write       # OIDC token for keyless cosign signing + provenance
+      attestations: write   # write build-provenance attestations
 
     steps:
       - name: Check out code into the Go module directory
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
         with:
           fetch-depth: 0
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff  # v5
         with:
           go-version-file: go.mod
 
       # syft generates the per-archive SBOMs configured in .goreleaser.yaml.
       - name: Install syft
-        uses: anchore/sbom-action/download-syft@v0
+        uses: anchore/sbom-action/download-syft@e22c389904149dbc22b58101806040fa8d37a610  # v0
+
+      # cosign performs the keyless signing of checksums.txt (signs block in
+      # .goreleaser.yaml) using this workflow's OIDC identity.
+      - name: Install cosign
+        uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac  # v3
 
       # Per-tag release notes override: if .github/release-notes/<tag>.md exists,
       # use it as the release body (bypasses the auto-generated changelog).
       # Without it, GoReleaser's grouped changelog runs as normal.
       - name: Determine GoReleaser args
         id: gr
+        env:
+          REF: ${{ github.ref }}
         run: |
-          TAG="${GITHUB_REF#refs/tags/}"
+          TAG="${REF#refs/tags/}"
           NOTES=".github/release-notes/${TAG}.md"
           if [ -f "$NOTES" ]; then
             echo "Using manual release notes from $NOTES"
@@ -43,9 +57,17 @@ jobs:
           fi
 
       - name: Run GoReleaser
-        uses: goreleaser/goreleaser-action@v6
+        uses: goreleaser/goreleaser-action@e435ccd777264be153ace6237001ef4d979d3a7a  # v6
         with:
           version: latest
           args: ${{ steps.gr.outputs.args }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # SLSA build provenance over every released artifact. subject-checksums
+      # attests each file listed in checksums.txt by its digest in a single step.
+      # Verify: gh attestation verify <artifact> --repo ZviBaratz/atrium
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be  # v2
+        with:
+          subject-checksums: dist/checksums.txt

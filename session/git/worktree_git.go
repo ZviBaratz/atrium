@@ -184,7 +184,7 @@ func (g *GitWorktree) IsBranchCheckedOut() (bool, error) {
 	if err != nil {
 		return false, fmt.Errorf("failed to get current branch: %w", err)
 	}
-	return strings.TrimSpace(string(output)) == g.branchName, nil
+	return strings.TrimSpace(output) == g.branchName, nil
 }
 
 // OpenBranchURL opens the branch URL in the default browser

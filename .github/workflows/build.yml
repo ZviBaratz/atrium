@@ -1,33 +1,52 @@
 name: Build
 
 on:
+  # No paths filter on purpose: these jobs are required by branch protection, so
+  # they must report on every PR. A path-filtered required check never reports
+  # on a docs/web-only PR, which leaves the check "pending" forever and blocks
+  # the merge (forcing an admin bypass). Running the Go suite on non-Go PRs is
+  # cheap and cached; it is the price of not having to override protection.
   push:
     branches: [ main ]
-    paths:
-      - '**.go'
-      - 'go.mod'
-      - 'go.sum'
-      - '.github/workflows/build.yml'
   pull_request:
     branches: [ main ]
-    paths:
-      - '**.go'
-      - 'go.mod'
-      - 'go.sum'
-      - '.github/workflows/build.yml'
+
+# Least privilege: this workflow only reads the repo. Widen per-job if needed.
+permissions:
+  contents: read
+
+# Cancel superseded runs on the same ref (PR pushes) to save CI minutes.
+concurrency:
+  group: build-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   test:
-    name: Test
-    runs-on: ubuntu-latest
+    name: Test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # Atrium is Unix-centric (tmux/PTY/git). macOS catches darwin-specific
+        # behavior; Windows stays build-only (tmux/PTY do not apply there).
+        os: [ubuntu-latest, macos-latest]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff  # v5
         with:
           go-version-file: go.mod
           cache: true
+
+      - name: go vet
+        run: go vet ./...
+
+      # Fail if go.mod/go.sum are not tidy (stale or missing dependencies).
+      - name: go mod tidy is a no-op
+        run: |
+          go mod tidy
+          git diff --exit-code go.mod go.sum
 
       # TestSessionDeathStopsProbing drives a real tmux server through a PTY and is
       # environment-sensitive (a local-only integration test); the death-probing
@@ -35,15 +54,43 @@ jobs:
       - name: Test with coverage
         run: go test -coverprofile=coverage.out -skip TestSessionDeathStopsProbing ./...
 
-      - name: Coverage summary
-        run: go tool cover -func=coverage.out | tail -1
+      # Coverage floor. Baseline at introduction was 46.7%; the floor sits a couple
+      # points below and should be ratcheted up over time, never down.
+      - name: Enforce coverage floor
+        if: matrix.os == 'ubuntu-latest'
+        env:
+          COVERAGE_FLOOR: '44.0'
+        run: |
+          total="$(go tool cover -func=coverage.out | awk '/^total:/ {gsub(/%/,"",$3); print $3}')"
+          echo "Total coverage: ${total}% (floor: ${COVERAGE_FLOOR}%)"
+          awk -v t="$total" -v f="$COVERAGE_FLOOR" 'BEGIN { exit (t+0 < f+0) ? 1 : 0 }' || {
+            echo "::error::Coverage ${total}% is below the floor of ${COVERAGE_FLOOR}%"
+            exit 1
+          }
 
       - name: Upload coverage
-        uses: actions/upload-artifact@v4
+        if: matrix.os == 'ubuntu-latest'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
         with:
           name: coverage
           path: coverage.out
           retention-days: 7
+
+  race:
+    name: Race detector
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+
+      - name: Set up Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff  # v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # -shuffle=on surfaces test-order coupling; -race catches data races.
+      - name: Test with race detector
+        run: go test -race -shuffle=on -skip TestSessionDeathStopsProbing ./...
 
   build:
     name: Build ${{ matrix.goos }}/${{ matrix.goarch }}
@@ -57,10 +104,10 @@ jobs:
             goarch: arm64
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff  # v5
         with:
           go-version-file: go.mod
           cache: true
@@ -77,7 +124,7 @@ jobs:
           go build -v -trimpath -o build/${{ matrix.goos }}_${{ matrix.goarch }}/$BINARY_NAME
 
       - name: Upload artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
         with:
           name: atrium-${{ matrix.goos }}-${{ matrix.goarch }}
           path: build/${{ matrix.goos }}_${{ matrix.goarch }}/*

@@ -64,12 +64,12 @@ get_latest_version() {
         echo "Failed to connect to GitHub API"
         exit 1
     fi
-    
+
     if echo "$API_RESPONSE" | grep -q "Not Found"; then
         echo "No releases found in the repository"
         exit 1
     fi
-    
+
     # Get the first release (latest) from the array
     LATEST_VERSION=$(echo "$API_RESPONSE" | grep -m1 '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/' | sed 's/^v//')
     if [ -z "$LATEST_VERSION" ]; then
@@ -89,7 +89,7 @@ download_release() {
     echo "Downloading binary from $binary_url"
     DOWNLOAD_OUTPUT=$(curl -sS -L -f -w '%{http_code}' "$binary_url" -o "${tmp_dir}/${archive_name}" 2>&1)
     HTTP_CODE=$?
-    
+
     if [ $HTTP_CODE -ne 0 ]; then
         echo "Error: Failed to download release asset"
         echo "This could be because:"
@@ -182,11 +182,11 @@ check_command_exists() {
 
 check_and_install_dependencies() {
     echo "Checking for required dependencies..."
-    
+
     # Check for tmux
     if ! command -v tmux &> /dev/null; then
         echo "tmux is not installed. Installing tmux..."
-        
+
         if [[ "$PLATFORM" == "darwin" ]]; then
             # macOS
             if command -v brew &> /dev/null; then
@@ -215,16 +215,16 @@ check_and_install_dependencies() {
             echo "For Windows, please install tmux via WSL or another method."
             exit 1
         fi
-        
+
         echo "tmux installed successfully."
     else
         echo "tmux is already installed."
     fi
-    
+
     # Check for GitHub CLI (gh)
     if ! command -v gh &> /dev/null; then
         echo "GitHub CLI (gh) is not installed. Installing GitHub CLI..."
-        
+
         if [[ "$PLATFORM" == "darwin" ]]; then
             # macOS
             if command -v brew &> /dev/null; then
@@ -263,12 +263,12 @@ check_and_install_dependencies() {
             echo "Visit https://github.com/cli/cli#installation for installation instructions."
             exit 1
         fi
-        
+
         echo "GitHub CLI (gh) installed successfully."
     else
         echo "GitHub CLI (gh) is already installed."
     fi
-    
+
     echo "All dependencies are installed."
 }
 
@@ -276,7 +276,7 @@ main() {
     # Parse command line arguments
     INSTALL_NAME="atrium"
     UPGRADE_MODE=false
-    
+
     while [[ $# -gt 0 ]]; do
         case $1 in
             --name)
@@ -293,9 +293,9 @@ main() {
 
     check_command_exists
     detect_platform_and_arch
-    
+
     check_and_install_dependencies
-    
+
     setup_shell_and_path
 
     VERSION=${VERSION:-"latest"}
@@ -307,7 +307,7 @@ main() {
     ARCHIVE_NAME="atrium_${VERSION}_${PLATFORM}_${ARCHITECTURE}${ARCHIVE_EXT}"
     BINARY_URL="${RELEASE_URL}/${ARCHIVE_NAME}"
     TMP_DIR=$(mktemp -d)
-    
+
     download_release "$VERSION" "$BINARY_URL" "$ARCHIVE_NAME" "$TMP_DIR"
     extract_and_install "$TMP_DIR" "$ARCHIVE_NAME" "$BIN_DIR" "$EXTENSION"
 }
