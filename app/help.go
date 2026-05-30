@@ -53,7 +53,7 @@ func (h helpTypeGeneral) toContent() string {
 	)
 
 	return lipgloss.JoinVertical(lipgloss.Left,
-		helpTitleStyle().Render("Claude Squad — Keys"),
+		helpTitleStyle().Render("Atrium — Keys"),
 		"",
 		helpHeaderStyle().Render("Navigate"),
 		helpRow("↑/k ↓/j", "move selection"),
@@ -93,7 +93,7 @@ func (h helpTypeGeneral) toContent() string {
 
 func (h helpTypeWelcome) toContent() string {
 	return lipgloss.JoinVertical(lipgloss.Left,
-		helpTitleStyle().Render("Welcome to Claude Squad"),
+		helpTitleStyle().Render("Welcome to Atrium"),
 		"",
 		helpDescStyle().Render("Run multiple coding agents in parallel — each in its own"),
 		helpDescStyle().Render("git worktree and tmux session, managed from one place."),
