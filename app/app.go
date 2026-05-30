@@ -30,11 +30,15 @@ const GlobalInstanceLimit = 10
 
 // Run is the main entrypoint into the application.
 func Run(ctx context.Context, program string, autoYes bool) error {
+	h := newHome(ctx, program, autoYes)
 	p := tea.NewProgram(
-		newHome(ctx, program, autoYes),
+		h,
 		tea.WithAltScreen(),
 		tea.WithMouseCellMotion(), // Mouse scroll
 	)
+	// Hand the program back to the model so attach handlers can release and
+	// reclaim the terminal around a tmux takeover (see attachWithHandoff).
+	h.teaProgram = p
 	_, err := p.Run()
 	return err
 }
@@ -116,6 +120,12 @@ type home struct {
 	// recomputed off a synthesized size event — e.g. when an error appears or
 	// clears and the panes must give up or reclaim the error box's row.
 	windowWidth, windowHeight int
+
+	// teaProgram is the running Bubble Tea program, set once in Run after the
+	// model is constructed. Attach handlers use it to release the terminal to a
+	// tmux session and reclaim it cleanly on detach (see attachWithHandoff). It
+	// is nil in tests that build home directly, so callers must guard for that.
+	teaProgram *tea.Program
 
 	// -- UI Components --
 
@@ -418,21 +428,19 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// instanceStartedMsg from another freshly-created session could have moved
 			// the list selection by now. Attaching blocks until the user detaches
 			// (ctrl-q); the hint bar carries the detach reminder, so no teaching modal.
-			ch, err := msg.instance.Attach()
-			if err != nil {
+			if err := m.attachWithHandoff(msg.instance.Attach); err != nil {
 				return m, m.handleError(err)
 			}
-			<-ch
 			m.state = stateDefault
 			// Honor an in-session kill (Ctrl+X) requested from the freshly-opened
 			// session; key on msg.instance since the selection may have drifted.
-			// Keep tea.WindowSize() so the confirmation overlay redraws at the
-			// correct dimensions after the full-screen attach (confirmKill only
-			// mutates state and returns nil).
+			// attachWithHandoff's RestoreTerminal repaints the whole frame, so the
+			// confirmation overlay draws at the correct dimensions without a
+			// separate tea.WindowSize() (confirmKill only mutates state).
 			if msg.instance.AttachKillRequested() {
-				return m, tea.Batch(tea.WindowSize(), m.confirmKill(msg.instance))
+				return m, m.confirmKill(msg.instance)
 			}
-			return m, tea.Batch(tea.WindowSize(), m.instanceChanged())
+			return m, m.instanceChanged()
 		}
 
 		return m, tea.Batch(tea.WindowSize(), m.instanceChanged())
@@ -1008,19 +1016,15 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		// Terminal tab: attach to terminal session. Attaching blocks until the
 		// user detaches (ctrl-q); the hint bar carries the detach reminder.
 		if m.tabbedWindow.IsInTerminalTab() {
-			ch, err := m.tabbedWindow.AttachTerminal()
-			if err != nil {
+			if err := m.attachWithHandoff(m.tabbedWindow.AttachTerminal); err != nil {
 				return m, m.handleError(err)
 			}
-			<-ch
 			m.state = stateDefault
-			return m, nil
+			return m, m.instanceChanged()
 		}
-		ch, err := m.list.Attach()
-		if err != nil {
+		if err := m.attachWithHandoff(m.list.Attach); err != nil {
 			return m, m.handleError(err)
 		}
-		<-ch
 		m.state = stateDefault
 		// If the user pressed the in-session kill key (Ctrl+X) before detaching,
 		// run the normal kill-confirmation flow on the session they just left.
@@ -1054,6 +1058,33 @@ func (m *home) deepRename(selected *session.Instance, value string) error {
 	}
 	selected.SetDisplayName("")
 	return m.storage.SaveInstances(m.list.GetInstances())
+}
+
+// attachWithHandoff releases the terminal to an external tmux session, blocks
+// until the user detaches, then reclaims it. Attaching copies the session's pty
+// straight to os.Stdout, bypassing Bubble Tea's renderer; without a clean
+// hand-off the renderer's cached frame is stale on return and the panes paint
+// short for a frame before filling out on the next tick. ReleaseTerminal stops
+// Bubble Tea's input reader (so it no longer competes with the attach goroutine
+// for stdin) and RestoreTerminal re-enters the alt screen and repaints in one
+// frame. teaProgram is nil in tests, so the hand-off is skipped there.
+func (m *home) attachWithHandoff(attach func() (chan struct{}, error)) error {
+	if m.teaProgram != nil {
+		if err := m.teaProgram.ReleaseTerminal(); err != nil {
+			return err
+		}
+		defer func() {
+			if err := m.teaProgram.RestoreTerminal(); err != nil {
+				log.ErrorLog.Printf("failed to restore terminal after detach: %v", err)
+			}
+		}()
+	}
+	ch, err := attach()
+	if err != nil {
+		return err
+	}
+	<-ch
+	return nil
 }
 
 func (m *home) instanceChanged() tea.Cmd {
