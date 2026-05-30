@@ -56,3 +56,30 @@ func TestState_CollapsedReposRoundTrip(t *testing.T) {
 	loaded := LoadState()
 	assert.Equal(t, []string{"repoA", "repoB"}, loaded.GetCollapsedRepos())
 }
+
+func TestState_ListRatioDefault(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	// A fresh state uses the default split.
+	assert.Equal(t, defaultListRatio, DefaultState().GetListRatio())
+
+	// A zero value (e.g. an older state.json with no list_ratio key) also reads
+	// as the default rather than collapsing the list to nothing.
+	assert.Equal(t, defaultListRatio, (&State{}).GetListRatio())
+}
+
+func TestState_ListRatioClampAndRoundTrip(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	s := DefaultState()
+
+	// A valid ratio is stored and survives a reload.
+	require.NoError(t, s.SetListRatio(0.45))
+	assert.Equal(t, 0.45, LoadState().GetListRatio())
+
+	// Out-of-range values clamp to the bounds.
+	require.NoError(t, s.SetListRatio(0.9))
+	assert.Equal(t, maxListRatio, s.GetListRatio())
+	require.NoError(t, s.SetListRatio(0.01))
+	assert.Equal(t, minListRatio, s.GetListRatio())
+}

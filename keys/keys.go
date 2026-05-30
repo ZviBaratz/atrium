@@ -51,6 +51,10 @@ const (
 	KeyFilter // Enter incremental filter mode to narrow the session list
 
 	KeyCopyBranch // Copy the selected session's branch name to the clipboard
+
+	// Pane resize keybindings: grow/shrink the session list relative to the preview.
+	KeyShrinkList
+	KeyGrowList
 )
 
 // GlobalKeyStringsMap is a global, immutable map string to keybinding.
@@ -84,6 +88,8 @@ var GlobalKeyStringsMap = map[string]KeyName{
 	"p":          KeySubmit,
 	"?":          KeyHelp,
 	"/":          KeyFilter,
+	"<":          KeyShrinkList,
+	">":          KeyGrowList,
 }
 
 // GlobalkeyBindings is a global, immutable map of KeyName tot keybinding.
@@ -193,6 +199,14 @@ var GlobalkeyBindings = map[KeyName]key.Binding{
 	KeyCopyBranch: key.NewBinding(
 		key.WithKeys("y"),
 		key.WithHelp("y", "copy branch name"),
+	),
+	KeyShrinkList: key.NewBinding(
+		key.WithKeys("<"),
+		key.WithHelp("<", "shrink list"),
+	),
+	KeyGrowList: key.NewBinding(
+		key.WithKeys(">"),
+		key.WithHelp(">", "grow list"),
 	),
 
 	// -- Special keybindings --

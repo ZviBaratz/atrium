@@ -37,10 +37,33 @@ type AppState interface {
 	GetCollapsedRepos() []string
 	// SetCollapsedRepos replaces the set of folded repo group keys
 	SetCollapsedRepos(repos []string) error
+	// GetListRatio returns the fraction of width given to the session list
+	GetListRatio() float64
+	// SetListRatio stores the list/preview split (clamped to a sane range)
+	SetListRatio(ratio float64) error
 }
 
 // maxRecentPaths caps how many recently-used project directories are retained.
 const maxRecentPaths = 10
+
+// List/preview split bounds. listRatio is the fraction of the terminal width
+// given to the session list; the clamp keeps either pane from collapsing.
+const (
+	defaultListRatio = 0.30
+	minListRatio     = 0.15
+	maxListRatio     = 0.60
+)
+
+// clampListRatio bounds r to [minListRatio, maxListRatio].
+func clampListRatio(r float64) float64 {
+	if r < minListRatio {
+		return minListRatio
+	}
+	if r > maxListRatio {
+		return maxListRatio
+	}
+	return r
+}
 
 // StateManager combines instance storage and app state management
 type StateManager interface {
@@ -58,6 +81,9 @@ type State struct {
 	RecentPaths []string `json:"recent_paths"`
 	// CollapsedRepos is the set of repo group keys the session list should render folded
 	CollapsedRepos []string `json:"collapsed_repos"`
+	// ListRatio is the fraction of the terminal width given to the session list.
+	// Zero (an older state file with no such key) reads back as defaultListRatio.
+	ListRatio float64 `json:"list_ratio,omitempty"`
 }
 
 // DefaultState returns the default state
@@ -67,6 +93,7 @@ func DefaultState() *State {
 		InstancesData:   json.RawMessage("[]"),
 		RecentPaths:     []string{},
 		CollapsedRepos:  []string{},
+		ListRatio:       defaultListRatio,
 	}
 }
 
@@ -188,5 +215,21 @@ func (s *State) GetCollapsedRepos() []string {
 // SetCollapsedRepos replaces the set of folded repo group keys and persists it.
 func (s *State) SetCollapsedRepos(repos []string) error {
 	s.CollapsedRepos = repos
+	return SaveState(s)
+}
+
+// GetListRatio returns the fraction of width given to the session list. A zero or
+// out-of-range stored value (older state files, or a hand-edited state.json) is
+// normalized: zero becomes the default, everything else clamps to the bounds.
+func (s *State) GetListRatio() float64 {
+	if s.ListRatio == 0 {
+		return defaultListRatio
+	}
+	return clampListRatio(s.ListRatio)
+}
+
+// SetListRatio stores the list/preview split, clamped to a sane range, and persists it.
+func (s *State) SetListRatio(ratio float64) error {
+	s.ListRatio = clampListRatio(ratio)
 	return SaveState(s)
 }

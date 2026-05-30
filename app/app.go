@@ -112,6 +112,10 @@ type home struct {
 	// clears and the panes must give up or reclaim the error box's row.
 	windowWidth, windowHeight int
 
+	// listRatio is the live fraction of width given to the session list (the rest
+	// goes to the preview pane). Adjusted with < / > and persisted via appState.
+	listRatio float64
+
 	// -- UI Components --
 
 	// list displays the list of instances
@@ -179,6 +183,7 @@ func newHome(ctx context.Context, program string, autoYes bool) *home {
 		autoYes:      autoYes,
 		state:        stateDefault,
 		appState:     appState,
+		listRatio:    appState.GetListRatio(),
 	}
 	h.list = ui.NewList(&h.spinner, autoYes)
 
@@ -207,8 +212,15 @@ func newHome(ctx context.Context, program string, autoYes bool) *home {
 // updateHandleWindowSizeEvent sets the sizes of the components.
 // The components will try to render inside their bounds.
 func (m *home) updateHandleWindowSizeEvent(msg tea.WindowSizeMsg) {
-	// List takes 30% of width, preview takes 70%
-	listWidth := int(float32(msg.Width) * 0.3)
+	// The session list takes listRatio of the width (default 30%); the preview pane
+	// takes the rest. listRatio is user-adjustable with < / > (clamped in appState).
+	// A zero value means the home was built without seeding the ratio (e.g. a struct
+	// literal in tests); fall back to the persisted/default value so the list never
+	// collapses to nothing.
+	if m.listRatio <= 0 {
+		m.listRatio = m.appState.GetListRatio()
+	}
+	listWidth := int(float32(msg.Width) * float32(m.listRatio))
 	tabsWidth := msg.Width - listWidth
 
 	m.windowWidth, m.windowHeight = msg.Width, msg.Height
@@ -254,6 +266,21 @@ func (m *home) recomputeLayout() {
 		return
 	}
 	m.updateHandleWindowSizeEvent(tea.WindowSizeMsg{Width: m.windowWidth, Height: m.windowHeight})
+}
+
+// listRatioStep is how much each < / > press shifts the list/preview split.
+const listRatioStep = 0.05
+
+// adjustListRatio nudges the list/preview split by delta, persists the clamped
+// value, re-pushes sizes to every pane, and refreshes the preview at its new width.
+// appState owns the clamp, so the stored and live values stay in lockstep.
+func (m *home) adjustListRatio(delta float64) tea.Cmd {
+	if err := m.appState.SetListRatio(m.listRatio + delta); err != nil {
+		return m.handleError(err)
+	}
+	m.listRatio = m.appState.GetListRatio()
+	m.recomputeLayout()
+	return m.instanceChanged()
 }
 
 func (m *home) Init() tea.Cmd {
@@ -850,6 +877,10 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 	case keys.KeyShiftDown:
 		m.tabbedWindow.ScrollDown()
 		return m, m.instanceChanged()
+	case keys.KeyShrinkList:
+		return m, m.adjustListRatio(-listRatioStep)
+	case keys.KeyGrowList:
+		return m, m.adjustListRatio(+listRatioStep)
 	case keys.KeyTab:
 		m.tabbedWindow.Toggle()
 		m.menu.SetActiveTab(m.tabbedWindow.GetActiveTab())
