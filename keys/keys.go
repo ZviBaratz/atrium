@@ -57,6 +57,11 @@ const (
 	KeyGrowList
 )
 
+// KillKey is the chord that triggers a kill from the session list. It mirrors the
+// in-session kill byte (ctrlX, session/tmux/tmux.go) so the same key tears a session
+// down whether you're on the list or attached to it.
+const KillKey = "ctrl+x"
+
 // GlobalKeyStringsMap is a global, immutable map string to keybinding.
 var GlobalKeyStringsMap = map[string]KeyName{
 	"up":         KeyUp,
@@ -75,7 +80,7 @@ var GlobalKeyStringsMap = map[string]KeyName{
 	"enter":      KeyEnter,
 	"o":          KeyEnter,
 	"n":          KeyNew,
-	"D":          KeyKill,
+	KillKey:      KeyKill,
 	"R":          KeyRename,
 	"A":          KeyAutoName,
 	"right":      KeyQuickSend,
@@ -119,8 +124,8 @@ var GlobalkeyBindings = map[KeyName]key.Binding{
 		key.WithHelp("n", "new"),
 	),
 	KeyKill: key.NewBinding(
-		key.WithKeys("D"),
-		key.WithHelp("D", "kill"),
+		key.WithKeys(KillKey),
+		key.WithHelp("ctrl-x", "kill"),
 	),
 	KeyRename: key.NewBinding(
 		key.WithKeys("R"),

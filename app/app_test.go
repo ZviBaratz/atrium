@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"github.com/ZviBaratz/atrium/config"
+	"github.com/ZviBaratz/atrium/keys"
 	"github.com/ZviBaratz/atrium/log"
 	"github.com/ZviBaratz/atrium/session"
 	"github.com/ZviBaratz/atrium/session/tmux"
@@ -458,6 +459,56 @@ func TestConfirmationFlowSimulation(t *testing.T) {
 	// Test that overlay renders with the correct message
 	rendered := h.confirmationOverlay.Render()
 	assert.Contains(t, rendered, "Kill session 'test-session'?")
+}
+
+// TestConfirmKillDoubleTapAltKey verifies that confirmKill enables the double-tap
+// confirm (the kill chord as a second confirm key) only when the toggle is on, and
+// that the generic confirmAction path never gets that alt key.
+func TestConfirmKillDoubleTapAltKey(t *testing.T) {
+	newHomeWithInstance := func(t *testing.T, cfg *config.Config) (*home, *session.Instance) {
+		t.Helper()
+		spin := spinner.New(spinner.WithSpinner(spinner.MiniDot))
+		list := ui.NewList(&spin, false)
+		instance, err := session.NewInstance(session.InstanceOptions{
+			Title:   "test-session",
+			Path:    t.TempDir(),
+			Program: "claude",
+		})
+		require.NoError(t, err)
+		_ = list.AddInstance(instance)
+		list.SetSelectedInstance(0)
+		return &home{
+			ctx:       context.Background(),
+			state:     stateDefault,
+			appConfig: cfg,
+			list:      list,
+			menu:      ui.NewMenu(),
+		}, instance
+	}
+
+	t.Run("toggle on sets the kill chord as an alt confirm key", func(t *testing.T) {
+		h, inst := newHomeWithInstance(t, config.DefaultConfig())
+		h.confirmKill(inst)
+		require.NotNil(t, h.confirmationOverlay)
+		assert.Equal(t, keys.KillKey, h.confirmationOverlay.ConfirmAltKey)
+	})
+
+	t.Run("toggle off leaves the alt key unset", func(t *testing.T) {
+		off := false
+		cfg := config.DefaultConfig()
+		cfg.KillDoubleTapConfirm = &off
+		h, inst := newHomeWithInstance(t, cfg)
+		h.confirmKill(inst)
+		require.NotNil(t, h.confirmationOverlay)
+		assert.Equal(t, "", h.confirmationOverlay.ConfirmAltKey)
+	})
+
+	t.Run("generic confirmAction never gets the alt key", func(t *testing.T) {
+		h, _ := newHomeWithInstance(t, config.DefaultConfig())
+		h.confirmAction("Push branch?", func() tea.Msg { return nil })
+		require.NotNil(t, h.confirmationOverlay)
+		assert.Equal(t, "", h.confirmationOverlay.ConfirmAltKey)
+	})
 }
 
 // TestConfirmActionWithDifferentTypes verifies that confirming an action routes

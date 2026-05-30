@@ -19,6 +19,10 @@ type ConfirmationOverlay struct {
 	width int
 	// Custom confirm key (defaults to 'y')
 	ConfirmKey string
+	// ConfirmAltKey is an optional second key that also confirms. Empty means
+	// unused. Set, for example, to the kill chord so pressing it again confirms a
+	// kill dialog (double-tap to kill).
+	ConfirmAltKey string
 	// Custom cancel key (defaults to 'n')
 	CancelKey string
 	// Custom styling options
@@ -40,12 +44,13 @@ func NewConfirmationOverlay(message string) *ConfirmationOverlay {
 // HandleKeyPress processes a key press and updates the state
 // Returns true if the overlay should be closed
 func (c *ConfirmationOverlay) HandleKeyPress(msg tea.KeyMsg) bool {
-	switch msg.String() {
-	case c.ConfirmKey:
+	s := msg.String()
+	switch {
+	case s == c.ConfirmKey, c.ConfirmAltKey != "" && s == c.ConfirmAltKey:
 		c.Dismissed = true
 		c.Confirmed = true
 		return true
-	case c.CancelKey, "esc":
+	case s == c.CancelKey, s == "esc":
 		c.Dismissed = true
 		return true
 	default:
@@ -62,9 +67,14 @@ func (c *ConfirmationOverlay) Render(opts ...WhitespaceOption) string {
 		Padding(1, 2).
 		Width(c.width)
 
-	// Add the confirmation instructions
+	// Add the confirmation instructions. When an alt confirm key is set (e.g. the
+	// kill chord for double-tap), surface it alongside the primary confirm key.
+	confirmHint := lipgloss.NewStyle().Bold(true).Render(c.ConfirmKey)
+	if c.ConfirmAltKey != "" {
+		confirmHint += " (or " + lipgloss.NewStyle().Bold(true).Render(c.ConfirmAltKey) + ")"
+	}
 	content := c.message + "\n\n" +
-		"Press " + lipgloss.NewStyle().Bold(true).Render(c.ConfirmKey) + " to confirm, " +
+		"Press " + confirmHint + " to confirm, " +
 		lipgloss.NewStyle().Bold(true).Render(c.CancelKey) + " or " +
 		lipgloss.NewStyle().Bold(true).Render("esc") + " to cancel"
 
@@ -85,6 +95,11 @@ func (c *ConfirmationOverlay) SetBorderColor(color lipgloss.Color) {
 // SetConfirmKey sets the key used to confirm the action
 func (c *ConfirmationOverlay) SetConfirmKey(key string) {
 	c.ConfirmKey = key
+}
+
+// SetConfirmAltKey sets an optional second key that also confirms the action.
+func (c *ConfirmationOverlay) SetConfirmAltKey(key string) {
+	c.ConfirmAltKey = key
 }
 
 // SetCancelKey sets the key used to cancel the action

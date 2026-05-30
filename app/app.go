@@ -1710,7 +1710,14 @@ func (m *home) confirmKill(inst *session.Instance) tea.Cmd {
 	}
 
 	message := fmt.Sprintf("[!] Kill session '%s'?", inst.DisplayName())
-	return m.confirmAction(message, killAction)
+	cmd := m.confirmAction(message, killAction)
+	// Opt-in: a second press of the kill key confirms the dialog, so Ctrl+X Ctrl+X
+	// kills in one motion. Scoped to the kill dialog (other confirmations still
+	// require 'y'); confirmAction created m.confirmationOverlay synchronously above.
+	if m.appConfig.GetKillDoubleTapConfirm() {
+		m.confirmationOverlay.SetConfirmAltKey(keys.KillKey)
+	}
+	return cmd
 }
 
 // confirmAction shows a confirmation modal and stores the action to execute on

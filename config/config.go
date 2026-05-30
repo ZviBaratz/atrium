@@ -66,6 +66,10 @@ type Config struct {
 	// starts (and has no initial prompt). nil means use the default (on), so the
 	// feature stays enabled for config files written before it existed.
 	AutoAttach *bool `json:"auto_attach,omitempty"`
+	// KillDoubleTapConfirm, when true, lets a second press of the kill key (Ctrl+X)
+	// confirm the kill dialog, so Ctrl+X Ctrl+X tears a session down in one motion.
+	// nil means use the default (on), so configs written before it existed keep it.
+	KillDoubleTapConfirm *bool `json:"kill_double_tap_confirm,omitempty"`
 	// Theme selects the UI color/glyph theme by name (see ui/theme registry:
 	// "tokyo-night", "catppuccin-mocha", "unicode"). Empty falls back to the
 	// default. The "unicode" theme avoids Nerd-Font glyphs for terminals
@@ -77,6 +81,13 @@ type Config struct {
 // A nil AutoAttach (e.g. an older config file with no such key) defaults to on.
 func (c *Config) GetAutoAttach() bool {
 	return c.AutoAttach == nil || *c.AutoAttach
+}
+
+// GetKillDoubleTapConfirm reports whether a second press of the kill key confirms
+// the kill dialog. A nil KillDoubleTapConfirm (e.g. an older config file with no
+// such key) defaults to on.
+func (c *Config) GetKillDoubleTapConfirm() bool {
+	return c.KillDoubleTapConfirm == nil || *c.KillDoubleTapConfirm
 }
 
 // GetProgram returns the program to run. If Profiles is non-empty and
@@ -123,6 +134,7 @@ func DefaultConfig() *Config {
 	}
 
 	autoAttach := true
+	killDoubleTap := true
 	return &Config{
 		DefaultProgram:     program,
 		AutoYes:            false,
@@ -136,7 +148,8 @@ func DefaultConfig() *Config {
 			}
 			return fmt.Sprintf("%s/", strings.ToLower(user.Username))
 		}(),
-		AutoAttach: &autoAttach,
+		AutoAttach:           &autoAttach,
+		KillDoubleTapConfirm: &killDoubleTap,
 	}
 }
 
