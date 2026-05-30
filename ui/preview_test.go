@@ -148,9 +148,8 @@ func TestPreviewScrolling(t *testing.T) {
 			if strings.Contains(cmdStr, "has-session") {
 				if sessionCreated {
 					return nil // Session exists
-				} else {
-					return fmt.Errorf("session does not exist")
 				}
+				return fmt.Errorf("session does not exist")
 			}
 
 			// Handle session creation
@@ -328,9 +327,8 @@ func TestPreviewContentWithoutScrolling(t *testing.T) {
 			if strings.Contains(cmdStr, "has-session") {
 				if sessionCreated {
 					return nil // Session exists
-				} else {
-					return fmt.Errorf("session does not exist")
 				}
+				return fmt.Errorf("session does not exist")
 			}
 
 			// Handle session creation
@@ -428,12 +426,4 @@ func TestPreviewDoesNotPinLoadingSplashForLiveSession(t *testing.T) {
 	require.NotContains(t, rendered, "Setting up workspace",
 		"the Loading splash must never pin for a live session")
 	require.Contains(t, rendered, expectedContent, "the live pane content must be shown")
-}
-
-// Helper function for max
-func max(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
 }

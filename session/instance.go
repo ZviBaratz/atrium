@@ -172,36 +172,79 @@ func FromInstanceData(data InstanceData) (*Instance, error) {
 		switch {
 		case sess.DoesSessionExist():
 			// Normal case: the session survived (cs detaches, it doesn't kill),
-			// so reattach to it. Start() no longer sets Running itself (that is owned by
-			// the caller), so mark the reattached, live session Running here.
+			// so reattach to it. If the attach (Restore) fails the session is
+			// wedged — kill it and recover in place rather than aborting the
+			// load of every other session. Start() no longer sets Running itself
+			// (that is owned by the caller), so mark a successfully-reattached
+			// session Running here; recoverInPlace sets its own status otherwise.
 			if err := instance.Start(false); err != nil {
-				return nil, err
+				log.ErrorLog.Printf("failed to restore session %s, recovering: %v", instance.Title, err)
+				if closeErr := sess.Close(); closeErr != nil {
+					log.ErrorLog.Printf("failed to close stale session %s: %v", instance.Title, closeErr)
+				}
+				instance.recoverInPlace()
+			} else {
+				instance.SetStatus(Running)
 			}
-			instance.SetStatus(Running)
 		default:
 			// The tmux session is gone — e.g. after a reboot, or the one-time
 			// migration to cs's dedicated socket. Don't crash on the failed
-			// attach (which previously aborted startup). If the worktree is
-			// intact, restart the session in place: this preserves uncommitted
-			// work (Resume would force-recreate the worktree and lose it) and
-			// keeps the instance usable. If the worktree is also gone, leave it
-			// Paused so the branch is preserved and Resume can recover it.
-			if valid, err := instance.gitWorktree.IsValidWorktree(); err == nil && valid {
-				// The agent process died with the tmux session, so resume its prior
-				// conversation rather than starting blank (no-op for non-claude agents).
-				if err := sess.StartContinue(instance.gitWorktree.GetWorktreePath()); err != nil {
-					return nil, err
-				}
-				instance.started = true
-				instance.SetStatus(Running)
-			} else {
-				instance.started = true
-				instance.SetStatus(Paused)
-			}
+			// attach (which previously aborted startup); recover in place.
+			instance.recoverInPlace()
 		}
 	}
 
 	return instance, nil
+}
+
+// recoverInPlace brings a loaded instance back online after its tmux session
+// could not be restored (the session was wedged, or gone entirely). If the
+// worktree is intact it recreates the session in place, resuming the agent's
+// prior conversation (StartContinue, a no-op for non-claude agents) and marks
+// the instance Running. If the worktree is gone, or the restart fails, it
+// degrades to Paused so the branch is preserved and Resume can recover it
+// later — a single bad session must never abort loading the rest.
+//
+// Recreating in place (rather than via Resume) deliberately preserves any
+// uncommitted work: Resume would force-recreate the worktree and lose it.
+func (i *Instance) recoverInPlace() {
+	i.started = true
+
+	valid, err := i.gitWorktree.IsValidWorktree()
+	if err != nil {
+		log.ErrorLog.Printf("failed to validate worktree for %s, leaving paused: %v", i.Title, err)
+	}
+	if err != nil || !valid {
+		i.SetStatus(Paused)
+		return
+	}
+
+	if err := i.tmuxSession.StartContinue(i.gitWorktree.GetWorktreePath()); err != nil {
+		log.ErrorLog.Printf("failed to restart session %s in place, leaving paused: %v", i.Title, err)
+		i.SetStatus(Paused)
+		return
+	}
+	i.SetStatus(Running)
+}
+
+// recreateSession starts a fresh tmux session for an already-set-up worktree,
+// resuming the agent's prior conversation (StartContinue, a no-op for
+// non-claude agents). On failure it tears down the worktree and returns a
+// wrapped error. Callers must ensure no session with the same name still exists
+// — Start guards against duplicates — so a stale session has to be closed first.
+func (i *Instance) recreateSession() error {
+	ts := i.tmux()
+	wt := i.worktree()
+	if err := ts.StartContinue(wt.GetWorktreePath()); err != nil {
+		log.ErrorLog.Print(err)
+		// Cleanup git worktree if tmux session creation fails.
+		if cleanupErr := wt.Cleanup(); cleanupErr != nil {
+			err = fmt.Errorf("%w (cleanup error: %w)", err, cleanupErr)
+			log.ErrorLog.Print(err)
+		}
+		return fmt.Errorf("failed to start new session: %w", err)
+	}
+	return nil
 }
 
 // Options for creating a new instance
@@ -350,7 +393,7 @@ func (i *Instance) Start(firstTimeSetup bool) error {
 	defer func() {
 		if setupErr != nil {
 			if cleanupErr := i.Kill(); cleanupErr != nil {
-				setupErr = fmt.Errorf("%v (cleanup error: %v)", setupErr, cleanupErr)
+				setupErr = fmt.Errorf("%w (cleanup error: %w)", setupErr, cleanupErr)
 			}
 		} else {
 			i.mu.Lock()
@@ -377,7 +420,7 @@ func (i *Instance) Start(firstTimeSetup bool) error {
 		if err := tmuxSession.Start(wt.GetWorktreePath()); err != nil {
 			// Cleanup git worktree if tmux session creation fails
 			if cleanupErr := wt.Cleanup(); cleanupErr != nil {
-				err = fmt.Errorf("%v (cleanup error: %v)", err, cleanupErr)
+				err = fmt.Errorf("%w (cleanup error: %w)", err, cleanupErr)
 			}
 			setupErr = fmt.Errorf("failed to start new session: %w", err)
 			return setupErr
@@ -533,6 +576,15 @@ func (i *Instance) GetWorktreePath() string {
 		return ""
 	}
 	return wt.GetWorktreePath()
+}
+
+// GetRepoPath returns the git repository root for the instance, or empty string if unavailable
+func (i *Instance) GetRepoPath() string {
+	wt := i.worktree()
+	if wt == nil {
+		return ""
+	}
+	return wt.GetRepoPath()
 }
 
 func (i *Instance) Started() bool {
@@ -754,31 +806,23 @@ func (i *Instance) Resume() error {
 
 	// Check if tmux session still exists from pause, otherwise create new one
 	if ts.DoesSessionExist() {
-		// Session exists, just restore PTY connection to it
+		// Session exists, just restore the PTY connection to it.
 		if err := ts.Restore(); err != nil {
 			log.ErrorLog.Print(err)
-			// If restore fails, fall back to creating new session
-			if err := ts.Start(wt.GetWorktreePath()); err != nil {
-				log.ErrorLog.Print(err)
-				// Cleanup git worktree if tmux session creation fails
-				if cleanupErr := wt.Cleanup(); cleanupErr != nil {
-					err = fmt.Errorf("%v (cleanup error: %v)", err, cleanupErr)
-					log.ErrorLog.Print(err)
-				}
-				return fmt.Errorf("failed to start new session: %w", err)
+			// Restore failed — the stale session must be killed before we can
+			// recreate it (Start guards against duplicate session names).
+			if closeErr := ts.Close(); closeErr != nil {
+				log.ErrorLog.Printf("failed to close stale session %s: %v", i.Title, closeErr)
+			}
+			if err := i.recreateSession(); err != nil {
+				return err
 			}
 		}
 	} else {
-		// The tmux session is gone, so the agent process died with it: resume its prior
-		// conversation rather than starting blank (no-op for non-claude agents).
-		if err := ts.StartContinue(wt.GetWorktreePath()); err != nil {
-			log.ErrorLog.Print(err)
-			// Cleanup git worktree if tmux session creation fails
-			if cleanupErr := wt.Cleanup(); cleanupErr != nil {
-				err = fmt.Errorf("%v (cleanup error: %v)", err, cleanupErr)
-				log.ErrorLog.Print(err)
-			}
-			return fmt.Errorf("failed to start new session: %w", err)
+		// The tmux session is gone, so the agent process died with it; recreate
+		// it, resuming the prior conversation rather than starting blank.
+		if err := i.recreateSession(); err != nil {
+			return err
 		}
 	}
 

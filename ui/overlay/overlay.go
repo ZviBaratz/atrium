@@ -213,20 +213,6 @@ func clamp(v, lower, upper int) int {
 	return min(max(v, lower), upper)
 }
 
-func max(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
-}
-
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}
-
 type whitespace struct {
 	style termenv.Style
 	chars string

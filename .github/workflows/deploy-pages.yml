@@ -14,20 +14,23 @@ on:
       - 'web/**'
       - '.github/workflows/deploy-pages.yml'
 
+# Least privilege at the top level; the deploy job widens to what Pages needs.
 permissions:
   contents: read
-  pages: write
-  id-token: write
+
+concurrency:
+  group: pages-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020  # v4
         with:
           node-version: 20
           cache: 'npm'
@@ -36,21 +39,19 @@ jobs:
       - name: Install dependencies
         run: cd web && npm ci
 
-      - name: Update Next.js config for static export
-        run: |
-          cd web
-          # Add output: 'export' to next.config.ts
-
       - name: Build website
         run: cd web && npm run build
 
       - name: Upload artifact
-        uses: actions/upload-pages-artifact@v3
+        uses: actions/upload-pages-artifact@56afc609e74202658d3ffba0e8f6dda462b719fa  # v3
         with:
           path: ./web/out
-          
+
   deploy:
     if: github.event_name == 'push'  # Only deploy on push to main, not on PR
+    permissions:
+      pages: write      # deploy to GitHub Pages
+      id-token: write   # OIDC verification for the Pages deployment
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
@@ -59,4 +60,4 @@ jobs:
     steps:
       - name: Deploy to GitHub Pages
         id: deployment
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e  # v4

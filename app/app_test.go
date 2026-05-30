@@ -25,7 +25,7 @@ func TestMain(m *testing.M) {
 	// writes a default config.json on first run.
 	tmpHome, err := os.MkdirTemp("", "cs-test-home-")
 	if err == nil {
-		os.Setenv("HOME", tmpHome)
+		_ = os.Setenv("HOME", tmpHome)
 	}
 
 	// Initialize the logger before any tests run
@@ -35,7 +35,7 @@ func TestMain(m *testing.M) {
 
 	log.Close()
 	if tmpHome != "" {
-		os.RemoveAll(tmpHome)
+		_ = os.RemoveAll(tmpHome)
 	}
 	os.Exit(exitCode)
 }

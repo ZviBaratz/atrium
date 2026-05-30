@@ -47,6 +47,8 @@ const (
 	KeyQuickSend // Open a compose box to send a message to the selected session without attaching
 
 	KeyAutoName // Auto-generate a display name for the selected session via claude
+
+	KeyFilter // Enter incremental filter mode to narrow the session list
 )
 
 // GlobalKeyStringsMap is a global, immutable map string to keybinding.
@@ -78,6 +80,7 @@ var GlobalKeyStringsMap = map[string]KeyName{
 	"r":          KeyResume,
 	"p":          KeySubmit,
 	"?":          KeyHelp,
+	"/":          KeyFilter,
 }
 
 // GlobalkeyBindings is a global, immutable map of KeyName tot keybinding.
@@ -179,6 +182,10 @@ var GlobalkeyBindings = map[KeyName]key.Binding{
 	KeyCollapseAll: key.NewBinding(
 		key.WithKeys("Z"),
 		key.WithHelp("Z", "collapse/expand all"),
+	),
+	KeyFilter: key.NewBinding(
+		key.WithKeys("/"),
+		key.WithHelp("/", "filter sessions"),
 	),
 
 	// -- Special keybindings --

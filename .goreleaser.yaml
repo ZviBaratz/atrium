@@ -32,6 +32,28 @@ archives:
 sboms:
   - artifacts: archive
 
+# Keyless (Sigstore) signing of the checksums file via cosign. Runs in CI with
+# the workflow's OIDC token (id-token: write) — no private key is managed. The
+# whole release is covered transitively because every artifact's digest is in
+# checksums.txt. Produces checksums.txt.sig (signature) and checksums.txt.pem
+# (the ephemeral signing certificate); both are attached to the release.
+# Verify: cosign verify-blob --certificate checksums.txt.pem \
+#   --signature checksums.txt.sig \
+#   --certificate-identity-regexp 'https://github.com/ZviBaratz/atrium/.*' \
+#   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+#   checksums.txt
+signs:
+  - cmd: cosign
+    certificate: '${artifact}.pem'
+    args:
+      - sign-blob
+      - '--output-certificate=${certificate}'
+      - '--output-signature=${signature}'
+      - '${artifact}'
+      - '--yes'
+    artifacts: checksum
+    output: true
+
 release:
   prerelease: auto
   draft: true
@@ -57,4 +79,3 @@ changelog:
       - typo
       - "^refactor"
       - "^chore"
-

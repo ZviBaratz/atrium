@@ -1,0 +1,38 @@
+name: Release config check
+
+# Validates .goreleaser.yaml on PRs that touch it, so GoReleaser deprecations or
+# schema errors are caught before a tag is pushed (the real release runs only on
+# tags, where a broken config would fail the actual release).
+on:
+  pull_request:
+    branches: [ main ]
+    paths:
+      - '.goreleaser.yaml'
+      - '.goreleaser.yml'
+      - '.github/workflows/release-check.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-check-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: goreleaser check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+
+      - name: Set up Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff  # v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Validate GoReleaser config
+        uses: goreleaser/goreleaser-action@e435ccd777264be153ace6237001ef4d979d3a7a  # v6
+        with:
+          version: latest
+          args: check

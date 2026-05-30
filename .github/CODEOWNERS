@@ -1,0 +1,6 @@
+# Code owners for Atrium. Listed owners are requested for review automatically
+# on pull requests touching matching paths. See:
+# https://docs.github.com/articles/about-code-owners
+
+# Default owner for everything in the repo.
+*       @ZviBaratz
