@@ -248,12 +248,16 @@ func (m *home) updateHandleWindowSizeEvent(msg tea.WindowSizeMsg) {
 
 	m.windowWidth, m.windowHeight = msg.Width, msg.Height
 
-	// The menu always takes one row at the bottom; the error box takes a row only
-	// while an error is showing. With no error the help bar sits flush on the last
-	// row. When an error appears the panes give up a row for it (and reclaim it once
-	// the error clears via recomputeLayout), so the composed frame is always exactly
-	// msg.Height tall and never floats in a centered band.
-	menuHeight := 1
+	// The hint bar is contextual (see menuVisible): it claims a row only during the
+	// inline interactions where it carries unique information, and the panes reclaim
+	// that row during plain navigation and behind overlays. The error box likewise
+	// takes a row only while an error is showing. Whichever rows are claimed, the
+	// composed frame is always exactly msg.Height tall and never floats in a
+	// centered band; transitions that flip menuVisible call recomputeLayout.
+	menuHeight := 0
+	if m.menuVisible() {
+		menuHeight = 1
+	}
 	errHeight := 0
 	if m.errBox.HasError() {
 		errHeight = 1
@@ -281,9 +285,27 @@ func (m *home) updateHandleWindowSizeEvent(msg tea.WindowSizeMsg) {
 	m.menu.SetSize(msg.Width, menuHeight)
 }
 
+// menuVisible reports whether the hint bar should occupy a row. The bar is the
+// sole, non-duplicated chrome only for inline interactions: stateNew shows the
+// submit cue and the target repo, stateFilter has no other key hints, and a
+// background name generation reports its progress there. Modal overlays
+// (prompt/rename/confirm/help/info) render their own instructions, so the bar
+// behind them would be a redundant strip; plain navigation stays clean.
+func (m *home) menuVisible() bool {
+	switch m.state {
+	case stateNew, stateFilter:
+		return true
+	case statePrompt, stateRename, stateConfirm, stateHelp, stateInfo:
+		return false
+	default: // stateDefault (and the empty list)
+		return m.generatingName
+	}
+}
+
 // recomputeLayout re-runs the size calculation off the cached terminal size. Use
 // it when something other than a resize changes the vertical budget — e.g. an
-// error appearing or clearing toggles whether the error box claims a row.
+// error appearing or clearing toggles whether the error box claims a row, or a
+// state transition flips menuVisible.
 func (m *home) recomputeLayout() {
 	if m.windowWidth == 0 || m.windowHeight == 0 {
 		return
@@ -339,9 +361,10 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case autoNameDoneMsg:
 		m.generatingName = false
 		if msg.err != nil {
-			// Restore the normal hint bar and surface the failure; leave the name
-			// untouched rather than applying a fallback or junk value.
+			// The progress row goes away and we return to plain navigation; surface the
+			// failure and leave the name untouched rather than applying a junk fallback.
 			m.menu.SetState(ui.StateDefault)
+			m.recomputeLayout() // the progress bar gave up its row; panes reclaim it
 			return m, m.handleError(msg.err)
 		}
 		// Offer the generated name through the existing rename overlay so the user
@@ -350,6 +373,7 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.renameOverlay = overlay.NewRenameOverlay(msg.name)
 		m.state = stateRename
 		m.menu.SetState(ui.StatePrompt)
+		m.recomputeLayout() // the progress bar gave up its row; the overlay self-documents
 		return m, nil
 	case metadataUpdateDoneMsg:
 		if recoverLostInstances(msg.results, m.lostStrikes) {
@@ -497,6 +521,15 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, m.handleError(err)
 		}
 		m.recordRecentPath(msg.instance.Path)
+		// First successful session start retires the one-time welcome. This is the single
+		// chokepoint every start (inline `n` and the `N` form) funnels through, so the
+		// welcome re-shows on every launch until the user has actually created a session —
+		// a dismissal alone no longer burns it (see showHelpScreen). Best-effort persist.
+		if seen := m.appState.GetHelpScreensSeen(); seen&(helpTypeWelcome{}.mask()) == 0 {
+			if err := m.appState.SetHelpScreensSeen(seen | helpTypeWelcome{}.mask()); err != nil {
+				log.WarningLog.Printf("failed to persist welcome-seen state: %v", err)
+			}
+		}
 		if m.autoYes {
 			msg.instance.AutoYes = true
 		}
@@ -795,12 +828,14 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 			m.list.ClearFilter()
 			m.state = stateDefault
 			m.menu.SetState(ui.StateDefault)
+			m.recomputeLayout() // the hint bar gave up its row; panes reclaim it
 			return m, m.instanceChanged()
 		case "enter", "down":
 			// Accept the current query and move focus to the filtered list.
 			m.list.SetFilterActive(false)
 			m.state = stateDefault
 			m.menu.SetState(ui.StateDefault)
+			m.recomputeLayout() // the hint bar gave up its row; panes reclaim it
 			return m, m.instanceChanged()
 		case "backspace", "ctrl+h":
 			if q := m.list.FilterQuery(); q != "" {
@@ -915,6 +950,7 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		m.state = stateNew
 		m.menu.SetState(ui.StateNewInstance)
 		m.menu.SetNewInstanceHint(filepath.Base(m.newSessionPath))
+		m.recomputeLayout() // the hint bar now claims a row; shrink the panes to fit
 
 		return m, nil
 	case keys.KeyQuickSend:
@@ -973,6 +1009,7 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		m.list.SetFilterActive(true)
 		m.state = stateFilter
 		m.menu.SetState(ui.StatePrompt)
+		m.recomputeLayout() // the hint bar now claims a row; shrink the panes to fit
 		return m, m.instanceChanged()
 	case keys.KeyRename:
 		selected := m.list.GetSelectedInstance()
@@ -993,6 +1030,7 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		// the UI stays responsive; only the instance and prompt are captured here.
 		m.generatingName = true
 		m.menu.SetState(ui.StateGeneratingName)
+		m.recomputeLayout() // the progress bar now claims a row; shrink the panes to fit
 		return m, runAutoNameCmd(m.ctx, selected, selected.Prompt)
 	case keys.KeySubmit:
 		selected := m.list.GetSelectedInstance()
@@ -1792,10 +1830,16 @@ func (m *home) confirmAction(message string, action tea.Cmd) tea.Cmd {
 func (m *home) View() string {
 	listAndPreview := lipgloss.JoinHorizontal(lipgloss.Top, m.list.String(), m.tabbedWindow.String())
 
-	parts := []string{listAndPreview, m.menu.String()}
-	// The error box only claims a row while it has something to show; otherwise the
-	// help bar is the last row and there is no trailing blank line. (JoinVertical
-	// treats an empty string as a blank line, so it must be omitted, not just empty.)
+	parts := []string{listAndPreview}
+	// The hint bar and error box each claim a row only when they have something to
+	// show; otherwise the last visible component sits flush on the final row with no
+	// trailing blank line. (JoinVertical treats an empty string as a blank line, so
+	// an unused component must be omitted, not just rendered empty.) menuVisible and
+	// menuHeight in updateHandleWindowSizeEvent stay in lockstep so the row the menu
+	// occupies here is exactly the row the layout reserved for it.
+	if m.menuVisible() {
+		parts = append(parts, m.menu.String())
+	}
 	if m.errBox.HasError() {
 		parts = append(parts, m.errBox.String())
 	}

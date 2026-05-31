@@ -54,6 +54,43 @@ func newTestList(titles ...string) *List {
 	return l
 }
 
+// An empty, unfiltered list is the primary first-run surface once the always-on
+// hint bar is gone, so it must surface the two essential onboarding keys.
+func TestList_EmptyStateHint(t *testing.T) {
+	l := newTestList()
+	l.SetSize(40, 20)
+	out := l.String()
+	require.Contains(t, out, "new", "empty list shows the new-session hint")
+	require.Contains(t, out, "keys", "empty list shows the help hint")
+}
+
+// The onboarding hint is for the genuinely empty list only: it must not appear
+// once sessions exist, nor clobber the filter affordances during an active filter.
+func TestList_EmptyStateHint_SuppressedWhenNotEmptyOrFiltering(t *testing.T) {
+	// Non-empty list: no onboarding hint. ("keys" is the hint's distinctive marker —
+	// it appears in neither session rows nor the "no matches" line.)
+	l := newTestList("alpha")
+	l.SetSize(40, 20)
+	require.NotContains(t, l.String(), "keys", "a non-empty list must not show the onboarding hint")
+
+	// Empty but mid-filter (filter bar active, empty query): the filter bar owns the
+	// view; the onboarding hint must not overwrite it.
+	lf := newTestList()
+	lf.SetSize(40, 20)
+	lf.SetFilterActive(true)
+	require.NotContains(t, lf.String(), "keys", "an active filter must suppress the onboarding hint")
+
+	// Empty result from a non-matching query keeps the existing "no matches" hint,
+	// not the onboarding hint.
+	lq := newTestList("alpha")
+	lq.SetSize(40, 20)
+	lq.SetFilterActive(true)
+	lq.SetFilter("zzz")
+	out := lq.String()
+	require.Contains(t, out, "no matches", "a non-matching filter shows the no-matches hint")
+	require.NotContains(t, out, "keys", "a filtered list must not show the onboarding hint")
+}
+
 func TestMoveUp(t *testing.T) {
 	l := newTestList("a", "b", "c")
 	l.SetSelectedInstance(1) // select "b"

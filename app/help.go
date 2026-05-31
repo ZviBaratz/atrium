@@ -1,7 +1,6 @@
 package app
 
 import (
-	"github.com/ZviBaratz/atrium/log"
 	"github.com/ZviBaratz/atrium/ui"
 	"github.com/ZviBaratz/atrium/ui/overlay"
 	"github.com/ZviBaratz/atrium/ui/theme"
@@ -114,9 +113,13 @@ func (h helpTypeGeneral) mask() uint32 { return 1 }
 // helpTypeWelcome uses bit 4; bits 1-3 belonged to retired teaching modals.
 func (h helpTypeWelcome) mask() uint32 { return 1 << 4 }
 
-// showHelpScreen displays a help overlay. The cheatsheet (helpTypeGeneral)
-// always shows on demand; one-time screens (welcome) show only until their seen
-// bit is set. onDismiss is retained for compatibility but is now always nil.
+// showHelpScreen displays a help overlay. The cheatsheet (helpTypeGeneral) always
+// shows on demand; one-time screens (welcome) show until their seen bit is set.
+// Crucially, the bit is NOT set here on render — the welcome's bit is set only on
+// the first successful session start (see the instanceStartedMsg handler), so a
+// stray keypress that dismisses the welcome no longer burns it for good; it
+// re-shows each launch until the user has actually created a session. onDismiss is
+// retained for compatibility but is now always nil.
 func (m *home) showHelpScreen(helpType helpText, onDismiss func()) (tea.Model, tea.Cmd) {
 	var alwaysShow bool
 	switch helpType.(type) {
@@ -127,10 +130,6 @@ func (m *home) showHelpScreen(helpType helpText, onDismiss func()) (tea.Model, t
 	flag := helpType.mask()
 
 	if alwaysShow || (m.appState.GetHelpScreensSeen()&flag) == 0 {
-		if err := m.appState.SetHelpScreensSeen(m.appState.GetHelpScreensSeen() | flag); err != nil {
-			log.WarningLog.Printf("Failed to save help screen state: %v", err)
-		}
-
 		m.textOverlay = overlay.NewTextOverlay(helpType.toContent())
 		m.textOverlay.OnDismiss = onDismiss
 		m.state = stateHelp

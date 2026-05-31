@@ -472,6 +472,28 @@ func (l *List) String() string {
 	if innerH < 1 {
 		innerH = 1
 	}
+
+	// A genuinely empty list (no sessions, not even mid-filter) would otherwise render a
+	// blank panel interior. With the contextual hint bar hidden during plain navigation,
+	// this empty list is the primary first-run surface, so center the two essential keys
+	// here — a fresh user (or one who dismissed the welcome) is never stranded on a
+	// silent screen. Pressing `n` makes the list non-empty and the contextual bar takes
+	// over. Guard on filterActive too: an empty-query filter still shows its bar above.
+	if len(l.items) == 0 && !filtering && !l.filterActive {
+		th := theme.Current()
+		// Kept terse so it never clips: the list panel is only ~30% of the terminal
+		// width, so a longer "new session / all keys" phrasing truncates on normal and
+		// narrow terminals. The styled key glyphs carry the meaning (n = new, ? = keys).
+		hint := th.AttentionStyle().Render("n") + " " + th.DimStyle().Render("new") +
+			th.FaintStyle().Render("  ·  ") +
+			th.AttentionStyle().Render("?") + " " + th.DimStyle().Render("keys")
+		lines = append(lines, lipgloss.PlaceHorizontal(l.width-2, lipgloss.Center, hint))
+		// Vertically center within the panel interior so the empty state reads as
+		// intentional rather than top-anchored.
+		for top := (innerH - 1) / 2; top > 0; top-- {
+			lines = append([]string{""}, lines...)
+		}
+	}
 	lines = l.windowLines(lines, selStart, selH, innerH)
 	content := strings.Join(lines, "\n")
 
