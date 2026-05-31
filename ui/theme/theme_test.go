@@ -120,7 +120,8 @@ func TestPanelLongTitleTruncates(t *testing.T) {
 // that rendered 6 — otherwise the composed line overflows, wraps, and desyncs the
 // alt-screen renderer (the duplicated-rows-on-navigation bug).
 func TestSanitizeWidth(t *testing.T) {
-	const family = "\U0001F468‍\U0001F469‍\U0001F467" // 👨‍👩‍👧
+	// Joiners written as escapes (ST1018: no invisible format chars in string literals).
+	const family = "\U0001F468\u200d\U0001F469\u200d\U0001F467" // 👨 ZWJ 👩 ZWJ 👧
 
 	// Pre-condition that creates the bug: the cluster measures as a single 2-cell glyph.
 	if w := lipgloss.Width(family); w != 2 {
@@ -137,7 +138,7 @@ func TestSanitizeWidth(t *testing.T) {
 	}
 
 	// Variation selector and skin-tone modifier are also stripped.
-	if got := SanitizeWidth("❤️"); got != "❤" { // ❤️ -> ❤
+	if got := SanitizeWidth("\u2764\ufe0f"); got != "\u2764" { // ❤️ -> ❤
 		t.Errorf("variation selector not stripped: %q", got)
 	}
 	if got := SanitizeWidth("\U0001F44D\U0001F3FD"); got != "\U0001F44D" { // 👍🏽 -> 👍
