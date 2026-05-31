@@ -607,6 +607,15 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		return m, cmd
 	}
 
+	// Ctrl+L forces a full repaint. The alt-screen renderer updates incrementally and
+	// never erases lines, so it desyncs (leaving accumulating ghost rows) if the terminal
+	// ever renders a line wider than measured — e.g. a font lacking a combined emoji glyph.
+	// theme.SanitizeWidth prevents the known cases; this is the universal manual-redraw
+	// escape hatch for any residual artifact, in any state.
+	if msg.String() == "ctrl+l" {
+		return m, tea.ClearScreen
+	}
+
 	if m.state == stateHelp {
 		return m.handleHelpState(msg)
 	}

@@ -99,7 +99,9 @@ func (d *DiffPane) SetDiff(instance *session.Instance) {
 		} else {
 			d.stats = lineStats
 		}
-		d.diff = colorizeDiff(stats.Content)
+		// Decompose font-dependent emoji clusters in the diff so the width we lay out
+		// matches what the terminal renders and the pane can't wrap (see theme.SanitizeWidth).
+		d.diff = colorizeDiff(theme.SanitizeWidth(stats.Content))
 		d.viewport.SetContent(lipgloss.JoinVertical(lipgloss.Left, d.stats, d.diff))
 	}
 }

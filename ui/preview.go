@@ -113,6 +113,7 @@ func (p *PreviewPane) UpdateContent(instance *session.Instance) error {
 				logPreviewFallback(instance, "scroll capture error", err)
 				return err
 			}
+			content = theme.SanitizeWidth(content)
 			p.viewport.SetContent(lipgloss.JoinVertical(lipgloss.Left, content, scrollExitFooter()))
 		}
 		return nil
@@ -127,6 +128,9 @@ func (p *PreviewPane) UpdateContent(instance *session.Instance) error {
 		logPreviewFallback(instance, "capture error", err)
 		return err
 	}
+	// Untrusted agent output: decompose font-dependent emoji clusters so the line
+	// width we lay out matches what the terminal renders (see theme.SanitizeWidth).
+	content = theme.SanitizeWidth(content)
 
 	// A live pane always wins, regardless of the Status flag — this is the guarantee
 	// that the splash can never pin once the session is actually producing output.

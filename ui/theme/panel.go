@@ -71,6 +71,43 @@ func (t *Theme) Panel(title, content string, width, height int, active bool) str
 	return lipgloss.JoinVertical(lipgloss.Left, topRow, body)
 }
 
+// SanitizeWidth makes untrusted captured content (tmux pane output, diffs) safe to
+// lay out, by removing the codepoints that let a terminal's *rendered* width diverge
+// from what width libraries (lipgloss / x-ansi / go-runewidth) *measure*.
+//
+// Emoji combine via a zero-width joiner (U+200D), an emoji/text presentation selector
+// (U+FE0F / U+FE0E), or a skin-tone modifier (U+1F3FB–U+1F3FF) into a single grapheme
+// cluster that those libraries count as one 2-cell glyph. A terminal whose font lacks
+// the combined glyph instead renders each component separately and far wider — e.g.
+// the family "👨‍👩‍👧" measures 2 but renders as three 2-cell people (6 cells). The line
+// then overflows its pane, wraps onto an extra physical row, and desyncs bubbletea's
+// incremental alt-screen renderer, which never erases lines — leaving the duplicated,
+// accumulating rows seen when navigating between repo groups (only a full repaint, e.g.
+// attaching and detaching, recovers it).
+//
+// Stripping the joiners/modifiers decomposes such clusters into standalone emoji, which
+// every renderer AND the terminal measure identically, so the laid-out width matches the
+// rendered width and nothing wraps. (Regional-indicator flag pairs combine without a
+// joiner and are not handled here; the manual redraw key is the backstop for those.)
+func SanitizeWidth(s string) string {
+	risky := func(r rune) bool {
+		return r == 0x200D || // ZERO WIDTH JOINER
+			r == 0xFE0F || r == 0xFE0E || // variation selectors (emoji / text presentation)
+			(r >= 0x1F3FB && r <= 0x1F3FF) // skin-tone modifiers
+	}
+	if strings.IndexFunc(s, risky) < 0 {
+		return s // common case: nothing to strip, no allocation
+	}
+	var b strings.Builder
+	b.Grow(len(s))
+	for _, r := range s {
+		if !risky(r) {
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
+}
+
 // clipContent truncates content to at most h lines, each at most w columns
 // (measured by display width, ANSI-aware). Shorter content is left as-is for
 // the caller's fixed-size style to pad.

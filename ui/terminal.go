@@ -108,7 +108,9 @@ func (t *TerminalPane) UpdateContent(instance *session.Instance) error {
 	}
 
 	t.fallback = false
-	t.content = content
+	// Decompose font-dependent emoji clusters so our laid-out width matches the
+	// terminal's rendered width and the pane can't wrap (see theme.SanitizeWidth).
+	t.content = theme.SanitizeWidth(content)
 	return nil
 }
 
@@ -304,6 +306,7 @@ func (t *TerminalPane) enterScrollMode() error {
 	if err != nil {
 		return fmt.Errorf("terminal pane: failed to capture full history: %w", err)
 	}
+	content = theme.SanitizeWidth(content)
 
 	footer := terminalFooterStyle().Render("ESC to exit scroll mode")
 	contentWithFooter := lipgloss.JoinVertical(lipgloss.Left, content, footer)

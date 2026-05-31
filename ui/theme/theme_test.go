@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/charmbracelet/lipgloss"
 	"github.com/mattn/go-runewidth"
 	"github.com/muesli/ansi"
 )
@@ -109,5 +110,43 @@ func TestPanelLongTitleTruncates(t *testing.T) {
 		if pw := ansi.PrintableRuneWidth(l); pw != 20 {
 			t.Errorf("line %d width %d, want 20", i, pw)
 		}
+	}
+}
+
+// SanitizeWidth must decompose font-dependent emoji clusters so the width a layout
+// library measures equals what a terminal lacking the combined glyph renders. The
+// family ZWJ sequence is the regression case: it measures 2 (one cluster) but renders
+// as three separate 2-cell people (6). After sanitizing, the measured width must equal
+// that rendered 6 — otherwise the composed line overflows, wraps, and desyncs the
+// alt-screen renderer (the duplicated-rows-on-navigation bug).
+func TestSanitizeWidth(t *testing.T) {
+	const family = "\U0001F468‍\U0001F469‍\U0001F467" // 👨‍👩‍👧
+
+	// Pre-condition that creates the bug: the cluster measures as a single 2-cell glyph.
+	if w := lipgloss.Width(family); w != 2 {
+		t.Fatalf("precondition: lipgloss.Width(family ZWJ) = %d, want 2", w)
+	}
+
+	got := SanitizeWidth(family)
+	if strings.ContainsRune(got, 0x200D) {
+		t.Errorf("SanitizeWidth left a ZERO WIDTH JOINER in %q", got)
+	}
+	// Decomposed: three standalone emoji, each 2 cells = 6, matching the terminal's render.
+	if w := lipgloss.Width(got); w != 6 {
+		t.Errorf("lipgloss.Width(sanitized) = %d, want 6 (three 2-cell emoji)", w)
+	}
+
+	// Variation selector and skin-tone modifier are also stripped.
+	if got := SanitizeWidth("❤️"); got != "❤" { // ❤️ -> ❤
+		t.Errorf("variation selector not stripped: %q", got)
+	}
+	if got := SanitizeWidth("\U0001F44D\U0001F3FD"); got != "\U0001F44D" { // 👍🏽 -> 👍
+		t.Errorf("skin-tone modifier not stripped: %q", got)
+	}
+
+	// Content with no risky codepoints is returned unchanged (and not reallocated needlessly).
+	plain := "│ zvi/bad-rendering ⇡11  +2646 -652 ● ready"
+	if SanitizeWidth(plain) != plain {
+		t.Errorf("plain content was modified: %q", SanitizeWidth(plain))
 	}
 }
