@@ -427,3 +427,105 @@ func TestPreviewDoesNotPinLoadingSplashForLiveSession(t *testing.T) {
 		"the Loading splash must never pin for a live session")
 	require.Contains(t, rendered, expectedContent, "the live pane content must be shown")
 }
+
+// TestPreviewSplashClearsOnceContentArrives is the core self-heal guarantee: while a
+// session is still coming up (empty pane) the splash is shown, but the instant the pane
+// yields content the preview must switch to it — even if the status flag is still a stale
+// Loading. This is the regression guard for "the splash isn't updated with the preview".
+func TestPreviewSplashClearsOnceContentArrives(t *testing.T) {
+	paneContent := "" // pane is blank during startup, then produces output
+	sessionCreated := false
+	cmdExec := cmd_test.MockCmdExec{
+		RunFunc: func(cmd *exec.Cmd) error {
+			cmdStr := cmd.String()
+			if strings.Contains(cmdStr, "has-session") {
+				if sessionCreated {
+					return nil
+				}
+				return fmt.Errorf("session does not exist")
+			}
+			if strings.Contains(cmdStr, "new-session") {
+				sessionCreated = true
+			}
+			return nil
+		},
+		OutputFunc: func(cmd *exec.Cmd) ([]byte, error) {
+			if strings.Contains(cmd.String(), "capture-pane") {
+				return []byte(paneContent), nil
+			}
+			return []byte(""), nil
+		},
+	}
+
+	setup := setupTestEnvironment(t, cmdExec)
+	defer setup.cleanupFn()
+
+	// Stuck-state precondition: status pinned at Loading with a blank pane.
+	setup.instance.SetStatus(session.Loading)
+
+	pane := NewPreviewPane()
+	pane.SetSize(80, 30)
+
+	// Tick 1: blank pane while still coming up → the setup splash.
+	require.NoError(t, pane.UpdateContent(setup.instance))
+	require.True(t, pane.previewState.fallback, "a blank, still-loading pane shows the setup splash")
+	require.Contains(t, pane.String(), "Setting up workspace")
+
+	// Tick 2: the pane produces output. The status flag is still a stale Loading, but live
+	// content must win and the splash must clear without any restart/reselect.
+	paneContent = "agent is working"
+	require.NoError(t, pane.UpdateContent(setup.instance))
+	require.False(t, pane.previewState.fallback,
+		"live pane content must clear the splash even while status is still Loading")
+	require.Contains(t, pane.String(), "agent is working")
+}
+
+// TestPreviewKeepsContentOnTransientCaptureError verifies a capture error never freezes a
+// stale fallback or blanks the pane: the last good content is retained and the error is
+// surfaced (not swallowed).
+func TestPreviewKeepsContentOnTransientCaptureError(t *testing.T) {
+	const liveContent = "agent is working"
+	sessionCreated := false
+	captureFails := false
+	cmdExec := cmd_test.MockCmdExec{
+		RunFunc: func(cmd *exec.Cmd) error {
+			cmdStr := cmd.String()
+			if strings.Contains(cmdStr, "has-session") {
+				if sessionCreated {
+					return nil
+				}
+				return fmt.Errorf("session does not exist")
+			}
+			if strings.Contains(cmdStr, "new-session") {
+				sessionCreated = true
+			}
+			return nil
+		},
+		OutputFunc: func(cmd *exec.Cmd) ([]byte, error) {
+			if strings.Contains(cmd.String(), "capture-pane") {
+				if captureFails {
+					return nil, fmt.Errorf("error capturing pane content")
+				}
+				return []byte(liveContent), nil
+			}
+			return []byte(""), nil
+		},
+	}
+
+	setup := setupTestEnvironment(t, cmdExec)
+	defer setup.cleanupFn()
+
+	pane := NewPreviewPane()
+	pane.SetSize(80, 30)
+
+	// Establish live content.
+	require.NoError(t, pane.UpdateContent(setup.instance))
+	require.False(t, pane.previewState.fallback)
+	require.Contains(t, pane.String(), liveContent)
+
+	// A transient capture error must surface but leave the last good content intact.
+	captureFails = true
+	require.Error(t, pane.UpdateContent(setup.instance))
+	require.False(t, pane.previewState.fallback, "a capture error must not flip to a stale fallback")
+	require.Contains(t, pane.String(), liveContent, "the last good content must be retained")
+}

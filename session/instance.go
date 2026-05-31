@@ -479,13 +479,18 @@ func (i *Instance) combineErrors(errs []error) error {
 }
 
 func (i *Instance) Preview() (string, error) {
-	if !i.isStarted() || i.Paused() {
+	if i.Paused() {
 		return "", nil
 	}
-	// A started session whose tmux pane has died (server restart, the agent
-	// process exited, an external kill) would fail capture every refresh and
-	// escalate to the error box. Treat a missing session as empty; the metadata
-	// loop detects it via TmuxAlive() and recovers the instance to Paused.
+	// Capture based on whether the tmux session actually exists, not the in-memory
+	// `started` flag. A brief window of stale `started` (mid-start, or a missed lifecycle
+	// write) must not blank the preview or pin the setup splash while the pane is genuinely
+	// live — UpdateContent decides what to show from the captured content.
+	//
+	// A started session whose tmux pane has died (server restart, the agent process exited,
+	// an external kill) would otherwise fail capture every refresh and escalate to the error
+	// box. Treat a missing session as empty; the metadata loop detects it via TmuxAlive() and
+	// recovers the instance to Paused.
 	ts := i.tmux()
 	if ts == nil || !ts.DoesSessionExist() {
 		return "", nil

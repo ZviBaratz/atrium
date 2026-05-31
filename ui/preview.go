@@ -2,13 +2,35 @@ package ui
 
 import (
 	"fmt"
+	"strings"
+	"time"
+
+	"github.com/ZviBaratz/atrium/log"
 	"github.com/ZviBaratz/atrium/session"
 	"github.com/ZviBaratz/atrium/ui/theme"
-	"strings"
 
 	"github.com/charmbracelet/bubbles/viewport"
 	"github.com/charmbracelet/lipgloss"
 )
+
+// previewFallbackLog rate-limits the diagnostic emitted whenever the preview falls
+// back to the "setting up" splash (or a capture error), so a genuinely stuck session
+// is recorded without flooding the log on every 100ms tick. It is the evidence trail
+// for the still-coming-up vs. stale-readiness question (see UpdateContent).
+var previewFallbackLog = log.NewEvery(5 * time.Second)
+
+// logPreviewFallback records the instance's observable readiness signals when the
+// preview cannot show live content, so the lying signal (stale Loading vs. !Started
+// vs. !TmuxAlive vs. a persistent capture error) can be identified from the log.
+func logPreviewFallback(instance *session.Instance, reason string, err error) {
+	if instance == nil || !previewFallbackLog.ShouldLog() {
+		return
+	}
+	log.InfoLog.Printf(
+		"preview fallback (%s): title=%q status=%d started=%t tmuxAlive=%t err=%v",
+		reason, instance.Title, instance.GetStatus(), instance.Started(), instance.TmuxAlive(), err,
+	)
+}
 
 // previewPaneStyle reads the active theme at render time.
 func previewPaneStyle() lipgloss.Style { return theme.Current().FgStyle() }
@@ -55,18 +77,18 @@ func (p *PreviewPane) setFallbackState(message string) {
 	}
 }
 
-// Updates the preview pane content with the tmux pane content
+// Updates the preview pane content with the tmux pane content.
+//
+// The splash decision is driven by what we can actually observe in the pane, not by
+// the mutable Status flag: a live pane (non-empty capture) always wins, so a stale
+// Loading / started value can never pin the "Setting up workspace..." splash. #28's
+// status-gated splash still relied on Started()/TmuxAlive() being current; when one of
+// those went stale the splash could freeze until restart. Capturing first removes that
+// dependency — the moment the pane yields content, the splash is gone on the next tick.
 func (p *PreviewPane) UpdateContent(instance *session.Instance) error {
 	switch {
 	case instance == nil:
 		p.setFallbackState("No agents running yet. Spin up a new instance with 'n' to get started!")
-		return nil
-	// Show the "setting up" splash only while the session is genuinely still coming up.
-	// Once it is started with a live tmux pane, render the real pane even if the status
-	// write hasn't landed yet — defense-in-depth so a stale Loading can never pin the
-	// splash (the authoritative fix sets Running on the main thread when Start completes).
-	case instance.GetStatus() == session.Loading && (!instance.Started() || !instance.TmuxAlive()):
-		p.setFallbackState("Setting up workspace...")
 		return nil
 	case instance.Paused():
 		p.setFallbackState(lipgloss.JoinVertical(lipgloss.Center,
@@ -83,41 +105,47 @@ func (p *PreviewPane) UpdateContent(instance *session.Instance) error {
 		return nil
 	}
 
-	var content string
-	var err error
-
-	// If in scroll mode but haven't captured content yet, do it now
-	if p.isScrolling && p.viewport.Height > 0 && len(p.viewport.View()) == 0 {
-		// Capture full pane content including scrollback history using capture-pane -p -S -
-		content, err = instance.PreviewFullHistory()
-		if err != nil {
-			return err
-		}
-
-		// Set content in the viewport
-		footer := scrollExitFooter()
-
-		p.viewport.SetContent(lipgloss.JoinVertical(lipgloss.Left, content, footer))
-	} else if !p.isScrolling {
-		// In normal mode, use the usual preview
-		content, err = instance.Preview()
-		if err != nil {
-			return err
-		}
-
-		// Always update the preview state with content, even if empty
-		// This ensures that newly created instances will display their content immediately
-		if len(content) == 0 && !instance.Started() {
-			p.setFallbackState("Please enter a name for the instance.")
-		} else {
-			// Update the preview state with the current content
-			p.previewState = previewState{
-				fallback: false,
-				text:     content,
+	// Scroll mode: capture full scrollback into the viewport once.
+	if p.isScrolling {
+		if p.viewport.Height > 0 && len(p.viewport.View()) == 0 {
+			content, err := instance.PreviewFullHistory()
+			if err != nil {
+				logPreviewFallback(instance, "scroll capture error", err)
+				return err
 			}
+			p.viewport.SetContent(lipgloss.JoinVertical(lipgloss.Left, content, scrollExitFooter()))
 		}
+		return nil
 	}
 
+	// Normal mode.
+	content, err := instance.Preview()
+	if err != nil {
+		// Never freeze a stale fallback (e.g. the setup splash) on a transient capture
+		// error: leave previewState untouched so the last good content stays, and surface
+		// the error rather than masking it.
+		logPreviewFallback(instance, "capture error", err)
+		return err
+	}
+
+	// A live pane always wins, regardless of the Status flag — this is the guarantee
+	// that the splash can never pin once the session is actually producing output.
+	if len(content) > 0 {
+		p.previewState = previewState{fallback: false, text: content}
+		return nil
+	}
+
+	// No content to show. Pick a fallback that reflects the session's real state.
+	switch {
+	case instance.GetStatus() == session.Loading || !instance.Started() || !instance.TmuxAlive():
+		// Still coming up (or its pane isn't readable yet): show the setup splash.
+		p.setFallbackState("Setting up workspace...")
+		logPreviewFallback(instance, "empty pane, not ready", nil)
+	default:
+		// Started, live, but the pane is momentarily blank — render it blank rather than
+		// reverting to the splash.
+		p.previewState = previewState{fallback: false, text: content}
+	}
 	return nil
 }
 
