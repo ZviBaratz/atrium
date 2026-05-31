@@ -314,7 +314,14 @@ func (r *InstanceRenderer) Render(i *session.Instance, idx int, selected bool) s
 	if selected {
 		nameStyle = nameStyle.Bold(true)
 	}
-	name := i.DisplayName()
+	// A user-set display name can contain emoji clusters (e.g. a ZWJ family
+	// sequence) whose measured width is narrower than what a terminal lacking the
+	// combined glyph actually renders. Sanitize the transient render string so the
+	// width measured here (for the budget/truncation below) matches the rendered
+	// width; otherwise the row overflows and wraps, desyncing bubbletea's
+	// incremental renderer — the same defect SanitizeWidth fixes for pane content.
+	// This is display-only and never mutates the stored display name.
+	name := theme.SanitizeWidth(i.DisplayName())
 	rightW := runewidth.StringWidth(rightPlain)
 	nameAvail := W - rightW - 1
 	if nameAvail < 1 {

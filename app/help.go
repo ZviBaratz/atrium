@@ -86,6 +86,7 @@ func (h helpTypeGeneral) toContent() string {
 		"",
 		helpHeaderStyle().Render("Other"),
 		helpRow("?", "toggle this cheatsheet"),
+		helpRow("ctrl-l", "force a full redraw of the screen"),
 		helpRow("q", "quit"),
 		"",
 		legend,
