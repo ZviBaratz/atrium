@@ -187,7 +187,10 @@ func TestSessionDeathStopsProbing(t *testing.T) {
 	_, _ = session.HasUpdated()
 
 	// Kill the session out from under cs (simulates a crash / external kill).
-	require.NoError(t, exec.Command("tmux", "kill-session", "-t", session.sanitizedName).Run())
+	// Must target the same dedicated socket the session was created on — bare
+	// `tmux kill-session` hits tmux's default socket, where this session never
+	// existed, so it would fail with "exit status 1".
+	require.NoError(t, tmuxCommand("kill-session", "-t", session.sanitizedName).Run())
 
 	// The pollers must now short-circuit cleanly rather than erroring every tick.
 	require.False(t, session.DoesSessionExist())

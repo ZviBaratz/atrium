@@ -73,10 +73,11 @@ Always confirm a change with `just build` **and** `just test` before claiming it
 works. `just test` is the source of truth for correctness; `just build` proves the
 binary still compiles and version-stamps.
 
-One known-flaky test, `TestSessionDeathStopsProbing` (package `session/tmux`),
-drives a real tmux server and can fail in constrained/nested environments — it is
-unrelated to most changes. Investigate only if your change touches tmux session
-lifecycle; otherwise skip it with `-skip TestSessionDeathStopsProbing`.
+Some `session/tmux` tests (e.g. `TestSessionDeathStopsProbing`) drive a **real**
+tmux server, so they self-skip when `tmux` is not on `PATH`. They run all tmux
+commands on Atrium's dedicated socket (`tmux -L <socket>`) — if you add a test that
+shells out to tmux directly, route it through the package's `tmuxCommand()` helper
+so it targets that same socket, not tmux's default one.
 
 ## Conventions
 
