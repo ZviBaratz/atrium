@@ -73,26 +73,32 @@ func continueProgram(program string) string {
 
 // detectPrompt reports whether region (the bottom chrome of the pane) shows a prompt that
 // blocks on the user's answer. Claude has two shapes: the tool-permission dialog, and any
-// interactive selection (AskUserQuestion, plan approval, etc.). The selection footer is
-// matched by its co-occurring tokens on one line ("Esc to cancel" + navigate/select) so a
-// sentence merely mentioning "Esc to cancel" cannot trip it.
+// interactive selection (AskUserQuestion, plan approval, etc.). Matching is done against the
+// flattened chrome (newlines collapsed to spaces) so a footer or sentence hard-wrapped at a
+// narrow pane width is still recognized. The selection footer requires its co-occurring tokens
+// ("Esc to cancel" + navigate/select) within a tight footer window, so prose merely mentioning
+// "Esc to cancel" higher in the chrome cannot trip it.
+//
+// region is already the promptChromeLines window (see Poll); the inner flattenChrome calls
+// re-window it, which stays correct only while footerChromeLines <= promptChromeLines so the
+// footer tokens remain reachable within region.
 func detectPrompt(program, region string) bool {
 	switch {
 	case strings.HasSuffix(program, ProgramClaude):
-		if strings.Contains(region, "No, and tell Claude what to do differently") {
+		if strings.Contains(flattenChrome(region, promptChromeLines),
+			"No, and tell Claude what to do differently") {
 			return true
 		}
-		for _, line := range strings.Split(region, "\n") {
-			if strings.Contains(line, "Esc to cancel") &&
-				(strings.Contains(line, "to navigate") || strings.Contains(line, "to select")) {
-				return true
-			}
+		footer := flattenChrome(region, footerChromeLines)
+		if strings.Contains(footer, "Esc to cancel") &&
+			(strings.Contains(footer, "to navigate") || strings.Contains(footer, "to select")) {
+			return true
 		}
 		return false
 	case strings.HasPrefix(program, ProgramAider):
-		return strings.Contains(region, "(Y)es/(N)o/(D)on't ask again")
+		return strings.Contains(flattenChrome(region, promptChromeLines), "(Y)es/(N)o/(D)on't ask again")
 	case strings.HasPrefix(program, ProgramGemini):
-		return strings.Contains(region, "Yes, allow once")
+		return strings.Contains(flattenChrome(region, promptChromeLines), "Yes, allow once")
 	}
 	return false
 }
@@ -187,7 +193,22 @@ func liveChromeLines(content string, n int) string {
 			kept = append(kept, lines[i])
 		}
 	}
+	// kept is collected bottom-up; reverse to natural top-to-bottom reading order so callers
+	// that reconstruct wrapped multi-line text (flattenChrome) join the lines in the order
+	// they were rendered. Substring callers (busy markers) are order-independent.
+	for l, r := 0, len(kept)-1; l < r; l, r = l+1, r-1 {
+		kept[l], kept[r] = kept[r], kept[l]
+	}
 	return strings.Join(kept, "\n")
+}
+
+// flattenChrome collapses the last n non-empty lines into one whitespace-normalized line.
+// A prompt's key-hint footer ("Enter to select · … · Esc to cancel") and the permission
+// dialog's decline option wrap across physical lines at a narrow pane width; flattening
+// (whiteSpaceRegex already spans newlines) reconstructs them so the substring/token matches
+// survive the wrap instead of silently leaving a waiting session classified as idle.
+func flattenChrome(content string, n int) string {
+	return whiteSpaceRegex.ReplaceAllString(liveChromeLines(content, n), " ")
 }
 
 // Window sizes for marker detection within the bottom chrome. The working status bar is
@@ -196,6 +217,10 @@ func liveChromeLines(content string, n int) string {
 const (
 	workChromeLines   = 3
 	promptChromeLines = 15
+	// footerChromeLines is the tight window for a prompt's key-hint footer. The footer wraps
+	// across at most a couple of physical lines at a narrow pane width, so a small window
+	// reconstructs it while keeping prose higher in the chrome from tripping detection.
+	footerChromeLines = 3
 )
 
 func toClaudeSquadTmuxName(str string) string {
