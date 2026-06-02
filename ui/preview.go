@@ -91,6 +91,11 @@ func (p *PreviewPane) UpdateContent(instance *session.Instance) error {
 		p.setFallbackState("No agents running yet. Spin up a new instance with 'n' to get started!")
 		return nil
 	case instance.Paused():
+		// A direct (non-git) session has no branch to check out — show a plain resume hint.
+		if instance.IsDirect() {
+			p.setFallbackState("Session is paused. Press 'r' to resume.")
+			return nil
+		}
 		p.setFallbackState(lipgloss.JoinVertical(lipgloss.Center,
 			"Session is paused. Press 'r' to resume.",
 			"",

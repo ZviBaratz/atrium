@@ -24,10 +24,12 @@ type DirectoryPicker struct {
 	width       int
 	visibleRows int // number of candidate rows to render (kept constant across focus)
 
-	// validityChecked/selectionValid let the call site surface an inline "(not a git
-	// repo)" hint as the selection changes, instead of only rejecting it at submit.
+	// These let the call site surface an inline hint as the selection changes, instead of
+	// only reacting at submit. selectionValid means the path exists and is a directory;
+	// selectionDirect means it is a valid directory but not a git repo (→ direct session).
 	validityChecked bool
 	selectionValid  bool
+	selectionDirect bool
 }
 
 // NewDirectoryPicker creates a directory picker over the given candidate paths.
@@ -75,11 +77,13 @@ func (dp *DirectoryPicker) IsFocused() bool {
 	return dp.focused
 }
 
-// SetSelectionValidity records whether the currently selected path is a valid git
-// repository, so Render can show an inline indicator while the user is choosing.
-func (dp *DirectoryPicker) SetSelectionValidity(valid bool) {
+// SetSelectionState records the currently selected path's state so Render can show an
+// inline indicator while the user is choosing: valid means it is an existing directory;
+// direct means it is a directory that is not a git repo (a direct session).
+func (dp *DirectoryPicker) SetSelectionState(valid, direct bool) {
 	dp.validityChecked = true
 	dp.selectionValid = valid
+	dp.selectionDirect = direct
 }
 
 // HandleKeyPress processes a key event. Returns (consumed, selectionChanged).
@@ -181,6 +185,23 @@ func dpSelectedStyle() lipgloss.Style {
 }
 func dpDimStyle() lipgloss.Style     { return theme.Current().DimStyle() }
 func dpInvalidStyle() lipgloss.Style { return theme.Current().DangerStyle() }
+func dpDirectStyle() lipgloss.Style  { return theme.Current().DimStyle().Italic(true) }
+
+// selectionHint returns the inline indicator for the current selection state: a red
+// "(not a directory)" for an invalid target, a muted "(direct session — no git
+// isolation)" for a valid non-git directory, or empty for a normal git repo.
+func (dp *DirectoryPicker) selectionHint() string {
+	if !dp.validityChecked {
+		return ""
+	}
+	if !dp.selectionValid {
+		return dpInvalidStyle().Render("  (not a directory)")
+	}
+	if dp.selectionDirect {
+		return dpDirectStyle().Render("  (direct session — no git isolation)")
+	}
+	return ""
+}
 
 // Render renders the directory picker at a constant height (one header line, a blank
 // line, then visibleRows item rows) so the surrounding overlay never changes size
@@ -196,9 +217,7 @@ func (dp *DirectoryPicker) Render() string {
 		} else {
 			s.WriteString(dpDimStyle().Render("(none)"))
 		}
-		if dp.validityChecked && !dp.selectionValid {
-			s.WriteString(dpInvalidStyle().Render("  (not a git repo)"))
-		}
+		s.WriteString(dp.selectionHint())
 		s.WriteString("\n\n")
 		s.WriteString(renderPickerRows(nil, 0, dp.visibleRows, false, "", dpSelectedStyle(), dpDimStyle()))
 		return s.String()
@@ -206,9 +225,7 @@ func (dp *DirectoryPicker) Render() string {
 
 	s.WriteString(dpLabelStyle().Render("Project"))
 	s.WriteString(dpFilterStyle().Render(" (filter/path: " + dp.filter + "█)"))
-	if dp.validityChecked && !dp.selectionValid {
-		s.WriteString(dpInvalidStyle().Render("  (not a git repo)"))
-	}
+	s.WriteString(dp.selectionHint())
 	s.WriteString("\n\n")
 
 	items := dp.visibleItems()

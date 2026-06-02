@@ -120,14 +120,25 @@ func TestDirectoryPicker_FocusedRenderListsCandidates(t *testing.T) {
 	assert.Contains(t, out, "/repo/b")
 }
 
-func TestDirectoryPicker_InvalidRepoIndicator(t *testing.T) {
+func TestDirectoryPicker_SelectionStateIndicator(t *testing.T) {
 	dp := NewDirectoryPicker([]string{"/repo/a"})
 	dp.Focus()
-	dp.SetSelectionValidity(false)
-	assert.Contains(t, dp.Render(), "not a git repo")
 
-	dp.SetSelectionValidity(true)
-	assert.NotContains(t, dp.Render(), "not a git repo")
+	// Not a directory at all → red invalid hint.
+	dp.SetSelectionState(false, false)
+	assert.Contains(t, dp.Render(), "not a directory")
+
+	// A valid directory that is not a git repo → direct-session hint.
+	dp.SetSelectionState(true, true)
+	out := dp.Render()
+	assert.Contains(t, out, "direct session")
+	assert.NotContains(t, out, "not a directory")
+
+	// A valid git repo → no hint at all.
+	dp.SetSelectionState(true, false)
+	out = dp.Render()
+	assert.NotContains(t, out, "not a directory")
+	assert.NotContains(t, out, "direct session")
 }
 
 func TestDirectoryPicker_EmptyMatchHintsFreeText(t *testing.T) {

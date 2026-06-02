@@ -752,9 +752,11 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		// fresh (debounced) search with the current branch filter.
 		if newPath := m.textInputOverlay.GetSelectedPath(); newPath != "" && newPath != m.newSessionPath {
 			m.newSessionPath = newPath
-			// Validate up front so the picker can flag a non-repo inline, rather than
-			// only rejecting it at submit after the user has filled in the prompt.
-			m.textInputOverlay.SetTargetValidity(git.IsGitRepo(newPath))
+			// Validate up front so the picker can flag the target inline, rather than
+			// only reacting at submit after the user has filled in the prompt. A non-git
+			// directory is valid — it becomes a direct session.
+			valid := isDirectory(newPath)
+			m.textInputOverlay.SetTargetValidity(valid, valid && !git.IsGitRepo(newPath))
 			version := m.textInputOverlay.InvalidateBranchSearch()
 			return m, m.scheduleBranchSearch(m.textInputOverlay.BranchFilter(), version)
 		}
@@ -932,18 +934,20 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 			return m, m.handleError(
 				fmt.Errorf("you can't create more than %d instances", GlobalInstanceLimit))
 		}
-		// Derive the contextual target repo before adding the new instance. The inline
-		// `n` flow has no directory picker, so if there is no repo context (e.g. cs was
-		// launched outside a repo with no sessions), guide the user to `N` instead of
-		// letting session creation fail later at worktree time.
+		// Derive the contextual target before adding the new instance. The inline `n`
+		// flow has no directory picker, so the target must already be a real directory
+		// (e.g. cs launched outside any directory leaves no context); guide the user to
+		// `N` otherwise. A non-git directory is fine — it becomes a direct session.
 		m.newSessionPath = m.defaultNewSessionPath()
-		if !git.IsGitRepo(m.newSessionPath) {
-			return m, m.handleError(fmt.Errorf("not in a git repository; press N to choose a project"))
+		if !isDirectory(m.newSessionPath) {
+			return m, m.handleError(fmt.Errorf("no directory context; press N to choose a project"))
 		}
+		direct := !git.IsGitRepo(m.newSessionPath)
 		instance, err := session.NewInstance(session.InstanceOptions{
 			Title:   "",
 			Path:    m.newSessionPath,
 			Program: m.program,
+			Direct:  direct,
 		})
 		if err != nil {
 			return m, m.handleError(err)
@@ -958,7 +962,11 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		m.newInstance = instance
 		m.state = stateNew
 		m.menu.SetState(ui.StateNewInstance)
-		m.menu.SetNewInstanceHint(filepath.Base(m.newSessionPath))
+		hint := filepath.Base(m.newSessionPath)
+		if direct {
+			hint += " (direct)"
+		}
+		m.menu.SetNewInstanceHint(hint)
 		m.recomputeLayout() // the hint bar now claims a row; shrink the panes to fit
 
 		return m, nil
@@ -1045,6 +1053,11 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		selected := m.list.GetSelectedInstance()
 		if selected == nil || selected.GetStatus() == session.Loading {
 			return m, nil
+		}
+		// A direct (non-git) session has nothing to push. Fail fast rather than prompting
+		// for confirmation and only then erroring. (The menu also hides this action.)
+		if selected.IsDirect() {
+			return m, m.handleError(fmt.Errorf("push is not available for a direct (non-git) session"))
 		}
 
 		// Create the push action as a tea.Cmd
@@ -1626,9 +1639,10 @@ func (m *home) handleInfoState(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 // profile, branch, prompt) for the `N` flow.
 func (m *home) newSessionFormOverlay() *overlay.TextInputOverlay {
 	ov := overlay.NewSessionCreateOverlay(m.appConfig.GetProfiles(), m.candidateRepoPaths())
-	// Seed the initial validity so the picker can flag a non-repo default target
-	// (e.g. when cs was launched outside a git repo) before the user navigates.
-	ov.SetTargetValidity(git.IsGitRepo(m.newSessionPath))
+	// Seed the initial validity so the picker can flag the default target before the user
+	// navigates: a non-git default directory shows the direct-session hint, not a block.
+	valid := isDirectory(m.newSessionPath)
+	ov.SetTargetValidity(valid, valid && !git.IsGitRepo(m.newSessionPath))
 	return ov
 }
 
@@ -1649,10 +1663,12 @@ func (m *home) createSessionFromForm(prompt string) tea.Cmd {
 	if path == "" {
 		path = m.newSessionPath
 	}
-	if !git.IsGitRepo(path) {
+	if !isDirectory(path) {
 		ov.Submitted = false
-		return m.handleError(fmt.Errorf("%q is not a git repository", path))
+		return m.handleError(fmt.Errorf("%q is not a directory", path))
 	}
+	// A non-git directory becomes a direct session (agent runs in place, no worktree).
+	direct := !git.IsGitRepo(path)
 
 	program := m.program
 	if p := ov.GetSelectedProgram(); p != "" {
@@ -1663,6 +1679,7 @@ func (m *home) createSessionFromForm(prompt string) tea.Cmd {
 		Title:   title,
 		Path:    path,
 		Program: program,
+		Direct:  direct,
 	})
 	if err != nil {
 		ov.Submitted = false
@@ -1689,6 +1706,12 @@ func (m *home) createSessionFromForm(prompt string) tea.Cmd {
 		return instanceStartedMsg{instance: instance, err: err}
 	}
 	return tea.Batch(tea.WindowSize(), m.instanceChanged(), startCmd)
+}
+
+// isDirectory reports whether path exists and is a directory.
+func isDirectory(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && info.IsDir()
 }
 
 // defaultNewSessionPath returns the contextual target repo for a new session: the
@@ -1725,7 +1748,7 @@ func (m *home) candidateRepoPaths() []string {
 	for _, p := range m.appState.GetRecentPaths() {
 		// Skip recent paths that no longer exist so deleted/moved repos don't clutter
 		// the picker or error only when selected.
-		if info, err := os.Stat(p); err != nil || !info.IsDir() {
+		if !isDirectory(p) {
 			continue
 		}
 		add(p)
