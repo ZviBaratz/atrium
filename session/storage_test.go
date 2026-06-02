@@ -128,7 +128,7 @@ func newPausedInstance(t *testing.T, title string) *Instance {
 	t.Helper()
 	inst, err := NewInstance(InstanceOptions{Title: title, Path: ".", Program: "echo"})
 	require.NoError(t, err)
-	inst.Status = Paused
+	inst.status = Paused
 	inst.started = true // mark started so ToInstanceData / SaveInstances includes it
 	return inst
 }
@@ -154,7 +154,7 @@ func TestStorageRoundTrip(t *testing.T) {
 	require.Len(t, got, 2)
 	assert.Equal(t, "alpha", got[0].Title)
 	assert.Equal(t, "beta", got[1].Title)
-	assert.Equal(t, Paused, got[0].Status)
+	assert.Equal(t, Paused, got[0].status)
 }
 
 // TestUpdateInstance_UpdatesField confirms that UpdateInstance persists a changed
