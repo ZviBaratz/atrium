@@ -755,8 +755,8 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 			// Validate up front so the picker can flag the target inline, rather than
 			// only reacting at submit after the user has filled in the prompt. A non-git
 			// directory is valid — it becomes a direct session.
-			valid := isDirectory(newPath)
-			m.textInputOverlay.SetTargetValidity(valid, valid && !git.IsGitRepo(newPath))
+			valid, direct := targetValidity(newPath)
+			m.textInputOverlay.SetTargetValidity(valid, direct)
 			version := m.textInputOverlay.InvalidateBranchSearch()
 			return m, m.scheduleBranchSearch(m.textInputOverlay.BranchFilter(), version)
 		}
@@ -939,10 +939,10 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		// (e.g. cs launched outside any directory leaves no context); guide the user to
 		// `N` otherwise. A non-git directory is fine — it becomes a direct session.
 		m.newSessionPath = m.defaultNewSessionPath()
-		if !isDirectory(m.newSessionPath) {
+		valid, direct := targetValidity(m.newSessionPath)
+		if !valid {
 			return m, m.handleError(fmt.Errorf("no directory context; press N to choose a project"))
 		}
-		direct := !git.IsGitRepo(m.newSessionPath)
 		instance, err := session.NewInstance(session.InstanceOptions{
 			Title:   "",
 			Path:    m.newSessionPath,
@@ -1081,6 +1081,13 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		selected := m.list.GetSelectedInstance()
 		if selected == nil || selected.GetStatus() == session.Loading {
 			return m, nil
+		}
+
+		// A direct (non-git) session has no worktree to free and runs in the user's
+		// real directory, so pausing it would only detach a still-running agent.
+		// Warn instead of pausing. (The menu also hides this action for direct sessions.)
+		if selected.IsDirect() {
+			return m, m.handleError(fmt.Errorf("pause is not available for a direct (non-git) session; it runs in place with no worktree to free"))
 		}
 
 		// Checkout: commit changes and pause. The branch name is copied to the
@@ -1641,8 +1648,8 @@ func (m *home) newSessionFormOverlay() *overlay.TextInputOverlay {
 	ov := overlay.NewSessionCreateOverlay(m.appConfig.GetProfiles(), m.candidateRepoPaths())
 	// Seed the initial validity so the picker can flag the default target before the user
 	// navigates: a non-git default directory shows the direct-session hint, not a block.
-	valid := isDirectory(m.newSessionPath)
-	ov.SetTargetValidity(valid, valid && !git.IsGitRepo(m.newSessionPath))
+	valid, direct := targetValidity(m.newSessionPath)
+	ov.SetTargetValidity(valid, direct)
 	return ov
 }
 
@@ -1663,12 +1670,12 @@ func (m *home) createSessionFromForm(prompt string) tea.Cmd {
 	if path == "" {
 		path = m.newSessionPath
 	}
-	if !isDirectory(path) {
+	// A non-git directory becomes a direct session (agent runs in place, no worktree).
+	valid, direct := targetValidity(path)
+	if !valid {
 		ov.Submitted = false
 		return m.handleError(fmt.Errorf("%q is not a directory", path))
 	}
-	// A non-git directory becomes a direct session (agent runs in place, no worktree).
-	direct := !git.IsGitRepo(path)
 
 	program := m.program
 	if p := ov.GetSelectedProgram(); p != "" {
@@ -1708,10 +1715,14 @@ func (m *home) createSessionFromForm(prompt string) tea.Cmd {
 	return tea.Batch(tea.WindowSize(), m.instanceChanged(), startCmd)
 }
 
-// isDirectory reports whether path exists and is a directory.
-func isDirectory(path string) bool {
-	info, err := os.Stat(path)
-	return err == nil && info.IsDir()
+// targetValidity reports whether path is a usable new-session target and, if so,
+// whether it would be a direct (non-git) session. Both the inline (`n`) and form
+// (`N`) flows use it to drive the picker's inline hint and to set the Direct flag.
+func targetValidity(path string) (valid, direct bool) {
+	if !config.DirExists(path) {
+		return false, false
+	}
+	return true, !git.IsGitRepo(path)
 }
 
 // defaultNewSessionPath returns the contextual target repo for a new session: the
@@ -1748,7 +1759,7 @@ func (m *home) candidateRepoPaths() []string {
 	for _, p := range m.appState.GetRecentPaths() {
 		// Skip recent paths that no longer exist so deleted/moved repos don't clutter
 		// the picker or error only when selected.
-		if !isDirectory(p) {
+		if !config.DirExists(p) {
 			continue
 		}
 		add(p)
@@ -1811,12 +1822,17 @@ func (m *home) confirmKill(inst *session.Instance) tea.Cmd {
 		// base-repo-only predicate. This is a teardown path: if the worktree or its
 		// repo is unreachable — e.g. the user renamed/removed the project directory —
 		// fail open and proceed, otherwise an orphaned session can never be deleted.
-		if worktree, err := inst.GetGitWorktree(); err != nil {
-			log.WarningLog.Printf("kill %s: cannot resolve worktree, proceeding: %v", inst.Title, err)
-		} else if heldByBase, cerr := worktree.IsBranchHeldByBaseRepo(); cerr != nil {
-			log.WarningLog.Printf("kill %s: cannot verify branch checkout, proceeding: %v", inst.Title, cerr)
-		} else if heldByBase {
-			return fmt.Errorf("branch for %s is checked out in the main repo; switch it away before deleting", inst.DisplayName())
+		// A direct (non-git) session has no branch or worktree, so skip the base-repo
+		// branch check entirely — calling GetGitWorktree would only log a misleading
+		// "cannot resolve worktree" warning for a session that never had one.
+		if !inst.IsDirect() {
+			if worktree, err := inst.GetGitWorktree(); err != nil {
+				log.WarningLog.Printf("kill %s: cannot resolve worktree, proceeding: %v", inst.Title, err)
+			} else if heldByBase, cerr := worktree.IsBranchHeldByBaseRepo(); cerr != nil {
+				log.WarningLog.Printf("kill %s: cannot verify branch checkout, proceeding: %v", inst.Title, cerr)
+			} else if heldByBase {
+				return fmt.Errorf("branch for %s is checked out in the main repo; switch it away before deleting", inst.DisplayName())
+			}
 		}
 
 		// Clean up terminal session for this instance

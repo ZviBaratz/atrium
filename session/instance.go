@@ -268,7 +268,7 @@ func (i *Instance) recoverInPlace() {
 func (i *Instance) recreateSession() error {
 	ts := i.tmux()
 	wt := i.worktree()
-	if err := ts.StartContinue(i.workingDir()); err != nil {
+	if err := ts.StartContinue(i.WorkingDir()); err != nil {
 		log.ErrorLog.Print(err)
 		// Cleanup git worktree if tmux session creation fails. A direct session has no
 		// worktree (wt == nil) and nothing to clean up.
@@ -395,9 +395,10 @@ func (i *Instance) IsDirect() bool {
 	return i.direct
 }
 
-// workingDir is the directory the agent's tmux session runs in: the isolated worktree
-// path for a git session, or Path itself for a direct session (no worktree).
-func (i *Instance) workingDir() string {
+// WorkingDir is the directory the agent's tmux session runs in: the isolated worktree
+// path for a git session, or Path itself for a direct session (no worktree). The UI
+// (e.g. the terminal pane) uses it to host shells in the same cwd as the agent.
+func (i *Instance) WorkingDir() string {
 	if wt := i.worktree(); wt != nil {
 		return wt.GetWorktreePath()
 	}
@@ -480,7 +481,7 @@ func (i *Instance) Start(firstTimeSetup bool) error {
 		}
 
 		// Create new session
-		if err := tmuxSession.Start(i.workingDir()); err != nil {
+		if err := tmuxSession.Start(i.WorkingDir()); err != nil {
 			// Cleanup git worktree if tmux session creation fails
 			if wt != nil {
 				if cleanupErr := wt.Cleanup(); cleanupErr != nil {
@@ -758,7 +759,15 @@ func (i *Instance) TmuxAlive() bool {
 
 // Pause stops the tmux session and removes the worktree, preserving the branch.
 // It copies the branch name to the clipboard so the user can check it out elsewhere.
+//
+// A direct (non-git) session has no worktree to free and runs in the user's real
+// directory, so "pausing" it would only detach a still-running agent while the UI
+// claims it is parked — misleading. Pause therefore refuses a direct session. (A
+// direct session whose pane actually dies is still parked via RecoverLostSession.)
 func (i *Instance) Pause() error {
+	if i.direct {
+		return fmt.Errorf("cannot pause a direct (non-git) session: it runs in place with no worktree to free")
+	}
 	return i.pause(true)
 }
 
@@ -783,8 +792,10 @@ func (i *Instance) pause(copyBranchToClipboard bool) error {
 	ts := i.tmux()
 	wt := i.worktree()
 
-	// Direct session: no worktree to commit/remove. Pause is just a detach — leave the
-	// tmux session running and never touch the user's real directory.
+	// Direct session: no worktree to commit/remove. User-initiated Pause is refused
+	// for direct sessions (see Pause), so this branch is only reached via
+	// RecoverLostSession when the pane has died — park it so the poll loop stops and
+	// the user can Resume, without ever touching the user's real directory.
 	if wt == nil {
 		if err := ts.DetachSafely(); err != nil {
 			log.ErrorLog.Print(err)

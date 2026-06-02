@@ -26,7 +26,7 @@ func directTmux(name string) *tmux.TmuxSession {
 }
 
 // TestNewInstance_DirectFlag verifies a direct session is born with no worktree, no
-// branch, and IsDirect() true, and that workingDir() resolves to Path (the cwd the tmux
+// branch, and IsDirect() true, and that WorkingDir() resolves to Path (the cwd the tmux
 // session runs in — the actual -c wiring is covered by tmux.TestStartTmuxSession).
 func TestNewInstance_DirectFlag(t *testing.T) {
 	dir := t.TempDir()
@@ -36,7 +36,7 @@ func TestNewInstance_DirectFlag(t *testing.T) {
 	assert.True(t, inst.IsDirect(), "Direct option must set IsDirect")
 	assert.Nil(t, inst.worktree(), "a direct session has no worktree")
 	assert.Empty(t, inst.Branch, "a direct session has no branch")
-	assert.Equal(t, dir, inst.workingDir(), "tmux cwd must be Path for a direct session")
+	assert.Equal(t, dir, inst.WorkingDir(), "tmux cwd must be Path for a direct session")
 }
 
 // TestDirectSession_RepoNameIsBasename verifies grouping identity falls back to the
@@ -79,17 +79,36 @@ func TestDirectSession_KillKeepsDirectory(t *testing.T) {
 	require.NoError(t, err, "Kill must not delete the direct session's real directory")
 }
 
-// TestDirectSession_PauseDetachesKeepsDirectory verifies Pause for a direct session is a
-// detach: it transitions to Paused without touching the directory.
-func TestDirectSession_PauseDetachesKeepsDirectory(t *testing.T) {
+// TestDirectSession_PauseRefused verifies user-initiated Pause is disabled for a direct
+// session: it returns an error, leaves the session Running, and never touches the
+// directory. (Pausing would only detach a still-running agent while claiming it parked.)
+func TestDirectSession_PauseRefused(t *testing.T) {
 	dir := t.TempDir()
 	inst := &Instance{Title: "d", status: Running, started: true, direct: true, Path: dir, tmuxSession: directTmux("d")}
 
-	require.NoError(t, inst.Pause())
-	assert.True(t, inst.Paused(), "a direct session must transition to Paused")
+	err := inst.Pause()
+	require.Error(t, err, "Pause must be refused for a direct session")
+	assert.False(t, inst.Paused(), "a refused Pause must leave the session Running")
+	assert.Equal(t, Running, inst.GetStatus())
 
-	_, err := os.Stat(dir)
-	require.NoError(t, err, "Pause must not remove the direct session's directory")
+	if _, statErr := os.Stat(dir); statErr != nil {
+		t.Fatalf("Pause must not remove the direct session's directory: %v", statErr)
+	}
+}
+
+// TestDirectSession_RecoverLostSessionParks verifies that when a direct session's pane
+// dies, the system-initiated RecoverLostSession still parks it (Paused) so the poll loop
+// stops — without removing the user's real directory.
+func TestDirectSession_RecoverLostSessionParks(t *testing.T) {
+	dir := t.TempDir()
+	inst := &Instance{Title: "d", status: Running, started: true, direct: true, Path: dir, tmuxSession: directTmux("d")}
+
+	require.NoError(t, inst.RecoverLostSession())
+	assert.True(t, inst.Paused(), "a lost direct session must be parked as Paused")
+
+	if _, statErr := os.Stat(dir); statErr != nil {
+		t.Fatalf("RecoverLostSession must not remove the direct session's directory: %v", statErr)
+	}
 }
 
 // TestDirectSession_RenameRenamesTmuxOnly verifies a deep rename of a direct session

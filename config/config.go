@@ -31,10 +31,10 @@ func GetConfigDir() (string, error) {
 		return "", fmt.Errorf("failed to get config home directory: %w", err)
 	}
 	newDir := filepath.Join(homeDir, configDirName)
-	if dirExists(newDir) {
+	if DirExists(newDir) {
 		return newDir, nil
 	}
-	if legacy := filepath.Join(homeDir, legacyConfigDirName); dirExists(legacy) {
+	if legacy := filepath.Join(homeDir, legacyConfigDirName); DirExists(legacy) {
 		return legacy, nil
 	}
 	return newDir, nil

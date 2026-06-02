@@ -365,22 +365,35 @@ func (r *InstanceRenderer) Render(i *session.Instance, idx int, selected bool) s
 		}
 	}
 
-	// Budget the branch (the only variable-length part) so the line fits W.
-	fixedW := runewidth.StringWidth(g.Branch+" ") + runewidth.StringWidth(gctxPlain) + runewidth.StringWidth(diffPlain)
-	branchBudget := W - fixedW - 1 // 1 = min gap before the diff stat
-	branch := i.Branch
-	if branchBudget < 1 {
-		branch = ""
-	} else if runewidth.StringWidth(branch) > branchBudget {
-		branch = runewidth.Truncate(branch, branchBudget, "…")
+	var line2 string
+	if i.IsDirect() {
+		// Direct (non-git) session: no branch, ahead/behind, or diff. The git line below
+		// would render a dangling branch glyph with no name, so show a concise dim marker
+		// instead — consistent with the diff pane and picker hint. Pad to W so the
+		// selected-row background fills the line.
+		label := "direct · no git isolation"
+		if runewidth.StringWidth(label) > W {
+			label = runewidth.Truncate(label, W, "…")
+		}
+		line2 = seg(th.Palette.FgDim).Render(label) + pad(W-runewidth.StringWidth(label))
+	} else {
+		// Budget the branch (the only variable-length part) so the line fits W.
+		fixedW := runewidth.StringWidth(g.Branch+" ") + runewidth.StringWidth(gctxPlain) + runewidth.StringWidth(diffPlain)
+		branchBudget := W - fixedW - 1 // 1 = min gap before the diff stat
+		branch := i.Branch
+		if branchBudget < 1 {
+			branch = ""
+		} else if runewidth.StringWidth(branch) > branchBudget {
+			branch = runewidth.Truncate(branch, branchBudget, "…")
+		}
+		leftPlain := g.Branch + " " + branch + gctxPlain
+		leftStyled := seg(th.Palette.FgDim).Render(g.Branch+" "+branch) + gctxStyled
+		gap2 := W - runewidth.StringWidth(leftPlain) - runewidth.StringWidth(diffPlain)
+		if gap2 < 1 {
+			gap2 = 1
+		}
+		line2 = leftStyled + pad(gap2) + diffStyled
 	}
-	leftPlain := g.Branch + " " + branch + gctxPlain
-	leftStyled := seg(th.Palette.FgDim).Render(g.Branch+" "+branch) + gctxStyled
-	gap2 := W - runewidth.StringWidth(leftPlain) - runewidth.StringWidth(diffPlain)
-	if gap2 < 1 {
-		gap2 = 1
-	}
-	line2 := leftStyled + pad(gap2) + diffStyled
 
 	// --- Left marker (accent bar when selected) + compose ---
 	marker := pad(1)

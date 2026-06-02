@@ -140,7 +140,9 @@ func (m *Menu) addInstanceOptions() {
 	}
 	if m.instance.Paused() {
 		actionGroup = append(actionGroup, keys.KeyResume)
-	} else {
+	} else if !m.instance.IsDirect() {
+		// A direct (non-git) session has no worktree to free, so pause/checkout is
+		// disabled — omit it rather than offering an action that only warns.
 		actionGroup = append(actionGroup, keys.KeyCheckout)
 	}
 
