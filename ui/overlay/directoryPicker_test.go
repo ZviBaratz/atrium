@@ -56,12 +56,15 @@ func TestDirectoryPicker_FilterMatchesCandidates(t *testing.T) {
 func TestDirectoryPicker_FreeTextPathEntry(t *testing.T) {
 	dp := NewDirectoryPicker([]string{"/home/me/repoA"})
 
-	// A filter that looks like a path is offered as a selectable entry, resolved to abs.
-	for _, r := range "/tmp/elsewhere" {
+	// A filter that looks like a path to a not-yet-existing location is offered as a
+	// selectable entry, resolved to abs. Use an empty temp dir so no on-disk sibling
+	// can fuzzy-match and steal the selection.
+	root := t.TempDir()
+	target := filepath.Join(root, "elsewhere")
+	for _, r := range target {
 		dp.HandleKeyPress(runes(string(r)))
 	}
-	abs, _ := filepath.Abs("/tmp/elsewhere")
-	assert.Equal(t, abs, dp.GetSelectedPath())
+	assert.Equal(t, target, dp.GetSelectedPath())
 }
 
 func TestDirectoryPicker_RelativePathExpandsToAbs(t *testing.T) {
@@ -137,6 +140,20 @@ func TestDirectoryPicker_SelectionStateIndicator(t *testing.T) {
 	// A valid git repo → no hint at all.
 	dp.SetSelectionState(true, false)
 	out = dp.Render()
+	assert.NotContains(t, out, "not a directory")
+	assert.NotContains(t, out, "direct session")
+}
+
+func TestDirectoryPicker_ClearSelectionStateHidesHint(t *testing.T) {
+	dp := NewDirectoryPicker([]string{"/repo/a"})
+	dp.Focus()
+	dp.SetSelectionState(false, false)
+	require.Contains(t, dp.Render(), "not a directory")
+
+	// Clearing returns the indicator to "unknown": no hint of any kind until a fresh
+	// check resolves.
+	dp.ClearSelectionState()
+	out := dp.Render()
 	assert.NotContains(t, out, "not a directory")
 	assert.NotContains(t, out, "direct session")
 }

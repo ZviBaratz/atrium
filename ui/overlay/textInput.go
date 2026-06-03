@@ -64,7 +64,7 @@ const (
 // createFormHelp is the single footer line describing how to navigate the create form.
 // Enter advances between fields (and inserts a newline in the prompt), so submission is
 // surfaced as Ctrl+S — which works from any field — rather than an ambiguous "Enter create".
-const createFormHelp = "Tab/⇧Tab move · ↑↓ select · type to filter · ⌃S create"
+const createFormHelp = "Tab complete/move · ↑↓ select · type to filter · ⌃S create"
 
 // renderPickerRows renders a list of pre-formatted labels windowed around the cursor,
 // always emitting exactly rows lines (padding with blanks) so the caller's height is
@@ -177,10 +177,11 @@ func NewSessionCreateOverlay(profiles []config.Profile, dirCandidates []string) 
 		pp = NewProfilePicker(profiles)
 	}
 
-	// Title first (where focus starts), then the prompt — the input that distinguishes this
-	// flow from the inline `n` flow — followed by project, optional profile, and branch.
-	// Branch stays after project because branches are scoped to the chosen project.
-	stops := []focusStop{stopTitle, stopTextarea, stopDirectory}
+	// Project first (where focus starts), so the repo is chosen before the session is named,
+	// then the title, then the prompt — the input that distinguishes this flow from the
+	// inline `n` flow — followed by the optional profile and the branch. Branch stays after
+	// project because branches are scoped to the chosen project.
+	stops := []focusStop{stopDirectory, stopTitle, stopTextarea}
 	if pp != nil && pp.HasMultiple() {
 		stops = append(stops, stopProfile)
 	}
@@ -196,7 +197,7 @@ func NewSessionCreateOverlay(profiles []config.Profile, dirCandidates []string) 
 		stops:           stops,
 		isCreateForm:    true,
 	}
-	overlay.focusStop(stopTitle)
+	overlay.focusStop(stopDirectory)
 	return overlay
 }
 
@@ -368,6 +369,11 @@ func (t *TextInputOverlay) HandleKeyPress(msg tea.KeyMsg) (bool, bool) {
 	numStops := len(t.stops)
 	switch msg.Type {
 	case tea.KeyTab:
+		// In the project field, Tab first tries shell-style path completion; only when
+		// there is nothing left to complete does it advance to the next field.
+		if t.isDirectoryPicker() && t.directoryPicker.CompletePrefix() {
+			return false, false
+		}
 		t.setFocusIndex((t.FocusIndex + 1) % numStops)
 		return false, false
 	case tea.KeyShiftTab:
@@ -479,6 +485,15 @@ func (t *TextInputOverlay) SetTargetValidity(valid, direct bool) {
 		return
 	}
 	t.directoryPicker.SetSelectionState(valid, direct)
+}
+
+// ClearTargetValidity resets the target-directory state indicator to "unknown", so no
+// hint is shown until a fresh check resolves. No-op when there is no directory picker.
+func (t *TextInputOverlay) ClearTargetValidity() {
+	if t.directoryPicker == nil {
+		return
+	}
+	t.directoryPicker.ClearSelectionState()
 }
 
 // GetSelectedBranch returns the selected branch name from the branch picker.
@@ -649,11 +664,11 @@ func (t *TextInputOverlay) renderCreateForm(divider string) string {
 	}
 
 	b.WriteString(tiTitleStyle().Render(t.Title) + "\n")
-	section(tiLabelStyle().Render("Title") + "  " + t.titleInput.View())
-	section(tiLabelStyle().Render("Prompt") + "\n" + t.textarea.View())
 	if t.directoryPicker != nil {
 		section(t.directoryPicker.Render())
 	}
+	section(tiLabelStyle().Render("Title") + "  " + t.titleInput.View())
+	section(tiLabelStyle().Render("Prompt") + "\n" + t.textarea.View())
 	if t.profilePicker != nil {
 		section(t.profilePicker.Render())
 	}

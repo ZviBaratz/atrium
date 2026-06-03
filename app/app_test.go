@@ -740,6 +740,90 @@ func TestConfirmActionSurfacesActionResult(t *testing.T) {
 	assert.Equal(t, wantErr, err)
 }
 
+// TestTargetValidityResultUpdatesIndicator verifies the async target-state result, when
+// it is for the still-current target, drives the picker's inline hint: "(not a
+// directory)" for an invalid target, the direct-session note for a non-git directory,
+// and no hint for a git repo.
+func TestTargetValidityResultUpdatesIndicator(t *testing.T) {
+	const repo = "/some/repo"
+	ov := overlay.NewSessionCreateOverlay(nil, []string{repo})
+	ov.SetSize(80, 24)
+	h := &home{
+		ctx:              context.Background(),
+		state:            statePrompt,
+		appConfig:        config.DefaultConfig(),
+		textInputOverlay: ov,
+		newSessionPath:   repo,
+	}
+
+	_, _ = h.Update(targetValidityResultMsg{path: repo, valid: false})
+	assert.Contains(t, ov.Render(), "not a directory", "an invalid result shows the hint")
+
+	_, _ = h.Update(targetValidityResultMsg{path: repo, valid: true, direct: true})
+	out := ov.Render()
+	assert.NotContains(t, out, "not a directory", "a valid result clears the invalid hint")
+	assert.Contains(t, out, "direct session", "a non-git directory shows the direct-session note")
+
+	_, _ = h.Update(targetValidityResultMsg{path: repo, valid: true, direct: false})
+	out = ov.Render()
+	assert.NotContains(t, out, "not a directory")
+	assert.NotContains(t, out, "direct session", "a git repo shows no hint at all")
+}
+
+// TestTargetValidityResultDropsStalePath verifies a result for a path the user has
+// already navigated away from is ignored, so it can't clobber the current indicator.
+func TestTargetValidityResultDropsStalePath(t *testing.T) {
+	const repo = "/some/repo"
+	ov := overlay.NewSessionCreateOverlay(nil, []string{repo})
+	ov.SetSize(80, 24)
+	h := &home{
+		ctx:              context.Background(),
+		state:            statePrompt,
+		appConfig:        config.DefaultConfig(),
+		textInputOverlay: ov,
+		newSessionPath:   repo,
+	}
+
+	// Establish the current target as invalid.
+	_, _ = h.Update(targetValidityResultMsg{path: repo, valid: false})
+	require.Contains(t, ov.Render(), "not a directory")
+
+	// A late result for a DIFFERENT (stale) path must not flip the indicator.
+	_, _ = h.Update(targetValidityResultMsg{path: "/elsewhere", valid: true})
+	assert.Contains(t, ov.Render(), "not a directory", "stale-path result is ignored")
+}
+
+// TestPathChangeResetsValidityToUnknown verifies that navigating to a different target
+// resets the indicator to "unknown" (no hint) instead of asserting the previous path's
+// verdict for the new path while the debounced async re-check is in flight.
+func TestPathChangeResetsValidityToUnknown(t *testing.T) {
+	const repoA = "/some/repo-a"
+	const repoB = "/some/repo-b"
+	ov := overlay.NewSessionCreateOverlay(nil, []string{repoA, repoB})
+	ov.SetSize(80, 24)
+	h := &home{
+		ctx:              context.Background(),
+		state:            statePrompt,
+		appConfig:        config.DefaultConfig(),
+		textInputOverlay: ov,
+		newSessionPath:   repoA,
+	}
+
+	// Establish the current target as known-invalid: hint visible.
+	_, _ = h.Update(targetValidityResultMsg{path: repoA, valid: false})
+	require.Contains(t, ov.Render(), "not a directory")
+
+	// Move the picker selection to repoB (focus starts on the project picker).
+	_, _ = h.Update(tea.KeyMsg{Type: tea.KeyDown})
+	require.Equal(t, repoB, h.newSessionPath, "the path change must be registered")
+
+	// repoA's verdict must not be shown for repoB; the indicator is unknown until the
+	// async check resolves.
+	out := ov.Render()
+	assert.NotContains(t, out, "not a directory", "stale verdict is cleared on path change")
+	assert.NotContains(t, out, "direct session", "no hint at all while the state is unknown")
+}
+
 // TestConfirmActionCancelDoesNotRun verifies cancelling never executes the action.
 func TestConfirmActionCancelDoesNotRun(t *testing.T) {
 	h := &home{
