@@ -39,6 +39,7 @@ type TerminalPane struct {
 	viewport    viewport.Model
 }
 
+// NewTerminalPane returns an empty TerminalPane with no shell sessions yet.
 func NewTerminalPane() *TerminalPane {
 	return &TerminalPane{
 		sessions: make(map[string]*terminalSession),
@@ -46,6 +47,8 @@ func NewTerminalPane() *TerminalPane {
 	}
 }
 
+// SetSize sets the pane's render dimensions and resizes the currently
+// displayed shell's detached tmux session to match.
 func (t *TerminalPane) SetSize(width, height int) {
 	t.mu.Lock()
 	defer t.mu.Unlock()

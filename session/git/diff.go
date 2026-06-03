@@ -28,6 +28,8 @@ type DiffStats struct {
 	Error error
 }
 
+// IsEmpty reports whether the diff has no changes at all (no added or removed
+// lines and no content).
 func (d *DiffStats) IsEmpty() bool {
 	return d.Added == 0 && d.Removed == 0 && d.Content == ""
 }

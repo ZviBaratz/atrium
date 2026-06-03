@@ -20,6 +20,8 @@ func hunkStyle() lipgloss.Style       { return theme.Current().CyanStyle() }
 func metaStyle() lipgloss.Style       { return theme.Current().DimStyle() }
 func diffBehindStyle() lipgloss.Style { return theme.Current().AttentionStyle() }
 
+// DiffPane renders the selected instance's diff against its base, with summary
+// stats above the scrollable patch.
 type DiffPane struct {
 	viewport viewport.Model
 	diff     string
@@ -28,12 +30,15 @@ type DiffPane struct {
 	height   int
 }
 
+// NewDiffPane returns an empty DiffPane.
 func NewDiffPane() *DiffPane {
 	return &DiffPane{
 		viewport: viewport.New(0, 0),
 	}
 }
 
+// SetSize sets the pane's render dimensions and re-flows existing content into
+// the resized viewport.
 func (d *DiffPane) SetSize(width, height int) {
 	d.width = width
 	d.height = height
@@ -45,6 +50,8 @@ func (d *DiffPane) SetSize(width, height int) {
 	}
 }
 
+// SetDiff recomputes and renders the instance's diff, falling back to a
+// centered placeholder when there are no changes (or no instance).
 func (d *DiffPane) SetDiff(instance *session.Instance) {
 	centeredFallbackMessage := lipgloss.Place(
 		d.width,

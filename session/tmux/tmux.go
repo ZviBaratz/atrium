@@ -1,3 +1,7 @@
+// Package tmux wraps a real tmux server on Atrium's dedicated socket. Each
+// session runs its agent program in a pty; Poll captures pane content and
+// classifies it into a PaneState (working, prompt, idle). All tmux subprocesses
+// go through cmd.Executor so tests can fake them.
 package tmux
 
 import (
@@ -21,10 +25,13 @@ import (
 	"github.com/creack/pty"
 )
 
-const ProgramClaude = "claude"
-
-const ProgramAider = "aider"
-const ProgramGemini = "gemini"
+// Names of known agent programs, used to select program-specific behavior
+// (busy markers, prompt detection, trust-prompt handling).
+const (
+	ProgramClaude = "claude"
+	ProgramAider  = "aider"
+	ProgramGemini = "gemini"
+)
 
 // PaneState is the classification of a tmux pane derived from its content. Unlike a
 // raw "did the content change" signal, these are *level* signals: each is decided by
@@ -586,6 +593,7 @@ func (t *TmuxSession) TapDAndEnter() error {
 	return nil
 }
 
+// SendKeys writes raw bytes to the session's pty, as if the user typed them.
 func (t *TmuxSession) SendKeys(keys string) error {
 	_, err := t.ptmx.Write([]byte(keys))
 	return err
@@ -1082,6 +1090,8 @@ func (t *TmuxSession) updateWindowSize(cols, rows int) error {
 	})
 }
 
+// DoesSessionExist asks the tmux server whether this session is currently
+// alive (exact-name match).
 func (t *TmuxSession) DoesSessionExist() bool {
 	// Using "-t name" does a prefix match, which is wrong. `-t=` does an exact match.
 	existsCmd := tmuxCommand("has-session", fmt.Sprintf("-t=%s", t.snapshotName()))

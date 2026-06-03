@@ -140,6 +140,8 @@ var filterBarStyle = lipgloss.NewStyle().
 var filterBarActiveStyle = lipgloss.NewStyle().
 	Foreground(lipgloss.AdaptiveColor{Light: "#1a1a1a", Dark: "#ffffff"})
 
+// List is the left panel: the instance list grouped by repo, with collapse
+// state, incremental filtering, and the selection the rest of the UI follows.
 type List struct {
 	items         []*session.Instance
 	selectedIdx   int
@@ -161,6 +163,7 @@ type List struct {
 	filterActive bool
 }
 
+// NewList returns an empty List; autoYes only affects how rows are rendered.
 func NewList(spinner *spinner.Model, autoYes bool) *List {
 	return &List{
 		items:     []*session.Instance{},
@@ -226,6 +229,8 @@ func (l *List) SetSessionPreviewSize(width, height int) (err error) {
 	return
 }
 
+// NumInstances returns the total number of instances, ignoring filtering and
+// collapsed groups.
 func (l *List) NumInstances() int {
 	return len(l.items)
 }
@@ -674,6 +679,8 @@ func (l *List) KillInstance(target *session.Instance) {
 	l.clampSelectionToNavigable()
 }
 
+// Attach attaches the user's terminal to the selected instance's tmux session
+// (see Instance.Attach).
 func (l *List) Attach() (chan struct{}, error) {
 	targetInstance := l.items[l.selectedIdx]
 	return targetInstance.Attach()

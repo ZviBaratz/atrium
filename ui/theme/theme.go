@@ -67,31 +67,57 @@ type Theme struct {
 
 // Semantic style helpers. Each returns a fresh style so callers can chain
 // .Background()/.Width()/.Bold() without mutating shared state.
-func (t *Theme) FgStyle() lipgloss.Style    { return lipgloss.NewStyle().Foreground(t.Palette.Fg) }
-func (t *Theme) DimStyle() lipgloss.Style   { return lipgloss.NewStyle().Foreground(t.Palette.FgDim) }
-func (t *Theme) FaintStyle() lipgloss.Style { return lipgloss.NewStyle().Foreground(t.Palette.FgFaint) }
+
+// FgStyle styles default foreground text.
+func (t *Theme) FgStyle() lipgloss.Style { return lipgloss.NewStyle().Foreground(t.Palette.Fg) }
+
+// DimStyle styles secondary, de-emphasized text.
+func (t *Theme) DimStyle() lipgloss.Style { return lipgloss.NewStyle().Foreground(t.Palette.FgDim) }
+
+// FaintStyle styles the faintest text: hints, separators, age indicators.
+func (t *Theme) FaintStyle() lipgloss.Style {
+	return lipgloss.NewStyle().Foreground(t.Palette.FgFaint)
+}
+
+// AccentStyle styles highlighted interactive elements (selection, active tab).
 func (t *Theme) AccentStyle() lipgloss.Style {
 	return lipgloss.NewStyle().Foreground(t.Palette.Accent)
 }
+
+// PurpleStyle styles brand-colored elements such as the wordmark.
 func (t *Theme) PurpleStyle() lipgloss.Style {
 	return lipgloss.NewStyle().Foreground(t.Palette.Purple)
 }
+
+// SuccessStyle styles positive states (ready, success).
 func (t *Theme) SuccessStyle() lipgloss.Style {
 	return lipgloss.NewStyle().Foreground(t.Palette.Success)
 }
+
+// WorkingStyle styles the busy/working status indicator.
 func (t *Theme) WorkingStyle() lipgloss.Style {
 	return lipgloss.NewStyle().Foreground(t.Palette.Working)
 }
+
+// AttentionStyle styles needs-input states that want the user's attention.
 func (t *Theme) AttentionStyle() lipgloss.Style {
 	return lipgloss.NewStyle().Foreground(t.Palette.Attention)
 }
+
+// DangerStyle styles errors and destructive actions.
 func (t *Theme) DangerStyle() lipgloss.Style {
 	return lipgloss.NewStyle().Foreground(t.Palette.Danger)
 }
+
+// CyanStyle styles informational accents (e.g. diff stats).
 func (t *Theme) CyanStyle() lipgloss.Style { return lipgloss.NewStyle().Foreground(t.Palette.Cyan) }
+
+// SelectedRowStyle styles the elevated background of the selected list row.
 func (t *Theme) SelectedRowStyle() lipgloss.Style {
 	return lipgloss.NewStyle().Background(t.Palette.BgElevated)
 }
+
+// BadgeStyle styles bold badge chips (e.g. counters) with the badge colors.
 func (t *Theme) BadgeStyle() lipgloss.Style {
 	return lipgloss.NewStyle().Background(t.Palette.BadgeBg).Foreground(t.Palette.BadgeFg).Bold(true)
 }

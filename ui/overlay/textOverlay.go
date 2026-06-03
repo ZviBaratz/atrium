@@ -52,6 +52,7 @@ func (t *TextOverlay) Render(opts ...WhitespaceOption) string {
 	return style.Render(t.content)
 }
 
+// SetWidth sets the overlay's render width (content wraps inside the border).
 func (t *TextOverlay) SetWidth(width int) {
 	t.width = width
 }

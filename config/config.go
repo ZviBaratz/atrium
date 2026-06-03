@@ -1,3 +1,8 @@
+// Package config persists Atrium's two data-dir artifacts — config.json
+// (Config: program, profiles, auto-attach) and state.json (State: serialized
+// instances plus UI state) — and resolves the runtime identity (data dir, tmux
+// socket, session prefix) shared with legacy claude-squad installs. See
+// RuntimeName and GetConfigDir for the prefer-new/fall-back-to-legacy rules.
 package config
 
 import (
@@ -13,6 +18,7 @@ import (
 )
 
 const (
+	// ConfigFileName is the name of the config file inside the data dir.
 	ConfigFileName = "config.json"
 	defaultProgram = "claude"
 )
@@ -248,6 +254,9 @@ func resolveClaudeCandidate(whichOutput string) (string, bool) {
 	return "", false
 }
 
+// LoadConfig reads config.json from the data dir. It never fails: a missing
+// file is created with defaults, and any read/parse error logs a warning and
+// falls back to DefaultConfig.
 func LoadConfig() *Config {
 	configDir, err := GetConfigDir()
 	if err != nil {

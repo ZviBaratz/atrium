@@ -40,6 +40,8 @@ func scrollExitFooter() string {
 	return theme.Current().DimStyle().Render("ESC to exit scroll mode")
 }
 
+// PreviewPane renders the selected instance's captured tmux pane content, with
+// an optional scroll mode backed by a viewport.
 type PreviewPane struct {
 	width  int
 	height int
@@ -56,12 +58,15 @@ type previewState struct {
 	text string
 }
 
+// NewPreviewPane returns an empty PreviewPane.
 func NewPreviewPane() *PreviewPane {
 	return &PreviewPane{
 		viewport: viewport.New(0, 0),
 	}
 }
 
+// SetSize sets the pane's render dimensions and resizes the scroll viewport to
+// match.
 func (p *PreviewPane) SetSize(width, maxHeight int) {
 	p.width = width
 	p.height = maxHeight
@@ -77,7 +82,7 @@ func (p *PreviewPane) setFallbackState(message string) {
 	}
 }
 
-// Updates the preview pane content with the tmux pane content.
+// UpdateContent updates the preview pane content with the tmux pane content.
 //
 // The splash decision is driven by what we can actually observe in the pane, not by
 // the mutable Status flag: a live pane (non-empty capture) always wins, so a stale

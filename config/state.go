@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 )
 
+// Names of the state files inside the data dir.
 const (
 	StateFileName     = "state.json"
 	InstancesFileName = "instances.json"

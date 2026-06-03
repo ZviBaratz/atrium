@@ -1,11 +1,19 @@
+// Package keys defines the logical key actions of the TUI and the global maps
+// that translate terminal key strings into those actions and into displayable
+// help bindings.
 package keys
 
 import (
 	"github.com/charmbracelet/bubbles/key"
 )
 
+// KeyName identifies a logical key action in the TUI. The home model switches
+// on KeyName rather than raw key strings, so a rebind only touches the maps in
+// this package.
 type KeyName int
 
+// The logical key actions. Their bindings live in GlobalKeyStringsMap (string
+// → action) and GlobalkeyBindings (action → help entry).
 const (
 	KeyUp KeyName = iota
 	KeyDown
@@ -26,19 +34,19 @@ const (
 	KeyPrompt // New key for entering a prompt
 	KeyHelp   // Key for showing help screen
 
-	// Diff keybindings
+	// KeyShiftUp and KeyShiftDown scroll the diff/preview pane.
 	KeyShiftUp
 	KeyShiftDown
 
-	// Reorder keybindings
+	// KeyMoveUp and KeyMoveDown reorder the selected session within its group.
 	KeyMoveUp
 	KeyMoveDown
 
-	// Whole-group reorder keybindings
+	// KeyMoveGroupUp and KeyMoveGroupDown reorder a whole repo group.
 	KeyMoveGroupUp
 	KeyMoveGroupDown
 
-	// Group collapse keybindings
+	// KeyCollapseToggle and KeyCollapseAll collapse/expand repo groups.
 	KeyCollapseToggle
 	KeyCollapseAll
 
@@ -52,7 +60,8 @@ const (
 
 	KeyCopyBranch // Copy the selected session's branch name to the clipboard
 
-	// Pane resize keybindings: grow/shrink the session list relative to the preview.
+	// KeyShrinkList and KeyGrowList resize the session list relative to the
+	// preview pane.
 	KeyShrinkList
 	KeyGrowList
 )
@@ -97,7 +106,7 @@ var GlobalKeyStringsMap = map[string]KeyName{
 	">":          KeyGrowList,
 }
 
-// GlobalkeyBindings is a global, immutable map of KeyName tot keybinding.
+// GlobalkeyBindings is a global, immutable map of KeyName to keybinding.
 var GlobalkeyBindings = map[KeyName]key.Binding{
 	KeyUp: key.NewBinding(
 		key.WithKeys("up", "k"),

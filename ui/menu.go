@@ -25,15 +25,21 @@ var verticalSeparator = " │ "
 type MenuState int
 
 const (
+	// StateDefault is the regular menu shown when a session is selected.
 	StateDefault MenuState = iota
+	// StateEmpty is the menu shown when no sessions exist.
 	StateEmpty
+	// StateNewInstance is the menu shown while naming a new session.
 	StateNewInstance
+	// StatePrompt is the menu shown while typing a startup prompt.
 	StatePrompt
 	// StateGeneratingName is shown while a session name is being generated in the
 	// background; the hint bar reports progress instead of the usual options.
 	StateGeneratingName
 )
 
+// Menu is the bottom help bar: it shows the keybindings available in the
+// current UI state, highlighting a pressed key briefly via Keydown.
 type Menu struct {
 	options       []keys.KeyName
 	height, width int
@@ -52,6 +58,7 @@ var defaultMenuOptions = []keys.KeyName{keys.KeyNew, keys.KeyPrompt, keys.KeyHel
 var newInstanceMenuOptions = []keys.KeyName{keys.KeySubmitName}
 var promptMenuOptions = []keys.KeyName{keys.KeySubmitName}
 
+// NewMenu returns a Menu in the empty state with the default options.
 func NewMenu() *Menu {
 	return &Menu{
 		options:   defaultMenuOptions,
@@ -61,10 +68,12 @@ func NewMenu() *Menu {
 	}
 }
 
+// Keydown highlights the given key's menu entry while it is held/processed.
 func (m *Menu) Keydown(name keys.KeyName) {
 	m.keyDown = name
 }
 
+// ClearKeydown removes the Keydown highlight.
 func (m *Menu) ClearKeydown() {
 	m.keyDown = -1
 }

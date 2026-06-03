@@ -1,3 +1,7 @@
+// Package ui contains the presentational Bubble Tea components of the TUI —
+// session list, preview/diff/terminal panes, tabbed window, menu bar, and error
+// box. Components hold view state but defer domain actions to the app package's
+// home model.
 package ui
 
 import (
