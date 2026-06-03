@@ -826,3 +826,44 @@ func TestShouldAutoOpen(t *testing.T) {
 		assert.False(t, newHomeWithAutoAttach(true).shouldAutoOpen(newInst("")))
 	})
 }
+
+// The off-cadence poll handler applies the polled state to the instance immediately, and
+// leaves a paused instance untouched (mirroring the metadata-tick skip).
+func TestInstancePolledMsgAppliesStatus(t *testing.T) {
+	newInst := func() *session.Instance {
+		inst, err := session.NewInstance(session.InstanceOptions{
+			Title: "s", Path: t.TempDir(), Program: "claude",
+		})
+		require.NoError(t, err)
+		return inst
+	}
+	h := &home{ctx: context.Background(), state: stateDefault}
+
+	t.Run("active instance gets the polled status", func(t *testing.T) {
+		inst := newInst()
+		inst.SetStatus(session.Ready)
+		h.Update(instancePolledMsg{instance: inst, state: tmux.PaneWorking})
+		assert.Equal(t, session.Running, inst.GetStatus())
+	})
+
+	t.Run("paused instance is left untouched", func(t *testing.T) {
+		inst := newInst()
+		inst.SetStatus(session.Paused)
+		h.Update(instancePolledMsg{instance: inst, state: tmux.PaneWorking})
+		assert.Equal(t, session.Paused, inst.GetStatus(), "a poll result must not resurrect a paused instance")
+	})
+}
+
+// pollSelectedCmd is a no-op for anything that can't be polled, so the switch/detach
+// refresh never spawns a doomed capture.
+func TestPollSelectedCmdGuards(t *testing.T) {
+	assert.Nil(t, pollSelectedCmd(nil, false), "nil selection yields no command")
+	assert.Nil(t, pollSelectedCmd(nil, true), "nil selection yields no command (fresh)")
+
+	inst, err := session.NewInstance(session.InstanceOptions{
+		Title: "s", Path: t.TempDir(), Program: "claude",
+	})
+	require.NoError(t, err)
+	assert.Nil(t, pollSelectedCmd(inst, false), "an unstarted instance yields no command")
+	assert.Nil(t, pollSelectedCmd(inst, true), "an unstarted instance yields no command (fresh)")
+}

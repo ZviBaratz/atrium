@@ -582,6 +582,17 @@ func (i *Instance) Poll() tmux.PaneState {
 	return ts.Poll()
 }
 
+// PollNow classifies the agent's current pane state at face value, skipping the working→idle
+// hysteresis, for a one-shot refresh after the poll stream was interrupted (a detach). See
+// tmux.TmuxSession.PollNow.
+func (i *Instance) PollNow() tmux.PaneState {
+	ts := i.tmux()
+	if !i.isStarted() || ts == nil {
+		return tmux.PaneUnknown
+	}
+	return ts.PollNow()
+}
+
 // CheckAndHandleTrustPrompt checks for and dismisses the trust prompt for supported programs.
 func (i *Instance) CheckAndHandleTrustPrompt() bool {
 	ts := i.tmux()
@@ -589,7 +600,7 @@ func (i *Instance) CheckAndHandleTrustPrompt() bool {
 		return false
 	}
 	program := i.Program
-	if !strings.HasSuffix(program, tmux.ProgramClaude) &&
+	if !tmux.IsClaude(program) &&
 		!strings.HasSuffix(program, tmux.ProgramAider) &&
 		!strings.HasSuffix(program, tmux.ProgramGemini) {
 		return false

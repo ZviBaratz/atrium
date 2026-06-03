@@ -170,6 +170,12 @@ type home struct {
 	// generatingName guards against launching a second auto-name request while one
 	// is already in flight, and drives the "Generating name…" hint-bar state.
 	generatingName bool
+
+	// lastStatusPollSelection is the instance instanceChanged last fired an immediate
+	// status poll for. instanceChanged runs on every 100ms preview tick, so we only
+	// re-poll when the selection actually changes (or when a detach resets this to nil),
+	// not 10×/s — which would also perturb the tick-based idle hysteresis.
+	lastStatusPollSelection *session.Instance
 }
 
 func newHome(ctx context.Context, program string, autoYes bool) *home {
@@ -401,6 +407,14 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmds := deliverReadyPrompts(msg.results)
 		cmds = append(cmds, tickUpdateMetadataCmd(m.snapshotActiveInstances(), m.list.GetSelectedInstance()))
 		return m, tea.Batch(cmds...)
+	case instancePolledMsg:
+		// An off-cadence single-instance refresh (selection change / detach). Apply the
+		// state but do NOT reschedule the metadata tick — that chain is owned by
+		// metadataUpdateDoneMsg above; touching it here would spawn a second tick loop.
+		if msg.instance.GetStatus() != session.Paused {
+			applyPaneState(msg.instance, msg.state)
+		}
+		return m, nil
 	case tea.MouseMsg:
 		if msg.Action != tea.MouseActionPress {
 			return m, nil
@@ -506,7 +520,14 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, m.attachExec(next.Attach, next)
 			}
 		}
-		return m, tea.Batch(tea.WindowSize(), m.instanceChanged())
+		// Polling stalled while attached, so the smoothing state is stale: refresh the
+		// selected session at face value (fresh) rather than letting a stale "running" on a
+		// now-idle agent linger — and re-run through the hysteresis — until it settles. Pin
+		// the poll tracker to the current selection first so instanceChanged's own
+		// (hysteresis) poll doesn't also fire for the same instance.
+		selected := m.list.GetSelectedInstance()
+		m.lastStatusPollSelection = selected
+		return m, tea.Batch(tea.WindowSize(), m.instanceChanged(), pollSelectedCmd(selected, true))
 	case infoMsg:
 		// An action requested a dismissible info modal (e.g. an actionable resume
 		// error). Unlike handleError's transient box, this persists until dismissed.
@@ -1312,6 +1333,15 @@ func (m *home) instanceChanged() tea.Cmd {
 	if err := m.tabbedWindow.UpdateTerminal(selected); err != nil {
 		return m.handleError(err)
 	}
+
+	// Refresh the newly-selected session's status immediately rather than waiting for the
+	// next 500ms metadata tick. instanceChanged also fires on every 100ms preview tick, so
+	// gate on an actual selection change (a detach resets the tracker to nil to force a
+	// refresh) to avoid polling 10×/s.
+	if selected != m.lastStatusPollSelection {
+		m.lastStatusPollSelection = selected
+		return pollSelectedCmd(selected, false)
+	}
 	return nil
 }
 
@@ -1441,6 +1471,36 @@ func applyPaneState(inst *session.Instance, state tmux.PaneState) {
 	case tmux.PaneIdle:
 		inst.SetStatus(session.Ready)
 	case tmux.PaneUnknown:
+	}
+}
+
+// instancePolledMsg carries the result of an off-cadence poll of a single instance,
+// triggered when the selection changes or a session is detached. It refreshes that one
+// instance's status immediately instead of waiting up to a full 500ms metadata tick —
+// which is why an idle session no longer lingers as "running" right after you switch to
+// it or step out of it.
+type instancePolledMsg struct {
+	instance *session.Instance
+	state    tmux.PaneState
+}
+
+// pollSelectedCmd polls a single instance off the UI thread for an immediate status
+// refresh. Returns nil for a session that can't be polled; Poll itself also yields
+// PaneUnknown for a dead session, which applyPaneState ignores.
+//
+// fresh selects PollNow over Poll: use it after a detach, where the tick stream was stalled
+// while attached so the hysteresis state is stale and a face-value snapshot is correct. A
+// live selection change uses the hysteresis-respecting Poll (the tick loop kept the monitor
+// current).
+func pollSelectedCmd(inst *session.Instance, fresh bool) tea.Cmd {
+	if inst == nil || !inst.Started() || inst.Paused() {
+		return nil
+	}
+	return func() tea.Msg {
+		if fresh {
+			return instancePolledMsg{instance: inst, state: inst.PollNow()}
+		}
+		return instancePolledMsg{instance: inst, state: inst.Poll()}
 	}
 }
 
