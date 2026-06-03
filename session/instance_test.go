@@ -31,8 +31,8 @@ func TestStatusAccessorsAreRaceFree(t *testing.T) {
 		RunFunc:    func(*exec.Cmd) error { return nil },
 		OutputFunc: func(*exec.Cmd) ([]byte, error) { return []byte(""), nil },
 	}
-	newSession := func() *tmux.TmuxSession {
-		return tmux.NewTmuxSessionWithDeps(context.Background(), "race", "claude", tmux.MakePtyFactory(), mockExec)
+	newSession := func() *tmux.Session {
+		return tmux.NewSessionWithDeps(context.Background(), "race", "claude", tmux.MakePtyFactory(), mockExec)
 	}
 	inst := &Instance{Title: "race", status: Loading, started: true, tmuxSession: newSession()}
 
@@ -71,7 +71,7 @@ func TestPreviewSkipsCaptureWhenSessionDead(t *testing.T) {
 		RunFunc:    func(*exec.Cmd) error { return fmt.Errorf("no such session") },
 		OutputFunc: func(*exec.Cmd) ([]byte, error) { captured = true; return nil, fmt.Errorf("capture fail") },
 	}
-	ts := tmux.NewTmuxSessionWithDeps(context.Background(), "dead", "claude", tmux.MakePtyFactory(), mockExec)
+	ts := tmux.NewSessionWithDeps(context.Background(), "dead", "claude", tmux.MakePtyFactory(), mockExec)
 	inst := &Instance{Title: "dead", status: Running, started: true, tmuxSession: ts}
 
 	content, err := inst.Preview()
@@ -103,7 +103,7 @@ func TestRecoverLostSessionTransitionsToPaused(t *testing.T) {
 	runGit(t, repoPath, "add", ".")
 	runGit(t, repoPath, "commit", "-m", "initial")
 
-	wt, _, err := git.NewGitWorktree(context.Background(), repoPath, "sess")
+	wt, _, err := git.NewWorktree(context.Background(), repoPath, "sess")
 	require.NoError(t, err)
 	require.NoError(t, wt.Setup())
 
@@ -111,7 +111,7 @@ func TestRecoverLostSessionTransitionsToPaused(t *testing.T) {
 		RunFunc:    func(*exec.Cmd) error { return fmt.Errorf("no such session") },
 		OutputFunc: func(*exec.Cmd) ([]byte, error) { return nil, fmt.Errorf("dead") },
 	}
-	ts := tmux.NewTmuxSessionWithDeps(context.Background(), "sess", "claude", tmux.MakePtyFactory(), deadExec)
+	ts := tmux.NewSessionWithDeps(context.Background(), "sess", "claude", tmux.MakePtyFactory(), deadExec)
 	inst := &Instance{Title: "sess", status: Running, started: true, gitWorktree: wt, tmuxSession: ts}
 
 	require.False(t, inst.TmuxAlive())
@@ -137,11 +137,11 @@ func TestToInstanceData_PersistsGitContext(t *testing.T) {
 	inst, err := NewInstance(InstanceOptions{Title: "t", Path: ".", Program: "echo"})
 	require.NoError(t, err)
 
-	// NewGitWorktreeFromStorage is a pure constructor (no git I/O), so we can use it
+	// NewWorktreeFromStorage is a pure constructor (no git I/O), so we can use it
 	// to stand up a worktree carrying a base ref without starting the instance.
-	inst.gitWorktree = git.NewGitWorktreeFromStorage(
+	inst.gitWorktree = git.NewWorktreeFromStorage(
 		context.Background(),
-		"/repo", "/repo/wt", "t", "session/t", "abc123", "main", false)
+		"/repo", "/repo/wt", "t", "session/t", "abc123", "main", false, "session/")
 	inst.diffStats = &git.DiffStats{
 		Added: 12, Removed: 3, FilesChanged: 4, Commits: 2, Behind: 5, Dirty: true,
 	}

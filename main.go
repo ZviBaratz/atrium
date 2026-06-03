@@ -1,3 +1,8 @@
+// Atrium is a terminal command center for orchestrating multiple AI coding
+// agents, each running in its own tmux session inside an isolated git worktree.
+// This package is the Cobra CLI entrypoint: the bare `atrium` invocation loads
+// config, initializes tmux, and starts the Bubble Tea TUI (app.Run); the hidden
+// --daemon flag reuses the binary as the autoyes background process.
 package main
 
 import (

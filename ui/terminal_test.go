@@ -17,13 +17,13 @@ import (
 
 // newMockTmuxSession creates a mock tmux session backed by MockCmdExec.
 // The returned session will report as existing and support capture-pane commands.
-func newMockTmuxSession(t *testing.T, name string, cmdExec cmd_test.MockCmdExec) *tmux.TmuxSession {
+func newMockTmuxSession(t *testing.T, name string, cmdExec cmd_test.MockCmdExec) *tmux.Session {
 	t.Helper()
 	ptyFactory := &MockPtyFactory{
 		t:       t,
 		cmdExec: cmdExec,
 	}
-	return tmux.NewTmuxSessionWithDeps(context.Background(), name, "bash", ptyFactory, cmdExec)
+	return tmux.NewSessionWithDeps(context.Background(), name, "bash", ptyFactory, cmdExec)
 }
 
 // mockCmdExec returns a MockCmdExec that simulates a working tmux session.
@@ -90,7 +90,6 @@ func makeStartedInstance(t *testing.T, title string) *session.Instance {
 		Title:   sessionName,
 		Path:    workdir,
 		Program: "bash",
-		AutoYes: false,
 	})
 	require.NoError(t, err)
 
@@ -98,7 +97,7 @@ func makeStartedInstance(t *testing.T, title string) *session.Instance {
 		t:       t,
 		cmdExec: cmdExec,
 	}
-	tmuxSession := tmux.NewTmuxSessionWithDeps(context.Background(), sessionName, "bash", ptyFactory, cmdExec)
+	tmuxSession := tmux.NewSessionWithDeps(context.Background(), sessionName, "bash", ptyFactory, cmdExec)
 	instance.SetTmuxSession(tmuxSession)
 
 	err = instance.Start(true)
@@ -108,7 +107,7 @@ func makeStartedInstance(t *testing.T, title string) *session.Instance {
 }
 
 // injectSession injects a mock tmux session into the TerminalPane's sessions map.
-func injectSession(tp *TerminalPane, title string, ts *tmux.TmuxSession, cwd string) {
+func injectSession(tp *TerminalPane, title string, ts *tmux.Session, cwd string) {
 	tp.mu.Lock()
 	defer tp.mu.Unlock()
 	tp.sessions[title] = &terminalSession{

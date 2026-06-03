@@ -21,7 +21,7 @@ import (
 func newAutoNameHome(t *testing.T, titles ...string) *home {
 	t.Helper()
 	s := spinner.New()
-	l := ui.NewList(&s, false)
+	l := ui.NewList(&s)
 	for _, title := range titles {
 		inst, err := session.NewInstance(session.InstanceOptions{Title: title, Path: t.TempDir(), Program: "echo"})
 		require.NoError(t, err)

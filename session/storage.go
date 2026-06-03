@@ -30,7 +30,7 @@ type InstanceData struct {
 	DiffStats DiffStatsData   `json:"diff_stats"`
 }
 
-// GitWorktreeData represents the serializable data of a GitWorktree
+// GitWorktreeData represents the serializable data of a Worktree
 type GitWorktreeData struct {
 	RepoPath         string `json:"repo_path"`
 	WorktreePath     string `json:"worktree_path"`
@@ -91,9 +91,11 @@ func (s *Storage) LoadInstances(ctx context.Context) ([]*Instance, error) {
 		return nil, err
 	}
 
+	// Load config once for the whole batch; FromInstanceData only needs BranchPrefix.
+	cfg := config.LoadConfig()
 	instances := make([]*Instance, len(instancesData))
 	for i, data := range instancesData {
-		instance, err := FromInstanceData(ctx, data)
+		instance, err := FromInstanceData(ctx, data, cfg.BranchPrefix)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create instance %s: %w", data.Title, err)
 		}

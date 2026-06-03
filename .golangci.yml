@@ -39,10 +39,9 @@ linters:
         - G702
     revive:
       # Listing rules replaces revive's default set, so this is the full enabled
-      # set. It is curated for correctness/clarity and deliberately omits the
-      # documentation rules (exported, package-comments) and unused-parameter:
-      # enabling those means a ~110-finding doc-comment sweep, tracked as a
-      # separate follow-up rather than bundled into this pass.
+      # set. It is curated for correctness/clarity plus the documentation rules
+      # (exported, package-comments; the #24 doc-comment sweep) and deliberately
+      # omits unused-parameter.
       rules:
         - name: blank-imports
         - name: context-as-argument
@@ -52,8 +51,10 @@ linters:
         - name: error-return
         - name: error-strings
         - name: errorf
+        - name: exported
         - name: increment-decrement
         - name: indent-error-flow
+        - name: package-comments
         - name: range
         - name: receiver-naming
         - name: redefines-builtin-id

@@ -1,3 +1,6 @@
+// Package overlay renders modal dialogs (text input, confirmation, pickers) on
+// top of the main view, including the compositing that places one rendered
+// block over another.
 package overlay
 
 import (
@@ -29,6 +32,8 @@ func getLines(s string) (lines []string, widest int) {
 	return lines, widest
 }
 
+// CalculateCenterCoordinates returns the x, y offsets that center the
+// foreground block within the background block.
 func CalculateCenterCoordinates(foregroundLines []string, backgroundLines []string, foregroundWidth, backgroundWidth int) (int, int) {
 	// Calculate the x-coordinate to horizontally center the foreground text.
 	x := (backgroundWidth - foregroundWidth) / 2

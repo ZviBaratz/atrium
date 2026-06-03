@@ -8,7 +8,7 @@ import (
 // A fresh session has no pending kill request; the flag only flips when the
 // in-session Ctrl+X is intercepted during an attach.
 func TestKillRequestedDefaultsFalse(t *testing.T) {
-	ts := NewTmuxSession(context.Background(), "kill-flag-test", "echo")
+	ts := NewSession(context.Background(), "kill-flag-test", "echo")
 	if ts.KillRequested() {
 		t.Fatal("expected KillRequested to be false on a fresh session")
 	}

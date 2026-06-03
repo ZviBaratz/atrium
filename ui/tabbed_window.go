@@ -48,12 +48,14 @@ func windowStyle() lipgloss.Style {
 		Border(lipgloss.RoundedBorder(), false, true, true, true)
 }
 
+// Indices of the right pane's tabs, in display order.
 const (
 	PreviewTab int = iota
 	DiffTab
 	TerminalTab
 )
 
+// Tab pairs a tab's display name with the function that renders its content.
 type Tab struct {
 	Name   string
 	Render func(width int, height int) string
@@ -74,6 +76,7 @@ type TabbedWindow struct {
 	instance *session.Instance
 }
 
+// NewTabbedWindow assembles the right pane from its three tab panes.
 func NewTabbedWindow(preview *PreviewPane, diff *DiffPane, terminal *TerminalPane) *TabbedWindow {
 	return &TabbedWindow{
 		tabs: []string{
@@ -87,10 +90,14 @@ func NewTabbedWindow(preview *PreviewPane, diff *DiffPane, terminal *TerminalPan
 	}
 }
 
+// SetInstance records which instance the window is showing; scroll events are
+// forwarded to it.
 func (w *TabbedWindow) SetInstance(instance *session.Instance) {
 	w.instance = instance
 }
 
+// SetSize resizes the window and propagates the resulting content area to all
+// three tab panes.
 func (w *TabbedWindow) SetSize(width, height int) {
 	// w.width is the inner (pre-border) width; the window border adds its
 	// horizontal frame back, so the pane's total rendered width equals the given
@@ -112,10 +119,13 @@ func (w *TabbedWindow) SetSize(width, height int) {
 	w.terminal.SetSize(contentWidth, contentHeight)
 }
 
+// GetPreviewSize returns the preview pane's content dimensions, used to size
+// each instance's detached tmux session to match.
 func (w *TabbedWindow) GetPreviewSize() (width, height int) {
 	return w.preview.width, w.preview.height
 }
 
+// Toggle cycles to the next tab, wrapping from the last back to the first.
 func (w *TabbedWindow) Toggle() {
 	w.activeTab = (w.activeTab + 1) % len(w.tabs)
 }
@@ -156,6 +166,8 @@ func (w *TabbedWindow) UpdatePreview(instance *session.Instance) error {
 	return w.preview.UpdateContent(instance)
 }
 
+// UpdateDiff refreshes the diff pane from the instance's worktree. Only
+// updates when the diff tab is active.
 func (w *TabbedWindow) UpdateDiff(instance *session.Instance) {
 	if w.activeTab != DiffTab {
 		return
@@ -176,7 +188,7 @@ func (w *TabbedWindow) ResetPreviewToNormalMode(instance *session.Instance) erro
 	return w.preview.ResetToNormalMode(instance)
 }
 
-// Add these new methods for handling scroll events
+// ScrollUp scrolls the active tab's pane up by one step.
 func (w *TabbedWindow) ScrollUp() {
 	switch w.activeTab {
 	case PreviewTab:
@@ -193,6 +205,7 @@ func (w *TabbedWindow) ScrollUp() {
 	}
 }
 
+// ScrollDown scrolls the active tab's pane down by one step.
 func (w *TabbedWindow) ScrollDown() {
 	switch w.activeTab {
 	case PreviewTab:

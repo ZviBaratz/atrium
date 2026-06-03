@@ -1,3 +1,7 @@
+// Package daemon implements autoyes mode as a separate background process (not
+// a goroutine): the TUI launches `atrium --daemon`, which polls all stored
+// instances and taps Enter on pending prompts, and the TUI kills it again on
+// startup and exit.
 package daemon
 
 import (

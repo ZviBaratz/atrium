@@ -9,19 +9,24 @@ import (
 	"github.com/mattn/go-runewidth"
 )
 
+// ErrBox is the single-row error banner rendered beneath the help bar when an
+// action fails.
 type ErrBox struct {
 	height, width int
 	err           error
 }
 
+// NewErrBox returns an empty ErrBox.
 func NewErrBox() *ErrBox {
 	return &ErrBox{}
 }
 
+// SetError sets the error to display; nil clears it.
 func (e *ErrBox) SetError(err error) {
 	e.err = err
 }
 
+// Clear removes the displayed error.
 func (e *ErrBox) Clear() {
 	e.err = nil
 }
@@ -32,6 +37,7 @@ func (e *ErrBox) HasError() bool {
 	return e.err != nil
 }
 
+// SetSize sets the box's render dimensions; long errors are truncated to fit.
 func (e *ErrBox) SetSize(width, height int) {
 	e.width = width
 	e.height = height

@@ -25,7 +25,7 @@ func TestSetContext_CachesUnchanged(t *testing.T) {
 		},
 		OutputFunc: func(c *exec.Cmd) ([]byte, error) { return nil, nil },
 	}
-	sess := NewTmuxSessionWithDeps(context.Background(), "alpha", "claude", NewMockPtyFactory(t), cmdExec)
+	sess := NewSessionWithDeps(context.Background(), "alpha", "claude", NewMockPtyFactory(t), cmdExec)
 
 	require.NoError(t, sess.SetContext("alpha", "left"))
 	require.Len(t, ran, 1, "first push should issue one batched command")

@@ -1,3 +1,8 @@
+// Package app contains the Bubble Tea program at the heart of Atrium. Its root
+// model, home, owns the instance list, the discrete UI states (default / new /
+// prompt / help / confirm / rename), and the per-tick poll loop that refreshes
+// each session's status and diff; the ui package's components render what home
+// orchestrates.
 package app
 
 import (
@@ -29,6 +34,8 @@ import (
 	"golang.org/x/term"
 )
 
+// GlobalInstanceLimit caps how many sessions can exist at once; creating a new
+// session beyond it is rejected with an error in the UI.
 const GlobalInstanceLimit = 10
 
 // doubleClickWindow is the maximum delay between two left-clicks on the same
@@ -222,7 +229,7 @@ func newHome(ctx context.Context, program string, autoYes bool) *home {
 		appState:     appState,
 		listRatio:    appState.GetListRatio(),
 	}
-	h.list = ui.NewList(&h.spinner, autoYes)
+	h.list = ui.NewList(&h.spinner)
 
 	// Load saved instances
 	instances, err := storage.LoadInstances(ctx)

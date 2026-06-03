@@ -14,7 +14,7 @@ func TestBranchCheckoutPath_BaseRepo(t *testing.T) {
 	mustRunGit(t, repoPath, "branch", "feat")
 	mustRunGit(t, repoPath, "switch", "feat") // base HEAD now on feat
 
-	g := &GitWorktree{repoPath: repoPath, branchName: "feat"}
+	g := &Worktree{repoPath: repoPath, branchName: "feat"}
 
 	path, err := g.BranchCheckoutPath()
 	if err != nil {
@@ -40,7 +40,7 @@ func TestBranchCheckoutPath_SiblingWorktree(t *testing.T) {
 	sibling := filepath.Join(t.TempDir(), "sibling")
 	mustRunGit(t, repoPath, "worktree", "add", sibling, "feat")
 
-	g := &GitWorktree{repoPath: repoPath, branchName: "feat"}
+	g := &Worktree{repoPath: repoPath, branchName: "feat"}
 
 	path, err := g.BranchCheckoutPath()
 	if err != nil {
@@ -65,7 +65,7 @@ func TestSessionOwnWorktreeIsKillable(t *testing.T) {
 	sessionWT := filepath.Join(t.TempDir(), "session")
 	mustRunGit(t, repoPath, "worktree", "add", "-b", "session/test", sessionWT)
 
-	g := &GitWorktree{repoPath: repoPath, branchName: "session/test", worktreePath: sessionWT}
+	g := &Worktree{repoPath: repoPath, branchName: "session/test", worktreePath: sessionWT}
 
 	if held, err := g.IsBranchHeldByBaseRepo(); err != nil || held {
 		t.Fatalf("IsBranchHeldByBaseRepo() = %v, %v; want false, nil (kill must be allowed)", held, err)
@@ -80,7 +80,7 @@ func TestBranchCheckoutPath_Free(t *testing.T) {
 	repoPath := newTestRepo(t)
 	mustRunGit(t, repoPath, "branch", "feat") // exists, never checked out
 
-	g := &GitWorktree{repoPath: repoPath, branchName: "feat"}
+	g := &Worktree{repoPath: repoPath, branchName: "feat"}
 
 	if path, err := g.BranchCheckoutPath(); err != nil || path != "" {
 		t.Fatalf("BranchCheckoutPath() = %q, %v; want \"\", nil", path, err)
@@ -101,7 +101,7 @@ func TestBranchCheckoutPath_DetachedBaseRepo(t *testing.T) {
 	mustRunGit(t, repoPath, "switch", "--detach")
 
 	// The branch the base repo just detached from must not be reported as held.
-	g := &GitWorktree{repoPath: repoPath, branchName: defaultBranch}
+	g := &Worktree{repoPath: repoPath, branchName: defaultBranch}
 	if path, err := g.BranchCheckoutPath(); err != nil || path != "" {
 		t.Fatalf("BranchCheckoutPath(%q) = %q, %v; want \"\", nil", defaultBranch, path, err)
 	}
@@ -122,7 +122,7 @@ func TestSetup_BusyBranchFriendlyError(t *testing.T) {
 	mustRunGit(t, repoPath, "worktree", "add", sibling, "feat")
 
 	tempHome := os.Getenv("HOME") // newTestRepo sandboxed HOME
-	g := &GitWorktree{
+	g := &Worktree{
 		repoPath:         repoPath,
 		worktreePath:     filepath.Join(tempHome, ".claude-squad", "worktrees", "sess-busy"),
 		branchName:       "feat",
@@ -158,7 +158,7 @@ func TestDetachBranchInBaseRepo_FreesBranch(t *testing.T) {
 	mustRunGit(t, repoPath, "switch", "feat") // base repo now holds feat
 
 	tempHome := os.Getenv("HOME")
-	g := &GitWorktree{
+	g := &Worktree{
 		repoPath:         repoPath,
 		worktreePath:     filepath.Join(tempHome, ".claude-squad", "worktrees", "sess-recover"),
 		branchName:       "feat",
@@ -202,7 +202,7 @@ func TestDetachBranchInBaseRepo_RefusesDirty(t *testing.T) {
 		t.Fatalf("write dirty file: %v", err)
 	}
 
-	g := &GitWorktree{repoPath: repoPath, branchName: "feat"}
+	g := &Worktree{repoPath: repoPath, branchName: "feat"}
 	err := g.DetachBranchInBaseRepo()
 	if err == nil {
 		t.Fatal("DetachBranchInBaseRepo() succeeded on a dirty base repo, want refusal")

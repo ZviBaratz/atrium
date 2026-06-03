@@ -12,9 +12,9 @@ import (
 // directory is moved to match the corrected name, all without losing the commit history.
 func TestRename_MovesBranchAndWorktree(t *testing.T) {
 	repoPath := newTestRepo(t)
-	wt, oldBranch, err := NewGitWorktree(context.Background(), repoPath, "formalize-packaing")
+	wt, oldBranch, err := NewWorktree(context.Background(), repoPath, "formalize-packaing")
 	if err != nil {
-		t.Fatalf("NewGitWorktree error = %v", err)
+		t.Fatalf("NewWorktree error = %v", err)
 	}
 	if err := wt.Setup(); err != nil {
 		t.Fatalf("Setup() error = %v", err)
@@ -59,16 +59,16 @@ func TestRename_MovesBranchAndWorktree(t *testing.T) {
 // leave the instance completely untouched, rather than force-clobbering the other branch.
 func TestRename_TargetBranchCollisionErrors(t *testing.T) {
 	repoPath := newTestRepo(t)
-	a, aBranch, err := NewGitWorktree(context.Background(), repoPath, "alpha")
+	a, aBranch, err := NewWorktree(context.Background(), repoPath, "alpha")
 	if err != nil {
-		t.Fatalf("NewGitWorktree(alpha) error = %v", err)
+		t.Fatalf("NewWorktree(context.Background(), alpha) error = %v", err)
 	}
 	if err := a.Setup(); err != nil {
 		t.Fatalf("Setup(alpha) error = %v", err)
 	}
-	b, _, err := NewGitWorktree(context.Background(), repoPath, "beta")
+	b, _, err := NewWorktree(context.Background(), repoPath, "beta")
 	if err != nil {
-		t.Fatalf("NewGitWorktree(beta) error = %v", err)
+		t.Fatalf("NewWorktree(context.Background(), beta) error = %v", err)
 	}
 	if err := b.Setup(); err != nil {
 		t.Fatalf("Setup(beta) error = %v", err)
@@ -90,9 +90,9 @@ func TestRename_TargetBranchCollisionErrors(t *testing.T) {
 // the corrected path) without attempting an impossible move or creating a stray directory.
 func TestRename_OrphanedWorktreeSkipsMove(t *testing.T) {
 	repoPath := newTestRepo(t)
-	wt, oldBranch, err := NewGitWorktree(context.Background(), repoPath, "alpha")
+	wt, oldBranch, err := NewWorktree(context.Background(), repoPath, "alpha")
 	if err != nil {
-		t.Fatalf("NewGitWorktree error = %v", err)
+		t.Fatalf("NewWorktree error = %v", err)
 	}
 	if err := wt.Setup(); err != nil {
 		t.Fatalf("Setup() error = %v", err)
@@ -129,9 +129,9 @@ func TestRename_OrphanedWorktreeSkipsMove(t *testing.T) {
 // rolled back so the session is left fully intact on its original names.
 func TestRename_RollbackWhenMoveFails(t *testing.T) {
 	repoPath := newTestRepo(t)
-	wt, oldBranch, err := NewGitWorktree(context.Background(), repoPath, "alpha")
+	wt, oldBranch, err := NewWorktree(context.Background(), repoPath, "alpha")
 	if err != nil {
-		t.Fatalf("NewGitWorktree error = %v", err)
+		t.Fatalf("NewWorktree error = %v", err)
 	}
 	if err := wt.Setup(); err != nil {
 		t.Fatalf("Setup() error = %v", err)
@@ -159,7 +159,7 @@ func TestRename_RollbackWhenMoveFails(t *testing.T) {
 
 // execUnlock unlocks a worktree, ignoring errors (best-effort test cleanup).
 func execUnlock(repoPath, worktreePath string) error {
-	g := &GitWorktree{repoPath: repoPath}
+	g := &Worktree{repoPath: repoPath}
 	_, err := g.runGitCommand(repoPath, "worktree", "unlock", worktreePath)
 	return err
 }

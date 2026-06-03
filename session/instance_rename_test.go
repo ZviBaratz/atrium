@@ -30,20 +30,20 @@ func renameTestRepo(t *testing.T) string {
 }
 
 // liveTmux returns a fake tmux session whose every command (incl. has-session) succeeds.
-func liveTmux(t *testing.T, name string) *tmux.TmuxSession {
+func liveTmux(t *testing.T, name string) *tmux.Session {
 	t.Helper()
 	exec := cmd_test.MockCmdExec{
 		RunFunc:    func(*exec.Cmd) error { return nil },
 		OutputFunc: func(*exec.Cmd) ([]byte, error) { return nil, nil },
 	}
-	return tmux.NewTmuxSessionWithDeps(context.Background(), name, "claude", tmux.MakePtyFactory(), exec)
+	return tmux.NewSessionWithDeps(context.Background(), name, "claude", tmux.MakePtyFactory(), exec)
 }
 
 // A deep rename fixes the typo everywhere at once: the title, the rendered branch field, the
 // git branch, and the worktree directory all move to the corrected name.
 func TestInstanceRename_RenamesBranchWorktreeAndTitle(t *testing.T) {
 	repoPath := renameTestRepo(t)
-	wt, _, err := git.NewGitWorktree(context.Background(), repoPath, "formalize-packaing")
+	wt, _, err := git.NewWorktree(context.Background(), repoPath, "formalize-packaing")
 	require.NoError(t, err)
 	require.NoError(t, wt.Setup())
 
@@ -76,12 +76,12 @@ func TestInstanceRename_RenamesBranchWorktreeAndTitle(t *testing.T) {
 // rolled back and the instance identity is left completely untouched.
 func TestInstanceRename_RollsBackTmuxOnGitFailure(t *testing.T) {
 	repoPath := renameTestRepo(t)
-	wt, _, err := git.NewGitWorktree(context.Background(), repoPath, "alpha")
+	wt, _, err := git.NewWorktree(context.Background(), repoPath, "alpha")
 	require.NoError(t, err)
 	require.NoError(t, wt.Setup())
 
 	// Occupy the target branch name so the git rename collides and fails.
-	collide, _, err := git.NewGitWorktree(context.Background(), repoPath, "alpha-fixed")
+	collide, _, err := git.NewWorktree(context.Background(), repoPath, "alpha-fixed")
 	require.NoError(t, err)
 	require.NoError(t, collide.Setup())
 
@@ -93,7 +93,7 @@ func TestInstanceRename_RollsBackTmuxOnGitFailure(t *testing.T) {
 		},
 		OutputFunc: func(*exec.Cmd) ([]byte, error) { return nil, nil },
 	}
-	ts := tmux.NewTmuxSessionWithDeps(context.Background(), "alpha", "claude", tmux.MakePtyFactory(), tmuxExec)
+	ts := tmux.NewSessionWithDeps(context.Background(), "alpha", "claude", tmux.MakePtyFactory(), tmuxExec)
 	inst := &Instance{
 		Title:       "alpha",
 		status:      Running,
@@ -116,9 +116,9 @@ func TestInstanceRename_RollsBackTmuxOnGitFailure(t *testing.T) {
 	require.NoError(t, statErr, "worktree dir must be intact after rollback")
 
 	// The tmux session was renamed forward then rolled back to its original name.
-	// The prefix follows the active brand (see tmux.TmuxPrefix), so resolve it
+	// The prefix follows the active brand (see tmux.Prefix), so resolve it
 	// dynamically rather than hardcoding the legacy claudesquad_ value.
-	prefix := tmux.TmuxPrefix()
+	prefix := tmux.Prefix()
 	requireSubstr(t, ran, "rename-session", prefix+"alpha", prefix+"alpha-fixed")
 	requireSubstr(t, ran, "rename-session", prefix+"alpha-fixed", prefix+"alpha")
 }

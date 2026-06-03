@@ -51,7 +51,6 @@ func setupTestEnvironment(t *testing.T, cmdExec cmd_test.MockCmdExec) *testSetup
 		Title:   sessionName,
 		Path:    workdir,
 		Program: "bash",
-		AutoYes: false,
 	})
 	require.NoError(t, err)
 
@@ -62,7 +61,7 @@ func setupTestEnvironment(t *testing.T, cmdExec cmd_test.MockCmdExec) *testSetup
 	}
 
 	// Set up tmux session with mocks
-	tmuxSession := tmux.NewTmuxSessionWithDeps(context.Background(), sessionName, "bash", ptyFactory, cmdExec)
+	tmuxSession := tmux.NewSessionWithDeps(context.Background(), sessionName, "bash", ptyFactory, cmdExec)
 	instance.SetTmuxSession(tmuxSession)
 
 	// Start the tmux session

@@ -45,7 +45,7 @@ func (f *recordingPtyFactory) commands() []string {
 
 // newTestWorktree stands up a real, valid git worktree in a temp HOME so
 // IsValidWorktree() returns true and Cleanup() has something to remove.
-func newTestWorktree(t *testing.T) *git.GitWorktree {
+func newTestWorktree(t *testing.T) *git.Worktree {
 	t.Helper()
 	t.Setenv("HOME", t.TempDir())
 	repoPath := filepath.Join(t.TempDir(), "repo")
@@ -56,7 +56,7 @@ func newTestWorktree(t *testing.T) *git.GitWorktree {
 	runGit(t, repoPath, "add", ".")
 	runGit(t, repoPath, "commit", "-m", "initial")
 
-	wt, _, err := git.NewGitWorktree(context.Background(), repoPath, "sess")
+	wt, _, err := git.NewWorktree(context.Background(), repoPath, "sess")
 	require.NoError(t, err)
 	require.NoError(t, wt.Setup())
 	return wt
@@ -77,13 +77,13 @@ func deadExec() cmd_test.MockCmdExec {
 func TestRecoverInPlace_OrphanedWorktreeDegradesToPaused(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	// A storage-only worktree pointing at a path that does not exist.
-	wt := git.NewGitWorktreeFromStorage(
+	wt := git.NewWorktreeFromStorage(
 		context.Background(),
 		filepath.Join(t.TempDir(), "repo"),
 		filepath.Join(t.TempDir(), "gone"),
-		"sess", "session/sess", "", "main", false)
+		"sess", "session/sess", "", "main", false, "session/")
 	pty := &recordingPtyFactory{}
-	ts := tmux.NewTmuxSessionWithDeps(context.Background(), "sess", "claude", pty, deadExec())
+	ts := tmux.NewSessionWithDeps(context.Background(), "sess", "claude", pty, deadExec())
 	inst := &Instance{Title: "sess", status: Running, gitWorktree: wt, tmuxSession: ts}
 
 	inst.recoverInPlace()
@@ -112,7 +112,7 @@ func TestRecoverInPlace_ResumesConversationWhenWorktreeValid(t *testing.T) {
 		},
 		OutputFunc: func(*exec.Cmd) ([]byte, error) { return nil, nil },
 	}
-	ts := tmux.NewTmuxSessionWithDeps(context.Background(), "sess", "claude", pty, liveExec)
+	ts := tmux.NewSessionWithDeps(context.Background(), "sess", "claude", pty, liveExec)
 	inst := &Instance{Title: "sess", status: Running, gitWorktree: wt, tmuxSession: ts}
 
 	inst.recoverInPlace()
@@ -131,7 +131,7 @@ func TestRecoverInPlace_ResumesConversationWhenWorktreeValid(t *testing.T) {
 func TestRecoverInPlace_FailedRestartDegradesToPaused(t *testing.T) {
 	wt := newTestWorktree(t)
 	pty := &recordingPtyFactory{startErr: fmt.Errorf("pty boom")}
-	ts := tmux.NewTmuxSessionWithDeps(context.Background(), "sess", "claude", pty, deadExec())
+	ts := tmux.NewSessionWithDeps(context.Background(), "sess", "claude", pty, deadExec())
 	inst := &Instance{Title: "sess", status: Running, gitWorktree: wt, tmuxSession: ts}
 
 	inst.recoverInPlace()
@@ -148,7 +148,7 @@ func TestRecoverInPlace_FailedRestartDegradesToPaused(t *testing.T) {
 func TestRecreateSession_ResumesConversationAndCleansUpOnFailure(t *testing.T) {
 	wt := newTestWorktree(t)
 	pty := &recordingPtyFactory{startErr: fmt.Errorf("pty boom")}
-	ts := tmux.NewTmuxSessionWithDeps(context.Background(), "sess", "claude", pty, deadExec())
+	ts := tmux.NewSessionWithDeps(context.Background(), "sess", "claude", pty, deadExec())
 	inst := &Instance{Title: "sess", started: true, gitWorktree: wt, tmuxSession: ts}
 
 	err := inst.recreateSession()
@@ -177,10 +177,10 @@ func TestResume_BranchCheckedOutReturnsTypedError(t *testing.T) {
 	// The base repo itself holds the session branch — the common Checkout case.
 	runGit(t, repoPath, "switch", "-c", "session/sess")
 
-	wt := git.NewGitWorktreeFromStorage(
+	wt := git.NewWorktreeFromStorage(
 		context.Background(),
 		repoPath, filepath.Join(t.TempDir(), "wt"),
-		"sess", "session/sess", "", "main", true)
+		"sess", "session/sess", "", "main", true, "session/")
 	inst := &Instance{Title: "sess", status: Paused, started: true, gitWorktree: wt}
 
 	err := inst.Resume()

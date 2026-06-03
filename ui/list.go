@@ -140,12 +140,13 @@ var filterBarStyle = lipgloss.NewStyle().
 var filterBarActiveStyle = lipgloss.NewStyle().
 	Foreground(lipgloss.AdaptiveColor{Light: "#1a1a1a", Dark: "#ffffff"})
 
+// List is the left panel: the instance list grouped by repo, with collapse
+// state, incremental filtering, and the selection the rest of the UI follows.
 type List struct {
 	items         []*session.Instance
 	selectedIdx   int
 	height, width int
 	renderer      *InstanceRenderer
-	autoyes       bool
 	// collapsed records which repo groups are folded, keyed by repoKey. It is a pure
 	// display/navigation flag — never authoritative over membership or order, which stay
 	// derived from items. All reads go through effectiveCollapsed so the "only meaningful
@@ -161,11 +162,11 @@ type List struct {
 	filterActive bool
 }
 
-func NewList(spinner *spinner.Model, autoYes bool) *List {
+// NewList returns an empty List.
+func NewList(spinner *spinner.Model) *List {
 	return &List{
 		items:     []*session.Instance{},
 		renderer:  &InstanceRenderer{spinner: spinner},
-		autoyes:   autoYes,
 		collapsed: map[string]bool{},
 	}
 }
@@ -226,6 +227,8 @@ func (l *List) SetSessionPreviewSize(width, height int) (err error) {
 	return
 }
 
+// NumInstances returns the total number of instances, ignoring filtering and
+// collapsed groups.
 func (l *List) NumInstances() int {
 	return len(l.items)
 }
@@ -385,28 +388,39 @@ func (r *InstanceRenderer) Render(i *session.Instance, idx int, selected bool) s
 		}
 	}
 
+	// Faint session-age label (e.g. "2h", "3d"), right-aligned on line 2 in both
+	// git and direct modes. agePlain carries the leading gap (for width
+	// budgeting); ageStyled renders that gap as a bg-aware pad so the
+	// selected-row fill doesn't drop out.
+	var agePlain, ageStyled string
+	if age := fmtAge(i.CreatedAt); age != "" {
+		agePlain = " " + age
+		ageStyled = pad(1) + seg(th.Palette.FgDim).Render(age)
+	}
+
 	var line2 string
 	if i.IsDirect() {
 		// Direct (non-git) session: no branch, ahead/behind, or diff. The git line below
 		// would render a dangling branch glyph with no name, so show a concise dim marker
 		// instead — consistent with the diff pane and picker hint. Pad to W so the
-		// selected-row background fills the line.
+		// selected-row background fills the line. The age steals budget from the
+		// marker (the only other content on the line) so the row still totals
+		// exactly W.
 		label := "direct · no git isolation"
-		if runewidth.StringWidth(label) > W {
-			label = runewidth.Truncate(label, W, "…")
+		labelBudget := W - runewidth.StringWidth(agePlain)
+		if labelBudget < 1 {
+			// Too narrow for both: keep the marker, drop the age.
+			agePlain, ageStyled = "", ""
+			labelBudget = W
 		}
-		line2 = seg(th.Palette.FgDim).Render(label) + pad(W-runewidth.StringWidth(label))
+		if runewidth.StringWidth(label) > labelBudget {
+			label = runewidth.Truncate(label, labelBudget, "…")
+		}
+		line2 = seg(th.Palette.FgDim).Render(label) +
+			pad(W-runewidth.StringWidth(label)-runewidth.StringWidth(agePlain)) + ageStyled
 	} else {
-		// Faint session-age label (e.g. "2h", "3d") appended after the diff stat.
-		// agePlain carries the leading gap (for width budgeting); ageStyled renders
-		// that gap as a bg-aware pad so the selected-row fill doesn't drop out.
-		var agePlain, ageStyled string
-		if age := fmtAge(i.CreatedAt); age != "" {
-			agePlain = " " + age
-			ageStyled = pad(1) + seg(th.Palette.FgDim).Render(age)
-		}
-
-		// Budget the branch (the only variable-length part) so the line fits W.
+		// Budget the branch (the only variable-length part) so the line fits W;
+		// the age label is appended after the diff stat.
 		fixedW := runewidth.StringWidth(g.Branch+" ") + runewidth.StringWidth(gctxPlain) + runewidth.StringWidth(diffPlain) + runewidth.StringWidth(agePlain)
 		branchBudget := W - fixedW - 1 // 1 = min gap before the diff stat
 		branch := i.Branch
@@ -674,6 +688,8 @@ func (l *List) KillInstance(target *session.Instance) {
 	l.clampSelectionToNavigable()
 }
 
+// Attach attaches the user's terminal to the selected instance's tmux session
+// (see Instance.Attach).
 func (l *List) Attach() (chan struct{}, error) {
 	targetInstance := l.items[l.selectedIdx]
 	return targetInstance.Attach()

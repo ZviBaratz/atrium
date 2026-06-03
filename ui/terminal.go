@@ -21,7 +21,7 @@ func terminalFooterStyle() lipgloss.Style { return theme.Current().DimStyle() }
 
 // terminalSession holds a cached tmux session for a specific instance.
 type terminalSession struct {
-	tmuxSession *tmux.TmuxSession
+	tmuxSession *tmux.Session
 	cwd         string
 }
 
@@ -44,6 +44,8 @@ type TerminalPane struct {
 	viewport    viewport.Model
 }
 
+// NewTerminalPane returns an empty TerminalPane with no shell sessions yet.
+// ctx is the app lifecycle context its shell tmux sessions derive from.
 func NewTerminalPane(ctx context.Context) *TerminalPane {
 	return &TerminalPane{
 		ctx:      ctx,
@@ -61,6 +63,8 @@ func (t *TerminalPane) baseContext() context.Context {
 	return context.Background()
 }
 
+// SetSize sets the pane's render dimensions and resizes the currently
+// displayed shell's detached tmux session to match.
 func (t *TerminalPane) SetSize(width, height int) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -161,14 +165,14 @@ func (t *TerminalPane) ensureSessionLocked(instance *session.Instance) error {
 	}
 
 	termName := "term_" + instance.Title
-	ts := tmux.NewTmuxSession(t.baseContext(), termName, shell)
+	ts := tmux.NewSession(t.baseContext(), termName, shell)
 
 	// Check if session already exists (e.g. from a previous run)
 	if ts.DoesSessionExist() {
 		if err := ts.Restore(); err != nil {
 			// Session exists but can't restore, kill it and start fresh
 			_ = ts.Close()
-			ts = tmux.NewTmuxSession(t.baseContext(), termName, shell)
+			ts = tmux.NewSession(t.baseContext(), termName, shell)
 			if err := ts.Start(cwd); err != nil {
 				return fmt.Errorf("terminal pane: failed to start session: %w", err)
 			}

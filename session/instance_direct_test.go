@@ -18,17 +18,17 @@ import (
 // directTmux returns a tmux session backed by a mock executor that reports success for
 // every command (so DoesSessionExist is true and Close/Detach/Rename succeed). It never
 // drives a real tmux server, keeping these tests hermetic.
-func directTmux(name string) *tmux.TmuxSession {
+func directTmux(name string) *tmux.Session {
 	mockExec := cmd_test.MockCmdExec{
 		RunFunc:    func(*exec.Cmd) error { return nil },
 		OutputFunc: func(*exec.Cmd) ([]byte, error) { return []byte(""), nil },
 	}
-	return tmux.NewTmuxSessionWithDeps(context.Background(), name, "claude", tmux.MakePtyFactory(), mockExec)
+	return tmux.NewSessionWithDeps(context.Background(), name, "claude", tmux.MakePtyFactory(), mockExec)
 }
 
 // TestNewInstance_DirectFlag verifies a direct session is born with no worktree, no
 // branch, and IsDirect() true, and that WorkingDir() resolves to Path (the cwd the tmux
-// session runs in — the actual -c wiring is covered by tmux.TestStartTmuxSession).
+// session runs in — the actual -c wiring is covered by tmux.TestStartSession).
 func TestNewInstance_DirectFlag(t *testing.T) {
 	dir := t.TempDir()
 	inst, err := NewInstance(InstanceOptions{Title: "t", Path: dir, Program: "echo", Direct: true})
@@ -136,7 +136,7 @@ func TestDirectSession_RoundTrip(t *testing.T) {
 	var decoded InstanceData
 	require.NoError(t, json.Unmarshal(blob, &decoded))
 
-	restored, err := FromInstanceData(context.Background(), decoded)
+	restored, err := FromInstanceData(context.Background(), decoded, "session/")
 	require.NoError(t, err)
 	assert.True(t, restored.IsDirect(), "Direct must survive restore")
 	assert.Nil(t, restored.worktree(), "restore must not fabricate a worktree for a direct session")

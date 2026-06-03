@@ -11,8 +11,8 @@ import (
 // observes the brief window where the old session name no longer exists — which would
 // otherwise read as a "lost session". If the session isn't live (e.g. paused after a
 // reboot) it updates the cached names only, so a later restore targets the new name.
-func (t *TmuxSession) Rename(newName string) error {
-	newSanitized := toClaudeSquadTmuxName(newName)
+func (t *Session) Rename(newName string) error {
+	newSanitized := toSanitizedName(newName)
 
 	t.mu.Lock()
 	defer t.mu.Unlock()

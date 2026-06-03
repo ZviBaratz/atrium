@@ -2,7 +2,6 @@ package git
 
 import (
 	"fmt"
-	"github.com/ZviBaratz/atrium/config"
 	"github.com/ZviBaratz/atrium/log"
 )
 
@@ -12,9 +11,8 @@ import (
 // so the worktree is left fully intact. For a paused/orphaned worktree (no dir on disk) it
 // skips the move and only recomputes the stored worktreePath so a later Resume's
 // `git worktree add` lands at the path matching the corrected branch.
-func (g *GitWorktree) Rename(newSessionName string) error {
-	cfg := config.LoadConfig()
-	newBranch := sanitizeBranchName(fmt.Sprintf("%s%s", cfg.BranchPrefix, newSessionName))
+func (g *Worktree) Rename(newSessionName string) error {
+	newBranch := sanitizeBranchName(fmt.Sprintf("%s%s", g.branchPrefix, newSessionName))
 	if newBranch == "" {
 		return fmt.Errorf("new session name %q produces an empty branch name", newSessionName)
 	}

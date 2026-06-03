@@ -214,7 +214,7 @@ func TestRecoverLostInstances(t *testing.T) {
 // can never stay stuck on the "Setting up workspace..." splash.
 func TestInstanceStartedMsgSetsRunning(t *testing.T) {
 	spin := spinner.New(spinner.WithSpinner(spinner.MiniDot))
-	list := ui.NewList(&spin, false)
+	list := ui.NewList(&spin)
 
 	inst, err := session.NewInstance(session.InstanceOptions{
 		Title: "started", Path: t.TempDir(), Program: "echo",
@@ -369,7 +369,7 @@ func TestConfirmationModalStateTransitions(t *testing.T) {
 func TestConfirmationModalKeyHandling(t *testing.T) {
 	// Import needed packages
 	spinner := spinner.New(spinner.WithSpinner(spinner.MiniDot))
-	list := ui.NewList(&spinner, false)
+	list := ui.NewList(&spinner)
 
 	// Create enough of home struct to test handleKeyPress in confirmation state
 	h := &home{
@@ -490,14 +490,13 @@ func TestConfirmationMessageFormatting(t *testing.T) {
 func TestConfirmationFlowSimulation(t *testing.T) {
 	// Create a minimal setup
 	spinner := spinner.New(spinner.WithSpinner(spinner.MiniDot))
-	list := ui.NewList(&spinner, false)
+	list := ui.NewList(&spinner)
 
 	// Add test instance
 	instance, err := session.NewInstance(session.InstanceOptions{
 		Title:   "test-session",
 		Path:    t.TempDir(),
 		Program: "claude",
-		AutoYes: false,
 	})
 	require.NoError(t, err)
 	_ = list.AddInstance(instance)
@@ -536,7 +535,7 @@ func TestConfirmKillDoubleTapAltKey(t *testing.T) {
 	newHomeWithInstance := func(t *testing.T, cfg *config.Config) (*home, *session.Instance) {
 		t.Helper()
 		spin := spinner.New(spinner.WithSpinner(spinner.MiniDot))
-		list := ui.NewList(&spin, false)
+		list := ui.NewList(&spin)
 		instance, err := session.NewInstance(session.InstanceOptions{
 			Title:   "test-session",
 			Path:    t.TempDir(),
@@ -882,7 +881,7 @@ func TestConfirmationModalVisualAppearance(t *testing.T) {
 func newStateNewHome(t *testing.T) (h *home, newInst, trailing *session.Instance) {
 	t.Helper()
 	spin := spinner.New(spinner.WithSpinner(spinner.MiniDot))
-	list := ui.NewList(&spin, false)
+	list := ui.NewList(&spin)
 
 	existingA, err := session.NewInstance(session.InstanceOptions{Title: "a", Path: "/tmp/repoA", Program: "echo"})
 	require.NoError(t, err)

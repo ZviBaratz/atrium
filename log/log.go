@@ -1,3 +1,6 @@
+// Package log provides file-backed loggers for the application. The TUI owns
+// stdout/stderr, so all diagnostics go to a log file in the OS temp directory
+// instead of the terminal.
 package log
 
 import (
@@ -23,10 +26,10 @@ var logFileName = filepath.Join(os.TempDir(), "atrium.log")
 
 var globalLogFile *os.File
 
-// Initialize should be called once at the beginning of the program to set up logging.
-// defer Close() after calling this function. It sets the go log output to the file in
-// the os temp directory.
-
+// Initialize redirects the package loggers to the log file in the OS temp
+// directory. Call it once at program start and defer Close afterwards; daemon
+// selects a "[DAEMON]" prefix so TUI and daemon entries are distinguishable in
+// the shared file.
 func Initialize(daemon bool) {
 	f, err := os.OpenFile(logFileName, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0666)
 	if err != nil {
@@ -47,6 +50,8 @@ func Initialize(daemon bool) {
 	globalLogFile = f
 }
 
+// Close closes the log file opened by Initialize and tells the user where the
+// logs were written.
 func Close() {
 	_ = globalLogFile.Close()
 	// TODO: maybe only print if verbose flag is set?
@@ -59,6 +64,7 @@ type Every struct {
 	timer   *time.Timer
 }
 
+// NewEvery returns an Every that allows one log line per timeout window.
 func NewEvery(timeout time.Duration) *Every {
 	return &Every{timeout: timeout}
 }

@@ -45,9 +45,9 @@ func TestSetup_BranchOffBusyBranch(t *testing.T) {
 	busyWorktree := filepath.Join(t.TempDir(), "busy")
 	mustRunGit(t, repoPath, "worktree", "add", busyWorktree, "feat")
 
-	wt, branch, err := NewGitWorktreeFromBase(context.Background(), repoPath, "mysess", "feat")
+	wt, branch, err := NewWorktreeFromBase(context.Background(), repoPath, "mysess", "feat")
 	if err != nil {
-		t.Fatalf("NewGitWorktreeFromBase error = %v", err)
+		t.Fatalf("NewWorktreeFromBase error = %v", err)
 	}
 	if err := wt.Setup(); err != nil {
 		t.Fatalf("Setup() error = %v (branch-off must succeed even when base is checked out elsewhere)", err)
@@ -80,9 +80,9 @@ func TestSetup_BranchOffRemoteOnlyBase(t *testing.T) {
 	mustRunGit(t, repoPath, "fetch", "origin")
 	mustRunGit(t, repoPath, "branch", "-D", "feat")
 
-	wt, branch, err := NewGitWorktreeFromBase(context.Background(), repoPath, "remotesess", "feat")
+	wt, branch, err := NewWorktreeFromBase(context.Background(), repoPath, "remotesess", "feat")
 	if err != nil {
-		t.Fatalf("NewGitWorktreeFromBase error = %v", err)
+		t.Fatalf("NewWorktreeFromBase error = %v", err)
 	}
 	if err := wt.Setup(); err != nil {
 		t.Fatalf("Setup() error = %v (should resolve origin/feat)", err)
@@ -96,9 +96,9 @@ func TestSetup_BranchOffRemoteOnlyBase(t *testing.T) {
 func TestSetup_UnknownBaseBranchErrors(t *testing.T) {
 	repoPath := newTestRepo(t)
 
-	wt, _, err := NewGitWorktreeFromBase(context.Background(), repoPath, "sess", "does-not-exist")
+	wt, _, err := NewWorktreeFromBase(context.Background(), repoPath, "sess", "does-not-exist")
 	if err != nil {
-		t.Fatalf("NewGitWorktreeFromBase error = %v", err)
+		t.Fatalf("NewWorktreeFromBase error = %v", err)
 	}
 	err = wt.Setup()
 	if err == nil {
@@ -143,7 +143,7 @@ func TestSetupFromExistingBranch_RemovesOrphanedDirectory(t *testing.T) {
 		t.Fatalf("write orphan marker: %v", err)
 	}
 
-	g := &GitWorktree{
+	g := &Worktree{
 		repoPath:         repoPath,
 		worktreePath:     worktreePath,
 		branchName:       "feature/test",
@@ -239,9 +239,9 @@ func mustRunGit(t *testing.T, dir string, args ...string) string {
 func TestCleanupWorktrees_DeletesBranchFromNonGitCWD(t *testing.T) {
 	repoPath := newTestRepo(t)
 
-	wt, branch, err := NewGitWorktree(context.Background(), repoPath, "cleanup-test")
+	wt, branch, err := NewWorktree(context.Background(), repoPath, "cleanup-test")
 	if err != nil {
-		t.Fatalf("NewGitWorktree: %v", err)
+		t.Fatalf("NewWorktree: %v", err)
 	}
 	if err := wt.Setup(); err != nil {
 		t.Fatalf("Setup: %v", err)
@@ -286,9 +286,9 @@ func TestCleanupWorktrees_DeletesBranchFromNonGitCWD(t *testing.T) {
 func TestCleanupWorktrees_EmptyRepoPathsStillRemovesDirs(t *testing.T) {
 	repoPath := newTestRepo(t)
 
-	wt, _, err := NewGitWorktree(context.Background(), repoPath, "orphan-test")
+	wt, _, err := NewWorktree(context.Background(), repoPath, "orphan-test")
 	if err != nil {
-		t.Fatalf("NewGitWorktree: %v", err)
+		t.Fatalf("NewWorktree: %v", err)
 	}
 	if err := wt.Setup(); err != nil {
 		t.Fatalf("Setup: %v", err)
