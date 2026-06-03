@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -57,7 +58,7 @@ func TestListInstanceAtZone(t *testing.T) {
 
 // TestTabAtZone verifies tab click regions resolve to the right tab index.
 func TestTabAtZone(t *testing.T) {
-	w := NewTabbedWindow(NewPreviewPane(), NewDiffPane(), NewTerminalPane())
+	w := NewTabbedWindow(NewPreviewPane(), NewDiffPane(), NewTerminalPane(context.Background()))
 	w.SetSize(60, 20)
 
 	for i := range []int{PreviewTab, DiffTab, TerminalTab} {

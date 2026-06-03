@@ -41,7 +41,7 @@ func newCreateFormHome(t *testing.T) *home {
 		state:        stateDefault,
 		list:         ui.NewList(&s, false),
 		menu:         ui.NewMenu(),
-		tabbedWindow: ui.NewTabbedWindow(ui.NewPreviewPane(), ui.NewDiffPane(), ui.NewTerminalPane()),
+		tabbedWindow: ui.NewTabbedWindow(ui.NewPreviewPane(), ui.NewDiffPane(), ui.NewTerminalPane(context.Background())),
 		errBox:       ui.NewErrBox(),
 		appConfig:    config.DefaultConfig(),
 		appState:     config.DefaultState(),
@@ -71,7 +71,7 @@ func TestKeyPrompt_OpensCreateFormWithoutAddingRow(t *testing.T) {
 func TestCreateSessionFromForm_CreatesOneAndClearsOverlay(t *testing.T) {
 	cwd, err := os.Getwd()
 	require.NoError(t, err)
-	require.True(t, git.IsGitRepo(cwd), "test must run inside a git repository")
+	require.True(t, git.IsGitRepo(context.Background(), cwd), "test must run inside a git repository")
 
 	h := newCreateFormHome(t)
 	h.newSessionPath = cwd

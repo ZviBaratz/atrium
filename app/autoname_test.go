@@ -34,7 +34,7 @@ func newAutoNameHome(t *testing.T, titles ...string) *home {
 		state:        stateDefault,
 		list:         l,
 		menu:         ui.NewMenu(),
-		tabbedWindow: ui.NewTabbedWindow(ui.NewPreviewPane(), ui.NewDiffPane(), ui.NewTerminalPane()),
+		tabbedWindow: ui.NewTabbedWindow(ui.NewPreviewPane(), ui.NewDiffPane(), ui.NewTerminalPane(context.Background())),
 		errBox:       ui.NewErrBox(),
 		appConfig:    config.DefaultConfig(),
 		appState:     config.DefaultState(),

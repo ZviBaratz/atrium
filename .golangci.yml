@@ -13,6 +13,7 @@ linters:
     - errorlint   # %w wrapping / errors.As correctness
     - gosec       # security issues (structural false positives excluded below)
     - misspell    # common spelling mistakes
+    - noctx       # exec/http calls that bypass context cancellation
     - nolintlint  # malformed or unexplained //nolint directives
     - revive      # curated correctness/clarity rules (see settings below)
     - unconvert   # unnecessary type conversions

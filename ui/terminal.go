@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"context"
 	"fmt"
 	"github.com/ZviBaratz/atrium/log"
 	"github.com/ZviBaratz/atrium/session"
@@ -27,6 +28,10 @@ type terminalSession struct {
 // TerminalPane manages shell tmux sessions in the working directory of selected instances.
 // Sessions are cached per instance so switching between instances preserves terminal state.
 type TerminalPane struct {
+	// ctx is the app lifecycle context the pane's shell tmux sessions derive
+	// their subprocess contexts from. Set once at construction; nil means
+	// Background (tests).
+	ctx           context.Context
 	mu            sync.Mutex
 	width, height int
 	sessions      map[string]*terminalSession // instanceTitle → session
@@ -39,11 +44,21 @@ type TerminalPane struct {
 	viewport    viewport.Model
 }
 
-func NewTerminalPane() *TerminalPane {
+func NewTerminalPane(ctx context.Context) *TerminalPane {
 	return &TerminalPane{
+		ctx:      ctx,
 		sessions: make(map[string]*terminalSession),
 		viewport: viewport.New(0, 0),
 	}
+}
+
+// baseContext returns the lifecycle context shell sessions derive from,
+// defaulting to Background for panes constructed without one.
+func (t *TerminalPane) baseContext() context.Context {
+	if t.ctx != nil {
+		return t.ctx
+	}
+	return context.Background()
 }
 
 func (t *TerminalPane) SetSize(width, height int) {
@@ -146,14 +161,14 @@ func (t *TerminalPane) ensureSessionLocked(instance *session.Instance) error {
 	}
 
 	termName := "term_" + instance.Title
-	ts := tmux.NewTmuxSession(termName, shell)
+	ts := tmux.NewTmuxSession(t.baseContext(), termName, shell)
 
 	// Check if session already exists (e.g. from a previous run)
 	if ts.DoesSessionExist() {
 		if err := ts.Restore(); err != nil {
 			// Session exists but can't restore, kill it and start fresh
 			_ = ts.Close()
-			ts = tmux.NewTmuxSession(termName, shell)
+			ts = tmux.NewTmuxSession(t.baseContext(), termName, shell)
 			if err := ts.Start(cwd); err != nil {
 				return fmt.Errorf("terminal pane: failed to start session: %w", err)
 			}

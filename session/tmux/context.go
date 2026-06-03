@@ -18,7 +18,9 @@ func (t *TmuxSession) SetContext(name, left string) error {
 		return nil
 	}
 	target := t.snapshotName()
-	cmd := tmuxCommand(
+	ctx, cancel := t.opContext()
+	defer cancel()
+	cmd := tmuxCommand(ctx,
 		"set-option", "-t", target, "@atrium_name", name, ";",
 		"set-option", "-t", target, "@atrium_left", left, ";",
 		"refresh-client", "-S",

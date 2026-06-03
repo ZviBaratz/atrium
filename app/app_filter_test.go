@@ -24,7 +24,7 @@ func newFilterHome() *home {
 		appConfig:    config.DefaultConfig(),
 		list:         l,
 		menu:         ui.NewMenu(),
-		tabbedWindow: ui.NewTabbedWindow(ui.NewPreviewPane(), ui.NewDiffPane(), ui.NewTerminalPane()),
+		tabbedWindow: ui.NewTabbedWindow(ui.NewPreviewPane(), ui.NewDiffPane(), ui.NewTerminalPane(context.Background())),
 	}
 }
 

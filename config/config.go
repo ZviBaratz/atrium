@@ -1,6 +1,7 @@
 package config
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"github.com/ZviBaratz/atrium/log"
@@ -10,11 +11,15 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 )
 
 const (
 	ConfigFileName = "config.json"
 	defaultProgram = "claude"
+	// shellProbeTimeout bounds the shell invocation GetClaudeCommand uses to
+	// resolve the claude binary, so a hung profile script can't wedge startup.
+	shellProbeTimeout = 10 * time.Second
 )
 
 // GetConfigDir returns the path to the application's data/config directory.
@@ -191,7 +196,12 @@ func GetClaudeCommand() (string, error) {
 		shellCmd = "which claude"
 	}
 
-	cmd := exec.Command(shell, "-c", shellCmd)
+	// One-shot startup probe with no ctx-bearing caller (config load runs before
+	// any lifecycle context exists); Background capped at the probe timeout is
+	// deliberate.
+	ctx, cancel := context.WithTimeout(context.Background(), shellProbeTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, shell, "-c", shellCmd)
 	output, err := cmd.Output()
 	if err == nil {
 		if program, ok := resolveClaudeCandidate(string(output)); ok {

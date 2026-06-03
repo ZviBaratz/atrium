@@ -1,6 +1,7 @@
 package session
 
 import (
+	"context"
 	cmd2 "github.com/ZviBaratz/atrium/cmd"
 	"github.com/ZviBaratz/atrium/cmd/cmd_test"
 	"github.com/ZviBaratz/atrium/session/git"
@@ -35,14 +36,14 @@ func liveTmux(t *testing.T, name string) *tmux.TmuxSession {
 		RunFunc:    func(*exec.Cmd) error { return nil },
 		OutputFunc: func(*exec.Cmd) ([]byte, error) { return nil, nil },
 	}
-	return tmux.NewTmuxSessionWithDeps(name, "claude", tmux.MakePtyFactory(), exec)
+	return tmux.NewTmuxSessionWithDeps(context.Background(), name, "claude", tmux.MakePtyFactory(), exec)
 }
 
 // A deep rename fixes the typo everywhere at once: the title, the rendered branch field, the
 // git branch, and the worktree directory all move to the corrected name.
 func TestInstanceRename_RenamesBranchWorktreeAndTitle(t *testing.T) {
 	repoPath := renameTestRepo(t)
-	wt, _, err := git.NewGitWorktree(repoPath, "formalize-packaing")
+	wt, _, err := git.NewGitWorktree(context.Background(), repoPath, "formalize-packaing")
 	require.NoError(t, err)
 	require.NoError(t, wt.Setup())
 
@@ -75,12 +76,12 @@ func TestInstanceRename_RenamesBranchWorktreeAndTitle(t *testing.T) {
 // rolled back and the instance identity is left completely untouched.
 func TestInstanceRename_RollsBackTmuxOnGitFailure(t *testing.T) {
 	repoPath := renameTestRepo(t)
-	wt, _, err := git.NewGitWorktree(repoPath, "alpha")
+	wt, _, err := git.NewGitWorktree(context.Background(), repoPath, "alpha")
 	require.NoError(t, err)
 	require.NoError(t, wt.Setup())
 
 	// Occupy the target branch name so the git rename collides and fails.
-	collide, _, err := git.NewGitWorktree(repoPath, "alpha-fixed")
+	collide, _, err := git.NewGitWorktree(context.Background(), repoPath, "alpha-fixed")
 	require.NoError(t, err)
 	require.NoError(t, collide.Setup())
 
@@ -92,7 +93,7 @@ func TestInstanceRename_RollsBackTmuxOnGitFailure(t *testing.T) {
 		},
 		OutputFunc: func(*exec.Cmd) ([]byte, error) { return nil, nil },
 	}
-	ts := tmux.NewTmuxSessionWithDeps("alpha", "claude", tmux.MakePtyFactory(), tmuxExec)
+	ts := tmux.NewTmuxSessionWithDeps(context.Background(), "alpha", "claude", tmux.MakePtyFactory(), tmuxExec)
 	inst := &Instance{
 		Title:       "alpha",
 		status:      Running,
@@ -134,7 +135,7 @@ func TestInstanceRename_RejectsEmpty(t *testing.T) {
 
 func mustGit(t *testing.T, dir string, args ...string) string {
 	t.Helper()
-	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
+	cmd := exec.CommandContext(context.Background(), "git", append([]string{"-C", dir}, args...)...)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("git %v: %v\n%s", args, err, out)

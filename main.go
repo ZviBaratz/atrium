@@ -13,8 +13,10 @@ import (
 	"github.com/ZviBaratz/atrium/session/git"
 	"github.com/ZviBaratz/atrium/session/tmux"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strings"
+	"syscall"
 
 	"github.com/spf13/cobra"
 )
@@ -32,7 +34,12 @@ var (
 		Use:   "atrium",
 		Short: "Atrium - A command center for orchestrating multiple AI coding agents like Claude Code, Aider, Codex, and Amp.",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			ctx := context.Background()
+			// Root lifecycle context: cancelled on SIGINT/SIGTERM so in-flight
+			// git/gh/tmux subprocesses are killed rather than orphaned on shutdown.
+			// (Inside the TUI, Ctrl+C is a key event handled by Bubble Tea, not a
+			// signal — this covers SIGTERM and the daemon's signal-driven exit.)
+			ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+			defer stop()
 			log.Initialize(daemonFlag)
 			defer log.Close()
 
@@ -41,7 +48,7 @@ var (
 				if err := tmux.Init(cfg.TmuxConfigOverride, cfg.GetSessionContextBar()); err != nil {
 					log.WarningLog.Printf("failed to initialize tmux config: %v", err)
 				}
-				err := daemon.RunDaemon(cfg)
+				err := daemon.RunDaemon(ctx, cfg)
 				log.ErrorLog.Printf("failed to start daemon %v", err)
 				return err
 			}
@@ -68,7 +75,7 @@ var (
 			}
 			if autoYes {
 				defer func() {
-					if err := daemon.LaunchDaemon(); err != nil {
+					if err := daemon.LaunchDaemon(ctx); err != nil {
 						log.ErrorLog.Printf("failed to launch daemon: %v", err)
 					}
 				}()
@@ -86,6 +93,9 @@ var (
 		Use:   "reset",
 		Short: "Reset all stored instances",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			// One-shot CLI command; a plain Background context is enough (the
+			// per-operation timeouts still bound every subprocess).
+			ctx := context.Background()
 			log.Initialize(false)
 			defer log.Close()
 
@@ -98,7 +108,7 @@ var (
 			// Capture the repo paths before deleting instances so CleanupWorktrees
 			// can run its git commands in the correct repositories regardless of the
 			// current working directory.
-			instances, err := storage.LoadInstances()
+			instances, err := storage.LoadInstances(ctx)
 			if err != nil {
 				return fmt.Errorf("failed to load instances: %w", err)
 			}
@@ -112,12 +122,12 @@ var (
 			}
 			fmt.Println("Storage has been reset successfully")
 
-			if err := tmux.CleanupSessions(cmd2.MakeExecutor()); err != nil {
+			if err := tmux.CleanupSessions(ctx, cmd2.MakeExecutor()); err != nil {
 				return fmt.Errorf("failed to cleanup tmux sessions: %w", err)
 			}
 			fmt.Println("Tmux sessions have been cleaned up")
 
-			if err := git.CleanupWorktrees(repoPaths); err != nil {
+			if err := git.CleanupWorktrees(ctx, repoPaths); err != nil {
 				return fmt.Errorf("failed to cleanup worktrees: %w", err)
 			}
 			fmt.Println("Worktrees have been cleaned up")

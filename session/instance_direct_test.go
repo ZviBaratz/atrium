@@ -1,6 +1,7 @@
 package session
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"os/exec"
@@ -22,7 +23,7 @@ func directTmux(name string) *tmux.TmuxSession {
 		RunFunc:    func(*exec.Cmd) error { return nil },
 		OutputFunc: func(*exec.Cmd) ([]byte, error) { return []byte(""), nil },
 	}
-	return tmux.NewTmuxSessionWithDeps(name, "claude", tmux.MakePtyFactory(), mockExec)
+	return tmux.NewTmuxSessionWithDeps(context.Background(), name, "claude", tmux.MakePtyFactory(), mockExec)
 }
 
 // TestNewInstance_DirectFlag verifies a direct session is born with no worktree, no
@@ -135,7 +136,7 @@ func TestDirectSession_RoundTrip(t *testing.T) {
 	var decoded InstanceData
 	require.NoError(t, json.Unmarshal(blob, &decoded))
 
-	restored, err := FromInstanceData(decoded)
+	restored, err := FromInstanceData(context.Background(), decoded)
 	require.NoError(t, err)
 	assert.True(t, restored.IsDirect(), "Direct must survive restore")
 	assert.Nil(t, restored.worktree(), "restore must not fabricate a worktree for a direct session")

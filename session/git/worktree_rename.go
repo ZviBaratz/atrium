@@ -35,7 +35,7 @@ func (g *GitWorktree) Rename(newSessionName string) error {
 	}
 
 	// Resolve the new worktree path up front (locals only; fields are swapped at the end).
-	_, newPath, err := resolveWorktreePaths(g.repoPath, newBranch)
+	_, newPath, err := resolveWorktreePaths(g.baseContext(), g.repoPath, newBranch)
 	if err != nil {
 		return fmt.Errorf("failed to resolve new worktree path: %w", err)
 	}

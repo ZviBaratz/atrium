@@ -1,6 +1,7 @@
 package tmux
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"os/exec"
@@ -21,7 +22,7 @@ func hookPollSession(t *testing.T, program string, content *string) *TmuxSession
 		RunFunc:    func(cmd *exec.Cmd) error { return nil },
 		OutputFunc: func(cmd *exec.Cmd) ([]byte, error) { return []byte(*content), nil },
 	}
-	return newTmuxSession(t.Name(), program, NewMockPtyFactory(t), cmdExec)
+	return newTmuxSession(context.Background(), t.Name(), program, NewMockPtyFactory(t), cmdExec)
 }
 
 func writeHookState(t *testing.T, s *TmuxSession, word string) {

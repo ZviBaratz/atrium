@@ -1,6 +1,7 @@
 package git
 
 import (
+	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -44,7 +45,7 @@ func TestSetup_BranchOffBusyBranch(t *testing.T) {
 	busyWorktree := filepath.Join(t.TempDir(), "busy")
 	mustRunGit(t, repoPath, "worktree", "add", busyWorktree, "feat")
 
-	wt, branch, err := NewGitWorktreeFromBase(repoPath, "mysess", "feat")
+	wt, branch, err := NewGitWorktreeFromBase(context.Background(), repoPath, "mysess", "feat")
 	if err != nil {
 		t.Fatalf("NewGitWorktreeFromBase error = %v", err)
 	}
@@ -79,7 +80,7 @@ func TestSetup_BranchOffRemoteOnlyBase(t *testing.T) {
 	mustRunGit(t, repoPath, "fetch", "origin")
 	mustRunGit(t, repoPath, "branch", "-D", "feat")
 
-	wt, branch, err := NewGitWorktreeFromBase(repoPath, "remotesess", "feat")
+	wt, branch, err := NewGitWorktreeFromBase(context.Background(), repoPath, "remotesess", "feat")
 	if err != nil {
 		t.Fatalf("NewGitWorktreeFromBase error = %v", err)
 	}
@@ -95,7 +96,7 @@ func TestSetup_BranchOffRemoteOnlyBase(t *testing.T) {
 func TestSetup_UnknownBaseBranchErrors(t *testing.T) {
 	repoPath := newTestRepo(t)
 
-	wt, _, err := NewGitWorktreeFromBase(repoPath, "sess", "does-not-exist")
+	wt, _, err := NewGitWorktreeFromBase(context.Background(), repoPath, "sess", "does-not-exist")
 	if err != nil {
 		t.Fatalf("NewGitWorktreeFromBase error = %v", err)
 	}
@@ -222,7 +223,7 @@ func mustRunGit(t *testing.T, dir string, args ...string) string {
 		cmdArgs = append([]string{"-C", dir}, args...)
 	}
 
-	cmd := exec.Command("git", cmdArgs...)
+	cmd := exec.CommandContext(context.Background(), "git", cmdArgs...)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("git %v failed: %v\n%s", args, err, output)
@@ -238,7 +239,7 @@ func mustRunGit(t *testing.T, dir string, args ...string) string {
 func TestCleanupWorktrees_DeletesBranchFromNonGitCWD(t *testing.T) {
 	repoPath := newTestRepo(t)
 
-	wt, branch, err := NewGitWorktree(repoPath, "cleanup-test")
+	wt, branch, err := NewGitWorktree(context.Background(), repoPath, "cleanup-test")
 	if err != nil {
 		t.Fatalf("NewGitWorktree: %v", err)
 	}
@@ -267,7 +268,7 @@ func TestCleanupWorktrees_DeletesBranchFromNonGitCWD(t *testing.T) {
 		t.Fatalf("chdir to non-git dir: %v", err)
 	}
 
-	if err := CleanupWorktrees([]string{repoPath}); err != nil {
+	if err := CleanupWorktrees(context.Background(), []string{repoPath}); err != nil {
 		t.Fatalf("CleanupWorktrees: %v", err)
 	}
 
@@ -285,7 +286,7 @@ func TestCleanupWorktrees_DeletesBranchFromNonGitCWD(t *testing.T) {
 func TestCleanupWorktrees_EmptyRepoPathsStillRemovesDirs(t *testing.T) {
 	repoPath := newTestRepo(t)
 
-	wt, _, err := NewGitWorktree(repoPath, "orphan-test")
+	wt, _, err := NewGitWorktree(context.Background(), repoPath, "orphan-test")
 	if err != nil {
 		t.Fatalf("NewGitWorktree: %v", err)
 	}
@@ -294,8 +295,8 @@ func TestCleanupWorktrees_EmptyRepoPathsStillRemovesDirs(t *testing.T) {
 	}
 	worktreePath := wt.GetWorktreePath()
 
-	if err := CleanupWorktrees(nil); err != nil {
-		t.Fatalf("CleanupWorktrees(nil): %v", err)
+	if err := CleanupWorktrees(context.Background(), nil); err != nil {
+		t.Fatalf("CleanupWorktrees(context.Background(), nil): %v", err)
 	}
 
 	if _, err := os.Stat(worktreePath); !os.IsNotExist(err) {

@@ -1,22 +1,23 @@
 package daemon
 
 import (
+	"context"
 	"fmt"
 	"github.com/ZviBaratz/atrium/config"
 	"github.com/ZviBaratz/atrium/log"
 	"github.com/ZviBaratz/atrium/session"
 	"os"
 	"os/exec"
-	"os/signal"
 	"path/filepath"
 	"sync"
-	"syscall"
 	"time"
 )
 
 // RunDaemon runs the daemon process which iterates over all sessions and runs AutoYes mode on them.
 // It's expected that the main process kills the daemon when the main process starts.
-func RunDaemon(cfg *config.Config) error {
+// ctx carries the daemon's shutdown signal (main installs signal.NotifyContext for
+// SIGINT/SIGTERM); cancelling it stops the poll loop and kills in-flight subprocesses.
+func RunDaemon(ctx context.Context, cfg *config.Config) error {
 	log.InfoLog.Printf("starting daemon")
 	state := config.LoadState()
 	storage, err := session.NewStorage(state)
@@ -24,7 +25,7 @@ func RunDaemon(cfg *config.Config) error {
 		return fmt.Errorf("failed to initialize storage: %w", err)
 	}
 
-	instances, err := storage.LoadInstances()
+	instances, err := storage.LoadInstances(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to load instacnes: %w", err)
 	}
@@ -71,11 +72,10 @@ func RunDaemon(cfg *config.Config) error {
 		}
 	}()
 
-	// Notify on SIGINT (Ctrl+C) and SIGTERM. Save instances before
-	sigChan := make(chan os.Signal, 1)
-	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
-	sig := <-sigChan
-	log.InfoLog.Printf("received signal %s", sig.String())
+	// Block until the lifecycle context is cancelled (SIGINT/SIGTERM via main's
+	// signal.NotifyContext). Save instances before exiting.
+	<-ctx.Done()
+	log.InfoLog.Printf("shutting down: %v", context.Cause(ctx))
 
 	// Stop the goroutine so we don't race.
 	close(stopCh)
@@ -88,14 +88,17 @@ func RunDaemon(cfg *config.Config) error {
 }
 
 // LaunchDaemon launches the daemon process.
-func LaunchDaemon() error {
+func LaunchDaemon(ctx context.Context) error {
 	// Find the atrium binary.
 	execPath, err := os.Executable()
 	if err != nil {
 		return fmt.Errorf("failed to get executable path: %w", err)
 	}
 
-	cmd := exec.Command(execPath, "--daemon")
+	// WithoutCancel is deliberate: the daemon is a detached successor that must
+	// survive the launching TUI's shutdown (it has its own signal handling), so
+	// its exec must never be killed by the parent's lifecycle context.
+	cmd := exec.CommandContext(context.WithoutCancel(ctx), execPath, "--daemon")
 
 	// Detach the process from the parent
 	cmd.Stdin = nil

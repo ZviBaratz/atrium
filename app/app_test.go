@@ -239,7 +239,7 @@ func TestInstanceStartedMsgSetsRunning(t *testing.T) {
 		storage:      storage,
 		list:         list,
 		menu:         ui.NewMenu(),
-		tabbedWindow: ui.NewTabbedWindow(ui.NewPreviewPane(), ui.NewDiffPane(), ui.NewTerminalPane()),
+		tabbedWindow: ui.NewTabbedWindow(ui.NewPreviewPane(), ui.NewDiffPane(), ui.NewTerminalPane(context.Background())),
 	}
 
 	_, _ = h.Update(instanceStartedMsg{instance: inst})

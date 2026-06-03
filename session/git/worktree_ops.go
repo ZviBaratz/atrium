@@ -1,6 +1,7 @@
 package git
 
 import (
+	"context"
 	"fmt"
 	"github.com/ZviBaratz/atrium/log"
 	"os"
@@ -319,7 +320,7 @@ func uniqueNonEmptyStrings(ss []string) []string {
 // `git branch -D` refuses to delete a branch checked out in a live worktree, so
 // the directories are removed and pruned (detaching the branches) before the
 // branches are finally deleted.
-func CleanupWorktrees(repoPaths []string) error {
+func CleanupWorktrees(ctx context.Context, repoPaths []string) error {
 	worktreesDir, err := getWorktreeDirectory()
 	if err != nil {
 		return fmt.Errorf("failed to get worktree directory: %w", err)
@@ -343,7 +344,9 @@ func CleanupWorktrees(repoPaths []string) error {
 	type repoBranch struct{ repo, branch string }
 	var branchesToDelete []repoBranch
 	for _, repoPath := range repos {
-		output, err := exec.Command("git", "-C", repoPath, "worktree", "list", "--porcelain").Output()
+		listCtx, cancel := context.WithTimeout(ctx, gitLocalTimeout)
+		output, err := exec.CommandContext(listCtx, "git", "-C", repoPath, "worktree", "list", "--porcelain").Output()
+		cancel()
 		if err != nil {
 			log.ErrorLog.Printf("failed to list worktrees for repo %s: %v", repoPath, err)
 			continue
@@ -369,16 +372,20 @@ func CleanupWorktrees(repoPaths []string) error {
 
 	// Prune git's internal worktree tracking now that the directories are gone.
 	for _, repoPath := range repos {
-		if err := exec.Command("git", "-C", repoPath, "worktree", "prune").Run(); err != nil {
+		pruneCtx, cancel := context.WithTimeout(ctx, gitLocalTimeout)
+		if err := exec.CommandContext(pruneCtx, "git", "-C", repoPath, "worktree", "prune").Run(); err != nil {
 			log.ErrorLog.Printf("failed to prune worktrees for repo %s: %v", repoPath, err)
 		}
+		cancel()
 	}
 
 	// Finally delete the session branches; they are no longer checked out.
 	for _, rb := range branchesToDelete {
-		if err := exec.Command("git", "-C", rb.repo, "branch", "-D", rb.branch).Run(); err != nil {
+		delCtx, cancel := context.WithTimeout(ctx, gitLocalTimeout)
+		if err := exec.CommandContext(delCtx, "git", "-C", rb.repo, "branch", "-D", rb.branch).Run(); err != nil {
 			log.ErrorLog.Printf("failed to delete branch %s in %s: %v", rb.branch, rb.repo, err)
 		}
+		cancel()
 	}
 
 	return nil

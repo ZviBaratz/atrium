@@ -1,6 +1,7 @@
 package git
 
 import (
+	"context"
 	"fmt"
 	"os/exec"
 	"regexp"
@@ -33,14 +34,16 @@ func sanitizeBranchName(s string) string {
 }
 
 // checkGHCLI checks if GitHub CLI is installed and configured
-func checkGHCLI() error {
+func checkGHCLI(ctx context.Context) error {
 	// Check if gh is installed
 	if _, err := exec.LookPath("gh"); err != nil {
 		return fmt.Errorf("GitHub CLI (gh) is not installed. Please install it first")
 	}
 
-	// Check if gh is authenticated
-	cmd := exec.Command("gh", "auth", "status")
+	// Check if gh is authenticated (may hit the network to validate the token)
+	ctx, cancel := context.WithTimeout(ctx, gitNetworkTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "gh", "auth", "status")
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("GitHub CLI is not configured. Please run 'gh auth login' first")
 	}
@@ -49,13 +52,17 @@ func checkGHCLI() error {
 }
 
 // IsGitRepo checks if the given path is within a git repository
-func IsGitRepo(path string) bool {
-	cmd := exec.Command("git", "-C", path, "rev-parse", "--show-toplevel")
+func IsGitRepo(ctx context.Context, path string) bool {
+	ctx, cancel := context.WithTimeout(ctx, gitLocalTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "git", "-C", path, "rev-parse", "--show-toplevel")
 	return cmd.Run() == nil
 }
 
-func findGitRepoRoot(path string) (string, error) {
-	cmd := exec.Command("git", "-C", path, "rev-parse", "--show-toplevel")
+func findGitRepoRoot(ctx context.Context, path string) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, gitLocalTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "git", "-C", path, "rev-parse", "--show-toplevel")
 	out, err := cmd.Output()
 	if err != nil {
 		return "", fmt.Errorf("failed to find Git repository root from path: %s", path)

@@ -47,8 +47,16 @@ func Run(ctx context.Context, program string, autoYes bool) error {
 		newHome(ctx, program, autoYes),
 		tea.WithAltScreen(),
 		tea.WithMouseCellMotion(), // Mouse scroll
+		// Tie the program to the lifecycle context so a SIGTERM (which cancels
+		// ctx in main) also stops the TUI loop, not just the subprocesses.
+		tea.WithContext(ctx),
 	)
 	_, err := p.Run()
+	if ctx.Err() != nil {
+		// Signal-driven shutdown: Bubble Tea reports the kill as an error
+		// (ErrProgramKilled), but for us it is a clean exit.
+		return nil
+	}
 	return err
 }
 
@@ -203,7 +211,7 @@ func newHome(ctx context.Context, program string, autoYes bool) *home {
 			FPS:    theme.Current().Glyphs.SpinnerFPS,
 		})),
 		menu:         ui.NewMenu(),
-		tabbedWindow: ui.NewTabbedWindow(ui.NewPreviewPane(), ui.NewDiffPane(), ui.NewTerminalPane()),
+		tabbedWindow: ui.NewTabbedWindow(ui.NewPreviewPane(), ui.NewDiffPane(), ui.NewTerminalPane(ctx)),
 		errBox:       ui.NewErrBox(),
 		storage:      storage,
 		lostStrikes:  make(map[*session.Instance]int),
@@ -217,7 +225,7 @@ func newHome(ctx context.Context, program string, autoYes bool) *home {
 	h.list = ui.NewList(&h.spinner, autoYes)
 
 	// Load saved instances
-	instances, err := storage.LoadInstances()
+	instances, err := storage.LoadInstances(ctx)
 	if err != nil {
 		fmt.Printf("Failed to load instances: %v\n", err)
 		os.Exit(1)
@@ -970,8 +978,9 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		// fetch so branches are current by the time the user reaches the branch field.
 		m.newSessionPath = m.defaultNewSessionPath()
 		target := m.newSessionPath
+		ctx := m.ctx
 		fetchCmd := func() tea.Msg {
-			git.FetchBranches(target)
+			git.FetchBranches(ctx, target)
 			return nil
 		}
 
@@ -992,7 +1001,7 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		// (e.g. cs launched outside any directory leaves no context); guide the user to
 		// `N` otherwise. A non-git directory is fine — it becomes a direct session.
 		m.newSessionPath = m.defaultNewSessionPath()
-		valid, direct := targetValidity(m.newSessionPath)
+		valid, direct := targetValidity(m.ctx, m.newSessionPath)
 		if !valid {
 			return m, m.handleError(fmt.Errorf("no directory context; press N to choose a project"))
 		}
@@ -1005,6 +1014,7 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		if err != nil {
 			return m, m.handleError(err)
 		}
+		instance.SetBaseContext(m.ctx)
 
 		m.newInstanceFinalizer = m.list.AddInstance(instance)
 		// AddInstance may insert the session into the middle of the list (under its repo
@@ -1466,8 +1476,9 @@ func (m *home) scheduleValidityCheck(path string) tea.Cmd {
 // runValidityCheck returns a tea.Cmd that runs targetValidity in the background and
 // reports the result tagged with the path it was computed for.
 func (m *home) runValidityCheck(path string) tea.Cmd {
+	ctx := m.ctx
 	return func() tea.Msg {
-		valid, direct := targetValidity(path)
+		valid, direct := targetValidity(ctx, path)
 		return targetValidityResultMsg{path: path, valid: valid, direct: direct}
 	}
 }
@@ -1477,6 +1488,7 @@ func (m *home) runValidityCheck(path string) tea.Cmd {
 // time so it reflects the directory chosen in the picker rather than the process cwd.
 func (m *home) runBranchSearch(filter string, version uint64) tea.Cmd {
 	target := m.newSessionPath
+	ctx := m.ctx
 	return func() tea.Msg {
 		if target == "" {
 			var err error
@@ -1484,7 +1496,7 @@ func (m *home) runBranchSearch(filter string, version uint64) tea.Cmd {
 				return nil
 			}
 		}
-		branches, err := git.SearchBranches(target, filter)
+		branches, err := git.SearchBranches(ctx, target, filter)
 		if err != nil {
 			log.WarningLog.Printf("branch search failed: %v", err)
 			return nil
@@ -1845,7 +1857,7 @@ func (m *home) newSessionFormOverlay() *overlay.TextInputOverlay {
 	ov := overlay.NewSessionCreateOverlay(m.appConfig.GetProfiles(), m.candidateRepoPaths())
 	// Seed the initial validity so the picker can flag the default target before the user
 	// navigates: a non-git default directory shows the direct-session hint, not a block.
-	valid, direct := targetValidity(m.newSessionPath)
+	valid, direct := targetValidity(m.ctx, m.newSessionPath)
 	ov.SetTargetValidity(valid, direct)
 	return ov
 }
@@ -1868,7 +1880,7 @@ func (m *home) createSessionFromForm(prompt string) tea.Cmd {
 		path = m.newSessionPath
 	}
 	// A non-git directory becomes a direct session (agent runs in place, no worktree).
-	valid, direct := targetValidity(path)
+	valid, direct := targetValidity(m.ctx, path)
 	if !valid {
 		ov.Submitted = false
 		return m.handleError(fmt.Errorf("%q is not a directory", path))
@@ -1889,6 +1901,7 @@ func (m *home) createSessionFromForm(prompt string) tea.Cmd {
 		ov.Submitted = false
 		return m.handleError(err)
 	}
+	instance.SetBaseContext(m.ctx)
 
 	// Create the list row only now, on submit. AddInstance may insert it mid-list under its
 	// repo group, so select it by identity.
@@ -1916,11 +1929,11 @@ func (m *home) createSessionFromForm(prompt string) tea.Cmd {
 // targetValidity reports whether path is a usable new-session target and, if so,
 // whether it would be a direct (non-git) session. Both the inline (`n`) and form
 // (`N`) flows use it to drive the picker's inline hint and to set the Direct flag.
-func targetValidity(path string) (valid, direct bool) {
+func targetValidity(ctx context.Context, path string) (valid, direct bool) {
 	if !config.DirExists(path) {
 		return false, false
 	}
-	return true, !git.IsGitRepo(path)
+	return true, !git.IsGitRepo(ctx, path)
 }
 
 // defaultNewSessionPath returns the contextual target repo for a new session: the

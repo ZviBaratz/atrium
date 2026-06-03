@@ -1,6 +1,7 @@
 package tmux
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"os/exec"
@@ -89,7 +90,11 @@ func claudeSupportsSettingsFlag() bool {
 		return *settingsFlagOverride
 	}
 	settingsFlagOnce.Do(func() {
-		out, err := exec.Command(ProgramClaude, "--help").CombinedOutput()
+		// One-shot, process-cached probe with no ctx-bearing caller; Background
+		// capped at probeTimeout is deliberate.
+		ctx, cancel := context.WithTimeout(context.Background(), probeTimeout)
+		defer cancel()
+		out, err := exec.CommandContext(ctx, ProgramClaude, "--help").CombinedOutput()
 		if err != nil {
 			log.InfoLog.Printf("status hooks disabled: probing %q --help failed: %v", ProgramClaude, err)
 			return

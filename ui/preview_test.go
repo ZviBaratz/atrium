@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"context"
 	"fmt"
 	"github.com/ZviBaratz/atrium/cmd/cmd_test"
 	"github.com/ZviBaratz/atrium/log"
@@ -42,7 +43,7 @@ func setupTestEnvironment(t *testing.T, cmdExec cmd_test.MockCmdExec) *testSetup
 	sessionName := fmt.Sprintf("test-preview-%s-%d-%d", t.Name(), time.Now().UnixNano(), random)
 
 	// Clean up any existing tmux session (cs runs on a dedicated -L socket)
-	cleanupCmd := exec.Command("tmux", "-L", "claudesquad", "kill-session", "-t", "claudesquad_"+sessionName)
+	cleanupCmd := exec.CommandContext(context.Background(), "tmux", "-L", "claudesquad", "kill-session", "-t", "claudesquad_"+sessionName)
 	_ = cleanupCmd.Run() // Ignore errors if session doesn't exist
 
 	// Create instance
@@ -61,7 +62,7 @@ func setupTestEnvironment(t *testing.T, cmdExec cmd_test.MockCmdExec) *testSetup
 	}
 
 	// Set up tmux session with mocks
-	tmuxSession := tmux.NewTmuxSessionWithDeps(sessionName, "bash", ptyFactory, cmdExec)
+	tmuxSession := tmux.NewTmuxSessionWithDeps(context.Background(), sessionName, "bash", ptyFactory, cmdExec)
 	instance.SetTmuxSession(tmuxSession)
 
 	// Start the tmux session
@@ -89,18 +90,18 @@ func setupGitRepo(t *testing.T, workdir string) {
 	t.Helper()
 
 	// Initialize git repository
-	initCmd := exec.Command("git", "init")
+	initCmd := exec.CommandContext(context.Background(), "git", "init")
 	initCmd.Dir = workdir
 	err := initCmd.Run()
 	require.NoError(t, err)
 
 	// Create basic git config (local to this repo only)
-	configCmd := exec.Command("git", "config", "--local", "user.email", "test@example.com")
+	configCmd := exec.CommandContext(context.Background(), "git", "config", "--local", "user.email", "test@example.com")
 	configCmd.Dir = workdir
 	err = configCmd.Run()
 	require.NoError(t, err)
 
-	configCmd = exec.Command("git", "config", "--local", "user.name", "Test User")
+	configCmd = exec.CommandContext(context.Background(), "git", "config", "--local", "user.name", "Test User")
 	configCmd.Dir = workdir
 	err = configCmd.Run()
 	require.NoError(t, err)
@@ -110,12 +111,12 @@ func setupGitRepo(t *testing.T, workdir string) {
 	err = os.WriteFile(testFile, []byte("test content"), 0644)
 	require.NoError(t, err)
 
-	addCmd := exec.Command("git", "add", "test.txt")
+	addCmd := exec.CommandContext(context.Background(), "git", "add", "test.txt")
 	addCmd.Dir = workdir
 	err = addCmd.Run()
 	require.NoError(t, err)
 
-	commitCmd := exec.Command("git", "commit", "-m", "initial commit")
+	commitCmd := exec.CommandContext(context.Background(), "git", "commit", "-m", "initial commit")
 	commitCmd.Dir = workdir
 	err = commitCmd.Run()
 	require.NoError(t, err)
