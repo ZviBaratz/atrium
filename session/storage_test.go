@@ -193,9 +193,7 @@ func TestUpdateInstance_NotFoundReturnsError(t *testing.T) {
 	require.NoError(t, store.SaveInstances([]*Instance{newPausedInstance(t, "alpha")}))
 
 	ghost := newPausedInstance(t, "ghost")
-	err := store.UpdateInstance(ghost)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "not found")
+	assert.ErrorContains(t, store.UpdateInstance(ghost), "not found")
 }
 
 // TestDeleteAllInstances_ClearsEverything confirms that DeleteAllInstances wipes
