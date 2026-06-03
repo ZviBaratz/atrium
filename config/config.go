@@ -31,10 +31,10 @@ func GetConfigDir() (string, error) {
 		return "", fmt.Errorf("failed to get config home directory: %w", err)
 	}
 	newDir := filepath.Join(homeDir, configDirName)
-	if dirExists(newDir) {
+	if DirExists(newDir) {
 		return newDir, nil
 	}
-	if legacy := filepath.Join(homeDir, legacyConfigDirName); dirExists(legacy) {
+	if legacy := filepath.Join(homeDir, legacyConfigDirName); DirExists(legacy) {
 		return legacy, nil
 	}
 	return newDir, nil
@@ -75,6 +75,19 @@ type Config struct {
 	// default. The "unicode" theme avoids Nerd-Font glyphs for terminals
 	// without a patched font.
 	Theme string `json:"theme,omitempty"`
+	// SessionContextBar, when true, renders a thin tmux status line inside each
+	// attached session (name · repo · branch · status + a strip of sibling
+	// sessions in the same repo group). nil means use the default (on), so the
+	// feature stays enabled for config files written before it existed. Setting
+	// it false restores the chrome-free fullscreen pane (tmux status off).
+	SessionContextBar *bool `json:"session_context_bar,omitempty"`
+}
+
+// GetSessionContextBar reports whether attached sessions should render the
+// in-session context status line. A nil SessionContextBar (e.g. an older config
+// file with no such key) defaults to on, mirroring GetAutoAttach.
+func (c *Config) GetSessionContextBar() bool {
+	return c.SessionContextBar == nil || *c.SessionContextBar
 }
 
 // GetAutoAttach reports whether new sessions should auto-attach on creation.
@@ -135,11 +148,13 @@ func DefaultConfig() *Config {
 
 	autoAttach := true
 	killDoubleTap := true
+	sessionContextBar := true
 	return &Config{
 		DefaultProgram:     program,
 		AutoYes:            false,
 		DaemonPollInterval: 1000,
 		Theme:              "tokyo-night",
+		SessionContextBar:  &sessionContextBar,
 		BranchPrefix: func() string {
 			user, err := user.Current()
 			if err != nil || user == nil || user.Username == "" {

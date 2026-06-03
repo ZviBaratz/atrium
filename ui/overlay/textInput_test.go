@@ -1,12 +1,15 @@
 package overlay
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func tab(o *TextInputOverlay)      { o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyTab}) }
@@ -66,31 +69,62 @@ func TestTextInputOverlay_InvalidateBumpsVersion(t *testing.T) {
 	assert.Greater(t, after, before)
 }
 
-func TestSessionCreateOverlay_FocusStartsOnTitleAndCycles(t *testing.T) {
-	// No profiles → stops: [title, textarea, directory, branch, enter]; focus starts on title.
+func TestSessionCreateOverlay_FocusStartsOnDirectoryAndCycles(t *testing.T) {
+	// No profiles → stops: [directory, title, textarea, branch, enter]; focus starts on
+	// the project picker so the repo is chosen before naming the session.
 	o := NewSessionCreateOverlay(nil, []string{"/repo/a", "/repo/b"})
 	assert.True(t, o.IsCreateForm())
-	assert.True(t, o.isTitle(), "focus should start on the title")
+	assert.True(t, o.isDirectoryPicker(), "focus should start on the project picker")
 
 	tab(o)
-	assert.True(t, o.isTextarea(), "prompt comes right after the title")
+	assert.True(t, o.isTitle(), "title comes right after the project")
 	tab(o)
-	assert.True(t, o.isDirectoryPicker())
+	assert.True(t, o.isTextarea())
 	tab(o)
 	assert.True(t, o.isBranchPicker())
 	tab(o)
 	assert.True(t, o.isEnterButton())
 	tab(o)
-	assert.True(t, o.isTitle(), "Tab wraps back to the title")
+	assert.True(t, o.isDirectoryPicker(), "Tab wraps back to the project picker")
 
 	shiftTab(o)
 	assert.True(t, o.isEnterButton())
 }
 
+func TestSessionCreateOverlay_RendersProjectAboveTitle(t *testing.T) {
+	o := NewSessionCreateOverlay(nil, []string{"/repo/a"})
+	o.SetSize(80, 24)
+	out := o.Render()
+
+	proj := strings.Index(out, "Project")
+	title := strings.Index(out, "Title")
+	require.GreaterOrEqual(t, proj, 0, "form must show the Project field")
+	require.GreaterOrEqual(t, title, 0, "form must show the Title field")
+	assert.Less(t, proj, title, "Project must render above Title")
+}
+
+func TestSessionCreateOverlay_TabCompletesDirectoryThenAdvances(t *testing.T) {
+	root := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(root, "alpha"), 0o755))
+
+	o := NewSessionCreateOverlay(nil, []string{root})
+	assert.True(t, o.isDirectoryPicker())
+
+	// Type a unique path prefix, then Tab — completion happens in place, focus stays.
+	o.HandleKeyPress(runes(root + "/al"))
+	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyTab})
+	assert.True(t, o.isDirectoryPicker(), "Tab completes in place rather than advancing")
+	assert.Equal(t, filepath.Join(root, "alpha"), o.GetSelectedPath())
+
+	// Tab again with nothing left to complete advances to the next field (title).
+	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyTab})
+	assert.True(t, o.isTitle(), "with nothing to complete, Tab advances focus")
+}
+
 func TestSessionCreateOverlay_CtrlSSubmitsFromAnyField(t *testing.T) {
 	o := NewSessionCreateOverlay(nil, []string{"/repo/a"})
-	// Focus starts on the title, not the submit button.
-	assert.True(t, o.isTitle())
+	// Focus starts on the project picker, not the submit button.
+	assert.True(t, o.isDirectoryPicker())
 
 	shouldClose, _ := o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyCtrlS})
 	assert.True(t, shouldClose, "Ctrl+S should close the form")
@@ -100,7 +134,9 @@ func TestSessionCreateOverlay_CtrlSSubmitsFromAnyField(t *testing.T) {
 
 func TestSessionCreateOverlay_GetTitle(t *testing.T) {
 	o := NewSessionCreateOverlay(nil, []string{"/repo/a"})
-	// Focus starts on the title, so runes land there.
+	// Focus starts on the project picker; Tab to the title, then runes land there.
+	tab(o)
+	assert.True(t, o.isTitle())
 	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("my-feature")})
 	assert.Equal(t, "my-feature", o.GetTitle())
 	// The default candidate is exposed as the chosen project.

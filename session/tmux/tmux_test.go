@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/ZviBaratz/atrium/cmd/cmd_test"
@@ -321,22 +322,145 @@ func TestPollIgnoresMarkersInScrollback(t *testing.T) {
 		"markers and a bare \"Esc to cancel\" in the scrolled-back body must be ignored")
 }
 
-// Hysteresis: working commits instantly; the first idle after working is held; the second
-// consecutive idle commits; a new working observation resets the streak.
-func TestPollHysteresis(t *testing.T) {
-	busy := "working… esc to interrupt"
-	idle := "│ > │ done"
-	c := busy
+// Fix 2 (agent-team layout): the busy marker lives in the footer below the input box's
+// bottom border, and the variable-height team selector (one line per teammate) renders below
+// the marker — pushing it outside a fixed bottom-N window. markerWorking must anchor to the
+// box border so it still finds the marker no matter how many teammates the selector lists.
+func TestMarkerWorkingAnchorsBelowInputBox(t *testing.T) {
+	c := ""
 	s := pollSession(t, "claude", &c, nil)
 
+	working := strings.Join([]string{
+		"⏺ Running the build…",
+		"╭────────────────────────────────────────╮",
+		"│ >                                        │",
+		"╰────────────────────────────────────────╯",
+		"  ⏵⏵ auto mode on (shift+tab to cycle) · esc to interrupt · ← for agents",
+		"  Running 2 agents…",
+		"  ● main",
+		"  ◯ general-purpose",
+	}, "\n")
+	require.True(t, s.markerWorking(working),
+		"the footer marker is found even when a team selector renders below it")
+
+	// Regression: the same marker text sitting in the scrolled-back transcript (above the
+	// last box border) must not count — only the live footer below the border does.
+	scrollback := strings.Join([]string{
+		"  I will add the \"esc to interrupt\" marker check now.",
+		"╭────────────────────────────────────────╮",
+		"│ >                                        │",
+		"╰────────────────────────────────────────╯",
+		"  ⏵⏵ auto mode on (shift+tab to cycle) · ← for agents",
+		"  ● main",
+	}, "\n")
+	require.False(t, s.markerWorking(scrollback),
+		"a marker above the input box (in the transcript) is ignored")
+}
+
+// Hysteresis (content-change fallback, e.g. aider): a content change reads as working;
+// once the pane goes quiet the indicator is held until it has been unchanged for
+// idleSettleTicks, then commits idle. This path is only for programs without a busy marker;
+// the marker-driven Claude path is covered by the hook/marker tests.
+func TestPollHysteresis(t *testing.T) {
+	busy := "running… building target"
+	idle := "$ done"
+	c := busy
+	s := pollSession(t, "aider", &c, nil)
+
+	require.Equal(t, PaneWorking, s.Poll(), "first content read → working")
+	// The content changing to idle is itself a change (working), then the pane must stay
+	// quiet for idleSettleTicks observations before idle commits.
+	c = idle
+	for i := 0; i < idleSettleTicks; i++ {
+		require.Equal(t, PaneWorking, s.Poll(), "held while the pane settles (observation %d)", i)
+	}
+	require.Equal(t, PaneIdle, s.Poll(), "commits once the pane has been quiet for idleSettleTicks")
+	c = busy
+	require.Equal(t, PaneWorking, s.Poll(), "a content change resets to working")
+}
+
+// Regression for the status oscillation: at an auto-accept turn boundary Claude briefly
+// drops the "esc to interrupt" marker (model spin-up) while the pane keeps repainting
+// (spinner elapsed ticking, output rendering). A *moving* pane must never settle to idle —
+// it holds "working" until the marker returns, so there is no Ready→Running flicker.
+func TestPollBridgesAutoAcceptTurnBoundary(t *testing.T) {
+	working := "⏵⏵ auto mode on (shift+tab to cycle) · esc to interrupt · ctrl+t to hide tasks"
+	// Same footer minus the marker, plus a spinner whose elapsed counter advances each tick.
+	gap := func(i int) string {
+		return fmt.Sprintf("✻ Cogitating… (%ds)\n⏵⏵ auto mode on (shift+tab to cycle) · ← for agents", i)
+	}
+	c := working
+	s := pollSession(t, "claude", &c, nil)
+	require.Equal(t, PaneWorking, s.Poll())
+
+	// A churning gap (well past idleSettleTicks) is held the whole time, then the marker
+	// returns: the indicator never flipped to idle.
+	for i := 1; i < idleConfirmTicks; i++ {
+		c = gap(i)
+		require.Equal(t, PaneWorking, s.Poll(), "churning turn-boundary gap held (observation %d)", i)
+	}
+	c = working
+	require.Equal(t, PaneWorking, s.Poll(), "marker returning resumes working without a blip")
+}
+
+// Safety cap: if the marker stays absent while the pane keeps changing (an agent UI we
+// don't model, or a missed marker), the idleConfirmTicks cap eventually commits idle rather
+// than holding "working" forever.
+func TestPollChurnHitsSafetyCap(t *testing.T) {
+	c := "esc to interrupt"
+	s := pollSession(t, "claude", &c, nil)
+	require.Equal(t, PaneWorking, s.Poll())
+
+	for i := 1; i < idleConfirmTicks; i++ {
+		c = fmt.Sprintf("repainting %d, no marker", i) // changes every tick → never settles
+		require.Equal(t, PaneWorking, s.Poll(), "held under churn before the cap (observation %d)", i)
+	}
+	c = "repainting final, no marker"
+	require.Equal(t, PaneIdle, s.Poll(), "commits at the idleConfirmTicks safety cap")
+}
+
+// PollNow classifies at face value with no hysteresis — for the one-shot refresh on detach,
+// where the stalled stream left the smoothing state stale. An idle pane reads idle at once
+// even though the monitor last reported working; a marker pane reads working; a markerless
+// program can't be classified from a single snapshot and yields PaneUnknown.
+func TestPollNow(t *testing.T) {
+	idle := "│ > │  ? for shortcuts"
+	c := "working… esc to interrupt"
+	s := pollSession(t, "claude", &c, nil)
+
+	// Leave the monitor mid working→idle hold, the way a stalled stream would.
 	require.Equal(t, PaneWorking, s.Poll())
 	c = idle
-	require.Equal(t, PaneWorking, s.Poll(), "first idle after working is held")
-	require.Equal(t, PaneIdle, s.Poll(), "second consecutive idle commits")
-	c = busy
-	require.Equal(t, PaneWorking, s.Poll(), "working resets the streak")
-	c = idle
-	require.Equal(t, PaneWorking, s.Poll(), "held again after reset")
+	require.Equal(t, PaneWorking, s.Poll(), "normal Poll holds working via hysteresis")
+
+	require.Equal(t, PaneIdle, s.PollNow(), "PollNow ignores the hold and commits idle at once")
+
+	c = "thinking… esc to interrupt"
+	require.Equal(t, PaneWorking, s.PollNow(), "a marker pane is working")
+
+	// A markerless program has no level signal, so a single snapshot is inconclusive.
+	c = "some output"
+	a := pollSession(t, "aider", &c, nil)
+	require.Equal(t, PaneUnknown, a.PollNow(), "no marker → unknown, left to the tick loop")
+}
+
+// Poll is driven by the metadata tick and, off-cadence, by the UI when the selection
+// changes or a session is detached. monitorMu must make concurrent calls on one session
+// race-free; run under -race to exercise it.
+func TestPollConcurrentIsRaceFree(t *testing.T) {
+	c := "✻ Cogitating… (5s · esc to interrupt)"
+	s := pollSession(t, "claude", &c, nil)
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < 50; j++ {
+				s.Poll()
+			}
+		}()
+	}
+	wg.Wait()
 }
 
 // Programs without a known marker use content-change detection on ANSI-stripped text, so
@@ -346,10 +470,14 @@ func TestPollFallbackNormalization(t *testing.T) {
 	s := pollSession(t, "aider", &c, nil)
 
 	require.Equal(t, PaneWorking, s.Poll(), "first observation is treated as active")
-	// Same visible text, different ANSI only → not a change. Drain the hysteresis hold.
-	c = "\x1b[33mthinking\x1b[0m"
-	require.Equal(t, PaneWorking, s.Poll(), "held (idleStreak 1)")
-	c = "\x1b[31mthinking\x1b[0m"
+	// Same visible text, different ANSI only → not a change, so the pane reads as quiet and
+	// settles to idle after idleSettleTicks. Vary the ANSI each tick to prove a raw byte
+	// comparison would (wrongly) see motion.
+	for i := 1; i < idleSettleTicks; i++ {
+		c = fmt.Sprintf("\x1b[%dmthinking\x1b[0m", 31+i)
+		require.Equal(t, PaneWorking, s.Poll(), "ANSI-only churn held (observation %d)", i)
+	}
+	c = fmt.Sprintf("\x1b[%dmthinking\x1b[0m", 31+idleSettleTicks)
 	require.Equal(t, PaneIdle, s.Poll(), "ANSI-only churn settles to idle")
 	// A real text change flips back to working.
 	c = "\x1b[31mthinking more\x1b[0m"
@@ -451,12 +579,14 @@ func TestContinueProgram(t *testing.T) {
 		{"absolute claude path gets --continue", "/usr/local/bin/claude", "/usr/local/bin/claude --continue"},
 		{"aider unchanged", "aider --model x", "aider --model x"},
 		{"gemini unchanged", "gemini", "gemini"},
-		// HasSuffix, not Contains: a binary merely containing "claude" is not matched.
-		{"claude as non-suffix unchanged", "claude-wrapper", "claude-wrapper"},
-		// A claude program carrying flags does not end in "claude", so it is not matched —
-		// deliberately consistent with busyMarkers/detectPrompt/containsStartupGate, which
-		// use the same HasSuffix predicate and likewise ignore flag-bearing claude profiles.
-		{"claude with trailing flags unchanged", "claude --model opus", "claude --model opus"},
+		// Detection is on the binary basename containing "claude", so a launcher wrapper that
+		// exec's claude (the default_program many setups use) and a flag-bearing claude are
+		// both recognized — the wrapper forwards the appended flag through to claude.
+		{"claude launcher wrapper gets --continue", "/home/u/.claude-squad/launch-claude.sh", "/home/u/.claude-squad/launch-claude.sh --continue"},
+		{"claude-wrapper gets --continue", "claude-wrapper", "claude-wrapper --continue"},
+		{"claude with trailing flags gets --continue", "claude --model opus", "claude --model opus --continue"},
+		// A non-claude binary under a claude-containing directory is NOT matched (basename wins).
+		{"non-claude binary in claude dir unchanged", "/home/u/.claude-squad/bin/aider", "/home/u/.claude-squad/bin/aider"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

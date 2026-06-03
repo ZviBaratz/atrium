@@ -4,11 +4,17 @@ import (
 	"github.com/ZviBaratz/atrium/ui/theme"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
+	"unicode"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 )
+
+// maxDirEntries bounds a single directory read so a pathological directory
+// (e.g. /nix/store, /) can't make the synchronous listing block or balloon.
+const maxDirEntries = 500
 
 // DirectoryPicker is an embeddable component for choosing the target repository
 // directory of a new session. Unlike the branch picker it is fully synchronous —
@@ -24,10 +30,21 @@ type DirectoryPicker struct {
 	width       int
 	visibleRows int // number of candidate rows to render (kept constant across focus)
 
-	// validityChecked/selectionValid let the call site surface an inline "(not a git
-	// repo)" hint as the selection changes, instead of only rejecting it at submit.
+	// These let the call site surface an inline hint as the selection changes, instead of
+	// only reacting at submit. selectionValid means the path exists and is a directory;
+	// selectionDirect means it is a valid directory but not a git repo (→ direct session).
 	validityChecked bool
 	selectionValid  bool
+	selectionDirect bool
+
+	// cachedDir/cachedNames memoize the last directory listing so typing within one
+	// directory (the base prefix grows, the directory does not) re-uses one read. The
+	// cache lives for the picker's lifetime (one short-lived form) and is deliberately
+	// never invalidated — a directory created mid-form won't appear until reopen, but
+	// it stays reachable by typing the full path (literal fallback).
+	cachedDir   string
+	cachedNames []string
+	cacheValid  bool
 }
 
 // NewDirectoryPicker creates a directory picker over the given candidate paths.
@@ -75,11 +92,23 @@ func (dp *DirectoryPicker) IsFocused() bool {
 	return dp.focused
 }
 
-// SetSelectionValidity records whether the currently selected path is a valid git
-// repository, so Render can show an inline indicator while the user is choosing.
-func (dp *DirectoryPicker) SetSelectionValidity(valid bool) {
+// SetSelectionState records the currently selected path's state so Render can show an
+// inline indicator while the user is choosing: valid means it is an existing directory;
+// direct means it is a directory that is not a git repo (a direct session).
+func (dp *DirectoryPicker) SetSelectionState(valid, direct bool) {
 	dp.validityChecked = true
 	dp.selectionValid = valid
+	dp.selectionDirect = direct
+}
+
+// ClearSelectionState resets the indicator to "unknown" (validityChecked = false), so
+// Render shows no target-state hint until a fresh check resolves. Called when the selected
+// path changes, so the previous path's verdict isn't briefly asserted for the new one while
+// the (debounced, async) re-check is in flight.
+func (dp *DirectoryPicker) ClearSelectionState() {
+	dp.validityChecked = false
+	dp.selectionValid = false
+	dp.selectionDirect = false
 }
 
 // HandleKeyPress processes a key event. Returns (consumed, selectionChanged).
@@ -136,30 +165,152 @@ func expandPath(s string) string {
 	return s
 }
 
-// visibleItems returns the candidates matching the current filter, plus the typed
-// path itself when the filter looks like a path that isn't already a candidate.
-func (dp *DirectoryPicker) visibleItems() []string {
-	var items []string
-	lower := strings.ToLower(dp.filter)
-	for _, c := range dp.candidates {
-		if dp.filter == "" || strings.Contains(strings.ToLower(c), lower) {
-			items = append(items, c)
+// splitRawPath splits the raw (un-expanded) filter into the directory portion to list
+// and the base prefix to match within it. It works on the raw string before expandPath
+// because filepath.Abs strips trailing slashes, which would erase the dir/base boundary.
+// A trailing slash (or a bare "~"/"."/"..") means "list this directory" (empty base).
+func splitRawPath(raw string) (dirRaw, base string) {
+	if strings.HasSuffix(raw, "/") {
+		return raw, ""
+	}
+	if idx := strings.LastIndex(raw, "/"); idx >= 0 {
+		return raw[:idx+1], raw[idx+1:]
+	}
+	// No separator: a bare "~", "." or ".." — list that directory, no base prefix.
+	return raw, ""
+}
+
+// listSubdirs returns the names of the immediate sub-directories of dir, bounded by
+// maxDirEntries. Any error (missing/permission-denied/unreadable) yields no names, so
+// the caller falls back to the literal typed path. Uses DirEntry.IsDir (no per-child stat).
+func listSubdirs(dir string) []string {
+	f, err := os.Open(dir)
+	if err != nil {
+		return nil
+	}
+	defer func() { _ = f.Close() }() // read-only handle; close error is not actionable
+	// ReadDir(n) returns up to n entries (io.EOF when fewer); the bound is what matters.
+	// Truncation is in raw directory order (not sorted), so in a pathological dir the
+	// target may fall outside the cap — the literal-fallback entry keeps it reachable
+	// by typing the path out.
+	entries, _ := f.ReadDir(maxDirEntries)
+	names := make([]string, 0, len(entries))
+	for _, e := range entries {
+		if e.IsDir() {
+			names = append(names, e.Name())
 		}
 	}
-	if dp.filter != "" && looksLikePath(dp.filter) {
-		typed := expandPath(dp.filter)
-		found := false
-		for _, it := range items {
-			if it == typed {
-				found = true
-				break
-			}
+	return names
+}
+
+// readSubdirs lists the sub-directories of dirRaw (after expansion), memoized so repeated
+// keystrokes within one directory don't re-read it.
+func (dp *DirectoryPicker) readSubdirs(dirRaw string) (dir string, names []string) {
+	dir = expandPath(dirRaw)
+	if dp.cacheValid && dp.cachedDir == dir {
+		return dir, dp.cachedNames
+	}
+	names = listSubdirs(dir)
+	dp.cachedDir, dp.cachedNames, dp.cacheValid = dir, names, true
+	return dir, names
+}
+
+// visibleItems returns the entries to display for the current filter. With no filter it
+// shows every candidate; a non-path fragment fuzzy-ranks the candidates; a path-like
+// filter browses the filesystem — the matching sub-directories of the typed parent, plus
+// the literal typed path as a fallback so a complete/new path stays selectable.
+func (dp *DirectoryPicker) visibleItems() []string {
+	if dp.filter == "" {
+		return append([]string(nil), dp.candidates...)
+	}
+	if !looksLikePath(dp.filter) {
+		return fuzzyRank(dp.candidates, dp.filter)
+	}
+
+	dirRaw, base := splitRawPath(dp.filter)
+	dir, names := dp.readSubdirs(dirRaw)
+
+	var ranked []string
+	if base == "" {
+		ranked = append([]string(nil), names...)
+		sort.Strings(ranked)
+	} else {
+		ranked = fuzzyRank(names, base)
+	}
+
+	items := make([]string, 0, len(ranked)+1)
+	seen := make(map[string]bool, len(ranked)+1)
+	for _, n := range ranked {
+		p := filepath.Join(dir, n)
+		if !seen[p] {
+			seen[p] = true
+			items = append(items, p)
 		}
-		if !found {
-			items = append(items, typed)
-		}
+	}
+	// Literal fallback: the fully-typed path, so entering a not-yet-existing or
+	// fully-typed repo path is always selectable even when nothing on disk matches.
+	if typed := expandPath(dp.filter); !seen[typed] {
+		items = append(items, typed)
 	}
 	return items
+}
+
+// CompletePrefix implements Tab-completion for the project field with shell-like
+// "complete, then advance" semantics: it extends the filter to the longest common
+// (literal, case-insensitive) prefix of the matching on-disk sub-directories, emitting
+// the on-disk casing. It deliberately never appends a trailing "/": completing to an
+// exact unique directory must leave that directory selectable rather than diving into it
+// — descending is the user typing "/". Returns true when the filter grew (so the caller
+// consumes Tab) and false otherwise (so Tab falls through to advance focus).
+func (dp *DirectoryPicker) CompletePrefix() bool {
+	if !looksLikePath(dp.filter) {
+		return false
+	}
+	dirRaw, base := splitRawPath(dp.filter)
+	_, names := dp.readSubdirs(dirRaw)
+
+	lower := strings.ToLower(base)
+	var matches []string
+	for _, n := range names {
+		if strings.HasPrefix(strings.ToLower(n), lower) {
+			matches = append(matches, n)
+		}
+	}
+	if len(matches) == 0 {
+		return false
+	}
+	newFilter := dirRaw + longestCommonPrefix(matches)
+	if newFilter == dp.filter {
+		return false
+	}
+	dp.filter = newFilter
+	dp.cursor = 0
+	return true
+}
+
+// longestCommonPrefix returns the longest common prefix of the given names, comparing
+// case-insensitively but emitting the casing of the first name (the on-disk casing).
+func longestCommonPrefix(names []string) string {
+	if len(names) == 0 {
+		return ""
+	}
+	prefix := names[0]
+	for _, n := range names[1:] {
+		prefix = commonPrefix(prefix, n)
+		if prefix == "" {
+			break
+		}
+	}
+	return prefix
+}
+
+func commonPrefix(a, b string) string {
+	ra, rb := []rune(a), []rune(b)
+	n := 0
+	for n < len(ra) && n < len(rb) && unicode.ToLower(ra[n]) == unicode.ToLower(rb[n]) {
+		n++
+	}
+	return string(ra[:n])
 }
 
 // GetSelectedPath returns the currently selected (absolute) path, or empty string
@@ -181,6 +332,23 @@ func dpSelectedStyle() lipgloss.Style {
 }
 func dpDimStyle() lipgloss.Style     { return theme.Current().DimStyle() }
 func dpInvalidStyle() lipgloss.Style { return theme.Current().DangerStyle() }
+func dpDirectStyle() lipgloss.Style  { return theme.Current().DimStyle().Italic(true) }
+
+// selectionHint returns the inline indicator for the current selection state: a red
+// "(not a directory)" for an invalid target, a muted "(direct session — no git
+// isolation)" for a valid non-git directory, or empty for a normal git repo.
+func (dp *DirectoryPicker) selectionHint() string {
+	if !dp.validityChecked {
+		return ""
+	}
+	if !dp.selectionValid {
+		return dpInvalidStyle().Render("  (not a directory)")
+	}
+	if dp.selectionDirect {
+		return dpDirectStyle().Render("  (direct session — no git isolation)")
+	}
+	return ""
+}
 
 // Render renders the directory picker at a constant height (one header line, a blank
 // line, then visibleRows item rows) so the surrounding overlay never changes size
@@ -196,9 +364,7 @@ func (dp *DirectoryPicker) Render() string {
 		} else {
 			s.WriteString(dpDimStyle().Render("(none)"))
 		}
-		if dp.validityChecked && !dp.selectionValid {
-			s.WriteString(dpInvalidStyle().Render("  (not a git repo)"))
-		}
+		s.WriteString(dp.selectionHint())
 		s.WriteString("\n\n")
 		s.WriteString(renderPickerRows(nil, 0, dp.visibleRows, false, "", dpSelectedStyle(), dpDimStyle()))
 		return s.String()
@@ -206,9 +372,7 @@ func (dp *DirectoryPicker) Render() string {
 
 	s.WriteString(dpLabelStyle().Render("Project"))
 	s.WriteString(dpFilterStyle().Render(" (filter/path: " + dp.filter + "█)"))
-	if dp.validityChecked && !dp.selectionValid {
-		s.WriteString(dpInvalidStyle().Render("  (not a git repo)"))
-	}
+	s.WriteString(dp.selectionHint())
 	s.WriteString("\n\n")
 
 	items := dp.visibleItems()

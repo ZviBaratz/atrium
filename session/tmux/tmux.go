@@ -50,10 +50,69 @@ const (
 // marker fall back to content-change detection in Poll. Extend the slice when an agent's
 // UI changes; the failure mode of a stale marker is a visible "always idle", not flicker.
 func busyMarkers(program string) []string {
-	if strings.HasSuffix(program, ProgramClaude) {
+	if isClaude(program) {
 		return []string{"esc to interrupt"}
 	}
 	return nil
+}
+
+// markerWorking reports whether a busy marker for this program is present in the live footer
+// of content. The match is confined to the footer (see footerRegion) rather than the whole
+// pane, which would also match the scrolled-back transcript. Returns false for programs
+// without a known marker.
+func (t *TmuxSession) markerWorking(content string) bool {
+	region := footerRegion(content)
+	for _, m := range busyMarkers(t.program) {
+		if strings.Contains(region, m) {
+			return true
+		}
+	}
+	return false
+}
+
+// isHorizontalRule reports whether line is a box-drawing horizontal border — the top or
+// bottom edge of Claude's input box. Such a line is made only of horizontal dashes, box
+// corners/sides, and padding, and contains a real run of dashes (so a prose line with a
+// stray "│" doesn't qualify). It anchors the live footer in footerRegion.
+func isHorizontalRule(line string) bool {
+	line = strings.TrimSpace(line)
+	if line == "" {
+		return false
+	}
+	dashes := 0
+	for _, r := range line {
+		switch r {
+		case '─':
+			dashes++
+		case '╭', '╮', '╰', '╯', '│', '┌', '┐', '└', '┘', '├', '┤', ' ':
+			// box corners/sides and interior padding are allowed
+		default:
+			return false
+		}
+	}
+	return dashes >= 3
+}
+
+// footerRegion returns the live footer of the pane: the lines below the input box's bottom
+// border. Claude renders its status hints and the variable-height agent-team selector (one
+// line per teammate) there, and the busy marker sits among them — so anchoring to the box
+// border, rather than a fixed bottom-N window, keeps the marker detectable no matter how many
+// teammates the selector lists. Everything below the last box border is pure live chrome, so
+// this still excludes the scrolled-back transcript above the box. When the pane has no border
+// — a minimal footer, a non-claude agent, or a degenerate capture — it falls back to the last
+// workChromeLines non-empty lines, preserving the previous behavior.
+func footerRegion(content string) string {
+	lines := strings.Split(content, "\n")
+	lastRule := -1
+	for i, line := range lines {
+		if isHorizontalRule(line) {
+			lastRule = i
+		}
+	}
+	if lastRule < 0 {
+		return liveChromeLines(content, workChromeLines)
+	}
+	return strings.Join(lines[lastRule+1:], "\n")
 }
 
 // continueProgram returns the launch command that resumes the prior conversation for
@@ -61,11 +120,11 @@ func busyMarkers(program string) []string {
 // session whose tmux pane has died, so the relaunched claude picks up where it left off
 // instead of starting blank. tmux word-splits the trailing command string itself (the
 // same reason "aider --model x" works), so appending " --continue" to the single program
-// argv element is sufficient — no shell wrapping. The claude predicate matches the same
-// HasSuffix check used by busyMarkers/detectPrompt, so an absolute path like
+// argv element is sufficient — no shell wrapping. The claude predicate is the same
+// wrapper-aware isClaude check used by busyMarkers/detectPrompt, so an absolute path like
 // /usr/local/bin/claude is recognized and the flag lands after it.
 func continueProgram(program string) string {
-	if strings.HasSuffix(program, ProgramClaude) {
+	if isClaude(program) {
 		return program + " --continue"
 	}
 	return program
@@ -84,7 +143,7 @@ func continueProgram(program string) string {
 // footer tokens remain reachable within region.
 func detectPrompt(program, region string) bool {
 	switch {
-	case strings.HasSuffix(program, ProgramClaude):
+	case isClaude(program):
 		if strings.Contains(flattenChrome(region, promptChromeLines),
 			"No, and tell Claude what to do differently") {
 			return true
@@ -101,6 +160,38 @@ func detectPrompt(program, region string) bool {
 		return strings.Contains(flattenChrome(region, promptChromeLines), "Yes, allow once")
 	}
 	return false
+}
+
+// DetachReason explains why an Attach loop ended so the caller (app.go's
+// attachLoop) can decide whether to return to the list or re-attach a sibling. It
+// is set by the stdin interceptor just before Detach and read via AttachExitReason
+// after the attach channel closes — the close provides the happens-before, and the
+// write+close happen on the same goroutine, so no extra synchronization is needed.
+type DetachReason int
+
+const (
+	// DetachQuit is the default: a normal Ctrl+Q detach (or any non-nav exit).
+	DetachQuit DetachReason = iota
+	// DetachNext requests cycling to the next sibling session in the repo group.
+	DetachNext
+	// DetachPrev requests cycling to the previous sibling session in the repo group.
+	DetachPrev
+)
+
+// navReason maps a raw stdin chunk to a sibling-navigation detach reason. The keys
+// are Ctrl+PageUp (previous) and Ctrl+PageDown (next); their standard xterm
+// encodings are matched exactly so pasted content can't trigger an accidental jump.
+// Terminals that emit different sequences for these chords simply won't navigate —
+// that is the documented terminal-dependency caveat; log buf[:nr] to discover the
+// actual bytes before changing this.
+func navReason(b []byte) (DetachReason, bool) {
+	switch string(b) {
+	case "\x1b[5;5~": // Ctrl+PageUp
+		return DetachPrev, true
+	case "\x1b[6;5~": // Ctrl+PageDown
+		return DetachNext, true
+	}
+	return DetachQuit, false
 }
 
 // TmuxSession represents a managed tmux session
@@ -135,12 +226,27 @@ type TmuxSession struct {
 	ptmx *os.File
 	// monitor monitors the tmux pane content and sends signals to the UI when it's status changes
 	monitor *statusMonitor
+	// monitorMu serializes Poll. The metadata tick polls each session once per cycle, but
+	// the UI also polls the selected session off-cadence on switch/detach; without this
+	// lock those two callers would race on the monitor's hash/streak fields.
+	monitorMu sync.Mutex
 
 	// Initialized by Attach
 	// Deinitilaized by Detach
 	//
 	// Channel to be closed at the very end of detaching. Used to signal callers.
 	attachCh chan struct{}
+	// detachReason records why the current attach ended (normal Ctrl+Q vs a
+	// sibling-navigation request). Reset at Attach, set by the stdin interceptor
+	// before Detach, read via AttachExitReason once attachCh has closed.
+	detachReason DetachReason
+
+	// ctx{Name,Left} cache the last context-bar payload pushed via SetContext so an
+	// unchanged metadata tick skips the tmux subprocess. ctxSet guards the first push
+	// (when both are still the empty string). Accessed only from the main update
+	// loop, like the other Set* paths.
+	ctxName, ctxLeft string
+	ctxSet           bool
 	// While attached, we use some goroutines to manage the window size and stdin/stdout. This stuff
 	// is used to terminate them on Detach. We don't want them to outlive the attached window.
 	ctx    context.Context
@@ -273,6 +379,16 @@ func (t *TmuxSession) start(workDir string, program string) error {
 		return fmt.Errorf("tmux session already exists: %s", t.sanitizedName)
 	}
 
+	// Inject the authoritative status hooks for claude (a no-op for other agents or when
+	// --settings is unsupported). The settings path is appended to the launch command only;
+	// t.program (the persisted value) is never mutated. A failure here just disables hooks —
+	// the launch still proceeds on the scrape classifier.
+	if settingsPath, err := ensureHookSettings(t.sanitizedName, t.program); err != nil {
+		log.ErrorLog.Printf("status hooks disabled for %s: %v", t.sanitizedName, err)
+	} else if settingsPath != "" {
+		program = program + " --settings " + settingsPath
+	}
+
 	// Create a new detached tmux session and start claude in it. -n gives the
 	// window the human-readable title (the conf disables auto-rename).
 	cmd := tmuxCommand("new-session", "-d", "-s", t.sanitizedName, "-c", workDir, "-n", t.windowName, program)
@@ -328,7 +444,7 @@ func (t *TmuxSession) start(workDir string, program string) error {
 // or the non-claude documentation-url screen). Keystrokes sent while a gate is up
 // are consumed by the gate rather than the agent's input box.
 func containsStartupGate(program, content string) bool {
-	if strings.HasSuffix(program, ProgramClaude) {
+	if isClaude(program) {
 		return strings.Contains(content, "Do you trust the files in this folder?") ||
 			strings.Contains(content, "new MCP server")
 	}
@@ -347,7 +463,7 @@ func (t *TmuxSession) CheckAndHandleTrustPrompt() bool {
 		return false
 	}
 
-	if strings.HasSuffix(t.program, ProgramClaude) {
+	if isClaude(t.program) {
 		if err := t.TapEnter(); err != nil {
 			log.ErrorLog.Printf("could not tap enter on trust/MCP screen: %v", err)
 		}
@@ -391,18 +507,58 @@ type statusMonitor struct {
 	// lastReported is the last committed PaneState, used by the working→idle hysteresis.
 	lastReported PaneState
 	// idleStreak counts consecutive idle observations since the agent was last working.
+	// It bounds the marker-absent hold (idleConfirmTicks) as a safety net.
 	idleStreak int
+	// stableStreak counts consecutive observations whose cleaned content is unchanged. A
+	// quiet (settled) pane is what distinguishes genuine completion from a between-turns
+	// gap, so it lets the working→idle commit fire fast when the pane stops repainting.
+	stableStreak int
+	// lastSignal is the last logged "which signal decided the state" label. Poll logs only
+	// when this changes, so the log records transitions (hook vs marker vs fallback) rather
+	// than one line per 500ms tick.
+	lastSignal string
 }
 
 func newStatusMonitor(program string) *statusMonitor {
 	return &statusMonitor{program: program}
 }
 
-// idleConfirmTicks is how many consecutive idle observations are required before a
-// working→idle transition is committed. At the 500ms metadata tick this is ~1s, which
-// absorbs the brief output gap at the end of a turn (and streaming pauses for agents on
-// the content-change fallback) without delaying the working indicator going up.
-const idleConfirmTicks = 2
+// logSignal records which signal path decided the pane state, but only when it changes from
+// the last decision — so a steady session emits one line, not one per tick. name is the tmux
+// session name. Output goes to the atrium log (os.TempDir()/atrium.log).
+func (m *statusMonitor) logSignal(name, signal string) {
+	if m.lastSignal == signal {
+		return
+	}
+	m.lastSignal = signal
+	log.InfoLog.Printf("status %s: %s", name, signal)
+}
+
+// The working→idle commit is gated by two thresholds, whichever fires first.
+//
+// Background: a genuinely-idle Claude pane and a between-turns pane (auto-accept, between
+// an accepted step and the next request's model spin-up) are indistinguishable in a single
+// snapshot — same input box and footer, differing only by the "esc to interrupt" substring
+// — so the marker alone can't tell "done" from "about to continue". The discriminator is
+// motion: a finished pane freezes, whereas a between-turns pane keeps repainting (spinner
+// elapsed ticking, output rendering, the next response streaming in).
+//
+//   - idleSettleTicks: once the marker is gone AND the cleaned content has been unchanged
+//     for this many ticks, the pane has settled — commit to idle promptly (~1s). This is
+//     the common path and keeps the "ready" indicator responsive on real completion.
+//   - idleConfirmTicks: a safety cap. If the marker stays absent for this long even while
+//     the pane keeps changing (an agent UI we don't model, or a missed marker), commit
+//     anyway rather than holding "working" forever (~3s).
+//
+// A churning turn-boundary gap never satisfies idleSettleTicks (the pane is moving), so it
+// holds "working" until the marker returns — no Ready→Running flicker. Prompts are surfaced
+// instantly via detectPrompt regardless of either threshold. Both also govern the
+// content-change fallback (aider/gemini): there "unchanged" is the same signal as "not
+// working", so idleSettleTicks absorbs brief streaming pauses.
+const (
+	idleSettleTicks  = 2
+	idleConfirmTicks = 6
+)
 
 // hash hashes the string.
 func (m *statusMonitor) hash(s string) []byte {
@@ -439,6 +595,11 @@ func (t *TmuxSession) SendKeys(keys string) error {
 // on screen, a busy marker, otherwise content stability) rather than treating any byte
 // change as "working", which is what makes the result stable while the agent is idle.
 func (t *TmuxSession) Poll() PaneState {
+	// Serialize against a concurrent off-cadence poll from the UI (switch/detach) so the
+	// two callers don't race on the monitor's hash/streak fields. The capture subprocess
+	// runs under the lock, but it is brief and the lock is per-session.
+	t.monitorMu.Lock()
+	defer t.monitorMu.Unlock()
 	// A dead/missing session can never be working; probing it would fail every tick
 	// and flood the log. The caller (metadata loop) detects the dead session
 	// separately and recovers the instance to Paused.
@@ -455,12 +616,19 @@ func (t *TmuxSession) Poll() PaneState {
 		return PaneUnknown
 	}
 	content := cleanForDetection(raw)
+	name := t.snapshotName()
 
-	// Track content change for the no-marker fallback. Always update so the comparison
-	// is relative to the previous tick regardless of which path decided the state.
+	// Track content change. Used both by the no-marker fallback and by the settle check
+	// below. Always update so the comparison is relative to the previous tick regardless of
+	// which path decided the state.
 	h := t.monitor.hash(content)
 	changed := !bytes.Equal(h, t.monitor.prevOutputHash)
 	t.monitor.prevOutputHash = h
+	if changed {
+		t.monitor.stableStreak = 0
+	} else {
+		t.monitor.stableStreak++
+	}
 
 	// A prompt awaiting an answer takes precedence over "working": when an agent stops to
 	// ask, it is not processing, and this is the state a caller most needs to surface.
@@ -469,40 +637,135 @@ func (t *TmuxSession) Poll() PaneState {
 	if detectPrompt(t.program, liveChromeLines(content, promptChromeLines)) {
 		t.monitor.idleStreak = 0
 		t.monitor.lastReported = PanePrompt
+		t.monitor.logSignal(name, "prompt → needs-input")
 		return PanePrompt
 	}
 
-	working := false
-	if markers := busyMarkers(t.program); markers != nil {
-		// The busy marker lives in the status bar (the last line), so confine the match
-		// tightly to the bottom chrome rather than the whole pane.
-		workRegion := liveChromeLines(content, workChromeLines)
-		for _, m := range markers {
-			if strings.Contains(workRegion, m) {
-				working = true
-				break
-			}
-		}
-	} else {
-		// No known marker for this program: fall back to content-change detection.
-		working = changed
-	}
-
-	if working {
+	// A live busy marker is the one positive proof of work, and the only signal that raises
+	// working. Anchoring it to the footer (markerWorking → footerRegion) keeps it reliable
+	// even under a multi-agent team selector. Raising only on the marker is what kills the
+	// flicker: a stuck state file or an idle repaint can never flip the indicator back to
+	// working once it has settled to idle — only the marker returning can.
+	hasMarker := busyMarkers(t.program) != nil
+	if hasMarker && t.markerWorking(content) {
 		t.monitor.idleStreak = 0
 		t.monitor.lastReported = PaneWorking
+		t.monitor.logSignal(name, "marker → working")
 		return PaneWorking
 	}
 
-	// Hysteresis: only the working→idle transition is debounced. Hold "working" for up to
-	// idleConfirmTicks-1 idle observations to absorb the end-of-turn output gap; going up
-	// to working stays immediate.
+	if hasMarker {
+		// Claude: the marker is absent. The hook state file is authoritative for *idle*: a
+		// clean turn-end (Stop) or an API-error turn-end (StopFailure) latches "ready", so we
+		// commit idle at once. Any other value — still "working", or no file yet — is NOT
+		// trusted to hold working (that latch caused the oscillation); instead the
+		// marker-absent grace below holds working only briefly, gated on how long the marker
+		// has actually been gone, then commits idle and stays there.
+		if hookState, ok := t.readHookState(); ok && hookState == hookStateReady {
+			t.monitor.idleStreak = 0
+			t.monitor.lastReported = PaneIdle
+			t.monitor.logSignal(name, "hook ready → idle")
+			return PaneIdle
+		}
+		t.monitor.idleStreak++
+		if t.monitor.lastReported == PaneWorking && t.monitor.idleStreak < idleConfirmTicks {
+			// A brief marker-absent gap after real work (auto-accept turn boundary, model
+			// spin-up). Hold working. idleStreak grows monotonically while the marker is
+			// gone, so once it caps we commit idle and the absence of a marker keeps us there
+			// — no churn-driven re-raise.
+			t.monitor.logSignal(name, "marker-absent grace → working")
+			return PaneWorking
+		}
+		t.monitor.lastReported = PaneIdle
+		t.monitor.logSignal(name, "marker-absent → idle")
+		return PaneIdle
+	}
+
+	// No known marker for this program (aider/gemini): fall back to content-change detection
+	// with the settle/cap hysteresis. A change reads as working; once the pane goes quiet it
+	// commits idle after idleSettleTicks, or after the idleConfirmTicks cap if it keeps
+	// churning without a marker we can model.
+	if changed {
+		t.monitor.idleStreak = 0
+		t.monitor.lastReported = PaneWorking
+		t.monitor.logSignal(name, "content-change → working")
+		return PaneWorking
+	}
 	if t.monitor.lastReported == PaneWorking {
 		t.monitor.idleStreak++
-		if t.monitor.idleStreak < idleConfirmTicks {
+		settled := t.monitor.stableStreak >= idleSettleTicks
+		capped := t.monitor.idleStreak >= idleConfirmTicks
+		if !settled && !capped {
+			t.monitor.logSignal(name, "content-change → working (settling)")
 			return PaneWorking
 		}
 	}
+	t.monitor.lastReported = PaneIdle
+	t.monitor.logSignal(name, "content-change → idle")
+	return PaneIdle
+}
+
+// PollNow classifies the current pane at face value, skipping the working→idle hysteresis,
+// and re-baselines the monitor to that result. It is for a one-shot refresh after the 500ms
+// poll stream was interrupted — a detach, where the TUI handed the terminal to tmux and no
+// ticks ran — so the accumulated smoothing state is stale and a single live snapshot is the
+// most trustworthy signal. The resuming tick loop continues from the re-baselined state.
+//
+// Programs without a level marker (aider/gemini) can't be classified from one snapshot
+// (their "working" signal is content change across ticks), so PollNow returns PaneUnknown
+// for them — leaving the status untouched for the tick loop to resolve.
+func (t *TmuxSession) PollNow() PaneState {
+	t.monitorMu.Lock()
+	defer t.monitorMu.Unlock()
+	if !t.DoesSessionExist() {
+		return PaneUnknown
+	}
+	raw, err := t.CapturePaneContent()
+	if err != nil {
+		if t.captureErrLog.ShouldLog() {
+			log.ErrorLog.Printf("error capturing pane content in status monitor: %v", err)
+		}
+		return PaneUnknown
+	}
+	content := cleanForDetection(raw)
+
+	// Re-baseline the change tracker and streaks so the resuming tick loop compares against
+	// this frame rather than a pre-attach one.
+	t.monitor.prevOutputHash = t.monitor.hash(content)
+	t.monitor.idleStreak = 0
+	t.monitor.stableStreak = 0
+
+	// Log via logSignal (transition-deduped, shared with Poll) so a detach that doesn't change
+	// the state stays silent and only a real change emits one line.
+	name := t.snapshotName()
+	if detectPrompt(t.program, liveChromeLines(content, promptChromeLines)) {
+		t.monitor.lastReported = PanePrompt
+		t.monitor.logSignal(name, "prompt → needs-input")
+		return PanePrompt
+	}
+	// A present busy marker positively proves work; the hook state file is the next-best
+	// authority (and is the only signal during a marker-absent between-turns gap).
+	if busyMarkers(t.program) != nil && t.markerWorking(content) {
+		t.monitor.lastReported = PaneWorking
+		t.monitor.logSignal(name, "marker → working")
+		return PaneWorking
+	}
+	if hookState, ok := t.readHookState(); ok {
+		if hookState == hookStateWorking {
+			t.monitor.lastReported = PaneWorking
+			t.monitor.logSignal(name, "refresh hook working → working")
+			return PaneWorking
+		}
+		t.monitor.lastReported = PaneIdle
+		t.monitor.logSignal(name, "hook ready → idle")
+		return PaneIdle
+	}
+	if busyMarkers(t.program) == nil {
+		// No level signal and no hook file; defer to the tick loop's content-change path.
+		return PaneUnknown
+	}
+	// Claude with no hook file yet (e.g. before the first event): the marker is absent here,
+	// so face value is idle.
 	t.monitor.lastReported = PaneIdle
 	return PaneIdle
 }
@@ -516,13 +779,16 @@ func (t *TmuxSession) HasUpdated() (updated bool, hasPrompt bool) {
 }
 
 // attachInputAction is the outcome of classifying a chunk of attach stdin: keep
-// forwarding it to the pty, detach, or detach-and-request-kill.
+// forwarding it to the pty, detach, detach-and-request-kill, or detach to cycle to
+// the next/previous sibling session.
 type attachInputAction int
 
 const (
 	attachForward attachInputAction = iota
 	attachDetach
 	attachKill
+	attachNext
+	attachPrev
 )
 
 // Control bytes intercepted while attached.
@@ -548,6 +814,14 @@ func classifyAttachInput(in []byte, allowKill bool) attachInputAction {
 			}
 		}
 	}
+	// Sibling navigation (Ctrl+PageUp/PageDown) arrives as a multi-byte escape
+	// sequence, so it is matched separately from the single-byte control keys.
+	switch reason, ok := navReason(in); {
+	case ok && reason == DetachNext:
+		return attachNext
+	case ok && reason == DetachPrev:
+		return attachPrev
+	}
 	return attachForward
 }
 
@@ -558,6 +832,7 @@ func classifyAttachInput(in []byte, allowKill bool) attachInputAction {
 func (t *TmuxSession) Attach(allowKill bool) (chan struct{}, error) {
 	t.attachCh = make(chan struct{})
 	t.killRequested = false
+	t.detachReason = DetachQuit
 
 	t.wg = &sync.WaitGroup{}
 	t.wg.Add(1)
@@ -625,12 +900,21 @@ func (t *TmuxSession) Attach(allowKill bool) (chan struct{}, error) {
 
 			switch classifyAttachInput(buf[:nr], allowKill) {
 			case attachDetach:
+				t.detachReason = DetachQuit
 				t.Detach()
 				return
 			case attachKill:
 				// Detach and request a kill; the caller reads KillRequested after
 				// the attach returns and runs the teardown confirmation.
 				t.killRequested = true
+				t.Detach()
+				return
+			case attachNext:
+				t.detachReason = DetachNext
+				t.Detach()
+				return
+			case attachPrev:
+				t.detachReason = DetachPrev
 				t.Detach()
 				return
 			default:
@@ -651,6 +935,12 @@ func (t *TmuxSession) Attach(allowKill bool) (chan struct{}, error) {
 // pressing the in-session kill key (Ctrl+X). It is reset at the start of Attach.
 func (t *TmuxSession) KillRequested() bool {
 	return t.killRequested
+}
+
+// AttachExitReason reports why the most recent attach ended. It is meaningful only
+// after the attach channel returned by Attach has closed.
+func (t *TmuxSession) AttachExitReason() DetachReason {
+	return t.detachReason
 }
 
 // DetachSafely disconnects from the current tmux session without panicking
@@ -732,6 +1022,9 @@ func (t *TmuxSession) Detach() {
 
 // Close terminates the tmux session and cleans up resources
 func (t *TmuxSession) Close() error {
+	// Remove the per-session status-hook artifacts; harmless if the session never had any.
+	cleanupHookSession(t.snapshotName())
+
 	var errs []error
 
 	if t.ptmx != nil {
@@ -828,6 +1121,9 @@ func (t *TmuxSession) CapturePaneContentWithOptions(start, end string) (string, 
 
 // CleanupSessions kills all tmux sessions that start with "session-"
 func CleanupSessions(cmdExec cmd.Executor) error {
+	// This is the `reset` path: wipe the entire status-hooks tree alongside the sessions.
+	cleanupAllHookSessions()
+
 	// First try to list sessions
 	cmd := tmuxCommand("ls")
 	output, err := cmdExec.Output(cmd)
