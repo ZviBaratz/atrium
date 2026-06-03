@@ -17,12 +17,12 @@ import (
 // directTmux returns a tmux session backed by a mock executor that reports success for
 // every command (so DoesSessionExist is true and Close/Detach/Rename succeed). It never
 // drives a real tmux server, keeping these tests hermetic.
-func directTmux(name string) *tmux.TmuxSession {
+func directTmux(name string) *tmux.Session {
 	mockExec := cmd_test.MockCmdExec{
 		RunFunc:    func(*exec.Cmd) error { return nil },
 		OutputFunc: func(*exec.Cmd) ([]byte, error) { return []byte(""), nil },
 	}
-	return tmux.NewTmuxSessionWithDeps(name, "claude", tmux.MakePtyFactory(), mockExec)
+	return tmux.NewSessionWithDeps(name, "claude", tmux.MakePtyFactory(), mockExec)
 }
 
 // TestNewInstance_DirectFlag verifies a direct session is born with no worktree, no

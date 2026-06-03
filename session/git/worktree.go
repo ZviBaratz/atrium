@@ -21,8 +21,8 @@ func getWorktreeDirectory() (string, error) {
 	return filepath.Join(configDir, "worktrees"), nil
 }
 
-// GitWorktree manages git worktree operations for a session
-type GitWorktree struct {
+// Worktree manages git worktree operations for a session
+type Worktree struct {
 	// mu guards the fields a deep Rename mutates (worktreePath, branchName, sessionName)
 	// against the metadata poll loop, which reads them from a background goroutine. Held
 	// for writes only during the in-place field swap, never across a git subprocess.
@@ -50,13 +50,13 @@ type GitWorktree struct {
 	isExistingBranch bool
 }
 
-// NewGitWorktreeFromStorage rehydrates a GitWorktree from its persisted fields
+// NewWorktreeFromStorage rehydrates a Worktree from its persisted fields
 // exactly as stored, without re-deriving paths — state.json records absolute
 // paths and moving them would orphan the live worktree. branchPrefix comes from
 // the caller (loaded once per storage read, see Storage.LoadInstances) so
 // deserializing N instances does not re-read config N times.
-func NewGitWorktreeFromStorage(repoPath string, worktreePath string, sessionName string, branchName string, baseCommitSHA string, baseRef string, isExistingBranch bool, branchPrefix string) *GitWorktree {
-	return &GitWorktree{
+func NewWorktreeFromStorage(repoPath string, worktreePath string, sessionName string, branchName string, baseCommitSHA string, baseRef string, isExistingBranch bool, branchPrefix string) *Worktree {
+	return &Worktree{
 		repoPath:         repoPath,
 		worktreePath:     worktreePath,
 		sessionName:      sessionName,
@@ -92,22 +92,22 @@ func resolveWorktreePaths(repoPath string, branchName string) (resolvedRepo stri
 	return resolvedRepo, worktreePath, nil
 }
 
-// NewGitWorktree creates a new GitWorktree instance whose session branch is based on HEAD.
-func NewGitWorktree(repoPath string, sessionName string) (tree *GitWorktree, branchname string, err error) {
+// NewWorktree creates a new Worktree instance whose session branch is based on HEAD.
+func NewWorktree(repoPath string, sessionName string) (tree *Worktree, branchname string, err error) {
 	return newSessionWorktree(repoPath, sessionName, "")
 }
 
-// NewGitWorktreeFromBase creates a new GitWorktree whose session branch is based on baseRef
+// NewWorktreeFromBase creates a new Worktree whose session branch is based on baseRef
 // (an existing branch to start from). The session still gets its own branch named after the
 // session, so cleanup deletes it and baseRef is left untouched; baseRef merely sets the start
 // point, which is why it works even when baseRef is checked out in another worktree.
-func NewGitWorktreeFromBase(repoPath string, sessionName string, baseRef string) (tree *GitWorktree, branchname string, err error) {
+func NewWorktreeFromBase(repoPath string, sessionName string, baseRef string) (tree *Worktree, branchname string, err error) {
 	return newSessionWorktree(repoPath, sessionName, baseRef)
 }
 
-// newSessionWorktree builds a GitWorktree that owns a fresh session branch
+// newSessionWorktree builds a Worktree that owns a fresh session branch
 // (<BranchPrefix><sessionName>) created from baseRef ("" = HEAD).
-func newSessionWorktree(repoPath string, sessionName string, baseRef string) (*GitWorktree, string, error) {
+func newSessionWorktree(repoPath string, sessionName string, baseRef string) (*Worktree, string, error) {
 	cfg := config.LoadConfig()
 	branchName := fmt.Sprintf("%s%s", cfg.BranchPrefix, sessionName)
 	// Sanitize the final branch name to handle invalid characters from any source
@@ -119,7 +119,7 @@ func newSessionWorktree(repoPath string, sessionName string, baseRef string) (*G
 		return nil, "", err
 	}
 
-	return &GitWorktree{
+	return &Worktree{
 		repoPath:     repoPath,
 		sessionName:  sessionName,
 		branchName:   branchName,
@@ -130,41 +130,41 @@ func newSessionWorktree(repoPath string, sessionName string, baseRef string) (*G
 }
 
 // IsExistingBranch returns whether this worktree uses a pre-existing branch
-func (g *GitWorktree) IsExistingBranch() bool {
+func (g *Worktree) IsExistingBranch() bool {
 	return g.isExistingBranch
 }
 
 // GetWorktreePath returns the path to the worktree
-func (g *GitWorktree) GetWorktreePath() string {
+func (g *Worktree) GetWorktreePath() string {
 	g.mu.RLock()
 	defer g.mu.RUnlock()
 	return g.worktreePath
 }
 
 // GetBranchName returns the name of the branch associated with this worktree
-func (g *GitWorktree) GetBranchName() string {
+func (g *Worktree) GetBranchName() string {
 	g.mu.RLock()
 	defer g.mu.RUnlock()
 	return g.branchName
 }
 
 // GetRepoPath returns the path to the repository
-func (g *GitWorktree) GetRepoPath() string {
+func (g *Worktree) GetRepoPath() string {
 	return g.repoPath
 }
 
 // GetRepoName returns the name of the repository (last part of the repoPath).
-func (g *GitWorktree) GetRepoName() string {
+func (g *Worktree) GetRepoName() string {
 	return filepath.Base(g.repoPath)
 }
 
 // GetBaseCommitSHA returns the base commit SHA for the worktree
-func (g *GitWorktree) GetBaseCommitSHA() string {
+func (g *Worktree) GetBaseCommitSHA() string {
 	return g.baseCommitSHA
 }
 
 // GetBaseRef returns the ref the session branch was based on ("" if branched from HEAD
 // or if not persisted for a legacy session).
-func (g *GitWorktree) GetBaseRef() string {
+func (g *Worktree) GetBaseRef() string {
 	return g.baseRef
 }

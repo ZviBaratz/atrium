@@ -35,7 +35,7 @@ func (d *DiffStats) IsEmpty() bool {
 }
 
 // Diff returns the git diff between the worktree and the base branch along with statistics
-func (g *GitWorktree) Diff() *DiffStats {
+func (g *Worktree) Diff() *DiffStats {
 	stats := &DiffStats{}
 
 	// Snapshot the worktree path under the lock so a concurrent deep Rename (which moves
@@ -73,7 +73,7 @@ func (g *GitWorktree) Diff() *DiffStats {
 // DiffNumstat returns the added/removed line counts between the worktree and the
 // base branch without loading the full diff content into memory. Use this when
 // only the summary counts are needed (e.g. for unselected instances in the list).
-func (g *GitWorktree) DiffNumstat() *DiffStats {
+func (g *Worktree) DiffNumstat() *DiffStats {
 	stats := &DiffStats{}
 
 	// See Diff: snapshot the worktree path so a concurrent rename can't tear the read.
@@ -100,7 +100,7 @@ func (g *GitWorktree) DiffNumstat() *DiffStats {
 
 // snapshotWorktreePath reads worktreePath under the read lock so background diff
 // computation can't race the in-place field swap a deep Rename performs.
-func (g *GitWorktree) snapshotWorktreePath() string {
+func (g *Worktree) snapshotWorktreePath() string {
 	g.mu.RLock()
 	defer g.mu.RUnlock()
 	return g.worktreePath
@@ -111,7 +111,7 @@ func (g *GitWorktree) snapshotWorktreePath() string {
 // never sets stats.Error, so a hiccup in a cosmetic counter can't blank the diff.
 // wt is the worktree path snapshotted by the caller under the read lock; baseRef and
 // baseCommitSHA are not mutated by Rename, so they're read directly.
-func (g *GitWorktree) computeRepoStats(stats *DiffStats, wt string) {
+func (g *Worktree) computeRepoStats(stats *DiffStats, wt string) {
 	// A single rev-list gives both "ahead" (session commits) and "behind" (base
 	// advanced) when the base ref is known; fall back to ahead-only otherwise.
 	if g.baseRef != "" {

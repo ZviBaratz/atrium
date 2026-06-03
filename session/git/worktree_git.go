@@ -55,7 +55,7 @@ func SearchBranches(repoPath, filter string) ([]string, error) {
 }
 
 // runGitCommand executes a git command and returns any error
-func (g *GitWorktree) runGitCommand(path string, args ...string) (string, error) {
+func (g *Worktree) runGitCommand(path string, args ...string) (string, error) {
 	baseArgs := []string{"-C", path}
 	cmd := exec.Command("git", append(baseArgs, args...)...)
 
@@ -68,7 +68,7 @@ func (g *GitWorktree) runGitCommand(path string, args ...string) (string, error)
 }
 
 // PushChanges commits and pushes changes in the worktree to the remote branch
-func (g *GitWorktree) PushChanges(commitMessage string, open bool) error {
+func (g *Worktree) PushChanges(commitMessage string, open bool) error {
 	if err := checkGHCLI(); err != nil {
 		return err
 	}
@@ -126,7 +126,7 @@ func (g *GitWorktree) PushChanges(commitMessage string, open bool) error {
 }
 
 // CommitChanges commits changes locally without pushing to remote
-func (g *GitWorktree) CommitChanges(commitMessage string) error {
+func (g *Worktree) CommitChanges(commitMessage string) error {
 	// Check if there are any changes to commit
 	isDirty, err := g.IsDirty()
 	if err != nil {
@@ -151,7 +151,7 @@ func (g *GitWorktree) CommitChanges(commitMessage string) error {
 }
 
 // IsDirty checks if the worktree has uncommitted changes
-func (g *GitWorktree) IsDirty() (bool, error) {
+func (g *Worktree) IsDirty() (bool, error) {
 	output, err := g.runGitCommand(g.worktreePath, "status", "--porcelain")
 	if err != nil {
 		return false, fmt.Errorf("failed to check worktree status: %w", err)
@@ -162,7 +162,7 @@ func (g *GitWorktree) IsDirty() (bool, error) {
 // IsValidWorktree reports whether the worktree path exists and contains a
 // .git entry, i.e. git can still recognize it as a working tree.
 // Returns (false, nil) if the worktree is orphaned (path or .git missing).
-func (g *GitWorktree) IsValidWorktree() (bool, error) {
+func (g *Worktree) IsValidWorktree() (bool, error) {
 	if _, err := os.Stat(g.worktreePath); err != nil {
 		if os.IsNotExist(err) {
 			return false, nil
@@ -201,7 +201,7 @@ func (e *BranchCheckedOutError) Error() string {
 // free. It parses `git worktree list --porcelain` (via parseWorktreeList) so it
 // sees ALL worktrees, not just the base repo; detached-HEAD and bare records
 // carry no branch line and therefore never match.
-func (g *GitWorktree) BranchCheckoutPath() (string, error) {
+func (g *Worktree) BranchCheckoutPath() (string, error) {
 	output, err := g.runGitCommand(g.repoPath, "worktree", "list", "--porcelain")
 	if err != nil {
 		return "", fmt.Errorf("failed to list worktrees: %w", err)
@@ -217,7 +217,7 @@ func (g *GitWorktree) BranchCheckoutPath() (string, error) {
 // IsBranchCheckedOut reports whether the instance branch is checked out anywhere
 // (the base repo or a sibling worktree). It is a thin wrapper over
 // BranchCheckoutPath; callers that need the location should use that directly.
-func (g *GitWorktree) IsBranchCheckedOut() (bool, error) {
+func (g *Worktree) IsBranchCheckedOut() (bool, error) {
 	path, err := g.BranchCheckoutPath()
 	if err != nil {
 		return false, err
@@ -229,7 +229,7 @@ func (g *GitWorktree) IsBranchCheckedOut() (bool, error) {
 // repo itself (as opposed to a sibling worktree). This distinguishes the
 // auto-recoverable case (detach the base repo) from a branch held by another
 // live worktree, which must not be touched automatically.
-func (g *GitWorktree) IsBranchHeldByBaseRepo() (bool, error) {
+func (g *Worktree) IsBranchHeldByBaseRepo() (bool, error) {
 	path, err := g.BranchCheckoutPath()
 	if err != nil {
 		return false, err
@@ -248,7 +248,7 @@ func (g *GitWorktree) IsBranchHeldByBaseRepo() (bool, error) {
 // out. It refuses when the base repo has uncommitted changes, to avoid stranding
 // the user's work on a detached HEAD. Callers should confirm the branch is
 // actually held by the base repo (IsBranchHeldByBaseRepo) before calling.
-func (g *GitWorktree) DetachBranchInBaseRepo() error {
+func (g *Worktree) DetachBranchInBaseRepo() error {
 	// Use the base repo's own working tree for the dirty check — IsDirty inspects
 	// the session worktree, which is the wrong target here.
 	status, err := g.runGitCommand(g.repoPath, "status", "--porcelain")
@@ -266,7 +266,7 @@ func (g *GitWorktree) DetachBranchInBaseRepo() error {
 }
 
 // OpenBranchURL opens the branch URL in the default browser
-func (g *GitWorktree) OpenBranchURL() error {
+func (g *Worktree) OpenBranchURL() error {
 	// Check if GitHub CLI is available
 	if err := checkGHCLI(); err != nil {
 		return err

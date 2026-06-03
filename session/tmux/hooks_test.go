@@ -15,16 +15,16 @@ import (
 // hookPollSession is like pollSession but names the session after the test, so each test
 // gets a unique sanitizedName (and thus its own hook dir under the sandbox HOME) — no
 // cross-test leakage through the shared state file path.
-func hookPollSession(t *testing.T, program string, content *string) *TmuxSession {
+func hookPollSession(t *testing.T, program string, content *string) *Session {
 	t.Helper()
 	cmdExec := cmd_test.MockCmdExec{
 		RunFunc:    func(cmd *exec.Cmd) error { return nil },
 		OutputFunc: func(cmd *exec.Cmd) ([]byte, error) { return []byte(*content), nil },
 	}
-	return newTmuxSession(t.Name(), program, NewMockPtyFactory(t), cmdExec)
+	return newSession(t.Name(), program, NewMockPtyFactory(t), cmdExec)
 }
 
-func writeHookState(t *testing.T, s *TmuxSession, word string) {
+func writeHookState(t *testing.T, s *Session, word string) {
 	t.Helper()
 	dir, err := hookSessionDir(s.snapshotName())
 	require.NoError(t, err)

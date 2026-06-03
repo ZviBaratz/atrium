@@ -11,7 +11,7 @@ import (
 )
 
 // monitorWindowSize monitors and handles window resize events while attached.
-func (t *TmuxSession) monitorWindowSize() {
+func (t *Session) monitorWindowSize() {
 	// Use the current terminal height and width.
 	doUpdate := func() {
 		cols, rows, err := term.GetSize(int(os.Stdin.Fd()))

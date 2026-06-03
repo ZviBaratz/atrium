@@ -192,7 +192,7 @@ func ensureHookSettings(sanitizedName, program string) (string, error) {
 // readHookState returns the latched hook state word and true, or ("", false) when there is
 // no usable signal: a non-claude program, or the file is absent/unreadable (hooks not yet
 // fired, hooks unsupported/disabled). Callers fall back to the scrape classifier on false.
-func (t *TmuxSession) readHookState() (string, bool) {
+func (t *Session) readHookState() (string, bool) {
 	if !isClaude(t.program) {
 		return "", false
 	}

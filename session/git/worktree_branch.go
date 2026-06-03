@@ -5,7 +5,7 @@ import (
 )
 
 // combineErrors combines multiple errors into a single error
-func (g *GitWorktree) combineErrors(errs []error) error {
+func (g *Worktree) combineErrors(errs []error) error {
 	if len(errs) == 0 {
 		return nil
 	}

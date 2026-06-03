@@ -21,7 +21,7 @@ The control flow is **Cobra → Bubble Tea → Instance → (tmux + git worktree
   confirm / rename), and a per-tick poll loop that refreshes each session's status
   and diff. This is the orchestrator everything else hangs off.
 - **`session/`** — `Instance` is the core domain object: one agent = one
-  `Instance`, which lazily composes a `tmux.TmuxSession` + `git.GitWorktree` on
+  `Instance`, which lazily composes a `tmux.Session` + `git.Worktree` on
   `Start()`. Its `Status` (Running / Ready / Loading / Paused / NeedsInput) drives
   list rendering and daemon behavior. `naming.go` derives branch/session names from
   the immutable `Title`; `displayName` is a cosmetic, freely-mutable label.
@@ -30,7 +30,7 @@ The control flow is **Cobra → Bubble Tea → Instance → (tmux + git worktree
   session runs the agent program in a pty; `Poll()` captures pane content and
   classifies it (busy markers, prompt detection) into a `PaneState`. tmux/git calls
   go through a `cmd.Executor` interface (`cmd/`) so tests can fake them.
-- **`session/git/`** — `GitWorktree` manages the isolated worktree + branch:
+- **`session/git/`** — `Worktree` manages the isolated worktree + branch:
   `Setup`/`Cleanup`/`Remove`, `CommitChanges`, `PushChanges` (uses `gh`). "Pause"
   removes the worktree but keeps the branch; "resume" recreates it.
 - **`daemon/`** — autoyes runs as a background process, **not** a goroutine. When
@@ -99,7 +99,7 @@ state-bearing and must never be migrated in place:
   by one function, `config.RuntimeName()`, which returns `atrium` for fresh
   installs and the legacy `claudesquad` when only `~/.claude-squad` exists. From it
   derive the data dir (`~/.atrium` vs `~/.claude-squad`), the tmux socket, the
-  session-name prefix (`TmuxPrefix()`), and the managed conf filename.
+  session-name prefix (`Prefix()`), and the managed conf filename.
 
 `config.GetConfigDir()` implements **prefer-new, fall back to legacy, never move**:
 it picks `~/.atrium` if present, else an existing `~/.claude-squad` (untouched),

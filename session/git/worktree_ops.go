@@ -10,7 +10,7 @@ import (
 )
 
 // Setup creates a new worktree for the session
-func (g *GitWorktree) Setup() error {
+func (g *Worktree) Setup() error {
 	// Ensure worktrees directory exists early (can be done in parallel with branch check)
 	worktreesDir, err := getWorktreeDirectory()
 	if err != nil {
@@ -38,7 +38,7 @@ func (g *GitWorktree) Setup() error {
 }
 
 // setupFromExistingBranch creates a worktree from an existing branch
-func (g *GitWorktree) setupFromExistingBranch() error {
+func (g *Worktree) setupFromExistingBranch() error {
 	// Directory already created in Setup(), skip duplicate creation
 
 	// Clean up any existing worktree first
@@ -84,7 +84,7 @@ func (g *GitWorktree) setupFromExistingBranch() error {
 // typed error the Resume pre-check returns so the app layer detects both origins
 // with a single errors.As — including the path-less fallback, which the app
 // recovers via IsBranchHeldByBaseRepo regardless.
-func (g *GitWorktree) busyBranchError(err error) error {
+func (g *Worktree) busyBranchError(err error) error {
 	path, busy := busyBranchHolder(err)
 	if !busy {
 		return nil
@@ -117,7 +117,7 @@ func busyBranchHolder(err error) (string, bool) {
 
 // setupNewWorktree creates a new worktree on a fresh session branch, started from g.baseRef
 // (an existing branch to base on) or HEAD when baseRef is empty.
-func (g *GitWorktree) setupNewWorktree() error {
+func (g *Worktree) setupNewWorktree() error {
 	// Clean up any existing worktree first
 	_, _ = g.runGitCommand(g.repoPath, "worktree", "remove", "-f", g.worktreePath) // Ignore error if worktree doesn't exist
 	// If the directory is still there (orphaned, not registered with git), drop it so `git worktree add` won't fail.
@@ -152,7 +152,7 @@ func (g *GitWorktree) setupNewWorktree() error {
 // resolveStartPoint returns the ref to branch the session off. When baseRef is empty this is
 // HEAD; otherwise it is the local branch baseRef, falling back to its remote-tracking
 // counterpart origin/<baseRef> when no local branch exists.
-func (g *GitWorktree) resolveStartPoint() (string, error) {
+func (g *Worktree) resolveStartPoint() (string, error) {
 	if g.baseRef == "" {
 		if _, err := g.runGitCommand(g.repoPath, "rev-parse", "--verify", "HEAD"); err != nil {
 			if strings.Contains(err.Error(), "fatal: ambiguous argument 'HEAD'") ||
@@ -175,7 +175,7 @@ func (g *GitWorktree) resolveStartPoint() (string, error) {
 }
 
 // Cleanup removes the worktree and associated branch
-func (g *GitWorktree) Cleanup() error {
+func (g *Worktree) Cleanup() error {
 	var errs []error
 
 	// Check if worktree path exists before attempting removal
@@ -248,7 +248,7 @@ func removeOrphanedWorktreeDir(worktreePath string) error {
 }
 
 // Remove removes the worktree but keeps the branch
-func (g *GitWorktree) Remove() error {
+func (g *Worktree) Remove() error {
 	// Remove the worktree using git command
 	if _, err := g.runGitCommand(g.repoPath, "worktree", "remove", "-f", g.worktreePath); err != nil {
 		return fmt.Errorf("failed to remove worktree: %w", err)
@@ -258,7 +258,7 @@ func (g *GitWorktree) Remove() error {
 }
 
 // Prune removes all working tree administrative files and directories
-func (g *GitWorktree) Prune() error {
+func (g *Worktree) Prune() error {
 	if _, err := g.runGitCommand(g.repoPath, "worktree", "prune"); err != nil {
 		return fmt.Errorf("failed to prune worktrees: %w", err)
 	}

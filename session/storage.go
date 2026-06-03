@@ -29,7 +29,7 @@ type InstanceData struct {
 	DiffStats DiffStatsData   `json:"diff_stats"`
 }
 
-// GitWorktreeData represents the serializable data of a GitWorktree
+// GitWorktreeData represents the serializable data of a Worktree
 type GitWorktreeData struct {
 	RepoPath         string `json:"repo_path"`
 	WorktreePath     string `json:"worktree_path"`

@@ -104,9 +104,9 @@ type Instance struct {
 
 	started bool
 	// tmuxSession is the tmux session for the instance.
-	tmuxSession *tmux.TmuxSession
+	tmuxSession *tmux.Session
 	// gitWorktree is the git worktree for the instance.
-	gitWorktree *git.GitWorktree
+	gitWorktree *git.Worktree
 }
 
 // ToInstanceData converts an Instance to its serializable form
@@ -177,7 +177,7 @@ func FromInstanceData(data InstanceData, branchPrefix string) (*Instance, error)
 	// storage. Restore direct first so every downstream path (Start(false),
 	// recoverInPlace) sees the nil worktree and stays on the direct branch.
 	if !data.Direct {
-		instance.gitWorktree = git.NewGitWorktreeFromStorage(
+		instance.gitWorktree = git.NewWorktreeFromStorage(
 			data.Worktree.RepoPath,
 			data.Worktree.WorktreePath,
 			data.Worktree.SessionName,
@@ -200,9 +200,9 @@ func FromInstanceData(data InstanceData, branchPrefix string) (*Instance, error)
 
 	if instance.Paused() {
 		instance.started = true
-		instance.tmuxSession = tmux.NewTmuxSession(instance.Title, instance.Program)
+		instance.tmuxSession = tmux.NewSession(instance.Title, instance.Program)
 	} else {
-		sess := tmux.NewTmuxSession(instance.Title, instance.Program)
+		sess := tmux.NewSession(instance.Title, instance.Program)
 		instance.tmuxSession = sess
 		switch {
 		case sess.DoesSessionExist():
@@ -390,9 +390,9 @@ func (i *Instance) isStarted() bool {
 }
 
 // tmux returns the tmux session pointer under the read lock. Callers invoke methods
-// on the returned session outside the lock (TmuxSession guards its own fields), so
+// on the returned session outside the lock (Session guards its own fields), so
 // mu is never held across tmux I/O.
-func (i *Instance) tmux() *tmux.TmuxSession {
+func (i *Instance) tmux() *tmux.Session {
 	i.mu.RLock()
 	defer i.mu.RUnlock()
 	return i.tmuxSession
@@ -400,7 +400,7 @@ func (i *Instance) tmux() *tmux.TmuxSession {
 
 // worktree returns the git worktree pointer under the read lock. As with tmux(),
 // callers run git I/O on the returned worktree outside the lock.
-func (i *Instance) worktree() *git.GitWorktree {
+func (i *Instance) worktree() *git.Worktree {
 	i.mu.RLock()
 	defer i.mu.RUnlock()
 	return i.gitWorktree
@@ -442,7 +442,7 @@ func (i *Instance) Start(firstTimeSetup bool) error {
 	tmuxSession := existing
 	if tmuxSession == nil {
 		// Create new tmux session
-		tmuxSession = tmux.NewTmuxSession(i.Title, i.Program)
+		tmuxSession = tmux.NewSession(i.Title, i.Program)
 	}
 	i.mu.Lock()
 	i.tmuxSession = tmuxSession
@@ -451,13 +451,13 @@ func (i *Instance) Start(firstTimeSetup bool) error {
 	if firstTimeSetup && !i.direct {
 		// The session always gets its own branch. baseBranch (if set) only chooses the start
 		// point it branches off, so i.Branch is the session branch in both cases.
-		var gitWorktree *git.GitWorktree
+		var gitWorktree *git.Worktree
 		var branchName string
 		var err error
 		if i.baseBranch != "" {
-			gitWorktree, branchName, err = git.NewGitWorktreeFromBase(i.Path, i.Title, i.baseBranch)
+			gitWorktree, branchName, err = git.NewWorktreeFromBase(i.Path, i.Title, i.baseBranch)
 		} else {
-			gitWorktree, branchName, err = git.NewGitWorktree(i.Path, i.Title)
+			gitWorktree, branchName, err = git.NewWorktree(i.Path, i.Title)
 		}
 		if err != nil {
 			return fmt.Errorf("failed to create git worktree: %w", err)
@@ -610,7 +610,7 @@ func (i *Instance) Poll() tmux.PaneState {
 
 // PollNow classifies the agent's current pane state at face value, skipping the working→idle
 // hysteresis, for a one-shot refresh after the poll stream was interrupted (a detach). See
-// tmux.TmuxSession.PollNow.
+// tmux.Session.PollNow.
 func (i *Instance) PollNow() tmux.PaneState {
 	ts := i.tmux()
 	if !i.isStarted() || ts == nil {
@@ -707,7 +707,7 @@ func (i *Instance) SetPreviewSize(width, height int) error {
 }
 
 // GetGitWorktree returns the git worktree for the instance
-func (i *Instance) GetGitWorktree() (*git.GitWorktree, error) {
+func (i *Instance) GetGitWorktree() (*git.Worktree, error) {
 	if !i.isStarted() {
 		return nil, fmt.Errorf("cannot get git worktree for instance that has not been started")
 	}
@@ -1129,7 +1129,7 @@ func (i *Instance) PreviewFullHistory() (string, error) {
 }
 
 // SetTmuxSession sets the tmux session for testing purposes
-func (i *Instance) SetTmuxSession(session *tmux.TmuxSession) {
+func (i *Instance) SetTmuxSession(session *tmux.Session) {
 	i.mu.Lock()
 	defer i.mu.Unlock()
 	i.tmuxSession = session

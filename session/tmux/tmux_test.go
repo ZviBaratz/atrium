@@ -44,11 +44,11 @@ func NewMockPtyFactory(t *testing.T) *MockPtyFactory {
 }
 
 func TestSanitizeName(t *testing.T) {
-	session := NewTmuxSession("asdf", "program")
-	require.Equal(t, TmuxPrefix()+"asdf", session.sanitizedName)
+	session := NewSession("asdf", "program")
+	require.Equal(t, Prefix()+"asdf", session.sanitizedName)
 
-	session = NewTmuxSession("a sd f . . asdf", "program")
-	require.Equal(t, TmuxPrefix()+"asdf__asdf", session.sanitizedName)
+	session = NewSession("a sd f . . asdf", "program")
+	require.Equal(t, Prefix()+"asdf__asdf", session.sanitizedName)
 }
 
 func TestIsReadyForPrompt(t *testing.T) {
@@ -99,7 +99,7 @@ func TestIsReadyForPrompt(t *testing.T) {
 					return []byte(tc.content), nil
 				},
 			}
-			session := newTmuxSession("ready-test", tc.program, ptyFactory, cmdExec)
+			session := newSession("ready-test", tc.program, ptyFactory, cmdExec)
 			require.Equal(t, tc.want, session.IsReadyForPrompt())
 		})
 	}
@@ -145,7 +145,7 @@ func TestPollersSkipCaptureWhenSessionDead(t *testing.T) {
 			return nil, fmt.Errorf("error capturing pane content: exit status 1")
 		},
 	}
-	session := newTmuxSession("dead", "claude", ptyFactory, cmdExec)
+	session := newSession("dead", "claude", ptyFactory, cmdExec)
 
 	updated, hasPrompt := session.HasUpdated()
 	require.False(t, updated)
@@ -163,7 +163,7 @@ func TestHasUpdatedCapturesWhenSessionAlive(t *testing.T) {
 		RunFunc:    func(cmd *exec.Cmd) error { return nil }, // session exists
 		OutputFunc: func(cmd *exec.Cmd) ([]byte, error) { return []byte("hello"), nil },
 	}
-	session := newTmuxSession("alive", "aider", ptyFactory, cmdExec)
+	session := newSession("alive", "aider", ptyFactory, cmdExec)
 
 	updated, _ := session.HasUpdated()
 	require.True(t, updated, "first capture of new content should report updated")
@@ -179,7 +179,7 @@ func TestSessionDeathStopsProbing(t *testing.T) {
 	}
 
 	name := fmt.Sprintf("death-%s-%d", t.Name(), rand.Int31())
-	session := NewTmuxSession(name, "sleep 300")
+	session := NewSession(name, "sleep 300")
 	require.NoError(t, session.Start(t.TempDir()))
 	t.Cleanup(func() { _ = session.Close() })
 
@@ -201,10 +201,10 @@ func TestSessionDeathStopsProbing(t *testing.T) {
 	require.False(t, session.IsReadyForPrompt())
 }
 
-// pollSession builds a TmuxSession whose CapturePaneContent returns *content (or an
+// pollSession builds a Session whose CapturePaneContent returns *content (or an
 // error when *fail is true), so a test can drive Poll across ticks by mutating them.
 // RunFunc reports the session as alive so Poll's liveness guard does not short-circuit.
-func pollSession(t *testing.T, program string, content *string, fail *bool) *TmuxSession {
+func pollSession(t *testing.T, program string, content *string, fail *bool) *Session {
 	t.Helper()
 	cmdExec := cmd_test.MockCmdExec{
 		RunFunc: func(cmd *exec.Cmd) error { return nil }, // session exists
@@ -215,7 +215,7 @@ func pollSession(t *testing.T, program string, content *string, fail *bool) *Tmu
 			return []byte(*content), nil
 		},
 	}
-	return newTmuxSession("poll-test", program, NewMockPtyFactory(t), cmdExec)
+	return newSession("poll-test", program, NewMockPtyFactory(t), cmdExec)
 }
 
 func TestCleanForDetection(t *testing.T) {
@@ -538,7 +538,7 @@ func TestStartTmuxSession(t *testing.T) {
 	}
 
 	workdir := t.TempDir()
-	session := newTmuxSession("test-session", "claude", ptyFactory, cmdExec)
+	session := newSession("test-session", "claude", ptyFactory, cmdExec)
 
 	err := session.Start(workdir)
 	require.NoError(t, err)
@@ -550,14 +550,14 @@ func TestStartTmuxSession(t *testing.T) {
 	// the load-bearing parts via the same helpers rather than a literal string.
 	newSession := cmd2.ToString(ptyFactory.cmds[0])
 	require.Contains(t, newSession, "-L "+socketName())
-	require.Contains(t, newSession, "new-session -d -s "+TmuxPrefix()+"test-session")
+	require.Contains(t, newSession, "new-session -d -s "+Prefix()+"test-session")
 	require.Contains(t, newSession, "-c "+workdir)
 	require.Contains(t, newSession, "-n test-session")
 	require.Contains(t, newSession, "claude")
 
 	attach := cmd2.ToString(ptyFactory.cmds[1])
 	require.Contains(t, attach, "-L "+socketName())
-	require.Contains(t, attach, "attach-session -t "+TmuxPrefix()+"test-session")
+	require.Contains(t, attach, "attach-session -t "+Prefix()+"test-session")
 
 	require.Equal(t, 2, len(ptyFactory.files))
 
@@ -616,7 +616,7 @@ func startMockExec() cmd_test.MockCmdExec {
 
 func TestStartContinueAppendsContinueForClaude(t *testing.T) {
 	ptyFactory := NewMockPtyFactory(t)
-	session := newTmuxSession("cont-test", "claude", ptyFactory, startMockExec())
+	session := newSession("cont-test", "claude", ptyFactory, startMockExec())
 
 	require.NoError(t, session.StartContinue(t.TempDir()))
 
@@ -624,12 +624,12 @@ func TestStartContinueAppendsContinueForClaude(t *testing.T) {
 	newSession := cmd2.ToString(ptyFactory.cmds[0])
 	require.Contains(t, newSession, "claude --continue")
 	// The session name is keyed off the session, not the program, so it is unchanged.
-	require.Contains(t, newSession, "new-session -d -s "+TmuxPrefix()+"cont-test")
+	require.Contains(t, newSession, "new-session -d -s "+Prefix()+"cont-test")
 }
 
 func TestStartContinueLeavesNonClaudeUnchanged(t *testing.T) {
 	ptyFactory := NewMockPtyFactory(t)
-	session := newTmuxSession("cont-test", "aider --model x", ptyFactory, startMockExec())
+	session := newSession("cont-test", "aider --model x", ptyFactory, startMockExec())
 
 	require.NoError(t, session.StartContinue(t.TempDir()))
 
@@ -642,7 +642,7 @@ func TestStartContinueLeavesNonClaudeUnchanged(t *testing.T) {
 // PTY-reattach path, where there is nothing to continue.
 func TestStartDoesNotAppendContinue(t *testing.T) {
 	ptyFactory := NewMockPtyFactory(t)
-	session := newTmuxSession("cont-test", "claude", ptyFactory, startMockExec())
+	session := newSession("cont-test", "claude", ptyFactory, startMockExec())
 
 	require.NoError(t, session.Start(t.TempDir()))
 	require.NotContains(t, cmd2.ToString(ptyFactory.cmds[0]), "--continue")

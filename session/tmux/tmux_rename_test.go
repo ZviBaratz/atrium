@@ -42,14 +42,14 @@ func TestRename_LiveSessionRenamesSessionAndWindow(t *testing.T) {
 		},
 		OutputFunc: func(c *exec.Cmd) ([]byte, error) { return nil, nil },
 	}
-	sess := NewTmuxSessionWithDeps("formalize-packaing", "claude", NewMockPtyFactory(t), cmdExec)
+	sess := NewSessionWithDeps("formalize-packaing", "claude", NewMockPtyFactory(t), cmdExec)
 	oldSanitized := sess.sanitizedName
 
 	if err := sess.Rename("formalize-packaging"); err != nil {
 		t.Fatalf("Rename() error = %v", err)
 	}
 
-	wantSanitized := TmuxPrefix() + "formalize-packaging"
+	wantSanitized := Prefix() + "formalize-packaging"
 	require.Equal(t, wantSanitized, sess.sanitizedName)
 	require.Equal(t, "formalize-packaging", sess.windowName)
 
@@ -72,13 +72,13 @@ func TestRename_NotLiveUpdatesFieldsOnly(t *testing.T) {
 		},
 		OutputFunc: func(c *exec.Cmd) ([]byte, error) { return nil, nil },
 	}
-	sess := NewTmuxSessionWithDeps("alpha", "claude", NewMockPtyFactory(t), cmdExec)
+	sess := NewSessionWithDeps("alpha", "claude", NewMockPtyFactory(t), cmdExec)
 
 	if err := sess.Rename("alpha-fixed"); err != nil {
 		t.Fatalf("Rename() error = %v", err)
 	}
 
-	require.Equal(t, TmuxPrefix()+"alpha-fixed", sess.sanitizedName)
+	require.Equal(t, Prefix()+"alpha-fixed", sess.sanitizedName)
 	require.Equal(t, "alpha-fixed", sess.windowName)
 	for _, s := range ran {
 		if strings.Contains(s, "rename-session") || strings.Contains(s, "rename-window") {
