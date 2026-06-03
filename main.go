@@ -38,7 +38,7 @@ var (
 
 			if daemonFlag {
 				cfg := config.LoadConfig()
-				if err := tmux.Init(cfg.TmuxConfigOverride); err != nil {
+				if err := tmux.Init(cfg.TmuxConfigOverride, cfg.GetSessionContextBar()); err != nil {
 					log.WarningLog.Printf("failed to initialize tmux config: %v", err)
 				}
 				err := daemon.RunDaemon(cfg)
@@ -52,7 +52,7 @@ var (
 			// any project. When there is no repo context, session creation guides you to
 			// pick one rather than failing at startup.
 			cfg := config.LoadConfig()
-			if err := tmux.Init(cfg.TmuxConfigOverride); err != nil {
+			if err := tmux.Init(cfg.TmuxConfigOverride, cfg.GetSessionContextBar()); err != nil {
 				log.WarningLog.Printf("failed to initialize tmux config: %v", err)
 			}
 

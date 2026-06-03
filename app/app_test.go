@@ -12,6 +12,7 @@ import (
 	"github.com/ZviBaratz/atrium/ui/overlay"
 	"os"
 	"testing"
+	"time"
 
 	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
@@ -53,11 +54,14 @@ func TestDeliverReadyPrompts(t *testing.T) {
 
 	t.Run("ready instance with a queued prompt is delivered once and cleared", func(t *testing.T) {
 		inst := newInst("do the thing")
+		inst.PromptQueuedAt = time.Now()
 		cmds := deliverReadyPrompts([]instanceMetaResult{
 			{instance: inst, readyForPrompt: true},
 		})
 		require.Len(t, cmds, 1)
 		require.Equal(t, "", inst.Prompt, "prompt must be cleared so it is never sent twice")
+		require.True(t, inst.PromptQueuedAt.IsZero(),
+			"PromptQueuedAt must be cleared alongside the prompt so a later tick can't re-trigger the timeout")
 	})
 
 	t.Run("ready instance with no queued prompt sends nothing", func(t *testing.T) {
@@ -76,6 +80,70 @@ func TestDeliverReadyPrompts(t *testing.T) {
 		require.Empty(t, cmds)
 		require.Equal(t, "waiting on trust screen", inst.Prompt, "prompt must remain queued")
 	})
+}
+
+func TestPromptDeliveryReady(t *testing.T) {
+	now := time.Now()
+	queued := now.Add(-1 * time.Second)          // queued recently, within grace
+	stale := now.Add(-2 * promptDeliveryTimeout) // queued long ago, past grace
+
+	tests := []struct {
+		name      string
+		state     tmux.PaneState
+		gateReady bool
+		queuedAt  time.Time
+		want      bool
+	}{
+		{
+			name:      "idle pane past the gate delivers",
+			state:     tmux.PaneIdle,
+			gateReady: true,
+			queuedAt:  queued,
+			want:      true,
+		},
+		{
+			name:      "startup gate still up never delivers even when idle",
+			state:     tmux.PaneIdle,
+			gateReady: false,
+			queuedAt:  queued,
+			want:      false,
+		},
+		{
+			name:      "busy pane within grace keeps waiting",
+			state:     tmux.PaneWorking,
+			gateReady: true,
+			queuedAt:  queued,
+			want:      false,
+		},
+		{
+			name:      "busy pane past timeout force-delivers once past the gate",
+			state:     tmux.PaneWorking,
+			gateReady: true,
+			queuedAt:  stale,
+			want:      true,
+		},
+		{
+			name:      "timeout never bypasses the startup gate",
+			state:     tmux.PaneWorking,
+			gateReady: false,
+			queuedAt:  stale,
+			want:      false,
+		},
+		{
+			name:      "zero queuedAt disables the timeout on a busy pane",
+			state:     tmux.PaneWorking,
+			gateReady: true,
+			queuedAt:  time.Time{},
+			want:      false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := promptDeliveryReady(tt.state, tt.gateReady, tt.queuedAt, now)
+			require.Equal(t, tt.want, got)
+		})
+	}
 }
 
 func TestRecoverLostInstances(t *testing.T) {
@@ -672,8 +740,10 @@ func TestConfirmActionSurfacesActionResult(t *testing.T) {
 	assert.Equal(t, wantErr, err)
 }
 
-// TestTargetValidityResultUpdatesIndicator verifies the async validity result, when it
-// is for the still-current target, flips the picker's inline "(not a git repo)" hint.
+// TestTargetValidityResultUpdatesIndicator verifies the async target-state result, when
+// it is for the still-current target, drives the picker's inline hint: "(not a
+// directory)" for an invalid target, the direct-session note for a non-git directory,
+// and no hint for a git repo.
 func TestTargetValidityResultUpdatesIndicator(t *testing.T) {
 	const repo = "/some/repo"
 	ov := overlay.NewSessionCreateOverlay(nil, []string{repo})
@@ -687,10 +757,17 @@ func TestTargetValidityResultUpdatesIndicator(t *testing.T) {
 	}
 
 	_, _ = h.Update(targetValidityResultMsg{path: repo, valid: false})
-	assert.Contains(t, ov.Render(), "not a git repo", "an invalid result shows the hint")
+	assert.Contains(t, ov.Render(), "not a directory", "an invalid result shows the hint")
 
-	_, _ = h.Update(targetValidityResultMsg{path: repo, valid: true})
-	assert.NotContains(t, ov.Render(), "not a git repo", "a valid result clears the hint")
+	_, _ = h.Update(targetValidityResultMsg{path: repo, valid: true, direct: true})
+	out := ov.Render()
+	assert.NotContains(t, out, "not a directory", "a valid result clears the invalid hint")
+	assert.Contains(t, out, "direct session", "a non-git directory shows the direct-session note")
+
+	_, _ = h.Update(targetValidityResultMsg{path: repo, valid: true, direct: false})
+	out = ov.Render()
+	assert.NotContains(t, out, "not a directory")
+	assert.NotContains(t, out, "direct session", "a git repo shows no hint at all")
 }
 
 // TestTargetValidityResultDropsStalePath verifies a result for a path the user has
@@ -709,11 +786,11 @@ func TestTargetValidityResultDropsStalePath(t *testing.T) {
 
 	// Establish the current target as invalid.
 	_, _ = h.Update(targetValidityResultMsg{path: repo, valid: false})
-	require.Contains(t, ov.Render(), "not a git repo")
+	require.Contains(t, ov.Render(), "not a directory")
 
 	// A late result for a DIFFERENT (stale) path must not flip the indicator.
 	_, _ = h.Update(targetValidityResultMsg{path: "/elsewhere", valid: true})
-	assert.Contains(t, ov.Render(), "not a git repo", "stale-path result is ignored")
+	assert.Contains(t, ov.Render(), "not a directory", "stale-path result is ignored")
 }
 
 // TestPathChangeResetsValidityToUnknown verifies that navigating to a different target
@@ -734,7 +811,7 @@ func TestPathChangeResetsValidityToUnknown(t *testing.T) {
 
 	// Establish the current target as known-invalid: hint visible.
 	_, _ = h.Update(targetValidityResultMsg{path: repoA, valid: false})
-	require.Contains(t, ov.Render(), "not a git repo")
+	require.Contains(t, ov.Render(), "not a directory")
 
 	// Move the picker selection to repoB (focus starts on the project picker).
 	_, _ = h.Update(tea.KeyMsg{Type: tea.KeyDown})
@@ -742,7 +819,9 @@ func TestPathChangeResetsValidityToUnknown(t *testing.T) {
 
 	// repoA's verdict must not be shown for repoB; the indicator is unknown until the
 	// async check resolves.
-	assert.NotContains(t, ov.Render(), "not a git repo", "stale verdict is cleared on path change")
+	out := ov.Render()
+	assert.NotContains(t, out, "not a directory", "stale verdict is cleared on path change")
+	assert.NotContains(t, out, "direct session", "no hint at all while the state is unknown")
 }
 
 // TestConfirmActionCancelDoesNotRun verifies cancelling never executes the action.
@@ -898,4 +977,45 @@ func TestShouldAutoOpen(t *testing.T) {
 		// running — the Started/TmuxAlive guard holds.
 		assert.False(t, newHomeWithAutoAttach(true).shouldAutoOpen(newInst("")))
 	})
+}
+
+// The off-cadence poll handler applies the polled state to the instance immediately, and
+// leaves a paused instance untouched (mirroring the metadata-tick skip).
+func TestInstancePolledMsgAppliesStatus(t *testing.T) {
+	newInst := func() *session.Instance {
+		inst, err := session.NewInstance(session.InstanceOptions{
+			Title: "s", Path: t.TempDir(), Program: "claude",
+		})
+		require.NoError(t, err)
+		return inst
+	}
+	h := &home{ctx: context.Background(), state: stateDefault}
+
+	t.Run("active instance gets the polled status", func(t *testing.T) {
+		inst := newInst()
+		inst.SetStatus(session.Ready)
+		h.Update(instancePolledMsg{instance: inst, state: tmux.PaneWorking})
+		assert.Equal(t, session.Running, inst.GetStatus())
+	})
+
+	t.Run("paused instance is left untouched", func(t *testing.T) {
+		inst := newInst()
+		inst.SetStatus(session.Paused)
+		h.Update(instancePolledMsg{instance: inst, state: tmux.PaneWorking})
+		assert.Equal(t, session.Paused, inst.GetStatus(), "a poll result must not resurrect a paused instance")
+	})
+}
+
+// pollSelectedCmd is a no-op for anything that can't be polled, so the switch/detach
+// refresh never spawns a doomed capture.
+func TestPollSelectedCmdGuards(t *testing.T) {
+	assert.Nil(t, pollSelectedCmd(nil, false), "nil selection yields no command")
+	assert.Nil(t, pollSelectedCmd(nil, true), "nil selection yields no command (fresh)")
+
+	inst, err := session.NewInstance(session.InstanceOptions{
+		Title: "s", Path: t.TempDir(), Program: "claude",
+	})
+	require.NoError(t, err)
+	assert.Nil(t, pollSelectedCmd(inst, false), "an unstarted instance yields no command")
+	assert.Nil(t, pollSelectedCmd(inst, true), "an unstarted instance yields no command (fresh)")
 }

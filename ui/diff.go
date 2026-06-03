@@ -59,6 +59,21 @@ func (d *DiffPane) SetDiff(instance *session.Instance) {
 		return
 	}
 
+	// A direct (non-git) session has no worktree to diff. Say so explicitly rather than
+	// falling into the "Setting up worktree..." path below, which never resolves.
+	if instance.IsDirect() {
+		d.stats = ""
+		d.diff = ""
+		d.viewport.SetContent(lipgloss.Place(
+			d.width,
+			d.height,
+			lipgloss.Center,
+			lipgloss.Center,
+			fmt.Sprintf("Direct session — git tracking disabled.\nAgent runs in %s", instance.Path),
+		))
+		return
+	}
+
 	stats := instance.GetDiffStats()
 	if stats == nil {
 		// Show loading message if worktree is not ready

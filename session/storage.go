@@ -20,6 +20,10 @@ type InstanceData struct {
 	UpdatedAt   time.Time `json:"updated_at"`
 	AutoYes     bool      `json:"auto_yes"`
 
+	// Direct marks a direct (non-git) session: no worktree or diff is serialized, and on
+	// load the instance is rehydrated with a nil worktree.
+	Direct bool `json:"direct,omitempty"`
+
 	Program   string          `json:"program"`
 	Worktree  GitWorktreeData `json:"worktree"`
 	DiffStats DiffStatsData   `json:"diff_stats"`

@@ -170,6 +170,12 @@ type home struct {
 	// generatingName guards against launching a second auto-name request while one
 	// is already in flight, and drives the "Generating name…" hint-bar state.
 	generatingName bool
+
+	// lastStatusPollSelection is the instance instanceChanged last fired an immediate
+	// status poll for. instanceChanged runs on every 100ms preview tick, so we only
+	// re-poll when the selection actually changes (or when a detach resets this to nil),
+	// not 10×/s — which would also perturb the tick-based idle hysteresis.
+	lastStatusPollSelection *session.Instance
 }
 
 func newHome(ctx context.Context, program string, autoYes bool) *home {
@@ -397,9 +403,18 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				r.instance.SetDiffStats(r.diffStats)
 			}
 		}
+		m.pushSessionContexts()
 		cmds := deliverReadyPrompts(msg.results)
 		cmds = append(cmds, tickUpdateMetadataCmd(m.snapshotActiveInstances(), m.list.GetSelectedInstance()))
 		return m, tea.Batch(cmds...)
+	case instancePolledMsg:
+		// An off-cadence single-instance refresh (selection change / detach). Apply the
+		// state but do NOT reschedule the metadata tick — that chain is owned by
+		// metadataUpdateDoneMsg above; touching it here would spawn a second tick loop.
+		if msg.instance.GetStatus() != session.Paused {
+			applyPaneState(msg.instance, msg.state)
+		}
+		return m, nil
 	case tea.MouseMsg:
 		if msg.Action != tea.MouseActionPress {
 			return m, nil
@@ -476,7 +491,7 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Apply only if the result is for the still-current target, so a stale check
 		// (the user has navigated on) can't clobber the indicator.
 		if m.textInputOverlay != nil && msg.path == m.newSessionPath {
-			m.textInputOverlay.SetTargetValidity(msg.valid)
+			m.textInputOverlay.SetTargetValidity(msg.valid, msg.direct)
 		}
 		return m, nil
 	case tea.KeyMsg:
@@ -507,7 +522,25 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.killTarget != nil && msg.killTarget.AttachKillRequested() {
 			return m, tea.Batch(tea.WindowSize(), m.confirmKill(msg.killTarget))
 		}
-		return m, tea.Batch(tea.WindowSize(), m.instanceChanged())
+		// A sibling-cycle key (Ctrl+PgUp/PgDn) detaches with a direction; re-attach the
+		// neighbouring session in the repo group, keeping cycling inside Atrium's model.
+		// killTarget is the session just detached (nil for the terminal tab, which has
+		// no cycle keys).
+		if msg.killTarget != nil {
+			if next := m.cycleTarget(msg.killTarget); next != nil {
+				m.list.SelectInstance(next)
+				m.pushOneContext(next)
+				return m, m.attachExec(next.Attach, next)
+			}
+		}
+		// Polling stalled while attached, so the smoothing state is stale: refresh the
+		// selected session at face value (fresh) rather than letting a stale "running" on a
+		// now-idle agent linger — and re-run through the hysteresis — until it settles. Pin
+		// the poll tracker to the current selection first so instanceChanged's own
+		// (hysteresis) poll doesn't also fire for the same instance.
+		selected := m.list.GetSelectedInstance()
+		m.lastStatusPollSelection = selected
+		return m, tea.Batch(tea.WindowSize(), m.instanceChanged(), pollSelectedCmd(selected, true))
 	case infoMsg:
 		// An action requested a dismissible info modal (e.g. an actionable resume
 		// error). Unlike handleError's transient box, this persists until dismissed.
@@ -560,7 +593,8 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// the list selection by now. The attach runs through tea.Exec, which hands
 			// the terminal to tmux and repaints on detach; post-detach handling — an
 			// in-session Ctrl+X kill request, keyed on msg.instance since the selection
-			// may have drifted — lands in the attachFinishedMsg handler.
+			// may have drifted, or a sibling-cycle request — lands in the
+			// attachFinishedMsg handler.
 			return m, m.attachExec(msg.instance.Attach, msg.instance)
 		}
 
@@ -765,12 +799,13 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		// fresh (debounced) search with the current branch filter.
 		if newPath := m.textInputOverlay.GetSelectedPath(); newPath != "" && newPath != m.newSessionPath {
 			m.newSessionPath = newPath
-			// Re-scope the branch search and (debounced, off the hot path) re-check whether
-			// the new target is a git repo. The validity check is async because filesystem
-			// browsing changes the selected path almost every keystroke, and a synchronous
-			// git subprocess per keystroke would stutter the UI. Reset the indicator to
-			// "unknown" up front so the previous path's verdict isn't asserted for the new
-			// path during the debounce window; the async result re-sets it.
+			// Re-scope the branch search and (debounced, off the hot path) re-check the
+			// new target's state (directory? git repo or direct session?). The check is
+			// async because filesystem browsing changes the selected path almost every
+			// keystroke, and a synchronous git subprocess per keystroke would stutter the
+			// UI. Reset the indicator to "unknown" up front so the previous path's verdict
+			// isn't asserted for the new path during the debounce window; the async
+			// result re-sets it.
 			m.textInputOverlay.ClearTargetValidity()
 			version := m.textInputOverlay.InvalidateBranchSearch()
 			return m, tea.Batch(
@@ -952,18 +987,20 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 			return m, m.handleError(
 				fmt.Errorf("you can't create more than %d instances", GlobalInstanceLimit))
 		}
-		// Derive the contextual target repo before adding the new instance. The inline
-		// `n` flow has no directory picker, so if there is no repo context (e.g. cs was
-		// launched outside a repo with no sessions), guide the user to `N` instead of
-		// letting session creation fail later at worktree time.
+		// Derive the contextual target before adding the new instance. The inline `n`
+		// flow has no directory picker, so the target must already be a real directory
+		// (e.g. cs launched outside any directory leaves no context); guide the user to
+		// `N` otherwise. A non-git directory is fine — it becomes a direct session.
 		m.newSessionPath = m.defaultNewSessionPath()
-		if !git.IsGitRepo(m.newSessionPath) {
-			return m, m.handleError(fmt.Errorf("not in a git repository; press N to choose a project"))
+		valid, direct := targetValidity(m.newSessionPath)
+		if !valid {
+			return m, m.handleError(fmt.Errorf("no directory context; press N to choose a project"))
 		}
 		instance, err := session.NewInstance(session.InstanceOptions{
 			Title:   "",
 			Path:    m.newSessionPath,
 			Program: m.program,
+			Direct:  direct,
 		})
 		if err != nil {
 			return m, m.handleError(err)
@@ -978,7 +1015,11 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		m.newInstance = instance
 		m.state = stateNew
 		m.menu.SetState(ui.StateNewInstance)
-		m.menu.SetNewInstanceHint(filepath.Base(m.newSessionPath))
+		hint := filepath.Base(m.newSessionPath)
+		if direct {
+			hint += " (direct)"
+		}
+		m.menu.SetNewInstanceHint(hint)
 		m.recomputeLayout() // the hint bar now claims a row; shrink the panes to fit
 
 		return m, nil
@@ -1066,6 +1107,11 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		if selected == nil || selected.GetStatus() == session.Loading {
 			return m, nil
 		}
+		// A direct (non-git) session has nothing to push. Fail fast rather than prompting
+		// for confirmation and only then erroring. (The menu also hides this action.)
+		if selected.IsDirect() {
+			return m, m.handleError(fmt.Errorf("push is not available for a direct (non-git) session"))
+		}
 
 		// Create the push action as a tea.Cmd
 		pushAction := func() tea.Msg {
@@ -1088,6 +1134,13 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		selected := m.list.GetSelectedInstance()
 		if selected == nil || selected.GetStatus() == session.Loading {
 			return m, nil
+		}
+
+		// A direct (non-git) session has no worktree to free and runs in the user's
+		// real directory, so pausing it would only detach a still-running agent.
+		// Warn instead of pausing. (The menu also hides this action for direct sessions.)
+		if selected.IsDirect() {
+			return m, m.handleError(fmt.Errorf("pause is not available for a direct (non-git) session; it runs in place with no worktree to free"))
 		}
 
 		// Checkout: commit changes and pause. The branch name is copied to the
@@ -1169,6 +1222,47 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		return m, m.attachExec(m.list.Attach, selected)
 	default:
 		return m, nil
+	}
+}
+
+// cycleTarget returns the sibling to re-attach when an in-session cycle key
+// (Ctrl+PgUp/PgDn) ended the attach, or nil for a normal detach. Cycling stays
+// inside Atrium's model — each hop is a real detach+attach, correctly sized via the
+// existing attach path. (A tmux switch-client would avoid the repaint but mis-sizes
+// panes here, since every session permanently holds its own pty client.)
+// SiblingInGroup returns attached itself when there is no other attachable sibling,
+// making a stray cycle key a harmless re-attach.
+func (m *home) cycleTarget(attached *session.Instance) *session.Instance {
+	switch attached.AttachExitReason() {
+	case tmux.DetachNext:
+		return m.list.SiblingInGroup(attached, +1)
+	case tmux.DetachPrev:
+		return m.list.SiblingInGroup(attached, -1)
+	}
+	return nil
+}
+
+// pushSessionContexts refreshes the in-session context bar for every live session.
+// SetContext caches per session, so an unchanged tick costs only string comparisons
+// rather than tmux subprocesses. No-op when the feature is disabled.
+func (m *home) pushSessionContexts() {
+	if !m.appConfig.GetSessionContextBar() {
+		return
+	}
+	for _, inst := range m.list.GetInstances() {
+		m.pushOneContext(inst)
+	}
+}
+
+// pushOneContext composes and pushes the context bar for a single session, skipping
+// sessions that have no live tmux pane to render it in (unstarted, paused, dead).
+func (m *home) pushOneContext(inst *session.Instance) {
+	if !m.appConfig.GetSessionContextBar() || !inst.Started() || inst.Paused() || !inst.TmuxAlive() {
+		return
+	}
+	name, left := ui.ComposeSessionContext(inst, ui.RepoKey(inst))
+	if err := inst.SetContext(name, left); err != nil {
+		log.WarningLog.Printf("failed to push session context for %q: %v", inst.Title, err)
 	}
 }
 
@@ -1258,6 +1352,15 @@ func (m *home) instanceChanged() tea.Cmd {
 	if err := m.tabbedWindow.UpdateTerminal(selected); err != nil {
 		return m.handleError(err)
 	}
+
+	// Refresh the newly-selected session's status immediately rather than waiting for the
+	// next 500ms metadata tick. instanceChanged also fires on every 100ms preview tick, so
+	// gate on an actual selection change (a detach resets the tracker to nil to force a
+	// refresh) to avoid polling 10×/s.
+	if selected != m.lastStatusPollSelection {
+		m.lastStatusPollSelection = selected
+		return pollSelectedCmd(selected, false)
+	}
 	return nil
 }
 
@@ -1338,21 +1441,21 @@ func (m *home) scheduleBranchSearch(filter string, version uint64) tea.Cmd {
 }
 
 // targetValidityDebounceMsg fires after the debounce interval to trigger an async
-// git-repo check of the chosen target path.
+// state check (targetValidity) of the chosen target path.
 type targetValidityDebounceMsg struct {
 	path string
 }
 
-// targetValidityResultMsg carries the git-repo check result back to Update, keyed by
+// targetValidityResultMsg carries the target-state check result back to Update, keyed by
 // the path it was computed for so a stale result (the user has since moved on) is dropped.
 type targetValidityResultMsg struct {
-	path  string
-	valid bool
+	path          string
+	valid, direct bool
 }
 
 // scheduleValidityCheck returns a debounced tea.Cmd mirroring scheduleBranchSearch: it
-// sleeps, then asks for an async git-repo check. Debouncing keeps the synchronous
-// git.IsGitRepo subprocess off the keystroke hot path while the user types/browses a path.
+// sleeps, then asks for an async target-state check. Debouncing keeps targetValidity's
+// git subprocess off the keystroke hot path while the user types/browses a path.
 func (m *home) scheduleValidityCheck(path string) tea.Cmd {
 	return func() tea.Msg {
 		time.Sleep(branchSearchDebounce)
@@ -1360,11 +1463,12 @@ func (m *home) scheduleValidityCheck(path string) tea.Cmd {
 	}
 }
 
-// runValidityCheck returns a tea.Cmd that runs git.IsGitRepo in the background and reports
-// the result tagged with the path it was computed for.
+// runValidityCheck returns a tea.Cmd that runs targetValidity in the background and
+// reports the result tagged with the path it was computed for.
 func (m *home) runValidityCheck(path string) tea.Cmd {
 	return func() tea.Msg {
-		return targetValidityResultMsg{path: path, valid: git.IsGitRepo(path)}
+		valid, direct := targetValidity(path)
+		return targetValidityResultMsg{path: path, valid: valid, direct: direct}
 	}
 }
 
@@ -1421,6 +1525,36 @@ func applyPaneState(inst *session.Instance, state tmux.PaneState) {
 	}
 }
 
+// instancePolledMsg carries the result of an off-cadence poll of a single instance,
+// triggered when the selection changes or a session is detached. It refreshes that one
+// instance's status immediately instead of waiting up to a full 500ms metadata tick —
+// which is why an idle session no longer lingers as "running" right after you switch to
+// it or step out of it.
+type instancePolledMsg struct {
+	instance *session.Instance
+	state    tmux.PaneState
+}
+
+// pollSelectedCmd polls a single instance off the UI thread for an immediate status
+// refresh. Returns nil for a session that can't be polled; Poll itself also yields
+// PaneUnknown for a dead session, which applyPaneState ignores.
+//
+// fresh selects PollNow over Poll: use it after a detach, where the tick stream was stalled
+// while attached so the hysteresis state is stale and a face-value snapshot is correct. A
+// live selection change uses the hysteresis-respecting Poll (the tick loop kept the monitor
+// current).
+func pollSelectedCmd(inst *session.Instance, fresh bool) tea.Cmd {
+	if inst == nil || !inst.Started() || inst.Paused() {
+		return nil
+	}
+	return func() tea.Msg {
+		if fresh {
+			return instancePolledMsg{instance: inst, state: inst.PollNow()}
+		}
+		return instancePolledMsg{instance: inst, state: inst.Poll()}
+	}
+}
+
 // sendPromptCmd submits a queued initial prompt to an instance off the UI thread,
 // so the SendKeys→Enter pause inside SendPrompt does not block rendering.
 func sendPromptCmd(instance *session.Instance, prompt string) tea.Cmd {
@@ -1441,10 +1575,42 @@ func deliverReadyPrompts(results []instanceMetaResult) []tea.Cmd {
 		if r.readyForPrompt && r.instance.Prompt != "" {
 			prompt := r.instance.Prompt
 			r.instance.Prompt = ""
+			r.instance.PromptQueuedAt = time.Time{}
 			cmds = append(cmds, sendPromptCmd(r.instance, prompt))
 		}
 	}
 	return cmds
+}
+
+// promptDeliveryTimeout bounds how long a queued startup prompt waits for the pane
+// to fall idle before it is delivered anyway. It is comfortably longer than a typical
+// agent boot (including slow MCP server init) yet short enough that a genuinely stalled
+// boot does not feel hung. The clock starts when the prompt is queued (session creation),
+// so it also covers worktree setup, not just the agent's own startup.
+const promptDeliveryTimeout = 60 * time.Second
+
+// promptDeliveryReady decides whether a queued startup prompt may be delivered now.
+//
+// gateReady is Instance.IsReadyForPrompt(): the agent has rendered and is past any
+// one-time startup gate (claude's trust-folder / "new MCP server" screen, or the
+// non-claude docs-url screen). This is a hard precondition the timeout never bypasses —
+// keystrokes sent while a gate is up are consumed by the gate dialog, not the agent's
+// input box, so the prompt would be lost.
+//
+// Normally we also wait for the pane to leave PaneWorking to avoid the post-trust
+// "loading" transition window. But a chatty agent that writes continuously on boot can
+// stay PaneWorking indefinitely and stall the first message forever; once the prompt has
+// been queued longer than promptDeliveryTimeout we drop only that busy check. A zero
+// queuedAt disables the timeout (the prompt was queued without a timestamp), falling back
+// to the strict idle-pane requirement.
+func promptDeliveryReady(state tmux.PaneState, gateReady bool, queuedAt, now time.Time) bool {
+	if !gateReady {
+		return false
+	}
+	if state != tmux.PaneWorking {
+		return true
+	}
+	return !queuedAt.IsZero() && now.Sub(queuedAt) > promptDeliveryTimeout
 }
 
 // lostSessionRecoverThreshold is how many consecutive ticks an instance must be seen
@@ -1562,10 +1728,10 @@ func tickUpdateMetadataCmd(active []*session.Instance, selected *session.Instanc
 				r.state = instance.Poll()
 				// Only probe readiness while a prompt is actually queued (a brief
 				// window after a new session), so the extra pane capture is rare.
-				// Require the pane to not be mid-work to avoid the post-trust
-				// "loading" transition window.
 				if instance.Prompt != "" {
-					r.readyForPrompt = r.state != tmux.PaneWorking && instance.IsReadyForPrompt()
+					r.readyForPrompt = promptDeliveryReady(
+						r.state, instance.IsReadyForPrompt(),
+						instance.PromptQueuedAt, time.Now())
 				}
 				if instance == selected {
 					r.diffStats = instance.ComputeDiff()
@@ -1677,9 +1843,10 @@ func (m *home) handleInfoState(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 // profile, branch, prompt) for the `N` flow.
 func (m *home) newSessionFormOverlay() *overlay.TextInputOverlay {
 	ov := overlay.NewSessionCreateOverlay(m.appConfig.GetProfiles(), m.candidateRepoPaths())
-	// Seed the initial validity so the picker can flag a non-repo default target
-	// (e.g. when cs was launched outside a git repo) before the user navigates.
-	ov.SetTargetValidity(git.IsGitRepo(m.newSessionPath))
+	// Seed the initial validity so the picker can flag the default target before the user
+	// navigates: a non-git default directory shows the direct-session hint, not a block.
+	valid, direct := targetValidity(m.newSessionPath)
+	ov.SetTargetValidity(valid, direct)
 	return ov
 }
 
@@ -1700,9 +1867,11 @@ func (m *home) createSessionFromForm(prompt string) tea.Cmd {
 	if path == "" {
 		path = m.newSessionPath
 	}
-	if !git.IsGitRepo(path) {
+	// A non-git directory becomes a direct session (agent runs in place, no worktree).
+	valid, direct := targetValidity(path)
+	if !valid {
 		ov.Submitted = false
-		return m.handleError(fmt.Errorf("%q is not a git repository", path))
+		return m.handleError(fmt.Errorf("%q is not a directory", path))
 	}
 
 	program := m.program
@@ -1714,6 +1883,7 @@ func (m *home) createSessionFromForm(prompt string) tea.Cmd {
 		Title:   title,
 		Path:    path,
 		Program: program,
+		Direct:  direct,
 	})
 	if err != nil {
 		ov.Submitted = false
@@ -1728,6 +1898,7 @@ func (m *home) createSessionFromForm(prompt string) tea.Cmd {
 		instance.SetBaseBranch(branch)
 	}
 	instance.Prompt = prompt
+	instance.PromptQueuedAt = time.Now()
 	instance.SetStatus(session.Loading)
 	finalizer()
 
@@ -1740,6 +1911,16 @@ func (m *home) createSessionFromForm(prompt string) tea.Cmd {
 		return instanceStartedMsg{instance: instance, err: err}
 	}
 	return tea.Batch(tea.WindowSize(), m.instanceChanged(), startCmd)
+}
+
+// targetValidity reports whether path is a usable new-session target and, if so,
+// whether it would be a direct (non-git) session. Both the inline (`n`) and form
+// (`N`) flows use it to drive the picker's inline hint and to set the Direct flag.
+func targetValidity(path string) (valid, direct bool) {
+	if !config.DirExists(path) {
+		return false, false
+	}
+	return true, !git.IsGitRepo(path)
 }
 
 // defaultNewSessionPath returns the contextual target repo for a new session: the
@@ -1776,7 +1957,7 @@ func (m *home) candidateRepoPaths() []string {
 	for _, p := range m.appState.GetRecentPaths() {
 		// Skip recent paths that no longer exist so deleted/moved repos don't clutter
 		// the picker or error only when selected.
-		if info, err := os.Stat(p); err != nil || !info.IsDir() {
+		if !config.DirExists(p) {
 			continue
 		}
 		add(p)
@@ -1839,12 +2020,17 @@ func (m *home) confirmKill(inst *session.Instance) tea.Cmd {
 		// base-repo-only predicate. This is a teardown path: if the worktree or its
 		// repo is unreachable — e.g. the user renamed/removed the project directory —
 		// fail open and proceed, otherwise an orphaned session can never be deleted.
-		if worktree, err := inst.GetGitWorktree(); err != nil {
-			log.WarningLog.Printf("kill %s: cannot resolve worktree, proceeding: %v", inst.Title, err)
-		} else if heldByBase, cerr := worktree.IsBranchHeldByBaseRepo(); cerr != nil {
-			log.WarningLog.Printf("kill %s: cannot verify branch checkout, proceeding: %v", inst.Title, cerr)
-		} else if heldByBase {
-			return fmt.Errorf("branch for %s is checked out in the main repo; switch it away before deleting", inst.DisplayName())
+		// A direct (non-git) session has no branch or worktree, so skip the base-repo
+		// branch check entirely — calling GetGitWorktree would only log a misleading
+		// "cannot resolve worktree" warning for a session that never had one.
+		if !inst.IsDirect() {
+			if worktree, err := inst.GetGitWorktree(); err != nil {
+				log.WarningLog.Printf("kill %s: cannot resolve worktree, proceeding: %v", inst.Title, err)
+			} else if heldByBase, cerr := worktree.IsBranchHeldByBaseRepo(); cerr != nil {
+				log.WarningLog.Printf("kill %s: cannot verify branch checkout, proceeding: %v", inst.Title, cerr)
+			} else if heldByBase {
+				return fmt.Errorf("branch for %s is checked out in the main repo; switch it away before deleting", inst.DisplayName())
+			}
 		}
 
 		// Clean up terminal session for this instance

@@ -133,11 +133,16 @@ func (m *Menu) addInstanceOptions() {
 	// Instance management group
 	options := []keys.KeyName{keys.KeyNew, keys.KeyKill, keys.KeyRename}
 
-	// Action group
-	actionGroup := []keys.KeyName{keys.KeyEnter, keys.KeySubmit}
+	// Action group. A direct (non-git) session has nothing to push, so omit KeySubmit.
+	actionGroup := []keys.KeyName{keys.KeyEnter}
+	if !m.instance.IsDirect() {
+		actionGroup = append(actionGroup, keys.KeySubmit)
+	}
 	if m.instance.Paused() {
 		actionGroup = append(actionGroup, keys.KeyResume)
-	} else {
+	} else if !m.instance.IsDirect() {
+		// A direct (non-git) session has no worktree to free, so pause/checkout is
+		// disabled — omit it rather than offering an action that only warns.
 		actionGroup = append(actionGroup, keys.KeyCheckout)
 	}
 

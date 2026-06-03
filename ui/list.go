@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
@@ -242,6 +243,25 @@ func (r *InstanceRenderer) setWidth(width int) {
 	r.width = width
 }
 
+// fmtAge formats a time.Time as a compact elapsed-time label: "<N>m", "<N>h", or "<N>d".
+// Sub-minute and zero times return "" so very fresh sessions stay uncluttered.
+func fmtAge(t time.Time) string {
+	if t.IsZero() {
+		return ""
+	}
+	d := time.Since(t)
+	switch {
+	case d < time.Minute:
+		return ""
+	case d < time.Hour:
+		return fmt.Sprintf("%dm", int(d.Minutes()))
+	case d < 24*time.Hour:
+		return fmt.Sprintf("%dh", int(d.Hours()))
+	default:
+		return fmt.Sprintf("%dd", int(d.Hours()/24))
+	}
+}
+
 // stateParts returns the glyph, word, and color describing an instance's status.
 // Running/Loading use the animated spinner frame; the others use theme glyphs.
 func (r *InstanceRenderer) stateParts(i *session.Instance, th *theme.Theme) (glyph, word string, color lipgloss.Color) {
@@ -365,22 +385,45 @@ func (r *InstanceRenderer) Render(i *session.Instance, idx int, selected bool) s
 		}
 	}
 
-	// Budget the branch (the only variable-length part) so the line fits W.
-	fixedW := runewidth.StringWidth(g.Branch+" ") + runewidth.StringWidth(gctxPlain) + runewidth.StringWidth(diffPlain)
-	branchBudget := W - fixedW - 1 // 1 = min gap before the diff stat
-	branch := i.Branch
-	if branchBudget < 1 {
-		branch = ""
-	} else if runewidth.StringWidth(branch) > branchBudget {
-		branch = runewidth.Truncate(branch, branchBudget, "…")
+	var line2 string
+	if i.IsDirect() {
+		// Direct (non-git) session: no branch, ahead/behind, or diff. The git line below
+		// would render a dangling branch glyph with no name, so show a concise dim marker
+		// instead — consistent with the diff pane and picker hint. Pad to W so the
+		// selected-row background fills the line.
+		label := "direct · no git isolation"
+		if runewidth.StringWidth(label) > W {
+			label = runewidth.Truncate(label, W, "…")
+		}
+		line2 = seg(th.Palette.FgDim).Render(label) + pad(W-runewidth.StringWidth(label))
+	} else {
+		// Faint session-age label (e.g. "2h", "3d") appended after the diff stat.
+		// agePlain carries the leading gap (for width budgeting); ageStyled renders
+		// that gap as a bg-aware pad so the selected-row fill doesn't drop out.
+		var agePlain, ageStyled string
+		if age := fmtAge(i.CreatedAt); age != "" {
+			agePlain = " " + age
+			ageStyled = pad(1) + seg(th.Palette.FgDim).Render(age)
+		}
+
+		// Budget the branch (the only variable-length part) so the line fits W.
+		fixedW := runewidth.StringWidth(g.Branch+" ") + runewidth.StringWidth(gctxPlain) + runewidth.StringWidth(diffPlain) + runewidth.StringWidth(agePlain)
+		branchBudget := W - fixedW - 1 // 1 = min gap before the diff stat
+		branch := i.Branch
+		if branchBudget < 1 {
+			branch = ""
+		} else if runewidth.StringWidth(branch) > branchBudget {
+			branch = runewidth.Truncate(branch, branchBudget, "…")
+		}
+		leftPlain := g.Branch + " " + branch + gctxPlain
+		leftStyled := seg(th.Palette.FgDim).Render(g.Branch+" "+branch) + gctxStyled
+		rightPlain2 := diffPlain + agePlain
+		gap2 := W - runewidth.StringWidth(leftPlain) - runewidth.StringWidth(rightPlain2)
+		if gap2 < 1 {
+			gap2 = 1
+		}
+		line2 = leftStyled + pad(gap2) + diffStyled + ageStyled
 	}
-	leftPlain := g.Branch + " " + branch + gctxPlain
-	leftStyled := seg(th.Palette.FgDim).Render(g.Branch+" "+branch) + gctxStyled
-	gap2 := W - runewidth.StringWidth(leftPlain) - runewidth.StringWidth(diffPlain)
-	if gap2 < 1 {
-		gap2 = 1
-	}
-	line2 := leftStyled + pad(gap2) + diffStyled
 
 	// --- Left marker (accent bar when selected) + compose ---
 	marker := pad(1)
@@ -715,6 +758,62 @@ func (l *List) SelectInstance(target *session.Instance) {
 			return
 		}
 	}
+}
+
+// isAttachable reports whether a session can be attached to right now — the same
+// condition the KeyEnter handler guards on before attaching (app.go). Started() is
+// checked first because TmuxAlive dereferences the tmux session, which a not-yet-
+// started instance does not have.
+func isAttachable(i *session.Instance) bool {
+	return i != nil && i.Started() && !i.Paused() && i.GetStatus() != session.Loading && i.TmuxAlive()
+}
+
+// SiblingInGroup returns the next attachable session in inst's repo group, moving
+// dir (+1 next, -1 previous) and wrapping within the group. Sessions that cannot be
+// attached (paused, still loading, or with no live tmux session) are skipped. When
+// inst is the only attachable member — or is not in the list — inst itself is
+// returned, so an in-session jump becomes a harmless no-op. This drives Ctrl+PgDn/
+// PgUp cycling from app.go's attachLoop; it is independent of collapse/filter state,
+// which are list-view concerns that don't apply while attached.
+func (l *List) SiblingInGroup(inst *session.Instance, dir int) *session.Instance {
+	return l.siblingInGroup(inst, dir, isAttachable)
+}
+
+// siblingInGroup is the predicate-injectable core of SiblingInGroup; ok decides
+// which candidates are eligible. Split out so the ring-walk can be tested without a
+// live tmux session.
+func (l *List) siblingInGroup(inst *session.Instance, dir int, ok func(*session.Instance) bool) *session.Instance {
+	if dir == 0 {
+		return inst
+	}
+	idx := -1
+	for i, it := range l.items {
+		if it == inst {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 {
+		return inst
+	}
+	start, end := l.groupBounds(idx)
+	n := end - start
+	if n <= 1 {
+		return inst
+	}
+	step := 1
+	if dir < 0 {
+		step = -1
+	}
+	// Walk the group ring from the neighbour outward, wrapping within [start, end).
+	for k := 1; k < n; k++ {
+		off := ((idx-start)+step*k)%n + n
+		cand := l.items[start+off%n]
+		if ok(cand) {
+			return cand
+		}
+	}
+	return inst
 }
 
 // MoveUp swaps the selected instance with the one above it. The swap is confined to within a repo group: if the item

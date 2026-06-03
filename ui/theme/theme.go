@@ -14,6 +14,7 @@ import (
 type Palette struct {
 	Bg          lipgloss.Color // window background
 	BgElevated  lipgloss.Color // selected-row / panel fill
+	BarBg       lipgloss.Color // in-session header bar fill (a step above BgElevated so the bar separates over a near-black agent pane)
 	Fg          lipgloss.Color // primary text
 	FgDim       lipgloss.Color // secondary text (line-2 git info)
 	FgFaint     lipgloss.Color // tertiary text / inactive borders & rules

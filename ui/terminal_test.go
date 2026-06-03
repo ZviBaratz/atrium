@@ -107,12 +107,12 @@ func makeStartedInstance(t *testing.T, title string) *session.Instance {
 }
 
 // injectSession injects a mock tmux session into the TerminalPane's sessions map.
-func injectSession(tp *TerminalPane, title string, ts *tmux.TmuxSession, worktreePath string) {
+func injectSession(tp *TerminalPane, title string, ts *tmux.TmuxSession, cwd string) {
 	tp.mu.Lock()
 	defer tp.mu.Unlock()
 	tp.sessions[title] = &terminalSession{
-		tmuxSession:  ts,
-		worktreePath: worktreePath,
+		tmuxSession: ts,
+		cwd:         cwd,
 	}
 	tp.currentTitle = title
 }
@@ -232,8 +232,8 @@ func TestTerminalSessionCaching(t *testing.T) {
 
 	tp.mu.Lock()
 	tp.sessions[instance2.Title] = &terminalSession{
-		tmuxSession:  ts2,
-		worktreePath: t.TempDir(),
+		tmuxSession: ts2,
+		cwd:         t.TempDir(),
 	}
 	tp.mu.Unlock()
 
@@ -343,8 +343,8 @@ func TestTerminalCloseForInstance(t *testing.T) {
 	injectSession(tp, instance1.Title, ts1, t.TempDir())
 	tp.mu.Lock()
 	tp.sessions[instance2.Title] = &terminalSession{
-		tmuxSession:  ts2,
-		worktreePath: t.TempDir(),
+		tmuxSession: ts2,
+		cwd:         t.TempDir(),
 	}
 	tp.mu.Unlock()
 

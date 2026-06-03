@@ -49,6 +49,7 @@ var tokyoNight = &Theme{
 	Palette: Palette{
 		Bg:          lipgloss.Color("#1a1b26"),
 		BgElevated:  lipgloss.Color("#24283b"),
+		BarBg:       lipgloss.Color("#414868"),
 		Fg:          lipgloss.Color("#c0caf5"),
 		FgDim:       lipgloss.Color("#565f89"),
 		FgFaint:     lipgloss.Color("#414868"),
@@ -72,6 +73,7 @@ var catppuccinMocha = &Theme{
 	Palette: Palette{
 		Bg:          lipgloss.Color("#1e1e2e"),
 		BgElevated:  lipgloss.Color("#313244"),
+		BarBg:       lipgloss.Color("#45475a"),
 		Fg:          lipgloss.Color("#cdd6f4"),
 		FgDim:       lipgloss.Color("#6c7086"),
 		FgFaint:     lipgloss.Color("#45475a"),
