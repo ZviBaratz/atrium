@@ -4,10 +4,13 @@ import (
 	"github.com/ZviBaratz/atrium/session"
 	"github.com/ZviBaratz/atrium/session/git"
 	"github.com/ZviBaratz/atrium/ui/theme"
+	"regexp"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/charmbracelet/bubbles/spinner"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/stretchr/testify/require"
 )
 
@@ -196,9 +199,14 @@ func TestRender_SessionAge(t *testing.T) {
 	require.NoError(t, err)
 	inst.Branch = "feat/x"
 
+	// Match an age token (digits followed by m/h/d at a word boundary) so the
+	// assertion targets the label specifically, not any incidental "m"/"h"/"d"
+	// in a branch name or status word.
+	ageToken := regexp.MustCompile(`\d+[mhd]\b`)
+
 	// Brand-new session (CreatedAt = time.Now()) → no age label.
 	out := r.Render(inst, 0, false)
-	require.NotContains(t, out, "m", "fresh session should not show age")
+	require.NotRegexp(t, ageToken, out, "fresh session should not show age")
 
 	// Simulate a 3-hour-old session.
 	inst.CreatedAt = time.Now().Add(-3 * time.Hour)
@@ -209,4 +217,40 @@ func TestRender_SessionAge(t *testing.T) {
 	inst.CreatedAt = time.Now().Add(-48 * time.Hour)
 	out = r.Render(inst, 0, false)
 	require.Contains(t, out, "2d", "2-day-old session should show '2d'")
+}
+
+// TestRender_SessionAgeBudget locks in the headline width property: the age
+// label steals horizontal budget from the branch (the only variable-length
+// part) so the rendered line still fits the width exactly. A regression here is
+// what reintroduces width-wrap, which desyncs bubbletea's incremental renderer.
+func TestRender_SessionAgeBudget(t *testing.T) {
+	t.Cleanup(theme.Set("unicode"))
+	s := spinner.New()
+	r := &InstanceRenderer{spinner: &s}
+	const width = 28
+	r.setWidth(width)
+
+	inst, err := session.NewInstance(session.InstanceOptions{Title: "t", Path: ".", Program: "echo"})
+	require.NoError(t, err)
+	inst.Branch = "feature/a-very-long-branch-name-that-overflows"
+
+	lineWidth := func(out string) int {
+		// The row is two lines (identity + version-control); measure the wider.
+		// ansi.StringWidth ignores escape sequences, giving true display width.
+		widest := 0
+		for _, ln := range strings.Split(out, "\n") {
+			if w := ansi.StringWidth(ln); w > widest {
+				widest = w
+			}
+		}
+		return widest
+	}
+
+	withoutAge := r.Render(inst, 0, false)
+	require.LessOrEqual(t, lineWidth(withoutAge), width, "row must fit width with no age label")
+
+	inst.CreatedAt = time.Now().Add(-3 * time.Hour)
+	withAge := r.Render(inst, 0, false)
+	require.Contains(t, withAge, "3h", "age label should render")
+	require.LessOrEqual(t, lineWidth(withAge), width, "row must still fit width once the age label is added")
 }
