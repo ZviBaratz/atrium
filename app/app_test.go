@@ -12,6 +12,7 @@ import (
 	"github.com/ZviBaratz/atrium/ui/overlay"
 	"os"
 	"testing"
+	"time"
 
 	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
@@ -53,11 +54,14 @@ func TestDeliverReadyPrompts(t *testing.T) {
 
 	t.Run("ready instance with a queued prompt is delivered once and cleared", func(t *testing.T) {
 		inst := newInst("do the thing")
+		inst.PromptQueuedAt = time.Now()
 		cmds := deliverReadyPrompts([]instanceMetaResult{
 			{instance: inst, readyForPrompt: true},
 		})
 		require.Len(t, cmds, 1)
 		require.Equal(t, "", inst.Prompt, "prompt must be cleared so it is never sent twice")
+		require.True(t, inst.PromptQueuedAt.IsZero(),
+			"PromptQueuedAt must be cleared alongside the prompt so a later tick can't re-trigger the timeout")
 	})
 
 	t.Run("ready instance with no queued prompt sends nothing", func(t *testing.T) {
@@ -76,6 +80,70 @@ func TestDeliverReadyPrompts(t *testing.T) {
 		require.Empty(t, cmds)
 		require.Equal(t, "waiting on trust screen", inst.Prompt, "prompt must remain queued")
 	})
+}
+
+func TestPromptDeliveryReady(t *testing.T) {
+	now := time.Now()
+	queued := now.Add(-1 * time.Second)          // queued recently, within grace
+	stale := now.Add(-2 * promptDeliveryTimeout) // queued long ago, past grace
+
+	tests := []struct {
+		name      string
+		state     tmux.PaneState
+		gateReady bool
+		queuedAt  time.Time
+		want      bool
+	}{
+		{
+			name:      "idle pane past the gate delivers",
+			state:     tmux.PaneIdle,
+			gateReady: true,
+			queuedAt:  queued,
+			want:      true,
+		},
+		{
+			name:      "startup gate still up never delivers even when idle",
+			state:     tmux.PaneIdle,
+			gateReady: false,
+			queuedAt:  queued,
+			want:      false,
+		},
+		{
+			name:      "busy pane within grace keeps waiting",
+			state:     tmux.PaneWorking,
+			gateReady: true,
+			queuedAt:  queued,
+			want:      false,
+		},
+		{
+			name:      "busy pane past timeout force-delivers once past the gate",
+			state:     tmux.PaneWorking,
+			gateReady: true,
+			queuedAt:  stale,
+			want:      true,
+		},
+		{
+			name:      "timeout never bypasses the startup gate",
+			state:     tmux.PaneWorking,
+			gateReady: false,
+			queuedAt:  stale,
+			want:      false,
+		},
+		{
+			name:      "zero queuedAt disables the timeout on a busy pane",
+			state:     tmux.PaneWorking,
+			gateReady: true,
+			queuedAt:  time.Time{},
+			want:      false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := promptDeliveryReady(tt.state, tt.gateReady, tt.queuedAt, now)
+			require.Equal(t, tt.want, got)
+		})
+	}
 }
 
 func TestRecoverLostInstances(t *testing.T) {

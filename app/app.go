@@ -1397,10 +1397,36 @@ func deliverReadyPrompts(results []instanceMetaResult) []tea.Cmd {
 	return cmds
 }
 
-// promptDeliveryTimeout is the maximum time to wait for an agent to reach an idle pane
-// before force-delivering a queued startup prompt. Chatty agents that write continuously
-// on boot would otherwise stall the first message indefinitely.
+// promptDeliveryTimeout bounds how long a queued startup prompt waits for the pane
+// to fall idle before it is delivered anyway. It is comfortably longer than a typical
+// agent boot (including slow MCP server init) yet short enough that a genuinely stalled
+// boot does not feel hung. The clock starts when the prompt is queued (session creation),
+// so it also covers worktree setup, not just the agent's own startup.
 const promptDeliveryTimeout = 60 * time.Second
+
+// promptDeliveryReady decides whether a queued startup prompt may be delivered now.
+//
+// gateReady is Instance.IsReadyForPrompt(): the agent has rendered and is past any
+// one-time startup gate (claude's trust-folder / "new MCP server" screen, or the
+// non-claude docs-url screen). This is a hard precondition the timeout never bypasses —
+// keystrokes sent while a gate is up are consumed by the gate dialog, not the agent's
+// input box, so the prompt would be lost.
+//
+// Normally we also wait for the pane to leave PaneWorking to avoid the post-trust
+// "loading" transition window. But a chatty agent that writes continuously on boot can
+// stay PaneWorking indefinitely and stall the first message forever; once the prompt has
+// been queued longer than promptDeliveryTimeout we drop only that busy check. A zero
+// queuedAt disables the timeout (the prompt was queued without a timestamp), falling back
+// to the strict idle-pane requirement.
+func promptDeliveryReady(state tmux.PaneState, gateReady bool, queuedAt, now time.Time) bool {
+	if !gateReady {
+		return false
+	}
+	if state != tmux.PaneWorking {
+		return true
+	}
+	return !queuedAt.IsZero() && now.Sub(queuedAt) > promptDeliveryTimeout
+}
 
 // lostSessionRecoverThreshold is how many consecutive ticks an instance must be seen
 // with a dead tmux session before it is recovered to Paused. Recovery commits any WIP
@@ -1517,13 +1543,10 @@ func tickUpdateMetadataCmd(active []*session.Instance, selected *session.Instanc
 				r.state = instance.Poll()
 				// Only probe readiness while a prompt is actually queued (a brief
 				// window after a new session), so the extra pane capture is rare.
-				// Require the pane to not be mid-work to avoid the post-trust
-				// "loading" transition window.
 				if instance.Prompt != "" {
-					timedOut := !instance.PromptQueuedAt.IsZero() &&
-						time.Since(instance.PromptQueuedAt) > promptDeliveryTimeout
-					r.readyForPrompt = timedOut ||
-						(r.state != tmux.PaneWorking && instance.IsReadyForPrompt())
+					r.readyForPrompt = promptDeliveryReady(
+						r.state, instance.IsReadyForPrompt(),
+						instance.PromptQueuedAt, time.Now())
 				}
 				if instance == selected {
 					r.diffStats = instance.ComputeDiff()
