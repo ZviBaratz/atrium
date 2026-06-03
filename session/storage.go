@@ -89,9 +89,11 @@ func (s *Storage) LoadInstances() ([]*Instance, error) {
 		return nil, err
 	}
 
+	// Load config once for the whole batch; FromInstanceData only needs BranchPrefix.
+	cfg := config.LoadConfig()
 	instances := make([]*Instance, len(instancesData))
 	for i, data := range instancesData {
-		instance, err := FromInstanceData(data)
+		instance, err := FromInstanceData(data, cfg.BranchPrefix)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create instance %s: %w", data.Title, err)
 		}

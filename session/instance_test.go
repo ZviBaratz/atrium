@@ -139,7 +139,7 @@ func TestToInstanceData_PersistsGitContext(t *testing.T) {
 	// NewGitWorktreeFromStorage is a pure constructor (no git I/O), so we can use it
 	// to stand up a worktree carrying a base ref without starting the instance.
 	inst.gitWorktree = git.NewGitWorktreeFromStorage(
-		"/repo", "/repo/wt", "t", "session/t", "abc123", "main", false)
+		"/repo", "/repo/wt", "t", "session/t", "abc123", "main", false, "session/")
 	inst.diffStats = &git.DiffStats{
 		Added: 12, Removed: 3, FilesChanged: 4, Commits: 2, Behind: 5, Dirty: true,
 	}

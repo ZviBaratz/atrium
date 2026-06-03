@@ -135,7 +135,7 @@ func TestDirectSession_RoundTrip(t *testing.T) {
 	var decoded InstanceData
 	require.NoError(t, json.Unmarshal(blob, &decoded))
 
-	restored, err := FromInstanceData(decoded)
+	restored, err := FromInstanceData(decoded, "session/")
 	require.NoError(t, err)
 	assert.True(t, restored.IsDirect(), "Direct must survive restore")
 	assert.Nil(t, restored.worktree(), "restore must not fabricate a worktree for a direct session")
