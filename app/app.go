@@ -768,7 +768,10 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 			// Re-scope the branch search and (debounced, off the hot path) re-check whether
 			// the new target is a git repo. The validity check is async because filesystem
 			// browsing changes the selected path almost every keystroke, and a synchronous
-			// git subprocess per keystroke would stutter the UI.
+			// git subprocess per keystroke would stutter the UI. Reset the indicator to
+			// "unknown" up front so the previous path's verdict isn't asserted for the new
+			// path during the debounce window; the async result re-sets it.
+			m.textInputOverlay.ClearTargetValidity()
 			version := m.textInputOverlay.InvalidateBranchSearch()
 			return m, tea.Batch(
 				m.scheduleBranchSearch(m.textInputOverlay.BranchFilter(), version),

@@ -716,6 +716,35 @@ func TestTargetValidityResultDropsStalePath(t *testing.T) {
 	assert.Contains(t, ov.Render(), "not a git repo", "stale-path result is ignored")
 }
 
+// TestPathChangeResetsValidityToUnknown verifies that navigating to a different target
+// resets the indicator to "unknown" (no hint) instead of asserting the previous path's
+// verdict for the new path while the debounced async re-check is in flight.
+func TestPathChangeResetsValidityToUnknown(t *testing.T) {
+	const repoA = "/some/repo-a"
+	const repoB = "/some/repo-b"
+	ov := overlay.NewSessionCreateOverlay(nil, []string{repoA, repoB})
+	ov.SetSize(80, 24)
+	h := &home{
+		ctx:              context.Background(),
+		state:            statePrompt,
+		appConfig:        config.DefaultConfig(),
+		textInputOverlay: ov,
+		newSessionPath:   repoA,
+	}
+
+	// Establish the current target as known-invalid: hint visible.
+	_, _ = h.Update(targetValidityResultMsg{path: repoA, valid: false})
+	require.Contains(t, ov.Render(), "not a git repo")
+
+	// Move the picker selection to repoB (focus starts on the project picker).
+	_, _ = h.Update(tea.KeyMsg{Type: tea.KeyDown})
+	require.Equal(t, repoB, h.newSessionPath, "the path change must be registered")
+
+	// repoA's verdict must not be shown for repoB; the indicator is unknown until the
+	// async check resolves.
+	assert.NotContains(t, ov.Render(), "not a git repo", "stale verdict is cleared on path change")
+}
+
 // TestConfirmActionCancelDoesNotRun verifies cancelling never executes the action.
 func TestConfirmActionCancelDoesNotRun(t *testing.T) {
 	h := &home{

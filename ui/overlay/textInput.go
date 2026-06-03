@@ -486,6 +486,15 @@ func (t *TextInputOverlay) SetTargetValidity(valid bool) {
 	t.directoryPicker.SetSelectionValidity(valid)
 }
 
+// ClearTargetValidity resets the target-directory validity indicator to "unknown", so no
+// hint is shown until a fresh check resolves. No-op when there is no directory picker.
+func (t *TextInputOverlay) ClearTargetValidity() {
+	if t.directoryPicker == nil {
+		return
+	}
+	t.directoryPicker.ClearSelectionValidity()
+}
+
 // GetSelectedBranch returns the selected branch name from the branch picker.
 // Returns empty string if no branch picker is present or "New branch" is selected.
 func (t *TextInputOverlay) GetSelectedBranch() string {

@@ -36,7 +36,10 @@ type DirectoryPicker struct {
 	selectionValid  bool
 
 	// cachedDir/cachedNames memoize the last directory listing so typing within one
-	// directory (the base prefix grows, the directory does not) re-uses one read.
+	// directory (the base prefix grows, the directory does not) re-uses one read. The
+	// cache lives for the picker's lifetime (one short-lived form) and is deliberately
+	// never invalidated — a directory created mid-form won't appear until reopen, but
+	// it stays reachable by typing the full path (literal fallback).
 	cachedDir   string
 	cachedNames []string
 	cacheValid  bool
@@ -92,6 +95,15 @@ func (dp *DirectoryPicker) IsFocused() bool {
 func (dp *DirectoryPicker) SetSelectionValidity(valid bool) {
 	dp.validityChecked = true
 	dp.selectionValid = valid
+}
+
+// ClearSelectionValidity resets the indicator to "unknown" (validityChecked = false), so
+// Render shows no repo-validity hint until a fresh check resolves. Called when the selected
+// path changes, so the previous path's verdict isn't briefly asserted for the new one while
+// the (debounced, async) re-check is in flight.
+func (dp *DirectoryPicker) ClearSelectionValidity() {
+	dp.validityChecked = false
+	dp.selectionValid = false
 }
 
 // HandleKeyPress processes a key event. Returns (consumed, selectionChanged).
@@ -173,6 +185,9 @@ func listSubdirs(dir string) []string {
 	}
 	defer func() { _ = f.Close() }() // read-only handle; close error is not actionable
 	// ReadDir(n) returns up to n entries (io.EOF when fewer); the bound is what matters.
+	// Truncation is in raw directory order (not sorted), so in a pathological dir the
+	// target may fall outside the cap — the literal-fallback entry keeps it reachable
+	// by typing the path out.
 	entries, _ := f.ReadDir(maxDirEntries)
 	names := make([]string, 0, len(entries))
 	for _, e := range entries {

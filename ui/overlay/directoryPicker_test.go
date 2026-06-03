@@ -133,6 +133,18 @@ func TestDirectoryPicker_InvalidRepoIndicator(t *testing.T) {
 	assert.NotContains(t, dp.Render(), "not a git repo")
 }
 
+func TestDirectoryPicker_ClearSelectionValidityHidesHint(t *testing.T) {
+	dp := NewDirectoryPicker([]string{"/repo/a"})
+	dp.Focus()
+	dp.SetSelectionValidity(false)
+	require.Contains(t, dp.Render(), "not a git repo")
+
+	// Clearing returns the indicator to "unknown": no hint either way until a fresh
+	// check resolves.
+	dp.ClearSelectionValidity()
+	assert.NotContains(t, dp.Render(), "not a git repo")
+}
+
 func TestDirectoryPicker_EmptyMatchHintsFreeText(t *testing.T) {
 	dp := NewDirectoryPicker([]string{"/repo/a"})
 	dp.Focus()
