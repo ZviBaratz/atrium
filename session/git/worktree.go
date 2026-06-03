@@ -32,6 +32,9 @@ type GitWorktree struct {
 	sessionName string
 	// Branch name for the worktree
 	branchName string
+	// branchPrefix is the configured prefix for session branches (e.g. "cs-"). Captured
+	// at construction time so Rename does not need a config.LoadConfig() disk read.
+	branchPrefix string
 	// Base commit hash for the worktree
 	baseCommitSHA string
 	// baseRef is the ref the session branch is created from (a branch name to base on,
@@ -45,11 +48,13 @@ type GitWorktree struct {
 }
 
 func NewGitWorktreeFromStorage(repoPath string, worktreePath string, sessionName string, branchName string, baseCommitSHA string, baseRef string, isExistingBranch bool) *GitWorktree {
+	cfg := config.LoadConfig()
 	return &GitWorktree{
 		repoPath:         repoPath,
 		worktreePath:     worktreePath,
 		sessionName:      sessionName,
 		branchName:       branchName,
+		branchPrefix:     cfg.BranchPrefix,
 		baseCommitSHA:    baseCommitSHA,
 		baseRef:          baseRef,
 		isExistingBranch: isExistingBranch,
@@ -111,6 +116,7 @@ func newSessionWorktree(repoPath string, sessionName string, baseRef string) (*G
 		repoPath:     repoPath,
 		sessionName:  sessionName,
 		branchName:   branchName,
+		branchPrefix: cfg.BranchPrefix,
 		worktreePath: worktreePath,
 		baseRef:      baseRef,
 	}, branchName, nil
