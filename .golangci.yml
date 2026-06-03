@@ -52,7 +52,7 @@ linters:
         - name: errorf
         # The stuttering check is disabled because satisfying it means renaming
         # git.GitWorktree / tmux.TmuxSession / tmux.TmuxPrefix across the
-        # codebase — a rename refactor, not a docs change (see #24).
+        # codebase — a rename refactor, not a docs change. Tracked in #51.
         - name: exported
           arguments:
             - disableStutteringCheck
