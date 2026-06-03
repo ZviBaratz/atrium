@@ -646,14 +646,15 @@ func (t *TmuxSession) Poll() PaneState {
 	// even under a multi-agent team selector. Raising only on the marker is what kills the
 	// flicker: a stuck state file or an idle repaint can never flip the indicator back to
 	// working once it has settled to idle — only the marker returning can.
-	if busyMarkers(t.program) != nil && t.markerWorking(content) {
+	hasMarker := busyMarkers(t.program) != nil
+	if hasMarker && t.markerWorking(content) {
 		t.monitor.idleStreak = 0
 		t.monitor.lastReported = PaneWorking
 		t.monitor.logSignal(name, "marker → working")
 		return PaneWorking
 	}
 
-	if busyMarkers(t.program) != nil {
+	if hasMarker {
 		// Claude: the marker is absent. The hook state file is authoritative for *idle*: a
 		// clean turn-end (Stop) or an API-error turn-end (StopFailure) latches "ready", so we
 		// commit idle at once. Any other value — still "working", or no file yet — is NOT
