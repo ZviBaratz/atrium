@@ -20,11 +20,11 @@ func terminalFooterStyle() lipgloss.Style { return theme.Current().DimStyle() }
 
 // terminalSession holds a cached tmux session for a specific instance.
 type terminalSession struct {
-	tmuxSession  *tmux.TmuxSession
-	worktreePath string
+	tmuxSession *tmux.TmuxSession
+	cwd         string
 }
 
-// TerminalPane manages shell tmux sessions in the worktree directory of selected instances.
+// TerminalPane manages shell tmux sessions in the working directory of selected instances.
 // Sessions are cached per instance so switching between instances preserves terminal state.
 type TerminalPane struct {
 	mu            sync.Mutex
@@ -121,8 +121,11 @@ func (t *TerminalPane) ensureSessionLocked(instance *session.Instance) error {
 		return nil
 	}
 
-	worktreePath := instance.GetWorktreePath()
-	if worktreePath == "" {
+	// Host the shell in the same cwd as the agent: the worktree for a git session, or
+	// Path for a direct (non-git) session. GetWorktreePath() would be "" for a direct
+	// session and wrongly skip terminal creation, so use WorkingDir().
+	cwd := instance.WorkingDir()
+	if cwd == "" {
 		return nil
 	}
 
@@ -151,19 +154,19 @@ func (t *TerminalPane) ensureSessionLocked(instance *session.Instance) error {
 			// Session exists but can't restore, kill it and start fresh
 			_ = ts.Close()
 			ts = tmux.NewTmuxSession(termName, shell)
-			if err := ts.Start(worktreePath); err != nil {
+			if err := ts.Start(cwd); err != nil {
 				return fmt.Errorf("terminal pane: failed to start session: %w", err)
 			}
 		}
 	} else {
-		if err := ts.Start(worktreePath); err != nil {
+		if err := ts.Start(cwd); err != nil {
 			return fmt.Errorf("terminal pane: failed to start session: %w", err)
 		}
 	}
 
 	t.sessions[instance.Title] = &terminalSession{
-		tmuxSession:  ts,
-		worktreePath: worktreePath,
+		tmuxSession: ts,
+		cwd:         cwd,
 	}
 
 	// Set the size

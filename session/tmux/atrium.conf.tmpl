@@ -1,0 +1,72 @@
+# Atrium managed tmux config. Regenerated on launch — do NOT edit.
+# To customize, set "tmux_config_override" in the config dir's config.json.
+#
+# Atrium runs its sessions on a dedicated tmux socket (tmux -L) started with this
+# file (-f), so the host ~/.tmux.conf is never sourced. Everything Atrium relies
+# on is therefore set explicitly below.
+#
+# This file is rendered from atrium.conf.tmpl at startup; the status-bar block is
+# included only when the session context bar is enabled (config session_context_bar).
+
+# Stable, human-readable window names (never auto-rename from the running program).
+set-option -g  allow-rename       off
+set-option -g  automatic-rename   off
+set-window-option -g automatic-rename off
+
+# Terminal (outer) title: identify the session as an Atrium one. Driven by the
+# @atrium_name user option Atrium pushes per session; falls back to the raw tmux
+# session name before the first metadata tick. This is independent of the in-pane
+# status bar below, so the tab still reads "Atrium · <name>" even with the bar off.
+set-option -g  set-titles         on
+set-option -g  set-titles-string  "Atrium · #{?@atrium_name,#{@atrium_name},#{session_name}}"
+
+# Scrollback + mouse (cs used to set these per-session after creation; now global).
+set-option -g  history-limit      10000
+set-option -g  mouse              on
+
+{{if .ContextBar -}}
+# In-session context as a single, minimal top header carrying session identity
+# (<glyph> <repo> · <name>), drawn at the very top so it stays clear of the agent's
+# own bottom footer. There is deliberately no bottom strip: the agent owns the pane
+# and draws directly under its own footer.
+#
+# Atrium owns all formatting/coloring: it pushes a fully-rendered string into
+# @atrium_left via set-option on each metadata tick, then refresh-client -S repaints.
+# status-interval 0 means tmux never refreshes on its own — Atrium drives every
+# update. The window list is blanked because each Atrium session is a single window,
+# and status-right is emptied so tmux's default clock never appears.
+#
+# status-style fills the whole row with the theme's elevated-surface color so the
+# header reads as a distinct band, not text floating over the agent's pane. The
+# @atrium_left markup only sets foregrounds, so #[default] resets back to this band
+# background, keeping the fill unbroken across every field.
+set-option -g  status              on
+set-option -g  status-position     top
+set-option -g  status-interval     0
+set-option -g  status-justify      left
+set-option -g  status-style        "bg={{.BarBg}},fg={{.BarFg}}"
+set-option -g  status-left-length  400
+set-option -g  status-right-length 0
+set-window-option -g window-status-format        ""
+set-window-option -g window-status-current-format ""
+set-option -g  status-left         " #{@atrium_left} "
+set-option -g  status-right        ""
+set-option -g  pane-border-status  off
+{{- else -}}
+# No status bar — each session is a single fullscreen pane and the agent draws its
+# own UI, so tmux chrome is pure noise (session_context_bar = false).
+set-option -g  status             off
+set-option -g  pane-border-status off
+{{- end}}
+
+# Color fidelity: cs captures pane content with -e (ANSI preserved) and re-renders
+# it, so the isolated server must advertise 256-color + truecolor passthrough.
+set-option -g  default-terminal   "tmux-256color"
+set-option -ga terminal-overrides ",*:Tc"
+
+# Predictable behavior regardless of host preferences.
+set-option -g  base-index         0
+set-window-option -g pane-base-index 0
+set-option -sg escape-time        10
+set-option -g  destroy-unattached off
+set-option -g  remain-on-exit     off

@@ -397,6 +397,7 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				r.instance.SetDiffStats(r.diffStats)
 			}
 		}
+		m.pushSessionContexts()
 		cmds := deliverReadyPrompts(msg.results)
 		cmds = append(cmds, tickUpdateMetadataCmd(m.snapshotActiveInstances(), m.list.GetSelectedInstance()))
 		return m, tea.Batch(cmds...)
@@ -494,6 +495,17 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.killTarget != nil && msg.killTarget.AttachKillRequested() {
 			return m, tea.Batch(tea.WindowSize(), m.confirmKill(msg.killTarget))
 		}
+		// A sibling-cycle key (Ctrl+PgUp/PgDn) detaches with a direction; re-attach the
+		// neighbouring session in the repo group, keeping cycling inside Atrium's model.
+		// killTarget is the session just detached (nil for the terminal tab, which has
+		// no cycle keys).
+		if msg.killTarget != nil {
+			if next := m.cycleTarget(msg.killTarget); next != nil {
+				m.list.SelectInstance(next)
+				m.pushOneContext(next)
+				return m, m.attachExec(next.Attach, next)
+			}
+		}
 		return m, tea.Batch(tea.WindowSize(), m.instanceChanged())
 	case infoMsg:
 		// An action requested a dismissible info modal (e.g. an actionable resume
@@ -547,7 +559,8 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// the list selection by now. The attach runs through tea.Exec, which hands
 			// the terminal to tmux and repaints on detach; post-detach handling — an
 			// in-session Ctrl+X kill request, keyed on msg.instance since the selection
-			// may have drifted — lands in the attachFinishedMsg handler.
+			// may have drifted, or a sibling-cycle request — lands in the
+			// attachFinishedMsg handler.
 			return m, m.attachExec(msg.instance.Attach, msg.instance)
 		}
 
@@ -752,9 +765,11 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		// fresh (debounced) search with the current branch filter.
 		if newPath := m.textInputOverlay.GetSelectedPath(); newPath != "" && newPath != m.newSessionPath {
 			m.newSessionPath = newPath
-			// Validate up front so the picker can flag a non-repo inline, rather than
-			// only rejecting it at submit after the user has filled in the prompt.
-			m.textInputOverlay.SetTargetValidity(git.IsGitRepo(newPath))
+			// Validate up front so the picker can flag the target inline, rather than
+			// only reacting at submit after the user has filled in the prompt. A non-git
+			// directory is valid — it becomes a direct session.
+			valid, direct := targetValidity(newPath)
+			m.textInputOverlay.SetTargetValidity(valid, direct)
 			version := m.textInputOverlay.InvalidateBranchSearch()
 			return m, m.scheduleBranchSearch(m.textInputOverlay.BranchFilter(), version)
 		}
@@ -932,18 +947,20 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 			return m, m.handleError(
 				fmt.Errorf("you can't create more than %d instances", GlobalInstanceLimit))
 		}
-		// Derive the contextual target repo before adding the new instance. The inline
-		// `n` flow has no directory picker, so if there is no repo context (e.g. cs was
-		// launched outside a repo with no sessions), guide the user to `N` instead of
-		// letting session creation fail later at worktree time.
+		// Derive the contextual target before adding the new instance. The inline `n`
+		// flow has no directory picker, so the target must already be a real directory
+		// (e.g. cs launched outside any directory leaves no context); guide the user to
+		// `N` otherwise. A non-git directory is fine — it becomes a direct session.
 		m.newSessionPath = m.defaultNewSessionPath()
-		if !git.IsGitRepo(m.newSessionPath) {
-			return m, m.handleError(fmt.Errorf("not in a git repository; press N to choose a project"))
+		valid, direct := targetValidity(m.newSessionPath)
+		if !valid {
+			return m, m.handleError(fmt.Errorf("no directory context; press N to choose a project"))
 		}
 		instance, err := session.NewInstance(session.InstanceOptions{
 			Title:   "",
 			Path:    m.newSessionPath,
 			Program: m.program,
+			Direct:  direct,
 		})
 		if err != nil {
 			return m, m.handleError(err)
@@ -958,7 +975,11 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		m.newInstance = instance
 		m.state = stateNew
 		m.menu.SetState(ui.StateNewInstance)
-		m.menu.SetNewInstanceHint(filepath.Base(m.newSessionPath))
+		hint := filepath.Base(m.newSessionPath)
+		if direct {
+			hint += " (direct)"
+		}
+		m.menu.SetNewInstanceHint(hint)
 		m.recomputeLayout() // the hint bar now claims a row; shrink the panes to fit
 
 		return m, nil
@@ -1046,6 +1067,11 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		if selected == nil || selected.GetStatus() == session.Loading {
 			return m, nil
 		}
+		// A direct (non-git) session has nothing to push. Fail fast rather than prompting
+		// for confirmation and only then erroring. (The menu also hides this action.)
+		if selected.IsDirect() {
+			return m, m.handleError(fmt.Errorf("push is not available for a direct (non-git) session"))
+		}
 
 		// Create the push action as a tea.Cmd
 		pushAction := func() tea.Msg {
@@ -1068,6 +1094,13 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		selected := m.list.GetSelectedInstance()
 		if selected == nil || selected.GetStatus() == session.Loading {
 			return m, nil
+		}
+
+		// A direct (non-git) session has no worktree to free and runs in the user's
+		// real directory, so pausing it would only detach a still-running agent.
+		// Warn instead of pausing. (The menu also hides this action for direct sessions.)
+		if selected.IsDirect() {
+			return m, m.handleError(fmt.Errorf("pause is not available for a direct (non-git) session; it runs in place with no worktree to free"))
 		}
 
 		// Checkout: commit changes and pause. The branch name is copied to the
@@ -1149,6 +1182,47 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		return m, m.attachExec(m.list.Attach, selected)
 	default:
 		return m, nil
+	}
+}
+
+// cycleTarget returns the sibling to re-attach when an in-session cycle key
+// (Ctrl+PgUp/PgDn) ended the attach, or nil for a normal detach. Cycling stays
+// inside Atrium's model — each hop is a real detach+attach, correctly sized via the
+// existing attach path. (A tmux switch-client would avoid the repaint but mis-sizes
+// panes here, since every session permanently holds its own pty client.)
+// SiblingInGroup returns attached itself when there is no other attachable sibling,
+// making a stray cycle key a harmless re-attach.
+func (m *home) cycleTarget(attached *session.Instance) *session.Instance {
+	switch attached.AttachExitReason() {
+	case tmux.DetachNext:
+		return m.list.SiblingInGroup(attached, +1)
+	case tmux.DetachPrev:
+		return m.list.SiblingInGroup(attached, -1)
+	}
+	return nil
+}
+
+// pushSessionContexts refreshes the in-session context bar for every live session.
+// SetContext caches per session, so an unchanged tick costs only string comparisons
+// rather than tmux subprocesses. No-op when the feature is disabled.
+func (m *home) pushSessionContexts() {
+	if !m.appConfig.GetSessionContextBar() {
+		return
+	}
+	for _, inst := range m.list.GetInstances() {
+		m.pushOneContext(inst)
+	}
+}
+
+// pushOneContext composes and pushes the context bar for a single session, skipping
+// sessions that have no live tmux pane to render it in (unstarted, paused, dead).
+func (m *home) pushOneContext(inst *session.Instance) {
+	if !m.appConfig.GetSessionContextBar() || !inst.Started() || inst.Paused() || !inst.TmuxAlive() {
+		return
+	}
+	name, left := ui.ComposeSessionContext(inst, ui.RepoKey(inst))
+	if err := inst.SetContext(name, left); err != nil {
+		log.WarningLog.Printf("failed to push session context for %q: %v", inst.Title, err)
 	}
 }
 
@@ -1658,9 +1732,10 @@ func (m *home) handleInfoState(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 // profile, branch, prompt) for the `N` flow.
 func (m *home) newSessionFormOverlay() *overlay.TextInputOverlay {
 	ov := overlay.NewSessionCreateOverlay(m.appConfig.GetProfiles(), m.candidateRepoPaths())
-	// Seed the initial validity so the picker can flag a non-repo default target
-	// (e.g. when cs was launched outside a git repo) before the user navigates.
-	ov.SetTargetValidity(git.IsGitRepo(m.newSessionPath))
+	// Seed the initial validity so the picker can flag the default target before the user
+	// navigates: a non-git default directory shows the direct-session hint, not a block.
+	valid, direct := targetValidity(m.newSessionPath)
+	ov.SetTargetValidity(valid, direct)
 	return ov
 }
 
@@ -1681,9 +1756,11 @@ func (m *home) createSessionFromForm(prompt string) tea.Cmd {
 	if path == "" {
 		path = m.newSessionPath
 	}
-	if !git.IsGitRepo(path) {
+	// A non-git directory becomes a direct session (agent runs in place, no worktree).
+	valid, direct := targetValidity(path)
+	if !valid {
 		ov.Submitted = false
-		return m.handleError(fmt.Errorf("%q is not a git repository", path))
+		return m.handleError(fmt.Errorf("%q is not a directory", path))
 	}
 
 	program := m.program
@@ -1695,6 +1772,7 @@ func (m *home) createSessionFromForm(prompt string) tea.Cmd {
 		Title:   title,
 		Path:    path,
 		Program: program,
+		Direct:  direct,
 	})
 	if err != nil {
 		ov.Submitted = false
@@ -1722,6 +1800,16 @@ func (m *home) createSessionFromForm(prompt string) tea.Cmd {
 		return instanceStartedMsg{instance: instance, err: err}
 	}
 	return tea.Batch(tea.WindowSize(), m.instanceChanged(), startCmd)
+}
+
+// targetValidity reports whether path is a usable new-session target and, if so,
+// whether it would be a direct (non-git) session. Both the inline (`n`) and form
+// (`N`) flows use it to drive the picker's inline hint and to set the Direct flag.
+func targetValidity(path string) (valid, direct bool) {
+	if !config.DirExists(path) {
+		return false, false
+	}
+	return true, !git.IsGitRepo(path)
 }
 
 // defaultNewSessionPath returns the contextual target repo for a new session: the
@@ -1758,7 +1846,7 @@ func (m *home) candidateRepoPaths() []string {
 	for _, p := range m.appState.GetRecentPaths() {
 		// Skip recent paths that no longer exist so deleted/moved repos don't clutter
 		// the picker or error only when selected.
-		if info, err := os.Stat(p); err != nil || !info.IsDir() {
+		if !config.DirExists(p) {
 			continue
 		}
 		add(p)
@@ -1821,12 +1909,17 @@ func (m *home) confirmKill(inst *session.Instance) tea.Cmd {
 		// base-repo-only predicate. This is a teardown path: if the worktree or its
 		// repo is unreachable — e.g. the user renamed/removed the project directory —
 		// fail open and proceed, otherwise an orphaned session can never be deleted.
-		if worktree, err := inst.GetGitWorktree(); err != nil {
-			log.WarningLog.Printf("kill %s: cannot resolve worktree, proceeding: %v", inst.Title, err)
-		} else if heldByBase, cerr := worktree.IsBranchHeldByBaseRepo(); cerr != nil {
-			log.WarningLog.Printf("kill %s: cannot verify branch checkout, proceeding: %v", inst.Title, cerr)
-		} else if heldByBase {
-			return fmt.Errorf("branch for %s is checked out in the main repo; switch it away before deleting", inst.DisplayName())
+		// A direct (non-git) session has no branch or worktree, so skip the base-repo
+		// branch check entirely — calling GetGitWorktree would only log a misleading
+		// "cannot resolve worktree" warning for a session that never had one.
+		if !inst.IsDirect() {
+			if worktree, err := inst.GetGitWorktree(); err != nil {
+				log.WarningLog.Printf("kill %s: cannot resolve worktree, proceeding: %v", inst.Title, err)
+			} else if heldByBase, cerr := worktree.IsBranchHeldByBaseRepo(); cerr != nil {
+				log.WarningLog.Printf("kill %s: cannot verify branch checkout, proceeding: %v", inst.Title, cerr)
+			} else if heldByBase {
+				return fmt.Errorf("branch for %s is checked out in the main repo; switch it away before deleting", inst.DisplayName())
+			}
 		}
 
 		// Clean up terminal session for this instance

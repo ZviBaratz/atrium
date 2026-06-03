@@ -103,6 +103,38 @@ func detectPrompt(program, region string) bool {
 	return false
 }
 
+// DetachReason explains why an Attach loop ended so the caller (app.go's
+// attachLoop) can decide whether to return to the list or re-attach a sibling. It
+// is set by the stdin interceptor just before Detach and read via AttachExitReason
+// after the attach channel closes — the close provides the happens-before, and the
+// write+close happen on the same goroutine, so no extra synchronization is needed.
+type DetachReason int
+
+const (
+	// DetachQuit is the default: a normal Ctrl+Q detach (or any non-nav exit).
+	DetachQuit DetachReason = iota
+	// DetachNext requests cycling to the next sibling session in the repo group.
+	DetachNext
+	// DetachPrev requests cycling to the previous sibling session in the repo group.
+	DetachPrev
+)
+
+// navReason maps a raw stdin chunk to a sibling-navigation detach reason. The keys
+// are Ctrl+PageUp (previous) and Ctrl+PageDown (next); their standard xterm
+// encodings are matched exactly so pasted content can't trigger an accidental jump.
+// Terminals that emit different sequences for these chords simply won't navigate —
+// that is the documented terminal-dependency caveat; log buf[:nr] to discover the
+// actual bytes before changing this.
+func navReason(b []byte) (DetachReason, bool) {
+	switch string(b) {
+	case "\x1b[5;5~": // Ctrl+PageUp
+		return DetachPrev, true
+	case "\x1b[6;5~": // Ctrl+PageDown
+		return DetachNext, true
+	}
+	return DetachQuit, false
+}
+
 // TmuxSession represents a managed tmux session
 type TmuxSession struct {
 	// mu guards sanitizedName/windowName against a deep Rename, which mutates them while
@@ -141,6 +173,17 @@ type TmuxSession struct {
 	//
 	// Channel to be closed at the very end of detaching. Used to signal callers.
 	attachCh chan struct{}
+	// detachReason records why the current attach ended (normal Ctrl+Q vs a
+	// sibling-navigation request). Reset at Attach, set by the stdin interceptor
+	// before Detach, read via AttachExitReason once attachCh has closed.
+	detachReason DetachReason
+
+	// ctx{Name,Left} cache the last context-bar payload pushed via SetContext so an
+	// unchanged metadata tick skips the tmux subprocess. ctxSet guards the first push
+	// (when both are still the empty string). Accessed only from the main update
+	// loop, like the other Set* paths.
+	ctxName, ctxLeft string
+	ctxSet           bool
 	// While attached, we use some goroutines to manage the window size and stdin/stdout. This stuff
 	// is used to terminate them on Detach. We don't want them to outlive the attached window.
 	ctx    context.Context
@@ -516,13 +559,16 @@ func (t *TmuxSession) HasUpdated() (updated bool, hasPrompt bool) {
 }
 
 // attachInputAction is the outcome of classifying a chunk of attach stdin: keep
-// forwarding it to the pty, detach, or detach-and-request-kill.
+// forwarding it to the pty, detach, detach-and-request-kill, or detach to cycle to
+// the next/previous sibling session.
 type attachInputAction int
 
 const (
 	attachForward attachInputAction = iota
 	attachDetach
 	attachKill
+	attachNext
+	attachPrev
 )
 
 // Control bytes intercepted while attached.
@@ -548,6 +594,14 @@ func classifyAttachInput(in []byte, allowKill bool) attachInputAction {
 			}
 		}
 	}
+	// Sibling navigation (Ctrl+PageUp/PageDown) arrives as a multi-byte escape
+	// sequence, so it is matched separately from the single-byte control keys.
+	switch reason, ok := navReason(in); {
+	case ok && reason == DetachNext:
+		return attachNext
+	case ok && reason == DetachPrev:
+		return attachPrev
+	}
 	return attachForward
 }
 
@@ -558,6 +612,7 @@ func classifyAttachInput(in []byte, allowKill bool) attachInputAction {
 func (t *TmuxSession) Attach(allowKill bool) (chan struct{}, error) {
 	t.attachCh = make(chan struct{})
 	t.killRequested = false
+	t.detachReason = DetachQuit
 
 	t.wg = &sync.WaitGroup{}
 	t.wg.Add(1)
@@ -625,12 +680,21 @@ func (t *TmuxSession) Attach(allowKill bool) (chan struct{}, error) {
 
 			switch classifyAttachInput(buf[:nr], allowKill) {
 			case attachDetach:
+				t.detachReason = DetachQuit
 				t.Detach()
 				return
 			case attachKill:
 				// Detach and request a kill; the caller reads KillRequested after
 				// the attach returns and runs the teardown confirmation.
 				t.killRequested = true
+				t.Detach()
+				return
+			case attachNext:
+				t.detachReason = DetachNext
+				t.Detach()
+				return
+			case attachPrev:
+				t.detachReason = DetachPrev
 				t.Detach()
 				return
 			default:
@@ -651,6 +715,12 @@ func (t *TmuxSession) Attach(allowKill bool) (chan struct{}, error) {
 // pressing the in-session kill key (Ctrl+X). It is reset at the start of Attach.
 func (t *TmuxSession) KillRequested() bool {
 	return t.killRequested
+}
+
+// AttachExitReason reports why the most recent attach ended. It is meaningful only
+// after the attach channel returned by Attach has closed.
+func (t *TmuxSession) AttachExitReason() DetachReason {
+	return t.detachReason
 }
 
 // DetachSafely disconnects from the current tmux session without panicking

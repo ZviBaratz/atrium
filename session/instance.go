@@ -6,6 +6,7 @@ import (
 	"github.com/ZviBaratz/atrium/session/tmux"
 	"path/filepath"
 
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -14,6 +15,11 @@ import (
 
 	"github.com/atotto/clipboard"
 )
+
+// ErrNoWorktree is returned by GetGitWorktree for a direct (non-git) session, which has
+// no worktree. Callers that need git use it to fall through to their error path instead
+// of dereferencing a nil worktree.
+var ErrNoWorktree = errors.New("not available for a direct (non-git) session")
 
 type Status int
 
@@ -73,6 +79,12 @@ type Instance struct {
 	// The session always gets its own branch; baseBranch only chooses the start point.
 	baseBranch string
 
+	// direct marks a "direct session": one whose Path is not a git repository. Such a
+	// session has no worktree (gitWorktree stays nil), no branch, and no diff — its agent
+	// runs directly in Path. Set at construction (NewInstance) or restore (FromInstanceData)
+	// and never changes afterwards, so it is read without the lock.
+	direct bool
+
 	// mu guards the live-state fields below (status, started, tmuxSession, gitWorktree),
 	// which the background Start() goroutine writes while the metadata-poll goroutines and
 	// the UI thread read them. Always access these through the locked accessors
@@ -104,6 +116,7 @@ func (i *Instance) ToInstanceData() InstanceData {
 		UpdatedAt:   time.Now(),
 		Program:     i.Program,
 		AutoYes:     i.AutoYes,
+		Direct:      i.direct,
 	}
 
 	// Only include worktree data if gitWorktree is initialized
@@ -148,7 +161,14 @@ func FromInstanceData(data InstanceData) (*Instance, error) {
 		CreatedAt:   data.CreatedAt,
 		UpdatedAt:   data.UpdatedAt,
 		Program:     data.Program,
-		gitWorktree: git.NewGitWorktreeFromStorage(
+		direct:      data.Direct,
+	}
+
+	// A direct session has no worktree or diff. For a git session, rehydrate both from
+	// storage. Restore direct first so every downstream path (Start(false),
+	// recoverInPlace) sees the nil worktree and stays on the direct branch.
+	if !data.Direct {
+		instance.gitWorktree = git.NewGitWorktreeFromStorage(
 			data.Worktree.RepoPath,
 			data.Worktree.WorktreePath,
 			data.Worktree.SessionName,
@@ -156,8 +176,8 @@ func FromInstanceData(data InstanceData) (*Instance, error) {
 			data.Worktree.BaseCommitSHA,
 			data.Worktree.BaseRef,
 			data.Worktree.IsExistingBranch,
-		),
-		diffStats: &git.DiffStats{
+		)
+		instance.diffStats = &git.DiffStats{
 			Added:        data.DiffStats.Added,
 			Removed:      data.DiffStats.Removed,
 			Content:      data.DiffStats.Content,
@@ -165,7 +185,7 @@ func FromInstanceData(data InstanceData) (*Instance, error) {
 			Commits:      data.DiffStats.Commits,
 			Behind:       data.DiffStats.Behind,
 			Dirty:        data.DiffStats.Dirty,
-		},
+		}
 	}
 
 	if instance.Paused() {
@@ -215,7 +235,20 @@ func FromInstanceData(data InstanceData) (*Instance, error) {
 func (i *Instance) recoverInPlace() {
 	i.started = true
 
-	valid, err := i.gitWorktree.IsValidWorktree()
+	wt := i.worktree()
+	if wt == nil {
+		// Direct session: no worktree to validate. Restart the agent in the real
+		// directory; on failure leave it Paused so the user can Resume later.
+		if err := i.tmuxSession.StartContinue(i.Path); err != nil {
+			log.ErrorLog.Printf("failed to restart direct session %s in place, leaving paused: %v", i.Title, err)
+			i.SetStatus(Paused)
+			return
+		}
+		i.SetStatus(Running)
+		return
+	}
+
+	valid, err := wt.IsValidWorktree()
 	if err != nil {
 		log.ErrorLog.Printf("failed to validate worktree for %s, leaving paused: %v", i.Title, err)
 	}
@@ -224,7 +257,7 @@ func (i *Instance) recoverInPlace() {
 		return
 	}
 
-	if err := i.tmuxSession.StartContinue(i.gitWorktree.GetWorktreePath()); err != nil {
+	if err := i.tmuxSession.StartContinue(wt.GetWorktreePath()); err != nil {
 		log.ErrorLog.Printf("failed to restart session %s in place, leaving paused: %v", i.Title, err)
 		i.SetStatus(Paused)
 		return
@@ -240,12 +273,15 @@ func (i *Instance) recoverInPlace() {
 func (i *Instance) recreateSession() error {
 	ts := i.tmux()
 	wt := i.worktree()
-	if err := ts.StartContinue(wt.GetWorktreePath()); err != nil {
+	if err := ts.StartContinue(i.WorkingDir()); err != nil {
 		log.ErrorLog.Print(err)
-		// Cleanup git worktree if tmux session creation fails.
-		if cleanupErr := wt.Cleanup(); cleanupErr != nil {
-			err = fmt.Errorf("%w (cleanup error: %w)", err, cleanupErr)
-			log.ErrorLog.Print(err)
+		// Cleanup git worktree if tmux session creation fails. A direct session has no
+		// worktree (wt == nil) and nothing to clean up.
+		if wt != nil {
+			if cleanupErr := wt.Cleanup(); cleanupErr != nil {
+				err = fmt.Errorf("%w (cleanup error: %w)", err, cleanupErr)
+				log.ErrorLog.Print(err)
+			}
 		}
 		return fmt.Errorf("failed to start new session: %w", err)
 	}
@@ -264,6 +300,9 @@ type InstanceOptions struct {
 	AutoYes bool
 	// Branch is an existing branch name to start the session on (empty = new branch from HEAD)
 	Branch string
+	// Direct creates a direct (non-git) session: the agent runs in Path with no worktree,
+	// branch, or diff. Set when Path is not a git repository.
+	Direct bool
 }
 
 func NewInstance(opts InstanceOptions) (*Instance, error) {
@@ -286,6 +325,7 @@ func NewInstance(opts InstanceOptions) (*Instance, error) {
 		UpdatedAt:  t,
 		AutoYes:    false,
 		baseBranch: opts.Branch,
+		direct:     opts.Direct,
 	}, nil
 }
 
@@ -293,7 +333,12 @@ func (i *Instance) RepoName() (string, error) {
 	if !i.isStarted() {
 		return "", fmt.Errorf("cannot get repo name for instance that has not been started")
 	}
-	return i.worktree().GetRepoName(), nil
+	wt := i.worktree()
+	if wt == nil {
+		// Direct session: no git repo. Group it by its directory name.
+		return filepath.Base(i.Path), nil
+	}
+	return wt.GetRepoName(), nil
 }
 
 // SetPath sets the repo path for a not-yet-started instance, resolving it to an
@@ -349,6 +394,22 @@ func (i *Instance) worktree() *git.GitWorktree {
 	return i.gitWorktree
 }
 
+// IsDirect reports whether this is a direct (non-git) session: one whose Path is not a
+// git repository, so it has no worktree, branch, or diff and its agent runs in Path.
+func (i *Instance) IsDirect() bool {
+	return i.direct
+}
+
+// WorkingDir is the directory the agent's tmux session runs in: the isolated worktree
+// path for a git session, or Path itself for a direct session (no worktree). The UI
+// (e.g. the terminal pane) uses it to host shells in the same cwd as the agent.
+func (i *Instance) WorkingDir() string {
+	if wt := i.worktree(); wt != nil {
+		return wt.GetWorktreePath()
+	}
+	return i.Path
+}
+
 // SetBaseBranch sets the existing branch the session branch will be based on when the
 // instance starts. The session still gets its own branch; this only sets the start point.
 func (i *Instance) SetBaseBranch(branch string) {
@@ -373,7 +434,7 @@ func (i *Instance) Start(firstTimeSetup bool) error {
 	i.tmuxSession = tmuxSession
 	i.mu.Unlock()
 
-	if firstTimeSetup {
+	if firstTimeSetup && !i.direct {
 		// The session always gets its own branch. baseBranch (if set) only chooses the start
 		// point it branches off, so i.Branch is the session branch in both cases.
 		var gitWorktree *git.GitWorktree
@@ -415,17 +476,22 @@ func (i *Instance) Start(firstTimeSetup bool) error {
 		}
 	} else {
 		// Setup git worktree first. wt is the worktree this goroutine just stored above.
+		// For a direct session wt is nil: there is nothing to set up, and tmux runs in Path.
 		wt := i.worktree()
-		if err := wt.Setup(); err != nil {
-			setupErr = fmt.Errorf("failed to setup git worktree: %w", err)
-			return setupErr
+		if wt != nil {
+			if err := wt.Setup(); err != nil {
+				setupErr = fmt.Errorf("failed to setup git worktree: %w", err)
+				return setupErr
+			}
 		}
 
 		// Create new session
-		if err := tmuxSession.Start(wt.GetWorktreePath()); err != nil {
+		if err := tmuxSession.Start(i.WorkingDir()); err != nil {
 			// Cleanup git worktree if tmux session creation fails
-			if cleanupErr := wt.Cleanup(); cleanupErr != nil {
-				err = fmt.Errorf("%w (cleanup error: %w)", err, cleanupErr)
+			if wt != nil {
+				if cleanupErr := wt.Cleanup(); cleanupErr != nil {
+					err = fmt.Errorf("%w (cleanup error: %w)", err, cleanupErr)
+				}
 			}
 			setupErr = fmt.Errorf("failed to start new session: %w", err)
 			return setupErr
@@ -571,6 +637,29 @@ func (i *Instance) AttachKillRequested() bool {
 	return ts != nil && ts.KillRequested()
 }
 
+// AttachExitReason reports why the most recent Attach ended (a normal detach vs a
+// request to cycle to the next/previous sibling session). Meaningful only after the
+// channel returned by Attach has closed. A not-yet-started instance never attaches,
+// so it reports the default DetachQuit.
+func (i *Instance) AttachExitReason() tmux.DetachReason {
+	ts := i.tmux()
+	if ts == nil {
+		return tmux.DetachQuit
+	}
+	return ts.AttachExitReason()
+}
+
+// SetContext pushes the in-session context-bar strings to the instance's tmux
+// session (see tmux.SetContext). It is a no-op for an instance with no live tmux
+// session, since there is nothing to render a bar in.
+func (i *Instance) SetContext(name, left string) error {
+	ts := i.tmux()
+	if ts == nil {
+		return nil
+	}
+	return ts.SetContext(name, left)
+}
+
 func (i *Instance) SetPreviewSize(width, height int) error {
 	if !i.isStarted() || i.Paused() {
 		return fmt.Errorf("cannot set preview size for instance that has not been started or " +
@@ -584,7 +673,13 @@ func (i *Instance) GetGitWorktree() (*git.GitWorktree, error) {
 	if !i.isStarted() {
 		return nil, fmt.Errorf("cannot get git worktree for instance that has not been started")
 	}
-	return i.worktree(), nil
+	wt := i.worktree()
+	if wt == nil {
+		// Direct session: no worktree. Return an error so git-dependent callers take
+		// their error path instead of dereferencing nil.
+		return nil, ErrNoWorktree
+	}
+	return wt, nil
 }
 
 // GetWorktreePath returns the worktree path for the instance, or empty string if unavailable
@@ -647,16 +742,19 @@ func (i *Instance) Rename(newTitle string) error {
 
 	// 2. Rename the git branch + move the worktree. On failure (incl. its own internal
 	// rollback of a half-done branch rename), roll the tmux session back to its old name.
-	if err := wt.Rename(newTitle); err != nil {
-		if rbErr := ts.Rename(oldTitle); rbErr != nil {
-			log.ErrorLog.Printf("failed to roll back tmux rename %q->%q: %v", newTitle, oldTitle, rbErr)
+	// A direct session has no worktree, so only the tmux rename (step 1) applies.
+	if wt != nil {
+		if err := wt.Rename(newTitle); err != nil {
+			if rbErr := ts.Rename(oldTitle); rbErr != nil {
+				log.ErrorLog.Printf("failed to roll back tmux rename %q->%q: %v", newTitle, oldTitle, rbErr)
+			}
+			return fmt.Errorf("failed to rename git worktree: %w", err)
 		}
-		return fmt.Errorf("failed to rename git worktree: %w", err)
+		i.Branch = wt.GetBranchName()
 	}
 
 	// 3. Adopt the corrected identity.
 	i.Title = newTitle
-	i.Branch = wt.GetBranchName()
 	return nil
 }
 
@@ -689,7 +787,15 @@ func (i *Instance) TmuxAlive() bool {
 
 // Pause stops the tmux session and removes the worktree, preserving the branch.
 // It copies the branch name to the clipboard so the user can check it out elsewhere.
+//
+// A direct (non-git) session has no worktree to free and runs in the user's real
+// directory, so "pausing" it would only detach a still-running agent while the UI
+// claims it is parked — misleading. Pause therefore refuses a direct session. (A
+// direct session whose pane actually dies is still parked via RecoverLostSession.)
 func (i *Instance) Pause() error {
+	if i.direct {
+		return fmt.Errorf("cannot pause a direct (non-git) session: it runs in place with no worktree to free")
+	}
 	return i.pause(true)
 }
 
@@ -713,6 +819,20 @@ func (i *Instance) pause(copyBranchToClipboard bool) error {
 
 	ts := i.tmux()
 	wt := i.worktree()
+
+	// Direct session: no worktree to commit/remove. User-initiated Pause is refused
+	// for direct sessions (see Pause), so this branch is only reached via
+	// RecoverLostSession when the pane has died — park it so the poll loop stops and
+	// the user can Resume, without ever touching the user's real directory.
+	if wt == nil {
+		if err := ts.DetachSafely(); err != nil {
+			log.ErrorLog.Print(err)
+			i.SetStatus(Paused)
+			return fmt.Errorf("failed to detach tmux session: %w", err)
+		}
+		i.SetStatus(Paused)
+		return nil
+	}
 
 	var errs []error
 
@@ -808,6 +928,26 @@ func (i *Instance) Resume() error {
 	ts := i.tmux()
 	wt := i.worktree()
 
+	// Direct session: no worktree to recreate. Reattach to the still-running tmux
+	// session (or recreate it in the real directory if it died).
+	if wt == nil {
+		if ts.DoesSessionExist() {
+			if err := ts.Restore(); err != nil {
+				log.ErrorLog.Print(err)
+				if closeErr := ts.Close(); closeErr != nil {
+					log.ErrorLog.Printf("failed to close stale session %s: %v", i.Title, closeErr)
+				}
+				if err := i.recreateSession(); err != nil {
+					return err
+				}
+			}
+		} else if err := i.recreateSession(); err != nil {
+			return err
+		}
+		i.SetStatus(Running)
+		return nil
+	}
+
 	// Check if branch is checked out elsewhere (base repo or a sibling worktree).
 	// Naming the holding path makes the error actionable and lets the app layer
 	// offer to detach the base repo automatically.
@@ -862,7 +1002,14 @@ func (i *Instance) UpdateDiffStats() error {
 		return nil
 	}
 
-	stats := i.worktree().Diff()
+	wt := i.worktree()
+	if wt == nil {
+		// Direct session: no worktree, so no diff to compute.
+		i.diffStats = nil
+		return nil
+	}
+
+	stats := wt.Diff()
 	if stats.Error != nil {
 		if strings.Contains(stats.Error.Error(), "base commit SHA not set") {
 			// Worktree is not fully set up yet, not an error

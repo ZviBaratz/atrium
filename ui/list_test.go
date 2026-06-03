@@ -40,6 +40,28 @@ func TestRender_GitContextCluster(t *testing.T) {
 	require.Contains(t, out, "⇡2", "commit count should still render")
 }
 
+// A direct (non-git) session has no branch, so rendering the git line would leave a
+// dangling branch glyph with no name. The row must instead show a dim "direct" marker —
+// consistent with the diff pane, menu, and picker hint.
+func TestRender_DirectSessionShowsMarkerNotBranchGlyph(t *testing.T) {
+	t.Cleanup(theme.Set("unicode"))
+	s := spinner.New()
+	r := &InstanceRenderer{spinner: &s}
+	r.setWidth(80)
+	g := theme.Current().Glyphs
+
+	gitInst, err := session.NewInstance(session.InstanceOptions{Title: "g", Path: ".", Program: "echo"})
+	require.NoError(t, err)
+	require.Contains(t, r.Render(gitInst, 1, false), g.Branch,
+		"a git session row carries the branch glyph")
+
+	directInst, err := session.NewInstance(session.InstanceOptions{Title: "d", Path: ".", Program: "echo", Direct: true})
+	require.NoError(t, err)
+	row := r.Render(directInst, 1, false)
+	require.Contains(t, row, "direct", "a direct session row shows the direct marker")
+	require.NotContains(t, row, g.Branch, "a direct session row must not render a dangling branch glyph")
+}
+
 func newTestList(titles ...string) *List {
 	s := spinner.New()
 	l := NewList(&s, false)
