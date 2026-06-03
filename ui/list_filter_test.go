@@ -15,7 +15,7 @@ import (
 func newFilterList(t *testing.T, titles ...string) (*List, []*session.Instance) {
 	t.Helper()
 	s := spinner.New()
-	l := NewList(&s, false)
+	l := NewList(&s)
 	insts := make([]*session.Instance, 0, len(titles))
 	for _, title := range titles {
 		inst, err := session.NewInstance(session.InstanceOptions{Title: title, Path: "/tmp/repoA", Program: "echo"})
@@ -109,7 +109,7 @@ func TestFilter_NavigationSkipsNonMatching(t *testing.T) {
 func newMultiRepoList(t *testing.T) *List {
 	t.Helper()
 	s := spinner.New()
-	l := NewList(&s, false)
+	l := NewList(&s)
 	for _, spec := range []struct{ title, path string }{
 		{"alpha", "/tmp/repoA"},
 		{"apex", "/tmp/repoA"},

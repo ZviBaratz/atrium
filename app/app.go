@@ -221,7 +221,7 @@ func newHome(ctx context.Context, program string, autoYes bool) *home {
 		appState:     appState,
 		listRatio:    appState.GetListRatio(),
 	}
-	h.list = ui.NewList(&h.spinner, autoYes)
+	h.list = ui.NewList(&h.spinner)
 
 	// Load saved instances
 	instances, err := storage.LoadInstances()

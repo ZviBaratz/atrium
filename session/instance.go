@@ -303,8 +303,6 @@ type InstanceOptions struct {
 	Path string
 	// Program is the program to run in the instance (e.g. "claude", "aider --model ollama_chat/gemma3:1b")
 	Program string
-	// AutoYes enables the daemon to automatically accept prompts for this instance.
-	AutoYes bool
 	// Branch is an existing branch name to start the session on (empty = new branch from HEAD)
 	Branch string
 	// Direct creates a direct (non-git) session: the agent runs in Path with no worktree,
@@ -332,7 +330,6 @@ func NewInstance(opts InstanceOptions) (*Instance, error) {
 		Width:      0,
 		CreatedAt:  t,
 		UpdatedAt:  t,
-		AutoYes:    false,
 		baseBranch: opts.Branch,
 		direct:     opts.Direct,
 	}, nil

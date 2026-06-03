@@ -147,7 +147,6 @@ type List struct {
 	selectedIdx   int
 	height, width int
 	renderer      *InstanceRenderer
-	autoyes       bool
 	// collapsed records which repo groups are folded, keyed by repoKey. It is a pure
 	// display/navigation flag — never authoritative over membership or order, which stay
 	// derived from items. All reads go through effectiveCollapsed so the "only meaningful
@@ -163,12 +162,11 @@ type List struct {
 	filterActive bool
 }
 
-// NewList returns an empty List; autoYes only affects how rows are rendered.
-func NewList(spinner *spinner.Model, autoYes bool) *List {
+// NewList returns an empty List.
+func NewList(spinner *spinner.Model) *List {
 	return &List{
 		items:     []*session.Instance{},
 		renderer:  &InstanceRenderer{spinner: spinner},
-		autoyes:   autoYes,
 		collapsed: map[string]bool{},
 	}
 }

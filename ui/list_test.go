@@ -68,7 +68,7 @@ func TestRender_DirectSessionShowsMarkerNotBranchGlyph(t *testing.T) {
 
 func newTestList(titles ...string) *List {
 	s := spinner.New()
-	l := NewList(&s, false)
+	l := NewList(&s)
 	for _, t := range titles {
 		inst, _ := session.NewInstance(session.InstanceOptions{
 			Title:   t,

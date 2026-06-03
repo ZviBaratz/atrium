@@ -77,7 +77,7 @@ func TestListGolden(t *testing.T) {
 	t.Cleanup(func() { lipgloss.SetColorProfile(prof) })
 
 	s := spinner.New()
-	l := NewList(&s, false)
+	l := NewList(&s)
 	mk := func(title, branch string, st session.Status, stats *git.DiffStats) {
 		inst := instWithStatus(t, title, st)
 		inst.Branch = branch

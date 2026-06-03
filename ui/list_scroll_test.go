@@ -16,7 +16,7 @@ func scrollList(t *testing.T, n, width, height int) *List {
 	t.Helper()
 	t.Cleanup(theme.Set("unicode"))
 	s := spinner.New()
-	l := NewList(&s, false)
+	l := NewList(&s)
 	for i := 0; i < n; i++ {
 		inst, err := session.NewInstance(session.InstanceOptions{
 			Title: fmt.Sprintf("sess-%02d", i), Path: ".", Program: "echo",

@@ -12,7 +12,7 @@ import (
 func newRenameTestHome(t *testing.T) (*home, []*session.Instance) {
 	t.Helper()
 	spin := spinner.New(spinner.WithSpinner(spinner.MiniDot))
-	list := ui.NewList(&spin, false)
+	list := ui.NewList(&spin)
 
 	a, err := session.NewInstance(session.InstanceOptions{Title: "alpha", Path: ".", Program: "echo"})
 	require.NoError(t, err)

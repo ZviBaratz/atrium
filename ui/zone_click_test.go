@@ -38,7 +38,7 @@ func waitZone(t *testing.T, render func() string, id string) *zone.ZoneInfo {
 // test does not hard-code the panel layout.
 func TestListInstanceAtZone(t *testing.T) {
 	s := spinner.New()
-	l := NewList(&s, false)
+	l := NewList(&s)
 	a := instWithStatus(t, "alpha", session.Ready)
 	b := instWithStatus(t, "bravo", session.Ready)
 	l.AddInstance(a)()

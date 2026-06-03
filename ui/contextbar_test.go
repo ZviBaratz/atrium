@@ -21,7 +21,7 @@ func mkInst(t *testing.T, title, path string) *session.Instance {
 // all-rejected group) yields the input unchanged so an in-session jump is a no-op.
 func TestSiblingInGroup_RingWalk(t *testing.T) {
 	s := spinner.New()
-	l := NewList(&s, false)
+	l := NewList(&s)
 	a := mkInst(t, "a", "/tmp/repoA")
 	b := mkInst(t, "b", "/tmp/repoA")
 	c := mkInst(t, "c", "/tmp/repoA")

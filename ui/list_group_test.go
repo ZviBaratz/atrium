@@ -24,7 +24,7 @@ func repoKeys(l *List) []string {
 func newGroupList(t *testing.T, paths ...string) *List {
 	t.Helper()
 	s := spinner.New()
-	l := NewList(&s, false)
+	l := NewList(&s)
 	for _, p := range paths {
 		inst, err := session.NewInstance(session.InstanceOptions{Title: "x", Path: p, Program: "echo"})
 		require.NoError(t, err)

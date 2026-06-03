@@ -89,7 +89,6 @@ func makeStartedInstance(t *testing.T, title string) *session.Instance {
 		Title:   sessionName,
 		Path:    workdir,
 		Program: "bash",
-		AutoYes: false,
 	})
 	require.NoError(t, err)
 

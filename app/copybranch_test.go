@@ -44,7 +44,7 @@ func withFakeClipboard(t *testing.T, retErr error) *fakeClipboard {
 func newCopyBranchHome(t *testing.T, instances ...*session.Instance) *home {
 	t.Helper()
 	s := spinner.New()
-	l := ui.NewList(&s, false)
+	l := ui.NewList(&s)
 	for _, inst := range instances {
 		l.AddInstance(inst)
 	}

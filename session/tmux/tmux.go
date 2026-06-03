@@ -1,7 +1,7 @@
 // Package tmux wraps a real tmux server on Atrium's dedicated socket. Each
 // session runs its agent program in a pty; Poll captures pane content and
-// classifies it into a PaneState (working, prompt, idle). All tmux subprocesses
-// go through cmd.Executor so tests can fake them.
+// classifies it into a PaneState (unknown, working, prompt, idle). All tmux
+// subprocesses go through cmd.Executor so tests can fake them.
 package tmux
 
 import (
