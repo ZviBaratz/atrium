@@ -219,6 +219,32 @@ func TestRender_SessionAge(t *testing.T) {
 	require.Contains(t, out, "2d", "2-day-old session should show '2d'")
 }
 
+// A direct (non-git) session carries the same right-aligned age label as a git
+// session: CreatedAt is just as meaningful without a worktree. Fresh (< 1 min)
+// direct sessions stay unlabeled, like their git counterparts.
+func TestRender_SessionAge_Direct(t *testing.T) {
+	t.Cleanup(theme.Set("unicode"))
+	s := spinner.New()
+	r := &InstanceRenderer{spinner: &s}
+	r.setWidth(80)
+
+	inst, err := session.NewInstance(session.InstanceOptions{Title: "d", Path: ".", Program: "echo", Direct: true})
+	require.NoError(t, err)
+
+	ageToken := regexp.MustCompile(`\d+[mhd]\b`)
+
+	// Brand-new direct session → no age label.
+	out := r.Render(inst, 0, false)
+	require.NotRegexp(t, ageToken, out, "fresh direct session should not show age")
+
+	// Simulate a 3-hour-old direct session: the label renders alongside the
+	// direct marker.
+	inst.CreatedAt = time.Now().Add(-3 * time.Hour)
+	out = r.Render(inst, 0, false)
+	require.Contains(t, out, "3h", "3-hour-old direct session should show '3h'")
+	require.Contains(t, out, "direct", "the direct marker must survive the age label")
+}
+
 // TestRender_SessionAgeBudget locks in the headline width property: the age
 // label steals horizontal budget from the branch (the only variable-length
 // part) so the rendered line still fits the width exactly. A regression here is
@@ -253,4 +279,19 @@ func TestRender_SessionAgeBudget(t *testing.T) {
 	withAge := r.Render(inst, 0, false)
 	require.Contains(t, withAge, "3h", "age label should render")
 	require.LessOrEqual(t, lineWidth(withAge), width, "row must still fit width once the age label is added")
+
+	// Direct (non-git) mode: the fixed marker is the only left-hand content, so
+	// the age steals budget from it instead of a branch. The row must still fit
+	// exactly — including at a width narrower than the marker itself.
+	direct, err := session.NewInstance(session.InstanceOptions{Title: "d", Path: ".", Program: "echo", Direct: true})
+	require.NoError(t, err)
+	direct.CreatedAt = time.Now().Add(-3 * time.Hour)
+	directRow := r.Render(direct, 0, false)
+	require.Contains(t, directRow, "3h", "direct-mode age label should render")
+	require.LessOrEqual(t, lineWidth(directRow), width, "direct row must fit width with the age label")
+
+	const narrow = 12 // narrower than the "direct · no git isolation" marker
+	r.setWidth(narrow)
+	require.LessOrEqual(t, lineWidth(r.Render(direct, 0, false)), narrow,
+		"direct row must fit even when the marker itself must truncate")
 }

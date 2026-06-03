@@ -155,8 +155,10 @@ func (i *Instance) ToInstanceData() InstanceData {
 	return data
 }
 
-// FromInstanceData creates a new Instance from serialized data
-func FromInstanceData(data InstanceData) (*Instance, error) {
+// FromInstanceData creates a new Instance from serialized data. branchPrefix is the
+// configured session-branch prefix, supplied by the caller so bulk restores (see
+// Storage.LoadInstances) load config once instead of once per instance.
+func FromInstanceData(data InstanceData, branchPrefix string) (*Instance, error) {
 	instance := &Instance{
 		Title:       data.Title,
 		displayName: data.DisplayName,
@@ -183,6 +185,7 @@ func FromInstanceData(data InstanceData) (*Instance, error) {
 			data.Worktree.BaseCommitSHA,
 			data.Worktree.BaseRef,
 			data.Worktree.IsExistingBranch,
+			branchPrefix,
 		)
 		instance.diffStats = &git.DiffStats{
 			Added:        data.DiffStats.Added,

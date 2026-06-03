@@ -79,7 +79,7 @@ func TestRecoverInPlace_OrphanedWorktreeDegradesToPaused(t *testing.T) {
 	wt := git.NewGitWorktreeFromStorage(
 		filepath.Join(t.TempDir(), "repo"),
 		filepath.Join(t.TempDir(), "gone"),
-		"sess", "session/sess", "", "main", false)
+		"sess", "session/sess", "", "main", false, "session/")
 	pty := &recordingPtyFactory{}
 	ts := tmux.NewTmuxSessionWithDeps("sess", "claude", pty, deadExec())
 	inst := &Instance{Title: "sess", status: Running, gitWorktree: wt, tmuxSession: ts}
@@ -177,7 +177,7 @@ func TestResume_BranchCheckedOutReturnsTypedError(t *testing.T) {
 
 	wt := git.NewGitWorktreeFromStorage(
 		repoPath, filepath.Join(t.TempDir(), "wt"),
-		"sess", "session/sess", "", "main", true)
+		"sess", "session/sess", "", "main", true, "session/")
 	inst := &Instance{Title: "sess", status: Paused, started: true, gitWorktree: wt}
 
 	err := inst.Resume()
