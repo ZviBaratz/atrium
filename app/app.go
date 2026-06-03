@@ -466,6 +466,19 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.textInputOverlay.SetBranchResults(msg.branches, msg.version)
 		}
 		return m, nil
+	case targetValidityDebounceMsg:
+		// Debounce timer fired — only check if this is still the current target.
+		if m.textInputOverlay == nil || msg.path != m.newSessionPath {
+			return m, nil
+		}
+		return m, m.runValidityCheck(msg.path)
+	case targetValidityResultMsg:
+		// Apply only if the result is for the still-current target, so a stale check
+		// (the user has navigated on) can't clobber the indicator.
+		if m.textInputOverlay != nil && msg.path == m.newSessionPath {
+			m.textInputOverlay.SetTargetValidity(msg.valid)
+		}
+		return m, nil
 	case tea.KeyMsg:
 		return m.handleKeyPress(msg)
 	case tea.WindowSizeMsg:
@@ -752,11 +765,15 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		// fresh (debounced) search with the current branch filter.
 		if newPath := m.textInputOverlay.GetSelectedPath(); newPath != "" && newPath != m.newSessionPath {
 			m.newSessionPath = newPath
-			// Validate up front so the picker can flag a non-repo inline, rather than
-			// only rejecting it at submit after the user has filled in the prompt.
-			m.textInputOverlay.SetTargetValidity(git.IsGitRepo(newPath))
+			// Re-scope the branch search and (debounced, off the hot path) re-check whether
+			// the new target is a git repo. The validity check is async because filesystem
+			// browsing changes the selected path almost every keystroke, and a synchronous
+			// git subprocess per keystroke would stutter the UI.
 			version := m.textInputOverlay.InvalidateBranchSearch()
-			return m, m.scheduleBranchSearch(m.textInputOverlay.BranchFilter(), version)
+			return m, tea.Batch(
+				m.scheduleBranchSearch(m.textInputOverlay.BranchFilter(), version),
+				m.scheduleValidityCheck(newPath),
+			)
 		}
 
 		// Schedule a debounced branch search if the filter changed
@@ -1314,6 +1331,37 @@ func (m *home) scheduleBranchSearch(filter string, version uint64) tea.Cmd {
 	return func() tea.Msg {
 		time.Sleep(branchSearchDebounce)
 		return branchSearchDebounceMsg{filter: filter, version: version}
+	}
+}
+
+// targetValidityDebounceMsg fires after the debounce interval to trigger an async
+// git-repo check of the chosen target path.
+type targetValidityDebounceMsg struct {
+	path string
+}
+
+// targetValidityResultMsg carries the git-repo check result back to Update, keyed by
+// the path it was computed for so a stale result (the user has since moved on) is dropped.
+type targetValidityResultMsg struct {
+	path  string
+	valid bool
+}
+
+// scheduleValidityCheck returns a debounced tea.Cmd mirroring scheduleBranchSearch: it
+// sleeps, then asks for an async git-repo check. Debouncing keeps the synchronous
+// git.IsGitRepo subprocess off the keystroke hot path while the user types/browses a path.
+func (m *home) scheduleValidityCheck(path string) tea.Cmd {
+	return func() tea.Msg {
+		time.Sleep(branchSearchDebounce)
+		return targetValidityDebounceMsg{path: path}
+	}
+}
+
+// runValidityCheck returns a tea.Cmd that runs git.IsGitRepo in the background and reports
+// the result tagged with the path it was computed for.
+func (m *home) runValidityCheck(path string) tea.Cmd {
+	return func() tea.Msg {
+		return targetValidityResultMsg{path: path, valid: git.IsGitRepo(path)}
 	}
 }
 

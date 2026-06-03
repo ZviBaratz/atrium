@@ -56,12 +56,15 @@ func TestDirectoryPicker_FilterMatchesCandidates(t *testing.T) {
 func TestDirectoryPicker_FreeTextPathEntry(t *testing.T) {
 	dp := NewDirectoryPicker([]string{"/home/me/repoA"})
 
-	// A filter that looks like a path is offered as a selectable entry, resolved to abs.
-	for _, r := range "/tmp/elsewhere" {
+	// A filter that looks like a path to a not-yet-existing location is offered as a
+	// selectable entry, resolved to abs. Use an empty temp dir so no on-disk sibling
+	// can fuzzy-match and steal the selection.
+	root := t.TempDir()
+	target := filepath.Join(root, "elsewhere")
+	for _, r := range target {
 		dp.HandleKeyPress(runes(string(r)))
 	}
-	abs, _ := filepath.Abs("/tmp/elsewhere")
-	assert.Equal(t, abs, dp.GetSelectedPath())
+	assert.Equal(t, target, dp.GetSelectedPath())
 }
 
 func TestDirectoryPicker_RelativePathExpandsToAbs(t *testing.T) {

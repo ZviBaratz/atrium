@@ -672,6 +672,50 @@ func TestConfirmActionSurfacesActionResult(t *testing.T) {
 	assert.Equal(t, wantErr, err)
 }
 
+// TestTargetValidityResultUpdatesIndicator verifies the async validity result, when it
+// is for the still-current target, flips the picker's inline "(not a git repo)" hint.
+func TestTargetValidityResultUpdatesIndicator(t *testing.T) {
+	const repo = "/some/repo"
+	ov := overlay.NewSessionCreateOverlay(nil, []string{repo})
+	ov.SetSize(80, 24)
+	h := &home{
+		ctx:              context.Background(),
+		state:            statePrompt,
+		appConfig:        config.DefaultConfig(),
+		textInputOverlay: ov,
+		newSessionPath:   repo,
+	}
+
+	_, _ = h.Update(targetValidityResultMsg{path: repo, valid: false})
+	assert.Contains(t, ov.Render(), "not a git repo", "an invalid result shows the hint")
+
+	_, _ = h.Update(targetValidityResultMsg{path: repo, valid: true})
+	assert.NotContains(t, ov.Render(), "not a git repo", "a valid result clears the hint")
+}
+
+// TestTargetValidityResultDropsStalePath verifies a result for a path the user has
+// already navigated away from is ignored, so it can't clobber the current indicator.
+func TestTargetValidityResultDropsStalePath(t *testing.T) {
+	const repo = "/some/repo"
+	ov := overlay.NewSessionCreateOverlay(nil, []string{repo})
+	ov.SetSize(80, 24)
+	h := &home{
+		ctx:              context.Background(),
+		state:            statePrompt,
+		appConfig:        config.DefaultConfig(),
+		textInputOverlay: ov,
+		newSessionPath:   repo,
+	}
+
+	// Establish the current target as invalid.
+	_, _ = h.Update(targetValidityResultMsg{path: repo, valid: false})
+	require.Contains(t, ov.Render(), "not a git repo")
+
+	// A late result for a DIFFERENT (stale) path must not flip the indicator.
+	_, _ = h.Update(targetValidityResultMsg{path: "/elsewhere", valid: true})
+	assert.Contains(t, ov.Render(), "not a git repo", "stale-path result is ignored")
+}
+
 // TestConfirmActionCancelDoesNotRun verifies cancelling never executes the action.
 func TestConfirmActionCancelDoesNotRun(t *testing.T) {
 	h := &home{
