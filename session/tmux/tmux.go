@@ -336,7 +336,10 @@ const (
 	footerChromeLines = 3
 )
 
-func toClaudeSquadTmuxName(str string) string {
+// toSanitizedName converts an instance title into the managed tmux session name:
+// whitespace stripped, dots replaced (tmux would do it anyway), and the active
+// brand prefix (see Prefix) applied. It produces the value held in Session.sanitizedName.
+func toSanitizedName(str string) string {
 	str = whiteSpaceRegex.ReplaceAllString(str, "")
 	str = strings.ReplaceAll(str, ".", "_") // tmux replaces all . with _
 	return fmt.Sprintf("%s%s", Prefix(), str)
@@ -354,7 +357,7 @@ func NewSessionWithDeps(name string, program string, ptyFactory PtyFactory, cmdE
 
 func newSession(name string, program string, ptyFactory PtyFactory, cmdExec cmd.Executor) *Session {
 	return &Session{
-		sanitizedName: toClaudeSquadTmuxName(name),
+		sanitizedName: toSanitizedName(name),
 		windowName:    name,
 		program:       program,
 		ptyFactory:    ptyFactory,

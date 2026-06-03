@@ -520,7 +520,7 @@ func TestTmuxCommandInjectsIsolationFlags(t *testing.T) {
 	require.Equal(t, "-t=foo", cmd.Args[len(cmd.Args)-1])
 }
 
-func TestStartTmuxSession(t *testing.T) {
+func TestStartSession(t *testing.T) {
 	ptyFactory := NewMockPtyFactory(t)
 
 	created := false
@@ -595,7 +595,7 @@ func TestContinueProgram(t *testing.T) {
 	}
 }
 
-// startMockExec mirrors TestStartTmuxSession's executor: the first has-session check
+// startMockExec mirrors TestStartSession's executor: the first has-session check
 // reports "not found" so start's entry guard passes, and every later check succeeds so
 // the poll loop sees the session and breaks.
 func startMockExec() cmd_test.MockCmdExec {

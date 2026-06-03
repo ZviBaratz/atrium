@@ -12,7 +12,7 @@ import (
 // otherwise read as a "lost session". If the session isn't live (e.g. paused after a
 // reboot) it updates the cached names only, so a later restore targets the new name.
 func (t *Session) Rename(newName string) error {
-	newSanitized := toClaudeSquadTmuxName(newName)
+	newSanitized := toSanitizedName(newName)
 
 	t.mu.Lock()
 	defer t.mu.Unlock()

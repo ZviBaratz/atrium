@@ -27,7 +27,7 @@ func directTmux(name string) *tmux.Session {
 
 // TestNewInstance_DirectFlag verifies a direct session is born with no worktree, no
 // branch, and IsDirect() true, and that WorkingDir() resolves to Path (the cwd the tmux
-// session runs in — the actual -c wiring is covered by tmux.TestStartTmuxSession).
+// session runs in — the actual -c wiring is covered by tmux.TestStartSession).
 func TestNewInstance_DirectFlag(t *testing.T) {
 	dir := t.TempDir()
 	inst, err := NewInstance(InstanceOptions{Title: "t", Path: dir, Program: "echo", Direct: true})
