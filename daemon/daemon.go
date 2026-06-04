@@ -31,7 +31,7 @@ func RunDaemon(ctx context.Context, cfg *config.Config) error {
 
 	instances, err := storage.LoadInstances(ctx)
 	if err != nil {
-		return fmt.Errorf("failed to load instacnes: %w", err)
+		return fmt.Errorf("failed to load instances: %w", err)
 	}
 	for _, instance := range instances {
 		// Assume AutoYes is true if the daemon is running.
