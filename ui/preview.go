@@ -93,7 +93,7 @@ func (p *PreviewPane) setFallbackState(message string) {
 func (p *PreviewPane) UpdateContent(instance *session.Instance) error {
 	switch {
 	case instance == nil:
-		p.setFallbackState("No agents running yet. Spin up a new instance with 'n' to get started!")
+		p.setFallbackState("No agents running yet. Spin up a new session with 'n' to get started!")
 		return nil
 	case instance.Paused():
 		// A direct (non-git) session has no branch to check out — show a plain resume hint.

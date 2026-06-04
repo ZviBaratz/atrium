@@ -53,7 +53,7 @@ func (e *ErrBox) String() string {
 	lines := strings.Split(err, "\n")
 	err = strings.Join(lines, "//")
 	if runewidth.StringWidth(err) > e.width-3 && e.width-3 >= 0 {
-		err = runewidth.Truncate(err, e.width-3, "...")
+		err = runewidth.Truncate(err, e.width-3, "…")
 	}
 	return lipgloss.Place(e.width, e.height, lipgloss.Center, lipgloss.Center, theme.Current().DangerStyle().Render(err))
 }

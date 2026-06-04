@@ -994,7 +994,7 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 	case keys.KeyPrompt:
 		if m.list.NumInstances() >= GlobalInstanceLimit {
 			return m, m.handleError(
-				fmt.Errorf("you can't create more than %d instances", GlobalInstanceLimit))
+				fmt.Errorf("you can't create more than %d sessions", GlobalInstanceLimit))
 		}
 
 		// Open the unified new-session form immediately. The session itself is not created
@@ -1019,7 +1019,7 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 	case keys.KeyNew:
 		if m.list.NumInstances() >= GlobalInstanceLimit {
 			return m, m.handleError(
-				fmt.Errorf("you can't create more than %d instances", GlobalInstanceLimit))
+				fmt.Errorf("you can't create more than %d sessions", GlobalInstanceLimit))
 		}
 		// Derive the contextual target before adding the new instance. The inline `n`
 		// flow has no directory picker, so the target must already be a real directory
