@@ -32,13 +32,11 @@ func TestArrowKeys_CollapseAndExpandGroup(t *testing.T) {
 
 	// ← from a non-anchor member folds the whole group.
 	h.list.SetSelectedInstance(1)
-	h.keySent = true // skip the menu-highlight pre-pass (see handleMenuHighlighting)
 	press(t, h, tea.KeyMsg{Type: tea.KeyLeft})
 	require.Equal(t, []string{"repoA"}, h.list.CollapsedRepos())
 	require.Equal(t, []string{"repoA"}, h.appState.GetCollapsedRepos(), "fold set is persisted")
 
 	// → on the collapsed header unfolds it.
-	h.keySent = true
 	press(t, h, tea.KeyMsg{Type: tea.KeyRight})
 	require.Empty(t, h.list.CollapsedRepos())
 	require.Empty(t, h.appState.GetCollapsedRepos(), "persisted fold set is cleared")

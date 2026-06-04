@@ -92,6 +92,11 @@ type Config struct {
 	// feature stays enabled for config files written before it existed. Setting
 	// it false restores the chrome-free fullscreen pane (tmux status off).
 	SessionContextBar *bool `json:"session_context_bar,omitempty"`
+	// HintBar, when true, keeps a one-line key-hint bar at the bottom of the
+	// screen during plain navigation. nil means use the default (on). Setting it
+	// false restores the chrome-free interface, where the bar appears only for
+	// inline interactions that need it (naming, filtering, progress).
+	HintBar *bool `json:"hint_bar,omitempty"`
 }
 
 // GetSessionContextBar reports whether attached sessions should render the
@@ -99,6 +104,12 @@ type Config struct {
 // file with no such key) defaults to on, mirroring GetAutoAttach.
 func (c *Config) GetSessionContextBar() bool {
 	return c.SessionContextBar == nil || *c.SessionContextBar
+}
+
+// GetHintBar reports whether the always-on bottom hint bar is enabled. A nil
+// HintBar (e.g. an older config file with no such key) defaults to on.
+func (c *Config) GetHintBar() bool {
+	return c.HintBar == nil || *c.HintBar
 }
 
 // GetAutoAttach reports whether new sessions should auto-attach on creation.
@@ -160,12 +171,14 @@ func DefaultConfig() *Config {
 	autoAttach := true
 	killDoubleTap := true
 	sessionContextBar := true
+	hintBar := true
 	return &Config{
 		DefaultProgram:     program,
 		AutoYes:            false,
 		DaemonPollInterval: 1000,
 		Theme:              "tokyo-night",
 		SessionContextBar:  &sessionContextBar,
+		HintBar:            &hintBar,
 		BranchPrefix: func() string {
 			user, err := user.Current()
 			if err != nil || user == nil || user.Username == "" {

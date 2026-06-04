@@ -188,6 +188,11 @@ type List struct {
 	// filterActive is true while the user is actively typing the filter (stateFilter in
 	// app.go). It controls the cursor indicator in the filter bar.
 	filterActive bool
+
+	// hideEmptyHint suppresses the centered first-run hint in an empty list. Set
+	// when the always-on bottom hint bar is enabled, whose hints supersede it —
+	// without the bar (hint_bar off) the in-list hint is the only affordance left.
+	hideEmptyHint bool
 }
 
 // NewList returns an empty List.
@@ -197,6 +202,13 @@ func NewList(spinner *spinner.Model) *List {
 		renderer:  &InstanceRenderer{spinner: spinner},
 		collapsed: map[string]bool{},
 	}
+}
+
+// SetShowEmptyHint controls whether an empty list renders its centered
+// first-run hint ("n new · ? keys"). The app disables it when the always-on
+// bottom hint bar already carries those keys.
+func (l *List) SetShowEmptyHint(show bool) {
+	l.hideEmptyHint = !show
 }
 
 // SetFilter updates the incremental filter query and clamps the selection to the
@@ -578,7 +590,9 @@ func (l *List) String() string {
 	// here — a fresh user (or one who dismissed the welcome) is never stranded on a
 	// silent screen. Pressing `n` makes the list non-empty and the contextual bar takes
 	// over. Guard on filterActive too: an empty-query filter still shows its bar above.
-	if len(l.items) == 0 && !filtering && !l.filterActive {
+	// hideEmptyHint (set when the always-on bottom hint bar is enabled) suppresses
+	// this so first-run guidance isn't shown twice.
+	if len(l.items) == 0 && !filtering && !l.filterActive && !l.hideEmptyHint {
 		th := theme.Current()
 		// Kept terse so it never clips: the list panel is only ~30% of the terminal
 		// width, so a longer "new session / all keys" phrasing truncates on normal and

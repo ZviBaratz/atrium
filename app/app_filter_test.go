@@ -37,13 +37,10 @@ func press(t *testing.T, h *home, msg tea.KeyMsg) {
 	require.True(t, ok)
 }
 
-// enterFilter presses '/' from the default state. Global-map keys take two passes there: the
-// first highlights the menu entry and re-sends the key, the second actually handles it (see
-// handleMenuHighlighting). Keys typed *within* filter mode skip that, so they need only one press.
+// enterFilter presses '/' from the default state.
 func enterFilter(t *testing.T, h *home) {
 	t.Helper()
-	press(t, h, runeKey("/")) // highlight pass (re-sends the key)
-	press(t, h, runeKey("/")) // actual KeyFilter handling
+	press(t, h, runeKey("/"))
 	require.Equal(t, stateFilter, h.state, "precondition: entered filter mode")
 }
 

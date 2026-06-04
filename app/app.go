@@ -138,9 +138,6 @@ type home struct {
 	// branch search and is applied to the instance before Start.
 	newSessionPath string
 
-	// keySent is used to manage underlining menu items
-	keySent bool
-
 	// welcomeChecked guards the one-time first-launch welcome so it is only
 	// attempted once per process (its seen-bit handles persistence across runs).
 	welcomeChecked bool
@@ -238,6 +235,9 @@ func newHome(ctx context.Context, program string, autoYes bool) *home {
 		listRatio:    appState.GetListRatio(),
 	}
 	h.list = ui.NewList(&h.spinner)
+	// With the always-on hint bar enabled, the bar already carries the first-run
+	// keys; suppress the list's centered empty hint so guidance isn't duplicated.
+	h.list.SetShowEmptyHint(!appConfig.GetHintBar())
 
 	// Load saved instances
 	instances, err := storage.LoadInstances(ctx)
@@ -314,12 +314,13 @@ func (m *home) updateHandleWindowSizeEvent(msg tea.WindowSizeMsg) {
 	m.menu.SetSize(msg.Width, menuHeight)
 }
 
-// menuVisible reports whether the hint bar should occupy a row. The bar is the
-// sole, non-duplicated chrome only for inline interactions: stateNew shows the
-// submit cue and the target repo, stateFilter has no other key hints, and a
-// background name generation reports its progress there. Modal overlays
-// (prompt/rename/confirm/help/info) render their own instructions, so the bar
-// behind them would be a redundant strip; plain navigation stays clean.
+// menuVisible reports whether the hint bar should occupy a row. Inline
+// interactions always get it (stateNew shows the submit cue and target repo,
+// stateFilter its accept/clear cue, and a background name generation its
+// progress). Modal overlays (prompt/rename/confirm/help/info) render their own
+// instructions, so the bar behind them would be a redundant strip. Plain
+// navigation shows the always-on hint line unless the user turned it off
+// (hint_bar in config.json), which restores the chrome-free interface.
 func (m *home) menuVisible() bool {
 	switch m.state {
 	case stateNew, stateFilter:
@@ -327,7 +328,7 @@ func (m *home) menuVisible() bool {
 	case statePrompt, stateRename, stateConfirm, stateHelp, stateInfo:
 		return false
 	default: // stateDefault (and the empty list)
-		return m.generatingName
+		return m.generatingName || m.appConfig.GetHintBar()
 	}
 }
 
@@ -385,9 +386,6 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return previewTickMsg{}
 			},
 		)
-	case keyupMsg:
-		m.menu.ClearKeydown()
-		return m, nil
 	case autoNameDoneMsg:
 		m.generatingName = false
 		if msg.err != nil {
@@ -647,46 +645,7 @@ func (m *home) handleQuit() (tea.Model, tea.Cmd) {
 	return m, tea.Quit
 }
 
-func (m *home) handleMenuHighlighting(msg tea.KeyMsg) (cmd tea.Cmd, returnEarly bool) {
-	// Handle menu highlighting when you press a button. We intercept it here and immediately return to
-	// update the ui while re-sending the keypress. Then, on the next call to this, we actually handle the keypress.
-	if m.keySent {
-		m.keySent = false
-		return nil, false
-	}
-	if m.state == statePrompt || m.state == stateHelp || m.state == stateConfirm || m.state == stateRename || m.state == stateFilter || m.state == stateInfo {
-		return nil, false
-	}
-	// If it's in the global keymap, we should try to highlight it.
-	name, ok := keys.GlobalKeyStringsMap[msg.String()]
-	if !ok {
-		return nil, false
-	}
-
-	if m.list.GetSelectedInstance() != nil && m.list.GetSelectedInstance().Paused() && name == keys.KeyEnter {
-		return nil, false
-	}
-	if name == keys.KeyShiftDown || name == keys.KeyShiftUp {
-		return nil, false
-	}
-
-	// Skip the menu highlighting if the key is not in the map or we are using the shift up and down keys.
-	// TODO: cleanup: when you press enter on stateNew, we use keys.KeySubmitName. We should unify the keymap.
-	if name == keys.KeyEnter && m.state == stateNew {
-		name = keys.KeySubmitName
-	}
-	m.keySent = true
-	return tea.Batch(
-		func() tea.Msg { return msg },
-		m.keydownCallback(name)), true
-}
-
 func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
-	cmd, returnEarly := m.handleMenuHighlighting(msg)
-	if returnEarly {
-		return m, cmd
-	}
-
 	// Ctrl+L forces a full repaint. The alt-screen renderer updates incrementally and
 	// never erases lines, so it desyncs (leaving accumulating ghost rows) if the terminal
 	// ever renders a line wider than measured — e.g. a font lacking a combined emoji glyph.
@@ -1113,7 +1072,7 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		m.list.SetFilter("")
 		m.list.SetFilterActive(true)
 		m.state = stateFilter
-		m.menu.SetState(ui.StatePrompt)
+		m.menu.SetState(ui.StateFilter)
 		m.recomputeLayout() // the hint bar now claims a row; shrink the panes to fit
 		return m, m.instanceChanged()
 	case keys.KeyRename:
@@ -1444,21 +1403,6 @@ func (m *home) markSeenAfterDwell(now time.Time) {
 		return
 	}
 	sel.MarkSeen()
-}
-
-type keyupMsg struct{}
-
-// keydownCallback clears the menu option highlighting after 500ms.
-func (m *home) keydownCallback(name keys.KeyName) tea.Cmd {
-	m.menu.Keydown(name)
-	return func() tea.Msg {
-		select {
-		case <-m.ctx.Done():
-		case <-time.After(500 * time.Millisecond):
-		}
-
-		return keyupMsg{}
-	}
 }
 
 // hideErrMsg implements tea.Msg and clears the error text from the screen.

@@ -11,10 +11,11 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// menuVisible is the single source of truth for whether the contextual hint bar
-// claims a row. It must be true only for the inline interactions the bar uniquely
-// serves (new/filter, and a background name generation), and false during plain
-// navigation and behind self-documenting overlays (prompt/rename/confirm/help).
+// menuVisible is the single source of truth for whether the hint bar claims a
+// row. With the default config the bar is always on during plain navigation;
+// inline interactions (new/filter, background name generation) always get it;
+// self-documenting overlays (prompt/rename/confirm/help) never do. Turning
+// hint_bar off restores the contextual-only behavior for plain navigation.
 func TestMenuVisible_ByState(t *testing.T) {
 	h := newCreateFormHome(t)
 
@@ -24,7 +25,7 @@ func TestMenuVisible_ByState(t *testing.T) {
 		generating bool
 		want       bool
 	}{
-		{"default navigation is clean", stateDefault, false, false},
+		{"default navigation shows the hint bar", stateDefault, false, true},
 		{"default + background name gen shows progress", stateDefault, true, true},
 		{"inline new session", stateNew, false, true},
 		{"inline filter", stateFilter, false, true},
@@ -38,11 +39,24 @@ func TestMenuVisible_ByState(t *testing.T) {
 		h.generatingName = c.generating
 		require.Equalf(t, c.want, h.menuVisible(), "%s", c.name)
 	}
+
+	// hint_bar off: plain navigation goes chrome-free again, but a background
+	// name generation still claims the row, and inline interactions keep theirs.
+	off := false
+	h.appConfig.HintBar = &off
+	h.state = stateDefault
+	h.generatingName = false
+	require.False(t, h.menuVisible(), "hint_bar=false restores clean navigation")
+	h.generatingName = true
+	require.True(t, h.menuVisible(), "name-gen progress still claims its row with the bar off")
+	h.generatingName = false
+	h.state = stateFilter
+	require.True(t, h.menuVisible(), "the filter cue is independent of hint_bar")
 }
 
-// The composed View must carry the hint bar exactly when menuVisible says so. We
-// key the assertions on " │ " (the menu's group separator, present whenever the
-// multi-option bar renders) and "submit name" (the bar's cue while naming inline).
+// The composed View must carry the hint bar exactly when menuVisible says so.
+// "kill" appears only in the bar's default hint line, so it keys the
+// presence/absence assertions; "submit name" keys the inline naming cue.
 func TestView_HintBarContextual(t *testing.T) {
 	h := newCreateFormHome(t)
 	inst, err := session.NewInstance(session.InstanceOptions{Title: "a", Path: t.TempDir(), Program: "echo"})
@@ -50,11 +64,20 @@ func TestView_HintBarContextual(t *testing.T) {
 	h.list.AddInstance(inst)()
 	h.list.SelectInstance(inst)
 
-	// Plain navigation with a selected session: no bottom bar.
+	// Plain navigation with a selected session: the always-on bar is present.
 	h.state = stateDefault
 	h.menu.SetState(ui.StateDefault)
+	h.menu.SetInstance(inst)
 	h.updateHandleWindowSizeEvent(tea.WindowSizeMsg{Width: 120, Height: 30})
-	require.NotContains(t, h.View(), " │ ", "default navigation must not render the hint bar")
+	require.Contains(t, h.View(), "kill", "default navigation renders the hint bar")
+
+	// hint_bar off: plain navigation goes chrome-free.
+	off := false
+	h.appConfig.HintBar = &off
+	h.updateHandleWindowSizeEvent(tea.WindowSizeMsg{Width: 120, Height: 30})
+	require.NotContains(t, h.View(), "kill", "hint_bar=false must not render the bar")
+	on := true
+	h.appConfig.HintBar = &on
 
 	// Inline new-session: the bar appears with the submit cue.
 	h.newInstance = inst
@@ -94,13 +117,26 @@ func TestWelcome_MarkedSeenOnStart(t *testing.T) {
 	require.NotZero(t, h.appState.GetHelpScreensSeen()&flag, "a successful start must mark the welcome seen")
 }
 
-// Sanity: the empty-state hint that replaces the removed always-on bar must not
-// leak into the composed app view as bottom chrome — it lives inside the list panel.
-func TestView_EmptyStateHasNoBottomBar(t *testing.T) {
-	h := newCreateFormHome(t) // no instances
+// First-run guidance must come from exactly one surface: the bottom bar when it
+// is on (the list's centered hint is suppressed), the centered in-list hint when
+// the bar is off. "keys" appears only in the in-list hint; "quit" only in the
+// bar's empty-state line. Both homes mirror newHome's SetShowEmptyHint wiring.
+func TestView_EmptyStateGuidanceSingleSurface(t *testing.T) {
+	h := newCreateFormHome(t) // no instances; default config (bar on)
+	h.list.SetShowEmptyHint(!h.appConfig.GetHintBar())
 	h.state = stateDefault
 	h.updateHandleWindowSizeEvent(tea.WindowSizeMsg{Width: 120, Height: 30})
 	view := h.View()
-	require.Contains(t, view, "keys", "empty list surfaces the inline onboarding hint")
-	require.False(t, strings.Contains(view, " │ "), "empty navigation must not render the hint bar")
+	require.Contains(t, view, "quit", "the bar carries the empty-state keys")
+	require.False(t, strings.Contains(view, "keys"), "the in-list hint is suppressed while the bar is on")
+
+	off := false
+	h2 := newCreateFormHome(t)
+	h2.appConfig.HintBar = &off
+	h2.list.SetShowEmptyHint(!h2.appConfig.GetHintBar())
+	h2.state = stateDefault
+	h2.updateHandleWindowSizeEvent(tea.WindowSizeMsg{Width: 120, Height: 30})
+	view2 := h2.View()
+	require.Contains(t, view2, "keys", "with the bar off, the in-list hint is the onboarding surface")
+	require.False(t, strings.Contains(view2, "quit"), "no bottom bar with hint_bar=false")
 }

@@ -55,8 +55,6 @@ func TestKeyPrompt_OpensCreateFormWithoutAddingRow(t *testing.T) {
 	h := newCreateFormHome(t)
 	before := h.list.NumInstances()
 
-	// keySent=true skips the menu-highlight pre-pass so the keypress is processed directly.
-	h.keySent = true
 	h.handleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("N")})
 
 	assert.Equal(t, statePrompt, h.state)
@@ -117,7 +115,6 @@ func TestCreateSessionFromForm_EmptyTitleKeepsFormOpen(t *testing.T) {
 // Canceling the create form (Esc) creates nothing and returns to the default state.
 func TestCreateForm_CancelCreatesNothing(t *testing.T) {
 	h := newCreateFormHome(t)
-	h.keySent = true
 	h.handleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("N")})
 	require.Equal(t, statePrompt, h.state)
 	before := h.list.NumInstances()

@@ -20,26 +20,48 @@ func TestMenu_NewInstanceHintShownOnlyWhileNaming(t *testing.T) {
 	require.NotContains(t, m.String(), "myrepo")
 }
 
-// TestMenu_DirectSessionHidesPushAndPause verifies a direct (non-git) session's menu
-// omits both push (no branch to push) and checkout/pause (no worktree to free), while a
-// git session still offers both.
-func TestMenu_DirectSessionHidesPushAndPause(t *testing.T) {
-	mk := func(direct bool) string {
-		inst, err := session.NewInstance(session.InstanceOptions{
-			Title: "t", Path: t.TempDir(), Program: "echo", Direct: direct,
-		})
-		require.NoError(t, err)
-		m := NewMenu()
-		m.SetSize(200, 3)
-		m.SetInstance(inst)
-		return m.String()
+// The default bar is a short, fixed line of high-value keys — a reminder that
+// keys exist (with ? as the door to the full list), not a reference card.
+func TestMenu_DefaultHintLine(t *testing.T) {
+	inst, err := session.NewInstance(session.InstanceOptions{Title: "t", Path: t.TempDir(), Program: "echo"})
+	require.NoError(t, err)
+	m := NewMenu()
+	m.SetSize(200, 3)
+	m.SetInstance(inst)
+
+	out := m.String()
+	for _, want := range []string{"open", "new", "send", "kill", "help"} {
+		require.Contains(t, out, want)
 	}
+	require.NotContains(t, out, "scroll", "the scroll hint is reserved for the scrolling tabs")
 
-	git := mk(false)
-	require.Contains(t, git, "push", "a git session offers push")
-	require.Contains(t, git, "checkout", "a git session offers checkout/pause")
+	// The diff/terminal tabs add the scroll hint.
+	m.SetActiveTab(DiffTab)
+	require.Contains(t, m.String(), "scroll")
+	m.SetActiveTab(PreviewTab)
+	require.NotContains(t, m.String(), "scroll")
+}
 
-	direct := mk(true)
-	require.NotContains(t, direct, "push", "a direct session must not offer push")
-	require.NotContains(t, direct, "checkout", "a direct session must not offer checkout/pause")
+// With no sessions, the bar surfaces the create/help/quit keys instead.
+func TestMenu_EmptyHintLine(t *testing.T) {
+	m := NewMenu()
+	m.SetSize(200, 3)
+	m.SetInstance(nil)
+
+	out := m.String()
+	for _, want := range []string{"new", "help", "quit"} {
+		require.Contains(t, out, want)
+	}
+	require.NotContains(t, out, "kill", "no session to kill in the empty state")
+}
+
+// The filter state shows its own accept/clear cue.
+func TestMenu_FilterHintLine(t *testing.T) {
+	m := NewMenu()
+	m.SetSize(200, 3)
+	m.SetState(StateFilter)
+
+	out := m.String()
+	require.Contains(t, out, "accept")
+	require.Contains(t, out, "clear")
 }

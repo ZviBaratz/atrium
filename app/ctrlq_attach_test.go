@@ -65,7 +65,6 @@ func TestCtrlQ_InStateNew_DoesNotSubmitName(t *testing.T) {
 
 	h.state = stateNew
 	h.newInstance = inst
-	h.keySent = true // skip the menu-highlight pre-pass, process the key directly
 
 	h.handleKeyPress(tea.KeyMsg{Type: tea.KeyCtrlQ})
 

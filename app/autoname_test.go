@@ -109,7 +109,6 @@ func TestRename_AppliesToTargetNotMovedSelection(t *testing.T) {
 func TestKeyAutoName_NoOpWhileGenerating(t *testing.T) {
 	h := newAutoNameHome(t, "a")
 	h.generatingName = true
-	h.keySent = true // bypass the two-phase menu-highlight pass
 
 	_, cmd := h.handleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("A")})
 
@@ -121,7 +120,6 @@ func TestKeyAutoName_NoOpWhileGenerating(t *testing.T) {
 // Pressing A on a selectable session starts a background generation and shows the hint.
 func TestKeyAutoName_StartsGeneration(t *testing.T) {
 	h := newAutoNameHome(t, "a")
-	h.keySent = true // bypass the two-phase menu-highlight pass
 
 	_, cmd := h.handleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("A")})
 
