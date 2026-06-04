@@ -1184,7 +1184,7 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		}
 
 		// Show confirmation modal
-		message := fmt.Sprintf("[!] Push changes from session '%s'?", selected.DisplayName())
+		message := fmt.Sprintf("Push changes from session '%s'?", selected.DisplayName())
 		return m, m.confirmAction(message, pushAction)
 	case keys.KeyCheckout:
 		selected := m.list.GetSelectedInstance()
@@ -1851,16 +1851,27 @@ func tickUpdateMetadataCmd(active []*session.Instance, selected *session.Instanc
 	}
 }
 
-// handleError handles all errors which get bubbled up to the app. sets the error message. We return a callback tea.Cmd that returns a hideErrMsg message
-// which clears the error message after 3 seconds.
+// errToastDuration is how long the transient error box stays before auto-hiding.
+const errToastDuration = 5 * time.Second
+
+// handleError surfaces an error in the UI. Short, single-line errors get the
+// transient bottom toast (auto-hidden after errToastDuration). An error that the
+// toast cannot actually convey — multi-line, or wider than the error box can
+// show (e.g. a failed push's git output) — is routed to the persistent info
+// modal instead, but only from stateDefault: in any overlay state (e.g. a form
+// validation error) switching to stateInfo would clobber the open overlay, so
+// those always use the toast.
 func (m *home) handleError(err error) tea.Cmd {
+	if m.state == stateDefault && !m.errBox.Fits(err) {
+		return m.showInfo(err.Error()) // showInfo logs the message itself
+	}
 	log.ErrorLog.Printf("%v", err)
 	m.errBox.SetError(err)
 	m.recomputeLayout() // give the error its row; panes shrink by one
 	return func() tea.Msg {
 		select {
 		case <-m.ctx.Done():
-		case <-time.After(3 * time.Second):
+		case <-time.After(errToastDuration):
 		}
 
 		return hideErrMsg{}
@@ -1900,7 +1911,7 @@ func (m *home) resumeSelected(selected *session.Instance) tea.Cmd {
 		return m.showInfo(err.Error())
 	}
 
-	message := fmt.Sprintf("[!] Branch '%s' is checked out in the main repo. Detach it and resume?", wt.GetBranchName())
+	message := fmt.Sprintf("Branch '%s' is checked out in the main repo. Detach it and resume?", wt.GetBranchName())
 	action := func() tea.Msg {
 		if derr := wt.DetachBranchInBaseRepo(); derr != nil {
 			// e.g. the dirty-repo refusal — show it in a modal the user can read.
@@ -2152,11 +2163,15 @@ func (m *home) confirmKill(inst *session.Instance) tea.Cmd {
 		return instanceChangedMsg{}
 	}
 
-	message := fmt.Sprintf("[!] Kill session '%s'?", inst.DisplayName())
+	message := fmt.Sprintf("Kill session '%s'?", inst.DisplayName())
 	cmd := m.confirmAction(message, killAction)
+	// Kill is the one destructive confirmation, so it alone wears the danger
+	// border (the default is accent); confirmAction created m.confirmationOverlay
+	// synchronously above.
+	m.confirmationOverlay.SetBorderColor(theme.Current().Palette.Danger)
 	// Opt-in: a second press of the kill key confirms the dialog, so Ctrl+X Ctrl+X
 	// kills in one motion. Scoped to the kill dialog (other confirmations still
-	// require 'y'); confirmAction created m.confirmationOverlay synchronously above.
+	// require 'y').
 	if m.appConfig.GetKillDoubleTapConfirm() {
 		m.confirmationOverlay.SetConfirmAltKey(keys.KillKey)
 	}

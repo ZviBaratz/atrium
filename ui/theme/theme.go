@@ -23,8 +23,8 @@ type Palette struct {
 	Purple      lipgloss.Color // app title / banner
 	Success     lipgloss.Color // ready, additions
 	SuccessDim  lipgloss.Color // seen-ready: a Ready session the user already visited
-	Working     lipgloss.Color // working spinner tint
-	Attention   lipgloss.Color // waiting / behind (the one attention color)
+	Working     lipgloss.Color // working/starting spinner tint; recedes (dim) so Attention stands alone
+	Attention   lipgloss.Color // waiting / behind (the one attention color — nothing else may use it)
 	Danger      lipgloss.Color // deletions, errors, destructive actions
 	Cyan        lipgloss.Color // hunks, info
 	BadgeBg     lipgloss.Color // AUTO badge background

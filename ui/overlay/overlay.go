@@ -60,6 +60,12 @@ func PlaceOverlay(
 
 	// Apply a fade effect to the background by directly modifying each line
 	// Create a new array of background lines with the fade effect applied
+	//
+	// TODO(theme): the fade greys below (ANSI 236/240) are hardcoded and bypass
+	// the theme palette — fine on the current dark themes, wrong for any light
+	// theme. Replacing them means deriving fade colors from theme.Current()
+	// and reworking this regex-based ANSI rewrite; out of scope for the token
+	// sweep that touched the rest of the UI.
 	fadedBgLines := make([]string, len(bgLines))
 
 	// Compile regular expressions for ANSI color codes
