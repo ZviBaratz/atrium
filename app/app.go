@@ -20,7 +20,6 @@ import (
 	"github.com/ZviBaratz/atrium/ui/theme"
 	"io"
 	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -30,7 +29,6 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	zone "github.com/lrstanley/bubblezone"
-	"github.com/mattn/go-runewidth"
 	"golang.org/x/term"
 )
 
@@ -71,9 +69,8 @@ type state int
 
 const (
 	stateDefault state = iota
-	// stateNew is the state when the user is creating a new instance.
-	stateNew
-	// statePrompt is the state when the user is entering a prompt.
+	// statePrompt is the state when a text-input overlay is up (the new-session
+	// form, quick-send compose).
 	statePrompt
 	// stateHelp is the state when a help screen is displayed.
 	stateHelp
@@ -117,17 +114,6 @@ type home struct {
 	// double-click (attach). Bubble Tea has no native double-click event.
 	lastClickTitle string
 	lastClickAt    time.Time
-	// newInstanceFinalizer is called when the state is stateNew and then you press enter.
-	// It registers the new instance in the list after the instance has been started.
-	newInstanceFinalizer func()
-
-	// newInstance is the session currently being created via the inline `n` flow (named in
-	// stateNew). AddInstance may insert it mid-list (under its repo group) and a background
-	// instanceStartedMsg may move the selection, so the naming step targets this stable
-	// reference rather than GetSelectedInstance / the last list item. The `N` flow does not
-	// use it — that session is created only on form submit.
-	newInstance *session.Instance
-
 	// newSessionPath is the target repo path for the session currently being created.
 	// It defaults to the contextual repo (the highlighted session's repo, else cwd) and
 	// can be re-pointed via the directory picker in the new-session overlay. It scopes the
@@ -311,15 +297,15 @@ func (m *home) updateHandleWindowSizeEvent(msg tea.WindowSizeMsg) {
 }
 
 // menuVisible reports whether the hint bar should occupy a row. Inline
-// interactions always get it (stateNew shows the submit cue and target repo,
-// stateFilter its accept/clear cue, and a background name generation its
-// progress). Modal overlays (prompt/rename/confirm/help/info) render their own
-// instructions, so the bar behind them would be a redundant strip. Plain
-// navigation shows the always-on hint line unless the user turned it off
-// (hint_bar in config.json), which restores the chrome-free interface.
+// interactions always get it (stateFilter shows its accept/clear cue, and a
+// background name generation its progress). Modal overlays
+// (prompt/rename/confirm/help/info) render their own instructions, so the bar
+// behind them would be a redundant strip. Plain navigation shows the always-on
+// hint line unless the user turned it off (hint_bar in config.json), which
+// restores the chrome-free interface.
 func (m *home) menuVisible() bool {
 	switch m.state {
-	case stateNew, stateFilter:
+	case stateFilter:
 		return true
 	case statePrompt, stateRename, stateConfirm, stateHelp, stateInfo:
 		return false
@@ -396,7 +382,6 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.renameTarget = msg.instance
 		m.renameOverlay = overlay.NewRenameOverlay(msg.name)
 		m.state = stateRename
-		m.menu.SetState(ui.StatePrompt)
 		m.recomputeLayout() // the progress bar gave up its row; the overlay self-documents
 		return m, nil
 	case metadataUpdateDoneMsg:
@@ -670,84 +655,7 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		return m.handleInfoState(msg)
 	}
 
-	if m.state == stateNew {
-		// Handle quit commands first. Don't handle q because the user might want to type that.
-		if msg.String() == "ctrl+c" {
-			m.state = stateDefault
-			m.killNewInstance()
-			return m, tea.Sequence(
-				tea.WindowSize(),
-				func() tea.Msg {
-					m.menu.SetState(ui.StateDefault)
-					return nil
-				},
-			)
-		}
-
-		// The inline `n` flow tracks the new instance by reference: AddInstance may insert it
-		// mid-list (under its repo group) and a background instanceStartedMsg may move the
-		// selection, so it is neither the last item nor reliably the selected one.
-		instance := m.newInstance
-		if instance == nil {
-			m.state = stateDefault
-			return m, nil
-		}
-		switch msg.Type {
-		// Start the instance (enable previews etc) and go back to the main menu state.
-		case tea.KeyEnter:
-			if len(instance.Title) == 0 {
-				return m, m.handleError(fmt.Errorf("title cannot be empty"))
-			}
-
-			// Set Loading status and finalize into the list immediately
-			instance.SetStatus(session.Loading)
-			m.newInstanceFinalizer()
-			m.newInstance = nil // creation handed off to the background start
-			m.state = stateDefault
-			m.menu.SetState(ui.StateDefault)
-
-			// Return a tea.Cmd that runs instance.Start in the background
-			startCmd := func() tea.Msg {
-				err := instance.Start(true)
-				return instanceStartedMsg{instance: instance, err: err}
-			}
-
-			return m, tea.Batch(tea.WindowSize(), m.instanceChanged(), startCmd)
-		case tea.KeyRunes:
-			if runewidth.StringWidth(instance.Title) >= 32 {
-				return m, m.handleError(fmt.Errorf("title cannot be longer than 32 characters"))
-			}
-			if err := instance.SetTitle(instance.Title + string(msg.Runes)); err != nil {
-				return m, m.handleError(err)
-			}
-		case tea.KeyBackspace:
-			runes := []rune(instance.Title)
-			if len(runes) == 0 {
-				return m, nil
-			}
-			if err := instance.SetTitle(string(runes[:len(runes)-1])); err != nil {
-				return m, m.handleError(err)
-			}
-		case tea.KeySpace:
-			if err := instance.SetTitle(instance.Title + " "); err != nil {
-				return m, m.handleError(err)
-			}
-		case tea.KeyEsc:
-			m.killNewInstance()
-			m.state = stateDefault
-			m.instanceChanged()
-
-			return m, tea.Sequence(
-				tea.WindowSize(),
-				func() tea.Msg {
-					m.menu.SetState(ui.StateDefault)
-					return nil
-				},
-			)
-		default:
-		}
-		return m, nil
-	} else if m.state == statePrompt {
+	if m.state == statePrompt {
 		// Handle cancel via ctrl+c before delegating to the overlay
 		if msg.String() == "ctrl+c" {
 			return m, m.cancelPromptOverlay()
@@ -964,72 +872,12 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 	case keys.KeyHelp:
 		return m.showHelpScreen(helpTypeGeneral{}, nil)
 	case keys.KeyPrompt:
-		if limit := m.appConfig.GetMaxSessions(); m.list.NumInstances() >= limit {
-			return m, m.handleError(
-				fmt.Errorf("you can't create more than %d sessions (max_sessions in config.json)", limit))
-		}
-
-		// Open the unified new-session form immediately. The session itself is not created
-		// (and no list row appears) until the form is submitted — every parameter is reached
-		// directly in the form. Derive the contextual target repo first and kick a background
-		// fetch so branches are current by the time the user reaches the branch field.
-		m.newSessionPath = m.defaultNewSessionPath()
-		target := m.newSessionPath
-		ctx := m.ctx
-		fetchCmd := func() tea.Msg {
-			git.FetchBranches(ctx, target)
-			return nil
-		}
-
-		m.state = statePrompt
-		m.menu.SetState(ui.StatePrompt)
-		m.textInputOverlay = m.newSessionFormOverlay()
-		// Trigger the initial branch search (no debounce, version 0).
-		initialSearch := m.runBranchSearch("", m.textInputOverlay.BranchFilterVersion())
-
-		return m, tea.Batch(tea.WindowSize(), fetchCmd, initialSearch)
+		// The full entry point: focus starts on the project picker.
+		return m, m.openCreateForm(false)
 	case keys.KeyNew:
-		if limit := m.appConfig.GetMaxSessions(); m.list.NumInstances() >= limit {
-			return m, m.handleError(
-				fmt.Errorf("you can't create more than %d sessions (max_sessions in config.json)", limit))
-		}
-		// Derive the contextual target before adding the new instance. The inline `n`
-		// flow has no directory picker, so the target must already be a real directory
-		// (e.g. cs launched outside any directory leaves no context); guide the user to
-		// `N` otherwise. A non-git directory is fine — it becomes a direct session.
-		m.newSessionPath = m.defaultNewSessionPath()
-		valid, direct := targetValidity(m.ctx, m.newSessionPath)
-		if !valid {
-			return m, m.handleError(fmt.Errorf("no directory context; press N to choose a project"))
-		}
-		instance, err := session.NewInstance(session.InstanceOptions{
-			Title:   "",
-			Path:    m.newSessionPath,
-			Program: m.program,
-			Direct:  direct,
-		})
-		if err != nil {
-			return m, m.handleError(err)
-		}
-		instance.SetBaseContext(m.ctx)
-
-		m.newInstanceFinalizer = m.list.AddInstance(instance)
-		// AddInstance may insert the session into the middle of the list (under its repo
-		// group), so select it by identity rather than assuming it is last. Also track it by
-		// reference: the naming/prompt flow operates on m.newInstance, not the selection,
-		// which a background instanceStartedMsg can move.
-		m.list.SelectInstance(instance)
-		m.newInstance = instance
-		m.state = stateNew
-		m.menu.SetState(ui.StateNewInstance)
-		hint := filepath.Base(m.newSessionPath)
-		if direct {
-			hint += " (direct)"
-		}
-		m.menu.SetNewInstanceHint(hint)
-		m.recomputeLayout() // the hint bar now claims a row; shrink the panes to fit
-
-		return m, nil
+		// The quick entry point: the same form, focused on the title, so
+		// "n → type a name → ⌃S" creates a session in the contextual repo.
+		return m, m.openCreateForm(true)
 	case keys.KeyQuickSend:
 		// Open a compose box to fire an ad-hoc message at the selected running session
 		// without attaching. Only meaningful when the agent is up and accepting input, so
@@ -1039,7 +887,6 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 			return m, nil
 		}
 		m.state = statePrompt
-		m.menu.SetState(ui.StatePrompt)
 		m.textInputOverlay = overlay.NewQuickSendOverlay("Send to " + selected.DisplayName())
 		return m, tea.WindowSize()
 	case keys.KeyCopyBranch:
@@ -1104,7 +951,6 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		m.renameTarget = selected
 		m.renameOverlay = overlay.NewRenameOverlay(selected.DisplayName())
 		m.state = stateRename
-		m.menu.SetState(ui.StatePrompt)
 		return m, nil
 	case keys.KeyAutoName:
 		selected := m.list.GetSelectedInstance()
@@ -1900,7 +1746,7 @@ func (m *home) handleInfoState(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 // newSessionFormOverlay builds the unified new-session form (title, project, optional
-// profile, branch, prompt) for the `N` flow.
+// profile, branch, prompt) shared by both creation flows.
 func (m *home) newSessionFormOverlay() *overlay.TextInputOverlay {
 	ov := overlay.NewSessionCreateOverlay(m.appConfig.GetProfiles(), m.candidateRepoPaths())
 	// Seed the initial validity so the picker can flag the default target before the user
@@ -1908,6 +1754,37 @@ func (m *home) newSessionFormOverlay() *overlay.TextInputOverlay {
 	valid, direct := targetValidity(m.ctx, m.newSessionPath)
 	ov.SetTargetValidity(valid, direct)
 	return ov
+}
+
+// openCreateForm opens the unified new-session form — the single creation flow
+// behind both `n` (focusTitle, for "type a name and go") and `N` (project picker
+// first). The session itself is not created (and no list row appears) until the
+// form is submitted. The contextual target repo is derived up front and a
+// background fetch kicked off so branches are current by the time the user
+// reaches the branch field.
+func (m *home) openCreateForm(focusTitle bool) tea.Cmd {
+	if limit := m.appConfig.GetMaxSessions(); m.list.NumInstances() >= limit {
+		return m.handleError(
+			fmt.Errorf("you can't create more than %d sessions (max_sessions in config.json)", limit))
+	}
+
+	m.newSessionPath = m.defaultNewSessionPath()
+	target := m.newSessionPath
+	ctx := m.ctx
+	fetchCmd := func() tea.Msg {
+		git.FetchBranches(ctx, target)
+		return nil
+	}
+
+	m.state = statePrompt
+	m.textInputOverlay = m.newSessionFormOverlay()
+	if focusTitle {
+		m.textInputOverlay.FocusTitle()
+	}
+	// Trigger the initial branch search (no debounce, version 0).
+	initialSearch := m.runBranchSearch("", m.textInputOverlay.BranchFilterVersion())
+
+	return tea.Batch(tea.WindowSize(), fetchCmd, initialSearch)
 }
 
 // createSessionFromForm validates the submitted new-session form, creates the session,
@@ -2037,9 +1914,8 @@ func (m *home) recordRecentPath(path string) {
 	}
 }
 
-// cancelPromptOverlay cancels the prompt overlay, cleaning up the unstarted instance.
+// cancelPromptOverlay cancels the prompt overlay.
 func (m *home) cancelPromptOverlay() tea.Cmd {
-	m.killNewInstance()
 	m.textInputOverlay = nil
 	m.state = stateDefault
 	return tea.Sequence(
@@ -2049,17 +1925,6 @@ func (m *home) cancelPromptOverlay() tea.Cmd {
 			return nil
 		},
 	)
-}
-
-// killNewInstance removes the in-progress new instance from the list and clears the tracking
-// reference. List.Kill removes the selected item, so we re-select the tracked instance first:
-// a background instanceStartedMsg may have moved the selection onto an already-started one.
-func (m *home) killNewInstance() {
-	if m.newInstance != nil && !m.newInstance.Started() {
-		m.list.SelectInstance(m.newInstance)
-		m.list.Kill()
-	}
-	m.newInstance = nil
 }
 
 // confirmKill shows the kill-confirmation overlay for inst and stashes the

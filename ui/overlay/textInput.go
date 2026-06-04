@@ -161,10 +161,10 @@ func NewQuickSendOverlay(title string) *TextInputOverlay {
 
 // NewSessionCreateOverlay creates the unified new-session form: a title field, a prompt
 // textarea, a project (directory) picker, an optional profile picker (only when more than
-// one profile exists), and a branch picker. Focus starts on the title so the user can name
-// the session immediately, and every section renders at a constant height so the centered
-// overlay does not jump as focus moves. dirCandidates is the ordered list of candidate repo
-// paths with the default/contextual target first.
+// one profile exists), and a branch picker. Focus starts on the project picker (the `N`
+// flow); the quick flow (`n`) moves it to the title via FocusTitle. Every section renders
+// at a constant height so the centered overlay does not jump as focus moves. dirCandidates
+// is the ordered list of candidate repo paths with the default/contextual target first.
 func NewSessionCreateOverlay(profiles []config.Profile, dirCandidates []string) *TextInputOverlay {
 	ti := newTextarea("")
 	// The prompt is optional and auto-sent to the agent once the session boots, so say so.
@@ -297,6 +297,14 @@ func (t *TextInputOverlay) currentStop() focusStop {
 	}
 	return t.stops[t.FocusIndex]
 }
+
+// FocusTitle moves focus to the title field. The quick-create flow (`n`) calls
+// it right after building the form so typing a name is immediate; the full flow
+// (`N`) keeps the default project-picker focus.
+func (t *TextInputOverlay) FocusTitle() { t.focusStop(stopTitle) }
+
+// TitleFocused reports whether the title field currently has focus.
+func (t *TextInputOverlay) TitleFocused() bool { return t.isTitle() }
 
 func (t *TextInputOverlay) isTitle() bool           { return t.currentStop() == stopTitle }
 func (t *TextInputOverlay) isDirectoryPicker() bool { return t.currentStop() == stopDirectory }

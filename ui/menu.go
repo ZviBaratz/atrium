@@ -27,12 +27,6 @@ const (
 	StateDefault MenuState = iota
 	// StateEmpty is the hint bar shown when no sessions exist.
 	StateEmpty
-	// StateNewInstance is the bar shown while naming a new session inline.
-	StateNewInstance
-	// StatePrompt is the bar shown while a text-input overlay is up. Those
-	// overlays self-document and the bar is hidden behind them (menuVisible),
-	// so this renders only the submit cue, for the callers that still set it.
-	StatePrompt
 	// StateFilter is the bar shown while typing an incremental filter query.
 	StateFilter
 	// StateGeneratingName is shown while a session name is being generated in the
@@ -55,9 +49,6 @@ type Menu struct {
 	state         MenuState
 	hasInstance   bool
 	activeTab     int
-
-	// newInstanceHint is the target repo shown while naming a new session.
-	newInstanceHint string
 }
 
 // NewMenu returns a Menu in the empty state.
@@ -70,14 +61,9 @@ func (m *Menu) SetState(state MenuState) {
 	m.state = state
 }
 
-// SetNewInstanceHint sets the target-repo hint shown while naming a new session.
-func (m *Menu) SetNewInstanceHint(repo string) {
-	m.newInstanceHint = repo
-}
-
 // SetInstance records whether a session is selected, which decides between the
-// default and empty hint sets. Special states (NewInstance, Prompt, Filter,
-// GeneratingName) persist across the periodic instanceChanged ticks.
+// default and empty hint sets. Special states (Filter, GeneratingName) persist
+// across the periodic instanceChanged ticks.
 func (m *Menu) SetInstance(instance *session.Instance) {
 	m.hasInstance = instance != nil
 	if m.state == StateDefault || m.state == StateEmpty {
@@ -122,15 +108,6 @@ func (m *Menu) String() string {
 	case StateGeneratingName:
 		// While generating a name, the bar shows a single status line.
 		line = progressStyle().Render("✨ Generating name…")
-	case StateNewInstance:
-		line = renderHintLine([]keys.KeyName{keys.KeySubmitName})
-		// While naming a new session, show which repo it will be created in.
-		if m.newInstanceHint != "" {
-			line += sepStyle().Render(separator) +
-				keyStyle().Render("in ") + descStyle().Render(m.newInstanceHint)
-		}
-	case StatePrompt:
-		line = renderHintLine([]keys.KeyName{keys.KeySubmitName})
 	case StateFilter:
 		line = keyStyle().Render("enter") + " " + descStyle().Render("accept") +
 			sepStyle().Render(separator) +

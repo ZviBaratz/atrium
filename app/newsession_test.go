@@ -63,6 +63,32 @@ func TestKeyPrompt_OpensCreateFormWithoutAddingRow(t *testing.T) {
 	assert.Equal(t, before, h.list.NumInstances(), "N must not add a list row before submit")
 }
 
+// N keeps its project-first focus: choosing a different repo is the reason to
+// reach for it over n.
+func TestKeyPrompt_FocusesProjectPicker(t *testing.T) {
+	h := newCreateFormHome(t)
+
+	h.handleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("N")})
+
+	require.NotNil(t, h.textInputOverlay)
+	assert.False(t, h.textInputOverlay.TitleFocused(), "N starts on the project picker, not the title")
+}
+
+// n opens the SAME create form (no inline naming flow, no premature list row),
+// but focused on the title so "n → type a name → ⌃S" stays the fast path.
+func TestKeyNew_OpensCreateFormFocusedOnTitle(t *testing.T) {
+	h := newCreateFormHome(t)
+	before := h.list.NumInstances()
+
+	h.handleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("n")})
+
+	assert.Equal(t, statePrompt, h.state)
+	require.NotNil(t, h.textInputOverlay)
+	assert.True(t, h.textInputOverlay.IsCreateForm(), "n should open the create form")
+	assert.True(t, h.textInputOverlay.TitleFocused(), "n starts on the title field")
+	assert.Equal(t, before, h.list.NumInstances(), "n must not add a list row before submit")
+}
+
 // Submitting the create form creates exactly one session carrying the typed title and
 // prompt, and closes the overlay. (The returned Cmd would Start it in the background; we
 // do not run it, so no tmux/worktree is spun up here.)

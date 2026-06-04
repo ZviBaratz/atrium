@@ -90,7 +90,6 @@ func TestRename_AppliesToTargetNotMovedSelection(t *testing.T) {
 	h.renameTarget = instA
 	h.renameOverlay = overlay.NewRenameOverlay("renamed-A")
 	h.state = stateRename
-	h.menu.SetState(ui.StatePrompt)
 
 	// Selection hijacked onto B while the overlay is open.
 	h.list.SelectInstance(instB)

@@ -50,25 +50,18 @@ func TestCtrlQ_OnPausedInstance_IsNoOp(t *testing.T) {
 	assert.Equal(t, stateDefault, h.state, "ctrl+q must not change state for a paused selection")
 }
 
-// Scope guarantee: ctrl+q's attach behavior is main-screen-only. In the new-session
-// naming overlay it must NOT submit the name (that is enter's job, matched by key
-// type), so the in-progress instance stays unfinalized and the overlay stays open.
-func TestCtrlQ_InStateNew_DoesNotSubmitName(t *testing.T) {
+// Scope guarantee: ctrl+q's attach behavior is main-screen-only. Inside the
+// create form it must neither attach nor close the overlay — the form keeps
+// collecting input and no session is created.
+func TestCtrlQ_InCreateForm_DoesNotAttachOrClose(t *testing.T) {
 	h := newCreateFormHome(t)
-
-	inst, err := session.NewInstance(session.InstanceOptions{
-		Title:   "feature",
-		Path:    t.TempDir(),
-		Program: "echo",
-	})
-	require.NoError(t, err)
-
-	h.state = stateNew
-	h.newInstance = inst
+	h.handleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("n")})
+	require.Equal(t, statePrompt, h.state, "precondition: the create form is open")
+	before := h.list.NumInstances()
 
 	h.handleKeyPress(tea.KeyMsg{Type: tea.KeyCtrlQ})
 
-	assert.Equal(t, stateNew, h.state, "ctrl+q must not leave the naming overlay")
-	require.NotNil(t, h.newInstance, "ctrl+q must not finalize the new instance")
-	assert.Equal(t, "feature", h.newInstance.Title, "the title must be untouched")
+	assert.Equal(t, statePrompt, h.state, "ctrl+q must not leave the create form")
+	require.NotNil(t, h.textInputOverlay, "ctrl+q must not close the overlay")
+	assert.Equal(t, before, h.list.NumInstances(), "ctrl+q must not create a session")
 }

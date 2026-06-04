@@ -27,7 +27,6 @@ func TestMenuVisible_ByState(t *testing.T) {
 	}{
 		{"default navigation shows the hint bar", stateDefault, false, true},
 		{"default + background name gen shows progress", stateDefault, true, true},
-		{"inline new session", stateNew, false, true},
 		{"inline filter", stateFilter, false, true},
 		{"prompt overlay self-documents", statePrompt, false, false},
 		{"rename overlay self-documents", stateRename, false, false},
@@ -56,7 +55,7 @@ func TestMenuVisible_ByState(t *testing.T) {
 
 // The composed View must carry the hint bar exactly when menuVisible says so.
 // "kill" appears only in the bar's default hint line, so it keys the
-// presence/absence assertions; "submit name" keys the inline naming cue.
+// presence/absence assertions.
 func TestView_HintBarContextual(t *testing.T) {
 	h := newCreateFormHome(t)
 	inst, err := session.NewInstance(session.InstanceOptions{Title: "a", Path: t.TempDir(), Program: "echo"})
@@ -79,13 +78,6 @@ func TestView_HintBarContextual(t *testing.T) {
 	on := true
 	h.appConfig.HintBar = &on
 
-	// Inline new-session: the bar appears with the submit cue.
-	h.newInstance = inst
-	h.state = stateNew
-	h.menu.SetState(ui.StateNewInstance)
-	h.menu.SetNewInstanceHint("myrepo")
-	h.updateHandleWindowSizeEvent(tea.WindowSizeMsg{Width: 120, Height: 30})
-	require.Contains(t, h.View(), "submit name", "stateNew must render the inline hint bar")
 }
 
 // The welcome's seen-bit must NOT be set merely by rendering it — a stray keypress

@@ -25,13 +25,12 @@ const (
 	KeyPush
 	KeySubmit
 
-	KeyTab        // Tab is a special keybinding for switching between panes.
-	KeyShiftTab   // ShiftTab cycles between panes in reverse order.
-	KeySubmitName // SubmitName is a special keybinding for submitting the name of a new instance.
+	KeyTab      // Tab is a special keybinding for switching between panes.
+	KeyShiftTab // ShiftTab cycles between panes in reverse order.
 
 	KeyCheckout
 	KeyResume
-	KeyPrompt // New key for entering a prompt
+	KeyPrompt // Open the new-session form focused on the project picker
 	KeyHelp   // Key for showing help screen
 
 	// KeyShiftUp and KeyShiftDown scroll the diff/preview pane.
@@ -174,7 +173,7 @@ var GlobalkeyBindings = map[KeyName]key.Binding{
 	),
 	KeyPrompt: key.NewBinding(
 		key.WithKeys("N"),
-		key.WithHelp("N", "new with prompt"),
+		key.WithHelp("N", "new (pick project)"),
 	),
 	KeyCheckout: key.NewBinding(
 		key.WithKeys("c"),
@@ -249,12 +248,5 @@ var GlobalkeyBindings = map[KeyName]key.Binding{
 	KeyTabTerminal: key.NewBinding(
 		key.WithKeys("3"),
 		key.WithHelp("3", "terminal tab"),
-	),
-
-	// -- Special keybindings --
-
-	KeySubmitName: key.NewBinding(
-		key.WithKeys("enter"),
-		key.WithHelp("enter", "submit name"),
 	),
 }
