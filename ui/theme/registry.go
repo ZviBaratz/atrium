@@ -59,7 +59,7 @@ var tokyoNight = &Theme{
 		Purple:      lipgloss.Color("#bb9af7"),
 		Success:     lipgloss.Color("#9ece6a"),
 		SuccessDim:  lipgloss.Color("#6a8a4a"),
-		Working:     lipgloss.Color("#e0af68"),
+		Working:     lipgloss.Color("#565f89"), // matches FgDim: working rows recede
 		Attention:   lipgloss.Color("#e0af68"),
 		Danger:      lipgloss.Color("#f7768e"),
 		Cyan:        lipgloss.Color("#7dcfff"),
@@ -84,7 +84,7 @@ var catppuccinMocha = &Theme{
 		Purple:      lipgloss.Color("#cba6f7"),
 		Success:     lipgloss.Color("#a6e3a1"),
 		SuccessDim:  lipgloss.Color("#6c9168"),
-		Working:     lipgloss.Color("#f9e2af"),
+		Working:     lipgloss.Color("#6c7086"), // matches FgDim: working rows recede
 		Attention:   lipgloss.Color("#f9e2af"),
 		Danger:      lipgloss.Color("#f38ba8"),
 		Cyan:        lipgloss.Color("#89dceb"),
