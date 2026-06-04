@@ -330,7 +330,7 @@ func (t *TerminalPane) enterScrollMode() error {
 	}
 	content = theme.SanitizeWidth(content)
 
-	footer := terminalFooterStyle().Render("ESC to exit scroll mode")
+	footer := terminalFooterStyle().Render("— snapshot · ESC to resume live view")
 	contentWithFooter := lipgloss.JoinVertical(lipgloss.Left, content, footer)
 	t.viewport.SetContent(contentWithFooter)
 	t.viewport.GotoBottom()

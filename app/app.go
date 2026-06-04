@@ -1163,7 +1163,7 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		}
 
 		// Show confirmation modal
-		message := fmt.Sprintf("[!] Push changes from session '%s'?", selected.DisplayName())
+		message := fmt.Sprintf("Push changes from session '%s'?", selected.DisplayName())
 		return m, m.confirmAction(message, pushAction)
 	case keys.KeyCheckout:
 		selected := m.list.GetSelectedInstance()
@@ -1879,7 +1879,7 @@ func (m *home) resumeSelected(selected *session.Instance) tea.Cmd {
 		return m.showInfo(err.Error())
 	}
 
-	message := fmt.Sprintf("[!] Branch '%s' is checked out in the main repo. Detach it and resume?", wt.GetBranchName())
+	message := fmt.Sprintf("Branch '%s' is checked out in the main repo. Detach it and resume?", wt.GetBranchName())
 	action := func() tea.Msg {
 		if derr := wt.DetachBranchInBaseRepo(); derr != nil {
 			// e.g. the dirty-repo refusal — show it in a modal the user can read.
@@ -2131,11 +2131,15 @@ func (m *home) confirmKill(inst *session.Instance) tea.Cmd {
 		return instanceChangedMsg{}
 	}
 
-	message := fmt.Sprintf("[!] Kill session '%s'?", inst.DisplayName())
+	message := fmt.Sprintf("Kill session '%s'?", inst.DisplayName())
 	cmd := m.confirmAction(message, killAction)
+	// Kill is the one destructive confirmation, so it alone wears the danger
+	// border (the default is accent); confirmAction created m.confirmationOverlay
+	// synchronously above.
+	m.confirmationOverlay.SetBorderColor(theme.Current().Palette.Danger)
 	// Opt-in: a second press of the kill key confirms the dialog, so Ctrl+X Ctrl+X
 	// kills in one motion. Scoped to the kill dialog (other confirmations still
-	// require 'y'); confirmAction created m.confirmationOverlay synchronously above.
+	// require 'y').
 	if m.appConfig.GetKillDoubleTapConfirm() {
 		m.confirmationOverlay.SetConfirmAltKey(keys.KillKey)
 	}
