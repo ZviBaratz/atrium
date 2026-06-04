@@ -43,6 +43,23 @@ func (e *ErrBox) SetSize(width, height int) {
 	e.height = height
 }
 
+// Fits reports whether the toast can convey err without losing content: a
+// single line that survives String()'s truncation threshold intact. Multi-line
+// errors never fit (String flattens them with "//"); over-wide ones don't
+// either, unless the box has no measured width yet (startup, tests), where the
+// toast is the safe default. Callers route non-fitting errors to a persistent
+// modal instead.
+func (e *ErrBox) Fits(err error) bool {
+	if err == nil {
+		return true
+	}
+	msg := err.Error()
+	if strings.Contains(msg, "\n") {
+		return false
+	}
+	return e.width <= 0 || runewidth.StringWidth(msg) <= e.width-3
+}
+
 func (e *ErrBox) String() string {
 	// No error means no row: returning "" keeps the caller from joining a blank
 	// line beneath the help bar (lipgloss.JoinVertical counts "" as one line).

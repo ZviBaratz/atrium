@@ -1830,16 +1830,27 @@ func tickUpdateMetadataCmd(active []*session.Instance, selected *session.Instanc
 	}
 }
 
-// handleError handles all errors which get bubbled up to the app. sets the error message. We return a callback tea.Cmd that returns a hideErrMsg message
-// which clears the error message after 3 seconds.
+// errToastDuration is how long the transient error box stays before auto-hiding.
+const errToastDuration = 5 * time.Second
+
+// handleError surfaces an error in the UI. Short, single-line errors get the
+// transient bottom toast (auto-hidden after errToastDuration). An error that the
+// toast cannot actually convey — multi-line, or wider than the error box can
+// show (e.g. a failed push's git output) — is routed to the persistent info
+// modal instead, but only from stateDefault: in any overlay state (e.g. a form
+// validation error) switching to stateInfo would clobber the open overlay, so
+// those always use the toast.
 func (m *home) handleError(err error) tea.Cmd {
+	if m.state == stateDefault && !m.errBox.Fits(err) {
+		return m.showInfo(err.Error()) // showInfo logs the message itself
+	}
 	log.ErrorLog.Printf("%v", err)
 	m.errBox.SetError(err)
 	m.recomputeLayout() // give the error its row; panes shrink by one
 	return func() tea.Msg {
 		select {
 		case <-m.ctx.Done():
-		case <-time.After(3 * time.Second):
+		case <-time.After(errToastDuration):
 		}
 
 		return hideErrMsg{}
