@@ -137,34 +137,37 @@ func continueProgram(program string) string {
 	return program
 }
 
-// detectPrompt reports whether region (the bottom chrome of the pane) shows a prompt that
-// blocks on the user's answer. Claude has two shapes: the tool-permission dialog, and any
-// interactive selection (AskUserQuestion, plan approval, etc.). Matching is done against the
-// flattened chrome (newlines collapsed to spaces) so a footer or sentence hard-wrapped at a
-// narrow pane width is still recognized. The selection footer requires its co-occurring tokens
-// ("Esc to cancel" + navigate/select) within a tight footer window, so prose merely mentioning
-// "Esc to cancel" higher in the chrome cannot trip it.
+// detectPrompt reports whether content (the full cleaned pane) shows a prompt that blocks on
+// the user's answer. Claude has two shapes: the tool-permission dialog, and any interactive
+// selection (AskUserQuestion, plan approval, etc.). Matching is done against the flattened
+// chrome (newlines collapsed to spaces) so a footer or sentence hard-wrapped at a narrow pane
+// width is still recognized.
 //
-// region is already the promptChromeLines window (see Poll); the inner flattenChrome calls
-// re-window it, which stays correct only while footerChromeLines <= promptChromeLines so the
-// footer tokens remain reachable within region.
-func detectPrompt(program, region string) bool {
+// The permission dialog and the aider/gemini prompts are matched within the bottom
+// promptChromeLines window, which keeps prose higher in the chrome (and in the scrolled-back
+// transcript) from tripping detection. The selection footer instead anchors to footerRegion —
+// the live chrome below the last box border, the same anchor markerWorking uses — because a
+// custom multi-line statusLine can render *below* the footer and push it out of any fixed
+// bottom-N window, while a footer quoted in the transcript stays above the input box's border
+// and is excluded. The footer still requires its co-occurring tokens ("Esc to cancel" +
+// navigate/select), so a statusLine that merely happens to sit below it cannot trip detection.
+func detectPrompt(program, content string) bool {
 	switch {
 	case isClaude(program):
-		if strings.Contains(flattenChrome(region, promptChromeLines),
+		if strings.Contains(flattenChrome(content, promptChromeLines),
 			"No, and tell Claude what to do differently") {
 			return true
 		}
-		footer := flattenChrome(region, footerChromeLines)
+		footer := whiteSpaceRegex.ReplaceAllString(footerRegion(content), " ")
 		if strings.Contains(footer, "Esc to cancel") &&
 			(strings.Contains(footer, "to navigate") || strings.Contains(footer, "to select")) {
 			return true
 		}
 		return false
 	case strings.HasPrefix(program, ProgramAider):
-		return strings.Contains(flattenChrome(region, promptChromeLines), "(Y)es/(N)o/(D)on't ask again")
+		return strings.Contains(flattenChrome(content, promptChromeLines), "(Y)es/(N)o/(D)on't ask again")
 	case strings.HasPrefix(program, ProgramGemini):
-		return strings.Contains(flattenChrome(region, promptChromeLines), "Yes, allow once")
+		return strings.Contains(flattenChrome(content, promptChromeLines), "Yes, allow once")
 	}
 	return false
 }
@@ -333,14 +336,12 @@ func flattenChrome(content string, n int) string {
 
 // Window sizes for marker detection within the bottom chrome. The working status bar is
 // the last line, so a tight window is safest; a prompt block (question + options + footer,
-// possibly with a todo tracker below) needs a taller one.
+// possibly with a todo tracker below) needs a taller one. The selection footer no longer uses
+// a fixed window — it anchors to footerRegion (see detectPrompt) — so its 3-line floor now
+// comes from workChromeLines via footerRegion's no-rule fallback.
 const (
 	workChromeLines   = 3
 	promptChromeLines = 15
-	// footerChromeLines is the tight window for a prompt's key-hint footer. The footer wraps
-	// across at most a couple of physical lines at a narrow pane width, so a small window
-	// reconstructs it while keeping prose higher in the chrome from tripping detection.
-	footerChromeLines = 3
 )
 
 // toSanitizedName converts an instance title into the managed tmux session name:
@@ -683,7 +684,7 @@ func (t *Session) Poll() PaneState {
 	// ask, it is not processing, and this is the state a caller most needs to surface.
 	// Match only within the bottom chrome so the same strings in the scrolled-back
 	// transcript (e.g. the agent discussing these UIs) don't false-trigger.
-	if detectPrompt(t.program, liveChromeLines(content, promptChromeLines)) {
+	if detectPrompt(t.program, content) {
 		t.monitor.idleStreak = 0
 		t.monitor.lastReported = PanePrompt
 		t.monitor.logSignal(name, "prompt → needs-input")
@@ -787,7 +788,7 @@ func (t *Session) PollNow() PaneState {
 	// Log via logSignal (transition-deduped, shared with Poll) so a detach that doesn't change
 	// the state stays silent and only a real change emits one line.
 	name := t.snapshotName()
-	if detectPrompt(t.program, liveChromeLines(content, promptChromeLines)) {
+	if detectPrompt(t.program, content) {
 		t.monitor.lastReported = PanePrompt
 		t.monitor.logSignal(name, "prompt → needs-input")
 		return PanePrompt

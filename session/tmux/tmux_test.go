@@ -277,6 +277,54 @@ func TestPollClaudeSelectionPrompt(t *testing.T) {
 	}
 }
 
+// A custom Claude Code statusLine renders below the selection-prompt footer (captured live:
+// the overlay draws a horizontal rule, then "6. Chat about this", the key-hint footer, blank
+// padding, and finally the user's multi-line statusLine). The footer is then several non-empty
+// lines above the pane bottom, so a fixed bottom-N window misses it. Anchoring to the live
+// chrome below the last box border (footerRegion) keeps it visible no matter how tall the
+// statusLine is.
+func TestPollClaudeSelectionPromptBelowStatusLine(t *testing.T) {
+	rule := strings.Repeat("─", 80)
+	pane := strings.Join([]string{
+		"  4. IMP-1573: midday API exhaustion gate",
+		"  5. Type something.",
+		rule,
+		"  6. Chat about this",
+		"",
+		"Enter to select · ↑/↓ to navigate · Esc to cancel",
+		"", "", "", "", "", "", "", "", "", "",
+		"  2 tasks (0 done, 2 open)",
+		"  ◻ Session ID: c706f0e8-d7a3-413e-85bf-9b74bd725e0b",
+		"  ◻ Worktree mode: inplace",
+	}, "\n")
+	c := pane
+	s := pollSession(t, "claude", &c, nil)
+	require.Equal(t, PanePrompt, s.Poll(),
+		"a selection prompt whose footer sits above a multi-line statusLine is still a prompt")
+}
+
+// FP-safety: an idle pane whose scrolled-back transcript quotes the full footer line must
+// stay idle. The quote sits above the input box, so footerRegion (below the box's bottom
+// border) excludes it — where a merely-wider bottom-N window would re-admit it and flip the
+// session to a spurious needs-input.
+func TestPollClaudeFooterQuoteInScrollbackStaysIdle(t *testing.T) {
+	rule := strings.Repeat("─", 80)
+	pane := strings.Join([]string{
+		"  The selection footer looks like:",
+		"  Enter to select · ↑/↓ to navigate · Esc to cancel",
+		"  (that is what we match on).",
+		"",
+		rule,
+		"❯ ",
+		rule,
+		"  ⏵⏵ auto mode on (shift+tab to cycle) · ← for agents",
+	}, "\n")
+	c := pane
+	s := pollSession(t, "claude", &c, nil)
+	require.Equal(t, PaneIdle, s.Poll(),
+		"a footer quoted in the transcript above the input box must not be read as a live prompt")
+}
+
 // At a narrow pane width Claude hard-wraps its chrome, splitting a prompt's footer (and the
 // permission dialog's decline option) across physical lines. Detection must survive the wrap:
 // the navigate/select token and "Esc to cancel" can land on separate lines, and the decline
