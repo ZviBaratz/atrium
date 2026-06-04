@@ -955,18 +955,35 @@ func (l *List) nearestNavigable(from int) int {
 	return -1
 }
 
-// ToggleCollapse folds or unfolds the selected session's repo group. It is a no-op (returns
-// false) when fewer than two repos are present, since folding is meaningless there.
-func (l *List) ToggleCollapse() bool {
+// Collapse folds the selected session's repo group, snapping the selection to the group
+// anchor. It is a no-op (returns false) when the group is already folded — so the caller can
+// skip the persistence write — or when fewer than two repos are present, since folding is
+// meaningless there.
+func (l *List) Collapse() bool {
 	if len(l.items) == 0 || l.distinctRepoCount() <= 1 {
 		return false
 	}
 	key := repoKey(l.items[l.selectedIdx])
 	if l.collapsed[key] {
-		delete(l.collapsed, key)
-	} else {
-		l.collapsed[key] = true
+		return false
 	}
+	l.collapsed[key] = true
+	l.clampSelectionToNavigable()
+	return true
+}
+
+// Expand unfolds the selected (folded) repo group, leaving the selection on the anchor.
+// It is a no-op (returns false) when the group is already expanded or with fewer than two
+// repos, mirroring Collapse.
+func (l *List) Expand() bool {
+	if len(l.items) == 0 || l.distinctRepoCount() <= 1 {
+		return false
+	}
+	key := repoKey(l.items[l.selectedIdx])
+	if !l.collapsed[key] {
+		return false
+	}
+	delete(l.collapsed, key)
 	l.clampSelectionToNavigable()
 	return true
 }

@@ -46,8 +46,10 @@ const (
 	KeyMoveGroupUp
 	KeyMoveGroupDown
 
-	// KeyCollapseToggle and KeyCollapseAll collapse/expand repo groups.
-	KeyCollapseToggle
+	// KeyCollapse and KeyExpand fold/unfold the selected repo group (tree-view
+	// style); KeyCollapseAll folds/unfolds every group at once.
+	KeyCollapse
+	KeyExpand
 	KeyCollapseAll
 
 	KeyRename // Rename the selected session's display label
@@ -83,7 +85,8 @@ var GlobalKeyStringsMap = map[string]KeyName{
 	"K":          KeyMoveUp,
 	"{":          KeyMoveGroupUp,
 	"}":          KeyMoveGroupDown,
-	" ":          KeyCollapseToggle,
+	"left":       KeyCollapse,
+	"right":      KeyExpand,
 	"Z":          KeyCollapseAll,
 	"N":          KeyPrompt,
 	"enter":      KeyEnter,
@@ -92,7 +95,7 @@ var GlobalKeyStringsMap = map[string]KeyName{
 	KillKey:      KeyKill,
 	"R":          KeyRename,
 	"A":          KeyAutoName,
-	"right":      KeyQuickSend,
+	"s":          KeyQuickSend,
 	"y":          KeyCopyBranch,
 	"q":          KeyQuit,
 	"tab":        KeyTab,
@@ -145,8 +148,8 @@ var GlobalkeyBindings = map[KeyName]key.Binding{
 		key.WithHelp("A", "auto-name"),
 	),
 	KeyQuickSend: key.NewBinding(
-		key.WithKeys("right"),
-		key.WithHelp("→", "send"),
+		key.WithKeys("s"),
+		key.WithHelp("s", "send"),
 	),
 	KeyHelp: key.NewBinding(
 		key.WithKeys("?"),
@@ -198,9 +201,13 @@ var GlobalkeyBindings = map[KeyName]key.Binding{
 		key.WithKeys("}"),
 		key.WithHelp("}", "move group down"),
 	),
-	KeyCollapseToggle: key.NewBinding(
-		key.WithKeys(" "),
-		key.WithHelp("space", "collapse/expand group"),
+	KeyCollapse: key.NewBinding(
+		key.WithKeys("left"),
+		key.WithHelp("←", "collapse group"),
+	),
+	KeyExpand: key.NewBinding(
+		key.WithKeys("right"),
+		key.WithHelp("→", "expand group"),
 	),
 	KeyCollapseAll: key.NewBinding(
 		key.WithKeys("Z"),

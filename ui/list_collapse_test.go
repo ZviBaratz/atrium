@@ -27,7 +27,7 @@ func TestCollapse_HidesMembersAndShowsCount(t *testing.T) {
 	l.items[2].SetDisplayName("gamma")
 
 	l.SetSelectedInstance(0)
-	require.True(t, l.ToggleCollapse())
+	require.True(t, l.Collapse())
 
 	out := l.String()
 	require.NotContains(t, out, "alpha", "collapsed group members are hidden")
@@ -36,7 +36,7 @@ func TestCollapse_HidesMembersAndShowsCount(t *testing.T) {
 	require.Contains(t, out, "▸", "collapsed header shows the folded marker")
 	require.Contains(t, out, "gamma", "other groups stay visible")
 
-	require.True(t, l.ToggleCollapse())
+	require.True(t, l.Expand())
 	out = l.String()
 	require.Contains(t, out, "alpha", "expanding restores members")
 	require.Contains(t, out, "beta")
@@ -50,7 +50,7 @@ func TestCollapse_SnapsSelectionToAnchor(t *testing.T) {
 	l.SetSize(80, 40)
 	l.SetSelectedInstance(1) // non-anchor member of repoA
 
-	require.True(t, l.ToggleCollapse())
+	require.True(t, l.Collapse())
 	require.Equal(t, 0, l.selectedIdx)
 }
 
@@ -59,7 +59,7 @@ func TestCollapse_NavigationSkipsHiddenMembers(t *testing.T) {
 	l := newGroupList(t, "/x/repoA", "/x/repoA", "/x/repoB")
 	l.SetSize(80, 40)
 	l.SetSelectedInstance(0)
-	require.True(t, l.ToggleCollapse())
+	require.True(t, l.Collapse())
 
 	l.Down() // from repoA anchor, skip hidden member, land on repoB
 	require.Equal(t, 2, l.selectedIdx)
@@ -68,12 +68,13 @@ func TestCollapse_NavigationSkipsHiddenMembers(t *testing.T) {
 	require.Equal(t, 0, l.selectedIdx)
 }
 
-// Collapse is meaningless with a single repo (no headers render), so it is a no-op.
+// Folding is meaningless with a single repo (no headers render), so both directions are no-ops.
 func TestCollapse_SingleRepoIsNoOp(t *testing.T) {
 	l := newGroupList(t, "/x/repoA", "/x/repoA")
 	l.SetSize(80, 40)
 	l.SetSelectedInstance(0)
-	require.False(t, l.ToggleCollapse())
+	require.False(t, l.Collapse())
+	require.False(t, l.Expand())
 }
 
 // Within-group reorder (J/K) is blocked while the group is collapsed — there are no visible
@@ -82,7 +83,7 @@ func TestMoveWithinGroup_BlockedWhenCollapsed(t *testing.T) {
 	l := newGroupList(t, "/x/repoA", "/x/repoA", "/x/repoB")
 	l.SetSize(80, 40)
 	l.SetSelectedInstance(0)
-	require.True(t, l.ToggleCollapse())
+	require.True(t, l.Collapse())
 
 	require.False(t, l.MoveDown())
 }
@@ -119,9 +120,9 @@ func TestCollapse_IgnoredWhenDownToSingleRepo(t *testing.T) {
 
 	// Collapse both groups.
 	l.SetSelectedInstance(0)
-	require.True(t, l.ToggleCollapse())
+	require.True(t, l.Collapse())
 	l.SetSelectedInstance(1)
-	require.True(t, l.ToggleCollapse())
+	require.True(t, l.Collapse())
 
 	// Kill repoB, leaving only repoA.
 	l.SetSelectedInstance(1)
@@ -137,7 +138,7 @@ func TestAddInstance_AutoExpandsCollapsedTargetGroup(t *testing.T) {
 	l := newGroupList(t, "/x/repoA", "/x/repoB")
 	l.SetSize(80, 40)
 	l.SetSelectedInstance(0)
-	require.True(t, l.ToggleCollapse()) // collapse repoA
+	require.True(t, l.Collapse()) // collapse repoA
 	require.True(t, l.effectiveCollapsed("repoA"))
 
 	added := addRepo(t, l, "/x/repoA")
@@ -153,9 +154,9 @@ func TestCollapsedRepos_PrunesVanishedRepos(t *testing.T) {
 	l := newGroupList(t, "/x/repoA", "/x/repoB")
 	l.SetSize(80, 40)
 	l.SetSelectedInstance(0)
-	require.True(t, l.ToggleCollapse())
+	require.True(t, l.Collapse())
 	l.SetSelectedInstance(1)
-	require.True(t, l.ToggleCollapse())
+	require.True(t, l.Collapse())
 	require.ElementsMatch(t, []string{"repoA", "repoB"}, l.CollapsedRepos())
 
 	l.SetSelectedInstance(1) // repoB
@@ -168,7 +169,7 @@ func TestKill_AnchorOfCollapsedGroupKeepsSelectionVisible(t *testing.T) {
 	l := newGroupList(t, "/x/repoA", "/x/repoA", "/x/repoB")
 	l.SetSize(80, 40)
 	l.SetSelectedInstance(0)
-	require.True(t, l.ToggleCollapse()) // collapse repoA (2 members)
+	require.True(t, l.Collapse()) // collapse repoA (2 members)
 
 	l.SetSelectedInstance(0) // anchor
 	l.Kill()
@@ -180,7 +181,7 @@ func TestMoveGroup_PreservesCollapsedFlag(t *testing.T) {
 	l := newGroupList(t, "/x/repoA", "/x/repoB", "/x/repoC")
 	l.SetSize(80, 40)
 	l.SetSelectedInstance(1)
-	require.True(t, l.ToggleCollapse()) // collapse repoB
+	require.True(t, l.Collapse()) // collapse repoB
 
 	require.True(t, l.MoveGroupDown()) // repoB moves below repoC
 	require.True(t, l.effectiveCollapsed("repoB"), "the fold travels with the group")
@@ -192,9 +193,45 @@ func TestCollapse_UpWrapSkipsHiddenMembers(t *testing.T) {
 	l := newGroupList(t, "/x/repoA", "/x/repoB", "/x/repoB")
 	l.SetSize(80, 40)
 	l.SetSelectedInstance(1)
-	require.True(t, l.ToggleCollapse()) // collapse repoB (anchor 1, hidden member 2)
+	require.True(t, l.Collapse()) // collapse repoB (anchor 1, hidden member 2)
 
 	l.SetSelectedInstance(0) // repoA
 	l.Up()                   // wraps past hidden index 2 to repoB anchor
 	require.Equal(t, 1, l.selectedIdx)
+}
+
+// Collapse is directional, not a toggle: folding an already-folded group is a no-op
+// (returns false), so the caller skips the persistence write and re-render.
+func TestCollapse_NoOpWhenAlreadyCollapsed(t *testing.T) {
+	l := newGroupList(t, "/x/repoA", "/x/repoA", "/x/repoB")
+	l.SetSize(80, 40)
+	l.SetSelectedInstance(0)
+
+	require.True(t, l.Collapse())
+	require.False(t, l.Collapse(), "folding a folded group must not report a change")
+	require.Equal(t, []string{"repoA"}, l.CollapsedRepos(), "the fold itself is untouched")
+}
+
+// Expand is directional too: unfolding an already-expanded group is a no-op.
+func TestExpand_NoOpWhenExpanded(t *testing.T) {
+	l := newGroupList(t, "/x/repoA", "/x/repoA", "/x/repoB")
+	l.SetSize(80, 40)
+	l.SetSelectedInstance(0)
+
+	require.False(t, l.Expand(), "unfolding an unfolded group must not report a change")
+	require.Empty(t, l.CollapsedRepos())
+}
+
+// Expanding from the collapsed header unfolds the group and leaves the selection on the
+// anchor, so the cursor stays where the user's eye already is.
+func TestExpand_FromHeaderKeepsSelectionOnAnchor(t *testing.T) {
+	l := newGroupList(t, "/x/repoA", "/x/repoA", "/x/repoB")
+	l.SetSize(80, 40)
+	l.SetSelectedInstance(1)
+	require.True(t, l.Collapse()) // selection snaps to the anchor (index 0)
+	require.Equal(t, 0, l.selectedIdx)
+
+	require.True(t, l.Expand())
+	require.Equal(t, 0, l.selectedIdx, "selection stays on the anchor after expanding")
+	require.False(t, l.isHidden(1), "the group's members are visible again")
 }

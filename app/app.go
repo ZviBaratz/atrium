@@ -1199,8 +1199,16 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 			return m, m.instanceChanged()
 		}
 		return m, nil
-	case keys.KeyCollapseToggle:
-		if m.list.ToggleCollapse() {
+	case keys.KeyCollapse:
+		if m.list.Collapse() {
+			if err := m.appState.SetCollapsedRepos(m.list.CollapsedRepos()); err != nil {
+				return m, m.handleError(err)
+			}
+			return m, m.instanceChanged()
+		}
+		return m, nil
+	case keys.KeyExpand:
+		if m.list.Expand() {
 			if err := m.appState.SetCollapsedRepos(m.list.CollapsedRepos()); err != nil {
 				return m, m.handleError(err)
 			}
