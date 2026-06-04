@@ -422,7 +422,10 @@ func (t *Session) start(workDir string, program string) error {
 	if settingsPath, err := ensureHookSettings(t.sanitizedName, t.program); err != nil {
 		log.ErrorLog.Printf("status hooks disabled for %s: %v", t.sanitizedName, err)
 	} else if settingsPath != "" {
-		program = program + " --settings " + settingsPath
+		// tmux hands the launch command to `sh -c`, and the path embeds the session name,
+		// which can carry shell metacharacters (a title like "Surya's comment"). Unquoted,
+		// the apostrophe killed the window's shell at launch and start timed out.
+		program = program + " --settings " + shellSingleQuote(settingsPath)
 	}
 
 	// Create a new detached tmux session and start claude in it. -n gives the
@@ -451,10 +454,13 @@ func (t *Session) start(workDir string, program string) error {
 	for !t.DoesSessionExist() {
 		select {
 		case <-timeout:
+			// err is nil on this path (a failed pty start returned above), so build the
+			// timeout error first — wrapping nil with %w renders as "%!w(<nil>)".
+			err := fmt.Errorf("timed out waiting for tmux session %s", t.sanitizedName)
 			if cleanupErr := t.Close(); cleanupErr != nil {
 				err = fmt.Errorf("%w (cleanup error: %w)", err, cleanupErr)
 			}
-			return fmt.Errorf("timed out waiting for tmux session %s: %w", t.sanitizedName, err)
+			return err
 		default:
 			time.Sleep(sleepDuration)
 			// Exponential backoff up to 50ms max

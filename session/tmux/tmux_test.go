@@ -570,6 +570,54 @@ func TestStartSession(t *testing.T) {
 	require.NoError(t, err)
 }
 
+// Regression: a session title with a shell metacharacter (e.g. "Surya's comment") flows
+// into the hook settings path, which is appended to the launch command — a string tmux
+// hands to `sh -c`. Unquoted, the apostrophe opened an unterminated quote, the window's
+// shell died instantly, and the start poll timed out ("timed out waiting for tmux
+// session claudesquad_Surya'scomment"). The path must be single-quoted so the launch
+// command stays valid shell for any session name.
+func TestStartQuotesHookSettingsPath(t *testing.T) {
+	forceSettingsFlag(t, true)
+	ptyFactory := NewMockPtyFactory(t)
+	session := newSession(context.Background(), "Surya's comment", "claude", ptyFactory, startMockExec())
+
+	require.NoError(t, session.Start(t.TempDir()))
+
+	// The launch command is the final argument of the new-session invocation; tmux runs
+	// it via the shell, so it must parse cleanly (sh -n parses without executing).
+	launchArgs := ptyFactory.cmds[0].Args
+	program := launchArgs[len(launchArgs)-1]
+	require.Contains(t, program, "--settings")
+	parseOnly := exec.CommandContext(context.Background(), "sh", "-n", "-c", program)
+	require.NoError(t, parseOnly.Run(), "launch command must be valid shell syntax: %q", program)
+
+	// The settings path (which embeds the apostrophe-bearing session name) is quoted.
+	dir, err := hookSessionDir(session.sanitizedName)
+	require.NoError(t, err)
+	settingsPath := filepath.Join(dir, "settings.json")
+	require.Contains(t, program, " --settings "+shellSingleQuote(settingsPath))
+}
+
+// Regression: the start poll's timeout branch wrapped a nil error with %w, rendering as
+// the unreadable "timed out waiting for tmux session X: %!w(<nil>) (cleanup error: …)".
+// The timeout must produce a clean message whether or not the cleanup also fails.
+func TestStartTimeoutErrorOmitsNilWrap(t *testing.T) {
+	ptyFactory := NewMockPtyFactory(t)
+	// has-session never succeeds (the session died at launch) and kill-session fails too
+	// (nothing to kill) — the exact shape of the real failure.
+	cmdExec := cmd_test.MockCmdExec{
+		RunFunc:    func(cmd *exec.Cmd) error { return fmt.Errorf("no such session") },
+		OutputFunc: func(cmd *exec.Cmd) ([]byte, error) { return []byte("output"), nil },
+	}
+	session := newSession(context.Background(), "timeout-test", "prog", ptyFactory, cmdExec)
+
+	err := session.Start(t.TempDir())
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "timed out waiting for tmux session")
+	require.Contains(t, err.Error(), "cleanup error", "the failed kill is still reported")
+	require.NotContains(t, err.Error(), "%!w", "a nil error must never be wrapped")
+}
+
 func TestContinueProgram(t *testing.T) {
 	cases := []struct {
 		name    string
