@@ -29,7 +29,10 @@ type ConfirmationOverlay struct {
 	borderColor lipgloss.Color
 }
 
-// NewConfirmationOverlay creates a new confirmation dialog overlay with the given message
+// NewConfirmationOverlay creates a new confirmation dialog overlay with the given
+// message. The default border is the accent color; destructive confirmations
+// (kill) opt into the danger color via SetBorderColor, so red keeps meaning
+// "destructive" instead of "any confirmation".
 func NewConfirmationOverlay(message string) *ConfirmationOverlay {
 	return &ConfirmationOverlay{
 		Dismissed:   false,
@@ -37,7 +40,7 @@ func NewConfirmationOverlay(message string) *ConfirmationOverlay {
 		width:       50, // Default width
 		ConfirmKey:  "y",
 		CancelKey:   "n",
-		borderColor: theme.Current().Palette.Danger, // attention/destructive color
+		borderColor: theme.Current().Palette.Accent,
 	}
 }
 

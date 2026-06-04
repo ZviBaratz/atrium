@@ -34,10 +34,6 @@ import (
 	"golang.org/x/term"
 )
 
-// GlobalInstanceLimit caps how many sessions can exist at once; creating a new
-// session beyond it is rejected with an error in the UI.
-const GlobalInstanceLimit = 10
-
 // doubleClickWindow is the maximum delay between two left-clicks on the same
 // session row for the second to count as a double-click (attach). Bubble Tea has
 // no native double-click event, so it is detected by timing here.
@@ -482,6 +478,17 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.lastClickTitle = inst.Title
 				m.lastClickAt = now
 				return m, m.instanceChanged()
+			}
+			// A click on a repo-group header toggles its fold, mirroring ←/→.
+			// Persist the new collapsed set exactly like the keyboard paths do.
+			if key, ok := m.list.HeaderAtZone(msg); ok {
+				if m.list.ClickHeader(key) {
+					if err := m.appState.SetCollapsedRepos(m.list.CollapsedRepos()); err != nil {
+						return m, m.handleError(err)
+					}
+					return m, m.instanceChanged()
+				}
+				return m, nil
 			}
 			if idx, ok := m.tabbedWindow.TabAtZone(msg); ok {
 				m.tabbedWindow.SetActiveTab(idx)
@@ -928,6 +935,12 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 			m.tabbedWindow.ResetTerminalToNormalMode()
 			return m, m.instanceChanged()
 		}
+		// A committed filter (typed with /, accepted with Enter) is still
+		// narrowing the list; Esc clears it, the expected escape hatch.
+		if m.list.FilterQuery() != "" {
+			m.list.ClearFilter()
+			return m, m.instanceChanged()
+		}
 	}
 
 	// Handle quit commands first
@@ -951,9 +964,9 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 	case keys.KeyHelp:
 		return m.showHelpScreen(helpTypeGeneral{}, nil)
 	case keys.KeyPrompt:
-		if m.list.NumInstances() >= GlobalInstanceLimit {
+		if limit := m.appConfig.GetMaxSessions(); m.list.NumInstances() >= limit {
 			return m, m.handleError(
-				fmt.Errorf("you can't create more than %d instances", GlobalInstanceLimit))
+				fmt.Errorf("you can't create more than %d sessions (max_sessions in config.json)", limit))
 		}
 
 		// Open the unified new-session form immediately. The session itself is not created
@@ -976,9 +989,9 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 
 		return m, tea.Batch(tea.WindowSize(), fetchCmd, initialSearch)
 	case keys.KeyNew:
-		if m.list.NumInstances() >= GlobalInstanceLimit {
+		if limit := m.appConfig.GetMaxSessions(); m.list.NumInstances() >= limit {
 			return m, m.handleError(
-				fmt.Errorf("you can't create more than %d instances", GlobalInstanceLimit))
+				fmt.Errorf("you can't create more than %d sessions (max_sessions in config.json)", limit))
 		}
 		// Derive the contextual target before adding the new instance. The inline `n`
 		// flow has no directory picker, so the target must already be a real directory
@@ -1066,10 +1079,18 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		m.tabbedWindow.ToggleReverse()
 		m.menu.SetActiveTab(m.tabbedWindow.GetActiveTab())
 		return m, m.instanceChanged()
+	case keys.KeyTabPreview, keys.KeyTabDiff, keys.KeyTabTerminal:
+		// Direct tab jump by number, complementing Tab/Shift+Tab cycling. The
+		// three KeyNames are consecutive, so the offset from KeyTabPreview is the
+		// tab index (PreviewTab/DiffTab/TerminalTab are likewise 0/1/2).
+		m.tabbedWindow.SetActiveTab(int(name - keys.KeyTabPreview))
+		m.menu.SetActiveTab(m.tabbedWindow.GetActiveTab())
+		return m, m.instanceChanged()
 	case keys.KeyKill:
 		return m, m.confirmKill(m.list.GetSelectedInstance())
 	case keys.KeyFilter:
-		m.list.SetFilter("")
+		// Resume editing a committed query rather than resetting it — re-pressing
+		// / to refine a filter should not force retyping it. Esc still clears.
 		m.list.SetFilterActive(true)
 		m.state = stateFilter
 		m.menu.SetState(ui.StateFilter)
@@ -1122,7 +1143,7 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		}
 
 		// Show confirmation modal
-		message := fmt.Sprintf("[!] Push changes from session '%s'?", selected.DisplayName())
+		message := fmt.Sprintf("Push changes from session '%s'?", selected.DisplayName())
 		return m, m.confirmAction(message, pushAction)
 	case keys.KeyCheckout:
 		selected := m.list.GetSelectedInstance()
@@ -1774,16 +1795,27 @@ func tickUpdateMetadataCmd(active []*session.Instance, selected *session.Instanc
 	}
 }
 
-// handleError handles all errors which get bubbled up to the app. sets the error message. We return a callback tea.Cmd that returns a hideErrMsg message
-// which clears the error message after 3 seconds.
+// errToastDuration is how long the transient error box stays before auto-hiding.
+const errToastDuration = 5 * time.Second
+
+// handleError surfaces an error in the UI. Short, single-line errors get the
+// transient bottom toast (auto-hidden after errToastDuration). An error that the
+// toast cannot actually convey — multi-line, or wider than the error box can
+// show (e.g. a failed push's git output) — is routed to the persistent info
+// modal instead, but only from stateDefault: in any overlay state (e.g. a form
+// validation error) switching to stateInfo would clobber the open overlay, so
+// those always use the toast.
 func (m *home) handleError(err error) tea.Cmd {
+	if m.state == stateDefault && !m.errBox.Fits(err) {
+		return m.showInfo(err.Error()) // showInfo logs the message itself
+	}
 	log.ErrorLog.Printf("%v", err)
 	m.errBox.SetError(err)
 	m.recomputeLayout() // give the error its row; panes shrink by one
 	return func() tea.Msg {
 		select {
 		case <-m.ctx.Done():
-		case <-time.After(3 * time.Second):
+		case <-time.After(errToastDuration):
 		}
 
 		return hideErrMsg{}
@@ -1823,7 +1855,7 @@ func (m *home) resumeSelected(selected *session.Instance) tea.Cmd {
 		return m.showInfo(err.Error())
 	}
 
-	message := fmt.Sprintf("[!] Branch '%s' is checked out in the main repo. Detach it and resume?", wt.GetBranchName())
+	message := fmt.Sprintf("Branch '%s' is checked out in the main repo. Detach it and resume?", wt.GetBranchName())
 	action := func() tea.Msg {
 		if derr := wt.DetachBranchInBaseRepo(); derr != nil {
 			// e.g. the dirty-repo refusal — show it in a modal the user can read.
@@ -2075,11 +2107,15 @@ func (m *home) confirmKill(inst *session.Instance) tea.Cmd {
 		return instanceChangedMsg{}
 	}
 
-	message := fmt.Sprintf("[!] Kill session '%s'?", inst.DisplayName())
+	message := fmt.Sprintf("Kill session '%s'?", inst.DisplayName())
 	cmd := m.confirmAction(message, killAction)
+	// Kill is the one destructive confirmation, so it alone wears the danger
+	// border (the default is accent); confirmAction created m.confirmationOverlay
+	// synchronously above.
+	m.confirmationOverlay.SetBorderColor(theme.Current().Palette.Danger)
 	// Opt-in: a second press of the kill key confirms the dialog, so Ctrl+X Ctrl+X
 	// kills in one motion. Scoped to the kill dialog (other confirmations still
-	// require 'y'); confirmAction created m.confirmationOverlay synchronously above.
+	// require 'y').
 	if m.appConfig.GetKillDoubleTapConfirm() {
 		m.confirmationOverlay.SetConfirmAltKey(keys.KillKey)
 	}

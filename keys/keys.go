@@ -66,6 +66,12 @@ const (
 	// preview pane.
 	KeyShrinkList
 	KeyGrowList
+
+	// KeyTabPreview/KeyTabDiff/KeyTabTerminal jump straight to a tab by number,
+	// complementing Tab/Shift+Tab cycling.
+	KeyTabPreview
+	KeyTabDiff
+	KeyTabTerminal
 )
 
 // KillKey is the chord that triggers a kill from the session list. It mirrors the
@@ -107,6 +113,9 @@ var GlobalKeyStringsMap = map[string]KeyName{
 	"/":          KeyFilter,
 	"<":          KeyShrinkList,
 	">":          KeyGrowList,
+	"1":          KeyTabPreview,
+	"2":          KeyTabDiff,
+	"3":          KeyTabTerminal,
 }
 
 // GlobalkeyBindings is a global, immutable map of KeyName to keybinding.
@@ -228,6 +237,18 @@ var GlobalkeyBindings = map[KeyName]key.Binding{
 	KeyGrowList: key.NewBinding(
 		key.WithKeys(">"),
 		key.WithHelp(">", "grow list"),
+	),
+	KeyTabPreview: key.NewBinding(
+		key.WithKeys("1"),
+		key.WithHelp("1", "preview tab"),
+	),
+	KeyTabDiff: key.NewBinding(
+		key.WithKeys("2"),
+		key.WithHelp("2", "diff tab"),
+	),
+	KeyTabTerminal: key.NewBinding(
+		key.WithKeys("3"),
+		key.WithHelp("3", "terminal tab"),
 	),
 
 	// -- Special keybindings --

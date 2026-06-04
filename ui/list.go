@@ -23,6 +23,11 @@ import (
 // queried (InstanceAtZone only checks rows currently in the list).
 func listRowZoneID(title string) string { return "list-row-" + title }
 
+// listHeaderZoneID is the bubblezone marker id for a repo-group header row,
+// keyed by the group's repoKey. Like row zones, only keys currently present are
+// ever queried (HeaderAtZone walks the live groups).
+func listHeaderZoneID(key string) string { return "list-header-" + key }
+
 // Row/header/selection styles read the active theme at render time.
 func repoHeaderStyle() lipgloss.Style { return theme.Current().DimStyle().Bold(true).Padding(0, 1) }
 func repoRuleStyle() lipgloss.Style   { return theme.Current().FaintStyle() }
@@ -161,12 +166,10 @@ func (l *List) groupUnreadCount(start, end int) int {
 }
 
 // filterBarStyle renders the incremental search bar that appears below the list header
-// when a filter is active.
-var filterBarStyle = lipgloss.NewStyle().
-	Foreground(lipgloss.AdaptiveColor{Light: "#555555", Dark: "#aaaaaa"})
-
-var filterBarActiveStyle = lipgloss.NewStyle().
-	Foreground(lipgloss.AdaptiveColor{Light: "#1a1a1a", Dark: "#ffffff"})
+// when a filter is active; filterBarActiveStyle brightens it while the user is typing.
+// Both read the active theme at render time like every other style in this file.
+func filterBarStyle() lipgloss.Style       { return theme.Current().DimStyle() }
+func filterBarActiveStyle() lipgloss.Style { return theme.Current().FgStyle() }
 
 // List is the left panel: the instance list grouped by repo, with collapse
 // state, incremental filtering, and the selection the rest of the UI follows.
@@ -494,8 +497,8 @@ func (r *InstanceRenderer) Render(i *session.Instance, idx int, selected bool) s
 }
 
 func (l *List) String() string {
-	// The list title and global state moved to the top status bar; the list is
-	// now a pure (scrollable) stream of repo groups and session rows.
+	// The list is a pure (scrollable) stream of repo groups and session rows;
+	// its only chrome is the panel border (the title rides the border's top edge).
 	// Build the list as a flat slice of lines (each row is two lines; headers one;
 	// a blank line separates groups), tracking the selected block's line range so
 	// the viewport can scroll to keep it visible.
@@ -515,9 +518,9 @@ func (l *List) String() string {
 		if l.filterActive {
 			cursor = "▌"
 		}
-		style := filterBarStyle
+		style := filterBarStyle()
 		if l.filterActive {
-			style = filterBarActiveStyle
+			style = filterBarActiveStyle()
 		}
 		lines = append(lines, style.Render(" / "+l.filterQuery+cursor), "")
 	}
@@ -553,7 +556,7 @@ func (l *List) String() string {
 			headerSelected := collapsed && l.selectedIdx == start
 			ni := l.groupNeedsInputCount(start, end)
 			ur := l.groupUnreadCount(start, end)
-			at := appendBlock(l.renderRepoHeader(key, collapsed, end-start, ni, ur, headerSelected))
+			at := appendBlock(zone.Mark(listHeaderZoneID(key), l.renderRepoHeader(key, collapsed, end-start, ni, ur, headerSelected)))
 			if headerSelected {
 				selStart, selH = at, len(lines)-at
 			}
@@ -575,7 +578,7 @@ func (l *List) String() string {
 	// `first` is still set only if no group rendered any row, i.e. the query matched nothing.
 	// Show an explicit hint so the empty list is not mistaken for "no sessions exist".
 	if filtering && first {
-		lines = append(lines, filterBarStyle.Render("   no matches"))
+		lines = append(lines, filterBarStyle().Render("   no matches"))
 	}
 
 	// Inner content area inside the panel border (2 cols / 2 rows of chrome).
@@ -667,6 +670,50 @@ func (l *List) InstanceAtZone(msg tea.MouseMsg) *session.Instance {
 		}
 	}
 	return nil
+}
+
+// HeaderAtZone returns the repo-group key of the header row containing the given
+// mouse event, and whether any header was hit. Mirrors InstanceAtZone: only the
+// groups currently in the list are considered.
+func (l *List) HeaderAtZone(msg tea.MouseMsg) (string, bool) {
+	for i := 0; i < len(l.items); {
+		key := repoKey(l.items[i])
+		if zone.Get(listHeaderZoneID(key)).InBounds(msg) {
+			return key, true
+		}
+		_, end := l.groupBounds(i)
+		i = end
+	}
+	return "", false
+}
+
+// ClickHeader toggles the fold of the repo group named key — the mouse
+// counterpart of the ←/→ keyboard fold — snapping the selection to the group's
+// anchor so keyboard and mouse agree on where the cursor is. Returns whether
+// anything changed (false for an unknown key or when folding is meaningless,
+// i.e. fewer than two repos), so the caller can skip the persistence write.
+func (l *List) ClickHeader(key string) bool {
+	if l.distinctRepoCount() <= 1 {
+		return false
+	}
+	anchor := -1
+	for i, item := range l.items {
+		if repoKey(item) == key {
+			anchor = i
+			break
+		}
+	}
+	if anchor < 0 {
+		return false
+	}
+	l.selectedIdx = anchor
+	if l.collapsed[key] {
+		delete(l.collapsed, key)
+	} else {
+		l.collapsed[key] = true
+	}
+	l.clampSelectionToNavigable()
+	return true
 }
 
 // Down selects the next visible item in the list, wrapping at the end and skipping the hidden

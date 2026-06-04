@@ -15,16 +15,21 @@ import (
 func tabZoneID(i int) string { return fmt.Sprintf("tab-%d", i) }
 
 func tabBorderWithBottom(left, middle, right string) lipgloss.Border {
-	border := lipgloss.RoundedBorder()
+	// Start from the theme's box style so a fallback theme's square corners
+	// apply to the tab strip too, not just the panels.
+	border := theme.Current().Borders.Style
 	border.BottomLeft = left
 	border.Bottom = middle
 	border.BottomRight = right
 	return border
 }
 
-// Tab/window styles read the active theme at render time. The active tab and
-// the window border use the accent color; inactive tabs recede (faint border,
-// dim label).
+// Tab/window styles read the active theme at render time. Border color carries
+// focus: the right pane's chrome is faint by default (the list panel, which owns
+// the selection, keeps the accent border) and lights up accent only while a pane
+// is in scroll mode — the one state where keyboard input is captured by this
+// pane. focused is that scroll-mode flag; frame metrics are identical either
+// way, so size computations may pass false.
 func inactiveTabStyle() lipgloss.Style {
 	return lipgloss.NewStyle().
 		Border(tabBorderWithBottom("┴", "─", "┴"), true).
@@ -33,19 +38,29 @@ func inactiveTabStyle() lipgloss.Style {
 		AlignHorizontal(lipgloss.Center)
 }
 
-func activeTabStyle() lipgloss.Style {
+func activeTabStyle(focused bool) lipgloss.Style {
+	border := theme.Current().Palette.FgFaint
+	label := theme.Current().Palette.AccentMuted
+	if focused {
+		border = theme.Current().Palette.Accent
+		label = theme.Current().Palette.Accent
+	}
 	return lipgloss.NewStyle().
 		Border(tabBorderWithBottom("┘", " ", "└"), true).
-		BorderForeground(theme.Current().Palette.Accent).
-		Foreground(theme.Current().Palette.Accent).
+		BorderForeground(border).
+		Foreground(label).
 		Bold(true).
 		AlignHorizontal(lipgloss.Center)
 }
 
-func windowStyle() lipgloss.Style {
+func windowStyle(focused bool) lipgloss.Style {
+	color := theme.Current().Palette.FgFaint
+	if focused {
+		color = theme.Current().Palette.Accent
+	}
 	return lipgloss.NewStyle().
-		BorderForeground(theme.Current().Palette.Accent).
-		Border(lipgloss.RoundedBorder(), false, true, true, true)
+		BorderForeground(color).
+		Border(theme.Current().Borders.Style, false, true, true, true)
 }
 
 // Indices of the right pane's tabs, in display order.
@@ -102,7 +117,7 @@ func (w *TabbedWindow) SetSize(width, height int) {
 	// w.width is the inner (pre-border) width; the window border adds its
 	// horizontal frame back, so the pane's total rendered width equals the given
 	// width and the right pane fills its column exactly.
-	w.width = width - windowStyle().GetHorizontalFrameSize()
+	w.width = width - windowStyle(false).GetHorizontalFrameSize()
 	w.height = height
 
 	// Calculate the content height by subtracting:
@@ -110,9 +125,9 @@ func (w *TabbedWindow) SetSize(width, height int) {
 	// 2. Window style vertical frame size (bottom border)
 	// The tab strip's top border is the pane's visual top edge, so it aligns
 	// with the list panel's top border at row 0 — no leading blank rows.
-	tabHeight := activeTabStyle().GetVerticalFrameSize() + 1
-	contentHeight := height - tabHeight - windowStyle().GetVerticalFrameSize()
-	contentWidth := w.width - windowStyle().GetHorizontalFrameSize()
+	tabHeight := activeTabStyle(false).GetVerticalFrameSize() + 1
+	contentHeight := height - tabHeight - windowStyle(false).GetVerticalFrameSize()
+	contentWidth := w.width - windowStyle(false).GetHorizontalFrameSize()
 
 	w.preview.SetSize(contentWidth, contentHeight)
 	w.diff.SetSize(contentWidth, contentHeight)
@@ -267,6 +282,13 @@ func (w *TabbedWindow) IsTerminalInScrollMode() bool {
 	return w.terminal.IsScrolling()
 }
 
+// paneScrolling reports whether any tab pane is in scroll mode — the state that
+// renders the window's chrome as focused. The diff tab scrolls live without a
+// mode, so it never claims focus.
+func (w *TabbedWindow) paneScrolling() bool {
+	return w.preview.isScrolling || w.terminal.IsScrolling()
+}
+
 // ResetTerminalToNormalMode exits scroll mode on the terminal pane
 func (w *TabbedWindow) ResetTerminalToNormalMode() {
 	w.terminal.ResetToNormalMode()
@@ -279,10 +301,14 @@ func (w *TabbedWindow) String() string {
 
 	var renderedTabs []string
 
-	totalTabWidth := w.width + windowStyle().GetHorizontalFrameSize()
+	// Scroll mode is the one state where this pane captures keyboard input, so
+	// it is what lights the pane's chrome up as focused.
+	focused := w.paneScrolling()
+
+	totalTabWidth := w.width + windowStyle(false).GetHorizontalFrameSize()
 	tabWidth := totalTabWidth / len(w.tabs)
 	lastTabWidth := totalTabWidth - tabWidth*(len(w.tabs)-1)
-	tabHeight := activeTabStyle().GetVerticalFrameSize() + 1 // get padding border margin size + 1 for character height
+	tabHeight := activeTabStyle(false).GetVerticalFrameSize() + 1 // get padding border margin size + 1 for character height
 
 	for i, t := range w.tabs {
 		width := tabWidth
@@ -293,7 +319,7 @@ func (w *TabbedWindow) String() string {
 		var style lipgloss.Style
 		isFirst, isLast, isActive := i == 0, i == len(w.tabs)-1, i == w.activeTab
 		if isActive {
-			style = activeTabStyle()
+			style = activeTabStyle(focused)
 		} else {
 			style = inactiveTabStyle()
 		}
@@ -322,9 +348,9 @@ func (w *TabbedWindow) String() string {
 	case TerminalTab:
 		content = w.terminal.String()
 	}
-	window := windowStyle().Render(
+	window := windowStyle(focused).Render(
 		lipgloss.Place(
-			w.width, w.height-windowStyle().GetVerticalFrameSize()-tabHeight,
+			w.width, w.height-windowStyle(false).GetVerticalFrameSize()-tabHeight,
 			lipgloss.Left, lipgloss.Top, content))
 
 	// Defensive height cap: lipgloss.Place aligns content but does not truncate, so

@@ -36,8 +36,10 @@ func logPreviewFallback(instance *session.Instance, reason string, err error) {
 func previewPaneStyle() lipgloss.Style { return theme.Current().FgStyle() }
 
 // scrollExitFooter is the dim hint shown at the bottom of the scroll viewport.
+// "snapshot" is the important word: entering scroll mode freezes a capture of
+// the pane, so new agent output is invisible until the user leaves.
 func scrollExitFooter() string {
-	return theme.Current().DimStyle().Render("ESC to exit scroll mode")
+	return theme.Current().DimStyle().Render("— snapshot · ESC to resume live view")
 }
 
 // PreviewPane renders the selected instance's captured tmux pane content, with
@@ -93,7 +95,7 @@ func (p *PreviewPane) setFallbackState(message string) {
 func (p *PreviewPane) UpdateContent(instance *session.Instance) error {
 	switch {
 	case instance == nil:
-		p.setFallbackState("No agents running yet. Spin up a new instance with 'n' to get started!")
+		p.setFallbackState("No agents running yet. Spin up a new session with 'n' to get started!")
 		return nil
 	case instance.Paused():
 		// A direct (non-git) session has no branch to check out — show a plain resume hint.
