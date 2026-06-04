@@ -280,9 +280,9 @@ func TestPollClaudeSelectionPrompt(t *testing.T) {
 // A custom Claude Code statusLine renders below the selection-prompt footer (captured live:
 // the overlay draws a horizontal rule, then "6. Chat about this", the key-hint footer, blank
 // padding, and finally the user's multi-line statusLine). The footer is then several non-empty
-// lines above the pane bottom, so a fixed bottom-N window misses it. Anchoring to the live
-// chrome below the last box border (footerRegion) keeps it visible no matter how tall the
-// statusLine is.
+// lines above the pane bottom, so a fixed bottom-N window misses it. The rule-delimited
+// segment scan (selectionFooterVisible) keeps it visible regardless of the statusLine's
+// height.
 func TestPollClaudeSelectionPromptBelowStatusLine(t *testing.T) {
 	rule := strings.Repeat("─", 80)
 	pane := strings.Join([]string{
@@ -303,10 +303,85 @@ func TestPollClaudeSelectionPromptBelowStatusLine(t *testing.T) {
 		"a selection prompt whose footer sits above a multi-line statusLine is still a prompt")
 }
 
+// Regression (review): a custom statusLine may draw its own horizontal divider — a pure-─
+// separator is a common powerline/boxed statusLine idiom. Anchoring the footer match to
+// "below the last rule" would re-anchor past the footer onto the statusLine's divider and
+// miss the prompt: the very displacement bug the statusLine fix addresses, reintroduced by
+// fancier statusLines. Detection must survive any number of rules below the footer.
+func TestPollClaudeSelectionPromptAboveStatusLineDivider(t *testing.T) {
+	rule := strings.Repeat("─", 80)
+	for _, tc := range []struct {
+		name       string
+		statusLine []string
+	}{
+		{"divider", []string{"────────────", "  main · opus · 12% ctx"}},
+		{"boxed", []string{"──────────", "  main · opus · 12% ctx", "──────────"}},
+		{"tall sectioned", []string{
+			"────────────",
+			"  main · opus · 12% ctx",
+			"  2 tasks (0 done, 2 open)",
+			"────────────",
+			"  ◻ Session ID: c706f0e8-d7a3-413e-85bf-9b74bd725e0b",
+			"  ◻ Worktree mode: inplace",
+		}},
+	} {
+		pane := strings.Join(append([]string{
+			"  5. Type something.",
+			rule,
+			"  6. Chat about this",
+			"",
+			"Enter to select · ↑/↓ to navigate · Esc to cancel",
+			"", "",
+		}, tc.statusLine...), "\n")
+		c := pane
+		s := pollSession(t, "claude", &c, nil)
+		require.Equal(t, PanePrompt, s.Poll(),
+			"a selection prompt above a %s statusLine is still a prompt", tc.name)
+	}
+}
+
+// FP-safety: the footer's co-occurring tokens must appear within one rule-delimited segment.
+// Hint text spread across different segments — Claude's own hint line plus an unrelated
+// statusLine line below a divider — must not combine into a false footer.
+func TestPollClaudeHintTokensAcrossSegmentsStayIdle(t *testing.T) {
+	pane := strings.Join([]string{
+		"╭────────────────────────────────────────╮",
+		"│ >                                        │",
+		"╰────────────────────────────────────────╯",
+		"  ⏵⏵ auto mode on · ↑/↓ to navigate history · ← for agents",
+		"────────────",
+		"  press Esc to cancel the current task",
+	}, "\n")
+	c := pane
+	s := pollSession(t, "claude", &c, nil)
+	require.Equal(t, PaneIdle, s.Poll(),
+		"footer tokens split across rule-delimited segments must not be read as a live prompt")
+}
+
+// FP-safety: a transcript quote of the footer stays excluded even when the statusLine draws
+// its own divider below the input box — the upward scan stops at the box interior and never
+// reaches the quote.
+func TestPollClaudeFooterQuoteAboveBoxWithDividerStatusLine(t *testing.T) {
+	pane := strings.Join([]string{
+		"  The selection footer looks like:",
+		"  Enter to select · ↑/↓ to navigate · Esc to cancel",
+		"╭────────────────────────────────────────╮",
+		"│ ❯                                        │",
+		"╰────────────────────────────────────────╯",
+		"  ⏵⏵ auto mode on (shift+tab to cycle) · ← for agents",
+		"────────────",
+		"  main · opus · 12% ctx",
+	}, "\n")
+	c := pane
+	s := pollSession(t, "claude", &c, nil)
+	require.Equal(t, PaneIdle, s.Poll(),
+		"a quoted footer above the input box must stay idle regardless of statusLine rules")
+}
+
 // FP-safety: an idle pane whose scrolled-back transcript quotes the full footer line must
-// stay idle. The quote sits above the input box, so footerRegion (below the box's bottom
-// border) excludes it — where a merely-wider bottom-N window would re-admit it and flip the
-// session to a spurious needs-input.
+// stay idle. The quote sits above the input box, so the upward segment scan stops at the
+// box interior before reaching it — where a merely-wider bottom-N window would re-admit it
+// and flip the session to a spurious needs-input.
 func TestPollClaudeFooterQuoteInScrollbackStaysIdle(t *testing.T) {
 	rule := strings.Repeat("─", 80)
 	pane := strings.Join([]string{
@@ -346,8 +421,9 @@ func TestPollClaudePromptWrapTolerant(t *testing.T) {
 	require.Equal(t, PanePrompt, s.Poll(), "a wrapped permission dialog is still a prompt")
 
 	// Footer wrapped across three physical lines, with a filler line between the nav/select
-	// token and "Esc to cancel". This pins footerChromeLines at its current width: any window
-	// narrower than 3 would drop the nav/select token and silently misclassify the prompt.
+	// token and "Esc to cancel". This pane has no horizontal rule, so it pins the no-rule
+	// fallback window (workChromeLines) at its current width: any window narrower than 3
+	// would drop the nav/select token and silently misclassify the prompt.
 	threeLineFooter := "Server restart?\n❯ 2. Restart now\n" +
 		"Enter to select · ↑/↓ to navigate\n· n to add notes\n· Esc to cancel"
 	c = threeLineFooter

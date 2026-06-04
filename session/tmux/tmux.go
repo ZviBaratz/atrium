@@ -137,6 +137,96 @@ func continueProgram(program string) string {
 	return program
 }
 
+// selectionFooterTokens reports whether the flattened text carries the selection footer's
+// co-occurring key hints: "Esc to cancel" plus a navigate/select token. Requiring the pair
+// keeps prose that merely mentions one phrase from reading as a live prompt.
+func selectionFooterTokens(s string) bool {
+	return strings.Contains(s, "Esc to cancel") &&
+		(strings.Contains(s, "to navigate") || strings.Contains(s, "to select"))
+}
+
+// isInputBoxLine reports whether line is the interior of Claude's input box: the "❯" or ">"
+// prompt, optionally inside the box's "│" side borders, possibly followed by typed text.
+// The box is drawn only while no overlay is up, so reaching it while scanning upward proves
+// everything above is scrolled-back transcript.
+func isInputBoxLine(line string) bool {
+	s := strings.TrimSpace(line)
+	s = strings.TrimSpace(strings.TrimPrefix(s, "│"))
+	return strings.HasPrefix(s, "❯") || strings.HasPrefix(s, ">")
+}
+
+// selectionFooterVisible reports whether the live key-hint footer of a Claude selection
+// prompt (AskUserQuestion, plan approval, …) is on screen. A custom multi-line statusLine
+// can render *below* the footer and push it out of any fixed bottom-N window — and a
+// statusLine may draw its own ─── dividers, which defeats any single "below the last rule"
+// anchor by becoming the last rule itself. So instead of one anchor, the pane is scanned as
+// rule-delimited segments, bottom-up:
+//
+//   - The footer tokens must co-occur within a single segment (flattened, so a footer
+//     hard-wrapped at a narrow pane width is reconstructed), which also keeps unrelated hint
+//     text in neighboring segments from combining into a false footer.
+//   - The scan stops at the input box interior (isInputBoxLine as a segment's first
+//     non-empty line): the box and an overlay are mutually exclusive, and the live footer
+//     always sits below any "❯" option pointer, so a segment opening with the prompt char
+//     means everything above is transcript — where a quoted footer must not count. A
+//     statusLine segment that itself opens with "❯"/">" stops the scan early and hides a
+//     footer above it; that residual miss needs a statusLine with both a divider and a
+//     prompt-char-initial line.
+//   - The scan is confined to the bottom promptChromeLines non-empty lines — the same budget
+//     the permission dialog uses — which caps how far a rule-bearing transcript can be
+//     searched on degenerate panes that show neither a box nor an overlay, at the cost of
+//     missing footers displaced by statusLines taller than that budget.
+//   - With no rule on screen there is no structure to segment by; fall back to the tight
+//     workChromeLines window, preserving the fixed-window behavior for minimal footers.
+func selectionFooterVisible(content string) bool {
+	lines := strings.Split(content, "\n")
+	nonEmpty := 0
+	for i := len(lines) - 1; i >= 0; i-- {
+		if strings.TrimSpace(lines[i]) != "" {
+			nonEmpty++
+			if nonEmpty == promptChromeLines {
+				lines = lines[i:]
+				break
+			}
+		}
+	}
+
+	var rules []int
+	for i, line := range lines {
+		if isHorizontalRule(line) {
+			rules = append(rules, i)
+		}
+	}
+	if len(rules) == 0 {
+		return selectionFooterTokens(flattenChrome(content, workChromeLines))
+	}
+
+	end := len(lines)
+	for k := len(rules) - 1; k >= -1; k-- {
+		start := 0
+		if k >= 0 {
+			start = rules[k] + 1
+		}
+		segment := lines[start:end]
+		if selectionFooterTokens(whiteSpaceRegex.ReplaceAllString(strings.Join(segment, " "), " ")) {
+			return true
+		}
+		for _, line := range segment {
+			if strings.TrimSpace(line) == "" {
+				continue
+			}
+			if isInputBoxLine(line) {
+				return false
+			}
+			break
+		}
+		if k >= 0 {
+			end = rules[k]
+		}
+	}
+	return false
+}
+
 // detectPrompt reports whether content (the full cleaned pane) shows a prompt that blocks on
 // the user's answer. Claude has two shapes: the tool-permission dialog, and any interactive
 // selection (AskUserQuestion, plan approval, etc.). Matching is done against the flattened
@@ -145,12 +235,10 @@ func continueProgram(program string) string {
 //
 // The permission dialog and the aider/gemini prompts are matched within the bottom
 // promptChromeLines window, which keeps prose higher in the chrome (and in the scrolled-back
-// transcript) from tripping detection. The selection footer instead anchors to footerRegion —
-// the live chrome below the last box border, the same anchor markerWorking uses — because a
-// custom multi-line statusLine can render *below* the footer and push it out of any fixed
-// bottom-N window, while a footer quoted in the transcript stays above the input box's border
-// and is excluded. The footer still requires its co-occurring tokens ("Esc to cancel" +
-// navigate/select), so a statusLine that merely happens to sit below it cannot trip detection.
+// transcript) from tripping detection. The selection footer instead uses the rule-delimited
+// segment scan of selectionFooterVisible, because a custom multi-line statusLine can render
+// *below* the footer — possibly with its own divider rules — and push it out of any fixed
+// bottom-N window or past any single structural anchor.
 func detectPrompt(program, content string) bool {
 	switch {
 	case isClaude(program):
@@ -158,12 +246,7 @@ func detectPrompt(program, content string) bool {
 			"No, and tell Claude what to do differently") {
 			return true
 		}
-		footer := whiteSpaceRegex.ReplaceAllString(footerRegion(content), " ")
-		if strings.Contains(footer, "Esc to cancel") &&
-			(strings.Contains(footer, "to navigate") || strings.Contains(footer, "to select")) {
-			return true
-		}
-		return false
+		return selectionFooterVisible(content)
 	case strings.HasPrefix(program, ProgramAider):
 		return strings.Contains(flattenChrome(content, promptChromeLines), "(Y)es/(N)o/(D)on't ask again")
 	case strings.HasPrefix(program, ProgramGemini):
@@ -337,8 +420,9 @@ func flattenChrome(content string, n int) string {
 // Window sizes for marker detection within the bottom chrome. The working status bar is
 // the last line, so a tight window is safest; a prompt block (question + options + footer,
 // possibly with a todo tracker below) needs a taller one. The selection footer no longer uses
-// a fixed window — it anchors to footerRegion (see detectPrompt) — so its 3-line floor now
-// comes from workChromeLines via footerRegion's no-rule fallback.
+// a fixed window — it scans rule-delimited segments (see selectionFooterVisible) — but both
+// constants still bound that scan: promptChromeLines caps its depth and workChromeLines is
+// its no-rule fallback.
 const (
 	workChromeLines   = 3
 	promptChromeLines = 15
