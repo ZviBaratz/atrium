@@ -75,6 +75,21 @@ func TestMarkSeenAfterDwell_SelectionFloor(t *testing.T) {
 	require.True(t, inst.Unread(), "a just-selected row must not be marked seen (cursor travel)")
 }
 
+// On startup the first preview tick runs markSeenAfterDwell before
+// instanceChanged has ever stamped selectedSince, so the field is still its
+// zero value — no dwell can have been observed yet, and the tick must leave the
+// unread state alone. Regression test: the zero value used to read as "selected
+// ~forever", wiping a restored unread bit ~100ms after launch.
+func TestMarkSeenAfterDwell_ZeroSelectedSince(t *testing.T) {
+	h, inst := newUnreadHome(t)
+	// selectedSince deliberately left at its zero value (pre-first-tick state);
+	// the unread floor is satisfied so only the missing selection stamp blocks.
+
+	h.markSeenAfterDwell(inst.UnreadAt().Add(readDwell + time.Second))
+
+	require.True(t, inst.Unread(), "no dwell exists before the first selection stamp; unread must survive the first tick")
+}
+
 // The dwell only runs in the default UI state: with an overlay up (help, new
 // session, confirm, …) the user is not looking at the preview pane.
 func TestMarkSeenAfterDwell_GatedOnDefaultState(t *testing.T) {

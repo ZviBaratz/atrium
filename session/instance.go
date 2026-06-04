@@ -121,8 +121,12 @@ type Instance struct {
 	// poll that follows settles to Ready without the agent having produced new
 	// output. The next into-Ready transition consumes the flag without flagging
 	// unread; any non-Ready SetStatus clears it (an observed working phase means
-	// the following completion is genuine). Arming sites must arm *after* their
-	// own SetStatus(Running) write. In-memory only. Guarded by mu.
+	// the following completion is genuine). Arming sites that write
+	// SetStatus(Running) themselves must arm *after* that write, or the write
+	// would clear the flag they just set; the post-detach arm instead precedes
+	// its poll's async Running write, which is safe — that write clearing the
+	// flag is exactly the observed-working rule above. In-memory only. Guarded
+	// by mu.
 	suppressNextUnread bool
 
 	// The below fields are initialized upon calling Start(). Guarded by mu.

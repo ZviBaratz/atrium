@@ -195,7 +195,9 @@ type home struct {
 	// selectedSince records when the current selection was last changed. The
 	// read-dwell (markSeenAfterDwell) requires the row to have been selected this
 	// long before clearing its unread state, so cursor travel through rows never
-	// marks them seen.
+	// marks them seen. Zero until instanceChanged first stamps it (~the first
+	// preview tick); markSeenAfterDwell treats the zero value as "no dwell yet",
+	// never as a dwell long since passed.
 	selectedSince time.Time
 }
 
@@ -1429,6 +1431,13 @@ func (m *home) markSeenAfterDwell(now time.Time) {
 	}
 	sel := m.list.GetSelectedInstance()
 	if sel == nil || !sel.Unread() {
+		return
+	}
+	// Zero selectedSince means instanceChanged hasn't stamped a selection yet
+	// (the first tick runs this before it): no dwell has been observed, and the
+	// zero value must not read as "selected ~forever" — that would wipe a
+	// restored unread bit (whose unreadAt is also zero) ~100ms after launch.
+	if m.selectedSince.IsZero() {
 		return
 	}
 	if now.Sub(m.selectedSince) < readDwell || now.Sub(sel.UnreadAt()) < readDwell {

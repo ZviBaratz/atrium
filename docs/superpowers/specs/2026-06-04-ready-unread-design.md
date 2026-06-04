@@ -73,11 +73,11 @@ daemon advanced while the TUI was closed.
 
 | Piece | Where | Change |
 |---|---|---|
-| Domain state | `session/instance.go` | `unread`, `suppressNextUnread`, `unreadAt` fields; edge detection in `SetStatus`; `Unread()/UnreadAt()/MarkSeen()/armReadySuppression()`; suppression arming in `FromInstanceData` (iff persisted Status==Ready), `recoverInPlace`, `Resume` |
+| Domain state | `session/instance.go` | `unread`, `suppressNextUnread`, `unreadAt` fields; edge detection in `SetStatus`; `Unread()/UnreadAt()/MarkSeen()/ArmReadySuppression()`; suppression arming in `FromInstanceData` (iff persisted Status==Ready), `recoverInPlace`, `Resume` |
 | Serialization | `session/storage.go` | `Unread bool` on `InstanceData` (omitempty; old files default to seen) |
 | Theme | `ui/theme/theme.go`, `registry.go` | `Palette.SuccessDim` (tokyo-night `#6a8a4a`, catppuccin-mocha `#6c9168`; unicode inherits tokyo-night's palette), `Glyphs.ReadySeen` (`○`) |
 | Rendering | `ui/list.go` | `stateParts` branches on `Unread()` for Ready; `groupUnreadCount` + dual badge in `renderRepoHeader` |
-| Triggers | `app/app.go` | `MarkSeen` in `attachExec`; `armReadySuppression` on both detach branches; `selectedSince` + `markSeenAfterDwell` (1.5 s dwell on both selection age and unread age, gated on `stateDefault`) driven by the existing 100 ms preview tick |
+| Triggers | `app/app.go` | `MarkSeen` in `attachExec`; `ArmReadySuppression` on both detach branches; `selectedSince` + `markSeenAfterDwell` (1.5 s dwell on both selection age and unread age, gated on `stateDefault`) driven by the existing 100 ms preview tick |
 
 The `unreadAt` floor guarantees every unread state stays visibly bright for at
 least the dwell duration even when its row is already selected (quick-send
