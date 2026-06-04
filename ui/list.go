@@ -23,6 +23,11 @@ import (
 // queried (InstanceAtZone only checks rows currently in the list).
 func listRowZoneID(title string) string { return "list-row-" + title }
 
+// listHeaderZoneID is the bubblezone marker id for a repo-group header row,
+// keyed by the group's repoKey. Like row zones, only keys currently present are
+// ever queried (HeaderAtZone walks the live groups).
+func listHeaderZoneID(key string) string { return "list-header-" + key }
+
 // Row/header/selection styles read the active theme at render time.
 func repoHeaderStyle() lipgloss.Style { return theme.Current().DimStyle().Bold(true).Padding(0, 1) }
 func repoRuleStyle() lipgloss.Style   { return theme.Current().FaintStyle() }
@@ -541,7 +546,7 @@ func (l *List) String() string {
 			headerSelected := collapsed && l.selectedIdx == start
 			ni := l.groupNeedsInputCount(start, end)
 			ur := l.groupUnreadCount(start, end)
-			at := appendBlock(l.renderRepoHeader(key, collapsed, end-start, ni, ur, headerSelected))
+			at := appendBlock(zone.Mark(listHeaderZoneID(key), l.renderRepoHeader(key, collapsed, end-start, ni, ur, headerSelected)))
 			if headerSelected {
 				selStart, selH = at, len(lines)-at
 			}
@@ -653,6 +658,50 @@ func (l *List) InstanceAtZone(msg tea.MouseMsg) *session.Instance {
 		}
 	}
 	return nil
+}
+
+// HeaderAtZone returns the repo-group key of the header row containing the given
+// mouse event, and whether any header was hit. Mirrors InstanceAtZone: only the
+// groups currently in the list are considered.
+func (l *List) HeaderAtZone(msg tea.MouseMsg) (string, bool) {
+	for i := 0; i < len(l.items); {
+		key := repoKey(l.items[i])
+		if zone.Get(listHeaderZoneID(key)).InBounds(msg) {
+			return key, true
+		}
+		_, end := l.groupBounds(i)
+		i = end
+	}
+	return "", false
+}
+
+// ClickHeader toggles the fold of the repo group named key — the mouse
+// counterpart of the ←/→ keyboard fold — snapping the selection to the group's
+// anchor so keyboard and mouse agree on where the cursor is. Returns whether
+// anything changed (false for an unknown key or when folding is meaningless,
+// i.e. fewer than two repos), so the caller can skip the persistence write.
+func (l *List) ClickHeader(key string) bool {
+	if l.distinctRepoCount() <= 1 {
+		return false
+	}
+	anchor := -1
+	for i, item := range l.items {
+		if repoKey(item) == key {
+			anchor = i
+			break
+		}
+	}
+	if anchor < 0 {
+		return false
+	}
+	l.selectedIdx = anchor
+	if l.collapsed[key] {
+		delete(l.collapsed, key)
+	} else {
+		l.collapsed[key] = true
+	}
+	l.clampSelectionToNavigable()
+	return true
 }
 
 // Down selects the next visible item in the list, wrapping at the end and skipping the hidden

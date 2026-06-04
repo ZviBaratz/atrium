@@ -105,3 +105,29 @@ func TestFilterKeys_EscClears(t *testing.T) {
 	require.Equal(t, stateDefault, h.state)
 	require.Equal(t, "", h.list.FilterQuery())
 }
+
+// Re-pressing '/' after committing a query resumes editing it (no forced retype).
+func TestFilterKeys_SlashResumesCommittedQuery(t *testing.T) {
+	h := newFilterHome()
+	enterFilter(t, h)
+	press(t, h, runeKey("a"))
+	press(t, h, tea.KeyMsg{Type: tea.KeyEnter}) // commit
+
+	enterFilter(t, h) // press '/' again
+
+	require.Equal(t, "a", h.list.FilterQuery(), "the committed query is kept for editing")
+}
+
+// Esc from the default state clears a committed filter — the escape hatch for a
+// query accepted with Enter. (Esc is not in the global keymap, so one press.)
+func TestFilterKeys_EscInDefaultClearsCommittedFilter(t *testing.T) {
+	h := newFilterHome()
+	enterFilter(t, h)
+	press(t, h, runeKey("a"))
+	press(t, h, tea.KeyMsg{Type: tea.KeyEnter}) // commit; back to stateDefault
+
+	press(t, h, tea.KeyMsg{Type: tea.KeyEscape})
+
+	require.Equal(t, stateDefault, h.state)
+	require.Equal(t, "", h.list.FilterQuery())
+}

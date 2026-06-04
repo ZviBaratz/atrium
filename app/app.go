@@ -34,10 +34,6 @@ import (
 	"golang.org/x/term"
 )
 
-// GlobalInstanceLimit caps how many sessions can exist at once; creating a new
-// session beyond it is rejected with an error in the UI.
-const GlobalInstanceLimit = 10
-
 // doubleClickWindow is the maximum delay between two left-clicks on the same
 // session row for the second to count as a double-click (attach). Bubble Tea has
 // no native double-click event, so it is detected by timing here.
@@ -484,6 +480,17 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.lastClickTitle = inst.Title
 				m.lastClickAt = now
 				return m, m.instanceChanged()
+			}
+			// A click on a repo-group header toggles its fold, mirroring ←/→.
+			// Persist the new collapsed set exactly like the keyboard paths do.
+			if key, ok := m.list.HeaderAtZone(msg); ok {
+				if m.list.ClickHeader(key) {
+					if err := m.appState.SetCollapsedRepos(m.list.CollapsedRepos()); err != nil {
+						return m, m.handleError(err)
+					}
+					return m, m.instanceChanged()
+				}
+				return m, nil
 			}
 			if idx, ok := m.tabbedWindow.TabAtZone(msg); ok {
 				m.tabbedWindow.SetActiveTab(idx)
@@ -969,6 +976,12 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 			m.tabbedWindow.ResetTerminalToNormalMode()
 			return m, m.instanceChanged()
 		}
+		// A committed filter (typed with /, accepted with Enter) is still
+		// narrowing the list; Esc clears it, the expected escape hatch.
+		if m.list.FilterQuery() != "" {
+			m.list.ClearFilter()
+			return m, m.instanceChanged()
+		}
 	}
 
 	// Handle quit commands first
@@ -992,9 +1005,9 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 	case keys.KeyHelp:
 		return m.showHelpScreen(helpTypeGeneral{}, nil)
 	case keys.KeyPrompt:
-		if m.list.NumInstances() >= GlobalInstanceLimit {
+		if limit := m.appConfig.GetMaxSessions(); m.list.NumInstances() >= limit {
 			return m, m.handleError(
-				fmt.Errorf("you can't create more than %d instances", GlobalInstanceLimit))
+				fmt.Errorf("you can't create more than %d sessions (max_sessions in config.json)", limit))
 		}
 
 		// Open the unified new-session form immediately. The session itself is not created
@@ -1017,9 +1030,9 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 
 		return m, tea.Batch(tea.WindowSize(), fetchCmd, initialSearch)
 	case keys.KeyNew:
-		if m.list.NumInstances() >= GlobalInstanceLimit {
+		if limit := m.appConfig.GetMaxSessions(); m.list.NumInstances() >= limit {
 			return m, m.handleError(
-				fmt.Errorf("you can't create more than %d instances", GlobalInstanceLimit))
+				fmt.Errorf("you can't create more than %d sessions (max_sessions in config.json)", limit))
 		}
 		// Derive the contextual target before adding the new instance. The inline `n`
 		// flow has no directory picker, so the target must already be a real directory
@@ -1107,10 +1120,18 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		m.tabbedWindow.ToggleReverse()
 		m.menu.SetActiveTab(m.tabbedWindow.GetActiveTab())
 		return m, m.instanceChanged()
+	case keys.KeyTabPreview, keys.KeyTabDiff, keys.KeyTabTerminal:
+		// Direct tab jump by number, complementing Tab/Shift+Tab cycling. The
+		// three KeyNames are consecutive, so the offset from KeyTabPreview is the
+		// tab index (PreviewTab/DiffTab/TerminalTab are likewise 0/1/2).
+		m.tabbedWindow.SetActiveTab(int(name - keys.KeyTabPreview))
+		m.menu.SetActiveTab(m.tabbedWindow.GetActiveTab())
+		return m, m.instanceChanged()
 	case keys.KeyKill:
 		return m, m.confirmKill(m.list.GetSelectedInstance())
 	case keys.KeyFilter:
-		m.list.SetFilter("")
+		// Resume editing a committed query rather than resetting it — re-pressing
+		// / to refine a filter should not force retyping it. Esc still clears.
 		m.list.SetFilterActive(true)
 		m.state = stateFilter
 		m.menu.SetState(ui.StatePrompt)

@@ -68,3 +68,39 @@ func TestTabAtZone(t *testing.T) {
 		require.Equal(t, i, got)
 	}
 }
+
+// TestHeaderAtZone_ClickTogglesFold verifies that a click landing on a repo-group
+// header resolves to that group's key, and that ClickHeader folds/unfolds the
+// group like the ←/→ keyboard fold, snapping the selection to the group anchor.
+func TestHeaderAtZone_ClickTogglesFold(t *testing.T) {
+	l := newGroupList(t, "/x/repoA", "/x/repoA", "/x/repoB")
+	l.SetSelectedInstance(2) // selection elsewhere, so the snap is observable
+
+	z := waitZone(t, l.String, listHeaderZoneID("repoA"))
+	key, ok := l.HeaderAtZone(clickAt(z.StartX, z.StartY))
+	require.True(t, ok, "click inside the header's zone should hit it")
+	require.Equal(t, "repoA", key)
+
+	// First click folds the group and moves the selection to its anchor.
+	require.True(t, l.ClickHeader(key))
+	require.True(t, l.collapsed["repoA"], "first click collapses the group")
+	require.Same(t, l.items[0], l.GetSelectedInstance(), "selection snaps to the group anchor")
+
+	// Second click unfolds it again.
+	require.True(t, l.ClickHeader(key))
+	require.False(t, l.collapsed["repoA"], "second click expands the group")
+
+	// A click outside every header hits nothing.
+	_, ok = l.HeaderAtZone(clickAt(9999, 9999))
+	require.False(t, ok)
+}
+
+// ClickHeader is inert when only one repo is present (headers don't render there)
+// and for keys that aren't in the list.
+func TestClickHeader_SingleRepoAndUnknownKeyAreInert(t *testing.T) {
+	l := newGroupList(t, "/x/repoA", "/x/repoA")
+	require.False(t, l.ClickHeader("repoA"), "folding is meaningless with one repo")
+
+	multi := newGroupList(t, "/x/repoA", "/x/repoB")
+	require.False(t, multi.ClickHeader("nope"), "unknown keys change nothing")
+}

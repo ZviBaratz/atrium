@@ -92,6 +92,22 @@ type Config struct {
 	// feature stays enabled for config files written before it existed. Setting
 	// it false restores the chrome-free fullscreen pane (tmux status off).
 	SessionContextBar *bool `json:"session_context_bar,omitempty"`
+	// MaxSessions caps how many sessions can exist at once; creating one beyond
+	// it is rejected with an error in the UI. nil (or a non-positive value)
+	// means use DefaultMaxSessions, so older config files keep the old cap.
+	MaxSessions *int `json:"max_sessions,omitempty"`
+}
+
+// DefaultMaxSessions is the session cap used when MaxSessions is unset.
+const DefaultMaxSessions = 10
+
+// GetMaxSessions returns the configured session cap, falling back to
+// DefaultMaxSessions for a nil or non-positive value.
+func (c *Config) GetMaxSessions() int {
+	if c.MaxSessions == nil || *c.MaxSessions < 1 {
+		return DefaultMaxSessions
+	}
+	return *c.MaxSessions
 }
 
 // GetSessionContextBar reports whether attached sessions should render the
@@ -160,6 +176,7 @@ func DefaultConfig() *Config {
 	autoAttach := true
 	killDoubleTap := true
 	sessionContextBar := true
+	maxSessions := DefaultMaxSessions
 	return &Config{
 		DefaultProgram:     program,
 		AutoYes:            false,
@@ -176,6 +193,7 @@ func DefaultConfig() *Config {
 		}(),
 		AutoAttach:           &autoAttach,
 		KillDoubleTapConfirm: &killDoubleTap,
+		MaxSessions:          &maxSessions,
 	}
 }
 
