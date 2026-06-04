@@ -15,7 +15,9 @@ import (
 func tabZoneID(i int) string { return fmt.Sprintf("tab-%d", i) }
 
 func tabBorderWithBottom(left, middle, right string) lipgloss.Border {
-	border := lipgloss.RoundedBorder()
+	// Start from the theme's box style so a fallback theme's square corners
+	// apply to the tab strip too, not just the panels.
+	border := theme.Current().Borders.Style
 	border.BottomLeft = left
 	border.Bottom = middle
 	border.BottomRight = right

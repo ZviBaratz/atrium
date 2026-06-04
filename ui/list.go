@@ -161,12 +161,10 @@ func (l *List) groupUnreadCount(start, end int) int {
 }
 
 // filterBarStyle renders the incremental search bar that appears below the list header
-// when a filter is active.
-var filterBarStyle = lipgloss.NewStyle().
-	Foreground(lipgloss.AdaptiveColor{Light: "#555555", Dark: "#aaaaaa"})
-
-var filterBarActiveStyle = lipgloss.NewStyle().
-	Foreground(lipgloss.AdaptiveColor{Light: "#1a1a1a", Dark: "#ffffff"})
+// when a filter is active; filterBarActiveStyle brightens it while the user is typing.
+// Both read the active theme at render time like every other style in this file.
+func filterBarStyle() lipgloss.Style       { return theme.Current().DimStyle() }
+func filterBarActiveStyle() lipgloss.Style { return theme.Current().FgStyle() }
 
 // List is the left panel: the instance list grouped by repo, with collapse
 // state, incremental filtering, and the selection the rest of the UI follows.
@@ -482,8 +480,8 @@ func (r *InstanceRenderer) Render(i *session.Instance, idx int, selected bool) s
 }
 
 func (l *List) String() string {
-	// The list title and global state moved to the top status bar; the list is
-	// now a pure (scrollable) stream of repo groups and session rows.
+	// The list is a pure (scrollable) stream of repo groups and session rows;
+	// its only chrome is the panel border (the title rides the border's top edge).
 	// Build the list as a flat slice of lines (each row is two lines; headers one;
 	// a blank line separates groups), tracking the selected block's line range so
 	// the viewport can scroll to keep it visible.
@@ -503,9 +501,9 @@ func (l *List) String() string {
 		if l.filterActive {
 			cursor = "▌"
 		}
-		style := filterBarStyle
+		style := filterBarStyle()
 		if l.filterActive {
-			style = filterBarActiveStyle
+			style = filterBarActiveStyle()
 		}
 		lines = append(lines, style.Render(" / "+l.filterQuery+cursor), "")
 	}
@@ -563,7 +561,7 @@ func (l *List) String() string {
 	// `first` is still set only if no group rendered any row, i.e. the query matched nothing.
 	// Show an explicit hint so the empty list is not mistaken for "no sessions exist".
 	if filtering && first {
-		lines = append(lines, filterBarStyle.Render("   no matches"))
+		lines = append(lines, filterBarStyle().Render("   no matches"))
 	}
 
 	// Inner content area inside the panel border (2 cols / 2 rows of chrome).
