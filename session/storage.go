@@ -21,6 +21,11 @@ type InstanceData struct {
 	UpdatedAt   time.Time `json:"updated_at"`
 	AutoYes     bool      `json:"auto_yes"`
 
+	// Unread marks a Ready session the user has not visited since the agent last
+	// finished a turn. omitempty keeps old state files (and seen sessions) compact;
+	// absence deserializes to false (= seen), so upgrades stay quiet.
+	Unread bool `json:"unread,omitempty"`
+
 	// Direct marks a direct (non-git) session: no worktree or diff is serialized, and on
 	// load the instance is rehydrated with a nil worktree.
 	Direct bool `json:"direct,omitempty"`

@@ -22,6 +22,7 @@ type Palette struct {
 	AccentMuted lipgloss.Color // dimmed accent
 	Purple      lipgloss.Color // app title / banner
 	Success     lipgloss.Color // ready, additions
+	SuccessDim  lipgloss.Color // seen-ready: a Ready session the user already visited
 	Working     lipgloss.Color // working spinner tint
 	Attention   lipgloss.Color // waiting / behind (the one attention color)
 	Danger      lipgloss.Color // deletions, errors, destructive actions
@@ -36,7 +37,8 @@ type Palette struct {
 type Glyphs struct {
 	SpinnerFrames []string
 	SpinnerFPS    time.Duration
-	Ready         string // idle, ready for input
+	Ready         string // idle, ready for input, not yet visited (unread)
+	ReadySeen     string // idle, ready for input, already visited (seen)
 	Waiting       string // blocked on user input (attention)
 	Paused        string // session halted
 	Branch        string // precedes a branch name

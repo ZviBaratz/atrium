@@ -84,7 +84,14 @@ func TestListGolden(t *testing.T) {
 		inst.SetDiffStats(stats)
 		l.AddInstance(inst)()
 	}
-	mk("overhaul", "zvi/visual-overhaul", session.Ready, &git.DiffStats{Added: 142, Removed: 31, Commits: 3, Dirty: true})
+	// Drive the ready row through the real Running→Ready edge so it carries the
+	// unread (bright ●) look — the canonical fresh-ready state. instWithStatus's
+	// bare SetStatus(Ready) is a Ready→Ready no-op that would render as seen (○).
+	readyInst := instWithStatus(t, "overhaul", session.Running)
+	readyInst.SetStatus(session.Ready)
+	readyInst.Branch = "zvi/visual-overhaul"
+	readyInst.SetDiffStats(&git.DiffStats{Added: 142, Removed: 31, Commits: 3, Dirty: true})
+	l.AddInstance(readyInst)()
 	mk("bounds", "fix-bounds", session.NeedsInput, nil)
 	mk("markers", "pane-markers", session.Paused, nil)
 	l.SetSize(40, 14)

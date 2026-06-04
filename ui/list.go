@@ -62,33 +62,48 @@ func (l *List) distinctRepoCount() int {
 // reads as a section divider. A collapsed group's header doubles as its selectable row, so it
 // gets the same left accent bar as a selected item when selected is true.
 //
-// needsInput is how many sessions in the group are blocked on user input. When the group is
-// collapsed (so its member rows — and their per-row waiting glyphs — are hidden) and the count
-// is non-zero, a "◆N" badge is appended in the attention color so the group still signals that
-// it needs attention without being expanded.
-func (l *List) renderRepoHeader(key string, collapsed bool, count, needsInput int, selected bool) string {
-	g := theme.Current().Glyphs
+// needsInput is how many sessions in the group are blocked on user input, and unread how many
+// are Ready but not yet visited. When the group is collapsed (so its member rows — and their
+// per-row state glyphs — are hidden) the non-zero counts are appended as badges ("◆N" in the
+// attention color, "●N" in the success color) so the group still signals what wants the user
+// without being expanded.
+func (l *List) renderRepoHeader(key string, collapsed bool, count, needsInput, unread int, selected bool) string {
+	th := theme.Current()
+	g := th.Glyphs
 	marker := g.FoldOpen + " "
 	if collapsed {
 		marker = g.FoldClosed + " "
 	}
 	name := marker + strings.ToUpper(key)
-	badge := ""
+	badgePlain, badgeStyled := "", ""
 	if collapsed {
 		name = fmt.Sprintf("%s (%d)", name, count)
+		// Build the badge cluster twice: plain for width math, styled for display
+		// (ANSI styling adds no columns, so the plain width is the rendered width).
+		appendBadge := func(text string, style lipgloss.Style) {
+			if badgePlain != "" {
+				badgePlain += " "
+				badgeStyled += " "
+			}
+			badgePlain += text
+			badgeStyled += style.Render(text)
+		}
 		if needsInput > 0 {
-			badge = fmt.Sprintf("%s%d", g.Waiting, needsInput)
+			appendBadge(fmt.Sprintf("%s%d", g.Waiting, needsInput), th.AttentionStyle())
+		}
+		if unread > 0 {
+			appendBadge(fmt.Sprintf("%s%d", g.Ready, unread), th.SuccessStyle())
 		}
 	}
 	header := repoHeaderStyle().Render(name)
 	// repoHeaderStyle pads the name with one space on each side; a selected header also gains
 	// a one-cell left accent bar, so reserve for both when sizing the trailing rule (hence -2,
-	// and an extra -1 when selected). The badge sits in the padding's right space and is
-	// followed by one separator space before the rule, so it consumes its plain-text width
-	// (its ANSI styling adds no columns) plus that one space.
+	// and an extra -1 when selected). The badge cluster sits in the padding's right space and
+	// is followed by one separator space before the rule, so it consumes its plain-text width
+	// plus that one space.
 	ruleLen := l.renderer.width - runewidth.StringWidth(name) - 2
-	if badge != "" {
-		ruleLen -= runewidth.StringWidth(badge) + 1
+	if badgePlain != "" {
+		ruleLen -= runewidth.StringWidth(badgePlain) + 1
 	}
 	if selected {
 		ruleLen--
@@ -97,8 +112,8 @@ func (l *List) renderRepoHeader(key string, collapsed bool, count, needsInput in
 		ruleLen = 0
 	}
 	line := header
-	if badge != "" {
-		line += theme.Current().AttentionStyle().Render(badge) + " "
+	if badgePlain != "" {
+		line += badgeStyled + " "
 	}
 	line += repoRuleStyle().Render(strings.Repeat("─", ruleLen))
 	if selected {
@@ -126,6 +141,19 @@ func (l *List) groupNeedsInputCount(start, end int) int {
 	n := 0
 	for _, item := range l.items[start:end] {
 		if item.GetStatus() == session.NeedsInput {
+			n++
+		}
+	}
+	return n
+}
+
+// groupUnreadCount returns how many sessions in the half-open item range [start, end) are
+// Ready but not yet visited. Used to badge a collapsed repo-group header, whose member rows
+// would otherwise carry the per-row unread glyph.
+func (l *List) groupUnreadCount(start, end int) int {
+	n := 0
+	for _, item := range l.items[start:end] {
+		if item.GetStatus() == session.Ready && item.Unread() {
 			n++
 		}
 	}
@@ -274,7 +302,13 @@ func (r *InstanceRenderer) stateParts(i *session.Instance, th *theme.Theme) (gly
 	case session.Loading:
 		return r.spinner.View(), "starting", th.Palette.Working
 	case session.Ready:
-		return th.Glyphs.Ready, "ready", th.Palette.Success
+		// Unread (the agent finished a turn the user hasn't visited) keeps the
+		// bright filled glyph; a seen session dims to the hollow variant. Shape
+		// and color both change so the signal survives colorblindness.
+		if i.Unread() {
+			return th.Glyphs.Ready, "ready", th.Palette.Success
+		}
+		return th.Glyphs.ReadySeen, "ready", th.Palette.SuccessDim
 	case session.NeedsInput:
 		return th.Glyphs.Waiting, "waiting", th.Palette.Attention
 	case session.Paused:
@@ -506,7 +540,8 @@ func (l *List) String() string {
 		if showRepos {
 			headerSelected := collapsed && l.selectedIdx == start
 			ni := l.groupNeedsInputCount(start, end)
-			at := appendBlock(l.renderRepoHeader(key, collapsed, end-start, ni, headerSelected))
+			ur := l.groupUnreadCount(start, end)
+			at := appendBlock(l.renderRepoHeader(key, collapsed, end-start, ni, ur, headerSelected))
 			if headerSelected {
 				selStart, selH = at, len(lines)-at
 			}

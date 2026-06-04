@@ -158,6 +158,23 @@ func TestStorageRoundTrip(t *testing.T) {
 	assert.Equal(t, Paused, got[0].status)
 }
 
+// TestStorageRoundTrip_Unread asserts the unread bit survives a save/load cycle
+// (and that its absence deserializes as seen, the quiet default for old files).
+func TestStorageRoundTrip_Unread(t *testing.T) {
+	store := newTestStorage(t)
+
+	a := newPausedInstance(t, "alpha")
+	a.unread = true
+	b := newPausedInstance(t, "beta")
+	require.NoError(t, store.SaveInstances([]*Instance{a, b}))
+
+	got, err := store.LoadInstances(context.Background())
+	require.NoError(t, err)
+	require.Len(t, got, 2)
+	assert.True(t, got[0].Unread(), "a persisted unread bit must survive the round-trip")
+	assert.False(t, got[1].Unread(), "an unflagged instance must load as seen")
+}
+
 // TestUpdateInstance_UpdatesField confirms that UpdateInstance persists a changed
 // displayName and leaves other instances untouched.
 func TestUpdateInstance_UpdatesField(t *testing.T) {

@@ -108,6 +108,23 @@ type Instance struct {
 	// status is the status of the instance. Guarded by mu.
 	status Status
 
+	// unread marks a Ready session the user has not visited since the agent last
+	// finished a turn. Set by SetStatus on a transition into Ready; cleared by
+	// MarkSeen (attach or selection dwell). Persisted in state.json. Guarded by mu.
+	unread bool
+	// unreadAt records when unread was last flagged, so the UI can keep a fresh
+	// unread visibly bright for at least the dwell duration even when its row is
+	// already selected. In-memory only. Guarded by mu.
+	unreadAt time.Time
+	// suppressNextUnread is a one-shot guard against synthetic lifecycle
+	// transitions: restore/recover/resume/detach force status to Running, and the
+	// poll that follows settles to Ready without the agent having produced new
+	// output. The next into-Ready transition consumes the flag without flagging
+	// unread; any non-Ready SetStatus clears it (an observed working phase means
+	// the following completion is genuine). Arming sites must arm *after* their
+	// own SetStatus(Running) write. In-memory only. Guarded by mu.
+	suppressNextUnread bool
+
 	// The below fields are initialized upon calling Start(). Guarded by mu.
 
 	started bool
@@ -131,6 +148,7 @@ func (i *Instance) ToInstanceData() InstanceData {
 		UpdatedAt:   time.Now(),
 		Program:     i.Program,
 		AutoYes:     i.AutoYes,
+		Unread:      i.Unread(),
 		Direct:      i.direct,
 	}
 
@@ -177,6 +195,7 @@ func FromInstanceData(ctx context.Context, data InstanceData, branchPrefix strin
 		Path:        data.Path,
 		Branch:      data.Branch,
 		status:      data.Status,
+		unread:      data.Unread,
 		Height:      data.Height,
 		Width:       data.Width,
 		CreatedAt:   data.CreatedAt,
@@ -233,6 +252,14 @@ func FromInstanceData(ctx context.Context, data InstanceData, branchPrefix strin
 				instance.recoverInPlace()
 			} else {
 				instance.SetStatus(Running)
+				// The Running just written is synthetic (the session was reattached,
+				// not observed working), so the first poll's settle to Ready must not
+				// flag unread when the session was already idle at save time. A
+				// persisted Running means the agent was genuinely working when the
+				// app closed — its first Ready is a real completion, so don't arm.
+				if data.Status == Ready {
+					instance.ArmReadySuppression()
+				}
 			}
 		default:
 			// The tmux session is gone — e.g. after a reboot, or the one-time
@@ -268,6 +295,9 @@ func (i *Instance) recoverInPlace() {
 			return
 		}
 		i.SetStatus(Running)
+		// The restarted agent's post-boot idle is a boot artifact, not new output;
+		// don't let the first poll's settle to Ready flag unread.
+		i.ArmReadySuppression()
 		return
 	}
 
@@ -286,6 +316,8 @@ func (i *Instance) recoverInPlace() {
 		return
 	}
 	i.SetStatus(Running)
+	// As above: the post-boot idle settle is not a genuine completion.
+	i.ArmReadySuppression()
 }
 
 // recreateSession starts a fresh tmux session for an already-set-up worktree,
@@ -388,11 +420,60 @@ func (i *Instance) GetStatus() Status {
 	return i.status
 }
 
-// SetStatus updates the instance status under the write lock.
+// SetStatus updates the instance status under the write lock. It also edge-detects
+// transitions into Ready to maintain the unread bit: a non-Ready→Ready transition
+// flags unread (the agent finished a turn) unless a one-shot suppression is armed
+// (a synthetic lifecycle transition — see suppressNextUnread); any non-Ready write
+// clears a pending suppression, since an observed working phase means the next
+// completion is genuine.
 func (i *Instance) SetStatus(status Status) {
 	i.mu.Lock()
 	defer i.mu.Unlock()
+	if status == Ready && i.status != Ready {
+		if i.suppressNextUnread {
+			i.suppressNextUnread = false
+		} else {
+			i.unread = true
+			i.unreadAt = time.Now()
+		}
+	} else if status != Ready {
+		i.suppressNextUnread = false
+	}
 	i.status = status
+}
+
+// Unread reports whether the session reached Ready without the user having
+// visited it since, under the read lock.
+func (i *Instance) Unread() bool {
+	i.mu.RLock()
+	defer i.mu.RUnlock()
+	return i.unread
+}
+
+// UnreadAt returns when the unread bit was last flagged, under the read lock.
+// Zero if it has never been flagged in this process.
+func (i *Instance) UnreadAt() time.Time {
+	i.mu.RLock()
+	defer i.mu.RUnlock()
+	return i.unreadAt
+}
+
+// MarkSeen clears the unread bit: the user has visited the session (attached,
+// or dwelled on its row with the live preview showing).
+func (i *Instance) MarkSeen() {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	i.unread = false
+}
+
+// ArmReadySuppression arms the one-shot guard so the next transition into Ready
+// does not flag unread. Called after synthetic SetStatus(Running) writes
+// (restore-reattach, recoverInPlace, Resume, post-detach refresh) — never after
+// an observed working phase.
+func (i *Instance) ArmReadySuppression() {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	i.suppressNextUnread = true
 }
 
 // isStarted reports whether Start() has completed, under the read lock.
@@ -1016,6 +1097,9 @@ func (i *Instance) Resume() error {
 			return err
 		}
 		i.SetStatus(Running)
+		// The resumed agent boots back into its old conversation — the first
+		// poll's settle to Ready is not new output, so don't flag unread.
+		i.ArmReadySuppression()
 		return nil
 	}
 
@@ -1058,6 +1142,8 @@ func (i *Instance) Resume() error {
 	}
 
 	i.SetStatus(Running)
+	// As above: the resumed agent's post-boot idle is not a genuine completion.
+	i.ArmReadySuppression()
 	return nil
 }
 

@@ -48,6 +48,7 @@ func TestGlyphWidths(t *testing.T) {
 		g := Get(name).Glyphs
 		cells := map[string]string{
 			"Ready":         g.Ready,
+			"ReadySeen":     g.ReadySeen,
 			"Waiting":       g.Waiting,
 			"Paused":        g.Paused,
 			"Branch":        g.Branch,

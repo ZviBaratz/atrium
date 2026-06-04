@@ -191,6 +191,12 @@ type home struct {
 	// re-poll when the selection actually changes (or when a detach resets this to nil),
 	// not 10×/s — which would also perturb the tick-based idle hysteresis.
 	lastStatusPollSelection *session.Instance
+
+	// selectedSince records when the current selection was last changed. The
+	// read-dwell (markSeenAfterDwell) requires the row to have been selected this
+	// long before clearing its unread state, so cursor travel through rows never
+	// marks them seen.
+	selectedSince time.Time
 }
 
 func newHome(ctx context.Context, program string, autoYes bool) *home {
@@ -368,6 +374,7 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.errBox.Clear()
 		m.recomputeLayout() // reclaim the error row; panes grow back by one
 	case previewTickMsg:
+		m.markSeenAfterDwell(time.Now())
 		cmd := m.instanceChanged()
 		return m, tea.Batch(
 			cmd,
@@ -529,6 +536,15 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.state = stateDefault
 		if msg.err != nil {
 			return m, m.handleError(msg.err)
+		}
+		// The user was watching this session until a moment ago, so if the agent
+		// finished while attached, the poll below settles a stale Running to Ready —
+		// a synthetic transition that must not flag unread. An agent still working
+		// at detach is observed as Running first, which clears the suppression, so a
+		// later genuine completion flags normally. Armed before BOTH detach paths:
+		// the sibling-cycle early return below and the normal fresh poll.
+		if msg.killTarget != nil {
+			msg.killTarget.ArmReadySuppression()
 		}
 		// Honor an in-session kill (Ctrl+X) requested before detach. killTarget is the
 		// attached instance (nil for the terminal tab, which has no kill key); keep
@@ -1356,6 +1372,12 @@ func (a attachCommand) SetStderr(io.Writer) {}
 // attached instance whose in-session Ctrl+X kill request the handler should honor
 // on detach, or nil when the attach has no kill key (the terminal tab).
 func (m *home) attachExec(attach func() (chan struct{}, error), killTarget *session.Instance) tea.Cmd {
+	// Attaching is the strongest form of visiting: clear the unread state before
+	// handing the terminal over. killTarget is nil only for the terminal tab,
+	// which the selection dwell covers instead.
+	if killTarget != nil {
+		killTarget.MarkSeen()
+	}
 	return tea.Exec(attachCommand{attach: attach}, func(err error) tea.Msg {
 		return attachFinishedMsg{err: err, killTarget: killTarget}
 	})
@@ -1384,9 +1406,35 @@ func (m *home) instanceChanged() tea.Cmd {
 	// refresh) to avoid polling 10×/s.
 	if selected != m.lastStatusPollSelection {
 		m.lastStatusPollSelection = selected
+		m.selectedSince = time.Now()
 		return pollSelectedCmd(selected, false)
 	}
 	return nil
+}
+
+// readDwell is how long a row must stay selected — and its unread state visible —
+// before the selection counts as a read. Long enough that cursor travel and a
+// just-landed result don't self-clear; short enough that glancing at the preview does.
+const readDwell = 1500 * time.Millisecond
+
+// markSeenAfterDwell clears the selected instance's unread state once the user has
+// demonstrably seen it: the row has been selected for readDwell (the preview pane
+// shows its live content) AND the unread flag itself is at least readDwell old (a
+// reply landing on an already-selected row stays bright long enough to register).
+// Gated on stateDefault because the 100ms preview tick fires in every UI state,
+// including overlays that occlude the preview.
+func (m *home) markSeenAfterDwell(now time.Time) {
+	if m.state != stateDefault {
+		return
+	}
+	sel := m.list.GetSelectedInstance()
+	if sel == nil || !sel.Unread() {
+		return
+	}
+	if now.Sub(m.selectedSince) < readDwell || now.Sub(sel.UnreadAt()) < readDwell {
+		return
+	}
+	sel.MarkSeen()
 }
 
 type keyupMsg struct{}
