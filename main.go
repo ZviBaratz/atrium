@@ -78,13 +78,18 @@ var (
 			if autoYesFlag {
 				autoYes = true
 			}
-			if autoYes {
-				defer func() {
-					if err := daemon.LaunchDaemon(ctx); err != nil {
-						log.ErrorLog.Printf("failed to launch daemon: %v", err)
-					}
-				}()
-			}
+			// The daemon takes over auto-accepting only while the TUI is closed.
+			// Whether to launch it is decided at exit time from the *persisted*
+			// config — not the autoYes value merged above — so an auto_yes toggle
+			// made in the settings panel during this run takes effect.
+			defer func() {
+				if !shouldLaunchDaemonOnExit(autoYesFlag) {
+					return
+				}
+				if err := daemon.LaunchDaemon(ctx); err != nil {
+					log.ErrorLog.Printf("failed to launch daemon: %v", err)
+				}
+			}()
 			// Kill any daemon that's running.
 			if err := daemon.StopDaemon(); err != nil {
 				log.ErrorLog.Printf("failed to stop daemon: %v", err)
@@ -211,6 +216,14 @@ var (
 		},
 	}
 )
+
+// shouldLaunchDaemonOnExit reports whether the autoyes daemon should take over
+// when the TUI exits. It re-reads the persisted config rather than reusing the
+// value merged at startup, so an auto_yes toggle made in the settings panel
+// during the run takes effect; the -y flag still wins for the run it was given.
+func shouldLaunchDaemonOnExit(autoYesFlag bool) bool {
+	return autoYesFlag || config.LoadConfig().AutoYes
+}
 
 func init() {
 	rootCmd.Flags().StringVarP(&programFlag, "program", "p", "",

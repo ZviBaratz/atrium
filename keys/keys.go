@@ -71,6 +71,8 @@ const (
 	KeyTabPreview
 	KeyTabDiff
 	KeyTabTerminal
+
+	KeySettings // Open the settings panel to view and edit the configuration
 )
 
 // KillKey is the chord that triggers a kill from the session list. It mirrors the
@@ -115,6 +117,7 @@ var GlobalKeyStringsMap = map[string]KeyName{
 	"1":          KeyTabPreview,
 	"2":          KeyTabDiff,
 	"3":          KeyTabTerminal,
+	",":          KeySettings,
 }
 
 // GlobalkeyBindings is a global, immutable map of KeyName to keybinding.
@@ -248,5 +251,9 @@ var GlobalkeyBindings = map[KeyName]key.Binding{
 	KeyTabTerminal: key.NewBinding(
 		key.WithKeys("3"),
 		key.WithHelp("3", "terminal tab"),
+	),
+	KeySettings: key.NewBinding(
+		key.WithKeys(","),
+		key.WithHelp(",", "settings"),
 	),
 }

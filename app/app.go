@@ -85,6 +85,9 @@ const (
 	// (an actionable error that must persist until the user reads and dismisses it,
 	// rather than auto-vanishing like the transient error box).
 	stateInfo
+	// stateSettings is the state when the settings panel is open for viewing and
+	// editing the persistent configuration.
+	stateSettings
 )
 
 type home struct {
@@ -162,6 +165,9 @@ type home struct {
 	pendingConfirmAction tea.Cmd
 	// renameOverlay handles editing a session's display label
 	renameOverlay *overlay.RenameOverlay
+	// settingsOverlay is the in-TUI configuration panel. It edits appConfig in
+	// place; applySettingChange persists and live-applies each change.
+	settingsOverlay *overlay.SettingsOverlay
 	// renameTarget is the instance the rename overlay was opened for. It is captured
 	// when the overlay opens so the new label lands on the right session even if the
 	// list selection moves while the overlay is open (e.g. during async auto-naming).
@@ -293,6 +299,11 @@ func (m *home) updateHandleWindowSizeEvent(msg tea.WindowSizeMsg) {
 	if m.textOverlay != nil {
 		m.textOverlay.SetWidth(int(float32(msg.Width) * 0.6))
 	}
+	if m.settingsOverlay != nil {
+		// Pass the full terminal size: the panel caps its own width and windows
+		// its rows to fit short terminals.
+		m.settingsOverlay.SetSize(msg.Width, msg.Height)
+	}
 
 	previewWidth, previewHeight := m.tabbedWindow.GetPreviewSize()
 	if err := m.list.SetSessionPreviewSize(previewWidth, previewHeight); err != nil {
@@ -312,7 +323,7 @@ func (m *home) menuVisible() bool {
 	switch m.state {
 	case stateFilter:
 		return true
-	case statePrompt, stateRename, stateConfirm, stateHelp, stateInfo:
+	case statePrompt, stateRename, stateConfirm, stateHelp, stateInfo, stateSettings:
 		return false
 	default: // stateDefault (and the empty list)
 		return m.generatingName || m.appConfig.GetHintBar()
@@ -328,6 +339,50 @@ func (m *home) recomputeLayout() {
 		return
 	}
 	m.updateHandleWindowSizeEvent(tea.WindowSizeMsg{Width: m.windowWidth, Height: m.windowHeight})
+}
+
+// applySettingChange persists the config after the settings panel changed the
+// given row, then live-applies whatever that field controls. Fields without a
+// case here are read live at their point of use (auto_attach, max_sessions,
+// kill_double_tap_confirm) or only consumed by later operations (branch_prefix,
+// default_program on the next session; daemon_poll_interval on the next daemon
+// run), so persisting is all they need.
+func (m *home) applySettingChange(key string) tea.Cmd {
+	if err := config.SaveConfig(m.appConfig); err != nil {
+		return m.handleError(err)
+	}
+	switch key {
+	case "theme":
+		// Styles read theme.Current() lazily at render time, so swapping the
+		// palette plus a forced repaint restyles the whole UI in place.
+		theme.Set(m.appConfig.Theme)
+		return tea.Sequence(tea.ClearScreen, tea.WindowSize())
+	case "hint_bar":
+		// Mirror the newHome seeding: the list shows its inline key hint only
+		// when the always-on bar is off.
+		if m.list != nil {
+			m.list.SetShowEmptyHint(!m.appConfig.GetHintBar())
+		}
+		m.recomputeLayout() // the bar claims or releases its row
+	case "session_context_bar", "tmux_config_override":
+		// Re-render the managed tmux conf so sessions started from now on pick
+		// the change up; live sessions keep their current status line (tmux only
+		// reads the config when a server starts).
+		if err := tmux.Init(m.appConfig.TmuxConfigOverride, m.appConfig.GetSessionContextBar()); err != nil {
+			return m.handleError(err)
+		}
+	case "auto_yes":
+		// In-TUI auto-accept is driven by each instance's AutoYes flag (the
+		// daemon only runs while the TUI is closed — main.go stops it before
+		// app.Run and relaunches it on exit from the persisted config).
+		m.autoYes = m.appConfig.AutoYes
+		if m.list != nil {
+			for _, inst := range m.list.GetInstances() {
+				inst.AutoYes = m.appConfig.AutoYes
+			}
+		}
+	}
+	return nil
 }
 
 // listRatioStep is how much each < / > press shifts the list/preview split.
@@ -839,6 +894,27 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		return m, m.instanceChanged()
 	}
 
+	// Handle settings state. Like the other overlay states, this must run before
+	// the global quit handling so q/esc and printable keys reach the panel. The
+	// overlay mutates appConfig in place and reports which row changed; persisting
+	// and live-applying that change is applySettingChange's job.
+	if m.state == stateSettings {
+		closed, changedKey := m.settingsOverlay.HandleKeyPress(msg)
+		var cmds []tea.Cmd
+		if changedKey != "" {
+			if cmd := m.applySettingChange(changedKey); cmd != nil {
+				cmds = append(cmds, cmd)
+			}
+		}
+		if closed {
+			m.settingsOverlay = nil
+			m.state = stateDefault
+			m.recomputeLayout() // menuVisible flipped; the hint bar may reclaim its row
+			cmds = append(cmds, tea.WindowSize())
+		}
+		return m, tea.Batch(cmds...)
+	}
+
 	// Handle filter state. This must run before the global quit handling so that printable keys
 	// and Esc update the filter instead of quitting. The list holds the query (single source of
 	// truth); note that letter keys must reach the default case, so we cannot reserve "j"/"k"
@@ -922,6 +998,11 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 	switch name {
 	case keys.KeyHelp:
 		return m.showHelpScreen(helpTypeGeneral{}, nil)
+	case keys.KeySettings:
+		m.state = stateSettings
+		m.settingsOverlay = overlay.NewSettingsOverlay(m.appConfig)
+		m.recomputeLayout() // the hint bar hides behind the modal; panes reclaim its row
+		return m, tea.WindowSize()
 	case keys.KeyPrompt:
 		// The full entry point: focus starts on the project picker.
 		return m, m.openCreateForm(false)
@@ -2139,6 +2220,11 @@ func (m *home) View() string {
 			log.ErrorLog.Printf("rename overlay is nil")
 		}
 		return overlay.PlaceOverlay(0, 0, m.renameOverlay.Render(), mainView, true, true)
+	} else if m.state == stateSettings {
+		if m.settingsOverlay == nil {
+			log.ErrorLog.Printf("settings overlay is nil")
+		}
+		return overlay.PlaceOverlay(0, 0, m.settingsOverlay.Render(), mainView, true, true)
 	}
 
 	return mainView
