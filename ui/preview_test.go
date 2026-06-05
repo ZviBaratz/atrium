@@ -606,6 +606,57 @@ func TestPreviewScrollSnapshotDropsWhenInstancePauses(t *testing.T) {
 // TestPreviewKeepsContentOnTransientCaptureError verifies a capture error never freezes a
 // stale fallback or blanks the pane: the last good content is retained and the error is
 // surfaced (not swallowed).
+// TestPreviewScrollDownAtBottomExitsToLive covers the snapshot's self-healing exit:
+// entering scroll mode lands at the bottom of the capture, so a wheel-down while
+// already at the bottom must resume the live view (tmux copy-mode style) — the
+// escape hatch for an accidental wheel flick. Scrolling down anywhere above the
+// bottom must stay in scroll mode.
+func TestPreviewScrollDownAtBottomExitsToLive(t *testing.T) {
+	// More lines than the 30-row viewport so "off the bottom" is reachable.
+	lines := make([]string, 60)
+	for i := range lines {
+		lines[i] = fmt.Sprintf("line %d", i+1)
+	}
+	content := strings.Join(lines, "\n")
+
+	setup := setupTestEnvironment(t, liveContentCmdExec(&content))
+	defer setup.cleanupFn()
+
+	pane := NewPreviewPane()
+	pane.SetSize(80, 30)
+	require.NoError(t, pane.UpdateContent(setup.instance))
+
+	// Enter scroll mode: the viewport starts at the bottom of the snapshot.
+	require.NoError(t, pane.ScrollUp(setup.instance))
+	require.True(t, pane.isScrolling)
+	require.True(t, pane.viewport.AtBottom(), "entering scroll mode must land at the bottom")
+
+	// Wheel-down while already at the bottom resumes the live view.
+	require.NoError(t, pane.ScrollDown(setup.instance))
+	require.False(t, pane.isScrolling, "a wheel-down at the bottom must exit scroll mode")
+	require.Equal(t, content, pane.previewState.text, "the live pane content must be re-captured on exit")
+
+	// A further wheel-down from the live view must not re-enter the snapshot —
+	// otherwise a held wheel would toggle enter/exit forever.
+	require.NoError(t, pane.ScrollDown(setup.instance))
+	require.False(t, pane.isScrolling, "wheel-down from the live view must not enter scroll mode")
+
+	// Off the bottom, a wheel-down scrolls — it must not exit.
+	require.NoError(t, pane.ScrollUp(setup.instance)) // re-enter
+	for range 5 {
+		require.NoError(t, pane.ScrollUp(setup.instance))
+	}
+	require.False(t, pane.viewport.AtBottom())
+	require.NoError(t, pane.ScrollDown(setup.instance))
+	require.True(t, pane.isScrolling, "scrolling down above the bottom must stay in scroll mode")
+
+	// Reaching the bottom and wheeling down once more exits.
+	for range 10 {
+		require.NoError(t, pane.ScrollDown(setup.instance))
+	}
+	require.False(t, pane.isScrolling, "wheeling down past the bottom must exit scroll mode")
+}
+
 func TestPreviewKeepsContentOnTransientCaptureError(t *testing.T) {
 	const liveContent = "agent is working"
 	sessionCreated := false

@@ -422,17 +422,40 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.Action != tea.MouseActionPress {
 			return m, nil
 		}
-		// Mouse wheel scrolls the diff/preview pane.
+		// Mouse wheel is routed by what it hovers, only in the default state
+		// (overlays own the screen otherwise, mirroring the left-click gate
+		// below). Over the session list it moves the selection like ↑/↓; over
+		// the right tabbed pane it scrolls the active tab; anywhere else (menu /
+		// hint bar / error rows) it is ignored. Zones are resolved against the
+		// frame scanned in View(); before the first scan both InBounds checks
+		// return false, so the wheel does nothing.
 		if msg.Button == tea.MouseButtonWheelDown || msg.Button == tea.MouseButtonWheelUp {
-			selected := m.list.GetSelectedInstance()
-			if selected == nil || selected.Paused() {
+			if m.state != stateDefault {
 				return m, nil
 			}
-			switch msg.Button {
-			case tea.MouseButtonWheelUp:
-				m.tabbedWindow.ScrollUp()
-			case tea.MouseButtonWheelDown:
-				m.tabbedWindow.ScrollDown()
+			// Over the list: move the selection, regardless of the selected
+			// instance's state (paused / nil), exactly like the keyboard paths.
+			if m.list.InPanelBounds(msg) {
+				if msg.Button == tea.MouseButtonWheelUp {
+					m.list.Up()
+				} else {
+					m.list.Down()
+				}
+				return m, m.instanceChanged()
+			}
+			// Over the right tabbed pane: scroll the active tab. A nil or
+			// paused selection has nothing to scroll.
+			if m.tabbedWindow.InBounds(msg) {
+				selected := m.list.GetSelectedInstance()
+				if selected == nil || selected.Paused() {
+					return m, nil
+				}
+				if msg.Button == tea.MouseButtonWheelUp {
+					m.tabbedWindow.ScrollUp()
+				} else {
+					m.tabbedWindow.ScrollDown()
+				}
+				return m, nil
 			}
 			return m, nil
 		}

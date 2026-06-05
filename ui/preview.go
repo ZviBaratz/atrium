@@ -284,33 +284,22 @@ func (p *PreviewPane) ScrollUp(instance *session.Instance) error {
 	return nil
 }
 
-// ScrollDown scrolls down in the viewport
+// ScrollDown scrolls down within an existing snapshot. From the live view it is
+// a no-op: the live view already shows the bottom, and a snapshot entered at the
+// bottom is indistinguishable from it while silently freezing updates — entry is
+// ScrollUp's job. (It would also make the bottom-exit below an enter/exit toggle
+// under a held wheel.)
 func (p *PreviewPane) ScrollDown(instance *session.Instance) error {
-	if instance == nil || instance.Paused() {
+	if instance == nil || instance.Paused() || !p.isScrolling {
 		return nil
 	}
 
-	if !p.isScrolling {
-		// Entering scroll mode - capture entire pane content including scrollback history
-		content, err := instance.PreviewFullHistory()
-		if err != nil {
-			return err
-		}
-
-		// Set content in the viewport
-		footer := scrollExitFooter()
-
-		contentWithFooter := lipgloss.JoinVertical(lipgloss.Left, content, footer)
-		p.viewport.SetContent(contentWithFooter)
-
-		// Position the viewport at the bottom initially
-		p.viewport.GotoBottom()
-
-		p.enterScrollMode(instance)
-		return nil
+	// A wheel-down at the very bottom leaves scroll mode and resumes the live
+	// view (tmux copy-mode style). Entering calls GotoBottom(), so a wheel-down
+	// right after an accidental entry self-heals.
+	if p.viewport.AtBottom() {
+		return p.ResetToNormalMode(instance)
 	}
-
-	// Already in copy mode, just scroll the viewport
 	p.viewport.LineDown(1)
 	return nil
 }

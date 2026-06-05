@@ -307,7 +307,12 @@ func TestTerminalScrolling(t *testing.T) {
 	viewContent := tp.viewport.View()
 	require.NotEmpty(t, viewContent, "viewport should have content in scroll mode")
 
-	// ScrollDown should continue in scroll mode
+	// Move off the bottom first: entering lands at the bottom, where a
+	// wheel-down would auto-exit back to the live view rather than scroll.
+	err = tp.ScrollUp()
+	require.NoError(t, err)
+
+	// ScrollDown above the bottom should continue in scroll mode
 	err = tp.ScrollDown()
 	require.NoError(t, err)
 	require.True(t, tp.IsScrolling(), "should still be in scroll mode after ScrollDown")
@@ -327,6 +332,63 @@ func TestTerminalScrolling(t *testing.T) {
 // checks isScrolling before the fallbacks, so a latched snapshot pinned across
 // selection changes until restart. Switching the displayed instance must drop the
 // snapshot and capture the new instance's live shell.
+// TestTerminalScrollDownAtBottomExitsToLive mirrors the preview pane's self-healing
+// exit: a wheel-down while the snapshot is already at its bottom must leave scroll
+// mode (the next UpdateContent tick repaints the live shell); a wheel-down anywhere
+// above the bottom must scroll and stay in the mode.
+func TestTerminalScrollDownAtBottomExitsToLive(t *testing.T) {
+	log.Initialize(false)
+	defer log.Close()
+
+	// More lines than the 30-row viewport so "off the bottom" is reachable.
+	const numLines = 100
+	lines := make([]string, numLines)
+	for i := range numLines {
+		lines[i] = fmt.Sprintf("line %d", i+1)
+	}
+	fullContent := strings.Join(lines, "\n")
+
+	instance := makeStartedInstance(t, "scroll-bottom-exit")
+	defer func() { _ = instance.Kill() }()
+
+	tp := NewTerminalPane(context.Background())
+	tp.SetSize(80, 30)
+	injectSession(tp, instance.Title, newMockTmuxSession(t, "mock-scroll-bottom", mockCmdExec(fullContent, true)), t.TempDir())
+
+	// Enter scroll mode: the viewport starts at the bottom of the snapshot.
+	require.NoError(t, tp.ScrollUp())
+	require.True(t, tp.IsScrolling())
+	tp.mu.Lock()
+	require.True(t, tp.viewport.AtBottom(), "entering scroll mode must land at the bottom")
+	tp.mu.Unlock()
+
+	// Wheel-down while already at the bottom exits scroll mode.
+	require.NoError(t, tp.ScrollDown())
+	require.False(t, tp.IsScrolling(), "a wheel-down at the bottom must exit scroll mode")
+
+	// A further wheel-down from the live view must not re-enter the snapshot —
+	// otherwise a held wheel would toggle enter/exit forever.
+	require.NoError(t, tp.ScrollDown())
+	require.False(t, tp.IsScrolling(), "wheel-down from the live view must not enter scroll mode")
+
+	// Off the bottom, a wheel-down scrolls — it must not exit.
+	require.NoError(t, tp.ScrollUp()) // re-enter
+	for range 5 {
+		require.NoError(t, tp.ScrollUp())
+	}
+	tp.mu.Lock()
+	require.False(t, tp.viewport.AtBottom())
+	tp.mu.Unlock()
+	require.NoError(t, tp.ScrollDown())
+	require.True(t, tp.IsScrolling(), "scrolling down above the bottom must stay in scroll mode")
+
+	// Reaching the bottom and wheeling down once more exits.
+	for range 10 {
+		require.NoError(t, tp.ScrollDown())
+	}
+	require.False(t, tp.IsScrolling(), "wheeling down past the bottom must exit scroll mode")
+}
+
 func TestTerminalScrollSnapshotUnpinsOnInstanceSwitch(t *testing.T) {
 	log.Initialize(false)
 	defer log.Close()

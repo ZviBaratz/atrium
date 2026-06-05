@@ -29,6 +29,11 @@ func listRowZoneID(title string) string { return "list-row-" + title }
 // ever queried (HeaderAtZone walks the live groups).
 func listHeaderZoneID(key string) string { return "list-header-" + key }
 
+// listPanelZoneID marks the entire session-list panel (its outer border box),
+// wrapping the per-row/header zones nested inside it. Wheel events landing here
+// are routed to selection movement rather than the right pane.
+const listPanelZoneID = "list-panel"
+
 // Row/header/selection styles read the active theme at render time.
 func repoHeaderStyle() lipgloss.Style { return theme.Current().DimStyle().Bold(true).Padding(0, 1) }
 func repoRuleStyle() lipgloss.Style   { return theme.Current().FaintStyle() }
@@ -621,7 +626,9 @@ func (l *List) String() string {
 
 	// The list is the primary navigation surface, so its panel is always drawn
 	// active (accent border). A dynamic focus model can flip this later.
-	return theme.Current().Panel("Sessions", content, l.width, l.height, true)
+	// The panel zone wraps outside Panel so its internal clipping cannot
+	// truncate the end marker.
+	return zone.Mark(listPanelZoneID, theme.Current().Panel("Sessions", content, l.width, l.height, true))
 }
 
 // windowLines clips lines to the list height, scrolling so the selected block
@@ -664,6 +671,13 @@ func (l *List) windowLines(lines []string, selStart, selH, avail int) []string {
 		window[avail-1] = faint.Render(fmt.Sprintf("  ↓ %d more", below))
 	}
 	return window
+}
+
+// InPanelBounds reports whether the mouse event lands within the list panel's
+// rendered box. Used to route wheel events to selection movement. False before
+// the first zone scan (zero ZoneInfo), so early frames route nowhere.
+func (l *List) InPanelBounds(msg tea.MouseMsg) bool {
+	return zone.Get(listPanelZoneID).InBounds(msg)
 }
 
 // InstanceAtZone returns the instance whose rendered row contains the given mouse

@@ -377,12 +377,21 @@ func (t *TerminalPane) ScrollUp() error {
 	return nil
 }
 
-// ScrollDown enters scroll mode (if not already) and scrolls down.
+// ScrollDown scrolls down within an existing snapshot; from the live view it is
+// a no-op (entry is ScrollUp's job — see PreviewPane.ScrollDown). A wheel-down
+// while the snapshot is already at its bottom leaves scroll mode instead (tmux
+// copy-mode style); the next UpdateContent tick repaints the live shell.
 func (t *TerminalPane) ScrollDown() error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if !t.isScrolling {
-		return t.enterScrollMode()
+		return nil
+	}
+	// The mutex is already held here, so exit directly — ResetToNormalMode would
+	// re-lock t.mu and deadlock.
+	if t.viewport.AtBottom() {
+		t.exitScrollModeLocked()
+		return nil
 	}
 	t.viewport.LineDown(1)
 	return nil

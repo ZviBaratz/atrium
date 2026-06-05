@@ -14,6 +14,11 @@ import (
 
 func tabZoneID(i int) string { return fmt.Sprintf("tab-%d", i) }
 
+// tabbedWindowZoneID marks the entire right tabbed pane (tab strip + window
+// body), wrapping the per-tab zones nested inside it. Wheel events landing here
+// scroll the active tab's content.
+const tabbedWindowZoneID = "tabbed-window"
+
 func tabBorderWithBottom(left, middle, right string) lipgloss.Border {
 	// Start from the theme's box style so a fallback theme's square corners
 	// apply to the tab strip too, not just the panels.
@@ -153,6 +158,13 @@ func (w *TabbedWindow) SetActiveTab(i int) {
 		return
 	}
 	w.activeTab = i
+}
+
+// InBounds reports whether the mouse event lands within the tabbed window's
+// rendered box. Used to route wheel events to the active tab's scroll. False
+// before the first zone scan (zero ZoneInfo), so early frames route nowhere.
+func (w *TabbedWindow) InBounds(msg tea.MouseMsg) bool {
+	return zone.Get(tabbedWindowZoneID).InBounds(msg)
 }
 
 // TabAtZone returns the index of the tab containing the given mouse event, and
@@ -358,6 +370,7 @@ func (w *TabbedWindow) String() string {
 	// taller than its budget. View joins it against the list with JoinHorizontal, so
 	// any excess overflows the terminal and scrolls the whole frame. Bound it to
 	// w.height so the right column always matches the list column.
-	return lipgloss.NewStyle().MaxHeight(w.height).Render(
-		lipgloss.JoinVertical(lipgloss.Left, row, window))
+	// The panel zone wraps outside MaxHeight so truncation cannot eat the end marker.
+	return zone.Mark(tabbedWindowZoneID, lipgloss.NewStyle().MaxHeight(w.height).Render(
+		lipgloss.JoinVertical(lipgloss.Left, row, window)))
 }
