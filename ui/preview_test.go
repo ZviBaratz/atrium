@@ -734,9 +734,11 @@ func writeClaudeTranscript(t *testing.T, workingDir string, jsonlLines ...string
 }
 
 // TestPreviewScrollUsesTranscriptForClaude verifies that scroll mode on a
-// Claude session renders the session's own JSONL transcript instead of the
-// tmux capture (which is structurally empty for in-place repainting agents),
-// and labels the snapshot as a transcript in the footer.
+// Claude session shows the session's own JSONL transcript as the history above
+// a frozen capture of the current screen (the tmux history itself is
+// structurally empty for in-place repainting agents). Anchoring the bottom on
+// the current screen keeps entry seamless: the snapshot's tail is exactly what
+// the live view showed, and the transcript continues above it past a divider.
 func TestPreviewScrollUsesTranscriptForClaude(t *testing.T) {
 	tmuxContent := "TMUX PANE CONTENT"
 	setup := setupTestEnvironmentWithProgram(t, liveContentCmdExec(&tmuxContent), "claude")
@@ -756,8 +758,18 @@ func TestPreviewScrollUsesTranscriptForClaude(t *testing.T) {
 	rendered := pane.String()
 	require.Contains(t, rendered, "❯ transcribed user prompt")
 	require.Contains(t, rendered, "transcribed assistant reply")
-	require.NotContains(t, rendered, tmuxContent, "the transcript must replace the tmux capture")
+	require.Contains(t, rendered, "current screen", "a divider must separate transcript history from the screen capture")
+	require.Contains(t, rendered, tmuxContent, "the frozen current screen must anchor the snapshot bottom")
 	require.Contains(t, rendered, "transcript · ESC", "the footer must label the snapshot as a transcript")
+
+	// Layout order: transcript history, divider, current screen, footer.
+	idxTranscript := strings.Index(rendered, "transcribed assistant reply")
+	idxDivider := strings.Index(rendered, "current screen")
+	idxPane := strings.Index(rendered, tmuxContent)
+	idxFooter := strings.Index(rendered, "transcript · ESC")
+	require.True(t, idxTranscript < idxDivider, "transcript history must render above the divider")
+	require.True(t, idxDivider < idxPane, "the divider must render above the screen capture")
+	require.True(t, idxPane < idxFooter, "the screen capture must render above the footer")
 }
 
 // TestPreviewScrollFallsBackToTmuxForAider locks in the "never worse than
@@ -777,6 +789,7 @@ func TestPreviewScrollFallsBackToTmuxForAider(t *testing.T) {
 	rendered := pane.String()
 	require.Contains(t, rendered, tmuxContent)
 	require.Contains(t, rendered, "snapshot · ESC", "non-transcript snapshots keep the snapshot footer")
+	require.NotContains(t, rendered, "current screen", "tmux-sourced snapshots have no transcript divider")
 }
 
 // TestPreviewScrollClaudeWithoutTranscriptFallsBack covers the degraded path
