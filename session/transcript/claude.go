@@ -36,6 +36,13 @@ func (claudeAdapter) render(workingDir string, opts Options) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	if len(entries) == 0 {
+		// A just-started session writes housekeeping lines before any
+		// conversation. Erroring (→ tmux fallback) beats returning success
+		// with nothing to show: the UI would frame an empty string as a
+		// blank region labeled "transcript".
+		return "", fmt.Errorf("no renderable entries in %s", path)
+	}
 	return renderEntries(entries, truncated, opts.Width), nil
 }
 

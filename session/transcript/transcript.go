@@ -17,7 +17,8 @@ const defaultMaxBytes = 512 * 1024
 
 // Options controls transcript rendering.
 type Options struct {
-	// Root overrides the transcript root (default ~/.claude) — for tests.
+	// Root overrides the transcript root (default $CLAUDE_CONFIG_DIR, else
+	// ~/.claude) — for tests.
 	Root string
 	// Width is the pane width to wrap to; <= 0 leaves lines unwrapped.
 	Width int
@@ -51,8 +52,11 @@ func Render(program, workingDir string, opts Options) (string, error) {
 
 func applyDefaults(opts Options) Options {
 	if opts.Root == "" {
-		home, err := os.UserHomeDir()
-		if err == nil {
+		// Claude Code relocates its whole data dir (incl. projects/) when
+		// CLAUDE_CONFIG_DIR is set; resolve the same way it does.
+		if dir := os.Getenv("CLAUDE_CONFIG_DIR"); dir != "" {
+			opts.Root = dir
+		} else if home, err := os.UserHomeDir(); err == nil {
 			opts.Root = filepath.Join(home, ".claude")
 		}
 	}

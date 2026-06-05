@@ -93,6 +93,48 @@ func TestRenderTruncationHeader(t *testing.T) {
 	}
 }
 
+// TestRenderHonorsClaudeConfigDir verifies the root default chain: an empty
+// Options.Root resolves to $CLAUDE_CONFIG_DIR before ~/.claude. Claude Code
+// relocates its whole data dir when that variable is set — without honoring it
+// such users would silently degrade to the (empty) tmux capture forever.
+func TestRenderHonorsClaudeConfigDir(t *testing.T) {
+	const cwd = "/home/zvi/work"
+	// Hermetic guard: if the env var were ignored, resolution would reach
+	// $HOME/.claude — point HOME at an empty temp dir, never the real one.
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("CLAUDE_CONFIG_DIR", renderRoot(t, cwd))
+
+	out, err := Render("claude", cwd, Options{Width: 60})
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	if !strings.Contains(out, "❯ Fix the terminal pane too and open a PR") {
+		t.Errorf("transcript under $CLAUDE_CONFIG_DIR not rendered:\n%s", out)
+	}
+}
+
+// TestRenderHousekeepingOnlyTranscriptErrors covers the just-started session:
+// the JSONL exists but holds only housekeeping lines (mode, snapshot), so
+// nothing renders. That must be an error — falling back to the tmux capture —
+// not a successful empty string, which the UI would frame as a blank region
+// labeled "transcript".
+func TestRenderHousekeepingOnlyTranscriptErrors(t *testing.T) {
+	const cwd = "/home/zvi/work"
+	root := t.TempDir()
+	lines := `{"type":"mode","mode":"default","sessionId":"s1"}` + "\n" +
+		`{"type":"file-history-snapshot","messageId":"m1","snapshot":{}}` + "\n"
+	dest := filepath.Join(root, "projects", sanitizeCWD(cwd), "fresh.jsonl")
+	writeFileWithMtime(t, dest, lines, time.Now())
+
+	_, err := Render("claude", cwd, Options{Root: root, Width: 80})
+	if err == nil {
+		t.Fatal("expected error for a housekeeping-only transcript")
+	}
+	if errors.Is(err, ErrUnsupported) {
+		t.Fatalf("error = %v, want a fallback error, not ErrUnsupported", err)
+	}
+}
+
 // TestRenderUnsupportedProgram verifies the adapter boundary: only Claude
 // (wrapper-aware) is handled; everything else signals ErrUnsupported so the
 // caller falls back to the tmux capture.
