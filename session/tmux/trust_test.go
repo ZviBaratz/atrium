@@ -21,15 +21,17 @@ func trustHome(t *testing.T) (home, claudeJSON string) {
 
 // claudeFixture is a realistic ~/.claude.json shape: top-level unknown fields
 // (one carrying an integer too large for float64 — re-encoding through
-// float64 would corrupt it), an unrelated trusted project, and OAuth-ish
-// material that must survive byte-for-byte semantically.
+// float64 would corrupt it), an unrelated trusted project whose history holds
+// HTML-special characters (a default JSON re-encode would escape them), and
+// OAuth-ish material that must survive byte-for-byte semantically.
 const claudeFixture = `{
   "firstStartTime": 1736159218941234567,
   "oauthAccount": {"accountUuid": "abc-123", "emailAddress": "user@example.com"},
   "projects": {
     "/home/user/other": {
       "hasTrustDialogAccepted": true,
-      "allowedTools": ["Bash"]
+      "allowedTools": ["Bash"],
+      "history": ["fix <div> & run a->b"]
     }
   },
   "customSentinel": {"nested": ["keep", "me"]}
@@ -102,6 +104,15 @@ func TestEnsureWorktreesRootTrusted_SetsTrustAndPreservesContent(t *testing.T) {
 	}
 	if !strings.Contains(string(data), "1736159218941234567") {
 		t.Fatalf("large integer corrupted on rewrite; got: %s", data)
+	}
+	// HTML-special characters stay literal (SetEscapeHTML(false)) — escaping
+	// them would make the file diff-noisy against claude's own rewrites.
+	if !strings.Contains(string(data), `"fix <div> & run a->b"`) {
+		t.Fatalf("HTML-special characters were escaped on rewrite; got: %s", data)
+	}
+	// Trailing newline matches how claude itself writes the file.
+	if !strings.HasSuffix(string(data), "\n") {
+		t.Fatal("rewrite dropped the trailing newline")
 	}
 	// File mode preserved (claude.json carries OAuth tokens).
 	info, err := os.Stat(claudeJSON)

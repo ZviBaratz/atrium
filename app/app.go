@@ -68,9 +68,12 @@ var copyToClipboard = clipboard.WriteAll
 // maybeTrustWorktreesRoot pre-accepts Claude's workspace trust for the
 // worktrees root when the opt-in trust_worktrees_root flag is on and any
 // configured program resolves to claude (the launch program or any profile —
-// sessions can be created from either). Strictly best-effort: every failure is
-// a warning, never an error, because the fallback is just Claude's own trust
-// dialog.
+// sessions can be created from either). Programs stored on persisted instances
+// are deliberately not consulted: a stored claude session whose program no
+// longer matches the config is rare, the miss only re-surfaces Claude's own
+// dialog, and the gate self-corrects as soon as claude is configured again.
+// Strictly best-effort: every failure is a warning, never an error, because
+// the fallback is just Claude's own trust dialog.
 func maybeTrustWorktreesRoot(cfg *config.Config, program string) {
 	if !cfg.GetTrustWorktreesRoot() {
 		return

@@ -102,10 +102,19 @@ func EnsureWorktreesRootTrusted(worktreesRoot string) error {
 	}
 	entry["hasTrustDialogAccepted"] = true
 
-	out, err := json.MarshalIndent(root, "", "  ")
-	if err != nil {
+	// Encode through an Encoder rather than MarshalIndent: SetEscapeHTML(false)
+	// keeps <, >, & literal (project history entries routinely contain them, and
+	// rewriting each one as a \uXXXX escape would make the file needlessly
+	// diff-noisy against claude's own rewrites), and Encode's trailing newline
+	// matches how claude itself writes the file.
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	enc.SetIndent("", "  ")
+	if err := enc.Encode(root); err != nil {
 		return fmt.Errorf("encode %s: %w", path, err)
 	}
+	out := buf.Bytes()
 
 	// CreateTemp creates the file 0600, so token material is never readable by
 	// other users even transiently; match the original's mode before the swap.
