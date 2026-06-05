@@ -39,8 +39,7 @@ func withFakeClipboard(t *testing.T, retErr error) *fakeClipboard {
 }
 
 // newCopyBranchHome builds a minimal stateDefault home holding the given instances
-// with the first one selected. keySent is preset so handleKeyPress skips the
-// two-phase menu-highlight pass and runs the keybinding directly (see autoname_test).
+// with the first one selected.
 func newCopyBranchHome(t *testing.T, instances ...*session.Instance) *home {
 	t.Helper()
 	s := spinner.New()
@@ -54,7 +53,6 @@ func newCopyBranchHome(t *testing.T, instances ...*session.Instance) *home {
 		list:      l,
 		menu:      ui.NewMenu(),
 		appConfig: config.DefaultConfig(),
-		keySent:   true,
 	}
 }
 

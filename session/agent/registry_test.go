@@ -86,6 +86,31 @@ func TestClaudePrompts(t *testing.T) {
 		"Enter to select · ↑/↓ to navigate\n· n to add notes · Esc to cancel")
 	require.True(t, ok, "wrapped selection footer")
 
+	// A custom multi-line statusLine below the footer (drawing its own divider
+	// rule) pushes the footer out of any fixed bottom window; the structural
+	// segment scan must still see it. Mirrors the session/tmux statusLine poll
+	// tests, which remain the behavioral gate.
+	name, ok = claude.DetectPrompt(strings.Join([]string{
+		"  6. Chat about this",
+		"Enter to select · ↑/↓ to navigate · Esc to cancel",
+		"────────────────────────────",
+		"  main · opus · 12% ctx",
+		"  3 files changed",
+	}, "\n"))
+	require.True(t, ok, "selection footer above a divider-drawing statusLine")
+	require.Equal(t, "selection", name)
+
+	// A footer quoted in the transcript sits above the input box; the scan stops
+	// at the box interior, so the quote must not read as a live prompt.
+	_, ok = claude.DetectPrompt(strings.Join([]string{
+		"  The footer reads: Enter to select · ↑/↓ to navigate · Esc to cancel",
+		"╭────────────────────────────╮",
+		"│ >                          │",
+		"╰────────────────────────────╯",
+		"  ? for shortcuts",
+	}, "\n"))
+	require.False(t, ok, "a footer quote in the transcript must not match")
+
 	// Live idle/working footers must not classify as prompts.
 	for _, footer := range []string{
 		"❯ \n⏵⏵ auto mode on · 1 shell · ctrl+t to hide tasks · ← for agents · ↓ to manage",

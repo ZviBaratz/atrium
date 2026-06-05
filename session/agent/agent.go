@@ -7,8 +7,9 @@
 // fixture test — never a change to the poll logic itself.
 //
 // The package is pure data and string matching: no tmux, no subprocesses, no IO.
-// Pane capture, windowing (footer anchoring, chrome flattening), and capability
-// probes stay in session/tmux; matchers receive already-windowed text.
+// Pane capture and capability probes stay in session/tmux; matchers receive the
+// cleaned full pane and confine themselves to its bottom chrome via the
+// windowing helpers in chrome.go.
 package agent
 
 import "strings"
@@ -26,21 +27,23 @@ const (
 	KeyGeneric Key = "generic"
 )
 
-// Chrome window sizes used by prompt matchers, in non-empty pane lines counted
-// from the bottom. They mirror the tmux poller's historical constants: a prompt
-// block (question + options + footer, possibly with a todo tracker below) needs
-// the tall window, while a key-hint footer that wraps across a couple of
-// physical lines needs a tight one so prose higher in the chrome can't trip a
-// token co-occurrence match.
-const (
-	WindowPrompt = 15
-	WindowFooter = 3
-)
+// WindowPrompt is the chrome window size used by prompt matchers, in non-empty
+// pane lines counted from the bottom. It mirrors the tmux poller's historical
+// constant: a prompt block (question + options + footer, possibly with a todo
+// tracker below) fits within it, and the structural segment scan
+// (footerVisibleInSegments) uses it as its depth budget.
+const WindowPrompt = 15
 
 // PromptMatcher recognizes one shape of blocking prompt in the flattened bottom
 // chrome (newlines collapsed to spaces, so hard-wrapped footers and sentences
 // survive narrow pane widths). A matcher fires when every string in All is
 // present and, if Any is non-empty, at least one of Any is present too.
+//
+// Match is the escape hatch for prompt shapes that a flat windowed substring
+// match cannot express — e.g. claude's selection footer, which a custom
+// multi-line statusLine can displace out of any fixed bottom-N window, so it
+// needs the rule-delimited segment scan instead. When Match is set it receives
+// the cleaned full pane and the declarative fields are ignored.
 type PromptMatcher struct {
 	// Name labels the matcher in status logs and tests.
 	Name string
@@ -50,9 +53,15 @@ type PromptMatcher struct {
 	All []string
 	// Any requires at least one entry present when non-empty.
 	Any []string
+	// Match, when set, replaces the All/Any/Window match entirely.
+	Match func(content string) bool
 }
 
-func (m PromptMatcher) matches(flat string) bool {
+func (m PromptMatcher) matches(content string) bool {
+	if m.Match != nil {
+		return m.Match(content)
+	}
+	flat := flattenChrome(content, m.Window)
 	for _, s := range m.All {
 		if !strings.Contains(flat, s) {
 			return false
@@ -156,11 +165,12 @@ func (a *Adapter) HasBusyMarker(content string) bool {
 
 // DetectPrompt reports whether the bottom chrome of content (the cleaned full
 // pane) shows a blocking prompt, returning the matcher's name for status
-// logging. Each matcher flattens its own window, so a tight-footer matcher and
-// a tall-dialog matcher coexist without the caller pre-windowing.
+// logging. Each matcher windows the pane itself (its own flattened window, or a
+// structural scan via Match), so differently shaped matchers coexist without
+// the caller pre-windowing.
 func (a *Adapter) DetectPrompt(content string) (string, bool) {
 	for _, m := range a.Prompts {
-		if m.matches(flattenChrome(content, m.Window)) {
+		if m.matches(content) {
 			return m.Name, true
 		}
 	}

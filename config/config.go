@@ -92,6 +92,27 @@ type Config struct {
 	// feature stays enabled for config files written before it existed. Setting
 	// it false restores the chrome-free fullscreen pane (tmux status off).
 	SessionContextBar *bool `json:"session_context_bar,omitempty"`
+	// HintBar, when true, keeps a one-line key-hint bar at the bottom of the
+	// screen during plain navigation. nil means use the default (on). Setting it
+	// false restores the chrome-free interface, where the bar appears only for
+	// inline interactions that need it (naming, filtering, progress).
+	HintBar *bool `json:"hint_bar,omitempty"`
+	// MaxSessions caps how many sessions can exist at once; creating one beyond
+	// it is rejected with an error in the UI. nil (or a non-positive value)
+	// means use DefaultMaxSessions, so older config files keep the old cap.
+	MaxSessions *int `json:"max_sessions,omitempty"`
+}
+
+// DefaultMaxSessions is the session cap used when MaxSessions is unset.
+const DefaultMaxSessions = 10
+
+// GetMaxSessions returns the configured session cap, falling back to
+// DefaultMaxSessions for a nil or non-positive value.
+func (c *Config) GetMaxSessions() int {
+	if c.MaxSessions == nil || *c.MaxSessions < 1 {
+		return DefaultMaxSessions
+	}
+	return *c.MaxSessions
 }
 
 // GetSessionContextBar reports whether attached sessions should render the
@@ -99,6 +120,12 @@ type Config struct {
 // file with no such key) defaults to on, mirroring GetAutoAttach.
 func (c *Config) GetSessionContextBar() bool {
 	return c.SessionContextBar == nil || *c.SessionContextBar
+}
+
+// GetHintBar reports whether the always-on bottom hint bar is enabled. A nil
+// HintBar (e.g. an older config file with no such key) defaults to on.
+func (c *Config) GetHintBar() bool {
+	return c.HintBar == nil || *c.HintBar
 }
 
 // GetAutoAttach reports whether new sessions should auto-attach on creation.
@@ -166,6 +193,8 @@ func DefaultConfig() *Config {
 	autoAttach := true
 	killDoubleTap := true
 	sessionContextBar := true
+	hintBar := true
+	maxSessions := DefaultMaxSessions
 	return &Config{
 		DefaultProgram:     program,
 		Profiles:           profiles,
@@ -173,6 +202,7 @@ func DefaultConfig() *Config {
 		DaemonPollInterval: 1000,
 		Theme:              "tokyo-night",
 		SessionContextBar:  &sessionContextBar,
+		HintBar:            &hintBar,
 		BranchPrefix: func() string {
 			user, err := user.Current()
 			if err != nil || user == nil || user.Username == "" {
@@ -183,6 +213,7 @@ func DefaultConfig() *Config {
 		}(),
 		AutoAttach:           &autoAttach,
 		KillDoubleTapConfirm: &killDoubleTap,
+		MaxSessions:          &maxSessions,
 	}
 }
 

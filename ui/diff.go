@@ -58,7 +58,7 @@ func (d *DiffPane) SetDiff(instance *session.Instance) {
 		d.height,
 		lipgloss.Center,
 		lipgloss.Center,
-		"No changes",
+		metaStyle().Render("No changes"),
 	)
 
 	if instance == nil || !instance.Started() {
@@ -76,7 +76,7 @@ func (d *DiffPane) SetDiff(instance *session.Instance) {
 			d.height,
 			lipgloss.Center,
 			lipgloss.Center,
-			fmt.Sprintf("Direct session — git tracking disabled.\nAgent runs in %s", instance.Path),
+			metaStyle().Render(fmt.Sprintf("Direct session — git tracking disabled.\nAgent runs in %s", instance.Path)),
 		))
 		return
 	}
@@ -89,7 +89,7 @@ func (d *DiffPane) SetDiff(instance *session.Instance) {
 			d.height,
 			lipgloss.Center,
 			lipgloss.Center,
-			"Setting up worktree...",
+			metaStyle().Render("Setting up worktree..."),
 		)
 		d.viewport.SetContent(centeredMessage)
 		return
@@ -149,10 +149,10 @@ func gitContextHeader(instance *session.Instance, stats *git.DiffStats) string {
 		segs = append(segs, metaStyle().Render(fmt.Sprintf("%s changed", pluralize(stats.FilesChanged, "file"))))
 	}
 	if stats.Commits > 0 {
-		segs = append(segs, metaStyle().Render(fmt.Sprintf("⇡%s", pluralize(stats.Commits, "commit"))))
+		segs = append(segs, metaStyle().Render(fmt.Sprintf("%s%s", theme.Current().Glyphs.Ahead, pluralize(stats.Commits, "commit"))))
 	}
 	if stats.Behind > 0 {
-		segs = append(segs, diffBehindStyle().Render(fmt.Sprintf("⇣%d behind", stats.Behind)))
+		segs = append(segs, diffBehindStyle().Render(fmt.Sprintf("%s%d behind", theme.Current().Glyphs.Behind, stats.Behind)))
 	}
 	if stats.Dirty {
 		segs = append(segs, metaStyle().Render("uncommitted"))

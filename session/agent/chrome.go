@@ -94,3 +94,85 @@ func footerRegion(content string) string {
 	}
 	return strings.Join(lines[lastRule+1:], "\n")
 }
+
+// isInputBoxLine reports whether line is the interior of an agent's input box: the "❯" or
+// ">" prompt, optionally inside the box's "│" side borders, possibly followed by typed
+// text. The box is drawn only while no overlay is up, so reaching it while scanning upward
+// proves everything above is scrolled-back transcript.
+func isInputBoxLine(line string) bool {
+	s := strings.TrimSpace(line)
+	s = strings.TrimSpace(strings.TrimPrefix(s, "│"))
+	return strings.HasPrefix(s, "❯") || strings.HasPrefix(s, ">")
+}
+
+// footerVisibleInSegments reports whether a live key-hint footer — recognized by the
+// tokens predicate — is on screen. It exists for footers a custom multi-line statusLine
+// can render *below*, pushing them out of any fixed bottom-N window — and a statusLine may
+// draw its own ─── dividers, which defeats any single "below the last rule" anchor by
+// becoming the last rule itself. So instead of one anchor, the pane is scanned as
+// rule-delimited segments, bottom-up:
+//
+//   - The footer tokens must co-occur within a single segment (flattened, so a footer
+//     hard-wrapped at a narrow pane width is reconstructed), which also keeps unrelated hint
+//     text in neighboring segments from combining into a false footer.
+//   - The scan stops at the input box interior (isInputBoxLine as a segment's first
+//     non-empty line): the box and an overlay are mutually exclusive, and the live footer
+//     always sits below any "❯" option pointer, so a segment opening with the prompt char
+//     means everything above is transcript — where a quoted footer must not count. A
+//     statusLine segment that itself opens with "❯"/">" stops the scan early and hides a
+//     footer above it; that residual miss needs a statusLine with both a divider and a
+//     prompt-char-initial line.
+//   - The scan is confined to the bottom WindowPrompt non-empty lines — the same budget
+//     the dialog matchers use — which caps how far a rule-bearing transcript can be
+//     searched on degenerate panes that show neither a box nor an overlay, at the cost of
+//     missing footers displaced by statusLines taller than that budget.
+//   - With no rule on screen there is no structure to segment by; fall back to the tight
+//     workChromeLines window, preserving the fixed-window behavior for minimal footers.
+func footerVisibleInSegments(content string, tokens func(string) bool) bool {
+	lines := strings.Split(content, "\n")
+	nonEmpty := 0
+	for i := len(lines) - 1; i >= 0; i-- {
+		if strings.TrimSpace(lines[i]) != "" {
+			nonEmpty++
+			if nonEmpty == WindowPrompt {
+				lines = lines[i:]
+				break
+			}
+		}
+	}
+
+	var rules []int
+	for i, line := range lines {
+		if isHorizontalRule(line) {
+			rules = append(rules, i)
+		}
+	}
+	if len(rules) == 0 {
+		return tokens(flattenChrome(content, workChromeLines))
+	}
+
+	end := len(lines)
+	for k := len(rules) - 1; k >= -1; k-- {
+		start := 0
+		if k >= 0 {
+			start = rules[k] + 1
+		}
+		segment := lines[start:end]
+		if tokens(whiteSpaceRegex.ReplaceAllString(strings.Join(segment, " "), " ")) {
+			return true
+		}
+		for _, line := range segment {
+			if strings.TrimSpace(line) == "" {
+				continue
+			}
+			if isInputBoxLine(line) {
+				return false
+			}
+			break
+		}
+		if k >= 0 {
+			end = rules[k]
+		}
+	}
+	return false
+}

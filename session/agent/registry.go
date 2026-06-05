@@ -28,12 +28,13 @@ var claude = &Adapter{
 		// The tool-permission dialog's decline option.
 		{Name: "permission", Window: WindowPrompt,
 			All: []string{"No, and tell Claude what to do differently"}},
-		// Any interactive selection (AskUserQuestion, plan approval). The footer
-		// requires its co-occurring tokens within a tight window, so prose merely
-		// mentioning "Esc to cancel" higher in the chrome cannot trip it.
-		{Name: "selection", Window: WindowFooter,
-			All: []string{"Esc to cancel"},
-			Any: []string{"to navigate", "to select"}},
+		// Any interactive selection (AskUserQuestion, plan approval). A custom
+		// multi-line statusLine can render *below* the key-hint footer — possibly
+		// drawing its own ─── dividers — and push it out of any fixed bottom
+		// window, so this matcher is structural: the rule-delimited segment scan
+		// finds the footer wherever the statusLine displaced it, while the
+		// input-box stop keeps a footer quoted in the transcript from counting.
+		{Name: "selection", Match: claudeSelectionFooterVisible},
 	},
 
 	Gates: []Gate{
@@ -45,6 +46,21 @@ var claude = &Adapter{
 	// single program argv element is sufficient — no shell wrapping.
 	Resume:      func(program string) string { return program + " --continue" },
 	HookSupport: true,
+}
+
+// selectionFooterTokens reports whether the flattened text carries claude's selection
+// footer's co-occurring key hints: "Esc to cancel" plus a navigate/select token.
+// Requiring the pair keeps prose that merely mentions one phrase from reading as a
+// live prompt.
+func selectionFooterTokens(s string) bool {
+	return strings.Contains(s, "Esc to cancel") &&
+		(strings.Contains(s, "to navigate") || strings.Contains(s, "to select"))
+}
+
+// claudeSelectionFooterVisible backs the claude "selection" matcher: the structural
+// segment scan (see footerVisibleInSegments) applied to claude's footer tokens.
+func claudeSelectionFooterVisible(content string) bool {
+	return footerVisibleInSegments(content, selectionFooterTokens)
 }
 
 // Codex CLI (openai/codex, Rust TUI). Strings verified against the repo at
