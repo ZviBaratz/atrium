@@ -18,6 +18,11 @@ import (
 // skipped. Nothing here may ever surface as a Setup error — Setup's callers
 // (Instance.Start's deferred Kill, Resume) tear the whole worktree down on
 // error, which would turn a cosmetic copy failure into a destroyed session.
+//
+// Carried files are seeded from the origin checkout on every Setup, including
+// the paused→resume recreation: being gitignored they are never committed by
+// pause, so edits made to them inside a session do not survive a pause/resume
+// cycle — the origin copy wins.
 func (g *Worktree) carryLocalFiles() {
 	for _, rel := range config.LoadConfig().GetCarryFiles() {
 		g.carryLocalFile(rel)
@@ -45,6 +50,9 @@ func (g *Worktree) carryLocalFile(rel string) {
 	dst := filepath.Join(g.worktreePath, rel)
 	// IsLocal above already rejects escapes; verify the joined results stayed
 	// inside their roots anyway (also marks the paths clean for taint analysis).
+	// Both checks are lexical: a symlinked path component could still point
+	// elsewhere, but the repo, the worktree, and the carry list are all the
+	// user's own content — no trust boundary is crossed.
 	if !strings.HasPrefix(src, g.repoPath+string(filepath.Separator)) ||
 		!strings.HasPrefix(dst, g.worktreePath+string(filepath.Separator)) {
 		log.WarningLog.Printf("carry_files: skipping %q: resolves outside the repo or worktree", rel)
