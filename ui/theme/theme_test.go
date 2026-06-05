@@ -78,6 +78,23 @@ func TestGlyphWidths(t *testing.T) {
 	}
 }
 
+// TestAgentGlyphWidths extends the same invariant to the agent identity glyphs:
+// each must be a single cell so the list's column math holds, and every entry
+// must resolve to a non-empty glyph (including the unknown-key fallback).
+func TestAgentGlyphWidths(t *testing.T) {
+	th := Get(DefaultThemeName)
+	for key := range agentGlyphs {
+		g, _ := th.AgentGlyph(key)
+		if w := runewidth.StringWidth(g); w != 1 {
+			t.Errorf("agent glyph %s = %q has width %d, want 1", key, g, w)
+		}
+	}
+	g, _ := th.AgentGlyph("unknown-agent")
+	if w := runewidth.StringWidth(g); w != 1 {
+		t.Errorf("unknown-key fallback glyph %q has width %d, want 1", g, w)
+	}
+}
+
 // TestPanelExactDimensions mirrors the view-bounds invariant at the unit level:
 // Panel must emit exactly height lines, each exactly width columns wide.
 func TestPanelExactDimensions(t *testing.T) {

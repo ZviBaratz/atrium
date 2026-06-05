@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"github.com/ZviBaratz/atrium/log"
 	"github.com/ZviBaratz/atrium/session"
+	"github.com/ZviBaratz/atrium/session/agent"
 	"github.com/ZviBaratz/atrium/ui/theme"
 	"path/filepath"
 	"sort"
@@ -366,7 +367,11 @@ func (r *InstanceRenderer) Render(i *session.Instance, idx int, selected bool) s
 		W = 1
 	}
 
-	// --- Line 1: name (left) · state word (right) ---
+	// --- Line 1: agent icon + name (left) · state word (right) ---
+	// The icon identifies which agent CLI the session runs — the rows are
+	// otherwise indistinguishable in a mixed-agent fleet. One cell + one gap;
+	// the glyphs are width-1 by the theme's agent-glyph invariant.
+	agentIcon, agentColor := th.AgentGlyph(string(agent.Resolve(i.Program).Key))
 	glyph, word, stateColor := r.stateParts(i, th)
 	rightPlain := glyph + " " + word
 	rightStyled := seg(stateColor).Render(glyph) + pad(1) + seg(stateColor).Render(word)
@@ -395,18 +400,19 @@ func (r *InstanceRenderer) Render(i *session.Instance, idx int, selected bool) s
 	// This is display-only and never mutates the stored display name.
 	name := theme.SanitizeWidth(i.DisplayName())
 	rightW := runewidth.StringWidth(rightPlain)
-	nameAvail := W - rightW - 1
+	const iconW = 2 // agent icon cell + gap
+	nameAvail := W - rightW - 1 - iconW
 	if nameAvail < 1 {
 		nameAvail = 1
 	}
 	if runewidth.StringWidth(name) > nameAvail {
 		name = runewidth.Truncate(name, nameAvail, "…")
 	}
-	gap1 := W - runewidth.StringWidth(name) - rightW
+	gap1 := W - iconW - runewidth.StringWidth(name) - rightW
 	if gap1 < 1 {
 		gap1 = 1
 	}
-	line1 := nameStyle.Render(name) + pad(gap1) + rightStyled
+	line1 := seg(agentColor).Render(agentIcon) + pad(1) + nameStyle.Render(name) + pad(gap1) + rightStyled
 
 	// --- Line 2: branch + git context (left) · diff stat (right), dim ---
 	stat := i.GetDiffStats()

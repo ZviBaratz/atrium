@@ -11,6 +11,7 @@ import (
 
 	"github.com/ZviBaratz/atrium/config"
 	"github.com/ZviBaratz/atrium/log"
+	"github.com/ZviBaratz/atrium/session/agent"
 )
 
 // Status hooks: an authoritative state signal for Claude Code sessions.
@@ -33,22 +34,17 @@ const (
 	hookStateReady   = "ready"
 )
 
-// isClaude reports whether program ultimately runs the Claude Code agent. It matches the
-// binary's basename containing "claude" (case-insensitive) rather than a path suffix, so it
-// recognizes both a direct invocation (claude, /usr/local/bin/claude, "claude --continue")
-// and a launcher wrapper that exec's claude (e.g. a "launch-claude.sh" default_program).
-// Basenaming first avoids false positives from a claude-containing directory such as
-// /home/user/.claude-squad/bin/otheragent.
+// isClaude reports whether program ultimately runs the Claude Code agent, via the
+// adapter registry's wrapper-aware resolution (basename contains-match on the first
+// token, so "claude", "/usr/local/bin/claude", "claude --continue", and a
+// "launch-claude.sh" wrapper all match while /home/user/.claude-squad/bin/otheragent
+// does not).
 func isClaude(program string) bool {
-	bin := program
-	if i := strings.IndexByte(bin, ' '); i >= 0 {
-		bin = bin[:i]
-	}
-	return strings.Contains(strings.ToLower(filepath.Base(bin)), ProgramClaude)
+	return agent.Resolve(program).Key == agent.KeyClaude
 }
 
-// IsClaude is the exported form of isClaude for callers outside this package (e.g. the
-// instance-level trust-prompt guard) that need the same wrapper-aware detection.
+// IsClaude is the exported form of isClaude for callers outside this package that need
+// the same wrapper-aware detection.
 func IsClaude(program string) bool {
 	return isClaude(program)
 }
@@ -90,21 +86,69 @@ func claudeSupportsSettingsFlag() bool {
 		return *settingsFlagOverride
 	}
 	settingsFlagOnce.Do(func() {
+		claudeBin := string(agent.KeyClaude)
 		// One-shot, process-cached probe with no ctx-bearing caller; Background
 		// capped at probeTimeout is deliberate.
 		ctx, cancel := context.WithTimeout(context.Background(), probeTimeout)
 		defer cancel()
-		out, err := exec.CommandContext(ctx, ProgramClaude, "--help").CombinedOutput()
+		out, err := exec.CommandContext(ctx, claudeBin, "--help").CombinedOutput()
 		if err != nil {
-			log.InfoLog.Printf("status hooks disabled: probing %q --help failed: %v", ProgramClaude, err)
+			log.InfoLog.Printf("status hooks disabled: probing %q --help failed: %v", claudeBin, err)
 			return
 		}
 		settingsFlagSupported = strings.Contains(string(out), "--settings")
 		if !settingsFlagSupported {
-			log.InfoLog.Printf("status hooks disabled: %q has no --settings flag", ProgramClaude)
+			log.InfoLog.Printf("status hooks disabled: %q has no --settings flag", claudeBin)
 		}
 	})
 	return settingsFlagSupported
+}
+
+var (
+	helpProbeMu    sync.Mutex
+	helpProbeCache = map[string]string{}
+	// helpProbeOverride forces probe output per binary in tests (nil = probe normally).
+	helpProbeOverride map[string]string
+)
+
+// binHelpContains reports whether bin's --help output contains needle. Used as a
+// capability gate before applying a version-sensitive flag (e.g. gemini --resume). Like
+// claudeSupportsSettingsFlag, it probes the literal canonical binary — never the
+// configured program, whose wrapper side effects must not run on a probe — and caches the
+// output per process so resurrecting many sessions costs one subprocess per binary. A
+// failed probe caches as empty output: the capability reads as absent and the caller
+// degrades (relaunch without resume) rather than failing the launch.
+//
+// The lock covers only the map accesses, never the subprocess — a slow --help (the
+// probe allows up to probeTimeout) must not block concurrent resurrections of other
+// agents. Two goroutines racing on the same uncached binary may both probe; both write
+// the same output, so last-writer-wins is correct.
+func binHelpContains(bin, needle string) bool {
+	helpProbeMu.Lock()
+	if helpProbeOverride != nil {
+		out := helpProbeOverride[bin]
+		helpProbeMu.Unlock()
+		return strings.Contains(out, needle)
+	}
+	out, ok := helpProbeCache[bin]
+	helpProbeMu.Unlock()
+	if ok {
+		return strings.Contains(out, needle)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), probeTimeout)
+	defer cancel()
+	b, err := exec.CommandContext(ctx, bin, "--help").CombinedOutput()
+	if err != nil {
+		log.InfoLog.Printf("capability probe %q --help failed: %v", bin, err)
+		b = nil
+	}
+	out = string(b)
+
+	helpProbeMu.Lock()
+	helpProbeCache[bin] = out
+	helpProbeMu.Unlock()
+	return strings.Contains(out, needle)
 }
 
 // shellSingleQuote wraps s for safe use inside the hook's shell command.
@@ -170,7 +214,7 @@ func buildHookSettings(stateFile string) ([]byte, error) {
 // support); it returns ("", err) only on a real IO failure, which the caller logs and treats
 // as "skip injection" so the launch still proceeds.
 func ensureHookSettings(sanitizedName, program string) (string, error) {
-	if !isClaude(program) || !claudeSupportsSettingsFlag() {
+	if !agent.Resolve(program).HookSupport || !claudeSupportsSettingsFlag() {
 		return "", nil
 	}
 	dir, err := hookSessionDir(sanitizedName)
@@ -195,10 +239,11 @@ func ensureHookSettings(sanitizedName, program string) (string, error) {
 }
 
 // readHookState returns the latched hook state word and true, or ("", false) when there is
-// no usable signal: a non-claude program, or the file is absent/unreadable (hooks not yet
-// fired, hooks unsupported/disabled). Callers fall back to the scrape classifier on false.
+// no usable signal: an agent without hook support, or the file is absent/unreadable (hooks
+// not yet fired, hooks unsupported/disabled). Callers fall back to the scrape classifier
+// on false.
 func (t *Session) readHookState() (string, bool) {
-	if !isClaude(t.program) {
+	if !t.adapter.HookSupport {
 		return "", false
 	}
 	dir, err := hookSessionDir(t.snapshotName())

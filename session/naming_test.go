@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/ZviBaratz/atrium/cmd/cmd_test"
+	"github.com/ZviBaratz/atrium/session/agent"
 	"github.com/ZviBaratz/atrium/session/git"
 
 	"github.com/stretchr/testify/require"
@@ -32,6 +33,17 @@ func TestIsExecutableFile(t *testing.T) {
 	// Guards against GetClaudeCommand returning a shell-function body like "$?".
 	require.False(t, isExecutableFile("$?"), "garbage paths are rejected")
 	require.False(t, isExecutableFile(filepath.Join(dir, "nope")), "missing paths are rejected")
+}
+
+// TestNamerPreference pins the fallback order: the session's own agent leads
+// when it supports headless naming; unsupported agents defer to the default
+// order (claude, then gemini).
+func TestNamerPreference(t *testing.T) {
+	require.Equal(t, []agent.Key{agent.KeyClaude, agent.KeyGemini}, namerPreference(agent.KeyClaude))
+	require.Equal(t, []agent.Key{agent.KeyGemini, agent.KeyClaude}, namerPreference(agent.KeyGemini))
+	require.Equal(t, []agent.Key{agent.KeyClaude, agent.KeyGemini}, namerPreference(agent.KeyCodex))
+	require.Equal(t, []agent.Key{agent.KeyClaude, agent.KeyGemini}, namerPreference(agent.KeyAider))
+	require.Equal(t, []agent.Key{agent.KeyClaude, agent.KeyGemini}, namerPreference(agent.KeyGeneric))
 }
 
 func TestGenerateName(t *testing.T) {
@@ -66,6 +78,20 @@ func TestGenerateName(t *testing.T) {
 
 	t.Run("errors on unparseable output", func(t *testing.T) {
 		_, err := generateName(context.Background(), okExec("not json"), "claude", t.TempDir(), "add retry", nil)
+		require.Error(t, err)
+	})
+
+	t.Run("gemini output is plain text, not json", func(t *testing.T) {
+		name, err := generateNameGemini(context.Background(), okExec("HTTP Client Retry Logic\n"), "gemini", "add retry", nil)
+		require.NoError(t, err)
+		require.Equal(t, "HTTP Client Retry Logic", name)
+	})
+
+	t.Run("gemini surfaces exec failures", func(t *testing.T) {
+		failExec := cmd_test.MockCmdExec{
+			OutputFunc: func(*exec.Cmd) ([]byte, error) { return nil, exec.ErrNotFound },
+		}
+		_, err := generateNameGemini(context.Background(), failExec, "gemini", "add retry", nil)
 		require.Error(t, err)
 	})
 
@@ -197,7 +223,7 @@ func TestGenerateNameIntegration(t *testing.T) {
 	stats := &git.DiffStats{FilesChanged: 3, Added: 4, Removed: 1, Content: diff}
 
 	start := time.Now()
-	name, err := GenerateName(context.Background(), "", stats)
+	name, err := GenerateName(context.Background(), "claude", "", stats)
 	elapsed := time.Since(start)
 	require.NoError(t, err)
 	require.NotEmpty(t, name)

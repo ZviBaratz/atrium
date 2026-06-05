@@ -1555,8 +1555,9 @@ type autoNameDoneMsg struct {
 }
 
 // runAutoNameCmd returns a Cmd that generates a display name in a background
-// goroutine (the claude subprocess can take a few seconds) so the UI stays
-// responsive.
+// goroutine (the agent subprocess can take a few seconds) so the UI stays
+// responsive. The session's own agent does the naming when it supports
+// headless one-shot prompting (see session.GenerateName).
 func runAutoNameCmd(ctx context.Context, instance *session.Instance, prompt string) tea.Cmd {
 	return func() tea.Msg {
 		// Compute the full diff here, off the UI thread. The cached stats are often the
@@ -1570,7 +1571,7 @@ func runAutoNameCmd(ctx context.Context, instance *session.Instance, prompt stri
 				stats = cached
 			}
 		}
-		name, err := session.GenerateName(ctx, prompt, stats)
+		name, err := session.GenerateName(ctx, instance.Program, prompt, stats)
 		return autoNameDoneMsg{instance: instance, name: name, err: err}
 	}
 }

@@ -90,6 +90,7 @@ func TestListGolden(t *testing.T) {
 	readyInst := instWithStatus(t, "overhaul", session.Running)
 	readyInst.SetStatus(session.Ready)
 	readyInst.Branch = "zvi/visual-overhaul"
+	readyInst.Program = "claude" // exercises the agent identity glyph (✻) in the row
 	readyInst.SetDiffStats(&git.DiffStats{Added: 142, Removed: 31, Commits: 3, Dirty: true})
 	l.AddInstance(readyInst)()
 	mk("bounds", "fix-bounds", session.NeedsInput, nil)

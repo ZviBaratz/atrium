@@ -322,6 +322,69 @@ func TestTerminalScrolling(t *testing.T) {
 	tp.mu.Unlock()
 }
 
+// TestTerminalScrollSnapshotUnpinsOnInstanceSwitch is the terminal-pane twin of the
+// stuck-preview bug: the scroll snapshot was not keyed to an instance, and String()
+// checks isScrolling before the fallbacks, so a latched snapshot pinned across
+// selection changes until restart. Switching the displayed instance must drop the
+// snapshot and capture the new instance's live shell.
+func TestTerminalScrollSnapshotUnpinsOnInstanceSwitch(t *testing.T) {
+	log.Initialize(false)
+	defer log.Close()
+
+	contentA := "shell A scrollback"
+	contentB := "shell B live output"
+
+	instA := makeStartedInstance(t, "scroll-switch-a")
+	defer func() { _ = instA.Kill() }()
+	instB := makeStartedInstance(t, "scroll-switch-b")
+	defer func() { _ = instB.Kill() }()
+
+	tp := NewTerminalPane(context.Background())
+	tp.SetSize(80, 30)
+
+	injectSession(tp, instA.Title, newMockTmuxSession(t, "mock-scroll-a", mockCmdExec(contentA, true)), t.TempDir())
+	injectSession(tp, instB.Title, newMockTmuxSession(t, "mock-scroll-b", mockCmdExec(contentB, true)), t.TempDir())
+
+	// Show A live, then enter scroll mode (snapshot of A's shell history).
+	require.NoError(t, tp.UpdateContent(instA))
+	require.NoError(t, tp.ScrollUp())
+	require.True(t, tp.IsScrolling(), "ScrollUp must enter scroll mode")
+	require.Contains(t, tp.String(), contentA)
+
+	// Selecting another session must exit the snapshot and show B's live shell.
+	require.NoError(t, tp.UpdateContent(instB))
+	require.False(t, tp.IsScrolling(), "switching instances must exit scroll mode")
+	rendered := tp.String()
+	require.Contains(t, rendered, contentB, "the newly selected session's live shell must be shown")
+	require.NotContains(t, rendered, contentA, "the old session's snapshot must not pin")
+}
+
+// TestTerminalScrollSnapshotDropsWhenInstancePauses guards the fallback ranking:
+// String() renders the scroll viewport before the fallbacks, so the snapshot must be
+// dropped when the displayed instance can no longer back it (paused here) — otherwise
+// the frozen capture outranks the "Session is paused" message.
+func TestTerminalScrollSnapshotDropsWhenInstancePauses(t *testing.T) {
+	log.Initialize(false)
+	defer log.Close()
+
+	content := "shell scrollback"
+	instance := makeStartedInstance(t, "scroll-pause")
+	defer func() { _ = instance.Kill() }()
+
+	tp := NewTerminalPane(context.Background())
+	tp.SetSize(80, 30)
+	injectSession(tp, instance.Title, newMockTmuxSession(t, "mock-scroll-pause", mockCmdExec(content, true)), t.TempDir())
+
+	require.NoError(t, tp.UpdateContent(instance))
+	require.NoError(t, tp.ScrollUp())
+	require.True(t, tp.IsScrolling())
+
+	instance.SetStatus(session.Paused)
+	require.NoError(t, tp.UpdateContent(instance))
+	require.False(t, tp.IsScrolling(), "pausing the displayed instance must exit scroll mode")
+	require.Contains(t, tp.String(), "paused", "the paused fallback must be visible, not the stale snapshot")
+}
+
 func TestTerminalCloseForInstance(t *testing.T) {
 	log.Initialize(false)
 	defer log.Close()

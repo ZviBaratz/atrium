@@ -2,6 +2,7 @@ package overlay
 
 import (
 	"github.com/ZviBaratz/atrium/config"
+	"github.com/ZviBaratz/atrium/session/agent"
 	"github.com/ZviBaratz/atrium/ui/theme"
 	"strings"
 
@@ -60,8 +61,13 @@ func (pp *ProfilePicker) HandleKeyPress(msg tea.KeyMsg) bool {
 	return false
 }
 
-// GetSelectedProfile returns the currently selected profile.
+// GetSelectedProfile returns the currently selected profile, or the zero
+// Profile when the picker holds none (callers construct pickers only for
+// non-empty profile lists, but a safety guard must not itself panic).
 func (pp *ProfilePicker) GetSelectedProfile() config.Profile {
+	if len(pp.profiles) == 0 {
+		return config.Profile{}
+	}
 	if pp.cursor < 0 || pp.cursor >= len(pp.profiles) {
 		return pp.profiles[0]
 	}
@@ -92,12 +98,16 @@ func (pp *ProfilePicker) Render() string {
 	s.WriteString("\n\n")
 
 	for i, p := range pp.profiles {
+		// Prefix each option with its agent's identity glyph (same glyph the
+		// session list shows) so picking among same-named profiles is visual.
+		glyph, _ := theme.Current().AgentGlyph(string(agent.Resolve(p.Program).Key))
+		label := " " + glyph + " " + p.Name + " "
 		if i == pp.cursor && pp.focused {
-			s.WriteString(ppSelectedStyle().Render(" " + p.Name + " "))
+			s.WriteString(ppSelectedStyle().Render(label))
 		} else if i == pp.cursor {
-			s.WriteString(" " + p.Name + " ")
+			s.WriteString(label)
 		} else {
-			s.WriteString(ppDimStyle().Render(" " + p.Name + " "))
+			s.WriteString(ppDimStyle().Render(label))
 		}
 		if i < len(pp.profiles)-1 {
 			s.WriteString(ppDimStyle().Render(" | "))

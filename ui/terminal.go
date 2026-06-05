@@ -41,6 +41,16 @@ type TerminalPane struct {
 	fallbackText  string
 
 	isScrolling bool
+	// scrollTitle is the instance title the scroll-mode snapshot was captured from.
+	// The snapshot is only meaningful while that same live instance is displayed:
+	// UpdateContent drops it for any other state (different instance, none, paused,
+	// not started), so a frozen capture can never pin across selection changes —
+	// the terminal-pane twin of the stuck-preview bug. This matters doubly here
+	// because String() renders the scroll viewport before the fallbacks.
+	// Keyed by title (not pointer, as PreviewPane does) to match the sessions map:
+	// Title is immutable for an instance's lifetime, so the key cannot drift while
+	// the snapshot is up.
+	scrollTitle string
 	viewport    viewport.Model
 }
 
@@ -91,6 +101,14 @@ func (t *TerminalPane) setFallbackState(message string) {
 func (t *TerminalPane) UpdateContent(instance *session.Instance) error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+
+	// The scroll snapshot belongs to one live instance; rendering anything else
+	// exits scroll mode so the pane reflects the new selection (or the right
+	// fallback) instead of pinning the old capture.
+	if t.isScrolling &&
+		(instance == nil || instance.Title != t.scrollTitle || instance.Paused() || !instance.Started()) {
+		t.exitScrollModeLocked()
+	}
 
 	if instance == nil {
 		t.setFallbackState("Select an instance to open a terminal")
@@ -335,7 +353,17 @@ func (t *TerminalPane) enterScrollMode() error {
 	t.viewport.SetContent(contentWithFooter)
 	t.viewport.GotoBottom()
 	t.isScrolling = true
+	t.scrollTitle = t.currentTitle
 	return nil
+}
+
+// exitScrollModeLocked returns the pane to the live per-tick view, keeping
+// isScrolling and the snapshot's owning title in lockstep. Caller must hold t.mu.
+func (t *TerminalPane) exitScrollModeLocked() {
+	t.isScrolling = false
+	t.scrollTitle = ""
+	t.viewport.SetContent("")
+	t.viewport.GotoTop()
 }
 
 // ScrollUp enters scroll mode (if not already) and scrolls up.
@@ -367,9 +395,7 @@ func (t *TerminalPane) ResetToNormalMode() {
 	if !t.isScrolling {
 		return
 	}
-	t.isScrolling = false
-	t.viewport.SetContent("")
-	t.viewport.GotoTop()
+	t.exitScrollModeLocked()
 }
 
 // IsScrolling returns whether the terminal pane is in scroll mode.

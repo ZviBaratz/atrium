@@ -50,7 +50,12 @@ type PreviewPane struct {
 
 	previewState previewState
 	isScrolling  bool
-	viewport     viewport.Model
+	// scrollInstance is the instance the scroll-mode snapshot was captured from.
+	// The snapshot is only meaningful for that instance: UpdateContent drops it the
+	// moment it is asked to render any other instance, so a frozen capture can never
+	// pin across selection changes (the "preview stuck for all sessions" bug).
+	scrollInstance *session.Instance
+	viewport       viewport.Model
 }
 
 type previewState struct {
@@ -93,6 +98,15 @@ func (p *PreviewPane) setFallbackState(message string) {
 // those went stale the splash could freeze until restart. Capturing first removes that
 // dependency — the moment the pane yields content, the splash is gone on the next tick.
 func (p *PreviewPane) UpdateContent(instance *session.Instance) error {
+	// The scroll snapshot belongs to one live instance; rendering any other (or
+	// none), or the owner once paused, exits scroll mode so the live view (or the
+	// right fallback) resumes immediately. Without the identity check the snapshot
+	// pinned across selection changes until restart; without the pause check, scroll
+	// mode survived a pause/resume and the early-return below kept the stale
+	// "Session is paused" fallback on screen after resuming.
+	if p.isScrolling && (instance != p.scrollInstance || instance.Paused()) {
+		p.exitScrollMode()
+	}
 	switch {
 	case instance == nil:
 		p.setFallbackState("No agents running yet. Spin up a new session with 'n' to get started!")
@@ -261,7 +275,7 @@ func (p *PreviewPane) ScrollUp(instance *session.Instance) error {
 		// Position the viewport at the bottom initially
 		p.viewport.GotoBottom()
 
-		p.isScrolling = true
+		p.enterScrollMode(instance)
 		return nil
 	}
 
@@ -292,7 +306,7 @@ func (p *PreviewPane) ScrollDown(instance *session.Instance) error {
 		// Position the viewport at the bottom initially
 		p.viewport.GotoBottom()
 
-		p.isScrolling = true
+		p.enterScrollMode(instance)
 		return nil
 	}
 
@@ -301,25 +315,45 @@ func (p *PreviewPane) ScrollDown(instance *session.Instance) error {
 	return nil
 }
 
-// ResetToNormalMode exits scroll mode and returns to normal mode
+// enterScrollMode flags the pane as showing a frozen snapshot of instance, and
+// exitScrollMode returns it to the live per-tick view. The pair keeps isScrolling
+// and the snapshot's owning instance in lockstep — scroll mode must never outlive
+// the instance it captured.
+func (p *PreviewPane) enterScrollMode(instance *session.Instance) {
+	p.isScrolling = true
+	p.scrollInstance = instance
+}
+
+func (p *PreviewPane) exitScrollMode() {
+	p.isScrolling = false
+	p.scrollInstance = nil
+	p.viewport.SetContent("")
+	p.viewport.GotoTop()
+}
+
+// ResetToNormalMode exits scroll mode and returns to normal mode. Leaving scroll
+// mode is unconditional — refusing for a nil or paused instance used to latch the
+// snapshot with no exit besides restarting the app. Only the immediate live
+// re-capture needs a usable instance; otherwise the next UpdateContent tick picks
+// the right fallback.
 func (p *PreviewPane) ResetToNormalMode(instance *session.Instance) error {
+	if !p.isScrolling {
+		return nil
+	}
+	p.exitScrollMode()
+
 	if instance == nil || instance.Paused() {
 		return nil
 	}
 
-	if p.isScrolling {
-		p.isScrolling = false
-		// Reset viewport
-		p.viewport.SetContent("")
-		p.viewport.GotoTop()
-
-		// Immediately update content instead of waiting for next UpdateContent call
-		content, err := instance.Preview()
-		if err != nil {
-			return err
-		}
-		p.previewState.text = content
+	// Immediately update content instead of waiting for next UpdateContent call.
+	// Replace the whole state (not just text): a leftover fallback=true would render
+	// the live capture through the centered-fallback layout for a tick. Sanitize for
+	// the same reason UpdateContent does — captured width must match rendered width.
+	content, err := instance.Preview()
+	if err != nil {
+		return err
 	}
-
+	p.previewState = previewState{fallback: false, text: theme.SanitizeWidth(content)}
 	return nil
 }

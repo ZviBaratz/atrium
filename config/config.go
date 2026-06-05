@@ -176,21 +176,19 @@ func (c *Config) GetProfiles() []Profile {
 	return profiles
 }
 
-// DefaultConfig returns the default configuration
+// DefaultConfig returns the built-in defaults without probing the machine: no
+// profiles, and the bare "claude" literal as the program. It is what tests
+// construct directly (hermetic — no PATH lookups or shell spawns), while every
+// LoadConfig fallback goes through seededDefaultConfig so a real user always
+// gets detection.
 func DefaultConfig() *Config {
-	program, err := GetClaudeCommand()
-	if err != nil {
-		log.ErrorLog.Printf("failed to get claude command: %v", err)
-		program = defaultProgram
-	}
-
 	autoAttach := true
 	killDoubleTap := true
 	sessionContextBar := true
 	hintBar := true
 	maxSessions := DefaultMaxSessions
 	return &Config{
-		DefaultProgram:     program,
+		DefaultProgram:     defaultProgram,
 		AutoYes:            false,
 		DaemonPollInterval: 1000,
 		Theme:              "tokyo-night",
@@ -208,6 +206,24 @@ func DefaultConfig() *Config {
 		KillDoubleTapConfirm: &killDoubleTap,
 		MaxSessions:          &maxSessions,
 	}
+}
+
+// seededDefaultConfig is DefaultConfig with profiles seeded from the installed
+// agent CLIs so the create-form picker works out of the box; claude leads when
+// present (it is first in knownAgentBins) and becomes the default program,
+// falling back to the bare "claude" literal when nothing is detected (the
+// historical behavior for a machine with no agents yet). It is the config a
+// user actually receives from every LoadConfig fallback — kept separate from
+// DefaultConfig so tests constructing defaults never probe the machine.
+func seededDefaultConfig() *Config {
+	cfg := DefaultConfig()
+	cfg.Profiles = DetectAgentProfiles()
+	if len(cfg.Profiles) > 0 {
+		cfg.DefaultProgram = cfg.Profiles[0].Name
+	} else {
+		log.WarningLog.Printf("no agent CLIs detected; defaulting program to %q", defaultProgram)
+	}
+	return cfg
 }
 
 // GetClaudeCommand attempts to find the "claude" command in the user's shell
@@ -302,7 +318,7 @@ func LoadConfig() *Config {
 	configDir, err := GetConfigDir()
 	if err != nil {
 		log.ErrorLog.Printf("failed to get config directory: %v", err)
-		return DefaultConfig()
+		return seededDefaultConfig()
 	}
 
 	configPath := filepath.Join(configDir, ConfigFileName)
@@ -310,7 +326,7 @@ func LoadConfig() *Config {
 	if err != nil {
 		if os.IsNotExist(err) {
 			// Create and save default config if file doesn't exist
-			defaultCfg := DefaultConfig()
+			defaultCfg := seededDefaultConfig()
 			if saveErr := saveConfig(defaultCfg); saveErr != nil {
 				log.WarningLog.Printf("failed to save default config: %v", saveErr)
 			}
@@ -318,13 +334,13 @@ func LoadConfig() *Config {
 		}
 
 		log.WarningLog.Printf("failed to get config file: %v", err)
-		return DefaultConfig()
+		return seededDefaultConfig()
 	}
 
 	var config Config
 	if err := json.Unmarshal(data, &config); err != nil {
 		log.ErrorLog.Printf("failed to parse config file: %v", err)
-		return DefaultConfig()
+		return seededDefaultConfig()
 	}
 
 	return &config

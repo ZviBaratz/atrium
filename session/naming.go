@@ -12,6 +12,7 @@ import (
 
 	"github.com/ZviBaratz/atrium/cmd"
 	"github.com/ZviBaratz/atrium/config"
+	"github.com/ZviBaratz/atrium/session/agent"
 	"github.com/ZviBaratz/atrium/session/git"
 )
 
@@ -42,20 +43,56 @@ type claudeResult struct {
 }
 
 // GenerateName produces a short display name for a session from its initial
-// prompt and diff stats by invoking the user's `claude` CLI in headless print
-// mode, reusing their existing claude auth. It returns an error (rather than a
-// fallback name) on any failure so the caller can surface it and leave the
-// session's name untouched.
-func GenerateName(ctx context.Context, prompt string, stats *git.DiffStats) (string, error) {
-	claudePath, err := resolveClaudeBinary()
-	if err != nil {
-		return "", fmt.Errorf("claude command not found (needed for auto-naming): %w", err)
-	}
+// prompt and diff stats by invoking an agent CLI in headless one-shot mode,
+// reusing the user's existing auth. program is the session's own agent: it is
+// preferred when it supports headless naming, so a gemini session is named by
+// gemini; otherwise the first installed agent with naming support is used
+// (claude, then gemini). It returns an error (rather than a fallback name) on
+// any failure so the caller can surface it and leave the session's name
+// untouched. Only binary resolution falls through to the next agent — a real
+// invocation failure (e.g. "Not logged in") is reported, not papered over.
+func GenerateName(ctx context.Context, program, prompt string, stats *git.DiffStats) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, nameGenTimeout)
 	defer cancel()
-	// Run from a neutral directory so a session worktree's CLAUDE.md can't bloat
-	// every naming call; all the context we need is supplied on stdin.
-	return generateName(ctx, cmd.MakeExecutor(), claudePath, os.TempDir(), prompt, stats)
+	for _, key := range namerPreference(agent.Resolve(program).Key) {
+		switch key {
+		case agent.KeyClaude:
+			claudePath, err := resolveClaudeBinary()
+			if err != nil {
+				continue
+			}
+			// Run from a neutral directory so a session worktree's CLAUDE.md can't bloat
+			// every naming call; all the context we need is supplied on stdin.
+			return generateName(ctx, cmd.MakeExecutor(), claudePath, os.TempDir(), prompt, stats)
+		case agent.KeyGemini:
+			geminiPath, err := exec.LookPath(string(agent.KeyGemini))
+			if err != nil {
+				continue
+			}
+			return generateNameGemini(ctx, cmd.MakeExecutor(), geminiPath, prompt, stats)
+		}
+	}
+	return "", fmt.Errorf("no agent with headless naming support found (auto-naming needs claude or gemini)")
+}
+
+// namerPreference orders the naming-capable agents (agent.NamerKeys, the
+// adapter table's HeadlessNamer entries in registry order): the session's own
+// agent first when it is capable, then the rest. Agents without a verified
+// headless mode defer to whichever capable agent is installed.
+func namerPreference(own agent.Key) []agent.Key {
+	keys := agent.NamerKeys()
+	out := make([]agent.Key, 0, len(keys))
+	for _, k := range keys {
+		if k == own {
+			out = append(out, k)
+		}
+	}
+	for _, k := range keys {
+		if k != own {
+			out = append(out, k)
+		}
+	}
+	return out
 }
 
 // resolveClaudeBinary finds a runnable claude executable for the headless call.
@@ -133,6 +170,35 @@ func generateName(ctx context.Context, executor cmd.Executor, claudePath, workDi
 		return "", fmt.Errorf("claude reported an error: %s", strings.TrimSpace(res.Result))
 	}
 	return sanitizeName(res.Result)
+}
+
+// generateNameGemini is the gemini counterpart of generateName: `gemini -p`
+// prints the bare response text on stdout (verified against gemini-cli 0.27;
+// auth notices and workspace warnings go to stderr), so the output feeds
+// sanitizeName directly — no JSON envelope. It runs from a freshly created
+// empty directory rather than os.TempDir() because gemini scans its cwd as a
+// workspace context; an empty dir keeps the call fast and the context clean.
+func generateNameGemini(ctx context.Context, executor cmd.Executor, geminiPath, prompt string, stats *git.DiffStats) (string, error) {
+	sessionContext := buildContext(prompt, stats)
+	if sessionContext == "" {
+		return "", fmt.Errorf("no session content to name yet")
+	}
+
+	workDir, err := os.MkdirTemp("", "cs-name-gemini-")
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = os.RemoveAll(workDir) }()
+
+	c := exec.CommandContext(ctx, geminiPath, "-p", namingInstruction)
+	c.Dir = workDir
+	c.Stdin = strings.NewReader(sessionContext)
+
+	out, err := executor.Output(c)
+	if err != nil {
+		return "", fmt.Errorf("gemini invocation failed: %w", err)
+	}
+	return sanitizeName(string(out))
 }
 
 // realCredsPath returns the path to the user's claude credentials file — the one

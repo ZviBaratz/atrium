@@ -6,6 +6,7 @@ package session
 
 import (
 	"github.com/ZviBaratz/atrium/log"
+	"github.com/ZviBaratz/atrium/session/agent"
 	"github.com/ZviBaratz/atrium/session/git"
 	"github.com/ZviBaratz/atrium/session/tmux"
 	"path/filepath"
@@ -733,16 +734,15 @@ func (i *Instance) PollNow() tmux.PaneState {
 	return ts.PollNow()
 }
 
-// CheckAndHandleTrustPrompt checks for and dismisses the trust prompt for supported programs.
+// CheckAndHandleTrustPrompt checks for and dismisses the startup gate for programs that
+// have one. The adapter guard skips the pane capture entirely for agents with no known
+// gates, where there is nothing to dismiss.
 func (i *Instance) CheckAndHandleTrustPrompt() bool {
 	ts := i.tmux()
 	if !i.isStarted() || ts == nil {
 		return false
 	}
-	program := i.Program
-	if !tmux.IsClaude(program) &&
-		!strings.HasSuffix(program, tmux.ProgramAider) &&
-		!strings.HasSuffix(program, tmux.ProgramGemini) {
+	if len(agent.Resolve(i.Program).Gates) == 0 {
 		return false
 	}
 	return ts.CheckAndHandleTrustPrompt()

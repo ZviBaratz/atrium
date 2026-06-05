@@ -5,6 +5,7 @@ import (
 	"fmt"
 	cmd2 "github.com/ZviBaratz/atrium/cmd"
 	"github.com/ZviBaratz/atrium/log"
+	"github.com/ZviBaratz/atrium/session/agent"
 	"math/rand"
 	"os"
 	"os/exec"
@@ -106,9 +107,10 @@ func TestIsReadyForPrompt(t *testing.T) {
 	}
 }
 
-// Regression: after extracting containsStartupGate (shared by CheckAndHandleTrustPrompt
-// and IsReadyForPrompt), it must still recognize each gate string.
-func TestContainsStartupGate(t *testing.T) {
+// Regression: the per-agent startup gates (now adapter data, shared by
+// CheckAndHandleTrustPrompt and IsReadyForPrompt) must still recognize each gate string —
+// and only for their own agent, so a gate is never dismissed with another agent's key.
+func TestStartupGates(t *testing.T) {
 	cases := []struct {
 		name    string
 		program string
@@ -117,15 +119,20 @@ func TestContainsStartupGate(t *testing.T) {
 	}{
 		{"claude trust folder", "claude", "Do you trust the files in this folder?", true},
 		{"claude new MCP server", "claude", "A new MCP server was found", true},
-		{"non-claude doc url", "aider", "Open documentation url for more info", true},
+		{"aider doc url", "aider", "Open documentation url for more info", true},
 		{"claude idle box has no gate", "claude", "│ > │  ? for shortcuts", false},
-		{"claude ignores non-claude gate string", "claude", "Open documentation url for more info", false},
-		{"non-claude ignores claude gate string", "aider", "Do you trust the files in this folder?", false},
+		{"claude ignores aider gate string", "claude", "Open documentation url for more info", false},
+		{"aider ignores claude gate string", "aider", "Do you trust the files in this folder?", false},
+		// Pre-adapter, every non-claude program matched aider's documentation gate and
+		// received its stray 'D' keystroke; an unknown agent must match nothing.
+		{"unknown agent has no gates", "someagent", "Open documentation url for more info", false},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			require.Equal(t, tc.want, containsStartupGate(tc.program, tc.content))
+			s := newSession(context.Background(), "gate-test", tc.program, NewMockPtyFactory(t), cmd_test.MockCmdExec{})
+			_, ok := s.adapter.GateUp(tc.content)
+			require.Equal(t, tc.want, ok)
 		})
 	}
 }
@@ -482,6 +489,48 @@ func TestMarkerWorkingAnchorsBelowInputBox(t *testing.T) {
 		"a marker above the input box (in the transcript) is ignored")
 }
 
+// Codex renders its status row ("Working (12s • esc to interrupt)") *above* the
+// composer, outside claude's below-the-box footer anchor; the adapter's bottom-window
+// confinement must still find it, hold across counter ticks, and read its approval
+// overlay as a prompt.
+func TestPollCodex(t *testing.T) {
+	working := "• Fixing the failing test.\n\n▌ Working (12s • esc to interrupt)\n\n› \n\n  ? for shortcuts"
+	c := working
+	s := pollSession(t, "codex", &c, nil)
+	require.Equal(t, PaneWorking, s.Poll())
+	c = "• Fixing the failing test.\n\n▌ Working (13s • esc to interrupt)\n\n› \n\n  ? for shortcuts"
+	require.Equal(t, PaneWorking, s.Poll(), "counter ticking does not flip the state")
+
+	c = "Would you like to run the following command?\n\n  rm -rf build/\n\n" +
+		"› 1. Yes, proceed\n  3. No, and tell Codex what to do differently"
+	require.Equal(t, PanePrompt, s.Poll(), "an approval overlay is a needs-input state")
+
+	c = "• Done. The tests pass.\n\n› \n\n  ? for shortcuts"
+	require.Equal(t, PaneIdle, s.Poll(), "marker gone after a prompt commits idle at face value")
+}
+
+// Gemini's loading row ("(esc to cancel, 12s)") also renders above its input box; it is
+// now a marker-bearing program, and its tool confirmation must classify as a prompt on
+// the current upstream strings (the pre-adapter "Yes, allow once" no longer exists).
+func TestPollGemini(t *testing.T) {
+	working := "✦ Refactoring the parser.\n\n⠏ Thinking... (esc to cancel, 12s)\n\n" +
+		"╭───╮\n│ > │\n╰───╯\n~/project   no sandbox   gemini-2.5-pro"
+	c := working
+	s := pollSession(t, "gemini", &c, nil)
+	require.Equal(t, PaneWorking, s.Poll())
+
+	c = "Apply this change?\n  1. Allow once\n  2. Allow always\n  3. No, suggest changes (esc)"
+	require.Equal(t, PanePrompt, s.Poll(), "a tool confirmation is a needs-input state")
+
+	// PollNow (the post-detach face-value refresh): gemini is marker-bearing, so —
+	// unlike aider's PaneUnknown — an absent marker with no hook file reads as idle,
+	// and a present marker as working.
+	c = "✦ Done.\n\n╭───╮\n│ > │\n╰───╯\n~/project   no sandbox   gemini-2.5-pro"
+	require.Equal(t, PaneIdle, s.PollNow(), "no marker at face value is idle")
+	c = working
+	require.Equal(t, PaneWorking, s.PollNow(), "a live marker at face value is working")
+}
+
 // Hysteresis (content-change fallback, e.g. aider): a content change reads as working;
 // once the pane goes quiet the indicator is held until it has been unchanged for
 // idleSettleTicks, then commits idle. This path is only for programs without a busy marker;
@@ -742,7 +791,30 @@ func TestStartTimeoutErrorOmitsNilWrap(t *testing.T) {
 	require.NotContains(t, err.Error(), "%!w", "a nil error must never be wrapped")
 }
 
-func TestContinueProgram(t *testing.T) {
+// forceHelpProbe installs canned --help outputs so the capability probes never exec a
+// real binary in tests. The override is set and cleared under helpProbeMu, since
+// binHelpContains reads it under the same lock from production goroutines.
+func forceHelpProbe(t *testing.T, outputs map[string]string) {
+	t.Helper()
+	helpProbeMu.Lock()
+	helpProbeOverride = outputs
+	helpProbeMu.Unlock()
+	t.Cleanup(func() {
+		helpProbeMu.Lock()
+		helpProbeOverride = nil
+		helpProbeMu.Unlock()
+	})
+}
+
+func TestResumeCommand(t *testing.T) {
+	forceHelpProbe(t, map[string]string{
+		"gemini": "-r, --resume   Resume a previous session",
+		"codex":  "Commands:\n  resume  Resume a previous interactive session",
+		// The canonical binary at an absolute path is probed at that path (it may
+		// not be on PATH at all); keyed by path so a bare-name probe would miss.
+		"/opt/agents/gemini": "-r, --resume   Resume a previous session",
+	})
+
 	cases := []struct {
 		name    string
 		program string
@@ -751,7 +823,14 @@ func TestContinueProgram(t *testing.T) {
 		{"bare claude gets --continue", "claude", "claude --continue"},
 		{"absolute claude path gets --continue", "/usr/local/bin/claude", "/usr/local/bin/claude --continue"},
 		{"aider unchanged", "aider --model x", "aider --model x"},
-		{"gemini unchanged", "gemini", "gemini"},
+		// Resume parity: gemini and codex now relaunch into their prior conversation.
+		{"gemini gets --resume latest", "gemini", "gemini --resume latest"},
+		{"codex gets resume --last", "codex", "codex resume --last"},
+		// The codex subcommand cannot be spliced into an argv with flags; relaunch blank.
+		{"codex with flags unchanged", "codex --model o3", "codex --model o3"},
+		// An off-PATH absolute install still resumes: the probe targets the
+		// program's own path because its basename is the canonical binary.
+		{"absolute gemini path probes itself", "/opt/agents/gemini", "/opt/agents/gemini --resume latest"},
 		// Detection is on the binary basename containing "claude", so a launcher wrapper that
 		// exec's claude (the default_program many setups use) and a flag-bearing claude are
 		// both recognized — the wrapper forwards the appended flag through to claude.
@@ -760,11 +839,49 @@ func TestContinueProgram(t *testing.T) {
 		{"claude with trailing flags gets --continue", "claude --model opus", "claude --model opus --continue"},
 		// A non-claude binary under a claude-containing directory is NOT matched (basename wins).
 		{"non-claude binary in claude dir unchanged", "/home/u/.claude-squad/bin/aider", "/home/u/.claude-squad/bin/aider"},
+		{"unknown agent unchanged", "someagent", "someagent"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			require.Equal(t, tc.want, continueProgram(tc.program))
+			s := newSession(context.Background(), "resume-test", tc.program, NewMockPtyFactory(t), cmd_test.MockCmdExec{})
+			require.Equal(t, tc.want, s.resumeCommand())
 		})
+	}
+}
+
+// An installed binary that predates its resume flag (probe finds no support) must
+// relaunch blank rather than fail on an unknown flag. Codex's needle additionally pins
+// the subcommand *listing* — help text that merely mentions resuming must not pass.
+func TestResumeCommandProbeGate(t *testing.T) {
+	forceHelpProbe(t, map[string]string{
+		"gemini": "old gemini help with no such flag",
+		"codex":  "old codex; sessions resume automatically on restart",
+	})
+
+	for _, program := range []string{"gemini", "codex"} {
+		s := newSession(context.Background(), "resume-test", program, NewMockPtyFactory(t), cmd_test.MockCmdExec{})
+		require.Equal(t, program, s.resumeCommand(), "probe must fail closed for %s", program)
+	}
+}
+
+// probeTarget picks which binary's --help the resume probe runs: the program's own first
+// token when it is the canonical binary (wherever it lives), the canonical name otherwise —
+// a wrapper's side effects must never run on a probe.
+func TestProbeTarget(t *testing.T) {
+	cases := []struct {
+		program string
+		key     agent.Key
+		want    string
+	}{
+		{"gemini", agent.KeyGemini, "gemini"},
+		{"/opt/agents/gemini", agent.KeyGemini, "/opt/agents/gemini"},
+		{"/opt/agents/gemini --yolo", agent.KeyGemini, "/opt/agents/gemini"},
+		{"launch-gemini.sh", agent.KeyGemini, "gemini"},
+		{"/usr/local/bin/codex", agent.KeyCodex, "/usr/local/bin/codex"},
+		{"codex-nightly", agent.KeyCodex, "codex"},
+	}
+	for _, tc := range cases {
+		require.Equal(t, tc.want, probeTarget(tc.program, tc.key), "program %q", tc.program)
 	}
 }
 
