@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -17,8 +18,15 @@ import (
 // TestMain initializes the logger and sandboxes HOME so config tests resolve the
 // data dir under a throwaway directory — never the developer's real ~/.atrium or
 // legacy ~/.claude-squad. Tests that need a specific layout override HOME locally.
+// Agent detection is stubbed to "nothing installed" for the same reason: PATH is
+// not sandboxed, so LoadConfig's seeded fallbacks would otherwise pick up
+// whatever agent CLIs this machine happens to have. Detection tests install
+// their own stubs (see stubDetect).
 func TestMain(m *testing.M) {
 	log.Initialize(false)
+	detectAgentCommand = func(bin string) (string, error) {
+		return "", fmt.Errorf("hermetic tests: %s not detectable", bin)
+	}
 	code := testutil.SandboxHomeMain(m)
 	log.Close()
 	os.Exit(code)

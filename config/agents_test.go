@@ -68,10 +68,10 @@ func TestMergeDetectedProfiles(t *testing.T) {
 	})
 }
 
-func TestDefaultConfigSeedsProfiles(t *testing.T) {
+func TestSeededDefaultConfig(t *testing.T) {
 	t.Run("detected agents become profiles with the first as default", func(t *testing.T) {
 		stubDetect(t, map[string]string{"claude": "/usr/local/bin/claude", "aider": "aider"})
-		cfg := DefaultConfig()
+		cfg := seededDefaultConfig()
 		assert.Equal(t, "claude", cfg.DefaultProgram)
 		assert.Equal(t, []Profile{
 			{Name: "claude", Program: "/usr/local/bin/claude"},
@@ -83,8 +83,18 @@ func TestDefaultConfigSeedsProfiles(t *testing.T) {
 
 	t.Run("no detected agents falls back to the claude literal", func(t *testing.T) {
 		stubDetect(t, nil)
-		cfg := DefaultConfig()
+		cfg := seededDefaultConfig()
 		assert.Equal(t, "claude", cfg.DefaultProgram)
 		assert.Empty(t, cfg.Profiles)
 	})
+}
+
+// DefaultConfig must stay pure — the hermeticity contract for the many tests
+// (here and in app/) that construct defaults directly: no profiles regardless
+// of what the machine has installed, and the bare claude literal as program.
+func TestDefaultConfigDoesNotProbe(t *testing.T) {
+	stubDetect(t, map[string]string{"claude": "/usr/local/bin/claude", "gemini": "gemini"})
+	cfg := DefaultConfig()
+	assert.Equal(t, "claude", cfg.DefaultProgram)
+	assert.Empty(t, cfg.Profiles, "DefaultConfig must not run agent detection")
 }
