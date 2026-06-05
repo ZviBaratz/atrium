@@ -12,18 +12,18 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ZviBaratz/atrium/session/tmux"
+	"github.com/ZviBaratz/atrium/session/agent"
 )
 
 // claudeAdapter renders Claude Code's session JSONL, written to
 // <root>/projects/<sanitized-cwd>/<session-uuid>.jsonl.
 type claudeAdapter struct{}
 
-// supports reuses the wrapper-aware detection from session/tmux (basename
-// contains "claude"), so "claude --continue", absolute paths, and launcher
-// wrappers all match — one source of truth with the status-hook guard.
+// supports resolves the program through the session/agent registry, so
+// "claude --continue", absolute paths, and launcher wrappers all match — one
+// source of truth with the poller's per-agent heuristics.
 func (claudeAdapter) supports(program string) bool {
-	return tmux.IsClaude(program)
+	return agent.Resolve(program).Key == agent.KeyClaude
 }
 
 func (claudeAdapter) render(workingDir string, opts Options) (string, error) {
