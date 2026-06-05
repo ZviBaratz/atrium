@@ -101,6 +101,31 @@ type Config struct {
 	// creating one beyond it is rejected with an error in the UI. nil (or a
 	// non-positive value) means unlimited — there is no cap by default.
 	MaxSessions *int `json:"max_sessions,omitempty"`
+	// CarryFiles lists repo-relative, gitignored files to copy from the origin
+	// checkout into each newly materialized session worktree (worktrees carry
+	// only tracked files, so local config like .claude/settings.local.json
+	// would otherwise never reach a session). nil means use the default list;
+	// an explicitly empty list opts out. Deliberately NOT omitempty: an
+	// explicit [] must survive a save/load cycle instead of being dropped and
+	// reverting to the default.
+	CarryFiles []string `json:"carry_files"`
+}
+
+// defaultCarryFiles is the carry list applied when a config predates the
+// carry_files key (nil field). Claude Code's gitignored local project config
+// is the one file every fresh worktree loses by default.
+var defaultCarryFiles = []string{".claude/settings.local.json"}
+
+// GetCarryFiles returns the repo-relative gitignored files to copy into each
+// new session worktree. A nil CarryFiles (e.g. an older config file with no
+// such key) defaults to defaultCarryFiles; an explicitly empty list opts out.
+// The default is returned as a copy so callers can never mutate the shared
+// seed.
+func (c *Config) GetCarryFiles() []string {
+	if c.CarryFiles == nil {
+		return append([]string(nil), defaultCarryFiles...)
+	}
+	return c.CarryFiles
 }
 
 // GetMaxSessions returns the configured session cap, or 0 (no cap) for a nil
@@ -200,6 +225,7 @@ func DefaultConfig() *Config {
 		}(),
 		AutoAttach:           &autoAttach,
 		KillDoubleTapConfirm: &killDoubleTap,
+		CarryFiles:           append([]string(nil), defaultCarryFiles...),
 	}
 }
 

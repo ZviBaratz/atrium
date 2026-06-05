@@ -410,3 +410,40 @@ func TestGetKillDoubleTapConfirm(t *testing.T) {
 		assert.False(t, (&Config{KillDoubleTapConfirm: &v}).GetKillDoubleTapConfirm())
 	})
 }
+
+func TestGetCarryFiles(t *testing.T) {
+	t.Run("default config seeds claude settings.local.json", func(t *testing.T) {
+		assert.Equal(t, []string{".claude/settings.local.json"}, DefaultConfig().GetCarryFiles())
+	})
+	t.Run("nil field (older config) defaults to seed", func(t *testing.T) {
+		assert.Equal(t, []string{".claude/settings.local.json"}, (&Config{}).GetCarryFiles())
+	})
+	t.Run("explicitly empty list opts out", func(t *testing.T) {
+		assert.Empty(t, (&Config{CarryFiles: []string{}}).GetCarryFiles())
+	})
+	t.Run("custom list returned as-is", func(t *testing.T) {
+		custom := []string{".env.local", ".claude/settings.local.json"}
+		assert.Equal(t, custom, (&Config{CarryFiles: custom}).GetCarryFiles())
+	})
+	t.Run("returned default is a copy, not the shared seed", func(t *testing.T) {
+		got := (&Config{}).GetCarryFiles()
+		got[0] = "mutated"
+		assert.Equal(t, []string{".claude/settings.local.json"}, (&Config{}).GetCarryFiles())
+	})
+
+	// The empty-list opt-out must survive a save/load cycle: with `omitempty`
+	// an explicit [] would be dropped on save and silently revert to the default
+	// on the next load (e.g. after a settings-panel save of unrelated fields).
+	t.Run("empty-list opt-out survives save and load", func(t *testing.T) {
+		tempHome := t.TempDir()
+		t.Setenv("HOME", tempHome)
+
+		cfg := DefaultConfig()
+		cfg.CarryFiles = []string{}
+		require.NoError(t, SaveConfig(cfg))
+
+		loaded := LoadConfig()
+		assert.NotNil(t, loaded.CarryFiles, "explicit [] must round-trip as non-nil")
+		assert.Empty(t, loaded.GetCarryFiles())
+	})
+}
