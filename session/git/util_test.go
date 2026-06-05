@@ -1,8 +1,29 @@
 package git
 
 import (
+	"context"
 	"testing"
 )
+
+// CurrentBranchName resolves the checked-out branch of a repo; "HEAD" for a detached
+// HEAD (git's own convention for --abbrev-ref); empty for a non-repo. The picker renders
+// the result as the "HEAD (<branch>)" base option in the new-session form.
+func TestCurrentBranchName(t *testing.T) {
+	repo := newTestRepo(t)
+	mustRunGit(t, repo, "switch", "-c", "feat")
+	if got := CurrentBranchName(context.Background(), repo); got != "feat" {
+		t.Fatalf("CurrentBranchName() = %q, want %q", got, "feat")
+	}
+
+	mustRunGit(t, repo, "switch", "--detach")
+	if got := CurrentBranchName(context.Background(), repo); got != "HEAD" {
+		t.Fatalf("CurrentBranchName() detached = %q, want %q", got, "HEAD")
+	}
+
+	if got := CurrentBranchName(context.Background(), t.TempDir()); got != "" {
+		t.Fatalf("CurrentBranchName() non-repo = %q, want empty", got)
+	}
+}
 
 func TestSanitizeBranchName(t *testing.T) {
 	tests := []struct {

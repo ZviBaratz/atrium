@@ -102,7 +102,9 @@ func TestCreateSessionFromForm_CreatesOneAndClearsOverlay(t *testing.T) {
 	h.state = statePrompt
 	ov := h.newSessionFormOverlay()
 	h.textInputOverlay = ov
-	// Focus starts on the project picker; Tab to the title field, then type the title.
+	// Focus starts on the project picker; Tab past the branch picker to the title field,
+	// then type the title.
+	ov.HandleKeyPress(tea.KeyMsg{Type: tea.KeyTab})
 	ov.HandleKeyPress(tea.KeyMsg{Type: tea.KeyTab})
 	ov.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("feature")})
 

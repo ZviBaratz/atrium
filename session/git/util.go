@@ -59,6 +59,20 @@ func IsGitRepo(ctx context.Context, path string) bool {
 	return cmd.Run() == nil
 }
 
+// CurrentBranchName returns the branch HEAD points at in the repo containing path,
+// "HEAD" for a detached HEAD (git's --abbrev-ref convention), or "" when the path is
+// not a git repo (best-effort, like IsGitRepo).
+func CurrentBranchName(ctx context.Context, path string) string {
+	ctx, cancel := context.WithTimeout(ctx, gitLocalTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "git", "-C", path, "rev-parse", "--abbrev-ref", "HEAD")
+	out, err := cmd.Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
+}
+
 func findGitRepoRoot(ctx context.Context, path string) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, gitLocalTimeout)
 	defer cancel()

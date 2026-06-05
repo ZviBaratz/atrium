@@ -177,15 +177,15 @@ func NewSessionCreateOverlay(profiles []config.Profile, dirCandidates []string) 
 		pp = NewProfilePicker(profiles)
 	}
 
-	// Project first (where focus starts), so the repo is chosen before the session is named,
-	// then the title, then the prompt — the input that distinguishes this flow from the
-	// inline `n` flow — followed by the optional profile and the branch. Branch stays after
-	// project because branches are scoped to the chosen project.
-	stops := []focusStop{stopDirectory, stopTitle, stopTextarea}
+	// Project first (where focus starts), immediately followed by the base branch — the two
+	// form one repo-context unit, since branches are scoped to the chosen project. Then the
+	// title and the prompt — the input that distinguishes this flow from the inline `n` flow
+	// (which jumps straight to the title via FocusTitle) — and finally the optional profile.
+	stops := []focusStop{stopDirectory, stopBranch, stopTitle, stopTextarea}
 	if pp != nil && pp.HasMultiple() {
 		stops = append(stops, stopProfile)
 	}
-	stops = append(stops, stopBranch, stopEnter)
+	stops = append(stops, stopEnter)
 
 	overlay := &TextInputOverlay{
 		textarea:        ti,
@@ -336,6 +336,30 @@ func (t *TextInputOverlay) setFocusIndex(i int) {
 	t.updateFocusState()
 }
 
+// stopEnabled reports whether a stop can take focus. Only the branch picker can be
+// disabled (when the target is not a git repo); every other stop is always enabled.
+func (t *TextInputOverlay) stopEnabled(kind focusStop) bool {
+	if kind == stopBranch && t.branchPicker != nil && t.branchPicker.Disabled() {
+		return false
+	}
+	return true
+}
+
+// nextEnabledIndex returns the first enabled stop index reached from `from` by repeatedly
+// stepping `delta` (+1 forward, -1 backward), wrapping around the stop list. At most one
+// stop can be disabled, so this always terminates on an enabled stop.
+func (t *TextInputOverlay) nextEnabledIndex(from, delta int) int {
+	n := len(t.stops)
+	i := from
+	for range t.stops {
+		i = (i + delta + n) % n
+		if t.stopEnabled(t.stops[i]) {
+			return i
+		}
+	}
+	return from
+}
+
 // updateFocusState syncs each component's focus/blur state to the current stop.
 func (t *TextInputOverlay) updateFocusState() {
 	if t.isTitle() {
@@ -374,7 +398,6 @@ func (t *TextInputOverlay) updateFocusState() {
 // HandleKeyPress processes a key press and updates the state accordingly.
 // Returns (shouldClose, branchFilterChanged).
 func (t *TextInputOverlay) HandleKeyPress(msg tea.KeyMsg) (bool, bool) {
-	numStops := len(t.stops)
 	switch msg.Type {
 	case tea.KeyTab:
 		// In the project field, Tab first tries shell-style path completion; only when
@@ -382,10 +405,10 @@ func (t *TextInputOverlay) HandleKeyPress(msg tea.KeyMsg) (bool, bool) {
 		if t.isDirectoryPicker() && t.directoryPicker.CompletePrefix() {
 			return false, false
 		}
-		t.setFocusIndex((t.FocusIndex + 1) % numStops)
+		t.setFocusIndex(t.nextEnabledIndex(t.FocusIndex, 1))
 		return false, false
 	case tea.KeyShiftTab:
-		t.setFocusIndex((t.FocusIndex - 1 + numStops) % numStops)
+		t.setFocusIndex(t.nextEnabledIndex(t.FocusIndex, -1))
 		return false, false
 	case tea.KeyEsc:
 		t.Canceled = true
@@ -426,10 +449,10 @@ func (t *TextInputOverlay) HandleKeyPress(msg tea.KeyMsg) (bool, bool) {
 			t.textarea, _ = t.textarea.Update(msg)
 			return false, false
 		}
-		// Every other field (title, pickers) advances to the next stop. Advancing by one —
-		// rather than jumping to the button — keeps Enter consistent regardless of where a
-		// field sits in the order.
-		t.setFocusIndex(t.FocusIndex + 1)
+		// Every other field (title, pickers) advances to the next enabled stop. Advancing
+		// by one — rather than jumping to the button — keeps Enter consistent regardless
+		// of where a field sits in the order.
+		t.setFocusIndex(t.nextEnabledIndex(t.FocusIndex, 1))
 		return false, false
 	default:
 		if t.isTitle() {
@@ -487,16 +510,32 @@ func (t *TextInputOverlay) GetSelectedPath() string {
 // SetTargetValidity marks the currently selected target directory's state so the picker
 // can surface an inline indicator while the user chooses: valid means it exists and is a
 // directory; direct means it is a directory but not a git repo (a direct session).
+// It also enables/disables the branch picker — a non-git (or invalid) target has no
+// branches to base on, so the section goes inert and is skipped by navigation. If the
+// verdict lands while the branch picker holds focus, focus moves to the next enabled
+// stop rather than stranding the user on an inert field. headBranch (the resolved name
+// of the branch HEAD points at, "" when unknown) labels the picker's default base option.
 // No-op when there is no directory picker.
-func (t *TextInputOverlay) SetTargetValidity(valid, direct bool) {
+func (t *TextInputOverlay) SetTargetValidity(valid, direct bool, headBranch string) {
 	if t.directoryPicker == nil {
 		return
 	}
 	t.directoryPicker.SetSelectionState(valid, direct)
+	if t.branchPicker == nil {
+		return
+	}
+	t.branchPicker.SetHeadLabel(headBranch)
+	t.branchPicker.SetDisabled(!valid || direct)
+	if t.isBranchPicker() && !t.stopEnabled(stopBranch) {
+		t.setFocusIndex(t.nextEnabledIndex(t.FocusIndex, 1))
+	}
 }
 
 // ClearTargetValidity resets the target-directory state indicator to "unknown", so no
-// hint is shown until a fresh check resolves. No-op when there is no directory picker.
+// hint is shown until a fresh check resolves. The branch picker's disabled state is
+// deliberately left untouched — flipping it during the debounce window would flicker the
+// section on every path keystroke; the fresh verdict re-sets it via SetTargetValidity.
+// No-op when there is no directory picker.
 func (t *TextInputOverlay) ClearTargetValidity() {
 	if t.directoryPicker == nil {
 		return
@@ -556,6 +595,15 @@ func (t *TextInputOverlay) SetBranchResults(branches []string, version uint64) {
 		return
 	}
 	t.branchPicker.SetResults(branches, version)
+}
+
+// SetBranchSearchError marks the branch search for the given version as failed, so the
+// picker stops showing "searching…" and surfaces an error hint instead.
+func (t *TextInputOverlay) SetBranchSearchError(version uint64) {
+	if t.branchPicker == nil {
+		return
+	}
+	t.branchPicker.SetError(version)
 }
 
 // IsSubmitted returns whether the form was submitted.
@@ -675,13 +723,19 @@ func (t *TextInputOverlay) renderCreateForm(divider string) string {
 	if t.directoryPicker != nil {
 		section(t.directoryPicker.Render())
 	}
-	section(tiLabelStyle().Render("Title") + "  " + t.titleInput.View())
+	if t.branchPicker != nil {
+		section(t.branchPicker.Render())
+	}
+	// The title is the form's only hard-required input; carry a dim marker while it is
+	// empty so the requirement is visible before the submit-time error backstop.
+	titleLabel := tiLabelStyle().Render("Title")
+	if t.GetTitle() == "" {
+		titleLabel += tiHintStyle().Render(" (required)")
+	}
+	section(titleLabel + "  " + t.titleInput.View())
 	section(tiLabelStyle().Render("Prompt") + "\n" + t.textarea.View())
 	if t.profilePicker != nil {
 		section(t.profilePicker.Render())
-	}
-	if t.branchPicker != nil {
-		section(t.branchPicker.Render())
 	}
 
 	b.WriteString(tiHintStyle().Render(createFormHelp) + "\n")
