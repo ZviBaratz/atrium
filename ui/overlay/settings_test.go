@@ -110,6 +110,32 @@ func TestSettingsOverlay_CycleDefaultProgramVisitsAllProfiles(t *testing.T) {
 	assert.Equal(t, "claude", cfg.DefaultProgram, "wraps back to the first profile")
 }
 
+// A hand-edited config can hold a raw command in default_program rather than a
+// profile name (GetProgram passes it through). The enum must carry that value
+// as a cycle option — otherwise the first ←/→/enter press would overwrite it
+// with a profile name and persist-per-change would destroy it irrecoverably.
+func TestSettingsOverlay_RawDefaultProgramSurvivesCycle(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.Profiles = []config.Profile{
+		{Name: "claude", Program: "claude"},
+		{Name: "gemini", Program: "gemini"},
+	}
+	cfg.DefaultProgram = "/home/user/launch-claude.sh" // not a profile name
+	o := NewSettingsOverlay(cfg)
+	settingsAt(t, o, "default_program")
+
+	// One press moves onto a profile…
+	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRight})
+	assert.Equal(t, "claude", cfg.DefaultProgram)
+	// …and a full cycle returns to the raw value: nothing is destroyed.
+	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRight})
+	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRight})
+	assert.Equal(t, "/home/user/launch-claude.sh", cfg.DefaultProgram)
+	// Cycling backwards from the raw value wraps onto the last profile.
+	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyLeft})
+	assert.Equal(t, "gemini", cfg.DefaultProgram)
+}
+
 func TestSettingsOverlay_SingleProfileCycleIsNoop(t *testing.T) {
 	cfg := config.DefaultConfig() // no profiles → one synthesized from DefaultProgram
 	o := NewSettingsOverlay(cfg)

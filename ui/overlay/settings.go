@@ -2,6 +2,7 @@ package overlay
 
 import (
 	"fmt"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -74,7 +75,15 @@ func boolRow(key, section, label, description, applyNote string, get func(c *con
 
 // newSettingRows declares the panel contents in display order. Section headers
 // are derived at render time from consecutive rows sharing a section.
-func newSettingRows() []settingRow {
+func newSettingRows(cfg *config.Config) []settingRow {
+	// Captured at panel open: a hand-edited config may hold a raw command in
+	// default_program rather than a profile name (GetProgram passes it through
+	// as-is). The enum's options must keep offering that original value even
+	// after cycling overwrites it in the live config — otherwise the first
+	// ←/→/enter press would persist a profile name over it and the raw command
+	// would be irrecoverable.
+	rawDefaultProgram := cfg.DefaultProgram
+
 	return []settingRow{
 		{
 			key: "default_program", section: "General", label: "Default program", kind: kindEnum,
@@ -94,6 +103,12 @@ func newSettingRows() []settingRow {
 				names := make([]string, len(c.Profiles))
 				for i, p := range c.Profiles {
 					names[i] = p.Name
+				}
+				// Keep the captured raw value (see newSettingRows) as a cycle
+				// option so touching the row can never silently destroy it —
+				// cycling must always be able to return.
+				if !slices.Contains(names, rawDefaultProgram) {
+					names = append([]string{rawDefaultProgram}, names...)
 				}
 				return names
 			},
@@ -228,7 +243,7 @@ type SettingsOverlay struct {
 // NewSettingsOverlay builds the settings panel over the given live config.
 func NewSettingsOverlay(cfg *config.Config) *SettingsOverlay {
 	return &SettingsOverlay{
-		rows: newSettingRows(),
+		rows: newSettingRows(cfg),
 		cfg:  cfg,
 		// Sensible floor so Render works before the first SetSize.
 		width:  80,
