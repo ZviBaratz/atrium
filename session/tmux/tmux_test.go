@@ -5,6 +5,7 @@ import (
 	"fmt"
 	cmd2 "github.com/ZviBaratz/atrium/cmd"
 	"github.com/ZviBaratz/atrium/log"
+	"github.com/ZviBaratz/atrium/session/agent"
 	"math/rand"
 	"os"
 	"os/exec"
@@ -808,7 +809,10 @@ func forceHelpProbe(t *testing.T, outputs map[string]string) {
 func TestResumeCommand(t *testing.T) {
 	forceHelpProbe(t, map[string]string{
 		"gemini": "-r, --resume   Resume a previous session",
-		"codex":  "  resume    Resume a previous interactive session",
+		"codex":  "Commands:\n  resume  Resume a previous interactive session",
+		// The canonical binary at an absolute path is probed at that path (it may
+		// not be on PATH at all); keyed by path so a bare-name probe would miss.
+		"/opt/agents/gemini": "-r, --resume   Resume a previous session",
 	})
 
 	cases := []struct {
@@ -824,6 +828,9 @@ func TestResumeCommand(t *testing.T) {
 		{"codex gets resume --last", "codex", "codex resume --last"},
 		// The codex subcommand cannot be spliced into an argv with flags; relaunch blank.
 		{"codex with flags unchanged", "codex --model o3", "codex --model o3"},
+		// An off-PATH absolute install still resumes: the probe targets the
+		// program's own path because its basename is the canonical binary.
+		{"absolute gemini path probes itself", "/opt/agents/gemini", "/opt/agents/gemini --resume latest"},
 		// Detection is on the binary basename containing "claude", so a launcher wrapper that
 		// exec's claude (the default_program many setups use) and a flag-bearing claude are
 		// both recognized — the wrapper forwards the appended flag through to claude.
@@ -843,12 +850,39 @@ func TestResumeCommand(t *testing.T) {
 }
 
 // An installed binary that predates its resume flag (probe finds no support) must
-// relaunch blank rather than fail on an unknown flag.
+// relaunch blank rather than fail on an unknown flag. Codex's needle additionally pins
+// the subcommand *listing* — help text that merely mentions resuming must not pass.
 func TestResumeCommandProbeGate(t *testing.T) {
-	forceHelpProbe(t, map[string]string{"gemini": "old gemini help with no such flag"})
+	forceHelpProbe(t, map[string]string{
+		"gemini": "old gemini help with no such flag",
+		"codex":  "old codex; sessions resume automatically on restart",
+	})
 
-	s := newSession(context.Background(), "resume-test", "gemini", NewMockPtyFactory(t), cmd_test.MockCmdExec{})
-	require.Equal(t, "gemini", s.resumeCommand())
+	for _, program := range []string{"gemini", "codex"} {
+		s := newSession(context.Background(), "resume-test", program, NewMockPtyFactory(t), cmd_test.MockCmdExec{})
+		require.Equal(t, program, s.resumeCommand(), "probe must fail closed for %s", program)
+	}
+}
+
+// probeTarget picks which binary's --help the resume probe runs: the program's own first
+// token when it is the canonical binary (wherever it lives), the canonical name otherwise —
+// a wrapper's side effects must never run on a probe.
+func TestProbeTarget(t *testing.T) {
+	cases := []struct {
+		program string
+		key     agent.Key
+		want    string
+	}{
+		{"gemini", agent.KeyGemini, "gemini"},
+		{"/opt/agents/gemini", agent.KeyGemini, "/opt/agents/gemini"},
+		{"/opt/agents/gemini --yolo", agent.KeyGemini, "/opt/agents/gemini"},
+		{"launch-gemini.sh", agent.KeyGemini, "gemini"},
+		{"/usr/local/bin/codex", agent.KeyCodex, "/usr/local/bin/codex"},
+		{"codex-nightly", agent.KeyCodex, "codex"},
+	}
+	for _, tc := range cases {
+		require.Equal(t, tc.want, probeTarget(tc.program, tc.key), "program %q", tc.program)
+	}
 }
 
 // startMockExec mirrors TestStartSession's executor: the first has-session check

@@ -18,6 +18,7 @@ import (
 	"math"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"sync"
@@ -266,11 +267,32 @@ func (t *Session) resumeCommand() string {
 	if a.Resume == nil {
 		return t.program
 	}
-	if a.ResumeProbe != "" && !binHelpContains(string(a.Key), a.ResumeProbe) {
-		log.InfoLog.Printf("resume disabled for %s: %q not in %q --help", t.sanitizedName, a.ResumeProbe, a.Key)
-		return t.program
+	if a.ResumeProbe != "" {
+		bin := probeTarget(t.program, a.Key)
+		if !binHelpContains(bin, a.ResumeProbe) {
+			log.InfoLog.Printf("resume disabled for %s: %q not in %q --help", t.sanitizedName, a.ResumeProbe, bin)
+			return t.program
+		}
 	}
 	return a.Resume(t.program)
+}
+
+// probeTarget returns the binary whose --help is probed for a resume capability. The
+// program's first token is preferred when it *is* the canonical agent binary — possibly at
+// an absolute path outside PATH, where probing the bare name would fail and silently
+// disable resume for the very binary the session runs. Anything whose basename is not
+// exactly the canonical name (a launcher wrapper, a same-agent alias script) is never
+// probed — a wrapper's side effects must not run on a probe — so the canonical name is
+// probed instead, accepting the PATH-miss degradation for that case.
+func probeTarget(program string, key agent.Key) string {
+	bin := program
+	if i := strings.IndexByte(bin, ' '); i >= 0 {
+		bin = bin[:i]
+	}
+	if filepath.Base(bin) == string(key) {
+		return bin
+	}
+	return string(key)
 }
 
 // start creates a new detached tmux session running program in workDir, then attaches.

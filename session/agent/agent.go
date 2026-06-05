@@ -135,7 +135,10 @@ type Adapter struct {
 	Resume func(program string) string
 	// ResumeProbe, when non-empty, must appear in the agent binary's --help
 	// output before Resume is applied — guarding against an older installed
-	// binary that predates the flag. The probe itself runs in session/tmux.
+	// binary that predates the flag. The probe itself runs in session/tmux,
+	// against the configured program when it is the canonical binary itself
+	// (even at an absolute path), else against the canonical name — never
+	// against a wrapper, whose side effects must not run on a probe.
 	ResumeProbe string
 
 	// HookSupport marks agents with an authoritative status-hook integration

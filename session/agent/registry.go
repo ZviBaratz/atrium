@@ -106,7 +106,12 @@ var codex = &Adapter{
 		}
 		return program + " resume --last"
 	},
-	ResumeProbe: "resume",
+	// The needle pins the clap subcommand listing line ("\n  resume  …"), not the
+	// bare word: any old help text that merely *mentions* resuming would pass a
+	// bare-word probe and relaunch an older codex into an argv it rejects. The
+	// trade is deliberate — if clap's listing indent ever changes, the probe
+	// fails closed and the session relaunches blank (the adapter's safe mode).
+	ResumeProbe: "\n  resume ",
 }
 
 // Gemini CLI (google-gemini/gemini-cli, React-Ink). Strings verified against
