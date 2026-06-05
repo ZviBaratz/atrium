@@ -49,6 +49,38 @@ func newCreateFormHome(t *testing.T) *home {
 	}
 }
 
+// Opening the form on a non-git default target must not kick any open-time branch
+// plumbing: there is nothing to fetch or search, the section is inert, and a later
+// path change onto a git repo triggers its own verdict-driven fetch.
+func TestOpenCreateForm_NonGitTargetSkipsBranchPlumbing(t *testing.T) {
+	h := newCreateFormHome(t)
+	inst, err := session.NewInstance(session.InstanceOptions{
+		Title:   "direct",
+		Path:    t.TempDir(), // a plain directory, not a git repo
+		Program: "echo",
+	})
+	require.NoError(t, err)
+	h.list.AddInstance(inst)
+
+	h.handleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("N")})
+
+	require.NotNil(t, h.textInputOverlay)
+	assert.Empty(t, h.fetchedPaths, "a non-git target must not be seeded for fetching")
+}
+
+// A git default target keeps the open-time plumbing: it is seeded as fetched (once per
+// form-session) so branches are current by the time the user reaches the branch field.
+func TestOpenCreateForm_GitTargetSeedsFetch(t *testing.T) {
+	cwd, err := os.Getwd()
+	require.NoError(t, err)
+	require.True(t, git.IsGitRepo(context.Background(), cwd), "test must run inside a git repository")
+
+	h := newCreateFormHome(t) // empty list → the default target is the cwd
+	h.handleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("N")})
+
+	assert.True(t, h.fetchedPaths[cwd], "a git target must be seeded as fetched at open")
+}
+
 // Pressing N opens the unified create form and, crucially, does NOT add a list row — the
 // session is created only on submit, so nothing appears under a repo group while naming.
 func TestKeyPrompt_OpensCreateFormWithoutAddingRow(t *testing.T) {
@@ -100,9 +132,11 @@ func TestCreateSessionFromForm_CreatesOneAndClearsOverlay(t *testing.T) {
 	h := newCreateFormHome(t)
 	h.newSessionPath = cwd
 	h.state = statePrompt
-	ov := h.newSessionFormOverlay()
+	ov, _ := h.newSessionFormOverlay()
 	h.textInputOverlay = ov
-	// Focus starts on the project picker; Tab to the title field, then type the title.
+	// Focus starts on the project picker; Tab past the branch picker to the title field,
+	// then type the title.
+	ov.HandleKeyPress(tea.KeyMsg{Type: tea.KeyTab})
 	ov.HandleKeyPress(tea.KeyMsg{Type: tea.KeyTab})
 	ov.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("feature")})
 
@@ -126,7 +160,7 @@ func TestCreateSessionFromForm_EmptyTitleKeepsFormOpen(t *testing.T) {
 	h := newCreateFormHome(t)
 	h.newSessionPath, _ = os.Getwd()
 	h.state = statePrompt
-	ov := h.newSessionFormOverlay()
+	ov, _ := h.newSessionFormOverlay()
 	ov.Submitted = true
 	h.textInputOverlay = ov
 

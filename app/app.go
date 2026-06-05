@@ -119,6 +119,11 @@ type home struct {
 	// can be re-pointed via the directory picker in the new-session overlay. It scopes the
 	// branch search and is applied to the instance before Start.
 	newSessionPath string
+	// fetchedPaths tracks which repo paths have had a background `git fetch` during the
+	// current new-session form, so each confirmed-git target is fetched at most once per
+	// form-session (re-pointing the picker back and forth doesn't spam the network).
+	// Reset in openCreateForm, seeded with the initial target when it is a git repo.
+	fetchedPaths map[string]bool
 
 	// welcomeChecked guards the one-time first-launch welcome so it is only
 	// attempted once per process (its seen-bit handles persistence across runs).
@@ -515,7 +520,11 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.runBranchSearch(msg.filter, msg.version)
 	case branchSearchResultMsg:
 		if m.textInputOverlay != nil {
-			m.textInputOverlay.SetBranchResults(msg.branches, msg.version)
+			if msg.err {
+				m.textInputOverlay.SetBranchSearchError(msg.version)
+			} else {
+				m.textInputOverlay.SetBranchResults(msg.branches, msg.version)
+			}
 		}
 		return m, nil
 	case targetValidityDebounceMsg:
@@ -528,9 +537,28 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Apply only if the result is for the still-current target, so a stale check
 		// (the user has navigated on) can't clobber the indicator.
 		if m.textInputOverlay != nil && msg.path == m.newSessionPath {
-			m.textInputOverlay.SetTargetValidity(msg.valid, msg.direct)
+			m.textInputOverlay.SetTargetValidity(msg.valid, msg.direct, msg.headBranch)
+			// A confirmed git target gets one background fetch per form-session, so its
+			// branch list reflects current remote refs. The verdict (not the path change)
+			// is the trigger: filesystem browsing through non-repos never fetches.
+			if msg.valid && !msg.direct && !m.fetchedPaths[msg.path] {
+				if m.fetchedPaths == nil {
+					m.fetchedPaths = make(map[string]bool)
+				}
+				m.fetchedPaths[msg.path] = true
+				return m, m.runBranchFetch(msg.path)
+			}
 		}
 		return m, nil
+	case branchFetchDoneMsg:
+		// A background fetch finished. If its path is still the current target, re-run
+		// the branch search so newly-fetched refs appear without retyping the filter; a
+		// completion for an abandoned path is dropped. (SetResults' version check still
+		// guards against the user having typed during the search itself.)
+		if m.textInputOverlay == nil || msg.path != m.newSessionPath {
+			return m, nil
+		}
+		return m, m.runBranchSearch(m.textInputOverlay.BranchFilter(), m.textInputOverlay.BranchFilterVersion())
 	case tea.KeyMsg:
 		return m.handleKeyPress(msg)
 	case tea.WindowSizeMsg:
@@ -1340,10 +1368,13 @@ type branchSearchDebounceMsg struct {
 	version uint64
 }
 
-// branchSearchResultMsg carries search results back to Update.
+// branchSearchResultMsg carries search results back to Update. err marks a failed
+// search (e.g. the target is not a git repo) so the picker can clear its loading state
+// and show an error hint instead of spinning forever.
 type branchSearchResultMsg struct {
 	branches []string
 	version  uint64
+	err      bool
 }
 
 const branchSearchDebounce = 150 * time.Millisecond
@@ -1356,6 +1387,25 @@ func (m *home) scheduleBranchSearch(filter string, version uint64) tea.Cmd {
 	}
 }
 
+// branchFetchDoneMsg signals that a background `git fetch` for a candidate target repo
+// finished (successfully or not), keyed by the path it fetched so a completion for a
+// path the user has navigated away from can be dropped.
+type branchFetchDoneMsg struct {
+	path string
+}
+
+// runBranchFetch returns a tea.Cmd that fetches the repo's remote refs in the background
+// and reports completion. FetchBranches is best-effort (errors are ignored — offline or
+// remoteless repos simply keep their local view), so completion always re-triggers a
+// search via the branchFetchDoneMsg handler.
+func (m *home) runBranchFetch(path string) tea.Cmd {
+	ctx := m.ctx
+	return func() tea.Msg {
+		git.FetchBranches(ctx, path)
+		return branchFetchDoneMsg{path: path}
+	}
+}
+
 // targetValidityDebounceMsg fires after the debounce interval to trigger an async
 // state check (targetValidity) of the chosen target path.
 type targetValidityDebounceMsg struct {
@@ -1364,9 +1414,12 @@ type targetValidityDebounceMsg struct {
 
 // targetValidityResultMsg carries the target-state check result back to Update, keyed by
 // the path it was computed for so a stale result (the user has since moved on) is dropped.
+// headBranch is the resolved name of the branch HEAD points at (only for git targets),
+// shown in the branch picker's default base option.
 type targetValidityResultMsg struct {
 	path          string
 	valid, direct bool
+	headBranch    string
 }
 
 // scheduleValidityCheck returns a debounced tea.Cmd mirroring scheduleBranchSearch: it
@@ -1384,8 +1437,8 @@ func (m *home) scheduleValidityCheck(path string) tea.Cmd {
 func (m *home) runValidityCheck(path string) tea.Cmd {
 	ctx := m.ctx
 	return func() tea.Msg {
-		valid, direct := targetValidity(ctx, path)
-		return targetValidityResultMsg{path: path, valid: valid, direct: direct}
+		valid, direct, head := targetValidity(ctx, path)
+		return targetValidityResultMsg{path: path, valid: valid, direct: direct, headBranch: head}
 	}
 }
 
@@ -1405,7 +1458,7 @@ func (m *home) runBranchSearch(filter string, version uint64) tea.Cmd {
 		branches, err := git.SearchBranches(ctx, target, filter)
 		if err != nil {
 			log.WarningLog.Printf("branch search failed: %v", err)
-			return nil
+			return branchSearchResultMsg{version: version, err: true}
 		}
 		return branchSearchResultMsg{branches: branches, version: version}
 	}
@@ -1770,22 +1823,25 @@ func (m *home) handleInfoState(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 // newSessionFormOverlay builds the unified new-session form (title, project, optional
-// profile, branch, prompt) shared by both creation flows.
-func (m *home) newSessionFormOverlay() *overlay.TextInputOverlay {
+// profile, branch, prompt) shared by both creation flows. It also reports whether the
+// seeded target is a git repo, so openCreateForm can gate the open-time branch plumbing
+// without re-running the git checks.
+func (m *home) newSessionFormOverlay() (_ *overlay.TextInputOverlay, isGit bool) {
 	ov := overlay.NewSessionCreateOverlay(m.appConfig.GetProfiles(), m.candidateRepoPaths())
 	// Seed the initial validity so the picker can flag the default target before the user
-	// navigates: a non-git default directory shows the direct-session hint, not a block.
-	valid, direct := targetValidity(m.ctx, m.newSessionPath)
-	ov.SetTargetValidity(valid, direct)
-	return ov
+	// navigates: a non-git default directory shows the direct-session hint (and an inert
+	// branch section), not a block.
+	valid, direct, head := targetValidity(m.ctx, m.newSessionPath)
+	ov.SetTargetValidity(valid, direct, head)
+	return ov, valid && !direct
 }
 
 // openCreateForm opens the unified new-session form — the single creation flow
 // behind both `n` (focusTitle, for "type a name and go") and `N` (project picker
 // first). The session itself is not created (and no list row appears) until the
-// form is submitted. The contextual target repo is derived up front and a
-// background fetch kicked off so branches are current by the time the user
-// reaches the branch field.
+// form is submitted. The contextual target is derived up front and, when it is a
+// git repo, a background fetch kicked off so branches are current by the time the
+// user reaches the branch field.
 func (m *home) openCreateForm(focusTitle bool) tea.Cmd {
 	if limit := m.appConfig.GetMaxSessions(); limit > 0 && m.list.NumInstances() >= limit {
 		return m.handleError(
@@ -1794,21 +1850,28 @@ func (m *home) openCreateForm(focusTitle bool) tea.Cmd {
 
 	m.newSessionPath = m.defaultNewSessionPath()
 	target := m.newSessionPath
-	ctx := m.ctx
-	fetchCmd := func() tea.Msg {
-		git.FetchBranches(ctx, target)
-		return nil
-	}
 
 	m.state = statePrompt
-	m.textInputOverlay = m.newSessionFormOverlay()
+	ov, isGit := m.newSessionFormOverlay()
+	m.textInputOverlay = ov
 	if focusTitle {
 		m.textInputOverlay.FocusTitle()
 	}
-	// Trigger the initial branch search (no debounce, version 0).
-	initialSearch := m.runBranchSearch("", m.textInputOverlay.BranchFilterVersion())
 
-	return tea.Batch(tea.WindowSize(), fetchCmd, initialSearch)
+	// Branch plumbing only applies to a git target: seed the fetched-once set and kick
+	// the background fetch plus the initial (undebounced) branch search. A non-git
+	// target's branch section is inert, so there is nothing to fetch or list — and a
+	// later path change onto a git repo triggers its own verdict-driven fetch (every
+	// other candidate is fetched when, and if, it is confirmed as git while selected).
+	m.fetchedPaths = map[string]bool{}
+	cmds := []tea.Cmd{tea.WindowSize()}
+	if isGit {
+		m.fetchedPaths[target] = true
+		cmds = append(cmds,
+			m.runBranchFetch(target),
+			m.runBranchSearch("", m.textInputOverlay.BranchFilterVersion()))
+	}
+	return tea.Batch(cmds...)
 }
 
 // createSessionFromForm validates the submitted new-session form, creates the session,
@@ -1829,7 +1892,7 @@ func (m *home) createSessionFromForm(prompt string) tea.Cmd {
 		path = m.newSessionPath
 	}
 	// A non-git directory becomes a direct session (agent runs in place, no worktree).
-	valid, direct := targetValidity(m.ctx, path)
+	valid, direct, _ := targetValidity(m.ctx, path)
 	if !valid {
 		ov.Submitted = false
 		return m.handleError(fmt.Errorf("%q is not a directory", path))
@@ -1876,13 +1939,18 @@ func (m *home) createSessionFromForm(prompt string) tea.Cmd {
 }
 
 // targetValidity reports whether path is a usable new-session target and, if so,
-// whether it would be a direct (non-git) session. Both the inline (`n`) and form
-// (`N`) flows use it to drive the picker's inline hint and to set the Direct flag.
-func targetValidity(ctx context.Context, path string) (valid, direct bool) {
+// whether it would be a direct (non-git) session. For a git target it also resolves
+// headBranch — the branch HEAD points at — for the branch picker's default base label.
+// Both the inline (`n`) and form (`N`) flows use it to drive the picker's inline hint
+// and to set the Direct flag.
+func targetValidity(ctx context.Context, path string) (valid, direct bool, headBranch string) {
 	if !config.DirExists(path) {
-		return false, false
+		return false, false, ""
 	}
-	return true, !git.IsGitRepo(ctx, path)
+	if !git.IsGitRepo(ctx, path) {
+		return true, true, ""
+	}
+	return true, false, git.CurrentBranchName(ctx, path)
 }
 
 // defaultNewSessionPath returns the contextual target repo for a new session: the

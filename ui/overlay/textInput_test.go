@@ -70,18 +70,19 @@ func TestTextInputOverlay_InvalidateBumpsVersion(t *testing.T) {
 }
 
 func TestSessionCreateOverlay_FocusStartsOnDirectoryAndCycles(t *testing.T) {
-	// No profiles → stops: [directory, title, textarea, branch, enter]; focus starts on
-	// the project picker so the repo is chosen before naming the session.
+	// No profiles → stops: [directory, branch, title, textarea, enter]; focus starts on
+	// the project picker, and the base branch follows immediately since it is scoped to
+	// the chosen project.
 	o := NewSessionCreateOverlay(nil, []string{"/repo/a", "/repo/b"})
 	assert.True(t, o.IsCreateForm())
 	assert.True(t, o.isDirectoryPicker(), "focus should start on the project picker")
 
 	tab(o)
-	assert.True(t, o.isTitle(), "title comes right after the project")
+	assert.True(t, o.isBranchPicker(), "base branch comes right after the project")
+	tab(o)
+	assert.True(t, o.isTitle())
 	tab(o)
 	assert.True(t, o.isTextarea())
-	tab(o)
-	assert.True(t, o.isBranchPicker())
 	tab(o)
 	assert.True(t, o.isEnterButton())
 	tab(o)
@@ -89,6 +90,22 @@ func TestSessionCreateOverlay_FocusStartsOnDirectoryAndCycles(t *testing.T) {
 
 	shiftTab(o)
 	assert.True(t, o.isEnterButton())
+}
+
+// The branch section must render between the project and the title, matching the Tab order.
+func TestSessionCreateOverlay_RendersBranchBetweenProjectAndTitle(t *testing.T) {
+	o := NewSessionCreateOverlay(nil, []string{"/repo/a"})
+	o.SetSize(80, 40)
+	out := o.Render()
+
+	proj := strings.Index(out, "Project")
+	base := strings.Index(out, "Base")
+	title := strings.Index(out, "Title")
+	require.GreaterOrEqual(t, proj, 0, "form must show the Project field")
+	require.GreaterOrEqual(t, base, 0, "form must show the Base branch field")
+	require.GreaterOrEqual(t, title, 0, "form must show the Title field")
+	assert.Less(t, proj, base, "Project must render above Base branch")
+	assert.Less(t, base, title, "Base branch must render above Title")
 }
 
 func TestSessionCreateOverlay_RendersProjectAboveTitle(t *testing.T) {
@@ -116,9 +133,9 @@ func TestSessionCreateOverlay_TabCompletesDirectoryThenAdvances(t *testing.T) {
 	assert.True(t, o.isDirectoryPicker(), "Tab completes in place rather than advancing")
 	assert.Equal(t, filepath.Join(root, "alpha"), o.GetSelectedPath())
 
-	// Tab again with nothing left to complete advances to the next field (title).
+	// Tab again with nothing left to complete advances to the next field (base branch).
 	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyTab})
-	assert.True(t, o.isTitle(), "with nothing to complete, Tab advances focus")
+	assert.True(t, o.isBranchPicker(), "with nothing to complete, Tab advances focus")
 }
 
 func TestSessionCreateOverlay_CtrlSSubmitsFromAnyField(t *testing.T) {
@@ -134,13 +151,94 @@ func TestSessionCreateOverlay_CtrlSSubmitsFromAnyField(t *testing.T) {
 
 func TestSessionCreateOverlay_GetTitle(t *testing.T) {
 	o := NewSessionCreateOverlay(nil, []string{"/repo/a"})
-	// Focus starts on the project picker; Tab to the title, then runes land there.
+	// Focus starts on the project picker; Tab past the branch picker to the title,
+	// then runes land there.
+	tab(o)
 	tab(o)
 	assert.True(t, o.isTitle())
 	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("my-feature")})
 	assert.Equal(t, "my-feature", o.GetTitle())
 	// The default candidate is exposed as the chosen project.
 	assert.Equal(t, "/repo/a", o.GetSelectedPath())
+}
+
+// When the target is not a git repo (direct session), the branch stop is skipped by both
+// Tab directions: forward from the project lands on the title, and Shift+Tab from the
+// title returns to the project.
+func TestSessionCreateOverlay_TabSkipsDisabledBranch(t *testing.T) {
+	o := NewSessionCreateOverlay(nil, []string{"/not/a/repo"})
+	o.SetTargetValidity(true, true, "") // valid directory, not a git repo → direct session
+	assert.True(t, o.isDirectoryPicker())
+
+	tab(o)
+	assert.True(t, o.isTitle(), "Tab must skip the disabled branch picker")
+	shiftTab(o)
+	assert.True(t, o.isDirectoryPicker(), "Shift+Tab must skip the disabled branch picker")
+}
+
+// Enter advances past a disabled branch stop too — Enter on the project must not land the
+// user on an inert field.
+func TestSessionCreateOverlay_EnterSkipsDisabledBranch(t *testing.T) {
+	o := NewSessionCreateOverlay(nil, []string{"/not/a/repo"})
+	o.SetTargetValidity(true, true, "")
+	assert.True(t, o.isDirectoryPicker())
+
+	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyEnter})
+	assert.True(t, o.isTitle(), "Enter must skip the disabled branch picker")
+}
+
+// If the disable verdict lands while the branch picker holds focus (the async validity
+// check resolving after the user tabbed ahead), focus is pushed to the next enabled stop
+// rather than stranding the user on an inert field.
+func TestSessionCreateOverlay_FocusEvictedWhenBranchDisabled(t *testing.T) {
+	o := NewSessionCreateOverlay(nil, []string{"/not/a/repo"})
+	tab(o)
+	assert.True(t, o.isBranchPicker())
+
+	o.SetTargetValidity(true, true, "")
+	assert.True(t, o.isTitle(), "focus must move off the now-disabled branch picker")
+}
+
+// ClearTargetValidity (the debounce window while a new path's verdict is pending) must not
+// flicker the branch section: the last known disabled/enabled state holds until the fresh
+// verdict re-sets it.
+func TestSessionCreateOverlay_ClearValidityKeepsBranchDisabledState(t *testing.T) {
+	o := NewSessionCreateOverlay(nil, []string{"/not/a/repo"})
+	o.SetTargetValidity(true, true, "")
+	o.ClearTargetValidity()
+
+	tab(o)
+	assert.True(t, o.isTitle(), "branch stays disabled through the unknown-validity window")
+
+	o.SetTargetValidity(true, false, "main") // fresh verdict: a git repo again
+	shiftTab(o)
+	assert.True(t, o.isBranchPicker(), "a git verdict re-enables the branch stop")
+}
+
+// An invalid target (not a directory at all) disables the branch picker just like a
+// non-git one — there is nothing to list branches in.
+func TestSessionCreateOverlay_InvalidTargetDisablesBranch(t *testing.T) {
+	o := NewSessionCreateOverlay(nil, []string{"/nonexistent"})
+	o.SetTargetValidity(false, false, "")
+
+	tab(o)
+	assert.True(t, o.isTitle(), "Tab must skip the branch picker for an invalid target")
+	assert.Equal(t, "", o.GetSelectedBranch())
+}
+
+// The Title label carries a dim "(required)" marker while the field is empty — the only
+// hard-required input — and drops it once a title is typed. Submit-time validation stays
+// as the backstop.
+func TestSessionCreateOverlay_TitleRequiredMarker(t *testing.T) {
+	o := NewSessionCreateOverlay(nil, []string{"/repo/a"})
+	o.SetSize(80, 40)
+	assert.Contains(t, o.Render(), "(required)", "empty title must show the marker")
+
+	tab(o)
+	tab(o)
+	require.True(t, o.isTitle())
+	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("x")})
+	assert.NotContains(t, o.Render(), "(required)", "a typed title clears the marker")
 }
 
 // The whole form must render the same number of lines no matter which field holds focus,
@@ -158,6 +256,13 @@ func TestSessionCreateOverlay_RenderHeightConstantAcrossFocus(t *testing.T) {
 
 	assert.Equal(t, dirFocused, promptFocused, "overlay height must not change between fields")
 	assert.Equal(t, dirFocused, branchFocused, "overlay height must not change between fields")
+
+	// Disabling the branch picker (non-git target) must not change the form height either —
+	// the inert placeholder keeps the section's exact shape.
+	o.SetTargetValidity(true, true, "")
+	o.focusStop(stopDirectory)
+	branchDisabled := strings.Count(o.Render(), "\n")
+	assert.Equal(t, dirFocused, branchDisabled, "overlay height must not change when the branch section is disabled")
 }
 
 // The form must shrink to fit short terminals (it has a fixed-height default that overflows

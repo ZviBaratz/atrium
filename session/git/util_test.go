@@ -1,8 +1,40 @@
 package git
 
 import (
+	"context"
 	"testing"
 )
+
+// CurrentBranchName resolves the checked-out branch of a repo; "HEAD" for a detached
+// HEAD (git's own convention for --abbrev-ref); empty for a non-repo. The picker renders
+// the result as the "HEAD (<branch>)" base option in the new-session form.
+func TestCurrentBranchName(t *testing.T) {
+	repo := newTestRepo(t)
+	mustRunGit(t, repo, "switch", "-c", "feat")
+	if got := CurrentBranchName(context.Background(), repo); got != "feat" {
+		t.Fatalf("CurrentBranchName() = %q, want %q", got, "feat")
+	}
+
+	mustRunGit(t, repo, "switch", "--detach")
+	if got := CurrentBranchName(context.Background(), repo); got != "HEAD" {
+		t.Fatalf("CurrentBranchName() detached = %q, want %q", got, "HEAD")
+	}
+
+	if got := CurrentBranchName(context.Background(), t.TempDir()); got != "" {
+		t.Fatalf("CurrentBranchName() non-repo = %q, want empty", got)
+	}
+}
+
+// A freshly-initialized repo has an unborn HEAD (the branch ref exists only as a symref,
+// no commit yet) — the branch name must still resolve so the picker's default base option
+// can label it instead of falling back to the generic "current branch" text.
+func TestCurrentBranchNameUnbornHead(t *testing.T) {
+	repo := t.TempDir()
+	mustRunGit(t, "", "init", "-b", "newborn", repo)
+	if got := CurrentBranchName(context.Background(), repo); got != "newborn" {
+		t.Fatalf("CurrentBranchName() unborn HEAD = %q, want %q", got, "newborn")
+	}
+}
 
 func TestSanitizeBranchName(t *testing.T) {
 	tests := []struct {

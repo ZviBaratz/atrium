@@ -769,6 +769,119 @@ func TestTargetValidityResultUpdatesIndicator(t *testing.T) {
 	assert.NotContains(t, out, "direct session", "a git repo shows no hint at all")
 }
 
+// TestValidityResultResolvesHeadLabel verifies the validity result's resolved HEAD branch
+// reaches the branch picker, so the default base option names the actual branch.
+func TestValidityResultResolvesHeadLabel(t *testing.T) {
+	const repo = "/some/repo"
+	ov := overlay.NewSessionCreateOverlay(nil, []string{repo})
+	ov.SetSize(80, 40)
+	h := &home{
+		ctx:              context.Background(),
+		state:            statePrompt,
+		appConfig:        config.DefaultConfig(),
+		textInputOverlay: ov,
+		newSessionPath:   repo,
+	}
+	// Focus the branch picker so its list (including the HEAD option) renders.
+	_, _ = h.Update(tea.KeyMsg{Type: tea.KeyTab})
+	ov.SetBranchResults(nil, ov.BranchFilterVersion())
+
+	_, _ = h.Update(targetValidityResultMsg{path: repo, valid: true, direct: false, headBranch: "main"})
+	assert.Contains(t, ov.Render(), "HEAD (main)", "the resolved branch must reach the picker")
+}
+
+// TestGitVerdictTriggersFetchOncePerPath verifies a confirmed-git validity result kicks a
+// background fetch for that path — but only the first time it is confirmed during one
+// form-session, so flipping between candidates doesn't spam the network.
+func TestGitVerdictTriggersFetchOncePerPath(t *testing.T) {
+	const repo = "/some/repo"
+	ov := overlay.NewSessionCreateOverlay(nil, []string{repo})
+	h := &home{
+		ctx:              context.Background(),
+		state:            statePrompt,
+		appConfig:        config.DefaultConfig(),
+		textInputOverlay: ov,
+		newSessionPath:   repo,
+	}
+
+	_, cmd := h.Update(targetValidityResultMsg{path: repo, valid: true, direct: false})
+	require.NotNil(t, cmd, "first git verdict for a path must trigger a fetch")
+	done, ok := cmd().(branchFetchDoneMsg)
+	require.True(t, ok, "the fetch cmd must deliver a branchFetchDoneMsg")
+	assert.Equal(t, repo, done.path)
+
+	_, cmd = h.Update(targetValidityResultMsg{path: repo, valid: true, direct: false})
+	assert.Nil(t, cmd, "a path is fetched at most once per form-session")
+}
+
+// TestNonGitVerdictDoesNotTriggerFetch verifies direct/invalid targets never fetch —
+// there is no repo to fetch in.
+func TestNonGitVerdictDoesNotTriggerFetch(t *testing.T) {
+	const dir = "/some/dir"
+	ov := overlay.NewSessionCreateOverlay(nil, []string{dir})
+	h := &home{
+		ctx:              context.Background(),
+		state:            statePrompt,
+		appConfig:        config.DefaultConfig(),
+		textInputOverlay: ov,
+		newSessionPath:   dir,
+	}
+
+	_, cmd := h.Update(targetValidityResultMsg{path: dir, valid: true, direct: true})
+	assert.Nil(t, cmd, "a non-git directory must not trigger a fetch")
+	_, cmd = h.Update(targetValidityResultMsg{path: dir, valid: false})
+	assert.Nil(t, cmd, "an invalid target must not trigger a fetch")
+}
+
+// TestFetchDoneRefreshesBranchListForCurrentPath verifies a completed fetch re-runs the
+// branch search (so newly-fetched refs appear), but only when the fetched path is still
+// the current target — a stale completion is dropped.
+func TestFetchDoneRefreshesBranchListForCurrentPath(t *testing.T) {
+	const repo = "/some/repo"
+	ov := overlay.NewSessionCreateOverlay(nil, []string{repo})
+	h := &home{
+		ctx:              context.Background(),
+		state:            statePrompt,
+		appConfig:        config.DefaultConfig(),
+		textInputOverlay: ov,
+		newSessionPath:   repo,
+	}
+
+	_, cmd := h.Update(branchFetchDoneMsg{path: repo})
+	require.NotNil(t, cmd, "a fetch completion for the current target must refresh the list")
+	_, ok := cmd().(branchSearchResultMsg)
+	assert.True(t, ok, "the refresh must be a branch search")
+
+	_, cmd = h.Update(branchFetchDoneMsg{path: "/elsewhere"})
+	assert.Nil(t, cmd, "a fetch completion for an abandoned path is dropped")
+}
+
+// TestBranchSearchErrorClearsSpinner verifies a failed branch search delivers an error
+// result that clears the picker's "searching…" state and shows the error hint — the old
+// behavior swallowed the error and the spinner never resolved.
+func TestBranchSearchErrorClearsSpinner(t *testing.T) {
+	const repo = "/some/repo"
+	ov := overlay.NewSessionCreateOverlay(nil, []string{repo})
+	ov.SetSize(80, 40)
+	h := &home{
+		ctx:              context.Background(),
+		state:            statePrompt,
+		appConfig:        config.DefaultConfig(),
+		textInputOverlay: ov,
+		newSessionPath:   repo,
+	}
+	// Focus the branch picker (right after the project) so its list UI renders.
+	_, _ = h.Update(tea.KeyMsg{Type: tea.KeyTab})
+	version := ov.InvalidateBranchSearch()
+	require.Contains(t, ov.Render(), "searching")
+
+	_, _ = h.Update(branchSearchResultMsg{version: version, err: true})
+
+	out := ov.Render()
+	assert.NotContains(t, out, "searching", "an error result must clear the loading state")
+	assert.Contains(t, out, "couldn't list branches")
+}
+
 // TestTargetValidityResultDropsStalePath verifies a result for a path the user has
 // already navigated away from is ignored, so it can't clobber the current indicator.
 func TestTargetValidityResultDropsStalePath(t *testing.T) {
@@ -817,10 +930,12 @@ func TestPathChangeResetsValidityToUnknown(t *testing.T) {
 	require.Equal(t, repoB, h.newSessionPath, "the path change must be registered")
 
 	// repoA's verdict must not be shown for repoB; the indicator is unknown until the
-	// async check resolves.
+	// async check resolves. ("no git isolation" is the project picker's direct-session
+	// hint; the branch picker's "direct session" placeholder deliberately persists
+	// through the unknown window so the section doesn't flicker on every keystroke.)
 	out := ov.Render()
 	assert.NotContains(t, out, "not a directory", "stale verdict is cleared on path change")
-	assert.NotContains(t, out, "direct session", "no hint at all while the state is unknown")
+	assert.NotContains(t, out, "no git isolation", "no hint at all while the state is unknown")
 }
 
 // TestConfirmActionCancelDoesNotRun verifies cancelling never executes the action.
