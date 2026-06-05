@@ -145,6 +145,26 @@ type Adapter struct {
 	// (claude's injected --settings). The injection mechanics live in
 	// session/tmux/hooks.go.
 	HookSupport bool
+
+	// HeadlessNamer marks agents whose CLI supports a one-shot headless prompt
+	// suitable for auto-naming sessions. Only the capability and its preference
+	// order (registry order) live in the table: the invocation mechanics differ
+	// per agent (claude prints a JSON envelope, gemini bare text), so each true
+	// entry must have a matching branch in session/naming.go.
+	HeadlessNamer bool
+}
+
+// NamerKeys returns the keys of the agents that support headless auto-naming,
+// in registry (preference) order. session/naming.go consumes this to build its
+// fallback chain instead of hardcoding the capable set.
+func NamerKeys() []Key {
+	var keys []Key
+	for _, a := range registry {
+		if a.HeadlessNamer {
+			keys = append(keys, a.Key)
+		}
+	}
+	return keys
 }
 
 // HasBusyMarker reports whether a busy marker is present in the live marker

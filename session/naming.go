@@ -75,22 +75,24 @@ func GenerateName(ctx context.Context, program, prompt string, stats *git.DiffSt
 	return "", fmt.Errorf("no agent with headless naming support found (auto-naming needs claude or gemini)")
 }
 
-// namerPreference orders the naming-capable agents: the session's own agent
-// first when it supports headless one-shot prompting, then the default order.
-// Agents without a verified headless mode (aider; codex pending verification of
-// `codex exec` output parsing) defer to whichever supported agent is installed.
+// namerPreference orders the naming-capable agents (agent.NamerKeys, the
+// adapter table's HeadlessNamer entries in registry order): the session's own
+// agent first when it is capable, then the rest. Agents without a verified
+// headless mode defer to whichever capable agent is installed.
 func namerPreference(own agent.Key) []agent.Key {
-	order := []agent.Key{agent.KeyClaude, agent.KeyGemini}
-	if own == agent.KeyClaude || own == agent.KeyGemini {
-		out := []agent.Key{own}
-		for _, k := range order {
-			if k != own {
-				out = append(out, k)
-			}
+	keys := agent.NamerKeys()
+	out := make([]agent.Key, 0, len(keys))
+	for _, k := range keys {
+		if k == own {
+			out = append(out, k)
 		}
-		return out
 	}
-	return order
+	for _, k := range keys {
+		if k != own {
+			out = append(out, k)
+		}
+	}
+	return out
 }
 
 // resolveClaudeBinary finds a runnable claude executable for the headless call.

@@ -44,8 +44,9 @@ var claude = &Adapter{
 
 	// tmux word-splits the trailing command string itself, so appending to the
 	// single program argv element is sufficient — no shell wrapping.
-	Resume:      func(program string) string { return program + " --continue" },
-	HookSupport: true,
+	Resume:        func(program string) string { return program + " --continue" },
+	HookSupport:   true,
+	HeadlessNamer: true, // `claude -p` with a JSON envelope (session/naming.go)
 }
 
 // selectionFooterTokens reports whether the flattened text carries claude's selection
@@ -112,6 +113,10 @@ var codex = &Adapter{
 	// trade is deliberate — if clap's listing indent ever changes, the probe
 	// fails closed and the session relaunches blank (the adapter's safe mode).
 	ResumeProbe: "\n  resume ",
+
+	// HeadlessNamer deliberately unset: `codex exec` output parsing is
+	// unverified, so codex sessions auto-name through whichever capable agent
+	// is installed (see session/naming.go).
 }
 
 // Gemini CLI (google-gemini/gemini-cli, React-Ink). Strings verified against
@@ -140,8 +145,9 @@ var gemini = &Adapter{
 		{Contains: []string{"Do you trust this folder"}, Dismiss: DismissEnter},
 	},
 
-	Resume:      func(program string) string { return program + " --resume latest" },
-	ResumeProbe: "--resume",
+	Resume:        func(program string) string { return program + " --resume latest" },
+	ResumeProbe:   "--resume",
+	HeadlessNamer: true, // `gemini -p` prints bare text (session/naming.go)
 }
 
 // Aider. No stable busy marker is known, so it rides the poller's

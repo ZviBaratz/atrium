@@ -259,6 +259,12 @@ func TestAider(t *testing.T) {
 	require.Nil(t, aider.Resume, "aider has no conversation resume")
 }
 
+// NamerKeys pins which agents claim headless auto-naming and their preference
+// order — each entry must have a matching invocation branch in session/naming.go.
+func TestNamerKeys(t *testing.T) {
+	require.Equal(t, []Key{KeyClaude, KeyGemini}, NamerKeys())
+}
+
 // --- Generic: an unknown agent gets no heuristics — and, unlike the
 // pre-adapter behavior, no aider documentation gate firing a stray 'D' at it.
 
