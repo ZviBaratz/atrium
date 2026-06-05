@@ -21,15 +21,18 @@ linters:
     gosec:
       # Atrium is a process/worktree orchestrator: it intentionally launches
       # tmux/git/agent subprocesses with dynamic arguments (G204/G702), reads
-      # files at user- and worktree-derived paths (G304), and writes
-      # config/state with conventional permissions (G301/G302/G306) — none of
-      # which hold secrets. These rule classes are structural to what the tool
-      # does, so they are excluded centrally here rather than annotated at
-      # dozens of intentional call sites. (G702 fires on the SHELL-detection
-      # helper, where the command string is a hardcoded literal — no tainted
-      # input reaches it.) Integer-overflow (G115) and weak-RNG (G404) are NOT
-      # excluded: real G115 sites are fixed in code, and G404 only fired in
-      # tests (excluded via the _test.go rule below).
+      # and writes files at user- and worktree-derived paths (G304/G703), and
+      # writes config/state with conventional permissions (G301/G302/G306) —
+      # none of which hold secrets. These rule classes are structural to what
+      # the tool does, so they are excluded centrally here rather than
+      # annotated at dozens of intentional call sites. (G702 fires on the
+      # SHELL-detection helper, where the command string is a hardcoded
+      # literal — no tainted input reaches it. G703 fires on the carry_files
+      # copy, where the relative path is validated by filepath.IsLocal plus an
+      # explicit containment check the taint analysis cannot see.)
+      # Integer-overflow (G115) and weak-RNG (G404) are NOT excluded: real
+      # G115 sites are fixed in code, and G404 only fired in tests (excluded
+      # via the _test.go rule below).
       excludes:
         - G204
         - G301
@@ -37,6 +40,7 @@ linters:
         - G304
         - G306
         - G702
+        - G703
     revive:
       # Listing rules replaces revive's default set, so this is the full enabled
       # set. It is curated for correctness/clarity plus the documentation rules

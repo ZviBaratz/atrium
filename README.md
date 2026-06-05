@@ -150,6 +150,29 @@ Each profile has two fields:
 
 If no profiles are defined, Atrium uses `default_program` directly as the launch command (the default is `claude`).
 
+#### Carried files
+
+Git worktrees materialize only tracked files, so gitignored local config — most
+commonly `.claude/settings.local.json` (hooks, output style, MCP allowlists) —
+never reaches a fresh session worktree on its own. The `carry_files` list names
+repo-relative gitignored files that Atrium copies from the original checkout
+into each newly created session worktree:
+
+```json
+{
+  "carry_files": [".claude/settings.local.json"]
+}
+```
+
+The default is `[".claude/settings.local.json"]`; set an empty list (`[]`) to
+opt out. Entries must be gitignored in the project — anything else is skipped
+with a warning, because pausing a session commits its worktree and a
+non-ignored file would leak into the session branch.
+
+Carried files are re-seeded from the original checkout whenever the worktree
+is created, including on resume after a pause — edits made to them inside a
+session do not survive a pause/resume cycle.
+
 ### FAQs
 
 #### Failed to start new session

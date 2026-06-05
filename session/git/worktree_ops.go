@@ -25,17 +25,24 @@ func (g *Worktree) Setup() error {
 	// When basing on a chosen branch, always branch off it into a fresh session branch
 	// (setupNewWorktree force-recreates the session branch from the start point). We must
 	// not fall into the reuse path below, which would ignore baseRef.
+	var setupErr error
 	if g.baseRef != "" {
-		return g.setupNewWorktree()
+		setupErr = g.setupNewWorktree()
+	} else if _, refErr := g.runGitCommand(g.repoPath, "show-ref", "--verify", fmt.Sprintf("refs/heads/%s", g.branchName)); refErr == nil {
+		// HEAD-based session: if the session branch already exists (e.g. a leftover from a
+		// previous run with the same title), reuse it rather than wiping it.
+		setupErr = g.setupFromExistingBranch()
+	} else {
+		setupErr = g.setupNewWorktree()
+	}
+	if setupErr != nil {
+		return setupErr
 	}
 
-	// HEAD-based session: if the session branch already exists (e.g. a leftover from a
-	// previous run with the same title), reuse it rather than wiping it.
-	_, err = g.runGitCommand(g.repoPath, "show-ref", "--verify", fmt.Sprintf("refs/heads/%s", g.branchName))
-	if err == nil {
-		return g.setupFromExistingBranch()
-	}
-	return g.setupNewWorktree()
+	// The worktree is materialized; carry configured gitignored files from the
+	// origin checkout into it (best-effort, never an error — see carry.go).
+	g.carryLocalFiles()
+	return nil
 }
 
 // setupFromExistingBranch creates a worktree from an existing branch
