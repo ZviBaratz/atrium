@@ -51,6 +51,19 @@ func GetConfigDir() (string, error) {
 	return newDir, nil
 }
 
+// WorktreesDir returns the directory that holds every session worktree:
+// <config dir>/worktrees. It is the single source of truth for that path —
+// session/git materializes worktrees under it, and the Claude workspace-trust
+// shim trusts it — so it must always derive from GetConfigDir (never a
+// hardcoded ~/.atrium or ~/.claude-squad).
+func WorktreesDir() (string, error) {
+	configDir, err := GetConfigDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(configDir, "worktrees"), nil
+}
+
 // Profile represents a named program configuration
 type Profile struct {
 	Name    string `json:"name"`
@@ -101,6 +114,14 @@ type Config struct {
 	// creating one beyond it is rejected with an error in the UI. nil (or a
 	// non-positive value) means unlimited — there is no cap by default.
 	MaxSessions *int `json:"max_sessions,omitempty"`
+	// TrustWorktreesRoot, when true, pre-accepts Claude Code's workspace-trust
+	// dialog for the worktrees root in ~/.claude.json before sessions start.
+	// Claude's trust check walks up parent directories, so trusting the root
+	// covers every session worktree: project-scoped skills/hooks/MCP servers
+	// load without the per-worktree dialog. Opt-in (nil/false = off) because it
+	// writes outside Atrium's data dir and bypasses a deliberate Claude Code
+	// confirmation — enable only if you trust the repos you open with Atrium.
+	TrustWorktreesRoot *bool `json:"trust_worktrees_root,omitempty"`
 }
 
 // GetMaxSessions returns the configured session cap, or 0 (no cap) for a nil
@@ -136,6 +157,13 @@ func (c *Config) GetAutoAttach() bool {
 // such key) defaults to on.
 func (c *Config) GetKillDoubleTapConfirm() bool {
 	return c.KillDoubleTapConfirm == nil || *c.KillDoubleTapConfirm
+}
+
+// GetTrustWorktreesRoot reports whether Atrium should pre-accept Claude Code's
+// workspace trust for the worktrees root. Defaults OFF for a nil field: this
+// writes to another tool's config file, so it is strictly opt-in.
+func (c *Config) GetTrustWorktreesRoot() bool {
+	return c.TrustWorktreesRoot != nil && *c.TrustWorktreesRoot
 }
 
 // GetProgram returns the program to run. If Profiles is non-empty and

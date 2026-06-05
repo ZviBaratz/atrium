@@ -65,6 +65,33 @@ func Run(ctx context.Context, program string, autoYes bool) error {
 // can substitute a fake without touching the host clipboard.
 var copyToClipboard = clipboard.WriteAll
 
+// maybeTrustWorktreesRoot pre-accepts Claude's workspace trust for the
+// worktrees root when the opt-in trust_worktrees_root flag is on and any
+// configured program resolves to claude (the launch program or any profile —
+// sessions can be created from either). Strictly best-effort: every failure is
+// a warning, never an error, because the fallback is just Claude's own trust
+// dialog.
+func maybeTrustWorktreesRoot(cfg *config.Config, program string) {
+	if !cfg.GetTrustWorktreesRoot() {
+		return
+	}
+	claudeConfigured := tmux.IsClaude(program)
+	for _, p := range cfg.GetProfiles() {
+		claudeConfigured = claudeConfigured || tmux.IsClaude(p.Program)
+	}
+	if !claudeConfigured {
+		return
+	}
+	root, err := config.WorktreesDir()
+	if err != nil {
+		log.WarningLog.Printf("worktrees-root trust skipped: %v", err)
+		return
+	}
+	if err := tmux.EnsureWorktreesRootTrusted(root); err != nil {
+		log.WarningLog.Printf("worktrees-root trust skipped: %v", err)
+	}
+}
+
 type state int
 
 const (
@@ -194,6 +221,14 @@ type home struct {
 func newHome(ctx context.Context, program string, autoYes bool) *home {
 	// Load application config
 	appConfig := config.LoadConfig()
+
+	// Pre-accept Claude's workspace trust for the worktrees root before any
+	// session starts (opt-in; best-effort — on failure the trust dialog simply
+	// appears per worktree, as it would without the feature). Done once here on
+	// the main thread: the trust target is the root, not a per-session path,
+	// and session Starts run on background goroutines where concurrent
+	// rewrites of ~/.claude.json would race each other.
+	maybeTrustWorktreesRoot(appConfig, program)
 
 	// Activate the configured UI theme before any component is constructed, so
 	// theme.Current() is correct everywhere it's read. Set once, never mutated.

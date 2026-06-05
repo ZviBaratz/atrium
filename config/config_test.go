@@ -394,6 +394,43 @@ func TestGetAutoAttach(t *testing.T) {
 	})
 }
 
+func TestGetTrustWorktreesRoot(t *testing.T) {
+	t.Run("default config is off", func(t *testing.T) {
+		assert.False(t, DefaultConfig().GetTrustWorktreesRoot())
+	})
+	t.Run("nil field (older config) defaults off", func(t *testing.T) {
+		assert.False(t, (&Config{}).GetTrustWorktreesRoot())
+	})
+	t.Run("explicit true", func(t *testing.T) {
+		v := true
+		assert.True(t, (&Config{TrustWorktreesRoot: &v}).GetTrustWorktreesRoot())
+	})
+	t.Run("explicit false", func(t *testing.T) {
+		v := false
+		assert.False(t, (&Config{TrustWorktreesRoot: &v}).GetTrustWorktreesRoot())
+	})
+}
+
+func TestWorktreesDir(t *testing.T) {
+	t.Run("derives from the config dir", func(t *testing.T) {
+		tempHome := t.TempDir()
+		t.Setenv("HOME", tempHome)
+
+		dir, err := WorktreesDir()
+		require.NoError(t, err)
+		assert.Equal(t, filepath.Join(tempHome, ".atrium", "worktrees"), dir)
+	})
+	t.Run("follows the legacy config dir when only it exists", func(t *testing.T) {
+		tempHome := t.TempDir()
+		t.Setenv("HOME", tempHome)
+		require.NoError(t, os.MkdirAll(filepath.Join(tempHome, ".claude-squad"), 0755))
+
+		dir, err := WorktreesDir()
+		require.NoError(t, err)
+		assert.Equal(t, filepath.Join(tempHome, ".claude-squad", "worktrees"), dir)
+	})
+}
+
 func TestGetKillDoubleTapConfirm(t *testing.T) {
 	t.Run("default config is on", func(t *testing.T) {
 		assert.True(t, DefaultConfig().GetKillDoubleTapConfirm())

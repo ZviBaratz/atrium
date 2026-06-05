@@ -26,12 +26,7 @@ const (
 )
 
 func getWorktreeDirectory() (string, error) {
-	configDir, err := config.GetConfigDir()
-	if err != nil {
-		return "", err
-	}
-
-	return filepath.Join(configDir, "worktrees"), nil
+	return config.WorktreesDir()
 }
 
 // Worktree manages git worktree operations for a session

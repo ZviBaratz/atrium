@@ -44,6 +44,17 @@ func TestSettingsOverlay_ToggleBool(t *testing.T) {
 	assert.True(t, cfg.GetAutoAttach())
 }
 
+func TestSettingsOverlay_ToggleTrustWorktreesRoot(t *testing.T) {
+	cfg := config.DefaultConfig()
+	o := NewSettingsOverlay(cfg)
+	settingsAt(t, o, "trust_worktrees_root")
+
+	require.False(t, cfg.GetTrustWorktreesRoot(), "trust must default off (opt-in)")
+	_, changed := o.HandleKeyPress(tea.KeyMsg{Type: tea.KeySpace})
+	assert.Equal(t, "trust_worktrees_root", changed)
+	assert.True(t, cfg.GetTrustWorktreesRoot())
+}
+
 func TestSettingsOverlay_ToggleAutoYes(t *testing.T) {
 	cfg := config.DefaultConfig()
 	o := NewSettingsOverlay(cfg)

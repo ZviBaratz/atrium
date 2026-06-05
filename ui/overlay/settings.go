@@ -186,6 +186,10 @@ func newSettingRows(cfg *config.Config) []settingRow {
 			"Auto-accept agent prompts (a daemon takes over after quit).", "",
 			func(c *config.Config) bool { return c.AutoYes },
 			func(c *config.Config, v bool) { c.AutoYes = v }),
+		boolRow("trust_worktrees_root", "Behavior", "Trust worktrees root",
+			"Pre-accept Claude's workspace-trust dialog for all session worktrees.", "applies on restart",
+			(*config.Config).GetTrustWorktreesRoot,
+			func(c *config.Config, v bool) { c.TrustWorktreesRoot = &v }),
 		{
 			key: "daemon_poll_interval", section: "Behavior", label: "Poll interval (ms)", kind: kindInt,
 			description: "Auto-yes daemon polling rate.", applyNote: "applies on restart",
