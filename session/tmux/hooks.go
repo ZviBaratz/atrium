@@ -118,24 +118,36 @@ var (
 // output per process so resurrecting many sessions costs one subprocess per binary. A
 // failed probe caches as empty output: the capability reads as absent and the caller
 // degrades (relaunch without resume) rather than failing the launch.
+//
+// The lock covers only the map accesses, never the subprocess — a slow --help (the
+// probe allows up to probeTimeout) must not block concurrent resurrections of other
+// agents. Two goroutines racing on the same uncached binary may both probe; both write
+// the same output, so last-writer-wins is correct.
 func binHelpContains(bin, needle string) bool {
 	helpProbeMu.Lock()
-	defer helpProbeMu.Unlock()
 	if helpProbeOverride != nil {
-		return strings.Contains(helpProbeOverride[bin], needle)
+		out := helpProbeOverride[bin]
+		helpProbeMu.Unlock()
+		return strings.Contains(out, needle)
 	}
 	out, ok := helpProbeCache[bin]
-	if !ok {
-		ctx, cancel := context.WithTimeout(context.Background(), probeTimeout)
-		defer cancel()
-		b, err := exec.CommandContext(ctx, bin, "--help").CombinedOutput()
-		if err != nil {
-			log.InfoLog.Printf("capability probe %q --help failed: %v", bin, err)
-			b = nil
-		}
-		out = string(b)
-		helpProbeCache[bin] = out
+	helpProbeMu.Unlock()
+	if ok {
+		return strings.Contains(out, needle)
 	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), probeTimeout)
+	defer cancel()
+	b, err := exec.CommandContext(ctx, bin, "--help").CombinedOutput()
+	if err != nil {
+		log.InfoLog.Printf("capability probe %q --help failed: %v", bin, err)
+		b = nil
+	}
+	out = string(b)
+
+	helpProbeMu.Lock()
+	helpProbeCache[bin] = out
+	helpProbeMu.Unlock()
 	return strings.Contains(out, needle)
 }
 

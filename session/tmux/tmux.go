@@ -167,7 +167,10 @@ func Prefix() string {
 	return config.RuntimeName() + "_"
 }
 
-var whiteSpaceRegex = regexp.MustCompile(`\s+`)
+// nameWhitespaceRegex strips whitespace runs from instance titles in
+// toSanitizedName. (The chrome-flattening whitespace regex moved to
+// session/agent with the windowing helpers; this one is name sanitizing only.)
+var nameWhitespaceRegex = regexp.MustCompile(`\s+`)
 
 // ansiRegex matches ANSI/SGR escape sequences. The pane is captured with `-e` (the
 // preview pane needs the colors), but for state detection we strip them so a cursor
@@ -190,7 +193,7 @@ func cleanForDetection(content string) string {
 // whitespace stripped, dots replaced (tmux would do it anyway), and the active
 // brand prefix (see Prefix) applied. It produces the value held in Session.sanitizedName.
 func toSanitizedName(str string) string {
-	str = whiteSpaceRegex.ReplaceAllString(str, "")
+	str = nameWhitespaceRegex.ReplaceAllString(str, "")
 	str = strings.ReplaceAll(str, ".", "_") // tmux replaces all . with _
 	return fmt.Sprintf("%s%s", Prefix(), str)
 }

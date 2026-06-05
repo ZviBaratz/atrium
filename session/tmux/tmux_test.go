@@ -396,6 +396,14 @@ func TestPollGemini(t *testing.T) {
 
 	c = "Apply this change?\n  1. Allow once\n  2. Allow always\n  3. No, suggest changes (esc)"
 	require.Equal(t, PanePrompt, s.Poll(), "a tool confirmation is a needs-input state")
+
+	// PollNow (the post-detach face-value refresh): gemini is marker-bearing, so —
+	// unlike aider's PaneUnknown — an absent marker with no hook file reads as idle,
+	// and a present marker as working.
+	c = "✦ Done.\n\n╭───╮\n│ > │\n╰───╯\n~/project   no sandbox   gemini-2.5-pro"
+	require.Equal(t, PaneIdle, s.PollNow(), "no marker at face value is idle")
+	c = working
+	require.Equal(t, PaneWorking, s.PollNow(), "a live marker at face value is working")
 }
 
 // Hysteresis (content-change fallback, e.g. aider): a content change reads as working;
@@ -658,13 +666,26 @@ func TestStartTimeoutErrorOmitsNilWrap(t *testing.T) {
 	require.NotContains(t, err.Error(), "%!w", "a nil error must never be wrapped")
 }
 
+// forceHelpProbe installs canned --help outputs so the capability probes never exec a
+// real binary in tests. The override is set and cleared under helpProbeMu, since
+// binHelpContains reads it under the same lock from production goroutines.
+func forceHelpProbe(t *testing.T, outputs map[string]string) {
+	t.Helper()
+	helpProbeMu.Lock()
+	helpProbeOverride = outputs
+	helpProbeMu.Unlock()
+	t.Cleanup(func() {
+		helpProbeMu.Lock()
+		helpProbeOverride = nil
+		helpProbeMu.Unlock()
+	})
+}
+
 func TestResumeCommand(t *testing.T) {
-	// Canned --help outputs so the capability probes never exec a real binary in tests.
-	helpProbeOverride = map[string]string{
+	forceHelpProbe(t, map[string]string{
 		"gemini": "-r, --resume   Resume a previous session",
 		"codex":  "  resume    Resume a previous interactive session",
-	}
-	defer func() { helpProbeOverride = nil }()
+	})
 
 	cases := []struct {
 		name    string
@@ -700,8 +721,7 @@ func TestResumeCommand(t *testing.T) {
 // An installed binary that predates its resume flag (probe finds no support) must
 // relaunch blank rather than fail on an unknown flag.
 func TestResumeCommandProbeGate(t *testing.T) {
-	helpProbeOverride = map[string]string{"gemini": "old gemini help with no such flag"}
-	defer func() { helpProbeOverride = nil }()
+	forceHelpProbe(t, map[string]string{"gemini": "old gemini help with no such flag"})
 
 	s := newSession(context.Background(), "resume-test", "gemini", NewMockPtyFactory(t), cmd_test.MockCmdExec{})
 	require.Equal(t, "gemini", s.resumeCommand())
