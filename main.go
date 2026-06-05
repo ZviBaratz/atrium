@@ -168,6 +168,35 @@ var (
 		},
 	}
 
+	profilesCmd = &cobra.Command{
+		Use:   "profiles",
+		Short: "Manage agent profiles",
+	}
+
+	profilesDetectCmd = &cobra.Command{
+		Use:   "detect",
+		Short: "Probe for installed agent CLIs and add missing profiles",
+		Long: "Probes the machine for known agent CLIs (claude, codex, gemini, aider) and appends a\n" +
+			"profile for each newly found one. Existing profiles and the default program are never\n" +
+			"modified, so hand-edited entries always survive a re-detect.",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			log.Initialize(false)
+			defer log.Close()
+
+			cfg := config.LoadConfig()
+			added := cfg.MergeDetectedProfiles(config.DetectAgentProfiles())
+			if len(added) == 0 {
+				fmt.Println("no new agents detected; profiles unchanged")
+				return nil
+			}
+			if err := config.SaveConfig(cfg); err != nil {
+				return fmt.Errorf("failed to save config: %w", err)
+			}
+			fmt.Printf("added profiles: %s\n", strings.Join(added, ", "))
+			return nil
+		},
+	}
+
 	versionCmd = &cobra.Command{
 		Use:   "version",
 		Short: "Print the version number",
@@ -197,9 +226,11 @@ func init() {
 		panic(err)
 	}
 
+	profilesCmd.AddCommand(profilesDetectCmd)
 	rootCmd.AddCommand(debugCmd)
 	rootCmd.AddCommand(versionCmd)
 	rootCmd.AddCommand(resetCmd)
+	rootCmd.AddCommand(profilesCmd)
 }
 
 func main() {

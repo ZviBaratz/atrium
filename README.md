@@ -120,7 +120,15 @@ To disable auto-attach and always return to the list after creating a session, s
 
 Profiles let you define multiple named program configurations and switch between them when creating a new session. When more than one profile is defined, the session creation overlay shows a profile picker that you can navigate with `←`/`→`.
 
-To configure profiles, add a `profiles` array to your config file and set `default_program` to the name of the profile to select by default:
+On first run, Atrium probes for installed agent CLIs (`claude`, `codex`, `gemini`, `aider`) and seeds a profile for each one it finds. After installing a new agent, run:
+
+```bash
+atrium profiles detect
+```
+
+to add it as a profile — existing profiles and your default program are never modified.
+
+To configure profiles by hand, add a `profiles` array to your config file and set `default_program` to the name of the profile to select by default:
 
 ```json
 {

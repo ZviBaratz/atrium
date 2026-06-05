@@ -149,12 +149,18 @@ func (c *Config) GetProfiles() []Profile {
 	return profiles
 }
 
-// DefaultConfig returns the default configuration
+// DefaultConfig returns the default configuration. Profiles are seeded from
+// the installed agent CLIs so the create-form picker works out of the box;
+// claude leads when present (it is first in knownAgentBins) and becomes the
+// default program, falling back to the bare "claude" literal when nothing is
+// detected (the historical behavior for a machine with no agents yet).
 func DefaultConfig() *Config {
-	program, err := GetClaudeCommand()
-	if err != nil {
-		log.ErrorLog.Printf("failed to get claude command: %v", err)
-		program = defaultProgram
+	profiles := DetectAgentProfiles()
+	program := defaultProgram
+	if len(profiles) > 0 {
+		program = profiles[0].Name
+	} else {
+		log.WarningLog.Printf("no agent CLIs detected; defaulting program to %q", defaultProgram)
 	}
 
 	autoAttach := true
@@ -162,6 +168,7 @@ func DefaultConfig() *Config {
 	sessionContextBar := true
 	return &Config{
 		DefaultProgram:     program,
+		Profiles:           profiles,
 		AutoYes:            false,
 		DaemonPollInterval: 1000,
 		Theme:              "tokyo-night",
