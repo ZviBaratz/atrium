@@ -364,6 +364,40 @@ func TestMarkerWorkingAnchorsBelowInputBox(t *testing.T) {
 		"a marker above the input box (in the transcript) is ignored")
 }
 
+// Codex renders its status row ("Working (12s • esc to interrupt)") *above* the
+// composer, outside claude's below-the-box footer anchor; the adapter's bottom-window
+// confinement must still find it, hold across counter ticks, and read its approval
+// overlay as a prompt.
+func TestPollCodex(t *testing.T) {
+	working := "• Fixing the failing test.\n\n▌ Working (12s • esc to interrupt)\n\n› \n\n  ? for shortcuts"
+	c := working
+	s := pollSession(t, "codex", &c, nil)
+	require.Equal(t, PaneWorking, s.Poll())
+	c = "• Fixing the failing test.\n\n▌ Working (13s • esc to interrupt)\n\n› \n\n  ? for shortcuts"
+	require.Equal(t, PaneWorking, s.Poll(), "counter ticking does not flip the state")
+
+	c = "Would you like to run the following command?\n\n  rm -rf build/\n\n" +
+		"› 1. Yes, proceed\n  3. No, and tell Codex what to do differently"
+	require.Equal(t, PanePrompt, s.Poll(), "an approval overlay is a needs-input state")
+
+	c = "• Done. The tests pass.\n\n› \n\n  ? for shortcuts"
+	require.Equal(t, PaneIdle, s.Poll(), "marker gone after a prompt commits idle at face value")
+}
+
+// Gemini's loading row ("(esc to cancel, 12s)") also renders above its input box; it is
+// now a marker-bearing program, and its tool confirmation must classify as a prompt on
+// the current upstream strings (the pre-adapter "Yes, allow once" no longer exists).
+func TestPollGemini(t *testing.T) {
+	working := "✦ Refactoring the parser.\n\n⠏ Thinking... (esc to cancel, 12s)\n\n" +
+		"╭───╮\n│ > │\n╰───╯\n~/project   no sandbox   gemini-2.5-pro"
+	c := working
+	s := pollSession(t, "gemini", &c, nil)
+	require.Equal(t, PaneWorking, s.Poll())
+
+	c = "Apply this change?\n  1. Allow once\n  2. Allow always\n  3. No, suggest changes (esc)"
+	require.Equal(t, PanePrompt, s.Poll(), "a tool confirmation is a needs-input state")
+}
+
 // Hysteresis (content-change fallback, e.g. aider): a content change reads as working;
 // once the pane goes quiet the indicator is held until it has been unchanged for
 // idleSettleTicks, then commits idle. This path is only for programs without a busy marker;
