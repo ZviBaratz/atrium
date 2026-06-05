@@ -9,6 +9,7 @@ import (
 	"github.com/ZviBaratz/atrium/session/agent"
 	"github.com/ZviBaratz/atrium/session/git"
 	"github.com/ZviBaratz/atrium/session/tmux"
+	"github.com/ZviBaratz/atrium/session/transcript"
 	"path/filepath"
 
 	"context"
@@ -1245,6 +1246,37 @@ func (i *Instance) PreviewFullHistory() (string, error) {
 		return "", nil
 	}
 	return i.tmux().CapturePaneContentWithOptions("-", "-")
+}
+
+// ScrollbackSource identifies where scroll-mode content came from, so the UI
+// can label the snapshot accordingly.
+type ScrollbackSource int
+
+const (
+	// ScrollbackTmux is the tmux full-history capture (PreviewFullHistory).
+	ScrollbackTmux ScrollbackSource = iota
+	// ScrollbackTranscript is the agent program's own session transcript.
+	ScrollbackTranscript
+)
+
+// ScrollbackContent returns the best available scrollback for scroll mode,
+// wrapped to width. Agents that repaint the alternate screen in place (Claude
+// Code) leave tmux history structurally empty, so for supported programs the
+// session's own transcript is rendered instead; unsupported programs and every
+// transcript failure fall back to the tmux capture — never worse than
+// PreviewFullHistory alone.
+func (i *Instance) ScrollbackContent(width int) (string, ScrollbackSource, error) {
+	text, err := transcript.Render(i.Program, i.WorkingDir(), transcript.Options{Width: width})
+	if err == nil {
+		return text, ScrollbackTranscript, nil
+	}
+	if !errors.Is(err, transcript.ErrUnsupported) {
+		// A supported program whose transcript is unavailable (not written yet,
+		// unreadable, …): degrade silently to the tmux capture.
+		log.InfoLog.Printf("transcript fallback to tmux capture for %q: %v", i.Title, err)
+	}
+	content, terr := i.PreviewFullHistory()
+	return content, ScrollbackTmux, terr
 }
 
 // SetTmuxSession sets the tmux session for testing purposes
