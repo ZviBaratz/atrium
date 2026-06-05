@@ -28,6 +28,14 @@ type testSetup struct {
 // setupTestEnvironment creates a common test environment with git repo and instance
 func setupTestEnvironment(t *testing.T, cmdExec cmd_test.MockCmdExec) *testSetup {
 	t.Helper()
+	return setupTestEnvironmentWithProgram(t, cmdExec, "bash")
+}
+
+// setupTestEnvironmentWithProgram is setupTestEnvironment with the instance's
+// agent program made explicit — scroll-mode behavior branches on it (Claude
+// sessions render their JSONL transcript; everything else captures tmux).
+func setupTestEnvironmentWithProgram(t *testing.T, cmdExec cmd_test.MockCmdExec, program string) *testSetup {
+	t.Helper()
 
 	// Initialize logging
 	log.Initialize(false)
@@ -50,7 +58,7 @@ func setupTestEnvironment(t *testing.T, cmdExec cmd_test.MockCmdExec) *testSetup
 	instance, err := session.NewInstance(session.InstanceOptions{
 		Title:   sessionName,
 		Path:    workdir,
-		Program: "bash",
+		Program: program,
 	})
 	require.NoError(t, err)
 
@@ -61,7 +69,7 @@ func setupTestEnvironment(t *testing.T, cmdExec cmd_test.MockCmdExec) *testSetup
 	}
 
 	// Set up tmux session with mocks
-	tmuxSession := tmux.NewSessionWithDeps(context.Background(), sessionName, "bash", ptyFactory, cmdExec)
+	tmuxSession := tmux.NewSessionWithDeps(context.Background(), sessionName, program, ptyFactory, cmdExec)
 	instance.SetTmuxSession(tmuxSession)
 
 	// Start the tmux session
@@ -702,4 +710,90 @@ func TestPreviewKeepsContentOnTransientCaptureError(t *testing.T) {
 	require.Error(t, pane.UpdateContent(setup.instance))
 	require.False(t, pane.previewState.fallback, "a capture error must not flip to a stale fallback")
 	require.Contains(t, pane.String(), liveContent, "the last good content must be retained")
+}
+
+// writeClaudeTranscript plants a Claude session JSONL for workingDir under the
+// sandboxed $HOME/.claude tree, mirroring Claude Code's project-dir scheme
+// (every non-alphanumeric rune of the cwd becomes '-'). The mapping is written
+// out independently here on purpose: if the transcript package's sanitization
+// drifted from the real on-disk scheme, this test would stop lining up.
+func writeClaudeTranscript(t *testing.T, workingDir string, jsonlLines ...string) {
+	t.Helper()
+	sanitized := strings.Map(func(r rune) rune {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') {
+			return r
+		}
+		return '-'
+	}, workingDir)
+	home, err := os.UserHomeDir()
+	require.NoError(t, err)
+	dir := filepath.Join(home, ".claude", "projects", sanitized)
+	require.NoError(t, os.MkdirAll(dir, 0o755))
+	content := strings.Join(jsonlLines, "\n") + "\n"
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "session.jsonl"), []byte(content), 0o644))
+}
+
+// TestPreviewScrollUsesTranscriptForClaude verifies that scroll mode on a
+// Claude session renders the session's own JSONL transcript instead of the
+// tmux capture (which is structurally empty for in-place repainting agents),
+// and labels the snapshot as a transcript in the footer.
+func TestPreviewScrollUsesTranscriptForClaude(t *testing.T) {
+	tmuxContent := "TMUX PANE CONTENT"
+	setup := setupTestEnvironmentWithProgram(t, liveContentCmdExec(&tmuxContent), "claude")
+	defer setup.cleanupFn()
+
+	writeClaudeTranscript(t, setup.instance.WorkingDir(),
+		`{"type":"user","message":{"role":"user","content":"transcribed user prompt"}}`,
+		`{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"transcribed assistant reply"}]}}`,
+	)
+
+	pane := NewPreviewPane()
+	pane.SetSize(80, 30)
+	require.NoError(t, pane.UpdateContent(setup.instance))
+	require.NoError(t, pane.ScrollUp(setup.instance))
+	require.True(t, pane.isScrolling)
+
+	rendered := pane.String()
+	require.Contains(t, rendered, "❯ transcribed user prompt")
+	require.Contains(t, rendered, "transcribed assistant reply")
+	require.NotContains(t, rendered, tmuxContent, "the transcript must replace the tmux capture")
+	require.Contains(t, rendered, "transcript · ESC", "the footer must label the snapshot as a transcript")
+}
+
+// TestPreviewScrollFallsBackToTmuxForAider locks in the "never worse than
+// today" guarantee: programs without a transcript adapter keep the existing
+// tmux full-history snapshot and footer.
+func TestPreviewScrollFallsBackToTmuxForAider(t *testing.T) {
+	tmuxContent := "AIDER TMUX HISTORY"
+	setup := setupTestEnvironmentWithProgram(t, liveContentCmdExec(&tmuxContent), "aider")
+	defer setup.cleanupFn()
+
+	pane := NewPreviewPane()
+	pane.SetSize(80, 30)
+	require.NoError(t, pane.UpdateContent(setup.instance))
+	require.NoError(t, pane.ScrollUp(setup.instance))
+	require.True(t, pane.isScrolling)
+
+	rendered := pane.String()
+	require.Contains(t, rendered, tmuxContent)
+	require.Contains(t, rendered, "snapshot · ESC", "non-transcript snapshots keep the snapshot footer")
+}
+
+// TestPreviewScrollClaudeWithoutTranscriptFallsBack covers the degraded path
+// for a Claude session whose transcript is missing (e.g. the conversation has
+// not started yet): scroll mode must silently fall back to the tmux capture.
+func TestPreviewScrollClaudeWithoutTranscriptFallsBack(t *testing.T) {
+	tmuxContent := "CLAUDE PANE WITHOUT TRANSCRIPT"
+	setup := setupTestEnvironmentWithProgram(t, liveContentCmdExec(&tmuxContent), "claude")
+	defer setup.cleanupFn()
+
+	pane := NewPreviewPane()
+	pane.SetSize(80, 30)
+	require.NoError(t, pane.UpdateContent(setup.instance))
+	require.NoError(t, pane.ScrollUp(setup.instance))
+	require.True(t, pane.isScrolling)
+
+	rendered := pane.String()
+	require.Contains(t, rendered, tmuxContent)
+	require.Contains(t, rendered, "snapshot · ESC", "a tmux-sourced snapshot keeps the snapshot footer")
 }
