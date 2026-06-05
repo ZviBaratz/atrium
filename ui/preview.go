@@ -35,11 +35,17 @@ func logPreviewFallback(instance *session.Instance, reason string, err error) {
 // previewPaneStyle reads the active theme at render time.
 func previewPaneStyle() lipgloss.Style { return theme.Current().FgStyle() }
 
-// scrollExitFooter is the dim hint shown at the bottom of the scroll viewport.
-// "snapshot" is the important word: entering scroll mode freezes a capture of
-// the pane, so new agent output is invisible until the user leaves.
-func scrollExitFooter() string {
-	return theme.Current().DimStyle().Render("— snapshot · ESC to resume live view")
+// scrollExitFooter is the dim hint shown at the bottom of the scroll viewport,
+// labeled by where the frozen content came from. "snapshot"/"transcript" is
+// the important word: entering scroll mode freezes the content, so new agent
+// output is invisible until the user leaves — and a transcript is the agent's
+// conversation log, not the pane, so it should say so.
+func scrollExitFooter(source session.ScrollbackSource) string {
+	label := "snapshot"
+	if source == session.ScrollbackTranscript {
+		label = "transcript"
+	}
+	return theme.Current().DimStyle().Render("— " + label + " · ESC to resume live view")
 }
 
 // PreviewPane renders the selected instance's captured tmux pane content, with
@@ -134,13 +140,10 @@ func (p *PreviewPane) UpdateContent(instance *session.Instance) error {
 	// Scroll mode: capture full scrollback into the viewport once.
 	if p.isScrolling {
 		if p.viewport.Height > 0 && len(p.viewport.View()) == 0 {
-			content, err := instance.PreviewFullHistory()
-			if err != nil {
+			if err := p.fillScrollViewport(instance); err != nil {
 				logPreviewFallback(instance, "scroll capture error", err)
 				return err
 			}
-			content = theme.SanitizeWidth(content)
-			p.viewport.SetContent(lipgloss.JoinVertical(lipgloss.Left, content, scrollExitFooter()))
 		}
 		return nil
 	}
@@ -260,17 +263,11 @@ func (p *PreviewPane) ScrollUp(instance *session.Instance) error {
 	}
 
 	if !p.isScrolling {
-		// Entering scroll mode - capture entire pane content including scrollback history
-		content, err := instance.PreviewFullHistory()
-		if err != nil {
+		// Entering scroll mode - freeze the best available scrollback (the
+		// agent's transcript when supported, else the full tmux history).
+		if err := p.fillScrollViewport(instance); err != nil {
 			return err
 		}
-
-		// Set content in the viewport
-		footer := scrollExitFooter()
-
-		contentWithFooter := lipgloss.JoinVertical(lipgloss.Left, content, footer)
-		p.viewport.SetContent(contentWithFooter)
 
 		// Position the viewport at the bottom initially
 		p.viewport.GotoBottom()
@@ -301,6 +298,22 @@ func (p *PreviewPane) ScrollDown(instance *session.Instance) error {
 		return p.ResetToNormalMode(instance)
 	}
 	p.viewport.LineDown(1)
+	return nil
+}
+
+// fillScrollViewport loads the instance's scrollback into the viewport with
+// the source-labeled exit footer. Both scroll-mode fill paths (ScrollUp entry
+// and UpdateContent's lazy refill) go through here so they can never disagree
+// on source, sanitization, or footer.
+func (p *PreviewPane) fillScrollViewport(instance *session.Instance) error {
+	content, source, err := instance.ScrollbackContent(p.width)
+	if err != nil {
+		return err
+	}
+	// Untrusted agent output: decompose font-dependent emoji clusters so the
+	// laid-out width matches what the terminal renders (see theme.SanitizeWidth).
+	content = theme.SanitizeWidth(content)
+	p.viewport.SetContent(lipgloss.JoinVertical(lipgloss.Left, content, scrollExitFooter(source)))
 	return nil
 }
 
