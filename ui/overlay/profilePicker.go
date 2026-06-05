@@ -61,8 +61,13 @@ func (pp *ProfilePicker) HandleKeyPress(msg tea.KeyMsg) bool {
 	return false
 }
 
-// GetSelectedProfile returns the currently selected profile.
+// GetSelectedProfile returns the currently selected profile, or the zero
+// Profile when the picker holds none (callers construct pickers only for
+// non-empty profile lists, but a safety guard must not itself panic).
 func (pp *ProfilePicker) GetSelectedProfile() config.Profile {
+	if len(pp.profiles) == 0 {
+		return config.Profile{}
+	}
 	if pp.cursor < 0 || pp.cursor >= len(pp.profiles) {
 		return pp.profiles[0]
 	}
