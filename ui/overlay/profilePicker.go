@@ -2,6 +2,7 @@ package overlay
 
 import (
 	"github.com/ZviBaratz/atrium/config"
+	"github.com/ZviBaratz/atrium/session/agent"
 	"github.com/ZviBaratz/atrium/ui/theme"
 	"strings"
 
@@ -92,12 +93,16 @@ func (pp *ProfilePicker) Render() string {
 	s.WriteString("\n\n")
 
 	for i, p := range pp.profiles {
+		// Prefix each option with its agent's identity glyph (same glyph the
+		// session list shows) so picking among same-named profiles is visual.
+		glyph, _ := theme.Current().AgentGlyph(string(agent.Resolve(p.Program).Key))
+		label := " " + glyph + " " + p.Name + " "
 		if i == pp.cursor && pp.focused {
-			s.WriteString(ppSelectedStyle().Render(" " + p.Name + " "))
+			s.WriteString(ppSelectedStyle().Render(label))
 		} else if i == pp.cursor {
-			s.WriteString(" " + p.Name + " ")
+			s.WriteString(label)
 		} else {
-			s.WriteString(ppDimStyle().Render(" " + p.Name + " "))
+			s.WriteString(ppDimStyle().Render(label))
 		}
 		if i < len(pp.profiles)-1 {
 			s.WriteString(ppDimStyle().Render(" | "))

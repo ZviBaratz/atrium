@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/ZviBaratz/atrium/session"
+	"github.com/ZviBaratz/atrium/session/agent"
 	"github.com/ZviBaratz/atrium/ui/theme"
 )
 
@@ -47,24 +48,27 @@ func barState(s session.Status, th *theme.Theme) (glyph, color string) {
 // ComposeSessionContext renders the two strings pushed to a session's tmux user
 // options for the context bar:
 //   - name: the plain display name (drives the terminal title via set-titles-string)
-//   - left: the styled header — "<glyph> <repo> · <name>"
+//   - left: the styled header — "<agent> <glyph> <repo> · <name>"
 //
 // The header rides a slate background band (status-style, set in the managed config),
-// where dim greys wash out — so hierarchy comes from weight, not color: the glyph
-// carries the state color (the only state signal), the repo + separator ride the
-// bar's default foreground, and the name is bold so the eye lands on it. Branch and
-// status word are intentionally omitted: the branch duplicates the name in practice,
-// and the glyph color already conveys state. repo is empty for direct-mode (non-git)
-// sessions, which collapse to "<glyph> <name>".
+// where dim greys wash out — so hierarchy comes from weight, not color: the agent
+// glyph carries its brand accent (which agent this is), the state glyph carries the
+// state color (the only state signal), the repo + separator ride the bar's default
+// foreground, and the name is bold so the eye lands on it. Branch and status word are
+// intentionally omitted: the branch duplicates the name in practice, and the glyph
+// color already conveys state. repo is empty for direct-mode (non-git) sessions,
+// which collapse to "<agent> <glyph> <name>".
 func ComposeSessionContext(current *session.Instance, repo string) (name, left string) {
 	th := theme.Current()
 	name = current.DisplayName()
 
+	agentIcon, agentColor := th.AgentGlyph(string(agent.Resolve(current.Program).Key))
 	glyph, color := barState(current.GetStatus(), th)
 
-	// #[default] after the glyph resets fg AND attributes back to the bar's
+	// #[default] after each glyph resets fg AND attributes back to the bar's
 	// status-style, so repo/separator render in the bar's bright default foreground.
 	var b strings.Builder
+	fmt.Fprintf(&b, "#[fg=%s]%s#[default] ", string(agentColor), agentIcon)
 	fmt.Fprintf(&b, "#[fg=%s]%s#[default]", color, glyph)
 	if repo != "" {
 		fmt.Fprintf(&b, " %s ·", tmuxEsc(repo))
