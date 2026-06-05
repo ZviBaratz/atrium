@@ -13,6 +13,7 @@ import (
 	"github.com/ZviBaratz/atrium/cmd"
 	"github.com/ZviBaratz/atrium/config"
 	"github.com/ZviBaratz/atrium/log"
+	"github.com/ZviBaratz/atrium/session/agent"
 	"io"
 	"math"
 	"os"
@@ -23,14 +24,6 @@ import (
 	"time"
 
 	"github.com/creack/pty"
-)
-
-// Names of known agent programs, used to select program-specific behavior
-// (busy markers, prompt detection, trust-prompt handling).
-const (
-	ProgramClaude = "claude"
-	ProgramAider  = "aider"
-	ProgramGemini = "gemini"
 )
 
 // PaneState is the classification of a tmux pane derived from its content. Unlike a
@@ -50,123 +43,13 @@ const (
 	PaneIdle
 )
 
-// busyMarkers returns substrings that, when present in the pane, prove the agent is
-// actively working. The marker is a level signal: it stays on screen for the whole turn
-// (including silent tool calls), and its own ticking elapsed-time counter no longer
-// matters because we test for presence, not byte-equality. Programs without a known
-// marker fall back to content-change detection in Poll. Extend the slice when an agent's
-// UI changes; the failure mode of a stale marker is a visible "always idle", not flicker.
-func busyMarkers(program string) []string {
-	if isClaude(program) {
-		return []string{"esc to interrupt"}
-	}
-	return nil
-}
-
-// markerWorking reports whether a busy marker for this program is present in the live footer
-// of content. The match is confined to the footer (see footerRegion) rather than the whole
-// pane, which would also match the scrolled-back transcript. Returns false for programs
-// without a known marker.
+// markerWorking reports whether this session's agent shows its busy marker in the live
+// marker region of content. The match is confined per the adapter's MarkerWindow (the
+// footer below the input box for claude, a bottom window for agents whose status row
+// renders above it) rather than the whole pane, which would also match the scrolled-back
+// transcript. Returns false for programs without a known marker.
 func (t *Session) markerWorking(content string) bool {
-	region := footerRegion(content)
-	for _, m := range busyMarkers(t.program) {
-		if strings.Contains(region, m) {
-			return true
-		}
-	}
-	return false
-}
-
-// isHorizontalRule reports whether line is a box-drawing horizontal border — the top or
-// bottom edge of Claude's input box. Such a line is made only of horizontal dashes, box
-// corners/sides, and padding, and contains a real run of dashes (so a prose line with a
-// stray "│" doesn't qualify). It anchors the live footer in footerRegion.
-func isHorizontalRule(line string) bool {
-	line = strings.TrimSpace(line)
-	if line == "" {
-		return false
-	}
-	dashes := 0
-	for _, r := range line {
-		switch r {
-		case '─':
-			dashes++
-		case '╭', '╮', '╰', '╯', '│', '┌', '┐', '└', '┘', '├', '┤', ' ':
-			// box corners/sides and interior padding are allowed
-		default:
-			return false
-		}
-	}
-	return dashes >= 3
-}
-
-// footerRegion returns the live footer of the pane: the lines below the input box's bottom
-// border. Claude renders its status hints and the variable-height agent-team selector (one
-// line per teammate) there, and the busy marker sits among them — so anchoring to the box
-// border, rather than a fixed bottom-N window, keeps the marker detectable no matter how many
-// teammates the selector lists. Everything below the last box border is pure live chrome, so
-// this still excludes the scrolled-back transcript above the box. When the pane has no border
-// — a minimal footer, a non-claude agent, or a degenerate capture — it falls back to the last
-// workChromeLines non-empty lines, preserving the previous behavior.
-func footerRegion(content string) string {
-	lines := strings.Split(content, "\n")
-	lastRule := -1
-	for i, line := range lines {
-		if isHorizontalRule(line) {
-			lastRule = i
-		}
-	}
-	if lastRule < 0 {
-		return liveChromeLines(content, workChromeLines)
-	}
-	return strings.Join(lines[lastRule+1:], "\n")
-}
-
-// continueProgram returns the launch command that resumes the prior conversation for
-// claude, and the unchanged program for every other agent. Used only when resurrecting a
-// session whose tmux pane has died, so the relaunched claude picks up where it left off
-// instead of starting blank. tmux word-splits the trailing command string itself (the
-// same reason "aider --model x" works), so appending " --continue" to the single program
-// argv element is sufficient — no shell wrapping. The claude predicate is the same
-// wrapper-aware isClaude check used by busyMarkers/detectPrompt, so an absolute path like
-// /usr/local/bin/claude is recognized and the flag lands after it.
-func continueProgram(program string) string {
-	if isClaude(program) {
-		return program + " --continue"
-	}
-	return program
-}
-
-// detectPrompt reports whether region (the bottom chrome of the pane) shows a prompt that
-// blocks on the user's answer. Claude has two shapes: the tool-permission dialog, and any
-// interactive selection (AskUserQuestion, plan approval, etc.). Matching is done against the
-// flattened chrome (newlines collapsed to spaces) so a footer or sentence hard-wrapped at a
-// narrow pane width is still recognized. The selection footer requires its co-occurring tokens
-// ("Esc to cancel" + navigate/select) within a tight footer window, so prose merely mentioning
-// "Esc to cancel" higher in the chrome cannot trip it.
-//
-// region is already the promptChromeLines window (see Poll); the inner flattenChrome calls
-// re-window it, which stays correct only while footerChromeLines <= promptChromeLines so the
-// footer tokens remain reachable within region.
-func detectPrompt(program, region string) bool {
-	switch {
-	case isClaude(program):
-		if strings.Contains(flattenChrome(region, promptChromeLines),
-			"No, and tell Claude what to do differently") {
-			return true
-		}
-		footer := flattenChrome(region, footerChromeLines)
-		if strings.Contains(footer, "Esc to cancel") &&
-			(strings.Contains(footer, "to navigate") || strings.Contains(footer, "to select")) {
-			return true
-		}
-		return false
-	case strings.HasPrefix(program, ProgramAider):
-		return strings.Contains(flattenChrome(region, promptChromeLines), "(Y)es/(N)o/(D)on't ask again")
-	case strings.HasPrefix(program, ProgramGemini):
-		return strings.Contains(flattenChrome(region, promptChromeLines), "Yes, allow once")
-	}
-	return false
+	return t.adapter.HasBusyMarker(content)
 }
 
 // DetachReason explains why an Attach loop ended so the caller (app.go's
@@ -224,6 +107,9 @@ type Session struct {
 	// auto-renamed to the running program.
 	windowName string
 	program    string
+	// adapter holds the per-agent heuristics resolved once from program at
+	// construction; never nil (unknown programs get agent.Generic).
+	adapter *agent.Adapter
 	// ptyFactory is used to create a PTY for the tmux session.
 	ptyFactory PtyFactory
 	// cmdExec is used to execute commands in the tmux session.
@@ -300,49 +186,6 @@ func cleanForDetection(content string) string {
 	return strings.Join(lines, "\n")
 }
 
-// liveChromeLines returns the last n non-empty lines of the pane — the region where
-// Claude renders its live status bar, prompt, and input box. Marker detection must be
-// confined here: capture-pane returns the whole visible pane including the scrolled-back
-// transcript, so the same strings ("esc to interrupt", a prompt footer) can appear in the
-// conversation body, and only their presence in the bottom chrome reflects the live state.
-func liveChromeLines(content string, n int) string {
-	lines := strings.Split(content, "\n")
-	var kept []string
-	for i := len(lines) - 1; i >= 0 && len(kept) < n; i-- {
-		if strings.TrimSpace(lines[i]) != "" {
-			kept = append(kept, lines[i])
-		}
-	}
-	// kept is collected bottom-up; reverse to natural top-to-bottom reading order so callers
-	// that reconstruct wrapped multi-line text (flattenChrome) join the lines in the order
-	// they were rendered. Substring callers (busy markers) are order-independent.
-	for l, r := 0, len(kept)-1; l < r; l, r = l+1, r-1 {
-		kept[l], kept[r] = kept[r], kept[l]
-	}
-	return strings.Join(kept, "\n")
-}
-
-// flattenChrome collapses the last n non-empty lines into one whitespace-normalized line.
-// A prompt's key-hint footer ("Enter to select · … · Esc to cancel") and the permission
-// dialog's decline option wrap across physical lines at a narrow pane width; flattening
-// (whiteSpaceRegex already spans newlines) reconstructs them so the substring/token matches
-// survive the wrap instead of silently leaving a waiting session classified as idle.
-func flattenChrome(content string, n int) string {
-	return whiteSpaceRegex.ReplaceAllString(liveChromeLines(content, n), " ")
-}
-
-// Window sizes for marker detection within the bottom chrome. The working status bar is
-// the last line, so a tight window is safest; a prompt block (question + options + footer,
-// possibly with a todo tracker below) needs a taller one.
-const (
-	workChromeLines   = 3
-	promptChromeLines = 15
-	// footerChromeLines is the tight window for a prompt's key-hint footer. The footer wraps
-	// across at most a couple of physical lines at a narrow pane width, so a small window
-	// reconstructs it while keeping prose higher in the chrome from tripping detection.
-	footerChromeLines = 3
-)
-
 // toSanitizedName converts an instance title into the managed tmux session name:
 // whitespace stripped, dots replaced (tmux would do it anyway), and the active
 // brand prefix (see Prefix) applied. It produces the value held in Session.sanitizedName.
@@ -370,6 +213,7 @@ func newSession(ctx context.Context, name string, program string, ptyFactory Pty
 		sanitizedName: toSanitizedName(name),
 		windowName:    name,
 		program:       program,
+		adapter:       agent.Resolve(program),
 		ptyFactory:    ptyFactory,
 		cmdExec:       cmdExec,
 		captureErrLog: log.NewEvery(60 * time.Second),
@@ -400,12 +244,30 @@ func (t *Session) Start(workDir string) error {
 }
 
 // StartContinue starts the session resuming the prior conversation when the program
-// supports it (claude --continue). It is used only on resurrection — the agent process
-// died and we are relaunching it — never on PTY reattach (Restore), where the process is
-// still alive. The continue command is computed transiently; t.program, the value
-// persisted via Instance, is never mutated.
+// supports it (claude --continue, codex resume --last, gemini --resume latest). It is
+// used only on resurrection — the agent process died and we are relaunching it — never
+// on PTY reattach (Restore), where the process is still alive. The continue command is
+// computed transiently; t.program, the value persisted via Instance, is never mutated.
 func (t *Session) StartContinue(workDir string) error {
-	return t.start(workDir, continueProgram(t.program))
+	return t.start(workDir, t.resumeCommand())
+}
+
+// resumeCommand returns the launch command that resumes the prior conversation, or the
+// unchanged program when the agent has no resume support. tmux word-splits the trailing
+// command string itself (the same reason "aider --model x" works), so the adapter's
+// rewrite of the single program argv element is sufficient — no shell wrapping. When the
+// adapter requires a capability probe (gemini's --resume is recent), an installed binary
+// that predates the flag relaunches blank instead of failing on an unknown flag.
+func (t *Session) resumeCommand() string {
+	a := t.adapter
+	if a.Resume == nil {
+		return t.program
+	}
+	if a.ResumeProbe != "" && !binHelpContains(string(a.Key), a.ResumeProbe) {
+		log.InfoLog.Printf("resume disabled for %s: %q not in %q --help", t.sanitizedName, a.ResumeProbe, a.Key)
+		return t.program
+	}
+	return a.Resume(t.program)
 }
 
 // start creates a new detached tmux session running program in workDir, then attaches.
@@ -485,37 +347,28 @@ func (t *Session) start(workDir string, program string) error {
 	return nil
 }
 
-// containsStartupGate reports whether the pane is showing a one-time setup/trust
-// gate that intercepts keystrokes (claude's trust-folder or new-MCP-server screen,
-// or the non-claude documentation-url screen). Keystrokes sent while a gate is up
-// are consumed by the gate rather than the agent's input box.
-func containsStartupGate(program, content string) bool {
-	if isClaude(program) {
-		return strings.Contains(content, "Do you trust the files in this folder?") ||
-			strings.Contains(content, "new MCP server")
-	}
-	return strings.Contains(content, "Open documentation url for more info")
-}
-
-// CheckAndHandleTrustPrompt checks the pane content once for a trust prompt and dismisses it if found.
-// Returns true if the prompt was found and handled.
+// CheckAndHandleTrustPrompt checks the pane content once for a startup gate (a trust or
+// setup screen that consumes keystrokes) and dismisses it with the adapter's keystroke if
+// found. Returns true if a gate was found and handled.
 func (t *Session) CheckAndHandleTrustPrompt() bool {
 	content, err := t.CapturePaneContent()
 	if err != nil {
 		return false
 	}
 
-	if !containsStartupGate(t.program, content) {
+	gate, ok := t.adapter.GateUp(content)
+	if !ok {
 		return false
 	}
 
-	if isClaude(t.program) {
-		if err := t.TapEnter(); err != nil {
-			log.ErrorLog.Printf("could not tap enter on trust/MCP screen: %v", err)
-		}
-	} else {
+	switch gate.Dismiss {
+	case agent.DismissDAndEnter:
 		if err := t.TapDAndEnter(); err != nil {
-			log.ErrorLog.Printf("could not tap enter on trust screen: %v", err)
+			log.ErrorLog.Printf("could not tap D+enter on startup gate: %v", err)
+		}
+	default:
+		if err := t.TapEnter(); err != nil {
+			log.ErrorLog.Printf("could not tap enter on startup gate: %v", err)
 		}
 	}
 	return true
@@ -532,7 +385,8 @@ func (t *Session) IsReadyForPrompt() bool {
 	if err != nil || strings.TrimSpace(content) == "" {
 		return false
 	}
-	return !containsStartupGate(t.program, content)
+	_, gated := t.adapter.GateUp(content)
+	return !gated
 }
 
 // Restore attaches to an existing session and restores the window size
@@ -681,21 +535,21 @@ func (t *Session) Poll() PaneState {
 
 	// A prompt awaiting an answer takes precedence over "working": when an agent stops to
 	// ask, it is not processing, and this is the state a caller most needs to surface.
-	// Match only within the bottom chrome so the same strings in the scrolled-back
+	// Matchers look only within the bottom chrome so the same strings in the scrolled-back
 	// transcript (e.g. the agent discussing these UIs) don't false-trigger.
-	if detectPrompt(t.program, liveChromeLines(content, promptChromeLines)) {
+	if matcher, ok := t.adapter.DetectPrompt(content); ok {
 		t.monitor.idleStreak = 0
 		t.monitor.lastReported = PanePrompt
-		t.monitor.logSignal(name, "prompt → needs-input")
+		t.monitor.logSignal(name, "prompt:"+matcher+" → needs-input")
 		return PanePrompt
 	}
 
 	// A live busy marker is the one positive proof of work, and the only signal that raises
-	// working. Anchoring it to the footer (markerWorking → footerRegion) keeps it reliable
-	// even under a multi-agent team selector. Raising only on the marker is what kills the
+	// working. Confining it to the adapter's marker region keeps it reliable even under a
+	// multi-agent team selector. Raising only on the marker is what kills the
 	// flicker: a stuck state file or an idle repaint can never flip the indicator back to
 	// working once it has settled to idle — only the marker returning can.
-	hasMarker := busyMarkers(t.program) != nil
+	hasMarker := len(t.adapter.BusyMarkers) > 0
 	if hasMarker && t.markerWorking(content) {
 		t.monitor.idleStreak = 0
 		t.monitor.lastReported = PaneWorking
@@ -704,7 +558,7 @@ func (t *Session) Poll() PaneState {
 	}
 
 	if hasMarker {
-		// Claude: the marker is absent. The hook state file is authoritative for *idle*: a
+		// The marker is absent. The hook state file is authoritative for *idle*: a
 		// clean turn-end (Stop) or an API-error turn-end (StopFailure) latches "ready", so we
 		// commit idle at once. Any other value — still "working", or no file yet — is NOT
 		// trusted to hold working (that latch caused the oscillation); instead the
@@ -730,7 +584,7 @@ func (t *Session) Poll() PaneState {
 		return PaneIdle
 	}
 
-	// No known marker for this program (aider/gemini): fall back to content-change detection
+	// No known marker for this program (aider, unknown agents): fall back to content-change detection
 	// with the settle/cap hysteresis. A change reads as working; once the pane goes quiet it
 	// commits idle after idleSettleTicks, or after the idleConfirmTicks cap if it keeps
 	// churning without a marker we can model.
@@ -787,14 +641,14 @@ func (t *Session) PollNow() PaneState {
 	// Log via logSignal (transition-deduped, shared with Poll) so a detach that doesn't change
 	// the state stays silent and only a real change emits one line.
 	name := t.snapshotName()
-	if detectPrompt(t.program, liveChromeLines(content, promptChromeLines)) {
+	if matcher, ok := t.adapter.DetectPrompt(content); ok {
 		t.monitor.lastReported = PanePrompt
-		t.monitor.logSignal(name, "prompt → needs-input")
+		t.monitor.logSignal(name, "prompt:"+matcher+" → needs-input")
 		return PanePrompt
 	}
 	// A present busy marker positively proves work; the hook state file is the next-best
 	// authority (and is the only signal during a marker-absent between-turns gap).
-	if busyMarkers(t.program) != nil && t.markerWorking(content) {
+	if t.markerWorking(content) {
 		t.monitor.lastReported = PaneWorking
 		t.monitor.logSignal(name, "marker → working")
 		return PaneWorking
@@ -809,12 +663,12 @@ func (t *Session) PollNow() PaneState {
 		t.monitor.logSignal(name, "hook ready → idle")
 		return PaneIdle
 	}
-	if busyMarkers(t.program) == nil {
+	if len(t.adapter.BusyMarkers) == 0 {
 		// No level signal and no hook file; defer to the tick loop's content-change path.
 		return PaneUnknown
 	}
-	// Claude with no hook file yet (e.g. before the first event): the marker is absent here,
-	// so face value is idle.
+	// A marker-bearing agent with no hook file yet (e.g. before the first event): the
+	// marker is absent here, so face value is idle.
 	t.monitor.lastReported = PaneIdle
 	return PaneIdle
 }

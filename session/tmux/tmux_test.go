@@ -106,9 +106,10 @@ func TestIsReadyForPrompt(t *testing.T) {
 	}
 }
 
-// Regression: after extracting containsStartupGate (shared by CheckAndHandleTrustPrompt
-// and IsReadyForPrompt), it must still recognize each gate string.
-func TestContainsStartupGate(t *testing.T) {
+// Regression: the per-agent startup gates (now adapter data, shared by
+// CheckAndHandleTrustPrompt and IsReadyForPrompt) must still recognize each gate string —
+// and only for their own agent, so a gate is never dismissed with another agent's key.
+func TestStartupGates(t *testing.T) {
 	cases := []struct {
 		name    string
 		program string
@@ -117,15 +118,20 @@ func TestContainsStartupGate(t *testing.T) {
 	}{
 		{"claude trust folder", "claude", "Do you trust the files in this folder?", true},
 		{"claude new MCP server", "claude", "A new MCP server was found", true},
-		{"non-claude doc url", "aider", "Open documentation url for more info", true},
+		{"aider doc url", "aider", "Open documentation url for more info", true},
 		{"claude idle box has no gate", "claude", "│ > │  ? for shortcuts", false},
-		{"claude ignores non-claude gate string", "claude", "Open documentation url for more info", false},
-		{"non-claude ignores claude gate string", "aider", "Do you trust the files in this folder?", false},
+		{"claude ignores aider gate string", "claude", "Open documentation url for more info", false},
+		{"aider ignores claude gate string", "aider", "Do you trust the files in this folder?", false},
+		// Pre-adapter, every non-claude program matched aider's documentation gate and
+		// received its stray 'D' keystroke; an unknown agent must match nothing.
+		{"unknown agent has no gates", "someagent", "Open documentation url for more info", false},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			require.Equal(t, tc.want, containsStartupGate(tc.program, tc.content))
+			s := newSession(context.Background(), "gate-test", tc.program, NewMockPtyFactory(t), cmd_test.MockCmdExec{})
+			_, ok := s.adapter.GateUp(tc.content)
+			require.Equal(t, tc.want, ok)
 		})
 	}
 }
@@ -618,7 +624,14 @@ func TestStartTimeoutErrorOmitsNilWrap(t *testing.T) {
 	require.NotContains(t, err.Error(), "%!w", "a nil error must never be wrapped")
 }
 
-func TestContinueProgram(t *testing.T) {
+func TestResumeCommand(t *testing.T) {
+	// Canned --help outputs so the capability probes never exec a real binary in tests.
+	helpProbeOverride = map[string]string{
+		"gemini": "-r, --resume   Resume a previous session",
+		"codex":  "  resume    Resume a previous interactive session",
+	}
+	defer func() { helpProbeOverride = nil }()
+
 	cases := []struct {
 		name    string
 		program string
@@ -627,7 +640,11 @@ func TestContinueProgram(t *testing.T) {
 		{"bare claude gets --continue", "claude", "claude --continue"},
 		{"absolute claude path gets --continue", "/usr/local/bin/claude", "/usr/local/bin/claude --continue"},
 		{"aider unchanged", "aider --model x", "aider --model x"},
-		{"gemini unchanged", "gemini", "gemini"},
+		// Resume parity: gemini and codex now relaunch into their prior conversation.
+		{"gemini gets --resume latest", "gemini", "gemini --resume latest"},
+		{"codex gets resume --last", "codex", "codex resume --last"},
+		// The codex subcommand cannot be spliced into an argv with flags; relaunch blank.
+		{"codex with flags unchanged", "codex --model o3", "codex --model o3"},
 		// Detection is on the binary basename containing "claude", so a launcher wrapper that
 		// exec's claude (the default_program many setups use) and a flag-bearing claude are
 		// both recognized — the wrapper forwards the appended flag through to claude.
@@ -636,12 +653,24 @@ func TestContinueProgram(t *testing.T) {
 		{"claude with trailing flags gets --continue", "claude --model opus", "claude --model opus --continue"},
 		// A non-claude binary under a claude-containing directory is NOT matched (basename wins).
 		{"non-claude binary in claude dir unchanged", "/home/u/.claude-squad/bin/aider", "/home/u/.claude-squad/bin/aider"},
+		{"unknown agent unchanged", "someagent", "someagent"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			require.Equal(t, tc.want, continueProgram(tc.program))
+			s := newSession(context.Background(), "resume-test", tc.program, NewMockPtyFactory(t), cmd_test.MockCmdExec{})
+			require.Equal(t, tc.want, s.resumeCommand())
 		})
 	}
+}
+
+// An installed binary that predates its resume flag (probe finds no support) must
+// relaunch blank rather than fail on an unknown flag.
+func TestResumeCommandProbeGate(t *testing.T) {
+	helpProbeOverride = map[string]string{"gemini": "old gemini help with no such flag"}
+	defer func() { helpProbeOverride = nil }()
+
+	s := newSession(context.Background(), "resume-test", "gemini", NewMockPtyFactory(t), cmd_test.MockCmdExec{})
+	require.Equal(t, "gemini", s.resumeCommand())
 }
 
 // startMockExec mirrors TestStartSession's executor: the first has-session check

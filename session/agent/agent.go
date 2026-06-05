@@ -17,6 +17,7 @@ import "strings"
 // across releases (unlike DisplayName) and safe to key UI glyphs or config on.
 type Key string
 
+// The canonical keys, one per registered adapter plus the unknown-agent fallback.
 const (
 	KeyClaude  Key = "claude"
 	KeyCodex   Key = "codex"
