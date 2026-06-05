@@ -97,20 +97,17 @@ type Config struct {
 	// false restores the chrome-free interface, where the bar appears only for
 	// inline interactions that need it (naming, filtering, progress).
 	HintBar *bool `json:"hint_bar,omitempty"`
-	// MaxSessions caps how many sessions can exist at once; creating one beyond
-	// it is rejected with an error in the UI. nil (or a non-positive value)
-	// means use DefaultMaxSessions, so older config files keep the old cap.
+	// MaxSessions is an opt-in cap on how many sessions can exist at once;
+	// creating one beyond it is rejected with an error in the UI. nil (or a
+	// non-positive value) means unlimited — there is no cap by default.
 	MaxSessions *int `json:"max_sessions,omitempty"`
 }
 
-// DefaultMaxSessions is the session cap used when MaxSessions is unset.
-const DefaultMaxSessions = 10
-
-// GetMaxSessions returns the configured session cap, falling back to
-// DefaultMaxSessions for a nil or non-positive value.
+// GetMaxSessions returns the configured session cap, or 0 (no cap) for a nil
+// or non-positive value. Callers must treat 0 as unlimited.
 func (c *Config) GetMaxSessions() int {
 	if c.MaxSessions == nil || *c.MaxSessions < 1 {
-		return DefaultMaxSessions
+		return 0
 	}
 	return *c.MaxSessions
 }
@@ -186,7 +183,6 @@ func DefaultConfig() *Config {
 	killDoubleTap := true
 	sessionContextBar := true
 	hintBar := true
-	maxSessions := DefaultMaxSessions
 	return &Config{
 		DefaultProgram:     defaultProgram,
 		AutoYes:            false,
@@ -204,7 +200,6 @@ func DefaultConfig() *Config {
 		}(),
 		AutoAttach:           &autoAttach,
 		KillDoubleTapConfirm: &killDoubleTap,
-		MaxSessions:          &maxSessions,
 	}
 }
 

@@ -1787,7 +1787,7 @@ func (m *home) newSessionFormOverlay() *overlay.TextInputOverlay {
 // background fetch kicked off so branches are current by the time the user
 // reaches the branch field.
 func (m *home) openCreateForm(focusTitle bool) tea.Cmd {
-	if limit := m.appConfig.GetMaxSessions(); m.list.NumInstances() >= limit {
+	if limit := m.appConfig.GetMaxSessions(); limit > 0 && m.list.NumInstances() >= limit {
 		return m.handleError(
 			fmt.Errorf("you can't create more than %d sessions (max_sessions in config.json)", limit))
 	}
