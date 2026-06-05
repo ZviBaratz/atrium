@@ -24,7 +24,7 @@ func TestViewFitsTerminalBounds(t *testing.T) {
 			if withOverlay {
 				home.newSessionPath = t.TempDir()
 				home.state = statePrompt
-				home.textInputOverlay = home.newSessionFormOverlay()
+				home.textInputOverlay, _ = home.newSessionFormOverlay()
 			}
 			home.updateHandleWindowSizeEvent(tea.WindowSizeMsg{Width: w, Height: h})
 

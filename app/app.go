@@ -122,7 +122,7 @@ type home struct {
 	// fetchedPaths tracks which repo paths have had a background `git fetch` during the
 	// current new-session form, so each confirmed-git target is fetched at most once per
 	// form-session (re-pointing the picker back and forth doesn't spam the network).
-	// Reset in openCreateForm, seeded with the initial target.
+	// Reset in openCreateForm, seeded with the initial target when it is a git repo.
 	fetchedPaths map[string]bool
 
 	// welcomeChecked guards the one-time first-launch welcome so it is only
@@ -1823,23 +1823,25 @@ func (m *home) handleInfoState(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 // newSessionFormOverlay builds the unified new-session form (title, project, optional
-// profile, branch, prompt) shared by both creation flows.
-func (m *home) newSessionFormOverlay() *overlay.TextInputOverlay {
+// profile, branch, prompt) shared by both creation flows. It also reports whether the
+// seeded target is a git repo, so openCreateForm can gate the open-time branch plumbing
+// without re-running the git checks.
+func (m *home) newSessionFormOverlay() (_ *overlay.TextInputOverlay, isGit bool) {
 	ov := overlay.NewSessionCreateOverlay(m.appConfig.GetProfiles(), m.candidateRepoPaths())
 	// Seed the initial validity so the picker can flag the default target before the user
 	// navigates: a non-git default directory shows the direct-session hint (and an inert
 	// branch section), not a block.
 	valid, direct, head := targetValidity(m.ctx, m.newSessionPath)
 	ov.SetTargetValidity(valid, direct, head)
-	return ov
+	return ov, valid && !direct
 }
 
 // openCreateForm opens the unified new-session form — the single creation flow
 // behind both `n` (focusTitle, for "type a name and go") and `N` (project picker
 // first). The session itself is not created (and no list row appears) until the
-// form is submitted. The contextual target repo is derived up front and a
-// background fetch kicked off so branches are current by the time the user
-// reaches the branch field.
+// form is submitted. The contextual target is derived up front and, when it is a
+// git repo, a background fetch kicked off so branches are current by the time the
+// user reaches the branch field.
 func (m *home) openCreateForm(focusTitle bool) tea.Cmd {
 	if limit := m.appConfig.GetMaxSessions(); m.list.NumInstances() >= limit {
 		return m.handleError(
@@ -1848,20 +1850,28 @@ func (m *home) openCreateForm(focusTitle bool) tea.Cmd {
 
 	m.newSessionPath = m.defaultNewSessionPath()
 	target := m.newSessionPath
-	// Fresh form-session: the initial target's fetch starts below, every other candidate
-	// is fetched when (and if) it is confirmed as a git target while selected.
-	m.fetchedPaths = map[string]bool{target: true}
-	fetchCmd := m.runBranchFetch(target)
 
 	m.state = statePrompt
-	m.textInputOverlay = m.newSessionFormOverlay()
+	ov, isGit := m.newSessionFormOverlay()
+	m.textInputOverlay = ov
 	if focusTitle {
 		m.textInputOverlay.FocusTitle()
 	}
-	// Trigger the initial branch search (no debounce, version 0).
-	initialSearch := m.runBranchSearch("", m.textInputOverlay.BranchFilterVersion())
 
-	return tea.Batch(tea.WindowSize(), fetchCmd, initialSearch)
+	// Branch plumbing only applies to a git target: seed the fetched-once set and kick
+	// the background fetch plus the initial (undebounced) branch search. A non-git
+	// target's branch section is inert, so there is nothing to fetch or list — and a
+	// later path change onto a git repo triggers its own verdict-driven fetch (every
+	// other candidate is fetched when, and if, it is confirmed as git while selected).
+	m.fetchedPaths = map[string]bool{}
+	cmds := []tea.Cmd{tea.WindowSize()}
+	if isGit {
+		m.fetchedPaths[target] = true
+		cmds = append(cmds,
+			m.runBranchFetch(target),
+			m.runBranchSearch("", m.textInputOverlay.BranchFilterVersion()))
+	}
+	return tea.Batch(cmds...)
 }
 
 // createSessionFromForm validates the submitted new-session form, creates the session,

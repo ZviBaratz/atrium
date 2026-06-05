@@ -92,6 +92,20 @@ func TestBranchPicker_SetErrorClearsLoadingAndShowsHint(t *testing.T) {
 	assert.Contains(t, out, "couldn't list branches")
 }
 
+// The error hint must survive losing focus: a search that fails while (or before) the
+// picker is blurred would otherwise leave the unfocused header showing a normal selection
+// with no sign anything went wrong, and the height must stay at the unfocused shape.
+func TestBranchPicker_ErrorHintVisibleWhenUnfocused(t *testing.T) {
+	bp := NewBranchPicker()
+	bp.SetResults(nil, bp.GetFilterVersion())
+	unfocusedHeight := strings.Count(bp.Render(), "\n")
+
+	bp.SetError(bp.Invalidate())
+	out := bp.Render()
+	assert.Contains(t, out, "couldn't list branches", "the unfocused header must surface the error")
+	assert.Equal(t, unfocusedHeight, strings.Count(out, "\n"), "the hint must not change the picker height")
+}
+
 // SetError is version-checked like SetResults: a stale error (for an abandoned search)
 // must not clobber the current state.
 func TestBranchPicker_SetErrorIgnoresStaleVersion(t *testing.T) {

@@ -25,6 +25,17 @@ func TestCurrentBranchName(t *testing.T) {
 	}
 }
 
+// A freshly-initialized repo has an unborn HEAD (the branch ref exists only as a symref,
+// no commit yet) — the branch name must still resolve so the picker's default base option
+// can label it instead of falling back to the generic "current branch" text.
+func TestCurrentBranchNameUnbornHead(t *testing.T) {
+	repo := t.TempDir()
+	mustRunGit(t, "", "init", "-b", "newborn", repo)
+	if got := CurrentBranchName(context.Background(), repo); got != "newborn" {
+		t.Fatalf("CurrentBranchName() unborn HEAD = %q, want %q", got, "newborn")
+	}
+}
+
 func TestSanitizeBranchName(t *testing.T) {
 	tests := []struct {
 		name     string

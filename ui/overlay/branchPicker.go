@@ -293,6 +293,11 @@ func (bp *BranchPicker) Render() string {
 		} else {
 			s.WriteString(bpDimStyle().Render("(none)"))
 		}
+		if bp.errored {
+			// A failure that lands while blurred must still be visible — the selection
+			// (typically the HEAD-base default) stays usable, but the list behind it isn't.
+			s.WriteString(bpDimStyle().Render("  couldn't list branches"))
+		}
 		s.WriteString("\n\n")
 		s.WriteString(renderPickerRows(nil, 0, bp.visibleRows, false, "", bpSelectedStyle(), bpDimStyle()))
 		return s.String()
