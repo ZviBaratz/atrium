@@ -8,6 +8,7 @@ import (
 	"github.com/ZviBaratz/atrium/ui/theme"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/mattn/go-runewidth"
 )
 
 // Hint-bar styles read the active theme at render time: keys in primary text,
@@ -42,13 +43,27 @@ var defaultHintKeys = []keys.KeyName{keys.KeyEnter, keys.KeyNew, keys.KeyQuickSe
 // emptyHintKeys are the bindings surfaced when no sessions exist yet.
 var emptyHintKeys = []keys.KeyName{keys.KeyNew, keys.KeyPrompt, keys.KeyHelp, keys.KeyQuit}
 
+// NoticeLevel grades a transient notice shown in the menu row.
+type NoticeLevel int
+
+const (
+	// NoticeInfo is a neutral acknowledgment ("branch copied").
+	NoticeInfo NoticeLevel = iota
+	// NoticeError is a failure or a state-guard explanation.
+	NoticeError
+)
+
 // Menu is the bottom hint bar: a single line of the most useful keybindings for
-// the current UI state, with ? as the doorway to the full cheatsheet.
+// the current UI state, with ? as the doorway to the full cheatsheet. It also
+// doubles as the home of transient feedback: a notice temporarily replaces the
+// hints on the same reserved row, so feedback never changes the frame height.
 type Menu struct {
 	height, width int
 	state         MenuState
 	hasInstance   bool
 	activeTab     int
+	notice        string
+	noticeLevel   NoticeLevel
 }
 
 // NewMenu returns a Menu in the empty state.
@@ -81,6 +96,24 @@ func (m *Menu) SetActiveTab(tab int) {
 	m.activeTab = tab
 }
 
+// SetNotice shows transient feedback in place of the hints. Newlines are
+// flattened (mirroring the error box) because the row is single-line by
+// construction.
+func (m *Menu) SetNotice(text string, level NoticeLevel) {
+	m.notice = strings.Join(strings.Split(text, "\n"), "//")
+	m.noticeLevel = level
+}
+
+// ClearNotice restores the hint line.
+func (m *Menu) ClearNotice() {
+	m.notice = ""
+}
+
+// HasNotice reports whether a notice currently occupies the row.
+func (m *Menu) HasNotice() bool {
+	return m.notice != ""
+}
+
 // SetSize sets the width of the window. The menu will be centered horizontally within this width.
 func (m *Menu) SetSize(width, height int) {
 	m.width = width
@@ -103,6 +136,20 @@ func renderHintLine(names []keys.KeyName) string {
 }
 
 func (m *Menu) String() string {
+	if m.notice != "" {
+		style := theme.Current().FgStyle()
+		if m.noticeLevel == NoticeError {
+			style = theme.Current().DangerStyle()
+		}
+		text := m.notice
+		// Truncate rather than wrap: a wrapped notice would grow the row and
+		// cause exactly the layout shift this mechanism exists to prevent.
+		if limit := m.width - 2; limit >= 0 && runewidth.StringWidth(text) > limit {
+			text = runewidth.Truncate(text, limit, "…")
+		}
+		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, style.Render(text))
+	}
+
 	var line string
 	switch m.state {
 	case StateGeneratingName:

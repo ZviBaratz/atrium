@@ -9,7 +9,7 @@ import (
 )
 
 // A short, single-line error stays on the transient toast: state is untouched
-// and the error box carries the message.
+// and (with the default always-on hint bar) the menu row carries the message.
 func TestHandleError_ShortErrorUsesToast(t *testing.T) {
 	h := newCreateFormHome(t)
 	h.errBox.SetSize(80, 1)
@@ -17,7 +17,8 @@ func TestHandleError_ShortErrorUsesToast(t *testing.T) {
 	h.handleError(fmt.Errorf("title cannot be empty"))
 
 	assert.Equal(t, stateDefault, h.state)
-	assert.True(t, h.errBox.HasError())
+	assert.True(t, h.menu.HasNotice())
+	assert.False(t, h.errBox.HasError(), "the hint bar carries the toast; no extra row")
 	assert.Nil(t, h.textOverlay)
 }
 
@@ -69,5 +70,5 @@ func TestHandleError_UnsizedBoxDefaultsToToast(t *testing.T) {
 	h.handleError(fmt.Errorf("%s", strings.Repeat("x", 200)))
 
 	assert.Equal(t, stateDefault, h.state)
-	assert.True(t, h.errBox.HasError())
+	assert.True(t, h.menu.HasNotice())
 }

@@ -179,8 +179,13 @@ type home struct {
 	menu *ui.Menu
 	// tabbedWindow displays the tabbed window with preview and diff panes
 	tabbedWindow *ui.TabbedWindow
-	// errBox displays error messages
+	// errBox displays error messages when the hint bar isn't there to carry them
+	// (hint_bar off, or an overlay state hides the bar).
 	errBox *ui.ErrBox
+	// noticeGen stamps the most recent transient toast (menu notice or error
+	// box); hideErrMsg carries the stamp so a stale timer can't clear a newer
+	// toast early.
+	noticeGen int
 	// global spinner instance. we plumb this down to where it's needed
 	spinner spinner.Model
 	// textInputOverlay handles text input with state
@@ -454,8 +459,13 @@ func (m *home) Init() tea.Cmd {
 func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case hideErrMsg:
-		m.errBox.Clear()
-		m.recomputeLayout() // reclaim the error row; panes grow back by one
+		if msg.gen == m.noticeGen {
+			if m.menu != nil {
+				m.menu.ClearNotice()
+			}
+			m.errBox.Clear()
+			m.recomputeLayout() // reclaim the error row; panes grow back by one
+		}
 	case previewTickMsg:
 		m.markSeenAfterDwell(time.Now())
 		cmd := m.instanceChanged()
@@ -1442,8 +1452,12 @@ func (m *home) markSeenAfterDwell(now time.Time) {
 	sel.MarkSeen()
 }
 
-// hideErrMsg implements tea.Msg and clears the error text from the screen.
-type hideErrMsg struct{}
+// hideErrMsg implements tea.Msg and clears the transient toast (menu notice or
+// error box). gen identifies which toast the timer belongs to: a stale timer's
+// message must not clear a newer toast.
+type hideErrMsg struct {
+	gen int
+}
 
 // previewTickMsg implements tea.Msg and triggers a preview update
 type previewTickMsg struct{}
@@ -1840,11 +1854,13 @@ func tickUpdateMetadataCmd(active []*session.Instance, selected *session.Instanc
 // errToastDuration is how long the transient error box stays before auto-hiding.
 const errToastDuration = 5 * time.Second
 
-// handleError surfaces an error in the UI. Short, single-line errors get the
-// transient bottom toast (auto-hidden after errToastDuration). An error that the
-// toast cannot actually convey — multi-line, or wider than the error box can
-// show (e.g. a failed push's git output) — is routed to the persistent info
-// modal instead, but only from stateDefault: in any overlay state (e.g. a form
+// handleError surfaces an error in the UI. Short, single-line errors get a
+// transient toast (auto-hidden after errToastDuration): when the always-on hint
+// bar is up, the toast rides the bar's reserved row so the layout never shifts;
+// otherwise it falls back to the error box's own row. An error that a one-line
+// toast cannot actually convey — multi-line, or wider than the row can show
+// (e.g. a failed push's git output) — is routed to the persistent info modal
+// instead, but only from stateDefault: in any overlay state (e.g. a form
 // validation error) switching to stateInfo would clobber the open overlay, so
 // those always use the toast.
 func (m *home) handleError(err error) tea.Cmd {
@@ -1852,15 +1868,40 @@ func (m *home) handleError(err error) tea.Cmd {
 		return m.showInfo(err.Error()) // showInfo logs the message itself
 	}
 	log.ErrorLog.Printf("%v", err)
-	m.errBox.SetError(err)
-	m.recomputeLayout() // give the error its row; panes shrink by one
+	if m.menuVisible() && m.menu != nil {
+		m.menu.SetNotice(err.Error(), ui.NoticeError)
+	} else {
+		m.errBox.SetError(err)
+		m.recomputeLayout() // give the error its row; panes shrink by one
+	}
+	return m.scheduleNoticeHide()
+}
+
+// handleInfoNotice flashes a neutral acknowledgment ("branch copied") on the
+// hint bar's reserved row. Unlike errors, info is chrome: when the user runs
+// without the hint bar there is no reserved row to ride, so the notice is
+// dropped rather than claiming one.
+func (m *home) handleInfoNotice(text string) tea.Cmd {
+	if !m.menuVisible() || m.menu == nil {
+		return nil
+	}
+	m.menu.SetNotice(text, ui.NoticeInfo)
+	return m.scheduleNoticeHide()
+}
+
+// scheduleNoticeHide stamps the just-shown toast with a fresh generation and
+// returns the command that clears it after errToastDuration. The generation
+// keeps an older toast's timer from clearing a newer toast early.
+func (m *home) scheduleNoticeHide() tea.Cmd {
+	m.noticeGen++
+	gen := m.noticeGen
 	return func() tea.Msg {
 		select {
 		case <-m.ctx.Done():
 		case <-time.After(errToastDuration):
 		}
 
-		return hideErrMsg{}
+		return hideErrMsg{gen: gen}
 	}
 }
 
