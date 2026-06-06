@@ -5,7 +5,24 @@ import (
 	"testing"
 
 	"github.com/ZviBaratz/atrium/ui/theme"
+
+	"github.com/charmbracelet/lipgloss"
+	"github.com/muesli/termenv"
 )
+
+// forceColorProfile pins lipgloss to ANSI256 so styled lines carry escape
+// sequences even without a TTY — go test detects Ascii and strips all styling,
+// which would make style assertions vacuous. Restored via t.Cleanup, same
+// pattern as overhaul_test.go.
+func forceColorProfile(t *testing.T) {
+	t.Helper()
+	prof := lipgloss.ColorProfile()
+	lipgloss.SetColorProfile(termenv.ANSI256)
+	t.Cleanup(func() { lipgloss.SetColorProfile(prof) })
+}
+
+// styled reports whether s carries ANSI escape bytes.
+func styled(s string) bool { return strings.Contains(s, "\x1b[") }
 
 func TestPluralize(t *testing.T) {
 	cases := []struct {
@@ -28,10 +45,13 @@ func TestPluralize(t *testing.T) {
 
 func TestColorizeDiff_LineClassification(t *testing.T) {
 	// Pin the unicode theme so rendering is deterministic.
-	restore := theme.Set("unicode")
-	defer restore()
+	defer theme.Set("unicode")()
+	forceColorProfile(t)
 
-	diff := strings.Join([]string{
+	// colorizeDiff maps input lines to output lines 1:1, so assertions can be
+	// positional: each output line must preserve its input's content, and be
+	// styled (or not) according to its classification.
+	in := []string{
 		"diff --git a/foo.go b/foo.go",
 		"--- a/foo.go",
 		"+++ b/foo.go",
@@ -39,65 +59,28 @@ func TestColorizeDiff_LineClassification(t *testing.T) {
 		" unchanged line",
 		"+added line",
 		"-removed line",
-		"",
-	}, "\n")
+	}
+	got := strings.Split(colorizeDiff(strings.Join(in, "\n")), "\n")
+	if len(got) != len(in)+1 || got[len(in)] != "" {
+		t.Fatalf("expected %d lines plus trailing newline, got %d: %q", len(in), len(got), got)
+	}
 
-	got := colorizeDiff(diff)
-	lines := strings.Split(got, "\n")
-
-	// The diff metadata lines ("---", "+++") must pass through uncolored.
-	for _, prefix := range []string{"diff --git", "--- a", "+++ b"} {
-		found := false
-		for _, l := range lines {
-			if strings.HasPrefix(l, prefix) {
-				found = true
-				// If colorized they'd carry ANSI bytes; ensure raw prefix survives.
-				if !strings.Contains(l, prefix) {
-					t.Errorf("metadata line %q lost its prefix in %q", prefix, l)
-				}
-				break
-			}
-		}
-		if !found {
-			t.Errorf("metadata line with prefix %q not found in output", prefix)
+	// Metadata ("diff --git", "---", "+++") and context lines pass through
+	// byte-identical — no styling.
+	for _, i := range []int{0, 1, 2, 4} {
+		if got[i] != in[i] {
+			t.Errorf("line %d: want unstyled %q, got %q", i, in[i], got[i])
 		}
 	}
 
-	// The hunk header "@@" line must appear in the output (colorizeDiff applies a style but
-	// should not drop it entirely).
-	hunkFound := false
-	for _, l := range lines {
-		if strings.Contains(l, "@@") {
-			hunkFound = true
-			break
+	// Hunk header, added, and removed lines are styled with content preserved.
+	for _, i := range []int{3, 5, 6} {
+		if !styled(got[i]) {
+			t.Errorf("line %d: %q should be styled, got %q", i, in[i], got[i])
 		}
-	}
-	if !hunkFound {
-		t.Error("hunk header (@@ line) missing from colorizeDiff output")
-	}
-
-	// Added line ("+" not "+++") must appear.
-	addedFound := false
-	for _, l := range lines {
-		if strings.Contains(l, "added line") {
-			addedFound = true
-			break
+		if !strings.Contains(got[i], in[i]) {
+			t.Errorf("line %d: styled output %q lost content %q", i, got[i], in[i])
 		}
-	}
-	if !addedFound {
-		t.Error("added line content missing from colorizeDiff output")
-	}
-
-	// Removed line ("-" not "---") must appear.
-	removedFound := false
-	for _, l := range lines {
-		if strings.Contains(l, "removed line") {
-			removedFound = true
-			break
-		}
-	}
-	if !removedFound {
-		t.Error("removed line content missing from colorizeDiff output")
 	}
 }
 
@@ -114,16 +97,22 @@ func TestColorizeDiff_EmptyInput(t *testing.T) {
 }
 
 func TestColorizeDiff_SinglePlusAndMinus(t *testing.T) {
-	// A line that is just "+" or "-" (no second char) must still be colored, not
-	// treated as metadata. Guards the len==1 special-case branch.
-	restore := theme.Set("unicode")
-	defer restore()
+	// A line that is just "+" or "-" (no second char) exercises the len==1
+	// branch: it must not panic on the line[1] lookahead, and must be classified
+	// as added/removed (styled), not metadata.
+	defer theme.Set("unicode")()
+	forceColorProfile(t)
 
-	out := colorizeDiff("+\n-\n")
-	if !strings.Contains(out, "+") {
-		t.Error("single '+' line missing from output")
+	out := strings.Split(colorizeDiff("+\n-"), "\n")
+	if len(out) < 2 {
+		t.Fatalf("expected at least 2 output lines, got %q", out)
 	}
-	if !strings.Contains(out, "-") {
-		t.Error("single '-' line missing from output")
+	for i, want := range []string{"+", "-"} {
+		if !styled(out[i]) {
+			t.Errorf("line %d: single %q should be styled, got %q", i, want, out[i])
+		}
+		if !strings.Contains(out[i], want) {
+			t.Errorf("line %d: %q missing from output %q", i, want, out[i])
+		}
 	}
 }

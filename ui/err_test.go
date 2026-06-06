@@ -16,7 +16,7 @@ func TestErrBox_Fits(t *testing.T) {
 		{"nil error always fits", 80, nil, true},
 		{"short error fits wide box", 80, errors.New("oops"), true},
 		{"no width set: anything fits", 0, errors.New("very long error message here"), true},
-		{"exact boundary fits", 10, errors.New("1234567"), true},  // 7 chars, box 10 => 10-3=7 limit
+		{"exact boundary fits", 10, errors.New("1234567"), true},          // 7 chars, box 10 => 10-3=7 limit
 		{"one over limit doesn't fit", 10, errors.New("12345678"), false}, // 8 chars > 7
 		{"multiline never fits", 80, errors.New("line1\nline2"), false},
 	}
