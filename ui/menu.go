@@ -8,6 +8,7 @@ import (
 	"github.com/ZviBaratz/atrium/ui/theme"
 
 	"github.com/charmbracelet/lipgloss"
+	xansi "github.com/charmbracelet/x/ansi"
 	"github.com/mattn/go-runewidth"
 )
 
@@ -205,5 +206,10 @@ func (m *Menu) String() string {
 		line = renderHintLine(hints)
 	}
 
+	// Truncate rather than overflow: a hint line wider than the terminal would
+	// wrap and break the one-row layout contract (same rule as notices above).
+	if limit := m.width; limit > 0 && lipgloss.Width(line) > limit {
+		line = xansi.Truncate(line, limit-1, "…")
+	}
 	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, line)
 }

@@ -23,8 +23,8 @@ func TestFade_RewritesAllColorFormsToThemeColors(t *testing.T) {
 	}
 	out := PlaceOverlay(0, 0, "FG", strings.Join(bgLines, "\n"), false)
 
-	wantFg := "\x1b[38;2;65;72;104m"  // #414868
-	wantBg := "\x1b[48;2;26;27;38m"   // #1a1b26
+	wantFg := "\x1b[38;2;65;72;104m" // #414868
+	wantBg := "\x1b[48;2;26;27;38m"  // #1a1b26
 	if !strings.Contains(out, wantFg) {
 		t.Errorf("faded output missing theme faint-fg sequence %q", wantFg)
 	}

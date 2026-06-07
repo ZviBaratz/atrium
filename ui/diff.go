@@ -67,7 +67,7 @@ func (d *DiffPane) SetDiff(instance *session.Instance) {
 	}
 
 	// A direct (non-git) session has no worktree to diff. Say so explicitly rather than
-	// falling into the "Setting up worktree..." path below, which never resolves.
+	// falling into the "Setting up workspace..." path below, which never resolves.
 	if instance.IsDirect() {
 		d.stats = ""
 		d.diff = ""
@@ -89,20 +89,21 @@ func (d *DiffPane) SetDiff(instance *session.Instance) {
 			d.height,
 			lipgloss.Center,
 			lipgloss.Center,
-			metaStyle().Render("Setting up worktree..."),
+			metaStyle().Render("Setting up workspace..."), // matches the preview pane's splash
 		)
 		d.viewport.SetContent(centeredMessage)
 		return
 	}
 
 	if stats.Error != nil {
-		// Show error message
+		// Show error message — danger-styled, so a broken diff doesn't render as
+		// unstyled default text while every sibling placeholder is dim.
 		centeredMessage := lipgloss.Place(
 			d.width,
 			d.height,
 			lipgloss.Center,
 			lipgloss.Center,
-			fmt.Sprintf("Error: %v", stats.Error),
+			theme.Current().DangerStyle().Render(fmt.Sprintf("Error: %v", stats.Error)),
 		)
 		d.viewport.SetContent(centeredMessage)
 		return

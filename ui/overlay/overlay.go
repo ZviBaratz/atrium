@@ -84,7 +84,7 @@ func hexRGB(s string) (r, g, b uint8, ok bool) {
 	if err != nil {
 		return 0, 0, 0, false
 	}
-	return uint8(v >> 16), uint8(v >> 8), uint8(v), true
+	return uint8(v >> 16 & 0xff), uint8(v >> 8 & 0xff), uint8(v & 0xff), true
 }
 
 // PlaceOverlay places fg on top of bg, fading the background into the active

@@ -5,6 +5,7 @@ import (
 
 	"github.com/ZviBaratz/atrium/session"
 	"github.com/ZviBaratz/atrium/session/git"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/stretchr/testify/require"
 )
 
@@ -83,6 +84,22 @@ func TestMenu_DirtyHintLineAddsPausePush(t *testing.T) {
 	out = m.String()
 	require.NotContains(t, out, "pause", "a clean session has nothing to pause")
 	require.NotContains(t, out, "push", "a clean session has nothing to push")
+}
+
+// On a terminal narrower than the hint line, the bar truncates with an
+// ellipsis instead of overflowing and wrapping — wrapping would grow the row
+// and break the one-row layout contract.
+func TestMenu_HintLineTruncatesOnNarrowWidth(t *testing.T) {
+	inst, err := session.NewInstance(session.InstanceOptions{Title: "t", Path: t.TempDir(), Program: "echo"})
+	require.NoError(t, err)
+	m := NewMenu()
+	m.SetSize(30, 1)
+	m.SetInstance(inst)
+
+	out := m.String()
+	require.Equal(t, 1, lipgloss.Height(out), "hint bar must stay a single row")
+	require.LessOrEqual(t, lipgloss.Width(out), 30)
+	require.Contains(t, out, "…")
 }
 
 // The filter state shows its own accept/clear cue.

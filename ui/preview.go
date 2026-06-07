@@ -189,36 +189,12 @@ func (p *PreviewPane) String() string {
 	}
 
 	if p.previewState.fallback {
-		// Calculate available height for fallback text
-		availableHeight := p.height - 3 - 4 // 2 for borders, 1 for margin, 1 for padding
-
-		// Count the number of lines in the fallback text
-		fallbackLines := len(strings.Split(p.previewState.text, "\n"))
-
-		// Calculate padding needed above and below to center the content
-		totalPadding := availableHeight - fallbackLines
-		topPadding := 0
-		bottomPadding := 0
-		if totalPadding > 0 {
-			topPadding = totalPadding / 2
-			bottomPadding = totalPadding - topPadding // accounts for odd numbers
-		}
-
-		// Build the centered content
-		var lines []string
-		if topPadding > 0 {
-			lines = append(lines, strings.Repeat("\n", topPadding))
-		}
-		lines = append(lines, p.previewState.text)
-		if bottomPadding > 0 {
-			lines = append(lines, strings.Repeat("\n", bottomPadding))
-		}
-
-		// Center both vertically and horizontally
-		return previewPaneStyle().
-			Width(p.width).
-			Align(lipgloss.Center).
-			Render(strings.Join(lines, ""))
+		// Center the fallback in the pane's exact box, the same way the diff
+		// pane centers its placeholders. (The hand-rolled padding loop this
+		// replaces guessed at chrome offsets that no longer exist and sat the
+		// text slightly high.)
+		return lipgloss.Place(p.width, p.height, lipgloss.Center, lipgloss.Center,
+			previewPaneStyle().Render(p.previewState.text))
 	}
 
 	// If in copy mode, use the viewport to display scrollable content

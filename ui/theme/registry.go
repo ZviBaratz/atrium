@@ -27,7 +27,7 @@ var miniDotFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "�
 func nfGlyphs() Glyphs {
 	return Glyphs{
 		SpinnerFrames: miniDotFrames,
-		SpinnerFPS:    time.Second / 12,
+		SpinnerFPS:    time.Second / 10, // matches the 100ms preview repaint tick so frames never lag a paint
 		Ready:         "●",
 		ReadySeen:     "○",
 		Waiting:       "◆",
@@ -103,7 +103,7 @@ var unicodeFallback = &Theme{
 	Palette: tokyoNight.Palette,
 	Glyphs: Glyphs{
 		SpinnerFrames: miniDotFrames,
-		SpinnerFPS:    time.Second / 12,
+		SpinnerFPS:    time.Second / 10, // matches the 100ms preview repaint tick so frames never lag a paint
 		Ready:         "●",
 		ReadySeen:     "○",
 		Waiting:       "◆",
