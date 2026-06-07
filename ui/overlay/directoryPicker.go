@@ -371,7 +371,7 @@ func (dp *DirectoryPicker) Render() string {
 	}
 
 	s.WriteString(dpLabelStyle().Render("Project"))
-	s.WriteString(dpFilterStyle().Render(" (filter/path: " + dp.filter + "█)"))
+	s.WriteString(dpFilterStyle().Render(" (filter/path: " + dp.filter + theme.Current().Glyphs.TextCursor + ")"))
 	s.WriteString(dp.selectionHint())
 	s.WriteString("\n\n")
 

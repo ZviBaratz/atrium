@@ -42,6 +42,7 @@ func nfGlyphs() Glyphs {
 		SelectionMark: "▎",
 		DiffAdd:       "+",
 		DiffDel:       "-",
+		TextCursor:    "▌",
 	}
 }
 
@@ -117,6 +118,7 @@ var unicodeFallback = &Theme{
 		SelectionMark: "▎",
 		DiffAdd:       "+",
 		DiffDel:       "-",
+		TextCursor:    "▌",
 	},
 	Borders: Borders{Style: lipgloss.NormalBorder()},
 }

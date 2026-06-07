@@ -527,7 +527,7 @@ func (l *List) String() string {
 	if l.filterQuery != "" || l.filterActive {
 		cursor := ""
 		if l.filterActive {
-			cursor = "▌"
+			cursor = theme.Current().Glyphs.TextCursor
 		}
 		style := filterBarStyle()
 		if l.filterActive {

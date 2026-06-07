@@ -51,6 +51,7 @@ type Glyphs struct {
 	SelectionMark string // left accent bar on the selected row
 	DiffAdd       string // "+" in diff stats
 	DiffDel       string // "-" in diff stats
+	TextCursor    string // hand-rolled "you are typing here" cursor (list filter, picker filters)
 }
 
 // Borders carries the box-drawing style so a fallback theme can use square
