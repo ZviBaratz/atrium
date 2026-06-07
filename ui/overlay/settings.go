@@ -430,7 +430,7 @@ func (s *SettingsOverlay) Render() string {
 	body := s.renderBody(inner)
 	footer := s.renderFooter(inner)
 
-	title := t.AccentStyle().Bold(true).Render("Settings")
+	title := t.OverlayTitleStyle().Render("Settings")
 	content := title + "\n\n" + strings.Join(body, "\n") + "\n\n" + footer
 
 	return lipgloss.NewStyle().
@@ -560,5 +560,5 @@ func (s *SettingsOverlay) renderFooter(inner int) string {
 		hint = "↵ save · esc cancel"
 	}
 	return xansi.Truncate(style.Render(desc), inner, "…") + "\n" +
-		xansi.Truncate(t.FaintStyle().Render(hint), inner, "…")
+		xansi.Truncate(t.OverlayHintStyle().Render(hint), inner, "…")
 }

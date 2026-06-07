@@ -94,7 +94,7 @@ func (h helpTypeGeneral) toContent() string {
 		"",
 		legend,
 		"",
-		helpDimStyle().Render("press any key to close"),
+		theme.Current().OverlayHintStyle().Render("press any key to close"),
 	)
 }
 
@@ -108,7 +108,7 @@ func (h helpTypeWelcome) toContent() string {
 		helpRow("n", "start your first session"),
 		helpRow("?", "show all keys, any time"),
 		"",
-		helpDimStyle().Render("press any key to begin"),
+		theme.Current().OverlayHintStyle().Render("press any key to begin"),
 	)
 }
 

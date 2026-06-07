@@ -22,7 +22,7 @@ func tiStyle() lipgloss.Style {
 }
 
 func tiTitleStyle() lipgloss.Style {
-	return theme.Current().AccentStyle().Bold(true).MarginBottom(1)
+	return theme.Current().OverlayTitleStyle().MarginBottom(1)
 }
 
 func tiButtonStyle() lipgloss.Style { return theme.Current().FgStyle() }
@@ -37,7 +37,7 @@ func tiDividerStyle() lipgloss.Style { return theme.Current().DimStyle() }
 
 func tiLabelStyle() lipgloss.Style { return theme.Current().AccentStyle().Bold(true) }
 
-func tiHintStyle() lipgloss.Style { return theme.Current().DimStyle().Italic(true) }
+func tiHintStyle() lipgloss.Style { return theme.Current().OverlayHintStyle() }
 
 // defaultPickerRows / defaultPromptRows are the preferred number of list rows the directory
 // and branch pickers render and the preferred prompt-textarea height. They are also the

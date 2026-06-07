@@ -81,6 +81,18 @@ func (t *Theme) FaintStyle() lipgloss.Style {
 	return lipgloss.NewStyle().Foreground(t.Palette.FgFaint)
 }
 
+// OverlayTitleStyle styles a modal's title line. Every overlay routes its
+// title through this so the same conceptual element looks the same everywhere.
+func (t *Theme) OverlayTitleStyle() lipgloss.Style {
+	return lipgloss.NewStyle().Foreground(t.Palette.Accent).Bold(true)
+}
+
+// OverlayHintStyle styles a modal's footer key-hints — the "↵ save · esc
+// cancel" line. One style for every overlay's footer.
+func (t *Theme) OverlayHintStyle() lipgloss.Style {
+	return lipgloss.NewStyle().Foreground(t.Palette.FgDim).Italic(true)
+}
+
 // AccentStyle styles highlighted interactive elements (selection, active tab).
 func (t *Theme) AccentStyle() lipgloss.Style {
 	return lipgloss.NewStyle().Foreground(t.Palette.Accent)

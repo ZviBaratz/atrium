@@ -92,9 +92,10 @@ func (r *RenameOverlay) Render() string {
 	}
 	// List the default (label only) first so the leading option is the one that's selected
 	// on open; deep rename is the deliberate opt-in below it.
-	mode := lipgloss.NewStyle().Faint(true).Render(
+	mode := theme.Current().DimStyle().Render(
 		"mode: " + labelMark + " label only\n      " + deepMark + " deep (branch + worktree)")
-	hint := lipgloss.NewStyle().Faint(true).Render("tab toggle · enter save · esc cancel")
-	content := "Rename session\n\n" + r.input.View() + "\n\n" + mode + "\n\n" + hint
+	hint := theme.Current().OverlayHintStyle().Render("tab toggle · enter save · esc cancel")
+	title := theme.Current().OverlayTitleStyle().Render("Rename session")
+	content := title + "\n\n" + r.input.View() + "\n\n" + mode + "\n\n" + hint
 	return style.Render(content)
 }
