@@ -104,16 +104,17 @@ func TestRename_AppliesToTargetNotMovedSelection(t *testing.T) {
 	require.Nil(t, h.renameTarget, "target is cleared after submit")
 }
 
-// Pressing A while a generation is already in flight is a no-op (no second request).
-func TestKeyAutoName_NoOpWhileGenerating(t *testing.T) {
+// Pressing A while a generation is already in flight starts no second request;
+// the key explains itself on the hint row instead of silently doing nothing.
+func TestKeyAutoName_NoSecondRequestWhileGenerating(t *testing.T) {
 	h := newAutoNameHome(t, "a")
 	h.generatingName = true
 
-	_, cmd := h.handleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("A")})
+	h.handleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("A")})
 
 	require.True(t, h.generatingName)
-	require.Nil(t, cmd)
 	require.Equal(t, stateDefault, h.state)
+	require.True(t, h.menu.HasNotice(), "the guard must explain itself")
 }
 
 // Pressing A on a selectable session starts a background generation and shows the hint.

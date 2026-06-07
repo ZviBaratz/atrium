@@ -4,8 +4,10 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/charmbracelet/lipgloss"
+	"github.com/ZviBaratz/atrium/session"
+
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -61,6 +63,45 @@ func TestHandleInfoNotice_HintBarOffDropsIt(t *testing.T) {
 	assert.Nil(t, cmd)
 	assert.False(t, h.menu.HasNotice())
 	assert.False(t, h.errBox.HasError())
+}
+
+// pressKey drives a single rune keybinding through the default-state handler.
+func pressKey(h *home, r rune) {
+	h.handleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+}
+
+// newPausedHome builds a stateDefault home whose selected session is paused.
+func newPausedHome(t *testing.T) *home {
+	t.Helper()
+	h := newCreateFormHome(t)
+	inst := newBranchInstance(t, "paused", "zvi/feat")
+	inst.SetStatus(session.Paused)
+	h.list.AddInstance(inst)
+	require.NotNil(t, h.list.GetSelectedInstance())
+	return h
+}
+
+// Pressing s (quick-send) on a paused session used to silently do nothing —
+// indistinguishable from a frozen app. It must explain itself.
+func TestQuickSend_PausedSessionExplains(t *testing.T) {
+	h := newPausedHome(t)
+
+	pressKey(h, 's')
+
+	assert.Equal(t, stateDefault, h.state, "the compose box must not open for a paused session")
+	require.True(t, h.menu.HasNotice())
+	assert.Contains(t, h.menu.String(), "paused")
+}
+
+// Pressing enter (attach) on a paused session likewise explains the guard and
+// points at the resume key.
+func TestEnter_PausedSessionExplains(t *testing.T) {
+	h := newPausedHome(t)
+
+	_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyEnter})
+
+	require.True(t, h.menu.HasNotice())
+	assert.Contains(t, h.menu.String(), "resume")
 }
 
 // A hide timer from an older toast must not clear a newer one: each notice

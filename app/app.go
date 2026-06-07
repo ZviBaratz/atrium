@@ -1060,28 +1060,37 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		return m, m.openCreateForm(true)
 	case keys.KeyQuickSend:
 		// Open a compose box to fire an ad-hoc message at the selected running session
-		// without attaching. Only meaningful when the agent is up and accepting input, so
-		// this is a no-op for an empty/loading/paused selection.
+		// without attaching. Only meaningful when the agent is up and accepting input;
+		// other states explain the guard instead of silently swallowing the key.
 		selected := m.list.GetSelectedInstance()
-		if selected == nil || !selected.Started() || selected.Paused() || selected.GetStatus() == session.Loading {
+		if selected == nil {
 			return m, nil
+		}
+		if selected.Paused() {
+			return m, m.handleInfoNotice("session is paused — press r to resume before sending")
+		}
+		if !selected.Started() || selected.GetStatus() == session.Loading {
+			return m, m.handleInfoNotice("session is still starting — try again in a moment")
 		}
 		m.state = statePrompt
 		m.textInputOverlay = overlay.NewQuickSendOverlay("Send to " + selected.DisplayName())
 		return m, tea.WindowSize()
 	case keys.KeyCopyBranch:
 		// Yank the selected session's branch name to the system clipboard for handoff
-		// to a PR, a teammate, or a git command. No-op when nothing is selected or the
-		// branch is not yet known; a clipboard failure is a host-env issue, so it is
-		// logged rather than surfaced as a TUI error.
+		// to a PR, a teammate, or a git command. Both outcomes are acknowledged on the
+		// hint row: without a toast, success and failure were indistinguishable from
+		// the keyboard.
 		selected := m.list.GetSelectedInstance()
-		if selected == nil || selected.Branch == "" {
+		if selected == nil {
 			return m, nil
 		}
-		if err := copyToClipboard(selected.Branch); err != nil {
-			log.ErrorLog.Printf("copy branch: %v", err)
+		if selected.Branch == "" {
+			return m, m.handleInfoNotice("no branch to copy yet")
 		}
-		return m, nil
+		if err := copyToClipboard(selected.Branch); err != nil {
+			return m, m.handleError(fmt.Errorf("copy branch: %w", err))
+		}
+		return m, m.handleInfoNotice(fmt.Sprintf("branch '%s' copied", selected.Branch))
 	case keys.KeyUp:
 		m.list.Up()
 		return m, m.instanceChanged()
@@ -1125,8 +1134,11 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		return m, m.instanceChanged()
 	case keys.KeyRename:
 		selected := m.list.GetSelectedInstance()
-		if selected == nil || selected.GetStatus() == session.Loading {
+		if selected == nil {
 			return m, nil
+		}
+		if selected.GetStatus() == session.Loading {
+			return m, m.handleInfoNotice("session is still starting — try again in a moment")
 		}
 		m.renameTarget = selected
 		m.renameOverlay = overlay.NewRenameOverlay(selected.DisplayName())
@@ -1134,8 +1146,14 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		return m, nil
 	case keys.KeyAutoName:
 		selected := m.list.GetSelectedInstance()
-		if selected == nil || selected.GetStatus() == session.Loading || m.generatingName {
+		if selected == nil {
 			return m, nil
+		}
+		if m.generatingName {
+			return m, m.handleInfoNotice("already generating a name")
+		}
+		if selected.GetStatus() == session.Loading {
+			return m, m.handleInfoNotice("session is still starting — try again in a moment")
 		}
 		// The model call (and the full diff it needs) happen in the background Cmd so
 		// the UI stays responsive; only the instance and prompt are captured here.
@@ -1145,8 +1163,11 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		return m, runAutoNameCmd(m.ctx, selected, selected.Prompt)
 	case keys.KeySubmit:
 		selected := m.list.GetSelectedInstance()
-		if selected == nil || selected.GetStatus() == session.Loading {
+		if selected == nil {
 			return m, nil
+		}
+		if selected.GetStatus() == session.Loading {
+			return m, m.handleInfoNotice("session is still starting — try again in a moment")
 		}
 		// A direct (non-git) session has nothing to push. Fail fast rather than prompting
 		// for confirmation and only then erroring. (The menu also hides this action.)
@@ -1173,8 +1194,11 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		return m, m.confirmAction(message, pushAction)
 	case keys.KeyCheckout:
 		selected := m.list.GetSelectedInstance()
-		if selected == nil || selected.GetStatus() == session.Loading {
+		if selected == nil {
 			return m, nil
+		}
+		if selected.GetStatus() == session.Loading {
+			return m, m.handleInfoNotice("session is still starting — try again in a moment")
 		}
 
 		// A direct (non-git) session has no worktree to free and runs in the user's
@@ -1249,8 +1273,14 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		return m, nil
 	case keys.KeyResume:
 		selected := m.list.GetSelectedInstance()
-		if selected == nil || selected.GetStatus() == session.Loading {
+		if selected == nil {
 			return m, nil
+		}
+		if selected.GetStatus() == session.Loading {
+			return m, m.handleInfoNotice("session is still starting — try again in a moment")
+		}
+		if !selected.Paused() {
+			return m, m.handleInfoNotice("session is already running — only paused sessions resume")
 		}
 		return m, m.resumeSelected(selected)
 	case keys.KeyEnter:
@@ -1258,8 +1288,17 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 			return m, nil
 		}
 		selected := m.list.GetSelectedInstance()
-		if selected == nil || selected.Paused() || selected.GetStatus() == session.Loading || !selected.TmuxAlive() {
+		if selected == nil {
 			return m, nil
+		}
+		if selected.Paused() {
+			return m, m.handleInfoNotice("session is paused — press r to resume")
+		}
+		if selected.GetStatus() == session.Loading {
+			return m, m.handleInfoNotice("session is still starting — try again in a moment")
+		}
+		if !selected.TmuxAlive() {
+			return m, m.handleInfoNotice("session has no live terminal — resume it or kill it")
 		}
 		// Attach to the session (or its terminal tab) via tea.Exec, which hands the
 		// terminal to tmux and repaints on detach; the hint bar carries the ctrl-q
