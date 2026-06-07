@@ -2319,27 +2319,27 @@ func (m *home) View() string {
 		if m.textInputOverlay == nil {
 			log.ErrorLog.Printf("text input overlay is nil")
 		}
-		return overlay.PlaceOverlay(0, 0, m.textInputOverlay.Render(), mainView, true, true)
+		return overlay.PlaceOverlay(0, 0, m.textInputOverlay.Render(), mainView, true)
 	} else if m.state == stateHelp || m.state == stateInfo {
 		if m.textOverlay == nil {
 			log.ErrorLog.Printf("text overlay is nil")
 		}
-		return overlay.PlaceOverlay(0, 0, m.textOverlay.Render(), mainView, true, true)
+		return overlay.PlaceOverlay(0, 0, m.textOverlay.Render(), mainView, true)
 	} else if m.state == stateConfirm {
 		if m.confirmationOverlay == nil {
 			log.ErrorLog.Printf("confirmation overlay is nil")
 		}
-		return overlay.PlaceOverlay(0, 0, m.confirmationOverlay.Render(), mainView, true, true)
+		return overlay.PlaceOverlay(0, 0, m.confirmationOverlay.Render(), mainView, true)
 	} else if m.state == stateRename {
 		if m.renameOverlay == nil {
 			log.ErrorLog.Printf("rename overlay is nil")
 		}
-		return overlay.PlaceOverlay(0, 0, m.renameOverlay.Render(), mainView, true, true)
+		return overlay.PlaceOverlay(0, 0, m.renameOverlay.Render(), mainView, true)
 	} else if m.state == stateSettings {
 		if m.settingsOverlay == nil {
 			log.ErrorLog.Printf("settings overlay is nil")
 		}
-		return overlay.PlaceOverlay(0, 0, m.settingsOverlay.Render(), mainView, true, true)
+		return overlay.PlaceOverlay(0, 0, m.settingsOverlay.Render(), mainView, true)
 	}
 
 	return mainView
