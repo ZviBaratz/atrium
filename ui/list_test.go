@@ -66,6 +66,29 @@ func TestRender_DirectSessionShowsMarkerNotBranchGlyph(t *testing.T) {
 	require.NotContains(t, row, g.Branch, "a direct session row must not render a dangling branch glyph")
 }
 
+// On a panel too narrow for any of the branch name, the glyph drops with it:
+// a dangling branch glyph followed by nothing reads as a rendering bug (the
+// same rule the direct-session row applies).
+func TestRender_NarrowWidthDropsDanglingBranchGlyph(t *testing.T) {
+	t.Cleanup(theme.Set("unicode"))
+	s := spinner.New()
+	r := &InstanceRenderer{spinner: &s}
+	r.setWidth(14) // enough for line 1, far too narrow for glyph+branch+stats
+	g := theme.Current().Glyphs
+
+	inst, err := session.NewInstance(session.InstanceOptions{Title: "t", Path: ".", Program: "echo"})
+	require.NoError(t, err)
+	inst.Branch = "zvi/a-rather-long-branch-name"
+	inst.SetDiffStats(&git.DiffStats{Added: 12, Removed: 3, Commits: 2})
+
+	row := r.Render(inst, 1, false)
+	if strings.Contains(row, g.Branch) {
+		// If the glyph survives, something of the name must follow it.
+		require.Regexp(t, regexp.QuoteMeta(g.Branch)+` *\S`, row,
+			"a branch glyph must never dangle with nothing after it")
+	}
+}
+
 func newTestList(titles ...string) *List {
 	s := spinner.New()
 	l := NewList(&s)

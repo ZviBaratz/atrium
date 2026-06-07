@@ -484,13 +484,17 @@ func (r *InstanceRenderer) Render(i *session.Instance, idx int, selected bool) s
 		fixedW := runewidth.StringWidth(g.Branch+" ") + runewidth.StringWidth(gctxPlain) + runewidth.StringWidth(diffPlain) + runewidth.StringWidth(agePlain)
 		branchBudget := W - fixedW - 1 // 1 = min gap before the diff stat
 		branch := i.Branch
+		branchGlyph := g.Branch + " "
 		if branchBudget < 1 {
-			branch = ""
+			// Too narrow for any of the name: drop the glyph with it — a dangling
+			// branch glyph followed by nothing reads as a rendering bug (mirrors
+			// the direct-session handling above).
+			branch, branchGlyph = "", ""
 		} else if runewidth.StringWidth(branch) > branchBudget {
 			branch = runewidth.Truncate(branch, branchBudget, "…")
 		}
-		leftPlain := g.Branch + " " + branch + gctxPlain
-		leftStyled := seg(th.Palette.FgDim).Render(g.Branch+" "+branch) + gctxStyled
+		leftPlain := branchGlyph + branch + gctxPlain
+		leftStyled := seg(th.Palette.FgDim).Render(branchGlyph+branch) + gctxStyled
 		rightPlain2 := diffPlain + agePlain
 		gap2 := W - runewidth.StringWidth(leftPlain) - runewidth.StringWidth(rightPlain2)
 		if gap2 < 1 {
@@ -659,6 +663,17 @@ func (l *List) windowLines(lines []string, selStart, selH, avail int) []string {
 	}
 	if offset < 0 {
 		offset = 0
+	}
+
+	// When the "↑ more" indicator would consume a content line while the very
+	// next line is a group separator, start the window one line later: the
+	// indicator then replaces the blank instead of a real row, and the gap
+	// under it stays constant while scrolling instead of breathing 0–1 lines.
+	// Skipped when it would violate the selection's one-line top margin.
+	if offset > 0 && offset+1 <= len(lines)-avail &&
+		lines[offset] != "" && lines[offset+1] == "" &&
+		(selStart < 0 || selStart-1 >= offset+1) {
+		offset++
 	}
 
 	window := make([]string, avail)
