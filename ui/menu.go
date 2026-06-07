@@ -36,12 +36,23 @@ const (
 )
 
 // defaultHintKeys are the high-value bindings the always-on bar surfaces during
-// plain navigation with a session selected. Deliberately few: the bar is a
-// reminder that keys exist (and that ? lists them all), not a reference card.
+// plain navigation with a running session selected. Deliberately few: the bar
+// is a reminder that keys exist (and that ? lists them all), not a reference
+// card. hintsFor swaps in status-specific sets so the bar never advertises an
+// action the selected session can't take.
 var defaultHintKeys = []keys.KeyName{keys.KeyEnter, keys.KeyNew, keys.KeyQuickSend, keys.KeyKill, keys.KeyHelp}
 
-// emptyHintKeys are the bindings surfaced when no sessions exist yet.
-var emptyHintKeys = []keys.KeyName{keys.KeyNew, keys.KeyPrompt, keys.KeyHelp, keys.KeyQuit}
+// pausedHintKeys replace the default set for a paused selection: it can't be
+// opened or sent to, so the bar points at resume instead.
+var pausedHintKeys = []keys.KeyName{keys.KeyResume, keys.KeyNew, keys.KeyKill, keys.KeyHelp}
+
+// dirtyHintKeys extend the default set when the selected session has work on
+// its branch — the moment pause/push become the actions that matter.
+var dirtyHintKeys = []keys.KeyName{keys.KeyEnter, keys.KeyNew, keys.KeyQuickSend, keys.KeyPause, keys.KeySubmit, keys.KeyKill, keys.KeyHelp}
+
+// emptyHintKeys are the bindings surfaced when no sessions exist yet. The n/N
+// distinction is noise for a zero-session user, so only n appears.
+var emptyHintKeys = []keys.KeyName{keys.KeyNew, keys.KeyHelp, keys.KeyQuit}
 
 // NoticeLevel grades a transient notice shown in the menu row.
 type NoticeLevel int
@@ -64,6 +75,7 @@ type Menu struct {
 	activeTab     int
 	notice        string
 	noticeLevel   NoticeLevel
+	contextHints  []keys.KeyName
 }
 
 // NewMenu returns a Menu in the empty state.
@@ -76,11 +88,13 @@ func (m *Menu) SetState(state MenuState) {
 	m.state = state
 }
 
-// SetInstance records whether a session is selected, which decides between the
-// default and empty hint sets. Special states (Filter, GeneratingName) persist
-// across the periodic instanceChanged ticks.
+// SetInstance records the selected session and derives the hint set from its
+// status, so the bar only advertises actions the selection can actually take.
+// Special states (Filter, GeneratingName) persist across the periodic
+// instanceChanged ticks.
 func (m *Menu) SetInstance(instance *session.Instance) {
 	m.hasInstance = instance != nil
+	m.contextHints = hintsFor(instance)
 	if m.state == StateDefault || m.state == StateEmpty {
 		if m.hasInstance {
 			m.state = StateDefault
@@ -88,6 +102,25 @@ func (m *Menu) SetInstance(instance *session.Instance) {
 			m.state = StateEmpty
 		}
 	}
+}
+
+// hintsFor picks the hint set matching the selection's state. Affordances must
+// track state: a bar that advertises "open" and "send" on a paused session is
+// advertising no-ops.
+func hintsFor(instance *session.Instance) []keys.KeyName {
+	if instance == nil {
+		return nil
+	}
+	if instance.Paused() {
+		return pausedHintKeys
+	}
+	if !instance.IsDirect() {
+		if stats := instance.GetDiffStats(); stats != nil && stats.Error == nil &&
+			(stats.Dirty || stats.Commits > 0 || !stats.IsEmpty()) {
+			return dirtyHintKeys
+		}
+	}
+	return defaultHintKeys
 }
 
 // SetActiveTab updates the currently active tab; the panes with a scroll mode
@@ -162,7 +195,10 @@ func (m *Menu) String() string {
 	case StateEmpty:
 		line = renderHintLine(emptyHintKeys)
 	default: // StateDefault
-		hints := defaultHintKeys
+		hints := m.contextHints
+		if hints == nil {
+			hints = defaultHintKeys
+		}
 		if m.activeTab == DiffTab || m.activeTab == TerminalTab {
 			hints = append(append([]keys.KeyName{}, hints...), keys.KeyShiftUp)
 		}
