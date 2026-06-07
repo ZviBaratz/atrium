@@ -73,6 +73,10 @@ const (
 	KeyTabTerminal
 
 	KeySettings // Open the settings panel to view and edit the configuration
+
+	// KeyAttachToggle mirrors the in-session detach key: on the list it attaches
+	// the selected session, making ctrl+q a symmetric attach/detach toggle.
+	KeyAttachToggle
 )
 
 // KillKey is the chord that triggers a kill from the session list. It mirrors the
@@ -118,6 +122,7 @@ var GlobalKeyStringsMap = map[string]KeyName{
 	"2":          KeyTabDiff,
 	"3":          KeyTabTerminal,
 	",":          KeySettings,
+	"ctrl+q":     KeyAttachToggle,
 }
 
 // GlobalkeyBindings is a global, immutable map of KeyName to keybinding.
@@ -255,5 +260,9 @@ var GlobalkeyBindings = map[KeyName]key.Binding{
 	KeySettings: key.NewBinding(
 		key.WithKeys(","),
 		key.WithHelp(",", "settings"),
+	),
+	KeyAttachToggle: key.NewBinding(
+		key.WithKeys("ctrl+q"),
+		key.WithHelp("ctrl-q", "attach/detach"),
 	),
 }
