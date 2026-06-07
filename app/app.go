@@ -1192,7 +1192,7 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		// Show confirmation modal
 		message := fmt.Sprintf("Push changes from session '%s'?", selected.DisplayName())
 		return m, m.confirmAction(message, pushAction)
-	case keys.KeyCheckout:
+	case keys.KeyPause:
 		selected := m.list.GetSelectedInstance()
 		if selected == nil {
 			return m, nil
@@ -1208,8 +1208,8 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 			return m, m.handleError(fmt.Errorf("pause is not available for a direct (non-git) session; it runs in place with no worktree to free"))
 		}
 
-		// Checkout: commit changes and pause. The branch name is copied to the
-		// clipboard inside Pause(); the always-on hint bar carries the reminder.
+		// Pause: commit changes and free the worktree. The branch name is copied to
+		// the clipboard inside Pause(); the always-on hint bar carries the reminder.
 		if err := selected.Pause(); err != nil {
 			return m, m.handleError(err)
 		}
