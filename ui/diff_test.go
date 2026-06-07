@@ -48,11 +48,9 @@ func TestColorizeDiff_LineClassification(t *testing.T) {
 	defer theme.Set("unicode")()
 	forceColorProfile(t)
 
-	// colorizeDiff maps input lines to output lines 1:1, so assertions can be
-	// positional: each output line must preserve its input's content, and be
-	// styled (or not) according to its classification.
 	in := []string{
 		"diff --git a/foo.go b/foo.go",
+		"index 123..456 100644",
 		"--- a/foo.go",
 		"+++ b/foo.go",
 		"@@ -1,3 +1,4 @@",
@@ -60,27 +58,80 @@ func TestColorizeDiff_LineClassification(t *testing.T) {
 		"+added line",
 		"-removed line",
 	}
-	got := strings.Split(colorizeDiff(strings.Join(in, "\n")), "\n")
-	if len(got) != len(in)+1 || got[len(in)] != "" {
-		t.Fatalf("expected %d lines plus trailing newline, got %d: %q", len(in), len(got), got)
+	out := colorizeDiff(strings.Join(in, "\n"), 80)
+	got := strings.Split(out, "\n")
+
+	// The "diff --git" line becomes a file boundary: a rule line plus the bold
+	// b-side path, so a multi-file diff reads as sections, not one stream.
+	if !strings.Contains(got[0], "─") {
+		t.Errorf("line 0: expected a boundary rule, got %q", got[0])
+	}
+	if !strings.Contains(got[1], "foo.go") || !styled(got[1]) {
+		t.Errorf("line 1: expected styled file path, got %q", got[1])
 	}
 
-	// Metadata ("diff --git", "---", "+++") and context lines pass through
-	// byte-identical — no styling.
-	for _, i := range []int{0, 1, 2, 4} {
-		if got[i] != in[i] {
-			t.Errorf("line %d: want unstyled %q, got %q", i, in[i], got[i])
-		}
-	}
-
-	// Hunk header, added, and removed lines are styled with content preserved.
-	for _, i := range []int{3, 5, 6} {
+	// Remaining metadata (index/---/+++ at output lines 2-4) is dimmed, not raw.
+	for i := 2; i <= 4; i++ {
 		if !styled(got[i]) {
-			t.Errorf("line %d: %q should be styled, got %q", i, in[i], got[i])
+			t.Errorf("line %d: metadata should be dimmed (styled), got %q", i, got[i])
 		}
-		if !strings.Contains(got[i], in[i]) {
-			t.Errorf("line %d: styled output %q lost content %q", i, got[i], in[i])
+	}
+
+	// Context passes through unstyled; hunk/added/removed are styled with
+	// content preserved (output index = input index + 1 after the boundary).
+	if got[6] != " unchanged line" {
+		t.Errorf("context line: want unstyled %q, got %q", " unchanged line", got[6])
+	}
+	for outIdx, inIdx := range map[int]int{5: 4, 7: 6, 8: 7} {
+		if !styled(got[outIdx]) {
+			t.Errorf("line %d: %q should be styled, got %q", outIdx, in[inIdx], got[outIdx])
 		}
+		if !strings.Contains(got[outIdx], in[inIdx]) {
+			t.Errorf("line %d: styled output %q lost content %q", outIdx, got[outIdx], in[inIdx])
+		}
+	}
+}
+
+// Long lines truncate to the pane width instead of soft-wrapping in the
+// viewport — wrapped rows make scroll position and file boundaries jump.
+func TestColorizeDiff_TruncatesToWidth(t *testing.T) {
+	defer theme.Set("unicode")()
+	forceColorProfile(t)
+
+	long := "+" + strings.Repeat("x", 200)
+	out := colorizeDiff(long, 40)
+	for i, l := range strings.Split(out, "\n") {
+		if w := lipgloss.Width(l); w > 40 {
+			t.Errorf("line %d width %d exceeds pane width 40", i, w)
+		}
+	}
+	if !strings.Contains(out, "…") {
+		t.Error("truncated line should carry an ellipsis")
+	}
+}
+
+// Tabs expand to spaces before width math, so indentation renders predictably
+// instead of depending on the terminal's tab stops.
+func TestColorizeDiff_ExpandsTabs(t *testing.T) {
+	defer theme.Set("unicode")()
+
+	out := colorizeDiff("+\tindented", 80)
+	if strings.Contains(out, "\t") {
+		t.Errorf("output must not contain raw tabs: %q", out)
+	}
+	if !strings.Contains(out, "    indented") {
+		t.Errorf("tab should expand to spaces: %q", out)
+	}
+}
+
+// A zero/unset width (startup, tests) must not truncate or panic.
+func TestColorizeDiff_ZeroWidthLeavesLinesAlone(t *testing.T) {
+	defer theme.Set("unicode")()
+
+	long := "+" + strings.Repeat("x", 120)
+	out := colorizeDiff(long, 0)
+	if !strings.Contains(out, strings.Repeat("x", 120)) {
+		t.Errorf("zero width must not truncate: %q", out)
 	}
 }
 
@@ -90,7 +141,7 @@ func TestColorizeDiff_EmptyInput(t *testing.T) {
 
 	// strings.Split("", "\n") yields one empty element, so the loop emits one
 	// empty line — a trailing newline is the only output.
-	got := colorizeDiff("")
+	got := colorizeDiff("", 80)
 	if strings.TrimSpace(got) != "" {
 		t.Errorf("colorizeDiff(\"\") = %q, expected only whitespace", got)
 	}
@@ -103,7 +154,7 @@ func TestColorizeDiff_SinglePlusAndMinus(t *testing.T) {
 	defer theme.Set("unicode")()
 	forceColorProfile(t)
 
-	out := strings.Split(colorizeDiff("+\n-"), "\n")
+	out := strings.Split(colorizeDiff("+\n-", 80), "\n")
 	if len(out) < 2 {
 		t.Fatalf("expected at least 2 output lines, got %q", out)
 	}
