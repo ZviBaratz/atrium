@@ -64,7 +64,7 @@ const (
 // createFormHelp is the single footer line describing how to navigate the create form.
 // Enter advances between fields (and inserts a newline in the prompt), so submission is
 // surfaced as Ctrl+S — which works from any field — rather than an ambiguous "Enter create".
-const createFormHelp = "Tab complete/move · ↑↓ select · type to filter · ⌃S create"
+const createFormHelp = "Tab complete/move · ↑↓ select · ↵ create from name · ⌃S create"
 
 // renderPickerRows renders a list of pre-formatted labels windowed around the cursor,
 // always emitting exactly rows lines (padding with blanks) so the caller's height is
@@ -414,9 +414,10 @@ func (t *TextInputOverlay) HandleKeyPress(msg tea.KeyMsg) (bool, bool) {
 		t.Canceled = true
 		return true, false
 	case tea.KeyCtrlS:
-		// Submit from any field. Enter only submits on the focused Create button (so it can
-		// stay a newline in the prompt and an "advance" elsewhere), so Ctrl+S is the
-		// submit-from-anywhere shortcut; the Create button remains the fallback.
+		// Submit from any field. Enter submits only on the Create button and a filled
+		// title (it stays a newline in the prompt and an "advance" elsewhere), so
+		// Ctrl+S is the submit-from-anywhere shortcut; the Create button remains the
+		// fallback.
 		t.Submitted = true
 		if t.OnSubmit != nil {
 			t.OnSubmit()
@@ -424,6 +425,18 @@ func (t *TextInputOverlay) HandleKeyPress(msg tea.KeyMsg) (bool, bool) {
 		return true, false
 	case tea.KeyEnter:
 		if t.isEnterButton() {
+			t.Submitted = true
+			if t.OnSubmit != nil {
+				t.OnSubmit()
+			}
+			return true, false
+		}
+		if t.isTitle() && strings.TrimSpace(t.titleInput.Value()) != "" {
+			// The quick-create contract: n focuses the title, so "n → name → ↵"
+			// creates the session one-handed. Tab from the title reaches the prompt
+			// for the create-with-prompt journey; an *empty* title falls through to
+			// the advance below (submitting would only bounce off the title-required
+			// validation).
 			t.Submitted = true
 			if t.OnSubmit != nil {
 				t.OnSubmit()
