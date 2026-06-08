@@ -145,30 +145,21 @@ func (g *Worktree) computeRepoStats(stats *DiffStats, wt string) {
 	} else {
 		g.statsCacheMu.Unlock()
 
-		// A single rev-list gives both "ahead" (session commits) and "behind" (base
-		// advanced) when the base ref is known; fall back to ahead-only otherwise.
-		if g.baseRef != "" {
-			if out, err := g.runGitCommand(wt, "rev-list", "--left-right", "--count", g.baseRef+"...HEAD"); err == nil {
-				if behind, ahead, ok := parseLeftRightCount(out); ok {
-					stats.Behind = behind
-					stats.Commits = ahead
-				}
-			}
-		} else if g.baseCommitSHA != "" {
-			if out, err := g.runGitCommand(wt, "rev-list", "--count", g.baseCommitSHA+"..HEAD"); err == nil {
-				if ahead, aerr := strconv.Atoi(strings.TrimSpace(out)); aerr == nil {
-					stats.Commits = ahead
-				}
-			}
-		}
+		// Only cache a successful result. A transient rev-list failure must not be
+		// stored, or the zero it leaves would suppress retries for the whole TTL;
+		// leaving the cache empty makes the next tick recompute immediately.
+		if commits, behind, ok := g.revListCounts(wt); ok {
+			stats.Commits = commits
+			stats.Behind = behind
 
-		g.statsCacheMu.Lock()
-		g.statsCache = repoStatsEntry{
-			commits:    stats.Commits,
-			behind:     stats.Behind,
-			computedAt: time.Now(),
+			g.statsCacheMu.Lock()
+			g.statsCache = repoStatsEntry{
+				commits:    commits,
+				behind:     behind,
+				computedAt: time.Now(),
+			}
+			g.statsCacheMu.Unlock()
 		}
-		g.statsCacheMu.Unlock()
 	}
 
 	// Always run git status fresh: the dirty flag must reflect uncommitted edits
@@ -178,6 +169,41 @@ func (g *Worktree) computeRepoStats(stats *DiffStats, wt string) {
 	if out, err := g.runGitCommand(wt, "status", "--porcelain"); err == nil {
 		stats.Dirty = len(out) > 0
 	}
+}
+
+// revListCounts returns the session's commits-ahead and, when the base ref is
+// known, commits-behind by shelling out to git rev-list. ok is false only when a
+// subprocess that was attempted failed (or its output couldn't be parsed); the
+// no-base case returns (0, 0, true) because zero is the correct, cacheable answer
+// rather than an error. The split lets computeRepoStats cache good results while
+// skipping bad ones.
+func (g *Worktree) revListCounts(wt string) (commits, behind int, ok bool) {
+	// A single rev-list gives both "ahead" (session commits) and "behind" (base
+	// advanced) when the base ref is known; fall back to ahead-only otherwise.
+	if g.baseRef != "" {
+		out, err := g.runGitCommand(wt, "rev-list", "--left-right", "--count", g.baseRef+"...HEAD")
+		if err != nil {
+			return 0, 0, false
+		}
+		behind, ahead, parsed := parseLeftRightCount(out)
+		if !parsed {
+			return 0, 0, false
+		}
+		return ahead, behind, true
+	}
+	if g.baseCommitSHA != "" {
+		out, err := g.runGitCommand(wt, "rev-list", "--count", g.baseCommitSHA+"..HEAD")
+		if err != nil {
+			return 0, 0, false
+		}
+		ahead, aerr := strconv.Atoi(strings.TrimSpace(out))
+		if aerr != nil {
+			return 0, 0, false
+		}
+		return ahead, 0, true
+	}
+	// No base to compare against: zero is a legitimate, cacheable result.
+	return 0, 0, true
 }
 
 // invalidateRevListCache clears the cached rev-list result so the next
