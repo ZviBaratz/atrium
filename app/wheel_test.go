@@ -29,10 +29,20 @@ func wheelAt(x, y int, btn tea.MouseButton) tea.MouseMsg {
 // or git is touched.
 func newWheelHome(t *testing.T) *home {
 	t.Helper()
-	// Reset the global zone registry so stale zone bounds from prior tests
-	// (which persist because bubblezone uses a package-level manager) cannot
-	// cause waitAppZone to return old coordinates and misroute wheel events.
-	zone.NewGlobal()
+	// Replace the global zone manager with a fresh one. zone.NewGlobal() is
+	// idempotent (a no-op when DefaultManager is already set), so it cannot
+	// reset state between tests — we must assign directly. Closing the prior
+	// manager stops its goroutine cleanly; t.Cleanup closes the one we're
+	// about to create so it doesn't leak past this test.
+	if zone.DefaultManager != nil {
+		zone.DefaultManager.Close()
+	}
+	zone.DefaultManager = zone.New()
+	t.Cleanup(func() {
+		if zone.DefaultManager != nil {
+			zone.DefaultManager.Close()
+		}
+	})
 	h := newCreateFormHome(t)
 	for _, title := range []string{"alpha", "bravo"} {
 		inst, err := session.NewInstance(session.InstanceOptions{
