@@ -142,6 +142,8 @@ func (g *Worktree) PushChanges(commitMessage string, open bool) error {
 		}
 	}
 
+	// The commit graph changed; ensure the next tick re-runs rev-list.
+	g.invalidateRevListCache()
 	return nil
 }
 
@@ -165,6 +167,9 @@ func (g *Worktree) CommitChanges(commitMessage string) error {
 			log.ErrorLog.Print(err)
 			return fmt.Errorf("failed to commit changes: %w", err)
 		}
+
+		// The commit graph changed; ensure the next tick re-runs rev-list.
+		g.invalidateRevListCache()
 	}
 
 	return nil

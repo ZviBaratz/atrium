@@ -3,7 +3,26 @@ package git
 import (
 	"strconv"
 	"strings"
+	"time"
 )
+
+// revListCacheTTL is how long the rev-list commit counts (ahead/behind) returned
+// by computeRepoStats are reused without re-running git rev-list. git status
+// (the dirty flag) is always run fresh because it reflects uncommitted file
+// changes that must be visible immediately after the user edits or commits.
+// Commits-ahead/behind change only on an explicit commit, so a 3-second cache
+// is imperceptible in normal use and cuts rev-list subprocess pressure by ~83%
+// at a 500ms tick interval (1 run per 6 ticks rather than 1 per tick).
+const revListCacheTTL = 3 * time.Second
+
+// repoStatsEntry holds the cached rev-list result from a single computeRepoStats
+// run. Only commits-ahead and commits-behind are cached; the dirty flag is not
+// (git status --porcelain runs on every tick for accurate real-time display).
+type repoStatsEntry struct {
+	commits    int
+	behind     int
+	computedAt time.Time
+}
 
 // DiffStats holds statistics about the changes in a diff
 type DiffStats struct {
@@ -111,29 +130,90 @@ func (g *Worktree) snapshotWorktreePath() string {
 // never sets stats.Error, so a hiccup in a cosmetic counter can't blank the diff.
 // wt is the worktree path snapshotted by the caller under the read lock; baseRef and
 // baseCommitSHA are not mutated by Rename, so they're read directly.
+//
+// The rev-list result (commits ahead/behind) is cached for revListCacheTTL because
+// it only changes on an explicit commit and the subprocess is relatively expensive on
+// large histories. The dirty check (git status --porcelain) always runs fresh so the
+// UI reflects uncommitted edits without delay.
 func (g *Worktree) computeRepoStats(stats *DiffStats, wt string) {
-	// A single rev-list gives both "ahead" (session commits) and "behind" (base
-	// advanced) when the base ref is known; fall back to ahead-only otherwise.
-	if g.baseRef != "" {
-		if out, err := g.runGitCommand(wt, "rev-list", "--left-right", "--count", g.baseRef+"...HEAD"); err == nil {
-			if behind, ahead, ok := parseLeftRightCount(out); ok {
-				stats.Behind = behind
-				stats.Commits = ahead
+	// Serve rev-list from cache when fresh; otherwise re-run and update.
+	g.statsCacheMu.Lock()
+	if !g.statsCache.computedAt.IsZero() && time.Since(g.statsCache.computedAt) < revListCacheTTL {
+		stats.Commits = g.statsCache.commits
+		stats.Behind = g.statsCache.behind
+		g.statsCacheMu.Unlock()
+	} else {
+		g.statsCacheMu.Unlock()
+
+		// Only cache a successful result. A transient rev-list failure must not be
+		// stored, or the zero it leaves would suppress retries for the whole TTL;
+		// leaving the cache empty makes the next tick recompute immediately.
+		if commits, behind, ok := g.revListCounts(wt); ok {
+			stats.Commits = commits
+			stats.Behind = behind
+
+			g.statsCacheMu.Lock()
+			g.statsCache = repoStatsEntry{
+				commits:    commits,
+				behind:     behind,
+				computedAt: time.Now(),
 			}
-		}
-	} else if g.baseCommitSHA != "" {
-		if out, err := g.runGitCommand(wt, "rev-list", "--count", g.baseCommitSHA+"..HEAD"); err == nil {
-			if ahead, aerr := strconv.Atoi(strings.TrimSpace(out)); aerr == nil {
-				stats.Commits = ahead
-			}
+			g.statsCacheMu.Unlock()
 		}
 	}
 
-	// Inline the dirtiness check against the snapshotted path rather than calling IsDirty
+	// Always run git status fresh: the dirty flag must reflect uncommitted edits
+	// immediately (unlike commit counts, it changes without an explicit commit).
+	// Inline the check against the snapshotted path rather than calling IsDirty
 	// (which reads g.worktreePath) so this background path never touches the mutable field.
 	if out, err := g.runGitCommand(wt, "status", "--porcelain"); err == nil {
 		stats.Dirty = len(out) > 0
 	}
+}
+
+// revListCounts returns the session's commits-ahead and, when the base ref is
+// known, commits-behind by shelling out to git rev-list. ok is false only when a
+// subprocess that was attempted failed (or its output couldn't be parsed); the
+// no-base case returns (0, 0, true) because zero is the correct, cacheable answer
+// rather than an error. The split lets computeRepoStats cache good results while
+// skipping bad ones.
+func (g *Worktree) revListCounts(wt string) (commits, behind int, ok bool) {
+	// A single rev-list gives both "ahead" (session commits) and "behind" (base
+	// advanced) when the base ref is known; fall back to ahead-only otherwise.
+	if g.baseRef != "" {
+		out, err := g.runGitCommand(wt, "rev-list", "--left-right", "--count", g.baseRef+"...HEAD")
+		if err != nil {
+			return 0, 0, false
+		}
+		behind, ahead, parsed := parseLeftRightCount(out)
+		if !parsed {
+			return 0, 0, false
+		}
+		return ahead, behind, true
+	}
+	if g.baseCommitSHA != "" {
+		out, err := g.runGitCommand(wt, "rev-list", "--count", g.baseCommitSHA+"..HEAD")
+		if err != nil {
+			return 0, 0, false
+		}
+		ahead, aerr := strconv.Atoi(strings.TrimSpace(out))
+		if aerr != nil {
+			return 0, 0, false
+		}
+		return ahead, 0, true
+	}
+	// No base to compare against: zero is a legitimate, cacheable result.
+	return 0, 0, true
+}
+
+// invalidateRevListCache clears the cached rev-list result so the next
+// computeRepoStats call re-runs git rev-list unconditionally. Call this after
+// any operation that alters the commit graph (commit, push) so the ahead/behind
+// counts update on the very next tick rather than waiting for the TTL to expire.
+func (g *Worktree) invalidateRevListCache() {
+	g.statsCacheMu.Lock()
+	g.statsCache = repoStatsEntry{}
+	g.statsCacheMu.Unlock()
 }
 
 // parseNumstat sums the added/removed columns and counts the files from
