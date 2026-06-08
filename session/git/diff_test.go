@@ -1,6 +1,9 @@
 package git
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 func TestParseNumstat(t *testing.T) {
 	tests := []struct {
@@ -127,5 +130,53 @@ func TestCountDiffFiles(t *testing.T) {
 				t.Errorf("countDiffFiles(%q) = %d, want %d", tt.input, got, tt.want)
 			}
 		})
+	}
+}
+
+// TestComputeRepoStats_RevListCacheHit verifies that a fresh cache entry causes
+// computeRepoStats to skip the rev-list subprocess (worktree path is empty so any
+// git call would fail) and populate Commits/Behind from the cache instead.
+// git status is always run regardless of cache state; with an empty path it fails
+// silently, leaving Dirty at its zero value — the test only asserts the cached fields.
+func TestComputeRepoStats_RevListCacheHit(t *testing.T) {
+	wt := &Worktree{}
+	wt.statsCacheMu.Lock()
+	wt.statsCache = repoStatsEntry{
+		commits:    3,
+		behind:     1,
+		computedAt: time.Now(),
+	}
+	wt.statsCacheMu.Unlock()
+
+	stats := &DiffStats{}
+	wt.computeRepoStats(stats, "")
+
+	if stats.Commits != 3 {
+		t.Errorf("rev-list cache hit: Commits = %d, want 3", stats.Commits)
+	}
+	if stats.Behind != 1 {
+		t.Errorf("rev-list cache hit: Behind = %d, want 1", stats.Behind)
+	}
+}
+
+// TestComputeRepoStats_RevListCacheMiss verifies that an expired cache entry is not
+// propagated — rev-list re-runs (fails silently with an empty path, leaving fields at
+// zero) rather than returning the stale 99 values.
+func TestComputeRepoStats_RevListCacheMiss(t *testing.T) {
+	wt := &Worktree{}
+	wt.statsCacheMu.Lock()
+	wt.statsCache = repoStatsEntry{
+		commits:    99,
+		behind:     99,
+		computedAt: time.Now().Add(-(revListCacheTTL + time.Second)),
+	}
+	wt.statsCacheMu.Unlock()
+
+	stats := &DiffStats{}
+	// Empty path: subprocess fails silently; fields stay at zero, not stale 99.
+	wt.computeRepoStats(stats, "")
+
+	if stats.Commits == 99 || stats.Behind == 99 {
+		t.Errorf("stale rev-list cache propagated: Commits=%d Behind=%d, want != 99", stats.Commits, stats.Behind)
 	}
 }

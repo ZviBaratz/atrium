@@ -61,6 +61,11 @@ type Worktree struct {
 	// When true, the branch will not be deleted on cleanup. Only set for sessions restored
 	// from storage that predate the branch-off model; new sessions are always branch-owners.
 	isExistingBranch bool
+	// statsCache caches the commit-count and dirty results from computeRepoStats so
+	// the subprocess pair (rev-list + status) does not run on every 500ms tick.
+	// statsCacheMu is a separate mutex so it never shares a lock ordering with mu.
+	statsCache   repoStatsEntry
+	statsCacheMu sync.Mutex
 }
 
 // NewWorktreeFromStorage rehydrates a Worktree from its persisted fields
