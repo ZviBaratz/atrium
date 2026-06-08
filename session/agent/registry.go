@@ -38,7 +38,7 @@ var claude = &Adapter{
 	},
 
 	Gates: []Gate{
-		{Contains: []string{"Do you trust the files in this folder?", "new MCP server"},
+		{Contains: []string{"Do you trust the files in this folder?", "new MCP server", "New MCP server"},
 			Dismiss: DismissEnter},
 	},
 

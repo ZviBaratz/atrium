@@ -126,6 +126,11 @@ func TestClaudeGate(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, DismissEnter, g.Dismiss)
 
+	// Claude Code v2.1.162+ uses capital-N "New MCP server found in this project:"
+	g, ok = claude.GateUp("New MCP server found in this project: nanoclaw\n  [Enter] to approve")
+	require.True(t, ok, "capital-N singular MCP gate must fire")
+	require.Equal(t, DismissEnter, g.Dismiss)
+
 	_, ok = claude.GateUp("╭───╮\n│ > │  ? for shortcuts\n╰───╯")
 	require.False(t, ok)
 }
