@@ -1737,7 +1737,7 @@ const promptDeliveryTimeout = 60 * time.Second
 // promptDeliveryReady decides whether a queued startup prompt may be delivered now.
 //
 // gateReady is Instance.IsReadyForPrompt(): the agent has rendered and is past any
-// one-time startup gate (claude's trust-folder / "new MCP server" screen, or the
+// one-time startup gate (claude's trust-folder / new-MCP-server screen, or the
 // non-claude docs-url screen). This is a hard precondition the timeout never bypasses —
 // keystrokes sent while a gate is up are consumed by the gate dialog, not the agent's
 // input box, so the prompt would be lost.

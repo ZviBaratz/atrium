@@ -118,7 +118,8 @@ func TestStartupGates(t *testing.T) {
 		want    bool
 	}{
 		{"claude trust folder", "claude", "Do you trust the files in this folder?", true},
-		{"claude new MCP server", "claude", "A new MCP server was found", true},
+		{"claude new MCP server (lowercase)", "claude", "new MCP server found in this project", true},
+		{"claude new MCP server (capital-N)", "claude", "New MCP server found in this project: nanoclaw", true},
 		{"aider doc url", "aider", "Open documentation url for more info", true},
 		{"claude idle box has no gate", "claude", "│ > │  ? for shortcuts", false},
 		{"claude ignores aider gate string", "claude", "Open documentation url for more info", false},
