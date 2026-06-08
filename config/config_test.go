@@ -272,6 +272,11 @@ func TestLoadConfig(t *testing.T) {
 		assert.NotEmpty(t, config.DefaultProgram)
 		assert.False(t, config.AutoYes)                  // Default value
 		assert.Equal(t, 1000, config.DaemonPollInterval) // Default value
+
+		// The unparseable file is preserved for recovery, not silently discarded.
+		corrupt, rerr := os.ReadFile(configPath + ".corrupt")
+		require.NoError(t, rerr)
+		assert.Equal(t, invalidContent, string(corrupt))
 	})
 }
 

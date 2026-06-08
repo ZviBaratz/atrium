@@ -371,6 +371,9 @@ func LoadConfig() *Config {
 	}
 
 	configPath := filepath.Join(configDir, ConfigFileName)
+	// Clear any temp files orphaned by a crash mid-write (see writeFileAtomic).
+	sweepStaleTempFiles(configPath)
+
 	data, err := os.ReadFile(configPath)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -388,7 +391,17 @@ func LoadConfig() *Config {
 
 	var config Config
 	if err := json.Unmarshal(data, &config); err != nil {
-		log.ErrorLog.Printf("failed to parse config file: %v", err)
+		// Preserve an unparseable config for recovery rather than silently
+		// replacing it with defaults the next save would overwrite it with.
+		if len(data) > 0 {
+			if dst, qerr := quarantineCorruptFile(configPath); qerr != nil {
+				log.ErrorLog.Printf("failed to parse config file and could not preserve it: parse=%v rename=%v", err, qerr)
+			} else {
+				log.ErrorLog.Printf("failed to parse config file; preserved corrupt copy at %s: %v", dst, err)
+			}
+		} else {
+			log.ErrorLog.Printf("failed to parse config file: %v", err)
+		}
 		return seededDefaultConfig()
 	}
 
@@ -412,7 +425,7 @@ func saveConfig(config *Config) error {
 		return fmt.Errorf("failed to marshal config: %w", err)
 	}
 
-	return os.WriteFile(configPath, data, 0644)
+	return writeFileAtomic(configPath, data, 0644)
 }
 
 // SaveConfig exports the saveConfig function for use by other packages

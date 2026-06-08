@@ -2,11 +2,61 @@ package config
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// statePath returns the resolved state.json path for the sandboxed HOME.
+func statePath(t *testing.T) string {
+	t.Helper()
+	dir, err := GetConfigDir()
+	require.NoError(t, err)
+	return filepath.Join(dir, StateFileName)
+}
+
+func TestLoadState_CorruptFileIsPreservedNotDiscarded(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	// Seed a real state with a recent path, then corrupt the file on disk.
+	require.NoError(t, DefaultState().AddRecentPath("/keepme"))
+	path := statePath(t)
+	require.NoError(t, os.WriteFile(path, []byte("{not valid json"), 0644))
+
+	loaded := LoadState()
+	// Falls back to defaults (no crash) rather than the corrupt content.
+	assert.Empty(t, loaded.GetRecentPaths())
+	// The corrupt bytes are preserved alongside, recoverable.
+	corrupt, err := os.ReadFile(path + ".corrupt")
+	require.NoError(t, err)
+	assert.Equal(t, "{not valid json", string(corrupt))
+}
+
+func TestLoadState_EmptyFileIsNotArchived(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	path := statePath(t)
+	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0755))
+	require.NoError(t, os.WriteFile(path, nil, 0644))
+
+	_ = LoadState()
+	assert.NoFileExists(t, path+".corrupt")
+}
+
+func TestLoadState_SweepsStaleTempFiles(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	path := statePath(t)
+	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0755))
+	orphan := filepath.Join(filepath.Dir(path), "."+StateFileName+".tmp-987654")
+	require.NoError(t, os.WriteFile(orphan, []byte("partial"), 0600))
+
+	_ = LoadState()
+	assert.NoFileExists(t, orphan)
+}
 
 func TestAddRecentPath_OrderDedupCap(t *testing.T) {
 	// Isolate SaveState writes from the real ~/.claude-squad/state.json.

@@ -107,6 +107,9 @@ func LoadState() *State {
 	}
 
 	statePath := filepath.Join(configDir, StateFileName)
+	// Clear any temp files orphaned by a crash mid-write (see writeFileAtomic).
+	sweepStaleTempFiles(statePath)
+
 	data, err := os.ReadFile(statePath)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -124,7 +127,18 @@ func LoadState() *State {
 
 	var state State
 	if err := json.Unmarshal(data, &state); err != nil {
-		log.ErrorLog.Printf("failed to parse state file: %v", err)
+		// A torn or unparseable file would otherwise be silently discarded along
+		// with every persisted session. Preserve it for recovery before falling
+		// back to defaults, and log loudly. Empty files are not worth archiving.
+		if len(data) > 0 {
+			if dst, qerr := quarantineCorruptFile(statePath); qerr != nil {
+				log.ErrorLog.Printf("failed to parse state file and could not preserve it: parse=%v rename=%v", err, qerr)
+			} else {
+				log.ErrorLog.Printf("failed to parse state file; preserved corrupt copy at %s: %v", dst, err)
+			}
+		} else {
+			log.ErrorLog.Printf("failed to parse state file: %v", err)
+		}
 		return DefaultState()
 	}
 
@@ -148,7 +162,7 @@ func SaveState(state *State) error {
 		return fmt.Errorf("failed to marshal state: %w", err)
 	}
 
-	return os.WriteFile(statePath, data, 0644)
+	return writeFileAtomic(statePath, data, 0644)
 }
 
 // InstanceStorage interface implementation

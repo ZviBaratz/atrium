@@ -17,6 +17,15 @@ import (
 	"time"
 )
 
+// Tunables for graceful daemon shutdown, overridable in tests.
+// gracefulStopTimeout bounds how long StopDaemon waits for a SIGTERM'd daemon to
+// persist its instances and exit before escalating to SIGKILL; gracefulStopPoll
+// is the interval between liveness probes while waiting.
+var (
+	gracefulStopTimeout = 3 * time.Second
+	gracefulStopPoll    = 25 * time.Millisecond
+)
+
 // RunDaemon runs the daemon process which iterates over all sessions and runs AutoYes mode on them.
 // It's expected that the main process kills the daemon when the main process starts.
 // ctx carries the daemon's shutdown signal (main installs signal.NotifyContext for
@@ -160,7 +169,11 @@ func StopDaemon() error {
 		return fmt.Errorf("failed to find daemon process: %w", err)
 	}
 
-	if err := proc.Kill(); err != nil {
+	// Graceful stop (SIGTERM, then SIGKILL fallback) so the daemon persists the
+	// autoyes progress it made while the TUI was closed instead of having it
+	// thrown away by an immediate kill. terminateProcess blocks until the daemon
+	// is gone, so the caller can safely load state afterward (see main.go).
+	if err := terminateProcess(proc); err != nil {
 		return fmt.Errorf("failed to stop daemon process: %w", err)
 	}
 
