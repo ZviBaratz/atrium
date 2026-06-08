@@ -191,6 +191,37 @@ func newSettingRows(cfg *config.Config) []settingRow {
 			(*config.Config).GetTrustWorktreesRoot,
 			func(c *config.Config, v bool) { c.TrustWorktreesRoot = &v }),
 		{
+			key: "carry_files", section: "Behavior", label: "Carry files", kind: kindText,
+			description: "Gitignored files copied into each new worktree; comma-separated repo-relative paths.",
+			applyNote:   "affects new sessions",
+			get: func(c *config.Config) string {
+				files := c.GetCarryFiles()
+				if len(files) == 0 {
+					return "(none)"
+				}
+				return strings.Join(files, ", ")
+			},
+			editGet: func(c *config.Config) string {
+				return strings.Join(c.GetCarryFiles(), ", ")
+			},
+			set: func(c *config.Config, v string) error {
+				v = strings.TrimSpace(v)
+				if v == "" {
+					c.CarryFiles = []string{}
+					return nil
+				}
+				parts := strings.Split(v, ",")
+				files := make([]string, 0, len(parts))
+				for _, p := range parts {
+					if t := strings.TrimSpace(p); t != "" {
+						files = append(files, t)
+					}
+				}
+				c.CarryFiles = files
+				return nil
+			},
+		},
+		{
 			key: "daemon_poll_interval", section: "Behavior", label: "Poll interval (ms)", kind: kindInt,
 			description: "Auto-yes daemon polling rate.", applyNote: "applies on restart",
 			get: func(c *config.Config) string { return strconv.Itoa(c.DaemonPollInterval) },
