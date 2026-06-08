@@ -205,11 +205,9 @@ func newSettingRows(cfg *config.Config) []settingRow {
 				return strings.Join(c.GetCarryFiles(), ", ")
 			},
 			set: func(c *config.Config, v string) error {
-				v = strings.TrimSpace(v)
-				if v == "" {
-					c.CarryFiles = []string{}
-					return nil
-				}
+				// Split on commas, trim each entry, drop blanks. Empty or
+				// all-blank input collapses to a non-nil empty slice — the
+				// explicit opt-out per GetCarryFiles's nil-vs-empty contract.
 				parts := strings.Split(v, ",")
 				files := make([]string, 0, len(parts))
 				for _, p := range parts {

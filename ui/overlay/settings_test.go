@@ -380,3 +380,18 @@ func TestSettingsOverlay_CarryFilesEditGetReturnsRawList(t *testing.T) {
 	require.NotNil(t, row.editGet)
 	assert.Equal(t, ".env, .envrc", row.editGet(cfg))
 }
+
+func TestSettingsOverlay_CarryFilesSetBlankEntriesOptOut(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.CarryFiles = []string{".env"}
+	o := NewSettingsOverlay(cfg)
+	settingsAt(t, o, "carry_files")
+	row := o.rows[o.cursor]
+
+	// Comma- and whitespace-only input carries no real entries: it must
+	// collapse to a non-nil empty slice (the explicit opt-out), never nil —
+	// nil would make GetCarryFiles fall back to the default list.
+	require.NoError(t, row.set(cfg, " , ,  "))
+	assert.NotNil(t, cfg.CarryFiles, "opt-out must be an explicit empty slice, not nil")
+	assert.Empty(t, cfg.CarryFiles)
+}
