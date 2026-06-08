@@ -29,6 +29,10 @@ func wheelAt(x, y int, btn tea.MouseButton) tea.MouseMsg {
 // or git is touched.
 func newWheelHome(t *testing.T) *home {
 	t.Helper()
+	// Reset the global zone registry so stale zone bounds from prior tests
+	// (which persist because bubblezone uses a package-level manager) cannot
+	// cause waitAppZone to return old coordinates and misroute wheel events.
+	zone.NewGlobal()
 	h := newCreateFormHome(t)
 	for _, title := range []string{"alpha", "bravo"} {
 		inst, err := session.NewInstance(session.InstanceOptions{
