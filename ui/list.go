@@ -219,6 +219,13 @@ func (l *List) SetShowEmptyHint(show bool) {
 	l.hideEmptyHint = !show
 }
 
+// SetBranchPrefix sets the git-branch prefix stripped from each row's branch
+// label (see InstanceRenderer.branchPrefix). The app passes the configured
+// BranchPrefix so the redundant per-row namespace (e.g. "zvi/") is hidden.
+func (l *List) SetBranchPrefix(prefix string) {
+	l.renderer.branchPrefix = prefix
+}
+
 // SetFilter updates the incremental filter query and clamps the selection to the
 // nearest still-visible item. Pass an empty string to disable filtering.
 func (l *List) SetFilter(query string) {
@@ -285,6 +292,10 @@ func (l *List) NumInstances() int {
 type InstanceRenderer struct {
 	spinner *spinner.Model
 	width   int
+	// branchPrefix is the configured git-branch prefix (e.g. "zvi/"). It is
+	// stripped from each row's branch label — every session shares it, so it is
+	// pure repetition on the version-control line. Empty disables stripping.
+	branchPrefix string
 }
 
 func (r *InstanceRenderer) setWidth(width int) {
@@ -342,9 +353,10 @@ func (r *InstanceRenderer) stateGlyph(i *session.Instance, th *theme.Theme) (gly
 // gutter (color-coded glyph — no word) and the name, with the account and AUTO
 // badges and the agent icon right-aligned — the agent icon pinned to the far
 // edge so it forms a fixed column mirroring the status gutter. Line 2 (dim) is
-// version control: branch + behind/ahead/dirty + PR on the left, diff stat + age
-// on the right, "·"-separated. The selected row carries a left accent bar and a
-// filled background. idx is unused (kept for the List caller's signature).
+// version control: the (prefix-stripped) branch + behind/ahead/dirty + PR on the
+// left and the diff stat on the right, "·"-separated. A direct (non-git) session
+// instead shows a dim marker and its age. The selected row carries a left accent
+// bar and a filled background. idx is unused (kept for the List caller's signature).
 func (r *InstanceRenderer) Render(i *session.Instance, idx int, selected bool) string {
 	_ = idx
 	th := theme.Current()
@@ -409,7 +421,17 @@ func (r *InstanceRenderer) Render(i *session.Instance, idx int, selected bool) s
 		line2 = p.composeLine(W, left2, right2)
 	} else {
 		stat := i.GetDiffStats()
-		left2 := []rowSeg{p.seg(strings.Repeat(" ", indentW), th.Palette.FgDim), p.flexSeg(i.Branch, th.Palette.FgDim, false)}
+		// Strip the configured branch prefix (e.g. "zvi/") — it repeats on every
+		// row, so dropping it reclaims width for the distinguishing part of the
+		// name. Only the exact configured prefix is removed, so a meaningful
+		// segment like "feature/" on a differently-namespaced branch survives.
+		branch := i.Branch
+		if r.branchPrefix != "" {
+			if trimmed := strings.TrimPrefix(branch, r.branchPrefix); trimmed != "" {
+				branch = trimmed
+			}
+		}
+		left2 := []rowSeg{p.seg(strings.Repeat(" ", indentW), th.Palette.FgDim), p.flexSeg(branch, th.Palette.FgDim, false)}
 		if chips := gitChips(p, stat); len(chips) > 0 {
 			left2 = append(left2, p.sepSeg())
 			left2 = append(left2, chips...)
@@ -418,13 +440,11 @@ func (r *InstanceRenderer) Render(i *session.Instance, idx int, selected bool) s
 			left2 = append(left2, p.sepSeg(), seg)
 		}
 
+		// The age is intentionally omitted here: it is the weakest glanceable
+		// signal on the densest line, and dropping it keeps the branch + diff
+		// legible. Direct sessions (above) still show age — their line 2 is
+		// otherwise near-empty, so it adds no clutter there.
 		right2 := diffSegs(p, stat)
-		if age, ok := p.ageSeg(i); ok {
-			if len(right2) > 0 {
-				right2 = append(right2, p.sepSeg())
-			}
-			right2 = append(right2, age)
-		}
 		line2 = p.composeLine(W, left2, right2)
 	}
 

@@ -2,6 +2,7 @@ package ui
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
@@ -208,16 +209,29 @@ func gitChips(p rowPaint, stat *git.DiffStats) []rowSeg {
 }
 
 // diffSegs returns the "+adds −dels" pair (additions Success, deletions Danger),
-// or nil when the diff is empty.
+// or nil when the diff is empty. Counts are humanized (see humanizeCount) so a
+// large churn doesn't crowd the branch off the line.
 func diffSegs(p rowPaint, stat *git.DiffStats) []rowSeg {
 	if stat == nil || stat.Error != nil || stat.IsEmpty() {
 		return nil
 	}
 	return []rowSeg{
-		p.seg(fmt.Sprintf("+%d", stat.Added), p.th.Palette.Success),
+		p.seg("+"+humanizeCount(stat.Added), p.th.Palette.Success),
 		p.seg(" ", p.th.Palette.FgDim),
-		p.seg(fmt.Sprintf("-%d", stat.Removed), p.th.Palette.Danger),
+		p.seg("-"+humanizeCount(stat.Removed), p.th.Palette.Danger),
 	}
+}
+
+// humanizeCount renders a diff line-count compactly: values under 1000 print
+// verbatim, larger ones collapse to a "k" suffix with one decimal place (a
+// trailing ".0" dropped). So 18918 reads "18.9k" instead of eating six columns
+// on the version-control line, while small, precise counts like 142 stay exact.
+func humanizeCount(n int) string {
+	if n < 1000 {
+		return strconv.Itoa(n)
+	}
+	s := strconv.FormatFloat(float64(n)/1000.0, 'f', 1, 64)
+	return strings.TrimSuffix(s, ".0") + "k"
 }
 
 // prSeg returns the "#<number>" PR chip colored by the most urgent signal, and

@@ -268,6 +268,9 @@ func newHome(ctx context.Context, program string, autoYes bool) *home {
 	// With the always-on hint bar enabled, the bar already carries the first-run
 	// keys; suppress the list's centered empty hint so guidance isn't duplicated.
 	h.list.SetShowEmptyHint(!appConfig.GetHintBar())
+	// Hide the redundant branch namespace (e.g. "zvi/") from each row's branch
+	// label — it repeats on every session and only crowds the diff off the line.
+	h.list.SetBranchPrefix(appConfig.GetBranchPrefix())
 
 	// Load saved instances
 	instances, err := storage.LoadInstances(ctx)

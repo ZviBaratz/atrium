@@ -150,6 +150,36 @@ func TestDiffSegs_EmptyWhenNoChanges(t *testing.T) {
 	require.Contains(t, joined, "-2")
 }
 
+func TestDiffSegs_HumanizesLargeCounts(t *testing.T) {
+	withASCIIProfile(t)
+	th := theme.Current()
+	p := newRowPaint(th, false)
+	segs := diffSegs(p, &git.DiffStats{Added: 18918, Removed: 3239})
+	joined := ""
+	for _, s := range segs {
+		joined += s.plain
+	}
+	require.Contains(t, joined, "+18.9k", "a large addition count collapses to a k-suffix")
+	require.Contains(t, joined, "-3.2k", "a large deletion count collapses to a k-suffix")
+}
+
+func TestHumanizeCount(t *testing.T) {
+	table := map[int]string{
+		0:     "0",
+		31:    "31",
+		142:   "142",
+		999:   "999",
+		1000:  "1k",   // exact thousand drops the ".0"
+		3239:  "3.2k", // rounds down
+		6600:  "6.6k",
+		9999:  "10k", // rounds up across the thousand
+		18918: "18.9k",
+	}
+	for in, want := range table {
+		require.Equalf(t, want, humanizeCount(in), "humanizeCount(%d)", in)
+	}
+}
+
 func TestPRSeg_EmptyWhenNoPR(t *testing.T) {
 	withASCIIProfile(t)
 	th := theme.Current()

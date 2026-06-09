@@ -227,6 +227,17 @@ func (c *Config) GetAutoAttach() bool {
 	return c.AutoAttach == nil || *c.AutoAttach
 }
 
+// GetBranchPrefix returns the configured git-branch prefix (e.g. "zvi/"), or ""
+// for a nil Config. The list view strips this prefix from each session's branch
+// when rendering, since it repeats identically on every row and carries no
+// distinguishing information.
+func (c *Config) GetBranchPrefix() string {
+	if c == nil {
+		return ""
+	}
+	return c.BranchPrefix
+}
+
 // GetKillDoubleTapConfirm reports whether a second press of the kill key confirms
 // the kill dialog. A nil KillDoubleTapConfirm (e.g. an older config file with no
 // such key) defaults to on.
