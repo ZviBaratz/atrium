@@ -182,9 +182,10 @@ func (p rowPaint) nameSeg(i *session.Instance, selected bool) rowSeg {
 	return p.flexSeg(theme.SanitizeWidth(i.DisplayName()), c, selected)
 }
 
-// gitChips returns the behind/ahead/dirty cluster as space-separated segments
-// (behind in Attention — it implies a rebase — the rest dim). Empty when none
-// apply.
+// gitChips returns the behind/ahead cluster as space-separated segments (behind
+// in Attention — it implies a rebase — ahead dim). Empty when neither applies.
+// The dirty glyph is intentionally not here: it describes *what changed* rather
+// than position vs base, so it rides with the diff counts (see changeSegs).
 func gitChips(p rowPaint, stat *git.DiffStats) []rowSeg {
 	if stat == nil || stat.Error != nil {
 		return nil
@@ -199,11 +200,28 @@ func gitChips(p rowPaint, stat *git.DiffStats) []rowSeg {
 		}
 		segs = append(segs, p.seg(fmt.Sprintf("%s%d", p.th.Glyphs.Ahead, stat.Commits), p.th.Palette.FgDim))
 	}
+	return segs
+}
+
+// changeSegs returns the right-aligned "what changed" group: the dirty glyph (an
+// uncommitted-work marker, dim) fronting the "+adds −dels" diff pair. The pencil
+// leads because it qualifies the counts that follow — it answers "is any of this
+// still uncommitted?", which the magnitude alone can't say. Either part may be
+// absent: a dirty worktree whose diff nets to empty shows the pencil alone, while
+// a clean tree with a delta vs base shows counts alone. Empty when neither holds.
+func changeSegs(p rowPaint, stat *git.DiffStats) []rowSeg {
+	if stat == nil || stat.Error != nil {
+		return nil
+	}
+	var segs []rowSeg
 	if stat.Dirty {
+		segs = append(segs, p.seg(p.th.Glyphs.Dirty, p.th.Palette.FgDim))
+	}
+	if diff := diffSegs(p, stat); len(diff) > 0 {
 		if len(segs) > 0 {
 			segs = append(segs, p.seg(" ", p.th.Palette.FgDim))
 		}
-		segs = append(segs, p.seg(p.th.Glyphs.Dirty, p.th.Palette.FgDim))
+		segs = append(segs, diff...)
 	}
 	return segs
 }

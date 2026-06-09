@@ -131,9 +131,68 @@ func TestGitChips_PresentAndAbsent(t *testing.T) {
 	}
 	require.Contains(t, joined, "⇣2")
 	require.Contains(t, joined, "⇡3")
-	require.Contains(t, joined, "*")
+	require.NotContains(t, joined, "*", "dirty rides with the diff counts, not the position cluster")
 
-	require.Empty(t, gitChips(p, &git.DiffStats{Commits: 0}), "no behind/ahead/dirty → no chips")
+	require.Empty(t, gitChips(p, &git.DiffStats{Commits: 0}), "no behind/ahead → no chips (dirty alone is not a chip)")
+}
+
+func TestChangeSegs_DirtyFrontsDiffCounts(t *testing.T) {
+	withASCIIProfile(t)
+	th := theme.Current()
+	p := newRowPaint(th, false)
+
+	// Dirty + a non-empty diff: the pencil precedes the "+adds −dels" pair.
+	segs := changeSegs(p, &git.DiffStats{Added: 20, Removed: 0, Dirty: true})
+	joined := ""
+	for _, s := range segs {
+		joined += s.plain
+	}
+	require.Contains(t, joined, "*")
+	require.Contains(t, joined, "+20")
+	require.Contains(t, joined, "-0")
+	require.Less(t, strings.Index(joined, "*"), strings.Index(joined, "+20"),
+		"the dirty glyph leads the diff counts")
+}
+
+func TestChangeSegs_DirtyWithoutDiff(t *testing.T) {
+	withASCIIProfile(t)
+	th := theme.Current()
+	p := newRowPaint(th, false)
+
+	// A dirty worktree whose diff against base is empty (e.g. an edit that nets
+	// to zero) still shows the pencil — it is the only signal there is work in
+	// flight.
+	segs := changeSegs(p, &git.DiffStats{Dirty: true})
+	joined := ""
+	for _, s := range segs {
+		joined += s.plain
+	}
+	require.Contains(t, joined, "*")
+	require.NotContains(t, joined, "+", "no diff counts when the diff is empty")
+}
+
+func TestChangeSegs_CleanWithDiff(t *testing.T) {
+	withASCIIProfile(t)
+	th := theme.Current()
+	p := newRowPaint(th, false)
+
+	// Everything committed (clean tree) with a delta vs base: counts only, no pencil.
+	segs := changeSegs(p, &git.DiffStats{Added: 9, Removed: 2})
+	joined := ""
+	for _, s := range segs {
+		joined += s.plain
+	}
+	require.NotContains(t, joined, "*", "a clean tree shows no dirty glyph")
+	require.Contains(t, joined, "+9")
+	require.Contains(t, joined, "-2")
+}
+
+func TestChangeSegs_CleanAndEmpty(t *testing.T) {
+	withASCIIProfile(t)
+	th := theme.Current()
+	p := newRowPaint(th, false)
+	require.Empty(t, changeSegs(p, &git.DiffStats{}),
+		"a clean, unchanged session contributes no change segments")
 }
 
 func TestDiffSegs_EmptyWhenNoChanges(t *testing.T) {

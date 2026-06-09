@@ -466,7 +466,7 @@ func (r *InstanceRenderer) Render(i *session.Instance, idx int, selected bool) s
 		// there), but used as a fallback when line 2 would otherwise be empty — a
 		// fresh, unchanged session with no decoupled branch — so every row keeps two
 		// lines and the would-be-blank one still says something useful.
-		right2 := diffSegs(p, stat)
+		right2 := changeSegs(p, stat)
 		if len(groups) == 0 && len(right2) == 0 {
 			if age, ok := p.ageSeg(i); ok {
 				right2 = append(right2, age)
