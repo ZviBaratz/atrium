@@ -1,10 +1,10 @@
 ┌─ Sessions ───────────────────────────┐
-│▎✻ overhaul                    ● ready│
-│▎⎇ zvi/visual-overhaul ⇡3 *   +142 -31│
-│ • bounds                    ◆ waiting│
-│ ⎇ fix-bounds                         │
-│ • markers                    ‖ paused│
-│ ⎇ pane-markers                       │
+│▎● ✻ overhaul                         │
+│▎    zvi/visual-overh… · ⇡3 * +142 -31│
+│ ◆ • bounds                           │
+│     fix-bounds                       │
+│ ‖ • markers                          │
+│     pane-markers                     │
 │                                      │
 │                                      │
 │                                      │

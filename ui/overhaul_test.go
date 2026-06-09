@@ -39,19 +39,27 @@ func TestRender_AutoBadge(t *testing.T) {
 	require.NotContains(t, r.Render(paused, 1, false), "AUTO", "paused session never shows the badge")
 }
 
-func TestRender_StateWords(t *testing.T) {
+// The state word is gone — the leading gutter glyph carries the signal. Assert
+// the glyph renders and the word does not.
+func TestRender_StatusGutterNoWord(t *testing.T) {
 	t.Cleanup(theme.Set("unicode"))
+	th := theme.Current()
 	s := spinner.New()
 	r := &InstanceRenderer{spinner: &s}
 	r.setWidth(60)
-	cases := map[session.Status]string{
-		session.Ready:      "ready",
-		session.NeedsInput: "waiting",
-		session.Paused:     "paused",
+
+	cases := []struct {
+		st    session.Status
+		glyph string
+		word  string
+	}{
+		{session.NeedsInput, th.Glyphs.Waiting, "waiting"},
+		{session.Paused, th.Glyphs.Paused, "paused"},
 	}
-	for st, word := range cases {
-		out := r.Render(instWithStatus(t, "s", st), 1, false)
-		require.Contains(t, out, word, "status %v should render the word %q", st, word)
+	for _, c := range cases {
+		out := r.Render(instWithStatus(t, "s", c.st), 1, false)
+		require.Contains(t, out, c.glyph, "status %v should render its gutter glyph", c.st)
+		require.NotContains(t, out, c.word, "the state word %q must no longer render", c.word)
 	}
 }
 

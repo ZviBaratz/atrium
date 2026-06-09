@@ -44,49 +44,48 @@ func TestRender_GitContextCluster(t *testing.T) {
 	require.Contains(t, out, "⇡2", "commit count should still render")
 }
 
-// A direct (non-git) session has no branch, so rendering the git line would leave a
-// dangling branch glyph with no name. The row must instead show a dim "direct" marker —
-// consistent with the diff pane, menu, and picker hint.
-func TestRender_DirectSessionShowsMarkerNotBranchGlyph(t *testing.T) {
+// A git session shows its branch name on line 2; a direct (non-git) session
+// shows a dim "direct" marker instead. (The branch glyph was removed in the row
+// redesign — indentation + the branch name carry the meaning.)
+func TestRender_DirectSessionShowsMarkerNotBranch(t *testing.T) {
 	t.Cleanup(theme.Set("unicode"))
 	s := spinner.New()
 	r := &InstanceRenderer{spinner: &s}
 	r.setWidth(80)
-	g := theme.Current().Glyphs
 
 	gitInst, err := session.NewInstance(session.InstanceOptions{Title: "g", Path: ".", Program: "echo"})
 	require.NoError(t, err)
-	require.Contains(t, r.Render(gitInst, 1, false), g.Branch,
-		"a git session row carries the branch glyph")
+	gitInst.Branch = "zvi/feature"
+	require.Contains(t, r.Render(gitInst, 1, false), "zvi/feature",
+		"a git session row shows its branch name")
 
 	directInst, err := session.NewInstance(session.InstanceOptions{Title: "d", Path: ".", Program: "echo", Direct: true})
 	require.NoError(t, err)
 	row := r.Render(directInst, 1, false)
 	require.Contains(t, row, "direct", "a direct session row shows the direct marker")
-	require.NotContains(t, row, g.Branch, "a direct session row must not render a dangling branch glyph")
 }
 
-// On a panel too narrow for any of the branch name, the glyph drops with it:
-// a dangling branch glyph followed by nothing reads as a rendering bug (the
-// same rule the direct-session row applies).
-func TestRender_NarrowWidthDropsDanglingBranchGlyph(t *testing.T) {
+// On a panel too narrow for the branch name, the branch flex empties and its
+// trailing separator collapses — the PR chip / git cluster must not be preceded
+// by a dangling "·". (Replaces the old dangling-branch-glyph rule; the glyph no
+// longer exists.)
+func TestRender_NarrowWidthCollapsesBranchSeparator(t *testing.T) {
 	t.Cleanup(theme.Set("unicode"))
 	s := spinner.New()
 	r := &InstanceRenderer{spinner: &s}
-	r.setWidth(14) // enough for line 1, far too narrow for glyph+branch+stats
-	g := theme.Current().Glyphs
+	r.setWidth(16) // wide enough for line 1, too narrow for branch + chips
 
 	inst, err := session.NewInstance(session.InstanceOptions{Title: "t", Path: ".", Program: "echo"})
 	require.NoError(t, err)
 	inst.Branch = "zvi/a-rather-long-branch-name"
-	inst.SetDiffStats(&git.DiffStats{Added: 12, Removed: 3, Commits: 2})
+	inst.SetDiffStats(&git.DiffStats{Added: 1, Removed: 1, Commits: 2})
 
 	row := r.Render(inst, 1, false)
-	if strings.Contains(row, g.Branch) {
-		// If the glyph survives, something of the name must follow it.
-		require.Regexp(t, regexp.QuoteMeta(g.Branch)+` *\S`, row,
-			"a branch glyph must never dangle with nothing after it")
-	}
+	// line 2 is the second line; it must not start its content with a stray middot.
+	lines := strings.Split(row, "\n")
+	require.Len(t, lines, 2)
+	require.NotRegexp(t, `^\s*·`, ansi.Strip(lines[1]),
+		"a separator must never lead line 2 after the branch is squeezed out")
 }
 
 func newTestList(titles ...string) *List {
