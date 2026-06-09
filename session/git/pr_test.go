@@ -334,3 +334,31 @@ func TestPRStatus_PollsGitActualBranch(t *testing.T) {
 		t.Errorf("HasPR/Number = %v/%d, want true/7", got.HasPR, got.Number)
 	}
 }
+
+// TestPRStatus_DetachedHeadFallsBackToStored verifies the fallback contract: on a
+// detached HEAD (CurrentBranchName reports "HEAD") the poll uses the stored
+// branchName, not the literal "HEAD". The unreachable-worktree case folds into
+// the same path — CurrentBranchName returns "" there, which also falls back.
+func TestPRStatus_DetachedHeadFallsBackToStored(t *testing.T) {
+	repo := newTestRepo(t)
+	mustRunGit(t, repo, "checkout", "-b", "stored")
+	sha := revParse(t, repo, "HEAD")
+	mustRunGit(t, repo, "update-ref", "refs/remotes/origin/stored", sha)
+	mustRunGit(t, repo, "checkout", "--detach")
+	wt := &Worktree{worktreePath: repo, branchName: "stored"}
+
+	var gotBranch string
+	restore := stubGHPRView(func(_ context.Context, _ string, branch string) ([]byte, error) {
+		gotBranch = branch
+		return []byte(`{"number":9,"state":"OPEN"}`), nil
+	})
+	defer restore()
+
+	got := wt.PRStatus(context.Background(), false)
+	if gotBranch != "stored" {
+		t.Errorf("detached HEAD: poll used branch %q, want fallback %q", gotBranch, "stored")
+	}
+	if !got.HasPR || got.Number != 9 {
+		t.Errorf("HasPR/Number = %v/%d, want true/9", got.HasPR, got.Number)
+	}
+}

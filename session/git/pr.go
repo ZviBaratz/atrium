@@ -139,17 +139,14 @@ func (g *Worktree) PRStatus(ctx context.Context, selected bool) PRStatus {
 // repointed to a different branch (e.g. the long-lived "Review" worktree checked
 // out onto a feature branch) is polled for the branch the PR really lives on. It
 // falls back to the stored name when the worktree path is empty, when git can't
-// be reached (a paused session whose worktree is gone), or on a detached HEAD.
+// be reached (a paused session whose worktree is gone, CurrentBranchName -> ""),
+// or on a detached HEAD (CurrentBranchName -> "HEAD").
 func (g *Worktree) currentBranch(wt string) string {
 	stored := g.GetBranchName()
 	if wt == "" {
 		return stored
 	}
-	out, err := g.runGitCommand(wt, "rev-parse", "--abbrev-ref", "HEAD")
-	if err != nil {
-		return stored
-	}
-	if b := strings.TrimSpace(out); b != "" && b != "HEAD" {
+	if b := CurrentBranchName(g.baseContext(), wt); b != "" && b != "HEAD" {
 		return b
 	}
 	return stored
