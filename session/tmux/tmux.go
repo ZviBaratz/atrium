@@ -108,6 +108,12 @@ type Session struct {
 	// auto-renamed to the running program.
 	windowName string
 	program    string
+	// configDir, when non-empty, is injected into the session's environment as
+	// CLAUDE_CONFIG_DIR via `new-session -e` at launch, selecting which Claude
+	// Code account the agent runs under. Empty = inherit the inherited env. Set
+	// once before Start (SetClaudeConfigDir); like program it is fixed for the
+	// life of the tmux session, since the env can only be set at session birth.
+	configDir string
 	// adapter holds the per-agent heuristics resolved once from program at
 	// construction; never nil (unknown programs get agent.Generic).
 	adapter *agent.Adapter
@@ -209,6 +215,12 @@ func NewSession(ctx context.Context, name string, program string) *Session {
 // NewSessionWithDeps creates a new Session with provided dependencies for testing.
 func NewSessionWithDeps(ctx context.Context, name string, program string, ptyFactory PtyFactory, cmdExec cmd.Executor) *Session {
 	return newSession(ctx, name, program, ptyFactory, cmdExec)
+}
+
+// SetClaudeConfigDir sets the CLAUDE_CONFIG_DIR injected at session launch. It
+// must be called before Start; once the session exists the env is frozen.
+func (t *Session) SetClaudeConfigDir(dir string) {
+	t.configDir = dir
 }
 
 func newSession(ctx context.Context, name string, program string, ptyFactory PtyFactory, cmdExec cmd.Executor) *Session {
@@ -319,7 +331,15 @@ func (t *Session) start(workDir string, program string) error {
 	// window the human-readable title (the conf disables auto-rename).
 	// The pty client outlives this call, so it runs under the bare base context
 	// (killed on app shutdown), never a per-op timeout.
-	cmd := tmuxCommand(t.baseContext(), "new-session", "-d", "-s", t.sanitizedName, "-c", workDir, "-n", t.windowName, program)
+	args := []string{"new-session", "-d", "-s", t.sanitizedName, "-c", workDir, "-n", t.windowName}
+	if t.configDir != "" {
+		// -e sets a session-scoped env var independent of the persistent server
+		// env (which froze CLAUDE_CONFIG_DIR unset at server start). It must
+		// precede the program word.
+		args = append(args, "-e", "CLAUDE_CONFIG_DIR="+t.configDir)
+	}
+	args = append(args, program)
+	cmd := tmuxCommand(t.baseContext(), args...)
 
 	ptmx, err := t.ptyFactory.Start(cmd)
 	if err != nil {
