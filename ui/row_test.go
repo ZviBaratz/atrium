@@ -4,7 +4,10 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ZviBaratz/atrium/session"
+	"github.com/ZviBaratz/atrium/session/git"
 	"github.com/ZviBaratz/atrium/ui/theme"
+	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/mattn/go-runewidth"
 	"github.com/muesli/termenv"
@@ -88,4 +91,60 @@ func TestComposeLine_SelectedBakesBackgroundIntoGap(t *testing.T) {
 	// The gap is rendered through p.pad, which sets a background; with color on,
 	// the output must contain SGR sequences (no bare-space tail).
 	require.Contains(t, out, "\x1b[", "selected-row gap must carry background styling")
+}
+
+func TestGutterSeg_PerState(t *testing.T) {
+	withAsciiProfile(t)
+	th := theme.Current()
+	s := spinner.New()
+	r := &InstanceRenderer{spinner: &s}
+	p := newRowPaint(th, false)
+
+	waiting := instWithStatus(t, "w", session.NeedsInput)
+	seg := r.gutterSeg(p, waiting)
+	require.Equal(t, th.Glyphs.Waiting, seg.plain, "needs-input gutter is the waiting glyph")
+	require.Equal(t, 1, seg.width(), "the gutter is a single column")
+}
+
+func TestGitChips_PresentAndAbsent(t *testing.T) {
+	withAsciiProfile(t)
+	th := theme.Current()
+	p := newRowPaint(th, false)
+
+	chips := gitChips(p, &git.DiffStats{Behind: 2, Commits: 3, Dirty: true})
+	joined := ""
+	for _, s := range chips {
+		joined += s.plain
+	}
+	require.Contains(t, joined, "⇣2")
+	require.Contains(t, joined, "⇡3")
+	require.Contains(t, joined, "*")
+
+	require.Empty(t, gitChips(p, &git.DiffStats{Commits: 0}), "no behind/ahead/dirty → no chips")
+}
+
+func TestDiffSegs_EmptyWhenNoChanges(t *testing.T) {
+	withAsciiProfile(t)
+	th := theme.Current()
+	p := newRowPaint(th, false)
+	require.Empty(t, diffSegs(p, &git.DiffStats{}), "an empty diff produces no segments")
+	segs := diffSegs(p, &git.DiffStats{Added: 9, Removed: 2})
+	joined := ""
+	for _, s := range segs {
+		joined += s.plain
+	}
+	require.Contains(t, joined, "+9")
+	require.Contains(t, joined, "-2")
+}
+
+func TestPRSeg_EmptyWhenNoPR(t *testing.T) {
+	withAsciiProfile(t)
+	th := theme.Current()
+	p := newRowPaint(th, false)
+	seg, ok := prSeg(p, nil)
+	require.False(t, ok, "no PR status → no segment")
+	_ = seg
+	seg, ok = prSeg(p, &git.PRStatus{HasPR: true, Number: 86})
+	require.True(t, ok)
+	require.Contains(t, seg.plain, "#86")
 }

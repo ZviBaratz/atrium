@@ -1,11 +1,15 @@
 package ui
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/mattn/go-runewidth"
 
+	"github.com/ZviBaratz/atrium/session"
+	"github.com/ZviBaratz/atrium/session/agent"
+	"github.com/ZviBaratz/atrium/session/git"
 	"github.com/ZviBaratz/atrium/ui/theme"
 )
 
@@ -150,4 +154,85 @@ func collapseSeps(left []rowSeg, idx int) []rowSeg {
 		out = append(out, s)
 	}
 	return out
+}
+
+// gutterSeg is the leading status column: the state glyph in its state color.
+func (r *InstanceRenderer) gutterSeg(p rowPaint, i *session.Instance) rowSeg {
+	glyph, c := r.stateGlyph(i, p.th)
+	return p.seg(glyph, c)
+}
+
+// agentSeg is the agent-identity icon (which CLI the session runs).
+func (p rowPaint) agentSeg(i *session.Instance) rowSeg {
+	icon, c := p.th.AgentGlyph(string(agent.Resolve(i.Program).Key))
+	return p.seg(icon, c)
+}
+
+// nameSeg is the flex (elastic) display-name segment. NeedsInput recolors the
+// name (the one attention state); the selected row bolds it. The name is width-
+// sanitized so emoji/ZWJ clusters don't desync the renderer.
+func (p rowPaint) nameSeg(i *session.Instance, selected bool) rowSeg {
+	c := p.th.Palette.Fg
+	if i.GetStatus() == session.NeedsInput {
+		c = p.th.Palette.Attention
+	}
+	return p.flexSeg(theme.SanitizeWidth(i.DisplayName()), c, selected)
+}
+
+// gitChips returns the behind/ahead/dirty cluster as space-separated segments
+// (behind in Attention — it implies a rebase — the rest dim). Empty when none
+// apply.
+func gitChips(p rowPaint, stat *git.DiffStats) []rowSeg {
+	if stat == nil || stat.Error != nil {
+		return nil
+	}
+	var segs []rowSeg
+	if stat.Behind > 0 {
+		segs = append(segs, p.seg(fmt.Sprintf("%s%d", p.th.Glyphs.Behind, stat.Behind), p.th.Palette.Attention))
+	}
+	if stat.Commits > 0 {
+		if len(segs) > 0 {
+			segs = append(segs, p.seg(" ", p.th.Palette.FgDim))
+		}
+		segs = append(segs, p.seg(fmt.Sprintf("%s%d", p.th.Glyphs.Ahead, stat.Commits), p.th.Palette.FgDim))
+	}
+	if stat.Dirty {
+		if len(segs) > 0 {
+			segs = append(segs, p.seg(" ", p.th.Palette.FgDim))
+		}
+		segs = append(segs, p.seg(p.th.Glyphs.Dirty, p.th.Palette.FgDim))
+	}
+	return segs
+}
+
+// diffSegs returns the "+adds −dels" pair (additions Success, deletions Danger),
+// or nil when the diff is empty.
+func diffSegs(p rowPaint, stat *git.DiffStats) []rowSeg {
+	if stat == nil || stat.Error != nil || stat.IsEmpty() {
+		return nil
+	}
+	return []rowSeg{
+		p.seg(fmt.Sprintf("+%d", stat.Added), p.th.Palette.Success),
+		p.seg(" ", p.th.Palette.FgDim),
+		p.seg(fmt.Sprintf("-%d", stat.Removed), p.th.Palette.Danger),
+	}
+}
+
+// prSeg returns the "#<number>" PR chip colored by the most urgent signal, and
+// whether there is a PR to show.
+func prSeg(p rowPaint, pr *git.PRStatus) (rowSeg, bool) {
+	if pr == nil || !pr.HasPR {
+		return rowSeg{}, false
+	}
+	return p.seg(p.th.Glyphs.PR+fmt.Sprintf("#%d", pr.Number), prBadgeColor(p.th, pr)), true
+}
+
+// ageSeg returns the faint session-age chip (e.g. "2h", "3d") and whether it is
+// non-empty (very fresh sessions render no age).
+func (p rowPaint) ageSeg(i *session.Instance) (rowSeg, bool) {
+	age := fmtAge(i.CreatedAt)
+	if age == "" {
+		return rowSeg{}, false
+	}
+	return p.seg(age, p.th.Palette.FgDim), true
 }
