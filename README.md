@@ -203,11 +203,13 @@ list to your config file:
 
 - `remote_matches` are case-insensitive substrings tested against the origin URL.
 - `path_matches` are case-insensitive substrings tested against the target
-  **directory path** — the fallback when there is no matching remote, and the only
-  signal for **direct (non-git) sessions** such as a container directory that holds
-  several repos but is not itself one.
-- Matching is evaluated per account in list order (remote first, then path); the
-  first account that hits either rule wins.
+  **directory path** — the routing signal for **direct (non-git) sessions** (which
+  have no remote), such as a container directory that holds several repos but is not
+  itself one, and also a route for git repos whose remote matches nothing.
+- Matching is evaluated per account in list order (within an account, remote first
+  then path); the first account that hits either rule wins. Because list order
+  dominates, an earlier account's `path_matches` beats a later account's
+  `remote_matches`.
 - The **first account with no `remote_matches` and no `path_matches`** is the
   catch-all default, used when no route matches. It is optional: with no such
   account, non-matching sessions inherit the current environment.

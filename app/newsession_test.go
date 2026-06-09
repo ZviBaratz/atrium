@@ -154,6 +154,47 @@ func TestCreateSessionFromForm_CreatesOneAndClearsOverlay(t *testing.T) {
 	assert.Equal(t, "do the thing", inst.Prompt)
 }
 
+// TestCreateSessionFromForm_ExplicitPathOnlyAccountIsAccented pins the styling contract
+// for a manually picked account: a path-only account (path_matches, no remote_matches) is
+// a real route, so its badge is accented (isDefault=false) — not dimmed as a default. This
+// is the IsCatchAll() delta: the old len(RemoteMatches)==0 test would have marked a
+// path-only pick as the dim default. A hermetic temp dir keeps this non-git (direct).
+func TestCreateSessionFromForm_ExplicitPathOnlyAccountIsAccented(t *testing.T) {
+	dir := t.TempDir() // direct (non-git) target → no remote, hermetic
+
+	h := newCreateFormHome(t)
+	h.appConfig.ClaudeAccounts = []config.ClaudeAccount{
+		{Name: "personal", ConfigDir: "~/.claude"},                                // catch-all default
+		{Name: "work", ConfigDir: "/w", PathMatches: []string{"/unmatched-xyz/"}}, // path-only; won't auto-route here
+	}
+	h.newSessionPath = dir
+	h.state = statePrompt
+	ov, _ := h.newSessionFormOverlay()
+	h.textInputOverlay = ov
+
+	// Type a title, then drive the picker to the path-only "work" account (index 1). A
+	// navigation keypress marks the picker touched, so the choice is an explicit override
+	// of the auto-route — which, since "work"'s path_matches misses dir, would land on the
+	// "personal" default.
+	ov.FocusTitle()
+	ov.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("feature")})
+	ov.HandleKeyPress(tea.KeyMsg{Type: tea.KeyTab})   // title → prompt
+	ov.HandleKeyPress(tea.KeyMsg{Type: tea.KeyTab})   // prompt → account
+	ov.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRight}) // personal → work, marks touched
+
+	acct, ok := ov.GetSelectedAccount()
+	require.True(t, ok, "driving the picker marks it an explicit override")
+	require.Equal(t, "work", acct.Name, "the picker must have moved to the path-only account")
+
+	require.NotNil(t, h.createSessionFromForm("do the thing"))
+
+	inst := h.list.GetSelectedInstance()
+	require.NotNil(t, inst)
+	assert.Equal(t, "work", inst.ClaudeAccountName())
+	assert.False(t, inst.ClaudeAccountIsDefault(),
+		"a manually picked path-only account is a real route (accented), not the dim default")
+}
+
 // An empty title keeps the form open (cleared submit flag) and surfaces an error rather
 // than creating a half-formed session.
 func TestCreateSessionFromForm_EmptyTitleKeepsFormOpen(t *testing.T) {

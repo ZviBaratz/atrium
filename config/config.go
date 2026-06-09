@@ -72,10 +72,12 @@ type Profile struct {
 
 // ClaudeAccount maps a named Claude Code account to a CLAUDE_CONFIG_DIR and the
 // route rules that auto-select it: git-remote substrings (RemoteMatches) and/or
-// target-directory-path substrings (PathMatches, the fallback for non-git/direct
-// sessions, which have no origin remote). config_dir may use a leading ~ for the
-// home directory. The first account with no route rules at all is the inferred
-// catch-all default used when nothing else matches.
+// target-directory-path substrings (PathMatches, the routing signal for
+// non-git/direct sessions, which have no origin remote). Rules are evaluated per
+// account in config order (see ResolveClaudeAccount), not as a global remote-then-
+// path pass. config_dir may use a leading ~ for the home directory. The first
+// account with no route rules at all is the inferred catch-all default used when
+// nothing else matches.
 type ClaudeAccount struct {
 	Name          string   `json:"name"`
 	ConfigDir     string   `json:"config_dir"`
@@ -172,7 +174,8 @@ type Config struct {
 	CarryFiles []string `json:"carry_files"`
 	// ClaudeAccounts routes sessions to a per-session CLAUDE_CONFIG_DIR (which
 	// Claude Code account a session runs under) by matching the worktree's git
-	// origin remote. Empty (the default) disables the feature entirely: no env
+	// origin remote or, for a non-git/direct session with no remote, its
+	// directory path. Empty (the default) disables the feature entirely: no env
 	// is injected and no account badge is shown, so configs predating this key
 	// behave exactly as before.
 	ClaudeAccounts []ClaudeAccount `json:"claude_accounts,omitempty"`

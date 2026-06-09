@@ -548,4 +548,15 @@ func TestResolveClaudeAccount(t *testing.T) {
 	if name, _, _ := c.ResolveClaudeAccount("https://x/acme/r.git", ""); name != "a" {
 		t.Fatalf("first-match-wins: got %q, want %q", name, "a")
 	}
+
+	// List order dominates the within-account remote-then-path order: when a target
+	// hits an EARLIER account's path_matches AND a LATER account's remote_matches,
+	// the earlier (path) account wins. This pins the per-account-in-order semantics
+	// against a refactor into a global remote-first pass, which would flip the result.
+	byPath := ClaudeAccount{Name: "byPath", ConfigDir: "/p", PathMatches: []string{"/acme/"}}
+	byRemote := ClaudeAccount{Name: "byRemote", ConfigDir: "/r", RemoteMatches: []string{"acme"}}
+	ordered := &Config{ClaudeAccounts: []ClaudeAccount{byPath, byRemote}}
+	if name, _, _ := ordered.ResolveClaudeAccount("https://x/acme/r.git", "/home/acme/proj"); name != "byPath" {
+		t.Fatalf("earlier path_matches must beat later remote_matches: got %q, want %q", name, "byPath")
+	}
 }
