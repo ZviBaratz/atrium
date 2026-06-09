@@ -72,6 +72,10 @@ type targetValidityResultMsg struct {
 	path          string
 	valid, direct bool
 	headBranch    string
+	// accountName is the Claude account auto-routed for this target (from its origin
+	// remote), used to re-point the form's account picker as the project changes.
+	// Empty when the feature is dormant. Resolved here, off the keystroke hot path.
+	accountName string
 }
 
 // scheduleValidityCheck returns a debounced tea.Cmd mirroring scheduleBranchSearch: it
@@ -88,9 +92,21 @@ func (m *home) scheduleValidityCheck(path string) tea.Cmd {
 // reports the result tagged with the path it was computed for.
 func (m *home) runValidityCheck(path string) tea.Cmd {
 	ctx := m.ctx
+	cfg := m.appConfig
 	return func() tea.Msg {
 		valid, direct, head := targetValidity(ctx, path)
-		return targetValidityResultMsg{path: path, valid: valid, direct: direct, headBranch: head}
+		// Resolve the auto-routed account here too (a git subprocess), so the form's
+		// account picker can follow the selected project without re-doing git on the
+		// update loop. A direct (non-git) target has no remote -> the inferred default.
+		var account string
+		if valid {
+			remoteURL := ""
+			if !direct {
+				remoteURL = git.GetRemoteURL(ctx, path)
+			}
+			account, _, _ = cfg.ResolveClaudeAccount(remoteURL)
+		}
+		return targetValidityResultMsg{path: path, valid: valid, direct: direct, headBranch: head, accountName: account}
 	}
 }
 

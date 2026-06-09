@@ -6,11 +6,60 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ZviBaratz/atrium/config"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+var twoAccounts = []config.ClaudeAccount{
+	{Name: "personal", ConfigDir: "~/.claude"},
+	{Name: "quantivly", ConfigDir: "~/.claude-quantivly", RemoteMatches: []string{"quantivly/"}},
+}
+
+// The account picker is a true override: until the user drives it, the form reports
+// no selection (ok=false) so the caller keeps the freshly-resolved auto-route. Only a
+// deliberate keypress flips it to an override that wins.
+func TestSessionCreateOverlay_AccountOverrideOnlyWhenTouched(t *testing.T) {
+	o := NewSessionCreateOverlay(nil, twoAccounts, []string{"/repo/a"})
+
+	_, ok := o.GetSelectedAccount()
+	assert.False(t, ok, "an untouched picker must not override auto-routing")
+
+	// Auto-routed preselection is not a user override.
+	o.PreselectAccount("quantivly")
+	_, ok = o.GetSelectedAccount()
+	assert.False(t, ok, "auto preselect alone must not override")
+
+	// The user drives the picker: now it overrides with the chosen account.
+	o.focusStop(stopAccount)
+	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyDown})
+	acct, ok := o.GetSelectedAccount()
+	require.True(t, ok, "a user choice overrides auto-routing")
+	assert.Equal(t, "quantivly", acct.Name)
+}
+
+// A form with no configured accounts never overrides — the feature is dormant.
+func TestSessionCreateOverlay_NoAccountsNeverOverrides(t *testing.T) {
+	o := NewSessionCreateOverlay(nil, nil, []string{"/repo/a"})
+	_, ok := o.GetSelectedAccount()
+	assert.False(t, ok)
+}
+
+// A single configured account renders no Account section (and adds no chrome): with
+// nothing to choose, the picker would be a dead, unfocusable row. The list badge still
+// conveys the account.
+func TestSessionCreateOverlay_SingleAccountHidesSection(t *testing.T) {
+	one := []config.ClaudeAccount{{Name: "solo", ConfigDir: "~/.claude"}}
+	o := NewSessionCreateOverlay(nil, one, []string{"/repo/a"})
+	o.SetSize(80, 40)
+	assert.NotContains(t, o.Render(), "Account", "a lone account must not render the picker section")
+
+	o2 := NewSessionCreateOverlay(nil, twoAccounts, []string{"/repo/a"})
+	o2.SetSize(80, 40)
+	assert.Contains(t, o2.Render(), "Account", "≥2 accounts render the picker section")
+}
 
 func tab(o *TextInputOverlay)      { o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyTab}) }
 func shiftTab(o *TextInputOverlay) { o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyShiftTab}) }

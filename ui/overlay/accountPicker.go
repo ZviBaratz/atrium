@@ -15,6 +15,11 @@ type AccountPicker struct {
 	cursor   int
 	focused  bool
 	width    int
+	// touched flips true the first time the user drives the picker with a nav key.
+	// It separates an auto-routed preselection (which the form revises as the target
+	// project changes) from a deliberate override (which must stick). Programmatic
+	// SelectByName never sets it.
+	touched bool
 }
 
 // NewAccountPicker creates a picker over accounts; the first is selected by default.
@@ -23,8 +28,12 @@ func NewAccountPicker(accounts []config.ClaudeAccount) *AccountPicker {
 }
 
 // SelectByName preselects the account with the given name (e.g. the auto-routed
-// one). No-op if the name is not present.
+// one). No-op if the name is not present, or once the user has taken manual
+// control (Touched) — a deliberate choice outranks later auto-routing.
 func (ap *AccountPicker) SelectByName(name string) {
+	if ap.touched {
+		return
+	}
 	for i, a := range ap.accounts {
 		if a.Name == name {
 			ap.cursor = i
@@ -45,15 +54,23 @@ func (ap *AccountPicker) SetWidth(w int) { ap.width = w }
 // HasMultiple returns true if there is more than one account to choose from.
 func (ap *AccountPicker) HasMultiple() bool { return len(ap.accounts) > 1 }
 
+// Touched reports whether the user has driven the picker with a nav key. The form
+// uses it to decide auto-routed preselection (untouched) versus an override (touched).
+func (ap *AccountPicker) Touched() bool { return ap.touched }
+
 // HandleKeyPress moves the cursor; Up/Down mirror Left/Right (the form navigates ↑↓).
+// Any nav key marks the picker touched — engaging the control signals intent even if
+// the cursor does not move (already at an end).
 func (ap *AccountPicker) HandleKeyPress(msg tea.KeyMsg) bool {
 	switch msg.Type {
 	case tea.KeyLeft, tea.KeyUp:
+		ap.touched = true
 		if ap.cursor > 0 {
 			ap.cursor--
 		}
 		return true
 	case tea.KeyRight, tea.KeyDown:
+		ap.touched = true
 		if ap.cursor < len(ap.accounts)-1 {
 			ap.cursor++
 		}

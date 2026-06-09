@@ -283,7 +283,7 @@ func (t *TextInputOverlay) fitRows(height int) (pickerRows, promptRows int) {
 	if t.profilePicker != nil {
 		chrome += profileSectionLines
 	}
-	if t.accountPicker != nil {
+	if t.hasAccountSection() {
 		chrome += accountSectionLines
 	}
 	const margin = 2 // keep a row above and below so the overlay isn't flush to the edges
@@ -334,6 +334,13 @@ func (t *TextInputOverlay) isAccountPicker() bool   { return t.currentStop() == 
 func (t *TextInputOverlay) isTextarea() bool        { return t.currentStop() == stopTextarea }
 func (t *TextInputOverlay) isBranchPicker() bool    { return t.currentStop() == stopBranch }
 func (t *TextInputOverlay) isEnterButton() bool     { return t.currentStop() == stopEnter }
+
+// hasAccountSection reports whether the form shows the Account picker. It requires
+// ≥2 accounts: a lone account offers no choice, so rendering it would be a dead,
+// unfocusable row (and stopAccount is likewise only added when HasMultiple).
+func (t *TextInputOverlay) hasAccountSection() bool {
+	return t.accountPicker != nil && t.accountPicker.HasMultiple()
+}
 
 // indexOfStop returns the FocusIndex of a stop kind, or -1 if absent.
 func (t *TextInputOverlay) indexOfStop(kind focusStop) int {
@@ -610,17 +617,21 @@ func (t *TextInputOverlay) GetSelectedProgram() string {
 	return t.profilePicker.GetSelectedProfile().Program
 }
 
-// GetSelectedAccount returns the chosen account and true when the form has an
-// account picker; (zero, false) when it does not (caller keeps the auto-routed
-// account).
+// GetSelectedAccount returns the chosen account and true only when the user has
+// deliberately driven the picker, i.e. an override. Otherwise it returns
+// (zero, false) so the caller keeps the freshly-resolved auto-route — whether the
+// form has no picker, or has one the user never touched (its selection is just the
+// auto-routed preselection, which the caller already computes itself).
 func (t *TextInputOverlay) GetSelectedAccount() (config.ClaudeAccount, bool) {
-	if t.accountPicker == nil {
+	if t.accountPicker == nil || !t.accountPicker.Touched() {
 		return config.ClaudeAccount{}, false
 	}
 	return t.accountPicker.GetSelectedAccount(), true
 }
 
-// PreselectAccount sets the picker's selection to name (the auto-routed account).
+// PreselectAccount points the picker at the auto-routed account name. It is a no-op
+// once the user has taken manual control (see AccountPicker.SelectByName), so the
+// form can re-preselect as the target project changes without clobbering a choice.
 func (t *TextInputOverlay) PreselectAccount(name string) {
 	if t.accountPicker != nil {
 		t.accountPicker.SelectByName(name)
@@ -803,7 +814,7 @@ func (t *TextInputOverlay) renderCreateForm(divider string) string {
 	if t.profilePicker != nil {
 		section(t.profilePicker.Render())
 	}
-	if t.accountPicker != nil {
+	if t.hasAccountSection() {
 		section(t.accountPicker.Render())
 	}
 

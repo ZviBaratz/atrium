@@ -203,6 +203,9 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// (the user has navigated on) can't clobber the indicator.
 		if m.textInputOverlay != nil && msg.path == m.newSessionPath {
 			m.textInputOverlay.SetTargetValidity(msg.valid, msg.direct, msg.headBranch)
+			// Re-point the account picker at the new project's auto-routed account so the
+			// displayed selection tracks the target. No-op once the user has overridden it.
+			m.textInputOverlay.PreselectAccount(msg.accountName)
 			// A confirmed git target gets one background fetch per form-session, so its
 			// branch list reflects current remote refs. The verdict (not the path change)
 			// is the trigger: filesystem browsing through non-repos never fetches.
