@@ -276,6 +276,17 @@ func (m *home) createSessionFromForm(prompt string) tea.Cmd {
 	}
 	instance.SetBaseContext(m.ctx)
 
+	// Resolve which Claude Code account this worktree runs under from its origin
+	// remote, and pin it on the instance (stored verbatim, injected at launch).
+	// Direct (non-git) sessions have no remote -> default/inherit. Empty
+	// claude_accounts leaves all fields empty (feature dormant).
+	remoteURL := ""
+	if !direct {
+		remoteURL = git.GetRemoteURL(m.ctx, path)
+	}
+	accName, accDir, accIsDefault := m.appConfig.ResolveClaudeAccount(remoteURL)
+	instance.SetClaudeAccount(accName, accDir, accIsDefault)
+
 	// Create the list row only now, on submit. AddInstance may insert it mid-list under its
 	// repo group, so select it by identity.
 	finalizer := m.list.AddInstance(instance)
