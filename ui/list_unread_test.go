@@ -21,7 +21,7 @@ func markUnread(t *testing.T, inst *session.Instance) {
 // An unread Ready session keeps today's bright look (Success + filled Ready
 // glyph); a seen one dims to SuccessDim with the hollow ReadySeen glyph. Both
 // shape and color change so the signal survives colorblindness and low color.
-func TestStateParts_UnreadBrightSeenDim(t *testing.T) {
+func TestStateGlyph_UnreadBrightSeenDim(t *testing.T) {
 	t.Cleanup(theme.Set("unicode"))
 	th := theme.Current()
 	s := spinner.New()
@@ -31,15 +31,13 @@ func TestStateParts_UnreadBrightSeenDim(t *testing.T) {
 	require.NoError(t, err)
 	markUnread(t, inst)
 
-	glyph, word, color := r.stateParts(inst, th)
+	glyph, color := r.stateGlyph(inst, th)
 	require.Equal(t, th.Glyphs.Ready, glyph, "unread keeps the filled Ready glyph")
-	require.Equal(t, "ready", word)
 	require.Equal(t, th.Palette.Success, color, "unread keeps the bright Success color")
 
 	inst.MarkSeen()
-	glyph, word, color = r.stateParts(inst, th)
+	glyph, color = r.stateGlyph(inst, th)
 	require.Equal(t, th.Glyphs.ReadySeen, glyph, "seen switches to the hollow glyph")
-	require.Equal(t, "ready", word, "the state word stays 'ready' either way")
 	require.Equal(t, th.Palette.SuccessDim, color, "seen dims to SuccessDim")
 }
 

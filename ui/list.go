@@ -314,28 +314,28 @@ func fmtAge(t time.Time) string {
 	}
 }
 
-// stateParts returns the glyph, word, and color describing an instance's status.
-// Running/Loading use the animated spinner frame; the others use theme glyphs.
-func (r *InstanceRenderer) stateParts(i *session.Instance, th *theme.Theme) (glyph, word string, color lipgloss.Color) {
+// stateGlyph returns the glyph and color describing an instance's status, for
+// the leading status gutter. Running/Loading use the animated spinner frame;
+// the others use theme glyphs. The state word is intentionally not returned —
+// the color-coded glyph carries the signal on its own.
+func (r *InstanceRenderer) stateGlyph(i *session.Instance, th *theme.Theme) (glyph string, color lipgloss.Color) {
 	switch i.GetStatus() {
-	case session.Running:
-		return r.spinner.View(), "working", th.Palette.Working
-	case session.Loading:
-		return r.spinner.View(), "starting", th.Palette.Working
+	case session.Running, session.Loading:
+		return r.spinner.View(), th.Palette.Working
 	case session.Ready:
 		// Unread (the agent finished a turn the user hasn't visited) keeps the
 		// bright filled glyph; a seen session dims to the hollow variant. Shape
 		// and color both change so the signal survives colorblindness.
 		if i.Unread() {
-			return th.Glyphs.Ready, "ready", th.Palette.Success
+			return th.Glyphs.Ready, th.Palette.Success
 		}
-		return th.Glyphs.ReadySeen, "ready", th.Palette.SuccessDim
+		return th.Glyphs.ReadySeen, th.Palette.SuccessDim
 	case session.NeedsInput:
-		return th.Glyphs.Waiting, "waiting", th.Palette.Attention
+		return th.Glyphs.Waiting, th.Palette.Attention
 	case session.Paused:
-		return th.Glyphs.Paused, "paused", th.Palette.FgDim
+		return th.Glyphs.Paused, th.Palette.FgDim
 	default:
-		return " ", "", th.Palette.FgDim
+		return " ", th.Palette.FgDim
 	}
 }
 
@@ -377,9 +377,9 @@ func (r *InstanceRenderer) Render(i *session.Instance, idx int, selected bool) s
 	// otherwise indistinguishable in a mixed-agent fleet. One cell + one gap;
 	// the glyphs are width-1 by the theme's agent-glyph invariant.
 	agentIcon, agentColor := th.AgentGlyph(string(agent.Resolve(i.Program).Key))
-	glyph, word, stateColor := r.stateParts(i, th)
-	rightPlain := glyph + " " + word
-	rightStyled := seg(stateColor).Render(glyph) + pad(1) + seg(stateColor).Render(word)
+	glyph, stateColor := r.stateGlyph(i, th)
+	rightPlain := glyph
+	rightStyled := seg(stateColor).Render(glyph)
 
 	// Per-session AUTO badge (not while paused) so "yolo" state is unmistakable.
 	if i.AutoYes && !i.Paused() {
