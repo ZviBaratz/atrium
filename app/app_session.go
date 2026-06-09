@@ -220,8 +220,13 @@ func (m *home) openCreateForm(focusTitle bool) tea.Cmd {
 	}
 	// Open the account picker on the auto-routed account for the contextual target,
 	// so the preselected choice matches what creating without touching it would do.
-	// No-op when the form has no account picker (≤1 account configured).
-	if name, _, _ := m.appConfig.ResolveClaudeAccount(git.GetRemoteURL(m.ctx, target)); name != "" {
+	// A non-git target has no remote and routes by path; no-op when the form has no
+	// account picker (≤1 account configured).
+	remoteURL := ""
+	if isGit {
+		remoteURL = git.GetRemoteURL(m.ctx, target)
+	}
+	if name, _, _ := m.appConfig.ResolveClaudeAccount(remoteURL, target); name != "" {
 		m.textInputOverlay.PreselectAccount(name)
 	}
 
@@ -283,19 +288,19 @@ func (m *home) createSessionFromForm(prompt string) tea.Cmd {
 	instance.SetBaseContext(m.ctx)
 
 	// Resolve which Claude Code account this worktree runs under from its origin
-	// remote, and pin it on the instance (stored verbatim, injected at launch).
-	// Direct (non-git) sessions have no remote -> default/inherit. Empty
+	// remote (or, for a direct/non-git session with no remote, its directory path),
+	// and pin it on the instance (stored verbatim, injected at launch). Empty
 	// claude_accounts leaves all fields empty (feature dormant).
 	remoteURL := ""
 	if !direct {
 		remoteURL = git.GetRemoteURL(m.ctx, path)
 	}
-	accName, accDir, accIsDefault := m.appConfig.ResolveClaudeAccount(remoteURL)
+	accName, accDir, accIsDefault := m.appConfig.ResolveClaudeAccount(remoteURL, path)
 	if acct, ok := ov.GetSelectedAccount(); ok && acct.Name != "" {
-		// An explicit picker choice wins over auto-routing. Picking the no-match
-		// (default) account stays dim; a routed account shows accented — the same
+		// An explicit picker choice wins over auto-routing. Picking the catch-all
+		// (no-rule) account stays dim; a routed account shows accented — the same
 		// rule the resolver applies.
-		accName, accDir, accIsDefault = acct.Name, acct.ResolvedConfigDir(), len(acct.RemoteMatches) == 0
+		accName, accDir, accIsDefault = acct.Name, acct.ResolvedConfigDir(), acct.IsCatchAll()
 	}
 	instance.SetClaudeAccount(accName, accDir, accIsDefault)
 

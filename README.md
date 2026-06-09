@@ -181,10 +181,11 @@ session do not survive a pause/resume cycle.
 #### Claude accounts
 
 Route each session to a specific Claude Code account by injecting a per-session
-`CLAUDE_CONFIG_DIR`, chosen by matching the worktree's git `origin` remote. This
-is useful when different repos must run under different Claude accounts (e.g.
-personal vs. work), since MCP connectors and auth are stored per
-`CLAUDE_CONFIG_DIR`. Add a `claude_accounts` list to your config file:
+`CLAUDE_CONFIG_DIR`, chosen by matching the worktree's git `origin` remote (or, for
+a non-git/direct session, its directory path). This is useful when different repos
+must run under different Claude accounts (e.g. personal vs. work), since MCP
+connectors and auth are stored per `CLAUDE_CONFIG_DIR`. Add a `claude_accounts`
+list to your config file:
 
 ```json
 {
@@ -193,17 +194,23 @@ personal vs. work), since MCP connectors and auth are stored per
     {
       "name": "quantivly",
       "config_dir": "~/.claude-quantivly",
-      "remote_matches": ["quantivly/", "github-quantivly:"]
+      "remote_matches": ["quantivly/", "github-quantivly:"],
+      "path_matches": ["/quantivly/"]
     }
   ]
 }
 ```
 
-- `remote_matches` are case-insensitive substrings tested against the origin
-  URL; the first account that matches wins.
-- The **first account with no `remote_matches`** is the catch-all default, used
-  when no route matches. It is optional: with no such account, non-matching
-  sessions inherit the current environment.
+- `remote_matches` are case-insensitive substrings tested against the origin URL.
+- `path_matches` are case-insensitive substrings tested against the target
+  **directory path** — the fallback when there is no matching remote, and the only
+  signal for **direct (non-git) sessions** such as a container directory that holds
+  several repos but is not itself one.
+- Matching is evaluated per account in list order (remote first, then path); the
+  first account that hits either rule wins.
+- The **first account with no `remote_matches` and no `path_matches`** is the
+  catch-all default, used when no route matches. It is optional: with no such
+  account, non-matching sessions inherit the current environment.
 - The resolved account is **pinned at session creation** and shown as a badge in
   the session list (dim for the default account, accented for a routed one). It
   is injected once at launch and is not re-resolved on restart or `--continue`;

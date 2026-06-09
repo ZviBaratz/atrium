@@ -493,9 +493,10 @@ func TestGetCarryFiles(t *testing.T) {
 func TestResolveClaudeAccount(t *testing.T) {
 	t.Setenv("HOME", "/home/tester")
 
-	personal := ClaudeAccount{Name: "personal", ConfigDir: "~/.claude"} // no matches → inferred default
+	personal := ClaudeAccount{Name: "personal", ConfigDir: "~/.claude"} // no rules → inferred default
 	work := ClaudeAccount{Name: "quantivly", ConfigDir: "~/.claude-quantivly",
-		RemoteMatches: []string{"quantivly/", "github-quantivly:"}}
+		RemoteMatches: []string{"quantivly/", "github-quantivly:"},
+		PathMatches:   []string{"/quantivly/"}}
 
 	cfg := &Config{ClaudeAccounts: []ClaudeAccount{personal, work}}
 
@@ -503,34 +504,48 @@ func TestResolveClaudeAccount(t *testing.T) {
 		name          string
 		accounts      []ClaudeAccount
 		remote        string
+		path          string
 		wantName      string
 		wantDir       string
 		wantIsDefault bool
 	}{
-		{"unconfigured", nil, "git@github.com:quantivly/x.git", "", "", false},
-		{"https match", cfg.ClaudeAccounts, "https://github.com/quantivly/x.git", "quantivly", "/home/tester/.claude-quantivly", false},
-		{"ssh alias match", cfg.ClaudeAccounts, "github-quantivly:quantivly/x.git", "quantivly", "/home/tester/.claude-quantivly", false},
-		{"case-insensitive", cfg.ClaudeAccounts, "https://github.com/Quantivly/X.git", "quantivly", "/home/tester/.claude-quantivly", false},
-		{"no match -> inferred default (no-match account)", cfg.ClaudeAccounts, "git@github.com:someoneelse/y.git", "personal", "/home/tester/.claude", true},
-		{"empty remote -> inferred default", cfg.ClaudeAccounts, "", "personal", "/home/tester/.claude", true},
-		{"no match, every account has matches -> inherit env", []ClaudeAccount{work}, "git@github.com:other/z.git", "default", "", true},
+		{"unconfigured", nil, "git@github.com:quantivly/x.git", "", "", "", false},
+		{"https remote match", cfg.ClaudeAccounts, "https://github.com/quantivly/x.git", "", "quantivly", "/home/tester/.claude-quantivly", false},
+		{"ssh alias remote match", cfg.ClaudeAccounts, "github-quantivly:quantivly/x.git", "", "quantivly", "/home/tester/.claude-quantivly", false},
+		{"case-insensitive remote", cfg.ClaudeAccounts, "https://github.com/Quantivly/X.git", "", "quantivly", "/home/tester/.claude-quantivly", false},
+		{"no match -> inferred default (no-rule account)", cfg.ClaudeAccounts, "git@github.com:someoneelse/y.git", "", "personal", "/home/tester/.claude", true},
+		{"empty remote and path -> inferred default", cfg.ClaudeAccounts, "", "", "personal", "/home/tester/.claude", true},
+		// Direct/non-git target: no remote, but the directory path routes by PathMatches.
+		{"direct path match", cfg.ClaudeAccounts, "", "/home/zvi/quantivly/qspace", "quantivly", "/home/tester/.claude-quantivly", false},
+		{"path case-insensitive", cfg.ClaudeAccounts, "", "/home/zvi/Quantivly/Qspace", "quantivly", "/home/tester/.claude-quantivly", false},
+		{"path present but no match -> default", cfg.ClaudeAccounts, "", "/home/zvi/personal/proj", "personal", "/home/tester/.claude", true},
+		{"remote matches while path doesn't", cfg.ClaudeAccounts, "https://github.com/quantivly/x.git", "/home/zvi/elsewhere", "quantivly", "/home/tester/.claude-quantivly", false},
+		{"no match, every account has rules -> inherit env", []ClaudeAccount{work}, "git@github.com:other/z.git", "/tmp/other", "default", "", true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			c := &Config{ClaudeAccounts: tc.accounts}
-			name, dir, isDefault := c.ResolveClaudeAccount(tc.remote)
+			name, dir, isDefault := c.ResolveClaudeAccount(tc.remote, tc.path)
 			if name != tc.wantName || dir != tc.wantDir || isDefault != tc.wantIsDefault {
-				t.Fatalf("ResolveClaudeAccount(%q) = (%q,%q,%v), want (%q,%q,%v)",
-					tc.remote, name, dir, isDefault, tc.wantName, tc.wantDir, tc.wantIsDefault)
+				t.Fatalf("ResolveClaudeAccount(%q, %q) = (%q,%q,%v), want (%q,%q,%v)",
+					tc.remote, tc.path, name, dir, isDefault, tc.wantName, tc.wantDir, tc.wantIsDefault)
 			}
 		})
+	}
+
+	// An account with only PathMatches is a route rule, not the catch-all default:
+	// a non-matching target inherits env rather than landing on the path-only account.
+	pathOnly := ClaudeAccount{Name: "work", ConfigDir: "/w", PathMatches: []string{"/work/"}}
+	if name, _, isDefault := (&Config{ClaudeAccounts: []ClaudeAccount{pathOnly}}).
+		ResolveClaudeAccount("", "/home/zvi/personal/x"); name != "default" || !isDefault {
+		t.Fatalf("path-only account treated as default: got (%q, isDefault=%v), want (\"default\", true)", name, isDefault)
 	}
 
 	// First matching account wins when two could match.
 	a := ClaudeAccount{Name: "a", ConfigDir: "/a", RemoteMatches: []string{"acme"}}
 	b := ClaudeAccount{Name: "b", ConfigDir: "/b", RemoteMatches: []string{"acme"}}
 	c := &Config{ClaudeAccounts: []ClaudeAccount{a, b}}
-	if name, _, _ := c.ResolveClaudeAccount("https://x/acme/r.git"); name != "a" {
+	if name, _, _ := c.ResolveClaudeAccount("https://x/acme/r.git", ""); name != "a" {
 		t.Fatalf("first-match-wins: got %q, want %q", name, "a")
 	}
 }

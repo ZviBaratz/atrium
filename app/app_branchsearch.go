@@ -97,14 +97,15 @@ func (m *home) runValidityCheck(path string) tea.Cmd {
 		valid, direct, head := targetValidity(ctx, path)
 		// Resolve the auto-routed account here too (a git subprocess), so the form's
 		// account picker can follow the selected project without re-doing git on the
-		// update loop. A direct (non-git) target has no remote -> the inferred default.
+		// update loop. A direct (non-git) target has no remote, so it routes by the
+		// directory path (path_matches) or falls back to the inferred default.
 		var account string
 		if valid {
 			remoteURL := ""
 			if !direct {
 				remoteURL = git.GetRemoteURL(ctx, path)
 			}
-			account, _, _ = cfg.ResolveClaudeAccount(remoteURL)
+			account, _, _ = cfg.ResolveClaudeAccount(remoteURL, path)
 		}
 		return targetValidityResultMsg{path: path, valid: valid, direct: direct, headBranch: head, accountName: account}
 	}

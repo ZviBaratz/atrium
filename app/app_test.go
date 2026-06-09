@@ -11,6 +11,7 @@ import (
 	"github.com/ZviBaratz/atrium/ui"
 	"github.com/ZviBaratz/atrium/ui/overlay"
 	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -844,6 +845,27 @@ func TestValidityResultRepreselectsAccount(t *testing.T) {
 	acct, ok := ov.GetSelectedAccount()
 	require.True(t, ok, "driving the picker marks it touched/overriding")
 	assert.Equal(t, "c", acct.Name, "the picker must have been re-preselected to b")
+}
+
+// TestValidityCheckRoutesDirectSessionByPath verifies that runValidityCheck routes a
+// direct (non-git) target — which has no origin remote — to an account via path_matches.
+// This is the container-directory case (e.g. ~/quantivly/qspace holds sub-repos but is
+// not itself a repo): without path routing it would always fall to the catch-all default.
+func TestValidityCheckRoutesDirectSessionByPath(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "quantivly-proj")
+	require.NoError(t, os.MkdirAll(dir, 0o755))
+
+	cfg := config.DefaultConfig()
+	cfg.ClaudeAccounts = []config.ClaudeAccount{
+		{Name: "personal", ConfigDir: "~/.claude"},
+		{Name: "quantivly", ConfigDir: "~/.claude-quantivly", PathMatches: []string{"quantivly-proj"}},
+	}
+	h := &home{ctx: context.Background(), appConfig: cfg}
+
+	msg, ok := h.runValidityCheck(dir)().(targetValidityResultMsg)
+	require.True(t, ok)
+	assert.True(t, msg.direct, "a non-git temp dir is a direct session")
+	assert.Equal(t, "quantivly", msg.accountName, "path_matches must route a direct session with no remote")
 }
 
 // TestNonGitVerdictDoesNotTriggerFetch verifies direct/invalid targets never fetch —

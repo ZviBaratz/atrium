@@ -71,18 +71,27 @@ type Profile struct {
 }
 
 // ClaudeAccount maps a named Claude Code account to a CLAUDE_CONFIG_DIR and the
-// git-remote substrings that auto-select it. config_dir may use a leading ~ for
-// the home directory. The first account with no RemoteMatches is the inferred
-// catch-all default used when no route matches the worktree's origin remote.
+// route rules that auto-select it: git-remote substrings (RemoteMatches) and/or
+// target-directory-path substrings (PathMatches, the fallback for non-git/direct
+// sessions, which have no origin remote). config_dir may use a leading ~ for the
+// home directory. The first account with no route rules at all is the inferred
+// catch-all default used when nothing else matches.
 type ClaudeAccount struct {
 	Name          string   `json:"name"`
 	ConfigDir     string   `json:"config_dir"`
 	RemoteMatches []string `json:"remote_matches,omitempty"`
+	PathMatches   []string `json:"path_matches,omitempty"`
 }
 
 // ResolvedConfigDir expands a leading ~ in ConfigDir to the user's home directory.
 func (a ClaudeAccount) ResolvedConfigDir() string {
 	return expandHomePath(a.ConfigDir)
+}
+
+// IsCatchAll reports whether the account has no routing rules, making it the
+// inferred default used when no remote or path route matches.
+func (a ClaudeAccount) IsCatchAll() bool {
+	return len(a.RemoteMatches) == 0 && len(a.PathMatches) == 0
 }
 
 // expandHomePath expands a leading "~" or "~/" in p to the user's home directory.
@@ -264,31 +273,35 @@ func (c *Config) GetProfiles() []Profile {
 	return profiles
 }
 
-// ResolveClaudeAccount picks the Claude Code account for a worktree whose origin
-// remote is remoteURL. It returns the account name (for the TUI badge), the
-// resolved CLAUDE_CONFIG_DIR to inject (empty = inherit the current env), and
-// whether the choice is the default/fallback account (drives dim styling).
-// Matching is case-insensitive substring; the first account whose remote_matches
-// hits wins. When no route matches, the first account with no remote_matches is
-// the inferred default; absent that, ("default", "", true) means inherit env.
-func (c *Config) ResolveClaudeAccount(remoteURL string) (name, configDir string, isDefault bool) {
+// ResolveClaudeAccount picks the Claude Code account for a target whose origin
+// remote is remoteURL and whose directory is targetPath. It returns the account
+// name (for the TUI badge), the resolved CLAUDE_CONFIG_DIR to inject (empty =
+// inherit the current env), and whether the choice is the default/fallback
+// account (drives dim styling). Matching is case-insensitive substring, evaluated
+// per account in config order: the remote is tested against remote_matches, then
+// the path against path_matches (the only signal for non-git/direct sessions,
+// which have no remote); the first account that hits either wins. When nothing
+// matches, the first account with no route rules is the inferred default; absent
+// that, ("default", "", true) means inherit env.
+func (c *Config) ResolveClaudeAccount(remoteURL, targetPath string) (name, configDir string, isDefault bool) {
 	if len(c.ClaudeAccounts) == 0 {
 		return "", "", false
 	}
-	lower := strings.ToLower(remoteURL)
+	lowerRemote := strings.ToLower(remoteURL)
+	lowerPath := strings.ToLower(targetPath)
 	defaultIdx := -1
 	for i := range c.ClaudeAccounts {
 		a := &c.ClaudeAccounts[i]
-		if len(a.RemoteMatches) == 0 && defaultIdx == -1 {
-			defaultIdx = i // first account with no match rules is the fallback
+		if a.IsCatchAll() && defaultIdx == -1 {
+			defaultIdx = i // first account with no route rules is the fallback
 		}
-		if lower == "" {
-			continue
+		// Per account, in config order: try the origin remote first, then the
+		// target directory path (the only signal for non-git/direct sessions).
+		if lowerRemote != "" && containsAny(lowerRemote, a.RemoteMatches) {
+			return a.Name, a.ResolvedConfigDir(), false
 		}
-		for _, m := range a.RemoteMatches {
-			if m != "" && strings.Contains(lower, strings.ToLower(m)) {
-				return a.Name, a.ResolvedConfigDir(), false
-			}
+		if lowerPath != "" && containsAny(lowerPath, a.PathMatches) {
+			return a.Name, a.ResolvedConfigDir(), false
 		}
 	}
 	if defaultIdx >= 0 {
@@ -296,6 +309,18 @@ func (c *Config) ResolveClaudeAccount(remoteURL string) (name, configDir string,
 		return d.Name, d.ResolvedConfigDir(), true
 	}
 	return "default", "", true
+}
+
+// containsAny reports whether lower (already lowercased) contains any non-empty
+// substring in subs (each lowercased on the fly), the shared rule used for both
+// remote and path route matching.
+func containsAny(lower string, subs []string) bool {
+	for _, s := range subs {
+		if s != "" && strings.Contains(lower, strings.ToLower(s)) {
+			return true
+		}
+	}
+	return false
 }
 
 // DefaultConfig returns the built-in defaults without probing the machine: no
