@@ -214,6 +214,28 @@ func TestPRStatus_NoPRCachesEmpty(t *testing.T) {
 	}
 }
 
+// TestPRStatus_AuthErrorCachesEmpty verifies a not-authenticated gh failure is
+// treated as benign and cached, so a pushed session doesn't re-spawn gh every
+// tick while auth is missing (a deterministic, non-transient condition).
+func TestPRStatus_AuthErrorCachesEmpty(t *testing.T) {
+	wt := pushedWorktree(t)
+
+	calls := 0
+	restore := stubGHPRView(func(context.Context, string, string) ([]byte, error) {
+		calls++
+		return nil, fmt.Errorf("gh pr view: To get started with GitHub CLI, please run:  gh auth login: exit status 4")
+	})
+	defer restore()
+
+	if got := wt.PRStatus(context.Background(), false); got.HasPR {
+		t.Errorf("auth error should yield empty, got %+v", got)
+	}
+	_ = wt.PRStatus(context.Background(), false)
+	if calls != 1 {
+		t.Errorf("auth error must be cached, gh calls = %d, want 1", calls)
+	}
+}
+
 // TestPRStatus_RealErrorNotCached verifies a genuine error (e.g. timeout) is not
 // cached, so the next eligible tick retries.
 func TestPRStatus_RealErrorNotCached(t *testing.T) {

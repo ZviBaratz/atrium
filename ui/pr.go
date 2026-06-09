@@ -19,7 +19,10 @@ func prBadgeColor(th *theme.Theme, pr *git.PRStatus) lipgloss.Color {
 		return th.Palette.Danger
 	case pr.CI == git.CIPending:
 		return th.Palette.Working
-	case pr.Review == git.ReviewApproved && (pr.CI == git.CIPassing || pr.CI == git.CINone):
+	// "Ready" green is reserved for a PR that can actually merge: approved with CI
+	// green/absent. A draft is excluded — it reads as ready-to-merge otherwise,
+	// when it explicitly is not. (A failing/pending draft still flags above.)
+	case pr.Review == git.ReviewApproved && (pr.CI == git.CIPassing || pr.CI == git.CINone) && !pr.IsDraft:
 		return th.Palette.Success
 	default:
 		return th.Palette.FgDim

@@ -20,6 +20,13 @@ import (
 const (
 	prCacheTTL         = 25 * time.Second
 	prCacheTTLSelected = 8 * time.Second
+	// prNetworkTimeout bounds a single `gh pr view`. It is deliberately tighter
+	// than gitNetworkTimeout (which sizes data-transferring push/fetch/sync): a
+	// PR read is a small request, and this call runs inside the synchronous
+	// metadata barrier (app_poll.go's wg.Wait), so a hung gh would otherwise
+	// stall every session's status/diff refresh for the full budget. Capping it
+	// here bounds that worst case while staying generous for a slow network.
+	prNetworkTimeout = 10 * time.Second
 )
 
 // CIStatus is the rolled-up state of a PR's status checks. The zero value
@@ -109,8 +116,8 @@ func (g *Worktree) PRStatus(ctx context.Context, selected bool) PRStatus {
 			// No PR / no remote / gh missing: a legitimate, cacheable "nothing".
 			return g.storePRStatus(PRStatus{})
 		}
-		// A genuine failure (timeout, auth hiccup): do NOT cache, so the next
-		// eligible tick retries. Return the last good value if we have one.
+		// A genuine, possibly-transient failure (timeout, API 5xx): do NOT cache,
+		// so the next eligible tick retries. Return the last good value if any.
 		g.prCacheMu.Lock()
 		cached := g.prCache
 		g.prCacheMu.Unlock()
@@ -150,7 +157,7 @@ func (g *Worktree) invalidatePRCache() {
 // gh on PATH. gh infers owner/repo from the worktree's origin remote (like the
 // existing gh browse call), so no --repo is needed.
 var runGHPRView = func(ctx context.Context, dir, branch string) ([]byte, error) {
-	ctx, cancel := context.WithTimeout(ctx, gitNetworkTimeout)
+	ctx, cancel := context.WithTimeout(ctx, prNetworkTimeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "gh", "pr", "view", branch,
 		"--json", "number,url,state,statusCheckRollup,reviewDecision,mergeable,isDraft")
@@ -165,9 +172,14 @@ var runGHPRView = func(ctx context.Context, dir, branch string) ([]byte, error) 
 }
 
 // isBenignGHError reports whether a gh failure means "there is simply nothing to
-// show" (no PR for the branch, no remote, or gh not installed) rather than a
-// transient/real error. Benign failures are cached as an empty status; real ones
-// are not, so they retry on the next tick.
+// show" (no PR for the branch, no remote, gh not installed, or gh not
+// authenticated) rather than a transient/real error. Benign failures are cached
+// as an empty status; real ones are not, so they retry on the next tick.
+//
+// Auth failures count as benign because they are deterministic and non-transient:
+// without caching them, every pushed session would re-spawn gh each TTL forever.
+// The cost is that recovery after `gh auth login` lags by up to one TTL, which is
+// an acceptable trade for not churning subprocesses on a steady-state condition.
 func isBenignGHError(err error) bool {
 	if err == nil {
 		return false
@@ -183,6 +195,9 @@ func isBenignGHError(err error) bool {
 		"no default remote",
 		"no git remote",
 		"executable file not found",
+		"gh auth login", // not authenticated (setup prompt)
+		"not logged in", // not authenticated (explicit)
+		"authentication required",
 	} {
 		if strings.Contains(msg, s) {
 			return true
