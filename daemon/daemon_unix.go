@@ -28,6 +28,13 @@ func getSysProcAttr() *syscall.SysProcAttr {
 // instances before exiting), waits for the process to disappear, and only
 // escalates to SIGKILL if it overstays gracefulStopTimeout. The daemon is not a
 // child of this process, so liveness is probed with signal 0 rather than Wait.
+//
+// Residual PID-reuse race (unchanged from the prior immediate-kill behavior): the
+// target PID comes from daemon.pid, so if the daemon already exited and the OS
+// recycled its PID, these signals land on an unrelated process. The window is
+// tiny and signaling an innocent victim is the pre-existing risk; closing it
+// fully would require the daemon to record an identity token the stopper can
+// verify, which is left as a follow-up.
 func terminateProcess(proc *os.Process) error {
 	if err := proc.Signal(syscall.SIGTERM); err != nil {
 		if processGone(err) {

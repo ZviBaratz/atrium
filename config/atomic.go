@@ -7,9 +7,12 @@ import (
 )
 
 // writeFileAtomic writes data to path by first writing a temp file in the same
-// directory, fsyncing it, and renaming it over the target. A reader (or a crash,
-// or a full disk) therefore never observes a torn or partially written file: the
-// rename is the commit point, and it either takes effect whole or not at all.
+// directory, fsyncing it, renaming it over the target, and fsyncing the
+// directory. A reader (or a crash, or a full disk) therefore never observes a
+// torn or partially written file: the rename is the commit point, and it either
+// takes effect whole or not at all. The trailing directory fsync makes the
+// rename itself durable, so a power loss right after the swap cannot silently
+// roll back to the previous file.
 //
 // The temp file is created in filepath.Dir(path) so the rename stays on a single
 // filesystem (cross-device renames are not atomic). It is named with a leading
@@ -48,7 +51,24 @@ func writeFileAtomic(path string, data []byte, perm os.FileMode) error {
 	if err := os.Rename(tmp.Name(), path); err != nil {
 		return fmt.Errorf("replace %s: %w", path, err)
 	}
+	// The write is already committed and visible; fsyncing the directory only
+	// hardens the rename against power loss, so it is best-effort. (Directory
+	// fsync is unsupported on some platforms — e.g. Windows — where Sync on a
+	// directory handle errors; ignoring it there is correct.)
+	syncDir(dir)
 	return nil
+}
+
+// syncDir flushes a directory's metadata so a rename into it survives a crash.
+// Best-effort: any error is ignored, including the "not supported on a directory
+// handle" failure returned on platforms like Windows.
+func syncDir(dir string) {
+	d, err := os.Open(dir)
+	if err != nil {
+		return
+	}
+	defer func() { _ = d.Close() }()
+	_ = d.Sync()
 }
 
 // sweepStaleTempFiles removes orphaned writeFileAtomic temp files for the given
