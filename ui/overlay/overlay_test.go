@@ -55,7 +55,7 @@ func TestPlaceOverlayCentersWithGraphemeClusterBackground(t *testing.T) {
 		Render("Title\nshort\na slightly longer help line here")
 	fgW := xansi.StringWidth(strings.Split(fg, "\n")[0])
 
-	out := PlaceOverlay(0, 0, fg, strings.Join(bg, "\n"), false, true)
+	out := PlaceOverlay(0, 0, fg, strings.Join(bg, "\n"), true)
 
 	// 1) The composed frame must never exceed the canvas width.
 	for i, l := range strings.Split(out, "\n") {

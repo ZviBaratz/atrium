@@ -1,6 +1,9 @@
 package git
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 func TestParseNumstat(t *testing.T) {
 	tests := []struct {
@@ -127,5 +130,71 @@ func TestCountDiffFiles(t *testing.T) {
 				t.Errorf("countDiffFiles(%q) = %d, want %d", tt.input, got, tt.want)
 			}
 		})
+	}
+}
+
+// TestComputeRepoStats_RevListCacheHit verifies that a fresh cache entry causes
+// computeRepoStats to populate Commits/Behind straight from the cache instead of
+// recomputing. git status still runs regardless of cache state; with an empty path
+// it fails silently, leaving Dirty at its zero value — the test only asserts the
+// cached fields.
+func TestComputeRepoStats_RevListCacheHit(t *testing.T) {
+	wt := &Worktree{}
+	wt.statsCacheMu.Lock()
+	wt.statsCache = repoStatsEntry{
+		commits:    3,
+		behind:     1,
+		computedAt: time.Now(),
+	}
+	wt.statsCacheMu.Unlock()
+
+	stats := &DiffStats{}
+	wt.computeRepoStats(stats, "")
+
+	if stats.Commits != 3 {
+		t.Errorf("rev-list cache hit: Commits = %d, want 3", stats.Commits)
+	}
+	if stats.Behind != 1 {
+		t.Errorf("rev-list cache hit: Behind = %d, want 1", stats.Behind)
+	}
+}
+
+// TestComputeRepoStats_RevListCacheMiss verifies that an expired cache entry is not
+// propagated. The bare Worktree has no baseRef or baseCommitSHA, so revListCounts
+// short-circuits to a zero result rather than running a subprocess — the stale 99
+// values must be overwritten with that fresh zero.
+func TestComputeRepoStats_RevListCacheMiss(t *testing.T) {
+	wt := &Worktree{}
+	wt.statsCacheMu.Lock()
+	wt.statsCache = repoStatsEntry{
+		commits:    99,
+		behind:     99,
+		computedAt: time.Now().Add(-(revListCacheTTL + time.Second)),
+	}
+	wt.statsCacheMu.Unlock()
+
+	stats := &DiffStats{}
+	wt.computeRepoStats(stats, "")
+
+	if stats.Commits == 99 || stats.Behind == 99 {
+		t.Errorf("stale rev-list cache propagated: Commits=%d Behind=%d, want != 99", stats.Commits, stats.Behind)
+	}
+}
+
+// TestComputeRepoStats_RevListErrorDoesNotCache verifies that a failed rev-list is
+// not written to the cache. With a base ref set but a non-repo worktree path, the
+// subprocess errors; the cache must stay empty so the next tick retries immediately
+// instead of serving a zero for the whole TTL.
+func TestComputeRepoStats_RevListErrorDoesNotCache(t *testing.T) {
+	wt := &Worktree{baseRef: "main"}
+
+	stats := &DiffStats{}
+	// t.TempDir() is not a git repo, so `git -C <dir> rev-list` fails.
+	wt.computeRepoStats(stats, t.TempDir())
+
+	wt.statsCacheMu.Lock()
+	defer wt.statsCacheMu.Unlock()
+	if !wt.statsCache.computedAt.IsZero() {
+		t.Errorf("failed rev-list poisoned the cache: computedAt = %v, want zero", wt.statsCache.computedAt)
 	}
 }

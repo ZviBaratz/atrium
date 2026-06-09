@@ -72,14 +72,16 @@ func (c *ConfirmationOverlay) Render(opts ...WhitespaceOption) string {
 
 	// Add the confirmation instructions. When an alt confirm key is set (e.g. the
 	// kill chord for double-tap), surface it alongside the primary confirm key.
-	confirmHint := lipgloss.NewStyle().Bold(true).Render(c.ConfirmKey)
+	hintStyle := theme.Current().OverlayHintStyle()
+	keyStyle := hintStyle.Bold(true)
+	confirmHint := keyStyle.Render(c.ConfirmKey)
 	if c.ConfirmAltKey != "" {
-		confirmHint += " (or " + lipgloss.NewStyle().Bold(true).Render(c.ConfirmAltKey) + ")"
+		confirmHint += hintStyle.Render(" (or ") + keyStyle.Render(c.ConfirmAltKey) + hintStyle.Render(")")
 	}
 	content := c.message + "\n\n" +
-		"Press " + confirmHint + " to confirm, " +
-		lipgloss.NewStyle().Bold(true).Render(c.CancelKey) + " or " +
-		lipgloss.NewStyle().Bold(true).Render("esc") + " to cancel"
+		hintStyle.Render("Press ") + confirmHint + hintStyle.Render(" to confirm, ") +
+		keyStyle.Render(c.CancelKey) + hintStyle.Render(" or ") +
+		keyStyle.Render("esc") + hintStyle.Render(" to cancel")
 
 	// Apply the border style and return
 	return style.Render(content)

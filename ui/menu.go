@@ -8,6 +8,8 @@ import (
 	"github.com/ZviBaratz/atrium/ui/theme"
 
 	"github.com/charmbracelet/lipgloss"
+	xansi "github.com/charmbracelet/x/ansi"
+	"github.com/mattn/go-runewidth"
 )
 
 // Hint-bar styles read the active theme at render time: keys in primary text,
@@ -35,20 +37,46 @@ const (
 )
 
 // defaultHintKeys are the high-value bindings the always-on bar surfaces during
-// plain navigation with a session selected. Deliberately few: the bar is a
-// reminder that keys exist (and that ? lists them all), not a reference card.
+// plain navigation with a running session selected. Deliberately few: the bar
+// is a reminder that keys exist (and that ? lists them all), not a reference
+// card. hintsFor swaps in status-specific sets so the bar never advertises an
+// action the selected session can't take.
 var defaultHintKeys = []keys.KeyName{keys.KeyEnter, keys.KeyNew, keys.KeyQuickSend, keys.KeyKill, keys.KeyHelp}
 
-// emptyHintKeys are the bindings surfaced when no sessions exist yet.
-var emptyHintKeys = []keys.KeyName{keys.KeyNew, keys.KeyPrompt, keys.KeyHelp, keys.KeyQuit}
+// pausedHintKeys replace the default set for a paused selection: it can't be
+// opened or sent to, so the bar points at resume instead.
+var pausedHintKeys = []keys.KeyName{keys.KeyResume, keys.KeyNew, keys.KeyKill, keys.KeyHelp}
+
+// dirtyHintKeys extend the default set when the selected session has work on
+// its branch — the moment pause/push become the actions that matter.
+var dirtyHintKeys = []keys.KeyName{keys.KeyEnter, keys.KeyNew, keys.KeyQuickSend, keys.KeyPause, keys.KeySubmit, keys.KeyKill, keys.KeyHelp}
+
+// emptyHintKeys are the bindings surfaced when no sessions exist yet. The n/N
+// distinction is noise for a zero-session user, so only n appears.
+var emptyHintKeys = []keys.KeyName{keys.KeyNew, keys.KeyHelp, keys.KeyQuit}
+
+// NoticeLevel grades a transient notice shown in the menu row.
+type NoticeLevel int
+
+const (
+	// NoticeInfo is a neutral acknowledgment ("branch copied").
+	NoticeInfo NoticeLevel = iota
+	// NoticeError is a failure or a state-guard explanation.
+	NoticeError
+)
 
 // Menu is the bottom hint bar: a single line of the most useful keybindings for
-// the current UI state, with ? as the doorway to the full cheatsheet.
+// the current UI state, with ? as the doorway to the full cheatsheet. It also
+// doubles as the home of transient feedback: a notice temporarily replaces the
+// hints on the same reserved row, so feedback never changes the frame height.
 type Menu struct {
 	height, width int
 	state         MenuState
 	hasInstance   bool
 	activeTab     int
+	notice        string
+	noticeLevel   NoticeLevel
+	contextHints  []keys.KeyName
 }
 
 // NewMenu returns a Menu in the empty state.
@@ -61,11 +89,13 @@ func (m *Menu) SetState(state MenuState) {
 	m.state = state
 }
 
-// SetInstance records whether a session is selected, which decides between the
-// default and empty hint sets. Special states (Filter, GeneratingName) persist
-// across the periodic instanceChanged ticks.
+// SetInstance records the selected session and derives the hint set from its
+// status, so the bar only advertises actions the selection can actually take.
+// Special states (Filter, GeneratingName) persist across the periodic
+// instanceChanged ticks.
 func (m *Menu) SetInstance(instance *session.Instance) {
 	m.hasInstance = instance != nil
+	m.contextHints = hintsFor(instance)
 	if m.state == StateDefault || m.state == StateEmpty {
 		if m.hasInstance {
 			m.state = StateDefault
@@ -75,10 +105,47 @@ func (m *Menu) SetInstance(instance *session.Instance) {
 	}
 }
 
+// hintsFor picks the hint set matching the selection's state. Affordances must
+// track state: a bar that advertises "open" and "send" on a paused session is
+// advertising no-ops.
+func hintsFor(instance *session.Instance) []keys.KeyName {
+	if instance == nil {
+		return nil
+	}
+	if instance.Paused() {
+		return pausedHintKeys
+	}
+	if !instance.IsDirect() {
+		if stats := instance.GetDiffStats(); stats != nil && stats.Error == nil &&
+			(stats.Dirty || stats.Commits > 0 || !stats.IsEmpty()) {
+			return dirtyHintKeys
+		}
+	}
+	return defaultHintKeys
+}
+
 // SetActiveTab updates the currently active tab; the panes with a scroll mode
 // (diff/terminal) add a scroll hint to the default bar.
 func (m *Menu) SetActiveTab(tab int) {
 	m.activeTab = tab
+}
+
+// SetNotice shows transient feedback in place of the hints. Newlines are
+// flattened (mirroring the error box) because the row is single-line by
+// construction.
+func (m *Menu) SetNotice(text string, level NoticeLevel) {
+	m.notice = strings.Join(strings.Split(text, "\n"), "//")
+	m.noticeLevel = level
+}
+
+// ClearNotice restores the hint line.
+func (m *Menu) ClearNotice() {
+	m.notice = ""
+}
+
+// HasNotice reports whether a notice currently occupies the row.
+func (m *Menu) HasNotice() bool {
+	return m.notice != ""
 }
 
 // SetSize sets the width of the window. The menu will be centered horizontally within this width.
@@ -103,6 +170,20 @@ func renderHintLine(names []keys.KeyName) string {
 }
 
 func (m *Menu) String() string {
+	if m.notice != "" {
+		style := theme.Current().FgStyle()
+		if m.noticeLevel == NoticeError {
+			style = theme.Current().DangerStyle()
+		}
+		text := m.notice
+		// Truncate rather than wrap: a wrapped notice would grow the row and
+		// cause exactly the layout shift this mechanism exists to prevent.
+		if limit := m.width - 2; limit >= 0 && runewidth.StringWidth(text) > limit {
+			text = runewidth.Truncate(text, limit, "…")
+		}
+		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, style.Render(text))
+	}
+
 	var line string
 	switch m.state {
 	case StateGeneratingName:
@@ -115,12 +196,20 @@ func (m *Menu) String() string {
 	case StateEmpty:
 		line = renderHintLine(emptyHintKeys)
 	default: // StateDefault
-		hints := defaultHintKeys
+		hints := m.contextHints
+		if hints == nil {
+			hints = defaultHintKeys
+		}
 		if m.activeTab == DiffTab || m.activeTab == TerminalTab {
 			hints = append(append([]keys.KeyName{}, hints...), keys.KeyShiftUp)
 		}
 		line = renderHintLine(hints)
 	}
 
+	// Truncate rather than overflow: a hint line wider than the terminal would
+	// wrap and break the one-row layout contract (same rule as notices above).
+	if limit := m.width; limit > 0 && lipgloss.Width(line) > limit {
+		line = xansi.Truncate(line, limit-1, "…")
+	}
 	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, line)
 }

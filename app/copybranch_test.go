@@ -52,6 +52,7 @@ func newCopyBranchHome(t *testing.T, instances ...*session.Instance) *home {
 		state:     stateDefault,
 		list:      l,
 		menu:      ui.NewMenu(),
+		errBox:    ui.NewErrBox(),
 		appConfig: config.DefaultConfig(),
 	}
 }
@@ -71,8 +72,10 @@ func pressY(h *home) tea.Cmd {
 	return cmd
 }
 
-// Pressing y copies the selected session's branch name to the clipboard.
-func TestKeyCopyBranch_CopiesSelectedBranch(t *testing.T) {
+// Pressing y copies the selected session's branch name to the clipboard and
+// acknowledges it: until this toast existed, success and failure were
+// indistinguishable from the keyboard.
+func TestKeyCopyBranch_CopiesSelectedBranchAndAcknowledges(t *testing.T) {
 	h := newCopyBranchHome(t, newBranchInstance(t, "a", "feature/login"))
 	fc := withFakeClipboard(t, nil)
 
@@ -80,22 +83,27 @@ func TestKeyCopyBranch_CopiesSelectedBranch(t *testing.T) {
 
 	require.True(t, fc.called, "clipboard writer must be invoked")
 	assert.Equal(t, "feature/login", fc.value)
-	assert.Nil(t, cmd)
+	require.True(t, h.menu.HasNotice(), "success must be acknowledged")
+	assert.Contains(t, h.menu.String(), "copied")
+	assert.NotNil(t, cmd, "the toast schedules its own hide")
 }
 
-// A clipboard failure is swallowed (logged, not surfaced) so the TUI keeps running:
-// clipboard unavailability is a host-env issue, not a user error.
-func TestKeyCopyBranch_ClipboardErrorIsSwallowed(t *testing.T) {
+// A clipboard failure surfaces as a toast rather than dying in the log: the
+// user needs to know the branch never reached the clipboard.
+func TestKeyCopyBranch_ClipboardErrorSurfaces(t *testing.T) {
 	h := newCopyBranchHome(t, newBranchInstance(t, "a", "feature/login"))
 	fc := withFakeClipboard(t, errors.New("no clipboard utility"))
 
 	cmd := pressY(h)
 
 	require.True(t, fc.called)
-	assert.Nil(t, cmd, "a clipboard error must not surface as a TUI command")
+	require.True(t, h.menu.HasNotice(), "the failure must be visible")
+	assert.NotContains(t, h.menu.String(), "copied", "a failed copy must not read as success")
+	assert.NotNil(t, cmd)
 }
 
-// With no session selected there is nothing to copy: the clipboard is left untouched.
+// With no session selected there is nothing to copy: the clipboard is left
+// untouched and the key stays silent (the empty state is self-evident).
 func TestKeyCopyBranch_NoOpWhenNoSelection(t *testing.T) {
 	h := newCopyBranchHome(t) // empty list -> GetSelectedInstance() == nil
 	fc := withFakeClipboard(t, nil)
@@ -106,14 +114,15 @@ func TestKeyCopyBranch_NoOpWhenNoSelection(t *testing.T) {
 	assert.Nil(t, cmd)
 }
 
-// A session whose branch is not yet known (empty Branch) is a no-op rather than
-// copying an empty string.
-func TestKeyCopyBranch_NoOpWhenBranchEmpty(t *testing.T) {
+// A session whose branch is not yet known (empty Branch) explains itself
+// instead of copying an empty string or silently doing nothing.
+func TestKeyCopyBranch_ExplainsWhenBranchEmpty(t *testing.T) {
 	h := newCopyBranchHome(t, newBranchInstance(t, "a", ""))
 	fc := withFakeClipboard(t, nil)
 
 	cmd := pressY(h)
 
 	assert.False(t, fc.called, "clipboard must not be written for an empty branch")
-	assert.Nil(t, cmd)
+	require.True(t, h.menu.HasNotice(), "the no-op must explain itself")
+	assert.NotNil(t, cmd)
 }

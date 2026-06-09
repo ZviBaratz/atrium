@@ -304,7 +304,7 @@ func (bp *BranchPicker) Render() string {
 	}
 
 	s.WriteString(bpLabelStyle().Render("Base branch"))
-	s.WriteString(bpFilterStyle().Render(" (filter: " + bp.filter + "█)"))
+	s.WriteString(bpFilterStyle().Render(" (filter: " + bp.filter + theme.Current().Glyphs.TextCursor + ")"))
 	switch {
 	case bp.loading:
 		s.WriteString(bpDimStyle().Render("  searching…"))

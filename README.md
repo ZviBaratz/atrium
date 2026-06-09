@@ -7,7 +7,7 @@ Atrium is a terminal command center for orchestrating multiple AI coding agents 
 ### Highlights
 - Complete tasks in the background (including yolo / auto-accept mode!)
 - Manage instances and tasks in one terminal window
-- Review changes before applying them, checkout changes before pushing them
+- Review changes before applying them, pause sessions to pick their branches up elsewhere
 - Each task gets its own isolated git workspace, so no conflicts
 
 <br />
@@ -82,23 +82,28 @@ NOTE: The default program is `claude` and we recommend using the latest version.
 The menu at the bottom of the screen shows available commands:
 
 ##### Instance/Session Management
-- `n` - Create a new session
-- `N` - Create a new session with a prompt
-- `D` - Kill (delete) the selected session
-- `↑/j`, `↓/k` - Navigate between sessions
+- `n` - Create a new session (form focused on the name)
+- `N` - Create a new session (form focused on the project picker)
+- `ctrl-x` - Kill the selected session (press twice to confirm)
+- `↑/k`, `↓/j` - Navigate between sessions
+- `/` - Filter sessions
 
 ##### Actions
-- `↵/o` - Attach to the selected session to reprompt
-- `ctrl-q` - Detach from session
-- `s` - Commit and push branch to github
-- `c` - Checkout. Commits changes and pauses the session
+- `↵/o` - Attach to the selected session
+- `ctrl-q` - Toggle attach/detach (detach when attached, attach from the list)
+- `s` - Send a message to the selected session without attaching
+- `p` - Pause: commit changes and free the worktree
+- `P` - Commit and push the session branch
 - `r` - Resume a paused session
+- `y` - Copy the session's branch name to the clipboard
 - `?` - Show help menu
 
 ##### Navigation
-- `tab` - Switch between preview tab and diff tab
+- `tab` / `shift-tab` - Cycle the preview / diff / terminal panes
+- `1` / `2` / `3` - Jump straight to a pane
+- `shift-↓/↑` - Scroll the active pane
+- `,` - Settings
 - `q` - Quit the application
-- `shift-↓/↑` - scroll in diff view
 
 ### Configuration
 

@@ -187,6 +187,51 @@ func TestSessionCreateOverlay_EnterSkipsDisabledBranch(t *testing.T) {
 	assert.True(t, o.isTitle(), "Enter must skip the disabled branch picker")
 }
 
+// The quick-create contract: n focuses the title, typing a name and pressing
+// Enter creates the session — no two-hand ⌃S chord on the fast path.
+func TestSessionCreateOverlay_EnterOnFilledTitleSubmits(t *testing.T) {
+	o := NewSessionCreateOverlay(nil, []string{"/repo/a"})
+	o.FocusTitle()
+	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("my-task")})
+
+	shouldClose, _ := o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyEnter})
+
+	assert.True(t, shouldClose, "Enter on a filled title must close the form")
+	assert.True(t, o.IsSubmitted())
+	assert.Equal(t, "my-task", o.GetTitle())
+}
+
+// Enter on an empty title advances instead of submitting: submitting would only
+// bounce off the title-required validation, so the keystroke moves the user on.
+func TestSessionCreateOverlay_EnterOnEmptyTitleAdvances(t *testing.T) {
+	o := NewSessionCreateOverlay(nil, []string{"/repo/a"})
+	o.FocusTitle()
+
+	shouldClose, _ := o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyEnter})
+
+	assert.False(t, shouldClose)
+	assert.False(t, o.IsSubmitted())
+	assert.True(t, o.isTextarea(), "Enter on an empty title moves to the prompt")
+}
+
+// Enter inside the create-form prompt stays a newline — the prompt is multiline
+// by design, which is exactly why title-enter (not prompt-enter) is the quick
+// submit.
+func TestSessionCreateOverlay_EnterInPromptInsertsNewline(t *testing.T) {
+	o := NewSessionCreateOverlay(nil, []string{"/repo/a"})
+	o.FocusTitle()
+	tab(o) // title → prompt
+	require.True(t, o.isTextarea())
+	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("line one")})
+
+	shouldClose, _ := o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyEnter})
+	assert.False(t, shouldClose, "Enter in the prompt must not submit the form")
+	assert.False(t, o.IsSubmitted())
+
+	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("line two")})
+	assert.Equal(t, "line one\nline two", o.GetValue())
+}
+
 // If the disable verdict lands while the branch picker holds focus (the async validity
 // check resolving after the user tabbed ahead), focus is pushed to the next enabled stop
 // rather than stranding the user on an inert field.

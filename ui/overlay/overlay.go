@@ -4,10 +4,13 @@
 package overlay
 
 import (
+	"fmt"
 	"regexp"
+	"strconv"
 	"strings"
 
-	"github.com/charmbracelet/lipgloss"
+	"github.com/ZviBaratz/atrium/ui/theme"
+
 	xansi "github.com/charmbracelet/x/ansi"
 	"github.com/muesli/termenv"
 )
@@ -44,12 +47,52 @@ func CalculateCenterCoordinates(foregroundLines []string, backgroundLines []stri
 	return x, y
 }
 
-// PlaceOverlay places fg on top of bg with an optional shadow effect.
+// Regular expressions matching the color forms a terminal can emit; compiled
+// once, used by the fade rewrite on every overlay render.
+var (
+	// Background color codes like \x1b[48;2;R;G;Bm or \x1b[48;5;Nm
+	bgColorRegex = regexp.MustCompile(`\x1b\[48;[25];[0-9;]+m`)
+	// Foreground color codes like \x1b[38;2;R;G;Bm or \x1b[38;5;Nm
+	fgColorRegex = regexp.MustCompile(`\x1b\[38;[25];[0-9;]+m`)
+	// Simple color codes like \x1b[31m
+	simpleColorRegex = regexp.MustCompile(`\x1b\[[0-9]+m`)
+)
+
+// fadeSGR returns the SGR fragments that repaint background content in the
+// active theme's faint colors while a modal is up. All bundled palettes are
+// truecolor hex; a non-hex color falls back to the legacy greys rather than
+// emitting a broken sequence.
+func fadeSGR() (fg, bg string) {
+	p := theme.Current().Palette
+	fg = "\x1b[38;5;240m"
+	bg = "\x1b[48;5;236m"
+	if r, g, b, ok := hexRGB(string(p.FgFaint)); ok {
+		fg = fmt.Sprintf("\x1b[38;2;%d;%d;%dm", r, g, b)
+	}
+	if r, g, b, ok := hexRGB(string(p.Bg)); ok {
+		bg = fmt.Sprintf("\x1b[48;2;%d;%d;%dm", r, g, b)
+	}
+	return fg, bg
+}
+
+// hexRGB parses a "#rrggbb" color into its components.
+func hexRGB(s string) (r, g, b uint8, ok bool) {
+	if len(s) != 7 || s[0] != '#' {
+		return 0, 0, 0, false
+	}
+	v, err := strconv.ParseUint(s[1:], 16, 32)
+	if err != nil {
+		return 0, 0, 0, false
+	}
+	return uint8(v >> 16 & 0xff), uint8(v >> 8 & 0xff), uint8(v & 0xff), true
+}
+
+// PlaceOverlay places fg on top of bg, fading the background into the active
+// theme's faint colors so the modal reads as the only live surface.
 // If center is true, the foreground is centered on the background; otherwise, the provided x and y are used.
 func PlaceOverlay(
 	x, y int,
 	fg, bg string,
-	shadow bool,
 	center bool,
 	opts ...WhitespaceOption,
 ) string {
@@ -58,71 +101,28 @@ func PlaceOverlay(
 	bgHeight := len(bgLines)
 	fgHeight := len(fgLines)
 
-	// Apply a fade effect to the background by directly modifying each line
-	// Create a new array of background lines with the fade effect applied
-	//
-	// TODO(theme): the fade greys below (ANSI 236/240) are hardcoded and bypass
-	// the theme palette — fine on the current dark themes, wrong for any light
-	// theme. Replacing them means deriving fade colors from theme.Current()
-	// and reworking this regex-based ANSI rewrite; out of scope for the token
-	// sweep that touched the rest of the UI.
+	// Apply the fade by rewriting each background line's color codes to the
+	// theme-derived faint pair.
+	fadeFg, fadeBg := fadeSGR()
 	fadedBgLines := make([]string, len(bgLines))
-
-	// Compile regular expressions for ANSI color codes
-	// Match background color codes like \x1b[48;2;R;G;Bm or \x1b[48;5;Nm
-	bgColorRegex := regexp.MustCompile(`\x1b\[48;[25];[0-9;]+m`)
-
-	// Match foreground color codes like \x1b[38;2;R;G;Bm or \x1b[38;5;Nm
-	fgColorRegex := regexp.MustCompile(`\x1b\[38;[25];[0-9;]+m`)
-
-	// Match simple color codes like \x1b[31m
-	simpleColorRegex := regexp.MustCompile(`\x1b\[[0-9]+m`)
-
 	for i, line := range bgLines {
-		// Replace background color codes with a faded version
-		content := bgColorRegex.ReplaceAllString(line, "\x1b[48;5;236m") // Dark gray background
-
-		// Replace foreground color codes with a faded version
-		content = fgColorRegex.ReplaceAllString(content, "\x1b[38;5;240m") // Medium gray foreground
-
-		// Replace simple color codes with a faded version
+		content := bgColorRegex.ReplaceAllString(line, fadeBg)
+		content = fgColorRegex.ReplaceAllString(content, fadeFg)
 		content = simpleColorRegex.ReplaceAllStringFunc(content, func(match string) string {
 			// Skip reset codes
 			if match == "\x1b[0m" {
 				return match
 			}
-			// Replace with dimmed color
-			return "\x1b[38;5;240m" // Medium gray
+			return fadeFg
 		})
-
 		fadedBgLines[i] = content
 	}
-
-	// Replace the original background with the faded version
 	bgLines = fadedBgLines
 
 	// Determine placement coordinates
 	placeX, placeY := x, y
 	if center {
 		placeX, placeY = CalculateCenterCoordinates(fgLines, bgLines, fgWidth, bgWidth)
-	}
-
-	// Handle shadow if enabled
-	if shadow {
-		// Define shadow style and character
-		shadowStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#333333"))
-		shadowChar := shadowStyle.Render("░")
-
-		// Create shadow string with same dimensions as foreground
-		shadowLines := make([]string, fgHeight)
-		for i := 0; i < fgHeight; i++ {
-			shadowLines[i] = strings.Repeat(shadowChar, fgWidth)
-		}
-		shadowStr := strings.Join(shadowLines, "\n")
-
-		// Place shadow on background at an offset (e.g., +1, +1)
-		const shadowOffsetX, shadowOffsetY = 1, 1
-		_ = PlaceOverlay(placeX+shadowOffsetX, placeY+shadowOffsetY, shadowStr, bg, false, false, opts...)
 	}
 
 	// Check if foreground exceeds background size

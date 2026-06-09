@@ -75,8 +75,8 @@ func (h helpTypeGeneral) toContent() string {
 		helpRow("ctrl-x", "kill the selected/attached session (twice to confirm)"),
 		helpRow("ctrl-pgup/pgdn", "in a session: cycle to prev / next session in the repo group"),
 		helpRow("s", "send a message (without attaching)"),
-		helpRow("c", "checkout: commit changes + pause"),
-		helpRow("p", "commit & push branch"),
+		helpRow("p", "pause: commit changes + free the worktree"),
+		helpRow("P", "commit & push branch"),
 		helpRow("r", "resume a paused session"),
 		helpRow("y", "copy branch name to clipboard"),
 		"",
@@ -94,7 +94,7 @@ func (h helpTypeGeneral) toContent() string {
 		"",
 		legend,
 		"",
-		helpDimStyle().Render("press any key to close"),
+		theme.Current().OverlayHintStyle().Render("press any key to close"),
 	)
 }
 
@@ -108,7 +108,7 @@ func (h helpTypeWelcome) toContent() string {
 		helpRow("n", "start your first session"),
 		helpRow("?", "show all keys, any time"),
 		"",
-		helpDimStyle().Render("press any key to begin"),
+		theme.Current().OverlayHintStyle().Render("press any key to begin"),
 	)
 }
 

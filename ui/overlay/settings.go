@@ -191,6 +191,35 @@ func newSettingRows(cfg *config.Config) []settingRow {
 			(*config.Config).GetTrustWorktreesRoot,
 			func(c *config.Config, v bool) { c.TrustWorktreesRoot = &v }),
 		{
+			key: "carry_files", section: "Behavior", label: "Carry files", kind: kindText,
+			description: "Gitignored files copied into each new worktree; comma-separated repo-relative paths.",
+			applyNote:   "affects new sessions",
+			get: func(c *config.Config) string {
+				files := c.GetCarryFiles()
+				if len(files) == 0 {
+					return "(none)"
+				}
+				return strings.Join(files, ", ")
+			},
+			editGet: func(c *config.Config) string {
+				return strings.Join(c.GetCarryFiles(), ", ")
+			},
+			set: func(c *config.Config, v string) error {
+				// Split on commas, trim each entry, drop blanks. Empty or
+				// all-blank input collapses to a non-nil empty slice — the
+				// explicit opt-out per GetCarryFiles's nil-vs-empty contract.
+				parts := strings.Split(v, ",")
+				files := make([]string, 0, len(parts))
+				for _, p := range parts {
+					if t := strings.TrimSpace(p); t != "" {
+						files = append(files, t)
+					}
+				}
+				c.CarryFiles = files
+				return nil
+			},
+		},
+		{
 			key: "daemon_poll_interval", section: "Behavior", label: "Poll interval (ms)", kind: kindInt,
 			description: "Auto-yes daemon polling rate.", applyNote: "applies on restart",
 			get: func(c *config.Config) string { return strconv.Itoa(c.DaemonPollInterval) },
@@ -430,7 +459,7 @@ func (s *SettingsOverlay) Render() string {
 	body := s.renderBody(inner)
 	footer := s.renderFooter(inner)
 
-	title := t.AccentStyle().Bold(true).Render("Settings")
+	title := t.OverlayTitleStyle().Render("Settings")
 	content := title + "\n\n" + strings.Join(body, "\n") + "\n\n" + footer
 
 	return lipgloss.NewStyle().
@@ -560,5 +589,5 @@ func (s *SettingsOverlay) renderFooter(inner int) string {
 		hint = "↵ save · esc cancel"
 	}
 	return xansi.Truncate(style.Render(desc), inner, "…") + "\n" +
-		xansi.Truncate(t.FaintStyle().Render(hint), inner, "…")
+		xansi.Truncate(t.OverlayHintStyle().Render(hint), inner, "…")
 }

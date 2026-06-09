@@ -28,7 +28,7 @@ const (
 	KeyTab      // Tab is a special keybinding for switching between panes.
 	KeyShiftTab // ShiftTab cycles between panes in reverse order.
 
-	KeyCheckout
+	KeyPause // Commit changes and pause the session, freeing its worktree
 	KeyResume
 	KeyPrompt // Open the new-session form focused on the project picker
 	KeyHelp   // Key for showing help screen
@@ -73,6 +73,10 @@ const (
 	KeyTabTerminal
 
 	KeySettings // Open the settings panel to view and edit the configuration
+
+	// KeyAttachToggle mirrors the in-session detach key: on the list it attaches
+	// the selected session, making ctrl+q a symmetric attach/detach toggle.
+	KeyAttachToggle
 )
 
 // KillKey is the chord that triggers a kill from the session list. It mirrors the
@@ -107,9 +111,9 @@ var GlobalKeyStringsMap = map[string]KeyName{
 	"q":          KeyQuit,
 	"tab":        KeyTab,
 	"shift+tab":  KeyShiftTab,
-	"c":          KeyCheckout,
+	"p":          KeyPause,
 	"r":          KeyResume,
-	"p":          KeySubmit,
+	"P":          KeySubmit,
 	"?":          KeyHelp,
 	"/":          KeyFilter,
 	"<":          KeyShrinkList,
@@ -118,6 +122,7 @@ var GlobalKeyStringsMap = map[string]KeyName{
 	"2":          KeyTabDiff,
 	"3":          KeyTabTerminal,
 	",":          KeySettings,
+	"ctrl+q":     KeyAttachToggle,
 }
 
 // GlobalkeyBindings is a global, immutable map of KeyName to keybinding.
@@ -171,16 +176,16 @@ var GlobalkeyBindings = map[KeyName]key.Binding{
 		key.WithHelp("q", "quit"),
 	),
 	KeySubmit: key.NewBinding(
-		key.WithKeys("p"),
-		key.WithHelp("p", "push branch"),
+		key.WithKeys("P"),
+		key.WithHelp("P", "push branch"),
 	),
 	KeyPrompt: key.NewBinding(
 		key.WithKeys("N"),
 		key.WithHelp("N", "new (pick project)"),
 	),
-	KeyCheckout: key.NewBinding(
-		key.WithKeys("c"),
-		key.WithHelp("c", "checkout"),
+	KeyPause: key.NewBinding(
+		key.WithKeys("p"),
+		key.WithHelp("p", "pause"),
 	),
 	KeyTab: key.NewBinding(
 		key.WithKeys("tab"),
@@ -255,5 +260,9 @@ var GlobalkeyBindings = map[KeyName]key.Binding{
 	KeySettings: key.NewBinding(
 		key.WithKeys(","),
 		key.WithHelp(",", "settings"),
+	),
+	KeyAttachToggle: key.NewBinding(
+		key.WithKeys("ctrl+q"),
+		key.WithHelp("ctrl-q", "attach/detach"),
 	),
 }

@@ -4,6 +4,8 @@ import (
 	"testing"
 
 	"github.com/ZviBaratz/atrium/session"
+	"github.com/ZviBaratz/atrium/session/git"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/stretchr/testify/require"
 )
 
@@ -40,6 +42,64 @@ func TestMenu_EmptyHintLine(t *testing.T) {
 		require.Contains(t, out, want)
 	}
 	require.NotContains(t, out, "kill", "no session to kill in the empty state")
+	require.NotContains(t, out, "pick project", "the n/N distinction is noise with zero sessions")
+}
+
+// A paused session can't be opened or sent to — the bar must advertise what
+// actually works (resume, kill) instead of actions that silently no-op.
+func TestMenu_PausedHintLine(t *testing.T) {
+	inst, err := session.NewInstance(session.InstanceOptions{Title: "t", Path: t.TempDir(), Program: "echo"})
+	require.NoError(t, err)
+	inst.SetStatus(session.Paused)
+
+	m := NewMenu()
+	m.SetSize(200, 3)
+	m.SetInstance(inst)
+
+	out := m.String()
+	require.Contains(t, out, "resume")
+	require.Contains(t, out, "kill")
+	require.NotContains(t, out, "open", "a paused session cannot be attached")
+	require.NotContains(t, out, "send", "a paused session cannot receive messages")
+}
+
+// A session with work on its branch surfaces the pause/push pair; a clean one
+// keeps the bar short.
+func TestMenu_DirtyHintLineAddsPausePush(t *testing.T) {
+	inst, err := session.NewInstance(session.InstanceOptions{Title: "t", Path: t.TempDir(), Program: "echo"})
+	require.NoError(t, err)
+	inst.SetStatus(session.Running)
+	inst.SetDiffStats(&git.DiffStats{Added: 3, Removed: 1, Content: "x"})
+
+	m := NewMenu()
+	m.SetSize(200, 3)
+	m.SetInstance(inst)
+
+	out := m.String()
+	require.Contains(t, out, "pause")
+	require.Contains(t, out, "push")
+
+	inst.SetDiffStats(&git.DiffStats{}) // clean
+	m.SetInstance(inst)
+	out = m.String()
+	require.NotContains(t, out, "pause", "a clean session has nothing to pause")
+	require.NotContains(t, out, "push", "a clean session has nothing to push")
+}
+
+// On a terminal narrower than the hint line, the bar truncates with an
+// ellipsis instead of overflowing and wrapping — wrapping would grow the row
+// and break the one-row layout contract.
+func TestMenu_HintLineTruncatesOnNarrowWidth(t *testing.T) {
+	inst, err := session.NewInstance(session.InstanceOptions{Title: "t", Path: t.TempDir(), Program: "echo"})
+	require.NoError(t, err)
+	m := NewMenu()
+	m.SetSize(30, 1)
+	m.SetInstance(inst)
+
+	out := m.String()
+	require.Equal(t, 1, lipgloss.Height(out), "hint bar must stay a single row")
+	require.LessOrEqual(t, lipgloss.Width(out), 30)
+	require.Contains(t, out, "…")
 }
 
 // The filter state shows its own accept/clear cue.

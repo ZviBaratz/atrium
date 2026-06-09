@@ -166,9 +166,10 @@ func (c *Config) GetSessionContextBar() bool {
 }
 
 // GetHintBar reports whether the always-on bottom hint bar is enabled. A nil
-// HintBar (e.g. an older config file with no such key) defaults to on.
+// HintBar (e.g. an older config file with no such key) — or a nil Config —
+// defaults to on.
 func (c *Config) GetHintBar() bool {
-	return c.HintBar == nil || *c.HintBar
+	return c == nil || c.HintBar == nil || *c.HintBar
 }
 
 // GetAutoAttach reports whether new sessions should auto-attach on creation.

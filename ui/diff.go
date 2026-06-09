@@ -9,6 +9,7 @@ import (
 
 	"github.com/charmbracelet/bubbles/viewport"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/mattn/go-runewidth"
 )
 
 // Diff styles read the active theme at render time. additions are success
@@ -67,7 +68,7 @@ func (d *DiffPane) SetDiff(instance *session.Instance) {
 	}
 
 	// A direct (non-git) session has no worktree to diff. Say so explicitly rather than
-	// falling into the "Setting up worktree..." path below, which never resolves.
+	// falling into the "Setting up workspace..." path below, which never resolves.
 	if instance.IsDirect() {
 		d.stats = ""
 		d.diff = ""
@@ -89,20 +90,21 @@ func (d *DiffPane) SetDiff(instance *session.Instance) {
 			d.height,
 			lipgloss.Center,
 			lipgloss.Center,
-			metaStyle().Render("Setting up worktree..."),
+			metaStyle().Render("Setting up workspace..."), // matches the preview pane's splash
 		)
 		d.viewport.SetContent(centeredMessage)
 		return
 	}
 
 	if stats.Error != nil {
-		// Show error message
+		// Show error message — danger-styled, so a broken diff doesn't render as
+		// unstyled default text while every sibling placeholder is dim.
 		centeredMessage := lipgloss.Place(
 			d.width,
 			d.height,
 			lipgloss.Center,
 			lipgloss.Center,
-			fmt.Sprintf("Error: %v", stats.Error),
+			theme.Current().DangerStyle().Render(fmt.Sprintf("Error: %v", stats.Error)),
 		)
 		d.viewport.SetContent(centeredMessage)
 		return
@@ -123,7 +125,7 @@ func (d *DiffPane) SetDiff(instance *session.Instance) {
 		}
 		// Decompose font-dependent emoji clusters in the diff so the width we lay out
 		// matches what the terminal renders and the pane can't wrap (see theme.SanitizeWidth).
-		d.diff = colorizeDiff(theme.SanitizeWidth(stats.Content))
+		d.diff = colorizeDiff(theme.SanitizeWidth(stats.Content), d.width)
 		d.viewport.SetContent(lipgloss.JoinVertical(lipgloss.Left, d.stats, d.diff))
 	}
 }
@@ -186,30 +188,82 @@ func (d *DiffPane) ScrollDown() {
 	d.viewport.LineDown(1)
 }
 
-func colorizeDiff(diff string) string {
-	var coloredOutput strings.Builder
+// diffMetaPrefixes mark the per-file metadata lines git emits after a
+// "diff --git" header; they render dimmed so the content lines stand out.
+var diffMetaPrefixes = []string{
+	"index ", "--- ", "+++ ", "old mode", "new mode", "new file mode",
+	"deleted file mode", "rename from", "rename to", "similarity index",
+	"copy from", "copy to", "Binary files", "---", "+++",
+}
 
-	lines := strings.Split(diff, "\n")
-	for _, line := range lines {
-		if len(line) > 0 {
-			if strings.HasPrefix(line, "@@") {
-				// Color hunk headers cyan
-				coloredOutput.WriteString(hunkStyle().Render(line) + "\n")
-			} else if line[0] == '+' && (len(line) == 1 || line[1] != '+') {
-				// Color added lines green, excluding metadata like '+++'
-				coloredOutput.WriteString(additionStyle().Render(line) + "\n")
-			} else if line[0] == '-' && (len(line) == 1 || line[1] != '-') {
-				// Color removed lines red, excluding metadata like '---'
-				coloredOutput.WriteString(deletionStyle().Render(line) + "\n")
+func isDiffMeta(line string) bool {
+	for _, p := range diffMetaPrefixes {
+		if strings.HasPrefix(line, p) {
+			return true
+		}
+	}
+	return false
+}
+
+// diffFilePath extracts the post-change path from a "diff --git a/x b/y"
+// header. Returns "" when the line doesn't carry one.
+func diffFilePath(line string) string {
+	if i := strings.Index(line, " b/"); i >= 0 {
+		return line[i+3:]
+	}
+	return ""
+}
+
+// colorizeDiff renders a unified diff for the pane: each "diff --git" header
+// becomes a file boundary (faint rule + bold path) so a multi-file diff reads
+// as sections; remaining metadata is dimmed; hunks are cyan and +/- lines
+// colored. Tabs expand to spaces and every line truncates to width — the
+// viewport must never soft-wrap, or scroll position and apparent boundaries
+// jump (the same discipline the preview pane applies). A non-positive width
+// (startup, tests) skips truncation.
+func colorizeDiff(diff string, width int) string {
+	var out strings.Builder
+
+	// fit expands tabs and truncates the *plain* line before styling, so the
+	// width math never has to see escape sequences.
+	fit := func(line string) string {
+		line = strings.ReplaceAll(line, "\t", "    ")
+		if width > 0 && runewidth.StringWidth(line) > width {
+			line = runewidth.Truncate(line, width-1, "…")
+		}
+		return line
+	}
+
+	ruleLen := 24
+	if width > 0 {
+		ruleLen = width
+	}
+	rule := theme.Current().FaintStyle().Render(strings.Repeat("─", ruleLen))
+
+	for _, line := range strings.Split(diff, "\n") {
+		switch {
+		case line == "":
+			out.WriteString("\n")
+		case strings.HasPrefix(line, "diff --git"):
+			out.WriteString(rule + "\n")
+			if path := diffFilePath(line); path != "" {
+				out.WriteString(theme.Current().FgStyle().Bold(true).Render(fit(path)) + "\n")
 			} else {
-				// Print metadata and unchanged lines without color
-				coloredOutput.WriteString(line + "\n")
+				out.WriteString(metaStyle().Render(fit(line)) + "\n")
 			}
-		} else {
-			// Preserve empty lines
-			coloredOutput.WriteString("\n")
+		case strings.HasPrefix(line, "@@"):
+			out.WriteString(hunkStyle().Render(fit(line)) + "\n")
+		case line[0] == '+' && (len(line) == 1 || line[1] != '+'):
+			out.WriteString(additionStyle().Render(fit(line)) + "\n")
+		case line[0] == '-' && (len(line) == 1 || line[1] != '-'):
+			out.WriteString(deletionStyle().Render(fit(line)) + "\n")
+		case isDiffMeta(line):
+			out.WriteString(metaStyle().Render(fit(line)) + "\n")
+		default:
+			// Context lines pass through uncolored.
+			out.WriteString(fit(line) + "\n")
 		}
 	}
 
-	return coloredOutput.String()
+	return out.String()
 }

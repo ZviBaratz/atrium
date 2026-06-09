@@ -304,3 +304,94 @@ func TestSettingsOverlay_ErrShownInRender(t *testing.T) {
 	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyEnter})
 	assert.Contains(t, stripANSI(o.Render()), o.lastErr)
 }
+
+func TestSettingsOverlay_CarryFilesRowExists(t *testing.T) {
+	o := NewSettingsOverlay(config.DefaultConfig())
+	assert.True(t, o.SelectRow("carry_files"), "settings panel must have a carry_files row")
+}
+
+func TestSettingsOverlay_CarryFilesGetDisplaysDefault(t *testing.T) {
+	cfg := config.DefaultConfig()
+	o := NewSettingsOverlay(cfg)
+	o.SetSize(80, 40)
+	settingsAt(t, o, "carry_files")
+	out := stripANSI(o.Render())
+	// The default carry list is [".claude/settings.local.json"]; the row must
+	// show it rather than "(none)".
+	assert.Contains(t, out, ".claude/settings.local.json")
+}
+
+func TestSettingsOverlay_CarryFilesGetDisplaysNoneWhenEmpty(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.CarryFiles = []string{} // explicit empty opts out
+	o := NewSettingsOverlay(cfg)
+	settingsAt(t, o, "carry_files")
+	row := o.rows[o.cursor]
+	assert.Equal(t, "(none)", row.get(cfg))
+}
+
+func TestSettingsOverlay_CarryFilesEditCommitsSingleEntry(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.CarryFiles = []string{}
+	o := NewSettingsOverlay(cfg)
+	settingsAt(t, o, "carry_files")
+
+	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyEnter})
+	o.HandleKeyPress(keyRunes(".env.local"))
+	_, changed := o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyEnter})
+	assert.Equal(t, "carry_files", changed)
+	assert.Equal(t, []string{".env.local"}, cfg.CarryFiles)
+}
+
+func TestSettingsOverlay_CarryFilesEditCommitsMultipleEntries(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.CarryFiles = []string{}
+	o := NewSettingsOverlay(cfg)
+	settingsAt(t, o, "carry_files")
+
+	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyEnter})
+	o.HandleKeyPress(keyRunes(".env.local, .envrc , .secrets"))
+	_, changed := o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyEnter})
+	assert.Equal(t, "carry_files", changed)
+	assert.Equal(t, []string{".env.local", ".envrc", ".secrets"}, cfg.CarryFiles)
+}
+
+func TestSettingsOverlay_CarryFilesEditEmptyStringClearsList(t *testing.T) {
+	cfg := config.DefaultConfig()
+	o := NewSettingsOverlay(cfg)
+	settingsAt(t, o, "carry_files")
+
+	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyEnter})
+	// editGet pre-fills with the current raw list; clear it entirely.
+	for range ".claude/settings.local.json" {
+		o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyBackspace})
+	}
+	_, changed := o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyEnter})
+	assert.Equal(t, "carry_files", changed)
+	assert.Empty(t, cfg.CarryFiles, "an empty field must set an explicit empty list (opt-out)")
+}
+
+func TestSettingsOverlay_CarryFilesEditGetReturnsRawList(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.CarryFiles = []string{".env", ".envrc"}
+	o := NewSettingsOverlay(cfg)
+	settingsAt(t, o, "carry_files")
+	row := o.rows[o.cursor]
+	require.NotNil(t, row.editGet)
+	assert.Equal(t, ".env, .envrc", row.editGet(cfg))
+}
+
+func TestSettingsOverlay_CarryFilesSetBlankEntriesOptOut(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.CarryFiles = []string{".env"}
+	o := NewSettingsOverlay(cfg)
+	settingsAt(t, o, "carry_files")
+	row := o.rows[o.cursor]
+
+	// Comma- and whitespace-only input carries no real entries: it must
+	// collapse to a non-nil empty slice (the explicit opt-out), never nil —
+	// nil would make GetCarryFiles fall back to the default list.
+	require.NoError(t, row.set(cfg, " , ,  "))
+	assert.NotNil(t, cfg.CarryFiles, "opt-out must be an explicit empty slice, not nil")
+	assert.Empty(t, cfg.CarryFiles)
+}

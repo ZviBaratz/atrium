@@ -51,6 +51,7 @@ type Glyphs struct {
 	SelectionMark string // left accent bar on the selected row
 	DiffAdd       string // "+" in diff stats
 	DiffDel       string // "-" in diff stats
+	TextCursor    string // hand-rolled "you are typing here" cursor (list filter, picker filters)
 }
 
 // Borders carries the box-drawing style so a fallback theme can use square
@@ -79,6 +80,18 @@ func (t *Theme) DimStyle() lipgloss.Style { return lipgloss.NewStyle().Foregroun
 // FaintStyle styles the faintest text: hints, separators, age indicators.
 func (t *Theme) FaintStyle() lipgloss.Style {
 	return lipgloss.NewStyle().Foreground(t.Palette.FgFaint)
+}
+
+// OverlayTitleStyle styles a modal's title line. Every overlay routes its
+// title through this so the same conceptual element looks the same everywhere.
+func (t *Theme) OverlayTitleStyle() lipgloss.Style {
+	return lipgloss.NewStyle().Foreground(t.Palette.Accent).Bold(true)
+}
+
+// OverlayHintStyle styles a modal's footer key-hints — the "↵ save · esc
+// cancel" line. One style for every overlay's footer.
+func (t *Theme) OverlayHintStyle() lipgloss.Style {
+	return lipgloss.NewStyle().Foreground(t.Palette.FgDim).Italic(true)
 }
 
 // AccentStyle styles highlighted interactive elements (selection, active tab).
