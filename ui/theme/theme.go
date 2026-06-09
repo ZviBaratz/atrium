@@ -45,6 +45,7 @@ type Glyphs struct {
 	Ahead         string // commits ahead of base
 	Behind        string // commits behind base
 	Dirty         string // uncommitted changes
+	PR            string // precedes a pull-request number (may be empty)
 	AutoBadge     string // leading icon for the AUTO badge (may be empty)
 	FoldOpen      string // expanded repo group
 	FoldClosed    string // collapsed repo group

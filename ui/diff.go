@@ -160,6 +160,27 @@ func gitContextHeader(instance *session.Instance, stats *git.DiffStats) string {
 		segs = append(segs, metaStyle().Render("uncommitted"))
 	}
 
+	// Pull-request detail: number + lifecycle state, check tallies, review
+	// decision. Omitted entirely when there is no PR, so a session whose branch
+	// isn't pushed shows nothing extra (silent degradation, like the diff stats).
+	if pr := instance.GetPRStatus(); pr != nil && pr.HasPR {
+		segs = append(segs, metaStyle().Render(fmt.Sprintf("PR #%d %s", pr.Number, prStateWord(pr))))
+		if pr.ChecksPass+pr.ChecksFail+pr.ChecksPending > 0 {
+			checks := fmt.Sprintf("checks %d✓ %d✗ %d•", pr.ChecksPass, pr.ChecksFail, pr.ChecksPending)
+			if pr.CI == git.CIFailing {
+				segs = append(segs, deletionStyle().Render(checks))
+			} else {
+				segs = append(segs, metaStyle().Render(checks))
+			}
+		}
+		if word := reviewWord(pr.Review); word != "" {
+			segs = append(segs, metaStyle().Render(word))
+		}
+		if pr.Mergeable == "CONFLICTING" {
+			segs = append(segs, diffBehindStyle().Render("conflicting"))
+		}
+	}
+
 	if len(segs) == 0 {
 		return ""
 	}

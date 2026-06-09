@@ -55,6 +55,7 @@ func TestGlyphWidths(t *testing.T) {
 			"Ahead":         g.Ahead,
 			"Behind":        g.Behind,
 			"Dirty":         g.Dirty,
+			"PR":            g.PR,
 			"FoldOpen":      g.FoldOpen,
 			"FoldClosed":    g.FoldClosed,
 			"SelectionMark": g.SelectionMark,

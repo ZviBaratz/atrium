@@ -85,6 +85,11 @@ type Instance struct {
 	// DiffStats stores the current git diff statistics
 	diffStats *git.DiffStats
 
+	// prStatus stores the last fetched pull-request snapshot (number, CI, review
+	// state). nil until first computed; transient and never persisted. Read in
+	// View and written from the metadata loop, like diffStats.
+	prStatus *git.PRStatus
+
 	// baseBranch is the existing branch the session branch is based on (empty = base on HEAD).
 	// The session always gets its own branch; baseBranch only chooses the start point.
 	baseBranch string
@@ -1216,6 +1221,30 @@ func (i *Instance) SetDiffStats(stats *git.DiffStats) {
 // GetDiffStats returns the current git diff statistics
 func (i *Instance) GetDiffStats() *git.DiffStats {
 	return i.diffStats
+}
+
+// ComputePRStatus fetches the session branch's pull-request status off the main
+// thread (it may shell out to gh over the network). Returns nil for sessions
+// that cannot have a PR — not started, paused, or direct (no worktree/branch).
+// selected requests the eager cache TTL for the focused session.
+func (i *Instance) ComputePRStatus(selected bool) *git.PRStatus {
+	wt := i.worktree()
+	if !i.isStarted() || i.Paused() || wt == nil {
+		return nil
+	}
+	s := wt.PRStatus(i.baseContext(), selected)
+	return &s
+}
+
+// SetPRStatus sets the PR status on the instance. Should be called from the main
+// event loop to avoid data races with View.
+func (i *Instance) SetPRStatus(s *git.PRStatus) {
+	i.prStatus = s
+}
+
+// GetPRStatus returns the current pull-request snapshot (nil until first fetched).
+func (i *Instance) GetPRStatus() *git.PRStatus {
+	return i.prStatus
 }
 
 // SendPrompt sends a prompt to the tmux session

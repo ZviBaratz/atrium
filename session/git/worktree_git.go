@@ -144,6 +144,8 @@ func (g *Worktree) PushChanges(commitMessage string, open bool) error {
 
 	// The commit graph changed; ensure the next tick re-runs rev-list.
 	g.invalidateRevListCache()
+	// The push may have just opened or updated the PR; re-poll on the next tick.
+	g.invalidatePRCache()
 	return nil
 }
 

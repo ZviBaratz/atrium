@@ -448,6 +448,17 @@ func (r *InstanceRenderer) Render(i *session.Instance, idx int, selected bool) s
 		}
 	}
 
+	// PR badge: a compact "<glyph>#<number>" colored by the most urgent signal
+	// (failing CI / changes requested = danger, pending = working, approved =
+	// success, merged = purple). Appended to gctxPlain before the width budget
+	// below so its cells are folded into fixedW and branch truncation stays exact
+	// (the dangling-overflow hazard the line-2 comment warns about).
+	if pr := i.GetPRStatus(); pr != nil && pr.HasPR {
+		s := " " + g.PR + fmt.Sprintf("#%d", pr.Number)
+		gctxPlain += s
+		gctxStyled += seg(prBadgeColor(th, pr)).Render(s)
+	}
+
 	// Faint session-age label (e.g. "2h", "3d"), right-aligned on line 2 in both
 	// git and direct modes. agePlain carries the leading gap (for width
 	// budgeting); ageStyled renders that gap as a bg-aware pad so the

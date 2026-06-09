@@ -74,6 +74,7 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			} else {
 				r.instance.SetDiffStats(r.diffStats)
 			}
+			r.instance.SetPRStatus(r.prStatus)
 		}
 		m.pushSessionContexts()
 		cmds := deliverReadyPrompts(msg.results)

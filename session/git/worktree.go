@@ -68,6 +68,11 @@ type Worktree struct {
 	// statsCacheMu is a separate mutex so it never shares a lock ordering with mu.
 	statsCache   repoStatsEntry
 	statsCacheMu sync.Mutex
+	// prCache caches the last fetched PR status (network-derived via gh) so
+	// gh pr view does not run on every 500ms tick. Guarded by its own mutex,
+	// independent of mu and statsCacheMu, so it never shares a lock ordering.
+	prCache   PRStatus
+	prCacheMu sync.Mutex
 }
 
 // NewWorktreeFromStorage rehydrates a Worktree from its persisted fields

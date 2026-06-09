@@ -268,6 +268,68 @@ func TestRender_SessionAge_Direct(t *testing.T) {
 	require.Contains(t, out, "direct", "the direct marker must survive the age label")
 }
 
+// TestRender_PRBadge verifies the PR badge renders "<glyph>#<number>" for a
+// session with an open PR, stays absent when there is no PR, and never panics on
+// a nil status.
+func TestRender_PRBadge(t *testing.T) {
+	t.Cleanup(theme.Set("unicode"))
+	s := spinner.New()
+	r := &InstanceRenderer{spinner: &s}
+	r.setWidth(80)
+	g := theme.Current().Glyphs
+
+	inst, err := session.NewInstance(session.InstanceOptions{Title: "t", Path: ".", Program: "echo"})
+	require.NoError(t, err)
+	inst.Branch = "feat"
+	inst.SetDiffStats(&git.DiffStats{Added: 1, Removed: 1, Commits: 1})
+
+	inst.SetPRStatus(&git.PRStatus{HasPR: true, Number: 42, CI: git.CIPassing})
+	require.Contains(t, r.Render(inst, 1, false), g.PR+"#42", "open PR should render the badge")
+
+	inst.SetPRStatus(&git.PRStatus{HasPR: false})
+	require.NotContains(t, r.Render(inst, 1, false), "#42", "no PR should render no badge")
+
+	inst.SetPRStatus(nil) // must not panic
+	_ = r.Render(inst, 1, false)
+}
+
+// TestRender_PRBadgeWidthBudget guards the width fold: a PR badge alongside a
+// long branch name must not overflow the row (which would wrap and desync the
+// renderer). The branch absorbs the badge's cost via fixedW.
+func TestRender_PRBadgeWidthBudget(t *testing.T) {
+	t.Cleanup(theme.Set("unicode"))
+	s := spinner.New()
+	r := &InstanceRenderer{spinner: &s}
+	const width = 36
+	r.setWidth(width)
+
+	inst, err := session.NewInstance(session.InstanceOptions{Title: "t", Path: ".", Program: "echo"})
+	require.NoError(t, err)
+	inst.Branch = "zvi/a-rather-long-branch-name-that-overflows"
+	inst.SetDiffStats(&git.DiffStats{Added: 12, Removed: 3, Commits: 2})
+	inst.SetPRStatus(&git.PRStatus{HasPR: true, Number: 1234, CI: git.CIFailing})
+
+	row := r.Render(inst, 1, false)
+	require.Contains(t, row, "#1234", "the PR badge survives at the expense of the branch")
+	for _, ln := range strings.Split(row, "\n") {
+		require.LessOrEqual(t, ansi.StringWidth(ln), width, "row must fit width with a PR badge present")
+	}
+}
+
+// A direct (non-git) session never has a PR, so even a stray status renders no badge.
+func TestRender_DirectSessionNoPRBadge(t *testing.T) {
+	t.Cleanup(theme.Set("unicode"))
+	s := spinner.New()
+	r := &InstanceRenderer{spinner: &s}
+	r.setWidth(80)
+
+	direct, err := session.NewInstance(session.InstanceOptions{Title: "d", Path: ".", Program: "echo", Direct: true})
+	require.NoError(t, err)
+	direct.SetPRStatus(&git.PRStatus{HasPR: true, Number: 99})
+	require.NotContains(t, r.Render(direct, 1, false), "#99",
+		"a direct session must not render a PR badge")
+}
+
 // TestRender_SessionAgeBudget locks in the headline width property: the age
 // label steals horizontal budget from the branch (the only variable-length
 // part) so the rendered line still fits the width exactly. A regression here is

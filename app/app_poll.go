@@ -90,6 +90,7 @@ type instanceMetaResult struct {
 	// exists. The main thread recovers it to Paused (see recoverLostInstances).
 	sessionLost bool
 	diffStats   *git.DiffStats
+	prStatus    *git.PRStatus
 }
 
 // applyPaneState maps a polled pane state onto an instance's status. Prompt handling
@@ -295,6 +296,9 @@ func tickUpdateMetadataCmd(active []*session.Instance, selected *session.Instanc
 				} else {
 					r.diffStats = instance.ComputeDiffNumstat()
 				}
+				// PR status is network-bound but TTL-cached, so most ticks return
+				// instantly with no I/O; the selected session refreshes eagerly.
+				r.prStatus = instance.ComputePRStatus(instance == selected)
 			}(idx, inst)
 		}
 		wg.Wait()
