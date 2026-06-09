@@ -14,9 +14,9 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// withAsciiProfile strips ANSI so assertions compare visible text, and pins the
+// withASCIIProfile strips ANSI so assertions compare visible text, and pins the
 // unicode theme for stable glyphs. Cleanups restore both.
-func withAsciiProfile(t *testing.T) {
+func withASCIIProfile(t *testing.T) {
 	t.Helper()
 	t.Cleanup(theme.Set("unicode"))
 	prof := lipgloss.ColorProfile()
@@ -25,7 +25,7 @@ func withAsciiProfile(t *testing.T) {
 }
 
 func TestComposeLine_FlexFillsAndRightAligns(t *testing.T) {
-	withAsciiProfile(t)
+	withASCIIProfile(t)
 	th := theme.Current()
 	p := newRowPaint(th, false)
 	left := []rowSeg{p.seg("L", th.Palette.Fg), p.flexSeg("name", th.Palette.Fg, false)}
@@ -37,7 +37,7 @@ func TestComposeLine_FlexFillsAndRightAligns(t *testing.T) {
 }
 
 func TestComposeLine_FlexTruncatesWithEllipsis(t *testing.T) {
-	withAsciiProfile(t)
+	withASCIIProfile(t)
 	th := theme.Current()
 	p := newRowPaint(th, false)
 	left := []rowSeg{p.flexSeg("a-very-long-name-indeed", th.Palette.Fg, false)}
@@ -48,7 +48,7 @@ func TestComposeLine_FlexTruncatesWithEllipsis(t *testing.T) {
 }
 
 func TestComposeLine_EmptiedFlexCollapsesAdjacentSeparator(t *testing.T) {
-	withAsciiProfile(t)
+	withASCIIProfile(t)
 	th := theme.Current()
 	p := newRowPaint(th, false)
 	// indent + flex(branch) + sep + chip; too narrow for any branch.
@@ -65,7 +65,7 @@ func TestComposeLine_EmptiedFlexCollapsesAdjacentSeparator(t *testing.T) {
 }
 
 func TestComposeLine_NoFlexKeepsFixedSegments(t *testing.T) {
-	withAsciiProfile(t)
+	withASCIIProfile(t)
 	th := theme.Current()
 	p := newRowPaint(th, false)
 	left := []rowSeg{p.seg("AB", th.Palette.Fg)}
@@ -94,7 +94,7 @@ func TestComposeLine_SelectedBakesBackgroundIntoGap(t *testing.T) {
 }
 
 func TestGutterSeg_PerState(t *testing.T) {
-	withAsciiProfile(t)
+	withASCIIProfile(t)
 	th := theme.Current()
 	s := spinner.New()
 	r := &InstanceRenderer{spinner: &s}
@@ -107,7 +107,7 @@ func TestGutterSeg_PerState(t *testing.T) {
 }
 
 func TestGitChips_PresentAndAbsent(t *testing.T) {
-	withAsciiProfile(t)
+	withASCIIProfile(t)
 	th := theme.Current()
 	p := newRowPaint(th, false)
 
@@ -124,7 +124,7 @@ func TestGitChips_PresentAndAbsent(t *testing.T) {
 }
 
 func TestDiffSegs_EmptyWhenNoChanges(t *testing.T) {
-	withAsciiProfile(t)
+	withASCIIProfile(t)
 	th := theme.Current()
 	p := newRowPaint(th, false)
 	require.Empty(t, diffSegs(p, &git.DiffStats{}), "an empty diff produces no segments")
@@ -138,7 +138,7 @@ func TestDiffSegs_EmptyWhenNoChanges(t *testing.T) {
 }
 
 func TestPRSeg_EmptyWhenNoPR(t *testing.T) {
-	withAsciiProfile(t)
+	withASCIIProfile(t)
 	th := theme.Current()
 	p := newRowPaint(th, false)
 	seg, ok := prSeg(p, nil)
