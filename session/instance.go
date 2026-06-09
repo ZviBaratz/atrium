@@ -100,6 +100,17 @@ type Instance struct {
 	// and never changes afterwards, so it is read without the lock.
 	direct bool
 
+	// claudeAccount / claudeConfigDir / claudeAccountDefault pin the Claude Code
+	// account chosen at creation. claudeConfigDir is injected into the tmux
+	// session as CLAUDE_CONFIG_DIR at launch; claudeAccount is the badge label;
+	// claudeAccountDefault marks the default/fallback account (dim badge). Set
+	// once before Start (or restored by FromInstanceData) and never re-resolved,
+	// mirroring Program — the tmux env can only be set at session birth. Read
+	// without the lock (creation-fixed, like direct).
+	claudeAccount        string
+	claudeConfigDir      string
+	claudeAccountDefault bool
+
 	// baseCtx is the lifecycle context the instance's tmux/git subprocesses derive
 	// from; cancelling it (app/daemon shutdown) kills in-flight subprocesses. Set via
 	// SetBaseContext (or FromInstanceData) before Start, i.e. before any background
@@ -161,6 +172,10 @@ func (i *Instance) ToInstanceData() InstanceData {
 		AutoYes:     i.AutoYes,
 		Unread:      i.Unread(),
 		Direct:      i.direct,
+
+		ClaudeAccount:        i.claudeAccount,
+		ClaudeConfigDir:      i.claudeConfigDir,
+		ClaudeAccountDefault: i.claudeAccountDefault,
 	}
 
 	// Only include worktree data if gitWorktree is initialized
@@ -213,6 +228,10 @@ func FromInstanceData(ctx context.Context, data InstanceData, branchPrefix strin
 		UpdatedAt:   data.UpdatedAt,
 		Program:     data.Program,
 		direct:      data.Direct,
+
+		claudeAccount:        data.ClaudeAccount,
+		claudeConfigDir:      data.ClaudeConfigDir,
+		claudeAccountDefault: data.ClaudeAccountDefault,
 	}
 
 	// A direct session has no worktree or diff. For a git session, rehydrate both from
@@ -243,9 +262,12 @@ func FromInstanceData(ctx context.Context, data InstanceData, branchPrefix strin
 
 	if instance.Paused() {
 		instance.started = true
-		instance.tmuxSession = tmux.NewSession(ctx, instance.Title, instance.Program)
+		sess := tmux.NewSession(ctx, instance.Title, instance.Program)
+		sess.SetClaudeConfigDir(instance.claudeConfigDir)
+		instance.tmuxSession = sess
 	} else {
 		sess := tmux.NewSession(ctx, instance.Title, instance.Program)
+		sess.SetClaudeConfigDir(instance.claudeConfigDir)
 		instance.tmuxSession = sess
 		switch {
 		case sess.DoesSessionExist():
@@ -393,6 +415,24 @@ func NewInstance(opts InstanceOptions) (*Instance, error) {
 		direct:     opts.Direct,
 	}, nil
 }
+
+// SetClaudeAccount pins the Claude Code account for this session. Call before
+// Start: claudeConfigDir is injected at session birth and cannot change after.
+func (i *Instance) SetClaudeAccount(name, configDir string, isDefault bool) {
+	i.claudeAccount = name
+	i.claudeConfigDir = configDir
+	i.claudeAccountDefault = isDefault
+}
+
+// ClaudeAccountName is the resolved account's display name ("" = none/dormant).
+func (i *Instance) ClaudeAccountName() string { return i.claudeAccount }
+
+// ClaudeConfigDir is the CLAUDE_CONFIG_DIR injected at launch ("" = inherit env).
+func (i *Instance) ClaudeConfigDir() string { return i.claudeConfigDir }
+
+// ClaudeAccountIsDefault reports whether this session is on the default/fallback
+// account (the list renders that badge dim rather than accented).
+func (i *Instance) ClaudeAccountIsDefault() bool { return i.claudeAccountDefault }
 
 // RepoName returns the name the instance is grouped under in the list: the git
 // repo name for worktree sessions, or the directory base name for direct
@@ -564,6 +604,7 @@ func (i *Instance) Start(firstTimeSetup bool) error {
 	if tmuxSession == nil {
 		// Create new tmux session
 		tmuxSession = tmux.NewSession(i.baseContext(), i.Title, i.Program)
+		tmuxSession.SetClaudeConfigDir(i.claudeConfigDir)
 	}
 	i.mu.Lock()
 	i.tmuxSession = tmuxSession

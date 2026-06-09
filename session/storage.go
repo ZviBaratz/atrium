@@ -30,7 +30,17 @@ type InstanceData struct {
 	// load the instance is rehydrated with a nil worktree.
 	Direct bool `json:"direct,omitempty"`
 
-	Program   string          `json:"program"`
+	Program string `json:"program"`
+
+	// ClaudeAccount / ClaudeConfigDir / ClaudeAccountDefault pin the Claude Code
+	// account resolved at creation: the display name, the CLAUDE_CONFIG_DIR
+	// actually injected into the tmux session, and whether it is the
+	// default/fallback account (dim badge). All omitempty: a state.json predating
+	// the feature decodes to empty -> no badge, no injection.
+	ClaudeAccount        string `json:"claude_account,omitempty"`
+	ClaudeConfigDir      string `json:"claude_config_dir,omitempty"`
+	ClaudeAccountDefault bool   `json:"claude_account_is_default,omitempty"`
+
 	Worktree  GitWorktreeData `json:"worktree"`
 	DiffStats DiffStatsData   `json:"diff_stats"`
 }

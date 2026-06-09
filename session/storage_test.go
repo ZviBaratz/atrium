@@ -226,3 +226,55 @@ func TestDeleteAllInstances_ClearsEverything(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, got)
 }
+
+func TestInstanceDataAccountRoundTrip(t *testing.T) {
+	data := InstanceData{
+		Title:                "t",
+		Path:                 "/tmp/x",
+		Program:              "claude",
+		Direct:               true,
+		ClaudeAccount:        "quantivly",
+		ClaudeConfigDir:      "/home/tester/.claude-quantivly",
+		ClaudeAccountDefault: false,
+	}
+	raw, err := json.Marshal(data)
+	require.NoError(t, err)
+
+	var back InstanceData
+	require.NoError(t, json.Unmarshal(raw, &back))
+	require.Equal(t, "quantivly", back.ClaudeAccount)
+	require.Equal(t, "/home/tester/.claude-quantivly", back.ClaudeConfigDir)
+	require.False(t, back.ClaudeAccountDefault)
+
+	// Old state.json with no account keys -> empty fields (feature dormant).
+	var legacy InstanceData
+	require.NoError(t, json.Unmarshal([]byte(`{"title":"t","program":"claude","direct":true}`), &legacy))
+	require.Equal(t, "", legacy.ClaudeAccount)
+	require.Equal(t, "", legacy.ClaudeConfigDir)
+}
+
+func TestInstanceAccountGettersAndFromData(t *testing.T) {
+	inst, err := NewInstance(InstanceOptions{Title: "t", Path: ".", Program: "claude"})
+	require.NoError(t, err)
+	inst.SetClaudeAccount("quantivly", "/home/tester/.claude-quantivly", false)
+	require.Equal(t, "quantivly", inst.ClaudeAccountName())
+	require.Equal(t, "/home/tester/.claude-quantivly", inst.ClaudeConfigDir())
+	require.False(t, inst.ClaudeAccountIsDefault())
+
+	require.Equal(t, "quantivly", inst.ToInstanceData().ClaudeAccount)
+
+	// FromInstanceData on a paused direct instance is hermetic (no live tmux:
+	// the paused branch constructs a Session without shelling out).
+	restored, err := FromInstanceData(context.Background(), InstanceData{
+		Title:           "t",
+		Path:            ".",
+		Program:         "claude",
+		Direct:          true,
+		Status:          Paused,
+		ClaudeAccount:   "quantivly",
+		ClaudeConfigDir: "/home/tester/.claude-quantivly",
+	}, "session/")
+	require.NoError(t, err)
+	require.Equal(t, "quantivly", restored.ClaudeAccountName())
+	require.Equal(t, "/home/tester/.claude-quantivly", restored.ClaudeConfigDir())
+}
