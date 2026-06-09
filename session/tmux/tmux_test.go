@@ -983,3 +983,24 @@ func TestStartSessionNoConfigDirNoEnvFlag(t *testing.T) {
 
 	require.NotContains(t, cmd2.ToString(ptyFactory.cmds[0]), "CLAUDE_CONFIG_DIR")
 }
+
+// TestStartSessionConfigDirReachesPane drives a real tmux server on Atrium's
+// dedicated socket and asserts the injected CLAUDE_CONFIG_DIR is actually present
+// in the session environment — the end-to-end proxy for the acceptance criterion
+// (`tmux show-environment` shows the var). Self-skips when tmux is unavailable.
+func TestStartSessionConfigDirReachesPane(t *testing.T) {
+	if _, err := exec.LookPath("tmux"); err != nil {
+		t.Skip("tmux not available")
+	}
+
+	name := fmt.Sprintf("acctenv-%d", rand.Int31())
+	dir := t.TempDir()
+	session := NewSession(context.Background(), name, "sleep 300")
+	session.SetClaudeConfigDir(dir)
+	require.NoError(t, session.Start(t.TempDir()))
+	t.Cleanup(func() { _ = session.Close() })
+
+	out, err := tmuxCommand(context.Background(), "show-environment", "-t", session.sanitizedName).Output()
+	require.NoError(t, err)
+	require.Contains(t, string(out), "CLAUDE_CONFIG_DIR="+dir)
+}
