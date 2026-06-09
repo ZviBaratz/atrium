@@ -96,8 +96,10 @@ func (p rowPaint) pad(n int) string {
 // width to the single flex segment in left (truncating with "…", or emptying it
 // and collapsing any adjacent separator when there is no room), then joins the
 // left segments, a background-aware gap of at least one column, and the right
-// segments flush to the right edge.
+// segments flush to the right edge. It never mutates the caller's slices: the
+// flex segment is truncated on a local copy.
 func (p rowPaint) composeLine(width int, left, right []rowSeg) string {
+	left = append([]rowSeg(nil), left...) // own our copy; we truncate the flex element below
 	rightW := 0
 	for _, s := range right {
 		rightW += s.width()

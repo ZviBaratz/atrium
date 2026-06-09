@@ -76,6 +76,19 @@ func TestComposeLine_NoFlexKeepsFixedSegments(t *testing.T) {
 	require.True(t, strings.HasSuffix(out, "CD"))
 }
 
+// composeLine truncates the flex segment to fit, but must do so on its own copy
+// — callers build the segment list fresh each render, yet a layout engine that
+// mutated its input would be a latent footgun for any future reuse.
+func TestComposeLine_DoesNotMutateInput(t *testing.T) {
+	withASCIIProfile(t)
+	th := theme.Current()
+	p := newRowPaint(th, false)
+	left := []rowSeg{p.flexSeg("a-very-long-name-indeed", th.Palette.Fg, false)}
+	p.composeLine(8, left, nil) // width far too small → flex would be truncated
+	require.Equal(t, "a-very-long-name-indeed", left[0].plain,
+		"composeLine must not mutate the caller's flex segment")
+}
+
 func TestComposeLine_SelectedBakesBackgroundIntoGap(t *testing.T) {
 	t.Cleanup(theme.Set("tokyo-night")) // a theme with a real BgElevated color
 	// Force a color-capable profile: the test binary has no TTY, so lipgloss
