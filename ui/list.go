@@ -339,11 +339,12 @@ func (r *InstanceRenderer) stateGlyph(i *session.Instance, th *theme.Theme) (gly
 }
 
 // Render draws a session as two lines. Line 1 is identity: a leading status
-// gutter (color-coded glyph — no word), the agent icon, and the name, with the
-// account and AUTO badges right-aligned. Line 2 (dim) is version control:
-// branch + behind/ahead/dirty + PR on the left, diff stat + age on the right,
-// "·"-separated. The selected row carries a left accent bar and a filled
-// background. idx is unused (kept for the List caller's signature).
+// gutter (color-coded glyph — no word) and the name, with the account and AUTO
+// badges and the agent icon right-aligned — the agent icon pinned to the far
+// edge so it forms a fixed column mirroring the status gutter. Line 2 (dim) is
+// version control: branch + behind/ahead/dirty + PR on the left, diff stat + age
+// on the right, "·"-separated. The selected row carries a left accent bar and a
+// filled background. idx is unused (kept for the List caller's signature).
 func (r *InstanceRenderer) Render(i *session.Instance, idx int, selected bool) string {
 	_ = idx
 	th := theme.Current()
@@ -357,8 +358,8 @@ func (r *InstanceRenderer) Render(i *session.Instance, idx int, selected bool) s
 	}
 	space := p.seg(" ", th.Palette.FgDim)
 
-	// --- Line 1: gutter + agent icon + name (left) · account + AUTO (right) ---
-	left1 := []rowSeg{r.gutterSeg(p, i), space, p.agentSeg(i), space, p.nameSeg(i, selected)}
+	// --- Line 1: gutter + name (left) · account + AUTO + agent icon (right) ---
+	left1 := []rowSeg{r.gutterSeg(p, i), space, p.nameSeg(i, selected)}
 
 	var right1 []rowSeg
 	// Per-session Claude account badge: accent for a routed account, dim for the
@@ -380,12 +381,20 @@ func (r *InstanceRenderer) Render(i *session.Instance, idx int, selected bool) s
 		badge := " " + g.AutoBadge + "AUTO "
 		right1 = append(right1, rawSeg(badge, th.BadgeStyle().Render(badge)))
 	}
+	// Agent-identity icon (which CLI the session runs), pinned to the far right so
+	// it sits in a fixed column — a right-edge counterpart to the left status
+	// gutter — instead of stacking another glyph at the left edge.
+	if len(right1) > 0 {
+		right1 = append(right1, space)
+	}
+	right1 = append(right1, p.agentSeg(i))
 
 	line1 := p.composeLine(W, left1, right1)
 
-	// Indent line 2 so its content aligns under the name: gutter + space +
-	// agent + space (all width-1 glyphs by theme invariant).
-	indentW := left1[0].width() + left1[1].width() + left1[2].width() + left1[3].width()
+	// Indent line 2 so its content aligns under the name: gutter + space (both
+	// width-1 by theme invariant). The agent icon no longer leads line 1, so the
+	// name — and thus this indent — starts two columns in, not four.
+	indentW := left1[0].width() + left1[1].width()
 
 	var line2 string
 	if i.IsDirect() {

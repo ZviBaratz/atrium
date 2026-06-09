@@ -1,10 +1,10 @@
 ┌─ Sessions ───────────────────────────┐
-│▎● ✻ overhaul                         │
-│▎    zvi/visual-overh… · ⇡3 * +142 -31│
-│ ◆ • bounds                           │
-│     fix-bounds                       │
-│ ‖ • markers                          │
-│     pane-markers                     │
+│▎● overhaul                          ✻│
+│▎  zvi/visual-overhaul · ⇡3 * +142 -31│
+│ ◆ bounds                            •│
+│   fix-bounds                         │
+│ ‖ markers                           •│
+│   pane-markers                       │
 │                                      │
 │                                      │
 │                                      │
