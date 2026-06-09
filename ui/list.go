@@ -388,6 +388,20 @@ func (r *InstanceRenderer) Render(i *session.Instance, idx int, selected bool) s
 		rightStyled = th.BadgeStyle().Render(badge) + pad(1) + rightStyled
 	}
 
+	// Per-session Claude account badge: which account the session runs under.
+	// Accent for a routed account, dim for the default/fallback. Prepended after
+	// AUTO so it sits leftmost of the right-hand cluster. Shown only when an
+	// account was resolved (empty = feature off / legacy session).
+	if acct := i.ClaudeAccountName(); acct != "" {
+		badge := " " + acct + " "
+		acctColor := th.Palette.Accent
+		if i.ClaudeAccountIsDefault() {
+			acctColor = th.Palette.FgDim
+		}
+		rightPlain = badge + " " + rightPlain
+		rightStyled = seg(acctColor).Render(badge) + pad(1) + rightStyled
+	}
+
 	nameColor := th.Palette.Fg
 	if i.GetStatus() == session.NeedsInput {
 		nameColor = th.Palette.Attention // the one state that wants attention

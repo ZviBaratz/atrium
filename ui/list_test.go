@@ -380,3 +380,23 @@ func TestRender_SessionAgeBudget(t *testing.T) {
 	require.LessOrEqual(t, lineWidth(r.Render(direct, 0, false)), narrow,
 		"direct row must fit even when the marker itself must truncate")
 }
+
+func TestRender_AccountBadge(t *testing.T) {
+	t.Cleanup(theme.Set("unicode"))
+	s := spinner.New()
+	r := &InstanceRenderer{spinner: &s}
+	r.setWidth(80)
+
+	// Routed account -> badge present.
+	inst, err := session.NewInstance(session.InstanceOptions{Title: "t", Path: ".", Program: "echo"})
+	require.NoError(t, err)
+	inst.SetClaudeAccount("quantivly", "/home/x/.claude-quantivly", false)
+	require.Contains(t, ansi.Strip(r.Render(inst, 1, false)), "quantivly",
+		"routed account badge should render its name")
+
+	// No account (feature dormant) -> no badge.
+	plain, err := session.NewInstance(session.InstanceOptions{Title: "p", Path: ".", Program: "echo"})
+	require.NoError(t, err)
+	out := ansi.Strip(r.Render(plain, 1, false))
+	require.NotContains(t, out, "quantivly")
+}
