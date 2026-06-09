@@ -305,6 +305,20 @@ func (r *InstanceRenderer) setWidth(width int) {
 	r.width = width
 }
 
+// displayBranch returns the session branch with the configured prefix stripped
+// (see branchPrefix). The prefix is removed only on an exact match, so a branch
+// under a different namespace keeps its meaningful prefix; if stripping would
+// empty the label, the full branch is kept.
+func (r *InstanceRenderer) displayBranch(i *session.Instance) string {
+	branch := i.Branch
+	if r.branchPrefix != "" {
+		if trimmed := strings.TrimPrefix(branch, r.branchPrefix); trimmed != "" {
+			branch = trimmed
+		}
+	}
+	return branch
+}
+
 // fmtAge formats a time.Time as a compact elapsed-time label: "<N>m", "<N>h", or "<N>d".
 // Sub-minute and zero times return "" so very fresh sessions stay uncluttered.
 func fmtAge(t time.Time) string {
@@ -353,10 +367,12 @@ func (r *InstanceRenderer) stateGlyph(i *session.Instance, th *theme.Theme) (gly
 // gutter (color-coded glyph — no word) and the name, with the account and AUTO
 // badges and the agent icon right-aligned — the agent icon pinned to the far
 // edge so it forms a fixed column mirroring the status gutter. Line 2 (dim) is
-// version control: the (prefix-stripped) branch + behind/ahead/dirty + PR on the
-// left and the diff stat on the right, "·"-separated. A direct (non-git) session
-// instead shows a dim marker and its age. The selected row carries a left accent
-// bar and a filled background. idx is unused (kept for the List caller's signature).
+// version control: behind/ahead/dirty + PR on the left and the diff stat on the
+// right, "·"-separated. The branch leads line 2 only when a label-only rename has
+// decoupled it from the visible name (else it is a slug echo and is dropped); a
+// fresh session with nothing to show falls back to its age. A direct (non-git)
+// session instead shows a dim marker and its age. The selected row carries a left
+// accent bar and a filled background. idx is unused (kept for the caller's signature).
 func (r *InstanceRenderer) Render(i *session.Instance, idx int, selected bool) string {
 	_ = idx
 	th := theme.Current()
@@ -421,30 +437,41 @@ func (r *InstanceRenderer) Render(i *session.Instance, idx int, selected bool) s
 		line2 = p.composeLine(W, left2, right2)
 	} else {
 		stat := i.GetDiffStats()
-		// Strip the configured branch prefix (e.g. "zvi/") — it repeats on every
-		// row, so dropping it reclaims width for the distinguishing part of the
-		// name. Only the exact configured prefix is removed, so a meaningful
-		// segment like "feature/" on a differently-namespaced branch survives.
-		branch := i.Branch
-		if r.branchPrefix != "" {
-			if trimmed := strings.TrimPrefix(branch, r.branchPrefix); trimmed != "" {
-				branch = trimmed
-			}
+		left2 := []rowSeg{p.seg(strings.Repeat(" ", indentW), th.Palette.FgDim)}
+
+		// Line-2 left content is a set of separator-joined groups. The branch is
+		// shown only when a label-only rename has decoupled it from the visible
+		// name (DisplayName != Title): otherwise the branch is just
+		// sanitizeBranchName(Title), a slug echo of the name on line 1, so it
+		// carries no information and is dropped to let the git state lead. The full
+		// branch is still reachable in the preview/diff panes.
+		var groups [][]rowSeg
+		if i.DisplayName() != i.Title {
+			groups = append(groups, []rowSeg{p.flexSeg(r.displayBranch(i), th.Palette.FgDim, false)})
 		}
-		left2 := []rowSeg{p.seg(strings.Repeat(" ", indentW), th.Palette.FgDim), p.flexSeg(branch, th.Palette.FgDim, false)}
 		if chips := gitChips(p, stat); len(chips) > 0 {
-			left2 = append(left2, p.sepSeg())
-			left2 = append(left2, chips...)
+			groups = append(groups, chips)
 		}
 		if seg, ok := prSeg(p, i.GetPRStatus()); ok {
-			left2 = append(left2, p.sepSeg(), seg)
+			groups = append(groups, []rowSeg{seg})
+		}
+		for gi, grp := range groups {
+			if gi > 0 {
+				left2 = append(left2, p.sepSeg())
+			}
+			left2 = append(left2, grp...)
 		}
 
-		// The age is intentionally omitted here: it is the weakest glanceable
-		// signal on the densest line, and dropping it keeps the branch + diff
-		// legible. Direct sessions (above) still show age — their line 2 is
-		// otherwise near-empty, so it adds no clutter there.
+		// Age is omitted from a populated version-control line (the weakest signal
+		// there), but used as a fallback when line 2 would otherwise be empty — a
+		// fresh, unchanged session with no decoupled branch — so every row keeps two
+		// lines and the would-be-blank one still says something useful.
 		right2 := diffSegs(p, stat)
+		if len(groups) == 0 && len(right2) == 0 {
+			if age, ok := p.ageSeg(i); ok {
+				right2 = append(right2, age)
+			}
+		}
 		line2 = p.composeLine(W, left2, right2)
 	}
 
