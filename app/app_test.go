@@ -745,7 +745,7 @@ func TestConfirmActionSurfacesActionResult(t *testing.T) {
 // and no hint for a git repo.
 func TestTargetValidityResultUpdatesIndicator(t *testing.T) {
 	const repo = "/some/repo"
-	ov := overlay.NewSessionCreateOverlay(nil, []string{repo})
+	ov := overlay.NewSessionCreateOverlay(nil, nil, []string{repo})
 	ov.SetSize(80, 24)
 	h := &home{
 		ctx:              context.Background(),
@@ -773,7 +773,7 @@ func TestTargetValidityResultUpdatesIndicator(t *testing.T) {
 // reaches the branch picker, so the default base option names the actual branch.
 func TestValidityResultResolvesHeadLabel(t *testing.T) {
 	const repo = "/some/repo"
-	ov := overlay.NewSessionCreateOverlay(nil, []string{repo})
+	ov := overlay.NewSessionCreateOverlay(nil, nil, []string{repo})
 	ov.SetSize(80, 40)
 	h := &home{
 		ctx:              context.Background(),
@@ -795,7 +795,7 @@ func TestValidityResultResolvesHeadLabel(t *testing.T) {
 // form-session, so flipping between candidates doesn't spam the network.
 func TestGitVerdictTriggersFetchOncePerPath(t *testing.T) {
 	const repo = "/some/repo"
-	ov := overlay.NewSessionCreateOverlay(nil, []string{repo})
+	ov := overlay.NewSessionCreateOverlay(nil, nil, []string{repo})
 	h := &home{
 		ctx:              context.Background(),
 		state:            statePrompt,
@@ -818,7 +818,7 @@ func TestGitVerdictTriggersFetchOncePerPath(t *testing.T) {
 // there is no repo to fetch in.
 func TestNonGitVerdictDoesNotTriggerFetch(t *testing.T) {
 	const dir = "/some/dir"
-	ov := overlay.NewSessionCreateOverlay(nil, []string{dir})
+	ov := overlay.NewSessionCreateOverlay(nil, nil, []string{dir})
 	h := &home{
 		ctx:              context.Background(),
 		state:            statePrompt,
@@ -838,7 +838,7 @@ func TestNonGitVerdictDoesNotTriggerFetch(t *testing.T) {
 // the current target — a stale completion is dropped.
 func TestFetchDoneRefreshesBranchListForCurrentPath(t *testing.T) {
 	const repo = "/some/repo"
-	ov := overlay.NewSessionCreateOverlay(nil, []string{repo})
+	ov := overlay.NewSessionCreateOverlay(nil, nil, []string{repo})
 	h := &home{
 		ctx:              context.Background(),
 		state:            statePrompt,
@@ -861,7 +861,7 @@ func TestFetchDoneRefreshesBranchListForCurrentPath(t *testing.T) {
 // behavior swallowed the error and the spinner never resolved.
 func TestBranchSearchErrorClearsSpinner(t *testing.T) {
 	const repo = "/some/repo"
-	ov := overlay.NewSessionCreateOverlay(nil, []string{repo})
+	ov := overlay.NewSessionCreateOverlay(nil, nil, []string{repo})
 	ov.SetSize(80, 40)
 	h := &home{
 		ctx:              context.Background(),
@@ -886,7 +886,7 @@ func TestBranchSearchErrorClearsSpinner(t *testing.T) {
 // already navigated away from is ignored, so it can't clobber the current indicator.
 func TestTargetValidityResultDropsStalePath(t *testing.T) {
 	const repo = "/some/repo"
-	ov := overlay.NewSessionCreateOverlay(nil, []string{repo})
+	ov := overlay.NewSessionCreateOverlay(nil, nil, []string{repo})
 	ov.SetSize(80, 24)
 	h := &home{
 		ctx:              context.Background(),
@@ -911,7 +911,7 @@ func TestTargetValidityResultDropsStalePath(t *testing.T) {
 func TestPathChangeResetsValidityToUnknown(t *testing.T) {
 	const repoA = "/some/repo-a"
 	const repoB = "/some/repo-b"
-	ov := overlay.NewSessionCreateOverlay(nil, []string{repoA, repoB})
+	ov := overlay.NewSessionCreateOverlay(nil, nil, []string{repoA, repoB})
 	ov.SetSize(80, 24)
 	h := &home{
 		ctx:              context.Background(),

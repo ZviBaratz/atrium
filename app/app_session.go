@@ -188,7 +188,7 @@ func (m *home) resumeSelected(selected *session.Instance) tea.Cmd {
 // seeded target is a git repo, so openCreateForm can gate the open-time branch plumbing
 // without re-running the git checks.
 func (m *home) newSessionFormOverlay() (_ *overlay.TextInputOverlay, isGit bool) {
-	ov := overlay.NewSessionCreateOverlay(m.appConfig.GetProfiles(), m.candidateRepoPaths())
+	ov := overlay.NewSessionCreateOverlay(m.appConfig.GetProfiles(), m.appConfig.ClaudeAccounts, m.candidateRepoPaths())
 	// Seed the initial validity so the picker can flag the default target before the user
 	// navigates: a non-git default directory shows the direct-session hint (and an inert
 	// branch section), not a block.
@@ -217,6 +217,12 @@ func (m *home) openCreateForm(focusTitle bool) tea.Cmd {
 	m.textInputOverlay = ov
 	if focusTitle {
 		m.textInputOverlay.FocusTitle()
+	}
+	// Open the account picker on the auto-routed account for the contextual target,
+	// so the preselected choice matches what creating without touching it would do.
+	// No-op when the form has no account picker (≤1 account configured).
+	if name, _, _ := m.appConfig.ResolveClaudeAccount(git.GetRemoteURL(m.ctx, target)); name != "" {
+		m.textInputOverlay.PreselectAccount(name)
 	}
 
 	// Branch plumbing only applies to a git target: seed the fetched-once set and kick
@@ -285,6 +291,12 @@ func (m *home) createSessionFromForm(prompt string) tea.Cmd {
 		remoteURL = git.GetRemoteURL(m.ctx, path)
 	}
 	accName, accDir, accIsDefault := m.appConfig.ResolveClaudeAccount(remoteURL)
+	if acct, ok := ov.GetSelectedAccount(); ok && acct.Name != "" {
+		// An explicit picker choice wins over auto-routing. Picking the no-match
+		// (default) account stays dim; a routed account shows accented — the same
+		// rule the resolver applies.
+		accName, accDir, accIsDefault = acct.Name, acct.ResolvedConfigDir(), len(acct.RemoteMatches) == 0
+	}
 	instance.SetClaudeAccount(accName, accDir, accIsDefault)
 
 	// Create the list row only now, on submit. AddInstance may insert it mid-list under its
