@@ -26,6 +26,11 @@ type prMergedMsg struct{ number int }
 // through the runtime, carrying the new PR number (0 if gh's output had none).
 type prCreatedMsg struct{ number int }
 
+// prOpenedMsg is returned by the open-PR action once gh has launched the browser,
+// carrying the PR number for the acknowledgment. Unlike a merge it changes no
+// state, so its handler only shows a notice.
+type prOpenedMsg struct{ number int }
+
 func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case hideErrMsg:
@@ -267,6 +272,12 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.handleInfoNotice(notice),
 			m.instanceChanged(),
 		)
+	case prOpenedMsg:
+		// The browser was launched (nothing to refresh): just acknowledge it.
+		if msg.number > 0 {
+			return m, m.handleInfoNotice(fmt.Sprintf("opened PR #%d in browser", msg.number))
+		}
+		return m, m.handleInfoNotice("opened PR in browser")
 	case attachFinishedMsg:
 		// A tea.Exec terminal attach returned (the user detached, or it failed to
 		// start). tea.Exec's RestoreTerminal has already repainted the frame; refine
@@ -870,6 +881,43 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		}
 		message := fmt.Sprintf("Create %s PR from '%s'?", adjective, selected.DisplayName())
 		return m, m.confirmAction(message, createAction)
+	case keys.KeyOpenPR:
+		selected := m.list.GetSelectedInstance()
+		if selected == nil {
+			return m, nil
+		}
+		if selected.GetStatus() == session.Loading {
+			return m, m.handleInfoNotice("session is still starting — try again in a moment")
+		}
+		// A direct (non-git) session has no branch and therefore no PR.
+		if selected.IsDirect() {
+			return m, m.handleInfoNotice("no PR for a direct (non-git) session")
+		}
+		// Read the poll-maintained snapshot (no I/O), like the merge handler. The
+		// guard is the looser HasPR rather than MergeBlockedReason: viewing is
+		// permissive where merging is strict, so drafts, CI-pending, conflicting and
+		// already-merged PRs all open.
+		var status git.PRStatus
+		if pr := selected.GetPRStatus(); pr != nil {
+			status = *pr
+		}
+		if !status.HasPR {
+			return m, m.handleInfoNotice("no PR for this session yet")
+		}
+		number := status.Number
+		// Defer the worktree lookup + browser launch into a tea.Cmd so a slow gh
+		// never blocks the UI thread. No confirmation: opening a browser is read-only.
+		openAction := func() tea.Msg {
+			worktree, err := selected.GetGitWorktree()
+			if err != nil {
+				return err
+			}
+			if err := worktree.OpenPRURL(); err != nil {
+				return err
+			}
+			return prOpenedMsg{number: number}
+		}
+		return m, openAction
 	case keys.KeyPause:
 		selected := m.list.GetSelectedInstance()
 		if selected == nil {

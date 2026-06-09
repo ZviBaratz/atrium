@@ -79,6 +79,7 @@ func (h helpTypeGeneral) toContent() string {
 		helpRow("P", "commit & push branch"),
 		helpRow("c", "create a PR for the pushed branch (gh)"),
 		helpRow("m", "merge the session's PR (squash)"),
+		helpRow("w", "open the session's PR in the browser"),
 		helpRow("r", "resume a paused session"),
 		helpRow("y", "copy branch name to clipboard"),
 		"",

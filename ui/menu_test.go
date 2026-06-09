@@ -86,8 +86,9 @@ func TestMenu_DirtyHintLineAddsPausePush(t *testing.T) {
 	require.NotContains(t, out, "push", "a clean session has nothing to push")
 }
 
-// A session whose PR is ready to merge surfaces the merge key; a blocked PR
-// (e.g. conflicting) falls back to the ordinary bar without advertising merge.
+// A session whose PR is ready to merge surfaces both the merge and open-PR keys.
+// A blocked PR (e.g. conflicting) drops merge but still advertises open-PR — the
+// case where going to look at the PR on GitHub matters most.
 func TestMenu_MergeableHintSurfacesMerge(t *testing.T) {
 	inst, err := session.NewInstance(session.InstanceOptions{Title: "t", Path: t.TempDir(), Program: "echo"})
 	require.NoError(t, err)
@@ -98,10 +99,12 @@ func TestMenu_MergeableHintSurfacesMerge(t *testing.T) {
 	m.SetSize(200, 3)
 	m.SetInstance(inst)
 	require.Contains(t, m.String(), "merge")
+	require.Contains(t, m.String(), "open PR", "a mergeable PR also advertises open-PR")
 
 	inst.SetPRStatus(&git.PRStatus{HasPR: true, State: "OPEN", Mergeable: "CONFLICTING"})
 	m.SetInstance(inst)
 	require.NotContains(t, m.String(), "merge", "a blocked PR must not advertise merge")
+	require.Contains(t, m.String(), "open PR", "a blocked PR still advertises open-PR")
 }
 
 // A pushed session with no PR yet surfaces the create key; an unpushed session

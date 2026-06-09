@@ -325,6 +325,37 @@ func prNumberFromURL(url string) int {
 	return n
 }
 
+// runGHPRWeb shells out to `gh pr view --web` for the branch, opening the PR in
+// the default browser. Like runGHMerge it is a package var so tests can swap it
+// out. gh infers owner/repo from the origin remote of dir, so no --repo is needed.
+var runGHPRWeb = func(ctx context.Context, dir, branch string) error {
+	cmd := exec.CommandContext(ctx, "gh", "pr", "view", branch, "--web")
+	cmd.Dir = dir
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("gh pr view --web: %s: %w", strings.TrimSpace(stderr.String()), err)
+	}
+	return nil
+}
+
+// OpenPRURL opens the session branch's pull request in the default browser. Like
+// MergePR it runs gh from the origin repo (g.repoPath), which always exists even
+// when the session is paused and its worktree removed, and resolves the PR by
+// branch exactly as the PR poll does — so if the poll saw a PR, this opens that
+// same one.
+func (g *Worktree) OpenPRURL() error {
+	if err := checkGHCLI(g.baseContext()); err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(g.baseContext(), gitNetworkTimeout)
+	defer cancel()
+	if err := runGHPRWeb(ctx, g.repoPath, g.GetBranchName()); err != nil {
+		return fmt.Errorf("failed to open PR for branch %s: %w", g.GetBranchName(), err)
+	}
+	return nil
+}
+
 // runGHPRView shells out to `gh pr view` for the branch and returns its JSON on
 // stdout. It is a package var so tests can swap in canned output without a real
 // gh on PATH. gh infers owner/repo from the worktree's origin remote (like the

@@ -55,7 +55,12 @@ var dirtyHintKeys = []keys.KeyName{keys.KeyEnter, keys.KeyNew, keys.KeyQuickSend
 // ship (open, not blocked). Merge is the headline action; push stays for any
 // last-minute fixups before merging, while quick-send and pause drop out — the
 // work is effectively done.
-var mergeableHintKeys = []keys.KeyName{keys.KeyEnter, keys.KeyNew, keys.KeyMerge, keys.KeySubmit, keys.KeyKill, keys.KeyHelp}
+var mergeableHintKeys = []keys.KeyName{keys.KeyEnter, keys.KeyNew, keys.KeyMerge, keys.KeyOpenPR, keys.KeySubmit, keys.KeyKill, keys.KeyHelp}
+
+// prBlockedHintKeys surface for a session that has a PR which isn't ready to
+// merge yet (draft, CI pending, conflicts). Merge would no-op, so the headline is
+// "open the PR to go look at it"; push stays for last-minute fixups.
+var prBlockedHintKeys = []keys.KeyName{keys.KeyEnter, keys.KeyNew, keys.KeyOpenPR, keys.KeySubmit, keys.KeyKill, keys.KeyHelp}
 
 // creatableHintKeys replace the default set for a pushed session with no PR yet —
 // the moment "create PR" is the action that matters. Push stays for last-minute
@@ -128,9 +133,13 @@ func hintsFor(instance *session.Instance) []keys.KeyName {
 	}
 	if !instance.IsDirect() {
 		// A PR that's ready to merge is the most action-relevant state: surface
-		// merge ahead of the pause/push pair.
-		if pr := instance.GetPRStatus(); pr != nil && pr.MergeBlockedReason() == "" {
-			return mergeableHintKeys
+		// merge ahead of the pause/push pair. A PR that exists but is blocked still
+		// surfaces "open PR" so you can go look at it on GitHub.
+		if pr := instance.GetPRStatus(); pr != nil && pr.HasPR {
+			if pr.MergeBlockedReason() == "" {
+				return mergeableHintKeys
+			}
+			return prBlockedHintKeys
 		}
 		// A pushed branch with no PR yet is next: surface create. This must come
 		// before the dirty check — a pushed branch is also "ahead" (Commits > 0),

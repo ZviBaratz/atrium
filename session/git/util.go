@@ -33,8 +33,10 @@ func sanitizeBranchName(s string) string {
 	return s
 }
 
-// checkGHCLI checks if GitHub CLI is installed and configured
-func checkGHCLI(ctx context.Context) error {
+// checkGHCLI checks if GitHub CLI is installed and configured. It is a package
+// var so tests can stub the gh-availability gate without a real, authenticated
+// gh on PATH.
+var checkGHCLI = func(ctx context.Context) error {
 	// Check if gh is installed
 	if _, err := exec.LookPath("gh"); err != nil {
 		return fmt.Errorf("GitHub CLI (gh) is not installed. Please install it first")
