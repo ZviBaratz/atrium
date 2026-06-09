@@ -101,7 +101,7 @@ func (g *Worktree) PRStatus(ctx context.Context, selected bool) PRStatus {
 	g.prCacheMu.Unlock()
 
 	wt := g.snapshotWorktreePath()
-	branch := g.GetBranchName()
+	branch := g.currentBranch(wt)
 
 	// Gate 2: no pushed branch => no PR possible. Cache the empty result so we
 	// don't even run the local ref check again until the TTL lapses.
@@ -132,6 +132,27 @@ func (g *Worktree) PRStatus(ctx context.Context, selected bool) PRStatus {
 		return cached
 	}
 	return g.storePRStatus(status)
+}
+
+// currentBranch resolves the branch to poll for a PR. It prefers git's actually
+// checked-out HEAD over the stored branchName, so a worktree that was manually
+// repointed to a different branch (e.g. the long-lived "Review" worktree checked
+// out onto a feature branch) is polled for the branch the PR really lives on. It
+// falls back to the stored name when the worktree path is empty, when git can't
+// be reached (a paused session whose worktree is gone), or on a detached HEAD.
+func (g *Worktree) currentBranch(wt string) string {
+	stored := g.GetBranchName()
+	if wt == "" {
+		return stored
+	}
+	out, err := g.runGitCommand(wt, "rev-parse", "--abbrev-ref", "HEAD")
+	if err != nil {
+		return stored
+	}
+	if b := strings.TrimSpace(out); b != "" && b != "HEAD" {
+		return b
+	}
+	return stored
 }
 
 // storePRStatus stamps and caches a freshly computed PR status, returning the

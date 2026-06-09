@@ -294,13 +294,43 @@ func stubGHPRView(fn func(context.Context, string, string) ([]byte, error)) func
 	return func() { runGHPRView = orig }
 }
 
-// pushedWorktree returns a Worktree over a fresh repo whose "feat" branch has a
-// remote-tracking ref (created locally, no network), so the local pre-gate passes
-// and PRStatus proceeds to the gh seam.
+// pushedWorktree returns a Worktree over a fresh repo checked out on "feat" with
+// a remote-tracking ref (created locally, no network), so the local pre-gate
+// passes and PRStatus proceeds to the gh seam. HEAD is "feat" so the git-actual
+// branch resolution agrees with branchName — the normal, aligned case.
 func pushedWorktree(t *testing.T) *Worktree {
 	t.Helper()
 	repo := newTestRepo(t)
+	mustRunGit(t, repo, "checkout", "-b", "feat")
 	sha := revParse(t, repo, "HEAD")
 	mustRunGit(t, repo, "update-ref", "refs/remotes/origin/feat", sha)
 	return &Worktree{worktreePath: repo, branchName: "feat"}
+}
+
+// TestPRStatus_PollsGitActualBranch verifies the poll resolves the branch from
+// git's checked-out HEAD, not the stored branchName. This is the repurposed-
+// worktree case: a worktree Atrium created for "stored" but later checked out
+// onto "actual" must be polled for "actual" (where the PR really is).
+func TestPRStatus_PollsGitActualBranch(t *testing.T) {
+	repo := newTestRepo(t)
+	mustRunGit(t, repo, "checkout", "-b", "actual")
+	sha := revParse(t, repo, "HEAD")
+	mustRunGit(t, repo, "update-ref", "refs/remotes/origin/actual", sha)
+	// branchName is the stale stored name; git HEAD is "actual".
+	wt := &Worktree{worktreePath: repo, branchName: "stored"}
+
+	var gotBranch string
+	restore := stubGHPRView(func(_ context.Context, _ string, branch string) ([]byte, error) {
+		gotBranch = branch
+		return []byte(`{"number":7,"state":"OPEN"}`), nil
+	})
+	defer restore()
+
+	got := wt.PRStatus(context.Background(), false)
+	if gotBranch != "actual" {
+		t.Errorf("poll used branch %q, want the git-actual %q", gotBranch, "actual")
+	}
+	if !got.HasPR || got.Number != 7 {
+		t.Errorf("HasPR/Number = %v/%d, want true/7", got.HasPR, got.Number)
+	}
 }
