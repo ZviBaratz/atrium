@@ -70,6 +70,37 @@ type Profile struct {
 	Program string `json:"program"`
 }
 
+// ClaudeAccount maps a named Claude Code account to a CLAUDE_CONFIG_DIR and the
+// git-remote substrings that auto-select it. config_dir may use a leading ~ for
+// the home directory. The first account with no RemoteMatches is the inferred
+// catch-all default used when no route matches the worktree's origin remote.
+type ClaudeAccount struct {
+	Name          string   `json:"name"`
+	ConfigDir     string   `json:"config_dir"`
+	RemoteMatches []string `json:"remote_matches,omitempty"`
+}
+
+// ResolvedConfigDir expands a leading ~ in ConfigDir to the user's home directory.
+func (a ClaudeAccount) ResolvedConfigDir() string {
+	return expandHomePath(a.ConfigDir)
+}
+
+// expandHomePath expands a leading "~" or "~/" in p to the user's home directory.
+// On any failure resolving home, p is returned unchanged.
+func expandHomePath(p string) string {
+	if p != "~" && !strings.HasPrefix(p, "~/") {
+		return p
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return p
+	}
+	if p == "~" {
+		return home
+	}
+	return filepath.Join(home, p[2:])
+}
+
 // Config represents the application configuration
 type Config struct {
 	// DefaultProgram is the default program to run in new instances
@@ -130,6 +161,12 @@ type Config struct {
 	// explicit [] must survive a save/load cycle instead of being dropped and
 	// reverting to the default.
 	CarryFiles []string `json:"carry_files"`
+	// ClaudeAccounts routes sessions to a per-session CLAUDE_CONFIG_DIR (which
+	// Claude Code account a session runs under) by matching the worktree's git
+	// origin remote. Empty (the default) disables the feature entirely: no env
+	// is injected and no account badge is shown, so configs predating this key
+	// behave exactly as before.
+	ClaudeAccounts []ClaudeAccount `json:"claude_accounts,omitempty"`
 }
 
 // defaultCarryFiles is the carry list applied when a config predates the
@@ -225,6 +262,40 @@ func (c *Config) GetProfiles() []Profile {
 		}
 	}
 	return profiles
+}
+
+// ResolveClaudeAccount picks the Claude Code account for a worktree whose origin
+// remote is remoteURL. It returns the account name (for the TUI badge), the
+// resolved CLAUDE_CONFIG_DIR to inject (empty = inherit the current env), and
+// whether the choice is the default/fallback account (drives dim styling).
+// Matching is case-insensitive substring; the first account whose remote_matches
+// hits wins. When no route matches, the first account with no remote_matches is
+// the inferred default; absent that, ("default", "", true) means inherit env.
+func (c *Config) ResolveClaudeAccount(remoteURL string) (name, configDir string, isDefault bool) {
+	if len(c.ClaudeAccounts) == 0 {
+		return "", "", false
+	}
+	lower := strings.ToLower(remoteURL)
+	defaultIdx := -1
+	for i := range c.ClaudeAccounts {
+		a := &c.ClaudeAccounts[i]
+		if len(a.RemoteMatches) == 0 && defaultIdx == -1 {
+			defaultIdx = i // first account with no match rules is the fallback
+		}
+		if lower == "" {
+			continue
+		}
+		for _, m := range a.RemoteMatches {
+			if m != "" && strings.Contains(lower, strings.ToLower(m)) {
+				return a.Name, a.ResolvedConfigDir(), false
+			}
+		}
+	}
+	if defaultIdx >= 0 {
+		d := c.ClaudeAccounts[defaultIdx]
+		return d.Name, d.ResolvedConfigDir(), true
+	}
+	return "default", "", true
 }
 
 // DefaultConfig returns the built-in defaults without probing the machine: no

@@ -489,3 +489,48 @@ func TestGetCarryFiles(t *testing.T) {
 		assert.Empty(t, loaded.GetCarryFiles())
 	})
 }
+
+func TestResolveClaudeAccount(t *testing.T) {
+	t.Setenv("HOME", "/home/tester")
+
+	personal := ClaudeAccount{Name: "personal", ConfigDir: "~/.claude"} // no matches → inferred default
+	work := ClaudeAccount{Name: "quantivly", ConfigDir: "~/.claude-quantivly",
+		RemoteMatches: []string{"quantivly/", "github-quantivly:"}}
+
+	cfg := &Config{ClaudeAccounts: []ClaudeAccount{personal, work}}
+
+	cases := []struct {
+		name          string
+		accounts      []ClaudeAccount
+		remote        string
+		wantName      string
+		wantDir       string
+		wantIsDefault bool
+	}{
+		{"unconfigured", nil, "git@github.com:quantivly/x.git", "", "", false},
+		{"https match", cfg.ClaudeAccounts, "https://github.com/quantivly/x.git", "quantivly", "/home/tester/.claude-quantivly", false},
+		{"ssh alias match", cfg.ClaudeAccounts, "github-quantivly:quantivly/x.git", "quantivly", "/home/tester/.claude-quantivly", false},
+		{"case-insensitive", cfg.ClaudeAccounts, "https://github.com/Quantivly/X.git", "quantivly", "/home/tester/.claude-quantivly", false},
+		{"no match -> inferred default (no-match account)", cfg.ClaudeAccounts, "git@github.com:someoneelse/y.git", "personal", "/home/tester/.claude", true},
+		{"empty remote -> inferred default", cfg.ClaudeAccounts, "", "personal", "/home/tester/.claude", true},
+		{"no match, every account has matches -> inherit env", []ClaudeAccount{work}, "git@github.com:other/z.git", "default", "", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			c := &Config{ClaudeAccounts: tc.accounts}
+			name, dir, isDefault := c.ResolveClaudeAccount(tc.remote)
+			if name != tc.wantName || dir != tc.wantDir || isDefault != tc.wantIsDefault {
+				t.Fatalf("ResolveClaudeAccount(%q) = (%q,%q,%v), want (%q,%q,%v)",
+					tc.remote, name, dir, isDefault, tc.wantName, tc.wantDir, tc.wantIsDefault)
+			}
+		})
+	}
+
+	// First matching account wins when two could match.
+	a := ClaudeAccount{Name: "a", ConfigDir: "/a", RemoteMatches: []string{"acme"}}
+	b := ClaudeAccount{Name: "b", ConfigDir: "/b", RemoteMatches: []string{"acme"}}
+	c := &Config{ClaudeAccounts: []ClaudeAccount{a, b}}
+	if name, _, _ := c.ResolveClaudeAccount("https://x/acme/r.git"); name != "a" {
+		t.Fatalf("first-match-wins: got %q, want %q", name, "a")
+	}
+}
