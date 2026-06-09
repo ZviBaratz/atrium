@@ -178,6 +178,41 @@ Carried files are re-seeded from the original checkout whenever the worktree
 is created, including on resume after a pause — edits made to them inside a
 session do not survive a pause/resume cycle.
 
+#### Claude accounts
+
+Route each session to a specific Claude Code account by injecting a per-session
+`CLAUDE_CONFIG_DIR`, chosen by matching the worktree's git `origin` remote. This
+is useful when different repos must run under different Claude accounts (e.g.
+personal vs. work), since MCP connectors and auth are stored per
+`CLAUDE_CONFIG_DIR`. Add a `claude_accounts` list to your config file:
+
+```json
+{
+  "claude_accounts": [
+    { "name": "personal", "config_dir": "~/.claude" },
+    {
+      "name": "quantivly",
+      "config_dir": "~/.claude-quantivly",
+      "remote_matches": ["quantivly/", "github-quantivly:"]
+    }
+  ]
+}
+```
+
+- `remote_matches` are case-insensitive substrings tested against the origin
+  URL; the first account that matches wins.
+- The **first account with no `remote_matches`** is the catch-all default, used
+  when no route matches. It is optional: with no such account, non-matching
+  sessions inherit the current environment.
+- The resolved account is **pinned at session creation** and shown as a badge in
+  the session list (dim for the default account, accented for a routed one). It
+  is injected once at launch and is not re-resolved on restart or `--continue`;
+  editing `claude_accounts` affects only newly created sessions.
+- When more than one account is configured, the new-session form shows an
+  **Account** picker, preset to the auto-routed account, to override the choice.
+- Omitting `claude_accounts` disables the feature entirely (no badge, no
+  injection), so existing configs are unaffected.
+
 ### FAQs
 
 #### Failed to start new session
