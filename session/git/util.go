@@ -89,3 +89,17 @@ func findGitRepoRoot(ctx context.Context, path string) (string, error) {
 	}
 	return strings.TrimSpace(string(out)), nil
 }
+
+// GetRemoteURL returns the origin remote URL for the repository containing path,
+// or "" when there is no origin remote or path is not a git repo (best-effort,
+// like CurrentBranchName). Used to route a worktree to a Claude Code account.
+func GetRemoteURL(ctx context.Context, path string) string {
+	ctx, cancel := context.WithTimeout(ctx, gitLocalTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "git", "-C", path, "config", "--get", "remote.origin.url")
+	out, err := cmd.Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
+}

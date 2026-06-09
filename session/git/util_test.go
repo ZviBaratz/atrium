@@ -103,3 +103,22 @@ func TestSanitizeBranchName(t *testing.T) {
 		})
 	}
 }
+
+func TestGetRemoteURL(t *testing.T) {
+	repo := newTestRepo(t)
+
+	// No remote yet -> empty.
+	if got := GetRemoteURL(context.Background(), repo); got != "" {
+		t.Fatalf("GetRemoteURL() with no remote = %q, want empty", got)
+	}
+
+	mustRunGit(t, repo, "remote", "add", "origin", "git@github.com:quantivly/atrium.git")
+	if got := GetRemoteURL(context.Background(), repo); got != "git@github.com:quantivly/atrium.git" {
+		t.Fatalf("GetRemoteURL() = %q, want the origin URL", got)
+	}
+
+	// Non-repo path -> empty (best-effort, like IsGitRepo).
+	if got := GetRemoteURL(context.Background(), t.TempDir()); got != "" {
+		t.Fatalf("GetRemoteURL() non-repo = %q, want empty", got)
+	}
+}
