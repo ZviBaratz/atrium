@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/ZviBaratz/atrium/config"
+	"github.com/ZviBaratz/atrium/hints"
 	"github.com/ZviBaratz/atrium/log"
 	"github.com/ZviBaratz/atrium/session"
 	"github.com/ZviBaratz/atrium/session/tmux"
@@ -112,6 +113,9 @@ const (
 	// stateSettings is the state when the settings panel is open for viewing and
 	// editing the persistent configuration.
 	stateSettings
+	// stateHints is the state when hint (fingers) mode overlays the preview
+	// pane with copy/open labels; every key routes to hint selection.
+	stateHints
 )
 
 type home struct {
@@ -204,6 +208,13 @@ type home struct {
 	// generatingName guards against launching a second auto-name request while one
 	// is already in flight, and drives the "Generating name…" hint-bar state.
 	generatingName bool
+
+	// hintScreen is the frozen, labeled capture hint mode is acting on.
+	// hintTyped is the entered label prefix, and hintOpenVariant records
+	// whether any hint character was typed uppercase (selecting copy+open).
+	hintScreen      *hints.Screen
+	hintTyped       string
+	hintOpenVariant bool
 
 	// lastStatusPollSelection is the instance instanceChanged last fired an immediate
 	// status poll for. instanceChanged runs on every 100ms preview tick, so we only

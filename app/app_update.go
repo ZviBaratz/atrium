@@ -42,6 +42,12 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.recomputeLayout() // reclaim the error row; panes grow back by one
 		}
 	case previewTickMsg:
+		// The pane owns hint-overlay validity (a selection change or pause
+		// drops it there); if it dropped, follow it back to default so keys
+		// stop being captured for a vanished overlay.
+		if m.state == stateHints && !m.tabbedWindow.InPreviewHintMode() {
+			m.exitHintMode()
+		}
 		m.markSeenAfterDwell(time.Now())
 		cmd := m.instanceChanged()
 		return m, tea.Batch(
@@ -262,6 +268,11 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyMsg:
 		return m.handleKeyPress(msg)
 	case tea.WindowSizeMsg:
+		// A resize invalidates hint mode's frozen geometry; exit rather than
+		// redraw stale coordinates (cheap and correct — scroll-mode pragmatism).
+		if m.state == stateHints {
+			m.exitHintMode()
+		}
 		m.updateHandleWindowSizeEvent(msg)
 		// First launch ever: show the one-time welcome once the size is known.
 		m.maybeShowWelcome()
@@ -620,6 +631,13 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		}
 	}
 
+	// Hint (fingers) mode: every key is either a hint character or an exit.
+	// Must run before the global esc/quit handling below so hint letters like
+	// q never quit the app.
+	if m.state == stateHints {
+		return m.handleHintsState(msg)
+	}
+
 	// Exit scrolling mode when ESC is pressed and preview pane is in scrolling mode
 	// Check if Escape key was pressed and we're not in the diff tab (meaning we're in preview tab)
 	// Always check for escape key first to ensure it doesn't get intercepted elsewhere
@@ -705,6 +723,9 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 			return m, m.handleError(fmt.Errorf("copy branch: %w", err))
 		}
 		return m, m.handleInfoNotice(fmt.Sprintf("branch '%s' copied", selected.Branch))
+	case keys.KeyHints:
+		// Freeze the preview and overlay copy/open hints on its matches.
+		return m.enterHintMode()
 	case keys.KeyUp:
 		m.list.Up()
 		return m, m.instanceChanged()
