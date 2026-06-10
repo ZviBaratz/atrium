@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // TestDiff_RepoStats exercises the real git wiring for commits/behind/dirty/files
@@ -34,9 +35,12 @@ func TestDiff_RepoStats(t *testing.T) {
 	}
 
 	// Uncommitted edit in the worktree → dirty + a changed file, no new commit.
+	// Sleep past dirtyCacheTTL so the cache misses and git status re-runs; without
+	// this the first Diff() above has already cached dirty=false for 1s.
 	if err := os.WriteFile(filepath.Join(wtPath, "work.txt"), []byte("in progress\n"), 0644); err != nil {
 		t.Fatalf("write work file: %v", err)
 	}
+	time.Sleep(dirtyCacheTTL + time.Millisecond)
 	stats = wt.Diff()
 	if !stats.Dirty {
 		t.Errorf("after uncommitted edit: Dirty = false, want true")
