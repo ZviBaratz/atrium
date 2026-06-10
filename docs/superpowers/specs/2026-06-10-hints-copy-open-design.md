@@ -138,8 +138,10 @@ texts share one hint.
   launched detached (`exec.Command(...).Start()`, stdio discarded). Never
   `tea.Exec`: the browser doesn't need the terminal. Non-URL kinds degrade to
   plain copy in v1.
-- Failures surface through the existing `m.handleError` path; success exits
-  hint mode silently.
+- Failures surface through the existing `m.handleError` path; success is
+  acknowledged with a hint-bar toast (`'…' copied`), following the
+  copy-branch precedent — without a toast, success and failure are
+  indistinguishable from the keyboard.
 
 ## Lifecycle & edge cases
 
