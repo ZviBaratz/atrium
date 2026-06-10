@@ -1,4 +1,3 @@
-// hints/patterns.go
 package hints
 
 import "regexp"

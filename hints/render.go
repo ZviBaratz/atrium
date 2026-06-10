@@ -1,4 +1,3 @@
-// hints/render.go
 package hints
 
 import (

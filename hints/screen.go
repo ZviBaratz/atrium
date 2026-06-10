@@ -1,4 +1,3 @@
-// hints/screen.go
 package hints
 
 import (

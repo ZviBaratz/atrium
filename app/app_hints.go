@@ -1,4 +1,3 @@
-// app/app_hints.go
 package app
 
 // Hint (fingers) mode: freeze the preview, label its URLs/paths/SHAs with
@@ -137,10 +136,10 @@ func (m *home) actHint(match hints.Match, open bool) tea.Cmd {
 // truncateForNotice keeps toasts one line short; the menu row truncates too,
 // but an early cut keeps the "copied" suffix visible.
 func truncateForNotice(s string) string {
-	const max = 40
+	const maxRunes = 40
 	r := []rune(s)
-	if len(r) <= max {
+	if len(r) <= maxRunes {
 		return s
 	}
-	return string(r[:max-1]) + "…"
+	return string(r[:maxRunes-1]) + "…"
 }

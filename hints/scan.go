@@ -1,4 +1,3 @@
-// hints/scan.go
 package hints
 
 import (

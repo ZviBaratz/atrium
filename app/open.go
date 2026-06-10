@@ -1,7 +1,7 @@
-// app/open.go
 package app
 
 import (
+	"context"
 	"fmt"
 	"os/exec"
 	"runtime"
@@ -45,7 +45,9 @@ func openDetached(target string) error {
 	if err != nil {
 		return err
 	}
-	cmd := exec.Command(opener, target)
+	// context.Background on purpose: the open is detached from the TUI's
+	// lifecycle, so there is no parent context that should cancel it.
+	cmd := exec.CommandContext(context.Background(), opener, target)
 	if err := cmd.Start(); err != nil {
 		return err
 	}
