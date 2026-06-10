@@ -80,6 +80,10 @@ const (
 	// KeyAttachToggle mirrors the in-session detach key: on the list it attaches
 	// the selected session, making ctrl+q a symmetric attach/detach toggle.
 	KeyAttachToggle
+
+	// KeyHints enters hint (fingers) mode: overlay copy/open hint labels on
+	// the preview pane's visible matches (URLs, paths, SHAs, …).
+	KeyHints
 )
 
 // KillKey is the chord that triggers a kill from the session list. It mirrors the
@@ -129,6 +133,7 @@ var GlobalKeyStringsMap = map[string]KeyName{
 	"3":          KeyTabTerminal,
 	",":          KeySettings,
 	"ctrl+q":     KeyAttachToggle,
+	"f":          KeyHints,
 }
 
 // GlobalkeyBindings is a global, immutable map of KeyName to keybinding.
@@ -282,5 +287,9 @@ var GlobalkeyBindings = map[KeyName]key.Binding{
 	KeyAttachToggle: key.NewBinding(
 		key.WithKeys("ctrl+q"),
 		key.WithHelp("ctrl-q", "attach/detach"),
+	),
+	KeyHints: key.NewBinding(
+		key.WithKeys("f"),
+		key.WithHelp("f", "copy/open from screen"),
 	),
 }

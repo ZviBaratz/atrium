@@ -86,6 +86,7 @@ func (h helpTypeGeneral) toContent() string {
 		helpRow("w", "open the session's PR in the browser"),
 		helpRow("r", "resume a paused session"),
 		helpRow("y", "copy branch name to clipboard"),
+		helpRow("f", "copy/open URLs & paths from the preview"),
 		"",
 		helpHeaderStyle().Render("Groups"),
 		helpRow("J / K", "reorder within a repo group"),

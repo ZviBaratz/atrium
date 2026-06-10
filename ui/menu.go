@@ -34,6 +34,9 @@ const (
 	// StateGeneratingName is shown while a session name is being generated in the
 	// background; the hint bar reports progress instead of the usual options.
 	StateGeneratingName
+	// StateHints is shown while hint (fingers) mode overlays the preview:
+	// the bar teaches the mode's three gestures instead of the usual options.
+	StateHints
 )
 
 // defaultHintKeys are the high-value bindings the always-on bar surfaces during
@@ -224,6 +227,12 @@ func (m *Menu) String() string {
 		line = keyStyle().Render("enter") + " " + descStyle().Render("accept") +
 			sepStyle().Render(separator) +
 			keyStyle().Render("esc") + " " + descStyle().Render("clear")
+	case StateHints:
+		line = keyStyle().Render("a–z") + " " + descStyle().Render("copy") +
+			sepStyle().Render(separator) +
+			keyStyle().Render("A–Z") + " " + descStyle().Render("copy + open") +
+			sepStyle().Render(separator) +
+			keyStyle().Render("esc") + " " + descStyle().Render("cancel")
 	case StateEmpty:
 		line = renderHintLine(emptyHintKeys)
 	default: // StateDefault
