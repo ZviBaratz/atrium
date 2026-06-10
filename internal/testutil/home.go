@@ -28,5 +28,12 @@ func SandboxHomeMain(m *testing.M) int {
 	if err := os.Setenv("HOME", tmp); err != nil {
 		panic("testutil: failed to set sandbox HOME: " + err.Error())
 	}
+	// CLAUDE_CONFIG_DIR outranks HOME in transcript-root resolution
+	// (session/transcript), so a developer shell that exports it — any shell
+	// inside Claude Code does — would quietly point tests back at the real
+	// ~/.claude. Drop it so every lookup stays inside the sandbox.
+	if err := os.Unsetenv("CLAUDE_CONFIG_DIR"); err != nil {
+		panic("testutil: failed to unset CLAUDE_CONFIG_DIR: " + err.Error())
+	}
 	return m.Run()
 }

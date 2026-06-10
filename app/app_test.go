@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"github.com/ZviBaratz/atrium/config"
+	"github.com/ZviBaratz/atrium/internal/testutil"
 	"github.com/ZviBaratz/atrium/keys"
 	"github.com/ZviBaratz/atrium/log"
 	"github.com/ZviBaratz/atrium/session"
@@ -21,25 +22,17 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestMain runs before all tests to set up the test environment.
+// TestMain runs before all tests to set up the test environment. HOME (and
+// CLAUDE_CONFIG_DIR) are sandboxed via the shared helper so tests never read
+// or overwrite the real Atrium state/config — config.GetConfigDir resolves
+// under $HOME, and LoadConfig writes a default config.json on first run.
 func TestMain(m *testing.M) {
-	// Sandbox HOME so tests never read or overwrite the real ~/.claude-squad
-	// state/config — config.GetConfigDir resolves under $HOME, and LoadConfig
-	// writes a default config.json on first run.
-	tmpHome, err := os.MkdirTemp("", "cs-test-home-")
-	if err == nil {
-		_ = os.Setenv("HOME", tmpHome)
-	}
-
 	// Initialize the logger before any tests run
 	log.Initialize(false)
 
-	exitCode := m.Run()
+	exitCode := testutil.SandboxHomeMain(m)
 
 	log.Close()
-	if tmpHome != "" {
-		_ = os.RemoveAll(tmpHome)
-	}
 	os.Exit(exitCode)
 }
 
