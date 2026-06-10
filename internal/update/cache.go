@@ -59,10 +59,10 @@ func loadCache(now time.Time) (cacheEntry, bool) {
 
 // saveCache records a completed check. Best-effort consumers may ignore the
 // error: a failed write only means the next startup re-checks the network.
-// A plain (non-atomic) write is deliberate: a torn write reads as corrupt
-// JSON, which loadCache already treats as "no cache" — using the data dir's
-// writeFileAtomic would instead require sweeping its orphaned temp files on
-// every load (see config.sweepStaleTempFiles) for no real gain.
+// The plain (non-atomic) write is deliberate: a torn write reads as corrupt
+// JSON, which loadCache treats as "no cache" — the worst case is one extra
+// network check. Adopting the data dir's writeFileAtomic would add temp-file
+// sweeping (see config.sweepStaleTempFiles) for no real gain at that stake.
 func saveCache(latest string, now time.Time) error {
 	path, err := cachePath()
 	if err != nil {
