@@ -41,6 +41,11 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.errBox.Clear()
 			m.recomputeLayout() // reclaim the error row; panes grow back by one
 		}
+	case updateCheckDoneMsg:
+		if msg.installed {
+			return m, m.handleInfoNotice(fmt.Sprintf("updated to v%s — restart %s to apply", msg.version, m.hintBinName()))
+		}
+		return m, m.handleInfoNotice(fmt.Sprintf("v%s available — run `%s update`", msg.version, m.hintBinName()))
 	case previewTickMsg:
 		// The pane owns hint-overlay validity (a selection change or pause
 		// drops it there); if it dropped, follow it back to default so keys
