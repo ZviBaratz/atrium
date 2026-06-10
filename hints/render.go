@@ -24,10 +24,13 @@ type Styles struct {
 }
 
 // Render draws the frozen screen with hint decorations: every line dimmed,
-// matches highlighted, each match's first cells overlaid with its label.
-// typed is the already-entered (lowercased) prefix: labels that no longer
-// match it lose their decoration; matching labels show only their remaining
-// suffix, keeping the next keys to type in front of the user.
+// matches highlighted, each match's label in the blank gutter cell(s) just
+// left of it — keeping the full match text readable — falling back to
+// overlaying the match's first cells when no gutter exists (column 0, a
+// non-space predecessor, or an adjacent earlier match). typed is the
+// already-entered (lowercased) prefix: labels that no longer match it lose
+// their decoration; matching labels show only their remaining suffix,
+// keeping the next keys to type in front of the user.
 //
 // Splicing happens at rune indices into the same rune slice the line came
 // from, so alignment is self-consistent: the output is exactly the original
@@ -55,7 +58,6 @@ func renderLine(line string, ms []Match, typed string, st Styles) string {
 		if m.Col < pos || m.Col > len(runes) {
 			continue // overlap or out of range: keep the earlier match
 		}
-		b.WriteString(st.Backdrop.Render(string(runes[pos:m.Col])))
 		// Width, not len(Text): a hyperlink match's copyable target can be
 		// longer than the visible span it decorates.
 		end := m.Col + m.Width
@@ -64,17 +66,28 @@ func renderLine(line string, ms []Match, typed string, st Styles) string {
 		}
 		if !strings.HasPrefix(m.Label, typed) {
 			// Filtered out by the typed prefix: back to plain backdrop.
-			b.WriteString(st.Backdrop.Render(string(runes[m.Col:end])))
+			b.WriteString(st.Backdrop.Render(string(runes[pos:end])))
 			pos = end
 			continue
 		}
 		suffix := m.Label[len(typed):]
-		if n := end - m.Col; len(suffix) > n {
-			suffix = suffix[:n]
-		}
 		matchStyle := st.Match
 		if m.Kind == KindURL {
 			matchStyle = st.MatchURL
+		}
+		// Gutter placement is decided on the FULL label so narrowing never
+		// flips a hint between gutter and overlay mid-flight; the suffix
+		// right-aligns against the match start.
+		if gutter := m.Col - len(m.Label); gutter >= pos && isBlank(runes[gutter:m.Col]) {
+			b.WriteString(st.Backdrop.Render(string(runes[pos : m.Col-len(suffix)])))
+			b.WriteString(st.Label.Render(suffix))
+			b.WriteString(matchStyle.Render(string(runes[m.Col:end])))
+			pos = end
+			continue
+		}
+		b.WriteString(st.Backdrop.Render(string(runes[pos:m.Col])))
+		if n := end - m.Col; len(suffix) > n {
+			suffix = suffix[:n]
 		}
 		b.WriteString(st.Label.Render(suffix))
 		b.WriteString(matchStyle.Render(string(runes[m.Col+len(suffix) : end])))
@@ -84,4 +97,15 @@ func renderLine(line string, ms []Match, typed string, st Styles) string {
 		b.WriteString(st.Backdrop.Render(string(runes[pos:])))
 	}
 	return b.String()
+}
+
+// isBlank reports whether every rune is a plain space — the only cells the
+// gutter may claim without eating a visible glyph.
+func isBlank(rs []rune) bool {
+	for _, r := range rs {
+		if r != ' ' {
+			return false
+		}
+	}
+	return true
 }

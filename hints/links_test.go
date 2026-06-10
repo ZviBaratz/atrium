@@ -114,6 +114,6 @@ func TestRender_HyperlinkSpliceStaysInSpan(t *testing.T) {
 	s := NewScreen(raw, 80, 10)
 	require.Equal(t, 1, s.MatchCount())
 	out := s.Render("", plainStyles())
-	assert.Equal(t, "go aere now", out,
-		"label replaces the span's first rune; the rest of the line is untouched")
+	assert.Equal(t, "goahere now", out,
+		"label sits in the gutter; the span itself stays intact")
 }
