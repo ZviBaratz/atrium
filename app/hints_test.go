@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ZviBaratz/atrium/actions"
 	"github.com/ZviBaratz/atrium/config"
 	"github.com/ZviBaratz/atrium/session"
 	"github.com/ZviBaratz/atrium/ui"
@@ -25,10 +26,10 @@ type fakeOpener struct {
 
 func withFakeOpener(t *testing.T, retErr error) *fakeOpener {
 	t.Helper()
-	orig := openInBrowser
-	t.Cleanup(func() { openInBrowser = orig })
+	orig := actions.OpenInBrowser
+	t.Cleanup(func() { actions.OpenInBrowser = orig })
 	fo := &fakeOpener{}
-	openInBrowser = func(s string) error {
+	actions.OpenInBrowser = func(s string) error {
 		fo.called = true
 		fo.target = s
 		return retErr
