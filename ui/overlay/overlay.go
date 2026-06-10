@@ -130,9 +130,13 @@ func PlaceOverlay(
 		return fg // Return foreground if it's larger than background
 	}
 
-	// Clamp coordinates to ensure foreground fits within background
-	placeX = clamp(placeX, 0, bgWidth-fgWidth)
-	placeY = clamp(placeY, 0, bgHeight-fgHeight)
+	// Clamp coordinates to ensure foreground fits within background. The upper
+	// bounds go negative when the foreground is larger than the background in
+	// one dimension; flooring them at 0 top/left-anchors an oversize foreground
+	// so the render loop bottom/right-truncates it instead of cutting its top
+	// off with a negative offset.
+	placeX = clamp(placeX, 0, max(0, bgWidth-fgWidth))
+	placeY = clamp(placeY, 0, max(0, bgHeight-fgHeight))
 
 	// Apply whitespace options
 	ws := &whitespace{}

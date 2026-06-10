@@ -83,3 +83,36 @@ func TestPlaceOverlayCentersWithGraphemeClusterBackground(t *testing.T) {
 		t.Fatalf("popup not centered: left border at col %d, want ~%d", startCol, want)
 	}
 }
+
+// A foreground taller than the background (but narrower, so the both-dims early
+// return does not apply) must be top-anchored and bottom-truncated. Before the
+// clamp floor, the centering offset went negative and the foreground's first
+// lines were cut off the top instead.
+func TestPlaceOverlayTopAnchorsOversizeForeground(t *testing.T) {
+	const canvasW, canvasH = 40, 10
+	const fgH = 30
+
+	bg := make([]string, canvasH)
+	for i := range bg {
+		bg[i] = strings.Repeat("x", canvasW)
+	}
+
+	fgLines := make([]string, fgH)
+	for i := range fgLines {
+		fgLines[i] = "fg-line-" + string(rune('a'+i))
+	}
+
+	out := PlaceOverlay(0, 0, strings.Join(fgLines, "\n"), strings.Join(bg, "\n"), true)
+
+	outLines := strings.Split(out, "\n")
+	if len(outLines) != canvasH {
+		t.Fatalf("composed frame is %d lines, want the canvas height %d", len(outLines), canvasH)
+	}
+	// Top-anchored: output row i carries foreground line i (horizontally
+	// centered, hence Contains), starting from the very first foreground line.
+	for i := 0; i < canvasH; i++ {
+		if !strings.Contains(outLines[i], fgLines[i]) {
+			t.Fatalf("output line %d = %q, want it to contain foreground line %d %q (top-anchored)", i, outLines[i], i, fgLines[i])
+		}
+	}
+}
