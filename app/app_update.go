@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ZviBaratz/atrium/actions"
+	"github.com/ZviBaratz/atrium/internal/actions"
 	"github.com/ZviBaratz/atrium/keys"
 	"github.com/ZviBaratz/atrium/log"
 	"github.com/ZviBaratz/atrium/session"

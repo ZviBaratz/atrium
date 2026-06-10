@@ -5,8 +5,8 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/ZviBaratz/atrium/actions"
 	"github.com/ZviBaratz/atrium/config"
+	"github.com/ZviBaratz/atrium/internal/actions"
 	"github.com/ZviBaratz/atrium/session"
 	"github.com/ZviBaratz/atrium/ui"
 
