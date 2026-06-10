@@ -6,12 +6,14 @@ import (
 	"testing"
 )
 
-// SandboxHomeMain points HOME at a throwaway temp directory for the duration of a
-// package's tests, then runs them. This keeps tests from reading or writing the
-// developer's real Atrium data directory (~/.atrium or a legacy ~/.claude-squad)
-// and — because the tmux socket name derives from config.RuntimeName, which is
-// resolved from HOME — keeps real-tmux tests on an isolated "atrium" socket
-// instead of the user's live "claudesquad" sessions.
+// SandboxHomeMain points HOME at a throwaway temp directory (and unsets
+// CLAUDE_CONFIG_DIR, which outranks HOME in transcript-root resolution) for the
+// duration of a package's tests, then runs them. This keeps tests from reading
+// or writing the developer's real Atrium data directory (~/.atrium or a legacy
+// ~/.claude-squad) or Claude Code config, and — because the tmux socket name
+// derives from config.RuntimeName, which is resolved from HOME — keeps
+// real-tmux tests on an isolated "atrium" socket instead of the user's live
+// "claudesquad" sessions.
 //
 // Use it from a package's TestMain:
 //
