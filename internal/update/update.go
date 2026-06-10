@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"time"
 
 	"github.com/ZviBaratz/atrium/log"
@@ -50,7 +51,14 @@ func realCheck(ctx context.Context, current string) (*Release, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to query the latest release: %w", err)
 	}
-	if !found || latest.LessOrEqual(current) {
+	if !found {
+		// Finding no release at all is a failure, not "up to date": a release
+		// build always finds at least its own published release, so this means
+		// the platform's asset is missing or the release pipeline broke. The
+		// CLI must report it (exit 1), not claim the binary is current.
+		return nil, fmt.Errorf("no release found for %s/%s", runtime.GOOS, runtime.GOARCH)
+	}
+	if latest.LessOrEqual(current) {
 		return nil, nil
 	}
 	return &Release{Version: latest.Version(), updater: updater, release: latest}, nil
