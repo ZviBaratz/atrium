@@ -1,0 +1,48 @@
+// app/open.go
+package app
+
+import (
+	"fmt"
+	"os/exec"
+	"runtime"
+)
+
+// openInBrowser launches the user's opener on a URL, detached from the TUI —
+// never via tea.Exec, because the browser doesn't need the terminal. Package
+// var so tests can substitute a fake (same pattern as copyToClipboard).
+var openInBrowser = openDetached
+
+// linuxOpeners are tried in order on non-darwin systems; wslview (from wslu)
+// covers WSL, where xdg-open is typically absent.
+var linuxOpeners = []string{"xdg-open", "x-www-browser", "wslview"}
+
+// chooseOpener picks the opener command for goos using lookPath. Split out
+// and parameterized so the selection logic is testable without the host's
+// actual binaries.
+func chooseOpener(goos string, lookPath func(string) (string, error)) (string, error) {
+	if goos == "darwin" {
+		return "open", nil
+	}
+	for _, c := range linuxOpeners {
+		if _, err := lookPath(c); err == nil {
+			return c, nil
+		}
+	}
+	return "", fmt.Errorf("no URL opener found (tried %v)", linuxOpeners)
+}
+
+// openDetached starts the opener and reaps it in the background. A failure to
+// start surfaces to the caller; the opener's own exit status does not — by
+// then the TUI has moved on and the browser owns the outcome.
+func openDetached(target string) error {
+	opener, err := chooseOpener(runtime.GOOS, exec.LookPath)
+	if err != nil {
+		return err
+	}
+	cmd := exec.Command(opener, target)
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	go func() { _ = cmd.Wait() }()
+	return nil
+}
