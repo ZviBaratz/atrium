@@ -98,7 +98,16 @@ type Session struct {
 	// the metadata poll loop reads sanitizedName from a background goroutine. Rename holds
 	// the write lock across its rename-session subprocess and the field swap, so a reader
 	// never observes the brief window where the old session name no longer exists.
+	// It also guards the paneID/paneIDTried cache below.
 	mu sync.RWMutex
+	// paneID caches the agent pane's immutable tmux id (%N) so pane reads
+	// (capture-pane) and keystroke writes (send-keys) target the agent's pane,
+	// never whatever pane happens to be active. Empty after a failed resolution
+	// — paneTarget then falls back to the session name. paneIDTried makes
+	// resolution once-per-generation; both are reset by resetPaneID where the
+	// session is created or killed.
+	paneID      string
+	paneIDTried bool
 	// Initialized by NewSession
 	//
 	// The name of the tmux session and the sanitized name used for tmux commands.
@@ -314,6 +323,10 @@ func (t *Session) start(workDir string, program string) error {
 		return fmt.Errorf("tmux session already exists: %s", t.sanitizedName)
 	}
 
+	// A fresh tmux session means a fresh agent pane; drop any id cached from a
+	// previous generation (pause → resume reuses this Session object).
+	t.resetPaneID()
+
 	// Inject the authoritative status hooks for claude (a no-op for other agents or when
 	// --settings is unsupported). The settings path is appended to the launch command only;
 	// t.program (the persisted value) is never mutated. A failure here just disables hooks —
@@ -515,28 +528,43 @@ func (m *statusMonitor) hash(s string) []byte {
 	return h.Sum(nil)
 }
 
-// TapEnter sends an enter keystroke to the tmux pane.
+// TapEnter sends an enter keystroke to the agent pane.
 func (t *Session) TapEnter() error {
-	_, err := t.ptmx.Write([]byte{0x0D})
-	if err != nil {
-		return fmt.Errorf("error sending enter keystroke to PTY: %w", err)
+	if err := t.sendKeysToPane("Enter"); err != nil {
+		return fmt.Errorf("error sending enter keystroke to tmux pane: %w", err)
 	}
 	return nil
 }
 
-// TapDAndEnter sends 'D' followed by an enter keystroke to the tmux pane.
+// TapDAndEnter sends 'D' followed by an enter keystroke to the agent pane.
 func (t *Session) TapDAndEnter() error {
-	_, err := t.ptmx.Write([]byte{0x44, 0x0D})
-	if err != nil {
-		return fmt.Errorf("error sending enter keystroke to PTY: %w", err)
+	if err := t.sendKeysToPane("D", "Enter"); err != nil {
+		return fmt.Errorf("error sending D+enter keystrokes to tmux pane: %w", err)
 	}
 	return nil
 }
 
-// SendKeys writes raw bytes to the session's pty, as if the user typed them.
+// SendKeys types text into the agent pane, as if the user typed it. -l sends
+// the bytes literally (never interpreted as tmux key names); -- guards text
+// that starts with a dash.
 func (t *Session) SendKeys(keys string) error {
-	_, err := t.ptmx.Write([]byte(keys))
-	return err
+	if keys == "" {
+		return nil
+	}
+	return t.sendKeysToPane("-l", "--", keys)
+}
+
+// sendKeysToPane runs send-keys against the agent pane (paneTarget), never by
+// writing to the attach client's pty: tmux routes client input to the *active*
+// pane of the session's current window — the same resolution that made
+// session-name captures unsafe — so a split opened while attached would
+// swallow autoyes Enter taps and queued prompts. An explicit pane target also
+// works without any attach client.
+func (t *Session) sendKeysToPane(keys ...string) error {
+	ctx, cancel := t.opContext()
+	defer cancel()
+	args := append([]string{"send-keys", "-t", t.paneTarget()}, keys...)
+	return t.cmdExec.Run(tmuxCommand(ctx, args...))
 }
 
 // Poll classifies the current pane into a PaneState. It reads level signals (a prompt
@@ -973,6 +1001,9 @@ func (t *Session) Close() error {
 	// Remove the per-session status-hook artifacts; harmless if the session never had any.
 	cleanupHookSession(t.snapshotName())
 
+	// The pane dies with the session; a resumed session must re-resolve.
+	t.resetPaneID()
+
 	var errs []error
 
 	if t.ptmx != nil {
@@ -1055,7 +1086,7 @@ func (t *Session) CapturePaneContent() (string, error) {
 	ctx, cancel := t.opContext()
 	defer cancel()
 	// Add -e flag to preserve escape sequences (ANSI color codes)
-	cmd := tmuxCommand(ctx, "capture-pane", "-p", "-e", "-J", "-t", t.snapshotName())
+	cmd := tmuxCommand(ctx, "capture-pane", "-p", "-e", "-J", "-t", t.paneTarget())
 	output, err := t.cmdExec.Output(cmd)
 	if err != nil {
 		return "", fmt.Errorf("error capturing pane content: %w", err)
@@ -1069,7 +1100,7 @@ func (t *Session) CapturePaneContentWithOptions(start, end string) (string, erro
 	ctx, cancel := t.opContext()
 	defer cancel()
 	// Add -e flag to preserve escape sequences (ANSI color codes)
-	cmd := tmuxCommand(ctx, "capture-pane", "-p", "-e", "-J", "-S", start, "-E", end, "-t", t.snapshotName())
+	cmd := tmuxCommand(ctx, "capture-pane", "-p", "-e", "-J", "-S", start, "-E", end, "-t", t.paneTarget())
 	output, err := t.cmdExec.Output(cmd)
 	if err != nil {
 		return "", fmt.Errorf("failed to capture tmux pane content with options: %w", err)
