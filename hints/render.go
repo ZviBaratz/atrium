@@ -1,0 +1,78 @@
+// hints/render.go
+package hints
+
+import (
+	"sort"
+	"strings"
+
+	"github.com/charmbracelet/lipgloss"
+)
+
+// Styles carries the three roles hint rendering needs. The caller builds them
+// from the active theme so this package stays theme-agnostic (and tests can
+// pass zero values for plain-text output).
+type Styles struct {
+	// Backdrop dims all non-match text.
+	Backdrop lipgloss.Style
+	// Match highlights matched text after its label.
+	Match lipgloss.Style
+	// Label renders the hint characters themselves.
+	Label lipgloss.Style
+}
+
+// Render draws the frozen screen with hint decorations: every line dimmed,
+// matches highlighted, each match's first cells overlaid with its label.
+// typed is the already-entered (lowercased) prefix: labels that no longer
+// match it lose their decoration; matching labels show only their remaining
+// suffix, keeping the next keys to type in front of the user.
+//
+// Splicing happens at rune indices into the same rune slice the line came
+// from, so alignment is self-consistent: the output is exactly the original
+// runes with some replaced by ASCII label characters. (All pattern matches
+// are ASCII, so the replaced cells are single-width.)
+func (s *Screen) Render(typed string, st Styles) string {
+	byRow := make(map[int][]Match)
+	for _, m := range s.matches {
+		byRow[m.Row] = append(byRow[m.Row], m)
+	}
+	out := make([]string, len(s.lines))
+	for row, line := range s.lines {
+		ms := byRow[row]
+		sort.Slice(ms, func(i, j int) bool { return ms[i].Col < ms[j].Col })
+		out[row] = renderLine(line, ms, typed, st)
+	}
+	return strings.Join(out, "\n")
+}
+
+func renderLine(line string, ms []Match, typed string, st Styles) string {
+	runes := []rune(line)
+	var b strings.Builder
+	pos := 0
+	for _, m := range ms {
+		if m.Col < pos || m.Col > len(runes) {
+			continue // overlap or out of range: keep the earlier match
+		}
+		b.WriteString(st.Backdrop.Render(string(runes[pos:m.Col])))
+		end := m.Col + len([]rune(m.Text))
+		if end > len(runes) {
+			end = len(runes)
+		}
+		if !strings.HasPrefix(m.Label, typed) {
+			// Filtered out by the typed prefix: back to plain backdrop.
+			b.WriteString(st.Backdrop.Render(string(runes[m.Col:end])))
+			pos = end
+			continue
+		}
+		suffix := m.Label[len(typed):]
+		if n := end - m.Col; len(suffix) > n {
+			suffix = suffix[:n]
+		}
+		b.WriteString(st.Label.Render(suffix))
+		b.WriteString(st.Match.Render(string(runes[m.Col+len(suffix) : end])))
+		pos = end
+	}
+	if pos < len(runes) {
+		b.WriteString(st.Backdrop.Render(string(runes[pos:])))
+	}
+	return b.String()
+}
