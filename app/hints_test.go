@@ -213,6 +213,24 @@ func TestHints_TwoCharNarrowing(t *testing.T) {
 		"label na = 26th from the bottom = row 1")
 }
 
+// If the pane drops the overlay out from under the state machine (owner
+// paused externally, or any future drop vector), the next key must
+// self-heal — exit instead of copying from a stale frozen screen.
+func TestHints_StaleStateSelfHeals(t *testing.T) {
+	h := newHintsHome(t, newBranchInstance(t, "a", "b1"))
+	inst := h.list.GetSelectedInstance()
+	fc := withFakeClipboard(t, nil)
+
+	_, _ = h.startHints(inst, "see /tmp/x.go\n")
+	require.Equal(t, stateHints, h.state)
+	h.tabbedWindow.ClearPreviewHintOverlay() // simulate an external drop
+
+	pressRunes(h, "a")
+
+	assert.Equal(t, stateDefault, h.state)
+	assert.False(t, fc.called, "a stale hint screen must not be acted on")
+}
+
 // A resize invalidates the frozen geometry: exit hint mode.
 func TestHints_ResizeExits(t *testing.T) {
 	h := newHintsHome(t, newBranchInstance(t, "a", "b1"))

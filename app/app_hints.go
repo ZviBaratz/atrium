@@ -26,6 +26,7 @@ func hintStyles() hints.Styles {
 	return hints.Styles{
 		Backdrop: t.DimStyle(),
 		Match:    t.SuccessStyle(),
+		MatchURL: t.SuccessStyle().Underline(true),
 		Label:    t.AttentionStyle().Reverse(true).Bold(true),
 	}
 }
@@ -86,6 +87,14 @@ func (m *home) exitHintMode() {
 // narrow toward a match, anything else exits. An uppercase hint character
 // selects the copy+open variant.
 func (m *home) handleHintsState(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if !m.tabbedWindow.InPreviewHintMode() {
+		// The pane dropped the overlay out from under us (owner paused or
+		// replaced between keys); self-heal instead of acting on a stale
+		// frozen screen. Normally previewTickMsg catches this within 100ms —
+		// this guard closes the window in between.
+		m.exitHintMode()
+		return m, m.instanceChanged()
+	}
 	if msg.Type != tea.KeyRunes || len(msg.Runes) != 1 {
 		m.exitHintMode()
 		return m, m.instanceChanged()

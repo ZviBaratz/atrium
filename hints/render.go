@@ -15,6 +15,10 @@ type Styles struct {
 	Backdrop lipgloss.Style
 	// Match highlights matched text after its label.
 	Match lipgloss.Style
+	// MatchURL highlights KindURL matches instead of Match — the app
+	// underlines them so openable hints are visible before any key is
+	// pressed. The zero value renders plain, same as Match's.
+	MatchURL lipgloss.Style
 	// Label renders the hint characters themselves.
 	Label lipgloss.Style
 }
@@ -68,8 +72,12 @@ func renderLine(line string, ms []Match, typed string, st Styles) string {
 		if n := end - m.Col; len(suffix) > n {
 			suffix = suffix[:n]
 		}
+		matchStyle := st.Match
+		if m.Kind == KindURL {
+			matchStyle = st.MatchURL
+		}
 		b.WriteString(st.Label.Render(suffix))
-		b.WriteString(st.Match.Render(string(runes[m.Col+len(suffix) : end])))
+		b.WriteString(matchStyle.Render(string(runes[m.Col+len(suffix) : end])))
 		pos = end
 	}
 	if pos < len(runes) {

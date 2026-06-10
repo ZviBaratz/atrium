@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/charmbracelet/lipgloss"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -45,6 +46,20 @@ func TestRender_TypedPrefixNarrows(t *testing.T) {
 	// Every other row's label no longer matches the prefix: plain text again.
 	assert.Equal(t, "/dir/file02", rows[2])
 	assert.Equal(t, "/dir/file26", rows[26])
+}
+
+// URL matches render through MatchURL (underlined by the app) so the user
+// can see which hints the open variant works on before pressing uppercase.
+// Transform-based styles make the routing observable without depending on
+// the terminal color profile.
+func TestRender_URLMatchesUseURLStyle(t *testing.T) {
+	st := Styles{MatchURL: lipgloss.NewStyle().Transform(strings.ToUpper)}
+	s := NewScreen("x https://e.com/a y\n/tmp/path.go", 80, 10)
+	out := s.Render("", st)
+	assert.Contains(t, out, "TTPS://E.COM/A",
+		"URL text (after its label rune) must go through MatchURL")
+	assert.Contains(t, out, "tmp/path.go",
+		"non-URL matches keep the plain Match style")
 }
 
 // Lines with no matches are passed through verbatim (modulo styling).
