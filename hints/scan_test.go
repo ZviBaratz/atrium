@@ -132,6 +132,59 @@ func TestScan_Patterns(t *testing.T) {
 			expected: []string{"session/instance.go"},
 			kinds:    []Kind{KindPath},
 		},
+		{
+			// Prose word-pairs ("copied/opened", "ssh/git", "CJK/emoji",
+			// "timestamps/PR") are slashes in English, not filesystem
+			// locations — they flooded the first smoke test with hints.
+			name:     "prose word-pair is not a path",
+			line:     "fed into the copied/opened text via ssh/git pairs",
+			expected: nil,
+			kinds:    nil,
+		},
+		{
+			name:     "bare module-ish pair without a signal is not a path",
+			line:     "delegates to x/ansi internals",
+			expected: nil,
+			kinds:    nil,
+		},
+		{
+			// Sentence-final punctuation must be trimmed BEFORE validation,
+			// or the trailing dot would count as a filesystem signal.
+			name:     "sentence-final word-pair stays rejected",
+			line:     "raw bytes reached the copied/opened. Next",
+			expected: nil,
+			kinds:    nil,
+		},
+		{
+			name:     "branch name with hyphen is a path",
+			line:     "pushed to zvi/copy-pasting now",
+			expected: []string{"zvi/copy-pasting"},
+			kinds:    []Kind{KindPath},
+		},
+		{
+			name:     "two slashes of depth are a path",
+			line:     "built src/app/main today",
+			expected: []string{"src/app/main"},
+			kinds:    []Kind{KindPath},
+		},
+		{
+			name:     "line-number suffix is a path signal",
+			line:     "failed at pkg/util:42 today",
+			expected: []string{"pkg/util:42"},
+			kinds:    []Kind{KindPath},
+		},
+		{
+			name:     "tilde prefix is a path",
+			line:     "installed to ~/bin/atrium ok",
+			expected: []string{"~/bin/atrium"},
+			kinds:    []Kind{KindPath},
+		},
+		{
+			name:     "multi-slash date is still not a path",
+			line:     "dated 2024/06/15 ok",
+			expected: nil,
+			kinds:    nil,
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

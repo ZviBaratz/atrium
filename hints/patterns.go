@@ -56,14 +56,28 @@ func shaLike(text string) bool {
 	return strings.ContainsAny(text, "0123456789") && strings.ContainsAny(text, "abcdef")
 }
 
-// digitFraction is a relative all-numeric "path" — dates and progress
+// digitFraction is an all-numeric "path" — dates ("2024/06/15") and progress
 // fractions ("10/25") rather than filesystem locations.
 var digitFraction = regexp.MustCompile(`^\d+(/\d+)+$`)
 
-// pathLike keeps absolute paths unconditionally and rejects relative
-// digit-only fractions.
+// lineSuffix is a trailing :line(:col) location, a strong path signal.
+var lineSuffix = regexp.MustCompile(`:\d+(:\d+)?$`)
+
+// pathLike separates filesystem paths from prose that happens to contain a
+// slash. Anchored prefixes (/, ./, ~/) are unambiguous; bare relative text
+// ("copied/opened", "ssh/git", "timestamps/PR") needs a filesystem signal
+// English word-pairs lack: an extension dot, a -/_ identifier, depth past
+// one slash, or a :line suffix.
 func pathLike(text string) bool {
-	return strings.HasPrefix(text, "/") || !digitFraction.MatchString(text)
+	if digitFraction.MatchString(text) {
+		return false
+	}
+	if strings.HasPrefix(text, "/") || strings.HasPrefix(text, "./") || strings.HasPrefix(text, "~/") {
+		return true
+	}
+	return strings.ContainsAny(text, "._-") ||
+		strings.Count(text, "/") >= 2 ||
+		lineSuffix.MatchString(text)
 }
 
 // hasURLScheme reports whether text starts like something a URL handler can

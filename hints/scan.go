@@ -71,14 +71,15 @@ func scanLine(line string, row int) []Match {
 			text = line[offset+bestLoc[2*gi] : offset+bestLoc[2*gi+1]]
 			textStart = offset + bestLoc[2*gi]
 		}
-		if p.kind == KindURL {
-			// Sentence-final URLs in logs: the trailing punctuation is prose,
-			// not address.
-			text = strings.TrimRight(text, ".,;:")
-		}
 		// Greedy .+ captures (git-status, diff-path) pick up tmux's
 		// width-padding; padding is never part of the copyable text.
 		text = strings.TrimRight(text, " \t")
+		if p.kind == KindURL || p.kind == KindPath {
+			// Sentence-final URLs/paths in prose: the trailing punctuation is
+			// prose, not address. Trimmed before validate so a sentence dot
+			// ("copied/opened.") can't pass as a filesystem signal.
+			text = strings.TrimRight(text, ".,;:")
+		}
 		kind := p.kind
 		if kind == KindURL && !hasURLScheme(text) {
 			// A markdown link to a relative target must not be browser-opened;
