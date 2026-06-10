@@ -43,6 +43,25 @@ var claude = &Adapter{
 				"No, keep planning",
 				"shift+tab to approve with this feedback",
 			}},
+		// The model-error notice: the API rejected --model X (404 model_not_found,
+		// or the Pro-plan access restriction), strings pinned against the 2.1.170
+		// binary's error mapping. The session stays alive with an idle input box,
+		// so without this it reads as Ready. NoAutoTap: there is nothing to answer
+		// — surface needs-input so the user attaches and fixes it via /model.
+		// Unlike a dismissable dialog this is *transcript* content, so after the
+		// fix it lingers in the bottom window into the start of the next turn
+		// (prompt match precedes the busy marker in Poll); needs-input shows a few
+		// extra seconds until output scrolls it away. Self-healing, nothing tapped.
+		{Name: "model-error", Window: WindowPrompt, NoAutoTap: true,
+			Any: []string{
+				"issue with the selected model (",
+				"is not available with the Claude Pro plan",
+			}},
+		// Auth expiry/revocation: those error messages start "Please run /login ·"
+		// (same 2.1.170 provenance) and the session likewise sits idle-looking.
+		// Same surfacing, nothing to auto-answer; same transcript-lingering note.
+		{Name: "login-error", Window: WindowPrompt, NoAutoTap: true,
+			All: []string{"Please run /login ·"}},
 		// Any interactive selection (AskUserQuestion). A custom
 		// multi-line statusLine can render *below* the key-hint footer — possibly
 		// drawing its own ─── dividers — and push it out of any fixed bottom

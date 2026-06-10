@@ -311,6 +311,32 @@ func TestPollClaudePlanPrompt(t *testing.T) {
 	require.False(t, hasPrompt, "the HasUpdated shim must not report a manual prompt as tappable")
 }
 
+// A session launched with a bad --model stays alive showing claude's error and
+// an idle input box; Poll must surface it as a manual prompt (needs-input),
+// never auto-tap — there is nothing for autoyes to answer. Pane content mirrors
+// a live 2.1.170 capture (see agent.TestClaudeModelErrorPrompt).
+func TestPollClaudeModelError(t *testing.T) {
+	pane := strings.Join([]string{
+		"❯ say hi",
+		"",
+		"● There's an issue with the selected model (atrium-bogus-model-check). It may not exist or you may",
+		"  not have access to it. Run /model to pick a different model.",
+		"",
+		"✻ Cogitated for 0s",
+		"",
+		strings.Repeat("─", 100),
+		"❯ ",
+		strings.Repeat("─", 100),
+		"  ⏵⏵ auto mode on (shift+tab to cycle) · ← for agents",
+	}, "\n")
+	c := pane
+	s := pollSession(t, "claude", &c, nil)
+	require.Equal(t, PanePromptManual, s.Poll(), "a bad-model launch must surface as needs-input")
+
+	_, hasPrompt := s.HasUpdated()
+	require.False(t, hasPrompt, "the HasUpdated shim must not report a manual prompt as tappable")
+}
+
 // A custom Claude Code statusLine renders below the selection-prompt footer (captured live:
 // the overlay draws a horizontal rule, then "6. Chat about this", the key-hint footer, blank
 // padding, and finally the user's multi-line statusLine). The footer is then several non-empty

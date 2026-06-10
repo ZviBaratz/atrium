@@ -177,6 +177,82 @@ func TestClaudePlanPrompt(t *testing.T) {
 	require.False(t, ok, "a transcript mention must not match")
 }
 
+// claudeModelErrorPane is a live bad-model launch captured from claude 2.1.170
+// (tmux capture-pane after `claude --model atrium-bogus-model-check` + a first
+// prompt, 2026-06-10). The session stays alive with an idle input box — without
+// the model-error matcher this pane classifies as idle, hiding the failure.
+var claudeModelErrorPane = strings.Join([]string{
+	" ⚠ 1 setup issue: MCP · /doctor",
+	"",
+	"❯ say hi",
+	"",
+	"● There's an issue with the selected model (atrium-bogus-model-check). It may not exist or you may",
+	"  not have access to it. Run /model to pick a different model.",
+	"",
+	"✻ Cogitated for 0s",
+	"",
+	"────────────────────────────────────────────────────────────────────────────────────────────────────",
+	"❯ ",
+	"────────────────────────────────────────────────────────────────────────────────────────────────────",
+	"  ⏵⏵ auto mode on (shift+tab to cycle) · ← for agents                         Remote Control active",
+}, "\n")
+
+// TestClaudeModelErrorPrompt pins the model-error matcher against the live pane
+// (the launched session is the model-name validator — Atrium deliberately has
+// no allowlist) plus the binary's Pro-plan access variant, and proves NoAutoTap:
+// there is nothing for autoyes to answer.
+func TestClaudeModelErrorPrompt(t *testing.T) {
+	m, ok := claude.DetectPrompt(claudeModelErrorPane)
+	require.True(t, ok, "the live bad-model pane must be detected")
+	require.Equal(t, "model-error", m.Name)
+	require.True(t, m.NoAutoTap)
+
+	// The 2.1.170 binary's access-restriction variant (400 invalid model name on
+	// a Pro plan) must match too.
+	m, ok = claude.DetectPrompt("● Claude Opus is not available with the Claude Pro plan. " +
+		"If you have updated your subscription plan recently, run /logout and /login " +
+		"for the plan to take effect.\n\n❯ ")
+	require.True(t, ok, "the Pro-plan variant must match")
+	require.Equal(t, "model-error", m.Name)
+	require.True(t, m.NoAutoTap)
+
+	// The message hard-wrapped at a narrow width must survive flattening.
+	m, ok = claude.DetectPrompt("● There's an issue with the selected\n" +
+		"  model (bogus). It may not exist or\n  you may not have access to it.\n❯ ")
+	require.True(t, ok, "narrow-pane wrap must still match")
+	require.Equal(t, "model-error", m.Name)
+
+	// The same text scrolled above WindowPrompt non-empty lines must not match.
+	_, ok = claude.DetectPrompt("There's an issue with the selected model (bogus).\n" +
+		strings.Repeat("a transcript line\n", WindowPrompt) +
+		"❯ ")
+	require.False(t, ok, "a scrolled-away error must not match")
+}
+
+// TestClaudeLoginErrorPrompt pins the auth-expiry matcher. Fixture constructed
+// from the 2.1.170 binary's literal message prefix ("Please run /login · API
+// Error: …" — mE() in its error mapping); a live capture would require a
+// revoked token. NoAutoTap: tapping Enter cannot re-authenticate.
+func TestClaudeLoginErrorPrompt(t *testing.T) {
+	m, ok := claude.DetectPrompt(strings.Join([]string{
+		"❯ continue",
+		"",
+		"● Please run /login · API Error: 401 OAuth token has expired",
+		"",
+		"────────────────────────────────────",
+		"❯ ",
+		"────────────────────────────────────",
+		"  ⏵⏵ auto mode on (shift+tab to cycle)",
+	}, "\n"))
+	require.True(t, ok, "the auth-expiry pane must be detected")
+	require.Equal(t, "login-error", m.Name)
+	require.True(t, m.NoAutoTap)
+
+	// Prose merely mentioning /login (no middle-dot prefix) must not match.
+	_, ok = claude.DetectPrompt("  You could run /login to switch accounts.\n❯ ")
+	require.False(t, ok, "a prose mention of /login must not match")
+}
+
 func TestClaudeGate(t *testing.T) {
 	g, ok := claude.GateUp("Do you trust the files in this folder?\n  1. Yes, proceed")
 	require.True(t, ok)
