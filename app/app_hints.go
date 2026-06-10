@@ -11,6 +11,7 @@ import (
 	"unicode"
 
 	"github.com/ZviBaratz/atrium/hints"
+	"github.com/ZviBaratz/atrium/internal/actions"
 	"github.com/ZviBaratz/atrium/session"
 	"github.com/ZviBaratz/atrium/ui"
 	"github.com/ZviBaratz/atrium/ui/theme"
@@ -130,11 +131,11 @@ func (m *home) handleHintsState(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 // actHint copies the match and, on the open variant, opens URLs in the
 // browser. Non-URL kinds degrade to plain copy in v1 (see the design doc).
 func (m *home) actHint(match hints.Match, open bool) tea.Cmd {
-	if err := copyToClipboard(match.Text); err != nil {
+	if err := actions.CopyToClipboard(match.Text); err != nil {
 		return m.handleError(fmt.Errorf("copy hint: %w", err))
 	}
-	if open && match.Kind == hints.KindURL && openableURL(match.Text) {
-		if err := openInBrowser(match.Text); err != nil {
+	if open && match.Kind == hints.KindURL && actions.OpenableURL(match.Text) {
+		if err := actions.OpenInBrowser(match.Text); err != nil {
 			return m.handleError(fmt.Errorf("open url: %w", err))
 		}
 		return m.handleInfoNotice(fmt.Sprintf("copied + opened %s", truncateForNotice(match.Text)))
