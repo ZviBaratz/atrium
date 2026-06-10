@@ -44,3 +44,22 @@ func TestOpenDetached_RejectsFlagLikeTarget(t *testing.T) {
 	assert.Error(t, openDetached("-evil"))
 	assert.Error(t, openDetached("--new-window=https://x"))
 }
+
+// Control bytes in a target mean an escape-stripping gap upstream; refuse to
+// hand them to the opener rather than launching something mangled (the PR #97
+// smoke test opened ...pull/97%1B/#97%1B]8;;%1B).
+func TestOpenDetached_RejectsControlBytes(t *testing.T) {
+	assert.Error(t, openDetached("https://x.com/\x1b]8;;\x1b\\"))
+	assert.Error(t, openDetached("https://x.com/a\nb"))
+}
+
+// Only web/file URLs are worth handing to a browser opener; ssh/git URLs and
+// scp-style remotes open nothing useful and must degrade to copy upstream.
+func TestOpenableURL(t *testing.T) {
+	assert.True(t, openableURL("https://github.com/x/pull/9"))
+	assert.True(t, openableURL("http://localhost:8080"))
+	assert.True(t, openableURL("file:///tmp/report.html"))
+	assert.False(t, openableURL("ssh://host/repo"))
+	assert.False(t, openableURL("git@github.com:x/y.git"))
+	assert.False(t, openableURL("/tmp/notes.md"))
+}

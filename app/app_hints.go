@@ -124,7 +124,7 @@ func (m *home) actHint(match hints.Match, open bool) tea.Cmd {
 	if err := copyToClipboard(match.Text); err != nil {
 		return m.handleError(fmt.Errorf("copy hint: %w", err))
 	}
-	if open && match.Kind == hints.KindURL {
+	if open && match.Kind == hints.KindURL && openableURL(match.Text) {
 		if err := openInBrowser(match.Text); err != nil {
 			return m.handleError(fmt.Errorf("open url: %w", err))
 		}

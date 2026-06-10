@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"runtime"
 	"strings"
+	"unicode"
 )
 
 // openInBrowser launches the user's opener on a URL, detached from the TUI —
@@ -32,6 +33,15 @@ func chooseOpener(goos string, lookPath func(string) (string, error)) (string, e
 	return "", fmt.Errorf("no URL opener found (tried %v)", linuxOpeners)
 }
 
+// openableURL reports whether target is worth handing to a browser opener:
+// web pages and local files open something useful; ssh/git URLs and
+// scp-style remotes do not, so their hints degrade to copy upstream.
+func openableURL(target string) bool {
+	return strings.HasPrefix(target, "http://") ||
+		strings.HasPrefix(target, "https://") ||
+		strings.HasPrefix(target, "file://")
+}
+
 // openDetached starts the opener and reaps it in the background. A failure to
 // start surfaces to the caller; the opener's own exit status does not — by
 // then the TUI has moved on and the browser owns the outcome.
@@ -40,6 +50,11 @@ func openDetached(target string) error {
 	// otherwise smuggle a flag into the opener's argv.
 	if strings.HasPrefix(target, "-") {
 		return fmt.Errorf("refusing to open %q: looks like a flag, not a URL", target)
+	}
+	// A control byte means an escape-stripping gap upstream; refuse rather
+	// than launch something mangled.
+	if strings.ContainsFunc(target, unicode.IsControl) {
+		return fmt.Errorf("refusing to open %q: contains control bytes", target)
 	}
 	opener, err := chooseOpener(runtime.GOOS, exec.LookPath)
 	if err != nil {

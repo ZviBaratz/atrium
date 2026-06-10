@@ -32,8 +32,11 @@ type pattern struct {
 // match at the same column, the earlier entry wins (url beats path, uuid
 // beats sha). Regexes follow tmux-fingers/tmux-thumbs, adapted to RE2.
 var builtinPatterns = []pattern{
-	{name: "markdown-url", re: regexp.MustCompile(`\[[^]]*\]\((?P<match>[^)]+)\)`), kind: KindURL},
-	{name: "url", re: regexp.MustCompile(`(?P<match>(https?://|git://|ssh://|ftp://|file:///)[^\s()"']+|git@[^\s()"']+)`), kind: KindURL},
+	// The negated classes exclude control bytes (\x00-\x1f, \x7f) on top of
+	// their structural delimiters: scanners normally see stripped text, but a
+	// stripping gap must not let ESC residue into copyable text again.
+	{name: "markdown-url", re: regexp.MustCompile(`\[[^]]*\]\((?P<match>[^)\x00-\x1f\x7f]+)\)`), kind: KindURL},
+	{name: "url", re: regexp.MustCompile(`(?P<match>(https?://|git://|ssh://|ftp://|file:///)[^\s()"'\x00-\x1f\x7f]+|git@[^\s()"'\x00-\x1f\x7f]+)`), kind: KindURL},
 	{name: "diff-path", re: regexp.MustCompile(`(---|\+\+\+) [ab]/(?P<match>.+)`), kind: KindPath},
 	{name: "git-status", re: regexp.MustCompile(`(modified|deleted|new file): +(?P<match>.+)`), kind: KindPath},
 	{name: "path", re: regexp.MustCompile(`(?P<match>([.\w\-@~]+)?(/[.\w\-@]+)+(:\d+(:\d+)?)?)`), kind: KindPath, validate: pathLike},

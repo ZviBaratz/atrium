@@ -161,6 +161,18 @@ func TestStripANSI(t *testing.T) {
 	assert.Equal(t, "red /tmp/a", StripANSI(in))
 }
 
+// Defense-in-depth: even if unstripped input ever reaches the scanner (a
+// future stripping gap), the permissive url/markdown char classes must not
+// swallow ESC bytes into the copyable text.
+func TestScan_ControlBytesNeverInMatchText(t *testing.T) {
+	raw := "PR \x1b]8;;https://e.com/a\x1b\\https://e.com/a\x1b]8;;\x1b\\ " +
+		"[x](\x1b]8;;https://e.com/b\x1b\\b\x1b]8;;\x1b\\)"
+	for _, m := range Scan(raw) {
+		assert.NotContains(t, m.Text, "\x1b", "match %q", m.Text)
+		assert.NotContains(t, m.Text, "\x07", "match %q", m.Text)
+	}
+}
+
 // tmux >= 3.4 re-emits OSC 8 hyperlinks in capture-pane -e, and Claude Code
 // wraps every URL it prints in one. The whole sequence — params, target, and
 // both terminators — must vanish, leaving only the visible text; the leaked

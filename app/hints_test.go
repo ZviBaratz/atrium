@@ -128,6 +128,22 @@ func TestHints_UppercaseOpensURL(t *testing.T) {
 	assert.Equal(t, "https://github.com/x/y/pull/9", fo.target)
 }
 
+// Uppercase on a URL the browser can't usefully open (ssh/git/scp-style)
+// degrades to plain copy: xdg-open on git@... is useless-to-surprising.
+func TestHints_UppercaseNonWebURLJustCopies(t *testing.T) {
+	h := newHintsHome(t, newBranchInstance(t, "a", "b1"))
+	inst := h.list.GetSelectedInstance()
+	fc := withFakeClipboard(t, nil)
+	fo := withFakeOpener(t, nil)
+
+	_, _ = h.startHints(inst, "clone git@github.com:x/y.git now\n")
+	pressRunes(h, "A")
+
+	require.True(t, fc.called)
+	assert.Equal(t, "git@github.com:x/y.git", fc.value)
+	assert.False(t, fo.called, "non-web URL must not reach the opener")
+}
+
 // Uppercase on a non-URL degrades to plain copy (v1).
 func TestHints_UppercaseNonURLJustCopies(t *testing.T) {
 	h := newHintsHome(t, newBranchInstance(t, "a", "b1"))
