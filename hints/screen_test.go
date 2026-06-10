@@ -50,6 +50,19 @@ func TestNewScreen_ClipsToGeometry(t *testing.T) {
 		s := NewScreen(pad+" /far/away", 20, 10)
 		assert.Equal(t, 0, s.MatchCount())
 	})
+	// Wide runes (CJK, emoji) occupy two terminal columns but one rune:
+	// clipping must compare display columns, not rune indices, or hints
+	// appear for matches the width truncation already cut off.
+	t.Run("width with wide runes", func(t *testing.T) {
+		wide := strings.Repeat("漢", 10) // 10 runes, 20 columns
+		s := NewScreen(wide+" /far/x", 20, 10)
+		assert.Equal(t, 0, s.MatchCount(),
+			"match at rune 11 but display column 21 is off-pane")
+
+		s = NewScreen(strings.Repeat("漢", 5)+" /near/x", 20, 10)
+		assert.Equal(t, 1, s.MatchCount(),
+			"display column 11 is on-pane")
+	})
 }
 
 // Resolve narrows by typed prefix: full label -> the match; proper prefix ->

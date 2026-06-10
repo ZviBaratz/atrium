@@ -3,6 +3,8 @@ package hints
 import (
 	"sort"
 	"strings"
+
+	"github.com/charmbracelet/x/ansi"
 )
 
 // Screen is one frozen, hinted capture of a preview pane: the stripped
@@ -46,10 +48,12 @@ func NewScreen(raw string, width, rows int) *Screen {
 		matches = append(unlinked, linkMs...)
 	}
 	// A hint must label something the user can see: drop matches whose first
-	// rune is already clipped by the pane's width truncation.
+	// rune is already clipped by the pane's width truncation. Compare display
+	// columns, not rune indices — wide runes (CJK, emoji) occupy two columns
+	// each, so rune index alone undercounts how far right a match sits.
 	visible := matches[:0]
 	for _, m := range matches {
-		if width <= 0 || m.Col < width {
+		if width <= 0 || displayCol(lines[m.Row], m.Col) < width {
 			visible = append(visible, m)
 		}
 	}
@@ -82,6 +86,15 @@ func NewScreen(raw string, width, rows int) *Screen {
 		}
 	}
 	return &Screen{lines: lines, width: width, matches: kept}
+}
+
+// displayCol converts a rune index within line to its terminal column.
+func displayCol(line string, runeIdx int) int {
+	runes := []rune(line)
+	if runeIdx > len(runes) {
+		runeIdx = len(runes)
+	}
+	return ansi.StringWidth(string(runes[:runeIdx]))
 }
 
 // overlapsLink reports whether m's visible range intersects any link span
