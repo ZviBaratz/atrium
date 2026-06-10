@@ -30,39 +30,42 @@ func ValidModelName(s string) bool {
 	return true
 }
 
-// hasModelFlag reports whether program pins a model via `--model value` or
-// `--model=value`. A whole-field comparison, so lookalike flags ("--models-dir",
-// "--model-context") don't count as pins.
-func hasModelFlag(program string) bool {
+// hasFlag reports whether program pins `name value` or `name=value`. A
+// whole-field comparison, so lookalike flags ("--models-dir", "--model-context")
+// don't count as pins.
+func hasFlag(program, name string) bool {
 	for _, f := range strings.Fields(program) {
-		if f == "--model" || strings.HasPrefix(f, "--model=") {
+		if f == name || strings.HasPrefix(f, name+"=") {
 			return true
 		}
 	}
 	return false
 }
 
-// WithModelFlag returns program with `--model model` applied. The common case —
-// no --model present — appends to the string verbatim, preserving any quoting
-// the profile's program carries. When the program already pins a model, the
-// flag is replaced instead of duplicated; that path re-joins strings.Fields
-// output, which collapses quoted multi-word arguments — acceptable, since it
-// only runs for profiles that already embed --model.
-func WithModelFlag(program, model string) string {
-	if !hasModelFlag(program) {
-		return program + " --model " + model
+// withFlag returns program with `name value` applied. The common case — no
+// pin present — appends to the string verbatim, preserving any quoting the
+// profile's program carries. When the program already pins the flag, it is
+// replaced instead of duplicated; that path re-joins strings.Fields output,
+// which collapses quoted multi-word arguments — acceptable, since it only
+// runs for profiles that already embed the flag.
+func withFlag(program, name, value string) string {
+	if !hasFlag(program, name) {
+		return program + " " + name + " " + value
 	}
 	fields := strings.Fields(program)
 	out := make([]string, 0, len(fields))
 	for i := 0; i < len(fields); i++ {
 		switch {
-		case fields[i] == "--model":
+		case fields[i] == name:
 			i++ // drop the flag and its value
-		case strings.HasPrefix(fields[i], "--model="):
+		case strings.HasPrefix(fields[i], name+"="):
 			// drop the combined form
 		default:
 			out = append(out, fields[i])
 		}
 	}
-	return strings.Join(out, " ") + " --model " + model
+	return strings.Join(out, " ") + " " + name + " " + value
 }
+
+// WithModelFlag returns program with `--model model` applied (see withFlag).
+func WithModelFlag(program, model string) string { return withFlag(program, "--model", model) }
