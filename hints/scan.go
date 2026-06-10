@@ -76,10 +76,19 @@ func scanLine(line string, row int) []Match {
 			// not address.
 			text = strings.TrimRight(text, ".,;:")
 		}
-		if text != "" {
+		// Greedy .+ captures (git-status, diff-path) pick up tmux's
+		// width-padding; padding is never part of the copyable text.
+		text = strings.TrimRight(text, " \t")
+		kind := p.kind
+		if kind == KindURL && !hasURLScheme(text) {
+			// A markdown link to a relative target must not be browser-opened;
+			// degrade to a copyable path.
+			kind = KindPath
+		}
+		if text != "" && (p.validate == nil || p.validate(text)) {
 			out = append(out, Match{
 				Text:  text,
-				Kind:  p.kind,
+				Kind:  kind,
 				Row:   row,
 				Col:   utf8.RuneCountInString(line[:textStart]),
 				Width: utf8.RuneCountInString(text),

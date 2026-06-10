@@ -82,6 +82,56 @@ func TestScan_Patterns(t *testing.T) {
 			expected: nil,
 			kinds:    nil,
 		},
+		{
+			// Timestamps, PR numbers, line counts: all-decimal runs would
+			// otherwise flood the overlay with bogus "sha" hints.
+			name:     "all-decimal run is not a sha",
+			line:     "deployed at 20260610 done",
+			expected: nil,
+			kinds:    nil,
+		},
+		{
+			// git-describe suffixes must keep matching (digits + hex letters).
+			name:     "git describe hash is a sha",
+			line:     "version 0.3.0-27-g5441edb",
+			expected: []string{"5441edb"},
+			kinds:    []Kind{KindText},
+		},
+		{
+			// English words spelled entirely in hex letters are not hashes.
+			name:     "pure-letter hex word is not a sha",
+			line:     "it effaced the data",
+			expected: nil,
+			kinds:    nil,
+		},
+		{
+			name:     "date fraction is not a path",
+			line:     "passed 10/25 tests",
+			expected: nil,
+			kinds:    nil,
+		},
+		{
+			name:     "absolute numeric path is kept",
+			line:     "saved to /2024/06",
+			expected: []string{"/2024/06"},
+			kinds:    []Kind{KindPath},
+		},
+		{
+			// A relative markdown target must not be browser-opened: demote
+			// to path so the open variant degrades to copy.
+			name:     "relative markdown link is a path",
+			line:     "see [readme](./README.md)",
+			expected: []string{"./README.md"},
+			kinds:    []Kind{KindPath},
+		},
+		{
+			// tmux pads captured lines to the pane width; the greedy .+
+			// captures must not copy that padding.
+			name:     "trailing padding spaces are trimmed",
+			line:     "        modified:   session/instance.go      ",
+			expected: []string{"session/instance.go"},
+			kinds:    []Kind{KindPath},
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
