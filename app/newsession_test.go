@@ -163,6 +163,9 @@ func TestCreateSessionFromForm_ExplicitPathOnlyAccountIsAccented(t *testing.T) {
 	dir := t.TempDir() // direct (non-git) target → no remote, hermetic
 
 	h := newCreateFormHome(t)
+	// A non-claude program keeps the model stop out of the form, so the Tab path
+	// below (prompt → account) stays two hops; this test is about accounts only.
+	h.appConfig.DefaultProgram = "echo"
 	h.appConfig.ClaudeAccounts = []config.ClaudeAccount{
 		{Name: "personal", ConfigDir: "~/.claude"},                                // catch-all default
 		{Name: "work", ConfigDir: "/w", PathMatches: []string{"/unmatched-xyz/"}}, // path-only; won't auto-route here
@@ -193,6 +196,83 @@ func TestCreateSessionFromForm_ExplicitPathOnlyAccountIsAccented(t *testing.T) {
 	assert.Equal(t, "work", inst.ClaudeAccountName())
 	assert.False(t, inst.ClaudeAccountIsDefault(),
 		"a manually picked path-only account is a real route (accented), not the dim default")
+}
+
+// A model typed into the form's Model field is composed into the persisted program
+// string, so launch, pause/resume, and the daemon all see it with no extra plumbing.
+func TestCreateSessionFromForm_ModelComposedIntoProgram(t *testing.T) {
+	dir := t.TempDir() // direct (non-git) target, hermetic
+
+	h := newCreateFormHome(t)
+	h.program = "claude"
+	h.appConfig.DefaultProgram = "claude" // GetProfiles synthesizes the claude profile
+	h.newSessionPath = dir
+	h.state = statePrompt
+	ov, _ := h.newSessionFormOverlay()
+	h.textInputOverlay = ov
+
+	// Stops: [directory, branch, title, prompt, model, enter] (one profile → no
+	// profile stop; claude → model stop present).
+	ov.FocusTitle()
+	ov.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("feature")})
+	ov.HandleKeyPress(tea.KeyMsg{Type: tea.KeyTab}) // title → prompt
+	ov.HandleKeyPress(tea.KeyMsg{Type: tea.KeyTab}) // prompt → model
+	ov.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("opus")})
+	require.Equal(t, "opus", ov.GetModel())
+
+	require.NotNil(t, h.createSessionFromForm(""))
+
+	inst := h.list.GetSelectedInstance()
+	require.NotNil(t, inst)
+	assert.Equal(t, "claude --model opus", inst.Program)
+}
+
+// A profile program that already pins --model is deduped, not double-flagged.
+func TestCreateSessionFromForm_ModelOverridesProfilePin(t *testing.T) {
+	dir := t.TempDir()
+
+	h := newCreateFormHome(t)
+	h.program = "claude --model haiku"
+	h.appConfig.DefaultProgram = "claude --model haiku"
+	h.newSessionPath = dir
+	h.state = statePrompt
+	ov, _ := h.newSessionFormOverlay()
+	h.textInputOverlay = ov
+
+	ov.FocusTitle()
+	ov.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("feature")})
+	ov.HandleKeyPress(tea.KeyMsg{Type: tea.KeyTab})
+	ov.HandleKeyPress(tea.KeyMsg{Type: tea.KeyTab})
+	ov.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("opus")})
+
+	require.NotNil(t, h.createSessionFromForm(""))
+
+	inst := h.list.GetSelectedInstance()
+	require.NotNil(t, inst)
+	assert.Equal(t, "claude --model opus", inst.Program)
+}
+
+// A non-claude program gets no model plumbing at all: the field is absent from the
+// form and the program string passes through untouched.
+func TestCreateSessionFromForm_NonClaudeProgramUntouched(t *testing.T) {
+	dir := t.TempDir()
+
+	h := newCreateFormHome(t) // program "echo", DefaultProgram default
+	h.appConfig.DefaultProgram = "echo"
+	h.newSessionPath = dir
+	h.state = statePrompt
+	ov, _ := h.newSessionFormOverlay()
+	h.textInputOverlay = ov
+
+	ov.FocusTitle()
+	ov.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("feature")})
+	require.Equal(t, "", ov.GetModel(), "a non-claude form must expose no model override")
+
+	require.NotNil(t, h.createSessionFromForm(""))
+
+	inst := h.list.GetSelectedInstance()
+	require.NotNil(t, inst)
+	assert.Equal(t, "echo", inst.Program)
 }
 
 // An empty title keeps the form open (cleared submit flag) and surfaces an error rather

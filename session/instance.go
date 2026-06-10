@@ -749,17 +749,6 @@ func (i *Instance) Preview() (string, error) {
 	return ts.CapturePaneContent()
 }
 
-// HasUpdated reports whether the pane content changed since the last check and
-// whether the pane is currently showing a y/n prompt (see tmux.HasUpdated).
-// The daemon uses the prompt signal to decide when to tap Enter.
-func (i *Instance) HasUpdated() (updated bool, hasPrompt bool) {
-	ts := i.tmux()
-	if !i.isStarted() || ts == nil {
-		return false, false
-	}
-	return ts.HasUpdated()
-}
-
 // Poll classifies the agent's current pane state. Returns PaneUnknown for a not-yet-started
 // instance so callers leave its status untouched.
 func (i *Instance) Poll() tmux.PaneState {

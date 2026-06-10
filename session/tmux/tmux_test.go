@@ -285,6 +285,32 @@ func TestPollClaudeSelectionPrompt(t *testing.T) {
 	}
 }
 
+// The plan-approval dialog classifies as PanePromptManual — its auto-answer is
+// destructive (Enter accepts the plan AND enables auto mode), so autoyes paths
+// must surface it instead of tapping. The HasUpdated shim's hasPrompt must stay
+// false for it: the daemon's legacy tap path keyed on that bit, so excluding the
+// manual state there is the fail-safe for any caller not yet switched to Poll.
+// Pane content mirrors a live 2.1.170 capture (see agent.TestClaudePlanPrompt).
+func TestPollClaudePlanPrompt(t *testing.T) {
+	plan := strings.Join([]string{
+		"   Claude has written up a plan and is ready to execute. Would you like to proceed?",
+		"",
+		"   ❯ 1. Yes, and use auto mode",
+		"     2. Yes, manually approve edits",
+		"     3. No, refine with Ultraplan on Claude Code on the web",
+		"     4. Tell Claude what to change",
+		"        shift+tab to approve with this feedback",
+		"",
+		"   ctrl+g to edit in  VS Code  · ~/.claude/plans/make-a-plan.md",
+	}, "\n")
+	c := plan
+	s := pollSession(t, "claude", &c, nil)
+	require.Equal(t, PanePromptManual, s.Poll(), "plan approval is a manual-only prompt")
+
+	_, hasPrompt := s.HasUpdated()
+	require.False(t, hasPrompt, "the HasUpdated shim must not report a manual prompt as tappable")
+}
+
 // A custom Claude Code statusLine renders below the selection-prompt footer (captured live:
 // the overlay draws a horizontal rule, then "6. Chat about this", the key-hint footer, blank
 // padding, and finally the user's multi-line statusLine). The footer is then several non-empty

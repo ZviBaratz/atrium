@@ -40,6 +40,10 @@ const (
 	PaneWorking
 	// PanePrompt means a yes/no prompt is on screen awaiting an answer.
 	PanePrompt
+	// PanePromptManual means a prompt is on screen whose auto-answer is destructive
+	// (a matcher with NoAutoTap, e.g. claude's plan approval): autoyes must surface
+	// it as needs-input rather than tapping Enter. Runtime-only, never persisted.
+	PanePromptManual
 	// PaneIdle means the agent has settled with nothing pending.
 	PaneIdle
 )
@@ -584,9 +588,13 @@ func (t *Session) Poll() PaneState {
 	// transcript (e.g. the agent discussing these UIs) don't false-trigger.
 	if matcher, ok := t.adapter.DetectPrompt(content); ok {
 		t.monitor.idleStreak = 0
-		t.monitor.lastReported = PanePrompt
-		t.monitor.logSignal(name, "prompt:"+matcher+" → needs-input")
-		return PanePrompt
+		state := PanePrompt
+		if matcher.NoAutoTap {
+			state = PanePromptManual
+		}
+		t.monitor.lastReported = state
+		t.monitor.logSignal(name, "prompt:"+matcher.Name+" → needs-input")
+		return state
 	}
 
 	// A live busy marker is the one positive proof of work, and the only signal that raises
@@ -687,9 +695,13 @@ func (t *Session) PollNow() PaneState {
 	// the state stays silent and only a real change emits one line.
 	name := t.snapshotName()
 	if matcher, ok := t.adapter.DetectPrompt(content); ok {
-		t.monitor.lastReported = PanePrompt
-		t.monitor.logSignal(name, "prompt:"+matcher+" → needs-input")
-		return PanePrompt
+		state := PanePrompt
+		if matcher.NoAutoTap {
+			state = PanePromptManual
+		}
+		t.monitor.lastReported = state
+		t.monitor.logSignal(name, "prompt:"+matcher.Name+" → needs-input")
+		return state
 	}
 	// A present busy marker positively proves work; the hook state file is the next-best
 	// authority (and is the only signal during a marker-absent between-turns gap).

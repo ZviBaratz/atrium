@@ -28,7 +28,22 @@ var claude = &Adapter{
 		// The tool-permission dialog's decline option.
 		{Name: "permission", Window: WindowPrompt,
 			All: []string{"No, and tell Claude what to do differently"}},
-		// Any interactive selection (AskUserQuestion, plan approval). A custom
+		// The plan-approval dialog ("Would you like to proceed?" after plan mode).
+		// Enter would accept the plan AND enable auto mode, so autoyes must not
+		// answer it. Tokens pinned against a live 2.1.170 pane (registry_test.go
+		// fixture): the rendered options are "Yes, and use auto mode" / "Yes,
+		// manually approve edits" / "No, refine with Ultraplan…" / "Tell Claude
+		// what to change" — and the dialog carries NO selection footer ("Esc to
+		// cancel"), so without this matcher it reads as *idle*, not even as a
+		// prompt. "No, keep planning" covers the binary's alternate label for the
+		// feedback option. A future rewording fails open to that idle behavior.
+		{Name: "plan", Window: WindowPrompt, NoAutoTap: true,
+			Any: []string{
+				"Yes, manually approve edits",
+				"No, keep planning",
+				"shift+tab to approve with this feedback",
+			}},
+		// Any interactive selection (AskUserQuestion). A custom
 		// multi-line statusLine can render *below* the key-hint footer — possibly
 		// drawing its own ─── dividers — and push it out of any fixed bottom
 		// window, so this matcher is structural: the rule-delimited segment scan

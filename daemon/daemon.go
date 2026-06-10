@@ -10,6 +10,7 @@ import (
 	"github.com/ZviBaratz/atrium/config"
 	"github.com/ZviBaratz/atrium/log"
 	"github.com/ZviBaratz/atrium/session"
+	"github.com/ZviBaratz/atrium/session/tmux"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -62,13 +63,19 @@ func RunDaemon(ctx context.Context, cfg *config.Config) error {
 			for _, instance := range instances {
 				// We only store started instances, but check anyway.
 				if instance.Started() && !instance.Paused() {
-					if _, hasPrompt := instance.HasUpdated(); hasPrompt {
+					switch instance.Poll() {
+					case tmux.PanePrompt:
 						instance.TapEnter()
 						if err := instance.UpdateDiffStats(); err != nil {
 							if everyN.ShouldLog() {
 								log.WarningLog.Printf("could not update diff stats for %s: %v", instance.Title, err)
 							}
 						}
+					case tmux.PanePromptManual:
+						// A prompt whose auto-answer is destructive (claude's plan
+						// approval). Surface it instead of tapping Enter; the status is
+						// persisted at shutdown so the TUI shows the blocked row.
+						instance.SetStatus(session.NeedsInput)
 					}
 				}
 			}
