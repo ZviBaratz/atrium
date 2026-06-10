@@ -559,6 +559,22 @@ func TestSessionCreateOverlay_ModelCustomBackToChips(t *testing.T) {
 	assert.Equal(t, "fable", o.GetModel(), "returning to chips restores the chip selection")
 }
 
+// The rune filter pre-checks runes as if typed at the end of the value, but the
+// text cursor can sit anywhere (Home/Ctrl+A): a rune that passes the append
+// check can still realize an invalid value once inserted mid-string (a leading
+// '.' here). The field's invariant is that it never holds an invalid non-empty
+// value — such an insertion must be reverted, keeping the submit-time backstop
+// unreachable from keyboard input.
+func TestSessionCreateOverlay_ModelMidValueInsertionStaysValid(t *testing.T) {
+	o := NewSessionCreateOverlay(nil, nil, []string{"/repo/a"}, "claude")
+	o.focusStop(stopModel)
+
+	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("opus")})
+	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyHome}) // text cursor to position 0
+	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'.'}})
+	assert.Equal(t, "opus", o.GetModel(), "an insertion realizing an invalid value must be reverted")
+}
+
 // The chip row must fit the worst realistic overlay width — an 80-col terminal
 // gives the form 42 inner cells — so every chip (and the cursor) stays visible.
 func TestModelFieldChipRowWidth(t *testing.T) {

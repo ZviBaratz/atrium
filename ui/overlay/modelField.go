@@ -119,7 +119,17 @@ func (mf *ModelField) HandleKeyPress(msg tea.KeyMsg) {
 		}
 		msg.Runes = kept
 	}
+	// The rune filter above checks runes as if appended, but the text cursor can
+	// sit anywhere (Home/Ctrl+A), so an accepted rune can still realize an
+	// invalid value once inserted (".opus" from '.' at position 0). Apply the
+	// key, then hold the field's invariant — never a non-empty invalid value —
+	// by reverting the edit wholesale.
+	prev, prevPos := mf.input.Value(), mf.input.Position()
 	mf.input, _ = mf.input.Update(msg)
+	if v := strings.TrimSpace(mf.input.Value()); v != "" && !agent.ValidModelName(v) {
+		mf.input.SetValue(prev)
+		mf.input.SetCursor(prevPos)
+	}
 }
 
 // keepValidRunes filters runes to those that keep base+rune a valid model

@@ -43,6 +43,12 @@ func TestWithModelFlag(t *testing.T) {
 		{"replace works on non-claude programs too",
 			"aider --model ollama_chat/gemma3:1b", "ollama_chat/llama3",
 			"aider --model ollama_chat/llama3"},
+		// A flag that merely starts with "--model" is not a model pin: the
+		// program must take the verbatim append path, not the replace path
+		// whose Fields re-join would collapse the quoted run of spaces.
+		{"flag lookalike takes the append path",
+			"claude --models-dir 'a  b'", "opus",
+			"claude --models-dir 'a  b' --model opus"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

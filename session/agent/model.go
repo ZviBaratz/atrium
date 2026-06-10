@@ -30,6 +30,18 @@ func ValidModelName(s string) bool {
 	return true
 }
 
+// hasModelFlag reports whether program pins a model via `--model value` or
+// `--model=value`. A whole-field comparison, so lookalike flags ("--models-dir",
+// "--model-context") don't count as pins.
+func hasModelFlag(program string) bool {
+	for _, f := range strings.Fields(program) {
+		if f == "--model" || strings.HasPrefix(f, "--model=") {
+			return true
+		}
+	}
+	return false
+}
+
 // WithModelFlag returns program with `--model model` applied. The common case —
 // no --model present — appends to the string verbatim, preserving any quoting
 // the profile's program carries. When the program already pins a model, the
@@ -37,7 +49,7 @@ func ValidModelName(s string) bool {
 // output, which collapses quoted multi-word arguments — acceptable, since it
 // only runs for profiles that already embed --model.
 func WithModelFlag(program, model string) string {
-	if !strings.Contains(program, "--model") {
+	if !hasModelFlag(program) {
 		return program + " --model " + model
 	}
 	fields := strings.Fields(program)
