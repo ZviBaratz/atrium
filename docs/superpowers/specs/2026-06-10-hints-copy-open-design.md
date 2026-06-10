@@ -158,25 +158,44 @@ texts share one hint.
   rows/columns the user sees. Capture uses `-J` (joined lines), so a logical
   line maps to one preview row.
 
-## Attached sessions (future increment, designed for)
+## Attached sessions (deferred increment, designed for)
 
 Inside an attached session Atrium's UI is not on screen — tmux owns the
-terminal — so the preview render path cannot be reused. The engine can:
+terminal — so the preview render path cannot be reused.
+
+Evaluated and **deferred** (2026-06-10): while attached, URLs are already
+clickable via their OSC 8 hyperlinks in modern terminals, and detach
+(`ctrl+q`) → `f` reaches everything else for two keystrokes — while building
+this means Atrium's first second-renderer subprocess, a permanent maintenance
+surface. Revisit when the detach→f hop is a felt friction, not before.
+
+The v1 engine boundary held, and the prep landed independently (#98 scoped
+pane capture *and* keystrokes to the agent's pane id; #99 extracted the
+shared `actions` package), so the increment is cheap to pick up. If built:
 
 1. `hints/` stays pure (no UI/tmux deps); it is the shared 80% of the feature.
-2. A hidden `atrium fingers --target <pane>` subcommand: capture the pane via
-   the existing tmux wrapper, run the same scan/assign/render, print the
-   decorated screen, read the hint from stdin, fire the same action layer.
-3. A key binding in the **managed tmux conf** (derived from
-   `config.RuntimeName()`, so it applies only to Atrium-managed sessions on
-   the dedicated socket) does the thumbs-style dance: temp window running the
-   subcommand, `swap-pane` over the real pane, swap back on exit. Because the
-   subcommand is the pane's own command it reads keys directly from its pty —
-   no input-socket machinery like tmux-fingers needs.
+2. A hidden `atrium fingers --target <pane-id>` subcommand: capture the pane
+   via the existing tmux wrapper, run the same scan/assign/render, print the
+   decorated screen, read the hint from its pty, fire `actions/`.
+3. Host it in a borderless full-window popup —
+   `display-popup -B -x0 -y0 -w100% -h100% -E ...` (tmux ≥ 3.3a; version-gate
+   or accept a border on 3.2) — **not** the thumbs-style `swap-pane` dance
+   this section originally sketched. A popup never mutates the pane tree:
+   a crashed fingers process self-cleans (the popup just closes, where
+   swap-pane needs crash-safe restore), and anything still addressing the
+   session rather than the pane id keeps hitting the agent pane — #98 makes
+   that a belt-and-braces defense instead of a correctness dependency.
+4. Trigger from the attach stdin proxy (`classifyAttachInput`, beside Ctrl+Q
+   and Ctrl+X, gated off for the Terminal tab the way `allowKill` is) rather
+   than a managed-conf key binding: same interception point as the existing
+   in-session keys, and hermetically testable.
 
-Nothing in v1 may couple the engine to `PreviewPane` types; this increment is
-the test of that boundary. Until it ships, detach (`ctrl+q`) → `f` is the
-two-keystroke workaround.
+Known risk to resolve before building: the popup child's parent is the tmux
+*server*, whose environment may lack `DISPLAY`/`WAYLAND_DISPLAY`, so
+atotto/clipboard can fail where the TUI's copy works — plan an OSC 52 or
+`tmux load-buffer` fallback.
+
+Until it ships, detach (`ctrl+q`) → `f` remains the two-keystroke workaround.
 
 ## Testing
 
