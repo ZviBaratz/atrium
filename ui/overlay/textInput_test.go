@@ -517,13 +517,56 @@ func TestSessionCreateOverlay_ModelCharsetFiltered(t *testing.T) {
 	assert.Equal(t, "opus", o.GetModel())
 }
 
-// An explicit "inherit" (the placeholder text, typed out) contributes no override,
-// same as leaving the field empty.
+// An explicit "inherit" (the inherit chip's label, typed out in custom mode)
+// contributes no override, same as leaving the field untouched.
 func TestSessionCreateOverlay_ModelInheritMeansNoOverride(t *testing.T) {
 	o := NewSessionCreateOverlay(nil, nil, []string{"/repo/a"}, "claude")
 	o.focusStop(stopModel)
 	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("inherit")})
 	assert.Equal(t, "", o.GetModel())
+}
+
+// Arrowing across the chip row selects aliases without any typing — the
+// typo-proof path. The first chip is inherit (no override).
+func TestSessionCreateOverlay_ModelChipCycle(t *testing.T) {
+	o := NewSessionCreateOverlay(nil, nil, []string{"/repo/a"}, "claude")
+	o.focusStop(stopModel)
+	assert.Equal(t, "", o.GetModel(), "the inherit chip contributes no override")
+
+	for i := 0; i < 3; i++ { // inherit → fable → haiku → opus
+		o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyDown})
+	}
+	assert.Equal(t, "opus", o.GetModel())
+
+	for i := 0; i < 3; i++ {
+		o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyUp})
+	}
+	assert.Equal(t, "", o.GetModel(), "cycling back to inherit drops the override")
+}
+
+// Typing enters custom mode; Left with the text cursor at position 0 returns to
+// the chip row with the prior chip selection intact.
+func TestSessionCreateOverlay_ModelCustomBackToChips(t *testing.T) {
+	o := NewSessionCreateOverlay(nil, nil, []string{"/repo/a"}, "claude")
+	o.focusStop(stopModel)
+	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyDown}) // fable chip
+
+	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("x")})
+	assert.Equal(t, "x", o.GetModel(), "typing switches to custom mode seeded with the rune")
+
+	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyLeft}) // cursor 1 → 0
+	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyLeft}) // at 0 → back to chips
+	assert.Equal(t, "fable", o.GetModel(), "returning to chips restores the chip selection")
+}
+
+// The chip row must fit the worst realistic overlay width — an 80-col terminal
+// gives the form 42 inner cells — so every chip (and the cursor) stays visible.
+func TestModelFieldChipRowWidth(t *testing.T) {
+	mf := NewModelField()
+	mf.Focus()
+	lines := strings.Split(mf.Render(), "\n")
+	row := lines[len(lines)-1]
+	assert.LessOrEqual(t, lipgloss.Width(row), 41, "chip row must fit 42 inner cells")
 }
 
 // With mixed profiles the field is present but tracks the selected profile's agent:
