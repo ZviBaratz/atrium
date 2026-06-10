@@ -29,6 +29,7 @@ to a decorated string plus a key dispatch. No pane gymnastics, no subprocess.
 - "Send to session" action — paste the match into the selected agent's prompt
   via the action layer (`ActionKind` is extensible).
 - Hint mode inside scroll-mode snapshots and the diff tab.
+- Hint mode inside **attached** sessions (see "Attached sessions" below).
 - User-defined patterns in `config.json`; alphabet/layout options.
 - Clickable hints via bubblezone; OSC52/tmux-buffer layered clipboard.
 
@@ -154,6 +155,26 @@ texts share one hint.
   preview (`availableHeight` rows, width-clamped), so labels land on the same
   rows/columns the user sees. Capture uses `-J` (joined lines), so a logical
   line maps to one preview row.
+
+## Attached sessions (future increment, designed for)
+
+Inside an attached session Atrium's UI is not on screen — tmux owns the
+terminal — so the preview render path cannot be reused. The engine can:
+
+1. `hints/` stays pure (no UI/tmux deps); it is the shared 80% of the feature.
+2. A hidden `atrium fingers --target <pane>` subcommand: capture the pane via
+   the existing tmux wrapper, run the same scan/assign/render, print the
+   decorated screen, read the hint from stdin, fire the same action layer.
+3. A key binding in the **managed tmux conf** (derived from
+   `config.RuntimeName()`, so it applies only to Atrium-managed sessions on
+   the dedicated socket) does the thumbs-style dance: temp window running the
+   subcommand, `swap-pane` over the real pane, swap back on exit. Because the
+   subcommand is the pane's own command it reads keys directly from its pty —
+   no input-socket machinery like tmux-fingers needs.
+
+Nothing in v1 may couple the engine to `PreviewPane` types; this increment is
+the test of that boundary. Until it ships, detach (`ctrl+q`) → `f` is the
+two-keystroke workaround.
 
 ## Testing
 
