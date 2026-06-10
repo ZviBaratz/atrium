@@ -215,6 +215,23 @@ func (w *TabbedWindow) ResetPreviewToNormalMode(instance *session.Instance) erro
 	return w.preview.ResetToNormalMode(instance)
 }
 
+// PreviewLiveContent exposes the preview pane's live text for hint mode.
+func (w *TabbedWindow) PreviewLiveContent() (string, bool) {
+	return w.preview.LiveContent()
+}
+
+// SetPreviewHintOverlay shows a frozen hint-decorated frame over instance's
+// live preview; ClearPreviewHintOverlay resumes the live view.
+func (w *TabbedWindow) SetPreviewHintOverlay(instance *session.Instance, content string) {
+	w.preview.SetHintOverlay(instance, content)
+}
+
+// ClearPreviewHintOverlay exits hint mode on the preview pane.
+func (w *TabbedWindow) ClearPreviewHintOverlay() { w.preview.ClearHintOverlay() }
+
+// InPreviewHintMode reports whether the preview pane shows a hint overlay.
+func (w *TabbedWindow) InPreviewHintMode() bool { return w.preview.InHintMode() }
+
 // ScrollUp scrolls the active tab's pane up by one step.
 func (w *TabbedWindow) ScrollUp() {
 	switch w.activeTab {
@@ -294,11 +311,11 @@ func (w *TabbedWindow) IsTerminalInScrollMode() bool {
 	return w.terminal.IsScrolling()
 }
 
-// paneScrolling reports whether any tab pane is in scroll mode — the state that
-// renders the window's chrome as focused. The diff tab scrolls live without a
-// mode, so it never claims focus.
+// paneScrolling reports whether any tab pane is in a key-capturing mode
+// (scroll or hint) — the state that renders the window's chrome as focused.
+// The diff tab scrolls live without a mode, so it never claims focus.
 func (w *TabbedWindow) paneScrolling() bool {
-	return w.preview.isScrolling || w.terminal.IsScrolling()
+	return w.preview.isScrolling || w.preview.InHintMode() || w.terminal.IsScrolling()
 }
 
 // ResetTerminalToNormalMode exits scroll mode on the terminal pane

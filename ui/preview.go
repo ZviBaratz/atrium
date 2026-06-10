@@ -62,6 +62,14 @@ type PreviewPane struct {
 	// pin across selection changes (the "preview stuck for all sessions" bug).
 	scrollInstance *session.Instance
 	viewport       viewport.Model
+
+	// hintContent, when non-empty, is hint mode's decorated rendering of
+	// hintInstance's frozen capture; String() shows it instead of the live
+	// text and UpdateContent freezes, mirroring the scroll snapshot's
+	// ownership rules (one owning instance, dropped the moment any other
+	// instance — or the owner once paused — is rendered).
+	hintContent  string
+	hintInstance *session.Instance
 }
 
 type previewState struct {
@@ -112,6 +120,17 @@ func (p *PreviewPane) UpdateContent(instance *session.Instance) error {
 	// "Session is paused" fallback on screen after resuming.
 	if p.isScrolling && (instance != p.scrollInstance || instance.Paused()) {
 		p.exitScrollMode()
+	}
+	// The hint overlay belongs to one live instance, exactly like the scroll
+	// snapshot above: rendering any other instance, or the owner once paused,
+	// drops it. While it is valid the pane is frozen, so the per-tick capture
+	// cannot repaint over the hints.
+	if p.InHintMode() {
+		if instance != p.hintInstance || instance.Paused() {
+			p.ClearHintOverlay()
+		} else {
+			return nil
+		}
 	}
 	switch {
 	case instance == nil:
@@ -201,6 +220,12 @@ func (p *PreviewPane) String() string {
 		return lipgloss.NewStyle().MaxWidth(p.width).MaxHeight(p.height).Render(
 			lipgloss.Place(p.width, p.height, lipgloss.Center, lipgloss.Center,
 				previewPaneStyle().Render(p.previewState.text)))
+	}
+
+	// Hint mode: show the frozen decorated frame, clamped exactly like the
+	// live view so the layout cannot shift on entry.
+	if p.hintContent != "" {
+		return previewPaneStyle().MaxWidth(p.width).MaxHeight(p.height).Render(p.hintContent)
 	}
 
 	// If in copy mode, use the viewport to display scrollable content
@@ -371,3 +396,30 @@ func (p *PreviewPane) ResetToNormalMode(instance *session.Instance) error {
 	p.previewState = previewState{fallback: false, text: theme.SanitizeWidth(content)}
 	return nil
 }
+
+// LiveContent returns the text the pane is currently rendering live, and
+// whether hint mode may act on it: no fallback splash, not scrolling, not
+// already in hint mode, and non-empty.
+func (p *PreviewPane) LiveContent() (string, bool) {
+	if p.previewState.fallback || p.isScrolling || p.hintContent != "" {
+		return "", false
+	}
+	return p.previewState.text, p.previewState.text != ""
+}
+
+// SetHintOverlay enters (or refreshes) hint mode: content is the decorated
+// frame shown frozen in place of instance's live capture.
+func (p *PreviewPane) SetHintOverlay(instance *session.Instance, content string) {
+	p.hintInstance = instance
+	p.hintContent = content
+}
+
+// ClearHintOverlay leaves hint mode; the next UpdateContent tick resumes the
+// live view.
+func (p *PreviewPane) ClearHintOverlay() {
+	p.hintInstance = nil
+	p.hintContent = ""
+}
+
+// InHintMode reports whether a hint overlay is currently displayed.
+func (p *PreviewPane) InHintMode() bool { return p.hintContent != "" }
