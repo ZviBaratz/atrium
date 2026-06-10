@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/muesli/ansi"
 	"github.com/stretchr/testify/require"
 )
 
@@ -809,4 +810,22 @@ func TestPreviewScrollClaudeWithoutTranscriptFallsBack(t *testing.T) {
 	rendered := pane.String()
 	require.Contains(t, rendered, tmuxContent)
 	require.Contains(t, rendered, "snapshot · ESC", "a tmux-sourced snapshot keeps the snapshot footer")
+}
+
+// The empty-state fallback (banner + onboarding message) can be wider than a
+// narrow pane. lipgloss.Place does not clip oversize content, so without the
+// MaxWidth/MaxHeight clamp the pane — and with it the whole composed frame —
+// grew past the terminal width, shoving every centered overlay off-center.
+func TestPreviewFallbackClampedToPaneBox(t *testing.T) {
+	pane := NewPreviewPane()
+	// Narrower than the "No agents running yet..." message (69 cols).
+	pane.SetSize(56, 13)
+	require.NoError(t, pane.UpdateContent(nil))
+
+	lines := strings.Split(pane.String(), "\n")
+	require.LessOrEqual(t, len(lines), 13, "fallback must not exceed the pane height")
+	for i, l := range lines {
+		require.LessOrEqualf(t, ansi.PrintableRuneWidth(l), 56,
+			"fallback line %d wider than the pane", i)
+	}
 }
