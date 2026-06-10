@@ -12,20 +12,29 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// captureTargets runs CapturePaneContent against a fake executor whose
-// list-panes answer is fixed, and records the -t value of every capture-pane
-// and the number of list-panes resolutions.
+// paneFake is a fake executor whose list-panes answer is fixed. It records
+// the -t value of every capture-pane, the trailing arguments of every
+// send-keys, and the number of list-panes resolutions.
 type paneFake struct {
 	listPanesOut string
 	listPanesErr error
 
 	resolutions    int
 	captureTargets []string
+	sendKeysArgs   [][]string
 }
 
 func (f *paneFake) exec() cmd_test.MockCmdExec {
 	return cmd_test.MockCmdExec{
-		RunFunc: func(cmd *exec.Cmd) error { return nil }, // has-session: alive
+		RunFunc: func(cmd *exec.Cmd) error {
+			for i, a := range cmd.Args {
+				if a == "send-keys" {
+					f.sendKeysArgs = append(f.sendKeysArgs, cmd.Args[i+1:])
+					break
+				}
+			}
+			return nil // anything else (has-session): alive
+		},
 		OutputFunc: func(cmd *exec.Cmd) ([]byte, error) {
 			args := strings.Join(cmd.Args, " ")
 			switch {
@@ -99,6 +108,46 @@ func TestPaneResolutionRejectsMalformedOutput(t *testing.T) {
 	_, err := s.CapturePaneContent()
 	require.NoError(t, err)
 	require.Equal(t, []string{Prefix() + "pane-garbage"}, fake.captureTargets)
+}
+
+// Keystroke writes must be pane-scoped exactly like reads: tmux routes attach
+// client pty input to the *active* pane, so with pane-scoped capture but
+// client-routed writes, a user split would make the daemon read the agent's
+// prompt correctly — and then tap Enter into the user's shell.
+func TestSendKeysTargetAgentPaneID(t *testing.T) {
+	fake := &paneFake{listPanesOut: "%7\n"}
+	s := newSession(context.Background(), "pane-keys", "claude", NewMockPtyFactory(t), fake.exec())
+
+	require.NoError(t, s.TapEnter())
+	require.NoError(t, s.TapDAndEnter())
+	require.NoError(t, s.SendKeys("-starts with a dash; and ; semicolons"))
+
+	require.Equal(t, [][]string{
+		{"-t", "%7", "Enter"},
+		{"-t", "%7", "D", "Enter"},
+		{"-t", "%7", "-l", "--", "-starts with a dash; and ; semicolons"},
+	}, fake.sendKeysArgs)
+	require.Equal(t, 1, fake.resolutions, "taps and sends must share the cached pane id")
+}
+
+// Sending an empty string is a no-op, not a malformed send-keys invocation
+// (tmux errors on send-keys with no key arguments).
+func TestSendKeysEmptyIsNoOp(t *testing.T) {
+	fake := &paneFake{listPanesOut: "%7\n"}
+	s := newSession(context.Background(), "pane-empty", "claude", NewMockPtyFactory(t), fake.exec())
+
+	require.NoError(t, s.SendKeys(""))
+	require.Empty(t, fake.sendKeysArgs)
+}
+
+// Writes degrade exactly like reads: a failed resolution falls back to the
+// session-name target (tmux's active-pane routing, the historical behavior).
+func TestSendKeysFallBackToSessionName(t *testing.T) {
+	fake := &paneFake{listPanesErr: fmt.Errorf("no server running")}
+	s := newSession(context.Background(), "pane-keys-fb", "claude", NewMockPtyFactory(t), fake.exec())
+
+	require.NoError(t, s.TapEnter())
+	require.Equal(t, [][]string{{"-t", Prefix() + "pane-keys-fb", "Enter"}}, fake.sendKeysArgs)
 }
 
 // Close kills the tmux session, so the cached pane id dies with it; the next

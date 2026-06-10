@@ -2,14 +2,15 @@ package tmux
 
 // pane.go — resolving the agent pane's immutable tmux id (%N).
 //
-// Pane-content reads must target the pane id, not the session name: tmux
-// resolves a session-name target to the *active* pane of the session's
-// current window, so any extra pane or window — a split the user opens while
-// attached (the attach proxy forwards the tmux prefix), or a future overlay
-// pane — silently redirects every capture. Status detection, unread tracking,
-// and the autoyes daemon all act on what capture shows, so a misdirected
-// capture doesn't just render the wrong preview: the daemon taps Enter based
-// on it.
+// Pane-content reads (capture-pane) and keystroke writes (send-keys) must
+// target the pane id, not the session name or the attach client's pty: tmux
+// resolves both a session-name target and client input to the *active* pane
+// of the session's current window, so any extra pane or window — a split the
+// user opens while attached (the attach proxy forwards the tmux prefix), or a
+// future overlay pane — silently redirects every capture and keystroke.
+// Status detection, unread tracking, and the autoyes daemon all act on what
+// capture shows, and the daemon answers with Enter taps — misdirect either
+// side and the wrong pane gets read, or worse, typed into.
 
 import (
 	"fmt"
@@ -19,10 +20,10 @@ import (
 	"github.com/ZviBaratz/atrium/log"
 )
 
-// paneTarget returns the tmux target for pane-content reads: the agent
-// pane's id when it can be resolved, otherwise the session name (tmux's
-// active-pane resolution — the historical behavior — as a graceful
-// fallback).
+// paneTarget returns the tmux target for pane-scoped commands (capture-pane,
+// send-keys): the agent pane's id when it can be resolved, otherwise the
+// session name (tmux's active-pane resolution — the historical behavior — as
+// a graceful fallback).
 //
 // Resolution runs at most once per tmux-session generation: pane ids are
 // immutable for the pane's lifetime and survive session renames, so the
@@ -34,7 +35,7 @@ func (t *Session) paneTarget() string {
 		t.paneIDTried = true
 		id, err := t.resolvePaneIDLocked()
 		if err != nil {
-			log.WarningLog.Printf("could not resolve pane id for %s (capture falls back to the session name): %v", t.sanitizedName, err)
+			log.WarningLog.Printf("could not resolve pane id for %s (capture/send-keys fall back to the session name): %v", t.sanitizedName, err)
 		} else {
 			t.paneID = id
 		}
