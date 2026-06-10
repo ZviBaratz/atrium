@@ -20,7 +20,6 @@ import (
 	"github.com/ZviBaratz/atrium/ui/overlay"
 	"github.com/ZviBaratz/atrium/ui/theme"
 
-	"github.com/atotto/clipboard"
 	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -55,10 +54,6 @@ func Run(ctx context.Context, program string, autoYes bool) error {
 	}
 	return err
 }
-
-// copyToClipboard writes text to the system clipboard. It is a package var so tests
-// can substitute a fake without touching the host clipboard.
-var copyToClipboard = clipboard.WriteAll
 
 // maybeTrustWorktreesRoot pre-accepts Claude's workspace trust for the
 // worktrees root when the opt-in trust_worktrees_root flag is on and any

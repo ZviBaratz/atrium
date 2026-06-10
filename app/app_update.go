@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ZviBaratz/atrium/internal/actions"
 	"github.com/ZviBaratz/atrium/keys"
 	"github.com/ZviBaratz/atrium/log"
 	"github.com/ZviBaratz/atrium/session"
@@ -719,7 +720,7 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		if selected.Branch == "" {
 			return m, m.handleInfoNotice("no branch to copy yet")
 		}
-		if err := copyToClipboard(selected.Branch); err != nil {
+		if err := actions.CopyToClipboard(selected.Branch); err != nil {
 			return m, m.handleError(fmt.Errorf("copy branch: %w", err))
 		}
 		return m, m.handleInfoNotice(fmt.Sprintf("branch '%s' copied", selected.Branch))

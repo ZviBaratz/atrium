@@ -1,5 +1,4 @@
-// app/open_test.go
-package app
+package actions
 
 import (
 	"errors"
@@ -56,10 +55,10 @@ func TestOpenDetached_RejectsControlBytes(t *testing.T) {
 // Only web/file URLs are worth handing to a browser opener; ssh/git URLs and
 // scp-style remotes open nothing useful and must degrade to copy upstream.
 func TestOpenableURL(t *testing.T) {
-	assert.True(t, openableURL("https://github.com/x/pull/9"))
-	assert.True(t, openableURL("http://localhost:8080"))
-	assert.True(t, openableURL("file:///tmp/report.html"))
-	assert.False(t, openableURL("ssh://host/repo"))
-	assert.False(t, openableURL("git@github.com:x/y.git"))
-	assert.False(t, openableURL("/tmp/notes.md"))
+	assert.True(t, OpenableURL("https://github.com/x/pull/9"))
+	assert.True(t, OpenableURL("http://localhost:8080"))
+	assert.True(t, OpenableURL("file:///tmp/report.html"))
+	assert.False(t, OpenableURL("ssh://host/repo"))
+	assert.False(t, OpenableURL("git@github.com:x/y.git"))
+	assert.False(t, OpenableURL("/tmp/notes.md"))
 }
