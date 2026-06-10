@@ -3,6 +3,7 @@ module github.com/ZviBaratz/atrium
 go 1.24.11
 
 require (
+	github.com/Masterminds/semver/v3 v3.5.0
 	github.com/atotto/clipboard v0.1.4
 	github.com/charmbracelet/bubbles v0.20.0
 	github.com/charmbracelet/bubbletea v1.3.4
