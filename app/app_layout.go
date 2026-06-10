@@ -54,7 +54,9 @@ func (m *home) updateHandleWindowSizeEvent(msg tea.WindowSizeMsg) {
 		m.textInputOverlay.SetSize(int(float32(msg.Width)*0.6), msg.Height)
 	}
 	if m.textOverlay != nil {
-		m.textOverlay.SetWidth(int(float32(msg.Width) * 0.6))
+		// Pass the full terminal size: the overlay hugs its content width and
+		// windows its lines to fit short terminals.
+		m.textOverlay.SetSize(msg.Width, msg.Height)
 	}
 	if m.settingsOverlay != nil {
 		// Pass the full terminal size: the panel caps its own width and windows

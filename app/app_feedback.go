@@ -86,6 +86,9 @@ func (m *home) scheduleNoticeHide() tea.Cmd {
 func (m *home) showInfo(text string) tea.Cmd {
 	log.ErrorLog.Printf("%s", text)
 	m.textOverlay = overlay.NewTextOverlay(text)
+	m.textOverlay.SetHint("press any key to close")
 	m.state = stateInfo
+	// Size the overlay now rather than waiting for the next resize.
+	m.recomputeLayout()
 	return nil
 }
