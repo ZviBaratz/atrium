@@ -168,17 +168,36 @@ func (m *home) maybeShowWelcome() {
 func (m *home) handleHelpState(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// The overlay scrolls on navigation keys while its content overflows;
 	// any other key closes it.
-	shouldClose := m.textOverlay.HandleKeyPress(msg)
-	if shouldClose {
-		m.state = stateDefault
-		return m, tea.Sequence(
-			tea.WindowSize(),
-			func() tea.Msg {
-				m.menu.SetState(ui.StateDefault)
-				return nil
-			},
-		)
+	if m.textOverlay.HandleKeyPress(msg) {
+		return m.closeTextOverlay()
 	}
-
 	return m, nil
+}
+
+// closeTextOverlay dismisses the modal text overlay (help or info) and
+// restores the default state. Shared by every dismissal path: any-key from
+// the help and info states, and a click outside the box.
+func (m *home) closeTextOverlay() (tea.Model, tea.Cmd) {
+	m.textOverlay.Dismiss()
+	m.state = stateDefault
+	return m, tea.Sequence(
+		tea.WindowSize(),
+		func() tea.Msg {
+			m.menu.SetState(ui.StateDefault)
+			return nil
+		},
+	)
+}
+
+// textOverlayContains reports whether the screen cell (x, y) falls inside the
+// rendered modal box. PlaceOverlay centers the overlay on the composed frame,
+// and the frame is exactly windowWidth×windowHeight (an invariant pinned by
+// TestViewFitsTerminalBounds and TestHelpOverlayFitsShortTerminal), so the
+// same centering math reproduces the box's on-screen rectangle.
+func (m *home) textOverlayContains(x, y int) bool {
+	box := m.textOverlay.Render()
+	w, h := lipgloss.Width(box), lipgloss.Height(box)
+	left := max(0, (m.windowWidth-w)/2)
+	top := max(0, (m.windowHeight-h)/2)
+	return x >= left && x < left+w && y >= top && y < top+h
 }

@@ -141,6 +141,44 @@ func TestTextOverlayFooter(t *testing.T) {
 	}
 }
 
+// ScrollBy (the mouse-wheel path) moves the window with clamping at both ends
+// and is a no-op when the content fits.
+func TestTextOverlayScrollBy(t *testing.T) {
+	o := NewTextOverlay(tallContent(60))
+	o.SetSize(80, 20)
+
+	o.ScrollBy(-5) // clamped at the top
+	top := xansi.Strip(o.Render())
+	if !strings.Contains(top, "line-0") {
+		t.Fatal("scroll up at the top moved the window")
+	}
+	o.ScrollBy(1000) // clamped at the end
+	if plain := xansi.Strip(o.Render()); !strings.Contains(plain, "line-59") {
+		t.Fatal("large scroll down did not clamp to the end of the content")
+	}
+
+	fits := NewTextOverlay("short")
+	fits.SetSize(80, 40)
+	beforeFit := fits.Render()
+	fits.ScrollBy(3)
+	if fits.Render() != beforeFit || fits.Dismissed {
+		t.Fatal("ScrollBy on fitting content must be a no-op")
+	}
+}
+
+// Dismiss fires OnDismiss exactly once, however many paths call it (key press
+// then click outside).
+func TestTextOverlayDismissIdempotent(t *testing.T) {
+	o := NewTextOverlay("short")
+	calls := 0
+	o.OnDismiss = func() { calls++ }
+	o.HandleKeyPress(key("x"))
+	o.Dismiss()
+	if calls != 1 {
+		t.Fatalf("OnDismiss fired %d times, want exactly once", calls)
+	}
+}
+
 // An overlay that was never sized renders at natural size (no windowing) and
 // closes on any key — the pre-first-WindowSizeMsg behavior.
 func TestTextOverlayUnsized(t *testing.T) {

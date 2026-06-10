@@ -67,12 +67,26 @@ func (t *TextOverlay) HandleKeyPress(msg tea.KeyMsg) bool {
 	}
 
 	// Close on any key
+	t.Dismiss()
+	return true
+}
+
+// Dismiss marks the overlay dismissed and fires the OnDismiss callback once,
+// no matter how the dismissal was triggered (key press or click outside).
+func (t *TextOverlay) Dismiss() {
+	if t.Dismissed {
+		return
+	}
 	t.Dismissed = true
-	// Call the OnDismiss callback if it exists
 	if t.OnDismiss != nil {
 		t.OnDismiss()
 	}
-	return true
+}
+
+// ScrollBy moves the scroll window by delta lines, clamped to the content;
+// a no-op when the content fits.
+func (t *TextOverlay) ScrollBy(delta int) {
+	t.scroll = clamp(t.scroll+delta, 0, t.maxScroll())
 }
 
 // Render renders the text overlay

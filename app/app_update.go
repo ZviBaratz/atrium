@@ -101,6 +101,24 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.Action != tea.MouseActionPress {
 			return m, nil
 		}
+		// Modal text overlays (help / info) own the screen: the wheel scrolls
+		// an overflowing cheatsheet wherever it hovers, and a left-click
+		// outside the box dismisses — mirroring the keyboard semantics
+		// (scroll keys scroll, anything else closes). Clicks inside the box
+		// are inert so a stray selection click doesn't tear the dialog down.
+		if (m.state == stateHelp || m.state == stateInfo) && m.textOverlay != nil {
+			switch msg.Button {
+			case tea.MouseButtonWheelUp:
+				m.textOverlay.ScrollBy(-1)
+			case tea.MouseButtonWheelDown:
+				m.textOverlay.ScrollBy(1)
+			case tea.MouseButtonLeft:
+				if !m.textOverlayContains(msg.X, msg.Y) {
+					return m.closeTextOverlay()
+				}
+			}
+			return m, nil
+		}
 		// Mouse wheel is routed by what it hovers, only in the default state
 		// (overlays own the screen otherwise, mirroring the left-click gate
 		// below). Over the session list it moves the selection like ↑/↓; over
@@ -995,17 +1013,11 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 	}
 }
 
-// handleInfoState dismisses the info modal on any key press.
+// handleInfoState dismisses the info modal on any key press (scroll keys
+// scroll first while the text overflows, exactly like the help state).
 func (m *home) handleInfoState(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.textOverlay.HandleKeyPress(msg) {
-		m.state = stateDefault
-		return m, tea.Sequence(
-			tea.WindowSize(),
-			func() tea.Msg {
-				m.menu.SetState(ui.StateDefault)
-				return nil
-			},
-		)
+		return m.closeTextOverlay()
 	}
 	return m, nil
 }
