@@ -98,7 +98,15 @@ type Session struct {
 	// the metadata poll loop reads sanitizedName from a background goroutine. Rename holds
 	// the write lock across its rename-session subprocess and the field swap, so a reader
 	// never observes the brief window where the old session name no longer exists.
+	// It also guards the paneID/paneIDTried cache below.
 	mu sync.RWMutex
+	// paneID caches the agent pane's immutable tmux id (%N) so pane-content
+	// reads target the agent's pane, never whatever pane happens to be active.
+	// Empty after a failed resolution — paneTarget then falls back to the
+	// session name. paneIDTried makes resolution once-per-generation; both are
+	// reset by resetPaneID where the session is created or killed.
+	paneID      string
+	paneIDTried bool
 	// Initialized by NewSession
 	//
 	// The name of the tmux session and the sanitized name used for tmux commands.
@@ -313,6 +321,10 @@ func (t *Session) start(workDir string, program string) error {
 	if t.DoesSessionExist() {
 		return fmt.Errorf("tmux session already exists: %s", t.sanitizedName)
 	}
+
+	// A fresh tmux session means a fresh agent pane; drop any id cached from a
+	// previous generation (pause → resume reuses this Session object).
+	t.resetPaneID()
 
 	// Inject the authoritative status hooks for claude (a no-op for other agents or when
 	// --settings is unsupported). The settings path is appended to the launch command only;
@@ -973,6 +985,9 @@ func (t *Session) Close() error {
 	// Remove the per-session status-hook artifacts; harmless if the session never had any.
 	cleanupHookSession(t.snapshotName())
 
+	// The pane dies with the session; a resumed session must re-resolve.
+	t.resetPaneID()
+
 	var errs []error
 
 	if t.ptmx != nil {
@@ -1055,7 +1070,7 @@ func (t *Session) CapturePaneContent() (string, error) {
 	ctx, cancel := t.opContext()
 	defer cancel()
 	// Add -e flag to preserve escape sequences (ANSI color codes)
-	cmd := tmuxCommand(ctx, "capture-pane", "-p", "-e", "-J", "-t", t.snapshotName())
+	cmd := tmuxCommand(ctx, "capture-pane", "-p", "-e", "-J", "-t", t.paneTarget())
 	output, err := t.cmdExec.Output(cmd)
 	if err != nil {
 		return "", fmt.Errorf("error capturing pane content: %w", err)
@@ -1069,7 +1084,7 @@ func (t *Session) CapturePaneContentWithOptions(start, end string) (string, erro
 	ctx, cancel := t.opContext()
 	defer cancel()
 	// Add -e flag to preserve escape sequences (ANSI color codes)
-	cmd := tmuxCommand(ctx, "capture-pane", "-p", "-e", "-J", "-S", start, "-E", end, "-t", t.snapshotName())
+	cmd := tmuxCommand(ctx, "capture-pane", "-p", "-e", "-J", "-S", start, "-E", end, "-t", t.paneTarget())
 	output, err := t.cmdExec.Output(cmd)
 	if err != nil {
 		return "", fmt.Errorf("failed to capture tmux pane content with options: %w", err)
