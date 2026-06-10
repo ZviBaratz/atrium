@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os/exec"
 	"runtime"
+	"strings"
 )
 
 // openInBrowser launches the user's opener on a URL, detached from the TUI —
@@ -35,6 +36,11 @@ func chooseOpener(goos string, lookPath func(string) (string, error)) (string, e
 // start surfaces to the caller; the opener's own exit status does not — by
 // then the TUI has moved on and the browser owns the outcome.
 func openDetached(target string) error {
+	// Pane content is untrusted: a crafted markdown link like [x](-flag) would
+	// otherwise smuggle a flag into the opener's argv.
+	if strings.HasPrefix(target, "-") {
+		return fmt.Errorf("refusing to open %q: looks like a flag, not a URL", target)
+	}
 	opener, err := chooseOpener(runtime.GOOS, exec.LookPath)
 	if err != nil {
 		return err

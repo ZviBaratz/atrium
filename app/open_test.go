@@ -37,3 +37,10 @@ func TestChooseOpener(t *testing.T) {
 		assert.Error(t, err)
 	})
 }
+
+// A target that parses as a flag must never reach the opener's argv: pane
+// content is untrusted (a crafted markdown link can put anything in a URL).
+func TestOpenDetached_RejectsFlagLikeTarget(t *testing.T) {
+	assert.Error(t, openDetached("-evil"))
+	assert.Error(t, openDetached("--new-window=https://x"))
+}
