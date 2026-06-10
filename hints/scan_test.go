@@ -110,3 +110,36 @@ func TestStripANSI(t *testing.T) {
 	in := "\x1b[31mred\x1b[0m /tmp/a"
 	assert.Equal(t, "red /tmp/a", StripANSI(in))
 }
+
+// tmux >= 3.4 re-emits OSC 8 hyperlinks in capture-pane -e, and Claude Code
+// wraps every URL it prints in one. The whole sequence — params, target, and
+// both terminators — must vanish, leaving only the visible text; the leaked
+// target was the source of duplicated URLs on screen and ESC bytes reaching
+// the clipboard/opener (PR #97 smoke test).
+func TestStripANSI_OSC8Hyperlink(t *testing.T) {
+	in := "PR: \x1b]8;;https://github.com/x/pull/97\x1b\\" +
+		"https://github.com/x/pull/97\x1b]8;;\x1b\\ done"
+	got := StripANSI(in)
+	assert.Equal(t, "PR: https://github.com/x/pull/97 done", got)
+	assert.NotContains(t, got, "\x1b")
+}
+
+// OSC sequences may terminate with BEL instead of ST (window titles do).
+func TestStripANSI_OSCBelTerminated(t *testing.T) {
+	assert.Equal(t, "after", StripANSI("\x1b]0;some title\x07after"))
+}
+
+// A torture mix of CSI (truecolor), OSC 8, and DCS must strip completely:
+// any surviving ESC byte desyncs the terminal when re-emitted in the hint
+// frame.
+func TestStripANSI_NoEscapeSurvives(t *testing.T) {
+	in := "\x1b[38;2;10;20;30mcolor\x1b[0m " +
+		"\x1b]8;id=x;https://e.com\x07link\x1b]8;;\x07 " +
+		"\x1bPsome dcs payload\x1b\\ tail"
+	got := StripANSI(in)
+	assert.NotContains(t, got, "\x1b")
+	assert.NotContains(t, got, "\x07")
+	assert.Contains(t, got, "color")
+	assert.Contains(t, got, "link")
+	assert.Contains(t, got, "tail")
+}

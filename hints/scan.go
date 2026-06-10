@@ -1,9 +1,10 @@
 package hints
 
 import (
-	"regexp"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/charmbracelet/x/ansi"
 )
 
 // Match is one actionable string found on the screen.
@@ -19,14 +20,14 @@ type Match struct {
 	Label string
 }
 
-// ansiRE matches the CSI escape sequences tmux capture-pane -e emits.
-var ansiRE = regexp.MustCompile(`\x1b\[[0-9;:?]*[A-Za-z]`)
-
-// StripANSI removes ANSI escape sequences so matching and rendering operate
-// on plain text. Hint mode re-renders the screen itself with a dim backdrop,
-// so original colors are deliberately dropped while the mode is active —
-// the contrast effect tmux-fingers applies on purpose.
-func StripANSI(s string) string { return ansiRE.ReplaceAllString(s, "") }
+// StripANSI removes ALL escape sequences — CSI colors, OSC (including the
+// OSC 8 hyperlinks Claude Code wraps URLs in, which tmux capture-pane -e
+// re-emits), DCS, and friends — so matching and rendering operate on plain
+// text. Hint mode re-renders the screen itself with a dim backdrop, so
+// original colors are deliberately dropped while the mode is active — the
+// contrast effect tmux-fingers applies on purpose. Delegates to x/ansi's
+// parser; a homegrown CSI-only regex let OSC 8 targets leak into match text.
+func StripANSI(s string) string { return ansi.Strip(s) }
 
 // Scan finds all matches in stripped multi-line text, top to bottom.
 func Scan(text string) []Match {
