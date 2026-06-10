@@ -13,9 +13,13 @@ type Match struct {
 	Text string
 	// Kind decides the open variant's behavior.
 	Kind Kind
-	// Row and Col locate the first rune of Text on the stripped screen:
+	// Row and Col locate the match's first rune on the stripped screen:
 	// Row is the 0-based visible line, Col the 0-based rune index within it.
 	Row, Col int
+	// Width is the visible extent in runes. For scanner matches it equals
+	// len([]rune(Text)); for hyperlink matches Text is the target, which can
+	// be longer (or shorter) than the visible span it decorates.
+	Width int
 	// Label is the assigned hint sequence (set by NewScreen, empty from Scan).
 	Label string
 }
@@ -74,10 +78,11 @@ func scanLine(line string, row int) []Match {
 		}
 		if text != "" {
 			out = append(out, Match{
-				Text: text,
-				Kind: p.kind,
-				Row:  row,
-				Col:  utf8.RuneCountInString(line[:textStart]),
+				Text:  text,
+				Kind:  p.kind,
+				Row:   row,
+				Col:   utf8.RuneCountInString(line[:textStart]),
+				Width: utf8.RuneCountInString(text),
 			})
 		}
 		offset += bestLoc[1]

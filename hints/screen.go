@@ -3,7 +3,6 @@ package hints
 import (
 	"sort"
 	"strings"
-	"unicode/utf8"
 )
 
 // Screen is one frozen, hinted capture of a preview pane: the stripped
@@ -21,12 +20,31 @@ type Screen struct {
 // shortest labels; identical text shares one label. A non-positive width or
 // negative rows disables that axis of clipping (used by tests).
 func NewScreen(raw string, width, rows int) *Screen {
-	lines := strings.Split(StripANSI(raw), "\n")
+	plain, links := stripWithLinks(raw)
+	lines := strings.Split(plain, "\n")
 	if rows >= 0 && len(lines) > rows {
 		lines = lines[:rows]
 	}
 
 	matches := Scan(strings.Join(lines, "\n"))
+	// Hyperlink targets are authoritative: a scanner match overlapping a
+	// link's visible span only re-detects the link from its display text
+	// (often the URL printed verbatim), so it yields to the link match.
+	var linkMs []Match
+	for _, sp := range links {
+		if sp.Row < len(lines) {
+			linkMs = append(linkMs, linkMatch(sp))
+		}
+	}
+	if len(linkMs) > 0 {
+		unlinked := matches[:0]
+		for _, m := range matches {
+			if !overlapsLink(m, linkMs) {
+				unlinked = append(unlinked, m)
+			}
+		}
+		matches = append(unlinked, linkMs...)
+	}
 	// A hint must label something the user can see: drop matches whose first
 	// rune is already clipped by the pane's width truncation.
 	visible := matches[:0]
@@ -54,15 +72,27 @@ func NewScreen(raw string, width, rows int) *Screen {
 		byText[visible[i].Text] = labels[next]
 		next++
 	}
-	// A label longer than its text would overhang the match (fingers' guard).
-	// Dropping after assignment keeps the remaining labels prefix-free.
+	// A label longer than its visible span would overhang the match
+	// (fingers' guard). Dropping after assignment keeps the remaining labels
+	// prefix-free.
 	kept := visible[:0]
 	for _, m := range visible {
-		if utf8.RuneCountInString(m.Text) >= len(m.Label) {
+		if m.Width >= len(m.Label) {
 			kept = append(kept, m)
 		}
 	}
 	return &Screen{lines: lines, width: width, matches: kept}
+}
+
+// overlapsLink reports whether m's visible range intersects any link span
+// match on the same row.
+func overlapsLink(m Match, links []Match) bool {
+	for _, l := range links {
+		if m.Row == l.Row && m.Col < l.Col+l.Width && l.Col < m.Col+m.Width {
+			return true
+		}
+	}
+	return false
 }
 
 func countDistinct(ms []Match) int {

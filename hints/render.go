@@ -52,7 +52,9 @@ func renderLine(line string, ms []Match, typed string, st Styles) string {
 			continue // overlap or out of range: keep the earlier match
 		}
 		b.WriteString(st.Backdrop.Render(string(runes[pos:m.Col])))
-		end := m.Col + len([]rune(m.Text))
+		// Width, not len(Text): a hyperlink match's copyable target can be
+		// longer than the visible span it decorates.
+		end := m.Col + m.Width
 		if end > len(runes) {
 			end = len(runes)
 		}

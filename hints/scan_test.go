@@ -100,8 +100,8 @@ func TestScan_RowsAndCols(t *testing.T) {
 	text := "line one\nsee /tmp/x.go here\nmodified:   foo/bar.go"
 	ms := Scan(text)
 	require.Len(t, ms, 2)
-	assert.Equal(t, Match{Text: "/tmp/x.go", Kind: KindPath, Row: 1, Col: 4}, ms[0])
-	assert.Equal(t, Match{Text: "foo/bar.go", Kind: KindPath, Row: 2, Col: 12}, ms[1])
+	assert.Equal(t, Match{Text: "/tmp/x.go", Kind: KindPath, Row: 1, Col: 4, Width: 9}, ms[0])
+	assert.Equal(t, Match{Text: "foo/bar.go", Kind: KindPath, Row: 2, Col: 12, Width: 10}, ms[1])
 }
 
 // Matching always operates on stripped text; StripANSI removes the SGR
