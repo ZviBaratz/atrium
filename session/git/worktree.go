@@ -61,10 +61,12 @@ type Worktree struct {
 	// When true, the branch will not be deleted on cleanup. Only set for sessions restored
 	// from storage that predate the branch-off model; new sessions are always branch-owners.
 	isExistingBranch bool
-	// statsCache caches only the rev-list commit counts (ahead/behind) from
-	// computeRepoStats so rev-list does not run on every 500ms tick. The dirty
-	// flag is intentionally not cached — git status --porcelain runs fresh each
-	// tick so uncommitted edits show without delay.
+	// statsCache caches rev-list commit counts (ahead/behind) for revListCacheTTL
+	// and the dirty flag for dirtyCacheTTL. The dirty TTL (1s) is shorter than the
+	// rev-list TTL (3s) because dirty reflects uncommitted file edits that should
+	// appear promptly; a brief lag is acceptable, permanent staleness is not.
+	// invalidateStatsCache zeros the whole struct, so a commit/push also clears
+	// the dirty cache and forces a fresh git-status on the next tick.
 	// statsCacheMu is a separate mutex so it never shares a lock ordering with mu.
 	statsCache   repoStatsEntry
 	statsCacheMu sync.Mutex

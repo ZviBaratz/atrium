@@ -1,6 +1,7 @@
 package git
 
 import (
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -196,5 +197,46 @@ func TestComputeRepoStats_RevListErrorDoesNotCache(t *testing.T) {
 	defer wt.statsCacheMu.Unlock()
 	if !wt.statsCache.computedAt.IsZero() {
 		t.Errorf("failed rev-list poisoned the cache: computedAt = %v, want zero", wt.statsCache.computedAt)
+	}
+}
+
+// TestComputeRepoStats_DirtyCacheHit verifies that a fresh dirtyComputedAt entry
+// causes computeRepoStats to serve Dirty from the cache without re-running git
+// status. The rev-list cache is stale here, so this also guards against a rev-list
+// refresh clobbering the dirty fields when it stores its result.
+func TestComputeRepoStats_DirtyCacheHit(t *testing.T) {
+	wt := &Worktree{}
+	wt.statsCacheMu.Lock()
+	wt.statsCache = repoStatsEntry{
+		dirty:           true,
+		dirtyComputedAt: time.Now(),
+	}
+	wt.statsCacheMu.Unlock()
+
+	stats := &DiffStats{}
+	// A nonexistent dir makes any unexpected git invocation fail loudly ("" would
+	// make git -C a no-op and silently inherit the test process's cwd).
+	wt.computeRepoStats(stats, filepath.Join(t.TempDir(), "missing"))
+	if !stats.Dirty {
+		t.Error("dirty cache hit: Dirty = false, want true")
+	}
+}
+
+// TestComputeRepoStats_DirtyCacheMiss verifies that a stale dirtyComputedAt entry
+// is not propagated. t.TempDir() is not a git repo, so git status fails silently,
+// leaving Dirty at its zero value — the stale true must not be carried forward.
+func TestComputeRepoStats_DirtyCacheMiss(t *testing.T) {
+	wt := &Worktree{}
+	wt.statsCacheMu.Lock()
+	wt.statsCache = repoStatsEntry{
+		dirty:           true,
+		dirtyComputedAt: time.Now().Add(-(dirtyCacheTTL + time.Second)),
+	}
+	wt.statsCacheMu.Unlock()
+
+	stats := &DiffStats{}
+	wt.computeRepoStats(stats, t.TempDir()) // non-git dir → git status fails silently → Dirty=false
+	if stats.Dirty {
+		t.Error("stale dirty cache propagated: Dirty = true, want false")
 	}
 }
