@@ -171,6 +171,14 @@ func (p rowPaint) agentSeg(i *session.Instance) rowSeg {
 	return p.seg(icon, c)
 }
 
+// agentColor is the identity color for i's agent (brand accent when the agent
+// has one, theme foreground otherwise) — the chip-tinting counterpart of
+// agentSeg, so the model chip can ride the icon as one brand-colored unit.
+func (p rowPaint) agentColor(i *session.Instance) lipgloss.Color {
+	_, c := p.th.AgentGlyph(string(agent.Resolve(i.Program).Key))
+	return c
+}
+
 // nameSeg is the flex (elastic) display-name segment. NeedsInput recolors the
 // name (the one attention state); the selected row bolds it. The name is width-
 // sanitized so emoji/ZWJ clusters don't desync the renderer.

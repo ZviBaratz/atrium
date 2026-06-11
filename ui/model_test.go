@@ -1,10 +1,13 @@
 package ui
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/charmbracelet/bubbles/spinner"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/muesli/termenv"
 	"github.com/stretchr/testify/require"
 
 	"github.com/ZviBaratz/atrium/session"
@@ -71,4 +74,45 @@ func TestRender_ModelChip(t *testing.T) {
 	r.modelIndicator = "off"
 	require.NotContains(t, ansi.Strip(r.Render(pinned, 0, false)), "fable")
 	require.NotContains(t, ansi.Strip(r.Render(known, 0, false)), "opus")
+}
+
+// TestRender_ModelChip_BrandUnit pins the chip's placement and tinting: the
+// chip rides the agent icon as one brand-colored unit — after the AUTO badge,
+// one space before the icon, agent brand color when pinned, dim when the model
+// is only transcript-observed.
+func TestRender_ModelChip_BrandUnit(t *testing.T) {
+	t.Cleanup(theme.Set("unicode"))
+	prof := lipgloss.ColorProfile()
+	lipgloss.SetColorProfile(termenv.TrueColor)
+	t.Cleanup(func() { lipgloss.SetColorProfile(prof) })
+
+	s := spinner.New()
+	r := &InstanceRenderer{spinner: &s}
+	r.setWidth(80)
+
+	pinned, err := session.NewInstance(session.InstanceOptions{Title: "p", Path: ".", Program: "claude --model fable"})
+	require.NoError(t, err)
+	pinned.AutoYes = true
+	known, err := session.NewInstance(session.InstanceOptions{Title: "k", Path: ".", Program: "claude"})
+	require.NoError(t, err)
+	known.SetModelMeta("claude-opus-4-7", transcript.Stamp{Path: "/t", Size: 1})
+
+	// Placement: AUTO badge, then chip, then icon — the badge must not split
+	// the chip from the icon — and exactly one space binds chip to icon.
+	plain := ansi.Strip(r.Render(pinned, 0, false))
+	idxAuto, idxModel, idxIcon := strings.Index(plain, "AUTO"), strings.Index(plain, "fable"), strings.Index(plain, "✻")
+	require.True(t, idxAuto >= 0 && idxModel >= 0 && idxIcon >= 0, "row must carry badge, chip and icon: %q", plain)
+	require.True(t, idxAuto < idxModel && idxModel < idxIcon,
+		"chip must sit between AUTO and the agent icon: %q", plain)
+	require.Contains(t, plain, "fable ✻", "one space between chip and icon")
+
+	// Tint: claude's brand coral #d97757. The icon is always coral, so count —
+	// a pinned row colors the chip too (2 coral spans), an observed-only row
+	// leaves the chip dim (1 coral span: the icon).
+	const coral = "38;2;217;119;87"
+	require.Equal(t, 2, strings.Count(r.Render(pinned, 0, false), coral),
+		"pinned chip + icon must both carry the brand color")
+	r.modelIndicator = "always"
+	require.Equal(t, 1, strings.Count(r.Render(known, 0, false), coral),
+		"an unpinned chip stays dim; only the icon is brand-colored")
 }

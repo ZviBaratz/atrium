@@ -425,19 +425,6 @@ func (r *InstanceRenderer) Render(i *session.Instance, idx int, selected bool) s
 		}
 		right1 = append(right1, p.seg(" "+acct+" ", acctColor))
 	}
-	// Per-session model chip: transcript truth first, --model flag fallback (see
-	// Instance.ModelInfo). The pinned-only default shows it just where a flag
-	// pins a model (accent); "always" also surfaces transcript-known models
-	// (dim when unpinned); "off" hides it.
-	if r.modelIndicator != "off" {
-		if model, pinned := i.ModelInfo(); model != "" && (pinned || r.modelIndicator == "always") {
-			c := th.Palette.FgDim
-			if pinned {
-				c = th.Palette.Accent
-			}
-			right1 = append(right1, p.seg(" "+shortModelName(model)+" ", c))
-		}
-	}
 	// Per-session AUTO badge (not while paused) so "yolo" state is unmistakable.
 	// The badge carries its own background, so wrap it as a pre-rendered chip.
 	if i.AutoYes && !i.Paused() {
@@ -446,6 +433,21 @@ func (r *InstanceRenderer) Render(i *session.Instance, idx int, selected bool) s
 		}
 		badge := " " + g.AutoBadge + "AUTO "
 		right1 = append(right1, rawSeg(badge, th.BadgeStyle().Render(badge)))
+	}
+	// Per-session model chip: transcript truth first, --model flag fallback (see
+	// Instance.ModelInfo). It rides the agent icon as one unit — last before the
+	// icon, one space apart, agent brand color when flag-pinned, dim when only
+	// transcript-observed. The pinned-only default shows it just where a flag
+	// pins a model; "always" also surfaces transcript-known models; "off" hides
+	// it.
+	if r.modelIndicator != "off" {
+		if model, pinned := i.ModelInfo(); model != "" && (pinned || r.modelIndicator == "always") {
+			c := th.Palette.FgDim
+			if pinned {
+				c = p.agentColor(i)
+			}
+			right1 = append(right1, p.seg(" "+shortModelName(model), c))
+		}
 	}
 	// Agent-identity icon (which CLI the session runs), pinned to the far right so
 	// it sits in a fixed column — a right-edge counterpart to the left status
