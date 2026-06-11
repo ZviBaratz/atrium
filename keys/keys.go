@@ -84,6 +84,10 @@ const (
 	// KeyHints enters hint (fingers) mode: overlay copy/open hint labels on
 	// the preview pane's visible matches (URLs, paths, SHAs, …).
 	KeyHints
+
+	// KeyApprove taps Enter at the selected session's visible prompt (tool
+	// permission, plan approval) without attaching.
+	KeyApprove
 )
 
 // KillKey is the chord that triggers a kill from the session list. It mirrors the
@@ -134,6 +138,7 @@ var GlobalKeyStringsMap = map[string]KeyName{
 	",":          KeySettings,
 	"ctrl+q":     KeyAttachToggle,
 	"f":          KeyHints,
+	"a":          KeyApprove,
 }
 
 // GlobalkeyBindings is a global, immutable map of KeyName to keybinding.
@@ -291,5 +296,9 @@ var GlobalkeyBindings = map[KeyName]key.Binding{
 	KeyHints: key.NewBinding(
 		key.WithKeys("f"),
 		key.WithHelp("f", "copy/open from screen"),
+	),
+	KeyApprove: key.NewBinding(
+		key.WithKeys("a"),
+		key.WithHelp("a", "approve"),
 	),
 }

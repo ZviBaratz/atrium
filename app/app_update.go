@@ -781,6 +781,27 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		m.state = statePrompt
 		m.textInputOverlay = overlay.NewQuickSendOverlay("Send to " + selected.DisplayName())
 		return m, tea.WindowSize()
+	case keys.KeyApprove:
+		// Answer the selected session's visible prompt with a single Enter,
+		// without attaching. Strictly gated on NeedsInput so a stray 'a' can't
+		// poke an agent that isn't asking. The gate is best-effort, not
+		// transactional: if the prompt resolved within the last poll tick the
+		// Enter lands at the agent's idle input box, which is a no-op.
+		selected := m.list.GetSelectedInstance()
+		if selected == nil {
+			return m, nil
+		}
+		if selected.GetStatus() != session.NeedsInput {
+			return m, m.handleInfoNotice("agent isn't waiting on a prompt — nothing to approve")
+		}
+		if err := selected.ApprovePrompt(); err != nil {
+			return m, m.handleError(fmt.Errorf("approve: %w", err))
+		}
+		// Optimistic flip: updates the row glyph immediately and turns a
+		// double-press into the guard notice instead of a second Enter.
+		// Self-correcting — the next poll tick reclassifies the pane.
+		selected.SetStatus(session.Running)
+		return m, m.handleInfoNotice(fmt.Sprintf("approved — enter sent to '%s'", selected.DisplayName()))
 	case keys.KeyCopyBranch:
 		// Yank the selected session's branch name to the system clipboard for handoff
 		// to a PR, a teammate, or a git command. Both outcomes are acknowledged on the

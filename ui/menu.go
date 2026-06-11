@@ -50,6 +50,11 @@ var defaultHintKeys = []keys.KeyName{keys.KeyEnter, keys.KeyNew, keys.KeyQuickSe
 // opened or sent to, so the bar points at resume instead.
 var pausedHintKeys = []keys.KeyName{keys.KeyResume, keys.KeyNew, keys.KeyKill, keys.KeyHelp}
 
+// needsInputHintKeys replace the default set while the agent is blocked on a
+// prompt: answering it is the action that unblocks everything else, so this
+// branch outranks the PR/dirty sets in hintsFor.
+var needsInputHintKeys = []keys.KeyName{keys.KeyEnter, keys.KeyNew, keys.KeyApprove, keys.KeyQuickSend, keys.KeyKill, keys.KeyHelp}
+
 // dirtyHintKeys extend the default set when the selected session has work on
 // its branch — the moment pause/push become the actions that matter.
 var dirtyHintKeys = []keys.KeyName{keys.KeyEnter, keys.KeyNew, keys.KeyQuickSend, keys.KeyPause, keys.KeySubmit, keys.KeyKill, keys.KeyHelp}
@@ -133,6 +138,9 @@ func hintsFor(instance *session.Instance) []keys.KeyName {
 	}
 	if instance.Paused() {
 		return pausedHintKeys
+	}
+	if instance.GetStatus() == session.NeedsInput {
+		return needsInputHintKeys
 	}
 	if !instance.IsDirect() {
 		// A PR that's ready to merge is the most action-relevant state: surface

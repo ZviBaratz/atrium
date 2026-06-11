@@ -219,3 +219,63 @@ func TestInstanceData_MissingDisplayNameIsEmpty(t *testing.T) {
 	require.NoError(t, json.Unmarshal([]byte(`{"title":"my-task"}`), &data))
 	assert.Equal(t, "", data.DisplayName)
 }
+
+// approveRecorder builds a MockCmdExec that records every send-keys argv and
+// resolves the agent pane as %7, so tests can assert exactly what reached tmux.
+func approveRecorder(sendKeysArgs *[][]string) cmd_test.MockCmdExec {
+	return cmd_test.MockCmdExec{
+		RunFunc: func(cmd *exec.Cmd) error {
+			for i, arg := range cmd.Args {
+				if arg == "send-keys" {
+					*sendKeysArgs = append(*sendKeysArgs, cmd.Args[i+1:])
+					break
+				}
+			}
+			return nil
+		},
+		OutputFunc: func(*exec.Cmd) ([]byte, error) { return []byte("%7\n"), nil },
+	}
+}
+
+// ApprovePrompt is the user-initiated twin of the autoyes TapEnter: it must work
+// with AutoYes off — that gate is what it deliberately bypasses.
+func TestApprovePrompt_TapsEnterWithoutAutoYes(t *testing.T) {
+	var sent [][]string
+	inst := &Instance{
+		Title:       "approve",
+		status:      NeedsInput,
+		started:     true,
+		tmuxSession: tmux.NewSessionWithDeps(context.Background(), "approve", "claude", tmux.MakePtyFactory(), approveRecorder(&sent)),
+	}
+	require.False(t, inst.AutoYes, "the test must exercise the AutoYes-off path")
+
+	require.NoError(t, inst.ApprovePrompt())
+
+	require.Len(t, sent, 1, "exactly one keystroke batch must reach tmux")
+	assert.Contains(t, sent[0], "Enter")
+}
+
+func TestApprovePrompt_NotStartedErrors(t *testing.T) {
+	var sent [][]string
+	inst := &Instance{
+		Title:       "approve-unstarted",
+		status:      Ready,
+		tmuxSession: tmux.NewSessionWithDeps(context.Background(), "approve-unstarted", "claude", tmux.MakePtyFactory(), approveRecorder(&sent)),
+	}
+
+	require.Error(t, inst.ApprovePrompt())
+	assert.Empty(t, sent, "an unstarted instance must never reach tmux")
+}
+
+func TestApprovePrompt_PausedErrors(t *testing.T) {
+	var sent [][]string
+	inst := &Instance{
+		Title:       "approve-paused",
+		status:      Paused,
+		started:     true,
+		tmuxSession: tmux.NewSessionWithDeps(context.Background(), "approve-paused", "claude", tmux.MakePtyFactory(), approveRecorder(&sent)),
+	}
+
+	require.Error(t, inst.ApprovePrompt())
+	assert.Empty(t, sent, "a paused instance has no live pane to tap")
+}
