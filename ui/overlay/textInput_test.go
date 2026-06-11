@@ -9,6 +9,7 @@ import (
 	"github.com/ZviBaratz/atrium/config"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	xansi "github.com/charmbracelet/x/ansi"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -693,6 +694,21 @@ func TestSessionCreateOverlay_ModeChipCycle(t *testing.T) {
 		o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyUp})
 	}
 	assert.Equal(t, "", o.GetPermissionMode(), "cycling back to default drops the override")
+}
+
+// The chip row displays the kebab-case label (accept-edits) while the value it
+// contributes stays the camelCase CLI enum (acceptEdits, asserted by value in
+// TestSessionCreateOverlay_ModeChipCycle). This pins the user-visible half of
+// that decoupling — the whole point of the labels slice — so a regression that
+// dropped it back to options would fail here, not just silently re-render the
+// camelCase token.
+func TestSessionCreateOverlay_ModeChipDisplaysKebabLabel(t *testing.T) {
+	o := NewSessionCreateOverlay(nil, nil, []string{"/repo/a"}, "claude")
+	o.SetSize(80, 40)
+
+	got := xansi.Strip(o.Render())
+	assert.Contains(t, got, "accept-edits", "the chip row must show the kebab-case label")
+	assert.NotContains(t, got, "acceptEdits", "the camelCase CLI value must never reach the display")
 }
 
 // Tab on the mode field always advances — chips have nothing to complete.
