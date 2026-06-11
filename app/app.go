@@ -135,6 +135,10 @@ type home struct {
 	// alias); update hints quote it so the suggested command actually exists
 	// in the user's shell. Empty (tests) falls back to "atrium".
 	binName string
+	// pendingUpdateNotice buffers a one-shot update notice that arrived while
+	// the hint bar couldn't render it (a modal overlay was open); the preview
+	// tick re-delivers it. Empty when nothing is pending.
+	pendingUpdateNotice string
 
 	// storage is the interface for saving/loading data to/from the app's state
 	storage *session.Storage

@@ -72,10 +72,15 @@ app/                    startup goroutine → tea.Msg → hint-bar / toast notic
 - Semver comparison against `main.version`. A `dev` version (or any version
   containing a prerelease suffix) makes the updater fully inert.
 - Results cached in `update-check.json` in the data dir (path derived from
-  `config.GetConfigDir()`, never hardcoded) with a 24-hour TTL. The cache
-  keeps the startup path fast and deterministic and respects GitHub's 60
-  requests/hour unauthenticated rate limit. `atrium update` bypasses the
-  cache.
+  `config.GetConfigDir()`, never hardcoded) with a 24-hour TTL. While the
+  cache is fresh the network is never touched: a known-newer release is served
+  as a version-only (unresolved) `Release`, which is all the notify hint
+  needs; the resolved install handle is fetched only when the cache expires.
+  Failed checks are themselves recorded and retried after a one-hour backoff,
+  so an offline or rate-limited machine doesn't re-query on every launch.
+  Together these respect GitHub's 60 requests/hour unauthenticated rate
+  limit. `atrium update` bypasses the cache. A cross-process flock serializes
+  concurrent appliers (e.g. a TUI auto-install racing `atrium update`).
 
 ### Apply
 
@@ -91,9 +96,12 @@ app/                    startup goroutine → tea.Msg → hint-bar / toast notic
 1. **TUI startup** (`app/`): if version is a clean release and mode ≠ `off`,
    fire exactly one goroutine; its result arrives as a `tea.Msg`.
    - `notify`: quiet hint ("v0.X.Y available — run `atrium update`").
-   - `auto`: proceed to Apply in the same goroutine; on success show
-     "✓ updated to v0.X.Y — restart atrium to apply". The two notices are
-     distinct: *available* vs *installed, restart needed*.
+   - `auto`: a network-resolved release stages the download as a second
+     command (so an "updating…" notice renders during the transfer); on
+     success show "✓ updated to v0.X.Y — restart atrium to apply". The
+     notices are distinct: *available* vs *updating* vs *installed, restart
+     needed*. A notice that arrives while a modal overlay owns the screen is
+     buffered and re-delivered once the hint bar is back.
    - Every failure (network, rate limit, checksum, permissions) is log-only.
      The TUI never blocks on the network and never surfaces updater errors.
 2. **`atrium update`**: explicit and verbose — prints current/latest versions,

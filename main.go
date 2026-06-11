@@ -23,6 +23,7 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/spf13/cobra"
 )
@@ -211,8 +212,9 @@ var (
 			fmt.Printf("%s version %s\n", binName, version)
 			// Only link to a release for a clean release version. Dev builds report
 			// "dev" or a `git describe` string (e.g. 0.1.0-5-gabc-dirty) that has no
-			// corresponding release page.
-			if version != "dev" && !strings.Contains(version, "-") {
+			// corresponding release page. Same predicate as the updater, so the two
+			// commands can never disagree on what counts as a release build.
+			if update.IsUpdatableVersion(version) {
 				fmt.Printf("https://github.com/ZviBaratz/atrium/releases/tag/v%s\n", version)
 			}
 		},
@@ -240,7 +242,13 @@ var (
 			ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 			defer stop()
 
-			rel, err := update.Check(ctx, version)
+			// Bound the metadata query so a blackholed connection (captive portal,
+			// dropped packets) fails fast instead of hanging the command. The
+			// download below stays on the signal context: large archives on slow
+			// links shouldn't be killed by an arbitrary deadline, and Ctrl+C works.
+			checkCtx, cancelCheck := context.WithTimeout(ctx, 30*time.Second)
+			rel, err := update.Check(checkCtx, version)
+			cancelCheck()
 			if err != nil {
 				return fmt.Errorf("update check failed: %w", err)
 			}

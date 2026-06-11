@@ -16,53 +16,53 @@ func TestCache_RoundTrip(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	now := time.Now()
 
-	require.NoError(t, saveCache("0.7.0", now))
+	require.NoError(t, saveCache(cacheEntry{CheckedAt: now, Latest: "0.7.0"}))
 
-	e, ok := loadCache(now.Add(time.Hour))
-	require.True(t, ok, "an hour-old entry is fresh")
+	e, ok := loadCache()
+	require.True(t, ok)
 	assert.Equal(t, "0.7.0", e.Latest)
+	assert.True(t, e.fresh(now.Add(time.Hour)), "an hour-old entry is fresh")
 }
 
-func TestCache_MissingFileIsNotFresh(t *testing.T) {
+func TestCache_MissingFileIsAbsent(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
-	_, ok := loadCache(time.Now())
+	_, ok := loadCache()
 	assert.False(t, ok)
 }
 
-func TestCache_StaleEntryIsNotFresh(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+func TestCache_Freshness(t *testing.T) {
 	now := time.Now()
-	require.NoError(t, saveCache("0.7.0", now))
+	e := cacheEntry{CheckedAt: now, Latest: "0.7.0"}
 
-	_, ok := loadCache(now.Add(cacheTTL + time.Minute))
-	assert.False(t, ok, "an entry past the TTL must force a fresh network check")
+	assert.True(t, e.fresh(now.Add(cacheTTL-time.Minute)))
+	assert.False(t, e.fresh(now.Add(cacheTTL)),
+		"an entry exactly cacheTTL old is stale, not fresh")
+	assert.False(t, e.fresh(now.Add(cacheTTL+time.Minute)),
+		"an entry past the TTL must force a fresh network check")
+	assert.False(t, cacheEntry{CheckedAt: now.Add(48 * time.Hour)}.fresh(now),
+		"a clock-skewed future entry must not pin the cache forever")
 }
 
-func TestCache_ExactTTLBoundaryIsNotFresh(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+func TestCache_FailureBackoffWindow(t *testing.T) {
 	now := time.Now()
-	require.NoError(t, saveCache("0.7.0", now))
+	e := cacheEntry{FailedAt: now}
 
-	_, ok := loadCache(now.Add(cacheTTL))
-	assert.False(t, ok, "an entry exactly cacheTTL old is stale, not fresh")
+	assert.True(t, e.failedRecently(now.Add(failureBackoff-time.Minute)))
+	assert.False(t, e.failedRecently(now.Add(failureBackoff)),
+		"the backoff window is half-open, like the TTL")
+	assert.False(t, cacheEntry{FailedAt: now.Add(48 * time.Hour)}.failedRecently(now),
+		"a clock-skewed future failure must not suppress checks forever")
+	assert.False(t, cacheEntry{}.failedRecently(now),
+		"no recorded failure means no backoff")
 }
 
-func TestCache_FutureTimestampIsNotFresh(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-	now := time.Now()
-	require.NoError(t, saveCache("0.7.0", now.Add(48*time.Hour)))
-
-	_, ok := loadCache(now)
-	assert.False(t, ok, "a clock-skewed future entry must not pin the cache forever")
-}
-
-func TestCache_CorruptFileIsNotFresh(t *testing.T) {
+func TestCache_CorruptFileIsAbsent(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	dir, err := config.GetConfigDir()
 	require.NoError(t, err)
 	require.NoError(t, os.MkdirAll(dir, 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(dir, cacheFileName), []byte("{not json"), 0o644))
 
-	_, ok := loadCache(time.Now())
+	_, ok := loadCache()
 	assert.False(t, ok)
 }

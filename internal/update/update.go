@@ -18,14 +18,28 @@ import (
 // repository regardless of any fork the binary was built from.
 const repoSlug = "ZviBaratz/atrium"
 
-// Release is a newer-than-current release resolved from the network. The
-// embedded library handles are what Apply needs to download and swap.
+// ErrNotUpdatable reports a check on a non-release build (dev, git-describe,
+// or SHA-stamped — see IsUpdatableVersion). It is a typed outcome rather than
+// a silent nil: a caller that forgets to gate gets an error it can present,
+// never a false "you're on the latest version".
+var ErrNotUpdatable = errors.New("not a release build; self-update requires a release version")
+
+// Release is a newer-than-current release. One resolved from the network
+// carries the library handles Apply needs to download and swap; one served
+// from the cache knows only its version (see Resolved).
 type Release struct {
 	// Version is the release's clean semver, without a leading "v".
 	Version string
 
 	updater *selfupdate.Updater
 	release *selfupdate.Release
+}
+
+// Resolved reports whether Apply has the handles it needs — true only for a
+// Release that came from the network. A cache-served Release carries just the
+// version: enough for a hint, never for an install.
+func (r *Release) Resolved() bool {
+	return r.updater != nil && r.release != nil
 }
 
 // checkRemote queries the release source. It is a package var so tests can
@@ -39,7 +53,7 @@ func realCheck(ctx context.Context, current string) (*Release, error) {
 	// A non-release version (dev build, git-describe string) can never match a
 	// release asset, and the library's semver comparison would panic on it.
 	if !IsUpdatableVersion(current) {
-		return nil, nil
+		return nil, ErrNotUpdatable
 	}
 	updater, err := selfupdate.NewUpdater(selfupdate.Config{
 		Validator: &selfupdate.ChecksumValidator{UniqueFilename: "checksums.txt"},
@@ -65,33 +79,45 @@ func realCheck(ctx context.Context, current string) (*Release, error) {
 }
 
 // Check queries the network unconditionally — the `atrium update` path. It
-// returns nil when the running version is already the latest. current should
-// be a clean release version (see IsUpdatableVersion); non-release versions
-// are inert and return nil.
+// returns nil when the running version is already the latest, and
+// ErrNotUpdatable for a non-release version (see IsUpdatableVersion).
 func Check(ctx context.Context, current string) (*Release, error) {
 	return checkRemote(ctx, current)
 }
 
-// CheckCached is the TUI-startup check: it consults the 24h cache first so the
-// common up-to-date startup never touches the network. A fresh cache that
-// already knows about a newer release still queries — Apply needs the resolved
-// release handle — but that path only recurs while an available update stays
-// uninstalled. The caller is responsible for gating on IsUpdatableVersion.
+// CheckCached is the TUI-startup check: while the 24h cache is fresh it never
+// touches the network — an up-to-date verdict short-circuits to nil, and a
+// known-newer release is served as an unresolved (version-only) Release, which
+// is all the notify hint needs. The network runs only when the cache expires;
+// a failed attempt is itself recorded so the retry happens after
+// failureBackoff, not on every launch.
 func CheckCached(ctx context.Context, current string) (*Release, error) {
 	now := time.Now()
-	if e, ok := loadCache(now); ok && !isNewer(e.Latest, current) {
+	e, ok := loadCache()
+	if ok && (e.fresh(now) || e.failedRecently(now)) {
+		// Answer from the cache. Inside the failure backoff the entry may be
+		// stale, but a previously seen newer release still hints rather than
+		// going silent until the network recovers.
+		if isNewer(e.Latest, current) {
+			return &Release{Version: e.Latest}, nil
+		}
 		return nil, nil
 	}
 	rel, err := checkRemote(ctx, current)
 	if err != nil {
+		// Keep the last successful CheckedAt/Latest; only stamp the failure.
+		e.FailedAt = now
+		if serr := saveCache(e); serr != nil {
+			log.WarningLog.Printf("failed to save update-check cache: %v", serr)
+		}
 		return nil, err
 	}
 	latest := current
 	if rel != nil {
 		latest = rel.Version
 	}
-	if err := saveCache(latest, now); err != nil {
-		log.WarningLog.Printf("failed to save update-check cache: %v", err)
+	if serr := saveCache(cacheEntry{CheckedAt: now, Latest: latest}); serr != nil {
+		log.WarningLog.Printf("failed to save update-check cache: %v", serr)
 	}
 	return rel, nil
 }
@@ -99,11 +125,18 @@ func CheckCached(ctx context.Context, current string) (*Release, error) {
 // Apply downloads the release archive, validates its checksum, and atomically
 // replaces the running executable. Running processes keep the old inode; the
 // new version takes effect on the next launch. On any failure the old binary
-// stays in place (the library rolls back a partial swap).
+// stays in place (the library rolls back a partial swap). A cross-process lock
+// serializes appliers: the swap renames through fixed .old/.new names next to
+// the binary, and two concurrent rename dances can clobber a fresh install.
 func (r *Release) Apply(ctx context.Context) error {
-	if r.release == nil || r.updater == nil {
+	if !r.Resolved() {
 		return errors.New("release was not resolved from the network")
 	}
+	unlock, err := acquireUpdateLock()
+	if err != nil {
+		return fmt.Errorf("cannot start the update: %w", err)
+	}
+	defer unlock()
 	exe, err := selfupdate.ExecutablePath()
 	if err != nil {
 		return fmt.Errorf("could not locate the running executable: %w", err)

@@ -14,8 +14,16 @@ import (
 // clean release version (e.g. "0.6.0") qualifies. "dev" (unstamped builds) and
 // git-describe strings ("0.6.0-5-gabc123") are inert — they have no
 // corresponding release asset, and a dev build usually outpaces the latest tag.
+// The strict-semver parse is the real gate: the justfile's `git describe
+// --always` fallback stamps a bare commit SHA in a tagless clone, and anything
+// that isn't X.Y.Z would panic in the library's semver comparison (or, for an
+// all-digit SHA, silently compare as an enormous version).
 func IsUpdatableVersion(v string) bool {
-	return v != "" && v != "dev" && !strings.Contains(v, "-") && !strings.Contains(v, "+")
+	if v == "" || v == "dev" || strings.Contains(v, "-") || strings.Contains(v, "+") {
+		return false
+	}
+	_, err := semver.StrictNewVersion(v)
+	return err == nil
 }
 
 // isNewer reports whether candidate is a strictly newer semver than current.
