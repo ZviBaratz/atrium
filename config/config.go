@@ -204,6 +204,33 @@ type Config struct {
 	// "off". Empty or unrecognized values behave as "notify". The explicit
 	// `atrium update` command works regardless of this setting.
 	AutoUpdate string `json:"auto_update,omitempty"`
+	// ModelIndicator controls the per-session model chip in the list:
+	// "pinned" shows it only on sessions whose program pins a --model flag,
+	// "always" shows it on any session with a known model, "off" hides it.
+	// Empty or unknown values normalize to "pinned" (GetModelIndicator), so
+	// configs predating this key keep the conservative default.
+	ModelIndicator string `json:"model_indicator,omitempty"`
+}
+
+// ModelIndicator modes (see Config.ModelIndicator).
+const (
+	ModelIndicatorPinned = "pinned"
+	ModelIndicatorAlways = "always"
+	ModelIndicatorOff    = "off"
+)
+
+// GetModelIndicator returns the normalized model-chip mode; empty or unknown
+// values — and a nil Config — default to ModelIndicatorPinned.
+func (c *Config) GetModelIndicator() string {
+	if c == nil {
+		return ModelIndicatorPinned
+	}
+	switch c.ModelIndicator {
+	case ModelIndicatorAlways, ModelIndicatorOff:
+		return c.ModelIndicator
+	default:
+		return ModelIndicatorPinned
+	}
 }
 
 // defaultCarryFiles is the carry list applied when a config predates the

@@ -25,6 +25,29 @@ func TestValidModelName(t *testing.T) {
 	}
 }
 
+// TestModelFlag pins the extraction counterpart of WithModelFlag: the value of
+// a --model pin, "" when absent — including the bare trailing flag, which
+// hasModelFlag deliberately still counts as a pin (see WithModelFlag).
+func TestModelFlag(t *testing.T) {
+	for _, tc := range []struct {
+		program, want string
+	}{
+		{"claude --model fable", "fable"},
+		{"claude --model=fable", "fable"},
+		{"/home/zvi/.local/bin/claude --model opus", "opus"},
+		{"claude --permission-mode plan --model opus --continue", "opus"},
+		{"aider --model ollama_chat/gemma3", "ollama_chat/gemma3"}, // extraction is agent-neutral
+		{"claude --models-dir x", ""},                              // lookalike flag is not a pin
+		{"claude --model", ""},                                     // bare trailing flag: no value
+		{"claude", ""},
+		{"", ""},
+	} {
+		if got := ModelFlag(tc.program); got != tc.want {
+			t.Errorf("ModelFlag(%q) = %q, want %q", tc.program, got, tc.want)
+		}
+	}
+}
+
 func TestWithModelFlag(t *testing.T) {
 	cases := []struct {
 		name, program, model, want string

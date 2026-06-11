@@ -10,6 +10,7 @@ import (
 	"github.com/ZviBaratz/atrium/session"
 	"github.com/ZviBaratz/atrium/session/git"
 	"github.com/ZviBaratz/atrium/session/tmux"
+	"github.com/ZviBaratz/atrium/session/transcript"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -91,6 +92,12 @@ type instanceMetaResult struct {
 	sessionLost bool
 	diffStats   *git.DiffStats
 	prStatus    *git.PRStatus
+	// model / modelStamp carry a transcript model extraction; modelOK marks a
+	// result worth applying (ComputeModel returns ok=false for non-claude,
+	// unavailable, or unchanged transcripts).
+	model      string
+	modelStamp transcript.Stamp
+	modelOK    bool
 }
 
 // applyPaneState maps a polled pane state onto an instance's status. Prompt handling
@@ -303,6 +310,9 @@ func tickUpdateMetadataCmd(active []*session.Instance, selected *session.Instanc
 				// PR status is network-bound but TTL-cached, so most ticks return
 				// instantly with no I/O; the selected session refreshes eagerly.
 				r.prStatus = instance.ComputePRStatus(instance == selected)
+				// Transcript model is stamp-gated: an idle claude session costs one
+				// ReadDir + Stat per tick, a streaming one a ≤128KB tail parse.
+				r.model, r.modelStamp, r.modelOK = instance.ComputeModel()
 			}(idx, inst)
 		}
 		wg.Wait()

@@ -293,6 +293,8 @@ func newHome(ctx context.Context, program string, autoYes bool, version, binName
 	// Hide the redundant branch namespace (e.g. "zvi/") from each row's branch
 	// label — it repeats on every session and only crowds the diff off the line.
 	h.list.SetBranchPrefix(appConfig.GetBranchPrefix())
+	// Seed the model-chip mode (pinned/always/off; see config.GetModelIndicator).
+	h.list.SetModelIndicator(appConfig.GetModelIndicator())
 
 	// Load saved instances
 	instances, err := storage.LoadInstances(ctx)

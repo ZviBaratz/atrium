@@ -35,6 +35,7 @@ type rawEntry struct {
 
 type rawMessage struct {
 	Content json.RawMessage `json:"content"`
+	Model   string          `json:"model"` // assistant entries only; see LatestModel
 }
 
 type rawBlock struct {
@@ -57,19 +58,34 @@ const scannerBufMax = 4 << 20
 // truncated=true. Malformed lines, housekeeping entry types, and sidechain
 // entries are skipped; only user/assistant message entries are returned.
 func parseTail(path string, maxBytes int64) (entries []entry, truncated bool, err error) {
-	f, err := os.Open(path)
+	truncated, err = scanTail(path, maxBytes, func(line []byte) {
+		if e, ok := decodeLine(line); ok {
+			entries = append(entries, e)
+		}
+	})
 	if err != nil {
 		return nil, false, err
+	}
+	return entries, truncated, nil
+}
+
+// scanTail streams the lines in the last maxBytes of path to fn, discarding a
+// leading partial line when the window starts mid-file (truncated=true). It is
+// the shared tail-reading core under parseTail (render) and LatestModel.
+func scanTail(path string, maxBytes int64, fn func(line []byte)) (truncated bool, err error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return false, err
 	}
 	defer func() { _ = f.Close() }()
 
 	info, err := f.Stat()
 	if err != nil {
-		return nil, false, err
+		return false, err
 	}
 	if maxBytes > 0 && info.Size() > maxBytes {
 		if _, err := f.Seek(info.Size()-maxBytes, io.SeekStart); err != nil {
-			return nil, false, err
+			return false, err
 		}
 		truncated = true
 	}
@@ -82,14 +98,12 @@ func parseTail(path string, maxBytes int64) (entries []entry, truncated bool, er
 			skipFirst = false
 			continue
 		}
-		if e, ok := decodeLine(sc.Bytes()); ok {
-			entries = append(entries, e)
-		}
+		fn(sc.Bytes())
 	}
 	if err := sc.Err(); err != nil {
-		return nil, false, err
+		return false, err
 	}
-	return entries, truncated, nil
+	return truncated, nil
 }
 
 // decodeLine decodes one JSONL line into a normalized entry. ok is false for
