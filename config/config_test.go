@@ -511,6 +511,37 @@ func TestGetCarryFiles(t *testing.T) {
 	})
 }
 
+// GetAutoUpdateMode must normalize every input to a valid mode. The default is
+// notify; a typo must never silently disable update hints ("off") nor enable
+// unattended binary swaps ("auto").
+func TestGetAutoUpdateMode(t *testing.T) {
+	cases := []struct {
+		name  string
+		value string
+		want  string
+	}{
+		{"empty defaults to notify", "", AutoUpdateNotify},
+		{"explicit notify", "notify", AutoUpdateNotify},
+		{"auto", "auto", AutoUpdateAuto},
+		{"off", "off", AutoUpdateOff},
+		{"unknown falls back to notify", "yolo", AutoUpdateNotify},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := DefaultConfig()
+			cfg.AutoUpdate = tc.value
+			if got := cfg.GetAutoUpdateMode(); got != tc.want {
+				t.Errorf("GetAutoUpdateMode(%q) = %q, want %q", tc.value, got, tc.want)
+			}
+		})
+	}
+
+	var nilCfg *Config
+	if got := nilCfg.GetAutoUpdateMode(); got != AutoUpdateNotify {
+		t.Errorf("nil config: got %q, want %q", got, AutoUpdateNotify)
+	}
+}
+
 func TestResolveClaudeAccount(t *testing.T) {
 	t.Setenv("HOME", "/home/tester")
 

@@ -31,15 +31,18 @@ import (
 // no native double-click event, so it is detected by timing here.
 const doubleClickWindow = 400 * time.Millisecond
 
-// Run is the main entrypoint into the application.
-func Run(ctx context.Context, program string, autoYes bool) error {
+// Run is the main entrypoint into the application. version is the build-stamped
+// binary version ("dev" when unstamped); it gates the startup update check and
+// names the current release in hints. binName is the invoked binary's basename,
+// used verbatim in user-facing hints.
+func Run(ctx context.Context, program string, autoYes bool, version, binName string) error {
 	// Initialize the global bubblezone manager before the first render. The list
 	// and tab views Mark() rows/tabs via the package-level manager, which panics
 	// ("manager not initialized") until NewGlobal() is called. Idempotent, so it
 	// coexists with the test init()s that also call it.
 	zone.NewGlobal()
 	p := tea.NewProgram(
-		newHome(ctx, program, autoYes),
+		newHome(ctx, program, autoYes, version, binName),
 		tea.WithAltScreen(),
 		tea.WithMouseCellMotion(), // Mouse scroll
 		// Tie the program to the lifecycle context so a SIGTERM (which cancels
@@ -120,6 +123,17 @@ type home struct {
 
 	program string
 	autoYes bool
+	// version is the build-stamped binary version ("dev" when unstamped); it
+	// gates the startup update check and names the current release in hints.
+	version string
+	// binName is how the user invoked the binary ("atrium" or the "atr"
+	// alias); update hints quote it so the suggested command actually exists
+	// in the user's shell. Empty (tests) falls back to "atrium".
+	binName string
+	// pendingUpdateNotice buffers a one-shot update notice that arrived while
+	// the hint bar couldn't render it (a modal overlay was open); the preview
+	// tick re-delivers it. Empty when nothing is pending.
+	pendingUpdateNotice string
 
 	// storage is the interface for saving/loading data to/from the app's state
 	storage *session.Storage
@@ -226,7 +240,7 @@ type home struct {
 	selectedSince time.Time
 }
 
-func newHome(ctx context.Context, program string, autoYes bool) *home {
+func newHome(ctx context.Context, program string, autoYes bool, version, binName string) *home {
 	// Load application config
 	appConfig := config.LoadConfig()
 
@@ -266,6 +280,8 @@ func newHome(ctx context.Context, program string, autoYes bool) *home {
 		appConfig:    appConfig,
 		program:      program,
 		autoYes:      autoYes,
+		version:      version,
+		binName:      binName,
 		state:        stateDefault,
 		appState:     appState,
 		listRatio:    appState.GetListRatio(),
@@ -277,6 +293,8 @@ func newHome(ctx context.Context, program string, autoYes bool) *home {
 	// Hide the redundant branch namespace (e.g. "zvi/") from each row's branch
 	// label — it repeats on every session and only crowds the diff off the line.
 	h.list.SetBranchPrefix(appConfig.GetBranchPrefix())
+	// Seed the model-chip mode (pinned/always/off; see config.GetModelIndicator).
+	h.list.SetModelIndicator(appConfig.GetModelIndicator())
 
 	// Load saved instances
 	instances, err := storage.LoadInstances(ctx)
@@ -310,6 +328,7 @@ func (m *home) Init() tea.Cmd {
 			return previewTickMsg{}
 		},
 		tickUpdateMetadataCmd(m.snapshotActiveInstances(), m.list.GetSelectedInstance()),
+		m.updateCheckCmd(), // nil (inert) is fine: tea.Batch skips nil cmds
 	)
 }
 

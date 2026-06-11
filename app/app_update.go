@@ -42,6 +42,26 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.errBox.Clear()
 			m.recomputeLayout() // reclaim the error row; panes grow back by one
 		}
+	case updateFoundMsg:
+		// Stage the download as its own command so this notice renders while
+		// the transfer runs; the restart hint arrives in updateCheckDoneMsg.
+		// The toast is transient; the panel badge persists until restart so
+		// the update survives overlays, missed toasts, and hint_bar:false.
+		if m.list != nil {
+			m.list.SetUpdateBadge(updateBadgeText(msg.release.Version, false))
+		}
+		return m, tea.Batch(
+			m.handleUpdateNotice(fmt.Sprintf("updating to v%s in the background…", msg.release.Version)),
+			m.installUpdateCmd(msg.release),
+		)
+	case updateCheckDoneMsg:
+		if m.list != nil {
+			m.list.SetUpdateBadge(updateBadgeText(msg.version, msg.installed))
+		}
+		if msg.installed {
+			return m, m.handleUpdateNotice(fmt.Sprintf("updated to v%s — restart %s to apply", msg.version, m.hintBinName()))
+		}
+		return m, m.handleUpdateNotice(fmt.Sprintf("v%s available — run `%s update`", msg.version, m.hintBinName()))
 	case previewTickMsg:
 		// The pane owns hint-overlay validity (a selection change or pause
 		// drops it there); if it dropped, follow it back to default so keys
@@ -53,6 +73,9 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmd := m.instanceChanged()
 		return m, tea.Batch(
 			cmd,
+			// An update notice that arrived while an overlay owned the screen
+			// is buffered; deliver it as soon as the hint bar is back.
+			m.flushPendingUpdateNotice(),
 			func() tea.Msg {
 				time.Sleep(100 * time.Millisecond)
 				return previewTickMsg{}
@@ -96,6 +119,9 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				r.instance.SetDiffStats(r.diffStats)
 			}
 			r.instance.SetPRStatus(r.prStatus)
+			if r.modelOK {
+				r.instance.SetModelMeta(r.model, r.modelStamp)
+			}
 		}
 		m.pushSessionContexts()
 		cmds := deliverReadyPrompts(msg.results)

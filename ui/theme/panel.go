@@ -23,6 +23,20 @@ import (
 // lipgloss v1 has no inset-title border API, so the top edge is composed by
 // hand (the body's own top border is disabled and replaced by this row).
 func (t *Theme) Panel(title, content string, width, height int, active bool) string {
+	return t.PanelWithBadge(title, "", content, width, height, active)
+}
+
+// PanelWithBadge is Panel plus an optional right-aligned, attention-colored
+// badge inset in the top border:
+//
+//	╭─ Sessions ──────── ⇡ v0.7.1 ─╮
+//
+// badge is plain text (no ANSI); empty means no badge. The title always wins
+// the width contest: a badge that doesn't fit degrades to its text after the
+// first space (e.g. "v0.7.1"), then to its first token alone (the glyph),
+// then disappears — it is never cut mid-word, which for a version string
+// would mislead.
+func (t *Theme) PanelWithBadge(title, badge, content string, width, height int, active bool) string {
 	if width < 2 {
 		width = 2
 	}
@@ -46,13 +60,45 @@ func (t *Theme) Panel(title, content string, width, height int, active bool) str
 		}
 		titleSeg = " " + runewidth.Truncate(title, maxTitle, "…") + " "
 	}
+	titleSegW := runewidth.StringWidth(titleSeg)
 
-	fill := width - 3 - runewidth.StringWidth(titleSeg) // 2 corners + 1 leading horiz
-	if fill < 0 {
-		fill = 0
+	// Pick the widest badge variant that fits beside the (untouched) title:
+	// full → text after the glyph → glyph alone → none. Budget: two corners,
+	// one leading and one trailing horizontal around the segments.
+	var badgeSeg string
+	if badge != "" {
+		candidates := []string{badge}
+		if i := strings.IndexByte(badge, ' '); i >= 0 {
+			candidates = append(candidates, badge[i+1:], badge[:i])
+		}
+		for _, c := range candidates {
+			if seg := " " + c + " "; width-4-titleSegW-runewidth.StringWidth(seg) >= 0 {
+				badge, badgeSeg = c, seg
+				break
+			}
+		}
+		if badgeSeg == "" {
+			badge = ""
+		}
 	}
-	top := b.TopLeft + b.Top + titleSeg + strings.Repeat(b.Top, fill) + b.TopRight
-	topRow := lipgloss.NewStyle().Foreground(color).Render(top)
+
+	border := lipgloss.NewStyle().Foreground(color)
+	var topRow string
+	if badgeSeg == "" {
+		fill := width - 3 - titleSegW // 2 corners + 1 leading horiz
+		if fill < 0 {
+			fill = 0
+		}
+		topRow = border.Render(b.TopLeft + b.Top + titleSeg + strings.Repeat(b.Top, fill) + b.TopRight)
+	} else {
+		// The badge needs its own (attention) style, so the row is composed
+		// from separately rendered segments; all width math stays on the
+		// plain strings (ANSI adds zero columns).
+		gap := width - 4 - titleSegW - runewidth.StringWidth(badgeSeg)
+		topRow = border.Render(b.TopLeft+b.Top+titleSeg+strings.Repeat(b.Top, gap)) +
+			" " + t.AttentionStyle().Render(badge) + " " +
+			border.Render(b.Top+b.TopRight)
+	}
 
 	// Clip content to the inner box. lipgloss .Height/.Width pad but never
 	// truncate, so oversized content would overflow the panel (and applying

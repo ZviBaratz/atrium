@@ -121,6 +121,12 @@ func (m *home) applySettingChange(key string) tea.Cmd {
 		// palette plus a forced repaint restyles the whole UI in place.
 		theme.Set(m.appConfig.Theme)
 		return tea.Sequence(tea.ClearScreen, tea.WindowSize())
+	case "model_indicator":
+		// Mirror the newHome seeding; the renderer takes the normalized mode
+		// string so ui needs no config import.
+		if m.list != nil {
+			m.list.SetModelIndicator(m.appConfig.GetModelIndicator())
+		}
 	case "hint_bar":
 		// Mirror the newHome seeding: the list shows its inline key hint only
 		// when the always-on bar is off.

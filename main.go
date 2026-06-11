@@ -13,6 +13,7 @@ import (
 	cmd2 "github.com/ZviBaratz/atrium/cmd"
 	"github.com/ZviBaratz/atrium/config"
 	"github.com/ZviBaratz/atrium/daemon"
+	"github.com/ZviBaratz/atrium/internal/update"
 	"github.com/ZviBaratz/atrium/log"
 	"github.com/ZviBaratz/atrium/session"
 	"github.com/ZviBaratz/atrium/session/git"
@@ -22,6 +23,7 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/spf13/cobra"
 )
@@ -30,12 +32,13 @@ var (
 	// version is overridden at build time via -ldflags "-X main.version=...".
 	// GoReleaser injects the tag (e.g. 0.1.0); the justfile injects git describe.
 	// Unstamped builds (plain `go build`) report "dev".
-	version     = "dev"
-	programFlag string
-	autoYesFlag bool
-	daemonFlag  bool
-	binName     string
-	rootCmd     = &cobra.Command{
+	version         = "dev"
+	programFlag     string
+	autoYesFlag     bool
+	daemonFlag      bool
+	updateCheckOnly bool
+	binName         string
+	rootCmd         = &cobra.Command{
 		Use:   "atrium",
 		Short: "Atrium - A command center for orchestrating multiple AI coding agents like Claude Code, Aider, Codex, and Amp.",
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -95,7 +98,7 @@ var (
 				log.ErrorLog.Printf("failed to stop daemon: %v", err)
 			}
 
-			return app.Run(ctx, program, autoYes)
+			return app.Run(ctx, program, autoYes, version, binName)
 		},
 	}
 
@@ -209,10 +212,60 @@ var (
 			fmt.Printf("%s version %s\n", binName, version)
 			// Only link to a release for a clean release version. Dev builds report
 			// "dev" or a `git describe` string (e.g. 0.1.0-5-gabc-dirty) that has no
-			// corresponding release page.
-			if version != "dev" && !strings.Contains(version, "-") {
+			// corresponding release page. Same predicate as the updater, so the two
+			// commands can never disagree on what counts as a release build.
+			if update.IsUpdatableVersion(version) {
 				fmt.Printf("https://github.com/ZviBaratz/atrium/releases/tag/v%s\n", version)
 			}
+		},
+	}
+
+	updateCmd = &cobra.Command{
+		Use:   "update",
+		Short: "Update atrium to the latest release",
+		Long: "Checks GitHub releases for a newer version, downloads the matching archive,\n" +
+			"verifies its checksum, and atomically replaces the current binary. Running\n" +
+			"sessions are not disturbed; the new version takes effect on the next launch.",
+		// A runtime failure is not a usage error: print it once (via main) and
+		// exit non-zero, with no usage dump.
+		SilenceUsage:  true,
+		SilenceErrors: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			log.Initialize(false)
+			defer log.Close()
+
+			if !update.IsUpdatableVersion(version) {
+				return fmt.Errorf("this is a dev build (version %q); self-update only works on release builds — see install.sh", version)
+			}
+			// Same signal-driven lifecycle as the root command: Ctrl+C aborts a
+			// download cleanly instead of leaving the HTTP transfer orphaned.
+			ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+			defer stop()
+
+			// Bound the metadata query so a blackholed connection (captive portal,
+			// dropped packets) fails fast instead of hanging the command. The
+			// download below stays on the signal context: large archives on slow
+			// links shouldn't be killed by an arbitrary deadline, and Ctrl+C works.
+			checkCtx, cancelCheck := context.WithTimeout(ctx, 30*time.Second)
+			rel, err := update.Check(checkCtx, version)
+			cancelCheck()
+			if err != nil {
+				return fmt.Errorf("update check failed: %w", err)
+			}
+			if rel == nil {
+				fmt.Printf("%s v%s is the latest version\n", binName, version)
+				return nil
+			}
+			if updateCheckOnly {
+				fmt.Printf("v%s is available (current: v%s) — run `%s update` to install\n", rel.Version, version, binName)
+				return nil
+			}
+			fmt.Printf("updating v%s → v%s ...\n", version, rel.Version)
+			if err := rel.Apply(ctx); err != nil {
+				return fmt.Errorf("update failed: %w", err)
+			}
+			fmt.Printf("✓ updated to v%s — restart %s to apply\n", rel.Version, binName)
+			return nil
 		},
 	}
 )
@@ -239,6 +292,10 @@ func init() {
 		panic(err)
 	}
 
+	updateCmd.Flags().BoolVar(&updateCheckOnly, "check", false,
+		"Only check whether a newer release exists; do not install it")
+	rootCmd.AddCommand(updateCmd)
+
 	profilesCmd.AddCommand(profilesDetectCmd)
 	rootCmd.AddCommand(debugCmd)
 	rootCmd.AddCommand(versionCmd)
@@ -253,5 +310,6 @@ func main() {
 
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Println(err)
+		os.Exit(1)
 	}
 }

@@ -287,6 +287,18 @@ func (m *home) createSessionFromForm(prompt string) tea.Cmd {
 		}
 		program = agent.WithModelFlag(program, model)
 	}
+	// Compose the permission-mode override the same way (behavioral details —
+	// resume semantics, autoyes safety — live on ModeField's doc comment). The
+	// chips are a closed set today, so the validation backstop exists for drift:
+	// claude rejects an unknown mode at argv parse time, and a pre-launch error
+	// beats a dead session if the chip list and the enum ever diverge.
+	if mode := ov.GetPermissionMode(); mode != "" && agent.Resolve(program).Key == agent.KeyClaude {
+		if !agent.ValidPermissionMode(mode) {
+			ov.Submitted = false
+			return m.handleError(fmt.Errorf("invalid permission mode %q", mode))
+		}
+		program = agent.WithPermissionModeFlag(program, mode)
+	}
 
 	instance, err := session.NewInstance(session.InstanceOptions{
 		Title:   title,

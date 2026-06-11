@@ -30,6 +30,20 @@ func renderRow(t *testing.T, branch string, stats *git.DiffStats) string {
 	return r.Render(inst, 1, false)
 }
 
+// TestList_UpdateBadge: the persistent update badge renders in the panel's
+// top border once set — it is panel chrome, independent of rows and overlays.
+func TestList_UpdateBadge(t *testing.T) {
+	t.Cleanup(theme.Set("unicode"))
+	s := spinner.New()
+	l := NewList(&s)
+	l.SetSize(40, 10)
+
+	require.NotContains(t, ansi.Strip(l.String()), "⇡ v9.9.9", "no badge before the setter")
+
+	l.SetUpdateBadge("⇡ v9.9.9")
+	require.Contains(t, ansi.Strip(l.String()), "⇡ v9.9.9", "badge must render after the setter")
+}
+
 func TestRender_GitContextCluster(t *testing.T) {
 	// Behind, ahead, and dirty all present → all three glyphs render.
 	out := renderRow(t, "feat", &git.DiffStats{Added: 5, Removed: 2, Commits: 3, Behind: 2, Dirty: true})

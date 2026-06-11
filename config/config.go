@@ -28,6 +28,19 @@ const (
 	shellProbeTimeout = 10 * time.Second
 )
 
+// AutoUpdate modes (Config.AutoUpdate). See GetAutoUpdateMode for normalization.
+const (
+	// AutoUpdateNotify checks for a newer release at TUI startup and shows a
+	// hint pointing at `atrium update`. The default.
+	AutoUpdateNotify = "notify"
+	// AutoUpdateAuto downloads, verifies, and stages the new binary in the
+	// background; it takes effect on the next launch (the running TUI, daemon,
+	// and sessions are never disturbed).
+	AutoUpdateAuto = "auto"
+	// AutoUpdateOff disables the startup check entirely.
+	AutoUpdateOff = "off"
+)
+
 // GetConfigDir returns the path to the application's data/config directory.
 //
 // It prefers the new ~/.atrium layout, falls back to an existing legacy
@@ -185,6 +198,39 @@ type Config struct {
 	// is injected and no account badge is shown, so configs predating this key
 	// behave exactly as before.
 	ClaudeAccounts []ClaudeAccount `json:"claude_accounts,omitempty"`
+	// AutoUpdate selects the update behavior at TUI startup: "notify" (default
+	// — check for a newer release and hint at `atrium update`), "auto"
+	// (download + verify + stage in the background; applied on next launch), or
+	// "off". Empty or unrecognized values behave as "notify". The explicit
+	// `atrium update` command works regardless of this setting.
+	AutoUpdate string `json:"auto_update,omitempty"`
+	// ModelIndicator controls the per-session model chip in the list:
+	// "pinned" shows it only on sessions whose program pins a --model flag,
+	// "always" shows it on any session with a known model, "off" hides it.
+	// Empty or unknown values normalize to "pinned" (GetModelIndicator), so
+	// configs predating this key keep the conservative default.
+	ModelIndicator string `json:"model_indicator,omitempty"`
+}
+
+// ModelIndicator modes (see Config.ModelIndicator).
+const (
+	ModelIndicatorPinned = "pinned"
+	ModelIndicatorAlways = "always"
+	ModelIndicatorOff    = "off"
+)
+
+// GetModelIndicator returns the normalized model-chip mode; empty or unknown
+// values — and a nil Config — default to ModelIndicatorPinned.
+func (c *Config) GetModelIndicator() string {
+	if c == nil {
+		return ModelIndicatorPinned
+	}
+	switch c.ModelIndicator {
+	case ModelIndicatorAlways, ModelIndicatorOff:
+		return c.ModelIndicator
+	default:
+		return ModelIndicatorPinned
+	}
 }
 
 // defaultCarryFiles is the carry list applied when a config predates the
@@ -238,6 +284,22 @@ func (c *Config) GetAutoAttach() bool {
 // nil Config — defaults to draft.
 func (c *Config) GetPRCreateDraft() bool {
 	return c == nil || c.PRCreateDraft == nil || *c.PRCreateDraft
+}
+
+// GetAutoUpdateMode returns the normalized auto-update mode: AutoUpdateAuto,
+// AutoUpdateOff, or AutoUpdateNotify for a nil Config, an empty value, or
+// anything unrecognized — a typo must never silently disable update hints nor
+// enable unattended binary swaps.
+func (c *Config) GetAutoUpdateMode() string {
+	if c == nil {
+		return AutoUpdateNotify
+	}
+	switch c.AutoUpdate {
+	case AutoUpdateAuto, AutoUpdateOff:
+		return c.AutoUpdate
+	default:
+		return AutoUpdateNotify
+	}
 }
 
 // GetBranchPrefix returns the configured git-branch prefix (e.g. "zvi/"), or ""

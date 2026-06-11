@@ -201,6 +201,12 @@ type List struct {
 	// when the always-on bottom hint bar is enabled, whose hints supersede it —
 	// without the bar (hint_bar off) the in-list hint is the only affordance left.
 	hideEmptyHint bool
+
+	// updateBadge is the persistent update indicator inset in the panel's top
+	// border ("⇡ v0.7.1"). The app sets it once when the startup update check
+	// resolves and never clears it: unlike toast notices it must survive
+	// overlays and hint_bar:false, so it lives in panel chrome.
+	updateBadge string
 }
 
 // NewList returns an empty List.
@@ -219,11 +225,25 @@ func (l *List) SetShowEmptyHint(show bool) {
 	l.hideEmptyHint = !show
 }
 
+// SetUpdateBadge sets the plain-text update badge ("⇡ v0.7.1") shown in the
+// panel's top border. The panel styles and width-degrades it; pass plain
+// text, no ANSI.
+func (l *List) SetUpdateBadge(text string) {
+	l.updateBadge = text
+}
+
 // SetBranchPrefix sets the git-branch prefix stripped from each row's branch
 // label (see InstanceRenderer.branchPrefix). The app passes the configured
 // BranchPrefix so the redundant per-row namespace (e.g. "zvi/") is hidden.
 func (l *List) SetBranchPrefix(prefix string) {
 	l.renderer.branchPrefix = prefix
+}
+
+// SetModelIndicator sets the model-chip mode (see
+// InstanceRenderer.modelIndicator). The app passes the normalized
+// config.GetModelIndicator value at startup and on settings changes.
+func (l *List) SetModelIndicator(mode string) {
+	l.renderer.modelIndicator = mode
 }
 
 // SetFilter updates the incremental filter query and clamps the selection to the
@@ -296,6 +316,11 @@ type InstanceRenderer struct {
 	// stripped from each row's branch label — every session shares it, so it is
 	// pure repetition on the version-control line. Empty disables stripping.
 	branchPrefix string
+	// modelIndicator is the model-chip mode (config.GetModelIndicator):
+	// "always" / "off", with anything else — including the zero value — read as
+	// the pinned-only default, so normalization stays in config and the ui
+	// package needs no config import.
+	modelIndicator string
 }
 
 func (r *InstanceRenderer) setWidth(width int) {
@@ -399,6 +424,19 @@ func (r *InstanceRenderer) Render(i *session.Instance, idx int, selected bool) s
 			acctColor = th.Palette.FgDim
 		}
 		right1 = append(right1, p.seg(" "+acct+" ", acctColor))
+	}
+	// Per-session model chip: transcript truth first, --model flag fallback (see
+	// Instance.ModelInfo). The pinned-only default shows it just where a flag
+	// pins a model (accent); "always" also surfaces transcript-known models
+	// (dim when unpinned); "off" hides it.
+	if r.modelIndicator != "off" {
+		if model, pinned := i.ModelInfo(); model != "" && (pinned || r.modelIndicator == "always") {
+			c := th.Palette.FgDim
+			if pinned {
+				c = th.Palette.Accent
+			}
+			right1 = append(right1, p.seg(" "+shortModelName(model)+" ", c))
+		}
 	}
 	// Per-session AUTO badge (not while paused) so "yolo" state is unmistakable.
 	// The badge carries its own background, so wrap it as a pre-rendered chip.
@@ -604,7 +642,7 @@ func (l *List) String() string {
 	// active (accent border). A dynamic focus model can flip this later.
 	// The panel zone wraps outside Panel so its internal clipping cannot
 	// truncate the end marker.
-	return zone.Mark(listPanelZoneID, theme.Current().Panel("Sessions", content, l.width, l.height, true))
+	return zone.Mark(listPanelZoneID, theme.Current().PanelWithBadge("Sessions", l.updateBadge, content, l.width, l.height, true))
 }
 
 // windowLines clips lines to the list height, scrolling so the selected block

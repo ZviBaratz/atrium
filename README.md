@@ -30,9 +30,30 @@ curl -fsSL https://raw.githubusercontent.com/ZviBaratz/atrium/main/install.sh | 
 
 #### go install
 
+Requires Go 1.25 or newer (older toolchains fetch it automatically unless
+`GOTOOLCHAIN=local` is set):
+
 ```bash
 go install github.com/ZviBaratz/atrium@latest
 ```
+
+#### Updating
+
+```bash
+atrium update          # download, verify, and install the latest release
+atrium update --check  # just see whether one exists
+```
+
+Atrium also checks for new releases when it starts (cached: the network is
+hit at most once a day, and at most once an hour after a failed check) and
+shows a hint when one is available. The running app and your sessions are
+never touched — an installed update takes effect the next time you start
+`atrium`. Set `"auto_update": "auto"` in `config.json` to install updates
+automatically in the background (auto mode may also check at startup while a
+found update is still pending install), or `"off"` to disable the startup
+check.
+Source builds that are not at an exact release tag (`go install`, dev
+checkouts) report a dev version and never self-update.
 
 ### Prerequisites
 
@@ -120,6 +141,15 @@ To disable auto-attach and always return to the list after creating a session, s
   "auto_attach": false
 }
 ```
+
+#### Auto-update
+
+`auto_update` controls the startup release check: `"notify"` (default) shows a
+hint when a newer release exists, `"auto"` downloads and installs it in the
+background (applied on the next launch), and `"off"` disables the check. The
+explicit `atrium update` command works regardless of this setting. Alongside
+the transient hint, a persistent `⇡` badge in the Sessions panel border shows
+the pending update (or restart) state until the next launch.
 
 #### Profiles
 
