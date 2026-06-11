@@ -444,7 +444,7 @@ func TestFitOverlay_TruncatesWideLinesToInnerWidth(t *testing.T) {
 	const innerWidth = 74
 	wide := strings.Repeat("x", 200)
 	short := "kept intact"
-	got := o.fitOverlay(wide+"\n"+short, innerWidth)
+	got := o.fitOverlay(wide+"\n"+short, innerWidth, strings.Repeat("─", innerWidth))
 
 	// The box is anchored to t.width: no rendered line may exceed it, and the long
 	// line must have been ellipsized rather than passed through whole.
@@ -649,7 +649,7 @@ func TestFitOverlay_CompactsHeightWithinTerminal(t *testing.T) {
 	}
 	parts = append(parts, "BUTTON")
 
-	got := o.fitOverlay(strings.Join(parts, "\n"), 74)
+	got := o.fitOverlay(strings.Join(parts, "\n"), 74, strings.Repeat("─", 74))
 
 	assert.LessOrEqual(t, strings.Count(got, "\n")+1, 24, "compacted box must fit the terminal height")
 	assert.Contains(t, got, "TITLE", "first content line must be preserved")
@@ -760,14 +760,45 @@ func TestSessionCreateOverlay_ModeSectionHeightConstant(t *testing.T) {
 	assert.Equal(t, titleFocused, disabled, "overlay height must not change when the mode field is inert")
 }
 
-// The claude form is the tallest 80×24 case (model + mode sections present)
-// and currently fits exactly — pin that boundary, which the echo-program
-// bounds test in app/view_bounds_test.go cannot see.
+// Every claude-form configuration must fit an 80×24 terminal — including the
+// tallest ones (profiles and a multi-account picker stacked on the model and
+// mode sections), which exceed what blank-line dropping alone can absorb and
+// exercise fitOverlay's divider-dropping stage. The echo-program bounds test
+// in app/view_bounds_test.go cannot see any of these.
 func TestSessionCreateOverlay_ClaudeFormFitsShortTerminal(t *testing.T) {
-	o := NewSessionCreateOverlay(nil, nil, []string{"/repo/a"}, "claude")
-	o.SetBranchResults([]string{"main", "develop", "feature/x"}, o.BranchFilterVersion())
-	o.SetSize(80, 24)
+	cases := []struct {
+		name     string
+		profiles []config.Profile
+		accounts []config.ClaudeAccount
+	}{
+		{"bare claude form", nil, nil},
+		{"with profiles", mixedProfiles, nil},
+		{"with profiles and accounts", mixedProfiles, twoAccounts},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			o := NewSessionCreateOverlay(c.profiles, c.accounts, []string{"/repo/a"}, "claude")
+			o.SetBranchResults([]string{"main", "develop", "feature/x"}, o.BranchFilterVersion())
+			o.SetSize(80, 24)
 
-	height := strings.Count(o.Render(), "\n") + 1
-	assert.LessOrEqual(t, height, 24, "the claude create form must fit a 80×24 terminal")
+			height := strings.Count(o.Render(), "\n") + 1
+			assert.LessOrEqual(t, height, 24, "the claude create form must fit a 80×24 terminal")
+			assert.Contains(t, o.Render(), "Create", "the Create button must survive compaction at 80×24")
+		})
+	}
+}
+
+// fitOverlay sheds divider lines (stage two, after blanks) when blank-dropping
+// alone cannot fit the budget, and hard-clips as the last resort — real content
+// is preserved through the divider stage.
+func TestDropLinesToFit_DividerStage(t *testing.T) {
+	isDivider := func(l string) bool { return l == "───" }
+	lines := []string{"title", "───", "body", "───", "button"}
+
+	got := dropLinesToFit(lines, 3, isDivider)
+	assert.Equal(t, []string{"title", "body", "button"}, got)
+
+	// Non-divider lines are never dropped, even over budget.
+	got = dropLinesToFit([]string{"a", "b", "c"}, 2, isDivider)
+	assert.Equal(t, []string{"a", "b", "c"}, got)
 }

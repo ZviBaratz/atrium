@@ -269,7 +269,9 @@ func NewSessionCreateOverlay(profiles []config.Profile, accounts []config.Claude
 // exists, else the configured default). Called at construction and after every
 // profile-picker keypress.
 func (t *TextInputOverlay) syncClaudeFieldsEnabled() {
-	if t.modelField == nil && t.modeField == nil {
+	// The two fields are created together or not at all (see NewSessionCreateOverlay),
+	// so one presence check covers both.
+	if t.modelField == nil {
 		return
 	}
 	program := t.defaultProgram
@@ -277,12 +279,8 @@ func (t *TextInputOverlay) syncClaudeFieldsEnabled() {
 		program = t.profilePicker.GetSelectedProfile().Program
 	}
 	disabled := agent.Resolve(program).Key != agent.KeyClaude
-	if t.modelField != nil {
-		t.modelField.SetDisabled(disabled)
-	}
-	if t.modeField != nil {
-		t.modeField.SetDisabled(disabled)
-	}
+	t.modelField.SetDisabled(disabled)
+	t.modeField.SetDisabled(disabled)
 }
 
 func newTextarea(initialValue string) textarea.Model {
@@ -637,10 +635,9 @@ func (t *TextInputOverlay) HandleKeyPress(msg tea.KeyMsg) (bool, bool) {
 			return false, false
 		}
 		if t.isModeField() {
-			switch msg.Type {
-			case tea.KeyLeft, tea.KeyRight, tea.KeyUp, tea.KeyDown:
-				t.modeField.HandleKeyPress(msg)
-			}
+			// No pre-filter: the field itself acts only on arrow keys (unlike the
+			// profile picker's filter above, which is load-bearing for the sync call).
+			t.modeField.HandleKeyPress(msg)
 			return false, false
 		}
 		if t.isAccountPicker() {
@@ -854,7 +851,7 @@ func (t *TextInputOverlay) Render() string {
 	divider := tiDividerStyle().Render(strings.Repeat("─", innerWidth))
 
 	if t.isCreateForm {
-		return t.fitOverlay(t.renderCreateForm(divider), innerWidth)
+		return t.fitOverlay(t.renderCreateForm(divider), innerWidth, divider)
 	}
 
 	// Plain prompt overlay (the `p` flow): no pickers — just a title, the prompt textarea,
@@ -868,7 +865,7 @@ func (t *TextInputOverlay) Render() string {
 	}
 	content += t.renderEnterButton()
 
-	return t.fitOverlay(content, innerWidth)
+	return t.fitOverlay(content, innerWidth, divider)
 }
 
 // fitOverlay constrains the assembled inner content to the overlay's terminal share
@@ -879,11 +876,14 @@ func (t *TextInputOverlay) Render() string {
 //   - Width: every line is truncated to innerWidth, so a long value (e.g. a deep
 //     project path or profile command) can never widen the box past t.width. The
 //     dividers, already innerWidth wide, anchor the box to a stable width.
-//   - Height: the create form's constant-height sections can total a row or two more
-//     than a short terminal (an 80×24 screen with a profile section needs 25 rows).
-//     Blank filler lines are dropped — never real content like the Create button —
-//     until the box fits t.height, so the form compacts instead of scrolling.
-func (t *TextInputOverlay) fitOverlay(content string, innerWidth int) string {
+//   - Height: the create form's constant-height sections can total several rows more
+//     than a short terminal (an 80×24 screen with profiles, the claude fields, and an
+//     account picker needs over 30). Spacing is shed in stages — blank filler lines
+//     first, then divider lines (pure visual separation) — so the form compacts
+//     instead of scrolling. If even that is not enough (a terminal below the 24-row
+//     floor), the tail is clipped outright: a partially visible form is degraded but
+//     stable, while an oversize View() is not.
+func (t *TextInputOverlay) fitOverlay(content string, innerWidth int, divider string) string {
 	lines := strings.Split(content, "\n")
 	for i, l := range lines {
 		if lipgloss.Width(l) > innerWidth {
@@ -893,28 +893,35 @@ func (t *TextInputOverlay) fitOverlay(content string, innerWidth int) string {
 	// The bordered, padded box adds 4 rows (border top/bottom + vertical padding),
 	// so the inner content must fit within t.height-4 for the box to fit the screen.
 	if budget := t.height - 4; budget > 0 {
-		lines = dropBlankLinesToFit(lines, budget)
+		lines = dropLinesToFit(lines, budget, func(l string) bool { return lipgloss.Width(l) == 0 })
+		lines = dropLinesToFit(lines, budget, func(l string) bool { return l == divider })
+		if len(lines) > budget {
+			lines = lines[:budget]
+		}
 	}
 	return tiStyle().Render(strings.Join(lines, "\n"))
 }
 
-// dropBlankLinesToFit removes interior blank lines (and only blank lines — leading,
-// trailing, and any line carrying visible content are preserved) until the slice is
-// at most budget lines long or no removable blanks remain. It is the graceful
-// degradation for terminals too short to hold the form at its natural spacing.
-//
-// It never drops visible content, so a terminal shorter than the form's irreducible
-// height (its content rows plus the few unavoidable blanks) still overflows by the
-// residual rows. The supported floor is 24 rows: at 80×24 the create form has enough
-// removable blanks to fit, which TestViewFitsTerminalBounds and the unit tests pin.
+// dropBlankLinesToFit removes interior blank lines (and only blank lines) until the
+// slice is at most budget lines long or no removable blanks remain. It is the first
+// stage of fitOverlay's graceful degradation for short terminals.
 func dropBlankLinesToFit(lines []string, budget int) []string {
+	return dropLinesToFit(lines, budget, func(l string) bool { return lipgloss.Width(l) == 0 })
+}
+
+// dropLinesToFit removes interior lines matching droppable — leading, trailing, and
+// non-matching lines are always preserved — until the slice is at most budget lines
+// long or no droppable lines remain. fitOverlay layers it: blanks go first (natural
+// spacing), then dividers (visual separation), so real content is only ever lost to
+// the final clip on terminals below the supported 24-row floor.
+func dropLinesToFit(lines []string, budget int, droppable func(string) bool) []string {
 	excess := len(lines) - budget
 	if excess <= 0 {
 		return lines
 	}
 	out := make([]string, 0, len(lines))
 	for i, l := range lines {
-		if excess > 0 && i > 0 && i < len(lines)-1 && lipgloss.Width(l) == 0 {
+		if excess > 0 && i > 0 && i < len(lines)-1 && droppable(l) {
 			excess--
 			continue
 		}
