@@ -11,6 +11,11 @@ package agent
 // contributes no flag.
 var ClaudePermissionModes = []string{"plan", "acceptEdits", "auto"}
 
+// ClaudePermissionModeLabels are the display labels for ClaudePermissionModes,
+// in the same order. Modes with uppercase letters are rendered in kebab-case
+// for visual consistency with the other chip rows in the create form.
+var ClaudePermissionModeLabels = []string{"plan", "accept-edits", "auto"}
+
 // claudePermissionModeEnum is the CLI's full closed enum (claude 2.1.172
 // --help). Unlike --model, claude rejects unknown values at argv parse time —
 // anything outside this set would kill the session at launch, so composition

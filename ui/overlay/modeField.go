@@ -42,7 +42,10 @@ type ModeField struct {
 
 // NewModeField builds the mode field, starting on the default chip.
 func NewModeField() *ModeField {
-	return &ModeField{chipRow{options: append([]string{modeInherit}, agent.ClaudePermissionModes...)}}
+	return &ModeField{chipRow{
+		options: append([]string{modeInherit}, agent.ClaudePermissionModes...),
+		labels:  append([]string{modeInherit}, agent.ClaudePermissionModeLabels...),
+	}}
 }
 
 // HandleKeyPress cycles the chips with the arrow keys; every other key is a
