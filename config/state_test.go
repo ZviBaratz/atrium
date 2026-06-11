@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -132,4 +133,87 @@ func TestState_ListRatioClampAndRoundTrip(t *testing.T) {
 	assert.Equal(t, maxListRatio, s.GetListRatio())
 	require.NoError(t, s.SetListRatio(0.01))
 	assert.Equal(t, minListRatio, s.GetListRatio())
+}
+
+func TestAddRecentPath_FeedsKnownProjects(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	s := DefaultState()
+	// Push enough paths that the earliest is evicted from recents...
+	for i := 0; i < maxRecentPaths+1; i++ {
+		require.NoError(t, s.AddRecentPath(fmt.Sprintf("/p%d", i)))
+	}
+	assert.Len(t, s.GetRecentPaths(), maxRecentPaths)
+	// ...but the durable known-projects list still has every path, MRU-first.
+	known := s.GetKnownProjects()
+	assert.Len(t, known, maxRecentPaths+1)
+	assert.Equal(t, fmt.Sprintf("/p%d", maxRecentPaths), known[0])
+	assert.Equal(t, "/p0", known[len(known)-1])
+
+	// Re-adding moves to the front of both lists without duplicating.
+	require.NoError(t, s.AddRecentPath("/p0"))
+	known = s.GetKnownProjects()
+	assert.Equal(t, "/p0", known[0])
+	assert.Len(t, known, maxRecentPaths+1)
+}
+
+func TestKnownProjects_Capped(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	s := DefaultState()
+	for i := 0; i < maxKnownProjects+5; i++ {
+		require.NoError(t, s.AddRecentPath(fmt.Sprintf("/k%d", i)))
+	}
+	got := s.GetKnownProjects()
+	assert.Len(t, got, maxKnownProjects)
+	assert.Equal(t, fmt.Sprintf("/k%d", maxKnownProjects+4), got[0])
+}
+
+func TestState_KnownProjectsRoundTrip(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	s := DefaultState()
+	require.NoError(t, s.AddRecentPath("/x"))
+	require.NoError(t, s.AddRecentPath("/y"))
+
+	loaded := LoadState()
+	assert.Equal(t, []string{"/y", "/x"}, loaded.GetKnownProjects())
+}
+
+func TestSetScannedRepos_RoundTripAndTimestamp(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	s := DefaultState()
+	// Never scanned: empty list, zero time.
+	repos, at := s.GetScannedRepos()
+	assert.Empty(t, repos)
+	assert.True(t, at.IsZero())
+
+	before := time.Now().Add(-time.Second)
+	require.NoError(t, s.SetScannedRepos([]string{"/r1", "/r2"}))
+
+	loaded := LoadState()
+	repos, at = loaded.GetScannedRepos()
+	assert.Equal(t, []string{"/r1", "/r2"}, repos)
+	assert.False(t, at.IsZero())
+	assert.True(t, at.After(before), "scan timestamp not stamped: %v", at)
+}
+
+func TestState_OldFileWithoutNewKeys(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	// A state.json written before known_projects/scanned_repos existed.
+	dir, err := GetConfigDir()
+	require.NoError(t, err)
+	require.NoError(t, os.MkdirAll(dir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, StateFileName),
+		[]byte(`{"help_screens_seen":0,"instances":[],"recent_paths":["/old"]}`), 0o644))
+
+	s := LoadState()
+	assert.Empty(t, s.GetKnownProjects())
+	repos, at := s.GetScannedRepos()
+	assert.Empty(t, repos)
+	assert.True(t, at.IsZero())
+	assert.Equal(t, []string{"/old"}, s.GetRecentPaths())
 }

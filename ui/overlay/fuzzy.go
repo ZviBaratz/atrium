@@ -30,6 +30,12 @@ func isFuzzySep(r rune) bool {
 // fuzzyMatch reports whether query is a case-insensitive subsequence of target and,
 // if so, a score where higher is a better match. An empty query matches everything
 // with score 0.
+//
+// Scoring uses fzf's v1 minimal-window approach (three O(n) passes, no DP): a
+// purely greedy leftmost alignment would under-score targets whose query runes
+// appear scattered early but contiguous late — "ses" against
+// "projects/sessions" would spend the first 's' on "projects" and never see the
+// boundary run in "sessions".
 func fuzzyMatch(query, target string) (bool, int) {
 	if query == "" {
 		return true, 0
@@ -37,11 +43,34 @@ func fuzzyMatch(query, target string) (bool, int) {
 	q := []rune(strings.ToLower(query))
 	t := []rune(strings.ToLower(target))
 
-	score := 0
-	qi := 0
-	prevMatch := -2 // so the first match is never counted as consecutive
-	run := 0
+	// Forward scan: subsequence test, and the earliest index a match can end at.
+	qi, end := 0, -1
 	for ti := 0; ti < len(t) && qi < len(q); ti++ {
+		if t[ti] == q[qi] {
+			end = ti
+			qi++
+		}
+	}
+	if qi < len(q) {
+		return false, 0
+	}
+
+	// Backward scan from that end to the latest start — the smallest window
+	// containing a match, where the densest (best-scoring) alignment lives.
+	start := end
+	for ti, bqi := end, len(q)-1; ti >= 0 && bqi >= 0; ti-- {
+		if t[ti] == q[bqi] {
+			start = ti
+			bqi--
+		}
+	}
+
+	// Score the greedy alignment within the window.
+	score := 0
+	qi = 0
+	prevMatch := start - 2 // so the first match is never counted as consecutive
+	run := 0
+	for ti := start; ti <= end && qi < len(q); ti++ {
 		if t[ti] != q[qi] {
 			continue
 		}
@@ -56,9 +85,6 @@ func fuzzyMatch(query, target string) (bool, int) {
 		}
 		prevMatch = ti
 		qi++
-	}
-	if qi < len(q) {
-		return false, 0
 	}
 	return true, score
 }
