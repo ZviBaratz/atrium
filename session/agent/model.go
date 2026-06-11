@@ -32,7 +32,8 @@ func ValidModelName(s string) bool {
 
 // hasFlag reports whether program pins `name value` or `name=value`. A
 // whole-field comparison, so lookalike flags ("--models-dir", "--model-context")
-// don't count as pins.
+// don't count as pins. Distinct from ModelFlag != "": a bare trailing flag is
+// a (broken) pin that withFlag must still replace, not append after.
 func hasFlag(program, name string) bool {
 	combined := name + "="
 	for _, f := range strings.Fields(program) {
@@ -41,6 +42,25 @@ func hasFlag(program, name string) bool {
 		}
 	}
 	return false
+}
+
+// ModelFlag returns the value of a --model pin in program ("" = none), the
+// extraction counterpart of WithModelFlag. Agent-neutral pure argv parsing;
+// callers gate on the agent where the pin's meaning is agent-specific. The
+// last pin wins, matching the CLI's argv semantics (withFlag's append path
+// can legitimately leave two pins on a quoted program).
+func ModelFlag(program string) string {
+	fields := strings.Fields(program)
+	value := ""
+	for n, f := range fields {
+		if v, ok := strings.CutPrefix(f, "--model="); ok {
+			value = v
+		}
+		if f == "--model" && n+1 < len(fields) {
+			value = fields[n+1]
+		}
+	}
+	return value
 }
 
 // withFlag returns program with `name value` applied. The common case — no

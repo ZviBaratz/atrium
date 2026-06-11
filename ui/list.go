@@ -226,6 +226,13 @@ func (l *List) SetBranchPrefix(prefix string) {
 	l.renderer.branchPrefix = prefix
 }
 
+// SetModelIndicator sets the model-chip mode (see
+// InstanceRenderer.modelIndicator). The app passes the normalized
+// config.GetModelIndicator value at startup and on settings changes.
+func (l *List) SetModelIndicator(mode string) {
+	l.renderer.modelIndicator = mode
+}
+
 // SetFilter updates the incremental filter query and clamps the selection to the
 // nearest still-visible item. Pass an empty string to disable filtering.
 func (l *List) SetFilter(query string) {
@@ -296,6 +303,11 @@ type InstanceRenderer struct {
 	// stripped from each row's branch label — every session shares it, so it is
 	// pure repetition on the version-control line. Empty disables stripping.
 	branchPrefix string
+	// modelIndicator is the model-chip mode (config.GetModelIndicator):
+	// "always" / "off", with anything else — including the zero value — read as
+	// the pinned-only default, so normalization stays in config and the ui
+	// package needs no config import.
+	modelIndicator string
 }
 
 func (r *InstanceRenderer) setWidth(width int) {
@@ -399,6 +411,19 @@ func (r *InstanceRenderer) Render(i *session.Instance, idx int, selected bool) s
 			acctColor = th.Palette.FgDim
 		}
 		right1 = append(right1, p.seg(" "+acct+" ", acctColor))
+	}
+	// Per-session model chip: transcript truth first, --model flag fallback (see
+	// Instance.ModelInfo). The pinned-only default shows it just where a flag
+	// pins a model (accent); "always" also surfaces transcript-known models
+	// (dim when unpinned); "off" hides it.
+	if r.modelIndicator != "off" {
+		if model, pinned := i.ModelInfo(); model != "" && (pinned || r.modelIndicator == "always") {
+			c := th.Palette.FgDim
+			if pinned {
+				c = th.Palette.Accent
+			}
+			right1 = append(right1, p.seg(" "+shortModelName(model)+" ", c))
+		}
 	}
 	// Per-session AUTO badge (not while paused) so "yolo" state is unmistakable.
 	// The badge carries its own background, so wrap it as a pre-rendered chip.

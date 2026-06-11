@@ -107,10 +107,18 @@ func RunDaemon(ctx context.Context, cfg *config.Config) error {
 	return nil
 }
 
+// selfPath is the binary's path resolved once at process start. LaunchDaemon
+// runs at TUI exit, and by then a completed self-update may have swapped the
+// binary on disk: os.Executable is a live readlink of /proc/self/exe on Linux,
+// which after the swap reports the deleted old inode (".../.atrium.old
+// (deleted)") — exec'ing that fails. The startup path stays valid because the
+// swap reuses it for the new binary.
+var selfPath, selfPathErr = os.Executable()
+
 // LaunchDaemon launches the daemon process.
 func LaunchDaemon(ctx context.Context) error {
-	// Find the atrium binary.
-	execPath, err := os.Executable()
+	// Find the atrium binary (resolved at process start, see selfPath).
+	execPath, err := selfPath, selfPathErr
 	if err != nil {
 		return fmt.Errorf("failed to get executable path: %w", err)
 	}
