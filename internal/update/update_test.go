@@ -33,7 +33,7 @@ func TestCheckCached_FreshUpToDateCacheSkipsNetwork(t *testing.T) {
 		return nil, nil
 	})
 
-	rel, err := CheckCached(context.Background(), "0.6.0")
+	rel, err := CheckCached(context.Background(), "0.6.0", false)
 
 	require.NoError(t, err)
 	assert.Nil(t, rel)
@@ -46,7 +46,7 @@ func TestCheckCached_NoCacheQueriesNetworkAndSavesResult(t *testing.T) {
 		return &Release{Version: "0.7.0"}, nil
 	})
 
-	rel, err := CheckCached(context.Background(), "0.6.0")
+	rel, err := CheckCached(context.Background(), "0.6.0", false)
 
 	require.NoError(t, err)
 	require.NotNil(t, rel)
@@ -64,7 +64,7 @@ func TestCheckCached_UpToDateResultCachesCurrentVersion(t *testing.T) {
 		return nil, nil // up to date
 	})
 
-	rel, err := CheckCached(context.Background(), "0.6.0")
+	rel, err := CheckCached(context.Background(), "0.6.0", false)
 
 	require.NoError(t, err)
 	assert.Nil(t, rel)
@@ -75,8 +75,8 @@ func TestCheckCached_UpToDateResultCachesCurrentVersion(t *testing.T) {
 
 // A fresh cache that already knows about a newer release answers from the
 // cache: an unresolved (version-only) Release, which is all the notify hint
-// needs. The network — and the resolved handle an install needs — waits for
-// the TTL to expire, so a pending update costs zero API calls per startup.
+// needs — so in notify mode a pending update costs zero API calls per
+// startup. (An install wants resolved handles; that is resolve=true.)
 func TestCheckCached_PendingNewerReleaseServedFromCache(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	require.NoError(t, saveCache(cacheEntry{CheckedAt: time.Now(), Latest: "0.7.0"}))
@@ -84,7 +84,7 @@ func TestCheckCached_PendingNewerReleaseServedFromCache(t *testing.T) {
 		return &Release{Version: "0.7.0"}, nil
 	})
 
-	rel, err := CheckCached(context.Background(), "0.6.0")
+	rel, err := CheckCached(context.Background(), "0.6.0", false)
 
 	require.NoError(t, err)
 	require.NotNil(t, rel)
@@ -102,14 +102,14 @@ func TestCheckCached_FailureRecordsBackoff(t *testing.T) {
 		return nil, errors.New("rate limited")
 	})
 
-	_, err := CheckCached(context.Background(), "0.6.0")
+	_, err := CheckCached(context.Background(), "0.6.0", false)
 	require.Error(t, err, "the first failure propagates")
 	assert.Equal(t, 1, *calls)
 	e, ok := loadCache()
 	require.True(t, ok, "the failure must be recorded")
 	assert.False(t, e.FailedAt.IsZero())
 
-	rel, err := CheckCached(context.Background(), "0.6.0")
+	rel, err := CheckCached(context.Background(), "0.6.0", false)
 	require.NoError(t, err, "inside the backoff the check is silently skipped")
 	assert.Nil(t, rel)
 	assert.Equal(t, 1, *calls, "no network retry inside the backoff window")
@@ -129,11 +129,136 @@ func TestCheckCached_BackoffPreservesKnownRelease(t *testing.T) {
 		return nil, errors.New("still offline")
 	})
 
-	rel, err := CheckCached(context.Background(), "0.6.0")
+	rel, err := CheckCached(context.Background(), "0.6.0", false)
 
 	require.NoError(t, err)
 	require.NotNil(t, rel)
 	assert.Equal(t, "0.7.0", rel.Version)
+	assert.Zero(t, *calls)
+}
+
+// When the cache has gone stale and the refresh attempt fails, a release the
+// cache already knows about must still hint — otherwise an offline machine
+// loses the hint on exactly the launches that retry the network.
+func TestCheckCached_StaleCacheNetworkFailureServesKnownHint(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	checkedAt := time.Now().Add(-2 * cacheTTL) // stale, and no recent failure
+	require.NoError(t, saveCache(cacheEntry{CheckedAt: checkedAt, Latest: "0.7.0"}))
+	calls := swapRemote(t, func(context.Context, string) (*Release, error) {
+		return nil, errors.New("offline")
+	})
+
+	rel, err := CheckCached(context.Background(), "0.6.0", false)
+
+	require.NoError(t, err, "a justified hint is served, not the error")
+	require.NotNil(t, rel)
+	assert.Equal(t, "0.7.0", rel.Version)
+	assert.False(t, rel.Resolved())
+	assert.Equal(t, 1, *calls, "the stale cache still attempts a refresh")
+	e, ok := loadCache()
+	require.True(t, ok)
+	assert.False(t, e.FailedAt.IsZero(), "the failure engages the backoff")
+	assert.Equal(t, "0.7.0", e.Latest, "the known release survives the failure")
+	assert.True(t, e.CheckedAt.Equal(checkedAt), "only the failure is stamped")
+}
+
+// The hint-past-failure fallback applies only when the cache justifies one:
+// with nothing newer on record, a failed refresh still propagates its error.
+func TestCheckCached_StaleCacheNetworkFailureUpToDatePropagatesError(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	require.NoError(t, saveCache(cacheEntry{
+		CheckedAt: time.Now().Add(-2 * cacheTTL),
+		Latest:    "0.6.0",
+	}))
+	swapRemote(t, func(context.Context, string) (*Release, error) {
+		return nil, errors.New("offline")
+	})
+
+	rel, err := CheckCached(context.Background(), "0.6.0", false)
+
+	require.Error(t, err)
+	assert.Nil(t, rel)
+}
+
+// resolve=true with a pending release re-queries even though the cache is
+// fresh: an install needs the handles only a live query carries, and waiting
+// out the TTL would defer it up to a day after a failed or interrupted
+// install (or a notify→auto switch).
+func TestCheckCached_ResolveRequeriesPendingRelease(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	freshCheckedAt := time.Now().Add(-time.Hour) // well inside cacheTTL
+	require.NoError(t, saveCache(cacheEntry{CheckedAt: freshCheckedAt, Latest: "0.7.0"}))
+	remote := &Release{Version: "0.7.0"}
+	calls := swapRemote(t, func(context.Context, string) (*Release, error) {
+		return remote, nil
+	})
+
+	rel, err := CheckCached(context.Background(), "0.6.0", true)
+
+	require.NoError(t, err)
+	assert.Same(t, remote, rel, "the live query's release is returned as-is")
+	assert.Equal(t, 1, *calls)
+	e, ok := loadCache()
+	require.True(t, ok)
+	assert.True(t, e.CheckedAt.After(freshCheckedAt), "the re-query refreshes the cache")
+}
+
+// The failure backoff gates the resolving re-query too: frequent relaunches
+// are this app's normal workflow, and a pending install must not turn each of
+// them into an API call while the network is known to be failing.
+func TestCheckCached_ResolveRespectsFailureBackoff(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	require.NoError(t, saveCache(cacheEntry{
+		CheckedAt: time.Now(),
+		Latest:    "0.7.0",
+		FailedAt:  time.Now(),
+	}))
+	calls := swapRemote(t, func(context.Context, string) (*Release, error) {
+		return &Release{Version: "0.7.0"}, nil
+	})
+
+	rel, err := CheckCached(context.Background(), "0.6.0", true)
+
+	require.NoError(t, err)
+	require.NotNil(t, rel)
+	assert.False(t, rel.Resolved(), "inside the backoff the hint is cache-served")
+	assert.Zero(t, *calls)
+}
+
+// A failed resolving re-query degrades to the cached hint and engages the
+// backoff — same fallback as the stale-cache failure path.
+func TestCheckCached_ResolveRequeryFailureFallsBackToHint(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	require.NoError(t, saveCache(cacheEntry{CheckedAt: time.Now(), Latest: "0.7.0"}))
+	calls := swapRemote(t, func(context.Context, string) (*Release, error) {
+		return nil, errors.New("rate limited")
+	})
+
+	rel, err := CheckCached(context.Background(), "0.6.0", true)
+
+	require.NoError(t, err)
+	require.NotNil(t, rel)
+	assert.Equal(t, "0.7.0", rel.Version)
+	assert.False(t, rel.Resolved())
+	assert.Equal(t, 1, *calls)
+	e, ok := loadCache()
+	require.True(t, ok)
+	assert.False(t, e.FailedAt.IsZero(), "the failed re-query engages the backoff")
+}
+
+// resolve=true must not query when nothing is pending: the common up-to-date
+// startup stays a zero-network operation in auto mode too.
+func TestCheckCached_ResolveFreshUpToDateSkipsNetwork(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	require.NoError(t, saveCache(cacheEntry{CheckedAt: time.Now(), Latest: "0.6.0"}))
+	calls := swapRemote(t, func(context.Context, string) (*Release, error) {
+		return nil, nil
+	})
+
+	rel, err := CheckCached(context.Background(), "0.6.0", true)
+
+	require.NoError(t, err)
+	assert.Nil(t, rel)
 	assert.Zero(t, *calls)
 }
 

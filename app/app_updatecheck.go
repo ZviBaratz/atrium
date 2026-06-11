@@ -75,7 +75,10 @@ func (m *home) updateCheckCmd() tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(appCtx, updateCheckTimeout)
 		defer cancel()
-		rel, err := checkForUpdate(ctx, current)
+		// Auto mode asks for a resolved release (the handles Apply needs), so
+		// a pending install re-queries the network instead of waiting out the
+		// cache TTL; notify mode is served from the cache while it is fresh.
+		rel, err := checkForUpdate(ctx, current, mode == config.AutoUpdateAuto)
 		if err != nil {
 			log.WarningLog.Printf("update check failed: %v", err)
 			return nil
@@ -87,8 +90,8 @@ func (m *home) updateCheckCmd() tea.Cmd {
 			return updateFoundMsg{release: rel}
 		}
 		// Notify mode — or auto mode with a cache-served (unresolved) release,
-		// which can hint but not install. The install runs when the cache
-		// expires and the check next reaches the network.
+		// which can hint but not install: the resolving re-query failed or is
+		// inside the failure backoff, so the install retries on a later launch.
 		return updateCheckDoneMsg{version: rel.Version}
 	}
 }

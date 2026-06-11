@@ -16,7 +16,7 @@ import (
 
 // swapUpdateFakes replaces the package-level network/swap hooks for one test.
 func swapUpdateFakes(t *testing.T,
-	check func(context.Context, string) (*update.Release, error),
+	check func(context.Context, string, bool) (*update.Release, error),
 	apply func(context.Context, *update.Release) error) {
 	t.Helper()
 	origCheck, origApply := checkForUpdate, applyUpdate
@@ -73,8 +73,10 @@ func TestUpdateCheckCmd_OffModeIsInert(t *testing.T) {
 func TestUpdateCheckCmd_NotifyShowsHint(t *testing.T) {
 	h := newUpdateHome(t, config.AutoUpdateNotify)
 	applied := false
+	resolve := true
 	swapUpdateFakes(t,
-		func(context.Context, string) (*update.Release, error) {
+		func(_ context.Context, _ string, r bool) (*update.Release, error) {
+			resolve = r
 			return &update.Release{Version: "9.9.9"}, nil
 		},
 		func(context.Context, *update.Release) error { applied = true; return nil },
@@ -87,6 +89,7 @@ func TestUpdateCheckCmd_NotifyShowsHint(t *testing.T) {
 
 	h.Update(msg)
 	assert.False(t, applied, "notify mode must never download")
+	assert.False(t, resolve, "notify mode asks the cache, not for install handles")
 	require.True(t, h.menu.HasNotice())
 	assert.Contains(t, h.menu.String(), "9.9.9")
 	assert.Contains(t, h.menu.String(), "atrium update")
@@ -100,8 +103,10 @@ func TestUpdateCheckCmd_NotifyShowsHint(t *testing.T) {
 func TestUpdateCheckCmd_AutoInstallsAndAsksRestart(t *testing.T) {
 	h := newUpdateHome(t, config.AutoUpdateAuto)
 	applied := false
+	resolve := false
 	swapUpdateFakes(t,
-		func(context.Context, string) (*update.Release, error) {
+		func(_ context.Context, _ string, r bool) (*update.Release, error) {
+			resolve = r
 			return &update.Release{Version: "9.9.9"}, nil
 		},
 		func(context.Context, *update.Release) error { applied = true; return nil },
@@ -112,6 +117,7 @@ func TestUpdateCheckCmd_AutoInstallsAndAsksRestart(t *testing.T) {
 	found, ok := msg.(updateFoundMsg)
 	require.True(t, ok, "a resolved release in auto mode stages an install")
 	assert.False(t, applied, "the check command itself must not download")
+	assert.True(t, resolve, "auto mode asks for install handles")
 
 	_, cmd := h.Update(msg)
 	require.NotNil(t, cmd, "Update must stage the install command")
@@ -131,13 +137,14 @@ func TestUpdateCheckCmd_AutoInstallsAndAsksRestart(t *testing.T) {
 	assert.Contains(t, listBadge(h), "⇡ restart", "the badge flips to the restart hint once the binary is swapped")
 }
 
-// Auto mode with a cache-served (unresolved) release: hint only — the install
-// handle isn't there, and the install runs when the cache next expires.
+// Auto mode with a cache-served (unresolved) release: hint only — the
+// resolving re-query failed or is inside the failure backoff, so the install
+// handle isn't there and the install retries on a later launch.
 func TestUpdateCheckCmd_AutoUnresolvedReleaseHintsOnly(t *testing.T) {
 	h := newUpdateHome(t, config.AutoUpdateAuto)
 	applied := false
 	swapUpdateFakes(t,
-		func(context.Context, string) (*update.Release, error) {
+		func(context.Context, string, bool) (*update.Release, error) {
 			return &update.Release{Version: "9.9.9"}, nil // no handles: cache-served
 		},
 		func(context.Context, *update.Release) error { applied = true; return nil },
@@ -153,7 +160,7 @@ func TestUpdateCheckCmd_AutoUnresolvedReleaseHintsOnly(t *testing.T) {
 func TestInstallUpdateCmd_FailureDegradesToNotify(t *testing.T) {
 	h := newUpdateHome(t, config.AutoUpdateAuto)
 	swapUpdateFakes(t,
-		func(context.Context, string) (*update.Release, error) {
+		func(context.Context, string, bool) (*update.Release, error) {
 			return &update.Release{Version: "9.9.9"}, nil
 		},
 		func(context.Context, *update.Release) error { return errors.New("read-only bin dir") },
@@ -178,13 +185,13 @@ func TestUpdateCheckCmd_UpToDateAndErrorsAreSilent(t *testing.T) {
 	h := newUpdateHome(t, config.AutoUpdateNotify)
 
 	swapUpdateFakes(t,
-		func(context.Context, string) (*update.Release, error) { return nil, nil },
+		func(context.Context, string, bool) (*update.Release, error) { return nil, nil },
 		func(context.Context, *update.Release) error { return nil },
 	)
 	assert.Nil(t, h.updateCheckCmd()(), "up to date yields no message")
 
 	swapUpdateFakes(t,
-		func(context.Context, string) (*update.Release, error) { return nil, errors.New("offline") },
+		func(context.Context, string, bool) (*update.Release, error) { return nil, errors.New("offline") },
 		func(context.Context, *update.Release) error { return nil },
 	)
 	assert.Nil(t, h.updateCheckCmd()(), "a failed check yields no message")
