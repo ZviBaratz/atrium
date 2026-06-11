@@ -44,12 +44,14 @@ atrium update          # download, verify, and install the latest release
 atrium update --check  # just see whether one exists
 ```
 
-Atrium also checks for new releases when it starts (cached, so the network is
-hit at most once a day — and at most once an hour after a failed check) and
+Atrium also checks for new releases when it starts (cached: the network is
+hit at most once a day, and at most once an hour after a failed check) and
 shows a hint when one is available. The running app and your sessions are
 never touched — an installed update takes effect the next time you start
 `atrium`. Set `"auto_update": "auto"` in `config.json` to install updates
-automatically in the background, or `"off"` to disable the startup check.
+automatically in the background (auto mode may also check at startup while a
+found update is still pending install), or `"off"` to disable the startup
+check.
 Source builds that are not at an exact release tag (`go install`, dev
 checkouts) report a dev version and never self-update.
 

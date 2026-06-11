@@ -85,23 +85,32 @@ func Check(ctx context.Context, current string) (*Release, error) {
 	return checkRemote(ctx, current)
 }
 
-// CheckCached is the TUI-startup check: while the 24h cache is fresh it never
-// touches the network — an up-to-date verdict short-circuits to nil, and a
-// known-newer release is served as an unresolved (version-only) Release, which
-// is all the notify hint needs. The network runs only when the cache expires;
-// a failed attempt is itself recorded so the retry happens after
-// failureBackoff, not on every launch.
-func CheckCached(ctx context.Context, current string) (*Release, error) {
+// CheckCached is the TUI-startup check. While the 24h cache is fresh it
+// answers without the network: an up-to-date verdict short-circuits to nil,
+// and a known-newer release is served as an unresolved (version-only) Release
+// — all a notify hint needs, so notify startups (resolve=false) hit the
+// network at most once per cacheTTL. An install needs the handles only a live
+// query carries, so resolve=true re-queries while a known release stays
+// uninstalled; that window closes after one successful install. Failed
+// attempts are recorded and retried only after failureBackoff — never on
+// every launch — and when the cache already justifies a hint, a failure
+// serves that hint (logging the error) instead of muting it.
+func CheckCached(ctx context.Context, current string, resolve bool) (*Release, error) {
 	now := time.Now()
 	e, ok := loadCache()
+	cachedNewer := ok && isNewer(e.Latest, current)
 	if ok && (e.fresh(now) || e.failedRecently(now)) {
-		// Answer from the cache. Inside the failure backoff the entry may be
-		// stale, but a previously seen newer release still hints rather than
-		// going silent until the network recovers.
-		if isNewer(e.Latest, current) {
+		if !cachedNewer {
+			return nil, nil
+		}
+		// A newer release is pending. The version alone serves a hint; an
+		// install wants the network — but the failure backoff gates that
+		// re-query too. Inside it the entry may even be stale: a previously
+		// seen release still hints rather than going silent until the
+		// network recovers.
+		if !resolve || e.failedRecently(now) {
 			return &Release{Version: e.Latest}, nil
 		}
-		return nil, nil
 	}
 	rel, err := checkRemote(ctx, current)
 	if err != nil {
@@ -109,6 +118,13 @@ func CheckCached(ctx context.Context, current string) (*Release, error) {
 		e.FailedAt = now
 		if serr := saveCache(e); serr != nil {
 			log.WarningLog.Printf("failed to save update-check cache: %v", serr)
+		}
+		if cachedNewer {
+			// The cache already justifies a hint; a flaky check must not
+			// mute it (an offline machine would otherwise lose the hint on
+			// every post-backoff retry launch).
+			log.WarningLog.Printf("update check failed; serving cached hint for v%s: %v", e.Latest, err)
+			return &Release{Version: e.Latest}, nil
 		}
 		return nil, err
 	}
