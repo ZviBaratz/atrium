@@ -336,6 +336,55 @@ func TestSessionCreateOverlay_TitleRequiredMarker(t *testing.T) {
 	assert.NotContains(t, o.Render(), "(required)", "a typed title clears the marker")
 }
 
+// The title row's verdicts — the dim "(required)" hint and the danger error —
+// trail the input rather than sitting between the label and the field: a
+// variable-width prefix would shift the text under the user's caret on exactly
+// the keystrokes that recompute the verdict. And because the input pads itself
+// to its Width, the suffix's columns must be carved out of the input, or the
+// message would always sit past fitOverlay's truncation edge, invisible.
+func TestSessionCreateOverlay_TitleVerdictsTrailInput(t *testing.T) {
+	o := NewSessionCreateOverlay(nil, nil, []string{"/repo/a"}, "")
+	o.SetSize(80, 40)
+
+	titleRow := func() string {
+		for _, l := range strings.Split(xansi.Strip(o.Render()), "\n") {
+			if strings.Contains(l, "Title") {
+				return l
+			}
+		}
+		t.Fatal("no title row rendered")
+		return ""
+	}
+
+	// Empty field: the placeholder and the "(required)" hint share the row.
+	emptyRow := titleRow()
+	placeholderCol := strings.Index(emptyRow, "name this session")
+	require.GreaterOrEqual(t, placeholderCol, 0, "placeholder must be visible while empty")
+	require.Contains(t, emptyRow, "(required)")
+
+	tab(o)
+	tab(o)
+	require.True(t, o.isTitle())
+	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("x")})
+
+	// Typing the first character drops the hint; the input must not move.
+	typedRow := titleRow()
+	typedCol := strings.Index(typedRow, "x")
+	assert.Equal(t, placeholderCol, typedCol,
+		"the input must not shift when the (required) hint disappears")
+
+	// An error appearing must neither move the input nor precede it, and must
+	// survive the row's width truncation in full.
+	o.SetTitleError("already used in atrium")
+	errorRow := titleRow()
+	require.Contains(t, errorRow, "(already used in atrium)",
+		"the error must survive width truncation intact")
+	assert.Equal(t, typedCol, strings.Index(errorRow, "x"),
+		"the input must not shift when the error appears")
+	assert.Greater(t, strings.Index(errorRow, "(already used"), strings.Index(errorRow, "x"),
+		"the error must trail the input, not precede it")
+}
+
 // The whole form must render the same number of lines no matter which field holds focus,
 // so the vertically centered overlay does not jump as the user Tabs between fields.
 func TestSessionCreateOverlay_RenderHeightConstantAcrossFocus(t *testing.T) {

@@ -860,9 +860,9 @@ func (t *TextInputOverlay) Render() string {
 		innerWidth = 1
 	}
 
-	// Set component widths to fit within the overlay
+	// Set component widths to fit within the overlay. The title input's width is
+	// owned by renderCreateForm, which carves the verdict suffix out of it.
 	t.textarea.SetWidth(innerWidth)
-	t.titleInput.Width = innerWidth
 
 	// Build a horizontal divider line
 	divider := tiDividerStyle().Render(strings.Repeat("─", innerWidth))
@@ -969,15 +969,33 @@ func (t *TextInputOverlay) renderCreateForm(divider string) string {
 	}
 	// The title is the form's only hard-required input; carry a dim marker while it is
 	// empty so the requirement is visible before the submit-time error backstop. A
-	// validation error (duplicate name in the target group) wins over the hint.
+	// validation error (duplicate name in the target group) wins over the hint. Both
+	// trail the input rather than sitting between the label and the field: a
+	// variable-width prefix would shift the text under the user's caret on exactly
+	// the keystrokes that recompute the verdict. The input pads itself to its Width,
+	// so the suffix's columns are carved out of the input up front — otherwise the
+	// message would land past fitOverlay's truncation edge, invisible. (innerWidth
+	// is recovered from the divider, which is rendered exactly that wide.)
 	titleLabel := tiLabelStyle().Render("Title")
+	var suffixPlain, suffix string
 	switch {
 	case t.titleError != "":
-		titleLabel += theme.Current().DangerStyle().Render(" (" + t.titleError + ")")
+		suffixPlain = " (" + t.titleError + ")"
+		suffix = theme.Current().DangerStyle().Render(suffixPlain)
 	case t.GetTitle() == "":
-		titleLabel += tiHintStyle().Render(" (required)")
+		suffixPlain = " (required)"
+		suffix = tiHintStyle().Render(suffixPlain)
 	}
-	section(titleLabel + "  " + t.titleInput.View())
+	// -1: the input renders one column past Width for the end-of-line cursor cell.
+	inputWidth := lipgloss.Width(divider) - lipgloss.Width(titleLabel) - 2 -
+		lipgloss.Width(suffixPlain) - 1
+	if inputWidth < 10 {
+		// Floor: on absurdly narrow terminals keep the field usable and let the
+		// suffix tail be what the row truncation eats.
+		inputWidth = 10
+	}
+	t.titleInput.Width = inputWidth
+	section(titleLabel + "  " + t.titleInput.View() + suffix)
 	section(tiLabelStyle().Render("Prompt") + "\n" + t.textarea.View())
 	if t.profilePicker != nil {
 		section(t.profilePicker.Render())
