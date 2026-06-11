@@ -45,11 +45,19 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case updateFoundMsg:
 		// Stage the download as its own command so this notice renders while
 		// the transfer runs; the restart hint arrives in updateCheckDoneMsg.
+		// The toast is transient; the panel badge persists until restart so
+		// the update survives overlays, missed toasts, and hint_bar:false.
+		if m.list != nil {
+			m.list.SetUpdateBadge(updateBadgeText(msg.release.Version, false))
+		}
 		return m, tea.Batch(
 			m.handleUpdateNotice(fmt.Sprintf("updating to v%s in the background…", msg.release.Version)),
 			m.installUpdateCmd(msg.release),
 		)
 	case updateCheckDoneMsg:
+		if m.list != nil {
+			m.list.SetUpdateBadge(updateBadgeText(msg.version, msg.installed))
+		}
 		if msg.installed {
 			return m, m.handleUpdateNotice(fmt.Sprintf("updated to v%s — restart %s to apply", msg.version, m.hintBinName()))
 		}

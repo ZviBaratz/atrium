@@ -39,6 +39,9 @@ func TestModelFlag(t *testing.T) {
 		{"aider --model ollama_chat/gemma3", "ollama_chat/gemma3"}, // extraction is agent-neutral
 		{"claude --models-dir x", ""},                              // lookalike flag is not a pin
 		{"claude --model", ""},                                     // bare trailing flag: no value
+		// Last pin wins, matching argv semantics — withFlag's append path can
+		// leave two pins on a quoted program.
+		{`claude --model sonnet --append-system-prompt "x" --model opus`, "opus"},
 		{"claude", ""},
 		{"", ""},
 	} {
@@ -72,6 +75,12 @@ func TestWithModelFlag(t *testing.T) {
 		{"flag lookalike takes the append path",
 			"claude --models-dir 'a  b'", "opus",
 			"claude --models-dir 'a  b' --model opus"},
+		// A real pin alongside shell quoting also appends — the replace path
+		// can't be trusted to parse quoted programs, and argv last-wins keeps
+		// the override effective.
+		{"real pin alongside quoting appends last-wins",
+			`claude --model sonnet --append-system-prompt "be brief"`, "opus",
+			`claude --model sonnet --append-system-prompt "be brief" --model opus`},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

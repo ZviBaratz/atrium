@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/charmbracelet/lipgloss"
+	xansi "github.com/charmbracelet/x/ansi"
 	"github.com/mattn/go-runewidth"
 	"github.com/muesli/ansi"
 )
@@ -117,6 +118,84 @@ func TestPanelExactDimensions(t *testing.T) {
 					}
 				}
 			}
+		}
+	}
+}
+
+// TestPanelWithBadgeExactDimensions: the badge variant must hold the same
+// bounds invariant as Panel at every size, including widths too narrow for
+// the badge to render at all.
+func TestPanelWithBadgeExactDimensions(t *testing.T) {
+	content := "first line\nsecond line\nthird"
+	for _, th := range []*Theme{Get("tokyo-night"), Get("unicode")} {
+		for _, dim := range [][2]int{{20, 5}, {40, 10}, {12, 4}, {60, 20}, {8, 3}, {24, 5}} {
+			w, h := dim[0], dim[1]
+			for _, active := range []bool{true, false} {
+				out := th.PanelWithBadge("Sessions", "⇡ v9.9.9", content, w, h, active)
+				lines := strings.Split(out, "\n")
+				if len(lines) != h {
+					t.Errorf("%s %dx%d active=%v: %d lines, want %d", th.Name, w, h, active, len(lines), h)
+					continue
+				}
+				for i, l := range lines {
+					if pw := ansi.PrintableRuneWidth(l); pw != w {
+						t.Errorf("%s %dx%d active=%v: line %d width %d, want %d", th.Name, w, h, active, i, pw, w)
+						break
+					}
+				}
+			}
+		}
+	}
+}
+
+// TestPanelBadgeDegradation pins the badge's narrow-width fallback order:
+// full badge → text after the glyph → glyph alone → nothing. The title is
+// never sacrificed, and a partial version string is never shown.
+func TestPanelBadgeDegradation(t *testing.T) {
+	th := Get("tokyo-night")
+	cases := []struct {
+		width          int
+		wants, rejects []string
+	}{
+		{24, []string{"⇡ v9.9.9"}, nil},               // 4 + titleSeg(10) + badgeSeg(10): exact fit
+		{23, []string{"v9.9.9"}, []string{"⇡"}},       // glyph dropped, version survives
+		{22, []string{"v9.9.9"}, []string{"⇡"}},       // tier-2 lower bound
+		{21, []string{"⇡"}, []string{"v9.9.9", "v9"}}, // glyph only
+		{17, []string{"⇡"}, []string{"v9.9.9", "v9"}}, // tier-3 lower bound
+		{16, nil, []string{"⇡", "v9.9.9", "v9"}},      // no room: today's plain border
+	}
+	for _, c := range cases {
+		out := th.PanelWithBadge("Sessions", "⇡ v9.9.9", "x", c.width, 4, true)
+		top := xansi.Strip(strings.Split(out, "\n")[0])
+		if !strings.Contains(top, "Sessions") {
+			t.Errorf("width %d: title missing from %q", c.width, top)
+		}
+		for _, want := range c.wants {
+			if !strings.Contains(top, want) {
+				t.Errorf("width %d: top row %q missing %q", c.width, top, want)
+			}
+		}
+		for _, reject := range c.rejects {
+			if strings.Contains(top, reject) {
+				t.Errorf("width %d: top row %q must not contain %q", c.width, top, reject)
+			}
+		}
+		for i, l := range strings.Split(out, "\n") {
+			if pw := ansi.PrintableRuneWidth(l); pw != c.width {
+				t.Errorf("width %d: line %d width %d", c.width, i, pw)
+			}
+		}
+	}
+}
+
+// TestPanelEmptyBadgeEqualsPanel locks Panel as the empty-badge identity so
+// the badge path can't drift the plain border rendering.
+func TestPanelEmptyBadgeEqualsPanel(t *testing.T) {
+	for _, th := range []*Theme{Get("tokyo-night"), Get("unicode")} {
+		plain := th.Panel("Sessions", "x", 24, 4, true)
+		badged := th.PanelWithBadge("Sessions", "", "x", 24, 4, true)
+		if plain != badged {
+			t.Errorf("%s: PanelWithBadge with empty badge differs from Panel:\n%q\nvs\n%q", th.Name, badged, plain)
 		}
 	}
 }

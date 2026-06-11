@@ -66,6 +66,9 @@ const (
 	// modelSectionLines is the height the model section adds when present, mirroring
 	// profileSectionLines (label + blank + input row + a divider).
 	modelSectionLines = 4
+	// modeSectionLines is the height the permission-mode section adds when present,
+	// mirroring modelSectionLines (label + blank + chips row + a divider).
+	modeSectionLines = 4
 )
 
 // createFormHelp is the single footer line describing how to navigate the create form.
@@ -121,6 +124,7 @@ const (
 	stopDirectory
 	stopProfile
 	stopModel
+	stopMode
 	stopAccount
 	stopTextarea
 	stopBranch
@@ -141,6 +145,7 @@ type TextInputOverlay struct {
 	directoryPicker *DirectoryPicker
 	profilePicker   *ProfilePicker
 	modelField      *ModelField
+	modeField       *ModeField
 	accountPicker   *AccountPicker
 	branchPicker    *BranchPicker
 	stops           []focusStop // ordered focusable stops actually present
@@ -198,11 +203,11 @@ func NewSessionCreateOverlay(profiles []config.Profile, accounts []config.Claude
 		ap = NewAccountPicker(accounts)
 	}
 
-	// The model field exists only when some selectable program resolves to claude (the
-	// candidates are the profiles when any exist — a profile's program always overrides
-	// the default — else the default program). Its *enabled* state then tracks the
-	// effective program: present-but-inert while a non-claude profile is selected, so a
-	// typed model is visibly n/a rather than silently dropped.
+	// The model and permission-mode fields exist only when some selectable program
+	// resolves to claude (the candidates are the profiles when any exist — a profile's
+	// program always overrides the default — else the default program). Their *enabled*
+	// state then tracks the effective program: present-but-inert while a non-claude
+	// profile is selected, so a typed model is visibly n/a rather than silently dropped.
 	candidates := []string{defaultProgram}
 	if len(profiles) > 0 {
 		candidates = candidates[:0]
@@ -211,9 +216,11 @@ func NewSessionCreateOverlay(profiles []config.Profile, accounts []config.Claude
 		}
 	}
 	var mf *ModelField
+	var pmf *ModeField
 	for _, c := range candidates {
 		if agent.Resolve(c).Key == agent.KeyClaude {
 			mf = NewModelField()
+			pmf = NewModeField()
 			break
 		}
 	}
@@ -230,6 +237,9 @@ func NewSessionCreateOverlay(profiles []config.Profile, accounts []config.Claude
 	if mf != nil {
 		stops = append(stops, stopModel)
 	}
+	if pmf != nil {
+		stops = append(stops, stopMode)
+	}
 	if ap != nil && ap.HasMultiple() {
 		stops = append(stops, stopAccount)
 	}
@@ -242,21 +252,25 @@ func NewSessionCreateOverlay(profiles []config.Profile, accounts []config.Claude
 		directoryPicker: dp,
 		profilePicker:   pp,
 		modelField:      mf,
+		modeField:       pmf,
 		accountPicker:   ap,
 		branchPicker:    bp,
 		stops:           stops,
 		isCreateForm:    true,
 		defaultProgram:  defaultProgram,
 	}
-	overlay.syncModelFieldEnabled()
+	overlay.syncClaudeFieldsEnabled()
 	overlay.focusStop(stopDirectory)
 	return overlay
 }
 
-// syncModelFieldEnabled re-derives the model field's enabled state from the effective
-// program (the selected profile's program when a picker exists, else the configured
-// default). Called at construction and after every profile-picker keypress.
-func (t *TextInputOverlay) syncModelFieldEnabled() {
+// syncClaudeFieldsEnabled re-derives the model and permission-mode fields' enabled
+// state from the effective program (the selected profile's program when a picker
+// exists, else the configured default). Called at construction and after every
+// profile-picker keypress.
+func (t *TextInputOverlay) syncClaudeFieldsEnabled() {
+	// The two fields are created together or not at all (see NewSessionCreateOverlay),
+	// so one presence check covers both.
 	if t.modelField == nil {
 		return
 	}
@@ -264,7 +278,9 @@ func (t *TextInputOverlay) syncModelFieldEnabled() {
 	if t.profilePicker != nil {
 		program = t.profilePicker.GetSelectedProfile().Program
 	}
-	t.modelField.SetDisabled(agent.Resolve(program).Key != agent.KeyClaude)
+	disabled := agent.Resolve(program).Key != agent.KeyClaude
+	t.modelField.SetDisabled(disabled)
+	t.modeField.SetDisabled(disabled)
 }
 
 func newTextarea(initialValue string) textarea.Model {
@@ -340,6 +356,9 @@ func (t *TextInputOverlay) fitRows(height int) (pickerRows, promptRows int) {
 	if t.modelField != nil {
 		chrome += modelSectionLines
 	}
+	if t.modeField != nil {
+		chrome += modeSectionLines
+	}
 	if t.hasAccountSection() {
 		chrome += accountSectionLines
 	}
@@ -388,6 +407,7 @@ func (t *TextInputOverlay) isTitle() bool           { return t.currentStop() == 
 func (t *TextInputOverlay) isDirectoryPicker() bool { return t.currentStop() == stopDirectory }
 func (t *TextInputOverlay) isProfilePicker() bool   { return t.currentStop() == stopProfile }
 func (t *TextInputOverlay) isModelField() bool      { return t.currentStop() == stopModel }
+func (t *TextInputOverlay) isModeField() bool       { return t.currentStop() == stopMode }
 func (t *TextInputOverlay) isAccountPicker() bool   { return t.currentStop() == stopAccount }
 func (t *TextInputOverlay) isTextarea() bool        { return t.currentStop() == stopTextarea }
 func (t *TextInputOverlay) isBranchPicker() bool    { return t.currentStop() == stopBranch }
@@ -428,6 +448,9 @@ func (t *TextInputOverlay) setFocusIndex(i int) {
 // every other stop is always enabled.
 func (t *TextInputOverlay) stopEnabled(kind focusStop) bool {
 	if kind == stopBranch && t.branchPicker != nil && t.branchPicker.Disabled() {
+		return false
+	}
+	if kind == stopMode && t.modeField != nil && t.modeField.Disabled() {
 		return false
 	}
 	if kind == stopModel && t.modelField != nil && t.modelField.Disabled() {
@@ -490,6 +513,13 @@ func (t *TextInputOverlay) updateFocusState() {
 			t.modelField.Focus()
 		} else {
 			t.modelField.Blur()
+		}
+	}
+	if t.modeField != nil {
+		if t.isModeField() {
+			t.modeField.Focus()
+		} else {
+			t.modeField.Blur()
 		}
 	}
 	if t.accountPicker != nil {
@@ -594,14 +624,20 @@ func (t *TextInputOverlay) HandleKeyPress(msg tea.KeyMsg) (bool, bool) {
 			switch msg.Type {
 			case tea.KeyLeft, tea.KeyRight, tea.KeyUp, tea.KeyDown:
 				t.profilePicker.HandleKeyPress(msg)
-				// The model override only applies to claude; keep its enabled state in
-				// step with the newly selected profile's agent.
-				t.syncModelFieldEnabled()
+				// The model and permission-mode overrides only apply to claude; keep
+				// their enabled state in step with the newly selected profile's agent.
+				t.syncClaudeFieldsEnabled()
 			}
 			return false, false
 		}
 		if t.isModelField() {
 			t.modelField.HandleKeyPress(msg)
+			return false, false
+		}
+		if t.isModeField() {
+			// No pre-filter: the field itself acts only on arrow keys (unlike the
+			// profile picker's filter above, which is load-bearing for the sync call).
+			t.modeField.HandleKeyPress(msg)
 			return false, false
 		}
 		if t.isAccountPicker() {
@@ -708,6 +744,16 @@ func (t *TextInputOverlay) GetModel() string {
 	return t.modelField.Value()
 }
 
+// GetPermissionMode returns the selected Claude permission-mode override, or
+// "" when no flag should be composed: no mode field, the field is inert
+// (non-claude profile selected), or it sits on the default chip.
+func (t *TextInputOverlay) GetPermissionMode() string {
+	if t.modeField == nil {
+		return ""
+	}
+	return t.modeField.Value()
+}
+
 // GetSelectedAccount returns the chosen account and true only when the user has
 // deliberately driven the picker, i.e. an override. Otherwise it returns
 // (zero, false) so the caller keeps the freshly-resolved auto-route — whether the
@@ -805,7 +851,7 @@ func (t *TextInputOverlay) Render() string {
 	divider := tiDividerStyle().Render(strings.Repeat("─", innerWidth))
 
 	if t.isCreateForm {
-		return t.fitOverlay(t.renderCreateForm(divider), innerWidth)
+		return t.fitOverlay(t.renderCreateForm(divider), innerWidth, divider)
 	}
 
 	// Plain prompt overlay (the `p` flow): no pickers — just a title, the prompt textarea,
@@ -819,7 +865,7 @@ func (t *TextInputOverlay) Render() string {
 	}
 	content += t.renderEnterButton()
 
-	return t.fitOverlay(content, innerWidth)
+	return t.fitOverlay(content, innerWidth, divider)
 }
 
 // fitOverlay constrains the assembled inner content to the overlay's terminal share
@@ -830,11 +876,14 @@ func (t *TextInputOverlay) Render() string {
 //   - Width: every line is truncated to innerWidth, so a long value (e.g. a deep
 //     project path or profile command) can never widen the box past t.width. The
 //     dividers, already innerWidth wide, anchor the box to a stable width.
-//   - Height: the create form's constant-height sections can total a row or two more
-//     than a short terminal (an 80×24 screen with a profile section needs 25 rows).
-//     Blank filler lines are dropped — never real content like the Create button —
-//     until the box fits t.height, so the form compacts instead of scrolling.
-func (t *TextInputOverlay) fitOverlay(content string, innerWidth int) string {
+//   - Height: the create form's constant-height sections can total several rows more
+//     than a short terminal (an 80×24 screen with profiles, the claude fields, and an
+//     account picker needs over 30). Spacing is shed in stages — blank filler lines
+//     first, then divider lines (pure visual separation) — so the form compacts
+//     instead of scrolling. If even that is not enough (a terminal below the 24-row
+//     floor), the tail is clipped outright: a partially visible form is degraded but
+//     stable, while an oversize View() is not.
+func (t *TextInputOverlay) fitOverlay(content string, innerWidth int, divider string) string {
 	lines := strings.Split(content, "\n")
 	for i, l := range lines {
 		if lipgloss.Width(l) > innerWidth {
@@ -844,28 +893,35 @@ func (t *TextInputOverlay) fitOverlay(content string, innerWidth int) string {
 	// The bordered, padded box adds 4 rows (border top/bottom + vertical padding),
 	// so the inner content must fit within t.height-4 for the box to fit the screen.
 	if budget := t.height - 4; budget > 0 {
-		lines = dropBlankLinesToFit(lines, budget)
+		lines = dropLinesToFit(lines, budget, func(l string) bool { return lipgloss.Width(l) == 0 })
+		lines = dropLinesToFit(lines, budget, func(l string) bool { return l == divider })
+		if len(lines) > budget {
+			lines = lines[:budget]
+		}
 	}
 	return tiStyle().Render(strings.Join(lines, "\n"))
 }
 
-// dropBlankLinesToFit removes interior blank lines (and only blank lines — leading,
-// trailing, and any line carrying visible content are preserved) until the slice is
-// at most budget lines long or no removable blanks remain. It is the graceful
-// degradation for terminals too short to hold the form at its natural spacing.
-//
-// It never drops visible content, so a terminal shorter than the form's irreducible
-// height (its content rows plus the few unavoidable blanks) still overflows by the
-// residual rows. The supported floor is 24 rows: at 80×24 the create form has enough
-// removable blanks to fit, which TestViewFitsTerminalBounds and the unit tests pin.
+// dropBlankLinesToFit removes interior blank lines (and only blank lines) until the
+// slice is at most budget lines long or no removable blanks remain. It is the first
+// stage of fitOverlay's graceful degradation for short terminals.
 func dropBlankLinesToFit(lines []string, budget int) []string {
+	return dropLinesToFit(lines, budget, func(l string) bool { return lipgloss.Width(l) == 0 })
+}
+
+// dropLinesToFit removes interior lines matching droppable — leading, trailing, and
+// non-matching lines are always preserved — until the slice is at most budget lines
+// long or no droppable lines remain. fitOverlay layers it: blanks go first (natural
+// spacing), then dividers (visual separation), so real content is only ever lost to
+// the final clip on terminals below the supported 24-row floor.
+func dropLinesToFit(lines []string, budget int, droppable func(string) bool) []string {
 	excess := len(lines) - budget
 	if excess <= 0 {
 		return lines
 	}
 	out := make([]string, 0, len(lines))
 	for i, l := range lines {
-		if excess > 0 && i > 0 && i < len(lines)-1 && lipgloss.Width(l) == 0 {
+		if excess > 0 && i > 0 && i < len(lines)-1 && droppable(l) {
 			excess--
 			continue
 		}
@@ -907,6 +963,9 @@ func (t *TextInputOverlay) renderCreateForm(divider string) string {
 	}
 	if t.modelField != nil {
 		section(t.modelField.Render())
+	}
+	if t.modeField != nil {
+		section(t.modeField.Render())
 	}
 	if t.hasAccountSection() {
 		section(t.accountPicker.Render())

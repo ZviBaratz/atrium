@@ -201,6 +201,12 @@ type List struct {
 	// when the always-on bottom hint bar is enabled, whose hints supersede it —
 	// without the bar (hint_bar off) the in-list hint is the only affordance left.
 	hideEmptyHint bool
+
+	// updateBadge is the persistent update indicator inset in the panel's top
+	// border ("⇡ v0.7.1"). The app sets it once when the startup update check
+	// resolves and never clears it: unlike toast notices it must survive
+	// overlays and hint_bar:false, so it lives in panel chrome.
+	updateBadge string
 }
 
 // NewList returns an empty List.
@@ -217,6 +223,13 @@ func NewList(spinner *spinner.Model) *List {
 // bottom hint bar already carries those keys.
 func (l *List) SetShowEmptyHint(show bool) {
 	l.hideEmptyHint = !show
+}
+
+// SetUpdateBadge sets the plain-text update badge ("⇡ v0.7.1") shown in the
+// panel's top border. The panel styles and width-degrades it; pass plain
+// text, no ANSI.
+func (l *List) SetUpdateBadge(text string) {
+	l.updateBadge = text
 }
 
 // SetBranchPrefix sets the git-branch prefix stripped from each row's branch
@@ -629,7 +642,7 @@ func (l *List) String() string {
 	// active (accent border). A dynamic focus model can flip this later.
 	// The panel zone wraps outside Panel so its internal clipping cannot
 	// truncate the end marker.
-	return zone.Mark(listPanelZoneID, theme.Current().Panel("Sessions", content, l.width, l.height, true))
+	return zone.Mark(listPanelZoneID, theme.Current().PanelWithBadge("Sessions", l.updateBadge, content, l.width, l.height, true))
 }
 
 // windowLines clips lines to the list height, scrolling so the selected block
