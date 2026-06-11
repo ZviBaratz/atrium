@@ -102,6 +102,12 @@ app/                    startup goroutine → tea.Msg → hint-bar / toast notic
      notices are distinct: *available* vs *updating* vs *installed, restart
      needed*. A notice that arrives while a modal overlay owns the screen is
      buffered and re-delivered once the hint bar is back.
+   - The toast is only the attention-getter. The durable signal is a
+     persistent badge in the Sessions panel's top border (`⇡ v0.X.Y` while an
+     update is available or downloading, `⇡ restart` once the binary is
+     swapped) that stays until the process restarts — covering the welcome
+     overlay, a missed 5s toast, and `hint_bar: false`, where the toast never
+     renders at all (issue #108).
    - Every failure (network, rate limit, checksum, permissions) is log-only.
      The TUI never blocks on the network and never surfaces updater errors.
 2. **`atrium update`**: explicit and verbose — prints current/latest versions,

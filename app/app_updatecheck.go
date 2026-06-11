@@ -13,6 +13,7 @@ import (
 	"github.com/ZviBaratz/atrium/config"
 	"github.com/ZviBaratz/atrium/internal/update"
 	"github.com/ZviBaratz/atrium/log"
+	"github.com/ZviBaratz/atrium/ui/theme"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -108,13 +109,27 @@ func (m *home) installUpdateCmd(rel *update.Release) tea.Cmd {
 	}
 }
 
+// updateBadgeText is the persistent Sessions-panel badge for an update state:
+// the available version in notify mode (or while an auto-install runs), and a
+// restart hint once the binary on disk has been swapped. It is deliberately
+// short — the panel degrades it word-by-word when the list is narrow.
+func updateBadgeText(version string, installed bool) string {
+	g := theme.Current().Glyphs
+	if installed {
+		return g.Ahead + " restart"
+	}
+	return g.Ahead + " v" + version
+}
+
 // handleUpdateNotice shows an update notice on the hint bar, like
 // handleInfoNotice — but where ordinary notices acknowledge a user action and
 // may drop when the bar can't render (a modal overlay owns the screen), the
 // startup check delivers each message exactly once, so an undeliverable notice
 // is buffered and re-delivered by the preview tick when the bar returns. With
-// the hint bar disabled in config it stays buffered indefinitely, consistent
-// with every other notice in that chrome-free setup.
+// the hint bar disabled in config it stays buffered indefinitely — acceptable
+// because the toast is only the attention-getter: the durable signal is the
+// Sessions-panel badge (updateBadgeText), which renders regardless of
+// overlays and hint_bar.
 func (m *home) handleUpdateNotice(text string) tea.Cmd {
 	if cmd := m.handleInfoNotice(text); cmd != nil {
 		m.pendingUpdateNotice = ""

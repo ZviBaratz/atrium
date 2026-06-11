@@ -145,7 +145,9 @@ To disable auto-attach and always return to the list after creating a session, s
 `auto_update` controls the startup release check: `"notify"` (default) shows a
 hint when a newer release exists, `"auto"` downloads and installs it in the
 background (applied on the next launch), and `"off"` disables the check. The
-explicit `atrium update` command works regardless of this setting.
+explicit `atrium update` command works regardless of this setting. Alongside
+the transient hint, a persistent `⇡` badge in the Sessions panel border shows
+the pending update (or restart) state until the next launch.
 
 #### Profiles
 
