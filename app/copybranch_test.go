@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/ZviBaratz/atrium/config"
+	"github.com/ZviBaratz/atrium/internal/actions"
 	"github.com/ZviBaratz/atrium/session"
 	"github.com/ZviBaratz/atrium/ui"
 
@@ -27,10 +28,10 @@ type fakeClipboard struct {
 // error path can be exercised without a real clipboard.
 func withFakeClipboard(t *testing.T, retErr error) *fakeClipboard {
 	t.Helper()
-	orig := copyToClipboard
-	t.Cleanup(func() { copyToClipboard = orig })
+	orig := actions.CopyToClipboard
+	t.Cleanup(func() { actions.CopyToClipboard = orig })
 	fc := &fakeClipboard{}
-	copyToClipboard = func(s string) error {
+	actions.CopyToClipboard = func(s string) error {
 		fc.called = true
 		fc.value = s
 		return retErr

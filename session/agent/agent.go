@@ -55,6 +55,10 @@ type PromptMatcher struct {
 	Any []string
 	// Match, when set, replaces the All/Any/Window match entirely.
 	Match func(content string) bool
+	// NoAutoTap marks a prompt whose auto-answer is destructive (e.g. claude's
+	// plan approval, where Enter accepts the plan AND enables auto-accept).
+	// Autoyes must surface it as needs-input instead of tapping Enter.
+	NoAutoTap bool
 }
 
 func (m PromptMatcher) matches(content string) bool {
@@ -187,17 +191,18 @@ func (a *Adapter) HasBusyMarker(content string) bool {
 }
 
 // DetectPrompt reports whether the bottom chrome of content (the cleaned full
-// pane) shows a blocking prompt, returning the matcher's name for status
-// logging. Each matcher windows the pane itself (its own flattened window, or a
-// structural scan via Match), so differently shaped matchers coexist without
-// the caller pre-windowing.
-func (a *Adapter) DetectPrompt(content string) (string, bool) {
+// pane) shows a blocking prompt, returning the matched matcher so callers can
+// read its Name (status logging) and NoAutoTap (autoyes guard). Each matcher
+// windows the pane itself (its own flattened window, or a structural scan via
+// Match), so differently shaped matchers coexist without the caller
+// pre-windowing.
+func (a *Adapter) DetectPrompt(content string) (PromptMatcher, bool) {
 	for _, m := range a.Prompts {
 		if m.matches(content) {
-			return m.Name, true
+			return m, true
 		}
 	}
-	return "", false
+	return PromptMatcher{}, false
 }
 
 // GateUp returns the startup gate currently showing in the raw pane content.

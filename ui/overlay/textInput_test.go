@@ -22,7 +22,7 @@ var twoAccounts = []config.ClaudeAccount{
 // no selection (ok=false) so the caller keeps the freshly-resolved auto-route. Only a
 // deliberate keypress flips it to an override that wins.
 func TestSessionCreateOverlay_AccountOverrideOnlyWhenTouched(t *testing.T) {
-	o := NewSessionCreateOverlay(nil, twoAccounts, []string{"/repo/a"})
+	o := NewSessionCreateOverlay(nil, twoAccounts, []string{"/repo/a"}, "")
 
 	_, ok := o.GetSelectedAccount()
 	assert.False(t, ok, "an untouched picker must not override auto-routing")
@@ -42,7 +42,7 @@ func TestSessionCreateOverlay_AccountOverrideOnlyWhenTouched(t *testing.T) {
 
 // A form with no configured accounts never overrides — the feature is dormant.
 func TestSessionCreateOverlay_NoAccountsNeverOverrides(t *testing.T) {
-	o := NewSessionCreateOverlay(nil, nil, []string{"/repo/a"})
+	o := NewSessionCreateOverlay(nil, nil, []string{"/repo/a"}, "")
 	_, ok := o.GetSelectedAccount()
 	assert.False(t, ok)
 }
@@ -52,11 +52,11 @@ func TestSessionCreateOverlay_NoAccountsNeverOverrides(t *testing.T) {
 // conveys the account.
 func TestSessionCreateOverlay_SingleAccountHidesSection(t *testing.T) {
 	one := []config.ClaudeAccount{{Name: "solo", ConfigDir: "~/.claude"}}
-	o := NewSessionCreateOverlay(nil, one, []string{"/repo/a"})
+	o := NewSessionCreateOverlay(nil, one, []string{"/repo/a"}, "")
 	o.SetSize(80, 40)
 	assert.NotContains(t, o.Render(), "Account", "a lone account must not render the picker section")
 
-	o2 := NewSessionCreateOverlay(nil, twoAccounts, []string{"/repo/a"})
+	o2 := NewSessionCreateOverlay(nil, twoAccounts, []string{"/repo/a"}, "")
 	o2.SetSize(80, 40)
 	assert.Contains(t, o2.Render(), "Account", "≥2 accounts render the picker section")
 }
@@ -112,7 +112,7 @@ func TestQuickSendOverlay_EscCancels(t *testing.T) {
 }
 
 func TestTextInputOverlay_InvalidateBumpsVersion(t *testing.T) {
-	o := NewSessionCreateOverlay(nil, nil, []string{"/repo/a"})
+	o := NewSessionCreateOverlay(nil, nil, []string{"/repo/a"}, "")
 	before := o.BranchFilterVersion()
 	after := o.InvalidateBranchSearch()
 	assert.Greater(t, after, before)
@@ -122,7 +122,7 @@ func TestSessionCreateOverlay_FocusStartsOnDirectoryAndCycles(t *testing.T) {
 	// No profiles → stops: [directory, branch, title, textarea, enter]; focus starts on
 	// the project picker, and the base branch follows immediately since it is scoped to
 	// the chosen project.
-	o := NewSessionCreateOverlay(nil, nil, []string{"/repo/a", "/repo/b"})
+	o := NewSessionCreateOverlay(nil, nil, []string{"/repo/a", "/repo/b"}, "")
 	assert.True(t, o.IsCreateForm())
 	assert.True(t, o.isDirectoryPicker(), "focus should start on the project picker")
 
@@ -143,7 +143,7 @@ func TestSessionCreateOverlay_FocusStartsOnDirectoryAndCycles(t *testing.T) {
 
 // The branch section must render between the project and the title, matching the Tab order.
 func TestSessionCreateOverlay_RendersBranchBetweenProjectAndTitle(t *testing.T) {
-	o := NewSessionCreateOverlay(nil, nil, []string{"/repo/a"})
+	o := NewSessionCreateOverlay(nil, nil, []string{"/repo/a"}, "")
 	o.SetSize(80, 40)
 	out := o.Render()
 
@@ -158,7 +158,7 @@ func TestSessionCreateOverlay_RendersBranchBetweenProjectAndTitle(t *testing.T) 
 }
 
 func TestSessionCreateOverlay_RendersProjectAboveTitle(t *testing.T) {
-	o := NewSessionCreateOverlay(nil, nil, []string{"/repo/a"})
+	o := NewSessionCreateOverlay(nil, nil, []string{"/repo/a"}, "")
 	o.SetSize(80, 24)
 	out := o.Render()
 
@@ -173,7 +173,7 @@ func TestSessionCreateOverlay_TabCompletesDirectoryThenAdvances(t *testing.T) {
 	root := t.TempDir()
 	require.NoError(t, os.MkdirAll(filepath.Join(root, "alpha"), 0o755))
 
-	o := NewSessionCreateOverlay(nil, nil, []string{root})
+	o := NewSessionCreateOverlay(nil, nil, []string{root}, "")
 	assert.True(t, o.isDirectoryPicker())
 
 	// Type a unique path prefix, then Tab — completion happens in place, focus stays.
@@ -188,7 +188,7 @@ func TestSessionCreateOverlay_TabCompletesDirectoryThenAdvances(t *testing.T) {
 }
 
 func TestSessionCreateOverlay_CtrlSSubmitsFromAnyField(t *testing.T) {
-	o := NewSessionCreateOverlay(nil, nil, []string{"/repo/a"})
+	o := NewSessionCreateOverlay(nil, nil, []string{"/repo/a"}, "")
 	// Focus starts on the project picker, not the submit button.
 	assert.True(t, o.isDirectoryPicker())
 
@@ -199,7 +199,7 @@ func TestSessionCreateOverlay_CtrlSSubmitsFromAnyField(t *testing.T) {
 }
 
 func TestSessionCreateOverlay_GetTitle(t *testing.T) {
-	o := NewSessionCreateOverlay(nil, nil, []string{"/repo/a"})
+	o := NewSessionCreateOverlay(nil, nil, []string{"/repo/a"}, "")
 	// Focus starts on the project picker; Tab past the branch picker to the title,
 	// then runes land there.
 	tab(o)
@@ -215,7 +215,7 @@ func TestSessionCreateOverlay_GetTitle(t *testing.T) {
 // Tab directions: forward from the project lands on the title, and Shift+Tab from the
 // title returns to the project.
 func TestSessionCreateOverlay_TabSkipsDisabledBranch(t *testing.T) {
-	o := NewSessionCreateOverlay(nil, nil, []string{"/not/a/repo"})
+	o := NewSessionCreateOverlay(nil, nil, []string{"/not/a/repo"}, "")
 	o.SetTargetValidity(true, true, "") // valid directory, not a git repo → direct session
 	assert.True(t, o.isDirectoryPicker())
 
@@ -228,7 +228,7 @@ func TestSessionCreateOverlay_TabSkipsDisabledBranch(t *testing.T) {
 // Enter advances past a disabled branch stop too — Enter on the project must not land the
 // user on an inert field.
 func TestSessionCreateOverlay_EnterSkipsDisabledBranch(t *testing.T) {
-	o := NewSessionCreateOverlay(nil, nil, []string{"/not/a/repo"})
+	o := NewSessionCreateOverlay(nil, nil, []string{"/not/a/repo"}, "")
 	o.SetTargetValidity(true, true, "")
 	assert.True(t, o.isDirectoryPicker())
 
@@ -239,7 +239,7 @@ func TestSessionCreateOverlay_EnterSkipsDisabledBranch(t *testing.T) {
 // The quick-create contract: n focuses the title, typing a name and pressing
 // Enter creates the session — no two-hand ⌃S chord on the fast path.
 func TestSessionCreateOverlay_EnterOnFilledTitleSubmits(t *testing.T) {
-	o := NewSessionCreateOverlay(nil, nil, []string{"/repo/a"})
+	o := NewSessionCreateOverlay(nil, nil, []string{"/repo/a"}, "")
 	o.FocusTitle()
 	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("my-task")})
 
@@ -253,7 +253,7 @@ func TestSessionCreateOverlay_EnterOnFilledTitleSubmits(t *testing.T) {
 // Enter on an empty title advances instead of submitting: submitting would only
 // bounce off the title-required validation, so the keystroke moves the user on.
 func TestSessionCreateOverlay_EnterOnEmptyTitleAdvances(t *testing.T) {
-	o := NewSessionCreateOverlay(nil, nil, []string{"/repo/a"})
+	o := NewSessionCreateOverlay(nil, nil, []string{"/repo/a"}, "")
 	o.FocusTitle()
 
 	shouldClose, _ := o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyEnter})
@@ -267,7 +267,7 @@ func TestSessionCreateOverlay_EnterOnEmptyTitleAdvances(t *testing.T) {
 // by design, which is exactly why title-enter (not prompt-enter) is the quick
 // submit.
 func TestSessionCreateOverlay_EnterInPromptInsertsNewline(t *testing.T) {
-	o := NewSessionCreateOverlay(nil, nil, []string{"/repo/a"})
+	o := NewSessionCreateOverlay(nil, nil, []string{"/repo/a"}, "")
 	o.FocusTitle()
 	tab(o) // title → prompt
 	require.True(t, o.isTextarea())
@@ -285,7 +285,7 @@ func TestSessionCreateOverlay_EnterInPromptInsertsNewline(t *testing.T) {
 // check resolving after the user tabbed ahead), focus is pushed to the next enabled stop
 // rather than stranding the user on an inert field.
 func TestSessionCreateOverlay_FocusEvictedWhenBranchDisabled(t *testing.T) {
-	o := NewSessionCreateOverlay(nil, nil, []string{"/not/a/repo"})
+	o := NewSessionCreateOverlay(nil, nil, []string{"/not/a/repo"}, "")
 	tab(o)
 	assert.True(t, o.isBranchPicker())
 
@@ -297,7 +297,7 @@ func TestSessionCreateOverlay_FocusEvictedWhenBranchDisabled(t *testing.T) {
 // flicker the branch section: the last known disabled/enabled state holds until the fresh
 // verdict re-sets it.
 func TestSessionCreateOverlay_ClearValidityKeepsBranchDisabledState(t *testing.T) {
-	o := NewSessionCreateOverlay(nil, nil, []string{"/not/a/repo"})
+	o := NewSessionCreateOverlay(nil, nil, []string{"/not/a/repo"}, "")
 	o.SetTargetValidity(true, true, "")
 	o.ClearTargetValidity()
 
@@ -312,7 +312,7 @@ func TestSessionCreateOverlay_ClearValidityKeepsBranchDisabledState(t *testing.T
 // An invalid target (not a directory at all) disables the branch picker just like a
 // non-git one — there is nothing to list branches in.
 func TestSessionCreateOverlay_InvalidTargetDisablesBranch(t *testing.T) {
-	o := NewSessionCreateOverlay(nil, nil, []string{"/nonexistent"})
+	o := NewSessionCreateOverlay(nil, nil, []string{"/nonexistent"}, "")
 	o.SetTargetValidity(false, false, "")
 
 	tab(o)
@@ -324,7 +324,7 @@ func TestSessionCreateOverlay_InvalidTargetDisablesBranch(t *testing.T) {
 // hard-required input — and drops it once a title is typed. Submit-time validation stays
 // as the backstop.
 func TestSessionCreateOverlay_TitleRequiredMarker(t *testing.T) {
-	o := NewSessionCreateOverlay(nil, nil, []string{"/repo/a"})
+	o := NewSessionCreateOverlay(nil, nil, []string{"/repo/a"}, "")
 	o.SetSize(80, 40)
 	assert.Contains(t, o.Render(), "(required)", "empty title must show the marker")
 
@@ -338,7 +338,7 @@ func TestSessionCreateOverlay_TitleRequiredMarker(t *testing.T) {
 // The whole form must render the same number of lines no matter which field holds focus,
 // so the vertically centered overlay does not jump as the user Tabs between fields.
 func TestSessionCreateOverlay_RenderHeightConstantAcrossFocus(t *testing.T) {
-	o := NewSessionCreateOverlay(nil, nil, []string{"/repo/a", "/repo/b"})
+	o := NewSessionCreateOverlay(nil, nil, []string{"/repo/a", "/repo/b"}, "")
 	o.SetSize(80, 40)
 
 	o.focusStop(stopDirectory)
@@ -362,7 +362,7 @@ func TestSessionCreateOverlay_RenderHeightConstantAcrossFocus(t *testing.T) {
 // The form must shrink to fit short terminals (it has a fixed-height default that overflows
 // otherwise), and must still render at a constant height regardless of which field is focused.
 func TestSessionCreateOverlay_FitsShortTerminal(t *testing.T) {
-	o := NewSessionCreateOverlay(nil, nil, []string{"/repo/a"})
+	o := NewSessionCreateOverlay(nil, nil, []string{"/repo/a"}, "")
 	o.SetBranchResults([]string{"main", "develop", "feature/x"}, o.BranchFilterVersion())
 
 	// The form collapses its picker/prompt rows to fit; at a comfortable-but-short 24 rows it
@@ -454,6 +454,182 @@ func TestFitOverlay_TruncatesWideLinesToInnerWidth(t *testing.T) {
 	assert.Contains(t, got, "…", "the over-wide line should be ellipsized")
 	assert.NotContains(t, got, wide, "the untruncated 200-char line must not survive")
 	assert.Contains(t, got, short, "a line within innerWidth must pass through untouched")
+}
+
+// --- Model field (the optional Claude model override) ---
+
+var mixedProfiles = []config.Profile{
+	{Name: "Claude", Program: "claude"},
+	{Name: "Aider", Program: "aider --model ollama_chat/gemma3:1b"},
+}
+
+// The model field exists only when a selectable program resolves to claude: a claude
+// default (or any claude profile) shows it, a non-claude-only form omits it entirely.
+func TestSessionCreateOverlay_ModelFieldOnlyForClaude(t *testing.T) {
+	o := NewSessionCreateOverlay(nil, nil, []string{"/repo/a"}, "claude")
+	o.SetSize(80, 40)
+	assert.Contains(t, o.Render(), "Model", "a claude default program must show the model field")
+	assert.GreaterOrEqual(t, o.indexOfStop(stopModel), 0)
+
+	o2 := NewSessionCreateOverlay(nil, nil, []string{"/repo/a"}, "aider")
+	o2.SetSize(80, 40)
+	assert.NotContains(t, o2.Render(), "Model", "a non-claude form must not show the model field")
+	assert.Equal(t, -1, o2.indexOfStop(stopModel))
+}
+
+// Tab in the model field completes against the alias list in place ("s" → "sonnet"),
+// and only advances focus once there is nothing left to complete — the same
+// "complete, then advance" contract as the project field.
+func TestSessionCreateOverlay_ModelTabCompletesThenAdvances(t *testing.T) {
+	o := NewSessionCreateOverlay(nil, nil, []string{"/repo/a"}, "claude")
+	o.focusStop(stopModel)
+	require.True(t, o.isModelField())
+
+	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("s")})
+	tab(o)
+	assert.True(t, o.isModelField(), "Tab completes in place rather than advancing")
+	assert.Equal(t, "sonnet", o.GetModel())
+
+	tab(o)
+	assert.False(t, o.isModelField(), "with nothing to complete, Tab advances focus")
+}
+
+// Tab through an untouched model field must keep meaning "inherit": no completion
+// fires on an empty value, focus just advances.
+func TestSessionCreateOverlay_ModelEmptyTabAdvances(t *testing.T) {
+	o := NewSessionCreateOverlay(nil, nil, []string{"/repo/a"}, "claude")
+	o.focusStop(stopModel)
+
+	tab(o)
+	assert.False(t, o.isModelField(), "Tab on an empty model field advances immediately")
+	assert.Equal(t, "", o.GetModel())
+}
+
+// Typed runes are filtered to the safe model-name charset, so the submit-time
+// validation backstop can effectively never fire from keyboard input.
+func TestSessionCreateOverlay_ModelCharsetFiltered(t *testing.T) {
+	o := NewSessionCreateOverlay(nil, nil, []string{"/repo/a"}, "claude")
+	o.focusStop(stopModel)
+
+	for _, r := range "op;u s$" { // ';', ' ', '$' must be dropped
+		o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+	}
+	assert.Equal(t, "opus", o.GetModel())
+}
+
+// An explicit "inherit" (the inherit chip's label, typed out in custom mode)
+// contributes no override, same as leaving the field untouched.
+func TestSessionCreateOverlay_ModelInheritMeansNoOverride(t *testing.T) {
+	o := NewSessionCreateOverlay(nil, nil, []string{"/repo/a"}, "claude")
+	o.focusStop(stopModel)
+	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("inherit")})
+	assert.Equal(t, "", o.GetModel())
+}
+
+// Arrowing across the chip row selects aliases without any typing — the
+// typo-proof path. The first chip is inherit (no override).
+func TestSessionCreateOverlay_ModelChipCycle(t *testing.T) {
+	o := NewSessionCreateOverlay(nil, nil, []string{"/repo/a"}, "claude")
+	o.focusStop(stopModel)
+	assert.Equal(t, "", o.GetModel(), "the inherit chip contributes no override")
+
+	for i := 0; i < 3; i++ { // inherit → fable → haiku → opus
+		o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyDown})
+	}
+	assert.Equal(t, "opus", o.GetModel())
+
+	for i := 0; i < 3; i++ {
+		o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyUp})
+	}
+	assert.Equal(t, "", o.GetModel(), "cycling back to inherit drops the override")
+}
+
+// Typing enters custom mode; Left with the text cursor at position 0 returns to
+// the chip row with the prior chip selection intact.
+func TestSessionCreateOverlay_ModelCustomBackToChips(t *testing.T) {
+	o := NewSessionCreateOverlay(nil, nil, []string{"/repo/a"}, "claude")
+	o.focusStop(stopModel)
+	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyDown}) // fable chip
+
+	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("x")})
+	assert.Equal(t, "x", o.GetModel(), "typing switches to custom mode seeded with the rune")
+
+	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyLeft}) // cursor 1 → 0
+	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyLeft}) // at 0 → back to chips
+	assert.Equal(t, "fable", o.GetModel(), "returning to chips restores the chip selection")
+}
+
+// The rune filter pre-checks runes as if typed at the end of the value, but the
+// text cursor can sit anywhere (Home/Ctrl+A): a rune that passes the append
+// check can still realize an invalid value once inserted mid-string (a leading
+// '.' here). The field's invariant is that it never holds an invalid non-empty
+// value — such an insertion must be reverted, keeping the submit-time backstop
+// unreachable from keyboard input.
+func TestSessionCreateOverlay_ModelMidValueInsertionStaysValid(t *testing.T) {
+	o := NewSessionCreateOverlay(nil, nil, []string{"/repo/a"}, "claude")
+	o.focusStop(stopModel)
+
+	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("opus")})
+	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyHome}) // text cursor to position 0
+	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'.'}})
+	assert.Equal(t, "opus", o.GetModel(), "an insertion realizing an invalid value must be reverted")
+}
+
+// The chip row must fit the worst realistic overlay width — an 80-col terminal
+// gives the form 42 inner cells — so every chip (and the cursor) stays visible.
+func TestModelFieldChipRowWidth(t *testing.T) {
+	mf := NewModelField()
+	mf.Focus()
+	lines := strings.Split(mf.Render(), "\n")
+	row := lines[len(lines)-1]
+	assert.LessOrEqual(t, lipgloss.Width(row), 41, "chip row must fit 42 inner cells")
+}
+
+// With mixed profiles the field is present but tracks the selected profile's agent:
+// inert (skipped, no override) while a non-claude profile is selected, re-enabled
+// when the selection returns to claude.
+func TestSessionCreateOverlay_ModelDisabledForNonClaudeProfile(t *testing.T) {
+	o := NewSessionCreateOverlay(mixedProfiles, nil, []string{"/repo/a"}, "")
+	o.SetSize(80, 40)
+	require.GreaterOrEqual(t, o.indexOfStop(stopModel), 0, "a claude profile makes the field present")
+
+	// Claude (first profile) selected: the field takes focus and input.
+	o.focusStop(stopModel)
+	require.True(t, o.isModelField())
+	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("opus")})
+	assert.Equal(t, "opus", o.GetModel())
+
+	// Switch to the aider profile: the field goes inert and contributes nothing.
+	o.focusStop(stopProfile)
+	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyDown})
+	assert.Equal(t, "", o.GetModel(), "a non-claude profile must drop the override")
+	o.focusStop(stopTextarea)
+	tab(o) // textarea → profile
+	tab(o) // profile → (model skipped) …
+	assert.False(t, o.isModelField(), "Tab must skip the disabled model field")
+
+	// Back to claude: the field re-enables and the typed value applies again.
+	o.focusStop(stopProfile)
+	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyUp})
+	assert.Equal(t, "opus", o.GetModel(), "returning to claude restores the override")
+}
+
+// The model section must hold the form's constant-height invariant: same line count
+// whether or not it holds focus, and whether it is enabled or inert.
+func TestSessionCreateOverlay_ModelSectionHeightConstant(t *testing.T) {
+	o := NewSessionCreateOverlay(mixedProfiles, nil, []string{"/repo/a"}, "")
+	o.SetSize(80, 40)
+
+	o.focusStop(stopModel)
+	modelFocused := strings.Count(o.Render(), "\n")
+	o.focusStop(stopTitle)
+	titleFocused := strings.Count(o.Render(), "\n")
+	assert.Equal(t, modelFocused, titleFocused, "overlay height must not change with model focus")
+
+	o.focusStop(stopProfile)
+	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyDown}) // aider → model field inert
+	disabled := strings.Count(o.Render(), "\n")
+	assert.Equal(t, titleFocused, disabled, "overlay height must not change when the model field is inert")
 }
 
 // fitOverlay's height pass must compact a too-tall body down to t.height by shedding

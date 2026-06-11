@@ -2,6 +2,7 @@ package overlay
 
 import (
 	"github.com/ZviBaratz/atrium/config"
+	"github.com/ZviBaratz/atrium/session/agent"
 	"github.com/ZviBaratz/atrium/ui/theme"
 	"strings"
 
@@ -62,6 +63,9 @@ const (
 	// profileSectionLines is the height the profile section adds when present (label + blank
 	// + the names row + a divider).
 	profileSectionLines = 4
+	// modelSectionLines is the height the model section adds when present, mirroring
+	// profileSectionLines (label + blank + input row + a divider).
+	modelSectionLines = 4
 )
 
 // createFormHelp is the single footer line describing how to navigate the create form.
@@ -116,6 +120,7 @@ const (
 	stopTitle focusStop = iota
 	stopDirectory
 	stopProfile
+	stopModel
 	stopAccount
 	stopTextarea
 	stopBranch
@@ -135,11 +140,13 @@ type TextInputOverlay struct {
 	height          int
 	directoryPicker *DirectoryPicker
 	profilePicker   *ProfilePicker
+	modelField      *ModelField
 	accountPicker   *AccountPicker
 	branchPicker    *BranchPicker
 	stops           []focusStop // ordered focusable stops actually present
 	isCreateForm    bool        // true for the new-session form (has a title field)
 	submitOnEnter   bool        // true for the quick-send overlay: Enter submits, Alt+Enter is a newline
+	defaultProgram  string      // the program used when no profile is selected (create form only)
 }
 
 // NewTextInputOverlay creates a new text input overlay with the given title and initial value.
@@ -166,11 +173,15 @@ func NewQuickSendOverlay(title string) *TextInputOverlay {
 
 // NewSessionCreateOverlay creates the unified new-session form: a title field, a prompt
 // textarea, a project (directory) picker, an optional profile picker (only when more than
-// one profile exists), and a branch picker. Focus starts on the project picker (the `N`
+// one profile exists), an optional Claude model override (only when a selectable program
+// resolves to claude), and a branch picker. Focus starts on the project picker (the `N`
 // flow); the quick flow (`n`) moves it to the title via FocusTitle. Every section renders
 // at a constant height so the centered overlay does not jump as focus moves. dirCandidates
 // is the ordered list of candidate repo paths with the default/contextual target first.
-func NewSessionCreateOverlay(profiles []config.Profile, accounts []config.ClaudeAccount, dirCandidates []string) *TextInputOverlay {
+// defaultProgram is the program used when no profile is selected; with profiles present
+// the selected profile's program always wins (see createSessionFromForm), so the model
+// field keys its visibility and enabled state off the profiles instead.
+func NewSessionCreateOverlay(profiles []config.Profile, accounts []config.ClaudeAccount, dirCandidates []string, defaultProgram string) *TextInputOverlay {
 	ti := newTextarea("")
 	// The prompt is optional and auto-sent to the agent once the session boots, so say so.
 	ti.Placeholder = "Optional — sent to the agent once it starts (Tab to skip)"
@@ -187,14 +198,37 @@ func NewSessionCreateOverlay(profiles []config.Profile, accounts []config.Claude
 		ap = NewAccountPicker(accounts)
 	}
 
+	// The model field exists only when some selectable program resolves to claude (the
+	// candidates are the profiles when any exist — a profile's program always overrides
+	// the default — else the default program). Its *enabled* state then tracks the
+	// effective program: present-but-inert while a non-claude profile is selected, so a
+	// typed model is visibly n/a rather than silently dropped.
+	candidates := []string{defaultProgram}
+	if len(profiles) > 0 {
+		candidates = candidates[:0]
+		for _, p := range profiles {
+			candidates = append(candidates, p.Program)
+		}
+	}
+	var mf *ModelField
+	for _, c := range candidates {
+		if agent.Resolve(c).Key == agent.KeyClaude {
+			mf = NewModelField()
+			break
+		}
+	}
+
 	// Project first (where focus starts), immediately followed by the base branch — the two
 	// form one repo-context unit, since branches are scoped to the chosen project. Then the
 	// title and the prompt — the input that distinguishes this flow from the inline `n` flow
-	// (which jumps straight to the title via FocusTitle) — then the optional profile, and
-	// finally the optional Claude-account override.
+	// (which jumps straight to the title via FocusTitle) — then the optional profile with its
+	// dependent model override, and finally the optional Claude-account override.
 	stops := []focusStop{stopDirectory, stopBranch, stopTitle, stopTextarea}
 	if pp != nil && pp.HasMultiple() {
 		stops = append(stops, stopProfile)
+	}
+	if mf != nil {
+		stops = append(stops, stopModel)
 	}
 	if ap != nil && ap.HasMultiple() {
 		stops = append(stops, stopAccount)
@@ -207,13 +241,30 @@ func NewSessionCreateOverlay(profiles []config.Profile, accounts []config.Claude
 		Title:           "New session",
 		directoryPicker: dp,
 		profilePicker:   pp,
+		modelField:      mf,
 		accountPicker:   ap,
 		branchPicker:    bp,
 		stops:           stops,
 		isCreateForm:    true,
+		defaultProgram:  defaultProgram,
 	}
+	overlay.syncModelFieldEnabled()
 	overlay.focusStop(stopDirectory)
 	return overlay
+}
+
+// syncModelFieldEnabled re-derives the model field's enabled state from the effective
+// program (the selected profile's program when a picker exists, else the configured
+// default). Called at construction and after every profile-picker keypress.
+func (t *TextInputOverlay) syncModelFieldEnabled() {
+	if t.modelField == nil {
+		return
+	}
+	program := t.defaultProgram
+	if t.profilePicker != nil {
+		program = t.profilePicker.GetSelectedProfile().Program
+	}
+	t.modelField.SetDisabled(agent.Resolve(program).Key != agent.KeyClaude)
 }
 
 func newTextarea(initialValue string) textarea.Model {
@@ -267,6 +318,9 @@ func (t *TextInputOverlay) SetSize(width, height int) {
 	if t.profilePicker != nil {
 		t.profilePicker.SetWidth(width - 6)
 	}
+	if t.modelField != nil {
+		t.modelField.SetWidth(width - 6)
+	}
 	if t.accountPicker != nil {
 		t.accountPicker.SetWidth(width - 6)
 	}
@@ -282,6 +336,9 @@ func (t *TextInputOverlay) fitRows(height int) (pickerRows, promptRows int) {
 	chrome := formChromeLines
 	if t.profilePicker != nil {
 		chrome += profileSectionLines
+	}
+	if t.modelField != nil {
+		chrome += modelSectionLines
 	}
 	if t.hasAccountSection() {
 		chrome += accountSectionLines
@@ -330,6 +387,7 @@ func (t *TextInputOverlay) TitleFocused() bool { return t.isTitle() }
 func (t *TextInputOverlay) isTitle() bool           { return t.currentStop() == stopTitle }
 func (t *TextInputOverlay) isDirectoryPicker() bool { return t.currentStop() == stopDirectory }
 func (t *TextInputOverlay) isProfilePicker() bool   { return t.currentStop() == stopProfile }
+func (t *TextInputOverlay) isModelField() bool      { return t.currentStop() == stopModel }
 func (t *TextInputOverlay) isAccountPicker() bool   { return t.currentStop() == stopAccount }
 func (t *TextInputOverlay) isTextarea() bool        { return t.currentStop() == stopTextarea }
 func (t *TextInputOverlay) isBranchPicker() bool    { return t.currentStop() == stopBranch }
@@ -365,18 +423,23 @@ func (t *TextInputOverlay) setFocusIndex(i int) {
 	t.updateFocusState()
 }
 
-// stopEnabled reports whether a stop can take focus. Only the branch picker can be
-// disabled (when the target is not a git repo); every other stop is always enabled.
+// stopEnabled reports whether a stop can take focus: the branch picker is disabled when
+// the target is not a git repo, the model field when the effective program is not claude;
+// every other stop is always enabled.
 func (t *TextInputOverlay) stopEnabled(kind focusStop) bool {
 	if kind == stopBranch && t.branchPicker != nil && t.branchPicker.Disabled() {
+		return false
+	}
+	if kind == stopModel && t.modelField != nil && t.modelField.Disabled() {
 		return false
 	}
 	return true
 }
 
 // nextEnabledIndex returns the first enabled stop index reached from `from` by repeatedly
-// stepping `delta` (+1 forward, -1 backward), wrapping around the stop list. At most one
-// stop can be disabled, so this always terminates on an enabled stop.
+// stepping `delta` (+1 forward, -1 backward), wrapping around the stop list. The loop
+// visits each stop at most once, so it terminates even with several stops disabled;
+// the Create button is never disabled, so an enabled stop always exists.
 func (t *TextInputOverlay) nextEnabledIndex(from, delta int) int {
 	n := len(t.stops)
 	i := from
@@ -422,6 +485,13 @@ func (t *TextInputOverlay) updateFocusState() {
 			t.profilePicker.Blur()
 		}
 	}
+	if t.modelField != nil {
+		if t.isModelField() {
+			t.modelField.Focus()
+		} else {
+			t.modelField.Blur()
+		}
+	}
 	if t.accountPicker != nil {
 		if t.isAccountPicker() {
 			t.accountPicker.Focus()
@@ -437,8 +507,12 @@ func (t *TextInputOverlay) HandleKeyPress(msg tea.KeyMsg) (bool, bool) {
 	switch msg.Type {
 	case tea.KeyTab:
 		// In the project field, Tab first tries shell-style path completion; only when
-		// there is nothing left to complete does it advance to the next field.
+		// there is nothing left to complete does it advance to the next field. The model
+		// field gets the same "complete, then advance" treatment against its alias list.
 		if t.isDirectoryPicker() && t.directoryPicker.CompletePrefix() {
+			return false, false
+		}
+		if t.isModelField() && t.modelField.CompletePrefix() {
 			return false, false
 		}
 		t.setFocusIndex(t.nextEnabledIndex(t.FocusIndex, 1))
@@ -520,7 +594,14 @@ func (t *TextInputOverlay) HandleKeyPress(msg tea.KeyMsg) (bool, bool) {
 			switch msg.Type {
 			case tea.KeyLeft, tea.KeyRight, tea.KeyUp, tea.KeyDown:
 				t.profilePicker.HandleKeyPress(msg)
+				// The model override only applies to claude; keep its enabled state in
+				// step with the newly selected profile's agent.
+				t.syncModelFieldEnabled()
 			}
+			return false, false
+		}
+		if t.isModelField() {
+			t.modelField.HandleKeyPress(msg)
 			return false, false
 		}
 		if t.isAccountPicker() {
@@ -615,6 +696,16 @@ func (t *TextInputOverlay) GetSelectedProgram() string {
 		return ""
 	}
 	return t.profilePicker.GetSelectedProfile().Program
+}
+
+// GetModel returns the Claude model override typed into the model field, or ""
+// when no flag should be composed: the form has no model field, the field is
+// inert (non-claude profile selected), or it was left empty / "inherit".
+func (t *TextInputOverlay) GetModel() string {
+	if t.modelField == nil {
+		return ""
+	}
+	return t.modelField.Value()
 }
 
 // GetSelectedAccount returns the chosen account and true only when the user has
@@ -813,6 +904,9 @@ func (t *TextInputOverlay) renderCreateForm(divider string) string {
 	section(tiLabelStyle().Render("Prompt") + "\n" + t.textarea.View())
 	if t.profilePicker != nil {
 		section(t.profilePicker.Render())
+	}
+	if t.modelField != nil {
+		section(t.modelField.Render())
 	}
 	if t.hasAccountSection() {
 		section(t.accountPicker.Render())

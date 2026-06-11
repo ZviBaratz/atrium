@@ -13,6 +13,7 @@ import (
 	"github.com/ZviBaratz/atrium/keys"
 	"github.com/ZviBaratz/atrium/log"
 	"github.com/ZviBaratz/atrium/session"
+	"github.com/ZviBaratz/atrium/session/agent"
 	"github.com/ZviBaratz/atrium/session/git"
 	"github.com/ZviBaratz/atrium/session/tmux"
 	"github.com/ZviBaratz/atrium/ui"
@@ -188,7 +189,7 @@ func (m *home) resumeSelected(selected *session.Instance) tea.Cmd {
 // seeded target is a git repo, so openCreateForm can gate the open-time branch plumbing
 // without re-running the git checks.
 func (m *home) newSessionFormOverlay() (_ *overlay.TextInputOverlay, isGit bool) {
-	ov := overlay.NewSessionCreateOverlay(m.appConfig.GetProfiles(), m.appConfig.ClaudeAccounts, m.candidateRepoPaths())
+	ov := overlay.NewSessionCreateOverlay(m.appConfig.GetProfiles(), m.appConfig.ClaudeAccounts, m.candidateRepoPaths(), m.program)
 	// Seed the initial validity so the picker can flag the default target before the user
 	// navigates: a non-git default directory shows the direct-session hint (and an inert
 	// branch section), not a block.
@@ -273,6 +274,18 @@ func (m *home) createSessionFromForm(prompt string) tea.Cmd {
 	program := m.program
 	if p := ov.GetSelectedProgram(); p != "" {
 		program = p
+	}
+	// Compose the model override into the persisted program string, so launch,
+	// pause/resume, and the daemon all see it with no extra plumbing. The Resolve
+	// check is a belt-and-braces guard behind the form's own gating (the field is
+	// inert for non-claude programs), and the validation is a backstop behind its
+	// keystroke filtering.
+	if model := ov.GetModel(); model != "" && agent.Resolve(program).Key == agent.KeyClaude {
+		if !agent.ValidModelName(model) {
+			ov.Submitted = false
+			return m.handleError(fmt.Errorf("invalid model name %q (letters, digits, . _ : / - only)", model))
+		}
+		program = agent.WithModelFlag(program, model)
 	}
 
 	instance, err := session.NewInstance(session.InstanceOptions{
