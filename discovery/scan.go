@@ -21,6 +21,13 @@ import (
 const (
 	maxEntriesPerDir = 500
 	maxTotalRepos    = 2000
+	// maxSubmoduleNesting bounds recursion through nested superprojects (a
+	// submodule that declares its own submodules). Real layouts rarely exceed
+	// two levels; the cap is a cycle/runaway backstop.
+	maxSubmoduleNesting = 3
+	// maxGitmodulesSize skips pathologically large .gitmodules files — real
+	// ones are a few KB.
+	maxGitmodulesSize = 1 << 20
 )
 
 // ignoredNames are directory names never entered, wherever they appear. Most
@@ -129,6 +136,11 @@ func (s *scanner) walk(dir string, depth int, isRoot bool) {
 			s.seen[dir] = true
 			s.found = append(s.found, foundRepo{path: dir, mod: fi.ModTime()})
 		}
+		// The repo-prune below hides everything inside a repo, but submodules
+		// are projects in their own right (superproject workflows live in
+		// them). Enumerate them from .gitmodules — one cheap file read —
+		// instead of walking the repo's interior.
+		s.collectSubmodules(dir, 0)
 		// A repo's interior holds no further projects — except when the repo
 		// is itself a search root (e.g. dotfiles tracked in ~): the user
 		// listed it to find the projects inside.
@@ -157,6 +169,60 @@ func (s *scanner) walk(dir string, depth int, isRoot bool) {
 		}
 		s.walk(filepath.Join(dir, name), depth+1, false)
 	}
+}
+
+// collectSubmodules records the initialized submodules a repo declares in its
+// .gitmodules, recursing into each for nested superprojects. Declared paths
+// without a .git present (uninitialized) are skipped, as are paths that would
+// escape the repo and symlinked entries — .gitmodules is repo-controlled data,
+// not a trusted walk input.
+func (s *scanner) collectSubmodules(repo string, nesting int) {
+	if nesting >= maxSubmoduleNesting {
+		return
+	}
+	for _, rel := range gitmodulePaths(filepath.Join(repo, ".gitmodules")) {
+		if s.ctx.Err() != nil || len(s.found) >= maxTotalRepos {
+			return
+		}
+		sub := filepath.Join(repo, rel) // Join cleans, so ".." resolves before the escape check
+		if !strings.HasPrefix(sub, repo+string(filepath.Separator)) || s.skip[sub] || s.seen[sub] {
+			continue
+		}
+		if fi, err := os.Lstat(sub); err != nil || !fi.IsDir() {
+			continue // missing, or a symlink — never followed, like the walk
+		}
+		fi, err := os.Lstat(filepath.Join(sub, ".git"))
+		if err != nil {
+			continue // declared but uninitialized: not a project yet
+		}
+		s.seen[sub] = true
+		s.found = append(s.found, foundRepo{path: sub, mod: fi.ModTime()})
+		s.collectSubmodules(sub, nesting+1)
+	}
+}
+
+// gitmodulePaths extracts the "path" values from a .gitmodules file without
+// shelling out to git: trimmed `path = value` lines, value optionally quoted.
+// Any read failure or an oversized file yields nil (no submodules).
+func gitmodulePaths(file string) []string {
+	if fi, err := os.Lstat(file); err != nil || !fi.Mode().IsRegular() || fi.Size() > maxGitmodulesSize {
+		return nil
+	}
+	data, err := os.ReadFile(file)
+	if err != nil {
+		return nil
+	}
+	var out []string
+	for _, line := range strings.Split(string(data), "\n") {
+		key, val, ok := strings.Cut(line, "=")
+		if !ok || !strings.EqualFold(strings.TrimSpace(key), "path") {
+			continue
+		}
+		if val = strings.Trim(strings.TrimSpace(val), `"`); val != "" {
+			out = append(out, val)
+		}
+	}
+	return out
 }
 
 // normalizeRoots expands, absolutizes, dedupes, and existence-filters roots.

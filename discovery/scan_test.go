@@ -220,3 +220,60 @@ func itoa(i int) string {
 	}
 	return string(b)
 }
+
+// mkGitmodules writes a .gitmodules declaring the given submodule paths.
+func mkGitmodules(t *testing.T, repo string, paths ...string) {
+	t.Helper()
+	var b []byte
+	for _, p := range paths {
+		b = append(b, []byte("[submodule \""+p+"\"]\n\tpath = "+p+"\n\turl = git@example.com:x.git\n")...)
+	}
+	if err := os.WriteFile(filepath.Join(repo, ".gitmodules"), b, 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestScanDiscoversInitializedSubmodules(t *testing.T) {
+	// The repo-prune rule hides everything inside a repo, but submodules are
+	// projects in their own right: declared paths with a .git present must be
+	// recorded; declared-but-uninitialized ones (no .git) must not.
+	root := t.TempDir()
+	repo := mkRepo(t, root, "platform")
+	sub := mkRepoFile(t, root, "platform/src/box")
+	mkDir(t, root, "platform/ghost") // declared below but never initialized
+	mkGitmodules(t, repo, "src/box", "ghost")
+
+	got := scan(t, Options{Roots: []string{root}, MaxDepth: 1})
+	assertPaths(t, got, repo, sub)
+}
+
+func TestScanDiscoversNestedSubmodules(t *testing.T) {
+	// The metric-namespace case: a submodule that is itself a superproject.
+	root := t.TempDir()
+	repo := mkRepo(t, root, "platform")
+	sub := mkRepoFile(t, root, "platform/src/box")
+	nested := mkRepoFile(t, root, "platform/src/box/metric-namespace")
+	mkGitmodules(t, repo, "src/box")
+	mkGitmodules(t, sub, "metric-namespace")
+
+	got := scan(t, Options{Roots: []string{root}, MaxDepth: 1})
+	assertPaths(t, got, repo, sub, nested)
+}
+
+func TestScanSubmodulePathsCannotEscapeRepo(t *testing.T) {
+	// A .gitmodules path pointing outside its repo (.. or absolute) is never
+	// followed — the file is repo-controlled data, not a trusted walk input.
+	root := t.TempDir()
+	repo := mkRepo(t, root, "ignored/inner")
+	outside := mkRepoFile(t, root, "outside")
+	mkGitmodules(t, repo, "../../outside")
+	mkGitmodules(t, repo) // overwrite below with explicit content incl. absolute
+	if err := os.WriteFile(filepath.Join(repo, ".gitmodules"), []byte(
+		"[submodule \"a\"]\n\tpath = ../../outside\n[submodule \"b\"]\n\tpath = "+outside+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Root is the repo itself so only .gitmodules could surface "outside".
+	got := scan(t, Options{Roots: []string{repo}, MaxDepth: 0})
+	assertPaths(t, got, repo)
+}
