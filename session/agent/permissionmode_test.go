@@ -19,6 +19,17 @@ func TestValidPermissionMode(t *testing.T) {
 	}
 }
 
+// Every chip the form offers must validate, or createSessionFromForm would
+// reject a mode the UI itself offered (the two lists are maintained by hand;
+// the enum is deliberately a superset, so it cannot be derived from the chips).
+func TestValidPermissionMode_CoversOfferedChips(t *testing.T) {
+	for _, m := range ClaudePermissionModes {
+		if !ValidPermissionMode(m) {
+			t.Errorf("offered chip %q is not in the permission-mode enum", m)
+		}
+	}
+}
+
 func TestWithPermissionModeFlag(t *testing.T) {
 	cases := []struct {
 		name, program, mode, want string
@@ -34,6 +45,15 @@ func TestWithPermissionModeFlag(t *testing.T) {
 		{"replace keeps trailing flags",
 			"claude --permission-mode plan --model opus", "auto",
 			"claude --model opus --permission-mode auto"},
+		// A flag-lookalike token inside a quoted argument must not trigger the
+		// replace path — strings.Fields can't see quoting, so quoted programs
+		// append instead (argv last-wins keeps the override effective).
+		{"flag token inside a quoted argument appends",
+			`claude --append-system-prompt "never use --permission-mode plan"`, "acceptEdits",
+			`claude --append-system-prompt "never use --permission-mode plan" --permission-mode acceptEdits`},
+		{"real pin alongside quoting appends last-wins",
+			`claude --permission-mode plan --append-system-prompt 'be nice'`, "auto",
+			`claude --permission-mode plan --append-system-prompt 'be nice' --permission-mode auto`},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

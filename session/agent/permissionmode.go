@@ -15,7 +15,13 @@ var ClaudePermissionModes = []string{"plan", "acceptEdits", "auto"}
 // --help). Unlike --model, claude rejects unknown values at argv parse time —
 // anything outside this set would kill the session at launch, so composition
 // validates against the whole enum (not just the offered chips, so a future
-// caller composing a profile-pinned mode still passes).
+// caller composing a profile-pinned mode still passes). It is deliberately a
+// superset of ClaudePermissionModes — TestValidPermissionMode_CoversOfferedChips
+// pins that relation so a chip added to one list but not the other cannot turn
+// into a submit-time "invalid permission mode" error on a UI-offered chip.
+// The snapshot can also lag the *installed* binary: an older CLI without
+// "auto" rejects the flag at launch — the same accepted tradeoff the
+// hardcoded chip list embodies, recoverable by killing the instance.
 var claudePermissionModeEnum = map[string]bool{
 	"acceptEdits": true, "auto": true, "bypassPermissions": true,
 	"default": true, "dontAsk": true, "plan": true,
@@ -27,7 +33,7 @@ func ValidPermissionMode(s string) bool { return claudePermissionModeEnum[s] }
 
 // WithPermissionModeFlag returns program with `--permission-mode mode`
 // applied: verbatim append when the program carries no pin, replace when it
-// does (see withFlag for the replace path's Fields re-join caveat).
+// does (see withFlag for when the replace path applies).
 func WithPermissionModeFlag(program, mode string) string {
 	return withFlag(program, "--permission-mode", mode)
 }

@@ -49,6 +49,12 @@ func TestWithModelFlag(t *testing.T) {
 		{"flag lookalike takes the append path",
 			"claude --models-dir 'a  b'", "opus",
 			"claude --models-dir 'a  b' --model opus"},
+		// A real pin alongside shell quoting also appends — the replace path
+		// can't be trusted to parse quoted programs, and argv last-wins keeps
+		// the override effective.
+		{"real pin alongside quoting appends last-wins",
+			`claude --model sonnet --append-system-prompt "be brief"`, "opus",
+			`claude --model sonnet --append-system-prompt "be brief" --model opus`},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

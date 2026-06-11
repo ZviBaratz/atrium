@@ -34,8 +34,9 @@ func ValidModelName(s string) bool {
 // whole-field comparison, so lookalike flags ("--models-dir", "--model-context")
 // don't count as pins.
 func hasFlag(program, name string) bool {
+	combined := name + "="
 	for _, f := range strings.Fields(program) {
-		if f == name || strings.HasPrefix(f, name+"=") {
+		if f == name || strings.HasPrefix(f, combined) {
 			return true
 		}
 	}
@@ -45,20 +46,25 @@ func hasFlag(program, name string) bool {
 // withFlag returns program with `name value` applied. The common case — no
 // pin present — appends to the string verbatim, preserving any quoting the
 // profile's program carries. When the program already pins the flag, it is
-// replaced instead of duplicated; that path re-joins strings.Fields output,
-// which collapses quoted multi-word arguments — acceptable, since it only
-// runs for profiles that already embed the flag.
+// replaced instead of duplicated. The replace path re-joins strings.Fields
+// output, which cannot see shell quoting: a flag-lookalike token inside a
+// quoted argument would be misread as a pin and stripped, mangling the quote
+// (and a re-join collapses quoted multi-word arguments regardless). So a
+// program carrying any quote character takes the append path instead — the
+// CLI's argv parsing is last-wins, so an appended override still beats an
+// earlier real pin, and the quoting survives verbatim.
 func withFlag(program, name, value string) string {
-	if !hasFlag(program, name) {
+	if !hasFlag(program, name) || strings.ContainsAny(program, `"'`) {
 		return program + " " + name + " " + value
 	}
+	combined := name + "="
 	fields := strings.Fields(program)
 	out := make([]string, 0, len(fields))
 	for i := 0; i < len(fields); i++ {
 		switch {
 		case fields[i] == name:
 			i++ // drop the flag and its value
-		case strings.HasPrefix(fields[i], name+"="):
+		case strings.HasPrefix(fields[i], combined):
 			// drop the combined form
 		default:
 			out = append(out, fields[i])
