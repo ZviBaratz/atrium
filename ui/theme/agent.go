@@ -26,6 +26,15 @@ var agentColors = map[string]lipgloss.Color{
 	"gemini": lipgloss.Color("#4285f4"),
 }
 
+// agentDimColors are muted variants of agentColors (each channel ~70% of the
+// brand value, i.e. blended toward a dark background) for elements that should
+// read as agent-branded without competing with the full accent — e.g. a model
+// chip whose value was only observed, not explicitly pinned.
+var agentDimColors = map[string]lipgloss.Color{
+	"claude": lipgloss.Color("#9a5a44"),
+	"gemini": lipgloss.Color("#2f5ead"),
+}
+
 // AgentGlyph returns the identity glyph and color for an agent key (unknown
 // keys get the neutral generic marker). Key is string(agent.Resolve(p).Key).
 func (t *Theme) AgentGlyph(key string) (string, lipgloss.Color) {
@@ -40,4 +49,13 @@ func (t *Theme) AgentGlyph(key string) (string, lipgloss.Color) {
 		return g, t.Palette.FgDim
 	}
 	return g, t.Palette.Fg
+}
+
+// AgentColorDim returns the muted brand accent for an agent key; agents
+// without a brand color recede to the theme dim foreground.
+func (t *Theme) AgentColorDim(key string) lipgloss.Color {
+	if c, ok := agentDimColors[key]; ok {
+		return c
+	}
+	return t.Palette.FgDim
 }

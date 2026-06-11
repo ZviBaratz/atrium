@@ -179,6 +179,12 @@ func (p rowPaint) agentColor(i *session.Instance) lipgloss.Color {
 	return c
 }
 
+// agentColorDim is agentColor's muted variant (theme dim fallback), for chip
+// values that are observed rather than explicitly pinned.
+func (p rowPaint) agentColorDim(i *session.Instance) lipgloss.Color {
+	return p.th.AgentColorDim(string(agent.Resolve(i.Program).Key))
+}
+
 // nameSeg is the flex (elastic) display-name segment. NeedsInput recolors the
 // name (the one attention state); the selected row bolds it. The name is width-
 // sanitized so emoji/ZWJ clusters don't desync the renderer.

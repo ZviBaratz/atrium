@@ -106,13 +106,22 @@ func TestRender_ModelChip_BrandUnit(t *testing.T) {
 		"chip must sit between AUTO and the agent icon: %q", plain)
 	require.Contains(t, plain, "fable ✻", "one space between chip and icon")
 
-	// Tint: claude's brand coral #d97757. The icon is always coral, so count —
-	// a pinned row colors the chip too (2 coral spans), an observed-only row
-	// leaves the chip dim (1 coral span: the icon).
+	// Tint: claude's brand coral #d97757 for a pinned chip, the muted variant
+	// #9a5a44 for an observed-only chip. The icon is always full coral, so
+	// count — a pinned row colors the chip too (2 coral spans), an observed-only
+	// row has 1 full span (the icon) plus the muted chip.
+	// Sequences as termenv actually emits them: hex parses through float
+	// channels and truncates on emission, so #9a5a44's 0x5a (90) lands as 89.
 	const coral = "38;2;217;119;87"
-	require.Equal(t, 2, strings.Count(r.Render(pinned, 0, false), coral),
+	const mutedCoral = "38;2;154;89;68"
+	out := r.Render(pinned, 0, false)
+	require.Equal(t, 2, strings.Count(out, coral),
 		"pinned chip + icon must both carry the brand color")
+	require.NotContains(t, out, mutedCoral, "a pinned chip is never muted")
 	r.modelIndicator = "always"
-	require.Equal(t, 1, strings.Count(r.Render(known, 0, false), coral),
-		"an unpinned chip stays dim; only the icon is brand-colored")
+	out = r.Render(known, 0, false)
+	require.Equal(t, 1, strings.Count(out, coral),
+		"an unpinned chip must not use the full brand color; only the icon does")
+	require.Equal(t, 1, strings.Count(out, mutedCoral),
+		"an unpinned chip carries the muted brand color")
 }

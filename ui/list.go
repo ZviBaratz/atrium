@@ -435,14 +435,14 @@ func (r *InstanceRenderer) Render(i *session.Instance, idx int, selected bool) s
 		right1 = append(right1, rawSeg(badge, th.BadgeStyle().Render(badge)))
 	}
 	// Per-session model chip: transcript truth first, --model flag fallback (see
-	// Instance.ModelInfo). It rides the agent icon as one unit — last before the
-	// icon, one space apart, agent brand color when flag-pinned, dim when only
-	// transcript-observed. The pinned-only default shows it just where a flag
-	// pins a model; "always" also surfaces transcript-known models; "off" hides
-	// it.
+	// Instance.ModelInfo). It rides the agent icon as one brand-colored unit —
+	// last before the icon, one space apart, full brand accent when flag-pinned,
+	// the muted brand variant when only transcript-observed. The pinned-only
+	// default shows it just where a flag pins a model; "always" also surfaces
+	// transcript-known models; "off" hides it.
 	if r.modelIndicator != "off" {
 		if model, pinned := i.ModelInfo(); model != "" && (pinned || r.modelIndicator == "always") {
-			c := th.Palette.FgDim
+			c := p.agentColorDim(i)
 			if pinned {
 				c = p.agentColor(i)
 			}
