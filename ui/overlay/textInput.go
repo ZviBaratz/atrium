@@ -152,6 +152,11 @@ type TextInputOverlay struct {
 	isCreateForm    bool        // true for the new-session form (has a title field)
 	submitOnEnter   bool        // true for the quick-send overlay: Enter submits, Alt+Enter is a newline
 	defaultProgram  string      // the program used when no profile is selected (create form only)
+	// titleError is the inline validation message rendered (in the danger color) on
+	// the title label — e.g. a duplicate name in the target's repo group. The overlay
+	// is a dumb view: the app layer computes the verdict (live on keystrokes/path
+	// changes, and again at submit) and pushes it in via SetTitleError. Empty = none.
+	titleError string
 }
 
 // NewTextInputOverlay creates a new text input overlay with the given title and initial value.
@@ -671,6 +676,18 @@ func (t *TextInputOverlay) IsCreateForm() bool {
 	return t.isCreateForm
 }
 
+// SetTitleError sets (or, with "", clears) the inline validation message shown
+// on the title label. The error never disables submit — the app layer blocks a
+// conflicting submit itself and re-focuses the title.
+func (t *TextInputOverlay) SetTitleError(msg string) {
+	t.titleError = msg
+}
+
+// TitleError returns the current inline title validation message ("" = none).
+func (t *TextInputOverlay) TitleError() string {
+	return t.titleError
+}
+
 // GetSelectedPath returns the selected target directory from the directory picker.
 // Returns empty string if no directory picker is present.
 func (t *TextInputOverlay) GetSelectedPath() string {
@@ -951,9 +968,13 @@ func (t *TextInputOverlay) renderCreateForm(divider string) string {
 		section(t.branchPicker.Render())
 	}
 	// The title is the form's only hard-required input; carry a dim marker while it is
-	// empty so the requirement is visible before the submit-time error backstop.
+	// empty so the requirement is visible before the submit-time error backstop. A
+	// validation error (duplicate name in the target group) wins over the hint.
 	titleLabel := tiLabelStyle().Render("Title")
-	if t.GetTitle() == "" {
+	switch {
+	case t.titleError != "":
+		titleLabel += theme.Current().DangerStyle().Render(" (" + t.titleError + ")")
+	case t.GetTitle() == "":
 		titleLabel += tiHintStyle().Render(" (required)")
 	}
 	section(titleLabel + "  " + t.titleInput.View())

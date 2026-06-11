@@ -149,11 +149,13 @@ type home struct {
 
 	// state is the current discrete state of the application
 	state state
-	// lastClickTitle / lastClickAt track the previous left-click on a session row
-	// so a second click on the same row within doubleClickWindow is treated as a
-	// double-click (attach). Bubble Tea has no native double-click event.
-	lastClickTitle string
-	lastClickAt    time.Time
+	// lastClickInstance / lastClickAt track the previous left-click on a session
+	// row so a second click on the same row within doubleClickWindow is treated as
+	// a double-click (attach). Pointer identity, not Title: titles are only unique
+	// per repo group, and a removed instance can't be returned by InstanceAtZone,
+	// so the pointer can't go stale. Bubble Tea has no native double-click event.
+	lastClickInstance *session.Instance
+	lastClickAt       time.Time
 	// newSessionPath is the target repo path for the session currently being created.
 	// It defaults to the contextual repo (the highlighted session's repo, else cwd) and
 	// can be re-pointed via the directory picker in the new-session overlay. It scopes the
@@ -164,6 +166,15 @@ type home struct {
 	// form-session (re-pointing the picker back and forth doesn't spam the network).
 	// Reset in openCreateForm, seeded with the initial target when it is a git repo.
 	fetchedPaths map[string]bool
+	// newSessionGroup is the repo-group key of the current new-session target — the
+	// scope of the duplicate-title check. Set when the form opens, updated from the
+	// async validity check as the directory picker moves, re-derived at submit.
+	newSessionGroup string
+	// titleBranchExists / titleBranchName hold the latest async branch-existence
+	// verdict for the form's title (an orphan branch from a killed session would
+	// make Start fail late). Display-only — submit re-verifies synchronously.
+	titleBranchExists bool
+	titleBranchName   string
 
 	// welcomeChecked guards the one-time first-launch welcome so it is only
 	// attempted once per process (its seen-bit handles persistence across runs).

@@ -206,8 +206,8 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				// mirroring Enter, via the tea.Exec attach path (attachExec). The first
 				// click already selected the row, so it is the current selection.
 				now := time.Now()
-				if m.lastClickTitle == inst.Title && now.Sub(m.lastClickAt) <= doubleClickWindow {
-					m.lastClickTitle = ""
+				if m.lastClickInstance == inst && now.Sub(m.lastClickAt) <= doubleClickWindow {
+					m.lastClickInstance = nil
 					if inst.Paused() || inst.GetStatus() == session.Loading || !inst.TmuxAlive() {
 						return m, m.instanceChanged()
 					}
@@ -218,7 +218,7 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					// killTarget carries it for the ctrl-x in-session kill flow.
 					return m, m.attachExec(m.list.Attach, inst)
 				}
-				m.lastClickTitle = inst.Title
+				m.lastClickInstance = inst
 				m.lastClickAt = now
 				return m, m.instanceChanged()
 			}
@@ -271,6 +271,12 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// Re-point the account picker at the new project's auto-routed account so the
 			// displayed selection tracks the target. No-op once the user has overridden it.
 			m.textInputOverlay.PreselectAccount(msg.accountName)
+			// Re-scope the duplicate-title check to the confirmed target's group and
+			// re-run it: the same title may be free in one repo and taken in another.
+			if msg.groupKey != "" {
+				m.newSessionGroup = msg.groupKey
+				m.refreshTitleError()
+			}
 			// A confirmed git target gets one background fetch per form-session, so its
 			// branch list reflects current remote refs. The verdict (not the path change)
 			// is the trigger: filesystem browsing through non-repos never fetches.
@@ -282,6 +288,25 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, m.runBranchFetch(msg.path)
 			}
 		}
+		return m, nil
+	case titleCheckDebounceMsg:
+		// Debounce timer fired — only run the git check if the title and target are
+		// still current (the user may have typed on or re-pointed the picker).
+		if m.textInputOverlay == nil || !m.textInputOverlay.IsCreateForm() ||
+			msg.title != m.textInputOverlay.GetTitle() || msg.path != m.newSessionPath {
+			return m, nil
+		}
+		return m, m.runTitleCheck(msg.title, msg.path)
+	case titleCheckResultMsg:
+		// Apply only a verdict for the still-current (title, target) pair; a stale
+		// one must not flag (or clear) the wrong title.
+		if m.textInputOverlay == nil || !m.textInputOverlay.IsCreateForm() ||
+			msg.title != m.textInputOverlay.GetTitle() || msg.path != m.newSessionPath {
+			return m, nil
+		}
+		m.titleBranchExists = msg.exists
+		m.titleBranchName = msg.branch
+		m.refreshTitleError()
 		return m, nil
 	case branchFetchDoneMsg:
 		// A background fetch finished. If its path is still the current target, re-run
@@ -474,6 +499,13 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 			return m, m.cancelPromptOverlay()
 		}
 
+		// Snapshot the title so a keystroke that edits it can refresh the inline
+		// duplicate verdict (and schedule the async branch-existence check) below.
+		prevTitle := ""
+		if m.textInputOverlay.IsCreateForm() {
+			prevTitle = m.textInputOverlay.GetTitle()
+		}
+
 		// Use the new TextInputOverlay component to handle all key events
 		shouldClose, branchFilterChanged := m.textInputOverlay.HandleKeyPress(msg)
 
@@ -528,9 +560,14 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 			// result re-sets it.
 			m.textInputOverlay.ClearTargetValidity()
 			version := m.textInputOverlay.InvalidateBranchSearch()
+			// The old target's branch verdict no longer applies; the validity
+			// result re-points the group scope and re-runs the duplicate check.
+			m.resetTitleCheck()
+			m.refreshTitleError()
 			return m, tea.Batch(
 				m.scheduleBranchSearch(m.textInputOverlay.BranchFilter(), version),
 				m.scheduleValidityCheck(newPath),
+				m.scheduleTitleCheck(m.textInputOverlay.GetTitle(), newPath),
 			)
 		}
 
@@ -539,6 +576,16 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 			filter := m.textInputOverlay.BranchFilter()
 			version := m.textInputOverlay.BranchFilterVersion()
 			return m, m.scheduleBranchSearch(filter, version)
+		}
+
+		// A keystroke that edited the title refreshes the inline duplicate verdict
+		// (in-memory, instant) and schedules the async branch-existence check.
+		if m.textInputOverlay.IsCreateForm() {
+			if title := m.textInputOverlay.GetTitle(); title != prevTitle {
+				m.titleBranchExists = false // the old verdict was for the old title
+				m.refreshTitleError()
+				return m, m.scheduleTitleCheck(title, m.newSessionPath)
+			}
 		}
 
 		return m, nil
@@ -1005,7 +1052,7 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		if err := selected.Pause(); err != nil {
 			return m, m.handleError(err)
 		}
-		m.tabbedWindow.CleanupTerminalForInstance(selected.Title)
+		m.tabbedWindow.CleanupTerminalForInstance(selected)
 		return m, m.instanceChanged()
 	case keys.KeyMoveUp:
 		if m.list.MoveUp() {

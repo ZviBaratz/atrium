@@ -5,14 +5,17 @@ import (
 	"github.com/ZviBaratz/atrium/log"
 )
 
-// Rename renames the live tmux session and its window to match newName, then swaps the
-// cached sanitizedName/windowName. The write lock is held across the rename-session
-// subprocess AND the field swap, so a concurrent reader (the metadata poll loop) never
-// observes the brief window where the old session name no longer exists — which would
-// otherwise read as a "lost session". If the session isn't live (e.g. paused after a
-// reboot) it updates the cached names only, so a later restore targets the new name.
-func (t *Session) Rename(newName string) error {
-	newSanitized := toSanitizedName(newName)
+// Rename renames the live tmux session to newSessionName and its window to
+// newWindowName, then swaps the cached names. The caller owns session-name
+// derivation (the instance layer mints repo-qualified names); this method never
+// derives. The write lock is held across the rename-session subprocess AND the
+// field swap, so a concurrent reader (the metadata poll loop) never observes
+// the brief window where the old session name no longer exists — which would
+// otherwise read as a "lost session". If the session isn't live (e.g. paused
+// after a reboot) it updates the cached names only, so a later restore targets
+// the new name.
+func (t *Session) Rename(newWindowName, newSessionName string) error {
+	newSanitized := newSessionName
 
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -30,13 +33,13 @@ func (t *Session) Rename(newName string) error {
 			}
 			// The window name is cosmetic (the conf disables auto-rename); log on failure
 			// but don't abort an otherwise-successful rename.
-			if err := t.cmdExec.Run(tmuxCommand(ctx, "rename-window", "-t", newSanitized, newName)); err != nil {
-				log.ErrorLog.Printf("failed to rename tmux window to %q: %v", newName, err)
+			if err := t.cmdExec.Run(tmuxCommand(ctx, "rename-window", "-t", newSanitized, newWindowName)); err != nil {
+				log.ErrorLog.Printf("failed to rename tmux window to %q: %v", newWindowName, err)
 			}
 		}
 	}
 
 	t.sanitizedName = newSanitized
-	t.windowName = newName
+	t.windowName = newWindowName
 	return nil
 }

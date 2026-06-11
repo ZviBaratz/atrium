@@ -1,0 +1,134 @@
+package session
+
+import (
+	"context"
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"testing"
+
+	"github.com/ZviBaratz/atrium/config"
+	"github.com/ZviBaratz/atrium/session/git"
+	"github.com/ZviBaratz/atrium/session/tmux"
+	"github.com/stretchr/testify/require"
+)
+
+// The tmux session name is persisted state: it must round-trip through
+// InstanceData so a restored session is found by exactly the name it was
+// created under, regardless of how new names are derived.
+func TestTmuxNameRoundTripsThroughInstanceData(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	name := tmux.QualifiedSessionName("myrepo", "my title")
+	data := InstanceData{
+		Title:    "my title",
+		Path:     "/nonexistent/myrepo",
+		Status:   Paused, // Paused: rehydrates without touching a tmux server
+		Program:  "claude",
+		TmuxName: name,
+		Worktree: GitWorktreeData{
+			RepoPath:     "/nonexistent/myrepo",
+			WorktreePath: "/nonexistent/wt",
+			SessionName:  "my title",
+			BranchName:   "zvi/my-title",
+		},
+	}
+
+	inst, err := FromInstanceData(context.Background(), data, "zvi/")
+	require.NoError(t, err)
+	require.Equal(t, name, inst.TmuxSessionName())
+	require.Equal(t, name, inst.ToInstanceData().TmuxName)
+}
+
+// A state.json written before tmux names were persisted has no tmux_name field.
+// Such a session must keep its legacy derived name — that is the name its live
+// tmux session still has on the socket — and record it for the next save.
+func TestFromInstanceDataLegacyTmuxNameFallback(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	data := InstanceData{
+		Title:   "legacy title",
+		Path:    "/nonexistent/repo",
+		Status:  Paused,
+		Program: "claude",
+		Worktree: GitWorktreeData{
+			RepoPath:     "/nonexistent/repo",
+			WorktreePath: "/nonexistent/wt",
+			SessionName:  "legacy title",
+			BranchName:   "zvi/legacy-title",
+		},
+	}
+
+	inst, err := FromInstanceData(context.Background(), data, "zvi/")
+	require.NoError(t, err)
+	legacy := tmux.Prefix() + tmux.SanitizeNameSegment("legacy title")
+	require.Equal(t, legacy, inst.TmuxSessionName())
+	require.Equal(t, legacy, inst.ToInstanceData().TmuxName, "legacy name must persist on next save")
+}
+
+// GroupKey must report the repo-root basename even before Start — a Loading
+// instance created from a repo subdirectory has to land in (and be duplicate-
+// checked against) the same group it will join once started.
+func TestGroupKeyUnstartedResolvesRepoRoot(t *testing.T) {
+	repoPath := renameTestRepo(t)
+	sub := filepath.Join(repoPath, "nested")
+	require.NoError(t, os.MkdirAll(sub, 0o755))
+
+	inst, err := NewInstance(InstanceOptions{Title: "x", Path: sub, Program: "claude"})
+	require.NoError(t, err)
+	require.Equal(t, filepath.Base(repoPath), inst.GroupKey())
+}
+
+// Outside a git repo the group is the directory's own basename, matching how
+// direct sessions are grouped in the list.
+func TestGroupKeyNonGitFallsBackToBasename(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	dir := t.TempDir()
+	inst, err := NewInstance(InstanceOptions{Title: "x", Path: dir, Program: "claude", Direct: true})
+	require.NoError(t, err)
+	require.Equal(t, filepath.Base(dir), inst.GroupKey())
+}
+
+// A deep rename re-mints the tmux session name in qualified form — this is the
+// migration point where a legacy-named session adopts a repo-qualified name.
+func TestInstanceRenameMintsQualifiedTmuxName(t *testing.T) {
+	repoPath := renameTestRepo(t)
+	wt, _, err := git.NewWorktree(context.Background(), repoPath, "old-name")
+	require.NoError(t, err)
+	require.NoError(t, wt.Setup())
+
+	inst := &Instance{
+		Title:       "old-name",
+		Path:        repoPath,
+		status:      Running,
+		started:     true,
+		gitWorktree: wt,
+		tmuxSession: liveTmux(t, "old-name"),
+		Branch:      wt.GetBranchName(),
+	}
+
+	require.NoError(t, inst.Rename("new-name"))
+	want := tmux.QualifiedSessionName(filepath.Base(repoPath), "new-name")
+	require.Equal(t, want, inst.TmuxSessionName())
+}
+
+// Storage matching must be composite (Title, Path): with same-titled sessions
+// legal across repos, a Title-only match would delete or update the wrong one.
+func TestStorageCompositeMatching(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	a := InstanceData{Title: "same", Path: "/repo/a", Status: Paused, Program: "claude"}
+	b := InstanceData{Title: "same", Path: "/repo/b", Status: Paused, Program: "claude"}
+	seeded, err := json.Marshal([]InstanceData{a, b})
+	require.NoError(t, err)
+
+	state := config.DefaultState()
+	state.InstancesData = seeded
+	storage, err := NewStorage(state)
+	require.NoError(t, err)
+
+	require.NoError(t, storage.DeleteInstance("same", "/repo/a"))
+	var got []InstanceData
+	require.NoError(t, json.Unmarshal(state.GetInstances(), &got))
+	require.Len(t, got, 1)
+	require.Equal(t, "/repo/b", got[0].Path, "only the matching entry may be deleted")
+
+	require.Error(t, storage.DeleteInstance("same", "/repo/a"), "already gone: must error")
+}

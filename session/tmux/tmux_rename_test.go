@@ -46,11 +46,11 @@ func TestRename_LiveSessionRenamesSessionAndWindow(t *testing.T) {
 	sess := NewSessionWithDeps(context.Background(), "formalize-packaing", "claude", NewMockPtyFactory(t), cmdExec)
 	oldSanitized := sess.sanitizedName
 
-	if err := sess.Rename("formalize-packaging"); err != nil {
+	wantSanitized := Prefix() + "formalize-packaging"
+	if err := sess.Rename("formalize-packaging", wantSanitized); err != nil {
 		t.Fatalf("Rename() error = %v", err)
 	}
 
-	wantSanitized := Prefix() + "formalize-packaging"
 	require.Equal(t, wantSanitized, sess.sanitizedName)
 	require.Equal(t, "formalize-packaging", sess.windowName)
 
@@ -75,7 +75,7 @@ func TestRename_NotLiveUpdatesFieldsOnly(t *testing.T) {
 	}
 	sess := NewSessionWithDeps(context.Background(), "alpha", "claude", NewMockPtyFactory(t), cmdExec)
 
-	if err := sess.Rename("alpha-fixed"); err != nil {
+	if err := sess.Rename("alpha-fixed", Prefix()+"alpha-fixed"); err != nil {
 		t.Fatalf("Rename() error = %v", err)
 	}
 

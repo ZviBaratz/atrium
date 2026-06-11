@@ -101,7 +101,7 @@ func TestIsReadyForPrompt(t *testing.T) {
 					return []byte(tc.content), nil
 				},
 			}
-			session := newSession(context.Background(), "ready-test", tc.program, ptyFactory, cmdExec)
+			session := NewSessionWithDeps(context.Background(), "ready-test", tc.program, ptyFactory, cmdExec)
 			require.Equal(t, tc.want, session.IsReadyForPrompt())
 		})
 	}
@@ -131,7 +131,7 @@ func TestStartupGates(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			s := newSession(context.Background(), "gate-test", tc.program, NewMockPtyFactory(t), cmd_test.MockCmdExec{})
+			s := NewSessionWithDeps(context.Background(), "gate-test", tc.program, NewMockPtyFactory(t), cmd_test.MockCmdExec{})
 			_, ok := s.adapter.GateUp(tc.content)
 			require.Equal(t, tc.want, ok)
 		})
@@ -154,7 +154,7 @@ func TestPollersSkipCaptureWhenSessionDead(t *testing.T) {
 			return nil, fmt.Errorf("error capturing pane content: exit status 1")
 		},
 	}
-	session := newSession(context.Background(), "dead", "claude", ptyFactory, cmdExec)
+	session := NewSessionWithDeps(context.Background(), "dead", "claude", ptyFactory, cmdExec)
 
 	updated, hasPrompt := session.HasUpdated()
 	require.False(t, updated)
@@ -172,7 +172,7 @@ func TestHasUpdatedCapturesWhenSessionAlive(t *testing.T) {
 		RunFunc:    func(cmd *exec.Cmd) error { return nil }, // session exists
 		OutputFunc: func(cmd *exec.Cmd) ([]byte, error) { return []byte("hello"), nil },
 	}
-	session := newSession(context.Background(), "alive", "aider", ptyFactory, cmdExec)
+	session := NewSessionWithDeps(context.Background(), "alive", "aider", ptyFactory, cmdExec)
 
 	updated, _ := session.HasUpdated()
 	require.True(t, updated, "first capture of new content should report updated")
@@ -224,7 +224,7 @@ func pollSession(t *testing.T, program string, content *string, fail *bool) *Ses
 			return []byte(*content), nil
 		},
 	}
-	return newSession(context.Background(), "poll-test", program, NewMockPtyFactory(t), cmdExec)
+	return NewSessionWithDeps(context.Background(), "poll-test", program, NewMockPtyFactory(t), cmdExec)
 }
 
 func TestCleanForDetection(t *testing.T) {
@@ -765,7 +765,7 @@ func TestStartSession(t *testing.T) {
 	}
 
 	workdir := t.TempDir()
-	session := newSession(context.Background(), "test-session", "claude", ptyFactory, cmdExec)
+	session := NewSessionWithDeps(context.Background(), "test-session", "claude", ptyFactory, cmdExec)
 
 	err := session.Start(workdir)
 	require.NoError(t, err)
@@ -805,7 +805,7 @@ func TestStartSession(t *testing.T) {
 func TestStartQuotesHookSettingsPath(t *testing.T) {
 	forceSettingsFlag(t, true)
 	ptyFactory := NewMockPtyFactory(t)
-	session := newSession(context.Background(), "Surya's comment", "claude", ptyFactory, startMockExec())
+	session := NewSessionWithDeps(context.Background(), "Surya's comment", "claude", ptyFactory, startMockExec())
 
 	require.NoError(t, session.Start(t.TempDir()))
 
@@ -835,7 +835,7 @@ func TestStartTimeoutErrorOmitsNilWrap(t *testing.T) {
 		RunFunc:    func(cmd *exec.Cmd) error { return fmt.Errorf("no such session") },
 		OutputFunc: func(cmd *exec.Cmd) ([]byte, error) { return []byte("output"), nil },
 	}
-	session := newSession(context.Background(), "timeout-test", "prog", ptyFactory, cmdExec)
+	session := NewSessionWithDeps(context.Background(), "timeout-test", "prog", ptyFactory, cmdExec)
 
 	err := session.Start(t.TempDir())
 	require.Error(t, err)
@@ -896,7 +896,7 @@ func TestResumeCommand(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			s := newSession(context.Background(), "resume-test", tc.program, NewMockPtyFactory(t), cmd_test.MockCmdExec{})
+			s := NewSessionWithDeps(context.Background(), "resume-test", tc.program, NewMockPtyFactory(t), cmd_test.MockCmdExec{})
 			require.Equal(t, tc.want, s.resumeCommand())
 		})
 	}
@@ -912,7 +912,7 @@ func TestResumeCommandProbeGate(t *testing.T) {
 	})
 
 	for _, program := range []string{"gemini", "codex"} {
-		s := newSession(context.Background(), "resume-test", program, NewMockPtyFactory(t), cmd_test.MockCmdExec{})
+		s := NewSessionWithDeps(context.Background(), "resume-test", program, NewMockPtyFactory(t), cmd_test.MockCmdExec{})
 		require.Equal(t, program, s.resumeCommand(), "probe must fail closed for %s", program)
 	}
 }
@@ -959,7 +959,7 @@ func startMockExec() cmd_test.MockCmdExec {
 
 func TestStartContinueAppendsContinueForClaude(t *testing.T) {
 	ptyFactory := NewMockPtyFactory(t)
-	session := newSession(context.Background(), "cont-test", "claude", ptyFactory, startMockExec())
+	session := NewSessionWithDeps(context.Background(), "cont-test", "claude", ptyFactory, startMockExec())
 
 	require.NoError(t, session.StartContinue(t.TempDir()))
 
@@ -972,7 +972,7 @@ func TestStartContinueAppendsContinueForClaude(t *testing.T) {
 
 func TestStartContinueLeavesNonClaudeUnchanged(t *testing.T) {
 	ptyFactory := NewMockPtyFactory(t)
-	session := newSession(context.Background(), "cont-test", "aider --model x", ptyFactory, startMockExec())
+	session := NewSessionWithDeps(context.Background(), "cont-test", "aider --model x", ptyFactory, startMockExec())
 
 	require.NoError(t, session.StartContinue(t.TempDir()))
 
@@ -985,7 +985,7 @@ func TestStartContinueLeavesNonClaudeUnchanged(t *testing.T) {
 // PTY-reattach path, where there is nothing to continue.
 func TestStartDoesNotAppendContinue(t *testing.T) {
 	ptyFactory := NewMockPtyFactory(t)
-	session := newSession(context.Background(), "cont-test", "claude", ptyFactory, startMockExec())
+	session := NewSessionWithDeps(context.Background(), "cont-test", "claude", ptyFactory, startMockExec())
 
 	require.NoError(t, session.Start(t.TempDir()))
 	require.NotContains(t, cmd2.ToString(ptyFactory.cmds[0]), "--continue")
@@ -1005,7 +1005,7 @@ func TestStartSessionInjectsClaudeConfigDir(t *testing.T) {
 		OutputFunc: func(cmd *exec.Cmd) ([]byte, error) { return []byte("output"), nil },
 	}
 
-	session := newSession(context.Background(), "acct-session", "claude", ptyFactory, cmdExec)
+	session := NewSessionWithDeps(context.Background(), "acct-session", "claude", ptyFactory, cmdExec)
 	session.SetClaudeConfigDir("/home/tester/.claude-quantivly")
 	require.NoError(t, session.Start(t.TempDir()))
 
@@ -1030,7 +1030,7 @@ func TestStartSessionNoConfigDirNoEnvFlag(t *testing.T) {
 		OutputFunc: func(cmd *exec.Cmd) ([]byte, error) { return []byte("output"), nil },
 	}
 
-	session := newSession(context.Background(), "plain-session", "claude", ptyFactory, cmdExec)
+	session := NewSessionWithDeps(context.Background(), "plain-session", "claude", ptyFactory, cmdExec)
 	require.NoError(t, session.Start(t.TempDir()))
 
 	require.NotContains(t, cmd2.ToString(ptyFactory.cmds[0]), "CLAUDE_CONFIG_DIR")

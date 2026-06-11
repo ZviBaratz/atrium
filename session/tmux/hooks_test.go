@@ -22,7 +22,7 @@ func hookPollSession(t *testing.T, program string, content *string) *Session {
 		RunFunc:    func(cmd *exec.Cmd) error { return nil },
 		OutputFunc: func(cmd *exec.Cmd) ([]byte, error) { return []byte(*content), nil },
 	}
-	return newSession(context.Background(), t.Name(), program, NewMockPtyFactory(t), cmdExec)
+	return NewSessionWithDeps(context.Background(), t.Name(), program, NewMockPtyFactory(t), cmdExec)
 }
 
 func writeHookState(t *testing.T, s *Session, word string) {

@@ -76,6 +76,10 @@ type targetValidityResultMsg struct {
 	// remote), used to re-point the form's account picker as the project changes.
 	// Empty when the feature is dormant. Resolved here, off the keystroke hot path.
 	accountName string
+	// groupKey is the repo-group key the target path resolves to (repo-root basename,
+	// or the directory's own basename for non-git targets) — the scope the form's
+	// duplicate-title check runs against. Resolved here, off the keystroke hot path.
+	groupKey string
 }
 
 // scheduleValidityCheck returns a debounced tea.Cmd mirroring scheduleBranchSearch: it
@@ -99,15 +103,53 @@ func (m *home) runValidityCheck(path string) tea.Cmd {
 		// account picker can follow the selected project without re-doing git on the
 		// update loop. A direct (non-git) target has no remote, so it routes by the
 		// directory path (path_matches) or falls back to the inferred default.
-		var account string
+		var account, group string
 		if valid {
 			remoteURL := ""
 			if !direct {
 				remoteURL = git.GetRemoteURL(ctx, path)
 			}
 			account, _, _ = cfg.ResolveClaudeAccount(remoteURL, path)
+			group = git.RepoGroupKey(ctx, path)
 		}
-		return targetValidityResultMsg{path: path, valid: valid, direct: direct, headBranch: head, accountName: account}
+		return targetValidityResultMsg{path: path, valid: valid, direct: direct, headBranch: head, accountName: account, groupKey: group}
+	}
+}
+
+// titleCheckDebounceMsg fires after the debounce interval to trigger an async
+// branch-existence check for the new-session title.
+type titleCheckDebounceMsg struct {
+	title, path string
+}
+
+// titleCheckResultMsg carries the branch-existence verdict back to Update, keyed
+// by the (title, path) it was computed for so a stale result — the user typed on
+// or re-pointed the picker meanwhile — is dropped rather than applied.
+type titleCheckResultMsg struct {
+	title, path, branch string
+	exists              bool
+}
+
+// scheduleTitleCheck returns a debounced tea.Cmd mirroring scheduleValidityCheck:
+// it sleeps, then asks for an async check of whether the branch the title would
+// mint already exists in the target repo (e.g. an orphan from a killed session —
+// invisible to the instance-list duplicate check, but fatal at Start).
+func (m *home) scheduleTitleCheck(title, path string) tea.Cmd {
+	return func() tea.Msg {
+		time.Sleep(branchSearchDebounce)
+		return titleCheckDebounceMsg{title: title, path: path}
+	}
+}
+
+// runTitleCheck returns a tea.Cmd that resolves the title's branch slug and asks
+// git whether it exists as a local head. Non-git targets report false: a direct
+// session mints no branch.
+func (m *home) runTitleCheck(title, path string) tea.Cmd {
+	ctx := m.ctx
+	branch := git.BranchNameForSession(m.appConfig.BranchPrefix, title)
+	return func() tea.Msg {
+		exists := git.IsGitRepo(ctx, path) && git.LocalBranchExists(ctx, path, branch)
+		return titleCheckResultMsg{title: title, path: path, branch: branch, exists: exists}
 	}
 }
 

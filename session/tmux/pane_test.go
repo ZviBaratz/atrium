@@ -61,7 +61,7 @@ func (f *paneFake) exec() cmd_test.MockCmdExec {
 // daemon's Enter taps) to the wrong pane.
 func TestCaptureTargetsAgentPaneID(t *testing.T) {
 	fake := &paneFake{listPanesOut: "%3\n"}
-	s := newSession(context.Background(), "pane-id", "claude", NewMockPtyFactory(t), fake.exec())
+	s := NewSessionWithDeps(context.Background(), "pane-id", "claude", NewMockPtyFactory(t), fake.exec())
 
 	_, err := s.CapturePaneContent()
 	require.NoError(t, err)
@@ -77,7 +77,7 @@ func TestCaptureTargetsAgentPaneID(t *testing.T) {
 // splits and windows shifted pane indexes.
 func TestPaneResolutionPicksSmallestID(t *testing.T) {
 	fake := &paneFake{listPanesOut: "%12\n%4\n%9\n"}
-	s := newSession(context.Background(), "pane-min", "claude", NewMockPtyFactory(t), fake.exec())
+	s := NewSessionWithDeps(context.Background(), "pane-min", "claude", NewMockPtyFactory(t), fake.exec())
 
 	_, err := s.CapturePaneContent()
 	require.NoError(t, err)
@@ -88,7 +88,7 @@ func TestPaneResolutionPicksSmallestID(t *testing.T) {
 // target), not break capture — and must not retry on every poll tick.
 func TestPaneResolutionFailureFallsBackToSessionName(t *testing.T) {
 	fake := &paneFake{listPanesErr: fmt.Errorf("no server running")}
-	s := newSession(context.Background(), "pane-fallback", "claude", NewMockPtyFactory(t), fake.exec())
+	s := NewSessionWithDeps(context.Background(), "pane-fallback", "claude", NewMockPtyFactory(t), fake.exec())
 
 	for range 2 {
 		content, err := s.CapturePaneContent()
@@ -103,7 +103,7 @@ func TestPaneResolutionFailureFallsBackToSessionName(t *testing.T) {
 // not a bogus target.
 func TestPaneResolutionRejectsMalformedOutput(t *testing.T) {
 	fake := &paneFake{listPanesOut: "not-a-pane\n%abc\n\n"}
-	s := newSession(context.Background(), "pane-garbage", "claude", NewMockPtyFactory(t), fake.exec())
+	s := NewSessionWithDeps(context.Background(), "pane-garbage", "claude", NewMockPtyFactory(t), fake.exec())
 
 	_, err := s.CapturePaneContent()
 	require.NoError(t, err)
@@ -116,7 +116,7 @@ func TestPaneResolutionRejectsMalformedOutput(t *testing.T) {
 // prompt correctly — and then tap Enter into the user's shell.
 func TestSendKeysTargetAgentPaneID(t *testing.T) {
 	fake := &paneFake{listPanesOut: "%7\n"}
-	s := newSession(context.Background(), "pane-keys", "claude", NewMockPtyFactory(t), fake.exec())
+	s := NewSessionWithDeps(context.Background(), "pane-keys", "claude", NewMockPtyFactory(t), fake.exec())
 
 	require.NoError(t, s.TapEnter())
 	require.NoError(t, s.TapDAndEnter())
@@ -134,7 +134,7 @@ func TestSendKeysTargetAgentPaneID(t *testing.T) {
 // (tmux errors on send-keys with no key arguments).
 func TestSendKeysEmptyIsNoOp(t *testing.T) {
 	fake := &paneFake{listPanesOut: "%7\n"}
-	s := newSession(context.Background(), "pane-empty", "claude", NewMockPtyFactory(t), fake.exec())
+	s := NewSessionWithDeps(context.Background(), "pane-empty", "claude", NewMockPtyFactory(t), fake.exec())
 
 	require.NoError(t, s.SendKeys(""))
 	require.Empty(t, fake.sendKeysArgs)
@@ -144,7 +144,7 @@ func TestSendKeysEmptyIsNoOp(t *testing.T) {
 // session-name target (tmux's active-pane routing, the historical behavior).
 func TestSendKeysFallBackToSessionName(t *testing.T) {
 	fake := &paneFake{listPanesErr: fmt.Errorf("no server running")}
-	s := newSession(context.Background(), "pane-keys-fb", "claude", NewMockPtyFactory(t), fake.exec())
+	s := NewSessionWithDeps(context.Background(), "pane-keys-fb", "claude", NewMockPtyFactory(t), fake.exec())
 
 	require.NoError(t, s.TapEnter())
 	require.Equal(t, [][]string{{"-t", Prefix() + "pane-keys-fb", "Enter"}}, fake.sendKeysArgs)
@@ -154,7 +154,7 @@ func TestSendKeysFallBackToSessionName(t *testing.T) {
 // capture (a resumed session) must re-resolve rather than reuse a stale id.
 func TestPaneIDCacheResetOnClose(t *testing.T) {
 	fake := &paneFake{listPanesOut: "%3\n"}
-	s := newSession(context.Background(), "pane-reset", "claude", NewMockPtyFactory(t), fake.exec())
+	s := NewSessionWithDeps(context.Background(), "pane-reset", "claude", NewMockPtyFactory(t), fake.exec())
 
 	_, err := s.CapturePaneContent()
 	require.NoError(t, err)

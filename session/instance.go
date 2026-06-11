@@ -167,6 +167,18 @@ type Instance struct {
 	tmuxSession *tmux.Session
 	// gitWorktree is the git worktree for the instance.
 	gitWorktree *git.Worktree
+
+	// tmuxName is the instance's tmux session name — persisted state, not a
+	// derivation. Minted repo-qualified (tmux.QualifiedSessionName) when the
+	// session is first created, recorded from the legacy derivation for
+	// instances restored from a state.json that predates the field, and
+	// re-minted by Rename. Guarded by mu: the background Start() goroutine
+	// writes it while the UI thread reads.
+	tmuxName string
+	// groupKey caches the repo-group key (see GroupKey): computed at most once
+	// per instance, possibly via a git subprocess. Guarded by mu (never held
+	// across that subprocess).
+	groupKey string
 }
 
 // ToInstanceData converts an Instance to its serializable form
@@ -190,6 +202,7 @@ func (i *Instance) ToInstanceData() InstanceData {
 		ClaudeConfigDir:      i.claudeConfigDir,
 		ClaudeAccountDefault: i.claudeAccountDefault,
 		Model:                i.modelID,
+		TmuxName:             i.TmuxSessionName(),
 	}
 
 	// Only include worktree data if gitWorktree is initialized
@@ -275,14 +288,23 @@ func FromInstanceData(ctx context.Context, data InstanceData, branchPrefix strin
 		}
 	}
 
+	// The tmux session name is persisted state. A state.json that predates the
+	// field decodes to "" — such a session still lives on the socket under the
+	// legacy derived name, so keep deriving and record the result; it persists
+	// on the next save and the session keeps its legacy name until deep-renamed.
+	var sess *tmux.Session
+	if data.TmuxName != "" {
+		sess = tmux.NewSessionWithName(ctx, data.TmuxName, data.Title, instance.Program)
+	} else {
+		sess = tmux.NewSession(ctx, instance.Title, instance.Program)
+	}
+	sess.SetClaudeConfigDir(instance.claudeConfigDir)
+	instance.tmuxName = sess.Name()
+
 	if instance.Paused() {
 		instance.started = true
-		sess := tmux.NewSession(ctx, instance.Title, instance.Program)
-		sess.SetClaudeConfigDir(instance.claudeConfigDir)
 		instance.tmuxSession = sess
 	} else {
-		sess := tmux.NewSession(ctx, instance.Title, instance.Program)
-		sess.SetClaudeConfigDir(instance.claudeConfigDir)
 		instance.tmuxSession = sess
 		switch {
 		case sess.DoesSessionExist():
@@ -464,6 +486,47 @@ func (i *Instance) RepoName() (string, error) {
 	return wt.GetRepoName(), nil
 }
 
+// TmuxSessionName returns the instance's persisted tmux session name, or ""
+// for an instance that has never been started or restored (the name is minted
+// on first Start).
+func (i *Instance) TmuxSessionName() string {
+	i.mu.RLock()
+	defer i.mu.RUnlock()
+	return i.tmuxName
+}
+
+// GroupKey returns the repo-group key the session list files this instance
+// under: the repo name for worktree sessions, the directory base name for
+// direct ones. Unlike RepoName it also works before Start — resolving the repo
+// root from Path — so a just-added Loading instance lands in (and is
+// duplicate-checked against) the same group it will join once started. The
+// result is computed at most once and cached; mu is never held across the git
+// subprocess the cold path may run.
+func (i *Instance) GroupKey() string {
+	i.mu.RLock()
+	cached := i.groupKey
+	wt := i.gitWorktree
+	i.mu.RUnlock()
+	if cached != "" {
+		return cached
+	}
+
+	var key string
+	switch {
+	case wt != nil:
+		key = wt.GetRepoName()
+	case i.direct:
+		key = filepath.Base(i.Path)
+	default:
+		key = git.RepoGroupKey(i.baseContext(), i.Path)
+	}
+
+	i.mu.Lock()
+	i.groupKey = key
+	i.mu.Unlock()
+	return key
+}
+
 // SetPath sets the repo path for a not-yet-started instance, resolving it to an
 // absolute path (mirroring NewInstance). The worktree is created from this path on
 // Start, so it must be called before the instance is started.
@@ -612,19 +675,9 @@ func (i *Instance) Start(firstTimeSetup bool) error {
 		return fmt.Errorf("instance title cannot be empty")
 	}
 
-	i.mu.RLock()
-	existing := i.tmuxSession
-	i.mu.RUnlock()
-	tmuxSession := existing
-	if tmuxSession == nil {
-		// Create new tmux session
-		tmuxSession = tmux.NewSession(i.baseContext(), i.Title, i.Program)
-		tmuxSession.SetClaudeConfigDir(i.claudeConfigDir)
-	}
-	i.mu.Lock()
-	i.tmuxSession = tmuxSession
-	i.mu.Unlock()
-
+	// Create the worktree before the tmux session: the qualified tmux name needs
+	// the repo group, which is only certain once the worktree has resolved the
+	// repo root.
 	if firstTimeSetup && !i.direct {
 		// The session always gets its own branch. baseBranch (if set) only chooses the start
 		// point it branches off, so i.Branch is the session branch in both cases.
@@ -644,6 +697,27 @@ func (i *Instance) Start(firstTimeSetup bool) error {
 		i.mu.Unlock()
 		i.Branch = branchName
 	}
+
+	i.mu.RLock()
+	existing := i.tmuxSession
+	i.mu.RUnlock()
+	tmuxSession := existing
+	if tmuxSession == nil {
+		// Mint the session's persisted tmux name: repo-qualified so identical
+		// titles in different repo groups never collide on the shared socket.
+		// (Restored instances arrive with tmuxSession already injected by
+		// FromInstanceData, so they never reach this branch.)
+		name := i.TmuxSessionName()
+		if name == "" {
+			name = tmux.QualifiedSessionName(i.GroupKey(), i.Title)
+		}
+		tmuxSession = tmux.NewSessionWithName(i.baseContext(), name, i.Title, i.Program)
+		tmuxSession.SetClaudeConfigDir(i.claudeConfigDir)
+	}
+	i.mu.Lock()
+	i.tmuxSession = tmuxSession
+	i.tmuxName = tmuxSession.Name()
+	i.mu.Unlock()
 
 	// Setup error handler to cleanup resources on any error
 	var setupErr error
@@ -940,8 +1014,15 @@ func (i *Instance) Rename(newTitle string) error {
 	ts := i.tmux()
 	wt := i.worktree()
 
+	// Mint the qualified replacement name. This is also the migration point: a
+	// session restored under a legacy (unqualified) name adopts a repo-qualified
+	// one on its first deep rename. The old name comes from the session itself
+	// so rollback is exact even for instances that predate persisted names.
+	oldName := ts.Name()
+	newName := tmux.QualifiedSessionName(i.GroupKey(), newTitle)
+
 	// 1. Rename the tmux session first: atomic and exactly reversible by name.
-	if err := ts.Rename(newTitle); err != nil {
+	if err := ts.Rename(newTitle, newName); err != nil {
 		return fmt.Errorf("failed to rename tmux session: %w", err)
 	}
 
@@ -950,7 +1031,7 @@ func (i *Instance) Rename(newTitle string) error {
 	// A direct session has no worktree, so only the tmux rename (step 1) applies.
 	if wt != nil {
 		if err := wt.Rename(newTitle); err != nil {
-			if rbErr := ts.Rename(oldTitle); rbErr != nil {
+			if rbErr := ts.Rename(oldTitle, oldName); rbErr != nil {
 				log.ErrorLog.Printf("failed to roll back tmux rename %q->%q: %v", newTitle, oldTitle, rbErr)
 			}
 			return fmt.Errorf("failed to rename git worktree: %w", err)
@@ -960,6 +1041,9 @@ func (i *Instance) Rename(newTitle string) error {
 
 	// 3. Adopt the corrected identity.
 	i.Title = newTitle
+	i.mu.Lock()
+	i.tmuxName = newName
+	i.mu.Unlock()
 	return nil
 }
 

@@ -34,25 +34,31 @@ type TerminalPane struct {
 	ctx           context.Context
 	mu            sync.Mutex
 	width, height int
-	sessions      map[string]*terminalSession // instanceTitle → session
-	currentTitle  string                      // currently displayed instance
+	sessions      map[string]*terminalSession // terminalKey (instance tmux name) → session
+	currentKey    string                      // terminalKey of the currently displayed instance
 	content       string
 	fallback      bool
 	fallbackText  string
 
 	isScrolling bool
-	// scrollTitle is the instance title the scroll-mode snapshot was captured from.
+	// scrollKey is the terminalKey the scroll-mode snapshot was captured from.
 	// The snapshot is only meaningful while that same live instance is displayed:
 	// UpdateContent drops it for any other state (different instance, none, paused,
 	// not started), so a frozen capture can never pin across selection changes —
 	// the terminal-pane twin of the stuck-preview bug. This matters doubly here
 	// because String() renders the scroll viewport before the fallbacks.
-	// Keyed by title (not pointer, as PreviewPane does) to match the sessions map:
-	// Title is immutable for an instance's lifetime, so the key cannot drift while
-	// the snapshot is up.
-	scrollTitle string
-	viewport    viewport.Model
+	// Keyed by terminalKey (not pointer, as PreviewPane does) to match the
+	// sessions map; the key is stable for a started instance's lifetime, so it
+	// cannot drift while the snapshot is up.
+	scrollKey string
+	viewport  viewport.Model
 }
+
+// terminalKey is the cache key for an instance's terminal shell: its persisted
+// tmux session name. Unlike Title it is unique across repo groups (same-titled
+// sessions are legal in different groups) and stable once the instance has
+// started — and the pane only creates shells for started instances.
+func terminalKey(i *session.Instance) string { return i.TmuxSessionName() }
 
 // NewTerminalPane returns an empty TerminalPane with no shell sessions yet.
 // ctx is the app lifecycle context its shell tmux sessions derive from.
@@ -82,7 +88,7 @@ func (t *TerminalPane) SetSize(width, height int) {
 	t.height = height
 	t.viewport.Width = width
 	t.viewport.Height = height
-	if s, ok := t.sessions[t.currentTitle]; ok && s.tmuxSession != nil {
+	if s, ok := t.sessions[t.currentKey]; ok && s.tmuxSession != nil {
 		if err := s.tmuxSession.SetDetachedSize(width, height); err != nil {
 			log.InfoLog.Printf("terminal pane: failed to set detached size: %v", err)
 		}
@@ -106,7 +112,7 @@ func (t *TerminalPane) UpdateContent(instance *session.Instance) error {
 	// exits scroll mode so the pane reflects the new selection (or the right
 	// fallback) instead of pinning the old capture.
 	if t.isScrolling &&
-		(instance == nil || instance.Title != t.scrollTitle || instance.Paused() || !instance.Started()) {
+		(instance == nil || terminalKey(instance) != t.scrollKey || instance.Paused() || !instance.Started()) {
 		t.exitScrollModeLocked()
 	}
 
@@ -133,7 +139,7 @@ func (t *TerminalPane) UpdateContent(instance *session.Instance) error {
 		return err
 	}
 
-	s, ok := t.sessions[t.currentTitle]
+	s, ok := t.sessions[t.currentKey]
 	if !ok || s.tmuxSession == nil || !s.tmuxSession.DoesSessionExist() {
 		t.setFallbackState("Terminal session not available.")
 		return nil
@@ -165,16 +171,22 @@ func (t *TerminalPane) ensureSessionLocked(instance *session.Instance) error {
 	if cwd == "" {
 		return nil
 	}
+	key := terminalKey(instance)
+	if key == "" {
+		// No persisted tmux name (an instance fabricated without Start, e.g. in
+		// tests): there is no stable key to cache a shell under.
+		return nil
+	}
 
-	t.currentTitle = instance.Title
+	t.currentKey = key
 
 	// Check if we already have a cached session for this instance
-	if s, ok := t.sessions[instance.Title]; ok {
+	if s, ok := t.sessions[key]; ok {
 		if s.tmuxSession != nil && s.tmuxSession.DoesSessionExist() {
 			return nil
 		}
 		// Session died, remove stale entry and recreate below
-		delete(t.sessions, instance.Title)
+		delete(t.sessions, key)
 	}
 
 	shell := os.Getenv("SHELL")
@@ -182,15 +194,19 @@ func (t *TerminalPane) ensureSessionLocked(instance *session.Instance) error {
 		shell = "/bin/sh"
 	}
 
-	termName := "term_" + instance.Title
-	ts := tmux.NewSession(t.baseContext(), termName, shell)
+	// The shell session rides the instance's own (unique, repo-qualified) tmux
+	// name with a "_term" suffix — already prefix-matched by CleanupSessions, and
+	// the suffix is reserved by the new-session/rename guards so no agent session
+	// can mint it. The window name is cosmetic.
+	termName := key + "_term"
+	ts := tmux.NewSessionWithName(t.baseContext(), termName, "term: "+instance.Title, shell)
 
 	// Check if session already exists (e.g. from a previous run)
 	if ts.DoesSessionExist() {
 		if err := ts.Restore(); err != nil {
 			// Session exists but can't restore, kill it and start fresh
 			_ = ts.Close()
-			ts = tmux.NewSession(t.baseContext(), termName, shell)
+			ts = tmux.NewSessionWithName(t.baseContext(), termName, "term: "+instance.Title, shell)
 			if err := ts.Start(cwd); err != nil {
 				return fmt.Errorf("terminal pane: failed to start session: %w", err)
 			}
@@ -201,7 +217,7 @@ func (t *TerminalPane) ensureSessionLocked(instance *session.Instance) error {
 		}
 	}
 
-	t.sessions[instance.Title] = &terminalSession{
+	t.sessions[key] = &terminalSession{
 		tmuxSession: ts,
 		cwd:         cwd,
 	}
@@ -219,7 +235,7 @@ func (t *TerminalPane) ensureSessionLocked(instance *session.Instance) error {
 // Attach attaches to the terminal tmux session (full-screen).
 func (t *TerminalPane) Attach() (chan struct{}, error) {
 	t.mu.Lock()
-	s, ok := t.sessions[t.currentTitle]
+	s, ok := t.sessions[t.currentKey]
 	if !ok || s.tmuxSession == nil {
 		t.mu.Unlock()
 		return nil, fmt.Errorf("no terminal session to attach to")
@@ -246,26 +262,30 @@ func (t *TerminalPane) Close() {
 		}
 	}
 	t.sessions = make(map[string]*terminalSession)
-	t.currentTitle = ""
+	t.currentKey = ""
 	t.content = ""
 	t.fallback = false
 	t.fallbackText = ""
 }
 
 // CloseForInstance kills the cached terminal session for a specific instance.
-func (t *TerminalPane) CloseForInstance(title string) {
+func (t *TerminalPane) CloseForInstance(inst *session.Instance) {
+	if inst == nil {
+		return
+	}
+	key := terminalKey(inst)
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	if s, ok := t.sessions[title]; ok {
+	if s, ok := t.sessions[key]; ok {
 		if s.tmuxSession != nil {
 			if err := s.tmuxSession.Close(); err != nil {
-				log.InfoLog.Printf("terminal pane: failed to close session for %s: %v", title, err)
+				log.InfoLog.Printf("terminal pane: failed to close session for %s: %v", key, err)
 			}
 		}
-		delete(t.sessions, title)
+		delete(t.sessions, key)
 	}
-	if t.currentTitle == title {
-		t.currentTitle = ""
+	if t.currentKey == key {
+		t.currentKey = ""
 		t.content = ""
 		t.fallback = false
 		t.fallbackText = ""
@@ -337,7 +357,7 @@ func (t *TerminalPane) String() string {
 // enterScrollMode captures the full terminal history and enters scroll mode.
 // Caller must hold t.mu.
 func (t *TerminalPane) enterScrollMode() error {
-	s, ok := t.sessions[t.currentTitle]
+	s, ok := t.sessions[t.currentKey]
 	if !ok || s.tmuxSession == nil || !s.tmuxSession.DoesSessionExist() {
 		return nil
 	}
@@ -353,7 +373,7 @@ func (t *TerminalPane) enterScrollMode() error {
 	t.viewport.SetContent(contentWithFooter)
 	t.viewport.GotoBottom()
 	t.isScrolling = true
-	t.scrollTitle = t.currentTitle
+	t.scrollKey = t.currentKey
 	return nil
 }
 
@@ -361,7 +381,7 @@ func (t *TerminalPane) enterScrollMode() error {
 // isScrolling and the snapshot's owning title in lockstep. Caller must hold t.mu.
 func (t *TerminalPane) exitScrollModeLocked() {
 	t.isScrolling = false
-	t.scrollTitle = ""
+	t.scrollKey = ""
 	t.viewport.SetContent("")
 	t.viewport.GotoTop()
 }

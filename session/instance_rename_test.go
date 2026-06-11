@@ -115,12 +115,13 @@ func TestInstanceRename_RollsBackTmuxOnGitFailure(t *testing.T) {
 	_, statErr := os.Stat(oldPath)
 	require.NoError(t, statErr, "worktree dir must be intact after rollback")
 
-	// The tmux session was renamed forward then rolled back to its original name.
-	// The prefix follows the active brand (see tmux.Prefix), so resolve it
-	// dynamically rather than hardcoding the legacy claudesquad_ value.
-	prefix := tmux.Prefix()
-	requireSubstr(t, ran, "rename-session", prefix+"alpha", prefix+"alpha-fixed")
-	requireSubstr(t, ran, "rename-session", prefix+"alpha-fixed", prefix+"alpha")
+	// The tmux session was renamed forward (to the freshly-minted qualified
+	// name) then rolled back to its exact original — here the legacy derived
+	// name, since this session predates persisted tmux names.
+	oldName := tmux.Prefix() + "alpha"
+	newName := tmux.QualifiedSessionName(inst.GroupKey(), "alpha-fixed")
+	requireSubstr(t, ran, "rename-session", oldName, newName)
+	requireSubstr(t, ran, "rename-session", newName, oldName)
 }
 
 func TestInstanceRename_RejectsUnstarted(t *testing.T) {

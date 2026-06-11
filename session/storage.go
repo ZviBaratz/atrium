@@ -47,6 +47,13 @@ type InstanceData struct {
 	// falls back to the Program's --model flag.
 	Model string `json:"model,omitempty"`
 
+	// TmuxName is the session's tmux session name. It is persisted state, not a
+	// derivation: new sessions mint a repo-qualified name (so identical titles
+	// in different repo groups coexist on the shared socket). omitempty: a
+	// state.json predating the field decodes to "" -> the instance falls back
+	// to the legacy title-derived name its live session still has.
+	TmuxName string `json:"tmux_name,omitempty"`
+
 	Worktree  GitWorktreeData `json:"worktree"`
 	DiffStats DiffStatsData   `json:"diff_stats"`
 }
@@ -153,8 +160,10 @@ func (s *Storage) saveInstanceData(data []InstanceData) error {
 
 // DeleteInstance removes an instance from storage. It operates on the serialized
 // data directly so an orphaned entry (repo/worktree gone) can always be removed
-// and unrelated siblings are left byte-for-byte intact.
-func (s *Storage) DeleteInstance(title string) error {
+// and unrelated siblings are left byte-for-byte intact. Matching is composite
+// (Title, Path): titles are only unique per repo group, so a same-titled session
+// in another repo must never be the one removed.
+func (s *Storage) DeleteInstance(title, path string) error {
 	instances, err := s.loadInstanceData()
 	if err != nil {
 		return fmt.Errorf("failed to load instances: %w", err)
@@ -163,7 +172,7 @@ func (s *Storage) DeleteInstance(title string) error {
 	found := false
 	newInstances := make([]InstanceData, 0, len(instances))
 	for _, data := range instances {
-		if data.Title == title {
+		if data.Title == title && data.Path == path {
 			found = true
 			continue
 		}
@@ -179,6 +188,7 @@ func (s *Storage) DeleteInstance(title string) error {
 
 // UpdateInstance updates an existing instance in storage. Only the target entry
 // is replaced; other entries are preserved exactly as stored (no reconstruct).
+// Matching is composite (Title, Path) — see DeleteInstance.
 func (s *Storage) UpdateInstance(instance *Instance) error {
 	instances, err := s.loadInstanceData()
 	if err != nil {
@@ -188,7 +198,7 @@ func (s *Storage) UpdateInstance(instance *Instance) error {
 	data := instance.ToInstanceData()
 	found := false
 	for i, existing := range instances {
-		if existing.Title == data.Title {
+		if existing.Title == data.Title && existing.Path == data.Path {
 			instances[i] = data
 			found = true
 			break

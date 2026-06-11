@@ -107,14 +107,14 @@ func makeStartedInstance(t *testing.T, title string) *session.Instance {
 }
 
 // injectSession injects a mock tmux session into the TerminalPane's sessions map.
-func injectSession(tp *TerminalPane, title string, ts *tmux.Session, cwd string) {
+func injectSession(tp *TerminalPane, key string, ts *tmux.Session, cwd string) {
 	tp.mu.Lock()
 	defer tp.mu.Unlock()
-	tp.sessions[title] = &terminalSession{
+	tp.sessions[key] = &terminalSession{
 		tmuxSession: ts,
 		cwd:         cwd,
 	}
-	tp.currentTitle = title
+	tp.currentKey = key
 }
 
 func TestTerminalUpdateContent(t *testing.T) {
@@ -134,7 +134,7 @@ func TestTerminalUpdateContent(t *testing.T) {
 	// Inject a mock session that returns expectedContent on capture-pane
 	ts := newMockTmuxSession(t, "mock-update", cmdExec)
 	// Start the session so DoesSessionExist returns true
-	injectSession(tp, instance.Title, ts, t.TempDir())
+	injectSession(tp, terminalKey(instance), ts, t.TempDir())
 
 	// UpdateContent should set fallback=false and capture content
 	err := tp.UpdateContent(instance)
@@ -228,10 +228,10 @@ func TestTerminalSessionCaching(t *testing.T) {
 	defer func() { _ = instance2.Kill() }()
 
 	// Inject two separate sessions
-	injectSession(tp, instance1.Title, ts1, t.TempDir())
+	injectSession(tp, terminalKey(instance1), ts1, t.TempDir())
 
 	tp.mu.Lock()
-	tp.sessions[instance2.Title] = &terminalSession{
+	tp.sessions[terminalKey(instance2)] = &terminalSession{
 		tmuxSession: ts2,
 		cwd:         t.TempDir(),
 	}
@@ -239,7 +239,7 @@ func TestTerminalSessionCaching(t *testing.T) {
 
 	// Switch to instance1 and capture
 	tp.mu.Lock()
-	tp.currentTitle = instance1.Title
+	tp.currentKey = terminalKey(instance1)
 	tp.mu.Unlock()
 
 	err := tp.UpdateContent(instance1)
@@ -250,7 +250,7 @@ func TestTerminalSessionCaching(t *testing.T) {
 
 	// Switch to instance2 and capture
 	tp.mu.Lock()
-	tp.currentTitle = instance2.Title
+	tp.currentKey = terminalKey(instance2)
 	tp.mu.Unlock()
 
 	err = tp.UpdateContent(instance2)
@@ -261,7 +261,7 @@ func TestTerminalSessionCaching(t *testing.T) {
 
 	// Switch back to instance1 — session should still exist (cached)
 	tp.mu.Lock()
-	tp.currentTitle = instance1.Title
+	tp.currentKey = terminalKey(instance1)
 	tp.mu.Unlock()
 
 	err = tp.UpdateContent(instance1)
@@ -293,7 +293,7 @@ func TestTerminalScrolling(t *testing.T) {
 	tp.SetSize(80, 30)
 
 	ts := newMockTmuxSession(t, "scroll-test", cmdExec)
-	injectSession(tp, instance.Title, ts, t.TempDir())
+	injectSession(tp, terminalKey(instance), ts, t.TempDir())
 
 	// Initially not scrolling
 	require.False(t, tp.IsScrolling(), "should not be scrolling initially")
@@ -353,7 +353,7 @@ func TestTerminalScrollDownAtBottomExitsToLive(t *testing.T) {
 
 	tp := NewTerminalPane(context.Background())
 	tp.SetSize(80, 30)
-	injectSession(tp, instance.Title, newMockTmuxSession(t, "mock-scroll-bottom", mockCmdExec(fullContent, true)), t.TempDir())
+	injectSession(tp, terminalKey(instance), newMockTmuxSession(t, "mock-scroll-bottom", mockCmdExec(fullContent, true)), t.TempDir())
 
 	// Enter scroll mode: the viewport starts at the bottom of the snapshot.
 	require.NoError(t, tp.ScrollUp())
@@ -404,8 +404,8 @@ func TestTerminalScrollSnapshotUnpinsOnInstanceSwitch(t *testing.T) {
 	tp := NewTerminalPane(context.Background())
 	tp.SetSize(80, 30)
 
-	injectSession(tp, instA.Title, newMockTmuxSession(t, "mock-scroll-a", mockCmdExec(contentA, true)), t.TempDir())
-	injectSession(tp, instB.Title, newMockTmuxSession(t, "mock-scroll-b", mockCmdExec(contentB, true)), t.TempDir())
+	injectSession(tp, terminalKey(instA), newMockTmuxSession(t, "mock-scroll-a", mockCmdExec(contentA, true)), t.TempDir())
+	injectSession(tp, terminalKey(instB), newMockTmuxSession(t, "mock-scroll-b", mockCmdExec(contentB, true)), t.TempDir())
 
 	// Show A live, then enter scroll mode (snapshot of A's shell history).
 	require.NoError(t, tp.UpdateContent(instA))
@@ -435,7 +435,7 @@ func TestTerminalScrollSnapshotDropsWhenInstancePauses(t *testing.T) {
 
 	tp := NewTerminalPane(context.Background())
 	tp.SetSize(80, 30)
-	injectSession(tp, instance.Title, newMockTmuxSession(t, "mock-scroll-pause", mockCmdExec(content, true)), t.TempDir())
+	injectSession(tp, terminalKey(instance), newMockTmuxSession(t, "mock-scroll-pause", mockCmdExec(content, true)), t.TempDir())
 
 	require.NoError(t, tp.UpdateContent(instance))
 	require.NoError(t, tp.ScrollUp())
@@ -465,9 +465,9 @@ func TestTerminalCloseForInstance(t *testing.T) {
 	ts1 := newMockTmuxSession(t, "close-test-1", cmdExec)
 	ts2 := newMockTmuxSession(t, "close-test-2", cmdExec)
 
-	injectSession(tp, instance1.Title, ts1, t.TempDir())
+	injectSession(tp, terminalKey(instance1), ts1, t.TempDir())
 	tp.mu.Lock()
-	tp.sessions[instance2.Title] = &terminalSession{
+	tp.sessions[terminalKey(instance2)] = &terminalSession{
 		tmuxSession: ts2,
 		cwd:         t.TempDir(),
 	}
@@ -479,20 +479,23 @@ func TestTerminalCloseForInstance(t *testing.T) {
 	tp.mu.Unlock()
 
 	// Close instance1's session
-	tp.CloseForInstance(instance1.Title)
+	tp.CloseForInstance(instance1)
 
 	// Only instance2 should remain
 	tp.mu.Lock()
 	require.Len(t, tp.sessions, 1, "should have only 1 session after closing instance1")
-	_, exists := tp.sessions[instance1.Title]
+	_, exists := tp.sessions[terminalKey(instance1)]
 	require.False(t, exists, "instance1 session should be removed")
-	_, exists = tp.sessions[instance2.Title]
+	_, exists = tp.sessions[terminalKey(instance2)]
 	require.True(t, exists, "instance2 session should still exist")
-	require.Empty(t, tp.currentTitle, "currentTitle should be cleared when closing current instance")
+	require.Empty(t, tp.currentKey, "currentKey should be cleared when closing current instance")
 	tp.mu.Unlock()
 
-	// Closing a non-existent instance should not panic
-	tp.CloseForInstance("non-existent")
+	// Closing an instance with no cached session (or nil) should not panic.
+	uncached := makeStartedInstance(t, "uncached")
+	defer func() { _ = uncached.Kill() }()
+	tp.CloseForInstance(uncached)
+	tp.CloseForInstance(nil)
 
 	tp.mu.Lock()
 	require.Len(t, tp.sessions, 1, "non-existent close should not affect existing sessions")

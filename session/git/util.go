@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strings"
 )
@@ -79,6 +80,35 @@ func CurrentBranchName(ctx context.Context, path string) string {
 		return "HEAD" // --show-current prints nothing when detached
 	}
 	return branch
+}
+
+// BranchNameForSession derives the git branch a session titled title owns:
+// sanitizeBranchName(prefix + title). It is the single source of the slug —
+// the worktree layer mints it and the new-session form predicts it for the
+// duplicate check, so the two can never drift.
+func BranchNameForSession(prefix, title string) string {
+	return sanitizeBranchName(prefix + title)
+}
+
+// LocalBranchExists reports whether branch exists as a local head in the repo
+// at repoPath. It is an exact ref lookup (show-ref --verify), deliberately not
+// SearchBranches, whose results are capped and merged with origin/ names.
+func LocalBranchExists(ctx context.Context, repoPath, branch string) bool {
+	ctx, cancel := context.WithTimeout(ctx, gitLocalTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "git", "-C", repoPath, "show-ref", "--verify", "--quiet", "refs/heads/"+branch)
+	return cmd.Run() == nil
+}
+
+// RepoGroupKey predicts the repo-group key the session list will file a session
+// under when created from path: the repo root's basename when path is inside a
+// git repo (even a subdirectory), else the directory's own basename (how direct
+// sessions group). Best-effort: any git failure falls back to the basename.
+func RepoGroupKey(ctx context.Context, path string) string {
+	if root, err := findGitRepoRoot(ctx, path); err == nil {
+		return filepath.Base(root)
+	}
+	return filepath.Base(path)
 }
 
 func findGitRepoRoot(ctx context.Context, path string) (string, error) {

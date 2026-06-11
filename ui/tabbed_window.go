@@ -296,9 +296,9 @@ func (w *TabbedWindow) CleanupTerminal() {
 	w.terminal.Close()
 }
 
-// CleanupTerminalForInstance closes the cached terminal session for the given instance title.
-func (w *TabbedWindow) CleanupTerminalForInstance(title string) {
-	w.terminal.CloseForInstance(title)
+// CleanupTerminalForInstance closes the cached terminal session for the given instance.
+func (w *TabbedWindow) CleanupTerminalForInstance(inst *session.Instance) {
+	w.terminal.CloseForInstance(inst)
 }
 
 // IsPreviewInScrollMode returns true if the preview pane is in scroll mode

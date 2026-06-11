@@ -62,7 +62,7 @@ func TestDeleteInstanceDoesNotReconstructSiblings(t *testing.T) {
 		t.Fatalf("NewStorage: %v", err)
 	}
 
-	if err := storage.DeleteInstance("target"); err != nil {
+	if err := storage.DeleteInstance("target", "/nonexistent/repo2"); err != nil {
 		t.Fatalf("DeleteInstance returned error: %v", err)
 	}
 
@@ -95,7 +95,7 @@ func TestDeleteInstanceNotFound(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewStorage: %v", err)
 	}
-	if err := storage.DeleteInstance("ghost"); err == nil {
+	if err := storage.DeleteInstance("ghost", "/nowhere"); err == nil {
 		t.Fatal("expected error deleting non-existent instance, got nil")
 	}
 }

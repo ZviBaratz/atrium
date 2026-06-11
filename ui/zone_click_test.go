@@ -47,13 +47,40 @@ func TestListInstanceAtZone(t *testing.T) {
 	l.SetSize(40, 14)
 
 	for _, inst := range []*session.Instance{a, b} {
-		z := waitZone(t, l.String, listRowZoneID(inst.Title))
+		z := waitZone(t, l.String, listRowZoneID(inst))
 		got := l.InstanceAtZone(clickAt(z.StartX, z.StartY))
 		require.Same(t, inst, got, "click inside %q's zone should resolve to it", inst.Title)
 	}
 
 	// A click far outside the panel hits no row.
 	require.Nil(t, l.InstanceAtZone(clickAt(9999, 9999)))
+}
+
+// Two sessions may share a title across repo groups; their click zones must not
+// share an id, or a click on one row selects whichever registered first.
+func TestListInstanceAtZone_SameTitleAcrossGroups(t *testing.T) {
+	s := spinner.New()
+	l := NewList(&s)
+	mk := func() *session.Instance {
+		inst, err := session.NewInstance(session.InstanceOptions{
+			Title: "same", Path: t.TempDir(), Program: "echo", Direct: true,
+		})
+		require.NoError(t, err)
+		inst.SetStatus(session.Ready)
+		return inst
+	}
+	a, b := mk(), mk()
+	l.AddInstance(a)()
+	l.AddInstance(b)()
+	l.SetSize(40, 14)
+
+	require.NotEqual(t, listRowZoneID(a), listRowZoneID(b),
+		"same-titled rows in different groups need distinct zone ids")
+	for _, inst := range []*session.Instance{a, b} {
+		z := waitZone(t, l.String, listRowZoneID(inst))
+		got := l.InstanceAtZone(clickAt(z.StartX, z.StartY))
+		require.Same(t, inst, got, "click inside the zone of %q (%s) should resolve to that instance", inst.Title, inst.Path)
+	}
 }
 
 // TestTabAtZone verifies tab click regions resolve to the right tab index.

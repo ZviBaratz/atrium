@@ -140,10 +140,10 @@ func NewWorktreeFromBase(ctx context.Context, repoPath string, sessionName strin
 // (<BranchPrefix><sessionName>) created from baseRef ("" = HEAD).
 func newSessionWorktree(ctx context.Context, repoPath string, sessionName string, baseRef string) (*Worktree, string, error) {
 	cfg := config.LoadConfig()
-	branchName := fmt.Sprintf("%s%s", cfg.BranchPrefix, sessionName)
-	// Sanitize the final branch name to handle invalid characters from any source
-	// (e.g., backslashes from Windows domain usernames like DOMAIN\user)
-	branchName = sanitizeBranchName(branchName)
+	// BranchNameForSession sanitizes the full name, handling invalid characters
+	// from any source (e.g., backslashes from Windows domain usernames like
+	// DOMAIN\user); the form's duplicate check predicts this same slug.
+	branchName := BranchNameForSession(cfg.BranchPrefix, sessionName)
 
 	repoPath, worktreePath, err := resolveWorktreePaths(ctx, repoPath, branchName)
 	if err != nil {

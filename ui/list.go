@@ -6,7 +6,6 @@ import (
 	"github.com/ZviBaratz/atrium/log"
 	"github.com/ZviBaratz/atrium/session"
 	"github.com/ZviBaratz/atrium/ui/theme"
-	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -18,10 +17,15 @@ import (
 	"github.com/mattn/go-runewidth"
 )
 
-// listRowZoneID is the bubblezone marker id for a session row. It is keyed by the
-// instance's immutable Title so stale zones from removed sessions are never
-// queried (InstanceAtZone only checks rows currently in the list).
-func listRowZoneID(title string) string { return "list-row-" + title }
+// listRowZoneID is the bubblezone marker id for a session row. It is keyed by
+// group + title — Title alone is only unique within a repo group, and two
+// same-titled rows sharing an id would route clicks to whichever registered
+// first. NUL can appear in neither part, so the join is unambiguous. Stale zones
+// from removed sessions are never queried (InstanceAtZone only checks rows
+// currently in the list).
+func listRowZoneID(i *session.Instance) string {
+	return "list-row-" + i.GroupKey() + "\x00" + i.Title
+}
 
 // listHeaderZoneID is the bubblezone marker id for a repo-group header row,
 // keyed by the group's repoKey. Like row zones, only keys currently present are
@@ -45,13 +49,12 @@ func selectedItemStyle() lipgloss.Style {
 		BorderForeground(theme.Current().Palette.Accent)
 }
 
-// repoKey returns the grouping key for an instance: its repo name once started,
-// falling back to the base name of its repo path for not-yet-started instances.
+// repoKey returns the grouping key for an instance. It delegates to
+// session.Instance.GroupKey, the single source of grouping truth, which also
+// resolves the repo root for not-yet-started instances so a Loading row lands
+// in the group it will join once started.
 func repoKey(i *session.Instance) string {
-	if name, err := i.RepoName(); err == nil {
-		return name
-	}
-	return filepath.Base(i.Path)
+	return i.GroupKey()
 }
 
 // distinctRepoCount returns how many distinct repo groups are present across the current
@@ -586,7 +589,7 @@ func (l *List) String() string {
 				if l.isHidden(j) {
 					continue
 				}
-				at := appendBlock(zone.Mark(listRowZoneID(l.items[j].Title), l.renderer.Render(l.items[j], j+1, j == l.selectedIdx)))
+				at := appendBlock(zone.Mark(listRowZoneID(l.items[j]), l.renderer.Render(l.items[j], j+1, j == l.selectedIdx)))
 				if j == l.selectedIdx {
 					selStart, selH = at, len(lines)-at
 				}
@@ -705,7 +708,7 @@ func (l *List) InPanelBounds(msg tea.MouseMsg) bool {
 // in the list are considered, so stale zones from removed sessions are ignored.
 func (l *List) InstanceAtZone(msg tea.MouseMsg) *session.Instance {
 	for _, it := range l.items {
-		if zone.Get(listRowZoneID(it.Title)).InBounds(msg) {
+		if zone.Get(listRowZoneID(it)).InBounds(msg) {
 			return it
 		}
 	}

@@ -209,25 +209,59 @@ func cleanForDetection(content string) string {
 	return strings.Join(lines, "\n")
 }
 
-// toSanitizedName converts an instance title into the managed tmux session name:
-// whitespace stripped, dots replaced (tmux would do it anyway), and the active
-// brand prefix (see Prefix) applied. It produces the value held in Session.sanitizedName.
+// SanitizeNameSegment normalizes one component of a managed tmux session name:
+// whitespace runs stripped, dots replaced with underscores (tmux would do it
+// anyway). It is the per-segment half of toSanitizedName, exported so callers
+// composing qualified names (and collision checks predicting them) share the
+// exact rules the session layer applies.
+func SanitizeNameSegment(s string) string {
+	s = nameWhitespaceRegex.ReplaceAllString(s, "")
+	return strings.ReplaceAll(s, ".", "_") // tmux replaces all . with _
+}
+
+// toSanitizedName converts an instance title into the legacy (unqualified)
+// managed tmux session name: the sanitized title with the active brand prefix
+// (see Prefix) applied. New sessions get repo-qualified names via
+// QualifiedSessionName; this derivation must stay byte-for-byte stable because
+// sessions persisted before names were stored are still found on the socket by
+// exactly this name.
 func toSanitizedName(str string) string {
-	str = nameWhitespaceRegex.ReplaceAllString(str, "")
-	str = strings.ReplaceAll(str, ".", "_") // tmux replaces all . with _
-	return fmt.Sprintf("%s%s", Prefix(), str)
+	return fmt.Sprintf("%s%s", Prefix(), SanitizeNameSegment(str))
+}
+
+// QualifiedSessionName builds the managed tmux session name for a session
+// titled title in repo group group: <prefix><group>_<title>, each segment
+// sanitized. The result is an opaque unique handle — it is not parseable back
+// into its parts (segments may themselves contain underscores); uniqueness is
+// enforced per group at creation/rename time, not by the name's shape.
+func QualifiedSessionName(group, title string) string {
+	return fmt.Sprintf("%s%s_%s", Prefix(), SanitizeNameSegment(group), SanitizeNameSegment(title))
 }
 
 // NewSession creates a new Session with the given name and program.
 // ctx is the lifecycle context tmux subprocesses derive from; cancelling it
 // (app/daemon shutdown) kills in-flight subprocesses.
 func NewSession(ctx context.Context, name string, program string) *Session {
-	return newSession(ctx, name, program, MakePtyFactory(), cmd.MakeExecutor())
+	return newSession(ctx, toSanitizedName(name), name, program, MakePtyFactory(), cmd.MakeExecutor())
+}
+
+// NewSessionWithName creates a Session whose tmux session name is sessionName
+// verbatim — no derivation. It is the constructor for sessions whose name is
+// owned by the caller (minted at creation as a qualified name, or restored from
+// persisted state); windowName stays the human-readable title shown in the
+// window list.
+func NewSessionWithName(ctx context.Context, sessionName, windowName, program string) *Session {
+	return newSession(ctx, sessionName, windowName, program, MakePtyFactory(), cmd.MakeExecutor())
 }
 
 // NewSessionWithDeps creates a new Session with provided dependencies for testing.
 func NewSessionWithDeps(ctx context.Context, name string, program string, ptyFactory PtyFactory, cmdExec cmd.Executor) *Session {
-	return newSession(ctx, name, program, ptyFactory, cmdExec)
+	return newSession(ctx, toSanitizedName(name), name, program, ptyFactory, cmdExec)
+}
+
+// NewSessionWithNameAndDeps is NewSessionWithName with injected dependencies for testing.
+func NewSessionWithNameAndDeps(ctx context.Context, sessionName, windowName, program string, ptyFactory PtyFactory, cmdExec cmd.Executor) *Session {
+	return newSession(ctx, sessionName, windowName, program, ptyFactory, cmdExec)
 }
 
 // SetClaudeConfigDir sets the CLAUDE_CONFIG_DIR injected at session launch. It
@@ -236,11 +270,11 @@ func (t *Session) SetClaudeConfigDir(dir string) {
 	t.configDir = dir
 }
 
-func newSession(ctx context.Context, name string, program string, ptyFactory PtyFactory, cmdExec cmd.Executor) *Session {
+func newSession(ctx context.Context, sessionName, windowName, program string, ptyFactory PtyFactory, cmdExec cmd.Executor) *Session {
 	return &Session{
 		baseCtx:       ctx,
-		sanitizedName: toSanitizedName(name),
-		windowName:    name,
+		sanitizedName: sessionName,
+		windowName:    windowName,
 		program:       program,
 		adapter:       agent.Resolve(program),
 		ptyFactory:    ptyFactory,
@@ -1091,6 +1125,13 @@ func (t *Session) snapshotName() string {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 	return t.sanitizedName
+}
+
+// Name returns the tmux session name this Session targets. It is the value the
+// instance layer persists, so a session created before names were stored
+// records its derived (legacy) name on first load.
+func (t *Session) Name() string {
+	return t.snapshotName()
 }
 
 // CapturePaneContent captures the content of the tmux pane

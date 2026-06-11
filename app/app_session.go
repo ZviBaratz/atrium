@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/ZviBaratz/atrium/config"
@@ -68,16 +69,29 @@ func (m *home) pushOneContext(inst *session.Instance) {
 // Cmd if there was any error.
 // deepRename renames the selected instance's title, git branch, worktree directory, and tmux
 // session to value, then clears the cosmetic label so the list shows the corrected name. It
-// rejects an empty title or one already used by another instance (Title is the storage key).
+// rejects an empty title or one already used in the instance's repo group — comparing derived
+// names (tmux segment, branch slug), not raw titles, and also reserving the qualified tmux
+// name the rename would mint (plus its "_term" terminal-shell sibling) against every session.
+// Same-titled sessions in other groups are fine: their qualified tmux names differ.
 // Runs synchronously on the main event loop — the rename is a handful of instant subprocesses,
 // and the git/tmux structs guard the fields the background poll loop reads.
 func (m *home) deepRename(selected *session.Instance, value string) error {
 	if value == "" {
 		return fmt.Errorf("session name cannot be empty")
 	}
+	group := selected.GroupKey()
+	cand := tmux.QualifiedSessionName(group, value)
 	for _, inst := range m.list.GetInstances() {
-		if inst != selected && inst.Title == value {
-			return fmt.Errorf("a session named %q already exists", value)
+		if inst == selected {
+			continue
+		}
+		if inst.GroupKey() == group && session.DerivedNamesCollide(m.appConfig.BranchPrefix, inst.Title, value) {
+			return fmt.Errorf("a session named %q already exists in %s", value, group)
+		}
+		if name := inst.TmuxSessionName(); name != "" {
+			if cand == name || cand == name+"_term" || cand+"_term" == name {
+				return fmt.Errorf("renaming to %q collides with session %q", value, inst.Title)
+			}
 		}
 	}
 	if err := selected.Rename(value); err != nil {
@@ -212,6 +226,11 @@ func (m *home) openCreateForm(focusTitle bool) tea.Cmd {
 
 	m.newSessionPath = m.defaultNewSessionPath()
 	target := m.newSessionPath
+	// Scope the duplicate-title check to the target's repo group from the first
+	// keystroke (one sync git call, in line with the open-time plumbing below);
+	// the async validity check re-points it as the picker moves.
+	m.newSessionGroup = git.RepoGroupKey(m.ctx, target)
+	m.resetTitleCheck()
 
 	m.state = statePrompt
 	ov, isGit := m.newSessionFormOverlay()
@@ -247,6 +266,56 @@ func (m *home) openCreateForm(focusTitle bool) tea.Cmd {
 	return tea.Batch(cmds...)
 }
 
+// titleConflict reports why title cannot be used for a new session in the
+// current target group ("" = no conflict). It compares derived names — not raw
+// titles — against every listed instance regardless of status (a Paused session
+// still owns its branch and tmux name):
+//   - same group + colliding tmux segment or branch slug → duplicate;
+//   - any instance whose tmux name equals the qualified name the title would
+//     mint (a legacy unqualified name can shadow a qualified one), or its
+//     "_term" sibling — the terminal-shell session derived from it;
+//   - the latest async verdict that the title's branch already exists in the
+//     target repo (an orphan from a killed session would make Start fail late).
+func (m *home) titleConflict(title string) string {
+	if strings.TrimSpace(title) == "" {
+		return ""
+	}
+	group := m.newSessionGroup
+	prefix := m.appConfig.BranchPrefix
+	cand := tmux.QualifiedSessionName(group, title)
+	for _, inst := range m.list.GetInstances() {
+		if inst.GroupKey() == group && session.DerivedNamesCollide(prefix, inst.Title, title) {
+			return fmt.Sprintf("already used in %s", group)
+		}
+		if name := inst.TmuxSessionName(); name != "" {
+			if cand == name || cand == name+"_term" || cand+"_term" == name {
+				return fmt.Sprintf("name collides with session %q", inst.Title)
+			}
+		}
+	}
+	if m.titleBranchExists && m.titleBranchName == git.BranchNameForSession(prefix, title) {
+		return fmt.Sprintf("branch %s exists in %s", m.titleBranchName, group)
+	}
+	return ""
+}
+
+// refreshTitleError recomputes the inline title verdict and pushes it into the
+// form. Called on title keystrokes, on path/group changes, and when an async
+// branch verdict lands.
+func (m *home) refreshTitleError() {
+	if m.textInputOverlay == nil || !m.textInputOverlay.IsCreateForm() {
+		return
+	}
+	m.textInputOverlay.SetTitleError(m.titleConflict(m.textInputOverlay.GetTitle()))
+}
+
+// resetTitleCheck clears the new-session validation state (group scope + async
+// branch verdict) when the form closes or its target moves.
+func (m *home) resetTitleCheck() {
+	m.titleBranchExists = false
+	m.titleBranchName = ""
+}
+
 // createSessionFromForm validates the submitted new-session form, creates the session,
 // adds it to the list, and starts it in the background with the entered prompt. On a
 // validation error it leaves the overlay open (clearing the submitted flag) and surfaces
@@ -269,6 +338,26 @@ func (m *home) createSessionFromForm(prompt string) tea.Cmd {
 	if !valid {
 		ov.Submitted = false
 		return m.handleError(fmt.Errorf("%q is not a directory", path))
+	}
+
+	// Duplicate gate. Re-derive the group for the path actually being submitted
+	// (the picker may have moved without an async verdict landing yet), re-run
+	// the in-memory conflict checks, and re-verify branch existence synchronously
+	// — one local ref lookup — so a submit that beats the debounce can't slip
+	// through and die in the background Start. On conflict the form stays open
+	// with the inline error and focus on the title; no toast to miss.
+	m.newSessionGroup = git.RepoGroupKey(m.ctx, path)
+	conflict := m.titleConflict(title)
+	if conflict == "" && !direct {
+		if branch := git.BranchNameForSession(m.appConfig.BranchPrefix, title); git.LocalBranchExists(m.ctx, path, branch) {
+			conflict = fmt.Sprintf("branch %s exists in %s", branch, m.newSessionGroup)
+		}
+	}
+	if conflict != "" {
+		ov.Submitted = false
+		ov.SetTitleError(conflict)
+		ov.FocusTitle()
+		return nil
 	}
 
 	program := m.program
@@ -344,6 +433,7 @@ func (m *home) createSessionFromForm(prompt string) tea.Cmd {
 	m.textInputOverlay = nil
 	m.state = stateDefault
 	m.menu.SetState(ui.StateDefault)
+	m.resetTitleCheck()
 
 	startCmd := func() tea.Msg {
 		err := instance.Start(true)
@@ -409,6 +499,7 @@ func (m *home) recordRecentPath(path string) {
 func (m *home) cancelPromptOverlay() tea.Cmd {
 	m.textInputOverlay = nil
 	m.state = stateDefault
+	m.resetTitleCheck()
 	return tea.Sequence(
 		tea.WindowSize(),
 		func() tea.Msg {
@@ -451,10 +542,10 @@ func (m *home) confirmKill(inst *session.Instance) tea.Cmd {
 		}
 
 		// Clean up terminal session for this instance
-		m.tabbedWindow.CleanupTerminalForInstance(inst.Title)
+		m.tabbedWindow.CleanupTerminalForInstance(inst)
 
 		// Delete from storage first
-		if err := m.storage.DeleteInstance(inst.Title); err != nil {
+		if err := m.storage.DeleteInstance(inst.Title, inst.Path); err != nil {
 			return err
 		}
 
