@@ -447,6 +447,38 @@ func TestTerminalScrollSnapshotDropsWhenInstancePauses(t *testing.T) {
 	require.Contains(t, tp.String(), "paused", "the paused fallback must be visible, not the stale snapshot")
 }
 
+// Terminal shells were keyed term_<title> before tmux names became persisted
+// state; the key change (<tmux name>_term) orphans those sessions on upgrade.
+// Creating the new-keyed shell for an instance must reap its legacy-named one.
+// Drives a real tmux server on the dedicated socket (self-skips without tmux).
+func TestEnsureSessionReapsLegacyTermSession(t *testing.T) {
+	if _, err := exec.LookPath("tmux"); err != nil {
+		t.Skip("tmux not available")
+	}
+	log.Initialize(false)
+	defer log.Close()
+
+	instance := makeStartedInstance(t, "legacy-reap")
+	defer func() { _ = instance.Kill() }()
+
+	// The shell session exactly as the pre-upgrade code minted it.
+	legacy := tmux.NewSession(context.Background(), "term_"+instance.Title, "sleep 300")
+	require.NoError(t, legacy.Start(t.TempDir()))
+	t.Cleanup(func() { _ = legacy.Close() })
+
+	tp := NewTerminalPane(context.Background())
+	tp.SetSize(80, 30)
+	t.Cleanup(tp.Close)
+
+	require.NoError(t, tp.UpdateContent(instance))
+
+	tp.mu.Lock()
+	_, created := tp.sessions[terminalKey(instance)]
+	tp.mu.Unlock()
+	require.True(t, created, "the new-keyed shell session must be created")
+	require.False(t, legacy.DoesSessionExist(), "the orphaned legacy term_ session must be reaped")
+}
+
 func TestTerminalCloseForInstance(t *testing.T) {
 	log.Initialize(false)
 	defer log.Close()

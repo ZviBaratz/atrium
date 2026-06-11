@@ -87,6 +87,21 @@ func TestGroupKeyNonGitFallsBackToBasename(t *testing.T) {
 	require.Equal(t, filepath.Base(dir), inst.GroupKey())
 }
 
+// SetPath re-points a not-yet-started instance, so a group key cached from the
+// old path (e.g. by a list render between creation and re-pointing) must not
+// survive — the instance would be grouped and duplicate-checked against the
+// directory it no longer targets.
+func TestSetPathInvalidatesGroupKeyCache(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	oldDir, newDir := t.TempDir(), t.TempDir()
+	inst, err := NewInstance(InstanceOptions{Title: "x", Path: oldDir, Program: "claude", Direct: true})
+	require.NoError(t, err)
+	require.Equal(t, filepath.Base(oldDir), inst.GroupKey())
+
+	require.NoError(t, inst.SetPath(newDir))
+	require.Equal(t, filepath.Base(newDir), inst.GroupKey())
+}
+
 // A deep rename re-mints the tmux session name in qualified form — this is the
 // migration point where a legacy-named session adopts a repo-qualified name.
 func TestInstanceRenameMintsQualifiedTmuxName(t *testing.T) {

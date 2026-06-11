@@ -539,6 +539,10 @@ func (i *Instance) SetPath(path string) error {
 		return fmt.Errorf("failed to get absolute path: %w", err)
 	}
 	i.Path = absPath
+	// The group key derives from Path; drop a value cached against the old one.
+	i.mu.Lock()
+	i.groupKey = ""
+	i.mu.Unlock()
 	return nil
 }
 

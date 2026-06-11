@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/ZviBaratz/atrium/session"
+	"github.com/ZviBaratz/atrium/session/git"
 	"github.com/ZviBaratz/atrium/session/tmux"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/stretchr/testify/assert"
@@ -131,6 +132,10 @@ func TestTitleConflict_TermReservation(t *testing.T) {
 func TestTitleCheckResult_AppliesAndDropsStale(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	h := newCreateFormHome(t)
+	// Pin a prefix that cannot equal the machine's username-derived default:
+	// the verdict-matching below must hold for any prefix, not just the one
+	// this test happens to run under.
+	h.appConfig.BranchPrefix = "elsewhere/"
 	dir := t.TempDir()
 	addDirectInstance(t, h, "other", dir)
 
@@ -138,7 +143,10 @@ func TestTitleCheckResult_AppliesAndDropsStale(t *testing.T) {
 	require.Equal(t, statePrompt, h.state)
 	typeString(h, "mywork")
 
-	branch := "zvi/mywork"
+	// Derive the branch exactly as runTitleCheck does: titleConflict only honors
+	// a verdict whose branch matches the current title's derived slug, so a
+	// hardcoded literal would only pass on machines whose username matches it.
+	branch := git.BranchNameForSession(h.appConfig.BranchPrefix, "mywork")
 	h.Update(titleCheckResultMsg{title: "mywork", path: h.newSessionPath, branch: branch, exists: true})
 	assert.Contains(t, h.textInputOverlay.TitleError(), "branch",
 		"a fresh verdict for the current title must surface inline")

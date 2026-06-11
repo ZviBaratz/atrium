@@ -199,6 +199,19 @@ func (t *TerminalPane) ensureSessionLocked(instance *session.Instance) error {
 	// the suffix is reserved by the new-session/rename guards so no agent session
 	// can mint it. The window name is cosmetic.
 	termName := key + "_term"
+
+	// Shells were keyed term_<title> before tmux names became persisted state;
+	// that name is unreachable under the new key, so a shell left from a
+	// pre-upgrade run would idle on the socket forever. Reap it here on the
+	// create path (one has-session probe, cache misses only). For an instance
+	// literally titled "term" the two names coincide — the "legacy" session IS
+	// the one being ensured, so leave it for the restore logic below.
+	if legacy := tmux.NewSession(t.baseContext(), "term_"+instance.Title, shell); legacy.Name() != termName && legacy.DoesSessionExist() {
+		if err := legacy.Close(); err != nil {
+			log.InfoLog.Printf("terminal pane: failed to reap legacy session %s: %v", legacy.Name(), err)
+		}
+	}
+
 	ts := tmux.NewSessionWithName(t.baseContext(), termName, "term: "+instance.Title, shell)
 
 	// Check if session already exists (e.g. from a previous run)
