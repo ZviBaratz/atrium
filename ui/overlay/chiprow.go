@@ -18,6 +18,7 @@ const claudeFieldNA = "  n/a — the selected profile is not Claude Code"
 // mode on top.
 type chipRow struct {
 	options  []string
+	labels   []string // display labels; nil = use options as-is (len must equal len(options) when set)
 	cursor   int
 	focused  bool
 	disabled bool
@@ -67,7 +68,11 @@ func (c *chipRow) selected() string {
 func (c *chipRow) render() string {
 	var s strings.Builder
 	for i, opt := range c.options {
-		label := " " + opt + " "
+		displayLabel := opt
+		if c.labels != nil {
+			displayLabel = c.labels[i]
+		}
+		label := " " + displayLabel + " "
 		switch {
 		case i == c.cursor && c.focused:
 			s.WriteString(ppSelectedStyle().Render(label))

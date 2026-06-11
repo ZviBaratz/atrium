@@ -19,6 +19,13 @@ func TestValidPermissionMode(t *testing.T) {
 	}
 }
 
+func TestPermissionModeLabels_LenMatchesModes(t *testing.T) {
+	if len(ClaudePermissionModeLabels) != len(ClaudePermissionModes) {
+		t.Errorf("ClaudePermissionModeLabels has %d entries, ClaudePermissionModes has %d — they must match",
+			len(ClaudePermissionModeLabels), len(ClaudePermissionModes))
+	}
+}
+
 // Every chip the form offers must validate, or createSessionFromForm would
 // reject a mode the UI itself offered (the two lists are maintained by hand;
 // the enum is deliberately a superset, so it cannot be derived from the chips).
