@@ -224,17 +224,26 @@ func (mf *ModelField) Render() string {
 		s.WriteString(mf.input.View())
 		return s.String()
 	}
-	for i, opt := range mf.options {
+	s.WriteString(renderChipRow(mf.options, mf.cursor, mf.focused))
+	return s.String()
+}
+
+// renderChipRow renders a horizontal chip row (the profile-picker idiom):
+// the cursor chip is highlighted when focused, plain when not, every other
+// chip dim, with dim "·" separators. Shared by the model and mode fields.
+func renderChipRow(options []string, cursor int, focused bool) string {
+	var s strings.Builder
+	for i, opt := range options {
 		label := " " + opt + " "
 		switch {
-		case i == mf.cursor && mf.focused:
+		case i == cursor && focused:
 			s.WriteString(ppSelectedStyle().Render(label))
-		case i == mf.cursor:
+		case i == cursor:
 			s.WriteString(label)
 		default:
 			s.WriteString(mfDimStyle().Render(label))
 		}
-		if i < len(mf.options)-1 {
+		if i < len(options)-1 {
 			s.WriteString(mfDimStyle().Render("·"))
 		}
 	}
