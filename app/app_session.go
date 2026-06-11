@@ -287,6 +287,19 @@ func (m *home) createSessionFromForm(prompt string) tea.Cmd {
 		}
 		program = agent.WithModelFlag(program, model)
 	}
+	// Compose the permission-mode override the same way — and resume (--continue)
+	// re-applies it. The Resolve check and validation are belt-and-braces behind
+	// the form's gating and the chips' closed set; unlike --model, claude rejects
+	// an unknown mode at argv parse time, so the backstop guards the launch
+	// itself. The plan-approval dialog a plan-mode session ends with is
+	// autoyes-safe via the NoAutoTap "plan" matcher (session/agent/registry.go).
+	if mode := ov.GetPermissionMode(); mode != "" && agent.Resolve(program).Key == agent.KeyClaude {
+		if !agent.ValidPermissionMode(mode) {
+			ov.Submitted = false
+			return m.handleError(fmt.Errorf("invalid permission mode %q", mode))
+		}
+		program = agent.WithPermissionModeFlag(program, mode)
+	}
 
 	instance, err := session.NewInstance(session.InstanceOptions{
 		Title:   title,

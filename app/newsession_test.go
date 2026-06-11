@@ -355,3 +355,111 @@ func TestCandidateRepoPaths_DropsStaleRecentPaths(t *testing.T) {
 	assert.Contains(t, got, existing, "existing recent path should be offered")
 	assert.NotContains(t, got, missing, "missing recent path should be pruned")
 }
+
+// A mode picked in the form's Permissions field is composed into the persisted
+// program string, so launch, pause/resume, and the daemon all see it with no
+// extra plumbing. Stops: [directory, branch, title, prompt, model, mode, enter].
+func TestCreateSessionFromForm_PermissionModeComposedIntoProgram(t *testing.T) {
+	dir := t.TempDir() // direct (non-git) target, hermetic
+
+	h := newCreateFormHome(t)
+	h.program = "claude"
+	h.appConfig.DefaultProgram = "claude"
+	h.newSessionPath = dir
+	h.state = statePrompt
+	ov, _ := h.newSessionFormOverlay()
+	h.textInputOverlay = ov
+
+	ov.FocusTitle()
+	ov.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("feature")})
+	ov.HandleKeyPress(tea.KeyMsg{Type: tea.KeyTab})   // title → prompt
+	ov.HandleKeyPress(tea.KeyMsg{Type: tea.KeyTab})   // prompt → model
+	ov.HandleKeyPress(tea.KeyMsg{Type: tea.KeyTab})   // model (empty → advance) → mode
+	ov.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRight}) // default → plan
+	require.Equal(t, "plan", ov.GetPermissionMode())
+
+	require.NotNil(t, h.createSessionFromForm(""))
+
+	inst := h.list.GetSelectedInstance()
+	require.NotNil(t, inst)
+	assert.Equal(t, "claude --permission-mode plan", inst.Program)
+}
+
+// A profile program that already pins --permission-mode is deduped, not
+// double-flagged.
+func TestCreateSessionFromForm_PermissionModeOverridesProfilePin(t *testing.T) {
+	dir := t.TempDir()
+
+	h := newCreateFormHome(t)
+	h.program = "claude --permission-mode acceptEdits"
+	h.appConfig.DefaultProgram = "claude --permission-mode acceptEdits"
+	h.newSessionPath = dir
+	h.state = statePrompt
+	ov, _ := h.newSessionFormOverlay()
+	h.textInputOverlay = ov
+
+	ov.FocusTitle()
+	ov.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("feature")})
+	ov.HandleKeyPress(tea.KeyMsg{Type: tea.KeyTab})
+	ov.HandleKeyPress(tea.KeyMsg{Type: tea.KeyTab})
+	ov.HandleKeyPress(tea.KeyMsg{Type: tea.KeyTab})
+	ov.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRight}) // default → plan
+
+	require.NotNil(t, h.createSessionFromForm(""))
+
+	inst := h.list.GetSelectedInstance()
+	require.NotNil(t, inst)
+	assert.Equal(t, "claude --permission-mode plan", inst.Program)
+}
+
+// The default chip leaves the program untouched — including an existing
+// profile pin, which "default" deliberately does not clear (it means
+// "inherit": don't clobber deliberate config).
+func TestCreateSessionFromForm_DefaultModeChipLeavesProgramUntouched(t *testing.T) {
+	dir := t.TempDir()
+
+	h := newCreateFormHome(t)
+	h.program = "claude"
+	h.appConfig.DefaultProgram = "claude"
+	h.newSessionPath = dir
+	h.state = statePrompt
+	ov, _ := h.newSessionFormOverlay()
+	h.textInputOverlay = ov
+
+	ov.FocusTitle()
+	ov.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("feature")})
+	require.Equal(t, "", ov.GetPermissionMode())
+
+	require.NotNil(t, h.createSessionFromForm(""))
+
+	inst := h.list.GetSelectedInstance()
+	require.NotNil(t, inst)
+	assert.Equal(t, "claude", inst.Program)
+}
+
+// Model and mode compose together onto one program string.
+func TestCreateSessionFromForm_ModelAndModeCompose(t *testing.T) {
+	dir := t.TempDir()
+
+	h := newCreateFormHome(t)
+	h.program = "claude"
+	h.appConfig.DefaultProgram = "claude"
+	h.newSessionPath = dir
+	h.state = statePrompt
+	ov, _ := h.newSessionFormOverlay()
+	h.textInputOverlay = ov
+
+	ov.FocusTitle()
+	ov.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("feature")})
+	ov.HandleKeyPress(tea.KeyMsg{Type: tea.KeyTab}) // title → prompt
+	ov.HandleKeyPress(tea.KeyMsg{Type: tea.KeyTab}) // prompt → model
+	ov.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("opus")})
+	ov.HandleKeyPress(tea.KeyMsg{Type: tea.KeyTab})   // "opus" is a complete alias → advance to mode
+	ov.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRight}) // default → plan
+
+	require.NotNil(t, h.createSessionFromForm(""))
+
+	inst := h.list.GetSelectedInstance()
+	require.NotNil(t, inst)
+	assert.Equal(t, "claude --model opus --permission-mode plan", inst.Program)
+}
