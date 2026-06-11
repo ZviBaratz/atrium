@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // TestDiff_RepoStats exercises the real git wiring for commits/behind/dirty/files
@@ -34,9 +35,14 @@ func TestDiff_RepoStats(t *testing.T) {
 	}
 
 	// Uncommitted edit in the worktree → dirty + a changed file, no new commit.
+	// The first Diff() above cached dirty=false; backdate the cache entry past
+	// dirtyCacheTTL so the next Diff() re-runs git status without a real sleep.
 	if err := os.WriteFile(filepath.Join(wtPath, "work.txt"), []byte("in progress\n"), 0644); err != nil {
 		t.Fatalf("write work file: %v", err)
 	}
+	wt.statsCacheMu.Lock()
+	wt.statsCache.dirtyComputedAt = time.Now().Add(-(dirtyCacheTTL + time.Millisecond))
+	wt.statsCacheMu.Unlock()
 	stats = wt.Diff()
 	if !stats.Dirty {
 		t.Errorf("after uncommitted edit: Dirty = false, want true")
@@ -52,7 +58,7 @@ func TestDiff_RepoStats(t *testing.T) {
 	mustRunGit(t, wtPath, "add", ".")
 	mustRunGit(t, wtPath, "commit", "-m", "session work")
 	// Direct git commit bypasses CommitChanges, so invalidate the cache manually.
-	wt.invalidateRevListCache()
+	wt.invalidateStatsCache()
 	stats = wt.Diff()
 	if stats.Commits != 1 {
 		t.Errorf("after commit: Commits = %d, want 1", stats.Commits)
@@ -72,7 +78,7 @@ func TestDiff_RepoStats(t *testing.T) {
 	mustRunGit(t, repoPath, "add", ".")
 	mustRunGit(t, repoPath, "commit", "-m", "base advances")
 	// The base branch advanced externally; invalidate so the next Diff re-runs rev-list.
-	wt.invalidateRevListCache()
+	wt.invalidateStatsCache()
 	stats = wt.Diff()
 	if stats.Behind != 1 {
 		t.Errorf("after base advances: Behind = %d, want 1", stats.Behind)

@@ -100,7 +100,7 @@ func (g *Worktree) PRStatus(ctx context.Context, selected bool) PRStatus {
 
 	// Gate 1: serve from cache when fresh.
 	g.prCacheMu.Lock()
-	if !g.prCache.fetchedAt.IsZero() && time.Since(g.prCache.fetchedAt) < ttl {
+	if cacheFresh(g.prCache.fetchedAt, ttl) {
 		cached := g.prCache
 		g.prCacheMu.Unlock()
 		return cached

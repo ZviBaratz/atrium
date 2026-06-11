@@ -7,21 +7,32 @@ import (
 )
 
 // revListCacheTTL is how long the rev-list commit counts (ahead/behind) returned
-// by computeRepoStats are reused without re-running git rev-list. git status
-// (the dirty flag) is always run fresh because it reflects uncommitted file
-// changes that must be visible immediately after the user edits or commits.
+// by computeRepoStats are reused without re-running git rev-list.
 // Commits-ahead/behind change only on an explicit commit, so a 3-second cache
 // is imperceptible in normal use and cuts rev-list subprocess pressure by ~83%
 // at a 500ms tick interval (1 run per 6 ticks rather than 1 per tick).
 const revListCacheTTL = 3 * time.Second
 
-// repoStatsEntry holds the cached rev-list result from a single computeRepoStats
-// run. Only commits-ahead and commits-behind are cached; the dirty flag is not
-// (git status --porcelain runs on every tick for accurate real-time display).
+// dirtyCacheTTL is how long the git-status dirty flag is cached. A 1-second
+// window halves subprocess pressure at the 500ms tick (1 run per 2 ticks) at
+// the cost of up to 1s lag before the pencil glyph updates in session rows.
+const dirtyCacheTTL = 1 * time.Second
+
+// repoStatsEntry holds the cached results from a single computeRepoStats run.
+// commits-ahead/behind are cached for revListCacheTTL; dirty is cached for
+// dirtyCacheTTL (shorter, because it reflects uncommitted file edits).
 type repoStatsEntry struct {
-	commits    int
-	behind     int
-	computedAt time.Time
+	commits         int
+	behind          int
+	dirty           bool
+	dirtyComputedAt time.Time
+	computedAt      time.Time
+}
+
+// cacheFresh reports whether a cache entry computed at the given time is still
+// within its TTL. A zero time means "never computed" and is always stale.
+func cacheFresh(computedAt time.Time, ttl time.Duration) bool {
+	return !computedAt.IsZero() && time.Since(computedAt) < ttl
 }
 
 // DiffStats holds statistics about the changes in a diff
@@ -133,12 +144,12 @@ func (g *Worktree) snapshotWorktreePath() string {
 //
 // The rev-list result (commits ahead/behind) is cached for revListCacheTTL because
 // it only changes on an explicit commit and the subprocess is relatively expensive on
-// large histories. The dirty check (git status --porcelain) always runs fresh so the
-// UI reflects uncommitted edits without delay.
+// large histories. The dirty flag (git status --porcelain) is cached for the shorter
+// dirtyCacheTTL — a 1-second window halves subprocess count at the 500ms tick.
 func (g *Worktree) computeRepoStats(stats *DiffStats, wt string) {
 	// Serve rev-list from cache when fresh; otherwise re-run and update.
 	g.statsCacheMu.Lock()
-	if !g.statsCache.computedAt.IsZero() && time.Since(g.statsCache.computedAt) < revListCacheTTL {
+	if cacheFresh(g.statsCache.computedAt, revListCacheTTL) {
 		stats.Commits = g.statsCache.commits
 		stats.Behind = g.statsCache.behind
 		g.statsCacheMu.Unlock()
@@ -152,22 +163,35 @@ func (g *Worktree) computeRepoStats(stats *DiffStats, wt string) {
 			stats.Commits = commits
 			stats.Behind = behind
 
+			// Update only the rev-list fields: a whole-struct replace would wipe
+			// the dirty cache, forcing a redundant git status on the next tick.
 			g.statsCacheMu.Lock()
-			g.statsCache = repoStatsEntry{
-				commits:    commits,
-				behind:     behind,
-				computedAt: time.Now(),
-			}
+			g.statsCache.commits = commits
+			g.statsCache.behind = behind
+			g.statsCache.computedAt = time.Now()
 			g.statsCacheMu.Unlock()
 		}
 	}
 
-	// Always run git status fresh: the dirty flag must reflect uncommitted edits
-	// immediately (unlike commit counts, it changes without an explicit commit).
+	// Cache the dirty flag for dirtyCacheTTL: a 1-second window halves git-status
+	// subprocess calls at a 500ms tick, at the cost of up to 1s lag before the
+	// pencil glyph reflects a new edit in session rows.
 	// Inline the check against the snapshotted path rather than calling IsDirty
 	// (which reads g.worktreePath) so this background path never touches the mutable field.
-	if out, err := g.runGitCommand(wt, "status", "--porcelain"); err == nil {
-		stats.Dirty = len(out) > 0
+	g.statsCacheMu.Lock()
+	if cacheFresh(g.statsCache.dirtyComputedAt, dirtyCacheTTL) {
+		stats.Dirty = g.statsCache.dirty
+		g.statsCacheMu.Unlock()
+	} else {
+		g.statsCacheMu.Unlock()
+		if out, err := g.runGitCommand(wt, "status", "--porcelain"); err == nil {
+			dirty := len(out) > 0
+			stats.Dirty = dirty
+			g.statsCacheMu.Lock()
+			g.statsCache.dirty = dirty
+			g.statsCache.dirtyComputedAt = time.Now()
+			g.statsCacheMu.Unlock()
+		}
 	}
 }
 
@@ -206,11 +230,12 @@ func (g *Worktree) revListCounts(wt string) (commits, behind int, ok bool) {
 	return 0, 0, true
 }
 
-// invalidateRevListCache clears the cached rev-list result so the next
-// computeRepoStats call re-runs git rev-list unconditionally. Call this after
-// any operation that alters the commit graph (commit, push) so the ahead/behind
-// counts update on the very next tick rather than waiting for the TTL to expire.
-func (g *Worktree) invalidateRevListCache() {
+// invalidateStatsCache clears the cached rev-list counts and dirty flag so the
+// next computeRepoStats call re-runs both git rev-list and git status. Call this
+// after any operation that alters the commit graph or worktree contents (commit,
+// push) so the ahead/behind counts and the dirty glyph update on the very next
+// tick rather than waiting for the TTLs to expire.
+func (g *Worktree) invalidateStatsCache() {
 	g.statsCacheMu.Lock()
 	g.statsCache = repoStatsEntry{}
 	g.statsCacheMu.Unlock()
