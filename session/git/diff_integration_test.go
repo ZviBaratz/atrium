@@ -58,7 +58,7 @@ func TestDiff_RepoStats(t *testing.T) {
 	mustRunGit(t, wtPath, "add", ".")
 	mustRunGit(t, wtPath, "commit", "-m", "session work")
 	// Direct git commit bypasses CommitChanges, so invalidate the cache manually.
-	wt.invalidateRevListCache()
+	wt.invalidateStatsCache()
 	stats = wt.Diff()
 	if stats.Commits != 1 {
 		t.Errorf("after commit: Commits = %d, want 1", stats.Commits)
@@ -78,7 +78,7 @@ func TestDiff_RepoStats(t *testing.T) {
 	mustRunGit(t, repoPath, "add", ".")
 	mustRunGit(t, repoPath, "commit", "-m", "base advances")
 	// The base branch advanced externally; invalidate so the next Diff re-runs rev-list.
-	wt.invalidateRevListCache()
+	wt.invalidateStatsCache()
 	stats = wt.Diff()
 	if stats.Behind != 1 {
 		t.Errorf("after base advances: Behind = %d, want 1", stats.Behind)

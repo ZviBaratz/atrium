@@ -65,7 +65,7 @@ type Worktree struct {
 	// and the dirty flag for dirtyCacheTTL. The dirty TTL (1s) is shorter than the
 	// rev-list TTL (3s) because dirty reflects uncommitted file edits that should
 	// appear promptly; a brief lag is acceptable, permanent staleness is not.
-	// invalidateRevListCache zeros the whole struct, so a commit/push also clears
+	// invalidateStatsCache zeros the whole struct, so a commit/push also clears
 	// the dirty cache and forces a fresh git-status on the next tick.
 	// statsCacheMu is a separate mutex so it never shares a lock ordering with mu.
 	statsCache   repoStatsEntry

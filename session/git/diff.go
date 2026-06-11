@@ -29,6 +29,12 @@ type repoStatsEntry struct {
 	computedAt      time.Time
 }
 
+// cacheFresh reports whether a cache entry computed at the given time is still
+// within its TTL. A zero time means "never computed" and is always stale.
+func cacheFresh(computedAt time.Time, ttl time.Duration) bool {
+	return !computedAt.IsZero() && time.Since(computedAt) < ttl
+}
+
 // DiffStats holds statistics about the changes in a diff
 type DiffStats struct {
 	// Content is the full diff content
@@ -143,7 +149,7 @@ func (g *Worktree) snapshotWorktreePath() string {
 func (g *Worktree) computeRepoStats(stats *DiffStats, wt string) {
 	// Serve rev-list from cache when fresh; otherwise re-run and update.
 	g.statsCacheMu.Lock()
-	if !g.statsCache.computedAt.IsZero() && time.Since(g.statsCache.computedAt) < revListCacheTTL {
+	if cacheFresh(g.statsCache.computedAt, revListCacheTTL) {
 		stats.Commits = g.statsCache.commits
 		stats.Behind = g.statsCache.behind
 		g.statsCacheMu.Unlock()
@@ -173,9 +179,7 @@ func (g *Worktree) computeRepoStats(stats *DiffStats, wt string) {
 	// Inline the check against the snapshotted path rather than calling IsDirty
 	// (which reads g.worktreePath) so this background path never touches the mutable field.
 	g.statsCacheMu.Lock()
-	dirtyFresh := !g.statsCache.dirtyComputedAt.IsZero() &&
-		time.Since(g.statsCache.dirtyComputedAt) < dirtyCacheTTL
-	if dirtyFresh {
+	if cacheFresh(g.statsCache.dirtyComputedAt, dirtyCacheTTL) {
 		stats.Dirty = g.statsCache.dirty
 		g.statsCacheMu.Unlock()
 	} else {
@@ -226,11 +230,12 @@ func (g *Worktree) revListCounts(wt string) (commits, behind int, ok bool) {
 	return 0, 0, true
 }
 
-// invalidateRevListCache clears the cached rev-list result so the next
-// computeRepoStats call re-runs git rev-list unconditionally. Call this after
-// any operation that alters the commit graph (commit, push) so the ahead/behind
-// counts update on the very next tick rather than waiting for the TTL to expire.
-func (g *Worktree) invalidateRevListCache() {
+// invalidateStatsCache clears the cached rev-list counts and dirty flag so the
+// next computeRepoStats call re-runs both git rev-list and git status. Call this
+// after any operation that alters the commit graph or worktree contents (commit,
+// push) so the ahead/behind counts and the dirty glyph update on the very next
+// tick rather than waiting for the TTLs to expire.
+func (g *Worktree) invalidateStatsCache() {
 	g.statsCacheMu.Lock()
 	g.statsCache = repoStatsEntry{}
 	g.statsCacheMu.Unlock()
