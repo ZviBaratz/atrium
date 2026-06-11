@@ -1,6 +1,7 @@
 package git
 
 import (
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -200,7 +201,9 @@ func TestComputeRepoStats_RevListErrorDoesNotCache(t *testing.T) {
 }
 
 // TestComputeRepoStats_DirtyCacheHit verifies that a fresh dirtyComputedAt entry
-// causes computeRepoStats to serve Dirty from the cache without re-running git status.
+// causes computeRepoStats to serve Dirty from the cache without re-running git
+// status. The rev-list cache is stale here, so this also guards against a rev-list
+// refresh clobbering the dirty fields when it stores its result.
 func TestComputeRepoStats_DirtyCacheHit(t *testing.T) {
 	wt := &Worktree{}
 	wt.statsCacheMu.Lock()
@@ -211,7 +214,9 @@ func TestComputeRepoStats_DirtyCacheHit(t *testing.T) {
 	wt.statsCacheMu.Unlock()
 
 	stats := &DiffStats{}
-	wt.computeRepoStats(stats, "") // empty path would fail git status if called
+	// A nonexistent dir makes any unexpected git invocation fail loudly ("" would
+	// make git -C a no-op and silently inherit the test process's cwd).
+	wt.computeRepoStats(stats, filepath.Join(t.TempDir(), "missing"))
 	if !stats.Dirty {
 		t.Error("dirty cache hit: Dirty = false, want true")
 	}

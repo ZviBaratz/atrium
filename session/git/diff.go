@@ -157,12 +157,12 @@ func (g *Worktree) computeRepoStats(stats *DiffStats, wt string) {
 			stats.Commits = commits
 			stats.Behind = behind
 
+			// Update only the rev-list fields: a whole-struct replace would wipe
+			// the dirty cache, forcing a redundant git status on the next tick.
 			g.statsCacheMu.Lock()
-			g.statsCache = repoStatsEntry{
-				commits:    commits,
-				behind:     behind,
-				computedAt: time.Now(),
-			}
+			g.statsCache.commits = commits
+			g.statsCache.behind = behind
+			g.statsCache.computedAt = time.Now()
 			g.statsCacheMu.Unlock()
 		}
 	}
