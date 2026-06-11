@@ -902,12 +902,15 @@ func (i *Instance) TapEnter() {
 // TapEnter — the self-gating autoyes path — this is user-initiated, so it
 // ignores AutoYes and returns errors instead of logging them. It deliberately
 // answers PanePromptManual prompts too: a human keypress is exactly the
-// manual confirmation the autoyes NoAutoTap guard preserves.
+// manual confirmation the autoyes NoAutoTap guard preserves. Note that Enter
+// selects whatever option the dialog has highlighted — on claude's plan
+// dialog the default both accepts the plan and enables auto-accept edits.
 func (i *Instance) ApprovePrompt() error {
-	if !i.isStarted() || i.Paused() {
+	ts := i.tmux()
+	if !i.isStarted() || i.Paused() || ts == nil {
 		return fmt.Errorf("session is not running")
 	}
-	if err := i.tmux().TapEnter(); err != nil {
+	if err := ts.TapEnter(); err != nil {
 		return fmt.Errorf("error tapping enter: %w", err)
 	}
 	return nil

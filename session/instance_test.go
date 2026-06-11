@@ -267,6 +267,19 @@ func TestApprovePrompt_NotStartedErrors(t *testing.T) {
 	assert.Empty(t, sent, "an unstarted instance must never reach tmux")
 }
 
+// A started instance with no tmux session must error, not panic: ApprovePrompt
+// follows the same nil guard as the other pane-touching methods (Poll,
+// IsReadyForPrompt, CheckAndHandleTrustPrompt).
+func TestApprovePrompt_NilTmuxSessionErrors(t *testing.T) {
+	inst := &Instance{
+		Title:   "approve-no-pane",
+		status:  NeedsInput,
+		started: true,
+	}
+
+	require.Error(t, inst.ApprovePrompt())
+}
+
 func TestApprovePrompt_PausedErrors(t *testing.T) {
 	var sent [][]string
 	inst := &Instance{
