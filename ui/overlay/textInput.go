@@ -66,6 +66,9 @@ const (
 	// modelSectionLines is the height the model section adds when present, mirroring
 	// profileSectionLines (label + blank + input row + a divider).
 	modelSectionLines = 4
+	// modeSectionLines is the height the permission-mode section adds when present,
+	// mirroring modelSectionLines (label + blank + chips row + a divider).
+	modeSectionLines = 4
 )
 
 // createFormHelp is the single footer line describing how to navigate the create form.
@@ -121,6 +124,7 @@ const (
 	stopDirectory
 	stopProfile
 	stopModel
+	stopMode
 	stopAccount
 	stopTextarea
 	stopBranch
@@ -141,6 +145,7 @@ type TextInputOverlay struct {
 	directoryPicker *DirectoryPicker
 	profilePicker   *ProfilePicker
 	modelField      *ModelField
+	modeField       *ModeField
 	accountPicker   *AccountPicker
 	branchPicker    *BranchPicker
 	stops           []focusStop // ordered focusable stops actually present
@@ -198,11 +203,11 @@ func NewSessionCreateOverlay(profiles []config.Profile, accounts []config.Claude
 		ap = NewAccountPicker(accounts)
 	}
 
-	// The model field exists only when some selectable program resolves to claude (the
-	// candidates are the profiles when any exist — a profile's program always overrides
-	// the default — else the default program). Its *enabled* state then tracks the
-	// effective program: present-but-inert while a non-claude profile is selected, so a
-	// typed model is visibly n/a rather than silently dropped.
+	// The model and permission-mode fields exist only when some selectable program
+	// resolves to claude (the candidates are the profiles when any exist — a profile's
+	// program always overrides the default — else the default program). Their *enabled*
+	// state then tracks the effective program: present-but-inert while a non-claude
+	// profile is selected, so a typed model is visibly n/a rather than silently dropped.
 	candidates := []string{defaultProgram}
 	if len(profiles) > 0 {
 		candidates = candidates[:0]
@@ -211,9 +216,11 @@ func NewSessionCreateOverlay(profiles []config.Profile, accounts []config.Claude
 		}
 	}
 	var mf *ModelField
+	var pmf *ModeField
 	for _, c := range candidates {
 		if agent.Resolve(c).Key == agent.KeyClaude {
 			mf = NewModelField()
+			pmf = NewModeField()
 			break
 		}
 	}
@@ -230,6 +237,9 @@ func NewSessionCreateOverlay(profiles []config.Profile, accounts []config.Claude
 	if mf != nil {
 		stops = append(stops, stopModel)
 	}
+	if pmf != nil {
+		stops = append(stops, stopMode)
+	}
 	if ap != nil && ap.HasMultiple() {
 		stops = append(stops, stopAccount)
 	}
@@ -242,29 +252,37 @@ func NewSessionCreateOverlay(profiles []config.Profile, accounts []config.Claude
 		directoryPicker: dp,
 		profilePicker:   pp,
 		modelField:      mf,
+		modeField:       pmf,
 		accountPicker:   ap,
 		branchPicker:    bp,
 		stops:           stops,
 		isCreateForm:    true,
 		defaultProgram:  defaultProgram,
 	}
-	overlay.syncModelFieldEnabled()
+	overlay.syncClaudeFieldsEnabled()
 	overlay.focusStop(stopDirectory)
 	return overlay
 }
 
-// syncModelFieldEnabled re-derives the model field's enabled state from the effective
-// program (the selected profile's program when a picker exists, else the configured
-// default). Called at construction and after every profile-picker keypress.
-func (t *TextInputOverlay) syncModelFieldEnabled() {
-	if t.modelField == nil {
+// syncClaudeFieldsEnabled re-derives the model and permission-mode fields' enabled
+// state from the effective program (the selected profile's program when a picker
+// exists, else the configured default). Called at construction and after every
+// profile-picker keypress.
+func (t *TextInputOverlay) syncClaudeFieldsEnabled() {
+	if t.modelField == nil && t.modeField == nil {
 		return
 	}
 	program := t.defaultProgram
 	if t.profilePicker != nil {
 		program = t.profilePicker.GetSelectedProfile().Program
 	}
-	t.modelField.SetDisabled(agent.Resolve(program).Key != agent.KeyClaude)
+	disabled := agent.Resolve(program).Key != agent.KeyClaude
+	if t.modelField != nil {
+		t.modelField.SetDisabled(disabled)
+	}
+	if t.modeField != nil {
+		t.modeField.SetDisabled(disabled)
+	}
 }
 
 func newTextarea(initialValue string) textarea.Model {
@@ -340,6 +358,9 @@ func (t *TextInputOverlay) fitRows(height int) (pickerRows, promptRows int) {
 	if t.modelField != nil {
 		chrome += modelSectionLines
 	}
+	if t.modeField != nil {
+		chrome += modeSectionLines
+	}
 	if t.hasAccountSection() {
 		chrome += accountSectionLines
 	}
@@ -388,6 +409,7 @@ func (t *TextInputOverlay) isTitle() bool           { return t.currentStop() == 
 func (t *TextInputOverlay) isDirectoryPicker() bool { return t.currentStop() == stopDirectory }
 func (t *TextInputOverlay) isProfilePicker() bool   { return t.currentStop() == stopProfile }
 func (t *TextInputOverlay) isModelField() bool      { return t.currentStop() == stopModel }
+func (t *TextInputOverlay) isModeField() bool       { return t.currentStop() == stopMode }
 func (t *TextInputOverlay) isAccountPicker() bool   { return t.currentStop() == stopAccount }
 func (t *TextInputOverlay) isTextarea() bool        { return t.currentStop() == stopTextarea }
 func (t *TextInputOverlay) isBranchPicker() bool    { return t.currentStop() == stopBranch }
@@ -428,6 +450,9 @@ func (t *TextInputOverlay) setFocusIndex(i int) {
 // every other stop is always enabled.
 func (t *TextInputOverlay) stopEnabled(kind focusStop) bool {
 	if kind == stopBranch && t.branchPicker != nil && t.branchPicker.Disabled() {
+		return false
+	}
+	if kind == stopMode && t.modeField != nil && t.modeField.Disabled() {
 		return false
 	}
 	if kind == stopModel && t.modelField != nil && t.modelField.Disabled() {
@@ -490,6 +515,13 @@ func (t *TextInputOverlay) updateFocusState() {
 			t.modelField.Focus()
 		} else {
 			t.modelField.Blur()
+		}
+	}
+	if t.modeField != nil {
+		if t.isModeField() {
+			t.modeField.Focus()
+		} else {
+			t.modeField.Blur()
 		}
 	}
 	if t.accountPicker != nil {
@@ -594,14 +626,21 @@ func (t *TextInputOverlay) HandleKeyPress(msg tea.KeyMsg) (bool, bool) {
 			switch msg.Type {
 			case tea.KeyLeft, tea.KeyRight, tea.KeyUp, tea.KeyDown:
 				t.profilePicker.HandleKeyPress(msg)
-				// The model override only applies to claude; keep its enabled state in
-				// step with the newly selected profile's agent.
-				t.syncModelFieldEnabled()
+				// The model and permission-mode overrides only apply to claude; keep
+				// their enabled state in step with the newly selected profile's agent.
+				t.syncClaudeFieldsEnabled()
 			}
 			return false, false
 		}
 		if t.isModelField() {
 			t.modelField.HandleKeyPress(msg)
+			return false, false
+		}
+		if t.isModeField() {
+			switch msg.Type {
+			case tea.KeyLeft, tea.KeyRight, tea.KeyUp, tea.KeyDown:
+				t.modeField.HandleKeyPress(msg)
+			}
 			return false, false
 		}
 		if t.isAccountPicker() {
@@ -706,6 +745,16 @@ func (t *TextInputOverlay) GetModel() string {
 		return ""
 	}
 	return t.modelField.Value()
+}
+
+// GetPermissionMode returns the selected Claude permission-mode override, or
+// "" when no flag should be composed: no mode field, the field is inert
+// (non-claude profile selected), or it sits on the default chip.
+func (t *TextInputOverlay) GetPermissionMode() string {
+	if t.modeField == nil {
+		return ""
+	}
+	return t.modeField.Value()
 }
 
 // GetSelectedAccount returns the chosen account and true only when the user has
@@ -907,6 +956,9 @@ func (t *TextInputOverlay) renderCreateForm(divider string) string {
 	}
 	if t.modelField != nil {
 		section(t.modelField.Render())
+	}
+	if t.modeField != nil {
+		section(t.modeField.Render())
 	}
 	if t.hasAccountSection() {
 		section(t.accountPicker.Render())
