@@ -230,3 +230,35 @@ func TestDirectoryPicker_UpdateCandidatesDedups(t *testing.T) {
 		t.Fatalf("got %v, want [/a /b]", items)
 	}
 }
+
+func TestDirectoryPicker_FilterMatchesDisplayPathNotHomePrefix(t *testing.T) {
+	// Regression: ranking ran on raw absolute paths, so the 'h' in "/home/…"
+	// matched a query's 'h' and every home-dir path matched "hub" — three box
+	// paths outranked ~/quantivly/hub (PR #120 screenshot). Matching must use
+	// the rendered (~-collapsed) form.
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	hub := filepath.Join(home, "quantivly", "hub")
+	dp := NewDirectoryPicker([]string{
+		filepath.Join(home, "quantivly", "platform", "src", "box"),
+		filepath.Join(home, "quantivly", "testing-box-baseline"),
+		filepath.Join(home, "quantivly", "box"),
+		hub,
+	})
+	dp.HandleKeyPress(runes("hub"))
+	assert.Equal(t, []string{hub}, dp.visibleItems(),
+		"only the hub path matches 'hub' once the home prefix is out of the match string")
+}
+
+func TestDirectoryPicker_FilterWeighsBasenameMatches(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	mid := filepath.Join(home, "box-tools", "legacy")
+	exact := filepath.Join(home, "quantivly", "box")
+	// Priority order puts the mid-path match first; the basename hit must
+	// still outrank it.
+	dp := NewDirectoryPicker([]string{mid, exact})
+	dp.HandleKeyPress(runes("box"))
+	assert.Equal(t, []string{exact, mid}, dp.visibleItems(),
+		"a candidate whose name matches the query outranks one matching mid-path")
+}

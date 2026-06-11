@@ -251,7 +251,7 @@ func (dp *DirectoryPicker) visibleItems() []string {
 		return append([]string(nil), dp.candidates...)
 	}
 	if !looksLikePath(dp.filter) {
-		return fuzzyRank(dp.candidates, dp.filter)
+		return rankCandidates(dp.candidates, dp.filter, dp.displayPath)
 	}
 
 	dirRaw, base := splitRawPath(dp.filter)
@@ -280,6 +280,39 @@ func (dp *DirectoryPicker) visibleItems() []string {
 		items = append(items, typed)
 	}
 	return items
+}
+
+// rankCandidates filters candidates to those whose *display* form matches the
+// query and sorts them best-first, preserving input (priority) order on ties.
+// Matching the display string rather than the raw absolute path keeps the
+// "/home/<user>" prefix out of the match — otherwise its runes match queries
+// they were never shown for. A candidate whose basename also matches gets that
+// match's score added on top: users type project names, so a name hit should
+// outrank an equal-score mid-path hit.
+func rankCandidates(candidates []string, query string, display func(string) string) []string {
+	type scored struct {
+		path  string
+		score int
+	}
+	matches := make([]scored, 0, len(candidates))
+	for _, c := range candidates {
+		ok, score := fuzzyMatch(query, display(c))
+		if !ok {
+			continue
+		}
+		if ok, base := fuzzyMatch(query, filepath.Base(c)); ok {
+			score += base
+		}
+		matches = append(matches, scored{path: c, score: score})
+	}
+	sort.SliceStable(matches, func(a, b int) bool {
+		return matches[a].score > matches[b].score
+	})
+	out := make([]string, len(matches))
+	for i, m := range matches {
+		out[i] = m.path
+	}
+	return out
 }
 
 // CompletePrefix implements Tab-completion for the project field with shell-like
