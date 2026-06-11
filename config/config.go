@@ -276,12 +276,13 @@ var defaultProjectSearchRoots = []string{"~"}
 
 // GetProjectSearchRoots returns the directories the repo scan walks. A nil or
 // empty ProjectSearchRoots — or a nil Config — defaults to the home directory.
-// The default is returned as a copy so callers can never mutate the shared seed.
+// The result is always a fresh copy so callers can never mutate the shared
+// default seed nor the Config's stored slice.
 func (c *Config) GetProjectSearchRoots() []string {
 	if c == nil || len(c.ProjectSearchRoots) == 0 {
 		return append([]string(nil), defaultProjectSearchRoots...)
 	}
-	return c.ProjectSearchRoots
+	return append([]string(nil), c.ProjectSearchRoots...)
 }
 
 // GetProjectSearchDepth returns the scan's depth bound: nil (an older config

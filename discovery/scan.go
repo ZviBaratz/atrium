@@ -28,6 +28,12 @@ const (
 // don't-descend-into-found-repos rule; this list guards the non-repo trees a
 // real $HOME contains (package caches, env managers, snap, macOS Library).
 // Hidden directories are skipped by prefix, not listed here.
+//
+// The list is intentionally fixed (not user-configurable): the cost of a missed
+// repo named exactly e.g. "env" or nested under one of these is a path-browse
+// away, whereas walking a giant build/cache tree on every scan is not. A user
+// who needs such a tree can name it directly in project_search_roots, which the
+// walk treats as explicit consent and descends regardless.
 var ignoredNames = map[string]bool{
 	"node_modules": true,
 	"vendor":       true,

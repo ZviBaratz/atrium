@@ -645,6 +645,14 @@ func TestGetProjectSearchRoots(t *testing.T) {
 	if got := c.GetProjectSearchRoots(); got[0] != "~" {
 		t.Fatalf("default roots shared/mutated: got %v", got)
 	}
+
+	// Explicit roots must be copied too: mutating the returned slice cannot
+	// reach back into the Config's stored slice.
+	c = &Config{ProjectSearchRoots: []string{"~/work"}}
+	c.GetProjectSearchRoots()[0] = "/mutated"
+	if got := c.GetProjectSearchRoots(); got[0] != "~/work" {
+		t.Fatalf("explicit roots shared/mutated: got %v", got)
+	}
 }
 
 func TestGetProjectSearchDepth(t *testing.T) {
