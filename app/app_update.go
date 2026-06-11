@@ -308,6 +308,10 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.titleBranchName = msg.branch
 		m.refreshTitleError()
 		return m, nil
+	case projectScanDoneMsg:
+		// A background repo scan finished: persist it and refresh an open create
+		// form's candidates in place (filter and cursor preserved).
+		return m, m.handleProjectScanDone(msg)
 	case branchFetchDoneMsg:
 		// A background fetch finished. If its path is still the current target, re-run
 		// the branch search so newly-fetched refs appear without retyping the filter; a
@@ -546,29 +550,11 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 			return m, tea.Sequence(tea.WindowSize(), m.instanceChanged())
 		}
 
-		// If the target directory changed in the picker, re-scope the branch search to
-		// the new repo: invalidate in-flight results for the old repo, then schedule a
-		// fresh (debounced) search with the current branch filter.
+		// If the target directory changed in the picker, re-scope the form to the
+		// new repo (branch search + async target-state re-check; see
+		// retargetNewSession for why the check is debounced and async).
 		if newPath := m.textInputOverlay.GetSelectedPath(); newPath != "" && newPath != m.newSessionPath {
-			m.newSessionPath = newPath
-			// Re-scope the branch search and (debounced, off the hot path) re-check the
-			// new target's state (directory? git repo or direct session?). The check is
-			// async because filesystem browsing changes the selected path almost every
-			// keystroke, and a synchronous git subprocess per keystroke would stutter the
-			// UI. Reset the indicator to "unknown" up front so the previous path's verdict
-			// isn't asserted for the new path during the debounce window; the async
-			// result re-sets it.
-			m.textInputOverlay.ClearTargetValidity()
-			version := m.textInputOverlay.InvalidateBranchSearch()
-			// The old target's branch verdict no longer applies; the validity
-			// result re-points the group scope and re-runs the duplicate check.
-			m.resetTitleCheck()
-			m.refreshTitleError()
-			return m, tea.Batch(
-				m.scheduleBranchSearch(m.textInputOverlay.BranchFilter(), version),
-				m.scheduleValidityCheck(newPath),
-				m.scheduleTitleCheck(m.textInputOverlay.GetTitle(), newPath),
-			)
+			return m, m.retargetNewSession(newPath)
 		}
 
 		// Schedule a debounced branch search if the filter changed

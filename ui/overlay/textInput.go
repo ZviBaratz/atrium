@@ -52,6 +52,11 @@ const (
 	// minPickerRows / minPromptRows are the floors the form collapses to on short terminals.
 	minPickerRows = 1
 	minPromptRows = 1
+	// maxPickerRows caps how far the picker lists grow on tall terminals. With
+	// background repo discovery the candidate list can hold hundreds of repos,
+	// so extra vertical room goes to the lists first (each extra row costs 2
+	// lines — the directory and branch pickers share the count).
+	maxPickerRows = 6
 	// formChromeLines is every create-form line that is neither a picker row nor a prompt
 	// row: the rounded border (2) + vertical padding (2) + the overlay title, the Title
 	// field and its divider, each picker's header/blank/divider, the prompt label and its
@@ -379,6 +384,13 @@ func (t *TextInputOverlay) fitRows(height int) (pickerRows, promptRows int) {
 			return pickerRows, promptRows
 		}
 	}
+	// Spare room on tall terminals goes to the picker lists (each increment
+	// costs 2 lines: the directory and branch pickers share the count) — with
+	// repo discovery the candidate list is worth the rows. The prompt keeps its
+	// preferred height: a taller textarea doesn't show more useful information.
+	for pickerRows < maxPickerRows && total()+2 <= height-margin {
+		pickerRows++
+	}
 	return pickerRows, promptRows
 }
 
@@ -695,6 +707,16 @@ func (t *TextInputOverlay) GetSelectedPath() string {
 		return ""
 	}
 	return t.directoryPicker.GetSelectedPath()
+}
+
+// UpdateDirCandidates refreshes the project picker's candidate list, preserving
+// the user's typed filter and selection — used when a background repo scan
+// completes while the form is open. No-op without a directory picker.
+func (t *TextInputOverlay) UpdateDirCandidates(paths []string) {
+	if t.directoryPicker == nil {
+		return
+	}
+	t.directoryPicker.UpdateCandidates(paths)
 }
 
 // SetTargetValidity marks the currently selected target directory's state so the picker

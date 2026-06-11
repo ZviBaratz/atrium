@@ -51,16 +51,43 @@ type DirectoryPicker struct {
 // The caller should pass the default/contextual target first; the list is deduped
 // while preserving order and the cursor starts on the first entry.
 func NewDirectoryPicker(candidates []string) *DirectoryPicker {
-	seen := make(map[string]bool, len(candidates))
-	deduped := make([]string, 0, len(candidates))
-	for _, c := range candidates {
-		if c == "" || seen[c] {
+	return &DirectoryPicker{candidates: dedupePaths(candidates), visibleRows: defaultPickerRows}
+}
+
+// dedupePaths drops empty and duplicate entries, preserving first-seen order.
+func dedupePaths(paths []string) []string {
+	seen := make(map[string]bool, len(paths))
+	deduped := make([]string, 0, len(paths))
+	for _, p := range paths {
+		if p == "" || seen[p] {
 			continue
 		}
-		seen[c] = true
-		deduped = append(deduped, c)
+		seen[p] = true
+		deduped = append(deduped, p)
 	}
-	return &DirectoryPicker{candidates: deduped, visibleRows: defaultPickerRows}
+	return deduped
+}
+
+// UpdateCandidates replaces the candidate list in place — used when a background
+// repo scan completes while the form is open — without disturbing the user's
+// typed filter and, where possible, their current selection: the cursor is
+// re-anchored on the previously selected path's new position, falling back to a
+// clamp. A path-mode filter browses the filesystem and ignores candidates
+// entirely, so only the list is swapped there.
+func (dp *DirectoryPicker) UpdateCandidates(candidates []string) {
+	prev := dp.GetSelectedPath()
+	dp.candidates = dedupePaths(candidates)
+	if looksLikePath(dp.filter) {
+		return
+	}
+	items := dp.visibleItems()
+	dp.cursor = 0
+	for i, it := range items {
+		if it == prev {
+			dp.cursor = i
+			break
+		}
+	}
 }
 
 // SetWidth sets the width of the directory picker.

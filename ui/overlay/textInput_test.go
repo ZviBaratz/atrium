@@ -867,3 +867,32 @@ func TestDropLinesToFit_DividerStage(t *testing.T) {
 	got = dropLinesToFit([]string{"a", "b", "c"}, 2, isDivider)
 	assert.Equal(t, []string{"a", "b", "c"}, got)
 }
+
+// On tall terminals the create form grows the picker lists beyond the 3-row
+// default (up to maxPickerRows) — with background repo discovery the candidate
+// list is much richer, and 3 rows undersells it. Short terminals keep the
+// existing shrink-to-fit behavior.
+func TestFitRows_GrowsPickersOnTallTerminals(t *testing.T) {
+	ov := NewSessionCreateOverlay(nil, nil, []string{"/a"}, "echo")
+
+	// Plenty of room: grow to the cap.
+	pickerRows, promptRows := ov.fitRows(60)
+	if pickerRows != maxPickerRows {
+		t.Fatalf("height 60: pickerRows = %d, want %d", pickerRows, maxPickerRows)
+	}
+	if promptRows != defaultPromptRows {
+		t.Fatalf("height 60: promptRows = %d, want %d (growth must not touch the prompt)", promptRows, defaultPromptRows)
+	}
+
+	// Just enough room for one extra row pair: partial growth.
+	pickerRows, _ = ov.fitRows(32)
+	if pickerRows != 4 {
+		t.Fatalf("height 32: pickerRows = %d, want 4", pickerRows)
+	}
+
+	// Typical short terminal: the existing shrink behavior is untouched.
+	pickerRows, promptRows = ov.fitRows(24)
+	if pickerRows != 1 || promptRows != 2 {
+		t.Fatalf("height 24: got (%d, %d), want (1, 2)", pickerRows, promptRows)
+	}
+}
