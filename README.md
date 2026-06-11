@@ -30,7 +30,7 @@ curl -fsSL https://raw.githubusercontent.com/ZviBaratz/atrium/main/install.sh | 
 
 #### go install
 
-Requires Go 1.24.11 or newer (older toolchains fetch it automatically unless
+Requires Go 1.25 or newer (older toolchains fetch it automatically unless
 `GOTOOLCHAIN=local` is set):
 
 ```bash
