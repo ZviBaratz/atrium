@@ -26,16 +26,15 @@ func pinnedModelFlag(program string) string {
 // Derived on demand — Program is immutable and already persisted.
 func (i *Instance) PinnedModel() string { return pinnedModelFlag(i.Program) }
 
-// ModelInfo returns the model chip's value — transcript truth when known, else
-// the pinned flag — and whether the model is pinned via flag (accent vs dim).
-// When an in-session /model switch diverges from the pin, the chip keeps the
-// pinned styling but shows the true model: truth wins over the flag.
-func (i *Instance) ModelInfo() (model string, pinned bool) {
-	flag := i.PinnedModel()
+// ModelInfo returns the model chip's value: transcript truth when known, else
+// the --model flag ("" = unknown). The flag only fills the gap before the
+// first turn — once the transcript speaks, truth wins, including over an
+// in-session /model switch away from the flag.
+func (i *Instance) ModelInfo() string {
 	if i.modelID != "" {
-		return i.modelID, flag != ""
+		return i.modelID
 	}
-	return flag, flag != ""
+	return i.PinnedModel()
 }
 
 // SetModelMeta records a model-extraction result. Main thread only (like

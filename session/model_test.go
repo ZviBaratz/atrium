@@ -35,30 +35,22 @@ func TestPinnedModelFlag(t *testing.T) {
 }
 
 // TestModelInfo pins the chip-value rule: transcript truth wins when known,
-// else the pinned flag; pinned reflects the flag either way.
+// else the --model flag fills in before the first turn.
 func TestModelInfo(t *testing.T) {
 	inst, err := NewInstance(InstanceOptions{Title: "m", Path: ".", Program: "claude --model fable"})
 	require.NoError(t, err)
 
-	model, pinned := inst.ModelInfo()
-	assert.Equal(t, "fable", model, "flag fallback before any transcript truth")
-	assert.True(t, pinned)
+	assert.Equal(t, "fable", inst.ModelInfo(), "flag fallback before any transcript truth")
 
 	inst.SetModelMeta("claude-fable-5", transcript.Stamp{Path: "/x", Size: 1})
-	model, pinned = inst.ModelInfo()
-	assert.Equal(t, "claude-fable-5", model, "transcript truth wins over the flag")
-	assert.True(t, pinned, "an in-session switch keeps the pinned styling")
+	assert.Equal(t, "claude-fable-5", inst.ModelInfo(), "transcript truth wins over the flag")
 
 	bare, err := NewInstance(InstanceOptions{Title: "b", Path: ".", Program: "claude"})
 	require.NoError(t, err)
-	model, pinned = bare.ModelInfo()
-	assert.Empty(t, model)
-	assert.False(t, pinned)
+	assert.Empty(t, bare.ModelInfo(), "no flag, no transcript: no chip")
 
 	bare.SetModelMeta("claude-opus-4-7", transcript.Stamp{Path: "/y", Size: 1})
-	model, pinned = bare.ModelInfo()
-	assert.Equal(t, "claude-opus-4-7", model)
-	assert.False(t, pinned, "transcript-known but unpinned renders dim")
+	assert.Equal(t, "claude-opus-4-7", bare.ModelInfo())
 }
 
 // TestSetModelMeta_EmptyAdvancesStampKeepsTruth pins the degradation contract:
@@ -73,8 +65,7 @@ func TestSetModelMeta_EmptyAdvancesStampKeepsTruth(t *testing.T) {
 	later := transcript.Stamp{Path: "/t", ModTime: first.ModTime.Add(time.Second), Size: 20}
 	inst.SetModelMeta("", later)
 
-	model, _ := inst.ModelInfo()
-	assert.Equal(t, "claude-opus-4-7", model, "empty extraction must not clear the last truth")
+	assert.Equal(t, "claude-opus-4-7", inst.ModelInfo(), "empty extraction must not clear the last truth")
 	assert.True(t, inst.modelStamp.Equal(later), "stamp must advance so the same bytes aren't re-parsed")
 }
 
@@ -132,8 +123,6 @@ func TestStorageRoundTrip_Model(t *testing.T) {
 	got, err := store.LoadInstances(context.Background())
 	require.NoError(t, err)
 	require.Len(t, got, 2)
-	model, _ := got[0].ModelInfo()
-	assert.Equal(t, "claude-opus-4-7", model, "persisted model must survive the round-trip")
-	model, _ = got[1].ModelInfo()
-	assert.Empty(t, model, "an instance without a model loads clean")
+	assert.Equal(t, "claude-opus-4-7", got[0].ModelInfo(), "persisted model must survive the round-trip")
+	assert.Empty(t, got[1].ModelInfo(), "an instance without a model loads clean")
 }

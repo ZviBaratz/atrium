@@ -10,8 +10,12 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
-// modelInherit is the chip that contributes no --model flag.
-const modelInherit = "inherit"
+// modelDefault is the chip that contributes no --model flag. It is labeled
+// "default" (matching the mode field's no-op chip) rather than "inherit":
+// what actually happens is that Claude resolves its own default — per-account
+// settings.json, env, or the current recommended model — and Atrium cannot
+// know which, so the label promises only "Claude's default, whatever that is".
+const modelDefault = "default"
 
 // ModelField is the create form's optional Claude model override. It is a
 // two-mode component: a horizontal chip row over the known aliases (the
@@ -34,19 +38,19 @@ const modelInherit = "inherit"
 // form's effective program does not resolve to claude — the only agent whose
 // --model flag this composes.
 type ModelField struct {
-	chipRow // modelInherit + agent.ClaudeModelAliases
+	chipRow // modelDefault + agent.ClaudeModelAliases
 	custom  bool
 	input   textinput.Model
 	width   int
 }
 
-// NewModelField builds the model field, starting on the inherit chip.
+// NewModelField builds the model field, starting on the default chip.
 func NewModelField() *ModelField {
 	in := textinput.New()
 	in.Prompt = ""
 	in.CharLimit = 64 // matches agent.ValidModelName's length cap
 	return &ModelField{
-		chipRow: chipRow{options: append([]string{modelInherit}, agent.ClaudeModelAliases...)},
+		chipRow: chipRow{options: append([]string{modelDefault}, agent.ClaudeModelAliases...)},
 		input:   in,
 	}
 }
@@ -162,15 +166,15 @@ func (mf *ModelField) CompletePrefix() bool {
 }
 
 // Value returns the model override, or "" when the field should contribute no
-// flag: disabled, the inherit chip, or a custom value left empty (or typed as
-// "inherit").
+// flag: disabled, the default chip, or a custom value left empty (or typed as
+// "default").
 func (mf *ModelField) Value() string {
 	if mf.disabled {
 		return ""
 	}
 	if mf.custom {
 		val := strings.TrimSpace(mf.input.Value())
-		if strings.EqualFold(val, modelInherit) {
+		if strings.EqualFold(val, modelDefault) {
 			return ""
 		}
 		return val

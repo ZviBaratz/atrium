@@ -172,7 +172,7 @@ func newSettingRows(cfg *config.Config) []settingRow {
 		},
 		{
 			key: "model_indicator", section: "Appearance", label: "Model chip", kind: kindEnum,
-			description: "Per-session model chip in the list: --model-pinned sessions only, always, or off.",
+			description: "Per-session model chip in the list, shown whenever the model is known.",
 			get: func(c *config.Config) string {
 				return c.GetModelIndicator()
 			},
@@ -181,7 +181,7 @@ func newSettingRows(cfg *config.Config) []settingRow {
 				return nil
 			},
 			options: func(c *config.Config) []string {
-				return []string{config.ModelIndicatorPinned, config.ModelIndicatorAlways, config.ModelIndicatorOff}
+				return []string{config.ModelIndicatorOn, config.ModelIndicatorOff}
 			},
 		},
 		boolRow("hint_bar", "Appearance", "Hint bar",

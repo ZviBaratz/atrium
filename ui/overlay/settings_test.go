@@ -101,24 +101,21 @@ func TestSettingsOverlay_CycleThemeWraps(t *testing.T) {
 	assert.Equal(t, names[(indexOf(names, start)+len(names)-1)%len(names)], cfg.Theme)
 }
 
-// TestSettingsOverlay_CycleModelIndicator pins the model-chip enum: defaults to
-// pinned-only, cycles pinned → always → off, and wraps.
+// TestSettingsOverlay_CycleModelIndicator pins the model-chip enum: defaults
+// to on, cycles on → off, and wraps back to on.
 func TestSettingsOverlay_CycleModelIndicator(t *testing.T) {
 	cfg := config.DefaultConfig()
 	o := NewSettingsOverlay(cfg)
 	settingsAt(t, o, "model_indicator")
 
-	require.Equal(t, config.ModelIndicatorPinned, cfg.GetModelIndicator(), "chip defaults to pinned-only")
+	require.Equal(t, config.ModelIndicatorOn, cfg.GetModelIndicator(), "chip defaults to on")
 
 	_, changed := o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRight})
 	assert.Equal(t, "model_indicator", changed, "the cycle must report its row key so home can persist")
-	assert.Equal(t, config.ModelIndicatorAlways, cfg.GetModelIndicator())
-
-	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRight})
 	assert.Equal(t, config.ModelIndicatorOff, cfg.GetModelIndicator())
 
 	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRight})
-	assert.Equal(t, config.ModelIndicatorPinned, cfg.GetModelIndicator(), "the enum wraps")
+	assert.Equal(t, config.ModelIndicatorOn, cfg.GetModelIndicator(), "the enum wraps")
 }
 
 func indexOf(ss []string, s string) int {

@@ -204,33 +204,28 @@ type Config struct {
 	// "off". Empty or unrecognized values behave as "notify". The explicit
 	// `atrium update` command works regardless of this setting.
 	AutoUpdate string `json:"auto_update,omitempty"`
-	// ModelIndicator controls the per-session model chip in the list:
-	// "pinned" shows it only on sessions whose program pins a --model flag,
-	// "always" shows it on any session with a known model, "off" hides it.
-	// Empty or unknown values normalize to "pinned" (GetModelIndicator), so
-	// configs predating this key keep the conservative default.
+	// ModelIndicator controls the per-session model chip in the list: "on"
+	// shows it on any session whose model is known (a --model flag before the
+	// first turn, transcript truth after), "off" hides it. Everything else —
+	// empty, unknown, and the retired "pinned"/"always" modes — normalizes to
+	// "on" (GetModelIndicator).
 	ModelIndicator string `json:"model_indicator,omitempty"`
 }
 
 // ModelIndicator modes (see Config.ModelIndicator).
 const (
-	ModelIndicatorPinned = "pinned"
-	ModelIndicatorAlways = "always"
-	ModelIndicatorOff    = "off"
+	ModelIndicatorOn  = "on"
+	ModelIndicatorOff = "off"
 )
 
-// GetModelIndicator returns the normalized model-chip mode; empty or unknown
-// values — and a nil Config — default to ModelIndicatorPinned.
+// GetModelIndicator returns the normalized model-chip mode: "off" only when
+// set explicitly, "on" for everything else (including a nil Config and the
+// retired "pinned"/"always" values from the chip's pinned/observed era).
 func (c *Config) GetModelIndicator() string {
-	if c == nil {
-		return ModelIndicatorPinned
+	if c != nil && c.ModelIndicator == ModelIndicatorOff {
+		return ModelIndicatorOff
 	}
-	switch c.ModelIndicator {
-	case ModelIndicatorAlways, ModelIndicatorOff:
-		return c.ModelIndicator
-	default:
-		return ModelIndicatorPinned
-	}
+	return ModelIndicatorOn
 }
 
 // defaultCarryFiles is the carry list applied when a config predates the

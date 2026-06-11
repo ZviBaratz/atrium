@@ -13,7 +13,7 @@ const claudeFieldNA = "  n/a — the selected profile is not Claude Code"
 
 // chipRow is the state machine behind the chip-style fields: a horizontal row
 // of options with a clamped cursor, focus, and an inert state. By convention
-// the first chip is the no-op ("inherit") choice, so selected returns "" for
+// the first chip is the no-op ("default") choice, so selected returns "" for
 // it. ModeField is a pure chip row; ModelField layers its free-text custom
 // mode on top.
 type chipRow struct {
@@ -53,7 +53,7 @@ func (c *chipRow) moveCursor(msg tea.KeyMsg) {
 }
 
 // selected returns the cursor chip, or "" when the row should contribute
-// nothing: disabled, or sitting on the first (inherit) chip.
+// nothing: disabled, or sitting on the first (default) chip.
 func (c *chipRow) selected() string {
 	if c.disabled || c.cursor == 0 {
 		return ""

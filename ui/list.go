@@ -316,10 +316,9 @@ type InstanceRenderer struct {
 	// stripped from each row's branch label — every session shares it, so it is
 	// pure repetition on the version-control line. Empty disables stripping.
 	branchPrefix string
-	// modelIndicator is the model-chip mode (config.GetModelIndicator):
-	// "always" / "off", with anything else — including the zero value — read as
-	// the pinned-only default, so normalization stays in config and the ui
-	// package needs no config import.
+	// modelIndicator is the model-chip mode (config.GetModelIndicator): "off"
+	// hides the chip, anything else — including the zero value — shows it, so
+	// normalization stays in config and the ui package needs no config import.
 	modelIndicator string
 }
 
@@ -436,17 +435,11 @@ func (r *InstanceRenderer) Render(i *session.Instance, idx int, selected bool) s
 	}
 	// Per-session model chip: transcript truth first, --model flag fallback (see
 	// Instance.ModelInfo). It rides the agent icon as one brand-colored unit —
-	// last before the icon, one space apart, full brand accent when flag-pinned,
-	// the muted brand variant when only transcript-observed. The pinned-only
-	// default shows it just where a flag pins a model; "always" also surfaces
-	// transcript-known models; "off" hides it.
+	// last before the icon, one space apart, always in the agent's full brand
+	// accent. Shown whenever the model is known; "off" hides it.
 	if r.modelIndicator != "off" {
-		if model, pinned := i.ModelInfo(); model != "" && (pinned || r.modelIndicator == "always") {
-			c := p.agentColorDim(i)
-			if pinned {
-				c = p.agentColor(i)
-			}
-			right1 = append(right1, p.seg(" "+shortModelName(model), c))
+		if model := i.ModelInfo(); model != "" {
+			right1 = append(right1, p.seg(" "+shortModelName(model), p.agentColor(i)))
 		}
 	}
 	// Agent-identity icon (which CLI the session runs), pinned to the far right so

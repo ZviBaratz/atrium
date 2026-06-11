@@ -736,7 +736,7 @@ func (t *TextInputOverlay) GetSelectedProgram() string {
 
 // GetModel returns the Claude model override typed into the model field, or ""
 // when no flag should be composed: the form has no model field, the field is
-// inert (non-claude profile selected), or it was left empty / "inherit".
+// inert (non-claude profile selected), or it was left empty / "default".
 func (t *TextInputOverlay) GetModel() string {
 	if t.modelField == nil {
 		return ""

@@ -494,7 +494,7 @@ func TestSessionCreateOverlay_ModelTabCompletesThenAdvances(t *testing.T) {
 	assert.False(t, o.isModelField(), "with nothing to complete, Tab advances focus")
 }
 
-// Tab through an untouched model field must keep meaning "inherit": no completion
+// Tab through an untouched model field must keep meaning "default": no completion
 // fires on an empty value, focus just advances.
 func TestSessionCreateOverlay_ModelEmptyTabAdvances(t *testing.T) {
 	o := NewSessionCreateOverlay(nil, nil, []string{"/repo/a"}, "claude")
@@ -517,23 +517,23 @@ func TestSessionCreateOverlay_ModelCharsetFiltered(t *testing.T) {
 	assert.Equal(t, "opus", o.GetModel())
 }
 
-// An explicit "inherit" (the inherit chip's label, typed out in custom mode)
+// An explicit "default" (the default chip's label, typed out in custom mode)
 // contributes no override, same as leaving the field untouched.
-func TestSessionCreateOverlay_ModelInheritMeansNoOverride(t *testing.T) {
+func TestSessionCreateOverlay_ModelDefaultMeansNoOverride(t *testing.T) {
 	o := NewSessionCreateOverlay(nil, nil, []string{"/repo/a"}, "claude")
 	o.focusStop(stopModel)
-	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("inherit")})
+	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("default")})
 	assert.Equal(t, "", o.GetModel())
 }
 
 // Arrowing across the chip row selects aliases without any typing — the
-// typo-proof path. The first chip is inherit (no override).
+// typo-proof path. The first chip is default (no override).
 func TestSessionCreateOverlay_ModelChipCycle(t *testing.T) {
 	o := NewSessionCreateOverlay(nil, nil, []string{"/repo/a"}, "claude")
 	o.focusStop(stopModel)
-	assert.Equal(t, "", o.GetModel(), "the inherit chip contributes no override")
+	assert.Equal(t, "", o.GetModel(), "the default chip contributes no override")
 
-	for i := 0; i < 3; i++ { // inherit → fable → haiku → opus
+	for i := 0; i < 3; i++ { // default → fable → haiku → opus
 		o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyDown})
 	}
 	assert.Equal(t, "opus", o.GetModel())
@@ -541,7 +541,7 @@ func TestSessionCreateOverlay_ModelChipCycle(t *testing.T) {
 	for i := 0; i < 3; i++ {
 		o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyUp})
 	}
-	assert.Equal(t, "", o.GetModel(), "cycling back to inherit drops the override")
+	assert.Equal(t, "", o.GetModel(), "cycling back to default drops the override")
 }
 
 // Typing enters custom mode; Left with the text cursor at position 0 returns to
