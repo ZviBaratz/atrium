@@ -41,6 +41,12 @@ type InstanceData struct {
 	ClaudeConfigDir      string `json:"claude_config_dir,omitempty"`
 	ClaudeAccountDefault bool   `json:"claude_account_is_default,omitempty"`
 
+	// Model is the session's transcript-derived model id (e.g.
+	// "claude-opus-4-7"), persisted so paused sessions keep their model chip.
+	// omitempty: a state.json predating the feature decodes to "" -> the UI
+	// falls back to the Program's --model flag.
+	Model string `json:"model,omitempty"`
+
 	Worktree  GitWorktreeData `json:"worktree"`
 	DiffStats DiffStatsData   `json:"diff_stats"`
 }

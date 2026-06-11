@@ -34,13 +34,10 @@ const modelInherit = "inherit"
 // form's effective program does not resolve to claude — the only agent whose
 // --model flag this composes.
 type ModelField struct {
-	options  []string // modelInherit + agent.ClaudeModelAliases
-	cursor   int
-	custom   bool
-	input    textinput.Model
-	focused  bool
-	disabled bool
-	width    int
+	chipRow // modelInherit + agent.ClaudeModelAliases
+	custom  bool
+	input   textinput.Model
+	width   int
 }
 
 // NewModelField builds the model field, starting on the inherit chip.
@@ -49,7 +46,7 @@ func NewModelField() *ModelField {
 	in.Prompt = ""
 	in.CharLimit = 64 // matches agent.ValidModelName's length cap
 	return &ModelField{
-		options: append([]string{modelInherit}, agent.ClaudeModelAliases...),
+		chipRow: chipRow{options: append([]string{modelInherit}, agent.ClaudeModelAliases...)},
 		input:   in,
 	}
 }
@@ -57,13 +54,13 @@ func NewModelField() *ModelField {
 // Focus gives the field focus (no-op visual change while disabled; the form
 // never focuses a disabled stop).
 func (mf *ModelField) Focus() {
-	mf.focused = true
+	mf.chipRow.Focus()
 	mf.input.Focus()
 }
 
 // Blur removes focus from the field.
 func (mf *ModelField) Blur() {
-	mf.focused = false
+	mf.chipRow.Blur()
 	mf.input.Blur()
 }
 
@@ -72,12 +69,6 @@ func (mf *ModelField) SetWidth(w int) {
 	mf.width = w
 	mf.input.Width = w
 }
-
-// SetDisabled toggles the inert state (the effective program is not claude).
-func (mf *ModelField) SetDisabled(disabled bool) { mf.disabled = disabled }
-
-// Disabled reports whether the field is inert.
-func (mf *ModelField) Disabled() bool { return mf.disabled }
 
 // HandleKeyPress routes a key by mode. Chips: arrows cycle (Up/Down accepted
 // alongside Left/Right, matching the profile picker); typing a charset-valid
@@ -90,22 +81,15 @@ func (mf *ModelField) HandleKeyPress(msg tea.KeyMsg) {
 		return
 	}
 	if !mf.custom {
-		switch msg.Type {
-		case tea.KeyLeft, tea.KeyUp:
-			if mf.cursor > 0 {
-				mf.cursor--
-			}
-		case tea.KeyRunes:
+		if msg.Type == tea.KeyRunes {
 			if kept := mf.keepValidRunes(msg.Runes, ""); len(kept) > 0 {
 				mf.custom = true
 				mf.input.SetValue(string(kept))
 				mf.input.CursorEnd()
 			}
-		case tea.KeyRight, tea.KeyDown:
-			if mf.cursor < len(mf.options)-1 {
-				mf.cursor++
-			}
+			return
 		}
+		mf.moveCursor(msg)
 		return
 	}
 	if msg.Type == tea.KeyLeft && mf.input.Position() == 0 {
@@ -191,10 +175,7 @@ func (mf *ModelField) Value() string {
 		}
 		return val
 	}
-	if mf.cursor == 0 {
-		return ""
-	}
-	return mf.options[mf.cursor]
+	return mf.selected()
 }
 
 func mfLabelStyle() lipgloss.Style { return theme.Current().AccentStyle().Bold(true) }
@@ -209,7 +190,7 @@ func (mf *ModelField) Render() string {
 	s.WriteString(mfLabelStyle().Render("Model"))
 	if mf.disabled {
 		s.WriteString("\n\n")
-		s.WriteString(mfDimStyle().Render("  n/a — the selected profile is not Claude Code"))
+		s.WriteString(mfDimStyle().Render(claudeFieldNA))
 		return s.String()
 	}
 	if mf.focused {
@@ -224,19 +205,6 @@ func (mf *ModelField) Render() string {
 		s.WriteString(mf.input.View())
 		return s.String()
 	}
-	for i, opt := range mf.options {
-		label := " " + opt + " "
-		switch {
-		case i == mf.cursor && mf.focused:
-			s.WriteString(ppSelectedStyle().Render(label))
-		case i == mf.cursor:
-			s.WriteString(label)
-		default:
-			s.WriteString(mfDimStyle().Render(label))
-		}
-		if i < len(mf.options)-1 {
-			s.WriteString(mfDimStyle().Render("·"))
-		}
-	}
+	s.WriteString(mf.render())
 	return s.String()
 }

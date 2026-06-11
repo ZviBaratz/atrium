@@ -111,6 +111,19 @@ type Instance struct {
 	claudeConfigDir      string
 	claudeAccountDefault bool
 
+	// modelID is the session's model per its transcript (the newest assistant
+	// entry, e.g. "claude-opus-4-7"). Written only on the main thread
+	// (SetModelMeta), like diffStats; persisted so paused sessions keep their
+	// model chip. "" = not yet known (the UI falls back to the --model flag).
+	modelID string
+	// modelStamp memoizes the transcript state modelID was extracted from, so
+	// the poll goroutine (ComputeModel) can skip unchanged transcripts. Read in
+	// the poll goroutine, written on the main thread — serialized by the
+	// non-overlapping tick chain, the same contract diffStats relies on. Any
+	// second extraction call site (e.g. the daemon) would need a lock here.
+	// In-memory only: the first post-restore tick re-extracts once.
+	modelStamp transcript.Stamp
+
 	// baseCtx is the lifecycle context the instance's tmux/git subprocesses derive
 	// from; cancelling it (app/daemon shutdown) kills in-flight subprocesses. Set via
 	// SetBaseContext (or FromInstanceData) before Start, i.e. before any background
@@ -176,6 +189,7 @@ func (i *Instance) ToInstanceData() InstanceData {
 		ClaudeAccount:        i.claudeAccount,
 		ClaudeConfigDir:      i.claudeConfigDir,
 		ClaudeAccountDefault: i.claudeAccountDefault,
+		Model:                i.modelID,
 	}
 
 	// Only include worktree data if gitWorktree is initialized
@@ -232,6 +246,7 @@ func FromInstanceData(ctx context.Context, data InstanceData, branchPrefix strin
 		claudeAccount:        data.ClaudeAccount,
 		claudeConfigDir:      data.ClaudeConfigDir,
 		claudeAccountDefault: data.ClaudeAccountDefault,
+		modelID:              data.Model,
 	}
 
 	// A direct session has no worktree or diff. For a git session, rehydrate both from
@@ -1325,7 +1340,10 @@ const (
 // transcript failure fall back to the tmux capture — never worse than
 // PreviewFullHistory alone.
 func (i *Instance) ScrollbackContent(width int) (string, ScrollbackSource, error) {
-	text, err := transcript.Render(i.Program, i.WorkingDir(), transcript.Options{Width: width})
+	// Root honors the per-account CLAUDE_CONFIG_DIR (account-routed sessions
+	// write transcripts under their own config dir); "" falls through to the
+	// process env / ~/.claude.
+	text, err := transcript.Render(i.Program, i.WorkingDir(), transcript.Options{Width: width, Root: i.claudeConfigDir})
 	if err == nil {
 		return text, ScrollbackTranscript, nil
 	}

@@ -444,7 +444,7 @@ func TestFitOverlay_TruncatesWideLinesToInnerWidth(t *testing.T) {
 	const innerWidth = 74
 	wide := strings.Repeat("x", 200)
 	short := "kept intact"
-	got := o.fitOverlay(wide+"\n"+short, innerWidth)
+	got := o.fitOverlay(wide+"\n"+short, innerWidth, strings.Repeat("─", innerWidth))
 
 	// The box is anchored to t.width: no rendered line may exceed it, and the long
 	// line must have been ellipsized rather than passed through whole.
@@ -649,9 +649,156 @@ func TestFitOverlay_CompactsHeightWithinTerminal(t *testing.T) {
 	}
 	parts = append(parts, "BUTTON")
 
-	got := o.fitOverlay(strings.Join(parts, "\n"), 74)
+	got := o.fitOverlay(strings.Join(parts, "\n"), 74, strings.Repeat("─", 74))
 
 	assert.LessOrEqual(t, strings.Count(got, "\n")+1, 24, "compacted box must fit the terminal height")
 	assert.Contains(t, got, "TITLE", "first content line must be preserved")
 	assert.Contains(t, got, "BUTTON", "last content line (the action) must be preserved")
+}
+
+// --- Mode field (the optional Claude permission-mode override) ---
+
+// The mode field exists only when a selectable program resolves to claude,
+// exactly like the model field.
+func TestSessionCreateOverlay_ModeFieldOnlyForClaude(t *testing.T) {
+	o := NewSessionCreateOverlay(nil, nil, []string{"/repo/a"}, "claude")
+	o.SetSize(80, 40)
+	assert.Contains(t, o.Render(), "Permissions", "a claude default program must show the mode field")
+	assert.GreaterOrEqual(t, o.indexOfStop(stopMode), 0)
+
+	o2 := NewSessionCreateOverlay(nil, nil, []string{"/repo/a"}, "aider")
+	o2.SetSize(80, 40)
+	assert.NotContains(t, o2.Render(), "Permissions", "a non-claude form must not show the mode field")
+	assert.Equal(t, -1, o2.indexOfStop(stopMode))
+}
+
+// Arrowing across the chip row selects modes; the first chip (default)
+// contributes no flag, and the cursor clamps at both ends.
+func TestSessionCreateOverlay_ModeChipCycle(t *testing.T) {
+	o := NewSessionCreateOverlay(nil, nil, []string{"/repo/a"}, "claude")
+	o.focusStop(stopMode)
+	require.True(t, o.isModeField())
+	assert.Equal(t, "", o.GetPermissionMode(), "the default chip contributes no flag")
+
+	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyDown})
+	assert.Equal(t, "plan", o.GetPermissionMode())
+	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyDown})
+	assert.Equal(t, "acceptEdits", o.GetPermissionMode())
+	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyDown})
+	assert.Equal(t, "auto", o.GetPermissionMode())
+	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyDown}) // clamps at the end
+	assert.Equal(t, "auto", o.GetPermissionMode())
+
+	for i := 0; i < 4; i++ {
+		o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyUp})
+	}
+	assert.Equal(t, "", o.GetPermissionMode(), "cycling back to default drops the override")
+}
+
+// Tab on the mode field always advances — chips have nothing to complete.
+func TestSessionCreateOverlay_ModeTabAdvances(t *testing.T) {
+	o := NewSessionCreateOverlay(nil, nil, []string{"/repo/a"}, "claude")
+	o.focusStop(stopMode)
+
+	tab(o)
+	assert.False(t, o.isModeField(), "Tab on the mode field advances immediately")
+}
+
+// With mixed profiles the field tracks the selected profile's agent: inert
+// (skipped, no override) while a non-claude profile is selected, re-enabled
+// when the selection returns to claude — alongside the model field.
+func TestSessionCreateOverlay_ModeDisabledForNonClaudeProfile(t *testing.T) {
+	o := NewSessionCreateOverlay(mixedProfiles, nil, []string{"/repo/a"}, "")
+	o.SetSize(80, 40)
+	require.GreaterOrEqual(t, o.indexOfStop(stopMode), 0, "a claude profile makes the field present")
+
+	o.focusStop(stopMode)
+	require.True(t, o.isModeField())
+	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyDown}) // default → plan
+	assert.Equal(t, "plan", o.GetPermissionMode())
+
+	// Switch to the aider profile: the field goes inert and contributes nothing.
+	o.focusStop(stopProfile)
+	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyDown})
+	assert.Equal(t, "", o.GetPermissionMode(), "a non-claude profile must drop the override")
+	o.focusStop(stopTextarea)
+	tab(o) // textarea → profile
+	tab(o) // profile → (model and mode both skipped) …
+	assert.False(t, o.isModeField(), "Tab must skip the disabled mode field")
+
+	// Back to claude: the field re-enables and the chip selection applies again.
+	o.focusStop(stopProfile)
+	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyUp})
+	assert.Equal(t, "plan", o.GetPermissionMode(), "returning to claude restores the override")
+}
+
+// The chip row must fit the worst realistic overlay width — an 80-col
+// terminal gives the form 42 inner cells.
+func TestModeFieldChipRowWidth(t *testing.T) {
+	f := NewModeField()
+	f.Focus()
+	lines := strings.Split(f.Render(), "\n")
+	row := lines[len(lines)-1]
+	assert.LessOrEqual(t, lipgloss.Width(row), 41, "chip row must fit 42 inner cells")
+}
+
+// The mode section must hold the form's constant-height invariant: same line
+// count whether or not it holds focus, and whether it is enabled or inert.
+func TestSessionCreateOverlay_ModeSectionHeightConstant(t *testing.T) {
+	o := NewSessionCreateOverlay(mixedProfiles, nil, []string{"/repo/a"}, "")
+	o.SetSize(80, 40)
+
+	o.focusStop(stopMode)
+	modeFocused := strings.Count(o.Render(), "\n")
+	o.focusStop(stopTitle)
+	titleFocused := strings.Count(o.Render(), "\n")
+	assert.Equal(t, modeFocused, titleFocused, "overlay height must not change with mode focus")
+
+	o.focusStop(stopProfile)
+	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyDown}) // aider → mode field inert
+	disabled := strings.Count(o.Render(), "\n")
+	assert.Equal(t, titleFocused, disabled, "overlay height must not change when the mode field is inert")
+}
+
+// Every claude-form configuration must fit an 80×24 terminal — including the
+// tallest ones (profiles and a multi-account picker stacked on the model and
+// mode sections), which exceed what blank-line dropping alone can absorb and
+// exercise fitOverlay's divider-dropping stage. The echo-program bounds test
+// in app/view_bounds_test.go cannot see any of these.
+func TestSessionCreateOverlay_ClaudeFormFitsShortTerminal(t *testing.T) {
+	cases := []struct {
+		name     string
+		profiles []config.Profile
+		accounts []config.ClaudeAccount
+	}{
+		{"bare claude form", nil, nil},
+		{"with profiles", mixedProfiles, nil},
+		{"with profiles and accounts", mixedProfiles, twoAccounts},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			o := NewSessionCreateOverlay(c.profiles, c.accounts, []string{"/repo/a"}, "claude")
+			o.SetBranchResults([]string{"main", "develop", "feature/x"}, o.BranchFilterVersion())
+			o.SetSize(80, 24)
+
+			height := strings.Count(o.Render(), "\n") + 1
+			assert.LessOrEqual(t, height, 24, "the claude create form must fit a 80×24 terminal")
+			assert.Contains(t, o.Render(), "Create", "the Create button must survive compaction at 80×24")
+		})
+	}
+}
+
+// fitOverlay sheds divider lines (stage two, after blanks) when blank-dropping
+// alone cannot fit the budget, and hard-clips as the last resort — real content
+// is preserved through the divider stage.
+func TestDropLinesToFit_DividerStage(t *testing.T) {
+	isDivider := func(l string) bool { return l == "───" }
+	lines := []string{"title", "───", "body", "───", "button"}
+
+	got := dropLinesToFit(lines, 3, isDivider)
+	assert.Equal(t, []string{"title", "body", "button"}, got)
+
+	// Non-divider lines are never dropped, even over budget.
+	got = dropLinesToFit([]string{"a", "b", "c"}, 2, isDivider)
+	assert.Equal(t, []string{"a", "b", "c"}, got)
 }

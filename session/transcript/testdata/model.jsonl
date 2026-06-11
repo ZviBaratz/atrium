@@ -1,0 +1,6 @@
+{"type":"summary","summary":"model extraction fixture"}
+{"type":"user","isSidechain":false,"message":{"content":"What model are you?"}}
+{"type":"assistant","isSidechain":false,"message":{"model":"claude-sonnet-4-6","content":[{"type":"text","text":"First answer."}]}}
+{"type":"assistant","isSidechain":false,"message":{"model":"claude-opus-4-7","content":[{"type":"text","text":"Second answer."}]}}
+{"type":"assistant","isSidechain":true,"message":{"model":"claude-haiku-4-5-20251001","content":[{"type":"text","text":"Subagent answer — sidechain, must not win."}]}}
+{"type":"assistant","isSidechain":false,"message":{"model":"<synthetic>","content":[{"type":"text","text":"API error placeholder — must not win."}]}}
