@@ -582,6 +582,37 @@ func (t *Session) TapDAndEnter() error {
 	return nil
 }
 
+// AcceptSuggestion captures the pane fresh and, when the adapter recognizes a
+// ghost-text prompt suggestion in an otherwise-empty input box, accepts and
+// submits it with Right then Enter, reporting whether keys were sent. Agents
+// without a suggestion UI (nil SuggestionVisible) return false without
+// capturing.
+//
+// The capture must be fresh — never the last poll tick's content: the dim
+// gate (agent/suggestion.go) is what keeps the trailing Enter from submitting
+// user-typed draft text, and it is only as good as the capture is current.
+// The keys are claude-semantics, verified against the 2.1.175 binary: Right
+// accepts only while a suggestion is showing on an empty input (a cursor
+// no-op otherwise; Tab was rejected for its completion fall-throughs), and
+// Enter on an empty input does nothing — so if the suggestion vanishes
+// between capture and send, the batch degrades to a no-op.
+func (t *Session) AcceptSuggestion() (bool, error) {
+	if t.adapter.SuggestionVisible == nil {
+		return false, nil
+	}
+	raw, err := t.CapturePaneContent()
+	if err != nil {
+		return false, fmt.Errorf("error capturing pane for suggestion: %w", err)
+	}
+	if !t.adapter.SuggestionVisible(raw) {
+		return false, nil
+	}
+	if err := t.sendKeysToPane("Right", "Enter"); err != nil {
+		return false, fmt.Errorf("error sending right+enter keystrokes to tmux pane: %w", err)
+	}
+	return true, nil
+}
+
 // SendKeys types text into the agent pane, as if the user typed it. -l sends
 // the bytes literally (never interpreted as tmux key names); -- guards text
 // that starts with a dash.
