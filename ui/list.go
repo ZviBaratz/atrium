@@ -249,6 +249,13 @@ func (l *List) SetModelIndicator(mode string) {
 	l.renderer.modelIndicator = mode
 }
 
+// SetPermissionIndicator sets the permission-chip mode (see
+// InstanceRenderer.permissionIndicator). The app passes the normalized
+// config.GetPermissionIndicator value at startup and on settings changes.
+func (l *List) SetPermissionIndicator(mode string) {
+	l.renderer.permissionIndicator = mode
+}
+
 // SetFilter updates the incremental filter query and clamps the selection to the
 // nearest still-visible item. Pass an empty string to disable filtering.
 func (l *List) SetFilter(query string) {
@@ -323,6 +330,10 @@ type InstanceRenderer struct {
 	// hides the chip, anything else — including the zero value — shows it, so
 	// normalization stays in config and the ui package needs no config import.
 	modelIndicator string
+	// permissionIndicator is the permission-mode chip mode
+	// (config.GetPermissionIndicator): "off" hides the chip, anything else
+	// shows it. Non-default modes only: "plan", "acceptEdits", "auto".
+	permissionIndicator string
 }
 
 func (r *InstanceRenderer) setWidth(width int) {
@@ -443,6 +454,14 @@ func (r *InstanceRenderer) Render(i *session.Instance, idx int, selected bool) s
 	if r.modelIndicator != "off" {
 		if model := i.ModelInfo(); model != "" {
 			right1 = append(right1, p.seg(" "+shortModelName(model), p.agentColor(i)))
+		}
+	}
+	// Per-session permission-mode chip: launch-time --permission-mode flag
+	// (static; never wrong about what it claims). Shown only for non-default
+	// modes (plan, acceptEdits, auto); "off" or no flag stays unbadged.
+	if r.permissionIndicator != "off" {
+		if mode := i.PinnedPermissionMode(); mode != "" && mode != "default" {
+			right1 = append(right1, p.seg(" "+permissionModeLabel(mode), p.agentColor(i)))
 		}
 	}
 	// Agent-identity icon (which CLI the session runs), pinned to the far right so

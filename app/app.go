@@ -323,6 +323,8 @@ func newHome(ctx context.Context, program string, autoYes bool, version, binName
 	h.list.SetBranchPrefix(appConfig.GetBranchPrefix())
 	// Seed the model-chip mode (on/off; see config.GetModelIndicator).
 	h.list.SetModelIndicator(appConfig.GetModelIndicator())
+	// Seed the permission-mode chip (on/off; see config.GetPermissionIndicator).
+	h.list.SetPermissionIndicator(appConfig.GetPermissionIndicator())
 
 	// Load saved instances
 	instances, err := storage.LoadInstances(ctx)

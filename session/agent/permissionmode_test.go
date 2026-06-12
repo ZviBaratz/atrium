@@ -70,3 +70,31 @@ func TestWithPermissionModeFlag(t *testing.T) {
 		})
 	}
 }
+
+func TestPermissionModeFlag(t *testing.T) {
+	cases := []struct {
+		name, program, want string
+	}{
+		{"no flag", "claude", ""},
+		{"plan flag", "claude --permission-mode plan", "plan"},
+		{"acceptEdits flag", "claude --permission-mode acceptEdits", "acceptEdits"},
+		{"auto flag", "claude --permission-mode auto", "auto"},
+		{"combined form", "claude --permission-mode=plan", "plan"},
+		{"last wins", "claude --permission-mode plan --permission-mode auto", "auto"},
+		{"invalid value returns empty", "claude --permission-mode yolo", ""},
+		// "default" IS a valid mode; the extractor returns it verbatim. The
+		// renderer filters mode == "default" separately so the chip stays
+		// hidden for explicit default pins — same as the no-flag case.
+		{"explicit default pin returns 'default'", "claude --permission-mode default", "default"},
+		{"non-claude program returns empty via caller gate — extractor sees it",
+			"aider --permission-mode plan", "plan"},
+		{"flag alongside model", "claude --model opus --permission-mode acceptEdits", "acceptEdits"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := PermissionModeFlag(c.program); got != c.want {
+				t.Errorf("PermissionModeFlag(%q) = %q, want %q", c.program, got, c.want)
+			}
+		})
+	}
+}
