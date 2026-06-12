@@ -2,6 +2,7 @@ package agent
 
 import (
 	"strings"
+	"unicode"
 
 	xansi "github.com/charmbracelet/x/ansi"
 )
@@ -44,7 +45,7 @@ func claudeSuggestionVisible(raw string) bool {
 
 	var rules []int
 	for i, l := range cleaned {
-		if isHorizontalRule(l) {
+		if isBoxBorderLine(l) {
 			rules = append(rules, i)
 		}
 	}
@@ -63,6 +64,33 @@ func claudeSuggestionVisible(raw string) bool {
 		}
 	}
 	return false
+}
+
+// isBoxBorderLine reports whether the cleaned line is an input-box border for
+// the purposes of this detector: after an optional corner/side prefix it
+// begins with a run of at least 3 horizontal dashes. Deliberately looser than
+// chrome.go's isHorizontalRule (whose other callers depend on "pure rule
+// only"): a session with a named agent context renders the name INSIDE the
+// top border ("──── context-name ──", observed live 2026-06-12), which the
+// strict predicate rejects — and that would make every such session read as
+// suggestion-less. The loosening is safe here because the border only locates
+// the box; the dim gate still decides.
+func isBoxBorderLine(line string) bool {
+	line = strings.TrimSpace(line)
+	dashes := 0
+	for _, r := range line {
+		switch r {
+		case '─':
+			dashes++
+			continue
+		case '╭', '╮', '╰', '╯', '│', '┌', '┐', '└', '┘', '├', '┤':
+			if dashes == 0 {
+				continue // corner/side prefix before the dash run
+			}
+		}
+		break
+	}
+	return dashes >= 3
 }
 
 // boxInteriorAllDim reports whether the input-box line's content after the
@@ -92,7 +120,7 @@ func boxInteriorAllDim(rawLine, cleanedLine string) bool {
 			start = i + 1
 			break
 		}
-		if c.r == ' ' || c.r == '│' {
+		if unicode.IsSpace(c.r) || c.r == '│' {
 			continue
 		}
 		if c.r == '>' {
@@ -106,7 +134,10 @@ func boxInteriorAllDim(rawLine, cleanedLine string) bool {
 
 	seen := false
 	for _, c := range cells[start:] {
-		if c.r == ' ' {
+		// unicode.IsSpace, not == ' ': claude pads the prompt char with a
+		// NO-BREAK SPACE (U+00A0), which renders before the dim sequence
+		// starts and must read as padding, not as a non-dim visible char.
+		if unicode.IsSpace(c.r) {
 			continue
 		}
 		if !c.dim {

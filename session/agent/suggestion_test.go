@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -28,6 +29,41 @@ func suggestionPane(boxLine string) string {
 // ghostBoxLine is the live-captured suggestion line: prompt char, then the
 // ghost text wrapped in SGR dim (ESC[2m … ESC[0m).
 const ghostBoxLine = "\x1b[39m❯ \x1b[2mGo ahead and resolve the threads, then merge if unblocked\x1b[0m"
+
+// ghostBoxLineLive is the byte-faithful form from a real capture: claude pads
+// the prompt char with a NO-BREAK SPACE (U+00A0), not an ASCII space, and the
+// closing SGR reset lands at the start of the NEXT line rather than ending
+// this one — whitespace skipping and dim tracking must handle both.
+const ghostBoxLineLive = "\x1b[39m❯\u00a0\x1b[2mGo ahead and resolve the threads, then merge if unblocked"
+
+// TestClaudeSuggestion_LiveByteFidelity pins the exact live bytes (atrium
+// session capture, claude 2.1.17x, 2026-06-12): U+00A0 padding after "❯" and
+// no reset before the line end. A hand-prettified fixture with an ASCII space
+// masked a real false-negative here.
+func TestClaudeSuggestion_LiveByteFidelity(t *testing.T) {
+	require.True(t, claudeSuggestionVisible(suggestionPane(ghostBoxLineLive)))
+	// The same nbsp padding with typed (non-dim) text must still be rejected.
+	require.False(t, claudeSuggestionVisible(suggestionPane("\x1b[39m❯ typed draft")))
+	// And the empty live box: prompt char + nbsp, nothing else.
+	require.False(t, claudeSuggestionVisible(suggestionPane("\x1b[39m❯ ")))
+}
+
+// TestClaudeSuggestion_LabeledTopBorder pins a second live shape (atrium
+// session capture, 2026-06-12): a session with a named agent context renders
+// the name INSIDE the box's top border ("──── name ──"), which the strict
+// isHorizontalRule rejects — the border scan must tolerate embedded labels or
+// every such session reads as suggestion-less.
+func TestClaudeSuggestion_LabeledTopBorder(t *testing.T) {
+	pane := "transcript prose\n" +
+		"\x1b[38;5;37m─────────────────────────── detect-crash-looping-services ──\x1b[0m\n" +
+		"\x1b[39m❯\u00a0\x1b[2mleave it as draft pending verification\n" +
+		"\x1b[0m\x1b[38;5;37m─────────────────────────────────────────────────────────────\x1b[0m\n" +
+		"\x1b[39m  ⏵⏵ auto mode on (shift+tab to cycle)"
+	require.True(t, claudeSuggestionVisible(pane))
+	// A labeled border with typed (non-dim) text keeps failing the dim gate.
+	typed := strings.Replace(pane, "\x1b[2m", "", 1)
+	require.False(t, claudeSuggestionVisible(typed))
+}
 
 func TestClaudeSuggestion_GhostTextVisible(t *testing.T) {
 	// A dim transcript line above the box must not be what fires the match:
