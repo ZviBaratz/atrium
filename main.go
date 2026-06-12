@@ -41,6 +41,12 @@ var (
 	rootCmd         = &cobra.Command{
 		Use:   "atrium",
 		Short: "Atrium - A command center for orchestrating multiple AI coding agents like Claude Code, Aider, Codex, and Amp.",
+		// A runtime failure is not a usage error: let main() be the single
+		// error printer (exit 1, message to stdout) rather than Cobra also
+		// printing "Error: ..." to stderr. SilenceUsage suppresses the usage
+		// block on runtime errors; both propagate to all subcommands.
+		SilenceErrors: true,
+		SilenceUsage:  true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			// Root lifecycle context: cancelled on SIGINT/SIGTERM so in-flight
 			// git/gh/tmux subprocesses are killed rather than orphaned on shutdown.
@@ -259,6 +265,11 @@ var (
 			if updateCheckOnly {
 				fmt.Printf("v%s is available (current: v%s) — run `%s update` to install\n", rel.Version, version, binName)
 				return nil
+			}
+			// Verify writability before printing the "updating..." line so a
+			// permission failure never reads as "updating ... / update failed:".
+			if err := rel.Preflight(); err != nil {
+				return fmt.Errorf("cannot apply update: %w", err)
 			}
 			fmt.Printf("updating v%s → v%s ...\n", version, rel.Version)
 			if err := rel.Apply(ctx); err != nil {
