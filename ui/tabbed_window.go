@@ -306,6 +306,22 @@ func (w *TabbedWindow) IsPreviewInScrollMode() bool {
 	return w.preview.isScrolling
 }
 
+// PreviewScrollContent exposes the preview pane's visible viewport text for
+// hint mode while the pane is in scroll mode.
+func (w *TabbedWindow) PreviewScrollContent() (string, bool) {
+	return w.preview.ScrollContent()
+}
+
+// SetPreviewScrollContent puts the preview pane into scroll mode with content
+// loaded directly into the viewport. Used by tests to simulate a scrolled
+// state without a live tmux session.
+func (w *TabbedWindow) SetPreviewScrollContent(inst *session.Instance, content string) {
+	w.preview.viewport.SetContent(content)
+	w.preview.enterScrollMode(inst)
+	w.preview.viewport.GotoBottom()
+	w.instance = inst
+}
+
 // IsTerminalInScrollMode returns true if the terminal pane is in scroll mode
 func (w *TabbedWindow) IsTerminalInScrollMode() bool {
 	return w.terminal.IsScrolling()

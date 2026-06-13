@@ -423,3 +423,14 @@ func (p *PreviewPane) ClearHintOverlay() {
 
 // InHintMode reports whether a hint overlay is currently displayed.
 func (p *PreviewPane) InHintMode() bool { return p.hintContent != "" }
+
+// ScrollContent returns the text currently visible in the scroll viewport for
+// hint mode. Returns "", false when not in scroll mode or when a hint overlay
+// is already active (re-entering would be a no-op).
+func (p *PreviewPane) ScrollContent() (string, bool) {
+	if !p.isScrolling || p.hintContent != "" {
+		return "", false
+	}
+	v := p.viewport.View()
+	return v, v != ""
+}
