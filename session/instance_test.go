@@ -306,16 +306,24 @@ func suggestionPane(boxLine string) string {
 
 const ghostBoxLine = "\x1b[39m❯ \x1b[2mrun the failing test and fix it\x1b[0m"
 
-// suggestionRecorder is approveRecorder plus a raw pane served to capture-pane.
+// committedPane is the box after Right accepts a suggestion: the same text, now
+// committed (non-dim) input rather than a dim ghost, so the detector reads it as
+// "no suggestion". AcceptSuggestion waits for this transition before Enter.
+const committedPane = "\x1b[39m❯ run the failing test and fix it"
+
+// suggestionRecorder is approveRecorder plus raw panes served to capture-pane.
 // The two recorders cannot share an OutputFunc: pane-id resolution (list-panes)
-// and the fresh AcceptSuggestion capture both go through Output, so the mock
-// must branch on the argv.
-func suggestionRecorder(sendKeysArgs *[][]string, capture string, captureErr error) cmd_test.MockCmdExec {
+// and the AcceptSuggestion captures both go through Output, so the mock must
+// branch on the argv. Successive capture-pane calls return successive captures
+// (clamped to the last), so a test can feed the gate's ghost frame and then the
+// post-Right committed frame the submit waits for.
+func suggestionRecorder(sendKeysArgs *[][]string, captureErr error, captures ...string) cmd_test.MockCmdExec {
+	i := 0
 	return cmd_test.MockCmdExec{
 		RunFunc: func(cmd *exec.Cmd) error {
-			for i, arg := range cmd.Args {
+			for j, arg := range cmd.Args {
 				if arg == "send-keys" {
-					*sendKeysArgs = append(*sendKeysArgs, cmd.Args[i+1:])
+					*sendKeysArgs = append(*sendKeysArgs, cmd.Args[j+1:])
 					break
 				}
 			}
@@ -324,7 +332,12 @@ func suggestionRecorder(sendKeysArgs *[][]string, capture string, captureErr err
 		OutputFunc: func(cmd *exec.Cmd) ([]byte, error) {
 			for _, arg := range cmd.Args {
 				if arg == "capture-pane" {
-					return []byte(capture), captureErr
+					c := captures[len(captures)-1]
+					if i < len(captures) {
+						c = captures[i]
+					}
+					i++
+					return []byte(c), captureErr
 				}
 			}
 			return []byte("%7\n"), nil
@@ -333,34 +346,42 @@ func suggestionRecorder(sendKeysArgs *[][]string, capture string, captureErr err
 }
 
 // suggestionInstance builds a started, Ready instance running program with the
-// given pane capture wired in.
-func suggestionInstance(t *testing.T, program, capture string, captureErr error, sent *[][]string) *Instance {
+// given sequence of pane captures wired in (gate frame first, then any frames
+// the post-Right wait observes).
+func suggestionInstance(t *testing.T, program string, captureErr error, sent *[][]string, captures ...string) *Instance {
 	t.Helper()
 	return &Instance{
 		Title:       "suggest",
 		status:      Ready,
 		started:     true,
-		tmuxSession: tmux.NewSessionWithDeps(context.Background(), "suggest", program, tmux.MakePtyFactory(), suggestionRecorder(sent, capture, captureErr)),
+		tmuxSession: tmux.NewSessionWithDeps(context.Background(), "suggest", program, tmux.MakePtyFactory(), suggestionRecorder(sent, captureErr, captures...)),
 	}
 }
 
+// Right (accept) and Enter (submit) must go out as SEPARATE keystrokes with the
+// accept committed in between — batching them sends Enter against claude's
+// not-yet-updated empty input, where it is a no-op, leaving the suggestion
+// inserted but unsent. The gate frame shows the ghost; the second frame shows
+// the committed (non-dim) text the wait keys off before submitting.
 func TestAcceptSuggestion_SendsRightThenEnter(t *testing.T) {
 	var sent [][]string
-	inst := suggestionInstance(t, "claude", suggestionPane(ghostBoxLine), nil, &sent)
+	inst := suggestionInstance(t, "claude", nil, &sent, suggestionPane(ghostBoxLine), suggestionPane(committedPane))
 
 	accepted, err := inst.AcceptSuggestion()
 	require.NoError(t, err)
 	require.True(t, accepted)
 
-	require.Len(t, sent, 1, "Right and Enter must go out as one send-keys batch")
-	batch := sent[0]
-	require.GreaterOrEqual(t, len(batch), 2)
-	assert.Equal(t, []string{"Right", "Enter"}, batch[len(batch)-2:], "Right must precede Enter")
+	require.Len(t, sent, 2, "Right and Enter must be separate sends, not one batch")
+	// Each batch is "-t <pane> <key>"; assert the key (last arg) and that no
+	// batch carries both keys.
+	require.Equal(t, "Right", sent[0][len(sent[0])-1], "Right (accept) goes first, alone")
+	require.Len(t, sent[0], 3, "the Right batch must carry only the one key")
+	assert.Equal(t, "Enter", sent[1][len(sent[1])-1], "Enter (submit) follows once the accept committed")
 }
 
 func TestAcceptSuggestion_EmptyBoxSendsNothing(t *testing.T) {
 	var sent [][]string
-	inst := suggestionInstance(t, "claude", suggestionPane("\x1b[39m❯ "), nil, &sent)
+	inst := suggestionInstance(t, "claude", nil, &sent, suggestionPane("\x1b[39m❯ "))
 
 	accepted, err := inst.AcceptSuggestion()
 	require.NoError(t, err)
@@ -372,7 +393,7 @@ func TestAcceptSuggestion_EmptyBoxSendsNothing(t *testing.T) {
 // draft, and Enter would submit it — nothing may be sent.
 func TestAcceptSuggestion_TypedDraftSendsNothing(t *testing.T) {
 	var sent [][]string
-	inst := suggestionInstance(t, "claude", suggestionPane("\x1b[39m❯ half-written draft"), nil, &sent)
+	inst := suggestionInstance(t, "claude", nil, &sent, suggestionPane("\x1b[39m❯ half-written draft"))
 
 	accepted, err := inst.AcceptSuggestion()
 	require.NoError(t, err)
@@ -386,7 +407,7 @@ func TestAcceptSuggestion_TypedDraftSendsNothing(t *testing.T) {
 func TestAcceptSuggestion_NonClaudeAdapterNoCaptureNoKeys(t *testing.T) {
 	var sent [][]string
 	captured := false
-	rec := suggestionRecorder(&sent, suggestionPane(ghostBoxLine), nil)
+	rec := suggestionRecorder(&sent, nil, suggestionPane(ghostBoxLine))
 	inner := rec.OutputFunc
 	rec.OutputFunc = func(cmd *exec.Cmd) ([]byte, error) {
 		for _, arg := range cmd.Args {
@@ -412,7 +433,7 @@ func TestAcceptSuggestion_NonClaudeAdapterNoCaptureNoKeys(t *testing.T) {
 
 func TestAcceptSuggestion_NotStartedErrors(t *testing.T) {
 	var sent [][]string
-	inst := suggestionInstance(t, "claude", suggestionPane(ghostBoxLine), nil, &sent)
+	inst := suggestionInstance(t, "claude", nil, &sent, suggestionPane(ghostBoxLine))
 	inst.started = false
 
 	_, err := inst.AcceptSuggestion()
@@ -422,7 +443,7 @@ func TestAcceptSuggestion_NotStartedErrors(t *testing.T) {
 
 func TestAcceptSuggestion_PausedErrors(t *testing.T) {
 	var sent [][]string
-	inst := suggestionInstance(t, "claude", suggestionPane(ghostBoxLine), nil, &sent)
+	inst := suggestionInstance(t, "claude", nil, &sent, suggestionPane(ghostBoxLine))
 	inst.status = Paused
 
 	_, err := inst.AcceptSuggestion()
@@ -445,7 +466,7 @@ func TestAcceptSuggestion_NilTmuxSessionErrors(t *testing.T) {
 
 func TestAcceptSuggestion_CaptureErrorSurfaces(t *testing.T) {
 	var sent [][]string
-	inst := suggestionInstance(t, "claude", "", fmt.Errorf("capture exploded"), &sent)
+	inst := suggestionInstance(t, "claude", fmt.Errorf("capture exploded"), &sent, "")
 
 	_, err := inst.AcceptSuggestion()
 	require.Error(t, err)
