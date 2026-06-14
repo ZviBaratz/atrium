@@ -773,6 +773,35 @@ func TestPreviewScrollUsesTranscriptForClaude(t *testing.T) {
 	require.True(t, idxPane < idxFooter, "the screen capture must render above the footer")
 }
 
+// TestPreviewScrollDedupesOverlapDropsDivider verifies the seam: when the frozen
+// current-screen capture repeats the transcript's tail, that tail is trimmed and
+// the "── current screen" divider is dropped so history flows continuously into
+// the live view.
+func TestPreviewScrollDedupesOverlapDropsDivider(t *testing.T) {
+	// The transcript renders the reply as "● reply"; the live screen shows the
+	// same bulleted line (Claude paints "● " too), so the capture repeats the
+	// transcript tail — exactly the doubled-last-message case dedup removes.
+	reply := "the distinctive assistant reply that the live screen still shows"
+	paneContent := "● " + reply
+	setup := setupTestEnvironmentWithProgram(t, liveContentCmdExec(&paneContent), "claude")
+	defer setup.cleanupFn()
+
+	writeClaudeTranscript(t, setup.instance.WorkingDir(),
+		`{"type":"user","message":{"role":"user","content":"earlier distinctive prompt about the parser"}}`,
+		`{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"`+reply+`"}]}}`,
+	)
+
+	pane := NewPreviewPane()
+	pane.SetSize(80, 30)
+	require.NoError(t, pane.UpdateContent(setup.instance))
+	require.NoError(t, pane.ScrollUp(setup.instance))
+
+	rendered := pane.String()
+	require.NotContains(t, rendered, "current screen", "a confident overlap must drop the divider")
+	require.Contains(t, rendered, "earlier distinctive prompt", "history above the overlap must remain")
+	require.Equal(t, 1, strings.Count(rendered, reply), "the doubled last message must be deduped")
+}
+
 // TestPreviewScrollFallsBackToTmuxForAider locks in the "never worse than
 // today" guarantee: programs without a transcript adapter keep the existing
 // tmux full-history snapshot and footer.

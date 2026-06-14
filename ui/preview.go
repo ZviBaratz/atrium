@@ -7,6 +7,7 @@ import (
 
 	"github.com/ZviBaratz/atrium/log"
 	"github.com/ZviBaratz/atrium/session"
+	"github.com/ZviBaratz/atrium/session/transcript"
 	"github.com/ZviBaratz/atrium/ui/theme"
 
 	"github.com/charmbracelet/bubbles/viewport"
@@ -340,11 +341,16 @@ func (p *PreviewPane) fillScrollViewport(instance *session.Instance) error {
 	}
 	if source == session.ScrollbackTranscript {
 		if pane, perr := instance.Preview(); perr == nil && strings.TrimSpace(pane) != "" {
-			content = lipgloss.JoinVertical(lipgloss.Left,
-				content,
-				transcriptPaneDivider(p.width),
-				strings.TrimRight(pane, "\n"),
-			)
+			paneTrim := strings.TrimRight(pane, "\n")
+			// Drop the transcript tail the frozen capture already shows, so
+			// history flows straight into the current screen with no divider and
+			// no doubled last message. When no confident overlap is found, keep
+			// the divider as an honest seam marker.
+			if trimmed, ok := transcript.TrimOverlap(content, paneTrim); ok {
+				content = lipgloss.JoinVertical(lipgloss.Left, trimmed, paneTrim)
+			} else {
+				content = lipgloss.JoinVertical(lipgloss.Left, content, transcriptPaneDivider(p.width), paneTrim)
+			}
 		}
 	}
 	// Untrusted agent output: decompose font-dependent emoji clusters so the
