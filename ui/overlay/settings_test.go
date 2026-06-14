@@ -333,6 +333,26 @@ func TestSettingsOverlay_ErrShownInRender(t *testing.T) {
 	assert.Contains(t, stripANSI(o.Render()), o.lastErr)
 }
 
+// TestSettingsOverlay_CycleAutoUpdate pins the auto-update enum: defaults to
+// notify, cycles notify → auto → off and wraps back to notify.
+func TestSettingsOverlay_CycleAutoUpdate(t *testing.T) {
+	cfg := config.DefaultConfig()
+	o := NewSettingsOverlay(cfg)
+	settingsAt(t, o, "auto_update")
+
+	require.Equal(t, config.AutoUpdateNotify, cfg.GetAutoUpdateMode(), "defaults to notify")
+
+	_, changed := o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRight})
+	assert.Equal(t, "auto_update", changed, "must report its row key so home can persist")
+	assert.Equal(t, config.AutoUpdateAuto, cfg.GetAutoUpdateMode())
+
+	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRight})
+	assert.Equal(t, config.AutoUpdateOff, cfg.GetAutoUpdateMode())
+
+	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRight})
+	assert.Equal(t, config.AutoUpdateNotify, cfg.GetAutoUpdateMode(), "enum wraps")
+}
+
 func TestSettingsOverlay_CarryFilesRowExists(t *testing.T) {
 	o := NewSettingsOverlay(config.DefaultConfig())
 	assert.True(t, o.SelectRow("carry_files"), "settings panel must have a carry_files row")

@@ -258,6 +258,19 @@ func newSettingRows(cfg *config.Config) []settingRow {
 			(*config.Config).GetPRCreateDraft,
 			func(c *config.Config, v bool) { c.PRCreateDraft = &v }),
 		{
+			key: "auto_update", section: "Behavior", label: "Auto-update", kind: kindEnum,
+			description: "Update check at startup: notify shows a hint, auto installs in the background, off disables.",
+			applyNote:   "applies on restart",
+			get:         func(c *config.Config) string { return c.GetAutoUpdateMode() },
+			set: func(c *config.Config, v string) error {
+				c.AutoUpdate = v
+				return nil
+			},
+			options: func(c *config.Config) []string {
+				return []string{config.AutoUpdateNotify, config.AutoUpdateAuto, config.AutoUpdateOff}
+			},
+		},
+		{
 			key: "tmux_config_override", section: "Behavior", label: "Tmux config override", kind: kindText,
 			description: "Custom tmux config path.", applyNote: "affects new sessions",
 			get: func(c *config.Config) string {
