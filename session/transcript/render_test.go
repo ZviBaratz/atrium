@@ -71,6 +71,42 @@ func TestRenderClaudeLean(t *testing.T) {
 	}
 }
 
+// TestRenderHangingIndentWrap is the regression for the muesli double-wrap
+// mid-word break: a long assistant paragraph wrapped to the pane must never
+// split a word mid-token (the production symptom was "fuz\nzy" / "righ\nt"),
+// and every wrapped row must fit the width including its hanging indent.
+func TestRenderHangingIndentWrap(t *testing.T) {
+	const cwd = "/home/zvi/work"
+	// The exact paragraph from the screenshot that exposed the bug.
+	const para = "My earlier install was built from the PR branch, which predated #120 (fuzzy project discovery) — the new build includes both #120 and your merged #121, so the next keybinding discussion starts from the right place."
+	root := t.TempDir()
+	line := `{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":` +
+		mustJSON(t, para) + `}]}}` + "\n"
+	dest := filepath.Join(root, "projects", sanitizeCWD(cwd), "wrap.jsonl")
+	writeFileWithMtime(t, dest, line, time.Now())
+
+	for _, width := range []int{140, 40} {
+		out, err := Render("claude", cwd, Options{Root: root, Width: width})
+		if err != nil {
+			t.Fatalf("Render(width=%d): %v", width, err)
+		}
+		rows := strings.Split(out, "\n")
+		for _, row := range rows {
+			if w := lipgloss.Width(row); w > width {
+				t.Errorf("width=%d: row exceeds width (%d): %q", width, w, row)
+			}
+		}
+		// No word is split across a row boundary: every word of the source must
+		// survive intact somewhere in the wrapped output (whitespace-joined).
+		joined := strings.Join(rows, " ")
+		for _, word := range []string{"fuzzy", "right", "discovery", "keybinding"} {
+			if !strings.Contains(joined, word) {
+				t.Errorf("width=%d: word %q was split across rows\n---\n%s", width, word, out)
+			}
+		}
+	}
+}
+
 // TestRenderTruncationHeader verifies a tail-capped transcript announces the
 // elision as its first line instead of silently dropping history.
 func TestRenderTruncationHeader(t *testing.T) {

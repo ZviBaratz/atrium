@@ -4,9 +4,8 @@ import (
 	"encoding/json"
 	"strings"
 
-	"github.com/mattn/go-runewidth"
-	"github.com/muesli/reflow/wordwrap"
-	"github.com/muesli/reflow/wrap"
+	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/ZviBaratz/atrium/ui/theme"
 )
@@ -30,11 +29,11 @@ func renderEntries(entries []entry, truncated bool, width int) string {
 		for _, b := range e.Blocks {
 			switch b.Kind {
 			case "text":
-				text := b.Text
+				prefix, cont := "", ""
 				if e.Role == "user" {
-					text = "❯ " + text
+					prefix, cont = "❯ ", "  "
 				}
-				lines = append(lines, wrapTo(text, width))
+				lines = append(lines, wrapStyled(b.Text, prefix, cont, width))
 			case "tool_use":
 				lines = append(lines, dim.Render(oneLine(toolLine(b), width)))
 			case "tool_result":
@@ -88,20 +87,40 @@ func firstLine(s string) string {
 	return strings.TrimSpace(s)
 }
 
-// wrapTo word-wraps s to width, then hard-wraps so an unbroken token (a long
-// path, a URL) can never overflow the pane. width <= 0 leaves s untouched.
-func wrapTo(s string, width int) string {
+// wrapStyled word-wraps already-styled text to width with a single ANSI-aware
+// pass (ansi.Wrap preserves SGR sequences and only breaks a word that genuinely
+// overflows), then hangs every wrapped row under the first: prefix leads row 0,
+// cont leads rows 1..n. Wrapping before applying the lead is deliberate — the
+// old wordwrap+wrap double pass re-wrapped an already-wrapped string and could
+// split a word mid-token ("fuz\nzy") when a hanging indent shifted the two
+// passes out of phase. width <= 0 leaves the body unwrapped behind the prefix.
+func wrapStyled(styled, prefix, cont string, width int) string {
 	if width <= 0 {
-		return s
+		return prefix + styled
 	}
-	return wrap.String(wordwrap.String(s, width), width)
+	// Deduct the widest lead so no row can overflow regardless of which lead it
+	// carries; prefix and cont are equal-width in practice (marker+space vs two
+	// spaces), so this is exact, not conservative.
+	inner := width - max(lipgloss.Width(prefix), lipgloss.Width(cont))
+	if inner < 1 {
+		inner = 1
+	}
+	rows := strings.Split(ansi.Wrap(styled, inner, ""), "\n")
+	for i := range rows {
+		if i == 0 {
+			rows[i] = prefix + rows[i]
+		} else {
+			rows[i] = cont + rows[i]
+		}
+	}
+	return strings.Join(rows, "\n")
 }
 
-// oneLine truncates s to a single line of at most width cells. It runs on
-// plain text before any styling, so cell-width truncation is safe.
+// oneLine truncates s to a single line of at most width cells. ansi.Truncate is
+// escape-safe, so it is correct whether s is plain or already styled.
 func oneLine(s string, width int) string {
 	if width <= 0 {
 		return s
 	}
-	return runewidth.Truncate(s, width, "…")
+	return ansi.Truncate(s, width, "…")
 }
