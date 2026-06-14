@@ -915,7 +915,9 @@ func (t *TextInputOverlay) Render() string {
 	content += t.textarea.View() + "\n\n"
 	content += divider + "\n\n"
 	if t.submitOnEnter {
-		content += tiHintStyle().Render("enter send · ⌥enter newline · esc cancel") + "\n"
+		// Mirror the create form's newline vocabulary: Shift+Enter (alt+enter on the
+		// wire, needs a configured terminal) or the universal Ctrl+J — see newTextarea.
+		content += tiHintStyle().Render("↵ send · ⇧↵ / ⌃J newline · esc cancel") + "\n"
 	}
 	content += t.renderEnterButton()
 
