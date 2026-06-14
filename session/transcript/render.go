@@ -2,6 +2,8 @@ package transcript
 
 import (
 	"encoding/json"
+	"fmt"
+	"path"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
@@ -14,10 +16,11 @@ import (
 // dropping history.
 const truncationHeader = "— transcript truncated —"
 
-// renderEntries renders parsed entries at Lean fidelity: user prompts and
-// assistant prose in full, tool calls as dim one-liners, errored tool results
-// surfaced, thinking and successful tool output omitted. Entries are separated
-// by a blank line; everything is wrapped (or one-liners truncated) to width.
+// renderEntries renders parsed entries to match what the attached Claude
+// session showed: user prompts ("❯ ") and assistant prose ("● ") with markdown,
+// a run of tool calls collapsed into one dim aggregate line ("Ran 3 shell
+// commands, recalled 1 memory…"), errored tool results surfaced, thinking and
+// successful tool output omitted. Sections are separated by a blank line.
 func renderEntries(entries []entry, truncated bool, width int) string {
 	dim := theme.Current().DimStyle()
 	st := mdStyleSet()
@@ -25,32 +28,54 @@ func renderEntries(entries []entry, truncated bool, width int) string {
 	if truncated {
 		sections = append(sections, dim.Render(truncationHeader))
 	}
+
+	// A run of tool_use blocks — possibly spanning several assistant entries with
+	// interleaved successful tool_results — collapses into one aggregate line,
+	// flushed when the next prose, error, image, or the end of the stream breaks
+	// the run.
+	var group toolCounts
+	imgN := 0
+	flush := func() {
+		if line := group.line(width, dim); line != "" {
+			sections = append(sections, line)
+		}
+		group = toolCounts{}
+	}
+
 	for _, e := range entries {
-		var lines []string
 		for _, b := range e.Blocks {
 			switch b.Kind {
 			case "text":
-				lead := "● "
 				if e.Role == "user" {
-					lead = "❯ "
+					display, skip := cleanUserText(b.Text)
+					if skip {
+						continue
+					}
+					flush()
+					sections = append(sections, renderProse(display, "❯ ", width, st))
+				} else {
+					flush()
+					sections = append(sections, renderProse(b.Text, "● ", width, st))
 				}
-				lines = append(lines, renderProse(b.Text, lead, width, st))
 			case "tool_use":
-				lines = append(lines, dim.Render(oneLine(toolLine(b), width)))
+				group.add(b.ToolName, b.ToolInput)
 			case "tool_result":
+				// Successful results keep the run intact (so consecutive tools
+				// collapse); an error breaks it and surfaces its first line.
 				if b.IsError {
-					lines = append(lines, dim.Render(oneLine("  ⎿ error: "+firstLine(b.Text), width)))
+					flush()
+					sections = append(sections, dim.Render(oneLine("  ⎿ error: "+firstLine(b.Text), width)))
 				}
 			case "image":
-				lines = append(lines, dim.Render("  [image]"))
+				flush()
+				imgN++
+				sections = append(sections, dim.Render(fmt.Sprintf("  [Image #%d]", imgN)))
 			}
 			// "thinking" is deliberately omitted: it routinely outweighs the
 			// answer and isn't what a scrollback reviewer is after.
 		}
-		if len(lines) > 0 {
-			sections = append(sections, strings.Join(lines, "\n"))
-		}
 	}
+	flush()
 	return strings.Join(sections, "\n\n")
 }
 
@@ -106,30 +131,172 @@ func renderProse(text, firstLead string, width int, st mdStyles) string {
 	return strings.Join(rows, "\n")
 }
 
-// toolLine compresses a tool_use block to "⏺ Name: summary" (or "⏺ Name" when
-// no summary is recognizable).
-func toolLine(b block) string {
-	if summary := toolSummary(b.ToolInput); summary != "" {
-		return "⏺ " + b.ToolName + ": " + summary
-	}
-	return "⏺ " + b.ToolName
+// toolCat buckets a tool call into the category whose wording Claude Code uses
+// when it collapses a turn's tools into one status line.
+type toolCat int
+
+const (
+	catShell toolCat = iota
+	catRead
+	catEdit
+	catSearch
+	catAgent
+	catWeb
+	catTodo
+	catMemRead
+	catMemWrite
+	catMCP
+	catGeneric
+	numCats
+)
+
+// catWording is the (verb, singular-noun, plural-noun) for each category. The
+// clause order in an aggregate line follows the toolCat iota order, so a line
+// reads "Ran 3 shell commands, recalled 1 memory, wrote 3 memories".
+var catWording = [numCats]struct{ verb, one, many string }{
+	catShell:    {"ran", "shell command", "shell commands"},
+	catRead:     {"read", "file", "files"},
+	catEdit:     {"made", "edit", "edits"},
+	catSearch:   {"ran", "search", "searches"},
+	catAgent:    {"ran", "agent", "agents"},
+	catWeb:      {"made", "web request", "web requests"},
+	catTodo:     {"updated", "the todo list", "the todo list"},
+	catMemRead:  {"recalled", "memory", "memories"},
+	catMemWrite: {"wrote", "memory", "memories"},
+	catMCP:      {"called", "tool", "tools"},
+	catGeneric:  {"used", "tool", "tools"},
 }
 
-// toolSummary extracts the most human-readable scalar from a tool input. The
-// key preference is ordered (not map iteration) so output is deterministic:
-// a Bash call prefers its description over the command, file tools surface
-// their path.
-func toolSummary(rawInput string) string {
+// categorize maps a tool name (and, for file tools, its target path) to a
+// category. File reads/writes whose path is in a memory directory become the
+// memory categories — that is how Claude Code's "recalled/wrote N memories"
+// wording is reconstructed, since memory ops are plain Read/Write calls.
+func categorize(name, input string) toolCat {
+	switch name {
+	case "Bash", "BashOutput", "KillShell":
+		return catShell
+	case "Read", "NotebookRead":
+		if isMemoryPath(input) {
+			return catMemRead
+		}
+		return catRead
+	case "Edit", "Write", "MultiEdit", "NotebookEdit":
+		if isMemoryPath(input) {
+			return catMemWrite
+		}
+		return catEdit
+	case "Grep", "Glob", "LS":
+		return catSearch
+	case "Task", "Agent":
+		return catAgent
+	case "WebFetch", "WebSearch":
+		return catWeb
+	case "TodoWrite":
+		return catTodo
+	}
+	if strings.HasPrefix(name, "mcp__") {
+		return catMCP
+	}
+	return catGeneric
+}
+
+// isMemoryPath reports whether a file tool's input targets a memory store: a
+// path under a "memory/" directory or a MEMORY.md index.
+func isMemoryPath(input string) bool {
+	p := toolPath(input)
+	if p == "" {
+		return false
+	}
+	if path.Base(p) == "MEMORY.md" {
+		return true
+	}
+	return strings.Contains(p, "/memory/")
+}
+
+// toolPath extracts the file_path/path scalar from a tool input, or "".
+func toolPath(input string) string {
 	var m map[string]any
-	if json.Unmarshal([]byte(rawInput), &m) != nil {
+	if json.Unmarshal([]byte(input), &m) != nil {
 		return ""
 	}
-	for _, k := range []string{"description", "file_path", "path", "command", "pattern", "skill", "query", "prompt", "url"} {
-		if v, ok := m[k].(string); ok && v != "" {
-			return firstLine(v)
+	for _, k := range []string{"file_path", "path"} {
+		if v, ok := m[k].(string); ok {
+			return v
 		}
 	}
 	return ""
+}
+
+// toolCounts accumulates a run of tool calls by category so the run renders as
+// one aggregate line.
+type toolCounts [numCats]int
+
+func (tc *toolCounts) add(name, input string) { tc[categorize(name, input)]++ }
+
+// line renders the accumulated run as a dim, two-space-indented aggregate, or
+// "" when no tools were seen. Clauses follow category order; the first is
+// capitalized ("Ran 3 shell commands, recalled 1 memory").
+func (tc *toolCounts) line(width int, dim lipgloss.Style) string {
+	var clauses []string
+	for cat := toolCat(0); cat < numCats; cat++ {
+		if tc[cat] == 0 {
+			continue
+		}
+		clauses = append(clauses, catClause(cat, tc[cat]))
+	}
+	if len(clauses) == 0 {
+		return ""
+	}
+	return dim.Render(oneLine("  "+capitalizeFirst(strings.Join(clauses, ", ")), width))
+}
+
+// catClause renders one category's count, e.g. "ran 3 shell commands" or the
+// count-suppressed "updated the todo list".
+func catClause(cat toolCat, n int) string {
+	w := catWording[cat]
+	if cat == catTodo {
+		return w.verb + " " + w.one
+	}
+	noun := w.many
+	if n == 1 {
+		noun = w.one
+	}
+	return fmt.Sprintf("%s %d %s", w.verb, n, noun)
+}
+
+// capitalizeFirst upper-cases the first rune of s.
+func capitalizeFirst(s string) string {
+	if s == "" {
+		return s
+	}
+	r := []rune(s)
+	r[0] = []rune(strings.ToUpper(string(r[0])))[0]
+	return string(r)
+}
+
+// cleanUserText prepares a user text block for display. A slash command stored
+// as <command-name>/x</command-name> renders as the bare "/x"; machine-plumbing
+// blocks (command stdout/args, local-command caveats) are skipped entirely so
+// they never appear as stray prompts.
+func cleanUserText(s string) (display string, skip bool) {
+	t := strings.TrimSpace(s)
+	if rest, ok := strings.CutPrefix(t, "<command-name>"); ok {
+		if i := strings.Index(rest, "</command-name>"); i >= 0 {
+			if name := strings.TrimSpace(rest[:i]); name != "" {
+				return name, false
+			}
+		}
+		return "", true
+	}
+	for _, tag := range []string{"<local-command-stdout>", "<command-message>", "<command-args>", "<bash-stdout>", "<bash-stderr>"} {
+		if strings.HasPrefix(t, tag) {
+			return "", true
+		}
+	}
+	if strings.HasPrefix(t, "Caveat:") {
+		return "", true
+	}
+	return s, false
 }
 
 // firstLine returns the trimmed first line of s.
