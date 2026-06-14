@@ -159,15 +159,15 @@ func renderInline(s string, st mdStyles) string {
 // the link text, the url, the index just past the closing ')', and ok. Nested
 // brackets are not supported (rare in assistant prose).
 func parseLink(runes []rune, i int) (text, url string, end int, ok bool) {
-	close := indexRune(runes, ']', i+1)
-	if close < 0 || close+1 >= len(runes) || runes[close+1] != '(' {
+	rb := indexRune(runes, ']', i+1)
+	if rb < 0 || rb+1 >= len(runes) || runes[rb+1] != '(' {
 		return "", "", 0, false
 	}
-	paren := indexRune(runes, ')', close+2)
+	paren := indexRune(runes, ')', rb+2)
 	if paren < 0 {
 		return "", "", 0, false
 	}
-	return string(runes[i+1 : close]), string(runes[close+2 : paren]), paren + 1, true
+	return string(runes[i+1 : rb]), string(runes[rb+2 : paren]), paren + 1, true
 }
 
 // hasMarkerAt reports whether the two-rune marker m sits at runes[i].
