@@ -158,8 +158,10 @@ type sgrCell struct {
 // sgrCells walks a raw pane line, tracking the SGR dim attribute (CSI ... m:
 // parameter 2 sets dim; 0, the empty parameter, and 22 clear it — including
 // inside combined sequences like ESC[2;39m) and skipping every other escape
-// sequence. tmux's capture-pane emits plain CSI sequences only, so a simple
-// ESC-[ ... final-byte walk covers the input.
+// sequence. capture-pane -e also re-emits OSC 8 hyperlinks (ESC ] 8 ; ; URL
+// ... ST), so the OSC payload is skipped wholesale — otherwise the URL bytes
+// would leak in as non-dim visible cells and could turn a genuine all-dim
+// suggestion into a false negative.
 func sgrCells(line string) []sgrCell {
 	var cells []sgrCell
 	dim := false
@@ -169,8 +171,25 @@ func sgrCells(line string) []sgrCell {
 			cells = append(cells, sgrCell{r: runes[i], dim: dim})
 			continue
 		}
+		// OSC (ESC ]): skip the whole control string up to its terminator —
+		// BEL, or ST (ESC \) — so a hyperlink's URL never reads as content.
+		if i+1 < len(runes) && runes[i+1] == ']' {
+			j := i + 2
+			for j < len(runes) {
+				if runes[j] == '\x07' {
+					break // BEL terminator
+				}
+				if runes[j] == '\x1b' && j+1 < len(runes) && runes[j+1] == '\\' {
+					j++ // ST terminator: consume the ESC, the '\' is consumed by i++
+					break
+				}
+				j++
+			}
+			i = j
+			continue
+		}
 		if i+1 >= len(runes) || runes[i+1] != '[' {
-			continue // bare ESC: drop it, keep walking
+			continue // bare ESC (or other introducer): drop it, keep walking
 		}
 		j := i + 2
 		for j < len(runes) && (runes[j] == ';' || runes[j] == '?' || (runes[j] >= '0' && runes[j] <= '9')) {

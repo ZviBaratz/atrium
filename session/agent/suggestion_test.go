@@ -130,6 +130,33 @@ func TestClaudeSuggestion_CombinedAndClearedSGR(t *testing.T) {
 		"\x1b[39m❯ \x1b[2mdim lead-in\x1b[22m then typed text")))
 }
 
+// TestClaudeSuggestion_OSCHyperlinkSkipped guards the OSC skip in sgrCells:
+// capture-pane -e re-emits OSC 8 hyperlinks. The link's URL bytes must be
+// skipped, not counted as visible cells. The first two probes place the OSC
+// *before* the dim span so the URL bytes are non-dim — without the skip they'd
+// inject non-dim content right after the prompt char and falsely reject a real
+// suggestion. Covers both BEL- and ST- (ESC \) terminated forms, then the
+// realistic all-dim-interior shape with the link inside the dim span.
+func TestClaudeSuggestion_OSCHyperlinkSkipped(t *testing.T) {
+	require.True(t, claudeSuggestionVisible(suggestionPane(
+		"\x1b[39m❯ \x1b]8;;https://example.com/issue/42\x07\x1b[2mopen the issue\x1b[0m")))
+	require.True(t, claudeSuggestionVisible(suggestionPane(
+		"\x1b[39m❯ \x1b]8;;https://example.com\x1b\\\x1b[2msee the docs\x1b[0m")))
+	require.True(t, claudeSuggestionVisible(suggestionPane(
+		"\x1b[39m❯ \x1b[2m\x1b]8;;https://example.com\x07read the report\x1b]8;;\x07\x1b[0m")))
+}
+
+// TestClaudeSuggestion_SingleRuleFailsClosed pins the bottom-border-off-screen
+// case: when only the box's top rule is captured, there is no closing rule to
+// bracket the interior, so the ≥2-rule scan finds no box and fails closed —
+// `a` does nothing rather than guessing.
+func TestClaudeSuggestion_SingleRuleFailsClosed(t *testing.T) {
+	pane := "transcript prose\n" +
+		"\x1b[38;5;244m────────────────────────────────────────\x1b[0m\n" +
+		ghostBoxLine
+	require.False(t, claudeSuggestionVisible(pane))
+}
+
 // TestSuggestionDetector_ClaudeOnly pins the adapter gate: only claude has a
 // suggestion UI, so every other adapter must leave SuggestionVisible nil —
 // that nil is what spares non-claude panes the capture in AcceptSuggestion.
