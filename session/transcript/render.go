@@ -20,6 +20,7 @@ const truncationHeader = "— transcript truncated —"
 // by a blank line; everything is wrapped (or one-liners truncated) to width.
 func renderEntries(entries []entry, truncated bool, width int) string {
 	dim := theme.Current().DimStyle()
+	st := mdStyleSet()
 	var sections []string
 	if truncated {
 		sections = append(sections, dim.Render(truncationHeader))
@@ -29,11 +30,11 @@ func renderEntries(entries []entry, truncated bool, width int) string {
 		for _, b := range e.Blocks {
 			switch b.Kind {
 			case "text":
-				prefix, cont := "", ""
+				lead := "● "
 				if e.Role == "user" {
-					prefix, cont = "❯ ", "  "
+					lead = "❯ "
 				}
-				lines = append(lines, wrapStyled(b.Text, prefix, cont, width))
+				lines = append(lines, renderProse(b.Text, lead, width, st))
 			case "tool_use":
 				lines = append(lines, dim.Render(oneLine(toolLine(b), width)))
 			case "tool_result":
@@ -51,6 +52,58 @@ func renderEntries(entries []entry, truncated bool, width int) string {
 		}
 	}
 	return strings.Join(sections, "\n\n")
+}
+
+// mdStyleSet builds the markdown style set from the active theme. Italic and
+// strikethrough have no dedicated theme accessor (they are attributes, not
+// colors), so they are composed inline on the default foreground.
+func mdStyleSet() mdStyles {
+	t := theme.Current()
+	return mdStyles{
+		Bold:    t.BoldStyle(),
+		Italic:  lipgloss.NewStyle().Italic(true),
+		Strike:  lipgloss.NewStyle().Strikethrough(true),
+		Code:    t.CodeStyle(),
+		Link:    t.LinkStyle(),
+		Heading: t.BoldStyle(),
+		Quote:   t.DimStyle(),
+		Fence:   t.FaintStyle(),
+	}
+}
+
+// renderProse renders a markdown text body to wrapped lines under a block lead.
+// firstLead leads the very first visual row ("● " for assistant prose, "❯ " for
+// a user prompt); every later row hangs at the same width. Each markdown line's
+// own marker (list bullet, quote bar) rides the base indent and its content
+// wraps with an aligned hang.
+func renderProse(text, firstLead string, width int, st mdStyles) string {
+	base := strings.Repeat(" ", lipgloss.Width(firstLead))
+	var rows []string
+	first := true
+	for _, ml := range renderMarkdown(text, st) {
+		if ml.Text == "" && ml.Marker == "" {
+			rows = append(rows, "")
+			continue
+		}
+		lead := base
+		if first {
+			lead = firstLead
+			first = false
+		}
+		prefix := lead + ml.Marker
+		if ml.NoWrap {
+			rows = append(rows, oneLine(prefix+ml.Text, width))
+			continue
+		}
+		cont := base + strings.Repeat(" ", lipgloss.Width(ml.Marker))
+		rows = append(rows, wrapStyled(ml.Text, prefix, cont, width))
+	}
+	// Trim trailing blank rows so a body ending in newlines doesn't inflate the
+	// blank-line separation between entries.
+	for len(rows) > 0 && rows[len(rows)-1] == "" {
+		rows = rows[:len(rows)-1]
+	}
+	return strings.Join(rows, "\n")
 }
 
 // toolLine compresses a tool_use block to "⏺ Name: summary" (or "⏺ Name" when

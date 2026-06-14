@@ -128,6 +128,19 @@ func (t *Theme) DangerStyle() lipgloss.Style {
 // CyanStyle styles informational accents (e.g. diff stats).
 func (t *Theme) CyanStyle() lipgloss.Style { return lipgloss.NewStyle().Foreground(t.Palette.Cyan) }
 
+// BoldStyle styles markdown-bold (and heading) spans in rendered transcript prose.
+func (t *Theme) BoldStyle() lipgloss.Style {
+	return lipgloss.NewStyle().Foreground(t.Palette.Fg).Bold(true)
+}
+
+// CodeStyle styles markdown inline code spans: tinted, no backticks.
+func (t *Theme) CodeStyle() lipgloss.Style { return lipgloss.NewStyle().Foreground(t.Palette.Cyan) }
+
+// LinkStyle styles markdown link text (the visible label, not the URL).
+func (t *Theme) LinkStyle() lipgloss.Style {
+	return lipgloss.NewStyle().Foreground(t.Palette.Accent).Underline(true)
+}
+
 // SelectedRowStyle styles the elevated background of the selected list row.
 func (t *Theme) SelectedRowStyle() lipgloss.Style {
 	return lipgloss.NewStyle().Background(t.Palette.BgElevated)
