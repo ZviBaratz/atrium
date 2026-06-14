@@ -264,8 +264,11 @@ func (p *PreviewPane) String() string {
 	return previewPaneStyle().MaxWidth(p.width).MaxHeight(p.height).Render(content)
 }
 
-// ScrollUp scrolls up in the viewport
-func (p *PreviewPane) ScrollUp(instance *session.Instance) error {
+// ScrollUp enters scroll mode (freezing the snapshot at its bottom) or, when
+// already scrolling, moves the viewport up by lines. The entry step ignores
+// lines — it always lands at the bottom — so the count only governs in-scroll
+// granularity (a wheel notch moves several lines, a key one).
+func (p *PreviewPane) ScrollUp(instance *session.Instance, lines int) error {
 	if instance == nil || instance.Paused() {
 		return nil
 	}
@@ -285,7 +288,7 @@ func (p *PreviewPane) ScrollUp(instance *session.Instance) error {
 	}
 
 	// Already in scroll mode, just scroll the viewport
-	p.viewport.LineUp(1)
+	p.viewport.LineUp(lines)
 	return nil
 }
 
@@ -294,7 +297,7 @@ func (p *PreviewPane) ScrollUp(instance *session.Instance) error {
 // bottom is indistinguishable from it while silently freezing updates — entry is
 // ScrollUp's job. (It would also make the bottom-exit below an enter/exit toggle
 // under a held wheel.)
-func (p *PreviewPane) ScrollDown(instance *session.Instance) error {
+func (p *PreviewPane) ScrollDown(instance *session.Instance, lines int) error {
 	if instance == nil || instance.Paused() || !p.isScrolling {
 		return nil
 	}
@@ -305,7 +308,7 @@ func (p *PreviewPane) ScrollDown(instance *session.Instance) error {
 	if p.viewport.AtBottom() {
 		return p.ResetToNormalMode(instance)
 	}
-	p.viewport.LineDown(1)
+	p.viewport.LineDown(lines)
 	return nil
 }
 

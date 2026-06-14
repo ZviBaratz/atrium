@@ -252,7 +252,7 @@ func TestPreviewScrolling(t *testing.T) {
 	require.Contains(t, fullHistory, "1", "Full history should contain earliest output")
 
 	// Step 3: Enter scroll mode
-	err = previewPane.ScrollUp(setup.instance)
+	err = previewPane.ScrollUp(setup.instance, 1)
 	require.NoError(t, err)
 
 	// Verify we entered scrolling mode
@@ -267,7 +267,7 @@ func TestPreviewScrolling(t *testing.T) {
 
 	// Step 5: Scroll up multiple times to get to the top
 	for range 50 {
-		err = previewPane.ScrollUp(setup.instance)
+		err = previewPane.ScrollUp(setup.instance, 1)
 		require.NoError(t, err)
 	}
 
@@ -277,7 +277,7 @@ func TestPreviewScrolling(t *testing.T) {
 
 	// Step 6: Scroll down multiple times
 	for range 25 {
-		err = previewPane.ScrollDown(setup.instance)
+		err = previewPane.ScrollDown(setup.instance, 1)
 		require.NoError(t, err)
 	}
 
@@ -517,6 +517,35 @@ func liveContentCmdExec(content *string) cmd_test.MockCmdExec {
 	}
 }
 
+// TestPreviewScrollStepHonorsLines verifies the in-scroll granularity knob: a
+// wheel notch (3) moves the viewport three lines, a key (1) moves one. Entry
+// always lands at the bottom regardless of the step.
+func TestPreviewScrollStepHonorsLines(t *testing.T) {
+	var rows []string
+	for i := 0; i < 100; i++ {
+		rows = append(rows, fmt.Sprintf("scrollback line %d", i))
+	}
+	content := strings.Join(rows, "\n")
+	setup := setupTestEnvironment(t, liveContentCmdExec(&content))
+	defer setup.cleanupFn()
+
+	pane := NewPreviewPane()
+	pane.SetSize(80, 30)
+	require.NoError(t, pane.UpdateContent(setup.instance))
+
+	// Enter scroll mode (lands at bottom), then a 3-line and a 1-line step up.
+	require.NoError(t, pane.ScrollUp(setup.instance, 1))
+	require.True(t, pane.isScrolling)
+	bottom := pane.viewport.YOffset
+
+	require.NoError(t, pane.ScrollUp(setup.instance, 3))
+	require.Equal(t, 3, bottom-pane.viewport.YOffset, "a wheel notch must move three lines")
+
+	after3 := pane.viewport.YOffset
+	require.NoError(t, pane.ScrollUp(setup.instance, 1))
+	require.Equal(t, 1, after3-pane.viewport.YOffset, "a key must move one line")
+}
+
 // TestPreviewScrollSnapshotUnpinsOnInstanceSwitch reproduces the stuck-preview bug:
 // entering scroll mode froze an instance-agnostic snapshot, and because nothing exited
 // scroll mode on selection change, every session rendered the same stale capture until
@@ -536,7 +565,7 @@ func TestPreviewScrollSnapshotUnpinsOnInstanceSwitch(t *testing.T) {
 
 	// Show A live, then enter scroll mode (snapshot of A's full history).
 	require.NoError(t, pane.UpdateContent(setupA.instance))
-	require.NoError(t, pane.ScrollUp(setupA.instance))
+	require.NoError(t, pane.ScrollUp(setupA.instance, 1))
 	require.True(t, pane.isScrolling, "ScrollUp must enter scroll mode")
 	require.Contains(t, pane.String(), contentA)
 
@@ -563,7 +592,7 @@ func TestPreviewScrollExitNeverRefuses(t *testing.T) {
 
 	// Enter scroll mode, then pause the session while the snapshot is up.
 	require.NoError(t, pane.UpdateContent(setup.instance))
-	require.NoError(t, pane.ScrollUp(setup.instance))
+	require.NoError(t, pane.ScrollUp(setup.instance, 1))
 	require.True(t, pane.isScrolling)
 	setup.instance.SetStatus(session.Paused)
 
@@ -573,7 +602,7 @@ func TestPreviewScrollExitNeverRefuses(t *testing.T) {
 
 	// Same for a nil selection (e.g. the last session was killed while scrolling).
 	setup.instance.SetStatus(session.Running)
-	require.NoError(t, pane.ScrollUp(setup.instance))
+	require.NoError(t, pane.ScrollUp(setup.instance, 1))
 	require.True(t, pane.isScrolling)
 	require.NoError(t, pane.ResetToNormalMode(nil))
 	require.False(t, pane.isScrolling, "exiting scroll mode must work with no selection")
@@ -594,7 +623,7 @@ func TestPreviewScrollSnapshotDropsWhenInstancePauses(t *testing.T) {
 	pane.SetSize(80, 30)
 
 	require.NoError(t, pane.UpdateContent(setup.instance))
-	require.NoError(t, pane.ScrollUp(setup.instance))
+	require.NoError(t, pane.ScrollUp(setup.instance, 1))
 	require.True(t, pane.isScrolling)
 
 	// Pausing the displayed instance must drop the snapshot, not just hide it.
@@ -636,32 +665,32 @@ func TestPreviewScrollDownAtBottomExitsToLive(t *testing.T) {
 	require.NoError(t, pane.UpdateContent(setup.instance))
 
 	// Enter scroll mode: the viewport starts at the bottom of the snapshot.
-	require.NoError(t, pane.ScrollUp(setup.instance))
+	require.NoError(t, pane.ScrollUp(setup.instance, 1))
 	require.True(t, pane.isScrolling)
 	require.True(t, pane.viewport.AtBottom(), "entering scroll mode must land at the bottom")
 
 	// Wheel-down while already at the bottom resumes the live view.
-	require.NoError(t, pane.ScrollDown(setup.instance))
+	require.NoError(t, pane.ScrollDown(setup.instance, 1))
 	require.False(t, pane.isScrolling, "a wheel-down at the bottom must exit scroll mode")
 	require.Equal(t, content, pane.previewState.text, "the live pane content must be re-captured on exit")
 
 	// A further wheel-down from the live view must not re-enter the snapshot —
 	// otherwise a held wheel would toggle enter/exit forever.
-	require.NoError(t, pane.ScrollDown(setup.instance))
+	require.NoError(t, pane.ScrollDown(setup.instance, 1))
 	require.False(t, pane.isScrolling, "wheel-down from the live view must not enter scroll mode")
 
 	// Off the bottom, a wheel-down scrolls — it must not exit.
-	require.NoError(t, pane.ScrollUp(setup.instance)) // re-enter
+	require.NoError(t, pane.ScrollUp(setup.instance, 1)) // re-enter
 	for range 5 {
-		require.NoError(t, pane.ScrollUp(setup.instance))
+		require.NoError(t, pane.ScrollUp(setup.instance, 1))
 	}
 	require.False(t, pane.viewport.AtBottom())
-	require.NoError(t, pane.ScrollDown(setup.instance))
+	require.NoError(t, pane.ScrollDown(setup.instance, 1))
 	require.True(t, pane.isScrolling, "scrolling down above the bottom must stay in scroll mode")
 
 	// Reaching the bottom and wheeling down once more exits.
 	for range 10 {
-		require.NoError(t, pane.ScrollDown(setup.instance))
+		require.NoError(t, pane.ScrollDown(setup.instance, 1))
 	}
 	require.False(t, pane.isScrolling, "wheeling down past the bottom must exit scroll mode")
 }
@@ -753,7 +782,7 @@ func TestPreviewScrollUsesTranscriptForClaude(t *testing.T) {
 	pane := NewPreviewPane()
 	pane.SetSize(80, 30)
 	require.NoError(t, pane.UpdateContent(setup.instance))
-	require.NoError(t, pane.ScrollUp(setup.instance))
+	require.NoError(t, pane.ScrollUp(setup.instance, 1))
 	require.True(t, pane.isScrolling)
 
 	rendered := pane.String()
@@ -794,7 +823,7 @@ func TestPreviewScrollDedupesOverlapDropsDivider(t *testing.T) {
 	pane := NewPreviewPane()
 	pane.SetSize(80, 30)
 	require.NoError(t, pane.UpdateContent(setup.instance))
-	require.NoError(t, pane.ScrollUp(setup.instance))
+	require.NoError(t, pane.ScrollUp(setup.instance, 1))
 
 	rendered := pane.String()
 	require.NotContains(t, rendered, "current screen", "a confident overlap must drop the divider")
@@ -813,7 +842,7 @@ func TestPreviewScrollFallsBackToTmuxForAider(t *testing.T) {
 	pane := NewPreviewPane()
 	pane.SetSize(80, 30)
 	require.NoError(t, pane.UpdateContent(setup.instance))
-	require.NoError(t, pane.ScrollUp(setup.instance))
+	require.NoError(t, pane.ScrollUp(setup.instance, 1))
 	require.True(t, pane.isScrolling)
 
 	rendered := pane.String()
@@ -833,7 +862,7 @@ func TestPreviewScrollClaudeWithoutTranscriptFallsBack(t *testing.T) {
 	pane := NewPreviewPane()
 	pane.SetSize(80, 30)
 	require.NoError(t, pane.UpdateContent(setup.instance))
-	require.NoError(t, pane.ScrollUp(setup.instance))
+	require.NoError(t, pane.ScrollUp(setup.instance, 1))
 	require.True(t, pane.isScrolling)
 
 	rendered := pane.String()
