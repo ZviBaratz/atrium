@@ -45,6 +45,9 @@ func Run(ctx context.Context, program string, autoYes bool, version, binName str
 		newHome(ctx, program, autoYes, version, binName),
 		tea.WithAltScreen(),
 		tea.WithMouseCellMotion(), // Mouse scroll
+		// Normalize SS3 Home/End (ESC O H/F) that a terminal left in application-cursor
+		// mode emits, which bubbletea v1 otherwise mis-decodes into literal "OH"/"OF".
+		tea.WithInput(newSS3HomeEndReader(os.Stdin)),
 		// Tie the program to the lifecycle context so a SIGTERM (which cancels
 		// ctx in main) also stops the TUI loop, not just the subprocesses.
 		tea.WithContext(ctx),

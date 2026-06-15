@@ -264,10 +264,9 @@ func TestSessionCreateOverlay_EnterOnEmptyTitleAdvances(t *testing.T) {
 	assert.True(t, o.isTextarea(), "Enter on an empty title moves to the prompt")
 }
 
-// Enter inside the create-form prompt stays a newline — the prompt is multiline
-// by design, which is exactly why title-enter (not prompt-enter) is the quick
-// submit.
-func TestSessionCreateOverlay_EnterInPromptInsertsNewline(t *testing.T) {
+// Enter inside the create-form prompt advances to the next field, like Tab — the
+// newline keys are Shift+Enter (Alt+Enter on the wire) and Ctrl+J.
+func TestSessionCreateOverlay_EnterInPromptAdvances(t *testing.T) {
 	o := NewSessionCreateOverlay(nil, nil, []string{"/repo/a"}, "")
 	o.FocusTitle()
 	tab(o) // title → prompt
@@ -277,9 +276,54 @@ func TestSessionCreateOverlay_EnterInPromptInsertsNewline(t *testing.T) {
 	shouldClose, _ := o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyEnter})
 	assert.False(t, shouldClose, "Enter in the prompt must not submit the form")
 	assert.False(t, o.IsSubmitted())
+	assert.False(t, o.isTextarea(), "Enter should move focus off the prompt")
+	assert.Equal(t, "line one", o.GetValue(), "Enter must not insert a newline")
+}
+
+// Alt+Enter (what a configured terminal's Shift+Enter sends) inserts a newline and
+// keeps focus on the prompt.
+func TestSessionCreateOverlay_AltEnterInPromptInsertsNewline(t *testing.T) {
+	o := NewSessionCreateOverlay(nil, nil, []string{"/repo/a"}, "")
+	o.FocusTitle()
+	tab(o)
+	require.True(t, o.isTextarea())
+	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("line one")})
+
+	shouldClose, _ := o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyEnter, Alt: true})
+	assert.False(t, shouldClose)
+	assert.True(t, o.isTextarea(), "Alt+Enter stays on the prompt")
 
 	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("line two")})
 	assert.Equal(t, "line one\nline two", o.GetValue())
+}
+
+// Ctrl+J is the universal newline that works in any terminal.
+func TestSessionCreateOverlay_CtrlJInPromptInsertsNewline(t *testing.T) {
+	o := NewSessionCreateOverlay(nil, nil, []string{"/repo/a"}, "")
+	o.FocusTitle()
+	tab(o)
+	require.True(t, o.isTextarea())
+	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("line one")})
+
+	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyCtrlJ})
+	assert.True(t, o.isTextarea(), "Ctrl+J stays on the prompt")
+
+	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("line two")})
+	assert.Equal(t, "line one\nline two", o.GetValue())
+}
+
+// Ctrl+Left jumps back a word in the prompt (the textarea default binds only
+// Alt+arrow; we add Ctrl+arrow to match the title field).
+func TestSessionCreateOverlay_CtrlLeftJumpsWordInPrompt(t *testing.T) {
+	o := NewSessionCreateOverlay(nil, nil, []string{"/repo/a"}, "")
+	o.FocusTitle()
+	tab(o)
+	require.True(t, o.isTextarea())
+	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("foo bar")})
+
+	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyCtrlLeft}) // cursor → start of "bar"
+	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("X")})
+	assert.Equal(t, "foo Xbar", o.GetValue(), "Ctrl+Left should jump back one word")
 }
 
 // If the disable verdict lands while the branch picker holds focus (the async validity
