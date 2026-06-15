@@ -77,6 +77,11 @@ func RunDaemon(ctx context.Context, cfg *config.Config) error {
 						// persisted at shutdown so the TUI shows the blocked row.
 						instance.SetStatus(session.NeedsInput)
 					}
+					// Keep the persisted model current so the TUI shows the right
+					// chip after relaunch (parity with app_poll.go tickUpdateMetadataCmd).
+					if model, stamp, ok := instance.ComputeModel(); ok {
+						instance.SetModelMeta(model, stamp)
+					}
 				}
 			}
 
