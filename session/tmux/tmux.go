@@ -561,7 +561,12 @@ const (
 // hash hashes the string.
 func (m *statusMonitor) hash(s string) []byte {
 	h := sha256.New()
-	// TODO: this allocation sucks since the string is probably large. Ideally, we hash the string directly.
+	// The []byte(s) conversion copies the (potentially several-KB) pane
+	// content. io.WriteString does NOT avoid it: sha256's digest is not an
+	// io.StringWriter, so it falls back to this same copy plus an extra alloc.
+	// The only zero-copy option is unsafe.Slice(unsafe.StringData(s), len(s)),
+	// not worth an unsafe import here — hash runs twice per session per 500ms
+	// tick, behind tmux/git I/O that dwarfs the copy.
 	h.Write([]byte(s))
 	return h.Sum(nil)
 }
