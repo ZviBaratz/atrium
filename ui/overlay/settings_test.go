@@ -76,6 +76,17 @@ func TestSettingsOverlay_TogglePRCreateDraft(t *testing.T) {
 	assert.False(t, cfg.GetPRCreateDraft(), "space flips the default-on draft field to ready-for-review")
 }
 
+func TestSettingsOverlay_ToggleShowReleaseNotesAfterUpdate(t *testing.T) {
+	cfg := config.DefaultConfig()
+	o := NewSettingsOverlay(cfg)
+	settingsAt(t, o, "show_release_notes_after_update")
+
+	require.True(t, cfg.GetShowReleaseNotesAfterUpdate(), "notes default on")
+	_, changed := o.HandleKeyPress(tea.KeyMsg{Type: tea.KeySpace})
+	assert.Equal(t, "show_release_notes_after_update", changed, "a toggle must report its row key so home can persist")
+	assert.False(t, cfg.GetShowReleaseNotesAfterUpdate(), "space flips the default-on field off")
+}
+
 func TestSettingsOverlay_CycleThemeWraps(t *testing.T) {
 	cfg := config.DefaultConfig()
 	o := NewSettingsOverlay(cfg)

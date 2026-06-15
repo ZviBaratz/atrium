@@ -67,6 +67,24 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, m.handleUpdateNotice(fmt.Sprintf("updated to v%s — restart %s to apply", msg.version, m.hintBinName()))
 		}
 		return m, m.handleUpdateNotice(fmt.Sprintf("v%s available — run `%s update`", msg.version, m.hintBinName()))
+	case releaseNotesFetchedMsg:
+		// Record the version on the successful fetch so the notes show once and
+		// never refetch — even when the body is empty (nothing to show, but no
+		// reason to keep polling).
+		if err := m.appState.SetLastNotesVersion(msg.version); err != nil {
+			log.WarningLog.Printf("failed to record release-notes version: %v", err)
+		}
+		if strings.TrimSpace(msg.notes) == "" {
+			return m, nil
+		}
+		// Don't clobber an open overlay (e.g. a new-session form): buffer and
+		// flush on the next preview tick, like pendingUpdateNotice.
+		if m.state != stateDefault {
+			buffered := msg
+			m.pendingReleaseNotes = &buffered
+			return m, nil
+		}
+		return m, m.showReleaseNotes(msg.version, msg.notes, msg.url)
 	case previewTickMsg:
 		// The pane owns hint-overlay validity (a selection change or pause
 		// drops it there); if it dropped, follow it back to default so keys
@@ -81,6 +99,8 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// An update notice that arrived while an overlay owned the screen
 			// is buffered; deliver it as soon as the hint bar is back.
 			m.flushPendingUpdateNotice(),
+			// Likewise for "what's new" notes buffered behind another overlay.
+			m.flushPendingReleaseNotes(),
 			func() tea.Msg {
 				time.Sleep(100 * time.Millisecond)
 				return previewTickMsg{}
