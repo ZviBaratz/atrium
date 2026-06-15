@@ -184,6 +184,20 @@ func newSettingRows(cfg *config.Config) []settingRow {
 				return []string{config.ModelIndicatorOn, config.ModelIndicatorOff}
 			},
 		},
+		{
+			key: "permission_indicator", section: "Appearance", label: "Permission chip", kind: kindEnum,
+			description: "Per-session permission-mode chip (plan/accept-edits/auto) in the list.",
+			get: func(c *config.Config) string {
+				return c.GetPermissionIndicator()
+			},
+			set: func(c *config.Config, v string) error {
+				c.PermissionIndicator = v
+				return nil
+			},
+			options: func(c *config.Config) []string {
+				return []string{config.PermissionIndicatorOn, config.PermissionIndicatorOff}
+			},
+		},
 		boolRow("hint_bar", "Appearance", "Hint bar",
 			"Always-on key-hint bar at the bottom of the screen.", "",
 			(*config.Config).GetHintBar,

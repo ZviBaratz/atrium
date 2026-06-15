@@ -1,11 +1,23 @@
 package transcript
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
 )
+
+// mustJSON encodes s as a JSON string literal (with surrounding quotes) for
+// inlining a text body into a hand-built JSONL line.
+func mustJSON(t *testing.T, s string) string {
+	t.Helper()
+	b, err := json.Marshal(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(b)
+}
 
 // TestSanitizeCWD verifies the cwd → project-dir mapping used by Claude Code:
 // every non-alphanumeric rune of the absolute path becomes '-'. The scheme was

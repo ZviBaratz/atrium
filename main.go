@@ -41,6 +41,12 @@ var (
 	rootCmd         = &cobra.Command{
 		Use:   "atrium",
 		Short: "Atrium - A command center for orchestrating multiple AI coding agents like Claude Code, Aider, Codex, and Amp.",
+		// A runtime failure is not a usage error: let main() be the single
+		// error printer (exit 1, message to stderr) rather than Cobra also
+		// printing its own "Error: ..." line. SilenceUsage drops the usage
+		// block on failures; both flags propagate to every subcommand.
+		SilenceErrors: true,
+		SilenceUsage:  true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			// Root lifecycle context: cancelled on SIGINT/SIGTERM so in-flight
 			// git/gh/tmux subprocesses are killed rather than orphaned on shutdown.
@@ -226,10 +232,6 @@ var (
 		Long: "Checks GitHub releases for a newer version, downloads the matching archive,\n" +
 			"verifies its checksum, and atomically replaces the current binary. Running\n" +
 			"sessions are not disturbed; the new version takes effect on the next launch.",
-		// A runtime failure is not a usage error: print it once (via main) and
-		// exit non-zero, with no usage dump.
-		SilenceUsage:  true,
-		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			log.Initialize(false)
 			defer log.Close()
@@ -259,6 +261,11 @@ var (
 			if updateCheckOnly {
 				fmt.Printf("v%s is available (current: v%s) — run `%s update` to install\n", rel.Version, version, binName)
 				return nil
+			}
+			// Verify writability before printing the "updating..." line so a
+			// permission failure never reads as "updating ... / update failed:".
+			if err := rel.Preflight(); err != nil {
+				return fmt.Errorf("cannot apply update: %w", err)
 			}
 			fmt.Printf("updating v%s → v%s ...\n", version, rel.Version)
 			if err := rel.Apply(ctx); err != nil {
@@ -309,7 +316,7 @@ func main() {
 	rootCmd.Use = binName
 
 	if err := rootCmd.Execute(); err != nil {
-		fmt.Println(err)
+		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
 }

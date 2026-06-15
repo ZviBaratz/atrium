@@ -220,6 +220,11 @@ type Config struct {
 	// empty, unknown, and the retired "pinned"/"always" modes — normalizes to
 	// "on" (GetModelIndicator).
 	ModelIndicator string `json:"model_indicator,omitempty"`
+	// PermissionIndicator controls the per-session permission-mode chip in the
+	// list: "on" shows it for any pinned non-default mode (e.g. plan,
+	// acceptEdits, auto), "off" hides it. Everything else normalizes to "on"
+	// (GetPermissionIndicator).
+	PermissionIndicator string `json:"permission_indicator,omitempty"`
 }
 
 // ModelIndicator modes (see Config.ModelIndicator).
@@ -236,6 +241,21 @@ func (c *Config) GetModelIndicator() string {
 		return ModelIndicatorOff
 	}
 	return ModelIndicatorOn
+}
+
+// PermissionIndicator modes (see Config.PermissionIndicator).
+const (
+	PermissionIndicatorOn  = "on"
+	PermissionIndicatorOff = "off"
+)
+
+// GetPermissionIndicator returns the normalized permission-chip mode: "off"
+// only when set explicitly, "on" for everything else.
+func (c *Config) GetPermissionIndicator() string {
+	if c != nil && c.PermissionIndicator == PermissionIndicatorOff {
+		return PermissionIndicatorOff
+	}
+	return PermissionIndicatorOn
 }
 
 // defaultCarryFiles is the carry list applied when a config predates the

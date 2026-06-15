@@ -45,6 +45,9 @@ func Run(ctx context.Context, program string, autoYes bool, version, binName str
 		newHome(ctx, program, autoYes, version, binName),
 		tea.WithAltScreen(),
 		tea.WithMouseCellMotion(), // Mouse scroll
+		// Normalize SS3 Home/End (ESC O H/F) that a terminal left in application-cursor
+		// mode emits, which bubbletea v1 otherwise mis-decodes into literal "OH"/"OF".
+		tea.WithInput(newSS3HomeEndReader(os.Stdin)),
 		// Tie the program to the lifecycle context so a SIGTERM (which cancels
 		// ctx in main) also stops the TUI loop, not just the subprocesses.
 		tea.WithContext(ctx),
@@ -323,6 +326,8 @@ func newHome(ctx context.Context, program string, autoYes bool, version, binName
 	h.list.SetBranchPrefix(appConfig.GetBranchPrefix())
 	// Seed the model-chip mode (on/off; see config.GetModelIndicator).
 	h.list.SetModelIndicator(appConfig.GetModelIndicator())
+	// Seed the permission-mode chip (on/off; see config.GetPermissionIndicator).
+	h.list.SetPermissionIndicator(appConfig.GetPermissionIndicator())
 
 	// Load saved instances
 	instances, err := storage.LoadInstances(ctx)
