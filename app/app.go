@@ -137,6 +137,10 @@ type home struct {
 	// the hint bar couldn't render it (a modal overlay was open); the preview
 	// tick re-delivers it. Empty when nothing is pending.
 	pendingUpdateNotice string
+	// pendingReleaseNotes buffers a one-shot "what's new" overlay that arrived
+	// while another modal owned the screen; the preview tick flushes it once the
+	// screen is free. nil when nothing is pending.
+	pendingReleaseNotes *releaseNotesFetchedMsg
 
 	// storage is the interface for saving/loading data to/from the app's state
 	storage *session.Storage
@@ -362,6 +366,7 @@ func (m *home) Init() tea.Cmd {
 		},
 		tickUpdateMetadataCmd(m.snapshotActiveInstances(), m.list.GetSelectedInstance()),
 		m.updateCheckCmd(),   // nil (inert) is fine: tea.Batch skips nil cmds
+		m.releaseNotesCmd(),  // nil (inert) is fine: tea.Batch skips nil cmds
 		m.startProjectScan(), // nil (disabled) is likewise skipped
 	)
 }
