@@ -12,7 +12,7 @@ import (
 const claudeFieldNA = "  n/a — the selected profile is not Claude Code"
 
 // chipRow is the state machine behind the chip-style fields: a horizontal row
-// of options with a clamped cursor, focus, and an inert state. By convention
+// of options with a wrapping cursor, focus, and an inert state. By convention
 // the first chip is the no-op ("default") choice, so selected returns "" for
 // it. ModeField is a pure chip row; ModelField layers its free-text custom
 // mode on top.
