@@ -101,6 +101,34 @@ func TestReleaseNotesCmd_FetchFailureIsSilentAndRetries(t *testing.T) {
 	assert.False(t, h.errBox.HasError(), "update failures never surface as UI errors")
 }
 
+// A "not found" release (deleted/yanked, or no asset for this OS/arch — the
+// library reports both as a nil release with no error) is permanent, unlike a
+// transient fetch error: it must record the landed version so the network is not
+// re-queried on every launch. No notes body means no overlay.
+func TestReleaseNotesCmd_NotFoundRecordsAndStops(t *testing.T) {
+	h := newReleaseNotesHome(t, "0.6.0", "0.5.0")
+	calls := 0
+	swapFetchReleaseNotes(t, func(context.Context, string) (*update.Release, error) {
+		calls++
+		return nil, nil // found=false: the release isn't there
+	})
+
+	msg := h.releaseNotesCmd()()
+	fetched, ok := msg.(releaseNotesFetchedMsg)
+	require.True(t, ok, "a not-found release still reports back so the version can be recorded")
+	assert.Equal(t, "0.6.0", fetched.version, "the landed version is carried, so the handler records it")
+	assert.Equal(t, "", fetched.notes, "nothing to show")
+
+	// Feed it through: the version records and no overlay opens.
+	h.Update(fetched)
+	assert.Equal(t, stateDefault, h.state, "a not-found release opens no modal")
+	assert.Equal(t, "0.6.0", h.appState.GetLastNotesVersion(), "the version is recorded so we stop refetching")
+
+	// A second launch at the same version is now inert — no further fetch.
+	assert.Nil(t, h.releaseNotesCmd(), "the recorded version is no longer an upgrade")
+	assert.Equal(t, 1, calls, "the network is queried once, not on every launch")
+}
+
 // Non-empty notes open the dismissible overlay and record the version so it
 // shows once and never refetches.
 func TestReleaseNotesFetchedMsg_OpensOverlayAndRecords(t *testing.T) {

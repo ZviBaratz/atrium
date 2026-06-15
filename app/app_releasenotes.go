@@ -17,7 +17,8 @@ var fetchReleaseNotes = update.FetchVersion
 
 // releaseNotesFetchedMsg carries the landed version's notes back to the UI. An
 // empty notes body still arrives (so the version is recorded and we stop
-// refetching); a fetch failure produces no message at all.
+// refetching) — whether the body was empty or the release was not found at all;
+// only a transient fetch error produces no message.
 type releaseNotesFetchedMsg struct {
 	version string
 	notes   string
@@ -58,7 +59,12 @@ func (m *home) releaseNotesCmd() tea.Cmd {
 			return nil
 		}
 		if rel == nil {
-			return nil
+			// The release is genuinely absent (deleted/yanked, or published
+			// without this OS/arch's asset — DetectVersion reports both as
+			// "not found"). That is permanent, not transient like the error
+			// above, so record the current version to stop re-querying the
+			// network on every launch. No notes body means no overlay.
+			return releaseNotesFetchedMsg{version: current}
 		}
 		return releaseNotesFetchedMsg{version: rel.Version, notes: rel.Notes, url: rel.URL}
 	}
