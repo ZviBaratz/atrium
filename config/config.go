@@ -204,6 +204,16 @@ type Config struct {
 	// "off". Empty or unrecognized values behave as "notify". The explicit
 	// `atrium update` command works regardless of this setting.
 	AutoUpdate string `json:"auto_update,omitempty"`
+	// ProjectSearchRoots lists the directories the background repo scan walks
+	// to populate the new-session project picker with git repos the user has
+	// never opened in Atrium. A leading "~" expands to the home directory.
+	// nil or empty (configs predating this key) defaults to ["~"].
+	ProjectSearchRoots []string `json:"project_search_roots,omitempty"`
+	// ProjectSearchDepth bounds how many directory levels below each search
+	// root the repo scan descends (a root's children are level 1). nil
+	// defaults to 3; zero or negative disables the scan entirely; large
+	// values are clamped so a typo can't walk the world.
+	ProjectSearchDepth *int `json:"project_search_depth,omitempty"`
 	// ModelIndicator controls the per-session model chip in the list: "on"
 	// shows it on any session whose model is known (a --model flag before the
 	// first turn, transcript truth after), "off" hides it. Everything else —
@@ -252,6 +262,44 @@ func (c *Config) GetMaxSessions() int {
 		return 0
 	}
 	return *c.MaxSessions
+}
+
+// Project-scan depth bounds (see Config.ProjectSearchDepth).
+const (
+	defaultProjectSearchDepth = 3
+	maxProjectSearchDepth     = 8
+)
+
+// defaultProjectSearchRoots is the scan scope applied when a config predates
+// the project_search_roots key (nil or empty field).
+var defaultProjectSearchRoots = []string{"~"}
+
+// GetProjectSearchRoots returns the directories the repo scan walks. A nil or
+// empty ProjectSearchRoots — or a nil Config — defaults to the home directory.
+// The result is always a fresh copy so callers can never mutate the shared
+// default seed nor the Config's stored slice.
+func (c *Config) GetProjectSearchRoots() []string {
+	if c == nil || len(c.ProjectSearchRoots) == 0 {
+		return append([]string(nil), defaultProjectSearchRoots...)
+	}
+	return append([]string(nil), c.ProjectSearchRoots...)
+}
+
+// GetProjectSearchDepth returns the scan's depth bound: nil (an older config
+// with no such key) defaults to defaultProjectSearchDepth, zero or negative
+// disables the scan (returns 0), and values beyond maxProjectSearchDepth clamp.
+func (c *Config) GetProjectSearchDepth() int {
+	if c == nil || c.ProjectSearchDepth == nil {
+		return defaultProjectSearchDepth
+	}
+	d := *c.ProjectSearchDepth
+	if d <= 0 {
+		return 0
+	}
+	if d > maxProjectSearchDepth {
+		return maxProjectSearchDepth
+	}
+	return d
 }
 
 // GetSessionContextBar reports whether attached sessions should render the

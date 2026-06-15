@@ -161,3 +161,37 @@ func TestMenu_FilterHintLine(t *testing.T) {
 	require.Contains(t, out, "accept")
 	require.Contains(t, out, "clear")
 }
+
+// While the agent is blocked on a prompt, answering it is the headline action:
+// the bar must surface approve, and drop it again once the agent moves on.
+func TestMenu_NeedsInputHintSurfacesApprove(t *testing.T) {
+	inst, err := session.NewInstance(session.InstanceOptions{Title: "t", Path: t.TempDir(), Program: "echo"})
+	require.NoError(t, err)
+	inst.SetStatus(session.NeedsInput)
+
+	m := NewMenu()
+	m.SetSize(200, 3)
+	m.SetInstance(inst)
+	require.Contains(t, m.String(), "approve")
+
+	inst.SetStatus(session.Running)
+	m.SetInstance(inst)
+	require.NotContains(t, m.String(), "approve", "a working agent has nothing to approve")
+}
+
+// A blocked prompt outranks PR state: merge/push are moot until the agent is
+// unblocked, so the needs-input set wins over the mergeable set.
+func TestMenu_NeedsInputHintOutranksPR(t *testing.T) {
+	inst, err := session.NewInstance(session.InstanceOptions{Title: "t", Path: t.TempDir(), Program: "echo"})
+	require.NoError(t, err)
+	inst.SetStatus(session.NeedsInput)
+	inst.SetPRStatus(&git.PRStatus{HasPR: true, State: "OPEN", CI: git.CIPassing, Mergeable: "MERGEABLE"})
+
+	m := NewMenu()
+	m.SetSize(200, 3)
+	m.SetInstance(inst)
+
+	out := m.String()
+	require.Contains(t, out, "approve")
+	require.NotContains(t, out, "merge", "PR actions are moot while the agent waits on a prompt")
+}

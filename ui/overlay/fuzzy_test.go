@@ -43,6 +43,21 @@ func TestFuzzyMatch_BoundaryStartBeatsMid(t *testing.T) {
 	assert.Greater(t, start, mid, "a match at a word boundary should outscore a mid-word match")
 }
 
+func TestFuzzyMatch_FindsLaterContiguousRun(t *testing.T) {
+	// Greedy leftmost alignment would consume 's' from "projects" and score the
+	// scattered embedding; the minimal-window pass must find the contiguous
+	// boundary run in "sessions" and score it identically to the clean target.
+	_, windowed := fuzzyMatch("ses", "projects/sessions")
+	_, clean := fuzzyMatch("ses", "sessions")
+	assert.Equal(t, clean, windowed, "the contiguous 'ses' run in the basename should be found and scored like a clean match")
+
+	// The PR #120 screenshot bug: 'h' stolen by "/home" left "hub" half the
+	// score of paths with a boundary 'b'.
+	_, hub := fuzzyMatch("hub", "/home/zvi/quantivly/hub")
+	_, box := fuzzyMatch("hub", "/home/zvi/quantivly/platform/src/box")
+	assert.Greater(t, hub, box, "a contiguous basename 'hub' must outscore a scattered h…u…b embedding")
+}
+
 func TestFuzzyRank_OrdersByScore(t *testing.T) {
 	got := fuzzyRank([]string{"atrium", "archive"}, "ar")
 	assert.Equal(t, []string{"archive", "atrium"}, got)
