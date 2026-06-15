@@ -29,40 +29,28 @@ const minDistinctiveWidth = 24
 func TrimOverlap(transcript, pane string) (string, bool) {
 	tLines := strings.Split(transcript, "\n")
 
-	type mline struct {
-		norm string
-		idx  int
-	}
-	var tm []mline
-	for i, l := range tLines {
-		if n := normLine(l); n != "" && !isChrome(n) {
-			tm = append(tm, mline{n, i})
-		}
-	}
-	var pm []string
-	for _, l := range strings.Split(pane, "\n") {
-		if n := normLine(l); n != "" && !isChrome(n) {
-			pm = append(pm, n)
-		}
-	}
-	if len(tm) == 0 || len(pm) == 0 {
+	// Both sides reduce to a flat stream of prose *words*, not whole lines. The
+	// transcript wraps to the preview width with our own "● "/hanging indent
+	// while the pane carries Claude's own margin, so the same paragraph breaks at
+	// different word boundaries — line-for-line matching misses it and the seam
+	// renders the block twice. Words carry no line breaks, so the overlap is
+	// wrap-independent. Each transcript word remembers its source line and
+	// whether it opened that line, so the cut can land on a clean line boundary.
+	tw, tLine, tFirst := wordStream(tLines)
+	pw, _, _ := wordStream(strings.Split(pane, "\n"))
+	if len(tw) == 0 || len(pw) == 0 {
 		return transcript, false
 	}
 
 	// The overlap is anchored at the pane's top: history flows straight into the
 	// live screen, so the transcript's tail equals the pane's *leading* prose
-	// lines. We take the longest transcript suffix that is a prefix of the pane's
-	// prose. Matching a suffix anywhere inside the pane instead would let a
-	// re-quoted tail line splice mid-screen and reorder/duplicate history — that
-	// is the wrong-splice case the divider fallback exists to avoid, so we never
-	// match off the top.
-	suffix := make([]string, len(tm))
-	for i, m := range tm {
-		suffix[i] = m.norm
-	}
+	// words. Take the longest transcript word-suffix that is a prefix of the
+	// pane's words. Matching anywhere inside the pane instead would let a
+	// re-quoted tail splice mid-screen and reorder/duplicate history — the
+	// wrong-splice case the divider fallback exists to avoid.
 	best := 0
-	for k := min(len(tm), len(pm)); k >= 1; k-- {
-		if matchesPrefix(pm, suffix[len(suffix)-k:]) {
+	for k := min(len(tw), len(pw)); k >= 1; k-- {
+		if equalWords(tw[len(tw)-k:], pw[:k]) {
 			best = k
 			break
 		}
@@ -70,14 +58,44 @@ func TrimOverlap(transcript, pane string) (string, bool) {
 	if best == 0 {
 		return transcript, false
 	}
-	// A single matched line must be long enough to be distinctive; two or more
-	// contiguous lines anchored at the pane top stand on their own.
-	if best == 1 && lipgloss.Width(tm[len(tm)-1].norm) < minDistinctiveWidth {
+	start := len(tw) - best
+	// Distinctiveness: the shared run must be wide enough to trust. A one- or
+	// two-word coincidental tail ("Done.", "ok thanks") is too generic; a real
+	// shared paragraph clears this easily.
+	if lipgloss.Width(strings.Join(pw[:best], " ")) < minDistinctiveWidth {
+		return transcript, false
+	}
+	// Clean cut: the overlap must begin at a transcript line boundary. When the
+	// pane's top row is a mid-paragraph cut (the overlap starts mid-line), cutting
+	// the whole line would drop head-of-line history that scrolled above the
+	// screen, and keeping it would duplicate the line's tail — so fall back to the
+	// divider, which is honest and lossless. Real seams start at a message or
+	// blank boundary, so this rarely rejects.
+	if !tFirst[start] {
 		return transcript, false
 	}
 
-	cut := tm[len(tm)-best].idx
+	cut := tLine[start]
 	return strings.TrimRight(strings.Join(tLines[:cut], "\n"), "\n"), true
+}
+
+// wordStream flattens prose lines into their normalized words, dropping blank
+// and chrome lines (the same filter both sides share). For each word it records
+// the source line index and whether the word opened its line, so a word-level
+// overlap can be cut back to a whole-line boundary.
+func wordStream(lines []string) (words []string, lineIdx []int, firstOnLine []bool) {
+	for i, l := range lines {
+		n := normLine(l)
+		if n == "" || isChrome(n) {
+			continue
+		}
+		for w, field := range strings.Fields(n) {
+			words = append(words, field)
+			lineIdx = append(lineIdx, i)
+			firstOnLine = append(firstOnLine, w == 0)
+		}
+	}
+	return words, lineIdx, firstOnLine
 }
 
 // normLine reduces a rendered line to a comparable form: ANSI escapes stripped
@@ -87,14 +105,13 @@ func normLine(l string) string {
 	return strings.Join(strings.Fields(ansi.Strip(l)), " ")
 }
 
-// matchesPrefix reports whether needle equals the first len(needle) lines of hay
-// — the match is anchored at hay's top, not floating anywhere inside it.
-func matchesPrefix(hay, needle []string) bool {
-	if len(needle) == 0 || len(needle) > len(hay) {
+// equalWords reports whether two word slices are elementwise equal.
+func equalWords(a, b []string) bool {
+	if len(a) != len(b) {
 		return false
 	}
-	for j := range needle {
-		if hay[j] != needle[j] {
+	for i := range a {
+		if a[i] != b[i] {
 			return false
 		}
 	}

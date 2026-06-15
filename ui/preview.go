@@ -350,7 +350,14 @@ func (p *PreviewPane) fillScrollViewport(instance *session.Instance) error {
 			// no doubled last message. When no confident overlap is found, keep
 			// the divider as an honest seam marker.
 			if trimmed, ok := transcript.TrimOverlap(content, paneTrim); ok {
-				content = lipgloss.JoinVertical(lipgloss.Left, trimmed, paneTrim)
+				// When the whole transcript was already on screen, the pane is the
+				// entire scrollback — joining with an empty trimmed half would only
+				// prepend a stray blank line.
+				if trimmed == "" {
+					content = paneTrim
+				} else {
+					content = lipgloss.JoinVertical(lipgloss.Left, trimmed, paneTrim)
+				}
 			} else {
 				content = lipgloss.JoinVertical(lipgloss.Left, content, transcriptPaneDivider(p.width), paneTrim)
 			}

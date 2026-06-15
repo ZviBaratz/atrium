@@ -136,6 +136,46 @@ func TestTrimOverlapAnchoredAtPaneTop(t *testing.T) {
 	}
 }
 
+// TestTrimOverlapWrapMismatch is the regression for the user-reported scroll
+// duplication: the same shared paragraph is wrapped one way in the transcript
+// (our "● "/hanging-indent renderer) and another way in the pane (Claude's live
+// render at the same cell width but a different left margin), so the seam's
+// prose lines never line up character-for-character. A robust overlap must key
+// on the shared *words*, not the shared line breaks, and still splice — leaving
+// the paragraph exactly once. Line-level matching falls to the divider here and
+// shows the block twice.
+func TestTrimOverlapWrapMismatch(t *testing.T) {
+	// Transcript tail: unique history, then the insight, wrapped narrow.
+	transcript := strings.Join([]string{
+		"● Older unique history that scrolled above the screen.",
+		"",
+		"★ Insight ─────",
+		"The PR is still BLOCKED but the reason has cleanly",
+		"shifted from required_conversation_resolution to the",
+		"required_pull_request_reviews gate instead.",
+	}, "\n")
+	// Pane top: the same insight, wrapped wider (different break points), then
+	// newer live content the transcript does not yet have.
+	pane := strings.Join([]string{
+		"★ Insight ─────",
+		"The PR is still BLOCKED but the reason has cleanly shifted from",
+		"required_conversation_resolution to the required_pull_request_reviews gate instead.",
+		"",
+		"❯ Any update?",
+	}, "\n")
+
+	trimmed, ok := TrimOverlap(transcript, pane)
+	if !ok {
+		t.Fatalf("differently-wrapped shared paragraph should still splice\ntrimmed=%q", trimmed)
+	}
+	if strings.Contains(trimmed, "BLOCKED") || strings.Contains(trimmed, "★ Insight") {
+		t.Errorf("the shared insight was not trimmed (it would render twice):\n%s", trimmed)
+	}
+	if !strings.Contains(trimmed, "Older unique history") {
+		t.Errorf("unique history above the overlap was lost:\n%s", trimmed)
+	}
+}
+
 // TestTrimOverlapOSC8Survives: a transcript line carrying an OSC 8 hyperlink
 // normalizes to its visible text and still matches the plain pane line.
 func TestTrimOverlapOSC8Survives(t *testing.T) {
