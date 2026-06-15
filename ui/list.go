@@ -332,7 +332,9 @@ type InstanceRenderer struct {
 	modelIndicator string
 	// permissionIndicator is the permission-mode chip mode
 	// (config.GetPermissionIndicator): "off" hides the chip, anything else
-	// shows it. Non-default modes only: "plan", "acceptEdits", "auto".
+	// shows it. The chip is drawn for any pinned non-default mode — the offered
+	// chips ("plan", "acceptEdits", "auto") plus a profile-pinned
+	// "bypassPermissions"/"dontAsk" — but never for "default" or no flag.
 	permissionIndicator string
 }
 
@@ -457,8 +459,10 @@ func (r *InstanceRenderer) Render(i *session.Instance, idx int, selected bool) s
 		}
 	}
 	// Per-session permission-mode chip: launch-time --permission-mode flag
-	// (static; never wrong about what it claims). Shown only for non-default
-	// modes (plan, acceptEdits, auto); "off" or no flag stays unbadged.
+	// (static; never wrong about what it claims). Shown for any pinned
+	// non-default mode (the offered plan/accept-edits/auto, and also a
+	// profile-pinned bypass mode worth surfacing); "default", no flag, or "off"
+	// stays unbadged.
 	if r.permissionIndicator != "off" {
 		if mode := i.PinnedPermissionMode(); mode != "" && mode != "default" {
 			right1 = append(right1, p.seg(" "+permissionModeLabel(mode), p.agentColor(i)))

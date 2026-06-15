@@ -221,8 +221,9 @@ type Config struct {
 	// "on" (GetModelIndicator).
 	ModelIndicator string `json:"model_indicator,omitempty"`
 	// PermissionIndicator controls the per-session permission-mode chip in the
-	// list: "on" shows it for any non-default mode (plan, acceptEdits, auto),
-	// "off" hides it. Everything else normalizes to "on" (GetPermissionIndicator).
+	// list: "on" shows it for any pinned non-default mode (e.g. plan,
+	// acceptEdits, auto), "off" hides it. Everything else normalizes to "on"
+	// (GetPermissionIndicator).
 	PermissionIndicator string `json:"permission_indicator,omitempty"`
 }
 
