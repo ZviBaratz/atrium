@@ -768,26 +768,45 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		m.textInputOverlay = overlay.NewQuickSendOverlay("Send to " + selected.DisplayName())
 		return m, tea.WindowSize()
 	case keys.KeyApprove:
-		// Answer the selected session's visible prompt with a single Enter,
-		// without attaching. Strictly gated on NeedsInput so a stray 'a' can't
-		// poke an agent that isn't asking. The gate is best-effort, not
+		// Answer the selected session's visible prompt with a single Enter, or
+		// accept claude's ghost-text prompt suggestion with Right+Enter — both
+		// without attaching. Strictly gated so a stray 'a' can't poke an agent
+		// that isn't asking: NeedsInput proves the prompt, and the suggestion
+		// path re-verifies the ghost text on a fresh capture inside
+		// AcceptSuggestion (only the dim styling distinguishes it from a typed
+		// draft that Enter would submit). The prompt gate is best-effort, not
 		// transactional: if the prompt resolved within the last poll tick the
 		// Enter lands at the agent's idle input box, which is a no-op.
 		selected := m.list.GetSelectedInstance()
 		if selected == nil {
 			return m, nil
 		}
-		if selected.GetStatus() != session.NeedsInput {
-			return m, m.handleInfoNotice("agent isn't waiting on a prompt — nothing to approve")
+		if selected.GetStatus() == session.NeedsInput {
+			if err := selected.ApprovePrompt(); err != nil {
+				return m, m.handleError(fmt.Errorf("approve: %w", err))
+			}
+			// Optimistic flip: updates the row glyph immediately and turns a
+			// double-press into the guard notice instead of a second Enter.
+			// Self-correcting — the next poll tick reclassifies the pane.
+			selected.SetStatus(session.Running)
+			return m, m.handleInfoNotice(fmt.Sprintf("approved — enter sent to '%s'", selected.DisplayName()))
 		}
-		if err := selected.ApprovePrompt(); err != nil {
-			return m, m.handleError(fmt.Errorf("approve: %w", err))
+		// A suggestion only renders on an idle input box, so Ready is the cheap
+		// pre-filter (never capture a busy pane); Started keeps an instance
+		// with no live pane on the guarded-notice path rather than surfacing
+		// AcceptSuggestion's "not running" error for a no-op keypress.
+		if selected.GetStatus() == session.Ready && selected.Started() {
+			accepted, err := selected.AcceptSuggestion()
+			if err != nil {
+				return m, m.handleError(fmt.Errorf("accept suggestion: %w", err))
+			}
+			if accepted {
+				// Same optimistic flip as approve, for the same reasons.
+				selected.SetStatus(session.Running)
+				return m, m.handleInfoNotice(fmt.Sprintf("accepted suggestion — sent to '%s'", selected.DisplayName()))
+			}
 		}
-		// Optimistic flip: updates the row glyph immediately and turns a
-		// double-press into the guard notice instead of a second Enter.
-		// Self-correcting — the next poll tick reclassifies the pane.
-		selected.SetStatus(session.Running)
-		return m, m.handleInfoNotice(fmt.Sprintf("approved — enter sent to '%s'", selected.DisplayName()))
+		return m, m.handleInfoNotice("agent isn't waiting on a prompt — nothing to approve or accept")
 	case keys.KeyCopyBranch:
 		// Yank the selected session's branch name to the system clipboard for handoff
 		// to a PR, a teammate, or a git command. Both outcomes are acknowledged on the
