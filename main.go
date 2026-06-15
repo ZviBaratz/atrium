@@ -42,9 +42,9 @@ var (
 		Use:   "atrium",
 		Short: "Atrium - A command center for orchestrating multiple AI coding agents like Claude Code, Aider, Codex, and Amp.",
 		// A runtime failure is not a usage error: let main() be the single
-		// error printer (exit 1, message to stdout) rather than Cobra also
-		// printing "Error: ..." to stderr. SilenceUsage suppresses the usage
-		// block on runtime errors; both propagate to all subcommands.
+		// error printer (exit 1, message to stderr) rather than Cobra also
+		// printing its own "Error: ..." line. SilenceUsage drops the usage
+		// block on failures; both flags propagate to every subcommand.
 		SilenceErrors: true,
 		SilenceUsage:  true,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -232,10 +232,6 @@ var (
 		Long: "Checks GitHub releases for a newer version, downloads the matching archive,\n" +
 			"verifies its checksum, and atomically replaces the current binary. Running\n" +
 			"sessions are not disturbed; the new version takes effect on the next launch.",
-		// A runtime failure is not a usage error: print it once (via main) and
-		// exit non-zero, with no usage dump.
-		SilenceUsage:  true,
-		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			log.Initialize(false)
 			defer log.Close()
@@ -320,7 +316,7 @@ func main() {
 	rootCmd.Use = binName
 
 	if err := rootCmd.Execute(); err != nil {
-		fmt.Println(err)
+		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
 }
