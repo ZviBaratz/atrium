@@ -257,6 +257,12 @@ func (m *home) openCreateForm(focusTitle bool) tea.Cmd {
 	// other candidate is fetched when, and if, it is confirmed as git while selected).
 	m.fetchedPaths = map[string]bool{}
 	cmds := []tea.Cmd{tea.WindowSize()}
+	// Refresh the repo scan when the last completed one has gone stale (a
+	// long-running TUI would otherwise serve launch-time results forever). The
+	// completion live-updates this form's picker in place.
+	if !m.scanInFlight && time.Since(m.lastScanAt) > projectScanTTL {
+		cmds = append(cmds, m.startProjectScan())
+	}
 	if isGit {
 		m.fetchedPaths[target] = true
 		cmds = append(cmds,
@@ -457,8 +463,11 @@ func (m *home) defaultNewSessionPath() string {
 }
 
 // candidateRepoPaths returns the deduped candidate target paths for the directory
-// picker: the current target first, then existing sessions' repos, then recently-used
-// project directories, then cwd.
+// picker, in priority order: the current target first, then existing sessions'
+// repos, then recently-used project directories, then the durable known-projects
+// tail, then background-scanned repos, then cwd. The picker's fuzzy ranking is
+// order-stable on ties, so this ordering is also the empty-filter display order
+// and the tiebreak between equal-scoring matches.
 func (m *home) candidateRepoPaths() []string {
 	seen := make(map[string]bool)
 	var paths []string
@@ -479,6 +488,20 @@ func (m *home) candidateRepoPaths() []string {
 		if !config.DirExists(p) {
 			continue
 		}
+		add(p)
+	}
+	for _, p := range m.appState.GetKnownProjects() {
+		// Same staleness pruning as recents (≤100 stats, same cost class).
+		if !config.DirExists(p) {
+			continue
+		}
+		add(p)
+	}
+	// Scanned repos arrive already ranked (most-recently-active first) and are
+	// deliberately not re-stat'd here — up to 2000 synchronous stats on form
+	// open would hurt on slow filesystems, and a stale entry is caught by the
+	// async validity check on selection plus the submit gate.
+	for _, p := range m.scannedRepos {
 		add(p)
 	}
 	if cwd, err := os.Getwd(); err == nil {

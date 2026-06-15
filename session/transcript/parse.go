@@ -28,9 +28,10 @@ type block struct {
 // content is either a plain string or an array of typed blocks, so both
 // levels decode through json.RawMessage and are sniffed.
 type rawEntry struct {
-	Type        string          `json:"type"`
-	IsSidechain bool            `json:"isSidechain"`
-	Message     json.RawMessage `json:"message"`
+	Type             string          `json:"type"`
+	IsSidechain      bool            `json:"isSidechain"`
+	IsCompactSummary bool            `json:"isCompactSummary"`
+	Message          json.RawMessage `json:"message"`
 }
 
 type rawMessage struct {
@@ -115,6 +116,13 @@ func decodeLine(line []byte) (entry, bool) {
 		return entry{}, false
 	}
 	if raw.IsSidechain || (raw.Type != "user" && raw.Type != "assistant") {
+		return entry{}, false
+	}
+	// Compact-summary user entries are the machine-generated "continued from a
+	// previous conversation" wall that bridges a context compaction. Claude Code
+	// never paints it as conversation, so it would only diverge the scrollback
+	// from the live view — skip it.
+	if raw.IsCompactSummary {
 		return entry{}, false
 	}
 	var msg rawMessage

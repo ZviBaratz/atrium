@@ -138,6 +138,19 @@ func CheckCached(ctx context.Context, current string, resolve bool) (*Release, e
 	return rel, nil
 }
 
+// Preflight reports whether the update can be applied by probing write
+// permission on the executable's directory. It is intentionally lock-free so
+// callers can bail out before printing an optimistic "updating..." message.
+// Apply re-runs the same check under the advisory lock, so a transient
+// permission change between the two calls is handled correctly.
+func (r *Release) Preflight() error {
+	exe, err := selfupdate.ExecutablePath()
+	if err != nil {
+		return fmt.Errorf("could not locate the running executable: %w", err)
+	}
+	return canReplaceExecutable(exe)
+}
+
 // Apply downloads the release archive, validates its checksum, and atomically
 // replaces the running executable. Running processes keep the old inode; the
 // new version takes effect on the next launch. On any failure the old binary

@@ -245,3 +245,50 @@ func TestHints_ResizeExits(t *testing.T) {
 	assert.Equal(t, stateDefault, h.state)
 	assert.False(t, h.tabbedWindow.InPreviewHintMode())
 }
+
+// Pressing f while in scroll mode enters hints over the visible viewport
+// snapshot. After the hint fires, scroll mode is still active — the user's
+// scroll position is not lost.
+func TestHints_InScrollModeEntersAndPreservesScroll(t *testing.T) {
+	h := newHintsHome(t, newBranchInstance(t, "a", "b1"))
+	inst := h.list.GetSelectedInstance()
+	fc := withFakeClipboard(t, nil)
+
+	// Size the window so the viewport renders non-empty content.
+	_, _ = h.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+
+	h.tabbedWindow.SetPreviewScrollContent(inst, "PR: https://github.com/x/y/pull/99\n")
+	require.True(t, h.tabbedWindow.IsPreviewInScrollMode(), "must be in scroll mode")
+
+	pressRunes(h, "f")
+	require.Equal(t, stateHints, h.state, "f in scroll mode must enter hints")
+	require.True(t, h.tabbedWindow.InPreviewHintMode())
+
+	pressRunes(h, "a")
+
+	assert.Equal(t, stateDefault, h.state)
+	assert.False(t, h.tabbedWindow.InPreviewHintMode())
+	require.True(t, fc.called)
+	assert.Equal(t, "https://github.com/x/y/pull/99", fc.value)
+	assert.True(t, h.tabbedWindow.IsPreviewInScrollMode(), "scroll position must be preserved after hints exit")
+}
+
+// f in scroll mode with no matches in the visible viewport explains itself
+// and leaves scroll mode active.
+func TestHints_ScrollModeNoMatchesExplains(t *testing.T) {
+	h := newHintsHome(t, newBranchInstance(t, "a", "b1"))
+	inst := h.list.GetSelectedInstance()
+
+	// Size the window so the viewport renders non-empty content.
+	_, _ = h.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+
+	h.tabbedWindow.SetPreviewScrollContent(inst, "nothing actionable in the viewport\n")
+	require.True(t, h.tabbedWindow.IsPreviewInScrollMode())
+
+	pressRunes(h, "f")
+
+	assert.Equal(t, stateDefault, h.state)
+	assert.False(t, h.tabbedWindow.InPreviewHintMode())
+	require.True(t, h.menu.HasNotice())
+	assert.True(t, h.tabbedWindow.IsPreviewInScrollMode(), "scroll mode must survive a no-match 'f'")
+}

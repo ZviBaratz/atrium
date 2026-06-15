@@ -45,6 +45,9 @@ func Run(ctx context.Context, program string, autoYes bool, version, binName str
 		newHome(ctx, program, autoYes, version, binName),
 		tea.WithAltScreen(),
 		tea.WithMouseCellMotion(), // Mouse scroll
+		// Normalize SS3 Home/End (ESC O H/F) that a terminal left in application-cursor
+		// mode emits, which bubbletea v1 otherwise mis-decodes into literal "OH"/"OF".
+		tea.WithInput(newSS3HomeEndReader(os.Stdin)),
 		// Tie the program to the lifecycle context so a SIGTERM (which cancels
 		// ctx in main) also stops the TUI loop, not just the subprocesses.
 		tea.WithContext(ctx),
@@ -176,6 +179,16 @@ type home struct {
 	titleBranchExists bool
 	titleBranchName   string
 
+	// scannedRepos is the latest completed background repo scan (most-recently-
+	// active first), seeded from the persisted cache at startup so the first
+	// form-open is populated instantly; lastScanAt is when it was produced.
+	// scanGen versions scans so a superseded result is dropped, and
+	// scanInFlight gates to one walk at a time.
+	scannedRepos []string
+	lastScanAt   time.Time
+	scanGen      uint64
+	scanInFlight bool
+
 	// welcomeChecked guards the one-time first-launch welcome so it is only
 	// attempted once per process (its seen-bit handles persistence across runs).
 	welcomeChecked bool
@@ -297,6 +310,13 @@ func newHome(ctx context.Context, program string, autoYes bool, version, binName
 		appState:     appState,
 		listRatio:    appState.GetListRatio(),
 	}
+	// Seed the picker's scanned-repo candidates from the persisted cache so the
+	// first form-open after launch is populated before the startup scan lands.
+	// Gated on the feature being enabled: with project_search_depth ≤ 0, a
+	// cache written before the user disabled the scan must not keep surfacing.
+	if appConfig.GetProjectSearchDepth() > 0 {
+		h.scannedRepos, h.lastScanAt = appState.GetScannedRepos()
+	}
 	h.list = ui.NewList(&h.spinner)
 	// With the always-on hint bar enabled, the bar already carries the first-run
 	// keys; suppress the list's centered empty hint so guidance isn't duplicated.
@@ -306,6 +326,8 @@ func newHome(ctx context.Context, program string, autoYes bool, version, binName
 	h.list.SetBranchPrefix(appConfig.GetBranchPrefix())
 	// Seed the model-chip mode (on/off; see config.GetModelIndicator).
 	h.list.SetModelIndicator(appConfig.GetModelIndicator())
+	// Seed the permission-mode chip (on/off; see config.GetPermissionIndicator).
+	h.list.SetPermissionIndicator(appConfig.GetPermissionIndicator())
 
 	// Load saved instances
 	instances, err := storage.LoadInstances(ctx)
@@ -339,7 +361,8 @@ func (m *home) Init() tea.Cmd {
 			return previewTickMsg{}
 		},
 		tickUpdateMetadataCmd(m.snapshotActiveInstances(), m.list.GetSelectedInstance()),
-		m.updateCheckCmd(), // nil (inert) is fine: tea.Batch skips nil cmds
+		m.updateCheckCmd(),   // nil (inert) is fine: tea.Batch skips nil cmds
+		m.startProjectScan(), // nil (disabled) is likewise skipped
 	)
 }
 

@@ -612,3 +612,68 @@ func TestResolveClaudeAccount(t *testing.T) {
 		t.Fatalf("earlier path_matches must beat later remote_matches: got %q, want %q", name, "byPath")
 	}
 }
+
+func TestGetProjectSearchRoots(t *testing.T) {
+	cases := []struct {
+		name  string
+		roots []string
+		want  []string
+	}{
+		{"nil (older config) defaults to home", nil, []string{"~"}},
+		{"explicit empty defaults to home", []string{}, []string{"~"}},
+		{"explicit roots returned as-is", []string{"~/work", "/srv/repos"}, []string{"~/work", "/srv/repos"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			c := &Config{ProjectSearchRoots: tc.roots}
+			got := c.GetProjectSearchRoots()
+			if len(got) != len(tc.want) {
+				t.Fatalf("GetProjectSearchRoots() = %v, want %v", got, tc.want)
+			}
+			for i := range tc.want {
+				if got[i] != tc.want[i] {
+					t.Fatalf("GetProjectSearchRoots() = %v, want %v", got, tc.want)
+				}
+			}
+		})
+	}
+
+	// The default must be a copy: mutating the returned slice cannot poison
+	// later callers.
+	c := &Config{}
+	c.GetProjectSearchRoots()[0] = "/mutated"
+	if got := c.GetProjectSearchRoots(); got[0] != "~" {
+		t.Fatalf("default roots shared/mutated: got %v", got)
+	}
+
+	// Explicit roots must be copied too: mutating the returned slice cannot
+	// reach back into the Config's stored slice.
+	c = &Config{ProjectSearchRoots: []string{"~/work"}}
+	c.GetProjectSearchRoots()[0] = "/mutated"
+	if got := c.GetProjectSearchRoots(); got[0] != "~/work" {
+		t.Fatalf("explicit roots shared/mutated: got %v", got)
+	}
+}
+
+func TestGetProjectSearchDepth(t *testing.T) {
+	intp := func(i int) *int { return &i }
+	cases := []struct {
+		name  string
+		depth *int
+		want  int
+	}{
+		{"nil (older config) defaults", nil, 3},
+		{"explicit zero disables", intp(0), 0},
+		{"negative disables", intp(-2), 0},
+		{"explicit value returned", intp(5), 5},
+		{"absurd value clamped", intp(30), 8},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			c := &Config{ProjectSearchDepth: tc.depth}
+			if got := c.GetProjectSearchDepth(); got != tc.want {
+				t.Fatalf("GetProjectSearchDepth() = %d, want %d", got, tc.want)
+			}
+		})
+	}
+}

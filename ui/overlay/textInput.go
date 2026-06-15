@@ -52,6 +52,11 @@ const (
 	// minPickerRows / minPromptRows are the floors the form collapses to on short terminals.
 	minPickerRows = 1
 	minPromptRows = 1
+	// maxPickerRows caps how far the picker lists grow on tall terminals. With
+	// background repo discovery the candidate list can hold hundreds of repos,
+	// so extra vertical room goes to the lists first (each extra row costs 2
+	// lines — the directory and branch pickers share the count).
+	maxPickerRows = 6
 	// formChromeLines is every create-form line that is neither a picker row nor a prompt
 	// row: the rounded border (2) + vertical padding (2) + the overlay title, the Title
 	// field and its divider, each picker's header/blank/divider, the prompt label and its
@@ -71,10 +76,16 @@ const (
 	modeSectionLines = 4
 )
 
-// createFormHelp is the single footer line describing how to navigate the create form.
-// Enter advances between fields (and inserts a newline in the prompt), so submission is
-// surfaced as Ctrl+S — which works from any field — rather than an ambiguous "Enter create".
+// createFormHelp is the footer shown for every create-form field except the prompt.
+// Enter advances between fields (and submits from a filled title — the one-handed quick
+// create), so submission is surfaced as Ctrl+S, which works from any field, rather than an
+// ambiguous "Enter create".
 const createFormHelp = "Tab complete/move · ↑↓ select · ↵ create from name · ⌃S create"
+
+// promptFocusHelp is the footer shown while the prompt textarea holds focus, where Enter
+// advances like Tab and the newline keys differ. Shift+Enter needs a Claude-Code-style
+// terminal setup; Ctrl+J always works.
+const promptFocusHelp = "⇧↵ / ⌃J newline · ↵ next field · ⌃S create"
 
 // renderPickerRows renders a list of pre-formatted labels windowed around the cursor,
 // always emitting exactly rows lines (padding with blanks) so the caller's height is
@@ -194,7 +205,7 @@ func NewQuickSendOverlay(title string) *TextInputOverlay {
 func NewSessionCreateOverlay(profiles []config.Profile, accounts []config.ClaudeAccount, dirCandidates []string, defaultProgram string) *TextInputOverlay {
 	ti := newTextarea("")
 	// The prompt is optional and auto-sent to the agent once the session boots, so say so.
-	ti.Placeholder = "Optional — sent to the agent once it starts (Tab to skip)"
+	ti.Placeholder = "Optional — sent to the agent once it starts (Enter or Tab to skip)"
 	bp := NewBranchPicker()
 	dp := NewDirectoryPicker(dirCandidates)
 
@@ -297,6 +308,14 @@ func newTextarea(initialValue string) textarea.Model {
 	ti.FocusedStyle.CursorLine = lipgloss.NewStyle()
 	ti.CharLimit = 0
 	ti.MaxHeight = 0
+	// Match the single-line title field, which already binds ctrl+arrow for word
+	// motion; the textarea default binds only alt+arrow. Make ctrl+j the textarea's
+	// newline: the overlay intercepts Enter for field navigation, so the literal
+	// "enter" binding never fires here, and Alt+Enter is handled explicitly in
+	// HandleKeyPress. ctrl+j is the one newline key that works in every terminal.
+	ti.KeyMap.WordForward.SetKeys("alt+right", "ctrl+right", "alt+f")
+	ti.KeyMap.WordBackward.SetKeys("alt+left", "ctrl+left", "alt+b")
+	ti.KeyMap.InsertNewline.SetKeys("ctrl+j")
 	return ti
 }
 
@@ -378,6 +397,13 @@ func (t *TextInputOverlay) fitRows(height int) (pickerRows, promptRows int) {
 		default:
 			return pickerRows, promptRows
 		}
+	}
+	// Spare room on tall terminals goes to the picker lists (each increment
+	// costs 2 lines: the directory and branch pickers share the count) — with
+	// repo discovery the candidate list is worth the rows. The prompt keeps its
+	// preferred height: a taller textarea doesn't show more useful information.
+	for pickerRows < maxPickerRows && total()+2 <= height-margin {
+		pickerRows++
 	}
 	return pickerRows, promptRows
 }
@@ -560,7 +586,7 @@ func (t *TextInputOverlay) HandleKeyPress(msg tea.KeyMsg) (bool, bool) {
 		return true, false
 	case tea.KeyCtrlS:
 		// Submit from any field. Enter submits only on the Create button and a filled
-		// title (it stays a newline in the prompt and an "advance" elsewhere), so
+		// title (it advances to the next field everywhere else, including the prompt), so
 		// Ctrl+S is the submit-from-anywhere shortcut; the Create button remains the
 		// fallback.
 		t.Submitted = true
@@ -589,27 +615,28 @@ func (t *TextInputOverlay) HandleKeyPress(msg tea.KeyMsg) (bool, bool) {
 			return true, false
 		}
 		if t.isTextarea() {
-			// Quick-send: bare Enter sends, Alt+Enter is the newline. The textarea's newline
-			// binding matches the literal "enter", so an Alt-modified Enter would be ignored if
-			// forwarded — insert the newline explicitly instead.
+			// Alt+Enter inserts a newline — and that is exactly what a Claude-Code-style
+			// terminal's Shift+Enter sends, so "shift+enter for a newline" works once the
+			// terminal is set up. The textarea's own newline binding matches the literal
+			// "enter", which is intercepted here, so insert the newline explicitly.
+			if msg.Alt {
+				t.textarea.InsertRune('\n')
+				return false, false
+			}
 			if t.submitOnEnter {
-				if msg.Alt {
-					t.textarea.InsertRune('\n')
-					return false, false
-				}
+				// Quick-send reply box: a bare Enter sends.
 				t.Submitted = true
 				if t.OnSubmit != nil {
 					t.OnSubmit()
 				}
 				return true, false
 			}
-			// In the create-form prompt, Enter inserts a newline.
-			t.textarea, _ = t.textarea.Update(msg)
-			return false, false
+			// Create-form prompt: a bare Enter advances to the next field, like Tab
+			// (Shift+Enter / Ctrl+J make a newline). Fall through to the shared advance.
 		}
-		// Every other field (title, pickers) advances to the next enabled stop. Advancing
-		// by one — rather than jumping to the button — keeps Enter consistent regardless
-		// of where a field sits in the order.
+		// Every other field (title, pickers) — and the prompt on a bare Enter — advances to
+		// the next enabled stop. Advancing by one — rather than jumping to the button — keeps
+		// Enter consistent regardless of where a field sits in the order.
 		t.setFocusIndex(t.nextEnabledIndex(t.FocusIndex, 1))
 		return false, false
 	default:
@@ -695,6 +722,16 @@ func (t *TextInputOverlay) GetSelectedPath() string {
 		return ""
 	}
 	return t.directoryPicker.GetSelectedPath()
+}
+
+// UpdateDirCandidates refreshes the project picker's candidate list, preserving
+// the user's typed filter and selection — used when a background repo scan
+// completes while the form is open. No-op without a directory picker.
+func (t *TextInputOverlay) UpdateDirCandidates(paths []string) {
+	if t.directoryPicker == nil {
+		return
+	}
+	t.directoryPicker.UpdateCandidates(paths)
 }
 
 // SetTargetValidity marks the currently selected target directory's state so the picker
@@ -878,7 +915,9 @@ func (t *TextInputOverlay) Render() string {
 	content += t.textarea.View() + "\n\n"
 	content += divider + "\n\n"
 	if t.submitOnEnter {
-		content += tiHintStyle().Render("enter send · ⌥enter newline · esc cancel") + "\n"
+		// Mirror the create form's newline vocabulary: Shift+Enter (alt+enter on the
+		// wire, needs a configured terminal) or the universal Ctrl+J — see newTextarea.
+		content += tiHintStyle().Render("↵ send · ⇧↵ / ⌃J newline · esc cancel") + "\n"
 	}
 	content += t.renderEnterButton()
 
@@ -1010,7 +1049,11 @@ func (t *TextInputOverlay) renderCreateForm(divider string) string {
 		section(t.accountPicker.Render())
 	}
 
-	b.WriteString(tiHintStyle().Render(createFormHelp) + "\n")
+	help := createFormHelp
+	if t.isTextarea() {
+		help = promptFocusHelp
+	}
+	b.WriteString(tiHintStyle().Render(help) + "\n")
 	b.WriteString(t.renderEnterButton())
 
 	return b.String()

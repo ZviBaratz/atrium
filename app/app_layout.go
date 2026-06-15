@@ -127,6 +127,10 @@ func (m *home) applySettingChange(key string) tea.Cmd {
 		if m.list != nil {
 			m.list.SetModelIndicator(m.appConfig.GetModelIndicator())
 		}
+	case "permission_indicator":
+		if m.list != nil {
+			m.list.SetPermissionIndicator(m.appConfig.GetPermissionIndicator())
+		}
 	case "hint_bar":
 		// Mirror the newHome seeding: the list shows its inline key hint only
 		// when the always-on bar is off.

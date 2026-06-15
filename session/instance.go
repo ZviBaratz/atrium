@@ -897,6 +897,41 @@ func (i *Instance) TapEnter() {
 	}
 }
 
+// ApprovePrompt sends a single Enter to the agent pane to answer a visible
+// prompt (tool permission, plan approval) on the user's behalf. Unlike
+// TapEnter — the self-gating autoyes path — this is user-initiated, so it
+// ignores AutoYes and returns errors instead of logging them. It deliberately
+// answers PanePromptManual prompts too: a human keypress is exactly the
+// manual confirmation the autoyes NoAutoTap guard preserves. Note that Enter
+// selects whatever option the dialog has highlighted — on claude's plan
+// dialog the default both accepts the plan and enables auto-accept edits.
+func (i *Instance) ApprovePrompt() error {
+	ts := i.tmux()
+	if !i.isStarted() || i.Paused() || ts == nil {
+		return fmt.Errorf("session is not running")
+	}
+	if err := ts.TapEnter(); err != nil {
+		return fmt.Errorf("error tapping enter: %w", err)
+	}
+	return nil
+}
+
+// AcceptSuggestion accepts the agent's ghost-text prompt suggestion in the
+// idle input box, without attaching: Right (accept) then Enter (send). The
+// detection gate lives in the tmux layer on a fresh raw capture
+// (tmux.Session.AcceptSuggestion); accepted reports whether anything was
+// actually sent, so the caller can distinguish "sent" from "nothing to
+// accept" — a normal outcome (non-claude agent, no suggestion showing) that
+// must not be treated as an error. Like ApprovePrompt it is user-initiated
+// and ignores AutoYes; the autoyes daemon deliberately never calls it.
+func (i *Instance) AcceptSuggestion() (accepted bool, err error) {
+	ts := i.tmux()
+	if !i.isStarted() || i.Paused() || ts == nil {
+		return false, fmt.Errorf("session is not running")
+	}
+	return ts.AcceptSuggestion()
+}
+
 // Attach attaches the user's terminal to the instance's tmux session. The
 // returned channel closes when the user detaches; consult AttachExitReason and
 // AttachKillRequested afterwards for why.

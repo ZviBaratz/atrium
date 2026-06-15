@@ -7,6 +7,7 @@ import (
 
 	"github.com/ZviBaratz/atrium/log"
 	"github.com/ZviBaratz/atrium/session"
+	"github.com/ZviBaratz/atrium/session/transcript"
 	"github.com/ZviBaratz/atrium/ui/theme"
 
 	"github.com/charmbracelet/bubbles/viewport"
@@ -263,8 +264,11 @@ func (p *PreviewPane) String() string {
 	return previewPaneStyle().MaxWidth(p.width).MaxHeight(p.height).Render(content)
 }
 
-// ScrollUp scrolls up in the viewport
-func (p *PreviewPane) ScrollUp(instance *session.Instance) error {
+// ScrollUp enters scroll mode (freezing the snapshot at its bottom) or, when
+// already scrolling, moves the viewport up by lines. The entry step ignores
+// lines — it always lands at the bottom — so the count only governs in-scroll
+// granularity (a wheel notch moves several lines, a key one).
+func (p *PreviewPane) ScrollUp(instance *session.Instance, lines int) error {
 	if instance == nil || instance.Paused() {
 		return nil
 	}
@@ -284,7 +288,7 @@ func (p *PreviewPane) ScrollUp(instance *session.Instance) error {
 	}
 
 	// Already in scroll mode, just scroll the viewport
-	p.viewport.LineUp(1)
+	p.viewport.LineUp(lines)
 	return nil
 }
 
@@ -293,7 +297,7 @@ func (p *PreviewPane) ScrollUp(instance *session.Instance) error {
 // bottom is indistinguishable from it while silently freezing updates — entry is
 // ScrollUp's job. (It would also make the bottom-exit below an enter/exit toggle
 // under a held wheel.)
-func (p *PreviewPane) ScrollDown(instance *session.Instance) error {
+func (p *PreviewPane) ScrollDown(instance *session.Instance, lines int) error {
 	if instance == nil || instance.Paused() || !p.isScrolling {
 		return nil
 	}
@@ -304,19 +308,8 @@ func (p *PreviewPane) ScrollDown(instance *session.Instance) error {
 	if p.viewport.AtBottom() {
 		return p.ResetToNormalMode(instance)
 	}
-	p.viewport.LineDown(1)
+	p.viewport.LineDown(lines)
 	return nil
-}
-
-// transcriptPaneDivider is the dim rule separating rendered transcript history
-// from the frozen capture of the current screen below it.
-func transcriptPaneDivider(width int) string {
-	const label = "── current screen "
-	rule := label
-	if pad := width - lipgloss.Width(label); pad > 0 {
-		rule += strings.Repeat("─", pad)
-	}
-	return theme.Current().DimStyle().Render(rule)
 }
 
 // fillScrollViewport loads the instance's scrollback into the viewport with
@@ -324,15 +317,16 @@ func transcriptPaneDivider(width int) string {
 // and UpdateContent's lazy refill) go through here so they can never disagree
 // on source, sanitization, or footer.
 //
-// A transcript snapshot is anchored on a frozen capture of the current screen:
-// the transcript's rendered tail lags the pane (the in-progress turn is not in
-// the JSONL yet, and Lean rendering skips thinking/tool output), so entering
-// at the bare transcript bottom visibly "jumped" to older content. With the
-// screen capture at the bottom, entry is seamless — the snapshot's tail is
-// exactly what the live view showed — and history continues above the divider.
-// The last completed message can appear twice (pane-rendered below the
-// divider, transcript-rendered above); that redundancy is the price of the
-// seamless anchor.
+// The rendered transcript already holds the whole conversation, so it is the
+// scrollback on its own. We splice the live screen capture onto its tail *only*
+// when TrimOverlap finds a confident, pane-top-anchored overlap — then the seam
+// is seamless and deduplicated, anchoring the bottom on exactly what the live
+// view showed. Without that overlap the two are misaligned (most often the last
+// turn is still streaming, so the capture sits mid-message while the JSONL holds
+// the finished turn): stacking them under a divider would render the shared
+// region twice, so we show the transcript alone. Nothing is lost — the capture's
+// content is already in the transcript — and the bottom simply rests on the last
+// completed message instead of the in-flight frame.
 func (p *PreviewPane) fillScrollViewport(instance *session.Instance) error {
 	content, source, err := instance.ScrollbackContent(p.width)
 	if err != nil {
@@ -340,11 +334,17 @@ func (p *PreviewPane) fillScrollViewport(instance *session.Instance) error {
 	}
 	if source == session.ScrollbackTranscript {
 		if pane, perr := instance.Preview(); perr == nil && strings.TrimSpace(pane) != "" {
-			content = lipgloss.JoinVertical(lipgloss.Left,
-				content,
-				transcriptPaneDivider(p.width),
-				strings.TrimRight(pane, "\n"),
-			)
+			paneTrim := strings.TrimRight(pane, "\n")
+			if trimmed, ok := transcript.TrimOverlap(content, paneTrim); ok {
+				// When the whole transcript was already on screen, the pane is the
+				// entire scrollback — joining with an empty trimmed half would only
+				// prepend a stray blank line.
+				if trimmed == "" {
+					content = paneTrim
+				} else {
+					content = lipgloss.JoinVertical(lipgloss.Left, trimmed, paneTrim)
+				}
+			}
 		}
 	}
 	// Untrusted agent output: decompose font-dependent emoji clusters so the
@@ -423,3 +423,14 @@ func (p *PreviewPane) ClearHintOverlay() {
 
 // InHintMode reports whether a hint overlay is currently displayed.
 func (p *PreviewPane) InHintMode() bool { return p.hintContent != "" }
+
+// ScrollContent returns the text currently visible in the scroll viewport for
+// hint mode. Returns "", false when not in scroll mode or when a hint overlay
+// is already active (re-entering would be a no-op).
+func (p *PreviewPane) ScrollContent() (string, bool) {
+	if !p.isScrolling || p.hintContent != "" {
+		return "", false
+	}
+	v := p.viewport.View()
+	return v, v != ""
+}
