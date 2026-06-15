@@ -17,6 +17,13 @@ One-line summary of what this release is about.
 ## Install
 
 ```bash
+curl -fsSL https://raw.githubusercontent.com/ZviBaratz/atrium/main/install.sh | bash
+```
+
+Or with Go — note this builds from source and reports a `dev` version (the
+script installs the version-stamped, self-updating release binary):
+
+```bash
 go install github.com/ZviBaratz/atrium@v<X.Y.Z>
 ```
 
