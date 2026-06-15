@@ -71,6 +71,13 @@ var claude = &Adapter{
 		{Name: "selection", Match: claudeSelectionFooterVisible},
 	},
 
+	// Ghost-text prompt suggestion in the idle input box (suggestion.go).
+	// Pinned against a live 2.1.17x capture (suggestion_test.go fixture,
+	// 2026-06-12). Version-sensitive like every heuristic here, but this one
+	// fails closed: a rewording/restyling upstream makes `a` do nothing on an
+	// idle claude — never sends a stray keystroke.
+	SuggestionVisible: claudeSuggestionVisible,
+
 	Gates: []Gate{
 		{Contains: []string{"Do you trust the files in this folder?", "new MCP server", "New MCP server"},
 			Dismiss: DismissEnter},

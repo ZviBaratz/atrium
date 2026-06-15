@@ -582,6 +582,82 @@ func (t *Session) TapDAndEnter() error {
 	return nil
 }
 
+// Tunables for AcceptSuggestion's accept→submit handshake. claude commits an
+// accepted suggestion via an async render, so the submit Enter polls for that
+// to land; overridable in tests to avoid real delays.
+var (
+	suggestionAcceptPollInterval = 20 * time.Millisecond
+	suggestionAcceptTimeout      = 1 * time.Second
+)
+
+// AcceptSuggestion captures the pane fresh and, when the adapter recognizes a
+// ghost-text prompt suggestion in an otherwise-empty input box, accepts it
+// (Right), waits for the accept to commit, then submits it (Enter), reporting
+// whether keys were sent. Agents without a suggestion UI (nil SuggestionVisible)
+// return false without capturing.
+//
+// The capture must be fresh — never the last poll tick's content: the dim
+// gate (agent/suggestion.go) is what keeps the trailing Enter from submitting
+// user-typed draft text, and it is only as good as the capture is current.
+// The keys are claude-semantics, verified against the 2.1.175 binary: Right
+// accepts only while a suggestion is showing on an empty input (a cursor
+// no-op otherwise; Tab was rejected for its completion fall-throughs), and
+// Enter on an empty input does nothing — so if the suggestion vanishes between
+// capture and send, the keys degrade to no-ops. Right and Enter cannot be one
+// batch: Right's accept is an async React state update, so an Enter in the
+// same breath hits the still-empty input (see waitSuggestionCommitted).
+func (t *Session) AcceptSuggestion() (bool, error) {
+	if t.adapter.SuggestionVisible == nil {
+		return false, nil
+	}
+	raw, err := t.CapturePaneContent()
+	if err != nil {
+		return false, fmt.Errorf("error capturing pane for suggestion: %w", err)
+	}
+	if !t.adapter.SuggestionVisible(raw) {
+		return false, nil
+	}
+	// Accept the ghost text. Right (not Tab) fills the input without Tab's
+	// completion-menu fall-throughs.
+	if err := t.sendKeysToPane("Right"); err != nil {
+		return false, fmt.Errorf("error sending right keystroke to tmux pane: %w", err)
+	}
+	// Submit only once the accept has committed. claude's input is a React
+	// component: Right schedules an *async* state update (the binary's accept
+	// handler runs `dH(L$)` — set input := suggestion — guarded on the input
+	// currently being empty), so an Enter sent in the same breath is read
+	// against the still-empty input, where since claude 2.1.136 Enter is a
+	// deliberate no-op. That left the suggestion inserted but unsent. Waiting
+	// for the dim ghost to give way to committed (non-dim) text closes the race
+	// before submitting.
+	t.waitSuggestionCommitted()
+	if err := t.sendKeysToPane("Enter"); err != nil {
+		return false, fmt.Errorf("error sending enter keystroke to tmux pane: %w", err)
+	}
+	return true, nil
+}
+
+// waitSuggestionCommitted blocks until a fresh capture no longer shows a dim
+// ghost suggestion — i.e. Right's accept has rendered the committed text — or
+// until suggestionAcceptTimeout elapses. The timeout is a bounded fallback, not
+// a guess: by the time it expires far more than a render frame has passed, so
+// submitting is safe regardless (and an Enter into a still-empty box is itself
+// a harmless no-op). Only reached after the nil-adapter gate, so
+// SuggestionVisible is non-nil here.
+func (t *Session) waitSuggestionCommitted() {
+	deadline := time.Now().Add(suggestionAcceptTimeout)
+	for {
+		raw, err := t.CapturePaneContent()
+		if err == nil && !t.adapter.SuggestionVisible(raw) {
+			return
+		}
+		if !time.Now().Before(deadline) {
+			return
+		}
+		time.Sleep(suggestionAcceptPollInterval)
+	}
+}
+
 // SendKeys types text into the agent pane, as if the user typed it. -l sends
 // the bytes literally (never interpreted as tmux key names); -- guards text
 // that starts with a dash.
