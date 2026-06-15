@@ -916,6 +916,22 @@ func (i *Instance) ApprovePrompt() error {
 	return nil
 }
 
+// AcceptSuggestion accepts the agent's ghost-text prompt suggestion in the
+// idle input box, without attaching: Right (accept) then Enter (send). The
+// detection gate lives in the tmux layer on a fresh raw capture
+// (tmux.Session.AcceptSuggestion); accepted reports whether anything was
+// actually sent, so the caller can distinguish "sent" from "nothing to
+// accept" — a normal outcome (non-claude agent, no suggestion showing) that
+// must not be treated as an error. Like ApprovePrompt it is user-initiated
+// and ignores AutoYes; the autoyes daemon deliberately never calls it.
+func (i *Instance) AcceptSuggestion() (accepted bool, err error) {
+	ts := i.tmux()
+	if !i.isStarted() || i.Paused() || ts == nil {
+		return false, fmt.Errorf("session is not running")
+	}
+	return ts.AcceptSuggestion()
+}
+
 // Attach attaches the user's terminal to the instance's tmux session. The
 // returned channel closes when the user detaches; consult AttachExitReason and
 // AttachKillRequested afterwards for why.

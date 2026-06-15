@@ -64,3 +64,23 @@ func TestApprove_NeedsInputButUnstartedSurfacesError(t *testing.T) {
 	assert.Equal(t, session.NeedsInput, inst.GetStatus(),
 		"the optimistic flip must not run when the tap failed")
 }
+
+// A Ready session routes to the accept-suggestion branch, but an unstarted
+// instance has no pane: the Started() pre-gate must fall through to the
+// explanatory notice (now covering both actions) without touching the status.
+// The success path — started claude, ghost text visible, Right+Enter sent —
+// is untestable from this package (started/tmuxSession are unexported; PR
+// #121 hit the same wall) and is pinned in session/instance_test.go instead.
+func TestApprove_ReadyUnstartedExplainsAcceptToo(t *testing.T) {
+	h := newCreateFormHome(t)
+	inst := newBranchInstance(t, "ready-suggest", "feat/accept")
+	inst.SetStatus(session.Ready)
+	h.list.AddInstance(inst)
+	require.NotNil(t, h.list.GetSelectedInstance())
+
+	pressKey(h, 'a')
+
+	require.True(t, h.menu.HasNotice())
+	assert.Contains(t, h.menu.String(), "nothing to approve or accept")
+	assert.Equal(t, session.Ready, inst.GetStatus(), "a guarded press must not touch the status")
+}

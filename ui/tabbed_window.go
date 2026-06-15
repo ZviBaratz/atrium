@@ -232,11 +232,13 @@ func (w *TabbedWindow) ClearPreviewHintOverlay() { w.preview.ClearHintOverlay() 
 // InPreviewHintMode reports whether the preview pane shows a hint overlay.
 func (w *TabbedWindow) InPreviewHintMode() bool { return w.preview.InHintMode() }
 
-// ScrollUp scrolls the active tab's pane up by one step.
-func (w *TabbedWindow) ScrollUp() {
+// ScrollUp scrolls the active tab's pane up. lines governs the preview pane's
+// in-scroll granularity (a wheel notch moves several, a key one); the diff and
+// terminal panes keep their own single-step scroll.
+func (w *TabbedWindow) ScrollUp(lines int) {
 	switch w.activeTab {
 	case PreviewTab:
-		err := w.preview.ScrollUp(w.instance)
+		err := w.preview.ScrollUp(w.instance, lines)
 		if err != nil {
 			log.InfoLog.Printf("tabbed window failed to scroll up: %v", err)
 		}
@@ -249,11 +251,11 @@ func (w *TabbedWindow) ScrollUp() {
 	}
 }
 
-// ScrollDown scrolls the active tab's pane down by one step.
-func (w *TabbedWindow) ScrollDown() {
+// ScrollDown scrolls the active tab's pane down; see ScrollUp on lines.
+func (w *TabbedWindow) ScrollDown(lines int) {
 	switch w.activeTab {
 	case PreviewTab:
-		err := w.preview.ScrollDown(w.instance)
+		err := w.preview.ScrollDown(w.instance, lines)
 		if err != nil {
 			log.InfoLog.Printf("tabbed window failed to scroll down: %v", err)
 		}
@@ -304,6 +306,22 @@ func (w *TabbedWindow) CleanupTerminalForInstance(inst *session.Instance) {
 // IsPreviewInScrollMode returns true if the preview pane is in scroll mode
 func (w *TabbedWindow) IsPreviewInScrollMode() bool {
 	return w.preview.isScrolling
+}
+
+// PreviewScrollContent exposes the preview pane's visible viewport text for
+// hint mode while the pane is in scroll mode.
+func (w *TabbedWindow) PreviewScrollContent() (string, bool) {
+	return w.preview.ScrollContent()
+}
+
+// SetPreviewScrollContent puts the preview pane into scroll mode with content
+// loaded directly into the viewport. Used by tests to simulate a scrolled
+// state without a live tmux session.
+func (w *TabbedWindow) SetPreviewScrollContent(inst *session.Instance, content string) {
+	w.preview.viewport.SetContent(content)
+	w.preview.enterScrollMode(inst)
+	w.preview.viewport.GotoBottom()
+	w.instance = inst
 }
 
 // IsTerminalInScrollMode returns true if the terminal pane is in scroll mode

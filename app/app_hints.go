@@ -33,8 +33,9 @@ func hintStyles() hints.Styles {
 }
 
 // enterHintMode validates the f keypress and enters hint mode over the
-// selected session's live preview. Guards explain themselves via notices
-// instead of silently swallowing the key.
+// selected session's live preview (or the visible scroll viewport when the
+// pane is in scroll mode). Guards explain themselves via notices instead of
+// silently swallowing the key.
 func (m *home) enterHintMode() (tea.Model, tea.Cmd) {
 	if !m.tabbedWindow.IsInPreviewTab() {
 		return m, m.handleInfoNotice("hints work in the preview tab")
@@ -45,6 +46,16 @@ func (m *home) enterHintMode() (tea.Model, tea.Cmd) {
 	}
 	if selected.Paused() {
 		return m, m.handleInfoNotice("session is paused — press r to resume")
+	}
+	// Scroll mode: hint over the visible viewport snapshot. The scroll state
+	// is preserved — exitHintMode clears only hintContent, so String() falls
+	// through to viewport.View() and the scroll position is intact on exit.
+	if m.tabbedWindow.IsPreviewInScrollMode() {
+		content, ok := m.tabbedWindow.PreviewScrollContent()
+		if !ok {
+			return m, m.handleInfoNotice("nothing to copy from yet")
+		}
+		return m.startHints(selected, content)
 	}
 	content, ok := m.tabbedWindow.PreviewLiveContent()
 	if !ok {

@@ -9,7 +9,9 @@
 // The package is pure data and string matching: no tmux, no subprocesses, no IO.
 // Pane capture and capability probes stay in session/tmux; matchers receive the
 // cleaned full pane and confine themselves to its bottom chrome via the
-// windowing helpers in chrome.go.
+// windowing helpers in chrome.go. Two exceptions take the RAW capture instead:
+// GateUp, and SuggestionVisible — the latter because SGR dim styling is its
+// entire signal (see suggestion.go).
 package agent
 
 import "strings"
@@ -128,6 +130,15 @@ type Adapter struct {
 	// Prompts are tried in order; the first match classifies the pane as a
 	// blocking prompt.
 	Prompts []PromptMatcher
+
+	// SuggestionVisible reports whether the agent's idle input box is showing
+	// a ghost-text prompt suggestion that a Right keypress would accept.
+	// Unlike every other matcher it receives the RAW capture (ANSI intact):
+	// the SGR dim attribute is the only signal distinguishing a suggestion
+	// from user-typed draft text, which Enter must never submit. nil means
+	// the agent has no suggestion UI, and spares its panes the capture
+	// entirely (session/tmux's AcceptSuggestion gates on it).
+	SuggestionVisible func(raw string) bool
 
 	// Gates are the startup screens this agent can show.
 	Gates []Gate
