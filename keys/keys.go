@@ -86,7 +86,9 @@ const (
 	KeyHints
 
 	// KeyApprove taps Enter at the selected session's visible prompt (tool
-	// permission, plan approval) without attaching.
+	// permission, plan approval) without attaching; on an idle claude session
+	// it instead accepts the ghost-text prompt suggestion (Right+Enter, gated
+	// on the suggestion actually showing in a fresh capture).
 	KeyApprove
 )
 
