@@ -27,6 +27,15 @@ func TestRenderInlineStripsMarkers(t *testing.T) {
 		{"escaped \\*not italic\\*", "escaped *not italic*"},
 		{"unterminated **bold", "unterminated **bold"}, // no close: literal
 		{"nested **a `b` c**", "nested a b c"},
+		// Intraword underscores are literal (CommonMark): identifiers in prose
+		// must survive intact, not be eaten as italic delimiters.
+		{"set the file_path_prefix value", "set the file_path_prefix value"},
+		{"call foo_bar_baz() now", "call foo_bar_baz() now"},
+		// An emphasis run must be left-flanking: a '*' followed by a space is a
+		// literal asterisk, not an opener that mis-pairs with a later "**".
+		{"a * b **c** d", "a * b c d"},
+		// Underscore emphasis still works at word boundaries.
+		{"an _emphasized_ word", "an emphasized word"},
 	}
 	for _, tc := range cases {
 		got := ansi.Strip(renderInline(tc.in, plainStyles()))
@@ -59,6 +68,34 @@ func TestRenderMarkdownLists(t *testing.T) {
 		if !strings.Contains(joined, want) {
 			t.Errorf("list rendering missing %q\n---\n%s", want, joined)
 		}
+	}
+}
+
+// markerOf returns the stripped marker of the first non-blank rendered line.
+func firstMarker(lines []mdLine) string {
+	for _, ml := range lines {
+		if ml.Text != "" || ml.Marker != "" {
+			return ansi.Strip(ml.Marker)
+		}
+	}
+	return ""
+}
+
+// TestRenderMarkdownBlockquoteRequiresSpace: a real blockquote ("> quoted")
+// renders with the "▌ " bar, but a comparison or redirection line that merely
+// starts with '>' ("- >= 3", "> out.txt" without the markdown space) is NOT a
+// blockquote — otherwise prose math and shell snippets lose their leading '>'.
+func TestRenderMarkdownBlockquoteRequiresSpace(t *testing.T) {
+	if m := firstMarker(renderMarkdown("> quoted text", plainStyles())); m != "▌ " {
+		t.Errorf("`> quoted` should be a blockquote, marker=%q", m)
+	}
+	if m := firstMarker(renderMarkdown(">= 3 required", plainStyles())); m == "▌ " {
+		t.Errorf("`>= 3 required` must NOT be a blockquote")
+	}
+	// The '>' must survive in the rendered text of the non-quote line.
+	lines := renderMarkdown(">= 3 required", plainStyles())
+	if got := ansi.Strip(lines[0].Text); got != ">= 3 required" {
+		t.Errorf("comparison line mangled: %q", got)
 	}
 }
 

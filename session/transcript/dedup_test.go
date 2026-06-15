@@ -109,6 +109,33 @@ func TestTrimOverlapLongLoneLineAccepted(t *testing.T) {
 	}
 }
 
+// TestTrimOverlapAnchoredAtPaneTop: the overlap must anchor at the pane's top
+// (where transcript history flows into the live screen). A transcript tail line
+// that also appears *lower* in the pane — with a different, newer line at the
+// pane top — must NOT splice, or history would be reordered/duplicated. This is
+// the "never a wrong splice" guarantee.
+func TestTrimOverlapAnchoredAtPaneTop(t *testing.T) {
+	transcript := strings.Join([]string{
+		"● A first earlier paragraph that is unique to history here.",
+		"● B second earlier paragraph that is unique to history here.",
+		"● C the distinctive trailing line long enough to anchor on its own.",
+	}, "\n")
+	// The distinctive tail line C appears at pane[1], not pane[0]; pane[0] is a
+	// newer line the transcript does not end with.
+	pane := strings.Join([]string{
+		"● D a brand new live line shown at the very top of the screen now.",
+		"● C the distinctive trailing line long enough to anchor on its own.",
+		"❯ ",
+	}, "\n")
+	trimmed, ok := TrimOverlap(transcript, pane)
+	if ok {
+		t.Errorf("a tail match below the pane top must not splice\ntrimmed=%q", trimmed)
+	}
+	if trimmed != transcript {
+		t.Errorf("transcript mutated on rejected splice: %q", trimmed)
+	}
+}
+
 // TestTrimOverlapOSC8Survives: a transcript line carrying an OSC 8 hyperlink
 // normalizes to its visible text and still matches the plain pane line.
 func TestTrimOverlapOSC8Survives(t *testing.T) {

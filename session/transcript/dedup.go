@@ -49,25 +49,30 @@ func TrimOverlap(transcript, pane string) (string, bool) {
 		return transcript, false
 	}
 
-	// Longest suffix of the transcript's prose lines that occurs as a contiguous
-	// block somewhere in the pane's prose lines.
+	// The overlap is anchored at the pane's top: history flows straight into the
+	// live screen, so the transcript's tail equals the pane's *leading* prose
+	// lines. We take the longest transcript suffix that is a prefix of the pane's
+	// prose. Matching a suffix anywhere inside the pane instead would let a
+	// re-quoted tail line splice mid-screen and reorder/duplicate history — that
+	// is the wrong-splice case the divider fallback exists to avoid, so we never
+	// match off the top.
 	suffix := make([]string, len(tm))
 	for i, m := range tm {
 		suffix[i] = m.norm
 	}
-	best, ambiguous := 0, false
+	best := 0
 	for k := min(len(tm), len(pm)); k >= 1; k-- {
-		if n := countContiguous(pm, suffix[len(suffix)-k:]); n >= 1 {
-			best, ambiguous = k, n >= 2
+		if matchesPrefix(pm, suffix[len(suffix)-k:]) {
+			best = k
 			break
 		}
 	}
 	if best == 0 {
 		return transcript, false
 	}
-	// A single matched line must be long and unique; two or more lines stand on
-	// their own.
-	if best == 1 && (ambiguous || lipgloss.Width(tm[len(tm)-1].norm) < minDistinctiveWidth) {
+	// A single matched line must be long enough to be distinctive; two or more
+	// contiguous lines anchored at the pane top stand on their own.
+	if best == 1 && lipgloss.Width(tm[len(tm)-1].norm) < minDistinctiveWidth {
 		return transcript, false
 	}
 
@@ -82,26 +87,18 @@ func normLine(l string) string {
 	return strings.Join(strings.Fields(ansi.Strip(l)), " ")
 }
 
-// countContiguous returns how many start positions in hay match needle as a
-// contiguous in-order block.
-func countContiguous(hay, needle []string) int {
+// matchesPrefix reports whether needle equals the first len(needle) lines of hay
+// — the match is anchored at hay's top, not floating anywhere inside it.
+func matchesPrefix(hay, needle []string) bool {
 	if len(needle) == 0 || len(needle) > len(hay) {
-		return 0
+		return false
 	}
-	count := 0
-	for i := 0; i+len(needle) <= len(hay); i++ {
-		match := true
-		for j := range needle {
-			if hay[i+j] != needle[j] {
-				match = false
-				break
-			}
-		}
-		if match {
-			count++
+	for j := range needle {
+		if hay[j] != needle[j] {
+			return false
 		}
 	}
-	return count
+	return true
 }
 
 // isChrome reports whether a normalized line is non-prose and must be excluded
@@ -143,6 +140,9 @@ func isAggregateLine(n string) bool {
 // isStatusChrome matches the live view's framing: box-drawing rows (input frame,
 // rules), spinner / turn-footer glyphs, and status-bar fragments.
 func isStatusChrome(n string) bool {
+	if n == "" {
+		return false
+	}
 	r0 := []rune(n)[0]
 	if strings.ContainsRune("╭╮╰╯│─", r0) || strings.ContainsRune("✻✶✳✽✢∗*", r0) {
 		return true

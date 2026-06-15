@@ -2,6 +2,7 @@ package transcript
 
 import (
 	"strings"
+	"unicode"
 
 	"github.com/charmbracelet/lipgloss"
 )
@@ -68,10 +69,12 @@ func renderMarkdown(src string, st mdStyles) []mdLine {
 			continue
 		}
 
-		// Blockquote.
-		if q, ok := strings.CutPrefix(trimmed, ">"); ok {
+		// Blockquote: require the markdown "> " space (or a bare ">") so prose
+		// comparisons and shell redirections (">= 3", ">out.txt") keep their '>'
+		// instead of being mistaken for quotes and losing the leading char.
+		if trimmed == ">" || strings.HasPrefix(trimmed, "> ") {
 			out = append(out, mdLine{
-				Text:   renderInline(strings.TrimSpace(q), st),
+				Text:   renderInline(strings.TrimSpace(strings.TrimPrefix(trimmed, ">")), st),
 				Marker: st.Quote.Render("▌ "),
 			})
 			continue
@@ -116,7 +119,7 @@ func renderInline(s string, st mdStyles) string {
 			}
 		case hasMarkerAt(runes, i, "**"), hasMarkerAt(runes, i, "__"):
 			m := string(runes[i : i+2])
-			if j := indexMarker(runes, m, i+2); j > i {
+			if j := emphasisSpan(runes, m, i, 2); j > i {
 				b.WriteString(st.Bold.Render(renderInline(string(runes[i+2:j]), st)))
 				i = j + 2
 			} else {
@@ -124,7 +127,7 @@ func renderInline(s string, st mdStyles) string {
 				i += 2
 			}
 		case r == '~' && hasMarkerAt(runes, i, "~~"):
-			if j := indexMarker(runes, "~~", i+2); j > i {
+			if j := emphasisSpan(runes, "~~", i, 2); j > i {
 				b.WriteString(st.Strike.Render(renderInline(string(runes[i+2:j]), st)))
 				i = j + 2
 			} else {
@@ -132,7 +135,7 @@ func renderInline(s string, st mdStyles) string {
 				i += 2
 			}
 		case r == '*' || r == '_':
-			if j := indexRune(runes, r, i+1); j > i {
+			if j := emphasisSpan(runes, string(r), i, 1); j > i {
 				b.WriteString(st.Italic.Render(renderInline(string(runes[i+1:j]), st)))
 				i = j + 1
 			} else {
@@ -140,7 +143,7 @@ func renderInline(s string, st mdStyles) string {
 				i++
 			}
 		case r == '[':
-			if text, _, end, ok := parseLink(runes, i); ok {
+			if text, end, ok := parseLink(runes, i); ok {
 				b.WriteString(st.Link.Render(text))
 				i = end
 			} else {
@@ -156,19 +159,62 @@ func renderInline(s string, st mdStyles) string {
 }
 
 // parseLink parses a [text](url) link starting at runes[i] == '['. It returns
-// the link text, the url, the index just past the closing ')', and ok. Nested
-// brackets are not supported (rare in assistant prose).
-func parseLink(runes []rune, i int) (text, url string, end int, ok bool) {
+// the link text and the index just past the closing ')'. The url is consumed but
+// not returned — the renderer shows only the visible label. Nested brackets are
+// not supported (rare in assistant prose).
+func parseLink(runes []rune, i int) (text string, end int, ok bool) {
 	rb := indexRune(runes, ']', i+1)
 	if rb < 0 || rb+1 >= len(runes) || runes[rb+1] != '(' {
-		return "", "", 0, false
+		return "", 0, false
 	}
 	paren := indexRune(runes, ')', rb+2)
 	if paren < 0 {
-		return "", "", 0, false
+		return "", 0, false
 	}
-	return string(runes[i+1 : rb]), string(runes[rb+2 : paren]), paren + 1, true
+	return string(runes[i+1 : rb]), paren + 1, true
 }
+
+// emphasisSpan returns the index of the matching closing delimiter for an
+// emphasis run of marker m (n runes) opening at runes[i], or i when i is not a
+// valid opener or no valid closer follows — in which case the marker is emitted
+// literally so malformed markup never drops text. Emphasis must be flanking (a
+// delimiter touching whitespace on its inner side can't open/close), and
+// underscore emphasis additionally may not sit inside a word (the CommonMark
+// intraword rule), so identifiers like file_path_prefix stay literal.
+func emphasisSpan(runes []rune, m string, i, n int) int {
+	underscore := m[0] == '_'
+	if !emphasisFlank(runes, i, n, underscore, true) {
+		return i
+	}
+	for j := i + n; j+n <= len(runes); j++ {
+		if hasMarkerAt(runes, j, m) && emphasisFlank(runes, j, n, underscore, false) {
+			return j
+		}
+	}
+	return i
+}
+
+// emphasisFlank reports whether a delimiter run of n runes at runes[k] can open
+// (opener=true: followed by a non-space) or close (opener=false: preceded by a
+// non-space) emphasis. An underscore run may not touch a word rune on its outer
+// side, which is what keeps snake_case identifiers from being italicized.
+func emphasisFlank(runes []rune, k, n int, underscore, opener bool) bool {
+	if opener {
+		if k+n >= len(runes) || unicode.IsSpace(runes[k+n]) {
+			return false
+		}
+		// An underscore opener may not sit immediately after a word rune.
+		return !underscore || k == 0 || !isWord(runes[k-1])
+	}
+	if k == 0 || unicode.IsSpace(runes[k-1]) {
+		return false
+	}
+	// An underscore closer may not sit immediately before a word rune.
+	return !underscore || k+n >= len(runes) || !isWord(runes[k+n])
+}
+
+// isWord reports whether r is a letter or digit, for the intraword-underscore rule.
+func isWord(r rune) bool { return unicode.IsLetter(r) || unicode.IsNumber(r) }
 
 // hasMarkerAt reports whether the two-rune marker m sits at runes[i].
 func hasMarkerAt(runes []rune, i int, m string) bool {
@@ -182,16 +228,6 @@ func hasMarkerAt(runes []rune, i int, m string) bool {
 		}
 	}
 	return true
-}
-
-// indexMarker finds the next occurrence of two-rune marker m at or after start.
-func indexMarker(runes []rune, m string, start int) int {
-	for i := start; i+1 < len(runes); i++ {
-		if hasMarkerAt(runes, i, m) {
-			return i
-		}
-	}
-	return -1
 }
 
 // indexRune finds the next r at or after start, or -1.
