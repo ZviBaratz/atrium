@@ -19,6 +19,11 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 )
 
+// wheelScrollLines is how many lines one mouse-wheel notch scrolls the preview
+// pane in scroll mode. A notch moves several lines for a fluid feel; the
+// keyboard scroll keys move one line for precise positioning.
+const wheelScrollLines = 3
+
 // prMergedMsg is returned by a confirmed merge action to report success back
 // through the runtime, carrying the merged PR number for the acknowledgment.
 type prMergedMsg struct{ number int }
@@ -186,9 +191,9 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					return m, nil
 				}
 				if msg.Button == tea.MouseButtonWheelUp {
-					m.tabbedWindow.ScrollUp()
+					m.tabbedWindow.ScrollUp(wheelScrollLines)
 				} else {
-					m.tabbedWindow.ScrollDown()
+					m.tabbedWindow.ScrollDown(wheelScrollLines)
 				}
 				return m, nil
 			}
@@ -833,10 +838,10 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		m.list.Down()
 		return m, m.instanceChanged()
 	case keys.KeyShiftUp:
-		m.tabbedWindow.ScrollUp()
+		m.tabbedWindow.ScrollUp(1)
 		return m, m.instanceChanged()
 	case keys.KeyShiftDown:
-		m.tabbedWindow.ScrollDown()
+		m.tabbedWindow.ScrollDown(1)
 		return m, m.instanceChanged()
 	case keys.KeyShrinkList:
 		return m, m.adjustListRatio(-listRatioStep)
