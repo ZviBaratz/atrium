@@ -44,18 +44,14 @@ func (pp *ProfilePicker) SetWidth(w int) {
 
 // HandleKeyPress processes a key event. Returns true if consumed. Up/Down are accepted
 // alongside Left/Right so navigation is ↑/↓ everywhere in the form, even though this picker
-// renders horizontally.
+// renders horizontally. The cursor wraps at both ends so one keypress reaches the opposite end.
 func (pp *ProfilePicker) HandleKeyPress(msg tea.KeyMsg) bool {
 	switch msg.Type {
 	case tea.KeyLeft, tea.KeyUp:
-		if pp.cursor > 0 {
-			pp.cursor--
-		}
+		pp.cursor = wrapIndex(pp.cursor, -1, len(pp.profiles))
 		return true
 	case tea.KeyRight, tea.KeyDown:
-		if pp.cursor < len(pp.profiles)-1 {
-			pp.cursor++
-		}
+		pp.cursor = wrapIndex(pp.cursor, +1, len(pp.profiles))
 		return true
 	}
 	return false

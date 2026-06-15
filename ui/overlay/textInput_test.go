@@ -33,12 +33,14 @@ func TestSessionCreateOverlay_AccountOverrideOnlyWhenTouched(t *testing.T) {
 	_, ok = o.GetSelectedAccount()
 	assert.False(t, ok, "auto preselect alone must not override")
 
-	// The user drives the picker: now it overrides with the chosen account.
+	// The user drives the picker: now it overrides with the chosen account. From the
+	// preselected quantivly (last of two), one step wraps around to personal — the
+	// point is that the override is engaged, whichever account it lands on.
 	o.focusStop(stopAccount)
 	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyDown})
 	acct, ok := o.GetSelectedAccount()
 	require.True(t, ok, "a user choice overrides auto-routing")
-	assert.Equal(t, "quantivly", acct.Name)
+	assert.Equal(t, "personal", acct.Name)
 }
 
 // A form with no configured accounts never overrides — the feature is dormant.
@@ -594,6 +596,21 @@ func TestSessionCreateOverlay_ModelChipCycle(t *testing.T) {
 	assert.Equal(t, "", o.GetModel(), "cycling back to default drops the override")
 }
 
+// One step back from the default chip wraps to the last alias — the motivating
+// case: reach "sonnet" with a single ← instead of arrowing all the way right.
+func TestSessionCreateOverlay_ModelChipWrapsToLast(t *testing.T) {
+	o := NewSessionCreateOverlay(nil, nil, []string{"/repo/a"}, "claude")
+	o.focusStop(stopModel)
+	require.True(t, o.isModelField())
+	assert.Equal(t, "", o.GetModel(), "starts on the default chip")
+
+	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyLeft})
+	assert.Equal(t, "sonnet", o.GetModel(), "← from default wraps to the last alias")
+
+	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRight})
+	assert.Equal(t, "", o.GetModel(), "→ from the last alias wraps back to default")
+}
+
 // Typing enters custom mode; Left with the text cursor at position 0 returns to
 // the chip row with the prior chip selection intact.
 func TestSessionCreateOverlay_ModelCustomBackToChips(t *testing.T) {
@@ -723,7 +740,8 @@ func TestSessionCreateOverlay_ModeFieldOnlyForClaude(t *testing.T) {
 }
 
 // Arrowing across the chip row selects modes; the first chip (default)
-// contributes no flag, and the cursor clamps at both ends.
+// contributes no flag, and the cursor wraps at both ends so one keypress
+// reaches the opposite end.
 func TestSessionCreateOverlay_ModeChipCycle(t *testing.T) {
 	o := NewSessionCreateOverlay(nil, nil, []string{"/repo/a"}, "claude")
 	o.focusStop(stopMode)
@@ -736,13 +754,12 @@ func TestSessionCreateOverlay_ModeChipCycle(t *testing.T) {
 	assert.Equal(t, "acceptEdits", o.GetPermissionMode())
 	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyDown})
 	assert.Equal(t, "auto", o.GetPermissionMode())
-	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyDown}) // clamps at the end
-	assert.Equal(t, "auto", o.GetPermissionMode())
+	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyDown}) // wraps past the last chip
+	assert.Equal(t, "", o.GetPermissionMode(), "past the last chip wraps to default")
 
-	for i := 0; i < 4; i++ {
-		o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyUp})
-	}
-	assert.Equal(t, "", o.GetPermissionMode(), "cycling back to default drops the override")
+	// From the default chip, one step back wraps to the last chip.
+	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyUp})
+	assert.Equal(t, "auto", o.GetPermissionMode(), "before the default chip wraps to the last")
 }
 
 // The chip row displays the kebab-case label (accept-edits) while the value it

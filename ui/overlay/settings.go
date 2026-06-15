@@ -417,7 +417,7 @@ func (s *SettingsOverlay) cycleEnum(row *settingRow, delta int) string {
 			break
 		}
 	}
-	next := (cur + delta + len(opts)) % len(opts)
+	next := wrapIndex(cur, delta, len(opts))
 	_ = row.set(s.cfg, opts[next]) // enum setters never fail
 	s.lastErr = ""
 	return row.key

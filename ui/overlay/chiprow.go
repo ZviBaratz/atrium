@@ -36,20 +36,26 @@ func (c *chipRow) SetDisabled(disabled bool) { c.disabled = disabled }
 // Disabled reports whether the row is inert.
 func (c *chipRow) Disabled() bool { return c.disabled }
 
+// wrapIndex moves cur by delta within [0,n), wrapping at both ends. A
+// non-positive n (no options) returns 0, keeping callers panic-free since
+// "% 0" would panic where the old clamp checks were silently safe.
+func wrapIndex(cur, delta, n int) int {
+	if n <= 0 {
+		return 0
+	}
+	return ((cur+delta)%n + n) % n
+}
+
 // moveCursor cycles the chips with the arrow keys (Up/Down accepted alongside
-// Left/Right, matching the profile picker), clamping at both ends. Every other
-// key is a no-op — in particular Esc is never consumed, staying the form's
-// close key.
+// Left/Right, matching the profile picker), wrapping at both ends so one keypress
+// reaches the opposite end. Every other key is a no-op — in particular Esc is
+// never consumed, staying the form's close key.
 func (c *chipRow) moveCursor(msg tea.KeyMsg) {
 	switch msg.Type {
 	case tea.KeyLeft, tea.KeyUp:
-		if c.cursor > 0 {
-			c.cursor--
-		}
+		c.cursor = wrapIndex(c.cursor, -1, len(c.options))
 	case tea.KeyRight, tea.KeyDown:
-		if c.cursor < len(c.options)-1 {
-			c.cursor++
-		}
+		c.cursor = wrapIndex(c.cursor, +1, len(c.options))
 	}
 }
 
