@@ -5,6 +5,11 @@ claude-squad
 cs
 .superpowers/
 
+# Claude Code: keep the shared .claude/settings.json tracked, but never
+# commit personal/local overrides.
+.claude/settings.local.json
+.claude/*.local.json
+
 # Build artifacts
 /atrium
 /atr
