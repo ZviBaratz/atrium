@@ -47,6 +47,12 @@ type InstanceData struct {
 	// falls back to the Program's --model flag.
 	Model string `json:"model,omitempty"`
 
+	// PermissionMode is the live permission mode last detected from the footer
+	// (e.g. "auto"), persisted so paused sessions keep the chip. omitempty: a
+	// state.json predating the feature decodes to "" -> the UI falls back to the
+	// Program's --permission-mode flag, refreshed on the next poll after resume.
+	PermissionMode string `json:"permission_mode,omitempty"`
+
 	// TmuxName is the session's tmux session name. It is persisted state, not a
 	// derivation: new sessions mint a repo-qualified name (so identical titles
 	// in different repo groups coexist on the shared socket). omitempty: a

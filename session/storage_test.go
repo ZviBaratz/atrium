@@ -278,3 +278,30 @@ func TestInstanceAccountGettersAndFromData(t *testing.T) {
 	require.Equal(t, "quantivly", restored.ClaudeAccountName())
 	require.Equal(t, "/home/tester/.claude-quantivly", restored.ClaudeConfigDir())
 }
+
+// TestPermissionModeRoundTrip asserts the live permission mode survives a
+// save/restore (so a paused session keeps its chip) and that a pre-feature
+// state.json — with no permission_mode key — restores to the flag fallback.
+func TestPermissionModeRoundTrip(t *testing.T) {
+	inst, err := NewInstance(InstanceOptions{Title: "t", Path: ".", Program: "claude"})
+	require.NoError(t, err)
+	inst.SetModeMeta("auto")
+	require.Equal(t, "auto", inst.ToInstanceData().PermissionMode)
+
+	// Program has no --permission-mode flag, so PermissionModeInfo == the
+	// restored runtimeMode: a clean read of what survived the round-trip.
+	restored, err := FromInstanceData(context.Background(), InstanceData{
+		Title: "t", Path: ".", Program: "claude", Direct: true, Status: Paused,
+		PermissionMode: "auto",
+	}, "session/")
+	require.NoError(t, err)
+	require.Equal(t, "auto", restored.PermissionModeInfo())
+
+	// Old state.json (no key) -> empty -> falls back to the pinned flag.
+	var legacy InstanceData
+	require.NoError(t, json.Unmarshal([]byte(`{"title":"t","program":"claude --permission-mode plan","direct":true}`), &legacy))
+	require.Equal(t, "", legacy.PermissionMode)
+	pre, err := FromInstanceData(context.Background(), legacy, "session/")
+	require.NoError(t, err)
+	require.Equal(t, "plan", pre.PermissionModeInfo(), "pre-feature session falls back to the flag")
+}

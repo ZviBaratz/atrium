@@ -458,13 +458,13 @@ func (r *InstanceRenderer) Render(i *session.Instance, idx int, selected bool) s
 			right1 = append(right1, p.seg(" "+shortModelName(model), p.agentColor(i)))
 		}
 	}
-	// Per-session permission-mode chip: launch-time --permission-mode flag
-	// (static; never wrong about what it claims). Shown for any pinned
-	// non-default mode (the offered plan/accept-edits/auto, and also a
-	// profile-pinned bypass mode worth surfacing); "default", no flag, or "off"
-	// stays unbadged.
+	// Per-session permission-mode chip: live footer truth first, --permission-mode
+	// flag fallback (see Instance.PermissionModeInfo). Tracks an in-session mode
+	// switch (e.g. plan-launched then accepted into auto) instead of the stale
+	// launch flag. Shown for any non-default mode; a detected "default", no flag,
+	// or "off" stays unbadged.
 	if r.permissionIndicator != "off" {
-		if mode := i.PinnedPermissionMode(); mode != "" && mode != "default" {
+		if mode := i.PermissionModeInfo(); mode != "" && mode != "default" {
 			right1 = append(right1, p.seg(" "+permissionModeLabel(mode), p.agentColor(i)))
 		}
 	}

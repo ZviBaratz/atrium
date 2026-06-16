@@ -147,6 +147,9 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if r.modelOK {
 				r.instance.SetModelMeta(r.model, r.modelStamp)
 			}
+			if r.modeOK {
+				r.instance.SetModeMeta(r.mode)
+			}
 		}
 		m.pushSessionContexts()
 		cmds := deliverReadyPrompts(msg.results)

@@ -124,6 +124,13 @@ type Instance struct {
 	// In-memory only: the first post-restore tick re-extracts once.
 	modelStamp transcript.Stamp
 
+	// runtimeMode is the permission mode last detected from the live pane footer
+	// (ComputeMode → SetModeMeta), e.g. "auto" after a plan-launched session is
+	// switched in-session. Written only on the main thread (like modelID),
+	// persisted so paused sessions keep the chip. "" = not yet known (the UI
+	// falls back to the --permission-mode flag).
+	runtimeMode string
+
 	// baseCtx is the lifecycle context the instance's tmux/git subprocesses derive
 	// from; cancelling it (app/daemon shutdown) kills in-flight subprocesses. Set via
 	// SetBaseContext (or FromInstanceData) before Start, i.e. before any background
@@ -202,6 +209,7 @@ func (i *Instance) ToInstanceData() InstanceData {
 		ClaudeConfigDir:      i.claudeConfigDir,
 		ClaudeAccountDefault: i.claudeAccountDefault,
 		Model:                i.modelID,
+		PermissionMode:       i.runtimeMode,
 		TmuxName:             i.TmuxSessionName(),
 	}
 
@@ -260,6 +268,7 @@ func FromInstanceData(ctx context.Context, data InstanceData, branchPrefix strin
 		claudeConfigDir:      data.ClaudeConfigDir,
 		claudeAccountDefault: data.ClaudeAccountDefault,
 		modelID:              data.Model,
+		runtimeMode:          data.PermissionMode,
 	}
 
 	// A direct session has no worktree or diff. For a git session, rehydrate both from

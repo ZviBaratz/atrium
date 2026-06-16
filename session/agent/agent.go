@@ -140,6 +140,14 @@ type Adapter struct {
 	// entirely (session/tmux's AcceptSuggestion gates on it).
 	SuggestionVisible func(raw string) bool
 
+	// PermissionMode reports the agent's current permission mode from the live
+	// pane footer's mode indicator (mode "" / known false = indeterminate, keep
+	// last value). It exists because the mode is runtime-mutable — a session
+	// launched in one mode can be cycled to another — so the launch-time
+	// --permission-mode flag goes stale. nil for agents that don't surface a
+	// mode in their footer; claude wires claudePermissionMode.
+	PermissionMode func(content string) (mode string, known bool)
+
 	// Gates are the startup screens this agent can show.
 	Gates []Gate
 
@@ -214,6 +222,16 @@ func (a *Adapter) DetectPrompt(content string) (PromptMatcher, bool) {
 		}
 	}
 	return PromptMatcher{}, false
+}
+
+// DetectPermissionMode reports the agent's current permission mode from the
+// cleaned full pane, when the adapter has a detector (claude only). known=false
+// means indeterminate or unsupported — the caller keeps its last known value.
+func (a *Adapter) DetectPermissionMode(content string) (mode string, known bool) {
+	if a.PermissionMode == nil {
+		return "", false
+	}
+	return a.PermissionMode(content)
 }
 
 // GateUp returns the startup gate currently showing in the raw pane content.

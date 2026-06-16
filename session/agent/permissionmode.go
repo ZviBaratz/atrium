@@ -66,3 +66,47 @@ func PermissionModeFlag(program string) string {
 func WithPermissionModeFlag(program, mode string) string {
 	return withFlag(program, "--permission-mode", mode)
 }
+
+// claudePermissionModeMarkers maps a stable footer token to the enum value of
+// the mode it indicates. The tokens are the mode-name words claude renders in
+// its status-bar line below the input box — captured verbatim from a live
+// claude 2.1.178 pane (see permissionmode_detect_test.go fixtures):
+//
+//	⏸ plan mode on (shift+tab to cycle)
+//	⏵⏵ accept edits on (shift+tab to cycle)
+//	⏵⏵ auto mode on (shift+tab to cycle)
+//	⏵⏵ bypass permissions on (shift+tab to cycle)
+//
+// Matching the words, not the leading glyph, keeps detection robust to a glyph
+// restyle and disambiguates the three ⏵⏵ modes. dontAsk has no interactive
+// footer indicator and is intentionally absent — it falls back to the pinned
+// flag like any unrecognized footer.
+var claudePermissionModeMarkers = []struct{ token, mode string }{
+	{"plan mode on", "plan"},
+	{"accept edits on", "acceptEdits"},
+	{"auto mode on", "auto"},
+	{"bypass permissions on", "bypassPermissions"},
+}
+
+// claudePermissionMode reports the permission mode shown in the live pane
+// footer. known=false (mode "") means the footer is indeterminate — a busy turn
+// whose footer shows neither a mode indicator nor the idle shortcuts hint, or a
+// startup/degenerate capture — so the caller keeps its last known value rather
+// than flicker. The default (normal) mode renders no mode line, so it is
+// recognized by the idle "? for shortcuts" hint instead; reporting it as a real
+// "default" lets the chip clear when a session is switched back to normal.
+//
+// Detection is confined to footerRegion (the live chrome below the input box)
+// so a mode phrase quoted in the scrolled-back transcript can never false-match.
+func claudePermissionMode(content string) (mode string, known bool) {
+	footer := footerRegion(content)
+	for _, m := range claudePermissionModeMarkers {
+		if strings.Contains(footer, m.token) {
+			return m.mode, true
+		}
+	}
+	if strings.Contains(footer, "? for shortcuts") {
+		return "default", true
+	}
+	return "", false
+}

@@ -98,6 +98,10 @@ type instanceMetaResult struct {
 	model      string
 	modelStamp transcript.Stamp
 	modelOK    bool
+	// mode carries the live permission mode detected from the footer; modeOK marks
+	// a result worth applying (ComputeMode returns ok=false when unchanged or none).
+	mode   string
+	modeOK bool
 }
 
 // applyPaneState maps a polled pane state onto an instance's status. Prompt handling
@@ -313,6 +317,9 @@ func tickUpdateMetadataCmd(active []*session.Instance, selected *session.Instanc
 				// Transcript model is stamp-gated: an idle claude session costs one
 				// ReadDir + Stat per tick, a streaming one a ≤128KB tail parse.
 				r.model, r.modelStamp, r.modelOK = instance.ComputeModel()
+				// Live permission mode reads the value Poll just detected from the
+				// footer — no extra capture; only applied when it changed.
+				r.mode, r.modeOK = instance.ComputeMode()
 			}(idx, inst)
 		}
 		wg.Wait()

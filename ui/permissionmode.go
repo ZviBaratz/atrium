@@ -11,5 +11,10 @@ func permissionModeLabel(mode string) string {
 			return agent.ClaudePermissionModeLabels[i]
 		}
 	}
+	// bypassPermissions isn't an offered create-form chip, but live footer
+	// detection can surface it; shorten the raw enum to a clean chip.
+	if mode == "bypassPermissions" {
+		return "bypass"
+	}
 	return mode
 }

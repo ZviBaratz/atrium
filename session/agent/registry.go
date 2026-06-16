@@ -78,6 +78,13 @@ var claude = &Adapter{
 	// idle claude — never sends a stray keystroke.
 	SuggestionVisible: claudeSuggestionVisible,
 
+	// Live permission mode from the footer's "⏵⏵ … on" / "⏸ plan mode on"
+	// indicator, so the list chip tracks an in-session mode switch instead of
+	// the stale launch-time flag. Pinned against a live 2.1.178 capture
+	// (permissionmode_detect_test.go); version-sensitive like every heuristic
+	// here, and fails safe — an unrecognized footer falls back to the flag.
+	PermissionMode: claudePermissionMode,
+
 	Gates: []Gate{
 		{Contains: []string{"Do you trust the files in this folder?", "new MCP server", "New MCP server"},
 			Dismiss: DismissEnter},
