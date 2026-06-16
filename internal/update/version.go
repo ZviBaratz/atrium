@@ -26,6 +26,13 @@ func IsUpdatableVersion(v string) bool {
 	return err == nil
 }
 
+// IsNewer reports whether candidate is a strictly newer release than current.
+// It is the exported transition test the app uses to decide whether the running
+// version is an upgrade over the last one it showed notes for.
+func IsNewer(candidate, current string) bool {
+	return isNewer(candidate, current)
+}
+
 // isNewer reports whether candidate is a strictly newer semver than current.
 // Unparseable versions are never newer, so bad data can't trigger an update
 // prompt or an auto-install.

@@ -51,6 +51,11 @@ type AppState interface {
 	GetListRatio() float64
 	// SetListRatio stores the list/preview split (clamped to a sane range)
 	SetListRatio(ratio float64) error
+	// GetLastNotesVersion returns the version whose release notes were last
+	// shown after an update ("" if none ever were)
+	GetLastNotesVersion() string
+	// SetLastNotesVersion records the version whose release notes were just shown
+	SetLastNotesVersion(version string) error
 }
 
 // maxRecentPaths caps how many recently-used project directories are retained.
@@ -113,6 +118,10 @@ type State struct {
 	// Zero (including older state files) means never scanned. An int64 rather
 	// than time.Time so omitempty works and old files read back cleanly.
 	LastRepoScanUnix int64 `json:"last_repo_scan_unix,omitempty"`
+	// LastNotesVersion is the version whose post-update "what's new" notes were
+	// last shown. Empty (an older state file, or a fresh install) means none
+	// have been shown yet.
+	LastNotesVersion string `json:"last_notes_version,omitempty"`
 }
 
 // DefaultState returns the default state
@@ -306,5 +315,18 @@ func (s *State) GetListRatio() float64 {
 // SetListRatio stores the list/preview split, clamped to a sane range, and persists it.
 func (s *State) SetListRatio(ratio float64) error {
 	s.ListRatio = clampListRatio(ratio)
+	return SaveState(s)
+}
+
+// GetLastNotesVersion returns the version whose post-update notes were last
+// shown, or "" if none ever were.
+func (s *State) GetLastNotesVersion() string {
+	return s.LastNotesVersion
+}
+
+// SetLastNotesVersion records the version whose post-update notes were just
+// shown (or seeded on first run) and persists it.
+func (s *State) SetLastNotesVersion(version string) error {
+	s.LastNotesVersion = version
 	return SaveState(s)
 }

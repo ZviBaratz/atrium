@@ -98,6 +98,19 @@ func TestState_RecentPathsRoundTrip(t *testing.T) {
 	assert.Equal(t, []string{"/y", "/x"}, loaded.GetRecentPaths())
 }
 
+func TestState_LastNotesVersionRoundTrip(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	// A fresh state has never shown notes.
+	assert.Equal(t, "", DefaultState().GetLastNotesVersion())
+
+	s := DefaultState()
+	require.NoError(t, s.SetLastNotesVersion("0.6.0"))
+
+	loaded := LoadState()
+	assert.Equal(t, "0.6.0", loaded.GetLastNotesVersion())
+}
+
 func TestState_CollapsedReposRoundTrip(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 

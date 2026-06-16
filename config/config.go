@@ -145,6 +145,10 @@ type Config struct {
 	// starts (and has no initial prompt). nil means use the default (on), so the
 	// feature stays enabled for config files written before it existed.
 	AutoAttach *bool `json:"auto_attach,omitempty"`
+	// ShowReleaseNotesAfterUpdate, when true, shows a dismissible "what's new"
+	// overlay once after the app updates to a newer version. nil means use the
+	// default (on), so configs written before it existed keep it.
+	ShowReleaseNotesAfterUpdate *bool `json:"show_release_notes_after_update,omitempty"`
 	// KillDoubleTapConfirm, when true, lets a second press of the kill key (Ctrl+X)
 	// confirm the kill dialog, so Ctrl+X Ctrl+X tears a session down in one motion.
 	// nil means use the default (on), so configs written before it existed keep it.
@@ -342,6 +346,13 @@ func (c *Config) GetAutoAttach() bool {
 	return c.AutoAttach == nil || *c.AutoAttach
 }
 
+// GetShowReleaseNotesAfterUpdate reports whether the post-update "what's new"
+// overlay should be shown. A nil field (an older config file with no such key)
+// — or a nil Config — defaults to on.
+func (c *Config) GetShowReleaseNotesAfterUpdate() bool {
+	return c == nil || c.ShowReleaseNotesAfterUpdate == nil || *c.ShowReleaseNotesAfterUpdate
+}
+
 // GetPRCreateDraft reports whether PRs opened with the create key (c) start as
 // drafts. A nil PRCreateDraft (e.g. an older config file with no such key) — or a
 // nil Config — defaults to draft.
@@ -485,6 +496,7 @@ func DefaultConfig() *Config {
 	killDoubleTap := true
 	sessionContextBar := true
 	hintBar := true
+	showReleaseNotes := true
 	return &Config{
 		DefaultProgram:     defaultProgram,
 		AutoYes:            false,
@@ -500,9 +512,10 @@ func DefaultConfig() *Config {
 			}
 			return fmt.Sprintf("%s/", strings.ToLower(user.Username))
 		}(),
-		AutoAttach:           &autoAttach,
-		KillDoubleTapConfirm: &killDoubleTap,
-		CarryFiles:           append([]string(nil), defaultCarryFiles...),
+		AutoAttach:                  &autoAttach,
+		KillDoubleTapConfirm:        &killDoubleTap,
+		ShowReleaseNotesAfterUpdate: &showReleaseNotes,
+		CarryFiles:                  append([]string(nil), defaultCarryFiles...),
 	}
 }
 
