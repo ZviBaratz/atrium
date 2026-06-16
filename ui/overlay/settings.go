@@ -184,6 +184,20 @@ func newSettingRows(cfg *config.Config) []settingRow {
 				return []string{config.ModelIndicatorOn, config.ModelIndicatorOff}
 			},
 		},
+		{
+			key: "permission_indicator", section: "Appearance", label: "Permission chip", kind: kindEnum,
+			description: "Per-session permission-mode chip (plan/accept-edits/auto) in the list.",
+			get: func(c *config.Config) string {
+				return c.GetPermissionIndicator()
+			},
+			set: func(c *config.Config, v string) error {
+				c.PermissionIndicator = v
+				return nil
+			},
+			options: func(c *config.Config) []string {
+				return []string{config.PermissionIndicatorOn, config.PermissionIndicatorOff}
+			},
+		},
 		boolRow("hint_bar", "Appearance", "Hint bar",
 			"Always-on key-hint bar at the bottom of the screen.", "",
 			(*config.Config).GetHintBar,
@@ -200,6 +214,10 @@ func newSettingRows(cfg *config.Config) []settingRow {
 			"Auto-accept agent prompts (a daemon takes over after quit).", "",
 			func(c *config.Config) bool { return c.AutoYes },
 			func(c *config.Config, v bool) { c.AutoYes = v }),
+		boolRow("show_release_notes_after_update", "Behavior", "Release notes after update",
+			"Show a \"what's new\" overlay once after updating to a new version.", "",
+			(*config.Config).GetShowReleaseNotesAfterUpdate,
+			func(c *config.Config, v bool) { c.ShowReleaseNotesAfterUpdate = &v }),
 		boolRow("trust_worktrees_root", "Behavior", "Trust worktrees root",
 			"Pre-accept Claude's workspace-trust dialog for all session worktrees.", "applies on restart",
 			(*config.Config).GetTrustWorktreesRoot,
@@ -257,6 +275,19 @@ func newSettingRows(cfg *config.Config) []settingRow {
 			"PRs opened with c start as drafts (turn off to merge them with m in-app).", "",
 			(*config.Config).GetPRCreateDraft,
 			func(c *config.Config, v bool) { c.PRCreateDraft = &v }),
+		{
+			key: "auto_update", section: "Behavior", label: "Auto-update", kind: kindEnum,
+			description: "Update check at startup: notify shows a hint, auto installs in the background, off disables.",
+			applyNote:   "applies on restart",
+			get:         func(c *config.Config) string { return c.GetAutoUpdateMode() },
+			set: func(c *config.Config, v string) error {
+				c.AutoUpdate = v
+				return nil
+			},
+			options: func(c *config.Config) []string {
+				return []string{config.AutoUpdateNotify, config.AutoUpdateAuto, config.AutoUpdateOff}
+			},
+		},
 		{
 			key: "tmux_config_override", section: "Behavior", label: "Tmux config override", kind: kindText,
 			description: "Custom tmux config path.", applyNote: "affects new sessions",
@@ -417,7 +448,7 @@ func (s *SettingsOverlay) cycleEnum(row *settingRow, delta int) string {
 			break
 		}
 	}
-	next := (cur + delta + len(opts)) % len(opts)
+	next := wrapIndex(cur, delta, len(opts))
 	_ = row.set(s.cfg, opts[next]) // enum setters never fail
 	s.lastErr = ""
 	return row.key

@@ -8,6 +8,7 @@ import (
 	"github.com/ZviBaratz/atrium/keys"
 	"github.com/ZviBaratz/atrium/log"
 	"github.com/ZviBaratz/atrium/session"
+	"github.com/ZviBaratz/atrium/session/git"
 	"github.com/ZviBaratz/atrium/session/tmux"
 	"github.com/ZviBaratz/atrium/ui"
 	"github.com/ZviBaratz/atrium/ui/overlay"
@@ -577,6 +578,61 @@ func TestConfirmKillDoubleTapAltKey(t *testing.T) {
 		h.confirmAction("Push branch?", func() tea.Msg { return nil })
 		require.NotNil(t, h.confirmationOverlay)
 		assert.Equal(t, "", h.confirmationOverlay.ConfirmAltKey)
+	})
+}
+
+// TestConfirmKillDirtyWarning verifies that confirmKill enriches the dialog message
+// with a dirty-state notice when the session has uncommitted changes, and leaves it
+// plain when the session is clean or has no cached diff stats.
+func TestConfirmKillDirtyWarning(t *testing.T) {
+	newHome := func(t *testing.T) (*home, *session.Instance) {
+		t.Helper()
+		spin := spinner.New(spinner.WithSpinner(spinner.MiniDot))
+		list := ui.NewList(&spin)
+		inst, err := session.NewInstance(session.InstanceOptions{
+			Title:   "test-session",
+			Path:    t.TempDir(),
+			Program: "claude",
+		})
+		require.NoError(t, err)
+		_ = list.AddInstance(inst)
+		list.SetSelectedInstance(0)
+		return &home{
+			ctx:       context.Background(),
+			state:     stateDefault,
+			appConfig: config.DefaultConfig(),
+			list:      list,
+			menu:      ui.NewMenu(),
+		}, inst
+	}
+
+	t.Run("dirty session adds uncommitted-changes notice", func(t *testing.T) {
+		h, inst := newHome(t)
+		inst.SetDiffStats(&git.DiffStats{Dirty: true})
+		h.confirmKill(inst)
+		require.NotNil(t, h.confirmationOverlay)
+		rendered := h.confirmationOverlay.Render()
+		assert.Contains(t, rendered, "uncommitted")
+	})
+
+	t.Run("clean session shows plain message", func(t *testing.T) {
+		h, inst := newHome(t)
+		inst.SetDiffStats(&git.DiffStats{Dirty: false})
+		h.confirmKill(inst)
+		require.NotNil(t, h.confirmationOverlay)
+		rendered := h.confirmationOverlay.Render()
+		assert.Contains(t, rendered, "Kill session 'test-session'?")
+		assert.NotContains(t, rendered, "uncommitted")
+	})
+
+	t.Run("nil diff stats shows plain message", func(t *testing.T) {
+		h, inst := newHome(t)
+		// SetDiffStats not called — diffStats is nil
+		h.confirmKill(inst)
+		require.NotNil(t, h.confirmationOverlay)
+		rendered := h.confirmationOverlay.Render()
+		assert.Contains(t, rendered, "Kill session 'test-session'?")
+		assert.NotContains(t, rendered, "uncommitted")
 	})
 }
 

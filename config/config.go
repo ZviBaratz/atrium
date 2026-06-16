@@ -145,6 +145,10 @@ type Config struct {
 	// starts (and has no initial prompt). nil means use the default (on), so the
 	// feature stays enabled for config files written before it existed.
 	AutoAttach *bool `json:"auto_attach,omitempty"`
+	// ShowReleaseNotesAfterUpdate, when true, shows a dismissible "what's new"
+	// overlay once after the app updates to a newer version. nil means use the
+	// default (on), so configs written before it existed keep it.
+	ShowReleaseNotesAfterUpdate *bool `json:"show_release_notes_after_update,omitempty"`
 	// KillDoubleTapConfirm, when true, lets a second press of the kill key (Ctrl+X)
 	// confirm the kill dialog, so Ctrl+X Ctrl+X tears a session down in one motion.
 	// nil means use the default (on), so configs written before it existed keep it.
@@ -204,12 +208,27 @@ type Config struct {
 	// "off". Empty or unrecognized values behave as "notify". The explicit
 	// `atrium update` command works regardless of this setting.
 	AutoUpdate string `json:"auto_update,omitempty"`
+	// ProjectSearchRoots lists the directories the background repo scan walks
+	// to populate the new-session project picker with git repos the user has
+	// never opened in Atrium. A leading "~" expands to the home directory.
+	// nil or empty (configs predating this key) defaults to ["~"].
+	ProjectSearchRoots []string `json:"project_search_roots,omitempty"`
+	// ProjectSearchDepth bounds how many directory levels below each search
+	// root the repo scan descends (a root's children are level 1). nil
+	// defaults to 3; zero or negative disables the scan entirely; large
+	// values are clamped so a typo can't walk the world.
+	ProjectSearchDepth *int `json:"project_search_depth,omitempty"`
 	// ModelIndicator controls the per-session model chip in the list: "on"
 	// shows it on any session whose model is known (a --model flag before the
 	// first turn, transcript truth after), "off" hides it. Everything else —
 	// empty, unknown, and the retired "pinned"/"always" modes — normalizes to
 	// "on" (GetModelIndicator).
 	ModelIndicator string `json:"model_indicator,omitempty"`
+	// PermissionIndicator controls the per-session permission-mode chip in the
+	// list: "on" shows it for any pinned non-default mode (e.g. plan,
+	// acceptEdits, auto), "off" hides it. Everything else normalizes to "on"
+	// (GetPermissionIndicator).
+	PermissionIndicator string `json:"permission_indicator,omitempty"`
 }
 
 // ModelIndicator modes (see Config.ModelIndicator).
@@ -226,6 +245,21 @@ func (c *Config) GetModelIndicator() string {
 		return ModelIndicatorOff
 	}
 	return ModelIndicatorOn
+}
+
+// PermissionIndicator modes (see Config.PermissionIndicator).
+const (
+	PermissionIndicatorOn  = "on"
+	PermissionIndicatorOff = "off"
+)
+
+// GetPermissionIndicator returns the normalized permission-chip mode: "off"
+// only when set explicitly, "on" for everything else.
+func (c *Config) GetPermissionIndicator() string {
+	if c != nil && c.PermissionIndicator == PermissionIndicatorOff {
+		return PermissionIndicatorOff
+	}
+	return PermissionIndicatorOn
 }
 
 // defaultCarryFiles is the carry list applied when a config predates the
@@ -254,6 +288,44 @@ func (c *Config) GetMaxSessions() int {
 	return *c.MaxSessions
 }
 
+// Project-scan depth bounds (see Config.ProjectSearchDepth).
+const (
+	defaultProjectSearchDepth = 3
+	maxProjectSearchDepth     = 8
+)
+
+// defaultProjectSearchRoots is the scan scope applied when a config predates
+// the project_search_roots key (nil or empty field).
+var defaultProjectSearchRoots = []string{"~"}
+
+// GetProjectSearchRoots returns the directories the repo scan walks. A nil or
+// empty ProjectSearchRoots — or a nil Config — defaults to the home directory.
+// The result is always a fresh copy so callers can never mutate the shared
+// default seed nor the Config's stored slice.
+func (c *Config) GetProjectSearchRoots() []string {
+	if c == nil || len(c.ProjectSearchRoots) == 0 {
+		return append([]string(nil), defaultProjectSearchRoots...)
+	}
+	return append([]string(nil), c.ProjectSearchRoots...)
+}
+
+// GetProjectSearchDepth returns the scan's depth bound: nil (an older config
+// with no such key) defaults to defaultProjectSearchDepth, zero or negative
+// disables the scan (returns 0), and values beyond maxProjectSearchDepth clamp.
+func (c *Config) GetProjectSearchDepth() int {
+	if c == nil || c.ProjectSearchDepth == nil {
+		return defaultProjectSearchDepth
+	}
+	d := *c.ProjectSearchDepth
+	if d <= 0 {
+		return 0
+	}
+	if d > maxProjectSearchDepth {
+		return maxProjectSearchDepth
+	}
+	return d
+}
+
 // GetSessionContextBar reports whether attached sessions should render the
 // in-session context status line. A nil SessionContextBar (e.g. an older config
 // file with no such key) defaults to on, mirroring GetAutoAttach.
@@ -272,6 +344,13 @@ func (c *Config) GetHintBar() bool {
 // A nil AutoAttach (e.g. an older config file with no such key) defaults to on.
 func (c *Config) GetAutoAttach() bool {
 	return c.AutoAttach == nil || *c.AutoAttach
+}
+
+// GetShowReleaseNotesAfterUpdate reports whether the post-update "what's new"
+// overlay should be shown. A nil field (an older config file with no such key)
+// — or a nil Config — defaults to on.
+func (c *Config) GetShowReleaseNotesAfterUpdate() bool {
+	return c == nil || c.ShowReleaseNotesAfterUpdate == nil || *c.ShowReleaseNotesAfterUpdate
 }
 
 // GetPRCreateDraft reports whether PRs opened with the create key (c) start as
@@ -417,6 +496,7 @@ func DefaultConfig() *Config {
 	killDoubleTap := true
 	sessionContextBar := true
 	hintBar := true
+	showReleaseNotes := true
 	return &Config{
 		DefaultProgram:     defaultProgram,
 		AutoYes:            false,
@@ -432,9 +512,10 @@ func DefaultConfig() *Config {
 			}
 			return fmt.Sprintf("%s/", strings.ToLower(user.Username))
 		}(),
-		AutoAttach:           &autoAttach,
-		KillDoubleTapConfirm: &killDoubleTap,
-		CarryFiles:           append([]string(nil), defaultCarryFiles...),
+		AutoAttach:                  &autoAttach,
+		KillDoubleTapConfirm:        &killDoubleTap,
+		ShowReleaseNotesAfterUpdate: &showReleaseNotes,
+		CarryFiles:                  append([]string(nil), defaultCarryFiles...),
 	}
 }
 

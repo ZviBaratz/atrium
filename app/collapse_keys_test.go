@@ -11,12 +11,14 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// The fold keys are directional arrows, quick-send lives on "s", and space is
-// deliberately unbound — reserved for a future mark/select action.
+// The fold keys are directional arrows, quick-send lives on "s", approve on
+// "a", and space is deliberately unbound — reserved for a future mark/select
+// action.
 func TestKeymap_FoldArrowsQuickSendAndFreeSpace(t *testing.T) {
 	require.Equal(t, keys.KeyCollapse, keys.GlobalKeyStringsMap["left"])
 	require.Equal(t, keys.KeyExpand, keys.GlobalKeyStringsMap["right"])
 	require.Equal(t, keys.KeyQuickSend, keys.GlobalKeyStringsMap["s"])
+	require.Equal(t, keys.KeyApprove, keys.GlobalKeyStringsMap["a"])
 
 	_, bound := keys.GlobalKeyStringsMap[" "]
 	require.False(t, bound, "space must stay unbound (reserved)")

@@ -59,21 +59,17 @@ func (ap *AccountPicker) HasMultiple() bool { return len(ap.accounts) > 1 }
 func (ap *AccountPicker) Touched() bool { return ap.touched }
 
 // HandleKeyPress moves the cursor; Up/Down mirror Left/Right (the form navigates ↑↓).
-// Any nav key marks the picker touched — engaging the control signals intent even if
-// the cursor does not move (already at an end).
+// The cursor wraps at both ends so one keypress reaches the opposite end. Any nav key
+// marks the picker touched — engaging the control signals intent.
 func (ap *AccountPicker) HandleKeyPress(msg tea.KeyMsg) bool {
 	switch msg.Type {
 	case tea.KeyLeft, tea.KeyUp:
 		ap.touched = true
-		if ap.cursor > 0 {
-			ap.cursor--
-		}
+		ap.cursor = wrapIndex(ap.cursor, -1, len(ap.accounts))
 		return true
 	case tea.KeyRight, tea.KeyDown:
 		ap.touched = true
-		if ap.cursor < len(ap.accounts)-1 {
-			ap.cursor++
-		}
+		ap.cursor = wrapIndex(ap.cursor, +1, len(ap.accounts))
 		return true
 	}
 	return false

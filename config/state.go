@@ -3,9 +3,11 @@ package config
 import (
 	"encoding/json"
 	"fmt"
-	"github.com/ZviBaratz/atrium/log"
 	"os"
 	"path/filepath"
+	"time"
+
+	"github.com/ZviBaratz/atrium/log"
 )
 
 // Names of the state files inside the data dir.
@@ -34,6 +36,13 @@ type AppState interface {
 	GetRecentPaths() []string
 	// AddRecentPath records a project directory as most-recently-used
 	AddRecentPath(path string) error
+	// GetKnownProjects returns every project directory ever used for a session,
+	// most-recent-first (the durable long tail behind GetRecentPaths)
+	GetKnownProjects() []string
+	// GetScannedRepos returns the cached repo-scan results and when they were produced
+	GetScannedRepos() ([]string, time.Time)
+	// SetScannedRepos stores a completed repo scan's results, stamped now
+	SetScannedRepos(paths []string) error
 	// GetCollapsedRepos returns the repo group keys that should render folded
 	GetCollapsedRepos() []string
 	// SetCollapsedRepos replaces the set of folded repo group keys
@@ -42,10 +51,21 @@ type AppState interface {
 	GetListRatio() float64
 	// SetListRatio stores the list/preview split (clamped to a sane range)
 	SetListRatio(ratio float64) error
+	// GetLastNotesVersion returns the version whose release notes were last
+	// shown after an update ("" if none ever were)
+	GetLastNotesVersion() string
+	// SetLastNotesVersion records the version whose release notes were just shown
+	SetLastNotesVersion(version string) error
 }
 
 // maxRecentPaths caps how many recently-used project directories are retained.
 const maxRecentPaths = 10
+
+// maxKnownProjects caps the durable known-projects list — the long tail behind
+// RecentPaths' short head. Generous on purpose: this is what keeps a non-git
+// (direct-session) directory fuzzy-searchable after it falls out of recents,
+// since no repo scan will ever rediscover it.
+const maxKnownProjects = 100
 
 // List/preview split bounds. listRatio is the fraction of the terminal width
 // given to the session list; the clamp keeps either pane from collapsing.
@@ -85,6 +105,23 @@ type State struct {
 	// ListRatio is the fraction of the terminal width given to the session list.
 	// Zero (an older state file with no such key) reads back as defaultListRatio.
 	ListRatio float64 `json:"list_ratio,omitempty"`
+	// KnownProjects is every project directory ever used for a session (git or
+	// direct), most-recent-first, capped at maxKnownProjects. It is maintained
+	// alongside RecentPaths by AddRecentPath and feeds the new-session picker's
+	// fuzzy search with the durable long tail.
+	KnownProjects []string `json:"known_projects,omitempty"`
+	// ScannedRepos caches the last completed background repo scan so the first
+	// form-open after launch is populated instantly. The order carries the
+	// scanner's most-recently-active-first ranking.
+	ScannedRepos []string `json:"scanned_repos,omitempty"`
+	// LastRepoScanUnix is when ScannedRepos was produced, in unix seconds.
+	// Zero (including older state files) means never scanned. An int64 rather
+	// than time.Time so omitempty works and old files read back cleanly.
+	LastRepoScanUnix int64 `json:"last_repo_scan_unix,omitempty"`
+	// LastNotesVersion is the version whose post-update "what's new" notes were
+	// last shown. Empty (an older state file, or a fresh install) means none
+	// have been shown yet.
+	LastNotesVersion string `json:"last_notes_version,omitempty"`
 }
 
 // DefaultState returns the default state
@@ -202,23 +239,55 @@ func (s *State) GetRecentPaths() []string {
 	return s.RecentPaths
 }
 
-// AddRecentPath records a project directory as most-recently-used: it is moved to
-// the front, duplicates are removed, and the list is capped at maxRecentPaths.
+// AddRecentPath records a project directory as most-recently-used in both MRU
+// lists — the short RecentPaths head shown first in the picker, and the durable
+// KnownProjects tail that keeps the path fuzzy-searchable after it falls out of
+// recents. One call, one save.
 func (s *State) AddRecentPath(path string) error {
 	if path == "" {
 		return nil
 	}
+	s.RecentPaths = promoteFront(s.RecentPaths, path, maxRecentPaths)
+	s.KnownProjects = promoteFront(s.KnownProjects, path, maxKnownProjects)
+	return SaveState(s)
+}
+
+// promoteFront returns list with path moved (or inserted) at the front,
+// deduplicated, and capped at limit entries.
+func promoteFront(list []string, path string, limit int) []string {
 	deduped := []string{path}
-	for _, p := range s.RecentPaths {
+	for _, p := range list {
 		if p == path {
 			continue
 		}
 		deduped = append(deduped, p)
-		if len(deduped) >= maxRecentPaths {
+		if len(deduped) >= limit {
 			break
 		}
 	}
-	s.RecentPaths = deduped
+	return deduped
+}
+
+// GetKnownProjects returns every project directory ever used for a session,
+// most-recent-first.
+func (s *State) GetKnownProjects() []string {
+	return s.KnownProjects
+}
+
+// GetScannedRepos returns the cached repo-scan results and when they were
+// produced; a zero time means no scan has ever completed.
+func (s *State) GetScannedRepos() ([]string, time.Time) {
+	if s.LastRepoScanUnix == 0 {
+		return s.ScannedRepos, time.Time{}
+	}
+	return s.ScannedRepos, time.Unix(s.LastRepoScanUnix, 0)
+}
+
+// SetScannedRepos stores a completed repo scan's results (order preserved — it
+// carries the scanner's ranking), stamps the time, and persists.
+func (s *State) SetScannedRepos(paths []string) error {
+	s.ScannedRepos = paths
+	s.LastRepoScanUnix = time.Now().Unix()
 	return SaveState(s)
 }
 
@@ -246,5 +315,18 @@ func (s *State) GetListRatio() float64 {
 // SetListRatio stores the list/preview split, clamped to a sane range, and persists it.
 func (s *State) SetListRatio(ratio float64) error {
 	s.ListRatio = clampListRatio(ratio)
+	return SaveState(s)
+}
+
+// GetLastNotesVersion returns the version whose post-update notes were last
+// shown, or "" if none ever were.
+func (s *State) GetLastNotesVersion() string {
+	return s.LastNotesVersion
+}
+
+// SetLastNotesVersion records the version whose post-update notes were just
+// shown (or seeded on first run) and persists it.
+func (s *State) SetLastNotesVersion(version string) error {
+	s.LastNotesVersion = version
 	return SaveState(s)
 }

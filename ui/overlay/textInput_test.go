@@ -33,12 +33,14 @@ func TestSessionCreateOverlay_AccountOverrideOnlyWhenTouched(t *testing.T) {
 	_, ok = o.GetSelectedAccount()
 	assert.False(t, ok, "auto preselect alone must not override")
 
-	// The user drives the picker: now it overrides with the chosen account.
+	// The user drives the picker: now it overrides with the chosen account. From the
+	// preselected quantivly (last of two), one step wraps around to personal — the
+	// point is that the override is engaged, whichever account it lands on.
 	o.focusStop(stopAccount)
 	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyDown})
 	acct, ok := o.GetSelectedAccount()
 	require.True(t, ok, "a user choice overrides auto-routing")
-	assert.Equal(t, "quantivly", acct.Name)
+	assert.Equal(t, "personal", acct.Name)
 }
 
 // A form with no configured accounts never overrides — the feature is dormant.
@@ -264,10 +266,9 @@ func TestSessionCreateOverlay_EnterOnEmptyTitleAdvances(t *testing.T) {
 	assert.True(t, o.isTextarea(), "Enter on an empty title moves to the prompt")
 }
 
-// Enter inside the create-form prompt stays a newline — the prompt is multiline
-// by design, which is exactly why title-enter (not prompt-enter) is the quick
-// submit.
-func TestSessionCreateOverlay_EnterInPromptInsertsNewline(t *testing.T) {
+// Enter inside the create-form prompt advances to the next field, like Tab — the
+// newline keys are Shift+Enter (Alt+Enter on the wire) and Ctrl+J.
+func TestSessionCreateOverlay_EnterInPromptAdvances(t *testing.T) {
 	o := NewSessionCreateOverlay(nil, nil, []string{"/repo/a"}, "")
 	o.FocusTitle()
 	tab(o) // title → prompt
@@ -277,9 +278,54 @@ func TestSessionCreateOverlay_EnterInPromptInsertsNewline(t *testing.T) {
 	shouldClose, _ := o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyEnter})
 	assert.False(t, shouldClose, "Enter in the prompt must not submit the form")
 	assert.False(t, o.IsSubmitted())
+	assert.False(t, o.isTextarea(), "Enter should move focus off the prompt")
+	assert.Equal(t, "line one", o.GetValue(), "Enter must not insert a newline")
+}
+
+// Alt+Enter (what a configured terminal's Shift+Enter sends) inserts a newline and
+// keeps focus on the prompt.
+func TestSessionCreateOverlay_AltEnterInPromptInsertsNewline(t *testing.T) {
+	o := NewSessionCreateOverlay(nil, nil, []string{"/repo/a"}, "")
+	o.FocusTitle()
+	tab(o)
+	require.True(t, o.isTextarea())
+	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("line one")})
+
+	shouldClose, _ := o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyEnter, Alt: true})
+	assert.False(t, shouldClose)
+	assert.True(t, o.isTextarea(), "Alt+Enter stays on the prompt")
 
 	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("line two")})
 	assert.Equal(t, "line one\nline two", o.GetValue())
+}
+
+// Ctrl+J is the universal newline that works in any terminal.
+func TestSessionCreateOverlay_CtrlJInPromptInsertsNewline(t *testing.T) {
+	o := NewSessionCreateOverlay(nil, nil, []string{"/repo/a"}, "")
+	o.FocusTitle()
+	tab(o)
+	require.True(t, o.isTextarea())
+	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("line one")})
+
+	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyCtrlJ})
+	assert.True(t, o.isTextarea(), "Ctrl+J stays on the prompt")
+
+	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("line two")})
+	assert.Equal(t, "line one\nline two", o.GetValue())
+}
+
+// Ctrl+Left jumps back a word in the prompt (the textarea default binds only
+// Alt+arrow; we add Ctrl+arrow to match the title field).
+func TestSessionCreateOverlay_CtrlLeftJumpsWordInPrompt(t *testing.T) {
+	o := NewSessionCreateOverlay(nil, nil, []string{"/repo/a"}, "")
+	o.FocusTitle()
+	tab(o)
+	require.True(t, o.isTextarea())
+	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("foo bar")})
+
+	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyCtrlLeft}) // cursor → start of "bar"
+	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("X")})
+	assert.Equal(t, "foo Xbar", o.GetValue(), "Ctrl+Left should jump back one word")
 }
 
 // If the disable verdict lands while the branch picker holds focus (the async validity
@@ -594,6 +640,21 @@ func TestSessionCreateOverlay_ModelChipCycle(t *testing.T) {
 	assert.Equal(t, "", o.GetModel(), "cycling back to default drops the override")
 }
 
+// One step back from the default chip wraps to the last alias — the motivating
+// case: reach "sonnet" with a single ← instead of arrowing all the way right.
+func TestSessionCreateOverlay_ModelChipWrapsToLast(t *testing.T) {
+	o := NewSessionCreateOverlay(nil, nil, []string{"/repo/a"}, "claude")
+	o.focusStop(stopModel)
+	require.True(t, o.isModelField())
+	assert.Equal(t, "", o.GetModel(), "starts on the default chip")
+
+	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyLeft})
+	assert.Equal(t, "sonnet", o.GetModel(), "← from default wraps to the last alias")
+
+	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRight})
+	assert.Equal(t, "", o.GetModel(), "→ from the last alias wraps back to default")
+}
+
 // Typing enters custom mode; Left with the text cursor at position 0 returns to
 // the chip row with the prior chip selection intact.
 func TestSessionCreateOverlay_ModelCustomBackToChips(t *testing.T) {
@@ -723,7 +784,8 @@ func TestSessionCreateOverlay_ModeFieldOnlyForClaude(t *testing.T) {
 }
 
 // Arrowing across the chip row selects modes; the first chip (default)
-// contributes no flag, and the cursor clamps at both ends.
+// contributes no flag, and the cursor wraps at both ends so one keypress
+// reaches the opposite end.
 func TestSessionCreateOverlay_ModeChipCycle(t *testing.T) {
 	o := NewSessionCreateOverlay(nil, nil, []string{"/repo/a"}, "claude")
 	o.focusStop(stopMode)
@@ -736,13 +798,12 @@ func TestSessionCreateOverlay_ModeChipCycle(t *testing.T) {
 	assert.Equal(t, "acceptEdits", o.GetPermissionMode())
 	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyDown})
 	assert.Equal(t, "auto", o.GetPermissionMode())
-	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyDown}) // clamps at the end
-	assert.Equal(t, "auto", o.GetPermissionMode())
+	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyDown}) // wraps past the last chip
+	assert.Equal(t, "", o.GetPermissionMode(), "past the last chip wraps to default")
 
-	for i := 0; i < 4; i++ {
-		o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyUp})
-	}
-	assert.Equal(t, "", o.GetPermissionMode(), "cycling back to default drops the override")
+	// From the default chip, one step back wraps to the last chip.
+	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyUp})
+	assert.Equal(t, "auto", o.GetPermissionMode(), "before the default chip wraps to the last")
 }
 
 // The chip row displays the kebab-case label (accept-edits) while the value it
@@ -866,4 +927,33 @@ func TestDropLinesToFit_DividerStage(t *testing.T) {
 	// Non-divider lines are never dropped, even over budget.
 	got = dropLinesToFit([]string{"a", "b", "c"}, 2, isDivider)
 	assert.Equal(t, []string{"a", "b", "c"}, got)
+}
+
+// On tall terminals the create form grows the picker lists beyond the 3-row
+// default (up to maxPickerRows) — with background repo discovery the candidate
+// list is much richer, and 3 rows undersells it. Short terminals keep the
+// existing shrink-to-fit behavior.
+func TestFitRows_GrowsPickersOnTallTerminals(t *testing.T) {
+	ov := NewSessionCreateOverlay(nil, nil, []string{"/a"}, "echo")
+
+	// Plenty of room: grow to the cap.
+	pickerRows, promptRows := ov.fitRows(60)
+	if pickerRows != maxPickerRows {
+		t.Fatalf("height 60: pickerRows = %d, want %d", pickerRows, maxPickerRows)
+	}
+	if promptRows != defaultPromptRows {
+		t.Fatalf("height 60: promptRows = %d, want %d (growth must not touch the prompt)", promptRows, defaultPromptRows)
+	}
+
+	// Just enough room for one extra row pair: partial growth.
+	pickerRows, _ = ov.fitRows(32)
+	if pickerRows != 4 {
+		t.Fatalf("height 32: pickerRows = %d, want 4", pickerRows)
+	}
+
+	// Typical short terminal: the existing shrink behavior is untouched.
+	pickerRows, promptRows = ov.fitRows(24)
+	if pickerRows != 1 || promptRows != 2 {
+		t.Fatalf("height 24: got (%d, %d), want (1, 2)", pickerRows, promptRows)
+	}
 }

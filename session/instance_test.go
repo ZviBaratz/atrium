@@ -119,6 +119,48 @@ func TestRecoverLostSessionTransitionsToPaused(t *testing.T) {
 	require.True(t, inst.Paused(), "a lost session must transition to Paused")
 }
 
+// TestPause_ClearsCachedDirtyDiffStat asserts that pausing a session with
+// uncommitted changes — which Pause commits before removing the worktree —
+// clears the cached diffStats.Dirty flag. The metadata poll loop skips paused
+// instances, so a stale Dirty=true would otherwise persist and surface a false
+// "(has uncommitted changes)" in the kill dialog (and a stale list glyph).
+func TestPause_ClearsCachedDirtyDiffStat(t *testing.T) {
+	tempHome := t.TempDir()
+	t.Setenv("HOME", tempHome)
+	repoPath := filepath.Join(t.TempDir(), "repo")
+	runGit(t, "", "init", repoPath)
+	runGit(t, repoPath, "config", "user.email", "test@example.com")
+	runGit(t, repoPath, "config", "user.name", "Test User")
+	require.NoError(t, os.WriteFile(filepath.Join(repoPath, "README.md"), []byte("hello\n"), 0644))
+	runGit(t, repoPath, "add", ".")
+	runGit(t, repoPath, "commit", "-m", "initial")
+
+	wt, _, err := git.NewWorktree(context.Background(), repoPath, "sess")
+	require.NoError(t, err)
+	require.NoError(t, wt.Setup())
+
+	// Dirty the worktree so pause has uncommitted work to commit.
+	require.NoError(t, os.WriteFile(filepath.Join(wt.GetWorktreePath(), "scratch.txt"),
+		[]byte("uncommitted\n"), 0644))
+	dirty, err := wt.IsDirty()
+	require.NoError(t, err)
+	require.True(t, dirty, "worktree should be dirty before pause")
+
+	liveExec := cmd_test.MockCmdExec{
+		RunFunc:    func(*exec.Cmd) error { return nil },
+		OutputFunc: func(*exec.Cmd) ([]byte, error) { return []byte(""), nil },
+	}
+	ts := tmux.NewSessionWithDeps(context.Background(), "sess", "claude", tmux.MakePtyFactory(), liveExec)
+	inst := &Instance{Title: "sess", status: Running, started: true, gitWorktree: wt, tmuxSession: ts}
+	inst.diffStats = &git.DiffStats{Added: 1, FilesChanged: 1, Dirty: true}
+
+	require.NoError(t, inst.pause(false))
+	require.True(t, inst.Paused(), "instance must be paused")
+	require.NotNil(t, inst.GetDiffStats())
+	assert.False(t, inst.GetDiffStats().Dirty,
+		"pause commits uncommitted work, so the cached dirty flag must be cleared")
+}
+
 func TestSetPath_ResolvesToAbsolute(t *testing.T) {
 	inst, err := NewInstance(InstanceOptions{Title: "t", Path: ".", Program: "echo"})
 	require.NoError(t, err)
@@ -218,4 +260,257 @@ func TestInstanceData_MissingDisplayNameIsEmpty(t *testing.T) {
 	var data InstanceData
 	require.NoError(t, json.Unmarshal([]byte(`{"title":"my-task"}`), &data))
 	assert.Equal(t, "", data.DisplayName)
+}
+
+// approveRecorder builds a MockCmdExec that records every send-keys argv and
+// resolves the agent pane as %7, so tests can assert exactly what reached tmux.
+func approveRecorder(sendKeysArgs *[][]string) cmd_test.MockCmdExec {
+	return cmd_test.MockCmdExec{
+		RunFunc: func(cmd *exec.Cmd) error {
+			for i, arg := range cmd.Args {
+				if arg == "send-keys" {
+					*sendKeysArgs = append(*sendKeysArgs, cmd.Args[i+1:])
+					break
+				}
+			}
+			return nil
+		},
+		OutputFunc: func(*exec.Cmd) ([]byte, error) { return []byte("%7\n"), nil },
+	}
+}
+
+// ApprovePrompt is the user-initiated twin of the autoyes TapEnter: it must work
+// with AutoYes off — that gate is what it deliberately bypasses.
+func TestApprovePrompt_TapsEnterWithoutAutoYes(t *testing.T) {
+	var sent [][]string
+	inst := &Instance{
+		Title:       "approve",
+		status:      NeedsInput,
+		started:     true,
+		tmuxSession: tmux.NewSessionWithDeps(context.Background(), "approve", "claude", tmux.MakePtyFactory(), approveRecorder(&sent)),
+	}
+	require.False(t, inst.AutoYes, "the test must exercise the AutoYes-off path")
+
+	require.NoError(t, inst.ApprovePrompt())
+
+	require.Len(t, sent, 1, "exactly one keystroke batch must reach tmux")
+	assert.Contains(t, sent[0], "Enter")
+}
+
+func TestApprovePrompt_NotStartedErrors(t *testing.T) {
+	var sent [][]string
+	inst := &Instance{
+		Title:       "approve-unstarted",
+		status:      Ready,
+		tmuxSession: tmux.NewSessionWithDeps(context.Background(), "approve-unstarted", "claude", tmux.MakePtyFactory(), approveRecorder(&sent)),
+	}
+
+	require.Error(t, inst.ApprovePrompt())
+	assert.Empty(t, sent, "an unstarted instance must never reach tmux")
+}
+
+// A started instance with no tmux session must error, not panic: ApprovePrompt
+// follows the same nil guard as the other pane-touching methods (Poll,
+// IsReadyForPrompt, CheckAndHandleTrustPrompt).
+func TestApprovePrompt_NilTmuxSessionErrors(t *testing.T) {
+	inst := &Instance{
+		Title:   "approve-no-pane",
+		status:  NeedsInput,
+		started: true,
+	}
+
+	require.Error(t, inst.ApprovePrompt())
+}
+
+func TestApprovePrompt_PausedErrors(t *testing.T) {
+	var sent [][]string
+	inst := &Instance{
+		Title:       "approve-paused",
+		status:      Paused,
+		started:     true,
+		tmuxSession: tmux.NewSessionWithDeps(context.Background(), "approve-paused", "claude", tmux.MakePtyFactory(), approveRecorder(&sent)),
+	}
+
+	require.Error(t, inst.ApprovePrompt())
+	assert.Empty(t, sent, "a paused instance has no live pane to tap")
+}
+
+// suggestionPane builds the raw (ANSI-bearing) capture of an idle claude pane
+// whose input box holds boxLine. Bytes mirror the live fixture pinned in
+// session/agent/suggestion_test.go (claude 2.1.17x, 2026-06-12).
+func suggestionPane(boxLine string) string {
+	return "transcript prose\n" +
+		"\x1b[38;5;244m────────────────────────────────────────\x1b[0m\n" +
+		boxLine + "\n" +
+		"\x1b[38;5;244m────────────────────────────────────────\x1b[0m\n" +
+		"  ? for shortcuts"
+}
+
+const ghostBoxLine = "\x1b[39m❯ \x1b[2mrun the failing test and fix it\x1b[0m"
+
+// committedPane is the box after Right accepts a suggestion: the same text, now
+// committed (non-dim) input rather than a dim ghost, so the detector reads it as
+// "no suggestion". AcceptSuggestion waits for this transition before Enter.
+const committedPane = "\x1b[39m❯ run the failing test and fix it"
+
+// suggestionRecorder is approveRecorder plus raw panes served to capture-pane.
+// The two recorders cannot share an OutputFunc: pane-id resolution (list-panes)
+// and the AcceptSuggestion captures both go through Output, so the mock must
+// branch on the argv. Successive capture-pane calls return successive captures
+// (clamped to the last), so a test can feed the gate's ghost frame and then the
+// post-Right committed frame the submit waits for.
+func suggestionRecorder(sendKeysArgs *[][]string, captureErr error, captures ...string) cmd_test.MockCmdExec {
+	i := 0
+	return cmd_test.MockCmdExec{
+		RunFunc: func(cmd *exec.Cmd) error {
+			for j, arg := range cmd.Args {
+				if arg == "send-keys" {
+					*sendKeysArgs = append(*sendKeysArgs, cmd.Args[j+1:])
+					break
+				}
+			}
+			return nil
+		},
+		OutputFunc: func(cmd *exec.Cmd) ([]byte, error) {
+			for _, arg := range cmd.Args {
+				if arg == "capture-pane" {
+					c := captures[len(captures)-1]
+					if i < len(captures) {
+						c = captures[i]
+					}
+					i++
+					return []byte(c), captureErr
+				}
+			}
+			return []byte("%7\n"), nil
+		},
+	}
+}
+
+// suggestionInstance builds a started, Ready instance running program with the
+// given sequence of pane captures wired in (gate frame first, then any frames
+// the post-Right wait observes).
+func suggestionInstance(t *testing.T, program string, captureErr error, sent *[][]string, captures ...string) *Instance {
+	t.Helper()
+	return &Instance{
+		Title:       "suggest",
+		status:      Ready,
+		started:     true,
+		tmuxSession: tmux.NewSessionWithDeps(context.Background(), "suggest", program, tmux.MakePtyFactory(), suggestionRecorder(sent, captureErr, captures...)),
+	}
+}
+
+// Right (accept) and Enter (submit) must go out as SEPARATE keystrokes with the
+// accept committed in between — batching them sends Enter against claude's
+// not-yet-updated empty input, where it is a no-op, leaving the suggestion
+// inserted but unsent. The gate frame shows the ghost; the second frame shows
+// the committed (non-dim) text the wait keys off before submitting.
+func TestAcceptSuggestion_SendsRightThenEnter(t *testing.T) {
+	var sent [][]string
+	inst := suggestionInstance(t, "claude", nil, &sent, suggestionPane(ghostBoxLine), suggestionPane(committedPane))
+
+	accepted, err := inst.AcceptSuggestion()
+	require.NoError(t, err)
+	require.True(t, accepted)
+
+	require.Len(t, sent, 2, "Right and Enter must be separate sends, not one batch")
+	// Each batch is "-t <pane> <key>"; assert the key (last arg) and that no
+	// batch carries both keys.
+	require.Equal(t, "Right", sent[0][len(sent[0])-1], "Right (accept) goes first, alone")
+	require.Len(t, sent[0], 3, "the Right batch must carry only the one key")
+	assert.Equal(t, "Enter", sent[1][len(sent[1])-1], "Enter (submit) follows once the accept committed")
+}
+
+func TestAcceptSuggestion_EmptyBoxSendsNothing(t *testing.T) {
+	var sent [][]string
+	inst := suggestionInstance(t, "claude", nil, &sent, suggestionPane("\x1b[39m❯ "))
+
+	accepted, err := inst.AcceptSuggestion()
+	require.NoError(t, err)
+	assert.False(t, accepted)
+	assert.Empty(t, sent)
+}
+
+// The safety-critical gate: non-dim text after the prompt char is a user-typed
+// draft, and Enter would submit it — nothing may be sent.
+func TestAcceptSuggestion_TypedDraftSendsNothing(t *testing.T) {
+	var sent [][]string
+	inst := suggestionInstance(t, "claude", nil, &sent, suggestionPane("\x1b[39m❯ half-written draft"))
+
+	accepted, err := inst.AcceptSuggestion()
+	require.NoError(t, err)
+	assert.False(t, accepted)
+	assert.Empty(t, sent)
+}
+
+// A non-claude agent has no suggestion UI (nil SuggestionVisible): the gate
+// must answer before any capture, so even a pane that *looks* like a claude
+// suggestion is never captured and never tapped.
+func TestAcceptSuggestion_NonClaudeAdapterNoCaptureNoKeys(t *testing.T) {
+	var sent [][]string
+	captured := false
+	rec := suggestionRecorder(&sent, nil, suggestionPane(ghostBoxLine))
+	inner := rec.OutputFunc
+	rec.OutputFunc = func(cmd *exec.Cmd) ([]byte, error) {
+		for _, arg := range cmd.Args {
+			if arg == "capture-pane" {
+				captured = true
+			}
+		}
+		return inner(cmd)
+	}
+	inst := &Instance{
+		Title:       "suggest-codex",
+		status:      Ready,
+		started:     true,
+		tmuxSession: tmux.NewSessionWithDeps(context.Background(), "suggest-codex", "codex", tmux.MakePtyFactory(), rec),
+	}
+
+	accepted, err := inst.AcceptSuggestion()
+	require.NoError(t, err)
+	assert.False(t, accepted)
+	assert.Empty(t, sent)
+	assert.False(t, captured, "the adapter gate must precede the capture")
+}
+
+func TestAcceptSuggestion_NotStartedErrors(t *testing.T) {
+	var sent [][]string
+	inst := suggestionInstance(t, "claude", nil, &sent, suggestionPane(ghostBoxLine))
+	inst.started = false
+
+	_, err := inst.AcceptSuggestion()
+	require.Error(t, err)
+	assert.Empty(t, sent)
+}
+
+func TestAcceptSuggestion_PausedErrors(t *testing.T) {
+	var sent [][]string
+	inst := suggestionInstance(t, "claude", nil, &sent, suggestionPane(ghostBoxLine))
+	inst.status = Paused
+
+	_, err := inst.AcceptSuggestion()
+	require.Error(t, err)
+	assert.Empty(t, sent)
+}
+
+// Same nil guard as ApprovePrompt: a started instance with no tmux session
+// must error, not panic.
+func TestAcceptSuggestion_NilTmuxSessionErrors(t *testing.T) {
+	inst := &Instance{
+		Title:   "suggest-no-pane",
+		status:  Ready,
+		started: true,
+	}
+
+	_, err := inst.AcceptSuggestion()
+	require.Error(t, err)
+}
+
+func TestAcceptSuggestion_CaptureErrorSurfaces(t *testing.T) {
+	var sent [][]string
+	inst := suggestionInstance(t, "claude", fmt.Errorf("capture exploded"), &sent, "")
+
+	_, err := inst.AcceptSuggestion()
+	require.Error(t, err)
+	assert.Empty(t, sent)
 }

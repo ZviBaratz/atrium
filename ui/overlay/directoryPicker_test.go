@@ -165,3 +165,100 @@ func TestDirectoryPicker_EmptyMatchHintsFreeText(t *testing.T) {
 	require.Empty(t, dp.visibleItems())
 	assert.Contains(t, dp.Render(), "type a path")
 }
+
+func TestDirectoryPicker_UpdateCandidatesPreservesFilter(t *testing.T) {
+	dp := NewDirectoryPicker([]string{"/repos/alpha"})
+	dp.HandleKeyPress(runes("br"))
+	if items := dp.visibleItems(); len(items) != 0 {
+		t.Fatalf("precondition: %q should match nothing, got %v", "br", items)
+	}
+
+	dp.UpdateCandidates([]string{"/repos/alpha", "/repos/bravo"})
+
+	items := dp.visibleItems()
+	if len(items) != 1 || items[0] != "/repos/bravo" {
+		t.Fatalf("after update, filter %q should match the new candidate, got %v", "br", items)
+	}
+}
+
+func TestDirectoryPicker_UpdateCandidatesKeepsCursorOnSelection(t *testing.T) {
+	dp := NewDirectoryPicker([]string{"/a", "/b", "/c"})
+	dp.HandleKeyPress(tea.KeyMsg{Type: tea.KeyDown}) // select /b
+	if got := dp.GetSelectedPath(); got != "/b" {
+		t.Fatalf("precondition: selected %q, want /b", got)
+	}
+
+	// New scan results land, inserting an entry ahead of the selection.
+	dp.UpdateCandidates([]string{"/x", "/a", "/b", "/c"})
+
+	if got := dp.GetSelectedPath(); got != "/b" {
+		t.Fatalf("selection moved to %q after update, want /b", got)
+	}
+}
+
+func TestDirectoryPicker_UpdateCandidatesClampsCursorWhenListShrinks(t *testing.T) {
+	dp := NewDirectoryPicker([]string{"/a", "/b", "/c"})
+	dp.HandleKeyPress(tea.KeyMsg{Type: tea.KeyDown})
+	dp.HandleKeyPress(tea.KeyMsg{Type: tea.KeyDown}) // select /c
+
+	dp.UpdateCandidates([]string{"/z"})
+
+	if got := dp.GetSelectedPath(); got != "/z" {
+		t.Fatalf("after shrink, selected %q, want /z", got)
+	}
+}
+
+func TestDirectoryPicker_UpdateCandidatesLeavesPathModeAlone(t *testing.T) {
+	dir := t.TempDir()
+	dp := NewDirectoryPicker([]string{"/a"})
+	dp.HandleKeyPress(runes(dir)) // absolute path: filesystem-browse mode
+	before := dp.GetSelectedPath()
+
+	dp.UpdateCandidates([]string{"/x", "/y"})
+
+	if got := dp.GetSelectedPath(); got != before {
+		t.Fatalf("path-mode selection changed by update: %q -> %q", before, got)
+	}
+}
+
+func TestDirectoryPicker_UpdateCandidatesDedups(t *testing.T) {
+	dp := NewDirectoryPicker([]string{"/a"})
+	dp.UpdateCandidates([]string{"/a", "/b", "/a", "", "/b"})
+
+	items := dp.visibleItems()
+	if len(items) != 2 || items[0] != "/a" || items[1] != "/b" {
+		t.Fatalf("got %v, want [/a /b]", items)
+	}
+}
+
+func TestDirectoryPicker_FilterMatchesDisplayPathNotHomePrefix(t *testing.T) {
+	// Regression: ranking ran on raw absolute paths, so the 'h' in "/home/…"
+	// matched a query's 'h' and every home-dir path matched "hub" — three box
+	// paths outranked ~/quantivly/hub (PR #120 screenshot). Matching must use
+	// the rendered (~-collapsed) form.
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	hub := filepath.Join(home, "quantivly", "hub")
+	dp := NewDirectoryPicker([]string{
+		filepath.Join(home, "quantivly", "platform", "src", "box"),
+		filepath.Join(home, "quantivly", "testing-box-baseline"),
+		filepath.Join(home, "quantivly", "box"),
+		hub,
+	})
+	dp.HandleKeyPress(runes("hub"))
+	assert.Equal(t, []string{hub}, dp.visibleItems(),
+		"only the hub path matches 'hub' once the home prefix is out of the match string")
+}
+
+func TestDirectoryPicker_FilterWeighsBasenameMatches(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	mid := filepath.Join(home, "box-tools", "legacy")
+	exact := filepath.Join(home, "quantivly", "box")
+	// Priority order puts the mid-path match first; the basename hit must
+	// still outrank it.
+	dp := NewDirectoryPicker([]string{mid, exact})
+	dp.HandleKeyPress(runes("box"))
+	assert.Equal(t, []string{exact, mid}, dp.visibleItems(),
+		"a candidate whose name matches the query outranks one matching mid-path")
+}

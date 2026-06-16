@@ -1,5 +1,7 @@
 package agent
 
+import "strings"
+
 // ClaudePermissionModes are the modes the create form's permission-mode field
 // offers as chips. The CLI's full closed enum (claude 2.1.172 --help) is
 // {acceptEdits, auto, bypassPermissions, default, dontAsk, plan}; the offered
@@ -35,6 +37,28 @@ var claudePermissionModeEnum = map[string]bool{
 // ValidPermissionMode reports whether s is a --permission-mode value the
 // claude CLI accepts (exact, case-sensitive match).
 func ValidPermissionMode(s string) bool { return claudePermissionModeEnum[s] }
+
+// PermissionModeFlag returns the value of a --permission-mode pin in program
+// ("" = none), the extraction counterpart of WithPermissionModeFlag.
+// Agent-neutral pure argv parsing; callers gate on the agent where the flag's
+// meaning is agent-specific. The last pin wins, matching the CLI's argv
+// semantics. An invalid or unrecognised value returns "".
+func PermissionModeFlag(program string) string {
+	fields := strings.Fields(program)
+	value := ""
+	for n, f := range fields {
+		if v, ok := strings.CutPrefix(f, "--permission-mode="); ok {
+			value = v
+		}
+		if f == "--permission-mode" && n+1 < len(fields) {
+			value = fields[n+1]
+		}
+	}
+	if !ValidPermissionMode(value) {
+		return ""
+	}
+	return value
+}
 
 // WithPermissionModeFlag returns program with `--permission-mode mode`
 // applied: verbatim append when the program carries no pin, replace when it

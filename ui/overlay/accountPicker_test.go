@@ -29,6 +29,22 @@ func TestAccountPicker_SelectionAndPreselect(t *testing.T) {
 	assert.Equal(t, config.ClaudeAccount{}, empty.GetSelectedAccount(), "zero picker is safe")
 }
 
+// The cursor wraps at both ends so one keypress reaches the opposite end.
+func TestAccountPicker_WrapsAtEnds(t *testing.T) {
+	accounts := []config.ClaudeAccount{
+		{Name: "personal", ConfigDir: "~/.claude"},
+		{Name: "quantivly", ConfigDir: "~/.claude-quantivly", RemoteMatches: []string{"quantivly/"}},
+	}
+	ap := NewAccountPicker(accounts)
+	require.Equal(t, "personal", ap.GetSelectedAccount().Name, "first account selected by default")
+
+	ap.HandleKeyPress(tea.KeyMsg{Type: tea.KeyLeft})
+	assert.Equal(t, "quantivly", ap.GetSelectedAccount().Name, "← from the first wraps to the last")
+
+	ap.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRight})
+	assert.Equal(t, "personal", ap.GetSelectedAccount().Name, "→ from the last wraps to the first")
+}
+
 // touched distinguishes an auto-routed preselection (which the form may revise as
 // the target project changes) from a deliberate user override (which must stick).
 func TestAccountPicker_TouchedTracksInteraction(t *testing.T) {

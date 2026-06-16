@@ -897,6 +897,41 @@ func (i *Instance) TapEnter() {
 	}
 }
 
+// ApprovePrompt sends a single Enter to the agent pane to answer a visible
+// prompt (tool permission, plan approval) on the user's behalf. Unlike
+// TapEnter — the self-gating autoyes path — this is user-initiated, so it
+// ignores AutoYes and returns errors instead of logging them. It deliberately
+// answers PanePromptManual prompts too: a human keypress is exactly the
+// manual confirmation the autoyes NoAutoTap guard preserves. Note that Enter
+// selects whatever option the dialog has highlighted — on claude's plan
+// dialog the default both accepts the plan and enables auto-accept edits.
+func (i *Instance) ApprovePrompt() error {
+	ts := i.tmux()
+	if !i.isStarted() || i.Paused() || ts == nil {
+		return fmt.Errorf("session is not running")
+	}
+	if err := ts.TapEnter(); err != nil {
+		return fmt.Errorf("error tapping enter: %w", err)
+	}
+	return nil
+}
+
+// AcceptSuggestion accepts the agent's ghost-text prompt suggestion in the
+// idle input box, without attaching: Right (accept) then Enter (send). The
+// detection gate lives in the tmux layer on a fresh raw capture
+// (tmux.Session.AcceptSuggestion); accepted reports whether anything was
+// actually sent, so the caller can distinguish "sent" from "nothing to
+// accept" — a normal outcome (non-claude agent, no suggestion showing) that
+// must not be treated as an error. Like ApprovePrompt it is user-initiated
+// and ignores AutoYes; the autoyes daemon deliberately never calls it.
+func (i *Instance) AcceptSuggestion() (accepted bool, err error) {
+	ts := i.tmux()
+	if !i.isStarted() || i.Paused() || ts == nil {
+		return false, fmt.Errorf("session is not running")
+	}
+	return ts.AcceptSuggestion()
+}
+
 // Attach attaches the user's terminal to the instance's tmux session. The
 // returned channel closes when the user detaches; consult AttachExitReason and
 // AttachKillRequested afterwards for why.
@@ -1153,6 +1188,11 @@ func (i *Instance) pause(copyBranchToClipboard bool) error {
 			errs = append(errs, fmt.Errorf("failed to prune git worktrees: %w", err))
 			log.ErrorLog.Print(err)
 		}
+		// The worktree is gone and any uncommitted changes it held are
+		// unrecoverable, so the cached dirty flag (still maintained for paused
+		// instances, which the poll loop skips) must not keep claiming there are
+		// uncommitted changes.
+		i.clearCachedDirty()
 		i.SetStatus(Paused)
 		if copyBranchToClipboard {
 			_ = clipboard.WriteAll(wt.GetBranchName())
@@ -1199,6 +1239,12 @@ func (i *Instance) pause(copyBranchToClipboard bool) error {
 		}
 	}
 
+	// Pause committed any uncommitted work above and removed the worktree, so the
+	// session now has nothing uncommitted. The metadata poll loop skips paused
+	// instances, so clear the cached dirty flag here or it would stay stale until
+	// the next Resume — surfacing a false "(has uncommitted changes)" in the kill
+	// dialog and a stale pencil glyph in the list.
+	i.clearCachedDirty()
 	i.SetStatus(Paused)
 	if copyBranchToClipboard {
 		_ = clipboard.WriteAll(wt.GetBranchName())
@@ -1354,6 +1400,16 @@ func (i *Instance) SetDiffStats(stats *git.DiffStats) {
 // GetDiffStats returns the current git diff statistics
 func (i *Instance) GetDiffStats() *git.DiffStats {
 	return i.diffStats
+}
+
+// clearCachedDirty marks the cached diff stats as having no uncommitted changes.
+// Called from pause(), which runs on the main event loop, so it shares the same
+// "main loop only" contract as SetDiffStats. It is a no-op when no stats are
+// cached yet (a never-polled session reads as clean anyway).
+func (i *Instance) clearCachedDirty() {
+	if i.diffStats != nil {
+		i.diffStats.Dirty = false
+	}
 }
 
 // ComputePRStatus fetches the session branch's pull-request status off the main
