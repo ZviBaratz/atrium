@@ -399,6 +399,27 @@ func TestGetAutoAttach(t *testing.T) {
 	})
 }
 
+func TestGetShowReleaseNotesAfterUpdate(t *testing.T) {
+	t.Run("default config is on", func(t *testing.T) {
+		assert.True(t, DefaultConfig().GetShowReleaseNotesAfterUpdate())
+	})
+	t.Run("nil config defaults on", func(t *testing.T) {
+		var c *Config
+		assert.True(t, c.GetShowReleaseNotesAfterUpdate())
+	})
+	t.Run("nil field (older config) defaults on", func(t *testing.T) {
+		assert.True(t, (&Config{}).GetShowReleaseNotesAfterUpdate())
+	})
+	t.Run("explicit true", func(t *testing.T) {
+		v := true
+		assert.True(t, (&Config{ShowReleaseNotesAfterUpdate: &v}).GetShowReleaseNotesAfterUpdate())
+	})
+	t.Run("explicit false", func(t *testing.T) {
+		v := false
+		assert.False(t, (&Config{ShowReleaseNotesAfterUpdate: &v}).GetShowReleaseNotesAfterUpdate())
+	})
+}
+
 func TestGetTrustWorktreesRoot(t *testing.T) {
 	t.Run("default config is off", func(t *testing.T) {
 		assert.False(t, DefaultConfig().GetTrustWorktreesRoot())

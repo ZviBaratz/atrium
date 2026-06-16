@@ -30,6 +30,12 @@ var ErrNotUpdatable = errors.New("not a release build; self-update requires a re
 type Release struct {
 	// Version is the release's clean semver, without a leading "v".
 	Version string
+	// Notes is the release's body (the "what's new" text). Empty for a
+	// cache-served Release, which knows only the version (see Resolved).
+	Notes string
+	// URL links the release's page for browsing. Empty for a cache-served
+	// Release.
+	URL string
 
 	updater *selfupdate.Updater
 	release *selfupdate.Release
@@ -75,7 +81,56 @@ func realCheck(ctx context.Context, current string) (*Release, error) {
 	if latest.LessOrEqual(current) {
 		return nil, nil
 	}
-	return &Release{Version: latest.Version(), updater: updater, release: latest}, nil
+	return &Release{
+		Version: latest.Version(),
+		Notes:   latest.ReleaseNotes,
+		URL:     latest.URL,
+		updater: updater,
+		release: latest,
+	}, nil
+}
+
+// fetchVersion queries the release source for one specific version. It is a
+// package var so tests can fake the network (same pattern as checkRemote).
+var fetchVersion = realFetchVersion
+
+// realFetchVersion fetches one specific release's metadata — the "what's new"
+// path taken after an auto-update landed the user on a new version, not "is
+// there something newer". Returns nil when that release isn't found. The
+// library wants a v-prefixed tag ("v0.6.0"), but Atrium stores Version clean,
+// so we prepend the "v". Gated on IsUpdatableVersion: a non-release running
+// build has no release to describe.
+func realFetchVersion(ctx context.Context, version string) (*Release, error) {
+	if !IsUpdatableVersion(version) {
+		return nil, ErrNotUpdatable
+	}
+	updater, err := selfupdate.NewUpdater(selfupdate.Config{
+		Validator: &selfupdate.ChecksumValidator{UniqueFilename: "checksums.txt"},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to initialize updater: %w", err)
+	}
+	rel, found, err := updater.DetectVersion(ctx, selfupdate.ParseSlug(repoSlug), "v"+version)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query release v%s: %w", version, err)
+	}
+	if !found || rel == nil {
+		return nil, nil
+	}
+	return &Release{
+		Version: rel.Version(),
+		Notes:   rel.ReleaseNotes,
+		URL:     rel.URL,
+		updater: updater,
+		release: rel,
+	}, nil
+}
+
+// FetchVersion returns a specific version's release metadata for the post-update
+// "what's new" surface. Returns nil (no error) when the release isn't found.
+// Best-effort: callers swallow the error and simply show nothing on failure.
+func FetchVersion(ctx context.Context, version string) (*Release, error) {
+	return fetchVersion(ctx, version)
 }
 
 // Check queries the network unconditionally — the `atrium update` path. It
