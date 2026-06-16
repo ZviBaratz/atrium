@@ -177,6 +177,29 @@ func (g *Worktree) CommitChanges(commitMessage string) error {
 	return nil
 }
 
+// CommitSubject returns the trimmed subject line (the first line of the message)
+// of the commit at ref. It errors when ref does not resolve — e.g. asking for
+// HEAD~n past the root commit — which callers use to detect the end of history.
+func (g *Worktree) CommitSubject(ref string) (string, error) {
+	out, err := g.runGitCommand(g.worktreePath, "log", "-1", "--format=%s", ref)
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(out), nil
+}
+
+// ResetSoft moves HEAD (and the current branch) back to ref while leaving the
+// index and working tree untouched, so the unwound commits' content returns as
+// staged changes. Resume uses it to undo the auto-commit made on pause.
+func (g *Worktree) ResetSoft(ref string) error {
+	if _, err := g.runGitCommand(g.worktreePath, "reset", "--soft", ref); err != nil {
+		return fmt.Errorf("failed to soft-reset to %s: %w", ref, err)
+	}
+	// The commit graph changed; refresh the ahead/behind counts and the dirty flag on the next tick.
+	g.invalidateStatsCache()
+	return nil
+}
+
 // IsDirty checks if the worktree has uncommitted changes
 func (g *Worktree) IsDirty() (bool, error) {
 	output, err := g.runGitCommand(g.worktreePath, "status", "--porcelain")
