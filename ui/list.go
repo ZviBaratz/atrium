@@ -1263,3 +1263,21 @@ func (l *List) PausedInstancesInView() []*session.Instance {
 	}
 	return out
 }
+
+// ActiveInstancesInView returns every pausable instance that passes the active
+// filter (all of them when no filter is set), in list order — the scope of a
+// batch "pause all". An instance is pausable when it is not already Paused and
+// not direct (a direct session has no worktree to free, so it cannot be parked).
+// Like PausedInstancesInView, collapsed groups are included: folding is a display
+// state, not a scope boundary, so a pre-restart "pause all" parks sessions the
+// user has folded away too — which is what leaves nothing for the post-restart
+// recovery loop to do.
+func (l *List) ActiveInstancesInView() []*session.Instance {
+	var out []*session.Instance
+	for _, it := range l.items {
+		if it.GetStatus() != session.Paused && !it.IsDirect() && l.filterMatches(it) {
+			out = append(out, it)
+		}
+	}
+	return out
+}

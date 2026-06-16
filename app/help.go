@@ -81,6 +81,7 @@ func (h helpTypeGeneral) toContent() string {
 		helpRow("s", "send a message (without attaching)"),
 		helpRow("a", "approve the agent's prompt (enter picks its default); on idle claude, accept the suggested prompt"),
 		helpRow("p", "pause: commit changes + free the worktree"),
+		helpRow("ctrl-p", "pause all active sessions in the current view"),
 		helpRow("P", "commit & push branch"),
 		helpRow("c", "create a PR for the pushed branch (gh)"),
 		helpRow("m", "merge the session's PR (squash)"),

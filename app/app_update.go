@@ -376,6 +376,22 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			)
 		}
 		return m, tea.Batch(m.showInfo(msg.summary()), m.instanceChanged())
+	case batchPauseDoneMsg:
+		// A confirmed "pause all" finished. Tear down each parked session's preview
+		// terminal on the main loop (single-session pause does the same after Pause).
+		// All-success gets a transient notice; any failures go to a persistent modal
+		// naming which sessions didn't park and why. Either way, refresh the list so
+		// the now-Paused rows reflect the park.
+		for _, inst := range msg.pausedInstances {
+			m.tabbedWindow.CleanupTerminalForInstance(inst)
+		}
+		if len(msg.failures) == 0 {
+			return m, tea.Batch(
+				m.handleInfoNotice(fmt.Sprintf("paused %d session%s", msg.paused, plural(msg.paused))),
+				m.instanceChanged(),
+			)
+		}
+		return m, tea.Batch(m.showInfo(msg.summary()), m.instanceChanged())
 	case prMergedMsg:
 		// A confirmed merge succeeded: acknowledge it and refresh so the PR badge
 		// reflects the now-merged state on the next poll.
@@ -1187,6 +1203,8 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		return m, m.resumeSelected(selected)
 	case keys.KeyResumeAll:
 		return m, m.resumeAll()
+	case keys.KeyPauseAll:
+		return m, m.pauseAll()
 	case keys.KeyEnter, keys.KeyAttachToggle:
 		// KeyAttachToggle (ctrl+q) mirrors the in-session detach key
 		// (session/tmux/tmux.go): on the list it attaches the selected session,

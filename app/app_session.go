@@ -277,6 +277,76 @@ func plural(n int) string {
 	return "s"
 }
 
+// pauseFailure records one instance that could not be paused during a batch
+// "pause all", paired with the reason so the summary can name it.
+type pauseFailure struct {
+	title string
+	err   error
+}
+
+// batchPauseDoneMsg reports the outcome of a "pause all" run back through Update
+// so the feedback (notice vs. modal), preview-terminal teardown, and list refresh
+// all run on the main loop. paused counts the successes; pausedInstances carries
+// the parked instances so Update can clean up their terminals (Pause does the
+// git/tmux work, but tearing down the UI terminal must happen on the main loop);
+// failures lists the rest, in list order.
+type batchPauseDoneMsg struct {
+	paused          int
+	pausedInstances []*session.Instance
+	failures        []pauseFailure
+}
+
+// summary renders the dismissible-modal text for a batch pause that had at least
+// one failure. It is empty when nothing failed (the caller uses a transient
+// notice for the all-success case instead).
+func (msg batchPauseDoneMsg) summary() string {
+	if len(msg.failures) == 0 {
+		return ""
+	}
+	total := msg.paused + len(msg.failures)
+	var b strings.Builder
+	fmt.Fprintf(&b, "Paused %d of %d session%s. %d could not pause:",
+		msg.paused, total, plural(total), len(msg.failures))
+	for _, f := range msg.failures {
+		fmt.Fprintf(&b, "\n  • %s — %s", f.title, f.err.Error())
+	}
+	return b.String()
+}
+
+// pauseAll parks every active (non-paused, non-direct) session in the current
+// view behind a count confirmation — the intentional "prepare for restart" path,
+// the inverse of resumeAll. Each Pause commits WIP, detaches tmux, and removes the
+// worktree (keeping the branch); a per-instance failure is recorded and the run
+// continues, with the outcome surfaced as a summary. State is persisted once at the
+// end (mirroring resumeAll).
+func (m *home) pauseAll() tea.Cmd {
+	active := m.list.ActiveInstancesInView()
+	if len(active) == 0 {
+		return m.handleInfoNotice("no active sessions to pause")
+	}
+	action := func() tea.Msg {
+		var res batchPauseDoneMsg
+		for _, inst := range active {
+			if err := inst.Pause(); err != nil {
+				res.failures = append(res.failures, pauseFailure{inst.Title, err})
+				continue
+			}
+			res.paused++
+			res.pausedInstances = append(res.pausedInstances, inst)
+		}
+		if res.paused > 0 {
+			if err := m.storage.SaveInstances(m.list.GetInstances()); err != nil {
+				log.WarningLog.Printf("pause all: failed to persist paused instances: %v", err)
+			}
+		}
+		return res
+	}
+	message := fmt.Sprintf("Pause %d active session%s?", len(active), plural(len(active)))
+	// Pause auto-commits WIP and frees worktrees but keeps every branch, so it is
+	// non-destructive and keeps confirmAction's default accent border.
+	return m.confirmAction(message, action)
+}
+
 // newSessionFormOverlay builds the unified new-session form (title, project, optional
 // profile, branch, prompt) shared by both creation flows. It also reports whether the
 // seeded target is a git repo, so openCreateForm can gate the open-time branch plumbing

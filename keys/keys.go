@@ -31,7 +31,8 @@ const (
 	KeyTab      // Tab is a special keybinding for switching between panes.
 	KeyShiftTab // ShiftTab cycles between panes in reverse order.
 
-	KeyPause // Commit changes and pause the session, freeing its worktree
+	KeyPause    // Commit changes and pause the session, freeing its worktree
+	KeyPauseAll // Pause every active session in the current view (batch park)
 	KeyResume
 	KeyResumeAll // Resume every paused session in the current view (batch restore)
 	KeyPrompt    // Open the new-session form focused on the project picker
@@ -126,6 +127,7 @@ var GlobalKeyStringsMap = map[string]KeyName{
 	"tab":        KeyTab,
 	"shift+tab":  KeyShiftTab,
 	"p":          KeyPause,
+	"ctrl+p":     KeyPauseAll,
 	"r":          KeyResume,
 	"ctrl+r":     KeyResumeAll,
 	"P":          KeySubmit,
@@ -218,6 +220,10 @@ var GlobalkeyBindings = map[KeyName]key.Binding{
 	KeyPause: key.NewBinding(
 		key.WithKeys("p"),
 		key.WithHelp("p", "pause"),
+	),
+	KeyPauseAll: key.NewBinding(
+		key.WithKeys("ctrl+p"),
+		key.WithHelp("ctrl+p", "pause all"),
 	),
 	KeyTab: key.NewBinding(
 		key.WithKeys("tab"),
