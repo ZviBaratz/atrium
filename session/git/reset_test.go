@@ -9,10 +9,11 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestCommitSubject_ReadsHeadAndErrorsPastRoot covers the two ways the resume
-// unwind loop leans on CommitSubject: reading the current subject, and detecting
-// the end of history (a ref past the root commit must error, not return "").
-func TestCommitSubject_ReadsHeadAndErrorsPastRoot(t *testing.T) {
+// TestCommitSubjects_ReturnsNewestFirstAndBoundsToHistory covers what the resume
+// unwind leans on CommitSubjects for: reading leading subjects newest-first, and
+// bounding the result to the available history (a limit past the root returns
+// only the real commits, never empties, so the caller can detect the end).
+func TestCommitSubjects_ReturnsNewestFirstAndBoundsToHistory(t *testing.T) {
 	repoPath := newTestRepo(t)
 	wt, _, err := NewWorktree(context.Background(), repoPath, "sess")
 	require.NoError(t, err)
@@ -22,12 +23,16 @@ func TestCommitSubject_ReadsHeadAndErrorsPastRoot(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(wtPath, "f.txt"), []byte("v\n"), 0644))
 	require.NoError(t, wt.CommitChanges("second commit"))
 
-	subj, err := wt.CommitSubject("HEAD")
+	subjects, err := wt.CommitSubjects(1)
 	require.NoError(t, err)
-	require.Equal(t, "second commit", subj)
+	require.Equal(t, []string{"second commit"}, subjects, "limit bounds the slice; newest first")
 
-	_, err = wt.CommitSubject("HEAD~5")
-	require.Error(t, err, "a ref past the root commit must error so the loop can stop")
+	// History is two commits deep (initial + second); asking for more returns just
+	// those two rather than erroring or padding past the root.
+	subjects, err = wt.CommitSubjects(5)
+	require.NoError(t, err)
+	require.Len(t, subjects, 2, "result is bounded by available history")
+	require.Equal(t, "second commit", subjects[0])
 }
 
 // TestResetSoft_RewindsHeadAndRestagesChanges asserts ResetSoft moves HEAD back

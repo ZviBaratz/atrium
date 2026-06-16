@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 )
 
@@ -177,15 +178,21 @@ func (g *Worktree) CommitChanges(commitMessage string) error {
 	return nil
 }
 
-// CommitSubject returns the trimmed subject line (the first line of the message)
-// of the commit at ref. It errors when ref does not resolve — e.g. asking for
-// HEAD~n past the root commit — which callers use to detect the end of history.
-func (g *Worktree) CommitSubject(ref string) (string, error) {
-	out, err := g.runGitCommand(g.worktreePath, "log", "-1", "--format=%s", ref)
+// CommitSubjects returns the trimmed subject lines of up to limit commits ending
+// at HEAD, newest first. Fewer than limit are returned when history is shorter
+// (e.g. near the root); an empty slice means HEAD has no commits. Callers walking
+// the leading run therefore detect the end of history by the slice running out,
+// not by a per-commit error.
+func (g *Worktree) CommitSubjects(limit int) ([]string, error) {
+	out, err := g.runGitCommand(g.worktreePath, "log", "-n", strconv.Itoa(limit), "--format=%s", "HEAD")
 	if err != nil {
-		return "", err
+		return nil, err
 	}
-	return strings.TrimSpace(out), nil
+	out = strings.TrimSpace(out)
+	if out == "" {
+		return nil, nil
+	}
+	return strings.Split(out, "\n"), nil
 }
 
 // ResetSoft moves HEAD (and the current branch) back to ref while leaving the

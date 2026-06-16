@@ -1361,28 +1361,32 @@ func (i *Instance) Resume() error {
 	return nil
 }
 
+// maxAutoPauseUnwind caps how many leading commit subjects we inspect when
+// undoing pause auto-commits. A run longer than this would need that many paused
+// reboots without an intervening real commit — far beyond anything realistic —
+// and is safely left partially coalesced rather than read of unbounded history.
+const maxAutoPauseUnwind = 64
+
 // unwindAutoPauseCommits soft-resets past every consecutive leading auto-commit
 // pause made, landing on the first real ancestor so the worktree returns exactly
 // as it was left (changes re-staged, no history artifact). Walking the whole run
 // — not just HEAD~1 — also coalesces legacy stacks from multiple reboots. It is a
 // no-op when HEAD is not an auto-commit, so a genuine user commit is never reset.
 func (i *Instance) unwindAutoPauseCommits(wt *git.Worktree) error {
+	subjects, err := wt.CommitSubjects(maxAutoPauseUnwind)
+	if err != nil {
+		return err
+	}
 	n := 0
-	for {
-		subj, err := wt.CommitSubject(fmt.Sprintf("HEAD~%d", n))
-		if err != nil {
-			// HEAD~n doesn't resolve: we ran past the root. The whole leading run
-			// is auto-commits down to the root with no real ancestor to land on —
-			// can't soft-reset below the first commit, so leave history untouched.
-			return nil
-		}
-		if !isAutoPauseCommit(subj) {
-			break // HEAD~n is the first real commit: our reset target
-		}
+	for n < len(subjects) && isAutoPauseCommit(subjects[n]) {
 		n++
 	}
-	if n == 0 {
-		return nil // HEAD is not an auto-commit — nothing to undo
+	// n == len(subjects) means the whole inspected run is auto-commits with no real
+	// ancestor in view (history shorter than the cap → down to the root, or a run
+	// longer than the cap). Either way there's nothing safe to land on, so leave
+	// history untouched rather than soft-reset below the first commit.
+	if n == 0 || n == len(subjects) {
+		return nil
 	}
 	return wt.ResetSoft(fmt.Sprintf("HEAD~%d", n))
 }

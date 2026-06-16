@@ -72,6 +72,44 @@ func TestPauseResume_RoundTripsWithoutHistoryArtifact(t *testing.T) {
 	require.Equal(t, "in progress\n", string(content), "the edited content must be restored verbatim")
 }
 
+// TestPauseResume_BaseRefSession_RoundTripsWithoutDataLoss is the same acceptance
+// test for a session created from a chosen base branch (baseRef != ""). Setup must
+// reattach to the existing session branch on resume, not force-recreate it from
+// baseRef — otherwise the paused WIP commit is force-deleted and lost. This fails
+// before the existence-first Setup fix and passes after it.
+func TestPauseResume_BaseRefSession_RoundTripsWithoutDataLoss(t *testing.T) {
+	wt := newTestWorktreeFromBase(t) // baseRef != "", the path that previously lost WIP
+	wtPath := wt.GetWorktreePath()
+	repoPath := wt.GetRepoPath()
+	branch := wt.GetBranchName()
+
+	baseSHA := gitOutput(t, wtPath, "rev-parse", "HEAD")
+	require.NoError(t, os.WriteFile(filepath.Join(wtPath, "work.txt"), []byte("in progress\n"), 0644))
+
+	aliveExec := cmd_test.MockCmdExec{
+		RunFunc:    func(*exec.Cmd) error { return nil },
+		OutputFunc: func(*exec.Cmd) ([]byte, error) { return nil, nil },
+	}
+	pty := &recordingPtyFactory{}
+	ts := tmux.NewSessionWithDeps(context.Background(), "sess", "claude", pty, aliveExec)
+	inst := &Instance{Title: "sess", status: Running, started: true, gitWorktree: wt, tmuxSession: ts}
+
+	require.NoError(t, inst.Pause())
+	require.True(t, inst.Paused())
+	require.True(t, isAutoPauseCommit(gitOutput(t, repoPath, "log", "-1", "--format=%s", branch)),
+		"the pause commit must be a recognizable auto-commit")
+
+	require.NoError(t, inst.Resume())
+	require.Equal(t, Running, inst.GetStatus())
+
+	require.Equal(t, baseSHA, gitOutput(t, wtPath, "rev-parse", "HEAD"),
+		"resume must reuse the branch and unwind the auto-commit, not recreate from baseRef")
+	require.NotEmpty(t, gitOutput(t, wtPath, "status", "--porcelain"), "the WIP must return as a pending change")
+	content, err := os.ReadFile(filepath.Join(wtPath, "work.txt"))
+	require.NoError(t, err)
+	require.Equal(t, "in progress\n", string(content), "the edited content must be restored verbatim")
+}
+
 // TestUnwindAutoPauseCommits_CollapsesStackedAutoCommits covers the legacy case
 // the issue calls out: several reboots stacked multiple auto-commits. A single
 // unwind must collapse the whole consecutive run back to the real ancestor.
