@@ -198,6 +198,85 @@ func (m *home) resumeSelected(selected *session.Instance) tea.Cmd {
 	return m.confirmAction(message, action)
 }
 
+// resumeFailure records one instance that could not be resumed during a batch
+// "resume all", paired with the reason so the summary can name it.
+type resumeFailure struct {
+	title string
+	err   error
+}
+
+// batchResumeDoneMsg reports the outcome of a "resume all" run back through
+// Update so the feedback (notice vs. modal) and list refresh run on the main
+// loop. resumed counts the successes; failures lists the rest, in list order.
+type batchResumeDoneMsg struct {
+	resumed  int
+	failures []resumeFailure
+}
+
+// summary renders the dismissible-modal text for a batch resume that had at
+// least one failure. It is empty when nothing failed (the caller uses a
+// transient notice for the all-success case instead). A branch-busy failure is
+// rendered as a short, actionable reason rather than the raw wrapped error.
+func (msg batchResumeDoneMsg) summary() string {
+	if len(msg.failures) == 0 {
+		return ""
+	}
+	total := msg.resumed + len(msg.failures)
+	var b strings.Builder
+	fmt.Fprintf(&b, "Resumed %d of %d session%s. %d could not resume:",
+		msg.resumed, total, plural(total), len(msg.failures))
+	for _, f := range msg.failures {
+		reason := f.err.Error()
+		var busy *git.BranchCheckedOutError
+		if errors.As(f.err, &busy) {
+			reason = "branch checked out elsewhere"
+		}
+		fmt.Fprintf(&b, "\n  • %s — %s", f.title, reason)
+	}
+	return b.String()
+}
+
+// resumeAll resumes every paused session in the current view behind a count
+// confirmation. Unlike resumeSelected, the batch cannot stop to prompt for each
+// branch-busy session, so a per-instance failure (e.g. BranchCheckedOutError) is
+// recorded and the run continues; the outcome is surfaced as a summary. Resume
+// only mutates in-memory status, so the action persists once at the end (mirroring
+// resumeSelected's SaveInstances).
+func (m *home) resumeAll() tea.Cmd {
+	paused := m.list.PausedInstancesInView()
+	if len(paused) == 0 {
+		return m.handleInfoNotice("no paused sessions to resume")
+	}
+	action := func() tea.Msg {
+		var res batchResumeDoneMsg
+		for _, inst := range paused {
+			if err := inst.Resume(); err != nil {
+				res.failures = append(res.failures, resumeFailure{inst.Title, err})
+				continue
+			}
+			res.resumed++
+		}
+		if res.resumed > 0 {
+			if err := m.storage.SaveInstances(m.list.GetInstances()); err != nil {
+				log.WarningLog.Printf("resume all: failed to persist resumed instances: %v", err)
+			}
+		}
+		return res
+	}
+	message := fmt.Sprintf("Resume %d paused session%s?", len(paused), plural(len(paused)))
+	// Resume is non-destructive, so it keeps confirmAction's default accent
+	// border (only kill wears the danger border).
+	return m.confirmAction(message, action)
+}
+
+// plural returns the "s" suffix for a count: "" for exactly one, "s" otherwise.
+func plural(n int) string {
+	if n == 1 {
+		return ""
+	}
+	return "s"
+}
+
 // newSessionFormOverlay builds the unified new-session form (title, project, optional
 // profile, branch, prompt) shared by both creation flows. It also reports whether the
 // seeded target is a git repo, so openCreateForm can gate the open-time branch plumbing

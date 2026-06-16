@@ -33,8 +33,9 @@ const (
 
 	KeyPause // Commit changes and pause the session, freeing its worktree
 	KeyResume
-	KeyPrompt // Open the new-session form focused on the project picker
-	KeyHelp   // Key for showing help screen
+	KeyResumeAll // Resume every paused session in the current view (batch restore)
+	KeyPrompt    // Open the new-session form focused on the project picker
+	KeyHelp      // Key for showing help screen
 
 	// KeyShiftUp and KeyShiftDown scroll the diff/preview pane.
 	KeyShiftUp
@@ -126,6 +127,7 @@ var GlobalKeyStringsMap = map[string]KeyName{
 	"shift+tab":  KeyShiftTab,
 	"p":          KeyPause,
 	"r":          KeyResume,
+	"ctrl+r":     KeyResumeAll,
 	"P":          KeySubmit,
 	"c":          KeyCreate,
 	"m":          KeyMerge,
@@ -228,6 +230,10 @@ var GlobalkeyBindings = map[KeyName]key.Binding{
 	KeyResume: key.NewBinding(
 		key.WithKeys("r"),
 		key.WithHelp("r", "resume"),
+	),
+	KeyResumeAll: key.NewBinding(
+		key.WithKeys("ctrl+r"),
+		key.WithHelp("ctrl+r", "resume all"),
 	),
 
 	KeyMoveUp: key.NewBinding(

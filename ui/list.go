@@ -1248,3 +1248,18 @@ func (l *List) MoveGroupDown() bool {
 func (l *List) GetInstances() []*session.Instance {
 	return l.items
 }
+
+// PausedInstancesInView returns every Paused instance that passes the active
+// filter (all paused when no filter is set), in list order. Collapsed groups
+// are included — folding is a display state, not a scope boundary — so a batch
+// "resume all" restores paused sessions the user can't currently see folded
+// away, which is what they expect after a reboot parked everything.
+func (l *List) PausedInstancesInView() []*session.Instance {
+	var out []*session.Instance
+	for _, it := range l.items {
+		if it.GetStatus() == session.Paused && l.filterMatches(it) {
+			out = append(out, it)
+		}
+	}
+	return out
+}

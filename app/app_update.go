@@ -364,6 +364,18 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case instanceChangedMsg:
 		// Handle instance changed after confirmation action
 		return m, m.instanceChanged()
+	case batchResumeDoneMsg:
+		// A confirmed "resume all" finished. All-success gets a transient notice;
+		// any failures go to a persistent modal the user must read (it names which
+		// sessions didn't come back and why). Either way, refresh the list so the
+		// now-Running rows reflect the restore.
+		if len(msg.failures) == 0 {
+			return m, tea.Batch(
+				m.handleInfoNotice(fmt.Sprintf("resumed %d session%s", msg.resumed, plural(msg.resumed))),
+				m.instanceChanged(),
+			)
+		}
+		return m, tea.Batch(m.showInfo(msg.summary()), m.instanceChanged())
 	case prMergedMsg:
 		// A confirmed merge succeeded: acknowledge it and refresh so the PR badge
 		// reflects the now-merged state on the next poll.
@@ -1173,6 +1185,8 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 			return m, m.handleInfoNotice("session is already running — only paused sessions resume")
 		}
 		return m, m.resumeSelected(selected)
+	case keys.KeyResumeAll:
+		return m, m.resumeAll()
 	case keys.KeyEnter, keys.KeyAttachToggle:
 		// KeyAttachToggle (ctrl+q) mirrors the in-session detach key
 		// (session/tmux/tmux.go): on the list it attaches the selected session,

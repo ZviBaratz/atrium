@@ -86,6 +86,7 @@ func (h helpTypeGeneral) toContent() string {
 		helpRow("m", "merge the session's PR (squash)"),
 		helpRow("w", "open the session's PR in the browser"),
 		helpRow("r", "resume a paused session"),
+		helpRow("ctrl-r", "resume all paused sessions in the current view"),
 		helpRow("y", "copy branch name to clipboard"),
 		helpRow("f", "copy/open URLs & paths from the preview"),
 		"",
