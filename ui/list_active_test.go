@@ -8,16 +8,18 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// ActiveInstancesInView returns every pausable row, in list order, ignoring the
-// paused ones — the batch "pause all" scope. Loading rows are pausable too, so a
-// pre-restart park leaves nothing for the recovery loop.
+// ActiveInstancesInView returns every pausable row, in list order — the batch
+// "pause all" scope. It skips Paused rows (nothing to park) and Loading rows
+// (still starting; pausing would race Start(), which is why single-pause refuses
+// them too). A Loading session left unparked is the recovery loop's job, not a gap.
 func TestActiveInstancesInView_OnlyActive(t *testing.T) {
-	l, insts := newFilterList(t, "alpha", "bravo", "charlie")
+	l, insts := newFilterList(t, "alpha", "bravo", "charlie", "delta")
 	insts[0].SetStatus(session.Running)
 	insts[1].SetStatus(session.Paused)
 	insts[2].SetStatus(session.Loading)
+	insts[3].SetStatus(session.Ready)
 
-	require.Equal(t, []string{"alpha", "charlie"}, titlesOf(l.ActiveInstancesInView()))
+	require.Equal(t, []string{"alpha", "delta"}, titlesOf(l.ActiveInstancesInView()))
 }
 
 // An active filter narrows the scope: only active rows that match the filter are
@@ -67,6 +69,18 @@ func TestActiveInstancesInView_ExcludesDirect(t *testing.T) {
 	l.SetSize(80, 40)
 
 	require.Equal(t, []string{"git"}, titlesOf(l.ActiveInstancesInView()))
+}
+
+// A Loading session is still starting (Start() is mid-flight and the
+// Loading→Running transition is owned by the main loop), so pausing it would
+// race that setup. It is excluded from "pause all" scope, mirroring the
+// single-pause guard; the recovery loop parks it after a restart if needed.
+func TestActiveInstancesInView_ExcludesLoading(t *testing.T) {
+	l, insts := newFilterList(t, "alpha", "bravo")
+	insts[0].SetStatus(session.Running)
+	insts[1].SetStatus(session.Loading)
+
+	require.Equal(t, []string{"alpha"}, titlesOf(l.ActiveInstancesInView()))
 }
 
 // No active rows yields an empty slice (the caller short-circuits to a notice).

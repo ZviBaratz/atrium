@@ -1266,16 +1266,22 @@ func (l *List) PausedInstancesInView() []*session.Instance {
 
 // ActiveInstancesInView returns every pausable instance that passes the active
 // filter (all of them when no filter is set), in list order — the scope of a
-// batch "pause all". An instance is pausable when it is not already Paused and
-// not direct (a direct session has no worktree to free, so it cannot be parked).
+// batch "pause all". An instance is pausable when it is:
+//   - not already Paused (nothing to park),
+//   - not Loading (its Start() is still building the worktree/tmux and the
+//     Loading→Running transition is still pending on the main loop; pausing now
+//     would race that setup, exactly why single-pause refuses a Loading session),
+//   - not direct (a direct session has no worktree to free, so it cannot be parked).
+//
 // Like PausedInstancesInView, collapsed groups are included: folding is a display
 // state, not a scope boundary, so a pre-restart "pause all" parks sessions the
-// user has folded away too — which is what leaves nothing for the post-restart
-// recovery loop to do.
+// user has folded away too. A Loading session left unparked is no gap — the
+// post-restart recovery loop is the safety net for it.
 func (l *List) ActiveInstancesInView() []*session.Instance {
 	var out []*session.Instance
 	for _, it := range l.items {
-		if it.GetStatus() != session.Paused && !it.IsDirect() && l.filterMatches(it) {
+		status := it.GetStatus()
+		if status != session.Paused && status != session.Loading && !it.IsDirect() && l.filterMatches(it) {
 			out = append(out, it)
 		}
 	}

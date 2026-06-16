@@ -313,8 +313,9 @@ func (msg batchPauseDoneMsg) summary() string {
 	return b.String()
 }
 
-// pauseAll parks every active (non-paused, non-direct) session in the current
-// view behind a count confirmation — the intentional "prepare for restart" path,
+// pauseAll parks every pausable (non-paused, non-loading, non-direct) session in
+// the current view (see ActiveInstancesInView) behind a count confirmation — the
+// intentional "prepare for restart" path,
 // the inverse of resumeAll. Each Pause commits WIP, detaches tmux, and removes the
 // worktree (keeping the branch); a per-instance failure is recorded and the run
 // continues, with the outcome surfaced as a summary. State is persisted once at the
