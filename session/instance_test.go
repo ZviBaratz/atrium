@@ -119,6 +119,48 @@ func TestRecoverLostSessionTransitionsToPaused(t *testing.T) {
 	require.True(t, inst.Paused(), "a lost session must transition to Paused")
 }
 
+// TestPause_ClearsCachedDirtyDiffStat asserts that pausing a session with
+// uncommitted changes — which Pause commits before removing the worktree —
+// clears the cached diffStats.Dirty flag. The metadata poll loop skips paused
+// instances, so a stale Dirty=true would otherwise persist and surface a false
+// "(has uncommitted changes)" in the kill dialog (and a stale list glyph).
+func TestPause_ClearsCachedDirtyDiffStat(t *testing.T) {
+	tempHome := t.TempDir()
+	t.Setenv("HOME", tempHome)
+	repoPath := filepath.Join(t.TempDir(), "repo")
+	runGit(t, "", "init", repoPath)
+	runGit(t, repoPath, "config", "user.email", "test@example.com")
+	runGit(t, repoPath, "config", "user.name", "Test User")
+	require.NoError(t, os.WriteFile(filepath.Join(repoPath, "README.md"), []byte("hello\n"), 0644))
+	runGit(t, repoPath, "add", ".")
+	runGit(t, repoPath, "commit", "-m", "initial")
+
+	wt, _, err := git.NewWorktree(context.Background(), repoPath, "sess")
+	require.NoError(t, err)
+	require.NoError(t, wt.Setup())
+
+	// Dirty the worktree so pause has uncommitted work to commit.
+	require.NoError(t, os.WriteFile(filepath.Join(wt.GetWorktreePath(), "scratch.txt"),
+		[]byte("uncommitted\n"), 0644))
+	dirty, err := wt.IsDirty()
+	require.NoError(t, err)
+	require.True(t, dirty, "worktree should be dirty before pause")
+
+	liveExec := cmd_test.MockCmdExec{
+		RunFunc:    func(*exec.Cmd) error { return nil },
+		OutputFunc: func(*exec.Cmd) ([]byte, error) { return []byte(""), nil },
+	}
+	ts := tmux.NewSessionWithDeps(context.Background(), "sess", "claude", tmux.MakePtyFactory(), liveExec)
+	inst := &Instance{Title: "sess", status: Running, started: true, gitWorktree: wt, tmuxSession: ts}
+	inst.diffStats = &git.DiffStats{Added: 1, FilesChanged: 1, Dirty: true}
+
+	require.NoError(t, inst.pause(false))
+	require.True(t, inst.Paused(), "instance must be paused")
+	require.NotNil(t, inst.GetDiffStats())
+	assert.False(t, inst.GetDiffStats().Dirty,
+		"pause commits uncommitted work, so the cached dirty flag must be cleared")
+}
+
 func TestSetPath_ResolvesToAbsolute(t *testing.T) {
 	inst, err := NewInstance(InstanceOptions{Title: "t", Path: ".", Program: "echo"})
 	require.NoError(t, err)

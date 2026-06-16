@@ -579,7 +579,7 @@ func (m *home) confirmKill(inst *session.Instance) tea.Cmd {
 
 	message := fmt.Sprintf("Kill session '%s'?", inst.DisplayName())
 	if stats := inst.GetDiffStats(); stats != nil && stats.Dirty {
-		message = fmt.Sprintf("Kill session '%s'? (has uncommitted changes)", inst.DisplayName())
+		message += " (has uncommitted changes)"
 	}
 	cmd := m.confirmAction(message, killAction)
 	// Kill is the one destructive confirmation, so it alone wears the danger

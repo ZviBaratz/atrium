@@ -1188,6 +1188,11 @@ func (i *Instance) pause(copyBranchToClipboard bool) error {
 			errs = append(errs, fmt.Errorf("failed to prune git worktrees: %w", err))
 			log.ErrorLog.Print(err)
 		}
+		// The worktree is gone and any uncommitted changes it held are
+		// unrecoverable, so the cached dirty flag (still maintained for paused
+		// instances, which the poll loop skips) must not keep claiming there are
+		// uncommitted changes.
+		i.clearCachedDirty()
 		i.SetStatus(Paused)
 		if copyBranchToClipboard {
 			_ = clipboard.WriteAll(wt.GetBranchName())
@@ -1234,6 +1239,12 @@ func (i *Instance) pause(copyBranchToClipboard bool) error {
 		}
 	}
 
+	// Pause committed any uncommitted work above and removed the worktree, so the
+	// session now has nothing uncommitted. The metadata poll loop skips paused
+	// instances, so clear the cached dirty flag here or it would stay stale until
+	// the next Resume — surfacing a false "(has uncommitted changes)" in the kill
+	// dialog and a stale pencil glyph in the list.
+	i.clearCachedDirty()
 	i.SetStatus(Paused)
 	if copyBranchToClipboard {
 		_ = clipboard.WriteAll(wt.GetBranchName())
@@ -1389,6 +1400,16 @@ func (i *Instance) SetDiffStats(stats *git.DiffStats) {
 // GetDiffStats returns the current git diff statistics
 func (i *Instance) GetDiffStats() *git.DiffStats {
 	return i.diffStats
+}
+
+// clearCachedDirty marks the cached diff stats as having no uncommitted changes.
+// Called from pause(), which runs on the main event loop, so it shares the same
+// "main loop only" contract as SetDiffStats. It is a no-op when no stats are
+// cached yet (a never-polled session reads as clean anyway).
+func (i *Instance) clearCachedDirty() {
+	if i.diffStats != nil {
+		i.diffStats.Dirty = false
+	}
 }
 
 // ComputePRStatus fetches the session branch's pull-request status off the main
