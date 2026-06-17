@@ -56,6 +56,10 @@ type AppState interface {
 	GetLastNotesVersion() string
 	// SetLastNotesVersion records the version whose release notes were just shown
 	SetLastNotesVersion(version string) error
+	// GetAckedDrift returns the agent-key → acknowledged-version map (never nil)
+	GetAckedDrift() map[string]string
+	// SetAckedDrift records the installed version the drift hint was dismissed at
+	SetAckedDrift(key, version string) error
 }
 
 // maxRecentPaths caps how many recently-used project directories are retained.
@@ -122,6 +126,10 @@ type State struct {
 	// last shown. Empty (an older state file, or a fresh install) means none
 	// have been shown yet.
 	LastNotesVersion string `json:"last_notes_version,omitempty"`
+	// AckedDrift maps an agent key to the installed version the user dismissed the
+	// heuristic-drift hint for. The hint stays quiet while installed == acked; a
+	// later version bump re-arms it.
+	AckedDrift map[string]string `json:"acked_drift,omitempty"`
 }
 
 // DefaultState returns the default state
@@ -328,5 +336,22 @@ func (s *State) GetLastNotesVersion() string {
 // shown (or seeded on first run) and persists it.
 func (s *State) SetLastNotesVersion(version string) error {
 	s.LastNotesVersion = version
+	return SaveState(s)
+}
+
+// GetAckedDrift returns the acknowledged-drift map, never nil.
+func (s *State) GetAckedDrift() map[string]string {
+	if s.AckedDrift == nil {
+		return map[string]string{}
+	}
+	return s.AckedDrift
+}
+
+// SetAckedDrift records the installed version the drift hint was dismissed at and persists it.
+func (s *State) SetAckedDrift(key, version string) error {
+	if s.AckedDrift == nil {
+		s.AckedDrift = map[string]string{}
+	}
+	s.AckedDrift[key] = version
 	return SaveState(s)
 }
