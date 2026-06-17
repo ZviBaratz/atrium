@@ -29,6 +29,20 @@ const (
 	KeyGeneric Key = "generic"
 )
 
+// Granularity is the smallest semver component whose increase past an adapter's
+// VerifiedVersion counts as drift. Patch is the zero value and the conservative
+// default: any installed version above the verified ceiling drifts.
+type Granularity int
+
+const (
+	// GranularityPatch treats any version above the ceiling as drift.
+	GranularityPatch Granularity = iota
+	// GranularityMinor ignores patch bumps; a minor-or-higher increase is drift.
+	GranularityMinor
+	// GranularityMajor ignores minor and patch bumps; only a major increase is drift.
+	GranularityMajor
+)
+
 // WindowPrompt is the chrome window size used by prompt matchers, in non-empty
 // pane lines counted from the bottom. It mirrors the tmux poller's historical
 // constant: a prompt block (question + options + footer, possibly with a todo
@@ -111,6 +125,18 @@ type Adapter struct {
 	Key         Key
 	DisplayName string
 
+	// VerifiedVersion is the highest CLI version whose heuristic strings have
+	// been confirmed against a live pane — a ceiling, not a frozen pin. An
+	// installed version above it is unverified territory and triggers a drift
+	// warning. Bump it (after re-checking) whenever a matcher string is edited,
+	// and on a plain re-verification of a newer release. Empty = unversioned
+	// (codex/aider): shown in `atrium doctor`, never triggers a hint.
+	VerifiedVersion string
+	// DriftGranularity is the smallest semver component whose increase past
+	// VerifiedVersion counts as drift. Zero value (GranularityPatch) is the
+	// conservative default.
+	DriftGranularity Granularity
+
 	// aliases are lowercased substrings matched against the basename of the
 	// program's first token by Resolve.
 	aliases []string
@@ -188,6 +214,12 @@ func NamerKeys() []Key {
 		}
 	}
 	return keys
+}
+
+// Adapters returns the recognized agent adapters (excludes the Generic
+// fallback). The doctor package probes these for version drift.
+func Adapters() []*Adapter {
+	return registry
 }
 
 // HasBusyMarker reports whether a busy marker is present in the live marker

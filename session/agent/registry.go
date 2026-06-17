@@ -10,7 +10,17 @@ import (
 // can be fixed by re-checking the cited source and editing the one stale entry.
 //
 // Heuristic strings are version-sensitive by nature. When editing, add a fixture
-// to registry_test.go pinning the new string against a captured pane.
+// to registry_test.go pinning the new string against a captured pane, and bump
+// the adapter's VerifiedVersion to the version you captured against (the drift
+// guard in internal/doctor warns when an installed CLI moves past it).
+//
+// Remediation is ADDITIVE, never replace-in-place: when a CLI rewords a gating
+// string, ADD the new variant alongside the old in the same matcher list and
+// keep both through a deprecation window, e.g.
+//   // claude >=2.1.180; "No, keep planning" kept for <2.1.180, remove after.
+// A union match can't guess wrong (a pane shows only one variant), so matching
+// never depends on the detected version. A plain re-verification (strings still
+// valid at a newer release) is just a VerifiedVersion bump, no string edit.
 
 // Claude Code. The reference adapter: every heuristic here predates this package
 // and is pinned by the poll tests in session/tmux.
@@ -18,6 +28,13 @@ var claude = &Adapter{
 	Key:         KeyClaude,
 	DisplayName: "Claude Code",
 	aliases:     []string{"claude"},
+
+	// Heuristic strings verified against claude 2.1.170 (see Prompts provenance).
+	// Patch granularity: claude rewords gating strings inside patch releases, so
+	// any version above this ceiling is unverified — a coarser granularity would
+	// silently miss real drift.
+	VerifiedVersion:  "2.1.170",
+	DriftGranularity: GranularityPatch,
 
 	// The footer renders e.g. "✻ Cogitating… (5s · esc to interrupt)" below the
 	// input box for the whole turn, including silent tool calls.
@@ -177,6 +194,12 @@ var gemini = &Adapter{
 	Key:         KeyGemini,
 	DisplayName: "Gemini CLI",
 	aliases:     []string{"gemini"},
+
+	// Heuristic strings verified against gemini 0.27. Minor granularity: the
+	// confirmation wording tracks minor releases; pure patch bumps within a
+	// minor don't warrant a warning.
+	VerifiedVersion:  "0.27",
+	DriftGranularity: GranularityMinor,
 
 	BusyMarkers: []string{"esc to cancel"},
 	// Like codex, the loading row renders above the input box.

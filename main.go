@@ -13,6 +13,7 @@ import (
 	cmd2 "github.com/ZviBaratz/atrium/cmd"
 	"github.com/ZviBaratz/atrium/config"
 	"github.com/ZviBaratz/atrium/daemon"
+	"github.com/ZviBaratz/atrium/internal/doctor"
 	"github.com/ZviBaratz/atrium/internal/update"
 	"github.com/ZviBaratz/atrium/log"
 	"github.com/ZviBaratz/atrium/session"
@@ -275,6 +276,24 @@ var (
 			return nil
 		},
 	}
+
+	doctorCmd = &cobra.Command{
+		Use:   "doctor",
+		Short: "Check installed agent CLIs against Atrium's verified heuristic versions",
+		Long: "Probes installed agent CLIs (claude, codex, gemini, aider) and reports whether each\n" +
+			"one's version has drifted past the version Atrium's pane-classification heuristics were\n" +
+			"verified against. Drift means a session's status (busy / needs-input / idle) may be\n" +
+			"misread; re-verify the matcher strings in session/agent/registry.go.",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			log.Initialize(false)
+			defer log.Close()
+
+			ctx, cancel := context.WithTimeout(context.Background(), doctor.ProbeTimeout)
+			defer cancel()
+			fmt.Print(doctor.Render(doctor.CheckInstalled(ctx)))
+			return nil
+		},
+	}
 )
 
 // shouldLaunchDaemonOnExit reports whether the autoyes daemon should take over
@@ -308,6 +327,7 @@ func init() {
 	rootCmd.AddCommand(versionCmd)
 	rootCmd.AddCommand(resetCmd)
 	rootCmd.AddCommand(profilesCmd)
+	rootCmd.AddCommand(doctorCmd)
 }
 
 func main() {

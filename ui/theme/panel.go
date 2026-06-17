@@ -26,17 +26,32 @@ func (t *Theme) Panel(title, content string, width, height int, active bool) str
 	return t.PanelWithBadge(title, "", content, width, height, active)
 }
 
-// PanelWithBadge is Panel plus an optional right-aligned, attention-colored
+// PanelWithBadge is Panel plus a single optional right-aligned, attention-colored
 // badge inset in the top border:
 //
 //	╭─ Sessions ──────── ⇡ v0.7.1 ─╮
 //
-// badge is plain text (no ANSI); empty means no badge. The title always wins
-// the width contest: a badge that doesn't fit degrades to its text after the
-// first space (e.g. "v0.7.1"), then to its first token alone (the glyph),
-// then disappears — it is never cut mid-word, which for a version string
-// would mislead.
+// See PanelWithBadges for the degradation contract.
 func (t *Theme) PanelWithBadge(title, badge, content string, width, height int, active bool) string {
+	return t.PanelWithBadges(title, []string{badge}, content, width, height, active)
+}
+
+// PanelWithBadges is Panel plus one or more right-aligned, attention-colored
+// badges inset in the top border:
+//
+//	╭─ Sessions ──── ⇡ v0.7.1 ⚠ stale ─╮
+//
+// Each badge is plain text (no ANSI) shaped as "glyph text"; empty entries are
+// skipped, so a caller may pass an absent badge as "". The title always wins the
+// width contest, and the badges degrade together through a fixed ladder — the
+// widest form that fits beside the title is rendered, else none:
+//
+//   - one badge:  full → text after the glyph → glyph alone → nothing
+//     (a version string is never cut mid-word, which would mislead)
+//   - many badges: all full → every glyph alone → nothing
+//     (a narrow panel keeps every signal as its glyph rather than orphaning or
+//     dropping a whole badge — the drift "⚠" survives beside the update "⇡")
+func (t *Theme) PanelWithBadges(title string, badges []string, content string, width, height int, active bool) string {
 	if width < 2 {
 		width = 2
 	}
@@ -62,23 +77,14 @@ func (t *Theme) PanelWithBadge(title, badge, content string, width, height int, 
 	}
 	titleSegW := runewidth.StringWidth(titleSeg)
 
-	// Pick the widest badge variant that fits beside the (untouched) title:
-	// full → text after the glyph → glyph alone → none. Budget: two corners,
-	// one leading and one trailing horizontal around the segments.
-	var badgeSeg string
-	if badge != "" {
-		candidates := []string{badge}
-		if i := strings.IndexByte(badge, ' '); i >= 0 {
-			candidates = append(candidates, badge[i+1:], badge[:i])
-		}
-		for _, c := range candidates {
-			if seg := " " + c + " "; width-4-titleSegW-runewidth.StringWidth(seg) >= 0 {
-				badge, badgeSeg = c, seg
-				break
-			}
-		}
-		if badgeSeg == "" {
-			badge = ""
+	// Pick the widest badge variant that fits beside the (untouched) title.
+	// Budget: two corners, one leading and one trailing horizontal around the
+	// segments.
+	var badge, badgeSeg string
+	for _, c := range badgeCandidates(badges) {
+		if seg := " " + c + " "; width-4-titleSegW-runewidth.StringWidth(seg) >= 0 {
+			badge, badgeSeg = c, seg
+			break
 		}
 	}
 
@@ -115,6 +121,44 @@ func (t *Theme) PanelWithBadge(title, badge, content string, width, height int, 
 		Render(inner)
 
 	return lipgloss.JoinVertical(lipgloss.Left, topRow, body)
+}
+
+// badgeCandidates returns the badge degradation ladder (widest first) for the
+// non-empty entries of badges. PanelWithBadges renders the first candidate that
+// fits beside the title, or none. See PanelWithBadges for the contract: one badge
+// keeps its text as it narrows; many badges collapse to their glyphs together.
+func badgeCandidates(badges []string) []string {
+	present := make([]string, 0, len(badges))
+	for _, b := range badges {
+		if b != "" {
+			present = append(present, b)
+		}
+	}
+	switch len(present) {
+	case 0:
+		return nil
+	case 1:
+		b := present[0]
+		ladder := []string{b}
+		if i := strings.IndexByte(b, ' '); i >= 0 {
+			ladder = append(ladder, b[i+1:], b[:i])
+		}
+		return ladder
+	default:
+		glyphs := make([]string, len(present))
+		for i, b := range present {
+			glyphs[i] = badgeGlyph(b)
+		}
+		return []string{strings.Join(present, " "), strings.Join(glyphs, " ")}
+	}
+}
+
+// badgeGlyph returns the leading glyph token of a "glyph text" badge.
+func badgeGlyph(b string) string {
+	if i := strings.IndexByte(b, ' '); i >= 0 {
+		return b[:i]
+	}
+	return b
 }
 
 // SanitizeWidth makes untrusted captured content (tmux pane output, diffs) safe to
