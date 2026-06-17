@@ -452,6 +452,59 @@ func TestRender_SessionAgeBudget(t *testing.T) {
 		"direct row must fit even when the marker itself must truncate")
 }
 
+// renderRowWith builds a single row at width 80 under the unicode theme (so the
+// note glyph "✎" is stable), applying setup to the instance before rendering.
+func renderRowWith(t *testing.T, setup func(i *session.Instance)) string {
+	t.Helper()
+	t.Cleanup(theme.Set("unicode"))
+	s := spinner.New()
+	r := &InstanceRenderer{spinner: &s}
+	r.setWidth(80)
+	inst, err := session.NewInstance(session.InstanceOptions{Title: "auth-refactor", Path: ".", Program: "echo"})
+	require.NoError(t, err)
+	setup(inst)
+	return r.Render(inst, 1, false)
+}
+
+func TestRender_PausedNoteTakesLineTwo(t *testing.T) {
+	out := renderRowWith(t, func(i *session.Instance) {
+		i.SetStatus(session.Paused)
+		i.SetNote("blocked on Benoit's review")
+		i.SetDiffStats(&git.DiffStats{Added: 5, Removed: 2, Commits: 3})
+	})
+	require.Contains(t, out, "✎", "paused row shows the note glyph")
+	require.Contains(t, out, "blocked on Benoit's review")
+	lines := strings.Split(out, "\n")
+	require.Len(t, lines, 2, "paused-with-note stays two lines (note replaces the VC line)")
+	for _, ln := range lines {
+		require.Equal(t, 80, ansi.StringWidth(ln), "each line totals r.width (marker col + W)")
+	}
+}
+
+func TestRender_RunningNoteGetsThirdLine(t *testing.T) {
+	out := renderRowWith(t, func(i *session.Instance) {
+		i.SetStatus(session.Running)
+		i.SetNote("risky — double-check before merge")
+		i.SetDiffStats(&git.DiffStats{Added: 5, Removed: 2, Commits: 3})
+	})
+	lines := strings.Split(out, "\n")
+	require.Len(t, lines, 3, "running-with-note gets a third line; live VC line is preserved")
+	require.Contains(t, lines[2], "✎")
+	require.Contains(t, lines[2], "risky — double-check before merge")
+	for _, ln := range lines {
+		require.Equal(t, 80, ansi.StringWidth(ln), "every line totals r.width")
+	}
+}
+
+func TestRender_NoNoteIsUnchanged(t *testing.T) {
+	out := renderRowWith(t, func(i *session.Instance) {
+		i.SetStatus(session.Running)
+		i.SetDiffStats(&git.DiffStats{Added: 5, Removed: 2, Commits: 3})
+	})
+	require.Len(t, strings.Split(out, "\n"), 2, "no note → exactly two lines, unchanged")
+	require.NotContains(t, out, "✎")
+}
+
 func TestRender_AccountBadge(t *testing.T) {
 	t.Cleanup(theme.Set("unicode"))
 	s := spinner.New()

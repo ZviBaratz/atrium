@@ -190,6 +190,19 @@ func (p rowPaint) nameSeg(i *session.Instance, selected bool) rowSeg {
 	return p.flexSeg(theme.SanitizeWidth(i.DisplayName()), c, selected)
 }
 
+// noteSeg is the freeform session note as a flex segment: a leading note glyph
+// plus the width-sanitized note text, in a distinct accent (Purple) so it reads
+// as an annotation, never confused with the branch (dim) or the name (Fg).
+// Returns the zero rowSeg (renders nothing) when the instance has no note.
+func (p rowPaint) noteSeg(i *session.Instance) rowSeg {
+	note := strings.TrimSpace(i.Note())
+	if note == "" {
+		return rowSeg{}
+	}
+	text := p.th.Glyphs.Note + " " + theme.SanitizeWidth(note)
+	return p.flexSeg(text, p.th.Palette.Purple, false)
+}
+
 // gitChips returns the behind/ahead cluster as space-separated segments (behind
 // in Attention — it implies a rebase — ahead dim). Empty when neither applies.
 // The dirty glyph is intentionally not here: it describes *what changed* rather

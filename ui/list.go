@@ -534,12 +534,35 @@ func (r *InstanceRenderer) Render(i *session.Instance, idx int, selected bool) s
 		line2 = p.composeLine(W, left2, right2)
 	}
 
+	// Session note: when the session is paused, the note takes line 2's
+	// (now-frozen) version-control slot, keeping the age on the right. When it is
+	// running, line 2's live VC signal is preserved and the note gets its own
+	// indented third line. No note → both branches are skipped and the row is
+	// unchanged.
+	var line3 string
+	if note := p.noteSeg(i); note.plain != "" {
+		indent := p.seg(strings.Repeat(" ", indentW), th.Palette.FgDim)
+		if i.Paused() {
+			var right2 []rowSeg
+			if age, ok := p.ageSeg(i); ok {
+				right2 = append(right2, age)
+			}
+			line2 = p.composeLine(W, []rowSeg{indent, note}, right2)
+		} else {
+			line3 = p.composeLine(W, []rowSeg{indent, note}, nil)
+		}
+	}
+
 	// --- Left marker (accent bar when selected) + compose ---
 	marker := p.pad(1)
 	if selected {
 		marker = p.seg(g.SelectionMark, th.Palette.Accent).render()
 	}
-	return lipgloss.JoinVertical(lipgloss.Left, marker+line1, marker+line2)
+	rows := []string{marker + line1, marker + line2}
+	if line3 != "" {
+		rows = append(rows, marker+line3)
+	}
+	return lipgloss.JoinVertical(lipgloss.Left, rows...)
 }
 
 func (l *List) String() string {
