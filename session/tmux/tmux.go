@@ -160,6 +160,11 @@ type Session struct {
 	// sibling-navigation request). Reset at Attach, set by the stdin interceptor
 	// before Detach, read via AttachExitReason once attachCh has closed.
 	detachReason DetachReason
+	// detachErr records any error encountered while tearing down the current
+	// attach (a failed pty close or a failed Restore). Reset at Attach, written by
+	// Detach before attachCh is closed, read via AttachExitError once attachCh has
+	// closed — sharing detachReason's happens-before edge. nil means a clean detach.
+	detachErr error
 
 	// ctx{Name,Left} cache the last context-bar payload pushed via SetContext so an
 	// unchanged metadata tick skips the tmux subprocess. ctxSet guards the first push
@@ -955,9 +960,19 @@ func classifyAttachInput(in []byte, allowKill bool) attachInputAction {
 // key (Ctrl+X) detaches and sets KillRequested so the caller can tear the session
 // down; the Terminal-tab shell passes false so Ctrl+X stays a normal shell key.
 func (t *Session) Attach(allowKill bool) (chan struct{}, error) {
+	// A prior Detach whose Restore failed leaves ptmx nil rather than panicking;
+	// re-establish the attach pty here so the degraded session heals transparently
+	// on the next attach. If Restore fails again, propagate it to the caller.
+	if t.ptmx == nil {
+		if err := t.Restore(); err != nil {
+			return nil, fmt.Errorf("cannot attach: pty unavailable and restore failed: %w", err)
+		}
+	}
+
 	t.attachCh = make(chan struct{})
 	t.killRequested = false
 	t.detachReason = DetachQuit
+	t.detachErr = nil
 
 	t.wg = &sync.WaitGroup{}
 	t.wg.Add(1)
@@ -1068,27 +1083,33 @@ func (t *Session) AttachExitReason() DetachReason {
 	return t.detachReason
 }
 
-// DetachSafely disconnects from the current tmux session without panicking
-func (t *Session) DetachSafely() error {
-	// Only detach if we're actually attached
+// AttachExitError reports any error encountered while tearing down the most recent
+// attach (a failed pty close or Restore). It is meaningful only after the attach
+// channel returned by Attach has closed, and is nil for a clean detach.
+func (t *Session) AttachExitError() error {
+	return t.detachErr
+}
+
+// detachCleanup tears down the goroutines and pty backing the current attach,
+// returning any errors instead of panicking. It deliberately does NOT close
+// attachCh: the caller closes it last, after writing per-detach state
+// (detachReason / detachErr), so the channel close provides the happens-before
+// edge that makes that state visible to the reader. Returns nil when there is no
+// active attach.
+func (t *Session) detachCleanup() []error {
 	if t.attachCh == nil {
-		return nil // Already detached
+		return nil // already detached / never attached
 	}
 
 	var errs []error
 
-	// Close the attached pty session.
+	// Close the attached pty session. Closing unblocks the io.Copy goroutine via
+	// EOF; nil the field so a stale pointer is never reused.
 	if t.ptmx != nil {
 		if err := t.ptmx.Close(); err != nil {
 			errs = append(errs, fmt.Errorf("error closing attach pty session: %w", err))
 		}
 		t.ptmx = nil
-	}
-
-	// Clean up attach state
-	if t.attachCh != nil {
-		close(t.attachCh)
-		t.attachCh = nil
 	}
 
 	if t.cancel != nil {
@@ -1103,46 +1124,62 @@ func (t *Session) DetachSafely() error {
 
 	t.ctx = nil
 
+	return errs
+}
+
+// DetachSafely disconnects from the current tmux session without panicking. It does
+// not re-establish the attach pty; the next Attach self-heals a nil ptmx. Used by
+// the programmatic lifecycle paths (pause, lost-session recovery).
+func (t *Session) DetachSafely() error {
+	if t.attachCh == nil {
+		return nil // Already detached
+	}
+
+	errs := t.detachCleanup()
+
+	// attachCh closed last; nothing reads detachErr on this path, but keep ordering
+	// consistent with Detach.
+	if t.attachCh != nil {
+		close(t.attachCh)
+		t.attachCh = nil
+	}
+
 	if len(errs) > 0 {
 		return fmt.Errorf("errors during detach: %v", errs)
 	}
 	return nil
 }
 
-// Detach disconnects from the current tmux session. It panics if detaching fails. At the moment, there's no
-// way to recover from a failed detach.
+// Detach disconnects from the current tmux session and re-establishes the attach pty
+// for the next Attach. It degrades rather than panicking: a failed pty close or
+// Restore is recorded in detachErr (surfaced via AttachExitError) and logged, leaving
+// the session recoverable — polling tolerates a nil ptmx, and the next Attach
+// re-Restores it. The caller has already set detachReason / killRequested.
 func (t *Session) Detach() {
-	// TODO: control flow is a bit messy here. If there's an error,
-	// I'm not sure if we get into a bad state. Needs testing.
-	defer func() {
+	if t.attachCh == nil {
+		return // already detached / never attached
+	}
+
+	errs := t.detachCleanup()
+
+	// Re-establish the attach pty for the next Attach. On failure leave ptmx nil
+	// (detachCleanup already did) and record it; Attach/Resume will re-Restore.
+	if err := t.Restore(); err != nil {
+		errs = append(errs, fmt.Errorf("error restoring attach pty after detach: %w", err))
+	}
+
+	if len(errs) > 0 {
+		t.detachErr = fmt.Errorf("errors during detach: %v", errs)
+		log.ErrorLog.Println(t.detachErr)
+	} else {
+		t.detachErr = nil
+	}
+
+	// attachCh closed LAST, after detachErr is written, so the reader observes it.
+	if t.attachCh != nil {
 		close(t.attachCh)
 		t.attachCh = nil
-		t.cancel = nil
-		t.ctx = nil
-		t.wg = nil
-	}()
-
-	// Close the attached pty session.
-	err := t.ptmx.Close()
-	if err != nil {
-		// This is a fatal error. We can't detach if we can't close the PTY. It's better to just panic and have the
-		// user re-invoke the program than to ruin their terminal pane.
-		msg := fmt.Sprintf("error closing attach pty session: %v", err)
-		log.ErrorLog.Println(msg)
-		panic(msg)
 	}
-	// Attach goroutines should die on EOF due to the ptmx closing. Call
-	// t.Restore to set a new t.ptmx.
-	if err = t.Restore(); err != nil {
-		// This is a fatal error. Our invariant that a started Session always has a valid ptmx is violated.
-		msg := fmt.Sprintf("error closing attach pty session: %v", err)
-		log.ErrorLog.Println(msg)
-		panic(msg)
-	}
-
-	// Cancel goroutines created by Attach.
-	t.cancel()
-	t.wg.Wait()
 }
 
 // Close terminates the tmux session and cleans up resources
@@ -1202,8 +1239,12 @@ func clampUint16(n int) uint16 {
 	return uint16(n)
 }
 
-// updateWindowSize updates the window size of the PTY.
+// updateWindowSize updates the window size of the PTY. A nil ptmx (e.g. during the
+// degraded window after a failed Restore) makes it a no-op rather than a crash.
 func (t *Session) updateWindowSize(cols, rows int) error {
+	if t.ptmx == nil {
+		return nil
+	}
 	return pty.Setsize(t.ptmx, &pty.Winsize{
 		Rows: clampUint16(rows),
 		Cols: clampUint16(cols),

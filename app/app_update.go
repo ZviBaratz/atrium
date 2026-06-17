@@ -436,6 +436,18 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.killTarget != nil {
 			msg.killTarget.ArmReadySuppression()
 		}
+		// A detach that hit a pty close/restore error can't ride msg.err (that comes
+		// from Run(), nil on a normal detach). Surface it via the persistent modal —
+		// it's actionable — and short-circuit the kill/cycle so we don't hop siblings
+		// while this session is half-broken. The terminal tab (killTarget nil) has no
+		// such teardown to report.
+		if msg.killTarget != nil {
+			if derr := msg.killTarget.AttachExitError(); derr != nil {
+				return m, m.showInfo(fmt.Sprintf(
+					"Session detach hit an error and may need re-attaching "+
+						"(pause then resume to recover):\n%v", derr))
+			}
+		}
 		// Honor an in-session kill (Ctrl+X) requested before detach. killTarget is the
 		// attached instance (nil for the terminal tab, which has no kill key); keep
 		// tea.WindowSize() so the confirmation overlay redraws at the correct

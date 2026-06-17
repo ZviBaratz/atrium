@@ -25,9 +25,16 @@ type MockPtyFactory struct {
 	// Array of commands and the corresponding file handles representing PTYs.
 	cmds  []*exec.Cmd
 	files []*os.File
+
+	// StartErr, when non-nil, makes Start fail without allocating a pty. Tests use
+	// it to simulate a Restore/pty failure (e.g. the Detach degraded path).
+	StartErr error
 }
 
 func (pt *MockPtyFactory) Start(cmd *exec.Cmd) (*os.File, error) {
+	if pt.StartErr != nil {
+		return nil, pt.StartErr
+	}
 	filePath := filepath.Join(pt.t.TempDir(), fmt.Sprintf("pty-%s-%d", pt.t.Name(), rand.Int31()))
 	f, err := os.OpenFile(filePath, os.O_CREATE|os.O_RDWR, 0644)
 	if err == nil {

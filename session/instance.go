@@ -971,6 +971,17 @@ func (i *Instance) AttachExitReason() tmux.DetachReason {
 	return ts.AttachExitReason()
 }
 
+// AttachExitError reports any error encountered while tearing down the most recent
+// attach (a failed pty close or Restore). Meaningful only after the channel returned
+// by Attach has closed; nil for a clean detach or a not-yet-started instance.
+func (i *Instance) AttachExitError() error {
+	ts := i.tmux()
+	if ts == nil {
+		return nil
+	}
+	return ts.AttachExitError()
+}
+
 // SetContext pushes the in-session context-bar strings to the instance's tmux
 // session (see tmux.SetContext). It is a no-op for an instance with no live tmux
 // session, since there is nothing to render a bar in.
