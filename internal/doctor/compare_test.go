@@ -3,8 +3,26 @@ package doctor
 import (
 	"testing"
 
+	"github.com/Masterminds/semver/v3"
+
 	"github.com/ZviBaratz/atrium/session/agent"
 )
+
+// TestRegistryVerifiedVersionsParse guards the registry against a typo'd ceiling.
+// A non-empty VerifiedVersion that isn't valid semver makes driftExceeds error,
+// which classify() turns into StatusUnknown — silently disabling drift detection
+// for that agent, the exact silent failure this guard exists to prevent. Keep
+// this in lockstep with any VerifiedVersion edit in session/agent/registry.go.
+func TestRegistryVerifiedVersionsParse(t *testing.T) {
+	for _, a := range agent.Adapters() {
+		if a.VerifiedVersion == "" {
+			continue // unversioned adapters never compare; nothing to validate
+		}
+		if _, err := semver.NewVersion(a.VerifiedVersion); err != nil {
+			t.Errorf("%s VerifiedVersion %q is not valid semver: %v", a.Key, a.VerifiedVersion, err)
+		}
+	}
+}
 
 func TestDriftExceeds(t *testing.T) {
 	cases := []struct {

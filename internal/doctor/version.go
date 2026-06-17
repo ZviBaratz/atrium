@@ -6,14 +6,24 @@ package doctor
 
 import "regexp"
 
-// versionRe matches the first MAJOR.MINOR[.PATCH] token in --version output.
-var versionRe = regexp.MustCompile(`\d+\.\d+(?:\.\d+)?`)
+// semver3Re matches a full MAJOR.MINOR.PATCH token; semver2Re a bare MAJOR.MINOR.
+var (
+	semver3Re = regexp.MustCompile(`\d+\.\d+\.\d+`)
+	semver2Re = regexp.MustCompile(`\d+\.\d+`)
+)
 
-// parseVersion extracts the first semver-shaped token from a --version line.
+// parseVersion extracts the version token from --version output. It prefers the
+// first full MAJOR.MINOR.PATCH token, falling back to a bare MAJOR.MINOR only
+// when no three-component token exists. Preferring the full form skips unrelated
+// two-component numbers a CLI may print first (e.g. a "Go 1.21" / "node 18.0"
+// toolchain banner) while still parsing agents that report only MAJOR.MINOR
+// (codex). The token is re-validated as semver by the caller.
 func parseVersion(out string) (string, bool) {
-	m := versionRe.FindString(out)
-	if m == "" {
-		return "", false
+	if m := semver3Re.FindString(out); m != "" {
+		return m, true
 	}
-	return m, true
+	if m := semver2Re.FindString(out); m != "" {
+		return m, true
+	}
+	return "", false
 }
