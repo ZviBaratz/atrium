@@ -50,8 +50,8 @@ func TestRenameOverlay_DefaultsToLabelOnly(t *testing.T) {
 	assert.False(t, o.IsDeep())
 }
 
-// Tab toggles between label-only and deep without submitting or canceling the dialog.
-func TestRenameOverlay_TabTogglesMode(t *testing.T) {
+// ctrl+d toggles between label-only and deep without submitting or canceling the dialog.
+func TestRenameOverlay_CtrlDTogglesDeepMode(t *testing.T) {
 	o := NewRenameOverlay("x", "", false)
 
 	shouldClose := o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyCtrlD})
@@ -75,8 +75,8 @@ func TestRenameOverlay_RendersDefaultModeFirst(t *testing.T) {
 	assert.Less(t, labelIdx, deepIdx, "the default (label only) must be listed before deep")
 }
 
-// Toggling mode does not leak into the entered value, and Enter still submits.
-func TestRenameOverlay_TabDoesNotAffectValue(t *testing.T) {
+// Toggling mode via ctrl+d does not leak into the entered value, and Enter still submits.
+func TestRenameOverlay_CtrlDDoesNotAffectValue(t *testing.T) {
 	o := NewRenameOverlay("alpha", "", false)
 	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyCtrlD})
 	shouldClose := o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyEnter})

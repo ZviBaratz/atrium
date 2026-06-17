@@ -646,7 +646,6 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		m.menu.SetState(ui.StateDefault)
 
 		if submitted && target != nil {
-			target.SetNote(note)
 			if deep {
 				if err := m.deepRename(target, value); err != nil {
 					return m, m.handleError(err)
@@ -654,6 +653,7 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 			} else {
 				target.SetDisplayName(value)
 			}
+			target.SetNote(note)
 			if err := m.storage.SaveInstances(m.list.GetInstances()); err != nil {
 				return m, m.handleError(err)
 			}
@@ -1107,9 +1107,9 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		}
 		m.tabbedWindow.CleanupTerminalForInstance(selected)
 		// Pause has already happened. Offer the rename overlay focused on the note
-		// field so "park this, jot why" is one motion; esc / empty-enter just leaves
-		// the session paused with no note. Instant pause is preserved — the pause is
-		// never rolled back by skipping the note.
+		// field so "park this, jot why" is one motion; esc / empty-enter leaves the
+		// note unchanged — the session stays paused either way. Instant pause is
+		// preserved — the pause is never rolled back by skipping the note.
 		m.renameTarget = selected
 		m.renameOverlay = overlay.NewRenameOverlay(selected.DisplayName(), selected.Note(), true)
 		m.state = stateRename
