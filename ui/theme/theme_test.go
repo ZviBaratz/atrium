@@ -8,6 +8,7 @@ import (
 	xansi "github.com/charmbracelet/x/ansi"
 	"github.com/mattn/go-runewidth"
 	"github.com/muesli/ansi"
+	"github.com/stretchr/testify/require"
 )
 
 func TestGetFallback(t *testing.T) {
@@ -208,6 +209,15 @@ func TestPanelLongTitleTruncates(t *testing.T) {
 		if pw := ansi.PrintableRuneWidth(l); pw != 20 {
 			t.Errorf("line %d width %d, want 20", i, pw)
 		}
+	}
+}
+
+func TestNoteGlyphIsSingleCellEverywhere(t *testing.T) {
+	for _, name := range Names() {
+		t.Cleanup(Set(name))
+		g := Current().Glyphs.Note
+		require.NotEmpty(t, g, "%s: note glyph must be set", name)
+		require.Equal(t, 1, runewidth.StringWidth(g), "%s: note glyph must be single-cell (no emoji)", name)
 	}
 }
 
