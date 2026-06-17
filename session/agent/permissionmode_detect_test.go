@@ -78,6 +78,23 @@ func TestClaudePermissionMode_ConfinedToFooter(t *testing.T) {
 	}
 }
 
+// With no input-box border on screen — a busy frame whose box is hidden, or a
+// pre-box startup capture — there is no anchor proving the bottom lines are live
+// chrome, so detection must stay indeterminate even when those lines contain a
+// verbatim mode token. Without the box gate footerRegion would fall back to the
+// last few lines and read the transcript as the live mode, then persist it.
+func TestClaudePermissionMode_NoBoxIsIndeterminate(t *testing.T) {
+	for _, body := range []string{
+		"Assistant: I'll switch to auto mode on the next turn.",
+		"Run with ? for shortcuts to see the menu.",
+		"⏸ plan mode on (shift+tab to cycle)", // a verbatim footer line, but unanchored
+	} {
+		if mode, known := claudePermissionMode(body); known {
+			t.Errorf("unanchored content %q detected as (%q, %v), want indeterminate", body, mode, known)
+		}
+	}
+}
+
 // The Claude adapter is wired; non-claude adapters report indeterminate so the
 // chip falls back to the (also-empty) pinned flag for them.
 func TestDetectPermissionMode_AdapterWiring(t *testing.T) {

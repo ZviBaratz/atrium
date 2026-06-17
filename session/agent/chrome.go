@@ -73,6 +73,27 @@ func isHorizontalRule(line string) bool {
 	return dashes >= 3
 }
 
+// footerBelowBox returns the lines below the input box's bottom border and true
+// when such a border is on screen. The border proves everything below it is live
+// chrome, never scrolled-back transcript — so a caller that must not false-match
+// a phrase quoted in the conversation (permission-mode detection) gates on the
+// ok result. When the pane shows no border — a minimal footer, a non-claude
+// agent, a pre-box startup frame, or a degenerate capture — there is no anchor
+// to make that guarantee, so it returns ("", false).
+func footerBelowBox(content string) (string, bool) {
+	lines := strings.Split(content, "\n")
+	lastRule := -1
+	for i, line := range lines {
+		if isHorizontalRule(line) {
+			lastRule = i
+		}
+	}
+	if lastRule < 0 {
+		return "", false
+	}
+	return strings.Join(lines[lastRule+1:], "\n"), true
+}
+
 // footerRegion returns the live footer of the pane: the lines below the input box's bottom
 // border. Claude renders its status hints and the variable-height agent-team selector (one
 // line per teammate) there, and the busy marker sits among them — so anchoring to the box
@@ -82,17 +103,10 @@ func isHorizontalRule(line string) bool {
 // — a minimal footer, a non-claude agent, or a degenerate capture — it falls back to the last
 // workChromeLines non-empty lines, preserving the previous behavior.
 func footerRegion(content string) string {
-	lines := strings.Split(content, "\n")
-	lastRule := -1
-	for i, line := range lines {
-		if isHorizontalRule(line) {
-			lastRule = i
-		}
+	if footer, ok := footerBelowBox(content); ok {
+		return footer
 	}
-	if lastRule < 0 {
-		return liveChromeLines(content, workChromeLines)
-	}
-	return strings.Join(lines[lastRule+1:], "\n")
+	return liveChromeLines(content, workChromeLines)
 }
 
 // isInputBoxLine reports whether line is the interior of an agent's input box: the "❯" or

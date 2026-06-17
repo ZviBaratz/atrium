@@ -332,9 +332,10 @@ type InstanceRenderer struct {
 	modelIndicator string
 	// permissionIndicator is the permission-mode chip mode
 	// (config.GetPermissionIndicator): "off" hides the chip, anything else
-	// shows it. The chip is drawn for any pinned non-default mode — the offered
-	// chips ("plan", "acceptEdits", "auto") plus a profile-pinned
-	// "bypassPermissions"/"dontAsk" — but never for "default" or no flag.
+	// shows it. The chip reflects the live mode (Instance.PermissionModeInfo:
+	// footer-detected truth, falling back to the --permission-mode launch flag),
+	// so it tracks an in-session switch; it is drawn for any non-default mode but
+	// never for a detected "default" or no flag.
 	permissionIndicator string
 }
 
