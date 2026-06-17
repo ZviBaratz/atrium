@@ -30,6 +30,13 @@ test:
 test-race:
     {{go}} test -race ./...
 
+# End-to-end TUI smoke test (issue #148 spike): drives the real binary through
+# vhs to prove the live create→attach→detach layer renders deterministically.
+# Opt-in only — NOT part of `test`/`ci`: needs non-Go deps (vhs, ttyd, ffmpeg,
+# tmux, jq) and drives a real tmux server. UPDATE=1 refreshes the golden.
+smoke:
+    GO={{go}} bash test/smoke/run.sh
+
 # Run tests with coverage and print the total.
 cover:
     {{go}} test -coverprofile=coverage.out ./...
