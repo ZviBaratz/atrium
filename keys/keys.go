@@ -31,10 +31,12 @@ const (
 	KeyTab      // Tab is a special keybinding for switching between panes.
 	KeyShiftTab // ShiftTab cycles between panes in reverse order.
 
-	KeyPause // Commit changes and pause the session, freeing its worktree
+	KeyPause    // Commit changes and pause the session, freeing its worktree
+	KeyPauseAll // Pause every active session in the current view (batch park)
 	KeyResume
-	KeyPrompt // Open the new-session form focused on the project picker
-	KeyHelp   // Key for showing help screen
+	KeyResumeAll // Resume every paused session in the current view (batch restore)
+	KeyPrompt    // Open the new-session form focused on the project picker
+	KeyHelp      // Key for showing help screen
 
 	// KeyShiftUp and KeyShiftDown scroll the diff/preview pane.
 	KeyShiftUp
@@ -125,7 +127,9 @@ var GlobalKeyStringsMap = map[string]KeyName{
 	"tab":        KeyTab,
 	"shift+tab":  KeyShiftTab,
 	"p":          KeyPause,
+	"ctrl+p":     KeyPauseAll,
 	"r":          KeyResume,
+	"ctrl+r":     KeyResumeAll,
 	"P":          KeySubmit,
 	"c":          KeyCreate,
 	"m":          KeyMerge,
@@ -217,6 +221,10 @@ var GlobalkeyBindings = map[KeyName]key.Binding{
 		key.WithKeys("p"),
 		key.WithHelp("p", "pause"),
 	),
+	KeyPauseAll: key.NewBinding(
+		key.WithKeys("ctrl+p"),
+		key.WithHelp("ctrl+p", "pause all"),
+	),
 	KeyTab: key.NewBinding(
 		key.WithKeys("tab"),
 		key.WithHelp("tab", "switch tab"),
@@ -228,6 +236,10 @@ var GlobalkeyBindings = map[KeyName]key.Binding{
 	KeyResume: key.NewBinding(
 		key.WithKeys("r"),
 		key.WithHelp("r", "resume"),
+	),
+	KeyResumeAll: key.NewBinding(
+		key.WithKeys("ctrl+r"),
+		key.WithHelp("ctrl+r", "resume all"),
 	),
 
 	KeyMoveUp: key.NewBinding(

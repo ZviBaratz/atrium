@@ -92,6 +92,54 @@ func TestSetup_BranchOffRemoteOnlyBase(t *testing.T) {
 	}
 }
 
+// Regression test for #146: a base-branch session (baseRef != "") must keep its committed
+// work across a pause→resume cycle. Pause commits dirty work to the session branch and
+// removes the worktree (keeping the branch); resume re-runs Setup(). The bug was that
+// Setup() force-recreated the branch from baseRef on every call, so resume ran
+// `git branch -D` against the session branch and reset it to the base tip — silently
+// discarding the committed work. Setup() must instead reuse the existing session branch.
+func TestSetup_BaseBranchPreservesCommitsAcrossPauseResume(t *testing.T) {
+	repoPath := newTestRepo(t)
+	mustRunGit(t, repoPath, "branch", "feature")
+	featureSHA := revParse(t, repoPath, "feature")
+
+	wt, branch, err := NewWorktreeFromBase(context.Background(), repoPath, "sess", "feature")
+	if err != nil {
+		t.Fatalf("NewWorktreeFromBase error = %v", err)
+	}
+	if err := wt.Setup(); err != nil {
+		t.Fatalf("Setup() (create) error = %v", err)
+	}
+
+	// Commit work on the session branch, mimicking pause's WIP commit / a real agent commit.
+	worktreePath := wt.GetWorktreePath()
+	if err := os.WriteFile(filepath.Join(worktreePath, "work.txt"), []byte("important\n"), 0644); err != nil {
+		t.Fatalf("write work file: %v", err)
+	}
+	mustRunGit(t, worktreePath, "add", "work.txt")
+	mustRunGit(t, worktreePath, "commit", "-m", "session work")
+	committedSHA := revParse(t, repoPath, branch)
+	if committedSHA == featureSHA {
+		t.Fatalf("commit did not advance the session branch past the base (%q)", featureSHA)
+	}
+
+	// Pause→resume: Remove the worktree (branch kept), then Setup() again.
+	if err := wt.Remove(); err != nil {
+		t.Fatalf("Remove() error = %v", err)
+	}
+	if err := wt.Setup(); err != nil {
+		t.Fatalf("Setup() (resume) error = %v", err)
+	}
+
+	if got := revParse(t, repoPath, branch); got != committedSHA {
+		t.Fatalf("session branch tip after resume = %q, want committed work %q (reset to base %q means data loss)",
+			got, committedSHA, featureSHA)
+	}
+	if _, err := os.Stat(filepath.Join(wt.GetWorktreePath(), "work.txt")); err != nil {
+		t.Fatalf("committed file missing from resumed worktree: %v", err)
+	}
+}
+
 // An unknown base branch fails cleanly rather than producing a confusing git error.
 func TestSetup_UnknownBaseBranchErrors(t *testing.T) {
 	repoPath := newTestRepo(t)
