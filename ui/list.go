@@ -210,6 +210,12 @@ type List struct {
 	// resolves and never clears it: unlike toast notices it must survive
 	// overlays and hint_bar:false, so it lives in panel chrome.
 	updateBadge string
+
+	// driftBadge is the persistent agent-heuristic drift indicator inset in the
+	// panel's top border ("⚠ stale"). Set only when the startup drift hint could
+	// not be shown (hint bar off / overlay), so it reaches users who'd miss the
+	// toast; like updateBadge it must survive overlays and hint_bar:false.
+	driftBadge string
 }
 
 // NewList returns an empty List.
@@ -233,6 +239,24 @@ func (l *List) SetShowEmptyHint(show bool) {
 // text, no ANSI.
 func (l *List) SetUpdateBadge(text string) {
 	l.updateBadge = text
+}
+
+// SetDriftBadge sets the plain-text drift badge ("⚠ stale") shown in the
+// Sessions panel border as a fallback when the startup drift hint can't render.
+func (l *List) SetDriftBadge(text string) {
+	l.driftBadge = text
+}
+
+// joinBadges combines the panel-border badges into the single slot,
+// space-separated, skipping empties so either badge may be absent.
+func joinBadges(badges ...string) string {
+	parts := make([]string, 0, len(badges))
+	for _, b := range badges {
+		if b != "" {
+			parts = append(parts, b)
+		}
+	}
+	return strings.Join(parts, " ")
 }
 
 // SetBranchPrefix sets the git-branch prefix stripped from each row's branch
@@ -664,7 +688,7 @@ func (l *List) String() string {
 	// active (accent border). A dynamic focus model can flip this later.
 	// The panel zone wraps outside Panel so its internal clipping cannot
 	// truncate the end marker.
-	return zone.Mark(listPanelZoneID, theme.Current().PanelWithBadge("Sessions", l.updateBadge, content, l.width, l.height, true))
+	return zone.Mark(listPanelZoneID, theme.Current().PanelWithBadge("Sessions", joinBadges(l.updateBadge, l.driftBadge), content, l.width, l.height, true))
 }
 
 // windowLines clips lines to the list height, scrolling so the selected block
