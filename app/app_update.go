@@ -75,6 +75,12 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// durable surface meanwhile.
 		cmd := m.handleInfoNotice(fmt.Sprintf("⚠ agent heuristics may be stale — run `%s doctor`", m.hintBinName()))
 		if cmd == nil {
+			// Toast dropped (hint bar off, or a modal owns the screen). Surface the
+			// drift via the persistent panel badge instead — the durable fallback
+			// for users who'd otherwise never see it. Don't ack: leave it re-armed.
+			if m.list != nil {
+				m.list.SetDriftBadge(driftBadgeText())
+			}
 			return m, nil
 		}
 		// Shown: record the ack at each agent's current installed version so the

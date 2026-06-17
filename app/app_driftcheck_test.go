@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/ZviBaratz/atrium/config"
@@ -74,6 +75,11 @@ func TestDriftFoundMsg_NoAckWhenHintDropped(t *testing.T) {
 	if got := m.appState.GetAckedDrift(); len(got) != 0 {
 		t.Fatalf("ack was recorded despite hint being dropped: %v", got)
 	}
+
+	m.list.SetSize(80, 24)
+	if out := m.list.String(); !strings.Contains(out, "stale") {
+		t.Errorf("drift badge not shown after hint was dropped; panel:\n%s", out)
+	}
 }
 
 // TestDriftFoundMsg_AckRecordedWhenHintShown verifies that when the hint bar is
@@ -98,5 +104,10 @@ func TestDriftFoundMsg_AckRecordedWhenHintShown(t *testing.T) {
 	got := m.appState.GetAckedDrift()
 	if got["claude"] != "2.1.179" {
 		t.Fatalf("ack not recorded after hint shown: GetAckedDrift() = %v", got)
+	}
+
+	m.list.SetSize(80, 24)
+	if out := m.list.String(); strings.Contains(out, "stale") {
+		t.Errorf("drift badge should NOT be set when the hint was shown; panel:\n%s", out)
 	}
 }

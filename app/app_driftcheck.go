@@ -9,6 +9,7 @@ import (
 	"context"
 
 	"github.com/ZviBaratz/atrium/internal/doctor"
+	"github.com/ZviBaratz/atrium/ui/theme"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -43,4 +44,11 @@ func (m *home) driftCheckCmd() tea.Cmd {
 		}
 		return driftFoundMsg{agents: fresh}
 	}
+}
+
+// driftBadgeText is the persistent Sessions-panel badge shown as a fallback when
+// the startup drift hint could not be delivered. Short so the panel can degrade
+// it word-by-word when narrow ("⚠ stale" -> "⚠"), like updateBadgeText.
+func driftBadgeText() string {
+	return theme.Current().Glyphs.Warn + " stale"
 }
