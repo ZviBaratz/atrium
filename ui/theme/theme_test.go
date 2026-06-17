@@ -189,6 +189,45 @@ func TestPanelBadgeDegradation(t *testing.T) {
 	}
 }
 
+// TestPanelMultiBadgeDegradation pins the multi-badge fallback ladder: both
+// badges full → every glyph alone → nothing. A narrow panel must keep both
+// signals as glyphs rather than orphaning one badge's glyph or dropping a whole
+// badge (the bug where "⚠ stale" vanished before "⇡ v9.9.9" under width pressure).
+func TestPanelMultiBadgeDegradation(t *testing.T) {
+	th := Get("tokyo-night")
+	badges := []string{"⇡ v9.9.9", "⚠ stale"}
+	cases := []struct {
+		width          int
+		wants, rejects []string
+	}{
+		{40, []string{"⇡ v9.9.9", "⚠ stale"}, nil},            // both full
+		{28, []string{"⇡", "⚠"}, []string{"v9.9.9", "stale"}}, // collapsed to glyphs
+		{16, nil, []string{"⇡", "⚠", "v9.9.9", "stale"}},      // no room: plain border
+	}
+	for _, c := range cases {
+		out := th.PanelWithBadges("Sessions", badges, "x", c.width, 4, true)
+		top := xansi.Strip(strings.Split(out, "\n")[0])
+		if !strings.Contains(top, "Sessions") {
+			t.Errorf("width %d: title missing from %q", c.width, top)
+		}
+		for _, want := range c.wants {
+			if !strings.Contains(top, want) {
+				t.Errorf("width %d: top row %q missing %q", c.width, top, want)
+			}
+		}
+		for _, reject := range c.rejects {
+			if strings.Contains(top, reject) {
+				t.Errorf("width %d: top row %q must not contain %q", c.width, top, reject)
+			}
+		}
+		for i, l := range strings.Split(out, "\n") {
+			if pw := ansi.PrintableRuneWidth(l); pw != c.width {
+				t.Errorf("width %d: line %d width %d", c.width, i, pw)
+			}
+		}
+	}
+}
+
 // TestPanelEmptyBadgeEqualsPanel locks Panel as the empty-badge identity so
 // the badge path can't drift the plain border rendering.
 func TestPanelEmptyBadgeEqualsPanel(t *testing.T) {

@@ -247,18 +247,6 @@ func (l *List) SetDriftBadge(text string) {
 	l.driftBadge = text
 }
 
-// joinBadges combines the panel-border badges into the single slot,
-// space-separated, skipping empties so either badge may be absent.
-func joinBadges(badges ...string) string {
-	parts := make([]string, 0, len(badges))
-	for _, b := range badges {
-		if b != "" {
-			parts = append(parts, b)
-		}
-	}
-	return strings.Join(parts, " ")
-}
-
 // SetBranchPrefix sets the git-branch prefix stripped from each row's branch
 // label (see InstanceRenderer.branchPrefix). The app passes the configured
 // BranchPrefix so the redundant per-row namespace (e.g. "zvi/") is hidden.
@@ -688,7 +676,7 @@ func (l *List) String() string {
 	// active (accent border). A dynamic focus model can flip this later.
 	// The panel zone wraps outside Panel so its internal clipping cannot
 	// truncate the end marker.
-	return zone.Mark(listPanelZoneID, theme.Current().PanelWithBadge("Sessions", joinBadges(l.updateBadge, l.driftBadge), content, l.width, l.height, true))
+	return zone.Mark(listPanelZoneID, theme.Current().PanelWithBadges("Sessions", []string{l.updateBadge, l.driftBadge}, content, l.width, l.height, true))
 }
 
 // windowLines clips lines to the list height, scrolling so the selected block

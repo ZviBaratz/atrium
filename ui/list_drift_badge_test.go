@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -23,20 +24,17 @@ func TestUpdateAndDriftBadgesCombine(t *testing.T) {
 	require.Contains(t, out, "stale")
 }
 
-func TestJoinBadges(t *testing.T) {
-	cases := []struct {
-		name string
-		in   []string
-		want string
-	}{
-		{"both empty", []string{"", ""}, ""},
-		{"update only", []string{"⇡ v0.7.1", ""}, "⇡ v0.7.1"},
-		{"drift only", []string{"", "⚠ stale"}, "⚠ stale"},
-		{"both present", []string{"⇡ v0.7.1", "⚠ stale"}, "⇡ v0.7.1 ⚠ stale"},
-	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			require.Equal(t, c.want, joinBadges(c.in...))
-		})
-	}
+// TestBadgesDegradeTogetherWhenNarrow guards the fallback at widths too narrow
+// for both full badges: they must collapse to their glyphs together, so the
+// drift "⚠" is never dropped while the update badge keeps a slot. A width that
+// fits "⇡ ⚠" but not "⇡ v0.7.1 ⚠ stale".
+func TestBadgesDegradeTogetherWhenNarrow(t *testing.T) {
+	l, _ := newFilterList(t, "alpha")
+	l.SetSize(26, 24)
+	l.SetUpdateBadge("⇡ v0.7.1")
+	l.SetDriftBadge("⚠ stale")
+	top := strings.Split(l.String(), "\n")[0]
+	require.Contains(t, top, "⚠", "drift glyph must survive the narrow fallback")
+	require.Contains(t, top, "⇡", "update glyph must survive the narrow fallback")
+	require.NotContains(t, top, "v0.7.1", "full text must not render at this width")
 }
