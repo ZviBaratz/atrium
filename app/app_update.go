@@ -68,15 +68,23 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, m.handleUpdateNotice(fmt.Sprintf("v%s available — run `%s update`", msg.version, m.hintBinName()))
 	case driftFoundMsg:
-		// Record the ack at each agent's current installed version so the hint
-		// shows once per version, then surface it. The doctor command stays the
-		// durable surface, so a missed toast is acceptable — no buffering.
+		// Try to show the hint first. handleInfoNotice returns nil when the hint
+		// bar can't render right now (e.g. hint_bar off, or a modal owns the
+		// screen); in that case record no ack so the hint re-arms on a later
+		// startup instead of being silently consumed. atrium doctor remains the
+		// durable surface meanwhile.
+		cmd := m.handleInfoNotice(fmt.Sprintf("⚠ agent heuristics may be stale — run `%s doctor`", m.hintBinName()))
+		if cmd == nil {
+			return m, nil
+		}
+		// Shown: record the ack at each agent's current installed version so the
+		// hint shows once per version.
 		for _, r := range msg.agents {
 			if err := m.appState.SetAckedDrift(string(r.Key), r.Installed); err != nil {
 				log.WarningLog.Printf("failed to record drift ack for %s: %v", r.Key, err)
 			}
 		}
-		return m, m.handleInfoNotice(fmt.Sprintf("⚠ agent heuristics may be stale — run `%s doctor`", m.hintBinName()))
+		return m, cmd
 	case releaseNotesFetchedMsg:
 		// Record the version on the successful fetch so the notes show once and
 		// never refetch — even when the body is empty (nothing to show, but no
