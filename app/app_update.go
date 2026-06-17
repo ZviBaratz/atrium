@@ -648,6 +648,13 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		if submitted && target != nil {
 			if deep {
 				if err := m.deepRename(target, value); err != nil {
+					// The rename was rejected before anything changed (e.g. a name
+					// collision). Reopen the dialog pre-filled with the attempted name
+					// and note so neither is lost — nothing is persisted until a rename
+					// succeeds.
+					m.renameTarget = target
+					m.renameOverlay = overlay.NewRenameOverlay(value, note, false)
+					m.state = stateRename
 					return m, m.handleError(err)
 				}
 			} else {

@@ -68,8 +68,10 @@ func (m *home) pushOneContext(inst *session.Instance) {
 // instanceChanged updates the preview pane, menu, and diff pane based on the selected instance. It returns an error
 // Cmd if there was any error.
 // deepRename renames the selected instance's title, git branch, worktree directory, and tmux
-// session to value, then clears the cosmetic label so the list shows the corrected name. It
-// rejects an empty title or one already used in the instance's repo group — comparing derived
+// session to value, then clears the cosmetic label so the list shows the corrected name.
+// Persisting the result is the caller's responsibility, so the rename and any note edit land
+// in a single state.json write. It rejects an empty title or one already used in the instance's
+// repo group — comparing derived
 // names (tmux segment, branch slug), not raw titles, and also reserving the qualified tmux
 // name the rename would mint (plus its "_term" terminal-shell sibling) against every session.
 // Same-titled sessions in other groups are fine: their qualified tmux names differ.
@@ -98,7 +100,7 @@ func (m *home) deepRename(selected *session.Instance, value string) error {
 		return err
 	}
 	selected.SetDisplayName("")
-	return m.storage.SaveInstances(m.list.GetInstances())
+	return nil
 }
 
 type instanceStartedMsg struct {
