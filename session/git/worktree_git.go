@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 )
 
@@ -174,6 +175,35 @@ func (g *Worktree) CommitChanges(commitMessage string) error {
 		g.invalidateStatsCache()
 	}
 
+	return nil
+}
+
+// CommitSubjects returns the trimmed subject lines of up to limit commits ending
+// at HEAD, newest first. Fewer than limit are returned when history is shorter
+// (e.g. near the root); an empty slice means HEAD has no commits. Callers walking
+// the leading run therefore detect the end of history by the slice running out,
+// not by a per-commit error.
+func (g *Worktree) CommitSubjects(limit int) ([]string, error) {
+	out, err := g.runGitCommand(g.worktreePath, "log", "-n", strconv.Itoa(limit), "--format=%s", "HEAD")
+	if err != nil {
+		return nil, err
+	}
+	out = strings.TrimSpace(out)
+	if out == "" {
+		return nil, nil
+	}
+	return strings.Split(out, "\n"), nil
+}
+
+// ResetSoft moves HEAD (and the current branch) back to ref while leaving the
+// index and working tree untouched, so the unwound commits' content returns as
+// staged changes. Resume uses it to undo the auto-commit made on pause.
+func (g *Worktree) ResetSoft(ref string) error {
+	if _, err := g.runGitCommand(g.worktreePath, "reset", "--soft", ref); err != nil {
+		return fmt.Errorf("failed to soft-reset to %s: %w", ref, err)
+	}
+	// The commit graph changed; refresh the ahead/behind counts and the dirty flag on the next tick.
+	g.invalidateStatsCache()
 	return nil
 }
 

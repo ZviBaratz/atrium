@@ -7,7 +7,10 @@ func TestPermissionModeLabel(t *testing.T) {
 		{"plan", "plan"},
 		{"auto", "auto"},
 		{"acceptEdits", "accept-edits"},
-		{"bypassPermissions", "bypassPermissions"}, // not a displayed chip; pass-through
+		// Not an offered create-form chip, but live footer detection surfaces it;
+		// shortened to a clean chip rather than the raw enum.
+		{"bypassPermissions", "bypass"},
+		{"dontAsk", "dontAsk"}, // undetected/unlabeled mode falls through verbatim
 	}
 	for _, c := range cases {
 		if got := permissionModeLabel(c.mode); got != c.want {
