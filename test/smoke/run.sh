@@ -23,7 +23,7 @@ GOLDEN="$TESTDATA/basic-flow.golden.txt"
 FAKE="$SMOKE_DIR/fake-agent.sh"
 RUNS="${RUNS:-3}"
 
-for bin in vhs tmux git jq; do
+for bin in vhs ttyd ffmpeg tmux git jq; do
 	command -v "$bin" >/dev/null 2>&1 || { echo "smoke: missing dependency: $bin" >&2; exit 127; }
 done
 GO="${GO:-go}"
@@ -47,9 +47,9 @@ ATR_BIN="$WORK/atrium"
 # write a sourceable env file ($dir/env) exporting HOME, TMUX_TMPDIR, PATH.
 setup_env() {
 	local home="$1/home" repo="$1/repo" tmux_dir="$1/tmux" bin="$1/bin"
-	mkdir -p "$home" "$tmux_dir" "$bin"
+	mkdir -p "$home" "$repo" "$tmux_dir" "$bin"
 
-	git -C "$repo" init -q -b main 2>/dev/null || { mkdir -p "$repo"; git -C "$repo" init -q -b main; }
+	git -C "$repo" init -q -b main
 	git -C "$repo" config user.email smoke@example.com
 	git -C "$repo" config user.name "Atrium Smoke"
 	echo "# smoke" > "$repo/README.md"
@@ -63,10 +63,11 @@ setup_env() {
 	HOME="$home" TMUX_TMPDIR="$tmux_dir" "$ATR_BIN" </dev/null >/dev/null 2>&1 || true
 	local cfg="$home/.atrium/config.json"
 	[[ -f "$cfg" ]] || { echo "smoke: expected seeded config at $cfg" >&2; return 1; }
-	local tmp; tmp="$(mktemp)"
+	# Write through a sibling temp under $cfg (inside $WORK, so the EXIT trap
+	# reaps it even if jq fails) rather than mktemp's system-temp file.
 	jq --arg p "$FAKE" \
 		'.default_program=$p | .profiles=[{name:$p,program:$p}] | .auto_attach=false' \
-		"$cfg" > "$tmp" && mv "$tmp" "$cfg"
+		"$cfg" > "$cfg.tmp" && mv "$cfg.tmp" "$cfg"
 
 	# Launcher the tape invokes by name (keeps basic-flow.tape static/committable).
 	cat > "$bin/atrium-smoke-launch" <<EOF
@@ -117,10 +118,15 @@ run_once() {
 		# shellcheck disable=SC1091
 		source "$dir/env"
 		cd "$dir"
+		# Reap the isolated tmux server however this subshell exits — success,
+		# vhs failure, or signal. A subshell doesn't inherit the outer EXIT
+		# trap, so without this a failed vhs run would orphan the server (and
+		# the day-sleeping fake agent). TMUX_TMPDIR is set, so this only ever
+		# touches the per-run socket, never the user's real Atrium server.
+		trap 'tmux -L atrium kill-server >/dev/null 2>&1 || true' EXIT
 		vhs "$SMOKE_DIR/basic-flow.tape" >/dev/null 2>"$dir/vhs.log" || {
 			echo "smoke: vhs failed (run $idx); last log lines:" >&2; tail -20 "$dir/vhs.log" >&2; exit 1;
 		}
-		tmux -L atrium kill-server >/dev/null 2>&1 || true
 	)
 	[[ -f "$dir/capture.txt" ]] || { echo "smoke: no capture.txt produced (run $idx)" >&2; return 1; }
 	extract_screen "$dir/capture.txt" > "$out"
