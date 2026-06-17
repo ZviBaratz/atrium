@@ -332,9 +332,10 @@ type InstanceRenderer struct {
 	modelIndicator string
 	// permissionIndicator is the permission-mode chip mode
 	// (config.GetPermissionIndicator): "off" hides the chip, anything else
-	// shows it. The chip is drawn for any pinned non-default mode — the offered
-	// chips ("plan", "acceptEdits", "auto") plus a profile-pinned
-	// "bypassPermissions"/"dontAsk" — but never for "default" or no flag.
+	// shows it. The chip reflects the live mode (Instance.PermissionModeInfo:
+	// footer-detected truth, falling back to the --permission-mode launch flag),
+	// so it tracks an in-session switch; it is drawn for any non-default mode but
+	// never for a detected "default" or no flag.
 	permissionIndicator string
 }
 
@@ -458,13 +459,13 @@ func (r *InstanceRenderer) Render(i *session.Instance, idx int, selected bool) s
 			right1 = append(right1, p.seg(" "+shortModelName(model), p.agentColor(i)))
 		}
 	}
-	// Per-session permission-mode chip: launch-time --permission-mode flag
-	// (static; never wrong about what it claims). Shown for any pinned
-	// non-default mode (the offered plan/accept-edits/auto, and also a
-	// profile-pinned bypass mode worth surfacing); "default", no flag, or "off"
-	// stays unbadged.
+	// Per-session permission-mode chip: live footer truth first, --permission-mode
+	// flag fallback (see Instance.PermissionModeInfo). Tracks an in-session mode
+	// switch (e.g. plan-launched then accepted into auto) instead of the stale
+	// launch flag. Shown for any non-default mode; a detected "default", no flag,
+	// or "off" stays unbadged.
 	if r.permissionIndicator != "off" {
-		if mode := i.PinnedPermissionMode(); mode != "" && mode != "default" {
+		if mode := i.PermissionModeInfo(); mode != "" && mode != "default" {
 			right1 = append(right1, p.seg(" "+permissionModeLabel(mode), p.agentColor(i)))
 		}
 	}
@@ -1247,4 +1248,43 @@ func (l *List) MoveGroupDown() bool {
 // GetInstances returns all instances in the list
 func (l *List) GetInstances() []*session.Instance {
 	return l.items
+}
+
+// PausedInstancesInView returns every Paused instance that passes the active
+// filter (all paused when no filter is set), in list order. Collapsed groups
+// are included — folding is a display state, not a scope boundary — so a batch
+// "resume all" restores paused sessions the user can't currently see folded
+// away, which is what they expect after a reboot parked everything.
+func (l *List) PausedInstancesInView() []*session.Instance {
+	var out []*session.Instance
+	for _, it := range l.items {
+		if it.GetStatus() == session.Paused && l.filterMatches(it) {
+			out = append(out, it)
+		}
+	}
+	return out
+}
+
+// ActiveInstancesInView returns every pausable instance that passes the active
+// filter (all of them when no filter is set), in list order — the scope of a
+// batch "pause all". An instance is pausable when it is:
+//   - not already Paused (nothing to park),
+//   - not Loading (its Start() is still building the worktree/tmux and the
+//     Loading→Running transition is still pending on the main loop; pausing now
+//     would race that setup, exactly why single-pause refuses a Loading session),
+//   - not direct (a direct session has no worktree to free, so it cannot be parked).
+//
+// Like PausedInstancesInView, collapsed groups are included: folding is a display
+// state, not a scope boundary, so a pre-restart "pause all" parks sessions the
+// user has folded away too. A Loading session left unparked is no gap — the
+// post-restart recovery loop is the safety net for it.
+func (l *List) ActiveInstancesInView() []*session.Instance {
+	var out []*session.Instance
+	for _, it := range l.items {
+		status := it.GetStatus()
+		if status != session.Paused && status != session.Loading && !it.IsDirect() && l.filterMatches(it) {
+			out = append(out, it)
+		}
+	}
+	return out
 }

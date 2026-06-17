@@ -80,13 +80,12 @@ func TestPreviewSkipsCaptureWhenSessionDead(t *testing.T) {
 	require.False(t, captured, "capture-pane must not run when the tmux session is dead")
 }
 
+// runGit runs git in dir and fails the test on error, discarding output. It is a
+// thin wrapper over gitOutput (the sibling helper that returns the output) so the
+// exec boilerplate lives in one place.
 func runGit(t *testing.T, dir string, args ...string) {
 	t.Helper()
-	cmd := exec.CommandContext(context.Background(), "git", args...)
-	cmd.Dir = dir
-	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("git %v: %v\n%s", args, err, out)
-	}
+	gitOutput(t, dir, args...)
 }
 
 // TestRecoverLostSessionTransitionsToPaused asserts that a started instance whose

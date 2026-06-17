@@ -246,6 +246,49 @@ func TestPollClaudeBusyMarkerIsStable(t *testing.T) {
 	require.Equal(t, PaneWorking, s.Poll())
 }
 
+// Poll feeds the live permission mode from the footer into the session, end to
+// end: real capture → cleanForDetection (ANSI strip) → adapter detection. The
+// box-rule + below-the-box footer mirror a live claude pane (see Step-0 capture).
+func TestPollDetectsPermissionMode(t *testing.T) {
+	box := func(footer string) string {
+		rule := strings.Repeat("─", 40)
+		return rule + "\n❯ \n" + rule + "\n" + footer
+	}
+	cases := []struct{ name, footer, want string }{
+		{"plan", "  ⏸ plan mode on (shift+tab to cycle) · ← for agents", "plan"},
+		{"acceptEdits", "  ⏵⏵ accept edits on (shift+tab to cycle) · ← for agents", "acceptEdits"},
+		{"auto", "  ⏵⏵ auto mode on (shift+tab to cycle) · ← for agents", "auto"},
+		{"bypass", "  ⏵⏵ bypass permissions on (shift+tab to cycle) · ← for agents", "bypassPermissions"},
+		{"default", "  ? for shortcuts · ← for agents", "default"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			content := box(c.footer)
+			s := pollSession(t, "claude", &content, nil)
+			s.Poll()
+			require.Equal(t, c.want, s.RuntimePermissionMode())
+		})
+	}
+
+	// A real capture carries ANSI; cleanForDetection must strip it so footerRegion
+	// and the detector still fire (the rule line would fail isHorizontalRule raw).
+	ansi := "\x1b[2m" + strings.Repeat("─", 40) + "\x1b[0m\n❯ \n" +
+		strings.Repeat("─", 40) + "\n\x1b[39m  ⏵⏵ auto mode on (shift+tab to cycle)\x1b[39m"
+	s := pollSession(t, "claude", &ansi, nil)
+	s.Poll()
+	require.Equal(t, "auto", s.RuntimePermissionMode(), "ANSI-wrapped footer must still detect")
+
+	// Sticky: an indeterminate (busy, no indicator) footer leaves the last mode in
+	// place rather than blanking it, so the chip doesn't flicker mid-turn.
+	c := box("  ⏵⏵ auto mode on (shift+tab to cycle) · ← for agents")
+	s = pollSession(t, "claude", &c, nil)
+	s.Poll()
+	require.Equal(t, "auto", s.RuntimePermissionMode())
+	c = "✻ Cogitating… (6s · esc to interrupt)" // no box, no mode indicator
+	s.Poll()
+	require.Equal(t, "auto", s.RuntimePermissionMode(), "indeterminate footer must keep the last mode")
+}
+
 func TestPollClaudeIdleAndPrompt(t *testing.T) {
 	idle := "╭───╮\n│ > │  ? for shortcuts\n╰───╯"
 	c := idle

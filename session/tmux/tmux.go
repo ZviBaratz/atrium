@@ -515,6 +515,11 @@ type statusMonitor struct {
 	// when this changes, so the log records transitions (hook vs marker vs fallback) rather
 	// than one line per 500ms tick.
 	lastSignal string
+	// mode is the last permission mode detected from the live footer ("" until the
+	// first confident detection). Sticky: an indeterminate footer (busy/startup)
+	// leaves it untouched so the chip doesn't flicker. Read under monitorMu via
+	// RuntimePermissionMode.
+	mode string
 }
 
 func newStatusMonitor(program string) *statusMonitor {
@@ -686,6 +691,16 @@ func (t *Session) sendKeysToPane(keys ...string) error {
 	return t.cmdExec.Run(tmuxCommand(ctx, args...))
 }
 
+// RuntimePermissionMode returns the permission mode last detected from the live
+// pane footer ("" until the first confident detection, or for agents whose
+// footer carries no mode indicator). Updated by Poll; read under monitorMu so it
+// stays consistent with a concurrent poll.
+func (t *Session) RuntimePermissionMode() string {
+	t.monitorMu.Lock()
+	defer t.monitorMu.Unlock()
+	return t.monitor.mode
+}
+
 // Poll classifies the current pane into a PaneState. It reads level signals (a prompt
 // on screen, a busy marker, otherwise content stability) rather than treating any byte
 // change as "working", which is what makes the result stable while the agent is idle.
@@ -712,6 +727,13 @@ func (t *Session) Poll() PaneState {
 	}
 	content := cleanForDetection(raw)
 	name := t.snapshotName()
+
+	// Live permission mode from the footer indicator. Sticky on an indeterminate
+	// read so a busy/startup footer doesn't blank the chip; the Instance reads
+	// t.monitor.mode via RuntimePermissionMode on the metadata tick.
+	if mode, ok := t.adapter.DetectPermissionMode(content); ok {
+		t.monitor.mode = mode
+	}
 
 	// Track content change. Used both by the no-marker fallback and by the settle check
 	// below. Always update so the comparison is relative to the previous tick regardless of

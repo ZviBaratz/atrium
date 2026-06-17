@@ -30,6 +30,29 @@ func renderRow(t *testing.T, branch string, stats *git.DiffStats) string {
 	return r.Render(inst, 1, false)
 }
 
+// The permission-mode chip renders the live mode (PermissionModeInfo), not the
+// stale launch flag: a session launched in plan but switched to auto shows
+// "auto", and a switch back to default hides the chip entirely.
+func TestRender_PermissionModeChipUsesLiveMode(t *testing.T) {
+	t.Cleanup(theme.Set("unicode"))
+	s := spinner.New()
+	r := &InstanceRenderer{spinner: &s}
+	r.setWidth(80)
+	inst, err := session.NewInstance(session.InstanceOptions{
+		Title: "t", Path: ".", Program: "claude --permission-mode plan"})
+	require.NoError(t, err)
+
+	inst.SetModeMeta("auto") // user cycled plan -> auto in-session
+	row := ansi.Strip(r.Render(inst, 1, false))
+	require.Contains(t, row, "auto", "chip must reflect the live mode")
+	require.NotContains(t, row, "plan", "chip must not show the stale launch flag")
+
+	inst.SetModeMeta("default") // cycled back to normal
+	row = ansi.Strip(r.Render(inst, 1, false))
+	require.NotContains(t, row, "plan")
+	require.NotContains(t, row, "auto", "a live default hides the chip")
+}
+
 // TestList_UpdateBadge: the persistent update badge renders in the panel's
 // top border once set — it is panel chrome, independent of rows and overlays.
 func TestList_UpdateBadge(t *testing.T) {

@@ -62,6 +62,28 @@ func newTestWorktree(t *testing.T) *git.Worktree {
 	return wt
 }
 
+// newTestWorktreeFromBase is newTestWorktree's counterpart for a session created
+// from a chosen base branch (baseRef != ""), exercising the Setup path that
+// branches off baseRef instead of HEAD. baseRef is the repo's initial branch so
+// it resolves locally.
+func newTestWorktreeFromBase(t *testing.T) *git.Worktree {
+	t.Helper()
+	t.Setenv("HOME", t.TempDir())
+	repoPath := filepath.Join(t.TempDir(), "repo")
+	runGit(t, "", "init", repoPath)
+	runGit(t, repoPath, "config", "user.email", "test@example.com")
+	runGit(t, repoPath, "config", "user.name", "Test User")
+	require.NoError(t, os.WriteFile(filepath.Join(repoPath, "README.md"), []byte("hello\n"), 0644))
+	runGit(t, repoPath, "add", ".")
+	runGit(t, repoPath, "commit", "-m", "initial")
+
+	baseBranch := gitOutput(t, repoPath, "rev-parse", "--abbrev-ref", "HEAD")
+	wt, _, err := git.NewWorktreeFromBase(context.Background(), repoPath, "sess", baseBranch)
+	require.NoError(t, err)
+	require.NoError(t, wt.Setup())
+	return wt
+}
+
 // deadExec fails every tmux command, so DoesSessionExist() reports false and the
 // duplicate-name guard in start() does not block the PTY launch.
 func deadExec() cmd_test.MockCmdExec {

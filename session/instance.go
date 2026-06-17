@@ -124,6 +124,13 @@ type Instance struct {
 	// In-memory only: the first post-restore tick re-extracts once.
 	modelStamp transcript.Stamp
 
+	// runtimeMode is the permission mode last detected from the live pane footer
+	// (ComputeMode → SetModeMeta), e.g. "auto" after a plan-launched session is
+	// switched in-session. Written only on the main thread (like modelID),
+	// persisted so paused sessions keep the chip. "" = not yet known (the UI
+	// falls back to the --permission-mode flag).
+	runtimeMode string
+
 	// baseCtx is the lifecycle context the instance's tmux/git subprocesses derive
 	// from; cancelling it (app/daemon shutdown) kills in-flight subprocesses. Set via
 	// SetBaseContext (or FromInstanceData) before Start, i.e. before any background
@@ -202,6 +209,7 @@ func (i *Instance) ToInstanceData() InstanceData {
 		ClaudeConfigDir:      i.claudeConfigDir,
 		ClaudeAccountDefault: i.claudeAccountDefault,
 		Model:                i.modelID,
+		PermissionMode:       i.runtimeMode,
 		TmuxName:             i.TmuxSessionName(),
 	}
 
@@ -260,6 +268,7 @@ func FromInstanceData(ctx context.Context, data InstanceData, branchPrefix strin
 		claudeConfigDir:      data.ClaudeConfigDir,
 		claudeAccountDefault: data.ClaudeAccountDefault,
 		modelID:              data.Model,
+		runtimeMode:          data.PermissionMode,
 	}
 
 	// A direct session has no worktree or diff. For a git session, rehydrate both from
@@ -1138,6 +1147,23 @@ func (i *Instance) RecoverLostSession() error {
 	return i.pause(false)
 }
 
+// Auto-commit marker. Pause commits a dirty worktree under this message so work
+// is not lost when the worktree is removed; Resume recognizes it by these
+// affixes and soft-resets it away, making pause/resume round-trip transparently.
+// The writer (pause) and reader (resume) share these so the format can't drift.
+const (
+	autoPauseCommitPrefix = "[atrium] update from "
+	autoPauseCommitSuffix = "(paused)"
+)
+
+// isAutoPauseCommit reports whether a commit subject is one of pause's
+// auto-commits. A genuine, user-authored commit never matches, so Resume only
+// ever unwinds Atrium's own markers.
+func isAutoPauseCommit(subject string) bool {
+	s := strings.TrimSpace(subject)
+	return strings.HasPrefix(s, autoPauseCommitPrefix) && strings.HasSuffix(s, autoPauseCommitSuffix)
+}
+
 // pause stops the tmux session and removes the worktree, preserving the branch.
 func (i *Instance) pause(copyBranchToClipboard bool) error {
 	if !i.isStarted() {
@@ -1206,7 +1232,7 @@ func (i *Instance) pause(copyBranchToClipboard bool) error {
 		log.ErrorLog.Print(err)
 	} else if dirty {
 		// Commit changes locally (without pushing to GitHub)
-		commitMsg := fmt.Sprintf("[atrium] update from '%s' on %s (paused)", i.Title, time.Now().Format(time.RFC822))
+		commitMsg := fmt.Sprintf("%s'%s' on %s %s", autoPauseCommitPrefix, i.Title, time.Now().Format(time.RFC822), autoPauseCommitSuffix)
 		if err := wt.CommitChanges(commitMsg); err != nil {
 			errs = append(errs, fmt.Errorf("failed to commit changes: %w", err))
 			log.ErrorLog.Print(err)
@@ -1308,6 +1334,14 @@ func (i *Instance) Resume() error {
 		return fmt.Errorf("failed to setup git worktree: %w", err)
 	}
 
+	// Reverse the auto-commit pause made (if any), so the worktree comes back
+	// exactly as it was left — changes restored, no history artifact. Best-effort:
+	// the WIP content is safe inside the commit regardless, so a failure here must
+	// not abort resume; worst case is the prior behavior (the commit stays).
+	if err := i.unwindAutoPauseCommits(wt); err != nil {
+		log.ErrorLog.Print(err)
+	}
+
 	// Check if tmux session still exists from pause, otherwise create new one
 	if ts.DoesSessionExist() {
 		// Session exists, just restore the PTY connection to it.
@@ -1334,6 +1368,36 @@ func (i *Instance) Resume() error {
 	// As above: the resumed agent's post-boot idle is not a genuine completion.
 	i.ArmReadySuppression()
 	return nil
+}
+
+// maxAutoPauseUnwind caps how many leading commit subjects we inspect when
+// undoing pause auto-commits. A run longer than this would need that many paused
+// reboots without an intervening real commit — far beyond anything realistic —
+// and is safely left partially coalesced rather than read of unbounded history.
+const maxAutoPauseUnwind = 64
+
+// unwindAutoPauseCommits soft-resets past every consecutive leading auto-commit
+// pause made, landing on the first real ancestor so the worktree returns exactly
+// as it was left (changes re-staged, no history artifact). Walking the whole run
+// — not just HEAD~1 — also coalesces legacy stacks from multiple reboots. It is a
+// no-op when HEAD is not an auto-commit, so a genuine user commit is never reset.
+func (i *Instance) unwindAutoPauseCommits(wt *git.Worktree) error {
+	subjects, err := wt.CommitSubjects(maxAutoPauseUnwind)
+	if err != nil {
+		return err
+	}
+	n := 0
+	for n < len(subjects) && isAutoPauseCommit(subjects[n]) {
+		n++
+	}
+	// n == len(subjects) means the whole inspected run is auto-commits with no real
+	// ancestor in view (history shorter than the cap → down to the root, or a run
+	// longer than the cap). Either way there's nothing safe to land on, so leave
+	// history untouched rather than soft-reset below the first commit.
+	if n == 0 || n == len(subjects) {
+		return nil
+	}
+	return wt.ResetSoft(fmt.Sprintf("HEAD~%d", n))
 }
 
 // UpdateDiffStats updates the git diff statistics for this instance

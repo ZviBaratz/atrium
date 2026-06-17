@@ -22,15 +22,15 @@ func (g *Worktree) Setup() error {
 		return err
 	}
 
-	// When basing on a chosen branch, always branch off it into a fresh session branch
-	// (setupNewWorktree force-recreates the session branch from the start point). We must
-	// not fall into the reuse path below, which would ignore baseRef.
+	// The session always gets its own branch. baseRef only selects the start point at first
+	// creation; once the branch exists it holds the session's committed work (including the
+	// WIP commit pause makes), so resume must reuse it rather than `branch -D` it away and
+	// rebuild from baseRef — which silently discarded that work for base-branch sessions
+	// (#146). Branch existence is the discriminator: creation never collides because the
+	// new-session form blocks a title whose branch slug already exists (app/app_session.go),
+	// so a pre-existing branch here means a resume of a base-branch or HEAD-based session.
 	var setupErr error
-	if g.baseRef != "" {
-		setupErr = g.setupNewWorktree()
-	} else if _, refErr := g.runGitCommand(g.repoPath, "show-ref", "--verify", fmt.Sprintf("refs/heads/%s", g.branchName)); refErr == nil {
-		// HEAD-based session: if the session branch already exists (e.g. a leftover from a
-		// previous run with the same title), reuse it rather than wiping it.
+	if _, refErr := g.runGitCommand(g.repoPath, "show-ref", "--verify", fmt.Sprintf("refs/heads/%s", g.branchName)); refErr == nil {
 		setupErr = g.setupFromExistingBranch()
 	} else {
 		setupErr = g.setupNewWorktree()
