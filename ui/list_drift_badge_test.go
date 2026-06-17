@@ -22,3 +22,21 @@ func TestUpdateAndDriftBadgesCombine(t *testing.T) {
 	require.Contains(t, out, "v0.7.1")
 	require.Contains(t, out, "stale")
 }
+
+func TestJoinBadges(t *testing.T) {
+	cases := []struct {
+		name string
+		in   []string
+		want string
+	}{
+		{"both empty", []string{"", ""}, ""},
+		{"update only", []string{"⇡ v0.7.1", ""}, "⇡ v0.7.1"},
+		{"drift only", []string{"", "⚠ stale"}, "⚠ stale"},
+		{"both present", []string{"⇡ v0.7.1", "⚠ stale"}, "⇡ v0.7.1 ⚠ stale"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			require.Equal(t, c.want, joinBadges(c.in...))
+		})
+	}
+}
