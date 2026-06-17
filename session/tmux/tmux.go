@@ -22,6 +22,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/creack/pty"
@@ -183,6 +184,14 @@ type Session struct {
 	// read once after the attach returns; the channel close in Detach provides the
 	// happens-before edge to the reader.
 	killRequested bool
+
+	// attached is true from the end of Attach until the teardown (Detach /
+	// DetachSafely) has finished reinstalling the detached ptmx + monitor. While
+	// set, Poll early-returns so the in-flight metadata tick neither contends the
+	// tmux socket with the live attach client nor races the monitor swap in
+	// Restore. Atomic: written on the attach/detach goroutine, read on the
+	// metadata-tick goroutines, with no companion state to guard under a mutex.
+	attached atomic.Bool
 }
 
 // Prefix is the prefix applied to every Atrium-managed tmux session name. It
@@ -499,7 +508,14 @@ func (t *Session) Restore() error {
 		return fmt.Errorf("error opening PTY: %w", err)
 	}
 	t.ptmx = ptmx
+	// Serialize the monitor swap against Poll/RuntimePermissionMode, which read
+	// t.monitor under this lock. Detach calls Restore on the detach goroutine
+	// while an in-flight tick may still be inside Poll; the lock (around the
+	// pointer write only, not the pty I/O above) closes the data race. No Restore
+	// caller holds monitorMu, so this cannot deadlock.
+	t.monitorMu.Lock()
 	t.monitor = newStatusMonitor(t.program)
+	t.monitorMu.Unlock()
 	return nil
 }
 
@@ -710,6 +726,15 @@ func (t *Session) RuntimePermissionMode() string {
 // on screen, a busy marker, otherwise content stability) rather than treating any byte
 // change as "working", which is what makes the result stable while the agent is idle.
 func (t *Session) Poll() PaneState {
+	// While the user is interactively attached, the live tmux client owns the
+	// session: a capture-pane/has-session here would contend the shared socket,
+	// and the detach's Restore swaps t.monitor out from under us. Skip before
+	// taking the lock or spawning any subprocess. PaneUnknown is a no-op in
+	// applyPaneState, and the post-detach attachFinishedMsg handler re-polls
+	// fresh, so an in-flight tick loses nothing by skipping here.
+	if t.attached.Load() {
+		return PaneUnknown
+	}
 	// Serialize against a concurrent off-cadence poll from the UI (switch/detach) so the
 	// two callers don't race on the monitor's hash/streak fields. The capture subprocess
 	// runs under the lock, but it is brief and the lock is per-session.
@@ -1068,6 +1093,10 @@ func (t *Session) Attach(allowKill bool) (chan struct{}, error) {
 	}()
 
 	t.monitorWindowSize()
+	// Mark attached last, once attachCh + goroutines + the captured ptmx are all
+	// live. From here the metadata tick skips this session until teardown clears
+	// the flag (after Restore reinstalls the detached ptmx/monitor).
+	t.attached.Store(true)
 	return t.attachCh, nil
 }
 
@@ -1103,6 +1132,17 @@ func (t *Session) detachCleanup() []error {
 
 	var errs []error
 
+	// Cancel BEFORE closing the pty so the io.Copy goroutine observes ctx.Done the
+	// instant the close unblocks its Read — taking its "normal detach" branch
+	// instead of printing the spurious red "terminated without detaching" error
+	// (that message is for the genuine Ctrl-D / agent-exit case, where the client
+	// dies without us cancelling first). t.ctx stays valid until the wg.Wait
+	// below returns; it is nil'd only after.
+	if t.cancel != nil {
+		t.cancel()
+		t.cancel = nil
+	}
+
 	// Close the attached pty session. Closing unblocks the io.Copy goroutine via
 	// EOF; nil the field so a stale pointer is never reused.
 	if t.ptmx != nil {
@@ -1110,11 +1150,6 @@ func (t *Session) detachCleanup() []error {
 			errs = append(errs, fmt.Errorf("error closing attach pty session: %w", err))
 		}
 		t.ptmx = nil
-	}
-
-	if t.cancel != nil {
-		t.cancel()
-		t.cancel = nil
 	}
 
 	if t.wg != nil {
@@ -1136,6 +1171,10 @@ func (t *Session) DetachSafely() error {
 	}
 
 	errs := t.detachCleanup()
+
+	// This path nils ptmx without re-Restoring; the next Attach self-heals. Clear
+	// the poll guard so the session is polled again while detached.
+	t.attached.Store(false)
 
 	// attachCh closed last; nothing reads detachErr on this path, but keep ordering
 	// consistent with Detach.
@@ -1174,6 +1213,11 @@ func (t *Session) Detach() {
 	} else {
 		t.detachErr = nil
 	}
+
+	// Clear the poll guard only now, after Restore has reinstalled the detached
+	// ptmx/monitor, so no metadata tick observes a half-swapped monitor. Keep
+	// this strictly after Restore on any future reorder.
+	t.attached.Store(false)
 
 	// attachCh closed LAST, after detachErr is written, so the reader observes it.
 	if t.attachCh != nil {

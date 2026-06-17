@@ -30,6 +30,7 @@ func attachedSession(t *testing.T) (*Session, *MockPtyFactory) {
 	s.attachCh = make(chan struct{})
 	s.wg = &sync.WaitGroup{}
 	s.ctx, s.cancel = context.WithCancel(context.Background())
+	s.attached.Store(true) // mirror Attach's poll guard
 	return s, ptyFactory
 }
 
