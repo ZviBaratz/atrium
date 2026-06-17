@@ -67,6 +67,16 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, m.handleUpdateNotice(fmt.Sprintf("updated to v%s — restart %s to apply", msg.version, m.hintBinName()))
 		}
 		return m, m.handleUpdateNotice(fmt.Sprintf("v%s available — run `%s update`", msg.version, m.hintBinName()))
+	case driftFoundMsg:
+		// Record the ack at each agent's current installed version so the hint
+		// shows once per version, then surface it. The doctor command stays the
+		// durable surface, so a missed toast is acceptable — no buffering.
+		for _, r := range msg.agents {
+			if err := m.appState.SetAckedDrift(string(r.Key), r.Installed); err != nil {
+				log.WarningLog.Printf("failed to record drift ack for %s: %v", r.Key, err)
+			}
+		}
+		return m, m.handleInfoNotice(fmt.Sprintf("⚠ agent heuristics may be stale — run `%s doctor`", m.hintBinName()))
 	case releaseNotesFetchedMsg:
 		// Record the version on the successful fetch so the notes show once and
 		// never refetch — even when the body is empty (nothing to show, but no

@@ -366,6 +366,7 @@ func (m *home) Init() tea.Cmd {
 		},
 		tickUpdateMetadataCmd(m.snapshotActiveInstances(), m.list.GetSelectedInstance()),
 		m.updateCheckCmd(),   // nil (inert) is fine: tea.Batch skips nil cmds
+		m.driftCheckCmd(),    // agent-heuristic drift hint
 		m.releaseNotesCmd(),  // nil (inert) is fine: tea.Batch skips nil cmds
 		m.startProjectScan(), // nil (disabled) is likewise skipped
 	)
