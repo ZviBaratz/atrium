@@ -10,16 +10,20 @@ import (
 
 // InstanceData represents the serializable data of an Instance
 type InstanceData struct {
-	Title       string    `json:"title"`
-	DisplayName string    `json:"display_name,omitempty"`
-	Path        string    `json:"path"`
-	Branch      string    `json:"branch"`
-	Status      Status    `json:"status"`
-	Height      int       `json:"height"`
-	Width       int       `json:"width"`
-	CreatedAt   time.Time `json:"created_at"`
-	UpdatedAt   time.Time `json:"updated_at"`
-	AutoYes     bool      `json:"auto_yes"`
+	Title       string `json:"title"`
+	DisplayName string `json:"display_name,omitempty"`
+	// Note is an optional freeform annotation shown on the session's row (e.g.
+	// "blocked on review"). omitempty keeps old state files compact; absence
+	// decodes to "" (no note).
+	Note      string    `json:"note,omitempty"`
+	Path      string    `json:"path"`
+	Branch    string    `json:"branch"`
+	Status    Status    `json:"status"`
+	Height    int       `json:"height"`
+	Width     int       `json:"width"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+	AutoYes   bool      `json:"auto_yes"`
 
 	// Unread marks a Ready session the user has not visited since the agent last
 	// finished a turn. omitempty keeps old state files (and seen sessions) compact;

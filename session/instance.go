@@ -58,6 +58,10 @@ type Instance struct {
 	// Unlike Title it can be changed at any time because it is decoupled from the git branch,
 	// worktree, and tmux session. Empty means "show Title".
 	displayName string
+	// note is an optional freeform annotation surfaced on the session's row
+	// (e.g. "blocked on review"). Like displayName it is cosmetic, mutable at
+	// any time, and decoupled from the git branch / tmux session.
+	note string
 	// Path is the path to the workspace.
 	Path string
 	// Branch is the branch of the instance.
@@ -186,6 +190,7 @@ func (i *Instance) ToInstanceData() InstanceData {
 	data := InstanceData{
 		Title:       i.Title,
 		DisplayName: i.displayName,
+		Note:        i.note,
 		Path:        i.Path,
 		Branch:      i.Branch,
 		Status:      i.GetStatus(),
@@ -245,6 +250,7 @@ func FromInstanceData(ctx context.Context, data InstanceData, branchPrefix strin
 		baseCtx:     ctx,
 		Title:       data.Title,
 		displayName: data.DisplayName,
+		note:        data.Note,
 		Path:        data.Path,
 		Branch:      data.Branch,
 		status:      data.Status,
@@ -1102,6 +1108,14 @@ func (i *Instance) DisplayName() string {
 func (i *Instance) SetDisplayName(name string) {
 	i.displayName = strings.TrimSpace(name)
 }
+
+// Note returns the freeform annotation shown on the session's row, or "" when unset.
+func (i *Instance) Note() string { return i.note }
+
+// SetNote sets the freeform annotation. Whitespace is trimmed; an empty value clears it.
+// Like SetDisplayName it works at any time and is independent of the git branch and tmux
+// session.
+func (i *Instance) SetNote(note string) { i.note = strings.TrimSpace(note) }
 
 // Paused reports whether the instance is paused (worktree removed, branch
 // preserved).
