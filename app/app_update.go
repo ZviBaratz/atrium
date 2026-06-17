@@ -78,11 +78,13 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		// Shown: record the ack at each agent's current installed version so the
-		// hint shows once per version.
+		// hint shows once per version. Batched into a single persist.
+		acks := make(map[string]string, len(msg.agents))
 		for _, r := range msg.agents {
-			if err := m.appState.SetAckedDrift(string(r.Key), r.Installed); err != nil {
-				log.WarningLog.Printf("failed to record drift ack for %s: %v", r.Key, err)
-			}
+			acks[string(r.Key)] = r.Installed
+		}
+		if err := m.appState.SetAckedDrift(acks); err != nil {
+			log.WarningLog.Printf("failed to record drift acks: %v", err)
 		}
 		return m, cmd
 	case releaseNotesFetchedMsg:

@@ -4,9 +4,15 @@ import (
 	"context"
 	"errors"
 	"os/exec"
+	"time"
 
 	"github.com/ZviBaratz/atrium/session/agent"
 )
+
+// ProbeTimeout bounds the agent `--version` probes so a wedged binary can't pin
+// either `atrium doctor` or the startup drift check. Shared by both callers so
+// the manual command and the background probe stay in lockstep.
+const ProbeTimeout = 10 * time.Second
 
 // Status is the drift classification of one agent CLI.
 type Status int
@@ -69,33 +75,33 @@ func Check(ctx context.Context, adapters []*agent.Adapter, r Runner) []Result {
 		case err != nil:
 			res.Status = StatusUnknown
 		default:
-			res.Status = classify(out, a)
-			if v, ok := parseVersion(out); ok {
-				res.Installed = v
-			}
+			res.Status, res.Installed = classify(out, a)
 		}
 		results = append(results, res)
 	}
 	return results
 }
 
-// classify turns a successful --version capture into a Status for one adapter.
-func classify(out string, a *agent.Adapter) Status {
+// classify turns a successful --version capture into a Status and the parsed
+// installed version for one adapter. The version is "" only when the output is
+// unparseable (StatusUnknown); an unversioned adapter still reports its parsed
+// version so `atrium doctor` can show it.
+func classify(out string, a *agent.Adapter) (Status, string) {
 	v, ok := parseVersion(out)
 	if !ok {
-		return StatusUnknown
+		return StatusUnknown, ""
 	}
 	if a.VerifiedVersion == "" {
-		return StatusUnknown
+		return StatusUnknown, v
 	}
 	drift, err := driftExceeds(v, a.VerifiedVersion, a.DriftGranularity)
 	if err != nil {
-		return StatusUnknown
+		return StatusUnknown, v
 	}
 	if drift {
-		return StatusDrifted
+		return StatusDrifted, v
 	}
-	return StatusOK
+	return StatusOK, v
 }
 
 // CheckInstalled probes the recognized adapters against the real environment.

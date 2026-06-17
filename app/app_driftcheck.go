@@ -7,16 +7,11 @@ package app
 
 import (
 	"context"
-	"time"
 
 	"github.com/ZviBaratz/atrium/internal/doctor"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
-
-// driftCheckTimeout bounds the version probes so a wedged agent binary can't pin
-// the startup command for the whole session.
-const driftCheckTimeout = 10 * time.Second
 
 // checkDrift is a package var so tests can fake the probe (same pattern as
 // checkForUpdate).
@@ -35,7 +30,7 @@ func (m *home) driftCheckCmd() tea.Cmd {
 	acked := m.appState.GetAckedDrift()
 	appCtx := m.ctx
 	return func() tea.Msg {
-		ctx, cancel := context.WithTimeout(appCtx, driftCheckTimeout)
+		ctx, cancel := context.WithTimeout(appCtx, doctor.ProbeTimeout)
 		defer cancel()
 		var fresh []doctor.Result
 		for _, r := range doctor.Drifted(checkDrift(ctx)) {

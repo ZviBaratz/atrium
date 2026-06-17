@@ -3,6 +3,7 @@ package config
 import (
 	"encoding/json"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"time"
@@ -56,10 +57,12 @@ type AppState interface {
 	GetLastNotesVersion() string
 	// SetLastNotesVersion records the version whose release notes were just shown
 	SetLastNotesVersion(version string) error
-	// GetAckedDrift returns the agent-key → acknowledged-version map (never nil)
+	// GetAckedDrift returns a copy of the agent-key → acknowledged-version map
+	// (never nil); mutating it does not affect persisted state.
 	GetAckedDrift() map[string]string
-	// SetAckedDrift records the installed version the drift hint was dismissed at
-	SetAckedDrift(key, version string) error
+	// SetAckedDrift merges the given agent-key → installed-version acknowledgements
+	// and persists once. A nil/empty map is a no-op.
+	SetAckedDrift(acks map[string]string) error
 }
 
 // maxRecentPaths caps how many recently-used project directories are retained.
@@ -339,19 +342,27 @@ func (s *State) SetLastNotesVersion(version string) error {
 	return SaveState(s)
 }
 
-// GetAckedDrift returns the acknowledged-drift map, never nil.
+// GetAckedDrift returns a copy of the acknowledged-drift map, never nil. The
+// copy keeps callers (including the startup probe goroutine) from aliasing the
+// persisted map.
 func (s *State) GetAckedDrift() map[string]string {
-	if s.AckedDrift == nil {
+	if len(s.AckedDrift) == 0 {
 		return map[string]string{}
 	}
-	return s.AckedDrift
+	return maps.Clone(s.AckedDrift)
 }
 
-// SetAckedDrift records the installed version the drift hint was dismissed at and persists it.
-func (s *State) SetAckedDrift(key, version string) error {
+// SetAckedDrift merges the given agent-key → installed-version acknowledgements
+// and persists once. A nil/empty map is a no-op (no write).
+func (s *State) SetAckedDrift(acks map[string]string) error {
+	if len(acks) == 0 {
+		return nil
+	}
 	if s.AckedDrift == nil {
 		s.AckedDrift = map[string]string{}
 	}
-	s.AckedDrift[key] = version
+	for k, v := range acks {
+		s.AckedDrift[k] = v
+	}
 	return SaveState(s)
 }

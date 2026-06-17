@@ -288,7 +288,7 @@ var (
 			log.Initialize(false)
 			defer log.Close()
 
-			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			ctx, cancel := context.WithTimeout(context.Background(), doctor.ProbeTimeout)
 			defer cancel()
 			fmt.Print(doctor.Render(doctor.CheckInstalled(ctx)))
 			return nil
