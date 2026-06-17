@@ -88,7 +88,7 @@ func TestRename_AppliesToTargetNotMovedSelection(t *testing.T) {
 	// Overlay opened for A (as KeyRename / a successful autoNameDoneMsg would).
 	h.list.SelectInstance(instA)
 	h.renameTarget = instA
-	h.renameOverlay = overlay.NewRenameOverlay("renamed-A")
+	h.renameOverlay = overlay.NewRenameOverlay("renamed-A", "", false)
 	h.state = stateRename
 
 	// Selection hijacked onto B while the overlay is open.

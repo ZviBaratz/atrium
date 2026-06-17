@@ -118,7 +118,7 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Offer the generated name through the existing rename overlay so the user
 		// can confirm or edit it before it commits.
 		m.renameTarget = msg.instance
-		m.renameOverlay = overlay.NewRenameOverlay(msg.name)
+		m.renameOverlay = overlay.NewRenameOverlay(msg.name, msg.instance.Note(), false)
 		m.state = stateRename
 		m.recomputeLayout() // the progress bar gave up its row; the overlay self-documents
 		return m, nil
@@ -634,6 +634,7 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 
 		submitted := m.renameOverlay.IsSubmitted()
 		value := m.renameOverlay.Value()
+		note := m.renameOverlay.NoteValue()
 		deep := m.renameOverlay.IsDeep()
 		// Apply to the instance the overlay was opened for, not the currently
 		// selected one — they can differ if the selection moved while the overlay
@@ -645,15 +646,16 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		m.menu.SetState(ui.StateDefault)
 
 		if submitted && target != nil {
+			target.SetNote(note)
 			if deep {
 				if err := m.deepRename(target, value); err != nil {
 					return m, m.handleError(err)
 				}
 			} else {
 				target.SetDisplayName(value)
-				if err := m.storage.SaveInstances(m.list.GetInstances()); err != nil {
-					return m, m.handleError(err)
-				}
+			}
+			if err := m.storage.SaveInstances(m.list.GetInstances()); err != nil {
+				return m, m.handleError(err)
 			}
 		}
 		return m, m.instanceChanged()
@@ -901,7 +903,7 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 			return m, m.handleInfoNotice("session is still starting — try again in a moment")
 		}
 		m.renameTarget = selected
-		m.renameOverlay = overlay.NewRenameOverlay(selected.DisplayName())
+		m.renameOverlay = overlay.NewRenameOverlay(selected.DisplayName(), selected.Note(), false)
 		m.state = stateRename
 		return m, nil
 	case keys.KeyAutoName:
@@ -1104,6 +1106,13 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 			return m, m.handleError(err)
 		}
 		m.tabbedWindow.CleanupTerminalForInstance(selected)
+		// Pause has already happened. Offer the rename overlay focused on the note
+		// field so "park this, jot why" is one motion; esc / empty-enter just leaves
+		// the session paused with no note. Instant pause is preserved — the pause is
+		// never rolled back by skipping the note.
+		m.renameTarget = selected
+		m.renameOverlay = overlay.NewRenameOverlay(selected.DisplayName(), selected.Note(), true)
+		m.state = stateRename
 		return m, m.instanceChanged()
 	case keys.KeyMoveUp:
 		if m.list.MoveUp() {
