@@ -35,6 +35,7 @@ func nfGlyphs() Glyphs {
 		Paused:        string(rune(nfPause)),
 		Branch:        string(rune(nfBranch)),
 		Ahead:         "⇡",
+		Warn:          "⚠",
 		Behind:        "⇣",
 		Dirty:         string(rune(nfPencil)),
 		PR:            string(rune(nfPR)),
@@ -112,6 +113,7 @@ var unicodeFallback = &Theme{
 		Paused:        "‖",
 		Branch:        "⎇",
 		Ahead:         "⇡",
+		Warn:          "⚠",
 		Behind:        "⇣",
 		Dirty:         "*",
 		PR:            "⇄", // plain-unicode pull-request marker

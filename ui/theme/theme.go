@@ -43,6 +43,7 @@ type Glyphs struct {
 	Paused        string // session halted
 	Branch        string // precedes a branch name
 	Ahead         string // commits ahead of base
+	Warn          string // heuristic-drift / stale-data warning
 	Behind        string // commits behind base
 	Dirty         string // uncommitted changes
 	PR            string // precedes a pull-request number (may be empty)
