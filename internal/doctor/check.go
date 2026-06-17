@@ -12,14 +12,14 @@ import (
 type Status int
 
 const (
-	// StatusOK: installed and within the verified ceiling.
+	// StatusOK means the agent is installed and within the verified ceiling.
 	StatusOK Status = iota
-	// StatusDrifted: installed version is past the verified ceiling.
+	// StatusDrifted means the installed version is past the verified ceiling.
 	StatusDrifted
-	// StatusUnknown: installed but version unparseable, or the adapter is
-	// unversioned (no VerifiedVersion to compare against).
+	// StatusUnknown means the agent is installed but its version is unparseable,
+	// or the adapter is unversioned (no VerifiedVersion to compare against).
 	StatusUnknown
-	// StatusNotInstalled: the binary is not on PATH.
+	// StatusNotInstalled means the binary is not on PATH.
 	StatusNotInstalled
 )
 

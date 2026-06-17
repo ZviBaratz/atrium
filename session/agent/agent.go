@@ -35,8 +35,11 @@ const (
 type Granularity int
 
 const (
+	// GranularityPatch treats any version above the ceiling as drift.
 	GranularityPatch Granularity = iota
+	// GranularityMinor ignores patch bumps; a minor-or-higher increase is drift.
 	GranularityMinor
+	// GranularityMajor ignores minor and patch bumps; only a major increase is drift.
 	GranularityMajor
 )
 
