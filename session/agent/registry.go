@@ -19,6 +19,13 @@ var claude = &Adapter{
 	DisplayName: "Claude Code",
 	aliases:     []string{"claude"},
 
+	// Heuristic strings verified against claude 2.1.170 (see Prompts provenance).
+	// Patch granularity: claude rewords gating strings inside patch releases, so
+	// any version above this ceiling is unverified — a coarser granularity would
+	// silently miss real drift.
+	VerifiedVersion:  "2.1.170",
+	DriftGranularity: GranularityPatch,
+
 	// The footer renders e.g. "✻ Cogitating… (5s · esc to interrupt)" below the
 	// input box for the whole turn, including silent tool calls.
 	BusyMarkers:  []string{"esc to interrupt"},
@@ -177,6 +184,12 @@ var gemini = &Adapter{
 	Key:         KeyGemini,
 	DisplayName: "Gemini CLI",
 	aliases:     []string{"gemini"},
+
+	// Heuristic strings verified against gemini 0.27. Minor granularity: the
+	// confirmation wording tracks minor releases; pure patch bumps within a
+	// minor don't warrant a warning.
+	VerifiedVersion:  "0.27",
+	DriftGranularity: GranularityMinor,
 
 	BusyMarkers: []string{"esc to cancel"},
 	// Like codex, the loading row renders above the input box.
