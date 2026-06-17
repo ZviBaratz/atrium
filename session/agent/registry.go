@@ -10,7 +10,17 @@ import (
 // can be fixed by re-checking the cited source and editing the one stale entry.
 //
 // Heuristic strings are version-sensitive by nature. When editing, add a fixture
-// to registry_test.go pinning the new string against a captured pane.
+// to registry_test.go pinning the new string against a captured pane, and bump
+// the adapter's VerifiedVersion to the version you captured against (the drift
+// guard in internal/doctor warns when an installed CLI moves past it).
+//
+// Remediation is ADDITIVE, never replace-in-place: when a CLI rewords a gating
+// string, ADD the new variant alongside the old in the same matcher list and
+// keep both through a deprecation window, e.g.
+//   // claude >=2.1.180; "No, keep planning" kept for <2.1.180, remove after.
+// A union match can't guess wrong (a pane shows only one variant), so matching
+// never depends on the detected version. A plain re-verification (strings still
+// valid at a newer release) is just a VerifiedVersion bump, no string edit.
 
 // Claude Code. The reference adapter: every heuristic here predates this package
 // and is pinned by the poll tests in session/tmux.
