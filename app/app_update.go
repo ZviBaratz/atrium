@@ -179,7 +179,9 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.pushSessionContexts()
 		cmds := deliverReadyPrompts(msg.results)
-		cmds = append(cmds, tickUpdateMetadataCmd(m.snapshotActiveInstances(), m.list.GetSelectedInstance()))
+		m.metadataTick++
+		fullSweep := m.metadataTick%metadataFullSweepEvery == 0
+		cmds = append(cmds, tickUpdateMetadataCmd(m.snapshotActiveInstances(), m.list.GetSelectedInstance(), fullSweep))
 		return m, tea.Batch(cmds...)
 	case instancePolledMsg:
 		// An off-cadence single-instance refresh (selection change / detach). Apply the
