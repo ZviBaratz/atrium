@@ -145,6 +145,11 @@ type Session struct {
 	// stdout dimensions of the tmux pane. On detach, we close it and set a new one.
 	// This should never be nil.
 	ptmx *os.File
+	// attachOut is the gated stdout pump for the current attach. Detach disables it so
+	// the io.Copy goroutine — which can stay blocked in a pty read until the tmux client
+	// exits — can be left to drain in the background without writing to the terminal
+	// Bubble Tea has reclaimed.
+	attachOut *gatedWriter
 	// monitor monitors the tmux pane content and sends signals to the UI when it's status changes
 	monitor *statusMonitor
 	// monitorMu serializes Poll. The metadata tick polls each session once per cycle, but
@@ -980,6 +985,28 @@ func classifyAttachInput(in []byte, allowKill bool) attachInputAction {
 	return attachForward
 }
 
+// gatedWriter wraps the attach's stdout pump so detach can sever it in O(1). The pty
+// master that the io.Copy goroutine reads is opened in blocking mode by creack/pty
+// (its open() ioctls the master through os.File.Fd(), which drops the fd from Go's
+// runtime poller), so neither Close nor SetReadDeadline can interrupt that read — it
+// returns only once the tmux client process exits, which a busy single-threaded server
+// can delay by seconds. Rather than block detach on it, we disable the writer (so any
+// late bytes are discarded instead of corrupting the reclaimed terminal) and let the
+// goroutine drain on its own.
+type gatedWriter struct {
+	w        io.Writer
+	disabled atomic.Bool
+}
+
+func (g *gatedWriter) Write(p []byte) (int, error) {
+	if g.disabled.Load() {
+		return len(p), nil // detached: swallow late output instead of writing the TUI's screen
+	}
+	return g.w.Write(p)
+}
+
+func (g *gatedWriter) disable() { g.disabled.Store(true) }
+
 // Attach connects the terminal to the tmux session and blocks (via the returned
 // channel) until the user detaches. When allowKill is true, the in-session kill
 // key (Ctrl+X) detaches and sets KillRequested so the caller can tear the session
@@ -1000,26 +1027,28 @@ func (t *Session) Attach(allowKill bool) (chan struct{}, error) {
 	t.detachErr = nil
 
 	t.wg = &sync.WaitGroup{}
-	t.wg.Add(1)
 	t.ctx, t.cancel = context.WithCancel(context.Background())
 
-	// The first goroutine should terminate when the ptmx is closed. We use the
-	// waitgroup to wait for it to finish.
-	// The 2nd one returns when you press escape to Detach. It doesn't need to be
-	// in the waitgroup because is the goroutine doing the Detaching; it waits for
-	// all the other ones.
+	// The stdout pump copies the pty master to the terminal until the master closes.
+	// It is deliberately NOT tracked by t.wg: creack/pty opens the master in blocking
+	// mode, so its Read cannot be interrupted by Close — it returns only once the tmux
+	// client exits, which a busy server can delay by seconds. Blocking detach on that
+	// froze the whole UI (the wg.Wait in detachCleanup). Instead, detach disables the
+	// gated writer — so this goroutine can no longer touch the terminal Bubble Tea has
+	// reclaimed — and lets it drain in the background. ctx and ptmx are captured locally
+	// because detachCleanup nils both without waiting for this goroutine.
+	out := &gatedWriter{w: os.Stdout}
+	t.attachOut = out
+	pumpPtmx := t.ptmx
+	pumpCtx := t.ctx
 	go func() {
-		defer t.wg.Done()
-		_, _ = io.Copy(os.Stdout, t.ptmx)
-		// When io.Copy returns, it means the connection was closed
-		// This could be due to normal detach or Ctrl-D
-		// Check if the context is done to determine if it was a normal detach
+		_, _ = io.Copy(out, pumpPtmx)
+		// When io.Copy returns, the connection closed — a normal detach (ctx done) or an
+		// abnormal Ctrl-D / agent exit (ctx still live), which warns the user.
 		select {
-		case <-t.ctx.Done():
+		case <-pumpCtx.Done():
 			// Normal detach, do nothing
 		default:
-			// If context is not done, it was likely an abnormal termination (Ctrl-D)
-			// Print warning message
 			fmt.Fprintf(os.Stderr, "\n\033[31mError: Session terminated without detaching. Use Ctrl-Q to properly detach from tmux sessions.\033[0m\n")
 		}
 	}()
@@ -1132,19 +1161,27 @@ func (t *Session) detachCleanup() []error {
 
 	var errs []error
 
-	// Cancel BEFORE closing the pty so the io.Copy goroutine observes ctx.Done the
-	// instant the close unblocks its Read — taking its "normal detach" branch
-	// instead of printing the spurious red "terminated without detaching" error
-	// (that message is for the genuine Ctrl-D / agent-exit case, where the client
-	// dies without us cancelling first). t.ctx stays valid until the wg.Wait
-	// below returns; it is nil'd only after.
+	// Cancel BEFORE closing the pty so the stdout pump observes ctx.Done as a normal
+	// detach (it captured ctx locally) rather than printing the spurious red
+	// "terminated without detaching" error (that message is for the genuine Ctrl-D /
+	// agent-exit case, where the client dies without us cancelling first).
 	if t.cancel != nil {
 		t.cancel()
 		t.cancel = nil
 	}
 
-	// Close the attached pty session. Closing unblocks the io.Copy goroutine via
-	// EOF; nil the field so a stale pointer is never reused.
+	// Sever the stdout pump in O(1): after this it can never write to the terminal
+	// again, so we can hand control back to Bubble Tea without waiting for it to exit.
+	// This is the crux of a snappy detach — the pump's pty read is uninterruptible and
+	// can stay blocked for seconds (see gatedWriter), so we must NOT wg.Wait on it.
+	if t.attachOut != nil {
+		t.attachOut.disable()
+		t.attachOut = nil
+	}
+
+	// Close the attached pty session so the tmux client exits (which eventually
+	// unblocks the backgrounded pump's read). Nil the field so a stale pointer is
+	// never reused.
 	if t.ptmx != nil {
 		if err := t.ptmx.Close(); err != nil {
 			errs = append(errs, fmt.Errorf("error closing attach pty session: %w", err))
@@ -1152,6 +1189,9 @@ func (t *Session) detachCleanup() []error {
 		t.ptmx = nil
 	}
 
+	// Wait only for the fast goroutines still tracked by t.wg (the window-size
+	// monitors, which exit immediately on ctx cancel). The stdout pump is intentionally
+	// not in t.wg.
 	if t.wg != nil {
 		t.wg.Wait()
 		t.wg = nil
