@@ -1,6 +1,6 @@
 ---
 name: cut-release
-description: Use when cutting, tagging, or publishing a new Atrium release (a new vX.Y.Z version, GitHub release, or GoReleaser build) — covers curated release notes, the notes→merge→tag ordering, and the draft-publish gate.
+description: Use when cutting, tagging, or publishing a new Atrium release — a new vX.Y.Z version, a GitHub release, a GoReleaser build, or recovering a bad release tag or missing release notes.
 ---
 
 # Cut an Atrium release
@@ -18,8 +18,9 @@ Two invariants make or break it:
    is silently ignored and you ship the auto-changelog instead). So the notes must
    merge to `main` *before* you tag, and the tag must point at that commit. Order is
    **notes → merge → tag**, never tag-first/backfill-later (published bodies are frozen).
-2. **The release is `draft: true`.** Nothing is public until a human reviews the
-   draft and clicks Publish. Forgetting this is the most likely miss.
+2. **The release is `draft: true`** (set in `.goreleaser.yaml`). Nothing is public
+   until a human reviews the draft and clicks Publish. Forgetting this is the most
+   likely miss.
 
 ## Procedure
 
@@ -51,9 +52,10 @@ Two invariants make or break it:
 ## Recovering from a bad tag or notes filename
 
 Only possible **while the release is still a draft** (published bodies are frozen).
-The workflow has `replace_existing_draft: true`, so moving the tag rebuilds and
-replaces the draft. Fix the cause on `main` first (rename `0.8.0.md` → `v0.8.0.md`,
-or add the missing notes), merge it, then move the tag to that commit:
+GoReleaser is configured with `replace_existing_draft: true` (in `.goreleaser.yaml`),
+so moving the tag rebuilds and replaces the draft. Fix the cause on `main` first
+(rename `0.8.0.md` → `v0.8.0.md`, or add the missing notes), merge it, then move the
+tag to that commit:
 
 ```bash
 git push origin :refs/tags/vX.Y.Z   # delete the remote tag
