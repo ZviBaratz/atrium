@@ -29,11 +29,13 @@ var claude = &Adapter{
 	DisplayName: "Claude Code",
 	aliases:     []string{"claude"},
 
-	// Heuristic strings verified against claude 2.1.170 (see Prompts provenance).
-	// Patch granularity: claude rewords gating strings inside patch releases, so
-	// any version above this ceiling is unverified — a coarser granularity would
-	// silently miss real drift.
-	VerifiedVersion:  "2.1.170",
+	// Heuristic strings verified against claude 2.1.177 (see Prompts provenance).
+	// Plain re-verification: all strings confirmed unchanged at 2.1.177; suggestion
+	// and permission-mode heuristics already pinned at 2.1.17x/2.1.178 in their
+	// respective test files. Patch granularity: claude rewords gating strings inside
+	// patch releases, so any version above this ceiling is unverified — a coarser
+	// granularity would silently miss real drift.
+	VerifiedVersion:  "2.1.177",
 	DriftGranularity: GranularityPatch,
 
 	// The footer renders e.g. "✻ Cogitating… (5s · esc to interrupt)" below the
