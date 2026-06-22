@@ -524,7 +524,10 @@ func (m *home) openCreateFormSeeded(seedPath string, focusTitle bool, prefill *P
 			ov.SelectPath(prefill.Path)
 		}
 		if prefill.Confident {
-			ov.FocusSubmit()
+			// Project and title are trusted; land on the Permissions chip — the one
+			// decision smart dispatch deliberately defers (←/→ to plan, ⌃S to create).
+			// Falls back to the Create button when there is no mode field (non-claude).
+			ov.FocusMode()
 		} else {
 			ov.FocusTitle()
 		}

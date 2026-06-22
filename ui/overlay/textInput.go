@@ -477,6 +477,22 @@ func (t *TextInputOverlay) currentStop() focusStop {
 // (`N`) keeps the default project-picker focus.
 func (t *TextInputOverlay) FocusTitle() { t.focusStop(stopTitle) }
 
+// FocusMode moves focus to the Permissions (mode) chip when it can take focus,
+// falling back to the Create button otherwise (the mode field is absent for a
+// non-claude program and disabled while a non-claude profile is selected). Smart
+// dispatch uses this on a confident match so the one decision it defers — the
+// permission mode — is the active field, a ←/→ away from plan and ⌃S from create.
+func (t *TextInputOverlay) FocusMode() {
+	if i := t.indexOfStop(stopMode); i >= 0 && t.stopEnabled(stopMode) {
+		t.setFocusIndex(i)
+		return
+	}
+	t.focusStop(stopEnter)
+}
+
+// ModeFocused reports whether the Permissions (mode) chip currently has focus.
+func (t *TextInputOverlay) ModeFocused() bool { return t.isModeField() }
+
 // FocusSubmit moves focus to the Create button, so a confident smart-dispatch
 // prefill is one Enter away from creating the session (the user can still Tab back
 // to edit any field first).

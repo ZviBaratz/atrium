@@ -175,6 +175,19 @@ func TestSessionCreateOverlay_FocusStartsOnDirectoryAndCycles(t *testing.T) {
 	assert.True(t, o.isEnterButton())
 }
 
+func TestSessionCreateOverlay_FocusModeLandsOnPermissions(t *testing.T) {
+	o := NewSessionCreateOverlay(nil, nil, []string{"/repo/a"}, "claude")
+	o.FocusMode()
+	assert.True(t, o.isModeField(), "FocusMode focuses the Permissions chip when it is enabled")
+}
+
+func TestSessionCreateOverlay_FocusModeFallsBackToCreateWhenAbsent(t *testing.T) {
+	// A non-claude program has no permission-mode field at all; focus falls back to Create.
+	o := NewSessionCreateOverlay(nil, nil, []string{"/repo/a"}, "gemini")
+	o.FocusMode()
+	assert.True(t, o.isEnterButton(), "with no mode field, FocusMode falls back to the Create button")
+}
+
 // The branch section must render between the project and the title, matching the Tab order.
 func TestSessionCreateOverlay_RendersBranchBetweenProjectAndTitle(t *testing.T) {
 	o := NewSessionCreateOverlay(nil, nil, []string{"/repo/a"}, "")

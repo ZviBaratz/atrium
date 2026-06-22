@@ -65,6 +65,21 @@ func TestSmartDispatch_ConfidentMatchSeedsForm(t *testing.T) {
 	require.NotContains(t, h.textInputOverlay.Render(), "refining", "a clean short title needs no LLM upgrade")
 }
 
+func TestSmartDispatch_ConfidentMatchFocusesPermissions(t *testing.T) {
+	h := newSmartHome(t)
+	h.program = "claude" // the Permissions field exists only for a claude program
+	neutral := mkNamedDir(t, "workspace")
+	box := mkNamedDir(t, "box")
+	addDirectInstance(t, h, "neutral", neutral)
+	addDirectInstance(t, h, "other", box)
+
+	h.handleSmartDispatchSubmit("Review box#123")
+
+	require.Equal(t, statePrompt, h.state)
+	require.True(t, h.textInputOverlay.ModeFocused(),
+		"a confident match lands focus on the Permissions chip, the one decision smart dispatch defers")
+}
+
 func TestSmartDispatch_ConfidentRoughMatchUpgradesTitleAsync(t *testing.T) {
 	h := newSmartHome(t)
 	neutral := mkNamedDir(t, "workspace")
