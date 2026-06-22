@@ -412,6 +412,18 @@ func changedFiles(content string) []string {
 // (see ui/overlay newTitleInput), so a generated name fits the same field.
 const maxNameLen = 32
 
+// SlugTitle turns a raw line into a clean, bounded session title using the same
+// rules (and 32-char cap) the new-session/rename inputs enforce, returning "" when
+// nothing usable remains. It is the shared definition of that rule for callers
+// outside this package (e.g. smart-dispatch prefill).
+func SlugTitle(raw string) string {
+	name, err := sanitizeName(raw)
+	if err != nil {
+		return ""
+	}
+	return name
+}
+
 // sanitizeName turns a model's raw response into a clean, bounded display name.
 // It keeps only the first line, strips surrounding quotes and trailing
 // punctuation, collapses internal whitespace, and truncates to maxNameLen on a

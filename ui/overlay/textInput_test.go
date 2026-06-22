@@ -19,6 +19,37 @@ var twoAccounts = []config.ClaudeAccount{
 	{Name: "quantivly", ConfigDir: "~/.claude-quantivly", RemoteMatches: []string{"quantivly/"}},
 }
 
+func TestSessionCreateOverlay_PrefillSetters(t *testing.T) {
+	o := NewSessionCreateOverlay(nil, nil, []string{"/repo/a", "/repo/b"}, "")
+
+	o.SetTitleValue("Review box 123")
+	assert.Equal(t, "Review box 123", o.GetTitle())
+
+	o.SetPrompt("Review box#123")
+	assert.Equal(t, "Review box#123", o.GetValue())
+
+	require.True(t, o.SelectPath("/repo/b"))
+	assert.Equal(t, "/repo/b", o.GetSelectedPath())
+}
+
+func TestSessionCreateOverlay_ProjectHint(t *testing.T) {
+	o := NewSessionCreateOverlay(nil, nil, []string{"/repo/a"}, "")
+	o.SetSize(80, 40)
+	o.SetProjectHint("detecting…")
+	assert.Contains(t, o.Render(), "detecting…")
+	o.SetProjectHint("")
+	assert.NotContains(t, o.Render(), "detecting…")
+}
+
+func TestNewSmartDispatchOverlay(t *testing.T) {
+	o := NewSmartDispatchOverlay("Describe the session")
+	assert.True(t, o.IsSmartDispatch())
+	assert.False(t, o.IsCreateForm())
+
+	plain := NewTextInputOverlay("x", "")
+	assert.False(t, plain.IsSmartDispatch())
+}
+
 // The account picker is a true override: until the user drives it, the form reports
 // no selection (ok=false) so the caller keeps the freshly-resolved auto-route. Only a
 // deliberate keypress flips it to an override that wins.

@@ -383,6 +383,21 @@ func (dp *DirectoryPicker) GetSelectedPath() string {
 	return items[dp.cursor]
 }
 
+// SelectPath points the cursor at the candidate equal to path and clears any typed
+// filter so the selection takes effect immediately. It returns false (leaving the
+// selection untouched) when path is not among the candidates — callers pass a path
+// drawn from the same candidate list, so a miss means "nothing to pre-select".
+func (dp *DirectoryPicker) SelectPath(path string) bool {
+	for i, c := range dp.candidates {
+		if c == path {
+			dp.filter = ""
+			dp.cursor = i
+			return true
+		}
+	}
+	return false
+}
+
 func dpLabelStyle() lipgloss.Style  { return theme.Current().AccentStyle().Bold(true) }
 func dpFilterStyle() lipgloss.Style { return theme.Current().FgStyle() }
 func dpSelectedStyle() lipgloss.Style {

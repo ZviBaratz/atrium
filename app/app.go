@@ -250,6 +250,11 @@ type home struct {
 	// is already in flight, and drives the "Generating name…" hint-bar state.
 	generatingName bool
 
+	// smartDispatchSeededTitle is the deterministic placeholder title the async form
+	// opened with. The routing call's (better) title replaces it only while the field
+	// still equals this — i.e. the user hasn't typed their own.
+	smartDispatchSeededTitle string
+
 	// hintScreen is the frozen, labeled capture hint mode is acting on.
 	// hintTyped is the entered label prefix, and hintOpenVariant records
 	// whether any hint character was typed uppercase (selecting copy+open).

@@ -92,6 +92,10 @@ const (
 	// it instead accepts the ghost-text prompt suggestion (Right+Enter, gated
 	// on the suggestion actually showing in a fresh capture).
 	KeyApprove
+
+	// KeySmartDispatch opens the single-line smart-dispatch input: type a free-form
+	// description and Atrium routes it to a project and pre-fills the new-session form.
+	KeySmartDispatch
 )
 
 // KillKey is the chord that triggers a kill from the session list. It mirrors the
@@ -118,6 +122,7 @@ var GlobalKeyStringsMap = map[string]KeyName{
 	"enter":      KeyEnter,
 	"o":          KeyEnter,
 	"n":          KeyNew,
+	"i":          KeySmartDispatch,
 	KillKey:      KeyKill,
 	"R":          KeyRename,
 	"A":          KeyAutoName,
@@ -172,6 +177,10 @@ var GlobalkeyBindings = map[KeyName]key.Binding{
 	KeyNew: key.NewBinding(
 		key.WithKeys("n"),
 		key.WithHelp("n", "new"),
+	),
+	KeySmartDispatch: key.NewBinding(
+		key.WithKeys("i"),
+		key.WithHelp("i", "smart new"),
 	),
 	KeyKill: key.NewBinding(
 		key.WithKeys(KillKey),

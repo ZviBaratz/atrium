@@ -74,6 +74,12 @@ func (m *home) handlePromptState(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 		prompt := m.textInputOverlay.GetValue()
 
+		// Smart dispatch: route the single line to a project and open the pre-filled
+		// form (or, opt-in, create directly) instead of sending it anywhere.
+		if m.textInputOverlay.IsSmartDispatch() {
+			return m, m.handleSmartDispatchSubmit(prompt)
+		}
+
 		// The new-session form creates the instance only now, on submit, so no row
 		// appears in the list while the user is still filling it in.
 		if m.textInputOverlay.IsCreateForm() {

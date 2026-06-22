@@ -22,6 +22,17 @@ func TestDirectoryPicker_DedupAndDefaultSelection(t *testing.T) {
 	assert.Equal(t, "/repo/a", dp.GetSelectedPath())
 }
 
+func TestDirectoryPicker_SelectPath(t *testing.T) {
+	dp := NewDirectoryPicker([]string{"/repo/a", "/repo/b", "/repo/c"})
+
+	require.True(t, dp.SelectPath("/repo/c"), "an existing candidate is selectable")
+	assert.Equal(t, "/repo/c", dp.GetSelectedPath())
+
+	// A path not among the candidates leaves the selection untouched.
+	require.False(t, dp.SelectPath("/repo/nope"))
+	assert.Equal(t, "/repo/c", dp.GetSelectedPath())
+}
+
 func TestDirectoryPicker_Navigation(t *testing.T) {
 	dp := NewDirectoryPicker([]string{"/repo/a", "/repo/b"})
 
