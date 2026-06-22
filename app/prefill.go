@@ -17,7 +17,18 @@ type PrefillResult struct {
 	Title     string // a bounded title derived from the line, "" when none
 	Prompt    string // the original line, trimmed, verbatim
 	Confident bool   // exactly one candidate matched by an exact basename token
+
+	// TitleIsRough is true when the project-stripped phrase still reads as prose
+	// (more than 4 words) and would benefit from an LLM rewrite. It lets a confident
+	// match — which routes deterministically and skips the LLM — still upgrade a
+	// sentence-like title, while leaving a clean short title (e.g. "Review #243")
+	// untouched. Only meaningful alongside a non-empty Title.
+	TitleIsRough bool
 }
+
+// titleRoughWordCount is the word count above which a project-stripped title reads
+// as prose rather than a title (a good session title is 2-4 words).
+const titleRoughWordCount = 4
 
 // issueRefRe captures the project name from an issue reference like "box#123" or
 // "hub-123" (non-greedy name so "box-123" yields "box"). The "-" form is ambiguous
@@ -40,9 +51,6 @@ func ParsePrefill(line string, candidates []string) PrefillResult {
 	if prompt == "" {
 		return res
 	}
-	// '#' separates an issue ref from its number ("box#123"); spacing it out yields a
-	// readable title ("box 123") that the slug rule then bounds.
-	res.Title = session.SlugTitle(strings.ReplaceAll(prompt, "#", " "))
 
 	tokens := prefillTokens(prompt)
 
@@ -67,7 +75,46 @@ func ParsePrefill(line string, candidates []string) PrefillResult {
 	case len(prefix) > 0:
 		res.Path = prefix[0]
 	}
+
+	// Drop the matched project name from the title — it is redundant with the repo
+	// group the session is filed under. Only an exact-tier match is stripped: a prefix
+	// match (e.g. "atri"→"atrium") is not a clean project mention.
+	matchedBase := ""
+	if len(exact) > 0 {
+		matchedBase = strings.ToLower(filepath.Base(res.Path))
+	}
+	res.Title, res.TitleIsRough = buildTitle(prompt, matchedBase)
 	return res
+}
+
+// buildTitle derives the bounded session title from the line. When matchedBase is set
+// it removes that project name: a bare word equal to the basename is dropped, and an
+// issue-ref naming the project keeps only its number ("box#123" with project "box" →
+// "#123", so "Review box#123" → "Review #243"-style). '#' is preserved — the branch
+// slug strips it anyway (session/git.sanitizeBranchName). If stripping empties the
+// title (the line was only the project name), it falls back to the unstripped line so
+// the title is never blank. The second result reports whether the kept phrase reads as
+// prose (more than titleRoughWordCount words), measured before the 32-char cap.
+func buildTitle(prompt, matchedBase string) (string, bool) {
+	words := strings.Fields(prompt)
+	var kept []string
+	if matchedBase != "" {
+		for _, w := range words {
+			wl := strings.ToLower(strings.Trim(w, prefillTrimChars))
+			if wl == matchedBase {
+				continue // the project name itself
+			}
+			if m := issueRefRe.FindStringSubmatch(wl); m != nil && m[1] == matchedBase {
+				kept = append(kept, "#"+m[2]) // keep the issue number, drop the name
+				continue
+			}
+			kept = append(kept, w)
+		}
+	}
+	if len(kept) == 0 {
+		kept = words // no match, or the strip emptied the title: keep the line
+	}
+	return session.SlugTitle(strings.Join(kept, " ")), len(kept) > titleRoughWordCount
 }
 
 const (

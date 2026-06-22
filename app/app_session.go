@@ -197,15 +197,27 @@ func (m *home) handleSmartDispatchSubmit(line string) tea.Cmd {
 	}
 
 	formCmd := m.openCreateFormSeeded(res.Path, false, &res)
-	if res.Confident || m.textInputOverlay == nil {
-		// Confident match needs no routing call; a nil overlay means the open was
-		// refused (e.g. max sessions) and formCmd already carries the error.
+	if m.textInputOverlay == nil {
+		// The open was refused (e.g. max sessions); formCmd already carries the error.
 		return formCmd
 	}
 
-	// No confident local match: route asynchronously and show the detecting hint.
+	// Decide whether to spend an async LLM call. An unconfident match needs the router
+	// for the project (and a title); a confident match already has the project but still
+	// upgrades a prose-y placeholder title. A confident, clean title needs neither and
+	// stays instant.
+	routing := !res.Confident
+	upgrade := res.Confident && res.TitleIsRough
+	if !routing && !upgrade {
+		return formCmd
+	}
+
 	m.smartDispatchSeededTitle = m.textInputOverlay.GetTitle()
-	m.textInputOverlay.SetProjectHint("detecting project…")
+	hint := "refining title…"
+	if routing {
+		hint = "detecting project…"
+	}
+	m.textInputOverlay.SetProjectHint(hint)
 	return tea.Batch(formCmd, m.runSmartDispatchCmd(line, candidates, m.textInputOverlay))
 }
 

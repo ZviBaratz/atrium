@@ -153,19 +153,23 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.textInputOverlay.SetProjectHint("")
-		if msg.err != nil || msg.project == "" {
-			return m, nil // no confident route; leave the form as the user left it
+		if msg.err != nil {
+			return m, nil // routing failed; leave the form as the user left it
 		}
 		var cmds []tea.Cmd
-		// Only re-point the project if the user hasn't moved the picker themselves
-		// (still on the contextual default the form opened with).
-		if path := m.candidatePathForBasename(msg.project); path != "" &&
-			m.textInputOverlay.GetSelectedPath() == m.newSessionPath && path != m.newSessionPath {
-			m.textInputOverlay.SelectPath(path)
-			cmds = append(cmds, m.retargetNewSession(path))
+		// Re-point the project only when the router found one and the user hasn't moved
+		// the picker themselves (still on the contextual default the form opened with).
+		// A confident match already sits on its project, so this is a no-op there.
+		if msg.project != "" {
+			if path := m.candidatePathForBasename(msg.project); path != "" &&
+				m.textInputOverlay.GetSelectedPath() == m.newSessionPath && path != m.newSessionPath {
+				m.textInputOverlay.SelectPath(path)
+				cmds = append(cmds, m.retargetNewSession(path))
+			}
 		}
-		// Replace the deterministic placeholder with the (better) routed title, but only
-		// while the user hasn't typed their own.
+		// Upgrade the title independently of routing: a confident match wants only a
+		// better title, and even an unrouted result may carry a usable one. Replace the
+		// deterministic placeholder only while the user hasn't typed their own.
 		if msg.title != "" && m.textInputOverlay.GetTitle() == m.smartDispatchSeededTitle {
 			m.textInputOverlay.SetTitleValue(msg.title)
 			m.refreshTitleError()

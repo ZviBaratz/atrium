@@ -59,9 +59,46 @@ func TestSmartDispatch_ConfidentMatchSeedsForm(t *testing.T) {
 	require.NotNil(t, h.textInputOverlay)
 	require.True(t, h.textInputOverlay.IsCreateForm())
 	require.Equal(t, "Review box#123", h.textInputOverlay.GetValue(), "the line seeds the prompt")
-	require.Equal(t, "Review box 123", h.textInputOverlay.GetTitle())
+	require.Equal(t, "Review #123", h.textInputOverlay.GetTitle(), "the redundant project name is dropped, '#' kept")
 	require.Equal(t, box, h.textInputOverlay.GetSelectedPath(), "the matched project is pre-selected")
 	require.NotContains(t, h.textInputOverlay.Render(), "detecting", "a confident local match needs no async routing")
+	require.NotContains(t, h.textInputOverlay.Render(), "refining", "a clean short title needs no LLM upgrade")
+}
+
+func TestSmartDispatch_ConfidentRoughMatchUpgradesTitleAsync(t *testing.T) {
+	h := newSmartHome(t)
+	neutral := mkNamedDir(t, "workspace")
+	box := mkNamedDir(t, "box")
+	addDirectInstance(t, h, "neutral", neutral) // selected → contextual default
+	addDirectInstance(t, h, "other", box)       // the confident match
+
+	cmd := h.handleSmartDispatchSubmit("box keeps crashing on startup unexpectedly")
+
+	require.Equal(t, statePrompt, h.state)
+	require.NotNil(t, cmd, "a confident but prose-y title still routes for an LLM title upgrade")
+	require.Equal(t, box, h.textInputOverlay.GetSelectedPath(), "the confident project stays pre-selected")
+	require.Equal(t, "keeps crashing on startup", h.textInputOverlay.GetTitle(), "the stripped slug seeds the title")
+	h.textInputOverlay.SetSize(100, 40)
+	render := h.textInputOverlay.Render()
+	require.Contains(t, render, "refining", "a title-only upgrade is in flight")
+	require.NotContains(t, render, "detecting", "the project is already known — not a routing call")
+}
+
+func TestSmartDispatch_EmptyProjectResultStillUpgradesTitle(t *testing.T) {
+	h := newSmartHome(t)
+	neutral := mkNamedDir(t, "workspace")
+	box := mkNamedDir(t, "box")
+	addDirectInstance(t, h, "neutral", neutral)
+	addDirectInstance(t, h, "other", box)
+
+	h.handleSmartDispatchSubmit("the crash in the dashboard") // unmatched → async, title seeded
+
+	// The router returned a usable title but no project: the title must still land,
+	// independent of routing, while the picker stays on the contextual default.
+	h.Update(smartDispatchDoneMsg{form: h.textInputOverlay, project: "", title: "Dashboard crash"})
+
+	require.Equal(t, "Dashboard crash", h.textInputOverlay.GetTitle(), "a title lands even without a routed project")
+	require.Equal(t, neutral, h.textInputOverlay.GetSelectedPath(), "no project means the picker stays on the default")
 }
 
 func TestSmartDispatch_NoMatchOpensFormAndRoutesAsync(t *testing.T) {
@@ -101,8 +138,9 @@ func TestSmartDispatch_AutoFallsBackToFormOnTitleConflict(t *testing.T) {
 	on := true
 	h.appConfig.SmartDispatchAuto = &on
 	box := mkNamedDir(t, "box")
-	// An existing session whose derived title collides with the one we'd mint.
-	addDirectInstance(t, h, "Review box 123", box)
+	// An existing session whose derived title collides with the one we'd mint
+	// ("Review box#123" → "Review #123").
+	addDirectInstance(t, h, "Review #123", box)
 
 	h.handleSmartDispatchSubmit("Review box#123")
 
