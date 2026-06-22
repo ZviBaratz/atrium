@@ -1,11 +1,14 @@
 package tmux
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"os/exec"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/ZviBaratz/atrium/cmd/cmd_test"
 
@@ -134,4 +137,57 @@ func TestDoubleDetachNoPanic(t *testing.T) {
 	s2, _ := attachedSession(t)
 	require.NotPanics(t, func() { _ = s2.DetachSafely() })
 	require.NotPanics(t, s2.Detach)
+}
+
+// T7: the gated writer passes output through until disabled, then silently discards it
+// (still reporting a full write so the backgrounded io.Copy keeps draining).
+func TestGatedWriterDiscardsAfterDisable(t *testing.T) {
+	var buf bytes.Buffer
+	g := &gatedWriter{w: &buf}
+
+	n, err := g.Write([]byte("hello"))
+	require.NoError(t, err)
+	require.Equal(t, 5, n)
+	require.Equal(t, "hello", buf.String())
+
+	g.disable()
+
+	n, err = g.Write([]byte("world"))
+	require.NoError(t, err)
+	require.Equal(t, 5, n, "a discarded write still reports the full length")
+	require.Equal(t, "hello", buf.String(), "writes after disable must be discarded")
+}
+
+// T8: detach must not block on the stdout pump. The pty master is opened blocking, so
+// its read can stay stuck for seconds (until the tmux client exits); detach has to
+// return regardless, severing the pump so its late output can't corrupt the terminal.
+// This models that with a pump blocked on a pipe that Detach never closes — without the
+// fix (pump tracked by t.wg), Detach would wait on it and this test would deadlock.
+func TestDetachDoesNotWaitOnStdoutPump(t *testing.T) {
+	s, _ := attachedSession(t)
+
+	pr, pw := io.Pipe()
+	var buf bytes.Buffer
+	out := &gatedWriter{w: &buf}
+	s.attachOut = out
+
+	pumpReturned := make(chan struct{})
+	go func() {
+		_, _ = io.Copy(out, pr) // blocks in pr.Read; Detach never touches pr
+		close(pumpReturned)
+	}()
+
+	start := time.Now()
+	s.Detach()
+	if d := time.Since(start); d > time.Second {
+		t.Fatalf("Detach blocked %s waiting on the stdout pump", d)
+	}
+	require.True(t, out.disabled.Load(), "Detach must disable the stdout pump")
+
+	// Output that arrives after detach (when the pump's read finally unblocks) must be
+	// discarded rather than written to the terminal Bubble Tea has reclaimed.
+	_, _ = pw.Write([]byte("late output"))
+	require.NoError(t, pw.Close())
+	<-pumpReturned
+	require.Empty(t, buf.String(), "post-detach output must be discarded, not written")
 }
