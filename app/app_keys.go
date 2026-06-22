@@ -335,12 +335,18 @@ func (m *home) openRenameSelected() (tea.Model, tea.Cmd) {
 // session. The model call and the diff it needs run in the Cmd so the UI stays
 // responsive; only the instance and prompt are captured here.
 func (m *home) startAutoNameSelected() (tea.Model, tea.Cmd) {
-	selected, cmd, ok := m.selectedActionable()
-	if !ok {
-		return m, cmd
+	// Guard order matters here: an in-flight generation is reported before a
+	// still-loading session, so this handler can't fold the nil+Loading check
+	// into selectedActionable() without changing which notice the user sees.
+	selected := m.list.GetSelectedInstance()
+	if selected == nil {
+		return m, nil
 	}
 	if m.generatingName {
 		return m, m.handleInfoNotice("already generating a name")
+	}
+	if selected.GetStatus() == session.Loading {
+		return m, m.handleInfoNotice(stillStartingNotice)
 	}
 	m.generatingName = true
 	m.menu.SetState(ui.StateGeneratingName)
