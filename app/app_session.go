@@ -223,7 +223,10 @@ func (m *home) handleSmartDispatchSubmit(line string) tea.Cmd {
 
 // autoDispatch creates a session directly from a confident match, returning (cmd, true)
 // on success. It returns (nil, false) when the target is invalid or the title would
-// collide, so the caller can fall back to the confirmation form.
+// collide, so the caller can fall back to the confirmation form. Because it bypasses the
+// form, the session launches with the agent's default permission mode — opting into
+// smart_dispatch_auto deliberately trades away the per-session permission choice the
+// form's Permissions chip would otherwise offer.
 func (m *home) autoDispatch(res PrefillResult) (tea.Cmd, bool) {
 	valid, direct, _ := targetValidity(m.ctx, res.Path)
 	if !valid {

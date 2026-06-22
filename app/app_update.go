@@ -156,6 +156,15 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.err != nil {
 			return m, nil // routing failed; leave the form as the user left it
 		}
+		// Upgrade the title independently of routing: a confident match wants only a
+		// better title, and even an unrouted result may carry a usable one. Replace the
+		// deterministic placeholder only while the user hasn't typed their own. Do this
+		// before any re-point so the retarget's async branch check below validates the
+		// final title (not the placeholder) against the routed repo.
+		if msg.title != "" && m.textInputOverlay.GetTitle() == m.smartDispatchSeededTitle {
+			m.textInputOverlay.SetTitleValue(msg.title)
+			m.refreshTitleError()
+		}
 		var cmds []tea.Cmd
 		// Re-point the project only when the router found one and the user hasn't moved
 		// the picker themselves (still on the contextual default the form opened with).
@@ -166,13 +175,6 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.textInputOverlay.SelectPath(path)
 				cmds = append(cmds, m.retargetNewSession(path))
 			}
-		}
-		// Upgrade the title independently of routing: a confident match wants only a
-		// better title, and even an unrouted result may carry a usable one. Replace the
-		// deterministic placeholder only while the user hasn't typed their own.
-		if msg.title != "" && m.textInputOverlay.GetTitle() == m.smartDispatchSeededTitle {
-			m.textInputOverlay.SetTitleValue(msg.title)
-			m.refreshTitleError()
 		}
 		return m, tea.Batch(cmds...)
 	case metadataUpdateDoneMsg:

@@ -97,3 +97,25 @@ func TestDispatchBasenames(t *testing.T) {
 		require.Equal(t, []string{"one", "two"}, got)
 	})
 }
+
+func TestParseDispatchReply(t *testing.T) {
+	t.Run("parses a bare JSON object", func(t *testing.T) {
+		project, title, err := parseDispatchReply(`{"project":"hub","title":"Fix it"}`, []string{"hub"})
+		require.NoError(t, err)
+		require.Equal(t, "hub", project)
+		require.Equal(t, "Fix it", title)
+	})
+
+	t.Run("tolerates markdown fences and surrounding prose (gemini)", func(t *testing.T) {
+		raw := "Sure, here is the routing:\n```json\n{\"project\":\"box\",\"title\":\"Login bug\"}\n```\n"
+		project, title, err := parseDispatchReply(raw, []string{"box", "hub"})
+		require.NoError(t, err)
+		require.Equal(t, "box", project)
+		require.Equal(t, "Login bug", title)
+	})
+
+	t.Run("errors when no JSON object is present", func(t *testing.T) {
+		_, _, err := parseDispatchReply("no json here", []string{"hub"})
+		require.Error(t, err)
+	})
+}

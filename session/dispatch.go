@@ -127,7 +127,7 @@ func generateDispatchGemini(ctx context.Context, executor cmd.Executor, geminiPa
 // dropped rather than routed. The title is bounded by the shared slug rule.
 func parseDispatchReply(raw string, basenames []string) (project, title string, err error) {
 	var reply dispatchReply
-	if err := json.Unmarshal([]byte(strings.TrimSpace(raw)), &reply); err != nil {
+	if err := json.Unmarshal([]byte(extractJSONObject(raw)), &reply); err != nil {
 		return "", "", fmt.Errorf("could not parse dispatch reply: %w", err)
 	}
 	chosen := strings.ToLower(strings.TrimSpace(reply.Project))
@@ -139,6 +139,21 @@ func parseDispatchReply(raw string, basenames []string) (project, title string, 
 		}
 	}
 	return project, SlugTitle(reply.Title), nil
+}
+
+// extractJSONObject pulls the JSON object out of a model reply that may be wrapped in
+// markdown code fences or surrounded by stray prose. The claude path hands us a clean
+// inner result, but gemini (`-p`, no JSON envelope) routinely adds ```json fences or a
+// leading sentence, so narrowing to the first '{' … last '}' keeps that path usable.
+// With no braces it returns the trimmed input, letting json.Unmarshal report the error.
+func extractJSONObject(raw string) string {
+	s := strings.TrimSpace(raw)
+	start := strings.IndexByte(s, '{')
+	end := strings.LastIndexByte(s, '}')
+	if start < 0 || end < start {
+		return s
+	}
+	return s[start : end+1]
 }
 
 // dispatchInstruction builds the per-call routing prompt. The candidate basenames are

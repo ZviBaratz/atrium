@@ -233,6 +233,8 @@ type Config struct {
 	// smart-dispatch input (the `i` key) create the session immediately, skipping the
 	// confirmation form. Off (nil) by default: the pre-filled form always opens first.
 	// Never applies to an LLM-routed guess — only an exact, unambiguous local match.
+	// Auto-created sessions use the agent's default permission mode (skipping the form
+	// forgoes the Permissions chip), so enable this only if that default suits you.
 	SmartDispatchAuto *bool `json:"smart_dispatch_auto,omitempty"`
 }
 

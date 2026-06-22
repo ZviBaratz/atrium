@@ -493,11 +493,6 @@ func (t *TextInputOverlay) FocusMode() {
 // ModeFocused reports whether the Permissions (mode) chip currently has focus.
 func (t *TextInputOverlay) ModeFocused() bool { return t.isModeField() }
 
-// FocusSubmit moves focus to the Create button, so a confident smart-dispatch
-// prefill is one Enter away from creating the session (the user can still Tab back
-// to edit any field first).
-func (t *TextInputOverlay) FocusSubmit() { t.focusStop(stopEnter) }
-
 // TitleFocused reports whether the title field currently has focus.
 func (t *TextInputOverlay) TitleFocused() bool { return t.isTitle() }
 
