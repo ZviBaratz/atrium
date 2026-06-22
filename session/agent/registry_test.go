@@ -267,6 +267,37 @@ func TestClaudeGate(t *testing.T) {
 	require.False(t, ok)
 }
 
+// claudeTrustPane is the folder-trust dialog captured verbatim from a live
+// claude 2.1.185 launched in a fresh (untrusted) directory (2026-06-22). Claude
+// reworded the dialog after 2.1.170: the old "Do you trust the files in this
+// folder?" title is gone, replaced by the "Quick safety check…" copy below with
+// a "Yes, I trust this folder" confirm button. "Enter to confirm" still accepts
+// the pre-highlighted trust option, so DismissEnter remains correct.
+const claudeTrustPane = `
+────────────────────────────────────────────────────────────────────────────
+ Accessing workspace:
+
+ /tmp/atr-trust-XBG1IL
+
+ Quick safety check: Is this a project you created or one you trust? (Like your own code, a well-known open source
+ project, or work from your team). If not, take a moment to review what's in this folder first.
+
+ Claude Code'll be able to read, edit, and execute files here.
+
+ Security guide
+
+ ❯ 1. Yes, I trust this folder
+   2. No, exit
+
+ Enter to confirm · Esc to cancel
+`
+
+func TestClaudeTrustGate_2_1_185(t *testing.T) {
+	g, ok := claude.GateUp(claudeTrustPane)
+	require.True(t, ok, "reworded 2.1.185 trust dialog must still fire the gate")
+	require.Equal(t, DismissEnter, g.Dismiss)
+}
+
 // --- Codex fixtures. Layout per openai/codex tui: the status row renders above
 // the composer ("Working (0s • esc to interrupt)", pinned by the repo's own
 // status_indicator_widget test), approval options per approval_overlay.rs.
