@@ -156,10 +156,15 @@ func prefillTokens(line string) []string {
 		tokens = append(tokens, s)
 	}
 	for _, raw := range strings.Fields(strings.ToLower(line)) {
-		if m := issueRefRe.FindStringSubmatch(raw); m != nil {
+		// Trim surrounding punctuation first: the issue-ref regex is $-anchored, so a
+		// trailing "." ("nanoclaw#247.") would otherwise fail to parse and the clean
+		// project name would never be extracted — silently degrading an exact match to a
+		// prefix one (no strip, not confident).
+		word := strings.Trim(raw, prefillTrimChars)
+		if m := issueRefRe.FindStringSubmatch(word); m != nil {
 			add(m[1])
 		}
-		add(strings.Trim(raw, prefillTrimChars))
+		add(word)
 	}
 	return tokens
 }

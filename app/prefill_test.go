@@ -28,6 +28,16 @@ func TestParsePrefill(t *testing.T) {
 			wantRough:     false,
 		},
 		{
+			name:          "trailing period on the issue ref still matches exactly and strips",
+			line:          "Review nanoclaw#247.",
+			candidates:    []string{"/x/nanoclaw", "/y/atrium"},
+			wantPath:      "/x/nanoclaw",
+			wantTitle:     "Review #247",
+			wantPrompt:    "Review nanoclaw#247.",
+			wantConfident: true,
+			wantRough:     false,
+		},
+		{
 			name:          "prose containing the literal repo name strips it and reads as rough",
 			line:          "The hub is failing with a migration error",
 			candidates:    []string{"/y/hub", "/x/atrium"},
