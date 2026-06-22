@@ -266,16 +266,47 @@ func (m *home) snapshotActiveInstances() []*session.Instance {
 	return out
 }
 
+// metadataFullSweepEvery is how many 500ms ticks pass between full metadata sweeps of
+// every active session. On the ticks in between, only the selected session and any
+// session with a queued prompt are polled. This bounds the per-tick load on the single
+// shared tmux server (its capture-pane calls serialize there): a full sweep over ~10
+// streaming sessions costs hundreds of ms, so doing it every ~2s instead of every 500ms
+// keeps the list responsive. Non-selected status chips can lag by at most this interval,
+// which is imperceptible for a background session.
+const metadataFullSweepEvery = 4
+
+// pollTargets selects which active sessions to poll this tick. A full sweep polls all of
+// them; a light tick polls only the selected session and any session with a queued
+// prompt (whose delivery needs a responsive readiness probe). Sessions left out keep
+// their last metadata until the next full sweep.
+func pollTargets(active []*session.Instance, selected *session.Instance, fullSweep bool) []*session.Instance {
+	if fullSweep {
+		return active
+	}
+	var out []*session.Instance
+	for _, inst := range active {
+		if inst == selected || inst.Prompt != "" {
+			out = append(out, inst)
+		}
+	}
+	return out
+}
+
 // tickUpdateMetadataCmd returns a self-chaining Cmd that sleeps 500ms, then performs
 // expensive metadata I/O (tmux capture, git diff) in parallel background goroutines.
 // Because it only re-schedules after completing, overlapping ticks are impossible.
 // The active instances slice should be snapshotted on the main thread via
 // snapshotActiveInstances() before being passed here.
 //
+// fullSweep polls every active session; otherwise only the selected session and any
+// session with a queued prompt are polled (the rest keep their last state until the next
+// full sweep) — see metadataFullSweepEvery. Sessions left out of the returned results are
+// simply not updated this tick.
+//
 // Only the selected instance gets a full diff (with Content); the rest get a
 // lightweight numstat-only summary. This keeps per-instance memory bounded
 // since the diff pane only ever renders the selected one.
-func tickUpdateMetadataCmd(active []*session.Instance, selected *session.Instance) tea.Cmd {
+func tickUpdateMetadataCmd(active []*session.Instance, selected *session.Instance, fullSweep bool) tea.Cmd {
 	return func() tea.Msg {
 		time.Sleep(500 * time.Millisecond)
 
@@ -283,9 +314,14 @@ func tickUpdateMetadataCmd(active []*session.Instance, selected *session.Instanc
 			return metadataUpdateDoneMsg{}
 		}
 
-		results := make([]instanceMetaResult, len(active))
+		poll := pollTargets(active, selected, fullSweep)
+		if len(poll) == 0 {
+			return metadataUpdateDoneMsg{}
+		}
+
+		results := make([]instanceMetaResult, len(poll))
 		var wg sync.WaitGroup
-		for idx, inst := range active {
+		for idx, inst := range poll {
 			wg.Add(1)
 			go func(i int, instance *session.Instance) {
 				defer wg.Done()
