@@ -73,9 +73,8 @@ func (g *Worktree) Diff() *DiffStats {
 	// against the local without holding the lock.
 	wt := g.snapshotWorktreePath()
 
-	// -N stages untracked files (intent to add), including them in the diff
-	_, err := g.runGitCommand(wt, "add", "-N", ".")
-	if err != nil {
+	// Intent-to-add untracked files so they appear in the diff (see intentAddUntracked).
+	if err := g.intentAddUntracked(wt); err != nil {
 		stats.Error = err
 		return stats
 	}
@@ -109,9 +108,8 @@ func (g *Worktree) DiffNumstat() *DiffStats {
 	// See Diff: snapshot the worktree path so a concurrent rename can't tear the read.
 	wt := g.snapshotWorktreePath()
 
-	// -N stages untracked files (intent to add), including them in the diff
-	_, err := g.runGitCommand(wt, "add", "-N", ".")
-	if err != nil {
+	// Intent-to-add untracked files so they appear in the diff (see intentAddUntracked).
+	if err := g.intentAddUntracked(wt); err != nil {
 		stats.Error = err
 		return stats
 	}
@@ -134,6 +132,55 @@ func (g *Worktree) snapshotWorktreePath() string {
 	g.mu.RLock()
 	defer g.mu.RUnlock()
 	return g.worktreePath
+}
+
+// intentAddUntracked stages untracked files as intent-to-add (git add -N) so they
+// appear in `git diff <base>`, scoped to only the paths git reports as untracked. It
+// is a no-op when nothing is untracked (the common steady state), so — unlike the old
+// unconditional `add -N .` that ran on every 500ms poll tick — it never walks and
+// rewrites the index, and never leaves intent-to-add residue in the worktree the agent
+// is actively using (that residue breaks the agent's own `git stash`). On a status
+// failure it falls back to the unconditional `add -N .` so the diff never silently
+// drops untracked files.
+func (g *Worktree) intentAddUntracked(wt string) error {
+	// -z emits raw, NUL-terminated paths; the default --porcelain C-quotes paths with
+	// tabs/unicode/quotes, which would not round-trip through `add -N --`.
+	out, err := g.runGitCommand(wt, "status", "--porcelain", "-z")
+	if err != nil {
+		_, ferr := g.runGitCommand(wt, "add", "-N", ".")
+		return ferr
+	}
+	paths := parsePorcelainUntracked(out)
+	if len(paths) == 0 {
+		return nil
+	}
+	_, err = g.runGitCommand(wt, append([]string{"add", "-N", "--"}, paths...)...)
+	return err
+}
+
+// parsePorcelainUntracked extracts the untracked-file paths (porcelain "??" entries)
+// from `git status --porcelain -z` output. Records are NUL-terminated; the first two
+// bytes are the XY status, byte 2 is a space, then the raw path. Untracked directories
+// come back as a single "dir/" entry, which `git add -N -- dir/` recurses into — so the
+// scoped intent-add reproduces `add -N .` exactly. Rename/copy records (status starting
+// with 'R'/'C') carry a second NUL-terminated source field, consumed and ignored here so
+// it is never misread as a separate record.
+func parsePorcelainUntracked(out string) []string {
+	var paths []string
+	records := strings.Split(out, "\x00")
+	for i := 0; i < len(records); i++ {
+		rec := records[i]
+		if len(rec) < 4 { // "XY p" minimum; also skips the trailing empty element
+			continue
+		}
+		switch status := rec[:2]; {
+		case status == "??":
+			paths = append(paths, rec[3:])
+		case status[0] == 'R' || status[0] == 'C':
+			i++ // skip the source-path field that follows a rename/copy
+		}
+	}
+	return paths
 }
 
 // computeRepoStats fills in the commit/behind/dirty fields on stats. It is
