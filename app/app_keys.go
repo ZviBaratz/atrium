@@ -191,7 +191,7 @@ func (m *home) handleRenameState(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			target.SetDisplayName(value)
 		}
 		target.SetNote(note)
-		if err := m.storage.SaveInstances(m.list.GetInstances()); err != nil {
+		if err := m.persistInstances(); err != nil {
 			return m, m.handleError(err)
 		}
 	}

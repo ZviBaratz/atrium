@@ -50,6 +50,26 @@ func (m *home) handleError(err error) tea.Cmd {
 	return m.scheduleNoticeHide()
 }
 
+// persistInstances writes the current instance list to disk. It is the single
+// chokepoint for the SaveInstances(GetInstances()) pattern; callers choose how to
+// surface the error (m.handleError for user-driven actions, log for bulk/background
+// paths).
+func (m *home) persistInstances() error {
+	return m.storage.SaveInstances(m.list.GetInstances())
+}
+
+// moveAndPersist runs a list-reorder closure; if it changed the order it persists
+// and re-selects. A persist failure is surfaced; a no-op move is a clean no-op.
+func (m *home) moveAndPersist(move func() bool) (tea.Model, tea.Cmd) {
+	if !move() {
+		return m, nil
+	}
+	if err := m.persistInstances(); err != nil {
+		return m, m.handleError(err)
+	}
+	return m, m.instanceChanged()
+}
+
 // handleInfoNotice flashes a neutral acknowledgment ("branch copied") on the
 // hint bar's reserved row. Unlike errors, info is chrome: when the user runs
 // without the hint bar there is no reserved row to ride, so the notice is

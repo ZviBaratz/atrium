@@ -179,7 +179,7 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(cmds...)
 	case metadataUpdateDoneMsg:
 		if recoverLostInstances(msg.results, m.lostStrikes) {
-			if err := m.storage.SaveInstances(m.list.GetInstances()); err != nil {
+			if err := m.persistInstances(); err != nil {
 				log.ErrorLog.Printf("failed to persist recovered sessions: %v", err)
 			}
 		}
@@ -554,7 +554,7 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		msg.instance.SetStatus(session.Running)
 
 		// Save after successful start
-		if err := m.storage.SaveInstances(m.list.GetInstances()); err != nil {
+		if err := m.persistInstances(); err != nil {
 			return m, m.handleError(err)
 		}
 		m.recordRecentPath(msg.instance.Path)
@@ -599,7 +599,7 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m *home) handleQuit() (tea.Model, tea.Cmd) {
-	if err := m.storage.SaveInstances(m.list.GetInstances()); err != nil {
+	if err := m.persistInstances(); err != nil {
 		return m, m.handleError(err)
 	}
 	return m, tea.Quit
@@ -778,37 +778,13 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 	case keys.KeyPause:
 		return m.pauseSelected()
 	case keys.KeyMoveUp:
-		if m.list.MoveUp() {
-			if err := m.storage.SaveInstances(m.list.GetInstances()); err != nil {
-				return m, m.handleError(err)
-			}
-			return m, m.instanceChanged()
-		}
-		return m, nil
+		return m.moveAndPersist(m.list.MoveUp)
 	case keys.KeyMoveDown:
-		if m.list.MoveDown() {
-			if err := m.storage.SaveInstances(m.list.GetInstances()); err != nil {
-				return m, m.handleError(err)
-			}
-			return m, m.instanceChanged()
-		}
-		return m, nil
+		return m.moveAndPersist(m.list.MoveDown)
 	case keys.KeyMoveGroupUp:
-		if m.list.MoveGroupUp() {
-			if err := m.storage.SaveInstances(m.list.GetInstances()); err != nil {
-				return m, m.handleError(err)
-			}
-			return m, m.instanceChanged()
-		}
-		return m, nil
+		return m.moveAndPersist(m.list.MoveGroupUp)
 	case keys.KeyMoveGroupDown:
-		if m.list.MoveGroupDown() {
-			if err := m.storage.SaveInstances(m.list.GetInstances()); err != nil {
-				return m, m.handleError(err)
-			}
-			return m, m.instanceChanged()
-		}
-		return m, nil
+		return m.moveAndPersist(m.list.MoveGroupDown)
 	case keys.KeyCollapse:
 		if m.list.Collapse() {
 			if err := m.appState.SetCollapsedRepos(m.list.CollapsedRepos()); err != nil {

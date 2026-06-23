@@ -280,7 +280,7 @@ func (m *home) candidatePathForBasename(basename string) string {
 func (m *home) resumeSelected(selected *session.Instance) tea.Cmd {
 	err := selected.Resume()
 	if err == nil {
-		if serr := m.storage.SaveInstances(m.list.GetInstances()); serr != nil {
+		if serr := m.persistInstances(); serr != nil {
 			log.WarningLog.Printf("failed to persist resumed instance %s: %v", selected.Title, serr)
 		}
 		return tea.WindowSize()
@@ -312,7 +312,7 @@ func (m *home) resumeSelected(selected *session.Instance) tea.Cmd {
 		if rerr := selected.Resume(); rerr != nil {
 			return rerr
 		}
-		if serr := m.storage.SaveInstances(m.list.GetInstances()); serr != nil {
+		if serr := m.persistInstances(); serr != nil {
 			log.WarningLog.Printf("failed to persist resumed instance %s: %v", selected.Title, serr)
 		}
 		return instanceChangedMsg{}
@@ -379,7 +379,7 @@ func (m *home) resumeAll() tea.Cmd {
 			res.resumed++
 		}
 		if res.resumed > 0 {
-			if err := m.storage.SaveInstances(m.list.GetInstances()); err != nil {
+			if err := m.persistInstances(); err != nil {
 				log.WarningLog.Printf("resume all: failed to persist resumed instances: %v", err)
 			}
 		}
@@ -458,7 +458,7 @@ func (m *home) pauseAll() tea.Cmd {
 			res.pausedInstances = append(res.pausedInstances, inst)
 		}
 		if res.paused > 0 {
-			if err := m.storage.SaveInstances(m.list.GetInstances()); err != nil {
+			if err := m.persistInstances(); err != nil {
 				log.WarningLog.Printf("pause all: failed to persist paused instances: %v", err)
 			}
 		}
