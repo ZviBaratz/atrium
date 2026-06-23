@@ -189,7 +189,7 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if r.sessionLost || r.instance.Paused() {
 				continue
 			}
-			applyPaneState(r.instance, r.state)
+			r.instance.ApplyPaneState(r.state)
 			if r.diffStats != nil && r.diffStats.Error != nil {
 				if !strings.Contains(r.diffStats.Error.Error(), "base commit SHA not set") {
 					log.WarningLog.Printf("could not update diff stats: %v", r.diffStats.Error)
@@ -217,7 +217,7 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// state but do NOT reschedule the metadata tick — that chain is owned by
 		// metadataUpdateDoneMsg above; touching it here would spawn a second tick loop.
 		if msg.instance.GetStatus() != session.Paused {
-			applyPaneState(msg.instance, msg.state)
+			msg.instance.ApplyPaneState(msg.state)
 		}
 		return m, nil
 	case tea.MouseMsg:

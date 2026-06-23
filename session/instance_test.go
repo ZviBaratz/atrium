@@ -278,6 +278,62 @@ func approveRecorder(sendKeysArgs *[][]string) cmd_test.MockCmdExec {
 	}
 }
 
+// TestApplyPaneState pins the pane-state → status/prompt mapping that both the TUI
+// metadata loop and the headless daemon route through. The tapped return is what lets the
+// daemon refresh diff stats only after an auto-answer; it must be true for exactly one
+// case (AutoYes prompt) so neither caller has to re-derive which states auto-answer.
+func TestApplyPaneState(t *testing.T) {
+	newInst := func(autoYes bool) *Instance {
+		inst, err := NewInstance(InstanceOptions{
+			Title: "s", Path: t.TempDir(), Program: "claude",
+		})
+		require.NoError(t, err)
+		inst.AutoYes = autoYes
+		inst.SetStatus(Loading) // a recognizable prior state
+		return inst
+	}
+
+	t.Run("working → Running", func(t *testing.T) {
+		inst := newInst(false)
+		require.False(t, inst.ApplyPaneState(tmux.PaneWorking))
+		require.Equal(t, Running, inst.GetStatus())
+	})
+
+	t.Run("idle → Ready", func(t *testing.T) {
+		inst := newInst(false)
+		require.False(t, inst.ApplyPaneState(tmux.PaneIdle))
+		require.Equal(t, Ready, inst.GetStatus())
+	})
+
+	t.Run("prompt with AutoYes off → NeedsInput, no tap", func(t *testing.T) {
+		inst := newInst(false)
+		require.False(t, inst.ApplyPaneState(tmux.PanePrompt))
+		require.Equal(t, NeedsInput, inst.GetStatus())
+	})
+
+	t.Run("prompt with AutoYes on → tapped, not NeedsInput", func(t *testing.T) {
+		inst := newInst(true)
+		require.True(t, inst.ApplyPaneState(tmux.PanePrompt),
+			"an auto-answered prompt must report tapped=true so the daemon refreshes its diff")
+		require.NotEqual(t, NeedsInput, inst.GetStatus())
+	})
+
+	t.Run("manual prompt → NeedsInput even with AutoYes on, no tap", func(t *testing.T) {
+		// The plan-approval dialog: auto-Enter would accept the plan and enable
+		// auto-accept, so autoyes must surface it instead of answering.
+		inst := newInst(true)
+		require.False(t, inst.ApplyPaneState(tmux.PanePromptManual),
+			"a destructive manual prompt must never tap Enter")
+		require.Equal(t, NeedsInput, inst.GetStatus())
+	})
+
+	t.Run("unknown → status unchanged, no tap", func(t *testing.T) {
+		inst := newInst(false)
+		require.False(t, inst.ApplyPaneState(tmux.PaneUnknown))
+		require.Equal(t, Loading, inst.GetStatus(), "an unreadable pane must not flip the status")
+	})
+}
+
 // ApprovePrompt is the user-initiated twin of the autoyes TapEnter: it must work
 // with AutoYes off — that gate is what it deliberately bypasses.
 func TestApprovePrompt_TapsEnterWithoutAutoYes(t *testing.T) {

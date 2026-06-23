@@ -104,30 +104,6 @@ type instanceMetaResult struct {
 	modeOK bool
 }
 
-// applyPaneState maps a polled pane state onto an instance's status. Prompt handling
-// depends on AutoYes: with it on, auto-answer (TapEnter is a no-op otherwise); with it
-// off the session is blocked on the user, so surface NeedsInput rather than a spinner.
-// PanePromptManual surfaces NeedsInput even under AutoYes — its auto-answer is
-// destructive (claude's plan approval: Enter accepts the plan AND enables auto-accept).
-// PaneUnknown (an unreadable pane) leaves the status untouched.
-func applyPaneState(inst *session.Instance, state tmux.PaneState) {
-	switch state {
-	case tmux.PaneWorking:
-		inst.SetStatus(session.Running)
-	case tmux.PanePrompt:
-		if inst.AutoYes {
-			inst.TapEnter()
-		} else {
-			inst.SetStatus(session.NeedsInput)
-		}
-	case tmux.PanePromptManual:
-		inst.SetStatus(session.NeedsInput)
-	case tmux.PaneIdle:
-		inst.SetStatus(session.Ready)
-	case tmux.PaneUnknown:
-	}
-}
-
 // instancePolledMsg carries the result of an off-cadence poll of a single instance,
 // triggered when the selection changes or a session is detached. It refreshes that one
 // instance's status immediately instead of waiting up to a full 500ms metadata tick —

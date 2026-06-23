@@ -878,6 +878,35 @@ func (i *Instance) PollNow() tmux.PaneState {
 	return ts.PollNow()
 }
 
+// ApplyPaneState maps a polled pane state onto this instance's status and runs the
+// prompt side effects. It returns whether it tapped Enter on an auto-answerable prompt,
+// so callers that want to refresh derived state (e.g. the daemon's diff stats) can key
+// off it without re-deciding which states auto-answer.
+//
+// Prompt handling depends on AutoYes: with it on, auto-answer (tap Enter); with it off,
+// the session is blocked on the user, so surface NeedsInput. PanePromptManual surfaces
+// NeedsInput even under AutoYes — its auto-answer is destructive (claude's plan approval:
+// Enter accepts the plan AND enables auto-accept). PaneUnknown (an unreadable or
+// not-yet-started pane) leaves the status untouched.
+func (i *Instance) ApplyPaneState(state tmux.PaneState) (tapped bool) {
+	switch state {
+	case tmux.PaneWorking:
+		i.SetStatus(Running)
+	case tmux.PanePrompt:
+		if i.AutoYes {
+			i.TapEnter()
+			return true
+		}
+		i.SetStatus(NeedsInput)
+	case tmux.PanePromptManual:
+		i.SetStatus(NeedsInput)
+	case tmux.PaneIdle:
+		i.SetStatus(Ready)
+	case tmux.PaneUnknown:
+	}
+	return false
+}
+
 // CheckAndHandleTrustPrompt checks for and dismisses the startup gate for programs that
 // have one. The adapter guard skips the pane capture entirely for agents with no known
 // gates, where there is nothing to dismiss.

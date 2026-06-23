@@ -243,56 +243,6 @@ func TestInstanceStartedMsgSetsRunning(t *testing.T) {
 		"a completed start must transition the instance out of Loading on the main thread")
 }
 
-func TestApplyPaneState(t *testing.T) {
-	newInst := func(autoYes bool) *session.Instance {
-		inst, err := session.NewInstance(session.InstanceOptions{
-			Title: "s", Path: t.TempDir(), Program: "claude",
-		})
-		require.NoError(t, err)
-		inst.AutoYes = autoYes
-		inst.SetStatus(session.Loading) // a recognizable prior state
-		return inst
-	}
-
-	t.Run("working → Running", func(t *testing.T) {
-		inst := newInst(false)
-		applyPaneState(inst, tmux.PaneWorking)
-		require.Equal(t, session.Running, inst.GetStatus())
-	})
-
-	t.Run("idle → Ready", func(t *testing.T) {
-		inst := newInst(false)
-		applyPaneState(inst, tmux.PaneIdle)
-		require.Equal(t, session.Ready, inst.GetStatus())
-	})
-
-	t.Run("prompt with AutoYes off → NeedsInput", func(t *testing.T) {
-		inst := newInst(false)
-		applyPaneState(inst, tmux.PanePrompt)
-		require.Equal(t, session.NeedsInput, inst.GetStatus())
-	})
-
-	t.Run("prompt with AutoYes on → not NeedsInput (auto-answered)", func(t *testing.T) {
-		inst := newInst(true)
-		applyPaneState(inst, tmux.PanePrompt)
-		require.NotEqual(t, session.NeedsInput, inst.GetStatus())
-	})
-
-	t.Run("manual prompt → NeedsInput even with AutoYes on", func(t *testing.T) {
-		// The plan-approval dialog: auto-Enter would accept the plan and enable
-		// auto-accept, so autoyes must surface it instead of answering.
-		inst := newInst(true)
-		applyPaneState(inst, tmux.PanePromptManual)
-		require.Equal(t, session.NeedsInput, inst.GetStatus())
-	})
-
-	t.Run("unknown → status unchanged", func(t *testing.T) {
-		inst := newInst(false)
-		applyPaneState(inst, tmux.PaneUnknown)
-		require.Equal(t, session.Loading, inst.GetStatus(), "an unreadable pane must not flip the status")
-	})
-}
-
 // TestConfirmationModalStateTransitions tests state transitions without full instance setup
 func TestConfirmationModalStateTransitions(t *testing.T) {
 	// Create a minimal home struct for testing state transitions
