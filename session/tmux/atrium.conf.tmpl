@@ -24,6 +24,14 @@ set-option -g  set-titles-string  "Atrium · #{?@atrium_name,#{@atrium_name},#{s
 set-option -g  history-limit      10000
 set-option -g  mouse              on
 
+# Make tmux's own copy reach the system clipboard via OSC 52, even though the
+# tmux-256color terminfo lacks an Ms entry. Without this, mouse / copy-mode
+# selections land only in a tmux paste buffer and never update the OS clipboard,
+# so a paste returns stale content. set-clipboard on also lets programs running
+# in the pane set the clipboard.
+set-option -g  set-clipboard      on
+set-option -ga terminal-overrides ",*:Ms=\E]52;%p1%s;%p2%s\7"
+
 {{if .ContextBar -}}
 # In-session context as a single, minimal top header carrying session identity
 # (<glyph> <repo> · <name>), drawn at the very top so it stays clear of the agent's

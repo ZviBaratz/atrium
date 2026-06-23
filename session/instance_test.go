@@ -153,7 +153,7 @@ func TestPause_ClearsCachedDirtyDiffStat(t *testing.T) {
 	inst := &Instance{Title: "sess", status: Running, started: true, gitWorktree: wt, tmuxSession: ts}
 	inst.diffStats = &git.DiffStats{Added: 1, FilesChanged: 1, Dirty: true}
 
-	require.NoError(t, inst.pause(false))
+	require.NoError(t, inst.pause())
 	require.True(t, inst.Paused(), "instance must be paused")
 	require.NotNil(t, inst.GetDiffStats())
 	assert.False(t, inst.GetDiffStats().Dirty,

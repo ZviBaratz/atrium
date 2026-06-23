@@ -19,8 +19,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-
-	"github.com/atotto/clipboard"
 )
 
 // ErrNoWorktree is returned by GetGitWorktree for a direct (non-git) session, which has
@@ -1189,16 +1187,15 @@ func (i *Instance) Pause() error {
 	if i.direct {
 		return fmt.Errorf("cannot pause a direct (non-git) session: it runs in place with no worktree to free")
 	}
-	return i.pause(true)
+	return i.pause()
 }
 
 // RecoverLostSession transitions an instance whose tmux pane has died (server
 // restart, agent exit, external kill) into Paused, so the metadata loop stops
 // polling it and the user can bring it back with Resume. It reuses the Pause path —
-// committing any uncommitted work and removing the worktree — but does not copy the
-// branch to the clipboard, since the user did not initiate the transition.
+// committing any uncommitted work and removing the worktree.
 func (i *Instance) RecoverLostSession() error {
-	return i.pause(false)
+	return i.pause()
 }
 
 // Auto-commit marker. Pause commits a dirty worktree under this message so work
@@ -1219,7 +1216,7 @@ func isAutoPauseCommit(subject string) bool {
 }
 
 // pause stops the tmux session and removes the worktree, preserving the branch.
-func (i *Instance) pause(copyBranchToClipboard bool) error {
+func (i *Instance) pause() error {
 	if !i.isStarted() {
 		return fmt.Errorf("cannot pause instance that has not been started")
 	}
@@ -1274,9 +1271,6 @@ func (i *Instance) pause(copyBranchToClipboard bool) error {
 		// uncommitted changes.
 		i.clearCachedDirty()
 		i.SetStatus(Paused)
-		if copyBranchToClipboard {
-			_ = clipboard.WriteAll(wt.GetBranchName())
-		}
 		return i.combineErrors(errs)
 	}
 
@@ -1326,9 +1320,6 @@ func (i *Instance) pause(copyBranchToClipboard bool) error {
 	// dialog and a stale pencil glyph in the list.
 	i.clearCachedDirty()
 	i.SetStatus(Paused)
-	if copyBranchToClipboard {
-		_ = clipboard.WriteAll(wt.GetBranchName())
-	}
 
 	if err := i.combineErrors(errs); err != nil {
 		log.ErrorLog.Print(err)

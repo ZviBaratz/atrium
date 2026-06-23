@@ -30,6 +30,10 @@ func TestRenderManagedConfig(t *testing.T) {
 		"@atrium_left",
 		"pane-border-status off",
 		"set-titles on",
+		// Copy must reach the OS clipboard: set-clipboard on + an OSC 52 Ms
+		// override (tmux-256color has no Ms), or in-pane copies never leave tmux.
+		"set-clipboard on",
+		`Ms=\E]52`,
 	} {
 		if !strings.Contains(onStr, want) {
 			t.Errorf("context-bar config missing %q\n---\n%s", want, onStr)
@@ -60,5 +64,11 @@ func TestRenderManagedConfig(t *testing.T) {
 	// The terminal-title fix is independent of the bar toggle.
 	if !strings.Contains(offStr, "set-titles on") {
 		t.Errorf("set-titles should be on regardless of the bar\n---\n%s", offStr)
+	}
+	// Clipboard fix is likewise unconditional.
+	for _, want := range []string{"set-clipboard on", `Ms=\E]52`} {
+		if !strings.Contains(offStr, want) {
+			t.Errorf("disabled config missing %q (clipboard fix is unconditional)\n---\n%s", want, offStr)
+		}
 	}
 }
