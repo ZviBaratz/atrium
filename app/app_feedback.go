@@ -59,7 +59,8 @@ func (m *home) persistInstances() error {
 }
 
 // moveAndPersist runs a list-reorder closure; if it changed the order it persists
-// and re-selects. A persist failure is surfaced; a no-op move is a clean no-op.
+// and refreshes the selected session's preview. A persist failure is surfaced; a
+// no-op move is a clean no-op.
 func (m *home) moveAndPersist(move func() bool) (tea.Model, tea.Cmd) {
 	if !move() {
 		return m, nil
