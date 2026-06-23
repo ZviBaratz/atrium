@@ -304,13 +304,16 @@ func tickUpdateMetadataCmd(active []*session.Instance, selected *session.Instanc
 				r := &results[i]
 				r.instance = instance
 				// A started session whose tmux pane has died would fail every probe
-				// (capture, diff) and flood the log/error box. Detect it once here
-				// (read-only) and skip polling; the main thread recovers it to Paused.
-				if instance.Started() && !instance.Paused() && !instance.TmuxAlive() {
+				// (capture, diff) and flood the log/error box. Poll reports a dead
+				// session as PaneDead from its own (single) has-session check, so derive
+				// sessionLost from that rather than forking a second has-session here.
+				// The main thread recovers it to Paused, debounced by recoverLostInstances
+				// (which also re-guards Paused, so a raced-paused instance is ignored).
+				r.state = instance.Poll()
+				if r.state == tmux.PaneDead {
 					r.sessionLost = true
 					return
 				}
-				r.state = instance.Poll()
 				// Only probe readiness while a prompt is actually queued (a brief
 				// window after a new session), so the extra pane capture is rare.
 				if instance.Prompt != "" {

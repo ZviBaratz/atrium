@@ -332,6 +332,13 @@ func TestApplyPaneState(t *testing.T) {
 		require.False(t, inst.ApplyPaneState(tmux.PaneUnknown))
 		require.Equal(t, Loading, inst.GetStatus(), "an unreadable pane must not flip the status")
 	})
+
+	t.Run("dead → status unchanged, no tap", func(t *testing.T) {
+		inst := newInst(false)
+		require.False(t, inst.ApplyPaneState(tmux.PaneDead))
+		require.Equal(t, Loading, inst.GetStatus(),
+			"a dead session must not flip the status; recovery to Paused is handled separately")
+	})
 }
 
 // ApprovePrompt is the user-initiated twin of the autoyes TapEnter: it must work

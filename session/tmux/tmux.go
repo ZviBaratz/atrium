@@ -47,6 +47,10 @@ const (
 	PanePromptManual
 	// PaneIdle means the agent has settled with nothing pending.
 	PaneIdle
+	// PaneDead means the tmux session no longer exists. Distinct from PaneUnknown
+	// (a transient read failure of a live session): the metadata loop flags only a
+	// PaneDead session for lost-session recovery. Runtime-only, never persisted.
+	PaneDead
 )
 
 // markerWorking reports whether this session's agent shows its busy marker in the live
@@ -746,10 +750,11 @@ func (t *Session) Poll() PaneState {
 	t.monitorMu.Lock()
 	defer t.monitorMu.Unlock()
 	// A dead/missing session can never be working; probing it would fail every tick
-	// and flood the log. The caller (metadata loop) detects the dead session
-	// separately and recovers the instance to Paused.
+	// and flood the log. Report PaneDead (not PaneUnknown) so the metadata loop can
+	// derive sessionLost from this single check and recover the instance to Paused,
+	// without forking a second has-session of its own.
 	if !t.DoesSessionExist() {
-		return PaneUnknown
+		return PaneDead
 	}
 	raw, err := t.CapturePaneContent()
 	if err != nil {
@@ -874,7 +879,7 @@ func (t *Session) PollNow() PaneState {
 	t.monitorMu.Lock()
 	defer t.monitorMu.Unlock()
 	if !t.DoesSessionExist() {
-		return PaneUnknown
+		return PaneDead
 	}
 	raw, err := t.CapturePaneContent()
 	if err != nil {

@@ -170,6 +170,28 @@ func TestPollersSkipCaptureWhenSessionDead(t *testing.T) {
 	require.False(t, captured, "capture-pane must not run when the tmux session is dead")
 }
 
+// A dead/missing session must classify as PaneDead (distinct from the PaneUnknown a
+// transient capture failure yields), so the metadata loop can flag it lost from this one
+// has-session check instead of forking its own. Neither poller may run capture-pane.
+func TestPollersReturnDeadWhenSessionDead(t *testing.T) {
+	captured := false
+	cmdExec := cmd_test.MockCmdExec{
+		RunFunc: func(cmd *exec.Cmd) error {
+			// has-session fails => the session no longer exists.
+			return fmt.Errorf("can't find session")
+		},
+		OutputFunc: func(cmd *exec.Cmd) ([]byte, error) {
+			captured = true
+			return nil, fmt.Errorf("error capturing pane content: exit status 1")
+		},
+	}
+	s := NewSessionWithDeps(context.Background(), "dead", "claude", NewMockPtyFactory(t), cmdExec)
+
+	require.Equal(t, PaneDead, s.Poll(), "a dead session must classify as PaneDead")
+	require.Equal(t, PaneDead, s.PollNow(), "a dead session must classify as PaneDead")
+	require.False(t, captured, "capture-pane must not run when the tmux session is dead")
+}
+
 // The happy path must keep working: an alive session still captures. For a program with
 // no busy marker, freshly seen content classifies as working (the content-change path),
 // which the HasUpdated shim reports as updated.
