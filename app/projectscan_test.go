@@ -67,6 +67,12 @@ func TestCandidateRepoPaths_DropsMissingKnownProjects(t *testing.T) {
 // A completed scan is stored, persisted, and live-updates an open create form
 // without disturbing the typed filter.
 func TestProjectScanDone_PersistsAndLiveUpdatesForm(t *testing.T) {
+	// Isolate cwd: candidateRepoPaths() includes os.Getwd(), and the picker
+	// fuzzy-matches full paths. A worktree path containing the subsequence
+	// z-e-b-r-a would otherwise match the "zebra" filter and pin the selection
+	// to cwd, masking the scanned repo (issue #169).
+	t.Chdir(t.TempDir())
+
 	scannedRepo := t.TempDir() + "/zebra-service"
 	require.NoError(t, os.MkdirAll(scannedRepo, 0o755))
 
