@@ -1177,7 +1177,6 @@ func (i *Instance) TmuxAlive() bool {
 }
 
 // Pause stops the tmux session and removes the worktree, preserving the branch.
-// It copies the branch name to the clipboard so the user can check it out elsewhere.
 //
 // A direct (non-git) session has no worktree to free and runs in the user's real
 // directory, so "pausing" it would only detach a still-running agent while the UI
