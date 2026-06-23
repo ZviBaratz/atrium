@@ -4,6 +4,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/ZviBaratz/atrium/log"
 )
 
 // revListCacheTTL is how long the rev-list commit counts (ahead/behind) returned
@@ -73,11 +75,9 @@ func (g *Worktree) Diff() *DiffStats {
 	// against the local without holding the lock.
 	wt := g.snapshotWorktreePath()
 
-	// Intent-to-add untracked files so they appear in the diff (see intentAddUntracked).
-	if err := g.intentAddUntracked(wt); err != nil {
-		stats.Error = err
-		return stats
-	}
+	// Surface untracked files in the diff (see intentAddUntracked). Best-effort: a
+	// failure here must not blank the diff, so its error is intentionally not propagated.
+	g.intentAddUntracked(wt)
 
 	content, err := g.runGitCommand(wt, "--no-pager", "diff", g.GetBaseCommitSHA())
 	if err != nil {
@@ -108,11 +108,8 @@ func (g *Worktree) DiffNumstat() *DiffStats {
 	// See Diff: snapshot the worktree path so a concurrent rename can't tear the read.
 	wt := g.snapshotWorktreePath()
 
-	// Intent-to-add untracked files so they appear in the diff (see intentAddUntracked).
-	if err := g.intentAddUntracked(wt); err != nil {
-		stats.Error = err
-		return stats
-	}
+	// See Diff: best-effort intent-add, error intentionally not propagated.
+	g.intentAddUntracked(wt)
 
 	out, err := g.runGitCommand(wt, "--no-pager", "diff", "--numstat", g.GetBaseCommitSHA())
 	if err != nil {
@@ -134,53 +131,43 @@ func (g *Worktree) snapshotWorktreePath() string {
 	return g.worktreePath
 }
 
-// intentAddUntracked stages untracked files as intent-to-add (git add -N) so they
-// appear in `git diff <base>`, scoped to only the paths git reports as untracked. It
-// is a no-op when nothing is untracked (the common steady state), so — unlike the old
-// unconditional `add -N .` that ran on every 500ms poll tick — it never walks and
-// rewrites the index, and never leaves intent-to-add residue in the worktree the agent
-// is actively using (that residue breaks the agent's own `git stash`). On a status
-// failure it falls back to the unconditional `add -N .` so the diff never silently
-// drops untracked files.
-func (g *Worktree) intentAddUntracked(wt string) error {
-	// -z emits raw, NUL-terminated paths; the default --porcelain C-quotes paths with
-	// tabs/unicode/quotes, which would not round-trip through `add -N --`.
-	out, err := g.runGitCommand(wt, "status", "--porcelain", "-z")
+// intentAddUntracked makes the agent's untracked files visible in `git diff <base>`
+// by staging just those paths as intent-to-add (`git add -N`). The old code ran an
+// unconditional `add -N .` on every 500ms poll tick, which rewrites the index even when
+// the worktree is clean — needless churn that also races the agent's own git operations
+// on the shared index. This first lists untracked paths with a read-only
+// `git ls-files --others` and only runs `add -N` when there is something to add, so the
+// common steady state costs one read-only tree walk and no index write.
+//
+// ls-files (rather than parsing `git status`) is deliberate: it is not affected by
+// `status.showUntrackedFiles`, so new files still surface even when the user has
+// configured `git status` to hide untracked files — matching the original `add .`, which
+// ignored that setting (a status-based scan would silently drop them). `--exclude-standard`
+// applies .gitignore/exclude exactly like `add -N .` did, and `--directory` collapses a
+// wholly-untracked directory to a single `dir/` entry that `add -N -- dir/` recurses into,
+// bounding the argument list.
+//
+// It is best-effort and never blocks the diff: on failure the untracked files are simply
+// absent from this tick (tracked changes still render) and the next poll retries. In
+// particular `add -N` is allowed to fail silently on the common race where the agent
+// creates and then deletes an untracked temp/swap file between the listing and the add —
+// failing the whole command there would otherwise blank the diff on every editor write.
+func (g *Worktree) intentAddUntracked(wt string) {
+	// -z emits raw, NUL-terminated paths so names with spaces/tabs/unicode round-trip
+	// through `add -N --` without the C-quoting git applies by default.
+	out, err := g.runGitCommand(wt, "ls-files", "--others", "--exclude-standard", "--directory", "-z")
 	if err != nil {
-		_, ferr := g.runGitCommand(wt, "add", "-N", ".")
-		return ferr
+		log.WarningLog.Printf("intent-add: list untracked files failed: %v", err)
+		return
 	}
-	paths := parsePorcelainUntracked(out)
-	if len(paths) == 0 {
-		return nil
+	out = strings.TrimRight(out, "\x00")
+	if out == "" {
+		return
 	}
-	_, err = g.runGitCommand(wt, append([]string{"add", "-N", "--"}, paths...)...)
-	return err
-}
-
-// parsePorcelainUntracked extracts the untracked-file paths (porcelain "??" entries)
-// from `git status --porcelain -z` output. Records are NUL-terminated; the first two
-// bytes are the XY status, byte 2 is a space, then the raw path. Untracked directories
-// come back as a single "dir/" entry, which `git add -N -- dir/` recurses into — so the
-// scoped intent-add reproduces `add -N .` exactly. Rename/copy records (status starting
-// with 'R'/'C') carry a second NUL-terminated source field, consumed and ignored here so
-// it is never misread as a separate record.
-func parsePorcelainUntracked(out string) []string {
-	var paths []string
-	records := strings.Split(out, "\x00")
-	for i := 0; i < len(records); i++ {
-		rec := records[i]
-		if len(rec) < 4 { // "XY p" minimum; also skips the trailing empty element
-			continue
-		}
-		switch status := rec[:2]; {
-		case status == "??":
-			paths = append(paths, rec[3:])
-		case status[0] == 'R' || status[0] == 'C':
-			i++ // skip the source-path field that follows a rename/copy
-		}
-	}
-	return paths
+	paths := strings.Split(out, "\x00")
+	// Tolerate a path that vanished between the listing and the add (see above); the
+	// next poll recovers, so a transient race must not surface as a diff error.
+	_, _ = g.runGitCommand(wt, append([]string{"add", "-N", "--"}, paths...)...)
 }
 
 // computeRepoStats fills in the commit/behind/dirty fields on stats. It is

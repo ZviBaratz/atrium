@@ -147,6 +147,37 @@ func TestDiff_IgnoredFileExcluded(t *testing.T) {
 	}
 }
 
+// TestDiff_UntrackedShownDespiteShowUntrackedFilesNo is the regression test for the
+// config-independence of untracked discovery: a user (or repo) may set
+// `status.showUntrackedFiles=no`, which makes `git status` hide untracked files. The old
+// `git add -N .` ignored that setting, so untracked files always showed in the diff;
+// intentAddUntracked must preserve that by listing via `git ls-files --others` (which is
+// not governed by the setting) rather than parsing `git status`.
+func TestDiff_UntrackedShownDespiteShowUntrackedFilesNo(t *testing.T) {
+	repoPath := newTestRepo(t)
+	wt := setupSessionWorktree(t, repoPath, "sess")
+	wtPath := wt.GetWorktreePath()
+
+	// Hide untracked files from `git status` in this worktree's config. If
+	// intentAddUntracked derived its paths from status, new.txt would vanish from the diff.
+	mustRunGit(t, wtPath, "config", "status.showUntrackedFiles", "no")
+
+	if err := os.WriteFile(filepath.Join(wtPath, "new.txt"), []byte("brand new\n"), 0644); err != nil {
+		t.Fatalf("write new.txt: %v", err)
+	}
+
+	stats := wt.Diff()
+	if stats.Error != nil {
+		t.Fatalf("Diff error: %v", stats.Error)
+	}
+	if !strings.Contains(stats.Content, "new.txt") || !strings.Contains(stats.Content, "brand new") {
+		t.Errorf("untracked file hidden from diff under status.showUntrackedFiles=no:\n%s", stats.Content)
+	}
+	if stats.FilesChanged != 1 {
+		t.Errorf("Diff FilesChanged = %d, want 1", stats.FilesChanged)
+	}
+}
+
 // TestDiff_RepoStats exercises the real git wiring for commits/behind/dirty/files
 // end-to-end, which is where a swapped left/right or wrong base ref would surface.
 func TestDiff_RepoStats(t *testing.T) {

@@ -2,7 +2,6 @@ package git
 
 import (
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 )
@@ -65,61 +64,6 @@ func TestParseNumstat(t *testing.T) {
 			if gotAdded != tt.wantAdded || gotRemoved != tt.wantRemoved || gotFiles != tt.wantFiles {
 				t.Errorf("parseNumstat(%q) = (%d, %d, %d), want (%d, %d, %d)",
 					tt.input, gotAdded, gotRemoved, gotFiles, tt.wantAdded, tt.wantRemoved, tt.wantFiles)
-			}
-		})
-	}
-}
-
-func TestParsePorcelainUntracked(t *testing.T) {
-	// Records are NUL-terminated in `git status --porcelain -z`; join with \x00 and
-	// add a trailing \x00 to mimic git's output (every record ends with a NUL).
-	rec := func(parts ...string) string {
-		var b strings.Builder
-		for _, p := range parts {
-			b.WriteString(p)
-			b.WriteByte(0)
-		}
-		return b.String()
-	}
-	tests := []struct {
-		name  string
-		input string
-		want  []string
-	}{
-		{name: "empty output", input: "", want: nil},
-		{name: "single untracked", input: rec("?? a.txt"), want: []string{"a.txt"}},
-		{
-			name:  "modified tracked excluded, untracked kept",
-			input: rec(" M tracked.txt", "?? new.txt"),
-			want:  []string{"new.txt"},
-		},
-		{name: "untracked directory keeps trailing slash", input: rec("?? sub/"), want: []string{"sub/"}},
-		{name: "path with spaces preserved raw", input: rec("?? with space.txt"), want: []string{"with space.txt"}},
-		{name: "path with tab preserved raw", input: rec("?? tab\tname.txt"), want: []string{"tab\tname.txt"}},
-		{
-			// A rename emits "<new>\0<old>\0"; the source field must be consumed, not
-			// misread as an untracked path, and the following "??" must still be found.
-			name:  "rename source field is skipped",
-			input: rec("R  new.txt", "old.txt", "?? u.txt"),
-			want:  []string{"u.txt"},
-		},
-		{
-			name:  "multiple untracked",
-			input: rec("?? a.txt", "?? b/", "?? c.txt"),
-			want:  []string{"a.txt", "b/", "c.txt"},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := parsePorcelainUntracked(tt.input)
-			if len(got) != len(tt.want) {
-				t.Fatalf("parsePorcelainUntracked(%q) = %q, want %q", tt.input, got, tt.want)
-			}
-			for i := range got {
-				if got[i] != tt.want[i] {
-					t.Fatalf("parsePorcelainUntracked(%q) = %q, want %q", tt.input, got, tt.want)
-				}
 			}
 		})
 	}
