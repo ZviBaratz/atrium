@@ -116,7 +116,7 @@ type instancePolledMsg struct {
 
 // pollSelectedCmd polls a single instance off the UI thread for an immediate status
 // refresh. Returns nil for a session that can't be polled; Poll itself also yields
-// PaneUnknown for a dead session, which ApplyPaneState ignores.
+// PaneDead for a dead session, which ApplyPaneState ignores.
 //
 // fresh selects PollNow over Poll: use it after a detach, where the tick stream was stalled
 // while attached so the hysteresis state is stale and a face-value snapshot is correct. A
