@@ -49,10 +49,8 @@ func (g *Worktree) Setup() error {
 func (g *Worktree) setupFromExistingBranch() error {
 	// Directory already created in Setup(), skip duplicate creation
 
-	// Clean up any existing worktree first
-	_, _ = g.runGitCommand(g.repoPath, "worktree", "remove", "-f", g.worktreePath) // Ignore error if worktree doesn't exist
-	// If the directory is still there (orphaned, not registered with git), drop it so `git worktree add` won't fail.
-	_ = os.RemoveAll(g.worktreePath)
+	// Clean up any existing worktree first.
+	g.clearStaleWorktree()
 
 	// Check if the local branch exists
 	_, localErr := g.runGitCommand(g.repoPath, "show-ref", "--verify", fmt.Sprintf("refs/heads/%s", g.branchName))
@@ -126,10 +124,8 @@ func busyBranchHolder(err error) (string, bool) {
 // setupNewWorktree creates a new worktree on a fresh session branch, started from g.baseRef
 // (an existing branch to base on) or HEAD when baseRef is empty.
 func (g *Worktree) setupNewWorktree() error {
-	// Clean up any existing worktree first
-	_, _ = g.runGitCommand(g.repoPath, "worktree", "remove", "-f", g.worktreePath) // Ignore error if worktree doesn't exist
-	// If the directory is still there (orphaned, not registered with git), drop it so `git worktree add` won't fail.
-	_ = os.RemoveAll(g.worktreePath)
+	// Clean up any existing worktree first.
+	g.clearStaleWorktree()
 
 	// Clean up any existing branch using git CLI (much faster than go-git PlainOpen)
 	_, _ = g.runGitCommand(g.repoPath, "branch", "-D", g.branchName) // Ignore error if branch doesn't exist
@@ -260,6 +256,18 @@ func (g *Worktree) Cleanup() error {
 	}
 
 	return nil
+}
+
+// clearStaleWorktree force-removes any worktree registration at g.worktreePath
+// and deletes a leftover directory, so a subsequent `git worktree add` starts
+// from a clean slate. Best-effort: the registration may not exist, and the
+// directory delete is guarded so it refuses anything outside the managed
+// worktrees/ tree (see removeOrphanedWorktreeDir).
+func (g *Worktree) clearStaleWorktree() {
+	_, _ = g.runGitCommand(g.repoPath, "worktree", "remove", "-f", g.worktreePath) // Ignore error if worktree doesn't exist
+	if err := removeOrphanedWorktreeDir(g.worktreePath); err != nil {
+		log.WarningLog.Printf("failed to clear stale worktree dir %s: %v", g.worktreePath, err)
+	}
 }
 
 // removeOrphanedWorktreeDir deletes worktreePath, but only when it lives under the

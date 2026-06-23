@@ -263,6 +263,33 @@ func TestRemoveOrphanedWorktreeDir(t *testing.T) {
 	}
 }
 
+// TestClearStaleWorktree_RefusesPathOutsideManagedTree locks in the safety
+// guarantee the setup paths previously bypassed: clearStaleWorktree routes its
+// directory delete through the guarded removeOrphanedWorktreeDir, so a worktree
+// path outside the managed worktrees/ tree must be left untouched rather than
+// recursively deleted.
+func TestClearStaleWorktree_RefusesPathOutsideManagedTree(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	outside := filepath.Join(t.TempDir(), "important")
+	sentinel := filepath.Join(outside, "keep.txt")
+	if err := os.MkdirAll(outside, 0755); err != nil {
+		t.Fatalf("mkdir outside: %v", err)
+	}
+	if err := os.WriteFile(sentinel, []byte("precious"), 0644); err != nil {
+		t.Fatalf("write sentinel: %v", err)
+	}
+
+	// repoPath is empty so the best-effort `git worktree remove` is a no-op; the
+	// guarded directory delete is what must refuse to touch this path.
+	g := &Worktree{worktreePath: outside}
+	g.clearStaleWorktree()
+
+	if _, err := os.Stat(sentinel); err != nil {
+		t.Fatalf("path outside the managed tree must be left intact, got %v", err)
+	}
+}
+
 func mustRunGit(t *testing.T, dir string, args ...string) string {
 	t.Helper()
 
