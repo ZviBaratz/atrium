@@ -147,6 +147,10 @@ type home struct {
 	// lostStrikes counts consecutive ticks each instance has been seen with a dead
 	// tmux session, debouncing auto-recovery to Paused (see recoverLostInstances).
 	lostStrikes map[*session.Instance]int
+	// metadataTick counts metadata poll cycles. Non-selected sessions are only fully
+	// swept every metadataFullSweepEvery ticks (see tickUpdateMetadataCmd); the counter
+	// drives that cadence.
+	metadataTick uint64
 	// appConfig stores persistent application configuration
 	appConfig *config.Config
 	// appState stores persistent application state like seen help screens
@@ -245,6 +249,11 @@ type home struct {
 	// generatingName guards against launching a second auto-name request while one
 	// is already in flight, and drives the "Generating name…" hint-bar state.
 	generatingName bool
+
+	// smartDispatchSeededTitle is the deterministic placeholder title the async form
+	// opened with. The routing call's (better) title replaces it only while the field
+	// still equals this — i.e. the user hasn't typed their own.
+	smartDispatchSeededTitle string
 
 	// hintScreen is the frozen, labeled capture hint mode is acting on.
 	// hintTyped is the entered label prefix, and hintOpenVariant records
@@ -364,7 +373,7 @@ func (m *home) Init() tea.Cmd {
 			time.Sleep(100 * time.Millisecond)
 			return previewTickMsg{}
 		},
-		tickUpdateMetadataCmd(m.snapshotActiveInstances(), m.list.GetSelectedInstance()),
+		tickUpdateMetadataCmd(m.snapshotActiveInstances(), m.list.GetSelectedInstance(), true), // first tick: full sweep
 		m.updateCheckCmd(),   // nil (inert) is fine: tea.Batch skips nil cmds
 		m.driftCheckCmd(),    // agent-heuristic drift hint
 		m.releaseNotesCmd(),  // nil (inert) is fine: tea.Batch skips nil cmds

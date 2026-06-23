@@ -29,11 +29,17 @@ var claude = &Adapter{
 	DisplayName: "Claude Code",
 	aliases:     []string{"claude"},
 
-	// Heuristic strings verified against claude 2.1.170 (see Prompts provenance).
-	// Patch granularity: claude rewords gating strings inside patch releases, so
-	// any version above this ceiling is unverified — a coarser granularity would
-	// silently miss real drift.
-	VerifiedVersion:  "2.1.170",
+	// Heuristic strings re-verified against a live claude 2.1.185 binary
+	// (2026-06-22). Not unchanged since 2.1.170: the folder-trust dialog was
+	// reworded (see the Gates comment + registry_test.go claudeTrustPane), now
+	// matched in both forms. Confirmed still valid at 2.1.185: the busy marker
+	// "esc to interrupt" (live capture), the login-error "Please run /login ·"
+	// separator (bundle render "Please run /login \xB7 …"), and the permission /
+	// plan / model-error / selection / MCP literals. Patch granularity: claude
+	// rewords gating strings inside patch releases, so any version above this
+	// ceiling is unverified — a coarser granularity would silently miss real
+	// drift.
+	VerifiedVersion:  "2.1.185",
 	DriftGranularity: GranularityPatch,
 
 	// The footer renders e.g. "✻ Cogitating… (5s · esc to interrupt)" below the
@@ -103,7 +109,19 @@ var claude = &Adapter{
 	PermissionMode: claudePermissionMode,
 
 	Gates: []Gate{
-		{Contains: []string{"Do you trust the files in this folder?", "new MCP server", "New MCP server"},
+		// Folder-trust dialog. Claude reworded it after 2.1.170: the old title
+		// "Do you trust the files in this folder?" is gone, replaced at 2.1.18x
+		// by a "Quick safety check…" dialog whose confirm button reads "Yes, I
+		// trust this folder" (pinned against a live 2.1.185 capture, see
+		// registry_test.go claudeTrustPane). Both are matched so the gate fires
+		// across the supported range; remove the old title once <2.1.18x is
+		// unsupported. "Enter to confirm" accepts the pre-highlighted trust
+		// option in both, so DismissEnter is still correct. Plus the MCP-approval
+		// prompt (capital- and lowercase-N variants).
+		{Contains: []string{
+			"Yes, I trust this folder",
+			"Do you trust the files in this folder?",
+			"new MCP server", "New MCP server"},
 			Dismiss: DismissEnter},
 	},
 

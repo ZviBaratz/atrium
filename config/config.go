@@ -229,6 +229,13 @@ type Config struct {
 	// acceptEdits, auto), "off" hides it. Everything else normalizes to "on"
 	// (GetPermissionIndicator).
 	PermissionIndicator string `json:"permission_indicator,omitempty"`
+	// SmartDispatchAuto, when true, lets a confident deterministic project match from the
+	// smart-dispatch input (the `i` key) create the session immediately, skipping the
+	// confirmation form. Off (nil) by default: the pre-filled form always opens first.
+	// Never applies to an LLM-routed guess — only an exact, unambiguous local match.
+	// Auto-created sessions use the agent's default permission mode (skipping the form
+	// forgoes the Permissions chip), so enable this only if that default suits you.
+	SmartDispatchAuto *bool `json:"smart_dispatch_auto,omitempty"`
 }
 
 // ModelIndicator modes (see Config.ModelIndicator).
@@ -392,6 +399,12 @@ func (c *Config) GetBranchPrefix() string {
 // such key) defaults to on.
 func (c *Config) GetKillDoubleTapConfirm() bool {
 	return c.KillDoubleTapConfirm == nil || *c.KillDoubleTapConfirm
+}
+
+// GetSmartDispatchAuto reports whether a confident deterministic smart-dispatch match
+// may create a session without the confirmation form. Off by default (nil → false).
+func (c *Config) GetSmartDispatchAuto() bool {
+	return c.SmartDispatchAuto != nil && *c.SmartDispatchAuto
 }
 
 // GetTrustWorktreesRoot reports whether Atrium should pre-accept Claude Code's

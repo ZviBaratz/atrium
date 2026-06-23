@@ -161,8 +161,12 @@ type TextInputOverlay struct {
 	branchPicker    *BranchPicker
 	stops           []focusStop // ordered focusable stops actually present
 	isCreateForm    bool        // true for the new-session form (has a title field)
+	smartDispatch   bool        // true for the single-line smart-dispatch input overlay
 	submitOnEnter   bool        // true for the quick-send overlay: Enter submits, Alt+Enter is a newline
-	defaultProgram  string      // the program used when no profile is selected (create form only)
+	// projectHint is a transient inline note rendered beside the project picker on the
+	// create form (e.g. "detecting…" while smart dispatch routes asynchronously). Empty = none.
+	projectHint    string
+	defaultProgram string // the program used when no profile is selected (create form only)
 	// titleError is the inline validation message rendered (in the danger color) on
 	// the title label — e.g. a duplicate name in the target's repo group. The overlay
 	// is a dumb view: the app layer computes the verdict (live on keystrokes/path
@@ -190,6 +194,48 @@ func NewQuickSendOverlay(title string) *TextInputOverlay {
 	o := NewTextInputOverlay(title, "")
 	o.submitOnEnter = true
 	return o
+}
+
+// NewSmartDispatchOverlay creates the single-line input that opens the smart-dispatch
+// flow: the user types one free-form description, Enter submits it (like quick-send),
+// and the app routes it to a project and pre-fills the new-session form. The
+// smartDispatch flag lets the submit dispatcher tell it apart from quick-send.
+func NewSmartDispatchOverlay(title string) *TextInputOverlay {
+	o := NewTextInputOverlay(title, "")
+	o.submitOnEnter = true
+	o.smartDispatch = true
+	return o
+}
+
+// IsSmartDispatch reports whether this overlay is the smart-dispatch input.
+func (t *TextInputOverlay) IsSmartDispatch() bool {
+	return t.smartDispatch
+}
+
+// SetPrompt sets the prompt textarea's contents (used to pre-fill the create form).
+func (t *TextInputOverlay) SetPrompt(s string) {
+	t.textarea.SetValue(s)
+}
+
+// SetTitleValue sets the title field's text (create form only). It is distinct from
+// the Title struct field, which is the overlay's header caption.
+func (t *TextInputOverlay) SetTitleValue(s string) {
+	t.titleInput.SetValue(s)
+}
+
+// SelectPath pre-selects path in the project picker, returning false when path is not
+// a candidate. No-op (false) without a directory picker.
+func (t *TextInputOverlay) SelectPath(path string) bool {
+	if t.directoryPicker == nil {
+		return false
+	}
+	return t.directoryPicker.SelectPath(path)
+}
+
+// SetProjectHint sets (or, with "", clears) the transient note rendered beside the
+// project picker — e.g. "detecting…" while smart dispatch routes in the background.
+func (t *TextInputOverlay) SetProjectHint(s string) {
+	t.projectHint = s
 }
 
 // NewSessionCreateOverlay creates the unified new-session form: a title field, a prompt
@@ -430,6 +476,22 @@ func (t *TextInputOverlay) currentStop() focusStop {
 // it right after building the form so typing a name is immediate; the full flow
 // (`N`) keeps the default project-picker focus.
 func (t *TextInputOverlay) FocusTitle() { t.focusStop(stopTitle) }
+
+// FocusMode moves focus to the Permissions (mode) chip when it can take focus,
+// falling back to the Create button otherwise (the mode field is absent for a
+// non-claude program and disabled while a non-claude profile is selected). Smart
+// dispatch uses this on a confident match so the one decision it defers — the
+// permission mode — is the active field, a ←/→ away from plan and ⌃S from create.
+func (t *TextInputOverlay) FocusMode() {
+	if i := t.indexOfStop(stopMode); i >= 0 && t.stopEnabled(stopMode) {
+		t.setFocusIndex(i)
+		return
+	}
+	t.focusStop(stopEnter)
+}
+
+// ModeFocused reports whether the Permissions (mode) chip currently has focus.
+func (t *TextInputOverlay) ModeFocused() bool { return t.isModeField() }
 
 // TitleFocused reports whether the title field currently has focus.
 func (t *TextInputOverlay) TitleFocused() bool { return t.isTitle() }
@@ -1001,7 +1063,11 @@ func (t *TextInputOverlay) renderCreateForm(divider string) string {
 
 	b.WriteString(tiTitleStyle().Render(t.Title) + "\n")
 	if t.directoryPicker != nil {
-		section(t.directoryPicker.Render())
+		project := t.directoryPicker.Render()
+		if t.projectHint != "" {
+			project += "  " + tiHintStyle().Render(t.projectHint)
+		}
+		section(project)
 	}
 	if t.branchPicker != nil {
 		section(t.branchPicker.Render())

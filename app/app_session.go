@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -148,6 +149,125 @@ func runAutoNameCmd(ctx context.Context, instance *session.Instance, prompt stri
 		name, err := session.GenerateName(ctx, instance.Program, prompt, stats)
 		return autoNameDoneMsg{instance: instance, name: name, err: err}
 	}
+}
+
+// smartDispatchDoneMsg carries the result of an async smart-dispatch routing call.
+// form identifies the exact pre-filled overlay the call was launched for, so a result
+// that lands after the user moved on (cancelled, submitted, or opened a different form)
+// is discarded by identity. project is a repo basename ("" = no confident route); title
+// is a proposed session title ("" = none).
+type smartDispatchDoneMsg struct {
+	form    *overlay.TextInputOverlay
+	project string
+	title   string
+	err     error
+}
+
+// handleSmartDispatchSubmit routes a free-form line to a project and either creates the
+// session directly (opt-in auto-dispatch on a confident local match) or opens the
+// new-session form pre-filled for confirmation. When no project matches locally it opens
+// the form and kicks an async routing call (GenerateDispatch) to fill it in.
+func (m *home) handleSmartDispatchSubmit(line string) tea.Cmd {
+	line = strings.TrimSpace(line)
+	if line == "" {
+		m.textInputOverlay = nil
+		m.state = stateDefault
+		return nil
+	}
+	if limit := m.appConfig.GetMaxSessions(); limit > 0 && m.list.NumInstances() >= limit {
+		m.textInputOverlay = nil
+		m.state = stateDefault
+		return m.handleError(
+			fmt.Errorf("you can't create more than %d sessions (max_sessions in config.json)", limit))
+	}
+
+	// Seed the contextual default so it heads the candidate list (and is what an
+	// unmatched line falls back to), then route the line against the known repos.
+	m.newSessionPath = m.defaultNewSessionPath()
+	candidates := m.candidateRepoPaths()
+	res := ParsePrefill(line, candidates)
+
+	// Opt-in auto-dispatch: a confident, conflict-free local match creates the session
+	// without the form. Never fires on an LLM guess (those are never Confident).
+	if res.Confident && m.appConfig.GetSmartDispatchAuto() {
+		if cmd, ok := m.autoDispatch(res); ok {
+			return cmd
+		}
+		// A conflict or invalid target falls through to the seeded form below.
+	}
+
+	formCmd := m.openCreateFormSeeded(res.Path, false, &res)
+	if m.textInputOverlay == nil {
+		// The open was refused (e.g. max sessions); formCmd already carries the error.
+		return formCmd
+	}
+
+	// Decide whether to spend an async LLM call. An unconfident match needs the router
+	// for the project (and a title); a confident match already has the project but still
+	// upgrades a prose-y placeholder title. A confident, clean title needs neither and
+	// stays instant.
+	routing := !res.Confident
+	upgrade := res.Confident && res.TitleIsRough
+	if !routing && !upgrade {
+		return formCmd
+	}
+
+	m.smartDispatchSeededTitle = m.textInputOverlay.GetTitle()
+	hint := "refining title…"
+	if routing {
+		hint = "detecting project…"
+	}
+	m.textInputOverlay.SetProjectHint(hint)
+	return tea.Batch(formCmd, m.runSmartDispatchCmd(line, candidates, m.textInputOverlay))
+}
+
+// autoDispatch creates a session directly from a confident match, returning (cmd, true)
+// on success. It returns (nil, false) when the target is invalid or the title would
+// collide, so the caller can fall back to the confirmation form. Because it bypasses the
+// form, the session launches with the agent's default permission mode — opting into
+// smart_dispatch_auto deliberately trades away the per-session permission choice the
+// form's Permissions chip would otherwise offer.
+func (m *home) autoDispatch(res PrefillResult) (tea.Cmd, bool) {
+	valid, direct, _ := targetValidity(m.ctx, res.Path)
+	if !valid {
+		return nil, false
+	}
+	m.newSessionGroup = git.RepoGroupKey(m.ctx, res.Path)
+	if m.titleConflict(res.Title) != "" {
+		return nil, false
+	}
+	cmd, err := m.startNewSession(res.Title, res.Path, direct, m.program, "", res.Prompt, nil)
+	if err != nil {
+		return nil, false
+	}
+	m.textInputOverlay = nil
+	m.state = stateDefault
+	m.menu.SetState(ui.StateDefault)
+	m.resetTitleCheck()
+	return cmd, true
+}
+
+// runSmartDispatchCmd routes line against the candidate repos in a background goroutine
+// (the agent subprocess takes a few seconds) so the form stays responsive. The result
+// is tagged with the originating form so a stale answer is dropped by the handler.
+func (m *home) runSmartDispatchCmd(line string, candidates []string, form *overlay.TextInputOverlay) tea.Cmd {
+	ctx := m.ctx
+	program := m.program
+	return func() tea.Msg {
+		project, title, err := session.GenerateDispatch(ctx, program, line, candidates)
+		return smartDispatchDoneMsg{form: form, project: project, title: title, err: err}
+	}
+}
+
+// candidatePathForBasename maps a routing result's repo basename back to a concrete
+// candidate path, preferring the most-recent (first listed) on a basename collision.
+func (m *home) candidatePathForBasename(basename string) string {
+	for _, p := range m.candidateRepoPaths() {
+		if filepath.Base(p) == basename {
+			return p
+		}
+	}
+	return ""
 }
 
 // resumeSelected resumes a paused instance and persists the new running state
@@ -371,12 +491,23 @@ func (m *home) newSessionFormOverlay() (_ *overlay.TextInputOverlay, isGit bool)
 // git repo, a background fetch kicked off so branches are current by the time the
 // user reaches the branch field.
 func (m *home) openCreateForm(focusTitle bool) tea.Cmd {
+	return m.openCreateFormSeeded("", focusTitle, nil)
+}
+
+// openCreateFormSeeded is the shared body of openCreateForm and the smart-dispatch
+// confirm path. seedPath, when non-empty, overrides the contextual target (the matched
+// project). prefill, when non-nil, pre-fills the prompt/title and pre-selects the
+// project, and a confident prefill lands focus on Create rather than the title.
+func (m *home) openCreateFormSeeded(seedPath string, focusTitle bool, prefill *PrefillResult) tea.Cmd {
 	if limit := m.appConfig.GetMaxSessions(); limit > 0 && m.list.NumInstances() >= limit {
 		return m.handleError(
 			fmt.Errorf("you can't create more than %d sessions (max_sessions in config.json)", limit))
 	}
 
-	m.newSessionPath = m.defaultNewSessionPath()
+	m.newSessionPath = seedPath
+	if m.newSessionPath == "" {
+		m.newSessionPath = m.defaultNewSessionPath()
+	}
 	target := m.newSessionPath
 	// Scope the duplicate-title check to the target's repo group from the first
 	// keystroke (one sync git call, in line with the open-time plumbing below);
@@ -387,7 +518,26 @@ func (m *home) openCreateForm(focusTitle bool) tea.Cmd {
 	m.state = statePrompt
 	ov, isGit := m.newSessionFormOverlay()
 	m.textInputOverlay = ov
-	if focusTitle {
+	if prefill != nil {
+		ov.SetPrompt(prefill.Prompt)
+		if prefill.Title != "" {
+			ov.SetTitleValue(prefill.Title)
+		}
+		if prefill.Path != "" {
+			ov.SelectPath(prefill.Path)
+		}
+		if prefill.Confident {
+			// Project and title are trusted; land on the Permissions chip — the one
+			// decision smart dispatch deliberately defers (←/→ to plan, ⌃S to create).
+			// Falls back to the Create button when there is no mode field (non-claude).
+			ov.FocusMode()
+		} else {
+			ov.FocusTitle()
+		}
+		// A pre-filled title needs the same duplicate verdict a keystroke would trigger,
+		// so a collision shows inline (and is re-checked async) before the user submits.
+		m.refreshTitleError()
+	} else if focusTitle {
 		m.textInputOverlay.FocusTitle()
 	}
 	// Open the account picker on the auto-routed account for the contextual target,
@@ -420,6 +570,11 @@ func (m *home) openCreateForm(focusTitle bool) tea.Cmd {
 		cmds = append(cmds,
 			m.runBranchFetch(target),
 			m.runBranchSearch("", m.textInputOverlay.BranchFilterVersion()))
+	}
+	// Verify a pre-filled title against orphan branches in the seeded repo, the same
+	// async check a keystroke schedules (the inline in-memory verdict already ran above).
+	if prefill != nil && prefill.Title != "" {
+		cmds = append(cmds, m.scheduleTitleCheck(prefill.Title, target))
 	}
 	return tea.Batch(cmds...)
 }
@@ -547,6 +702,30 @@ func (m *home) createSessionFromForm(prompt string) tea.Cmd {
 		program = agent.WithPermissionModeFlag(program, mode)
 	}
 
+	var accountOverride *config.ClaudeAccount
+	if acct, ok := ov.GetSelectedAccount(); ok && acct.Name != "" {
+		accountOverride = &acct
+	}
+	created, err := m.startNewSession(title, path, direct, program, ov.GetSelectedBranch(), prompt, accountOverride)
+	if err != nil {
+		ov.Submitted = false
+		return m.handleError(err)
+	}
+
+	m.textInputOverlay = nil
+	m.state = stateDefault
+	m.menu.SetState(ui.StateDefault)
+	m.resetTitleCheck()
+
+	return created
+}
+
+// startNewSession builds, registers, and starts a new session from already-validated
+// inputs, returning the batch that boots it in the background. It is the shared core of
+// the form-submit and smart-auto-dispatch paths: caller-supplied validation (title
+// conflict, target validity) must already have passed. accountOverride, when non-nil, is
+// an explicit Claude-account choice that wins over auto-routing.
+func (m *home) startNewSession(title, path string, direct bool, program, branch, prompt string, accountOverride *config.ClaudeAccount) (tea.Cmd, error) {
 	instance, err := session.NewInstance(session.InstanceOptions{
 		Title:   title,
 		Path:    path,
@@ -554,8 +733,7 @@ func (m *home) createSessionFromForm(prompt string) tea.Cmd {
 		Direct:  direct,
 	})
 	if err != nil {
-		ov.Submitted = false
-		return m.handleError(err)
+		return nil, err
 	}
 	instance.SetBaseContext(m.ctx)
 
@@ -568,11 +746,11 @@ func (m *home) createSessionFromForm(prompt string) tea.Cmd {
 		remoteURL = git.GetRemoteURL(m.ctx, path)
 	}
 	accName, accDir, accIsDefault := m.appConfig.ResolveClaudeAccount(remoteURL, path)
-	if acct, ok := ov.GetSelectedAccount(); ok && acct.Name != "" {
+	if accountOverride != nil {
 		// An explicit picker choice wins over auto-routing. Picking the catch-all
 		// (no-rule) account stays dim; a routed account shows accented — the same
 		// rule the resolver applies.
-		accName, accDir, accIsDefault = acct.Name, acct.ResolvedConfigDir(), acct.IsCatchAll()
+		accName, accDir, accIsDefault = accountOverride.Name, accountOverride.ResolvedConfigDir(), accountOverride.IsCatchAll()
 	}
 	instance.SetClaudeAccount(accName, accDir, accIsDefault)
 
@@ -580,7 +758,7 @@ func (m *home) createSessionFromForm(prompt string) tea.Cmd {
 	// repo group, so select it by identity.
 	finalizer := m.list.AddInstance(instance)
 	m.list.SelectInstance(instance)
-	if branch := ov.GetSelectedBranch(); branch != "" {
+	if branch != "" {
 		instance.SetBaseBranch(branch)
 	}
 	instance.Prompt = prompt
@@ -588,16 +766,11 @@ func (m *home) createSessionFromForm(prompt string) tea.Cmd {
 	instance.SetStatus(session.Loading)
 	finalizer()
 
-	m.textInputOverlay = nil
-	m.state = stateDefault
-	m.menu.SetState(ui.StateDefault)
-	m.resetTitleCheck()
-
 	startCmd := func() tea.Msg {
 		err := instance.Start(true)
 		return instanceStartedMsg{instance: instance, err: err}
 	}
-	return tea.Batch(tea.WindowSize(), m.instanceChanged(), startCmd)
+	return tea.Batch(tea.WindowSize(), m.instanceChanged(), startCmd), nil
 }
 
 // defaultNewSessionPath returns the contextual target repo for a new session: the

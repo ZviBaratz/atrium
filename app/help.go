@@ -69,6 +69,7 @@ func (h helpTypeGeneral) toContent() string {
 		helpHeaderStyle().Render("Manage"),
 		helpRow("n", "new session (form, name first)"),
 		helpRow("N", "new session (form, project first)"),
+		helpRow("i", "smart new (describe it; auto-routes to a project)"),
 		helpRow("R", "rename session (label only)"),
 		helpRow("A", "auto-name session (via its agent)"),
 		helpRow("/", "filter sessions"),

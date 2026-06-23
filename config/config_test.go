@@ -474,6 +474,19 @@ func TestGetKillDoubleTapConfirm(t *testing.T) {
 	})
 }
 
+func TestGetSmartDispatchAuto(t *testing.T) {
+	t.Run("default config is off (confirm-by-default)", func(t *testing.T) {
+		assert.False(t, DefaultConfig().GetSmartDispatchAuto())
+	})
+	t.Run("nil field defaults off", func(t *testing.T) {
+		assert.False(t, (&Config{}).GetSmartDispatchAuto())
+	})
+	t.Run("explicit true", func(t *testing.T) {
+		v := true
+		assert.True(t, (&Config{SmartDispatchAuto: &v}).GetSmartDispatchAuto())
+	})
+}
+
 func TestGetPRCreateDraft(t *testing.T) {
 	t.Run("default config opens drafts", func(t *testing.T) {
 		assert.True(t, DefaultConfig().GetPRCreateDraft())

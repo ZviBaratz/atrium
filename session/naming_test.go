@@ -142,6 +142,23 @@ func TestGenerateName(t *testing.T) {
 	})
 }
 
+func TestSlugTitle(t *testing.T) {
+	t.Run("returns a clean title for ordinary input", func(t *testing.T) {
+		require.Equal(t, "Review box 123", SlugTitle("Review box 123"))
+	})
+
+	t.Run("returns empty for input with nothing usable", func(t *testing.T) {
+		require.Empty(t, SlugTitle("   "))
+		require.Empty(t, SlugTitle(""))
+	})
+
+	t.Run("truncates to the 32-char title cap on a word boundary", func(t *testing.T) {
+		got := SlugTitle("The hub is failing with a migration error somewhere")
+		require.LessOrEqual(t, len([]rune(got)), maxNameLen)
+		require.Equal(t, "The hub is failing with a", got)
+	})
+}
+
 func TestPrepareNamingHome(t *testing.T) {
 	t.Run("isolates HOME with a credentials symlink when creds exist", func(t *testing.T) {
 		src := t.TempDir()
