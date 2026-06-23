@@ -14,7 +14,7 @@ import (
 // While the user is interactively attached, an in-flight metadata tick must not
 // poll the session: a capture-pane/has-session there contends the shared tmux
 // socket with the live attach client and races the monitor swap in Restore. Poll
-// must short-circuit to PaneUnknown (a no-op in applyPaneState) without running a
+// must short-circuit to PaneUnknown (a no-op in ApplyPaneState) without running a
 // single subprocess.
 func TestPollSkipsWhileAttached(t *testing.T) {
 	var runs, outputs int

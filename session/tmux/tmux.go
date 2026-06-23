@@ -735,7 +735,7 @@ func (t *Session) Poll() PaneState {
 	// session: a capture-pane/has-session here would contend the shared socket,
 	// and the detach's Restore swaps t.monitor out from under us. Skip before
 	// taking the lock or spawning any subprocess. PaneUnknown is a no-op in
-	// applyPaneState, and the post-detach attachFinishedMsg handler re-polls
+	// ApplyPaneState, and the post-detach attachFinishedMsg handler re-polls
 	// fresh, so an in-flight tick loses nothing by skipping here.
 	if t.attached.Load() {
 		return PaneUnknown

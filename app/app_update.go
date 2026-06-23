@@ -549,7 +549,7 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// deliberately no longer sets Running from its background goroutine (that
 		// raced the UI/poll readers and could leave the session stuck on the
 		// "Setting up workspace..." splash); this message arrives after Start()
-		// completed, so the write is race-free. applyPaneState refines it to
+		// completed, so the write is race-free. ApplyPaneState refines it to
 		// Ready/NeedsInput on later ticks.
 		msg.instance.SetStatus(session.Running)
 
