@@ -54,12 +54,24 @@ var checkGHCLI = func(ctx context.Context) error {
 	return nil
 }
 
-// IsGitRepo checks if the given path is within a git repository
-func IsGitRepo(ctx context.Context, path string) bool {
+// localGit runs `git -C dir args...` capped at gitLocalTimeout and returns its
+// trimmed stdout. It is the package-level analog of Worktree.runGitCommand for the
+// helpers here that hold a context and a path but no *Worktree; deriving the
+// timeout and building the command once keeps a local-git invocation defined in a
+// single place. Unlike runGitCommand's CombinedOutput, stderr is left out of the
+// result so a git diagnostic can't corrupt a parsed value; callers that only care
+// whether the command succeeded ignore the string and check err.
+func localGit(ctx context.Context, dir string, args ...string) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, gitLocalTimeout)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "git", "-C", path, "rev-parse", "--show-toplevel")
-	return cmd.Run() == nil
+	out, err := exec.CommandContext(ctx, "git", append([]string{"-C", dir}, args...)...).Output()
+	return strings.TrimSpace(string(out)), err
+}
+
+// IsGitRepo checks if the given path is within a git repository
+func IsGitRepo(ctx context.Context, path string) bool {
+	_, err := localGit(ctx, path, "rev-parse", "--show-toplevel")
+	return err == nil
 }
 
 // CurrentBranchName returns the branch HEAD points at in the repo containing path,
@@ -68,14 +80,10 @@ func IsGitRepo(ctx context.Context, path string) bool {
 // `rev-parse --abbrev-ref HEAD`) so an unborn HEAD — a fresh init with no commits yet —
 // still resolves to its branch name.
 func CurrentBranchName(ctx context.Context, path string) string {
-	ctx, cancel := context.WithTimeout(ctx, gitLocalTimeout)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, "git", "-C", path, "branch", "--show-current")
-	out, err := cmd.Output()
+	branch, err := localGit(ctx, path, "branch", "--show-current")
 	if err != nil {
 		return ""
 	}
-	branch := strings.TrimSpace(string(out))
 	if branch == "" {
 		return "HEAD" // --show-current prints nothing when detached
 	}
@@ -94,10 +102,8 @@ func BranchNameForSession(prefix, title string) string {
 // at repoPath. It is an exact ref lookup (show-ref --verify), deliberately not
 // SearchBranches, whose results are capped and merged with origin/ names.
 func LocalBranchExists(ctx context.Context, repoPath, branch string) bool {
-	ctx, cancel := context.WithTimeout(ctx, gitLocalTimeout)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, "git", "-C", repoPath, "show-ref", "--verify", "--quiet", "refs/heads/"+branch)
-	return cmd.Run() == nil
+	_, err := localGit(ctx, repoPath, "show-ref", "--verify", "--quiet", "refs/heads/"+branch)
+	return err == nil
 }
 
 // RepoGroupKey predicts the repo-group key the session list will file a session
@@ -112,26 +118,20 @@ func RepoGroupKey(ctx context.Context, path string) string {
 }
 
 func findGitRepoRoot(ctx context.Context, path string) (string, error) {
-	ctx, cancel := context.WithTimeout(ctx, gitLocalTimeout)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, "git", "-C", path, "rev-parse", "--show-toplevel")
-	out, err := cmd.Output()
+	out, err := localGit(ctx, path, "rev-parse", "--show-toplevel")
 	if err != nil {
 		return "", fmt.Errorf("failed to find Git repository root from path: %s", path)
 	}
-	return strings.TrimSpace(string(out)), nil
+	return out, nil
 }
 
 // GetRemoteURL returns the origin remote URL for the repository containing path,
 // or "" when there is no origin remote or path is not a git repo (best-effort,
 // like CurrentBranchName). Used to route a worktree to a Claude Code account.
 func GetRemoteURL(ctx context.Context, path string) string {
-	ctx, cancel := context.WithTimeout(ctx, gitLocalTimeout)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, "git", "-C", path, "config", "--get", "remote.origin.url")
-	out, err := cmd.Output()
+	out, err := localGit(ctx, path, "config", "--get", "remote.origin.url")
 	if err != nil {
 		return ""
 	}
-	return strings.TrimSpace(string(out))
+	return out
 }

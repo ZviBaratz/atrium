@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"github.com/ZviBaratz/atrium/log"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 )
@@ -393,14 +392,12 @@ func CleanupWorktrees(ctx context.Context, repoPaths []string) error {
 	type repoBranch struct{ repo, branch string }
 	var branchesToDelete []repoBranch
 	for _, repoPath := range repos {
-		listCtx, cancel := context.WithTimeout(ctx, gitLocalTimeout)
-		output, err := exec.CommandContext(listCtx, "git", "-C", repoPath, "worktree", "list", "--porcelain").Output()
-		cancel()
+		output, err := localGit(ctx, repoPath, "worktree", "list", "--porcelain")
 		if err != nil {
 			log.ErrorLog.Printf("failed to list worktrees for repo %s: %v", repoPath, err)
 			continue
 		}
-		for wtPath, branch := range parseWorktreeList(string(output)) {
+		for wtPath, branch := range parseWorktreeList(output) {
 			if branch == "" || !strings.HasPrefix(resolvePath(wtPath), worktreePrefix) {
 				continue
 			}
@@ -421,20 +418,16 @@ func CleanupWorktrees(ctx context.Context, repoPaths []string) error {
 
 	// Prune git's internal worktree tracking now that the directories are gone.
 	for _, repoPath := range repos {
-		pruneCtx, cancel := context.WithTimeout(ctx, gitLocalTimeout)
-		if err := exec.CommandContext(pruneCtx, "git", "-C", repoPath, "worktree", "prune").Run(); err != nil {
+		if _, err := localGit(ctx, repoPath, "worktree", "prune"); err != nil {
 			log.ErrorLog.Printf("failed to prune worktrees for repo %s: %v", repoPath, err)
 		}
-		cancel()
 	}
 
 	// Finally delete the session branches; they are no longer checked out.
 	for _, rb := range branchesToDelete {
-		delCtx, cancel := context.WithTimeout(ctx, gitLocalTimeout)
-		if err := exec.CommandContext(delCtx, "git", "-C", rb.repo, "branch", "-D", rb.branch).Run(); err != nil {
+		if _, err := localGit(ctx, rb.repo, "branch", "-D", rb.branch); err != nil {
 			log.ErrorLog.Printf("failed to delete branch %s in %s: %v", rb.branch, rb.repo, err)
 		}
-		cancel()
 	}
 
 	return nil
