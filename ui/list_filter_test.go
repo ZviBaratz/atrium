@@ -162,3 +162,33 @@ func TestFilter_OverridesCollapse(t *testing.T) {
 
 	require.Contains(t, out, "apex", "a match inside a collapsed group must surface while filtering")
 }
+
+// A status: predicate filters rows by their cached Status, not by text. This is the
+// end-to-end proof that the predicate matcher is wired into the render gate.
+func TestFilter_StatusPredicateHidesNonMatchingRows(t *testing.T) {
+	l, insts := newFilterList(t, "alpha", "bravo", "charlie")
+	insts[0].SetStatus(session.Ready)
+	insts[1].SetStatus(session.Running)
+	insts[2].SetStatus(session.Ready)
+
+	l.SetFilter("status:ready")
+	out := l.String()
+
+	require.Contains(t, out, "alpha", "ready row visible")
+	require.Contains(t, out, "charlie", "ready row visible")
+	require.NotContains(t, out, "bravo", "running row hidden by status:ready")
+}
+
+// Prefix matching means an incomplete predicate value narrows progressively instead
+// of blinking the list empty: "status:r" keeps both ready and running visible.
+func TestFilter_StatusPredicatePrefixKeepsListPopulated(t *testing.T) {
+	l, insts := newFilterList(t, "alpha", "bravo")
+	insts[0].SetStatus(session.Ready)
+	insts[1].SetStatus(session.Running)
+
+	l.SetFilter("status:r")
+	out := l.String()
+
+	require.Contains(t, out, "alpha", "ready matches prefix r")
+	require.Contains(t, out, "bravo", "running matches prefix r")
+}

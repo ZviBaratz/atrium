@@ -192,10 +192,14 @@ type List struct {
 	// with >1 repo" rule is enforced in exactly one place.
 	collapsed map[string]bool
 
-	// filterQuery is the current incremental filter string. Items whose DisplayName and
-	// Branch both fail a case-insensitive contains check are hidden exactly like collapsed
-	// group members — isHidden returns true for them. An empty string disables filtering.
+	// filterQuery is the current incremental filter string, echoed verbatim in the filter
+	// bar. Items that fail parsedFilter are hidden exactly like collapsed group members —
+	// isHidden returns true for them. An empty string disables filtering.
 	filterQuery string
+	// parsedFilter is filterQuery compiled into a predicate matcher (status:/dirty/behind/
+	// pr: predicates plus substring terms, AND-combined). Recompiled on every SetFilter;
+	// its zero value matches all, so an empty query disables filtering.
+	parsedFilter session.Filter
 	// filterActive is true while the user is actively typing the filter (stateFilter in
 	// app.go). It controls the cursor indicator in the filter bar.
 	filterActive bool
@@ -272,12 +276,14 @@ func (l *List) SetPermissionIndicator(mode string) {
 // nearest still-visible item. Pass an empty string to disable filtering.
 func (l *List) SetFilter(query string) {
 	l.filterQuery = query
+	l.parsedFilter = session.ParseFilter(query)
 	l.clampSelectionToNavigable()
 }
 
 // ClearFilter resets both the filter query and the active state.
 func (l *List) ClearFilter() {
 	l.filterQuery = ""
+	l.parsedFilter = session.ParseFilter("")
 	l.filterActive = false
 	l.clampSelectionToNavigable()
 }
@@ -290,14 +296,10 @@ func (l *List) FilterQuery() string { return l.filterQuery }
 func (l *List) SetFilterActive(active bool) { l.filterActive = active }
 
 // filterMatches reports whether an instance should be shown given the current filter.
-// The match is a case-insensitive substring check against DisplayName and Branch.
+// The query is compiled (in SetFilter) into predicate + substring terms; see
+// session.Filter. An empty query yields the zero Filter, which matches everything.
 func (l *List) filterMatches(i *session.Instance) bool {
-	if l.filterQuery == "" {
-		return true
-	}
-	q := strings.ToLower(l.filterQuery)
-	return strings.Contains(strings.ToLower(i.DisplayName()), q) ||
-		strings.Contains(strings.ToLower(i.Branch), q)
+	return l.parsedFilter.Matches(i)
 }
 
 // SetSize sets the OUTER height and width of the list (including its panel

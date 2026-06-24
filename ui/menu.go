@@ -232,9 +232,13 @@ func (m *Menu) String() string {
 		// While generating a name, the bar shows a single status line.
 		line = progressStyle().Render("✨ Generating name…")
 	case StateFilter:
+		// Action hints first so that on a narrow terminal the width truncation below
+		// drops the predicate vocabulary tail, never the accept/clear actions.
 		line = keyStyle().Render("enter") + " " + descStyle().Render("accept") +
 			sepStyle().Render(separator) +
-			keyStyle().Render("esc") + " " + descStyle().Render("clear")
+			keyStyle().Render("esc") + " " + descStyle().Render("clear") +
+			sepStyle().Render(separator) +
+			descStyle().Render("filter: status: dirty behind pr:")
 	case StateHints:
 		line = keyStyle().Render("a–z") + " " + descStyle().Render("copy") +
 			sepStyle().Render(separator) +
