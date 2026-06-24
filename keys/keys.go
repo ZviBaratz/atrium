@@ -42,6 +42,12 @@ const (
 	KeyShiftUp
 	KeyShiftDown
 
+	// KeyNextUnread jumps the selection to the next unread Ready session;
+	// KeyNextNeedsInput jumps to the next session blocked on input. Both wrap
+	// around the list and cross repo-group boundaries.
+	KeyNextUnread
+	KeyNextNeedsInput
+
 	// KeyMoveUp and KeyMoveDown reorder the selected session within its group.
 	KeyMoveUp
 	KeyMoveDown
@@ -111,6 +117,8 @@ var GlobalKeyStringsMap = map[string]KeyName{
 	"j":          KeyDown,
 	"shift+up":   KeyShiftUp,
 	"shift+down": KeyShiftDown,
+	"u":          KeyNextUnread,
+	"b":          KeyNextNeedsInput,
 	"J":          KeyMoveDown,
 	"K":          KeyMoveUp,
 	"{":          KeyMoveGroupUp,
@@ -169,6 +177,14 @@ var GlobalkeyBindings = map[KeyName]key.Binding{
 	KeyShiftDown: key.NewBinding(
 		key.WithKeys("shift+down"),
 		key.WithHelp("shift+↓", "scroll"),
+	),
+	KeyNextUnread: key.NewBinding(
+		key.WithKeys("u"),
+		key.WithHelp("u", "next unread"),
+	),
+	KeyNextNeedsInput: key.NewBinding(
+		key.WithKeys("b"),
+		key.WithHelp("b", "next blocked"),
 	),
 	KeyEnter: key.NewBinding(
 		key.WithKeys("enter", "o"),

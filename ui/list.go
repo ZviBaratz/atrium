@@ -838,6 +838,55 @@ func (l *List) Down() {
 	}
 }
 
+// NextUnread moves the selection to the next unread Ready session (forward,
+// wrapping). Reports whether one was found.
+func (l *List) NextUnread() bool {
+	return l.nextActionable(
+		func(i *session.Instance) bool { return i.GetStatus() == session.Ready && i.Unread() },
+		l.groupUnreadCount,
+	)
+}
+
+// NextNeedsInput moves the selection to the next session blocked on input
+// (forward, wrapping). Reports whether one was found.
+func (l *List) NextNeedsInput() bool {
+	return l.nextActionable(
+		func(i *session.Instance) bool { return i.GetStatus() == session.NeedsInput },
+		l.groupNeedsInputCount,
+	)
+}
+
+// nextActionable moves the selection forward (wrapping, others-only) to the next
+// visible row that needs the user, landing on a collapsed group's anchor when the
+// match is folded inside it. Reports whether such a row was found. member judges an
+// individual row; groupCount badges a collapsed group's [start, end) range.
+func (l *List) nextActionable(member func(*session.Instance) bool, groupCount func(start, end int) int) bool {
+	n := len(l.items)
+	for off := 1; off < n; off++ { // others only, full wrap; off == n (self) excluded
+		idx := (l.selectedIdx + off) % n
+		if l.isHidden(idx) {
+			continue
+		}
+		if l.rowNeedsUser(idx, member, groupCount) {
+			l.SetSelectedInstance(idx) // idx is visible; no clamp needed
+			return true
+		}
+	}
+	return false
+}
+
+// rowNeedsUser judges a visible row. With no active filter a collapsed group's
+// anchor stands in for its hidden members (via groupCount), matching the header
+// badge; otherwise (and always under a filter, where matches surface individually)
+// the per-row predicate applies.
+func (l *List) rowNeedsUser(idx int, member func(*session.Instance) bool, groupCount func(start, end int) int) bool {
+	if l.filterQuery == "" && l.effectiveCollapsed(repoKey(l.items[idx])) {
+		start, end := l.groupBounds(idx)
+		return groupCount(start, end) > 0
+	}
+	return member(l.items[idx])
+}
+
 // Kill tears down the selected instance and removes it from the list.
 func (l *List) Kill() {
 	if len(l.items) == 0 {

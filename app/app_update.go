@@ -733,6 +733,16 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 	case keys.KeyDown:
 		m.list.Down()
 		return m, m.instanceChanged()
+	case keys.KeyNextUnread:
+		if m.list.NextUnread() {
+			return m, m.instanceChanged()
+		}
+		return m, m.handleInfoNotice("no more unread sessions")
+	case keys.KeyNextNeedsInput:
+		if m.list.NextNeedsInput() {
+			return m, m.instanceChanged()
+		}
+		return m, m.handleInfoNotice("no more blocked sessions")
 	case keys.KeyShiftUp:
 		m.tabbedWindow.ScrollUp(1)
 		return m, m.instanceChanged()
