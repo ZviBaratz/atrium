@@ -242,18 +242,30 @@ func createArgv(branch string, draft bool) []string {
 	return argv
 }
 
+// runGH runs `gh argv…` in dir, capturing stdout and stderr. On failure it folds
+// gh's trimmed stderr (its human-readable diagnostic) into the error, tagged with
+// opName; on success it returns stdout. It is the gh analog of localGit: one place
+// that builds the command, captures both streams, and formats the error. Callers
+// that don't need stdout discard it. The caller owns the context's timeout — runGH
+// stays timeout-agnostic because runGHPRView bounds itself with a different cap.
+func runGH(ctx context.Context, dir, opName string, argv ...string) ([]byte, error) {
+	cmd := exec.CommandContext(ctx, "gh", argv...)
+	cmd.Dir = dir
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		return stdout.Bytes(), fmt.Errorf("%s: %s: %w", opName, strings.TrimSpace(stderr.String()), err)
+	}
+	return stdout.Bytes(), nil
+}
+
 // runGHMerge shells out to `gh pr merge` for the branch. Like runGHPRView it is a
 // package var so tests can swap it out. gh infers owner/repo from the origin
 // remote of dir, so no --repo is needed.
 var runGHMerge = func(ctx context.Context, dir, branch string) error {
-	cmd := exec.CommandContext(ctx, "gh", mergeArgv(branch)...)
-	cmd.Dir = dir
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("gh pr merge: %s: %w", strings.TrimSpace(stderr.String()), err)
-	}
-	return nil
+	_, err := runGH(ctx, dir, "gh pr merge", mergeArgv(branch)...)
+	return err
 }
 
 // MergePR squash-merges the session branch's pull request via gh, then invalidates
@@ -278,15 +290,7 @@ func (g *Worktree) MergePR() error {
 // swap it out. gh infers owner/repo from the origin remote of dir, so no --repo
 // is needed.
 var runGHCreate = func(ctx context.Context, dir string, argv []string) ([]byte, error) {
-	cmd := exec.CommandContext(ctx, "gh", argv...)
-	cmd.Dir = dir
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
-		return stdout.Bytes(), fmt.Errorf("gh pr create: %s: %w", strings.TrimSpace(stderr.String()), err)
-	}
-	return stdout.Bytes(), nil
+	return runGH(ctx, dir, "gh pr create", argv...)
 }
 
 // CreatePR opens a pull request for the session branch via gh, then invalidates
@@ -329,14 +333,8 @@ func prNumberFromURL(url string) int {
 // the default browser. Like runGHMerge it is a package var so tests can swap it
 // out. gh infers owner/repo from the origin remote of dir, so no --repo is needed.
 var runGHPRWeb = func(ctx context.Context, dir, branch string) error {
-	cmd := exec.CommandContext(ctx, "gh", "pr", "view", branch, "--web")
-	cmd.Dir = dir
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("gh pr view --web: %s: %w", strings.TrimSpace(stderr.String()), err)
-	}
-	return nil
+	_, err := runGH(ctx, dir, "gh pr view --web", "pr", "view", branch, "--web")
+	return err
 }
 
 // OpenPRURL opens the session branch's pull request in the default browser. Like
@@ -361,18 +359,10 @@ func (g *Worktree) OpenPRURL() error {
 // gh on PATH. gh infers owner/repo from the worktree's origin remote (like the
 // existing gh browse call), so no --repo is needed.
 var runGHPRView = func(ctx context.Context, dir, branch string) ([]byte, error) {
-	ctx, cancel := context.WithTimeout(ctx, prNetworkTimeout)
+	ctx, cancel := context.WithTimeout(ctx, prNetworkTimeout) // keep: runGHPRView's own cap
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "gh", "pr", "view", branch,
+	return runGH(ctx, dir, "gh pr view", "pr", "view", branch,
 		"--json", "number,url,state,statusCheckRollup,reviewDecision,mergeable,isDraft")
-	cmd.Dir = dir
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
-		return stdout.Bytes(), fmt.Errorf("gh pr view: %s: %w", strings.TrimSpace(stderr.String()), err)
-	}
-	return stdout.Bytes(), nil
 }
 
 // isBenignGHError reports whether a gh failure means "there is simply nothing to
