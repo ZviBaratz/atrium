@@ -1271,10 +1271,9 @@ func (i *Instance) pause() error {
 			return tc.Err()
 		}
 
-		// Only prune if remove was successful
-		if tc.Record("prune git worktrees", wt.Prune()) {
-			return tc.Err()
-		}
+		// Prune stale metadata even if this fails — the worktree directory is
+		// gone after Remove(), so the session must be marked Paused regardless.
+		tc.Record("prune git worktrees", wt.Prune())
 	}
 
 	// Pause committed any uncommitted work above and removed the worktree, so the
