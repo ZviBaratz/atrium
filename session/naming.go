@@ -2,7 +2,6 @@ package session
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -32,15 +31,6 @@ const nameSystemPrompt = "You are titling a coding session. Reply with ONLY a 2-
 // nameGenTimeout caps a single naming call so a hung subprocess can't wedge the
 // action; the work runs off the UI goroutine, but we still want a hard ceiling.
 const nameGenTimeout = 30 * time.Second
-
-// claudeResult is the subset of `claude -p --output-format json` we care about.
-// is_error distinguishes a real title from a failure message: claude exits 0 and
-// prints errors (e.g. "Not logged in") as result text, so the flag is the only
-// reliable signal.
-type claudeResult struct {
-	Result  string `json:"result"`
-	IsError bool   `json:"is_error"`
-}
 
 // GenerateName produces a short display name for a session from its initial
 // prompt and diff stats by invoking an agent CLI in headless one-shot mode,
@@ -134,71 +124,33 @@ func generateName(ctx context.Context, executor cmd.Executor, claudePath, workDi
 		return "", fmt.Errorf("no session content to name yet")
 	}
 
-	// Run claude under a throwaway $HOME so it can't load the user's global
-	// ~/.claude/CLAUDE.md. That memory file roughly doubles call latency (it's a large
-	// input) and, when the diff signal is weak, derails the title toward whatever it
-	// emphasizes — a packaging session once got named "Refactor Memory System". The
-	// isolated home holds only a symlink to the real credentials, so OAuth still works
-	// and token refreshes write through. If we can't build one (e.g. keychain-only
-	// auth, no creds file), namingHome is "" and we fall back to the real $HOME — we
-	// give up the optimization, never correctness.
-	namingHome, cleanup, _ := prepareNamingHome(realCredsPath())
-	defer cleanup()
-
-	c := exec.CommandContext(ctx, claudePath,
-		"-p", namingInstruction,
-		"--append-system-prompt", nameSystemPrompt,
-		"--output-format", "json",
-		"--model", "haiku",
-		"--tools", "",
-		"--no-session-persistence",
-	)
-	c.Dir = workDir
-	c.Stdin = strings.NewReader(sessionContext)
-	c.Env = namingEnv(namingHome)
-
-	out, err := executor.Output(c)
+	// runClaudeHeadless isolates $HOME so the user's global ~/.claude/CLAUDE.md can't
+	// load: that memory file roughly doubles call latency and, when the diff signal is
+	// weak, derails the title toward whatever it emphasizes — a packaging session once
+	// got named "Refactor Memory System". The shared helper falls back to the real
+	// $HOME when no isolated home can be built, trading the optimization, never auth.
+	result, err := runClaudeHeadless(ctx, executor, claudePath, workDir, namingInstruction, nameSystemPrompt, sessionContext)
 	if err != nil {
-		return "", fmt.Errorf("claude invocation failed: %w", err)
+		return "", err
 	}
-
-	var res claudeResult
-	if err := json.Unmarshal(out, &res); err != nil {
-		return "", fmt.Errorf("could not parse claude output: %w", err)
-	}
-	if res.IsError {
-		return "", fmt.Errorf("claude reported an error: %s", strings.TrimSpace(res.Result))
-	}
-	return sanitizeName(res.Result)
+	return sanitizeName(result)
 }
 
 // generateNameGemini is the gemini counterpart of generateName: `gemini -p`
 // prints the bare response text on stdout (verified against gemini-cli 0.27;
 // auth notices and workspace warnings go to stderr), so the output feeds
-// sanitizeName directly — no JSON envelope. It runs from a freshly created
-// empty directory rather than os.TempDir() because gemini scans its cwd as a
-// workspace context; an empty dir keeps the call fast and the context clean.
+// sanitizeName directly — no JSON envelope (see runGeminiHeadless).
 func generateNameGemini(ctx context.Context, executor cmd.Executor, geminiPath, prompt string, stats *git.DiffStats) (string, error) {
 	sessionContext := buildContext(prompt, stats)
 	if sessionContext == "" {
 		return "", fmt.Errorf("no session content to name yet")
 	}
 
-	workDir, err := os.MkdirTemp("", "cs-name-gemini-")
+	result, err := runGeminiHeadless(ctx, executor, geminiPath, namingInstruction, sessionContext)
 	if err != nil {
 		return "", err
 	}
-	defer func() { _ = os.RemoveAll(workDir) }()
-
-	c := exec.CommandContext(ctx, geminiPath, "-p", namingInstruction)
-	c.Dir = workDir
-	c.Stdin = strings.NewReader(sessionContext)
-
-	out, err := executor.Output(c)
-	if err != nil {
-		return "", fmt.Errorf("gemini invocation failed: %w", err)
-	}
-	return sanitizeName(string(out))
+	return sanitizeName(result)
 }
 
 // realCredsPath returns the path to the user's claude credentials file — the one
