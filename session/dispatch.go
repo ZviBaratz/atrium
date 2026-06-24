@@ -67,34 +67,11 @@ func generateDispatch(ctx context.Context, executor cmd.Executor, claudePath, wo
 		return "", "", fmt.Errorf("no description to route")
 	}
 
-	namingHome, cleanup, _ := prepareNamingHome(realCredsPath())
-	defer cleanup()
-
-	c := exec.CommandContext(ctx, claudePath,
-		"-p", dispatchInstruction(basenames),
-		"--append-system-prompt", dispatchSystemPrompt,
-		"--output-format", "json",
-		"--model", "haiku",
-		"--tools", "",
-		"--no-session-persistence",
-	)
-	c.Dir = workDir
-	c.Stdin = strings.NewReader(line)
-	c.Env = namingEnv(namingHome)
-
-	out, err := executor.Output(c)
+	result, err := runClaudeHeadless(ctx, executor, claudePath, workDir, dispatchInstruction(basenames), dispatchSystemPrompt, line)
 	if err != nil {
-		return "", "", fmt.Errorf("claude invocation failed: %w", err)
+		return "", "", err
 	}
-
-	var res claudeResult
-	if err := json.Unmarshal(out, &res); err != nil {
-		return "", "", fmt.Errorf("could not parse claude output: %w", err)
-	}
-	if res.IsError {
-		return "", "", fmt.Errorf("claude reported an error: %s", strings.TrimSpace(res.Result))
-	}
-	return parseDispatchReply(res.Result, basenames)
+	return parseDispatchReply(result, basenames)
 }
 
 // generateDispatchGemini is the gemini counterpart: `gemini -p` prints the bare reply
@@ -105,21 +82,11 @@ func generateDispatchGemini(ctx context.Context, executor cmd.Executor, geminiPa
 		return "", "", fmt.Errorf("no description to route")
 	}
 
-	workDir, err := os.MkdirTemp("", "cs-dispatch-gemini-")
+	result, err := runGeminiHeadless(ctx, executor, geminiPath, dispatchInstruction(basenames), line)
 	if err != nil {
 		return "", "", err
 	}
-	defer func() { _ = os.RemoveAll(workDir) }()
-
-	c := exec.CommandContext(ctx, geminiPath, "-p", dispatchInstruction(basenames))
-	c.Dir = workDir
-	c.Stdin = strings.NewReader(line)
-
-	out, err := executor.Output(c)
-	if err != nil {
-		return "", "", fmt.Errorf("gemini invocation failed: %w", err)
-	}
-	return parseDispatchReply(string(out), basenames)
+	return parseDispatchReply(result, basenames)
 }
 
 // parseDispatchReply decodes the model's JSON answer and validates the project
