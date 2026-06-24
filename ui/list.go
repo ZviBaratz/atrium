@@ -913,17 +913,6 @@ func (l *List) Kill() {
 // target need not be the selected item — the in-session kill path (Ctrl+X) and
 // the auto-open path target a specific instance regardless of current selection.
 func (l *List) KillInstance(target *session.Instance) {
-	// Under a sort mode, drop the target from the canonical order and re-sort once
-	// the existing removal + selection recovery below has fully settled. Registered
-	// first so it runs LAST (after the conditional `defer l.Up()`), and applySort
-	// then preserves the recovered selection by identity. In creation mode manual is
-	// nil and this is skipped.
-	if l.sortActive() {
-		defer func() {
-			l.manual = removeInstance(l.manual, target)
-			l.applySort()
-		}()
-	}
 	idx := -1
 	for i, item := range l.items {
 		if item == target {
@@ -933,6 +922,19 @@ func (l *List) KillInstance(target *session.Instance) {
 	}
 	if idx == -1 {
 		return
+	}
+
+	// Under a sort mode, drop the target from the canonical order and re-sort once
+	// the existing removal + selection recovery below has fully settled. Registered
+	// before the conditional `defer l.Up()` so it runs LAST, after that recovery, and
+	// applySort then preserves the recovered selection by identity. Placed after the
+	// idx==-1 guard so it pairs with a real items removal (no spurious re-sort when
+	// target isn't in the list). In creation mode manual is nil and this is skipped.
+	if l.sortActive() {
+		defer func() {
+			l.manual = removeInstance(l.manual, target)
+			l.applySort()
+		}()
 	}
 
 	// Kill the tmux session and clean up the worktree.
@@ -1198,21 +1200,37 @@ func removeInstance(items []*session.Instance, target *session.Instance) []*sess
 // like (the just-reordered display list), preserving manual's within-group order.
 // Used after a whole-group move so the canonical order tracks the new group sequence
 // without disturbing the within-group (manual) order.
+//
+// like and manual hold the same instances (a whole-group move only permutes group
+// order), so every manual group is normally covered by like. The trailing pass that
+// appends any group key absent from like is a safety net: should the two ever diverge
+// on membership, those sessions are kept (appended in manual order) rather than
+// silently dropped from the canonical order and then persisted away.
 func regroupManualLike(manual, like []*session.Instance) []*session.Instance {
 	byKey := map[string][]*session.Instance{}
+	keyOrder := make([]string, 0)
 	for _, it := range manual {
 		k := repoKey(it)
+		if _, ok := byKey[k]; !ok {
+			keyOrder = append(keyOrder, k)
+		}
 		byKey[k] = append(byKey[k], it)
 	}
 	out := make([]*session.Instance, 0, len(manual))
 	seen := map[string]bool{}
-	for _, it := range like {
-		k := repoKey(it)
+	emit := func(k string) {
 		if seen[k] {
-			continue
+			return
 		}
 		seen[k] = true
 		out = append(out, byKey[k]...)
+	}
+	for _, it := range like {
+		emit(repoKey(it))
+	}
+	// Keep any manual group like never mentioned (see doc comment).
+	for _, k := range keyOrder {
+		emit(k)
 	}
 	return out
 }
