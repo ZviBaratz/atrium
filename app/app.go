@@ -363,6 +363,9 @@ func newHome(ctx context.Context, program string, autoYes bool, version, binName
 	// Restore folded groups only after every instance is loaded — AddInstance auto-expands the
 	// group it inserts into, so applying persisted folds earlier would be undone by the loop.
 	h.list.SetCollapsedRepos(appState.GetCollapsedRepos())
+	// Apply the persisted within-group sort mode once the full (creation-order) list
+	// is in place, so its canonical-order snapshot is the real creation order.
+	h.list.SetSortMode(appConfig.GetSessionSort())
 
 	return h
 }

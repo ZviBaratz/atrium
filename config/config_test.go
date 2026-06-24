@@ -610,6 +610,36 @@ func TestGetAutoUpdateMode(t *testing.T) {
 	}
 }
 
+// GetSessionSort must normalize every input to a valid mode. The default is
+// creation (the existing manual order); a typo must never silently rearrange the
+// list into status order.
+func TestGetSessionSort(t *testing.T) {
+	cases := []struct {
+		name  string
+		value string
+		want  string
+	}{
+		{"empty defaults to creation", "", SessionSortCreation},
+		{"explicit creation", "creation", SessionSortCreation},
+		{"status", "status", SessionSortStatus},
+		{"unknown falls back to creation", "yolo", SessionSortCreation},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := DefaultConfig()
+			cfg.SessionSort = tc.value
+			if got := cfg.GetSessionSort(); got != tc.want {
+				t.Errorf("GetSessionSort(%q) = %q, want %q", tc.value, got, tc.want)
+			}
+		})
+	}
+
+	var nilCfg *Config
+	if got := nilCfg.GetSessionSort(); got != SessionSortCreation {
+		t.Errorf("nil config: got %q, want %q", got, SessionSortCreation)
+	}
+}
+
 func TestResolveClaudeAccount(t *testing.T) {
 	t.Setenv("HOME", "/home/tester")
 

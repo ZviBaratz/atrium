@@ -364,6 +364,21 @@ func TestSettingsOverlay_CycleAutoUpdate(t *testing.T) {
 	assert.Equal(t, config.AutoUpdateNotify, cfg.GetAutoUpdateMode(), "enum wraps")
 }
 
+func TestSettingsOverlay_CycleSessionSort(t *testing.T) {
+	cfg := config.DefaultConfig()
+	o := NewSettingsOverlay(cfg)
+	settingsAt(t, o, "session_sort")
+
+	require.Equal(t, config.SessionSortCreation, cfg.GetSessionSort(), "defaults to creation")
+
+	_, changed := o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRight})
+	assert.Equal(t, "session_sort", changed, "must report its row key so home can persist")
+	assert.Equal(t, config.SessionSortStatus, cfg.GetSessionSort())
+
+	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRight})
+	assert.Equal(t, config.SessionSortCreation, cfg.GetSessionSort(), "enum wraps")
+}
+
 func TestSettingsOverlay_CarryFilesRowExists(t *testing.T) {
 	o := NewSettingsOverlay(config.DefaultConfig())
 	assert.True(t, o.SelectRow("carry_files"), "settings panel must have a carry_files row")

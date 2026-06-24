@@ -47,6 +47,33 @@ const (
 	NeedsInput
 )
 
+// StatusUrgency returns a session's action-priority rank for the "status" sort
+// mode — lower is more urgent and sorts first. It encodes how much the session
+// wants the user's attention right now: a blocked prompt outranks a finished-but-
+// unseen turn, which outranks an idle session, which outranks one still working.
+// unread is the caller's Instance.Unread() (only meaningful for Ready); the value
+// is independent of the numeric Status constants so their serialized order can
+// keep changing without disturbing this ordering.
+func StatusUrgency(s Status, unread bool) int {
+	switch s {
+	case NeedsInput:
+		return 0
+	case Ready:
+		if unread {
+			return 1
+		}
+		return 2
+	case Running:
+		return 3
+	case Loading:
+		return 4
+	case Paused:
+		return 5
+	default:
+		return 6
+	}
+}
+
 // Instance is a running instance of claude code.
 type Instance struct {
 	// Title is the title of the instance. It is the stable identifier used as the storage

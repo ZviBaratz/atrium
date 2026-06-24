@@ -51,11 +51,12 @@ func (m *home) handleError(err error) tea.Cmd {
 }
 
 // persistInstances writes the current instance list to disk. It is the single
-// chokepoint for the SaveInstances(GetInstances()) pattern; callers choose how to
-// surface the error (m.handleError for user-driven actions, log for bulk/background
-// paths).
+// chokepoint for the SaveInstances pattern; callers choose how to surface the error
+// (m.handleError for user-driven actions, log for bulk/background paths). It saves
+// the canonical manual order (InstancesForPersist), so an active sort mode never
+// overwrites the user's manual ordering on disk.
 func (m *home) persistInstances() error {
-	return m.storage.SaveInstances(m.list.GetInstances())
+	return m.storage.SaveInstances(m.list.InstancesForPersist())
 }
 
 // moveAndPersist runs a list-reorder closure; if it changed the order it persists

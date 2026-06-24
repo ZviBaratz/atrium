@@ -206,6 +206,10 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				r.instance.SetModeMeta(r.mode)
 			}
 		}
+		// Re-apply the status sort now that pane states are fresh, so urgent sessions
+		// keep floating to the top of their group. No-op in creation mode; the
+		// selected session stays under the cursor (preserved by identity).
+		m.list.ApplySort()
 		m.pushSessionContexts()
 		cmds := deliverReadyPrompts(msg.results)
 		m.metadataTick++
@@ -792,9 +796,13 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		return m.openPRForSelected()
 	case keys.KeyPause:
 		return m.pauseSelected()
-	case keys.KeyMoveUp:
-		return m.moveAndPersist(m.list.MoveUp)
-	case keys.KeyMoveDown:
+	case keys.KeyMoveUp, keys.KeyMoveDown:
+		if !m.list.ManualReorderEnabled() {
+			return m, m.handleInfoNotice("manual reorder only in creation sort")
+		}
+		if name == keys.KeyMoveUp {
+			return m.moveAndPersist(m.list.MoveUp)
+		}
 		return m.moveAndPersist(m.list.MoveDown)
 	case keys.KeyMoveGroupUp:
 		return m.moveAndPersist(m.list.MoveGroupUp)

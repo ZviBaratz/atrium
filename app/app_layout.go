@@ -131,6 +131,13 @@ func (m *home) applySettingChange(key string) tea.Cmd {
 		if m.list != nil {
 			m.list.SetPermissionIndicator(m.appConfig.GetPermissionIndicator())
 		}
+	case "session_sort":
+		// Re-order the list under the new mode immediately; the list takes the
+		// normalized mode string so ui needs no config import. Selection is
+		// preserved by identity.
+		if m.list != nil {
+			m.list.SetSortMode(m.appConfig.GetSessionSort())
+		}
 	case "hint_bar":
 		// Mirror the newHome seeding: the list shows its inline key hint only
 		// when the always-on bar is off.
