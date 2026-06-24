@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"github.com/ZviBaratz/atrium/cmd"
 	"github.com/ZviBaratz/atrium/config"
+	"github.com/ZviBaratz/atrium/internal/teardown"
 	"github.com/ZviBaratz/atrium/log"
 	"github.com/ZviBaratz/atrium/session/agent"
 	"io"
@@ -1279,34 +1280,19 @@ func (t *Session) Close() error {
 	// The pane dies with the session; a resumed session must re-resolve.
 	t.resetPaneID()
 
-	var errs []error
+	var tc teardown.Errors
 
 	if t.ptmx != nil {
-		if err := t.ptmx.Close(); err != nil {
-			errs = append(errs, fmt.Errorf("error closing PTY: %w", err))
-		}
+		tc.Record("close PTY", t.ptmx.Close())
 		t.ptmx = nil
 	}
 
 	ctx, cancel := t.opContext()
 	defer cancel()
 	cmd := tmuxCommand(ctx, "kill-session", "-t", t.sanitizedName)
-	if err := t.cmdExec.Run(cmd); err != nil {
-		errs = append(errs, fmt.Errorf("error killing tmux session: %w", err))
-	}
+	tc.Record("kill tmux session", t.cmdExec.Run(cmd))
 
-	if len(errs) == 0 {
-		return nil
-	}
-	if len(errs) == 1 {
-		return errs[0]
-	}
-
-	errMsg := "multiple errors occurred during cleanup:"
-	for _, err := range errs {
-		errMsg += "\n  - " + err.Error()
-	}
-	return errors.New(errMsg)
+	return tc.Err()
 }
 
 // SetDetachedSize set the width and height of the session while detached. This makes the

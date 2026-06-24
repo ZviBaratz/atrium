@@ -3,6 +3,7 @@ package git
 import (
 	"context"
 	"fmt"
+	"github.com/ZviBaratz/atrium/internal/teardown"
 	"github.com/ZviBaratz/atrium/log"
 	"os"
 	"path/filepath"
@@ -213,7 +214,7 @@ func (g *Worktree) resolveStartPoint() (string, error) {
 
 // Cleanup removes the worktree and associated branch
 func (g *Worktree) Cleanup() error {
-	var errs []error
+	var tc teardown.Errors
 
 	// Check if worktree path exists before attempting removal
 	if _, err := os.Stat(g.worktreePath); err == nil {
@@ -225,36 +226,31 @@ func (g *Worktree) Cleanup() error {
 			// orphaned worktree is never left behind, guarding the path to the
 			// managed worktrees/ tree so a bug can't RemoveAll something arbitrary.
 			if rmErr := removeOrphanedWorktreeDir(g.worktreePath); rmErr != nil {
-				errs = append(errs, err, rmErr)
+				tc.Add(err)
+				tc.Add(rmErr)
 			} else {
 				log.WarningLog.Printf("git worktree remove failed for %s, removed directory directly: %v", g.worktreePath, err)
 			}
 		}
 	} else if !os.IsNotExist(err) {
 		// Only append error if it's not a "not exists" error
-		errs = append(errs, fmt.Errorf("failed to check worktree path: %w", err))
+		tc.Record("check worktree path", err)
 	}
 
 	// Delete the branch using git CLI, but skip if this is a pre-existing branch
 	if !g.isExistingBranch {
 		if _, err := g.runGitCommand(g.repoPath, "branch", "-D", g.branchName); err != nil {
-			// Only log if it's not a "branch not found" error
+			// Only record if it's not a "branch not found" error
 			if !strings.Contains(err.Error(), "not found") {
-				errs = append(errs, fmt.Errorf("failed to remove branch %s: %w", g.branchName, err))
+				tc.Record(fmt.Sprintf("remove branch %s", g.branchName), err)
 			}
 		}
 	}
 
 	// Prune the worktree to clean up any remaining references
-	if err := g.Prune(); err != nil {
-		errs = append(errs, err)
-	}
+	tc.Add(g.Prune())
 
-	if len(errs) > 0 {
-		return g.combineErrors(errs)
-	}
-
-	return nil
+	return tc.Err()
 }
 
 // clearStaleWorktree force-removes any worktree registration at g.worktreePath
