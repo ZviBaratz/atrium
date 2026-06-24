@@ -5,6 +5,11 @@
 // It exists so the session/git/tmux teardown paths (Instance.pause, Instance.Kill,
 // Worktree.Cleanup, Session.Close) share one accumulate-log-combine helper instead
 // of each hand-rolling the pattern and its own error-joining tail.
+//
+// A step's failure is logged exactly once, at the point of failure. When one
+// teardown path composes another that is itself teardown-based (Instance.Kill
+// calling Session.Close and Worktree.Cleanup), the outer path uses Wrap rather
+// than Record so the already-logged aggregate is not logged a second time.
 package teardown
 
 import (
@@ -29,13 +34,30 @@ type Errors struct {
 //		return t.Err()
 //	}
 func (e *Errors) Record(op string, err error) bool {
+	if wrapped := e.wrap(op, err); wrapped != nil {
+		log.ErrorLog.Print(wrapped)
+		return true
+	}
+	return false
+}
+
+// Wrap is Record without the logging: it wraps and retains a non-nil err the same
+// way but does not log it, for a step whose own failure was already logged at the
+// point of failure — typically a callee that is itself a teardown path. It is a
+// no-op for a nil err and reports whether anything was recorded.
+func (e *Errors) Wrap(op string, err error) bool {
+	return e.wrap(op, err) != nil
+}
+
+// wrap retains a non-nil err as "failed to <op>: err" and returns the wrapped
+// error (nil for a nil err), without logging. It backs Record and Wrap.
+func (e *Errors) wrap(op string, err error) error {
 	if err == nil {
-		return false
+		return nil
 	}
 	wrapped := fmt.Errorf("failed to %s: %w", op, err)
 	e.errs = append(e.errs, wrapped)
-	log.ErrorLog.Print(wrapped)
-	return true
+	return wrapped
 }
 
 // Add retains and logs an already-formed error verbatim (no "failed to" prefix),

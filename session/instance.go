@@ -798,15 +798,17 @@ func (i *Instance) Kill() error {
 
 	var tc teardown.Errors
 
-	// Always try to cleanup both resources, even if one fails
+	// Always try to cleanup both resources, even if one fails.
+	// Close and Cleanup are themselves teardown paths that log their own
+	// failures, so Wrap (not Record) adds return context without re-logging.
 	// Clean up tmux session first since it's using the git worktree
 	if ts := i.tmux(); ts != nil {
-		tc.Record("close tmux session", ts.Close())
+		tc.Wrap("close tmux session", ts.Close())
 	}
 
 	// Then clean up git worktree
 	if wt := i.worktree(); wt != nil {
-		tc.Record("cleanup git worktree", wt.Cleanup())
+		tc.Wrap("cleanup git worktree", wt.Cleanup())
 	}
 
 	return tc.Err()

@@ -1,10 +1,25 @@
 package teardown
 
 import (
+	"bytes"
 	"errors"
+	"io"
 	"strings"
 	"testing"
+
+	"github.com/ZviBaratz/atrium/log"
 )
+
+// captureErrorLog redirects log.ErrorLog to a buffer for the duration of fn and
+// returns what was written, so a test can assert whether a method logged.
+func captureErrorLog(t *testing.T, fn func()) string {
+	t.Helper()
+	var buf bytes.Buffer
+	log.ErrorLog.SetOutput(&buf)
+	defer log.ErrorLog.SetOutput(io.Discard)
+	fn()
+	return buf.String()
+}
 
 func TestRecordNilIsNoop(t *testing.T) {
 	var tc Errors
@@ -39,6 +54,48 @@ func TestRecordWrapsAndReturnsTrue(t *testing.T) {
 	}
 	if got := err.Error(); !strings.Contains(got, "failed to commit changes") {
 		t.Errorf("Err() = %q, want it to contain the op prefix", got)
+	}
+}
+
+func TestRecordLogs(t *testing.T) {
+	var tc Errors
+	out := captureErrorLog(t, func() {
+		tc.Record("commit changes", errors.New("boom"))
+	})
+	if !strings.Contains(out, "failed to commit changes") {
+		t.Errorf("Record should log the wrapped error, logged %q", out)
+	}
+}
+
+func TestWrapRetainsButDoesNotLog(t *testing.T) {
+	var tc Errors
+	sentinel := errors.New("boom")
+	var recorded bool
+	out := captureErrorLog(t, func() {
+		recorded = tc.Wrap("cleanup git worktree", sentinel)
+	})
+	if !recorded {
+		t.Fatal("Wrap(non-nil) should return true")
+	}
+	if out != "" {
+		t.Errorf("Wrap should not log, logged %q", out)
+	}
+	err := tc.Err()
+	if !errors.Is(err, sentinel) {
+		t.Errorf("Wrap should retain the error for Err(): %v", err)
+	}
+	if got := err.Error(); !strings.Contains(got, "failed to cleanup git worktree") {
+		t.Errorf("Wrap should wrap with the op prefix, got %q", got)
+	}
+}
+
+func TestWrapNilIsNoop(t *testing.T) {
+	var tc Errors
+	if tc.Wrap("do thing", nil) {
+		t.Fatal("Wrap(nil) should return false")
+	}
+	if err := tc.Err(); err != nil {
+		t.Fatalf("Err() = %v, want nil after only a nil Wrap", err)
 	}
 }
 
