@@ -587,19 +587,27 @@ func (r *InstanceRenderer) Render(i *session.Instance, idx int, selected, marked
 	}
 
 	// --- Left marker (mark glyph when marked, else accent bar when selected) ---
-	// Marked outranks selected for the one-column gutter: a marked row still shows
-	// as the cursor via its elevated row background (newRowPaint), so the mark
-	// glyph can claim column 0 without losing the cursor.
+	// Marked outranks selected for line 1's one-column gutter: a marked row still
+	// shows as the cursor via its elevated row background (newRowPaint), so the
+	// mark glyph can claim column 0 without losing the cursor. The check is a
+	// discrete glyph, so it leads line 1 alone — continuation lines carry the
+	// accent bar (a continuous rail) only when this is the cursor row, never a
+	// repeated check, which would read as duplicate marks.
+	bar := p.seg(g.SelectionMark, th.Palette.Accent).render()
 	marker := p.pad(1)
 	switch {
 	case marked:
 		marker = p.seg(g.MarkChecked, th.Palette.Accent).render()
 	case selected:
-		marker = p.seg(g.SelectionMark, th.Palette.Accent).render()
+		marker = bar
 	}
-	rows := []string{marker + line1, marker + line2}
+	cont := p.pad(1)
+	if selected {
+		cont = bar
+	}
+	rows := []string{marker + line1, cont + line2}
 	if line3 != "" {
-		rows = append(rows, marker+line3)
+		rows = append(rows, cont+line3)
 	}
 	return lipgloss.JoinVertical(lipgloss.Left, rows...)
 }

@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/ZviBaratz/atrium/session"
@@ -115,4 +116,25 @@ func TestRender_MarkGlyph(t *testing.T) {
 
 	unmarked := ansi.Strip(r.Render(inst, 1, false, false))
 	require.NotContains(t, unmarked, mark, "an unmarked row must not show the mark glyph")
+}
+
+// The mark glyph leads line 1 only: a session row spans multiple visual lines
+// (name line + version-control line), and repeating the discrete check glyph on
+// every line reads as duplicate checkmarks. It must appear exactly once.
+func TestRender_MarkGlyphAppearsOncePerRow(t *testing.T) {
+	t.Cleanup(theme.Set("unicode"))
+	mark := theme.Current().Glyphs.MarkChecked
+
+	s := spinner.New()
+	r := &InstanceRenderer{spinner: &s}
+	r.setWidth(80)
+	inst := markInst(t, "t")
+
+	// Marked but not selected, and marked + selected (cursor row): in both cases
+	// the check glyph rides line 1 alone.
+	for _, selected := range []bool{false, true} {
+		out := ansi.Strip(r.Render(inst, 1, selected, true))
+		require.Equalf(t, 1, strings.Count(out, mark),
+			"marked row (selected=%v) must show the mark glyph exactly once, got:\n%s", selected, out)
+	}
 }
