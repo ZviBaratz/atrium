@@ -1017,6 +1017,13 @@ func (m *home) cancelPromptOverlay() tea.Cmd {
 		// Drop any pending "⌃R again" arm so it can't survive a Ctrl+C cancel (which
 		// bypasses the overlay's own disarm) and make the next single Ctrl+R a wipe.
 		m.textInputOverlay.DisarmClear()
+		// The stash reuses this very overlay, whose Canceled flag was just set by the
+		// Escape that triggered this stash. Clear the transient submit/cancel flags so
+		// the restored draft is a clean, submittable form — otherwise handlePromptState
+		// checks IsCanceled before IsSubmitted, so every later Enter/Ctrl+S on the
+		// restored form is misread as a cancel and the session is never created.
+		m.textInputOverlay.Canceled = false
+		m.textInputOverlay.Submitted = false
 		m.stashedDraft = m.textInputOverlay
 	}
 	m.textInputOverlay = nil

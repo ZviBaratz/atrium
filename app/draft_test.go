@@ -54,6 +54,60 @@ func TestDraft_ReopenRestoresStash(t *testing.T) {
 	assert.Nil(t, h.stashedDraft, "the stash is consumed into the live overlay")
 }
 
+// A restored draft must stay submittable. Escaping a dirty form stashes the very
+// overlay whose Esc keypress set Canceled=true; if that flag rides into the stash,
+// the restored form's every submit (Enter or Ctrl+S) is misread as a cancel —
+// handlePromptState checks IsCanceled before IsSubmitted — so the form closes and
+// re-stashes without ever creating the session. Once any draft has been stashed,
+// new-session creation is dead. Regression guard for that.
+func TestDraft_RestoredDraftIsSubmittable(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	h := newCreateFormHome(t)
+	dir := t.TempDir()
+	addDirectInstance(t, h, "existing", dir) // contextual non-git target → a direct session
+	before := h.list.NumInstances()
+
+	h.handleKeyPress(draftRunes("n")) // open, focus title
+	typeString(h, "my-draft")
+	h.handleKeyPress(tea.KeyMsg{Type: tea.KeyEsc}) // stash the dirty form
+	require.NotNil(t, h.stashedDraft, "a dirty form is stashed on Escape")
+
+	h.handleKeyPress(draftRunes("n")) // reopen → restore the draft
+	require.NotNil(t, h.textInputOverlay)
+	require.Equal(t, "my-draft", h.textInputOverlay.GetTitle(), "the draft is restored")
+
+	h.handleKeyPress(tea.KeyMsg{Type: tea.KeyCtrlS}) // submit the restored draft
+
+	assert.Nil(t, h.stashedDraft, "a submitted draft must not be re-stashed as a cancel")
+	assert.Equal(t, before+1, h.list.NumInstances(),
+		"submitting a restored draft must create the session")
+	assert.Nil(t, h.textInputOverlay, "a successful submit closes the form")
+	assert.Equal(t, stateDefault, h.state)
+}
+
+// The same flow via Enter on the title (the one-handed "n → name → ↵" create
+// contract) must also create the restored draft — both submit keys went dead
+// behind the stale Canceled flag.
+func TestDraft_RestoredDraftSubmitsOnEnter(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	h := newCreateFormHome(t)
+	dir := t.TempDir()
+	addDirectInstance(t, h, "existing", dir)
+	before := h.list.NumInstances()
+
+	h.handleKeyPress(draftRunes("n"))
+	typeString(h, "my-draft")
+	h.handleKeyPress(tea.KeyMsg{Type: tea.KeyEsc}) // stash
+	h.handleKeyPress(draftRunes("n"))              // restore
+	require.Equal(t, "my-draft", h.textInputOverlay.GetTitle())
+
+	h.handleKeyPress(tea.KeyMsg{Type: tea.KeyEnter}) // submit via Enter on the title
+
+	assert.Nil(t, h.stashedDraft, "Enter on a restored draft must not re-stash it as a cancel")
+	assert.Equal(t, before+1, h.list.NumInstances(), "Enter must create the restored draft's session")
+	assert.Nil(t, h.textInputOverlay)
+}
+
 func TestDraft_EscapeOnNonCreateOverlayDoesNotStash(t *testing.T) {
 	h := newCreateFormHome(t)
 	ov := overlay.NewSmartDispatchOverlay("Describe the session")
