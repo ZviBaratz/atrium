@@ -33,7 +33,10 @@ func TestBranchNameForSession(t *testing.T) {
 // with a misleading error (issue #187).
 func TestBranchNameForSessionEmptyTitleFallback(t *testing.T) {
 	const prefix = "zvi/"
-	bare := BranchNameForSession(prefix, "") // the degenerate prefix-only slug
+	// The degenerate prefix-only slug the fallback must avoid. Derived straight
+	// from sanitizeBranchName (not BranchNameForSession, which now takes the same
+	// hash fallback for an empty title) so this stays the literal "zvi".
+	bare := sanitizeBranchName(prefix)
 
 	for _, title := range []string{"日本語", "中文", "???", "😀"} {
 		got := BranchNameForSession(prefix, title)
