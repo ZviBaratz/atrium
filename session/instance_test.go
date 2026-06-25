@@ -196,6 +196,55 @@ func TestToInstanceData_PersistsGitContext(t *testing.T) {
 	assert.True(t, data.DiffStats.Dirty)
 }
 
+// TestOperableGitSession_TruthTable pins the predicate behind the diff/PR guards:
+// true only for a started, non-paused git session, false for unstarted, paused, and
+// direct sessions. It also guards the key invariant the issue #188 premise got wrong —
+// a paused git session keeps a non-nil worktree pointer (pause removes only the on-disk
+// directory). NewWorktreeFromStorage is a pure constructor (no git I/O), so each state
+// is stood up without starting tmux/git.
+func TestOperableGitSession_TruthTable(t *testing.T) {
+	newGitWt := func() *git.Worktree {
+		return git.NewWorktreeFromStorage(
+			context.Background(),
+			"/repo", "/repo/wt", "t", "session/t", "abc123", "main", false, "session/")
+	}
+
+	t.Run("unstarted git session is not operable", func(t *testing.T) {
+		inst, err := NewInstance(InstanceOptions{Title: "t", Path: ".", Program: "echo"})
+		require.NoError(t, err)
+		inst.gitWorktree = newGitWt() // worktree pointer set, but Start has not run
+		assert.False(t, inst.IsDirect(), "an unstarted git session is not direct")
+		assert.False(t, inst.operableGitSession())
+	})
+
+	t.Run("started git session is operable", func(t *testing.T) {
+		inst, err := NewInstance(InstanceOptions{Title: "t", Path: ".", Program: "echo"})
+		require.NoError(t, err)
+		inst.started = true
+		inst.gitWorktree = newGitWt()
+		assert.True(t, inst.operableGitSession())
+	})
+
+	t.Run("paused git session is not operable but keeps its worktree", func(t *testing.T) {
+		inst, err := NewInstance(InstanceOptions{Title: "t", Path: ".", Program: "echo"})
+		require.NoError(t, err)
+		inst.started = true
+		inst.status = Paused
+		inst.gitWorktree = newGitWt() // pause removes the on-disk dir, not this pointer
+		assert.NotNil(t, inst.worktree(), "a paused git session must keep its worktree pointer")
+		assert.False(t, inst.operableGitSession())
+	})
+
+	t.Run("started direct session is not operable", func(t *testing.T) {
+		inst, err := NewInstance(InstanceOptions{Title: "t", Path: t.TempDir(), Program: "echo", Direct: true})
+		require.NoError(t, err)
+		inst.started = true
+		assert.True(t, inst.IsDirect())
+		assert.Nil(t, inst.worktree(), "a direct session has no worktree")
+		assert.False(t, inst.operableGitSession())
+	})
+}
+
 func TestSetPath_RejectedAfterStart(t *testing.T) {
 	inst, err := NewInstance(InstanceOptions{Title: "t", Path: ".", Program: "echo"})
 	require.NoError(t, err)

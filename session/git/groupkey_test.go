@@ -16,11 +16,45 @@ func TestBranchNameForSession(t *testing.T) {
 		{"zvi/", "fix-bug", "zvi/fix-bug"},
 		{"", "Hello World", "hello-world"},
 		{"me/", "v1.2 cleanup", "me/v1.2-cleanup"},
+		// A mixed title still slugs from its ASCII part — the empty-title fallback
+		// must NOT trigger when the title contributes any safe characters.
+		{"zvi/", "fix 日本語", "zvi/fix"},
 	}
 	for _, c := range cases {
 		if got := BranchNameForSession(c.prefix, c.title); got != c.want {
 			t.Fatalf("BranchNameForSession(%q, %q) = %q, want %q", c.prefix, c.title, got, c.want)
 		}
+	}
+}
+
+// A title that sanitizes to nothing (CJK, emoji, punctuation-only) must still
+// mint a non-degenerate branch, and two distinct such titles must mint distinct
+// branches — otherwise the new-session form rejects the second as a duplicate
+// with a misleading error (issue #187).
+func TestBranchNameForSessionEmptyTitleFallback(t *testing.T) {
+	const prefix = "zvi/"
+	// The degenerate prefix-only slug the fallback must avoid. Derived straight
+	// from sanitizeBranchName (not BranchNameForSession, which now takes the same
+	// hash fallback for an empty title) so this stays the literal "zvi".
+	bare := sanitizeBranchName(prefix)
+
+	for _, title := range []string{"日本語", "中文", "???", "😀"} {
+		got := BranchNameForSession(prefix, title)
+		if got == "" {
+			t.Fatalf("BranchNameForSession(%q, %q) = empty, want a non-empty slug", prefix, title)
+		}
+		if got == bare {
+			t.Fatalf("BranchNameForSession(%q, %q) = %q, must not collapse to the bare prefix", prefix, title, got)
+		}
+		// Deterministic: the same title always derives the same branch.
+		if again := BranchNameForSession(prefix, title); again != got {
+			t.Fatalf("BranchNameForSession(%q, %q) not deterministic: %q != %q", prefix, title, got, again)
+		}
+	}
+
+	// The core regression: distinct empty-sanitizing titles get distinct branches.
+	if a, b := BranchNameForSession(prefix, "日本語"), BranchNameForSession(prefix, "中文"); a == b {
+		t.Fatalf("distinct titles collided on branch %q", a)
 	}
 }
 

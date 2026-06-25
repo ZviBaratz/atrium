@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/ZviBaratz/atrium/internal/actions"
+	"github.com/ZviBaratz/atrium/keys"
 	"github.com/ZviBaratz/atrium/session"
 	"github.com/ZviBaratz/atrium/session/git"
 	"github.com/ZviBaratz/atrium/ui"
@@ -101,6 +102,12 @@ func (m *home) handlePromptState(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.state = stateDefault
 		m.menu.SetState(ui.StateDefault)
 		return m, tea.Sequence(tea.WindowSize(), m.instanceChanged())
+	}
+
+	// A confirmed double-tap Ctrl+R rebuilds the form fresh and drops any draft.
+	if m.textInputOverlay.ClearRequested() {
+		m.stashedDraft = nil
+		return m, m.openCreateForm(true)
 	}
 
 	// If the target directory changed in the picker, re-scope the form to the
@@ -249,6 +256,80 @@ func (m *home) handleFilterState(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.list.SetFilter(m.list.FilterQuery() + string(msg.Runes))
 		}
 		return m, m.instanceChanged()
+	}
+}
+
+// enterMultiSelect enters multi-select ("visual") mode from the list. It is a
+// no-op (with an explanation) when there are no sessions, so the mode never opens
+// on an empty list.
+func (m *home) enterMultiSelect() (tea.Model, tea.Cmd) {
+	if m.list.NumInstances() == 0 {
+		return m, m.handleInfoNotice("no sessions to select")
+	}
+	m.enterVisualMode()
+	return m, m.instanceChanged()
+}
+
+// enterVisualMode flips into multi-select mode and gives the hint bar its row
+// (even when the always-on bar is off, so the gestures are always taught).
+func (m *home) enterVisualMode() {
+	m.state = stateVisual
+	m.menu.SetState(ui.StateVisual)
+	m.recomputeLayout()
+}
+
+// exitVisualMode leaves multi-select mode: it clears the marks and restores the
+// default state/menu, reclaiming the hint-bar row. The marked runners call this
+// before opening their confirmation; confirmAction then overrides the state to
+// stateConfirm, and the layout is already correct for the post-confirm default.
+func (m *home) exitVisualMode() {
+	m.list.ClearMarks()
+	m.state = stateDefault
+	m.menu.SetState(ui.StateDefault)
+	m.recomputeLayout()
+}
+
+// handleMultiSelectState routes a key while multi-select ("visual") mode is
+// active: space marks/unmarks the highlighted session, the lifecycle keys act on
+// the marked set (each opens its own count confirmation over the eligible
+// subset), navigation still moves the cursor, and esc clears the marks and exits.
+func (m *home) handleMultiSelectState(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "esc":
+		m.exitVisualMode()
+		return m, m.instanceChanged()
+	case "x":
+		// Plain x kills the marked set (the bar advertises "x"); ctrl+x (the global
+		// kill chord, KeyKill below) does the same.
+		return m, m.killMarked()
+	}
+
+	name, ok := keys.GlobalKeyStringsMap[msg.String()]
+	if !ok {
+		return m, nil
+	}
+	switch name {
+	case keys.KeyMultiSelect:
+		// v toggles the mode: pressing it again exits, mirroring esc.
+		m.exitVisualMode()
+		return m, m.instanceChanged()
+	case keys.KeyToggleMark:
+		m.list.ToggleMark(m.list.GetSelectedInstance())
+		return m, m.instanceChanged()
+	case keys.KeyUp:
+		m.list.Up()
+		return m, m.instanceChanged()
+	case keys.KeyDown:
+		m.list.Down()
+		return m, m.instanceChanged()
+	case keys.KeyPause:
+		return m, m.pauseMarked()
+	case keys.KeyResume:
+		return m, m.resumeMarked()
+	case keys.KeyKill:
+		return m, m.killMarked()
+	default:
+		return m, nil
 	}
 }
 

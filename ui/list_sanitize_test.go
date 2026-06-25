@@ -24,7 +24,7 @@ func TestRender_DisplayNameSanitizedBeforeMeasurement(t *testing.T) {
 	l, insts := newFilterList(t, "session")
 	insts[0].SetDisplayName(family)
 
-	row := l.renderer.Render(insts[0], 1, false)
+	row := l.renderer.Render(insts[0], 1, false, false)
 
 	// The joiner that lets the rendered width diverge from the measured width must
 	// be gone from the laid-out row: its presence is precisely what causes the

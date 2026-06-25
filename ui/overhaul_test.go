@@ -33,11 +33,11 @@ func TestRender_AutoBadge(t *testing.T) {
 
 	working := instWithStatus(t, "auto", session.Running)
 	working.AutoYes = true
-	require.Contains(t, r.Render(working, 1, false), "AUTO", "auto-accepting session shows the badge")
+	require.Contains(t, r.Render(working, 1, false, false), "AUTO", "auto-accepting session shows the badge")
 
 	paused := instWithStatus(t, "auto-paused", session.Paused)
 	paused.AutoYes = true
-	require.NotContains(t, r.Render(paused, 1, false), "AUTO", "paused session never shows the badge")
+	require.NotContains(t, r.Render(paused, 1, false, false), "AUTO", "paused session never shows the badge")
 }
 
 // The state word is gone — the leading gutter glyph carries the signal. Assert
@@ -58,7 +58,7 @@ func TestRender_StatusGutterNoWord(t *testing.T) {
 		{session.Paused, th.Glyphs.Paused, "paused"},
 	}
 	for _, c := range cases {
-		out := r.Render(instWithStatus(t, "s", c.st), 1, false)
+		out := r.Render(instWithStatus(t, "s", c.st), 1, false, false)
 		require.Contains(t, out, c.glyph, "status %v should render its gutter glyph", c.st)
 		require.NotContains(t, out, c.word, "the state word %q must no longer render", c.word)
 	}
@@ -72,7 +72,7 @@ func TestRender_DiffStatPresent(t *testing.T) {
 	r.setWidth(60)
 	inst := instWithStatus(t, "s", session.Ready)
 	inst.SetDiffStats(&git.DiffStats{Added: 9, Removed: 2})
-	out := r.Render(inst, 1, false)
+	out := r.Render(inst, 1, false, false)
 	require.True(t, strings.Contains(out, "+9") && strings.Contains(out, "-2"), "diff stat should render")
 }
 

@@ -206,6 +206,10 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				r.instance.SetModeMeta(r.mode)
 			}
 		}
+		// Re-apply the status sort now that pane states are fresh, so urgent sessions
+		// keep floating to the top of their group. No-op in creation mode; the
+		// selected session stays under the cursor (preserved by identity).
+		m.list.ApplySort()
 		m.pushSessionContexts()
 		cmds := deliverReadyPrompts(msg.results)
 		m.metadataTick++
@@ -220,6 +224,11 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			msg.instance.ApplyPaneState(msg.state)
 		}
 		return m, nil
+	case promptSendErrorMsg:
+		// A queued initial prompt that could not be delivered (the session died after
+		// the readiness gate passed). Surface it like the manual send path rather than
+		// leaving the session Ready-but-idle with no sign the prompt was lost.
+		return m, m.handleError(fmt.Errorf("failed to deliver prompt to %q: %w", msg.instance.Title, msg.err))
 	case tea.MouseMsg:
 		if msg.Action != tea.MouseActionPress {
 			return m, nil
@@ -452,6 +461,22 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			)
 		}
 		return m, tea.Batch(m.showInfo(msg.summary()), m.instanceChanged())
+	case batchKillDoneMsg:
+		// A confirmed batch kill finished. Tear down each killed session's preview
+		// terminal on the main loop (single-session kill does the same). All-success
+		// gets a transient notice; any failures go to a persistent modal naming which
+		// sessions survived and why. Either way, refresh the list so the now-gone rows
+		// disappear.
+		for _, inst := range msg.killedInstances {
+			m.tabbedWindow.CleanupTerminalForInstance(inst)
+		}
+		if len(msg.failures) == 0 {
+			return m, tea.Batch(
+				m.handleInfoNotice(fmt.Sprintf("killed %d session%s", msg.killed, plural(msg.killed))),
+				m.instanceChanged(),
+			)
+		}
+		return m, tea.Batch(m.showInfo(msg.summary()), m.instanceChanged())
 	case prMergedMsg:
 		// A confirmed merge succeeded: acknowledge it and refresh so the PR badge
 		// reflects the now-merged state on the next poll.
@@ -656,6 +681,13 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		return m.handleHintsState(msg)
 	}
 
+	// Multi-select (visual) mode: space marks, lifecycle keys act on the marked
+	// set, esc exits. Must run before the global esc/quit handling below so esc
+	// clears the marks (not the filter) and q never quits.
+	if m.state == stateVisual {
+		return m.handleMultiSelectState(msg)
+	}
+
 	// Exit scrolling mode when ESC is pressed and preview pane is in scrolling mode
 	// Check if Escape key was pressed and we're not in the diff tab (meaning we're in preview tab)
 	// Always check for escape key first to ensure it doesn't get intercepted elsewhere
@@ -728,6 +760,16 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 	case keys.KeyDown:
 		m.list.Down()
 		return m, m.instanceChanged()
+	case keys.KeyNextUnread:
+		if m.list.NextUnread() {
+			return m, m.instanceChanged()
+		}
+		return m, m.handleInfoNotice("no more unread sessions")
+	case keys.KeyNextNeedsInput:
+		if m.list.NextNeedsInput() {
+			return m, m.instanceChanged()
+		}
+		return m, m.handleInfoNotice("no more blocked sessions")
 	case keys.KeyShiftUp:
 		m.tabbedWindow.ScrollUp(1)
 		return m, m.instanceChanged()
@@ -763,6 +805,8 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		m.menu.SetState(ui.StateFilter)
 		m.recomputeLayout() // the hint bar now claims a row; shrink the panes to fit
 		return m, m.instanceChanged()
+	case keys.KeyMultiSelect:
+		return m.enterMultiSelect()
 	case keys.KeyRename:
 		return m.openRenameSelected()
 	case keys.KeyAutoName:
@@ -777,9 +821,13 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		return m.openPRForSelected()
 	case keys.KeyPause:
 		return m.pauseSelected()
-	case keys.KeyMoveUp:
-		return m.moveAndPersist(m.list.MoveUp)
-	case keys.KeyMoveDown:
+	case keys.KeyMoveUp, keys.KeyMoveDown:
+		if !m.list.ManualReorderEnabled() {
+			return m, m.handleInfoNotice("manual reorder only in creation sort")
+		}
+		if name == keys.KeyMoveUp {
+			return m.moveAndPersist(m.list.MoveUp)
+		}
 		return m.moveAndPersist(m.list.MoveDown)
 	case keys.KeyMoveGroupUp:
 		return m.moveAndPersist(m.list.MoveGroupUp)

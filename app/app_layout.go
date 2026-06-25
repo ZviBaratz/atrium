@@ -85,7 +85,9 @@ func (m *home) updateHandleWindowSizeEvent(msg tea.WindowSizeMsg) {
 // restores the chrome-free interface.
 func (m *home) menuVisible() bool {
 	switch m.state {
-	case stateFilter:
+	case stateFilter, stateVisual:
+		// Both inline interactions teach their gestures on the bar, so it stays
+		// even when the always-on hint bar is turned off.
 		return true
 	case statePrompt, stateRename, stateConfirm, stateHelp, stateInfo, stateSettings:
 		return false
@@ -130,6 +132,13 @@ func (m *home) applySettingChange(key string) tea.Cmd {
 	case "permission_indicator":
 		if m.list != nil {
 			m.list.SetPermissionIndicator(m.appConfig.GetPermissionIndicator())
+		}
+	case "session_sort":
+		// Re-order the list under the new mode immediately; the list takes the
+		// normalized mode string so ui needs no config import. Selection is
+		// preserved by identity.
+		if m.list != nil {
+			m.list.SetSortMode(m.appConfig.GetSessionSort())
 		}
 	case "hint_bar":
 		// Mirror the newHome seeding: the list shows its inline key hint only

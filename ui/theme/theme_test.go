@@ -62,6 +62,7 @@ func TestGlyphWidths(t *testing.T) {
 			"FoldOpen":      g.FoldOpen,
 			"FoldClosed":    g.FoldClosed,
 			"SelectionMark": g.SelectionMark,
+			"MarkChecked":   g.MarkChecked,
 			"DiffAdd":       g.DiffAdd,
 			"DiffDel":       g.DiffDel,
 		}

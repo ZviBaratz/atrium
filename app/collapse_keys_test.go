@@ -12,16 +12,15 @@ import (
 )
 
 // The fold keys are directional arrows, quick-send lives on "s", approve on
-// "a", and space is deliberately unbound — reserved for a future mark/select
-// action.
-func TestKeymap_FoldArrowsQuickSendAndFreeSpace(t *testing.T) {
+// "a", and space now drives the mark/unmark action it was reserved for (only
+// consumed in multi-select mode; a no-op in the default state).
+func TestKeymap_FoldArrowsQuickSendAndMarkSpace(t *testing.T) {
 	require.Equal(t, keys.KeyCollapse, keys.GlobalKeyStringsMap["left"])
 	require.Equal(t, keys.KeyExpand, keys.GlobalKeyStringsMap["right"])
 	require.Equal(t, keys.KeyQuickSend, keys.GlobalKeyStringsMap["s"])
 	require.Equal(t, keys.KeyApprove, keys.GlobalKeyStringsMap["a"])
-
-	_, bound := keys.GlobalKeyStringsMap[" "]
-	require.False(t, bound, "space must stay unbound (reserved)")
+	require.Equal(t, keys.KeyToggleMark, keys.GlobalKeyStringsMap[" "])
+	require.Equal(t, keys.KeyMultiSelect, keys.GlobalKeyStringsMap["v"])
 }
 
 // ←/→ drive the directional fold end-to-end through handleKeyPress: ← folds the

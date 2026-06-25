@@ -18,6 +18,7 @@ func TestDerivedNamesCollide(t *testing.T) {
 		{"a.b", "a_b", true, "tmux maps dots to underscores; segments equal"},
 		{"foo", "bar", false, "unrelated titles"},
 		{"alpha", "alpha2", false, "prefix of the other is not a collision"},
+		{"日本語", "中文", false, "distinct non-ASCII titles get distinct branch slugs (issue #187)"},
 	}
 	for _, c := range cases {
 		if got := DerivedNamesCollide("zvi/", c.a, c.b); got != c.want {

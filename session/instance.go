@@ -47,6 +47,33 @@ const (
 	NeedsInput
 )
 
+// StatusUrgency returns a session's action-priority rank for the "status" sort
+// mode — lower is more urgent and sorts first. It encodes how much the session
+// wants the user's attention right now: a blocked prompt outranks a finished-but-
+// unseen turn, which outranks an idle session, which outranks one still working.
+// unread is the caller's Instance.Unread() (only meaningful for Ready); the value
+// is independent of the numeric Status constants so their serialized order can
+// keep changing without disturbing this ordering.
+func StatusUrgency(s Status, unread bool) int {
+	switch s {
+	case NeedsInput:
+		return 0
+	case Ready:
+		if unread {
+			return 1
+		}
+		return 2
+	case Running:
+		return 3
+	case Loading:
+		return 4
+	case Paused:
+		return 5
+	default:
+		return 6
+	}
+}
+
 // Instance is a running instance of claude code.
 type Instance struct {
 	// Title is the title of the instance. It is the stable identifier used as the storage
@@ -101,6 +128,10 @@ type Instance struct {
 	// session has no worktree (gitWorktree stays nil), no branch, and no diff — its agent
 	// runs directly in Path. Set at construction (NewInstance) or restore (FromInstanceData)
 	// and never changes afterwards, so it is read without the lock.
+	//
+	// Use this (via IsDirect) to test directness, not `gitWorktree == nil`: an unstarted
+	// git session also has a nil worktree but is not direct. See worktree() for the full
+	// nil-vs-direct distinction.
 	direct bool
 
 	// claudeAccount / claudeConfigDir / claudeAccountDefault pin the Claude Code
@@ -641,6 +672,15 @@ func (i *Instance) tmux() *tmux.Session {
 
 // worktree returns the git worktree pointer under the read lock. As with tmux(),
 // callers run git I/O on the returned worktree outside the lock.
+//
+// It is nil in exactly two situations: a direct (non-git) session — which never has a
+// worktree (see IsDirect) — and a git session before Start has created one. It is NOT
+// nil for a paused git session: pause() removes the on-disk worktree directory but
+// leaves this pointer intact (and restore rehydrates it from storage), so a paused git
+// session still reports worktree() != nil. Consequently `worktree() == nil` is broader
+// than IsDirect(): they coincide for every started session, but for an unstarted git
+// session worktree() is nil while IsDirect() is false. Test directness with IsDirect();
+// use a `worktree() == nil` check only as a nil guard before dereferencing the pointer.
 func (i *Instance) worktree() *git.Worktree {
 	i.mu.RLock()
 	defer i.mu.RUnlock()
@@ -651,6 +691,15 @@ func (i *Instance) worktree() *git.Worktree {
 // git repository, so it has no worktree, branch, or diff and its agent runs in Path.
 func (i *Instance) IsDirect() bool {
 	return i.direct
+}
+
+// operableGitSession reports whether the instance is a started, non-paused git session
+// with a live worktree pointer — i.e. one it is safe to run diff/PR git I/O against.
+// It is false for an unstarted, paused, or direct session. This names the intent of the
+// otherwise-opaque `!i.isStarted() || i.Paused() || worktree() == nil` guard so callers
+// don't conflate "not operable right now" with "is a direct session" (see worktree()).
+func (i *Instance) operableGitSession() bool {
+	return i.isStarted() && !i.Paused() && i.worktree() != nil
 }
 
 // WorkingDir is the directory the agent's tmux session runs in: the isolated worktree
@@ -1036,7 +1085,12 @@ func (i *Instance) GetGitWorktree() (*git.Worktree, error) {
 	return wt, nil
 }
 
-// GetWorktreePath returns the worktree path for the instance, or empty string if unavailable
+// GetWorktreePath returns the worktree path for the instance, or empty string if unavailable.
+//
+// Unlike GetGitWorktree this is deliberately not isStarted-guarded, so it can be called on
+// an unstarted git session whose worktree pointer is still nil. The `wt == nil` test is a
+// nil guard, not a directness test — keep it (do not swap in IsDirect, which would be false
+// for that unstarted git session and let the nil pointer through to a panic). See worktree().
 func (i *Instance) GetWorktreePath() string {
 	wt := i.worktree()
 	if wt == nil {
@@ -1045,7 +1099,9 @@ func (i *Instance) GetWorktreePath() string {
 	return wt.GetWorktreePath()
 }
 
-// GetRepoPath returns the git repository root for the instance, or empty string if unavailable
+// GetRepoPath returns the git repository root for the instance, or empty string if unavailable.
+// As with GetWorktreePath, the `wt == nil` check is a nil guard (it also covers an unstarted
+// git session), not an IsDirect test — see worktree().
 func (i *Instance) GetRepoPath() string {
 	wt := i.worktree()
 	if wt == nil {
@@ -1440,11 +1496,10 @@ func (i *Instance) UpdateDiffStats() error {
 // ComputeDiff runs the expensive git diff I/O and returns the result without
 // mutating instance state. Safe to call from a background goroutine.
 func (i *Instance) ComputeDiff() *git.DiffStats {
-	wt := i.worktree()
-	if !i.isStarted() || i.Paused() || wt == nil {
+	if !i.operableGitSession() {
 		return nil
 	}
-	return wt.Diff()
+	return i.worktree().Diff()
 }
 
 // ComputeDiffNumstat runs a lightweight git diff --numstat and returns only the
@@ -1452,11 +1507,10 @@ func (i *Instance) ComputeDiff() *git.DiffStats {
 // background goroutine. Use this for instances whose full diff content is not
 // currently needed so we avoid keeping large diffs in memory.
 func (i *Instance) ComputeDiffNumstat() *git.DiffStats {
-	wt := i.worktree()
-	if !i.isStarted() || i.Paused() || wt == nil {
+	if !i.operableGitSession() {
 		return nil
 	}
-	return wt.DiffNumstat()
+	return i.worktree().DiffNumstat()
 }
 
 // SetDiffStats sets the diff statistics on the instance. Should be called from
@@ -1485,11 +1539,10 @@ func (i *Instance) clearCachedDirty() {
 // that cannot have a PR — not started, paused, or direct (no worktree/branch).
 // selected requests the eager cache TTL for the focused session.
 func (i *Instance) ComputePRStatus(selected bool) *git.PRStatus {
-	wt := i.worktree()
-	if !i.isStarted() || i.Paused() || wt == nil {
+	if !i.operableGitSession() {
 		return nil
 	}
-	s := wt.PRStatus(i.baseContext(), selected)
+	s := i.worktree().PRStatus(i.baseContext(), selected)
 	return &s
 }
 

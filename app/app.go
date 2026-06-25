@@ -117,6 +117,10 @@ const (
 	// stateHints is the state when hint (fingers) mode overlays the preview
 	// pane with copy/open labels; every key routes to hint selection.
 	stateHints
+	// stateVisual is multi-select ("visual") mode: space marks/unmarks the
+	// highlighted session and a lifecycle action (pause/resume/kill) applies to
+	// the marked set; esc clears the marks and exits.
+	stateVisual
 )
 
 type home struct {
@@ -229,6 +233,9 @@ type home struct {
 	spinner spinner.Model
 	// textInputOverlay handles text input with state
 	textInputOverlay *overlay.TextInputOverlay
+	// stashedDraft keeps a dirty new-session form across Escape so reopening with
+	// n/N restores it. In-memory only (this run) — never persisted to state.json.
+	stashedDraft *overlay.TextInputOverlay
 	// textOverlay displays text information
 	textOverlay *overlay.TextOverlay
 	// confirmationOverlay displays confirmation modals
@@ -360,6 +367,9 @@ func newHome(ctx context.Context, program string, autoYes bool, version, binName
 	// Restore folded groups only after every instance is loaded — AddInstance auto-expands the
 	// group it inserts into, so applying persisted folds earlier would be undone by the loop.
 	h.list.SetCollapsedRepos(appState.GetCollapsedRepos())
+	// Apply the persisted within-group sort mode once the full (creation-order) list
+	// is in place, so its canonical-order snapshot is the real creation order.
+	h.list.SetSortMode(appConfig.GetSessionSort())
 
 	return h
 }

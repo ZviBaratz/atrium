@@ -192,10 +192,14 @@ type List struct {
 	// with >1 repo" rule is enforced in exactly one place.
 	collapsed map[string]bool
 
-	// filterQuery is the current incremental filter string. Items whose DisplayName and
-	// Branch both fail a case-insensitive contains check are hidden exactly like collapsed
-	// group members — isHidden returns true for them. An empty string disables filtering.
+	// filterQuery is the current incremental filter string, echoed verbatim in the filter
+	// bar. Items that fail parsedFilter are hidden exactly like collapsed group members —
+	// isHidden returns true for them. An empty string disables filtering.
 	filterQuery string
+	// parsedFilter is filterQuery compiled into a predicate matcher (status:/dirty/behind/
+	// pr: predicates plus substring terms, AND-combined). Recompiled on every SetFilter;
+	// its zero value matches all, so an empty query disables filtering.
+	parsedFilter session.Filter
 	// filterActive is true while the user is actively typing the filter (stateFilter in
 	// app.go). It controls the cursor indicator in the filter bar.
 	filterActive bool
@@ -216,6 +220,24 @@ type List struct {
 	// not be shown (hint bar off / overlay), so it reaches users who'd miss the
 	// toast; like updateBadge it must survive overlays and hint_bar:false.
 	driftBadge string
+
+	// sortMode selects the within-group ordering: "" / "creation" keeps items as
+	// the manual order (the default — no sorting runs); "status" sorts each repo
+	// group by action-priority. See config.SessionSort* for the values.
+	sortMode string
+	// manual is the canonical creation/manual order, snapshotted lazily: it is nil
+	// in creation mode (where items IS canonical and untouched) and holds the
+	// pre-sort order while a non-creation mode is active. Persistence and the
+	// switch back to creation read it; applySort derives the displayed items from
+	// it. Keeping it nil in the common case guarantees creation mode is unchanged.
+	manual []*session.Instance
+
+	// marked is the set of sessions tagged in multi-select ("visual") mode, keyed
+	// by instance pointer. It is ephemeral — cleared on mode exit and after a
+	// batch action — so it is empty (and invisible) during normal navigation. A
+	// stale pointer (instance removed while marked) is harmless: every read
+	// intersects with items, so it simply drops out. See MarkedInstancesInView.
+	marked map[*session.Instance]bool
 }
 
 // NewList returns an empty List.
@@ -272,12 +294,14 @@ func (l *List) SetPermissionIndicator(mode string) {
 // nearest still-visible item. Pass an empty string to disable filtering.
 func (l *List) SetFilter(query string) {
 	l.filterQuery = query
+	l.parsedFilter = session.ParseFilter(query)
 	l.clampSelectionToNavigable()
 }
 
 // ClearFilter resets both the filter query and the active state.
 func (l *List) ClearFilter() {
 	l.filterQuery = ""
+	l.parsedFilter = session.ParseFilter("")
 	l.filterActive = false
 	l.clampSelectionToNavigable()
 }
@@ -290,14 +314,10 @@ func (l *List) FilterQuery() string { return l.filterQuery }
 func (l *List) SetFilterActive(active bool) { l.filterActive = active }
 
 // filterMatches reports whether an instance should be shown given the current filter.
-// The match is a case-insensitive substring check against DisplayName and Branch.
+// The query is compiled (in SetFilter) into predicate + substring terms; see
+// session.Filter. An empty query yields the zero Filter, which matches everything.
 func (l *List) filterMatches(i *session.Instance) bool {
-	if l.filterQuery == "" {
-		return true
-	}
-	q := strings.ToLower(l.filterQuery)
-	return strings.Contains(strings.ToLower(i.DisplayName()), q) ||
-		strings.Contains(strings.ToLower(i.Branch), q)
+	return l.parsedFilter.Matches(i)
 }
 
 // SetSize sets the OUTER height and width of the list (including its panel
@@ -426,7 +446,7 @@ func (r *InstanceRenderer) stateGlyph(i *session.Instance, th *theme.Theme) (gly
 // fresh session with nothing to show falls back to its age. A direct (non-git)
 // session instead shows a dim marker and its age. The selected row carries a left
 // accent bar and a filled background. idx is unused (kept for the caller's signature).
-func (r *InstanceRenderer) Render(i *session.Instance, idx int, selected bool) string {
+func (r *InstanceRenderer) Render(i *session.Instance, idx int, selected, marked bool) string {
 	_ = idx
 	th := theme.Current()
 	g := th.Glyphs
@@ -566,9 +586,15 @@ func (r *InstanceRenderer) Render(i *session.Instance, idx int, selected bool) s
 		}
 	}
 
-	// --- Left marker (accent bar when selected) + compose ---
+	// --- Left marker (mark glyph when marked, else accent bar when selected) ---
+	// Marked outranks selected for the one-column gutter: a marked row still shows
+	// as the cursor via its elevated row background (newRowPaint), so the mark
+	// glyph can claim column 0 without losing the cursor.
 	marker := p.pad(1)
-	if selected {
+	switch {
+	case marked:
+		marker = p.seg(g.MarkChecked, th.Palette.Accent).render()
+	case selected:
 		marker = p.seg(g.SelectionMark, th.Palette.Accent).render()
 	}
 	rows := []string{marker + line1, marker + line2}
@@ -648,7 +674,7 @@ func (l *List) String() string {
 				if l.isHidden(j) {
 					continue
 				}
-				at := appendBlock(zone.Mark(listRowZoneID(l.items[j]), l.renderer.Render(l.items[j], j+1, j == l.selectedIdx)))
+				at := appendBlock(zone.Mark(listRowZoneID(l.items[j]), l.renderer.Render(l.items[j], j+1, j == l.selectedIdx, l.IsMarked(l.items[j]))))
 				if j == l.selectedIdx {
 					selStart, selH = at, len(lines)-at
 				}
@@ -838,6 +864,55 @@ func (l *List) Down() {
 	}
 }
 
+// NextUnread moves the selection to the next unread Ready session (forward,
+// wrapping). Reports whether one was found.
+func (l *List) NextUnread() bool {
+	return l.nextActionable(
+		func(i *session.Instance) bool { return i.GetStatus() == session.Ready && i.Unread() },
+		l.groupUnreadCount,
+	)
+}
+
+// NextNeedsInput moves the selection to the next session blocked on input
+// (forward, wrapping). Reports whether one was found.
+func (l *List) NextNeedsInput() bool {
+	return l.nextActionable(
+		func(i *session.Instance) bool { return i.GetStatus() == session.NeedsInput },
+		l.groupNeedsInputCount,
+	)
+}
+
+// nextActionable moves the selection forward (wrapping, others-only) to the next
+// visible row that needs the user, landing on a collapsed group's anchor when the
+// match is folded inside it. Reports whether such a row was found. member judges an
+// individual row; groupCount badges a collapsed group's [start, end) range.
+func (l *List) nextActionable(member func(*session.Instance) bool, groupCount func(start, end int) int) bool {
+	n := len(l.items)
+	for off := 1; off < n; off++ { // others only, full wrap; off == n (self) excluded
+		idx := (l.selectedIdx + off) % n
+		if l.isHidden(idx) {
+			continue
+		}
+		if l.rowNeedsUser(idx, member, groupCount) {
+			l.SetSelectedInstance(idx) // idx is visible; no clamp needed
+			return true
+		}
+	}
+	return false
+}
+
+// rowNeedsUser judges a visible row. With no active filter a collapsed group's
+// anchor stands in for its hidden members (via groupCount), matching the header
+// badge; otherwise (and always under a filter, where matches surface individually)
+// the per-row predicate applies.
+func (l *List) rowNeedsUser(idx int, member func(*session.Instance) bool, groupCount func(start, end int) int) bool {
+	if l.filterQuery == "" && l.effectiveCollapsed(repoKey(l.items[idx])) {
+		start, end := l.groupBounds(idx)
+		return groupCount(start, end) > 0
+	}
+	return member(l.items[idx])
+}
+
 // Kill tears down the selected instance and removes it from the list.
 func (l *List) Kill() {
 	if len(l.items) == 0 {
@@ -860,6 +935,19 @@ func (l *List) KillInstance(target *session.Instance) {
 	}
 	if idx == -1 {
 		return
+	}
+
+	// Under a sort mode, drop the target from the canonical order and re-sort once
+	// the existing removal + selection recovery below has fully settled. Registered
+	// before the conditional `defer l.Up()` so it runs LAST, after that recovery, and
+	// applySort then preserves the recovered selection by identity. Placed after the
+	// idx==-1 guard so it pairs with a real items removal (no spurious re-sort when
+	// target isn't in the list). In creation mode manual is nil and this is skipped.
+	if l.sortActive() {
+		defer func() {
+			l.manual = removeInstance(l.manual, target)
+			l.applySort()
+		}()
 	}
 
 	// Kill the tmux session and clean up the worktree.
@@ -943,6 +1031,13 @@ func (l *List) AddInstance(instance *session.Instance) (finalize func()) {
 	if insertAt <= l.selectedIdx && len(l.items) > 1 {
 		l.selectedIdx++
 	}
+	// Under a sort mode, mirror the insertion into the canonical order and re-sort
+	// so the new session lands at its priority position (selection is preserved by
+	// identity). In creation mode manual is nil and this is skipped.
+	if l.sortActive() {
+		l.manual = insertByRepo(l.manual, instance)
+		l.applySort()
+	}
 	return func() {}
 }
 
@@ -972,6 +1067,185 @@ func (l *List) SelectInstance(target *session.Instance) {
 			return
 		}
 	}
+}
+
+// sortActive reports whether a non-creation sort mode is in effect — i.e. items is
+// a sorted view of the canonical manual order. "" and "creation" are not active.
+func (l *List) sortActive() bool {
+	return l.sortMode != "" && l.sortMode != "creation"
+}
+
+// ManualReorderEnabled reports whether J/K within-group manual reordering applies.
+// It is true only in creation mode; under a sort mode the order is computed, so the
+// app turns J/K into a no-op hint instead.
+func (l *List) ManualReorderEnabled() bool {
+	return !l.sortActive()
+}
+
+// InstancesForPersist returns the instances in canonical (manual/creation) order so
+// a sort mode never overwrites the user's manual order on disk. In creation mode the
+// canonical order is simply items.
+func (l *List) InstancesForPersist() []*session.Instance {
+	if l.sortActive() {
+		return l.manual
+	}
+	return l.items
+}
+
+// SetSortMode switches the within-group ordering. "" / "creation" restores the
+// manual order captured when the sort mode was entered; any other value snapshots
+// the current manual order once and sorts. The selected session is preserved by
+// identity. Calling with the same mode re-applies it (cheap, no-op if unchanged).
+func (l *List) SetSortMode(mode string) {
+	if mode == "" {
+		mode = "creation"
+	}
+	wasActive := l.sortActive()
+	if mode == "creation" {
+		if wasActive {
+			sel := l.GetSelectedInstance()
+			l.items = l.manual
+			l.manual = nil
+			l.sortMode = mode
+			if sel != nil {
+				l.SelectInstance(sel)
+			}
+			return
+		}
+		l.sortMode = mode
+		return
+	}
+	if !wasActive {
+		// Entering a sort mode from creation: snapshot the canonical order once.
+		l.manual = make([]*session.Instance, len(l.items))
+		copy(l.manual, l.items)
+	}
+	l.sortMode = mode
+	l.applySort()
+}
+
+// ApplySort re-derives the sorted order from the latest statuses; the metadata poll
+// calls it each tick. No-op in creation mode; reorders only when the computed order
+// actually changed. Returns whether the order changed.
+func (l *List) ApplySort() bool {
+	return l.applySort()
+}
+
+// applySort rebuilds items as the canonical manual order sorted within each repo
+// group by the active mode's priority, preserving the selected instance by identity.
+// It is the single writer of items while a sort mode is active: group order and
+// membership come from manual and are left intact (only within-group order changes).
+// Returns whether items changed.
+func (l *List) applySort() bool {
+	if !l.sortActive() {
+		return false
+	}
+	sel := l.GetSelectedInstance()
+	next := make([]*session.Instance, len(l.manual))
+	copy(next, l.manual)
+	for start := 0; start < len(next); {
+		key := repoKey(next[start])
+		end := start + 1
+		for end < len(next) && repoKey(next[end]) == key {
+			end++
+		}
+		grp := next[start:end]
+		sort.SliceStable(grp, func(i, j int) bool {
+			return session.StatusUrgency(grp[i].GetStatus(), grp[i].Unread()) <
+				session.StatusUrgency(grp[j].GetStatus(), grp[j].Unread())
+		})
+		start = end
+	}
+	if sameOrder(l.items, next) {
+		return false
+	}
+	l.items = next
+	if sel != nil {
+		l.SelectInstance(sel)
+	} else {
+		l.clampSelectionToNavigable()
+	}
+	return true
+}
+
+// sameOrder reports whether a and b hold the same instances in the same positions.
+func sameOrder(a, b []*session.Instance) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// insertByRepo inserts inst into items immediately after the last existing entry
+// sharing its repoKey (appending a new group if none), mirroring AddInstance's
+// placement. Keeps the canonical manual order in step while a sort mode is active.
+func insertByRepo(items []*session.Instance, inst *session.Instance) []*session.Instance {
+	key := repoKey(inst)
+	insertAt := len(items)
+	for i, item := range items {
+		if repoKey(item) == key {
+			insertAt = i + 1
+		}
+	}
+	items = append(items, nil)
+	copy(items[insertAt+1:], items[insertAt:])
+	items[insertAt] = inst
+	return items
+}
+
+// removeInstance drops the first occurrence of target from items, returning the
+// shortened slice (unchanged if target is absent).
+func removeInstance(items []*session.Instance, target *session.Instance) []*session.Instance {
+	for i, it := range items {
+		if it == target {
+			return append(items[:i], items[i+1:]...)
+		}
+	}
+	return items
+}
+
+// regroupManualLike reorders manual's repo-group blocks to match the group order in
+// like (the just-reordered display list), preserving manual's within-group order.
+// Used after a whole-group move so the canonical order tracks the new group sequence
+// without disturbing the within-group (manual) order.
+//
+// like and manual hold the same instances (a whole-group move only permutes group
+// order), so every manual group is normally covered by like. The trailing pass that
+// appends any group key absent from like is a safety net: should the two ever diverge
+// on membership, those sessions are kept (appended in manual order) rather than
+// silently dropped from the canonical order and then persisted away.
+func regroupManualLike(manual, like []*session.Instance) []*session.Instance {
+	byKey := map[string][]*session.Instance{}
+	keyOrder := make([]string, 0)
+	for _, it := range manual {
+		k := repoKey(it)
+		if _, ok := byKey[k]; !ok {
+			keyOrder = append(keyOrder, k)
+		}
+		byKey[k] = append(byKey[k], it)
+	}
+	out := make([]*session.Instance, 0, len(manual))
+	seen := map[string]bool{}
+	emit := func(k string) {
+		if seen[k] {
+			return
+		}
+		seen[k] = true
+		out = append(out, byKey[k]...)
+	}
+	for _, it := range like {
+		emit(repoKey(it))
+	}
+	// Keep any manual group like never mentioned (see doc comment).
+	for _, k := range keyOrder {
+		emit(k)
+	}
+	return out
 }
 
 // isAttachable reports whether a session can be attached to right now — the same
@@ -1034,6 +1308,11 @@ func (l *List) siblingInGroup(inst *session.Instance, dir int, ok func(*session.
 // above belongs to a different group, this is a no-op so the move cannot split a group and produce a duplicate header.
 // (Single-repo lists share one key, so reordering stays unrestricted there.)
 func (l *List) MoveUp() bool {
+	// A sort mode owns within-group order; manual reorder is disabled there (the app
+	// surfaces a hint via ManualReorderEnabled).
+	if l.sortActive() {
+		return false
+	}
 	if l.selectedIdx <= 0 || len(l.items) < 2 {
 		return false
 	}
@@ -1052,6 +1331,9 @@ func (l *List) MoveUp() bool {
 // MoveDown swaps the selected instance with the one below it. As with MoveUp, the swap is confined to within a repo
 // group so it cannot split a group across a boundary.
 func (l *List) MoveDown() bool {
+	if l.sortActive() {
+		return false
+	}
 	if l.selectedIdx >= len(l.items)-1 || len(l.items) < 2 {
 		return false
 	}
@@ -1257,6 +1539,7 @@ func (l *List) MoveGroupUp() bool {
 	reordered = append(reordered, l.items[end:]...)
 	l.items = reordered
 	l.SelectInstance(sel)
+	l.syncManualGroupOrder()
 	return true
 }
 
@@ -1277,7 +1560,20 @@ func (l *List) MoveGroupDown() bool {
 	reordered = append(reordered, l.items[nextEnd:]...)
 	l.items = reordered
 	l.SelectInstance(sel)
+	l.syncManualGroupOrder()
 	return true
+}
+
+// syncManualGroupOrder realigns the canonical manual order to the group sequence
+// just produced in items by a whole-group move, then re-sorts. A no-op in creation
+// mode (manual is nil). Group order is manual in every mode; only the within-group
+// order is owned by the sort, so the move must be reflected in manual too.
+func (l *List) syncManualGroupOrder() {
+	if !l.sortActive() {
+		return
+	}
+	l.manual = regroupManualLike(l.manual, l.items)
+	l.applySort()
 }
 
 // GetInstances returns all instances in the list
@@ -1318,6 +1614,55 @@ func (l *List) ActiveInstancesInView() []*session.Instance {
 	for _, it := range l.items {
 		status := it.GetStatus()
 		if status != session.Paused && status != session.Loading && !it.IsDirect() && l.filterMatches(it) {
+			out = append(out, it)
+		}
+	}
+	return out
+}
+
+// ToggleMark flips the multi-select mark on inst (no-op for nil), lazily
+// allocating the set on first use.
+func (l *List) ToggleMark(inst *session.Instance) {
+	if inst == nil {
+		return
+	}
+	if l.marked == nil {
+		l.marked = map[*session.Instance]bool{}
+	}
+	if l.marked[inst] {
+		delete(l.marked, inst)
+	} else {
+		l.marked[inst] = true
+	}
+}
+
+// IsMarked reports whether inst is currently marked in multi-select mode.
+func (l *List) IsMarked(inst *session.Instance) bool {
+	return l.marked[inst]
+}
+
+// ClearMarks drops every multi-select mark (mode exit / post-action reset).
+func (l *List) ClearMarks() {
+	l.marked = nil
+}
+
+// MarkedCount returns the number of marked instances, counting only those still
+// present in the list (a marked instance removed since is not counted).
+func (l *List) MarkedCount() int {
+	return len(l.MarkedInstancesInView())
+}
+
+// MarkedInstancesInView returns every marked instance that passes the active
+// filter, in list order. Iterating items (not the marked map) keeps the order
+// stable and drops any instance removed since it was marked — mirroring
+// PausedInstancesInView / ActiveInstancesInView.
+func (l *List) MarkedInstancesInView() []*session.Instance {
+	if len(l.marked) == 0 {
+		return nil
+	}
+	var out []*session.Instance
+	for _, it := range l.items {
+		if l.marked[it] && l.filterMatches(it) {
 			out = append(out, it)
 		}
 	}

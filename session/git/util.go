@@ -2,6 +2,8 @@ package git
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"os/exec"
 	"path/filepath"
@@ -90,12 +92,30 @@ func CurrentBranchName(ctx context.Context, path string) string {
 	return branch
 }
 
+// titleHash returns a short, stable hex digest of a raw title, used to mint a
+// unique branch slug when the title itself sanitizes to nothing (issue #187).
+func titleHash(s string) string {
+	sum := sha256.Sum256([]byte(s))
+	return hex.EncodeToString(sum[:])[:8]
+}
+
 // BranchNameForSession derives the git branch a session titled title owns:
 // sanitizeBranchName(prefix + title). It is the single source of the slug —
 // the worktree layer mints it and the new-session form predicts it for the
 // duplicate check, so the two can never drift.
+//
+// When the title contributes nothing to the slug (a CJK title, emoji, or
+// punctuation-only input all sanitize to ""), prefix+title would collapse to
+// just the prefix — so distinct titles would mint the same branch and the form's
+// duplicate check would reject the second with a misleading "branch already used"
+// error. In that case a short deterministic hash of the raw title is substituted
+// so each session still gets a unique, non-degenerate branch.
 func BranchNameForSession(prefix, title string) string {
-	return sanitizeBranchName(prefix + title)
+	name := sanitizeBranchName(prefix + title)
+	if sanitizeBranchName(title) == "" {
+		name = sanitizeBranchName(prefix + "session-" + titleHash(title))
+	}
+	return name
 }
 
 // LocalBranchExists reports whether branch exists as a local head in the repo

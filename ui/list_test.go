@@ -27,7 +27,7 @@ func renderRow(t *testing.T, branch string, stats *git.DiffStats) string {
 	require.NoError(t, err)
 	inst.Branch = branch
 	inst.SetDiffStats(stats)
-	return r.Render(inst, 1, false)
+	return r.Render(inst, 1, false, false)
 }
 
 // The permission-mode chip renders the live mode (PermissionModeInfo), not the
@@ -43,12 +43,12 @@ func TestRender_PermissionModeChipUsesLiveMode(t *testing.T) {
 	require.NoError(t, err)
 
 	inst.SetModeMeta("auto") // user cycled plan -> auto in-session
-	row := ansi.Strip(r.Render(inst, 1, false))
+	row := ansi.Strip(r.Render(inst, 1, false, false))
 	require.Contains(t, row, "auto", "chip must reflect the live mode")
 	require.NotContains(t, row, "plan", "chip must not show the stale launch flag")
 
 	inst.SetModeMeta("default") // cycled back to normal
-	row = ansi.Strip(r.Render(inst, 1, false))
+	row = ansi.Strip(r.Render(inst, 1, false, false))
 	require.NotContains(t, row, "plan")
 	require.NotContains(t, row, "auto", "a live default hides the chip")
 }
@@ -96,12 +96,12 @@ func TestRender_DirectSessionShowsMarkerNotBranch(t *testing.T) {
 	require.NoError(t, err)
 	gitInst.Branch = "zvi/feature"
 	gitInst.SetDisplayName("Some Label")
-	require.Contains(t, r.Render(gitInst, 1, false), "zvi/feature",
+	require.Contains(t, r.Render(gitInst, 1, false, false), "zvi/feature",
 		"a label-renamed git session row shows its branch name")
 
 	directInst, err := session.NewInstance(session.InstanceOptions{Title: "d", Path: ".", Program: "echo", Direct: true})
 	require.NoError(t, err)
-	row := r.Render(directInst, 1, false)
+	row := r.Render(directInst, 1, false, false)
 	require.Contains(t, row, "direct", "a direct session row shows the direct marker")
 }
 
@@ -120,7 +120,7 @@ func TestRender_StripsConfiguredBranchPrefix(t *testing.T) {
 	require.NoError(t, err)
 	inst.Branch = "zvi/session-row-redesign"
 	inst.SetDisplayName("Row redesign")
-	out := r.Render(inst, 1, false)
+	out := r.Render(inst, 1, false, false)
 	require.Contains(t, out, "session-row-redesign", "the distinguishing branch part still renders")
 	require.NotContains(t, out, "zvi/", "the configured prefix is stripped from the label")
 
@@ -130,7 +130,7 @@ func TestRender_StripsConfiguredBranchPrefix(t *testing.T) {
 	require.NoError(t, err)
 	other.Branch = "feature/login"
 	other.SetDisplayName("Login work")
-	require.Contains(t, r.Render(other, 1, false), "feature/login",
+	require.Contains(t, r.Render(other, 1, false, false), "feature/login",
 		"a non-matching namespace is left intact")
 }
 
@@ -148,13 +148,13 @@ func TestRender_GitRowOmitsAgeDirectKeepsIt(t *testing.T) {
 	gitInst.Branch = "feat"
 	gitInst.CreatedAt = twoDaysAgo
 	gitInst.SetDiffStats(&git.DiffStats{Added: 5, Removed: 1, Commits: 1})
-	require.NotContains(t, r.Render(gitInst, 1, false), "2d",
+	require.NotContains(t, r.Render(gitInst, 1, false, false), "2d",
 		"a git row no longer carries the age tail")
 
 	directInst, err := session.NewInstance(session.InstanceOptions{Title: "d", Path: ".", Program: "echo", Direct: true})
 	require.NoError(t, err)
 	directInst.CreatedAt = twoDaysAgo
-	require.Contains(t, r.Render(directInst, 1, false), "2d",
+	require.Contains(t, r.Render(directInst, 1, false, false), "2d",
 		"a direct row still shows its age")
 }
 
@@ -174,7 +174,7 @@ func TestRender_NarrowWidthCollapsesBranchSeparator(t *testing.T) {
 	inst.SetDisplayName("Renamed") // decouple so the branch flex actually renders
 	inst.SetDiffStats(&git.DiffStats{Added: 1, Removed: 1, Commits: 2})
 
-	row := r.Render(inst, 1, false)
+	row := r.Render(inst, 1, false, false)
 	// line 2 is the second line; it must not start its content with a stray middot.
 	lines := strings.Split(row, "\n")
 	require.Len(t, lines, 2)
@@ -322,17 +322,17 @@ func TestRender_SessionAge(t *testing.T) {
 	ageToken := regexp.MustCompile(`\d+[mhd]\b`)
 
 	// Brand-new session (CreatedAt = time.Now()) → no age label.
-	out := r.Render(inst, 0, false)
+	out := r.Render(inst, 0, false, false)
 	require.NotRegexp(t, ageToken, out, "fresh session should not show age")
 
 	// Simulate a 3-hour-old session.
 	inst.CreatedAt = time.Now().Add(-3 * time.Hour)
-	out = r.Render(inst, 0, false)
+	out = r.Render(inst, 0, false, false)
 	require.Contains(t, out, "3h", "3-hour-old session should show '3h'")
 
 	// Simulate a 2-day-old session.
 	inst.CreatedAt = time.Now().Add(-48 * time.Hour)
-	out = r.Render(inst, 0, false)
+	out = r.Render(inst, 0, false, false)
 	require.Contains(t, out, "2d", "2-day-old session should show '2d'")
 }
 
@@ -351,13 +351,13 @@ func TestRender_SessionAge_Direct(t *testing.T) {
 	ageToken := regexp.MustCompile(`\d+[mhd]\b`)
 
 	// Brand-new direct session → no age label.
-	out := r.Render(inst, 0, false)
+	out := r.Render(inst, 0, false, false)
 	require.NotRegexp(t, ageToken, out, "fresh direct session should not show age")
 
 	// Simulate a 3-hour-old direct session: the label renders alongside the
 	// direct marker.
 	inst.CreatedAt = time.Now().Add(-3 * time.Hour)
-	out = r.Render(inst, 0, false)
+	out = r.Render(inst, 0, false, false)
 	require.Contains(t, out, "3h", "3-hour-old direct session should show '3h'")
 	require.Contains(t, out, "direct", "the direct marker must survive the age label")
 }
@@ -378,13 +378,13 @@ func TestRender_PRBadge(t *testing.T) {
 	inst.SetDiffStats(&git.DiffStats{Added: 1, Removed: 1, Commits: 1})
 
 	inst.SetPRStatus(&git.PRStatus{HasPR: true, Number: 42, CI: git.CIPassing})
-	require.Contains(t, r.Render(inst, 1, false), g.PR+"#42", "open PR should render the badge")
+	require.Contains(t, r.Render(inst, 1, false, false), g.PR+"#42", "open PR should render the badge")
 
 	inst.SetPRStatus(&git.PRStatus{HasPR: false})
-	require.NotContains(t, r.Render(inst, 1, false), "#42", "no PR should render no badge")
+	require.NotContains(t, r.Render(inst, 1, false, false), "#42", "no PR should render no badge")
 
 	inst.SetPRStatus(nil) // must not panic
-	_ = r.Render(inst, 1, false)
+	_ = r.Render(inst, 1, false, false)
 }
 
 // TestRender_PRBadgeWidthBudget guards the width fold: a PR badge alongside a
@@ -403,7 +403,7 @@ func TestRender_PRBadgeWidthBudget(t *testing.T) {
 	inst.SetDiffStats(&git.DiffStats{Added: 12, Removed: 3, Commits: 2})
 	inst.SetPRStatus(&git.PRStatus{HasPR: true, Number: 1234, CI: git.CIFailing})
 
-	row := r.Render(inst, 1, false)
+	row := r.Render(inst, 1, false, false)
 	require.Contains(t, row, "#1234", "the PR badge survives at the expense of the branch")
 	for _, ln := range strings.Split(row, "\n") {
 		require.LessOrEqual(t, ansi.StringWidth(ln), width, "row must fit width with a PR badge present")
@@ -420,7 +420,7 @@ func TestRender_DirectSessionNoPRBadge(t *testing.T) {
 	direct, err := session.NewInstance(session.InstanceOptions{Title: "d", Path: ".", Program: "echo", Direct: true})
 	require.NoError(t, err)
 	direct.SetPRStatus(&git.PRStatus{HasPR: true, Number: 99})
-	require.NotContains(t, r.Render(direct, 1, false), "#99",
+	require.NotContains(t, r.Render(direct, 1, false, false), "#99",
 		"a direct session must not render a PR badge")
 }
 
@@ -455,7 +455,7 @@ func TestRender_SessionAgeBudget(t *testing.T) {
 	gitInst.Branch = "feature/a-very-long-branch-name-that-overflows"
 	gitInst.CreatedAt = time.Now().Add(-3 * time.Hour)
 	gitInst.SetDiffStats(&git.DiffStats{Added: 5, Removed: 1, Commits: 1})
-	gitRow := r.Render(gitInst, 0, false)
+	gitRow := r.Render(gitInst, 0, false, false)
 	require.NotContains(t, gitRow, "3h", "a populated git row carries no age label")
 	require.LessOrEqual(t, lineWidth(gitRow), width, "git row must fit width")
 
@@ -465,13 +465,13 @@ func TestRender_SessionAgeBudget(t *testing.T) {
 	direct, err := session.NewInstance(session.InstanceOptions{Title: "d", Path: ".", Program: "echo", Direct: true})
 	require.NoError(t, err)
 	direct.CreatedAt = time.Now().Add(-3 * time.Hour)
-	directRow := r.Render(direct, 0, false)
+	directRow := r.Render(direct, 0, false, false)
 	require.Contains(t, directRow, "3h", "direct-mode age label should render")
 	require.LessOrEqual(t, lineWidth(directRow), width, "direct row must fit width with the age label")
 
 	const narrow = 12 // narrower than the "direct · no git isolation" marker
 	r.setWidth(narrow)
-	require.LessOrEqual(t, lineWidth(r.Render(direct, 0, false)), narrow,
+	require.LessOrEqual(t, lineWidth(r.Render(direct, 0, false, false)), narrow,
 		"direct row must fit even when the marker itself must truncate")
 }
 
@@ -486,7 +486,7 @@ func renderRowWith(t *testing.T, setup func(i *session.Instance)) string {
 	inst, err := session.NewInstance(session.InstanceOptions{Title: "auth-refactor", Path: ".", Program: "echo"})
 	require.NoError(t, err)
 	setup(inst)
-	return r.Render(inst, 1, false)
+	return r.Render(inst, 1, false, false)
 }
 
 func TestRender_PausedNoteTakesLineTwo(t *testing.T) {
@@ -538,12 +538,12 @@ func TestRender_AccountBadge(t *testing.T) {
 	inst, err := session.NewInstance(session.InstanceOptions{Title: "t", Path: ".", Program: "echo"})
 	require.NoError(t, err)
 	inst.SetClaudeAccount("quantivly", "/home/x/.claude-quantivly", false)
-	require.Contains(t, ansi.Strip(r.Render(inst, 1, false)), "quantivly",
+	require.Contains(t, ansi.Strip(r.Render(inst, 1, false, false)), "quantivly",
 		"routed account badge should render its name")
 
 	// No account (feature dormant) -> no badge.
 	plain, err := session.NewInstance(session.InstanceOptions{Title: "p", Path: ".", Program: "echo"})
 	require.NoError(t, err)
-	out := ansi.Strip(r.Render(plain, 1, false))
+	out := ansi.Strip(r.Render(plain, 1, false, false))
 	require.NotContains(t, out, "quantivly")
 }

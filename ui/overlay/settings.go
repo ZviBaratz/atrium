@@ -284,6 +284,18 @@ func newSettingRows(cfg *config.Config) []settingRow {
 			(*config.Config).GetFastForwardLocalBase,
 			func(c *config.Config, v bool) { c.FastForwardLocalBase = &v }),
 		{
+			key: "session_sort", section: "Behavior", label: "Session sort", kind: kindEnum,
+			description: "Order within each repo group: creation keeps the manual order (reorderable with J/K); status floats NeedsInput and unread sessions to the top. Group order stays manual ({ / }).",
+			get:         func(c *config.Config) string { return c.GetSessionSort() },
+			set: func(c *config.Config, v string) error {
+				c.SessionSort = v
+				return nil
+			},
+			options: func(c *config.Config) []string {
+				return []string{config.SessionSortCreation, config.SessionSortStatus}
+			},
+		},
+		{
 			key: "auto_update", section: "Behavior", label: "Auto-update", kind: kindEnum,
 			description: "Update check at startup: notify shows a hint, auto installs in the background, off disables.",
 			applyNote:   "applies on restart",

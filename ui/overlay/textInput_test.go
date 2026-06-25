@@ -97,6 +97,36 @@ func TestSessionCreateOverlay_SingleAccountHidesSection(t *testing.T) {
 
 func tab(o *TextInputOverlay)      { o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyTab}) }
 func shiftTab(o *TextInputOverlay) { o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyShiftTab}) }
+func ctrlR(o *TextInputOverlay)    { o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyCtrlR}) }
+
+func TestSessionCreateOverlay_DoubleCtrlRClears(t *testing.T) {
+	o := NewSessionCreateOverlay(nil, nil, []string{"/repo/a"}, "")
+
+	ctrlR(o)
+	assert.False(t, o.ClearRequested(), "one Ctrl+R only arms")
+
+	ctrlR(o)
+	assert.True(t, o.ClearRequested(), "a second consecutive Ctrl+R requests the clear")
+}
+
+func TestSessionCreateOverlay_CtrlRDisarmsOnOtherKey(t *testing.T) {
+	o := NewSessionCreateOverlay(nil, nil, []string{"/repo/a"}, "")
+	o.FocusTitle()
+
+	ctrlR(o) // arm
+	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("x")})
+	ctrlR(o) // this is now a first press again, not a confirm
+	assert.False(t, o.ClearRequested(), "an intervening key disarms the clear")
+}
+
+func TestSessionCreateOverlay_ClearHintInFooter(t *testing.T) {
+	o := NewSessionCreateOverlay(nil, nil, []string{"/repo/a"}, "")
+	o.SetSize(80, 40)
+	assert.Contains(t, o.Render(), "⌃R clear")
+
+	ctrlR(o)
+	assert.Contains(t, o.Render(), "⌃R again")
+}
 
 func TestTextInputOverlay_SimpleFocusCycle(t *testing.T) {
 	o := NewTextInputOverlay("Title", "")
@@ -1000,4 +1030,20 @@ func TestFitRows_GrowsPickersOnTallTerminals(t *testing.T) {
 	if pickerRows != 1 || promptRows != 2 {
 		t.Fatalf("height 24: got (%d, %d), want (1, 2)", pickerRows, promptRows)
 	}
+}
+
+func TestSessionCreateOverlay_IsDirty(t *testing.T) {
+	o := NewSessionCreateOverlay(nil, nil, []string{"/repo/a"}, "")
+	assert.False(t, o.IsDirty(), "a fresh form is not dirty")
+
+	o.SetTitleValue("draft")
+	assert.True(t, o.IsDirty(), "a typed title makes the form dirty")
+
+	o.SetTitleValue("")
+	o.SetPrompt("some prompt")
+	assert.True(t, o.IsDirty(), "a typed prompt makes the form dirty")
+
+	o.SetPrompt("   ")
+	o.SetTitleValue("  ")
+	assert.False(t, o.IsDirty(), "whitespace-only is not dirty")
 }

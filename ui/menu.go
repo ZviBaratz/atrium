@@ -37,6 +37,9 @@ const (
 	// StateHints is shown while hint (fingers) mode overlays the preview:
 	// the bar teaches the mode's three gestures instead of the usual options.
 	StateHints
+	// StateVisual is shown while multi-select ("visual") mode is active: the bar
+	// teaches the mark/act/exit gestures instead of the usual options.
+	StateVisual
 )
 
 // defaultHintKeys are the high-value bindings the always-on bar surfaces during
@@ -111,6 +114,11 @@ func NewMenu() *Menu {
 // SetState updates the menu state.
 func (m *Menu) SetState(state MenuState) {
 	m.state = state
+}
+
+// State returns the menu's current state (which hint set the bar shows).
+func (m *Menu) State() MenuState {
+	return m.state
 }
 
 // SetInstance records the selected session and derives the hint set from its
@@ -232,15 +240,27 @@ func (m *Menu) String() string {
 		// While generating a name, the bar shows a single status line.
 		line = progressStyle().Render("✨ Generating name…")
 	case StateFilter:
+		// Action hints first so that on a narrow terminal the width truncation below
+		// drops the predicate vocabulary tail, never the accept/clear actions.
 		line = keyStyle().Render("enter") + " " + descStyle().Render("accept") +
 			sepStyle().Render(separator) +
-			keyStyle().Render("esc") + " " + descStyle().Render("clear")
+			keyStyle().Render("esc") + " " + descStyle().Render("clear") +
+			sepStyle().Render(separator) +
+			descStyle().Render("filter: status: dirty behind pr:")
 	case StateHints:
 		line = keyStyle().Render("a–z") + " " + descStyle().Render("copy") +
 			sepStyle().Render(separator) +
 			keyStyle().Render("A–Z") + " " + descStyle().Render("copy + open") +
 			sepStyle().Render(separator) +
 			keyStyle().Render("esc") + " " + descStyle().Render("cancel")
+	case StateVisual:
+		// Gesture hints for multi-select mode. Actions first so a narrow terminal
+		// truncates the trailing exit cue, never the verbs that do the work.
+		line = keyStyle().Render("space") + " " + descStyle().Render("mark") +
+			sepStyle().Render(separator) +
+			keyStyle().Render("p/r/x") + " " + descStyle().Render("pause/resume/kill marked") +
+			sepStyle().Render(separator) +
+			keyStyle().Render("esc") + " " + descStyle().Render("exit")
 	case StateEmpty:
 		line = renderHintLine(emptyHintKeys)
 	default: // StateDefault

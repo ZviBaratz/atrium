@@ -41,6 +41,18 @@ const (
 	AutoUpdateOff = "off"
 )
 
+// SessionSort modes (Config.SessionSort). See GetSessionSort for normalization.
+// The sort applies within each repo group only; group order stays manual ({ / }).
+const (
+	// SessionSortCreation keeps the existing manual/creation order — the order
+	// sessions were added in, as adjusted by J/K. The default; no reordering.
+	SessionSortCreation = "creation"
+	// SessionSortStatus orders each repo group by action-priority: NeedsInput,
+	// then unread Ready, then seen Ready, Running, Loading, Paused. Manual J/K
+	// reordering is disabled while this mode is active (group order stays manual).
+	SessionSortStatus = "status"
+)
+
 // GetConfigDir returns the path to the application's data/config directory.
 //
 // It prefers the new ~/.atrium layout, falls back to an existing legacy
@@ -240,6 +252,12 @@ type Config struct {
 	// acceptEdits, auto), "off" hides it. Everything else normalizes to "on"
 	// (GetPermissionIndicator).
 	PermissionIndicator string `json:"permission_indicator,omitempty"`
+	// SessionSort selects how sessions are ordered within each repo group:
+	// "creation" (default — manual/creation order, reorderable with J/K) or
+	// "status" (action-priority: NeedsInput, unread Ready, Ready, Running,
+	// Loading, Paused). Empty or unrecognized values normalize to "creation"
+	// (GetSessionSort). The group order itself stays manual ({ / }) in all modes.
+	SessionSort string `json:"session_sort,omitempty"`
 	// SmartDispatchAuto, when true, lets a confident deterministic project match from the
 	// smart-dispatch input (the `i` key) create the session immediately, skipping the
 	// confirmation form. Off (nil) by default: the pre-filled form always opens first.
@@ -405,6 +423,21 @@ func (c *Config) GetAutoUpdateMode() string {
 		return c.AutoUpdate
 	default:
 		return AutoUpdateNotify
+	}
+}
+
+// GetSessionSort returns the normalized within-group session sort mode:
+// SessionSortStatus, or SessionSortCreation for a nil Config, an empty value, or
+// anything unrecognized — a typo must never silently rearrange the list.
+func (c *Config) GetSessionSort() string {
+	if c == nil {
+		return SessionSortCreation
+	}
+	switch c.SessionSort {
+	case SessionSortStatus:
+		return c.SessionSort
+	default:
+		return SessionSortCreation
 	}
 }
 

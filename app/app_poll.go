@@ -134,12 +134,59 @@ func pollSelectedCmd(inst *session.Instance, fresh bool) tea.Cmd {
 	}
 }
 
+// promptSendErrorMsg reports that a queued initial prompt failed to deliver after the
+// bounded retries, so the failure surfaces in the UI instead of only reaching the log.
+// instance identifies which session's prompt was lost.
+type promptSendErrorMsg struct {
+	instance *session.Instance
+	err      error
+}
+
+// promptSendAttempts bounds how many times a queued initial prompt's delivery is retried
+// before the failure is surfaced. The readiness gate already confirmed the pane was live
+// and idle, so a failure is usually a dead pane that retrying cannot revive; the extra
+// attempts exist only to ride out a transient tmux hiccup (e.g. a send-keys that times
+// out during a window resize) where the pane is still alive.
+const promptSendAttempts = 3
+
+// promptSendRetryDelay spaces the retry attempts so momentary tmux contention can clear.
+// A var, not a const, so tests can zero it out and stay fast.
+var promptSendRetryDelay = 250 * time.Millisecond
+
+// sendWithRetry calls send up to promptSendAttempts times, spacing attempts by
+// promptSendRetryDelay, and returns nil on the first success or the last error once
+// every attempt has failed. It is split out of sendPromptCmd so the bounded-retry
+// policy can be unit-tested directly — SendPrompt is a concrete method with no fake
+// seam, so a real instance can only be made to fail, never to fail-then-succeed.
+//
+// Caution: send is retried as a whole, not resumed mid-way. SendPrompt types the
+// prompt and submits it as two steps, so if the pane dies in the ~100ms between them
+// — text typed but not yet submitted — a retry re-types the prompt and the agent may
+// see it doubled. That needs the pane to fail mid-SendPrompt and then recover before
+// the next attempt, which is vanishingly rare; it is accepted rather than guarded.
+func sendWithRetry(send func() error) error {
+	var err error
+	for attempt := range promptSendAttempts {
+		if err = send(); err == nil {
+			return nil
+		}
+		if attempt < promptSendAttempts-1 {
+			time.Sleep(promptSendRetryDelay) // ride out a transient tmux hiccup
+		}
+	}
+	return err
+}
+
 // sendPromptCmd submits a queued initial prompt to an instance off the UI thread,
-// so the SendKeys→Enter pause inside SendPrompt does not block rendering.
+// so the SendKeys→Enter pause inside SendPrompt does not block rendering. It retries
+// a bounded number of times to ride out a transient tmux failure, and on final failure
+// returns a promptSendErrorMsg so the loss surfaces in the UI rather than being swallowed.
 func sendPromptCmd(instance *session.Instance, prompt string) tea.Cmd {
 	return func() tea.Msg {
-		if err := instance.SendPrompt(prompt); err != nil {
-			log.ErrorLog.Printf("failed to send queued prompt: %v", err)
+		if err := sendWithRetry(func() error { return instance.SendPrompt(prompt) }); err != nil {
+			log.ErrorLog.Printf("failed to send queued prompt to %q after %d attempts: %v",
+				instance.Title, promptSendAttempts, err)
+			return promptSendErrorMsg{instance: instance, err: err}
 		}
 		return nil
 	}

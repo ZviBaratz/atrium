@@ -97,6 +97,12 @@ func (c *ConfirmationOverlay) SetBorderColor(color lipgloss.Color) {
 	c.borderColor = color
 }
 
+// BorderColor returns the overlay's current border color (accent by default,
+// danger after SetBorderColor on a destructive confirmation).
+func (c *ConfirmationOverlay) BorderColor() lipgloss.Color {
+	return c.borderColor
+}
+
 // SetConfirmKey sets the key used to confirm the action
 func (c *ConfirmationOverlay) SetConfirmKey(key string) {
 	c.ConfirmKey = key

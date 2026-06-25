@@ -369,9 +369,21 @@ func (m *home) resumeAll() tea.Cmd {
 	if len(paused) == 0 {
 		return m.handleInfoNotice("no paused sessions to resume")
 	}
+	message := fmt.Sprintf("Resume %d paused session%s?", len(paused), plural(len(paused)))
+	return m.resumeInstances(paused, message)
+}
+
+// resumeInstances resumes an explicit set of (already-paused) sessions behind a
+// count confirmation — the shared core of resumeAll and resumeMarked. A
+// per-instance failure (e.g. BranchCheckedOutError) is recorded and the run
+// continues; the outcome is surfaced as a summary. Resume only mutates in-memory
+// status, so the action persists once at the end. Resume is non-destructive, so
+// it keeps confirmAction's default accent border (only kill wears the danger
+// border).
+func (m *home) resumeInstances(insts []*session.Instance, message string) tea.Cmd {
 	action := func() tea.Msg {
 		var res batchResumeDoneMsg
-		for _, inst := range paused {
+		for _, inst := range insts {
 			if err := inst.Resume(); err != nil {
 				res.failures = append(res.failures, resumeFailure{inst.Title, err})
 				continue
@@ -380,14 +392,11 @@ func (m *home) resumeAll() tea.Cmd {
 		}
 		if res.resumed > 0 {
 			if err := m.persistInstances(); err != nil {
-				log.WarningLog.Printf("resume all: failed to persist resumed instances: %v", err)
+				log.WarningLog.Printf("batch resume: failed to persist resumed instances: %v", err)
 			}
 		}
 		return res
 	}
-	message := fmt.Sprintf("Resume %d paused session%s?", len(paused), plural(len(paused)))
-	// Resume is non-destructive, so it keeps confirmAction's default accent
-	// border (only kill wears the danger border).
 	return m.confirmAction(message, action)
 }
 
@@ -447,9 +456,21 @@ func (m *home) pauseAll() tea.Cmd {
 	if len(active) == 0 {
 		return m.handleInfoNotice("no active sessions to pause")
 	}
+	message := fmt.Sprintf("Pause %d active session%s?", len(active), plural(len(active)))
+	return m.pauseInstances(active, message)
+}
+
+// pauseInstances parks an explicit set of (pausable) sessions behind a count
+// confirmation — the shared core of pauseAll and pauseMarked. Each Pause commits
+// WIP, detaches tmux, and removes the worktree (keeping the branch); a
+// per-instance failure is recorded and the run continues, with the outcome
+// surfaced as a summary. State is persisted once at the end. Pause is
+// non-destructive (every branch is kept), so it keeps confirmAction's default
+// accent border.
+func (m *home) pauseInstances(insts []*session.Instance, message string) tea.Cmd {
 	action := func() tea.Msg {
 		var res batchPauseDoneMsg
-		for _, inst := range active {
+		for _, inst := range insts {
 			if err := inst.Pause(); err != nil {
 				res.failures = append(res.failures, pauseFailure{inst.Title, err})
 				continue
@@ -459,15 +480,148 @@ func (m *home) pauseAll() tea.Cmd {
 		}
 		if res.paused > 0 {
 			if err := m.persistInstances(); err != nil {
-				log.WarningLog.Printf("pause all: failed to persist paused instances: %v", err)
+				log.WarningLog.Printf("batch pause: failed to persist paused instances: %v", err)
 			}
 		}
 		return res
 	}
-	message := fmt.Sprintf("Pause %d active session%s?", len(active), plural(len(active)))
-	// Pause auto-commits WIP and frees worktrees but keeps every branch, so it is
-	// non-destructive and keeps confirmAction's default accent border.
 	return m.confirmAction(message, action)
+}
+
+// killFailure records one instance that could not be killed during a batch kill,
+// paired with the reason so the summary can name it.
+type killFailure struct {
+	title string
+	err   error
+}
+
+// batchKillDoneMsg reports the outcome of a batch kill back through Update so the
+// feedback (notice vs. modal), preview-terminal teardown, and list refresh all
+// run on the main loop. killed counts the successes; killedInstances carries the
+// torn-down instances so Update can clean up their preview terminals; failures
+// lists the rest, in list order.
+type batchKillDoneMsg struct {
+	killed          int
+	killedInstances []*session.Instance
+	failures        []killFailure
+}
+
+// summary renders the dismissible-modal text for a batch kill that had at least
+// one failure. It is empty when nothing failed (the caller uses a transient
+// notice for the all-success case instead).
+func (msg batchKillDoneMsg) summary() string {
+	if len(msg.failures) == 0 {
+		return ""
+	}
+	total := msg.killed + len(msg.failures)
+	var b strings.Builder
+	fmt.Fprintf(&b, "Killed %d of %d session%s. %d could not be killed:",
+		msg.killed, total, plural(total), len(msg.failures))
+	for _, f := range msg.failures {
+		fmt.Fprintf(&b, "\n  • %s — %s", f.title, f.err.Error())
+	}
+	return b.String()
+}
+
+// killInstances tears down an explicit set of sessions behind a single count
+// confirmation — the batch counterpart of confirmKill, used by killMarked. Each
+// teardown reuses confirmKill's per-instance logic: it refuses only when the
+// branch is held by the base repo itself (recorded as a failure so the run
+// continues), then deletes from storage and kills. Storage deletion and
+// KillInstance run on the main loop (the action is invoked there), so they don't
+// race the list. Kill is destructive, so the confirmation wears the danger
+// border like the single-kill dialog.
+func (m *home) killInstances(insts []*session.Instance, message string) tea.Cmd {
+	action := func() tea.Msg {
+		var res batchKillDoneMsg
+		for _, inst := range insts {
+			// Mirror confirmKill: refuse only when the branch is checked out in the
+			// primary repo itself; a live session's branch is in its own worktree, so
+			// IsBranchHeldByBaseRepo (not IsBranchCheckedOut) is the right predicate.
+			// Fail open if the worktree/repo is unreachable so an orphan can still be
+			// deleted. Direct sessions have no branch/worktree, so skip the check.
+			if !inst.IsDirect() {
+				if worktree, err := inst.GetGitWorktree(); err != nil {
+					log.WarningLog.Printf("kill %s: cannot resolve worktree, proceeding: %v", inst.Title, err)
+				} else if heldByBase, cerr := worktree.IsBranchHeldByBaseRepo(); cerr != nil {
+					log.WarningLog.Printf("kill %s: cannot verify branch checkout, proceeding: %v", inst.Title, cerr)
+				} else if heldByBase {
+					res.failures = append(res.failures, killFailure{inst.Title,
+						fmt.Errorf("branch checked out in the main repo")})
+					continue
+				}
+			}
+			if err := m.storage.DeleteInstance(inst.Title, inst.Path); err != nil {
+				res.failures = append(res.failures, killFailure{inst.Title, err})
+				continue
+			}
+			m.list.KillInstance(inst)
+			res.killed++
+			res.killedInstances = append(res.killedInstances, inst)
+		}
+		return res
+	}
+	cmd := m.confirmAction(message, action)
+	// Kill is destructive, so it wears the danger border (confirmAction created
+	// m.confirmationOverlay synchronously above).
+	m.confirmationOverlay.SetBorderColor(theme.Current().Palette.Danger)
+	return cmd
+}
+
+// pauseMarked parks the pausable subset of the multi-select-marked sessions
+// (mirroring ActiveInstancesInView's predicate: not paused/loading/direct). With
+// nothing eligible it explains itself and stays in the mode; otherwise it leaves
+// visual mode (capturing the slice first) so a cancelled confirmation leaves no
+// stale marks behind.
+func (m *home) pauseMarked() tea.Cmd {
+	var insts []*session.Instance
+	for _, inst := range m.list.MarkedInstancesInView() {
+		status := inst.GetStatus()
+		if status != session.Paused && status != session.Loading && !inst.IsDirect() {
+			insts = append(insts, inst)
+		}
+	}
+	if len(insts) == 0 {
+		return m.handleInfoNotice("no marked sessions to pause")
+	}
+	m.exitVisualMode()
+	message := fmt.Sprintf("Pause %d marked session%s?", len(insts), plural(len(insts)))
+	return m.pauseInstances(insts, message)
+}
+
+// resumeMarked resumes the paused subset of the multi-select-marked sessions.
+// Same eligibility/exit semantics as pauseMarked.
+func (m *home) resumeMarked() tea.Cmd {
+	var insts []*session.Instance
+	for _, inst := range m.list.MarkedInstancesInView() {
+		if inst.GetStatus() == session.Paused {
+			insts = append(insts, inst)
+		}
+	}
+	if len(insts) == 0 {
+		return m.handleInfoNotice("no marked sessions to resume")
+	}
+	m.exitVisualMode()
+	message := fmt.Sprintf("Resume %d marked session%s?", len(insts), plural(len(insts)))
+	return m.resumeInstances(insts, message)
+}
+
+// killMarked tears down the killable subset of the multi-select-marked sessions
+// (everything except a still-Loading session, which single-kill also refuses).
+// Same eligibility/exit semantics as pauseMarked.
+func (m *home) killMarked() tea.Cmd {
+	var insts []*session.Instance
+	for _, inst := range m.list.MarkedInstancesInView() {
+		if inst.GetStatus() != session.Loading {
+			insts = append(insts, inst)
+		}
+	}
+	if len(insts) == 0 {
+		return m.handleInfoNotice("no marked sessions to kill")
+	}
+	m.exitVisualMode()
+	message := fmt.Sprintf("Kill %d marked session%s?", len(insts), plural(len(insts)))
+	return m.killInstances(insts, message)
 }
 
 // newSessionFormOverlay builds the unified new-session form (title, project, optional
@@ -504,59 +658,69 @@ func (m *home) openCreateFormSeeded(seedPath string, focusTitle bool, prefill *P
 			fmt.Errorf("you can't create more than %d sessions (max_sessions in config.json)", limit))
 	}
 
-	m.newSessionPath = seedPath
+	// Restore a stashed draft only on the bare n/N entry (no seed path, no prefill):
+	// the smart-dispatch and seeded paths carry explicit intent that must win.
+	restore := prefill == nil && seedPath == "" && m.stashedDraft != nil
+
+	if restore {
+		m.newSessionPath = m.stashedDraft.GetSelectedPath()
+	} else {
+		m.newSessionPath = seedPath
+	}
 	if m.newSessionPath == "" {
 		m.newSessionPath = m.defaultNewSessionPath()
 	}
 	target := m.newSessionPath
 	// Scope the duplicate-title check to the target's repo group from the first
-	// keystroke (one sync git call, in line with the open-time plumbing below);
-	// the async validity check re-points it as the picker moves.
+	// keystroke; the async validity check re-points it as the picker moves.
 	m.newSessionGroup = git.RepoGroupKey(m.ctx, target)
 	m.resetTitleCheck()
-
 	m.state = statePrompt
-	ov, isGit := m.newSessionFormOverlay()
-	m.textInputOverlay = ov
-	if prefill != nil {
-		ov.SetPrompt(prefill.Prompt)
-		if prefill.Title != "" {
-			ov.SetTitleValue(prefill.Title)
-		}
-		if prefill.Path != "" {
-			ov.SelectPath(prefill.Path)
-		}
-		if prefill.Confident {
-			// Project and title are trusted; land on the Permissions chip — the one
-			// decision smart dispatch deliberately defers (←/→ to plan, ⌃S to create).
-			// Falls back to the Create button when there is no mode field (non-claude).
-			ov.FocusMode()
-		} else {
-			ov.FocusTitle()
-		}
-		// A pre-filled title needs the same duplicate verdict a keystroke would trigger,
-		// so a collision shows inline (and is re-checked async) before the user submits.
+
+	var isGit bool
+	if restore {
+		m.textInputOverlay = m.stashedDraft
+		m.stashedDraft = nil
+		valid, direct, _ := targetValidity(m.ctx, target)
+		isGit = valid && !direct
+		// Re-run the inline duplicate verdict for the restored title.
 		m.refreshTitleError()
-	} else if focusTitle {
-		m.textInputOverlay.FocusTitle()
-	}
-	// Open the account picker on the auto-routed account for the contextual target,
-	// so the preselected choice matches what creating without touching it would do.
-	// A non-git target has no remote and routes by path; no-op when the form has no
-	// account picker (≤1 account configured).
-	remoteURL := ""
-	if isGit {
-		remoteURL = git.GetRemoteURL(m.ctx, target)
-	}
-	if name, _, _ := m.appConfig.ResolveClaudeAccount(remoteURL, target); name != "" {
-		m.textInputOverlay.PreselectAccount(name)
+	} else {
+		var ov *overlay.TextInputOverlay
+		ov, isGit = m.newSessionFormOverlay()
+		m.textInputOverlay = ov
+		if prefill != nil {
+			ov.SetPrompt(prefill.Prompt)
+			if prefill.Title != "" {
+				ov.SetTitleValue(prefill.Title)
+			}
+			if prefill.Path != "" {
+				ov.SelectPath(prefill.Path)
+			}
+			if prefill.Confident {
+				// Project and title are trusted; land on the Permissions chip — the one
+				// decision smart dispatch defers. Falls back to Create on non-claude.
+				ov.FocusMode()
+			} else {
+				ov.FocusTitle()
+			}
+			// A pre-filled title needs the same duplicate verdict a keystroke triggers.
+			m.refreshTitleError()
+		} else if focusTitle {
+			m.textInputOverlay.FocusTitle()
+		}
+		// Open the account picker on the auto-routed account for the contextual target.
+		remoteURL := ""
+		if isGit {
+			remoteURL = git.GetRemoteURL(m.ctx, target)
+		}
+		if name, _, _ := m.appConfig.ResolveClaudeAccount(remoteURL, target); name != "" {
+			m.textInputOverlay.PreselectAccount(name)
+		}
 	}
 
-	// Branch plumbing only applies to a git target: seed the fetched-once set and kick
-	// the background fetch plus the initial (undebounced) branch search. A non-git
-	// target's branch section is inert, so there is nothing to fetch or list — and a
-	// later path change onto a git repo triggers its own verdict-driven fetch (every
-	// other candidate is fetched when, and if, it is confirmed as git while selected).
+	// Branch plumbing only applies to a git target: seed the fetched-once set and
+	// kick the background fetch plus the initial (undebounced) branch search.
 	m.fetchedPaths = map[string]bool{}
 	cmds := []tea.Cmd{tea.WindowSize()}
 	// Refresh the repo scan when the last completed one has gone stale (a
@@ -571,10 +735,10 @@ func (m *home) openCreateFormSeeded(seedPath string, focusTitle bool, prefill *P
 			m.runBranchFetch(target),
 			m.runBranchSearch("", m.textInputOverlay.BranchFilterVersion()))
 	}
-	// Verify a pre-filled title against orphan branches in the seeded repo, the same
-	// async check a keystroke schedules (the inline in-memory verdict already ran above).
-	if prefill != nil && prefill.Title != "" {
-		cmds = append(cmds, m.scheduleTitleCheck(prefill.Title, target))
+	// Verify a pre-filled or restored title against orphan branches in the target repo,
+	// the same async check a keystroke schedules.
+	if title := m.textInputOverlay.GetTitle(); title != "" {
+		cmds = append(cmds, m.scheduleTitleCheck(title, target))
 	}
 	return tea.Batch(cmds...)
 }
@@ -713,6 +877,7 @@ func (m *home) createSessionFromForm(prompt string) tea.Cmd {
 	}
 
 	m.textInputOverlay = nil
+	m.stashedDraft = nil
 	m.state = stateDefault
 	m.menu.SetState(ui.StateDefault)
 	m.resetTitleCheck()
@@ -845,6 +1010,15 @@ func (m *home) recordRecentPath(path string) {
 
 // cancelPromptOverlay cancels the prompt overlay.
 func (m *home) cancelPromptOverlay() tea.Cmd {
+	// Keep a dirty create form as a draft so a deliberate Escape-to-check-something
+	// is non-destructive; everything else (clean form, quick-send, smart-dispatch)
+	// is discarded as before.
+	if m.textInputOverlay != nil && m.textInputOverlay.IsCreateForm() && m.textInputOverlay.IsDirty() {
+		// Drop any pending "⌃R again" arm so it can't survive a Ctrl+C cancel (which
+		// bypasses the overlay's own disarm) and make the next single Ctrl+R a wipe.
+		m.textInputOverlay.DisarmClear()
+		m.stashedDraft = m.textInputOverlay
+	}
 	m.textInputOverlay = nil
 	m.state = stateDefault
 	m.resetTitleCheck()

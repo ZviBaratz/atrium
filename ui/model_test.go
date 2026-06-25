@@ -57,22 +57,22 @@ func TestRender_ModelChip(t *testing.T) {
 	require.NoError(t, err)
 
 	// On (default): both sources render; an unknown model shows nothing.
-	require.Contains(t, ansi.Strip(r.Render(flagged, 0, false)), "fable",
+	require.Contains(t, ansi.Strip(r.Render(flagged, 0, false, false)), "fable",
 		"a --model flag must show its chip before any transcript truth")
-	require.Contains(t, ansi.Strip(r.Render(known, 0, false)), "opus 4.7",
+	require.Contains(t, ansi.Strip(r.Render(known, 0, false, false)), "opus 4.7",
 		"a transcript-known model must show its chip")
-	require.NotContains(t, ansi.Strip(r.Render(bare, 0, false)), "opus",
+	require.NotContains(t, ansi.Strip(r.Render(bare, 0, false, false)), "opus",
 		"no flag and no transcript: no chip")
 
 	// Transcript truth overrides the flag value once known.
 	flagged.SetModelMeta("claude-fable-5", transcript.Stamp{Path: "/t", Size: 1})
-	require.Contains(t, ansi.Strip(r.Render(flagged, 0, false)), "fable 5",
+	require.Contains(t, ansi.Strip(r.Render(flagged, 0, false, false)), "fable 5",
 		"the chip shows transcript truth once known, not the raw flag")
 
 	// Off mode: nothing renders.
 	r.modelIndicator = "off"
-	require.NotContains(t, ansi.Strip(r.Render(flagged, 0, false)), "fable")
-	require.NotContains(t, ansi.Strip(r.Render(known, 0, false)), "opus")
+	require.NotContains(t, ansi.Strip(r.Render(flagged, 0, false, false)), "fable")
+	require.NotContains(t, ansi.Strip(r.Render(known, 0, false, false)), "opus")
 }
 
 // TestRender_ModelChip_BrandUnit pins the chip's placement and tinting: the
@@ -98,7 +98,7 @@ func TestRender_ModelChip_BrandUnit(t *testing.T) {
 
 	// Placement: AUTO badge, then chip, then icon — the badge must not split
 	// the chip from the icon — and exactly one space binds chip to icon.
-	plain := ansi.Strip(r.Render(flagged, 0, false))
+	plain := ansi.Strip(r.Render(flagged, 0, false, false))
 	idxAuto, idxModel, idxIcon := strings.Index(plain, "AUTO"), strings.Index(plain, "fable"), strings.Index(plain, "✻")
 	require.True(t, idxAuto >= 0 && idxModel >= 0 && idxIcon >= 0, "row must carry badge, chip and icon: %q", plain)
 	require.True(t, idxAuto < idxModel && idxModel < idxIcon,
@@ -113,7 +113,7 @@ func TestRender_ModelChip_BrandUnit(t *testing.T) {
 	const coral = "38;2;217;119;87"
 	const mutedCoral = "38;2;154;89;68"
 	for name, inst := range map[string]*session.Instance{"flagged": flagged, "known": known} {
-		out := r.Render(inst, 0, false)
+		out := r.Render(inst, 0, false, false)
 		require.Equal(t, 2, strings.Count(out, coral),
 			"%s: chip + icon must both carry the brand color", name)
 		require.NotContains(t, out, mutedCoral, "%s: the muted tint is retired", name)

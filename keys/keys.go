@@ -42,6 +42,12 @@ const (
 	KeyShiftUp
 	KeyShiftDown
 
+	// KeyNextUnread jumps the selection to the next unread Ready session;
+	// KeyNextNeedsInput jumps to the next session blocked on input. Both wrap
+	// around the list and cross repo-group boundaries.
+	KeyNextUnread
+	KeyNextNeedsInput
+
 	// KeyMoveUp and KeyMoveDown reorder the selected session within its group.
 	KeyMoveUp
 	KeyMoveDown
@@ -96,6 +102,15 @@ const (
 	// KeySmartDispatch opens the single-line smart-dispatch input: type a free-form
 	// description and Atrium routes it to a project and pre-fills the new-session form.
 	KeySmartDispatch
+
+	// KeyMultiSelect enters multi-select ("visual") mode from the list, where
+	// space marks/unmarks rows and a lifecycle action (pause/resume/kill) applies
+	// to the marked set behind a single confirmation.
+	KeyMultiSelect
+
+	// KeyToggleMark marks/unmarks the highlighted session while in multi-select
+	// mode. It is consumed only by the mode handler, never the default state.
+	KeyToggleMark
 )
 
 // KillKey is the chord that triggers a kill from the session list. It mirrors the
@@ -111,6 +126,8 @@ var GlobalKeyStringsMap = map[string]KeyName{
 	"j":          KeyDown,
 	"shift+up":   KeyShiftUp,
 	"shift+down": KeyShiftDown,
+	"u":          KeyNextUnread,
+	"b":          KeyNextNeedsInput,
 	"J":          KeyMoveDown,
 	"K":          KeyMoveUp,
 	"{":          KeyMoveGroupUp,
@@ -150,6 +167,8 @@ var GlobalKeyStringsMap = map[string]KeyName{
 	"ctrl+q":     KeyAttachToggle,
 	"f":          KeyHints,
 	"a":          KeyApprove,
+	"v":          KeyMultiSelect,
+	" ":          KeyToggleMark,
 }
 
 // GlobalkeyBindings is a global, immutable map of KeyName to keybinding.
@@ -169,6 +188,14 @@ var GlobalkeyBindings = map[KeyName]key.Binding{
 	KeyShiftDown: key.NewBinding(
 		key.WithKeys("shift+down"),
 		key.WithHelp("shift+↓", "scroll"),
+	),
+	KeyNextUnread: key.NewBinding(
+		key.WithKeys("u"),
+		key.WithHelp("u", "next unread"),
+	),
+	KeyNextNeedsInput: key.NewBinding(
+		key.WithKeys("b"),
+		key.WithHelp("b", "next blocked"),
 	),
 	KeyEnter: key.NewBinding(
 		key.WithKeys("enter", "o"),
@@ -249,6 +276,14 @@ var GlobalkeyBindings = map[KeyName]key.Binding{
 	KeyResumeAll: key.NewBinding(
 		key.WithKeys("ctrl+r"),
 		key.WithHelp("ctrl+r", "resume all"),
+	),
+	KeyMultiSelect: key.NewBinding(
+		key.WithKeys("v"),
+		key.WithHelp("v", "multi-select"),
+	),
+	KeyToggleMark: key.NewBinding(
+		key.WithKeys(" "),
+		key.WithHelp("space", "mark/unmark"),
 	),
 
 	KeyMoveUp: key.NewBinding(
