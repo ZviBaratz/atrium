@@ -36,9 +36,9 @@ func statusFor(results []Result, k agent.Key) Status {
 func TestCheckClassifies(t *testing.T) {
 	r := fakeRunner{
 		out: map[string]string{
-			"claude": "2.1.186 (Claude Code)\n", // verified 2.1.185, patch -> drifted
-			"gemini": "0.27.4\n",                // verified 0.27, minor -> ok
-			"codex":  "0.12.0\n",                // unversioned adapter -> unknown
+			"claude": "2.2.0 (Claude Code)\n", // verified 2.1.185, minor -> drifted
+			"gemini": "0.27.4\n",              // verified 0.27, minor -> ok
+			"codex":  "0.12.0\n",              // unversioned adapter -> unknown
 		},
 		err: map[string]error{},
 	}

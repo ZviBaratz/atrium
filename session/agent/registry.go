@@ -35,12 +35,16 @@ var claude = &Adapter{
 	// matched in both forms. Confirmed still valid at 2.1.185: the busy marker
 	// "esc to interrupt" (live capture), the login-error "Please run /login ·"
 	// separator (bundle render "Please run /login \xB7 …"), and the permission /
-	// plan / model-error / selection / MCP literals. Patch granularity: claude
-	// rewords gating strings inside patch releases, so any version above this
-	// ceiling is unverified — a coarser granularity would silently miss real
-	// drift.
+	// plan / model-error / selection / MCP literals. Minor granularity (matching
+	// gemini): claude ships patch releases every few days, so patch-level drift
+	// would fire the warning almost constantly — alert fatigue, not signal. A
+	// patch reword is already handled additively (both old and new variants kept
+	// in the same matcher's union, so matching never depends on the version), and
+	// a missed reword fails gracefully to "idle", never a wrong action. So only a
+	// minor/major bump — where structural UI changes are likelier — counts as
+	// drift worth re-verifying.
 	VerifiedVersion:  "2.1.185",
-	DriftGranularity: GranularityPatch,
+	DriftGranularity: GranularityMinor,
 
 	// The footer renders e.g. "✻ Cogitating… (5s · esc to interrupt)" below the
 	// input box for the whole turn, including silent tool calls.
