@@ -134,6 +134,8 @@ func TestFilter_PR(t *testing.T) {
 	open.SetPRStatus(&git.PRStatus{HasPR: true, State: "OPEN"})
 	merged := newFilterInstance(t, "m", "b")
 	merged.SetPRStatus(&git.PRStatus{HasPR: true, State: "MERGED"})
+	closed := newFilterInstance(t, "c", "b")
+	closed.SetPRStatus(&git.PRStatus{HasPR: true, State: "CLOSED"})
 	none := newFilterInstance(t, "n", "b")
 	none.SetPRStatus(&git.PRStatus{HasPR: false})
 	unknown := newFilterInstance(t, "u", "b") // nil prStatus
@@ -141,6 +143,17 @@ func TestFilter_PR(t *testing.T) {
 	require.True(t, ParseFilter("pr:open").Matches(open))
 	require.False(t, ParseFilter("pr:open").Matches(none))
 	require.False(t, ParseFilter("pr:open").Matches(merged), "merged is not open")
+	require.False(t, ParseFilter("pr:open").Matches(closed), "closed is not open")
+
+	require.True(t, ParseFilter("pr:merged").Matches(merged))
+	require.False(t, ParseFilter("pr:merged").Matches(open), "open is not merged")
+	require.False(t, ParseFilter("pr:merged").Matches(closed), "closed is not merged")
+	require.False(t, ParseFilter("pr:merged").Matches(none), "none is not merged")
+
+	require.True(t, ParseFilter("pr:closed").Matches(closed))
+	require.False(t, ParseFilter("pr:closed").Matches(open), "open is not closed")
+	require.False(t, ParseFilter("pr:closed").Matches(merged), "merged is not closed")
+	require.False(t, ParseFilter("pr:closed").Matches(none), "none is not closed")
 
 	require.True(t, ParseFilter("pr:none").Matches(none))
 	require.True(t, ParseFilter("pr:none").Matches(unknown), "nil prStatus is none")
@@ -148,15 +161,18 @@ func TestFilter_PR(t *testing.T) {
 
 	// Prefix / incremental.
 	require.True(t, ParseFilter("pr:o").Matches(open))
+	require.True(t, ParseFilter("pr:m").Matches(merged))
+	require.True(t, ParseFilter("pr:c").Matches(closed))
 	require.True(t, ParseFilter("pr:n").Matches(none))
 
 	// Empty value is a no-op (match all) so "pr:" never blinks the list empty.
 	require.True(t, ParseFilter("pr:").Matches(open))
 	require.True(t, ParseFilter("pr:").Matches(merged))
+	require.True(t, ParseFilter("pr:").Matches(closed))
 	require.True(t, ParseFilter("pr:").Matches(none))
 
-	// A value prefixing neither open nor none matches nothing.
-	require.False(t, ParseFilter("pr:closed").Matches(open))
+	// A value prefixing no known state matches nothing.
+	require.False(t, ParseFilter("pr:xyz").Matches(open))
 }
 
 func TestFilter_MixedPredicateAndSubstringANDed(t *testing.T) {

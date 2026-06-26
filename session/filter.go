@@ -128,22 +128,30 @@ func behindPredicate(expr string) func(int) bool {
 	}
 }
 
-// prTerm matches the cached PR state. value is prefix-matched against "open" and
-// "none"; an empty value is a no-op (matches all) so a mid-typed "pr:" never blinks
-// the list empty. A value prefixing neither matches nothing.
+// prTerm matches the cached PR state. value is prefix-matched against "open",
+// "merged", "closed", and "none"; an empty value is a no-op (matches all) so a
+// mid-typed "pr:" never blinks the list empty. A value prefixing none of the known
+// states matches nothing.
 func prTerm(value string) term {
 	if value == "" {
 		return func(*Instance) bool { return true }
 	}
-	wantOpen := strings.HasPrefix("open", value)
-	wantNone := strings.HasPrefix("none", value)
+	wantOpen   := strings.HasPrefix("open",   value)
+	wantMerged := strings.HasPrefix("merged", value)
+	wantClosed := strings.HasPrefix("closed", value)
+	wantNone   := strings.HasPrefix("none",   value)
 	return func(i *Instance) bool {
 		pr := i.GetPRStatus()
-		if wantOpen && pr != nil && pr.HasPR && pr.State == "OPEN" {
-			return true
+		if pr == nil || !pr.HasPR {
+			return wantNone
 		}
-		if wantNone && (pr == nil || !pr.HasPR) {
-			return true
+		switch pr.State {
+		case "OPEN":
+			return wantOpen
+		case "MERGED":
+			return wantMerged
+		case "CLOSED":
+			return wantClosed
 		}
 		return false
 	}
