@@ -387,11 +387,26 @@ func FromInstanceData(ctx context.Context, data InstanceData, branchPrefix strin
 	return instance, nil
 }
 
+// startResuming relaunches the dead agent in workDir, resuming its prior conversation
+// only when one actually exists. It blocks resume *only* when the agent's transcript is
+// locatable (claude) AND no session record exists for workDir — the exact case where
+// `claude --continue` aborts with "No conversation found to continue!", killing the pane
+// and bouncing the session straight back to Paused. Agents without a native-transcript
+// adapter (codex/gemini) report supported == false and defer to their own resume probe in
+// tmux.resumeCommand, so their behavior is unchanged.
+func (i *Instance) startResuming(ts *tmux.Session, workDir string) error {
+	resumable, supported := transcript.HasResumable(i.Program, workDir, transcript.Options{Root: i.claudeConfigDir})
+	if supported && !resumable {
+		return ts.Start(workDir)
+	}
+	return ts.StartContinue(workDir)
+}
+
 // recoverInPlace brings a loaded instance back online after its tmux session
 // could not be restored (the session was wedged, or gone entirely). If the
 // worktree is intact it recreates the session in place, resuming the agent's
-// prior conversation (StartContinue, a no-op for non-claude agents) and marks
-// the instance Running. If the worktree is gone, or the restart fails, it
+// prior conversation when one exists (startResuming; a fresh start otherwise) and
+// marks the instance Running. If the worktree is gone, or the restart fails, it
 // degrades to Paused so the branch is preserved and Resume can recover it
 // later — a single bad session must never abort loading the rest.
 //
@@ -404,7 +419,7 @@ func (i *Instance) recoverInPlace() {
 	if wt == nil {
 		// Direct session: no worktree to validate. Restart the agent in the real
 		// directory; on failure leave it Paused so the user can Resume later.
-		if err := i.tmuxSession.StartContinue(i.Path); err != nil {
+		if err := i.startResuming(i.tmuxSession, i.Path); err != nil {
 			log.ErrorLog.Printf("failed to restart direct session %s in place, leaving paused: %v", i.Title, err)
 			i.SetStatus(Paused)
 			return
@@ -425,7 +440,7 @@ func (i *Instance) recoverInPlace() {
 		return
 	}
 
-	if err := i.tmuxSession.StartContinue(wt.GetWorktreePath()); err != nil {
+	if err := i.startResuming(i.tmuxSession, wt.GetWorktreePath()); err != nil {
 		log.ErrorLog.Printf("failed to restart session %s in place, leaving paused: %v", i.Title, err)
 		i.SetStatus(Paused)
 		return
@@ -436,14 +451,14 @@ func (i *Instance) recoverInPlace() {
 }
 
 // recreateSession starts a fresh tmux session for an already-set-up worktree,
-// resuming the agent's prior conversation (StartContinue, a no-op for
-// non-claude agents). On failure it tears down the worktree and returns a
-// wrapped error. Callers must ensure no session with the same name still exists
-// — Start guards against duplicates — so a stale session has to be closed first.
+// resuming the agent's prior conversation when one exists (startResuming; a fresh
+// start otherwise). On failure it tears down the worktree and returns a wrapped
+// error. Callers must ensure no session with the same name still exists — Start
+// guards against duplicates — so a stale session has to be closed first.
 func (i *Instance) recreateSession() error {
 	ts := i.tmux()
 	wt := i.worktree()
-	if err := ts.StartContinue(i.WorkingDir()); err != nil {
+	if err := i.startResuming(ts, i.WorkingDir()); err != nil {
 		log.ErrorLog.Print(err)
 		// Cleanup git worktree if tmux session creation fails. A direct session has no
 		// worktree (wt == nil) and nothing to clean up.

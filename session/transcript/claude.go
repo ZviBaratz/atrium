@@ -46,6 +46,16 @@ func (claudeAdapter) render(workingDir string, opts Options) (string, error) {
 	return renderEntries(entries, truncated, opts.Width), nil
 }
 
+// hasSession reports whether Claude Code has a resumable conversation for workingDir,
+// applying the exact rule `claude --continue` uses: a newest non-empty *.jsonl directly
+// under <root>/projects/<sanitized-cwd>. newestTranscript returns an error for a
+// missing/empty dir or an empty newest file, so err == nil ⇔ there is something to resume.
+func (claudeAdapter) hasSession(workingDir string, opts Options) bool {
+	dir := filepath.Join(opts.Root, "projects", sanitizeCWD(workingDir))
+	_, err := newestTranscript(dir)
+	return err == nil
+}
+
 // sanitizeCWD maps an absolute working directory to Claude Code's project
 // directory name: every rune outside [A-Za-z0-9] becomes '-'. Verified against
 // real ~/.claude/projects entries — '.', '_', and '/' all map to '-'.

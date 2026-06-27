@@ -84,6 +84,29 @@ func newTestWorktreeFromBase(t *testing.T) *git.Worktree {
 	return wt
 }
 
+// claudeProjectDirName mirrors transcript.sanitizeCWD (unexported there): every
+// non-alphanumeric rune of the cwd becomes '-'. Kept trivially in sync — the
+// transcript package's own TestSanitizeCWD pins the scheme; duplicated here only
+// to place a fixture transcript at the path `claude --continue` would read.
+func claudeProjectDirName(cwd string) string {
+	return strings.Map(func(r rune) rune {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') {
+			return r
+		}
+		return '-'
+	}, cwd)
+}
+
+// writeClaudeTranscript drops a non-empty session JSONL under
+// <root>/projects/<encoded-cwd>/ so transcript.HasResumable reports a resumable
+// conversation for cwd — i.e. the startResuming gate elects `--continue`.
+func writeClaudeTranscript(t *testing.T, root, cwd string) {
+	t.Helper()
+	dir := filepath.Join(root, "projects", claudeProjectDirName(cwd))
+	require.NoError(t, os.MkdirAll(dir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "session.jsonl"), []byte("{}\n"), 0o644))
+}
+
 // deadExec fails every tmux command, so DoesSessionExist() reports false and the
 // duplicate-name guard in start() does not block the PTY launch.
 func deadExec() cmd_test.MockCmdExec {
@@ -120,6 +143,8 @@ func TestRecoverInPlace_OrphanedWorktreeDegradesToPaused(t *testing.T) {
 // (StartContinue → `--continue`), not by starting a blank agent.
 func TestRecoverInPlace_ResumesConversationWhenWorktreeValid(t *testing.T) {
 	wt := newTestWorktree(t)
+	cfgDir := t.TempDir()
+	writeClaudeTranscript(t, cfgDir, wt.GetWorktreePath())
 	pty := &recordingPtyFactory{}
 	calls := 0
 	liveExec := cmd_test.MockCmdExec{
@@ -135,7 +160,7 @@ func TestRecoverInPlace_ResumesConversationWhenWorktreeValid(t *testing.T) {
 		OutputFunc: func(*exec.Cmd) ([]byte, error) { return nil, nil },
 	}
 	ts := tmux.NewSessionWithDeps(context.Background(), "sess", "claude", pty, liveExec)
-	inst := &Instance{Title: "sess", status: Running, gitWorktree: wt, tmuxSession: ts}
+	inst := &Instance{Title: "sess", status: Running, Program: "claude", claudeConfigDir: cfgDir, gitWorktree: wt, tmuxSession: ts}
 
 	inst.recoverInPlace()
 
@@ -146,15 +171,47 @@ func TestRecoverInPlace_ResumesConversationWhenWorktreeValid(t *testing.T) {
 		"recovery must resume the prior conversation, not start blank")
 }
 
+// TestRecoverInPlace_StartsBlankWhenNoConversation is the regression guard for the
+// "No conversation found to continue!" loop: a claude session whose worktree has no
+// transcript (e.g. paused before the agent ever ran) must recover by starting blank,
+// never with `--continue` (which aborts and bounces the session back to Paused).
+func TestRecoverInPlace_StartsBlankWhenNoConversation(t *testing.T) {
+	wt := newTestWorktree(t)
+	cfgDir := t.TempDir() // deliberately no transcript written
+	pty := &recordingPtyFactory{}
+	calls := 0
+	liveExec := cmd_test.MockCmdExec{
+		RunFunc: func(*exec.Cmd) error {
+			calls++
+			if calls == 1 {
+				return fmt.Errorf("not yet")
+			}
+			return nil
+		},
+		OutputFunc: func(*exec.Cmd) ([]byte, error) { return nil, nil },
+	}
+	ts := tmux.NewSessionWithDeps(context.Background(), "sess", "claude", pty, liveExec)
+	inst := &Instance{Title: "sess", status: Running, Program: "claude", claudeConfigDir: cfgDir, gitWorktree: wt, tmuxSession: ts}
+
+	inst.recoverInPlace()
+
+	require.Equal(t, Running, inst.GetStatus(), "recovery must still bring the session online")
+	require.NotEmpty(t, pty.cmds, "the session must be (re)launched")
+	require.NotContains(t, pty.commands()[0], "--continue",
+		"with no conversation to continue, recovery must start the agent blank")
+}
+
 // TestRecoverInPlace_FailedRestartDegradesToPaused asserts that if the restart
 // itself fails, recovery still degrades to Paused rather than aborting — one bad
 // session must never block loading the rest — while still having attempted to
 // resume the conversation.
 func TestRecoverInPlace_FailedRestartDegradesToPaused(t *testing.T) {
 	wt := newTestWorktree(t)
+	cfgDir := t.TempDir()
+	writeClaudeTranscript(t, cfgDir, wt.GetWorktreePath())
 	pty := &recordingPtyFactory{startErr: fmt.Errorf("pty boom")}
 	ts := tmux.NewSessionWithDeps(context.Background(), "sess", "claude", pty, deadExec())
-	inst := &Instance{Title: "sess", status: Running, gitWorktree: wt, tmuxSession: ts}
+	inst := &Instance{Title: "sess", status: Running, Program: "claude", claudeConfigDir: cfgDir, gitWorktree: wt, tmuxSession: ts}
 
 	inst.recoverInPlace()
 
@@ -169,9 +226,11 @@ func TestRecoverInPlace_FailedRestartDegradesToPaused(t *testing.T) {
 // fails, tears down the worktree and returns an error rather than leaking it.
 func TestRecreateSession_ResumesConversationAndCleansUpOnFailure(t *testing.T) {
 	wt := newTestWorktree(t)
+	cfgDir := t.TempDir()
+	writeClaudeTranscript(t, cfgDir, wt.GetWorktreePath())
 	pty := &recordingPtyFactory{startErr: fmt.Errorf("pty boom")}
 	ts := tmux.NewSessionWithDeps(context.Background(), "sess", "claude", pty, deadExec())
-	inst := &Instance{Title: "sess", started: true, gitWorktree: wt, tmuxSession: ts}
+	inst := &Instance{Title: "sess", started: true, Program: "claude", claudeConfigDir: cfgDir, gitWorktree: wt, tmuxSession: ts}
 
 	err := inst.recreateSession()
 
@@ -181,6 +240,23 @@ func TestRecreateSession_ResumesConversationAndCleansUpOnFailure(t *testing.T) {
 	valid, vErr := wt.IsValidWorktree()
 	require.NoError(t, vErr)
 	require.False(t, valid, "the worktree must be cleaned up after a failed launch")
+}
+
+// TestRecreateSession_StartsBlankWhenNoConversation asserts the Resume fallback
+// helper starts the agent blank (no `--continue`) when no transcript exists for the
+// worktree — the resume path must not abort on a conversation that was never created.
+func TestRecreateSession_StartsBlankWhenNoConversation(t *testing.T) {
+	wt := newTestWorktree(t)
+	cfgDir := t.TempDir() // deliberately no transcript written
+	pty := &recordingPtyFactory{startErr: fmt.Errorf("pty boom")}
+	ts := tmux.NewSessionWithDeps(context.Background(), "sess", "claude", pty, deadExec())
+	inst := &Instance{Title: "sess", started: true, Program: "claude", claudeConfigDir: cfgDir, gitWorktree: wt, tmuxSession: ts}
+
+	err := inst.recreateSession()
+
+	require.Error(t, err, "a failed launch must still surface an error")
+	require.NotContains(t, pty.commands()[0], "--continue",
+		"with no conversation, the fallback must start the agent blank")
 }
 
 // Resume must surface a typed *git.BranchCheckedOutError when the session branch
