@@ -14,7 +14,6 @@ const DefaultThemeName = "tokyo-night"
 // All are private-use-area glyphs that render at width 1 in a Nerd-Font
 // terminal and measure width 1 under go-runewidth.
 const (
-	nfPause  = 0xf04c // nf-fa-pause
 	nfBranch = 0xe0a0 // nf-pl-branch
 	nfPencil = 0xf040 // nf-fa-pencil
 	nfBolt   = 0xf0e7 // nf-fa-bolt
@@ -33,7 +32,10 @@ func nfGlyphs() Glyphs {
 		Ready:         "●",
 		ReadySeen:     "○",
 		Waiting:       "◆",
-		Paused:        string(rune(nfPause)),
+		// Plain, non-PUA Unicode (U+2016) so it renders without a patched Nerd
+		// Font: the old fa-pause PUA codepoint tofu'd on bare fonts and was
+		// remapped in Nerd Fonts v3, so it could even fail with one installed.
+		Paused:        "‖",
 		Branch:        string(rune(nfBranch)),
 		Ahead:         "⇡",
 		Warn:          "⚠",
