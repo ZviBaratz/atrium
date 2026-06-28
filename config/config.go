@@ -165,10 +165,10 @@ type Config struct {
 	// confirm the kill dialog, so Ctrl+X Ctrl+X tears a session down in one motion.
 	// nil means use the default (on), so configs written before it existed keep it.
 	KillDoubleTapConfirm *bool `json:"kill_double_tap_confirm,omitempty"`
-	// Theme selects the UI color/glyph theme by name (see ui/theme registry:
-	// "tokyo-night", "catppuccin-mocha", "unicode"). Empty falls back to the
-	// default. The "unicode" theme avoids Nerd-Font glyphs for terminals
-	// without a patched font.
+	// Theme selects the UI color palette and border style by name (see ui/theme
+	// registry: "tokyo-night", "catppuccin-mocha", "unicode"). Empty falls back
+	// to the default. Glyphs are a separate axis — see NerdFont; the "unicode"
+	// theme differs only by using square borders.
 	Theme string `json:"theme,omitempty"`
 	// NerdFont, when true, draws the branch / pull-request / dirty / auto markers
 	// with vendor icons from a patched Nerd Font. nil/false (the default) uses

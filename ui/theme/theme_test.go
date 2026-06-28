@@ -93,6 +93,7 @@ func assertGlyphWidths(t *testing.T, name string, g Glyphs) {
 		"Warn":          g.Warn,
 		"Behind":        g.Behind,
 		"Dirty":         g.Dirty,
+		"Note":          g.Note,
 		"PR":            g.PR,
 		"FoldOpen":      g.FoldOpen,
 		"FoldClosed":    g.FoldClosed,
@@ -100,6 +101,7 @@ func assertGlyphWidths(t *testing.T, name string, g Glyphs) {
 		"MarkChecked":   g.MarkChecked,
 		"DiffAdd":       g.DiffAdd,
 		"DiffDel":       g.DiffDel,
+		"TextCursor":    g.TextCursor,
 	}
 	for label, glyph := range cells {
 		if w := runewidth.StringWidth(glyph); w != 1 {

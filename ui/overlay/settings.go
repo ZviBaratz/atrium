@@ -153,7 +153,7 @@ func newSettingRows(cfg *config.Config) []settingRow {
 		},
 		{
 			key: "theme", section: "Appearance", label: "Theme", kind: kindEnum,
-			description: "UI color and glyph theme.",
+			description: "UI color palette and border style.",
 			get: func(c *config.Config) string {
 				if c.Theme == "" {
 					return theme.DefaultThemeName
