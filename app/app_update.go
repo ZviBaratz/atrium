@@ -324,9 +324,12 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					if m.tabbedWindow.IsInTerminalTab() {
 						return m, m.attachExec(m.tabbedWindow.AttachTerminal, nil)
 					}
-					// inst is the current selection, so list.Attach targets it;
-					// killTarget carries it for the ctrl-x in-session kill flow.
-					return m, m.attachExec(m.list.Attach, inst)
+					// Attach inst directly (not m.list.Attach, which re-reads the
+					// selected index when the deferred command runs and could target a
+					// row the selection moved to in between); killTarget carries it for
+					// the ctrl-x in-session kill flow. Matches the sibling/auto-open
+					// attach paths, which also bind the instance up front.
+					return m, m.attachExec(inst.Attach, inst)
 				}
 				m.lastClickInstance = inst
 				m.lastClickAt = now
