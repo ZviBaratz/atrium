@@ -259,6 +259,26 @@ func TestRecreateSession_StartsBlankWhenNoConversation(t *testing.T) {
 		"with no conversation, the fallback must start the agent blank")
 }
 
+// TestKill_CleansUpWorktreeWhenNotStarted is the regression guard for the resource
+// leak where a failed Start() left its worktree (and branch) behind. Start() only
+// sets started=true on success, so its deferred Kill() ran while started==false; the
+// old !isStarted() early-return then made that cleanup a no-op, leaking the worktree
+// NewWorktree/Setup had already created. Kill() must tear down whatever resources
+// exist regardless of the started flag. (No tmux session is attached so the assertion
+// is the on-disk worktree alone, which is the resource that actually leaked.)
+func TestKill_CleansUpWorktreeWhenNotStarted(t *testing.T) {
+	wt := newTestWorktree(t)
+	// started is left false and no tmux session is set — exactly the state Start()'s
+	// deferred Kill() runs in when worktree setup has succeeded but a later step fails.
+	inst := &Instance{Title: "sess", gitWorktree: wt}
+
+	require.NoError(t, inst.Kill())
+
+	valid, err := wt.IsValidWorktree()
+	require.NoError(t, err)
+	require.False(t, valid, "Kill must remove the worktree even when the instance was never marked started")
+}
+
 // Resume must surface a typed *git.BranchCheckedOutError when the session branch
 // is already checked out elsewhere — the app layer keys its detach-and-recover
 // offer off errors.As against that type, so the type is the cross-package

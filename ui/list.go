@@ -956,9 +956,9 @@ func (l *List) KillInstance(target *session.Instance) {
 	}
 
 	// Under a sort mode, drop the target from the canonical order and re-sort once
-	// the existing removal + selection recovery below has fully settled. Registered
-	// before the conditional `defer l.Up()` so it runs LAST, after that recovery, and
-	// applySort then preserves the recovered selection by identity. Placed after the
+	// the removal + selection recovery below has fully settled. As a deferred call it
+	// runs LAST — after clampSelectionToNavigable has recovered the selection — and
+	// applySort then preserves that recovered selection by identity. Placed after the
 	// idx==-1 guard so it pairs with a real items removal (no spurious re-sort when
 	// target isn't in the list). In creation mode manual is nil and this is skipped.
 	if l.sortActive() {
@@ -971,12 +971,6 @@ func (l *List) KillInstance(target *session.Instance) {
 	// Kill the tmux session and clean up the worktree.
 	if err := target.Kill(); err != nil {
 		log.ErrorLog.Printf("could not kill instance: %v", err)
-	}
-
-	// If the selected item is the last one and we're removing it, select the
-	// previous one so the selection doesn't fall off the end.
-	if l.selectedIdx == idx && idx == len(l.items)-1 {
-		defer l.Up()
 	}
 
 	l.items = append(l.items[:idx], l.items[idx+1:]...)
