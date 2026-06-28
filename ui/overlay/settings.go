@@ -170,6 +170,10 @@ func newSettingRows(cfg *config.Config) []settingRow {
 				return names
 			},
 		},
+		boolRow("nerd_font", "Appearance", "Nerd Font icons",
+			"Vendor icons (branch, PR, dirty, auto) from a patched Nerd Font; off = plain Unicode.", "",
+			(*config.Config).GetNerdFont,
+			func(c *config.Config, v bool) { c.NerdFont = &v }),
 		{
 			key: "model_indicator", section: "Appearance", label: "Model chip", kind: kindEnum,
 			description: "Per-session model chip in the list, shown whenever the model is known.",

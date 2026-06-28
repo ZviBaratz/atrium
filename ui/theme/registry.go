@@ -24,26 +24,25 @@ const (
 // miniDotFrames are the Braille spinner frames (each width 1, widely supported).
 var miniDotFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
 
-// nfGlyphs is the Nerd-Font glyph set shared by the colored themes.
-func nfGlyphs() Glyphs {
+// plainGlyphs is the safe glyph set: every icon is non-PUA Unicode that measures
+// width 1 (or empty for AutoBadge) and renders on any terminal/font — no patched
+// Nerd Font required. It is the default, so a bare terminal never shows tofu.
+func plainGlyphs() Glyphs {
 	return Glyphs{
 		SpinnerFrames: miniDotFrames,
 		SpinnerFPS:    time.Second / 10, // matches the 100ms preview repaint tick so frames never lag a paint
 		Ready:         "●",
 		ReadySeen:     "○",
 		Waiting:       "◆",
-		// Plain, non-PUA Unicode (U+2016) so it renders without a patched Nerd
-		// Font: the old fa-pause PUA codepoint tofu'd on bare fonts and was
-		// remapped in Nerd Fonts v3, so it could even fail with one installed.
 		Paused:        "‖",
-		Branch:        string(rune(nfBranch)),
+		Branch:        "⎇",
 		Ahead:         "⇡",
 		Warn:          "⚠",
 		Behind:        "⇣",
-		Dirty:         string(rune(nfPencil)),
-		Note:          string(rune(nfNote)),
-		PR:            string(rune(nfPR)),
-		AutoBadge:     string(rune(nfBolt)),
+		Dirty:         "*",
+		Note:          "✎",
+		PR:            "⇄", // plain-unicode pull-request marker
+		AutoBadge:     "",  // text-only "AUTO" chip
 		FoldOpen:      "▾",
 		FoldClosed:    "▸",
 		SelectionMark: "▎",
@@ -52,6 +51,28 @@ func nfGlyphs() Glyphs {
 		DiffDel:       "-",
 		TextCursor:    "▌",
 	}
+}
+
+// nerdGlyphs is plainGlyphs with the five vendor icons overlaid from the Nerd-Font
+// private-use area. These render only on a patched Nerd Font, so this set is chosen
+// solely when the nerd-font preference is on (see current.go). Everything else stays
+// shared with plainGlyphs so the two sets can never drift apart.
+func nerdGlyphs() Glyphs {
+	g := plainGlyphs()
+	g.Branch = string(rune(nfBranch))
+	g.Dirty = string(rune(nfPencil))
+	g.Note = string(rune(nfNote))
+	g.PR = string(rune(nfPR))
+	g.AutoBadge = string(rune(nfBolt))
+	return g
+}
+
+// glyphsFor returns the glyph set for the given nerd-font preference.
+func glyphsFor(nerd bool) Glyphs {
+	if nerd {
+		return nerdGlyphs()
+	}
+	return plainGlyphs()
 }
 
 var tokyoNight = &Theme{
@@ -75,7 +96,7 @@ var tokyoNight = &Theme{
 		BadgeBg:     lipgloss.Color("#bb9af7"),
 		BadgeFg:     lipgloss.Color("#1a1b26"),
 	},
-	Glyphs:  nfGlyphs(),
+	Glyphs:  plainGlyphs(),
 	Borders: Borders{Style: lipgloss.RoundedBorder()},
 }
 
@@ -100,38 +121,18 @@ var catppuccinMocha = &Theme{
 		BadgeBg:     lipgloss.Color("#cba6f7"),
 		BadgeFg:     lipgloss.Color("#1e1e2e"),
 	},
-	Glyphs:  nfGlyphs(),
+	Glyphs:  plainGlyphs(),
 	Borders: Borders{Style: lipgloss.RoundedBorder()},
 }
 
 // unicodeFallback reuses the Tokyo Night palette (colors are fine without a
-// patched font) but avoids Nerd-Font / wide glyphs and uses square borders.
+// patched font) but uses square borders. Its glyphs are the plain set; since the
+// colored themes now also default to plainGlyphs(), this theme's distinction is the
+// square border. It stays registered for back-compat with configs set to "unicode".
 var unicodeFallback = &Theme{
 	Name:    "unicode",
 	Palette: tokyoNight.Palette,
-	Glyphs: Glyphs{
-		SpinnerFrames: miniDotFrames,
-		SpinnerFPS:    time.Second / 10, // matches the 100ms preview repaint tick so frames never lag a paint
-		Ready:         "●",
-		ReadySeen:     "○",
-		Waiting:       "◆",
-		Paused:        "‖",
-		Branch:        "⎇",
-		Ahead:         "⇡",
-		Warn:          "⚠",
-		Behind:        "⇣",
-		Dirty:         "*",
-		Note:          "✎",
-		PR:            "⇄", // plain-unicode pull-request marker
-		AutoBadge:     "",  // text-only "AUTO" chip
-		FoldOpen:      "▾",
-		FoldClosed:    "▸",
-		SelectionMark: "▎",
-		MarkChecked:   "✓",
-		DiffAdd:       "+",
-		DiffDel:       "-",
-		TextCursor:    "▌",
-	},
+	Glyphs:  plainGlyphs(),
 	Borders: Borders{Style: lipgloss.NormalBorder()},
 }
 

@@ -32,6 +32,26 @@ func TestMain(m *testing.M) {
 	os.Exit(code)
 }
 
+func TestGetNerdFont(t *testing.T) {
+	on, off := true, false
+	cases := []struct {
+		name string
+		cfg  *Config
+		want bool
+	}{
+		{"nil config", nil, false},
+		{"zero config", &Config{}, false},
+		{"explicit nil pointer", &Config{NerdFont: nil}, false},
+		{"explicit off", &Config{NerdFont: &off}, false},
+		{"explicit on", &Config{NerdFont: &on}, true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			assert.Equal(t, c.want, c.cfg.GetNerdFont())
+		})
+	}
+}
+
 func TestGetClaudeCommand(t *testing.T) {
 	originalShell := os.Getenv("SHELL")
 	originalPath := os.Getenv("PATH")
