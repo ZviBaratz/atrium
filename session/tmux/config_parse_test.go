@@ -1,6 +1,7 @@
 package tmux
 
 import (
+	"context"
 	"fmt"
 	"math/rand"
 	"os"
@@ -39,14 +40,15 @@ func TestManagedConfigParsesUnderRealTmux(t *testing.T) {
 			// No '/' in the socket name: tmux reads -L as a path under /tmp/tmux-<uid>,
 			// and a slash (t.Name carries the subtest path) would point at a missing dir.
 			sock := fmt.Sprintf("cfgparse-%d", rand.Int31())
+			ctx := context.Background()
 			// Clean probe server (no -f) kept alive by a session so source-file has a
 			// target. Never the live socket.
-			if out, err := exec.Command("tmux", "-L", sock, "new-session", "-d", "sleep 60").CombinedOutput(); err != nil {
+			if out, err := exec.CommandContext(ctx, "tmux", "-L", sock, "new-session", "-d", "sleep 60").CombinedOutput(); err != nil {
 				t.Fatalf("start probe tmux server: %v: %s", err, out)
 			}
-			defer func() { _ = exec.Command("tmux", "-L", sock, "kill-server").Run() }()
+			defer func() { _ = exec.CommandContext(ctx, "tmux", "-L", sock, "kill-server").Run() }()
 
-			out, err := exec.Command("tmux", "-L", sock, "source-file", path).CombinedOutput()
+			out, err := exec.CommandContext(ctx, "tmux", "-L", sock, "source-file", path).CombinedOutput()
 			if msg := strings.TrimSpace(string(out)); err != nil || msg != "" {
 				t.Fatalf("tmux rejected the rendered managed config (contextBar=%v): err=%v msg=%q\n---\n%s",
 					contextBar, err, msg, rendered)

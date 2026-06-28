@@ -128,8 +128,11 @@ func validateConfig(path string) error {
 		return nil
 	}
 	defer func() {
-		// Always tear the probe server down, even if ctx already expired.
-		_ = exec.Command("tmux", "-L", sock, "kill-server").Run()
+		// Always tear the probe server down, even if ctx already expired — so use a
+		// fresh short-lived context rather than the (possibly cancelled) parent.
+		killCtx, killCancel := context.WithTimeout(context.Background(), tmuxOpTimeout)
+		defer killCancel()
+		_ = exec.CommandContext(killCtx, "tmux", "-L", sock, "kill-server").Run()
 	}()
 	out, err := exec.CommandContext(ctx, "tmux", "-L", sock, "source-file", path).CombinedOutput()
 	if err != nil {
