@@ -15,9 +15,25 @@ func getSysProcAttr() *syscall.SysProcAttr {
 	}
 }
 
+// acquireDaemonLock is a no-op on Windows, which has no flock, so the daemon runs
+// without a single-instance lock. The exposure is small — Atrium's tmux-based
+// runtime doesn't target Windows (the build exists for completeness) — and this
+// mirrors internal/update/lock_windows.go.
+func acquireDaemonLock(path string) (release func(), err error) {
+	return func() {}, nil
+}
+
+// isDaemonLockHeld can't consult an flock on Windows, so it conservatively
+// reports the lock as held: StopDaemon then falls back to its prior
+// signal-by-PID behavior (terminateProcess's Kill), unchanged here.
+func isDaemonLockHeld(path string) (bool, error) {
+	return true, nil
+}
+
 // terminateProcess stops the daemon. Windows has no SIGTERM equivalent that Go's
 // os/signal delivers to a detached process group, so there is no graceful
 // shutdown hook to trip; fall back to an immediate kill (the prior behavior).
-func terminateProcess(proc *os.Process) error {
+// lockPath is unused here (no flock); it keeps the cross-platform signature.
+func terminateProcess(proc *os.Process, lockPath string) error {
 	return proc.Kill()
 }

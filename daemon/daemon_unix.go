@@ -23,19 +23,67 @@ func getSysProcAttr() *syscall.SysProcAttr {
 	}
 }
 
+// acquireDaemonLock takes the exclusive daemon lock at path and returns a release
+// func the running daemon must hold for its entire lifetime. Closing the
+// descriptor drops the flock, and so does process death — so the lock doubles as
+// a liveness signal the stopper can trust (see isDaemonLockHeld). If another
+// daemon already holds it, it returns errDaemonAlreadyRunning so RunDaemon can
+// decline to start a duplicate. Mirrors internal/update/lock_unix.go.
+func acquireDaemonLock(path string) (release func(), err error) {
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o644)
+	if err != nil {
+		return nil, err
+	}
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		_ = f.Close()
+		if errors.Is(err, syscall.EWOULDBLOCK) {
+			return nil, errDaemonAlreadyRunning
+		}
+		return nil, err
+	}
+	// Closing the descriptor releases the flock.
+	return func() { _ = f.Close() }, nil
+}
+
+// isDaemonLockHeld reports whether a live daemon currently holds the lock at path.
+// It trylocks without delivering anything: acquiring the lock means nobody held
+// it, so the PID in daemon.pid is stale and must NOT be signaled. A missing lock
+// file means no daemon has ever run. flock conflicts across separate open file
+// descriptions even within a single process, so this answers correctly no matter
+// who calls it.
+func isDaemonLockHeld(path string) (bool, error) {
+	f, err := os.OpenFile(path, os.O_RDONLY, 0)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	// Closing the descriptor releases the lock if our trylock below succeeded.
+	defer func() { _ = f.Close() }()
+
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		if errors.Is(err, syscall.EWOULDBLOCK) {
+			return true, nil // a live daemon holds it
+		}
+		return false, err
+	}
+	return false, nil // we acquired it, so nobody held it
+}
+
 // terminateProcess stops the daemon gracefully: it sends SIGTERM (which trips the
 // daemon's signal.NotifyContext shutdown, letting it persist its in-memory
 // instances before exiting), waits for the process to disappear, and only
 // escalates to SIGKILL if it overstays gracefulStopTimeout. The daemon is not a
-// child of this process, so liveness is probed with signal 0 rather than Wait.
+// child of this process, so liveness is probed externally rather than with Wait.
 //
-// Residual PID-reuse race (unchanged from the prior immediate-kill behavior): the
-// target PID comes from daemon.pid, so if the daemon already exited and the OS
-// recycled its PID, these signals land on an unrelated process. The window is
-// tiny and signaling an innocent victim is the pre-existing risk; closing it
-// fully would require the daemon to record an identity token the stopper can
-// verify, which is left as a follow-up.
-func terminateProcess(proc *os.Process) error {
+// PID-reuse safety: liveness is probed via the daemon lock at lockPath (see
+// daemonGone), which the kernel frees only when the real daemon dies — so a
+// recycled PID can never be mistaken for a still-running daemon and SIGKILLed.
+// StopDaemon also confirms the lock is held before calling this, so the initial
+// SIGTERM targets a confirmed-live daemon. An empty lockPath (tests) falls back
+// to a signal-0 probe.
+func terminateProcess(proc *os.Process, lockPath string) error {
 	if err := proc.Signal(syscall.SIGTERM); err != nil {
 		if processGone(err) {
 			return nil // already stopped — nothing to do
@@ -46,12 +94,23 @@ func terminateProcess(proc *os.Process) error {
 
 	deadline := time.Now().Add(gracefulStopTimeout)
 	for time.Now().Before(deadline) {
-		// signal 0 performs error checking without delivering a signal: a
-		// non-nil error means the process is gone (or its PID was reused).
-		if err := proc.Signal(syscall.Signal(0)); err != nil {
+		if daemonGone(proc, lockPath) {
 			return nil
 		}
 		time.Sleep(gracefulStopPoll)
 	}
 	return proc.Kill()
+}
+
+// daemonGone reports whether the daemon has exited. It prefers the lock
+// (reuse-proof: the kernel frees it only when the real daemon process dies); on a
+// lock-check error, or when no lock path is supplied (tests), it falls back to a
+// signal-0 probe, where any error means the PID is gone.
+func daemonGone(proc *os.Process, lockPath string) bool {
+	if lockPath != "" {
+		if held, err := isDaemonLockHeld(lockPath); err == nil {
+			return !held
+		}
+	}
+	return proc.Signal(syscall.Signal(0)) != nil
 }
