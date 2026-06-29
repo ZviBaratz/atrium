@@ -35,7 +35,10 @@ The control flow is **Cobra → Bubble Tea → Instance → (tmux + git worktree
   removes the worktree but keeps the branch; "resume" recreates it.
 - **`daemon/`** — autoyes runs as a background process, **not** a goroutine. When
   autoyes is on, the TUI launches `atrium --daemon`, which polls all stored
-  instances and taps Enter on prompts; the TUI kills it on startup/exit.
+  instances and taps Enter on prompts; the TUI kills it on startup/exit. It runs
+  only while no TUI is alive and snapshots the instance list once for its lifetime
+  (the TUI is the sole session creator), so new sessions are picked up at the next
+  relaunch rather than mid-run.
 - **`config/`** — two persisted artifacts in the data dir: `config.json`
   (`Config`: program, profiles, auto-attach) and `state.json` (`State`: serialized
   instances plus UI state like collapsed repos and recent paths). See the

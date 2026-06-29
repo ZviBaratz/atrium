@@ -2,6 +2,15 @@
 // a goroutine): the TUI launches `atrium --daemon`, which polls all stored
 // instances and taps Enter on pending prompts, and the TUI kills it again on
 // startup and exit.
+//
+// The daemon is a strict fill-the-gap process: it runs only while no TUI is
+// alive. The TUI kills any daemon before app.Run (main.go) and relaunches one
+// only on exit, and the TUI is the sole creator of sessions — so no process
+// adds sessions during the daemon's lifetime in the supported single-TUI
+// workflow. The daemon therefore snapshots the instance list once at startup
+// and treats that snapshot as authoritative for its whole (short) life; newly
+// created sessions are picked up automatically at the next relaunch, not via an
+// in-daemon refresh. See the RunDaemon load site for the invariant in full.
 package daemon
 
 import (
@@ -100,6 +109,20 @@ func RunDaemon(ctx context.Context, cfg *config.Config) error {
 		return fmt.Errorf("failed to initialize storage: %w", err)
 	}
 
+	// Load the instance list once for the daemon's whole lifetime. This is
+	// correct, not a missed refresh (issue #210): the daemon and TUI are mutually
+	// exclusive — main.go calls StopDaemon() before app.Run (main.go:113) and only
+	// LaunchDaemon()s on TUI exit (main.go:104-111, gated by
+	// shouldLaunchDaemonOnExit; covered by TestShouldLaunchDaemonOnExit) — and the
+	// TUI is the only thing that creates sessions. So nothing adds sessions while
+	// this daemon is alive; any created later are covered by the next relaunch.
+	//
+	// Known limitation: with two concurrent TUIs on one data dir, a session created
+	// in TUI B after this daemon launched is not auto-answered until the daemon dies
+	// (next TUI start). That is intentionally not handled here — a read-only refresh
+	// would not make concurrent TUIs safe, because the same scenario also corrupts
+	// state.json on the write side (SaveInstances below overwrites the whole file
+	// from this startup snapshot). Both directions are tracked together in #230.
 	instances, err := storage.LoadInstances(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to load instances: %w", err)
