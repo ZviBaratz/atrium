@@ -225,7 +225,17 @@ type Instance struct {
 	// per instance, possibly via a git subprocess. Guarded by mu (never held
 	// across that subprocess).
 	groupKey string
+	// groupKeyComputeMu serializes the cold-path GroupKey git subprocess so
+	// concurrent callers run it at most once. A leaf mutex: taken only on a
+	// cache miss for a non-direct, not-yet-started instance, and never nested
+	// under mu, so the subprocess never blocks mu-guarded status reads.
+	groupKeyComputeMu sync.Mutex
 }
+
+// repoGroupKey is the package's hook into git.RepoGroupKey for GroupKey's cold
+// path. A var (mirroring git.checkGHCLI) so the dedup test can stub it to count
+// cold-path invocations.
+var repoGroupKey = git.RepoGroupKey
 
 // ToInstanceData converts an Instance to its serializable form
 func (i *Instance) ToInstanceData() InstanceData {
@@ -584,21 +594,39 @@ func (i *Instance) GroupKey() string {
 	i.mu.RLock()
 	cached := i.groupKey
 	wt := i.gitWorktree
+	direct := i.direct
 	i.mu.RUnlock()
 	if cached != "" {
 		return cached
 	}
 
-	var key string
+	// Cheap branches: no subprocess, so the worst a concurrent miss costs is a
+	// redundant basename/GetRepoName — not worth serializing.
 	switch {
 	case wt != nil:
-		key = wt.GetRepoName()
-	case i.direct:
-		key = filepath.Base(i.Path)
-	default:
-		key = git.RepoGroupKey(i.baseContext(), i.Path)
+		return i.cacheGroupKey(wt.GetRepoName())
+	case direct:
+		return i.cacheGroupKey(filepath.Base(i.Path))
 	}
 
+	// Cold path: a git subprocess. Serialize on a leaf mutex (never under mu, so
+	// the subprocess never blocks status reads) and re-check the cache after
+	// acquiring it — a prior holder may have just populated it, collapsing N
+	// concurrent callers to a single RepoGroupKey run.
+	i.groupKeyComputeMu.Lock()
+	defer i.groupKeyComputeMu.Unlock()
+	i.mu.RLock()
+	cached = i.groupKey
+	i.mu.RUnlock()
+	if cached != "" {
+		return cached
+	}
+	return i.cacheGroupKey(repoGroupKey(i.baseContext(), i.Path))
+}
+
+// cacheGroupKey stores key as the resolved group key under mu and returns it.
+// SetPath can clear the cache so a re-pointed instance recomputes.
+func (i *Instance) cacheGroupKey(key string) string {
 	i.mu.Lock()
 	i.groupKey = key
 	i.mu.Unlock()
