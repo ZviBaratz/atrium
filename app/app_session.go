@@ -270,13 +270,6 @@ func (m *home) candidatePathForBasename(basename string) string {
 	return ""
 }
 
-// resumeSelected resumes a paused instance and persists the new running state
-// (Resume itself only mutates in-memory status, so without this a crash before
-// the next save would leave the session stamped Paused). When resume is blocked
-// because the session branch is checked out in the BASE repo — the common result
-// of the Checkout action — it offers to detach the base repo and retry. When the
-// branch is held by a sibling worktree it surfaces a dismissible modal naming the
-// holder rather than auto-touching another live worktree.
 // isBranchBusyError reports whether err is (or wraps) a *git.BranchCheckedOutError,
 // returning the typed error when so. Both the interactive resume path and the batch
 // summary key off this — the type, not the message, is the cross-package contract.
@@ -288,6 +281,13 @@ func isBranchBusyError(err error) (*git.BranchCheckedOutError, bool) {
 	return nil, false
 }
 
+// resumeSelected resumes a paused instance and persists the new running state
+// (Resume itself only mutates in-memory status, so without this a crash before
+// the next save would leave the session stamped Paused). When resume is blocked
+// because the session branch is checked out in the BASE repo — the common result
+// of the Checkout action — it offers to detach the base repo and retry. When the
+// branch is held by a sibling worktree it surfaces a dismissible modal naming the
+// holder rather than auto-touching another live worktree.
 func (m *home) resumeSelected(selected *session.Instance) tea.Cmd {
 	err := selected.Resume()
 	if err == nil {

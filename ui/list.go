@@ -985,13 +985,6 @@ func (l *List) KillInstance(target *session.Instance) {
 	l.clampSelectionToNavigable()
 }
 
-// Attach attaches the user's terminal to the selected instance's tmux session
-// (see Instance.Attach).
-func (l *List) Attach() (chan struct{}, error) {
-	targetInstance := l.items[l.selectedIdx]
-	return targetInstance.Attach()
-}
-
 // Up selects the prev visible item in the list, wrapping at the top and skipping the hidden
 // members of collapsed groups.
 func (l *List) Up() { l.moveSelection(-1) }

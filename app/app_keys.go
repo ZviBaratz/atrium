@@ -685,5 +685,8 @@ func (m *home) attachSelected() (tea.Model, tea.Cmd) {
 		// The terminal tab has no in-session kill key, so no kill target.
 		return m, m.attachExec(m.tabbedWindow.AttachTerminal, nil)
 	}
-	return m, m.attachExec(m.list.Attach, selected)
+	// Attach the captured selection directly (not m.list.Attach, which re-reads the
+	// selected index when the deferred command runs) so the attach target and the
+	// killTarget can't diverge. Matches the double-click and sibling/auto-open paths.
+	return m, m.attachExec(selected.Attach, selected)
 }
