@@ -259,14 +259,10 @@ func (bp *BranchPicker) GetSelectedBranch() string {
 	return bp.results[idx]
 }
 
-func bpLabelStyle() lipgloss.Style  { return theme.Current().AccentStyle().Bold(true) }
-func bpFilterStyle() lipgloss.Style { return theme.Current().FgStyle() }
-func bpSelectedStyle() lipgloss.Style {
-	return lipgloss.NewStyle().
-		Background(theme.Current().Palette.Accent).
-		Foreground(theme.Current().Palette.Bg)
-}
-func bpDimStyle() lipgloss.Style { return theme.Current().DimStyle() }
+func bpLabelStyle() lipgloss.Style    { return overlayLabelStyle() }
+func bpFilterStyle() lipgloss.Style   { return overlayFilterStyle() }
+func bpSelectedStyle() lipgloss.Style { return overlaySelectedStyle() }
+func bpDimStyle() lipgloss.Style      { return overlayDimStyle() }
 
 // Render renders the branch picker at a constant height (one header line, a blank line,
 // then visibleRows item rows) so the surrounding overlay never changes size as

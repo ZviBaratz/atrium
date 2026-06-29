@@ -28,15 +28,11 @@ func tiTitleStyle() lipgloss.Style {
 
 func tiButtonStyle() lipgloss.Style { return theme.Current().FgStyle() }
 
-func tiFocusedButtonStyle() lipgloss.Style {
-	return lipgloss.NewStyle().
-		Background(theme.Current().Palette.Accent).
-		Foreground(theme.Current().Palette.Bg)
-}
+func tiFocusedButtonStyle() lipgloss.Style { return overlaySelectedStyle() }
 
-func tiDividerStyle() lipgloss.Style { return theme.Current().DimStyle() }
+func tiDividerStyle() lipgloss.Style { return overlayDimStyle() }
 
-func tiLabelStyle() lipgloss.Style { return theme.Current().AccentStyle().Bold(true) }
+func tiLabelStyle() lipgloss.Style { return overlayLabelStyle() }
 
 func tiHintStyle() lipgloss.Style { return theme.Current().OverlayHintStyle() }
 

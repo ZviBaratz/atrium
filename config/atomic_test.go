@@ -24,6 +24,22 @@ func TestWriteFileAtomic_ContentsAndMode(t *testing.T) {
 	assert.Equal(t, os.FileMode(0644), info.Mode().Perm())
 }
 
+// WriteFileAtomic is the exported wrapper external packages (e.g. the daemon PID
+// file) depend on; it must write the bytes and honor the mode like the internal one.
+func TestWriteFileAtomic_ExportedWrapper(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "daemon.pid")
+
+	require.NoError(t, WriteFileAtomic(path, []byte("4242"), 0644))
+
+	got, err := os.ReadFile(path)
+	require.NoError(t, err)
+	assert.Equal(t, "4242", string(got))
+
+	info, err := os.Stat(path)
+	require.NoError(t, err)
+	assert.Equal(t, os.FileMode(0644), info.Mode().Perm())
+}
+
 func TestWriteFileAtomic_NoLeftoverTempOnSuccess(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "state.json")

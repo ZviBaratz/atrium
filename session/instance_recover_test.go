@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/ZviBaratz/atrium/cmd/cmd_test"
@@ -20,22 +21,53 @@ import (
 // (e.g. `claude --continue` vs a blank `claude`). When startErr is set every
 // Start fails, letting tests drive the failure branches without a real tmux.
 type recordingPtyFactory struct {
+	mu       sync.Mutex // guards cmds and opened against concurrent Start/Close
 	cmds     []*exec.Cmd
 	startErr error
+	opened   []*os.File // pty stub files handed out by Start, released by Close
+}
+
+// newRecordingPtyFactory builds a recordingPtyFactory and registers its Close with
+// t.Cleanup, so the pty stub files and fds it hands out are released at test end
+// rather than leaking across the suite. startErr (may be nil) makes every Start fail.
+func newRecordingPtyFactory(t *testing.T, startErr error) *recordingPtyFactory {
+	t.Helper()
+	f := &recordingPtyFactory{startErr: startErr}
+	t.Cleanup(f.Close)
+	return f
 }
 
 func (f *recordingPtyFactory) Start(cmd *exec.Cmd) (*os.File, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.cmds = append(f.cmds, cmd)
 	if f.startErr != nil {
 		return nil, f.startErr
 	}
-	// A real *os.File the caller can Close(); contents are irrelevant.
-	return os.CreateTemp("", "pty-stub")
+	// A real, bidirectional *os.File the caller can Close(); contents are irrelevant.
+	// Tracked so Close removes it — otherwise each Start leaks one /tmp file.
+	file, err := os.CreateTemp("", "pty-stub")
+	if err != nil {
+		return nil, err
+	}
+	f.opened = append(f.opened, file)
+	return file, nil
 }
 
-func (f *recordingPtyFactory) Close() {}
+// Close closes and removes every pty stub file Start handed out.
+func (f *recordingPtyFactory) Close() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, file := range f.opened {
+		_ = file.Close()
+		_ = os.Remove(file.Name())
+	}
+	f.opened = nil
+}
 
 func (f *recordingPtyFactory) commands() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	out := make([]string, 0, len(f.cmds))
 	for _, c := range f.cmds {
 		out = append(out, strings.Join(c.Args, " "))
@@ -127,7 +159,7 @@ func TestRecoverInPlace_OrphanedWorktreeDegradesToPaused(t *testing.T) {
 		filepath.Join(t.TempDir(), "repo"),
 		filepath.Join(t.TempDir(), "gone"),
 		"sess", "session/sess", "", "main", false, "session/")
-	pty := &recordingPtyFactory{}
+	pty := newRecordingPtyFactory(t, nil)
 	ts := tmux.NewSessionWithDeps(context.Background(), "sess", "claude", pty, deadExec())
 	inst := &Instance{Title: "sess", status: Running, gitWorktree: wt, tmuxSession: ts}
 
@@ -145,7 +177,7 @@ func TestRecoverInPlace_ResumesConversationWhenWorktreeValid(t *testing.T) {
 	wt := newTestWorktree(t)
 	cfgDir := t.TempDir()
 	writeClaudeTranscript(t, cfgDir, wt.GetWorktreePath())
-	pty := &recordingPtyFactory{}
+	pty := newRecordingPtyFactory(t, nil)
 	calls := 0
 	liveExec := cmd_test.MockCmdExec{
 		// First has-session (the duplicate-name guard) must report "gone" so the
@@ -178,7 +210,7 @@ func TestRecoverInPlace_ResumesConversationWhenWorktreeValid(t *testing.T) {
 func TestRecoverInPlace_StartsBlankWhenNoConversation(t *testing.T) {
 	wt := newTestWorktree(t)
 	cfgDir := t.TempDir() // deliberately no transcript written
-	pty := &recordingPtyFactory{}
+	pty := newRecordingPtyFactory(t, nil)
 	calls := 0
 	liveExec := cmd_test.MockCmdExec{
 		RunFunc: func(*exec.Cmd) error {
@@ -209,7 +241,7 @@ func TestRecoverInPlace_FailedRestartDegradesToPaused(t *testing.T) {
 	wt := newTestWorktree(t)
 	cfgDir := t.TempDir()
 	writeClaudeTranscript(t, cfgDir, wt.GetWorktreePath())
-	pty := &recordingPtyFactory{startErr: fmt.Errorf("pty boom")}
+	pty := newRecordingPtyFactory(t, fmt.Errorf("pty boom"))
 	ts := tmux.NewSessionWithDeps(context.Background(), "sess", "claude", pty, deadExec())
 	inst := &Instance{Title: "sess", status: Running, Program: "claude", claudeConfigDir: cfgDir, gitWorktree: wt, tmuxSession: ts}
 
@@ -228,7 +260,7 @@ func TestRecreateSession_ResumesConversationAndCleansUpOnFailure(t *testing.T) {
 	wt := newTestWorktree(t)
 	cfgDir := t.TempDir()
 	writeClaudeTranscript(t, cfgDir, wt.GetWorktreePath())
-	pty := &recordingPtyFactory{startErr: fmt.Errorf("pty boom")}
+	pty := newRecordingPtyFactory(t, fmt.Errorf("pty boom"))
 	ts := tmux.NewSessionWithDeps(context.Background(), "sess", "claude", pty, deadExec())
 	inst := &Instance{Title: "sess", started: true, Program: "claude", claudeConfigDir: cfgDir, gitWorktree: wt, tmuxSession: ts}
 
@@ -248,7 +280,7 @@ func TestRecreateSession_ResumesConversationAndCleansUpOnFailure(t *testing.T) {
 func TestRecreateSession_StartsBlankWhenNoConversation(t *testing.T) {
 	wt := newTestWorktree(t)
 	cfgDir := t.TempDir() // deliberately no transcript written
-	pty := &recordingPtyFactory{startErr: fmt.Errorf("pty boom")}
+	pty := newRecordingPtyFactory(t, fmt.Errorf("pty boom"))
 	ts := tmux.NewSessionWithDeps(context.Background(), "sess", "claude", pty, deadExec())
 	inst := &Instance{Title: "sess", started: true, Program: "claude", claudeConfigDir: cfgDir, gitWorktree: wt, tmuxSession: ts}
 

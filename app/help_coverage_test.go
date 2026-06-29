@@ -22,7 +22,7 @@ func TestHelpScreen_CoversEveryBinding(t *testing.T) {
 	// bindings count as covered.
 	content = strings.ReplaceAll(content, "shift+↑↓", "shift+↑ shift+↓")
 
-	for name, binding := range keys.GlobalkeyBindings {
+	for name, binding := range keys.GlobalKeyBindings {
 		k := strings.ReplaceAll(binding.Help().Key, "-", "+")
 		if !strings.Contains(content, k) {
 			t.Errorf("binding %v (%q) is missing from the help cheatsheet", name, binding.Help().Key)

@@ -116,6 +116,10 @@ func busyBranchHolder(err error) (string, bool) {
 		if end := strings.IndexByte(rest, '\''); end >= 0 {
 			return rest[:end], true
 		}
+		// Marker matched but the closing quote is missing — git's output format may
+		// have drifted. Still report the busy-branch conflict (path-less), and warn
+		// so the parser gap is visible rather than silently degrading to "".
+		log.WarningLog.Printf("busy-branch error matched %q but no closing quote for the worktree path: %q", marker, msg)
 		return "", true
 	}
 	return "", false
@@ -364,7 +368,16 @@ func uniqueNonEmptyStrings(ss []string) []string {
 // `git branch -D` refuses to delete a branch checked out in a live worktree, so
 // the directories are removed and pruned (detaching the branches) before the
 // branches are finally deleted.
+//
+// Failures that mean cleanup did not happen — a worktree directory that could not
+// be removed, or a branch that could not be deleted — are accumulated and returned
+// so the caller (atrium reset) reports an incomplete cleanup instead of a false
+// success. Per-repo enumeration failures (`worktree list`/`prune`) are only logged:
+// they are commonly a since-deleted project repo, whose physical worktree
+// directories are still removed by the entries sweep below regardless.
 func CleanupWorktrees(ctx context.Context, repoPaths []string) error {
+	var tc teardown.Errors
+
 	worktreesDir, err := getWorktreeDirectory()
 	if err != nil {
 		return fmt.Errorf("failed to get worktree directory: %w", err)
@@ -408,7 +421,7 @@ func CleanupWorktrees(ctx context.Context, repoPaths []string) error {
 			continue
 		}
 		if err := removeOrphanedWorktreeDir(filepath.Join(worktreesDir, entry.Name())); err != nil {
-			log.ErrorLog.Printf("failed to remove worktree dir %s: %v", entry.Name(), err)
+			tc.Add(fmt.Errorf("failed to remove worktree dir %s: %w", entry.Name(), err))
 		}
 	}
 
@@ -422,9 +435,9 @@ func CleanupWorktrees(ctx context.Context, repoPaths []string) error {
 	// Finally delete the session branches; they are no longer checked out.
 	for _, rb := range branchesToDelete {
 		if _, err := localGit(ctx, rb.repo, "branch", "-D", rb.branch); err != nil {
-			log.ErrorLog.Printf("failed to delete branch %s in %s: %v", rb.branch, rb.repo, err)
+			tc.Add(fmt.Errorf("failed to delete branch %s in %s: %w", rb.branch, rb.repo, err))
 		}
 	}
 
-	return nil
+	return tc.Err()
 }

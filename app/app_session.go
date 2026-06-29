@@ -270,6 +270,17 @@ func (m *home) candidatePathForBasename(basename string) string {
 	return ""
 }
 
+// isBranchBusyError reports whether err is (or wraps) a *git.BranchCheckedOutError,
+// returning the typed error when so. Both the interactive resume path and the batch
+// summary key off this — the type, not the message, is the cross-package contract.
+func isBranchBusyError(err error) (*git.BranchCheckedOutError, bool) {
+	var busy *git.BranchCheckedOutError
+	if errors.As(err, &busy) {
+		return busy, true
+	}
+	return nil, false
+}
+
 // resumeSelected resumes a paused instance and persists the new running state
 // (Resume itself only mutates in-memory status, so without this a crash before
 // the next save would leave the session stamped Paused). When resume is blocked
@@ -287,8 +298,7 @@ func (m *home) resumeSelected(selected *session.Instance) tea.Cmd {
 	}
 
 	// Only a branch-busy failure is recoverable; surface anything else as-is.
-	var busy *git.BranchCheckedOutError
-	if !errors.As(err, &busy) {
+	if _, ok := isBranchBusyError(err); !ok {
 		return m.handleError(err)
 	}
 
@@ -297,9 +307,14 @@ func (m *home) resumeSelected(selected *session.Instance) tea.Cmd {
 		return m.handleError(err)
 	}
 	heldByBase, herr := wt.IsBranchHeldByBaseRepo()
-	if herr != nil || !heldByBase {
-		// Held by a sibling worktree (or undeterminable): report where it lives in
-		// a dismissible modal; never auto-detach another live worktree.
+	if herr != nil {
+		// Couldn't determine where the branch is held: surface that failure rather
+		// than masking it behind the (less informative) branch-busy message.
+		return m.handleError(herr)
+	}
+	if !heldByBase {
+		// Held by a sibling worktree: report where it lives in a dismissible modal;
+		// never auto-detach another live worktree.
 		return m.showInfo(err.Error())
 	}
 
@@ -349,8 +364,7 @@ func (msg batchResumeDoneMsg) summary() string {
 		msg.resumed, total, plural(total), len(msg.failures))
 	for _, f := range msg.failures {
 		reason := f.err.Error()
-		var busy *git.BranchCheckedOutError
-		if errors.As(f.err, &busy) {
+		if _, ok := isBranchBusyError(f.err); ok {
 			reason = "branch checked out elsewhere"
 		}
 		fmt.Fprintf(&b, "\n  • %s — %s", f.title, reason)
@@ -809,6 +823,12 @@ func (m *home) createSessionFromForm(prompt string) tea.Cmd {
 	path := ov.GetSelectedPath()
 	if path == "" {
 		path = m.newSessionPath
+	}
+	if path == "" {
+		// No target at all (no picker selection and no contextual default): say so
+		// plainly instead of letting targetValidity report '"" is not a directory'.
+		ov.Submitted = false
+		return m.handleError(fmt.Errorf("no directory selected"))
 	}
 	// A non-git directory becomes a direct session (agent runs in place, no worktree).
 	valid, direct, _ := targetValidity(m.ctx, path)

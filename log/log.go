@@ -26,6 +26,14 @@ var logFileName = filepath.Join(os.TempDir(), "atrium.log")
 
 var globalLogFile *os.File
 
+// verbose gates the "wrote logs to" line Close prints. It defaults off so a normal
+// exit stays quiet; SetVerbose turns it on from the --verbose flag.
+var verbose bool
+
+// SetVerbose enables verbose mode (Close prints the log file path). Call it before
+// Close (e.g. from a PersistentPreRun) when the user passes --verbose.
+func SetVerbose(v bool) { verbose = v }
+
 // Initialize redirects the package loggers to the log file in the OS temp
 // directory. Call it once at program start and defer Close afterwards; daemon
 // selects a "[DAEMON]" prefix so TUI and daemon entries are distinguishable in
@@ -35,9 +43,6 @@ func Initialize(daemon bool) {
 	if err != nil {
 		panic(fmt.Sprintf("could not open log file: %s", err))
 	}
-
-	// Set log format to include timestamp and file/line number
-	log.SetFlags(log.LstdFlags | log.Lshortfile)
 
 	fmtS := "%s"
 	if daemon {
@@ -50,12 +55,19 @@ func Initialize(daemon bool) {
 	globalLogFile = f
 }
 
-// Close closes the log file opened by Initialize and tells the user where the
-// logs were written.
+// Close closes the log file opened by Initialize. With verbose set (--verbose) it
+// also prints where the logs were written; otherwise it exits quietly so a normal
+// run leaves no trailing line. A close error goes to stderr — it cannot go to the
+// loggers, which write to the file being closed.
 func Close() {
-	_ = globalLogFile.Close()
-	// TODO: maybe only print if verbose flag is set?
-	fmt.Println("wrote logs to " + logFileName)
+	if globalLogFile != nil {
+		if err := globalLogFile.Close(); err != nil {
+			fmt.Fprintf(os.Stderr, "failed to close log file: %v\n", err)
+		}
+	}
+	if verbose {
+		fmt.Println("wrote logs to " + logFileName)
+	}
 }
 
 // Every is used to log at most once every timeout duration.

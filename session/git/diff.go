@@ -1,12 +1,21 @@
 package git
 
 import (
+	"errors"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/ZviBaratz/atrium/log"
 )
+
+// errBaseCommitNotSet is returned (via DiffStats.Error) when a diff is requested
+// before the worktree's base commit has been resolved — the brief not-fully-set-up
+// window after creation, and legacy sessions persisted without one. Callers
+// (Instance.UpdateDiffStats, the metadata-poll handler) recognize it by this exact
+// message and treat it as "no diff yet" rather than a hard error, so the wording is
+// a cross-package contract; running `git diff ""` instead yields a confusing failure.
+var errBaseCommitNotSet = errors.New("base commit SHA not set")
 
 // revListCacheTTL is how long the rev-list commit counts (ahead/behind) returned
 // by computeRepoStats are reused without re-running git rev-list.
@@ -70,6 +79,13 @@ func (d *DiffStats) IsEmpty() bool {
 func (g *Worktree) Diff() *DiffStats {
 	stats := &DiffStats{}
 
+	// Without a base commit there is nothing to diff against; surface the recognizable
+	// errBaseCommitNotSet rather than running `git diff ""`. Checked before any git call.
+	if g.GetBaseCommitSHA() == "" {
+		stats.Error = errBaseCommitNotSet
+		return stats
+	}
+
 	// Snapshot the worktree path under the lock so a concurrent deep Rename (which moves
 	// the worktree and swaps the field) can't tear the read. Subsequent git calls run
 	// against the local without holding the lock.
@@ -104,6 +120,12 @@ func (g *Worktree) Diff() *DiffStats {
 // only the summary counts are needed (e.g. for unselected instances in the list).
 func (g *Worktree) DiffNumstat() *DiffStats {
 	stats := &DiffStats{}
+
+	// See Diff: without a base commit there is nothing to diff against.
+	if g.GetBaseCommitSHA() == "" {
+		stats.Error = errBaseCommitNotSet
+		return stats
+	}
 
 	// See Diff: snapshot the worktree path so a concurrent rename can't tear the read.
 	wt := g.snapshotWorktreePath()

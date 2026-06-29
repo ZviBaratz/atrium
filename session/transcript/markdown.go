@@ -247,6 +247,8 @@ func isFence(trimmed string) bool {
 
 // isRule reports whether a trimmed line is a thematic break (---, ***, ___).
 func isRule(trimmed string) bool {
+	// CommonMark requires at least three identical break characters, so "-" and
+	// "--" are ordinary text (e.g. a "--" bullet or flag), not a horizontal rule.
 	if len(trimmed) < 3 {
 		return false
 	}

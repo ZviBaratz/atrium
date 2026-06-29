@@ -29,15 +29,32 @@ import (
 // immutable for the pane's lifetime and survive session renames, so the
 // cache is only reset where the session is created or killed (start, Close).
 func (t *Session) paneTarget() string {
+	// Fast path: once resolution has been attempted the result is immutable (pane
+	// ids survive renames), so serve it under a read lock with no subprocess. This
+	// is the steady state on the hot poll/capture/send-keys path, and the read lock
+	// lets concurrent callers proceed without serializing on mu.
+	t.mu.RLock()
+	tried, id, name := t.paneIDTried, t.paneID, t.sanitizedName
+	t.mu.RUnlock()
+	if tried {
+		if id != "" {
+			return id
+		}
+		return name
+	}
+
+	// Slow path: resolve once per tmux-session generation under the write lock.
+	// This runs at most once per session, so holding mu across the single
+	// list-panes subprocess here is a one-time cost, not a recurring hot-path one.
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	if !t.paneIDTried {
+	if !t.paneIDTried { // re-check: another caller may have resolved while we waited
 		t.paneIDTried = true
-		id, err := t.resolvePaneIDLocked()
+		resolved, err := t.resolvePaneIDLocked()
 		if err != nil {
 			log.WarningLog.Printf("could not resolve pane id for %s (capture/send-keys fall back to the session name): %v", t.sanitizedName, err)
 		} else {
-			t.paneID = id
+			t.paneID = resolved
 		}
 	}
 	if t.paneID != "" {

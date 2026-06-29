@@ -142,42 +142,39 @@ func (l *List) renderRepoHeader(key string, collapsed bool, count, needsInput, u
 	return line
 }
 
-// visibleCount returns how many items in the half-open range [start, end) are not hidden.
-// Used to decide whether a (non-collapsed) group has any rows to render under the active filter.
-func (l *List) visibleCount(start, end int) int {
+// countInRange returns how many indices in the half-open range [start, end) satisfy
+// pred. It backs the group counters below, which differ only in their predicate; an
+// index-based predicate lets visibleCount reuse isHidden(idx) too.
+func (l *List) countInRange(start, end int, pred func(idx int) bool) int {
 	n := 0
 	for j := start; j < end; j++ {
-		if !l.isHidden(j) {
+		if pred(j) {
 			n++
 		}
 	}
 	return n
+}
+
+// visibleCount returns how many items in the half-open range [start, end) are not hidden.
+// Used to decide whether a (non-collapsed) group has any rows to render under the active filter.
+func (l *List) visibleCount(start, end int) int {
+	return l.countInRange(start, end, func(j int) bool { return !l.isHidden(j) })
 }
 
 // groupNeedsInputCount returns how many sessions in the half-open item range [start, end) are
 // blocked on user input. Used to badge a collapsed repo-group header, whose member rows would
 // otherwise carry the per-row waiting glyph.
 func (l *List) groupNeedsInputCount(start, end int) int {
-	n := 0
-	for _, item := range l.items[start:end] {
-		if item.GetStatus() == session.NeedsInput {
-			n++
-		}
-	}
-	return n
+	return l.countInRange(start, end, func(j int) bool { return l.items[j].GetStatus() == session.NeedsInput })
 }
 
 // groupUnreadCount returns how many sessions in the half-open item range [start, end) are
 // Ready but not yet visited. Used to badge a collapsed repo-group header, whose member rows
 // would otherwise carry the per-row unread glyph.
 func (l *List) groupUnreadCount(start, end int) int {
-	n := 0
-	for _, item := range l.items[start:end] {
-		if item.GetStatus() == session.Ready && item.Unread() {
-			n++
-		}
-	}
-	return n
+	return l.countInRange(start, end, func(j int) bool {
+		return l.items[j].GetStatus() == session.Ready && l.items[j].Unread()
+	})
 }
 
 // filterBarStyle renders the incremental search bar that appears below the list header
@@ -862,25 +859,27 @@ func (l *List) ClickHeader(key string) bool {
 	return true
 }
 
-// Down selects the next visible item in the list, wrapping at the end and skipping the hidden
-// members of collapsed groups.
-func (l *List) Down() {
-	if len(l.items) == 0 {
+// moveSelection advances the selection by delta (+1 next, -1 previous), wrapping at
+// either end and skipping hidden rows (collapsed-group members, filtered-out items).
+// It backs both Down and Up so the wrap-and-skip logic lives in one place.
+func (l *List) moveSelection(delta int) {
+	n := len(l.items)
+	if n == 0 {
 		return
 	}
 	idx := l.selectedIdx
-	for i := 0; i < len(l.items); i++ {
-		if idx < len(l.items)-1 {
-			idx++
-		} else {
-			idx = 0
-		}
+	for range n {
+		idx = (idx + delta + n) % n
 		if !l.isHidden(idx) {
 			l.selectedIdx = idx
 			return
 		}
 	}
 }
+
+// Down selects the next visible item in the list, wrapping at the end and skipping the hidden
+// members of collapsed groups.
+func (l *List) Down() { l.moveSelection(1) }
 
 // NextUnread moves the selection to the next unread Ready session (forward,
 // wrapping). Reports whether one was found.
@@ -986,32 +985,9 @@ func (l *List) KillInstance(target *session.Instance) {
 	l.clampSelectionToNavigable()
 }
 
-// Attach attaches the user's terminal to the selected instance's tmux session
-// (see Instance.Attach).
-func (l *List) Attach() (chan struct{}, error) {
-	targetInstance := l.items[l.selectedIdx]
-	return targetInstance.Attach()
-}
-
 // Up selects the prev visible item in the list, wrapping at the top and skipping the hidden
 // members of collapsed groups.
-func (l *List) Up() {
-	if len(l.items) == 0 {
-		return
-	}
-	idx := l.selectedIdx
-	for i := 0; i < len(l.items); i++ {
-		if idx > 0 {
-			idx--
-		} else {
-			idx = len(l.items) - 1
-		}
-		if !l.isHidden(idx) {
-			l.selectedIdx = idx
-			return
-		}
-	}
-}
+func (l *List) Up() { l.moveSelection(-1) }
 
 // AddInstance adds a new instance to the list. It returns a finalizer function that callers
 // invoke once the instance has started (restored/paused instances may call it immediately;

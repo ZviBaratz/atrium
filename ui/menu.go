@@ -208,7 +208,7 @@ func (m *Menu) SetSize(width, height int) {
 func renderHintLine(names []keys.KeyName) string {
 	var s strings.Builder
 	for i, k := range names {
-		binding := keys.GlobalkeyBindings[k]
+		binding := keys.GlobalKeyBindings[k]
 		if i > 0 {
 			s.WriteString(sepStyle().Render(separator))
 		}

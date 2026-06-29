@@ -1,10 +1,67 @@
 package config
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
+
+	"github.com/ZviBaratz/atrium/log"
 )
+
+// loadJSONFile reads and JSON-decodes filename (resolved under the data dir) into a
+// *T. It never fails: a missing file is created from makeDefault and saved, a
+// read/parse error logs and returns the default, and an unparseable file is
+// quarantined for recovery before falling back. label names the file in log lines
+// ("config", "state"). This is the shared core behind LoadConfig and LoadState.
+func loadJSONFile[T any](filename, label string, makeDefault func() *T, saveDefault func(*T) error) *T {
+	configDir, err := GetConfigDir()
+	if err != nil {
+		log.ErrorLog.Printf("failed to get config directory: %v", err)
+		return makeDefault()
+	}
+
+	path := filepath.Join(configDir, filename)
+	// Clear any temp files orphaned by a crash mid-write (see writeFileAtomic).
+	sweepStaleTempFiles(path)
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			// Create and save the default when the file doesn't exist yet.
+			def := makeDefault()
+			if saveErr := saveDefault(def); saveErr != nil {
+				log.WarningLog.Printf("failed to save default %s: %v", label, saveErr)
+			}
+			return def
+		}
+		log.WarningLog.Printf("failed to get %s file: %v", label, err)
+		return makeDefault()
+	}
+
+	var out T
+	if err := json.Unmarshal(data, &out); err != nil {
+		logCorruptFile(label, path, data, err)
+		return makeDefault()
+	}
+	return &out
+}
+
+// logCorruptFile preserves an unparseable config/state file via quarantineCorruptFile
+// — so its bytes survive for recovery instead of being overwritten by the defaults
+// the caller falls back to — and logs the outcome. An empty file is not worth
+// archiving; it is just reported.
+func logCorruptFile(label, path string, data []byte, parseErr error) {
+	if len(data) == 0 {
+		log.ErrorLog.Printf("failed to parse %s file: %v", label, parseErr)
+		return
+	}
+	if dst, qerr := quarantineCorruptFile(path); qerr != nil {
+		log.ErrorLog.Printf("failed to parse %s file and could not preserve it: parse=%v rename=%v", label, parseErr, qerr)
+	} else {
+		log.ErrorLog.Printf("failed to parse %s file; preserved corrupt copy at %s: %v", label, dst, parseErr)
+	}
+}
 
 // writeFileAtomic writes data to path by first writing a temp file in the same
 // directory, fsyncing it, renaming it over the target, and fsyncing the
@@ -57,6 +114,15 @@ func writeFileAtomic(path string, data []byte, perm os.FileMode) error {
 	// directory handle errors; ignoring it there is correct.)
 	syncDir(dir)
 	return nil
+}
+
+// WriteFileAtomic writes data to path atomically (temp file → fsync → rename →
+// directory fsync), the same crash-safe primitive used for config.json and
+// state.json. It is the exported entry point for callers outside this package —
+// e.g. the daemon's PID file — that want the same all-or-nothing guarantee
+// instead of a plain os.WriteFile that can leave a torn file on a crash.
+func WriteFileAtomic(path string, data []byte, perm os.FileMode) error {
+	return writeFileAtomic(path, data, perm)
 }
 
 // syncDir flushes a directory's metadata so a rename into it survives a crash.

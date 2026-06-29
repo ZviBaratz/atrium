@@ -13,7 +13,7 @@ import (
 type KeyName int
 
 // The logical key actions. Their bindings live in GlobalKeyStringsMap (string
-// → action) and GlobalkeyBindings (action → help entry).
+// → action) and GlobalKeyBindings (action → help entry).
 const (
 	KeyUp KeyName = iota
 	KeyDown
@@ -171,8 +171,8 @@ var GlobalKeyStringsMap = map[string]KeyName{
 	" ":          KeyToggleMark,
 }
 
-// GlobalkeyBindings is a global, immutable map of KeyName to keybinding.
-var GlobalkeyBindings = map[KeyName]key.Binding{
+// GlobalKeyBindings is a global, immutable map of KeyName to keybinding.
+var GlobalKeyBindings = map[KeyName]key.Binding{
 	KeyUp: key.NewBinding(
 		key.WithKeys("up", "k"),
 		key.WithHelp("↑/k", "up"),

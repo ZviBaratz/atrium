@@ -81,7 +81,7 @@ func TestUnread_SuppressionClearedByObservedWorking(t *testing.T) {
 // recovered session's first Ready is a boot artifact, not new output.
 func TestRecoverInPlace_ArmsReadySuppression(t *testing.T) {
 	wt := newTestWorktree(t)
-	pty := &recordingPtyFactory{}
+	pty := newRecordingPtyFactory(t, nil)
 	calls := 0
 	liveExec := cmd_test.MockCmdExec{
 		RunFunc: func(*exec.Cmd) error {
@@ -109,7 +109,7 @@ func TestRecoverInPlace_ArmsReadySuppression(t *testing.T) {
 // Resume without git plumbing.
 func TestResume_ArmsReadySuppression(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
-	pty := &recordingPtyFactory{}
+	pty := newRecordingPtyFactory(t, nil)
 	calls := 0
 	liveExec := cmd_test.MockCmdExec{
 		// Resume's own DoesSessionExist and the launch's duplicate-name guard must

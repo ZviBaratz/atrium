@@ -1532,7 +1532,10 @@ func (i *Instance) unwindAutoPauseCommits(wt *git.Worktree) error {
 	return wt.ResetSoft(fmt.Sprintf("HEAD~%d", n))
 }
 
-// UpdateDiffStats updates the git diff statistics for this instance
+// UpdateDiffStats updates the git diff statistics for this instance. Like
+// SetDiffStats it mutates the unguarded diffStats field, so it must be called from a
+// single-threaded context per instance (the main event loop, or the daemon's
+// single poll goroutine) — never concurrently with the View/poll readers.
 func (i *Instance) UpdateDiffStats() error {
 	if !i.isStarted() {
 		i.diffStats = nil

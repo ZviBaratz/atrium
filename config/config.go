@@ -570,6 +570,13 @@ func containsAny(lower string, subs []string) bool {
 	return false
 }
 
+// DefaultDaemonPollIntervalMs is the built-in autoyes daemon poll interval in
+// milliseconds. It is the value DefaultConfig seeds and the floor the daemon
+// falls back to when a loaded config carries a non-positive interval (the field
+// absent from a legacy or hand-edited config.json, or set <= 0) that would
+// otherwise panic time.NewTicker.
+const DefaultDaemonPollIntervalMs = 1000
+
 // DefaultConfig returns the built-in defaults without probing the machine: no
 // profiles, and the bare "claude" literal as the program. It is what tests
 // construct directly (hermetic — no PATH lookups or shell spawns), while every
@@ -585,7 +592,7 @@ func DefaultConfig() *Config {
 	return &Config{
 		DefaultProgram:     defaultProgram,
 		AutoYes:            false,
-		DaemonPollInterval: 1000,
+		DaemonPollInterval: DefaultDaemonPollIntervalMs,
 		Theme:              "tokyo-night",
 		SessionContextBar:  &sessionContextBar,
 		HintBar:            &hintBar,
@@ -710,50 +717,9 @@ func resolveClaudeCandidate(whichOutput string) (string, bool) {
 
 // LoadConfig reads config.json from the data dir. It never fails: a missing
 // file is created with defaults, and any read/parse error logs a warning and
-// falls back to DefaultConfig.
+// falls back to DefaultConfig. See loadJSONFile for the shared load behavior.
 func LoadConfig() *Config {
-	configDir, err := GetConfigDir()
-	if err != nil {
-		log.ErrorLog.Printf("failed to get config directory: %v", err)
-		return seededDefaultConfig()
-	}
-
-	configPath := filepath.Join(configDir, ConfigFileName)
-	// Clear any temp files orphaned by a crash mid-write (see writeFileAtomic).
-	sweepStaleTempFiles(configPath)
-
-	data, err := os.ReadFile(configPath)
-	if err != nil {
-		if os.IsNotExist(err) {
-			// Create and save default config if file doesn't exist
-			defaultCfg := seededDefaultConfig()
-			if saveErr := saveConfig(defaultCfg); saveErr != nil {
-				log.WarningLog.Printf("failed to save default config: %v", saveErr)
-			}
-			return defaultCfg
-		}
-
-		log.WarningLog.Printf("failed to get config file: %v", err)
-		return seededDefaultConfig()
-	}
-
-	var config Config
-	if err := json.Unmarshal(data, &config); err != nil {
-		// Preserve an unparseable config for recovery rather than silently
-		// replacing it with defaults the next save would overwrite it with.
-		if len(data) > 0 {
-			if dst, qerr := quarantineCorruptFile(configPath); qerr != nil {
-				log.ErrorLog.Printf("failed to parse config file and could not preserve it: parse=%v rename=%v", err, qerr)
-			} else {
-				log.ErrorLog.Printf("failed to parse config file; preserved corrupt copy at %s: %v", dst, err)
-			}
-		} else {
-			log.ErrorLog.Printf("failed to parse config file: %v", err)
-		}
-		return seededDefaultConfig()
-	}
-
-	return &config
+	return loadJSONFile(ConfigFileName, "config", seededDefaultConfig, saveConfig)
 }
 
 // saveConfig saves the configuration to disk

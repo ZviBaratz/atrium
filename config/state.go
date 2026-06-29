@@ -7,8 +7,6 @@ import (
 	"os"
 	"path/filepath"
 	"time"
-
-	"github.com/ZviBaratz/atrium/log"
 )
 
 // Names of the state files inside the data dir.
@@ -146,51 +144,11 @@ func DefaultState() *State {
 	}
 }
 
-// LoadState loads the state from disk. If it cannot be done, we return the default state.
+// LoadState loads the state from disk. If it cannot be done, we return the default
+// state. A torn or unparseable file is preserved for recovery before falling back,
+// so persisted sessions are never silently discarded. See loadJSONFile.
 func LoadState() *State {
-	configDir, err := GetConfigDir()
-	if err != nil {
-		log.ErrorLog.Printf("failed to get config directory: %v", err)
-		return DefaultState()
-	}
-
-	statePath := filepath.Join(configDir, StateFileName)
-	// Clear any temp files orphaned by a crash mid-write (see writeFileAtomic).
-	sweepStaleTempFiles(statePath)
-
-	data, err := os.ReadFile(statePath)
-	if err != nil {
-		if os.IsNotExist(err) {
-			// Create and save default state if file doesn't exist
-			defaultState := DefaultState()
-			if saveErr := SaveState(defaultState); saveErr != nil {
-				log.WarningLog.Printf("failed to save default state: %v", saveErr)
-			}
-			return defaultState
-		}
-
-		log.WarningLog.Printf("failed to get state file: %v", err)
-		return DefaultState()
-	}
-
-	var state State
-	if err := json.Unmarshal(data, &state); err != nil {
-		// A torn or unparseable file would otherwise be silently discarded along
-		// with every persisted session. Preserve it for recovery before falling
-		// back to defaults, and log loudly. Empty files are not worth archiving.
-		if len(data) > 0 {
-			if dst, qerr := quarantineCorruptFile(statePath); qerr != nil {
-				log.ErrorLog.Printf("failed to parse state file and could not preserve it: parse=%v rename=%v", err, qerr)
-			} else {
-				log.ErrorLog.Printf("failed to parse state file; preserved corrupt copy at %s: %v", dst, err)
-			}
-		} else {
-			log.ErrorLog.Printf("failed to parse state file: %v", err)
-		}
-		return DefaultState()
-	}
-
-	return &state
+	return loadJSONFile(StateFileName, "state", DefaultState, SaveState)
 }
 
 // SaveState saves the state to disk

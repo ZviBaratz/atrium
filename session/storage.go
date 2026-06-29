@@ -111,8 +111,8 @@ func NewStorage(state config.InstanceStorage) (*Storage, error) {
 
 // SaveInstances saves the list of instances to disk
 func (s *Storage) SaveInstances(instances []*Instance) error {
-	// Convert instances to InstanceData
-	data := make([]InstanceData, 0)
+	// Convert instances to InstanceData (pre-sized: at most one entry per instance).
+	data := make([]InstanceData, 0, len(instances))
 	for _, instance := range instances {
 		if instance.Started() {
 			data = append(data, instance.ToInstanceData())

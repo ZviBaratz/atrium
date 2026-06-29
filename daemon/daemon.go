@@ -26,6 +26,18 @@ var (
 	gracefulStopPoll    = 25 * time.Millisecond
 )
 
+// effectivePollInterval converts a configured poll interval in milliseconds into
+// a positive ticker duration. A non-positive value — the field absent from a
+// legacy or hand-edited config.json, or explicitly set <= 0 — would panic
+// time.NewTicker, so it falls back to the built-in default and keeps the daemon
+// running instead of crashing the autoyes process.
+func effectivePollInterval(ms int) time.Duration {
+	if ms <= 0 {
+		ms = config.DefaultDaemonPollIntervalMs
+	}
+	return time.Duration(ms) * time.Millisecond
+}
+
 // RunDaemon runs the daemon process which iterates over all sessions and runs AutoYes mode on them.
 // It's expected that the main process kills the daemon when the main process starts.
 // ctx carries the daemon's shutdown signal (main installs signal.NotifyContext for
@@ -47,54 +59,59 @@ func RunDaemon(ctx context.Context, cfg *config.Config) error {
 		instance.AutoYes = true
 	}
 
-	pollInterval := time.Duration(cfg.DaemonPollInterval) * time.Millisecond
+	pollInterval := effectivePollInterval(cfg.DaemonPollInterval)
 
 	// If we get an error for a session, it's likely that we'll keep getting the error. Log every 30 seconds.
 	everyN := log.NewEvery(60 * time.Second)
+
+	// pollOnce sweeps every active instance once: shared pane-state → status/prompt
+	// mapping with the TUI metadata loop (see Instance.ApplyPaneState), so the
+	// headless autoyes path can't drift from what the UI does. AutoYes is true on
+	// every instance here (set above), so an auto-answerable prompt taps Enter; a
+	// destructive manual prompt (claude's plan approval) instead surfaces NeedsInput,
+	// persisted at shutdown so the TUI shows the blocked row.
+	pollOnce := func() {
+		for _, instance := range instances {
+			// We only store started instances, but check anyway.
+			if instance.Started() && !instance.Paused() {
+				if instance.ApplyPaneState(instance.Poll()) {
+					// Auto-answered a prompt: refresh the diff so the post-answer
+					// state is reflected in the persisted snapshot.
+					if err := instance.UpdateDiffStats(); err != nil {
+						if everyN.ShouldLog() {
+							log.WarningLog.Printf("could not update diff stats for %s: %v", instance.Title, err)
+						}
+					}
+				}
+				// Keep the persisted model current so the TUI shows the right
+				// chip after relaunch (parity with app_poll.go tickUpdateMetadataCmd).
+				if model, stamp, ok := instance.ComputeModel(); ok {
+					instance.SetModelMeta(model, stamp)
+				}
+			}
+		}
+	}
 
 	wg := &sync.WaitGroup{}
 	wg.Add(1)
 	stopCh := make(chan struct{})
 	go func() {
 		defer wg.Done()
-		ticker := time.NewTimer(pollInterval)
+		pollOnce() // first sweep immediately, then on each tick
+		ticker := time.NewTicker(pollInterval)
+		defer ticker.Stop()
 		for {
-			for _, instance := range instances {
-				// We only store started instances, but check anyway.
-				if instance.Started() && !instance.Paused() {
-					// Shared pane-state → status/prompt mapping with the TUI metadata
-					// loop (see Instance.ApplyPaneState), so the headless autoyes path
-					// can't drift from what the UI does. AutoYes is true on every
-					// instance here (set above), so an auto-answerable prompt taps Enter;
-					// a destructive manual prompt (claude's plan approval) instead
-					// surfaces NeedsInput, persisted at shutdown so the TUI shows the
-					// blocked row.
-					if instance.ApplyPaneState(instance.Poll()) {
-						// Auto-answered a prompt: refresh the diff so the post-answer
-						// state is reflected in the persisted snapshot.
-						if err := instance.UpdateDiffStats(); err != nil {
-							if everyN.ShouldLog() {
-								log.WarningLog.Printf("could not update diff stats for %s: %v", instance.Title, err)
-							}
-						}
-					}
-					// Keep the persisted model current so the TUI shows the right
-					// chip after relaunch (parity with app_poll.go tickUpdateMetadataCmd).
-					if model, stamp, ok := instance.ComputeModel(); ok {
-						instance.SetModelMeta(model, stamp)
-					}
-				}
-			}
-
-			// Handle stop before ticker.
+			// One blocking select so shutdown (stopCh close or ctx cancel) is observed
+			// immediately rather than after the remaining tick interval, and the ticker
+			// is always stopped on exit.
 			select {
 			case <-stopCh:
 				return
-			default:
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				pollOnce()
 			}
-
-			<-ticker.C
-			ticker.Reset(pollInterval)
 		}
 	}()
 
@@ -155,7 +172,10 @@ func LaunchDaemon(ctx context.Context) error {
 	}
 
 	pidFile := filepath.Join(pidDir, "daemon.pid")
-	if err := os.WriteFile(pidFile, []byte(fmt.Sprintf("%d", cmd.Process.Pid)), 0644); err != nil {
+	// Atomic write (temp → fsync → rename), matching config.json/state.json: a crash
+	// mid-write must not leave a torn PID file that StopDaemon would misparse or skip,
+	// orphaning the daemon.
+	if err := config.WriteFileAtomic(pidFile, []byte(fmt.Sprintf("%d", cmd.Process.Pid)), 0644); err != nil {
 		return fmt.Errorf("failed to write PID file: %w", err)
 	}
 

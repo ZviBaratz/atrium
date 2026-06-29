@@ -398,16 +398,12 @@ func (dp *DirectoryPicker) SelectPath(path string) bool {
 	return false
 }
 
-func dpLabelStyle() lipgloss.Style  { return theme.Current().AccentStyle().Bold(true) }
-func dpFilterStyle() lipgloss.Style { return theme.Current().FgStyle() }
-func dpSelectedStyle() lipgloss.Style {
-	return lipgloss.NewStyle().
-		Background(theme.Current().Palette.Accent).
-		Foreground(theme.Current().Palette.Bg)
-}
-func dpDimStyle() lipgloss.Style     { return theme.Current().DimStyle() }
-func dpInvalidStyle() lipgloss.Style { return theme.Current().DangerStyle() }
-func dpDirectStyle() lipgloss.Style  { return theme.Current().DimStyle().Italic(true) }
+func dpLabelStyle() lipgloss.Style    { return overlayLabelStyle() }
+func dpFilterStyle() lipgloss.Style   { return overlayFilterStyle() }
+func dpSelectedStyle() lipgloss.Style { return overlaySelectedStyle() }
+func dpDimStyle() lipgloss.Style      { return overlayDimStyle() }
+func dpInvalidStyle() lipgloss.Style  { return theme.Current().DangerStyle() }
+func dpDirectStyle() lipgloss.Style   { return theme.Current().DimStyle().Italic(true) }
 
 // selectionHint returns the inline indicator for the current selection state: a red
 // "(not a directory)" for an invalid target, a muted "(direct session — no git

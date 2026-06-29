@@ -139,8 +139,8 @@ func (t *TerminalPane) UpdateContent(instance *session.Instance) error {
 		return err
 	}
 
-	s, ok := t.sessions[t.currentKey]
-	if !ok || s.tmuxSession == nil || !s.tmuxSession.DoesSessionExist() {
+	s, ok := t.liveCurrentSession()
+	if !ok {
 		t.setFallbackState("Terminal session not available.")
 		return nil
 	}
@@ -367,11 +367,23 @@ func (t *TerminalPane) String() string {
 	return terminalPaneStyle().Width(width).Render(contentStr)
 }
 
+// liveCurrentSession returns the session for the current key when it exists and its
+// tmux session is alive, else (nil, false). It is the shared existence guard for the
+// capture paths (UpdateContent, enterScrollMode). Caller must hold t.mu. (Attach's
+// own existence check is deliberately separate — see there.)
+func (t *TerminalPane) liveCurrentSession() (*terminalSession, bool) {
+	s, ok := t.sessions[t.currentKey]
+	if !ok || s.tmuxSession == nil || !s.tmuxSession.DoesSessionExist() {
+		return nil, false
+	}
+	return s, true
+}
+
 // enterScrollMode captures the full terminal history and enters scroll mode.
 // Caller must hold t.mu.
 func (t *TerminalPane) enterScrollMode() error {
-	s, ok := t.sessions[t.currentKey]
-	if !ok || s.tmuxSession == nil || !s.tmuxSession.DoesSessionExist() {
+	s, ok := t.liveCurrentSession()
+	if !ok {
 		return nil
 	}
 

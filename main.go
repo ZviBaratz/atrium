@@ -38,6 +38,7 @@ var (
 	autoYesFlag     bool
 	daemonFlag      bool
 	updateCheckOnly bool
+	verboseFlag     bool
 	binName         string
 	rootCmd         = &cobra.Command{
 		Use:   "atrium",
@@ -48,6 +49,12 @@ var (
 		// block on failures; both flags propagate to every subcommand.
 		SilenceErrors: true,
 		SilenceUsage:  true,
+		// Apply --verbose before any command runs (and so before the deferred
+		// log.Close), for the root command and every subcommand. None of them
+		// define their own PersistentPreRun, so this one covers all.
+		PersistentPreRun: func(cmd *cobra.Command, args []string) {
+			log.SetVerbose(verboseFlag)
+		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			// Root lifecycle context: cancelled on SIGINT/SIGTERM so in-flight
 			// git/gh/tmux subprocesses are killed rather than orphaned on shutdown.
@@ -63,9 +70,11 @@ var (
 				if err := tmux.Init(cfg.TmuxConfigOverride, cfg.GetSessionContextBar()); err != nil {
 					log.WarningLog.Printf("failed to initialize tmux config: %v", err)
 				}
-				err := daemon.RunDaemon(ctx, cfg)
-				log.ErrorLog.Printf("failed to start daemon %v", err)
-				return err
+				if err := daemon.RunDaemon(ctx, cfg); err != nil {
+					log.ErrorLog.Printf("failed to start daemon: %v", err)
+					return err
+				}
+				return nil
 			}
 
 			// cs no longer requires being launched from within a git repository. A new
@@ -154,7 +163,10 @@ var (
 
 			// Kill any daemon that's running.
 			if err := daemon.StopDaemon(); err != nil {
-				return err
+				// Log (to the file) before returning, matching the root command's
+				// handling, so the failure is captured and not just surfaced to stderr.
+				log.ErrorLog.Printf("failed to stop daemon: %v", err)
+				return fmt.Errorf("failed to stop daemon: %w", err)
 			}
 			fmt.Println("daemon has been stopped")
 
@@ -311,6 +323,9 @@ func init() {
 		"[experimental] If enabled, all instances will automatically accept prompts")
 	rootCmd.Flags().BoolVar(&daemonFlag, "daemon", false, "Run a program that loads all sessions"+
 		" and runs autoyes mode on them.")
+	// Persistent so every subcommand (each defers log.Close) honors it.
+	rootCmd.PersistentFlags().BoolVarP(&verboseFlag, "verbose", "v", false,
+		"Print the log file path on exit")
 
 	// Hide the daemonFlag as it's only for internal use
 	err := rootCmd.Flags().MarkHidden("daemon")

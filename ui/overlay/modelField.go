@@ -4,7 +4,6 @@ import (
 	"strings"
 
 	"github.com/ZviBaratz/atrium/session/agent"
-	"github.com/ZviBaratz/atrium/ui/theme"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -182,8 +181,8 @@ func (mf *ModelField) Value() string {
 	return mf.selected()
 }
 
-func mfLabelStyle() lipgloss.Style { return theme.Current().AccentStyle().Bold(true) }
-func mfDimStyle() lipgloss.Style   { return theme.Current().DimStyle() }
+func mfLabelStyle() lipgloss.Style { return overlayLabelStyle() }
+func mfDimStyle() lipgloss.Style   { return overlayDimStyle() }
 
 // Render renders the field: label + a constant-height hint row, then the
 // single chip-or-input row, so the form never jumps as focus or mode changes.

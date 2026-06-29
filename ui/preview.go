@@ -424,6 +424,11 @@ func (p *PreviewPane) ClearHintOverlay() {
 // InHintMode reports whether a hint overlay is currently displayed.
 func (p *PreviewPane) InHintMode() bool { return p.hintContent != "" }
 
+// IsScrolling reports whether the preview pane is in scroll mode. It mirrors
+// TerminalPane.IsScrolling so the tabbed window can query both panes the same way
+// instead of reaching into this pane's private field.
+func (p *PreviewPane) IsScrolling() bool { return p.isScrolling }
+
 // ScrollContent returns the text currently visible in the scroll viewport for
 // hint mode. Returns "", false when not in scroll mode or when a hint overlay
 // is already active (re-entering would be a no-op).

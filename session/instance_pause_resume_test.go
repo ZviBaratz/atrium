@@ -50,7 +50,7 @@ func TestPauseResume_RoundTripsWithoutHistoryArtifact(t *testing.T) {
 		RunFunc:    func(*exec.Cmd) error { return nil },
 		OutputFunc: func(*exec.Cmd) ([]byte, error) { return nil, nil },
 	}
-	pty := &recordingPtyFactory{}
+	pty := newRecordingPtyFactory(t, nil)
 	ts := tmux.NewSessionWithDeps(context.Background(), "sess", "claude", pty, aliveExec)
 	inst := &Instance{Title: "sess", status: Running, started: true, gitWorktree: wt, tmuxSession: ts}
 
@@ -90,7 +90,7 @@ func TestPauseResume_BaseRefSession_RoundTripsWithoutDataLoss(t *testing.T) {
 		RunFunc:    func(*exec.Cmd) error { return nil },
 		OutputFunc: func(*exec.Cmd) ([]byte, error) { return nil, nil },
 	}
-	pty := &recordingPtyFactory{}
+	pty := newRecordingPtyFactory(t, nil)
 	ts := tmux.NewSessionWithDeps(context.Background(), "sess", "claude", pty, aliveExec)
 	inst := &Instance{Title: "sess", status: Running, started: true, gitWorktree: wt, tmuxSession: ts}
 
