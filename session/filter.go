@@ -136,10 +136,10 @@ func prTerm(value string) term {
 	if value == "" {
 		return func(*Instance) bool { return true }
 	}
-	wantOpen   := strings.HasPrefix("open",   value)
+	wantOpen := strings.HasPrefix("open", value)
 	wantMerged := strings.HasPrefix("merged", value)
 	wantClosed := strings.HasPrefix("closed", value)
-	wantNone   := strings.HasPrefix("none",   value)
+	wantNone := strings.HasPrefix("none", value)
 	return func(i *Instance) bool {
 		pr := i.GetPRStatus()
 		if pr == nil || !pr.HasPR {
