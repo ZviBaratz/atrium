@@ -5,7 +5,10 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/ZviBaratz/atrium/config"
 	"github.com/ZviBaratz/atrium/session/git"
@@ -100,6 +103,42 @@ func TestSetPathInvalidatesGroupKeyCache(t *testing.T) {
 
 	require.NoError(t, inst.SetPath(newDir))
 	require.Equal(t, filepath.Base(newDir), inst.GroupKey())
+}
+
+// GroupKey's cold path shells out to git; concurrent callers racing an empty
+// cache (a list render and the background Start goroutine both hitting a Loading
+// instance) must run that subprocess at most once, not once per caller. The
+// leaf compute-mutex + post-lock re-check collapses them to a single run.
+func TestGroupKeyDedupsColdComputation(t *testing.T) {
+	var calls atomic.Int64
+	orig := repoGroupKey
+	t.Cleanup(func() { repoGroupKey = orig })
+	repoGroupKey = func(context.Context, string) string {
+		calls.Add(1)
+		time.Sleep(time.Millisecond) // widen the window so an un-deduped race would recompute
+		return "deduped-key"
+	}
+
+	// A non-direct, not-yet-started instance: no worktree, not direct, so
+	// GroupKey takes the cold (subprocess) branch.
+	inst := &Instance{Title: "x", Path: t.TempDir()}
+
+	const n = 32
+	var wg sync.WaitGroup
+	wg.Add(n)
+	results := make([]string, n)
+	for k := 0; k < n; k++ {
+		go func(idx int) {
+			defer wg.Done()
+			results[idx] = inst.GroupKey()
+		}(k)
+	}
+	wg.Wait()
+
+	require.Equal(t, int64(1), calls.Load(), "cold computation should run exactly once")
+	for _, got := range results {
+		require.Equal(t, "deduped-key", got)
+	}
 }
 
 // A deep rename re-mints the tmux session name in qualified form — this is the

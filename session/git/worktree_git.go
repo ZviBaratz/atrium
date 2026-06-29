@@ -116,50 +116,49 @@ func (g *Worktree) commitLocalChanges(commitMessage string) error {
 	return nil
 }
 
-// PushChanges commits and pushes changes in the worktree to the remote branch
-func (g *Worktree) PushChanges(commitMessage string, open bool) error {
-	if err := checkGHCLI(g.baseContext()); err != nil {
-		return err
+// runGitPush pushes branch to origin from dir, creating the remote branch with
+// upstream tracking on the first push and fast-forwarding it thereafter. It is a
+// package var so tests can swap in a fake without a real remote, mirroring pr.go's
+// gh seams. -u is idempotent — re-affirming upstream on later pushes costs nothing.
+// CombinedOutput so git's "Updates were rejected…" text stays legible when a
+// divergent branch is (correctly) refused; the caller owns the context's timeout.
+var runGitPush = func(ctx context.Context, dir, branch string) error {
+	out, err := exec.CommandContext(ctx, "git", "-C", dir, "push", "-u", "origin", branch).CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("failed to push branch %s: %s (%w)", branch, out, err)
 	}
+	return nil
+}
 
+// PushChanges commits and pushes changes in the worktree to the remote branch.
+//
+// The push is a single `git push -u origin <branch>`: it creates the remote
+// branch on first push and fast-forwards it after. (It deliberately does NOT use
+// `gh repo sync`, which syncs a destination FROM its upstream parent — a pull, and
+// the wrong direction here; on a non-fork repo it has no parent and errors.)
+//
+// The push authenticates via git itself (SSH key / credential helper), independent
+// of gh, so it is intentionally NOT gated on gh availability — a gh-less SSH user
+// can still push. The optional browser-open below is best-effort and self-gates on
+// gh inside OpenBranchURL, where a missing/unauthenticated gh is logged, not fatal.
+func (g *Worktree) PushChanges(commitMessage string, open bool) error {
 	// Commit any local changes first (no-op when clean).
 	if err := g.commitLocalChanges(commitMessage); err != nil {
 		return err
 	}
 
-	// Snapshot the rename-mutable fields once so the push subprocesses below all
-	// target the same branch/worktree even if a concurrent Rename swaps them.
+	// Snapshot the rename-mutable fields once so the push subprocess below targets
+	// the same branch/worktree even if a concurrent Rename swaps them.
 	branch := g.GetBranchName()
 	wt := g.snapshotWorktreePath()
 
-	// Each network subprocess gets its own gitNetworkTimeout budget derived from
-	// the worktree's base context.
+	// The push is the only network subprocess; give it its own gitNetworkTimeout
+	// budget derived from the worktree's base context (the commit above is local).
 	ctx, cancel := context.WithTimeout(g.baseContext(), gitNetworkTimeout)
 	defer cancel()
-
-	// First push the branch to remote to ensure it exists
-	pushCmd := exec.CommandContext(ctx, "gh", "repo", "sync", "--source", "-b", branch)
-	pushCmd.Dir = wt
-	if err := pushCmd.Run(); err != nil {
-		// If sync fails, try creating the branch on remote first
-		fallbackCtx, fallbackCancel := context.WithTimeout(g.baseContext(), gitNetworkTimeout)
-		defer fallbackCancel()
-		gitPushCmd := exec.CommandContext(fallbackCtx, "git", "push", "-u", "origin", branch)
-		gitPushCmd.Dir = wt
-		if pushOutput, pushErr := gitPushCmd.CombinedOutput(); pushErr != nil {
-			log.ErrorLog.Print(pushErr)
-			return fmt.Errorf("failed to push branch: %s (%w)", pushOutput, pushErr)
-		}
-	}
-
-	// Now sync with remote
-	syncCtx, syncCancel := context.WithTimeout(g.baseContext(), gitNetworkTimeout)
-	defer syncCancel()
-	syncCmd := exec.CommandContext(syncCtx, "gh", "repo", "sync", "-b", branch)
-	syncCmd.Dir = wt
-	if output, err := syncCmd.CombinedOutput(); err != nil {
+	if err := runGitPush(ctx, wt, branch); err != nil {
 		log.ErrorLog.Print(err)
-		return fmt.Errorf("failed to sync changes: %s (%w)", output, err)
+		return err
 	}
 
 	// Open the branch in the browser
@@ -329,6 +328,15 @@ func (g *Worktree) DetachBranchInBaseRepo() error {
 	return nil
 }
 
+// runGHBrowse shells out to `gh browse --branch` for the branch, opening it in the
+// default browser. Like pr.go's runGHPRWeb it is a package var so tests can swap it
+// out. gh infers owner/repo from dir's origin remote, so no --repo is needed.
+var runGHBrowse = func(ctx context.Context, dir, branch string) error {
+	cmd := exec.CommandContext(ctx, "gh", "browse", "--branch", branch)
+	cmd.Dir = dir
+	return cmd.Run()
+}
+
 // OpenBranchURL opens the branch URL in the default browser
 func (g *Worktree) OpenBranchURL() error {
 	// Check if GitHub CLI is available
@@ -340,9 +348,7 @@ func (g *Worktree) OpenBranchURL() error {
 	defer cancel()
 	// Snapshot the rename-mutable fields under the lock so the browse subprocess
 	// can't read a torn branch/worktree against a concurrent Rename (see Diff).
-	cmd := exec.CommandContext(ctx, "gh", "browse", "--branch", g.GetBranchName())
-	cmd.Dir = g.snapshotWorktreePath()
-	if err := cmd.Run(); err != nil {
+	if err := runGHBrowse(ctx, g.snapshotWorktreePath(), g.GetBranchName()); err != nil {
 		return fmt.Errorf("failed to open branch URL: %w", err)
 	}
 	return nil

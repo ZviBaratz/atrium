@@ -1,5 +1,5 @@
 // Package git manages each session's isolated git worktree and branch: setup,
-// cleanup, commit, push (via gh), and diff-against-base computation. "Pause"
+// cleanup, commit, push (via git), and diff-against-base computation. "Pause"
 // removes the worktree but keeps the branch; "resume" recreates it.
 package git
 
@@ -20,8 +20,8 @@ const (
 	// gitLocalTimeout bounds local git operations (status, diff, commit,
 	// worktree add/remove, branch queries).
 	gitLocalTimeout = 30 * time.Second
-	// gitNetworkTimeout bounds network-bound operations (push, fetch,
-	// gh repo sync / auth / browse).
+	// gitNetworkTimeout bounds network-bound operations (git push, fetch,
+	// gh auth / browse).
 	gitNetworkTimeout = 60 * time.Second
 	// baseFetchTimeout bounds the create-time fetch of a session's base branch.
 	// It is deliberately shorter than gitNetworkTimeout: this fetch runs while the
