@@ -38,6 +38,14 @@ const daemonLockFilename = "daemon.lock"
 // already holds the lock, so RunDaemon can decline to start a second one.
 var errDaemonAlreadyRunning = errors.New("another atrium daemon is already running")
 
+// errDaemonLockAbsent is returned by isDaemonLockHeld when no lock file exists.
+// This is deliberately distinct from a present-but-free lock: an absent file is
+// NOT proof the daemon is dead, because a daemon from a build predating the lock
+// never created one. Callers must treat it as "can't confirm dead" and fall back
+// to a direct signal/probe rather than assuming the recorded PID is stale —
+// otherwise upgrading from a pre-lock binary would orphan a live legacy daemon.
+var errDaemonLockAbsent = errors.New("daemon lock file does not exist")
+
 // daemonLockPath returns the path to the daemon's advisory lock file in the data
 // dir. Shared by RunDaemon (which holds the lock) and StopDaemon (which checks it).
 func daemonLockPath() (string, error) {
@@ -248,17 +256,27 @@ func StopDaemon() error {
 	}
 
 	// Verify a daemon is actually alive before signaling. The kernel holds the
-	// daemon's flock only while the real process lives, so if the lock is not held
-	// the PID is stale — the daemon crashed, was killed, or the machine rebooted
-	// and recycled the number onto an unrelated process — and signaling it would
-	// hit an innocent victim. Drop the stale PID file and return without
-	// signaling. On a lock-check error we fall through to terminate, preserving
-	// the "ensure stopped" guarantee at the same tiny risk as before.
+	// daemon's flock only while the real process lives, so a present-but-free lock
+	// proves the PID is stale — the daemon crashed, was killed, or the machine
+	// rebooted and recycled the number onto an unrelated process — and signaling it
+	// would hit an innocent victim. In that case drop the stale PID file and return
+	// without signaling.
+	//
+	// An ABSENT lock file is treated differently: it is not proof of death (a daemon
+	// from a pre-lock build never created one, so the file's absence can mean a live
+	// legacy daemon), so we fall through to terminate rather than orphan it. A
+	// lock-check error is handled the same way — both preserve the "ensure stopped"
+	// guarantee. Once any post-lock daemon has run, the file persists on disk, so a
+	// genuinely dead daemon is detected below as present-but-free, never absent.
 	lockPath := filepath.Join(pidDir, daemonLockFilename)
-	if held, err := isDaemonLockHeld(lockPath); err != nil {
-		log.WarningLog.Printf("could not verify daemon liveness via lock: %v; proceeding to stop PID %d", err, pid)
-	} else if !held {
-		log.InfoLog.Printf("daemon PID %d is stale (no live daemon holds the lock); skipping signal", pid)
+	held, lockErr := isDaemonLockHeld(lockPath)
+	switch {
+	case errors.Is(lockErr, errDaemonLockAbsent):
+		log.InfoLog.Printf("no daemon lock file at %s; stopping PID %d directly (possible pre-lock daemon)", lockPath, pid)
+	case lockErr != nil:
+		log.WarningLog.Printf("could not verify daemon liveness via lock: %v; proceeding to stop PID %d", lockErr, pid)
+	case !held:
+		log.InfoLog.Printf("daemon PID %d is stale (lock present but unheld); skipping signal", pid)
 		if err := os.Remove(pidFile); err != nil && !os.IsNotExist(err) {
 			return fmt.Errorf("failed to remove stale PID file: %w", err)
 		}

@@ -87,10 +87,12 @@ func TestTerminateProcess_AlreadyDead(t *testing.T) {
 func TestDaemonLock(t *testing.T) {
 	path := filepath.Join(t.TempDir(), daemonLockFilename)
 
-	// No file yet → no daemon ever ran → not held.
-	held, err := isDaemonLockHeld(path)
-	require.NoError(t, err)
-	assert.False(t, held, "absent lock file must read as not held")
+	// No file yet → indeterminate, reported as errDaemonLockAbsent (distinct from a
+	// present-but-free lock) so the stopper falls back to a direct probe instead of
+	// assuming the recorded PID is stale.
+	if _, err := isDaemonLockHeld(path); !assert.ErrorIs(t, err, errDaemonLockAbsent) {
+		t.Fatalf("expected errDaemonLockAbsent for missing file, got %v", err)
+	}
 
 	release, err := acquireDaemonLock(path)
 	require.NoError(t, err)
@@ -102,7 +104,7 @@ func TestDaemonLock(t *testing.T) {
 
 	// flock conflicts across open file descriptions even in one process, so the
 	// stopper's check sees the held lock.
-	held, err = isDaemonLockHeld(path)
+	held, err := isDaemonLockHeld(path)
 	require.NoError(t, err)
 	assert.True(t, held, "lock must read as held while owned")
 
@@ -114,8 +116,9 @@ func TestDaemonLock(t *testing.T) {
 }
 
 // The core fix: a stale daemon.pid (the daemon died but the OS recycled its PID
-// onto an unrelated process) must not get signaled. With no daemon holding the
-// lock, StopDaemon skips signaling and clears the stale PID file instead of
+// onto an unrelated process) must not get signaled. The dead daemon left its lock
+// file on disk but no longer holds it; that present-but-free lock is the signal
+// StopDaemon trusts to skip signaling and clear the stale PID file instead of
 // killing the innocent process now living at that PID.
 func TestStopDaemon_SkipsStalePIDWhenLockNotHeld(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
@@ -129,7 +132,10 @@ func TestStopDaemon_SkipsStalePIDWhenLockNotHeld(t *testing.T) {
 
 	pidFile := filepath.Join(dir, "daemon.pid")
 	require.NoError(t, os.WriteFile(pidFile, []byte(strconv.Itoa(victim.Process.Pid)), 0o644))
-	// Deliberately do NOT create/hold daemon.lock: no live daemon owns it.
+	// The dead daemon left its lock file behind but holds no flock on it: a
+	// present-but-free lock, which proves the PID is stale.
+	lockFile := filepath.Join(dir, daemonLockFilename)
+	require.NoError(t, os.WriteFile(lockFile, nil, 0o644))
 
 	require.NoError(t, StopDaemon())
 
@@ -138,4 +144,32 @@ func TestStopDaemon_SkipsStalePIDWhenLockNotHeld(t *testing.T) {
 	assert.False(t, exited(), "victim should still be running (was not signaled)")
 	_, statErr := os.Stat(pidFile)
 	assert.True(t, os.IsNotExist(statErr), "stale PID file should be removed")
+}
+
+// Regression guard for the pre-lock upgrade path: when daemon.pid points at a
+// LIVE daemon but there is no lock file (a daemon from a build predating the lock
+// never created one), StopDaemon must still stop it rather than mistake the absent
+// file for a dead daemon and orphan it. An absent lock file is not proof of death;
+// only a present-but-free lock is.
+func TestStopDaemon_SignalsLegacyDaemonWithoutLock(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	dir, err := config.GetConfigDir()
+	require.NoError(t, err)
+	require.NoError(t, os.MkdirAll(dir, 0o755))
+
+	// Stand in for a still-running pre-lock daemon. `sleep` takes the default
+	// SIGTERM disposition, so StopDaemon's graceful path terminates it.
+	legacy := exec.CommandContext(context.Background(), "sleep", "60")
+	exited := reapAndWatch(t, legacy)
+
+	pidFile := filepath.Join(dir, "daemon.pid")
+	require.NoError(t, os.WriteFile(pidFile, []byte(strconv.Itoa(legacy.Process.Pid)), 0o644))
+	// Deliberately create NO daemon.lock: a pre-lock daemon never made one.
+
+	require.NoError(t, StopDaemon())
+
+	assert.Eventually(t, exited, time.Second, 10*time.Millisecond,
+		"legacy daemon should be stopped, not orphaned")
+	_, statErr := os.Stat(pidFile)
+	assert.True(t, os.IsNotExist(statErr), "PID file should be removed after stopping")
 }

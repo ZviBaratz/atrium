@@ -46,16 +46,22 @@ func acquireDaemonLock(path string) (release func(), err error) {
 }
 
 // isDaemonLockHeld reports whether a live daemon currently holds the lock at path.
-// It trylocks without delivering anything: acquiring the lock means nobody held
-// it, so the PID in daemon.pid is stale and must NOT be signaled. A missing lock
-// file means no daemon has ever run. flock conflicts across separate open file
-// descriptions even within a single process, so this answers correctly no matter
-// who calls it.
+// It trylocks without delivering anything:
+//   - trylock blocked → a live daemon holds it → (true, nil).
+//   - trylock succeeds → the file exists but nobody holds it, so the daemon that
+//     created it has died and the recorded PID is stale → (false, nil).
+//   - the file is absent → (false, errDaemonLockAbsent). This is deliberately
+//     distinct from "present but free": an absent file is not proof of death (a
+//     pre-lock daemon never created one), so callers fall back to a direct
+//     signal/probe instead of treating the PID as stale.
+//
+// flock conflicts across separate open file descriptions even within a single
+// process, so this answers correctly no matter who calls it.
 func isDaemonLockHeld(path string) (bool, error) {
 	f, err := os.OpenFile(path, os.O_RDONLY, 0)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return false, nil
+			return false, errDaemonLockAbsent
 		}
 		return false, err
 	}
@@ -103,9 +109,11 @@ func terminateProcess(proc *os.Process, lockPath string) error {
 }
 
 // daemonGone reports whether the daemon has exited. It prefers the lock
-// (reuse-proof: the kernel frees it only when the real daemon process dies); on a
-// lock-check error, or when no lock path is supplied (tests), it falls back to a
-// signal-0 probe, where any error means the PID is gone.
+// (reuse-proof: the kernel frees it only when the real daemon process dies). It
+// falls back to a signal-0 probe — where any error means the PID is gone — when
+// no lock path is supplied (tests), on a lock-check error, or when the lock file
+// is absent (a pre-lock daemon never created one), since none of those let the
+// lock answer authoritatively.
 func daemonGone(proc *os.Process, lockPath string) bool {
 	if lockPath != "" {
 		if held, err := isDaemonLockHeld(lockPath); err == nil {
