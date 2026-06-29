@@ -17,6 +17,7 @@ func draftRunes(s string) tea.KeyMsg {
 }
 
 func TestDraft_EscapeStashesDirtyForm(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
 	h := newCreateFormHome(t)
 
 	h.handleKeyPress(draftRunes("n")) // open, focus on title
@@ -31,6 +32,7 @@ func TestDraft_EscapeStashesDirtyForm(t *testing.T) {
 }
 
 func TestDraft_EscapeDiscardsCleanForm(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
 	h := newCreateFormHome(t)
 
 	h.handleKeyPress(draftRunes("n")) // open, type nothing
@@ -40,6 +42,7 @@ func TestDraft_EscapeDiscardsCleanForm(t *testing.T) {
 }
 
 func TestDraft_ReopenRestoresStash(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
 	h := newCreateFormHome(t)
 
 	h.handleKeyPress(draftRunes("n"))
@@ -136,6 +139,41 @@ func TestDraft_SurvivesRestart(t *testing.T) {
 	assert.Nil(t, config.LoadState().GetDraft(), "consuming the draft clears the disk copy")
 }
 
+// A draft recovered from disk after a restart must show the project's auto-routed Claude
+// account, exactly like a fresh form — the account is re-derived from the target, never
+// persisted, so the rehydrated overlay must re-run the same preselection. Without it the
+// picker would default to the first account, misrepresenting which login the session runs.
+func TestDraft_RehydratedDraftPreselectsRoutedAccount(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	dir := t.TempDir() // direct (non-git) target → routes by path, hermetic
+	accounts := []config.ClaudeAccount{
+		{Name: "personal", ConfigDir: "~/.claude"},                  // catch-all default (accounts[0])
+		{Name: "work", ConfigDir: "/w", PathMatches: []string{dir}}, // path route for this target
+	}
+
+	h := newCreateFormHome(t)
+	h.appConfig.ClaudeAccounts = accounts
+	addDirectInstance(t, h, "existing", dir) // make dir the contextual target
+
+	h.handleKeyPress(draftRunes("n"))
+	typeString(h, "my-draft")
+	h.handleKeyPress(tea.KeyMsg{Type: tea.KeyEsc}) // stash + persist (Path = dir)
+	d := config.LoadState().GetDraft()
+	require.NotNil(t, d)
+	require.Equal(t, dir, d.Path, "the draft persists its project")
+
+	// Simulate a restart: a fresh home reading the persisted draft back.
+	h2 := newCreateFormHome(t)
+	h2.appConfig.ClaudeAccounts = accounts
+	h2.appState = config.LoadState()
+
+	h2.handleKeyPress(draftRunes("n")) // reopen → rehydrate from disk
+	require.NotNil(t, h2.textInputOverlay)
+	require.Equal(t, "my-draft", h2.textInputOverlay.GetTitle(), "the draft is restored")
+	assert.Equal(t, "work", h2.textInputOverlay.SelectedAccountName(),
+		"the recovered draft shows the path-routed account, not the first-account default")
+}
+
 // Submitting must leave no stale draft on disk, so a created session is never shadowed
 // by a lingering crash-recovery copy.
 func TestDraft_SubmitClearsPersistedDraft(t *testing.T) {
@@ -178,6 +216,7 @@ func TestDraft_ClearFormDropsPersistedDraft(t *testing.T) {
 }
 
 func TestDraft_EscapeOnNonCreateOverlayDoesNotStash(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
 	h := newCreateFormHome(t)
 	ov := overlay.NewSmartDispatchOverlay("Describe the session")
 	ov.SetPrompt("some text")
@@ -195,6 +234,7 @@ func TestDraft_EscapeOnNonCreateOverlayDoesNotStash(t *testing.T) {
 // Stashing must drop that arm; otherwise a single Ctrl+R after reopening would wipe
 // the restored draft, defeating the double-tap guard.
 func TestDraft_ArmDoesNotSurviveCtrlCCancel(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
 	h := newCreateFormHome(t)
 
 	h.handleKeyPress(draftRunes("n"))
@@ -212,6 +252,7 @@ func TestDraft_ArmDoesNotSurviveCtrlCCancel(t *testing.T) {
 }
 
 func TestDraft_DoubleCtrlRRebuildsFresh(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
 	h := newCreateFormHome(t)
 
 	h.handleKeyPress(draftRunes("n"))

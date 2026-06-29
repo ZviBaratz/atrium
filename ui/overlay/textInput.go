@@ -912,6 +912,18 @@ func (t *TextInputOverlay) GetSelectedAccount() (config.ClaudeAccount, bool) {
 	return t.accountPicker.GetSelectedAccount(), true
 }
 
+// SelectedAccountName returns the name of the account the picker is currently pointing
+// at — the auto-routed preselection or a manual choice — regardless of whether the user
+// has driven it. Unlike GetSelectedAccount, which reports a value only after a deliberate
+// override (the submit contract), this exposes the displayed selection. "" when there is
+// no account picker.
+func (t *TextInputOverlay) SelectedAccountName() string {
+	if t.accountPicker == nil {
+		return ""
+	}
+	return t.accountPicker.GetSelectedAccount().Name
+}
+
 // PreselectAccount points the picker at the auto-routed account name. It is a no-op
 // once the user has taken manual control (see AccountPicker.SelectByName), so the
 // form can re-preselect as the target project changes without clobbering a choice.
