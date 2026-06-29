@@ -111,18 +111,21 @@ func RunDaemon(ctx context.Context, cfg *config.Config) error {
 
 	// Load the instance list once for the daemon's whole lifetime. This is
 	// correct, not a missed refresh (issue #210): the daemon and TUI are mutually
-	// exclusive — main.go calls StopDaemon() before app.Run (main.go:113) and only
-	// LaunchDaemon()s on TUI exit (main.go:104-111, gated by
+	// exclusive — main.go calls StopDaemon() before app.Run (main.go:136) and only
+	// LaunchDaemon()s on TUI exit (main.go:127-134, gated by
 	// shouldLaunchDaemonOnExit; covered by TestShouldLaunchDaemonOnExit) — and the
 	// TUI is the only thing that creates sessions. So nothing adds sessions while
 	// this daemon is alive; any created later are covered by the next relaunch.
 	//
-	// Known limitation: with two concurrent TUIs on one data dir, a session created
-	// in TUI B after this daemon launched is not auto-answered until the daemon dies
-	// (next TUI start). That is intentionally not handled here — a read-only refresh
-	// would not make concurrent TUIs safe, because the same scenario also corrupts
-	// state.json on the write side (SaveInstances below overwrites the whole file
-	// from this startup snapshot). Both directions are tracked together in #230.
+	// This rests on there being one TUI per data dir, which is now enforced: the
+	// interactive atrium holds an flock (tui.lock, main.go:88-107) for its whole
+	// life, so a second TUI on the same data dir refuses to start rather than racing
+	// this snapshot. That closes #230 — which tracked the read- and write-side
+	// staleness two concurrent TUIs would otherwise cause (the write side being the
+	// whole-file SaveInstances below, run from this startup snapshot) — by
+	// prevention, making both hazards impossible, rather than by a
+	// concurrency-sensitive in-daemon refresh that would not have made the write
+	// side safe anyway.
 	instances, err := storage.LoadInstances(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to load instances: %w", err)

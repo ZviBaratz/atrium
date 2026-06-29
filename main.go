@@ -8,6 +8,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"github.com/ZviBaratz/atrium/app"
 	cmd2 "github.com/ZviBaratz/atrium/cmd"
@@ -83,6 +84,28 @@ var (
 			// any project. When there is no repo context, session creation guides you to
 			// pick one rather than failing at startup.
 			cfg := config.LoadConfig()
+
+			// Enforce one interactive atrium per data dir (issue #230). A second TUI
+			// sharing this state.json would let this run's exit-time autoyes daemon
+			// snapshot clobber the other's instances and non-instance state; refuse to
+			// start instead. The kernel frees an flock on process death, so a crashed
+			// TUI never wedges the next one. The defer registers BEFORE the exit-time
+			// LaunchDaemon defer below, so (LIFO) the lock is released only AFTER that
+			// daemon is launched — otherwise a second TUI could grab the lock and run
+			// concurrently with the daemon we just launched, the exact hazard above.
+			// Failing to resolve or open the lock is non-fatal (log and run unlocked),
+			// matching RunDaemon; only an already-held lock refuses.
+			if lockPath, err := tuiLockPath(); err != nil {
+				log.WarningLog.Printf("could not resolve TUI lock path: %v; running without single-instance lock", err)
+			} else if release, err := acquireTUILock(lockPath); err != nil {
+				if errors.Is(err, errTUIAlreadyRunning) {
+					return fmt.Errorf("atrium is already running for this data directory (%s); close the other instance before starting a new one", filepath.Dir(lockPath))
+				}
+				log.WarningLog.Printf("could not acquire TUI lock %s: %v; running without it", lockPath, err)
+			} else {
+				defer release()
+			}
+
 			if err := tmux.Init(cfg.TmuxConfigOverride, cfg.GetSessionContextBar()); err != nil {
 				log.WarningLog.Printf("failed to initialize tmux config: %v", err)
 			}

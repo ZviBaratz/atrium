@@ -38,7 +38,9 @@ The control flow is **Cobra → Bubble Tea → Instance → (tmux + git worktree
   instances and taps Enter on prompts; the TUI kills it on startup/exit. It runs
   only while no TUI is alive and snapshots the instance list once for its lifetime
   (the TUI is the sole session creator), so new sessions are picked up at the next
-  relaunch rather than mid-run.
+  relaunch rather than mid-run. A per-data-dir flock (`tui.lock`, held by the
+  interactive `atrium` in `main.go`) enforces one TUI per data dir, so that
+  snapshot can't be raced by a concurrent TUI (#230).
 - **`config/`** — two persisted artifacts in the data dir: `config.json`
   (`Config`: program, profiles, auto-attach) and `state.json` (`State`: serialized
   instances plus UI state like collapsed repos and recent paths). See the
