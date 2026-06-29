@@ -75,13 +75,9 @@ func (pp *ProfilePicker) HasMultiple() bool {
 	return len(pp.profiles) > 1
 }
 
-func ppLabelStyle() lipgloss.Style { return theme.Current().AccentStyle().Bold(true) }
-func ppSelectedStyle() lipgloss.Style {
-	return lipgloss.NewStyle().
-		Background(theme.Current().Palette.Accent).
-		Foreground(theme.Current().Palette.Bg)
-}
-func ppDimStyle() lipgloss.Style { return theme.Current().DimStyle() }
+func ppLabelStyle() lipgloss.Style    { return overlayLabelStyle() }
+func ppSelectedStyle() lipgloss.Style { return overlaySelectedStyle() }
+func ppDimStyle() lipgloss.Style      { return overlayDimStyle() }
 
 // Render renders the profile picker.
 func (pp *ProfilePicker) Render() string {

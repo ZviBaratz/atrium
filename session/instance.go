@@ -871,13 +871,14 @@ func (i *Instance) Start(firstTimeSetup bool) error {
 	return nil
 }
 
-// Kill terminates the instance and cleans up all resources
+// Kill terminates the instance and cleans up all resources. It is safe to call at
+// any point in an instance's lifecycle — including from Start()'s error unwind,
+// before started is set, and on a never-started instance — because it only acts on
+// the resources that actually exist: the tmux()/worktree() nil checks below no-op
+// when a resource was never allocated. It must NOT gate on isStarted(): a failed
+// Start() leaves started false yet may already have created the worktree/branch
+// (and a partial tmux session), which an early return would leak.
 func (i *Instance) Kill() error {
-	if !i.isStarted() {
-		// If instance was never started, just return success
-		return nil
-	}
-
 	var tc teardown.Errors
 
 	// Always try to cleanup both resources, even if one fails.
@@ -1015,8 +1016,14 @@ func (i *Instance) AwaitingInput() bool {
 // MarkPromptSending / PromptSending / ClearPromptSending manage the in-flight guard that
 // keeps overlapping metadata ticks from dispatching the same queued prompt twice. All three
 // are called only from the main event loop, so the unguarded field never races.
-func (i *Instance) MarkPromptSending()  { i.promptInFlight = true }
+
+// MarkPromptSending raises the in-flight guard before a queued prompt is dispatched.
+func (i *Instance) MarkPromptSending() { i.promptInFlight = true }
+
+// PromptSending reports whether a queued prompt is currently in flight.
 func (i *Instance) PromptSending() bool { return i.promptInFlight }
+
+// ClearPromptSending lowers the in-flight guard once a prompt dispatch has settled.
 func (i *Instance) ClearPromptSending() { i.promptInFlight = false }
 
 // ClearPrompt retires a queued prompt: it drops the pending text, its timeout clock, and

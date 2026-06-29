@@ -1084,6 +1084,11 @@ func (g *gatedWriter) Write(p []byte) (int, error) {
 
 func (g *gatedWriter) disable() { g.disabled.Store(true) }
 
+// stdinNukeWindow is how long after an attach the stdin reader treats incoming
+// bytes as the terminal's control-sequence burst (e.g. ?[?62c, ]10;rgb:...) and
+// drops them so they never reach tmux. A var, not a const, so tests can shorten it.
+var stdinNukeWindow = 50 * time.Millisecond
+
 // Attach connects the terminal to the tmux session and blocks (via the returned
 // channel) until the user detaches. When allowKill is true, the in-session kill
 // key (Ctrl+X) detaches and sets KillRequested so the caller can tear the session
@@ -1136,13 +1141,18 @@ func (t *Session) Attach(allowKill bool) (chan struct{}, error) {
 	// blocked on os.Stdin.Read; reading the field in the loop would be a data race on that
 	// pointer. (os.File.Write is nil-safe, so the original code raced rather than panicked.)
 	attachedPtmx := t.ptmx
+	// Capture ctx locally for the same reason: detachCleanup nils t.ctx without waiting
+	// for this goroutine, which blocks on the uninterruptible os.Stdin.Read (like the
+	// stdout pump it is deliberately NOT in t.wg — wg.Wait would freeze detach). The
+	// local ctx lets a reader left over from a prior attach notice the detach after its
+	// next read and exit WITHOUT touching the detach state or pty of a newer attach.
+	readCtx := t.ctx
+	stdinReadErr := log.NewEvery(60 * time.Second)
 	go func() {
-		// Close the channel after 50ms
-		timeoutCh := make(chan struct{})
-		go func() {
-			time.Sleep(50 * time.Millisecond)
-			close(timeoutCh)
-		}()
+		// Within stdinNukeWindow of attach, stdin carries the terminal's control-sequence
+		// burst (e.g. ?[?62c0;95;0c, ]10:rgb:f8f8f8; varies by terminal) that must not reach
+		// tmux. A deadline drops those initial bytes — self-contained, no extra goroutine.
+		nukeUntil := time.Now().Add(stdinNukeWindow)
 
 		// Read input from stdin and check for Ctrl+q
 		buf := make([]byte, 32)
@@ -1150,21 +1160,27 @@ func (t *Session) Attach(allowKill bool) (chan struct{}, error) {
 			nr, err := os.Stdin.Read(buf)
 			if err != nil {
 				if err == io.EOF {
-					break
+					return
+				}
+				// Throttle: a persistently failing stdin (e.g. a closed fd) must not spin
+				// the log; the loop still retries on the next read.
+				if stdinReadErr.ShouldLog() {
+					log.ErrorLog.Printf("attach stdin read error (throttled): %v", err)
 				}
 				continue
 			}
 
-			// Nuke the first bytes of stdin, up to 64, to prevent tmux from reading it.
-			// When we attach, there tends to be terminal control sequences like ?[?62c0;95;0c or
-			// ]10;rgb:f8f8f8. The control sequences depend on the terminal (warp vs iterm). We should use regex ideally
-			// but this works well for now. Log this for debugging.
-			//
-			// There seems to always be control characters, but I think it's possible for there not to be. The heuristic
-			// here can be: if there's characters within 50ms, then assume they are control characters and nuke them.
+			// A detach (user keystroke, pause, or app shutdown) cancels readCtx. Once
+			// cancelled this goroutine is stale — stop reading and never act on the shared
+			// detach state or pty, which may already belong to a newer attach.
 			select {
-			case <-timeoutCh:
+			case <-readCtx.Done():
+				return
 			default:
+			}
+
+			// Drop the initial control-sequence burst (see nukeUntil).
+			if time.Now().Before(nukeUntil) {
 				log.InfoLog.Printf("nuked first stdin: %s", buf[:nr])
 				continue
 			}
@@ -1300,10 +1316,9 @@ func (t *Session) DetachSafely() error {
 		t.attachCh = nil
 	}
 
-	if len(errs) > 0 {
-		return fmt.Errorf("errors during detach: %v", errs)
-	}
-	return nil
+	// errors.Join folds the (already-descriptive) detach errors into one unwrappable
+	// error, returning nil when there were none.
+	return errors.Join(errs...)
 }
 
 // Detach disconnects from the current tmux session and re-establishes the attach pty
@@ -1324,8 +1339,8 @@ func (t *Session) Detach() {
 		errs = append(errs, fmt.Errorf("error restoring attach pty after detach: %w", err))
 	}
 
-	if len(errs) > 0 {
-		t.detachErr = fmt.Errorf("errors during detach: %v", errs)
+	if joined := errors.Join(errs...); joined != nil {
+		t.detachErr = joined
 		log.ErrorLog.Println(t.detachErr)
 	} else {
 		t.detachErr = nil

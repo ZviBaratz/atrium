@@ -1,10 +1,40 @@
 package git
 
 import (
+	"errors"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
+
+// TestDiff_NoBaseCommitSHA: without a resolved base commit, Diff/DiffNumstat return
+// the recognizable errBaseCommitNotSet and never shell out to git (the zero-value
+// worktree has no repo). The message is a cross-package contract — Instance.UpdateDiffStats
+// and the poll handler substring-match "base commit SHA not set" — so it must not drift.
+func TestDiff_NoBaseCommitSHA(t *testing.T) {
+	wt := &Worktree{} // baseCommitSHA == ""
+
+	for _, tc := range []struct {
+		name string
+		got  *DiffStats
+	}{
+		{"Diff", wt.Diff()},
+		{"DiffNumstat", wt.DiffNumstat()},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if !errors.Is(tc.got.Error, errBaseCommitNotSet) {
+				t.Fatalf("%s().Error = %v, want errBaseCommitNotSet", tc.name, tc.got.Error)
+			}
+			if !strings.Contains(tc.got.Error.Error(), "base commit SHA not set") {
+				t.Errorf("%s() error %q must contain the cross-package contract string", tc.name, tc.got.Error)
+			}
+			if !tc.got.IsEmpty() {
+				t.Errorf("%s() should return empty stats, got %+v", tc.name, tc.got)
+			}
+		})
+	}
+}
 
 func TestParseNumstat(t *testing.T) {
 	tests := []struct {

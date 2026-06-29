@@ -79,31 +79,58 @@ func (g *Worktree) runGitCommand(path string, args ...string) (string, error) {
 	return string(output), nil
 }
 
+// commitLocalChanges stages and commits all changes in the worktree with
+// --no-verify when it is dirty, and is a no-op when the worktree is clean. It
+// snapshots the worktree path once and runs the status/add/commit against that
+// single snapshot, so a concurrent deep Rename (which swaps worktreePath under
+// the lock) cannot land the three git calls on different paths. On a commit it
+// invalidates the stats cache so ahead/behind counts and the dirty glyph refresh
+// on the next tick. Shared by CommitChanges and PushChanges.
+func (g *Worktree) commitLocalChanges(commitMessage string) error {
+	wt := g.snapshotWorktreePath()
+
+	// Inline the dirty check against the snapshot (rather than calling IsDirty,
+	// which snapshots again) so all three git calls target the same worktree.
+	status, err := g.runGitCommand(wt, "status", "--porcelain")
+	if err != nil {
+		return fmt.Errorf("failed to check for changes: %w", err)
+	}
+	if len(status) == 0 {
+		return nil
+	}
+
+	// Stage all changes
+	if _, err := g.runGitCommand(wt, "add", "."); err != nil {
+		log.ErrorLog.Print(err)
+		return fmt.Errorf("failed to stage changes: %w", err)
+	}
+
+	// Create commit
+	if _, err := g.runGitCommand(wt, "commit", "-m", commitMessage, "--no-verify"); err != nil {
+		log.ErrorLog.Print(err)
+		return fmt.Errorf("failed to commit changes: %w", err)
+	}
+
+	// The commit graph changed; refresh the ahead/behind counts and the dirty flag on the next tick.
+	g.invalidateStatsCache()
+	return nil
+}
+
 // PushChanges commits and pushes changes in the worktree to the remote branch
 func (g *Worktree) PushChanges(commitMessage string, open bool) error {
 	if err := checkGHCLI(g.baseContext()); err != nil {
 		return err
 	}
 
-	// Check if there are any changes to commit
-	isDirty, err := g.IsDirty()
-	if err != nil {
-		return fmt.Errorf("failed to check for changes: %w", err)
+	// Commit any local changes first (no-op when clean).
+	if err := g.commitLocalChanges(commitMessage); err != nil {
+		return err
 	}
 
-	if isDirty {
-		// Stage all changes
-		if _, err := g.runGitCommand(g.worktreePath, "add", "."); err != nil {
-			log.ErrorLog.Print(err)
-			return fmt.Errorf("failed to stage changes: %w", err)
-		}
-
-		// Create commit
-		if _, err := g.runGitCommand(g.worktreePath, "commit", "-m", commitMessage, "--no-verify"); err != nil {
-			log.ErrorLog.Print(err)
-			return fmt.Errorf("failed to commit changes: %w", err)
-		}
-	}
+	// Snapshot the rename-mutable fields once so the push subprocesses below all
+	// target the same branch/worktree even if a concurrent Rename swaps them.
+	branch := g.GetBranchName()
+	wt := g.snapshotWorktreePath()
 
 	// Each network subprocess gets its own gitNetworkTimeout budget derived from
 	// the worktree's base context.
@@ -111,14 +138,14 @@ func (g *Worktree) PushChanges(commitMessage string, open bool) error {
 	defer cancel()
 
 	// First push the branch to remote to ensure it exists
-	pushCmd := exec.CommandContext(ctx, "gh", "repo", "sync", "--source", "-b", g.branchName)
-	pushCmd.Dir = g.worktreePath
+	pushCmd := exec.CommandContext(ctx, "gh", "repo", "sync", "--source", "-b", branch)
+	pushCmd.Dir = wt
 	if err := pushCmd.Run(); err != nil {
 		// If sync fails, try creating the branch on remote first
 		fallbackCtx, fallbackCancel := context.WithTimeout(g.baseContext(), gitNetworkTimeout)
 		defer fallbackCancel()
-		gitPushCmd := exec.CommandContext(fallbackCtx, "git", "push", "-u", "origin", g.branchName)
-		gitPushCmd.Dir = g.worktreePath
+		gitPushCmd := exec.CommandContext(fallbackCtx, "git", "push", "-u", "origin", branch)
+		gitPushCmd.Dir = wt
 		if pushOutput, pushErr := gitPushCmd.CombinedOutput(); pushErr != nil {
 			log.ErrorLog.Print(pushErr)
 			return fmt.Errorf("failed to push branch: %s (%w)", pushOutput, pushErr)
@@ -128,8 +155,8 @@ func (g *Worktree) PushChanges(commitMessage string, open bool) error {
 	// Now sync with remote
 	syncCtx, syncCancel := context.WithTimeout(g.baseContext(), gitNetworkTimeout)
 	defer syncCancel()
-	syncCmd := exec.CommandContext(syncCtx, "gh", "repo", "sync", "-b", g.branchName)
-	syncCmd.Dir = g.worktreePath
+	syncCmd := exec.CommandContext(syncCtx, "gh", "repo", "sync", "-b", branch)
+	syncCmd.Dir = wt
 	if output, err := syncCmd.CombinedOutput(); err != nil {
 		log.ErrorLog.Print(err)
 		return fmt.Errorf("failed to sync changes: %s (%w)", output, err)
@@ -150,32 +177,10 @@ func (g *Worktree) PushChanges(commitMessage string, open bool) error {
 	return nil
 }
 
-// CommitChanges commits changes locally without pushing to remote
+// CommitChanges commits changes locally without pushing to remote. It is a no-op
+// when the worktree is clean.
 func (g *Worktree) CommitChanges(commitMessage string) error {
-	// Check if there are any changes to commit
-	isDirty, err := g.IsDirty()
-	if err != nil {
-		return fmt.Errorf("failed to check for changes: %w", err)
-	}
-
-	if isDirty {
-		// Stage all changes
-		if _, err := g.runGitCommand(g.worktreePath, "add", "."); err != nil {
-			log.ErrorLog.Print(err)
-			return fmt.Errorf("failed to stage changes: %w", err)
-		}
-
-		// Create commit (local only)
-		if _, err := g.runGitCommand(g.worktreePath, "commit", "-m", commitMessage, "--no-verify"); err != nil {
-			log.ErrorLog.Print(err)
-			return fmt.Errorf("failed to commit changes: %w", err)
-		}
-
-		// The commit graph changed; refresh the ahead/behind counts and the dirty flag on the next tick.
-		g.invalidateStatsCache()
-	}
-
-	return nil
+	return g.commitLocalChanges(commitMessage)
 }
 
 // CommitSubjects returns the trimmed subject lines of up to limit commits ending
@@ -209,7 +214,9 @@ func (g *Worktree) ResetSoft(ref string) error {
 
 // IsDirty checks if the worktree has uncommitted changes
 func (g *Worktree) IsDirty() (bool, error) {
-	output, err := g.runGitCommand(g.worktreePath, "status", "--porcelain")
+	// Snapshot the worktree path under the lock so a concurrent deep Rename can't
+	// tear the read (see Diff).
+	output, err := g.runGitCommand(g.snapshotWorktreePath(), "status", "--porcelain")
 	if err != nil {
 		return false, fmt.Errorf("failed to check worktree status: %w", err)
 	}
@@ -331,8 +338,10 @@ func (g *Worktree) OpenBranchURL() error {
 
 	ctx, cancel := context.WithTimeout(g.baseContext(), gitNetworkTimeout)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "gh", "browse", "--branch", g.branchName)
-	cmd.Dir = g.worktreePath
+	// Snapshot the rename-mutable fields under the lock so the browse subprocess
+	// can't read a torn branch/worktree against a concurrent Rename (see Diff).
+	cmd := exec.CommandContext(ctx, "gh", "browse", "--branch", g.GetBranchName())
+	cmd.Dir = g.snapshotWorktreePath()
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("failed to open branch URL: %w", err)
 	}

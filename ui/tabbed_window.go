@@ -305,7 +305,7 @@ func (w *TabbedWindow) CleanupTerminalForInstance(inst *session.Instance) {
 
 // IsPreviewInScrollMode returns true if the preview pane is in scroll mode
 func (w *TabbedWindow) IsPreviewInScrollMode() bool {
-	return w.preview.isScrolling
+	return w.preview.IsScrolling()
 }
 
 // PreviewScrollContent exposes the preview pane's visible viewport text for
@@ -333,7 +333,7 @@ func (w *TabbedWindow) IsTerminalInScrollMode() bool {
 // (scroll or hint) — the state that renders the window's chrome as focused.
 // The diff tab scrolls live without a mode, so it never claims focus.
 func (w *TabbedWindow) paneScrolling() bool {
-	return w.preview.isScrolling || w.preview.InHintMode() || w.terminal.IsScrolling()
+	return w.preview.IsScrolling() || w.preview.InHintMode() || w.terminal.IsScrolling()
 }
 
 // ResetTerminalToNormalMode exits scroll mode on the terminal pane

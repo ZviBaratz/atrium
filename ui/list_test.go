@@ -233,6 +233,21 @@ func TestList_EmptyStateHint_SuppressedWhenNotEmptyOrFiltering(t *testing.T) {
 	require.NotContains(t, out, "keys", "a filtered list must not show the onboarding hint")
 }
 
+// TestKillInstance_SelectsPreviousWhenLastRemoved is the regression guard for the
+// delete-the-last-item double-jump: removing the selected last item must land the
+// selection on the new last item (its neighbour), not skip past it. The bug was a
+// redundant deferred l.Up() that fired *after* clampSelectionToNavigable had already
+// recovered the off-the-end selection, moving it one row too far.
+func TestKillInstance_SelectsPreviousWhenLastRemoved(t *testing.T) {
+	l := newTestList("a", "b", "c")
+	l.SetSelectedInstance(2) // select the last item, "c"
+
+	l.KillInstance(l.items[2])
+
+	require.Equal(t, 1, l.selectedIdx, "removing the selected last item selects its neighbour")
+	require.Equal(t, "b", l.items[l.selectedIdx].Title, "selection lands on b, not a")
+}
+
 func TestMoveUp(t *testing.T) {
 	l := newTestList("a", "b", "c")
 	l.SetSelectedInstance(1) // select "b"

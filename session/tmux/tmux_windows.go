@@ -27,17 +27,18 @@ func (t *Session) monitorWindowSize() {
 	// Do one at the start to set the initial size
 	doUpdate()
 
-	// On Windows, we'll just periodically check for window size changes
-	// since SIGWINCH is not available
-	ticker := time.NewTicker(250 * time.Millisecond)
-	defer ticker.Stop()
-
-	var lastCols, lastRows int
-	lastCols, lastRows, _ = term.GetSize(int(os.Stdin.Fd()))
-
 	t.wg.Add(1)
 	go func() {
 		defer t.wg.Done()
+		// On Windows there is no SIGWINCH, so poll for size changes. The ticker is
+		// created and stopped INSIDE the goroutine that uses it: monitorWindowSize
+		// returns immediately after launching this goroutine, so a function-scoped
+		// `defer ticker.Stop()` would fire right away and leave the loop spinning on
+		// a dead ticker (it never ticks again).
+		ticker := time.NewTicker(250 * time.Millisecond)
+		defer ticker.Stop()
+
+		lastCols, lastRows, _ := term.GetSize(int(os.Stdin.Fd()))
 		for {
 			select {
 			case <-t.ctx.Done():

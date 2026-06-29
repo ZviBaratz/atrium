@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os/exec"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/ZviBaratz/atrium/cmd/cmd_test"
@@ -53,6 +54,27 @@ func (f *paneFake) exec() cmd_test.MockCmdExec {
 			}
 		},
 	}
+}
+
+// Concurrent first-callers must resolve the pane id exactly once — the
+// double-checked lock serves the steady state under a read lock and resolves
+// under the write lock with a re-check, so racing callers don't each shell out.
+// Runs clean under -race.
+func TestPaneTargetConcurrentResolvesOnce(t *testing.T) {
+	fake := &paneFake{listPanesOut: "%5\n"}
+	s := NewSessionWithDeps(context.Background(), "pane-concurrent", "claude", NewMockPtyFactory(t), fake.exec())
+
+	var wg sync.WaitGroup
+	for range 20 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			require.Equal(t, "%5", s.paneTarget())
+		}()
+	}
+	wg.Wait()
+
+	require.Equal(t, 1, fake.resolutions, "double-checked lock must resolve exactly once under concurrency")
 }
 
 // Capture must target the resolved pane id, not the session name: a

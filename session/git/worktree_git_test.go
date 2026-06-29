@@ -1,12 +1,57 @@
 package git
 
 import (
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 )
+
+// TestRenameMutableFields_ConcurrentReadsAreLocked is a -race guard for the snapshot
+// protection the write ops (IsDirty, PushChanges, OpenBranchURL) and Diff rely on:
+// worktreePath/branchName must be read under g.mu, never as a bare field, so a
+// concurrent deep Rename swapping those fields can't tear the read. The reader loop
+// spins on the locked accessors throughout Rename's field swap; a bare read would
+// trip the race detector here.
+func TestRenameMutableFields_ConcurrentReadsAreLocked(t *testing.T) {
+	repoPath := newTestRepo(t)
+	wt, _, err := NewWorktree(context.Background(), repoPath, "race-before")
+	if err != nil {
+		t.Fatalf("NewWorktree error = %v", err)
+	}
+	if err := wt.Setup(); err != nil {
+		t.Fatalf("Setup() error = %v", err)
+	}
+
+	stop := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+				_ = wt.GetWorktreePath() // shares the RLock snapshotWorktreePath uses
+				_ = wt.GetBranchName()
+			}
+		}
+	}()
+
+	renameErr := wt.Rename("race-after")
+	close(stop)
+	<-done
+
+	if renameErr != nil {
+		t.Fatalf("Rename() error = %v", renameErr)
+	}
+	// IsDirty now reads the path through the same locked snapshot.
+	if _, err := wt.IsDirty(); err != nil {
+		t.Fatalf("IsDirty() after rename error = %v", err)
+	}
+}
 
 // BranchCheckoutPath must report the base repo when the branch is checked out there.
 func TestBranchCheckoutPath_BaseRepo(t *testing.T) {
