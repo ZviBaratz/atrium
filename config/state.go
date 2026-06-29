@@ -61,6 +61,14 @@ type AppState interface {
 	// SetAckedDrift merges the given agent-key → installed-version acknowledgements
 	// and persists once. A nil/empty map is a no-op.
 	SetAckedDrift(acks map[string]string) error
+	// GetDraft returns a copy of the stashed new-session draft, or nil when none is
+	// stashed. Mutating the result does not affect persisted state.
+	GetDraft() *SessionDraft
+	// SetDraft stores the stashed new-session draft and persists it.
+	SetDraft(draft *SessionDraft) error
+	// ClearDraft drops any stashed new-session draft. A no-op (no write) when none
+	// is stashed.
+	ClearDraft() error
 }
 
 // maxRecentPaths caps how many recently-used project directories are retained.
@@ -131,6 +139,21 @@ type State struct {
 	// heuristic-drift hint for. The hint stays quiet while installed == acked; a
 	// later version bump re-arms it.
 	AckedDrift map[string]string `json:"acked_drift,omitempty"`
+	// Draft is the dirty new-session form stashed on Escape, persisted so a deliberate
+	// non-destructive cancel survives a crash or quit (not just an in-run reopen). Nil
+	// (an older state file, or no stash) means there is nothing to restore. It mirrors
+	// the in-memory home.stashedDraft and is cleared on submit / restore / clear-form.
+	Draft *SessionDraft `json:"draft,omitempty"`
+}
+
+// SessionDraft is the persisted, serializable projection of a stashed new-session
+// form: only the free-text fields and the chosen project, which have stable overlay
+// setters. The live overlay (cursors, async pickers, closures) is not serializable,
+// so the form is rebuilt from these values on the next open.
+type SessionDraft struct {
+	Title  string `json:"title,omitempty"`
+	Prompt string `json:"prompt,omitempty"`
+	Path   string `json:"path,omitempty"`
 }
 
 // DefaultState returns the default state
@@ -322,5 +345,33 @@ func (s *State) SetAckedDrift(acks map[string]string) error {
 	for k, v := range acks {
 		s.AckedDrift[k] = v
 	}
+	return SaveState(s)
+}
+
+// GetDraft returns a shallow copy of the stashed new-session draft (never the
+// stored pointer), or nil when none is stashed, so a caller can read the values
+// without aliasing persisted state.
+func (s *State) GetDraft() *SessionDraft {
+	if s.Draft == nil {
+		return nil
+	}
+	d := *s.Draft
+	return &d
+}
+
+// SetDraft stores the stashed new-session draft and persists it. The app only
+// stashes a dirty form, so this is never called with an all-empty draft.
+func (s *State) SetDraft(draft *SessionDraft) error {
+	s.Draft = draft
+	return SaveState(s)
+}
+
+// ClearDraft drops any stashed new-session draft and persists. A no-op (no write)
+// when nothing is stashed, so the common clear-on-submit path stays cheap.
+func (s *State) ClearDraft() error {
+	if s.Draft == nil {
+		return nil
+	}
+	s.Draft = nil
 	return SaveState(s)
 }

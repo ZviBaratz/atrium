@@ -672,6 +672,28 @@ func (m *home) openCreateFormSeeded(seedPath string, focusTitle bool, prefill *P
 			fmt.Errorf("you can't create more than %d sessions (max_sessions in config.json)", limit))
 	}
 
+	// On the first bare n/N open after a restart, rebuild a crash-persisted draft into
+	// the in-memory stash so the restore branch below surfaces it exactly like an
+	// in-run Escape stash. Skipped when this run already has a stash (its live overlay
+	// wins, carrying every field) or the open carries explicit intent (prefill/seed).
+	// The disk copy is left intact here; the consume site clears it, so disk and the
+	// in-memory stash stay in lockstep at every handler boundary.
+	if m.stashedDraft == nil && prefill == nil && seedPath == "" {
+		if d := m.appState.GetDraft(); d != nil {
+			m.newSessionPath = d.Path
+			if m.newSessionPath == "" {
+				m.newSessionPath = m.defaultNewSessionPath()
+			}
+			ov, _ := m.newSessionFormOverlay()
+			ov.SetTitleValue(d.Title)
+			ov.SetPrompt(d.Prompt)
+			if d.Path != "" {
+				ov.SelectPath(d.Path)
+			}
+			m.stashedDraft = ov
+		}
+	}
+
 	// Restore a stashed draft only on the bare n/N entry (no seed path, no prefill):
 	// the smart-dispatch and seeded paths carry explicit intent that must win.
 	restore := prefill == nil && seedPath == "" && m.stashedDraft != nil
@@ -695,6 +717,8 @@ func (m *home) openCreateFormSeeded(seedPath string, focusTitle bool, prefill *P
 	if restore {
 		m.textInputOverlay = m.stashedDraft
 		m.stashedDraft = nil
+		// The draft is now live in the form; drop the disk copy to mirror the stash.
+		m.clearPersistedDraft()
 		valid, direct, _ := targetValidity(m.ctx, target)
 		isGit = valid && !direct
 		// Re-run the inline duplicate verdict for the restored title.
@@ -898,6 +922,8 @@ func (m *home) createSessionFromForm(prompt string) tea.Cmd {
 
 	m.textInputOverlay = nil
 	m.stashedDraft = nil
+	// The form was submitted, so any persisted draft is now stale — drop it.
+	m.clearPersistedDraft()
 	m.state = stateDefault
 	m.menu.SetState(ui.StateDefault)
 	m.resetTitleCheck()
@@ -1032,6 +1058,30 @@ func (m *home) recordRecentPath(path string) {
 	}
 }
 
+// persistDraft mirrors the in-memory stashed draft to state.json so a non-destructive
+// Escape survives a crash or quit, not just an in-run reopen. It serializes only the
+// values with stable overlay setters (title, prompt, project) — the live overlay is
+// not serializable. Best-effort, like recordRecentPath: a write error is logged, never
+// surfaced. Only called for a dirty create form, so it never persists an empty draft.
+func (m *home) persistDraft(ov *overlay.TextInputOverlay) {
+	draft := &config.SessionDraft{
+		Title:  ov.GetTitle(),
+		Prompt: ov.GetValue(),
+		Path:   ov.GetSelectedPath(),
+	}
+	if err := m.appState.SetDraft(draft); err != nil {
+		log.WarningLog.Printf("failed to persist new-session draft: %v", err)
+	}
+}
+
+// clearPersistedDraft drops the on-disk stashed draft, keeping it in lockstep with the
+// in-memory stash (cleared on submit, restore-consume, and clear-form). Best-effort.
+func (m *home) clearPersistedDraft() {
+	if err := m.appState.ClearDraft(); err != nil {
+		log.WarningLog.Printf("failed to clear new-session draft: %v", err)
+	}
+}
+
 // cancelPromptOverlay cancels the prompt overlay.
 func (m *home) cancelPromptOverlay() tea.Cmd {
 	// Keep a dirty create form as a draft so a deliberate Escape-to-check-something
@@ -1049,6 +1099,8 @@ func (m *home) cancelPromptOverlay() tea.Cmd {
 		m.textInputOverlay.Canceled = false
 		m.textInputOverlay.Submitted = false
 		m.stashedDraft = m.textInputOverlay
+		// Mirror the stash to disk so it outlives a crash/quit before the reopen.
+		m.persistDraft(m.textInputOverlay)
 	}
 	m.textInputOverlay = nil
 	m.state = stateDefault

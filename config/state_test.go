@@ -121,6 +121,37 @@ func TestState_CollapsedReposRoundTrip(t *testing.T) {
 	assert.Equal(t, []string{"repoA", "repoB"}, loaded.GetCollapsedRepos())
 }
 
+func TestState_DraftRoundTrip(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	// A fresh state has no stashed draft.
+	assert.Nil(t, DefaultState().GetDraft())
+
+	s := DefaultState()
+	require.NoError(t, s.SetDraft(&SessionDraft{Title: "t", Prompt: "p", Path: "/x"}))
+
+	loaded := LoadState()
+	got := loaded.GetDraft()
+	require.NotNil(t, got)
+	assert.Equal(t, SessionDraft{Title: "t", Prompt: "p", Path: "/x"}, *got)
+
+	// Clearing drops it from disk; a reload sees no draft.
+	require.NoError(t, loaded.ClearDraft())
+	assert.Nil(t, LoadState().GetDraft())
+}
+
+func TestState_GetDraftIsACopy(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	s := DefaultState()
+	require.NoError(t, s.SetDraft(&SessionDraft{Title: "t"}))
+
+	// Mutating the returned draft must not bleed into persisted state.
+	got := s.GetDraft()
+	got.Title = "mutated"
+	assert.Equal(t, "t", s.GetDraft().Title)
+}
+
 func TestState_ListRatioDefault(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 
@@ -228,5 +259,6 @@ func TestState_OldFileWithoutNewKeys(t *testing.T) {
 	repos, at := s.GetScannedRepos()
 	assert.Empty(t, repos)
 	assert.True(t, at.IsZero())
+	assert.Nil(t, s.GetDraft())
 	assert.Equal(t, []string{"/old"}, s.GetRecentPaths())
 }

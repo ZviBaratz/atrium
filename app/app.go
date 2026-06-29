@@ -234,7 +234,10 @@ type home struct {
 	// textInputOverlay handles text input with state
 	textInputOverlay *overlay.TextInputOverlay
 	// stashedDraft keeps a dirty new-session form across Escape so reopening with
-	// n/N restores it. In-memory only (this run) — never persisted to state.json.
+	// n/N restores it — the full live overlay, every field, within this run. It is
+	// also mirrored to state.json (title/prompt/project only; see config.SessionDraft)
+	// so a deliberate non-destructive cancel survives a crash or quit: the next bare
+	// n/N rebuilds the form from that on-disk copy when no in-run stash exists.
 	stashedDraft *overlay.TextInputOverlay
 	// textOverlay displays text information
 	textOverlay *overlay.TextOverlay

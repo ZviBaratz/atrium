@@ -116,6 +116,7 @@ func (m *home) handlePromptState(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// A confirmed double-tap Ctrl+R rebuilds the form fresh and drops any draft.
 	if m.textInputOverlay.ClearRequested() {
 		m.stashedDraft = nil
+		m.clearPersistedDraft()
 		return m, m.openCreateForm(true)
 	}
 
