@@ -118,10 +118,11 @@ func (m *home) applySettingChange(key string) tea.Cmd {
 		return m.handleError(err)
 	}
 	switch key {
-	case "theme":
+	case "theme", "nerd_font":
 		// Styles read theme.Current() lazily at render time, so swapping the
-		// palette plus a forced repaint restyles the whole UI in place.
+		// palette / glyph set plus a forced repaint restyles the whole UI in place.
 		theme.Set(m.appConfig.Theme)
+		theme.SetNerdFont(m.appConfig.GetNerdFont())
 		return tea.Sequence(tea.ClearScreen, tea.WindowSize())
 	case "model_indicator":
 		// Mirror the newHome seeding; the renderer takes the normalized mode

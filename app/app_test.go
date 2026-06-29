@@ -47,16 +47,27 @@ func TestDeliverReadyPrompts(t *testing.T) {
 		return inst
 	}
 
-	t.Run("ready instance with a queued prompt is delivered once and cleared", func(t *testing.T) {
+	t.Run("ready instance with a queued prompt is dispatched once, kept queued and marked in-flight", func(t *testing.T) {
 		inst := newInst("do the thing")
 		inst.PromptQueuedAt = time.Now()
 		cmds := deliverReadyPrompts([]instanceMetaResult{
 			{instance: inst, readyForPrompt: true},
 		})
 		require.Len(t, cmds, 1)
-		require.Equal(t, "", inst.Prompt, "prompt must be cleared so it is never sent twice")
-		require.True(t, inst.PromptQueuedAt.IsZero(),
-			"PromptQueuedAt must be cleared alongside the prompt so a later tick can't re-trigger the timeout")
+		require.Equal(t, "do the thing", inst.Prompt,
+			"prompt must stay queued until delivery is confirmed (promptDeliveredMsg), so a failed send is retried")
+		require.True(t, inst.PromptSending(),
+			"the in-flight guard must be set so an overlapping tick can't dispatch the same prompt again")
+	})
+
+	t.Run("an in-flight prompt is not dispatched again", func(t *testing.T) {
+		inst := newInst("do the thing")
+		inst.PromptQueuedAt = time.Now()
+		inst.MarkPromptSending() // a prior tick's send is still running
+		cmds := deliverReadyPrompts([]instanceMetaResult{
+			{instance: inst, readyForPrompt: true},
+		})
+		require.Empty(t, cmds, "a send already in flight must not be re-dispatched")
 	})
 
 	t.Run("ready instance with no queued prompt sends nothing", func(t *testing.T) {
@@ -74,6 +85,7 @@ func TestDeliverReadyPrompts(t *testing.T) {
 		})
 		require.Empty(t, cmds)
 		require.Equal(t, "waiting on trust screen", inst.Prompt, "prompt must remain queued")
+		require.False(t, inst.PromptSending(), "a not-ready instance must not be marked in-flight")
 	})
 }
 
@@ -153,65 +165,123 @@ func TestPromptSendErrorMsgSurfacesInUI(t *testing.T) {
 	assert.True(t, h.menu.HasNotice(), "a failed queued-prompt delivery must surface, not be swallowed")
 }
 
+func TestPromptDeliveredMsgClearsQueuedPrompt(t *testing.T) {
+	// A confirmed delivery must retire the queued prompt (so it stops being a poll target
+	// and is never re-sent) and release the in-flight guard.
+	h := newCreateFormHome(t)
+	st, err := session.NewStorage(config.DefaultState())
+	require.NoError(t, err)
+	h.storage = st // the handler persists the cleared prompt
+	inst, err := session.NewInstance(session.InstanceOptions{
+		Title: "delivered", Path: t.TempDir(), Program: "claude",
+	})
+	require.NoError(t, err)
+	inst.Prompt = "do the thing"
+	inst.PromptQueuedAt = time.Now()
+	inst.MarkPromptSending()
+
+	_, _ = h.Update(promptDeliveredMsg{instance: inst})
+
+	require.Equal(t, "", inst.Prompt, "a delivered prompt must be cleared")
+	require.True(t, inst.PromptQueuedAt.IsZero(), "the delivery clock must be cleared")
+	require.False(t, inst.PromptSending(), "the in-flight guard must be released")
+}
+
+func TestPromptDeferredMsgKeepsPromptAndReleasesGuard(t *testing.T) {
+	// A soft (unconfirmed) outcome must keep the prompt queued for the next tick but release
+	// the in-flight guard so that tick can re-dispatch it.
+	h := newCreateFormHome(t)
+	inst, err := session.NewInstance(session.InstanceOptions{
+		Title: "deferred", Path: t.TempDir(), Program: "claude",
+	})
+	require.NoError(t, err)
+	inst.Prompt = "do the thing"
+	inst.PromptQueuedAt = time.Now()
+	inst.MarkPromptSending()
+
+	_, _ = h.Update(promptDeferredMsg{instance: inst})
+
+	require.Equal(t, "do the thing", inst.Prompt, "a deferred prompt must stay queued for retry")
+	require.False(t, inst.PromptSending(), "the in-flight guard must be released so the next tick can retry")
+}
+
+func TestPromptSendErrorMsgClearsPrompt(t *testing.T) {
+	// A hard failure must retire the prompt (so the loop stops retrying a dead pane) in
+	// addition to surfacing the loss.
+	h := newCreateFormHome(t)
+	h.errBox.SetSize(80, 1)
+	inst, err := session.NewInstance(session.InstanceOptions{
+		Title: "lost", Path: t.TempDir(), Program: "claude",
+	})
+	require.NoError(t, err)
+	inst.Prompt = "do the thing"
+	inst.MarkPromptSending()
+
+	_, _ = h.Update(promptSendErrorMsg{instance: inst, err: fmt.Errorf("dead pane")})
+
+	require.Equal(t, "", inst.Prompt, "a hard-failed prompt must be cleared so the loop stops retrying")
+	require.False(t, inst.PromptSending())
+}
+
 func TestPromptDeliveryReady(t *testing.T) {
 	now := time.Now()
 	queued := now.Add(-1 * time.Second)          // queued recently, within grace
 	stale := now.Add(-2 * promptDeliveryTimeout) // queued long ago, past grace
 
 	tests := []struct {
-		name      string
-		state     tmux.PaneState
-		gateReady bool
-		queuedAt  time.Time
-		want      bool
+		name          string
+		state         tmux.PaneState
+		awaitingInput bool
+		queuedAt      time.Time
+		want          bool
 	}{
 		{
-			name:      "idle pane past the gate delivers",
-			state:     tmux.PaneIdle,
-			gateReady: true,
-			queuedAt:  queued,
-			want:      true,
+			name:          "idle pane past the gate delivers",
+			state:         tmux.PaneIdle,
+			awaitingInput: true,
+			queuedAt:      queued,
+			want:          true,
 		},
 		{
-			name:      "startup gate still up never delivers even when idle",
-			state:     tmux.PaneIdle,
-			gateReady: false,
-			queuedAt:  queued,
-			want:      false,
+			name:          "startup gate still up never delivers even when idle",
+			state:         tmux.PaneIdle,
+			awaitingInput: false,
+			queuedAt:      queued,
+			want:          false,
 		},
 		{
-			name:      "busy pane within grace keeps waiting",
-			state:     tmux.PaneWorking,
-			gateReady: true,
-			queuedAt:  queued,
-			want:      false,
+			name:          "busy pane within grace keeps waiting",
+			state:         tmux.PaneWorking,
+			awaitingInput: true,
+			queuedAt:      queued,
+			want:          false,
 		},
 		{
-			name:      "busy pane past timeout force-delivers once past the gate",
-			state:     tmux.PaneWorking,
-			gateReady: true,
-			queuedAt:  stale,
-			want:      true,
+			name:          "busy pane past timeout force-delivers once past the gate",
+			state:         tmux.PaneWorking,
+			awaitingInput: true,
+			queuedAt:      stale,
+			want:          true,
 		},
 		{
-			name:      "timeout never bypasses the startup gate",
-			state:     tmux.PaneWorking,
-			gateReady: false,
-			queuedAt:  stale,
-			want:      false,
+			name:          "timeout never bypasses the startup gate",
+			state:         tmux.PaneWorking,
+			awaitingInput: false,
+			queuedAt:      stale,
+			want:          false,
 		},
 		{
-			name:      "zero queuedAt disables the timeout on a busy pane",
-			state:     tmux.PaneWorking,
-			gateReady: true,
-			queuedAt:  time.Time{},
-			want:      false,
+			name:          "zero queuedAt disables the timeout on a busy pane",
+			state:         tmux.PaneWorking,
+			awaitingInput: true,
+			queuedAt:      time.Time{},
+			want:          false,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := promptDeliveryReady(tt.state, tt.gateReady, tt.queuedAt, now)
+			got := promptDeliveryReady(tt.state, tt.awaitingInput, tt.queuedAt, now)
 			require.Equal(t, tt.want, got)
 		})
 	}

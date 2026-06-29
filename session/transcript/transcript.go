@@ -34,6 +34,9 @@ type adapter interface {
 	// workingDir, or an error (incl. missing/empty transcript) so the caller
 	// falls back to the tmux capture.
 	render(workingDir string, opts Options) (string, error)
+	// hasSession reports whether a resumable native session exists for workingDir —
+	// the same record the agent's resume flag (e.g. `claude --continue`) would pick up.
+	hasSession(workingDir string, opts Options) bool
 }
 
 var adapters = []adapter{claudeAdapter{}}
@@ -48,6 +51,22 @@ func Render(program, workingDir string, opts Options) (string, error) {
 		}
 	}
 	return "", ErrUnsupported
+}
+
+// HasResumable reports whether the agent program running in workingDir has a resumable
+// native session — the record its resume flag (`claude --continue`) would pick up — and
+// whether any adapter handles program at all. supported == false means resumability is
+// unknowable here (no native-transcript adapter, e.g. codex/gemini); the caller should then
+// defer to the agent's own resume handling rather than block it. It lets callers avoid
+// launching a resume that the agent would abort on (claude prints "No conversation found to
+// continue!" and exits when none exists).
+func HasResumable(program, workingDir string, opts Options) (resumable, supported bool) {
+	for _, a := range adapters {
+		if a.supports(program) {
+			return a.hasSession(workingDir, applyDefaults(opts)), true
+		}
+	}
+	return false, false
 }
 
 func applyDefaults(opts Options) Options {

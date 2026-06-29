@@ -70,24 +70,31 @@ func (l *List) distinctRepoCount() int {
 	return len(seen)
 }
 
-// renderRepoHeader renders a repo group header as a fold marker, the uppercased name (with a
-// member count when collapsed), and a dim rule filling the rest of the panel width, so it
-// reads as a section divider. A collapsed group's header doubles as its selectable row, so it
+// renderRepoHeader renders a repo group header as an optional fold marker, the uppercased name
+// (with a member count when collapsed), and a dim rule filling the rest of the panel width, so
+// it reads as a section divider. A collapsed group's header doubles as its selectable row, so it
 // gets the same left accent bar as a selected item when selected is true.
+//
+// foldable reports whether the list spans more than one repo. Only a foldable group carries a
+// fold marker; a lone group (the sole-repo case) renders as a plain section label, since folding
+// it does nothing and the marker would advertise an absent affordance.
 //
 // needsInput is how many sessions in the group are blocked on user input, and unread how many
 // are Ready but not yet visited. When the group is collapsed (so its member rows — and their
 // per-row state glyphs — are hidden) the non-zero counts are appended as badges ("◆N" in the
 // attention color, "●N" in the success color) so the group still signals what wants the user
 // without being expanded.
-func (l *List) renderRepoHeader(key string, collapsed bool, count, needsInput, unread int, selected bool) string {
+func (l *List) renderRepoHeader(key string, collapsed bool, count, needsInput, unread int, selected, foldable bool) string {
 	th := theme.Current()
 	g := th.Glyphs
-	marker := g.FoldOpen + " "
-	if collapsed {
-		marker = g.FoldClosed + " "
+	name := strings.ToUpper(key)
+	if foldable {
+		marker := g.FoldOpen + " "
+		if collapsed {
+			marker = g.FoldClosed + " "
+		}
+		name = marker + name
 	}
-	name := marker + strings.ToUpper(key)
 	badgePlain, badgeStyled := "", ""
 	if collapsed {
 		name = fmt.Sprintf("%s (%d)", name, count)
@@ -641,19 +648,22 @@ func (l *List) String() string {
 		lines = append(lines, style.Render(" / "+l.filterQuery+cursor), "")
 	}
 
-	// Render the list group by group, in the user's existing (reorderable) order. Headers are
-	// shown only with more than one repo, and are not selectable rows for expanded groups, so
-	// selectedIdx stays a flat index into l.items. A collapsed group renders only its header
-	// (which doubles as its anchor's row) and suppresses its members.
-	// An active filter is the sole visibility gate and overrides collapse (see isHidden), so a
-	// folded group expands to reveal its matches while filtering.
+	// Render the list group by group, in the user's existing (reorderable) order. Every group
+	// gets a header, so the project a session belongs to is always visible — even with a single
+	// repo. Only a multi-repo list is foldable; a lone group's header drops its fold marker and
+	// is never a selectable row, so selectedIdx stays a flat index into l.items. A collapsed
+	// group renders only its header (which doubles as its anchor's row) and suppresses its
+	// members. An active filter is the sole visibility gate and overrides collapse (see
+	// isHidden), so a folded group expands to reveal its matches while filtering.
 	filtering := l.filterQuery != ""
-	showRepos := l.distinctRepoCount() > 1
+	distinct := l.distinctRepoCount()
+	showRepos := distinct > 0
+	foldable := distinct > 1
 	first := true
 	for i := 0; i < len(l.items); {
 		key := repoKey(l.items[i])
 		start, end := l.groupBounds(i)
-		collapsed := showRepos && l.collapsed[key] && !filtering
+		collapsed := foldable && l.collapsed[key] && !filtering
 
 		// A filter can hide every member of a group; such a group renders neither its header nor
 		// a separating blank line. A collapsed group is always represented (by its header).
@@ -672,7 +682,7 @@ func (l *List) String() string {
 			headerSelected := collapsed && l.selectedIdx == start
 			ni := l.groupNeedsInputCount(start, end)
 			ur := l.groupUnreadCount(start, end)
-			at := appendBlock(zone.Mark(listHeaderZoneID(key), l.renderRepoHeader(key, collapsed, end-start, ni, ur, headerSelected)))
+			at := appendBlock(zone.Mark(listHeaderZoneID(key), l.renderRepoHeader(key, collapsed, end-start, ni, ur, headerSelected, foldable)))
 			if headerSelected {
 				selStart, selH = at, len(lines)-at
 			}
@@ -946,9 +956,9 @@ func (l *List) KillInstance(target *session.Instance) {
 	}
 
 	// Under a sort mode, drop the target from the canonical order and re-sort once
-	// the existing removal + selection recovery below has fully settled. Registered
-	// before the conditional `defer l.Up()` so it runs LAST, after that recovery, and
-	// applySort then preserves the recovered selection by identity. Placed after the
+	// the removal + selection recovery below has fully settled. As a deferred call it
+	// runs LAST — after clampSelectionToNavigable has recovered the selection — and
+	// applySort then preserves that recovered selection by identity. Placed after the
 	// idx==-1 guard so it pairs with a real items removal (no spurious re-sort when
 	// target isn't in the list). In creation mode manual is nil and this is skipped.
 	if l.sortActive() {
@@ -961,12 +971,6 @@ func (l *List) KillInstance(target *session.Instance) {
 	// Kill the tmux session and clean up the worktree.
 	if err := target.Kill(); err != nil {
 		log.ErrorLog.Printf("could not kill instance: %v", err)
-	}
-
-	// If the selected item is the last one and we're removing it, select the
-	// previous one so the selection doesn't fall off the end.
-	if l.selectedIdx == idx && idx == len(l.items)-1 {
-		defer l.Up()
 	}
 
 	l.items = append(l.items[:idx], l.items[idx+1:]...)
@@ -1376,7 +1380,7 @@ func (l *List) groupBounds(idx int) (start, end int) {
 }
 
 // effectiveCollapsed reports whether a group is folded *and* folding is meaningful. Folding
-// is only meaningful when more than one repo is present (headers don't render otherwise), so
+// is only meaningful when more than one repo is present (a lone group's header has no fold marker), so
 // this guard lives here and every collapse read goes through it — preventing a stale flag from
 // hiding the sole remaining group after others are killed.
 func (l *List) effectiveCollapsed(key string) bool {

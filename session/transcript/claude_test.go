@@ -116,3 +116,55 @@ func TestNewestTranscriptMissingDirAndEmpty(t *testing.T) {
 		}
 	})
 }
+
+// TestHasResumable is the gate that keeps `claude --continue` from launching against a
+// cwd with no conversation (which aborts with "No conversation found to continue!" and
+// bounces the session to Paused). resumable tracks whether a usable transcript exists;
+// supported tells the caller whether the program even has a native-transcript adapter —
+// false for codex/gemini, which must keep deferring to their own resume probe.
+func TestHasResumable(t *testing.T) {
+	const cwd = "/home/zvi/.atrium/worktrees/zvi/improve_18bd02e657bdde19"
+
+	t.Run("claude with a non-empty transcript", func(t *testing.T) {
+		root := t.TempDir()
+		proj := filepath.Join(root, "projects", sanitizeCWD(cwd))
+		writeFileWithMtime(t, filepath.Join(proj, "session.jsonl"), "{}\n", time.Now())
+		resumable, supported := HasResumable("claude", cwd, Options{Root: root})
+		if !supported {
+			t.Error("claude must be a supported (transcript-backed) program")
+		}
+		if !resumable {
+			t.Error("a non-empty transcript must be reported resumable")
+		}
+	})
+
+	t.Run("claude with no project dir", func(t *testing.T) {
+		// The reported bug: a worktree the agent never wrote into.
+		resumable, supported := HasResumable("claude --continue", cwd, Options{Root: t.TempDir()})
+		if !supported {
+			t.Error("claude must be supported regardless of history presence")
+		}
+		if resumable {
+			t.Error("a missing project dir must not be reported resumable")
+		}
+	})
+
+	t.Run("claude with only an empty transcript", func(t *testing.T) {
+		root := t.TempDir()
+		proj := filepath.Join(root, "projects", sanitizeCWD(cwd))
+		writeFileWithMtime(t, filepath.Join(proj, "session.jsonl"), "", time.Now())
+		if resumable, _ := HasResumable("claude", cwd, Options{Root: root}); resumable {
+			t.Error("an empty transcript must not be reported resumable")
+		}
+	})
+
+	t.Run("non-claude program is unsupported", func(t *testing.T) {
+		resumable, supported := HasResumable("aider", cwd, Options{Root: t.TempDir()})
+		if supported {
+			t.Error("aider has no transcript adapter; supported must be false")
+		}
+		if resumable {
+			t.Error("resumable must be false when no adapter handles the program")
+		}
+	})
+}

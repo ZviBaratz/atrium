@@ -1,11 +1,11 @@
 ┌─ Sessions ───────────────────────────┐
+│ ATRIUM ──────────────────────────────│
 │▎● Visual overhaul                   ✻│
 │▎  visual-overhaul · ⇡3     * +142 -31│
 │ ◆ bounds                            •│
 │                                    2h│
 │ ‖ markers                           •│
 │   ⇡1                            +8 -3│
-│                                      │
 │                                      │
 │                                      │
 │                                      │

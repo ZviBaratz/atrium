@@ -43,42 +43,78 @@ func TestSetAndRestore(t *testing.T) {
 	}
 }
 
+// TestSetNerdFont verifies the glyph set is an axis orthogonal to the palette:
+// flipping it swaps to the Nerd-Font vendor glyphs while preserving the palette,
+// and restore brings the plain glyphs back. Default is plain (never tofu).
+func TestSetNerdFont(t *testing.T) {
+	if got := Current().Glyphs.Branch; got != "⎇" {
+		t.Fatalf("default Branch glyph = %q, want plain ⎇", got)
+	}
+	wantPalette := Current().Palette
+	restore := SetNerdFont(true)
+	if got, want := Current().Glyphs.Branch, string(rune(nfBranch)); got != want {
+		t.Errorf("nerd-on Branch glyph = %q, want PUA %q", got, want)
+	}
+	if Current().Palette != wantPalette {
+		t.Errorf("SetNerdFont must preserve the palette")
+	}
+	if Current().Name != DefaultThemeName {
+		t.Errorf("SetNerdFont must preserve the palette theme name, got %q", Current().Name)
+	}
+	restore()
+	if got := Current().Glyphs.Branch; got != "⎇" {
+		t.Errorf("after restore, Branch glyph = %q, want plain ⎇", got)
+	}
+}
+
 // TestGlyphWidths guards the alignment invariant: every cell glyph must measure
-// width 1, so column math and the view-bounds test stay correct across themes.
+// width 1, so column math and the view-bounds test stay correct across every
+// palette × glyph-set combination (plain and Nerd-Font).
 func TestGlyphWidths(t *testing.T) {
 	for _, name := range Names() {
-		g := Get(name).Glyphs
-		cells := map[string]string{
-			"Ready":         g.Ready,
-			"ReadySeen":     g.ReadySeen,
-			"Waiting":       g.Waiting,
-			"Paused":        g.Paused,
-			"Branch":        g.Branch,
-			"Ahead":         g.Ahead,
-			"Warn":          g.Warn,
-			"Behind":        g.Behind,
-			"Dirty":         g.Dirty,
-			"PR":            g.PR,
-			"FoldOpen":      g.FoldOpen,
-			"FoldClosed":    g.FoldClosed,
-			"SelectionMark": g.SelectionMark,
-			"MarkChecked":   g.MarkChecked,
-			"DiffAdd":       g.DiffAdd,
-			"DiffDel":       g.DiffDel,
+		for _, nerd := range []bool{false, true} {
+			t.Cleanup(Set(name))
+			t.Cleanup(SetNerdFont(nerd))
+			assertGlyphWidths(t, Current().Name, Current().Glyphs)
 		}
-		for label, glyph := range cells {
-			if w := runewidth.StringWidth(glyph); w != 1 {
-				t.Errorf("%s: glyph %s = %q has width %d, want 1", name, label, glyph, w)
-			}
+	}
+}
+
+// assertGlyphWidths checks the width-1 invariant for one resolved glyph set.
+func assertGlyphWidths(t *testing.T, name string, g Glyphs) {
+	t.Helper()
+	cells := map[string]string{
+		"Ready":         g.Ready,
+		"ReadySeen":     g.ReadySeen,
+		"Waiting":       g.Waiting,
+		"Paused":        g.Paused,
+		"Branch":        g.Branch,
+		"Ahead":         g.Ahead,
+		"Warn":          g.Warn,
+		"Behind":        g.Behind,
+		"Dirty":         g.Dirty,
+		"Note":          g.Note,
+		"PR":            g.PR,
+		"FoldOpen":      g.FoldOpen,
+		"FoldClosed":    g.FoldClosed,
+		"SelectionMark": g.SelectionMark,
+		"MarkChecked":   g.MarkChecked,
+		"DiffAdd":       g.DiffAdd,
+		"DiffDel":       g.DiffDel,
+		"TextCursor":    g.TextCursor,
+	}
+	for label, glyph := range cells {
+		if w := runewidth.StringWidth(glyph); w != 1 {
+			t.Errorf("%s: glyph %s = %q has width %d, want 1", name, label, glyph, w)
 		}
-		// AutoBadge is an optional leading icon: empty (0) or a single cell.
-		if w := runewidth.StringWidth(g.AutoBadge); w > 1 {
-			t.Errorf("%s: AutoBadge %q has width %d, want <=1", name, g.AutoBadge, w)
-		}
-		for i, f := range g.SpinnerFrames {
-			if w := runewidth.StringWidth(f); w != 1 {
-				t.Errorf("%s: spinner frame %d = %q has width %d, want 1", name, i, f, w)
-			}
+	}
+	// AutoBadge is an optional leading icon: empty (0) or a single cell.
+	if w := runewidth.StringWidth(g.AutoBadge); w > 1 {
+		t.Errorf("%s: AutoBadge %q has width %d, want <=1", name, g.AutoBadge, w)
+	}
+	for i, f := range g.SpinnerFrames {
+		if w := runewidth.StringWidth(f); w != 1 {
+			t.Errorf("%s: spinner frame %d = %q has width %d, want 1", name, i, f, w)
 		}
 	}
 }

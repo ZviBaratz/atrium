@@ -12,6 +12,7 @@ import (
 
 	"github.com/ZviBaratz/atrium/internal/actions"
 	"github.com/ZviBaratz/atrium/keys"
+	"github.com/ZviBaratz/atrium/log"
 	"github.com/ZviBaratz/atrium/session"
 	"github.com/ZviBaratz/atrium/session/git"
 	"github.com/ZviBaratz/atrium/ui"
@@ -87,7 +88,7 @@ func (m *home) handlePromptState(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, m.createSessionFromForm(prompt)
 		}
 
-		// Quick-send overlay: fire the message at the selected running session and drop
+		// Quick-send overlay: queue the message for the selected running session and drop
 		// straight back to the list (no new-session help — the session is already up).
 		selected := m.list.GetSelectedInstance()
 		if selected == nil {
@@ -95,8 +96,16 @@ func (m *home) handlePromptState(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.state = stateDefault
 			return m, nil
 		}
-		if err := selected.SendPrompt(prompt); err != nil {
-			return m, m.handleError(err)
+		// Route the message through the same tick-driven, verified delivery as the
+		// new-session prompt rather than sending it inline. SendPrompt now polls to confirm
+		// the text landed and submitted, which must not block the UI thread, and its soft
+		// "pane not ready yet" outcomes must defer to a retry rather than surface as user
+		// errors; queuing reuses that closed-loop machinery (await readiness, paste
+		// multi-line, confirm, idempotent retry, persist) instead of duplicating it here.
+		selected.Prompt = prompt
+		selected.PromptQueuedAt = time.Now()
+		if err := m.persistInstances(); err != nil {
+			log.ErrorLog.Printf("failed to persist queued quick-send prompt: %v", err)
 		}
 		m.textInputOverlay = nil
 		m.state = stateDefault

@@ -119,6 +119,81 @@ func isInputBoxLine(line string) bool {
 	return strings.HasPrefix(s, "❯") || strings.HasPrefix(s, ">")
 }
 
+// stripBoxInterior removes an input-box interior line's side borders, leading prompt
+// char ("❯"/">"), and surrounding whitespace, leaving just the typed text. Used to read
+// back what the user (or a queued-prompt send) has entered into the composer.
+func stripBoxInterior(line string) string {
+	s := strings.TrimSpace(line)
+	s = strings.TrimSpace(strings.TrimPrefix(s, "│")) // left border
+	s = strings.TrimSpace(strings.TrimSuffix(s, "│")) // right border
+	s = strings.TrimPrefix(s, "❯")
+	s = strings.TrimPrefix(s, ">")
+	return strings.TrimSpace(s)
+}
+
+// inputBoxText returns the text currently entered in the agent's live input box and
+// whether a box is on screen at all. The box is the composer at the bottom of the pane: a
+// line opening with the "❯"/">" prompt char, optionally inside "│" side borders. Builds
+// differ — claude draws a borderless interior wrapped by "─" horizontal rules; others use
+// full "│"-bordered rows — so a long entry that wraps across several rows is read by joining
+// every interior line below the prompt char up to the box's bottom rule (or the next box
+// line), stripped of any borders and squashed to single spaces, making the readback
+// width- and border-style-independent. Detection is confined to the bottom WindowPrompt
+// non-empty lines (the same budget the prompt matchers use) so a ">" quoted in the
+// scrolled-back transcript never counts as the box.
+//
+// found=false means no composer is on screen. found=true with empty text means the box is
+// genuinely blank; note that an otherwise-empty composer showing a placeholder/ghost
+// suggestion (claude's `Try "…"` hint) reads that hint back as the text, so callers must
+// not treat the readback as the user's input verbatim — they compare it against the prompt
+// signature with a substring check (see boxHasSignature) precisely so ghost text and the
+// wrap point never cause a false match.
+func inputBoxText(content string) (string, bool) {
+	lines := strings.Split(content, "\n")
+
+	// Restrict to the bottom WindowPrompt non-empty lines.
+	start := 0
+	nonEmpty := 0
+	for i := len(lines) - 1; i >= 0; i-- {
+		if strings.TrimSpace(lines[i]) != "" {
+			nonEmpty++
+			if nonEmpty == WindowPrompt {
+				start = i
+				break
+			}
+		}
+	}
+	window := lines[start:]
+
+	// Anchor on the bottom-most prompt-char line; the box always sits below the
+	// transcript, so the lowest "❯"/">" is the live composer.
+	anchor := -1
+	for i := len(window) - 1; i >= 0; i-- {
+		if isInputBoxLine(window[i]) {
+			anchor = i
+			break
+		}
+	}
+	if anchor < 0 {
+		return "", false
+	}
+
+	// Join the wrapped interior rows below the prompt char. A "│"-bordered build and a
+	// borderless one both terminate the box with a horizontal rule (the bottom border), so
+	// reading until that rule — or a blank line, or a second prompt-char line (a new box) —
+	// captures the whole entry without swallowing the footer that lives below the box.
+	parts := []string{stripBoxInterior(window[anchor])}
+	for i := anchor + 1; i < len(window); i++ {
+		line := window[i]
+		if strings.TrimSpace(line) == "" || isHorizontalRule(line) || isInputBoxLine(line) {
+			break
+		}
+		parts = append(parts, stripBoxInterior(line))
+	}
+	text := whiteSpaceRegex.ReplaceAllString(strings.Join(parts, " "), " ")
+	return strings.TrimSpace(text), true
+}
+
 // footerVisibleInSegments reports whether a live key-hint footer — recognized by the
 // tokens predicate — is on screen. It exists for footers a custom multi-line statusLine
 // can render *below*, pushing them out of any fixed bottom-N window — and a statusLine may

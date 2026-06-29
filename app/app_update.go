@@ -224,10 +224,26 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			msg.instance.ApplyPaneState(msg.state)
 		}
 		return m, nil
+	case promptDeliveredMsg:
+		// Delivery confirmed: retire the queued prompt so it stops being a poll target and
+		// is never re-sent, and persist so the cleared prompt survives a restart.
+		msg.instance.ClearPrompt()
+		if err := m.persistInstances(); err != nil {
+			log.ErrorLog.Printf("failed to persist after prompt delivery: %v", err)
+		}
+		return m, nil
+	case promptDeferredMsg:
+		// Soft outcome (pane not ready, or delivery unconfirmed): keep the prompt queued
+		// and only release the in-flight guard so the next tick retries. SendPrompt is
+		// idempotent, so the retry re-submits an already-staged prompt rather than doubling it.
+		msg.instance.ClearPromptSending()
+		return m, nil
 	case promptSendErrorMsg:
-		// A queued initial prompt that could not be delivered (the session died after
-		// the readiness gate passed). Surface it like the manual send path rather than
-		// leaving the session Ready-but-idle with no sign the prompt was lost.
+		// A queued initial prompt that hard-failed to deliver (the session died after the
+		// readiness gate passed). Retire it so the loop doesn't spin retrying a dead pane,
+		// and surface the loss like the manual send path rather than leaving the session
+		// Ready-but-idle with no sign the prompt was lost.
+		msg.instance.ClearPrompt()
 		return m, m.handleError(fmt.Errorf("failed to deliver prompt to %q: %w", msg.instance.Title, msg.err))
 	case tea.MouseMsg:
 		if msg.Action != tea.MouseActionPress {

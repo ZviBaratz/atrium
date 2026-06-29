@@ -19,7 +19,17 @@ import (
 
 func instWithStatus(t *testing.T, title string, st session.Status) *session.Instance {
 	t.Helper()
-	inst, err := session.NewInstance(session.InstanceOptions{Title: title, Path: ".", Program: "echo"})
+	// A fixed, nonexistent repo path keeps the rendered group header deterministic
+	// (its basename "atrium" is what TestListGolden snapshots) instead of leaking the
+	// checkout directory name. The path can't resolve to a git repo (the child dir
+	// never exists), so GroupKey falls back to filepath.Base — independent of git's
+	// presence or the working directory. The single-row renderer ignores the path, so
+	// the other tests using this helper are unaffected.
+	inst, err := session.NewInstance(session.InstanceOptions{
+		Title:   title,
+		Path:    filepath.Join(t.TempDir(), "atrium"),
+		Program: "echo",
+	})
 	require.NoError(t, err)
 	inst.SetStatus(st)
 	return inst

@@ -54,14 +54,16 @@ func TestList_RendersRepoHeadersWhenMultipleRepos(t *testing.T) {
 	require.Contains(t, out, "REPOB")
 }
 
-func TestList_NoHeadersForSingleRepo(t *testing.T) {
+// A single-repo list still shows the project as a section header so the user
+// always sees which repo the session(s) belong to. The lone group is not
+// foldable, so its header is a plain label with no fold marker — distinguishing
+// it from the foldable multi-repo headers guarded above.
+func TestList_RendersHeaderForSingleRepo(t *testing.T) {
 	l := newGroupList(t, "/tmp/repoA", "/tmp/repoA")
 
 	out := l.String()
-	// With a single repo no header is emitted, so the uppercased header token must
-	// not appear.
-	require.NotContains(t, out, repoHeaderStyle().Render("REPOA"))
-	_ = strings.TrimSpace(out)
+	require.Contains(t, out, "REPOA")
+	require.NotContains(t, out, theme.Current().Glyphs.FoldOpen)
 }
 
 // AddInstance must place a new instance under its existing repo group rather than

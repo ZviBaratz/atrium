@@ -165,11 +165,17 @@ type Config struct {
 	// confirm the kill dialog, so Ctrl+X Ctrl+X tears a session down in one motion.
 	// nil means use the default (on), so configs written before it existed keep it.
 	KillDoubleTapConfirm *bool `json:"kill_double_tap_confirm,omitempty"`
-	// Theme selects the UI color/glyph theme by name (see ui/theme registry:
-	// "tokyo-night", "catppuccin-mocha", "unicode"). Empty falls back to the
-	// default. The "unicode" theme avoids Nerd-Font glyphs for terminals
-	// without a patched font.
+	// Theme selects the UI color palette and border style by name (see ui/theme
+	// registry: "tokyo-night", "catppuccin-mocha", "unicode"). Empty falls back
+	// to the default. Glyphs are a separate axis — see NerdFont; the "unicode"
+	// theme differs only by using square borders.
 	Theme string `json:"theme,omitempty"`
+	// NerdFont, when true, draws the branch / pull-request / dirty / auto markers
+	// with vendor icons from a patched Nerd Font. nil/false (the default) uses
+	// plain Unicode that renders on any font, so a bare terminal never shows tofu
+	// boxes. Orthogonal to Theme: it applies on top of whichever color theme is
+	// selected. Turn it on only if your terminal uses a patched Nerd Font.
+	NerdFont *bool `json:"nerd_font,omitempty"`
 	// SessionContextBar, when true, renders a thin tmux status line inside each
 	// attached session (name · repo · branch · status + a strip of sibling
 	// sessions in the same repo group). nil means use the default (on), so the
@@ -367,6 +373,13 @@ func (c *Config) GetProjectSearchDepth() int {
 // file with no such key) defaults to on, mirroring GetAutoAttach.
 func (c *Config) GetSessionContextBar() bool {
 	return c.SessionContextBar == nil || *c.SessionContextBar
+}
+
+// GetNerdFont reports whether vendor Nerd-Font icons should be used. A nil
+// NerdFont (an older config, or a fresh install) — or a nil Config — defaults to
+// off, so the UI never renders tofu boxes without an explicit opt-in.
+func (c *Config) GetNerdFont() bool {
+	return c != nil && c.NerdFont != nil && *c.NerdFont
 }
 
 // GetHintBar reports whether the always-on bottom hint bar is enabled. A nil

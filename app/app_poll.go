@@ -142,6 +142,21 @@ type promptSendErrorMsg struct {
 	err      error
 }
 
+// promptDeliveredMsg reports that a queued initial prompt was confirmed delivered (typed
+// into the composer and submitted). The main loop clears the queued prompt on receipt, so
+// it stops being a poll target and is never re-sent.
+type promptDeliveredMsg struct {
+	instance *session.Instance
+}
+
+// promptDeferredMsg reports that a delivery attempt could not yet confirm (the pane was not
+// awaiting input, or the text had not landed/submitted) — a soft, expected outcome during
+// boot. The main loop only clears the in-flight guard so the next tick retries; the prompt
+// stays queued. SendPrompt is idempotent, so the retry re-submits rather than re-types.
+type promptDeferredMsg struct {
+	instance *session.Instance
+}
+
 // promptSendAttempts bounds how many times a queued initial prompt's delivery is retried
 // before the failure is surfaced. The readiness gate already confirmed the pane was live
 // and idle, so a failure is usually a dead pane that retrying cannot revive; the extra
@@ -154,21 +169,22 @@ const promptSendAttempts = 3
 var promptSendRetryDelay = 250 * time.Millisecond
 
 // sendWithRetry calls send up to promptSendAttempts times, spacing attempts by
-// promptSendRetryDelay, and returns nil on the first success or the last error once
-// every attempt has failed. It is split out of sendPromptCmd so the bounded-retry
-// policy can be unit-tested directly — SendPrompt is a concrete method with no fake
-// seam, so a real instance can only be made to fail, never to fail-then-succeed.
+// promptSendRetryDelay, to ride out a transient *hard* tmux failure. It returns nil on the
+// first success and stops immediately on a soft outcome (session.IsSoftPromptError) —
+// "pane not ready / not yet confirmed", which must defer to the next tick rather than burn
+// the retry budget — returning that soft error for the caller to route. Only a hard error
+// is retried; the last error is returned once every attempt has failed.
 //
-// Caution: send is retried as a whole, not resumed mid-way. SendPrompt types the
-// prompt and submits it as two steps, so if the pane dies in the ~100ms between them
-// — text typed but not yet submitted — a retry re-types the prompt and the agent may
-// see it doubled. That needs the pane to fail mid-SendPrompt and then recover before
-// the next attempt, which is vanishingly rare; it is accepted rather than guarded.
+// SendPrompt is idempotent across the soft-failure paths (it re-submits an already-staged
+// prompt instead of re-typing it), so a retry after a partial send does not double the
+// prompt — bar the one narrow window noted on SendPrompt where a submit succeeds but its
+// confirmation times out before the box repaints.
 func sendWithRetry(send func() error) error {
 	var err error
 	for attempt := range promptSendAttempts {
-		if err = send(); err == nil {
-			return nil
+		err = send()
+		if err == nil || session.IsSoftPromptError(err) {
+			return err
 		}
 		if attempt < promptSendAttempts-1 {
 			time.Sleep(promptSendRetryDelay) // ride out a transient tmux hiccup
@@ -177,32 +193,41 @@ func sendWithRetry(send func() error) error {
 	return err
 }
 
-// sendPromptCmd submits a queued initial prompt to an instance off the UI thread,
-// so the SendKeys→Enter pause inside SendPrompt does not block rendering. It retries
-// a bounded number of times to ride out a transient tmux failure, and on final failure
-// returns a promptSendErrorMsg so the loss surfaces in the UI rather than being swallowed.
+// sendPromptCmd delivers a queued initial prompt to an instance off the UI thread, so the
+// verify pauses inside SendPrompt do not block rendering. It returns:
+//   - promptDeliveredMsg on confirmed delivery (the main loop then clears the prompt);
+//   - promptDeferredMsg on a soft outcome (pane not ready / unconfirmed) so the next tick
+//     retries with the prompt still queued;
+//   - promptSendErrorMsg on a hard failure after the bounded retries, so the loss surfaces
+//     in the UI rather than being swallowed.
 func sendPromptCmd(instance *session.Instance, prompt string) tea.Cmd {
 	return func() tea.Msg {
-		if err := sendWithRetry(func() error { return instance.SendPrompt(prompt) }); err != nil {
+		err := sendWithRetry(func() error { return instance.SendPrompt(prompt) })
+		switch {
+		case err == nil:
+			log.InfoLog.Printf("delivered queued prompt to %q", instance.Title)
+			return promptDeliveredMsg{instance: instance}
+		case session.IsSoftPromptError(err):
+			return promptDeferredMsg{instance: instance}
+		default:
 			log.ErrorLog.Printf("failed to send queued prompt to %q after %d attempts: %v",
 				instance.Title, promptSendAttempts, err)
 			return promptSendErrorMsg{instance: instance, err: err}
 		}
-		return nil
 	}
 }
 
-// deliverReadyPrompts submits each ready instance's queued prompt and returns the
-// commands that perform the sends. The prompt is cleared synchronously here so it
-// is dispatched at most once, even if a later tick also reports the instance ready.
+// deliverReadyPrompts dispatches a send for each ready instance with a queued prompt and
+// returns the commands that perform them. The prompt is NOT cleared here — it stays queued
+// until delivery is confirmed (promptDeliveredMsg), so a failed or unconfirmed send is
+// retried by a later tick rather than lost. An in-flight guard ensures only one send is
+// outstanding per instance, so overlapping ticks cannot dispatch the same prompt twice.
 func deliverReadyPrompts(results []instanceMetaResult) []tea.Cmd {
 	var cmds []tea.Cmd
 	for _, r := range results {
-		if r.readyForPrompt && r.instance.Prompt != "" {
-			prompt := r.instance.Prompt
-			r.instance.Prompt = ""
-			r.instance.PromptQueuedAt = time.Time{}
-			cmds = append(cmds, sendPromptCmd(r.instance, prompt))
+		if r.readyForPrompt && r.instance.Prompt != "" && !r.instance.PromptSending() {
+			r.instance.MarkPromptSending()
+			cmds = append(cmds, sendPromptCmd(r.instance, r.instance.Prompt))
 		}
 	}
 	return cmds
@@ -217,11 +242,15 @@ const promptDeliveryTimeout = 60 * time.Second
 
 // promptDeliveryReady decides whether a queued startup prompt may be delivered now.
 //
-// gateReady is Instance.IsReadyForPrompt(): the agent has rendered and is past any
-// one-time startup gate (claude's trust-folder / new-MCP-server screen, or the
-// non-claude docs-url screen). This is a hard precondition the timeout never bypasses —
-// keystrokes sent while a gate is up are consumed by the gate dialog, not the agent's
-// input box, so the prompt would be lost.
+// awaitingInput is Instance.AwaitingInput(): the agent has rendered, no startup gate
+// (claude's trust-folder / new-MCP-server screen, the non-claude docs-url screen) and no
+// blocking prompt is up, AND its live input box is on screen. This is a hard precondition
+// the timeout never bypasses — keystrokes sent while anything but the box is up are consumed
+// by that screen, not the agent's input box, so the prompt would be lost. Requiring the
+// box's *presence* (not merely the absence of a known gate) closes the race where a startup
+// screen that has not painted yet — no box on screen — is briefly mistaken for readiness.
+// (A menu-style gate that has painted still reads as a box, so it is the gate/prompt checks
+// inside AwaitingInput, not the box check, that keep its "❯ 1. …" selector out.)
 //
 // Normally we also wait for the pane to leave PaneWorking to avoid the post-trust
 // "loading" transition window. But a chatty agent that writes continuously on boot can
@@ -229,8 +258,8 @@ const promptDeliveryTimeout = 60 * time.Second
 // been queued longer than promptDeliveryTimeout we drop only that busy check. A zero
 // queuedAt disables the timeout (the prompt was queued without a timestamp), falling back
 // to the strict idle-pane requirement.
-func promptDeliveryReady(state tmux.PaneState, gateReady bool, queuedAt, now time.Time) bool {
-	if !gateReady {
+func promptDeliveryReady(state tmux.PaneState, awaitingInput bool, queuedAt, now time.Time) bool {
+	if !awaitingInput {
 		return false
 	}
 	if state != tmux.PaneWorking {
@@ -365,7 +394,7 @@ func tickUpdateMetadataCmd(active []*session.Instance, selected *session.Instanc
 				// window after a new session), so the extra pane capture is rare.
 				if instance.Prompt != "" {
 					r.readyForPrompt = promptDeliveryReady(
-						r.state, instance.IsReadyForPrompt(),
+						r.state, instance.AwaitingInput(),
 						instance.PromptQueuedAt, time.Now())
 				}
 				if instance == selected {

@@ -104,13 +104,18 @@ type Instance struct {
 	UpdatedAt time.Time
 	// AutoYes is true if the instance should automatically press enter when prompted.
 	AutoYes bool
-	// Prompt is the initial prompt to pass to the instance on startup
+	// Prompt is the initial prompt to pass to the instance on startup. It is held until
+	// delivery is confirmed (see SendPrompt) and persisted, so a prompt queued but not yet
+	// delivered survives a restart and is re-delivered on reload.
 	Prompt string
-	// PromptQueuedAt records when Prompt was set (at session creation). It drives the
-	// delivery timeout in promptDeliveryReady so chatty-startup agents that never reach an
-	// idle pane don't stall the first message. Like Prompt it is in-memory only (not
-	// serialized), so a queued prompt does not survive a restart.
+	// PromptQueuedAt records when delivery of Prompt may begin (session creation, or reload
+	// for a restored pending prompt). It drives the delivery timeout in promptDeliveryReady
+	// so chatty-startup agents that never reach an idle pane don't stall the first message.
 	PromptQueuedAt time.Time
+	// promptInFlight guards against a second metadata tick dispatching the same queued
+	// prompt while a send is still running. Owned by the main thread (set in
+	// deliverReadyPrompts, cleared when the send's result is handled), so it never races.
+	promptInFlight bool
 
 	// DiffStats stores the current git diff statistics
 	diffStats *git.DiffStats
@@ -246,6 +251,11 @@ func (i *Instance) ToInstanceData() InstanceData {
 		Model:                i.modelID,
 		PermissionMode:       i.runtimeMode,
 		TmuxName:             i.TmuxSessionName(),
+
+		// Persist an undelivered prompt so it survives a restart and is re-delivered on
+		// reload (a delivered prompt has already been cleared, so this is usually empty).
+		Prompt:         i.Prompt,
+		PromptQueuedAt: i.PromptQueuedAt,
 	}
 
 	// Only include worktree data if gitWorktree is initialized
@@ -305,6 +315,14 @@ func FromInstanceData(ctx context.Context, data InstanceData, branchPrefix strin
 		claudeAccountDefault: data.ClaudeAccountDefault,
 		modelID:              data.Model,
 		runtimeMode:          data.PermissionMode,
+		Prompt:               data.Prompt,
+	}
+
+	// A pending prompt restored from disk re-enters tick-driven delivery on reload. Restart
+	// the delivery-timeout clock from now rather than keeping the (possibly long-past)
+	// original queue time, so the timeout measures the post-restart wait, not wall-clock age.
+	if instance.Prompt != "" {
+		instance.PromptQueuedAt = time.Now()
 	}
 
 	// A direct session has no worktree or diff. For a git session, rehydrate both from
@@ -387,11 +405,26 @@ func FromInstanceData(ctx context.Context, data InstanceData, branchPrefix strin
 	return instance, nil
 }
 
+// startResuming relaunches the dead agent in workDir, resuming its prior conversation
+// only when one actually exists. It blocks resume *only* when the agent's transcript is
+// locatable (claude) AND no session record exists for workDir — the exact case where
+// `claude --continue` aborts with "No conversation found to continue!", killing the pane
+// and bouncing the session straight back to Paused. Agents without a native-transcript
+// adapter (codex/gemini) report supported == false and defer to their own resume probe in
+// tmux.resumeCommand, so their behavior is unchanged.
+func (i *Instance) startResuming(ts *tmux.Session, workDir string) error {
+	resumable, supported := transcript.HasResumable(i.Program, workDir, transcript.Options{Root: i.claudeConfigDir})
+	if supported && !resumable {
+		return ts.Start(workDir)
+	}
+	return ts.StartContinue(workDir)
+}
+
 // recoverInPlace brings a loaded instance back online after its tmux session
 // could not be restored (the session was wedged, or gone entirely). If the
 // worktree is intact it recreates the session in place, resuming the agent's
-// prior conversation (StartContinue, a no-op for non-claude agents) and marks
-// the instance Running. If the worktree is gone, or the restart fails, it
+// prior conversation when one exists (startResuming; a fresh start otherwise) and
+// marks the instance Running. If the worktree is gone, or the restart fails, it
 // degrades to Paused so the branch is preserved and Resume can recover it
 // later — a single bad session must never abort loading the rest.
 //
@@ -404,7 +437,7 @@ func (i *Instance) recoverInPlace() {
 	if wt == nil {
 		// Direct session: no worktree to validate. Restart the agent in the real
 		// directory; on failure leave it Paused so the user can Resume later.
-		if err := i.tmuxSession.StartContinue(i.Path); err != nil {
+		if err := i.startResuming(i.tmuxSession, i.Path); err != nil {
 			log.ErrorLog.Printf("failed to restart direct session %s in place, leaving paused: %v", i.Title, err)
 			i.SetStatus(Paused)
 			return
@@ -425,7 +458,7 @@ func (i *Instance) recoverInPlace() {
 		return
 	}
 
-	if err := i.tmuxSession.StartContinue(wt.GetWorktreePath()); err != nil {
+	if err := i.startResuming(i.tmuxSession, wt.GetWorktreePath()); err != nil {
 		log.ErrorLog.Printf("failed to restart session %s in place, leaving paused: %v", i.Title, err)
 		i.SetStatus(Paused)
 		return
@@ -436,14 +469,14 @@ func (i *Instance) recoverInPlace() {
 }
 
 // recreateSession starts a fresh tmux session for an already-set-up worktree,
-// resuming the agent's prior conversation (StartContinue, a no-op for
-// non-claude agents). On failure it tears down the worktree and returns a
-// wrapped error. Callers must ensure no session with the same name still exists
-// — Start guards against duplicates — so a stale session has to be closed first.
+// resuming the agent's prior conversation when one exists (startResuming; a fresh
+// start otherwise). On failure it tears down the worktree and returns a wrapped
+// error. Callers must ensure no session with the same name still exists — Start
+// guards against duplicates — so a stale session has to be closed first.
 func (i *Instance) recreateSession() error {
 	ts := i.tmux()
 	wt := i.worktree()
-	if err := ts.StartContinue(i.WorkingDir()); err != nil {
+	if err := i.startResuming(ts, i.WorkingDir()); err != nil {
 		log.ErrorLog.Print(err)
 		// Cleanup git worktree if tmux session creation fails. A direct session has no
 		// worktree (wt == nil) and nothing to clean up.
@@ -838,13 +871,14 @@ func (i *Instance) Start(firstTimeSetup bool) error {
 	return nil
 }
 
-// Kill terminates the instance and cleans up all resources
+// Kill terminates the instance and cleans up all resources. It is safe to call at
+// any point in an instance's lifecycle — including from Start()'s error unwind,
+// before started is set, and on a never-started instance — because it only acts on
+// the resources that actually exist: the tmux()/worktree() nil checks below no-op
+// when a resource was never allocated. It must NOT gate on isStarted(): a failed
+// Start() leaves started false yet may already have created the worktree/branch
+// (and a partial tmux session), which an early return would leak.
 func (i *Instance) Kill() error {
-	if !i.isStarted() {
-		// If instance was never started, just return success
-		return nil
-	}
-
 	var tc teardown.Errors
 
 	// Always try to cleanup both resources, even if one fails.
@@ -961,6 +995,44 @@ func (i *Instance) IsReadyForPrompt() bool {
 		return false
 	}
 	return ts.IsReadyForPrompt()
+}
+
+// AwaitingInput reports whether the agent is rendered with its live input box on screen
+// and no startup gate or blocking prompt up — i.e. keystrokes typed now would land in the
+// composer. It is the positive readiness signal that gates queued-prompt delivery, stronger
+// than IsReadyForPrompt: it additionally confirms the box is present, so a pre-box boot
+// frame or a not-yet-painted startup screen that is briefly idle-looking can't be mistaken
+// for readiness. Menu-style gates (claude's trust/new-MCP screens render a "❯ 1. …" selector
+// that looks like a box) are still excluded by the gate/prompt checks, not by the box check;
+// see Session.AwaitingInput.
+func (i *Instance) AwaitingInput() bool {
+	ts := i.tmux()
+	if !i.isStarted() || ts == nil {
+		return false
+	}
+	return ts.AwaitingInput()
+}
+
+// MarkPromptSending / PromptSending / ClearPromptSending manage the in-flight guard that
+// keeps overlapping metadata ticks from dispatching the same queued prompt twice. All three
+// are called only from the main event loop, so the unguarded field never races.
+
+// MarkPromptSending raises the in-flight guard before a queued prompt is dispatched.
+func (i *Instance) MarkPromptSending() { i.promptInFlight = true }
+
+// PromptSending reports whether a queued prompt is currently in flight.
+func (i *Instance) PromptSending() bool { return i.promptInFlight }
+
+// ClearPromptSending lowers the in-flight guard once a prompt dispatch has settled.
+func (i *Instance) ClearPromptSending() { i.promptInFlight = false }
+
+// ClearPrompt retires a queued prompt: it drops the pending text, its timeout clock, and
+// the in-flight guard. Called from the main loop once delivery is confirmed (or definitively
+// abandoned), so a delivered prompt is never re-sent and stops being a poll target.
+func (i *Instance) ClearPrompt() {
+	i.Prompt = ""
+	i.PromptQueuedAt = time.Time{}
+	i.promptInFlight = false
 }
 
 // TapEnter sends an enter key press to the tmux session if AutoYes is enabled.
@@ -1557,7 +1629,127 @@ func (i *Instance) GetPRStatus() *git.PRStatus {
 	return i.prStatus
 }
 
-// SendPrompt sends a prompt to the tmux session
+// Soft prompt-delivery outcomes: the pane was not (yet) in a state to accept or to confirm
+// the prompt. These are not failures — the prompt stays queued and the next metadata tick
+// retries — so the app layer distinguishes them (via IsSoftPromptError) from a hard tmux
+// error, which it surfaces to the user.
+var (
+	errPromptNotReady     = errors.New("agent not awaiting input")
+	errPromptNotLanded    = errors.New("prompt did not land in the input box")
+	errPromptNotSubmitted = errors.New("prompt was typed but not submitted")
+)
+
+// IsSoftPromptError reports whether err from SendPrompt is a retryable soft outcome (the
+// pane was not ready, or delivery could not be confirmed) rather than a hard send failure.
+// On a soft outcome the caller should keep the prompt queued and let the next tick retry;
+// SendPrompt is idempotent, so a retry never doubles the prompt.
+func IsSoftPromptError(err error) bool {
+	return errors.Is(err, errPromptNotReady) ||
+		errors.Is(err, errPromptNotLanded) ||
+		errors.Is(err, errPromptNotSubmitted)
+}
+
+// promptSignatureMax caps the landing-confirmation anchor (see promptSignature) at a length
+// that comfortably fits one composer row on any reasonable pane width, so the anchor itself
+// never wraps and the squashed-whitespace match stays exact.
+const promptSignatureMax = 40
+
+// promptVerifyInterval spaces the post-type and post-submit pane re-captures while
+// confirming delivery. A var so tests can zero it and stay fast.
+var promptVerifyInterval = 100 * time.Millisecond
+
+// promptLandAttempts / promptSubmitAttempts bound how long SendPrompt waits (in
+// promptVerifyInterval steps) for the typed text to appear in the box, and for it to clear
+// after Enter, before returning a soft error that defers to the next tick.
+const (
+	promptLandAttempts   = 5
+	promptSubmitAttempts = 5
+)
+
+// squashSpace removes all whitespace from s. The input-box readback flattens the composer's
+// wrapped rows by joining them with spaces, and a terminal wrap can fall mid-word; comparing
+// both the readback and the signature with all whitespace removed makes the landing check
+// immune to wherever the box wrapped the text.
+func squashSpace(s string) string {
+	return strings.Join(strings.Fields(s), "")
+}
+
+// promptSignature is the recognizable anchor used to confirm a queued prompt actually
+// reached the composer: the first non-empty line, whitespace-squashed and capped. It is
+// matched (as a substring) against the squashed input-box readback. Empty only for an
+// all-blank prompt, which is never queued.
+func promptSignature(prompt string) string {
+	for _, line := range strings.Split(prompt, "\n") {
+		sq := squashSpace(line)
+		if sq == "" {
+			continue
+		}
+		if r := []rune(sq); len(r) > promptSignatureMax {
+			sq = string(r[:promptSignatureMax])
+		}
+		return sq
+	}
+	return ""
+}
+
+// boxHasSignature reports whether the agent's input box currently contains sig (squashed).
+func boxHasSignature(ts *tmux.Session, sig string) bool {
+	if sig == "" {
+		return false
+	}
+	text, ok := ts.InputBoxText()
+	if !ok {
+		return false
+	}
+	return strings.Contains(squashSpace(text), sig)
+}
+
+// confirmBox polls pred up to attempts times, spaced by promptVerifyInterval, returning
+// true on the first satisfied check. It gives the agent's TUI a moment to repaint after a
+// paste or an Enter before SendPrompt concludes whether delivery was confirmed.
+func confirmBox(pred func() bool, attempts int) bool {
+	for k := 0; k < attempts; k++ {
+		if pred() {
+			return true
+		}
+		time.Sleep(promptVerifyInterval)
+	}
+	return false
+}
+
+// typePrompt enters the prompt text into the composer without submitting it. A multi-line
+// prompt is pasted as one bracketed-paste block (so the agent does not submit on the first
+// newline and drop the rest); a single-line prompt is typed literally.
+func (i *Instance) typePrompt(ts *tmux.Session, prompt string) error {
+	if strings.Contains(prompt, "\n") {
+		if err := ts.SendPasted(prompt); err != nil {
+			return fmt.Errorf("error pasting prompt to tmux session: %w", err)
+		}
+		return nil
+	}
+	if err := ts.SendKeys(prompt); err != nil {
+		return fmt.Errorf("error sending keys to tmux session: %w", err)
+	}
+	return nil
+}
+
+// SendPrompt delivers a queued initial prompt into the agent and submits it, verifying each
+// step so the prompt is never silently dropped onto the wrong screen. It:
+//
+//  1. confirms the agent is awaiting input (else returns a soft error to retry next tick);
+//  2. types the prompt — unless a prior attempt already staged it in the box — as a paste
+//     for multi-line text or literal keys for a single line;
+//  3. confirms the text landed in the box before submitting (soft error if it never does);
+//  4. presses Enter and confirms the box cleared (soft error if it did not submit).
+//
+// It is idempotent across the common soft-failure paths: step 2 is skipped when the box
+// already holds the prompt, so a retry after a not-yet-submitted attempt re-submits rather
+// than re-types. The one residual doubling window is a submit that actually succeeded but
+// whose post-Enter confirmation (step 4) timed out before the box repainted as cleared: the
+// next attempt then sees an empty box and re-types. That needs the box to clear later than
+// promptSubmitAttempts*promptVerifyInterval after a successful Enter, which the agents we
+// target do effectively instantly, so it is accepted rather than guarded. Hard tmux failures
+// (dead pane, send-keys error) are returned wrapped for the caller to surface.
 func (i *Instance) SendPrompt(prompt string) error {
 	ts := i.tmux()
 	if !i.isStarted() {
@@ -1566,16 +1758,28 @@ func (i *Instance) SendPrompt(prompt string) error {
 	if ts == nil {
 		return fmt.Errorf("tmux session not initialized")
 	}
-	if err := ts.SendKeys(prompt); err != nil {
-		return fmt.Errorf("error sending keys to tmux session: %w", err)
+	if !ts.AwaitingInput() {
+		return errPromptNotReady
 	}
 
-	// Brief pause to prevent carriage return from being interpreted as newline
-	time.Sleep(100 * time.Millisecond)
+	sig := promptSignature(prompt)
+	// Skip typing if a previous attempt already staged this prompt in the box but could
+	// not confirm its submission; retype only when the box does not already hold it.
+	if !boxHasSignature(ts, sig) {
+		if err := i.typePrompt(ts, prompt); err != nil {
+			return err
+		}
+		if !confirmBox(func() bool { return boxHasSignature(ts, sig) }, promptLandAttempts) {
+			return errPromptNotLanded
+		}
+	}
+
 	if err := ts.TapEnter(); err != nil {
-		return fmt.Errorf("error tapping enter: %w", err)
+		return fmt.Errorf("error submitting prompt to tmux session: %w", err)
 	}
-
+	if !confirmBox(func() bool { return !boxHasSignature(ts, sig) }, promptSubmitAttempts) {
+		return errPromptNotSubmitted
+	}
 	return nil
 }
 

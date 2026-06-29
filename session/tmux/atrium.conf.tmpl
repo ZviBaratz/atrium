@@ -29,8 +29,13 @@ set-option -g  mouse              on
 # selections land only in a tmux paste buffer and never update the OS clipboard,
 # so a paste returns stale content. set-clipboard on also lets programs running
 # in the pane set the clipboard.
+#
+# The value is double-quoted, so tmux's config lexer processes the escapes: ESC and
+# BEL MUST be written as 3-digit octal (\033, \007). A 1-digit octal like \7 is a
+# hard "invalid octal escape" parse error on tmux, and \E yields a literal 'E', not
+# ESC — either one silently or fatally breaks the OSC 52 sequence.
 set-option -g  set-clipboard      on
-set-option -ga terminal-overrides ",*:Ms=\E]52;%p1%s;%p2%s\7"
+set-option -ga terminal-overrides ",*:Ms=\033]52;%p1%s;%p2%s\007"
 
 {{if .ContextBar -}}
 # In-session context as a single, minimal top header carrying session identity

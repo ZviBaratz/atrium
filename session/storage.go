@@ -25,6 +25,13 @@ type InstanceData struct {
 	UpdatedAt time.Time `json:"updated_at"`
 	AutoYes   bool      `json:"auto_yes"`
 
+	// Prompt is an initial prompt that was queued but not yet delivered to the agent.
+	// Persisting it lets a pending prompt survive a restart before delivery; a delivered
+	// prompt has been cleared, so this is empty for all but freshly-created sessions.
+	// PromptQueuedAt is its delivery-timeout clock (reset to load time on restore).
+	Prompt         string    `json:"prompt,omitempty"`
+	PromptQueuedAt time.Time `json:"prompt_queued_at,omitempty"`
+
 	// Unread marks a Ready session the user has not visited since the agent last
 	// finished a turn. omitempty keeps old state files (and seen sessions) compact;
 	// absence deserializes to false (= seen), so upgrades stay quiet.

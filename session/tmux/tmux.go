@@ -509,6 +509,51 @@ func (t *Session) IsReadyForPrompt() bool {
 	return !gated
 }
 
+// AwaitingInput reports whether keystrokes typed now would land in the agent's live
+// input box. It is the positive readiness signal for delivering a queued initial prompt:
+// the session exists, the pane has rendered, no startup gate (GateUp, raw pane) and no
+// blocking prompt (DetectPrompt) is up, and the composer's input box is actually on screen
+// (InputBoxVisible).
+//
+// Requiring the box's presence — not merely the absence of a *known* gate, as
+// IsReadyForPrompt does — closes the timing race this fix targets: a pre-box boot frame or
+// a late-painting startup screen that is briefly idle-looking has no composer yet, so it can
+// no longer be mistaken for readiness and swallow the prompt. It does not, on its own,
+// distinguish a menu-style gate from the composer: claude renders its trust/new-MCP screens
+// as a "❯ 1. …" selector, which reads as a box line, so those gates are still excluded by
+// GateUp / DetectPrompt above, not by the box check. Readiness is therefore the conjunction:
+// no known gate or prompt AND a box on screen. It is a read-only check: it captures the pane
+// once and never sends keystrokes.
+func (t *Session) AwaitingInput() bool {
+	if !t.DoesSessionExist() {
+		return false
+	}
+	raw, err := t.CapturePaneContent()
+	if err != nil || strings.TrimSpace(raw) == "" {
+		return false
+	}
+	if _, gated := t.adapter.GateUp(raw); gated {
+		return false
+	}
+	content := cleanForDetection(raw)
+	if _, prompted := t.adapter.DetectPrompt(content); prompted {
+		return false
+	}
+	return t.adapter.InputBoxVisible(content)
+}
+
+// InputBoxText returns the text currently shown in the agent's live input box and whether
+// a box is on screen, from a fresh capture. It backs the closed-loop send: after typing a
+// queued prompt the caller confirms the box now holds that text (it landed) and, after
+// submitting, that the box no longer holds it (it was sent).
+func (t *Session) InputBoxText() (string, bool) {
+	raw, err := t.CapturePaneContent()
+	if err != nil {
+		return "", false
+	}
+	return t.adapter.InputBoxText(cleanForDetection(raw))
+}
+
 // Restore attaches to an existing session and restores the window size
 func (t *Session) Restore() error {
 	// The attach client lives until detach/close, so it runs under the bare base
@@ -707,6 +752,32 @@ func (t *Session) SendKeys(keys string) error {
 		return nil
 	}
 	return t.sendKeysToPane("-l", "--", keys)
+}
+
+// SendPasted delivers text into the agent pane as a single bracketed-paste block via a
+// tmux paste buffer, preserving embedded newlines without submitting on each one. Typing a
+// multi-line prompt with send-keys -l feeds literal line feeds, and most agent TUIs submit
+// on the first newline — dropping every line after it. Staging the text in a buffer and
+// pasting with -p (bracketed paste) makes the agent receive the whole block as pasted text,
+// exactly as if the user pasted it; the caller's subsequent single Enter submits it once.
+// The buffer is named per session and deleted on paste (-d), so concurrent sessions sharing
+// the tmux server do not collide and no buffer leaks.
+func (t *Session) SendPasted(text string) error {
+	if text == "" {
+		return nil
+	}
+	ctx, cancel := t.opContext()
+	defer cancel()
+	buf := "atrium-prompt-" + t.snapshotName()
+	// set-buffer passes the text as a single argv element (-- guards a leading dash), so no
+	// stdin plumbing is needed and the staged value is verbatim — newlines included.
+	if err := t.cmdExec.Run(tmuxCommand(ctx, "set-buffer", "-b", buf, "--", text)); err != nil {
+		return fmt.Errorf("error staging tmux paste buffer: %w", err)
+	}
+	if err := t.cmdExec.Run(tmuxCommand(ctx, "paste-buffer", "-d", "-p", "-b", buf, "-t", t.paneTarget())); err != nil {
+		return fmt.Errorf("error pasting buffer to tmux pane: %w", err)
+	}
+	return nil
 }
 
 // sendKeysToPane runs send-keys against the agent pane (paneTarget), never by

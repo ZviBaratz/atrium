@@ -252,6 +252,14 @@ list to your config file:
 - Omitting `claude_accounts` disables the feature entirely (no badge, no
   injection), so existing configs are unaffected.
 
+> **Git identity & SSH keys are handled outside Atrium.** This feature routes only
+> the *Claude Code account* (`CLAUDE_CONFIG_DIR`). Git commit identity
+> (`user.email` / `user.signingkey`) and the SSH key used to fetch/push are selected
+> by your machine's git config from the repo's remote org — e.g. a remote-based
+> `includeIf "hasconfig:remote.*.url:…"` (git ≥ 2.36) so a work repo's worktree
+> resolves to the work identity and key regardless of its path under
+> `~/.atrium/worktrees/`. Atrium deliberately carries no git-identity logic; it relies
+> on that system, which keys off the same remote signal as `remote_matches` above.
 ### FAQs
 
 #### Failed to start new session

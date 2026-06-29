@@ -297,8 +297,10 @@ func newHome(ctx context.Context, program string, autoYes bool, version, binName
 	maybeTrustWorktreesRoot(appConfig, program)
 
 	// Activate the configured UI theme before any component is constructed, so
-	// theme.Current() is correct everywhere it's read. Set once, never mutated.
+	// theme.Current() is correct everywhere it's read. The palette and the
+	// glyph set (plain vs Nerd-Font) are independent axes.
 	theme.Set(appConfig.Theme)
+	theme.SetNerdFont(appConfig.GetNerdFont())
 
 	// Load application state
 	appState := config.LoadState()
