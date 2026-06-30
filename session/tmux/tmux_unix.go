@@ -17,8 +17,9 @@ import (
 
 // winchDebounce is how long runWindowSizeMonitor waits after the last resize signal
 // before applying the new size, collapsing a drag's burst of events into one resize.
-// A var, not a const, so tests can shorten it.
-var winchDebounce = 50 * time.Millisecond
+// Tests drive runWindowSizeMonitor directly with their own debounce, so this is just
+// the production value.
+const winchDebounce = 50 * time.Millisecond
 
 // monitorWindowSize applies the current terminal size to the attached pty and keeps
 // it in sync with SIGWINCH for the life of the attach.
