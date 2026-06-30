@@ -79,11 +79,13 @@ func (d *DiffStats) IsEmpty() bool {
 // the differing middle to fill. It checks for a base commit (surfacing the
 // recognizable errBaseCommitNotSet rather than running `git diff ""`), snapshots
 // the worktree path under the lock so a concurrent deep Rename — which moves the
-// worktree and swaps the field — can't tear the read, surfaces untracked files
+// worktree and swaps the field — can't tear the read (subsequent git calls run
+// against the local snapshot without holding the lock), surfaces untracked files
 // best-effort (see intentAddUntracked; its error is intentionally not
-// propagated), then runs fill to populate the line/file counts. On a base-commit
-// or fill error it returns early with stats.Error set and no repo stats; on
-// success it fills the commit/behind/dirty counters before returning.
+// propagated), then runs fill to populate the diff stats (the line/file counts,
+// plus the full content for Diff). On a base-commit or fill error it returns early
+// with stats.Error set and no repo stats; on success it fills the
+// commit/behind/dirty counters before returning.
 func (g *Worktree) diffWith(fill func(wt string, stats *DiffStats) error) *DiffStats {
 	stats := &DiffStats{}
 
