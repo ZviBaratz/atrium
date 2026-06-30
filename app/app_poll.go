@@ -3,6 +3,7 @@ package app
 // Per-tick metadata poll loop, pane-state application, and prompt delivery.
 
 import (
+	"context"
 	"strings"
 	"sync"
 	"time"
@@ -318,12 +319,12 @@ type metadataSweepDoneMsg struct {
 // so a stale "running" on a now-idle agent doesn't linger; background rows keep the
 // hysteresis Poll so a mid-turn agent isn't falsely flagged done (see collectMetadata's
 // fresh argument). Returns nil when there are no active sessions to refresh.
-func sweepMetadataNowCmd(active []*session.Instance, selected *session.Instance) tea.Cmd {
+func sweepMetadataNowCmd(ctx context.Context, active []*session.Instance, selected *session.Instance) tea.Cmd {
 	if len(active) == 0 {
 		return nil
 	}
 	return func() tea.Msg {
-		return metadataSweepDoneMsg{results: collectMetadata(active, selected, true)}
+		return metadataSweepDoneMsg{results: collectMetadata(ctx, active, selected, true)}
 	}
 }
 
@@ -379,7 +380,7 @@ func pollTargets(active []*session.Instance, selected *session.Instance, fullSwe
 // use the hysteresis Poll — they carry no ready-suppression, so a single marker-absent
 // sample of a mid-turn agent must not be allowed to flag a false completion. The periodic
 // tick passes fresh=false, so every row uses the hysteresis Poll there.
-func collectMetadata(poll []*session.Instance, selected *session.Instance, fresh bool) []instanceMetaResult {
+func collectMetadata(ctx context.Context, poll []*session.Instance, selected *session.Instance, fresh bool) []instanceMetaResult {
 	results := make([]instanceMetaResult, len(poll))
 	var wg sync.WaitGroup
 	for idx, inst := range poll {
@@ -388,6 +389,15 @@ func collectMetadata(poll []*session.Instance, selected *session.Instance, fresh
 			defer wg.Done()
 			r := &results[i]
 			r.instance = instance
+			// Bail before firing any subprocess once the app context is cancelled
+			// (shutdown): each probe below would only fail fast against a torn-down
+			// instance. r.instance is already set, so applyMetadataResults — which
+			// leaves a zero PaneUnknown state untouched — never derefs a nil here. The
+			// zero diff/PR stats it does apply are harmless: this fires only on the
+			// shutdown tick, and a cancelled probe would have nilled them anyway.
+			if ctx.Err() != nil {
+				return
+			}
 			// A started session whose tmux pane has died would fail every probe
 			// (capture, diff) and flood the log/error box. Poll reports a dead
 			// session as PaneDead from its own (single) has-session check, so derive
@@ -475,6 +485,16 @@ func applyDiffStats(inst *session.Instance, stats *git.DiffStats) {
 	inst.SetDiffStats(stats)
 }
 
+// Context contract for poll tea.Cmd closures: tickUpdateMetadataCmd and
+// sweepMetadataNowCmd capture the app context (home.ctx) and must honor it so app
+// shutdown unwinds in-flight poll work instead of running it to completion. The tick's
+// 500ms wait selects on ctx.Done(); collectMetadata's per-instance fan-out
+// short-circuits when ctx is cancelled; and the underlying I/O derives its kill signal
+// from each instance's baseCtx (= the app ctx): tmux capture and git diff cancel their
+// subprocesses (exec.CommandContext), and ComputeModel's transcript read honors
+// ctx via Instance.baseContext(). The metadataUpdateDoneMsg handler also stops re-arming
+// once ctx is cancelled, so the tick chain ends on shutdown.
+//
 // tickUpdateMetadataCmd returns a self-chaining Cmd that sleeps 500ms, then performs
 // expensive metadata I/O (tmux capture, git diff) in parallel background goroutines.
 // Because it only re-schedules after completing, overlapping ticks are impossible.
@@ -489,9 +509,15 @@ func applyDiffStats(inst *session.Instance, stats *git.DiffStats) {
 // Only the selected instance gets a full diff (with Content); the rest get a
 // lightweight numstat-only summary. This keeps per-instance memory bounded
 // since the diff pane only ever renders the selected one.
-func tickUpdateMetadataCmd(active []*session.Instance, selected *session.Instance, fullSweep bool) tea.Cmd {
+func tickUpdateMetadataCmd(ctx context.Context, active []*session.Instance, selected *session.Instance, fullSweep bool) tea.Cmd {
 	return func() tea.Msg {
-		time.Sleep(500 * time.Millisecond)
+		// Honor ctx during the inter-tick wait so a shutdown mid-sleep doesn't leave
+		// this goroutine parked for up to 500ms.
+		select {
+		case <-time.After(500 * time.Millisecond):
+		case <-ctx.Done():
+			return metadataUpdateDoneMsg{}
+		}
 
 		if len(active) == 0 {
 			return metadataUpdateDoneMsg{}
@@ -502,6 +528,6 @@ func tickUpdateMetadataCmd(active []*session.Instance, selected *session.Instanc
 			return metadataUpdateDoneMsg{}
 		}
 
-		return metadataUpdateDoneMsg{results: collectMetadata(poll, selected, false)}
+		return metadataUpdateDoneMsg{results: collectMetadata(ctx, poll, selected, false)}
 	}
 }

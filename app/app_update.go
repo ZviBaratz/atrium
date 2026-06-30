@@ -186,7 +186,11 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmds := m.applyMetadataResults(msg.results)
 		m.metadataTick++
 		fullSweep := m.metadataTick%metadataFullSweepEvery == 0
-		cmds = append(cmds, tickUpdateMetadataCmd(m.snapshotActiveInstances(), m.list.GetSelectedInstance(), fullSweep))
+		// Stop the self-chaining tick once the app context is cancelled (shutdown):
+		// re-arming would only spawn a Cmd that immediately returns on ctx.Done().
+		if m.ctx.Err() == nil {
+			cmds = append(cmds, tickUpdateMetadataCmd(m.ctx, m.snapshotActiveInstances(), m.list.GetSelectedInstance(), fullSweep))
+		}
 		return m, tea.Batch(cmds...)
 	case metadataSweepDoneMsg:
 		// A one-shot background refresh fired on detach (sweepMetadataNowCmd). Apply the
@@ -574,7 +578,7 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		selected := m.list.GetSelectedInstance()
 		m.lastStatusPollSelection = selected
 		return m, tea.Batch(tea.WindowSize(), m.instanceChanged(),
-			sweepMetadataNowCmd(m.snapshotActiveInstances(), selected))
+			sweepMetadataNowCmd(m.ctx, m.snapshotActiveInstances(), selected))
 	case infoMsg:
 		// An action requested a dismissible info modal (e.g. an actionable resume
 		// error). Unlike handleError's transient box, this persists until dismissed.

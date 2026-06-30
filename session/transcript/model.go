@@ -1,6 +1,7 @@
 package transcript
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -41,13 +42,21 @@ const syntheticModel = "<synthetic>"
 // keeps its last value and, because the stamp advanced, won't re-parse the
 // same bytes. Non-claude programs return ErrUnsupported, like Render.
 //
+// It honors ctx: an already-cancelled context returns ("", prev, ctx.Err())
+// before any filesystem I/O, and a cancellation mid-scan aborts the tail read.
+// The poll goroutine passes the session's lifecycle context (Instance.baseCtx),
+// so app shutdown unwinds an in-flight extraction instead of running it to end.
+//
 // The headless auto-namer runs `claude -p` cwd'd to the session's worktree —
 // it would shadow the session's transcript here, except it passes
 // --no-session-persistence (see session/naming.go). Any future headless claude
 // invocation cwd'd to a worktree must keep that flag.
-func LatestModel(program, workingDir string, prev Stamp, opts Options) (string, Stamp, error) {
+func LatestModel(ctx context.Context, program, workingDir string, prev Stamp, opts Options) (string, Stamp, error) {
 	if !(claudeAdapter{}).supports(program) {
 		return "", prev, ErrUnsupported
+	}
+	if err := ctx.Err(); err != nil {
+		return "", prev, err
 	}
 	// Apply the model-sized tail cap before applyDefaults, which would fill a
 	// zero MaxBytes with the render path's larger default.
@@ -70,7 +79,7 @@ func LatestModel(program, workingDir string, prev Stamp, opts Options) (string, 
 	}
 
 	model := ""
-	if _, err := scanTail(path, opts.MaxBytes, func(line []byte) {
+	if _, err := scanTail(ctx, path, opts.MaxBytes, func(line []byte) {
 		if m, ok := decodeModel(line); ok {
 			model = m // last qualifying entry wins
 		}

@@ -1,6 +1,7 @@
 package transcript
 
 import (
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
@@ -31,7 +32,7 @@ func TestLatestModel_NewestAssistantWins(t *testing.T) {
 	}
 	root, path := modelRoot(t, cwd, string(data), time.Now())
 
-	model, stamp, err := LatestModel("claude", cwd, Stamp{}, Options{Root: root})
+	model, stamp, err := LatestModel(context.Background(), "claude", cwd, Stamp{}, Options{Root: root})
 	if err != nil {
 		t.Fatalf("LatestModel: %v", err)
 	}
@@ -51,7 +52,7 @@ func TestLatestModel_BareAlias(t *testing.T) {
 		`{"type":"assistant","isSidechain":false,"message":{"model":"fable","content":[{"type":"text","text":"hi"}]}}`+"\n",
 		time.Now())
 
-	model, _, err := LatestModel("claude", cwd, Stamp{}, Options{Root: root})
+	model, _, err := LatestModel(context.Background(), "claude", cwd, Stamp{}, Options{Root: root})
 	if err != nil {
 		t.Fatalf("LatestModel: %v", err)
 	}
@@ -69,12 +70,12 @@ func TestLatestModel_StampShortCircuit(t *testing.T) {
 	mtime := time.Now().Add(-time.Minute)
 	root, path := modelRoot(t, cwd, base, mtime)
 
-	model, stamp, err := LatestModel("claude", cwd, Stamp{}, Options{Root: root})
+	model, stamp, err := LatestModel(context.Background(), "claude", cwd, Stamp{}, Options{Root: root})
 	if err != nil || model != "claude-sonnet-4-6" {
 		t.Fatalf("first call: model=%q err=%v", model, err)
 	}
 
-	model, again, err := LatestModel("claude", cwd, stamp, Options{Root: root})
+	model, again, err := LatestModel(context.Background(), "claude", cwd, stamp, Options{Root: root})
 	if err != nil {
 		t.Fatalf("second call: %v", err)
 	}
@@ -85,7 +86,7 @@ func TestLatestModel_StampShortCircuit(t *testing.T) {
 	appended := base + `{"type":"assistant","isSidechain":false,"message":{"model":"claude-opus-4-7","content":[{"type":"text","text":"more"}]}}` + "\n"
 	writeFileWithMtime(t, path, appended, mtime.Add(30*time.Second))
 
-	model, fresh, err := LatestModel("claude", cwd, stamp, Options{Root: root})
+	model, fresh, err := LatestModel(context.Background(), "claude", cwd, stamp, Options{Root: root})
 	if err != nil {
 		t.Fatalf("third call: %v", err)
 	}
@@ -109,7 +110,7 @@ func TestLatestModel_NoAssistantInWindow(t *testing.T) {
 		`{"type":"user","isSidechain":false,"message":{"content":[{"type":"tool_result","content":"` + strings.Repeat("x", 8*1024) + `"}]}}` + "\n"
 	root, _ := modelRoot(t, cwd, content, time.Now())
 
-	model, stamp, err := LatestModel("claude", cwd, Stamp{}, Options{Root: root, MaxBytes: 1024})
+	model, stamp, err := LatestModel(context.Background(), "claude", cwd, Stamp{}, Options{Root: root, MaxBytes: 1024})
 	if err != nil {
 		t.Fatalf("LatestModel: %v", err)
 	}
@@ -124,7 +125,7 @@ func TestLatestModel_NoAssistantInWindow(t *testing.T) {
 // TestLatestModel_Unsupported: non-claude programs return ErrUnsupported, the
 // same contract as Render.
 func TestLatestModel_Unsupported(t *testing.T) {
-	_, _, err := LatestModel("codex", "/anywhere", Stamp{}, Options{Root: t.TempDir()})
+	_, _, err := LatestModel(context.Background(), "codex", "/anywhere", Stamp{}, Options{Root: t.TempDir()})
 	if !errors.Is(err, ErrUnsupported) {
 		t.Errorf("err = %v, want ErrUnsupported", err)
 	}
@@ -140,12 +141,38 @@ func TestLatestModel_EnvRootFallback(t *testing.T) {
 		time.Now())
 	t.Setenv("CLAUDE_CONFIG_DIR", root)
 
-	model, _, err := LatestModel("claude", cwd, Stamp{}, Options{})
+	model, _, err := LatestModel(context.Background(), "claude", cwd, Stamp{}, Options{})
 	if err != nil {
 		t.Fatalf("LatestModel: %v", err)
 	}
 	if model != "claude-opus-4-8" {
 		t.Errorf("model = %q, want claude-opus-4-8", model)
+	}
+}
+
+// TestLatestModelCanceledContextReturnsPromptly pins the cancellation contract:
+// an already-cancelled context short-circuits before any filesystem I/O, returning
+// the caller's prev stamp and ctx.Err(). This is the poll path's shutdown behavior —
+// a cancelled app context unwinds an in-flight transcript read instead of parsing it.
+func TestLatestModelCanceledContextReturnsPromptly(t *testing.T) {
+	const cwd = "/home/zvi/work"
+	root, _ := modelRoot(t, cwd,
+		`{"type":"assistant","isSidechain":false,"message":{"model":"claude-opus-4-8","content":[{"type":"text","text":"hi"}]}}`+"\n",
+		time.Now())
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	prev := Stamp{Path: "/sentinel"}
+	model, stamp, err := LatestModel(ctx, "claude", cwd, prev, Options{Root: root})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v, want context.Canceled", err)
+	}
+	if model != "" {
+		t.Errorf("model = %q, want \"\" on cancellation", model)
+	}
+	if !stamp.Equal(prev) {
+		t.Errorf("stamp = %+v, want prev %+v returned unchanged", stamp, prev)
 	}
 }
 

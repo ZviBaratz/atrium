@@ -1,10 +1,13 @@
 package app
 
 import (
+	"context"
 	"testing"
+	"time"
 
 	"github.com/ZviBaratz/atrium/session"
 
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/stretchr/testify/require"
 )
 
@@ -55,10 +58,34 @@ func TestSweepMetadataNowCmdGuards(t *testing.T) {
 	}
 	selected, other := newInst(), newInst()
 
-	require.Nil(t, sweepMetadataNowCmd(nil, selected),
+	require.Nil(t, sweepMetadataNowCmd(context.Background(), nil, selected),
 		"no active sessions yields no sweep")
-	require.NotNil(t, sweepMetadataNowCmd([]*session.Instance{selected}, selected),
+	require.NotNil(t, sweepMetadataNowCmd(context.Background(), []*session.Instance{selected}, selected),
 		"the selected row alone still yields a sweep (it is refreshed face-value)")
-	require.NotNil(t, sweepMetadataNowCmd([]*session.Instance{selected, other}, selected),
+	require.NotNil(t, sweepMetadataNowCmd(context.Background(), []*session.Instance{selected, other}, selected),
 		"active rows present yield a sweep")
+}
+
+// TestTickUpdateMetadataCmdHonorsContextCancellation pins the shutdown contract: the
+// self-chaining metadata tick selects on ctx.Done() during its 500ms inter-tick wait, so
+// a cancelled app context unblocks the in-flight poll Cmd promptly instead of leaving its
+// goroutine parked for up to half a second. (The Cmd wg.Wait()s its per-instance fan-out,
+// so its prompt return also proves those children unwound.)
+func TestTickUpdateMetadataCmdHonorsContextCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	// Empty active slice: the tick still runs its inter-tick wait before the len check,
+	// which is exactly the cancellable sleep under test.
+	cmd := tickUpdateMetadataCmd(ctx, nil, nil, true)
+
+	done := make(chan tea.Msg, 1)
+	go func() { done <- cmd() }()
+
+	cancel()
+
+	select {
+	case msg := <-done:
+		require.IsType(t, metadataUpdateDoneMsg{}, msg)
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("tick did not unblock within 200ms of cancellation (sleep ignored ctx)")
+	}
 }

@@ -2,6 +2,7 @@ package transcript
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"io"
 	"os"
@@ -59,7 +60,10 @@ const scannerBufMax = 4 << 20
 // truncated=true. Malformed lines, housekeeping entry types, and sidechain
 // entries are skipped; only user/assistant message entries are returned.
 func parseTail(path string, maxBytes int64) (entries []entry, truncated bool, err error) {
-	truncated, err = scanTail(path, maxBytes, func(line []byte) {
+	// The render path is a synchronous UI-thread call, not a leaked background
+	// goroutine, so it is not cancellation-sensitive — pass a never-cancelled
+	// context. Only the poll path (LatestModel) threads a real one.
+	truncated, err = scanTail(context.Background(), path, maxBytes, func(line []byte) {
 		if e, ok := decodeLine(line); ok {
 			entries = append(entries, e)
 		}
@@ -72,8 +76,14 @@ func parseTail(path string, maxBytes int64) (entries []entry, truncated bool, er
 
 // scanTail streams the lines in the last maxBytes of path to fn, discarding a
 // leading partial line when the window starts mid-file (truncated=true). It is
-// the shared tail-reading core under parseTail (render) and LatestModel.
-func scanTail(path string, maxBytes int64, fn func(line []byte)) (truncated bool, err error) {
+// the shared tail-reading core under parseTail (render) and LatestModel. It
+// honors ctx: an already-cancelled context is reported before any I/O, and a
+// cancellation mid-scan aborts with ctx.Err() rather than reading to the end.
+func scanTail(ctx context.Context, path string, maxBytes int64, fn func(line []byte)) (truncated bool, err error) {
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+
 	f, err := os.Open(path)
 	if err != nil {
 		return false, err
@@ -95,6 +105,9 @@ func scanTail(path string, maxBytes int64, fn func(line []byte)) (truncated bool
 	sc.Buffer(make([]byte, 64*1024), scannerBufMax)
 	skipFirst := truncated
 	for sc.Scan() {
+		if err := ctx.Err(); err != nil {
+			return truncated, err
+		}
 		if skipFirst {
 			skipFirst = false
 			continue

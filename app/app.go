@@ -388,7 +388,7 @@ func (m *home) Init() tea.Cmd {
 			time.Sleep(100 * time.Millisecond)
 			return previewTickMsg{}
 		},
-		tickUpdateMetadataCmd(m.snapshotActiveInstances(), m.list.GetSelectedInstance(), true), // first tick: full sweep
+		tickUpdateMetadataCmd(m.ctx, m.snapshotActiveInstances(), m.list.GetSelectedInstance(), true), // first tick: full sweep
 		m.updateCheckCmd(),   // nil (inert) is fine: tea.Batch skips nil cmds
 		m.driftCheckCmd(),    // agent-heuristic drift hint
 		m.releaseNotesCmd(),  // nil (inert) is fine: tea.Batch skips nil cmds

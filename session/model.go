@@ -51,11 +51,15 @@ func (i *Instance) SetModelMeta(model string, stamp transcript.Stamp) {
 // metadata-poll goroutine), gated by the memoized stamp so an idle session
 // costs one ReadDir + Stat per tick. ok=false means nothing to apply:
 // unstarted/paused, non-claude program, transcript unavailable, or unchanged.
+//
+// Like ComputeDiff/ComputePRStatus, it derives its lifecycle context from
+// i.baseContext() (= the app ctx) rather than taking a ctx parameter, so app
+// shutdown cancels an in-flight transcript read.
 func (i *Instance) ComputeModel() (model string, stamp transcript.Stamp, ok bool) {
 	if !i.isStarted() || i.Paused() {
 		return "", transcript.Stamp{}, false
 	}
-	m, s, err := transcript.LatestModel(i.Program, i.WorkingDir(), i.modelStamp,
+	m, s, err := transcript.LatestModel(i.baseContext(), i.Program, i.WorkingDir(), i.modelStamp,
 		transcript.Options{Root: i.claudeConfigDir})
 	if err != nil || s.Equal(i.modelStamp) {
 		return "", transcript.Stamp{}, false
