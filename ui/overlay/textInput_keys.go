@@ -34,10 +34,10 @@ func (t *TextInputOverlay) HandleKeyPress(msg tea.KeyMsg) (bool, bool) {
 		if t.isModelField() && t.modelField.CompletePrefix() {
 			return false, false
 		}
-		t.setFocusIndex(t.nextEnabledIndex(t.focus.index, 1))
+		t.setFocusIndex(t.nextEnabledIndex(1))
 		return false, false
 	case tea.KeyShiftTab:
-		t.setFocusIndex(t.nextEnabledIndex(t.focus.index, -1))
+		t.setFocusIndex(t.nextEnabledIndex(-1))
 		return false, false
 	case tea.KeyEsc:
 		t.Canceled = true
@@ -95,7 +95,7 @@ func (t *TextInputOverlay) HandleKeyPress(msg tea.KeyMsg) (bool, bool) {
 		// Every other field (title, pickers) — and the prompt on a bare Enter — advances to
 		// the next enabled stop. Advancing by one — rather than jumping to the button — keeps
 		// Enter consistent regardless of where a field sits in the order.
-		t.setFocusIndex(t.nextEnabledIndex(t.focus.index, 1))
+		t.setFocusIndex(t.nextEnabledIndex(1))
 		return false, false
 	default:
 		if t.isTitle() {

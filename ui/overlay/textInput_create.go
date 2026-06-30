@@ -238,7 +238,7 @@ func (t *TextInputOverlay) SetTargetValidity(valid, direct bool, headBranch stri
 	t.branchPicker.SetHeadLabel(headBranch)
 	t.branchPicker.SetDisabled(!valid || direct)
 	if t.isBranchPicker() && !t.stopEnabled(stopBranch) {
-		t.setFocusIndex(t.nextEnabledIndex(t.focus.index, 1))
+		t.setFocusIndex(t.nextEnabledIndex(1))
 	}
 }
 

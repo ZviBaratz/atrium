@@ -48,20 +48,20 @@ func (r *focusRing) indexOf(kind focusStop) int {
 // set moves the cursor to index i.
 func (r *focusRing) set(i int) { r.index = i }
 
-// next returns the first enabled stop index reached from `from` by repeatedly stepping
-// `delta` (+1 forward, -1 backward), wrapping around the stop list. The loop visits each
-// stop at most once, so it terminates even with several stops disabled; the caller keeps
-// one always-enabled stop (the Create button), so an enabled stop always exists.
-func (r *focusRing) next(from, delta int, enabled func(focusStop) bool) int {
+// nextEnabled returns the first enabled stop index reached from the current cursor by
+// repeatedly stepping `delta` (+1 forward, -1 backward), wrapping around the stop list. The
+// loop visits each stop at most once, so it terminates even with several stops disabled; the
+// caller keeps one always-enabled stop (the Create button), so an enabled stop always exists.
+func (r *focusRing) nextEnabled(delta int, enabled func(focusStop) bool) int {
 	n := len(r.stops)
-	i := from
+	i := r.index
 	for range r.stops {
 		i = (i + delta + n) % n
 		if enabled(r.stops[i]) {
 			return i
 		}
 	}
-	return from
+	return r.index
 }
 
 // currentStop returns the focusStop the cursor currently points at.
@@ -122,10 +122,10 @@ func (t *TextInputOverlay) stopEnabled(kind focusStop) bool {
 	return true
 }
 
-// nextEnabledIndex returns the first enabled stop index reached from `from` by repeatedly
+// nextEnabledIndex returns the first enabled stop index reached from the current cursor by
 // stepping `delta` (+1 forward, -1 backward), wrapping around the stop list.
-func (t *TextInputOverlay) nextEnabledIndex(from, delta int) int {
-	return t.focus.next(from, delta, t.stopEnabled)
+func (t *TextInputOverlay) nextEnabledIndex(delta int) int {
+	return t.focus.nextEnabled(delta, t.stopEnabled)
 }
 
 // updateFocusState syncs each component's focus/blur state to the current stop.
