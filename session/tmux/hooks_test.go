@@ -31,6 +31,11 @@ func writeHookState(t *testing.T, s *Session, word string) {
 	require.NoError(t, err)
 	require.NoError(t, os.MkdirAll(dir, 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "state"), []byte(word), 0o644))
+	// The sandbox HOME is shared across a `go test -count=N` run, so a state file left
+	// here would leak into the next iteration — e.g. TestReadHookState's opening
+	// "absent file" assertion would then see a stale file and fail. Remove the dir at
+	// test end so each iteration starts clean.
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
 }
 
 // forceSettingsFlag overrides the --settings capability probe for the duration of a test so
