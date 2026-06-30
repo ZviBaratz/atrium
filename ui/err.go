@@ -5,7 +5,6 @@ import (
 
 	"github.com/ZviBaratz/atrium/ui/theme"
 
-	"github.com/charmbracelet/lipgloss"
 	"github.com/mattn/go-runewidth"
 )
 
@@ -72,5 +71,5 @@ func (e *ErrBox) String() string {
 	if runewidth.StringWidth(err) > e.width-3 && e.width-3 >= 0 {
 		err = runewidth.Truncate(err, e.width-3, "…")
 	}
-	return lipgloss.Place(e.width, e.height, lipgloss.Center, lipgloss.Center, theme.Current().DangerStyle().Render(err))
+	return centerInBox(e.width, e.height, theme.Current().DangerStyle().Render(err))
 }

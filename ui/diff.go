@@ -54,13 +54,7 @@ func (d *DiffPane) SetSize(width, height int) {
 // SetDiff recomputes and renders the instance's diff, falling back to a
 // centered placeholder when there are no changes (or no instance).
 func (d *DiffPane) SetDiff(instance *session.Instance) {
-	centeredFallbackMessage := lipgloss.Place(
-		d.width,
-		d.height,
-		lipgloss.Center,
-		lipgloss.Center,
-		metaStyle().Render("No changes"),
-	)
+	centeredFallbackMessage := centerInBox(d.width, d.height, metaStyle().Render("No changes"))
 
 	if instance == nil || !instance.Started() {
 		d.viewport.SetContent(centeredFallbackMessage)
@@ -72,26 +66,16 @@ func (d *DiffPane) SetDiff(instance *session.Instance) {
 	if instance.IsDirect() {
 		d.stats = ""
 		d.diff = ""
-		d.viewport.SetContent(lipgloss.Place(
-			d.width,
-			d.height,
-			lipgloss.Center,
-			lipgloss.Center,
-			metaStyle().Render(fmt.Sprintf("Direct session — git tracking disabled.\nAgent runs in %s", instance.Path)),
-		))
+		d.viewport.SetContent(centerInBox(d.width, d.height,
+			metaStyle().Render(fmt.Sprintf("Direct session — git tracking disabled.\nAgent runs in %s", instance.Path))))
 		return
 	}
 
 	stats := instance.GetDiffStats()
 	if stats == nil {
 		// Show loading message if worktree is not ready
-		centeredMessage := lipgloss.Place(
-			d.width,
-			d.height,
-			lipgloss.Center,
-			lipgloss.Center,
-			metaStyle().Render("Setting up workspace..."), // matches the preview pane's splash
-		)
+		// matches the preview pane's splash
+		centeredMessage := centerInBox(d.width, d.height, metaStyle().Render("Setting up workspace..."))
 		d.viewport.SetContent(centeredMessage)
 		return
 	}
@@ -99,13 +83,8 @@ func (d *DiffPane) SetDiff(instance *session.Instance) {
 	if stats.Error != nil {
 		// Show error message — danger-styled, so a broken diff doesn't render as
 		// unstyled default text while every sibling placeholder is dim.
-		centeredMessage := lipgloss.Place(
-			d.width,
-			d.height,
-			lipgloss.Center,
-			lipgloss.Center,
-			theme.Current().DangerStyle().Render(fmt.Sprintf("Error: %v", stats.Error)),
-		)
+		centeredMessage := centerInBox(d.width, d.height,
+			theme.Current().DangerStyle().Render(fmt.Sprintf("Error: %v", stats.Error)))
 		d.viewport.SetContent(centeredMessage)
 		return
 	}

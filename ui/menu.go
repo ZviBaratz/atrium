@@ -231,7 +231,7 @@ func (m *Menu) String() string {
 		if limit := m.width - 2; limit >= 0 && runewidth.StringWidth(text) > limit {
 			text = runewidth.Truncate(text, limit, "…")
 		}
-		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, style.Render(text))
+		return centerInBox(m.width, m.height, style.Render(text))
 	}
 
 	var line string
@@ -279,5 +279,5 @@ func (m *Menu) String() string {
 	if limit := m.width; limit > 0 && lipgloss.Width(line) > limit {
 		line = xansi.Truncate(line, limit-1, "…")
 	}
-	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, line)
+	return centerInBox(m.width, m.height, line)
 }

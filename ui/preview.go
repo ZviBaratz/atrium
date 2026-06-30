@@ -219,8 +219,7 @@ func (p *PreviewPane) String() string {
 		// renderer truncates output lines, but every centered overlay then
 		// computes its position against the inflated width and lands off-center.
 		return lipgloss.NewStyle().MaxWidth(p.width).MaxHeight(p.height).Render(
-			lipgloss.Place(p.width, p.height, lipgloss.Center, lipgloss.Center,
-				previewPaneStyle().Render(p.previewState.text)))
+			centerInBox(p.width, p.height, previewPaneStyle().Render(p.previewState.text)))
 	}
 
 	// Hint mode: show the frozen decorated frame, clamped exactly like the
