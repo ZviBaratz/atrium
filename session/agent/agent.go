@@ -153,6 +153,14 @@ type Adapter struct {
 	// *above* the input box, where the footer anchor never looks.
 	MarkerWindow int
 
+	// IdleConfirmTicks overrides the poller's working→idle safety cap for this
+	// agent: the number of consecutive marker-absent (or, for markerless agents,
+	// unchanged-while-churning) poll ticks after which the pane is committed to
+	// idle even if it keeps moving. 0 means "use the package default" (session/
+	// tmux's idleConfirmTicks). Raise it for an agent prone to long between-turns
+	// gaps on a slow/loaded host, where the default cap can report a false idle.
+	IdleConfirmTicks int
+
 	// Prompts are tried in order; the first match classifies the pane as a
 	// blocking prompt.
 	Prompts []PromptMatcher

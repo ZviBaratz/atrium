@@ -15,8 +15,9 @@ func TestKillRequestedDefaultsFalse(t *testing.T) {
 }
 
 // classifyAttachInput is the decision the attach stdin reader makes for every
-// chunk it reads. These cases lock in the control-byte gating that the
-// real-PTY/stdin goroutine cannot be unit-tested against directly.
+// chunk it reads. These cases lock in the control-byte gating and the multi-byte
+// sibling-navigation sequences that the real-PTY/stdin goroutine cannot be
+// unit-tested against directly.
 func TestClassifyAttachInput(t *testing.T) {
 	cases := []struct {
 		name      string
@@ -32,6 +33,13 @@ func TestClassifyAttachInput(t *testing.T) {
 		{"ctrl-x within a longer read is forwarded", []byte{ctrlX, 'a'}, true, attachForward},
 		{"ctrl-q within a longer read is forwarded", []byte{ctrlQ, 'b'}, true, attachForward},
 		{"empty read is forwarded", []byte{}, true, attachForward},
+		// Sibling navigation: Ctrl+PageUp/PageDown arrive as multi-byte escape
+		// sequences, matched after the single-byte control switch.
+		{"ctrl+pageup navigates to previous sibling", []byte("\x1b[5;5~"), false, attachPrev},
+		{"ctrl+pagedown navigates to next sibling", []byte("\x1b[6;5~"), false, attachNext},
+		{"ctrl+pageup navigates regardless of allowKill", []byte("\x1b[5;5~"), true, attachPrev},
+		// A near-miss (plain PageUp, no modifier) must not navigate — exact match only.
+		{"plain pageup is forwarded", []byte("\x1b[5~"), true, attachForward},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

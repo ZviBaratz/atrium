@@ -668,6 +668,17 @@ const (
 	idleConfirmTicks = 6
 )
 
+// idleConfirmCap returns the working→idle safety cap for this session's agent:
+// the adapter's IdleConfirmTicks when it sets one (> 0), otherwise the package
+// default idleConfirmTicks. The override exists so a slow agent prone to long
+// marker-absent gaps isn't reported falsely idle on a loaded host.
+func (t *Session) idleConfirmCap() int {
+	if t.adapter != nil && t.adapter.IdleConfirmTicks > 0 {
+		return t.adapter.IdleConfirmTicks
+	}
+	return idleConfirmTicks
+}
+
 // hash hashes the string.
 func (m *statusMonitor) hash(s string) []byte {
 	h := sha256.New()
@@ -930,7 +941,7 @@ func (t *Session) Poll() PaneState {
 			return PaneIdle
 		}
 		t.monitor.idleStreak++
-		if t.monitor.lastReported == PaneWorking && t.monitor.idleStreak < idleConfirmTicks {
+		if t.monitor.lastReported == PaneWorking && t.monitor.idleStreak < t.idleConfirmCap() {
 			// A brief marker-absent gap after real work (auto-accept turn boundary, model
 			// spin-up). Hold working. idleStreak grows monotonically while the marker is
 			// gone, so once it caps we commit idle and the absence of a marker keeps us there
@@ -956,7 +967,7 @@ func (t *Session) Poll() PaneState {
 	if t.monitor.lastReported == PaneWorking {
 		t.monitor.idleStreak++
 		settled := t.monitor.stableStreak >= idleSettleTicks
-		capped := t.monitor.idleStreak >= idleConfirmTicks
+		capped := t.monitor.idleStreak >= t.idleConfirmCap()
 		if !settled && !capped {
 			t.monitor.logSignal(name, "content-change → working (settling)")
 			return PaneWorking
@@ -1167,68 +1178,9 @@ func (t *Session) Attach(allowKill bool) (chan struct{}, error) {
 	// local ctx lets a reader left over from a prior attach notice the detach after its
 	// next read and exit WITHOUT touching the detach state or pty of a newer attach.
 	readCtx := t.ctx
-	stdinReadErr := log.NewEvery(60 * time.Second)
-	go func() {
-		// Within stdinNukeWindow of attach, stdin carries the terminal's control-sequence
-		// burst (e.g. ?[?62c0;95;0c, ]10:rgb:f8f8f8; varies by terminal) that must not reach
-		// tmux. A deadline drops those initial bytes — self-contained, no extra goroutine.
-		nukeUntil := time.Now().Add(stdinNukeWindow)
-
-		// Read input from stdin and check for Ctrl+q
-		buf := make([]byte, 32)
-		for {
-			nr, err := os.Stdin.Read(buf)
-			if err != nil {
-				if err == io.EOF {
-					return
-				}
-				// Throttle: a persistently failing stdin (e.g. a closed fd) must not spin
-				// the log; the loop still retries on the next read.
-				if stdinReadErr.ShouldLog() {
-					log.ErrorLog.Printf("attach stdin read error (throttled): %v", err)
-				}
-				continue
-			}
-
-			// A detach (user keystroke, pause, or app shutdown) cancels readCtx. Once
-			// cancelled this goroutine is stale — stop reading and never act on the shared
-			// detach state or pty, which may already belong to a newer attach.
-			select {
-			case <-readCtx.Done():
-				return
-			default:
-			}
-
-			// Drop the initial control-sequence burst (see nukeUntil).
-			if time.Now().Before(nukeUntil) {
-				log.InfoLog.Printf("nuked first stdin: %s", buf[:nr])
-				continue
-			}
-
-			switch classifyAttachInput(buf[:nr], allowKill) {
-			case attachDetach:
-				t.keyDetach(DetachQuit, false)
-				return
-			case attachKill:
-				// Detach and request a kill; the caller reads KillRequested after
-				// the attach returns and runs the teardown confirmation.
-				t.keyDetach(DetachQuit, true)
-				return
-			case attachNext:
-				t.keyDetach(DetachNext, false)
-				return
-			case attachPrev:
-				t.keyDetach(DetachPrev, false)
-				return
-			default:
-				// Forward other input to tmux. If DetachSafely closed the pty, this
-				// write returns a "file already closed" error (discarded) rather than
-				// racing on t.ptmx. attachedPtmx is captured live at Attach time, so
-				// it is never nil.
-				_, _ = attachedPtmx.Write(buf[:nr])
-			}
-		}
-	}()
+	// nukeUntil is evaluated here, at the spawn, rather than inside the goroutine so the
+	// window is testable: readAttachStdin takes the deadline as a parameter.
+	go t.readAttachStdin(readCtx, os.Stdin, attachedPtmx, allowKill, time.Now().Add(stdinNukeWindow))
 
 	t.monitorWindowSize()
 	// Mark attached last, once attachCh + goroutines + the captured ptmx are all
@@ -1262,6 +1214,75 @@ func (t *Session) Attach(allowKill bool) (chan struct{}, error) {
 	}()
 
 	return ret, nil
+}
+
+// readAttachStdin reads the attached terminal's stdin and acts on each chunk until
+// the user detaches (Ctrl+Q), requests a kill (Ctrl+X when allowKill), cycles to a
+// sibling (Ctrl+PageUp/Down), the reader goes stale, or in reaches EOF. Bytes read
+// before nukeUntil are the terminal's post-attach control-sequence burst (device
+// attributes, color queries) and are dropped so they never reach tmux; everything
+// after is classified and either acted on or forwarded to ptmx.
+//
+// Attach spawns it with os.Stdin and the pty master. It is deliberately NOT tracked
+// by t.wg: in.Read is uninterruptible, so a reader left over from a prior attach
+// exits via the ctx check after its next read rather than being waited on by detach.
+// ctx and ptmx are captured by Attach before the goroutine starts so a concurrent
+// detachCleanup that nils t.ctx / t.ptmx can't race them.
+func (t *Session) readAttachStdin(ctx context.Context, in io.Reader, ptmx io.Writer, allowKill bool, nukeUntil time.Time) {
+	stdinReadErr := log.NewEvery(60 * time.Second)
+	// Read input from stdin and check for Ctrl+q
+	buf := make([]byte, 32)
+	for {
+		nr, err := in.Read(buf)
+		if err != nil {
+			if err == io.EOF {
+				return
+			}
+			// Throttle: a persistently failing stdin (e.g. a closed fd) must not spin
+			// the log; the loop still retries on the next read.
+			if stdinReadErr.ShouldLog() {
+				log.ErrorLog.Printf("attach stdin read error (throttled): %v", err)
+			}
+			continue
+		}
+
+		// A detach (user keystroke, pause, or app shutdown) cancels ctx. Once cancelled
+		// this goroutine is stale — stop reading and never act on the shared detach state
+		// or pty, which may already belong to a newer attach.
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+
+		// Drop the initial control-sequence burst (see nukeUntil).
+		if time.Now().Before(nukeUntil) {
+			log.InfoLog.Printf("nuked first stdin: %s", buf[:nr])
+			continue
+		}
+
+		switch classifyAttachInput(buf[:nr], allowKill) {
+		case attachDetach:
+			t.keyDetach(DetachQuit, false)
+			return
+		case attachKill:
+			// Detach and request a kill; the caller reads KillRequested after
+			// the attach returns and runs the teardown confirmation.
+			t.keyDetach(DetachQuit, true)
+			return
+		case attachNext:
+			t.keyDetach(DetachNext, false)
+			return
+		case attachPrev:
+			t.keyDetach(DetachPrev, false)
+			return
+		default:
+			// Forward other input to tmux. If DetachSafely closed the pty, this write
+			// returns a "file already closed" error (discarded) rather than racing on
+			// t.ptmx. ptmx is captured live at Attach time, so it is never nil.
+			_, _ = ptmx.Write(buf[:nr])
+		}
+	}
 }
 
 // KillRequested reports whether the most recent attach ended with the user

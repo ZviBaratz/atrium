@@ -718,6 +718,41 @@ func TestPollChurnHitsSafetyCap(t *testing.T) {
 	require.Equal(t, PaneIdle, s.Poll(), "commits at the idleConfirmTicks safety cap")
 }
 
+// idleConfirmCap returns the adapter override when set (> 0), else the package default.
+func TestIdleConfirmCap(t *testing.T) {
+	c := "x"
+	s := pollSession(t, "claude", &c, nil)
+	require.Equal(t, idleConfirmTicks, s.idleConfirmCap(), "claude sets no override → package default")
+
+	s.adapter = &agent.Adapter{IdleConfirmTicks: 3}
+	require.Equal(t, 3, s.idleConfirmCap(), "a positive adapter override is honored")
+
+	s.adapter = nil
+	require.Equal(t, idleConfirmTicks, s.idleConfirmCap(), "nil adapter falls back to the default")
+}
+
+// An adapter that raises IdleConfirmTicks holds working past the package default, and a
+// lowered one commits idle earlier — proving Poll reads the per-adapter cap, not the const.
+func TestPollHonorsAdapterIdleConfirmCap(t *testing.T) {
+	c := "esc to interrupt"
+	s := pollSession(t, "claude", &c, nil)
+	// Clone the resolved adapter by value and change only the cap. Mutating the shared
+	// registry adapter in place would leak the lowered cap into the default-cap tests.
+	ad := *s.adapter
+	ad.IdleConfirmTicks = 3
+	s.adapter = &ad
+
+	require.Equal(t, PaneWorking, s.Poll())
+	// idleStreak climbs 1,2 under churn (held), then 3 trips the lowered cap — well before
+	// the default idleConfirmTicks (6) would have.
+	for i := 1; i < 3; i++ {
+		c = fmt.Sprintf("repainting %d, no marker", i)
+		require.Equal(t, PaneWorking, s.Poll(), "held under churn before the per-adapter cap (observation %d)", i)
+	}
+	c = "repainting final, no marker"
+	require.Equal(t, PaneIdle, s.Poll(), "commits at the per-adapter cap (3), earlier than the default 6")
+}
+
 // PollNow classifies at face value with no hysteresis — for the one-shot refresh on detach,
 // where the stalled stream left the smoothing state stale. An idle pane reads idle at once
 // even though the monitor last reported working; a marker pane reads working; a markerless
