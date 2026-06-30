@@ -10,6 +10,8 @@ import (
 // it toggles: applying the sort, persisting the manual order, and the slice
 // helpers that keep same-repo sessions grouped.
 
+// sortActive reports whether a non-creation sort mode is in effect — i.e. items is
+// a sorted view of the canonical manual order. "" and "creation" are not active.
 func (l *List) sortActive() bool {
 	return l.sortMode != "" && l.sortMode != "creation"
 }
@@ -186,8 +188,3 @@ func regroupManualLike(manual, like []*session.Instance) []*session.Instance {
 	}
 	return out
 }
-
-// isAttachable reports whether a session can be attached to right now — the same
-// condition the KeyEnter handler guards on before attaching (app.go). Started() is
-// checked first because TmuxAlive dereferences the tmux session, which a not-yet-
-// started instance does not have.

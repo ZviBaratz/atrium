@@ -5,6 +5,10 @@ import "sort"
 // Repo-group fold state: collapse/expand a group, collapse-all toggling, and
 // the persisted set of collapsed repo keys.
 
+// Collapse folds the selected session's repo group, snapping the selection to the group
+// anchor. It is a no-op (returns false) when the group is already folded — so the caller can
+// skip the persistence write — or when fewer than two repos are present, since folding is
+// meaningless there.
 func (l *List) Collapse() bool {
 	if len(l.items) == 0 || l.distinctRepoCount() <= 1 {
 		return false
@@ -87,7 +91,3 @@ func (l *List) SetCollapsedRepos(keys []string) {
 	}
 	l.clampSelectionToNavigable()
 }
-
-// MoveGroupUp moves the selected session's entire repo group above the group immediately
-// preceding it, as a unit, keeping the same session selected. It is a no-op when the group is
-// already first (which also covers the single-group case). Returns whether anything moved.

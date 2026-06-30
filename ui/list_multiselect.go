@@ -5,6 +5,11 @@ import "github.com/ZviBaratz/atrium/session"
 // Multi-select batch scope: the in-view paused/active filters that batch
 // actions operate over, and the per-instance mark set.
 
+// PausedInstancesInView returns every Paused instance that passes the active
+// filter (all paused when no filter is set), in list order. Collapsed groups
+// are included — folding is a display state, not a scope boundary — so a batch
+// "resume all" restores paused sessions the user can't currently see folded
+// away, which is what they expect after a reboot parked everything.
 func (l *List) PausedInstancesInView() []*session.Instance {
 	var out []*session.Instance
 	for _, it := range l.items {

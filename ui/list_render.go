@@ -17,6 +17,7 @@ import (
 // session row, the full-list String(), and the scroll windowing that keeps the
 // selection visible.
 
+// InstanceRenderer handles rendering of session.Instance objects
 type InstanceRenderer struct {
 	spinner *spinner.Model
 	width   int
@@ -457,6 +458,3 @@ func (l *List) windowLines(lines []string, selStart, selH, avail int) []string {
 	}
 	return window
 }
-
-// InPanelBounds reports whether the mouse event lands within the list panel's
-// rendered box. Used to route wheel events to selection movement. False before

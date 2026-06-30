@@ -352,7 +352,8 @@ func (l *List) NumInstances() int {
 	return len(l.items)
 }
 
-// InstanceRenderer handles rendering of session.Instance objects
+// InPanelBounds reports whether the mouse event lands within the list panel's
+// rendered box. Used to route wheel events to selection movement. False before
 // the first zone scan (zero ZoneInfo), so early frames route nowhere.
 func (l *List) InPanelBounds(msg tea.MouseMsg) bool {
 	return zone.Get(listPanelZoneID).InBounds(msg)
@@ -612,8 +613,10 @@ func (l *List) SelectInstance(target *session.Instance) {
 	}
 }
 
-// sortActive reports whether a non-creation sort mode is in effect — i.e. items is
-// a sorted view of the canonical manual order. "" and "creation" are not active.
+// isAttachable reports whether a session can be attached to right now — the same
+// condition the KeyEnter handler guards on before attaching (app.go). Started() is
+// checked first because TmuxAlive dereferences the tmux session, which a not-yet-
+// started instance does not have.
 func isAttachable(i *session.Instance) bool {
 	return i != nil && i.Started() && !i.Paused() && i.GetStatus() != session.Loading && i.TmuxAlive()
 }
@@ -797,10 +800,9 @@ func (l *List) nearestNavigable(from int) int {
 	return -1
 }
 
-// Collapse folds the selected session's repo group, snapping the selection to the group
-// anchor. It is a no-op (returns false) when the group is already folded — so the caller can
-// skip the persistence write — or when fewer than two repos are present, since folding is
-// meaningless there.
+// MoveGroupUp moves the selected session's entire repo group above the group immediately
+// preceding it, as a unit, keeping the same session selected. It is a no-op when the group is
+// already first (which also covers the single-group case). Returns whether anything moved.
 func (l *List) MoveGroupUp() bool {
 	start, end := l.groupBounds(l.selectedIdx)
 	if start <= 0 {
@@ -856,9 +858,3 @@ func (l *List) syncManualGroupOrder() {
 func (l *List) GetInstances() []*session.Instance {
 	return l.items
 }
-
-// PausedInstancesInView returns every Paused instance that passes the active
-// filter (all paused when no filter is set), in list order. Collapsed groups
-// are included — folding is a display state, not a scope boundary — so a batch
-// "resume all" restores paused sessions the user can't currently see folded
-// away, which is what they expect after a reboot parked everything.
