@@ -156,6 +156,12 @@ type Instance struct {
 	// ambient gh account. Creation-fixed and read without the lock, like the
 	// claude* fields above.
 	ghConfigDir string
+	// githubTokenEnv are the env var names the routed gh account's token is
+	// injected under at launch (config.GHAccount.TokenEnv), forwarded to the tmux
+	// session. The token VALUE is resolved at session birth by the tmux layer and
+	// never held here or persisted — only these names are. Creation-fixed and read
+	// without the lock, like ghConfigDir.
+	githubTokenEnv []string
 
 	// modelID is the session's model per its transcript (the newest assistant
 	// entry, e.g. "claude-opus-4-7"). Written only on the main thread
@@ -266,6 +272,7 @@ func (i *Instance) ToInstanceData() InstanceData {
 		ClaudeConfigDir:      i.claudeConfigDir,
 		ClaudeAccountDefault: i.claudeAccountDefault,
 		GHConfigDir:          i.ghConfigDir,
+		GitHubTokenEnv:       i.githubTokenEnv,
 		Model:                i.modelID,
 		PermissionMode:       i.runtimeMode,
 		TmuxName:             i.TmuxSessionName(),
@@ -332,6 +339,7 @@ func FromInstanceData(ctx context.Context, data InstanceData, branchPrefix strin
 		claudeConfigDir:      data.ClaudeConfigDir,
 		claudeAccountDefault: data.ClaudeAccountDefault,
 		ghConfigDir:          data.GHConfigDir,
+		githubTokenEnv:       data.GitHubTokenEnv,
 		modelID:              data.Model,
 		runtimeMode:          data.PermissionMode,
 		Prompt:               data.Prompt,
@@ -383,6 +391,7 @@ func FromInstanceData(ctx context.Context, data InstanceData, branchPrefix strin
 	}
 	sess.SetClaudeConfigDir(instance.claudeConfigDir)
 	sess.SetGHConfigDir(instance.ghConfigDir)
+	sess.SetGitHubTokenEnv(instance.githubTokenEnv)
 	instance.tmuxName = sess.Name()
 
 	if instance.Paused() {
@@ -781,6 +790,7 @@ func (i *Instance) Start(firstTimeSetup bool) error {
 		tmuxSession = tmux.NewSessionWithName(i.baseContext(), name, i.Title, i.Program)
 		tmuxSession.SetClaudeConfigDir(i.claudeConfigDir)
 		tmuxSession.SetGHConfigDir(i.ghConfigDir)
+		tmuxSession.SetGitHubTokenEnv(i.githubTokenEnv)
 	}
 	i.mu.Lock()
 	i.tmuxSession = tmuxSession

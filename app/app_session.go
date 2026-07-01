@@ -996,7 +996,11 @@ func (m *home) startNewSession(title, path string, direct bool, program, branch,
 	// The gh account routes from the origin remote (or path) independently of the
 	// Claude-account override: gh access is determined by the actual repo, not by
 	// which Claude login was picked. "" leaves gh on the ambient global account.
-	instance.SetGHConfigDir(m.appConfig.ResolveGHConfigDir(remoteURL, path))
+	// TokenEnv (if any) names the env vars the account's gh token is injected under
+	// at launch (e.g. GITHUB_PERSONAL_ACCESS_TOKEN for the github MCP).
+	ghDir, ghTokenEnv := m.appConfig.ResolveGHAccount(remoteURL, path)
+	instance.SetGHConfigDir(ghDir)
+	instance.SetGitHubTokenEnv(ghTokenEnv)
 
 	// Create the list row only now, on submit. AddInstance may insert it mid-list under its
 	// repo group, so select it by identity.

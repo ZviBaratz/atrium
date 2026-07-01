@@ -212,14 +212,10 @@ func (p *PreviewPane) String() string {
 		// Center the fallback in the pane's exact box, the same way the diff
 		// pane centers its placeholders. (The hand-rolled padding loop this
 		// replaces guessed at chrome offsets that no longer exist and sat the
-		// text slightly high.) Clamp both axes like the normal branch below:
-		// lipgloss.Place does not clip oversize content, so a fallback line
+		// text slightly high.) centerInBox clamps to the box, so a fallback line
 		// wider than the pane (the empty-state message on a narrow terminal)
-		// would widen the whole frame past the terminal — invisibly, since the
-		// renderer truncates output lines, but every centered overlay then
-		// computes its position against the inflated width and lands off-center.
-		return lipgloss.NewStyle().MaxWidth(p.width).MaxHeight(p.height).Render(
-			centerInBox(p.width, p.height, previewPaneStyle().Render(p.previewState.text)))
+		// can't inflate the frame and throw centered overlays off-center (#251).
+		return centerInBox(p.width, p.height, previewPaneStyle().Render(p.previewState.text))
 	}
 
 	// Hint mode: show the frozen decorated frame, clamped exactly like the
