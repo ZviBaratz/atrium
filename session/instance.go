@@ -305,12 +305,14 @@ func (i *Instance) ToInstanceData() InstanceData {
 	return data
 }
 
-// FromInstanceData creates a new Instance from serialized data. branchPrefix is the
-// configured session-branch prefix, supplied by the caller so bulk restores (see
-// Storage.LoadInstances) load config once instead of once per instance. ctx is the
-// lifecycle context the instance's tmux/git subprocesses derive from; it is threaded
-// in here (rather than set afterwards) because reconstruction itself spawns
-// subprocesses (session reattach, recovery).
+// FromInstanceData rehydrates an Instance from serialized data. It is pure: it
+// maps the fields, reconstructs the worktree/diff, and constructs (but does not
+// launch or reattach) the tmux Session — so it spawns no subprocesses. The live
+// reattach/recovery that used to run here now lives in Reattach, which the caller
+// (Storage.LoadInstances) invokes next. branchPrefix is the configured
+// session-branch prefix, supplied by the caller so bulk restores load config once
+// instead of once per instance. ctx is the lifecycle context the instance's
+// tmux/git subprocesses (spawned later, by Reattach) derive from.
 func FromInstanceData(ctx context.Context, data InstanceData, branchPrefix string) (*Instance, error) {
 	instance := &Instance{
 		baseCtx:     ctx,
@@ -384,46 +386,59 @@ func FromInstanceData(ctx context.Context, data InstanceData, branchPrefix strin
 	sess.SetClaudeConfigDir(instance.claudeConfigDir)
 	sess.SetGHConfigDir(instance.ghConfigDir)
 	instance.tmuxName = sess.Name()
-
-	if instance.Paused() {
-		instance.started = true
-		instance.tmuxSession = sess
-	} else {
-		instance.tmuxSession = sess
-		switch {
-		case sess.DoesSessionExist():
-			// Normal case: the session survived (cs detaches, it doesn't kill),
-			// so reattach to it. If the attach (Restore) fails the session is
-			// wedged — kill it and recover in place rather than aborting the
-			// load of every other session. Start() no longer sets Running itself
-			// (that is owned by the caller), so mark a successfully-reattached
-			// session Running here; recoverInPlace sets its own status otherwise.
-			if err := instance.Start(false); err != nil {
-				log.ErrorLog.Printf("failed to restore session %s, recovering: %v", instance.Title, err)
-				if closeErr := sess.Close(); closeErr != nil {
-					log.ErrorLog.Printf("failed to close stale session %s: %v", instance.Title, closeErr)
-				}
-				instance.recoverInPlace()
-			} else {
-				instance.SetStatus(Running)
-				// The Running just written is synthetic (the session was reattached,
-				// not observed working), so the first poll's settle to Ready must not
-				// flag unread when the session was already idle at save time. A
-				// persisted Running means the agent was genuinely working when the
-				// app closed — its first Ready is a real completion, so don't arm.
-				if data.Status == Ready {
-					instance.ArmReadySuppression()
-				}
-			}
-		default:
-			// The tmux session is gone — e.g. after a reboot, or the one-time
-			// migration to cs's dedicated socket. Don't crash on the failed
-			// attach (which previously aborted startup); recover in place.
-			instance.recoverInPlace()
-		}
-	}
+	instance.tmuxSession = sess
 
 	return instance, nil
+}
+
+// Reattach brings a rehydrated instance online: it reattaches to a surviving tmux
+// session, or recovers in place when that session is wedged or gone. This is the
+// live tmux/git IO deliberately kept out of FromInstanceData, so a caller can
+// rehydrate an instance without side effects and reattach as a separate step
+// (Storage.LoadInstances does both in sequence). A paused instance has no live
+// session to reattach — its Session was constructed for a later Resume — so it is
+// only marked started.
+func (i *Instance) Reattach() {
+	if i.Paused() {
+		i.started = true
+		return
+	}
+
+	// FromInstanceData mapped the saved Status onto i.status and nothing has changed
+	// it since, so it still reflects the status at save time here.
+	savedStatus := i.GetStatus()
+	sess := i.tmuxSession
+	switch {
+	case sess.DoesSessionExist():
+		// Normal case: the session survived (cs detaches, it doesn't kill), so
+		// reattach to it. If the attach (Restore) fails the session is wedged — kill
+		// it and recover in place rather than aborting the load of every other
+		// session. Start() no longer sets Running itself (that is owned by the
+		// caller), so mark a successfully-reattached session Running here;
+		// recoverInPlace sets its own status otherwise.
+		if err := i.Start(false); err != nil {
+			log.ErrorLog.Printf("failed to restore session %s, recovering: %v", i.Title, err)
+			if closeErr := sess.Close(); closeErr != nil {
+				log.ErrorLog.Printf("failed to close stale session %s: %v", i.Title, closeErr)
+			}
+			i.recoverInPlace()
+		} else {
+			i.SetStatus(Running)
+			// The Running just written is synthetic (the session was reattached, not
+			// observed working), so the first poll's settle to Ready must not flag
+			// unread when the session was already idle at save time. A persisted
+			// Running means the agent was genuinely working when the app closed — its
+			// first Ready is a real completion, so don't arm.
+			if savedStatus == Ready {
+				i.ArmReadySuppression()
+			}
+		}
+	default:
+		// The tmux session is gone — e.g. after a reboot, or the one-time migration
+		// to cs's dedicated socket. Don't crash on the failed attach (which
+		// previously aborted startup); recover in place.
+		i.recoverInPlace()
+	}
 }
 
 // startResuming relaunches the dead agent in workDir, resuming its prior conversation
@@ -834,7 +849,7 @@ func (i *Instance) Start(firstTimeSetup bool) error {
 	// NOTE: the transition out of Loading is owned by the caller on the main thread,
 	// not set here from the background start goroutine, so it can never race with the
 	// UI/poll readers. The new-session flow sets Running in the instanceStartedMsg
-	// handler; the reattach path (FromInstanceData) sets it after Start(false) returns.
+	// handler; the reattach path (Reattach) sets it after Start(false) returns.
 
 	return nil
 }

@@ -148,6 +148,9 @@ func (s *Storage) LoadInstances(ctx context.Context) ([]*Instance, error) {
 		if err != nil {
 			return nil, fmt.Errorf("failed to create instance %s: %w", data.Title, err)
 		}
+		// FromInstanceData is now pure rehydration; reattach to the live tmux session
+		// (or recover in place) as the separate IO step.
+		instance.Reattach()
 		instances[i] = instance
 	}
 
