@@ -74,6 +74,19 @@ type GHAccount struct {
 	ConfigDir     string   `json:"config_dir"`
 	RemoteMatches []string `json:"remote_matches,omitempty"`
 	PathMatches   []string `json:"path_matches,omitempty"`
+	// TokenEnv lists env var names to inject this account's gh token under at
+	// session launch (e.g. ["GITHUB_PERSONAL_ACCESS_TOKEN"], which the github MCP
+	// reads as its Bearer token). Empty (the default) injects no token, preserving
+	// the pre-feature behavior. The token itself is resolved fresh at session start
+	// via `gh auth token` under ConfigDir and is never persisted; only these names
+	// are stored. ConfigDir should hold a single account so the token is
+	// unambiguous. GH_CONFIG_DIR already routes the agent's own `gh` CLI to this
+	// account, so TokenEnv is mainly for tools that read the token straight from the
+	// env (like the github MCP), not the CLI. Adding "GH_TOKEN"/"GITHUB_TOKEN"
+	// additionally pins the CLI to this account's token, overriding gh's own
+	// selection — handy when the OS keyring's shared default would otherwise shadow
+	// it (see resolveGitHubToken), but otherwise leave them out.
+	TokenEnv []string `json:"token_env,omitempty"`
 }
 
 // ResolvedConfigDir expands a leading ~ in ConfigDir to the user's home directory.

@@ -1237,3 +1237,105 @@ func TestStartSessionInjectsBothConfigDirs(t *testing.T) {
 	require.Less(t, strings.Index(newSessionCmd, "CLAUDE_CONFIG_DIR"), programIdx)
 	require.Less(t, strings.Index(newSessionCmd, "GH_CONFIG_DIR"), programIdx)
 }
+
+// The ATRIUM marker is injected into every session (no setter, no config) so
+// external shell hooks can detect an Atrium session and defer to the injected env.
+func TestStartSessionInjectsAtriumMarker(t *testing.T) {
+	ptyFactory := NewMockPtyFactory(t)
+	session := NewSessionWithDeps(context.Background(), "marker-session", "claude", ptyFactory, startMockExec())
+	require.NoError(t, session.Start(t.TempDir()))
+
+	newSessionCmd := cmd2.ToString(ptyFactory.cmds[0])
+	require.Contains(t, newSessionCmd, "-e ATRIUM=1")
+	require.Contains(t, newSessionCmd, "-e ATRIUM_SESSION="+session.sanitizedName)
+	// Marker env must precede the program word.
+	require.Less(t, strings.Index(newSessionCmd, "ATRIUM=1"),
+		strings.LastIndex(newSessionCmd, "claude"))
+}
+
+// stubGitHubToken swaps the package-level gh-token resolver for a test double and
+// restores it after the test, keeping token tests off the real gh/keyring (the
+// same stubbable-package-var convention as session/git's checkGHCLI).
+func stubGitHubToken(t *testing.T, fn func(ctx context.Context, ghConfigDir string) (string, error)) {
+	t.Helper()
+	orig := resolveGitHubToken
+	resolveGitHubToken = fn
+	t.Cleanup(func() { resolveGitHubToken = orig })
+}
+
+func TestStartSessionInjectsGitHubToken(t *testing.T) {
+	stubGitHubToken(t, func(_ context.Context, ghConfigDir string) (string, error) {
+		require.Equal(t, "/home/tester/.config/gh-quantivly", ghConfigDir)
+		return "gho_testtoken", nil
+	})
+	ptyFactory := NewMockPtyFactory(t)
+	session := NewSessionWithDeps(context.Background(), "tok-session", "claude", ptyFactory, startMockExec())
+	session.SetGHConfigDir("/home/tester/.config/gh-quantivly")
+	session.SetGitHubTokenEnv([]string{"GITHUB_PERSONAL_ACCESS_TOKEN"})
+	require.NoError(t, session.Start(t.TempDir()))
+
+	newSessionCmd := cmd2.ToString(ptyFactory.cmds[0])
+	require.Contains(t, newSessionCmd, "-e GITHUB_PERSONAL_ACCESS_TOKEN=gho_testtoken")
+	// The token -e flag must precede the program word.
+	require.Less(t, strings.Index(newSessionCmd, "GITHUB_PERSONAL_ACCESS_TOKEN"),
+		strings.LastIndex(newSessionCmd, "claude"))
+}
+
+// One resolved token, injected under every configured name.
+func TestStartSessionMultipleTokenEnv(t *testing.T) {
+	stubGitHubToken(t, func(_ context.Context, _ string) (string, error) { return "tok123", nil })
+	ptyFactory := NewMockPtyFactory(t)
+	session := NewSessionWithDeps(context.Background(), "multi-tok", "claude", ptyFactory, startMockExec())
+	session.SetGitHubTokenEnv([]string{"GITHUB_PERSONAL_ACCESS_TOKEN", "GH_TOKEN"})
+	require.NoError(t, session.Start(t.TempDir()))
+
+	newSessionCmd := cmd2.ToString(ptyFactory.cmds[0])
+	require.Contains(t, newSessionCmd, "-e GITHUB_PERSONAL_ACCESS_TOKEN=tok123")
+	require.Contains(t, newSessionCmd, "-e GH_TOKEN=tok123")
+}
+
+// A failed token resolution must never block the launch — inject nothing, start anyway.
+func TestStartSessionTokenResolutionFailureStillStarts(t *testing.T) {
+	stubGitHubToken(t, func(_ context.Context, _ string) (string, error) {
+		return "", fmt.Errorf("gh not authenticated")
+	})
+	ptyFactory := NewMockPtyFactory(t)
+	session := NewSessionWithDeps(context.Background(), "tok-fail", "claude", ptyFactory, startMockExec())
+	session.SetGitHubTokenEnv([]string{"GITHUB_PERSONAL_ACCESS_TOKEN"})
+	require.NoError(t, session.Start(t.TempDir()))
+
+	require.NotContains(t, cmd2.ToString(ptyFactory.cmds[0]), "GITHUB_PERSONAL_ACCESS_TOKEN")
+}
+
+// Guards the opt-in default: with no TokenEnv, the resolver is never invoked (no
+// gh subprocess) and no token env is injected.
+func TestStartSessionNoTokenEnvSkipsResolution(t *testing.T) {
+	called := false
+	stubGitHubToken(t, func(_ context.Context, _ string) (string, error) {
+		called = true
+		return "tok", nil
+	})
+	ptyFactory := NewMockPtyFactory(t)
+	session := NewSessionWithDeps(context.Background(), "no-tok", "claude", ptyFactory, startMockExec())
+	session.SetGHConfigDir("/home/tester/.config/gh")
+	require.NoError(t, session.Start(t.TempDir()))
+
+	require.False(t, called, "resolveGitHubToken must not run when TokenEnv is empty")
+	require.NotContains(t, cmd2.ToString(ptyFactory.cmds[0]), "GH_TOKEN")
+}
+
+// TestStartSessionAtriumMarkerReachesPane drives a real tmux server and asserts
+// ATRIUM=1 is actually present in the session environment. Self-skips without tmux.
+func TestStartSessionAtriumMarkerReachesPane(t *testing.T) {
+	if _, err := exec.LookPath("tmux"); err != nil {
+		t.Skip("tmux not available")
+	}
+	name := fmt.Sprintf("markerenv-%d", rand.Int31())
+	session := NewSession(context.Background(), name, "sleep 300")
+	require.NoError(t, session.Start(t.TempDir()))
+	t.Cleanup(func() { _ = session.Close() })
+
+	out, err := tmuxCommand(context.Background(), "show-environment", "-t", session.sanitizedName).Output()
+	require.NoError(t, err)
+	require.Contains(t, string(out), "ATRIUM=1")
+}

@@ -325,30 +325,16 @@ func (t *TerminalPane) String() string {
 	content := t.content
 
 	if fallback {
-		// 3 = tab bar height (border + padding + text), 4 = window style frame (top/bottom border + padding)
-		availableHeight := height - 3 - 4
-		fallbackLines := len(strings.Split(fallbackText, "\n"))
-		totalPadding := availableHeight - fallbackLines
-		topPadding := 0
-		bottomPadding := 0
-		if totalPadding > 0 {
-			topPadding = totalPadding / 2
-			bottomPadding = totalPadding - topPadding
-		}
-
-		var lines []string
-		if topPadding > 0 {
-			lines = append(lines, strings.Repeat("\n", topPadding))
-		}
-		lines = append(lines, fallbackText)
-		if bottomPadding > 0 {
-			lines = append(lines, strings.Repeat("\n", bottomPadding))
-		}
-
-		return terminalPaneStyle().
-			Width(width).
-			Align(lipgloss.Center).
-			Render(strings.Join(lines, ""))
+		// Center the fallback in the pane's exact box, the same way the preview
+		// and diff panes center their placeholders. The hand-rolled padding this
+		// replaces subtracted the tab/frame chrome a second time (height-3-4) even
+		// though TabbedWindow.SetSize had already removed it, so the banner sat
+		// high rather than at true center. Clamp both axes like the preview pane:
+		// lipgloss.Place does not clip oversize content, so a fallback line wider
+		// than a narrow pane would inflate the whole frame and throw every
+		// centered overlay off.
+		return lipgloss.NewStyle().MaxWidth(width).MaxHeight(height).Render(
+			centerInBox(width, height, terminalPaneStyle().Render(fallbackText)))
 	}
 
 	// Normal mode: show captured content

@@ -829,6 +829,42 @@ func TestResolveGHConfigDir(t *testing.T) {
 	}
 }
 
+func TestResolveGHAccount(t *testing.T) {
+	t.Setenv("HOME", "/home/tester")
+
+	personal := GHAccount{Name: "personal", ConfigDir: "~/.config/gh-personal",
+		TokenEnv: []string{"GITHUB_PERSONAL_ACCESS_TOKEN"}} // catch-all, with token env
+	work := GHAccount{Name: "quantivly", ConfigDir: "~/.config/gh-quantivly",
+		RemoteMatches: []string{"quantivly/"},
+		TokenEnv:      []string{"GITHUB_PERSONAL_ACCESS_TOKEN"}}
+	noToken := GHAccount{Name: "notoken", ConfigDir: "~/.config/gh-x", RemoteMatches: []string{"acme/"}}
+	c := &Config{GHAccounts: []GHAccount{personal, work, noToken}}
+
+	// Remote match returns the matched account's dir AND its token-env names.
+	dir, tokenEnv := c.ResolveGHAccount("https://github.com/quantivly/x.git", "")
+	require.Equal(t, "/home/tester/.config/gh-quantivly", dir)
+	require.Equal(t, []string{"GITHUB_PERSONAL_ACCESS_TOKEN"}, tokenEnv)
+
+	// A matched account with no TokenEnv yields nil token-env (dir still routes).
+	dir, tokenEnv = c.ResolveGHAccount("git@github.com:acme/y.git", "")
+	require.Equal(t, "/home/tester/.config/gh-x", dir)
+	require.Nil(t, tokenEnv)
+
+	// No match -> catch-all (personal), carrying its token-env.
+	dir, tokenEnv = c.ResolveGHAccount("git@github.com:someoneelse/z.git", "")
+	require.Equal(t, "/home/tester/.config/gh-personal", dir)
+	require.Equal(t, []string{"GITHUB_PERSONAL_ACCESS_TOKEN"}, tokenEnv)
+
+	// Unconfigured -> inherit, no token.
+	dir, tokenEnv = (&Config{}).ResolveGHAccount("git@github.com:quantivly/x.git", "")
+	require.Equal(t, "", dir)
+	require.Nil(t, tokenEnv)
+
+	// ResolveGHConfigDir stays consistent with the delegated resolver.
+	require.Equal(t, "/home/tester/.config/gh-quantivly",
+		c.ResolveGHConfigDir("https://github.com/quantivly/x.git", ""))
+}
+
 func TestGetProjectSearchRoots(t *testing.T) {
 	cases := []struct {
 		name  string
