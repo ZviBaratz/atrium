@@ -474,8 +474,16 @@ func (t *Session) start(workDir string, program string) error {
 	// value is a start() local — never stored on the session nor persisted. A
 	// failed resolution (no gh / not authenticated) injects nothing; launch still
 	// proceeds, so a token hiccup can never block a session.
+	//
+	// Caveat: `-e NAME=<token>` puts the token in the spawned tmux client's argv,
+	// readable by other local users via `ps`/`/proc/<pid>/cmdline` for that
+	// process's brief lifetime. That's an accepted tradeoff on a single-user dev
+	// host — and the only per-session env channel tmux offers — not a persisted or
+	// logged exposure.
 	if len(t.githubTokenEnv) > 0 {
-		tokCtx, cancel := t.opContext()
+		// Two short, local keyring/config reads (see resolveGitHubToken); they never
+		// touch the network, so bound them with the same short budget as a tmux op.
+		tokCtx, cancel := context.WithTimeout(t.baseContext(), tmuxOpTimeout)
 		tok, err := resolveGitHubToken(tokCtx, t.ghConfigDir)
 		cancel()
 		if err != nil {

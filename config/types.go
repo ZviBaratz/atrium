@@ -80,9 +80,12 @@ type GHAccount struct {
 	// the pre-feature behavior. The token itself is resolved fresh at session start
 	// via `gh auth token` under ConfigDir and is never persisted; only these names
 	// are stored. ConfigDir should hold a single account so the token is
-	// unambiguous. Adding "GH_TOKEN"/"GITHUB_TOKEN" here also overrides gh's own
-	// account selection for the agent's `gh` CLI — usually redundant with
-	// ConfigDir, so leave them out unless deliberately pinning the CLI by token.
+	// unambiguous. GH_CONFIG_DIR already routes the agent's own `gh` CLI to this
+	// account, so TokenEnv is mainly for tools that read the token straight from the
+	// env (like the github MCP), not the CLI. Adding "GH_TOKEN"/"GITHUB_TOKEN"
+	// additionally pins the CLI to this account's token, overriding gh's own
+	// selection — handy when the OS keyring's shared default would otherwise shadow
+	// it (see resolveGitHubToken), but otherwise leave them out.
 	TokenEnv []string `json:"token_env,omitempty"`
 }
 
