@@ -3,21 +3,22 @@ package session
 import (
 	"context"
 	"os/exec"
-	"path/filepath"
 	"testing"
 
 	"github.com/ZviBaratz/atrium/cmd/cmd_test"
-	"github.com/ZviBaratz/atrium/session/git"
 	"github.com/ZviBaratz/atrium/session/tmux"
 
 	"github.com/stretchr/testify/require"
 )
 
 // reattachableInstance builds an instance whose injected tmux session reports as
-// existing (has-session succeeds) and whose Restore (attach) succeeds, so
-// Reattach takes the reattach-success path. saved is the status at save time.
+// existing (has-session succeeds) and whose Restore (attach) succeeds, so reattach
+// takes the reattach-success path. saved is the status at save time. HOME is
+// redirected to a temp dir because reattach builds tmux commands whose socket/conf
+// paths resolve through the config dir under $HOME.
 func reattachableInstance(t *testing.T, saved Status) *Instance {
 	t.Helper()
+	t.Setenv("HOME", t.TempDir())
 	pty := newRecordingPtyFactory(t, nil)
 	aliveExec := cmd_test.MockCmdExec{
 		RunFunc:    func(*exec.Cmd) error { return nil }, // has-session succeeds -> session exists
@@ -36,7 +37,7 @@ func TestReattach_ArmsSuppressionOnlyWhenSavedReady(t *testing.T) {
 	t.Run("saved Ready arms suppression", func(t *testing.T) {
 		inst := reattachableInstance(t, Ready)
 
-		inst.Reattach()
+		inst.reattach()
 		require.True(t, inst.started, "a reattached session is marked started")
 		require.Equal(t, Running, inst.GetStatus(), "a surviving session reattaches to Running")
 
@@ -47,7 +48,7 @@ func TestReattach_ArmsSuppressionOnlyWhenSavedReady(t *testing.T) {
 	t.Run("saved non-Ready does not arm", func(t *testing.T) {
 		inst := reattachableInstance(t, Running)
 
-		inst.Reattach()
+		inst.reattach()
 		require.True(t, inst.started)
 		require.Equal(t, Running, inst.GetStatus())
 
@@ -56,23 +57,14 @@ func TestReattach_ArmsSuppressionOnlyWhenSavedReady(t *testing.T) {
 	})
 }
 
-// TestReattach_SessionGoneRecoversInPlace asserts Reattach routes to recoverInPlace
+// TestReattach_SessionGoneRecoversInPlace asserts reattach routes to recoverInPlace
 // when the tmux session no longer exists. With an orphaned worktree, recovery
 // cannot relaunch and degrades to Paused (never aborting), and no session is
 // relaunched.
 func TestReattach_SessionGoneRecoversInPlace(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-	// A storage-only worktree pointing at a path that does not exist.
-	wt := git.NewWorktreeFromStorage(
-		context.Background(),
-		filepath.Join(t.TempDir(), "repo"),
-		filepath.Join(t.TempDir(), "gone"),
-		"sess", "session/sess", "", "main", false, "session/")
-	pty := newRecordingPtyFactory(t, nil)
-	ts := tmux.NewSessionWithDeps(context.Background(), "sess", "claude", pty, deadExec())
-	inst := &Instance{Title: "sess", status: Running, Program: "claude", gitWorktree: wt, tmuxSession: ts}
+	inst, pty := orphanedWorktreeInstance(t)
 
-	inst.Reattach()
+	inst.reattach()
 
 	require.True(t, inst.started, "a recovered instance must be marked started")
 	require.True(t, inst.Paused(), "a gone session with an orphaned worktree must degrade to Paused")
@@ -80,15 +72,15 @@ func TestReattach_SessionGoneRecoversInPlace(t *testing.T) {
 }
 
 // TestReattach_PausedDoesNoIO asserts a paused instance is only marked started —
-// Reattach must not probe or launch any tmux session (it has one constructed for a
+// reattach must not probe or launch any tmux session (it has one constructed for a
 // later Resume, but no live session to reattach).
 func TestReattach_PausedDoesNoIO(t *testing.T) {
 	pty := newRecordingPtyFactory(t, nil)
-	// deadExec would error if Reattach touched the session; a paused one must not.
+	// deadExec would error if reattach touched the session; a paused one must not.
 	ts := tmux.NewSessionWithDeps(context.Background(), "sess", "claude", pty, deadExec())
 	inst := &Instance{Title: "sess", status: Paused, Program: "claude", tmuxSession: ts}
 
-	inst.Reattach()
+	inst.reattach()
 
 	require.True(t, inst.started, "a paused instance is marked started")
 	require.True(t, inst.Paused(), "a paused instance stays Paused — no reattach")

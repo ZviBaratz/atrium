@@ -315,11 +315,11 @@ func (i *Instance) ToInstanceData() InstanceData {
 // FromInstanceData rehydrates an Instance from serialized data. It is pure: it
 // maps the fields, reconstructs the worktree/diff, and constructs (but does not
 // launch or reattach) the tmux Session — so it spawns no subprocesses. The live
-// reattach/recovery that used to run here now lives in Reattach, which the caller
+// reattach/recovery that used to run here now lives in reattach, which the caller
 // (Storage.LoadInstances) invokes next. branchPrefix is the configured
 // session-branch prefix, supplied by the caller so bulk restores load config once
 // instead of once per instance. ctx is the lifecycle context the instance's
-// tmux/git subprocesses (spawned later, by Reattach) derive from.
+// tmux/git subprocesses (spawned later, by reattach) derive from.
 func FromInstanceData(ctx context.Context, data InstanceData, branchPrefix string) (*Instance, error) {
 	instance := &Instance{
 		baseCtx:     ctx,
@@ -400,14 +400,19 @@ func FromInstanceData(ctx context.Context, data InstanceData, branchPrefix strin
 	return instance, nil
 }
 
-// Reattach brings a rehydrated instance online: it reattaches to a surviving tmux
+// reattach brings a rehydrated instance online: it reattaches to a surviving tmux
 // session, or recovers in place when that session is wedged or gone. This is the
 // live tmux/git IO deliberately kept out of FromInstanceData, so a caller can
 // rehydrate an instance without side effects and reattach as a separate step
 // (Storage.LoadInstances does both in sequence). A paused instance has no live
 // session to reattach — its Session was constructed for a later Resume — so it is
 // only marked started.
-func (i *Instance) Reattach() {
+//
+// Precondition: reattach must run during load, before the instance is published to
+// the poll loop. It reads tmuxSession and — via the paused branch and
+// recoverInPlace — writes started without holding i.mu, which is safe only in that
+// single-threaded, pre-publication window.
+func (i *Instance) reattach() {
 	if i.Paused() {
 		i.started = true
 		return
@@ -859,7 +864,7 @@ func (i *Instance) Start(firstTimeSetup bool) error {
 	// NOTE: the transition out of Loading is owned by the caller on the main thread,
 	// not set here from the background start goroutine, so it can never race with the
 	// UI/poll readers. The new-session flow sets Running in the instanceStartedMsg
-	// handler; the reattach path (Reattach) sets it after Start(false) returns.
+	// handler; the reattach path (reattach) sets it after Start(false) returns.
 
 	return nil
 }

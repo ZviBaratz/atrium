@@ -155,8 +155,10 @@ func (s *Storage) LoadInstances(ctx context.Context) ([]*Instance, error) {
 			return nil, fmt.Errorf("failed to create instance %s: %w", data.Title, err)
 		}
 		// FromInstanceData is now pure rehydration; reattach to the live tmux session
-		// (or recover in place) as the separate IO step.
-		instance.Reattach()
+		// (or recover in place) as the separate IO step. Safe to call here: the
+		// instance is not published until the returned slice reaches the poll loop,
+		// satisfying reattach's pre-publication precondition.
+		instance.reattach()
 		instances[i] = instance
 	}
 

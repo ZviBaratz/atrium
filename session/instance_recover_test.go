@@ -148,10 +148,13 @@ func deadExec() cmd_test.MockCmdExec {
 	}
 }
 
-// TestRecoverInPlace_OrphanedWorktreeDegradesToPaused asserts that when the
-// worktree is gone there is nothing to restart, so recovery leaves the instance
-// Paused (branch preserved, recoverable via Resume) without touching tmux.
-func TestRecoverInPlace_OrphanedWorktreeDegradesToPaused(t *testing.T) {
+// orphanedWorktreeInstance builds an instance whose tmux session is gone (deadExec
+// makes has-session fail) and whose worktree points at a nonexistent path, so any
+// recovery path degrades to Paused without relaunching. It returns the pty factory
+// so callers can assert nothing was launched. HOME is redirected to a temp dir
+// because recovery shells out to git, which reads global config from $HOME.
+func orphanedWorktreeInstance(t *testing.T) (*Instance, *recordingPtyFactory) {
+	t.Helper()
 	t.Setenv("HOME", t.TempDir())
 	// A storage-only worktree pointing at a path that does not exist.
 	wt := git.NewWorktreeFromStorage(
@@ -161,7 +164,15 @@ func TestRecoverInPlace_OrphanedWorktreeDegradesToPaused(t *testing.T) {
 		"sess", "session/sess", "", "main", false, "session/")
 	pty := newRecordingPtyFactory(t, nil)
 	ts := tmux.NewSessionWithDeps(context.Background(), "sess", "claude", pty, deadExec())
-	inst := &Instance{Title: "sess", status: Running, gitWorktree: wt, tmuxSession: ts}
+	inst := &Instance{Title: "sess", status: Running, Program: "claude", gitWorktree: wt, tmuxSession: ts}
+	return inst, pty
+}
+
+// TestRecoverInPlace_OrphanedWorktreeDegradesToPaused asserts that when the
+// worktree is gone there is nothing to restart, so recovery leaves the instance
+// Paused (branch preserved, recoverable via Resume) without touching tmux.
+func TestRecoverInPlace_OrphanedWorktreeDegradesToPaused(t *testing.T) {
+	inst, pty := orphanedWorktreeInstance(t)
 
 	inst.recoverInPlace()
 
