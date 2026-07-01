@@ -562,6 +562,41 @@ func TestGetFastForwardLocalBase(t *testing.T) {
 	})
 }
 
+func TestBoolOr(t *testing.T) {
+	tru, fls := true, false
+	t.Run("nil pointer yields the default", func(t *testing.T) {
+		assert.True(t, boolOr(nil, true))
+		assert.False(t, boolOr(nil, false))
+	})
+	t.Run("non-nil pointer yields its value, ignoring the default", func(t *testing.T) {
+		assert.True(t, boolOr(&tru, false))
+		assert.False(t, boolOr(&fls, true))
+	})
+}
+
+// TestBoolAccessorsNilReceiver locks the contract that every optional-bool
+// accessor resolves to its documented default on a nil *Config instead of
+// panicking. Several accessors previously omitted the nil-receiver guard
+// (GetSessionContextBar, GetAutoAttach, GetKillDoubleTapConfirm,
+// GetSmartDispatchAuto, GetTrustWorktreesRoot); routing them through boolOr
+// standardized the guard.
+func TestBoolAccessorsNilReceiver(t *testing.T) {
+	var c *Config
+	// Default-on accessors.
+	assert.True(t, c.GetSessionContextBar())
+	assert.True(t, c.GetHintBar())
+	assert.True(t, c.GetAutoAttach())
+	assert.True(t, c.GetShowReleaseNotesAfterUpdate())
+	assert.True(t, c.GetPRCreateDraft())
+	assert.True(t, c.GetUpdateBaseOnCreate())
+	assert.True(t, c.GetKillDoubleTapConfirm())
+	// Default-off accessors.
+	assert.False(t, c.GetNerdFont())
+	assert.False(t, c.GetFastForwardLocalBase())
+	assert.False(t, c.GetSmartDispatchAuto())
+	assert.False(t, c.GetTrustWorktreesRoot())
+}
+
 func TestGetCarryFiles(t *testing.T) {
 	t.Run("default config seeds claude settings.local.json", func(t *testing.T) {
 		assert.Equal(t, []string{".claude/settings.local.json"}, DefaultConfig().GetCarryFiles())

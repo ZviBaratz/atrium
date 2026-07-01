@@ -451,6 +451,29 @@ func (m *home) startAutoNameSelected() (tea.Model, tea.Cmd) {
 	return m, runAutoNameCmd(m.ctx, selected, selected.Prompt)
 }
 
+// worktreeAction builds a deferred command that resolves selected's git worktree
+// and runs fn against it, surfacing a lookup failure as an error message. It
+// hoists the GetGitWorktree + error preamble the push/merge/create/open PR
+// actions share; running deferred keeps the lookup and any network call off the
+// UI thread (and, when wrapped by confirmWorktreeAction, runs only on confirm).
+func worktreeAction(selected *session.Instance, fn func(worktree *git.Worktree) tea.Msg) tea.Cmd {
+	return func() tea.Msg {
+		worktree, err := selected.GetGitWorktree()
+		if err != nil {
+			return err
+		}
+		return fn(worktree)
+	}
+}
+
+// confirmWorktreeAction shows a confirmation modal whose accepted action runs fn
+// against selected's git worktree. The mutating PR actions (push, merge, create)
+// share this confirm -> worktree -> message shape; the read-only openPR uses
+// worktreeAction directly without a prompt.
+func (m *home) confirmWorktreeAction(message string, selected *session.Instance, fn func(worktree *git.Worktree) tea.Msg) tea.Cmd {
+	return m.confirmAction(message, worktreeAction(selected, fn))
+}
+
 // pushSelected confirms and pushes the selected session's branch.
 func (m *home) pushSelected() (tea.Model, tea.Cmd) {
 	selected, cmd, ok := m.selectedActionable()
@@ -463,23 +486,16 @@ func (m *home) pushSelected() (tea.Model, tea.Cmd) {
 		return m, m.handleError(fmt.Errorf("push is not available for a direct (non-git) session"))
 	}
 
-	// Create the push action as a tea.Cmd
-	pushAction := func() tea.Msg {
-		// Default commit message with timestamp
+	// Show confirmation modal; the push runs (deferred) only on confirm.
+	message := fmt.Sprintf("Push changes from session '%s'?", selected.DisplayName())
+	return m, m.confirmWorktreeAction(message, selected, func(worktree *git.Worktree) tea.Msg {
+		// Default commit message with timestamp.
 		commitMsg := fmt.Sprintf("[atrium] update from '%s' on %s", selected.DisplayName(), time.Now().Format(time.RFC822))
-		worktree, err := selected.GetGitWorktree()
-		if err != nil {
-			return err
-		}
-		if err = worktree.PushChanges(commitMsg, true); err != nil {
+		if err := worktree.PushChanges(commitMsg, true); err != nil {
 			return err
 		}
 		return nil
-	}
-
-	// Show confirmation modal
-	message := fmt.Sprintf("Push changes from session '%s'?", selected.DisplayName())
-	return m, m.confirmAction(message, pushAction)
+	})
 }
 
 // mergeSelected confirms and squash-merges the selected session's open PR, gated
@@ -505,23 +521,18 @@ func (m *home) mergeSelected() (tea.Model, tea.Cmd) {
 		return m, m.handleInfoNotice(reason)
 	}
 	number := status.Number
-	// Defer the worktree lookup and network merge into the confirm action, which
-	// the runtime runs only if the user confirms.
-	mergeAction := func() tea.Msg {
-		worktree, err := selected.GetGitWorktree()
-		if err != nil {
-			return err
-		}
-		if err := worktree.MergePR(); err != nil {
-			return err
-		}
-		return prMergedMsg{number: number}
-	}
 	message := fmt.Sprintf("Merge PR #%d from '%s' (squash)?", number, selected.DisplayName())
 	if status.CI == git.CIPending {
 		message += " CI is still running."
 	}
-	return m, m.confirmAction(message, mergeAction)
+	// Defer the worktree lookup and network merge into the confirm action, run
+	// only if the user confirms.
+	return m, m.confirmWorktreeAction(message, selected, func(worktree *git.Worktree) tea.Msg {
+		if err := worktree.MergePR(); err != nil {
+			return err
+		}
+		return prMergedMsg{number: number}
+	})
 }
 
 // createPRForSelected confirms and opens a PR for the selected session, gated on
@@ -556,25 +567,20 @@ func (m *home) createPRForSelected() (tea.Model, tea.Cmd) {
 	}
 	// The draft default is configurable; capture it for the deferred action.
 	draft := m.appConfig.GetPRCreateDraft()
-	// Defer the worktree lookup and network create into the confirm action, which
-	// the runtime runs only if the user confirms.
-	createAction := func() tea.Msg {
-		worktree, err := selected.GetGitWorktree()
-		if err != nil {
-			return err
-		}
-		number, err := worktree.CreatePR(draft)
-		if err != nil {
-			return err
-		}
-		return prCreatedMsg{number: number}
-	}
 	adjective := "ready-for-review"
 	if draft {
 		adjective = "draft"
 	}
 	message := fmt.Sprintf("Create %s PR from '%s'?", adjective, selected.DisplayName())
-	return m, m.confirmAction(message, createAction)
+	// Defer the worktree lookup and network create into the confirm action, run
+	// only if the user confirms.
+	return m, m.confirmWorktreeAction(message, selected, func(worktree *git.Worktree) tea.Msg {
+		number, err := worktree.CreatePR(draft)
+		if err != nil {
+			return err
+		}
+		return prCreatedMsg{number: number}
+	})
 }
 
 // openPRForSelected launches the browser at the selected session's PR. Viewing is
@@ -602,17 +608,12 @@ func (m *home) openPRForSelected() (tea.Model, tea.Cmd) {
 	number := status.Number
 	// Defer the worktree lookup + browser launch into a tea.Cmd so a slow gh
 	// never blocks the UI thread. No confirmation: opening a browser is read-only.
-	openAction := func() tea.Msg {
-		worktree, err := selected.GetGitWorktree()
-		if err != nil {
-			return err
-		}
+	return m, worktreeAction(selected, func(worktree *git.Worktree) tea.Msg {
 		if err := worktree.OpenPRURL(); err != nil {
 			return err
 		}
 		return prOpenedMsg{number: number}
-	}
-	return m, openAction
+	})
 }
 
 // pauseSelected commits the selected session's changes, frees its worktree, and

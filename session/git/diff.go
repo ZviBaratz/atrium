@@ -75,74 +75,70 @@ func (d *DiffStats) IsEmpty() bool {
 	return d.Added == 0 && d.Removed == 0 && d.Content == ""
 }
 
-// Diff returns the git diff between the worktree and the base branch along with statistics
-func (g *Worktree) Diff() *DiffStats {
+// diffWith runs the scaffolding shared by Diff and DiffNumstat and delegates only
+// the differing middle to fill. It checks for a base commit (surfacing the
+// recognizable errBaseCommitNotSet rather than running `git diff ""`), snapshots
+// the worktree path under the lock so a concurrent deep Rename — which moves the
+// worktree and swaps the field — can't tear the read (subsequent git calls run
+// against the local snapshot without holding the lock), surfaces untracked files
+// best-effort (see intentAddUntracked; its error is intentionally not
+// propagated), then runs fill to populate the diff stats (the line/file counts,
+// plus the full content for Diff). On a base-commit or fill error it returns early
+// with stats.Error set and no repo stats; on success it fills the
+// commit/behind/dirty counters before returning.
+func (g *Worktree) diffWith(fill func(wt string, stats *DiffStats) error) *DiffStats {
 	stats := &DiffStats{}
 
-	// Without a base commit there is nothing to diff against; surface the recognizable
-	// errBaseCommitNotSet rather than running `git diff ""`. Checked before any git call.
 	if g.GetBaseCommitSHA() == "" {
 		stats.Error = errBaseCommitNotSet
 		return stats
 	}
 
-	// Snapshot the worktree path under the lock so a concurrent deep Rename (which moves
-	// the worktree and swaps the field) can't tear the read. Subsequent git calls run
-	// against the local without holding the lock.
 	wt := g.snapshotWorktreePath()
-
-	// Surface untracked files in the diff (see intentAddUntracked). Best-effort: a
-	// failure here must not blank the diff, so its error is intentionally not propagated.
 	g.intentAddUntracked(wt)
 
-	content, err := g.runGitCommand(wt, "--no-pager", "diff", g.GetBaseCommitSHA())
-	if err != nil {
+	if err := fill(wt, stats); err != nil {
 		stats.Error = err
 		return stats
 	}
-	lines := strings.Split(content, "\n")
-	for _, line := range lines {
-		if strings.HasPrefix(line, "+") && !strings.HasPrefix(line, "+++") {
-			stats.Added++
-		} else if strings.HasPrefix(line, "-") && !strings.HasPrefix(line, "---") {
-			stats.Removed++
-		}
-	}
-	stats.Content = content
-	stats.FilesChanged = countDiffFiles(content)
 
 	g.computeRepoStats(stats, wt)
 	return stats
+}
+
+// Diff returns the git diff between the worktree and the base branch along with statistics
+func (g *Worktree) Diff() *DiffStats {
+	return g.diffWith(func(wt string, stats *DiffStats) error {
+		content, err := g.runGitCommand(wt, "--no-pager", "diff", g.GetBaseCommitSHA())
+		if err != nil {
+			return err
+		}
+		lines := strings.Split(content, "\n")
+		for _, line := range lines {
+			if strings.HasPrefix(line, "+") && !strings.HasPrefix(line, "+++") {
+				stats.Added++
+			} else if strings.HasPrefix(line, "-") && !strings.HasPrefix(line, "---") {
+				stats.Removed++
+			}
+		}
+		stats.Content = content
+		stats.FilesChanged = countDiffFiles(content)
+		return nil
+	})
 }
 
 // DiffNumstat returns the added/removed line counts between the worktree and the
 // base branch without loading the full diff content into memory. Use this when
 // only the summary counts are needed (e.g. for unselected instances in the list).
 func (g *Worktree) DiffNumstat() *DiffStats {
-	stats := &DiffStats{}
-
-	// See Diff: without a base commit there is nothing to diff against.
-	if g.GetBaseCommitSHA() == "" {
-		stats.Error = errBaseCommitNotSet
-		return stats
-	}
-
-	// See Diff: snapshot the worktree path so a concurrent rename can't tear the read.
-	wt := g.snapshotWorktreePath()
-
-	// See Diff: best-effort intent-add, error intentionally not propagated.
-	g.intentAddUntracked(wt)
-
-	out, err := g.runGitCommand(wt, "--no-pager", "diff", "--numstat", g.GetBaseCommitSHA())
-	if err != nil {
-		stats.Error = err
-		return stats
-	}
-
-	stats.Added, stats.Removed, stats.FilesChanged = parseNumstat(out)
-
-	g.computeRepoStats(stats, wt)
-	return stats
+	return g.diffWith(func(wt string, stats *DiffStats) error {
+		out, err := g.runGitCommand(wt, "--no-pager", "diff", "--numstat", g.GetBaseCommitSHA())
+		if err != nil {
+			return err
+		}
+		stats.Added, stats.Removed, stats.FilesChanged = parseNumstat(out)
+		return nil
+	})
 }
 
 // snapshotWorktreePath reads worktreePath under the read lock so background diff
