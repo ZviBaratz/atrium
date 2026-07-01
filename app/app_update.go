@@ -21,6 +21,12 @@ import (
 // keyboard scroll keys move one line for precise positioning.
 const wheelScrollLines = 3
 
+// cleanupTerminalForInstance tears down an instance's cached preview terminal.
+// It is a package var (method expression) so batch-outcome tests can swap in a
+// capturing fake and pin which instances a batch tears down — resume must tear
+// down none. Same seam idiom as releaseResolved / actions.CopyToClipboard.
+var cleanupTerminalForInstance = (*ui.TabbedWindow).CleanupTerminalForInstance
+
 // prMergedMsg is returned by a confirmed merge action to report success back
 // through the runtime, carrying the merged PR number for the acknowledgment.
 type prMergedMsg struct{ number int }
@@ -239,45 +245,27 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// any failures go to a persistent modal the user must read (it names which
 		// sessions didn't come back and why). Either way, refresh the list so the
 		// now-Running rows reflect the restore.
-		if len(msg.failures) == 0 {
-			return m, tea.Batch(
-				m.handleInfoNotice(fmt.Sprintf("resumed %d session%s", msg.resumed, plural(msg.resumed))),
-				m.instanceChanged(),
-			)
-		}
-		return m, tea.Batch(m.showInfo(msg.summary()), m.instanceChanged())
+		return m, m.finishBatch(nil, len(msg.failures) > 0,
+			fmt.Sprintf("resumed %d session%s", msg.resumed, plural(msg.resumed)),
+			msg.summary())
 	case batchPauseDoneMsg:
 		// A confirmed "pause all" finished. Tear down each parked session's preview
 		// terminal on the main loop (single-session pause does the same after Pause).
 		// All-success gets a transient notice; any failures go to a persistent modal
 		// naming which sessions didn't park and why. Either way, refresh the list so
 		// the now-Paused rows reflect the park.
-		for _, inst := range msg.pausedInstances {
-			m.tabbedWindow.CleanupTerminalForInstance(inst)
-		}
-		if len(msg.failures) == 0 {
-			return m, tea.Batch(
-				m.handleInfoNotice(fmt.Sprintf("paused %d session%s", msg.paused, plural(msg.paused))),
-				m.instanceChanged(),
-			)
-		}
-		return m, tea.Batch(m.showInfo(msg.summary()), m.instanceChanged())
+		return m, m.finishBatch(msg.pausedInstances, len(msg.failures) > 0,
+			fmt.Sprintf("paused %d session%s", msg.paused, plural(msg.paused)),
+			msg.summary())
 	case batchKillDoneMsg:
 		// A confirmed batch kill finished. Tear down each killed session's preview
 		// terminal on the main loop (single-session kill does the same). All-success
 		// gets a transient notice; any failures go to a persistent modal naming which
 		// sessions survived and why. Either way, refresh the list so the now-gone rows
 		// disappear.
-		for _, inst := range msg.killedInstances {
-			m.tabbedWindow.CleanupTerminalForInstance(inst)
-		}
-		if len(msg.failures) == 0 {
-			return m, tea.Batch(
-				m.handleInfoNotice(fmt.Sprintf("killed %d session%s", msg.killed, plural(msg.killed))),
-				m.instanceChanged(),
-			)
-		}
-		return m, tea.Batch(m.showInfo(msg.summary()), m.instanceChanged())
+		return m, m.finishBatch(msg.killedInstances, len(msg.failures) > 0,
+			fmt.Sprintf("killed %d session%s", msg.killed, plural(msg.killed)),
+			msg.summary())
 	case prMergedMsg:
 		// A confirmed merge succeeded: acknowledge it and refresh so the PR badge
 		// reflects the now-merged state on the next poll.
@@ -316,6 +304,22 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, cmd
 	}
 	return m, nil
+}
+
+// finishBatch renders the shared Update-side outcome of a batch resume/pause/kill.
+// It tears down the preview terminal of each torn-down session (cleanup is empty
+// for resume, which only flips in-memory status and must keep its preview
+// terminal), then either flashes the all-success notice or raises the failure
+// modal, and always refreshes the list. notice and summary are precomputed by the
+// caller so the three distinct summary() verbs stay intact.
+func (m *home) finishBatch(cleanup []*session.Instance, hasFailures bool, notice, summary string) tea.Cmd {
+	for _, inst := range cleanup {
+		cleanupTerminalForInstance(m.tabbedWindow, inst)
+	}
+	if !hasFailures {
+		return tea.Batch(m.handleInfoNotice(notice), m.instanceChanged())
+	}
+	return tea.Batch(m.showInfo(summary), m.instanceChanged())
 }
 
 func (m *home) handleQuit() (tea.Model, tea.Cmd) {
