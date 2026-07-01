@@ -143,6 +143,15 @@ type Session struct {
 	// own `gh` (and any https git credential-helper) calls run under. Empty =
 	// inherit. Set once before Start (SetGHConfigDir); fixed for the session life.
 	ghConfigDir string
+	// githubTokenEnv lists env var names (from config.GHAccount.TokenEnv, e.g.
+	// GITHUB_PERSONAL_ACCESS_TOKEN) to inject the routed account's gh token under,
+	// so tools that read a token from the env — notably the github MCP's
+	// `Authorization: Bearer ${GITHUB_PERSONAL_ACCESS_TOKEN}` — use this session's
+	// account rather than a stale value frozen into the tmux server env. The token
+	// VALUE is resolved fresh in start() and never held on this struct, so it is
+	// never persisted; only the names are creation-fixed (SetGitHubTokenEnv). Empty
+	// = inject no token.
+	githubTokenEnv []string
 	// adapter holds the per-agent heuristics resolved once from program at
 	// construction; never nil (unknown programs get agent.Generic).
 	adapter *agent.Adapter
@@ -317,6 +326,20 @@ func (t *Session) SetGHConfigDir(dir string) {
 	t.ghConfigDir = dir
 }
 
+// SetGitHubTokenEnv sets the env var names the routed account's gh token is
+// injected under at launch (config.GHAccount.TokenEnv). Call before Start; the
+// token value is resolved at session birth and never stored on the session.
+func (t *Session) SetGitHubTokenEnv(names []string) {
+	t.githubTokenEnv = names
+}
+
+// atriumMarkerEnv is injected into every session's env so external shell hooks
+// (e.g. a per-repo gh/Claude account switcher in the user's zshrc) can detect an
+// Atrium session and defer to the CLAUDE_CONFIG_DIR / GH_CONFIG_DIR / token env
+// injected here, instead of re-deriving — and clobbering — it from the shell's
+// current directory.
+const atriumMarkerEnv = "ATRIUM=1"
+
 func newSession(ctx context.Context, sessionName, windowName, program string, ptyFactory PtyFactory, cmdExec cmd.Executor) *Session {
 	return &Session{
 		baseCtx:       ctx,
@@ -441,6 +464,27 @@ func (t *Session) start(workDir string, program string) error {
 		// credential-helper) to the right GitHub account, per-session, with no
 		// mutation of the global ~/.config/gh active account.
 		args = append(args, "-e", "GH_CONFIG_DIR="+t.ghConfigDir)
+	}
+	// Marker for external shell hooks (see atriumMarkerEnv). Injected for every
+	// session; -e values are single argv elements, so a sanitizedName is safe as a
+	// value (only the trailing program word is handed to `sh -c`).
+	args = append(args, "-e", atriumMarkerEnv, "-e", "ATRIUM_SESSION="+t.sanitizedName)
+	// Resolve the routed account's gh token and inject it under each configured env
+	// name (e.g. GITHUB_PERSONAL_ACCESS_TOKEN, which the github MCP reads). The
+	// value is a start() local — never stored on the session nor persisted. A
+	// failed resolution (no gh / not authenticated) injects nothing; launch still
+	// proceeds, so a token hiccup can never block a session.
+	if len(t.githubTokenEnv) > 0 {
+		tokCtx, cancel := t.opContext()
+		tok, err := resolveGitHubToken(tokCtx, t.ghConfigDir)
+		cancel()
+		if err != nil {
+			log.InfoLog.Printf("gh token injection skipped for %s: %v", t.sanitizedName, err)
+		} else {
+			for _, name := range t.githubTokenEnv {
+				args = append(args, "-e", name+"="+tok)
+			}
+		}
 	}
 	args = append(args, program)
 	cmd := tmuxCommand(t.baseContext(), args...)
