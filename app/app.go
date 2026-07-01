@@ -41,8 +41,12 @@ func Run(ctx context.Context, program string, autoYes bool, version, binName str
 	// ("manager not initialized") until NewGlobal() is called. Idempotent, so it
 	// coexists with the test init()s that also call it.
 	zone.NewGlobal()
+	h, err := newHome(ctx, program, autoYes, version, binName)
+	if err != nil {
+		return err
+	}
 	p := tea.NewProgram(
-		newHome(ctx, program, autoYes, version, binName),
+		h,
 		tea.WithAltScreen(),
 		tea.WithMouseCellMotion(), // Mouse scroll
 		// Normalize SS3 Home/End (ESC O H/F) that a terminal left in application-cursor
@@ -52,7 +56,7 @@ func Run(ctx context.Context, program string, autoYes bool, version, binName str
 		// ctx in main) also stops the TUI loop, not just the subprocesses.
 		tea.WithContext(ctx),
 	)
-	_, err := p.Run()
+	_, err = p.Run()
 	if ctx.Err() != nil {
 		// Signal-driven shutdown: Bubble Tea reports the kill as an error
 		// (ErrProgramKilled), but for us it is a clean exit.
@@ -287,7 +291,12 @@ type home struct {
 	selectedSince time.Time
 }
 
-func newHome(ctx context.Context, program string, autoYes bool, version, binName string) *home {
+// newHome loads the persisted config, state, and instances from disk — the IO
+// the TUI is built on — then hands them to assembleHome, which builds the root
+// model with no further IO. Splitting the two keeps assembleHome a pure,
+// unit-testable constructor and lets a load failure return an error (surfaced by
+// Run) instead of an os.Exit from inside the constructor.
+func newHome(ctx context.Context, program string, autoYes bool, version, binName string) (*home, error) {
 	// Load application config
 	appConfig := config.LoadConfig()
 
@@ -300,8 +309,9 @@ func newHome(ctx context.Context, program string, autoYes bool, version, binName
 	maybeTrustWorktreesRoot(appConfig, program)
 
 	// Activate the configured UI theme before any component is constructed, so
-	// theme.Current() is correct everywhere it's read. The palette and the
-	// glyph set (plain vs Nerd-Font) are independent axes.
+	// theme.Current() is correct everywhere it's read (assembleHome's spinner
+	// included). The palette and the glyph set (plain vs Nerd-Font) are
+	// independent axes.
 	theme.Set(appConfig.Theme)
 	theme.SetNerdFont(appConfig.GetNerdFont())
 
@@ -311,72 +321,16 @@ func newHome(ctx context.Context, program string, autoYes bool, version, binName
 	// Initialize storage
 	storage, err := session.NewStorage(appState)
 	if err != nil {
-		fmt.Printf("Failed to initialize storage: %v\n", err)
-		os.Exit(1)
+		return nil, fmt.Errorf("failed to initialize storage: %w", err)
 	}
-
-	h := &home{
-		ctx: ctx,
-		spinner: spinner.New(spinner.WithSpinner(spinner.Spinner{
-			Frames: theme.Current().Glyphs.SpinnerFrames,
-			FPS:    theme.Current().Glyphs.SpinnerFPS,
-		})),
-		menu:         ui.NewMenu(),
-		tabbedWindow: ui.NewTabbedWindow(ui.NewPreviewPane(), ui.NewDiffPane(), ui.NewTerminalPane(ctx)),
-		errBox:       ui.NewErrBox(),
-		storage:      storage,
-		lostStrikes:  make(map[*session.Instance]int),
-		appConfig:    appConfig,
-		program:      program,
-		autoYes:      autoYes,
-		version:      version,
-		binName:      binName,
-		state:        stateDefault,
-		appState:     appState,
-		listRatio:    appState.GetListRatio(),
-	}
-	// Seed the picker's scanned-repo candidates from the persisted cache so the
-	// first form-open after launch is populated before the startup scan lands.
-	// Gated on the feature being enabled: with project_search_depth ≤ 0, a
-	// cache written before the user disabled the scan must not keep surfacing.
-	if appConfig.GetProjectSearchDepth() > 0 {
-		h.scannedRepos, h.lastScanAt = appState.GetScannedRepos()
-	}
-	h.list = ui.NewList(&h.spinner)
-	// With the always-on hint bar enabled, the bar already carries the first-run
-	// keys; suppress the list's centered empty hint so guidance isn't duplicated.
-	h.list.SetShowEmptyHint(!appConfig.GetHintBar())
-	// Hide the redundant branch namespace (e.g. "zvi/") from each row's branch
-	// label — it repeats on every session and only crowds the diff off the line.
-	h.list.SetBranchPrefix(appConfig.GetBranchPrefix())
-	// Seed the model-chip mode (on/off; see config.GetModelIndicator).
-	h.list.SetModelIndicator(appConfig.GetModelIndicator())
-	// Seed the permission-mode chip (on/off; see config.GetPermissionIndicator).
-	h.list.SetPermissionIndicator(appConfig.GetPermissionIndicator())
 
 	// Load saved instances
 	instances, err := storage.LoadInstances(ctx)
 	if err != nil {
-		fmt.Printf("Failed to load instances: %v\n", err)
-		os.Exit(1)
+		return nil, fmt.Errorf("failed to load instances: %w", err)
 	}
 
-	// Add loaded instances to the list
-	for _, instance := range instances {
-		// Call the finalizer immediately.
-		h.list.AddInstance(instance)()
-		if autoYes {
-			instance.AutoYes = true
-		}
-	}
-	// Restore folded groups only after every instance is loaded — AddInstance auto-expands the
-	// group it inserts into, so applying persisted folds earlier would be undone by the loop.
-	h.list.SetCollapsedRepos(appState.GetCollapsedRepos())
-	// Apply the persisted within-group sort mode once the full (creation-order) list
-	// is in place, so its canonical-order snapshot is the real creation order.
-	h.list.SetSortMode(appConfig.GetSessionSort())
-
-	return h
+	return assembleHome(ctx, program, autoYes, version, binName, appConfig, appState, storage, instances), nil
 }
 
 func (m *home) Init() tea.Cmd {
