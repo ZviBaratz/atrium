@@ -258,13 +258,17 @@ func TestInstanceAccountGettersAndFromData(t *testing.T) {
 	require.NoError(t, err)
 	inst.SetClaudeAccount("quantivly", "/home/tester/.claude-quantivly", false)
 	inst.SetGHConfigDir("/home/tester/.config/gh-quantivly")
+	inst.SetGitHubTokenEnv([]string{"GITHUB_PERSONAL_ACCESS_TOKEN"})
 	require.Equal(t, "quantivly", inst.ClaudeAccountName())
 	require.Equal(t, "/home/tester/.claude-quantivly", inst.ClaudeConfigDir())
 	require.Equal(t, "/home/tester/.config/gh-quantivly", inst.GHConfigDir())
+	require.Equal(t, []string{"GITHUB_PERSONAL_ACCESS_TOKEN"}, inst.GitHubTokenEnv())
 	require.False(t, inst.ClaudeAccountIsDefault())
 
 	require.Equal(t, "quantivly", inst.ToInstanceData().ClaudeAccount)
 	require.Equal(t, "/home/tester/.config/gh-quantivly", inst.ToInstanceData().GHConfigDir)
+	// Only the token-env NAMES are persisted; the token value is never a field.
+	require.Equal(t, []string{"GITHUB_PERSONAL_ACCESS_TOKEN"}, inst.ToInstanceData().GitHubTokenEnv)
 
 	// FromInstanceData on a paused direct instance is hermetic (no live tmux:
 	// the paused branch constructs a Session without shelling out).
@@ -277,11 +281,18 @@ func TestInstanceAccountGettersAndFromData(t *testing.T) {
 		ClaudeAccount:   "quantivly",
 		ClaudeConfigDir: "/home/tester/.claude-quantivly",
 		GHConfigDir:     "/home/tester/.config/gh-quantivly",
+		GitHubTokenEnv:  []string{"GITHUB_PERSONAL_ACCESS_TOKEN"},
 	}, "session/")
 	require.NoError(t, err)
 	require.Equal(t, "quantivly", restored.ClaudeAccountName())
 	require.Equal(t, "/home/tester/.claude-quantivly", restored.ClaudeConfigDir())
 	require.Equal(t, "/home/tester/.config/gh-quantivly", restored.GHConfigDir())
+	require.Equal(t, []string{"GITHUB_PERSONAL_ACCESS_TOKEN"}, restored.GitHubTokenEnv())
+
+	// A state.json predating the feature (no github_token_env) decodes to nil.
+	var legacy InstanceData
+	require.NoError(t, json.Unmarshal([]byte(`{"title":"t","program":"claude","direct":true}`), &legacy))
+	require.Nil(t, legacy.GitHubTokenEnv)
 }
 
 // TestPermissionModeRoundTrip asserts the live permission mode survives a

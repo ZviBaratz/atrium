@@ -207,6 +207,44 @@ func TestTerminalFallbackStates(t *testing.T) {
 	})
 }
 
+// TestTerminalFallbackCentered locks the fallback placeholder to the shared
+// centerInBox contract: it must fill the pane's full height and sit at true
+// vertical center, the same way the preview and diff panes center theirs. The
+// prior hand-rolled path subtracted the tab/frame chrome a second time
+// (height-3-4) even though TabbedWindow.SetSize had already removed it, so the
+// banner rendered height-7 lines tall and sat high. This test fails on that old
+// output and passes once the fallback centers via centerInBox.
+func TestTerminalFallbackCentered(t *testing.T) {
+	log.Initialize(false)
+	defer log.Close()
+
+	const w, h = 80, 30
+	tp := NewTerminalPane(context.Background())
+	tp.SetSize(w, h)
+
+	// A nil instance drops the pane into the fallback banner state.
+	require.NoError(t, tp.UpdateContent(nil))
+
+	lines := strings.Split(tp.String(), "\n")
+	require.Len(t, lines, h, "fallback must occupy the pane's full height (was height-7 with the old double chrome subtraction)")
+
+	first, last := -1, -1
+	for i, l := range lines {
+		if strings.TrimSpace(l) != "" {
+			if first == -1 {
+				first = i
+			}
+			last = i
+		}
+	}
+	require.NotEqual(t, -1, first, "fallback text should be present")
+	top := first
+	bottom := len(lines) - 1 - last
+	if d := top - bottom; d < -1 || d > 1 {
+		t.Fatalf("fallback not vertically centered: %d blank lines above, %d below", top, bottom)
+	}
+}
+
 func TestTerminalSessionCaching(t *testing.T) {
 	log.Initialize(false)
 	defer log.Close()

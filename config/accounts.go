@@ -35,16 +35,27 @@ func (c *Config) ResolveClaudeAccount(remoteURL, targetPath string) (name, confi
 // CLAUDE_CONFIG_DIR. Because it reads its own section, an account/context may set
 // a Claude dir but no gh dir (or vice versa) and each resolves independently.
 func (c *Config) ResolveGHConfigDir(remoteURL, targetPath string) string {
+	dir, _ := c.ResolveGHAccount(remoteURL, targetPath)
+	return dir
+}
+
+// ResolveGHAccount is ResolveGHConfigDir plus the resolved account's TokenEnv —
+// the env var names its gh token should be injected under at session launch (nil
+// when nothing matches, there is no catch-all, or the matched account sets no
+// TokenEnv). Same routing as ResolveGHConfigDir; callers that need the token-env
+// names use this, and ResolveGHConfigDir delegates here so the two never drift.
+func (c *Config) ResolveGHAccount(remoteURL, targetPath string) (configDir string, tokenEnv []string) {
 	if len(c.GHAccounts) == 0 {
-		return ""
+		return "", nil
 	}
 	idx, _ := matchRouteIndex(len(c.GHAccounts), strings.ToLower(remoteURL), strings.ToLower(targetPath),
 		func(i int) []string { return c.GHAccounts[i].RemoteMatches },
 		func(i int) []string { return c.GHAccounts[i].PathMatches })
 	if idx < 0 {
-		return ""
+		return "", nil
 	}
-	return c.GHAccounts[idx].ResolvedConfigDir()
+	a := c.GHAccounts[idx]
+	return a.ResolvedConfigDir(), a.TokenEnv
 }
 
 // matchRouteIndex runs the shared per-account routing for an account section of

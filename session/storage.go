@@ -55,6 +55,12 @@ type InstanceData struct {
 	// tmux session + Atrium's gh subprocesses. omitempty: a state.json predating
 	// the feature decodes to empty -> no injection (inherit ambient gh account).
 	GHConfigDir string `json:"gh_config_dir,omitempty"`
+	// GitHubTokenEnv are the env var names the routed account's gh token is
+	// injected under at launch (config.GHAccount.TokenEnv). Only the NAMES are
+	// persisted — the token VALUE is resolved fresh at session start and never
+	// serialized, so state.json never holds a credential. omitempty: legacy
+	// state.json decodes to nil -> no token injection.
+	GitHubTokenEnv []string `json:"github_token_env,omitempty"`
 
 	// Model is the session's transcript-derived model id (e.g.
 	// "claude-opus-4-7"), persisted so paused sessions keep their model chip.
