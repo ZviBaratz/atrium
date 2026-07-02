@@ -394,6 +394,29 @@ func TestSettingsOverlay_CycleGroupMode(t *testing.T) {
 	assert.Equal(t, config.GroupModeRepo, cfg.GetGroupMode(), "enum wraps")
 }
 
+// The account-clustering row presents an off/on toggle while storing the
+// repo/account config value underneath, so config.json (and a future third
+// grouping axis) keep their vocabulary. The label names the added layer rather
+// than implying account grouping replaces repo grouping.
+func TestSettingsOverlay_AccountClusteringRowMapsOffOn(t *testing.T) {
+	cfg := config.DefaultConfig()
+	var row settingRow
+	for _, r := range newSettingRows(cfg) {
+		if r.key == "group_mode" {
+			row = r
+		}
+	}
+	require.Equal(t, "Account clustering", row.label)
+	require.Equal(t, []string{"off", "on"}, row.options(cfg))
+
+	require.Equal(t, "off", row.get(cfg), "repo (the default) displays as off")
+	require.NoError(t, row.set(cfg, "on"))
+	require.Equal(t, config.GroupModeAccount, cfg.GroupMode, "on stores account")
+	require.Equal(t, "on", row.get(cfg))
+	require.NoError(t, row.set(cfg, "off"))
+	require.Equal(t, config.GroupModeRepo, cfg.GroupMode, "off stores repo")
+}
+
 func TestSettingsOverlay_CarryFilesRowExists(t *testing.T) {
 	o := NewSettingsOverlay(config.DefaultConfig())
 	assert.True(t, o.SelectRow("carry_files"), "settings panel must have a carry_files row")
