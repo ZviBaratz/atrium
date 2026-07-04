@@ -11,14 +11,11 @@ import (
 	"errors"
 	"fmt"
 	"github.com/ZviBaratz/atrium/app"
-	cmd2 "github.com/ZviBaratz/atrium/cmd"
 	"github.com/ZviBaratz/atrium/config"
 	"github.com/ZviBaratz/atrium/daemon"
 	"github.com/ZviBaratz/atrium/internal/doctor"
 	"github.com/ZviBaratz/atrium/internal/update"
 	"github.com/ZviBaratz/atrium/log"
-	"github.com/ZviBaratz/atrium/session"
-	"github.com/ZviBaratz/atrium/session/git"
 	"github.com/ZviBaratz/atrium/session/tmux"
 	"os"
 	"os/signal"
@@ -138,62 +135,6 @@ var (
 			}
 
 			return app.Run(ctx, program, autoYes, version, binName)
-		},
-	}
-
-	resetCmd = &cobra.Command{
-		Use:   "reset",
-		Short: "Reset all stored instances",
-		RunE: func(cmd *cobra.Command, args []string) error {
-			// One-shot CLI command; a plain Background context is enough (the
-			// per-operation timeouts still bound every subprocess).
-			ctx := context.Background()
-			log.Initialize(false)
-			defer log.Close()
-
-			state := config.LoadState()
-			storage, err := session.NewStorage(state)
-			if err != nil {
-				return fmt.Errorf("failed to initialize storage: %w", err)
-			}
-
-			// Capture the repo paths before deleting instances so CleanupWorktrees
-			// can run its git commands in the correct repositories regardless of the
-			// current working directory.
-			instances, err := storage.LoadInstances(ctx)
-			if err != nil {
-				return fmt.Errorf("failed to load instances: %w", err)
-			}
-			repoPaths := make([]string, 0, len(instances))
-			for _, inst := range instances {
-				repoPaths = append(repoPaths, inst.GetRepoPath())
-			}
-
-			if err := storage.DeleteAllInstances(); err != nil {
-				return fmt.Errorf("failed to reset storage: %w", err)
-			}
-			fmt.Println("Storage has been reset successfully")
-
-			if err := tmux.CleanupSessions(ctx, cmd2.MakeExecutor()); err != nil {
-				return fmt.Errorf("failed to cleanup tmux sessions: %w", err)
-			}
-			fmt.Println("Tmux sessions have been cleaned up")
-
-			if err := git.CleanupWorktrees(ctx, repoPaths); err != nil {
-				return fmt.Errorf("failed to cleanup worktrees: %w", err)
-			}
-			fmt.Println("Worktrees have been cleaned up")
-
-			// Kill any daemon that's running.
-			if err := daemon.StopDaemon(); err != nil {
-				// Log (to the file) before returning, matching the root command's
-				// handling, so the failure is captured and not just surfaced to stderr.
-				log.ErrorLog.Printf("failed to stop daemon: %v", err)
-				return fmt.Errorf("failed to stop daemon: %w", err)
-			}
-			fmt.Println("daemon has been stopped")
-
-			return nil
 		},
 	}
 

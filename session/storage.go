@@ -248,3 +248,21 @@ func (s *Storage) UpdateInstance(instance *Instance) error {
 func (s *Storage) DeleteAllInstances() error {
 	return s.state.DeleteAllInstances()
 }
+
+// RepoPaths returns the repository path of every stored instance, read from the
+// raw serialized data. Like DeleteInstance it deliberately bypasses
+// LoadInstances: rehydrating would reattach — or recover, i.e. relaunch — live
+// sessions, which a caller like `reset` is about to destroy, and a raw read
+// cannot fail on an orphaned entry. Direct sessions have no repo and yield ""
+// (matching Instance.GetRepoPath); callers filter empties.
+func (s *Storage) RepoPaths() ([]string, error) {
+	instances, err := s.loadInstanceData()
+	if err != nil {
+		return nil, fmt.Errorf("failed to load instances: %w", err)
+	}
+	paths := make([]string, 0, len(instances))
+	for _, data := range instances {
+		paths = append(paths, data.Worktree.RepoPath)
+	}
+	return paths, nil
+}
