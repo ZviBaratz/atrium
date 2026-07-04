@@ -254,7 +254,8 @@ func (s *Storage) DeleteAllInstances() error {
 // LoadInstances: rehydrating would reattach — or recover, i.e. relaunch — live
 // sessions, which a caller like `reset` is about to destroy, and a raw read
 // cannot fail on an orphaned entry. Direct sessions have no repo and yield ""
-// (matching Instance.GetRepoPath); callers filter empties.
+// (matching Instance.GetRepoPath); the empties are harmless — the consumer,
+// git.CleanupWorktrees, drops them itself.
 func (s *Storage) RepoPaths() ([]string, error) {
 	instances, err := s.loadInstanceData()
 	if err != nil {
