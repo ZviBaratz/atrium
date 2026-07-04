@@ -2,9 +2,7 @@ package main
 
 import (
 	"context"
-	"errors"
 	"fmt"
-	"path/filepath"
 
 	cmd2 "github.com/ZviBaratz/atrium/cmd"
 	"github.com/ZviBaratz/atrium/config"
@@ -43,18 +41,11 @@ var resetCmd = &cobra.Command{
 //     guarantees that dying save lands before the deletion below rather than
 //     resurrecting the deleted instances after it.
 func runReset(ctx context.Context, cmdExec cmd2.Executor) error {
-	// Failing to resolve or open the lock is non-fatal (log and reset unlocked),
-	// matching the root command; only an already-held lock refuses.
-	if lockPath, err := tuiLockPath(); err != nil {
-		log.WarningLog.Printf("could not resolve TUI lock path: %v; resetting without single-instance lock", err)
-	} else if release, err := acquireTUILock(lockPath); err != nil {
-		if errors.Is(err, errTUIAlreadyRunning) {
-			return fmt.Errorf("atrium is running for this data directory (%s); close it before resetting", filepath.Dir(lockPath))
-		}
-		log.WarningLog.Printf("could not acquire TUI lock %s: %v; resetting without it", lockPath, err)
-	} else {
-		defer release()
+	release, err := acquireTUILockOrWarn("resetting", "close it before resetting")
+	if err != nil {
+		return err
 	}
+	defer release()
 
 	// Abort on failure: with the daemon possibly still alive, proceeding would
 	// let its dying save rewrite state.json after the deletion below.

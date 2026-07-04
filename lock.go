@@ -2,8 +2,11 @@ package main
 
 import (
 	"errors"
-	"github.com/ZviBaratz/atrium/config"
+	"fmt"
 	"path/filepath"
+
+	"github.com/ZviBaratz/atrium/config"
+	"github.com/ZviBaratz/atrium/log"
 )
 
 // tuiLockFilename is the advisory-lock file a running interactive atrium holds for
@@ -29,4 +32,29 @@ func tuiLockPath() (string, error) {
 		return "", err
 	}
 	return filepath.Join(dir, tuiLockFilename), nil
+}
+
+// acquireTUILockOrWarn applies the single-instance policy for a top-level
+// command: it resolves and try-acquires tui.lock, returning a release func
+// (never nil on a nil error) the caller must defer. Only a lock held by another
+// atrium refuses, with a user-facing error ending in refuseHint. Failing to
+// resolve or open the lock is deliberately non-fatal — warn and proceed with a
+// no-op release, matching RunDaemon — since a data dir broken enough to refuse
+// the flock will fail the command's real work anyway. verb names the caller's
+// action in those warnings ("running", "resetting").
+func acquireTUILockOrWarn(verb, refuseHint string) (release func(), err error) {
+	lockPath, err := tuiLockPath()
+	if err != nil {
+		log.WarningLog.Printf("could not resolve TUI lock path: %v; %s without single-instance lock", err, verb)
+		return func() {}, nil
+	}
+	release, err = acquireTUILock(lockPath)
+	if err != nil {
+		if errors.Is(err, errTUIAlreadyRunning) {
+			return nil, fmt.Errorf("atrium is already running for this data directory (%s); %s", filepath.Dir(lockPath), refuseHint)
+		}
+		log.WarningLog.Printf("could not acquire TUI lock %s: %v; %s without it", lockPath, err, verb)
+		return func() {}, nil
+	}
+	return release, nil
 }
