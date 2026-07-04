@@ -4,6 +4,7 @@ package daemon
 
 import (
 	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -182,10 +183,23 @@ func TestStopDaemon_StopsFreshlyLaunchedDaemonBeforeItLocks(t *testing.T) {
 	go func() {
 		defer close(lockerDone)
 		time.Sleep(50 * time.Millisecond)
-		release, err := acquireDaemonLock(lockPath)
-		if err != nil {
-			t.Errorf("locker goroutine failed to acquire the daemon lock: %v", err)
-			return
+		// Retry a refused acquire: StopDaemon's grace loop probes by trylocking
+		// this same file (isDaemonLockHeld), holding the flock for a moment per
+		// probe, so a one-shot acquire here can collide with a probe and read as
+		// a duplicate daemon. A real daemon losing that race just exits before
+		// loading any state — already stopped, which is all the stopper wants —
+		// but this test needs the lock to genuinely turn held.
+		var release func()
+		for deadline := time.Now().Add(2 * time.Second); ; {
+			var err error
+			if release, err = acquireDaemonLock(lockPath); err == nil {
+				break
+			}
+			if !errors.Is(err, errDaemonAlreadyRunning) || time.Now().After(deadline) {
+				t.Errorf("locker goroutine failed to acquire the daemon lock: %v", err)
+				return
+			}
+			time.Sleep(time.Millisecond)
 		}
 		defer release()
 		for i := 0; i < 400 && !exited(); i++ { // bounded so a failure cannot hang Cleanup
