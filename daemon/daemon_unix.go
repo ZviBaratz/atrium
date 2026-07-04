@@ -77,6 +77,32 @@ func isDaemonLockHeld(path string) (bool, error) {
 	return false, nil // we acquired it, so nobody held it
 }
 
+// awaitDaemonStartupLock resolves the one ambiguity a present-but-unheld lock
+// leaves: a just-launched daemon records its PID (LaunchDaemon) before it
+// reaches acquireDaemonLock in RunDaemon, so for a brief startup window it is
+// alive without holding its lock — indistinguishable at a glance from a dead
+// daemon's PID recycled onto an unrelated process. It polls for up to
+// daemonStartupGrace: the lock turning held proves a live daemon (true); the
+// process dying proves the PID stale (false); outliving the grace without ever
+// locking means the PID was recycled — never signal it (false). The common
+// stale case (process gone, PID not recycled) returns on the first probe, so
+// the grace costs nothing there.
+func awaitDaemonStartupLock(proc *os.Process, lockPath string) bool {
+	deadline := time.Now().Add(daemonStartupGrace)
+	for {
+		if held, err := isDaemonLockHeld(lockPath); err == nil && held {
+			return true
+		}
+		if proc.Signal(syscall.Signal(0)) != nil {
+			return false
+		}
+		if time.Now().After(deadline) {
+			return false
+		}
+		time.Sleep(gracefulStopPoll)
+	}
+}
+
 // terminateProcess stops the daemon gracefully: it sends SIGTERM (which trips the
 // daemon's signal.NotifyContext shutdown, letting it persist its in-memory
 // instances before exiting), waits for the process to disappear, and only

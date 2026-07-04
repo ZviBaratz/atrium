@@ -30,10 +30,14 @@ import (
 // Tunables for graceful daemon shutdown, overridable in tests.
 // gracefulStopTimeout bounds how long StopDaemon waits for a SIGTERM'd daemon to
 // persist its instances and exit before escalating to SIGKILL; gracefulStopPoll
-// is the interval between liveness probes while waiting.
+// is the interval between liveness probes while waiting; daemonStartupGrace
+// bounds how long StopDaemon gives a live, just-launched daemon — whose PID is
+// recorded (LaunchDaemon) before RunDaemon reaches acquireDaemonLock — to take
+// its lock before a present-but-unheld lock is trusted as proof of death.
 var (
 	gracefulStopTimeout = 3 * time.Second
 	gracefulStopPoll    = 25 * time.Millisecond
+	daemonStartupGrace  = time.Second
 )
 
 // daemonLockFilename is the advisory-lock file the running daemon holds for its
@@ -281,6 +285,11 @@ func StopDaemon() error {
 		return fmt.Errorf("invalid PID file format: %w", err)
 	}
 
+	proc, err := os.FindProcess(pid)
+	if err != nil {
+		return fmt.Errorf("failed to find daemon process: %w", err)
+	}
+
 	// Verify a daemon is actually alive before signaling. The kernel holds the
 	// daemon's flock only while the real process lives, so a present-but-free lock
 	// proves the PID is stale — the daemon crashed, was killed, or the machine
@@ -302,16 +311,22 @@ func StopDaemon() error {
 	case lockErr != nil:
 		log.WarningLog.Printf("could not verify daemon liveness via lock: %v; proceeding to stop PID %d", lockErr, pid)
 	case !held:
+		// One live daemon hides behind a free lock: one so freshly launched (an
+		// exiting TUI spawns its successor before releasing tui.lock, and reset
+		// can run the moment that lock frees) that it has not reached
+		// acquireDaemonLock yet. Grant it a startup grace before trusting the
+		// free lock as proof of death: locking within the grace proves a live
+		// daemon (stop it below); dying or outliving the grace without ever
+		// locking proves the PID stale or recycled.
+		if awaitDaemonStartupLock(proc, lockPath) {
+			log.InfoLog.Printf("daemon PID %d took its lock during the startup grace; stopping it", pid)
+			break
+		}
 		log.InfoLog.Printf("daemon PID %d is stale (lock present but unheld); skipping signal", pid)
 		if err := os.Remove(pidFile); err != nil && !os.IsNotExist(err) {
 			return fmt.Errorf("failed to remove stale PID file: %w", err)
 		}
 		return nil
-	}
-
-	proc, err := os.FindProcess(pid)
-	if err != nil {
-		return fmt.Errorf("failed to find daemon process: %w", err)
 	}
 
 	// Graceful stop (SIGTERM, then SIGKILL fallback) so the daemon persists the

@@ -119,8 +119,14 @@ func TestDaemonLock(t *testing.T) {
 // onto an unrelated process) must not get signaled. The dead daemon left its lock
 // file on disk but no longer holds it; that present-but-free lock is the signal
 // StopDaemon trusts to skip signaling and clear the stale PID file instead of
-// killing the innocent process now living at that PID.
+// killing the innocent process now living at that PID. Because the victim is
+// alive, StopDaemon first waits out the startup grace (in case the PID were a
+// daemon still headed for its lock) — shortened here to keep the test fast.
 func TestStopDaemon_SkipsStalePIDWhenLockNotHeld(t *testing.T) {
+	origGrace := daemonStartupGrace
+	daemonStartupGrace = 100 * time.Millisecond
+	t.Cleanup(func() { daemonStartupGrace = origGrace })
+
 	t.Setenv("HOME", t.TempDir())
 	dir, err := config.GetConfigDir()
 	require.NoError(t, err)
@@ -144,6 +150,56 @@ func TestStopDaemon_SkipsStalePIDWhenLockNotHeld(t *testing.T) {
 	assert.False(t, exited(), "victim should still be running (was not signaled)")
 	_, statErr := os.Stat(pidFile)
 	assert.True(t, os.IsNotExist(statErr), "stale PID file should be removed")
+}
+
+// A daemon's PID is recorded (LaunchDaemon) before the daemon itself reaches
+// acquireDaemonLock (RunDaemon), so StopDaemon can catch a live, just-launched
+// daemon whose lock is present but not yet held — e.g. `atrium reset` racing the
+// successor daemon an exiting TUI spawned moments earlier (#265). A free lock
+// must not be trusted as proof of death on sight: StopDaemon grants the startup
+// grace, sees the lock turn held, and stops the daemon instead of declaring the
+// PID stale and orphaning it.
+func TestStopDaemon_StopsFreshlyLaunchedDaemonBeforeItLocks(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	dir, err := config.GetConfigDir()
+	require.NoError(t, err)
+	require.NoError(t, os.MkdirAll(dir, 0o755))
+
+	// Stand in for the just-launched daemon: alive now, takes its lock shortly.
+	fresh := exec.CommandContext(context.Background(), "sleep", "60")
+	exited := reapAndWatch(t, fresh)
+
+	pidFile := filepath.Join(dir, "daemon.pid")
+	require.NoError(t, os.WriteFile(pidFile, []byte(strconv.Itoa(fresh.Process.Pid)), 0o644))
+	// The lock file a prior daemon left behind: present, held by nobody yet.
+	lockPath := filepath.Join(dir, daemonLockFilename)
+	require.NoError(t, os.WriteFile(lockPath, nil, 0o644))
+
+	// The daemon "finishes starting up" mid-grace: the flock turns held (any
+	// holder looks the same to isDaemonLockHeld) and is released once the
+	// process is gone, mirroring RunDaemon's hold-for-lifetime behavior.
+	lockerDone := make(chan struct{})
+	go func() {
+		defer close(lockerDone)
+		time.Sleep(50 * time.Millisecond)
+		release, err := acquireDaemonLock(lockPath)
+		if err != nil {
+			t.Errorf("locker goroutine failed to acquire the daemon lock: %v", err)
+			return
+		}
+		defer release()
+		for i := 0; i < 400 && !exited(); i++ { // bounded so a failure cannot hang Cleanup
+			time.Sleep(5 * time.Millisecond)
+		}
+	}()
+	t.Cleanup(func() { <-lockerDone })
+
+	require.NoError(t, StopDaemon())
+
+	assert.Eventually(t, exited, time.Second, 10*time.Millisecond,
+		"the starting daemon should be stopped, not orphaned as a stale PID")
+	_, statErr := os.Stat(pidFile)
+	assert.True(t, os.IsNotExist(statErr), "PID file should be removed after stopping")
 }
 
 // Regression guard for the pre-lock upgrade path: when daemon.pid points at a

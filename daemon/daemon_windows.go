@@ -30,6 +30,13 @@ func isDaemonLockHeld(path string) (bool, error) {
 	return true, nil
 }
 
+// awaitDaemonStartupLock is unreachable on Windows: isDaemonLockHeld always
+// reports the lock held, so StopDaemon never takes the present-but-unheld
+// branch that calls this. The stub keeps the shared code compiling.
+func awaitDaemonStartupLock(proc *os.Process, lockPath string) bool {
+	return false
+}
+
 // terminateProcess stops the daemon. Windows has no SIGTERM equivalent that Go's
 // os/signal delivers to a detached process group, so there is no graceful
 // shutdown hook to trip; fall back to an immediate kill (the prior behavior).
