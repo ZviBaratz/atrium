@@ -45,11 +45,14 @@ func (i *Instance) Unread() bool {
 
 // AwaitingSetup reports whether the session is blocked on a one-time startup/trust
 // gate (see the awaitingSetup field), under the read lock. The row uses it to show a
-// "waiting on setup screen" hint alongside the NeedsInput status.
+// "waiting on setup screen" hint alongside the NeedsInput status. It is gated on the
+// live status being NeedsInput so a flag left set by a path that bypasses ApplyPaneState
+// — a pause or a lost-session recovery to Paused, where PaneDead is a no-op — can never
+// surface the hint on a row that is no longer actually blocked.
 func (i *Instance) AwaitingSetup() bool {
 	i.mu.RLock()
 	defer i.mu.RUnlock()
-	return i.awaitingSetup
+	return i.awaitingSetup && i.status == NeedsInput
 }
 
 // setAwaitingSetup records whether the session is sitting on a startup gate, under the

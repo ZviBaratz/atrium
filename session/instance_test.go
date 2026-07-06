@@ -399,6 +399,17 @@ func TestApplyPaneState(t *testing.T) {
 		require.Equal(t, Running, inst.GetStatus())
 	})
 
+	t.Run("paused after a gate no longer reports the setup hint", func(t *testing.T) {
+		// Pause (and lost-session recovery) sets Paused directly, bypassing ApplyPaneState,
+		// so the awaitingSetup flag can linger. AwaitingSetup must stay false there, or the
+		// row would show "waiting on setup screen" over a paused session.
+		inst := newInst(false)
+		inst.ApplyPaneState(tmux.PaneGate)
+		require.True(t, inst.AwaitingSetup())
+		inst.SetStatus(Paused)
+		require.False(t, inst.AwaitingSetup(), "a paused session must not surface the setup hint")
+	})
+
 	t.Run("unknown → status unchanged, no tap", func(t *testing.T) {
 		inst := newInst(false)
 		require.False(t, inst.ApplyPaneState(tmux.PaneUnknown))

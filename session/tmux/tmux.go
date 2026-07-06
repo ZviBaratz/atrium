@@ -464,17 +464,17 @@ func (t *Session) IsReadyForPrompt() bool {
 	if !t.DoesSessionExist() {
 		return false
 	}
-	content, err := t.CapturePaneContent()
-	if err != nil || strings.TrimSpace(content) == "" {
+	raw, err := t.CapturePaneContent()
+	if err != nil || strings.TrimSpace(raw) == "" {
 		return false
 	}
-	_, gated := t.adapter.GateUp(content)
+	_, gated := t.adapter.GateUp(cleanForDetection(raw))
 	return !gated
 }
 
 // AwaitingInput reports whether keystrokes typed now would land in the agent's live
 // input box. It is the positive readiness signal for delivering a queued initial prompt:
-// the session exists, the pane has rendered, no startup gate (GateUp, raw pane) and no
+// the session exists, the pane has rendered, no startup gate (GateUp) and no
 // blocking prompt (DetectPrompt) is up, and the composer's input box is actually on screen
 // (InputBoxVisible).
 //
@@ -495,10 +495,10 @@ func (t *Session) AwaitingInput() bool {
 	if err != nil || strings.TrimSpace(raw) == "" {
 		return false
 	}
-	if _, gated := t.adapter.GateUp(raw); gated {
+	content := cleanForDetection(raw)
+	if _, gated := t.adapter.GateUp(content); gated {
 		return false
 	}
-	content := cleanForDetection(raw)
 	if _, prompted := t.adapter.DetectPrompt(content); prompted {
 		return false
 	}

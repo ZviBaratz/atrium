@@ -224,11 +224,13 @@ func (t *Session) Poll() PaneState {
 	// A startup gate outranks every content state below: a trust/first-run screen has no
 	// busy marker and matches no prompt matcher, so without this it would fall through to
 	// idle and the row would lie as Ready while the session is actually blocked. GateUp
-	// scans the raw pane (like AwaitingInput/IsReadyForPrompt), and setting lastReported to
-	// PaneGate keeps the marker-absent grace below from reading the eventual clear-out as a
-	// working→idle transition. We never dismiss the gate — a human must accept it (or the
-	// trust_worktrees_root opt-in pre-accepts it), so ApplyPaneState maps this to NeedsInput.
-	if _, gated := t.adapter.GateUp(raw); gated {
+	// scans only the live dialog region (bottom chrome), like the prompt matchers, so a gate
+	// literal quoted in the transcript body never wins over a genuinely-working pane. Setting
+	// lastReported to PaneGate keeps the marker-absent grace below from reading the eventual
+	// clear-out as a working→idle transition. We never dismiss the gate — a human must accept
+	// it (or the trust_worktrees_root opt-in pre-accepts it), so ApplyPaneState maps this to
+	// NeedsInput.
+	if _, gated := t.adapter.GateUp(content); gated {
 		t.monitor.idleStreak = 0
 		t.monitor.lastReported = PaneGate
 		t.monitor.logSignal(name, "gate → needs-input")
@@ -349,7 +351,7 @@ func (t *Session) PollNow() PaneState {
 	name := t.snapshotName()
 	// A startup gate outranks the states below (see Poll for the full rationale): a
 	// post-detach refresh must classify a trust/first-run screen as gated, not idle.
-	if _, gated := t.adapter.GateUp(raw); gated {
+	if _, gated := t.adapter.GateUp(content); gated {
 		t.monitor.lastReported = PaneGate
 		t.monitor.logSignal(name, "gate → needs-input")
 		return PaneGate

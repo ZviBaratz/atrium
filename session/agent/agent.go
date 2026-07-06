@@ -103,7 +103,8 @@ func (m PromptMatcher) matches(content string) bool {
 // never auto-dismisses a gate (surfacing it as needs-input is safer than blindly
 // accepting a folder-trust or new-MCP screen); GateUp is a detection-only signal.
 type Gate struct {
-	// Contains marks the gate as up when any entry is present in the raw pane.
+	// Contains marks the gate as up when any entry is present in the live dialog
+	// region (the bottom chrome scanned by GateUp), not anywhere in the pane.
 	Contains []string
 }
 
@@ -264,11 +265,21 @@ func (a *Adapter) DetectPermissionMode(content string) (mode string, known bool)
 	return a.PermissionMode(content)
 }
 
-// GateUp returns the startup gate currently showing in the raw pane content.
+// GateUp returns the startup gate currently showing in the live dialog region of the
+// cleaned pane. Detection is confined to the bottom WindowPrompt non-empty lines — the
+// same budget and windowing the prompt matchers use — so a gate literal quoted in the
+// scrolled-back transcript or in an agent's own output (a session editing this registry,
+// or discussing a "New MCP server") is not mistaken for a live gate. flattenChrome also
+// reconstructs a title/footer wrapped across physical lines at a narrow pane width. The
+// input must already be cleaned for detection (ANSI stripped; see tmux's cleanForDetection).
 func (a *Adapter) GateUp(content string) (Gate, bool) {
+	if len(a.Gates) == 0 {
+		return Gate{}, false
+	}
+	flat := flattenChrome(content, WindowPrompt)
 	for _, g := range a.Gates {
 		for _, s := range g.Contains {
-			if strings.Contains(content, s) {
+			if strings.Contains(flat, s) {
 				return g, true
 			}
 		}

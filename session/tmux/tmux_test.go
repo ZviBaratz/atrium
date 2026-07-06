@@ -179,6 +179,25 @@ func TestPollGateClearsToIdle(t *testing.T) {
 	require.Equal(t, PaneIdle, s.Poll(), "a cleared gate settles to idle, not wedged in the working grace")
 }
 
+// A gate literal quoted in the transcript body (a claude session editing this registry, or
+// discussing a "New MCP server") must NOT gate the whole pane: gate detection is confined to
+// the live dialog region, so a pane whose bottom chrome is a normal composer settles to idle.
+// Without the confinement the row would flip to a bogus "waiting on setup screen" while the
+// session is genuinely idle/working (#266 follow-up).
+func TestPollGateLiteralInBodyIsNotGate(t *testing.T) {
+	var b strings.Builder
+	b.WriteString("New MCP server found in this project: nanoclaw\n")
+	b.WriteString("Do you trust the files in this folder?\n")
+	for i := 0; i < agent.WindowPrompt+5; i++ {
+		b.WriteString("plain transcript line\n")
+	}
+	// Bottom chrome is an ordinary idle composer: no gate, no busy marker.
+	b.WriteString(strings.Repeat("─", 40) + "\n❯ \n" + strings.Repeat("─", 40) + "\n  ? for shortcuts")
+	c := b.String()
+	s := pollSession(t, "claude", &c, nil)
+	require.Equal(t, PaneIdle, s.Poll(), "a gate literal in the transcript body must not classify the pane as PaneGate")
+}
+
 // A dead/missing tmux session must not be probed: the pollers should short-circuit
 // without ever running capture-pane, so a single dead session can't flood the log
 // and error box with "error capturing pane content: exit status 1" every tick.

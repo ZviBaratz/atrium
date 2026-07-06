@@ -272,6 +272,20 @@ func TestClaudeGate(t *testing.T) {
 
 	_, ok = claude.GateUp("╭───╮\n│ > │  ? for shortcuts\n╰───╯")
 	require.False(t, ok)
+
+	// A gate literal quoted far above the live dialog region — the transcript body, or
+	// the agent's own output (a claude session editing this very registry, or discussing
+	// a "New MCP server") — must not fire the gate: detection is confined to the bottom
+	// chrome, so a working/idle pane is never misclassified as blocked (#266 follow-up).
+	var body strings.Builder
+	body.WriteString("New MCP server found in this project: nanoclaw\n")
+	body.WriteString("Do you trust the files in this folder?\n")
+	for i := 0; i < WindowPrompt+5; i++ {
+		body.WriteString("plain transcript line\n")
+	}
+	body.WriteString("╭───╮\n│ > │  ? for shortcuts\n╰───╯")
+	_, ok = claude.GateUp(body.String())
+	require.False(t, ok, "a gate string above the live dialog region must not fire the gate")
 }
 
 // claudeTrustPane is the folder-trust dialog captured verbatim from a live
