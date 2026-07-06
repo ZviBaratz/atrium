@@ -91,6 +91,14 @@ func (a *attachCommand) SetStderr(io.Writer) {}
 // attached instance whose in-session Ctrl+X kill request the handler should honor
 // on detach, or nil when the attach has no kill key (the terminal tab).
 func (m *home) attachExec(attach func() (chan struct{}, error), killTarget *session.Instance) tea.Cmd {
+	return m.attachExecCarry(attach, killTarget, nil)
+}
+
+// attachExecCarry is attachExec with keeper errors carried over from a previous
+// attach in the same sibling-cycle chain: the cycle branch of handleAttachFinished
+// re-attaches without reaching the error surfacing, so it seeds the next keeper
+// with the losses and the chain's final plain detach surfaces all of them.
+func (m *home) attachExecCarry(attach func() (chan struct{}, error), killTarget *session.Instance, carriedErrs []string) tea.Cmd {
 	// Attaching is the strongest form of visiting: clear the unread state before
 	// handing the terminal over. killTarget is nil only for the terminal tab,
 	// which the selection dwell covers instead.
@@ -103,10 +111,9 @@ func (m *home) attachExec(attach func() (chan struct{}, error), killTarget *sess
 	// ordered after the writes (no race). The keeper gets a main-thread copy of the
 	// instance list; membership can't change while the loop is suspended, and the
 	// keeper re-checks Started/Paused per cycle.
-	cmd := &attachCommand{
-		attach: attach,
-		keeper: newAttachKeeper(m.ctx, slices.Clone(m.list.GetInstances()), killTarget),
-	}
+	keeper := newAttachKeeper(m.ctx, slices.Clone(m.list.GetInstances()), killTarget)
+	keeper.errs = slices.Clone(carriedErrs) // pre-start seed, ordered before the goroutine's appends
+	cmd := &attachCommand{attach: attach, keeper: keeper}
 	return tea.Exec(cmd, func(err error) tea.Msg {
 		return attachFinishedMsg{
 			err:             err,

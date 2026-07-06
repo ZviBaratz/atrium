@@ -247,11 +247,12 @@ func (m *home) handleAttachFinished(msg attachFinishedMsg) (tea.Model, tea.Cmd) 
 	if msg.err != nil {
 		return m, m.handleError(msg.err)
 	}
-	// The attach keeper delivered prompt(s) while the loop was suspended; it cleared
-	// them in memory but cannot persist (persistence is main-loop-owned), so mirror
-	// promptDeliveredMsg's persist here — before the kill/cycle early returns below,
-	// so no detach path leaves a delivered prompt resurrectable from state.json.
-	if msg.keeperDelivered {
+	// The attach keeper cleared prompt(s) while the loop was suspended — delivered
+	// ones, or abandoned ones whose hard-failure budget ran out — but it cannot
+	// persist (persistence is main-loop-owned). Mirror promptDeliveredMsg's persist
+	// here — before the kill/cycle early returns below, so no detach path leaves a
+	// cleared prompt resurrectable from state.json.
+	if msg.keeperDelivered || len(msg.keeperErrs) > 0 {
 		if err := m.persistInstances(); err != nil {
 			log.ErrorLog.Printf("failed to persist after keeper prompt delivery: %v", err)
 		}
@@ -293,7 +294,9 @@ func (m *home) handleAttachFinished(msg attachFinishedMsg) (tea.Model, tea.Cmd) 
 		if next := m.cycleTarget(msg.killTarget); next != nil {
 			m.list.SelectInstance(next)
 			m.pushOneContext(next)
-			return m, m.attachExec(next.Attach, next)
+			// Carry keeper losses into the next attach's keeper so the chain's final
+			// plain detach surfaces them (this branch returns before the surfacing).
+			return m, m.attachExecCarry(next.Attach, next, msg.keeperErrs)
 		}
 	}
 	if msg.rawModeFailed {
@@ -326,8 +329,10 @@ func (m *home) handleAttachFinished(msg attachFinishedMsg) (tea.Model, tea.Cmd) 
 		sweepMetadataNowCmd(m.ctx, m.snapshotActiveInstances(), selected)}
 	// Prompts the keeper definitively failed to deliver mid-attach: surface the loss
 	// like promptSendErrorMsg would, rather than leaving sessions silently
-	// Ready-but-idle. (On the early-return paths above the error log is the record;
-	// they immediately re-attach or open a modal a transient notice would fight.)
+	// Ready-but-idle. The sibling-cycle branch carries its errs forward to the next
+	// keeper, so they land here at the chain's end; only the kill and
+	// AttachExitError paths remain log-only (each opens its own modal that a second
+	// notice would fight).
 	if len(msg.keeperErrs) > 0 {
 		cmds = append(cmds, m.handleError(errors.New(strings.Join(msg.keeperErrs, "\n"))))
 	}

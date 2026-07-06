@@ -61,7 +61,7 @@ func TestDeliverReadyPrompts(t *testing.T) {
 
 	t.Run("an in-flight prompt is not dispatched again", func(t *testing.T) {
 		inst := newInst("do the thing")
-		inst.MarkPromptSending() // a prior tick's send is still running
+		_, _ = inst.ClaimPrompt() // a prior tick's dispatch raised the guard; its send is still running
 		cmds := deliverReadyPrompts([]instanceMetaResult{
 			{instance: inst, readyForPrompt: true},
 		})
@@ -175,7 +175,7 @@ func TestPromptDeliveredMsgClearsQueuedPrompt(t *testing.T) {
 	})
 	require.NoError(t, err)
 	inst.QueuePrompt("do the thing")
-	inst.MarkPromptSending()
+	_, _ = inst.ClaimPrompt()
 
 	_, _ = h.Update(promptDeliveredMsg{instance: inst})
 
@@ -193,7 +193,7 @@ func TestPromptDeferredMsgKeepsPromptAndReleasesGuard(t *testing.T) {
 	})
 	require.NoError(t, err)
 	inst.QueuePrompt("do the thing")
-	inst.MarkPromptSending()
+	_, _ = inst.ClaimPrompt()
 
 	_, _ = h.Update(promptDeferredMsg{instance: inst})
 
@@ -211,7 +211,7 @@ func TestPromptSendErrorMsgClearsPrompt(t *testing.T) {
 	})
 	require.NoError(t, err)
 	inst.QueuePrompt("do the thing")
-	inst.MarkPromptSending()
+	_, _ = inst.ClaimPrompt()
 
 	_, _ = h.Update(promptSendErrorMsg{instance: inst, err: fmt.Errorf("dead pane")})
 

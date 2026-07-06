@@ -35,6 +35,7 @@ type fakeKeeperPane struct {
 	box          string // current composer text ("" = empty/submitted)
 	pending      string // text staged by set-buffer, applied on paste-buffer
 	failSendKeys bool   // hard-fail typing/tapping (exec error), for the hard-failure budget
+	noLand       bool   // drop typed text on the floor (a soft not-landed outcome)
 
 	typed  []string // recorded send-keys -l payloads
 	enters int      // recorded submitting Enter taps
@@ -101,7 +102,9 @@ func (f *fakeKeeperPane) exec() cmd_test.MockCmdExec {
 				}
 				text := args[len(args)-1]
 				f.typed = append(f.typed, text)
-				f.box += text
+				if !f.noLand {
+					f.box += text
+				}
 			case hasKeeperArg(args, "set-buffer"):
 				f.pending = args[len(args)-1]
 			case hasKeeperArg(args, "paste-buffer"):
@@ -265,7 +268,8 @@ func TestKeeperServiceSkipsInFlightSend(t *testing.T) {
 	inst := newKeeperInstance(t, "inflight", fake)
 	startKeeperInstance(t, inst)
 	inst.QueuePrompt("do the thing")
-	inst.MarkPromptSending()
+	_, ok := inst.ClaimPrompt() // the pre-attach tick's dispatch raised the guard
+	require.True(t, ok)
 
 	k := newAttachKeeper(context.Background(), []*session.Instance{inst}, nil)
 	k.service(inst, time.Now())
@@ -342,6 +346,63 @@ func TestKeeperServiceHardFailureBudget(t *testing.T) {
 	require.Len(t, k.errs, 1)
 	require.Contains(t, k.errs[0], "hardfail", "the error must name the session")
 	require.False(t, k.delivered)
+}
+
+func TestKeeperServiceHardFailureBudgetResetsOnSoftOutcome(t *testing.T) {
+	// The tick path gives every dispatch a fresh sendWithRetry budget, so sporadic
+	// transient hard failures spread across a long attach must not accumulate into
+	// a retirement — only consecutive-cycle hard failures should.
+	fake := &fakeKeeperPane{}
+	inst := newKeeperInstance(t, "flappy", fake)
+	startKeeperInstance(t, inst)
+	inst.QueuePrompt("do the thing")
+
+	k := newAttachKeeper(context.Background(), []*session.Instance{inst}, nil)
+	set := func(fail, noLand bool) {
+		fake.mu.Lock()
+		fake.failSendKeys, fake.noLand = fail, noLand
+		fake.mu.Unlock()
+	}
+
+	for round := 0; round < 2; round++ { // 2 hard failures, then a soft not-landed outcome, repeated
+		set(true, false)
+		k.service(inst, time.Now())
+		k.service(inst, time.Now())
+		set(false, true) // typing "works" but never lands → errPromptNotLanded (soft) → budget resets
+		k.service(inst, time.Now())
+		require.Equal(t, "do the thing", inst.Prompt(),
+			"interleaved transient failures must never retire the prompt (round %d)", round+1)
+	}
+	require.Empty(t, k.errs)
+
+	set(false, false) // healthy pane again → delivers
+	k.service(inst, time.Now())
+	require.Equal(t, "", inst.Prompt())
+	require.True(t, k.delivered)
+}
+
+func TestKeeperStartSkipsWhenNothingServiceable(t *testing.T) {
+	prev := attachKeeperInterval
+	attachKeeperInterval = time.Millisecond
+	defer func() { attachKeeperInterval = prev }()
+
+	fake := &fakeKeeperPane{}
+	inst := newKeeperInstance(t, "nothing-to-do", fake) // no prompt, no AutoYes
+	startKeeperInstance(t, inst)
+	_, _, before := fake.snapshot()
+
+	k := newAttachKeeper(context.Background(), []*session.Instance{inst}, nil)
+	k.start()
+	time.Sleep(10 * time.Millisecond)
+	k.stop() // must not hang: the goroutine was never launched
+
+	select {
+	case <-k.done:
+		t.Fatal("the keeper must not launch when no instance is serviceable")
+	default:
+	}
+	_, _, after := fake.snapshot()
+	require.Equal(t, before, after, "an idle keeper must spawn no subprocesses")
 }
 
 func TestKeeperStartStopJoins(t *testing.T) {
@@ -484,6 +545,23 @@ func TestAttachFinished_KeeperDeliveredPersists(t *testing.T) {
 	_, err := os.Stat(statePath)
 	require.NoError(t, err,
 		"a keeper delivery must be persisted on detach, mirroring promptDeliveredMsg's persist")
+}
+
+func TestAttachFinished_KeeperAbandonedPromptPersists(t *testing.T) {
+	// A budget-exhausted prompt is cleared in memory by the keeper; the detach must
+	// persist that clear too, or state.json resurrects the abandoned prompt on the
+	// next launch.
+	h, inst := newUnreadHome(t)
+	h.errBox = ui.NewErrBox() // the same message also routes through error surfacing
+
+	statePath := filepath.Join(mustConfigDir(t), "state.json")
+	_ = os.Remove(statePath)
+
+	_, _ = h.Update(attachFinishedMsg{killTarget: inst, keeperErrs: []string{"lost"}})
+
+	_, err := os.Stat(statePath)
+	require.NoError(t, err,
+		"a keeper-abandoned prompt must be persisted on detach so it is not resurrected")
 }
 
 func TestAttachFinished_KeeperErrsSurfaced(t *testing.T) {

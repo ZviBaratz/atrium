@@ -258,6 +258,7 @@ var repoGroupKey = git.RepoGroupKey
 
 // ToInstanceData converts an Instance to its serializable form
 func (i *Instance) ToInstanceData() InstanceData {
+	prompt, promptQueuedAt := i.promptState()
 	data := InstanceData{
 		Title:       i.Title,
 		DisplayName: i.displayName,
@@ -285,8 +286,8 @@ func (i *Instance) ToInstanceData() InstanceData {
 
 		// Persist an undelivered prompt so it survives a restart and is re-delivered on
 		// reload (a delivered prompt has already been cleared, so this is usually empty).
-		Prompt:         i.Prompt(),
-		PromptQueuedAt: i.PromptQueuedAt(),
+		Prompt:         prompt,
+		PromptQueuedAt: promptQueuedAt,
 	}
 
 	// Only include worktree data if gitWorktree is initialized
@@ -1037,6 +1038,14 @@ func (i *Instance) PromptQueuedAt() time.Time {
 	return i.promptQueuedAt
 }
 
+// promptState returns the queued prompt and its clock as one atomic pair, for
+// callers (persistence) that must not observe a torn combination.
+func (i *Instance) promptState() (string, time.Time) {
+	i.promptMu.Lock()
+	defer i.promptMu.Unlock()
+	return i.prompt, i.promptQueuedAt
+}
+
 // QueuePrompt stages prompt for tick-driven delivery and starts its delivery-timeout
 // clock; an empty prompt clears the clock (the FromInstanceData restore rule).
 func (i *Instance) QueuePrompt(prompt string) {
@@ -1063,15 +1072,6 @@ func (i *Instance) ClaimPrompt() (string, bool) {
 	}
 	i.promptInFlight = true
 	return i.prompt, true
-}
-
-// MarkPromptSending raises the in-flight guard before a queued prompt is dispatched.
-// Dispatch paths should prefer ClaimPrompt; this remains for callers (and tests) that
-// need to raise the guard without claiming the text.
-func (i *Instance) MarkPromptSending() {
-	i.promptMu.Lock()
-	defer i.promptMu.Unlock()
-	i.promptInFlight = true
 }
 
 // PromptSending reports whether a queued prompt is currently in flight.
