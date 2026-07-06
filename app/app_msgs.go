@@ -6,7 +6,9 @@ package app
 // and per-action work to app_keys.go. Trivial cases remain inline in the switch.
 
 import (
+	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/ZviBaratz/atrium/log"
@@ -245,6 +247,15 @@ func (m *home) handleAttachFinished(msg attachFinishedMsg) (tea.Model, tea.Cmd) 
 	if msg.err != nil {
 		return m, m.handleError(msg.err)
 	}
+	// The attach keeper delivered prompt(s) while the loop was suspended; it cleared
+	// them in memory but cannot persist (persistence is main-loop-owned), so mirror
+	// promptDeliveredMsg's persist here — before the kill/cycle early returns below,
+	// so no detach path leaves a delivered prompt resurrectable from state.json.
+	if msg.keeperDelivered {
+		if err := m.persistInstances(); err != nil {
+			log.ErrorLog.Printf("failed to persist after keeper prompt delivery: %v", err)
+		}
+	}
 	// The user was watching this session until a moment ago, so if the agent
 	// finished while attached, the poll below settles a stale Running to Ready —
 	// a synthetic transition that must not flag unread. An agent still working
@@ -301,17 +312,26 @@ func (m *home) handleAttachFinished(msg attachFinishedMsg) (tea.Model, tea.Cmd) 
 			"terminal/SSH/Docker session provides a real TTY; `stty -ixon` can also stop " +
 			"Ctrl+Q being swallowed.")
 	}
-	// Polling stalled for the whole list while attached, so every row is stale on
-	// return. Sweep every active session immediately instead of waiting up to a full
-	// ~2s sweep cycle: the selected row is polled face-value (PollNow) so a stale
-	// "running" on a now-idle agent doesn't linger — and re-runs through the hysteresis
-	// from there — while background rows keep the hysteresis Poll so a mid-turn agent
+	// Polling stalled for the whole list while attached (the keeper services only
+	// prompt-delivery and auto-yes work), so every row is stale on return. Sweep
+	// every active session immediately instead of waiting up to a full ~2s sweep
+	// cycle: the selected row is polled face-value (PollNow) so a stale "running" on
+	// a now-idle agent doesn't linger — and re-runs through the hysteresis from
+	// there — while background rows keep the hysteresis Poll so a mid-turn agent
 	// isn't falsely flagged done. Pin the poll tracker to the current selection first so
 	// instanceChanged's own (hysteresis) poll doesn't also fire for the same instance.
 	selected := m.list.GetSelectedInstance()
 	m.lastStatusPollSelection = selected
-	return m, tea.Batch(tea.WindowSize(), m.instanceChanged(),
-		sweepMetadataNowCmd(m.ctx, m.snapshotActiveInstances(), selected))
+	cmds := []tea.Cmd{tea.WindowSize(), m.instanceChanged(),
+		sweepMetadataNowCmd(m.ctx, m.snapshotActiveInstances(), selected)}
+	// Prompts the keeper definitively failed to deliver mid-attach: surface the loss
+	// like promptSendErrorMsg would, rather than leaving sessions silently
+	// Ready-but-idle. (On the early-return paths above the error log is the record;
+	// they immediately re-attach or open a modal a transient notice would fight.)
+	if len(msg.keeperErrs) > 0 {
+		cmds = append(cmds, m.handleError(errors.New(strings.Join(msg.keeperErrs, "\n"))))
+	}
+	return m, tea.Batch(cmds...)
 }
 
 func (m *home) handleInstanceStarted(msg instanceStartedMsg) (tea.Model, tea.Cmd) {

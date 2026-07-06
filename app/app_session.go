@@ -111,8 +111,10 @@ type instanceStartedMsg struct {
 
 // shouldAutoOpen reports whether a freshly started session should be attached
 // automatically. It is gated by the auto_attach config flag and skipped when the
-// instance carries an initial prompt (delivered asynchronously by the metadata tick,
-// which is paused while attached). The Started/TmuxAlive guards avoid attaching a
+// instance carries an initial prompt: delivery is asynchronous (metadata tick), and
+// while attached only the keeper delivers — which excludes the attached session
+// itself, so auto-opening it would starve its own prompt. The Started/TmuxAlive
+// guards avoid attaching a
 // session that did not come up — and, because Started() short-circuits before
 // TmuxAlive() (which dereferences tmuxSession), keep unstarted instances (e.g. in
 // tests) off both the panic and the attach path.

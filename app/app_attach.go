@@ -5,6 +5,7 @@ package app
 import (
 	"io"
 	"os"
+	"slices"
 
 	"github.com/ZviBaratz/atrium/log"
 	"github.com/ZviBaratz/atrium/session"
@@ -35,10 +36,15 @@ var (
 //
 // Methods take a pointer receiver so Run's rawModeFailed write survives: tea.Exec
 // holds the value as an interface and invokes Run on it after releasing the
-// terminal, then evaluates our callback on the same goroutine — attachExec passes a
-// *attachCommand and reads the flag back there (see attachExec).
+// terminal, then hands our callback's message to a fresh goroutine (go p.Send in
+// bubbletea's exec) — the go statement orders the callback's reads after Run's
+// writes, so attachExec can pass a *attachCommand and read the flags back there.
 type attachCommand struct {
 	attach func() (chan struct{}, error)
+	// keeper services non-attached sessions (prompt delivery, auto-yes taps) while
+	// the event loop is suspended. Run starts it once the attach succeeds and joins
+	// it before returning; nil is tolerated for tests that only exercise Run.
+	keeper *attachKeeper
 	// rawModeFailed records that raw mode couldn't be set, so the attach ran cooked
 	// and Ctrl+Q detach was disabled. Read by attachExec's callback after Run returns.
 	rawModeFailed bool
@@ -61,6 +67,15 @@ func (a *attachCommand) Run() error {
 	if err != nil {
 		return err
 	}
+	if a.keeper != nil {
+		// Run executes on the suspended event-loop goroutine, so starting here gives
+		// the keeper a happens-before edge from everything the main loop did, and the
+		// deferred stop-and-join orders everything the keeper did before the loop
+		// resumes. Do not move the keeper's lifetime out of Run: messages queued
+		// mid-attach can be processed before attachFinishedMsg.
+		a.keeper.start()
+		defer a.keeper.stop()
+	}
 	<-ch
 	return nil
 }
@@ -82,12 +97,24 @@ func (m *home) attachExec(attach func() (chan struct{}, error), killTarget *sess
 	if killTarget != nil {
 		killTarget.MarkSeen()
 	}
-	// Pass a pointer so Run's rawModeFailed write is visible here: tea.Exec runs Run
-	// and then evaluates this callback on the same goroutine, so the read is ordered
-	// after the write (no race).
-	cmd := &attachCommand{attach: attach}
+	// Pass a pointer so Run's writes (rawModeFailed, the keeper's results) are
+	// visible here: bubbletea runs Run to completion and only then spawns the
+	// goroutine that evaluates this callback (go p.Send in exec), so the reads are
+	// ordered after the writes (no race). The keeper gets a main-thread copy of the
+	// instance list; membership can't change while the loop is suspended, and the
+	// keeper re-checks Started/Paused per cycle.
+	cmd := &attachCommand{
+		attach: attach,
+		keeper: newAttachKeeper(m.ctx, slices.Clone(m.list.GetInstances()), killTarget),
+	}
 	return tea.Exec(cmd, func(err error) tea.Msg {
-		return attachFinishedMsg{err: err, killTarget: killTarget, rawModeFailed: cmd.rawModeFailed}
+		return attachFinishedMsg{
+			err:             err,
+			killTarget:      killTarget,
+			rawModeFailed:   cmd.rawModeFailed,
+			keeperDelivered: cmd.keeper.delivered,
+			keeperErrs:      cmd.keeper.errs,
+		}
 	})
 }
 
@@ -97,8 +124,13 @@ func (m *home) attachExec(attach func() (chan struct{}, error), killTarget *sess
 // an in-session Ctrl+X kill request. killTarget is nil for the terminal tab, which
 // has no kill key. rawModeFailed reports that raw mode couldn't be set, so the
 // attach ran cooked and Ctrl+Q detach was disabled — the handler surfaces a modal.
+// keeperDelivered and keeperErrs carry the attach keeper's results out of the
+// suspended window: the handler persists the cleared prompts (the keeper cannot —
+// persistence is main-loop-owned) and surfaces any lost prompts.
 type attachFinishedMsg struct {
-	err           error
-	killTarget    *session.Instance
-	rawModeFailed bool
+	err             error
+	killTarget      *session.Instance
+	rawModeFailed   bool
+	keeperDelivered bool
+	keeperErrs      []string
 }
