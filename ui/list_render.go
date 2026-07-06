@@ -188,7 +188,14 @@ func (r *InstanceRenderer) Render(i *session.Instance, idx int, selected, marked
 	indentW := left1[0].width() + left1[1].width()
 
 	var line2 string
-	if i.IsDirect() {
+	if i.AwaitingSetup() {
+		// Blocked on a one-time startup/trust screen (PaneGate). Replace the
+		// version-control line with a dim hint so the block is legible on every row —
+		// only the selected row's preview shows the screen itself, and the status glyph
+		// alone doesn't distinguish a setup gate from an ordinary prompt.
+		left2 := []rowSeg{p.flexSeg("waiting on setup screen · attach to continue", th.Palette.FgDim, false)}
+		line2 = p.composeLine(W, left2, nil)
+	} else if i.IsDirect() {
 		// Direct (non-git) session: no branch/ahead/behind/diff. Show a dim marker
 		// (consistent with the diff pane and picker hint) as the flex field, with
 		// the age right-aligned.

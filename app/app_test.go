@@ -267,6 +267,15 @@ func TestPromptDeliveryReady(t *testing.T) {
 			want:          false,
 		},
 		{
+			// A gate now classifies as PaneGate (not PaneIdle); awaiting-input is false
+			// while it is up, so delivery is held no matter how long the prompt queued.
+			name:          "PaneGate holds delivery past the timeout",
+			state:         tmux.PaneGate,
+			awaitingInput: false,
+			queuedAt:      stale,
+			want:          false,
+		},
+		{
 			name:          "zero queuedAt disables the timeout on a busy pane",
 			state:         tmux.PaneWorking,
 			awaitingInput: true,

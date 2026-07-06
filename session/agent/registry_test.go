@@ -263,14 +263,12 @@ func TestClaudeLoginErrorPrompt(t *testing.T) {
 }
 
 func TestClaudeGate(t *testing.T) {
-	g, ok := claude.GateUp("Do you trust the files in this folder?\n  1. Yes, proceed")
+	_, ok := claude.GateUp("Do you trust the files in this folder?\n  1. Yes, proceed")
 	require.True(t, ok)
-	require.Equal(t, DismissEnter, g.Dismiss)
 
 	// Claude Code v2.1.162+ uses capital-N "New MCP server found in this project:"
-	g, ok = claude.GateUp("New MCP server found in this project: nanoclaw\n  [Enter] to approve")
+	_, ok = claude.GateUp("New MCP server found in this project: nanoclaw\n  [Enter] to approve")
 	require.True(t, ok, "capital-N singular MCP gate must fire")
-	require.Equal(t, DismissEnter, g.Dismiss)
 
 	_, ok = claude.GateUp("╭───╮\n│ > │  ? for shortcuts\n╰───╯")
 	require.False(t, ok)
@@ -280,8 +278,8 @@ func TestClaudeGate(t *testing.T) {
 // claude 2.1.185 launched in a fresh (untrusted) directory (2026-06-22). Claude
 // reworded the dialog after 2.1.170: the old "Do you trust the files in this
 // folder?" title is gone, replaced by the "Quick safety check…" copy below with
-// a "Yes, I trust this folder" confirm button. "Enter to confirm" still accepts
-// the pre-highlighted trust option, so DismissEnter remains correct.
+// a "Yes, I trust this folder" confirm button — the gate must still fire so the
+// session surfaces as needs-input rather than a stale Ready.
 const claudeTrustPane = `
 ────────────────────────────────────────────────────────────────────────────
  Accessing workspace:
@@ -302,9 +300,8 @@ const claudeTrustPane = `
 `
 
 func TestClaudeTrustGate_2_1_185(t *testing.T) {
-	g, ok := claude.GateUp(claudeTrustPane)
+	_, ok := claude.GateUp(claudeTrustPane)
 	require.True(t, ok, "reworded 2.1.185 trust dialog must still fire the gate")
-	require.Equal(t, DismissEnter, g.Dismiss)
 }
 
 // --- Codex fixtures. Layout per openai/codex tui: the status row renders above
@@ -359,9 +356,8 @@ func TestCodexPrompts(t *testing.T) {
 }
 
 func TestCodexGateAndResume(t *testing.T) {
-	g, ok := codex.GateUp("Do you trust the contents of this directory?\n› 1. Yes, continue\n  2. No, quit")
+	_, ok := codex.GateUp("Do you trust the contents of this directory?\n› 1. Yes, continue\n  2. No, quit")
 	require.True(t, ok)
-	require.Equal(t, DismissEnter, g.Dismiss)
 
 	require.Equal(t, "codex resume --last", codex.Resume("codex"))
 	// A program carrying flags relaunches blank: the subcommand cannot be
@@ -412,9 +408,8 @@ func TestGeminiPrompts(t *testing.T) {
 }
 
 func TestGeminiGateAndResume(t *testing.T) {
-	g, ok := gemini.GateUp("Do you trust this folder?\n● 1. Trust folder\n  2. Trust parent folder")
+	_, ok := gemini.GateUp("Do you trust this folder?\n● 1. Trust folder\n  2. Trust parent folder")
 	require.True(t, ok)
-	require.Equal(t, DismissEnter, g.Dismiss)
 
 	require.Equal(t, "gemini --resume latest", gemini.Resume("gemini"))
 	require.Equal(t, "--resume", gemini.ResumeProbe)
@@ -431,9 +426,8 @@ func TestAider(t *testing.T) {
 	_, ok := aider.DetectPrompt("Add file to the chat? (Y)es/(N)o/(D)on't ask again [Yes]:")
 	require.True(t, ok)
 
-	g, ok := aider.GateUp("Open documentation url for more info? (Y)es/(N)o/(D)on't ask again [Yes]:")
+	_, ok = aider.GateUp("Open documentation url for more info? (Y)es/(N)o/(D)on't ask again [Yes]:")
 	require.True(t, ok)
-	require.Equal(t, DismissDAndEnter, g.Dismiss)
 
 	require.Nil(t, aider.Resume, "aider has no conversation resume")
 }

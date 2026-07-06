@@ -457,33 +457,6 @@ func (t *Session) start(workDir string, program string) error {
 	return nil
 }
 
-// CheckAndHandleTrustPrompt checks the pane content once for a startup gate (a trust or
-// setup screen that consumes keystrokes) and dismisses it with the adapter's keystroke if
-// found. Returns true if a gate was found and handled.
-func (t *Session) CheckAndHandleTrustPrompt() bool {
-	content, err := t.CapturePaneContent()
-	if err != nil {
-		return false
-	}
-
-	gate, ok := t.adapter.GateUp(content)
-	if !ok {
-		return false
-	}
-
-	switch gate.Dismiss {
-	case agent.DismissDAndEnter:
-		if err := t.TapDAndEnter(); err != nil {
-			log.ErrorLog.Printf("could not tap D+enter on startup gate: %v", err)
-		}
-	default:
-		if err := t.TapEnter(); err != nil {
-			log.ErrorLog.Printf("could not tap enter on startup gate: %v", err)
-		}
-	}
-	return true
-}
-
 // IsReadyForPrompt reports whether the agent has rendered and is past any startup
 // gate, so a queued first message can be submitted into its input box. It is a
 // read-only check: it captures the pane once and never sends keystrokes.
@@ -568,14 +541,6 @@ func (t *Session) Restore() error {
 func (t *Session) TapEnter() error {
 	if err := t.sendKeysToPane("Enter"); err != nil {
 		return fmt.Errorf("error sending enter keystroke to tmux pane: %w", err)
-	}
-	return nil
-}
-
-// TapDAndEnter sends 'D' followed by an enter keystroke to the agent pane.
-func (t *Session) TapDAndEnter() error {
-	if err := t.sendKeysToPane("D", "Enter"); err != nil {
-		return fmt.Errorf("error sending D+enter keystrokes to tmux pane: %w", err)
 	}
 	return nil
 }

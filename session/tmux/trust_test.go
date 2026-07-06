@@ -272,6 +272,54 @@ func TestEnsureWorktreesRootTrusted_PreservesSymlink(t *testing.T) {
 	}
 }
 
+func TestEnsureAccountWorktreesRootTrusted_WritesAccountConfigDir(t *testing.T) {
+	// An account-routed session reads trust from $CLAUDE_CONFIG_DIR/.claude.json,
+	// not ~/.claude.json, so the per-account entrypoint must write there.
+	configDir := t.TempDir()
+	accountJSON := filepath.Join(configDir, ".claude.json")
+	writeClaudeJSON(t, accountJSON, claudeFixture, 0600)
+	root := "/home/user/.atrium/worktrees"
+
+	if err := EnsureAccountWorktreesRootTrusted(configDir, root); err != nil {
+		t.Fatalf("EnsureAccountWorktreesRootTrusted: %v", err)
+	}
+
+	m := readJSONMap(t, accountJSON)
+	if !trustAccepted(t, m, root) {
+		t.Fatal("worktrees root not trusted in the account config dir")
+	}
+	// The account's own OAuth material and unknown fields survive (each account
+	// dir carries a distinct oauthAccount).
+	if _, ok := m["oauthAccount"]; !ok {
+		t.Fatal("account oauthAccount was dropped on rewrite")
+	}
+	data, err := os.ReadFile(accountJSON)
+	if err != nil {
+		t.Fatalf("read back: %v", err)
+	}
+	if !strings.Contains(string(data), "1736159218941234567") {
+		t.Fatalf("large integer corrupted on rewrite; got: %s", data)
+	}
+}
+
+func TestEnsureAccountWorktreesRootTrusted_MissingFileIsNoop(t *testing.T) {
+	configDir := t.TempDir() // exists, but no .claude.json inside
+	if err := EnsureAccountWorktreesRootTrusted(configDir, "/anywhere/worktrees"); err != nil {
+		t.Fatalf("account dir without .claude.json must be a silent no-op, got: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(configDir, ".claude.json")); !os.IsNotExist(err) {
+		t.Fatal("must never create the account .claude.json (absence means the account is not onboarded)")
+	}
+}
+
+func TestEnsureAccountWorktreesRootTrusted_EmptyConfigDirIsNoop(t *testing.T) {
+	// The inherit-env account has no config dir; its trust lives in ~/.claude.json,
+	// written separately, so the account entrypoint must do nothing.
+	if err := EnsureAccountWorktreesRootTrusted("", "/anywhere/worktrees"); err != nil {
+		t.Fatalf("empty config dir must be a silent no-op, got: %v", err)
+	}
+}
+
 func TestEnsureWorktreesRootTrusted_SecondCallIsNoop(t *testing.T) {
 	_, claudeJSON := trustHome(t)
 	writeClaudeJSON(t, claudeJSON, claudeFixture, 0600)

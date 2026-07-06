@@ -7,7 +7,6 @@ package session
 import (
 	"github.com/ZviBaratz/atrium/internal/teardown"
 	"github.com/ZviBaratz/atrium/log"
-	"github.com/ZviBaratz/atrium/session/agent"
 	"github.com/ZviBaratz/atrium/session/git"
 	"github.com/ZviBaratz/atrium/session/tmux"
 	"github.com/ZviBaratz/atrium/session/transcript"
@@ -203,6 +202,13 @@ type Instance struct {
 	mu sync.RWMutex
 	// status is the status of the instance. Guarded by mu.
 	status Status
+
+	// awaitingSetup marks a session sitting on a one-time startup/trust gate (PaneGate).
+	// It reuses the NeedsInput status but lets the row show a "waiting on setup screen"
+	// hint so the block is legible instead of looking like an ordinary prompt. Recomputed
+	// every poll by ApplyPaneState (set on PaneGate, cleared on every other settled state),
+	// so it is in-memory only and never serialized. Guarded by mu.
+	awaitingSetup bool
 
 	// unread marks a Ready session the user has not visited since the agent last
 	// finished a turn. Set by SetStatus on a transition into Ready; cleared by
@@ -953,41 +959,39 @@ func (i *Instance) PollNow() tmux.PaneState {
 // Prompt handling depends on AutoYes: with it on, auto-answer (tap Enter); with it off,
 // the session is blocked on the user, so surface NeedsInput. PanePromptManual surfaces
 // NeedsInput even under AutoYes — its auto-answer is destructive (claude's plan approval:
-// Enter accepts the plan AND enables auto-accept). PaneUnknown (an unreadable or
-// not-yet-started pane) and PaneDead (the session is gone) both leave the status
-// untouched: a dead session is recovered to Paused separately, debounced by the
-// metadata loop's recoverLostInstances, not from here.
+// Enter accepts the plan AND enables auto-accept). PaneGate (a startup/trust screen) also
+// surfaces NeedsInput and is never auto-tapped, with the awaitingSetup flag set so the row
+// shows a setup hint. PaneUnknown (an unreadable or not-yet-started pane) and PaneDead (the
+// session is gone) both leave the status untouched: a dead session is recovered to Paused
+// separately, debounced by the metadata loop's recoverLostInstances, not from here.
 func (i *Instance) ApplyPaneState(state tmux.PaneState) (tapped bool) {
+	// A startup gate is never auto-tapped (even under AutoYes): auto-accepting a
+	// folder-trust or new-MCP screen is exactly the unsafe action we refuse. Every
+	// settled state clears the setup flag so a cleared gate drops the row hint; the
+	// keep-prior states (Unknown/Dead) leave both status and flag untouched.
 	switch state {
 	case tmux.PaneWorking:
+		i.setAwaitingSetup(false)
 		i.SetStatus(Running)
+	case tmux.PaneGate:
+		i.setAwaitingSetup(true)
+		i.SetStatus(NeedsInput)
 	case tmux.PanePrompt:
+		i.setAwaitingSetup(false)
 		if i.AutoYes {
 			i.TapEnter()
 			return true
 		}
 		i.SetStatus(NeedsInput)
 	case tmux.PanePromptManual:
+		i.setAwaitingSetup(false)
 		i.SetStatus(NeedsInput)
 	case tmux.PaneIdle:
+		i.setAwaitingSetup(false)
 		i.SetStatus(Ready)
 	case tmux.PaneUnknown, tmux.PaneDead:
 	}
 	return false
-}
-
-// CheckAndHandleTrustPrompt checks for and dismisses the startup gate for programs that
-// have one. The adapter guard skips the pane capture entirely for agents with no known
-// gates, where there is nothing to dismiss.
-func (i *Instance) CheckAndHandleTrustPrompt() bool {
-	ts := i.tmux()
-	if !i.isStarted() || ts == nil {
-		return false
-	}
-	if len(agent.Resolve(i.Program).Gates) == 0 {
-		return false
-	}
-	return ts.CheckAndHandleTrustPrompt()
 }
 
 // IsReadyForPrompt reports whether the agent has finished booting and is past any

@@ -114,9 +114,9 @@ func TestIsReadyForPrompt(t *testing.T) {
 	}
 }
 
-// Regression: the per-agent startup gates (now adapter data, shared by
-// CheckAndHandleTrustPrompt and IsReadyForPrompt) must still recognize each gate string —
-// and only for their own agent, so a gate is never dismissed with another agent's key.
+// Regression: the per-agent startup gates (adapter data, consumed by Poll's PaneGate
+// classification and by IsReadyForPrompt/AwaitingInput) must still recognize each gate
+// string — and only for their own agent, so one agent's screen never gates another's.
 func TestStartupGates(t *testing.T) {
 	cases := []struct {
 		name    string
@@ -143,6 +143,40 @@ func TestStartupGates(t *testing.T) {
 			require.Equal(t, tc.want, ok)
 		})
 	}
+}
+
+// A pane sitting on a startup/trust gate must classify as PaneGate, not PaneIdle.
+// Regression for #266: gates carry no busy marker and match no prompt matcher, so
+// without the gate branch they fall through to idle and the row lies as Ready while
+// the session is actually blocked (and its queued first prompt is held indefinitely).
+func TestPollClassifiesStartupGateAsGate(t *testing.T) {
+	cases := []struct{ name, program, content string }{
+		{"claude folder-trust", "claude", "Quick safety check…\n ❯ 1. Yes, I trust this folder\n Enter to confirm · Esc to cancel"},
+		{"claude new MCP server", "claude", "New MCP server found in this project: nanoclaw\n [Enter] to approve"},
+		{"codex folder-trust", "codex", "Do you trust the contents of this directory?\n› 1. Yes, continue"},
+		{"gemini folder-trust", "gemini", "Do you trust this folder?\n● 1. Trust folder"},
+		{"aider first-run docs", "aider", "Open documentation url for more info? (Y)es/(N)o/(D)on't ask again [Yes]:"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			c := tc.content
+			s := pollSession(t, tc.program, &c, nil)
+			require.Equal(t, PaneGate, s.Poll(), "a startup gate must classify as PaneGate")
+		})
+	}
+}
+
+// When the gate clears, the next poll must move off PaneGate cleanly: the gate branch
+// sets lastReported=PaneGate, which must not wedge the marker-absent working grace.
+func TestPollGateClearsToIdle(t *testing.T) {
+	c := "Quick safety check…\n ❯ 1. Yes, I trust this folder\n Enter to confirm · Esc to cancel"
+	s := pollSession(t, "claude", &c, nil)
+	require.Equal(t, PaneGate, s.Poll())
+
+	// Composer on screen, no gate, no busy marker: a cleared claude gate settles to idle
+	// immediately (the grace only holds a prior PaneWorking, never a prior PaneGate).
+	c = strings.Repeat("─", 40) + "\n❯ \n" + strings.Repeat("─", 40) + "\n  ? for shortcuts"
+	require.Equal(t, PaneIdle, s.Poll(), "a cleared gate settles to idle, not wedged in the working grace")
 }
 
 // A dead/missing tmux session must not be probed: the pollers should short-circuit

@@ -43,6 +43,23 @@ func (i *Instance) Unread() bool {
 	return i.unread
 }
 
+// AwaitingSetup reports whether the session is blocked on a one-time startup/trust
+// gate (see the awaitingSetup field), under the read lock. The row uses it to show a
+// "waiting on setup screen" hint alongside the NeedsInput status.
+func (i *Instance) AwaitingSetup() bool {
+	i.mu.RLock()
+	defer i.mu.RUnlock()
+	return i.awaitingSetup
+}
+
+// setAwaitingSetup records whether the session is sitting on a startup gate, under the
+// write lock. Called only from ApplyPaneState, which recomputes it every poll.
+func (i *Instance) setAwaitingSetup(v bool) {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	i.awaitingSetup = v
+}
+
 // UnreadAt returns when the unread bit was last flagged, under the read lock.
 // Zero if it has never been flagged in this process.
 func (i *Instance) UnreadAt() time.Time {

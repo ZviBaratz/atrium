@@ -141,12 +141,10 @@ func TestSendKeysTargetAgentPaneID(t *testing.T) {
 	s := NewSessionWithDeps(context.Background(), "pane-keys", "claude", NewMockPtyFactory(t), fake.exec())
 
 	require.NoError(t, s.TapEnter())
-	require.NoError(t, s.TapDAndEnter())
 	require.NoError(t, s.SendKeys("-starts with a dash; and ; semicolons"))
 
 	require.Equal(t, [][]string{
 		{"-t", "%7", "Enter"},
-		{"-t", "%7", "D", "Enter"},
 		{"-t", "%7", "-l", "--", "-starts with a dash; and ; semicolons"},
 	}, fake.sendKeysArgs)
 	require.Equal(t, 1, fake.resolutions, "taps and sends must share the cached pane id")

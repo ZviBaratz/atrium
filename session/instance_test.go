@@ -376,6 +376,29 @@ func TestApplyPaneState(t *testing.T) {
 		require.Equal(t, NeedsInput, inst.GetStatus())
 	})
 
+	t.Run("gate → NeedsInput with setup hint, no tap", func(t *testing.T) {
+		inst := newInst(false)
+		require.False(t, inst.ApplyPaneState(tmux.PaneGate), "a startup gate must never tap")
+		require.Equal(t, NeedsInput, inst.GetStatus())
+		require.True(t, inst.AwaitingSetup(), "a gated session flags the setup hint")
+	})
+
+	t.Run("gate → NeedsInput even with AutoYes on (auto-accepting trust is unsafe)", func(t *testing.T) {
+		inst := newInst(true)
+		require.False(t, inst.ApplyPaneState(tmux.PaneGate), "a gate must never be auto-accepted")
+		require.Equal(t, NeedsInput, inst.GetStatus())
+		require.True(t, inst.AwaitingSetup())
+	})
+
+	t.Run("cleared gate drops the setup hint", func(t *testing.T) {
+		inst := newInst(false)
+		inst.ApplyPaneState(tmux.PaneGate)
+		require.True(t, inst.AwaitingSetup())
+		inst.ApplyPaneState(tmux.PaneWorking)
+		require.False(t, inst.AwaitingSetup(), "moving off the gate clears the hint")
+		require.Equal(t, Running, inst.GetStatus())
+	})
+
 	t.Run("unknown → status unchanged, no tap", func(t *testing.T) {
 		inst := newInst(false)
 		require.False(t, inst.ApplyPaneState(tmux.PaneUnknown))
@@ -422,7 +445,7 @@ func TestApprovePrompt_NotStartedErrors(t *testing.T) {
 
 // A started instance with no tmux session must error, not panic: ApprovePrompt
 // follows the same nil guard as the other pane-touching methods (Poll,
-// IsReadyForPrompt, CheckAndHandleTrustPrompt).
+// IsReadyForPrompt, AwaitingInput).
 func TestApprovePrompt_NilTmuxSessionErrors(t *testing.T) {
 	inst := &Instance{
 		Title:   "approve-no-pane",

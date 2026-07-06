@@ -128,14 +128,12 @@ var claude = &Adapter{
 		// trust this folder" (pinned against a live 2.1.185 capture, see
 		// registry_test.go claudeTrustPane). Both are matched so the gate fires
 		// across the supported range; remove the old title once <2.1.18x is
-		// unsupported. "Enter to confirm" accepts the pre-highlighted trust
-		// option in both, so DismissEnter is still correct. Plus the MCP-approval
-		// prompt (capital- and lowercase-N variants).
+		// unsupported. Plus the MCP-approval prompt (capital- and lowercase-N
+		// variants).
 		{Contains: []string{
 			"Yes, I trust this folder",
 			"Do you trust the files in this folder?",
-			"new MCP server", "New MCP server"},
-			Dismiss: DismissEnter},
+			"new MCP server", "New MCP server"}},
 	},
 
 	// tmux word-splits the trailing command string itself, so appending to the
@@ -189,8 +187,7 @@ var codex = &Adapter{
 	Gates: []Gate{
 		// onboarding/trust_directory.rs: "Do you trust the contents of this
 		// directory?" with "Yes, continue" pre-highlighted.
-		{Contains: []string{"Do you trust the contents of this directory"},
-			Dismiss: DismissEnter},
+		{Contains: []string{"Do you trust the contents of this directory"}},
 	},
 
 	// `codex resume --last` continues the most recent session. The subcommand
@@ -244,7 +241,7 @@ var gemini = &Adapter{
 	Gates: []Gate{
 		// FolderTrustDialog.js: "Do you trust this folder?" with "Trust folder"
 		// pre-highlighted.
-		{Contains: []string{"Do you trust this folder"}, Dismiss: DismissEnter},
+		{Contains: []string{"Do you trust this folder"}},
 	},
 
 	Resume:        func(program string) string { return program + " --resume latest" },
@@ -312,9 +309,8 @@ var aider = &Adapter{
 	},
 
 	Gates: []Gate{
-		// First-run analytics/docs prompt; (D)on't ask again, then Enter.
-		{Contains: []string{"Open documentation url for more info"},
-			Dismiss: DismissDAndEnter},
+		// First-run analytics/docs prompt.
+		{Contains: []string{"Open documentation url for more info"}},
 	},
 }
 

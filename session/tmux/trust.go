@@ -42,12 +42,32 @@ func EnsureWorktreesRootTrusted(worktreesRoot string) error {
 	if err != nil {
 		return fmt.Errorf("resolve home dir: %w", err)
 	}
+	return ensureRootTrustedAt(filepath.Join(home, ".claude.json"), worktreesRoot)
+}
 
+// EnsureAccountWorktreesRootTrusted pre-accepts the trust dialog for worktreesRoot in
+// a specific Claude account's config dir. Sessions routed to an account via
+// CLAUDE_CONFIG_DIR (#261/#262) read trust from $CLAUDE_CONFIG_DIR/.claude.json, not
+// ~/.claude.json, so the trust_worktrees_root opt-in must be written into each
+// account's file too. Same conservative posture as EnsureWorktreesRootTrusted: a
+// missing file (account not onboarded) is a silent no-op.
+func EnsureAccountWorktreesRootTrusted(configDir, worktreesRoot string) error {
+	if configDir == "" {
+		return nil // inherit-env account: its trust lives in ~/.claude.json, handled separately
+	}
+	return ensureRootTrustedAt(filepath.Join(configDir, ".claude.json"), worktreesRoot)
+}
+
+// ensureRootTrustedAt sets projects[worktreesRoot].hasTrustDialogAccepted=true in the
+// .claude.json at claudeJSONPath, with all the conservative safety documented on
+// EnsureWorktreesRootTrusted (symlink-follow, UseNumber, defensive shape checks, 0600
+// temp, mode match, stat race-guard, atomic rename).
+func ensureRootTrustedAt(claudeJSONPath, worktreesRoot string) error {
 	// Follow a dotfile-manager symlink to the real file: the temp+rename below
 	// must replace the target, not the link.
-	path, err := filepath.EvalSymlinks(filepath.Join(home, ".claude.json"))
+	path, err := filepath.EvalSymlinks(claudeJSONPath)
 	if err != nil {
-		return nil // no ~/.claude.json: claude not onboarded; never create it
+		return nil // no .claude.json here: claude not onboarded; never create it
 	}
 
 	before, err := os.Stat(path)

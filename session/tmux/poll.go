@@ -32,6 +32,12 @@ const (
 	// (a transient read failure of a live session): the metadata loop flags only a
 	// PaneDead session for lost-session recovery. Runtime-only, never persisted.
 	PaneDead
+	// PaneGate means a one-time startup/trust screen is up (claude's folder-trust or
+	// new-MCP prompt, codex/gemini folder-trust, aider's first-run docs prompt). It
+	// consumes keystrokes until a human dismisses it, so a queued first prompt must be
+	// held; callers surface it as needs-input rather than tapping. Runtime-only, never
+	// persisted.
+	PaneGate
 )
 
 // markerWorking reports whether this session's agent shows its busy marker in the live
@@ -215,6 +221,20 @@ func (t *Session) Poll() PaneState {
 		t.monitor.stableStreak++
 	}
 
+	// A startup gate outranks every content state below: a trust/first-run screen has no
+	// busy marker and matches no prompt matcher, so without this it would fall through to
+	// idle and the row would lie as Ready while the session is actually blocked. GateUp
+	// scans the raw pane (like AwaitingInput/IsReadyForPrompt), and setting lastReported to
+	// PaneGate keeps the marker-absent grace below from reading the eventual clear-out as a
+	// working→idle transition. We never dismiss the gate — a human must accept it (or the
+	// trust_worktrees_root opt-in pre-accepts it), so ApplyPaneState maps this to NeedsInput.
+	if _, gated := t.adapter.GateUp(raw); gated {
+		t.monitor.idleStreak = 0
+		t.monitor.lastReported = PaneGate
+		t.monitor.logSignal(name, "gate → needs-input")
+		return PaneGate
+	}
+
 	// A prompt awaiting an answer takes precedence over "working": when an agent stops to
 	// ask, it is not processing, and this is the state a caller most needs to surface.
 	// Matchers look only within the bottom chrome so the same strings in the scrolled-back
@@ -327,6 +347,13 @@ func (t *Session) PollNow() PaneState {
 	// Log via logSignal (transition-deduped, shared with Poll) so a detach that doesn't change
 	// the state stays silent and only a real change emits one line.
 	name := t.snapshotName()
+	// A startup gate outranks the states below (see Poll for the full rationale): a
+	// post-detach refresh must classify a trust/first-run screen as gated, not idle.
+	if _, gated := t.adapter.GateUp(raw); gated {
+		t.monitor.lastReported = PaneGate
+		t.monitor.logSignal(name, "gate → needs-input")
+		return PaneGate
+	}
 	if matcher, ok := t.adapter.DetectPrompt(content); ok {
 		state := PanePrompt
 		if matcher.NoAutoTap {

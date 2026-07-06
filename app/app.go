@@ -9,6 +9,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/ZviBaratz/atrium/config"
@@ -90,8 +91,25 @@ func maybeTrustWorktreesRoot(cfg *config.Config, program string) {
 		log.WarningLog.Printf("worktrees-root trust skipped: %v", err)
 		return
 	}
+	// The default file, for sessions that inherit the ambient CLAUDE_CONFIG_DIR
+	// (unrouted / catch-all account).
 	if err := tmux.EnsureWorktreesRootTrusted(root); err != nil {
 		log.WarningLog.Printf("worktrees-root trust skipped: %v", err)
+	}
+	// Plus each configured Claude account's own config dir: an account-routed
+	// session reads trust from $CLAUDE_CONFIG_DIR/.claude.json, so the opt-in
+	// wouldn't cover it otherwise (#266). Dedup against the home file, which an
+	// account pointing at ~ would otherwise write twice (harmless, but noisy).
+	home, _ := os.UserHomeDir()
+	homeConfig := filepath.Join(home, ".claude.json")
+	for _, acct := range cfg.ClaudeAccounts {
+		dir := acct.ResolvedConfigDir()
+		if dir == "" || filepath.Join(dir, ".claude.json") == homeConfig {
+			continue
+		}
+		if err := tmux.EnsureAccountWorktreesRootTrusted(dir, root); err != nil {
+			log.WarningLog.Printf("worktrees-root trust skipped for account %q: %v", acct.Name, err)
+		}
 	}
 }
 

@@ -98,29 +98,19 @@ func (m PromptMatcher) matches(content string) bool {
 	return false
 }
 
-// DismissKey is the keystroke that dismisses a startup gate.
-type DismissKey int
-
-const (
-	// DismissEnter accepts the gate's pre-highlighted option (trust screens).
-	DismissEnter DismissKey = iota
-	// DismissDAndEnter sends 'D' then Enter (aider's "(D)on't ask again").
-	DismissDAndEnter
-)
-
-// Gate is a one-time setup/trust screen that consumes keystrokes until
-// dismissed, so a queued first prompt must not be typed while one is up.
+// Gate is a one-time setup/trust screen that consumes keystrokes until a human
+// dismisses it, so a queued first prompt must not be typed while one is up. Atrium
+// never auto-dismisses a gate (surfacing it as needs-input is safer than blindly
+// accepting a folder-trust or new-MCP screen); GateUp is a detection-only signal.
 type Gate struct {
 	// Contains marks the gate as up when any entry is present in the raw pane.
 	Contains []string
-	// Dismiss is the keystroke that clears the gate.
-	Dismiss DismissKey
 }
 
 // Adapter is the declarative profile of one agent CLI. The zero value of every
 // optional field means "no support": nil BusyMarkers falls back to the poller's
 // content-change hysteresis, no Prompts means prompts are never surfaced, no
-// Gates means nothing is auto-dismissed, nil Resume relaunches without history.
+// Gates means no startup screen is detected, nil Resume relaunches without history.
 type Adapter struct {
 	Key         Key
 	DisplayName string
