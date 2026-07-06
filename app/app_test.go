@@ -43,18 +43,17 @@ func TestDeliverReadyPrompts(t *testing.T) {
 			Title: "s", Path: t.TempDir(), Program: "claude",
 		})
 		require.NoError(t, err)
-		inst.Prompt = prompt
+		inst.QueuePrompt(prompt)
 		return inst
 	}
 
 	t.Run("ready instance with a queued prompt is dispatched once, kept queued and marked in-flight", func(t *testing.T) {
 		inst := newInst("do the thing")
-		inst.PromptQueuedAt = time.Now()
 		cmds := deliverReadyPrompts([]instanceMetaResult{
 			{instance: inst, readyForPrompt: true},
 		})
 		require.Len(t, cmds, 1)
-		require.Equal(t, "do the thing", inst.Prompt,
+		require.Equal(t, "do the thing", inst.Prompt(),
 			"prompt must stay queued until delivery is confirmed (promptDeliveredMsg), so a failed send is retried")
 		require.True(t, inst.PromptSending(),
 			"the in-flight guard must be set so an overlapping tick can't dispatch the same prompt again")
@@ -62,7 +61,6 @@ func TestDeliverReadyPrompts(t *testing.T) {
 
 	t.Run("an in-flight prompt is not dispatched again", func(t *testing.T) {
 		inst := newInst("do the thing")
-		inst.PromptQueuedAt = time.Now()
 		inst.MarkPromptSending() // a prior tick's send is still running
 		cmds := deliverReadyPrompts([]instanceMetaResult{
 			{instance: inst, readyForPrompt: true},
@@ -84,7 +82,7 @@ func TestDeliverReadyPrompts(t *testing.T) {
 			{instance: inst, readyForPrompt: false},
 		})
 		require.Empty(t, cmds)
-		require.Equal(t, "waiting on trust screen", inst.Prompt, "prompt must remain queued")
+		require.Equal(t, "waiting on trust screen", inst.Prompt(), "prompt must remain queued")
 		require.False(t, inst.PromptSending(), "a not-ready instance must not be marked in-flight")
 	})
 }
@@ -176,14 +174,13 @@ func TestPromptDeliveredMsgClearsQueuedPrompt(t *testing.T) {
 		Title: "delivered", Path: t.TempDir(), Program: "claude",
 	})
 	require.NoError(t, err)
-	inst.Prompt = "do the thing"
-	inst.PromptQueuedAt = time.Now()
+	inst.QueuePrompt("do the thing")
 	inst.MarkPromptSending()
 
 	_, _ = h.Update(promptDeliveredMsg{instance: inst})
 
-	require.Equal(t, "", inst.Prompt, "a delivered prompt must be cleared")
-	require.True(t, inst.PromptQueuedAt.IsZero(), "the delivery clock must be cleared")
+	require.Equal(t, "", inst.Prompt(), "a delivered prompt must be cleared")
+	require.True(t, inst.PromptQueuedAt().IsZero(), "the delivery clock must be cleared")
 	require.False(t, inst.PromptSending(), "the in-flight guard must be released")
 }
 
@@ -195,13 +192,12 @@ func TestPromptDeferredMsgKeepsPromptAndReleasesGuard(t *testing.T) {
 		Title: "deferred", Path: t.TempDir(), Program: "claude",
 	})
 	require.NoError(t, err)
-	inst.Prompt = "do the thing"
-	inst.PromptQueuedAt = time.Now()
+	inst.QueuePrompt("do the thing")
 	inst.MarkPromptSending()
 
 	_, _ = h.Update(promptDeferredMsg{instance: inst})
 
-	require.Equal(t, "do the thing", inst.Prompt, "a deferred prompt must stay queued for retry")
+	require.Equal(t, "do the thing", inst.Prompt(), "a deferred prompt must stay queued for retry")
 	require.False(t, inst.PromptSending(), "the in-flight guard must be released so the next tick can retry")
 }
 
@@ -214,12 +210,12 @@ func TestPromptSendErrorMsgClearsPrompt(t *testing.T) {
 		Title: "lost", Path: t.TempDir(), Program: "claude",
 	})
 	require.NoError(t, err)
-	inst.Prompt = "do the thing"
+	inst.QueuePrompt("do the thing")
 	inst.MarkPromptSending()
 
 	_, _ = h.Update(promptSendErrorMsg{instance: inst, err: fmt.Errorf("dead pane")})
 
-	require.Equal(t, "", inst.Prompt, "a hard-failed prompt must be cleared so the loop stops retrying")
+	require.Equal(t, "", inst.Prompt(), "a hard-failed prompt must be cleared so the loop stops retrying")
 	require.False(t, inst.PromptSending())
 }
 
@@ -1213,7 +1209,7 @@ func TestShouldAutoOpen(t *testing.T) {
 			Program: "claude",
 		})
 		require.NoError(t, err)
-		inst.Prompt = prompt
+		inst.QueuePrompt(prompt)
 		return inst
 	}
 

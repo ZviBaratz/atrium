@@ -102,8 +102,7 @@ func (m *home) handlePromptState(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// "pane not ready yet" outcomes must defer to a retry rather than surface as user
 		// errors; queuing reuses that closed-loop machinery (await readiness, paste
 		// multi-line, confirm, idempotent retry, persist) instead of duplicating it here.
-		selected.Prompt = prompt
-		selected.PromptQueuedAt = time.Now()
+		selected.QueuePrompt(prompt)
 		if err := m.persistInstances(); err != nil {
 			log.ErrorLog.Printf("failed to persist queued quick-send prompt: %v", err)
 		}
@@ -448,7 +447,7 @@ func (m *home) startAutoNameSelected() (tea.Model, tea.Cmd) {
 	m.generatingName = true
 	m.menu.SetState(ui.StateGeneratingName)
 	m.recomputeLayout() // the progress bar now claims a row; shrink the panes to fit
-	return m, runAutoNameCmd(m.ctx, selected, selected.Prompt)
+	return m, runAutoNameCmd(m.ctx, selected, selected.Prompt())
 }
 
 // worktreeAction builds a deferred command that resolves selected's git worktree

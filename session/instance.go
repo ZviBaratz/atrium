@@ -103,17 +103,23 @@ type Instance struct {
 	UpdatedAt time.Time
 	// AutoYes is true if the instance should automatically press enter when prompted.
 	AutoYes bool
-	// Prompt is the initial prompt to pass to the instance on startup. It is held until
+	// promptMu guards the queued-prompt trio below (prompt, promptQueuedAt,
+	// promptInFlight). Writers are the main event loop — or, while a tea.Exec attach
+	// suspends it, the attach keeper — never both at once; the mutex exists because
+	// the metadata tick's cmd goroutines read this state off-thread (pollTargets,
+	// collectMetadata) concurrently with those writes.
+	promptMu sync.Mutex
+	// prompt is the initial prompt to pass to the instance on startup. It is held until
 	// delivery is confirmed (see SendPrompt) and persisted, so a prompt queued but not yet
 	// delivered survives a restart and is re-delivered on reload.
-	Prompt string
-	// PromptQueuedAt records when delivery of Prompt may begin (session creation, or reload
+	prompt string
+	// promptQueuedAt records when delivery of prompt may begin (session creation, or reload
 	// for a restored pending prompt). It drives the delivery timeout in promptDeliveryReady
 	// so chatty-startup agents that never reach an idle pane don't stall the first message.
-	PromptQueuedAt time.Time
-	// promptInFlight guards against a second metadata tick dispatching the same queued
-	// prompt while a send is still running. Owned by the main thread (set in
-	// deliverReadyPrompts, cleared when the send's result is handled), so it never races.
+	promptQueuedAt time.Time
+	// promptInFlight guards against a second dispatcher sending the same queued prompt
+	// while a send is still running (raised by ClaimPrompt, lowered when the send's
+	// outcome is settled).
 	promptInFlight bool
 
 	// DiffStats stores the current git diff statistics
@@ -279,8 +285,8 @@ func (i *Instance) ToInstanceData() InstanceData {
 
 		// Persist an undelivered prompt so it survives a restart and is re-delivered on
 		// reload (a delivered prompt has already been cleared, so this is usually empty).
-		Prompt:         i.Prompt,
-		PromptQueuedAt: i.PromptQueuedAt,
+		Prompt:         i.Prompt(),
+		PromptQueuedAt: i.PromptQueuedAt(),
 	}
 
 	// Only include worktree data if gitWorktree is initialized
@@ -344,15 +350,13 @@ func FromInstanceData(ctx context.Context, data InstanceData, branchPrefix strin
 		githubTokenEnv:       data.GitHubTokenEnv,
 		modelID:              data.Model,
 		runtimeMode:          data.PermissionMode,
-		Prompt:               data.Prompt,
 	}
 
-	// A pending prompt restored from disk re-enters tick-driven delivery on reload. Restart
-	// the delivery-timeout clock from now rather than keeping the (possibly long-past)
-	// original queue time, so the timeout measures the post-restart wait, not wall-clock age.
-	if instance.Prompt != "" {
-		instance.PromptQueuedAt = time.Now()
-	}
+	// A pending prompt restored from disk re-enters tick-driven delivery on reload.
+	// QueuePrompt restarts the delivery-timeout clock from now rather than keeping the
+	// (possibly long-past) original queue time, so the timeout measures the
+	// post-restart wait, not wall-clock age.
+	instance.QueuePrompt(data.Prompt)
 
 	// A direct session has no worktree or diff. For a git session, rehydrate both from
 	// storage. Restore direct first so every downstream path (Start(false),
@@ -1011,25 +1015,88 @@ func (i *Instance) AwaitingInput() bool {
 	return ts.AwaitingInput()
 }
 
-// MarkPromptSending / PromptSending / ClearPromptSending manage the in-flight guard that
-// keeps overlapping metadata ticks from dispatching the same queued prompt twice. All three
-// are called only from the main event loop, so the unguarded field never races.
+// The queued-prompt state (prompt, promptQueuedAt, promptInFlight) forms one small
+// state machine: QueuePrompt stages a prompt, ClaimPrompt hands it to exactly one
+// sender at a time, and ClearPromptSending/ClearPrompt settle the attempt. All of it
+// is promptMu-guarded: the main event loop writes it — or the attach keeper does,
+// while a tea.Exec attach suspends the loop — and the metadata tick's cmd goroutines
+// read it off-thread.
+
+// Prompt returns the queued startup/quick-send prompt, or "" when none is pending.
+func (i *Instance) Prompt() string {
+	i.promptMu.Lock()
+	defer i.promptMu.Unlock()
+	return i.prompt
+}
+
+// PromptQueuedAt returns when the queued prompt's delivery-timeout clock started
+// (zero when no prompt is queued).
+func (i *Instance) PromptQueuedAt() time.Time {
+	i.promptMu.Lock()
+	defer i.promptMu.Unlock()
+	return i.promptQueuedAt
+}
+
+// QueuePrompt stages prompt for tick-driven delivery and starts its delivery-timeout
+// clock; an empty prompt clears the clock (the FromInstanceData restore rule).
+func (i *Instance) QueuePrompt(prompt string) {
+	i.promptMu.Lock()
+	defer i.promptMu.Unlock()
+	i.prompt = prompt
+	if prompt != "" {
+		i.promptQueuedAt = time.Now()
+	} else {
+		i.promptQueuedAt = time.Time{}
+	}
+}
+
+// ClaimPrompt atomically claims the queued prompt for one delivery attempt: it
+// returns ("", false) when nothing is queued or a send is already in flight,
+// otherwise it raises the in-flight guard and returns the prompt. Collapsing the
+// check-then-act into one lock hold is what keeps overlapping dispatchers (metadata
+// ticks, the attach keeper) from sending the same prompt twice.
+func (i *Instance) ClaimPrompt() (string, bool) {
+	i.promptMu.Lock()
+	defer i.promptMu.Unlock()
+	if i.prompt == "" || i.promptInFlight {
+		return "", false
+	}
+	i.promptInFlight = true
+	return i.prompt, true
+}
 
 // MarkPromptSending raises the in-flight guard before a queued prompt is dispatched.
-func (i *Instance) MarkPromptSending() { i.promptInFlight = true }
+// Dispatch paths should prefer ClaimPrompt; this remains for callers (and tests) that
+// need to raise the guard without claiming the text.
+func (i *Instance) MarkPromptSending() {
+	i.promptMu.Lock()
+	defer i.promptMu.Unlock()
+	i.promptInFlight = true
+}
 
 // PromptSending reports whether a queued prompt is currently in flight.
-func (i *Instance) PromptSending() bool { return i.promptInFlight }
+func (i *Instance) PromptSending() bool {
+	i.promptMu.Lock()
+	defer i.promptMu.Unlock()
+	return i.promptInFlight
+}
 
-// ClearPromptSending lowers the in-flight guard once a prompt dispatch has settled.
-func (i *Instance) ClearPromptSending() { i.promptInFlight = false }
+// ClearPromptSending lowers the in-flight guard once a prompt dispatch has settled
+// softly (pane not ready / unconfirmed), leaving the prompt queued for a retry.
+func (i *Instance) ClearPromptSending() {
+	i.promptMu.Lock()
+	defer i.promptMu.Unlock()
+	i.promptInFlight = false
+}
 
-// ClearPrompt retires a queued prompt: it drops the pending text, its timeout clock, and
-// the in-flight guard. Called from the main loop once delivery is confirmed (or definitively
-// abandoned), so a delivered prompt is never re-sent and stops being a poll target.
+// ClearPrompt retires a queued prompt: it drops the pending text, its timeout clock,
+// and the in-flight guard, once delivery is confirmed (or definitively abandoned) —
+// so a delivered prompt is never re-sent and stops being a poll target.
 func (i *Instance) ClearPrompt() {
-	i.Prompt = ""
-	i.PromptQueuedAt = time.Time{}
+	i.promptMu.Lock()
+	defer i.promptMu.Unlock()
+	i.prompt = ""
+	i.promptQueuedAt = time.Time{}
 	i.promptInFlight = false
 }
 

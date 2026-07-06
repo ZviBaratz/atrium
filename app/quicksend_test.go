@@ -35,8 +35,8 @@ func TestQuickSendQueuesPromptForVerifiedDelivery(t *testing.T) {
 
 	_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyEnter})
 
-	require.Equal(t, "ship it", inst.Prompt, "the message must be queued for delivery, not sent inline")
-	require.False(t, inst.PromptQueuedAt.IsZero(),
+	require.Equal(t, "ship it", inst.Prompt(), "the message must be queued for delivery, not sent inline")
+	require.False(t, inst.PromptQueuedAt().IsZero(),
 		"the delivery clock must start so the tick can deliver it (and time out a busy boot)")
 	require.Nil(t, h.textInputOverlay, "a submitted quick-send closes the overlay")
 	require.Equal(t, stateDefault, h.state, "submit drops straight back to the list")

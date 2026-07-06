@@ -153,7 +153,7 @@ func TestCreateSessionFromForm_CreatesOneAndClearsOverlay(t *testing.T) {
 	inst := h.list.GetSelectedInstance()
 	require.NotNil(t, inst)
 	assert.Equal(t, "feature", inst.Title)
-	assert.Equal(t, "do the thing", inst.Prompt)
+	assert.Equal(t, "do the thing", inst.Prompt())
 }
 
 // TestCreateSessionFromForm_ExplicitPathOnlyAccountIsAccented pins the styling contract

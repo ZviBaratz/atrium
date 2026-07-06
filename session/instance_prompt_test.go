@@ -203,19 +203,21 @@ func TestPendingPromptSurvivesRoundTrip(t *testing.T) {
 	store := newTestStorage(t)
 
 	a := newPausedInstance(t, "pending")
-	a.Prompt = "finish the migration"
-	a.PromptQueuedAt = time.Unix(1000, 0) // long-past queue time
+	// Write the fields directly (same package) to plant a deliberately long-past queue
+	// time; QueuePrompt would stamp it with now and defeat the clock-restart assertion.
+	a.prompt = "finish the migration"
+	a.promptQueuedAt = time.Unix(1000, 0)
 
 	require.NoError(t, store.SaveInstances([]*Instance{a}))
 	got, err := store.LoadInstances(context.Background())
 	require.NoError(t, err)
 	require.Len(t, got, 1)
 
-	require.Equal(t, "finish the migration", got[0].Prompt,
+	require.Equal(t, "finish the migration", got[0].Prompt(),
 		"an undelivered prompt must survive a restart so it can be re-delivered")
-	require.False(t, got[0].PromptQueuedAt.IsZero(),
+	require.False(t, got[0].PromptQueuedAt().IsZero(),
 		"a restored pending prompt must have a delivery clock")
-	require.True(t, got[0].PromptQueuedAt.After(time.Unix(1000, 0)),
+	require.True(t, got[0].PromptQueuedAt().After(time.Unix(1000, 0)),
 		"the delivery timeout must restart from reload, not keep the stale wall-clock age")
 }
 

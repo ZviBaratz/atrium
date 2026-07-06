@@ -117,7 +117,7 @@ type instanceStartedMsg struct {
 // TmuxAlive() (which dereferences tmuxSession), keep unstarted instances (e.g. in
 // tests) off both the panic and the attach path.
 func (m *home) shouldAutoOpen(inst *session.Instance) bool {
-	return m.appConfig.GetAutoAttach() && inst.Prompt == "" && inst.Started() && inst.TmuxAlive()
+	return m.appConfig.GetAutoAttach() && inst.Prompt() == "" && inst.Started() && inst.TmuxAlive()
 }
 
 // autoNameDoneMsg is sent when a background name generation completes. instance
@@ -1009,8 +1009,7 @@ func (m *home) startNewSession(title, path string, direct bool, program, branch,
 	if branch != "" {
 		instance.SetBaseBranch(branch)
 	}
-	instance.Prompt = prompt
-	instance.PromptQueuedAt = time.Now()
+	instance.QueuePrompt(prompt)
 	instance.SetStatus(session.Loading)
 	finalizer()
 

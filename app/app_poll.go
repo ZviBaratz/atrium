@@ -220,14 +220,17 @@ func sendPromptCmd(instance *session.Instance, prompt string) tea.Cmd {
 // deliverReadyPrompts dispatches a send for each ready instance with a queued prompt and
 // returns the commands that perform them. The prompt is NOT cleared here — it stays queued
 // until delivery is confirmed (promptDeliveredMsg), so a failed or unconfirmed send is
-// retried by a later tick rather than lost. An in-flight guard ensures only one send is
-// outstanding per instance, so overlapping ticks cannot dispatch the same prompt twice.
+// retried by a later tick rather than lost. ClaimPrompt's atomic in-flight guard ensures
+// only one send is outstanding per instance, so overlapping dispatchers (a later tick, or
+// the attach keeper) cannot send the same prompt twice.
 func deliverReadyPrompts(results []instanceMetaResult) []tea.Cmd {
 	var cmds []tea.Cmd
 	for _, r := range results {
-		if r.readyForPrompt && r.instance.Prompt != "" && !r.instance.PromptSending() {
-			r.instance.MarkPromptSending()
-			cmds = append(cmds, sendPromptCmd(r.instance, r.instance.Prompt))
+		if !r.readyForPrompt {
+			continue
+		}
+		if prompt, ok := r.instance.ClaimPrompt(); ok {
+			cmds = append(cmds, sendPromptCmd(r.instance, prompt))
 		}
 	}
 	return cmds
@@ -360,7 +363,7 @@ func pollTargets(active []*session.Instance, selected *session.Instance, fullSwe
 	}
 	var out []*session.Instance
 	for _, inst := range active {
-		if inst == selected || inst.Prompt != "" {
+		if inst == selected || inst.Prompt() != "" {
 			out = append(out, inst)
 		}
 	}
@@ -415,10 +418,10 @@ func collectMetadata(ctx context.Context, poll []*session.Instance, selected *se
 			}
 			// Only probe readiness while a prompt is actually queued (a brief
 			// window after a new session), so the extra pane capture is rare.
-			if instance.Prompt != "" {
+			if instance.Prompt() != "" {
 				r.readyForPrompt = promptDeliveryReady(
 					r.state, instance.AwaitingInput(),
-					instance.PromptQueuedAt, time.Now())
+					instance.PromptQueuedAt(), time.Now())
 			}
 			if instance == selected {
 				r.diffStats = instance.ComputeDiff()

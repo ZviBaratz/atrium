@@ -21,7 +21,7 @@ func TestPollTargets(t *testing.T) {
 			Title: "s", Path: t.TempDir(), Program: "claude",
 		})
 		require.NoError(t, err)
-		inst.Prompt = prompt
+		inst.QueuePrompt(prompt)
 		return inst
 	}
 
