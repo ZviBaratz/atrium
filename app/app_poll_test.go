@@ -58,11 +58,11 @@ func TestSweepMetadataNowCmdGuards(t *testing.T) {
 	}
 	selected, other := newInst(), newInst()
 
-	require.Nil(t, sweepMetadataNowCmd(context.Background(), nil, selected),
+	require.Nil(t, sweepMetadataNowCmd(context.Background(), nil, selected, 0),
 		"no active sessions yields no sweep")
-	require.NotNil(t, sweepMetadataNowCmd(context.Background(), []*session.Instance{selected}, selected),
+	require.NotNil(t, sweepMetadataNowCmd(context.Background(), []*session.Instance{selected}, selected, 0),
 		"the selected row alone still yields a sweep (it is refreshed face-value)")
-	require.NotNil(t, sweepMetadataNowCmd(context.Background(), []*session.Instance{selected, other}, selected),
+	require.NotNil(t, sweepMetadataNowCmd(context.Background(), []*session.Instance{selected, other}, selected, 0),
 		"active rows present yield a sweep")
 }
 
@@ -75,7 +75,7 @@ func TestTickUpdateMetadataCmdHonorsContextCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	// Empty active slice: the tick still runs its inter-tick wait before the len check,
 	// which is exactly the cancellable sleep under test.
-	cmd := tickUpdateMetadataCmd(ctx, nil, nil, true)
+	cmd := tickUpdateMetadataCmd(ctx, nil, nil, true, 0)
 
 	done := make(chan tea.Msg, 1)
 	go func() { done <- cmd() }()

@@ -1214,15 +1214,23 @@ func TestShouldAutoOpen(t *testing.T) {
 	}
 
 	t.Run("flag off, no prompt", func(t *testing.T) {
-		assert.False(t, newHomeWithAutoAttach(false).shouldAutoOpen(newInst("")))
+		assert.False(t, newHomeWithAutoAttach(false).shouldAutoOpen(newInst(""), false))
 	})
 	t.Run("flag on, prompt set", func(t *testing.T) {
-		assert.False(t, newHomeWithAutoAttach(true).shouldAutoOpen(newInst("do a thing")))
+		assert.False(t, newHomeWithAutoAttach(true).shouldAutoOpen(newInst("do a thing"), true))
+	})
+	t.Run("flag on, prompt delivered before the parked start message", func(t *testing.T) {
+		// The keeper can deliver (and clear) the prompt while instanceStartedMsg is
+		// parked during an attach; the creation-time hadPrompt flag must keep the
+		// suppression so detaching from another session doesn't force-attach this one.
+		inst := newInst("do a thing")
+		inst.ClearPrompt()
+		assert.False(t, newHomeWithAutoAttach(true).shouldAutoOpen(inst, true))
 	})
 	t.Run("flag on, no prompt, but not started", func(t *testing.T) {
 		// The most eligible case by policy, yet still false because the session is not
 		// running — the Started/TmuxAlive guard holds.
-		assert.False(t, newHomeWithAutoAttach(true).shouldAutoOpen(newInst("")))
+		assert.False(t, newHomeWithAutoAttach(true).shouldAutoOpen(newInst(""), false))
 	})
 }
 
@@ -1256,13 +1264,13 @@ func TestInstancePolledMsgAppliesStatus(t *testing.T) {
 // pollSelectedCmd is a no-op for anything that can't be polled, so the selection-change
 // refresh never spawns a doomed capture.
 func TestPollSelectedCmdGuards(t *testing.T) {
-	assert.Nil(t, pollSelectedCmd(nil), "nil selection yields no command")
+	assert.Nil(t, pollSelectedCmd(nil, 0), "nil selection yields no command")
 
 	inst, err := session.NewInstance(session.InstanceOptions{
 		Title: "s", Path: t.TempDir(), Program: "claude",
 	})
 	require.NoError(t, err)
-	assert.Nil(t, pollSelectedCmd(inst), "an unstarted instance yields no command")
+	assert.Nil(t, pollSelectedCmd(inst, 0), "an unstarted instance yields no command")
 }
 
 // TestApplyMetadataResults covers the shared apply helper used by both the periodic tick
@@ -1459,4 +1467,63 @@ func TestMetadataSweepDoneMsgDoesNotRescheduleTick(t *testing.T) {
 	assert.Equal(t, session.Ready, inst.GetStatus(), "the sweep must apply the fresh pane state")
 	assert.Equal(t, uint64(7), h.metadataTick, "a one-shot sweep must not advance the periodic full-sweep phase")
 	assert.Nil(t, cmd, "the sweep must not reschedule the metadata tick (no second loop)")
+}
+
+// TestStalePaneCapturesDroppedAfterAttach pins the attachGen guard: a pane-state
+// capture stamped with an older generation was taken before a terminal attach ran,
+// and the keeper may have advanced the very dialog it observed — replaying it would
+// TapEnter whatever is up now (worst case a plan-approval screen auto-yes never
+// answers). Stale results must be dropped; the periodic tick must still re-arm.
+func TestStalePaneCapturesDroppedAfterAttach(t *testing.T) {
+	newHome := func() (*home, *session.Instance) {
+		spin := spinner.New(spinner.WithSpinner(spinner.MiniDot))
+		list := ui.NewList(&spin)
+		inst, err := session.NewInstance(session.InstanceOptions{
+			Title: "s", Path: t.TempDir(), Program: "claude",
+		})
+		require.NoError(t, err)
+		inst.SetStatus(session.Running)
+		_ = list.AddInstance(inst)
+		return &home{
+			ctx:         context.Background(),
+			state:       stateDefault,
+			appConfig:   config.DefaultConfig(),
+			list:        list,
+			lostStrikes: map[*session.Instance]int{},
+			attachGen:   1, // an attach ran since the captures below were created (gen 0)
+		}, inst
+	}
+
+	t.Run("periodic tick: results dropped, tick still re-arms", func(t *testing.T) {
+		h, inst := newHome()
+		_, cmd := h.Update(metadataUpdateDoneMsg{results: []instanceMetaResult{
+			{instance: inst, state: tmux.PaneIdle},
+		}, attachGen: 0})
+		assert.Equal(t, session.Running, inst.GetStatus(), "a stale capture must not be applied")
+		assert.Equal(t, uint64(1), h.metadataTick, "the phase counter still advances")
+		assert.NotNil(t, cmd, "the tick chain must survive a dropped batch")
+	})
+
+	t.Run("detach sweep: results dropped", func(t *testing.T) {
+		h, inst := newHome()
+		_, cmd := h.Update(metadataSweepDoneMsg{results: []instanceMetaResult{
+			{instance: inst, state: tmux.PaneIdle},
+		}, attachGen: 0})
+		assert.Equal(t, session.Running, inst.GetStatus(), "a stale sweep must not be applied")
+		assert.Nil(t, cmd)
+	})
+
+	t.Run("selection poll: result dropped", func(t *testing.T) {
+		h, inst := newHome()
+		_, _ = h.Update(instancePolledMsg{instance: inst, state: tmux.PaneIdle, attachGen: 0})
+		assert.Equal(t, session.Running, inst.GetStatus(), "a stale selection poll must not be applied")
+	})
+
+	t.Run("current-generation results still apply", func(t *testing.T) {
+		h, inst := newHome()
+		_, _ = h.Update(metadataSweepDoneMsg{results: []instanceMetaResult{
+			{instance: inst, state: tmux.PaneIdle},
+		}, attachGen: 1})
+		assert.Equal(t, session.Ready, inst.GetStatus(), "a fresh capture applies normally")
+	})
 }

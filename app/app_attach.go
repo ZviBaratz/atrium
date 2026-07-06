@@ -45,6 +45,12 @@ type attachCommand struct {
 	// the event loop is suspended. Run starts it once the attach succeeds and joins
 	// it before returning; nil is tolerated for tests that only exercise Run.
 	keeper *attachKeeper
+	// onAttached is called once the attach has succeeded, before the keeper starts.
+	// Run executes on the suspended event-loop goroutine, so the callback may touch
+	// main-loop state — attachExecCarry uses it to bump home.attachGen, retiring
+	// pane-state captures taken before the keeper started rearranging panes. nil is
+	// tolerated for tests that only exercise Run.
+	onAttached func()
 	// rawModeFailed records that raw mode couldn't be set, so the attach ran cooked
 	// and Ctrl+Q detach was disabled. Read by attachExec's callback after Run returns.
 	rawModeFailed bool
@@ -66,6 +72,9 @@ func (a *attachCommand) Run() error {
 	ch, err := a.attach()
 	if err != nil {
 		return err
+	}
+	if a.onAttached != nil {
+		a.onAttached()
 	}
 	if a.keeper != nil {
 		// Run executes on the suspended event-loop goroutine, so starting here gives
@@ -113,7 +122,11 @@ func (m *home) attachExecCarry(attach func() (chan struct{}, error), killTarget 
 	// keeper re-checks Started/Paused per cycle.
 	keeper := newAttachKeeper(m.ctx, slices.Clone(m.list.GetInstances()), killTarget)
 	keeper.errs = slices.Clone(carriedErrs) // pre-start seed, ordered before the goroutine's appends
-	cmd := &attachCommand{attach: attach, keeper: keeper}
+	cmd := &attachCommand{attach: attach, keeper: keeper,
+		// Runs on the suspended event-loop goroutine (see attachCommand.onAttached),
+		// so the bump is ordered before every parked message the resumed loop
+		// processes — pre-attach captures always compare against the new generation.
+		onAttached: func() { m.attachGen++ }}
 	return tea.Exec(cmd, func(err error) tea.Msg {
 		return attachFinishedMsg{
 			err:             err,

@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -84,19 +85,19 @@ func (f *fakeKeeperPane) exec() cmd_test.MockCmdExec {
 			f.calls++
 			args := cmd.Args
 			switch {
-			case hasKeeperArg(args, "new-session"):
+			case slices.Contains(args, "new-session"):
 				f.created = true
-			case hasKeeperArg(args, "has-session"):
+			case slices.Contains(args, "has-session"):
 				if !f.created {
 					return fmt.Errorf("no session")
 				}
-			case hasKeeperArg(args, "send-keys") && hasKeeperArg(args, "Enter"):
+			case slices.Contains(args, "send-keys") && slices.Contains(args, "Enter"):
 				if f.failSendKeys {
 					return fmt.Errorf("send-keys failed")
 				}
 				f.enters++
 				f.box = "" // a submitting Enter clears the composer
-			case hasKeeperArg(args, "send-keys") && hasKeeperArg(args, "-l"):
+			case slices.Contains(args, "send-keys") && slices.Contains(args, "-l"):
 				if f.failSendKeys {
 					return fmt.Errorf("send-keys failed")
 				}
@@ -105,9 +106,9 @@ func (f *fakeKeeperPane) exec() cmd_test.MockCmdExec {
 				if !f.noLand {
 					f.box += text
 				}
-			case hasKeeperArg(args, "set-buffer"):
+			case slices.Contains(args, "set-buffer"):
 				f.pending = args[len(args)-1]
-			case hasKeeperArg(args, "paste-buffer"):
+			case slices.Contains(args, "paste-buffer"):
 				f.box += f.pending
 			}
 			return nil // has-session etc.: alive
@@ -125,15 +126,6 @@ func (f *fakeKeeperPane) exec() cmd_test.MockCmdExec {
 			}
 		},
 	}
-}
-
-func hasKeeperArg(args []string, want string) bool {
-	for _, a := range args {
-		if a == want {
-			return true
-		}
-	}
-	return false
 }
 
 // keeperPtyFactory is the ui/preview_test MockPtyFactory pattern: hand Start a
@@ -181,7 +173,7 @@ func TestKeeperServiceDeliversQueuedPrompt(t *testing.T) {
 	inst.QueuePrompt("do the thing")
 
 	k := newAttachKeeper(context.Background(), []*session.Instance{inst}, nil)
-	k.service(inst, time.Now())
+	k.service(inst)
 
 	typed, enters, _ := fake.snapshot()
 	require.Equal(t, []string{"do the thing"}, typed, "the queued prompt must be typed into the composer")
@@ -201,7 +193,7 @@ func TestKeeperServiceNeverTouchesExcludedInstance(t *testing.T) {
 	_, _, before := fake.snapshot()
 
 	k := newAttachKeeper(context.Background(), []*session.Instance{inst}, inst)
-	k.service(inst, time.Now())
+	k.service(inst)
 
 	_, enters, after := fake.snapshot()
 	require.Equal(t, before, after, "the attached instance must never be polled or probed")
@@ -219,7 +211,7 @@ func TestKeeperServiceSkipsIdleInstanceWithNothingToDo(t *testing.T) {
 	_, _, before := fake.snapshot()
 
 	k := newAttachKeeper(context.Background(), []*session.Instance{inst}, nil)
-	k.service(inst, time.Now())
+	k.service(inst)
 
 	_, _, after := fake.snapshot()
 	require.Equal(t, before, after, "an instance with no prompt and no AutoYes must not be polled")
@@ -236,7 +228,7 @@ func TestKeeperServiceAutoYesTap(t *testing.T) {
 		inst.AutoYes = true
 
 		k := newAttachKeeper(context.Background(), []*session.Instance{inst}, nil)
-		k.service(inst, time.Now())
+		k.service(inst)
 
 		typed, enters, _ := fake.snapshot()
 		require.Equal(t, 1, enters, "AutoYes must tap Enter on a pending permission dialog")
@@ -251,7 +243,7 @@ func TestKeeperServiceAutoYesTap(t *testing.T) {
 		inst.QueuePrompt("queued but blocked") // passes the scope gate without AutoYes
 
 		k := newAttachKeeper(context.Background(), []*session.Instance{inst}, nil)
-		k.service(inst, time.Now())
+		k.service(inst)
 
 		_, enters, _ := fake.snapshot()
 		require.Equal(t, 0, enters, "no AutoYes, no tap")
@@ -272,7 +264,7 @@ func TestKeeperServiceSkipsInFlightSend(t *testing.T) {
 	require.True(t, ok)
 
 	k := newAttachKeeper(context.Background(), []*session.Instance{inst}, nil)
-	k.service(inst, time.Now())
+	k.service(inst)
 
 	typed, enters, _ := fake.snapshot()
 	require.Empty(t, typed, "an in-flight prompt must not be typed a second time")
@@ -290,7 +282,7 @@ func TestKeeperServiceSkipsUnstartedAndPaused(t *testing.T) {
 		_, _, before := fake.snapshot()
 
 		k := newAttachKeeper(context.Background(), []*session.Instance{inst}, nil)
-		k.service(inst, time.Now())
+		k.service(inst)
 		_, _, after := fake.snapshot()
 		require.Equal(t, before, after, "an unstarted instance must not be touched")
 		require.Equal(t, "do the thing", inst.Prompt())
@@ -298,7 +290,7 @@ func TestKeeperServiceSkipsUnstartedAndPaused(t *testing.T) {
 		// Start() completes mid-attach on its background goroutine; the per-cycle
 		// re-check must pick the instance up on the next tick.
 		startKeeperInstance(t, inst)
-		k.service(inst, time.Now())
+		k.service(inst)
 		require.Equal(t, "", inst.Prompt(), "a session that finished starting mid-attach must get its prompt")
 		require.True(t, k.delivered)
 	})
@@ -312,7 +304,7 @@ func TestKeeperServiceSkipsUnstartedAndPaused(t *testing.T) {
 		_, _, before := fake.snapshot()
 
 		k := newAttachKeeper(context.Background(), []*session.Instance{inst}, nil)
-		k.service(inst, time.Now())
+		k.service(inst)
 
 		_, _, after := fake.snapshot()
 		require.Equal(t, before, after, "a paused instance must not be touched")
@@ -331,7 +323,7 @@ func TestKeeperServiceHardFailureBudget(t *testing.T) {
 
 	k := newAttachKeeper(context.Background(), []*session.Instance{inst}, nil)
 	for i := 0; i < promptSendAttempts-1; i++ {
-		k.service(inst, time.Now())
+		k.service(inst)
 		require.Equal(t, "do the thing", inst.Prompt(),
 			"a hard failure below the retry budget must keep the prompt queued (cycle %d)", i+1)
 		require.False(t, inst.PromptSending(),
@@ -339,7 +331,7 @@ func TestKeeperServiceHardFailureBudget(t *testing.T) {
 		require.Empty(t, k.errs)
 	}
 
-	k.service(inst, time.Now())
+	k.service(inst)
 	require.Equal(t, "", inst.Prompt(),
 		"exhausting the retry budget must retire the prompt, mirroring promptSendErrorMsg")
 	require.False(t, inst.PromptSending())
@@ -366,17 +358,17 @@ func TestKeeperServiceHardFailureBudgetResetsOnSoftOutcome(t *testing.T) {
 
 	for round := 0; round < 2; round++ { // 2 hard failures, then a soft not-landed outcome, repeated
 		set(true, false)
-		k.service(inst, time.Now())
-		k.service(inst, time.Now())
+		k.service(inst)
+		k.service(inst)
 		set(false, true) // typing "works" but never lands → errPromptNotLanded (soft) → budget resets
-		k.service(inst, time.Now())
+		k.service(inst)
 		require.Equal(t, "do the thing", inst.Prompt(),
 			"interleaved transient failures must never retire the prompt (round %d)", round+1)
 	}
 	require.Empty(t, k.errs)
 
 	set(false, false) // healthy pane again → delivers
-	k.service(inst, time.Now())
+	k.service(inst)
 	require.Equal(t, "", inst.Prompt())
 	require.True(t, k.delivered)
 }
@@ -577,6 +569,54 @@ func TestAttachFinished_KeeperErrsSurfaced(t *testing.T) {
 	require.NotNil(t, h.textOverlay)
 	plain := xansi.Strip(h.textOverlay.Render())
 	assert.Contains(t, plain, "failed to deliver prompt")
+}
+
+func TestAttachFinished_KeeperErrsSurfacedOnFailedReattach(t *testing.T) {
+	// A sibling-cycle re-attach that fails still carries the previous keeper's
+	// losses (attachExecCarry seeds them before Run can fail); the err branch must
+	// surface them alongside the attach error, not drop them to log-only.
+	h, inst := newUnreadHome(t)
+	h.errBox = ui.NewErrBox()
+
+	_, _ = h.Update(attachFinishedMsg{
+		err:        fmt.Errorf("tmux attach failed"),
+		killTarget: inst,
+		keeperErrs: []string{`failed to deliver prompt to "b": send-keys failed`},
+	})
+
+	require.Equal(t, stateInfo, h.state, "carried keeper losses must be surfaced even when the re-attach fails")
+	require.NotNil(t, h.textOverlay)
+	plain := xansi.Strip(h.textOverlay.Render())
+	assert.Contains(t, plain, "tmux attach failed")
+	assert.Contains(t, plain, "failed to deliver prompt")
+}
+
+func TestAttachCommandRunCallsOnAttached(t *testing.T) {
+	origIsTerminal := isTerminal
+	t.Cleanup(func() { isTerminal = origIsTerminal })
+	isTerminal = func(int) bool { return false }
+
+	t.Run("successful attach bumps once, before the keeper could act", func(t *testing.T) {
+		calls := 0
+		ch := make(chan struct{})
+		close(ch)
+		cmd := &attachCommand{
+			attach:     func() (chan struct{}, error) { return ch, nil },
+			onAttached: func() { calls++ },
+		}
+		require.NoError(t, cmd.Run())
+		require.Equal(t, 1, calls, "a successful attach must record the generation bump exactly once")
+	})
+
+	t.Run("failed attach does not bump", func(t *testing.T) {
+		calls := 0
+		cmd := &attachCommand{
+			attach:     func() (chan struct{}, error) { return nil, fmt.Errorf("attach failed") },
+			onAttached: func() { calls++ },
+		}
+		require.Error(t, cmd.Run())
+		require.Zero(t, calls, "no keeper ran, so pre-attach captures are still valid")
+	})
 }
 
 func mustConfigDir(t *testing.T) string {

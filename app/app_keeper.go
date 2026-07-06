@@ -29,7 +29,9 @@ var attachKeeperInterval = 500 * time.Millisecond
 // returns, so everything the keeper did happens-before the resumed loop and the
 // tea.Exec callback. That join placement is the correctness linchpin: messages queued
 // mid-attach (a stale metadataUpdateDoneMsg, a parked promptDeliveredMsg) may be
-// processed BEFORE attachFinishedMsg, so the keeper must not outlive Run.
+// processed BEFORE attachFinishedMsg, so the keeper must not outlive Run. (Pane-state
+// captures taken before the attach are separately retired by home.attachGen, so a
+// parked capture can't replay an auto-yes tap onto a dialog the keeper advanced.)
 //
 // Scope is deliberately minimal: it writes only instance status (mu-guarded) and the
 // promptMu-guarded prompt state. It never touches diff/PR/model/mode metadata
@@ -120,7 +122,7 @@ func (k *attachKeeper) run() {
 	defer close(k.done)
 	// Sweep immediately (daemon precedent): a prompt that became ready just before
 	// the attach shouldn't wait a full interval.
-	k.tick(time.Now())
+	k.tick()
 	ticker := time.NewTicker(attachKeeperInterval)
 	defer ticker.Stop()
 	for {
@@ -130,14 +132,14 @@ func (k *attachKeeper) run() {
 		case <-k.ctx.Done():
 			return
 		case <-ticker.C:
-			k.tick(time.Now())
+			k.tick()
 		}
 	}
 }
 
 // tick services every snapshot instance once, checking for a stop between instances
 // so a detach never waits on more than the one in-flight delivery (≤ ~1s).
-func (k *attachKeeper) tick(now time.Time) {
+func (k *attachKeeper) tick() {
 	for _, inst := range k.instances {
 		select {
 		case <-k.stopCh:
@@ -146,7 +148,7 @@ func (k *attachKeeper) tick(now time.Time) {
 			return
 		default:
 		}
-		k.service(inst, now)
+		k.service(inst)
 	}
 }
 
@@ -154,7 +156,7 @@ func (k *attachKeeper) tick(now time.Time) {
 // tap) → deliver a claimable queued prompt. It mirrors one metadata-tick fan-out
 // plus applyMetadataResults plus deliverReadyPrompts, minus everything out of the
 // keeper's scope.
-func (k *attachKeeper) service(inst *session.Instance, now time.Time) {
+func (k *attachKeeper) service(inst *session.Instance) {
 	// Re-check liveness per cycle, not at snapshot time: a session whose Start()
 	// completes mid-attach becomes serviceable here (its instanceStartedMsg is
 	// parked until detach), which is exactly the "create B, attach to A" case.
@@ -179,7 +181,7 @@ func (k *attachKeeper) service(inst *session.Instance, now time.Time) {
 	if prompt == "" {
 		return // only probe readiness while a prompt is queued, like collectMetadata
 	}
-	if !promptDeliveryReady(state, inst.AwaitingInput(), inst.PromptQueuedAt(), now) {
+	if !promptDeliveryReady(state, inst.AwaitingInput(), inst.PromptQueuedAt(), time.Now()) {
 		return
 	}
 	prompt, ok := inst.ClaimPrompt()

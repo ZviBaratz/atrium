@@ -245,6 +245,13 @@ func (m *home) handleAttachFinished(msg attachFinishedMsg) (tea.Model, tea.Cmd) 
 	// the layout and selection-derived panes from here.
 	m.state = stateDefault
 	if msg.err != nil {
+		// A failed sibling-cycle re-attach still carries keeper losses from the
+		// previous attach (attachExecCarry seeds them before Run can fail); surface
+		// them alongside the attach error, honoring the promise below that only the
+		// kill and AttachExitError paths stay log-only.
+		if len(msg.keeperErrs) > 0 {
+			return m, m.handleError(errors.Join(msg.err, errors.New(strings.Join(msg.keeperErrs, "\n"))))
+		}
 		return m, m.handleError(msg.err)
 	}
 	// The attach keeper cleared prompt(s) while the loop was suspended — delivered
@@ -326,7 +333,7 @@ func (m *home) handleAttachFinished(msg attachFinishedMsg) (tea.Model, tea.Cmd) 
 	selected := m.list.GetSelectedInstance()
 	m.lastStatusPollSelection = selected
 	cmds := []tea.Cmd{tea.WindowSize(), m.instanceChanged(),
-		sweepMetadataNowCmd(m.ctx, m.snapshotActiveInstances(), selected)}
+		sweepMetadataNowCmd(m.ctx, m.snapshotActiveInstances(), selected, m.attachGen)}
 	// Prompts the keeper definitively failed to deliver mid-attach: surface the loss
 	// like promptSendErrorMsg would, rather than leaving sessions silently
 	// Ready-but-idle. The sibling-cycle branch carries its errs forward to the next
@@ -376,7 +383,7 @@ func (m *home) handleInstanceStarted(msg instanceStartedMsg) (tea.Model, tea.Cmd
 	// keystrokes in the trust dialog instead of the input box.
 	m.menu.SetState(ui.StateDefault)
 
-	if m.shouldAutoOpen(msg.instance) {
+	if m.shouldAutoOpen(msg.instance, msg.hadPrompt) {
 		// Drop straight into the new session, mirroring the KeyEnter attach path.
 		// Attach msg.instance directly rather than via m.list.Attach(): a background
 		// instanceStartedMsg from another freshly-created session could have moved

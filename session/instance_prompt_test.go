@@ -3,6 +3,7 @@ package session
 import (
 	"context"
 	"os/exec"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -83,18 +84,18 @@ func (f *fakeAgentPane) exec() cmd_test.MockCmdExec {
 		RunFunc: func(cmd *exec.Cmd) error {
 			args := cmd.Args
 			switch {
-			case hasArg(args, "send-keys") && hasArg(args, "Enter"):
+			case slices.Contains(args, "send-keys") && slices.Contains(args, "Enter"):
 				f.enters++
 				f.box = "" // a submitting Enter clears the composer
-			case hasArg(args, "send-keys") && hasArg(args, "-l"):
+			case slices.Contains(args, "send-keys") && slices.Contains(args, "-l"):
 				text := lastArg(args)
 				f.typed = append(f.typed, text)
 				if !f.noLand {
 					f.box += text
 				}
-			case hasArg(args, "set-buffer"):
+			case slices.Contains(args, "set-buffer"):
 				f.pending = lastArg(args)
-			case hasArg(args, "paste-buffer"):
+			case slices.Contains(args, "paste-buffer"):
 				f.pasted = append(f.pasted, f.pending)
 				if !f.noLand {
 					f.box += f.pending
@@ -114,15 +115,6 @@ func (f *fakeAgentPane) exec() cmd_test.MockCmdExec {
 			}
 		},
 	}
-}
-
-func hasArg(args []string, want string) bool {
-	for _, a := range args {
-		if a == want {
-			return true
-		}
-	}
-	return false
 }
 
 func lastArg(args []string) string { return args[len(args)-1] }

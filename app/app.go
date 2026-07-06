@@ -164,6 +164,19 @@ type home struct {
 	// swept every metadataFullSweepEvery ticks (see tickUpdateMetadataCmd); the counter
 	// drives that cadence.
 	metadataTick uint64
+	// attachGen counts terminal attaches. It is bumped by attachCommand.Run — on the
+	// suspended event-loop goroutine, so it is still main-thread state — once an
+	// attach succeeds. Pane-state capture cmds (metadata tick, detach sweep,
+	// selection poll) stamp the generation they were created under, and their
+	// results are dropped when an attach ran in between: the attach keeper may have
+	// advanced the very dialog a pre-attach capture observed, so replaying its
+	// PanePrompt at detach would TapEnter whatever is up NOW — e.g. accept a
+	// PanePromptManual plan-approval screen that auto-yes deliberately never
+	// answers. One accepted edge: a capture that STARTS after the bump (a detach
+	// sweep racing an immediately-following auto-open attach) carries the current
+	// generation, so it can still apply a capture taken concurrently with that next
+	// attach's keeper — the next attach's own bump retires it one attach later.
+	attachGen uint64
 	// appConfig stores persistent application configuration
 	appConfig *config.Config
 	// appState stores persistent application state like seen help screens
@@ -355,7 +368,7 @@ func (m *home) Init() tea.Cmd {
 			time.Sleep(100 * time.Millisecond)
 			return previewTickMsg{}
 		},
-		tickUpdateMetadataCmd(m.ctx, m.snapshotActiveInstances(), m.list.GetSelectedInstance(), true), // first tick: full sweep
+		tickUpdateMetadataCmd(m.ctx, m.snapshotActiveInstances(), m.list.GetSelectedInstance(), true, m.attachGen), // first tick: full sweep
 		m.updateCheckCmd(),   // nil (inert) is fine: tea.Batch skips nil cmds
 		m.driftCheckCmd(),    // agent-heuristic drift hint
 		m.releaseNotesCmd(),  // nil (inert) is fine: tea.Batch skips nil cmds

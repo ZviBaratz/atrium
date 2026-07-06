@@ -107,19 +107,27 @@ func (m *home) deepRename(selected *session.Instance, value string) error {
 type instanceStartedMsg struct {
 	instance *session.Instance
 	err      error
+	// hadPrompt records that the session was created with an initial prompt. The
+	// auto-open gate keys on this, not on the live Prompt(): when Start() completes
+	// mid-attach this message parks, and the attach keeper may deliver — and clear —
+	// the prompt before it is handled, which would otherwise flip shouldAutoOpen and
+	// force-attach the user into this session the moment they detach.
+	hadPrompt bool
 }
 
 // shouldAutoOpen reports whether a freshly started session should be attached
 // automatically. It is gated by the auto_attach config flag and skipped when the
-// instance carries an initial prompt: delivery is asynchronous (metadata tick), and
-// while attached only the keeper delivers — which excludes the attached session
-// itself, so auto-opening it would starve its own prompt. The Started/TmuxAlive
-// guards avoid attaching a
+// session was created with an initial prompt (hadPrompt): delivery is asynchronous
+// (metadata tick), and while attached only the keeper delivers — which excludes the
+// attached session itself, so auto-opening it would starve its own prompt. The
+// creation-time flag, not the live Prompt(), is the signal: the keeper may already
+// have delivered and cleared the prompt while this message was parked. The
+// Started/TmuxAlive guards avoid attaching a
 // session that did not come up — and, because Started() short-circuits before
 // TmuxAlive() (which dereferences tmuxSession), keep unstarted instances (e.g. in
 // tests) off both the panic and the attach path.
-func (m *home) shouldAutoOpen(inst *session.Instance) bool {
-	return m.appConfig.GetAutoAttach() && inst.Prompt() == "" && inst.Started() && inst.TmuxAlive()
+func (m *home) shouldAutoOpen(inst *session.Instance, hadPrompt bool) bool {
+	return m.appConfig.GetAutoAttach() && !hadPrompt && inst.Started() && inst.TmuxAlive()
 }
 
 // autoNameDoneMsg is sent when a background name generation completes. instance
@@ -1017,7 +1025,7 @@ func (m *home) startNewSession(title, path string, direct bool, program, branch,
 
 	startCmd := func() tea.Msg {
 		err := instance.Start(true)
-		return instanceStartedMsg{instance: instance, err: err}
+		return instanceStartedMsg{instance: instance, err: err, hadPrompt: prompt != ""}
 	}
 	return tea.Batch(tea.WindowSize(), m.instanceChanged(), startCmd), nil
 }

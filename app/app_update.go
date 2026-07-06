@@ -111,18 +111,25 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case smartDispatchDoneMsg:
 		return m.handleSmartDispatchDone(msg)
 	case metadataUpdateDoneMsg:
-		if recoverLostInstances(msg.results, m.lostStrikes) {
-			if err := m.persistInstances(); err != nil {
-				log.ErrorLog.Printf("failed to persist recovered sessions: %v", err)
+		// Drop results captured before a terminal attach ran (see home.attachGen):
+		// the keeper may have advanced those panes mid-attach, so replaying a stale
+		// PanePrompt would tap whatever dialog is up now. The post-detach sweep
+		// re-polls everything, so nothing is lost — but the tick must still re-arm.
+		var cmds []tea.Cmd
+		if msg.attachGen == m.attachGen {
+			if recoverLostInstances(msg.results, m.lostStrikes) {
+				if err := m.persistInstances(); err != nil {
+					log.ErrorLog.Printf("failed to persist recovered sessions: %v", err)
+				}
 			}
+			cmds = m.applyMetadataResults(msg.results)
 		}
-		cmds := m.applyMetadataResults(msg.results)
 		m.metadataTick++
 		fullSweep := m.metadataTick%metadataFullSweepEvery == 0
 		// Stop the self-chaining tick once the app context is cancelled (shutdown):
 		// re-arming would only spawn a Cmd that immediately returns on ctx.Done().
 		if m.ctx.Err() == nil {
-			cmds = append(cmds, tickUpdateMetadataCmd(m.ctx, m.snapshotActiveInstances(), m.list.GetSelectedInstance(), fullSweep))
+			cmds = append(cmds, tickUpdateMetadataCmd(m.ctx, m.snapshotActiveInstances(), m.list.GetSelectedInstance(), fullSweep, m.attachGen))
 		}
 		return m, tea.Batch(cmds...)
 	case metadataSweepDoneMsg:
@@ -132,11 +139,17 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// and do NOT touch metadataTick, which phases the periodic full-sweep cadence.
 		// Lost-session recovery is intentionally left to the periodic tick so its strike
 		// debounce isn't shortened by a same-resume double observation.
+		if msg.attachGen != m.attachGen {
+			return m, nil // captured before an attach ran; stale (see home.attachGen)
+		}
 		return m, tea.Batch(m.applyMetadataResults(msg.results)...)
 	case instancePolledMsg:
 		// An off-cadence single-instance status refresh (selection change). Apply the state
 		// but do NOT reschedule the metadata tick — that chain is owned by
 		// metadataUpdateDoneMsg above; touching it here would spawn a second tick loop.
+		if msg.attachGen != m.attachGen {
+			return m, nil // captured before an attach ran; stale (see home.attachGen)
+		}
 		if msg.instance.GetStatus() != session.Paused {
 			msg.instance.ApplyPaneState(msg.state)
 		}
