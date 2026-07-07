@@ -137,6 +137,16 @@ that behaves like the settings-only `session_sort`.
 
 ### 6. Interaction with manual reordering
 
+> **Superseded 2026-07-07 (PR #285).** The rule below was revised: manual
+> reordering is now *enabled* within account boundaries. J/K reorders within a
+> repo group (gated only on the status sort, since account clustering never
+> touches within-block order), and `{ }` reorders whole groups within an account
+> cluster — a move that would cross an account boundary is refused with a hint.
+> `ManualReorderEnabled()` is `!sortActive()` (not `!viewActive()`), and the
+> reorder is reflected into `manual` (a within-block swap, or an in-place block
+> transpose) then the view rebuilt. The original v1 decision is kept below as the
+> historical record.
+
 While `account` mode is active, **manual reordering is disabled** — both
 within-group J/K and whole-group `{ }` moves — exactly as status-sort already
 disables J/K today. This is the single clean rule that keeps clustering a pure

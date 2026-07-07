@@ -1,5 +1,11 @@
 # Account Grouping Implementation Plan
 
+> **Partially superseded 2026-07-07 (PR #285):** §6's "manual reordering disabled
+> in account mode" rule was later reversed — reordering is now enabled within
+> account boundaries. See the superseded note in the design spec's §6. The rest of
+> this plan (filter, clustering/view machinery, divider/tint, settings wiring)
+> stands as implemented.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Add an `account:<name>` list-filter predicate and a togglable "group by Claude account" list view mode (cluster repo groups by account, with a divider, tinted headers, and suppressed per-row account badges).
