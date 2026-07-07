@@ -109,9 +109,7 @@ func (m *home) surfaceLostRecoveries(recoveries []lostRecovery) tea.Cmd {
 		return m.handleError(fmt.Errorf("session %q could not be parked cleanly: %v — press r to resume or k to kill",
 			failed.title, failed.err))
 	case launchCrash != nil:
-		return m.showInfo(fmt.Sprintf(
-			"session %q exited moments after launch — parked as paused.\ncommand: %s\nfix the command, then press r to resume.",
-			launchCrash.title, launchCrash.launchCmd))
+		return m.showLaunchCrash(launchCrash)
 	case len(parked) == 1:
 		return m.handleInfoNotice(fmt.Sprintf("session %q terminal exited — parked as paused; press r to resume", parked[0]))
 	case len(parked) > 1:
@@ -119,6 +117,36 @@ func (m *home) surfaceLostRecoveries(recoveries []lostRecovery) tea.Cmd {
 	default:
 		return nil
 	}
+}
+
+// showLaunchCrash surfaces a crash-at-launch recovery as a persistent modal
+// naming the command. surfaceLostRecoveries runs on every background poll tick
+// regardless of m.state, so — like showInfo's own stateDefault guard and the
+// buffered release-notes/update notices — it must not switch to stateInfo while
+// an overlay (form, rename, confirm, prompt) owns the screen: that would clobber
+// the overlay and discard the user's in-progress input. When the screen is busy
+// it buffers the crash for the preview tick to flush once we are back at default.
+func (m *home) showLaunchCrash(lr *lostRecovery) tea.Cmd {
+	if m.state != stateDefault {
+		buffered := *lr
+		m.pendingLaunchCrash = &buffered
+		return nil
+	}
+	return m.showInfo(fmt.Sprintf(
+		"session %q exited moments after launch — parked as paused.\ncommand: %s\nfix the command, then press r to resume.",
+		lr.title, lr.launchCmd))
+}
+
+// flushPendingLaunchCrash opens a crash-at-launch modal that arrived while
+// another overlay owned the screen, once the screen is free. nil when there is
+// nothing buffered or an overlay is still up (mirrors flushPendingReleaseNotes).
+func (m *home) flushPendingLaunchCrash() tea.Cmd {
+	if m.pendingLaunchCrash == nil || m.state != stateDefault {
+		return nil
+	}
+	lr := m.pendingLaunchCrash
+	m.pendingLaunchCrash = nil
+	return m.showLaunchCrash(lr)
 }
 
 // scheduleNoticeHide stamps the just-shown toast with a fresh generation and

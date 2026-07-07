@@ -172,6 +172,11 @@ type home struct {
 	// while another modal owned the screen; the preview tick flushes it once the
 	// screen is free. nil when nothing is pending.
 	pendingReleaseNotes *releaseNotesFetchedMsg
+	// pendingLaunchCrash buffers a lost-session crash-at-launch modal that fired
+	// while an overlay (form, rename, confirm, prompt) owned the screen; the
+	// preview tick flushes it once the screen is free, so background recovery
+	// never clobbers what the user was doing. nil when nothing is pending.
+	pendingLaunchCrash *lostRecovery
 
 	// storage is the interface for saving/loading data to/from the app's state
 	storage *session.Storage

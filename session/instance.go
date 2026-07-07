@@ -577,6 +577,13 @@ func (i *Instance) recreateSession() error {
 		}
 		return fmt.Errorf("failed to start new session: %w", err)
 	}
+	// Stamp the relaunch so DiedAtLaunch keeps working across Resume: a typo'd
+	// program/profile that crashes moments after launch must stay diagnosable on
+	// every resume, not just the first Start (#270). Written under the lock that
+	// DiedAtLaunch reads startedAt through.
+	i.mu.Lock()
+	i.startedAt = time.Now()
+	i.mu.Unlock()
 	return nil
 }
 

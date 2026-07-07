@@ -7,12 +7,50 @@ import (
 	"os/exec"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/ZviBaratz/atrium/cmd/cmd_test"
 	"github.com/ZviBaratz/atrium/session/git"
 	"github.com/ZviBaratz/atrium/session/tmux"
 	"github.com/stretchr/testify/require"
 )
+
+// resumableInstance wires a Paused instance around a real worktree and a tmux
+// session whose first two probes report "gone" (so Resume's recreate proceeds)
+// and later ones report alive, mirroring TestResume_ReusesInPlaceWorktreePreservingWIP.
+func resumableInstance(t *testing.T, wt *git.Worktree) *Instance {
+	t.Helper()
+	calls := 0
+	liveExec := cmd_test.MockCmdExec{
+		RunFunc: func(*exec.Cmd) error {
+			calls++
+			if calls <= 2 {
+				return fmt.Errorf("not yet")
+			}
+			return nil
+		},
+		OutputFunc: func(*exec.Cmd) ([]byte, error) { return nil, nil },
+	}
+	ts := tmux.NewSessionWithDeps(context.Background(), "sess", "claude", newRecordingPtyFactory(t, nil), liveExec)
+	return &Instance{Title: "sess", status: Paused, started: true, Program: "claude", gitWorktree: wt, tmuxSession: ts}
+}
+
+// TestResume_StampsStartedAtForLaunchCrashDetection guards the #270 fix that
+// DiedAtLaunch must keep working across Resume: recreateSession stamps startedAt
+// on every relaunch, so a program that crashes moments after a resume is still
+// classified as a launch crash. Without the stamp, startedAt stays frozen at the
+// original Start and every resume-crash past the first is misread as a long-lived
+// death — dropping the diagnostic modal exactly when the user needs it.
+func TestResume_StampsStartedAtForLaunchCrashDetection(t *testing.T) {
+	wt := newTestWorktree(t)
+	inst := resumableInstance(t, wt)
+	// A stale timestamp from the original Start, well outside the launch window.
+	inst.startedAt = time.Now().Add(-time.Hour)
+
+	require.NoError(t, inst.Resume())
+	require.True(t, inst.DiedAtLaunch(15*time.Second),
+		"Resume must refresh startedAt so a crash right after resume is still a launch crash")
+}
 
 // startedInstance wires a started, Running instance around a real worktree and a
 // dead tmux session, so pause()/RecoverLostSession runs its teardown without a

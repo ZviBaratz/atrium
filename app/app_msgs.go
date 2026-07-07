@@ -62,6 +62,8 @@ func (m *home) handlePreviewTick(msg previewTickMsg) (tea.Model, tea.Cmd) {
 		m.flushPendingUpdateNotice(),
 		// Likewise for "what's new" notes buffered behind another overlay.
 		m.flushPendingReleaseNotes(),
+		// Likewise for a crash-at-launch modal buffered behind another overlay.
+		m.flushPendingLaunchCrash(),
 		func() tea.Msg {
 			time.Sleep(100 * time.Millisecond)
 			return previewTickMsg{}

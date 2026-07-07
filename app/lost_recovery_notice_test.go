@@ -33,6 +33,25 @@ func TestSurfaceLostRecoveries(t *testing.T) {
 			"the modal must name the launch command so a typo'd profile is diagnosable")
 	})
 
+	t.Run("crash at launch behind an overlay buffers instead of clobbering it", func(t *testing.T) {
+		h := newCreateFormHome(t)
+		h.state = statePrompt // an overlay owns the screen
+
+		cmd := h.surfaceLostRecoveries([]lostRecovery{{title: "boom", launchCmd: "claude --profile typo"}})
+
+		require.Nil(t, cmd, "a buffered crash issues no command this tick")
+		require.Equal(t, statePrompt, h.state, "a background recovery must never clobber an open overlay")
+		require.NotNil(t, h.pendingLaunchCrash, "the crash must be buffered for later")
+
+		// Once the overlay closes, the preview tick's flush pops the buffered modal.
+		// (showInfo drives the modal via state, so the flush returns no command.)
+		h.state = stateDefault
+		h.flushPendingLaunchCrash()
+		require.Equal(t, stateInfo, h.state, "the buffered crash pops once the screen is free")
+		require.Contains(t, h.textOverlay.Render(), "claude --profile typo")
+		require.Nil(t, h.pendingLaunchCrash, "flushing clears the buffer")
+	})
+
 	t.Run("a failed recovery surfaces an error naming the session", func(t *testing.T) {
 		h := newCreateFormHome(t)
 		h.surfaceLostRecoveries([]lostRecovery{{title: "bad", err: fmt.Errorf("disk full")}})
