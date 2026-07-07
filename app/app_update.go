@@ -117,12 +117,16 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// re-polls everything, so nothing is lost — but the tick must still re-arm.
 		var cmds []tea.Cmd
 		if msg.attachGen == m.attachGen {
-			if recoverLostInstances(msg.results, m.lostStrikes) {
+			if recoveries := recoverLostInstances(msg.results, m.lostStrikes); len(recoveries) > 0 {
+				// Every recovery ends the instance Paused (even a failed one), so its
+				// status genuinely changed — persist. Then make the transition visible
+				// rather than a silent Running→Paused (#270).
 				if err := m.persistInstances(); err != nil {
 					log.ErrorLog.Printf("failed to persist recovered sessions: %v", err)
 				}
+				cmds = append(cmds, m.surfaceLostRecoveries(recoveries))
 			}
-			cmds = m.applyMetadataResults(msg.results)
+			cmds = append(cmds, m.applyMetadataResults(msg.results)...)
 		}
 		m.metadataTick++
 		fullSweep := m.metadataTick%metadataFullSweepEvery == 0

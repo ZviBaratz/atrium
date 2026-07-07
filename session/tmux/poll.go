@@ -186,9 +186,14 @@ func (t *Session) Poll() PaneState {
 	// A dead/missing session can never be working; probing it would fail every tick
 	// and flood the log. Report PaneDead (not PaneUnknown) so the metadata loop can
 	// derive sessionLost from this single check and recover the instance to Paused,
-	// without forking a second has-session of its own.
-	if !t.DoesSessionExist() {
+	// without forking a second has-session of its own. An inconclusive probe (a
+	// timeout kill or a fork/exec failure under load) is NOT a death — report
+	// PaneUnknown so the strike counter never advances on transient failures (#270).
+	switch t.liveness() {
+	case sessionGone:
 		return PaneDead
+	case sessionIndeterminate:
+		return PaneUnknown
 	}
 	raw, err := t.CapturePaneContent()
 	if err != nil {
@@ -328,8 +333,13 @@ func (t *Session) Poll() PaneState {
 func (t *Session) PollNow() PaneState {
 	t.monitorMu.Lock()
 	defer t.monitorMu.Unlock()
-	if !t.DoesSessionExist() {
+	// As in Poll: only a definitive "gone" is PaneDead; an inconclusive probe stays
+	// PaneUnknown so a transient failure doesn't re-baseline the monitor to dead.
+	switch t.liveness() {
+	case sessionGone:
 		return PaneDead
+	case sessionIndeterminate:
+		return PaneUnknown
 	}
 	raw, err := t.CapturePaneContent()
 	if err != nil {

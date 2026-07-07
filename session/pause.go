@@ -114,44 +114,53 @@ func (i *Instance) pause() error {
 		return tc.Err()
 	}
 
-	// Check if there are any changes to commit
+	// Whether it is safe to remove the worktree. Committing dirty work is a
+	// precondition: if the commit fails we must NOT remove the worktree — that
+	// would destroy the very WIP pause exists to protect. We still park the
+	// session as Paused below (leaving the WIP on disk for the user to rescue) so
+	// a lost-session recovery doesn't loop and the row doesn't freeze at Running.
+	removeWorktree := true
 	if dirty, err := wt.IsDirty(); err != nil {
 		tc.Record("check if worktree is dirty", err)
 	} else if dirty {
 		// Commit changes locally (without pushing to GitHub)
 		commitMsg := fmt.Sprintf("%s'%s' on %s %s", autoPauseCommitPrefix, i.Title, time.Now().Format(time.RFC822), autoPauseCommitSuffix)
-		// Return early if we can't commit changes to avoid corrupted state
 		if tc.Record("commit changes", wt.CommitChanges(commitMsg)) {
-			return tc.Err()
+			removeWorktree = false
+		} else {
+			// The metadata poll skips paused instances, so fold this WIP commit into
+			// the cached/persisted commit count now — otherwise the kill dialog would
+			// not warn before `branch -D` destroys its only ref.
+			i.noteAutoPauseCommit()
 		}
-		// The metadata poll skips paused instances, so fold this WIP commit into
-		// the cached/persisted commit count now — otherwise the kill dialog would
-		// not warn before `branch -D` destroys its only ref.
-		i.noteAutoPauseCommit()
 	}
 
 	// Detach from tmux session instead of closing to preserve session output.
 	// Continue with the pause process even if detach fails.
 	tc.Record("detach tmux session", ts.DetachSafely())
 
-	// Check if worktree exists before trying to remove it
-	if _, err := os.Stat(wt.GetWorktreePath()); err == nil {
-		// Remove worktree but keep branch
-		if tc.Record("remove git worktree", wt.Remove()) {
-			return tc.Err()
+	if removeWorktree {
+		// Check if worktree exists before trying to remove it
+		if _, err := os.Stat(wt.GetWorktreePath()); err == nil {
+			// Remove worktree but keep branch. If git can't remove it (the base repo
+			// moved or was deleted), fall back to the orphan handling the
+			// invalid-worktree branch uses — best-effort directory removal + prune —
+			// so the session still ends Paused instead of stuck Running with a dead
+			// pane. The Remove error is still recorded so the failure surfaces once.
+			if tc.Record("remove git worktree", wt.Remove()) {
+				tc.Record("remove orphaned worktree directory", os.RemoveAll(wt.GetWorktreePath()))
+			}
+			// Prune stale metadata even if this fails — the worktree directory is
+			// gone now, so the session must be marked Paused regardless.
+			tc.Record("prune git worktrees", wt.Prune())
 		}
-
-		// Prune stale metadata even if this fails — the worktree directory is
-		// gone after Remove(), so the session must be marked Paused regardless.
-		tc.Record("prune git worktrees", wt.Prune())
+		// The worktree is gone and its work is committed on the branch, so the
+		// cached dirty flag must not keep claiming uncommitted changes. When the
+		// commit failed above we deliberately leave it set (the WIP is real and
+		// still on disk) so the kill dialog keeps warning before branch -D.
+		i.clearCachedDirty()
 	}
 
-	// Pause committed any uncommitted work above and removed the worktree, so the
-	// session now has nothing uncommitted. The metadata poll loop skips paused
-	// instances, so clear the cached dirty flag here or it would stay stale until
-	// the next Resume — surfacing a false "(has uncommitted changes)" in the kill
-	// dialog and a stale pencil glyph in the list.
-	i.clearCachedDirty()
 	i.SetStatus(Paused)
 
 	return tc.Err()
@@ -192,33 +201,45 @@ func (i *Instance) Resume() error {
 		return nil
 	}
 
-	// Check if branch is checked out elsewhere (base repo or a sibling worktree).
-	// Naming the holding path makes the error actionable and lets the app layer
-	// offer to detach the base repo automatically.
-	if heldBy, err := wt.BranchCheckoutPath(); err != nil {
+	// If our own worktree is still materialized on disk, a commit-failure pause left
+	// it in place to preserve uncommitted WIP (see pause). Reuse it as-is: running
+	// Setup would clearStaleWorktree and re-add from the branch, discarding that WIP
+	// — and BranchCheckoutPath would see our own worktree as a foreign checkout and
+	// refuse the resume outright. A valid worktree here can only be that degraded
+	// park (a normal pause removed the worktree), so there is no auto-pause commit to
+	// unwind. Otherwise materialize it fresh, first guarding against the branch being
+	// checked out elsewhere (base repo or a sibling worktree).
+	if valid, err := wt.IsValidWorktree(); err != nil {
 		log.ErrorLog.Print(err)
-		return fmt.Errorf("failed to check if branch is checked out: %w", err)
-	} else if heldBy != "" {
-		return &git.BranchCheckedOutError{Branch: wt.GetBranchName(), Path: heldBy}
-	}
+		return fmt.Errorf("failed to validate worktree: %w", err)
+	} else if !valid {
+		// Naming the holding path makes the error actionable and lets the app layer
+		// offer to detach the base repo automatically.
+		if heldBy, err := wt.BranchCheckoutPath(); err != nil {
+			log.ErrorLog.Print(err)
+			return fmt.Errorf("failed to check if branch is checked out: %w", err)
+		} else if heldBy != "" {
+			return &git.BranchCheckedOutError{Branch: wt.GetBranchName(), Path: heldBy}
+		}
 
-	// Setup git worktree
-	if err := wt.Setup(); err != nil {
-		log.ErrorLog.Print(err)
-		return fmt.Errorf("failed to setup git worktree: %w", err)
-	}
+		// Setup git worktree
+		if err := wt.Setup(); err != nil {
+			log.ErrorLog.Print(err)
+			return fmt.Errorf("failed to setup git worktree: %w", err)
+		}
 
-	// Reverse the auto-commit pause made (if any), so the worktree comes back
-	// exactly as it was left — changes restored, no history artifact. Best-effort:
-	// the WIP content is safe inside the commit regardless, so a failure here must
-	// not abort resume; worst case is the prior behavior (the commit stays).
-	if n, err := i.unwindAutoPauseCommits(wt); err != nil {
-		log.ErrorLog.Print(err)
-	} else {
-		// The unwound commits are pending changes again, so walk the count pause
-		// bumped back down; otherwise the kill dialog would over-count after a
-		// resume (durably if the session is re-paused before the next poll).
-		i.noteAutoPauseUnwind(n)
+		// Reverse the auto-commit pause made (if any), so the worktree comes back
+		// exactly as it was left — changes restored, no history artifact. Best-effort:
+		// the WIP content is safe inside the commit regardless, so a failure here must
+		// not abort resume; worst case is the prior behavior (the commit stays).
+		if n, err := i.unwindAutoPauseCommits(wt); err != nil {
+			log.ErrorLog.Print(err)
+		} else {
+			// The unwound commits are pending changes again, so walk the count pause
+			// bumped back down; otherwise the kill dialog would over-count after a
+			// resume (durably if the session is re-paused before the next poll).
+			i.noteAutoPauseUnwind(n)
+		}
 	}
 
 	// Check if tmux session still exists from pause, otherwise create new one

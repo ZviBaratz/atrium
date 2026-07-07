@@ -688,7 +688,10 @@ func (m *home) attachSelected() (tea.Model, tea.Cmd) {
 		return m, m.handleInfoNotice(stillStartingNotice)
 	}
 	if !selected.TmuxAlive() {
-		return m, m.handleInfoNotice("session has no live terminal — resume it or kill it")
+		// Don't say "resume it": r refuses a non-paused session (resumeSelectedKey).
+		// A dead terminal is parked as paused within a couple of poll ticks (the
+		// lost-session recovery), after which r works; until then kill is the action.
+		return m, m.handleInfoNotice("session terminal has exited — it will be parked as paused shortly (then press r), or press k to kill")
 	}
 	// Attach to the session (or its terminal tab) via tea.Exec, which hands the
 	// terminal to tmux and repaints on detach; the hint bar carries the ctrl-q

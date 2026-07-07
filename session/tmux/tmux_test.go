@@ -245,6 +245,43 @@ func TestPollersReturnDeadWhenSessionDead(t *testing.T) {
 	require.False(t, captured, "capture-pane must not run when the tmux session is dead")
 }
 
+// An inconclusive has-session probe (a deadline-kill of a slow-but-alive server,
+// or a fork/exec failure under full-sweep fan-out) must NOT read as a dead
+// session. It classifies as PaneUnknown so the metadata loop keeps the prior
+// status and the lost-session strike counter never advances on a transient
+// infrastructure hiccup — the mass-pause bug in #270.
+func TestPollersReturnUnknownOnIndeterminateProbe(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+	}{
+		// A timeout kill: exec.CommandContext SIGKILLs the process and Run surfaces
+		// the wait error, but ctx.Err()/the error chain carries the deadline.
+		{"deadline exceeded", context.DeadlineExceeded},
+		{"wrapped deadline", fmt.Errorf("signal: killed: %w", context.DeadlineExceeded)},
+		// A fork/exec failure never reaches the server (EMFILE/ENOMEM): not an
+		// ExitError, not a recognized "gone" message.
+		{"exec failure", fmt.Errorf("fork/exec /usr/bin/tmux: too many open files")},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			captured := false
+			cmdExec := cmd_test.MockCmdExec{
+				RunFunc: func(cmd *exec.Cmd) error { return tc.err },
+				OutputFunc: func(cmd *exec.Cmd) ([]byte, error) {
+					captured = true
+					return nil, fmt.Errorf("should not be called")
+				},
+			}
+			s := NewSessionWithDeps(context.Background(), "blip", "claude", NewMockPtyFactory(t), cmdExec)
+
+			require.Equal(t, PaneUnknown, s.Poll(), "an indeterminate probe must not classify as dead")
+			require.Equal(t, PaneUnknown, s.PollNow(), "an indeterminate probe must not classify as dead")
+			require.False(t, captured, "capture-pane must not run on an indeterminate probe")
+		})
+	}
+}
+
 // The happy path must keep working: an alive session still captures. For a program with
 // no busy marker, freshly seen content classifies as working (the content-change path),
 // which the HasUpdated shim reports as updated.

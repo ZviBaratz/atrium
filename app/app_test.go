@@ -348,11 +348,15 @@ func TestRecoverLostInstances(t *testing.T) {
 		return []instanceMetaResult{{instance: inst, sessionLost: true}}
 	}
 
+	acted := func(inst *session.Instance, strikes map[*session.Instance]int) bool {
+		return len(recoverLostInstances(lost(inst), strikes)) > 0
+	}
+
 	t.Run("a live instance is left untouched and clears its strikes", func(t *testing.T) {
 		inst := newInst()
 		strikes := map[*session.Instance]int{inst: 1}
 		recovered := recoverLostInstances([]instanceMetaResult{{instance: inst, sessionLost: false}}, strikes)
-		require.False(t, recovered)
+		require.Empty(t, recovered)
 		require.False(t, inst.Paused())
 		require.Zero(t, strikes[inst], "a live observation resets the dead-strike count")
 	})
@@ -360,8 +364,7 @@ func TestRecoverLostInstances(t *testing.T) {
 	t.Run("a single lost observation does NOT recover (debounce)", func(t *testing.T) {
 		inst := newInst()
 		strikes := map[*session.Instance]int{}
-		recovered := recoverLostInstances(lost(inst), strikes)
-		require.False(t, recovered, "one transient has-session miss must not tear down a live worktree")
+		require.False(t, acted(inst, strikes), "one transient has-session miss must not tear down a live worktree")
 		require.Equal(t, 1, strikes[inst])
 	})
 
@@ -370,8 +373,7 @@ func TestRecoverLostInstances(t *testing.T) {
 		strikes := map[*session.Instance]int{}
 		recoverLostInstances(lost(inst), strikes)                                                 // strike 1
 		recoverLostInstances([]instanceMetaResult{{instance: inst, sessionLost: false}}, strikes) // reset
-		recovered := recoverLostInstances(lost(inst), strikes)                                    // strike 1 again
-		require.False(t, recovered)
+		require.False(t, acted(inst, strikes), "strike 1 again after a reset must not recover")
 		require.Equal(t, 1, strikes[inst])
 	})
 
@@ -381,17 +383,33 @@ func TestRecoverLostInstances(t *testing.T) {
 		var recovered bool
 		for i := 0; i < lostSessionRecoverThreshold; i++ {
 			require.False(t, recovered, "must not recover before the threshold")
-			recovered = recoverLostInstances(lost(inst), strikes)
+			recovered = acted(inst, strikes)
 		}
 		require.True(t, recovered, "recovers once confirmed dead on threshold consecutive ticks")
+	})
+
+	t.Run("a failed recovery is attempted once, not retried in a loop", func(t *testing.T) {
+		// This instance is never started, so RecoverLostSession() errors — standing in
+		// for a recovery that can't complete. It must fire exactly once (at threshold)
+		// and then stop, never hammering RecoverLostSession every tick (#270).
+		inst := newInst()
+		strikes := map[*session.Instance]int{}
+		for i := 0; i < lostSessionRecoverThreshold-1; i++ {
+			require.Empty(t, recoverLostInstances(lost(inst), strikes))
+		}
+		out := recoverLostInstances(lost(inst), strikes) // threshold: the one attempt
+		require.Len(t, out, 1)
+		require.Error(t, out[0].err, "an unstarted instance cannot be paused, so recovery fails")
+		// Subsequent ticks keep seeing it lost but must NOT re-attempt.
+		require.Empty(t, recoverLostInstances(lost(inst), strikes), "a failed recovery must not retry")
+		require.Empty(t, recoverLostInstances(lost(inst), strikes), "still no retry on the next tick")
 	})
 
 	t.Run("an already-paused instance is skipped", func(t *testing.T) {
 		inst := newInst()
 		inst.SetStatus(session.Paused)
 		strikes := map[*session.Instance]int{}
-		recovered := recoverLostInstances(lost(inst), strikes)
-		require.False(t, recovered, "an already-paused instance needs no recovery")
+		require.False(t, acted(inst, strikes), "an already-paused instance needs no recovery")
 	})
 	// The actual lost-session -> Paused transition is covered against a real worktree
 	// by session.TestRecoverLostSessionTransitionsToPaused.

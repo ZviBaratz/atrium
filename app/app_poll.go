@@ -285,28 +285,58 @@ func promptDeliveryReady(state tmux.PaneState, awaitingInput bool, queuedAt, now
 // blip, load spike) must not trigger it — require confirmation across ticks.
 const lostSessionRecoverThreshold = 2
 
+// lostSessionLaunchCrashWindow is how soon after (re)launch a lost-session
+// recovery counts as a crash-at-launch (a bad program/profile) rather than a
+// long-lived session that later died, so the notice can name the command.
+const lostSessionLaunchCrashWindow = 15 * time.Second
+
+// lostRecovery is the outcome of recovering one lost session, returned so the
+// caller can surface it — a silent Running→Paused transition is indistinguishable
+// from a user pause (#270). err is non-nil when RecoverLostSession failed (the
+// instance is still parked Paused by pause()); launchCmd is set only for a
+// crash-at-launch, naming the command that likely caused it.
+type lostRecovery struct {
+	title     string
+	err       error
+	launchCmd string
+}
+
 // recoverLostInstances moves instances whose tmux session has died (flagged
 // sessionLost by the metadata tick) into Paused, so they stop being polled and can be
 // brought back with Resume. It debounces using strikes (a per-instance count of
 // consecutive dead observations, owned by the caller): a session is only recovered
 // after lostSessionRecoverThreshold consecutive misses; any live observation resets
-// the count. Returns whether any instance was recovered so the caller can persist.
-// Runs on the main thread — the only place model state may be mutated.
-func recoverLostInstances(results []instanceMetaResult, strikes map[*session.Instance]int) (recovered bool) {
+// the count. Recovery is attempted exactly once (at the threshold strike): a failed
+// recovery pins the strike above the threshold so it never retries in a tight loop
+// (the #270 dead-end), and pause() guarantees the instance ends Paused regardless, so
+// the next tick's Paused check clears the strike. Returns one lostRecovery per
+// instance acted on so the caller can persist and surface them. Runs on the main
+// thread — the only place model state may be mutated.
+func recoverLostInstances(results []instanceMetaResult, strikes map[*session.Instance]int) []lostRecovery {
+	var recovered []lostRecovery
 	for _, r := range results {
 		if !r.sessionLost || r.instance.Paused() {
 			delete(strikes, r.instance) // alive (or already paused): clear any prior strikes
 			continue
 		}
 		strikes[r.instance]++
-		if strikes[r.instance] < lostSessionRecoverThreshold {
-			continue // not yet confirmed dead; re-check next tick
+		// Attempt recovery only on the exact threshold strike. Below it we are still
+		// debouncing; above it a prior attempt already ran and (if it failed) must not
+		// be retried every tick — surface once, then leave it be.
+		if strikes[r.instance] != lostSessionRecoverThreshold {
+			continue
 		}
-		delete(strikes, r.instance)
-		if err := r.instance.RecoverLostSession(); err != nil {
+		err := r.instance.RecoverLostSession()
+		if err != nil {
 			log.ErrorLog.Printf("failed to recover lost session %q: %v", r.instance.Title, err)
+		} else {
+			delete(strikes, r.instance) // clean success; drop the strike
 		}
-		recovered = true
+		var launchCmd string
+		if r.instance.DiedAtLaunch(lostSessionLaunchCrashWindow) {
+			launchCmd = r.instance.Program
+		}
+		recovered = append(recovered, lostRecovery{title: r.instance.Title, err: err, launchCmd: launchCmd})
 	}
 	return recovered
 }

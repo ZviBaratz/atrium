@@ -768,14 +768,60 @@ func (t *Session) updateWindowSize(cols, rows int) error {
 	})
 }
 
-// DoesSessionExist asks the tmux server whether this session is currently
-// alive (exact-name match).
-func (t *Session) DoesSessionExist() bool {
+// sessionLiveness is the outcome of a has-session probe. It distinguishes a
+// definitive "the session is gone" from an inconclusive probe (a timeout kill,
+// a fork/exec failure under load) so the poll loop never treats a transient
+// infrastructure hiccup as a dead session — the mass-pause bug in #270.
+type sessionLiveness int
+
+const (
+	sessionAlive         sessionLiveness = iota // has-session succeeded
+	sessionGone                                 // tmux answered "no such session"/"no server running"
+	sessionIndeterminate                        // probe never got a definitive answer (timeout, exec failure)
+)
+
+// liveness probes the tmux server for this session and classifies the result.
+// A non-nil error is not automatically "gone": a deadline-kill or a fork/exec
+// failure means the probe never reached a definitive answer, so the caller must
+// keep the prior status rather than tear the session down.
+func (t *Session) liveness() sessionLiveness {
 	ctx, cancel := t.opContext()
 	defer cancel()
+	// Capture stderr so a definitive "session not found"/"no server running" can
+	// be recognized the same way Close's sessionAlreadyGone does.
+	var stderr bytes.Buffer
 	// Using "-t name" does a prefix match, which is wrong. `-t=` does an exact match.
 	existsCmd := tmuxCommand(ctx, "has-session", fmt.Sprintf("-t=%s", t.snapshotName()))
-	return t.cmdExec.Run(existsCmd) == nil
+	existsCmd.Stderr = &stderr
+	err := t.cmdExec.Run(existsCmd)
+	switch {
+	case err == nil:
+		return sessionAlive
+	// A deadline-kill can surface as an ExitError ("signal: killed"), so this must
+	// be checked before the ExitError branch below. Inspect the context (a real
+	// timeout in production) and the error chain (a fake executor in tests).
+	case errors.Is(ctx.Err(), context.DeadlineExceeded) || errors.Is(err, context.DeadlineExceeded):
+		return sessionIndeterminate
+	// tmux gave a definitive "no live session" answer.
+	case sessionAlreadyGone(err, stderr.String()):
+		return sessionGone
+	// tmux actually ran and exited non-zero for some other reason — has-session
+	// only fails when the session is absent, so this is still a real "no".
+	case errors.As(err, new(*exec.ExitError)):
+		return sessionGone
+	// The probe never reached the server (fork/exec EMFILE/ENOMEM, ctx canceled,
+	// a stalled-but-alive server): inconclusive, keep the prior status.
+	default:
+		return sessionIndeterminate
+	}
+}
+
+// DoesSessionExist asks the tmux server whether this session is currently
+// alive (exact-name match). An inconclusive probe (timeout, exec failure) reads
+// as not-alive here, matching the historical bool contract; callers that must
+// distinguish transient failures from a real death use liveness directly (Poll).
+func (t *Session) DoesSessionExist() bool {
+	return t.liveness() == sessionAlive
 }
 
 // snapshotName reads sanitizedName under the read lock so background polling can't race

@@ -237,6 +237,11 @@ type Instance struct {
 	// The below fields are initialized upon calling Start(). Guarded by mu.
 
 	started bool
+	// startedAt records when the agent was last (re)launched, so a lost-session
+	// recovery can tell a crash-moments-after-launch (a bad program/profile) from a
+	// long-lived session that later died, and surface an actionable notice. Runtime
+	// only, not persisted.
+	startedAt time.Time
 	// tmuxSession is the tmux session for the instance.
 	tmuxSession *tmux.Session
 	// gitWorktree is the git worktree for the instance.
@@ -509,6 +514,7 @@ func (i *Instance) startResuming(ts *tmux.Session, workDir string) error {
 // uncommitted work: Resume would force-recreate the worktree and lose it.
 func (i *Instance) recoverInPlace() {
 	i.started = true
+	i.startedAt = time.Now()
 
 	wt := i.worktree()
 	if wt == nil {
@@ -714,6 +720,16 @@ func (i *Instance) isStarted() bool {
 	return i.started
 }
 
+// DiedAtLaunch reports whether the agent was (re)launched within the last
+// `within` — i.e. a lost-session recovery firing now is a crash moments after
+// launch (a bad program/profile) rather than a long-running session that died.
+// False for a never-started instance (zero startedAt).
+func (i *Instance) DiedAtLaunch(within time.Duration) bool {
+	i.mu.RLock()
+	defer i.mu.RUnlock()
+	return !i.startedAt.IsZero() && time.Since(i.startedAt) < within
+}
+
 // tmux returns the tmux session pointer under the read lock. Callers invoke methods
 // on the returned session outside the lock (Session guards its own fields), so
 // mu is never held across tmux I/O.
@@ -854,6 +870,7 @@ func (i *Instance) Start(firstTimeSetup bool) error {
 		} else {
 			i.mu.Lock()
 			i.started = true
+			i.startedAt = time.Now()
 			i.mu.Unlock()
 		}
 	}()
