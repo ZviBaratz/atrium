@@ -291,19 +291,16 @@ func (l *List) swapInManual(a, b *session.Instance) {
 // blockRange returns the [start, end) range of the contiguous repo block whose
 // repoKey is key, or (-1, -1) if no instance carries it. Repo blocks are contiguous
 // in both manual and items (the repo-contiguous invariant), so each key maps to at
-// most one range.
+// most one range. Built on forEachRepoBlock so block detection keeps a single
+// definition (the start < 0 guard just keeps the first — and only — matching block).
 func blockRange(items []*session.Instance, key string) (start, end int) {
-	for i, it := range items {
-		if repoKey(it) == key {
-			start = i
-			end = i + 1
-			for end < len(items) && repoKey(items[end]) == key {
-				end++
-			}
-			return start, end
+	start, end = -1, -1
+	forEachRepoBlock(items, func(s, e int) {
+		if start < 0 && repoKey(items[s]) == key {
+			start, end = s, e
 		}
-	}
-	return -1, -1
+	})
+	return start, end
 }
 
 // transposeBlocksInManual swaps the positions of two whole repo blocks (identified

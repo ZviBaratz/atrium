@@ -885,13 +885,14 @@ func (l *List) MoveGroupUp() bool {
 	if start <= 0 {
 		return false
 	}
-	prevStart, _ := l.groupBounds(start - 1)
 	// Under account grouping a block move must stay within the account cluster; a
-	// move across an account boundary is refused (clustering would undo it). The
-	// account is judged by the block anchor, matching clusterByAccount's keying.
-	if l.accountGrouped() && accountKey(l.items[start]) != accountKey(l.items[prevStart]) {
+	// move across an account boundary is refused (clustering would undo it).
+	// GroupMoveCrossesAccount is the single definition of that boundary — the app
+	// calls it too, to explain the refusal rather than leaving a silent no-op.
+	if l.GroupMoveCrossesAccount(true) {
 		return false
 	}
+	prevStart, _ := l.groupBounds(start - 1)
 	// While a view is active items is derived, so reflect the move into the manual
 	// snapshot and rebuild (which re-selects the session by identity); otherwise
 	// splice the canonical items directly.
@@ -917,11 +918,12 @@ func (l *List) MoveGroupDown() bool {
 	if end >= len(l.items) {
 		return false
 	}
-	// The next block starts at end; groupBounds gives its exclusive upper bound.
-	nextStart, nextEnd := l.groupBounds(end)
-	if l.accountGrouped() && accountKey(l.items[start]) != accountKey(l.items[nextStart]) {
+	// Same account-boundary gate as MoveGroupUp, via the single GroupMoveCrossesAccount source.
+	if l.GroupMoveCrossesAccount(false) {
 		return false
 	}
+	// The next block starts at end; groupBounds gives its exclusive upper bound.
+	nextStart, nextEnd := l.groupBounds(end)
 	if l.reflectGroupMove(start, nextStart) {
 		return true
 	}
