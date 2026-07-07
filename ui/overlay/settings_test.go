@@ -344,7 +344,7 @@ func TestSettingsOverlay_LongDescriptionShownInFull(t *testing.T) {
 	o.SetSize(80, 40)
 	settingsAt(t, o, "group_mode")
 	out := stripANSI(o.Render())
-	assert.Contains(t, out, "reordering (J/K and { }).",
+	assert.Contains(t, out, "an account boundary is refused",
 		"the full description must be shown, not truncated to one line")
 	assert.Contains(t, out, "esc close", "the key hint stays visible")
 }
