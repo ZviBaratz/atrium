@@ -30,6 +30,17 @@ const (
 // would have the daemon hammering tmux capture-pane in a hot loop.
 const minPollIntervalMs = 100
 
+// Vertical chrome around the settings body that is neither body nor footer:
+// border (2) + Padding(1,2) verticals (2) + title (1) + blank-after-title (1)
+// + blank-before-footer (1). Used to size the body window against the terminal
+// height so the box (with its now variable-height footer) never overflows.
+const settingsVChrome = 7
+
+// settingsMinBody is the minimum number of body rows kept visible, which keeps
+// the cursor row on screen; it is also the floor the wrapped-description cap
+// reserves for the body on short terminals.
+const settingsMinBody = 3
+
 // settingRow declares one editable config field. The panel is driven entirely
 // by this schema, so exposing a new Config field is a matter of appending a
 // row in newSettingRows — the navigation, editing, and rendering are generic.
@@ -552,11 +563,12 @@ func (s *SettingsOverlay) Render() string {
 	t := theme.Current()
 	inner := s.innerWidth()
 
-	body := s.renderBody(inner)
+	// Footer first: its (now variable) line count feeds the body's height budget.
 	footer := s.renderFooter(inner)
+	body := s.renderBody(inner, len(footer))
 
 	title := t.OverlayTitleStyle().Render("Settings")
-	content := title + "\n\n" + strings.Join(body, "\n") + "\n\n" + footer
+	content := title + "\n\n" + strings.Join(body, "\n") + "\n\n" + strings.Join(footer, "\n")
 
 	return lipgloss.NewStyle().
 		Border(t.Borders.Style).
@@ -568,7 +580,7 @@ func (s *SettingsOverlay) Render() string {
 
 // renderBody renders the section headers + rows, windowed so the cursor's row
 // is always visible within the height budget.
-func (s *SettingsOverlay) renderBody(inner int) []string {
+func (s *SettingsOverlay) renderBody(inner, footerHeight int) []string {
 	t := theme.Current()
 	headerStyle := t.DimStyle().Bold(true)
 	dim := t.DimStyle()
@@ -611,10 +623,12 @@ func (s *SettingsOverlay) renderBody(inner int) []string {
 	}
 
 	// Window the lines so the cursor's line stays visible on short terminals.
-	// Chrome around the body: border (2) + padding (2) + title (2) + footer (3).
-	budget := s.height - 9
-	if budget < 3 {
-		budget = 3
+	// Budget = terminal height minus the fixed chrome and the now variable-height
+	// footer (wrapped description + hint line); reduces to the old height-9 when
+	// the description is a single line (footerHeight == 2).
+	budget := s.height - settingsVChrome - footerHeight
+	if budget < settingsMinBody {
+		budget = settingsMinBody
 	}
 	if len(lines) <= budget {
 		out := make([]string, len(lines))
@@ -666,8 +680,10 @@ func (s *SettingsOverlay) renderValue(i int) string {
 }
 
 // renderFooter renders the selected row's description (or pending validation
-// error) with its apply note, followed by the key-hint line.
-func (s *SettingsOverlay) renderFooter(inner int) string {
+// error) with its apply note, wrapped across as many lines as it needs, followed
+// by the key-hint line. It returns one string per rendered line so Render can
+// size the body window against the footer's actual height.
+func (s *SettingsOverlay) renderFooter(inner int) []string {
 	t := theme.Current()
 	row := s.rows[s.cursor]
 
@@ -680,10 +696,31 @@ func (s *SettingsOverlay) renderFooter(inner int) string {
 		desc += " · " + row.applyNote
 	}
 
+	// Wrap the raw description to the inner width so long help is shown in full
+	// rather than clipped to one line. xansi.Wrap hard-breaks over-long tokens, so
+	// every line stays within inner (keeping the box within its width). Cap the
+	// line count on short terminals — reserving chrome, the hint, and a minimum
+	// body — so the box can never grow past the terminal and get bottom-clipped by
+	// PlaceOverlay (which would hide the pinned hint line). The cap only bites on
+	// genuinely short terminals; normally the full description fits.
+	lines := strings.Split(xansi.Wrap(desc, inner, ""), "\n")
+	maxDescLines := max(1, s.height-settingsVChrome-1-settingsMinBody)
+	if len(lines) > maxDescLines {
+		lines = lines[:maxDescLines]
+		last := lines[maxDescLines-1]
+		if xansi.StringWidth(last) > inner-1 {
+			last = xansi.Truncate(last, inner-1, "")
+		}
+		lines[maxDescLines-1] = last + "…"
+	}
+	// Style each wrapped line for color only; the outer box .Width pads them.
+	for i, l := range lines {
+		lines[i] = style.Render(l)
+	}
+
 	hint := "↑/↓ move · ←/→ change · ↵ edit · esc close"
 	if s.editing {
 		hint = "↵ save · esc cancel"
 	}
-	return xansi.Truncate(style.Render(desc), inner, "…") + "\n" +
-		xansi.Truncate(t.OverlayHintStyle().Render(hint), inner, "…")
+	return append(lines, xansi.Truncate(t.OverlayHintStyle().Render(hint), inner, "…"))
 }
