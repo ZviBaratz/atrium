@@ -108,14 +108,19 @@ func (m *home) handlePromptState(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// "pane not ready yet" outcomes must defer to a retry rather than surface as user
 		// errors; queuing reuses that closed-loop machinery (await readiness, paste
 		// multi-line, confirm, idempotent retry, persist) instead of duplicating it here.
-		selected.QueuePrompt(prompt)
+		// A quick-send appends a follow-up (zero-clock: delivered when the agent next
+		// idles, never force-injected mid-turn) rather than overwriting the slot, so a
+		// message queued behind a booting or busy agent is never silently lost. Flash a
+		// "queued" acknowledgment so the submit isn't silent.
+		selected.QueueFollowupPrompt(prompt)
 		if err := m.persistInstances(); err != nil {
 			log.ErrorLog.Printf("failed to persist queued quick-send prompt: %v", err)
 		}
 		m.textInputOverlay = nil
 		m.state = stateDefault
 		m.menu.SetState(ui.StateDefault)
-		return m, tea.Sequence(tea.WindowSize(), m.instanceChanged())
+		notice := m.handleInfoNotice(fmt.Sprintf("queued for %q", selected.DisplayName()))
+		return m, tea.Sequence(tea.WindowSize(), m.instanceChanged(), notice)
 	}
 
 	// A confirmed double-tap Ctrl+R rebuilds the form fresh and drops any draft.

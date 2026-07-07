@@ -177,7 +177,7 @@ func TestPromptDeliveredMsgClearsQueuedPrompt(t *testing.T) {
 	inst.QueuePrompt("do the thing")
 	_, _ = inst.ClaimPrompt()
 
-	_, _ = h.Update(promptDeliveredMsg{instance: inst})
+	_, _ = h.Update(promptDeliveredMsg{instance: inst, prompt: "do the thing"})
 
 	require.Equal(t, "", inst.Prompt(), "a delivered prompt must be cleared")
 	require.True(t, inst.PromptQueuedAt().IsZero(), "the delivery clock must be cleared")
@@ -213,10 +213,42 @@ func TestPromptSendErrorMsgClearsPrompt(t *testing.T) {
 	inst.QueuePrompt("do the thing")
 	_, _ = inst.ClaimPrompt()
 
-	_, _ = h.Update(promptSendErrorMsg{instance: inst, err: fmt.Errorf("dead pane")})
+	_, _ = h.Update(promptSendErrorMsg{instance: inst, prompt: "do the thing", err: fmt.Errorf("dead pane")})
 
 	require.Equal(t, "", inst.Prompt(), "a hard-failed prompt must be cleared so the loop stops retrying")
 	require.False(t, inst.PromptSending())
+}
+
+// TestPromptQueueDeliversInOrder is the repro for loss scenario (A): a boot prompt and a
+// quick-send queued behind it both reach the agent, in FIFO order, driven through the real
+// claim → promptDeliveredMsg handler cycle. The queue is empty once both are delivered.
+func TestPromptQueueDeliversInOrder(t *testing.T) {
+	h := newCreateFormHome(t)
+	st, err := session.NewStorage(config.DefaultState())
+	require.NoError(t, err)
+	h.storage = st
+	inst, err := session.NewInstance(session.InstanceOptions{
+		Title: "ordered", Path: t.TempDir(), Program: "claude",
+	})
+	require.NoError(t, err)
+	inst.QueuePrompt("first")          // the still-undelivered boot prompt
+	inst.QueueFollowupPrompt("second") // a quick-send that landed in the boot window
+	require.Equal(t, 2, inst.QueueLen())
+
+	// The head (boot prompt) is claimed and confirmed delivered.
+	p, ok := inst.ClaimPrompt()
+	require.True(t, ok)
+	require.Equal(t, "first", p)
+	_, _ = h.Update(promptDeliveredMsg{instance: inst, prompt: p})
+	require.Equal(t, "second", inst.Prompt(), "the follow-up is promoted after the boot prompt delivers")
+
+	// The promoted follow-up is claimed and confirmed delivered in turn.
+	p, ok = inst.ClaimPrompt()
+	require.True(t, ok)
+	require.Equal(t, "second", p)
+	_, _ = h.Update(promptDeliveredMsg{instance: inst, prompt: p})
+	require.Equal(t, 0, inst.QueueLen(), "both prompts delivered in order; the queue drains empty")
+	require.False(t, inst.HasQueuedPrompt())
 }
 
 func TestPromptDeliveryReady(t *testing.T) {
@@ -276,11 +308,22 @@ func TestPromptDeliveryReady(t *testing.T) {
 			want:          false,
 		},
 		{
+			// A follow-up (quick-send) carries a zero clock: the 60s valve is disabled so it
+			// is never force-injected into the middle of a working turn.
 			name:          "zero queuedAt disables the timeout on a busy pane",
 			state:         tmux.PaneWorking,
 			awaitingInput: true,
 			queuedAt:      time.Time{},
 			want:          false,
+		},
+		{
+			// ...but a zero-clock follow-up still delivers the moment the agent idles, so it
+			// is not starved — it just waits for the turn to finish instead of interrupting it.
+			name:          "zero queuedAt still delivers on an idle pane",
+			state:         tmux.PaneIdle,
+			awaitingInput: true,
+			queuedAt:      time.Time{},
+			want:          true,
 		},
 	}
 
@@ -1233,7 +1276,7 @@ func TestShouldAutoOpen(t *testing.T) {
 		// parked during an attach; the creation-time hadPrompt flag must keep the
 		// suppression so detaching from another session doesn't force-attach this one.
 		inst := newInst("do a thing")
-		inst.ClearPrompt()
+		inst.ClearPrompt("do a thing")
 		assert.False(t, newHomeWithAutoAttach(true).shouldAutoOpen(inst, true))
 	})
 	t.Run("flag on, no prompt, but not started", func(t *testing.T) {

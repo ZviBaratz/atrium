@@ -41,6 +41,7 @@ func plainGlyphs() Glyphs {
 		Behind:        "⇣",
 		Dirty:         "*",
 		Note:          "✎",
+		Queued:        "↦", // plain-unicode "queued to send" marker
 		PR:            "⇄", // plain-unicode pull-request marker
 		AutoBadge:     "",  // text-only "AUTO" chip
 		FoldOpen:      "▾",

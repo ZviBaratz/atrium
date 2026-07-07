@@ -9,6 +9,7 @@ import (
 	"github.com/ZviBaratz/atrium/ui/theme"
 	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/mattn/go-runewidth"
 	"github.com/muesli/termenv"
 	"github.com/stretchr/testify/require"
@@ -117,6 +118,29 @@ func TestGutterSeg_PerState(t *testing.T) {
 	seg := r.gutterSeg(p, waiting)
 	require.Equal(t, th.Glyphs.Waiting, seg.plain, "needs-input gutter is the waiting glyph")
 	require.Equal(t, 1, seg.width(), "the gutter is a single column")
+}
+
+// TestRender_QueuedPromptChip pins the pending-prompt indicator: a session with a queued
+// prompt shows the Queued glyph, one without does not, and the glyph is additive — it never
+// displaces the status gutter glyph.
+func TestRender_QueuedPromptChip(t *testing.T) {
+	t.Cleanup(theme.Set("unicode"))
+	th := theme.Current()
+	s := spinner.New()
+	r := &InstanceRenderer{spinner: &s}
+	r.setWidth(80)
+
+	queued := instWithStatus(t, "q", session.NeedsInput)
+	queued.QueueFollowupPrompt("ship it")
+	bare := instWithStatus(t, "b", session.NeedsInput)
+
+	withGlyph := ansi.Strip(r.Render(queued, 0, false, false))
+	require.Contains(t, withGlyph, th.Glyphs.Queued, "a queued prompt must show the pending-prompt glyph")
+	require.Contains(t, withGlyph, th.Glyphs.Waiting,
+		"the status gutter glyph is additive-only: NeedsInput still shows its waiting glyph")
+
+	require.NotContains(t, ansi.Strip(r.Render(bare, 0, false, false)), th.Glyphs.Queued,
+		"a session with no queued prompt shows no pending-prompt glyph")
 }
 
 func TestGitChips_PresentAndAbsent(t *testing.T) {

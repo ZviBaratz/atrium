@@ -25,10 +25,17 @@ type InstanceData struct {
 	UpdatedAt time.Time `json:"updated_at"`
 	AutoYes   bool      `json:"auto_yes"`
 
-	// Prompt is an initial prompt that was queued but not yet delivered to the agent.
-	// Persisting it lets a pending prompt survive a restart before delivery; a delivered
-	// prompt has been cleared, so this is empty for all but freshly-created sessions.
-	// PromptQueuedAt is its delivery-timeout clock (reset to load time on restore).
+	// PromptQueue is the FIFO of prompts queued but not yet delivered to the agent.
+	// Persisting it lets pending prompts survive a restart before delivery and be
+	// re-delivered in order; delivered prompts have been popped, so this is empty for all
+	// but freshly-created or busy sessions. omitempty keeps prompt-less sessions
+	// byte-identical to before the field existed.
+	PromptQueue []QueuedPromptData `json:"prompt_queue,omitempty"`
+
+	// Prompt / PromptQueuedAt are the legacy single-prompt fields, no longer written
+	// (superseded by PromptQueue). They remain decode-only so a state.json that predates
+	// the queue migrates on load: FromInstanceData reads Prompt into a one-element queue
+	// when PromptQueue is absent.
 	Prompt         string    `json:"prompt,omitempty"`
 	PromptQueuedAt time.Time `json:"prompt_queued_at,omitempty"`
 
@@ -83,6 +90,28 @@ type InstanceData struct {
 
 	Worktree  GitWorktreeData `json:"worktree"`
 	DiffStats DiffStatsData   `json:"diff_stats"`
+}
+
+// QueuedPromptData is the serializable form of one queued prompt. QueuedAt is
+// persisted for diagnostics but is not load-bearing: FromInstanceData resets the
+// restored head's clock to load time and treats the rest as strict idle-only, so a
+// zero (omitted) QueuedAt round-trips safely.
+type QueuedPromptData struct {
+	Text     string    `json:"text"`
+	QueuedAt time.Time `json:"queued_at,omitempty"`
+}
+
+// toQueuedPromptData converts an Instance's internal queue snapshot to its
+// serializable form.
+func toQueuedPromptData(queue []queuedPrompt) []QueuedPromptData {
+	if len(queue) == 0 {
+		return nil
+	}
+	out := make([]QueuedPromptData, len(queue))
+	for idx, qp := range queue {
+		out[idx] = QueuedPromptData{Text: qp.text, QueuedAt: qp.queuedAt}
+	}
+	return out
 }
 
 // GitWorktreeData represents the serializable data of a Worktree

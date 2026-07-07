@@ -47,6 +47,7 @@ type Glyphs struct {
 	Behind        string // commits behind base
 	Dirty         string // uncommitted changes
 	Note          string // precedes a freeform session note
+	Queued        string // a prompt is queued for delivery (undelivered)
 	PR            string // precedes a pull-request number (may be empty)
 	AutoBadge     string // leading icon for the AUTO badge (may be empty)
 	FoldOpen      string // expanded repo group

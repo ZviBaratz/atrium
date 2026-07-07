@@ -134,6 +134,14 @@ func (r *InstanceRenderer) Render(i *session.Instance, idx int, selected, marked
 	left1 := []rowSeg{r.gutterSeg(p, i), space, p.nameSeg(i, selected)}
 
 	var right1 []rowSeg
+	// Pending-prompt marker: a durable signal that this session has a queued prompt
+	// awaiting delivery (waiting or in flight), so the user can tell "queued" from
+	// "delivered" without relying on the transient submit/delivery toast. Clears the
+	// moment the queue drains. Orthogonal to the status gutter, so it rides the right
+	// cluster rather than replacing the stateGlyph.
+	if i.HasQueuedPrompt() {
+		right1 = append(right1, p.seg(g.Queued, th.Palette.Accent))
+	}
 	// Per-session Claude account badge: accent for a routed account, dim for the
 	// default/fallback. Shown only when an account was resolved (empty = feature
 	// off / legacy session).
