@@ -354,10 +354,18 @@ func TestSettingsOverlay_LongDescriptionShownInFull(t *testing.T) {
 // PlaceOverlay bottom-clip the pinned hint line. The rendered box height must
 // stay within the terminal for any terminal >= 12 rows (below that it degrades
 // like the pre-existing windowing).
+//
+// The sweep covers every height in the range, not just a few samples: the body
+// budget (renderBody) and the description cap (renderFooter) are two separate
+// formulas that must stay in numeric lockstep for the box to fit, so a dense
+// sweep catches any future drift between them. It also exercises the height
+// (15, with group_mode's help) at which the footer's full-width cut line trips
+// the ellipsis hard-truncate branch — without which that line would soft-wrap
+// in Render, grow the box, and clip the hint.
 func TestSettingsOverlay_FooterNeverClipsHint(t *testing.T) {
 	o := NewSettingsOverlay(config.DefaultConfig())
 	settingsAt(t, o, "group_mode") // the longest description
-	for _, h := range []int{12, 16, 24, 40} {
+	for h := 12; h <= 40; h++ {
 		o.SetSize(80, h)
 		out := o.Render()
 		assert.LessOrEqualf(t, lipgloss.Height(out), h,
@@ -377,6 +385,29 @@ func TestSettingsOverlay_LongDescriptionCapsWithEllipsis(t *testing.T) {
 	out := stripANSI(o.Render())
 	assert.Contains(t, out, "…", "a short terminal caps the description with an ellipsis")
 	assert.Contains(t, out, "esc close", "the hint must remain visible")
+}
+
+// TestSettingsOverlay_FooterCutLineStaysWithinInner pins the footer's inner
+// defense directly: when the description is capped on a short terminal and the
+// last kept line is already full-width, appending the ellipsis must not push it
+// past the inner width. If it did, Render's lipgloss box would soft-wrap that
+// line, add a row, and clip the pinned hint. Height 15 caps group_mode's help at
+// four lines whose fourth wrapped line is exactly inner-wide, which is the case
+// that trips the xansi.Truncate branch.
+func TestSettingsOverlay_FooterCutLineStaysWithinInner(t *testing.T) {
+	o := NewSettingsOverlay(config.DefaultConfig())
+	o.SetSize(80, 15)
+	settingsAt(t, o, "group_mode")
+	inner := o.innerWidth()
+	footer := o.renderFooter(inner)
+	for i, line := range footer {
+		assert.LessOrEqualf(t, ansi.StringWidth(line), inner,
+			"footer line %d must stay within inner width %d after capping", i, inner)
+	}
+	// The ellipsis confirms the cap actually fired, so the width check above is
+	// exercising the truncate path rather than a description that simply fit.
+	assert.Contains(t, stripANSI(strings.Join(footer, "\n")), "…",
+		"the capped description must end with an ellipsis")
 }
 
 func TestSettingsOverlay_ErrShownInRender(t *testing.T) {

@@ -700,9 +700,12 @@ func (s *SettingsOverlay) renderFooter(inner int) []string {
 	// rather than clipped to one line. xansi.Wrap hard-breaks over-long tokens, so
 	// every line stays within inner (keeping the box within its width). Cap the
 	// line count on short terminals — reserving chrome, the hint, and a minimum
-	// body — so the box can never grow past the terminal and get bottom-clipped by
-	// PlaceOverlay (which would hide the pinned hint line). The cap only bites on
-	// genuinely short terminals; normally the full description fits.
+	// body — so that on any terminal tall enough for the minimum layout the box
+	// stays within the terminal and PlaceOverlay can't bottom-clip the pinned hint
+	// line. On terminals shorter than that (below settingsVChrome + settingsMinBody
+	// + a two-line footer) the box still degrades exactly like the pre-existing
+	// body windowing. The cap only bites on short terminals; normally the full
+	// description fits.
 	lines := strings.Split(xansi.Wrap(desc, inner, ""), "\n")
 	maxDescLines := max(1, s.height-settingsVChrome-1-settingsMinBody)
 	if len(lines) > maxDescLines {
