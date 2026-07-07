@@ -71,8 +71,11 @@ func startedInstance(t *testing.T, wt *git.Worktree) *Instance {
 func TestPause_CommitFailureParksPausedAndKeepsWIP(t *testing.T) {
 	wt := newTestWorktree(t)
 	repoPath := wt.GetRepoPath()
-	// Break the identity so an auto-pause commit fails deterministically (HOME is a
-	// fresh temp dir, so there is no global identity to fall back on).
+	// Break the identity so an auto-pause commit fails deterministically. Unsetting
+	// alone is not portable — git auto-detects user@host on some CI (macOS), so the
+	// commit would succeed. user.useConfigOnly forces git to require an explicit
+	// identity and refuse the auto-detect fallback on every platform.
+	runGit(t, repoPath, "config", "user.useConfigOnly", "true")
 	runGit(t, repoPath, "config", "--unset", "user.email")
 	runGit(t, repoPath, "config", "--unset", "user.name")
 	// Make the worktree dirty so pause attempts the (now-failing) commit.

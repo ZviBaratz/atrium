@@ -106,7 +106,7 @@ func (m *home) surfaceLostRecoveries(recoveries []lostRecovery) tea.Cmd {
 	}
 	switch {
 	case failed != nil:
-		return m.handleError(fmt.Errorf("session %q could not be parked cleanly: %v — press r to resume or k to kill",
+		return m.handleError(fmt.Errorf("session %q could not be parked cleanly: %w — press r to resume or k to kill",
 			failed.title, failed.err))
 	case launchCrash != nil:
 		return m.showLaunchCrash(launchCrash)
