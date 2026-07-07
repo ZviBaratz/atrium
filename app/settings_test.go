@@ -145,6 +145,12 @@ func TestGroupModeChange_ClustersList(t *testing.T) {
 func accountGroupedHome(t *testing.T) *home {
 	t.Helper()
 	h := newCreateFormHome(t)
+	// A working in-memory storage so a performed (not just hinted) reorder can persist.
+	st := config.DefaultState()
+	storage, err := session.NewStorage(st)
+	require.NoError(t, err)
+	h.appState = st
+	h.storage = storage
 	for _, spec := range []struct{ repo, acct string }{{"api", "work"}, {"infra", "personal"}} {
 		inst, err := session.NewInstance(session.InstanceOptions{
 			Title: spec.repo, Path: "/tmp/" + spec.repo, Program: "echo",
@@ -157,31 +163,72 @@ func accountGroupedHome(t *testing.T) *home {
 	return h
 }
 
-// Pressing { (whole-group move) while account-grouped must explain itself with a
-// hint rather than silently no-op — clustering owns block order there — mirroring
-// the J/K feedback. (Group moves stay available under a status sort, so this hint is
-// account-specific.)
-func TestGroupMode_GroupMoveKeyExplainsInAccountMode(t *testing.T) {
-	h := accountGroupedHome(t)
+// Pressing { (whole-group move) toward a different account's cluster must explain
+// that group reordering stays within an account, rather than silently no-op'ing.
+func TestGroupMode_GroupMoveAcrossAccountBoundaryExplains(t *testing.T) {
+	h := accountGroupedHome(t) // api|work, infra|personal (clustered, one block each)
 	before := append([]*session.Instance(nil), h.list.GetInstances()...)
+	h.list.SetSelectedInstance(1) // infra|personal, whose neighbor above is work
 
-	pressKey(h, '{') // KeyMoveGroupUp
+	pressKey(h, '{') // KeyMoveGroupUp — would cross into the work cluster
 
-	require.True(t, h.menu.HasNotice(), "a group move while account-grouped must explain itself")
-	assert.Contains(t, h.menu.String(), "grouping by account")
-	assert.Equal(t, before, h.list.GetInstances(), "the group move stays a no-op")
+	require.True(t, h.menu.HasNotice(), "a cross-account group move must explain itself")
+	assert.Contains(t, h.menu.String(), "within an account")
+	assert.Equal(t, before, h.list.GetInstances(), "the cross-account move stays a no-op")
 }
 
-// The J/K reorder-disabled hint names account grouping as a cause, not only the sort
-// mode, so a user in the default creation sort but account-grouped gets accurate
-// guidance about why reordering is off.
-func TestGroupMode_ManualMoveKeyHintNamesAccountGrouping(t *testing.T) {
+// A whole-group move within an account cluster is performed (and persisted), with no
+// hint — account grouping no longer disables group reordering outright.
+func TestGroupMode_GroupMoveWithinClusterPerformsMove(t *testing.T) {
 	h := accountGroupedHome(t)
+	// Add a second work repo so the work cluster has two blocks to reorder.
+	inst, err := session.NewInstance(session.InstanceOptions{
+		Title: "infra2", Path: "/tmp/infra2", Program: "echo",
+	})
+	require.NoError(t, err)
+	inst.SetClaudeAccount("work", "", false)
+	h.list.AddInstance(inst)
+	// Clustered display now leads with the two work blocks: api, infra2, then personal.
+	h.list.SetSelectedInstance(0) // api|work
 
-	pressKey(h, 'K') // KeyMoveUp
+	pressKey(h, '}') // KeyMoveGroupDown within the work cluster
 
-	require.True(t, h.menu.HasNotice(), "manual reorder is disabled while account-grouped")
-	assert.Contains(t, h.menu.String(), "grouping by account")
+	assert.False(t, h.menu.HasNotice(), "a within-cluster move needs no explanation")
+	got := h.list.GetInstances()
+	require.Len(t, got, 3)
+	assert.Equal(t, "infra2", filepath.Base(got[0].Path), "api and infra2 swapped within the work cluster")
+	assert.Equal(t, "api", filepath.Base(got[1].Path))
+}
+
+// J/K within-group reordering works while account-grouped (no status sort), so
+// pressing K performs the swap rather than emitting a hint.
+func TestGroupMode_ManualMoveWorksWhileAccountGrouped(t *testing.T) {
+	h := accountGroupedHome(t)
+	// Two work sessions in one repo so there is a sibling to swap with.
+	inst, err := session.NewInstance(session.InstanceOptions{
+		Title: "api2", Path: "/tmp/api", Program: "echo",
+	})
+	require.NoError(t, err)
+	inst.SetClaudeAccount("work", "", false)
+	h.list.AddInstance(inst)
+	h.list.SetSelectedInstance(1) // the second api session
+
+	pressKey(h, 'K') // KeyMoveUp — within the api repo
+
+	assert.False(t, h.menu.HasNotice(), "J/K is available under account grouping")
+	assert.Equal(t, "api2", h.list.GetSelectedInstance().Title, "the second api session moved up")
+	assert.Equal(t, 0, indexOfTitle(h.list, "api2"), "and now leads its repo")
+}
+
+// indexOfTitle returns the position of the instance with the given title in the
+// displayed order, or -1.
+func indexOfTitle(l *ui.List, title string) int {
+	for i, it := range l.GetInstances() {
+		if it.Title == title {
+			return i
+		}
+	}
+	return -1
 }
 
 func TestSettingsPanel_HidesHintBarLikeOtherModals(t *testing.T) {

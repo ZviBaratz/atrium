@@ -643,21 +643,25 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 	case keys.KeyPause:
 		return m.pauseSelected()
 	case keys.KeyMoveUp, keys.KeyMoveDown:
+		// J/K reorders within a repo group; only a within-group status sort owns that
+		// order. Account grouping leaves J/K available (clustering never touches
+		// within-block order), so the hint names only the sort.
 		if !m.list.ManualReorderEnabled() {
-			return m, m.handleInfoNotice("manual reorder is off while sorting or grouping by account")
+			return m, m.handleInfoNotice("manual reorder is off while sorting by status")
 		}
 		if name == keys.KeyMoveUp {
 			return m.moveAndPersist(m.list.MoveUp)
 		}
 		return m.moveAndPersist(m.list.MoveDown)
 	case keys.KeyMoveGroupUp, keys.KeyMoveGroupDown:
-		// Whole-group moves stay available under a status sort but not while account-
-		// grouped, where the clustering owns block order; surface a hint there rather
-		// than a silent no-op (mirroring the J/K feedback above).
-		if m.list.AccountGrouped() {
-			return m, m.handleInfoNotice("group reorder is off while grouping by account")
+		// Whole-group moves work within an account cluster; a move across an account
+		// boundary is refused (clustering owns cross-account block order), so explain
+		// that rather than leaving a silent no-op (mirroring the J/K feedback above).
+		up := name == keys.KeyMoveGroupUp
+		if m.list.GroupMoveCrossesAccount(up) {
+			return m, m.handleInfoNotice("group reorder stays within an account")
 		}
-		if name == keys.KeyMoveGroupUp {
+		if up {
 			return m.moveAndPersist(m.list.MoveGroupUp)
 		}
 		return m.moveAndPersist(m.list.MoveGroupDown)

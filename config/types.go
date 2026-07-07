@@ -26,8 +26,9 @@ const (
 	// sessions were added in, as adjusted by J/K. The default; no reordering.
 	SessionSortCreation = "creation"
 	// SessionSortStatus orders each repo group by action-priority: NeedsInput,
-	// then unread Ready, then seen Ready, Running, Loading, Paused. Manual J/K
-	// reordering is disabled while this mode is active (group order stays manual).
+	// then unread Ready, then seen Ready, Running, Loading, Paused. This mode owns
+	// within-group order, so manual J/K reordering is disabled while it is active;
+	// whole-group moves ({ / }) stay available.
 	SessionSortStatus = "status"
 )
 
@@ -40,9 +41,10 @@ const (
 	// GroupModeAccount clusters repo groups by their sessions' Claude account
 	// (personal/work), with a divider and tinted headers. The clustering is a
 	// visual no-op when fewer than two distinct accounts are present (e.g.
-	// ClaudeAccounts unconfigured); like the status sort, though, the mode disables
-	// manual reordering (J/K and { }) whenever it is selected, since the view — not
-	// the manual order — owns placement.
+	// ClaudeAccounts unconfigured). It only reorders whole repo blocks, so manual
+	// reordering stays available: J/K reorders within a group as usual, and { / }
+	// reorders groups within an account cluster (a move across an account boundary
+	// is refused, since clustering owns block order across accounts).
 	GroupModeAccount = "account"
 )
 
@@ -271,8 +273,8 @@ type Config struct {
 	// in manual order) or "account" (cluster repo groups by their sessions' Claude
 	// account). Empty or unrecognized values normalize to "repo" (GetGroupMode).
 	// Only meaningful when ClaudeAccounts are configured; with fewer than two
-	// distinct accounts it renders identically to "repo" — but, like the status
-	// sort, selecting it disables manual reordering regardless of account count.
+	// distinct accounts it renders identically to "repo". Manual reordering stays
+	// available under it: J/K within a group, and { / } within an account cluster.
 	GroupMode string `json:"group_mode,omitempty"`
 	// SmartDispatchAuto, when true, lets a confident deterministic project match from the
 	// smart-dispatch input (the `i` key) create the session immediately, skipping the

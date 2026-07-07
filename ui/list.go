@@ -735,9 +735,9 @@ func (l *List) siblingInGroup(inst *session.Instance, dir int, ok func(*session.
 // above belongs to a different group, this is a no-op so the move cannot split a group and produce a duplicate header.
 // (Single-repo lists share one key, so reordering stays unrestricted there.)
 func (l *List) MoveUp() bool {
-	// An active view (sort mode or account grouping) owns the order; manual reorder
-	// is disabled there (the app surfaces a hint via ManualReorderEnabled).
-	if l.viewActive() {
+	// A within-group status sort owns within-block order; J/K is disabled there.
+	// Account clustering only reorders whole blocks, so J/K stays available under it.
+	if l.sortActive() {
 		return false
 	}
 	if l.selectedIdx <= 0 || len(l.items) < 2 {
@@ -750,15 +750,13 @@ func (l *List) MoveUp() bool {
 	if repoKey(l.items[l.selectedIdx]) != repoKey(l.items[l.selectedIdx-1]) {
 		return false
 	}
-	l.items[l.selectedIdx], l.items[l.selectedIdx-1] = l.items[l.selectedIdx-1], l.items[l.selectedIdx]
-	l.selectedIdx--
-	return true
+	return l.applyWithinGroupSwap(l.items[l.selectedIdx], l.items[l.selectedIdx-1], -1)
 }
 
 // MoveDown swaps the selected instance with the one below it. As with MoveUp, the swap is confined to within a repo
 // group so it cannot split a group across a boundary.
 func (l *List) MoveDown() bool {
-	if l.viewActive() {
+	if l.sortActive() {
 		return false
 	}
 	if l.selectedIdx >= len(l.items)-1 || len(l.items) < 2 {
@@ -770,8 +768,25 @@ func (l *List) MoveDown() bool {
 	if repoKey(l.items[l.selectedIdx]) != repoKey(l.items[l.selectedIdx+1]) {
 		return false
 	}
-	l.items[l.selectedIdx], l.items[l.selectedIdx+1] = l.items[l.selectedIdx+1], l.items[l.selectedIdx]
-	l.selectedIdx++
+	return l.applyWithinGroupSwap(l.items[l.selectedIdx], l.items[l.selectedIdx+1], +1)
+}
+
+// applyWithinGroupSwap swaps two adjacent same-repo instances a (the selected one)
+// and b. In creation/repo mode (no snapshot) items is canonical, so the swap is
+// applied directly to items and the selection follows a by dir (-1 up / +1 down).
+// While account-grouped, items is a view: the swap is mirrored into the manual
+// snapshot and the view rebuilt (which re-selects a by identity), so a swap that
+// changes a mixed-account block's anchor account re-clusters correctly. Always
+// returns true (the callers validated the swap).
+func (l *List) applyWithinGroupSwap(a, b *session.Instance, dir int) bool {
+	if l.manual == nil {
+		i := l.selectedIdx
+		l.items[i], l.items[i+dir] = b, a
+		l.selectedIdx += dir
+		return true
+	}
+	l.swapInManual(a, b)
+	l.rebuildView()
 	return true
 }
 
@@ -866,16 +881,23 @@ func (l *List) nearestNavigable(from int) int {
 // preceding it, as a unit, keeping the same session selected. It is a no-op when the group is
 // already first (which also covers the single-group case). Returns whether anything moved.
 func (l *List) MoveGroupUp() bool {
-	// Account grouping owns block order (clustering is a pure view over manual); a
-	// whole-group move would break account contiguity, so it is a no-op there.
-	if l.accountGrouped() {
-		return false
-	}
 	start, end := l.groupBounds(l.selectedIdx)
 	if start <= 0 {
 		return false
 	}
 	prevStart, _ := l.groupBounds(start - 1)
+	// Under account grouping a block move must stay within the account cluster; a
+	// move across an account boundary is refused (clustering would undo it). The
+	// account is judged by the block anchor, matching clusterByAccount's keying.
+	if l.accountGrouped() && accountKey(l.items[start]) != accountKey(l.items[prevStart]) {
+		return false
+	}
+	// While a view is active items is derived, so reflect the move into the manual
+	// snapshot and rebuild (which re-selects the session by identity); otherwise
+	// splice the canonical items directly.
+	if l.reflectGroupMove(start, prevStart) {
+		return true
+	}
 	sel := l.items[l.selectedIdx]
 	reordered := make([]*session.Instance, 0, len(l.items))
 	reordered = append(reordered, l.items[:prevStart]...)
@@ -884,7 +906,6 @@ func (l *List) MoveGroupUp() bool {
 	reordered = append(reordered, l.items[end:]...)
 	l.items = reordered
 	l.SelectInstance(sel)
-	l.syncManualGroupOrder()
 	return true
 }
 
@@ -892,16 +913,18 @@ func (l *List) MoveGroupUp() bool {
 // following it, as a unit, keeping the same session selected. It is a no-op when the group is
 // already last (which also covers the single-group case). Returns whether anything moved.
 func (l *List) MoveGroupDown() bool {
-	// Account grouping owns block order (clustering is a pure view over manual); a
-	// whole-group move would break account contiguity, so it is a no-op there.
-	if l.accountGrouped() {
-		return false
-	}
 	start, end := l.groupBounds(l.selectedIdx)
 	if end >= len(l.items) {
 		return false
 	}
-	_, nextEnd := l.groupBounds(end)
+	// The next block starts at end; groupBounds gives its exclusive upper bound.
+	nextStart, nextEnd := l.groupBounds(end)
+	if l.accountGrouped() && accountKey(l.items[start]) != accountKey(l.items[nextStart]) {
+		return false
+	}
+	if l.reflectGroupMove(start, nextStart) {
+		return true
+	}
 	sel := l.items[l.selectedIdx]
 	reordered := make([]*session.Instance, 0, len(l.items))
 	reordered = append(reordered, l.items[:start]...)
@@ -910,23 +933,46 @@ func (l *List) MoveGroupDown() bool {
 	reordered = append(reordered, l.items[nextEnd:]...)
 	l.items = reordered
 	l.SelectInstance(sel)
-	l.syncManualGroupOrder()
 	return true
 }
 
-// syncManualGroupOrder realigns the canonical manual order to the group sequence
-// just produced in items by a whole-group move, then rebuilds the view. A no-op in
-// creation mode (manual is nil). Group order is manual in every mode; only the
-// within-group order is owned by the sort, so the move must be reflected in manual
-// too. Guarded on sortActive() rather than viewActive(): group moves only occur in
-// non-account modes (MoveGroupUp/Down no-op while account-grouped), so this is never
-// reached while accountGrouped() is true.
-func (l *List) syncManualGroupOrder() {
-	if !l.sortActive() {
-		return
+// reflectGroupMove mirrors a whole-group move into the canonical order while a view
+// is active: it transposes the selected block (anchored at start) with the neighbor
+// block (anchored at neighborStart) in the manual snapshot — an in-place transpose so
+// account clustering stays stable — then rebuilds the view, which re-selects the
+// session by identity. Reports whether it handled the move; false in creation/repo
+// mode (manual is nil), where the caller splices the canonical items directly.
+func (l *List) reflectGroupMove(start, neighborStart int) bool {
+	if l.manual == nil {
+		return false
 	}
-	l.manual = regroupManualLike(l.manual, l.items)
+	l.manual = transposeBlocksInManual(l.manual, repoKey(l.items[start]), repoKey(l.items[neighborStart]))
 	l.rebuildView()
+	return true
+}
+
+// GroupMoveCrossesAccount reports whether a whole-group move ({ / }) in the given
+// direction (up=true / down=false) would cross an account boundary while account-
+// grouped — i.e. the neighbor block belongs to a different account. The app uses it
+// to explain a refused move (clustering keeps blocks within their account cluster)
+// rather than leaving a silent no-op. False when not account-grouped or when there is
+// no neighbor block (a whole-list edge, already a plain no-op).
+func (l *List) GroupMoveCrossesAccount(up bool) bool {
+	if !l.accountGrouped() {
+		return false
+	}
+	start, end := l.groupBounds(l.selectedIdx)
+	if up {
+		if start <= 0 {
+			return false
+		}
+		prevStart, _ := l.groupBounds(start - 1)
+		return accountKey(l.items[start]) != accountKey(l.items[prevStart])
+	}
+	if end >= len(l.items) {
+		return false
+	}
+	return accountKey(l.items[start]) != accountKey(l.items[end])
 }
 
 // GetInstances returns all instances in the list

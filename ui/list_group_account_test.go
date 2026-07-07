@@ -110,18 +110,35 @@ func TestGroupMode_PreservesSelectionByIdentity(t *testing.T) {
 	require.Same(t, sel, l.GetSelectedInstance())
 }
 
-func TestGroupMode_DisablesManualReorder(t *testing.T) {
+// Account grouping only reorders whole repo blocks, so J/K within-group reordering
+// stays available under it (unlike a status sort, which owns within-group order).
+func TestGroupMode_KeepsManualReorderButSortDisablesIt(t *testing.T) {
 	l := acctList(t, "api|work", "infra|personal")
 	require.True(t, l.ManualReorderEnabled())
 	l.SetGroupMode("account")
-	require.False(t, l.ManualReorderEnabled())
+	require.True(t, l.ManualReorderEnabled(), "account grouping leaves J/K available")
+	l.SetSortMode("status")
+	require.False(t, l.ManualReorderEnabled(), "a status sort disables J/K")
 }
 
-func TestGroupMode_GroupMovesAreNoOpInAccountMode(t *testing.T) {
+// A whole-group move within an account cluster is allowed and reflected in both the
+// display and the canonical (persisted) order.
+func TestGroupMode_GroupMoveWithinClusterSucceeds(t *testing.T) {
+	// Clustered display: api(work), infra(work), sideproj(personal).
 	l := acctList(t, "api|work", "sideproj|personal", "infra|work")
 	l.SetGroupMode("account")
-	l.SelectInstance(l.items[0])
-	require.False(t, l.MoveGroupDown(), "group moves are disabled while account-grouped")
+	l.SelectInstance(l.items[0]) // api, the work cluster's first block
+	sel := l.GetSelectedInstance()
+
+	require.True(t, l.MoveGroupDown(), "moving api past infra stays within the work cluster")
+	require.Equal(t, []string{"infra|work", "api|work", "sideproj|personal"}, orderKeys(l),
+		"api and infra swap within the work cluster; personal untouched")
+	require.Same(t, sel, l.GetSelectedInstance(), "selection follows the moved session")
+	// Canonical order reflects the transpose but is NOT clusterized: personal stays
+	// interleaved where it was, only the two work blocks swapped.
+	require.Equal(t, []string{"infra|work", "sideproj|personal", "api|work"}, persistKeys(l))
+	// items stays consistent with a fresh cluster of the canonical order.
+	require.Equal(t, l.items, clusterByAccount(l.InstancesForPersist()))
 }
 
 func TestGroupMode_RendersAccountDividers(t *testing.T) {
@@ -272,14 +289,123 @@ func TestGroupMode_KillInstanceKeepsClusteringAndCanonicalPersist(t *testing.T) 
 		"persisted order drops the killed session and stays canonical")
 }
 
-// MoveGroupUp mirrors the existing MoveGroupDown no-op guard: whole-group moves
-// are disabled while account-grouped, since account clustering — not manual group
-// order — owns block order there.
-func TestGroupMode_MoveGroupUpNoOpInAccountMode(t *testing.T) {
+// A whole-group move that would cross an account boundary is refused: the personal
+// cluster's only block cannot move up into the work cluster, since re-clustering
+// would immediately undo it. GroupMoveCrossesAccount reports the boundary so the app
+// can explain it.
+func TestGroupMode_GroupMoveAcrossAccountBoundaryRefused(t *testing.T) {
+	// Clustered display: api(work), infra(work), sideproj(personal).
 	l := acctList(t, "api|work", "sideproj|personal", "infra|work")
 	l.SetGroupMode("account")
-	l.SelectInstance(l.items[2])
-	require.False(t, l.MoveGroupUp(), "group moves are disabled while account-grouped")
+
+	l.SelectInstance(l.items[2]) // sideproj, first (only) block of the personal cluster
+	require.True(t, l.GroupMoveCrossesAccount(true), "moving personal up crosses into work")
+	require.False(t, l.MoveGroupUp(), "the cross-account move is a no-op")
+	require.Equal(t, []string{"api|work", "infra|work", "sideproj|personal"}, orderKeys(l), "order unchanged")
+
+	l.SelectInstance(l.items[1]) // infra, last block of the work cluster
+	require.True(t, l.GroupMoveCrossesAccount(false), "moving infra down crosses into personal")
+	require.False(t, l.MoveGroupDown(), "the cross-account move is a no-op")
+	require.Equal(t, []string{"api|work", "infra|work", "sideproj|personal"}, orderKeys(l), "order unchanged")
+}
+
+// Under a status sort with NO account grouping, a whole-group move across
+// different-account repos still works — the account-boundary gate applies only while
+// account-grouped, so status-sort group moves are unrestricted.
+func TestGroupMode_StatusSortGroupMoveCrossesAccountsFreely(t *testing.T) {
+	l := acctList(t, "api|work", "infra|personal")
+	l.SetSortMode("status") // status sort only; repo grouping (no clustering)
+	require.False(t, l.GroupMoveCrossesAccount(false), "no boundary gate without account grouping")
+	l.SelectInstance(l.items[0]) // api|work
+	require.True(t, l.MoveGroupDown(), "group move works under a pure status sort")
+	require.Equal(t, []string{"infra|personal", "api|work"}, orderKeys(l))
+	require.Equal(t, []string{"infra|personal", "api|work"}, persistKeys(l))
+}
+
+// J/K reorders sessions within a repo group while account-grouped. The swap is
+// mirrored into the canonical order, and items stays == clusterByAccount(manual).
+func TestGroupMode_WithinGroupReorderUnderAccountGrouping(t *testing.T) {
+	// Two work sessions share repo api; a personal repo makes grouping active.
+	l := acctList(t, "api|work", "api|work", "sideproj|personal")
+	l.SetGroupMode("account")
+	first, second := l.items[0], l.items[1] // both in api
+	require.Equal(t, "api", filepath.Base(first.Path))
+
+	l.SelectInstance(second)
+	require.True(t, l.MoveUp(), "J/K works within a repo under account grouping")
+	require.Equal(t, []*session.Instance{second, first}, l.items[:2], "the two api sessions swapped")
+	require.Same(t, second, l.GetSelectedInstance(), "selection follows the moved session")
+	require.Equal(t, l.items, clusterByAccount(l.InstancesForPersist()), "items stays consistent with canonical")
+	// A second rebuild is stable (idempotent).
+	before := append([]*session.Instance(nil), l.items...)
+	l.rebuildView()
+	require.Equal(t, before, l.items)
+}
+
+// A J/K swap in a mixed-account repo (sessions with differing accounts) must go
+// through rebuildView so the block re-clusters by its new anchor account and items
+// stays == clusterByAccount(manual). This guards the "no rebuild" shortcut bug.
+func TestGroupMode_WithinGroupReorderMixedAccountRepoReclusters(t *testing.T) {
+	// repoB holds a work session (anchor) then a personal one; p is a personal repo,
+	// w a work repo, so both accounts appear and clustering is active.
+	l := acctList(t, "solo|personal", "solo2|work", "shared|work", "shared|personal")
+	l.SetGroupMode("account")
+	// Select the personal session inside the work-anchored shared repo and move it up
+	// to the anchor slot, flipping the block's anchor account to personal.
+	var bAnchor, bDiverge *session.Instance
+	for _, it := range l.items {
+		if filepath.Base(it.Path) == "shared" {
+			if it.ClaudeAccountName() == "work" {
+				bAnchor = it
+			} else {
+				bDiverge = it
+			}
+		}
+	}
+	require.NotNil(t, bAnchor)
+	require.NotNil(t, bDiverge)
+	l.SelectInstance(bDiverge)
+	require.True(t, l.MoveUp(), "swap within the shared repo")
+	require.Equal(t, l.items, clusterByAccount(l.InstancesForPersist()),
+		"items stays consistent even though the swap changed the block's anchor account")
+}
+
+// J/K stays disabled under a status sort even while account-grouped (the sort owns
+// within-group order).
+func TestGroupMode_WithinGroupReorderDisabledUnderStatusSort(t *testing.T) {
+	l := acctList(t, "api|work", "api|work", "sideproj|personal")
+	l.SetGroupMode("account")
+	l.SetSortMode("status")
+	l.SelectInstance(l.items[0])
+	require.False(t, l.MoveUp())
+	require.False(t, l.MoveDown())
+}
+
+// A group move within a single account cluster spanning three repos works both ways
+// and keeps the selection.
+func TestGroupMode_GroupMoveSymmetryWithinCluster(t *testing.T) {
+	l := acctList(t, "a|work", "b|work", "c|work")
+	l.SetGroupMode("account") // single account: whole list is one cluster
+	l.SelectInstance(l.items[0])
+	sel := l.GetSelectedInstance()
+	require.True(t, l.MoveGroupDown())
+	require.Equal(t, []string{"b|work", "a|work", "c|work"}, orderKeys(l))
+	require.Same(t, sel, l.GetSelectedInstance())
+	require.True(t, l.MoveGroupUp())
+	require.Equal(t, []string{"a|work", "b|work", "c|work"}, orderKeys(l))
+	require.Same(t, sel, l.GetSelectedInstance())
+}
+
+// Round-trip: a group move made in account mode survives switching back to repo
+// mode — the canonical order carries the transpose.
+func TestGroupMode_GroupMoveRoundTripToRepoMode(t *testing.T) {
+	l := acctList(t, "api|work", "sideproj|personal", "infra|work")
+	l.SetGroupMode("account")
+	l.SelectInstance(l.items[0]) // api
+	require.True(t, l.MoveGroupDown())
+	l.SetGroupMode("repo")
+	require.Equal(t, []string{"infra|work", "sideproj|personal", "api|work"}, orderKeys(l),
+		"repo mode shows the canonical order with the transpose applied")
 }
 
 // A session whose account diverges from its repo anchor (a mixed-account repo)

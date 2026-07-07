@@ -33,20 +33,13 @@ func (l *List) viewActive() bool {
 	return l.sortActive() || l.accountGrouped()
 }
 
-// ManualReorderEnabled reports whether J/K and { } manual reordering apply. Any
-// active view (sort or account grouping) computes the order, so reordering is
-// disabled there and the app surfaces a hint instead.
+// ManualReorderEnabled reports whether J/K within-group reordering applies. Only a
+// within-group status sort computes that order, so J/K is disabled there (the app
+// surfaces a hint). Account clustering only reorders whole repo blocks and never
+// touches within-block order, so it leaves J/K available: a swap is mirrored into
+// the manual snapshot and the view rebuilt (see MoveUp/MoveDown).
 func (l *List) ManualReorderEnabled() bool {
-	return !l.viewActive()
-}
-
-// AccountGrouped reports whether the list is clustering by Claude account. The app
-// uses it to explain why whole-group reorder ({ / }) is inert: block order is owned
-// by the clustering there, not the manual order. Group moves stay available under a
-// status sort (see syncManualGroupOrder), so this is a narrower query than
-// ManualReorderEnabled, which also bars J/K.
-func (l *List) AccountGrouped() bool {
-	return l.accountGrouped()
+	return !l.sortActive()
 }
 
 // InstancesForPersist returns the instances in canonical (manual) order so a view
@@ -271,41 +264,76 @@ func removeInstance(items []*session.Instance, target *session.Instance) []*sess
 	return items
 }
 
-// regroupManualLike reorders manual's repo-group blocks to match the group order in
-// like (the just-reordered display list), preserving manual's within-group order.
-// Used after a whole-group move so the canonical order tracks the new group sequence
-// without disturbing the within-group (manual) order.
+// swapInManual swaps the positions of instances a and b in the manual snapshot,
+// mirroring a within-block J/K swap made on the displayed items into the canonical
+// order. A no-op when no snapshot is held (creation/repo mode, where items is
+// canonical) or when either instance is absent. The caller rebuilds the view so the
+// two orders stay consistent — a swap that changes a block's anchor account (a mixed-
+// account repo) re-clusters the block, which only rebuildView can reflect.
+func (l *List) swapInManual(a, b *session.Instance) {
+	if l.manual == nil {
+		return
+	}
+	ia, ib := -1, -1
+	for i, it := range l.manual {
+		switch it {
+		case a:
+			ia = i
+		case b:
+			ib = i
+		}
+	}
+	if ia >= 0 && ib >= 0 {
+		l.manual[ia], l.manual[ib] = l.manual[ib], l.manual[ia]
+	}
+}
+
+// blockRange returns the [start, end) range of the contiguous repo block whose
+// repoKey is key, or (-1, -1) if no instance carries it. Repo blocks are contiguous
+// in both manual and items (the repo-contiguous invariant), so each key maps to at
+// most one range.
+func blockRange(items []*session.Instance, key string) (start, end int) {
+	for i, it := range items {
+		if repoKey(it) == key {
+			start = i
+			end = i + 1
+			for end < len(items) && repoKey(items[end]) == key {
+				end++
+			}
+			return start, end
+		}
+	}
+	return -1, -1
+}
+
+// transposeBlocksInManual swaps the positions of two whole repo blocks (identified
+// by their repoKeys) in place, leaving every other block — including any blocks
+// interleaved between the two — untouched, and preserving each block's internal
+// order. It reflects a whole-group move made on the displayed items back into the
+// canonical order after either a status sort or account clustering.
 //
-// like and manual hold the same instances (a whole-group move only permutes group
-// order), so every manual group is normally covered by like. The trailing pass that
-// appends any group key absent from like is a safety net: should the two ever diverge
-// on membership, those sessions are kept (appended in manual order) rather than
-// silently dropped from the canonical order and then persisted away.
-func regroupManualLike(manual, like []*session.Instance) []*session.Instance {
-	byKey := map[string][]*session.Instance{}
-	keyOrder := make([]string, 0)
-	for _, it := range manual {
-		k := repoKey(it)
-		if _, ok := byKey[k]; !ok {
-			keyOrder = append(keyOrder, k)
-		}
-		byKey[k] = append(byKey[k], it)
+// In-place transposition (as opposed to removing a block and reinserting it beside
+// the pivot) is what keeps account clustering stable: clusterByAccount orders
+// accounts by their first-appearance index in manual, so vacating a block's slot
+// could hand an earlier index to a different account and yank an unrelated cluster.
+// Transposing keeps the leading slot's account fixed and every interior block
+// interior, so no account's first-appearance order changes — only the two blocks'
+// relative order within their own cluster flips. For a status sort the two blocks
+// are already adjacent in manual, so this degenerates to a single adjacent swap.
+func transposeBlocksInManual(items []*session.Instance, keyA, keyB string) []*session.Instance {
+	a0, a1 := blockRange(items, keyA)
+	b0, b1 := blockRange(items, keyB)
+	if a0 < 0 || b0 < 0 {
+		return items
 	}
-	out := make([]*session.Instance, 0, len(manual))
-	seen := map[string]bool{}
-	emit := func(k string) {
-		if seen[k] {
-			return
-		}
-		seen[k] = true
-		out = append(out, byKey[k]...)
+	if a0 > b0 { // order so the lo block precedes the hi block
+		a0, a1, b0, b1 = b0, b1, a0, a1
 	}
-	for _, it := range like {
-		emit(repoKey(it))
-	}
-	// Keep any manual group like never mentioned (see doc comment).
-	for _, k := range keyOrder {
-		emit(k)
-	}
+	out := make([]*session.Instance, 0, len(items))
+	out = append(out, items[:a0]...)   // before the lo block
+	out = append(out, items[b0:b1]...) // hi block takes the lo slot
+	out = append(out, items[a1:b0]...) // interleaved blocks stay put
+	out = append(out, items[a0:a1]...) // lo block takes the hi slot
+	out = append(out, items[b1:]...)   // after the hi block
 	return out
 }

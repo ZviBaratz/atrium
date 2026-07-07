@@ -147,23 +147,32 @@ func TestSessionSort_ApplySortNoopInCreation(t *testing.T) {
 	require.Equal(t, []*session.Instance{a, b}, l.items, "creation order untouched")
 }
 
-// regroupManualLike reorders manual's group blocks to match like's group order
-// while preserving each group's internal manual order.
-func TestRegroupManualLike_ReordersGroupsKeepsWithinGroupOrder(t *testing.T) {
+// transposeBlocksInManual swaps two whole repo blocks in place, preserving each
+// block's internal order. Adjacent blocks (the status-sort case) degenerate to a
+// single adjacent swap.
+func TestTransposeBlocksInManual_AdjacentBlocks(t *testing.T) {
 	l := newGroupList(t, "/r/a", "/r/a", "/r/b")
 	a1, a2, b1 := l.items[0], l.items[1], l.items[2]
 
-	// like puts group b before group a; within-group order must be untouched.
-	got := regroupManualLike([]*session.Instance{a1, a2, b1}, []*session.Instance{b1, a1, a2})
-	require.Equal(t, []*session.Instance{b1, a1, a2}, got)
+	got := transposeBlocksInManual([]*session.Instance{a1, a2, b1}, "a", "b")
+	require.Equal(t, []*session.Instance{b1, a1, a2}, got, "block b takes a's slot; a's internal order kept")
 }
 
-// Safety net: a group present in manual but never mentioned by like is kept
-// (appended in manual order), not silently dropped from the canonical order.
-func TestRegroupManualLike_KeepsGroupsAbsentFromLike(t *testing.T) {
-	l := newGroupList(t, "/r/a", "/r/a", "/r/b")
-	a1, a2, b1 := l.items[0], l.items[1], l.items[2]
+// With a block interleaved between the two being transposed (the account-clustering
+// case), the interleaved block stays put — only the two named blocks swap positions.
+func TestTransposeBlocksInManual_NonAdjacentKeepsInterleavedBlock(t *testing.T) {
+	l := newGroupList(t, "/r/a", "/r/b", "/r/c")
+	a1, b1, c1 := l.items[0], l.items[1], l.items[2]
 
-	got := regroupManualLike([]*session.Instance{a1, a2, b1}, []*session.Instance{a1, a2})
-	require.Equal(t, []*session.Instance{a1, a2, b1}, got, "missing group b is appended, not lost")
+	got := transposeBlocksInManual([]*session.Instance{a1, b1, c1}, "a", "c")
+	require.Equal(t, []*session.Instance{c1, b1, a1}, got, "a and c swap; interleaved b stays put")
+}
+
+// An unknown key leaves the slice unchanged (no block to transpose).
+func TestTransposeBlocksInManual_UnknownKeyNoOp(t *testing.T) {
+	l := newGroupList(t, "/r/a", "/r/b")
+	a1, b1 := l.items[0], l.items[1]
+
+	got := transposeBlocksInManual([]*session.Instance{a1, b1}, "a", "zzz")
+	require.Equal(t, []*session.Instance{a1, b1}, got)
 }
