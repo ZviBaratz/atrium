@@ -141,7 +141,10 @@ func pollSelectedCmd(inst *session.Instance, attachGen uint64) tea.Cmd {
 // instance identifies which session's prompt was lost.
 type promptSendErrorMsg struct {
 	instance *session.Instance
-	err      error
+	// prompt is the claimed head text this attempt carried, so the handler pops exactly
+	// that entry (matched dequeue) rather than blindly clearing whatever now heads the queue.
+	prompt string
+	err    error
 }
 
 // promptDeliveredMsg reports that a queued initial prompt was confirmed delivered (typed
@@ -149,6 +152,9 @@ type promptSendErrorMsg struct {
 // it stops being a poll target and is never re-sent.
 type promptDeliveredMsg struct {
 	instance *session.Instance
+	// prompt is the claimed head text that was delivered, so the handler pops exactly that
+	// entry (matched dequeue) and a stale confirmation can never wipe a newer prompt.
+	prompt string
 }
 
 // promptDeferredMsg reports that a delivery attempt could not yet confirm (the pane was not
@@ -208,13 +214,13 @@ func sendPromptCmd(instance *session.Instance, prompt string) tea.Cmd {
 		switch {
 		case err == nil:
 			log.InfoLog.Printf("delivered queued prompt to %q", instance.Title)
-			return promptDeliveredMsg{instance: instance}
+			return promptDeliveredMsg{instance: instance, prompt: prompt}
 		case session.IsSoftPromptError(err):
 			return promptDeferredMsg{instance: instance}
 		default:
 			log.ErrorLog.Printf("failed to send queued prompt to %q after %d attempts: %v",
 				instance.Title, promptSendAttempts, err)
-			return promptSendErrorMsg{instance: instance, err: err}
+			return promptSendErrorMsg{instance: instance, prompt: prompt, err: err}
 		}
 	}
 }

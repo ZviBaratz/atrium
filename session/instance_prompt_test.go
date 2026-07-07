@@ -195,10 +195,9 @@ func TestPendingPromptSurvivesRoundTrip(t *testing.T) {
 	store := newTestStorage(t)
 
 	a := newPausedInstance(t, "pending")
-	// Write the fields directly (same package) to plant a deliberately long-past queue
-	// time; QueuePrompt would stamp it with now and defeat the clock-restart assertion.
-	a.prompt = "finish the migration"
-	a.promptQueuedAt = time.Unix(1000, 0)
+	// Plant the queue directly (same package) with a deliberately long-past queue time;
+	// QueuePrompt would stamp it with now and defeat the clock-restart assertion.
+	a.promptQueue = []queuedPrompt{{text: "finish the migration", queuedAt: time.Unix(1000, 0)}}
 
 	require.NoError(t, store.SaveInstances([]*Instance{a}))
 	got, err := store.LoadInstances(context.Background())

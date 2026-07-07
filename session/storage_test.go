@@ -321,3 +321,62 @@ func TestPermissionModeRoundTrip(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "plan", pre.PermissionModeInfo(), "pre-feature session falls back to the flag")
 }
+
+// TestPromptQueueRoundTrip pins that a multi-element queue is serialized and restored in
+// order: the head re-arms its delivery clock at load time (the agent re-boots on resume),
+// while the follow-up tail restores with strict idle-only (zero) clocks.
+func TestPromptQueueRoundTrip(t *testing.T) {
+	a := newPausedInstance(t, "queued")
+	a.promptQueue = []queuedPrompt{
+		{text: "first", queuedAt: time.Unix(1000, 0)},
+		{text: "second", queuedAt: time.Unix(2000, 0)},
+	}
+
+	data := a.ToInstanceData()
+	require.Len(t, data.PromptQueue, 2, "the whole queue must be persisted")
+	require.Equal(t, "", data.Prompt, "the legacy single-prompt field is no longer written")
+
+	restored, err := FromInstanceData(context.Background(), data, "session/")
+	require.NoError(t, err)
+	require.Equal(t, 2, restored.QueueLen())
+	require.Equal(t, "first", restored.Prompt(), "the head restores first (FIFO order preserved)")
+	require.False(t, restored.PromptQueuedAt().IsZero(), "the restored head re-arms its delivery clock")
+	require.True(t, restored.PromptQueuedAt().After(time.Unix(1000, 0)),
+		"the head clock restarts from reload, not the stale persisted time")
+
+	restored.ClearPrompt("first")
+	require.Equal(t, "second", restored.Prompt(), "the tail restores in order behind the head")
+	require.True(t, restored.PromptQueuedAt().IsZero(),
+		"a restored tail entry is a follow-up: strict idle-only (zero clock)")
+}
+
+// TestLegacyPromptFieldMigration pins that a pre-queue state.json (only the legacy `prompt`
+// field) migrates into a one-element queue on load.
+func TestLegacyPromptFieldMigration(t *testing.T) {
+	var legacy InstanceData
+	require.NoError(t, json.Unmarshal(
+		[]byte(`{"title":"t","program":"echo","direct":true,"prompt":"finish it"}`), &legacy))
+	require.Empty(t, legacy.PromptQueue, "a pre-queue file has no prompt_queue")
+	require.Equal(t, "finish it", legacy.Prompt)
+
+	restored, err := FromInstanceData(context.Background(), legacy, "session/")
+	require.NoError(t, err)
+	require.Equal(t, 1, restored.QueueLen(), "the legacy prompt migrates into a one-element queue")
+	require.Equal(t, "finish it", restored.Prompt())
+	require.False(t, restored.PromptQueuedAt().IsZero(), "the migrated head gets a live clock")
+}
+
+// TestPromptQueueWinsOverLegacyPrompt pins the strict precedence: when a transitional file
+// carries BOTH prompt_queue and the legacy prompt, the queue is authoritative and the head
+// is not duplicated.
+func TestPromptQueueWinsOverLegacyPrompt(t *testing.T) {
+	data := InstanceData{
+		Title: "t", Program: "echo", Direct: true, Status: Paused,
+		Prompt:      "legacy",
+		PromptQueue: []QueuedPromptData{{Text: "queued"}},
+	}
+	restored, err := FromInstanceData(context.Background(), data, "session/")
+	require.NoError(t, err)
+	require.Equal(t, 1, restored.QueueLen(), "the legacy field must not be appended on top of the queue")
+	require.Equal(t, "queued", restored.Prompt(), "prompt_queue is authoritative when both are present")
+}
