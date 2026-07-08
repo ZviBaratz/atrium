@@ -291,58 +291,121 @@ func isBranchBusyError(err error) (*git.BranchCheckedOutError, bool) {
 	return nil, false
 }
 
-// resumeSelected resumes a paused instance and persists the new running state
-// (Resume itself only mutates in-memory status, so without this a crash before
-// the next save would leave the session stamped Paused). When resume is blocked
-// because the session branch is checked out in the BASE repo — the common result
-// of the Checkout action — it offers to detach the base repo and retry. When the
-// branch is held by a sibling worktree it surfaces a dismissible modal naming the
-// holder rather than auto-touching another live worktree.
+// pauseDoneMsg reports the outcome of a single off-UI-thread pause (pauseSelected)
+// back through Update so the terminal teardown, persistence, and rename-overlay
+// open all run on the main loop. err is set when Pause failed.
+type pauseDoneMsg struct {
+	instance *session.Instance
+	err      error
+}
+
+// resumeDoneMsg reports the outcome of a single off-UI-thread resume
+// (resumeSelected) back through Update so persistence and any recovery UI run on
+// the main loop. On a plain success err is nil. On a branch-busy failure the
+// goroutine also records the diagnosis (recoverable/heldByBase/branchName +
+// worktree) so the handler can decide between a dismissible info modal and the
+// detach-and-resume confirmation without doing any I/O on the UI thread.
+type resumeDoneMsg struct {
+	instance    *session.Instance
+	err         error
+	recoverable bool
+	heldByBase  bool
+	branchName  string
+	worktree    *git.Worktree
+}
+
+// resumeSelected resumes a paused instance off the UI thread and persists the new
+// running state on the Update loop (Resume itself only mutates in-memory status, so
+// without this a crash before the next save would leave the session stamped
+// Paused). When resume is blocked because the session branch is checked out in the
+// BASE repo — the common result of the Checkout action — it offers to detach the
+// base repo and retry. When the branch is held by a sibling worktree it surfaces a
+// dismissible modal naming the holder rather than auto-touching another live
+// worktree. The whole diagnosis runs in the goroutine; handleResumeDone only
+// decides the UI.
 func (m *home) resumeSelected(selected *session.Instance) tea.Cmd {
-	err := selected.Resume()
-	if err == nil {
+	return m.beginAsyncAction("resuming…", func() tea.Msg {
+		err := selected.Resume()
+		if err == nil {
+			return resumeDoneMsg{instance: selected}
+		}
+		// Only a branch-busy failure is recoverable; surface anything else as-is.
+		if _, ok := isBranchBusyError(err); !ok {
+			return resumeDoneMsg{instance: selected, err: err}
+		}
+		wt, gerr := selected.GetGitWorktree()
+		if gerr != nil {
+			return resumeDoneMsg{instance: selected, err: err}
+		}
+		heldByBase, herr := wt.IsBranchHeldByBaseRepo()
+		if herr != nil {
+			// Couldn't determine where the branch is held: surface that failure rather
+			// than masking it behind the (less informative) branch-busy message.
+			return resumeDoneMsg{instance: selected, err: herr}
+		}
+		return resumeDoneMsg{
+			instance:    selected,
+			err:         err,
+			recoverable: true,
+			heldByBase:  heldByBase,
+			branchName:  wt.GetBranchName(),
+			worktree:    wt,
+		}
+	})
+}
+
+// handlePauseDone completes a single pause on the Update loop: it tears down the
+// preview terminal, persists (so an esc'd rename can't leave the pause unpersisted),
+// and opens the rename overlay focused on the note field so "park this, jot why" is
+// one motion — esc / empty-enter leaves the note unchanged, the session stays paused
+// either way.
+func (m *home) handlePauseDone(msg pauseDoneMsg) tea.Cmd {
+	if msg.err != nil {
+		return m.handleError(msg.err)
+	}
+	selected := msg.instance
+	m.tabbedWindow.CleanupTerminalForInstance(selected)
+	if serr := m.persistInstances(); serr != nil {
+		log.WarningLog.Printf("failed to persist paused instance %s: %v", selected.Title, serr)
+	}
+	m.renameTarget = selected
+	m.renameOverlay = overlay.NewRenameOverlay(selected.DisplayName(), selected.Note(), true)
+	m.state = stateRename
+	return m.instanceChanged()
+}
+
+// handleResumeDone completes a single resume on the Update loop, acting on the
+// diagnosis resumeSelected's goroutine recorded. Success persists and refreshes; a
+// non-recoverable (or diagnosis-failed) error surfaces as-is; a sibling-held branch
+// gets a dismissible modal; a base-repo-held branch offers detach-and-resume, which
+// runs off the UI thread again.
+func (m *home) handleResumeDone(msg resumeDoneMsg) tea.Cmd {
+	if msg.err == nil {
 		if serr := m.persistInstances(); serr != nil {
-			log.WarningLog.Printf("failed to persist resumed instance %s: %v", selected.Title, serr)
+			log.WarningLog.Printf("failed to persist resumed instance %s: %v", msg.instance.Title, serr)
 		}
 		return tea.WindowSize()
 	}
-
-	// Only a branch-busy failure is recoverable; surface anything else as-is.
-	if _, ok := isBranchBusyError(err); !ok {
-		return m.handleError(err)
+	if !msg.recoverable {
+		return m.handleError(msg.err)
 	}
-
-	wt, gerr := selected.GetGitWorktree()
-	if gerr != nil {
-		return m.handleError(err)
-	}
-	heldByBase, herr := wt.IsBranchHeldByBaseRepo()
-	if herr != nil {
-		// Couldn't determine where the branch is held: surface that failure rather
-		// than masking it behind the (less informative) branch-busy message.
-		return m.handleError(herr)
-	}
-	if !heldByBase {
+	if !msg.heldByBase {
 		// Held by a sibling worktree: report where it lives in a dismissible modal;
 		// never auto-detach another live worktree.
-		return m.showInfo(err.Error())
+		return m.showInfo(msg.err.Error())
 	}
-
-	message := fmt.Sprintf("Branch '%s' is checked out in the main repo. Detach it and resume?", wt.GetBranchName())
-	action := func() tea.Msg {
+	selected, wt := msg.instance, msg.worktree
+	message := fmt.Sprintf("Branch '%s' is checked out in the main repo. Detach it and resume?", msg.branchName)
+	return m.confirmAsyncAction(message, "resuming…", func() tea.Msg {
 		if derr := wt.DetachBranchInBaseRepo(); derr != nil {
 			// e.g. the dirty-repo refusal — show it in a modal the user can read.
 			return infoMsg(derr.Error())
 		}
 		if rerr := selected.Resume(); rerr != nil {
-			return rerr
+			return resumeDoneMsg{instance: selected, err: rerr}
 		}
-		if serr := m.persistInstances(); serr != nil {
-			log.WarningLog.Printf("failed to persist resumed instance %s: %v", selected.Title, serr)
-		}
-		return instanceChangedMsg{}
-	}
-	return m.confirmAction(message, action)
+		return resumeDoneMsg{instance: selected}
+	})
 }
 
 // resumeFailure records one instance that could not be resumed during a batch
@@ -385,9 +448,9 @@ func (msg batchResumeDoneMsg) summary() string {
 // resumeAll resumes every paused session in the current view behind a count
 // confirmation. Unlike resumeSelected, the batch cannot stop to prompt for each
 // branch-busy session, so a per-instance failure (e.g. BranchCheckedOutError) is
-// recorded and the run continues; the outcome is surfaced as a summary. Resume
-// only mutates in-memory status, so the action persists once at the end (mirroring
-// resumeSelected's SaveInstances).
+// recorded and the run continues; the outcome is surfaced as a summary. The resume
+// runs off the UI thread; state is persisted once, on the Update loop, when the
+// batchResumeDoneMsg lands (mirroring resumeSelected).
 func (m *home) resumeAll() tea.Cmd {
 	paused := m.list.PausedInstancesInView()
 	if len(paused) == 0 {
@@ -400,10 +463,10 @@ func (m *home) resumeAll() tea.Cmd {
 // resumeInstances resumes an explicit set of (already-paused) sessions behind a
 // count confirmation — the shared core of resumeAll and resumeMarked. A
 // per-instance failure (e.g. BranchCheckedOutError) is recorded and the run
-// continues; the outcome is surfaced as a summary. Resume only mutates in-memory
-// status, so the action persists once at the end. Resume is non-destructive, so
-// it keeps confirmAction's default accent border (only kill wears the danger
-// border).
+// continues; the outcome is surfaced as a summary. The resume runs off the UI
+// thread (confirmAsyncAction); state is persisted once, on the Update loop, in the
+// batchResumeDoneMsg handler. Resume is non-destructive, so it keeps the default
+// accent border (only kill wears the danger border).
 func (m *home) resumeInstances(insts []*session.Instance, message string) tea.Cmd {
 	action := func() tea.Msg {
 		var res batchResumeDoneMsg
@@ -414,14 +477,12 @@ func (m *home) resumeInstances(insts []*session.Instance, message string) tea.Cm
 			}
 			res.resumed++
 		}
-		if res.resumed > 0 {
-			if err := m.persistInstances(); err != nil {
-				log.WarningLog.Printf("batch resume: failed to persist resumed instances: %v", err)
-			}
-		}
+		// Persistence reads m.list, so it must run on the Update loop, not in this
+		// goroutine — the batchResumeDoneMsg handler persists when resumed > 0.
 		return res
 	}
-	return m.confirmAction(message, action)
+	label := fmt.Sprintf("resuming %d session%s…", len(insts), plural(len(insts)))
+	return m.confirmAsyncAction(message, label, action)
 }
 
 // plural returns the "s" suffix for a count: "" for exactly one, "s" otherwise.
@@ -473,8 +534,9 @@ func (msg batchPauseDoneMsg) summary() string {
 // intentional "prepare for restart" path,
 // the inverse of resumeAll. Each Pause commits WIP, detaches tmux, and removes the
 // worktree (keeping the branch); a per-instance failure is recorded and the run
-// continues, with the outcome surfaced as a summary. State is persisted once at the
-// end (mirroring resumeAll).
+// continues, with the outcome surfaced as a summary. The run happens off the UI
+// thread; state is persisted once, on the Update loop, in the batchPauseDoneMsg
+// handler (mirroring resumeAll).
 func (m *home) pauseAll() tea.Cmd {
 	active := m.list.ActiveInstancesInView()
 	if len(active) == 0 {
@@ -488,9 +550,10 @@ func (m *home) pauseAll() tea.Cmd {
 // confirmation — the shared core of pauseAll and pauseMarked. Each Pause commits
 // WIP, detaches tmux, and removes the worktree (keeping the branch); a
 // per-instance failure is recorded and the run continues, with the outcome
-// surfaced as a summary. State is persisted once at the end. Pause is
-// non-destructive (every branch is kept), so it keeps confirmAction's default
-// accent border.
+// surfaced as a summary. The run happens off the UI thread (confirmAsyncAction);
+// state is persisted once, on the Update loop, in the batchPauseDoneMsg handler.
+// Pause is non-destructive (every branch is kept), so it keeps the default accent
+// border.
 func (m *home) pauseInstances(insts []*session.Instance, message string) tea.Cmd {
 	action := func() tea.Msg {
 		var res batchPauseDoneMsg
@@ -502,14 +565,12 @@ func (m *home) pauseInstances(insts []*session.Instance, message string) tea.Cmd
 			res.paused++
 			res.pausedInstances = append(res.pausedInstances, inst)
 		}
-		if res.paused > 0 {
-			if err := m.persistInstances(); err != nil {
-				log.WarningLog.Printf("batch pause: failed to persist paused instances: %v", err)
-			}
-		}
+		// Persistence reads m.list, so it must run on the Update loop, not in this
+		// goroutine — the batchPauseDoneMsg handler persists when paused > 0.
 		return res
 	}
-	return m.confirmAction(message, action)
+	label := fmt.Sprintf("pausing %d session%s…", len(insts), plural(len(insts)))
+	return m.confirmAsyncAction(message, label, action)
 }
 
 // killFailure records one instance that could not be killed during a batch kill,
@@ -1305,4 +1366,41 @@ func (m *home) confirmAction(message string, action tea.Cmd) tea.Cmd {
 	m.confirmationOverlay.SetWidth(confirmWidth(m.windowWidth))
 
 	return nil
+}
+
+// confirmAsyncAction is confirmAction for a confirmed action that should run off
+// the UI thread. It stashes busyLabel so handleConfirmState launches the action
+// through beginAsyncAction (goroutine + "busy" progress row) instead of running it
+// inline. The action closure must be UI-thread-safe: touch only its captured
+// instance/worktree and return a message — never read or mutate m.* (list, storage,
+// menu), which belongs on the Update loop. The overlay is still built synchronously
+// (via confirmAction) so callers that restyle it keep working.
+func (m *home) confirmAsyncAction(message, busyLabel string, action tea.Cmd) tea.Cmd {
+	cmd := m.confirmAction(message, action)
+	m.pendingConfirmBusyLabel = busyLabel
+	return cmd
+}
+
+// asyncActionDoneMsg wraps the result of an off-UI-thread action (see
+// beginAsyncAction) so Update can clear the in-flight state before the inner
+// message is handled. result is whatever the action returned (a success message,
+// an error, or nil).
+type asyncActionDoneMsg struct{ result tea.Msg }
+
+// beginAsyncAction runs cmd off the UI thread behind a "busy" progress row. It
+// arms the StateBusy bar (label), marks actionInFlight so handleKeyPress refuses
+// re-entry and mutating keys, and reclaims a layout row. The returned command runs
+// cmd in a goroutine and wraps whatever it returns in asyncActionDoneMsg, so the
+// in-flight state is cleared and the inner message dispatched on the Update loop.
+func (m *home) beginAsyncAction(label string, cmd tea.Cmd) tea.Cmd {
+	m.actionInFlight = true
+	m.menu.SetBusy(label)
+	m.recomputeLayout() // the progress row now claims a line; shrink the panes to fit
+	return func() tea.Msg {
+		var result tea.Msg
+		if cmd != nil {
+			result = cmd()
+		}
+		return asyncActionDoneMsg{result: result}
+	}
 }

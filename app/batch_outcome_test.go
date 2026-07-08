@@ -3,6 +3,7 @@ package app
 import (
 	"testing"
 
+	"github.com/ZviBaratz/atrium/config"
 	"github.com/ZviBaratz/atrium/session"
 	"github.com/ZviBaratz/atrium/ui"
 
@@ -25,10 +26,21 @@ func withCapturingCleanup(t *testing.T) *[]*session.Instance {
 	return &captured
 }
 
+// withStorage gives a test home a working in-memory storage so the batch
+// pause/resume Update handlers can persist (they moved persistence onto the Update
+// loop when the batch actions went off-thread).
+func withStorage(t *testing.T, h *home) {
+	t.Helper()
+	st, err := session.NewStorage(config.DefaultState())
+	require.NoError(t, err)
+	h.storage = st
+}
+
 // A confirmed batch pause tears down each parked session's preview terminal (the
 // single-session pause path does the same after Pause).
 func TestBatchOutcome_PauseTearsDownTerminals(t *testing.T) {
 	h := newCreateFormHome(t)
+	withStorage(t, h)
 	inst := addActive(t, h, "alpha")
 	captured := withCapturingCleanup(t)
 
@@ -56,6 +68,7 @@ func TestBatchOutcome_KillTearsDownTerminals(t *testing.T) {
 // making resume pass no cleanup slice at all.
 func TestBatchOutcome_ResumeTearsDownNothing(t *testing.T) {
 	h := newCreateFormHome(t)
+	withStorage(t, h)
 	addPaused(t, h, "alpha")
 	captured := withCapturingCleanup(t)
 

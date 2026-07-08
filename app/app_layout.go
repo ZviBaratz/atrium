@@ -102,7 +102,9 @@ func (m *home) menuVisible() bool {
 	case statePrompt, stateRename, stateConfirm, stateHelp, stateInfo, stateSettings, stateWelcome, stateAccounts:
 		return false
 	default: // stateDefault (and the empty list)
-		return m.generatingName || m.appConfig.GetHintBar()
+		// generatingName and actionInFlight each force the bar visible so their
+		// progress row shows even when the always-on hint bar is turned off.
+		return m.generatingName || m.actionInFlight || m.appConfig.GetHintBar()
 	}
 }
 

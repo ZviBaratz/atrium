@@ -299,9 +299,15 @@ type home struct {
 	// confirmationOverlay displays confirmation modals
 	confirmationOverlay *overlay.ConfirmationOverlay
 	// pendingConfirmAction is the action to run if the confirmation overlay is
-	// confirmed. It is executed on the main loop and its returned message is fed
+	// confirmed. When pendingConfirmBusyLabel is empty it runs inline on the main
+	// loop (kill and other list-mutating confirms); when the label is set it runs
+	// off the UI thread via beginAsyncAction. Either way its returned message is fed
 	// back through Update so errors surface in the error box.
 	pendingConfirmAction tea.Cmd
+	// pendingConfirmBusyLabel is the progress label ("pushing…", "merging PR #12…")
+	// for a confirm action that should run off the UI thread. Empty means run the
+	// action inline (the legacy synchronous path). Set by confirmAsyncAction.
+	pendingConfirmBusyLabel string
 	// quitRequested records that the user asked to quit while a session was still
 	// Loading. handleQuit defers the exit (a Loading session isn't yet persisted,
 	// so quitting would drop it); handleInstanceStarted re-invokes handleQuit once
@@ -328,6 +334,12 @@ type home struct {
 	// generatingName guards against launching a second auto-name request while one
 	// is already in flight, and drives the "Generating name…" hint-bar state.
 	generatingName bool
+	// actionInFlight is true while a confirm/pause/resume action runs off the UI
+	// thread (see beginAsyncAction). It drives the StateBusy progress row, gates
+	// re-entry, and makes handleKeyPress swallow mutating keys until the action's
+	// completion message lands. Touched only on the Update loop, so it needs no
+	// synchronization.
+	actionInFlight bool
 
 	// smartDispatchSeededTitle is the deterministic placeholder title the async form
 	// opened with. The routing call's (better) title replaces it only while the field

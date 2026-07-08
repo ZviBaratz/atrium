@@ -34,6 +34,10 @@ const (
 	// StateGeneratingName is shown while a session name is being generated in the
 	// background; the hint bar reports progress instead of the usual options.
 	StateGeneratingName
+	// StateBusy is shown while a confirm/pause/resume action runs off the UI thread;
+	// the bar reports the operation ("pushing…", "resuming 5 sessions…") via busyText
+	// instead of the usual options. Set through SetBusy.
+	StateBusy
 	// StateHints is shown while hint (fingers) mode overlays the preview:
 	// the bar teaches the mode's three gestures instead of the usual options.
 	StateHints
@@ -104,6 +108,9 @@ type Menu struct {
 	notice        string
 	noticeLevel   NoticeLevel
 	contextHints  []keys.KeyName
+	// busyText is the progress line shown in StateBusy ("pushing…", "resuming 5
+	// sessions…"), set by SetBusy while an action runs off the UI thread.
+	busyText string
 }
 
 // NewMenu returns a Menu in the empty state.
@@ -116,14 +123,28 @@ func (m *Menu) SetState(state MenuState) {
 	m.state = state
 }
 
+// SetBusy switches the bar to StateBusy and sets the progress line shown there
+// (e.g. "pushing…"). Like StateGeneratingName, this state survives the periodic
+// instanceChanged ticks (SetInstance only rewrites Default/Empty).
+func (m *Menu) SetBusy(text string) {
+	m.state = StateBusy
+	m.busyText = text
+}
+
 // State returns the menu's current state (which hint set the bar shows).
 func (m *Menu) State() MenuState {
 	return m.state
 }
 
+// BusyText returns the current StateBusy progress line (empty if never set). The
+// in-flight input gate reuses it so a swallowed key names the operation.
+func (m *Menu) BusyText() string {
+	return m.busyText
+}
+
 // SetInstance records the selected session and derives the hint set from its
 // status, so the bar only advertises actions the selection can actually take.
-// Special states (Filter, GeneratingName) persist across the periodic
+// Special states (Filter, GeneratingName, Busy) persist across the periodic
 // instanceChanged ticks.
 func (m *Menu) SetInstance(instance *session.Instance) {
 	m.hasInstance = instance != nil
@@ -246,6 +267,9 @@ func (m *Menu) String() string {
 	case StateGeneratingName:
 		// While generating a name, the bar shows a single status line.
 		line = progressStyle().Render("✨ Generating name…")
+	case StateBusy:
+		// While an action runs off the UI thread, the bar shows its progress line.
+		line = progressStyle().Render(m.busyText)
 	case StateFilter:
 		// Action hints first so that on a narrow terminal the width truncation below
 		// drops the predicate vocabulary tail, never the accept/clear actions.

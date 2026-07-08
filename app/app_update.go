@@ -31,6 +31,11 @@ var cleanupTerminalForInstance = (*ui.TabbedWindow).CleanupTerminalForInstance
 // through the runtime, carrying the merged PR number for the acknowledgment.
 type prMergedMsg struct{ number int }
 
+// pushedMsg is returned by a confirmed push action to acknowledge success. Push
+// used to return nil (no notice at all); this lets its handler flash a "pushed"
+// notice like merge/create do.
+type pushedMsg struct{}
+
 // prCreatedMsg is returned by a confirmed create action to report success back
 // through the runtime, carrying the new PR number (0 if gh's output had none).
 type prCreatedMsg struct{ number int }
@@ -97,7 +102,11 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.err != nil {
 			// The progress row goes away and we return to plain navigation; surface the
 			// failure and leave the name untouched rather than applying a junk fallback.
-			m.menu.SetState(ui.StateDefault)
+			// Don't clobber a concurrent "busy" row: if an action is in flight, leave
+			// StateBusy in place (asyncActionDoneMsg restores StateDefault later).
+			if !m.actionInFlight {
+				m.menu.SetState(ui.StateDefault)
+			}
 			m.recomputeLayout() // the progress bar gave up its row; panes reclaim it
 			return m, m.handleError(msg.err)
 		}
@@ -275,19 +284,32 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Handle instance changed after confirmation action
 		return m, m.instanceChanged()
 	case batchResumeDoneMsg:
-		// A confirmed "resume all" finished. All-success gets a transient notice;
-		// any failures go to a persistent modal the user must read (it names which
-		// sessions didn't come back and why). Either way, refresh the list so the
-		// now-Running rows reflect the restore.
+		// A confirmed "resume all" finished off the UI thread. Persist here on the
+		// Update loop (the action ran in a goroutine and must not read m.list). All-
+		// success gets a transient notice; any failures go to a persistent modal the
+		// user must read (it names which sessions didn't come back and why). Either
+		// way, refresh the list so the now-Running rows reflect the restore.
+		if msg.resumed > 0 {
+			if err := m.persistInstances(); err != nil {
+				log.WarningLog.Printf("batch resume: failed to persist resumed instances: %v", err)
+			}
+		}
 		return m, m.finishBatch(nil, len(msg.failures) > 0,
 			fmt.Sprintf("resumed %d session%s", msg.resumed, plural(msg.resumed)),
 			msg.summary())
 	case batchPauseDoneMsg:
-		// A confirmed "pause all" finished. Tear down each parked session's preview
-		// terminal on the main loop (single-session pause does the same after Pause).
-		// All-success gets a transient notice; any failures go to a persistent modal
-		// naming which sessions didn't park and why. Either way, refresh the list so
-		// the now-Paused rows reflect the park.
+		// A confirmed "pause all" finished off the UI thread. Persist here on the
+		// Update loop (the action ran in a goroutine and must not read m.list), then
+		// tear down each parked session's preview terminal on the main loop (single-
+		// session pause does the same after Pause). All-success gets a transient
+		// notice; any failures go to a persistent modal naming which sessions didn't
+		// park and why. Either way, refresh the list so the now-Paused rows reflect
+		// the park.
+		if msg.paused > 0 {
+			if err := m.persistInstances(); err != nil {
+				log.WarningLog.Printf("batch pause: failed to persist paused instances: %v", err)
+			}
+		}
 		return m, m.finishBatch(msg.pausedInstances, len(msg.failures) > 0,
 			fmt.Sprintf("paused %d session%s", msg.paused, plural(msg.paused)),
 			msg.summary())
@@ -300,6 +322,29 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.finishBatch(msg.killedInstances, len(msg.failures) > 0,
 			fmt.Sprintf("killed %d session%s", msg.killed, plural(msg.killed)),
 			msg.summary())
+	case asyncActionDoneMsg:
+		// An off-UI-thread action (see beginAsyncAction) finished. Clear the
+		// in-flight state and progress row on the main loop, then feed the inner
+		// result back through the runtime so its own case handles it (a success
+		// message, an error, or a harmless nil).
+		m.actionInFlight = false
+		m.menu.SetState(ui.StateDefault) // SetInstance corrects to Empty if the list emptied
+		m.recomputeLayout()              // the progress row gave up its line; panes reclaim it
+		result := msg.result
+		return m, func() tea.Msg { return result }
+	case pushedMsg:
+		// A confirmed push succeeded: acknowledge it and refresh so the create-PR
+		// hint flips now that the branch is pushed (matching prCreatedMsg).
+		return m, tea.Batch(
+			m.handleInfoNotice("pushed changes"),
+			m.instanceChanged(),
+		)
+	case pauseDoneMsg:
+		// A single off-UI-thread pause finished: tear down + persist + open the note.
+		return m, m.handlePauseDone(msg)
+	case resumeDoneMsg:
+		// A single off-UI-thread resume finished: persist/refresh, or drive recovery.
+		return m, m.handleResumeDone(msg)
 	case prMergedMsg:
 		// A confirmed merge succeeded: acknowledge it and refresh so the PR badge
 		// reflects the now-merged state on the next poll.
@@ -546,6 +591,17 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		return m, nil
 	}
 
+	// While an action runs off the UI thread, keys stay live (unlike the old
+	// synchronous freeze). Allow only navigation/scroll/view keys through; swallow
+	// every per-session mutating key and overlay-opener with a busy notice. This
+	// closes two windows the freeze used to cover: driving tmux/git on the very
+	// instance an in-flight Pause is tearing down (e.g. attach), and opening an
+	// overlay that a completion handler (pause → rename) would then clobber. Quit
+	// and ctrl+l are handled above, so a wedged action stays escapable.
+	if m.actionInFlight && !keyAllowedWhileBusy(name) {
+		return m, m.handleInfoNotice("busy — " + m.menu.BusyText())
+	}
+
 	switch name {
 	case keys.KeyHelp:
 		return m.showHelpScreen(helpTypeGeneral{}, nil)
@@ -704,6 +760,23 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		return m.attachSelected()
 	default:
 		return m, nil
+	}
+}
+
+// keyAllowedWhileBusy reports whether a key may act while an off-UI-thread action
+// is in flight (see the guard in handleKeyPress). The allowlist is deliberately
+// narrow: pure navigation, scrolling, pane sizing, tab switching, list collapse,
+// and help — nothing that mutates a session, opens an overlay, or drives tmux/git.
+func keyAllowedWhileBusy(name keys.KeyName) bool {
+	switch name {
+	case keys.KeyHelp,
+		keys.KeyUp, keys.KeyDown, keys.KeyNextUnread, keys.KeyNextNeedsInput,
+		keys.KeyShiftUp, keys.KeyShiftDown, keys.KeyShrinkList, keys.KeyGrowList,
+		keys.KeyTab, keys.KeyShiftTab, keys.KeyTabPreview, keys.KeyTabDiff, keys.KeyTabTerminal,
+		keys.KeyCollapse, keys.KeyExpand, keys.KeyCollapseAll:
+		return true
+	default:
+		return false
 	}
 }
 

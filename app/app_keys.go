@@ -158,21 +158,32 @@ func (m *home) handlePromptState(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 // handleConfirmState routes a key to the confirmation overlay and, on a confirmed
-// close, runs the pending action on the main loop (see the inline comment for why
-// it does not become a tea.Cmd).
+// close, runs the pending action. The action runs one of two ways depending on how
+// it was armed:
+//   - confirmAsyncAction set a busy label → run it off the UI thread via
+//     beginAsyncAction (a real tea.Cmd goroutine) behind a "busy" progress row.
+//     These closures are UI-thread-safe (they touch only their captured
+//     instance/worktree); their model mutation happens in the completion handler.
+//   - confirmAction (no label) → run it inline on the main loop, as before. Kill and
+//     the other list/terminal-mutating confirms take this path deliberately: a
+//     goroutine would race Update on shared model state.
+//
+// Either way only the resulting message flows back through the runtime, so a
+// returned error reaches the error box.
 func (m *home) handleConfirmState(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	shouldClose := m.confirmationOverlay.HandleKeyPress(msg)
 	if shouldClose {
 		confirmed := m.confirmationOverlay.Confirmed
 		action := m.pendingConfirmAction
+		busyLabel := m.pendingConfirmBusyLabel
 		m.state = stateDefault
 		m.confirmationOverlay = nil
 		m.pendingConfirmAction = nil
+		m.pendingConfirmBusyLabel = ""
 		if confirmed && action != nil {
-			// Run the action here, on the main loop, because it mutates shared
-			// model state (list, terminals); a tea.Cmd would run it in a
-			// goroutine and race Update. Feed only the resulting message back
-			// through the runtime so a returned error reaches the error box.
+			if busyLabel != "" {
+				return m, m.beginAsyncAction(busyLabel, action)
+			}
 			resultMsg := action()
 			return m, func() tea.Msg { return resultMsg }
 		}
@@ -464,8 +475,9 @@ func (m *home) startAutoNameSelected() (tea.Model, tea.Cmd) {
 // worktreeAction builds a deferred command that resolves selected's git worktree
 // and runs fn against it, surfacing a lookup failure as an error message. It
 // hoists the GetGitWorktree + error preamble the push/merge/create/open PR
-// actions share; running deferred keeps the lookup and any network call off the
-// UI thread (and, when wrapped by confirmWorktreeAction, runs only on confirm).
+// actions share. The read-only openPR runs it directly as a tea.Cmd (off the UI
+// thread); the mutating PR actions run it via confirmWorktreeAction, which — once
+// confirmed — dispatches it through beginAsyncAction, likewise off the UI thread.
 func worktreeAction(selected *session.Instance, fn func(worktree *git.Worktree) tea.Msg) tea.Cmd {
 	return func() tea.Msg {
 		worktree, err := selected.GetGitWorktree()
@@ -477,11 +489,13 @@ func worktreeAction(selected *session.Instance, fn func(worktree *git.Worktree) 
 }
 
 // confirmWorktreeAction shows a confirmation modal whose accepted action runs fn
-// against selected's git worktree. The mutating PR actions (push, merge, create)
-// share this confirm -> worktree -> message shape; the read-only openPR uses
-// worktreeAction directly without a prompt.
-func (m *home) confirmWorktreeAction(message string, selected *session.Instance, fn func(worktree *git.Worktree) tea.Msg) tea.Cmd {
-	return m.confirmAction(message, worktreeAction(selected, fn))
+// against selected's git worktree off the UI thread, behind the busyLabel progress
+// row. The mutating PR actions (push, merge, create) share this confirm -> worktree
+// -> message shape; the read-only openPR uses worktreeAction directly without a
+// prompt. fn must be UI-thread-safe (touch only worktree/selected, return a
+// message) since it runs in a goroutine.
+func (m *home) confirmWorktreeAction(message, busyLabel string, selected *session.Instance, fn func(worktree *git.Worktree) tea.Msg) tea.Cmd {
+	return m.confirmAsyncAction(message, busyLabel, worktreeAction(selected, fn))
 }
 
 // pushSelected confirms and pushes the selected session's branch.
@@ -496,15 +510,15 @@ func (m *home) pushSelected() (tea.Model, tea.Cmd) {
 		return m, m.handleError(fmt.Errorf("push is not available for a direct (non-git) session"))
 	}
 
-	// Show confirmation modal; the push runs (deferred) only on confirm.
+	// Show confirmation modal; the push runs off the UI thread only on confirm.
 	message := fmt.Sprintf("Push changes from session '%s'?", selected.DisplayName())
-	return m, m.confirmWorktreeAction(message, selected, func(worktree *git.Worktree) tea.Msg {
+	return m, m.confirmWorktreeAction(message, "pushing…", selected, func(worktree *git.Worktree) tea.Msg {
 		// Default commit message with timestamp.
 		commitMsg := fmt.Sprintf("[atrium] update from '%s' on %s", selected.DisplayName(), time.Now().Format(time.RFC822))
 		if err := worktree.PushChanges(commitMsg, true); err != nil {
 			return err
 		}
-		return nil
+		return pushedMsg{}
 	})
 }
 
@@ -535,9 +549,9 @@ func (m *home) mergeSelected() (tea.Model, tea.Cmd) {
 	if status.CI == git.CIPending {
 		message += " CI is still running."
 	}
-	// Defer the worktree lookup and network merge into the confirm action, run
-	// only if the user confirms.
-	return m, m.confirmWorktreeAction(message, selected, func(worktree *git.Worktree) tea.Msg {
+	// Defer the worktree lookup and network merge into the confirm action, run off
+	// the UI thread only if the user confirms.
+	return m, m.confirmWorktreeAction(message, fmt.Sprintf("merging PR #%d…", number), selected, func(worktree *git.Worktree) tea.Msg {
 		if err := worktree.MergePR(); err != nil {
 			return err
 		}
@@ -582,9 +596,9 @@ func (m *home) createPRForSelected() (tea.Model, tea.Cmd) {
 		adjective = "draft"
 	}
 	message := fmt.Sprintf("Create %s PR from '%s'?", adjective, selected.DisplayName())
-	// Defer the worktree lookup and network create into the confirm action, run
-	// only if the user confirms.
-	return m, m.confirmWorktreeAction(message, selected, func(worktree *git.Worktree) tea.Msg {
+	// Defer the worktree lookup and network create into the confirm action, run off
+	// the UI thread only if the user confirms.
+	return m, m.confirmWorktreeAction(message, "creating PR…", selected, func(worktree *git.Worktree) tea.Msg {
 		number, err := worktree.CreatePR(draft)
 		if err != nil {
 			return err
@@ -628,7 +642,9 @@ func (m *home) openPRForSelected() (tea.Model, tea.Cmd) {
 
 // pauseSelected commits the selected session's changes, frees its worktree, and
 // then offers the rename overlay focused on the note field so "park this, jot why"
-// is one motion.
+// is one motion. Pause (git commit + worktree removal + tmux detach) runs off the
+// UI thread behind a "pausing…" progress row; the rename overlay opens when
+// pauseDoneMsg lands.
 func (m *home) pauseSelected() (tea.Model, tea.Cmd) {
 	selected, cmd, ok := m.selectedActionable()
 	if !ok {
@@ -642,20 +658,15 @@ func (m *home) pauseSelected() (tea.Model, tea.Cmd) {
 		return m, m.handleError(fmt.Errorf("pause is not available for a direct (non-git) session; it runs in place with no worktree to free"))
 	}
 
-	// Pause: commit changes and free the worktree. The branch name is copied to
-	// the clipboard inside Pause(); the always-on hint bar carries the reminder.
-	if err := selected.Pause(); err != nil {
-		return m, m.handleError(err)
-	}
-	m.tabbedWindow.CleanupTerminalForInstance(selected)
-	// Pause has already happened. Offer the rename overlay focused on the note
-	// field so "park this, jot why" is one motion; esc / empty-enter leaves the
-	// note unchanged — the session stays paused either way. Instant pause is
-	// preserved — the pause is never rolled back by skipping the note.
-	m.renameTarget = selected
-	m.renameOverlay = overlay.NewRenameOverlay(selected.DisplayName(), selected.Note(), true)
-	m.state = stateRename
-	return m, m.instanceChanged()
+	// Pause off the UI thread: the branch name is copied to the clipboard inside
+	// Pause(); the always-on hint bar carries the reminder. The completion handler
+	// (pauseDoneMsg) tears down the terminal, persists, and opens the rename overlay.
+	return m, m.beginAsyncAction("pausing…", func() tea.Msg {
+		if err := selected.Pause(); err != nil {
+			return pauseDoneMsg{instance: selected, err: err}
+		}
+		return pauseDoneMsg{instance: selected}
+	})
 }
 
 // resumeSelectedKey resumes the selected paused session (rebuilding its worktree).

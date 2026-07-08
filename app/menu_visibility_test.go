@@ -23,21 +23,25 @@ func TestMenuVisible_ByState(t *testing.T) {
 		name       string
 		state      state
 		generating bool
+		inFlight   bool
 		want       bool
 	}{
-		{"default navigation shows the hint bar", stateDefault, false, true},
-		{"default + background name gen shows progress", stateDefault, true, true},
-		{"inline filter", stateFilter, false, true},
-		{"prompt overlay self-documents", statePrompt, false, false},
-		{"rename overlay self-documents", stateRename, false, false},
-		{"confirm overlay self-documents", stateConfirm, false, false},
-		{"help overlay self-documents", stateHelp, false, false},
+		{"default navigation shows the hint bar", stateDefault, false, false, true},
+		{"default + background name gen shows progress", stateDefault, true, false, true},
+		{"default + action in flight shows progress", stateDefault, false, true, true},
+		{"inline filter", stateFilter, false, false, true},
+		{"prompt overlay self-documents", statePrompt, false, false, false},
+		{"rename overlay self-documents", stateRename, false, false, false},
+		{"confirm overlay self-documents", stateConfirm, false, false, false},
+		{"help overlay self-documents", stateHelp, false, false, false},
 	}
 	for _, c := range cases {
 		h.state = c.state
 		h.generatingName = c.generating
+		h.actionInFlight = c.inFlight
 		require.Equalf(t, c.want, h.menuVisible(), "%s", c.name)
 	}
+	h.actionInFlight = false
 
 	// hint_bar off: plain navigation goes chrome-free again, but a background
 	// name generation still claims the row, and inline interactions keep theirs.
@@ -49,6 +53,9 @@ func TestMenuVisible_ByState(t *testing.T) {
 	h.generatingName = true
 	require.True(t, h.menuVisible(), "name-gen progress still claims its row with the bar off")
 	h.generatingName = false
+	h.actionInFlight = true
+	require.True(t, h.menuVisible(), "an in-flight action's progress row claims its row with the bar off")
+	h.actionInFlight = false
 	h.state = stateFilter
 	require.True(t, h.menuVisible(), "the filter cue is independent of hint_bar")
 }
