@@ -58,6 +58,12 @@ fmt-check:
 vet:
     {{go}} vet ./...
 
+# Scan for known vulnerabilities (govulncheck). Allowlists the single documented
+# advisory GO-2026-5932; fails on anything else (see scripts/govulncheck.sh).
+# Needs network for `go run ...@latest`, so — like smoke/snapshot — it is not in `ci`.
+vuln:
+    GO={{go}} bash scripts/govulncheck.sh
+
 # Tidy go.mod / go.sum.
 tidy:
     {{go}} mod tidy

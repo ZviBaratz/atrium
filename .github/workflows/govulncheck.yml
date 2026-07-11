@@ -4,6 +4,12 @@ name: govulncheck
 # known-vulnerable function is actually reachable from this code, so it is
 # low-noise. The scheduled run matters — new advisories land in the Go vuln DB
 # after code is written and merged.
+#
+# We run govulncheck directly (not golang/govulncheck-action, which has no ignore
+# list) via scripts/govulncheck.sh, which allowlists exactly ONE advisory,
+# GO-2026-5932 (unmaintained x/crypto/openpgp, reachable only through go-selfupdate's
+# init chain — never actually invoked; see the script header for the full rationale)
+# and fails on anything else. `just vuln` runs the same script locally.
 on:
   # No paths filter on purpose: govulncheck is required by branch protection, so
   # it must report on every PR. A path-filtered required check never reports on a
@@ -28,11 +34,12 @@ jobs:
     name: govulncheck
     runs-on: ubuntu-latest
     steps:
-      # Default 'text' output makes the job fail when a reachable vulnerability
-      # is found (the action follows govulncheck's exit code). The action checks
-      # out the repo itself (repo-checkout defaults to true).
-      - name: Run govulncheck
-        uses: golang/govulncheck-action@b625fbe08f3bccbe446d94fbf87fcc875a4f50ee  # v1
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+      - name: Set up Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff  # v5
         with:
           go-version-file: go.mod
-          go-package: ./...
+      # jq is preinstalled on ubuntu-latest. The script scans ./... with JSON
+      # output, allowlists GO-2026-5932, and fails on any other reachable vuln.
+      - name: Run govulncheck (allowlisting GO-2026-5932)
+        run: bash scripts/govulncheck.sh
