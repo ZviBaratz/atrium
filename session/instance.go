@@ -45,6 +45,43 @@ const (
 	NeedsInput
 )
 
+// String renders a Status as a short lowercase word for logs and the status-history
+// diagnostic surface. It is deliberately not used for list rendering (a color-coded
+// glyph carries the signal there, see ui.stateGlyph).
+func (s Status) String() string {
+	switch s {
+	case Running:
+		return "running"
+	case Ready:
+		return "ready"
+	case Loading:
+		return "loading"
+	case Paused:
+		return "paused"
+	case NeedsInput:
+		return "needs-input"
+	default:
+		return "unknown"
+	}
+}
+
+// StatusTransition is one entry in an Instance's bounded status-change history: the
+// status it moved From, the status it moved To, and when. Recorded by SetStatus on
+// every actual change so a transient mislabel — e.g. a session that briefly rendered
+// Ready while a background sub-agent was still in flight (#290) — leaves an
+// inspectable trace instead of vanishing between polls.
+type StatusTransition struct {
+	From Status
+	To   Status
+	At   time.Time
+}
+
+// statusHistoryMax bounds the per-instance transition ring buffer. Only real From≠To
+// moves are appended (they are already debounced by the poll classifier), so a handful
+// of entries spans minutes of activity; the cap only stops a long-lived, flapping
+// session from growing the slice without bound.
+const statusHistoryMax = 32
+
 // StatusUrgency returns a session's action-priority rank for the "status" sort
 // mode — lower is more urgent and sorts first. It encodes how much the session
 // wants the user's attention right now: a blocked prompt outranks a finished-but-
@@ -233,6 +270,16 @@ type Instance struct {
 	// flag is exactly the observed-working rule above. In-memory only. Guarded
 	// by mu.
 	suppressNextUnread bool
+
+	// statusChangedAt records when status last actually changed (or was first
+	// observed via the initial SetStatus). It lets the UI show how long a session
+	// has held a state and gives a future reconciliation watchdog a per-status
+	// wall-clock to cap against (#290). In-memory only. Guarded by mu.
+	statusChangedAt time.Time
+	// statusHistory is a bounded ring buffer of recent status transitions (newest
+	// last), so a transient mislabel can be diagnosed after the fact rather than
+	// lost between polls (#290 observability). In-memory only. Guarded by mu.
+	statusHistory []StatusTransition
 
 	// The below fields are initialized upon calling Start(). Guarded by mu.
 
