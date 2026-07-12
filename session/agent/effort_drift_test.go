@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"context"
 	"os"
 	"os/exec"
 	"regexp"
@@ -19,7 +20,7 @@ func TestClaudeEffortLevels_MatchInstalledCLI(t *testing.T) {
 	if _, err := exec.LookPath("claude"); err != nil {
 		t.Skip("claude not on PATH; skipping effort-level drift check")
 	}
-	cmd := exec.Command("claude", "--effort", "__atrium_drift_probe__", "--help")
+	cmd := exec.CommandContext(context.Background(), "claude", "--effort", "__atrium_drift_probe__", "--help")
 	cmd.Env = append(os.Environ(), "HOME="+t.TempDir())
 	out, _ := cmd.CombinedOutput() // exit 0 expected; parse regardless
 
