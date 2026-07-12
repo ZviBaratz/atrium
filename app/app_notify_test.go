@@ -33,6 +33,15 @@ func TestNotifyEventFor(t *testing.T) {
 		{"finish outranks a coincident needs-input read", session.NeedsInput, session.Ready, true, notify.EventFinished, true},
 		{"running with nothing new", session.Ready, session.Running, false, 0, false},
 		{"needs-input cleared to ready without unread", session.NeedsInput, session.Ready, false, 0, false},
+		// Pending-origin transitions (#290): Pending is the "background sub-agent still
+		// in flight" state. A block surfaced from Pending should ring (the user can't
+		// auto-continue a blocked pane). A genuine completion from Pending (sub-agent
+		// done, unread advanced) should ring. A synthetic Pending hold (no unread change,
+		// no NeedsInput) should stay silent.
+		{"pending → needs-input rings (sub-agent blocks)", session.Pending, session.NeedsInput, false, notify.EventNeedsInput, true},
+		{"pending → genuine finish rings (unread advanced)", session.Pending, session.Ready, true, notify.EventFinished, true},
+		{"pending → suppressed finish (unread not advanced)", session.Pending, session.Ready, false, 0, false},
+		{"pending still pending (no edge)", session.Pending, session.Pending, false, 0, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

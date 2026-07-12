@@ -34,7 +34,7 @@ func plainGlyphs() Glyphs {
 		Ready:         "●",
 		ReadySeen:     "○",
 		Waiting:       "◆",
-		Pending:       "◐", // still half-disk: pending autonomous work (#290), distinct from the moving spinner
+		Pending:       "⧗", // still hourglass: pending autonomous work (#290) — a process glyph, not a disk, so it reads as "still churning," not a read-state
 		Paused:        "‖",
 		Branch:        "⎇",
 		Ahead:         "⇡",

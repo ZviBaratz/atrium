@@ -168,7 +168,7 @@ func (r *InstanceRenderer) Render(i *session.Instance, idx int, selected, marked
 	// collides with the right-aligned badges/agent icon, and appends after index 1 so the
 	// line-2 indent (gutter+space) is unaffected. The separator is the shared collapsible
 	// sepSeg, so at a width too narrow to keep any of the name it drops out (composeLine's
-	// collapseSeps) and the row degrades to "◐ 12s" rather than a dangling "◐  · 12s".
+	// collapseSeps) and the row degrades to "⧗ 12s" rather than a dangling "⧗  · 12s".
 	if i.GetStatus() == session.Pending {
 		if elapsed := fmtPendingElapsed(i.StatusChangedAt()); elapsed != "" {
 			left1 = append(left1, p.sepSeg(), p.seg(elapsed, th.Palette.FgFaint))
