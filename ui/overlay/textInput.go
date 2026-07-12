@@ -27,6 +27,7 @@ type TextInputOverlay struct {
 	profilePicker   *ProfilePicker
 	modelField      *ModelField
 	modeField       *ModeField
+	effortField     *EffortField
 	accountPicker   *AccountPicker
 	branchPicker    *BranchPicker
 	isCreateForm    bool // true for the new-session form (has a title field)

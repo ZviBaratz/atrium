@@ -34,6 +34,9 @@ const (
 	// modeSectionLines is the height the permission-mode section adds when present,
 	// mirroring modelSectionLines (label + blank + chips row + a divider).
 	modeSectionLines = 4
+	// effortSectionLines is the height the effort section adds when present,
+	// mirroring modeSectionLines (label + blank + chips row + a divider).
+	effortSectionLines = 4
 )
 
 // SetSize is given the full terminal dimensions. The create form keeps every section at a
@@ -89,6 +92,9 @@ func (t *TextInputOverlay) fitRows(height int) (pickerRows, promptRows int) {
 	}
 	if t.modeField != nil {
 		chrome += modeSectionLines
+	}
+	if t.effortField != nil {
+		chrome += effortSectionLines
 	}
 	if t.hasAccountSection() {
 		chrome += accountSectionLines
