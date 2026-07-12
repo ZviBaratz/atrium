@@ -213,8 +213,9 @@ func TestCreateSessionFromForm_ModelComposedIntoProgram(t *testing.T) {
 	ov, _ := h.newSessionFormOverlay()
 	h.textInputOverlay = ov
 
-	// Stops: [directory, branch, title, prompt, model, enter] (one profile → no
-	// profile stop; claude → model stop present).
+	// Stops: [directory, branch, title, prompt, model, effort, mode, enter] (one
+	// profile → no profile stop; claude → model/effort/mode stops present). This
+	// test only navigates as far as the model stop.
 	ov.FocusTitle()
 	ov.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("feature")})
 	ov.HandleKeyPress(tea.KeyMsg{Type: tea.KeyTab}) // title → prompt

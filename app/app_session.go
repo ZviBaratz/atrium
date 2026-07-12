@@ -944,8 +944,8 @@ func (m *home) resetTitleCheck() {
 	m.titleBranchName = ""
 }
 
-// composeProgramFlags folds the optional Claude model and permission-mode overrides
-// into program, returning the augmented command. Each is applied only when non-empty
+// composeProgramFlags folds the optional Claude model, permission-mode, and
+// effort overrides into program, returning the augmented command. Each is applied only when non-empty
 // and the program resolves to claude — the sole agent whose --model / --permission-mode
 // flags these compose — and is re-validated as a backstop: the create form already
 // filters the model field to agent.ValidModelName's charset (see ui/overlay/modelField.go)
