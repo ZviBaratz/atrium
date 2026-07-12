@@ -191,6 +191,63 @@ func TestFilter_Account(t *testing.T) {
 	require.True(t, ParseFilter("account:").Matches(personal), "empty value is a no-op")
 }
 
+func TestFilter_StatusPending(t *testing.T) {
+	pending := newFilterInstance(t, "sub", "b")
+	pending.SetStatus(Pending)
+	paused := newFilterInstance(t, "wip", "b")
+	paused.SetStatus(Paused)
+	ready := newFilterInstance(t, "done", "b")
+	ready.SetStatus(Ready)
+
+	require.True(t, ParseFilter("status:pending").Matches(pending))
+	require.False(t, ParseFilter("status:pending").Matches(paused))
+	require.False(t, ParseFilter("status:pending").Matches(ready))
+
+	// "p" is a prefix of both "pending" and "paused".
+	require.True(t, ParseFilter("status:p").Matches(pending))
+	require.True(t, ParseFilter("status:p").Matches(paused))
+
+	// "pe" narrows to pending; "pa" narrows to paused.
+	require.True(t, ParseFilter("status:pe").Matches(pending))
+	require.False(t, ParseFilter("status:pe").Matches(paused))
+	require.True(t, ParseFilter("status:pa").Matches(paused))
+	require.False(t, ParseFilter("status:pa").Matches(pending))
+}
+
+func TestFilter_SubstringMatchesNote(t *testing.T) {
+	inst := newFilterInstance(t, "session-alpha", "feat/alpha")
+	inst.SetNote("blocked on review")
+
+	require.True(t, ParseFilter("blocked").Matches(inst), "note substring match")
+	require.True(t, ParseFilter("BLOCKED").Matches(inst), "note match is case-insensitive")
+	require.True(t, ParseFilter("review").Matches(inst), "partial note match")
+	require.False(t, ParseFilter("deploy").Matches(inst), "non-matching substring")
+
+	// Bare substring still matches title/branch too.
+	require.True(t, ParseFilter("alpha").Matches(inst), "title still matched")
+}
+
+func TestFilter_Note(t *testing.T) {
+	tagged := newFilterInstance(t, "s", "b")
+	tagged.SetNote("fix auth")
+	other := newFilterInstance(t, "s2", "b")
+	other.SetNote("blocked")
+	empty := newFilterInstance(t, "s3", "b") // no note
+
+	require.True(t, ParseFilter("note:fix").Matches(tagged), "prefix match")
+	require.True(t, ParseFilter("note:fix auth").Matches(tagged), "full note matches")
+	require.False(t, ParseFilter("note:fix").Matches(other), "different note does not match")
+	require.True(t, ParseFilter("NOTE:FIX").Matches(tagged), "case-insensitive")
+
+	// Empty value is a no-op (match all) so "note:" never blinks the list empty.
+	require.True(t, ParseFilter("note:").Matches(tagged))
+	require.True(t, ParseFilter("note:").Matches(other))
+	require.True(t, ParseFilter("note:").Matches(empty))
+
+	// A session with no note does not match a specific note predicate.
+	require.False(t, ParseFilter("note:fix").Matches(empty))
+}
+
 func TestFilter_MixedPredicateAndSubstringANDed(t *testing.T) {
 	inst := newFilterInstance(t, "feat login", "feat/login")
 	inst.SetStatus(Ready)
