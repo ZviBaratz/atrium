@@ -34,6 +34,7 @@ func plainGlyphs() Glyphs {
 		Ready:         "●",
 		ReadySeen:     "○",
 		Waiting:       "◆",
+		Pending:       "◐", // still half-disk: pending autonomous work (#290), distinct from the moving spinner
 		Paused:        "‖",
 		Branch:        "⎇",
 		Ahead:         "⇡",
@@ -91,6 +92,7 @@ var tokyoNight = &Theme{
 		Success:     lipgloss.Color("#9ece6a"),
 		SuccessDim:  lipgloss.Color("#6a8a4a"),
 		Working:     lipgloss.Color("#565f89"), // matches FgDim: working rows recede
+		Pending:     lipgloss.Color("#7dcfff"), // calm cyan: pending autonomous work, distinct from Working/Success/Attention
 		Attention:   lipgloss.Color("#e0af68"),
 		Danger:      lipgloss.Color("#f7768e"),
 		Cyan:        lipgloss.Color("#7dcfff"),
@@ -116,6 +118,7 @@ var catppuccinMocha = &Theme{
 		Success:     lipgloss.Color("#a6e3a1"),
 		SuccessDim:  lipgloss.Color("#6c9168"),
 		Working:     lipgloss.Color("#6c7086"), // matches FgDim: working rows recede
+		Pending:     lipgloss.Color("#89dceb"), // calm cyan: pending autonomous work, distinct from Working/Success/Attention
 		Attention:   lipgloss.Color("#f9e2af"),
 		Danger:      lipgloss.Color("#f38ba8"),
 		Cyan:        lipgloss.Color("#89dceb"),

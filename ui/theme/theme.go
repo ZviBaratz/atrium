@@ -24,6 +24,7 @@ type Palette struct {
 	Success     lipgloss.Color // ready, additions
 	SuccessDim  lipgloss.Color // seen-ready: a Ready session the user already visited
 	Working     lipgloss.Color // working/starting spinner tint; recedes (dim) so Attention stands alone
+	Pending     lipgloss.Color // pending autonomous work — a background sub-agent is still in flight (#290); a calm cyan-family tint, distinct from Working/Success/Attention
 	Attention   lipgloss.Color // waiting / behind (the one attention color — nothing else may use it)
 	Danger      lipgloss.Color // deletions, errors, destructive actions
 	Cyan        lipgloss.Color // hunks, info
@@ -40,6 +41,7 @@ type Glyphs struct {
 	Ready         string // idle, ready for input, not yet visited (unread)
 	ReadySeen     string // idle, ready for input, already visited (seen)
 	Waiting       string // blocked on user input (attention)
+	Pending       string // still glyph for pending autonomous work (#290): a background sub-agent is in flight; width-1
 	Paused        string // session halted
 	Branch        string // precedes a branch name
 	Ahead         string // commits ahead of base

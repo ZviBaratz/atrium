@@ -182,6 +182,27 @@ func TestPollPendingWhenSubagentInFlight(t *testing.T) {
 	require.Equal(t, PaneIdle, s.Poll(), "ready + empty set → idle (done)")
 }
 
+// TestPollPendingWorkingLatchWithInflight is the #290 follow-up regression: a background
+// sub-agent's OWN PreToolUse re-latches "working" on the parent's state file while it runs,
+// so the record reads {working, inflight>0}, not {ready, inflight>0}. The session is still
+// busy — the SET, not the latch, decides — so it must read PanePending rather than fall
+// through to the marker-absent grace and commit a false idle (the observed regression: a
+// session showing "Waiting for N background agents to finish" rendered as done).
+func TestPollPendingWorkingLatchWithInflight(t *testing.T) {
+	idle := "❯ \n⏵⏵ auto mode on (shift+tab to cycle) · ← for agents"
+	c := idle
+	s := hookPollSession(t, "claude", &c)
+
+	seedHookRecord(t, s, hookRecord{State: hookStateWorking, Inflight: []string{"aa", "bb"}})
+	require.Equal(t, PanePending, s.Poll(), "working latch + sub-agents in flight → pending, not idle")
+	require.Equal(t, PanePending, s.PollNow(), "PollNow agrees: the set outranks the latch")
+
+	// Once the set drains, a bare "working" latch is NOT trusted to hold working — it falls to
+	// the bounded marker-absent grace (unchanged #46 behavior), not a fresh pending.
+	seedHookRecord(t, s, hookRecord{State: hookStateWorking})
+	require.Equal(t, PaneWorking, s.Poll(), "empty set + working latch → the bounded grace, not pending")
+}
+
 // TestPollPendingResumeHoldsWorking guards the sub-agent resume boundary: when a pending
 // session resumes, a working hook latches before the busy marker repaints. The marker-absent
 // grace must hold working across that gap (rather than dropping to idle → a false "done"), so

@@ -29,21 +29,22 @@ var claude = &Adapter{
 	DisplayName: "Claude Code",
 	aliases:     []string{"claude"},
 
-	// Heuristic strings re-verified against a live claude 2.1.185 binary
-	// (2026-06-22). Not unchanged since 2.1.170: the folder-trust dialog was
-	// reworded (see the Gates comment + registry_test.go claudeTrustPane), now
-	// matched in both forms. Confirmed still valid at 2.1.185: the busy marker
-	// "esc to interrupt" (live capture), the login-error "Please run /login ·"
-	// separator (bundle render "Please run /login \xB7 …"), and the permission /
-	// plan / model-error / selection / MCP literals. Minor granularity (matching
-	// gemini): claude ships patch releases every few days, so patch-level drift
-	// would fire the warning almost constantly — alert fatigue, not signal. A
-	// patch reword is already handled additively (both old and new variants kept
-	// in the same matcher's union, so matching never depends on the version), and
-	// a missed reword fails gracefully to "idle", never a wrong action. So only a
-	// minor/major bump — where structural UI changes are likelier — counts as
-	// drift worth re-verifying.
-	VerifiedVersion:  "2.1.185",
+	// Heuristic strings confirmed against live claude 2.1.207 sessions (2026-07-12):
+	// the busy marker "esc to interrupt" and the selection prompt matcher were seen
+	// firing correctly across many real sessions in production (the #290 status
+	// trace), and no structural reword has surfaced since the detailed 2.1.185
+	// fixture capture (2026-06-22) — whose per-string provenance is carried forward:
+	// the folder-trust dialog reworded since 2.1.170 and matched in both forms (see
+	// the Gates comment + registry_test.go claudeTrustPane); the login-error "Please
+	// run /login ·" separator (bundle render "Please run /login \xB7 …"); and the
+	// permission / plan / model-error / MCP literals. Minor granularity (matching
+	// gemini): claude ships patch releases every few days, so patch-level drift would
+	// fire the warning almost constantly — alert fatigue, not signal. A patch reword
+	// is already handled additively (both old and new variants kept in the same
+	// matcher's union, so matching never depends on the version), and a missed reword
+	// fails gracefully to "idle", never a wrong action. So only a minor/major bump —
+	// where structural UI changes are likelier — counts as drift worth re-verifying.
+	VerifiedVersion:  "2.1.207",
 	DriftGranularity: GranularityMinor,
 
 	// The footer renders e.g. "✻ Cogitating… (5s · esc to interrupt)" below the

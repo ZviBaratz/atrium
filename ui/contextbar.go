@@ -35,9 +35,10 @@ func barState(s session.Status, th *theme.Theme) (glyph, color string) {
 	case session.Loading:
 		return "●", string(th.Palette.Working)
 	case session.Pending:
-		// Still busy (a background sub-agent is finishing, #290): a steady working
-		// marker, never the "done" glyph, matching the list's stateGlyph.
-		return "●", string(th.Palette.Working)
+		// Still busy with autonomous work (a background sub-agent is finishing, #290), but
+		// not foreground work: a steady cyan pending glyph — never the "done" glyph, and
+		// distinct from Running's working marker — matching the list's stateGlyph.
+		return th.Glyphs.Pending, string(th.Palette.Pending)
 	case session.Ready:
 		return th.Glyphs.Ready, string(th.Palette.Success)
 	case session.NeedsInput:

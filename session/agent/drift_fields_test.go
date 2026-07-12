@@ -7,7 +7,7 @@ func TestAdaptersExposesSeededVersions(t *testing.T) {
 		verified string
 		gran     Granularity
 	}{
-		KeyClaude: {"2.1.185", GranularityMinor},
+		KeyClaude: {"2.1.207", GranularityMinor},
 		KeyGemini: {"0.27", GranularityMinor},
 		KeyCodex:  {"", GranularityPatch},
 		KeyAider:  {"0.86.2", GranularityMinor},

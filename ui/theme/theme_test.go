@@ -87,6 +87,7 @@ func assertGlyphWidths(t *testing.T, name string, g Glyphs) {
 		"Ready":         g.Ready,
 		"ReadySeen":     g.ReadySeen,
 		"Waiting":       g.Waiting,
+		"Pending":       g.Pending,
 		"Paused":        g.Paused,
 		"Branch":        g.Branch,
 		"Ahead":         g.Ahead,

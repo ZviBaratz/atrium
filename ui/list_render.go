@@ -82,19 +82,44 @@ func fmtAge(t time.Time) string {
 	}
 }
 
+// fmtPendingElapsed formats how long a session has held the Pending status as a compact
+// label: "<N>s", "<N>m", "<N>h", or "<N>d". Unlike fmtAge it does NOT blank the sub-minute
+// range — a session that has only just entered Pending should still show "12s", since the
+// most common Pending window is short and "how long has it been churning?" is exactly the
+// question this cue answers (a long elapsed hints the autonomous work may be stuck). A zero
+// time still returns "" so a never-stamped status stays uncluttered.
+func fmtPendingElapsed(t time.Time) string {
+	if t.IsZero() {
+		return ""
+	}
+	d := time.Since(t)
+	switch {
+	case d < time.Minute:
+		return fmt.Sprintf("%ds", int(d.Seconds()))
+	case d < time.Hour:
+		return fmt.Sprintf("%dm", int(d.Minutes()))
+	case d < 24*time.Hour:
+		return fmt.Sprintf("%dh", int(d.Hours()))
+	default:
+		return fmt.Sprintf("%dd", int(d.Hours()/24))
+	}
+}
+
 // stateGlyph returns the glyph and color describing an instance's status, for
 // the leading status gutter. Running/Loading use the animated spinner frame;
 // the others use theme glyphs. The state word is intentionally not returned —
 // the color-coded glyph carries the signal on its own.
 func (r *InstanceRenderer) stateGlyph(i *session.Instance, th *theme.Theme) (glyph string, color lipgloss.Color) {
 	switch i.GetStatus() {
-	case session.Running, session.Loading, session.Pending:
-		// Pending (main turn ended, but a background sub-agent is still in flight — #290)
-		// shares the working spinner: the session is doing autonomous work, so it must read
-		// as "busy," never as the green "done" glyph the user would mistake for finished.
-		// That satisfies the hard requirement (pending ≠ done); a richer pending-specific
-		// cue is Phase 3.
+	case session.Running, session.Loading:
 		return r.spinner.View(), th.Palette.Working
+	case session.Pending:
+		// Pending (main turn ended, but a background sub-agent is still in flight — #290)
+		// is busy autonomous work: it must never read as the green "done" glyph, but it is
+		// also not foreground work. A *still* glyph in a calm cyan tint separates it from
+		// Running by motion (still vs the moving spinner), shape, and color — colorblind-safe
+		// without relying on color, and consistent with the in-session header (see barState).
+		return th.Glyphs.Pending, th.Palette.Pending
 	case session.Ready:
 		// Unread (the agent finished a turn the user hasn't visited) keeps the
 		// bright filled glyph; a seen session dims to the hollow variant. Shape
@@ -137,6 +162,18 @@ func (r *InstanceRenderer) Render(i *session.Instance, idx int, selected, marked
 
 	// --- Line 1: gutter + name (left) · account + AUTO + agent icon (right) ---
 	left1 := []rowSeg{r.gutterSeg(p, i), space, p.nameSeg(i, selected)}
+	// Pending rows carry a faint elapsed cue ("· 12s") right after the name — how long the
+	// session has been doing autonomous background work. Only Pending shows it (the state
+	// where "how long / is it stuck?" matters most); it rides the left cluster so it never
+	// collides with the right-aligned badges/agent icon, and appends after index 1 so the
+	// line-2 indent (gutter+space) is unaffected. The separator is the shared collapsible
+	// sepSeg, so at a width too narrow to keep any of the name it drops out (composeLine's
+	// collapseSeps) and the row degrades to "◐ 12s" rather than a dangling "◐  · 12s".
+	if i.GetStatus() == session.Pending {
+		if elapsed := fmtPendingElapsed(i.StatusChangedAt()); elapsed != "" {
+			left1 = append(left1, p.sepSeg(), p.seg(elapsed, th.Palette.FgFaint))
+		}
+	}
 
 	var right1 []rowSeg
 	// Pending-prompt marker: a durable signal that this session has a queued prompt

@@ -278,30 +278,37 @@ func (t *Session) Poll() PaneState {
 	}
 
 	if hasMarker {
-		// The marker is absent. The hook state file is authoritative for *idle*: a
-		// clean turn-end (Stop) or an API-error turn-end (StopFailure) latches "ready", so we
-		// commit idle at once — UNLESS a background sub-agent is still recorded in flight, in
-		// which case the turn only looks finished (Stop fired while the child runs) and we
-		// surface PanePending instead, so the row isn't mislabeled done (#290). Any other
-		// value — still "working", or no file yet — is NOT trusted to hold working (that latch
-		// caused the oscillation); instead the marker-absent grace below holds working only
-		// briefly, gated on how long the marker has actually been gone, then commits idle.
-		if rec, ok := t.readHookRecord(); ok && rec.State == hookStateReady {
-			t.monitor.idleStreak = 0
+		// The marker is absent. Read the structured hook record.
+		//
+		// The in-flight SET — not the working/ready latch — answers "is background work
+		// pending". A non-empty set means sub-agents are still running, so the session is
+		// busy regardless of whether the latch reads "ready" (the main turn ended and is
+		// waiting on them) or "working" (a background sub-agent's OWN PreToolUse re-latched
+		// it on the parent's file — confirmed to happen for run_in_background agents). Keying
+		// off the latch alone mislabeled the latter as idle, because the busy children kept
+		// the latch on "working" so the ready-gated pending check never fired (#290 follow-up).
+		//
+		// Trusting the set does NOT reintroduce the #46 oscillation the bare "working" latch
+		// did: the set is bounded — SubagentStop drains it, the wall-clock watchdog clears a
+		// stuck set after its cap, and tmux liveness recovers a dead pane — so an unmatched
+		// start can never pin a row busy forever the way a stuck "working" file could.
+		if rec, ok := t.readHookRecord(); ok {
 			if len(rec.Inflight) > 0 {
+				t.monitor.idleStreak = 0
 				t.monitor.lastReported = PanePending
-				t.monitor.logSignal(name, "hook ready + subagents in flight → pending")
+				t.monitor.logSignal(name, "hook subagents in flight → pending")
 				return PanePending
 			}
-			// Ready with an empty set is a genuine end-of-turn. Known residual: a background
-			// sub-agent's SubagentStop drains the set a beat before the resuming main turn
-			// latches "working", so there is a sub-tick {ready, empty} window that reads here
-			// as idle. A 500ms poll rarely lands in it, and it self-corrects the very next tick
-			// (the working edge → the grace below → working), so it is left to the deferred
-			// freshness layer rather than adding a hold-pending latch (#46 risk) in v1.
-			t.monitor.lastReported = PaneIdle
-			t.monitor.logSignal(name, "hook ready → idle")
-			return PaneIdle
+			// Empty set. "ready" (a clean/errored turn-end) is a genuine idle; commit at once.
+			// Any other latch value ("working", or no state yet) is NOT trusted to hold working
+			// on its own (that bare latch caused the #46 oscillation) — fall through to the
+			// bounded marker-absent grace below.
+			if rec.State == hookStateReady {
+				t.monitor.idleStreak = 0
+				t.monitor.lastReported = PaneIdle
+				t.monitor.logSignal(name, "hook ready → idle")
+				return PaneIdle
+			}
 		}
 		t.monitor.idleStreak++
 		if (t.monitor.lastReported == PaneWorking || t.monitor.lastReported == PanePending) &&
@@ -410,14 +417,15 @@ func (t *Session) PollNow() PaneState {
 	}
 	if rec, ok := t.readHookRecord(); ok {
 		switch {
+		case len(rec.Inflight) > 0:
+			// Background sub-agents in flight → pending, whatever the latch reads (see Poll).
+			t.monitor.lastReported = PanePending
+			t.monitor.logSignal(name, "refresh hook subagents in flight → pending")
+			return PanePending
 		case rec.State == hookStateWorking:
 			t.monitor.lastReported = PaneWorking
 			t.monitor.logSignal(name, "refresh hook working → working")
 			return PaneWorking
-		case rec.State == hookStateReady && len(rec.Inflight) > 0:
-			t.monitor.lastReported = PanePending
-			t.monitor.logSignal(name, "refresh hook ready + subagents in flight → pending")
-			return PanePending
 		default:
 			t.monitor.lastReported = PaneIdle
 			t.monitor.logSignal(name, "hook ready → idle")
