@@ -63,7 +63,7 @@ func TestRender_PendingElapsedSuffix(t *testing.T) {
 
 // At a width too narrow to keep any of the name, the elapsed cue's separator is a
 // collapsible sepSeg, so it drops out instead of dangling: the line-1 gutter degrades to
-// "◐ 0s", never "◐  · 0s" with an orphaned separator and no name.
+// "⧗ 0s", never "⧗  · 0s" with an orphaned separator and no name.
 func TestRender_PendingElapsed_SeparatorCollapsesWhenNameStarved(t *testing.T) {
 	t.Cleanup(theme.Set("unicode"))
 	s := spinner.New()
