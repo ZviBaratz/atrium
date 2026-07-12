@@ -235,9 +235,17 @@ func TestFilter_Note(t *testing.T) {
 	empty := newFilterInstance(t, "s3", "b") // no note
 
 	require.True(t, ParseFilter("note:fix").Matches(tagged), "prefix match")
-	require.True(t, ParseFilter("note:fix auth").Matches(tagged), "full note matches")
 	require.False(t, ParseFilter("note:fix").Matches(other), "different note does not match")
 	require.True(t, ParseFilter("NOTE:FIX").Matches(tagged), "case-insensitive")
+
+	// note: is a *prefix* predicate, not a substring one: "auth" is a substring of
+	// "fix auth" but not a prefix, so note:auth must not match. (This isolates
+	// noteTerm from substringTerm, which does match "auth" against the note.)
+	require.False(t, ParseFilter("note:auth").Matches(tagged), "note: matches by prefix, not substring")
+
+	// A multi-word query splits on whitespace into ANDed terms: note:fix (the
+	// prefix predicate) AND auth (a plain substring, which now also scans the note).
+	require.True(t, ParseFilter("note:fix auth").Matches(tagged), "note:fix AND substring auth")
 
 	// Empty value is a no-op (match all) so "note:" never blinks the list empty.
 	require.True(t, ParseFilter("note:").Matches(tagged))
