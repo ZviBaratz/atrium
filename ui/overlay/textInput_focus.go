@@ -10,8 +10,8 @@ const (
 	stopDirectory
 	stopProfile
 	stopModel
-	stopMode
 	stopEffort
+	stopMode
 	stopAccount
 	stopTextarea
 	stopBranch

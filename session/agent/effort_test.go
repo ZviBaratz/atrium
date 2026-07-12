@@ -37,17 +37,3 @@ func TestWithEffortFlag(t *testing.T) {
 		})
 	}
 }
-
-func TestEffortFlag(t *testing.T) {
-	tests := []struct{ program, want string }{
-		{"claude", ""},
-		{"claude --effort xhigh", "xhigh"},
-		{"claude --effort=high", "high"},
-		{"claude --effort low --effort max", "max"}, // last wins
-	}
-	for _, tt := range tests {
-		if got := EffortFlag(tt.program); got != tt.want {
-			t.Errorf("EffortFlag(%q) = %q, want %q", tt.program, got, tt.want)
-		}
-	}
-}

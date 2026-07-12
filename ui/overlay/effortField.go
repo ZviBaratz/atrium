@@ -22,6 +22,12 @@ const effortInherit = "default"
 // killing the launch. The field is disabled (dim, skipped in Tab order,
 // Value() == "") while the effective program does not resolve to claude,
 // mirroring ModelField / ModeField.
+//
+// The chip row totals 42 cells — the tightest of the three claude fields, right
+// at the 42-cell inner width an 80-col terminal yields (see modelField.go). That
+// fit is why agent.ClaudeEffortLabels abbreviates "medium" to "med": the full
+// labels overflow to 45 and fitOverlay would truncate the "max" chip.
+// TestClaudeChipFields_FitInnerWidth pins the budget.
 type EffortField struct {
 	chipRow
 }

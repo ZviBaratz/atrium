@@ -62,7 +62,8 @@ func NewSessionCreateOverlay(profiles []config.Profile, accounts []config.Claude
 	// form one repo-context unit, since branches are scoped to the chosen project. Then the
 	// title and the prompt — the input that distinguishes this flow from the inline `n` flow
 	// (which jumps straight to the title via FocusTitle) — then the optional profile with its
-	// dependent model override, and finally the optional Claude-account override.
+	// dependent claude overrides (model, effort, permission mode, in that order), and finally
+	// the optional Claude-account override.
 	stops := []focusStop{stopDirectory, stopBranch, stopTitle, stopTextarea}
 	if pp != nil && pp.HasMultiple() {
 		stops = append(stops, stopProfile)
@@ -101,13 +102,13 @@ func NewSessionCreateOverlay(profiles []config.Profile, accounts []config.Claude
 	return overlay
 }
 
-// syncClaudeFieldsEnabled re-derives the model and permission-mode fields' enabled
-// state from the effective program (the selected profile's program when a picker
-// exists, else the configured default). Called at construction and after every
-// profile-picker keypress.
+// syncClaudeFieldsEnabled re-derives the model, effort, and permission-mode fields'
+// enabled state from the effective program (the selected profile's program when a
+// picker exists, else the configured default). Called at construction and after
+// every profile-picker keypress.
 func (t *TextInputOverlay) syncClaudeFieldsEnabled() {
-	// The two fields are created together or not at all (see NewSessionCreateOverlay),
-	// so one presence check covers both.
+	// The three fields are created together or not at all (see NewSessionCreateOverlay),
+	// so one presence check covers all of them.
 	if t.modelField == nil {
 		return
 	}
