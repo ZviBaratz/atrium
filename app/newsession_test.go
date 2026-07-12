@@ -213,8 +213,9 @@ func TestCreateSessionFromForm_ModelComposedIntoProgram(t *testing.T) {
 	ov, _ := h.newSessionFormOverlay()
 	h.textInputOverlay = ov
 
-	// Stops: [directory, branch, title, prompt, model, enter] (one profile → no
-	// profile stop; claude → model stop present).
+	// Stops: [directory, branch, title, prompt, model, effort, mode, enter] (one
+	// profile → no profile stop; claude → model/effort/mode stops present). This
+	// test only navigates as far as the model stop.
 	ov.FocusTitle()
 	ov.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("feature")})
 	ov.HandleKeyPress(tea.KeyMsg{Type: tea.KeyTab}) // title → prompt
@@ -360,7 +361,7 @@ func TestCandidateRepoPaths_DropsStaleRecentPaths(t *testing.T) {
 
 // A mode picked in the form's Permissions field is composed into the persisted
 // program string, so launch, pause/resume, and the daemon all see it with no
-// extra plumbing. Stops: [directory, branch, title, prompt, model, mode, enter].
+// extra plumbing. Stops: [directory, branch, title, prompt, model, effort, mode, enter].
 func TestCreateSessionFromForm_PermissionModeComposedIntoProgram(t *testing.T) {
 	dir := t.TempDir() // direct (non-git) target, hermetic
 
@@ -376,7 +377,8 @@ func TestCreateSessionFromForm_PermissionModeComposedIntoProgram(t *testing.T) {
 	ov.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("feature")})
 	ov.HandleKeyPress(tea.KeyMsg{Type: tea.KeyTab})   // title → prompt
 	ov.HandleKeyPress(tea.KeyMsg{Type: tea.KeyTab})   // prompt → model
-	ov.HandleKeyPress(tea.KeyMsg{Type: tea.KeyTab})   // model (empty → advance) → mode
+	ov.HandleKeyPress(tea.KeyMsg{Type: tea.KeyTab})   // model (empty → advance) → effort
+	ov.HandleKeyPress(tea.KeyMsg{Type: tea.KeyTab})   // leave effort on default → mode
 	ov.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRight}) // default → plan
 	require.Equal(t, "plan", ov.GetPermissionMode())
 
@@ -402,9 +404,10 @@ func TestCreateSessionFromForm_PermissionModeOverridesProfilePin(t *testing.T) {
 
 	ov.FocusTitle()
 	ov.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("feature")})
-	ov.HandleKeyPress(tea.KeyMsg{Type: tea.KeyTab})
-	ov.HandleKeyPress(tea.KeyMsg{Type: tea.KeyTab})
-	ov.HandleKeyPress(tea.KeyMsg{Type: tea.KeyTab})
+	ov.HandleKeyPress(tea.KeyMsg{Type: tea.KeyTab})   // title → prompt
+	ov.HandleKeyPress(tea.KeyMsg{Type: tea.KeyTab})   // prompt → model
+	ov.HandleKeyPress(tea.KeyMsg{Type: tea.KeyTab})   // model (empty → advance) → effort
+	ov.HandleKeyPress(tea.KeyMsg{Type: tea.KeyTab})   // leave effort on default → mode
 	ov.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRight}) // default → plan
 
 	require.NotNil(t, h.createSessionFromForm(""))
@@ -456,7 +459,8 @@ func TestCreateSessionFromForm_ModelAndModeCompose(t *testing.T) {
 	ov.HandleKeyPress(tea.KeyMsg{Type: tea.KeyTab}) // title → prompt
 	ov.HandleKeyPress(tea.KeyMsg{Type: tea.KeyTab}) // prompt → model
 	ov.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("opus")})
-	ov.HandleKeyPress(tea.KeyMsg{Type: tea.KeyTab})   // "opus" is a complete alias → advance to mode
+	ov.HandleKeyPress(tea.KeyMsg{Type: tea.KeyTab})   // "opus" is a complete alias → advance to effort
+	ov.HandleKeyPress(tea.KeyMsg{Type: tea.KeyTab})   // leave effort on default → advance to mode
 	ov.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRight}) // default → plan
 
 	require.NotNil(t, h.createSessionFromForm(""))
@@ -567,27 +571,37 @@ func TestCreateSessionFromForm_SyncBranchExistsBlocksSubmit(t *testing.T) {
 // them directly, plus the compose and pass-through cases.
 func TestComposeProgramFlags(t *testing.T) {
 	t.Run("invalid model name is rejected", func(t *testing.T) {
-		_, err := composeProgramFlags("claude", "bad model!", "")
+		_, err := composeProgramFlags("claude", "bad model!", "", "")
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "invalid model name")
 	})
 	t.Run("invalid permission mode is rejected", func(t *testing.T) {
-		_, err := composeProgramFlags("claude", "", "bogusmode")
+		_, err := composeProgramFlags("claude", "", "bogusmode", "")
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "invalid permission mode")
 	})
-	t.Run("valid model and mode compose onto a claude program", func(t *testing.T) {
-		got, err := composeProgramFlags("claude", "opus", "plan")
+	t.Run("invalid effort level is rejected", func(t *testing.T) {
+		_, err := composeProgramFlags("claude", "", "", "ultracode")
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "invalid effort level")
+	})
+	t.Run("valid model, mode, and effort compose onto a claude program", func(t *testing.T) {
+		got, err := composeProgramFlags("claude", "opus", "plan", "xhigh")
 		require.NoError(t, err)
-		assert.Equal(t, "claude --model opus --permission-mode plan", got)
+		assert.Equal(t, "claude --model opus --permission-mode plan --effort xhigh", got)
+	})
+	t.Run("effort alone composes", func(t *testing.T) {
+		got, err := composeProgramFlags("claude", "", "", "high")
+		require.NoError(t, err)
+		assert.Equal(t, "claude --effort high", got)
 	})
 	t.Run("a non-claude program is left untouched", func(t *testing.T) {
-		got, err := composeProgramFlags("echo", "opus", "plan")
+		got, err := composeProgramFlags("echo", "opus", "plan", "xhigh")
 		require.NoError(t, err)
 		assert.Equal(t, "echo", got)
 	})
 	t.Run("empty overrides leave the program untouched", func(t *testing.T) {
-		got, err := composeProgramFlags("claude", "", "")
+		got, err := composeProgramFlags("claude", "", "", "")
 		require.NoError(t, err)
 		assert.Equal(t, "claude", got)
 	})

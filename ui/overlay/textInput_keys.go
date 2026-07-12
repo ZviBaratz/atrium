@@ -130,6 +130,10 @@ func (t *TextInputOverlay) HandleKeyPress(msg tea.KeyMsg) (bool, bool) {
 			t.modeField.HandleKeyPress(msg)
 			return false, false
 		}
+		if t.isEffortField() {
+			t.effortField.HandleKeyPress(msg)
+			return false, false
+		}
 		if t.isAccountPicker() {
 			switch msg.Type {
 			case tea.KeyLeft, tea.KeyRight, tea.KeyUp, tea.KeyDown:

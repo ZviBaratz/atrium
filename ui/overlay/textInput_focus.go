@@ -10,6 +10,7 @@ const (
 	stopDirectory
 	stopProfile
 	stopModel
+	stopEffort
 	stopMode
 	stopAccount
 	stopTextarea
@@ -78,6 +79,7 @@ func (t *TextInputOverlay) isDirectoryPicker() bool { return t.currentStop() == 
 func (t *TextInputOverlay) isProfilePicker() bool   { return t.currentStop() == stopProfile }
 func (t *TextInputOverlay) isModelField() bool      { return t.currentStop() == stopModel }
 func (t *TextInputOverlay) isModeField() bool       { return t.currentStop() == stopMode }
+func (t *TextInputOverlay) isEffortField() bool     { return t.currentStop() == stopEffort }
 func (t *TextInputOverlay) isAccountPicker() bool   { return t.currentStop() == stopAccount }
 func (t *TextInputOverlay) isTextarea() bool        { return t.currentStop() == stopTextarea }
 func (t *TextInputOverlay) isBranchPicker() bool    { return t.currentStop() == stopBranch }
@@ -117,6 +119,9 @@ func (t *TextInputOverlay) stopEnabled(kind focusStop) bool {
 		return false
 	}
 	if kind == stopModel && t.modelField != nil && t.modelField.Disabled() {
+		return false
+	}
+	if kind == stopEffort && t.effortField != nil && t.effortField.Disabled() {
 		return false
 	}
 	return true
@@ -173,6 +178,13 @@ func (t *TextInputOverlay) updateFocusState() {
 			t.modeField.Focus()
 		} else {
 			t.modeField.Blur()
+		}
+	}
+	if t.effortField != nil {
+		if t.isEffortField() {
+			t.effortField.Focus()
+		} else {
+			t.effortField.Blur()
 		}
 	}
 	if t.accountPicker != nil {

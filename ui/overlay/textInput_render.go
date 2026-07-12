@@ -237,6 +237,9 @@ func (t *TextInputOverlay) renderCreateForm(divider string) string {
 	if t.modelField != nil {
 		section(t.modelField.Render())
 	}
+	if t.effortField != nil {
+		section(t.effortField.Render())
+	}
 	if t.modeField != nil {
 		section(t.modeField.Render())
 	}

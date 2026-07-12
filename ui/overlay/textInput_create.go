@@ -48,10 +48,12 @@ func NewSessionCreateOverlay(profiles []config.Profile, accounts []config.Claude
 	}
 	var mf *ModelField
 	var pmf *ModeField
+	var ef *EffortField
 	for _, c := range candidates {
 		if agent.Resolve(c).Key == agent.KeyClaude {
 			mf = NewModelField()
 			pmf = NewModeField()
+			ef = NewEffortField()
 			break
 		}
 	}
@@ -60,13 +62,17 @@ func NewSessionCreateOverlay(profiles []config.Profile, accounts []config.Claude
 	// form one repo-context unit, since branches are scoped to the chosen project. Then the
 	// title and the prompt — the input that distinguishes this flow from the inline `n` flow
 	// (which jumps straight to the title via FocusTitle) — then the optional profile with its
-	// dependent model override, and finally the optional Claude-account override.
+	// dependent claude overrides (model, effort, permission mode, in that order), and finally
+	// the optional Claude-account override.
 	stops := []focusStop{stopDirectory, stopBranch, stopTitle, stopTextarea}
 	if pp != nil && pp.HasMultiple() {
 		stops = append(stops, stopProfile)
 	}
 	if mf != nil {
 		stops = append(stops, stopModel)
+	}
+	if ef != nil {
+		stops = append(stops, stopEffort)
 	}
 	if pmf != nil {
 		stops = append(stops, stopMode)
@@ -84,6 +90,7 @@ func NewSessionCreateOverlay(profiles []config.Profile, accounts []config.Claude
 		profilePicker:   pp,
 		modelField:      mf,
 		modeField:       pmf,
+		effortField:     ef,
 		accountPicker:   ap,
 		branchPicker:    bp,
 		focus:           focusRing{stops: stops},
@@ -95,13 +102,13 @@ func NewSessionCreateOverlay(profiles []config.Profile, accounts []config.Claude
 	return overlay
 }
 
-// syncClaudeFieldsEnabled re-derives the model and permission-mode fields' enabled
-// state from the effective program (the selected profile's program when a picker
-// exists, else the configured default). Called at construction and after every
-// profile-picker keypress.
+// syncClaudeFieldsEnabled re-derives the model, effort, and permission-mode fields'
+// enabled state from the effective program (the selected profile's program when a
+// picker exists, else the configured default). Called at construction and after
+// every profile-picker keypress.
 func (t *TextInputOverlay) syncClaudeFieldsEnabled() {
-	// The two fields are created together or not at all (see NewSessionCreateOverlay),
-	// so one presence check covers both.
+	// The three fields are created together or not at all (see NewSessionCreateOverlay),
+	// so one presence check covers all of them.
 	if t.modelField == nil {
 		return
 	}
@@ -112,6 +119,7 @@ func (t *TextInputOverlay) syncClaudeFieldsEnabled() {
 	disabled := agent.Resolve(program).Key != agent.KeyClaude
 	t.modelField.SetDisabled(disabled)
 	t.modeField.SetDisabled(disabled)
+	t.effortField.SetDisabled(disabled)
 }
 
 // FocusTitle moves focus to the title field. The quick-create flow (`n`) calls
@@ -290,6 +298,16 @@ func (t *TextInputOverlay) GetPermissionMode() string {
 		return ""
 	}
 	return t.modeField.Value()
+}
+
+// GetEffort returns the selected Claude effort-level override, or "" when no
+// flag should be composed: no effort field, the field is inert (non-claude
+// profile selected), or it sits on the default chip.
+func (t *TextInputOverlay) GetEffort() string {
+	if t.effortField == nil {
+		return ""
+	}
+	return t.effortField.Value()
 }
 
 // GetSelectedAccount returns the chosen account and true only when the user has

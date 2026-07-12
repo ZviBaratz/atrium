@@ -944,8 +944,8 @@ func (m *home) resetTitleCheck() {
 	m.titleBranchName = ""
 }
 
-// composeProgramFlags folds the optional Claude model and permission-mode overrides
-// into program, returning the augmented command. Each is applied only when non-empty
+// composeProgramFlags folds the optional Claude model, permission-mode, and
+// effort overrides into program, returning the augmented command. Each is applied only when non-empty
 // and the program resolves to claude — the sole agent whose --model / --permission-mode
 // flags these compose — and is re-validated as a backstop: the create form already
 // filters the model field to agent.ValidModelName's charset (see ui/overlay/modelField.go)
@@ -953,7 +953,10 @@ func (m *home) resetTitleCheck() {
 // drift between the UI and the agent enums, caught before a dead launch rather than
 // after. The mode check sees the model-augmented program, matching the form's submit
 // order; since --model leaves the base command claude, Resolve is unaffected.
-func composeProgramFlags(program, model, mode string) (string, error) {
+// Effort is composed the same way, but note the CLI soft-validates --effort
+// (an unknown value is warned-and-ignored, not rejected like --permission-mode),
+// so ValidEffort here is a UI/enum-drift backstop rather than a launch guard.
+func composeProgramFlags(program, model, mode, effort string) (string, error) {
 	if model != "" && agent.Resolve(program).Key == agent.KeyClaude {
 		if !agent.ValidModelName(model) {
 			return "", fmt.Errorf("invalid model name %q (letters, digits, . _ : / - only)", model)
@@ -965,6 +968,12 @@ func composeProgramFlags(program, model, mode string) (string, error) {
 			return "", fmt.Errorf("invalid permission mode %q", mode)
 		}
 		program = agent.WithPermissionModeFlag(program, mode)
+	}
+	if effort != "" && agent.Resolve(program).Key == agent.KeyClaude {
+		if !agent.ValidEffort(effort) {
+			return "", fmt.Errorf("invalid effort level %q", effort)
+		}
+		program = agent.WithEffortFlag(program, effort)
 	}
 	return program, nil
 }
@@ -1028,7 +1037,7 @@ func (m *home) createSessionFromForm(prompt string) tea.Cmd {
 	// plumbing. composeProgramFlags re-validates each as a backstop behind the
 	// form's own gating (the fields are inert for non-claude programs, and the
 	// model field filters keystrokes to the valid charset).
-	program, err := composeProgramFlags(program, ov.GetModel(), ov.GetPermissionMode())
+	program, err := composeProgramFlags(program, ov.GetModel(), ov.GetPermissionMode(), ov.GetEffort())
 	if err != nil {
 		ov.Submitted = false
 		return m.handleError(err)
