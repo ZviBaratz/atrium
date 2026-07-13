@@ -224,7 +224,7 @@ func stripBoxInterior(line string) string {
 // genuinely blank; note that an otherwise-empty composer showing a placeholder/ghost
 // suggestion (claude's `Try "…"` hint) reads that hint back as the text, so callers must
 // not treat the readback as the user's input verbatim — they compare it against the prompt
-// signature with a substring check (see boxHasSignature) precisely so ghost text and the
+// signature with a substring check (see boxHoldsPrompt) precisely so ghost text and the
 // wrap point never cause a false match.
 func inputBoxText(content string) (string, bool) {
 	lines := strings.Split(content, "\n")

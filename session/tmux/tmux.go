@@ -566,7 +566,16 @@ func (t *Session) InputBoxCollapsedPaste() bool {
 	if !ok {
 		return false
 	}
-	return t.adapter.PasteCollapsed(text)
+	return t.IsCollapsedPaste(text)
+}
+
+// IsCollapsedPaste reports whether an already-captured input-box readback is the agent's
+// collapsed-paste placeholder chip rather than literal text. It is the pure predicate behind
+// InputBoxCollapsedPaste, exposed so a caller that already holds a readback (see the prompt
+// delivery's boxHoldsPrompt) classifies it without re-capturing the pane. False for agents
+// without a PasteCollapsed predicate (they render pastes inline).
+func (t *Session) IsCollapsedPaste(text string) bool {
+	return t.adapter.PasteCollapsed != nil && t.adapter.PasteCollapsed(text)
 }
 
 // Restore attaches to an existing session and restores the window size
