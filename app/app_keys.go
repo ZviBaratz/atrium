@@ -236,6 +236,24 @@ func (m *home) handleRenameState(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, m.instanceChanged()
 }
 
+// handleQueueState routes a key to the queue overlay: cursor moves and esc are
+// handled inside the overlay. (Task 4 adds the cancel branch.)
+func (m *home) handleQueueState(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if m.queueOverlay.HandleKeyPress(msg) {
+		m.dismissQueueOverlay()
+		return m, m.instanceChanged()
+	}
+	return m, nil
+}
+
+// dismissQueueOverlay tears down the queue overlay and returns to the list.
+func (m *home) dismissQueueOverlay() {
+	m.queueOverlay = nil
+	m.queueTarget = nil
+	m.state = stateDefault
+	m.menu.SetState(ui.StateDefault)
+}
+
 // handleSettingsState routes a key to the settings overlay, live-applies any
 // changed row, and reclaims the menu row when the panel closes.
 func (m *home) handleSettingsState(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -447,6 +465,29 @@ func (m *home) openRenameSelected() (tea.Model, tea.Cmd) {
 	m.renameOverlay = overlay.NewRenameOverlay(selected.DisplayName(), selected.Note(), false)
 	m.state = stateRename
 	return m, nil
+}
+
+// openQueue opens the pending-prompt management overlay for the selected session,
+// listing its queued prompts so the user can cancel one before delivery. Unlike
+// openQuickSend it needs no live pane (management is a pure in-memory read +
+// cancel + persist), so paused and loading sessions are fair game; only an empty
+// queue is a dead end worth refusing. The overlay acts on this instance even if
+// the selection later moves (queueTarget), mirroring the rename flow.
+func (m *home) openQueue() (tea.Model, tea.Cmd) {
+	selected := m.list.GetSelectedInstance()
+	if selected == nil {
+		return m, nil
+	}
+	if !selected.HasQueuedPrompt() {
+		return m, m.handleInfoNotice(fmt.Sprintf("nothing queued for %q", selected.DisplayName()))
+	}
+	m.queueTarget = selected
+	m.queueOverlay = overlay.NewQueueOverlay(selected.DisplayName())
+	texts, headInFlight := selected.QueueView()
+	m.queueOverlay.SetQueue(texts, headInFlight)
+	m.state = stateQueue
+	// tea.WindowSize re-runs layout so the overlay gets its responsive width.
+	return m, tea.WindowSize()
 }
 
 // startAutoNameSelected kicks off background model-driven naming for the selected

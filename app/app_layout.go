@@ -78,6 +78,13 @@ func (m *home) updateHandleWindowSizeEvent(msg tea.WindowSizeMsg) {
 		// terminals, shrink so the box never spills off a narrow one.
 		m.welcomeOverlay.SetWidth(welcomeWidth(msg.Width))
 	}
+	if m.queueOverlay != nil {
+		w := int(float32(msg.Width) * 0.6)
+		if w > 80 {
+			w = 80
+		}
+		m.queueOverlay.SetWidth(w)
+	}
 
 	previewWidth, previewHeight := m.tabbedWindow.GetPreviewSize()
 	if err := m.list.SetSessionPreviewSize(previewWidth, previewHeight); err != nil {
@@ -99,7 +106,7 @@ func (m *home) menuVisible() bool {
 		// Both inline interactions teach their gestures on the bar, so it stays
 		// even when the always-on hint bar is turned off.
 		return true
-	case statePrompt, stateRename, stateConfirm, stateHelp, stateInfo, stateSettings, stateWelcome, stateAccounts:
+	case statePrompt, stateRename, stateQueue, stateConfirm, stateHelp, stateInfo, stateSettings, stateWelcome, stateAccounts:
 		return false
 	default: // stateDefault (and the empty list)
 		// generatingName and actionInFlight each force the bar visible so their

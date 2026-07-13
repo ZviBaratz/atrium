@@ -66,6 +66,8 @@ const (
 
 	KeyQuickSend // Open a compose box to send a message to the selected session without attaching
 
+	KeyQueue // Open the pending-prompt management overlay for the selected session
+
 	KeyAutoName // Auto-generate a display name for the selected session via claude
 
 	KeyFilter // Enter incremental filter mode to narrow the session list
@@ -146,6 +148,7 @@ var GlobalKeyStringsMap = map[string]KeyName{
 	"R":          KeyRename,
 	"A":          KeyAutoName,
 	"s":          KeyQuickSend,
+	"Q":          KeyQueue,
 	"y":          KeyCopyBranch,
 	"q":          KeyQuit,
 	"tab":        KeyTab,
@@ -227,6 +230,10 @@ var GlobalKeyBindings = map[KeyName]key.Binding{
 	KeyQuickSend: key.NewBinding(
 		key.WithKeys("s"),
 		key.WithHelp("s", "send"),
+	),
+	KeyQueue: key.NewBinding(
+		key.WithKeys("Q"),
+		key.WithHelp("Q", "manage queued prompts"),
 	),
 	KeyHelp: key.NewBinding(
 		key.WithKeys("?"),

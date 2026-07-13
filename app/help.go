@@ -82,6 +82,7 @@ func (h helpTypeGeneral) toContent() string {
 		helpRow("ctrl-x", "kill the selected/attached session (twice to confirm)"),
 		helpRow("ctrl-pgup/pgdn", "in a session: cycle to prev / next session in the repo group"),
 		helpRow("s", "send a message (without attaching)"),
+		helpRow("Q", "manage queued prompts (list / cancel)"),
 		helpRow("a", "approve the agent's prompt (enter picks its default); on idle claude, accept the suggested prompt"),
 		helpRow("p", "pause: commit changes + free the worktree"),
 		helpRow("ctrl-p", "pause all active sessions in the current view"),
