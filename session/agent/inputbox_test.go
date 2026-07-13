@@ -171,6 +171,21 @@ func TestClaudePasteCollapsed(t *testing.T) {
 		}
 	})
 
+	t.Run("inputBoxText reads back accumulated chips from a re-pasted composer", func(t *testing.T) {
+		// The pre-fix retry loop could stack chips on one composer line; the parser must read
+		// the whole run back so the delivery check still recognizes it as a collapsed paste.
+		text, ok := inputBoxText(liveAccumulatedPasteComposer)
+		if !ok {
+			t.Fatal("a composer showing accumulated collapsed pastes must be detected as present")
+		}
+		if text != "[Pasted text #1 +29 lines][Pasted text #2 +28 lines]" {
+			t.Fatalf("readback = %q, want the accumulated chips", text)
+		}
+		if !claudePasteCollapsed(text) {
+			t.Error("accumulated chips read back from the pane must be recognized as a collapsed paste")
+		}
+	})
+
 	collapsed := []struct {
 		name, box string
 	}{
