@@ -237,9 +237,37 @@ func (m *home) handleRenameState(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 // handleQueueState routes a key to the queue overlay: cursor moves and esc are
-// handled inside the overlay. (Task 4 adds the cancel branch.)
+// handled inside the overlay; a cancel (d/x) is performed here against the target
+// instance the overlay was opened for (queueTarget), not the live selection —
+// which can move while the overlay is open. A successful cancel persists and
+// refreshes the list; cancelling the last entry closes the overlay and flashes on
+// the now-visible hint bar; a refusal (the in-flight head, or a queue that shifted
+// under the snapshot) explains itself in-overlay, since the hint bar is hidden
+// behind the box.
 func (m *home) handleQueueState(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	if m.queueOverlay.HandleKeyPress(msg) {
+	shouldClose := m.queueOverlay.HandleKeyPress(msg)
+
+	if m.queueOverlay.RemoveRequested() && m.queueTarget != nil {
+		removed := m.queueTarget.CancelQueuedPrompt(m.queueOverlay.SelectedIndex(), m.queueOverlay.SelectedText())
+		if removed {
+			if err := m.persistInstances(); err != nil {
+				log.ErrorLog.Printf("failed to persist after cancelling queued prompt: %v", err)
+			}
+		}
+		texts, headInFlight := m.queueTarget.QueueView()
+		if len(texts) == 0 {
+			// The queue drained — close and flash on the (now visible) hint bar.
+			m.dismissQueueOverlay()
+			return m, tea.Sequence(m.handleInfoNotice("queue cleared"), m.instanceChanged())
+		}
+		m.queueOverlay.SetQueue(texts, headInFlight)
+		if !removed {
+			m.queueOverlay.SetMessage("can't cancel — prompt is being delivered")
+		}
+		return m, m.instanceChanged()
+	}
+
+	if shouldClose {
 		m.dismissQueueOverlay()
 		return m, m.instanceChanged()
 	}

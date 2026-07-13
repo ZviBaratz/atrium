@@ -3,6 +3,7 @@ package app
 import (
 	"testing"
 
+	"github.com/ZviBaratz/atrium/config"
 	"github.com/ZviBaratz/atrium/session"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -16,6 +17,13 @@ func queueInstance(t *testing.T, title string) *session.Instance {
 	})
 	require.NoError(t, err)
 	return inst
+}
+
+func mustStorage(t *testing.T) *session.Storage {
+	t.Helper()
+	st, err := session.NewStorage(config.DefaultState())
+	require.NoError(t, err)
+	return st
 }
 
 func TestOpenQueue_EmptyQueueRefused(t *testing.T) {
@@ -72,4 +80,75 @@ func TestQueueOverlay_EscCloses(t *testing.T) {
 	require.Equal(t, stateDefault, h.state)
 	require.Nil(t, h.queueOverlay)
 	require.Nil(t, h.queueTarget)
+}
+
+func TestQueueCancel_RemovesEntryAndPersists(t *testing.T) {
+	h := newCreateFormHome(t)
+	h.storage = mustStorage(t)
+	inst := queueInstance(t, "q")
+	inst.QueueFollowupPrompt("a")
+	inst.QueueFollowupPrompt("b")
+	h.list.AddInstance(inst)
+	h.list.SelectInstance(inst)
+	_, _ = h.openQueue() // cursor on head "a"
+
+	_, _ = h.handleKeyPress(runeKey("d"))
+
+	require.Equal(t, 1, inst.QueueLen(), "the head was cancelled")
+	require.Equal(t, "b", inst.Prompt())
+	require.Equal(t, stateQueue, h.state, "still open with one entry left")
+}
+
+func TestQueueCancel_LastEntryClosesOverlay(t *testing.T) {
+	h := newCreateFormHome(t)
+	h.storage = mustStorage(t)
+	inst := queueInstance(t, "q")
+	inst.QueueFollowupPrompt("only")
+	h.list.AddInstance(inst)
+	h.list.SelectInstance(inst)
+	_, _ = h.openQueue()
+
+	_, _ = h.handleKeyPress(runeKey("d"))
+
+	require.Equal(t, 0, inst.QueueLen())
+	require.Equal(t, stateDefault, h.state)
+	require.Nil(t, h.queueOverlay)
+	require.True(t, h.menu.HasNotice())
+}
+
+func TestQueueCancel_InFlightHeadRefused(t *testing.T) {
+	h := newCreateFormHome(t)
+	h.storage = mustStorage(t)
+	inst := queueInstance(t, "q")
+	inst.QueueFollowupPrompt("boot")
+	_, ok := inst.ClaimPrompt() // raises the in-flight guard on the head
+	require.True(t, ok)
+	h.list.AddInstance(inst)
+	h.list.SelectInstance(inst)
+	_, _ = h.openQueue()
+
+	_, _ = h.handleKeyPress(runeKey("d"))
+
+	require.Equal(t, 1, inst.QueueLen(), "the in-flight head is not cancelled")
+	require.Equal(t, stateQueue, h.state, "the overlay stays open")
+	require.Contains(t, h.queueOverlay.Render(), "being delivered", "the refusal is explained in-overlay")
+}
+
+func TestQueueCancel_TargetsOpenedInstanceNotSelection(t *testing.T) {
+	h := newCreateFormHome(t)
+	h.storage = mustStorage(t)
+	a := queueInstance(t, "a")
+	a.QueueFollowupPrompt("xa")
+	b := queueInstance(t, "b")
+	b.QueueFollowupPrompt("xb")
+	h.list.AddInstance(a)
+	h.list.AddInstance(b)
+	h.list.SelectInstance(a)
+	_, _ = h.openQueue() // target = a
+
+	h.list.SelectInstance(b) // selection moves away while the overlay is open
+	_, _ = h.handleKeyPress(runeKey("d"))
+
+	require.Equal(t, 0, a.QueueLen(), "the opened instance's queue shrank")
+	require.Equal(t, 1, b.QueueLen(), "the newly-selected instance is untouched")
 }
