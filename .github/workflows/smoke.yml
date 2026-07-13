@@ -1,0 +1,48 @@
+name: Smoke (e2e)
+
+# End-to-end TUI smoke test (issue #148/#274): drives the real atrium binary
+# through vhs to prove the live create→attach→detach layer renders
+# deterministically and still matches the committed golden.
+#
+# This is a ROT ALARM, never a gate. It is not in the required `Build` workflow
+# because it is slow (~20s), depends on non-Go binaries (vhs, ttyd, ffmpeg,
+# tmux, jq) and drives a real tmux server through a PTY. It runs on a weekly
+# schedule and on demand; `continue-on-error: true` means a red run surfaces rot
+# without ever blocking a PR.
+on:
+  schedule:
+    # Weekly, Monday 07:00 UTC.
+    - cron: '0 7 * * 1'
+  workflow_dispatch:
+
+# Least privilege: this workflow only reads the repo.
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    name: Smoke (ubuntu)
+    runs-on: ubuntu-latest
+    # Never gate a PR: a smoke failure is a rot signal, not a merge blocker.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+
+      - name: Set up Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff  # v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # Bundles the vhs deps (vhs + ttyd + ffmpeg) onto PATH.
+      - name: Install vhs
+        uses: charmbracelet/vhs-action@59641cdc7fadf3978db65eb8c6937ea2752f4ec3  # v2.1.0
+
+      # tmux + jq are the remaining run.sh deps (vhs-action covers the rest).
+      - name: Install tmux and jq
+        run: sudo apt-get update && sudo apt-get install -y tmux jq
+
+      # setup-go puts `go` on PATH, so run.sh's GO defaults correctly. Call the
+      # script directly instead of `just` to avoid installing just on the runner.
+      - name: Run smoke flow
+        run: RUNS=1 bash test/smoke/run.sh
