@@ -46,6 +46,24 @@ func (m *home) handleDriftFound(msg driftFoundMsg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
+// advanceSplashFrame ticks the empty-state splash animation, pushing every other
+// tick (~5Hz) so identical frames in between diff to no-ops and a parked empty
+// screen doesn't repaint the full pane 10×/s. It freezes entirely outside the
+// default state: while any overlay owns the screen (the welcome dialog, help,
+// confirm, a form, …), motion churning behind a modal the user is reading is
+// distracting — and the splash only renders while the idle screen is on top
+// anyway. The field itself is only drawn when no session is selected, so this
+// costs nothing once a session exists.
+func (m *home) advanceSplashFrame() {
+	if m.state != stateDefault {
+		return
+	}
+	m.splashFrame++
+	if m.splashFrame%2 == 0 {
+		m.tabbedWindow.SetSplashFrame(m.splashFrame / 2)
+	}
+}
+
 func (m *home) handlePreviewTick(msg previewTickMsg) (tea.Model, tea.Cmd) {
 	// The pane owns hint-overlay validity (a selection change or pause
 	// drops it there); if it dropped, follow it back to default so keys
@@ -54,6 +72,7 @@ func (m *home) handlePreviewTick(msg previewTickMsg) (tea.Model, tea.Cmd) {
 		m.exitHintMode()
 	}
 	m.markSeenAfterDwell(time.Now())
+	m.advanceSplashFrame()
 	cmd := m.instanceChanged()
 	return m, tea.Batch(
 		cmd,

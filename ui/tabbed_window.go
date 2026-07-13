@@ -139,6 +139,14 @@ func (w *TabbedWindow) SetSize(width, height int) {
 	w.terminal.SetSize(contentWidth, contentHeight)
 }
 
+// SetSplashFrame advances the empty-state splash animation clock on the panes
+// that render it. Driven by the 100ms preview tick (not the content path) so the
+// field keeps drifting regardless of which tab is focused.
+func (w *TabbedWindow) SetSplashFrame(n int) {
+	w.preview.SetSplashFrame(n)
+	w.terminal.SetSplashFrame(n)
+}
+
 // GetPreviewSize returns the preview pane's content dimensions, used to size
 // each instance's detached tmux session to match.
 func (w *TabbedWindow) GetPreviewSize() (width, height int) {

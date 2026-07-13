@@ -39,6 +39,11 @@ type TerminalPane struct {
 	content       string
 	fallback      bool
 	fallbackText  string
+	// splash is true only for the idle empty screen (nil instance): String() then
+	// renders the animated nebula behind the wordmark. Implies fallback.
+	splash        bool
+	splashMessage string
+	splashFrame   int
 
 	isScrolling bool
 	// scrollKey is the terminalKey the scroll-mode snapshot was captured from.
@@ -95,12 +100,30 @@ func (t *TerminalPane) SetSize(width, height int) {
 	}
 }
 
+// SetSplashFrame stores the current splash animation frame, pushed from the
+// app's 100ms tick. It only affects the idle-splash render in String().
+func (t *TerminalPane) SetSplashFrame(n int) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.splashFrame = n
+}
+
 // setFallbackState sets the terminal pane to display a fallback message.
 // Caller must hold t.mu.
 func (t *TerminalPane) setFallbackState(message string) {
 	t.fallback = true
+	t.splash = false
 	t.fallbackText = lipgloss.JoinVertical(lipgloss.Center, FallbackBanner(), "", message)
 	t.content = ""
+}
+
+// setSplashState is setFallbackState for the idle empty screen (nil instance),
+// additionally flagging the splash so String() renders the animated nebula behind
+// the wordmark. Every other empty state keeps the plain fallback. Caller holds t.mu.
+func (t *TerminalPane) setSplashState(message string) {
+	t.setFallbackState(message)
+	t.splash = true
+	t.splashMessage = message
 }
 
 // UpdateContent captures the tmux pane output for the terminal session.
@@ -117,7 +140,7 @@ func (t *TerminalPane) UpdateContent(instance *session.Instance) error {
 	}
 
 	if instance == nil {
-		t.setFallbackState("Select an instance to open a terminal")
+		t.setSplashState("Select an instance to open a terminal")
 		return nil
 	}
 	if instance.Paused() {
@@ -151,6 +174,7 @@ func (t *TerminalPane) UpdateContent(instance *session.Instance) error {
 	}
 
 	t.fallback = false
+	t.splash = false
 	// Decompose font-dependent emoji clusters so our laid-out width matches the
 	// terminal's rendered width and the pane can't wrap (see theme.SanitizeWidth).
 	t.content = theme.SanitizeWidth(content)
@@ -278,6 +302,7 @@ func (t *TerminalPane) Close() {
 	t.currentKey = ""
 	t.content = ""
 	t.fallback = false
+	t.splash = false
 	t.fallbackText = ""
 }
 
@@ -301,6 +326,7 @@ func (t *TerminalPane) CloseForInstance(inst *session.Instance) {
 		t.currentKey = ""
 		t.content = ""
 		t.fallback = false
+		t.splash = false
 		t.fallbackText = ""
 	}
 }
@@ -318,6 +344,10 @@ func (t *TerminalPane) String() string {
 
 	if t.isScrolling {
 		return t.viewport.View()
+	}
+
+	if t.splash && splashFits(width, height) {
+		return splashScene(width, height, t.splashFrame, t.splashMessage)
 	}
 
 	fallback := t.fallback

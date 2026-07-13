@@ -13,6 +13,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/stretchr/testify/require"
 )
 
@@ -219,7 +221,10 @@ func TestTerminalFallbackCentered(t *testing.T) {
 	log.Initialize(false)
 	defer log.Close()
 
-	const w, h = 80, 30
+	// Width below the splash floor (minSplashW) so the nil idle state renders the
+	// plain centered fallback this test locks — the animated splash is covered by
+	// the splash tests. Height stays full so the centering check is meaningful.
+	const w, h = 48, 30
 	tp := NewTerminalPane(context.Background())
 	tp.SetSize(w, h)
 
@@ -244,6 +249,40 @@ func TestTerminalFallbackCentered(t *testing.T) {
 	if d := top - bottom; d < -1 || d > 1 {
 		t.Fatalf("fallback not vertically centered: %d blank lines above, %d below", top, bottom)
 	}
+}
+
+// TestTerminalSplashParity locks the Terminal tab's idle empty state to the same
+// animated nebula as the preview: at an adequate size String() renders the field
+// (wordmark and prompt surviving, bounded), and below the floor it falls back to
+// the plain wordmark with no field glyphs.
+func TestTerminalSplashParity(t *testing.T) {
+	log.Initialize(false)
+	defer log.Close()
+
+	tp := NewTerminalPane(context.Background())
+	tp.SetSize(80, 30)
+	tp.SetSplashFrame(6)
+	require.NoError(t, tp.UpdateContent(nil))
+	require.True(t, tp.splash, "nil instance must set the splash on the terminal pane")
+
+	out := tp.String()
+	lines := strings.Split(out, "\n")
+	require.Len(t, lines, 30, "splash must fill the pane height")
+	for i, l := range lines {
+		require.LessOrEqualf(t, lipgloss.Width(l), 80, "line %d width", i)
+	}
+	stripped := ansi.Strip(out)
+	require.Contains(t, stripped, "Select an instance", "terminal prompt must survive")
+	require.Contains(t, stripped, "█", "wordmark must survive")
+	require.True(t, strings.ContainsAny(stripped, fieldGlyphs), "nebula must render behind the wordmark")
+
+	// Below the splash floor → plain fallback, no field glyphs.
+	small := NewTerminalPane(context.Background())
+	small.SetSize(48, 16)
+	small.SetSplashFrame(6)
+	require.NoError(t, small.UpdateContent(nil))
+	require.False(t, strings.ContainsAny(ansi.Strip(small.String()), fieldGlyphs),
+		"below the floor the terminal must render the plain wordmark, not the field")
 }
 
 func TestTerminalSessionCaching(t *testing.T) {
