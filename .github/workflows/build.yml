@@ -59,6 +59,16 @@ jobs:
             sudo apt-get update && sudo apt-get install -y tmux
           fi
 
+      # TEMPORARY (#305 diagnostic) — DO NOT MERGE. Reproduces the terminal-pane
+      # $SHELL new-session on both runners with remain-on-exit on and prints the
+      # dead-pane status/output so we can see why the shell exits on macOS. -v so
+      # t.Log lines show even on a pass; continue-on-error so it never blocks.
+      - name: DIAG 305 (temporary)
+        continue-on-error: true
+        env:
+          ATRIUM_DIAG_305: '1'
+        run: go test -v -run TestDiag305TerminalShellStartup ./session/tmux/
+
       - name: go vet
         run: go vet ./...
 
