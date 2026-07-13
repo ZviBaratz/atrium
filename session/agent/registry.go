@@ -121,6 +121,12 @@ var claude = &Adapter{
 	// idle claude — never sends a stray keystroke.
 	SuggestionVisible: claudeSuggestionVisible,
 
+	// Collapsed-paste placeholder chip in the input box (claudePasteCollapsed). Claude
+	// renders a ≥4-line bracketed paste as "[Pasted text #N +L lines]", so a queued multi-line
+	// prompt never shows its first line for the delivery signature check — the chip is the
+	// only landing signal. Verified live against claude 2.1.207 (2026-07-13).
+	PasteCollapsed: claudePasteCollapsed,
+
 	// Live permission mode from the footer's "⏵⏵ … on" / "⏸ plan mode on"
 	// indicator, so the list chip tracks an in-session mode switch instead of
 	// the stale launch-time flag. Pinned against a live 2.1.178 capture
@@ -163,6 +169,13 @@ func selectionFooterTokens(s string) bool {
 // segment scan (see footerVisibleInSegments) applied to claude's footer tokens.
 func claudeSelectionFooterVisible(content string) bool {
 	return footerVisibleInSegments(content, selectionFooterTokens)
+}
+
+// claudePasteCollapsed backs the claude adapter's PasteCollapsed: it reports whether the input-box
+// readback is a "[Pasted text +N lines]" placeholder chip (see pasteChipRegex), which claude shows
+// in place of a ≥4-line bracketed paste.
+func claudePasteCollapsed(boxText string) bool {
+	return pasteChipRegex.MatchString(boxText)
 }
 
 // Codex CLI (openai/codex, Rust TUI). Strings verified against the repo at

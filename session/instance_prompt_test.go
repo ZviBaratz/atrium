@@ -2,6 +2,7 @@ package session
 
 import (
 	"context"
+	"fmt"
 	"os/exec"
 	"slices"
 	"strings"
@@ -47,10 +48,11 @@ func assertHardErr() error { return exec.ErrNotFound }
 // lets a full SendPrompt run be driven without a real tmux server, and is robust to how many
 // times SendPrompt re-captures (no brittle fixed response sequence).
 type fakeAgentPane struct {
-	box     string // current composer text ("" = empty/submitted)
-	pending string // text staged by set-buffer, applied on paste-buffer
-	gate    bool   // a startup gate is up: no composer, keystrokes would be swallowed
-	noLand  bool   // drop typed/pasted text on the floor (simulate a send that doesn't land)
+	box      string // current composer text ("" = empty/submitted)
+	pending  string // text staged by set-buffer, applied on paste-buffer
+	gate     bool   // a startup gate is up: no composer, keystrokes would be swallowed
+	noLand   bool   // drop typed/pasted text on the floor (simulate a send that doesn't land)
+	collapse bool   // render a ≥4-line paste as claude's "[Pasted text +N lines]" chip, not the text
 
 	typed  []string // recorded send-keys -l payloads
 	pasted []string // recorded paste-buffer applications
@@ -97,7 +99,14 @@ func (f *fakeAgentPane) exec() cmd_test.MockCmdExec {
 				f.pending = lastArg(args)
 			case slices.Contains(args, "paste-buffer"):
 				f.pasted = append(f.pasted, f.pending)
-				if !f.noLand {
+				switch {
+				case f.noLand:
+					// dropped on the floor
+				case f.collapse && strings.Count(f.pending, "\n") >= 3:
+					// claude collapses a ≥4-line bracketed paste into a placeholder chip whose
+					// text is NOT the pasted content, defeating a first-line signature match.
+					f.box += fmt.Sprintf("[Pasted text +%d lines]", strings.Count(f.pending, "\n"))
+				default:
 					f.box += f.pending
 				}
 			}
@@ -188,6 +197,30 @@ func TestSendPrompt_VerifiedDelivery(t *testing.T) {
 		require.Empty(t, fake.typed, "an already-staged prompt must not be retyped (no doubling)")
 		require.Empty(t, fake.pasted)
 		require.Equal(t, 1, fake.enters, "the staged prompt must simply be submitted")
+	})
+
+	t.Run("a collapsed multi-line paste is recognized as landed and submitted once", func(t *testing.T) {
+		// claude collapses a ≥4-line bracketed paste to "[Pasted text +N lines]", so the
+		// first-line signature never appears in the box. Delivery must treat the chip as landed:
+		// submit once, paste once (never re-paste and accumulate chips across retries).
+		fake := &fakeAgentPane{collapse: true}
+		inst := newPromptInstance(t, "collapsed", fake)
+
+		require.NoError(t, inst.SendPrompt("line one\nline two\nline three\nline four\nline five"))
+		require.Len(t, fake.pasted, 1, "the prompt must be pasted exactly once (no re-paste accumulation)")
+		require.Equal(t, 1, fake.enters, "a collapsed paste must be submitted exactly once")
+		require.Equal(t, "", fake.box, "the composer must be empty after submission")
+	})
+
+	t.Run("a retry sees the collapsed chip already staged and does not re-paste", func(t *testing.T) {
+		// A prior attempt pasted but could not confirm submission: the box already holds the chip.
+		// A fresh SendPrompt must skip the paste and just submit — the anti-accumulation guard.
+		fake := &fakeAgentPane{box: "[Pasted text +12 lines]", collapse: true}
+		inst := newPromptInstance(t, "collapsed-retry", fake)
+
+		require.NoError(t, inst.SendPrompt("line one\nline two\nline three\nline four"))
+		require.Empty(t, fake.pasted, "an already-staged collapsed paste must not be re-pasted")
+		require.Equal(t, 1, fake.enters, "the staged chip must simply be submitted")
 	})
 }
 

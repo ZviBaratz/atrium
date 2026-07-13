@@ -187,6 +187,14 @@ type Adapter struct {
 	// entirely (session/tmux's AcceptSuggestion gates on it).
 	SuggestionVisible func(raw string) bool
 
+	// PasteCollapsed reports whether the input-box readback is the agent's collapsed-paste
+	// placeholder chip rather than literal text: claude renders a ≥4-line bracketed paste as
+	// "[Pasted text #N +L lines]" instead of the pasted content. Queued-prompt delivery treats
+	// such a chip as the prompt having landed, since the chip carries no prompt text to match
+	// against the first-line signature. nil means the agent renders pastes inline, so the
+	// signature check alone suffices (codex/gemini/aider).
+	PasteCollapsed func(boxText string) bool
+
 	// PermissionMode reports the agent's current permission mode from the live
 	// pane footer's mode indicator (mode "" / known false = indeterminate, keep
 	// last value). It exists because the mode is runtime-mutable — a session

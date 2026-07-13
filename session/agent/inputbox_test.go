@@ -52,6 +52,26 @@ const liveTypedComposer = "" +
 	liveRule + "\n" +
 	"  ? for shortcuts · ← for agents\n"
 
+// A live composer holding a collapsed paste: claude renders a ≥4-line bracketed paste as a
+// "[Pasted text #N +L lines]" placeholder chip instead of the literal text (captured live from
+// claude 2.1.207, 2026-07-13). The literal first line never appears, which is why the delivery
+// signature check needs the chip as its landing signal.
+const liveCollapsedPasteComposer = "" +
+	"  some earlier transcript line\n" +
+	liveRule + "\n" +
+	"❯ [Pasted text #1 +29 lines]\n" +
+	liveRule + "\n" +
+	"  ? for shortcuts · ← for agents\n"
+
+// The same composer after the delivery retry re-pasted before the fix: chips accumulate on one
+// line. The chip predicate must still recognize this as collapsed paste.
+const liveAccumulatedPasteComposer = "" +
+	"  some earlier transcript line\n" +
+	liveRule + "\n" +
+	"❯ [Pasted text #1 +29 lines][Pasted text #2 +28 lines]\n" +
+	liveRule + "\n" +
+	"  ? for shortcuts · ← for agents\n"
+
 // The live folder-trust gate: a "❯ 1. …" selector, which reads as a box line even though it
 // is a gate. This is exactly why AwaitingInput cannot rely on box presence alone to exclude
 // it — GateUp must.
@@ -136,6 +156,64 @@ func TestInputBoxText(t *testing.T) {
 			t.Fatal("the menu selector reads as a box line; this test pins that known limit")
 		}
 	})
+}
+
+func TestClaudePasteCollapsed(t *testing.T) {
+	// The chip is read back through the same input-box parser the delivery check uses, so
+	// assert on inputBoxText's output — the exact string claudePasteCollapsed will see.
+	t.Run("inputBoxText reads back the collapsed-paste chip verbatim", func(t *testing.T) {
+		text, ok := inputBoxText(liveCollapsedPasteComposer)
+		if !ok {
+			t.Fatal("a composer showing a collapsed paste must be detected as present")
+		}
+		if text != "[Pasted text #1 +29 lines]" {
+			t.Fatalf("readback = %q, want the collapsed-paste chip", text)
+		}
+	})
+
+	collapsed := []struct {
+		name, box string
+	}{
+		{"single chip", "[Pasted text #1 +29 lines]"},
+		{"no index", "[Pasted text +5 lines]"},
+		{"singular line", "[Pasted text +1 line]"},
+		{"accumulated chips", "[Pasted text #1 +29 lines][Pasted text #2 +28 lines]"},
+	}
+	for _, c := range collapsed {
+		t.Run("collapsed: "+c.name, func(t *testing.T) {
+			if !claudePasteCollapsed(c.box) {
+				t.Errorf("%q must be recognized as a collapsed paste", c.box)
+			}
+		})
+	}
+
+	notCollapsed := []struct {
+		name, box string
+	}{
+		{"empty box", ""},
+		{"typed text", "refactor the parser and add a regression test"},
+		{"mentions pasted but no chip", "explain how bracketed paste works"},
+		{"live ghost hint", `Try "how do I log an error?"`},
+	}
+	for _, c := range notCollapsed {
+		t.Run("plain: "+c.name, func(t *testing.T) {
+			if claudePasteCollapsed(c.box) {
+				t.Errorf("%q must not be recognized as a collapsed paste", c.box)
+			}
+		})
+	}
+
+	// End-to-end through the adapter wiring: claude has the predicate, others leave it nil.
+	if claude := Resolve("claude"); claude.PasteCollapsed == nil {
+		t.Error("the claude adapter must wire PasteCollapsed")
+	} else if text, _ := claude.InputBoxText(liveCollapsedPasteComposer); !claude.PasteCollapsed(text) {
+		t.Error("the claude adapter must recognize its own collapsed-paste chip")
+	}
+	for _, name := range []string{"codex", "gemini", "aider"} {
+		if a := Resolve(name); a.PasteCollapsed != nil {
+			t.Errorf("%s renders pastes inline and must leave PasteCollapsed nil", name)
+		}
+	}
 }
 
 func TestAdapterInputBoxVisible(t *testing.T) {

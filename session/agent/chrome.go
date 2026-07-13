@@ -13,6 +13,13 @@ import (
 
 var whiteSpaceRegex = regexp.MustCompile(`\s+`)
 
+// pasteChipRegex matches claude's collapsed-paste placeholder in an input-box readback, e.g.
+// "[Pasted text #1 +29 lines]" — the readback of a ≥4-line bracketed paste (claude renders it
+// as a chip rather than the literal text). Deliberately tolerant: the "#N" index is optional
+// and "line"/"lines" both match. Verified live against claude 2.1.207 (2026-07-13). See
+// claudePasteCollapsed and prompt delivery (session/prompt.go boxHoldsPrompt).
+var pasteChipRegex = regexp.MustCompile(`\[Pasted text[^\]]*\+\d+ lines?\]`)
+
 // workChromeLines is footerRegion's fallback window when the pane shows no
 // input-box border: the last few non-empty lines, where a minimal footer or a
 // degenerate capture keeps its live status.

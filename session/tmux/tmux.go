@@ -553,6 +553,22 @@ func (t *Session) InputBoxText() (string, bool) {
 	return t.adapter.InputBoxText(cleanForDetection(raw))
 }
 
+// InputBoxCollapsedPaste reports whether the live composer is showing the agent's collapsed-paste
+// placeholder chip (claude's "[Pasted text +N lines]") rather than literal text. It backs the
+// closed-loop send: a ≥4-line prompt is delivered as a bracketed paste that claude collapses into
+// this chip, so the first-line signature never appears — the chip is the only landing signal.
+// False for agents without a PasteCollapsed predicate (they render pastes inline).
+func (t *Session) InputBoxCollapsedPaste() bool {
+	if t.adapter.PasteCollapsed == nil {
+		return false
+	}
+	text, ok := t.InputBoxText()
+	if !ok {
+		return false
+	}
+	return t.adapter.PasteCollapsed(text)
+}
+
 // Restore attaches to an existing session and restores the window size
 func (t *Session) Restore() error {
 	// The attach client lives until detach/close, so it runs under the bare base

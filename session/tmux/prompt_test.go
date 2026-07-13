@@ -85,6 +85,35 @@ func TestSendPasted_UsesBracketedPasteBuffer(t *testing.T) {
 	require.True(t, contains(pasteBuffer, "-d"), "paste must use -d so the buffer is cleaned up")
 }
 
+// collapsedPastePane is claude's composer showing a collapsed-paste chip (its render of a
+// ≥4-line bracketed paste) instead of the literal pasted text.
+const collapsedPastePane = "" +
+	"  some earlier transcript line\n" +
+	"────────────────────────────────────────────────\n" +
+	"❯ [Pasted text #1 +29 lines]\n" +
+	"────────────────────────────────────────────────\n" +
+	"  ? for shortcuts\n"
+
+func TestInputBoxCollapsedPaste(t *testing.T) {
+	t.Run("true when the composer shows a collapsed-paste chip", func(t *testing.T) {
+		var sent [][]string
+		s := NewSessionWithDeps(context.Background(), "chip", "claude", NewMockPtyFactory(t), captureExec(collapsedPastePane, &sent))
+		require.True(t, s.InputBoxCollapsedPaste())
+	})
+
+	t.Run("false for an empty composer", func(t *testing.T) {
+		var sent [][]string
+		s := NewSessionWithDeps(context.Background(), "empty", "claude", NewMockPtyFactory(t), captureExec(boxPane, &sent))
+		require.False(t, s.InputBoxCollapsedPaste())
+	})
+
+	t.Run("false for an agent without a PasteCollapsed predicate", func(t *testing.T) {
+		var sent [][]string
+		s := NewSessionWithDeps(context.Background(), "codex", "codex", NewMockPtyFactory(t), captureExec(collapsedPastePane, &sent))
+		require.False(t, s.InputBoxCollapsedPaste(), "codex renders pastes inline; the chip text must not be mistaken for one")
+	})
+}
+
 func contains(args []string, want string) bool {
 	for _, a := range args {
 		if a == want {
