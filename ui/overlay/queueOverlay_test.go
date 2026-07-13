@@ -65,11 +65,18 @@ func TestQueueOverlay_RemoveArmsOnceWithSelection(t *testing.T) {
 	require.False(t, o.RemoveRequested(), "RemoveRequested is read-once")
 }
 
-func TestQueueOverlay_EscCancels(t *testing.T) {
+func TestQueueOverlay_EscCloses(t *testing.T) {
 	o := NewQueueOverlay("x")
 	o.SetQueue([]string{"a"}, false)
-	require.True(t, o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyEsc}))
-	require.True(t, o.IsCanceled())
+	require.True(t, o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyEsc}), "esc closes the overlay")
+}
+
+func TestQueueOverlay_HeadInFlightReflectsQueue(t *testing.T) {
+	o := NewQueueOverlay("x")
+	o.SetQueue([]string{"a"}, true)
+	require.True(t, o.HeadInFlight())
+	o.SetQueue([]string{"a"}, false)
+	require.False(t, o.HeadInFlight())
 }
 
 func TestQueueOverlay_MessageShownAndClearedOnSetQueue(t *testing.T) {

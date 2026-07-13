@@ -241,13 +241,17 @@ func (m *home) handleRenameState(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 // instance the overlay was opened for (queueTarget), not the live selection —
 // which can move while the overlay is open. A successful cancel persists and
 // refreshes the list; cancelling the last entry closes the overlay and flashes on
-// the now-visible hint bar; a refusal (the in-flight head, or a queue that shifted
-// under the snapshot) explains itself in-overlay, since the hint bar is hidden
-// behind the box.
+// the now-visible hint bar; a refusal explains itself in-overlay (since the hint
+// bar is hidden behind the box), distinguishing the in-flight head from a queue
+// that shifted under the snapshot.
 func (m *home) handleQueueState(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	shouldClose := m.queueOverlay.HandleKeyPress(msg)
 
 	if m.queueOverlay.RemoveRequested() && m.queueTarget != nil {
+		// Capture what the user was acting on *before* the refresh so a refusal can
+		// name the right reason: cancelling the head they could see was in flight
+		// (marked with the ⟳ glyph) versus a stale index whose queue shifted.
+		refusingInFlightHead := m.queueOverlay.SelectedIndex() == 0 && m.queueOverlay.HeadInFlight()
 		removed := m.queueTarget.CancelQueuedPrompt(m.queueOverlay.SelectedIndex(), m.queueOverlay.SelectedText())
 		if removed {
 			if err := m.persistInstances(); err != nil {
@@ -258,11 +262,15 @@ func (m *home) handleQueueState(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if len(texts) == 0 {
 			// The queue drained — close and flash on the (now visible) hint bar.
 			m.dismissQueueOverlay()
-			return m, tea.Sequence(m.handleInfoNotice("queue cleared"), m.instanceChanged())
+			return m, tea.Batch(m.handleInfoNotice("queue cleared"), m.instanceChanged())
 		}
 		m.queueOverlay.SetQueue(texts, headInFlight)
 		if !removed {
-			m.queueOverlay.SetMessage("can't cancel — prompt is being delivered")
+			if refusingInFlightHead {
+				m.queueOverlay.SetMessage("can't cancel — prompt is being delivered")
+			} else {
+				m.queueOverlay.SetMessage("can't cancel — the queue just changed")
+			}
 		}
 		return m, m.instanceChanged()
 	}

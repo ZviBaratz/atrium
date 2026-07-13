@@ -134,6 +134,32 @@ func TestQueueCancel_InFlightHeadRefused(t *testing.T) {
 	require.Contains(t, h.queueOverlay.Render(), "being delivered", "the refusal is explained in-overlay")
 }
 
+func TestQueueCancel_StaleIndexRefusedWithShiftMessage(t *testing.T) {
+	h := newCreateFormHome(t)
+	h.storage = mustStorage(t)
+	inst := queueInstance(t, "q")
+	inst.QueueFollowupPrompt("a")
+	inst.QueueFollowupPrompt("b")
+	h.list.AddInstance(inst)
+	h.list.SelectInstance(inst)
+	_, _ = h.openQueue() // snapshot ["a","b"], cursor on head "a"
+
+	// A delivery pops the head after the overlay snapshotted it, so the cursor's
+	// index/text no longer matches the live queue — a refusal that is not the
+	// in-flight head.
+	txt, ok := inst.ClaimPrompt()
+	require.True(t, ok)
+	inst.ClearPrompt(txt) // "a" delivered and popped; live queue is now ["b"]
+
+	_, _ = h.handleKeyPress(runeKey("d"))
+
+	require.Equal(t, 1, inst.QueueLen(), "the stale index cancels nothing")
+	require.Equal(t, stateQueue, h.state, "the overlay stays open")
+	require.Contains(t, h.queueOverlay.Render(), "the queue just changed",
+		"a shifted-queue refusal is named distinctly from an in-flight head")
+	require.NotContains(t, h.queueOverlay.Render(), "being delivered")
+}
+
 func TestQueueCancel_TargetsOpenedInstanceNotSelection(t *testing.T) {
 	h := newCreateFormHome(t)
 	h.storage = mustStorage(t)

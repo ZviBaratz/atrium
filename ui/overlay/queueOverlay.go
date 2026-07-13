@@ -24,7 +24,6 @@ type QueueOverlay struct {
 	message      string // transient in-overlay note (e.g. a cancel refusal); cleared by SetQueue
 	width        int
 	removeReq    bool
-	canceled     bool
 }
 
 // queueInFlightMark rides the head row while its prompt is being delivered; a
@@ -64,7 +63,6 @@ func (q *QueueOverlay) SetMessage(text string) { q.message = text }
 func (q *QueueOverlay) HandleKeyPress(msg tea.KeyMsg) (shouldClose bool) {
 	switch msg.String() {
 	case "esc", "ctrl+c":
-		q.canceled = true
 		return true
 	case "up", "k":
 		if q.cursor > 0 {
@@ -105,8 +103,9 @@ func (q *QueueOverlay) SelectedText() string {
 	return q.items[q.cursor]
 }
 
-// IsCanceled reports whether the user dismissed the overlay.
-func (q *QueueOverlay) IsCanceled() bool { return q.canceled }
+// HeadInFlight reports whether the displayed head prompt is being delivered — the
+// app reads this to tell an in-flight-head cancel refusal apart from a stale one.
+func (q *QueueOverlay) HeadInFlight() bool { return q.headInFlight }
 
 // SetWidth sets the box width, flooring it so the box never collapses.
 func (q *QueueOverlay) SetWidth(width int) {
