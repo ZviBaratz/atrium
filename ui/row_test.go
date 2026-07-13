@@ -141,6 +141,11 @@ func TestRender_QueuedPromptChip(t *testing.T) {
 
 	require.NotContains(t, ansi.Strip(r.Render(bare, 0, false, false)), th.Glyphs.Queued,
 		"a session with no queued prompt shows no pending-prompt glyph")
+
+	// Depth > 1 surfaces the count so the user knows there's a queue worth opening.
+	queued.QueueFollowupPrompt("and again")
+	deep := ansi.Strip(r.Render(queued, 0, false, false))
+	require.Contains(t, deep, th.Glyphs.Queued+"2", "two queued prompts show the count")
 }
 
 func TestGitChips_PresentAndAbsent(t *testing.T) {
