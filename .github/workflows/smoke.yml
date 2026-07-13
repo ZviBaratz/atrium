@@ -9,6 +9,12 @@ name: Smoke (e2e)
 # tmux, jq) and drives a real tmux server through a PTY. It runs on a weekly
 # schedule and on demand; `continue-on-error: true` means a red run surfaces rot
 # without ever blocking a PR.
+#
+# Note: charmbracelet/vhs-action (the "obvious" choice) can't be used — its
+# linux ffmpeg installer hard-matches BtbN/FFmpeg-Builds `ffmpeg-n5.1` assets,
+# which that project's rolling "latest" release no longer ships (n7.1/n8.1 now),
+# so the action fails with "Failed to install ffmpeg". We install the deps
+# directly instead: ffmpeg/ttyd/tmux/jq from apt, vhs pinned via `go install`.
 on:
   schedule:
     # Weekly, Monday 07:00 UTC.
@@ -34,15 +40,18 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      # Bundles the vhs deps (vhs + ttyd + ffmpeg) onto PATH.
+      # run.sh's non-Go deps. ffmpeg is only a PATH requirement (the tape outputs
+      # .txt, not video), ttyd is vhs's headless terminal, tmux+jq drive/seed the
+      # flow. All four are in ubuntu's apt.
+      - name: Install smoke dependencies
+        run: sudo apt-get update && sudo apt-get install -y tmux jq ffmpeg ttyd
+
+      # vhs pinned to the version the committed golden was captured with; setup-go
+      # already provides the toolchain. Put GOPATH/bin on PATH for run.sh.
       - name: Install vhs
-        uses: charmbracelet/vhs-action@59641cdc7fadf3978db65eb8c6937ea2752f4ec3  # v2.1.0
+        run: |
+          go install github.com/charmbracelet/vhs@v0.11.0
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
 
-      # tmux + jq are the remaining run.sh deps (vhs-action covers the rest).
-      - name: Install tmux and jq
-        run: sudo apt-get update && sudo apt-get install -y tmux jq
-
-      # setup-go puts `go` on PATH, so run.sh's GO defaults correctly. Call the
-      # script directly instead of `just` to avoid installing just on the runner.
       - name: Run smoke flow
         run: RUNS=1 bash test/smoke/run.sh
