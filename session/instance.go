@@ -15,6 +15,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -1290,6 +1291,45 @@ func (i *Instance) ClearPrompt(deliveredText string) {
 		return
 	}
 	i.promptQueue = i.promptQueue[1:]
+}
+
+// CancelQueuedPrompt removes the queued prompt at idx, but only when it still
+// matches expectedText and is not the in-flight head. The text match is the same
+// double-settle guard ClearPrompt uses: if a delivery popped the head since the
+// UI snapshotted the queue, the stale idx no longer matches and the call is a
+// safe no-op instead of cancelling the wrong prompt. idx 0 is cancellable only
+// while no send is in flight (an actively-delivering head is locked). Returns
+// whether an entry was removed.
+func (i *Instance) CancelQueuedPrompt(idx int, expectedText string) bool {
+	i.promptMu.Lock()
+	defer i.promptMu.Unlock()
+	if idx < 0 || idx >= len(i.promptQueue) {
+		return false
+	}
+	if idx == 0 && i.promptInFlight {
+		return false
+	}
+	if i.promptQueue[idx].text != expectedText {
+		return false
+	}
+	i.promptQueue = slices.Delete(i.promptQueue, idx, idx+1)
+	return true
+}
+
+// QueueView returns a read-only snapshot for the management overlay: head-first
+// prompt texts plus whether the head is currently being delivered. Taken under
+// one lock so headInFlight can't tear away from the texts it describes.
+func (i *Instance) QueueView() (texts []string, headInFlight bool) {
+	i.promptMu.Lock()
+	defer i.promptMu.Unlock()
+	if len(i.promptQueue) == 0 {
+		return nil, false
+	}
+	texts = make([]string, len(i.promptQueue))
+	for idx, qp := range i.promptQueue {
+		texts[idx] = qp.text
+	}
+	return texts, i.promptInFlight
 }
 
 // TapEnter sends an enter key press to the tmux session if AutoYes is enabled.
