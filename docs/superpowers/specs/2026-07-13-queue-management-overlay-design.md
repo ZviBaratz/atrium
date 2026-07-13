@@ -55,16 +55,26 @@ Plus a small discoverability win: show the pending **count** on the row glyph
 ### Opening (`Q` from the list)
 
 `Q` (mnemonic for **Q**ueue; `q` is quit) on the default list opens the overlay
-for the selected session. Guards, mirroring `openQuickSend`:
+for the selected session. Guards:
 
 - No selection → no-op.
-- Paused session → info notice (`"session is paused …"`), don't open. (A paused
-  session's queue is not actionable and reload rebuilds it.)
-- **Empty queue → info notice** (`nothing queued for "<name>"`), don't open. The
-  row glyph already tells the user when there is something to manage, so opening
-  onto an empty box would be a dead end.
+- **Empty queue** (`!HasQueuedPrompt()`) → info notice
+  (`nothing queued for "<name>"`), don't open. The row glyph already tells the
+  user when there is something to manage, so opening onto an empty box would be a
+  dead end.
 - Otherwise: record the target instance, snapshot its queue, build the overlay,
   enter `stateQueue`.
+
+**Paused and Loading sessions are allowed.** Unlike `openQuickSend` (which needs
+a live pane and so blocks both), queue management is a pure in-memory read +
+`CancelQueuedPrompt` + persist — no pane required. Blocking paused would create a
+trap: to cancel a queued prompt on a paused session the user would have to resume
+first, and resuming can deliver that very prompt before they get to cancel it. The
+rename path (`selectedActionable`, which only blocks `nil`/`Loading`) is the
+precedent that management actions run on paused sessions; the empty-queue guard
+already screens out the common Loading case (a just-started session with no queue
+yet), and the in-flight-head lock in `CancelQueuedPrompt` protects a boot prompt
+that *is* mid-delivery.
 
 ### The overlay
 
@@ -346,8 +356,11 @@ All `app`-level tests stay hermetic (temp `HOME` via the existing `TestMain` in
 - empty `items` renders the empty-state and `SelectedText()` is `""`.
 
 ### `app` integration tests (`app/queue_test.go`, mirroring `quicksend_test.go`)
-- `openQueue` with no selection / paused / empty queue → info notice, `state`
-  stays `stateDefault`, no overlay built.
+- `openQueue` with no selection → no-op, `state` stays `stateDefault`, no overlay.
+- `openQueue` on a session with an **empty** queue → info notice, `state` stays
+  `stateDefault`, no overlay built.
+- `openQueue` on a **paused** session that has a queue → opens normally
+  (`stateQueue`, overlay populated) — management needs no live pane.
 - `openQueue` on a session with a queue → `stateQueue`, overlay populated from
   `QueueView`.
 - `handleQueueState` `d` on a tail entry → `CancelQueuedPrompt` called, state
