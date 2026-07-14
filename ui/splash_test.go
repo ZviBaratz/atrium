@@ -8,6 +8,7 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/muesli/termenv"
 	"github.com/stretchr/testify/require"
 )
 
@@ -264,6 +265,100 @@ func TestSplashLUTThemeAnchored(t *testing.T) {
 	// The lower stops (warm→blue) are rim-independent; the upper stops must move.
 	require.NotEqual(t, lut.colors[len(lut.colors)-4], otherLUT.colors[len(otherLUT.colors)-4],
 		"the rim hue must reach the upper stops of the ramp")
+}
+
+// withColorProfile pins lipgloss's global color profile for one test and
+// restores it afterward. The emitter's output is profile-dependent by
+// construction, and a test binary's stdout is not a TTY — so the ambient
+// profile is Ascii, and the SGR path never runs unless a test asks for it.
+func withColorProfile(t *testing.T, prof termenv.Profile) {
+	t.Helper()
+	prev := lipgloss.ColorProfile()
+	lipgloss.SetColorProfile(prof)
+	t.Cleanup(func() { lipgloss.SetColorProfile(prev) })
+}
+
+// TestSplashAffixBracketsMatchRender pins the invariant the whole emitter rests
+// on: writing a style's cached prefix, then the cells, then its suffix must
+// produce exactly what Style.Render would have produced for those cells.
+// Splitting the SGR bracket out of lipgloss is only safe if the bracket really
+// is a pure wrapper — for every stop, on every profile, including the colorless
+// one where it has to collapse to plain text.
+func TestSplashAffixBracketsMatchRender(t *testing.T) {
+	profiles := map[string]termenv.Profile{
+		"truecolor": termenv.TrueColor,
+		"ansi256":   termenv.ANSI256,
+		"ansi":      termenv.ANSI,
+		"ascii":     termenv.Ascii,
+	}
+	// Spaces and braille included: the emitter brackets whatever the ramp
+	// produced, and lipgloss has space-sensitive paths for some attributes.
+	contents := []string{"x", "▓▓▓", "   ", "⠿⠿", "·-=#"}
+	for name, prof := range profiles {
+		t.Run(name, func(t *testing.T) {
+			withColorProfile(t, prof)
+			// Built directly rather than via splashLUTFor: this asserts on the
+			// affixes themselves; TestSplashLUTCacheTracksColorProfile covers
+			// the cache's keying.
+			lut := buildSplashLUT(splashTestPalette())
+			require.Equal(t, len(lut.styles), lut.starIndex(),
+				"the star sentinel must sit exactly one past the last gradient stop")
+			for _, content := range contents {
+				for i, st := range lut.styles {
+					require.Equal(t, st.Render(content),
+						lut.affix[i].prefix+content+lut.affix[i].suffix,
+						"stop %d must bracket %q exactly as Render does", i, content)
+				}
+				require.Equal(t, lut.star.Render(content),
+					lut.starAffix.prefix+content+lut.starAffix.suffix,
+					"the star style must bracket %q exactly as Render does", content)
+			}
+			if prof == termenv.Ascii {
+				require.Empty(t, lut.affix[1].prefix, "a colorless profile must degrade to plain")
+				require.Empty(t, lut.affix[1].suffix, "a colorless profile must degrade to plain")
+			}
+		})
+	}
+}
+
+// TestSplashLUTCacheTracksColorProfile guards the trap that baking the affixes
+// introduces. Style.Render re-read the color profile on every call, so a LUT
+// cached under one profile still rendered correctly under the next; the affixes
+// are frozen at build time, so the cache has to key on the profile or it pins
+// whichever one happened to build the entry. That matters most in tests: a test
+// binary starts out colorless, so a stale entry would silently turn any later
+// truecolor assertion into a test of plain text.
+func TestSplashLUTCacheTracksColorProfile(t *testing.T) {
+	pal := splashTestPalette()
+	pal.Purple = lipgloss.Color("#123456") // a private cache entry, so other tests are unaffected
+
+	withColorProfile(t, termenv.Ascii)
+	require.Empty(t, splashLUTFor(pal).affix[1].prefix, "a colorless profile emits no SGR")
+
+	withColorProfile(t, termenv.TrueColor)
+	require.NotEmpty(t, splashLUTFor(pal).affix[1].prefix,
+		"a LUT cached under Ascii must not pin the colorless path once the profile is truecolor")
+}
+
+// TestRenderSplashFieldColorByProfile pins the emitted bytes end-to-end: a
+// truecolor terminal gets SGR-bracketed runs, a colorless one gets the very
+// same glyphs with no escapes at all.
+func TestRenderSplashFieldColorByProfile(t *testing.T) {
+	pal := splashTestPalette()
+	render := func() string {
+		return renderSplashField(60, 20, 3, pal, centeredClearing(20, 20, 4), splashVariantLegacy)
+	}
+
+	withColorProfile(t, termenv.TrueColor)
+	colored := render()
+	require.Contains(t, colored, "\x1b[38;2;", "a truecolor profile must emit truecolor SGR")
+
+	withColorProfile(t, termenv.Ascii)
+	plain := render()
+	require.NotContains(t, plain, "\x1b[", "a colorless profile must emit no escapes")
+
+	require.Equal(t, plain, ansi.Strip(colored),
+		"color must be the only difference — the glyphs are identical either way")
 }
 
 // TestSplashFitsExported pins the exported gate the screensaver entry uses —

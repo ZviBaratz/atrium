@@ -9,6 +9,7 @@ package ui
 // it; every other empty state keeps the plain FallbackBanner.
 
 import (
+	"strconv"
 	"strings"
 	"sync"
 
@@ -188,6 +189,13 @@ type splashLUT struct {
 // splashAffix is a style's rendered prefix/suffix around its content.
 type splashAffix struct{ prefix, suffix string }
 
+// starIndex is the run index that means "star" rather than a gradient stop.
+// The emitter's index protocol (negative = blank, >= starIndex = star) spans
+// two files, and the gradient's length is now carried by two parallel slices,
+// so both sides resolve it here rather than each reaching for a len() of their
+// own.
+func (l *splashLUT) starIndex() int { return len(l.affix) }
+
 // splashAffixFor extracts a style's SGR bracket by rendering a sentinel and
 // splitting on it. Going through Render (rather than formatting the escape by
 // hand) is what keeps this correct under lipgloss's color-profile degradation:
@@ -209,11 +217,21 @@ var (
 )
 
 // splashLUTFor returns the memoized gradient for a palette, keyed by every
-// anchor it draws from. Bubble Tea renders on a single goroutine, but the mutex
-// is cheap insurance since both the preview and (future) terminal panes render
-// here.
+// anchor it draws from *and* by the active color profile. Bubble Tea renders on
+// a single goroutine, but the mutex is cheap insurance since both the preview
+// and (future) terminal panes render here.
+//
+// The profile belongs in the key because the entry now bakes the styles' SGR
+// bytes at build time (see splashAffix). Style.Render used to re-read the
+// profile on every call, so a palette-only key was enough; a cached entry would
+// track a profile change on its own. It no longer would — it would keep
+// emitting the profile it was built under. Nothing in the binary changes the
+// profile after startup, so this is insurance rather than a live fix, but tests
+// do change it, and a cache that silently pins the colorless path is exactly
+// the trap that hides a regression in the SGR bytes this LUT exists to emit.
 func splashLUTFor(pal theme.Palette) *splashLUT {
 	key := strings.Join([]string{
+		strconv.Itoa(int(lipgloss.ColorProfile())),
 		string(pal.Danger), string(pal.Purple), string(pal.Accent),
 		string(pal.Cyan), string(pal.Fg),
 	}, "|")
@@ -316,7 +334,7 @@ func splashRunAffix(styleIdx int, lut *splashLUT) splashAffix {
 	switch {
 	case styleIdx < 0: // blank run — raw spaces, no color
 		return splashAffix{}
-	case styleIdx >= len(lut.affix): // star run — bright near-white
+	case styleIdx >= lut.starIndex(): // star run — bright near-white
 		return lut.starAffix
 	default: // gradient run
 		return lut.affix[styleIdx]
