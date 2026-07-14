@@ -89,7 +89,8 @@ func TestSplashValNoiseAnchorsLattice(t *testing.T) {
 }
 
 // splashTestVariants enumerates every variant for contract loops, with names
-// for failure messages.
+// for failure messages. Hand-maintained — TestSplashTestVariantsCoversEnum is
+// what keeps it honest.
 func splashTestVariants() map[string]splashVariant {
 	return map[string]splashVariant{
 		"legacy":  splashVariantLegacy,
@@ -98,6 +99,26 @@ func splashTestVariants() map[string]splashVariant {
 		"flow":    splashVariantFlow,
 		"julia":   splashVariantJulia,
 		"mandala": splashVariantMandala,
+	}
+}
+
+// TestSplashTestVariantsCoversEnum guards the map above, which is the entry
+// point to this package's two per-variant sweeps: TestSplashVariantsContract
+// (determinism, bounds, blank borders, frame-to-frame animation) and
+// BenchmarkRenderSplashVariants (the frame budget). Both iterate the map, so a
+// variant left out of it is not partially covered — it is invisible to both,
+// and nothing fails to say so. Adding one is exactly when a contract breach is
+// most likely and least likely to be noticed.
+func TestSplashTestVariantsCoversEnum(t *testing.T) {
+	seen := make(map[splashVariant]bool, len(splashTestVariants()))
+	for name, v := range splashTestVariants() {
+		require.Falsef(t, seen[v], "%q duplicates a variant already in the map", name)
+		seen[v] = true
+	}
+	for v := splashVariant(0); v < splashVariantCount; v++ {
+		require.Truef(t, seen[v],
+			"variant %d is missing from splashTestVariants, so it escapes both "+
+				"the contract loop and the benchmark", int(v))
 	}
 }
 
