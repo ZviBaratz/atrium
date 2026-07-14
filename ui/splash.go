@@ -1,12 +1,15 @@
 package ui
 
-// The empty-state splash: a slow-drifting radial-ripple field that appears to
-// emanate from the ATRIUM wordmark and fades out at a round vignette. The field
-// is a cheap sum-of-sines interference pattern sampled per character cell,
+// The empty-state splash: a slow-drifting field that appears to emanate from
+// the ATRIUM wordmark and fades out at the pane's edges. The field is sampled
+// per character cell from one of several generators (see splashVariant),
 // modulated by a radial envelope, colored by a theme-anchored gradient, and
 // composited *behind* the existing wordmark+message block (which is left
 // untouched, so its styling survives). Only the idle "no agents" screen uses
 // it; every other empty state keeps the plain FallbackBanner.
+//
+// This file owns the scene composition, the gradient LUT, and the emitter; the
+// field math and the per-cell loops live in splash_field.go.
 
 import (
 	"strconv"
@@ -36,12 +39,12 @@ const (
 	// concentric ring octaves + rotationally-symmetric petals + an isotropic
 	// fine texture. Every term is direction-free (radial, or a set of plane waves
 	// whose directions cancel), so the plasma reads rich but never skewed.
-	rippleFreq1 = 0.55  // primary ring spacing
-	rippleFreq2 = 0.31  // second ring octave (drifts at a different rate)
-	rippleFreq3 = 0.14  // slow ring that pulses the angular petals
+	plasmaFreq1 = 0.55  // primary ring spacing
+	plasmaFreq2 = 0.31  // second ring octave (drifts at a different rate)
+	plasmaFreq3 = 0.14  // slow ring that pulses the angular petals
 	petalCount  = 6.0   // even → rotationally symmetric petals, no directional lean
-	rippleWarp  = 3.6   // domain-warp amplitude in cells: wavy, organic filaments
-	rippleWarpF = 0.055 // domain-warp spatial frequency
+	plasmaWarp  = 3.6   // domain-warp amplitude in cells: wavy, organic filaments
+	plasmaWarpF = 0.055 // domain-warp spatial frequency
 	// isoFreq/isoSpeed drive three plane waves 120° apart (iso*Cos/Sin below);
 	// their directions sum to zero, so the fine texture shimmers isotropically
 	// with no diagonal grain — the fix for the field looking skewed.
@@ -52,8 +55,8 @@ const (
 	iso1Sin   = 0.8660254037844386
 	iso2Cos   = -0.5
 	iso2Sin   = -0.8660254037844386
-	// rippleAmp is the sum of the term weights below; normalizes v into [0,1].
-	rippleAmp = 1.0 + 0.55 + 0.40 + 3*isoWeight
+	// plasmaAmp is the sum of the term weights below; normalizes v into [0,1].
+	plasmaAmp = 1.0 + 0.55 + 0.40 + 3*isoWeight
 
 	// edgeVignetteFrac is the fraction of each dimension over which the full-bleed
 	// field fades to black at the pane border, so it softens into the edges
@@ -364,7 +367,7 @@ func starHash(col, row int) float64 {
 	return splashCellHash(col, row, seedStar)
 }
 
-// overlayAt composites fg over bg (the ripple field) at cell (placeX, placeY),
+// overlayAt composites fg over bg (the splash field) at cell (placeX, placeY),
 // splicing width-correctly around bg's ANSI escapes. Adapted from
 // overlay.PlaceOverlay (ui/overlay/overlay.go) but deliberately WITHOUT its
 // background fade — the gradient must show through, not be dimmed — and without

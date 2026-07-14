@@ -574,18 +574,18 @@ func splashFieldAt(v splashVariant) func(dx, dy, phase float64) (val, aux float6
 // isotropic fine texture (three plane waves 120° apart, so no diagonal
 // grain). Returns the raw value and the warped angle (its swirl input).
 func splashLegacyAt(dx, dy, phase float64) (val, theta float64) {
-	wx := dx + rippleWarp*math.Sin(dy*rippleWarpF-phase*0.4)
-	wy := dy + rippleWarp*math.Sin(dx*rippleWarpF-phase*0.4)
+	wx := dx + plasmaWarp*math.Sin(dy*plasmaWarpF-phase*0.4)
+	wy := dy + plasmaWarp*math.Sin(dx*plasmaWarpF-phase*0.4)
 	d := math.Hypot(wx, wy)
 	theta = math.Atan2(wy, wx)
 	tex := math.Sin(dx*isoFreq-phase*isoSpeed) +
 		math.Sin((dx*iso1Cos+dy*iso1Sin)*isoFreq-phase*isoSpeed) +
 		math.Sin((dx*iso2Cos+dy*iso2Sin)*isoFreq-phase*isoSpeed)
-	v := math.Sin(d*rippleFreq1-phase) +
-		0.55*math.Sin(d*rippleFreq2-phase*0.7) +
-		0.40*math.Sin(d*rippleFreq3-phase*0.5)*math.Cos(theta*petalCount) +
+	v := math.Sin(d*plasmaFreq1-phase) +
+		0.55*math.Sin(d*plasmaFreq2-phase*0.7) +
+		0.40*math.Sin(d*plasmaFreq3-phase*0.5)*math.Cos(theta*petalCount) +
 		isoWeight*tex
-	return clamp01((v/rippleAmp + 1) * 0.5), theta
+	return clamp01((v/plasmaAmp + 1) * 0.5), theta
 }
 
 // renderSplashField builds the colored plasma background: exactly h rows of

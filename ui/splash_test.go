@@ -163,7 +163,7 @@ func TestOverlayCenterComposites(t *testing.T) {
 	}
 }
 
-// fieldGlyphs are ramp glyphs that only the ripple field emits — none appear in
+// fieldGlyphs are ramp glyphs that only the splash field emits — none appear in
 // the wordmark art (box-drawing + ░) or the onboarding message — so their
 // presence in a stripped render proves the field engaged, and their absence
 // proves the plain fallback did.
@@ -193,13 +193,13 @@ func TestPreviewSplashStringBounds(t *testing.T) {
 		require.Containsf(t, stripped, msg, "%dx%d: onboarding message must survive", w, h)
 		require.Containsf(t, stripped, "█", "%dx%d: wordmark must survive", w, h)
 		require.Truef(t, strings.ContainsAny(stripped, fieldGlyphs),
-			"%dx%d: ripple field must render behind the wordmark", w, h)
+			"%dx%d: splash field must render behind the wordmark", w, h)
 	}
 }
 
 // TestPreviewSplashFallbackBelowFloor guards the size gate: below the splashFits
 // floor the idle screen must fall back to the plain centered wordmark — bounded,
-// panic-free, and with no field glyphs — never a clipped ripple.
+// panic-free, and with no field glyphs — never a clipped field.
 func TestPreviewSplashFallbackBelowFloor(t *testing.T) {
 	for _, s := range [][2]int{{49, 18}, {50, 17}, {40, 12}, {49, 17}, {10, 4}} {
 		w, h := s[0], s[1]

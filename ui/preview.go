@@ -55,7 +55,7 @@ type PreviewPane struct {
 	width  int
 	height int
 
-	// splashFrame is the current animation frame for the idle-splash ripple
+	// splashFrame is the current animation frame for the idle splash
 	// field, pushed from the app's 60fps splash tick via SetSplashFrame.
 	splashFrame  int
 	previewState previewState
@@ -80,7 +80,7 @@ type previewState struct {
 	// fallback is true if the preview pane is displaying fallback text
 	fallback bool
 	// splash is true only for the idle empty screen (no agents): String() then
-	// renders the animated ripple field behind the wordmark. Implies fallback.
+	// renders the animated splash field behind the wordmark. Implies fallback.
 	splash bool
 	// splashMessage is the onboarding line composited below the wordmark in the
 	// splash. Kept separate from text so it can be overlaid at its own width
@@ -119,7 +119,7 @@ func (p *PreviewPane) setFallbackState(message string) {
 }
 
 // setSplashState is setFallbackState for the idle empty screen (no agents),
-// additionally flagging the splash so String() renders the animated ripple
+// additionally flagging the splash so String() renders the animated splash
 // field behind the wordmark. Every other empty state keeps the plain fallback.
 func (p *PreviewPane) setSplashState(message string) {
 	p.setFallbackState(message)
