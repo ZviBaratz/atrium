@@ -181,6 +181,10 @@ func (m *home) applySettingChange(key string) tea.Cmd {
 		if m.list != nil {
 			m.list.SetModelIndicator(m.appConfig.GetModelIndicator())
 		}
+	case "effort_indicator":
+		if m.list != nil {
+			m.list.SetEffortIndicator(m.appConfig.GetEffortIndicator())
+		}
 	case "permission_indicator":
 		if m.list != nil {
 			m.list.SetPermissionIndicator(m.appConfig.GetPermissionIndicator())

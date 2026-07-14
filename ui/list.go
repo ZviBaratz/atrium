@@ -345,6 +345,13 @@ func (l *List) SetPermissionIndicator(mode string) {
 	l.renderer.permissionIndicator = mode
 }
 
+// SetEffortIndicator sets the effort-chip mode (see
+// InstanceRenderer.effortIndicator). The app passes the normalized
+// config.GetEffortIndicator value at startup and on settings changes.
+func (l *List) SetEffortIndicator(mode string) {
+	l.renderer.effortIndicator = mode
+}
+
 // SetFilter updates the incremental filter query and clamps the selection to the
 // nearest still-visible item. Pass an empty string to disable filtering.
 func (l *List) SetFilter(query string) {

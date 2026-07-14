@@ -285,6 +285,11 @@ type Config struct {
 	// acceptEdits, auto), "off" hides it. Everything else normalizes to "on"
 	// (GetPermissionIndicator).
 	PermissionIndicator string `json:"permission_indicator,omitempty"`
+	// EffortIndicator controls the per-session reasoning-effort chip in the
+	// list: "on" shows it on any session whose effort is known (an --effort flag
+	// before the first turn, hook-reported truth after), "off" hides it.
+	// Everything else normalizes to "on" (GetEffortIndicator).
+	EffortIndicator string `json:"effort_indicator,omitempty"`
 	// SessionSort selects how sessions are ordered within each repo group:
 	// "creation" (default — manual/creation order, reorderable with J/K) or
 	// "status" (action-priority: NeedsInput, unread Ready, Ready, Running,

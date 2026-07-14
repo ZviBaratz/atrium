@@ -322,6 +322,34 @@ func TestPermissionModeRoundTrip(t *testing.T) {
 	require.Equal(t, "plan", pre.PermissionModeInfo(), "pre-feature session falls back to the flag")
 }
 
+// TestEffortRoundTrip asserts the hook-reported effort survives a save/restore (so the chip
+// is right on the first frame after a restart, rather than blank until the session's next
+// tool-using turn) and that a pre-feature state.json — with no effort key — restores to the
+// flag fallback.
+func TestEffortRoundTrip(t *testing.T) {
+	inst, err := NewInstance(InstanceOptions{Title: "t", Path: ".", Program: "claude"})
+	require.NoError(t, err)
+	inst.SetEffortMeta("xhigh")
+	require.Equal(t, "xhigh", inst.ToInstanceData().Effort)
+
+	// Program has no --effort flag, so EffortInfo == the restored runtimeEffort: a clean
+	// read of what survived the round-trip.
+	restored, err := FromInstanceData(context.Background(), InstanceData{
+		Title: "t", Path: ".", Program: "claude", Direct: true, Status: Paused,
+		Effort: "xhigh",
+	}, "session/")
+	require.NoError(t, err)
+	require.Equal(t, "xhigh", restored.EffortInfo())
+
+	// Old state.json (no key) -> empty -> falls back to the pinned flag.
+	var legacy InstanceData
+	require.NoError(t, json.Unmarshal([]byte(`{"title":"t","program":"claude --effort low","direct":true}`), &legacy))
+	require.Equal(t, "", legacy.Effort)
+	pre, err := FromInstanceData(context.Background(), legacy, "session/")
+	require.NoError(t, err)
+	require.Equal(t, "low", pre.EffortInfo(), "pre-feature session falls back to the flag")
+}
+
 // TestPromptQueueRoundTrip pins that a multi-element queue is serialized and restored in
 // order: the head re-arms its delivery clock at load time (the agent re-boots on resume),
 // while the follow-up tail restores with strict idle-only (zero) clocks.

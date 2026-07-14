@@ -217,7 +217,18 @@ func buildHookSettings(binPath, stateFile string) ([]byte, error) {
 		return hookCommand{Type: "command", Command: hookEventCommand(binPath, stateFile, event)}
 	}
 	s := hookSettings{Hooks: map[string][]hookMatcherGroup{
-		"UserPromptSubmit": {{Hooks: []hookCommand{cmd(HookEventWorking)}}},
+		// UserPromptSubmit latches working exactly like the tool-use edges, but via its own
+		// event: its $CLAUDE_EFFORT is a stale pre-resolution value, so it must not record
+		// effort (see HookEventPromptSubmit).
+		//
+		// Splitting it out is safe across an atrium upgrade, but bounded rather than
+		// risk-free. ensureHookSettings runs at session Start, so a session already live when
+		// the binary is replaced in place keeps a settings.json routing this edge to the old
+		// "working" verb — which the new binary does record effort on. That session's chip can
+		// show the stale model default mid-turn, until the turn's first PreToolUse (or its
+		// Stop) overwrites it with the resolved truth. Self-correcting within the turn, and
+		// the chip only settles at turn end anyway; a relaunch clears it for good.
+		"UserPromptSubmit": {{Hooks: []hookCommand{cmd(HookEventPromptSubmit)}}},
 		"PreToolUse":       {{Matcher: "*", Hooks: []hookCommand{cmd(HookEventWorking)}}},
 		// PostToolUse re-latches working at each tool boundary. It carries no new latch value
 		// (a completed tool means the turn is still processing), but it bumps the heartbeat
@@ -320,7 +331,7 @@ func (t *Session) ClearInflight() error {
 	if err != nil {
 		return err
 	}
-	return UpdateHookState(path, HookEventResetInflight, "")
+	return UpdateHookState(path, HookEventResetInflight, "", "")
 }
 
 // cleanupHookSession removes a session's hook artifacts. Called from Close on kill; missing

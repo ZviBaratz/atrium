@@ -32,37 +32,148 @@ func TestApplyHookEvent(t *testing.T) {
 	var rec hookRecord
 	const t0, t1 int64 = 1_700_000_000, 1_700_000_050
 
-	applyHookEvent(&rec, HookEventWorking, "", t0)
+	applyHookEvent(&rec, HookEventWorking, "", "", t0)
 	require.Equal(t, hookStateWorking, rec.State)
 	require.Equal(t, t0, rec.LastHeartbeat, "a working edge bumps the heartbeat (#311)")
 
-	applyHookEvent(&rec, HookEventSubagentStart, "aa", t1)
-	applyHookEvent(&rec, HookEventSubagentStart, "aa", t1) // duplicate start is idempotent
-	applyHookEvent(&rec, HookEventSubagentStart, "bb", t1)
+	applyHookEvent(&rec, HookEventSubagentStart, "aa", "", t1)
+	applyHookEvent(&rec, HookEventSubagentStart, "aa", "", t1) // duplicate start is idempotent
+	applyHookEvent(&rec, HookEventSubagentStart, "bb", "", t1)
 	require.ElementsMatch(t, []string{"aa", "bb"}, rec.Inflight)
 	require.Equal(t, t0, rec.LastHeartbeat, "sub-agent edges do not bump the main heartbeat")
 
-	applyHookEvent(&rec, HookEventReady, "", t1)
+	applyHookEvent(&rec, HookEventReady, "", "", t1)
 	require.Equal(t, hookStateReady, rec.State)
 	require.Len(t, rec.Inflight, 2, "the ready latch never touches the in-flight set")
 	require.Equal(t, t0, rec.LastHeartbeat, "ready does not bump the heartbeat (else it would mask a clean turn-end)")
 
-	applyHookEvent(&rec, HookEventSubagentStop, "zz", t1) // unmatched stop → no-op
+	applyHookEvent(&rec, HookEventSubagentStop, "zz", "", t1) // unmatched stop → no-op
 	require.ElementsMatch(t, []string{"aa", "bb"}, rec.Inflight)
 
-	applyHookEvent(&rec, HookEventSubagentStart, "", t1) // empty id can't be tracked → skipped
+	applyHookEvent(&rec, HookEventSubagentStart, "", "", t1) // empty id can't be tracked → skipped
 	require.ElementsMatch(t, []string{"aa", "bb"}, rec.Inflight)
 
-	applyHookEvent(&rec, HookEventSubagentStop, "aa", t1)
+	applyHookEvent(&rec, HookEventSubagentStop, "aa", "", t1)
 	require.ElementsMatch(t, []string{"bb"}, rec.Inflight)
 
-	applyHookEvent(&rec, HookEventResetInflight, "", t1)
+	applyHookEvent(&rec, HookEventResetInflight, "", "", t1)
 	require.Empty(t, rec.Inflight)
 	require.Equal(t, hookStateReady, rec.State, "reset clears only the set, not the latch")
 
 	// A later working edge advances the heartbeat.
-	applyHookEvent(&rec, HookEventWorking, "", t1)
+	applyHookEvent(&rec, HookEventWorking, "", "", t1)
 	require.Equal(t, t1, rec.LastHeartbeat, "the newest working edge wins")
+}
+
+// TestApplyHookEventEffort pins the effort write rule. Each clause guards a distinct real
+// bug, so each gets its own case.
+func TestApplyHookEventEffort(t *testing.T) {
+	const now int64 = 1_700_000_000
+
+	t.Run("recorded on a working edge with an empty set", func(t *testing.T) {
+		var rec hookRecord
+		applyHookEvent(&rec, HookEventWorking, "", "max", now)
+		require.Equal(t, "max", rec.Effort)
+	})
+
+	t.Run("recorded on a ready edge with an empty set", func(t *testing.T) {
+		var rec hookRecord
+		applyHookEvent(&rec, HookEventReady, "", "xhigh", now)
+		require.Equal(t, "xhigh", rec.Effort)
+	})
+
+	// The spike's headline finding: UserPromptSubmit's $CLAUDE_EFFORT is a STALE
+	// pre-resolution value (a --effort low session reports the model default "high"
+	// there). It is present-and-wrong, so an `effort != ""` guard does not catch it —
+	// only routing it to its own event does. This is the clobber regression guard.
+	t.Run("prompt-submit latches working and bumps the heartbeat but never records effort", func(t *testing.T) {
+		rec := hookRecord{Effort: "low"}
+		applyHookEvent(&rec, HookEventPromptSubmit, "", "high", now)
+		require.Equal(t, "low", rec.Effort, "the stale prompt-submit value must not clobber the resolved truth")
+		require.Equal(t, hookStateWorking, rec.State, "prompt-submit still latches working")
+		require.Equal(t, now, rec.LastHeartbeat, "prompt-submit still bumps the heartbeat (#311)")
+	})
+
+	// A model without effort support reports nothing; an empty read must not clear the
+	// last known truth (the same reasoning as SetModelMeta). A backstop, not the
+	// UserPromptSubmit defense.
+	t.Run("empty effort does not clear a known one", func(t *testing.T) {
+		rec := hookRecord{Effort: "max"}
+		applyHookEvent(&rec, HookEventWorking, "", "", now)
+		require.Equal(t, "max", rec.Effort)
+	})
+
+	// Per #290 a background sub-agent's PreToolUse fires in the MAIN session, and skill
+	// frontmatter can set its own effort. While the set is non-empty those events are
+	// gated out, so the chip can't flicker to the sub-agent's level.
+	t.Run("not recorded while a sub-agent is in flight", func(t *testing.T) {
+		rec := hookRecord{Effort: "max", Inflight: []string{"aa"}}
+		applyHookEvent(&rec, HookEventWorking, "", "low", now)
+		require.Equal(t, "max", rec.Effort, "a sub-agent's effort must not contaminate the main session's")
+		require.Equal(t, hookStateWorking, rec.State, "the latch still applies — only the effort write is gated")
+	})
+
+	// subagent-stop's effort IS the sub-agent's, and it removes the last id from the set,
+	// leaving it empty — which would sneak past the in-flight gate if it recorded.
+	t.Run("not recorded on sub-agent lifecycle edges", func(t *testing.T) {
+		rec := hookRecord{Effort: "max", Inflight: []string{"aa"}}
+		applyHookEvent(&rec, HookEventSubagentStop, "aa", "low", now)
+		require.Empty(t, rec.Inflight, "the stop still drains the set")
+		require.Equal(t, "max", rec.Effort, "subagent-stop empties the set but must never record its own effort")
+
+		applyHookEvent(&rec, HookEventSubagentStart, "bb", "low", now)
+		require.Equal(t, "max", rec.Effort, "subagent-start must never record either")
+	})
+
+	t.Run("a later working edge advances a known effort", func(t *testing.T) {
+		rec := hookRecord{Effort: "max"}
+		applyHookEvent(&rec, HookEventWorking, "", "low", now)
+		require.Equal(t, "low", rec.Effort, "an in-session /effort switch is the whole point of the feature")
+	})
+
+	t.Run("unknown event is still a no-op", func(t *testing.T) {
+		rec := hookRecord{Effort: "max", State: hookStateReady}
+		applyHookEvent(&rec, "some-future-event", "", "low", now)
+		require.Equal(t, hookRecord{Effort: "max", State: hookStateReady}, rec)
+	})
+}
+
+// TestRuntimeEffort covers the poll-side half of the carrier: Poll lifts the record's
+// effort onto the monitor, where the Instance reads it on the metadata tick. Sticky like
+// monitor.mode — a record with no effort (a pre-first-turn session, a model without effort
+// support) must leave the last known level alone rather than blank the chip.
+func TestRuntimeEffort(t *testing.T) {
+	idle := "❯ \n⏵⏵ auto mode on (shift+tab to cycle) · ← for agents"
+	c := idle
+	s := hookPollSession(t, "claude", &c)
+
+	require.Empty(t, s.RuntimeEffort(), "nothing detected before the first poll")
+
+	seedHookRecord(t, s, hookRecord{State: hookStateReady, Effort: "max"})
+	s.Poll()
+	require.Equal(t, "max", s.RuntimeEffort())
+
+	// An in-session /effort switch: the next turn's hooks rewrite the record.
+	seedHookRecord(t, s, hookRecord{State: hookStateReady, Effort: "low"})
+	s.Poll()
+	require.Equal(t, "low", s.RuntimeEffort(), "the newest reported level wins")
+
+	seedHookRecord(t, s, hookRecord{State: hookStateReady})
+	s.Poll()
+	require.Equal(t, "low", s.RuntimeEffort(), "an effort-less record must not blank the chip")
+}
+
+// PollNow (the detach/switch face-value refresh) stashes effort too — that is the tick
+// right after a user detaches from an in-session /effort switch, so it is exactly when a
+// changed level most needs to land.
+func TestRuntimeEffortPollNow(t *testing.T) {
+	idle := "❯ \n⏵⏵ auto mode on (shift+tab to cycle) · ← for agents"
+	c := idle
+	s := hookPollSession(t, "claude", &c)
+
+	seedHookRecord(t, s, hookRecord{State: hookStateReady, Effort: "xhigh"})
+	s.PollNow()
+	require.Equal(t, "xhigh", s.RuntimeEffort())
 }
 
 // TestParseHookRecord covers the JSON record, the Phase 1 bare-word compat fallback (a
@@ -73,11 +184,17 @@ func TestParseHookRecord(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, hookStateReady, rec.State)
 	require.ElementsMatch(t, []string{"aa", "bb"}, rec.Inflight)
+	require.Empty(t, rec.Effort, "a record predating the effort field decodes with an unknown effort")
+
+	rec, ok = parseHookRecord([]byte(`{"state":"working","effort":"xhigh"}`))
+	require.True(t, ok)
+	require.Equal(t, "xhigh", rec.Effort)
 
 	rec, ok = parseHookRecord([]byte("  working\n")) // bare word, whitespace tolerated
 	require.True(t, ok)
 	require.Equal(t, hookStateWorking, rec.State)
 	require.Empty(t, rec.Inflight)
+	require.Empty(t, rec.Effort, "a Phase-1 bare-word file carries no effort")
 
 	for _, bad := range []string{"garbage", "   ", "", "{bad json"} {
 		_, ok := parseHookRecord([]byte(bad))
@@ -90,16 +207,16 @@ func TestParseHookRecord(t *testing.T) {
 func TestUpdateHookStateRoundTrip(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "state")
 
-	require.NoError(t, UpdateHookState(path, HookEventWorking, ""))
-	require.NoError(t, UpdateHookState(path, HookEventSubagentStart, "aa"))
-	require.NoError(t, UpdateHookState(path, HookEventReady, ""))
+	require.NoError(t, UpdateHookState(path, HookEventWorking, "", ""))
+	require.NoError(t, UpdateHookState(path, HookEventSubagentStart, "aa", ""))
+	require.NoError(t, UpdateHookState(path, HookEventReady, "", ""))
 
 	rec, ok := readHookRecordFile(path)
 	require.True(t, ok)
 	require.Equal(t, hookStateReady, rec.State)
 	require.ElementsMatch(t, []string{"aa"}, rec.Inflight)
 
-	require.NoError(t, UpdateHookState(path, HookEventSubagentStop, "aa"))
+	require.NoError(t, UpdateHookState(path, HookEventSubagentStop, "aa", ""))
 	rec, ok = readHookRecordFile(path)
 	require.True(t, ok)
 	require.Equal(t, hookStateReady, rec.State)
@@ -120,7 +237,7 @@ func TestUpdateHookStateConcurrentAdds(t *testing.T) {
 		wg.Add(1)
 		go func(id string) {
 			defer wg.Done()
-			require.NoError(t, UpdateHookState(path, HookEventSubagentStart, id))
+			require.NoError(t, UpdateHookState(path, HookEventSubagentStart, id, ""))
 		}("agent-" + itoa(i))
 	}
 	wg.Wait()
@@ -140,7 +257,7 @@ func TestUpdateHookStateConcurrentRemoves(t *testing.T) {
 	ids := make([]string, n)
 	for i := range ids {
 		ids[i] = "agent-" + itoa(i)
-		require.NoError(t, UpdateHookState(path, HookEventSubagentStart, ids[i]))
+		require.NoError(t, UpdateHookState(path, HookEventSubagentStart, ids[i], ""))
 	}
 
 	var wg sync.WaitGroup
@@ -148,7 +265,7 @@ func TestUpdateHookStateConcurrentRemoves(t *testing.T) {
 		wg.Add(1)
 		go func(id string) {
 			defer wg.Done()
-			require.NoError(t, UpdateHookState(path, HookEventSubagentStop, id))
+			require.NoError(t, UpdateHookState(path, HookEventSubagentStop, id, ""))
 		}(id)
 	}
 	wg.Wait()

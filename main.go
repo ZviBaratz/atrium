@@ -345,7 +345,12 @@ func runHookEvent(stateFile, event string, stdin io.Reader) {
 	if tmux.HookEventReadsAgentID(event) {
 		agentID = parseSubagentID(stdin)
 	}
-	if err := tmux.UpdateHookState(stateFile, event, agentID); err != nil {
+	// Claude exports the turn's resolved effort level to every hook subprocess. Reading the
+	// env var rather than the stdin payload is what lets the high-frequency working/ready
+	// latches carry effort at all: HookEventReadsAgentID keeps them deliberately payload-free
+	// so their subprocess can never block on stdin. Empty for a model without effort support
+	// (and stale on UserPromptSubmit) — UpdateHookState's write rule sorts that out.
+	if err := tmux.UpdateHookState(stateFile, event, agentID, os.Getenv("CLAUDE_EFFORT")); err != nil {
 		fmt.Fprintf(os.Stderr, "atrium hook: %v\n", err)
 	}
 }

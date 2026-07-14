@@ -69,21 +69,12 @@ var claudePermissionModeEnum = map[string]bool{
 func ValidPermissionMode(s string) bool { return claudePermissionModeEnum[s] }
 
 // PermissionModeFlag returns the value of a --permission-mode pin in program
-// ("" = none), the extraction counterpart of WithPermissionModeFlag.
-// Agent-neutral pure argv parsing; callers gate on the agent where the flag's
-// meaning is agent-specific. The last pin wins, matching the CLI's argv
-// semantics. An invalid or unrecognised value returns "".
+// ("" = none), the extraction counterpart of WithPermissionModeFlag. An invalid
+// or unrecognised value returns "" — unlike --model and --effort, claude rejects
+// an unknown mode at argv parse time, so a value outside the enum is not a mode
+// the session could be running in.
 func PermissionModeFlag(program string) string {
-	fields := strings.Fields(program)
-	value := ""
-	for n, f := range fields {
-		if v, ok := strings.CutPrefix(f, "--permission-mode="); ok {
-			value = v
-		}
-		if f == "--permission-mode" && n+1 < len(fields) {
-			value = fields[n+1]
-		}
-	}
+	value := flagValue(program, "--permission-mode")
 	if !ValidPermissionMode(value) {
 		return ""
 	}

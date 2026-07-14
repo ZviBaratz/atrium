@@ -129,6 +129,25 @@ func TestSettingsOverlay_CycleModelIndicator(t *testing.T) {
 	assert.Equal(t, config.ModelIndicatorOn, cfg.GetModelIndicator(), "the enum wraps")
 }
 
+// TestSettingsOverlay_CycleEffortIndicator pins the effort-chip enum: defaults to on,
+// cycles on → off, and wraps back to on. The reported key is what makes the chip toggle
+// live-apply — app.applySettingChange switches on it, and the row is the only thing that
+// can produce it, so without this row that branch is unreachable.
+func TestSettingsOverlay_CycleEffortIndicator(t *testing.T) {
+	cfg := config.DefaultConfig()
+	o := NewSettingsOverlay(cfg)
+	settingsAt(t, o, "effort_indicator")
+
+	require.Equal(t, config.EffortIndicatorOn, cfg.GetEffortIndicator(), "chip defaults to on")
+
+	_, changed := o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRight})
+	assert.Equal(t, "effort_indicator", changed, "the cycle must report its row key so home can persist")
+	assert.Equal(t, config.EffortIndicatorOff, cfg.GetEffortIndicator())
+
+	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRight})
+	assert.Equal(t, config.EffortIndicatorOn, cfg.GetEffortIndicator(), "the enum wraps")
+}
+
 // TestSettingsOverlay_CycleSplash pins the splash enum: defaults to random,
 // right steps into the named patterns, and a full cycle wraps back to random.
 func TestSettingsOverlay_CycleSplash(t *testing.T) {

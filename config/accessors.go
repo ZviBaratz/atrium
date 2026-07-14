@@ -37,6 +37,21 @@ func (c *Config) GetPermissionIndicator() string {
 	return PermissionIndicatorOn
 }
 
+// EffortIndicator modes (see Config.EffortIndicator).
+const (
+	EffortIndicatorOn  = "on"
+	EffortIndicatorOff = "off"
+)
+
+// GetEffortIndicator returns the normalized effort-chip mode: "off" only when
+// set explicitly, "on" for everything else.
+func (c *Config) GetEffortIndicator() string {
+	if c != nil && c.EffortIndicator == EffortIndicatorOff {
+		return EffortIndicatorOff
+	}
+	return EffortIndicatorOn
+}
+
 // SplashRandom is the Splash mode that picks a fresh pattern each launch —
 // the default (see Config.Splash).
 const SplashRandom = "random"

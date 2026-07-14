@@ -44,24 +44,31 @@ func hasFlag(program, name string) bool {
 	return false
 }
 
-// ModelFlag returns the value of a --model pin in program ("" = none), the
-// extraction counterpart of WithModelFlag. Agent-neutral pure argv parsing;
-// callers gate on the agent where the pin's meaning is agent-specific. The
-// last pin wins, matching the CLI's argv semantics (withFlag's append path
-// can legitimately leave two pins on a quoted program).
-func ModelFlag(program string) string {
+// flagValue returns the value of a `name value` or `name=value` pin in program
+// ("" = none) — the shared extraction counterpart of withFlag, behind ModelFlag,
+// PermissionModeFlag, and EffortFlag. Agent-neutral pure argv parsing; callers
+// gate on the agent where the pin's meaning is agent-specific. Comparison is
+// whole-field, so a lookalike flag ("--model-context", "--effort-budget") is not
+// read as a pin. The last pin wins, matching the CLI's argv semantics (withFlag's
+// append path can legitimately leave two pins on a quoted program).
+func flagValue(program, name string) string {
+	combined := name + "="
 	fields := strings.Fields(program)
 	value := ""
 	for n, f := range fields {
-		if v, ok := strings.CutPrefix(f, "--model="); ok {
+		if v, ok := strings.CutPrefix(f, combined); ok {
 			value = v
 		}
-		if f == "--model" && n+1 < len(fields) {
+		if f == name && n+1 < len(fields) {
 			value = fields[n+1]
 		}
 	}
 	return value
 }
+
+// ModelFlag returns the value of a --model pin in program ("" = none), the
+// extraction counterpart of WithModelFlag.
+func ModelFlag(program string) string { return flagValue(program, "--model") }
 
 // withFlag returns program with `name value` applied. The common case — no
 // pin present — appends to the string verbatim, preserving any quoting the

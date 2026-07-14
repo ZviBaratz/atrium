@@ -212,6 +212,20 @@ func newSettingRows(cfg *config.Config) []settingRow {
 			},
 		},
 		{
+			key: "effort_indicator", section: "Appearance", label: "Effort chip", kind: kindEnum,
+			description: "Per-session reasoning-effort chip (claude) in the list, shown whenever the level is known.",
+			get: func(c *config.Config) string {
+				return c.GetEffortIndicator()
+			},
+			set: func(c *config.Config, v string) error {
+				c.EffortIndicator = v
+				return nil
+			},
+			options: func(c *config.Config) []string {
+				return []string{config.EffortIndicatorOn, config.EffortIndicatorOff}
+			},
+		},
+		{
 			key: "permission_indicator", section: "Appearance", label: "Permission chip", kind: kindEnum,
 			description: "Per-session permission-mode chip (plan/accept-edits/auto) in the list.",
 			get: func(c *config.Config) string {

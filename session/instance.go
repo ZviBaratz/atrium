@@ -241,6 +241,14 @@ type Instance struct {
 	// falls back to the --permission-mode flag).
 	runtimeMode string
 
+	// runtimeEffort is the reasoning-effort level claude's hooks last reported for
+	// a resolved turn (ComputeEffort → SetEffortMeta), e.g. "low" after a
+	// max-launched session is switched in-session with /effort. Written only on the
+	// main thread (like runtimeMode), persisted so the chip is right on the first
+	// frame after a restart. "" = not yet known (the UI falls back to the --effort
+	// flag).
+	runtimeEffort string
+
 	// baseCtx is the lifecycle context the instance's tmux/git subprocesses derive
 	// from; cancelling it (app/daemon shutdown) kills in-flight subprocesses. Set via
 	// SetBaseContext (or FromInstanceData) before Start, i.e. before any background
@@ -355,6 +363,7 @@ func (i *Instance) ToInstanceData() InstanceData {
 		GitHubTokenEnv:       i.githubTokenEnv,
 		Model:                i.modelID,
 		PermissionMode:       i.runtimeMode,
+		Effort:               i.runtimeEffort,
 		TmuxName:             i.TmuxSessionName(),
 
 		// Persist the undelivered prompt queue so it survives a restart and is re-delivered
@@ -429,6 +438,7 @@ func FromInstanceData(ctx context.Context, data InstanceData, branchPrefix strin
 		githubTokenEnv:       data.GitHubTokenEnv,
 		modelID:              data.Model,
 		runtimeMode:          data.PermissionMode,
+		runtimeEffort:        data.Effort,
 	}
 
 	// Pending prompts restored from disk re-enter tick-driven delivery on reload. The

@@ -105,6 +105,11 @@ type instanceMetaResult struct {
 	// a result worth applying (ComputeMode returns ok=false when unchanged or none).
 	mode   string
 	modeOK bool
+	// effort carries the reasoning-effort level claude's hooks reported; effortOK
+	// marks a result worth applying (ComputeEffort returns ok=false when unchanged
+	// or none reported yet).
+	effort   string
+	effortOK bool
 }
 
 // instancePolledMsg carries the result of an off-cadence status poll of a single instance,
@@ -484,6 +489,9 @@ func collectMetadata(ctx context.Context, poll []*session.Instance, selected *se
 			// Live permission mode reads the value Poll just detected from the
 			// footer — no extra capture; only applied when it changed.
 			r.mode, r.modeOK = instance.ComputeMode()
+			// Effort reads the value Poll just lifted off the hook record — no extra
+			// I/O; only applied when it changed.
+			r.effort, r.effortOK = instance.ComputeEffort()
 		}(idx, inst)
 	}
 	wg.Wait()
@@ -491,7 +499,7 @@ func collectMetadata(ctx context.Context, poll []*session.Instance, selected *se
 }
 
 // applyMetadataResults applies a batch of metadata results to their instances on the main
-// thread (pane state, diff, PR, model, mode), re-floats urgent rows, refreshes the session
+// thread (pane state, diff, PR, model, mode, effort), re-floats urgent rows, refreshes the session
 // context bars, and returns any queued-prompt delivery commands. Shared by the periodic
 // metadata tick and the one-shot detach sweep. It deliberately does NOT recover lost
 // sessions or reschedule the tick — those stay with the periodic handler (recovery's
@@ -532,6 +540,9 @@ func (m *home) applyMetadataResults(results []instanceMetaResult, emit bool) []t
 		}
 		if r.modeOK {
 			r.instance.SetModeMeta(r.mode)
+		}
+		if r.effortOK {
+			r.instance.SetEffortMeta(r.effort)
 		}
 	}
 	// Re-apply the status sort now that pane states are fresh, so urgent sessions keep

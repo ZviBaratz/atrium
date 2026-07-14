@@ -30,8 +30,18 @@ import (
 // must know which events read an agent_id from stdin.
 const (
 	// HookEventWorking latches state="working" and bumps the heartbeat (#311), fired by the
-	// working edges: UserPromptSubmit / PreToolUse / PostToolUse.
+	// tool-use working edges: PreToolUse / PostToolUse. These fire within a resolved turn, so
+	// they also record its effort (see applyHookEvent's write rule).
 	HookEventWorking = "working"
+	// HookEventPromptSubmit is the UserPromptSubmit edge: identical to HookEventWorking
+	// (latch working + bump heartbeat) except it NEVER records effort. UserPromptSubmit fires
+	// before the turn's effort resolves, so its $CLAUDE_EFFORT carries the model default
+	// rather than the session's real level — verified against claude 2.1.209, where a
+	// `--effort low` session reports `high` here. The value is present-and-WRONG, not absent,
+	// so recordEffort's `effort != ""` guard cannot catch it; splitting the event is the only
+	// thing that can, since all three working edges otherwise arrive indistinguishably as
+	// "working".
+	HookEventPromptSubmit = "prompt-submit"
 	// HookEventReady latches state="ready" (Stop / StopFailure — a clean or API-error
 	// end-of-turn). Gated on the in-flight set by the poller, never terminal on its own.
 	HookEventReady = "ready"
@@ -69,15 +79,25 @@ type hookRecord struct {
 	// preserving the #46 no-stuck-latch guarantee. Zero (a Phase-1 bare-word file, or a
 	// record predating this field) reads as stale, so those degrade to the scrape fallback.
 	LastHeartbeat int64 `json:"heartbeat,omitempty"`
+	// Effort is the reasoning-effort level claude reported for the last resolved main-session
+	// turn ("" = unknown), read from the hook subprocess's $CLAUDE_EFFORT. It is claude's own
+	// post-downgrade truth — the level actually in force, after any silent downgrade for the
+	// selected model — so it survives an in-session /effort switch and knows the level a
+	// session inherited from settings.json, neither of which the --effort flag can see.
+	// Empty (a Phase-1 bare-word file, a record predating this field, or a model without
+	// effort support) means the chip falls back to the flag.
+	Effort string `json:"effort,omitempty"`
 }
 
 // UpdateHookState applies one hook event to the record at stateFile under an exclusive
 // cross-process lock, then writes it back atomically. It is the single mutation entry
 // point shared by the hook subprocesses (via the `atrium hook` subcommand) and the
 // watchdog's ClearInflight. agentID is used only by the sub-agent events; it is ignored
-// (and may be "") for the others. Best-effort by contract: callers (hooks) must not fail
-// the agent on an error here, so the error is returned for logging but never blocks.
-func UpdateHookState(stateFile, event, agentID string) error {
+// (and may be "") for the others. effort is the subprocess's $CLAUDE_EFFORT, recorded only
+// by the events applyHookEvent's write rule admits. Best-effort by contract: callers (hooks)
+// must not fail the agent on an error here, so the error is returned for logging but never
+// blocks.
+func UpdateHookState(stateFile, event, agentID, effort string) error {
 	unlock, err := hookStateLock(stateFile)
 	if err != nil {
 		return err
@@ -85,7 +105,7 @@ func UpdateHookState(stateFile, event, agentID string) error {
 	defer unlock()
 
 	rec, _ := readHookRecordFile(stateFile) // zero record on a missing/corrupt file
-	applyHookEvent(&rec, event, agentID, time.Now().Unix())
+	applyHookEvent(&rec, event, agentID, effort, time.Now().Unix())
 	return writeHookRecordAtomic(stateFile, rec)
 }
 
@@ -94,7 +114,12 @@ func UpdateHookState(stateFile, event, agentID string) error {
 // no-op). A sub-agent event with an empty agent_id is skipped: we can't key the set without
 // an id, and adding "" would strand a phantom member the matching Stop could never discard —
 // the watchdog/liveness backstop covers the untracked agent.
-func applyHookEvent(rec *hookRecord, event, agentID string, now int64) {
+//
+// The effort write rule (recordEffort) is confined to the working/ready latches: those are
+// the main session's own resolved turns. The sub-agent edges are deliberately excluded — a
+// sub-agent's effort is its own, and subagent-stop additionally empties the in-flight set,
+// which would sneak its level past recordEffort's gate.
+func applyHookEvent(rec *hookRecord, event, agentID, effort string, now int64) {
 	switch event {
 	case HookEventWorking:
 		rec.State = hookStateWorking
@@ -103,8 +128,15 @@ func applyHookEvent(rec *hookRecord, event, agentID string, now int64) {
 		// Stop could mask a clean turn-end; the poller resolves that via ready+empty anyway,
 		// but keeping ready heartbeat-free keeps the record honest (#311).
 		rec.LastHeartbeat = now
+		rec.recordEffort(effort)
+	case HookEventPromptSubmit:
+		// The same latch + heartbeat as HookEventWorking, minus the effort write: this edge's
+		// $CLAUDE_EFFORT is a stale pre-resolution value (see the constant).
+		rec.State = hookStateWorking
+		rec.LastHeartbeat = now
 	case HookEventReady:
 		rec.State = hookStateReady
+		rec.recordEffort(effort)
 	case HookEventSubagentStart:
 		if agentID != "" {
 			rec.Inflight = addAgent(rec.Inflight, agentID)
@@ -115,6 +147,30 @@ func applyHookEvent(rec *hookRecord, event, agentID string, now int64) {
 		}
 	case HookEventResetInflight:
 		rec.Inflight = nil
+	}
+}
+
+// recordEffort applies the effort write rule to a main-session latch edge. Both clauses
+// guard a distinct real failure:
+//
+//   - effort == "" — a model without effort support reports nothing. An empty read must not
+//     clear the last known truth (the same stance SetModelMeta takes). This is only a
+//     backstop; the stale-UserPromptSubmit defense is HookEventPromptSubmit, because that
+//     value is non-empty and would sail through this check.
+//   - a non-empty in-flight set — skill/sub-agent frontmatter can set its own effort, and
+//     per #290 a background sub-agent's PreToolUse fires in the MAIN session against this
+//     very record. Gating on the set keeps the chip on the main session's level instead of
+//     flickering to a sub-agent's.
+//
+// The in-flight clause costs one turn in a narrow case, which is the accepted price of the
+// #290 gate: a turn that still has sub-agents running when its own Stop fires records
+// nothing (Stop is gated, and the SubagentStop that drains the set is itself a no-op here),
+// so the level lands on the next ordinary turn instead. Harmless in practice — a turn's
+// first PreToolUse usually fires before anything is spawned — and it degrades to a stale or
+// flag-derived chip, never to another session's level.
+func (rec *hookRecord) recordEffort(effort string) {
+	if effort != "" && len(rec.Inflight) == 0 {
+		rec.Effort = effort
 	}
 }
 

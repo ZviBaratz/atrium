@@ -96,6 +96,12 @@ type statusMonitor struct {
 	// leaves it untouched so the chip doesn't flicker. Read under monitorMu via
 	// RuntimePermissionMode.
 	mode string
+	// effort is the reasoning-effort level the last read hook record reported ("" until a
+	// resolved turn reports one — hooks only carry effort inside a tool-use context, so a
+	// session that has never called a tool has none). Sticky like mode: a record with no
+	// effort leaves it untouched rather than blanking the chip. Read under monitorMu via
+	// RuntimeEffort.
+	effort string
 }
 
 func newStatusMonitor(program string) *statusMonitor {
@@ -190,6 +196,31 @@ func (t *Session) RuntimePermissionMode() string {
 	t.monitorMu.Lock()
 	defer t.monitorMu.Unlock()
 	return t.monitor.mode
+}
+
+// RuntimeEffort returns the reasoning-effort level claude last reported through its hooks
+// ("" until a resolved turn reports one, or for an agent without effort hooks). This is
+// post-downgrade truth for the main session, so it outranks the --effort launch flag.
+// Updated by Poll/PollNow; read under monitorMu so it stays consistent with a concurrent
+// poll.
+func (t *Session) RuntimeEffort() string {
+	t.monitorMu.Lock()
+	defer t.monitorMu.Unlock()
+	return t.monitor.effort
+}
+
+// stashEffort lifts a hook record's effort onto the monitor. Sticky: an effort-less record
+// (a session that hasn't run a tool yet, a model without effort support) leaves the last
+// known level in place instead of blanking the chip. The record's own write rule already
+// settled which turns may report an effort at all — by the time it lands on disk it is the
+// main session's resolved level, so this is a plain lift, not a second gate.
+//
+// Caller must hold monitorMu (both call sites are inside Poll/PollNow, which hold it for
+// their duration) — RuntimeEffort reads the field under that same lock.
+func (t *Session) stashEffort(rec hookRecord) {
+	if rec.Effort != "" {
+		t.monitor.effort = rec.Effort
+	}
 }
 
 // Poll classifies the current pane into a PaneState. It reads level signals (a prompt
@@ -314,6 +345,11 @@ func (t *Session) Poll() PaneState {
 		// stuck set after its cap, and tmux liveness recovers a dead pane — so an unmatched
 		// start can never pin a row busy forever the way a stuck "working" file could.
 		rec, haveRec := t.readHookRecord()
+		if haveRec {
+			// Lift the turn's effort onto the monitor before any classification returns below,
+			// so the chip updates on the same tick that reads the record.
+			t.stashEffort(rec)
+		}
 
 		// A live spinner status line above the box (2.1.207's footer reflow can crowd
 		// "esc to interrupt" out of the below-box footer while the agent works — spinner.go).
@@ -477,6 +513,7 @@ func (t *Session) PollNow() PaneState {
 		return PaneWorking
 	}
 	if rec, ok := t.readHookRecord(); ok {
+		t.stashEffort(rec)
 		switch {
 		case len(rec.Inflight) > 0:
 			// Background sub-agents in flight → pending, whatever the latch reads (see Poll).

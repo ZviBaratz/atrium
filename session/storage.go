@@ -81,6 +81,13 @@ type InstanceData struct {
 	// Program's --permission-mode flag, refreshed on the next poll after resume.
 	PermissionMode string `json:"permission_mode,omitempty"`
 
+	// Effort is the reasoning-effort level claude's hooks last reported for a
+	// resolved turn (e.g. "max"), persisted so the chip is right on the first frame
+	// after a restart rather than blank until the session's next tool-using turn.
+	// omitempty: a state.json predating the feature decodes to "" -> the UI falls
+	// back to the Program's --effort flag, refreshed on the next poll.
+	Effort string `json:"effort,omitempty"`
+
 	// TmuxName is the session's tmux session name. It is persisted state, not a
 	// derivation: new sessions mint a repo-qualified name (so identical titles
 	// in different repo groups coexist on the shared socket). omitempty: a

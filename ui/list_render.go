@@ -36,6 +36,12 @@ type InstanceRenderer struct {
 	// so it tracks an in-session switch; it is drawn for any non-default mode but
 	// never for a detected "default" or no flag.
 	permissionIndicator string
+	// effortIndicator is the reasoning-effort chip mode (config.GetEffortIndicator):
+	// "off" hides the chip, anything else shows it. The chip reflects the live level
+	// (Instance.EffortInfo: hook-reported truth, falling back to the --effort launch
+	// flag), so it tracks an in-session /effort switch and knows the level a session
+	// with no flag inherited; it is drawn whenever an effort is known.
+	effortIndicator string
 	// hideAccountBadge suppresses the per-row Claude-account badge. Set by List.String
 	// when account grouping is visually active (mode == account and >1 account), so the
 	// cluster divider + tinted header carry the identity instead of every row repeating it.
@@ -214,6 +220,17 @@ func (r *InstanceRenderer) Render(i *session.Instance, idx int, selected, marked
 	if r.modelIndicator != "off" {
 		if model := i.ModelInfo(); model != "" {
 			right1 = append(right1, p.seg(" "+shortModelName(model), p.agentColor(i)))
+		}
+	}
+	// Per-session reasoning-effort chip: hook-reported truth first, --effort flag
+	// fallback (see Instance.EffortInfo). Sits between the model and permission
+	// chips, reading as one brand-colored phrase with them ("opus 4.8 max plan").
+	// Shown whenever the level is known; "off" hides it. Unknown stays unbadged
+	// rather than guessing a default — a session that has never run a tool has
+	// reported no effort, and claude's default is not Atrium's to assume.
+	if r.effortIndicator != "off" {
+		if effort := i.EffortInfo(); effort != "" {
+			right1 = append(right1, p.seg(" "+effortLabel(effort), p.agentColor(i)))
 		}
 	}
 	// Per-session permission-mode chip: live footer truth first, --permission-mode

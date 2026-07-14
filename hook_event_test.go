@@ -45,9 +45,34 @@ func TestRunHookEvent(t *testing.T) {
 	require.Equal(t, "ready", readState(t, path).State, "no-op events leave the record untouched")
 }
 
+// TestRunHookEventEffort pins the carrier: the subcommand takes the turn's effort from its
+// own $CLAUDE_EFFORT environment (claude exports it to every hook subprocess), never from
+// stdin — which is what lets the payload-free working/ready latches carry it without ever
+// touching stdin. The write rule itself is tmux's (TestApplyHookEventEffort); this covers
+// the main-package seam that feeds it, including the prompt-submit exemption end to end.
+func TestRunHookEventEffort(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state")
+
+	t.Setenv("CLAUDE_EFFORT", "max")
+	runHookEvent(path, tmux.HookEventWorking, strings.NewReader(""))
+	require.Equal(t, "max", readState(t, path).Effort, "effort comes from the env, with no stdin read")
+
+	// UserPromptSubmit's env value is a stale model default; it must not clobber the truth.
+	t.Setenv("CLAUDE_EFFORT", "high")
+	runHookEvent(path, tmux.HookEventPromptSubmit, strings.NewReader(""))
+	require.Equal(t, "max", readState(t, path).Effort, "prompt-submit's stale value is ignored")
+	require.Equal(t, "working", readState(t, path).State, "but it still latches working")
+
+	// A model without effort support exports nothing — the last known level must survive.
+	t.Setenv("CLAUDE_EFFORT", "")
+	runHookEvent(path, tmux.HookEventWorking, strings.NewReader(""))
+	require.Equal(t, "max", readState(t, path).Effort, "an empty env must not clear a known effort")
+}
+
 type stateFileView struct {
 	State    string   `json:"state"`
 	Inflight []string `json:"inflight"`
+	Effort   string   `json:"effort"`
 }
 
 func readState(t *testing.T, path string) stateFileView {

@@ -86,9 +86,16 @@ func TestBuildHookSettings(t *testing.T) {
 	require.Empty(t, parsed.Hooks["Stop"][0].Matcher)
 	require.Empty(t, parsed.Hooks["StopFailure"][0].Matcher)
 	// Each event carries the right --event verb. Stop/StopFailure both latch ready (a clean
-	// and an API-error turn-end); UserPromptSubmit/PreToolUse/PostToolUse latch working (and
-	// bump the heartbeat); the sub-agent lifecycle drives the in-flight set.
-	require.Contains(t, parsed.Hooks["UserPromptSubmit"][0].Hooks[0].Command, HookEventWorking)
+	// and an API-error turn-end); UserPromptSubmit/PreToolUse/PostToolUse all latch working
+	// (and bump the heartbeat); the sub-agent lifecycle drives the in-flight set.
+	//
+	// UserPromptSubmit routes through its own prompt-submit verb rather than sharing
+	// "working": it latches identically but must never record effort, because its
+	// $CLAUDE_EFFORT is a stale model default (a `--effort low` session reports `high`
+	// there). Since the verb is the only thing that distinguishes the three working edges
+	// downstream, this wiring IS the defense — pinning it here keeps a future "simplify
+	// them back into one event" from silently reintroducing the clobber.
+	require.Contains(t, parsed.Hooks["UserPromptSubmit"][0].Hooks[0].Command, "--event "+HookEventPromptSubmit)
 	require.Contains(t, parsed.Hooks["PreToolUse"][0].Hooks[0].Command, HookEventWorking)
 	require.Contains(t, parsed.Hooks["PostToolUse"][0].Hooks[0].Command, HookEventWorking)
 	require.Contains(t, parsed.Hooks["Stop"][0].Hooks[0].Command, HookEventReady)
