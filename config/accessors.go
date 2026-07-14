@@ -57,8 +57,14 @@ func (c *Config) GetEffortIndicator() string {
 const SplashRandom = "random"
 
 // SplashVariants lists the pinnable splash pattern names in settings-panel
-// display order. The mapping onto generators lives in ui (splash_field.go),
+// display order. The mapping onto generators lives in ui (splash_variants.go),
 // which takes the name as a plain string so it needs no config import.
+//
+// This list and ui's must name the same patterns: a name here with no generator
+// falls through ui.SetSplashVariant's lookup and silently means "random", so the
+// pattern the settings panel offers simply never appears. Neither package can
+// import the other; app imports both and holds them to each other (see
+// TestSplashVocabularyAgrees against ui.SplashVariantNames).
 func SplashVariants() []string {
 	return []string{"nebula", "braille", "contours", "julia", "mandala", "plasma"}
 }
