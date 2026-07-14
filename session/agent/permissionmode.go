@@ -100,8 +100,10 @@ func WithPermissionModeFlag(program, mode string) string {
 //
 // Matching the words, not the leading glyph, keeps detection robust to a glyph
 // restyle and disambiguates the three ⏵⏵ modes. dontAsk has no interactive
-// footer indicator and is intentionally absent — it falls back to the pinned
-// flag like any unrecognized footer.
+// footer indicator and is intentionally absent. A footer no token here names
+// yields known=false, which for a claude session now consults the hook record's
+// permission_mode before falling back to the pinned flag (tmux.Session.Poll's
+// arbitration, #324).
 var claudePermissionModeMarkers = []struct{ token, mode string }{
 	{"plan mode on", "plan"},
 	{"accept edits on", "acceptEdits"},

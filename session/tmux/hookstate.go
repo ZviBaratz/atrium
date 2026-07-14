@@ -30,20 +30,33 @@ import (
 // must know which events read an agent_id from stdin.
 const (
 	// HookEventWorking latches state="working" and bumps the heartbeat (#311), fired by the
-	// tool-use working edges: PreToolUse / PostToolUse. These fire within a resolved turn, so
-	// they also record its effort (see applyHookEvent's write rule).
+	// per-tool working edges: PreToolUse / PostToolUse. These fire within a resolved turn, so
+	// they also record its effort (see applyHookEvent's write rule). Deliberately stdin-free,
+	// so they carry no permission_mode — see HookEventReadsStdin.
 	HookEventWorking = "working"
-	// HookEventPromptSubmit is the UserPromptSubmit edge: identical to HookEventWorking
-	// (latch working + bump heartbeat) except it NEVER records effort. UserPromptSubmit fires
-	// before the turn's effort resolves, so its $CLAUDE_EFFORT carries the model default
-	// rather than the session's real level — verified against claude 2.1.209, where a
-	// `--effort low` session reports `high` here. The value is present-and-WRONG, not absent,
-	// so recordEffort's `effort != ""` guard cannot catch it; splitting the event is the only
-	// thing that can, since all three working edges otherwise arrive indistinguishably as
-	// "working".
+	// HookEventPromptSubmit is the UserPromptSubmit edge: it latches working and bumps the
+	// heartbeat exactly like HookEventWorking, but takes the OPPOSITE rule on each of the two
+	// payload fields. The split earns its keep once per issue:
+	//
+	//   - It NEVER records effort (#325). UserPromptSubmit fires before the turn's effort
+	//     resolves, so its $CLAUDE_EFFORT carries the model default rather than the session's
+	//     real level — verified against claude 2.1.209, where a `--effort low` session reports
+	//     `high` here. The value is present-and-WRONG, not absent, so recordEffort's
+	//     `effort != ""` guard cannot catch it; splitting the event is the only thing that can,
+	//     since all three working edges otherwise arrive indistinguishably as "working".
+	//   - It DOES record the permission mode (#324), because it is the once-per-turn edge and
+	//     so the cheap place to read stdin: the per-tool edges stay on HookEventWorking and
+	//     stay stdin-free, keeping the N-per-turn hot path free of a payload read (a
+	//     PostToolUse payload embeds the whole tool_response).
+	//
+	// The rules are opposite because the CARRIERS are: effort rides $CLAUDE_EFFORT, an env var
+	// resolved late, whereas permission_mode rides the stdin payload — claude's own
+	// toolPermissionContext at hook time, correct from this first edge onward.
 	HookEventPromptSubmit = "prompt-submit"
 	// HookEventReady latches state="ready" (Stop / StopFailure — a clean or API-error
-	// end-of-turn). Gated on the in-flight set by the poller, never terminal on its own.
+	// end-of-turn) and records both the permission mode (#324) and the turn's effort (see
+	// applyHookEvent's write rule). Gated on the in-flight set by the poller, never terminal
+	// on its own.
 	HookEventReady = "ready"
 	// HookEventSubagentStart adds the stdin payload's agent_id to the in-flight set.
 	HookEventSubagentStart = "subagent-start"
@@ -55,12 +68,31 @@ const (
 	HookEventResetInflight = "reset-inflight"
 )
 
-// HookEventReadsAgentID reports whether an event's hook subprocess must parse the stdin
-// payload for an agent_id. Only the sub-agent lifecycle events do; the working/ready
-// latches are payload-free, so their subprocess never touches stdin (and so can never
-// block on it).
-func HookEventReadsAgentID(event string) bool {
-	return event == HookEventSubagentStart || event == HookEventSubagentStop
+// HookPayload is the subset of a Claude hook's stdin payload the state record consumes:
+// agent_id for the in-flight set (#290), permission_mode for the mode chip (#324). Both are
+// optional, and "" always means "no information" rather than a value — SubagentStart and
+// StopFailure omit permission_mode entirely, and the main loop's own events omit agent_id
+// (both verified live against claude 2.1.209).
+type HookPayload struct {
+	AgentID        string `json:"agent_id"`
+	PermissionMode string `json:"permission_mode"`
+}
+
+// HookEventReadsStdin reports whether an event's hook subprocess must parse the stdin
+// payload: the sub-agent events need an agent_id, and the prompt-submit/ready edges need a
+// permission_mode. HookEventWorking is deliberately excluded — it is the only event that
+// fires N times per turn (PreToolUse/PostToolUse), so keeping it payload-free keeps the hot
+// path off stdin entirely, and away from the fat tool_response a PostToolUse embeds.
+//
+// The "a hook can never block on stdin" property this predicate used to buy by abstention is
+// now enforced by construction in the reader itself (main.parseHookPayload is bounded in both
+// size and time), which is what makes it safe for the once-per-turn edges to read at all.
+func HookEventReadsStdin(event string) bool {
+	switch event {
+	case HookEventSubagentStart, HookEventSubagentStop, HookEventPromptSubmit, HookEventReady:
+		return true
+	}
+	return false
 }
 
 // hookRecord is the on-disk hook state: the working/ready latch, the set of currently
@@ -87,17 +119,34 @@ type hookRecord struct {
 	// Empty (a Phase-1 bare-word file, a record predating this field, or a model without
 	// effort support) means the chip falls back to the flag.
 	Effort string `json:"effort,omitempty"`
+	// PermissionMode is the live effective permission mode the last main-turn edge carried
+	// (#324) — claude's own toolPermissionContext at hook time, so it tracks an in-session
+	// Shift+Tab rather than the launch flag, and it reports the stable enum ("default") rather
+	// than the footer's display label ("manual mode on"). Unlike Effort, this is only the
+	// FALLBACK source for its chip: the footer scrape stays primary because it refreshes every
+	// 500ms whereas this refreshes only when a hook fires — no Claude hook fires on a mode
+	// switch itself (see Session.RuntimePermissionMode). Effort has no such scrape to defer to
+	// (it is not rendered in the pane at all), which is why the two chips arbitrate
+	// differently. "" = never recorded: a hookless session, a Phase-1 bare-word file, or a
+	// record predating this field.
+	PermissionMode string `json:"permission_mode,omitempty"`
 }
 
 // UpdateHookState applies one hook event to the record at stateFile under an exclusive
 // cross-process lock, then writes it back atomically. It is the single mutation entry
 // point shared by the hook subprocesses (via the `atrium hook` subcommand) and the
-// watchdog's ClearInflight. agentID is used only by the sub-agent events; it is ignored
-// (and may be "") for the others. effort is the subprocess's $CLAUDE_EFFORT, recorded only
-// by the events applyHookEvent's write rule admits. Best-effort by contract: callers (hooks)
-// must not fail the agent on an error here, so the error is returned for logging but never
-// blocks.
-func UpdateHookState(stateFile, event, agentID, effort string) error {
+// watchdog's ClearInflight.
+//
+// The two value params are deliberately separate because their CARRIERS are: p holds the
+// stdin-derived fields (agent_id, permission_mode) and may be zero — each event uses only
+// the ones it needs, see HookEventReadsStdin — while effort is the subprocess's
+// $CLAUDE_EFFORT, an env var every event has for free. Folding them into one struct would
+// hide that split, and it is the whole reason the per-tool hot path can carry effort without
+// touching stdin.
+//
+// Best-effort by contract: callers (hooks) must not fail the agent on an error here, so the
+// error is returned for logging but never blocks.
+func UpdateHookState(stateFile, event string, p HookPayload, effort string) error {
 	unlock, err := hookStateLock(stateFile)
 	if err != nil {
 		return err
@@ -105,21 +154,28 @@ func UpdateHookState(stateFile, event, agentID, effort string) error {
 	defer unlock()
 
 	rec, _ := readHookRecordFile(stateFile) // zero record on a missing/corrupt file
-	applyHookEvent(&rec, event, agentID, effort, time.Now().Unix())
+	applyHookEvent(&rec, event, p, effort, time.Now().Unix())
 	return writeHookRecordAtomic(stateFile, rec)
 }
 
 // applyHookEvent mutates rec in place for one event; now is the unix-second wall-clock time
 // used to stamp the heartbeat on a working edge. Unknown events are ignored (a forward-compat
-// no-op). A sub-agent event with an empty agent_id is skipped: we can't key the set without
-// an id, and adding "" would strand a phantom member the matching Stop could never discard —
-// the watchdog/liveness backstop covers the untracked agent.
+// no-op — which is also how a downgraded binary tolerates a prompt-submit hook baked in by a
+// newer one). A sub-agent event with an empty agent_id is skipped: we can't key the set
+// without an id, and adding "" would strand a phantom member the matching Stop could never
+// discard — the watchdog/liveness backstop covers the untracked agent.
 //
-// The effort write rule (recordEffort) is confined to the working/ready latches: those are
-// the main session's own resolved turns. The sub-agent edges are deliberately excluded — a
-// sub-agent's effort is its own, and subagent-stop additionally empties the in-flight set,
-// which would sneak its level past recordEffort's gate.
-func applyHookEvent(rec *hookRecord, event, agentID, effort string, now int64) {
+// The two field write rules both exclude the sub-agent edges, but by different tests, and the
+// difference is forced by the carrier rather than chosen:
+//
+//   - recordEffort gates on an EMPTY IN-FLIGHT SET. Effort arrives on the stdin-free per-tool
+//     edges, where there is no payload and therefore no agent_id to test — the set is the only
+//     signal available.
+//   - setPermissionMode gates on the payload's AGENT_ID. Mode only ever rides events that
+//     already read stdin, so it can test the writer directly instead of inferring from a set a
+//     missed SubagentStart would leave empty — and it need not suppress a legitimate main-turn
+//     update merely because background work is in flight.
+func applyHookEvent(rec *hookRecord, event string, p HookPayload, effort string, now int64) {
 	switch event {
 	case HookEventWorking:
 		rec.State = hookStateWorking
@@ -130,20 +186,24 @@ func applyHookEvent(rec *hookRecord, event, agentID, effort string, now int64) {
 		rec.LastHeartbeat = now
 		rec.recordEffort(effort)
 	case HookEventPromptSubmit:
-		// The same latch + heartbeat as HookEventWorking, minus the effort write: this edge's
-		// $CLAUDE_EFFORT is a stale pre-resolution value (see the constant).
+		// The same latch + heartbeat as HookEventWorking, with each field on its opposite rule
+		// (see the constant): no effort write, because this edge's $CLAUDE_EFFORT is a stale
+		// pre-resolution value; but this IS the edge that records the mode, because it is the
+		// once-per-turn one and its payload's permission_mode is already correct.
 		rec.State = hookStateWorking
 		rec.LastHeartbeat = now
+		setPermissionMode(rec, p)
 	case HookEventReady:
 		rec.State = hookStateReady
 		rec.recordEffort(effort)
+		setPermissionMode(rec, p)
 	case HookEventSubagentStart:
-		if agentID != "" {
-			rec.Inflight = addAgent(rec.Inflight, agentID)
+		if p.AgentID != "" {
+			rec.Inflight = addAgent(rec.Inflight, p.AgentID)
 		}
 	case HookEventSubagentStop:
-		if agentID != "" {
-			rec.Inflight = removeAgent(rec.Inflight, agentID)
+		if p.AgentID != "" {
+			rec.Inflight = removeAgent(rec.Inflight, p.AgentID)
 		}
 	case HookEventResetInflight:
 		rec.Inflight = nil
@@ -172,6 +232,29 @@ func (rec *hookRecord) recordEffort(effort string) {
 	if effort != "" && len(rec.Inflight) == 0 {
 		rec.Effort = effort
 	}
+}
+
+// setPermissionMode records a main-turn edge's permission_mode (#324). Two guards, both
+// load-bearing and both grounded in a live probe of claude 2.1.209:
+//
+//   - An empty mode is "no information", never a value. StopFailure omits the field
+//     entirely, so an errored turn-end must leave the last known mode standing rather than
+//     blank the chip. Any future event that drops the field is absorbed by the same guard,
+//     with no per-event knowledge here to drift.
+//   - A payload carrying an agent_id came from a SUB-AGENT, whose hooks fire on the PARENT's
+//     state file (#290) and whose permission_mode is resolved through its own
+//     permissionLayers — i.e. a mode the user never chose for this session. The main loop's
+//     own events carry no agent_id, so this cleanly separates the two.
+//
+// The agent_id test is preferred over gating on the in-flight set: it is a direct property of
+// the writer rather than an inference from a set that a missed SubagentStart would leave
+// empty, and it does not suppress a legitimate main-turn update merely because a background
+// sub-agent happens to be in flight.
+func setPermissionMode(rec *hookRecord, p HookPayload) {
+	if p.PermissionMode == "" || p.AgentID != "" {
+		return
+	}
+	rec.PermissionMode = p.PermissionMode
 }
 
 // addAgent returns set with id present exactly once (idempotent add).

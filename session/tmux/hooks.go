@@ -180,9 +180,9 @@ var resolvedBinPath, resolvedBinPathErr = os.Executable()
 // hookEventCommand builds the shell command a Claude hook runs: it calls the atrium
 // binary's hidden `hook` subcommand, which does the locked read-modify-write of the
 // state record. The binary path and state-file path are baked in and single-quoted; the
-// event is a fixed literal (no quoting needed). The sub-agent events additionally read
-// their agent_id from the hook's stdin payload, which Claude pipes in — the command line
-// is identical, only the subcommand's stdin handling differs.
+// event is a fixed literal (no quoting needed). Some events additionally read fields from
+// the hook's stdin payload, which Claude pipes in (see HookEventReadsStdin) — the command
+// line is identical, only the subcommand's stdin handling differs.
 //
 // This replaces the Phase 1 printf one-liner: the in-flight SET needs a locked JSON
 // read-modify-write that shell can't do portably (macOS has no flock(1)), so every event
@@ -217,17 +217,21 @@ func buildHookSettings(binPath, stateFile string) ([]byte, error) {
 		return hookCommand{Type: "command", Command: hookEventCommand(binPath, stateFile, event)}
 	}
 	s := hookSettings{Hooks: map[string][]hookMatcherGroup{
-		// UserPromptSubmit latches working exactly like the tool-use edges, but via its own
-		// event: its $CLAUDE_EFFORT is a stale pre-resolution value, so it must not record
-		// effort (see HookEventPromptSubmit).
+		// UserPromptSubmit latches working exactly like the per-tool edges, but via its own
+		// event, for two independent reasons that happen to demand the same split: its
+		// $CLAUDE_EFFORT is a stale pre-resolution value so it must NOT record effort (#325),
+		// and it is the once-per-turn edge so it is the cheap place to read the payload's
+		// permission_mode (#324) without putting stdin on the per-tool hot path below. See
+		// HookEventPromptSubmit.
 		//
 		// Splitting it out is safe across an atrium upgrade, but bounded rather than
 		// risk-free. ensureHookSettings runs at session Start, so a session already live when
 		// the binary is replaced in place keeps a settings.json routing this edge to the old
-		// "working" verb — which the new binary does record effort on. That session's chip can
-		// show the stale model default mid-turn, until the turn's first PreToolUse (or its
-		// Stop) overwrites it with the resolved truth. Self-correcting within the turn, and
-		// the chip only settles at turn end anyway; a relaunch clears it for good.
+		// "working" verb — which the new binary does record effort on, and reads no mode from.
+		// That session's chip can show the stale model default mid-turn, until the turn's first
+		// PreToolUse (or its Stop) overwrites it with the resolved truth; its mode is
+		// unaffected, still landing on the Stop edge. Self-correcting within the turn, and the
+		// chip only settles at turn end anyway; a relaunch clears it for good.
 		"UserPromptSubmit": {{Hooks: []hookCommand{cmd(HookEventPromptSubmit)}}},
 		"PreToolUse":       {{Matcher: "*", Hooks: []hookCommand{cmd(HookEventWorking)}}},
 		// PostToolUse re-latches working at each tool boundary. It carries no new latch value
@@ -331,7 +335,7 @@ func (t *Session) ClearInflight() error {
 	if err != nil {
 		return err
 	}
-	return UpdateHookState(path, HookEventResetInflight, "", "")
+	return UpdateHookState(path, HookEventResetInflight, HookPayload{}, "")
 }
 
 // cleanupHookSession removes a session's hook artifacts. Called from Close on kill; missing

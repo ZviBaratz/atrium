@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/ZviBaratz/atrium/cmd/cmd_test"
@@ -85,23 +86,40 @@ func TestBuildHookSettings(t *testing.T) {
 	require.Empty(t, parsed.Hooks["UserPromptSubmit"][0].Matcher)
 	require.Empty(t, parsed.Hooks["Stop"][0].Matcher)
 	require.Empty(t, parsed.Hooks["StopFailure"][0].Matcher)
-	// Each event carries the right --event verb. Stop/StopFailure both latch ready (a clean
-	// and an API-error turn-end); UserPromptSubmit/PreToolUse/PostToolUse all latch working
-	// (and bump the heartbeat); the sub-agent lifecycle drives the in-flight set.
+	// Each event carries the right --event verb, asserted exactly (not by substring: the verbs
+	// share prefixes/words, so a Contains check could pass on the wrong one). Stop/StopFailure
+	// both latch ready (a clean and an API-error turn-end); PreToolUse/PostToolUse latch
+	// working; the sub-agent lifecycle drives the in-flight set.
 	//
-	// UserPromptSubmit routes through its own prompt-submit verb rather than sharing
-	// "working": it latches identically but must never record effort, because its
-	// $CLAUDE_EFFORT is a stale model default (a `--effort low` session reports `high`
-	// there). Since the verb is the only thing that distinguishes the three working edges
-	// downstream, this wiring IS the defense — pinning it here keeps a future "simplify
-	// them back into one event" from silently reintroducing the clobber.
-	require.Contains(t, parsed.Hooks["UserPromptSubmit"][0].Hooks[0].Command, "--event "+HookEventPromptSubmit)
-	require.Contains(t, parsed.Hooks["PreToolUse"][0].Hooks[0].Command, HookEventWorking)
-	require.Contains(t, parsed.Hooks["PostToolUse"][0].Hooks[0].Command, HookEventWorking)
-	require.Contains(t, parsed.Hooks["Stop"][0].Hooks[0].Command, HookEventReady)
-	require.Contains(t, parsed.Hooks["StopFailure"][0].Hooks[0].Command, HookEventReady)
-	require.Contains(t, parsed.Hooks["SubagentStart"][0].Hooks[0].Command, HookEventSubagentStart)
-	require.Contains(t, parsed.Hooks["SubagentStop"][0].Hooks[0].Command, HookEventSubagentStop)
+	// UserPromptSubmit latches working too, but routes through its own prompt-submit verb
+	// rather than sharing "working", and that verb is the ONLY thing distinguishing the three
+	// working edges downstream — so this wiring IS the defense for both rules hanging off the
+	// split: the edge must never record effort (its $CLAUDE_EFFORT is a stale model default —
+	// a `--effort low` session reports `high` there, #325) and it IS the edge that records the
+	// permission mode (#324). Pinning the verb here keeps a future "simplify them back into one
+	// event" from silently reintroducing the effort clobber or dropping the mode.
+	verb := func(ev string) string {
+		cmd := parsed.Hooks[ev][0].Hooks[0].Command
+		_, after, found := strings.Cut(cmd, "--event ")
+		require.True(t, found, "event %s has an --event flag", ev)
+		v, _, _ := strings.Cut(after, " ")
+		return v
+	}
+	require.Equal(t, HookEventPromptSubmit, verb("UserPromptSubmit"))
+	require.Equal(t, HookEventWorking, verb("PreToolUse"))
+	require.Equal(t, HookEventWorking, verb("PostToolUse"))
+	require.Equal(t, HookEventReady, verb("Stop"))
+	require.Equal(t, HookEventReady, verb("StopFailure"))
+	require.Equal(t, HookEventSubagentStart, verb("SubagentStart"))
+	require.Equal(t, HookEventSubagentStop, verb("SubagentStop"))
+
+	// The stdin contract the wiring depends on: only the once-per-turn and sub-agent edges
+	// read a payload, so the N-per-turn tool edges stay off stdin entirely — which is exactly
+	// what lets effort ride $CLAUDE_EFFORT on those edges without ever touching stdin.
+	require.True(t, HookEventReadsStdin(verb("UserPromptSubmit")))
+	require.True(t, HookEventReadsStdin(verb("Stop")))
+	require.False(t, HookEventReadsStdin(verb("PreToolUse")), "the per-tool hot path never reads stdin")
+	require.False(t, HookEventReadsStdin(verb("PostToolUse")), "the per-tool hot path never reads stdin")
 }
 
 // The hook command re-invokes the atrium binary (never a shell printf), single-quoting the

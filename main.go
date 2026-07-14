@@ -269,10 +269,11 @@ var (
 		// session/tmux/hooks.go), once per hook event, to maintain the structured
 		// status record — the working/ready latch plus the set of in-flight sub-agent
 		// ids that distinguishes a finished turn from one still waiting on a background
-		// sub-agent (#290). It runs the locked read-modify-write that shell can't do
-		// portably, then exits. Best-effort by contract: a hook must never fail or stall
-		// the agent, so this always exits 0 and reads stdin only for the sub-agent events
-		// that carry an agent_id.
+		// sub-agent (#290), plus the turn's permission mode (#324). It runs the locked
+		// read-modify-write that shell can't do portably, then exits. Best-effort by contract:
+		// a hook must never fail or stall the agent, so this always exits 0, reads stdin only
+		// for the events that need a payload field (tmux.HookEventReadsStdin), and bounds that
+		// read in both size and time.
 		RunE: func(cmd *cobra.Command, args []string) error {
 			runHookEvent(hookStateFileArg, hookEventArg, os.Stdin)
 			return nil
@@ -341,31 +342,68 @@ func runHookEvent(stateFile, event string, stdin io.Reader) {
 	if stateFile == "" || event == "" {
 		return
 	}
-	var agentID string
-	if tmux.HookEventReadsAgentID(event) {
-		agentID = parseSubagentID(stdin)
+	var payload tmux.HookPayload
+	if tmux.HookEventReadsStdin(event) {
+		payload = parseHookPayload(stdin)
 	}
 	// Claude exports the turn's resolved effort level to every hook subprocess. Reading the
-	// env var rather than the stdin payload is what lets the high-frequency working/ready
-	// latches carry effort at all: HookEventReadsAgentID keeps them deliberately payload-free
-	// so their subprocess can never block on stdin. Empty for a model without effort support
-	// (and stale on UserPromptSubmit) — UpdateHookState's write rule sorts that out.
-	if err := tmux.UpdateHookState(stateFile, event, agentID, os.Getenv("CLAUDE_EFFORT")); err != nil {
+	// env var rather than the stdin payload is what lets the N-per-turn per-tool latches carry
+	// effort at all: HookEventReadsStdin keeps those deliberately payload-free, so their
+	// subprocess never touches stdin. The once-per-turn edges do read it, for permission_mode
+	// (#324) — safe because parseHookPayload is bounded in both size and time, so the "a hook
+	// can never block on stdin" property survives the change. Empty for a model without effort
+	// support (and stale on UserPromptSubmit) — UpdateHookState's write rule sorts that out.
+	if err := tmux.UpdateHookState(stateFile, event, payload, os.Getenv("CLAUDE_EFFORT")); err != nil {
 		fmt.Fprintf(os.Stderr, "atrium hook: %v\n", err)
 	}
 }
 
-// parseSubagentID pulls the agent_id out of a SubagentStart/Stop hook's stdin payload.
-// Best-effort: an absent, empty, or unparseable payload yields "", which applyHookEvent
-// treats as "can't track this one" (skipped) rather than corrupting the in-flight set.
-func parseSubagentID(stdin io.Reader) string {
-	var payload struct {
-		AgentID string `json:"agent_id"`
+// hookPayloadLimit bounds how much of a hook's stdin payload we will buffer. json.Decoder
+// buffers a whole top-level value before unmarshalling, so an unbounded read is the only real
+// memory exposure here. 4 MiB sits far above any payload these events carry and far below
+// anything that could hurt; on overflow the decode fails and we degrade to the zero payload.
+//
+// That degradation is not free, so the cap is set where it can only ever fire on a broken
+// contract: an overflowing SubagentStart/Stop loses its agent_id, stranding a member in the
+// in-flight set until the wall-clock watchdog clears it (#290) — a bounded, self-healing
+// cost, but a real one, and one the previous unbounded Decode would not have paid.
+const hookPayloadLimit = 4 << 20
+
+// hookPayloadTimeout caps the wait for stdin. A var so tests can shorten it.
+var hookPayloadTimeout = 2 * time.Second
+
+// parseHookPayload reads the fields the state record consumes out of a hook's stdin payload.
+// Best-effort three ways, and every degradation is safe:
+//
+//   - BOUNDED IN SIZE (io.LimitReader): a truncated read fails the decode → zero payload.
+//   - BOUNDED IN TIME (goroutine + select): claude always writes the payload and closes the
+//     pipe, but were stdin ever a non-pipe or a never-closed fd, an unbounded decode would
+//     stall the hook — and claude WAITS for its hooks. This makes hookstate.go's "a hook can
+//     never block on stdin" property true by CONSTRUCTION rather than by abstention, which is
+//     what lets the once-per-turn edges read stdin at all; it also hardens the sub-agent path,
+//     which previously did an unbounded Decode. The blocked goroutine is bounded by process
+//     lifetime — the hook exits immediately after. The cap is orders of magnitude above a real
+//     pipe read, so it can only fire on a broken contract, never on a slow-but-real pipe
+//     (which would cost a lost agent_id and regress #290).
+//   - TOLERANT OF ABSENCE: an empty, absent, or unparseable payload yields the zero value.
+//
+// Crucially, every degradation costs ONLY the payload-derived fields. The working/ready latch
+// and the #311 heartbeat ride the --event command line, not stdin, so a failed read can never
+// disturb #290/#311 — and an empty permission_mode is a no-op in applyHookEvent, not a
+// blanked chip.
+func parseHookPayload(stdin io.Reader) tmux.HookPayload {
+	ch := make(chan tmux.HookPayload, 1) // buffered: a late goroutine never blocks on send
+	go func() {
+		var p tmux.HookPayload
+		_ = json.NewDecoder(io.LimitReader(stdin, hookPayloadLimit)).Decode(&p)
+		ch <- p
+	}()
+	select {
+	case p := <-ch:
+		return p
+	case <-time.After(hookPayloadTimeout):
+		return tmux.HookPayload{}
 	}
-	if err := json.NewDecoder(stdin).Decode(&payload); err != nil {
-		return ""
-	}
-	return payload.AgentID
 }
 
 func init() {

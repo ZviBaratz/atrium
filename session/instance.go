@@ -234,8 +234,9 @@ type Instance struct {
 	// In-memory only: the first post-restore tick re-extracts once.
 	modelStamp transcript.Stamp
 
-	// runtimeMode is the permission mode last detected from the live pane footer
-	// (ComputeMode → SetModeMeta), e.g. "auto" after a plan-launched session is
+	// runtimeMode is the permission mode the poll last resolved — the live pane footer,
+	// else the hook record where the footer is silent (ComputeMode → SetModeMeta; see
+	// tmux.Session.RuntimePermissionMode) — e.g. "auto" after a plan-launched session is
 	// switched in-session. Written only on the main thread (like modelID),
 	// persisted so paused sessions keep the chip. "" = not yet known (the UI
 	// falls back to the --permission-mode flag).

@@ -37,9 +37,9 @@ func seedInflight(t *testing.T, inst *Instance, stateEvent string, ids ...string
 	path, err := inst.tmux().HookStateFile()
 	require.NoError(t, err)
 	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
-	require.NoError(t, tmux.UpdateHookState(path, stateEvent, "", ""))
+	require.NoError(t, tmux.UpdateHookState(path, stateEvent, tmux.HookPayload{}, ""))
 	for _, id := range ids {
-		require.NoError(t, tmux.UpdateHookState(path, tmux.HookEventSubagentStart, id, ""))
+		require.NoError(t, tmux.UpdateHookState(path, tmux.HookEventSubagentStart, tmux.HookPayload{AgentID: id}, ""))
 	}
 }
 

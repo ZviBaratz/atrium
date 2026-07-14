@@ -91,8 +91,9 @@ type statusMonitor struct {
 	// when this changes, so the log records transitions (hook vs marker vs fallback) rather
 	// than one line per 500ms tick.
 	lastSignal string
-	// mode is the last permission mode detected from the live footer ("" until the
-	// first confident detection). Sticky: an indeterminate footer (busy/startup)
+	// mode is the last permission mode Poll resolved — the live footer indicator when it
+	// reads confidently, else the hook record's permission_mode (#324); "" until the first
+	// of either. Sticky: a frame where neither source speaks (busy/startup, no hook channel)
 	// leaves it untouched so the chip doesn't flicker. Read under monitorMu via
 	// RuntimePermissionMode.
 	mode string
@@ -188,9 +189,10 @@ func (m *statusMonitor) hash(s string) []byte {
 	return h.Sum(nil)
 }
 
-// RuntimePermissionMode returns the permission mode last detected from the live
-// pane footer ("" until the first confident detection, or for agents whose
-// footer carries no mode indicator). Updated by Poll; read under monitorMu so it
+// RuntimePermissionMode returns the permission mode Poll last resolved for this session —
+// the live footer indicator, else the hook record's permission_mode where the footer is
+// silent (#324). "" until the first of either lands, or for agents whose footer carries no
+// mode indicator and that have no hook channel. Updated by Poll; read under monitorMu so it
 // stays consistent with a concurrent poll.
 func (t *Session) RuntimePermissionMode() string {
 	t.monitorMu.Lock()
@@ -265,11 +267,33 @@ func (t *Session) Poll() PaneState {
 	content := cleanForDetection(raw)
 	name := t.snapshotName()
 
-	// Live permission mode from the footer indicator. Sticky on an indeterminate
-	// read so a busy/startup footer doesn't blank the chip; the Instance reads
-	// t.monitor.mode via RuntimePermissionMode on the metadata tick.
+	// Live permission mode, footer first and the hook record only to fill its gaps (#324).
+	// Sticky on a doubly-indeterminate read so a busy/startup frame doesn't blank the chip;
+	// the Instance reads t.monitor.mode via RuntimePermissionMode on the metadata tick.
+	//
+	// The footer stays PRIMARY because it is the only source that tracks a Shift+Tab the user
+	// makes without then submitting anything: no Claude hook fires on a mode switch itself, so
+	// the record's mode refreshes only at a turn boundary. Preferring the record would leave a
+	// switch-then-detach sitting stale until the next turn — a regression on the exact case
+	// the runtime detector exists for (session/permissionmode.go).
+	//
+	// The record is strictly better than the footer's ABSENCE, though, and the footer's
+	// realistic failure is silence rather than a confident wrong answer: a custom statusLine
+	// that draws its own ─── becomes footerBelowBox's anchor and hides the mode line above it
+	// (chrome.go), and a reworded indicator matches no token. Either way DetectPermissionMode
+	// reports known=false and, before this, the chip fell back to the stale launch flag
+	// forever. The record answers with claude's own enum, so footer drift now degrades into a
+	// silent self-heal instead of a stale chip.
+	//
+	// Cost is confined to the gap: a session whose footer parses never reads the file, and
+	// readHookRecord is a no-op for agents without HookSupport. A session actually IN the gap
+	// (a statusLine stealing the anchor) reads it every tick for as long as the gap lasts —
+	// inherent to being the fallback, and a lock-free os.ReadFile of a small file next to the
+	// capture-pane fork/exec already running under this same monitorMu.
 	if mode, ok := t.adapter.DetectPermissionMode(content); ok {
 		t.monitor.mode = mode
+	} else if rec, ok := t.readHookRecord(); ok && rec.PermissionMode != "" {
+		t.monitor.mode = rec.PermissionMode
 	}
 
 	// Track content change. Used both by the no-marker fallback and by the settle check
