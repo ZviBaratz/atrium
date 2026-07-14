@@ -648,7 +648,12 @@ func renderSplashField(w, h, frame int, pal theme.Palette, clearing splashCleari
 	}
 
 	var sb strings.Builder
-	var run strings.Builder
+	// A seed size, not a bound: the SGR brackets mean the real output runs
+	// several times this. It exists so Builder's doubling starts high enough to
+	// land in ~2 more steps (20 allocs/frame at 240×60 → 4). Measured: sizing it
+	// to the true output is *slower*, since over-allocating costs more than the
+	// copies it saves.
+	sb.Grow(w*h*3 + h)
 	for row := 0; row < h; row++ {
 		if row > 0 {
 			sb.WriteByte('\n')
@@ -712,12 +717,13 @@ func renderSplashField(w, h, frame int, pal theme.Palette, clearing splashCleari
 			}
 
 			if idx != curIdx {
-				flushSplashRun(&sb, &run, curIdx, lut)
+				splashCloseRun(&sb, curIdx, lut)
+				splashOpenRun(&sb, idx, lut)
 				curIdx = idx
 			}
-			run.WriteRune(ch)
+			sb.WriteRune(ch)
 		}
-		flushSplashRun(&sb, &run, curIdx, lut)
+		splashCloseRun(&sb, curIdx, lut)
 	}
 	return sb.String()
 }

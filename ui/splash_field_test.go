@@ -529,16 +529,33 @@ func BenchmarkSplashValNoise(b *testing.B) {
 	_ = sink
 }
 
-// BenchmarkRenderSplashVariants tracks the ≤3ms/frame budget per variant at
-// the reference 80×30 pane (checked manually; never a timed assertion).
+// BenchmarkRenderSplashVariants tracks the ≤3ms/frame budget per variant
+// (checked manually; never a timed assertion — a timed assertion would flake on
+// shared CI).
+//
+// Two sizes, because they answer different questions. 80×30 is the reference
+// preview pane. 240×60 is the *screensaver*, which renders full-window: it is
+// ~6× the cells but ~8× the cost, and it is measured against a 16.7ms/60fps
+// frame — so a variant can sit comfortably inside the 80×30 budget and still be
+// a slideshow full-screen. Benchmark both before shipping one.
 func BenchmarkRenderSplashVariants(b *testing.B) {
 	pal := splashTestPalette()
-	for name, v := range splashTestVariants() {
-		b.Run(name, func(b *testing.B) {
-			b.ReportAllocs()
-			for i := 0; i < b.N; i++ {
-				_ = renderSplashField(80, 30, i, pal, centeredClearing(30, 20, 4), v)
-			}
-		})
+	sizes := []struct {
+		name string
+		w, h int
+	}{
+		{"80x30", 80, 30},
+		{"240x60", 240, 60}, // the full-window screensaver
+	}
+	for _, s := range sizes {
+		for name, v := range splashTestVariants() {
+			b.Run(s.name+"/"+name, func(b *testing.B) {
+				b.ReportAllocs()
+				clearing := centeredClearing(s.h, 20, 4)
+				for i := 0; i < b.N; i++ {
+					_ = renderSplashField(s.w, s.h, i, pal, clearing, v)
+				}
+			})
+		}
 	}
 }

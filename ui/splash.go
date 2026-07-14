@@ -176,6 +176,31 @@ type splashLUT struct {
 	colors []lipgloss.Color
 	styles []lipgloss.Style
 	star   lipgloss.Style
+	// affix/starAffix are the styles' SGR sequences, split out once per palette
+	// so the hot loop can bracket a run with two WriteStrings instead of calling
+	// Style.Render — which allocates a fresh string per run. Emission dominates
+	// the frame (the field-free legacy variant still costs ~290ns/cell), and
+	// runs coalesce at only ~1.1 cells, so that was ~one allocation per cell.
+	affix     []splashAffix
+	starAffix splashAffix
+}
+
+// splashAffix is a style's rendered prefix/suffix around its content.
+type splashAffix struct{ prefix, suffix string }
+
+// splashAffixFor extracts a style's SGR bracket by rendering a sentinel and
+// splitting on it. Going through Render (rather than formatting the escape by
+// hand) is what keeps this correct under lipgloss's color-profile degradation:
+// on a no-color profile Render returns the sentinel untouched, so both affixes
+// come back empty and the run emits as plain text — exactly what Render would
+// have produced.
+func splashAffixFor(st lipgloss.Style) splashAffix {
+	const sentinel = "\x00"
+	prefix, suffix, ok := strings.Cut(st.Render(sentinel), sentinel)
+	if !ok {
+		return splashAffix{} // style mangled the sentinel; degrade to plain
+	}
+	return splashAffix{prefix: prefix, suffix: suffix}
 }
 
 var (
@@ -219,6 +244,7 @@ func buildSplashLUT(pal theme.Palette) *splashLUT {
 		colors: make([]lipgloss.Color, splashLUTSize),
 		styles: make([]lipgloss.Style, splashLUTSize),
 		star:   lipgloss.NewStyle().Foreground(pal.Fg),
+		affix:  make([]splashAffix, splashLUTSize),
 	}
 	anchors := make([]colorful.Color, len(anchorCols))
 	ok := true
@@ -246,6 +272,12 @@ func buildSplashLUT(pal theme.Palette) *splashLUT {
 	lut.colors[0], lut.styles[0] = anchorCols[0], lipgloss.NewStyle().Foreground(anchorCols[0])
 	last := splashLUTSize - 1
 	lut.colors[last], lut.styles[last] = anchorCols[segs], lipgloss.NewStyle().Foreground(anchorCols[segs])
+	// Split every style's SGR bracket once, after the endpoint pinning above so
+	// the affixes match the styles they were derived from.
+	for i, st := range lut.styles {
+		lut.affix[i] = splashAffixFor(st)
+	}
+	lut.starAffix = splashAffixFor(lut.star)
 	return lut
 }
 
@@ -277,22 +309,33 @@ func (c splashClearing) blanks(dx float64, row int) bool {
 		inEllipse(c.msgHalfW, c.msgHalfH, c.msgCenterRow)
 }
 
-// flushSplashRun emits an accumulated run of same-color cells with a single SGR
-// (or raw, for a blank run), then resets the buffer. Coalescing runs keeps the
-// per-frame ANSI compact instead of one color code per cell.
-func flushSplashRun(sb, run *strings.Builder, styleIdx int, lut *splashLUT) {
-	if run.Len() == 0 {
-		return
-	}
+// splashRunAffix resolves a run's SGR bracket from its style index. The index
+// protocol: negative is a blank run (raw, uncolored), an index at or past the
+// gradient is the star style, everything else is a gradient stop.
+func splashRunAffix(styleIdx int, lut *splashLUT) splashAffix {
 	switch {
 	case styleIdx < 0: // blank run — raw spaces, no color
-		sb.WriteString(run.String())
-	case styleIdx >= len(lut.styles): // star run — bright near-white
-		sb.WriteString(lut.star.Render(run.String()))
+		return splashAffix{}
+	case styleIdx >= len(lut.affix): // star run — bright near-white
+		return lut.starAffix
 	default: // gradient run
-		sb.WriteString(lut.styles[styleIdx].Render(run.String()))
+		return lut.affix[styleIdx]
 	}
-	run.Reset()
+}
+
+// splashOpenRun / splashCloseRun bracket a run of same-color cells with one SGR
+// pair, while the cells themselves are written straight into sb. The cells used
+// to accumulate in a second strings.Builder that was Render'd and Reset per run,
+// but Reset drops the buffer — so every run re-allocated, and runs coalesce at
+// only ~1.1 cells because the hue gradient steps almost every cell. Writing
+// through to sb keeps the emitted bytes identical while making the per-frame
+// allocation count a function of sb's growth rather than of the cell count.
+func splashOpenRun(sb *strings.Builder, styleIdx int, lut *splashLUT) {
+	sb.WriteString(splashRunAffix(styleIdx, lut).prefix)
+}
+
+func splashCloseRun(sb *strings.Builder, styleIdx int, lut *splashLUT) {
+	sb.WriteString(splashRunAffix(styleIdx, lut).suffix)
 }
 
 // starHash is a deterministic per-cell pseudo-random value in [0,1), so the
