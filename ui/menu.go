@@ -54,8 +54,17 @@ const (
 var defaultHintKeys = []keys.KeyName{keys.KeyEnter, keys.KeyNew, keys.KeyQuickSend, keys.KeyKill, keys.KeyHelp}
 
 // pausedHintKeys replace the default set for a paused selection: it can't be
-// opened or sent to, so the bar points at resume instead.
-var pausedHintKeys = []keys.KeyName{keys.KeyResume, keys.KeyNew, keys.KeyKill, keys.KeyHelp}
+// opened or sent to, so the bar points at resume instead. Copy-branch earns a
+// slot in this set alone: the branch is what you parked the session to pick up
+// elsewhere, and the paused preview names the same key — it has to, since this
+// bar can be switched off — so the two must not disagree.
+var pausedHintKeys = []keys.KeyName{keys.KeyResume, keys.KeyCopyBranch, keys.KeyNew, keys.KeyKill, keys.KeyHelp}
+
+// pausedDirectHintKeys drop copy-branch for a parked direct (non-git) session:
+// it has no worktree and no branch, so y would only report "no branch to copy
+// yet". Such a session never reaches Paused through Pause() (which refuses it)
+// but does through RecoverLostSession when its pane dies.
+var pausedDirectHintKeys = []keys.KeyName{keys.KeyResume, keys.KeyNew, keys.KeyKill, keys.KeyHelp}
 
 // needsInputHintKeys replace the default set while the agent is blocked on a
 // prompt: answering it is the action that unblocks everything else, so this
@@ -166,6 +175,9 @@ func hintsFor(instance *session.Instance) []keys.KeyName {
 		return nil
 	}
 	if instance.Paused() {
+		if instance.IsDirect() {
+			return pausedDirectHintKeys
+		}
 		return pausedHintKeys
 	}
 	if instance.GetStatus() == session.NeedsInput {

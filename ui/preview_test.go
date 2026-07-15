@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	xansi "github.com/charmbracelet/x/ansi"
 	"github.com/muesli/ansi"
 	"github.com/stretchr/testify/require"
 )
@@ -882,5 +883,53 @@ func TestPreviewFallbackClampedToPaneBox(t *testing.T) {
 	for i, l := range lines {
 		require.LessOrEqualf(t, ansi.PrintableRuneWidth(l), 56,
 			"fallback line %d wider than the pane", i)
+	}
+}
+
+// pausedInstance builds a not-yet-started instance parked in Paused with a
+// branch to check out. UpdateContent takes the Paused arm before it touches
+// tmux or git, so no worktree or mock executor is needed.
+func pausedInstance(t *testing.T, branch string) *session.Instance {
+	t.Helper()
+	inst, err := session.NewInstance(session.InstanceOptions{
+		Title: "paused-inst", Path: t.TempDir(), Program: "bash",
+	})
+	require.NoError(t, err)
+	inst.SetStatus(session.Paused)
+	inst.Branch = branch
+	return inst
+}
+
+// Pausing has not touched the clipboard since ea0b490 (#173) removed the
+// unsolicited WriteAll from Pause(), but this fallback kept claiming it did for
+// another year — #173's diff never opened this file. The branch reaches the
+// clipboard only when the user asks for it, so the fallback advertises the key
+// that asks rather than promising a copy nobody made.
+func TestPreviewPausedFallbackPointsAtCopyKeyAndNeverClaimsAClipboardWrite(t *testing.T) {
+	pane := NewPreviewPane()
+	pane.SetSize(80, 20)
+	require.NoError(t, pane.UpdateContent(pausedInstance(t, "zvi/foo")))
+
+	out := xansi.Strip(pane.String())
+	require.Contains(t, out, "zvi/foo", "the branch to check out must stay on screen")
+	require.Contains(t, out, "'y'", "the fallback must point at the key that actually copies")
+	require.NotContains(t, out, "clipboard",
+		"nothing copies on pause — the fallback must not claim the clipboard was written")
+}
+
+// The fallback is composed width-unaware (setFallbackState never sees p.width)
+// and JoinVertical pads every line out to the block's longest, so an oversize
+// message line drags the banner right and MaxWidth chops the lot. A pane this
+// narrow is reachable: an 80-col terminal at maxListRatio leaves ~28.
+func TestPreviewPausedFallbackClampedToNarrowPane(t *testing.T) {
+	pane := NewPreviewPane()
+	pane.SetSize(28, 13)
+	require.NoError(t, pane.UpdateContent(pausedInstance(t, "zvi/a-rather-long-branch-name")))
+
+	lines := strings.Split(pane.String(), "\n")
+	require.LessOrEqual(t, len(lines), 13, "paused fallback must not exceed the pane height")
+	for i, l := range lines {
+		require.LessOrEqualf(t, ansi.PrintableRuneWidth(l), 28,
+			"paused fallback line %d wider than the pane", i)
 	}
 }

@@ -59,8 +59,31 @@ func TestMenu_PausedHintLine(t *testing.T) {
 	out := m.String()
 	require.Contains(t, out, "resume")
 	require.Contains(t, out, "kill")
+	require.Contains(t, out, "copy branch",
+		"a paused session's branch is the thing you came to pick up elsewhere — y works here")
 	require.NotContains(t, out, "open", "a paused session cannot be attached")
 	require.NotContains(t, out, "send", "a paused session cannot receive messages")
+}
+
+// A direct (non-git) session has no worktree and no branch, so y would report
+// "no branch to copy yet". Direct sessions still reach Paused — not through
+// Pause(), which refuses them, but through RecoverLostSession when their pane
+// dies — and hintsFor tests Paused() before IsDirect(), so the paused set has
+// to carve them out or the bar advertises a dead key.
+func TestMenu_PausedDirectHintLineOmitsCopyBranch(t *testing.T) {
+	inst, err := session.NewInstance(session.InstanceOptions{
+		Title: "t", Path: t.TempDir(), Program: "echo", Direct: true,
+	})
+	require.NoError(t, err)
+	inst.SetStatus(session.Paused)
+
+	m := NewMenu()
+	m.SetSize(200, 3)
+	m.SetInstance(inst)
+
+	out := m.String()
+	require.Contains(t, out, "resume", "a parked direct session can still be resumed")
+	require.NotContains(t, out, "copy branch", "a direct session has no branch to copy")
 }
 
 // A session with work on its branch surfaces the pause/push pair; a clean one

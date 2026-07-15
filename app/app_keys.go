@@ -735,8 +735,8 @@ func (m *home) pauseSelected() (tea.Model, tea.Cmd) {
 		return m, m.handleError(fmt.Errorf("pause is not available for a direct (non-git) session; it runs in place with no worktree to free"))
 	}
 
-	// Pause off the UI thread: the branch name is copied to the clipboard inside
-	// Pause(); the always-on hint bar carries the reminder. The completion handler
+	// Pause off the UI thread: Pause() commits any dirty work and removes the
+	// worktree, keeping the branch to check out elsewhere. The completion handler
 	// (pauseDoneMsg) tears down the terminal, persists, and opens the rename overlay.
 	return m, m.beginAsyncAction("pausing…", func() tea.Msg {
 		if err := selected.Pause(); err != nil {

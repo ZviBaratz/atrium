@@ -166,14 +166,21 @@ func (p *PreviewPane) UpdateContent(instance *session.Instance) error {
 			p.setFallbackState("Session is paused. Press 'r' to resume.")
 			return nil
 		}
+		// Nothing copies on pause (#173 dropped that unsolicited write), so the branch
+		// is offered with the key that copies it on request. The affordance sits on its
+		// own line deliberately: this block is composed width-unaware and JoinVertical
+		// pads every line out to the longest one, so folding it into the branch line
+		// would widen the block and cost the banner truncation on a narrow pane.
 		p.setFallbackState(lipgloss.JoinVertical(lipgloss.Center,
 			"Session is paused. Press 'r' to resume.",
 			"",
 			theme.Current().AttentionStyle().
 				Render(fmt.Sprintf(
-					"The instance can be checked out at '%s' (copied to your clipboard)",
+					"The instance can be checked out at '%s'",
 					instance.Branch,
 				)),
+			theme.Current().AttentionStyle().
+				Render("(press 'y' to copy)"),
 			theme.Current().AttentionStyle().
 				Render("Switch your main repo off this branch before resuming."),
 		))
