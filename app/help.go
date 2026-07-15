@@ -98,6 +98,7 @@ func (h helpTypeGeneral) toContent() string {
 		helpHeaderStyle().Render("Groups"),
 		helpRow("J / K", "reorder within a repo group"),
 		helpRow("{ / }", "move a whole group up / down"),
+		helpRow("[ / ]", "move an account cluster up / down"),
 		helpRow("← / →", "collapse / expand group"),
 		helpRow("Z", "collapse / expand all"),
 		"",

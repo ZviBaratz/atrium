@@ -338,7 +338,7 @@ func newSettingRows(cfg *config.Config) []settingRow {
 		},
 		{
 			key: "group_mode", section: "Behavior", label: "Account clustering", kind: kindEnum,
-			description: "Off (the default) keeps the list grouped by repo. On adds a top-level cluster by Claude account above the repo groups — a divider and tinted headers per account. The clustering is a visual no-op unless two or more accounts are present. Manual reordering stays available: J/K reorders within a repo group, and { / } reorders groups within an account cluster (a move across an account boundary is refused).",
+			description: "Off (the default) keeps the list grouped by repo. On adds a top-level cluster by Claude account above the repo groups — a divider and tinted headers per account. The clustering is a visual no-op unless two or more accounts are present. Manual reordering stays available: J/K reorders within a repo group, { / } reorders groups within an account cluster (a move across an account boundary is refused), and [ / ] moves a whole account cluster.",
 			// Display value is off/on; the stored config value stays repo/account, so
 			// config.json and a future third grouping axis keep their vocabulary.
 			get: func(c *config.Config) string {

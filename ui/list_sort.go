@@ -141,7 +141,7 @@ func (l *List) rebuildView() bool {
 	next := make([]*session.Instance, len(l.manual))
 	copy(next, l.manual)
 	if l.accountGrouped() {
-		next = clusterByAccount(next)
+		next = clusterByAccount(next, l.accountOrder)
 	}
 	if l.sortActive() {
 		sortWithinRepoGroups(next)
@@ -191,10 +191,15 @@ func sortWithinRepoGroups(items []*session.Instance) {
 
 // clusterByAccount reorders whole repo blocks so blocks sharing a Claude account are
 // contiguous, without disturbing any block's internal order. Input must be repo-
-// contiguous (the manual invariant). Accounts are emitted in first-appearance order;
-// the no-account ("") bucket trails last. Repo blocks within an account keep their
+// contiguous (the manual invariant). Repo blocks within an account keep their
 // first-appearance order. Pure function — the view deriver, not a state mutator.
-func clusterByAccount(items []*session.Instance) []*session.Instance {
+//
+// Cluster order is the user's chosen order (see List.accountOrder) intersected with the
+// accounts actually present, followed by any unlisted account in first-appearance order,
+// with the no-account ("") bucket trailing last unless it is itself listed. A nil/empty
+// order therefore reproduces the original first-appearance rule exactly — which is what
+// makes a state file predating the order behave as it always did.
+func clusterByAccount(items []*session.Instance, order []string) []*session.Instance {
 	type block struct {
 		items []*session.Instance
 		acct  string
@@ -203,17 +208,33 @@ func clusterByAccount(items []*session.Instance) []*session.Instance {
 	forEachRepoBlock(items, func(start, end int) {
 		blocks = append(blocks, block{items: items[start:end], acct: accountKey(items[start])})
 	})
-	order := make([]string, 0, len(blocks))
-	seen := map[string]bool{}
+	present := make(map[string]bool, len(blocks))
 	for _, b := range blocks {
-		if b.acct != "" && !seen[b.acct] {
-			seen[b.acct] = true
-			order = append(order, b.acct)
+		present[b.acct] = true
+	}
+	seq := make([]string, 0, len(blocks))
+	emitted := map[string]bool{}
+	emit := func(acct string) {
+		if !emitted[acct] {
+			emitted[acct] = true
+			seq = append(seq, acct)
 		}
 	}
-	order = append(order, "") // no-account bucket trails last
+	for _, acct := range order { // the chosen order leads, in its own sequence
+		if present[acct] {
+			emit(acct)
+		}
+	}
+	for _, b := range blocks { // then anything unlisted, by first appearance
+		if b.acct != "" {
+			emit(b.acct)
+		}
+	}
+	if present[""] { // "" trails last unless the chosen order placed it
+		emit("")
+	}
 	out := make([]*session.Instance, 0, len(items))
-	for _, acct := range order {
+	for _, acct := range seq {
 		for _, b := range blocks {
 			if b.acct == acct {
 				out = append(out, b.items...)
@@ -310,13 +331,14 @@ func blockRange(items []*session.Instance, key string) (start, end int) {
 // canonical order after either a status sort or account clustering.
 //
 // In-place transposition (as opposed to removing a block and reinserting it beside
-// the pivot) is what keeps account clustering stable: clusterByAccount orders
-// accounts by their first-appearance index in manual, so vacating a block's slot
-// could hand an earlier index to a different account and yank an unrelated cluster.
-// Transposing keeps the leading slot's account fixed and every interior block
-// interior, so no account's first-appearance order changes — only the two blocks'
-// relative order within their own cluster flips. For a status sort the two blocks
-// are already adjacent in manual, so this degenerates to a single adjacent swap.
+// the pivot) is what keeps account clustering stable: clusterByAccount falls back to
+// first-appearance in manual for any account the chosen order does not list, so
+// vacating a block's slot could hand an earlier index to a different unlisted account
+// and yank an unrelated cluster. Transposing keeps the leading slot's account fixed
+// and every interior block interior, so no account's first-appearance order changes —
+// only the two blocks' relative order within their own cluster flips. For a status
+// sort the two blocks are already adjacent in manual, so this degenerates to a single
+// adjacent swap.
 func transposeBlocksInManual(items []*session.Instance, keyA, keyB string) []*session.Instance {
 	a0, a1 := blockRange(items, keyA)
 	b0, b1 := blockRange(items, keyB)

@@ -121,6 +121,20 @@ func TestState_CollapsedReposRoundTrip(t *testing.T) {
 	assert.Equal(t, []string{"repoA", "repoB"}, loaded.GetCollapsedRepos())
 }
 
+func TestState_AccountOrderRoundTrip(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	// A state file predating the field (and a fresh one) has no order, which the
+	// list reads as "fall back to first-appearance" — today's behavior.
+	assert.Empty(t, DefaultState().GetAccountOrder())
+
+	s := DefaultState()
+	require.NoError(t, s.SetAccountOrder([]string{"personal", "work"}))
+
+	loaded := LoadState()
+	assert.Equal(t, []string{"personal", "work"}, loaded.GetAccountOrder())
+}
+
 func TestState_DraftRoundTrip(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 

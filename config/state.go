@@ -46,6 +46,10 @@ type AppState interface {
 	GetCollapsedRepos() []string
 	// SetCollapsedRepos replaces the set of folded repo group keys
 	SetCollapsedRepos(repos []string) error
+	// GetAccountOrder returns the chosen order of account clusters in the session list
+	GetAccountOrder() []string
+	// SetAccountOrder replaces the chosen order of account clusters
+	SetAccountOrder(accounts []string) error
 	// GetListRatio returns the fraction of width given to the session list
 	GetListRatio() float64
 	// SetListRatio stores the list/preview split (clamped to a sane range)
@@ -121,6 +125,13 @@ type State struct {
 	RecentPaths []string `json:"recent_paths"`
 	// CollapsedRepos is the set of repo group keys the session list should render folded
 	CollapsedRepos []string `json:"collapsed_repos"`
+	// AccountOrder is the chosen order of the session list's account clusters,
+	// most-preferred first (see ui.List.SetAccountOrder). An account missing from the
+	// list falls back to first-appearance order and "" (no account) trails last, so an
+	// absent key — an older state file — reproduces the pre-reordering behavior exactly.
+	// Names with no live sessions are kept rather than pruned: they cost nothing in the
+	// view and are what restores an account's slot when a session for it returns.
+	AccountOrder []string `json:"account_order,omitempty"`
 	// ListRatio is the fraction of the terminal width given to the session list.
 	// Zero (an older state file with no such key) reads back as defaultListRatio.
 	ListRatio float64 `json:"list_ratio,omitempty"`
@@ -297,6 +308,17 @@ func (s *State) GetCollapsedRepos() []string {
 // SetCollapsedRepos replaces the set of folded repo group keys and persists it.
 func (s *State) SetCollapsedRepos(repos []string) error {
 	s.CollapsedRepos = repos
+	return SaveState(s)
+}
+
+// GetAccountOrder returns the chosen order of the session list's account clusters.
+func (s *State) GetAccountOrder() []string {
+	return s.AccountOrder
+}
+
+// SetAccountOrder replaces the chosen order of account clusters and persists it.
+func (s *State) SetAccountOrder(accounts []string) error {
+	s.AccountOrder = accounts
 	return SaveState(s)
 }
 

@@ -42,9 +42,12 @@ const (
 	// (personal/work), with a divider and tinted headers. The clustering is a
 	// visual no-op when fewer than two distinct accounts are present (e.g.
 	// ClaudeAccounts unconfigured). It only reorders whole repo blocks, so manual
-	// reordering stays available: J/K reorders within a group as usual, and { / }
-	// reorders groups within an account cluster (a move across an account boundary
-	// is refused, since clustering owns block order across accounts).
+	// reordering stays available at every scope: J/K reorders within a group as
+	// usual, { / } reorders groups within an account cluster (a move across an
+	// account boundary is refused — clustering owns which cluster a block belongs
+	// to), and [ / ] reorders the clusters themselves. Cluster order is the user's,
+	// not an accident of creation order: it is stored in State.AccountOrder, and
+	// clustering falls back to first-appearance only for accounts it does not name.
 	GroupModeAccount = "account"
 )
 
@@ -300,7 +303,8 @@ type Config struct {
 	// account). Empty or unrecognized values normalize to "repo" (GetGroupMode).
 	// Only meaningful when ClaudeAccounts are configured; with fewer than two
 	// distinct accounts it renders identically to "repo". Manual reordering stays
-	// available under it: J/K within a group, and { / } within an account cluster.
+	// available under it: J/K within a group, { / } within an account cluster, and
+	// [ / ] across clusters (whose order persists in State.AccountOrder).
 	GroupMode string `json:"group_mode,omitempty"`
 	// SmartDispatchAuto, when true, lets a confident deterministic project match from the
 	// smart-dispatch input (the `i` key) create the session immediately, skipping the

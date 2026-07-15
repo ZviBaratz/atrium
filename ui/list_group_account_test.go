@@ -138,7 +138,7 @@ func TestGroupMode_GroupMoveWithinClusterSucceeds(t *testing.T) {
 	// interleaved where it was, only the two work blocks swapped.
 	require.Equal(t, []string{"infra|work", "sideproj|personal", "api|work"}, persistKeys(l))
 	// items stays consistent with a fresh cluster of the canonical order.
-	require.Equal(t, l.items, clusterByAccount(l.InstancesForPersist()))
+	require.Equal(t, l.items, clusterByAccount(l.InstancesForPersist(), l.AccountOrder()))
 }
 
 func TestGroupMode_RendersAccountDividers(t *testing.T) {
@@ -335,7 +335,7 @@ func TestGroupMode_WithinGroupReorderUnderAccountGrouping(t *testing.T) {
 	require.True(t, l.MoveUp(), "J/K works within a repo under account grouping")
 	require.Equal(t, []*session.Instance{second, first}, l.items[:2], "the two api sessions swapped")
 	require.Same(t, second, l.GetSelectedInstance(), "selection follows the moved session")
-	require.Equal(t, l.items, clusterByAccount(l.InstancesForPersist()), "items stays consistent with canonical")
+	require.Equal(t, l.items, clusterByAccount(l.InstancesForPersist(), l.AccountOrder()), "items stays consistent with canonical")
 	// A second rebuild is stable (idempotent).
 	before := append([]*session.Instance(nil), l.items...)
 	l.rebuildView()
@@ -366,7 +366,7 @@ func TestGroupMode_WithinGroupReorderMixedAccountRepoReclusters(t *testing.T) {
 	require.NotNil(t, bDiverge)
 	l.SelectInstance(bDiverge)
 	require.True(t, l.MoveUp(), "swap within the shared repo")
-	require.Equal(t, l.items, clusterByAccount(l.InstancesForPersist()),
+	require.Equal(t, l.items, clusterByAccount(l.InstancesForPersist(), l.AccountOrder()),
 		"items stays consistent even though the swap changed the block's anchor account")
 }
 

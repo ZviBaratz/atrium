@@ -56,6 +56,13 @@ const (
 	KeyMoveGroupUp
 	KeyMoveGroupDown
 
+	// KeyMoveAccountUp and KeyMoveAccountDown reorder a whole account cluster while
+	// account-grouped — the widest step of the reorder ladder (session → repo group →
+	// account cluster). Unlike the other two, the order they write is a stored
+	// preference (config.State.AccountOrder), not the session order itself.
+	KeyMoveAccountUp
+	KeyMoveAccountDown
+
 	// KeyCollapse and KeyExpand fold/unfold the selected repo group (tree-view
 	// style); KeyCollapseAll folds/unfolds every group at once.
 	KeyCollapse
@@ -142,6 +149,8 @@ var GlobalKeyStringsMap = map[string]KeyName{
 	"K":          KeyMoveUp,
 	"{":          KeyMoveGroupUp,
 	"}":          KeyMoveGroupDown,
+	"[":          KeyMoveAccountUp,
+	"]":          KeyMoveAccountDown,
 	"left":       KeyCollapse,
 	"right":      KeyExpand,
 	"Z":          KeyCollapseAll,
@@ -319,6 +328,15 @@ var GlobalKeyBindings = map[KeyName]key.Binding{
 	KeyMoveGroupDown: key.NewBinding(
 		key.WithKeys("}"),
 		key.WithHelp("}", "move group down"),
+	),
+
+	KeyMoveAccountUp: key.NewBinding(
+		key.WithKeys("["),
+		key.WithHelp("[", "move account up"),
+	),
+	KeyMoveAccountDown: key.NewBinding(
+		key.WithKeys("]"),
+		key.WithHelp("]", "move account down"),
 	),
 	KeyCollapse: key.NewBinding(
 		key.WithKeys("left"),

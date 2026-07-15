@@ -89,6 +89,10 @@ func assembleHome(
 	// Apply the persisted within-group sort mode once the full (creation-order) list
 	// is in place, so its canonical-order snapshot is the real creation order.
 	h.list.SetSortMode(appConfig.GetSessionSort())
+	// Restore the chosen account-cluster order. Applying it before the grouping means
+	// the first cluster build already honors it; SetAccountOrder rebuilds an active view
+	// itself, so the reverse order would also land correctly, just via a second build.
+	h.list.SetAccountOrder(appState.GetAccountOrder())
 	// Apply the persisted top-level grouping after the full list is in place, so its
 	// canonical-order snapshot is the real creation order.
 	h.list.SetGroupMode(appConfig.GetGroupMode())

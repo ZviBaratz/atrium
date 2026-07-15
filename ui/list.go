@@ -287,6 +287,16 @@ type List struct {
 	// compared as a bare literal so ui needs no config import.
 	groupMode string
 
+	// accountOrder is the user's chosen order of account clusters, most-preferred
+	// first ([ / ] rewrite it; config.State persists it). It is a preference, not a
+	// derived value, so it lives beside groupMode rather than in the manual snapshot:
+	// an account move rewrites only this, leaving the canonical session order — and
+	// therefore repo mode and what is persisted as instances — untouched. It may name
+	// accounts with no live sessions (they simply don't render) and may omit present
+	// ones (clusterByAccount falls back to first-appearance for those), so empty is a
+	// valid state meaning "no preference yet".
+	accountOrder []string
+
 	// marked is the set of sessions tagged in multi-select ("visual") mode, keyed
 	// by instance pointer. It is ephemeral — cleared on mode exit and after a
 	// batch action — so it is empty (and invisible) during normal navigation. A
@@ -982,6 +992,135 @@ func (l *List) GroupMoveCrossesAccount(up bool) bool {
 		return false
 	}
 	return accountKey(l.items[start]) != accountKey(l.items[end])
+}
+
+// SetAccountOrder replaces the chosen account-cluster order (used to restore persisted
+// state on startup) and rebuilds the view when one is active. Call it before
+// SetGroupMode at startup so the first cluster build already reflects the order.
+// The slice is copied: a move rewrites the order in place, and the caller's slice is
+// typically config.State's own, which must not change until the move is persisted.
+func (l *List) SetAccountOrder(accounts []string) {
+	l.accountOrder = append([]string(nil), accounts...)
+	l.rebuildView()
+}
+
+// AccountOrder returns a copy of the chosen account-cluster order, for persistence.
+// Copying keeps the list the sole writer of its own order — the caller stores the
+// result, it does not share it.
+func (l *List) AccountOrder() []string {
+	return append([]string(nil), l.accountOrder...)
+}
+
+// AccountGrouped reports whether the list is clustering by account — the mode [ / ]
+// operate in. Exposed so the app can tell "grouping is off" from "only one cluster"
+// when explaining a refused move.
+func (l *List) AccountGrouped() bool {
+	return l.accountGrouped()
+}
+
+// AccountReorderEnabled reports whether [ / ] can move an account cluster: there must be
+// account clustering to reorder, and at least two clusters to swap. It mirrors
+// ManualReorderEnabled so the app can explain a refusal instead of leaving a silent
+// no-op. Unlike J/K this is not gated on the sort mode — cluster order and within-block
+// order are orthogonal, so a status sort leaves [ / ] available.
+//
+// The count is of *clusters*, not distinct accounts: a repo whose sessions span accounts
+// still renders as one cluster (its anchor's), so distinctAccountCount would claim two
+// orderable things where only one exists — leaving [ / ] a dead key with no explanation.
+func (l *List) AccountReorderEnabled() bool {
+	return l.accountGrouped() && len(l.accountSequence()) > 1
+}
+
+// accountSequence returns the rendered cluster order: the account of each repo block's
+// anchor, deduped, in display order. While account-grouped, items is already clustered,
+// so this is exactly the sequence clusterByAccount produced — including its fallback and
+// no-account rules — without recomputing them.
+func (l *List) accountSequence() []string {
+	var seq []string
+	seen := map[string]bool{}
+	forEachRepoBlock(l.items, func(start, end int) {
+		if acct := accountKey(l.items[start]); !seen[acct] {
+			seen[acct] = true
+			seq = append(seq, acct)
+		}
+	})
+	return seq
+}
+
+// MoveAccountUp moves the selected session's whole account cluster above the cluster
+// preceding it, keeping the same session selected. No-op for the leading cluster.
+func (l *List) MoveAccountUp() bool { return l.moveAccount(-1) }
+
+// MoveAccountDown moves the selected session's whole account cluster below the cluster
+// following it, keeping the same session selected. No-op for the trailing cluster.
+func (l *List) MoveAccountDown() bool { return l.moveAccount(+1) }
+
+// moveAccount swaps the selected session's account cluster with its neighbor in
+// direction dir (-1 up / +1 down), recording the result in accountOrder and rebuilding
+// the view (which re-selects the session by identity). The manual snapshot is never
+// touched, so the canonical/persisted session order is unaffected. Reports whether
+// anything moved.
+func (l *List) moveAccount(dir int) bool {
+	if !l.AccountReorderEnabled() {
+		return false
+	}
+	seq := l.accountSequence()
+	// Key off the block anchor, not the selected row: a mixed-account repo renders
+	// under its anchor's divider (see List.String), so the anchor's account names the
+	// cluster the user sees the selection sitting in.
+	start, _ := l.groupBounds(l.selectedIdx)
+	if start < 0 || start >= len(l.items) {
+		return false
+	}
+	i := indexOfString(seq, accountKey(l.items[start]))
+	if i < 0 {
+		return false
+	}
+	j := i + dir
+	if j < 0 || j >= len(seq) {
+		return false
+	}
+	// Adopt the full rendered sequence before swapping. This is view-neutral (listing
+	// the accounts in the order they already render reproduces that same order), and it
+	// makes the sequence exactly accountOrder ∩ present, so the swap below can work on
+	// accountOrder positions alone.
+	l.normalizeAccountOrder(seq)
+	pa, pb := indexOfString(l.accountOrder, seq[i]), indexOfString(l.accountOrder, seq[j])
+	if pa < 0 || pb < 0 {
+		return false
+	}
+	// Swap by position, so a listed-but-absent account sitting between the two keeps
+	// its slot (and thus its place if its sessions come back) instead of being shifted.
+	l.accountOrder[pa], l.accountOrder[pb] = l.accountOrder[pb], l.accountOrder[pa]
+	l.rebuildView()
+	return true
+}
+
+// normalizeAccountOrder appends every account in seq that accountOrder does not already
+// list, in seq's order. Because seq is the rendered order and the listed accounts
+// already lead it, appending the rest preserves the rendered order exactly — the call is
+// idempotent and never moves a cluster on its own.
+func (l *List) normalizeAccountOrder(seq []string) {
+	listed := make(map[string]bool, len(l.accountOrder))
+	for _, name := range l.accountOrder {
+		listed[name] = true
+	}
+	for _, name := range seq {
+		if !listed[name] {
+			listed[name] = true
+			l.accountOrder = append(l.accountOrder, name)
+		}
+	}
+}
+
+// indexOfString returns the position of target in list, or -1 when absent.
+func indexOfString(list []string, target string) int {
+	for i, s := range list {
+		if s == target {
+			return i
+		}
+	}
+	return -1
 }
 
 // GetInstances returns all instances in the list

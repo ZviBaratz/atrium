@@ -856,15 +856,41 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 	case keys.KeyMoveGroupUp, keys.KeyMoveGroupDown:
 		// Whole-group moves work within an account cluster; a move across an account
 		// boundary is refused (clustering owns cross-account block order), so explain
-		// that rather than leaving a silent no-op (mirroring the J/K feedback above).
+		// that rather than leaving a silent no-op (mirroring the J/K feedback above)
+		// and point at the key that does move the cluster.
 		up := name == keys.KeyMoveGroupUp
 		if m.list.GroupMoveCrossesAccount(up) {
-			return m, m.handleInfoNotice("group reorder stays within an account")
+			return m, m.handleInfoNotice("group reorder stays within an account — [ / ] moves the cluster")
 		}
 		if up {
 			return m.moveAndPersist(m.list.MoveGroupUp)
 		}
 		return m.moveAndPersist(m.list.MoveGroupDown)
+	case keys.KeyMoveAccountUp, keys.KeyMoveAccountDown:
+		// [ / ] reorder whole account clusters. Both refusals are explained rather than
+		// left as a silent no-op, and they are told apart because the advice differs: one
+		// is a mode to switch, the other is nothing to reorder. The second is not simply
+		// "you only have one account" — a repo whose sessions span accounts still renders
+		// as a single cluster — so the wording names the cluster, not the account count.
+		if !m.list.AccountGrouped() {
+			return m, m.handleInfoNotice("account reorder needs account grouping (, to switch)")
+		}
+		if !m.list.AccountReorderEnabled() {
+			return m, m.handleInfoNotice("only one account cluster to reorder")
+		}
+		moved := m.list.MoveAccountUp
+		if name == keys.KeyMoveAccountDown {
+			moved = m.list.MoveAccountDown
+		}
+		if !moved() {
+			return m, nil
+		}
+		// The cluster order is a stored preference, not the session order, so it
+		// persists to state — moveAndPersist would save the (unchanged) instance array.
+		if err := m.appState.SetAccountOrder(m.list.AccountOrder()); err != nil {
+			return m, m.handleError(err)
+		}
+		return m, m.instanceChanged()
 	case keys.KeyCollapse:
 		if m.list.Collapse() {
 			if err := m.appState.SetCollapsedRepos(m.list.CollapsedRepos()); err != nil {
