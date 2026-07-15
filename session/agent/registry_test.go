@@ -430,10 +430,28 @@ var claudeMCPSinglePane = strings.Join([]string{
 //
 // At 28 the wrapped dialog runs 17 non-empty lines, so the title is the 16th from the
 // bottom and falls outside the 15-line budget; the gate reads nothing and an MCP-blocked
-// session reads Ready. Real but remote — a pane that narrow is not a working terminal, and
-// the dialog only appears at session start — so it is recorded, not fixed: widening the
-// budget trades a documented miss at 28 columns for false-positive surface on every gate
-// at every width. claudeMCPWrappedPane below pins the boundary case that IS reachable.
+// session reads Ready.
+//
+// That width is REACHABLE, and the tempting reading — "no working terminal is 28 columns" —
+// is a category error worth spelling out, because it is what kept this miss filed as
+// theoretical. The pane is not the terminal. session/instance.go SetPreviewSize sizes each
+// agent's detached tmux session to the PREVIEW pane, precisely so captured content wraps the
+// way it renders, and that pane is the terminal minus the session list minus two 2-column
+// frames. The split is user-adjustable (< / >, mouse drag) to config.maxListRatio = 0.60 and
+// persisted in state.json, so it survives restarts. Measured by driving the real layout
+// (ui.TabbedWindow SetSize → GetPreviewSize) rather than re-deriving its arithmetic:
+//
+//	term=80 ratio=0.60 → preview=28    term=100 ratio=0.60 → preview=36
+//
+// A plain 80-column terminal with the list dragged wide lands exactly on the miss.
+//
+// Recorded rather than fixed because the flat window is the wrong instrument to tune, not
+// because the miss is rare: widening the budget buys it back with false-positive surface on
+// every gate at every width, and the window already fails at the OTHER end too — an agent
+// that merely quotes these titles reads as gated (#342). Only a liveness signal separates
+// showing the dialog from discussing it; #344 anchors the match to live chrome instead of
+// counting lines from the bottom, which dissolves the width limit and retires this
+// paragraph. claudeMCPWrappedPane below is the narrowest width that still fires.
 var claudeMCPMultiPane = strings.Join([]string{
 	strings.Repeat("─", 56),
 	"  3 new MCP servers found in this project",
@@ -488,13 +506,20 @@ func TestClaudeGate(t *testing.T) {
 	// singular case below, removing the lowercase fails both plural shapes. Case is what
 	// separates them because the plural's count prefix ("3 new…") puts the word
 	// mid-sentence, so the title lowercases it.
-	for name, pane := range map[string]string{
-		"singular": claudeMCPSinglePane,
-		"plural":   claudeMCPMultiPane,
-		"wrapped":  claudeMCPWrappedPane,
+	//
+	// Subtests over a slice, not require over a map: require aborts on the first failure and
+	// map order is randomized, so a dropped literal would report one arbitrary shape and hide
+	// the rest — leaving the claim above ("fails both plural shapes") unobservable in the
+	// test that exists to demonstrate it.
+	for _, tc := range []struct{ name, pane string }{
+		{"singular", claudeMCPSinglePane},
+		{"plural", claudeMCPMultiPane},
+		{"wrapped", claudeMCPWrappedPane},
 	} {
-		_, ok = claude.GateUp(pane)
-		require.True(t, ok, "the live %s MCP dialog must fire the gate", name)
+		t.Run(tc.name, func(t *testing.T) {
+			_, ok := claude.GateUp(tc.pane)
+			require.True(t, ok, "the live %s MCP dialog must fire the gate", tc.name)
+		})
 	}
 
 	_, ok = claude.GateUp("╭───╮\n│ > │  ? for shortcuts\n╰───╯")
