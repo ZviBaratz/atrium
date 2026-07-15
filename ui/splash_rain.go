@@ -11,7 +11,11 @@ package ui
 // of the rain) or as a rendering bug. No amount of field math settles that; it
 // needs eyes on a real terminal.
 
-import "math"
+import (
+	"math"
+	"os"
+	"sync"
+)
 
 const (
 	// rainFall is the fall speed in aspect units per phase unit. phase advances
@@ -185,20 +189,40 @@ func splashRainAt(col, _ int, _, dy, phase float64) (val, aux float64) {
 	return clamp01(best), bestAux
 }
 
-// splashRainGlyphs is the vocabulary a stream's cells are drawn from.
+// The vocabularies a stream's cells are drawn from, indexed by the name
+// ATRIUM_RAIN_GLYPHS takes. Every glyph must be terminal-width-1 and evenly
+// weighted: brightness is the luminance ramp's job, so a light "." among them
+// would read as a hole in the stream rather than as a dimmer cell.
 //
-// Deliberately all ASCII, for two reasons. It is byte-indexable, so the modulo
-// below picks a character rather than slicing a multi-byte rune in half — a
-// trap the moment this set grows a box-drawing or katakana glyph. And every
-// character renders on any font: half-width katakana would be the authentic
-// Matrix look and is correctly terminal-width-1, but its coverage is far
-// patchier than the box-drawing and braille this codebase already leans on, and
-// a pane of tofu is worse than the wrong alphabet.
-//
-// The glyphs are chosen for even visual weight. Brightness is the luminance
-// ramp's job now, so a light "." mixed in among them would read as a hole in
-// the stream rather than as a dimmer cell.
-const splashRainGlyphs = "0123456789ABCDEFHKLMNPRSTVXYZ<>[]{}=+*#%&$@?!/\\|"
+// []rune, not string. The pick below is a modulo into this slice, and on a
+// string that indexes *bytes* — fine while the set is ASCII, and silently
+// emitting mangled half-runes the moment it is not. Katakana are three bytes
+// each.
+var splashRainGlyphSets = map[string][]rune{
+	// Reads as terminal code rather than as Matrix pastiche, and renders on
+	// any font at all.
+	"ascii": []rune("0123456789ABCDEFHKLMNPRSTVXYZ<>[]{}=+*#%&$@?!/\\|"),
+	// The authentic look. Half-width katakana (U+FF66–FF9D) is Unicode
+	// East-Asian-Halfwidth, so width-1 is guaranteed by the standard rather than
+	// by hope — the risk is font coverage, which is patchier than the
+	// box-drawing and braille this codebase already leans on, and a pane of tofu
+	// is worse than the wrong alphabet.
+	"katakana": []rune("ｱｲｳｴｵｶｷｸｹｺｻｼｽｾｿﾀﾁﾂﾃﾄﾅﾆﾇﾈﾉﾊﾋﾌﾍﾎﾏﾐﾑﾒﾓﾔﾕﾖﾗﾘﾙﾚﾛﾜﾝｦ0123456789"),
+	// The film's own compromise: katakana carries the look, digits keep it
+	// legible as a machine rather than as a language.
+	"mixed": []rune("ｱｳｴｵｶｷｸｹｻｼｽｾﾀﾂﾃﾅﾆﾇﾈﾊﾋﾌﾍﾎﾏﾐﾑﾒﾓﾗﾘﾙﾚﾜ0123456789<>=+*"),
+}
+
+// splashRainGlyphSet resolves the dev-only ATRIUM_RAIN_GLYPHS override once per
+// process, defaulting to ASCII. Temporary: it exists to A/B the sets on a live
+// terminal, since which one reads best is a question only a real font can
+// answer. Once one wins, it becomes the set and this goes away.
+var splashRainGlyphSet = sync.OnceValue(func() []rune {
+	if g, ok := splashRainGlyphSets[os.Getenv("ATRIUM_RAIN_GLYPHS")]; ok {
+		return g
+	}
+	return splashRainGlyphSets["ascii"]
+})
 
 // splashRainMutSpeed is how fast a cell re-draws its glyph, in mutations per
 // phase unit. Slow on purpose: mutating every frame boils, and the eye reads
@@ -210,7 +234,8 @@ const splashRainMutSpeed = 1.6
 // which is what makes a stream read as passing over the screen rather than as a
 // rigid object sliding down it.
 func splashRainGlyph(col, row int, phase float64) rune {
+	set := splashRainGlyphSet()
 	epoch := int(phase * splashRainMutSpeed)
 	h := splashHash(int32(col), int32(row*977+epoch), seedRainGlyph) //nolint:gosec // G115: cell coords are pane-bounded
-	return rune(splashRainGlyphs[h%uint32(len(splashRainGlyphs))])
+	return set[h%uint32(len(set))]                                   //nolint:gosec // G115: the glyph sets are fixed literals of a few dozen runes
 }

@@ -358,3 +358,34 @@ func TestRainLayersSeparateInBrightness(t *testing.T) {
 		prev = head
 	}
 }
+
+// TestRainGlyphSetsAreWidthOne is what actually settles whether a glyph set is
+// usable, rather than a reading of the East-Asian-Width tables. Every emitted
+// glyph must occupy exactly one terminal cell: the contract requires each row to
+// be exactly w runes wide, and a width-2 glyph would shift every cell after it
+// and break the column alignment rain depends on.
+//
+// It also guards the trap the sets are stored as []rune to avoid — indexing a
+// multi-byte set by byte yields half-runes, which are not width-1 either.
+func TestRainGlyphSetsAreWidthOne(t *testing.T) {
+	for name, set := range splashRainGlyphSets {
+		require.NotEmptyf(t, set, "%s: empty glyph set", name)
+		for _, r := range set {
+			require.Equalf(t, 1, ansi.StringWidth(string(r)),
+				"%s: glyph %q (U+%04X) is not terminal-width-1", name, r, r)
+		}
+	}
+}
+
+// TestRainGlyphSetDefaultsToASCII pins the override's default: an unset or
+// unknown ATRIUM_RAIN_GLYPHS must land on the set that renders on any font,
+// never on tofu.
+func TestRainGlyphSetDefaultsToASCII(t *testing.T) {
+	require.NotEmpty(t, splashRainGlyphSets["ascii"])
+	for _, r := range splashRainGlyphSets["ascii"] {
+		require.Lessf(t, r, rune(128), "the default set must be ASCII; %q is not", r)
+	}
+	// The resolved set is whatever the env said at process start; assert only
+	// that resolution never yields nothing.
+	require.NotEmpty(t, splashRainGlyphSet(), "the resolved glyph set must never be empty")
+}
