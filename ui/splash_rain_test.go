@@ -359,33 +359,41 @@ func TestRainLayersSeparateInBrightness(t *testing.T) {
 	}
 }
 
-// TestRainGlyphSetsAreWidthOne is what actually settles whether a glyph set is
-// usable, rather than a reading of the East-Asian-Width tables. Every emitted
-// glyph must occupy exactly one terminal cell: the contract requires each row to
-// be exactly w runes wide, and a width-2 glyph would shift every cell after it
-// and break the column alignment rain depends on.
+// TestRainGlyphsAreWidthOne is what actually settles the glyph set, rather than
+// a reading of the East-Asian-Width tables. Every emitted glyph must occupy
+// exactly one terminal cell: the contract requires each row to be exactly w
+// runes wide, and a width-2 glyph would shift every cell after it and break the
+// column alignment rain is made of.
 //
-// It also guards the trap the sets are stored as []rune to avoid — indexing a
-// multi-byte set by byte yields half-runes, which are not width-1 either.
-func TestRainGlyphSetsAreWidthOne(t *testing.T) {
-	for name, set := range splashRainGlyphSets {
-		require.NotEmptyf(t, set, "%s: empty glyph set", name)
-		for _, r := range set {
-			require.Equalf(t, 1, ansi.StringWidth(string(r)),
-				"%s: glyph %q (U+%04X) is not terminal-width-1", name, r, r)
-		}
+// It also guards the trap the set is a []rune to avoid — indexing a multi-byte
+// set by byte yields half-runes, which are not width-1 either.
+func TestRainGlyphsAreWidthOne(t *testing.T) {
+	require.NotEmpty(t, splashRainGlyphs)
+	for _, r := range splashRainGlyphs {
+		require.Equalf(t, 1, ansi.StringWidth(string(r)),
+			"glyph %q (U+%04X) is not terminal-width-1", r, r)
 	}
 }
 
-// TestRainGlyphSetDefaultsToASCII pins the override's default: an unset or
-// unknown ATRIUM_RAIN_GLYPHS must land on the set that renders on any font,
-// never on tofu.
-func TestRainGlyphSetDefaultsToASCII(t *testing.T) {
-	require.NotEmpty(t, splashRainGlyphSets["ascii"])
-	for _, r := range splashRainGlyphSets["ascii"] {
-		require.Lessf(t, r, rune(128), "the default set must be ASCII; %q is not", r)
+// TestRainGlyphsRenderIntact guards the []rune choice end to end: every glyph
+// the renderer emits must be one the set actually contains. A byte-indexed set
+// would emit half-runes here, which is the failure this is watching for — it is
+// silent in the field math and only shows up as mojibake on screen.
+func TestRainGlyphsRenderIntact(t *testing.T) {
+	want := make(map[rune]bool, len(splashRainGlyphs))
+	for _, r := range splashRainGlyphs {
+		want[r] = true
 	}
-	// The resolved set is whatever the env said at process start; assert only
-	// that resolution never yields nothing.
-	require.NotEmpty(t, splashRainGlyphSet(), "the resolved glyph set must never be empty")
+	const w, h = 80, 40
+	out := ansi.Strip(renderSplashField(w, h, 40, splashTestPalette(),
+		splashClearing{wordCenterRow: h / 2}, splashVariantRain))
+	seen := 0
+	for _, r := range out {
+		if r == ' ' || r == '\n' {
+			continue
+		}
+		require.Truef(t, want[r], "rendered glyph %q (U+%04X) is not in the set", r, r)
+		seen++
+	}
+	require.Positive(t, seen, "rain must render glyphs")
 }

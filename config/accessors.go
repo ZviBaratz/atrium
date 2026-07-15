@@ -66,7 +66,7 @@ const SplashRandom = "random"
 // import the other; app imports both and holds them to each other (see
 // TestSplashVocabularyAgrees against ui.SplashVariantNames).
 func SplashVariants() []string {
-	return []string{"nebula", "braille", "contours", "julia", "mandala", "plasma"}
+	return []string{"nebula", "braille", "contours", "julia", "mandala", "plasma", "rain"}
 }
 
 // GetSplash returns the normalized splash mode: a known variant name when set

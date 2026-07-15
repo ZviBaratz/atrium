@@ -47,9 +47,10 @@ const (
 	// the wordmark — a 2N-fold rosette of the ridged noise field with a slow
 	// infinite zoom, rotation, and bloom.
 	splashVariantMandala
-	// splashVariantRain is Matrix-style digital rain ("f"): per-column streams
-	// with bright heads and fading tails, layered at three depths. PROTOTYPE —
-	// dev-only (no name here) until the wordmark-clearing question is settled.
+	// splashVariantRain ("f") is Matrix-style digital rain: per-column streams
+	// with bright heads and fading tails, layered at three depths. The only
+	// variant with persistent directional motion — and the only one that shades
+	// by luminance rather than by glyph density.
 	splashVariantRain
 
 	// splashVariantCount is the enum's cardinality, not a variant — it must
@@ -77,7 +78,7 @@ const splashDefaultVariant = splashVariantFBM
 // the env override).
 var splashRotation = []splashVariant{
 	splashVariantFBM, splashVariantBraille, splashVariantFlow,
-	splashVariantJulia, splashVariantMandala,
+	splashVariantJulia, splashVariantMandala, splashVariantRain,
 }
 
 // splashVariantNames maps the user-facing pattern names (config.SplashVariants,
@@ -90,6 +91,7 @@ var splashVariantNames = map[string]splashVariant{
 	"julia":    splashVariantJulia,
 	"mandala":  splashVariantMandala,
 	"plasma":   splashVariantLegacy,
+	"rain":     splashVariantRain,
 }
 
 // structured reports whether a variant's field carries directional geometry
