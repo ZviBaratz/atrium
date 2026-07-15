@@ -451,7 +451,9 @@ var claudeMCPSinglePane = strings.Join([]string{
 // that merely quotes these titles reads as gated (#342). Only a liveness signal separates
 // showing the dialog from discussing it; #344 anchors the match to live chrome instead of
 // counting lines from the bottom, which dissolves the width limit and retires this
-// paragraph. claudeMCPWrappedPane below is the narrowest width that still fires.
+// paragraph. claudeMCPWrappedPane below is the narrowest CAPTURE that still fires — 40, not
+// a measured boundary: the widths between it and 28 were never driven, and pinning an exact
+// threshold would only pin how one prose paragraph happens to wrap today.
 var claudeMCPMultiPane = strings.Join([]string{
 	strings.Repeat("─", 56),
 	"  3 new MCP servers found in this project",
