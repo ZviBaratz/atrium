@@ -418,6 +418,17 @@ var claudeMCPSinglePane = strings.Join([]string{
 // all" rather than "Esc to cancel". The bundle's token table for this dialog reads
 // "space select · enter confirm", which is not the rendered line — the standing reminder
 // that the table enumerates, only a probe renders.
+//
+// Both MCP panes are captured at one width, which is the honest limit of what they pin.
+// Width matters more for these than for the trust gate: GateUp scans only the bottom
+// WindowPrompt (15) non-empty lines, and the trust gate is keyed on an option line three
+// lines off the bottom, whereas these are keyed on titles sitting ~8 lines up behind a
+// prose paragraph that wraps. Narrowing the pane grows that paragraph and walks the
+// title toward the budget edge; an approximate rewrap puts the miss near 28 columns —
+// below the 30 the busy marker is pinned at, so the gate holds across every width the
+// adapter claims. Left unpinned rather than pinned against a rewrapped pane: a fixture
+// Atrium folded itself would assert Atrium's idea of claude's wrapping, which is the
+// composed-pane mistake this file just undid. Pinning it needs a narrow real capture.
 var claudeMCPMultiPane = strings.Join([]string{
 	strings.Repeat("─", 56),
 	"  3 new MCP servers found in this project",
@@ -435,12 +446,15 @@ func TestClaudeGate(t *testing.T) {
 	require.True(t, ok)
 
 	// Both MCP-approval shapes, captured verbatim from live claude 2.1.210 by putting a
-	// project-scoped .mcp.json in a fresh dir (2026-07-15, #338). The gate fires on the
+	// project-scoped .mcp.json in a fresh dir (2026-07-15, #340). The gate fires on the
 	// title in each: "New MCP server" (capital-N singular, v2.1.162+) and "new MCP server"
 	// (the plural title's substring). Nothing else in the adapter sees either — the
 	// singular's footer names no navigate/select token and the plural's says "Esc to
 	// reject all", not "Esc to cancel" — so the gate is the only thing standing between
 	// these and a session that reads Ready while blocked.
+	//
+	// Each literal is load-bearing on its own: removing the capital-N fails only the
+	// singular case below, removing the lowercase fails only the plural.
 	for name, pane := range map[string]string{
 		"singular": claudeMCPSinglePane,
 		"plural":   claudeMCPMultiPane,

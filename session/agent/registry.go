@@ -45,7 +45,7 @@ var claude = &Adapter{
 	// MCP-approval shapes. The one string a pane cannot show is the login-error separator
 	// (reaching it means revoking auth); it was confirmed present in the 2.1.210 bundle
 	// instead. #332 claimed the MCP titles were unreachable too — they are not, a
-	// project-scoped .mcp.json renders them on demand, and #338 drove them.
+	// project-scoped .mcp.json renders them on demand, and #340 drove them.
 	//
 	// The sweep exists because the pin is a claim about the WHOLE surface, and twice now
 	// that claim was false at the version it named. #333 found the default footer
@@ -224,11 +224,16 @@ var claude = &Adapter{
 		//
 		// Plus the MCP-approval prompt, whose two literals are not a
 		// capital/lowercase spelling hedge but the titles of two DIFFERENT
-		// dialogs (both captured live at 2.1.210, #338 — registry_test.go
+		// dialogs (both captured live at 2.1.210, #340 — registry_test.go
 		// claudeMCPSinglePane / claudeMCPMultiPane):
 		//   "New MCP server found in this project: <name>"   → one server
 		//   "3 new MCP servers found in this project"        → many, matched
 		//                                                      as a substring
+		// Neither literal is redundant, and the fixtures prove it one at a
+		// time: drop the capital-N and only the singular fixture fails, drop
+		// the lowercase and only the plural does. Case is what separates them
+		// because the plural's count prefix ("3 new…") lowercases the title.
+		//
 		// The gate is the ONLY thing that sees either. The singular's footer
 		// ("Enter to confirm · Esc to cancel") names no navigate/select token,
 		// and the plural's says "Esc to reject all" — so neither reaches the
