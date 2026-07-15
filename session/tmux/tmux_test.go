@@ -199,6 +199,28 @@ func TestPollGateLiteralInBodyIsNotGate(t *testing.T) {
 	require.Equal(t, PaneIdle, s.Poll(), "a gate literal in the transcript body must not classify the pane as PaneGate")
 }
 
+// The reported shape, which the distance-based test above cannot express: the quote is the
+// agent's LAST message, sitting directly above the composer, on a pane that is provably
+// working (the below-box busy marker is right there). GateUp is checked before the marker, so
+// a false gate beat positive proof of work — the atrium log recorded this pane flapping
+// between "marker → working" and "gate → needs-input" as its own output scrolled the literal
+// in and out of the old bottom-15 window.
+func TestPollQuotedGateLiteralAboveComposerStaysWorking(t *testing.T) {
+	c := strings.Join([]string{
+		"● The dialog titles are \"New MCP server found in this project: nanoclaw\" and",
+		"  \"3 new MCP servers found in this project\", and I trust this folder is the other one.",
+		"",
+		"✽ Sautéing… (2m 52s · ↓ 5.7k tokens)",
+		"",
+		strings.Repeat("─", 40) + " my-branch ──",
+		"❯ ",
+		strings.Repeat("─", 52),
+		"  ⏵⏵ auto mode on (shift+tab to cycle) · esc to interrupt · ← for agents",
+	}, "\n")
+	s := pollSession(t, "claude", &c, nil)
+	require.Equal(t, PaneWorking, s.Poll(), "a working pane quoting the gate's titles must read as working, not gated")
+}
+
 // A dead/missing tmux session must not be probed: the pollers should short-circuit
 // without ever running capture-pane, so a single dead session can't flood the log
 // and error box with "error capturing pane content: exit status 1" every tick.

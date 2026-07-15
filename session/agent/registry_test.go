@@ -473,9 +473,8 @@ var claudeMCPMultiPane = strings.Join([]string{
 //	project
 //
 // It pins the property the flattened match quietly depends on — the gate literal survives a
-// wrapped TITLE, because the wrap falls after it rather than inside it. A narrower capture
-// is not pinned here on purpose: at 28 the gate genuinely misses (see above), so a fixture
-// there would pin the limitation rather than the behavior.
+// wrapped TITLE, because the wrap falls after it rather than inside it. See
+// claudeMCPNarrowPane for the width this fixture used to be the floor of.
 var claudeMCPWrappedPane = strings.Join([]string{
 	strings.Repeat("─", 40),
 	"  3 new MCP servers found in this",
@@ -490,6 +489,69 @@ var claudeMCPWrappedPane = strings.Join([]string{
 	"    [✔] femtoclaw",
 	" Space to select · Enter to confirm ·",
 	" Esc to reject all",
+}, "\n")
+
+// claudeMCPNarrowPane is the single-server approval captured from a live 2.1.210 pane at
+// width 28 (2026-07-15) — the width #340 measured as a genuine MISS and deliberately left
+// unpinned, because under the old flat bottom-15 window a fixture here "would pin the
+// limitation rather than the behavior": the reflowed dialog runs 17 non-empty lines, which
+// walks the title off the top of that window.
+//
+// It pins the behavior now. claudeGateVisible anchors on the dialog's own top rule instead
+// of counting lines from the bottom, so the region it matches in is the whole dialog however
+// tall it reflows, and there is no longer a width at which the gate falls out of the window.
+var claudeMCPNarrowPane = strings.Join([]string{
+	strings.Repeat("─", 28),
+	"  New MCP server found in",
+	"  this project: nanoclaw",
+	"",
+	"  MCP servers may execute",
+	"  code or access system",
+	"  resources. All tool",
+	"  calls require approval.",
+	"  Learn more in the MCP",
+	"  documentation.",
+	"",
+	"  ❯ 1. Use this MCP server",
+	"    2.Use this and all",
+	"      future MCP servers in",
+	"      this project",
+	"    3.Continue without using",
+	"      this MCP server",
+	"",
+	"  Enter to confirm · Esc",
+	"  to cancel",
+}, "\n")
+
+// claudeQuotedGatePane is the bug this gate's Match exists for, captured from a live 2.1.210
+// pane (2026-07-15): a session that merely QUOTES the gate's title and footer, sitting idle
+// with its composer on screen. Every gate literal check reads the same region here, so the
+// idle shape is the one pinned — it is also the harmful one. A working pane scrolls the quote
+// out of the window within a tick or two (the reported symptom flapped between "marker →
+// working" and "gate → needs-input" in the atrium log), whereas an idle pane never scrolls:
+// the row stays wrong at "waiting on setup screen" until a human types, and because PaneGate
+// also gates prompt delivery (session/tmux AwaitingInput, whose caller's timeout never
+// bypasses it) a prompt queued to this session is silently never sent.
+//
+// Note what defeats a cheaper fix: the quote is the title VERBATIM, beside the real footer
+// wording. Tightening the literals, or requiring a title+footer pair, would still match here —
+// the sessions that hit this are the ones editing this file.
+var claudeQuotedGatePane = strings.Join([]string{
+	"● The title is \"New MCP server found in this project: nanoclaw\" and the footer is \"Enter to confirm",
+	"  . Esc to cancel\".",
+	"",
+	"  Ran 1 shell command",
+	"",
+	"● The sentence is above. The sleep 120 was blocked by this environment's harness — standalone sleeps",
+	"  aren't permitted, and it suggests using Monitor with an until-loop or a background command",
+	"  instead. Let me know if you want me to wait on something specific rather than just idle.",
+	"",
+	"✻ Baked for 5s",
+	"",
+	strings.Repeat("─", 100),
+	"❯ run it in the background instead",
+	strings.Repeat("─", 100),
+	"  ⏵⏵ bypass permissions on (shift+tab to cycle) · ← for agents",
 }, "\n")
 
 func TestClaudeGate(t *testing.T) {
@@ -517,6 +579,7 @@ func TestClaudeGate(t *testing.T) {
 		{"singular", claudeMCPSinglePane},
 		{"plural", claudeMCPMultiPane},
 		{"wrapped", claudeMCPWrappedPane},
+		{"narrow", claudeMCPNarrowPane},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			_, ok := claude.GateUp(tc.pane)
@@ -540,6 +603,35 @@ func TestClaudeGate(t *testing.T) {
 	body.WriteString("╭───╮\n│ > │  ? for shortcuts\n╰───╯")
 	_, ok = claude.GateUp(body.String())
 	require.False(t, ok, "a gate string above the live dialog region must not fire the gate")
+}
+
+// TestClaudeGateIgnoresTranscriptQuote is the regression the anchored matcher exists for: the
+// distance-based test above only ever pushed the quote WindowPrompt+5 lines up, which is not
+// where an agent's own output lands. Its last message sits directly above the composer —
+// inside any bottom-N window — so the quote has to be excluded structurally, not by distance.
+func TestClaudeGateIgnoresTranscriptQuote(t *testing.T) {
+	// The captured bug: a live pane quoting the title verbatim, composer on screen.
+	_, ok := claude.GateUp(claudeQuotedGatePane)
+	require.False(t, ok, "a pane merely quoting the gate's title must not read as gated")
+
+	// The same quote directly above a live permission dialog. The dialog's segment opens
+	// with its own title rather than the composer, so a scan that stops at the input box
+	// walks straight past it into the transcript; anchoring on the border does not.
+	_, ok = claude.GateUp("● I checked the \"New MCP server found in this project:\" title\n" + claudeWritePermissionPane)
+	require.False(t, ok, "a quote above a live permission dialog must not read as gated")
+
+	// Nothing above the composer counts, at any distance: walk the quote up line by line.
+	for pad := 0; pad < WindowPrompt; pad++ {
+		var b strings.Builder
+		b.WriteString("● discussing the New MCP server found in this project: dialog\n")
+		for i := 0; i < pad; i++ {
+			b.WriteString("  filler transcript line\n")
+		}
+		b.WriteString(strings.Repeat("─", 40) + " my-branch ──\n❯ \n" + strings.Repeat("─", 52) + "\n")
+		b.WriteString("  ⏵⏵ auto mode on (shift+tab to cycle) · esc to interrupt\n")
+		_, ok = claude.GateUp(b.String())
+		require.Falsef(t, ok, "quote %d line(s) above the composer must not fire the gate", pad)
+	}
 }
 
 // claudeTrustPane is the folder-trust dialog captured verbatim from a live

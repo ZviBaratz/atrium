@@ -9,9 +9,16 @@
 // The package is pure data and string matching: no tmux, no subprocesses, no IO.
 // Pane capture and capability probes stay in session/tmux; matchers receive the
 // cleaned full pane and confine themselves to its bottom chrome via the
-// windowing helpers in chrome.go. Two exceptions take the RAW capture instead:
-// GateUp, and SuggestionVisible — the latter because SGR dim styling is its
-// entire signal (see suggestion.go).
+// windowing helpers in chrome.go. One exception takes the RAW capture instead:
+// SuggestionVisible, because SGR dim styling is its entire signal (see
+// suggestion.go).
+//
+// GateUp is NOT an exception — every call site passes cleaned content (session/tmux
+// poll.go and tmux.go), and it must: its Match implementations anchor on box-drawing
+// borders to tell the live dialog from a transcript quote, and an ANSI-prefixed line
+// matches no border predicate. Handing it a raw capture would silently stop every gate
+// from being detected, which is the fail-dangerous direction (a queued prompt typed into
+// a folder-trust screen).
 package agent
 
 import (
@@ -109,6 +116,29 @@ type Gate struct {
 	// Contains marks the gate as up when any entry is present in the live dialog
 	// region (the bottom chrome scanned by GateUp), not anywhere in the pane.
 	Contains []string
+	// Match, when set, replaces the Contains scan entirely — the escape hatch for a
+	// gate whose literals a flat bottom-N window cannot separate from the same words
+	// quoted in the transcript (claude's; see claudeGateVisible). It receives the
+	// cleaned full pane and does its own windowing, mirroring PromptMatcher.Match.
+	Match func(content string) bool
+}
+
+// matches reports whether this gate is showing in flat, a region already narrowed and
+// flattened by the caller. Any entry in Contains is sufficient (a pane shows one shape).
+func (g Gate) matches(flat string) bool {
+	return containsAny(flat, g.Contains)
+}
+
+// containsAny reports whether flat holds any of lits. Shared by Gate.matches and the
+// adapters' own Match implementations, so a gate's literals are matched the same way
+// whichever region the caller narrowed to.
+func containsAny(flat string, lits []string) bool {
+	for _, s := range lits {
+		if strings.Contains(flat, s) {
+			return true
+		}
+	}
+	return false
 }
 
 // Adapter is the declarative profile of one agent CLI. The zero value of every
@@ -296,22 +326,42 @@ func (a *Adapter) DetectPermissionMode(content string) (mode string, known bool)
 }
 
 // GateUp returns the startup gate currently showing in the live dialog region of the
-// cleaned pane. Detection is confined to the bottom WindowPrompt non-empty lines — the
-// same budget and windowing the prompt matchers use — so a gate literal quoted in the
-// scrolled-back transcript or in an agent's own output (a session editing this registry,
-// or discussing a "New MCP server") is not mistaken for a live gate. flattenChrome also
-// reconstructs a title/footer wrapped across physical lines at a narrow pane width. The
-// input must already be cleaned for detection (ANSI stripped; see tmux's cleanForDetection).
+// cleaned pane. A gate with a Match runs it against the whole pane (it does its own
+// windowing); otherwise the Contains entries are matched against the bottom WindowPrompt
+// non-empty lines, flattened so a title wrapped across physical lines at a narrow pane
+// width still reconstructs.
+//
+// That flat window is NOT by itself a liveness test, and this comment used to claim it was:
+// the live chrome below the composer is only a few lines, so the window always also holds
+// the tail of the transcript, and an agent that merely DISCUSSES a gate ("a session editing
+// this registry, or discussing a 'New MCP server'") matched it. Only the adapters whose
+// dialog shapes are pinned to captured panes can do better, via Match — see
+// claudeGateVisible. The rest keep the flat window, whose failure is a false positive
+// (needs-input on a working session), never a missed gate.
+//
+// The input must already be cleaned for detection (ANSI stripped; see tmux's
+// cleanForDetection) — Match implementations anchor on box-drawing lines, which an
+// ANSI-prefixed line would not match.
 func (a *Adapter) GateUp(content string) (Gate, bool) {
 	if len(a.Gates) == 0 {
 		return Gate{}, false
 	}
-	flat := flattenChrome(content, WindowPrompt)
+	// Flattened lazily: claude's gate is all Match, and this runs on every poll tick of
+	// every session, so the windowing is only worth doing for an adapter that needs it.
+	var flat string
+	var flattened bool
 	for _, g := range a.Gates {
-		for _, s := range g.Contains {
-			if strings.Contains(flat, s) {
+		if g.Match != nil {
+			if g.Match(content) {
 				return g, true
 			}
+			continue
+		}
+		if !flattened {
+			flat, flattened = flattenChrome(content, WindowPrompt), true
+		}
+		if g.matches(flat) {
+			return g, true
 		}
 	}
 	return Gate{}, false
@@ -331,7 +381,7 @@ func (a *Adapter) InputBoxText(content string) (string, bool) {
 // frame or an overlay that has replaced the composer has no box, so keystrokes would be
 // lost. It does not by itself tell a composer from a menu-style gate — claude's trust/new-MCP
 // screens render a "❯ 1. …" selector that also reads as a box line — so the caller must pair
-// it with GateUp (raw pane) and DetectPrompt to exclude the screens that consume keystrokes.
+// it with GateUp and DetectPrompt to exclude the screens that consume keystrokes.
 func (a *Adapter) InputBoxVisible(content string) bool {
 	_, ok := inputBoxText(content)
 	return ok

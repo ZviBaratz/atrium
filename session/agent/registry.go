@@ -234,11 +234,6 @@ var claude = &Adapter{
 		// the lowercase and only the plural shapes do. Case is what separates
 		// them because the plural's count prefix ("3 new…") lowercases the title.
 		//
-		// Bounded by GateUp's 15-line budget, measured live at 2.1.210 (#340):
-		// fires at widths 110 and 40, MISSES at 28 and below, where the reflowed
-		// dialog runs 17 lines and walks the title out of the window. Recorded,
-		// not fixed — see claudeMCPWrappedPane.
-		//
 		// The gate is the ONLY thing that sees either. The singular's footer
 		// ("Enter to confirm · Esc to cancel") names no navigate/select token,
 		// and the plural's says "Esc to reject all" — so neither reaches the
@@ -246,10 +241,16 @@ var claude = &Adapter{
 		// session sits blocked. Keyed on the titles, which is what makes it
 		// sound: unlike #332's permission literal, these ARE this dialog's own
 		// text rather than another family's option label.
-		{Contains: []string{
-			"Yes, I trust this folder",
-			"Do you trust the files in this folder?",
-			"new MCP server", "New MCP server"}},
+		//
+		// Structural, not a flat window (claudeGateVisible): these titles are the
+		// most quotable strings in the adapter — "new MCP server" is a bare noun
+		// phrase, and an agent working on Atrium prints all four verbatim — so a
+		// bottom-N match read those quotes as a live gate. #340's width note is
+		// obsolete with it: the anchored region is the dialog however tall it
+		// reflows, so the 15-line budget no longer bounds the gate and the
+		// width-28 miss it recorded is fixed (registry_test.go
+		// claudeMCPNarrowPane).
+		{Match: claudeGateVisible, Contains: claudeGateTitles},
 	},
 
 	// tmux word-splits the trailing command string itself, so appending to the
@@ -257,6 +258,52 @@ var claude = &Adapter{
 	Resume:        func(program string) string { return program + " --continue" },
 	HookSupport:   true,
 	HeadlessNamer: true, // `claude -p` with a JSON envelope (session/naming.go)
+}
+
+// claudeGateTitles are the literals claude's gate is keyed on. Shared by the Gate's Contains
+// (the no-border fallback, and the declarative record of what is matched) and by
+// claudeGateVisible, so the two can never drift apart. A separate var rather than an inline
+// literal because a Gate whose own Match reads it would be an initialization cycle.
+var claudeGateTitles = []string{
+	"Yes, I trust this folder",
+	"Do you trust the files in this folder?",
+	"new MCP server", "New MCP server",
+}
+
+// claudeGateVisible backs claude's Gate.Match: its titles, matched only inside the region a
+// box border proves is live chrome (footerBelowBox), never the transcript above it.
+//
+// Claude's gates are shaped "one rule across the top, dialog below it, no bottom rule" —
+// pinned by every captured shape (registry_test.go claudeTrustPane, claudeMCPSinglePane,
+// claudeMCPMultiPane, claudeMCPWrappedPane, claudeMCPNarrowPane). So the last border on a
+// gated pane is the dialog's own top rule and everything below it IS the dialog, while on a
+// running session the last border is the composer's bottom edge and everything below it is
+// just the footer. That asymmetry is the whole signal, and it is the one footerBelowBox was
+// written for: "a caller that must not false-match a phrase quoted in the conversation".
+//
+// Why not the flat window it replaces: only ~5 lines of live chrome sit below the composer,
+// so a bottom-15 window always also holds the tail of the transcript, and a session merely
+// discussing these titles read as blocked — with the row stuck on "waiting on setup screen"
+// and, because PaneGate also gates prompt delivery (session/tmux AwaitingInput), its queued
+// prompt silently never sent. Tightening the literals cannot fix that: the sessions that hit
+// it quote the titles verbatim, being about this file.
+//
+// Why not the segment scan the prompt matchers use (footerVisibleInSegments): its input-box
+// stop only fires on a segment whose FIRST line is the composer, so a live permission dialog
+// — whose segment opens with its own title — lets the scan walk on into the transcript. The
+// border anchor has no such hole, needs no window budget, and flattens the whole region at
+// once, so a title that reflows at a narrow width still reconstructs (claudeMCPWrappedPane).
+//
+// Falls back to the flat window when no border anchors the pane. That path is today's
+// behavior, kept because its failure is a false positive (needs-input on a live session),
+// never a missed gate — and it is unreachable for the bug above, which needs a composer on
+// screen, which is itself drawn with borders.
+func claudeGateVisible(content string) bool {
+	region, ok := footerBelowBox(content)
+	if !ok {
+		region = liveChromeLines(content, WindowPrompt)
+	}
+	return containsAny(whiteSpaceRegex.ReplaceAllString(region, " "), claudeGateTitles)
 }
 
 // selectionFooterTokens reports whether the flattened text carries claude's selection
