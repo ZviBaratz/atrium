@@ -51,51 +51,38 @@ const (
 	// stream at all; the rest are gaps.
 	rainDensity = 0.85
 
-	// rainTailAmp caps the tail's brightness so it stays below the head's.
+	// rainTailAmp caps the tail's brightness so it stays below the head's, which
+	// is what reserves the luminance ramp's white top end for the head alone.
 	rainTailAmp = 0.82
-
-	// rainHeadLo is the raw field value at or above which a cell is drawn in the
-	// bright near-white head colour rather than the gradient. It sits above
-	// rainTailAmp by construction, so only the head lobe can reach it — the tail
-	// never promotes itself.
-	rainHeadLo = 0.9
 )
 
 // rainLayers are the parallax depths, near to far.
 //
-// Depth is carried by four cues at once, because on this palette no single one
-// is enough. speed and bright are the classic pair — motion parallax is
-// monocular and needs no vanishing point, so nearer simply means faster and
-// stronger. period spaces the far layers' streams more tightly, the way distance
-// packs anything together. hue is the one that does the heavy lifting here: the
-// gradient LUT is near-equal-luminance by construction, so it cannot shade for
-// depth, but it *can* separate the layers outright — near streams sit at the
-// cyan end, far ones at the warm end, and a glyph's colour says which layer it
-// belongs to no matter where on screen it lands.
+// Depth is luminance first. Each layer's bright caps how far up the ramp its
+// streams can climb, and the ramp runs dark → the stream hue → white: the near
+// layer reaches the white head, the mid layer tops out around the stream hue,
+// and the far layer never leaves the dim end. That is atmospheric perspective,
+// and it is the cue the earlier hue-per-layer attempt was standing in for —
+// badly, because hue says *which* layer without saying which is nearer.
 //
-// Only the near layer's peak clears rainHeadLo, so only it gets white heads.
-// That is deliberate and is the fifth cue: the brightest thing on screen is
-// always the nearest.
+// speed is the second cue, and an independent one: motion parallax is monocular
+// and needs no vanishing point, so nearer simply means faster. period spaces the
+// far layers' streams more tightly, the way distance packs anything together.
 var rainLayers = [3]struct {
-	speed, bright, period, hue float64
+	speed, bright, period float64
 }{
-	{speed: 1.00, bright: 1.00, period: 58.0, hue: 1.00}, // near: cyan, white-headed
-	{speed: 0.62, bright: 0.72, period: 42.0, hue: 0.55}, // mid:  blue/violet
-	{speed: 0.40, bright: 0.45, period: 30.0, hue: 0.14}, // far:  warm, dim
+	{speed: 1.00, bright: 1.00, period: 58.0}, // near: reaches white
+	{speed: 0.62, bright: 0.72, period: 42.0}, // mid:  the stream hue
+	{speed: 0.40, bright: 0.45, period: 30.0}, // far:  dim only
 }
-
-// rainHueSpread is how much of the LUT a single stream wanders across as it
-// fades from head to tail, around its layer's anchor. Small on purpose: it keeps
-// a stream from reading as a flat bar of one colour, without letting a near
-// stream's tail drift into the far layer's hue and undo the separation.
-const rainHueSpread = 0.10
 
 // Lattice seeds for the per-stream draws (distinct from every field seed).
 const (
-	seedRainOff  uint32 = 0x51A7C39B
-	seedRainSpd  uint32 = 0x7B3D2E11
-	seedRainTail uint32 = 0x2C9E4F07
-	seedRainLive uint32 = 0x6D1B8A53
+	seedRainOff   uint32 = 0x51A7C39B
+	seedRainSpd   uint32 = 0x7B3D2E11
+	seedRainTail  uint32 = 0x2C9E4F07
+	seedRainLive  uint32 = 0x6D1B8A53
+	seedRainGlyph uint32 = 0x3F5B7C21
 )
 
 // splashRainAt evaluates the rain field at one cell.
@@ -149,18 +136,44 @@ func splashRainAt(col, _ int, _, dy, phase float64) (val, aux float64) {
 				lit = t
 			}
 		}
-		along := lit // position along the stream, before the layer dims it
 		lit *= L.bright
 		if lit > best {
 			best = lit
-			// Hue names the layer, so the eye can tell the depths apart wherever
-			// they cross; the stream's own fade only nudges it around that anchor
-			// (see rainHueSpread).
-			bestAux = clamp01(L.hue + (along-0.5)*2*rainHueSpread)
+			bestAux = lit // unused by the luminance path; kept in [0,1] for the contract
 		}
 	}
 	// Layers combine by max, not by sum: a far stream crossing behind a near
 	// one must not brighten its head — and taking the max is also what makes the
 	// near layer *occlude* the far one rather than blend with it.
 	return clamp01(best), bestAux
+}
+
+// splashRainGlyphs is the vocabulary a stream's cells are drawn from.
+//
+// Deliberately all ASCII, for two reasons. It is byte-indexable, so the modulo
+// below picks a character rather than slicing a multi-byte rune in half — a
+// trap the moment this set grows a box-drawing or katakana glyph. And every
+// character renders on any font: half-width katakana would be the authentic
+// Matrix look and is correctly terminal-width-1, but its coverage is far
+// patchier than the box-drawing and braille this codebase already leans on, and
+// a pane of tofu is worse than the wrong alphabet.
+//
+// The glyphs are chosen for even visual weight. Brightness is the luminance
+// ramp's job now, so a light "." mixed in among them would read as a hole in
+// the stream rather than as a dimmer cell.
+const splashRainGlyphs = "0123456789ABCDEFHKLMNPRSTVXYZ<>[]{}=+*#%&$@?!/\\|"
+
+// splashRainMutSpeed is how fast a cell re-draws its glyph, in mutations per
+// phase unit. Slow on purpose: mutating every frame boils, and the eye reads
+// churn as noise rather than as falling.
+const splashRainMutSpeed = 1.6
+
+// splashRainGlyph picks a cell's character. It is keyed on the cell rather than
+// on the stream, so a glyph belongs to a position the rain falls *through* —
+// which is what makes a stream read as passing over the screen rather than as a
+// rigid object sliding down it.
+func splashRainGlyph(col, row int, phase float64) rune {
+	epoch := int(phase * splashRainMutSpeed)
+	h := splashHash(int32(col), int32(row*977+epoch), seedRainGlyph) //nolint:gosec // G115: cell coords are pane-bounded
+	return rune(splashRainGlyphs[h%uint32(len(splashRainGlyphs))])
 }

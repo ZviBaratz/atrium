@@ -247,14 +247,6 @@ func splashColorIdx(variant splashVariant, aux, dx, dy, dRaw, phase, maxD float6
 	case variant == splashVariantLegacy:
 		swirl := 0.5 + 0.5*math.Sin(aux+dRaw*colorSwirlF-phase*colorSwirlSpeed)
 		colorT = clamp01(colorRadialMix*(dRaw/maxD) + (1-colorRadialMix)*swirl)
-	case variant == splashVariantRain:
-		// Hue is the depth cue, so it must come from the stream and nothing else.
-		// The shared mix below spends half its weight on distance-from-the-focus,
-		// which paints every glyph by where it sits on screen: three layers at one
-		// spot all land on the same colour, and the parallax the layers exist to
-		// create is invisible. aux already carries the stream's depth (see
-		// splashRainAt), so take it whole.
-		colorT = clamp01(aux)
 	case variant.isFractal():
 		theta := math.Atan2(dy, dx)
 		swirl := 0.5 + 0.5*math.Sin(theta+dRaw*colorSwirlF-phase*colorSwirlSpeed)
@@ -453,13 +445,18 @@ func renderSplashField(w, h, frame int, pal theme.Palette, clearing splashCleari
 	maxGlyph := len(ramp) - 1
 	starRampR := []rune(starRamp)
 	starMax := len(starRampR) - 1
-	// Slow global brightness swell (breathing), computed once per frame.
-	breathe := 1 - breatheDepth*(0.5-0.5*math.Sin(phase*breatheSpeed))
-	// Per-variant Pass-2 policy: contrast window, dither, starfield, and the
-	// optional bright head (see splashVariant.ops).
+	// Per-variant Pass-2 policy: contrast window, dither, starfield, the
+	// envelope terms, and how the field is shaded (see splashVariant.ops).
 	ops := variant.ops()
 	contrastLo, contrastHi := ops.contrastLo, ops.contrastHi
 	dither := ops.dither
+	// Slow global brightness swell (breathing), computed once per frame. A field
+	// already in motion opts out: it would flicker everything at once, and it
+	// costs the brightest cells the top of their range.
+	breathe := 1.0
+	if ops.breathes {
+		breathe = 1 - breatheDepth*(0.5-0.5*math.Sin(phase*breatheSpeed))
+	}
 
 	var sb strings.Builder
 	// A seed, not a bound — the run count isn't known until the field is walked.
@@ -494,7 +491,17 @@ func renderSplashField(w, h, frame int, pal theme.Palette, clearing splashCleari
 				radial := 1 - radialDim*clamp01(dRaw/maxD)
 				envelope := edgeX * edgeY * radial * breathe
 				lit := intensity * envelope
-				if variant == splashVariantBraille && lit < brailleBandHi {
+				if ops.lumRamp {
+					// A luminance-shaded field: brightness rides the colour ramp,
+					// so the glyph holds a constant visual weight and a dim cell
+					// is the same mark, only darker. Pushing the fade through the
+					// density ramp instead substitutes size for brightness — a
+					// fading stream renders as a column of dots.
+					if g := clampInt(int(lit*float64(len(lut.rain)-1)), 0, len(lut.rain)-1); g > 0 {
+						ch = splashRainGlyph(col, row, phase)
+						idx = lut.rainIndex() + g
+					}
+				} else if variant == splashVariantBraille && lit < brailleBandHi {
 					// Faint gas: refine to sub-cell braille dots instead of a
 					// (coarse) ramp glyph; bright cores keep the solid ramp.
 					if mask := splashBrailleMask(col, row, dx, dy, phase, contrastLo, contrastHi, envelope); mask != 0 {
@@ -519,16 +526,6 @@ func renderSplashField(w, h, frame int, pal theme.Palette, clearing splashCleari
 							}
 						}
 						idx = splashColorIdx(variant, fld.aux[cell], dx, dy, dRaw, phase, maxD, nColors)
-						// A variant's own highlight overrides the gradient: the
-						// LUT is near-equal-luminance, so it has no bright value
-						// to give a head. Keyed on the *raw* field rather than
-						// lit, or the radial dim would strip heads of their white
-						// toward the rim — where the depth cue needs them most.
-						// Inside the g > 0 branch, so the blank-border invariant
-						// still holds by construction.
-						if ops.headLo > 0 && fld.vals[cell] >= ops.headLo {
-							idx = starIdx
-						}
 					}
 				}
 				// Starfield on top: a fixed, twinkling point can light even a void

@@ -114,10 +114,21 @@ type splashOps struct {
 	dither bool
 	// stars draws the fixed twinkling starfield over the field.
 	stars bool
-	// headLo, when > 0, promotes cells whose *raw* field value reaches it to the
-	// bright near-white star colour — a variant's own highlight rather than the
-	// gradient's.
-	headLo float64
+	// dimToRim is how much the field dims from the focal point out to the
+	// farthest corner. It reads as a glow emanating from the wordmark on a field
+	// that has no depth of its own — and fights one that does, by dimming
+	// whatever is furthest from the centre regardless of how near it is meant to
+	// look.
+	dimToRim float64
+	// breathes applies the slow global brightness swell. It makes a static field
+	// feel alive; on a field already in motion it is a flicker over everything at
+	// once, and it costs the brightest cells the top of their range.
+	breathes bool
+	// lumRamp shades the field along the LUT's luminance ramp instead of the
+	// glyph density ramp: the glyph keeps a constant weight and brightness rides
+	// the colour. Only a field whose own gradient is the point wants this — see
+	// buildRainRamp for why the hue gradient cannot carry one.
+	lumRamp bool
 }
 
 // ops returns a variant's Pass-2 policy.
@@ -136,7 +147,10 @@ func (v splashVariant) ops() splashOps {
 	switch {
 	case v == splashVariantLegacy:
 		// The superseded baseline, kept faithful: its wide window and no dither.
-		return splashOps{contrastLo: splashContrastLo, contrastHi: splashContrastHi}
+		return splashOps{
+			contrastLo: splashContrastLo, contrastHi: splashContrastHi,
+			stars: true, dimToRim: radialDim, breathes: true,
+		}
 	case v == splashVariantRain:
 		return splashOps{
 			// Identity: pass the tail through untouched (see above).
@@ -147,17 +161,29 @@ func (v splashVariant) ops() splashOps {
 			// Stars are fixed points; rain is moving ones. Together the fixed ones
 			// read as stuck pixels, and rain has its own highlight anyway.
 			stars: false,
-			// The white-hot head: the leading cell of each stream, in the star
-			// colour. The gradient LUT is near-equal-luminance by construction, so
-			// it cannot supply a highlight — this is the only bright value on the
-			// palette, and the head is what the eye actually tracks.
-			headLo: rainHeadLo,
+			// Brightness rides the luminance ramp; the glyph stays a constant
+			// mark. This is the whole difference between a stream and a column of
+			// dots — see buildRainRamp.
+			lumRamp: true,
+			// Both envelope terms are off, and for the same reason: they cost the
+			// head the top of the ramp, which is the only white on screen and the
+			// thing the eye tracks. dimToRim would also actively undo the depth —
+			// it dims by distance from the centre, so a near stream at the rim
+			// would render dimmer than a far one at the middle.
+			dimToRim: 0,
+			breathes: false,
 		}
 	case v.isFractal():
 		// The trap glow is already contrasty; a wide window keeps its range.
-		return splashOps{contrastLo: fractalContrastLo, contrastHi: fractalContrastHi, dither: true, stars: true}
+		return splashOps{
+			contrastLo: fractalContrastLo, contrastHi: fractalContrastHi,
+			dither: true, stars: true, dimToRim: radialDim, breathes: true,
+		}
 	default:
-		return splashOps{contrastLo: fbmContrastLo, contrastHi: fbmContrastHi, dither: true, stars: true}
+		return splashOps{
+			contrastLo: fbmContrastLo, contrastHi: fbmContrastHi,
+			dither: true, stars: true, dimToRim: radialDim, breathes: true,
+		}
 	}
 }
 

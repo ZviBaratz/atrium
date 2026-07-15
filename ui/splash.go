@@ -101,6 +101,18 @@ const (
 	// splashLUTSize is the number of gradient color stops from core to rim.
 	splashLUTSize = 20
 
+	// The rain luminance ramp (see buildRainRamp). splashRainStops is its length
+	// — enough steps that a tail of a dozen rows fades smoothly rather than
+	// banding. rainRampHeadAt is where along it the stream hue sits: below is the
+	// tail's climb out of the dark, above is the head's blow-out to white, so the
+	// white is reserved for the few cells at a stream's leading edge.
+	// rainRampFloor is the darkest luminance as a fraction of the stream hue's —
+	// low enough to read as unlit, high enough that terminals with a
+	// minimum-contrast feature leave it alone.
+	splashRainStops = 16
+	rainRampHeadAt  = 0.82
+	rainRampFloor   = 0.06
+
 	// minSplashW/minSplashH gate the effect: below this the pane is too small
 	// for the field to read, so String() falls back to the plain wordmark. The
 	// width floor sits just above the 48-col wordmark; the height floor leaves
@@ -190,6 +202,14 @@ type splashLUT struct {
 	colors []lipgloss.Color
 	styles []lipgloss.Style
 	star   lipgloss.Style
+	// rain is a luminance ramp, dark → the stream hue → the head's white. It
+	// exists because the gradient above is not one: splashAnchors is four
+	// hue-adjacent stops spanning L* 65–80, with the star only 2 points brighter
+	// than Cyan, so it can say what colour a cell is but not how bright. A
+	// stream's tail has nowhere to fade to on it, and rendering that fade through
+	// the glyph ramp instead makes faint cells *small* rather than dim — a column
+	// of "." is a column of dots, not a fading line. See buildRainRamp.
+	rain []splashAffix
 	// affix/starAffix are the styles' SGR sequences, split out once per palette
 	// so the hot loop can bracket a run with two WriteStrings instead of calling
 	// Style.Render — which allocates a fresh string per run. Emission dominates
@@ -202,12 +222,15 @@ type splashLUT struct {
 // splashAffix is a style's rendered prefix/suffix around its content.
 type splashAffix struct{ prefix, suffix string }
 
-// starIndex is the run index that means "star" rather than a gradient stop.
-// The emitter's index protocol (negative = blank, >= starIndex = star) spans
-// two files, and the gradient's length is now carried by two parallel slices,
-// so both sides resolve it here rather than each reaching for a len() of their
-// own.
+// The emitter's run-index protocol, resolved here rather than by each side
+// reaching for a len() of its own:
+//
+//	 idx < 0            a blank run — raw, uncolored
+//	 idx < starIndex    a gradient stop
+//	idx == starIndex    the star / head white
+//	 idx > starIndex    a rain luminance stop, at idx - rainIndex
 func (l *splashLUT) starIndex() int { return len(l.affix) }
+func (l *splashLUT) rainIndex() int { return l.starIndex() + 1 }
 
 // splashAffixFor extracts a style's SGR bracket by rendering a sentinel and
 // splitting on it. Going through Render (rather than formatting the escape by
@@ -309,7 +332,65 @@ func buildSplashLUT(pal theme.Palette) *splashLUT {
 		lut.affix[i] = splashAffixFor(st)
 	}
 	lut.starAffix = splashAffixFor(lut.star)
+	lut.rain = buildRainRamp(pal)
 	return lut
+}
+
+// buildRainRamp builds the luminance ramp rain fades along.
+//
+// The gradient LUT cannot do this job. Its anchors are chosen hue-adjacent so
+// blending never backtracks muddy, which lands all four inside L* 65–80 — a
+// bright band with no floor and no highlight. Fading a stream's tail along it
+// changes only hue, and pushing the fade through the glyph density ramp instead
+// substitutes size for brightness: the faint end becomes "·" and "." and the
+// stream reads as scattered dots rather than a dimming line.
+//
+// So: take the theme's stream hue, walk it down to near-black for the tail, and
+// up to the foreground white for the head. Hue is held constant on the way down
+// (HCL, chroma falling with luminance) so a dim tail cell is the same colour as
+// a bright one, only darker — which is exactly what the eye reads as a fade.
+//
+// The floor is deliberately not black. A tail that reached the background would
+// be invisible, which is what we want, but terminals with a minimum-contrast
+// feature would rewrite those cells to something legible and scatter bright
+// specks through the tail — the very artifact this ramp removes.
+func buildRainRamp(pal theme.Palette) []splashAffix {
+	stops := make([]splashAffix, splashRainStops)
+	for i := range stops {
+		stops[i] = splashAffixFor(lipgloss.NewStyle().Foreground(lipgloss.Color(rainRampHexAt(pal, i))))
+	}
+	return stops
+}
+
+// rainRampHexAt is stop i's color. Split out from buildRainRamp so the ramp's
+// shape can be asserted as color rather than by parsing SGR back out of an
+// affix — the property that matters is that it climbs in *luminance*, and a
+// ramp that only changed hue would look identical to every other check.
+func rainRampHexAt(pal theme.Palette, i int) string {
+	base, err := colorful.Hex(string(pal.Cyan))
+	if err != nil {
+		// An unparseable theme degrades to a flat ramp rather than broken color,
+		// as buildSplashLUT does.
+		base = colorful.Color{R: 0.49, G: 0.81, B: 1}
+	}
+	head, err := colorful.Hex(string(pal.Fg))
+	if err != nil {
+		head = base
+	}
+	hue, chroma, lum := base.Hcl()
+	t := float64(i) / float64(splashRainStops-1)
+	var c colorful.Color
+	if t < rainRampHeadAt {
+		// Tail: near-black → the stream hue. Chroma falls with luminance so the
+		// dim end stays the same colour, only darker, rather than drifting grey.
+		u := t / rainRampHeadAt
+		c = colorful.Hcl(hue, chroma*u, lum*(rainRampFloor+(1-rainRampFloor)*u))
+	} else {
+		// Head: the stream hue → white.
+		u := (t - rainRampHeadAt) / (1 - rainRampHeadAt)
+		c = base.BlendHcl(head, u)
+	}
+	return c.Clamped().Hex()
 }
 
 // splashClearing marks the cells to leave blank for the composited text: a tight
@@ -347,10 +428,12 @@ func splashRunAffix(styleIdx int, lut *splashLUT) splashAffix {
 	switch {
 	case styleIdx < 0: // blank run — raw spaces, no color
 		return splashAffix{}
-	case styleIdx >= lut.starIndex(): // star run — bright near-white
-		return lut.starAffix
-	default: // gradient run
+	case styleIdx < lut.starIndex(): // gradient run
 		return lut.affix[styleIdx]
+	case styleIdx == lut.starIndex(): // star / head run — bright near-white
+		return lut.starAffix
+	default: // rain luminance run
+		return lut.rain[clampInt(styleIdx-lut.rainIndex(), 0, len(lut.rain)-1)]
 	}
 }
 
