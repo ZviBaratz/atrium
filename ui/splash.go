@@ -212,6 +212,13 @@ type splashLUT struct {
 	// the glyph ramp instead makes faint cells *small* rather than dim — a column
 	// of "." is a column of dots, not a fading line. See buildRainRamp.
 	rain []splashAffix
+	// shade is the hue x luminance grid, flat: shade[hue*splashLumStops + lum].
+	// It is what lets a variant hold its glyph weight constant and still shade,
+	// which the gradient above cannot do and the density ramp can only do by
+	// changing the mark's *size*. Deliberately a second table beside rain rather
+	// than a generalization of it — the two axes want different tops. See
+	// buildShadeGrid.
+	shade []splashAffix
 	// affix/starAffix are the styles' SGR sequences, split out once per palette
 	// so the hot loop can bracket a run with two WriteStrings instead of calling
 	// Style.Render — which allocates a fresh string per run. Emission dominates
@@ -227,12 +234,14 @@ type splashAffix struct{ prefix, suffix string }
 // The emitter's run-index protocol, resolved here rather than by each side
 // reaching for a len() of its own:
 //
-//	 idx < 0            a blank run — raw, uncolored
-//	 idx < starIndex    a gradient stop
-//	idx == starIndex    the star / head white
-//	 idx > starIndex    a rain luminance stop, at idx - rainIndex
-func (l *splashLUT) starIndex() int { return len(l.affix) }
-func (l *splashLUT) rainIndex() int { return l.starIndex() + 1 }
+//	 idx < 0             a blank run — raw, uncolored
+//	 idx < starIndex     a gradient stop (hue only, full brightness)
+//	idx == starIndex     the star / head white
+//	 idx < shadeIndex    a rain luminance stop, at idx - rainIndex
+//	 idx >= shadeIndex   a shade stop, at (idx - shadeIndex) = hue*splashLumStops + lum
+func (l *splashLUT) starIndex() int  { return len(l.affix) }
+func (l *splashLUT) rainIndex() int  { return l.starIndex() + 1 }
+func (l *splashLUT) shadeIndex() int { return l.rainIndex() + len(l.rain) }
 
 // splashAffixFor extracts a style's SGR bracket by rendering a sentinel and
 // splitting on it. Going through Render (rather than formatting the escape by
@@ -290,18 +299,17 @@ func splashAnchors(pal theme.Palette) []lipgloss.Color {
 	return []lipgloss.Color{pal.Danger, pal.Purple, pal.Accent, pal.Cyan}
 }
 
-// buildSplashLUT blends the anchors across splashLUTSize stops in HCL for smooth,
-// non-muddy hue steps, pins the exact endpoints, and adds a bright near-white
-// star color. If any anchor is not parseable hex (an unusual theme), the ramp
-// degrades to flat purple rather than emitting broken colors.
-func buildSplashLUT(pal theme.Palette) *splashLUT {
+// splashGradientColors blends the anchors across splashLUTSize stops in HCL for
+// smooth, non-muddy hue steps, and pins the exact endpoints (HCL round-tripping
+// can nudge the hex a hair). If any anchor is not parseable hex (an unusual
+// theme), the ramp degrades to flat purple rather than emitting broken colors.
+//
+// Split out from buildSplashLUT so the luminance grid can shade the same stops the
+// gradient renders (see buildShadeGrid) without rebuilding a second, subtly
+// different gradient beside it.
+func splashGradientColors(pal theme.Palette) []lipgloss.Color {
 	anchorCols := splashAnchors(pal)
-	lut := &splashLUT{
-		colors: make([]lipgloss.Color, splashLUTSize),
-		styles: make([]lipgloss.Style, splashLUTSize),
-		star:   lipgloss.NewStyle().Foreground(pal.Fg),
-		affix:  make([]splashAffix, splashLUTSize),
-	}
+	colors := make([]lipgloss.Color, splashLUTSize)
 	anchors := make([]colorful.Color, len(anchorCols))
 	ok := true
 	for i, c := range anchorCols {
@@ -313,7 +321,7 @@ func buildSplashLUT(pal theme.Palette) *splashLUT {
 		anchors[i] = cc
 	}
 	segs := len(anchorCols) - 1
-	for i := range lut.colors {
+	for i := range colors {
 		c := pal.Purple
 		if ok {
 			// Map stop i to a position along the multi-segment anchor path.
@@ -321,20 +329,31 @@ func buildSplashLUT(pal theme.Palette) *splashLUT {
 			seg := clampInt(int(t), 0, segs-1)
 			c = lipgloss.Color(anchors[seg].BlendHcl(anchors[seg+1], t-float64(seg)).Clamped().Hex())
 		}
-		lut.colors[i] = c
-		lut.styles[i] = lipgloss.NewStyle().Foreground(c)
+		colors[i] = c
 	}
-	// Pin the endpoints exactly (HCL round-tripping can nudge the hex a hair).
-	lut.colors[0], lut.styles[0] = anchorCols[0], lipgloss.NewStyle().Foreground(anchorCols[0])
-	last := splashLUTSize - 1
-	lut.colors[last], lut.styles[last] = anchorCols[segs], lipgloss.NewStyle().Foreground(anchorCols[segs])
-	// Split every style's SGR bracket once, after the endpoint pinning above so
-	// the affixes match the styles they were derived from.
-	for i, st := range lut.styles {
-		lut.affix[i] = splashAffixFor(st)
+	colors[0] = anchorCols[0]
+	colors[splashLUTSize-1] = anchorCols[segs]
+	return colors
+}
+
+// buildSplashLUT builds every table the emitter indexes: the hue gradient, the
+// star white, rain's luminance ramp, and the hue x luminance shade grid.
+func buildSplashLUT(pal theme.Palette) *splashLUT {
+	lut := &splashLUT{
+		colors: splashGradientColors(pal),
+		styles: make([]lipgloss.Style, splashLUTSize),
+		star:   lipgloss.NewStyle().Foreground(pal.Fg),
+		affix:  make([]splashAffix, splashLUTSize),
+	}
+	// Split every style's SGR bracket once, so the hot loop can bracket a run with
+	// two WriteStrings instead of calling Style.Render.
+	for i, c := range lut.colors {
+		lut.styles[i] = lipgloss.NewStyle().Foreground(c)
+		lut.affix[i] = splashAffixFor(lut.styles[i])
 	}
 	lut.starAffix = splashAffixFor(lut.star)
 	lut.rain = buildRainRamp(pal)
+	lut.shade = buildShadeGrid(lut.colors, lut.affix)
 	return lut
 }
 
@@ -371,31 +390,25 @@ func buildRainRamp(pal theme.Palette) []splashAffix {
 // shape can be asserted as color rather than by parsing SGR back out of an
 // affix — the property that matters is that it climbs in *luminance*, and a
 // ramp that only changed hue would look identical to every other check.
+//
+// The tail is the shared luminance curve (splashLumHexAt), which the shade grid
+// walks too. The head is rain's alone: it blows out past the stream hue to the
+// foreground white, and that is exactly what a hue x luminance grid must not do —
+// see buildShadeGrid.
 func rainRampHexAt(pal theme.Palette, i int) string {
-	base, err := colorful.Hex(string(pal.Cyan))
-	if err != nil {
-		// An unparseable theme degrades to a flat ramp rather than broken color,
-		// as buildSplashLUT does.
-		base = colorful.Color{R: 0.49, G: 0.81, B: 1}
-	}
+	base := splashShadeParse(pal.Cyan)
 	head, err := colorful.Hex(string(pal.Fg))
 	if err != nil {
 		head = base
 	}
-	hue, chroma, lum := base.Hcl()
 	t := float64(i) / float64(splashRainStops-1)
-	var c colorful.Color
 	if t < rainRampHeadAt {
-		// Tail: near-black → the stream hue. Chroma falls with luminance so the
-		// dim end stays the same colour, only darker, rather than drifting grey.
-		u := t / rainRampHeadAt
-		c = colorful.Hcl(hue, chroma*u, lum*(rainRampFloor+(1-rainRampFloor)*u))
-	} else {
-		// Head: the stream hue → white.
-		u := (t - rainRampHeadAt) / (1 - rainRampHeadAt)
-		c = base.BlendHcl(head, u)
+		// Tail: near-black → the stream hue, on rain's own axis.
+		return splashLumHexAt(base, t/rainRampHeadAt, rainChromaHold)
 	}
-	return c.Clamped().Hex()
+	// Head: the stream hue → white.
+	u := (t - rainRampHeadAt) / (1 - rainRampHeadAt)
+	return base.BlendHcl(head, u).Clamped().Hex()
 }
 
 // splashClearing marks the cells to leave blank for the composited text: a tight
@@ -426,9 +439,8 @@ func (c splashClearing) blanks(dx float64, row int) bool {
 		inEllipse(c.msgHalfW, c.msgHalfH, c.msgCenterRow)
 }
 
-// splashRunAffix resolves a run's SGR bracket from its style index. The index
-// protocol: negative is a blank run (raw, uncolored), an index at or past the
-// gradient is the star style, everything else is a gradient stop.
+// splashRunAffix resolves a run's SGR bracket from its style index, per the
+// protocol documented above.
 func splashRunAffix(styleIdx int, lut *splashLUT) splashAffix {
 	switch {
 	case styleIdx < 0: // blank run — raw spaces, no color
@@ -437,8 +449,10 @@ func splashRunAffix(styleIdx int, lut *splashLUT) splashAffix {
 		return lut.affix[styleIdx]
 	case styleIdx == lut.starIndex(): // star / head run — bright near-white
 		return lut.starAffix
-	default: // rain luminance run
+	case styleIdx < lut.shadeIndex(): // rain luminance run
 		return lut.rain[clampInt(styleIdx-lut.rainIndex(), 0, len(lut.rain)-1)]
+	default: // hue x luminance shade run
+		return lut.shade[clampInt(styleIdx-lut.shadeIndex(), 0, len(lut.shade)-1)]
 	}
 }
 

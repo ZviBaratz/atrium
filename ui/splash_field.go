@@ -155,6 +155,27 @@ var brailleBit = [4][2]uint8{{0x01, 0x08}, {0x02, 0x10}, {0x04, 0x20}, {0x40, 0x
 // every dot, and the per-dot dither runs at sub-cell resolution so dot
 // patterns stay granular. A zero mask means "render a space" — bare U+2800
 // is never emitted (some fonts draw it as eight hollow circles).
+//
+// It deliberately does not spend splashShade's dens, and is the only branch that
+// does not: at lumRange > 0 a braille cell dims without its dot count rising to pay
+// for it. Measured at 120x40, lumRange 0 -> 0.5, over the braille cells themselves:
+// dots 3394 -> 3382 (i.e. only the gate moved) while their mean luminance stop falls
+// 15.0 -> 5.4. Braille's density *is* that dot count, so the lift would have to land
+// here, per sub-cell, rather than on a glyph index.
+//
+// Take that mean over the braille cells and no others. Averaged across the whole
+// render it reads 9.2, because the variant is only braille *below* brailleBandHi and
+// the brighter ramp cells above it — which this function never sees — carry the top
+// of the axis. The band is what dims, and measuring the pane hides most of it.
+//
+// That asymmetry is a decision, not an oversight. The screenshot gate on the shaded
+// nebula found that lifting density to decouple brightness necessarily makes density
+// more uniform — you buy tonal smoothness by spending the stipple — and braille's
+// halftone is nothing but stipple. The variant ships at lumRange 0 (see
+// splashVariant.ops), so this is unreached rather than latent. Opting it in is a
+// picture question rather than an algebra one; if the answer is ever yes, the change
+// is to take lumRange here and lift subLit through splashShade before the dither
+// compare, which measures at +141% dots and costs nothing at lumRange 0.
 func splashBrailleMask(col, row int, dx, dy, phase, lo, hi, envelope float64) uint8 {
 	qx, qy, _ := splashFBMWarpAt(dx, dy, phase)
 	wx, wy := warpAmp*qx, warpAmp*qy
@@ -460,13 +481,26 @@ func renderSplashField(w, h, frame int, pal theme.Palette, clearing splashCleari
 
 	var sb strings.Builder
 	// A seed, not a bound — the run count isn't known until the field is walked.
-	// ~4 bytes/cell is where the truecolor output actually lands (measured
-	// 2.1–5.5 across the variants: a cell is one glyph plus its share of the SGR
-	// bracket its run pays for). Seeding near the real size is what holds
-	// Builder's doubling to a step or two: at 240×60 it is the difference
-	// between ~24 allocations a frame and 4. A colorless profile emits ~1
-	// byte/cell and merely over-seeds — one buffer, no copies.
-	sb.Grow(w*h*4 + h)
+	// ~4 bytes/cell is where the truecolor output actually lands at lumRange 0
+	// (measured 2.1–5.5 across the variants: a cell is one glyph plus its share of
+	// the SGR bracket its run pays for). Seeding near the real size is what holds
+	// Builder's doubling to a step or two: at 240×60 it is the difference between
+	// ~24 allocations a frame and 4. A colorless profile emits ~1 byte/cell and
+	// merely over-seeds — one buffer, no copies.
+	//
+	// A luminance-shaded field lands far higher and the seed has to know it: 9.9–10.8
+	// at 240×60 across lumRange 0.35–0.7, and 7.2 for rain. Brightness stepping per
+	// cell is why — a run breaks when *either* hue or luminance changes, and runs
+	// already coalesced at only ~1.14 cells, so nearly every cell pays its own SGR
+	// bracket. Seeded at 4 the Builder doubled twice more and copied ~150KB a frame
+	// for nothing; rain was paying that on the 4-byte seed too, at 6 allocations a
+	// frame rather than 4. One constant over-seeds rain by half a buffer and buys
+	// both of them a single allocation, which is the trade this seed exists to make.
+	perCell := 4
+	if ops.lumRange > 0 {
+		perCell = 11
+	}
+	sb.Grow(w*h*perCell + h)
 	for row := 0; row < h; row++ {
 		if row > 0 {
 			sb.WriteByte('\n')
@@ -491,47 +525,62 @@ func renderSplashField(w, h, frame int, pal theme.Palette, clearing splashCleari
 				radial := 1 - ops.dimToRim*clamp01(dRaw/maxD)
 				envelope := edgeX * edgeY * radial * breathe
 				lit := intensity * envelope
-				if ops.lumRamp {
-					// A luminance-shaded field: brightness rides the colour ramp,
-					// so the glyph holds a constant visual weight and a dim cell
-					// is the same mark, only darker. Pushing the fade through the
-					// density ramp instead substitutes size for brightness — a
-					// fading stream renders as a column of dots.
+				// Split lit between the two channels. At lumRange 0 this is the
+				// identity (dens == lit, lumT unused); at 1 the glyph holds full
+				// weight and brightness rides the colour entirely, which is rain.
+				dens, lumT := splashShade(lit, ops.lumRange)
+				if variant == splashVariantRain {
+					// Rain's own ramp: it blows out past the stream hue to white,
+					// which the shade grid deliberately does not (see
+					// buildShadeGrid). Its gate is luminance because its glyph has
+					// constant weight — there is no light end to fade into.
 					//
-					// g == 0 stays blank rather than emitting the ramp's floor:
-					// the floor anchors the ramp's shape (see buildRainRamp), but
+					// Stop 0 stays blank rather than emitting the ramp's floor: the
+					// floor anchors the ramp's shape (see buildRainRamp), but
 					// painting it would put a near-black glyph *over* the terminal
 					// background, which is a mark where the design wants none. So
 					// stop 0 is never emitted and the tail dies into the pane.
-					if g := clampInt(int(lit*float64(len(lut.rain)-1)), 0, len(lut.rain)-1); g > 0 {
+					if g := clampInt(int(lumT*float64(len(lut.rain)-1)), 0, len(lut.rain)-1); g > 0 {
 						ch = splashRainGlyph(col, row, phase)
 						idx = lut.rainIndex() + g
 					}
 				} else if variant == splashVariantBraille && lit < brailleBandHi {
 					// Faint gas: refine to sub-cell braille dots instead of a
 					// (coarse) ramp glyph; bright cores keep the solid ramp.
+					//
+					// Note this branch keeps its own gate. The halftone answers "is
+					// there ink" at sub-cell resolution, and it answers yes well
+					// below where the density ramp rounds to glyph 0 — so folding it
+					// under the ramp's gate would blank the faintest third of the
+					// band this variant exists to draw.
 					if mask := splashBrailleMask(col, row, dx, dy, phase, contrastLo, contrastHi, envelope); mask != 0 {
-						ch = rune(0x2800) | rune(mask)
-						idx = splashColorIdx(variant, fld.aux[cell], dx, dy, dRaw, phase, maxD, nColors)
+						if si, ok := shadeAt(splashColorIdx(variant, fld.aux[cell], dx, dy, dRaw, phase, maxD, nColors), lumT, ops, lut); ok {
+							ch = rune(0x2800) | rune(mask)
+							idx = si
+						}
 					}
 				} else {
-					gf := lit * float64(maxGlyph)
+					gf := dens * float64(maxGlyph)
 					if dither {
 						// Sub-step dither in glyph-index space: kills banding on
 						// smooth gradients. Amplitude < 1 step, so lit=0 stays
-						// glyph 0 (the blank-border invariant).
+						// glyph 0 (the blank-border invariant — though at lumRange
+						// > 0 the luminance gate in shadeAt carries that instead,
+						// since a lifted density reaches glyph 2 or 3 at lit≈0).
 						gf += (splashDither(col, row) - 0.5) * ditherAmp
 					}
 					if g := clampInt(int(gf), 0, maxGlyph); g > 0 {
-						ch = ramp[g]
-						if variant == splashVariantFlow && lit >= flowBandLo && lit <= flowBandHi {
-							// Stroke the contour band along the field's
-							// iso-lines; flat cells keep the ramp glyph.
-							if fg, ok := splashFlowGlyph(fld.vals, w, h, row, col); ok {
-								ch = fg
+						if si, ok := shadeAt(splashColorIdx(variant, fld.aux[cell], dx, dy, dRaw, phase, maxD, nColors), lumT, ops, lut); ok {
+							ch = ramp[g]
+							if variant == splashVariantFlow && lit >= flowBandLo && lit <= flowBandHi {
+								// Stroke the contour band along the field's
+								// iso-lines; flat cells keep the ramp glyph.
+								if fg, ok := splashFlowGlyph(fld.vals, w, h, row, col); ok {
+									ch = fg
+								}
 							}
+							idx = si
 						}
-						idx = splashColorIdx(variant, fld.aux[cell], dx, dy, dRaw, phase, maxD, nColors)
 					}
 				}
 				// Starfield on top: a fixed, twinkling point can light even a void

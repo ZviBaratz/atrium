@@ -11,9 +11,11 @@ package ui
 // keeps screenshot A/B runs and the test suites deterministic.
 
 import (
+	"math"
 	"os"
 	"slices"
 	"sort"
+	"strconv"
 	"sync"
 	"time"
 )
@@ -126,11 +128,19 @@ type splashOps struct {
 	// feel alive; on a field already in motion it is a flicker over everything at
 	// once, and it costs the brightest cells the top of their range.
 	breathes bool
-	// lumRamp shades the field along the LUT's luminance ramp instead of the
-	// glyph density ramp: the glyph keeps a constant weight and brightness rides
-	// the colour. Only a field whose own gradient is the point wants this — see
-	// buildRainRamp for why the hue gradient cannot carry one.
-	lumRamp bool
+	// lumRange is the share of a cell's brightness that rides its colour's
+	// luminance rather than its glyph's density.
+	//
+	// 0 is the shading every field had before there was a choice: density carries
+	// all of it, so a dim cell is necessarily a *small* one and a fading field
+	// degenerates into a scatter of dots. 1 is rain's: a constant-weight glyph with
+	// all brightness in the colour, which is the only thing that works when the
+	// glyph vocabulary has no light end to fade into. Between them the two channels
+	// split it, so density can carry texture while luminance carries brightness.
+	//
+	// Both endpoints are reproduced exactly and for free (see splashShade), which is
+	// what makes every variant byte-identical until it opts in.
+	lumRange float64
 }
 
 // ops returns a variant's Pass-2 policy.
@@ -146,6 +156,15 @@ type splashOps struct {
 // were no streams to be nearer or further away. An identity window keeps the
 // tail the generator drew.
 func (v splashVariant) ops() splashOps {
+	o := v.baseOps()
+	if r, ok := splashLumRangeOverride(); ok {
+		o.lumRange = r
+	}
+	return o
+}
+
+// baseOps is the shipped policy, before the dev-only lumRange override.
+func (v splashVariant) baseOps() splashOps {
 	switch {
 	case v == splashVariantLegacy:
 		// The superseded baseline, kept faithful: its wide window and no dither.
@@ -163,10 +182,10 @@ func (v splashVariant) ops() splashOps {
 			// Stars are fixed points; rain is moving ones. Together the fixed ones
 			// read as stuck pixels, and rain has its own highlight anyway.
 			stars: false,
-			// Brightness rides the luminance ramp; the glyph stays a constant
-			// mark. This is the whole difference between a stream and a column of
-			// dots — see buildRainRamp.
-			lumRamp: true,
+			// All brightness rides the colour; the glyph stays a constant mark.
+			// This is the whole difference between a stream and a column of dots —
+			// see buildRainRamp.
+			lumRange: 1,
 			// Both envelope terms are off, and for the same reason: they cost the
 			// head the top of the ramp, which is the only white on screen and the
 			// thing the eye tracks. dimToRim would also actively undo the depth —
@@ -275,6 +294,57 @@ var splashEnvVariant = sync.OnceValues(func() (splashVariant, bool) {
 	}
 	return splashDefaultVariant, true
 })
+
+// splashLumRange is the dev-only ATRIUM_SPLASH_LUMRANGE override: it replaces
+// every variant's shipped lumRange, so a screenshot round can sweep the knob
+// without a rebuild per value. Unset (the shipped path) leaves each variant's own.
+//
+// It applies to every variant, rain included, and on rain a low value is a
+// deliberate absurdity rather than a bug: rain's glyphs have constant weight, so
+// taking brightness off the colour leaves it nowhere to go and the pane fills with
+// white katakana. That is the whole thesis of this file, rendered. Pin the variant
+// you mean to look at (ATRIUM_SPLASH_VARIANT) when sweeping.
+//
+// A plain var behind splashSelMu rather than a sync.OnceValue, for two reasons.
+// The benchmarks have to drive the shaded path, and a OnceValue cannot be driven
+// from one — it would resolve on whatever the first test touched it with and pin
+// that for the binary. And splashSelMu already guards exactly this shape of state
+// (see splashPick below), at one uncontended lock per *frame* — ops() is called
+// once per render, not once per cell.
+var (
+	splashLumRangeSet bool
+	splashLumRangeVal float64
+)
+
+func init() {
+	splashLumRangeVal, splashLumRangeSet = parseSplashLumRange(os.Getenv("ATRIUM_SPLASH_LUMRANGE"))
+}
+
+func splashLumRangeOverride() (float64, bool) {
+	splashSelMu.Lock()
+	defer splashSelMu.Unlock()
+	return splashLumRangeVal, splashLumRangeSet
+}
+
+// parseSplashLumRange reads the override, rejecting anything that would not be a
+// share of brightness.
+//
+// The NaN and infinity rejections are not hygiene. strconv.ParseFloat accepts
+// "nan" and "+Inf" happily, and a NaN would pass *both* of splashShade's endpoint
+// guards (every comparison against NaN is false), reach the interior, and land in
+// an int() conversion of a NaN — which is implementation-defined in Go: amd64
+// gives minint, arm64 gives 0. That is a silent per-architecture difference in
+// rendered output, which is the one property this whole field is careful about.
+func parseSplashLumRange(s string) (float64, bool) {
+	if s == "" {
+		return 0, false
+	}
+	v, err := strconv.ParseFloat(s, 64)
+	if err != nil || math.IsNaN(v) || math.IsInf(v, 0) {
+		return 0, false
+	}
+	return math.Min(math.Max(v, 0), 1), true
+}
 
 // The process-wide variant selection: lazily a per-launch rotation draw, or
 // whatever SetSplashVariant last pinned or re-rolled. splashRandomMode records
