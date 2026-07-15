@@ -393,13 +393,61 @@ func TestClaudeLoginErrorPrompt(t *testing.T) {
 	require.False(t, ok, "a prose mention of /login must not match")
 }
 
+// claudeMCPSinglePane is the one-server MCP approval, captured verbatim from live claude
+// 2.1.210 launched in a fresh dir holding a project-scoped .mcp.json (2026-07-15). It
+// replaces a composed fixture that ended "[Enter] to approve" — a line this dialog does not
+// render (the string does exist elsewhere in the bundle, which is exactly why its presence
+// there proved nothing). The title was always right, so the gate always fired; #332's
+// permission bug was the same setup with the opposite outcome, so the shape is pinned from
+// a real pane now rather than from a plausible guess.
+var claudeMCPSinglePane = strings.Join([]string{
+	strings.Repeat("─", 56),
+	"  New MCP server found in this project: nanoclaw",
+	"  MCP servers may execute code or access system resources. All tool calls require approval. Learn more in",
+	"  the MCP documentation.",
+	"  ❯ 1. Use this MCP server",
+	"    2. Use this and all future MCP servers in this project",
+	"    3. Continue without using this MCP server",
+	"  Enter to confirm · Esc to cancel",
+}, "\n")
+
+// claudeMCPMultiPane is the multi-server MCP approval (live 2.1.210, three servers in one
+// project-scoped .mcp.json). A distinct shape no fixture covered before: a checkbox
+// multi-select whose title is PLURAL ("3 new MCP servers found in this project" — the
+// lowercase gate literal matches it as a substring) and whose footer reads "Esc to reject
+// all" rather than "Esc to cancel". The bundle's token table for this dialog reads
+// "space select · enter confirm", which is not the rendered line — the standing reminder
+// that the table enumerates, only a probe renders.
+var claudeMCPMultiPane = strings.Join([]string{
+	strings.Repeat("─", 56),
+	"  3 new MCP servers found in this project",
+	"  Select any you wish to enable.",
+	"  MCP servers may execute code or access system resources. All tool calls require approval. Learn more in",
+	"  the MCP documentation.",
+	"  ❯ [✔] nanoclaw",
+	"    [✔] picoclaw",
+	"    [✔] femtoclaw",
+	" Space to select · Enter to confirm · Esc to reject all",
+}, "\n")
+
 func TestClaudeGate(t *testing.T) {
 	_, ok := claude.GateUp("Do you trust the files in this folder?\n  1. Yes, proceed")
 	require.True(t, ok)
 
-	// Claude Code v2.1.162+ uses capital-N "New MCP server found in this project:"
-	_, ok = claude.GateUp("New MCP server found in this project: nanoclaw\n  [Enter] to approve")
-	require.True(t, ok, "capital-N singular MCP gate must fire")
+	// Both MCP-approval shapes, captured verbatim from live claude 2.1.210 by putting a
+	// project-scoped .mcp.json in a fresh dir (2026-07-15, #338). The gate fires on the
+	// title in each: "New MCP server" (capital-N singular, v2.1.162+) and "new MCP server"
+	// (the plural title's substring). Nothing else in the adapter sees either — the
+	// singular's footer names no navigate/select token and the plural's says "Esc to
+	// reject all", not "Esc to cancel" — so the gate is the only thing standing between
+	// these and a session that reads Ready while blocked.
+	for name, pane := range map[string]string{
+		"singular": claudeMCPSinglePane,
+		"plural":   claudeMCPMultiPane,
+	} {
+		_, ok = claude.GateUp(pane)
+		require.True(t, ok, "the live %s MCP dialog must fire the gate", name)
+	}
 
 	_, ok = claude.GateUp("╭───╮\n│ > │  ? for shortcuts\n╰───╯")
 	require.False(t, ok)

@@ -41,9 +41,11 @@ var claude = &Adapter{
 	// sweep (2026-07-15) — busy marker (at widths 200/60/56/30), live spinner, plan
 	// approval, model-error, AskUserQuestion selection, folder-trust gate, all six
 	// permission-mode footers, the "? for shortcuts" fall-through, the collapsed-paste
-	// chip, the dim ghost-text suggestion, and the --settings capability probe. The two
-	// strings a pane cannot show — the login-error separator and the MCP-approval
-	// titles — were confirmed present in the 2.1.210 bundle instead.
+	// chip, the dim ghost-text suggestion, the --settings capability probe, and both
+	// MCP-approval shapes. The one string a pane cannot show is the login-error separator
+	// (reaching it means revoking auth); it was confirmed present in the 2.1.210 bundle
+	// instead. #332 claimed the MCP titles were unreachable too — they are not, a
+	// project-scoped .mcp.json renders them on demand, and #338 drove them.
 	//
 	// The sweep exists because the pin is a claim about the WHOLE surface, and twice now
 	// that claim was false at the version it named. #333 found the default footer
@@ -218,8 +220,22 @@ var claude = &Adapter{
 		// registry_test.go claudeTrustPane; re-confirmed verbatim on a live 2.1.210
 		// launch in a fresh dir, #332). Both are matched so the gate fires
 		// across the supported range; remove the old title once <2.1.18x is
-		// unsupported. Plus the MCP-approval prompt (capital- and lowercase-N
-		// variants).
+		// unsupported.
+		//
+		// Plus the MCP-approval prompt, whose two literals are not a
+		// capital/lowercase spelling hedge but the titles of two DIFFERENT
+		// dialogs (both captured live at 2.1.210, #338 — registry_test.go
+		// claudeMCPSinglePane / claudeMCPMultiPane):
+		//   "New MCP server found in this project: <name>"   → one server
+		//   "3 new MCP servers found in this project"        → many, matched
+		//                                                      as a substring
+		// The gate is the ONLY thing that sees either. The singular's footer
+		// ("Enter to confirm · Esc to cancel") names no navigate/select token,
+		// and the plural's says "Esc to reject all" — so neither reaches the
+		// selection matcher, and a missing gate would read as Ready while the
+		// session sits blocked. Keyed on the titles, which is what makes it
+		// sound: unlike #332's permission literal, these ARE this dialog's own
+		// text rather than another family's option label.
 		{Contains: []string{
 			"Yes, I trust this folder",
 			"Do you trust the files in this folder?",
