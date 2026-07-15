@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ZviBaratz/atrium/ui/theme"
+
 	"github.com/charmbracelet/x/ansi"
 	colorful "github.com/lucasb-eyer/go-colorful"
 	"github.com/muesli/termenv"
@@ -293,5 +295,66 @@ func TestRainHeadAlwaysLandsOnACell(t *testing.T) {
 		require.Equalf(t, stops-1, best,
 			"a head offset %.2f between rows peaks at ramp stop %d, not the top: "+
 				"it renders without white", offset, best)
+	}
+}
+
+// rainRampLum is a ramp stop's L*, for the luminance assertions below.
+func rainRampLum(t *testing.T, pal theme.Palette, stop int) float64 {
+	t.Helper()
+	c, err := colorful.Hex(rainRampHexAt(pal, stop))
+	require.NoError(t, err)
+	l, _, _ := c.Lab()
+	return l * 100
+}
+
+// rainStopFor is where a brightness lands on the ramp, as Pass 2 quantizes it.
+func rainStopFor(lit float64) int {
+	return clampInt(int(lit*float64(splashRainStops-1)), 0, splashRainStops-1)
+}
+
+// TestRainHeadOutshinesItsTail is the one that took three screenshots to find.
+//
+// A head reads as a head because of the step down to the cell behind it, and
+// nothing else — not its glyph, which is the same weight as every other, and not
+// its lobe's width, which only decides whether it lands on a row at all. The
+// step has to be big.
+//
+// It was not. rainTailAmp was 0.82, which put the tail's brightest cell on ramp
+// stop 12 (L* 78.0) against a head at 81.9 — under four points apart, so the
+// head was the same brightness as its own tail and vanished into it. The instinct
+// is to brighten the head, and it is unavailable: pal.Fg is L* 81.9, only 2.2
+// above pal.Cyan, so the ramp's top four stops are one colour and there is
+// nothing brighter in the palette to reach for. The tail has to come down
+// instead.
+func TestRainHeadOutshinesItsTail(t *testing.T) {
+	withColorProfile(t, termenv.TrueColor)
+	pal := splashTestPalette()
+
+	for li, L := range rainLayers {
+		head := rainRampLum(t, pal, rainStopFor(1.0*L.bright))
+		tail := rainRampLum(t, pal, rainStopFor(rainTailAmp*L.bright))
+		require.Greaterf(t, head-tail, 15.0,
+			"layer %d's head is only %.1f L* above its own tail-top (head %.1f, tail %.1f); "+
+				"a head that close to its tail does not read as a head",
+			li, head-tail, head, tail)
+	}
+}
+
+// TestRainLayersSeparateInBrightness pins depth to the cue that actually carries
+// it. An earlier attempt gave each layer its own hue, which says *which* layer a
+// glyph belongs to but never which is nearer — and read, correctly, as "more
+// colourful, not depth". Brightness is what the eye reads as distance, so the
+// layers' heads must land distinctly apart on the ramp.
+func TestRainLayersSeparateInBrightness(t *testing.T) {
+	withColorProfile(t, termenv.TrueColor)
+	pal := splashTestPalette()
+
+	prev := 999.0
+	for li, L := range rainLayers {
+		head := rainRampLum(t, pal, rainStopFor(1.0*L.bright))
+		require.Lessf(t, head, prev-10.0,
+			"layer %d's head (L* %.1f) must sit clearly below the layer in front of it "+
+				"(L* %.1f); layers that close read as one plane", li, head, prev)
+		prev = head
 	}
 }

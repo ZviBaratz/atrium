@@ -64,9 +64,24 @@ const (
 	// not weather.
 	rainDensity = 0.62
 
-	// rainTailAmp caps the tail's brightness so it stays below the head's, which
-	// is what reserves the luminance ramp's white top end for the head alone.
-	rainTailAmp = 0.82
+	// rainTailAmp caps the tail's brightness, and the gap it opens under the head
+	// is the whole reason a head reads as one.
+	//
+	// It has to be this low because the palette has no brighter white to reach
+	// for: pal.Fg is #c0caf5 at L* 81.9, a mere 2.2 above pal.Cyan, so the ramp's
+	// top four stops are visually one colour. At 0.82 the tail's brightest cell
+	// landed on stop 12 — L* 78.0 against the head's 81.9, a gap of under four
+	// points. The head was the same brightness as the cell behind it, and no
+	// amount of widening its lobe could make it pop. The head cannot be made
+	// brighter, so the tail is made darker: at 0.55 the near layer's tail tops
+	// out around L* 54, opening a ~28-point step under a head that now reads as
+	// white-hot.
+	//
+	// It darkens the field as a whole too, which rain wants: the tail's lower
+	// half now falls below the terminal background and simply disappears, so the
+	// screen is mostly dark with bright streams on it, rather than a uniform haze
+	// of mid-grey glyphs.
+	rainTailAmp = 0.55
 )
 
 // rainLayers are the parallax depths, near to far.
