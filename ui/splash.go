@@ -106,9 +106,11 @@ const (
 	// banding. rainRampHeadAt is where along it the stream hue sits: below is the
 	// tail's climb out of the dark, above is the head's blow-out to white, so the
 	// white is reserved for the few cells at a stream's leading edge.
-	// rainRampFloor is the darkest luminance as a fraction of the stream hue's —
-	// low enough to read as unlit, high enough that terminals with a
-	// minimum-contrast feature leave it alone.
+	// rainRampFloor is the darkest luminance as a fraction of the stream hue's.
+	// It anchors the low end rather than being drawn itself (a cell that dim
+	// renders blank): low enough that the stops above it read as unlit, high
+	// enough that the dimmest one that does render stays clear of the black a
+	// minimum-contrast terminal would rewrite.
 	splashRainStops = 16
 	rainRampHeadAt  = 0.82
 	rainRampFloor   = 0.06
@@ -350,10 +352,13 @@ func buildSplashLUT(pal theme.Palette) *splashLUT {
 // (HCL, chroma falling with luminance) so a dim tail cell is the same colour as
 // a bright one, only darker — which is exactly what the eye reads as a fade.
 //
-// The floor is deliberately not black. A tail that reached the background would
-// be invisible, which is what we want, but terminals with a minimum-contrast
-// feature would rewrite those cells to something legible and scatter bright
-// specks through the tail — the very artifact this ramp removes.
+// The floor is deliberately not black — though it is never itself emitted. A
+// cell that dim renders blank (see the g == 0 gate in renderSplashField), which
+// is how a tail dies into the pane rather than painting near-black over it. What
+// the floor does is anchor the low end's *shape*, and so set how dark the dimmest
+// stop that does render is. That one has to stay off true black: terminals with a
+// minimum-contrast feature would rewrite it to something legible and scatter
+// bright specks through the tail — the very artifact this ramp removes.
 func buildRainRamp(pal theme.Palette) []splashAffix {
 	stops := make([]splashAffix, splashRainStops)
 	for i := range stops {

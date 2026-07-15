@@ -488,7 +488,7 @@ func renderSplashField(w, h, frame int, pal theme.Palette, clearing splashCleari
 				// filaments against darker voids.
 				intensity := smoothstep(contrastLo, contrastHi, fld.vals[cell])
 				edgeX := smoothstep(0, 1, clamp01(math.Min(float64(col), float64(w-1-col))/marginX))
-				radial := 1 - radialDim*clamp01(dRaw/maxD)
+				radial := 1 - ops.dimToRim*clamp01(dRaw/maxD)
 				envelope := edgeX * edgeY * radial * breathe
 				lit := intensity * envelope
 				if ops.lumRamp {
@@ -497,6 +497,12 @@ func renderSplashField(w, h, frame int, pal theme.Palette, clearing splashCleari
 					// is the same mark, only darker. Pushing the fade through the
 					// density ramp instead substitutes size for brightness — a
 					// fading stream renders as a column of dots.
+					//
+					// g == 0 stays blank rather than emitting the ramp's floor:
+					// the floor anchors the ramp's shape (see buildRainRamp), but
+					// painting it would put a near-black glyph *over* the terminal
+					// background, which is a mark where the design wants none. So
+					// stop 0 is never emitted and the tail dies into the pane.
 					if g := clampInt(int(lit*float64(len(lut.rain)-1)), 0, len(lut.rain)-1); g > 0 {
 						ch = splashRainGlyph(col, row, phase)
 						idx = lut.rainIndex() + g

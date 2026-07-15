@@ -116,6 +116,21 @@ const (
 	seedRainGlyph uint32 = 0x3F5B7C21
 )
 
+// rainStreamKey folds a stream's identity — the column it falls in, which head
+// of that column's train it is, and which layer it belongs to — into the two
+// coordinates the lattice hash takes. Every per-stream draw goes through it, so
+// they all key the same stream rather than each combining the parts its own way.
+//
+// Folding k and li together keeps the key injective, which combining k into col
+// does not: col^k and col+k both collide across columns — (col 1, head 2) and
+// (col 2, head 1) land on one key and so share every draw they make. The per-
+// column speed and offset scatter those twins to unrelated screen positions, so
+// nothing showed; the key is injective anyway, because a draw that silently
+// aliases is a bug waiting for the day something does depend on it.
+func rainStreamKey(col, k, li int) (int, int) {
+	return col, k*len(rainLayers) + li
+}
+
 // splashRainAt evaluates the rain field at one cell.
 //
 // The formulation is a *stream train*: rather than tracking one head per column
@@ -154,12 +169,13 @@ func splashRainAt(col, _ int, _, dy, phase float64) (val, aux float64) {
 
 		// Per-stream draws, keyed on the stream's identity so they hold for its
 		// whole life rather than changing under it as it falls.
-		if splashCellHash(col^k, li, seedRainLive) > rainDensity {
+		kc, kr := rainStreamKey(col, k, li)
+		if splashCellHash(kc, kr, seedRainLive) > rainDensity {
 			continue // a gap in this column's train
 		}
 		// Scaled to this layer's period, so every layer keeps its gaps.
 		tail := L.period * (rainTailFracMin +
-			(rainTailFracMax-rainTailFracMin)*splashCellHash(col+k, li, seedRainTail))
+			(rainTailFracMax-rainTailFracMin)*splashCellHash(kc, kr, seedRainTail))
 
 		// Head lobe, then tail. Both are continuous in d — that is the whole
 		// trick (see rainFall).

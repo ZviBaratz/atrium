@@ -4,6 +4,7 @@ import (
 	"math"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/ZviBaratz/atrium/ui/theme"
 
@@ -220,9 +221,13 @@ func TestRainRampIsALuminanceRamp(t *testing.T) {
 		"the tail's darkest stop must read as unlit")
 	require.Greaterf(t, lum(rainRampHexAt(pal, splashRainStops-1)), 0.75,
 		"the head's brightest stop must read as white-hot")
-	// And the floor must stay off true black, or a minimum-contrast terminal
-	// rewrites it and speckles the tail with the very artifact this removes.
+	// And the low end must stay off true black. The floor itself never renders
+	// (a cell that dim goes blank), but it anchors the shape of the stops that
+	// do — and a minimum-contrast terminal rewrites those to something legible,
+	// speckling the tail with the very artifact this ramp removes.
 	require.Positive(t, lum(rainRampHexAt(pal, 0)), "the floor must not be pure black")
+	require.Positive(t, lum(rainRampHexAt(pal, 1)),
+		"the dimmest stop that actually renders must not be pure black")
 }
 
 // TestRainTailsLeaveGaps pins the constraint that a comment stated and the code
@@ -357,6 +362,126 @@ func TestRainLayersSeparateInBrightness(t *testing.T) {
 				"(L* %.1f); layers that close read as one plane", li, head, prev)
 		prev = head
 	}
+}
+
+// sgrPrefix returns the SGR sequence at the head of s, or "" if s starts with
+// text. Each affix the emitter opens a run with is exactly one such sequence.
+func sgrPrefix(s string) string {
+	if !strings.HasPrefix(s, "\x1b[") {
+		return ""
+	}
+	if i := strings.IndexByte(s, 'm'); i >= 0 {
+		return s[:i+1]
+	}
+	return ""
+}
+
+// rainStopGrid renders rain and decodes each cell back to the luminance stop it
+// actually carries (-1 for a blank cell), by tracking the run the emitter
+// opened. It reads the rendered bytes rather than recomputing the field, which
+// is the point: the brightness assertions elsewhere in this file work off the
+// layer table and so never exercise Pass 2's envelope at all.
+func rainStopGrid(t *testing.T, w, h, frame int, pal theme.Palette) [][]int {
+	t.Helper()
+	lut := buildSplashLUT(pal)
+	stopOf := make(map[string]int, len(lut.rain))
+	for i, a := range lut.rain {
+		stopOf[a.prefix] = i
+	}
+	out := renderSplashField(w, h, frame, pal,
+		splashClearing{wordCenterRow: (h - 1) / 2}, splashVariantRain)
+
+	grid := make([][]int, 0, h)
+	for _, line := range strings.Split(out, "\n") {
+		row := make([]int, 0, w)
+		cur := -1
+		for len(line) > 0 {
+			if seq := sgrPrefix(line); seq != "" {
+				stop, ok := stopOf[seq]
+				if !ok {
+					stop = -1 // a reset, or a run this variant should not emit
+				}
+				cur = stop
+				line = line[len(seq):]
+				continue
+			}
+			r, size := utf8.DecodeRuneInString(line)
+			if r == ' ' {
+				row = append(row, -1)
+			} else {
+				row = append(row, cur)
+			}
+			line = line[size:]
+		}
+		require.Lenf(t, row, w, "row must be exactly %d cells", w)
+		grid = append(grid, row)
+	}
+	return grid
+}
+
+// TestRainKeepsItsHeadsAwayFromTheFocalPoint is the regression for a defect that
+// every other test in this file was structurally unable to see.
+//
+// splashOps exists so a variant can decline the Pass-2 envelope terms, and rain
+// declines dimToRim for a stated reason: the radial dim fades the field by
+// distance from the wordmark, which *inverts* rain's depth — a near stream at
+// the rim renders dimmer than a far stream at the middle — and costs every head
+// out there the top of the ramp, which is the only white on screen and the thing
+// the eye tracks. The field was declared and then not consumed: Pass 2 read the
+// package constant instead, so rain got a 42% radial dim it had opted out of and
+// a full-brightness head at the rim landed on stop 8 of 15.
+//
+// The brightness tests above could not catch it. They compute stops straight
+// from the layer table (rainStopFor(L.bright)), which is Pass-1 math — the
+// envelope never enters. This one reads the rendered cells back instead.
+func TestRainKeepsItsHeadsAwayFromTheFocalPoint(t *testing.T) {
+	withColorProfile(t, termenv.TrueColor)
+	pal := splashTestPalette()
+	const w, h = 120, 40
+	const top = splashRainStops - 1
+
+	require.Zerof(t, splashVariantRain.ops().dimToRim,
+		"this test only means anything while rain declines the radial dim")
+
+	// The vignette legitimately fades the border, so sample only where it has
+	// reached full strength — what is under test is the radial term, not it.
+	marginX := math.Max(1, float64(w)*edgeVignetteFrac)
+	marginY := math.Max(1, float64(h)*edgeVignetteFrac)
+	cx, cyFocal := float64(w-1)/2, float64((h-1)/2)
+	maxD := math.Hypot(
+		math.Max(cx, float64(w-1)-cx),
+		math.Max(cyFocal, float64(h-1)-cyFocal)*cellAspect)
+
+	best, sampled := -1, 0
+	for frame := 0; frame < 12 && best < top; frame++ {
+		grid := rainStopGrid(t, w, h, frame, pal)
+		for row := range grid {
+			if math.Min(float64(row), float64(h-1-row)) < marginY {
+				continue // inside the vertical vignette
+			}
+			dy := (float64(row) - cyFocal) * cellAspect
+			for col, stop := range grid[row] {
+				if math.Min(float64(col), float64(w-1-col)) < marginX {
+					continue // inside the horizontal vignette
+				}
+				// Far from the wordmark: where the radial dim bites hardest.
+				if math.Hypot(float64(col)-cx, dy)/maxD < 0.5 {
+					continue
+				}
+				sampled++
+				if stop > best {
+					best = stop
+				}
+			}
+		}
+	}
+
+	require.Positive(t, sampled, "the far region must contain sampleable cells")
+	require.Equalf(t, top, best,
+		"the brightest cell more than half-way to the rim reached ramp stop %d, not "+
+			"the top (%d): rain's heads are being dimmed by a radial falloff it "+
+			"declined in splashOps (a dim of %.2f puts them at stop %d)",
+		best, top, radialDim, rainStopFor(1-radialDim*0.5))
 }
 
 // TestRainGlyphsAreWidthOne is what actually settles the glyph set, rather than
