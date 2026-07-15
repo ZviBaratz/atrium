@@ -100,12 +100,7 @@ func (m PromptMatcher) matches(content string) bool {
 	if len(m.Any) == 0 {
 		return true
 	}
-	for _, s := range m.Any {
-		if strings.Contains(flat, s) {
-			return true
-		}
-	}
-	return false
+	return containsAny(flat, m.Any)
 }
 
 // Gate is a one-time setup/trust screen that consumes keystrokes until a human
@@ -113,8 +108,10 @@ func (m PromptMatcher) matches(content string) bool {
 // never auto-dismisses a gate (surfacing it as needs-input is safer than blindly
 // accepting a folder-trust or new-MCP screen); GateUp is a detection-only signal.
 type Gate struct {
-	// Contains marks the gate as up when any entry is present in the live dialog
-	// region (the bottom chrome scanned by GateUp), not anywhere in the pane.
+	// Contains marks the gate as up when any entry is present in the region GateUp
+	// narrowed to — the flattened bottom WindowPrompt lines — not anywhere in the pane.
+	// That window is a budget, not a liveness proof (see GateUp): a gate whose literals
+	// also appear in the transcript needs Match instead.
 	Contains []string
 	// Match, when set, replaces the Contains scan entirely — the escape hatch for a
 	// gate whose literals a flat bottom-N window cannot separate from the same words

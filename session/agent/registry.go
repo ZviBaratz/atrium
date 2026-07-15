@@ -250,7 +250,7 @@ var claude = &Adapter{
 		// reflows, so the 15-line budget no longer bounds the gate and the
 		// width-28 miss it recorded is fixed (registry_test.go
 		// claudeMCPNarrowPane).
-		{Match: claudeGateVisible, Contains: claudeGateTitles},
+		{Match: claudeGateVisible},
 	},
 
 	// tmux word-splits the trailing command string itself, so appending to the
@@ -260,10 +260,12 @@ var claude = &Adapter{
 	HeadlessNamer: true, // `claude -p` with a JSON envelope (session/naming.go)
 }
 
-// claudeGateTitles are the literals claude's gate is keyed on. Shared by the Gate's Contains
-// (the no-border fallback, and the declarative record of what is matched) and by
-// claudeGateVisible, so the two can never drift apart. A separate var rather than an inline
-// literal because a Gate whose own Match reads it would be an initialization cycle.
+// claudeGateTitles are the literals claude's gate is keyed on. A package-level var rather
+// than an inline literal because claudeGateVisible — the Gate's own Match — reads them, and a
+// Gate literal referencing a func that read that same Gate back would be an initialization
+// cycle. The Gate deliberately carries no Contains: Match replaces that scan entirely
+// (GateUp), so a Contains beside it would never be read, and a reader could not tell that the
+// no-border fallback lives inside claudeGateVisible rather than in the declarative field.
 var claudeGateTitles = []string{
 	"Yes, I trust this folder",
 	"Do you trust the files in this folder?",
@@ -291,20 +293,51 @@ var claudeGateTitles = []string{
 // Why not the segment scan the prompt matchers use (footerVisibleInSegments): its input-box
 // stop only fires on a segment whose FIRST line is the composer, so a live permission dialog
 // — whose segment opens with its own title — lets the scan walk on into the transcript. The
-// border anchor has no such hole, needs no window budget, and flattens the whole region at
-// once, so a title that reflows at a narrow width still reconstructs (claudeMCPWrappedPane).
+// border anchor does not walk, and it puts no floor under the region, so a title reconstructs
+// however tall the dialog reflows (claudeMCPWrappedPane, claudeMCPNarrowPane).
 //
-// Falls back to the flat window when no border anchors the pane. That path is today's
-// behavior, kept because its failure is a false positive (needs-input on a live session),
-// never a missed gate — and it is unreachable for the bug above, which needs a composer on
-// screen, which is itself drawn with borders.
+// What the anchor does NOT prove, bounded here rather than assumed away:
+//
+//   - That anything sits below the rule at all. footerBelowBox reports ok=true for a pane
+//     whose LAST line is the rule, handing back an empty region: ok means "an anchor exists",
+//     not "the region is meaningful". Keying the fallback on ok alone would match "" and go
+//     silent — a MISSED gate — so an empty region falls back too.
+//   - That the rule is live chrome. Removing the floor must not remove the ceiling with it,
+//     or transcript below a rule the agent printed itself matches instead: see gateRegionCap.
+//
+// Either fallback lands on the flat window, which is today's behavior, kept because ITS
+// failure is a false positive (needs-input on a live session), never a missed gate — and it
+// is unreachable for the bug above, which needs a composer on screen, which is itself drawn
+// with borders.
+//
+// Known limit, accepted: a rule rendered BELOW a live dialog steals the anchor, and the gate
+// is missed. A custom statusLine drawing its own ─── is the shape chrome.go names (it is why
+// footerVisibleInSegments exists). Reaching it needs claude to paint REPL chrome around a
+// startup screen, which no captured gate does — the dialogs replace the composer rather than
+// sit above it — so there is no pane to pin it from; revisit if one is ever captured.
 func claudeGateVisible(content string) bool {
 	region, ok := footerBelowBox(content)
-	if !ok {
-		region = liveChromeLines(content, WindowPrompt)
+	if !ok || strings.TrimSpace(region) == "" {
+		return containsAny(flattenChrome(content, WindowPrompt), claudeGateTitles)
 	}
-	return containsAny(whiteSpaceRegex.ReplaceAllString(region, " "), claudeGateTitles)
+	return containsAny(flattenChrome(region, gateRegionCap), claudeGateTitles)
 }
+
+// gateRegionCap bounds how many non-empty lines below the anchoring rule claudeGateVisible
+// matches in. The anchor is the pane's LAST rule, which is the dialog's own top rule only
+// while a dialog IS the live chrome. On a frame with no composer — startup, or a --continue
+// transcript replay — the last rule can instead be one the agent printed in its own output (a
+// markdown rule, a table edge, a diff header), and then everything below it is transcript,
+// unbounded. Dropping the flat window's budget dropped that ceiling along with the floor
+// #340 measured as the bug: without this, a title quoted 60 lines under such a rule fires the
+// gate where the bottom-15 window did not — a false positive, which is the reported bug's own
+// direction (a row stuck on "waiting on setup screen", its queued prompt never sent).
+//
+// The cap restores the ceiling without restoring the floor. It sits well clear of the tallest
+// dialog ever captured (claudeMCPNarrowPane: 17 non-empty lines at width 28 — the width that
+// used to miss), so it never truncates a real gate, and bites only when the anchor turns out
+// not to be live chrome. Same role aboveBoxBlockCap plays for the upward scan (chrome.go).
+const gateRegionCap = 40
 
 // selectionFooterTokens reports whether the flattened text carries claude's selection
 // footer's co-occurring key hints: "Esc to cancel" plus a navigate/select token.

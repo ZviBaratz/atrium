@@ -310,13 +310,22 @@ func (t *Session) Poll() PaneState {
 
 	// A startup gate outranks every content state below: a trust/first-run screen has no
 	// busy marker and matches no prompt matcher, so without this it would fall through to
-	// idle and the row would lie as Ready while the session is actually blocked. GateUp
-	// scans only the live dialog region (bottom chrome), like the prompt matchers, so a gate
-	// literal quoted in the transcript body never wins over a genuinely-working pane. Setting
+	// idle and the row would lie as Ready while the session is actually blocked. Setting
 	// lastReported to PaneGate keeps the marker-absent grace below from reading the eventual
 	// clear-out as a working→idle transition. We never dismiss the gate — a human must accept
 	// it (or the trust_worktrees_root opt-in pre-accepts it), so ApplyPaneState maps this to
 	// NeedsInput.
+	//
+	// Ordering it above the busy marker means a false gate beats positive proof of work, so
+	// the cost of a wrong gate is paid here. This comment used to justify that with "GateUp
+	// scans only the live dialog region (bottom chrome), like the prompt matchers, so a gate
+	// literal quoted in the transcript body never wins over a genuinely-working pane" — which
+	// was false, and #342 is what it cost: only ~5 lines of live chrome sit below the
+	// composer, so the bottom-N window always also held transcript, and an agent discussing
+	// claude's MCP dialog read as blocked. Claude's gate is anchored structurally now
+	// (agent/registry.go claudeGateVisible); the other adapters still use the flat window, so
+	// for them the sentence remains aspirational rather than true. The ordering stands because
+	// a real gate genuinely outranks a stale marker — not because the gate cannot be wrong.
 	if _, gated := t.adapter.GateUp(content); gated {
 		t.monitor.idleStreak = 0
 		t.monitor.lastReported = PaneGate
