@@ -136,6 +136,11 @@ func SplashScreensaver(width, height, frame int) string {
 // an uninterrupted field, which is the screensaver (see SplashScreensaver). Both
 // panes always pass one.
 func splashScene(width, height, frame int, message string) string {
+	// Resolved once: the variant picks both the field generator and whether its
+	// field wants a clearing around the text at all (see splashVariant.textPad).
+	variant := splashActiveVariant()
+	pad, clears := variant.textPad()
+
 	word := trimBlankLines(FallbackBanner())
 	wordW, wordH := lipgloss.Width(word), lipgloss.Height(word)
 
@@ -144,10 +149,13 @@ func splashScene(width, height, frame int, message string) string {
 	wordX := (width - wordW) / 2
 	wordY := max(0, cy-wordH/2) // wordmark centered on the pane
 
-	clearing := splashClearing{
-		wordHalfW:     wordW/2 + 2,
-		wordHalfH:     wordH/2 + 1,
-		wordCenterRow: wordY + wordH/2,
+	// wordCenterRow is set unconditionally: it doubles as the field's focal row
+	// (renderSplashField), so it is not the clearing's to skip. Only the
+	// half-extents are — zero disables an ellipse (see splashClearing.blanks).
+	clearing := splashClearing{wordCenterRow: wordY + wordH/2}
+	if clears {
+		clearing.wordHalfW = wordW/2 + pad.wordX
+		clearing.wordHalfH = wordH/2 + pad.wordY
 	}
 
 	// Sized only when there is a message: the zero-value msg half-extents left
@@ -160,12 +168,14 @@ func splashScene(width, height, frame int, message string) string {
 		msgW, msgH := lipgloss.Width(msg), lipgloss.Height(msg)
 		msgX = (width - msgW) / 2
 		msgY = wordY + wordH + gap
-		clearing.msgHalfW = msgW/2 + 2
-		clearing.msgHalfH = msgH/2 + 2
-		clearing.msgCenterRow = msgY + msgH/2
+		if clears {
+			clearing.msgHalfW = msgW/2 + pad.msgX
+			clearing.msgHalfH = msgH/2 + pad.msgY
+			clearing.msgCenterRow = msgY + msgH/2
+		}
 	}
 
-	field := renderSplashField(width, height, frame, theme.Current().Palette, clearing, splashActiveVariant())
+	field := renderSplashField(width, height, frame, theme.Current().Palette, clearing, variant)
 	scene := overlayAt(field, word, wordX, wordY)
 	if message != "" {
 		scene = overlayAt(scene, msg, msgX, msgY)

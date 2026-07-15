@@ -99,6 +99,7 @@ func splashTestVariants() map[string]splashVariant {
 		"flow":    splashVariantFlow,
 		"julia":   splashVariantJulia,
 		"mandala": splashVariantMandala,
+		"rain":    splashVariantRain,
 	}
 }
 
@@ -177,21 +178,6 @@ func TestSplashDitherDistribution(t *testing.T) {
 		}
 	}
 	require.InDelta(t, 0.5, sum/float64(n), 0.02, "dither must be unbiased")
-}
-
-// TestSplashFBMAtRange checks the fBm field evaluator's output contract over
-// a spread of positions and phases: raw value and hue helper both in [0,1].
-func TestSplashFBMAtRange(t *testing.T) {
-	for i := 0; i < 600; i++ {
-		dx := (float64(i%60) - 30) * 1.37
-		dy := (float64(i/60) - 5) * 2.9
-		phase := float64(i%17) * 1.3
-		v, q := splashFBMAt(dx, dy, phase)
-		require.GreaterOrEqualf(t, v, 0.0, "val at (%f,%f,p%f)", dx, dy, phase)
-		require.LessOrEqualf(t, v, 1.0, "val at (%f,%f,p%f)", dx, dy, phase)
-		require.GreaterOrEqualf(t, q, 0.0, "qLen at (%f,%f,p%f)", dx, dy, phase)
-		require.LessOrEqualf(t, q, 1.0, "qLen at (%f,%f,p%f)", dx, dy, phase)
-	}
 }
 
 // TestRenderSplashFieldConcurrent guards the two-panes case (preview and
@@ -281,22 +267,41 @@ func TestSplashBrailleVariantOutput(t *testing.T) {
 	require.True(t, sawBraille, "the faint band must produce braille dots")
 }
 
-// TestSplashFractalRange checks both fractal evaluators' output contract
-// over a spread of positions and phases: raw value and hue helper in [0,1].
-func TestSplashFractalRange(t *testing.T) {
-	for name, at := range map[string]func(dx, dy, phase float64) (float64, float64){
-		"julia":   splashJuliaAt,
-		"mandala": splashMandalaAt,
-	} {
+// TestSplashPointFnRange checks every variant's point evaluator over a spread
+// of cells and phases.
+//
+// Driven off splashFieldAt rather than a list of evaluators, so a variant is
+// covered the moment it is dispatched — this used to be two hand-maintained
+// lists (one for fBm, one for the fractals) that a new variant had to be
+// remembered into, which is why the gap below went unnoticed for so long.
+//
+// val is [0,1] for every variant: Pass 2's contrast window, glyph quantization
+// and envelope all assume it, and a breach silently clips rather than crashing.
+//
+// aux is deliberately *not* universal. It is a variant-defined hue helper, and
+// splashColorIdx consumes it two different ways: the legacy plasma passes an
+// atan2 angle straight into sin(aux + …), which is meaningful for any real,
+// while every other variant contributes aux as a *weighted term* in the hue mix
+// and so must keep it in [0,1] or the hue wraps to the far end of the gradient.
+// Assert the range only where the mix actually weights it.
+func TestSplashPointFnRange(t *testing.T) {
+	for name, v := range splashTestVariants() {
+		at := splashFieldAt(v)
+		// The legacy plasma's aux is an angle by construction, consumed inside a
+		// sine rather than weighted — see splashColorIdx and splashField's doc.
+		auxIsWeight := v != splashVariantLegacy
 		for i := 0; i < 600; i++ {
-			dx := (float64(i%60) - 30) * 1.37
-			dy := (float64(i/60) - 5) * 2.9
+			col, row := i%60, i/60
+			dx := (float64(col) - 30) * 1.37
+			dy := (float64(row) - 5) * 2.9
 			phase := float64(i%23) * 1.7
-			v, aux := at(dx, dy, phase)
-			require.GreaterOrEqualf(t, v, 0.0, "%s val at (%f,%f,p%f)", name, dx, dy, phase)
-			require.LessOrEqualf(t, v, 1.0, "%s val at (%f,%f,p%f)", name, dx, dy, phase)
-			require.GreaterOrEqualf(t, aux, 0.0, "%s aux at (%f,%f,p%f)", name, dx, dy, phase)
-			require.LessOrEqualf(t, aux, 1.0, "%s aux at (%f,%f,p%f)", name, dx, dy, phase)
+			val, aux := at(col, row, dx, dy, phase)
+			require.GreaterOrEqualf(t, val, 0.0, "%s val at (%d,%d,p%f)", name, col, row, phase)
+			require.LessOrEqualf(t, val, 1.0, "%s val at (%d,%d,p%f)", name, col, row, phase)
+			if auxIsWeight {
+				require.GreaterOrEqualf(t, aux, 0.0, "%s aux at (%d,%d,p%f)", name, col, row, phase)
+				require.LessOrEqualf(t, aux, 1.0, "%s aux at (%d,%d,p%f)", name, col, row, phase)
+			}
 		}
 	}
 }

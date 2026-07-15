@@ -44,7 +44,7 @@ const (
 // ping-pongs along the smooth escape depth (a triangle wave, so the gradient
 // never seam-wraps), making color bands follow the fractal's equipotential
 // geometry rather than plain radius.
-func splashJuliaAt(dx, dy, phase float64) (val, aux float64) {
+func splashJuliaAt(_, _ int, dx, dy, phase float64) (val, aux float64) {
 	// Launch on the scanned-for "emptiest" point of the animation (see
 	// juliaPhase0); everything animates forward from there.
 	phase += juliaPhase0
@@ -108,7 +108,7 @@ const (
 
 // splashMandalaAt evaluates the kaleidoscope field at one point. The hue
 // helper ping-pongs along log-radius, giving drifting concentric color rings.
-func splashMandalaAt(dx, dy, phase float64) (val, aux float64) {
+func splashMandalaAt(_, _ int, dx, dy, phase float64) (val, aux float64) {
 	r := math.Hypot(dx, dy)
 	lr := math.Log1p(r)
 	th := math.Atan2(dy, dx) + phase*mandalaRotSpd

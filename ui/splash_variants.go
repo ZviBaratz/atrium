@@ -47,6 +47,10 @@ const (
 	// the wordmark — a 2N-fold rosette of the ridged noise field with a slow
 	// infinite zoom, rotation, and bloom.
 	splashVariantMandala
+	// splashVariantRain is Matrix-style digital rain ("f"): per-column streams
+	// with bright heads and fading tails, layered at three depths. PROTOTYPE —
+	// dev-only (no name here) until the wordmark-clearing question is settled.
+	splashVariantRain
 
 	// splashVariantCount is the enum's cardinality, not a variant — it must
 	// stay last. It exists so the tests can prove they cover every variant:
@@ -86,6 +90,51 @@ var splashVariantNames = map[string]splashVariant{
 	"julia":    splashVariantJulia,
 	"mandala":  splashVariantMandala,
 	"plasma":   splashVariantLegacy,
+}
+
+// structured reports whether a variant's field carries directional geometry
+// that a hole punched in it is visible *against*. It is the difference between
+// a field that hides the text clearing and one that exposes it: the nebula and
+// its relatives drift and fade, so a soft void around the wordmark reads as gas
+// thinning out, while rain's streams are long, straight and vertical — a band
+// with no streams in it reads as a band, and the eye asks what put it there.
+func (v splashVariant) structured() bool {
+	return v == splashVariantRain
+}
+
+// splashTextPad is the margin a clearing leaves around the text it protects,
+// in cells, added to the text's half-extents.
+type splashTextPad struct{ wordX, wordY, msgX, msgY int }
+
+// textPad returns a variant's clearing margin, and whether it wants a clearing
+// at all.
+//
+// It is worth being precise about what the clearing is for, because the name
+// suggests a job it does not have. It does *not* keep the field from bleeding
+// through the text: overlayAt is an opaque compositor — it writes each overlaid
+// line's cells wholesale, spaces included — and the banner is solid to begin
+// with (it fills with ░ and contains no spaces at all). The text covers its own
+// footprint no matter what the field does underneath. The clearing's only job is
+// aesthetic: it opens a margin of quiet *around* the text.
+//
+// That margin is the whole charm on an organic field, which fades into it, so
+// the gas appears to part around the wordmark. On a structured field it is the
+// opposite: rain's streams are long, straight and vertical, and a margin is a
+// band of missing streams with nothing drawn in it to account for them. Measured
+// against the inherited padding that came to three such bands — one below the
+// wordmark, two around a one-row message whose ellipse spanned three rows.
+//
+// So structured variants take no clearing rather than a smaller one. Tightening
+// the padding could only ever fix two of those three bands: wordCenterRow rounds
+// to wordY + wordH/2, half a row below the even-height banner's true center, so
+// the art spans dy ∈ [-3, +2] and no integer half-extent covers exactly that —
+// 4 takes a row past the bottom, 3 uncovers the top. Dropping the clearing skips
+// the geometry entirely, and loses nothing: the text was never relying on it.
+func (v splashVariant) textPad() (splashTextPad, bool) {
+	if v.structured() {
+		return splashTextPad{}, false
+	}
+	return splashTextPad{wordX: 2, wordY: 1, msgX: 2, msgY: 2}, true
 }
 
 // SplashVariantNames lists every pinnable pattern name, sorted.
@@ -134,6 +183,8 @@ var splashEnvVariant = sync.OnceValues(func() (splashVariant, bool) {
 		return splashVariantJulia, true
 	case "e":
 		return splashVariantMandala, true
+	case "f", "rain":
+		return splashVariantRain, true
 	}
 	return splashDefaultVariant, true
 })

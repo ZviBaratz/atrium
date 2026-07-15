@@ -193,7 +193,7 @@ var (
 // per-octave rotated by the exact Pythagorean matrix (0.8, 0.6; −0.6, 0.8) —
 // are blended with a weak ring anchored on the wordmark. Returns the raw
 // value in [0,1] and the normalized warp magnitude (the hue helper).
-func splashFBMAt(dx, dy, phase float64) (val, qLen float64) {
+func splashFBMAt(_, _ int, dx, dy, phase float64) (val, qLen float64) {
 	qx, qy, qq := splashFBMWarpAt(dx, dy, phase)
 	return splashFBMBody(dx+warpAmp*qx, dy+warpAmp*qy, phase), clamp01(qq * fbmHueWarpScale)
 }
@@ -342,24 +342,35 @@ type splashField struct {
 // aspect-corrected coordinates (dx, dy) — the same frame the envelopes and
 // color gradient use in Pass 2. Buffers are per-call allocations; at splash
 // sizes (19 KB at 80×30) that is cheaper than any pooling would be worth.
-func splashEvalField(w, h int, cx, cyFocal, phase float64, at func(dx, dy, phase float64) (float64, float64)) splashField {
+func splashEvalField(w, h int, cx, cyFocal, phase float64, at splashPointFn) splashField {
 	f := splashField{vals: make([]float64, w*h), aux: make([]float64, w*h)}
 	i := 0
 	for row := 0; row < h; row++ {
 		dy := (float64(row) - cyFocal) * cellAspect
 		for col := 0; col < w; col++ {
 			dx := float64(col) - cx
-			f.vals[i], f.aux[i] = at(dx, dy, phase)
+			f.vals[i], f.aux[i] = at(col, row, dx, dy, phase)
 			i++
 		}
 	}
 	return f
 }
 
+// splashPointFn evaluates one cell's raw field value and its hue helper, both
+// in [0,1]. It must be pure over its arguments: animation enters only through
+// phase, and randomness only through the integer lattice hash.
+//
+// The continuous (dx, dy) is the focal-relative, aspect-corrected position and
+// is what the field math wants. The integer (col, row) is the cell's identity,
+// which per-column effects need and cannot recover from dx: dx is col - cx, and
+// cx is a half-integer on even-width panes, so a generator would have to guess
+// the pane's parity to round back to a column. Most evaluators ignore it.
+type splashPointFn func(col, row int, dx, dy, phase float64) (val, aux float64)
+
 // splashFieldAt returns the per-point field evaluator for a variant. Exposed
 // as a point function (not just a buffer fill) so sub-cell techniques can
 // re-sample the same field at finer positions.
-func splashFieldAt(v splashVariant) func(dx, dy, phase float64) (val, aux float64) {
+func splashFieldAt(v splashVariant) splashPointFn {
 	switch v {
 	case splashVariantLegacy:
 		return splashLegacyAt
@@ -367,6 +378,8 @@ func splashFieldAt(v splashVariant) func(dx, dy, phase float64) (val, aux float6
 		return splashJuliaAt
 	case splashVariantMandala:
 		return splashMandalaAt
+	case splashVariantRain:
+		return splashRainAt
 	default:
 		return splashFBMAt
 	}
@@ -376,7 +389,7 @@ func splashFieldAt(v splashVariant) func(dx, dy, phase float64) (val, aux float6
 // two domain-warped ring octaves + rotationally-symmetric petals + an
 // isotropic fine texture (three plane waves 120° apart, so no diagonal
 // grain). Returns the raw value and the warped angle (its swirl input).
-func splashLegacyAt(dx, dy, phase float64) (val, theta float64) {
+func splashLegacyAt(_, _ int, dx, dy, phase float64) (val, theta float64) {
 	wx := dx + plasmaWarp*math.Sin(dy*plasmaWarpF-phase*0.4)
 	wy := dy + plasmaWarp*math.Sin(dx*plasmaWarpF-phase*0.4)
 	d := math.Hypot(wx, wy)
