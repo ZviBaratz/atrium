@@ -33,23 +33,36 @@ const (
 	rainSpdMin = 0.55
 	rainSpdMax = 1.45
 
-	// Tail length range in aspect units, hashed per stream. Must stay under
-	// half the layer period, or a stream's tail reaches the head behind it and
-	// the column reads as a solid line with no gaps. The gaps are load-bearing:
-	// uninterrupted rain reads as static noise; rain with rhythm reads as
-	// falling.
-	rainTailMin = 8.0
-	rainTailMax = 26.0
+	// Tail length, hashed per stream, as a fraction of *its layer's* period —
+	// not an absolute length. The layers' periods differ (58/42/30), so one
+	// global range cannot serve them: at an absolute 8–26 the far layer's tails
+	// ran to 26 against a 30-unit period, so every stream's tail reached the head
+	// behind it and the column rendered as one unbroken line. Two of three layers
+	// were solid, which is why the field read as a uniform wash of glyphs rather
+	// than as rain.
+	//
+	// The ceiling must stay below 0.5: a tail longer than half its period is a
+	// column with no gap in it. The gaps are the whole rhythm — uninterrupted
+	// rain reads as static noise; rain with gaps reads as falling.
+	rainTailFracMin = 0.12
+	rainTailFracMax = 0.38
 
-	// rainHeadR is the head lobe's radius in aspect units. Rows are cellAspect
-	// (2.0) apart, so a radius above 2 guarantees at least one saturated head
-	// cell plus a soft leading edge that slides between rows — that slide is
-	// the sub-cell interpolation made visible.
-	rainHeadR = 3.2
+	// The head lobe, in aspect units. rainHeadFlat is a *plateau* at full
+	// brightness, and it exists because rows are sampled every cellAspect (2.0)
+	// units: a pure peak is caught only when a row happens to land on it, so at
+	// the old 3.2-unit radius the bright part spanned 43% of a row and over half
+	// of all heads rendered with no white cell at all — they blinked. A plateau
+	// wider than one row guarantees every head lands on at least one cell at the
+	// top of the ramp. rainHeadR is where the lobe finally reaches zero, giving
+	// the soft leading edge that slides between rows.
+	rainHeadFlat = 1.15
+	rainHeadR    = 4.5
 
 	// rainDensity is the fraction of (column, layer, stream) slots that carry a
-	// stream at all; the rest are gaps.
-	rainDensity = 0.85
+	// stream at all; the rest are gaps. Sparse on purpose — three layers of
+	// streams compound, and a screen with a glyph in every cell is a texture,
+	// not weather.
+	rainDensity = 0.62
 
 	// rainTailAmp caps the tail's brightness so it stays below the head's, which
 	// is what reserves the luminance ramp's white top end for the head alone.
@@ -126,11 +139,20 @@ func splashRainAt(col, _ int, _, dy, phase float64) (val, aux float64) {
 		if splashCellHash(col^k, li, seedRainLive) > rainDensity {
 			continue // a gap in this column's train
 		}
-		tail := rainTailMin + (rainTailMax-rainTailMin)*splashCellHash(col+k, li, seedRainTail)
+		// Scaled to this layer's period, so every layer keeps its gaps.
+		tail := L.period * (rainTailFracMin +
+			(rainTailFracMax-rainTailFracMin)*splashCellHash(col+k, li, seedRainTail))
 
 		// Head lobe, then tail. Both are continuous in d — that is the whole
 		// trick (see rainFall).
-		lit := clamp01((rainHeadR - math.Abs(d)) / rainHeadR)
+		d0 := math.Abs(d)
+		lit := 0.0
+		switch {
+		case d0 <= rainHeadFlat:
+			lit = 1 // the plateau: always at least one cell wide (see rainHeadFlat)
+		case d0 < rainHeadR:
+			lit = (rainHeadR - d0) / (rainHeadR - rainHeadFlat)
+		}
 		if d > 0 {
 			if t := rainTailAmp * clamp01(1-d/tail); t > lit {
 				lit = t

@@ -69,32 +69,50 @@ func TestRainTailFadesFromTheHead(t *testing.T) {
 	require.Greater(t, headVal, 0.9, "a column should contain a saturated head somewhere")
 
 	// Immediately behind the head (above it) the value must be below the peak,
-	// and further back it must be lower still.
+	// and further back it must be lower still. Step back in units of the
+	// shortest tail any layer can draw, so the samples land inside a tail
+	// whichever layer owns this column.
+	shortestTail := rainLayers[len(rainLayers)-1].period * rainTailFracMin
 	near, _ := splashRainAt(col, 0, 0, headDy-rainHeadR*1.5, 0)
-	far, _ := splashRainAt(col, 0, 0, headDy-rainHeadR*1.5-rainTailMin*0.5, 0)
+	far, _ := splashRainAt(col, 0, 0, headDy-rainHeadR*1.5-shortestTail*0.5, 0)
 	require.Less(t, near, headVal, "the cell behind the head must be dimmer than the head")
 	require.Less(t, far, near, "the tail must keep fading with distance behind the head")
 	require.Greater(t, near, 0.0, "the tail must be lit at all, not merely absent")
 }
 
-// TestRainHeadIsContinuousInPhase is the mechanism behind
-// TestRainAnimatesEveryFrame, asserted directly rather than through the
-// renderer: a phase nudge far smaller than a row must still move the field.
-// Quantizing brightness to the head's integer row would flatten this to zero.
-func TestRainHeadIsContinuousInPhase(t *testing.T) {
-	const col = 23
-	// A cell somewhere in a stream, and a phase step of one frame.
-	dy := 6.0
-	moved := 0
-	for f := 0; f < 40; f++ {
-		a, _ := splashRainAt(col, 0, 0, dy, float64(f)*driftPerFrame)
-		b, _ := splashRainAt(col, 0, 0, dy, float64(f+1)*driftPerFrame)
-		if math.Abs(a-b) > 1e-9 {
-			moved++
+// TestRainIsContinuousInPhase is the mechanism behind TestRainAnimatesEveryFrame,
+// asserted directly rather than through the renderer: a phase nudge far smaller
+// than a row must still move the field.
+//
+// Measured over a population rather than one cell, because two parts of the
+// design are deliberately flat and would defeat a single-cell probe: a cell on
+// the head's plateau holds full brightness for the ~5 frames it takes to cross
+// (see rainHeadFlat), and most cells are in gaps at all (see rainDensity).
+//
+// The threshold discriminates. Measured on this field, a one-frame step moves
+// ~46% of (cell, frame) pairs; quantizing the distance-to-head to whole rows —
+// the naive design this replaced — drops it to ~13%, since a cell can then only
+// change when a head crosses a row boundary.
+func TestRainIsContinuousInPhase(t *testing.T) {
+	moved, total := 0, 0
+	for col := 0; col < 40; col++ {
+		for i := 0; i < 12; i++ {
+			dy := float64(i) * cellAspect // on the row grid, as the renderer samples
+			for f := 0; f < 20; f++ {
+				a, _ := splashRainAt(col, 0, 0, dy, float64(f)*driftPerFrame)
+				b, _ := splashRainAt(col, 0, 0, dy, float64(f+1)*driftPerFrame)
+				if math.Abs(a-b) > 1e-9 {
+					moved++
+				}
+				total++
+			}
 		}
 	}
-	require.Greater(t, moved, 30,
-		"a one-frame phase step must change the field at nearly every frame (moved %d/40)", moved)
+	frac := float64(moved) / float64(total)
+	require.Greaterf(t, frac, 0.30,
+		"only %.0f%% of (cell, frame) pairs moved on a one-frame phase step; rain's "+
+			"brightness must be continuous in the distance to the head, not quantized "+
+			"to rows (quantized measures ~13%%)", frac*100)
 }
 
 // TestRainRendersAsLinesNotDots is the regression for the failure that took two
@@ -203,4 +221,77 @@ func TestRainRampIsALuminanceRamp(t *testing.T) {
 	// And the floor must stay off true black, or a minimum-contrast terminal
 	// rewrites it and speckles the tail with the very artifact this removes.
 	require.Positive(t, lum(rainRampHexAt(pal, 0)), "the floor must not be pure black")
+}
+
+// TestRainTailsLeaveGaps pins the constraint that a comment stated and the code
+// then broke.
+//
+// A stream's tail must be shorter than half its layer's period, or it reaches
+// the head behind it and the column renders as one unbroken line. The tail range
+// was originally absolute (8–26) while the periods are per-layer (58/42/30), so
+// the mid and far layers ran solid — and a field with a glyph in every cell is a
+// texture, not rain. The gaps carry the rhythm.
+func TestRainTailsLeaveGaps(t *testing.T) {
+	require.Less(t, rainTailFracMax, 0.5,
+		"a tail longer than half its period leaves the column with no gap in it")
+	require.Less(t, rainTailFracMin, rainTailFracMax, "the tail range must be a range")
+	require.Positive(t, rainTailFracMin, "streams need a tail")
+
+	// And prove it end to end: no column may be solid over a tall pane.
+	const w, h = 80, 60
+	out := ansi.Strip(renderSplashField(w, h, 40, splashTestPalette(),
+		splashClearing{wordCenterRow: h / 2}, splashVariantRain))
+	rows := strings.Split(out, "\n")
+	for col := 0; col < w; col++ {
+		lit := 0
+		for _, r := range rows {
+			rs := []rune(r)
+			if col < len(rs) && rs[col] != ' ' {
+				lit++
+			}
+		}
+		require.Lessf(t, lit, len(rows)-2,
+			"column %d is lit in %d of %d rows — a solid column is a texture, not a stream",
+			col, lit, len(rows))
+	}
+}
+
+// TestRainHeadAlwaysLandsOnACell pins the head's plateau against the row grid.
+//
+// Rows sample the field every cellAspect units, so a head that is a pure peak is
+// only caught when a row happens to land on it: at the original 3.2-unit radius
+// the bright part spanned 43% of a row, so over half of all heads rendered with
+// no white cell and the stream had nothing for the eye to track. The plateau has
+// to be wider than one row for a head to be guaranteed.
+func TestRainHeadAlwaysLandsOnACell(t *testing.T) {
+	require.Greaterf(t, rainHeadFlat*2, cellAspect,
+		"the head plateau spans %.2f units against a %.2f-unit row pitch; a head "+
+			"that narrow blinks as it falls between rows", rainHeadFlat*2, cellAspect)
+	require.Greater(t, rainHeadR, rainHeadFlat, "the lobe must fall off outside its plateau")
+
+	// Sweep a head across a row boundary: some cell must reach the ramp's top
+	// stop at every sub-row offset it can occupy.
+	stops := splashRainStops
+	for i := 0; i < 24; i++ {
+		offset := float64(i) / 24 * cellAspect // where the head sits between rows
+		best := 0
+		for row := -4; row <= 4; row++ {
+			dy := float64(row)*cellAspect + offset
+			// A synthetic head at dy=0: sample the lobe directly.
+			d0 := math.Abs(dy)
+			lit := 0.0
+			switch {
+			case d0 <= rainHeadFlat:
+				lit = 1
+			case d0 < rainHeadR:
+				lit = (rainHeadR - d0) / (rainHeadR - rainHeadFlat)
+			}
+			if g := clampInt(int(lit*float64(stops-1)), 0, stops-1); g > best {
+				best = g
+			}
+		}
+		require.Equalf(t, stops-1, best,
+			"a head offset %.2f between rows peaks at ramp stop %d, not the top: "+
+				"it renders without white", offset, best)
+	}
 }
