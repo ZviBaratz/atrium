@@ -231,8 +231,13 @@ var claude = &Adapter{
 		//                                                      as a substring
 		// Neither literal is redundant, and the fixtures prove it one at a
 		// time: drop the capital-N and only the singular fixture fails, drop
-		// the lowercase and only the plural does. Case is what separates them
-		// because the plural's count prefix ("3 new…") lowercases the title.
+		// the lowercase and only the plural shapes do. Case is what separates
+		// them because the plural's count prefix ("3 new…") lowercases the title.
+		//
+		// Bounded by GateUp's 15-line budget, measured live at 2.1.210 (#340):
+		// fires at widths 110 and 40, MISSES at 28 and below, where the reflowed
+		// dialog runs 17 lines and walks the title out of the window. Recorded,
+		// not fixed — see claudeMCPWrappedPane.
 		//
 		// The gate is the ONLY thing that sees either. The singular's footer
 		// ("Enter to confirm · Esc to cancel") names no navigate/select token,

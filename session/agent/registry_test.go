@@ -419,16 +419,21 @@ var claudeMCPSinglePane = strings.Join([]string{
 // "space select · enter confirm", which is not the rendered line — the standing reminder
 // that the table enumerates, only a probe renders.
 //
-// Both MCP panes are captured at one width, which is the honest limit of what they pin.
-// Width matters more for these than for the trust gate: GateUp scans only the bottom
-// WindowPrompt (15) non-empty lines, and the trust gate is keyed on an option line three
-// lines off the bottom, whereas these are keyed on titles sitting ~8 lines up behind a
-// prose paragraph that wraps. Narrowing the pane grows that paragraph and walks the
-// title toward the budget edge; an approximate rewrap puts the miss near 28 columns —
-// below the 30 the busy marker is pinned at, so the gate holds across every width the
-// adapter claims. Left unpinned rather than pinned against a rewrapped pane: a fixture
-// Atrium folded itself would assert Atrium's idea of claude's wrapping, which is the
-// composed-pane mistake this file just undid. Pinning it needs a narrow real capture.
+// Width is load-bearing here in a way it is not for the trust gate, and the limit is
+// measured rather than reasoned: GateUp scans only the bottom WindowPrompt (15) non-empty
+// lines, the trust gate's literal sits on an option line three lines off the bottom, and
+// these titles sit ~8 lines up behind a prose paragraph that reflows. Narrowing the pane
+// grows that paragraph and walks the title past the budget. Driven live at 2.1.210 against
+// real captures at each width (#340):
+//
+//	110 → fires    40 → fires    28 → MISSES    24 → MISSES
+//
+// At 28 the wrapped dialog runs 17 non-empty lines, so the title is the 16th from the
+// bottom and falls outside the 15-line budget; the gate reads nothing and an MCP-blocked
+// session reads Ready. Real but remote — a pane that narrow is not a working terminal, and
+// the dialog only appears at session start — so it is recorded, not fixed: widening the
+// budget trades a documented miss at 28 columns for false-positive surface on every gate
+// at every width. claudeMCPWrappedPane below pins the boundary case that IS reachable.
 var claudeMCPMultiPane = strings.Join([]string{
 	strings.Repeat("─", 56),
 	"  3 new MCP servers found in this project",
@@ -439,6 +444,32 @@ var claudeMCPMultiPane = strings.Join([]string{
 	"    [✔] picoclaw",
 	"    [✔] femtoclaw",
 	" Space to select · Enter to confirm · Esc to reject all",
+}, "\n")
+
+// claudeMCPWrappedPane is the multi-server approval captured from a live 2.1.210 pane at
+// width 40 (2026-07-15), where the title itself reflows onto two lines:
+//
+//	3 new MCP servers found in this
+//	project
+//
+// It pins the property the flattened match quietly depends on — the gate literal survives a
+// wrapped TITLE, because the wrap falls after it rather than inside it. A narrower capture
+// is not pinned here on purpose: at 28 the gate genuinely misses (see above), so a fixture
+// there would pin the limitation rather than the behavior.
+var claudeMCPWrappedPane = strings.Join([]string{
+	strings.Repeat("─", 40),
+	"  3 new MCP servers found in this",
+	"  project",
+	"  Select any you wish to enable.",
+	"  MCP servers may execute code or",
+	"  access system resources. All tool",
+	"  calls require approval. Learn more",
+	"  in the MCP documentation.",
+	"  ❯ [✔] nanoclaw",
+	"    [✔] picoclaw",
+	"    [✔] femtoclaw",
+	" Space to select · Enter to confirm ·",
+	" Esc to reject all",
 }, "\n")
 
 func TestClaudeGate(t *testing.T) {
@@ -454,10 +485,13 @@ func TestClaudeGate(t *testing.T) {
 	// these and a session that reads Ready while blocked.
 	//
 	// Each literal is load-bearing on its own: removing the capital-N fails only the
-	// singular case below, removing the lowercase fails only the plural.
+	// singular case below, removing the lowercase fails both plural shapes. Case is what
+	// separates them because the plural's count prefix ("3 new…") puts the word
+	// mid-sentence, so the title lowercases it.
 	for name, pane := range map[string]string{
 		"singular": claudeMCPSinglePane,
 		"plural":   claudeMCPMultiPane,
+		"wrapped":  claudeMCPWrappedPane,
 	} {
 		_, ok = claude.GateUp(pane)
 		require.True(t, ok, "the live %s MCP dialog must fire the gate", name)
