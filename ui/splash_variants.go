@@ -102,6 +102,65 @@ func (v splashVariant) structured() bool {
 	return v == splashVariantRain
 }
 
+// splashOps is a variant's Pass-2 policy: how its raw field is turned into
+// glyphs and colour.
+type splashOps struct {
+	// contrastLo/contrastHi are the smoothstep window applied to the raw field.
+	// It exists to push a noise field's mid-tones apart — but it is destructive
+	// where the field already carries its own gradient, since everything below
+	// Lo is erased and everything above Hi flattens.
+	contrastLo, contrastHi float64
+	// dither adds sub-glyph-step noise to break banding on smooth gradients.
+	dither bool
+	// stars draws the fixed twinkling starfield over the field.
+	stars bool
+	// headLo, when > 0, promotes cells whose *raw* field value reaches it to the
+	// bright near-white star colour — a variant's own highlight rather than the
+	// gradient's.
+	headLo float64
+}
+
+// ops returns a variant's Pass-2 policy.
+//
+// The contrast window is the interesting one. A noise field concentrates its
+// values near the middle, so the narrow fBm window is what turns a flat wash
+// into filaments — but it assumes the field has no gradient of its own worth
+// keeping. Rain's does: its tail *is* a ramp from the head down to nothing, and
+// running the fBm window over it erased the faint 44% of every tail outright,
+// flattened the brightest 22%, and crushed the fade into the third that was
+// left. With dither scattering the survivors, streams rendered as loose
+// confetti — no visible trails, and so no parallax to see either, since there
+// were no streams to be nearer or further away. An identity window keeps the
+// tail the generator drew.
+func (v splashVariant) ops() splashOps {
+	switch {
+	case v == splashVariantLegacy:
+		// The superseded baseline, kept faithful: its wide window and no dither.
+		return splashOps{contrastLo: splashContrastLo, contrastHi: splashContrastHi}
+	case v == splashVariantRain:
+		return splashOps{
+			// Identity: pass the tail through untouched (see above).
+			contrastLo: 0, contrastHi: 1,
+			// Dither is for banding on a smooth wash. A stream is a thin line of
+			// cells, so per-cell noise does not smooth it — it eats it.
+			dither: false,
+			// Stars are fixed points; rain is moving ones. Together the fixed ones
+			// read as stuck pixels, and rain has its own highlight anyway.
+			stars: false,
+			// The white-hot head: the leading cell of each stream, in the star
+			// colour. The gradient LUT is near-equal-luminance by construction, so
+			// it cannot supply a highlight — this is the only bright value on the
+			// palette, and the head is what the eye actually tracks.
+			headLo: rainHeadLo,
+		}
+	case v.isFractal():
+		// The trap glow is already contrasty; a wide window keeps its range.
+		return splashOps{contrastLo: fractalContrastLo, contrastHi: fractalContrastHi, dither: true, stars: true}
+	default:
+		return splashOps{contrastLo: fbmContrastLo, contrastHi: fbmContrastHi, dither: true, stars: true}
+	}
+}
+
 // splashTextPad is the margin a clearing leaves around the text it protects,
 // in cells, added to the text's half-extents.
 type splashTextPad struct{ wordX, wordY, msgX, msgY int }

@@ -53,18 +53,42 @@ const (
 
 	// rainTailAmp caps the tail's brightness so it stays below the head's.
 	rainTailAmp = 0.82
+
+	// rainHeadLo is the raw field value at or above which a cell is drawn in the
+	// bright near-white head colour rather than the gradient. It sits above
+	// rainTailAmp by construction, so only the head lobe can reach it — the tail
+	// never promotes itself.
+	rainHeadLo = 0.9
 )
 
-// rainLayers are the parallax depths, near to far. Slower + dimmer + longer
-// period reads as further away — motion parallax needs no vanishing point, so
-// depth here costs nothing but three passes of arithmetic.
+// rainLayers are the parallax depths, near to far.
+//
+// Depth is carried by four cues at once, because on this palette no single one
+// is enough. speed and bright are the classic pair — motion parallax is
+// monocular and needs no vanishing point, so nearer simply means faster and
+// stronger. period spaces the far layers' streams more tightly, the way distance
+// packs anything together. hue is the one that does the heavy lifting here: the
+// gradient LUT is near-equal-luminance by construction, so it cannot shade for
+// depth, but it *can* separate the layers outright — near streams sit at the
+// cyan end, far ones at the warm end, and a glyph's colour says which layer it
+// belongs to no matter where on screen it lands.
+//
+// Only the near layer's peak clears rainHeadLo, so only it gets white heads.
+// That is deliberate and is the fifth cue: the brightest thing on screen is
+// always the nearest.
 var rainLayers = [3]struct {
-	speed, bright, period float64
+	speed, bright, period, hue float64
 }{
-	{1.00, 1.00, 58.0},
-	{0.62, 0.72, 42.0},
-	{0.40, 0.45, 30.0},
+	{speed: 1.00, bright: 1.00, period: 58.0, hue: 1.00}, // near: cyan, white-headed
+	{speed: 0.62, bright: 0.72, period: 42.0, hue: 0.55}, // mid:  blue/violet
+	{speed: 0.40, bright: 0.45, period: 30.0, hue: 0.14}, // far:  warm, dim
 }
+
+// rainHueSpread is how much of the LUT a single stream wanders across as it
+// fades from head to tail, around its layer's anchor. Small on purpose: it keeps
+// a stream from reading as a flat bar of one colour, without letting a near
+// stream's tail drift into the far layer's hue and undo the separation.
+const rainHueSpread = 0.10
 
 // Lattice seeds for the per-stream draws (distinct from every field seed).
 const (
@@ -125,16 +149,18 @@ func splashRainAt(col, _ int, _, dy, phase float64) (val, aux float64) {
 				lit = t
 			}
 		}
+		along := lit // position along the stream, before the layer dims it
 		lit *= L.bright
 		if lit > best {
 			best = lit
-			// Hue rides position-along-stream: the trail runs head→tail down the
-			// gradient. On a near-equal-luminance ramp hue cannot carry a fade —
-			// the density ramp does that — but it can carry *direction*.
-			bestAux = clamp01(lit / L.bright)
+			// Hue names the layer, so the eye can tell the depths apart wherever
+			// they cross; the stream's own fade only nudges it around that anchor
+			// (see rainHueSpread).
+			bestAux = clamp01(L.hue + (along-0.5)*2*rainHueSpread)
 		}
 	}
 	// Layers combine by max, not by sum: a far stream crossing behind a near
-	// one must not brighten its head.
+	// one must not brighten its head — and taking the max is also what makes the
+	// near layer *occlude* the far one rather than blend with it.
 	return clamp01(best), bestAux
 }

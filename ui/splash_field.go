@@ -247,6 +247,14 @@ func splashColorIdx(variant splashVariant, aux, dx, dy, dRaw, phase, maxD float6
 	case variant == splashVariantLegacy:
 		swirl := 0.5 + 0.5*math.Sin(aux+dRaw*colorSwirlF-phase*colorSwirlSpeed)
 		colorT = clamp01(colorRadialMix*(dRaw/maxD) + (1-colorRadialMix)*swirl)
+	case variant == splashVariantRain:
+		// Hue is the depth cue, so it must come from the stream and nothing else.
+		// The shared mix below spends half its weight on distance-from-the-focus,
+		// which paints every glyph by where it sits on screen: three layers at one
+		// spot all land on the same colour, and the parallax the layers exist to
+		// create is invisible. aux already carries the stream's depth (see
+		// splashRainAt), so take it whole.
+		colorT = clamp01(aux)
 	case variant.isFractal():
 		theta := math.Atan2(dy, dx)
 		swirl := 0.5 + 0.5*math.Sin(theta+dRaw*colorSwirlF-phase*colorSwirlSpeed)
@@ -447,21 +455,11 @@ func renderSplashField(w, h, frame int, pal theme.Palette, clearing splashCleari
 	starMax := len(starRampR) - 1
 	// Slow global brightness swell (breathing), computed once per frame.
 	breathe := 1 - breatheDepth*(0.5-0.5*math.Sin(phase*breatheSpeed))
-	// Per-variant Pass-2 behavior: the legacy field keeps its wide contrast
-	// window and no dither (it stays a faithful baseline); noise variants get
-	// the narrower fBm window, fractals a wide one (trap glow is already
-	// contrasty); both get dithering.
-	contrastLo, contrastHi := splashContrastLo, splashContrastHi
-	dither := false
-	switch {
-	case variant == splashVariantLegacy:
-	case variant.isFractal():
-		contrastLo, contrastHi = fractalContrastLo, fractalContrastHi
-		dither = true
-	default:
-		contrastLo, contrastHi = fbmContrastLo, fbmContrastHi
-		dither = true
-	}
+	// Per-variant Pass-2 policy: contrast window, dither, starfield, and the
+	// optional bright head (see splashVariant.ops).
+	ops := variant.ops()
+	contrastLo, contrastHi := ops.contrastLo, ops.contrastHi
+	dither := ops.dither
 
 	var sb strings.Builder
 	// A seed, not a bound — the run count isn't known until the field is walked.
@@ -521,11 +519,23 @@ func renderSplashField(w, h, frame int, pal theme.Palette, clearing splashCleari
 							}
 						}
 						idx = splashColorIdx(variant, fld.aux[cell], dx, dy, dRaw, phase, maxD, nColors)
+						// A variant's own highlight overrides the gradient: the
+						// LUT is near-equal-luminance, so it has no bright value
+						// to give a head. Keyed on the *raw* field rather than
+						// lit, or the radial dim would strip heads of their white
+						// toward the rim — where the depth cue needs them most.
+						// Inside the g > 0 branch, so the blank-border invariant
+						// still holds by construction.
+						if ops.headLo > 0 && fld.vals[cell] >= ops.headLo {
+							idx = starIdx
+						}
 					}
 				}
 				// Starfield on top: a fixed, twinkling point can light even a void
 				// the plasma left dark. Fades with the same border vignette.
-				if sh := starHash(col, row); sh > starThreshold {
+				// Variants whose own motion the eye tracks opt out — fixed points
+				// over moving ones read as stuck pixels.
+				if sh := starHash(col, row); ops.stars && sh > starThreshold {
 					tw := 0.7 + 0.3*math.Sin(phase*starTwinkleSpeed+sh*starPhaseScatter)
 					if sg := clampInt(int(tw*edgeX*edgeY*float64(starMax)), 0, starMax); sg > 0 {
 						ch = starRampR[sg]
