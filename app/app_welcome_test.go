@@ -80,7 +80,11 @@ func TestWelcome_FirstRunConfirmPersistsProgram(t *testing.T) {
 	require.NotZero(t, h.appState.GetHelpScreensSeen()&(helpTypeWelcome{}.mask()), "confirm sets the welcome seen-bit")
 }
 
-func TestWelcome_SkipLeavesSeenBitUnset(t *testing.T) {
+// Skipping the welcome with Esc now retires it (#381): the modal swallows keys
+// until dismissed, so re-greeting a look-around-first user every launch is a
+// recurring toll. The seen-bit is set on skip just as on confirm; recovery is a
+// one-line notice pointing at settings, not the modal again.
+func TestWelcome_SkipMarksSeen(t *testing.T) {
 	stubDetect(t, []config.Profile{{Name: "claude", Program: "claude"}})
 	h := newCreateFormHome(t)
 
@@ -89,11 +93,37 @@ func TestWelcome_SkipLeavesSeenBitUnset(t *testing.T) {
 	model, _ = h.Update(cmd().(agentsDetectedMsg))
 	h = model.(*home)
 
-	model, _ = h.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	model, skipCmd := h.Update(tea.KeyMsg{Type: tea.KeyEsc})
 	h = model.(*home)
 
 	require.Equal(t, stateDefault, h.state, "esc closes the welcome")
-	require.Zero(t, h.appState.GetHelpScreensSeen()&(helpTypeWelcome{}.mask()), "skip must not set the seen-bit")
+	require.NotZero(t, h.appState.GetHelpScreensSeen()&(helpTypeWelcome{}.mask()),
+		"skip must retire the welcome so a look-around-first user is not re-greeted")
+	require.NotNil(t, skipCmd, "skip flashes a recovery notice alongside the resize")
+}
+
+// The retired seen-bit makes the next launch take the returning-user branch of
+// maybeShowWelcome rather than re-opening the modal — the AC2 "relaunch does not
+// re-open" guarantee, exercised through the real show path.
+func TestWelcome_SkipThenRelaunchDoesNotReopen(t *testing.T) {
+	stubDetect(t, []config.Profile{{Name: "claude", Program: "claude"}})
+	h := newCreateFormHome(t)
+
+	model, cmd := h.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+	h = model.(*home)
+	model, _ = h.Update(cmd().(agentsDetectedMsg))
+	h = model.(*home)
+	model, _ = h.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	h = model.(*home)
+	require.NotZero(t, h.appState.GetHelpScreensSeen()&(helpTypeWelcome{}.mask()))
+
+	// Simulate a relaunch: welcomeChecked guards once-per-process, so clear it and
+	// re-run the show gate against the now-persisted seen-bit.
+	h.welcomeChecked = false
+	h.welcomeOverlay = nil
+	h.maybeShowWelcome()
+	require.NotEqual(t, stateWelcome, h.state, "a retired welcome must not re-open on relaunch")
+	require.Nil(t, h.welcomeOverlay, "no welcome overlay is constructed on relaunch")
 }
 
 // While the welcome is up, menuVisible() is false and the panes are sized

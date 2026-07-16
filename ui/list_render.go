@@ -486,29 +486,34 @@ func (l *List) String() string {
 		innerH = 1
 	}
 
-	// A genuinely empty list (no sessions, not even mid-filter) would otherwise render a
-	// blank panel interior. With the contextual hint bar hidden during plain navigation,
-	// this empty list is the primary first-run surface, so center the two essential keys
-	// here — a fresh user (or one who dismissed the welcome) is never stranded on a
-	// silent screen. Pressing `n` makes the list non-empty and the contextual bar takes
-	// over. Guard on filterActive too: an empty-query filter still shows its bar above.
-	// hideEmptyHint (set when the always-on bottom hint bar is enabled) suppresses
-	// this so first-run guidance isn't shown twice.
-	if len(l.items) == 0 && !filtering && !l.filterActive && !l.hideEmptyHint {
+	// A genuinely empty list (no sessions, not even mid-filter) would otherwise
+	// render a blank panel interior. Show a small CTA card instead: why the panel
+	// is empty, plus the single next action. This is *content*, not a duplicate of
+	// the bottom hint bar's keys, so it renders regardless of the hint_bar setting
+	// (#381) — a fresh user is never stranded on a silent screen. The `n` glyph
+	// comes from the registry so a rebind can't strand the call to action. Guard on
+	// filterActive too: an empty-query filter still shows its filter bar above, and
+	// a no-match filter renders its own "no matches" line, so the CTA stays out of
+	// both filtered states.
+	if len(l.items) == 0 && !filtering && !l.filterActive {
 		th := theme.Current()
-		// Kept terse so it never clips: the list panel is only ~30% of the terminal
-		// width, so a longer "new session / all keys" phrasing truncates on normal and
-		// narrow terminals. The styled key glyphs carry the meaning (n = new, ? = keys);
-		// the glyphs come from the registry so a rebind can't strand this hint.
-		hint := th.AttentionStyle().Render(keys.GlobalKeyBindings[keys.KeyNew].Help().Key) +
-			" " + th.DimStyle().Render("new") +
-			th.FaintStyle().Render("  ·  ") +
-			th.AttentionStyle().Render(keys.GlobalKeyBindings[keys.KeyHelp].Help().Key) +
-			" " + th.DimStyle().Render("keys")
-		lines = append(lines, lipgloss.PlaceHorizontal(l.width-2, lipgloss.Center, hint))
-		// Vertically center within the panel interior so the empty state reads as
-		// intentional rather than top-anchored.
-		for top := (innerH - 1) / 2; top > 0; top-- {
+		innerW := l.width - 2
+		if innerW < 1 {
+			innerW = 1
+		}
+		nKey := keys.GlobalKeyBindings[keys.KeyNew].Help().Key
+		title := lipgloss.NewStyle().Width(innerW).Align(lipgloss.Center).
+			Render(th.BoldStyle().Render("No sessions yet"))
+		action := lipgloss.NewStyle().Width(innerW).Align(lipgloss.Center).Render(
+			th.DimStyle().Render("Press ") +
+				th.AttentionStyle().Render(nKey) +
+				th.DimStyle().Render(" to start your first agent"))
+		card := lipgloss.JoinVertical(lipgloss.Center, title, "", action)
+		cardLines := strings.Split(card, "\n")
+		lines = append(lines, cardLines...)
+		// Vertically center the card within the panel interior so the empty state
+		// reads as intentional rather than top-anchored.
+		for top := (innerH - len(cardLines)) / 2; top > 0; top-- {
 			lines = append([]string{""}, lines...)
 		}
 	}
