@@ -80,6 +80,7 @@ func DefaultConfig() *Config {
 	killDoubleTap := true
 	sessionContextBar := true
 	hintBar := true
+	osChrome := true
 	showReleaseNotes := true
 	updateBaseOnCreate := true
 	return &Config{
@@ -89,6 +90,7 @@ func DefaultConfig() *Config {
 		Theme:              "tokyo-night",
 		SessionContextBar:  &sessionContextBar,
 		HintBar:            &hintBar,
+		OSChrome:           &osChrome,
 		BranchPrefix: func() string {
 			user, err := user.Current()
 			if err != nil || user == nil || user.Username == "" {

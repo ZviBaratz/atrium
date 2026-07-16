@@ -126,7 +126,16 @@ func (m *home) attachExecCarry(attach func() (chan struct{}, error), killTarget 
 		// Runs on the suspended event-loop goroutine (see attachCommand.onAttached),
 		// so the bump is ordered before every parked message the resumed loop
 		// processes — pre-attach captures always compare against the new generation.
-		onAttached: func() { m.attachGen++ }}
+		// Reset the OS chrome as the terminal is handed to tmux, so a stale
+		// "5 running" title / progress bar doesn't linger under the attach; the
+		// post-detach handler re-asserts it. Runs on the suspended loop, before
+		// tmux writes, so the sequence lands first.
+		onAttached: func() {
+			m.attachGen++
+			if m.chrome != nil {
+				m.chrome.Reset()
+			}
+		}}
 	return tea.Exec(cmd, func(err error) tea.Msg {
 		return attachFinishedMsg{
 			err:             err,

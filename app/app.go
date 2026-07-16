@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ZviBaratz/atrium/chrome"
 	"github.com/ZviBaratz/atrium/config"
 	"github.com/ZviBaratz/atrium/hints"
 	"github.com/ZviBaratz/atrium/log"
@@ -60,6 +61,11 @@ func Run(ctx context.Context, program string, autoYes bool, version, binName str
 		tea.WithContext(ctx),
 	)
 	_, err = p.Run()
+	// The event loop has exited (graceful quit or signal shutdown): clear the OS
+	// chrome so no stale title/progress outlives the TUI.
+	if h.chrome != nil {
+		h.chrome.Reset()
+	}
 	// The event loop has exited. On signal shutdown it returned on ctx.Done()
 	// without dispatching Update, and the force-quit escape exits with a session
 	// still Loading — either way an in-flight Start was never persisted or torn
@@ -206,6 +212,10 @@ type home struct {
 	// session finishes a turn or blocks on a prompt (see app_notify.go, config
 	// Notifications). nil disables notification (hand-built test homes).
 	notifier *notify.Notifier
+	// chrome surfaces fleet state in the terminal's OS chrome — window title and
+	// OSC 9;4 taskbar progress (see chrome, config OSChrome). nil disables it
+	// (hand-built test homes); the emitter itself no-ops when the config is off.
+	chrome *chrome.Emitter
 	// notifySeen tracks per-instance notification state (first-observation gate to
 	// suppress the startup replay of restored statuses, plus per-edge throttle
 	// timestamps). An instance absent from the map has not been observed yet, so its

@@ -189,6 +189,13 @@ func (m *home) applySettingChange(key string) tea.Cmd {
 		if m.list != nil {
 			m.list.SetPermissionIndicator(m.appConfig.GetPermissionIndicator())
 		}
+	case "os_chrome":
+		if m.chrome != nil {
+			m.chrome.SetEnabled(m.appConfig.GetOSChrome())
+			// Repaint now: enabling should show the current fleet immediately rather
+			// than wait a tick; disabling already cleared the chrome in SetEnabled.
+			m.applyOSChrome(false)
+		}
 	case "splash":
 		// Mirror the newHome seeding; ui takes the normalized name so it needs
 		// no config import. With zero sessions the splash repaints in place, so

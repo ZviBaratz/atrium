@@ -402,6 +402,9 @@ func (m *home) handleAttachFinished(msg attachFinishedMsg) (tea.Model, tea.Cmd) 
 	// start). tea.Exec's RestoreTerminal has already repainted the frame; refine
 	// the layout and selection-derived panes from here.
 	m.state = stateDefault
+	// Re-assert the OS chrome the attach handed to tmux (onAttached reset it); the
+	// next metadata tick refines it, this repaints the known state immediately.
+	m.applyOSChrome(false)
 	if msg.err != nil {
 		// A failed sibling-cycle re-attach still carries keeper losses from the
 		// previous attach (attachExecCarry seeds them before Run can fail); surface
