@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/ZviBaratz/atrium/config"
 	"github.com/ZviBaratz/atrium/internal/actions"
 	"github.com/ZviBaratz/atrium/keys"
 	"github.com/ZviBaratz/atrium/log"
@@ -56,6 +57,19 @@ func (m *home) handlePromptState(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// Handle cancel via ctrl+c before delegating to the overlay
 	if msg.String() == "ctrl+c" {
 		return m, m.cancelPromptOverlay()
+	}
+
+	// #388: up-arrow on an empty prompt field opens the prompt-history reuse
+	// picker. ctrl+r — the issue's first suggestion — already arms the create
+	// form's clear gesture, so up-on-empty is used instead: it is free in both the
+	// create form and quick-send (an empty field has nothing to move up to).
+	if msg.String() == "up" && m.textInputOverlay.PromptFocusedAndEmpty() {
+		if texts := promptHistoryTexts(m.appState.GetPromptHistory()); len(texts) > 0 {
+			m.promptHistoryOverlay = overlay.NewPromptHistoryOverlay(texts)
+			m.promptHistoryOverlay.SetWidth(historyOverlayWidth(m.windowWidth))
+			m.state = stateHistory
+			return m, nil
+		}
 	}
 
 	// Snapshot the title so a keystroke that edits it can refresh the inline
@@ -113,6 +127,7 @@ func (m *home) handlePromptState(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// message queued behind a booting or busy agent is never silently lost. Flash a
 		// "queued" acknowledgment so the submit isn't silent.
 		selected.QueueFollowupPrompt(prompt)
+		m.recordPrompt(prompt)
 		if err := m.persistInstances(); err != nil {
 			log.ErrorLog.Printf("failed to persist queued quick-send prompt: %v", err)
 		}
@@ -792,4 +807,60 @@ func (m *home) attachSelected() (tea.Model, tea.Cmd) {
 	// selected index when the deferred command runs) so the attach target and the
 	// killTarget can't diverge. Matches the double-click and sibling/auto-open paths.
 	return m, m.attachExec(selected.Attach, selected)
+}
+
+// promptHistoryTexts projects the persisted history entries to their reuse texts,
+// most-recent-first (the order they are stored in).
+func promptHistoryTexts(entries []config.PromptHistoryEntry) []string {
+	texts := make([]string, len(entries))
+	for i, e := range entries {
+		texts[i] = e.Text
+	}
+	return texts
+}
+
+// historyOverlayWidth sizes the prompt-history picker to ~60% of the terminal,
+// capped at 80 — the same responsive box the queue overlay uses.
+func historyOverlayWidth(termWidth int) int {
+	w := int(float32(termWidth) * 0.6)
+	if w > 80 {
+		w = 80
+	}
+	return w
+}
+
+// recordPrompt appends a submitted prompt to the reuse history when recording is
+// enabled (config), swallowing a persist error into the log — history is a
+// convenience and must never fail a submit.
+func (m *home) recordPrompt(text string) {
+	if !m.appConfig.GetRecordPromptHistory() {
+		return
+	}
+	if err := m.appState.AddPromptHistory(text); err != nil {
+		log.ErrorLog.Printf("failed to record prompt history: %v", err)
+	}
+}
+
+// handleHistoryState routes keys to the prompt-history picker. Selecting a row
+// inserts its text into the prompt field being composed (never submits) and
+// returns to the compose overlay; x empties the history in place; esc cancels
+// back to the compose overlay.
+func (m *home) handleHistoryState(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	shouldClose := m.promptHistoryOverlay.HandleKeyPress(msg)
+	if m.promptHistoryOverlay.ClearRequested() {
+		if err := m.appState.ClearPromptHistory(); err != nil {
+			log.ErrorLog.Printf("failed to clear prompt history: %v", err)
+		}
+		m.promptHistoryOverlay.SetItems(nil)
+		return m, nil
+	}
+	if !shouldClose {
+		return m, nil
+	}
+	if m.promptHistoryOverlay.Selected() && m.textInputOverlay != nil {
+		m.textInputOverlay.SetPrompt(m.promptHistoryOverlay.SelectedText())
+	}
+	m.promptHistoryOverlay = nil
+	m.state = statePrompt
+	return m, nil
 }

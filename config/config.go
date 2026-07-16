@@ -82,13 +82,15 @@ func DefaultConfig() *Config {
 	hintBar := true
 	showReleaseNotes := true
 	updateBaseOnCreate := true
+	recordPromptHistory := true
 	return &Config{
-		DefaultProgram:     defaultProgram,
-		AutoYes:            false,
-		DaemonPollInterval: DefaultDaemonPollIntervalMs,
-		Theme:              "tokyo-night",
-		SessionContextBar:  &sessionContextBar,
-		HintBar:            &hintBar,
+		DefaultProgram:      defaultProgram,
+		AutoYes:             false,
+		DaemonPollInterval:  DefaultDaemonPollIntervalMs,
+		Theme:               "tokyo-night",
+		SessionContextBar:   &sessionContextBar,
+		HintBar:             &hintBar,
+		RecordPromptHistory: &recordPromptHistory,
 		BranchPrefix: func() string {
 			user, err := user.Current()
 			if err != nil || user == nil || user.Username == "" {

@@ -194,6 +194,15 @@ func (c *Config) GetHintBar() bool {
 	return boolOr(c.HintBar, true)
 }
 
+// GetRecordPromptHistory reports whether submitted prompts are recorded for
+// reuse. A nil field (an older config file) — or a nil Config — defaults to on.
+func (c *Config) GetRecordPromptHistory() bool {
+	if c == nil {
+		return true
+	}
+	return boolOr(c.RecordPromptHistory, true)
+}
+
 // GetAutoAttach reports whether new sessions should auto-attach on creation.
 // A nil AutoAttach (e.g. an older config file with no such key) — or a nil
 // Config — defaults to on.

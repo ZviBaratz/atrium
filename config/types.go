@@ -207,6 +207,11 @@ type Config struct {
 	// false restores the chrome-free interface, where the bar appears only for
 	// inline interactions that need it (naming, filtering, progress).
 	HintBar *bool `json:"hint_bar,omitempty"`
+	// RecordPromptHistory, when true (the default), records submitted prompts in
+	// state.json so they can be reused from the create form and quick-send. nil
+	// means the default (on). Setting it false stops new prompts being recorded;
+	// clearing existing history is a separate action.
+	RecordPromptHistory *bool `json:"record_prompt_history,omitempty"`
 	// MaxSessions is an opt-in cap on how many sessions can exist at once;
 	// creating one beyond it is rejected with an error in the UI. nil (or a
 	// non-positive value) means unlimited — there is no cap by default.
