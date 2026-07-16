@@ -3,11 +3,11 @@ package ui
 // Splash variant selection: which generator is currently active, and the
 // dev-only ATRIUM_SPLASH_* env overrides that can force it. The vocabulary
 // itself — the variant enum, its names, and each variant's Pass-2 policy — lives
-// in the splash package; this file resolves config and env into a splash.Variant
-// and hands it to splash.Render (see splashScene).
+// in the fresco package; this file resolves config and env into a fresco.Variant
+// and hands it to fresco.Render (see splashScene).
 //
 // Note the two directions of "name". The pinnable vocabulary is shared with
-// config (splash.Variants / config.SplashVariants); ATRIUM_SPLASH_VARIANT
+// config (fresco.Variants / config.SplashVariants); ATRIUM_SPLASH_VARIANT
 // additionally accepts historical dev letters and trumps config, which is what
 // keeps screenshot A/B runs and the test suites deterministic.
 
@@ -19,31 +19,31 @@ import (
 	"sync"
 	"time"
 
-	"github.com/ZviBaratz/atrium/splash"
+	"github.com/ZviBaratz/fresco"
 )
 
 // splashDefaultVariant is the fallback for an unrecognized override value; an
 // unset override rotates instead (see splashActiveVariant).
 //
-// splash.Rain, so that there is exactly one fallback rather than three: this,
+// fresco.Rain, so that there is exactly one fallback rather than three: this,
 // and the field-generator and Pass-2-policy default arms in package splash, all
 // resolve to it, and a variant that is mis-wired in any of them renders rain
 // rather than something that merely looks plausible. Deliberately NOT what the
 // test suites pin — see parseSplashEnvVariant, whose fall-through is invisible to
 // a pin that names the fallback.
-const splashDefaultVariant = splash.Rain
+const splashDefaultVariant = fresco.Rain
 
 // splashRotation is the pool random mode draws from: every shipped variant. It
-// is splash.Variants() captured once, so the rotation helpers below index a
+// is fresco.Variants() captured once, so the rotation helpers below index a
 // stable slice.
-var splashRotation = splash.Variants()
+var splashRotation = fresco.Variants()
 
 // splashEnvVariant resolves the dev-only ATRIUM_SPLASH_VARIANT override once
 // per process. It trumps the config setting so screenshot A/B runs and the test
 // suites (which pin a variant in TestMain against rotation nondeterminism) stay
 // deterministic whatever the config under test says. The second value is false
 // when the variable is unset.
-var splashEnvVariant = sync.OnceValues(func() (splash.Variant, bool) {
+var splashEnvVariant = sync.OnceValues(func() (fresco.Variant, bool) {
 	return parseSplashEnvVariant(os.Getenv("ATRIUM_SPLASH_VARIANT"))
 })
 
@@ -69,7 +69,7 @@ var splashEnvVariant = sync.OnceValues(func() (splash.Variant, bool) {
 // "f" cannot be observed at this boundary and the whole letter vocabulary sits on
 // a guard that passes either way. And it is why TestMain pins a variant that is
 // not the fallback, for the same reason one level up.
-func parseSplashEnvVariant(s string) (splash.Variant, bool) {
+func parseSplashEnvVariant(s string) (fresco.Variant, bool) {
 	if s == "" {
 		return splashDefaultVariant, false
 	}
@@ -81,23 +81,23 @@ func parseSplashEnvVariant(s string) (splash.Variant, bool) {
 
 // lookupSplashVariant answers only "does this build know that name", which is the
 // question the fall-through above destroys. It accepts the user-facing names (via
-// splash.ParseVariant) and the historical dev letters, kept as they were: f/g/h
+// fresco.ParseVariant) and the historical dev letters, kept as they were: f/g/h
 // are what the screenshot recipes, the notes and the muscle memory all use, and
 // re-lettering to a/b/c would buy tidiness and break every recipe. a–e and
 // "legacy" named the organic fields retired in V5; next free letter is j.
-func lookupSplashVariant(s string) (splash.Variant, bool) {
-	if v, ok := splash.ParseVariant(s); ok {
+func lookupSplashVariant(s string) (fresco.Variant, bool) {
+	if v, ok := fresco.ParseVariant(s); ok {
 		return v, true
 	}
 	switch s {
 	case "f":
-		return splash.Rain, true
+		return fresco.Rain, true
 	case "g":
-		return splash.Tunnel, true
+		return fresco.Tunnel, true
 	case "h":
-		return splash.Ripple, true
+		return fresco.Ripple, true
 	case "i":
-		return splash.Galaxy, true
+		return fresco.Galaxy, true
 	}
 	return splashDefaultVariant, false
 }
@@ -170,16 +170,16 @@ var (
 	splashSelMu      sync.Mutex
 	splashRandomMode = true
 	splashPicked     bool
-	splashPick       splash.Variant
+	splashPick       fresco.Variant
 )
 
 // splashActiveVariant resolves the variant splashScene renders: the dev env
 // override if set, else the current selection (seeded lazily from the launch
 // time, so an unconfigured launch gets a fresh look each time). Resolving to
 // one process-wide value is what keeps the preview and terminal panes in
-// agreement; only splashScene consults it — splash.Render takes the variant as a
+// agreement; only splashScene consults it — fresco.Render takes the variant as a
 // parameter and stays pure over its inputs.
-func splashActiveVariant() splash.Variant {
+func splashActiveVariant() fresco.Variant {
 	if v, ok := splashEnvVariant(); ok {
 		return v
 	}
@@ -199,7 +199,7 @@ func splashActiveVariant() splash.Variant {
 func SetSplashVariant(name string) {
 	splashSelMu.Lock()
 	defer splashSelMu.Unlock()
-	if v, ok := splash.ParseVariant(name); ok {
+	if v, ok := fresco.ParseVariant(name); ok {
 		splashRandomMode, splashPick, splashPicked = false, v, true
 		return
 	}
@@ -221,7 +221,7 @@ func RerollSplashVariant() {
 }
 
 // splashRotationPick maps a launch-time nanosecond seed to a rotation variant.
-func splashRotationPick(nano int64) splash.Variant {
+func splashRotationPick(nano int64) fresco.Variant {
 	return splashRotation[splashRotationIdx(nano, len(splashRotation))]
 }
 
@@ -240,7 +240,7 @@ func splashRotationPick(nano int64) splash.Variant {
 // its first variant*, which is a bias no caller asked for and nothing would
 // notice. (The len < 2 arm is the one that stops a panic: splashRotationIdx
 // would take nano % 0.)
-func splashRotationReroll(nano int64, cur splash.Variant) splash.Variant {
+func splashRotationReroll(nano int64, cur fresco.Variant) fresco.Variant {
 	ci := slices.Index(splashRotation, cur)
 	if ci < 0 || len(splashRotation) < 2 {
 		return splashRotationPick(nano)

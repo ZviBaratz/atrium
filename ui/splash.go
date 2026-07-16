@@ -2,7 +2,7 @@ package ui
 
 // The empty-state splash: a slow-drifting field that appears to emanate from
 // the ATRIUM wordmark and fades out at the pane's edges. The field is sampled
-// per character cell from one of several generators (see splash.Variant),
+// per character cell from one of several generators (see fresco.Variant),
 // modulated by a radial envelope, colored by a theme-anchored gradient, and
 // composited *behind* the existing wordmark+message block (which is left
 // untouched, so its styling survives). Only the idle "no agents" screen uses
@@ -11,14 +11,14 @@ package ui
 // This file owns the scene composition (compositing the wordmark and message
 // over the field) and the opaque overlay compositor. The field engine — the
 // field math, the gradient LUT, the emitter, and the variant vocabulary — lives
-// in the splash package, driven through splash.Render; variant selection and the
+// in the fresco package, driven through fresco.Render; variant selection and the
 // ATRIUM_SPLASH_* env overrides live in splash_variants.go.
 
 import (
 	"strings"
 
-	"github.com/ZviBaratz/atrium/splash"
 	"github.com/ZviBaratz/atrium/ui/theme"
+	"github.com/ZviBaratz/fresco"
 
 	"github.com/charmbracelet/lipgloss"
 	xansi "github.com/charmbracelet/x/ansi"
@@ -81,7 +81,7 @@ func splashScene(width, height, frame int, message string) string {
 	// The wordmark's centre row is the field's focal row: the origin its
 	// focal-relative coordinates are measured from, so the pattern emanates from
 	// the wordmark, and the anchor for the focal-point-to-corner radius a
-	// size-relative variant scales itself against (see splash.Render).
+	// size-relative variant scales itself against (see fresco.Render).
 	focalRow := wordY + wordH/2
 
 	var msg string
@@ -98,7 +98,7 @@ func splashScene(width, height, frame int, message string) string {
 	if r, ok := splashLumRangeOverride(); ok {
 		lum = &r
 	}
-	field := splash.Render(width, height, frame, splash.Options{
+	field := fresco.Render(width, height, frame, fresco.Options{
 		Palette:  splashPalette(theme.Current().Palette),
 		Variant:  variant,
 		FocalRow: focalRow,
@@ -111,11 +111,11 @@ func splashScene(width, height, frame int, message string) string {
 	return lipgloss.NewStyle().MaxWidth(width).MaxHeight(height).Render(scene)
 }
 
-// splashPalette maps the active theme's five splash tokens onto splash.Palette:
+// splashPalette maps the active theme's five splash tokens onto fresco.Palette:
 // the warm→cool anchors (Danger→Purple→Accent→Cyan) and the highlight (Fg). It
 // is the whole of Atrium's coupling to the splash engine.
-func splashPalette(pal theme.Palette) splash.Palette {
-	return splash.Palette{
+func splashPalette(pal theme.Palette) fresco.Palette {
+	return fresco.Palette{
 		A0:        string(pal.Danger),
 		A1:        string(pal.Purple),
 		A2:        string(pal.Accent),

@@ -14,7 +14,7 @@ import (
 
 // TestLumRangeEnvReachesRender pins the inverted env plumbing end to end. The
 // splash engine reads no environment, so ui must resolve ATRIUM_SPLASH_LUMRANGE
-// (init → splashLumRangeOverride) and thread it through splash.Render's
+// (init → splashLumRangeOverride) and thread it through fresco.Render's
 // Options.LumRange in splashScene. init reads the variable once at package load,
 // which is why this drives it in a subprocess rather than in-process: the same
 // variant rendered with the override set must differ from one rendered without
@@ -58,5 +58,5 @@ func TestLumRangeEnvReachesRender(t *testing.T) {
 	overridden := child("0")
 	require.NotEqual(t, base, overridden,
 		"ATRIUM_SPLASH_LUMRANGE must change the render — the engine reads no env, so "+
-			"ui must thread it through splash.Render's Options.LumRange (see splashScene)")
+			"ui must thread it through fresco.Render's Options.LumRange (see splashScene)")
 }

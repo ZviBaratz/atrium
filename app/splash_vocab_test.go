@@ -1,7 +1,7 @@
 package app
 
 // The splash pattern vocabulary is defined twice — config.SplashVariants() for
-// the settings panel, splash.Variants() for the generators — in packages that
+// the settings panel, fresco.Variants() for the generators — in packages that
 // cannot import each other (config knows nothing of splash, and the splash
 // engine takes no config import). app imports both, so this is the only place the
 // two can be held to each other.
@@ -10,15 +10,15 @@ import (
 	"testing"
 
 	"github.com/ZviBaratz/atrium/config"
-	"github.com/ZviBaratz/atrium/splash"
+	"github.com/ZviBaratz/fresco"
 
 	"github.com/stretchr/testify/require"
 )
 
 // splashVariantNames is the pinnable pattern names the splash engine ships,
-// derived from splash.Variants() via String().
+// derived from fresco.Variants() via String().
 func splashVariantNames() []string {
-	vs := splash.Variants()
+	vs := fresco.Variants()
 	names := make([]string, len(vs))
 	for i, v := range vs {
 		names[i] = v.String()

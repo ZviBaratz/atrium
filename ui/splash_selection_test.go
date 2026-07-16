@@ -5,7 +5,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/ZviBaratz/atrium/splash"
+	"github.com/ZviBaratz/fresco"
 
 	"github.com/stretchr/testify/require"
 )
@@ -41,7 +41,7 @@ func resetSplashSelection(t *testing.T) {
 // a pinned name leaves random mode.
 func TestSetSplashVariantPinsKnownNames(t *testing.T) {
 	resetSplashSelection(t)
-	for _, want := range splash.Variants() {
+	for _, want := range fresco.Variants() {
 		name := want.String()
 		SetSplashVariant(name)
 		require.False(t, splashRandomMode, "%q must pin, not stay random", name)
@@ -59,7 +59,7 @@ func TestSetSplashVariantRandomRerolls(t *testing.T) {
 
 	SetSplashVariant("ripple")
 	RerollSplashVariant()
-	require.Equal(t, splash.Ripple, splashPick, "reroll must not disturb a pinned pattern")
+	require.Equal(t, fresco.Ripple, splashPick, "reroll must not disturb a pinned pattern")
 
 	SetSplashVariant("random")
 	require.True(t, splashRandomMode)
@@ -84,7 +84,7 @@ func TestSetSplashVariantRandomRerolls(t *testing.T) {
 // once — i.e. skipping cur's slot doesn't bias the draw toward its neighbour.
 func TestSplashRotationRerollUniformOverRemainder(t *testing.T) {
 	for _, cur := range splashRotation {
-		counts := map[splash.Variant]int{}
+		counts := map[fresco.Variant]int{}
 		for seed := int64(0); seed < int64(len(splashRotation)-1); seed++ {
 			got := splashRotationReroll(seed, cur)
 			require.NotEqual(t, cur, got, "cur=%d seed=%d must be excluded", cur, seed)
@@ -112,8 +112,8 @@ func TestSplashRotationRerollUniformOverRemainder(t *testing.T) {
 // return splashRotation[0] again. So the claim is that an out-of-pool cur excludes
 // nothing, and it takes a sweep to see it.
 func TestSplashRotationRerollFallsBackOutsidePool(t *testing.T) {
-	notAVariant := splash.Variant(len(splashRotation)) // one past the pool
-	seen := map[splash.Variant]bool{}
+	notAVariant := fresco.Variant(len(splashRotation)) // one past the pool
+	seen := map[fresco.Variant]bool{}
 	for seed := int64(0); seed < int64(len(splashRotation))*20; seed++ {
 		got := splashRotationReroll(seed, notAVariant)
 		require.Containsf(t, splashRotation, got, "out-of-pool cur, seed %d", seed)
@@ -131,7 +131,7 @@ func TestSplashRotationRerollFallsBackOutsidePool(t *testing.T) {
 }
 
 // TestSplashSelectionConcurrent is TestRenderSplashFieldConcurrent's counterpart
-// for the mutable selection: splash.Render is pure and provably safe, but
+// for the mutable selection: fresco.Render is pure and provably safe, but
 // SetSplashVariant / RerollSplashVariant write process-wide state that a
 // sync.OnceValue used to make safe by construction. Under -race this pins
 // splashSelMu actually covering them; without it the package's own
@@ -182,6 +182,6 @@ func TestSplashSelectionConcurrent(t *testing.T) {
 func TestSplashEnvOverrideTrumpsSelection(t *testing.T) {
 	resetSplashSelection(t)
 	SetSplashVariant("ripple")
-	require.Equal(t, splash.Tunnel, splashActiveVariant(),
+	require.Equal(t, fresco.Tunnel, splashActiveVariant(),
 		"the env override (pinned to \"tunnel\" in TestMain) must trump the config selection")
 }

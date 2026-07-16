@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ZviBaratz/atrium/splash"
+	"github.com/ZviBaratz/fresco"
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
@@ -70,9 +70,9 @@ func TestBannerIsSolid(t *testing.T) {
 // point of doing it before the #251 clamp).
 func TestOverlayCenterComposites(t *testing.T) {
 	w, h := 60, 20
-	field := splash.Render(w, h, 3, splash.Options{
-		Palette:  splash.Palette{A0: "#f7768e", A1: "#bb9af7", A2: "#7aa2f7", A3: "#7dcfff", Highlight: "#c0caf5"},
-		Variant:  splash.Rain,
+	field := fresco.Render(w, h, 3, fresco.Options{
+		Palette:  fresco.Palette{A0: "#f7768e", A1: "#bb9af7", A2: "#7aa2f7", A3: "#7dcfff", Highlight: "#c0caf5"},
+		Variant:  fresco.Rain,
 		FocalRow: (h - 1) / 2,
 	})
 	fg := "ABCDEF"

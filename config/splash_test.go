@@ -3,7 +3,7 @@ package config
 import (
 	"testing"
 
-	"github.com/ZviBaratz/atrium/splash"
+	"github.com/ZviBaratz/fresco"
 )
 
 // TestGetSplashDefaultsToRandom pins the normalization: nil receiver, empty
@@ -28,13 +28,13 @@ func TestGetSplashDefaultsToRandom(t *testing.T) {
 // TestGetSplashRoundTripsVariants guards every settings-panel option: a pinned
 // pattern name must come back verbatim, never fall through to random.
 //
-// Iterated over splash.Variants() rather than the local SplashVariants() so the
+// Iterated over fresco.Variants() rather than the local SplashVariants() so the
 // vocabulary this normalization is checked against is the engine's own: every
-// generator the splash package ships must be a name config accepts and round-
+// generator the fresco package ships must be a name config accepts and round-
 // trips, or a pattern the settings panel offers silently degrades to random. The
 // reverse direction (a config name with no generator) is app's vocab test.
 func TestGetSplashRoundTripsVariants(t *testing.T) {
-	for _, variant := range splash.Variants() {
+	for _, variant := range fresco.Variants() {
 		name := variant.String()
 		if got := (&Config{Splash: name}).GetSplash(); got != name {
 			t.Errorf("GetSplash(%q) = %q, want %q", name, got, name)

@@ -3,7 +3,7 @@ package ui
 import (
 	"testing"
 
-	"github.com/ZviBaratz/atrium/splash"
+	"github.com/ZviBaratz/fresco"
 
 	"github.com/stretchr/testify/require"
 )
@@ -26,14 +26,14 @@ func TestParseSplashEnvVariant(t *testing.T) {
 	require.False(t, ok, "an unset override must not claim to be one")
 	require.Equal(t, splashDefaultVariant, v)
 
-	for s, want := range map[string]splash.Variant{
-		"rain": splash.Rain, "tunnel": splash.Tunnel, "ripple": splash.Ripple,
-		"galaxy": splash.Galaxy,
+	for s, want := range map[string]fresco.Variant{
+		"rain": fresco.Rain, "tunnel": fresco.Tunnel, "ripple": fresco.Ripple,
+		"galaxy": fresco.Galaxy,
 		// The historical dev letters. They are kept as they are — f/g/h is what the
 		// screenshot recipes and the notes use — so a–e are simply gone with the
 		// fields they named, and i is the galaxy.
-		"f": splash.Rain, "g": splash.Tunnel, "h": splash.Ripple,
-		"i": splash.Galaxy,
+		"f": fresco.Rain, "g": fresco.Tunnel, "h": fresco.Ripple,
+		"i": fresco.Galaxy,
 	} {
 		v, ok := parseSplashEnvVariant(s)
 		require.Truef(t, ok, "%q must set an override", s)
@@ -60,11 +60,11 @@ func TestParseSplashEnvVariant(t *testing.T) {
 // vocabulary needs a boundary that distinguishes "known" from "resolved to the
 // fallback", which is what lookupSplashVariant is for.
 func TestLookupSplashVariantKnowsOnlyWhatItShips(t *testing.T) {
-	for s, want := range map[string]splash.Variant{
-		"rain": splash.Rain, "tunnel": splash.Tunnel, "ripple": splash.Ripple,
-		"galaxy": splash.Galaxy,
-		"f":      splash.Rain, "g": splash.Tunnel, "h": splash.Ripple,
-		"i": splash.Galaxy,
+	for s, want := range map[string]fresco.Variant{
+		"rain": fresco.Rain, "tunnel": fresco.Tunnel, "ripple": fresco.Ripple,
+		"galaxy": fresco.Galaxy,
+		"f":      fresco.Rain, "g": fresco.Tunnel, "h": fresco.Ripple,
+		"i": fresco.Galaxy,
 	} {
 		v, ok := lookupSplashVariant(s)
 		require.Truef(t, ok, "%q is a name this build ships", s)
