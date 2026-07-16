@@ -1,12 +1,10 @@
-package ui
+package splash
 
 import (
 	"math"
 	"strings"
 	"testing"
 	"unicode/utf8"
-
-	"github.com/ZviBaratz/atrium/ui/theme"
 
 	"github.com/charmbracelet/x/ansi"
 	colorful "github.com/lucasb-eyer/go-colorful"
@@ -44,7 +42,7 @@ func TestRainAnimatesEveryFrame(t *testing.T) {
 	pal := splashTestPalette()
 	prev := ""
 	for f := 0; f < 30; f++ {
-		got := renderSplashField(80, 30, f, pal, centeredFocalRow(30), splashVariantRain)
+		got := renderSplashField(80, 30, f, pal, centeredFocalRow(30), Rain)
 		if f > 0 {
 			require.NotEqualf(t, prev, got,
 				"frames %d and %d render identically: rain must move every frame, "+
@@ -133,7 +131,7 @@ func TestRainIsContinuousInPhase(t *testing.T) {
 func TestRainRendersAsLinesNotDots(t *testing.T) {
 	const w, h = 80, 40
 	out := ansi.Strip(renderSplashField(w, h, 40, splashTestPalette(),
-		h/2, splashVariantRain))
+		h/2, Rain))
 	rows := strings.Split(out, "\n")
 
 	lit, faint := 0, 0
@@ -161,7 +159,7 @@ func TestRainRendersAsLinesNotDots(t *testing.T) {
 func TestRainStreamsAreLong(t *testing.T) {
 	const w, h = 80, 40
 	out := ansi.Strip(renderSplashField(w, h, 40, splashTestPalette(),
-		h/2, splashVariantRain))
+		h/2, Rain))
 	rows := strings.Split(out, "\n")
 
 	longest, runs, cells := 0, 0, 0
@@ -247,7 +245,7 @@ func TestRainTailsLeaveGaps(t *testing.T) {
 	// And prove it end to end: no column may be solid over a tall pane.
 	const w, h = 80, 60
 	out := ansi.Strip(renderSplashField(w, h, 40, splashTestPalette(),
-		h/2, splashVariantRain))
+		h/2, Rain))
 	rows := strings.Split(out, "\n")
 	for col := 0; col < w; col++ {
 		lit := 0
@@ -304,7 +302,7 @@ func TestRainHeadAlwaysLandsOnACell(t *testing.T) {
 }
 
 // rainRampLum is a ramp stop's L*, for the luminance assertions below.
-func rainRampLum(t *testing.T, pal theme.Palette, stop int) float64 {
+func rainRampLum(t *testing.T, pal Palette, stop int) float64 {
 	t.Helper()
 	c, err := colorful.Hex(rainRampHexAt(pal, stop))
 	require.NoError(t, err)
@@ -381,7 +379,7 @@ func sgrPrefix(s string) string {
 // opened. It reads the rendered bytes rather than recomputing the field, which
 // is the point: the brightness assertions elsewhere in this file work off the
 // layer table and so never exercise Pass 2's envelope at all.
-func rainStopGrid(t *testing.T, w, h, frame int, pal theme.Palette) [][]int {
+func rainStopGrid(t *testing.T, w, h, frame int, pal Palette) [][]int {
 	t.Helper()
 	lut := buildSplashLUT(pal)
 	stopOf := make(map[string]int, len(lut.rain))
@@ -389,7 +387,7 @@ func rainStopGrid(t *testing.T, w, h, frame int, pal theme.Palette) [][]int {
 		stopOf[a.prefix] = i
 	}
 	out := renderSplashField(w, h, frame, pal,
-		centeredFocalRow(h), splashVariantRain)
+		centeredFocalRow(h), Rain)
 
 	grid := make([][]int, 0, h)
 	for _, line := range strings.Split(out, "\n") {
@@ -514,7 +512,7 @@ func TestRainGlyphsRenderIntact(t *testing.T) {
 	}
 	const w, h = 80, 40
 	out := ansi.Strip(renderSplashField(w, h, 40, splashTestPalette(),
-		h/2, splashVariantRain))
+		h/2, Rain))
 	seen := 0
 	for _, r := range out {
 		if r == ' ' || r == '\n' {

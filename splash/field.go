@@ -1,25 +1,28 @@
-package ui
+// Package splash renders Atrium's animated empty-state splash field: a
+// slow-drifting, theme-coloured pattern that appears to emanate from a focal
+// row. It is a self-contained engine — the field math, the gradient LUT, and
+// the variant vocabulary — driven by package ui, which owns scene composition
+// (the wordmark/message overlay) and variant selection and calls in through
+// Render.
+package splash
 
 // The splash field generator: deterministic noise primitives and the two-pass
 // renderer built on them. Pass 1 evaluates the raw (pre-contrast) scalar field
 // into a buffer; Pass 2 applies the contrast curve, the edge vignette, glyph
 // and color quantization, the starfield, and emits run-coalesced ANSI.
-// Everything is free of time/rand dependence so renderSplashField stays pure
-// and snapshot-testable — animation enters only through the frame counter.
+// Everything is free of time/rand dependence so Render stays pure and
+// snapshot-testable — animation enters only through the frame counter.
 //
-// The scene composition (wordmark/message overlay, gradient LUT) lives in
-// splash.go; the variant vocabulary and selection live in splash_variants.go;
-// this file owns the field math and the per-cell loops.
+// The gradient LUT lives in lut.go and the variant vocabulary in variant.go;
+// this file owns the field math, the per-cell loops, and the Render entrypoint.
 
 import (
 	"math"
 	"strings"
-
-	"github.com/ZviBaratz/atrium/ui/theme"
 )
 
 // seedStar keys the fixed starfield (an arbitrary distinct odd constant); see
-// starHash in splash.go.
+// starHash in lut.go.
 var seedStar = uint32(0x2545F491)
 
 // splashColorIdx maps a cell's hue helper to its gradient stop, and it is the
@@ -139,11 +142,11 @@ type splashPointFn func(col, row int, dx, dy, phase float64) (val, aux float64)
 // the mipped core and render a vague dark blob with no rings at all. Measured at
 // 90×28: the whole pane reaches r≈53 while the wall only resolves past r≈32.
 // Scaling it to the pane makes it the same tunnel at every size.
-func splashFieldAt(v splashVariant, maxD float64) splashPointFn {
+func splashFieldAt(v Variant, maxD float64) splashPointFn {
 	switch v {
-	case splashVariantTunnel:
+	case Tunnel:
 		return splashTunnelAtFor(maxD)
-	case splashVariantRipple:
+	case Ripple:
 		return splashRippleAt
 	default:
 		// Rain, and the fallback for a variant that forgot its case here.
@@ -162,7 +165,42 @@ func splashFieldAt(v splashVariant, maxD float64) splashPointFn {
 	}
 }
 
-// renderSplashField builds the colored field background: exactly h rows of
+// Options configures Render.
+type Options struct {
+	// Palette supplies the four warm→cool gradient anchors plus the star /
+	// rain-head highlight.
+	Palette Palette
+	// Variant selects the field generator.
+	Variant Variant
+	// FocalRow is the pane row the pattern emanates from — the origin of the
+	// focal-relative coordinates every field is evaluated in. A negative value
+	// centres it on the pane.
+	FocalRow int
+	// LumRange, when non-nil, overrides the variant's shipped luminance-range
+	// policy (the split between glyph density and colour luminance); nil keeps
+	// the variant's default. It is how package ui applies the dev-only
+	// ATRIUM_SPLASH_LUMRANGE knob without this package reading the environment.
+	LumRange *float64
+}
+
+// Render builds the colored splash field background: exactly h rows of exactly
+// w visible cells, or "" on a degenerate pane. Pure over its inputs
+// (deterministic, snapshot-testable). It resolves the focal row and the
+// per-variant Pass-2 policy (applying Options.LumRange over the variant default)
+// and hands off to renderField.
+func Render(w, h, frame int, opts Options) string {
+	focalRow := opts.FocalRow
+	if focalRow < 0 {
+		focalRow = (h - 1) / 2
+	}
+	ops := opts.Variant.ops()
+	if opts.LumRange != nil {
+		ops.lumRange = *opts.LumRange
+	}
+	return renderField(w, h, frame, opts.Palette, focalRow, opts.Variant, ops)
+}
+
+// renderField builds the colored field background: exactly h rows of
 // exactly w visible cells. The field fills the whole pane and softens only near
 // the four borders (an edge vignette), rather than being a single disc inscribed
 // to the shorter axis. The pattern emanates from focalRow — the wordmark's centre
@@ -170,8 +208,9 @@ func splashFieldAt(v splashVariant, maxD float64) splashPointFn {
 // and a size-relative variant scales itself against the focal-point-to-corner
 // radius (see splashFieldAt), so the field stays visually anchored on the wordmark
 // while still reaching the edges. Pure over its inputs (deterministic,
-// snapshot-testable); returns "" on a degenerate pane.
-func renderSplashField(w, h, frame int, pal theme.Palette, focalRow int, variant splashVariant) string {
+// snapshot-testable); returns "" on a degenerate pane. ops is the resolved
+// per-variant Pass-2 policy (see Render and Variant.ops).
+func renderField(w, h, frame int, pal Palette, focalRow int, variant Variant, ops splashOps) string {
 	if w <= 0 || h <= 0 {
 		return ""
 	}
@@ -201,9 +240,6 @@ func renderSplashField(w, h, frame int, pal theme.Palette, focalRow int, variant
 	maxGlyph := len(ramp) - 1
 	starRampR := []rune(starRamp)
 	starMax := len(starRampR) - 1
-	// Per-variant Pass-2 policy: the starfield, and how the field is shaded (see
-	// splashVariant.ops).
-	ops := variant.ops()
 
 	var sb strings.Builder
 	// A seed, not a bound — the run count isn't known until the field is walked.
@@ -271,7 +307,7 @@ func renderSplashField(w, h, frame int, pal theme.Palette, focalRow int, variant
 				// identity (dens == lit, lumT unused); at 1 the glyph holds full
 				// weight and brightness rides the colour entirely, which is rain.
 				dens, lumT := splashShade(lit, ops.lumRange)
-				if variant == splashVariantRain {
+				if variant == Rain {
 					// Rain's own ramp: it blows out past the stream hue to white,
 					// which the shade grid deliberately does not (see
 					// buildShadeGrid). Its gate is luminance because its glyph has
@@ -318,4 +354,36 @@ func renderSplashField(w, h, frame int, pal theme.Palette, focalRow int, variant
 		splashCloseRun(&sb, curIdx, lut)
 	}
 	return sb.String()
+}
+
+// smoothstep is the classic Hermite ease between edges a and b, clamped to [0,1].
+func smoothstep(a, b, x float64) float64 {
+	if a == b {
+		if x < a {
+			return 0
+		}
+		return 1
+	}
+	t := clamp01((x - a) / (b - a))
+	return t * t * (3 - 2*t)
+}
+
+func clamp01(x float64) float64 {
+	if x < 0 {
+		return 0
+	}
+	if x > 1 {
+		return 1
+	}
+	return x
+}
+
+func clampInt(v, lo, hi int) int {
+	if v < lo {
+		return lo
+	}
+	if v > hi {
+		return hi
+	}
+	return v
 }

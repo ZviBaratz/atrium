@@ -1,4 +1,4 @@
-package ui
+package splash
 
 import (
 	"math"
@@ -483,7 +483,7 @@ func TestSplashTunnelHueMipQuietsTheVanishingPoint(t *testing.T) {
 // while testing nothing about the fallback.
 func TestSplashTunnelReachesItsOwnField(t *testing.T) {
 	const phase = 5 * driftPerFrame
-	sample := func(v splashVariant) []float64 {
+	sample := func(v Variant) []float64 {
 		at := splashFieldAt(v, tunRefD)
 		out := make([]float64, 0, 2*21*31)
 		for row := -10; row <= 10; row++ {
@@ -494,7 +494,7 @@ func TestSplashTunnelReachesItsOwnField(t *testing.T) {
 		}
 		return out
 	}
-	require.NotEqual(t, sample(splashVariantRain), sample(splashVariantTunnel),
+	require.NotEqual(t, sample(Rain), sample(Tunnel),
 		"tunnel must reach splashTunnelAtFor — a variant with no case in "+
 			"splashFieldAt silently falls through to the fallback's field")
 }
@@ -512,7 +512,7 @@ func TestSplashTunnelRendersDepthAsLuminance(t *testing.T) {
 	withColorProfile(t, termenv.TrueColor)
 	const w, h = 160, 44
 	pal := splashTestPalette()
-	stops, _ := shadeStopGrid(t, w, h, 5, pal, splashVariantTunnel)
+	stops, _ := shadeStopGrid(t, w, h, 5, pal, Tunnel)
 
 	cx, cyFocal := float64(w-1)/2, float64((h-1)/2)
 	// Mean luminance stop in a near band and a far band, by radius from the

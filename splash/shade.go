@@ -1,4 +1,4 @@
-package ui
+package splash
 
 // The luminance channel: a second axis the field can shade along, so brightness
 // and glyph identity stop being one instruction.

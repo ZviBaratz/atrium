@@ -1,4 +1,4 @@
-package ui
+package splash
 
 // Matrix-style digital rain: per-column streams of glyphs falling with bright
 // heads and fading tails, layered at three depths for parallax.

@@ -1,4 +1,4 @@
-package ui
+package splash
 
 import (
 	"fmt"
@@ -6,8 +6,6 @@ import (
 	"strings"
 	"testing"
 	"unicode/utf8"
-
-	"github.com/ZviBaratz/atrium/ui/theme"
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
@@ -118,7 +116,7 @@ func TestShadeAxisIsHeadlessAndRainKeepsItsHead(t *testing.T) {
 	colors := splashGradientColors(pal)
 
 	fgLum := func() float64 {
-		c, err := colorful.Hex(string(pal.Fg))
+		c, err := colorful.Hex(pal.Highlight)
 		require.NoError(t, err)
 		l, _, _ := c.Lab()
 		return l * 100
@@ -147,7 +145,7 @@ func TestShadeAxisIsHeadlessAndRainKeepsItsHead(t *testing.T) {
 // this is the cheapest place to notice.
 func TestSharedLumCurveMatchesRainsTail(t *testing.T) {
 	pal := splashTestPalette()
-	base, err := colorful.Hex(string(pal.Cyan))
+	base, err := colorful.Hex(pal.A3)
 	require.NoError(t, err)
 
 	for i := 0; i < splashRainStops; i++ {
@@ -201,7 +199,7 @@ func newShadeDecoder(t *testing.T, lut *splashLUT) *shadeDecoder {
 // and every brightness test in splash_rain_test.go was structurally blind to it
 // because they all asserted Pass-1 math and never Pass 2's envelope. Mirrors
 // rainStopGrid, which exists for the same reason.
-func shadeStopGrid(t *testing.T, w, h, frame int, pal theme.Palette, v splashVariant) ([][]int, [][]string) {
+func shadeStopGrid(t *testing.T, w, h, frame int, pal Palette, v Variant) ([][]int, [][]string) {
 	t.Helper()
 	d := newShadeDecoder(t, buildSplashLUT(pal))
 	out := renderSplashField(w, h, frame, pal,
@@ -257,7 +255,7 @@ func TestShadedFieldVariesLuminanceAndHoldsHue(t *testing.T) {
 	// own ramp and never arrives — and because it is the densest, so the spread
 	// below is measured over most of the pane.
 	withLumRange(t, 0)
-	flat, flatPre := shadeStopGrid(t, w, h, 7, pal, splashVariantTunnel)
+	flat, flatPre := shadeStopGrid(t, w, h, 7, pal, Tunnel)
 	// At lumRange 0 every cell is blank or at its hue's *full* colour.
 	//
 	// Not "no cell decodes into the grid" — it cannot be, and asserting it would be
@@ -272,7 +270,7 @@ func TestShadedFieldVariesLuminanceAndHoldsHue(t *testing.T) {
 	}
 
 	withLumRange(t, 0.5)
-	lit, litPre := shadeStopGrid(t, w, h, 7, pal, splashVariantTunnel)
+	lit, litPre := shadeStopGrid(t, w, h, 7, pal, Tunnel)
 
 	seen := map[int]bool{}
 	for _, row := range lit {
@@ -335,7 +333,7 @@ func TestShadedFaintCellsAreDimNotTiny(t *testing.T) {
 
 	faintFrac := func() float64 {
 		out := ansi.Strip(renderSplashField(w, h, 7, pal,
-			centeredFocalRow(h), splashVariantRipple))
+			centeredFocalRow(h), Ripple))
 		lit, faint := 0, 0
 		for _, ch := range out {
 			switch ch {
@@ -476,22 +474,6 @@ func TestSplashShadeIsMonotone(t *testing.T) {
 	}
 }
 
-// withLumRange drives the dev-only lumRange override for a test or benchmark and
-// restores it after, mirroring withColorProfile. Benchmarks need this too, which is
-// why the override is a var rather than a sync.OnceValue.
-func withLumRange(tb testing.TB, r float64) {
-	tb.Helper()
-	splashSelMu.Lock()
-	prevV, prevSet := splashLumRangeVal, splashLumRangeSet
-	splashLumRangeVal, splashLumRangeSet = r, true
-	splashSelMu.Unlock()
-	tb.Cleanup(func() {
-		splashSelMu.Lock()
-		splashLumRangeVal, splashLumRangeSet = prevV, prevSet
-		splashSelMu.Unlock()
-	})
-}
-
 // TestShadeAffixBracketsMatchRender extends TestSplashAffixBracketsMatchRender's
 // invariant to the shade grid: the emitter writes a cached prefix, the cells, then
 // a cached suffix, and that is only safe while the bracket really is a pure
@@ -538,34 +520,6 @@ func TestShadeAffixBracketsMatchRender(t *testing.T) {
 	}
 }
 
-// TestParseSplashLumRangeRejectsNonFinite guards a real cross-arch hazard rather
-// than input hygiene.
-//
-// strconv.ParseFloat accepts "nan" and "+Inf". A NaN would pass *both* of
-// splashShade's endpoint guards — every comparison against NaN is false — reach the
-// interior, and end up in an int() conversion of a NaN, which Go leaves
-// implementation-defined: amd64 yields minint, arm64 yields 0. That is a silent
-// per-architecture difference in rendered output, in a package whose whole hashing
-// and golden strategy exists to avoid exactly that.
-func TestParseSplashLumRangeRejectsNonFinite(t *testing.T) {
-	for _, s := range []string{"nan", "NaN", "+Inf", "-Inf", "inf", "", "banana", "0.5x"} {
-		v, ok := parseSplashLumRange(s)
-		require.Falsef(t, ok, "%q must not set an override (got %v)", s, v)
-	}
-	for _, tc := range []struct {
-		in   string
-		want float64
-	}{
-		{"0", 0}, {"0.5", 0.5}, {"1", 1},
-		{"-3", 0}, // clamped, not rejected: a knob is a knob
-		{"9", 1},
-	} {
-		v, ok := parseSplashLumRange(tc.in)
-		require.Truef(t, ok, "%q must set an override", tc.in)
-		require.Equalf(t, tc.want, v, "%q must resolve to %v", tc.in, tc.want)
-	}
-}
-
 // BenchmarkRenderSplashShaded is the cost of the luminance channel, measured
 // rather than reasoned about.
 //
@@ -598,7 +552,7 @@ func BenchmarkRenderSplashShaded(b *testing.B) {
 				b.ReportAllocs()
 				b.ResetTimer()
 				for i := 0; i < b.N; i++ {
-					_ = renderSplashField(s.w, s.h, i, pal, focalRow, splashVariantTunnel)
+					_ = renderSplashField(s.w, s.h, i, pal, focalRow, Tunnel)
 				}
 			})
 		}

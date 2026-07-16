@@ -1,4 +1,4 @@
-package ui
+package splash
 
 import (
 	"math"
@@ -474,7 +474,7 @@ func TestSplashRippleOpensMidFlight(t *testing.T) {
 // while testing nothing about the fallback.
 func TestSplashRippleReachesItsOwnField(t *testing.T) {
 	const phase = 5 * driftPerFrame
-	sample := func(v splashVariant) []float64 {
+	sample := func(v Variant) []float64 {
 		at := splashFieldAt(v, 96)
 		out := make([]float64, 0, 2*21*31)
 		for row := -10; row <= 10; row++ {
@@ -485,7 +485,7 @@ func TestSplashRippleReachesItsOwnField(t *testing.T) {
 		}
 		return out
 	}
-	require.NotEqual(t, sample(splashVariantRain), sample(splashVariantRipple),
+	require.NotEqual(t, sample(Rain), sample(Ripple),
 		"ripple must reach splashRippleAt — a variant with no case in splashFieldAt "+
 			"silently falls through to the fallback's field")
 }
@@ -502,7 +502,7 @@ func TestSplashRippleReachesItsOwnField(t *testing.T) {
 func TestSplashRippleIgnoresThePaneSize(t *testing.T) {
 	const phase = 3.3
 	for _, maxD := range []float64{20, 96, 400} {
-		at := splashFieldAt(splashVariantRipple, maxD)
+		at := splashFieldAt(Ripple, maxD)
 		val, aux := at(4, 7, 11.5, -23, phase)
 		want, wantAux := splashRippleAt(4, 7, 11.5, -23, phase)
 		require.Equalf(t, want, val, "the field must not depend on the pane radius (maxD %v)", maxD)
@@ -568,7 +568,7 @@ func rippleMeasurable(col, row, w, h int) bool {
 func TestSplashRippleRendersTheFadeNotAThreshold(t *testing.T) {
 	withColorProfile(t, termenv.TrueColor)
 	const w, h, frame = 240, 60, 300
-	stops, _ := shadeStopGrid(t, w, h, frame, splashTestPalette(), splashVariantRipple)
+	stops, _ := shadeStopGrid(t, w, h, frame, splashTestPalette(), Ripple)
 	vals := rippleFieldVals(w, h, frame)
 
 	faint, faintLit := 0, 0
@@ -625,7 +625,7 @@ func TestSplashRippleRendersDropsTheSameEverywhere(t *testing.T) {
 
 	nearSum, nearN, farSum, farN := 0.0, 0, 0.0, 0
 	for _, frame := range []int{60, 300, 700, 1500} {
-		stops, _ := shadeStopGrid(t, w, h, frame, pal, splashVariantRipple)
+		stops, _ := shadeStopGrid(t, w, h, frame, pal, Ripple)
 		vals := rippleFieldVals(w, h, frame)
 		for row := 0; row < h; row++ {
 			for col := 0; col < w; col++ {
