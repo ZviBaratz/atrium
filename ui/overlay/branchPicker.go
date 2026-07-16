@@ -21,16 +21,12 @@ const (
 // It does not hold the full branch list — results are provided asynchronously
 // via SetResults after each debounced search.
 type BranchPicker struct {
-	results       []string // current search results (from git)
-	filter        string   // current filter text
-	filterVersion uint64   // incremented on each filter change
-	cursor        int      // index into visibleItems()
-	focused       bool
-	width         int
-	visibleRows   int  // number of result rows to render (kept constant across focus)
-	showHeadBase  bool // whether to offer the default "HEAD (current branch)" base option
-	loading       bool // a search is in flight (results not yet authoritative)
-	errored       bool // the last search failed (cleared by any filter edit or fresh results)
+	Picker // shared filter/cursor/key-grammar; async source — filter edits bump filterVersion
+
+	results      []string // current search results (from git)
+	showHeadBase bool     // whether to offer the default "HEAD (current branch)" base option
+	loading      bool     // a search is in flight (results not yet authoritative)
+	errored      bool     // the last search failed (cleared by any filter edit or fresh results)
 	// headBranch is the resolved name of the branch HEAD points at in the target repo
 	// ("" until the async validity check resolves it; "HEAD" for a detached HEAD). It
 	// only affects the default option's label — selection is positional (see
@@ -47,40 +43,13 @@ type BranchPicker struct {
 // because the caller kicks off an initial search as soon as the overlay opens.
 func NewBranchPicker() *BranchPicker {
 	return &BranchPicker{
+		Picker:       newPicker(true),
 		showHeadBase: true,
 		loading:      true,
-		visibleRows:  defaultPickerRows,
 	}
 }
 
-// SetWidth sets the width of the branch picker.
-func (bp *BranchPicker) SetWidth(w int) {
-	bp.width = w
-}
-
-// SetVisibleRows sets how many result rows the picker renders (floored at 1). Driven by the
-// overlay so the form can shrink to fit short terminals.
-func (bp *BranchPicker) SetVisibleRows(n int) {
-	if n < 1 {
-		n = 1
-	}
-	bp.visibleRows = n
-}
-
-// Focus gives the branch picker focus.
-func (bp *BranchPicker) Focus() {
-	bp.focused = true
-}
-
-// Blur removes focus from the branch picker.
-func (bp *BranchPicker) Blur() {
-	bp.focused = false
-}
-
-// IsFocused returns whether the branch picker is focused.
-func (bp *BranchPicker) IsFocused() bool {
-	return bp.focused
-}
+// (Focus/Blur/IsFocused/SetWidth/SetVisibleRows are provided by the embedded Picker.)
 
 // SetDisabled marks the picker inert (true when the target is not a git repo). The
 // selection state is retained, so flipping back to a git target restores it.
@@ -135,52 +104,23 @@ func (bp *BranchPicker) Invalidate() uint64 {
 	return bp.filterVersion
 }
 
-// HandleKeyPress processes a key event. Returns (consumed, filterChanged).
+// HandleKeyPress processes a key event. Returns (consumed, filterChanged). The
+// shared Picker owns the key grammar; as an async source it bumps filterVersion on
+// each edit so in-flight results are rejected on arrival. On an edit we also enter
+// the loading state and clear any previous error (it described the previous
+// search), reproducing the old beginSearch step.
 func (bp *BranchPicker) HandleKeyPress(msg tea.KeyMsg) (consumed bool, filterChanged bool) {
 	if bp.disabled {
 		// Unreachable through normal navigation (the form skips a disabled picker), but
 		// guard anyway so no input path can mutate an inert picker.
 		return false, false
 	}
-	switch msg.Type {
-	case tea.KeyUp:
-		if bp.cursor > 0 {
-			bp.cursor--
-		}
-		return true, false
-	case tea.KeyDown:
-		items := bp.visibleItems()
-		if bp.cursor < len(items)-1 {
-			bp.cursor++
-		}
-		return true, false
-	case tea.KeyBackspace:
-		if len(bp.filter) > 0 {
-			runes := []rune(bp.filter)
-			bp.filter = string(runes[:len(runes)-1])
-			bp.beginSearch()
-			return true, true
-		}
-		return true, false
-	case tea.KeyRunes:
-		bp.filter += string(msg.Runes)
-		bp.beginSearch()
-		return true, true
-	case tea.KeySpace:
-		bp.filter += " "
-		bp.beginSearch()
-		return true, true
+	consumed, filterChanged, _ = bp.handleKey(msg, len(bp.visibleItems()))
+	if filterChanged {
+		bp.loading = true
+		bp.errored = false
 	}
-	return false, false
-}
-
-// beginSearch marks a fresh (debounced) search as pending after a filter edit: the
-// version is bumped so in-flight results are rejected, and any previous error is
-// cleared — it described the previous search, not this one.
-func (bp *BranchPicker) beginSearch() {
-	bp.filterVersion++
-	bp.loading = true
-	bp.errored = false
+	return consumed, filterChanged
 }
 
 // SetError marks the current search as failed, clearing the loading state so the picker
@@ -218,15 +158,8 @@ func (bp *BranchPicker) SetResults(branches []string, version uint64) {
 		}
 	}
 
-	// Clamp cursor
-	items := bp.visibleItems()
-	if bp.cursor >= len(items) {
-		if len(items) > 0 {
-			bp.cursor = len(items) - 1
-		} else {
-			bp.cursor = 0
-		}
-	}
+	// Clamp the cursor to the freshly delivered result set.
+	bp.clampCursor(len(bp.visibleItems()))
 }
 
 // visibleItems returns the list of items to display. When showHeadBase is set, the
