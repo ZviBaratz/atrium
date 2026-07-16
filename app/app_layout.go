@@ -9,6 +9,7 @@ import (
 	"github.com/ZviBaratz/atrium/ui"
 	"github.com/ZviBaratz/atrium/ui/theme"
 
+	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
 )
 
@@ -169,11 +170,19 @@ func (m *home) applySettingChange(key string) tea.Cmd {
 		return m.handleError(err)
 	}
 	switch key {
-	case "theme", "nerd_font":
+	case "theme", "glyph_set":
 		// Styles read theme.Current() lazily at render time, so swapping the
 		// palette / glyph set plus a forced repaint restyles the whole UI in place.
 		theme.Set(m.appConfig.Theme)
-		theme.SetNerdFont(m.appConfig.GetNerdFont())
+		theme.SetGlyphSet(m.appConfig.GetGlyphSet())
+		// The spinner snapshots its frames at construction (assembleHome), so a
+		// rung change that alters them (ascii's |/-\ vs the Braille dots) would not
+		// show until relaunch. The list holds &m.spinner, so re-seeding the frames
+		// here re-frames the running spinner in place.
+		m.spinner.Spinner = spinner.Spinner{
+			Frames: theme.Current().Glyphs.SpinnerFrames,
+			FPS:    theme.Current().Glyphs.SpinnerFPS,
+		}
 		return tea.Sequence(tea.ClearScreen, tea.WindowSize())
 	case "model_indicator":
 		// Mirror the newHome seeding; the renderer takes the normalized mode

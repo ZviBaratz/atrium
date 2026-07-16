@@ -430,7 +430,7 @@ func newHome(ctx context.Context, program string, autoYes bool, version, binName
 	// included). The palette and the glyph set (plain vs Nerd-Font) are
 	// independent axes.
 	theme.Set(appConfig.Theme)
-	theme.SetNerdFont(appConfig.GetNerdFont())
+	theme.SetGlyphSet(appConfig.GetGlyphSet())
 
 	// Load application state
 	appState := config.LoadState()

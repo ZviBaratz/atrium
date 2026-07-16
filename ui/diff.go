@@ -94,12 +94,13 @@ func (d *DiffPane) SetDiff(instance *session.Instance) {
 		d.diff = ""
 		d.viewport.SetContent(centeredFallbackMessage)
 	} else {
-		additions := additionStyle().Render(fmt.Sprintf("%d additions(+)", stats.Added))
-		deletions := deletionStyle().Render(fmt.Sprintf("%d deletions(-)", stats.Removed))
-		lineStats := lipgloss.JoinHorizontal(lipgloss.Center, additions, " ", deletions)
-		if header := gitContextHeader(instance, stats); header != "" {
+		lineStats := diffStatLine(stats)
+		switch header := gitContextHeader(instance, stats); {
+		case header != "" && lineStats != "":
 			d.stats = lipgloss.JoinVertical(lipgloss.Left, header, lineStats)
-		} else {
+		case header != "":
+			d.stats = header
+		default:
 			d.stats = lineStats
 		}
 		// Decompose font-dependent emoji clusters in the diff so the width we lay out
@@ -107,6 +108,22 @@ func (d *DiffPane) SetDiff(instance *session.Instance) {
 		d.diff = colorizeDiff(theme.SanitizeWidth(stats.Content), d.width)
 		d.viewport.SetContent(lipgloss.JoinVertical(lipgloss.Left, d.stats, d.diff))
 	}
+}
+
+// diffStatLine renders the "N additions(+)  M deletions(-)" summary above the
+// patch, omitting a zero side entirely — the same omit-zero convention
+// gitContextHeader follows just below, so a red "0 deletions(-)" never flags
+// attention at nothing (#378). A content-only diff (a pure rename that nets to
+// zero lines) yields "", leaving the git-context header to carry the summary.
+func diffStatLine(stats *git.DiffStats) string {
+	var segs []string
+	if stats.Added > 0 {
+		segs = append(segs, additionStyle().Render(fmt.Sprintf("%d additions(+)", stats.Added)))
+	}
+	if stats.Removed > 0 {
+		segs = append(segs, deletionStyle().Render(fmt.Sprintf("%d deletions(-)", stats.Removed)))
+	}
+	return strings.Join(segs, " ")
 }
 
 // gitContextHeader builds the one-line git-context summary shown above the

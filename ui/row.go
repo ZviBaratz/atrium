@@ -247,17 +247,27 @@ func changeSegs(p rowPaint, stat *git.DiffStats) []rowSeg {
 	return segs
 }
 
-// diffSegs returns the "+adds −dels" pair (additions Success, deletions Danger),
-// or nil when the diff is empty. Counts are humanized (see humanizeCount) so a
-// large churn doesn't crowd the branch off the line.
+// diffSegs returns the "+adds −dels" pair, or nil when the diff is empty. A
+// nonzero side keeps its semantic color (additions Success, deletions Danger); a
+// zero side renders dim (neutral) instead — a green +0 or a red −0 would flag
+// attention at nothing, so it recedes to FgDim (#378). Counts are humanized (see
+// humanizeCount) so a large churn doesn't crowd the branch off the line.
 func diffSegs(p rowPaint, stat *git.DiffStats) []rowSeg {
 	if stat == nil || stat.Error != nil || stat.IsEmpty() {
 		return nil
 	}
+	addColor := p.th.Palette.Success
+	if stat.Added == 0 {
+		addColor = p.th.Palette.FgDim
+	}
+	delColor := p.th.Palette.Danger
+	if stat.Removed == 0 {
+		delColor = p.th.Palette.FgDim
+	}
 	return []rowSeg{
-		p.seg("+"+humanizeCount(stat.Added), p.th.Palette.Success),
+		p.seg("+"+humanizeCount(stat.Added), addColor),
 		p.seg(" ", p.th.Palette.FgDim),
-		p.seg("-"+humanizeCount(stat.Removed), p.th.Palette.Danger),
+		p.seg("-"+humanizeCount(stat.Removed), delColor),
 	}
 }
 

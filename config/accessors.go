@@ -184,6 +184,36 @@ func (c *Config) GetNerdFont() bool {
 	return boolOr(c.NerdFont, false)
 }
 
+// GlyphSet fidelity rungs (see Config.GlyphSet). These mirror the theme package's
+// glyph-set vocabulary (theme.GlyphSet*) verbatim, so the app passes GetGlyphSet()
+// straight to theme.SetGlyphSet without a translation table.
+const (
+	GlyphSetNerd  = "nerd"
+	GlyphSetPlain = "plain"
+	GlyphSetASCII = "ascii"
+)
+
+// GetGlyphSet returns the normalized glyph-fidelity rung: GlyphSetNerd,
+// GlyphSetPlain, or GlyphSetASCII. An explicit GlyphSet wins. When it is empty (a
+// config predating this key) the legacy NerdFont bool decides — true → nerd,
+// false/absent → plain — so existing configs keep their exact glyph set. A nil
+// Config, or any unrecognized value, normalizes to plain: the safe rung that
+// never renders tofu, so a typo can't strand the UI on the ascii floor or on
+// vendor icons the font lacks.
+func (c *Config) GetGlyphSet() string {
+	if c == nil {
+		return GlyphSetPlain
+	}
+	switch c.GlyphSet {
+	case GlyphSetNerd, GlyphSetPlain, GlyphSetASCII:
+		return c.GlyphSet
+	}
+	if c.GetNerdFont() {
+		return GlyphSetNerd
+	}
+	return GlyphSetPlain
+}
+
 // GetHintBar reports whether the always-on bottom hint bar is enabled. A nil
 // HintBar (e.g. an older config file with no such key) — or a nil Config —
 // defaults to on.

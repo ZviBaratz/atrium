@@ -24,6 +24,19 @@ const (
 // miniDotFrames are the Braille spinner frames (each width 1, widely supported).
 var miniDotFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
 
+// Glyph-fidelity rungs, highest to lowest. The set descends from vendor Nerd-Font
+// icons (need a patched font), through plain non-PUA Unicode (the safe default),
+// to a 7-bit-ASCII floor that renders on literally any terminal/font/locale — the
+// answer to the plain set still showing tofu under stock monospaces (the Braille
+// spinner, ⧗, ⎇, ⇄). These strings are the on-disk config vocabulary too: they
+// match config.GlyphSet* verbatim, so app can pass config.GetGlyphSet() straight
+// to SetGlyphSet.
+const (
+	GlyphSetNerd  = "nerd"
+	GlyphSetPlain = "plain"
+	GlyphSetASCII = "ascii"
+)
+
 // plainGlyphs is the safe glyph set: every icon is non-PUA Unicode that measures
 // width 1 (or empty for AutoBadge) and renders on any terminal/font — no patched
 // Nerd Font required. It is the default, so a bare terminal never shows tofu.
@@ -69,12 +82,52 @@ func nerdGlyphs() Glyphs {
 	return g
 }
 
-// glyphsFor returns the glyph set for the given nerd-font preference.
-func glyphsFor(nerd bool) Glyphs {
-	if nerd {
+// asciiGlyphs is the bottom fidelity rung: every icon is a 7-bit ASCII character
+// that renders identically on any terminal, font, or locale — the floor for
+// environments where even the plain set (the Braille spinner, ⧗, ⎇, ⇄) shows
+// tofu. It is built from plainGlyphs so a glyph added later inherits a Unicode
+// default here until it is given an explicit ASCII form.
+//
+// IMPORTANT: the ASCII glyph VALUES below are PROVISIONAL. They compile and render
+// so the three-rung mechanism is exercisable end to end, but the final characters
+// are a taste call deferred to the #378 "plate" decision (see the issue comment).
+// Nothing here is a chosen mapping — do not treat any value as final.
+func asciiGlyphs() Glyphs {
+	g := plainGlyphs()
+	g.SpinnerFrames = []string{"|", "/", "-", "\\"} // PROVISIONAL — pending the #378 plate choice
+	g.Ready = "*"                                   // PROVISIONAL — pending the #378 plate choice
+	g.ReadySeen = "o"                               // PROVISIONAL — pending the #378 plate choice
+	g.Waiting = "?"                                 // PROVISIONAL — pending the #378 plate choice
+	g.Pending = "~"                                 // PROVISIONAL — pending the #378 plate choice
+	g.Paused = "="                                  // PROVISIONAL — pending the #378 plate choice
+	g.Branch = "Y"                                  // PROVISIONAL — pending the #378 plate choice
+	g.Ahead = "^"                                   // PROVISIONAL — pending the #378 plate choice
+	g.Warn = "!"                                    // PROVISIONAL — pending the #378 plate choice
+	g.Behind = "v"                                  // PROVISIONAL — pending the #378 plate choice
+	g.Dirty = "%"                                   // PROVISIONAL — pending the #378 plate choice
+	g.Note = "#"                                    // PROVISIONAL — pending the #378 plate choice
+	g.Queued = ">"                                  // PROVISIONAL — pending the #378 plate choice
+	g.PR = "&"                                      // PROVISIONAL — pending the #378 plate choice
+	g.FoldOpen = "v"                                // PROVISIONAL — pending the #378 plate choice
+	g.FoldClosed = ">"                              // PROVISIONAL — pending the #378 plate choice
+	g.SelectionMark = "|"                           // PROVISIONAL — pending the #378 plate choice
+	g.MarkChecked = "x"                             // PROVISIONAL — pending the #378 plate choice
+	g.TextCursor = "_"                              // PROVISIONAL — pending the #378 plate choice
+	// AutoBadge, DiffAdd, DiffDel are already ASCII/empty in plainGlyphs — inherited.
+	return g
+}
+
+// glyphsFor returns the glyph set for a given fidelity rung. An unrecognized rung
+// resolves to the plain set — the safe default that never renders tofu.
+func glyphsFor(set string) Glyphs {
+	switch set {
+	case GlyphSetNerd:
 		return nerdGlyphs()
+	case GlyphSetASCII:
+		return asciiGlyphs()
+	default:
+		return plainGlyphs()
 	}
-	return plainGlyphs()
 }
 
 var tokyoNight = &Theme{
