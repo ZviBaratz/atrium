@@ -274,12 +274,27 @@ func humanizeCount(n int) string {
 }
 
 // prSeg returns the "#<number>" PR chip colored by the most urgent signal, and
-// whether there is a PR to show.
+// whether there is a PR to show. When the PR carries a URL the chip becomes an
+// OSC 8 hyperlink to it via linkSeg — clickable, with the visible "#<number>"
+// text (and thus the row's width math) unchanged.
 func prSeg(p rowPaint, pr *git.PRStatus) (rowSeg, bool) {
 	if pr == nil || !pr.HasPR {
 		return rowSeg{}, false
 	}
-	return p.seg(p.th.Glyphs.PR+fmt.Sprintf("#%d", pr.Number), prBadgeColor(p.th, pr)), true
+	seg := p.seg(p.th.Glyphs.PR+fmt.Sprintf("#%d", pr.Number), prBadgeColor(p.th, pr))
+	return linkSeg(seg, pr.URL), true
+}
+
+// linkSeg turns s into an OSC 8 hyperlink to url, overriding only its rendered
+// bytes: width() still reads s.plain (the visible text, escape-free), so the
+// link adds no columns and layout is unchanged. An empty url leaves s untouched.
+func linkSeg(s rowSeg, url string) rowSeg {
+	if url == "" {
+		return s
+	}
+	s.rendered = hyperlink(url, s.render())
+	s.hasRendered = true
+	return s
 }
 
 // ageSeg returns the faint session-age chip (e.g. "2h", "3d") and whether it is

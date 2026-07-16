@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 )
 
 // Styles carries the three roles hint rendering needs. The caller builds them
@@ -75,13 +76,24 @@ func renderLine(line string, ms []Match, typed string, st Styles) string {
 		if m.Kind == KindURL {
 			matchStyle = st.MatchURL
 		}
+		// link wraps a rendered match span in an OSC 8 hyperlink to the match's
+		// copyable target, but only for URL kinds — so an openable hint is
+		// clickable on supporting terminals. The escapes are zero-width, so the
+		// gutter/overlay column math above (rune indices into the frozen line) is
+		// untouched. Non-URL kinds (SHAs, paths) render exactly as before.
+		link := func(styled string) string {
+			if m.Kind != KindURL {
+				return styled
+			}
+			return ansi.SetHyperlink(m.Text) + styled + ansi.ResetHyperlink()
+		}
 		// Gutter placement is decided on the FULL label so narrowing never
 		// flips a hint between gutter and overlay mid-flight; the suffix
 		// right-aligns against the match start.
 		if gutter := m.Col - len(m.Label); gutter >= pos && isBlank(runes[gutter:m.Col]) {
 			b.WriteString(st.Backdrop.Render(string(runes[pos : m.Col-len(suffix)])))
 			b.WriteString(st.Label.Render(suffix))
-			b.WriteString(matchStyle.Render(string(runes[m.Col:end])))
+			b.WriteString(link(matchStyle.Render(string(runes[m.Col:end]))))
 			pos = end
 			continue
 		}
@@ -90,7 +102,7 @@ func renderLine(line string, ms []Match, typed string, st Styles) string {
 			suffix = suffix[:n]
 		}
 		b.WriteString(st.Label.Render(suffix))
-		b.WriteString(matchStyle.Render(string(runes[m.Col+len(suffix) : end])))
+		b.WriteString(link(matchStyle.Render(string(runes[m.Col+len(suffix) : end]))))
 		pos = end
 	}
 	if pos < len(runes) {

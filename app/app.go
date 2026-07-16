@@ -15,6 +15,7 @@ import (
 
 	"github.com/ZviBaratz/atrium/config"
 	"github.com/ZviBaratz/atrium/hints"
+	"github.com/ZviBaratz/atrium/internal/actions"
 	"github.com/ZviBaratz/atrium/log"
 	"github.com/ZviBaratz/atrium/notify"
 	"github.com/ZviBaratz/atrium/session"
@@ -48,6 +49,10 @@ func Run(ctx context.Context, program string, autoYes bool, version, binName str
 	if err != nil {
 		return err
 	}
+	// Route clipboard copies through the TUI's own output so OSC 52 reaches the
+	// user's terminal (the SSH-safe path); the exec copier stays as the local
+	// fallback. Wired before the event loop, so no copy can race the setter.
+	actions.SetClipboardOutput(os.Stdout)
 	p := tea.NewProgram(
 		h,
 		tea.WithAltScreen(),
