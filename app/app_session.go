@@ -1319,17 +1319,14 @@ func sessionsWithUnpushedWork(insts []*session.Instance) int {
 	return n
 }
 
-// confirmKill shows the kill-confirmation overlay for inst and stashes the
-// teardown action. inst need not be the selected instance: the in-session kill
-// key (Ctrl+X) and the auto-open path target a specific session regardless of
-// the current list selection, so the action keys on inst (and KillInstance)
-// rather than on whatever happens to be selected when the user confirms.
-func (m *home) confirmKill(inst *session.Instance) tea.Cmd {
-	if inst == nil || inst.GetStatus() == session.Loading {
-		return nil
-	}
-
-	killAction := func() tea.Msg {
+// instanceTeardownCmd returns the command that tears down inst — terminal
+// cleanup, storage delete, kill, and bookkeeping forget — emitting
+// instanceChangedMsg on success. It is shared by the kill confirmation and the
+// post-merge cleanup offer (#384) so both retire a session by exactly the same
+// path. The closure is UI-thread-safe to the extent the original kill action was:
+// it touches only m.tabbedWindow/m.storage/m.list/m.forgetInstance and inst.
+func (m *home) instanceTeardownCmd(inst *session.Instance) tea.Cmd {
+	return func() tea.Msg {
 		// Refuse to kill only when the branch is checked out in the primary repo
 		// itself (deleting it would strand the user's main checkout on a dangling
 		// branch). A live session's branch is always checked out in the session's
@@ -1370,6 +1367,19 @@ func (m *home) confirmKill(inst *session.Instance) tea.Cmd {
 		}
 		return instanceChangedMsg{}
 	}
+}
+
+// confirmKill shows the kill-confirmation overlay for inst and stashes the
+// teardown action. inst need not be the selected instance: the in-session kill
+// key (Ctrl+X) and the auto-open path target a specific session regardless of
+// the current list selection, so the action keys on inst (and KillInstance)
+// rather than on whatever happens to be selected when the user confirms.
+func (m *home) confirmKill(inst *session.Instance) tea.Cmd {
+	if inst == nil || inst.GetStatus() == session.Loading {
+		return nil
+	}
+
+	killAction := m.instanceTeardownCmd(inst)
 
 	message := fmt.Sprintf("Kill session '%s'?", inst.DisplayName())
 	if stats := inst.GetDiffStats(); stats != nil {
@@ -1387,6 +1397,24 @@ func (m *home) confirmKill(inst *session.Instance) tea.Cmd {
 		m.confirmationOverlay.SetConfirmAltKey(keys.KillKey)
 	}
 	return cmd
+}
+
+// offerCleanupAfterMerge presents a follow-up confirmation to tear down a
+// just-merged session, reusing the kill teardown path and its consequence-first
+// data warning (#384). Its message announces the merge, so it doubles as the
+// merge acknowledgment. Declining leaves the session untouched — its row keeps
+// rendering the merged (purple) PR chip. Returns false when there is no session
+// to offer cleanup for, so the caller can fall back to a plain notice.
+func (m *home) offerCleanupAfterMerge(inst *session.Instance, number int) bool {
+	if inst == nil {
+		return false
+	}
+	message := fmt.Sprintf("PR #%d merged. Clean up session '%s'?", number, inst.DisplayName())
+	if stats := inst.GetDiffStats(); stats != nil {
+		message += killDataWarning(stats.Dirty, stats.Unpushed)
+	}
+	m.confirmAction(message, m.instanceTeardownCmd(inst))
+	return true
 }
 
 // confirmWidth is the confirmation dialog's width for the given terminal

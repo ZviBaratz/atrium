@@ -29,9 +29,15 @@ const wheelScrollLines = 3
 // down none. Same seam idiom as releaseResolved / actions.CopyToClipboard.
 var cleanupTerminalForInstance = (*ui.TabbedWindow).CleanupTerminalForInstance
 
+// prMergedMsg carries the merged session so the handler can offer to clean it up
+// (#384) — the selection may have moved by the time the async merge lands.
+//
 // prMergedMsg is returned by a confirmed merge action to report success back
 // through the runtime, carrying the merged PR number for the acknowledgment.
-type prMergedMsg struct{ number int }
+type prMergedMsg struct {
+	number   int
+	instance *session.Instance
+}
 
 // pushedMsg is returned by a confirmed push action to acknowledge success. Push
 // used to return nil (no notice at all); this lets its handler flash a "pushed"
@@ -355,11 +361,17 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// A single off-UI-thread resume finished: persist/refresh, or drive recovery.
 		return m, m.handleResumeDone(msg)
 	case prMergedMsg:
-		// A confirmed merge succeeded: acknowledge it and refresh so the PR badge
-		// reflects the now-merged state on the next poll.
+		// A confirmed merge succeeded. Refresh so the PR badge reflects the merged
+		// state on the next poll, then offer to clean up the finished session (#384) —
+		// the offer's message announces the merge, so it replaces the plain notice.
+		// Falls back to the notice when there is no session to clean up.
+		refresh := m.instanceChanged()
+		if m.offerCleanupAfterMerge(msg.instance, msg.number) {
+			return m, refresh
+		}
 		return m, tea.Batch(
 			m.handleInfoNotice(fmt.Sprintf("merged PR #%d", msg.number)),
-			m.instanceChanged(),
+			refresh,
 		)
 	case prCreatedMsg:
 		// A confirmed create succeeded: acknowledge it and refresh so the PR badge

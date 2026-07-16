@@ -632,7 +632,7 @@ func (m *home) mergeSelected() (tea.Model, tea.Cmd) {
 		if err := worktree.MergePR(); err != nil {
 			return err
 		}
-		return prMergedMsg{number: number}
+		return prMergedMsg{number: number, instance: selected}
 	})
 }
 
