@@ -8,8 +8,10 @@ import (
 	"github.com/ZviBaratz/atrium/ui/theme"
 
 	"github.com/charmbracelet/bubbles/key"
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	xansi "github.com/charmbracelet/x/ansi"
+	zone "github.com/lrstanley/bubblezone"
 	"github.com/mattn/go-runewidth"
 )
 
@@ -126,6 +128,11 @@ type Menu struct {
 	// busyText is the progress line shown in StateBusy ("pushing…", "resuming 5
 	// sessions…"), set by SetBusy while an action runs off the UI thread.
 	busyText string
+	// clickTargets are the dispatch keys of the hint-bar entries the last
+	// String() marked as click zones, in render order. KeyAtZone walks them to
+	// resolve a click back to the key it fires. Rebuilt every String() so a state
+	// or width change can't leave a stale target clickable.
+	clickTargets []string
 }
 
 // NewMenu returns a Menu in the empty state.
@@ -250,33 +257,100 @@ func (m *Menu) SetSize(width, height int) {
 	m.height = height
 }
 
-// renderBindingLine renders a flat "key desc · key desc" line for the given
-// bindings. Every bar — context hints and mode bars alike — renders through
-// this one path, so a bar can only name keys some registry table carries
-// (pinned by TestMenuBars_KeysExistInRegistry).
-func renderBindingLine(bindings []key.Binding) string {
+// hintZoneID namespaces a hint-bar entry's click zone by the key it dispatches.
+// The app resolves a click on this zone back to that key and re-injects it
+// through the normal key path (app.handleMouse), so clicking a bar entry is
+// exactly the keypress it advertises — every mouse action mirrors a key action.
+func hintZoneID(dispatchKey string) string { return "hintbar:" + dispatchKey }
+
+// renderEntry renders one "key desc" hint-bar segment (the same words the bar
+// has always shown; clicking anywhere on it fires the key, btop-style).
+func renderEntry(b key.Binding) string {
+	return keyStyle().Render(b.Help().Key) + " " + descStyle().Render(b.Help().Desc)
+}
+
+// markHint wraps a rendered entry in a click zone for dispatchKey and records it
+// so KeyAtZone can resolve a later click. An empty dispatchKey marks nothing, so
+// a teaching-only cue (hint mode's "a–z", or a compound like "p/r/x" that maps
+// to no single key) renders inert — clicking it does nothing surprising.
+func (m *Menu) markHint(dispatchKey, seg string) string {
+	if dispatchKey == "" {
+		return seg
+	}
+	m.clickTargets = append(m.clickTargets, dispatchKey)
+	return zone.Mark(hintZoneID(dispatchKey), seg)
+}
+
+// renderModeLine renders a mode bar (filter / hint / visual) from raw bindings.
+// A binding with exactly one key is clickable via that key; range/compound
+// teaching entries (no keys, or several) stay inert (see singleDispatchKey).
+func (m *Menu) renderModeLine(bindings []key.Binding) string {
 	var s strings.Builder
-	for i, binding := range bindings {
+	for i, b := range bindings {
 		if i > 0 {
 			s.WriteString(sepStyle().Render(separator))
 		}
-		s.WriteString(keyStyle().Render(binding.Help().Key))
-		s.WriteString(" ")
-		s.WriteString(descStyle().Render(binding.Help().Desc))
+		s.WriteString(m.markHint(singleDispatchKey(b), renderEntry(b)))
 	}
 	return s.String()
 }
 
-// renderHintLine renders the named global bindings through renderBindingLine.
-func renderHintLine(names []keys.KeyName) string {
-	bindings := make([]key.Binding, len(names))
-	for i, k := range names {
-		bindings[i] = keys.GlobalKeyBindings[k]
+// renderHintLine renders the named global bindings, each clickable via its
+// primary key. Every bar — context hints and mode bars alike — renders through
+// renderEntry, so a bar can only name keys some registry table carries (pinned
+// by TestMenuBars_KeysExistInRegistry).
+func (m *Menu) renderHintLine(names []keys.KeyName) string {
+	var s strings.Builder
+	for i, name := range names {
+		if i > 0 {
+			s.WriteString(sepStyle().Render(separator))
+		}
+		b := keys.GlobalKeyBindings[name]
+		s.WriteString(m.markHint(primaryDispatchKey(b), renderEntry(b)))
 	}
-	return renderBindingLine(bindings)
+	return s.String()
+}
+
+// primaryDispatchKey is the key a KeyName entry fires on click: its first bound
+// key (KeyEnter's "enter", not its "o" alias). A KeyName is one action, so its
+// whole "↵/o open" entry dispatches enter even though the binding lists both.
+func primaryDispatchKey(b key.Binding) string {
+	if ks := b.Keys(); len(ks) > 0 {
+		return ks[0]
+	}
+	return ""
+}
+
+// singleDispatchKey is the key a mode-bar entry fires on click, but only when
+// the binding carries exactly one. A compound like "p/r/x" (pause/resume/kill
+// the marked set) maps to no single action, so it stays inert rather than
+// firing a surprising one of the three.
+func singleDispatchKey(b key.Binding) string {
+	if ks := b.Keys(); len(ks) == 1 {
+		return ks[0]
+	}
+	return ""
+}
+
+// KeyAtZone reports the dispatch key of the hint-bar entry a mouse event lands
+// on, if any. Only entries the last String() marked are considered, so a bar
+// with no clickable entries (busy / notice / generating) resolves nothing —
+// and, before the first zone scan, every InBounds check is false.
+func (m *Menu) KeyAtZone(msg tea.MouseMsg) (string, bool) {
+	for _, k := range m.clickTargets {
+		if zone.Get(hintZoneID(k)).InBounds(msg) {
+			return k, true
+		}
+	}
+	return "", false
 }
 
 func (m *Menu) String() string {
+	// Rebuild the click-zone target list from scratch each render: the bar's
+	// entries depend on state and width, so a stale target must never survive a
+	// change. The notice / busy / generating paths add none (they show no keys).
+	m.clickTargets = m.clickTargets[:0]
+
 	if m.notice != "" {
 		style := theme.Current().FgStyle()
 		if m.noticeLevel == NoticeError {
@@ -303,15 +377,15 @@ func (m *Menu) String() string {
 		// Actions first (see keys.FilterModeHints) so that on a narrow terminal
 		// the width truncation below drops the predicate vocabulary tail, never
 		// the accept/clear actions.
-		line = renderBindingLine(keys.FilterModeHints) +
+		line = m.renderModeLine(keys.FilterModeHints) +
 			sepStyle().Render(separator) +
 			descStyle().Render(filterSyntaxHint)
 	case StateHints:
-		line = renderBindingLine(keys.HintModeHints)
+		line = m.renderModeLine(keys.HintModeHints)
 	case StateVisual:
-		line = renderBindingLine(keys.VisualModeHints)
+		line = m.renderModeLine(keys.VisualModeHints)
 	case StateEmpty:
-		line = renderHintLine(emptyHintKeys)
+		line = m.renderHintLine(emptyHintKeys)
 	default: // StateDefault
 		hints := m.contextHints
 		if hints == nil {
@@ -320,7 +394,7 @@ func (m *Menu) String() string {
 		if m.activeTab == DiffTab || m.activeTab == TerminalTab {
 			hints = append(append([]keys.KeyName{}, hints...), keys.KeyShiftUp)
 		}
-		line = renderHintLine(hints)
+		line = m.renderHintLine(hints)
 	}
 
 	// Truncate rather than overflow: a hint line wider than the terminal would

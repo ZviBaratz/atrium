@@ -319,6 +319,22 @@ func (m *home) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	}
+	// A left-click on a hint-bar entry mirrors pressing its key. The bar carries
+	// click zones in the default view and the three modal bars (filter / hint /
+	// visual); KeyAtZone resolves nothing in any other state — an overlay owns
+	// the screen, or the bar shows progress, not keys — so this is inert there,
+	// like the row/tab path ignoring rows behind an overlay. The resolved key is
+	// re-injected through handleKeyPress so it runs the exact same dispatch
+	// (state routing + guards) as the keypress it advertises: nothing here
+	// becomes mouse-only.
+	if msg.Button == tea.MouseButtonLeft && m.hintBarClickState() {
+		if k, ok := m.menu.KeyAtZone(msg); ok {
+			if kmsg, ok := synthKeyMsg(k); ok {
+				return m.handleKeyPress(kmsg)
+			}
+			return m, nil // a marked entry with no synthesizable key: no-op
+		}
+	}
 	// Left-click selects a session row, switches the active tab, or (on a quick
 	// second click of the same row) attaches. Only in the default state — when
 	// an overlay is up the rows behind it still have recorded bounds, so a click
@@ -367,6 +383,49 @@ func (m *home) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		}
 	}
 	return m, nil
+}
+
+// hintBarClickState reports whether the hint bar is the live surface a click can
+// act on: the default view and the three modal bars (filter / hint / visual). In
+// every other state an overlay owns the screen (or the bar shows non-key
+// progress), so a click on the bar's last-scanned zones must be ignored — the
+// same reason the row/tab path gates itself to stateDefault.
+func (m *home) hintBarClickState() bool {
+	switch m.state {
+	case stateDefault, stateFilter, stateHints, stateVisual:
+		return true
+	default:
+		return false
+	}
+}
+
+// synthKeyMsg builds the tea.KeyMsg a hint-bar click re-injects to fire the
+// clicked entry's key. The dispatch path keys off msg.String(), so the returned
+// message must stringify back to k: the special keys the bars can show (enter,
+// esc, space, ctrl+x, the shift arrows) map to their KeyType, and every other
+// bar key is a single rune whose KeyRunes message stringifies to that rune. A
+// key it can't represent reports false, so an unrecognized entry is a no-op
+// rather than a wrong action.
+func synthKeyMsg(k string) (tea.KeyMsg, bool) {
+	switch k {
+	case "enter":
+		return tea.KeyMsg{Type: tea.KeyEnter}, true
+	case "esc":
+		return tea.KeyMsg{Type: tea.KeyEsc}, true
+	case " ":
+		return tea.KeyMsg{Type: tea.KeySpace}, true
+	case "ctrl+x":
+		return tea.KeyMsg{Type: tea.KeyCtrlX}, true
+	case "shift+up":
+		return tea.KeyMsg{Type: tea.KeyShiftUp}, true
+	case "shift+down":
+		return tea.KeyMsg{Type: tea.KeyShiftDown}, true
+	default:
+		if r := []rune(k); len(r) == 1 {
+			return tea.KeyMsg{Type: tea.KeyRunes, Runes: r}, true
+		}
+		return tea.KeyMsg{}, false
+	}
 }
 
 func (m *home) handleTargetValidityResult(msg targetValidityResultMsg) (tea.Model, tea.Cmd) {

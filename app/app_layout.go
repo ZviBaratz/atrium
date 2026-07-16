@@ -215,6 +215,15 @@ func (m *home) applySettingChange(key string) tea.Cmd {
 			m.list.SetShowEmptyHint(!m.appConfig.GetHintBar())
 		}
 		m.recomputeLayout() // the bar claims or releases its row
+	case "mouse":
+		// Toggle mouse capture live so the change takes effect without a restart
+		// (the app.Run gate only covers the initial launch). Disabling hands every
+		// mouse event back to the terminal — restoring native select-to-copy —
+		// while enabling turns cell-motion reporting back on.
+		if m.appConfig.GetMouse() {
+			return tea.EnableMouseCellMotion
+		}
+		return tea.DisableMouse
 	case "session_context_bar", "tmux_config_override":
 		// Re-render the managed tmux conf so sessions started from now on pick
 		// the change up; live sessions keep their current status line (tmux only

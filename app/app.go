@@ -48,17 +48,25 @@ func Run(ctx context.Context, program string, autoYes bool, version, binName str
 	if err != nil {
 		return err
 	}
-	p := tea.NewProgram(
-		h,
+	opts := []tea.ProgramOption{
 		tea.WithAltScreen(),
-		tea.WithMouseCellMotion(), // Mouse scroll
 		// Normalize SS3 Home/End (ESC O H/F) that a terminal left in application-cursor
 		// mode emits, which bubbletea v1 otherwise mis-decodes into literal "OH"/"OF".
 		tea.WithInput(newSS3HomeEndReader(os.Stdin)),
 		// Tie the program to the lifecycle context so a SIGTERM (which cancels
 		// ctx in main) also stops the TUI loop, not just the subprocesses.
 		tea.WithContext(ctx),
-	)
+	}
+	// Mouse capture is opt-out (config `mouse`, default on). With it off we never
+	// enable cell-motion reporting, so every mouse event stays with the terminal
+	// and its native select-to-copy works unmodified — the fix for terminals whose
+	// selection the capture would otherwise hijack (#397). It can still be toggled
+	// live from the Settings panel (see applySettingChange). Appended before the
+	// SS3/context options only for readability; option order is irrelevant.
+	if h.appConfig.GetMouse() {
+		opts = append(opts, tea.WithMouseCellMotion())
+	}
+	p := tea.NewProgram(h, opts...)
 	_, err = p.Run()
 	// The event loop has exited. On signal shutdown it returned on ctx.Done()
 	// without dispatching Update, and the force-quit escape exits with a session

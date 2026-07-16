@@ -126,9 +126,32 @@ The menu at the bottom of the screen shows available commands:
 - `,` - Settings
 - `q` - Quit the application
 
+##### Mouse
+The mouse mirrors the keyboard — every click runs the same action its key would, nothing is mouse-only:
+
+- **Click** a session row to select it, a repo header to fold/unfold it, a tab to switch to it, or any **hint-bar entry** to run that key.
+- **Double-click** a session row to attach (like `↵`).
+- **Wheel** over the list moves the selection; over a pane it scrolls that pane.
+- **Drag** the divider between the list and the preview to resize the split.
+- **Shift+drag** bypasses capture and selects text with your terminal's own selection — the escape hatch when you want to copy from the screen.
+
+Set `mouse` to `false` to turn mouse capture off completely, handing every mouse event back to the terminal (see below).
+
 ### Configuration
 
 Atrium stores its configuration in `~/.atrium/config.json`. You can find the exact path by running `atrium debug`. Installs that predate the rename keep using their existing `~/.claude-squad` directory automatically.
+
+#### Mouse
+
+Mouse capture is on by default: clickable session rows, repo headers, tabs, and hint-bar entries; wheel scrolling; and a draggable list/preview divider. If your terminal's native select-to-copy matters more than in-app clicking, hold **Shift** while dragging to select text past the capture, or turn the mouse off entirely:
+
+```json
+{
+  "mouse": false
+}
+```
+
+With `mouse` off, Atrium never enables mouse reporting, so selection, copy, and paste behave exactly as they would in any non-mouse program. The setting is also togglable live from the Settings panel (`,`).
 
 #### Auto-attach
 

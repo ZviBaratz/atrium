@@ -67,8 +67,26 @@ func (h helpTypeGeneral) toContent() string {
 			lines = append(lines, helpRow(rowKeyLabel(row), rowDesc(row)))
 		}
 	}
+	lines = append(lines, "", helpHeaderStyle().Render("Mouse"))
+	for _, row := range mouseHelpRows {
+		lines = append(lines, helpRow(row[0], row[1]))
+	}
+	lines = append(lines, helpDimStyle().Render(
+		"Shift+drag selects text for your terminal's own copy, bypassing capture; "+
+			"turn the mouse off entirely in settings (,)."))
 	lines = append(lines, "", legend)
 	return lipgloss.JoinVertical(lipgloss.Left, lines...)
+}
+
+// mouseHelpRows document the mouse map in the ? overlay. Every mouse action
+// mirrors a key (click zones in ui.Menu + app.handleMouse), so this is a map of
+// what the mouse does, not a set of mouse-only powers. The Shift bypass and the
+// off-switch are called out below the table.
+var mouseHelpRows = [][2]string{
+	{"click", "select a row · fold a repo header · switch tab · run a hint-bar key"},
+	{"double-click", "attach to a session row (like ↵)"},
+	{"wheel", "move the selection over the list · scroll the active pane"},
+	{"drag", "the list/preview divider to resize the split"},
 }
 
 // rowKeyLabel derives a row's key column from its bindings' Help().Key labels

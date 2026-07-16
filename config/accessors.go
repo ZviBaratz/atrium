@@ -194,6 +194,17 @@ func (c *Config) GetHintBar() bool {
 	return boolOr(c.HintBar, true)
 }
 
+// GetMouse reports whether mouse capture is enabled. A nil Mouse (e.g. an older
+// config file with no such key) — or a nil Config — defaults to on, so the
+// mouse works out of the box; setting it false is the opt-out for terminals
+// whose native select-to-copy the capture would otherwise break.
+func (c *Config) GetMouse() bool {
+	if c == nil {
+		return true
+	}
+	return boolOr(c.Mouse, true)
+}
+
 // GetAutoAttach reports whether new sessions should auto-attach on creation.
 // A nil AutoAttach (e.g. an older config file with no such key) — or a nil
 // Config — defaults to on.
