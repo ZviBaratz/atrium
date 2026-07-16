@@ -49,8 +49,9 @@ frontier — synchronized output, kitty keyboard, theme events — first-class.
 
 ## The portfolio
 
-29 issues in 6 themes (8×P1, 14×P2, 7×P3), filed as the "UX Program" epic —
-final issue numbers recorded in the epic. Canonical one-paragraph rationales and
+29 issues in 6 themes (8×P1, 14×P2, 7×P3), filed 2026-07-16 as epic **#370**
+with children **#371–#399** (program number NN maps to issue #(370+NN)).
+Canonical one-paragraph rationales and
 provenance live in each issue body; the visual audit (screenshots + annotations)
 was delivered as a session artifact.
 
