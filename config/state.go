@@ -54,6 +54,16 @@ type AppState interface {
 	GetListRatio() float64
 	// SetListRatio stores the list/preview split (clamped to a sane range)
 	SetListRatio(ratio float64) error
+	// GetLayoutPreset returns the name of the active layout preset ("" when none
+	// has been chosen — an older state file — which the app reads as the default)
+	GetLayoutPreset() string
+	// GetLayoutCustom reports whether the live listRatio is a < / > (or drag)
+	// override of the active preset's ratio, rather than the preset's own value
+	GetLayoutCustom() bool
+	// SetLayout stores the active layout preset, whether the split is a custom
+	// override of it, and the live listRatio (clamped) — in one persist, so the
+	// three stay consistent
+	SetLayout(preset string, custom bool, ratio float64) error
 	// GetLastNotesVersion returns the version whose release notes were last
 	// shown after an update ("" if none ever were)
 	GetLastNotesVersion() string
@@ -90,6 +100,17 @@ const (
 	defaultListRatio = 0.30
 	minListRatio     = 0.15
 	maxListRatio     = 0.60
+)
+
+// Exported list-ratio bounds for callers that build layout presets pinned to
+// the clamp (app/app_presets.go): the "monitor" preset is the widest allowed
+// list and "review" the thinnest, so pinning them here means a preset can never
+// name a split the divider itself couldn't reach, and the clamp can't silently
+// reshape a preset if it ever changes.
+const (
+	DefaultListRatio = defaultListRatio
+	MinListRatio     = minListRatio
+	MaxListRatio     = maxListRatio
 )
 
 // clampListRatio bounds r to [minListRatio, maxListRatio].
@@ -135,6 +156,16 @@ type State struct {
 	// ListRatio is the fraction of the terminal width given to the session list.
 	// Zero (an older state file with no such key) reads back as defaultListRatio.
 	ListRatio float64 `json:"list_ratio,omitempty"`
+	// LayoutPreset is the name of the active layout preset (see app.layoutPresets:
+	// monitor / default / review / focus), cycled with the layout key and restored
+	// on relaunch. Empty (an older state file) reads as the default preset.
+	LayoutPreset string `json:"layout_preset,omitempty"`
+	// LayoutCustom records that ListRatio is a < / > (or divider-drag) override of
+	// LayoutPreset's own ratio rather than the preset's value. It lets a manual
+	// split coexist with a named preset (btop's per-box override): the layout key
+	// still cycles from the preset, and in focus it un-hides the list. False (an
+	// older state file) means the ratio is the preset's own.
+	LayoutCustom bool `json:"layout_custom,omitempty"`
 	// KnownProjects is every project directory ever used for a session (git or
 	// direct), most-recent-first, capped at maxKnownProjects. It is maintained
 	// alongside RecentPaths by AddRecentPath and feeds the new-session picker's
@@ -334,6 +365,28 @@ func (s *State) GetListRatio() float64 {
 
 // SetListRatio stores the list/preview split, clamped to a sane range, and persists it.
 func (s *State) SetListRatio(ratio float64) error {
+	s.ListRatio = clampListRatio(ratio)
+	return SaveState(s)
+}
+
+// GetLayoutPreset returns the stored layout-preset name, "" when none was ever
+// chosen (an older state file); the app maps that to its default preset.
+func (s *State) GetLayoutPreset() string {
+	return s.LayoutPreset
+}
+
+// GetLayoutCustom reports whether the stored ListRatio is a manual override of
+// the active preset's ratio (see LayoutCustom).
+func (s *State) GetLayoutCustom() bool {
+	return s.LayoutCustom
+}
+
+// SetLayout stores the active preset, its custom-override flag, and the live
+// listRatio (clamped like SetListRatio) in a single persist, so a preset switch
+// or a split adjustment never leaves the three fields inconsistent on disk.
+func (s *State) SetLayout(preset string, custom bool, ratio float64) error {
+	s.LayoutPreset = preset
+	s.LayoutCustom = custom
 	s.ListRatio = clampListRatio(ratio)
 	return SaveState(s)
 }

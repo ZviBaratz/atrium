@@ -300,6 +300,16 @@ type home struct {
 	// goes to the preview pane). Adjusted with < / > and persisted via appState.
 	listRatio float64
 
+	// layoutIndex is the active named layout preset (an index into layoutPresets;
+	// see app_presets.go) — the base the layout key cycles from and < / > override.
+	// layoutPrev is the preset active just before the current one, so Esc can back
+	// out of focus to it. layoutCustom marks listRatio as a manual override of the
+	// active preset's own ratio. All three are seeded from appState and persisted
+	// by SetLayout, so the chosen preset survives relaunch (as listRatio does).
+	layoutIndex  int
+	layoutPrev   int
+	layoutCustom bool
+
 	// draggingDivider is true while the user holds the list/preview seam and drags
 	// it; motion events then map the cursor column to the split (see handleMouse).
 	draggingDivider bool
@@ -475,7 +485,15 @@ func (m *home) View() string {
 		return ui.SplashScreensaver(m.windowWidth, m.windowHeight, m.splashFrame)
 	}
 
-	listAndPreview := lipgloss.JoinHorizontal(lipgloss.Top, m.list.String(), m.tabbedWindow.String())
+	// In focus mode the list is hidden and the tabbed window fills the full
+	// terminal width; every other preset joins the list and preview side by side.
+	// Omit the list entirely (rather than render it at zero width) so no sliver of
+	// panel border remains — updateHandleWindowSizeEvent already gave the tabbed
+	// window the whole width to match.
+	listAndPreview := m.tabbedWindow.String()
+	if !m.listHidden() {
+		listAndPreview = lipgloss.JoinHorizontal(lipgloss.Top, m.list.String(), m.tabbedWindow.String())
+	}
 
 	parts := []string{listAndPreview}
 	// The hint bar and error box each claim a row only when they have something to

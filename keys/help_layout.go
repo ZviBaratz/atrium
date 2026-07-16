@@ -38,7 +38,8 @@ var HelpGroups = []HelpGroup{
 		{Keys: []KeyName{KeyTabPreview, KeyTabDiff, KeyTabTerminal}, Desc: "jump to preview / diff / terminal"},
 		{Keys: []KeyName{KeyShiftUp, KeyShiftDown}, Compact: true, Desc: "scroll the active pane"},
 		{Keys: []KeyName{KeyShrinkList, KeyGrowList}, Desc: "shrink / grow the session list (or drag the divider)"},
-		{Keys: []KeyName{KeyEscape}, Desc: "exit scroll mode / clear filter"},
+		{Keys: []KeyName{KeyLayoutPreset}, Desc: "cycle layout presets (monitor / default / review / focus)"},
+		{Keys: []KeyName{KeyEscape}, Desc: "exit scroll mode / clear filter / leave focus"},
 	}},
 	{Title: "Manage", Rows: []HelpRow{
 		{Keys: []KeyName{KeyNew}, Desc: "new session (form, name first)"},

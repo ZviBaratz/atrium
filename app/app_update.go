@@ -698,6 +698,13 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 			m.list.ClearFilter()
 			return m, m.instanceChanged()
 		}
+		// Focus mode hides the list; Esc backs out to the preset that preceded it
+		// so focus is never a dead end (the layout key instead cycles onward). This
+		// is the last Esc branch: it only fires once scroll mode and any filter are
+		// already cleared, matching what a user expects a repeated Esc to unwind.
+		if m.listHidden() {
+			return m, m.exitFocusLayout()
+		}
 	}
 
 	// Handle quit commands first
@@ -801,6 +808,10 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		return m, m.adjustListCols(-listColStep)
 	case keys.KeyGrowList:
 		return m, m.adjustListCols(+listColStep)
+	case keys.KeyLayoutPreset:
+		// One key steps the named layout presets (monitor → default → review →
+		// focus → wrap); the active preset's name flashes on the notice row.
+		return m, m.cycleLayoutPreset()
 	case keys.KeyTab:
 		m.tabbedWindow.Toggle()
 		m.menu.SetActiveTab(m.tabbedWindow.GetActiveTab())
@@ -965,6 +976,7 @@ func keyAllowedWhileBusy(name keys.KeyName) bool {
 	case keys.KeyHelp,
 		keys.KeyUp, keys.KeyDown, keys.KeyNextUnread, keys.KeyNextNeedsInput,
 		keys.KeyShiftUp, keys.KeyShiftDown, keys.KeyShrinkList, keys.KeyGrowList,
+		keys.KeyLayoutPreset,
 		keys.KeyTab, keys.KeyShiftTab, keys.KeyTabPreview, keys.KeyTabDiff, keys.KeyTabTerminal,
 		keys.KeyCollapse, keys.KeyExpand, keys.KeyCollapseAll:
 		return true

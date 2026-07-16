@@ -60,6 +60,7 @@ func TestGlobalKeyStringsMap_GoldenInventory(t *testing.T) {
 		"/":          KeyFilter,
 		"<":          KeyShrinkList,
 		">":          KeyGrowList,
+		"\\":         KeyLayoutPreset,
 		"1":          KeyTabPreview,
 		"2":          KeyTabDiff,
 		"3":          KeyTabTerminal,

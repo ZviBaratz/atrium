@@ -51,6 +51,20 @@ func assembleHome(
 		appState:     appState,
 		listRatio:    appState.GetListRatio(),
 	}
+	// Restore the persisted layout preset (see app_presets.go). When the split is
+	// not a custom override, the preset owns the ratio, so seed listRatio from it —
+	// this keeps a restored monitor/review at its preset width even if the stored
+	// ratio drifted, while a custom override or focus (ratio 0) keeps the stored
+	// value. layoutPrev seeds to the default so an Esc out of a restored focus lands
+	// somewhere sane rather than back in focus.
+	h.layoutIndex = presetIndexByName(appState.GetLayoutPreset())
+	h.layoutPrev = defaultPresetIndex
+	h.layoutCustom = appState.GetLayoutCustom()
+	if !h.layoutCustom {
+		if p := layoutPresets[h.layoutIndex]; p.ratio > 0 {
+			h.listRatio = p.ratio
+		}
+	}
 	// Seed the picker's scanned-repo candidates from the persisted cache so the
 	// first form-open after launch is populated before the startup scan lands.
 	// Gated on the feature being enabled: with project_search_depth ≤ 0, a

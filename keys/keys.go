@@ -121,6 +121,13 @@ const (
 	// mode. It is consumed only by the mode handler, never the default state.
 	KeyToggleMark
 
+	// KeyLayoutPreset cycles the named layout presets (monitor / default / review
+	// / focus; see app.layoutPresets) on a single key. Each preset sets the
+	// list/preview split (or hides the list entirely, in focus), the active
+	// preset persists across relaunch, and < / > still fine-tune the split as a
+	// custom override that never fights this cycle.
+	KeyLayoutPreset
+
 	// KeyScreensaver shows the configured splash pattern full-window until any
 	// key (or click) dismisses it. A deliberate easter egg: it has no Registry
 	// entry (and therefore no GlobalKeyBindings entry), so it never appears in

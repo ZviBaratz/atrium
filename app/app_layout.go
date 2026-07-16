@@ -24,6 +24,11 @@ func (m *home) updateHandleWindowSizeEvent(msg tea.WindowSizeMsg) {
 		m.listRatio = m.appState.GetListRatio()
 	}
 	listWidth := int(float32(msg.Width) * float32(m.listRatio))
+	// Focus preset: the list is hidden (View omits it), so hand its whole column
+	// to the tabbed window. Every other preset keeps the listRatio split.
+	if m.listHidden() {
+		listWidth = 0
+	}
 	tabsWidth := msg.Width - listWidth
 
 	m.windowWidth, m.windowHeight = msg.Width, msg.Height
@@ -241,16 +246,12 @@ func (m *home) applySettingChange(key string) tea.Cmd {
 // the mouse drag (handleMouse) covers larger jumps.
 const listColStep = 1
 
-// adjustListRatio nudges the list/preview split by delta, persists the clamped
-// value, re-pushes sizes to every pane, and refreshes the preview at its new width.
-// appState owns the clamp, so the stored and live values stay in lockstep.
+// adjustListRatio nudges the list/preview split by delta and applies it as a
+// custom override of the active preset (setCustomRatio persists the clamped
+// value and re-pushes sizes), so fine-tuning the split complements the preset
+// cycle instead of fighting it.
 func (m *home) adjustListRatio(delta float64) tea.Cmd {
-	if err := m.appState.SetListRatio(m.listRatio + delta); err != nil {
-		return m.handleError(err)
-	}
-	m.listRatio = m.appState.GetListRatio()
-	m.recomputeLayout()
-	return m.instanceChanged()
+	return m.setCustomRatio(m.listRatio + delta)
 }
 
 // adjustListCols nudges the split by whole columns: it converts the current ratio
@@ -273,10 +274,5 @@ func (m *home) adjustListCols(delta int) tea.Cmd {
 	// lands squarely on cols+delta instead of on a boundary a float32 rounding
 	// error could snap back to cols, which would make a step silently stick.
 	ratio := (float64(cols+delta) + 0.5) / float64(m.windowWidth)
-	if err := m.appState.SetListRatio(ratio); err != nil {
-		return m.handleError(err)
-	}
-	m.listRatio = m.appState.GetListRatio()
-	m.recomputeLayout()
-	return m.instanceChanged()
+	return m.setCustomRatio(ratio)
 }

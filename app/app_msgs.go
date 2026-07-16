@@ -236,7 +236,11 @@ func (m *home) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 				return m, nil
 			case tea.MouseActionRelease:
 				m.draggingDivider = false
-				if err := m.appState.SetListRatio(m.listRatio); err != nil {
+				// A drag is a manual split, so it is a custom override of the active
+				// preset (like < / >): persist preset+override+ratio together so it
+				// complements the preset cycle rather than resetting on relaunch.
+				m.layoutCustom = true
+				if err := m.appState.SetLayout(m.currentPreset().name, true, m.listRatio); err != nil {
 					return m, m.handleError(err)
 				}
 				// One content refresh at the end of the gesture, now that the width
@@ -254,7 +258,7 @@ func (m *home) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	// the row/tab click logic, so a seam press starts a drag instead of selecting
 	// the row behind it.
 	if msg.Button == tea.MouseButtonLeft && msg.Action == tea.MouseActionPress &&
-		m.state == stateDefault && m.windowWidth > 0 && msg.Y < m.paneContentHeight() {
+		m.state == stateDefault && m.windowWidth > 0 && msg.Y < m.paneContentHeight() && !m.listHidden() {
 		listWidth := int(float32(m.windowWidth) * float32(m.listRatio))
 		if msg.X >= listWidth-dividerGrab && msg.X <= listWidth+dividerGrab {
 			m.draggingDivider = true
