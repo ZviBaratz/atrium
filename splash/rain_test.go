@@ -198,7 +198,7 @@ func TestRainStreamsAreLong(t *testing.T) {
 func TestRainRampIsALuminanceRamp(t *testing.T) {
 	withColorProfile(t, termenv.TrueColor)
 	pal := splashTestPalette()
-	lut := buildSplashLUT(pal)
+	lut := buildLUTAmbient(pal)
 	require.Len(t, lut.rain, splashRainStops)
 
 	lum := func(hex string) float64 {
@@ -381,7 +381,7 @@ func sgrPrefix(s string) string {
 // layer table and so never exercise Pass 2's envelope at all.
 func rainStopGrid(t *testing.T, w, h, frame int, pal Palette) [][]int {
 	t.Helper()
-	lut := buildSplashLUT(pal)
+	lut := buildLUTAmbient(pal)
 	stopOf := make(map[string]int, len(lut.rain))
 	for i, a := range lut.rain {
 		stopOf[a.prefix] = i

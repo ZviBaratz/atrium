@@ -180,14 +180,14 @@ func splashShadeParse(c lipgloss.Color) colorful.Color {
 //
 // Being headless is also what buys the resolution: all 15 steps go to the tail
 // rather than 12, so the axis steps ~5.0 L* instead of rain's 6.1.
-func buildShadeGrid(colors []lipgloss.Color, affix []splashAffix) []splashAffix {
+func buildShadeGrid(colors []lipgloss.Color, affix []splashAffix, r *lipgloss.Renderer) []splashAffix {
 	grid := make([]splashAffix, len(colors)*splashLumStops)
 	top := splashLumStops - 1
 	for h, c := range colors {
 		base := splashShadeParse(c)
 		for l := 0; l < top; l++ {
 			hex := splashLumHexAt(base, float64(l)/float64(top), shadeChromaHold)
-			grid[h*splashLumStops+l] = splashAffixFor(lipgloss.NewStyle().Foreground(lipgloss.Color(hex)))
+			grid[h*splashLumStops+l] = splashAffixFor(r.NewStyle().Foreground(lipgloss.Color(hex)))
 		}
 		// Pin the top exactly, as buildSplashLUT pins its gradient endpoints: at
 		// u == 1 the curve returns the hue, but by way of an HCL round-trip that can

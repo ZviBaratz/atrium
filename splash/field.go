@@ -19,6 +19,9 @@ package splash
 import (
 	"math"
 	"strings"
+
+	"github.com/charmbracelet/lipgloss"
+	"github.com/muesli/termenv"
 )
 
 // seedStar keys the fixed starfield (an arbitrary distinct odd constant); see
@@ -181,6 +184,14 @@ type Options struct {
 	// the variant's default. It is how package ui applies the dev-only
 	// ATRIUM_SPLASH_LUMRANGE knob without this package reading the environment.
 	LumRange *float64
+	// Profile, when non-nil, pins the color depth Render emits at (truecolor,
+	// 256, 16, or none), independent of the process-global color profile. nil
+	// defers to lipgloss.ColorProfile() — the auto-detected terminal profile —
+	// which is what package ui wants when rendering to a real pane. Setting it
+	// makes Render pure over its inputs: the same Options yield the same bytes
+	// regardless of ambient stdout state, which is what a standalone consumer
+	// (and a snapshot test) needs.
+	Profile *termenv.Profile
 }
 
 // Render builds the colored splash field background: exactly h rows of exactly
@@ -197,7 +208,15 @@ func Render(w, h, frame int, opts Options) string {
 	if opts.LumRange != nil {
 		ops.lumRange = *opts.LumRange
 	}
-	return renderField(w, h, frame, opts.Palette, focalRow, opts.Variant, ops)
+	// Resolve the color depth: an explicit Options.Profile wins, otherwise defer
+	// to the auto-detected terminal profile. This is the only place the ambient
+	// profile is read, so a caller that pins Profile makes Render pure over its
+	// inputs (see splashLUTFor, which bakes the SGR bytes for this profile).
+	prof := lipgloss.ColorProfile()
+	if opts.Profile != nil {
+		prof = *opts.Profile
+	}
+	return renderField(w, h, frame, opts.Palette, focalRow, opts.Variant, ops, prof)
 }
 
 // renderField builds the colored field background: exactly h rows of
@@ -209,8 +228,9 @@ func Render(w, h, frame int, opts Options) string {
 // radius (see splashFieldAt), so the field stays visually anchored on the wordmark
 // while still reaching the edges. Pure over its inputs (deterministic,
 // snapshot-testable); returns "" on a degenerate pane. ops is the resolved
-// per-variant Pass-2 policy (see Render and Variant.ops).
-func renderField(w, h, frame int, pal Palette, focalRow int, variant Variant, ops splashOps) string {
+// per-variant Pass-2 policy (see Render and Variant.ops), and prof is the
+// resolved color profile the emitted SGR is baked for (see Render).
+func renderField(w, h, frame int, pal Palette, focalRow int, variant Variant, ops splashOps, prof termenv.Profile) string {
 	if w <= 0 || h <= 0 {
 		return ""
 	}
@@ -233,7 +253,7 @@ func renderField(w, h, frame int, pal Palette, focalRow int, variant Variant, op
 	at := splashFieldAt(variant, maxD)
 	fld := splashEvalField(w, h, cx, cyFocal, phase, at)
 
-	lut := splashLUTFor(pal)
+	lut := splashLUTFor(pal, prof)
 	nColors := len(lut.styles)
 	starIdx := lut.starIndex() // splashRunAffix emits any index >= this as a star
 	ramp := []rune(splashRamp)

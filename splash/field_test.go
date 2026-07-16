@@ -100,13 +100,13 @@ func TestRenderSplashFieldExtremes(t *testing.T) {
 // so the rendered field carries no color to compare.
 func TestSplashLUTThemeAnchored(t *testing.T) {
 	pal := splashTestPalette()
-	lut := splashLUTFor(pal)
+	lut := lutForAmbient(pal)
 	require.Equal(t, lipgloss.Color(pal.A0), lut.colors[0], "core stop is the warm anchor")
 	require.Equal(t, lipgloss.Color(pal.A3), lut.colors[len(lut.colors)-1], "rim stop is the cool anchor")
 
 	other := pal
 	other.A3 = "#a6e3a1" // a distinctly different rim (catppuccin green)
-	otherLUT := splashLUTFor(other)
+	otherLUT := lutForAmbient(other)
 	require.NotEqual(t, lut.colors, otherLUT.colors,
 		"changing the rim hue must change the gradient")
 	// The lower stops (warm→blue) are rim-independent; the upper stops must move.
@@ -136,7 +136,7 @@ func TestSplashAffixBracketsMatchRender(t *testing.T) {
 			// Built directly rather than via splashLUTFor: this asserts on the
 			// affixes themselves; TestSplashLUTCacheTracksColorProfile covers
 			// the cache's keying.
-			lut := buildSplashLUT(splashTestPalette())
+			lut := buildLUTAmbient(splashTestPalette())
 			require.Equal(t, len(lut.styles), lut.starIndex(),
 				"the star sentinel must sit exactly one past the last gradient stop")
 			for _, content := range contents {
@@ -169,10 +169,10 @@ func TestSplashLUTCacheTracksColorProfile(t *testing.T) {
 	pal.A1 = "#123456" // a private cache entry, so other tests are unaffected
 
 	withColorProfile(t, termenv.Ascii)
-	require.Empty(t, splashLUTFor(pal).affix[1].prefix, "a colorless profile emits no SGR")
+	require.Empty(t, lutForAmbient(pal).affix[1].prefix, "a colorless profile emits no SGR")
 
 	withColorProfile(t, termenv.TrueColor)
-	require.NotEmpty(t, splashLUTFor(pal).affix[1].prefix,
+	require.NotEmpty(t, lutForAmbient(pal).affix[1].prefix,
 		"a LUT cached under Ascii must not pin the colorless path once the profile is truecolor")
 }
 
@@ -195,6 +195,46 @@ func TestRenderSplashFieldColorByProfile(t *testing.T) {
 
 	require.Equal(t, plain, ansi.Strip(colored),
 		"color must be the only difference — the glyphs are identical either way")
+}
+
+// TestRenderProfileOverridesAmbient pins the decoupling Options.Profile buys:
+// when set, it decides the emitted color depth regardless of the process-global
+// lipgloss.ColorProfile(). The ambient profile is forced to the opposite of the
+// explicit one in each direction, so a Render that still read the global would
+// fail — proving the field is honored, not the terminal.
+func TestRenderProfileOverridesAmbient(t *testing.T) {
+	pal := splashTestPalette()
+	pal.A2 = "#0a0b0c" // a private cache entry, so other tests are unaffected
+
+	truecolor, asciiP := termenv.TrueColor, termenv.Ascii
+	render := func(p *termenv.Profile) string {
+		return Render(60, 20, 3, Options{Palette: pal, Variant: Tunnel, FocalRow: centeredFocalRow(20), Profile: p})
+	}
+
+	withColorProfile(t, termenv.Ascii)
+	require.Contains(t, render(&truecolor), "\x1b[38;2;",
+		"an explicit truecolor Profile must emit truecolor SGR even when the ambient profile is colorless")
+
+	withColorProfile(t, termenv.TrueColor)
+	require.NotContains(t, render(&asciiP), "\x1b[",
+		"an explicit Ascii Profile must emit no escapes even when the ambient profile is truecolor")
+}
+
+// TestRenderNilProfileDefersToAmbient guards the default: a nil Profile keeps
+// the auto-detect behavior package ui relies on, tracking the ambient profile
+// in both directions.
+func TestRenderNilProfileDefersToAmbient(t *testing.T) {
+	pal := splashTestPalette()
+	pal.A2 = "#0c0b0a" // a private cache entry, distinct from the override test's
+	render := func() string {
+		return Render(60, 20, 3, Options{Palette: pal, Variant: Tunnel, FocalRow: centeredFocalRow(20)})
+	}
+
+	withColorProfile(t, termenv.TrueColor)
+	require.Contains(t, render(), "\x1b[38;2;", "a nil Profile must defer to the ambient truecolor profile")
+
+	withColorProfile(t, termenv.Ascii)
+	require.NotContains(t, render(), "\x1b[", "a nil Profile under a colorless ambient must stay colorless")
 }
 
 // TestFieldContrastIsStillHermite pins the distinction renderField draws

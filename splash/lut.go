@@ -6,12 +6,14 @@ package splash
 // per-cell loops live in field.go; the variant vocabulary in variant.go.
 
 import (
+	"io"
 	"strconv"
 	"strings"
 	"sync"
 
 	"github.com/charmbracelet/lipgloss"
 	colorful "github.com/lucasb-eyer/go-colorful"
+	"github.com/muesli/termenv"
 )
 
 // Palette is the splash field's colour input: four warm→cool gradient anchors
@@ -140,22 +142,22 @@ var (
 	splashLUTCache = map[string]*splashLUT{}
 )
 
-// splashLUTFor returns the memoized gradient for a palette, keyed by every
-// anchor it draws from *and* by the active color profile. Bubble Tea renders on
-// a single goroutine, but the mutex is cheap insurance since both the preview
+// splashLUTFor returns the memoized gradient for a palette at a given color
+// profile, keyed by every anchor it draws from *and* by prof. Bubble Tea renders
+// on a single goroutine, but the mutex is cheap insurance since both the preview
 // and (future) terminal panes render here.
 //
-// The profile belongs in the key because the entry now bakes the styles' SGR
-// bytes at build time (see splashAffix). Style.Render used to re-read the
-// profile on every call, so a palette-only key was enough; a cached entry would
-// track a profile change on its own. It no longer would — it would keep
-// emitting the profile it was built under. Nothing in the binary changes the
-// profile after startup, so this is insurance rather than a live fix, but tests
-// do change it, and a cache that silently pins the colorless path is exactly
-// the trap that hides a regression in the SGR bytes this LUT exists to emit.
-func splashLUTFor(pal Palette) *splashLUT {
+// The profile belongs in the key because the entry bakes the styles' SGR bytes
+// at build time (see splashAffix), under a renderer pinned to prof. Style.Render
+// used to re-read the global profile on every call, so a palette-only key was
+// enough; the frozen affixes emit whichever profile built them, so an entry
+// built for truecolor must not be handed to an Ascii caller. prof is the
+// resolved profile from Render (an explicit Options.Profile, or the ambient
+// default) — this package no longer reads the global itself, so two callers at
+// different depths never collide in the cache.
+func splashLUTFor(pal Palette, prof termenv.Profile) *splashLUT {
 	key := strings.Join([]string{
-		strconv.Itoa(int(lipgloss.ColorProfile())),
+		strconv.Itoa(int(prof)),
 		pal.A0, pal.A1, pal.A2, pal.A3, pal.Highlight,
 	}, "|")
 	splashLUTMu.Lock()
@@ -163,7 +165,7 @@ func splashLUTFor(pal Palette) *splashLUT {
 	if lut, ok := splashLUTCache[key]; ok {
 		return lut
 	}
-	lut := buildSplashLUT(pal)
+	lut := buildSplashLUT(pal, prof)
 	splashLUTCache[key] = lut
 	return lut
 }
@@ -217,23 +219,29 @@ func splashGradientColors(pal Palette) []lipgloss.Color {
 }
 
 // buildSplashLUT builds every table the emitter indexes: the hue gradient, the
-// star white, rain's luminance ramp, and the hue x luminance shade grid.
-func buildSplashLUT(pal Palette) *splashLUT {
+// star white, rain's luminance ramp, and the hue x luminance shade grid. Every
+// style is created from a renderer pinned to prof rather than the global default
+// one, so the affixes bake the SGR bytes for prof and Render stays pure over its
+// inputs (see splashLUTFor). The io.Discard writer is unused — the renderer only
+// formats styles, it never writes.
+func buildSplashLUT(pal Palette, prof termenv.Profile) *splashLUT {
+	r := lipgloss.NewRenderer(io.Discard)
+	r.SetColorProfile(prof)
 	lut := &splashLUT{
 		colors: splashGradientColors(pal),
 		styles: make([]lipgloss.Style, splashLUTSize),
-		star:   lipgloss.NewStyle().Foreground(lipgloss.Color(pal.Highlight)),
+		star:   r.NewStyle().Foreground(lipgloss.Color(pal.Highlight)),
 		affix:  make([]splashAffix, splashLUTSize),
 	}
 	// Split every style's SGR bracket once, so the hot loop can bracket a run with
 	// two WriteStrings instead of calling Style.Render.
 	for i, c := range lut.colors {
-		lut.styles[i] = lipgloss.NewStyle().Foreground(c)
+		lut.styles[i] = r.NewStyle().Foreground(c)
 		lut.affix[i] = splashAffixFor(lut.styles[i])
 	}
 	lut.starAffix = splashAffixFor(lut.star)
-	lut.rain = buildRainRamp(pal)
-	lut.shade = buildShadeGrid(lut.colors, lut.affix)
+	lut.rain = buildRainRamp(pal, r)
+	lut.shade = buildShadeGrid(lut.colors, lut.affix, r)
 	return lut
 }
 
@@ -258,10 +266,10 @@ func buildSplashLUT(pal Palette) *splashLUT {
 // stop that does render is. That one has to stay off true black: terminals with a
 // minimum-contrast feature would rewrite it to something legible and scatter
 // bright specks through the tail — the very artifact this ramp removes.
-func buildRainRamp(pal Palette) []splashAffix {
+func buildRainRamp(pal Palette, r *lipgloss.Renderer) []splashAffix {
 	stops := make([]splashAffix, splashRainStops)
 	for i := range stops {
-		stops[i] = splashAffixFor(lipgloss.NewStyle().Foreground(lipgloss.Color(rainRampHexAt(pal, i))))
+		stops[i] = splashAffixFor(r.NewStyle().Foreground(lipgloss.Color(rainRampHexAt(pal, i))))
 	}
 	return stops
 }

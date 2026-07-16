@@ -62,7 +62,7 @@ func shadeLum(t *testing.T, colors []lipgloss.Color, hue, stop int) float64 {
 // A/B screenshot would carry silently.
 func TestShadeGridTopStopIsTheGradientColour(t *testing.T) {
 	withColorProfile(t, termenv.TrueColor)
-	lut := buildSplashLUT(splashTestPalette())
+	lut := buildLUTAmbient(splashTestPalette())
 	require.Len(t, lut.shade, splashLUTSize*splashLumStops)
 
 	for h := 0; h < splashLUTSize; h++ {
@@ -201,7 +201,7 @@ func newShadeDecoder(t *testing.T, lut *splashLUT) *shadeDecoder {
 // rainStopGrid, which exists for the same reason.
 func shadeStopGrid(t *testing.T, w, h, frame int, pal Palette, v Variant) ([][]int, [][]string) {
 	t.Helper()
-	d := newShadeDecoder(t, buildSplashLUT(pal))
+	d := newShadeDecoder(t, buildLUTAmbient(pal))
 	out := renderSplashField(w, h, frame, pal,
 		centeredFocalRow(h), v)
 
@@ -286,8 +286,8 @@ func TestShadedFieldVariesLuminanceAndHoldsHue(t *testing.T) {
 		"luminance stop 0 is near-black ink on a dark pane: it must render blank, not painted")
 
 	// Hue: every cell lit under both must carry the same hue column.
-	d := newShadeDecoder(t, buildSplashLUT(pal))
-	lutFlat := buildSplashLUT(pal)
+	d := newShadeDecoder(t, buildLUTAmbient(pal))
+	lutFlat := buildLUTAmbient(pal)
 	hueOf := map[string]int{}
 	for i, a := range lutFlat.affix {
 		hueOf[a.prefix] = i
@@ -493,7 +493,7 @@ func TestShadeAffixBracketsMatchRender(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			withColorProfile(t, prof)
 			pal := splashTestPalette()
-			lut := buildSplashLUT(pal)
+			lut := buildLUTAmbient(pal)
 			colors := splashGradientColors(pal)
 			require.Equal(t, lut.rainIndex()+len(lut.rain), lut.shadeIndex(),
 				"the shade grid must start exactly one past rain's last stop")

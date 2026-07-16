@@ -35,6 +35,15 @@ func renderSplashField(w, h, frame int, pal Palette, focalRow int, v Variant) st
 	return Render(w, h, frame, Options{Palette: pal, Variant: v, FocalRow: focalRow, LumRange: testLumRange})
 }
 
+// lutForAmbient / buildLUTAmbient call the profile-parameterized LUT builders
+// under the profile withColorProfile has pinned. The internal LUT tests were
+// written before Options.Profile existed, when the builders read lipgloss's
+// global; these keep them expressing "the ambient test profile" without
+// threading termenv through every call site. Render itself no longer reads the
+// global (see Render / splashLUTFor).
+func lutForAmbient(pal Palette) *splashLUT   { return splashLUTFor(pal, lipgloss.ColorProfile()) }
+func buildLUTAmbient(pal Palette) *splashLUT { return buildSplashLUT(pal, lipgloss.ColorProfile()) }
+
 // withLumRange pins the dev lumRange override for a test or benchmark and
 // restores it after, mirroring withColorProfile. Benchmarks need it too, which
 // is why the override rides a plain var rather than resolving once.
