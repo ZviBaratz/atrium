@@ -29,9 +29,15 @@ const wheelScrollLines = 3
 // down none. Same seam idiom as releaseResolved / actions.CopyToClipboard.
 var cleanupTerminalForInstance = (*ui.TabbedWindow).CleanupTerminalForInstance
 
+// prMergedMsg carries the merged session so the handler can offer to clean it up
+// (#384) — the selection may have moved by the time the async merge lands.
+//
 // prMergedMsg is returned by a confirmed merge action to report success back
 // through the runtime, carrying the merged PR number for the acknowledgment.
-type prMergedMsg struct{ number int }
+type prMergedMsg struct {
+	number   int
+	instance *session.Instance
+}
 
 // pushedMsg is returned by a confirmed push action to acknowledge success. Push
 // used to return nil (no notice at all); this lets its handler flash a "pushed"
@@ -130,7 +136,8 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// re-polls everything, so nothing is lost — but the tick must still re-arm.
 		var cmds []tea.Cmd
 		if msg.attachGen == m.attachGen {
-			if recoveries := recoverLostInstances(msg.results, m.lostStrikes); len(recoveries) > 0 {
+			recoveries := recoverLostInstances(msg.results, m.lostStrikes)
+			if len(recoveries) > 0 {
 				// Every recovery ends the instance Paused (even a failed one), so its
 				// status genuinely changed — persist. Then make the transition visible
 				// rather than a silent Running→Paused (#270).
@@ -140,6 +147,9 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				cmds = append(cmds, m.surfaceLostRecoveries(recoveries))
 			}
 			cmds = append(cmds, m.applyMetadataResults(msg.results, true)...)
+			// Surface the fleet in the OS chrome once per tick; a session death this
+			// tick (a recovery) shows the taskbar error state, cleared next tick.
+			m.applyOSChrome(len(recoveries) > 0)
 		}
 		m.metadataTick++
 		fullSweep := m.metadataTick%metadataFullSweepEvery == 0
@@ -355,11 +365,17 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// A single off-UI-thread resume finished: persist/refresh, or drive recovery.
 		return m, m.handleResumeDone(msg)
 	case prMergedMsg:
-		// A confirmed merge succeeded: acknowledge it and refresh so the PR badge
-		// reflects the now-merged state on the next poll.
+		// A confirmed merge succeeded. Refresh so the PR badge reflects the merged
+		// state on the next poll, then offer to clean up the finished session (#384) —
+		// the offer's message announces the merge, so it replaces the plain notice.
+		// Falls back to the notice when there is no session to clean up.
+		refresh := m.instanceChanged()
+		if m.offerCleanupAfterMerge(msg.instance, msg.number) {
+			return m, refresh
+		}
 		return m, tea.Batch(
 			m.handleInfoNotice(fmt.Sprintf("merged PR #%d", msg.number)),
-			m.instanceChanged(),
+			refresh,
 		)
 	case prCreatedMsg:
 		// A confirmed create succeeded: acknowledge it and refresh so the PR badge
@@ -627,6 +643,10 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		return m.handlePromptState(msg)
 	}
 
+	if m.state == stateHistory {
+		return m.handleHistoryState(msg)
+	}
+
 	if m.state == stateConfirm {
 		return m.handleConfirmState(msg)
 	}
@@ -639,6 +659,10 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 
 	if m.state == stateQueue {
 		return m.handleQueueState(msg)
+	}
+
+	if m.state == stateCmdLog {
+		return m.handleCmdLogState(msg)
 	}
 
 	// Settings, like the other overlay states, must run before the global quit
@@ -697,6 +721,13 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		if m.list.FilterQuery() != "" {
 			m.list.ClearFilter()
 			return m, m.instanceChanged()
+		}
+		// Focus mode hides the list; Esc backs out to the preset that preceded it
+		// so focus is never a dead end (the layout key instead cycles onward). This
+		// is the last Esc branch: it only fires once scroll mode and any filter are
+		// already cleared, matching what a user expects a repeated Esc to unwind.
+		if m.listHidden() {
+			return m, m.exitFocusLayout()
 		}
 	}
 
@@ -768,6 +799,8 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		return m.openQuickSend()
 	case keys.KeyQueue:
 		return m.openQueue()
+	case keys.KeyCmdLog:
+		return m.openCmdLog()
 	case keys.KeyApprove:
 		return m.approveSelected()
 	case keys.KeyCopyBranch:
@@ -801,6 +834,10 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		return m, m.adjustListCols(-listColStep)
 	case keys.KeyGrowList:
 		return m, m.adjustListCols(+listColStep)
+	case keys.KeyLayoutPreset:
+		// One key steps the named layout presets (monitor → default → review →
+		// focus → wrap); the active preset's name flashes on the notice row.
+		return m, m.cycleLayoutPreset()
 	case keys.KeyTab:
 		m.tabbedWindow.Toggle()
 		m.menu.SetActiveTab(m.tabbedWindow.GetActiveTab())
@@ -965,6 +1002,7 @@ func keyAllowedWhileBusy(name keys.KeyName) bool {
 	case keys.KeyHelp,
 		keys.KeyUp, keys.KeyDown, keys.KeyNextUnread, keys.KeyNextNeedsInput,
 		keys.KeyShiftUp, keys.KeyShiftDown, keys.KeyShrinkList, keys.KeyGrowList,
+		keys.KeyLayoutPreset,
 		keys.KeyTab, keys.KeyShiftTab, keys.KeyTabPreview, keys.KeyTabDiff, keys.KeyTabTerminal,
 		keys.KeyCollapse, keys.KeyExpand, keys.KeyCollapseAll:
 		return true

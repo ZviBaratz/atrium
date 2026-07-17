@@ -1,10 +1,12 @@
 package app
 
 import (
+	"strings"
+
+	"github.com/ZviBaratz/atrium/keys"
 	"github.com/ZviBaratz/atrium/ui"
 	"github.com/ZviBaratz/atrium/ui/overlay"
 	"github.com/ZviBaratz/atrium/ui/theme"
-	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -47,6 +49,9 @@ func helpRow(key, desc string) string {
 	return helpKeyStyle().Render(key) + strings.Repeat(" ", pad) + helpDescStyle().Render(desc)
 }
 
+// The cheatsheet is generated from keys.HelpGroups — help is a projection of
+// the keymap registry, never authored beside it (#371). Layout and prose live
+// in that table; only the rendering rules live here.
 func (h helpTypeGeneral) toContent() string {
 	g := theme.Current().Glyphs
 	legend := helpDimStyle().Render(
@@ -55,62 +60,59 @@ func (h helpTypeGeneral) toContent() string {
 			theme.Current().BadgeStyle().Render(" "+g.AutoBadge+"AUTO ") + " auto-accepting",
 	)
 
-	return lipgloss.JoinVertical(lipgloss.Left,
-		helpTitleStyle().Render("Atrium — Keys"),
-		"",
-		helpHeaderStyle().Render("Navigate"),
-		helpRow("↑/k ↓/j", "move selection"),
-		helpRow("u / b", "jump to next unread / blocked"),
-		helpRow("tab / shift-tab", "next / prev pane"),
-		helpRow("1 / 2 / 3", "jump to preview / diff / terminal"),
-		helpRow("shift-↑↓", "scroll the active pane"),
-		helpRow("< / >", "shrink / grow the session list (or drag the divider)"),
-		helpRow("esc", "exit scroll mode / clear filter"),
-		"",
-		helpHeaderStyle().Render("Manage"),
-		helpRow("n", "new session (form, name first)"),
-		helpRow("N", "new session (form, project first)"),
-		helpRow("i", "smart new (describe it; auto-routes to a project)"),
-		helpRow("R", "rename session (label only)"),
-		helpRow("A", "auto-name session (via its agent)"),
-		helpRow("/", "filter sessions"),
-		helpRow("v", "multi-select: space marks, p/r/x act on the marked set"),
-		"",
-		helpHeaderStyle().Render("Handoff"),
-		helpRow("↵/o", "attach to the selected session"),
-		helpRow("ctrl-q", "toggle attach/detach (detach when in, attach from the list)"),
-		helpRow("ctrl-x", "kill the selected/attached session (twice to confirm)"),
-		helpRow("ctrl-pgup/pgdn", "in a session: cycle to prev / next session in the repo group"),
-		helpRow("s", "send a message (without attaching)"),
-		helpRow("Q", "manage queued prompts (list / cancel)"),
-		helpRow("a", "approve the agent's prompt (enter picks its default); on idle claude, accept the suggested prompt"),
-		helpRow("p", "pause: commit changes + free the worktree"),
-		helpRow("ctrl-p", "pause all active sessions in the current view"),
-		helpRow("P", "commit & push branch"),
-		helpRow("c", "create a PR for the pushed branch (gh)"),
-		helpRow("m", "merge the session's PR (squash)"),
-		helpRow("w", "open the session's PR in the browser"),
-		helpRow("r", "resume a paused session"),
-		helpRow("ctrl-r", "resume all paused sessions in the current view"),
-		helpRow("y", "copy branch name to clipboard"),
-		helpRow("f", "copy/open URLs & paths from the preview"),
-		"",
-		helpHeaderStyle().Render("Groups"),
-		helpRow("J / K", "reorder within a repo group"),
-		helpRow("{ / }", "move a whole group up / down"),
-		helpRow("[ / ]", "move an account cluster up / down"),
-		helpRow("← / →", "collapse / expand group"),
-		helpRow("Z", "collapse / expand all"),
-		"",
-		helpHeaderStyle().Render("Other"),
-		helpRow("?", "toggle this cheatsheet"),
-		helpRow(",", "settings"),
-		helpRow("@", "accounts (Claude / GitHub)"),
-		helpRow("ctrl-l", "force a full redraw of the screen"),
-		helpRow("q", "quit"),
-		"",
-		legend,
-	)
+	lines := []string{helpTitleStyle().Render("Atrium — Keys")}
+	for _, group := range keys.HelpGroups {
+		lines = append(lines, "", helpHeaderStyle().Render(group.Title))
+		for _, row := range group.Rows {
+			lines = append(lines, helpRow(rowKeyLabel(row), rowDesc(row)))
+		}
+	}
+	lines = append(lines, "", helpHeaderStyle().Render("Mouse"))
+	for _, row := range mouseHelpRows {
+		lines = append(lines, helpRow(row[0], row[1]))
+	}
+	lines = append(lines, helpDimStyle().Render(
+		"Shift+drag selects text for your terminal's own copy, bypassing capture; "+
+			"turn the mouse off entirely in settings (,)."))
+	lines = append(lines, "", legend)
+	return lipgloss.JoinVertical(lipgloss.Left, lines...)
+}
+
+// mouseHelpRows document the mouse map in the ? overlay. Every mouse action
+// mirrors a key (click zones in ui.Menu + app.handleMouse), so this is a map of
+// what the mouse does, not a set of mouse-only powers. The Shift bypass and the
+// off-switch are called out below the table.
+var mouseHelpRows = [][2]string{
+	{"click", "select a row · fold a repo header · switch tab · run a hint-bar key"},
+	{"double-click", "attach to a session row (like ↵)"},
+	{"wheel", "move the selection over the list · scroll the active pane"},
+	{"drag", "the list/preview divider to resize the split"},
+}
+
+// rowKeyLabel derives a row's key column from its bindings' Help().Key labels
+// — never free text, so the column cannot document a key the registry lacks.
+func rowKeyLabel(row keys.HelpRow) string {
+	sep := " / "
+	if row.Compact {
+		sep = " "
+	}
+	labels := make([]string, len(row.Keys))
+	for i, k := range row.Keys {
+		labels[i] = keys.GlobalKeyBindings[k].Help().Key
+	}
+	return strings.Join(labels, sep)
+}
+
+// rowDesc prefixes rows whose keys live in the attach layer, so generated help
+// documents them truthfully by construction — the table's prose deliberately
+// omits the prefix (see keys.HelpRow).
+func rowDesc(row keys.HelpRow) string {
+	for _, k := range row.Keys {
+		if keys.LayerOf(k) != keys.LayerAttached {
+			return row.Desc
+		}
+	}
+	return "in a session: " + row.Desc
 }
 
 func (h helpTypeGeneral) hint() string { return "press any key to close" }

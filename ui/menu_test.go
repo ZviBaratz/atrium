@@ -1,13 +1,33 @@
 package ui
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/ZviBaratz/atrium/session"
 	"github.com/ZviBaratz/atrium/session/git"
 	"github.com/charmbracelet/lipgloss"
+	xansi "github.com/charmbracelet/x/ansi"
 	"github.com/stretchr/testify/require"
 )
+
+// The three mode bars teach modal gesture vocabularies. Exact-text pins: the
+// bars render from the registry's mode hint tables through the same path as
+// renderHintLine, and these froze the text across that refactor — any change
+// to the words or separators is a deliberate UX decision, not a side effect.
+func TestMenu_ModeBarsExactText(t *testing.T) {
+	for state, want := range map[MenuState]string{
+		StateFilter: "enter accept · esc clear · filter: status: dirty behind pr: account: note:",
+		StateHints:  "a–z copy · A–Z copy + open · esc cancel",
+		StateVisual: "space mark · p/r/x pause/resume/kill marked · esc exit",
+	} {
+		m := NewMenu()
+		m.SetSize(200, 3)
+		m.SetState(state)
+		got := strings.TrimSpace(xansi.Strip(m.String()))
+		require.Equal(t, want, got, "state %v bar text", state)
+	}
+}
 
 // The default bar is a short, fixed line of high-value keys — a reminder that
 // keys exist (with ? as the door to the full list), not a reference card.

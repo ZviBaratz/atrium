@@ -1,19 +1,17 @@
-// Package keys defines the logical key actions of the TUI and the global maps
-// that translate terminal key strings into those actions and into displayable
-// help bindings.
+// Package keys defines the logical key actions of the TUI and the single
+// registry (Registry, registry.go) from which the dispatch and help maps are
+// derived. Help is a projection of the registry, never authored beside it.
 package keys
 
-import (
-	"github.com/charmbracelet/bubbles/key"
-)
-
 // KeyName identifies a logical key action in the TUI. The home model switches
-// on KeyName rather than raw key strings, so a rebind only touches the maps in
-// this package.
+// on KeyName rather than raw key strings, so a rebind only touches the
+// registry in this package. A few names are documented-only (no dispatch):
+// they exist so generated help can reference every key it documents.
 type KeyName int
 
-// The logical key actions. Their bindings live in GlobalKeyStringsMap (string
-// → action) and GlobalKeyBindings (action → help entry).
+// The logical key actions. Their key strings and help entries live in
+// Registry (registry.go); GlobalKeyStringsMap (string → action) and
+// GlobalKeyBindings (action → help entry) are derived from it.
 const (
 	KeyUp KeyName = iota
 	KeyDown
@@ -75,6 +73,8 @@ const (
 
 	KeyQueue // Open the pending-prompt management overlay for the selected session
 
+	KeyCmdLog // Open the command-log overlay (tmux/git/gh subprocesses Atrium ran)
+
 	KeyAutoName // Auto-generate a display name for the selected session via claude
 
 	KeyFilter // Enter incremental filter mode to narrow the session list
@@ -123,279 +123,38 @@ const (
 	// mode. It is consumed only by the mode handler, never the default state.
 	KeyToggleMark
 
+	// KeyLayoutPreset cycles the named layout presets (monitor / default / review
+	// / focus; see app.layoutPresets) on a single key. Each preset sets the
+	// list/preview split (or hides the list entirely, in focus), the active
+	// preset persists across relaunch, and < / > still fine-tune the split as a
+	// custom override that never fights this cycle.
+	KeyLayoutPreset
+
 	// KeyScreensaver shows the configured splash pattern full-window until any
-	// key (or click) dismisses it. A deliberate easter egg: it has no
-	// GlobalKeyBindings entry, so it never appears in the help cheatsheet or
-	// the hint bar (the coverage guard only walks that map).
+	// key (or click) dismisses it. A deliberate easter egg: it has no Registry
+	// entry (and therefore no GlobalKeyBindings entry), so it never appears in
+	// the help cheatsheet or the hint bar (the coverage guard only walks that
+	// map). Its dispatch line is appended by hand in registry.go.
 	KeyScreensaver
+
+	// The names below are documented-only: their Registry entries carry
+	// DocOnly, so they never enter GlobalKeyStringsMap. They exist so the
+	// cheatsheet can reference the keys it documents.
+
+	// KeySessionCycle is ctrl+pgup/pgdn — cycle to the prev/next session in
+	// the repo group. Honored only while attached, by the attach layer's
+	// escape-sequence scanner (session/tmux/detach.go); the TUI never sees it.
+	KeySessionCycle
+	// KeyEscape is esc's contextual role on the list: exit scroll mode /
+	// clear the committed filter. Handled before dispatch (app/app_update.go),
+	// like ctrl+l below — routing either through the dispatch map would put
+	// it behind the busy-gate.
+	KeyEscape
+	// KeyRedraw is ctrl+l, the universal manual-repaint escape hatch.
+	KeyRedraw
 )
 
 // KillKey is the chord that triggers a kill from the session list. It mirrors the
 // in-session kill byte (ctrlX, session/tmux/tmux.go) so the same key tears a session
 // down whether you're on the list or attached to it.
 const KillKey = "ctrl+x"
-
-// GlobalKeyStringsMap is a global, immutable map string to keybinding.
-var GlobalKeyStringsMap = map[string]KeyName{
-	"up":         KeyUp,
-	"k":          KeyUp,
-	"down":       KeyDown,
-	"j":          KeyDown,
-	"shift+up":   KeyShiftUp,
-	"shift+down": KeyShiftDown,
-	"u":          KeyNextUnread,
-	"b":          KeyNextNeedsInput,
-	"J":          KeyMoveDown,
-	"K":          KeyMoveUp,
-	"{":          KeyMoveGroupUp,
-	"}":          KeyMoveGroupDown,
-	"[":          KeyMoveAccountUp,
-	"]":          KeyMoveAccountDown,
-	"left":       KeyCollapse,
-	"right":      KeyExpand,
-	"Z":          KeyCollapseAll,
-	"N":          KeyPrompt,
-	"enter":      KeyEnter,
-	"o":          KeyEnter,
-	"n":          KeyNew,
-	"i":          KeySmartDispatch,
-	KillKey:      KeyKill,
-	"R":          KeyRename,
-	"A":          KeyAutoName,
-	"s":          KeyQuickSend,
-	"Q":          KeyQueue,
-	"y":          KeyCopyBranch,
-	"q":          KeyQuit,
-	"tab":        KeyTab,
-	"shift+tab":  KeyShiftTab,
-	"p":          KeyPause,
-	"ctrl+p":     KeyPauseAll,
-	"r":          KeyResume,
-	"ctrl+r":     KeyResumeAll,
-	"P":          KeySubmit,
-	"c":          KeyCreate,
-	"m":          KeyMerge,
-	"w":          KeyOpenPR,
-	"?":          KeyHelp,
-	"/":          KeyFilter,
-	"<":          KeyShrinkList,
-	">":          KeyGrowList,
-	"1":          KeyTabPreview,
-	"2":          KeyTabDiff,
-	"3":          KeyTabTerminal,
-	",":          KeySettings,
-	"@":          KeyAccounts,
-	"ctrl+q":     KeyAttachToggle,
-	"f":          KeyHints,
-	"a":          KeyApprove,
-	"v":          KeyMultiSelect,
-	" ":          KeyToggleMark,
-	"`":          KeyScreensaver,
-}
-
-// GlobalKeyBindings is a global, immutable map of KeyName to keybinding.
-var GlobalKeyBindings = map[KeyName]key.Binding{
-	KeyUp: key.NewBinding(
-		key.WithKeys("up", "k"),
-		key.WithHelp("↑/k", "up"),
-	),
-	KeyDown: key.NewBinding(
-		key.WithKeys("down", "j"),
-		key.WithHelp("↓/j", "down"),
-	),
-	KeyShiftUp: key.NewBinding(
-		key.WithKeys("shift+up"),
-		key.WithHelp("shift+↑", "scroll"),
-	),
-	KeyShiftDown: key.NewBinding(
-		key.WithKeys("shift+down"),
-		key.WithHelp("shift+↓", "scroll"),
-	),
-	KeyNextUnread: key.NewBinding(
-		key.WithKeys("u"),
-		key.WithHelp("u", "next unread"),
-	),
-	KeyNextNeedsInput: key.NewBinding(
-		key.WithKeys("b"),
-		key.WithHelp("b", "next blocked"),
-	),
-	KeyEnter: key.NewBinding(
-		key.WithKeys("enter", "o"),
-		key.WithHelp("↵/o", "open"),
-	),
-	KeyNew: key.NewBinding(
-		key.WithKeys("n"),
-		key.WithHelp("n", "new"),
-	),
-	KeySmartDispatch: key.NewBinding(
-		key.WithKeys("i"),
-		key.WithHelp("i", "smart new"),
-	),
-	KeyKill: key.NewBinding(
-		key.WithKeys(KillKey),
-		key.WithHelp("ctrl-x", "kill"),
-	),
-	KeyRename: key.NewBinding(
-		key.WithKeys("R"),
-		key.WithHelp("R", "rename"),
-	),
-	KeyAutoName: key.NewBinding(
-		key.WithKeys("A"),
-		key.WithHelp("A", "auto-name"),
-	),
-	KeyQuickSend: key.NewBinding(
-		key.WithKeys("s"),
-		key.WithHelp("s", "send"),
-	),
-	KeyQueue: key.NewBinding(
-		key.WithKeys("Q"),
-		key.WithHelp("Q", "manage queued prompts"),
-	),
-	KeyHelp: key.NewBinding(
-		key.WithKeys("?"),
-		key.WithHelp("?", "help"),
-	),
-	KeyQuit: key.NewBinding(
-		key.WithKeys("q"),
-		key.WithHelp("q", "quit"),
-	),
-	KeySubmit: key.NewBinding(
-		key.WithKeys("P"),
-		key.WithHelp("P", "push branch"),
-	),
-	KeyCreate: key.NewBinding(
-		key.WithKeys("c"),
-		key.WithHelp("c", "create PR"),
-	),
-	KeyMerge: key.NewBinding(
-		key.WithKeys("m"),
-		key.WithHelp("m", "merge PR"),
-	),
-	KeyOpenPR: key.NewBinding(
-		key.WithKeys("w"),
-		key.WithHelp("w", "open PR"),
-	),
-	KeyPrompt: key.NewBinding(
-		key.WithKeys("N"),
-		key.WithHelp("N", "new (pick project)"),
-	),
-	KeyPause: key.NewBinding(
-		key.WithKeys("p"),
-		key.WithHelp("p", "pause"),
-	),
-	KeyPauseAll: key.NewBinding(
-		key.WithKeys("ctrl+p"),
-		key.WithHelp("ctrl+p", "pause all"),
-	),
-	KeyTab: key.NewBinding(
-		key.WithKeys("tab"),
-		key.WithHelp("tab", "switch tab"),
-	),
-	KeyShiftTab: key.NewBinding(
-		key.WithKeys("shift+tab"),
-		key.WithHelp("shift+tab", "prev tab"),
-	),
-	KeyResume: key.NewBinding(
-		key.WithKeys("r"),
-		key.WithHelp("r", "resume"),
-	),
-	KeyResumeAll: key.NewBinding(
-		key.WithKeys("ctrl+r"),
-		key.WithHelp("ctrl+r", "resume all"),
-	),
-	KeyMultiSelect: key.NewBinding(
-		key.WithKeys("v"),
-		key.WithHelp("v", "multi-select"),
-	),
-	KeyToggleMark: key.NewBinding(
-		key.WithKeys(" "),
-		key.WithHelp("space", "mark/unmark"),
-	),
-
-	KeyMoveUp: key.NewBinding(
-		key.WithKeys("K"),
-		key.WithHelp("K", "move up"),
-	),
-	KeyMoveDown: key.NewBinding(
-		key.WithKeys("J"),
-		key.WithHelp("J", "move down"),
-	),
-
-	KeyMoveGroupUp: key.NewBinding(
-		key.WithKeys("{"),
-		key.WithHelp("{", "move group up"),
-	),
-	KeyMoveGroupDown: key.NewBinding(
-		key.WithKeys("}"),
-		key.WithHelp("}", "move group down"),
-	),
-
-	KeyMoveAccountUp: key.NewBinding(
-		key.WithKeys("["),
-		key.WithHelp("[", "move account up"),
-	),
-	KeyMoveAccountDown: key.NewBinding(
-		key.WithKeys("]"),
-		key.WithHelp("]", "move account down"),
-	),
-	KeyCollapse: key.NewBinding(
-		key.WithKeys("left"),
-		key.WithHelp("←", "collapse group"),
-	),
-	KeyExpand: key.NewBinding(
-		key.WithKeys("right"),
-		key.WithHelp("→", "expand group"),
-	),
-	KeyCollapseAll: key.NewBinding(
-		key.WithKeys("Z"),
-		key.WithHelp("Z", "collapse/expand all"),
-	),
-	KeyFilter: key.NewBinding(
-		key.WithKeys("/"),
-		key.WithHelp("/", "filter sessions"),
-	),
-	KeyCopyBranch: key.NewBinding(
-		key.WithKeys("y"),
-		key.WithHelp("y", "copy branch name"),
-	),
-	KeyShrinkList: key.NewBinding(
-		key.WithKeys("<"),
-		key.WithHelp("<", "shrink list"),
-	),
-	KeyGrowList: key.NewBinding(
-		key.WithKeys(">"),
-		key.WithHelp(">", "grow list"),
-	),
-	KeyTabPreview: key.NewBinding(
-		key.WithKeys("1"),
-		key.WithHelp("1", "preview tab"),
-	),
-	KeyTabDiff: key.NewBinding(
-		key.WithKeys("2"),
-		key.WithHelp("2", "diff tab"),
-	),
-	KeyTabTerminal: key.NewBinding(
-		key.WithKeys("3"),
-		key.WithHelp("3", "terminal tab"),
-	),
-	KeySettings: key.NewBinding(
-		key.WithKeys(","),
-		key.WithHelp(",", "settings"),
-	),
-	KeyAccounts: key.NewBinding(
-		key.WithKeys("@"),
-		key.WithHelp("@", "accounts"),
-	),
-	KeyAttachToggle: key.NewBinding(
-		key.WithKeys("ctrl+q"),
-		key.WithHelp("ctrl-q", "attach/detach"),
-	),
-	KeyHints: key.NewBinding(
-		key.WithKeys("f"),
-		key.WithHelp("f", "copy/open from screen"),
-	),
-	KeyApprove: key.NewBinding(
-		key.WithKeys("a"),
-		key.WithHelp("a", "approve"),
-	),
-}

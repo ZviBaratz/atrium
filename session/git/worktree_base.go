@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"os/exec"
 	"strings"
+	"time"
 
 	"github.com/ZviBaratz/atrium/log"
 )
@@ -34,7 +35,11 @@ func (g *Worktree) updateBaseRef() {
 
 	ctx, cancel := context.WithTimeout(g.baseContext(), baseFetchTimeout)
 	defer cancel()
-	if err := exec.CommandContext(ctx, "git", "-C", g.repoPath, "fetch", "origin", name).Run(); err != nil {
+	cmd := exec.CommandContext(ctx, "git", "-C", g.repoPath, "fetch", "origin", name)
+	start := time.Now()
+	err := cmd.Run()
+	recordCmd(cmd, g.sessionName, start, nil, err)
+	if err != nil {
 		// Info, not warning: this is a best-effort freshen that always falls back to
 		// the local base, and the common cause is benign — a local-only base branch
 		// that was never pushed (routine in a stacked-branch workflow), not just an
