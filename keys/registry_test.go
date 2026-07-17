@@ -115,6 +115,12 @@ func TestRegistry_OmitsScreensaver(t *testing.T) {
 			t.Fatal("KeyScreensaver must not appear in Registry — the easter egg's " +
 				"exclusion from help is structural, not a flag")
 		}
+		for _, s := range e.Binding.Keys() {
+			if s == "`" {
+				t.Errorf("Registry entry %v claims the screensaver key '`'; "+
+					"the hand-append in GlobalKeyStringsMap would silently overwrite it", e.Name)
+			}
+		}
 	}
 	if _, ok := GlobalKeyBindings[KeyScreensaver]; ok {
 		t.Error("KeyScreensaver must have no GlobalKeyBindings entry")
