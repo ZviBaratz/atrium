@@ -455,6 +455,7 @@ added without a row here.
 | `nerd_font` | bool | `false` | draw markers with patched-Nerd-Font vendor icons |
 | `session_context_bar` | bool | `true` | thin tmux status line inside attached sessions |
 | `hint_bar` | bool | `true` | always-on bottom key-hint bar |
+| `os_chrome` | bool | `true` | fleet state in the terminal title + OSC 9;4 taskbar progress |
 | `max_sessions` | int | unlimited | opt-in cap on concurrent sessions |
 | `trust_worktrees_root` | bool | `false` | pre-accept Claude's workspace-trust for the worktrees root |
 | `carry_files` | array | `[".claude/settings.local.json"]` | gitignored files copied into each worktree ([Carried files](#carried-files)) |
