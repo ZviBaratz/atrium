@@ -209,11 +209,6 @@ func (m *home) applySettingChange(key string) tea.Cmd {
 			m.list.SetGroupMode(m.appConfig.GetGroupMode())
 		}
 	case "hint_bar":
-		// Mirror the newHome seeding: the list shows its inline key hint only
-		// when the always-on bar is off.
-		if m.list != nil {
-			m.list.SetShowEmptyHint(!m.appConfig.GetHintBar())
-		}
 		m.recomputeLayout() // the bar claims or releases its row
 	case "session_context_bar", "tmux_config_override":
 		// Re-render the managed tmux conf so sessions started from now on pick
