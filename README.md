@@ -124,6 +124,7 @@ in-app keymap and this section ever drift apart, so it stays complete.
 | `1` / `2` / `3` | jump to preview / diff / terminal |
 | `shift-↑` `shift-↓` | scroll the active pane |
 | `<` / `>` | shrink / grow the session list (or drag the divider) |
+| `\` | cycle layout presets (monitor / default / review / focus) |
 | `esc` | exit scroll mode / clear filter |
 
 ##### Manage
