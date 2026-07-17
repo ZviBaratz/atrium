@@ -80,15 +80,19 @@ func DefaultConfig() *Config {
 	killDoubleTap := true
 	sessionContextBar := true
 	hintBar := true
+	osChrome := true
 	showReleaseNotes := true
 	updateBaseOnCreate := true
+	recordPromptHistory := true
 	return &Config{
-		DefaultProgram:     defaultProgram,
-		AutoYes:            false,
-		DaemonPollInterval: DefaultDaemonPollIntervalMs,
-		Theme:              "tokyo-night",
-		SessionContextBar:  &sessionContextBar,
-		HintBar:            &hintBar,
+		DefaultProgram:      defaultProgram,
+		AutoYes:             false,
+		DaemonPollInterval:  DefaultDaemonPollIntervalMs,
+		Theme:               "tokyo-night",
+		SessionContextBar:   &sessionContextBar,
+		HintBar:             &hintBar,
+		RecordPromptHistory: &recordPromptHistory,
+		OSChrome:            &osChrome,
 		BranchPrefix: func() string {
 			user, err := user.Current()
 			if err != nil || user == nil || user.Username == "" {

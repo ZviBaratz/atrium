@@ -1079,6 +1079,9 @@ func (m *home) createSessionFromForm(prompt string) tea.Cmd {
 		ov.Submitted = false
 		return m.handleError(err)
 	}
+	// The boot prompt is now committed to a real session — record it for reuse
+	// (a no-op for an empty prompt or when recording is disabled).
+	m.recordPrompt(prompt)
 
 	m.textInputOverlay = nil
 	m.stashedDraft = nil

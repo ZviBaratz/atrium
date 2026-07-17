@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 )
 
 // ghConfigDirKey is the context key carrying a per-worktree GH_CONFIG_DIR to the
@@ -83,7 +84,10 @@ var checkGHCLI = func(ctx context.Context) error {
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "gh", "auth", "status")
 	cmd.Env = ghEnv(ctx) // validate the account the PR call will actually use
-	if err := cmd.Run(); err != nil {
+	start := time.Now()
+	err := cmd.Run()
+	recordCmd(cmd, "", start, nil, err)
+	if err != nil {
 		return fmt.Errorf("GitHub CLI is not configured. Please run 'gh auth login' first")
 	}
 
@@ -100,7 +104,10 @@ var checkGHCLI = func(ctx context.Context) error {
 func localGit(ctx context.Context, dir string, args ...string) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, gitLocalTimeout)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, "git", append([]string{"-C", dir}, args...)...).Output()
+	cmd := exec.CommandContext(ctx, "git", append([]string{"-C", dir}, args...)...)
+	start := time.Now()
+	out, err := cmd.Output()
+	recordCmd(cmd, "", start, nil, err)
 	return strings.TrimSpace(string(out)), err
 }
 

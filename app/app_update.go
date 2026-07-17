@@ -136,7 +136,8 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// re-polls everything, so nothing is lost — but the tick must still re-arm.
 		var cmds []tea.Cmd
 		if msg.attachGen == m.attachGen {
-			if recoveries := recoverLostInstances(msg.results, m.lostStrikes); len(recoveries) > 0 {
+			recoveries := recoverLostInstances(msg.results, m.lostStrikes)
+			if len(recoveries) > 0 {
 				// Every recovery ends the instance Paused (even a failed one), so its
 				// status genuinely changed — persist. Then make the transition visible
 				// rather than a silent Running→Paused (#270).
@@ -146,6 +147,9 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				cmds = append(cmds, m.surfaceLostRecoveries(recoveries))
 			}
 			cmds = append(cmds, m.applyMetadataResults(msg.results, true)...)
+			// Surface the fleet in the OS chrome once per tick; a session death this
+			// tick (a recovery) shows the taskbar error state, cleared next tick.
+			m.applyOSChrome(len(recoveries) > 0)
 		}
 		m.metadataTick++
 		fullSweep := m.metadataTick%metadataFullSweepEvery == 0
@@ -639,6 +643,10 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		return m.handlePromptState(msg)
 	}
 
+	if m.state == stateHistory {
+		return m.handleHistoryState(msg)
+	}
+
 	if m.state == stateConfirm {
 		return m.handleConfirmState(msg)
 	}
@@ -651,6 +659,10 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 
 	if m.state == stateQueue {
 		return m.handleQueueState(msg)
+	}
+
+	if m.state == stateCmdLog {
+		return m.handleCmdLogState(msg)
 	}
 
 	// Settings, like the other overlay states, must run before the global quit
@@ -780,6 +792,8 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		return m.openQuickSend()
 	case keys.KeyQueue:
 		return m.openQueue()
+	case keys.KeyCmdLog:
+		return m.openCmdLog()
 	case keys.KeyApprove:
 		return m.approveSelected()
 	case keys.KeyCopyBranch:

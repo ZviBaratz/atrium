@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // MaxBranchSearchResults is the maximum number of branches returned by SearchBranches.
@@ -19,7 +20,9 @@ func FetchBranches(ctx context.Context, repoPath string) {
 	ctx, cancel := context.WithTimeout(ctx, gitNetworkTimeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "git", "-C", repoPath, "fetch", "--prune")
-	_ = cmd.Run()
+	start := time.Now()
+	err := cmd.Run()
+	recordCmd(cmd, "", start, nil, err)
 }
 
 // SearchBranches searches for branches whose name contains filter (case-insensitive),
@@ -31,7 +34,9 @@ func SearchBranches(ctx context.Context, repoPath, filter string) ([]string, err
 	cmd := exec.CommandContext(ctx, "git", "-C", repoPath, "branch", "-a",
 		"--sort=-committerdate",
 		"--format=%(refname:short)")
+	start := time.Now()
 	output, err := cmd.CombinedOutput()
+	recordCmd(cmd, "", start, output, err)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list branches: %s (%w)", output, err)
 	}
@@ -71,7 +76,9 @@ func (g *Worktree) runGitCommand(path string, args ...string) (string, error) {
 	baseArgs := []string{"-C", path}
 	cmd := exec.CommandContext(ctx, "git", append(baseArgs, args...)...)
 
+	start := time.Now()
 	output, err := cmd.CombinedOutput()
+	recordCmd(cmd, g.sessionName, start, output, err)
 	if err != nil {
 		return "", fmt.Errorf("git command failed: %s (%w)", output, err)
 	}
@@ -123,7 +130,10 @@ func (g *Worktree) commitLocalChanges(commitMessage string) error {
 // CombinedOutput so git's "Updates were rejected…" text stays legible when a
 // divergent branch is (correctly) refused; the caller owns the context's timeout.
 var runGitPush = func(ctx context.Context, dir, branch string) error {
-	out, err := exec.CommandContext(ctx, "git", "-C", dir, "push", "-u", "origin", branch).CombinedOutput()
+	cmd := exec.CommandContext(ctx, "git", "-C", dir, "push", "-u", "origin", branch)
+	start := time.Now()
+	out, err := cmd.CombinedOutput()
+	recordCmd(cmd, branch, start, out, err)
 	if err != nil {
 		return fmt.Errorf("failed to push branch %s: %s (%w)", branch, out, err)
 	}
@@ -335,7 +345,10 @@ var runGHBrowse = func(ctx context.Context, dir, branch string) error {
 	cmd := exec.CommandContext(ctx, "gh", "browse", "--branch", branch)
 	cmd.Dir = dir
 	cmd.Env = ghEnv(ctx) // select the gh account from ctx (nil = inherit), see ghContext
-	return cmd.Run()
+	start := time.Now()
+	err := cmd.Run()
+	recordCmd(cmd, branch, start, nil, err)
+	return err
 }
 
 // OpenBranchURL opens the branch URL in the default browser
