@@ -40,6 +40,20 @@ func TestFilter_SubstringTermsAreANDed(t *testing.T) {
 	require.False(t, ParseFilter("fix gone").Matches(inst), "one word missing fails the AND")
 }
 
+// Free-text terms match as a case-insensitive fuzzy SUBSEQUENCE (issue #373), not
+// just a substring, so an abbreviation finds a longer name. Negatives that lack the
+// runes in order still fail — the swap only widens matching, it does not match all.
+// (This is the mutation guard for the substring→subsequence swap: reverting to
+// strings.Contains flips the two fuzzy-positive assertions to false.)
+func TestFilter_FreeTextIsFuzzy(t *testing.T) {
+	inst := newFilterInstance(t, "Refactor Parser", "zvi/refactor-parser")
+
+	require.True(t, ParseFilter("rfp").Matches(inst), "abbreviation subsequence r-f-p matches 'Refactor Parser'")
+	require.True(t, ParseFilter("refpar").Matches(inst), "gapped subsequence matches")
+	require.False(t, ParseFilter("deploy").Matches(inst), "no d-e-p-l-o-y-in-order still fails")
+	require.False(t, ParseFilter("zzz").Matches(inst), "no subsequence fails")
+}
+
 func TestFilter_Status(t *testing.T) {
 	ready := newFilterInstance(t, "r", "b")
 	ready.SetStatus(Ready)

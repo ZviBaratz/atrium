@@ -23,10 +23,27 @@ type WelcomeOverlay struct {
 	width     int
 }
 
+// welcomeIntro is the one-paragraph pitch shown under the title. It is authored
+// as a single flowing sentence and wrapped by the renderer to the modal's
+// content width: hard newlines baked into a fixed-width string get re-wrapped a
+// second time by lipgloss inside the narrower padded box, and the two wraps
+// fight — that is what produced the mid-phrase breaks reported in #381.
+const welcomeIntro = "Run multiple coding agents in parallel — each in its own git worktree and tmux session, managed from one place."
+
 // NewWelcomeOverlay creates the overlay in its "detecting" state; the caller
 // fills it in with SetDetected once agent detection resolves.
 func NewWelcomeOverlay() *WelcomeOverlay {
 	return &WelcomeOverlay{detecting: true, width: 54}
+}
+
+// contentWidth is the usable text width inside the modal's border and horizontal
+// padding (Padding(1, 2) eats two columns per side). The intro paragraph and the
+// picker are both sized to it so nothing spills past the box.
+func (w *WelcomeOverlay) contentWidth() int {
+	if cw := w.width - 4; cw > 0 {
+		return cw
+	}
+	return 1
 }
 
 // SetDetected leaves the detecting state and installs a picker over the detected
@@ -37,7 +54,7 @@ func (w *WelcomeOverlay) SetDetected(detected []config.Profile) {
 	if len(detected) > 0 {
 		w.picker = NewProfilePicker(detected)
 		w.picker.Focus()
-		w.picker.SetWidth(w.width - 4)
+		w.picker.SetWidth(w.contentWidth())
 	}
 }
 
@@ -45,7 +62,7 @@ func (w *WelcomeOverlay) SetDetected(detected []config.Profile) {
 func (w *WelcomeOverlay) SetWidth(width int) {
 	w.width = width
 	if w.picker != nil {
-		w.picker.SetWidth(width - 4)
+		w.picker.SetWidth(w.contentWidth())
 	}
 }
 
@@ -91,8 +108,8 @@ func (w *WelcomeOverlay) Render() string {
 	var b strings.Builder
 	b.WriteString(theme.Current().OverlayTitleStyle().Render("Welcome to Atrium"))
 	b.WriteString("\n\n")
-	b.WriteString("Run multiple coding agents in parallel — each in its own\n")
-	b.WriteString("git worktree and tmux session, managed from one place.\n\n")
+	b.WriteString(lipgloss.NewStyle().Width(w.contentWidth()).Render(welcomeIntro))
+	b.WriteString("\n\n")
 
 	var hint string
 	switch {
@@ -107,7 +124,11 @@ func (w *WelcomeOverlay) Render() string {
 		b.WriteString("Choose your default agent:\n\n")
 		b.WriteString(w.picker.Render())
 		b.WriteString("\n\n")
-		b.WriteString(overlayDimStyle().Render(fmt.Sprintf("✓ %d agent(s) detected on your PATH", len(w.detected))))
+		noun := "agents"
+		if len(w.detected) == 1 {
+			noun = "agent"
+		}
+		b.WriteString(overlayDimStyle().Render(fmt.Sprintf("✓ %d %s detected on your PATH", len(w.detected), noun)))
 		hint = "↑/↓ choose · enter confirm · esc skip"
 	}
 

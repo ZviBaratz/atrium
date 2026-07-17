@@ -205,6 +205,25 @@ func (c *Config) GetMouse() bool {
 	return boolOr(c.Mouse, true)
 }
 
+// GetRecordPromptHistory reports whether submitted prompts are recorded for
+// reuse. A nil field (an older config file) — or a nil Config — defaults to on.
+func (c *Config) GetRecordPromptHistory() bool {
+	if c == nil {
+		return true
+	}
+	return boolOr(c.RecordPromptHistory, true)
+}
+
+// GetOSChrome reports whether fleet state is surfaced in the terminal's OS chrome
+// (window title + OSC 9;4 taskbar progress). A nil OSChrome — or a nil Config —
+// defaults to on.
+func (c *Config) GetOSChrome() bool {
+	if c == nil {
+		return true
+	}
+	return boolOr(c.OSChrome, true)
+}
+
 // GetAutoAttach reports whether new sessions should auto-attach on creation.
 // A nil AutoAttach (e.g. an older config file with no such key) — or a nil
 // Config — defaults to on.

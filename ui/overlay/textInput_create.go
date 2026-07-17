@@ -140,6 +140,14 @@ func (t *TextInputOverlay) FocusMode() {
 	t.focusStop(stopEnter)
 }
 
+// PromptFocusedAndEmpty reports whether the prompt textarea currently holds focus
+// and is empty. It gates the up-arrow prompt-history trigger (#388): up on an
+// empty prompt has nothing to move to, so it is free to open the history picker,
+// in both the create form and the single-field quick-send overlay.
+func (t *TextInputOverlay) PromptFocusedAndEmpty() bool {
+	return t.isTextarea() && strings.TrimSpace(t.textarea.Value()) == ""
+}
+
 // SetPrompt sets the prompt textarea's contents (used to pre-fill the create form).
 func (t *TextInputOverlay) SetPrompt(s string) {
 	t.textarea.SetValue(s)

@@ -256,7 +256,10 @@ func runGH(ctx context.Context, dir, opName string, argv ...string) ([]byte, err
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
+	start := time.Now()
+	err := cmd.Run()
+	recordCmd(cmd, "", start, stderr.Bytes(), err)
+	if err != nil {
 		return stdout.Bytes(), fmt.Errorf("%s: %s: %w", opName, strings.TrimSpace(stderr.String()), err)
 	}
 	return stdout.Bytes(), nil

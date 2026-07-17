@@ -6,6 +6,7 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -73,6 +74,24 @@ type AppState interface {
 	// ClearDraft drops any stashed new-session draft. A no-op (no write) when none
 	// is stashed.
 	ClearDraft() error
+	// GetPromptHistory returns recently-submitted prompts, most-recent-first.
+	GetPromptHistory() []PromptHistoryEntry
+	// AddPromptHistory records a submitted prompt at the front of the history,
+	// deduplicating a consecutive repeat and capping the list; persists once.
+	AddPromptHistory(text string) error
+	// ClearPromptHistory empties the prompt history. A no-op (no write) when empty.
+	ClearPromptHistory() error
+}
+
+// maxPromptHistory caps how many recently-submitted prompts are retained for
+// reuse. Prompts are cheap to store; the cap just keeps state.json bounded.
+const maxPromptHistory = 50
+
+// PromptHistoryEntry is one persisted, reusable prompt: the submitted text plus
+// when it was sent (unix seconds, so omitempty works and old files read cleanly).
+type PromptHistoryEntry struct {
+	Text   string `json:"text"`
+	AtUnix int64  `json:"at_unix,omitempty"`
 }
 
 // maxRecentPaths caps how many recently-used project directories are retained.
@@ -161,6 +180,10 @@ type State struct {
 	// (an older state file, or no stash) means there is nothing to restore. It mirrors
 	// the in-memory home.stashedDraft and is cleared on submit / restore / clear-form.
 	Draft *SessionDraft `json:"draft,omitempty"`
+	// PromptHistory is the most-recent-first ring of submitted prompts, capped at
+	// maxPromptHistory, offered for reuse in the create form and quick-send. Absent
+	// (an older state file) reads back as no history.
+	PromptHistory []PromptHistoryEntry `json:"prompt_history,omitempty"`
 }
 
 // SessionDraft is the persisted, serializable projection of a stashed new-session
@@ -401,5 +424,39 @@ func (s *State) ClearDraft() error {
 		return nil
 	}
 	s.Draft = nil
+	return SaveState(s)
+}
+
+// GetPromptHistory returns the reusable prompt history, most-recent-first.
+func (s *State) GetPromptHistory() []PromptHistoryEntry {
+	return s.PromptHistory
+}
+
+// AddPromptHistory records a submitted prompt at the front of the history. It
+// skips a blank prompt and a *consecutive* repeat of the current head (so
+// re-sending the same thing twice in a row does not pile up), but keeps
+// non-consecutive repeats — a prompt reused after others is genuinely recent
+// again. The list is capped at maxPromptHistory and persisted once.
+func (s *State) AddPromptHistory(text string) error {
+	if strings.TrimSpace(text) == "" {
+		return nil
+	}
+	if len(s.PromptHistory) > 0 && s.PromptHistory[0].Text == text {
+		return nil
+	}
+	s.PromptHistory = append([]PromptHistoryEntry{{Text: text, AtUnix: time.Now().Unix()}}, s.PromptHistory...)
+	if len(s.PromptHistory) > maxPromptHistory {
+		s.PromptHistory = s.PromptHistory[:maxPromptHistory]
+	}
+	return SaveState(s)
+}
+
+// ClearPromptHistory empties the prompt history and persists. A no-op (no write)
+// when it is already empty.
+func (s *State) ClearPromptHistory() error {
+	if len(s.PromptHistory) == 0 {
+		return nil
+	}
+	s.PromptHistory = nil
 	return SaveState(s)
 }
