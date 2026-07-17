@@ -10,6 +10,13 @@ Atrium is a terminal command center for orchestrating multiple AI coding agents 
 - Review changes before applying them, pause sessions to pick their branches up elsewhere
 - Each task gets its own isolated git workspace, so no conflicts
 
+### Demos
+
+Per-flow screencasts — create→attach→detach, diff review, pause/resume — are
+generated from committed [vhs](https://github.com/charmbracelet/vhs) tapes in
+[`docs/demos/`](docs/demos/). Render them with `just gifs`; they are deliberately
+slow-paced so each step is followable.
+
 <br />
 
 ### Installation
@@ -70,8 +77,11 @@ Usage:
 Available Commands:
   completion  Generate the autocompletion script for the specified shell
   debug       Print debug information like config paths
+  doctor      Check the environment for common misconfigurations
   help        Help about any command
+  profiles    Manage agent profiles (e.g. `profiles detect`)
   reset       Reset all stored instances
+  update      Download, verify, and install the latest release
   version     Print the version number of atrium
 
 Flags:
@@ -99,32 +109,101 @@ NOTE: The default program is `claude` and we recommend using the latest version.
 
 <br />
 
-#### Menu
-The menu at the bottom of the screen shows available commands:
+#### Keybindings
 
-##### Instance/Session Management
-- `n` - Create a new session (form focused on the name)
-- `N` - Create a new session (form focused on the project picker)
-- `ctrl-x` - Kill the selected session (press twice to confirm)
-- `↑/k`, `↓/j` - Navigate between sessions
-- `/` - Filter sessions
+Press `?` in the app for the same cheatsheet, live. This table mirrors it group
+for group; a test (`keys.TestReadmeDocumentsEveryBinding`) fails the build if the
+in-app keymap and this section ever drift apart, so it stays complete.
 
-##### Actions
-- `↵/o` - Attach to the selected session
-- `ctrl-q` - Toggle attach/detach (detach when attached, attach from the list)
-- `s` - Send a message to the selected session without attaching
-- `p` - Pause: commit changes and free the worktree
-- `P` - Commit and push the session branch
-- `r` - Resume a paused session
-- `y` - Copy the session's branch name to the clipboard
-- `?` - Show help menu
+##### Navigate
+| Key | Action |
+|-----|--------|
+| `↑/k` `↓/j` | move selection |
+| `u` / `b` | jump to next unread / blocked session |
+| `tab` / `shift-tab` | next / prev pane |
+| `1` / `2` / `3` | jump to preview / diff / terminal |
+| `shift-↑` `shift-↓` | scroll the active pane |
+| `<` / `>` | shrink / grow the session list (or drag the divider) |
+| `esc` | exit scroll mode / clear filter |
 
-##### Navigation
-- `tab` / `shift-tab` - Cycle the preview / diff / terminal panes
-- `1` / `2` / `3` - Jump straight to a pane
-- `shift-↓/↑` - Scroll the active pane
-- `,` - Settings
-- `q` - Quit the application
+##### Manage
+| Key | Action |
+|-----|--------|
+| `n` | new session (form, name first) |
+| `N` | new session (form, project first) |
+| `i` | smart new (describe it; auto-routes to a project) |
+| `R` | rename session (label only) |
+| `A` | auto-name session (via its agent) |
+| `/` | filter sessions (see [Filtering](#filtering)) |
+| `v` | multi-select: `space` marks, `p`/`r`/`x` act on the marked set |
+
+##### Handoff
+| Key | Action |
+|-----|--------|
+| `↵/o` | attach to the selected session |
+| `ctrl-q` | toggle attach/detach (detach when in, attach from the list) |
+| `ctrl-x` | kill the selected/attached session (twice to confirm) |
+| `ctrl-pgup/pgdn` | in a session: cycle to prev / next session in the repo group |
+| `s` | send a message (without attaching) |
+| `Q` | manage queued prompts (list / cancel) |
+| `a` | approve the agent's prompt (`↵` picks its default); on idle claude, accept the suggested prompt |
+| `p` | pause: commit changes + free the worktree |
+| `ctrl-p` | pause all active sessions in the current view |
+| `P` | commit & push branch |
+| `c` | create a PR for the pushed branch (gh) |
+| `m` | merge the session's PR (squash) |
+| `w` | open the session's PR in the browser |
+| `r` | resume a paused session |
+| `ctrl-r` | resume all paused sessions in the current view |
+| `y` | copy branch name to clipboard |
+| `f` | copy/open URLs & paths from the preview |
+
+##### Groups
+| Key | Action |
+|-----|--------|
+| `J` / `K` | reorder within a repo group |
+| `{` / `}` | move a whole group up / down |
+| `[` / `]` | move an account cluster up / down |
+| `←` / `→` | collapse / expand group |
+| `Z` | collapse / expand all |
+
+##### Other
+| Key | Action |
+|-----|--------|
+| `?` | toggle this cheatsheet |
+| `,` | settings |
+| `@` | accounts (Claude / GitHub) |
+| `ctrl-l` | force a full redraw of the screen |
+| `q` | quit |
+
+#### Filtering
+
+Press `/` to filter the session list incrementally. A query is split on
+whitespace into terms combined with **AND**; each term is either a predicate over
+cached session state or a plain substring matched (case-insensitively) against a
+session's name, branch, or note. Predicate values match by **prefix**, so the
+list narrows as you type rather than blinking empty mid-word.
+
+| Term | Matches |
+|------|---------|
+| `status:<name>` | sessions whose status prefixes `<name>` — `running`, `ready`, `loading`, `paused`, `needsinput`, `pending` |
+| `dirty` | sessions with uncommitted changes |
+| `behind` | sessions behind their base branch |
+| `behind:<expr>` | `behind:3` (exactly 3), `behind:>0`, `behind:>=2`, `behind:<5`, `behind:<=1` |
+| `pr:<state>` | PR state prefixing `<state>` — `open`, `merged`, `closed`, or `none` (no PR) |
+| `account:<name>` | Claude account name prefixing `<name>`; `account:none` for sessions with no resolved account |
+| `note:<text>` | sessions whose note prefixes `<text>` |
+| `<text>` | plain substring in the session's name, branch, or note |
+
+Worked examples (each is exercised verbatim against the parser by
+`session.TestReadmeFilterExamples`):
+
+- `status:need dirty` — sessions that need input **and** have uncommitted changes.
+- `behind:>0 pr:open` — sessions behind their base **and** with an open PR.
+- `account:work note:release` — `work`-account sessions whose note starts with `release`.
+- `auth` — any session with `auth` in its name, branch, or note.
+
+Press `esc` to clear the committed filter.
 
 ### Configuration
 
@@ -328,6 +407,51 @@ routing can differ from Claude-login routing. Add a `gh_accounts` list:
 > resolves to the work identity and key regardless of its path under
 > `~/.atrium/worktrees/`. Atrium carries no commit-identity logic; it relies on that
 > system, which keys off the same remote signal as `remote_matches` above.
+
+#### Configuration reference
+
+Every `config.json` key, its default, and where it is documented above. Most are
+also editable live from the Settings panel (`,`); the three marked **†** are
+JSON-only and have no Settings row. A test
+(`config.TestReadmeDocumentsEveryConfigField`) fails the build if a new field is
+added without a row here.
+
+| Key | Type | Default | Notes |
+|-----|------|---------|-------|
+| `default_program` | string | `"claude"` | launch command when no matching profile ([Profiles](#profiles)) |
+| `auto_yes` | bool | `false` | auto-accept all prompts (experimental; the `-y` flag) |
+| `daemon_poll_interval` | int | `1000` | autoyes daemon poll interval, milliseconds |
+| `branch_prefix` | string | `"<user>/"` | prefix for created git branches |
+| `profiles` | array | detected | named program configs ([Profiles](#profiles)) |
+| `tmux_config_override` | string | `""` | path to a custom tmux config for sessions |
+| `auto_attach` | bool | `true` | attach to a new session as soon as it starts ([Auto-attach](#auto-attach)) |
+| `show_release_notes_after_update` | bool | `true` | "what's new" overlay once after an update |
+| `kill_double_tap_confirm` | bool | `true` | a second `ctrl-x` confirms the kill dialog |
+| `theme` | string | `"tokyo-night"` | color palette + border style |
+| `splash` | string | random | empty-state splash pattern (`""`/`"random"` = fresh each launch) |
+| `nerd_font` | bool | `false` | draw markers with patched-Nerd-Font vendor icons |
+| `session_context_bar` | bool | `true` | thin tmux status line inside attached sessions |
+| `hint_bar` | bool | `true` | always-on bottom key-hint bar |
+| `max_sessions` | int | unlimited | opt-in cap on concurrent sessions |
+| `trust_worktrees_root` | bool | `false` | pre-accept Claude's workspace-trust for the worktrees root |
+| `carry_files` | array | `[".claude/settings.local.json"]` | gitignored files copied into each worktree ([Carried files](#carried-files)) |
+| `pr_create_draft` | bool | `true` | `c` opens a draft PR |
+| `update_base_on_create` | bool | `true` | branch off the freshest remote base tip |
+| `fast_forward_local_base` | bool | `false` | also fast-forward the local base branch on create |
+| `claude_accounts` | array | `[]` | per-session `CLAUDE_CONFIG_DIR` routing ([Claude accounts](#claude-accounts)) |
+| `gh_accounts` | array | `[]` | per-session `GH_CONFIG_DIR` routing ([GitHub CLI accounts](#github-cli-accounts)) |
+| `auto_update` | string | `"notify"` | startup update behavior: `notify` / `auto` / `off` ([Auto-update](#auto-update)) |
+| `project_search_roots` **†** | array | `["~"]` | directories the background repo scan walks for the project picker |
+| `project_search_depth` **†** | int | `3` | levels below each root the scan descends (`0`/negative disables it) |
+| `model_indicator` | string | `"on"` | per-session model chip: `on` / `off` |
+| `permission_indicator` | string | `"on"` | per-session permission-mode chip: `on` / `off` |
+| `effort_indicator` | string | `"on"` | per-session reasoning-effort chip: `on` / `off` |
+| `session_sort` | string | `"creation"` | within-group order: `creation` / `status` |
+| `group_mode` | string | `"repo"` | list grouping: `repo` / `account` |
+| `smart_dispatch_auto` **†** | bool | `false` | let a confident `i` match create the session without the form |
+| `notifications` | string | `"off"` | background-session signal: `off` / `bell` / `desktop` ([Notifications](#notifications)) |
+| `notify_command` | string | built-in | shell command for `desktop` notifications ([Notifications](#notifications)) |
+
 ### FAQs
 
 #### Failed to start new session
