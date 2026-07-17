@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -115,4 +116,32 @@ func TestRender_PlainLinesUntouched(t *testing.T) {
 	s := NewScreen("no matches here\n/tmp/x.go", 80, 10)
 	out := strings.Split(s.Render("", plainStyles()), "\n")
 	assert.Equal(t, "no matches here", out[0])
+}
+
+// A URL match is wrapped in an OSC 8 hyperlink to its copyable target, so it is
+// clickable on supporting terminals — and the escapes add zero display columns,
+// so the frozen screen's alignment is unchanged (the no-drift guard). With
+// plainStyles the only escapes present are the OSC 8 wrapper, so equal display
+// and rune widths prove the wrapper is weightless.
+func TestRender_URLMatchHyperlinkNoWidthDrift(t *testing.T) {
+	s := NewScreen("see https://example.com/p now", 80, 10)
+	require.Equal(t, 1, s.MatchCount())
+	out := s.Render("", plainStyles())
+
+	require.Contains(t, out, ansi.SetHyperlink("https://example.com/p"), "URL match opens an OSC 8 link")
+	require.Contains(t, out, ansi.ResetHyperlink(), "and closes it")
+	for _, ln := range strings.Split(out, "\n") {
+		require.Equal(t, len([]rune(ansi.Strip(ln))), ansi.StringWidth(ln),
+			"OSC 8 escapes must not add display columns: %q", ln)
+	}
+}
+
+// Non-URL matches (SHAs, paths) are never hyperlinked — clicking them opens
+// nothing useful, and the visible text carries the copyable value already. This
+// also pins the KindURL guard: were it dropped, a path match would gain an OSC 8.
+func TestRender_NonURLMatchNotHyperlinked(t *testing.T) {
+	s := NewScreen("edit /tmp/notes.go here", 80, 10)
+	require.Equal(t, 1, s.MatchCount())
+	out := s.Render("", plainStyles())
+	require.NotContains(t, out, "\x1b]8;", "a path match must not be hyperlinked")
 }

@@ -44,6 +44,24 @@ func TestSettingsOverlay_ToggleBool(t *testing.T) {
 	assert.True(t, cfg.GetAutoAttach())
 }
 
+// The mouse off-switch is reachable from the panel (not JSON-only) and toggles
+// the default-on capture, so a user whose terminal's select-to-copy the capture
+// breaks can turn it off without hand-editing config.json.
+func TestSettingsOverlay_ToggleMouse(t *testing.T) {
+	cfg := config.DefaultConfig()
+	o := NewSettingsOverlay(cfg)
+	settingsAt(t, o, "mouse")
+
+	require.True(t, cfg.GetMouse(), "mouse defaults on")
+	_, changed := o.HandleKeyPress(tea.KeyMsg{Type: tea.KeySpace})
+	assert.Equal(t, "mouse", changed, "a toggle must report its row key so home can persist and live-apply")
+	assert.False(t, cfg.GetMouse(), "space turns capture off")
+
+	_, changed = o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyEnter})
+	assert.Equal(t, "mouse", changed)
+	assert.True(t, cfg.GetMouse(), "enter turns it back on")
+}
+
 func TestSettingsOverlay_ToggleTrustWorktreesRoot(t *testing.T) {
 	cfg := config.DefaultConfig()
 	o := NewSettingsOverlay(cfg)

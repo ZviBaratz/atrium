@@ -103,6 +103,10 @@ var Registry = []Entry{
 		key.WithKeys("Q"),
 		key.WithHelp("Q", "manage queued prompts"),
 	)},
+	{Name: KeyCmdLog, Binding: key.NewBinding(
+		key.WithKeys("L"),
+		key.WithHelp("L", "command log"),
+	)},
 	{Name: KeyHelp, Binding: key.NewBinding(
 		key.WithKeys("?"),
 		key.WithHelp("?", "help"),
@@ -217,6 +221,13 @@ var Registry = []Entry{
 	{Name: KeyGrowList, Binding: key.NewBinding(
 		key.WithKeys(">"),
 		key.WithHelp(">", "grow list"),
+	)},
+	// Backslash: a free, unshifted key (a reviewer may prefer a mnemonic — see
+	// the PR). The label reads like a leaning divider between the two panes it
+	// re-proportions.
+	{Name: KeyLayoutPreset, Binding: key.NewBinding(
+		key.WithKeys("\\"),
+		key.WithHelp("\\", "cycle layout"),
 	)},
 	{Name: KeyTabPreview, Binding: key.NewBinding(
 		key.WithKeys("1"),

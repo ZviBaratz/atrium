@@ -1,6 +1,7 @@
 package overlay
 
 import (
+	"github.com/ZviBaratz/atrium/internal/fuzzy"
 	"github.com/ZviBaratz/atrium/ui/theme"
 	"os"
 	"path/filepath"
@@ -23,12 +24,9 @@ const maxDirEntries = 500
 // "/", "~" or ".") offers that path as a selectable entry. Validation that the
 // chosen path is a git repo happens at the call site, on selection/submit.
 type DirectoryPicker struct {
-	candidates  []string // absolute candidate repo paths, deduped; candidates[0] is the default
-	filter      string
-	cursor      int
-	focused     bool
-	width       int
-	visibleRows int // number of candidate rows to render (kept constant across focus)
+	Picker // shared filter/cursor/key-grammar (sync source); candidates are local
+
+	candidates []string // absolute candidate repo paths, deduped; candidates[0] is the default
 
 	// These let the call site surface an inline hint as the selection changes, instead of
 	// only reacting at submit. selectionValid means the path exists and is a directory;
@@ -55,7 +53,7 @@ type DirectoryPicker struct {
 // The caller should pass the default/contextual target first; the list is deduped
 // while preserving order and the cursor starts on the first entry.
 func NewDirectoryPicker(candidates []string) *DirectoryPicker {
-	return &DirectoryPicker{candidates: dedupePaths(candidates), visibleRows: defaultPickerRows, label: "Project"}
+	return &DirectoryPicker{Picker: newPicker(false), candidates: dedupePaths(candidates), label: "Project"}
 }
 
 // dedupePaths drops empty and duplicate entries, preserving first-seen order.
@@ -94,37 +92,9 @@ func (dp *DirectoryPicker) UpdateCandidates(candidates []string) {
 	}
 }
 
-// SetWidth sets the width of the directory picker.
-func (dp *DirectoryPicker) SetWidth(w int) {
-	dp.width = w
-}
-
-// SetVisibleRows sets how many candidate rows the picker renders (floored at 1). Driven by
-// the overlay so the form can shrink to fit short terminals.
-func (dp *DirectoryPicker) SetVisibleRows(n int) {
-	if n < 1 {
-		n = 1
-	}
-	dp.visibleRows = n
-}
-
 // SetLabel overrides the field label shown in the header (default "Project").
+// (Focus/Blur/IsFocused/SetWidth/SetVisibleRows are provided by the embedded Picker.)
 func (dp *DirectoryPicker) SetLabel(label string) { dp.label = label }
-
-// Focus gives the directory picker focus.
-func (dp *DirectoryPicker) Focus() {
-	dp.focused = true
-}
-
-// Blur removes focus from the directory picker.
-func (dp *DirectoryPicker) Blur() {
-	dp.focused = false
-}
-
-// IsFocused returns whether the directory picker is focused.
-func (dp *DirectoryPicker) IsFocused() bool {
-	return dp.focused
-}
 
 // SetSelectionState records the currently selected path's state so Render can show an
 // inline indicator while the user is choosing: valid means it is an existing directory;
@@ -146,38 +116,12 @@ func (dp *DirectoryPicker) ClearSelectionState() {
 }
 
 // HandleKeyPress processes a key event. Returns (consumed, selectionChanged).
+// The shared Picker owns the key grammar (sync source: a filter edit resets the
+// cursor to the top of the re-ranked list); a directory selection changes when the
+// filter text changed or the cursor moved.
 func (dp *DirectoryPicker) HandleKeyPress(msg tea.KeyMsg) (consumed bool, selectionChanged bool) {
-	switch msg.Type {
-	case tea.KeyUp:
-		if dp.cursor > 0 {
-			dp.cursor--
-			return true, true
-		}
-		return true, false
-	case tea.KeyDown:
-		if dp.cursor < len(dp.visibleItems())-1 {
-			dp.cursor++
-			return true, true
-		}
-		return true, false
-	case tea.KeyBackspace:
-		if len(dp.filter) > 0 {
-			runes := []rune(dp.filter)
-			dp.filter = string(runes[:len(runes)-1])
-			dp.cursor = 0
-			return true, true
-		}
-		return true, false
-	case tea.KeyRunes:
-		dp.filter += string(msg.Runes)
-		dp.cursor = 0
-		return true, true
-	case tea.KeySpace:
-		dp.filter += " "
-		dp.cursor = 0
-		return true, true
-	}
-	return false, false
+	consumed, filterChanged, cursorMoved := dp.handleKey(msg, len(dp.visibleItems()))
+	return consumed, filterChanged || cursorMoved
 }
 
 // looksLikePath reports whether the filter should be treated as a path to enter
@@ -269,7 +213,7 @@ func (dp *DirectoryPicker) visibleItems() []string {
 		ranked = append([]string(nil), names...)
 		sort.Strings(ranked)
 	} else {
-		ranked = fuzzyRank(names, base)
+		ranked = fuzzy.Rank(names, base)
 	}
 
 	items := make([]string, 0, len(ranked)+1)
@@ -287,39 +231,6 @@ func (dp *DirectoryPicker) visibleItems() []string {
 		items = append(items, typed)
 	}
 	return items
-}
-
-// rankCandidates filters candidates to those whose *display* form matches the
-// query and sorts them best-first, preserving input (priority) order on ties.
-// Matching the display string rather than the raw absolute path keeps the
-// "/home/<user>" prefix out of the match — otherwise its runes match queries
-// they were never shown for. A candidate whose basename also matches gets that
-// match's score added on top: users type project names, so a name hit should
-// outrank an equal-score mid-path hit.
-func rankCandidates(candidates []string, query string, display func(string) string) []string {
-	type scored struct {
-		path  string
-		score int
-	}
-	matches := make([]scored, 0, len(candidates))
-	for _, c := range candidates {
-		ok, score := fuzzyMatch(query, display(c))
-		if !ok {
-			continue
-		}
-		if ok, base := fuzzyMatch(query, filepath.Base(c)); ok {
-			score += base
-		}
-		matches = append(matches, scored{path: c, score: score})
-	}
-	sort.SliceStable(matches, func(a, b int) bool {
-		return matches[a].score > matches[b].score
-	})
-	out := make([]string, len(matches))
-	for i, m := range matches {
-		out[i] = m.path
-	}
-	return out
 }
 
 // CompletePrefix implements Tab-completion for the project field with shell-like

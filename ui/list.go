@@ -252,11 +252,6 @@ type List struct {
 	// app.go). It controls the cursor indicator in the filter bar.
 	filterActive bool
 
-	// hideEmptyHint suppresses the centered first-run hint in an empty list. Set
-	// when the always-on bottom hint bar is enabled, whose hints supersede it —
-	// without the bar (hint_bar off) the in-list hint is the only affordance left.
-	hideEmptyHint bool
-
 	// updateBadge is the persistent update indicator inset in the panel's top
 	// border ("⇡ v0.7.1"). The app sets it once when the startup update check
 	// resolves and never clears it: unlike toast notices it must survive
@@ -312,13 +307,6 @@ func NewList(spinner *spinner.Model) *List {
 		renderer:  &InstanceRenderer{spinner: spinner},
 		collapsed: map[string]bool{},
 	}
-}
-
-// SetShowEmptyHint controls whether an empty list renders its centered
-// first-run hint ("n new · ? keys"). The app disables it when the always-on
-// bottom hint bar already carries those keys.
-func (l *List) SetShowEmptyHint(show bool) {
-	l.hideEmptyHint = !show
 }
 
 // SetUpdateBadge sets the plain-text update badge ("⇡ v0.7.1") shown in the
