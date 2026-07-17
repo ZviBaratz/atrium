@@ -63,7 +63,16 @@ func (m *home) handleWelcomeState(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	m.recomputeLayout() // menuVisible flipped; the hint bar may reclaim its row
 
 	if !confirmed {
-		return m, tea.WindowSize()
+		// Retire the welcome on skip, not only on confirm (#381): the modal
+		// swallows keys until dismissed, so re-greeting a look-around-first user
+		// every launch is a recurring toll on exactly the cautious newcomers it is
+		// for. The recovery path is a one-line notice rather than the modal again,
+		// and returning users are still covered by the missing-program check.
+		m.markWelcomeSeen()
+		return m, tea.Batch(
+			tea.WindowSize(),
+			m.flashNotice("Setup skipped — press , to pick a default agent, or n to start a session", ui.NoticeInfo),
+		)
 	}
 	// Confirm: adopt the detected agents as profiles and persist the pick as the
 	// profile *name* (matching seededDefaultConfig), so GetProgram keeps resolving

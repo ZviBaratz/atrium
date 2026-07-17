@@ -76,6 +76,80 @@ func TestWelcomeOverlay_CtrlCSkips(t *testing.T) {
 	}
 }
 
+// normalizeWS collapses every run of whitespace down to single spaces.
+func normalizeWS(s string) string { return strings.Join(strings.Fields(s), " ") }
+
+// flowText strips ANSI and the modal's box-drawing border, then collapses
+// whitespace — so the renderer's wrapped lines rejoin into one flowing string.
+// A word split across a wrap boundary would surface as two tokens and break a
+// Contains of the canonical sentence; a clean word-wrap leaves it intact.
+func flowText(s string) string {
+	s = strings.Map(func(r rune) rune {
+		if r >= 0x2500 && r <= 0x257F { // box-drawing block (border runes)
+			return ' '
+		}
+		return r
+	}, stripANSI(s))
+	return normalizeWS(s)
+}
+
+// The intro is wrapped by the renderer to the modal's content width, never
+// hard-broken, so it never breaks mid-phrase (#381) — checked across the widths
+// the live drive used (140→54 clamp, 80) plus narrower clamps.
+func TestWelcomeOverlay_IntroNeverBreaksMidWord(t *testing.T) {
+	for _, width := range []int{28, 40, 50, 54} {
+		w := NewWelcomeOverlay()
+		w.SetWidth(width)
+		w.SetDetected(detectedFixture())
+		if got := flowText(w.Render()); !strings.Contains(got, normalizeWS(welcomeIntro)) {
+			t.Errorf("width %d: intro broke mid-word.\n got: %s\nwant substring: %s",
+				width, got, normalizeWS(welcomeIntro))
+		}
+	}
+}
+
+// The detected-count line pluralizes properly (#381): one agent is singular, two
+// or more plural, and the lazy "agent(s)" is gone.
+func TestWelcomeOverlay_Pluralization(t *testing.T) {
+	for _, tc := range []struct {
+		n    int
+		want string
+	}{
+		{1, "1 agent detected"},
+		{2, "2 agents detected"},
+		{3, "3 agents detected"},
+	} {
+		w := NewWelcomeOverlay()
+		w.SetWidth(54)
+		w.SetDetected(detectedFixture()[:tc.n])
+		out := stripANSI(w.Render())
+		if !strings.Contains(out, tc.want) {
+			t.Errorf("n=%d: render missing %q\n%s", tc.n, tc.want, out)
+		}
+		if strings.Contains(out, "agent(s)") {
+			t.Errorf("n=%d: render still contains lazy 'agent(s)'", tc.n)
+		}
+	}
+}
+
+// contentWidth subtracts the border+padding chrome and floors at 1 so a
+// degenerate modal width can never hand lipgloss a zero/negative wrap width.
+func TestWelcomeOverlay_ContentWidthFloor(t *testing.T) {
+	w := NewWelcomeOverlay()
+	for _, tc := range []struct{ width, want int }{
+		{54, 50}, {24, 20}, {5, 1}, {4, 1}, {0, 1},
+	} {
+		w.SetWidth(tc.width)
+		if got := w.contentWidth(); got != tc.want {
+			t.Errorf("contentWidth(width=%d) = %d, want %d", tc.width, got, tc.want)
+		}
+	}
+	// Render must not panic at a degenerate width.
+	w.SetWidth(3)
+	w.SetDetected(detectedFixture())
+	_ = w.Render()
+}
+
 func TestWelcomeOverlay_EmptyDetection(t *testing.T) {
 	w := NewWelcomeOverlay()
 	w.SetWidth(54)

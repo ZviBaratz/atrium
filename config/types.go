@@ -212,6 +212,12 @@ type Config struct {
 	// means the default (on). Setting it false stops new prompts being recorded;
 	// clearing existing history is a separate action.
 	RecordPromptHistory *bool `json:"record_prompt_history,omitempty"`
+	// OSChrome, when true (the default), surfaces fleet state in the terminal's OS
+	// chrome: the window title ("atrium · 2 need you · 5 running") and an OSC 9;4
+	// taskbar progress bar. nil means the default (on). Set it false when your
+	// shell or multiplexer owns the title; terminals that ignore the escapes show
+	// nothing either way.
+	OSChrome *bool `json:"os_chrome,omitempty"`
 	// MaxSessions is an opt-in cap on how many sessions can exist at once;
 	// creating one beyond it is rejected with an error in the UI. nil (or a
 	// non-positive value) means unlimited — there is no cap by default.
