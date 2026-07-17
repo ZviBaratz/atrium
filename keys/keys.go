@@ -73,6 +73,8 @@ const (
 
 	KeyQueue // Open the pending-prompt management overlay for the selected session
 
+	KeyCmdLog // Open the command-log overlay (tmux/git/gh subprocesses Atrium ran)
+
 	KeyAutoName // Auto-generate a display name for the selected session via claude
 
 	KeyFilter // Enter incremental filter mode to narrow the session list

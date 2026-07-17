@@ -135,6 +135,9 @@ const (
 	stateRename
 	// stateQueue is the state when the pending-prompt management overlay is up.
 	stateQueue
+	// stateCmdLog is the state when the command-log overlay is up (the tmux/git/gh
+	// subprocesses Atrium has run — #372).
+	stateCmdLog
 	// stateFilter is the state when the user is typing an incremental filter query
 	// to narrow the session list by DisplayName / Branch.
 	stateFilter
@@ -325,6 +328,8 @@ type home struct {
 	textInputOverlay *overlay.TextInputOverlay
 	// queueOverlay manages a session's pending prompt queue (list / cancel).
 	queueOverlay *overlay.QueueOverlay
+	// cmdLogOverlay shows the recorded tmux/git/gh subprocesses (#372).
+	cmdLogOverlay *overlay.CmdLogOverlay
 	// queueTarget is the instance the queue overlay was opened for; a cancel acts
 	// on it even if the selection moves (mirrors renameTarget).
 	queueTarget *session.Instance
@@ -523,6 +528,11 @@ func (m *home) View() string {
 			log.ErrorLog.Printf("queue overlay is nil")
 		}
 		return overlay.PlaceOverlay(0, 0, m.queueOverlay.Render(), mainView, true)
+	} else if m.state == stateCmdLog {
+		if m.cmdLogOverlay == nil {
+			log.ErrorLog.Printf("command-log overlay is nil")
+		}
+		return overlay.PlaceOverlay(0, 0, m.cmdLogOverlay.Render(), mainView, true)
 	} else if m.state == stateSettings {
 		if m.settingsOverlay == nil {
 			log.ErrorLog.Printf("settings overlay is nil")

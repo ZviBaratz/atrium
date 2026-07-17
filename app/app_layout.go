@@ -89,6 +89,19 @@ func (m *home) updateHandleWindowSizeEvent(msg tea.WindowSizeMsg) {
 		}
 		m.queueOverlay.SetWidth(w)
 	}
+	if m.cmdLogOverlay != nil {
+		// The command log benefits from width (argv) and height (many rows), so it
+		// takes a larger share than the queue overlay, capped for very wide terminals.
+		w := int(float32(msg.Width) * 0.85)
+		if w > 120 {
+			w = 120
+		}
+		h := int(float32(msg.Height) * 0.85)
+		if h > 44 {
+			h = 44
+		}
+		m.cmdLogOverlay.SetSize(w, h)
+	}
 
 	previewWidth, previewHeight := m.tabbedWindow.GetPreviewSize()
 	if err := m.list.SetSessionPreviewSize(previewWidth, previewHeight); err != nil {
@@ -110,7 +123,7 @@ func (m *home) menuVisible() bool {
 		// Both inline interactions teach their gestures on the bar, so it stays
 		// even when the always-on hint bar is turned off.
 		return true
-	case statePrompt, stateRename, stateQueue, stateConfirm, stateHelp, stateInfo, stateSettings, stateWelcome, stateAccounts:
+	case statePrompt, stateRename, stateQueue, stateCmdLog, stateConfirm, stateHelp, stateInfo, stateSettings, stateWelcome, stateAccounts:
 		return false
 	default: // stateDefault (and the empty list)
 		// generatingName and actionInFlight each force the bar visible so their
@@ -209,11 +222,6 @@ func (m *home) applySettingChange(key string) tea.Cmd {
 			m.list.SetGroupMode(m.appConfig.GetGroupMode())
 		}
 	case "hint_bar":
-		// Mirror the newHome seeding: the list shows its inline key hint only
-		// when the always-on bar is off.
-		if m.list != nil {
-			m.list.SetShowEmptyHint(!m.appConfig.GetHintBar())
-		}
 		m.recomputeLayout() // the bar claims or releases its row
 	case "session_context_bar", "tmux_config_override":
 		// Re-render the managed tmux conf so sessions started from now on pick
