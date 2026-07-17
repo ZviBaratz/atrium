@@ -60,6 +60,26 @@ func TestHelpScreen_GeneratedRows(t *testing.T) {
 	}
 }
 
+// The cheatsheet gains a short Mouse section: click targets, wheel, divider
+// drag, and the Shift bypass for native selection (#397). This pins its presence
+// so a future edit can't silently drop the one place the mouse map is documented
+// in-app.
+func TestHelpScreen_MouseSection(t *testing.T) {
+	content := ansi.Strip(helpTypeGeneral{}.toContent())
+	for _, want := range []string{
+		"Mouse",       // the section header
+		"hint-bar",    // click targets include the hint bar
+		"repo header", // and repo headers
+		"wheel",       // wheel scrolling
+		"divider",     // divider drag
+		"Shift+drag",  // the native-selection bypass
+	} {
+		if !strings.Contains(content, want) {
+			t.Errorf("help cheatsheet mouse section missing %q", want)
+		}
+	}
+}
+
 // The screensaver backtick is a deliberate easter egg. It surfaces to users by
 // exactly two routes, so this guards both: a GlobalKeyBindings entry (which
 // would feed it to the coverage guard above *and* to the hint bar — see

@@ -196,41 +196,42 @@ func newTestList(titles ...string) *List {
 	return l
 }
 
-// An empty, unfiltered list is the primary first-run surface once the always-on
-// hint bar is gone, so it must surface the two essential onboarding keys.
+// An empty, unfiltered list is the primary first-run surface, so it must surface
+// a why-empty CTA card (#381): the empty-state explanation plus the single next
+// action (the `n` key), never a blank panel interior.
 func TestList_EmptyStateHint(t *testing.T) {
 	l := newTestList()
 	l.SetSize(40, 20)
 	out := l.String()
-	require.Contains(t, out, "new", "empty list shows the new-session hint")
-	require.Contains(t, out, "keys", "empty list shows the help hint")
+	require.Contains(t, out, "No sessions yet", "empty list explains why it is empty")
+	require.Contains(t, out, "start your first agent", "empty list shows the single next action")
 }
 
-// The onboarding hint is for the genuinely empty list only: it must not appear
+// The onboarding CTA is for the genuinely empty list only: it must not appear
 // once sessions exist, nor clobber the filter affordances during an active filter.
 func TestList_EmptyStateHint_SuppressedWhenNotEmptyOrFiltering(t *testing.T) {
-	// Non-empty list: no onboarding hint. ("keys" is the hint's distinctive marker —
+	// Non-empty list: no CTA. ("No sessions yet" is the card's distinctive marker —
 	// it appears in neither session rows nor the "no matches" line.)
 	l := newTestList("alpha")
 	l.SetSize(40, 20)
-	require.NotContains(t, l.String(), "keys", "a non-empty list must not show the onboarding hint")
+	require.NotContains(t, l.String(), "No sessions yet", "a non-empty list must not show the CTA")
 
 	// Empty but mid-filter (filter bar active, empty query): the filter bar owns the
-	// view; the onboarding hint must not overwrite it.
+	// view; the CTA must not overwrite it.
 	lf := newTestList()
 	lf.SetSize(40, 20)
 	lf.SetFilterActive(true)
-	require.NotContains(t, lf.String(), "keys", "an active filter must suppress the onboarding hint")
+	require.NotContains(t, lf.String(), "No sessions yet", "an active filter must suppress the CTA")
 
 	// Empty result from a non-matching query keeps the existing "no matches" hint,
-	// not the onboarding hint.
+	// not the CTA.
 	lq := newTestList("alpha")
 	lq.SetSize(40, 20)
 	lq.SetFilterActive(true)
 	lq.SetFilter("zzz")
 	out := lq.String()
 	require.Contains(t, out, "no matches", "a non-matching filter shows the no-matches hint")
-	require.NotContains(t, out, "keys", "a filtered list must not show the onboarding hint")
+	require.NotContains(t, out, "No sessions yet", "a filtered list must not show the CTA")
 }
 
 // TestKillInstance_SelectsPreviousWhenLastRemoved is the regression guard for the

@@ -3,6 +3,7 @@ package hints
 import (
 	"testing"
 
+	"github.com/charmbracelet/x/ansi"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -114,6 +115,11 @@ func TestRender_HyperlinkSpliceStaysInSpan(t *testing.T) {
 	s := NewScreen(raw, 80, 10)
 	require.Equal(t, 1, s.MatchCount())
 	out := s.Render("", plainStyles())
-	assert.Equal(t, "goahere now", out,
-		"label sits in the gutter; the span itself stays intact")
+	// A URL match now carries a zero-width OSC 8 hyperlink to its target, so the
+	// raw bytes gained the escapes — but the visible layout is byte-for-byte
+	// unchanged once stripped: label 'a' in the gutter, the "here" span intact.
+	assert.Equal(t, "goahere now", ansi.Strip(out),
+		"label sits in the gutter; the visible span stays intact")
+	assert.Equal(t, "go"+"a"+ansi.SetHyperlink("https://example.com/deep/page")+"here"+ansi.ResetHyperlink()+" now", out,
+		"the span is wrapped in an OSC 8 link to the copyable target")
 }

@@ -103,6 +103,10 @@ var Registry = []Entry{
 		key.WithKeys("Q"),
 		key.WithHelp("Q", "manage queued prompts"),
 	)},
+	{Name: KeyCmdLog, Binding: key.NewBinding(
+		key.WithKeys("L"),
+		key.WithHelp("L", "command log"),
+	)},
 	{Name: KeyHelp, Binding: key.NewBinding(
 		key.WithKeys("?"),
 		key.WithHelp("?", "help"),

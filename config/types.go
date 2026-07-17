@@ -207,6 +207,26 @@ type Config struct {
 	// false restores the chrome-free interface, where the bar appears only for
 	// inline interactions that need it (naming, filtering, progress).
 	HintBar *bool `json:"hint_bar,omitempty"`
+	// Mouse, when true (the default), enables mouse capture: clickable session
+	// rows / repo headers / tabs / hint-bar entries, wheel scrolling, and a
+	// draggable list/preview divider. nil means use the default (on), so configs
+	// written before this key keep the mouse. Setting it false omits
+	// tea.WithMouseCellMotion entirely, handing every mouse event back to the
+	// terminal — the escape hatch for users whose terminal's native
+	// select-to-copy is broken by capture (Shift+drag is the per-gesture escape
+	// while capture is on). Live-togglable from the Settings panel.
+	Mouse *bool `json:"mouse,omitempty"`
+	// RecordPromptHistory, when true (the default), records submitted prompts in
+	// state.json so they can be reused from the create form and quick-send. nil
+	// means the default (on). Setting it false stops new prompts being recorded;
+	// clearing existing history is a separate action.
+	RecordPromptHistory *bool `json:"record_prompt_history,omitempty"`
+	// OSChrome, when true (the default), surfaces fleet state in the terminal's OS
+	// chrome: the window title ("atrium · 2 need you · 5 running") and an OSC 9;4
+	// taskbar progress bar. nil means the default (on). Set it false when your
+	// shell or multiplexer owns the title; terminals that ignore the escapes show
+	// nothing either way.
+	OSChrome *bool `json:"os_chrome,omitempty"`
 	// MaxSessions is an opt-in cap on how many sessions can exist at once;
 	// creating one beyond it is rejected with an error in the UI. nil (or a
 	// non-positive value) means unlimited — there is no cap by default.

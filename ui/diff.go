@@ -143,7 +143,14 @@ func gitContextHeader(instance *session.Instance, stats *git.DiffStats) string {
 	// decision. Omitted entirely when there is no PR, so a session whose branch
 	// isn't pushed shows nothing extra (silent degradation, like the diff stats).
 	if pr := instance.GetPRStatus(); pr != nil && pr.HasPR {
-		segs = append(segs, metaStyle().Render(fmt.Sprintf("PR #%d %s", pr.Number, prStateWord(pr))))
+		// The PR segment becomes an OSC 8 hyperlink when a URL is known. The
+		// escapes are zero-width (lipgloss.Width ignores them), so embedding them
+		// in the joined header does not shift the summary line's layout.
+		prText := metaStyle().Render(fmt.Sprintf("PR #%d %s", pr.Number, prStateWord(pr)))
+		if pr.URL != "" {
+			prText = hyperlink(pr.URL, prText)
+		}
+		segs = append(segs, prText)
 		if pr.ChecksPass+pr.ChecksFail+pr.ChecksPending > 0 {
 			checks := fmt.Sprintf("checks %d✓ %d✗ %d•", pr.ChecksPass, pr.ChecksFail, pr.ChecksPending)
 			if pr.CI == git.CIFailing {

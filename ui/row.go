@@ -273,13 +273,52 @@ func humanizeCount(n int) string {
 	return strings.TrimSuffix(s, ".0") + "k"
 }
 
-// prSeg returns the "#<number>" PR chip colored by the most urgent signal, and
-// whether there is a PR to show.
+// prCheckGlyph returns a compact CI-state glyph appended to the row's PR chip so
+// the pipeline state reads by shape, not color alone (#384): ✗ failing, • pending,
+// ✓ passing. A merged PR (chip already purple) and a PR with no checks show
+// nothing. The glyph inherits the chip's color, so shape and hue agree — a red
+// #12✗ survives the desaturation test that a red #12 alone fails. The glyphs match
+// the diff-header check tally (ui/diff.go).
+func prCheckGlyph(pr *git.PRStatus) string {
+	if pr.State == "MERGED" {
+		return ""
+	}
+	switch pr.CI {
+	case git.CIFailing:
+		return "✗"
+	case git.CIPending:
+		return "•"
+	case git.CIPassing:
+		return "✓"
+	default:
+		return ""
+	}
+}
+
+// prSeg returns the "#<number>" PR chip — with a CI-state shape glyph (see
+// prCheckGlyph) — colored by the most urgent signal, and whether there is a PR to
+// show. When the PR carries a URL the chip becomes an OSC 8 hyperlink to it via
+// linkSeg — clickable, with the visible "#<number>" text (and thus the row's width
+// math) unchanged.
 func prSeg(p rowPaint, pr *git.PRStatus) (rowSeg, bool) {
 	if pr == nil || !pr.HasPR {
 		return rowSeg{}, false
 	}
-	return p.seg(p.th.Glyphs.PR+fmt.Sprintf("#%d", pr.Number), prBadgeColor(p.th, pr)), true
+	label := p.th.Glyphs.PR + fmt.Sprintf("#%d", pr.Number) + prCheckGlyph(pr)
+	seg := p.seg(label, prBadgeColor(p.th, pr))
+	return linkSeg(seg, pr.URL), true
+}
+
+// linkSeg turns s into an OSC 8 hyperlink to url, overriding only its rendered
+// bytes: width() still reads s.plain (the visible text, escape-free), so the
+// link adds no columns and layout is unchanged. An empty url leaves s untouched.
+func linkSeg(s rowSeg, url string) rowSeg {
+	if url == "" {
+		return s
+	}
+	s.rendered = hyperlink(url, s.render())
+	s.hasRendered = true
+	return s
 }
 
 // ageSeg returns the faint session-age chip (e.g. "2h", "3d") and whether it is
