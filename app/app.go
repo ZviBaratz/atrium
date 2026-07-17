@@ -529,7 +529,14 @@ func (m *home) View() string {
 		listAndPreview = lipgloss.JoinHorizontal(lipgloss.Top, m.list.String(), m.tabbedWindow.String())
 	}
 
-	parts := []string{listAndPreview}
+	// The auto-accept safety banner pins the top row while armed (#378); its row is
+	// reserved by topBannerHeight in the layout budget, so prepending it here keeps
+	// the frame exactly windowHeight tall.
+	var parts []string
+	if m.autoYesArmed() {
+		parts = append(parts, m.autoYesBanner(m.windowWidth))
+	}
+	parts = append(parts, listAndPreview)
 	// The hint bar and error box each claim a row only when they have something to
 	// show; otherwise the last visible component sits flush on the final row with no
 	// trailing blank line. (JoinVertical treats an empty string as a blank line, so

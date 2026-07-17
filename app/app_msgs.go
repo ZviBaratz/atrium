@@ -253,12 +253,14 @@ func (m *home) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	}
 	// Begin a divider drag when the left button presses on (or adjacent to) the
 	// seam between the panes. Default state only; the seam column is listWidth and
-	// the grab is bounded to the pane rows so a press on the hint/error strip below
-	// them doesn't start a drag. This runs before the press-only early return and
-	// the row/tab click logic, so a seam press starts a drag instead of selecting
-	// the row behind it.
+	// the grab is bounded to the pane rows so a press on the safety banner above or
+	// the hint/error strip below them doesn't start a drag. This runs before the
+	// press-only early return and the row/tab click logic, so a seam press starts a
+	// drag instead of selecting the row behind it.
+	bannerH := m.topBannerHeight()
 	if msg.Button == tea.MouseButtonLeft && msg.Action == tea.MouseActionPress &&
-		m.state == stateDefault && m.windowWidth > 0 && msg.Y < m.paneContentHeight() && !m.listHidden() {
+		m.state == stateDefault && m.windowWidth > 0 &&
+		msg.Y >= bannerH && msg.Y < bannerH+m.paneContentHeight() && !m.listHidden() {
 		listWidth := int(float32(m.windowWidth) * float32(m.listRatio))
 		if msg.X >= listWidth-dividerGrab && msg.X <= listWidth+dividerGrab {
 			m.draggingDivider = true

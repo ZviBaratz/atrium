@@ -507,7 +507,8 @@ added without a row here.
 | `kill_double_tap_confirm` | bool | `true` | a second `ctrl-x` confirms the kill dialog |
 | `theme` | string | `"tokyo-night"` | color palette + border style |
 | `splash` | string | random | empty-state splash pattern (`""`/`"random"` = fresh each launch) |
-| `nerd_font` | bool | `false` | draw markers with patched-Nerd-Font vendor icons |
+| `glyph_set` | string | `"plain"` | icon fidelity rung: `nerd` (vendor Nerd-Font icons, needs a patched font), `plain` (Unicode that renders on any font — the default), `ascii` (7-bit floor for terminals where even plain Unicode shows tofu) |
+| `nerd_font` | bool | `false` | *deprecated* — superseded by `glyph_set`; still read for back-compat (`true` → `glyph_set: nerd` when `glyph_set` is unset) |
 | `session_context_bar` | bool | `true` | thin tmux status line inside attached sessions |
 | `hint_bar` | bool | `true` | always-on bottom key-hint bar |
 | `os_chrome` | bool | `true` | fleet state in the terminal title + OSC 9;4 taskbar progress |
