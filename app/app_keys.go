@@ -290,6 +290,23 @@ func (m *home) dismissQueueOverlay() {
 	m.menu.SetState(ui.StateDefault)
 }
 
+// handleCmdLogState routes a key to the command-log overlay. All navigation,
+// filter cycling and failure expansion live inside the overlay, which reads the
+// log ring live; only esc/ctrl+c closes.
+func (m *home) handleCmdLogState(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if m.cmdLogOverlay.HandleKeyPress(msg) {
+		m.dismissCmdLogOverlay()
+	}
+	return m, nil
+}
+
+// dismissCmdLogOverlay tears down the command-log overlay and returns to the list.
+func (m *home) dismissCmdLogOverlay() {
+	m.cmdLogOverlay = nil
+	m.state = stateDefault
+	m.menu.SetState(ui.StateDefault)
+}
+
 // handleSettingsState routes a key to the settings overlay, live-applies any
 // changed row, and reclaims the menu row when the panel closes.
 func (m *home) handleSettingsState(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -523,6 +540,21 @@ func (m *home) openQueue() (tea.Model, tea.Cmd) {
 	m.queueOverlay.SetQueue(texts, headInFlight)
 	m.state = stateQueue
 	// tea.WindowSize re-runs layout so the overlay gets its responsive width.
+	return m, tea.WindowSize()
+}
+
+// openCmdLog opens the command-log overlay: the tmux/git/gh subprocesses Atrium
+// has run (#372). It is a global inspection surface, so it opens with or without a
+// selection; the selected session's Title (the same label git records against) is
+// passed so the overlay's per-session filter has a target.
+func (m *home) openCmdLog() (tea.Model, tea.Cmd) {
+	session := ""
+	if sel := m.list.GetSelectedInstance(); sel != nil {
+		session = sel.Title
+	}
+	m.cmdLogOverlay = overlay.NewCmdLogOverlay(session)
+	m.state = stateCmdLog
+	// tea.WindowSize re-runs layout so the overlay gets its responsive size.
 	return m, tea.WindowSize()
 }
 

@@ -37,6 +37,12 @@ test-race:
 smoke:
     GO={{go}} bash test/smoke/run.sh
 
+# Render the README demo GIFs from the committed tapes (docs/demos/*.tape).
+# Opt-in only — NOT part of `test`/`ci`: needs the same non-Go deps as `smoke`
+# (vhs, ttyd, ffmpeg, tmux). Writes *.gif next to the tapes.
+gifs:
+    GO={{go}} bash docs/demos/render.sh
+
 # Run tests with coverage and print the total.
 cover:
     {{go}} test -coverprofile=coverage.out ./...
