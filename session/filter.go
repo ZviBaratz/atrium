@@ -3,6 +3,8 @@ package session
 import (
 	"strconv"
 	"strings"
+
+	"github.com/ZviBaratz/atrium/internal/fuzzy"
 )
 
 // Filter is a compiled list-filter query. It is produced by ParseFilter and
@@ -181,13 +183,17 @@ func accountTerm(value string) term {
 	}
 }
 
-// substringTerm matches a plain (lowercased) substring against DisplayName,
-// Branch, or the session note.
+// substringTerm matches a free-text term against DisplayName, Branch, or the
+// session note as a case-insensitive fuzzy SUBSEQUENCE via the shared matcher
+// (issue #373) — so "rfp" matches "Refactor Parser" — rather than a plain
+// substring. It only widens which rows match: the list's grouped, status-sorted
+// order is deliberately left untouched here (row position is muscle memory on that
+// surface), so free-text does not re-rank the session list — a follow-up if wanted.
+// Predicate terms (status:/dirty/behind/pr:/account:/note:) keep exact semantics.
 func substringTerm(q string) term {
 	return func(i *Instance) bool {
-		return strings.Contains(strings.ToLower(i.DisplayName()), q) ||
-			strings.Contains(strings.ToLower(i.Branch), q) ||
-			strings.Contains(strings.ToLower(i.Note()), q)
+		match := func(s string) bool { ok, _ := fuzzy.Match(q, s); return ok }
+		return match(i.DisplayName()) || match(i.Branch) || match(i.Note())
 	}
 }
 

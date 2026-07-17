@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ZviBaratz/atrium/chrome"
 	"github.com/ZviBaratz/atrium/config"
 	"github.com/ZviBaratz/atrium/hints"
 	"github.com/ZviBaratz/atrium/internal/actions"
@@ -53,18 +54,31 @@ func Run(ctx context.Context, program string, autoYes bool, version, binName str
 	// user's terminal (the SSH-safe path); the exec copier stays as the local
 	// fallback. Wired before the event loop, so no copy can race the setter.
 	actions.SetClipboardOutput(os.Stdout)
-	p := tea.NewProgram(
-		h,
+	opts := []tea.ProgramOption{
 		tea.WithAltScreen(),
-		tea.WithMouseCellMotion(), // Mouse scroll
 		// Normalize SS3 Home/End (ESC O H/F) that a terminal left in application-cursor
 		// mode emits, which bubbletea v1 otherwise mis-decodes into literal "OH"/"OF".
 		tea.WithInput(newSS3HomeEndReader(os.Stdin)),
 		// Tie the program to the lifecycle context so a SIGTERM (which cancels
 		// ctx in main) also stops the TUI loop, not just the subprocesses.
 		tea.WithContext(ctx),
-	)
+	}
+	// Mouse capture is opt-out (config `mouse`, default on). With it off we never
+	// enable cell-motion reporting, so every mouse event stays with the terminal
+	// and its native select-to-copy works unmodified — the fix for terminals whose
+	// selection the capture would otherwise hijack (#397). It can still be toggled
+	// live from the Settings panel (see applySettingChange). Appended before the
+	// SS3/context options only for readability; option order is irrelevant.
+	if h.appConfig.GetMouse() {
+		opts = append(opts, tea.WithMouseCellMotion())
+	}
+	p := tea.NewProgram(h, opts...)
 	_, err = p.Run()
+	// The event loop has exited (graceful quit or signal shutdown): clear the OS
+	// chrome so no stale title/progress outlives the TUI.
+	if h.chrome != nil {
+		h.chrome.Reset()
+	}
 	// The event loop has exited. On signal shutdown it returned on ctx.Done()
 	// without dispatching Update, and the force-quit escape exits with a session
 	// still Loading — either way an in-flight Start was never persisted or torn
@@ -140,6 +154,9 @@ const (
 	stateRename
 	// stateQueue is the state when the pending-prompt management overlay is up.
 	stateQueue
+	// stateCmdLog is the state when the command-log overlay is up (the tmux/git/gh
+	// subprocesses Atrium has run — #372).
+	stateCmdLog
 	// stateFilter is the state when the user is typing an incremental filter query
 	// to narrow the session list by DisplayName / Branch.
 	stateFilter
@@ -165,6 +182,9 @@ const (
 	// stateScreensaver is the full-window splash easter egg (backtick from the
 	// default state); any key or click returns to stateDefault.
 	stateScreensaver
+	// stateHistory is the prompt-history picker, opened from an empty prompt field
+	// (create form or quick-send) to reuse a previously-submitted prompt (#388).
+	stateHistory
 )
 
 type home struct {
@@ -211,6 +231,10 @@ type home struct {
 	// session finishes a turn or blocks on a prompt (see app_notify.go, config
 	// Notifications). nil disables notification (hand-built test homes).
 	notifier *notify.Notifier
+	// chrome surfaces fleet state in the terminal's OS chrome — window title and
+	// OSC 9;4 taskbar progress (see chrome, config OSChrome). nil disables it
+	// (hand-built test homes); the emitter itself no-ops when the config is off.
+	chrome *chrome.Emitter
 	// notifySeen tracks per-instance notification state (first-observation gate to
 	// suppress the startup replay of restored statuses, plus per-edge throttle
 	// timestamps). An instance absent from the map has not been observed yet, so its
@@ -328,8 +352,13 @@ type home struct {
 	spinner spinner.Model
 	// textInputOverlay handles text input with state
 	textInputOverlay *overlay.TextInputOverlay
+	// promptHistoryOverlay is the reuse picker over State.PromptHistory, opened from
+	// an empty prompt field; on select it inserts into textInputOverlay (#388).
+	promptHistoryOverlay *overlay.PromptHistoryOverlay
 	// queueOverlay manages a session's pending prompt queue (list / cancel).
 	queueOverlay *overlay.QueueOverlay
+	// cmdLogOverlay shows the recorded tmux/git/gh subprocesses (#372).
+	cmdLogOverlay *overlay.CmdLogOverlay
 	// queueTarget is the instance the queue overlay was opened for; a cancel acts
 	// on it even if the selection moves (mirrors renameTarget).
 	queueTarget *session.Instance
@@ -528,6 +557,16 @@ func (m *home) View() string {
 			log.ErrorLog.Printf("queue overlay is nil")
 		}
 		return overlay.PlaceOverlay(0, 0, m.queueOverlay.Render(), mainView, true)
+	} else if m.state == stateHistory {
+		if m.promptHistoryOverlay == nil {
+			log.ErrorLog.Printf("prompt history overlay is nil")
+		}
+		return overlay.PlaceOverlay(0, 0, m.promptHistoryOverlay.Render(), mainView, true)
+	} else if m.state == stateCmdLog {
+		if m.cmdLogOverlay == nil {
+			log.ErrorLog.Printf("command-log overlay is nil")
+		}
+		return overlay.PlaceOverlay(0, 0, m.cmdLogOverlay.Render(), mainView, true)
 	} else if m.state == stateSettings {
 		if m.settingsOverlay == nil {
 			log.ErrorLog.Printf("settings overlay is nil")

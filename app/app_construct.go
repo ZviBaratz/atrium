@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 
+	"github.com/ZviBaratz/atrium/chrome"
 	"github.com/ZviBaratz/atrium/cmd"
 	"github.com/ZviBaratz/atrium/config"
 	"github.com/ZviBaratz/atrium/notify"
@@ -41,6 +42,7 @@ func assembleHome(
 		storage:      storage,
 		lostStrikes:  make(map[*session.Instance]int),
 		notifier:     notify.New(os.Stdout, cmd.MakeExecutor()),
+		chrome:       chrome.New(os.Stdout, appConfig.GetOSChrome()),
 		notifySeen:   make(map[*session.Instance]*notifyState),
 		appConfig:    appConfig,
 		program:      program,
@@ -59,9 +61,6 @@ func assembleHome(
 		h.scannedRepos, h.lastScanAt = appState.GetScannedRepos()
 	}
 	h.list = ui.NewList(&h.spinner)
-	// With the always-on hint bar enabled, the bar already carries the first-run
-	// keys; suppress the list's centered empty hint so guidance isn't duplicated.
-	h.list.SetShowEmptyHint(!appConfig.GetHintBar())
 	// Hide the redundant branch namespace (e.g. "zvi/") from each row's branch
 	// label — it repeats on every session and only crowds the diff off the line.
 	h.list.SetBranchPrefix(appConfig.GetBranchPrefix())

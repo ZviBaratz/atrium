@@ -80,6 +80,7 @@ var HelpGroups = []HelpGroup{
 		{Keys: []KeyName{KeyHelp}, Desc: "toggle this cheatsheet"},
 		{Keys: []KeyName{KeySettings}, Desc: "settings"},
 		{Keys: []KeyName{KeyAccounts}, Desc: "accounts (Claude / GitHub)"},
+		{Keys: []KeyName{KeyCmdLog}, Desc: "command log: the tmux/git/gh commands Atrium ran (filter all / session / failures)"},
 		{Keys: []KeyName{KeyRedraw}, Desc: "force a full redraw of the screen"},
 		{Keys: []KeyName{KeyQuit}, Desc: "quit"},
 	}},
