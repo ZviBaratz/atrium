@@ -67,7 +67,7 @@ const SplashRandom = "random"
 // Neither package can import the other; app imports both and holds them to each
 // other (see TestSplashVocabularyAgrees against fresco.Variants).
 func SplashVariants() []string {
-	return []string{"rain", "tunnel", "ripple", "galaxy"}
+	return []string{"rain", "tunnel", "ripple", "galaxy", "aurora"}
 }
 
 // GetSplash returns the normalized splash mode: a known variant name when set
