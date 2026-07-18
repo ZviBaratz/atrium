@@ -323,6 +323,13 @@ func (w *TabbedWindow) DiffCommentMessage(note string) (string, bool) {
 	return w.diff.CommentMessage(note)
 }
 
+// SetDiffContent parses raw unified-diff content and loads the resulting rows into
+// the diff pane, bypassing the live-instance path. Useful for testing comment mode
+// without a real git worktree, and for programmatic diff display.
+func (w *TabbedWindow) SetDiffContent(content string) {
+	w.diff.rows = parseDiffRows(content)
+}
+
 // GetActiveTab returns the currently active tab index
 func (w *TabbedWindow) GetActiveTab() int {
 	return w.activeTab

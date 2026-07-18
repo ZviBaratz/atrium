@@ -190,3 +190,36 @@ func TestDiffCommentRange(t *testing.T) {
 	require.Len(t, rows, 1, "j/k collapses the selection")
 	require.Equal(t, "+add1", rows[0].text)
 }
+
+// TestParseHunkHeader exercises parseHunkHeader directly for edge cases that
+// TestParseDiffRows only covers indirectly via the full parser:
+//   - standard hunk with explicit counts ("@@ -1,3 +1,4 @@")
+//   - count-omitted form used by git for single-line hunks ("@@ -10 +10 @@")
+//   - trailing context text after the closing "@@" ("@@ -1,3 +1,4 @@ func Foo() {")
+//   - malformed line that produces ok=false
+func TestParseHunkHeader(t *testing.T) {
+	tests := []struct {
+		line     string
+		oldStart int
+		newStart int
+		ok       bool
+	}{
+		{"@@ -1,3 +1,4 @@", 1, 1, true},
+		{"@@ -10,2 +10,3 @@", 10, 10, true},
+		{"@@ -10 +10 @@", 10, 10, true},               // count omitted (single-line hunk)
+		{"@@ -1,3 +1,4 @@ func Foo() {", 1, 1, true}, // trailing context text
+		{"@@ -5,0 +6,3 @@", 5, 6, true},                // zero-count old side
+		{"not a hunk header", 0, 0, false},
+		{"@@ missing fields", 0, 0, false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.line, func(t *testing.T) {
+			old, new, ok := parseHunkHeader(tc.line)
+			require.Equal(t, tc.ok, ok, "ok mismatch")
+			if tc.ok {
+				require.Equal(t, tc.oldStart, old, "oldStart mismatch")
+				require.Equal(t, tc.newStart, new, "newStart mismatch")
+			}
+		})
+	}
+}

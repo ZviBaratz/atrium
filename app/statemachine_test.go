@@ -78,6 +78,14 @@ func TestStateMachine_BackgroundMessagesNeverPanic(t *testing.T) {
 		{"filter", stateFilter, nil},
 		{"hints", stateHints, nil},
 		{"visual", stateVisual, nil},
+		{"diffComment", stateDiffComment, func(h *home, _ *session.Instance) {
+			// Populate the diff pane with annotatable rows so EnterDiffComment
+			// succeeds and IsCommenting() is true — making the state consistent:
+			// h.state == stateDiffComment and d.commenting == true both hold.
+			const diff = "diff --git a/foo.go b/foo.go\n@@ -1,2 +1,2 @@\n ctx\n+add\n"
+			h.tabbedWindow.SetDiffContent(diff)
+			h.tabbedWindow.EnterDiffComment()
+		}},
 	}
 
 	// Each factory takes the home's selected instance so payload-bearing messages
