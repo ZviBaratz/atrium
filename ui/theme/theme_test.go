@@ -69,15 +69,39 @@ func TestSetNerdFont(t *testing.T) {
 
 // TestGlyphWidths guards the alignment invariant: every cell glyph must measure
 // width 1, so column math and the view-bounds test stay correct across every
-// palette × glyph-set combination (plain and Nerd-Font).
+// palette × glyph-set combination (all three fidelity rungs, including the ascii
+// set and both per-rung spinners).
 func TestGlyphWidths(t *testing.T) {
 	for _, name := range Names() {
-		for _, nerd := range []bool{false, true} {
+		for _, set := range []string{GlyphSetNerd, GlyphSetPlain, GlyphSetASCII} {
 			t.Cleanup(Set(name))
-			t.Cleanup(SetNerdFont(nerd))
+			t.Cleanup(SetGlyphSet(set))
 			assertGlyphWidths(t, Current().Name, Current().Glyphs)
 		}
 	}
+}
+
+// TestGlyphsForFidelityRungs pins the three-rung ladder: nerd overlays the vendor
+// PUA icons, ascii swaps in the 7-bit set (including its own spinner frames), and
+// an unrecognized rung falls back to the safe plain set. It also pins the
+// spinner-per-rung split (#378): the plain rung uses the block bars (universal
+// coverage), while the nerd rung keeps the finer Braille motion.
+func TestGlyphsForFidelityRungs(t *testing.T) {
+	restore := SetGlyphSet(GlyphSetPlain)
+	defer restore()
+
+	require.Equal(t, blockSpinnerFrames[0], Current().Glyphs.SpinnerFrames[0], "plain rung uses the block spinner")
+
+	SetGlyphSet(GlyphSetNerd)
+	require.Equal(t, string(rune(nfBranch)), Current().Glyphs.Branch, "nerd rung overlays the PUA branch icon")
+	require.Equal(t, miniDotFrames[0], Current().Glyphs.SpinnerFrames[0], "nerd rung keeps the Braille spinner")
+
+	SetGlyphSet(GlyphSetASCII)
+	require.Equal(t, asciiGlyphs().Branch, Current().Glyphs.Branch, "ascii rung uses the 7-bit set")
+	require.Equal(t, "|", Current().Glyphs.SpinnerFrames[0], "ascii rung swaps in the |/-\\ spinner frames")
+
+	SetGlyphSet("bogus-rung")
+	require.Equal(t, plainGlyphs().Branch, Current().Glyphs.Branch, "an unknown rung falls back to plain")
 }
 
 // assertGlyphWidths checks the width-1 invariant for one resolved glyph set.

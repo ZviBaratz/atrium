@@ -94,12 +94,13 @@ func (d *DiffPane) SetDiff(instance *session.Instance) {
 		d.diff = ""
 		d.viewport.SetContent(centeredFallbackMessage)
 	} else {
-		additions := additionStyle().Render(fmt.Sprintf("%d additions(+)", stats.Added))
-		deletions := deletionStyle().Render(fmt.Sprintf("%d deletions(-)", stats.Removed))
-		lineStats := lipgloss.JoinHorizontal(lipgloss.Center, additions, " ", deletions)
-		if header := gitContextHeader(instance, stats); header != "" {
+		lineStats := diffStatLine(stats)
+		switch header := gitContextHeader(instance, stats); {
+		case header != "" && lineStats != "":
 			d.stats = lipgloss.JoinVertical(lipgloss.Left, header, lineStats)
-		} else {
+		case header != "":
+			d.stats = header
+		default:
 			d.stats = lineStats
 		}
 		// Decompose font-dependent emoji clusters in the diff so the width we lay out
@@ -107,6 +108,26 @@ func (d *DiffPane) SetDiff(instance *session.Instance) {
 		d.diff = colorizeDiff(theme.SanitizeWidth(stats.Content), d.width)
 		d.viewport.SetContent(lipgloss.JoinVertical(lipgloss.Left, d.stats, d.diff))
 	}
+}
+
+// diffStatLine renders the "N additions(+)  M deletions(-)" summary above the
+// patch. Both sides always render; a zero side recedes to the dim/meta style
+// instead of the semantic green/red, so a red "0 deletions(-)" never flags
+// attention at nothing (#378). This matches the row's +adds/−dels chip, which
+// dims its zero side too — one −0 rule everywhere. A content-only diff (a pure
+// rename that nets to zero lines) thus still shows a dim "0 additions(+) 0
+// deletions(-)" rather than vanishing.
+func diffStatLine(stats *git.DiffStats) string {
+	addStyle := additionStyle()
+	if stats.Added == 0 {
+		addStyle = metaStyle()
+	}
+	delStyle := deletionStyle()
+	if stats.Removed == 0 {
+		delStyle = metaStyle()
+	}
+	return addStyle.Render(fmt.Sprintf("%d additions(+)", stats.Added)) + " " +
+		delStyle.Render(fmt.Sprintf("%d deletions(-)", stats.Removed))
 }
 
 // gitContextHeader builds the one-line git-context summary shown above the

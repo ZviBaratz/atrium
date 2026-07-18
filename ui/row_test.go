@@ -238,6 +238,29 @@ func TestDiffSegs_EmptyWhenNoChanges(t *testing.T) {
 	require.Contains(t, joined, "-2")
 }
 
+// TestDiffSegs_ZeroSideIsNeutral pins the #378 −0 rule: a zero addition or
+// deletion count renders dim (FgDim), never Success/Danger — a green +0 or a red
+// −0 flags attention at nothing. The nonzero side keeps its semantic color.
+func TestDiffSegs_ZeroSideIsNeutral(t *testing.T) {
+	withASCIIProfile(t)
+	th := theme.Current()
+	p := newRowPaint(th, false)
+
+	// +12 −0: additions stay Success; the zero deletions go dim, not Danger.
+	segs := diffSegs(p, &git.DiffStats{Added: 12, Removed: 0})
+	require.Len(t, segs, 3)
+	require.Equal(t, th.Palette.Success, segs[0].style.GetForeground(), "nonzero additions keep Success")
+	require.Equal(t, th.Palette.FgDim, segs[2].style.GetForeground(), "a zero −0 renders dim")
+	require.NotEqual(t, th.Palette.Danger, segs[2].style.GetForeground(), "−0 must never be Danger-red")
+
+	// +0 −5: the symmetric case — zero additions go dim, deletions stay Danger.
+	segs = diffSegs(p, &git.DiffStats{Added: 0, Removed: 5})
+	require.Len(t, segs, 3)
+	require.Equal(t, th.Palette.FgDim, segs[0].style.GetForeground(), "a zero +0 renders dim")
+	require.NotEqual(t, th.Palette.Success, segs[0].style.GetForeground(), "+0 must never be Success-green")
+	require.Equal(t, th.Palette.Danger, segs[2].style.GetForeground(), "nonzero deletions keep Danger")
+}
+
 func TestDiffSegs_HumanizesLargeCounts(t *testing.T) {
 	withASCIIProfile(t)
 	th := theme.Current()

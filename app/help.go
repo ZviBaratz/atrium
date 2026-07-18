@@ -51,15 +51,9 @@ func helpRow(key, desc string) string {
 
 // The cheatsheet is generated from keys.HelpGroups — help is a projection of
 // the keymap registry, never authored beside it (#371). Layout and prose live
-// in that table; only the rendering rules live here.
+// in that table; only the rendering rules live here. The glyph legend below is
+// likewise a projection of the active Glyphs table (see legendGroups).
 func (h helpTypeGeneral) toContent() string {
-	g := theme.Current().Glyphs
-	legend := helpDimStyle().Render(
-		theme.Current().SuccessStyle().Render(g.Ready) + " ready    " +
-			theme.Current().AttentionStyle().Render(g.Waiting) + " waiting on you    " +
-			theme.Current().BadgeStyle().Render(" "+g.AutoBadge+"AUTO ") + " auto-accepting",
-	)
-
 	lines := []string{helpTitleStyle().Render("Atrium — Keys")}
 	for _, group := range keys.HelpGroups {
 		lines = append(lines, "", helpHeaderStyle().Render(group.Title))
@@ -74,8 +68,93 @@ func (h helpTypeGeneral) toContent() string {
 	lines = append(lines, helpDimStyle().Render(
 		"Shift+drag selects text for your terminal's own copy, bypassing capture; "+
 			"turn the mouse off entirely in settings (,)."))
-	lines = append(lines, "", legend)
+	lines = append(lines, "", helpHeaderStyle().Render("Legend"))
+	lines = append(lines, legendLines()...)
 	return lipgloss.JoinVertical(lipgloss.Left, lines...)
+}
+
+// legendEntry is one glyph in the '?' legend: the glyph text, the semantic style
+// it renders in on a row, an optional pre-rendered override for self-styled chips
+// (the AUTO badge carries its own background), and a short gloss.
+type legendEntry struct {
+	glyph    string
+	style    lipgloss.Style
+	rendered string
+	label    string
+}
+
+// legendGroup is a titled cluster of legend entries.
+type legendGroup struct {
+	title   string
+	entries []legendEntry
+}
+
+// legendGroups projects the active Glyphs table into the '?' legend, grouped
+// status / git / badges. Every entry reads its glyph from the live Glyphs set, so
+// the legend can never drift from what a row actually paints, and it re-renders
+// under whichever fidelity rung is active. Completeness — every row-vocabulary
+// glyph field is present — is pinned by TestLegendCoversRowVocabulary.
+func legendGroups() []legendGroup {
+	t := theme.Current()
+	g := t.Glyphs
+	pending := lipgloss.NewStyle().Foreground(t.Palette.Pending)
+	seen := lipgloss.NewStyle().Foreground(t.Palette.SuccessDim)
+	spin := " "
+	if len(g.SpinnerFrames) > 0 {
+		spin = g.SpinnerFrames[0]
+	}
+	return []legendGroup{
+		{"status", []legendEntry{
+			{glyph: spin, style: t.WorkingStyle(), label: "working"},
+			{glyph: g.Pending, style: pending, label: "pending"},
+			{glyph: g.Ready, style: t.SuccessStyle(), label: "ready"},
+			{glyph: g.ReadySeen, style: seen, label: "seen"},
+			{glyph: g.Waiting, style: t.AttentionStyle(), label: "waiting"},
+			{glyph: g.Paused, style: t.DimStyle(), label: "paused"},
+		}},
+		{"git", []legendEntry{
+			{glyph: g.Branch, style: t.DimStyle(), label: "branch"},
+			{glyph: g.Ahead, style: t.DimStyle(), label: "ahead"},
+			{glyph: g.Behind, style: t.AttentionStyle(), label: "behind"},
+			{glyph: g.Dirty, style: t.DimStyle(), label: "dirty"},
+			{glyph: g.PR, style: t.AccentStyle(), label: "PR"},
+			{glyph: g.DiffAdd, style: t.SuccessStyle(), label: "added"},
+			{glyph: g.DiffDel, style: t.DangerStyle(), label: "removed"},
+		}},
+		{"badges", []legendEntry{
+			{glyph: g.Queued, style: t.AccentStyle(), label: "queued"},
+			{glyph: g.Note, style: t.PurpleStyle(), label: "note"},
+			{glyph: g.Warn, style: t.AttentionStyle(), label: "stale"},
+			{glyph: g.AutoBadge, rendered: t.BadgeStyle().Render(" " + g.AutoBadge + "AUTO "), label: "auto-accepting"},
+		}},
+	}
+}
+
+// legendLines renders the legend groups, one line per group: a padded group title
+// followed by "<glyph> <label>" entries. The text overlay wraps a long line to the
+// box width, so a narrow terminal reflows rather than overflows.
+func legendLines() []string {
+	var lines []string
+	for _, grp := range legendGroups() {
+		title := grp.title
+		for len(title) < 8 {
+			title += " "
+		}
+		var b strings.Builder
+		b.WriteString(helpDimStyle().Render("  " + title))
+		for i, e := range grp.entries {
+			if i > 0 {
+				b.WriteString("  ")
+			}
+			glyph := e.rendered
+			if glyph == "" {
+				glyph = e.style.Render(e.glyph)
+			}
+			b.WriteString(glyph + " " + helpDimStyle().Render(e.label))
+		}
+		lines = append(lines, b.String())
+	}
+	return lines
 }
 
 // mouseHelpRows document the mouse map in the ? overlay. Every mouse action

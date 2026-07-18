@@ -193,10 +193,18 @@ func newSettingRows(cfg *config.Config) []settingRow {
 				return append([]string{config.SplashRandom}, config.SplashVariants()...)
 			},
 		},
-		boolRow("nerd_font", "Appearance", "Nerd Font icons",
-			"Vendor icons (branch, PR, dirty, auto) from a patched Nerd Font; off = plain Unicode.", "",
-			(*config.Config).GetNerdFont,
-			func(c *config.Config, v bool) { c.NerdFont = &v }),
+		{
+			key: "glyph_set", section: "Appearance", label: "Glyph set", kind: kindEnum,
+			description: "Icon fidelity: nerd = vendor Nerd-Font icons (needs a patched font), plain = Unicode that renders on any font (the default), ascii = a 7-bit floor for terminals where even plain Unicode shows tofu.",
+			get:         func(c *config.Config) string { return c.GetGlyphSet() },
+			set: func(c *config.Config, v string) error {
+				c.GlyphSet = v
+				return nil
+			},
+			options: func(c *config.Config) []string {
+				return []string{config.GlyphSetNerd, config.GlyphSetPlain, config.GlyphSetASCII}
+			},
+		},
 		{
 			key: "model_indicator", section: "Appearance", label: "Model chip", kind: kindEnum,
 			description: "Per-session model chip in the list, shown whenever the model is known.",
