@@ -323,9 +323,11 @@ func (w *TabbedWindow) DiffCommentMessage(note string) (string, bool) {
 	return w.diff.CommentMessage(note)
 }
 
-// SetDiffContent parses raw unified-diff content and loads the resulting rows into
-// the diff pane, bypassing the live-instance path. Useful for testing comment mode
-// without a real git worktree, and for programmatic diff display.
+// SetDiffContent seeds the diff pane's comment rows from raw unified-diff content,
+// bypassing the live-instance path so comment mode (#383) is reachable in tests
+// without a real git worktree. Exported only because those tests live in package
+// app; it is not a display path — it sets no rendered content, so the pane still
+// draws whatever SetDiff last put in the viewport.
 func (w *TabbedWindow) SetDiffContent(content string) {
 	w.diff.rows = parseDiffRows(content)
 }

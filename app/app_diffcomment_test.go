@@ -46,42 +46,10 @@ func newDiffCommentHome(t *testing.T) *home {
 	return h
 }
 
-// --- Gap 1: stateDiffComment in the background-message panic sweep ---
-//
-// TestStateMachine_DiffComment_BackgroundNeverPanics is a targeted extension of
-// TestStateMachine_BackgroundMessagesNeverPanic: it feeds every async background
-// message through Update while h.state == stateDiffComment and the diff pane is
-// genuinely frozen (commenting == true), asserting neither panics nor nil-derefs.
-// Background messages bypass handleDiffCommentState and should be invisible to the
-// cursor state, but a misrouted previewTick or a nil-deref on the selected instance
-// could slip through — this sweep guards the whole cross-product.
-func TestStateMachine_DiffComment_BackgroundNeverPanics(t *testing.T) {
-	messages := []struct {
-		name string
-		msg  tea.Msg
-	}{
-		{"WindowSizeMsg", tea.WindowSizeMsg{Width: 100, Height: 40}},
-		{"previewTickMsg", previewTickMsg{}},
-		{"metadataUpdateDoneMsg", metadataUpdateDoneMsg{}},
-		{"metadataSweepDoneMsg", metadataSweepDoneMsg{}},
-		{"smartDispatchDoneMsg", smartDispatchDoneMsg{}},
-	}
-
-	for _, mc := range messages {
-		t.Run(mc.name, func(t *testing.T) {
-			h := newDiffCommentHome(t)
-
-			defer func() {
-				if r := recover(); r != nil {
-					t.Fatalf("Update panicked in stateDiffComment on %s: %v", mc.name, r)
-				}
-			}()
-
-			model, _ := h.Update(mc.msg)
-			require.NotNil(t, model, "Update must always return a model")
-		})
-	}
-}
+// Gap 1 (stateDiffComment in the background-message panic sweep) is covered by the
+// "diffComment" entry in TestStateMachine_BackgroundMessagesNeverPanic rather than a
+// test here: that sweep feeds three more background messages and renders View after
+// each Update, so a dedicated Update-only version would be a strict subset of it.
 
 // --- Gap 2: enterDiffComment guard — no session selected ---
 
@@ -94,7 +62,10 @@ func TestEnterDiffComment_NoSession_ShowsNotice(t *testing.T) {
 	_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'C'}})
 
 	require.Equal(t, stateDefault, h.state)
-	require.True(t, h.menu.HasNotice())
+	// Pin the text, not just HasNotice(): the two enterDiffComment guards decline
+	// for different reasons and the message is the only thing that tells them apart,
+	// so a bare HasNotice() passes even when the wrong guard fires.
+	require.Equal(t, "no session selected", h.menu.NoticeText())
 }
 
 // --- Gap 3: enterDiffComment guard — session selected but no annotatable rows ---
@@ -113,7 +84,7 @@ func TestEnterDiffComment_NoDiffLines_ShowsNotice(t *testing.T) {
 	_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'C'}})
 
 	require.Equal(t, stateDefault, h.state)
-	require.True(t, h.menu.HasNotice())
+	require.Equal(t, "no diff lines to comment on", h.menu.NoticeText())
 }
 
 // --- Gap 6: cancelDiffComment — returns to stateDiffComment, not stateDefault ---
@@ -195,6 +166,13 @@ func TestDiffComment_Submit_QueuesFollowupAndReturnsToCommentMode(t *testing.T) 
 func TestDiffComment_EmptyNote_QueuesNothing(t *testing.T) {
 	h := newDiffCommentHome(t)
 
+	// Storage must be live even though nothing should be persisted: submitDiffComment
+	// calls persistInstances on the queueing leg, so a regression that drops the guard
+	// has to fail on the assertions below rather than nil-panicking inside SaveInstances.
+	st, err := session.NewStorage(config.DefaultState())
+	require.NoError(t, err)
+	h.storage = st
+
 	// Wire in an overlay the way openDiffCommentComposer would: submitOnEnter=true
 	// so a bare Enter submits even with empty content.
 	h.textInputOverlay = overlay.NewQuickSendOverlay("Comment on foo.go:1")
@@ -207,5 +185,6 @@ func TestDiffComment_EmptyNote_QueuesNothing(t *testing.T) {
 	inst := h.list.GetSelectedInstance()
 	require.Empty(t, inst.Prompt(), "an empty note must not be queued")
 	require.Equal(t, stateDiffComment, h.state, "empty-note submit still returns to the cursor")
-	require.True(t, h.menu.HasNotice(), "empty submit must show an explanatory notice")
+	require.Equal(t, "empty comment — nothing queued", h.menu.NoticeText(),
+		"empty submit must say why nothing was queued")
 }

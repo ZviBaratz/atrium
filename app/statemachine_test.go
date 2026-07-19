@@ -42,9 +42,11 @@ func newSmokeHome(t *testing.T, st state, wire func(h *home, inst *session.Insta
 // TestStateMachine_BackgroundMessagesNeverPanic is a robustness sweep: for every UI
 // state, feed each background/async message — the ones emitted by timers and
 // goroutines independently of the current state, so they can genuinely arrive in any
-// of them — through Update and assert it neither panics nor nil-derefs and always
-// returns a model. State-routed *key* handling is covered per-feature elsewhere; this
-// guards the cross-product that those targeted tests don't.
+// of them — through Update *and the View that follows it* and assert neither panics
+// nor nil-derefs, and that Update always returns a model. Rendering is what makes the
+// per-state overlay wiring load-bearing: the overlay dereferences live in View.
+// State-routed *key* handling is covered per-feature elsewhere; this guards the
+// cross-product that those targeted tests don't.
 func TestStateMachine_BackgroundMessagesNeverPanic(t *testing.T) {
 	states := []struct {
 		name string
@@ -86,6 +88,18 @@ func TestStateMachine_BackgroundMessagesNeverPanic(t *testing.T) {
 			h.tabbedWindow.SetDiffContent(diff)
 			h.tabbedWindow.EnterDiffComment()
 		}},
+		{"queue", stateQueue, func(h *home, inst *session.Instance) {
+			h.queueOverlay = overlay.NewQueueOverlay(inst.DisplayName())
+		}},
+		{"cmdlog", stateCmdLog, func(h *home, _ *session.Instance) {
+			h.cmdLogOverlay = overlay.NewCmdLogOverlay("test-session")
+		}},
+		{"welcome", stateWelcome, func(h *home, _ *session.Instance) {
+			h.welcomeOverlay = overlay.NewWelcomeOverlay()
+		}},
+		{"history", stateHistory, func(h *home, _ *session.Instance) {
+			h.promptHistoryOverlay = overlay.NewPromptHistoryOverlay([]string{"remembered"})
+		}},
 	}
 
 	// Each factory takes the home's selected instance so payload-bearing messages
@@ -114,12 +128,18 @@ func TestStateMachine_BackgroundMessagesNeverPanic(t *testing.T) {
 
 				defer func() {
 					if r := recover(); r != nil {
-						t.Fatalf("Update panicked in state %q on %s: %v", sc.name, mc.name, r)
+						t.Fatalf("Update/View panicked in state %q on %s: %v", sc.name, mc.name, r)
 					}
 				}()
 
 				model, _ := h.Update(msg)
 				require.NotNil(t, model, "Update must always return a model")
+
+				// Render too: the per-state overlay dereferences live in View, so an
+				// Update-only sweep never touches the fields each wire callback arms.
+				// Bubble Tea always renders after Update, so a state whose overlay the
+				// message invalidated panics here, not above.
+				require.NotEmpty(t, model.View(), "View must render in every state")
 			})
 		}
 	}

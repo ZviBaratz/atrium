@@ -206,19 +206,19 @@ func TestParseHunkHeader(t *testing.T) {
 	}{
 		{"@@ -1,3 +1,4 @@", 1, 1, true},
 		{"@@ -10,2 +10,3 @@", 10, 10, true},
-		{"@@ -10 +10 @@", 10, 10, true},               // count omitted (single-line hunk)
+		{"@@ -10 +10 @@", 10, 10, true},              // count omitted (single-line hunk)
 		{"@@ -1,3 +1,4 @@ func Foo() {", 1, 1, true}, // trailing context text
-		{"@@ -5,0 +6,3 @@", 5, 6, true},                // zero-count old side
+		{"@@ -5,0 +6,3 @@", 5, 6, true},              // zero-count old side
 		{"not a hunk header", 0, 0, false},
 		{"@@ missing fields", 0, 0, false},
 	}
 	for _, tc := range tests {
 		t.Run(tc.line, func(t *testing.T) {
-			old, new, ok := parseHunkHeader(tc.line)
+			oldStart, newStart, ok := parseHunkHeader(tc.line)
 			require.Equal(t, tc.ok, ok, "ok mismatch")
 			if tc.ok {
-				require.Equal(t, tc.oldStart, old, "oldStart mismatch")
-				require.Equal(t, tc.newStart, new, "newStart mismatch")
+				require.Equal(t, tc.oldStart, oldStart, "oldStart mismatch")
+				require.Equal(t, tc.newStart, newStart, "newStart mismatch")
 			}
 		})
 	}

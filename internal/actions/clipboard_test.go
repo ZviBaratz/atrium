@@ -10,6 +10,12 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// errWriter is an io.Writer that always returns a write error, simulating a
+// broken pipe or closed fd without touching a real terminal.
+type errWriter struct{}
+
+func (errWriter) Write(_ []byte) (int, error) { return 0, errors.New("broken pipe") }
+
 // swapClipboardLegs points both clipboard legs at test doubles and restores the
 // real ones when the test ends, keeping the suite hermetic (no host clipboard,
 // no terminal). out is the OSC 52 sink; exec is the exec-copier stand-in.
@@ -103,4 +109,44 @@ func TestCopyToClipboard_NilOutputDoesNotPanic(t *testing.T) {
 func TestEmitClipboardOSC52_NoWriter(t *testing.T) {
 	swapClipboardLegs(t, nil, func(string) error { return nil })
 	require.False(t, emitClipboardOSC52("x"), "a nil writer means the OSC 52 leg did not deliver")
+}
+
+// TestEmitClipboardOSC52_WriteError: a write error (broken pipe, closed fd) is
+// indistinguishable from "no terminal" from the caller's perspective — the OSC 52
+// leg reports false so copyToClipboard falls back to execCopy.
+func TestEmitClipboardOSC52_WriteError(t *testing.T) {
+	orig := clipboardOutput
+	clipboardOutput = errWriter{}
+	t.Cleanup(func() { clipboardOutput = orig })
+	require.False(t, emitClipboardOSC52("x"), "a write error must report the OSC 52 leg as not delivered")
+}
+
+// TestCopyToClipboard_WriteFaultyOutputFallsBackToExec: when the wired terminal
+// writer errors (broken pipe), the exec leg still runs and a clean exec reports
+// overall success — the write error is not exposed to the caller.
+func TestCopyToClipboard_WriteFaultyOutputFallsBackToExec(t *testing.T) {
+	orig, origExec := clipboardOutput, execCopy
+	execCalled := false
+	clipboardOutput = errWriter{}
+	execCopy = func(string) error { execCalled = true; return nil }
+	t.Cleanup(func() { clipboardOutput, execCopy = orig, origExec })
+
+	require.NoError(t, copyToClipboard("fallback"), "a successful exec leg must report overall success")
+	require.True(t, execCalled, "the exec leg must run when the OSC 52 write errors")
+}
+
+// TestCopyToClipboard_WriteFaultyOutputAndExecFail: when both legs fail — the
+// terminal writer errors and execCopy returns an error — the reported error names
+// the install hint and the OSC 52 alternative, keeping a stuck copy actionable.
+func TestCopyToClipboard_WriteFaultyOutputAndExecFail(t *testing.T) {
+	orig, origExec := clipboardOutput, execCopy
+	clipboardOutput = errWriter{}
+	execCopy = func(string) error { return errors.New("xclip: not found") }
+	t.Cleanup(func() { clipboardOutput, execCopy = orig, origExec })
+
+	err := copyToClipboard("x")
+	require.Error(t, err)
+	msg := strings.ToLower(err.Error())
+	require.Contains(t, msg, "install", "the error must name the next step (install a clipboard utility)")
+	require.Contains(t, msg, "osc 52", "the error must name the terminal alternative")
 }
