@@ -79,3 +79,34 @@ func TestPromptHistory_UpWithTextDoesNotOpen(t *testing.T) {
 	_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyUp})
 	require.Equal(t, statePrompt, h.state, "up with text present must not open history")
 }
+
+// Up-arrow on an empty prompt in the CREATE FORM also opens the picker (#388).
+// The trigger code is shared (app_keys.go:handlePrompt), but the create form's
+// multi-field focus ring makes PromptFocusedAndEmpty() return false unless the
+// textarea is the active stop — this test pins that the correct stop is reached
+// via Tab and that the picker opens, inserts, and returns to compose.
+func TestPromptHistory_CreateFormUpOnEmptyOpensPicker(t *testing.T) {
+	h := newCreateFormHome(t)
+	h.state = statePrompt
+	ov, _ := h.newSessionFormOverlay()
+	h.textInputOverlay = ov
+
+	// FocusTitle() is the n quick-create entry point. One Tab moves from the
+	// title field to the prompt textarea (stopTitle → stopTextarea).
+	ov.FocusTitle()
+	_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyTab})
+
+	require.NoError(t, h.appState.AddPromptHistory("create-form prompt"))
+
+	_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyUp})
+
+	require.Equal(t, stateHistory, h.state,
+		"up on an empty prompt textarea in the create form opens the history picker")
+	require.NotNil(t, h.promptHistoryOverlay)
+
+	// Enter inserts the selected text and returns to compose without submitting.
+	_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyEnter})
+	require.Equal(t, statePrompt, h.state, "picking returns to compose")
+	require.Equal(t, "create-form prompt", h.textInputOverlay.GetValue(),
+		"the picked text is inserted into the create form's prompt field, not submitted")
+}
