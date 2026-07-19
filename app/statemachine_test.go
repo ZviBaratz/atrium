@@ -78,6 +78,18 @@ func TestStateMachine_BackgroundMessagesNeverPanic(t *testing.T) {
 		{"filter", stateFilter, nil},
 		{"hints", stateHints, nil},
 		{"visual", stateVisual, nil},
+		{"queue", stateQueue, func(h *home, inst *session.Instance) {
+			h.queueOverlay = overlay.NewQueueOverlay(inst.DisplayName())
+		}},
+		{"cmdlog", stateCmdLog, func(h *home, _ *session.Instance) {
+			h.cmdLogOverlay = overlay.NewCmdLogOverlay("test-session")
+		}},
+		{"welcome", stateWelcome, func(h *home, _ *session.Instance) {
+			h.welcomeOverlay = overlay.NewWelcomeOverlay()
+		}},
+		{"history", stateHistory, func(h *home, _ *session.Instance) {
+			h.promptHistoryOverlay = overlay.NewPromptHistoryOverlay([]string{"remembered"})
+		}},
 	}
 
 	// Each factory takes the home's selected instance so payload-bearing messages
