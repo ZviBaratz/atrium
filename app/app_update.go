@@ -697,6 +697,13 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		return m.handleMultiSelectState(msg)
 	}
 
+	// Diff-comment mode: the line cursor moves with j/k, enter opens the composer,
+	// esc exits. Must run before the global esc/quit handling below so esc leaves
+	// comment mode (not the app) and q never quits.
+	if m.state == stateDiffComment {
+		return m.handleDiffCommentState(msg)
+	}
+
 	// Exit scrolling mode when ESC is pressed and preview pane is in scrolling mode
 	// Check if Escape key was pressed and we're not in the diff tab (meaning we're in preview tab)
 	// Always check for escape key first to ensure it doesn't get intercepted elsewhere
@@ -797,6 +804,8 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		return m, tea.WindowSize()
 	case keys.KeyQuickSend:
 		return m.openQuickSend()
+	case keys.KeyDiffComment:
+		return m.enterDiffComment()
 	case keys.KeyQueue:
 		return m.openQueue()
 	case keys.KeyCmdLog:

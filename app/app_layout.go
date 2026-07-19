@@ -133,8 +133,8 @@ func (m *home) updateHandleWindowSizeEvent(msg tea.WindowSizeMsg) {
 // restores the chrome-free interface.
 func (m *home) menuVisible() bool {
 	switch m.state {
-	case stateFilter, stateVisual:
-		// Both inline interactions teach their gestures on the bar, so it stays
+	case stateFilter, stateVisual, stateDiffComment:
+		// These inline interactions teach their gestures on the bar, so it stays
 		// even when the always-on hint bar is turned off.
 		return true
 	case statePrompt, stateRename, stateQueue, stateCmdLog, stateConfirm, stateHelp, stateInfo, stateSettings, stateWelcome, stateAccounts, stateHistory:

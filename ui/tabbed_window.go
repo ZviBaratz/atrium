@@ -291,6 +291,38 @@ func (w *TabbedWindow) IsInTerminalTab() bool {
 	return w.activeTab == TerminalTab
 }
 
+// --- Diff-tab comment mode (#383): thin proxies to the diff pane's line cursor ---
+
+// EnterDiffComment freezes the diff pane and drops the comment cursor; false when
+// the diff has no code line to anchor a comment to.
+func (w *TabbedWindow) EnterDiffComment() bool { return w.diff.EnterComment() }
+
+// ExitDiffComment leaves comment mode and lets live diff refreshes resume.
+func (w *TabbedWindow) ExitDiffComment() { w.diff.ExitComment() }
+
+// DiffCursorDown steps the comment cursor to the next code line.
+func (w *TabbedWindow) DiffCursorDown() { w.diff.CursorDown() }
+
+// DiffCursorUp steps the comment cursor to the previous code line.
+func (w *TabbedWindow) DiffCursorUp() { w.diff.CursorUp() }
+
+// DiffExtendDown grows the comment selection to the next contiguous code line below.
+func (w *TabbedWindow) DiffExtendDown() { w.diff.ExtendDown() }
+
+// DiffExtendUp grows the comment selection to the next contiguous code line above.
+func (w *TabbedWindow) DiffExtendUp() { w.diff.ExtendUp() }
+
+// IsDiffCommenting reports whether the diff pane is in comment mode.
+func (w *TabbedWindow) IsDiffCommenting() bool { return w.diff.IsCommenting() }
+
+// DiffCommentLocation returns the "file:line" the cursor sits on, for the composer title.
+func (w *TabbedWindow) DiffCommentLocation() (string, bool) { return w.diff.CommentLocation() }
+
+// DiffCommentMessage builds the queued-prompt text for the cursor's line and note.
+func (w *TabbedWindow) DiffCommentMessage(note string) (string, bool) {
+	return w.diff.CommentMessage(note)
+}
+
 // GetActiveTab returns the currently active tab index
 func (w *TabbedWindow) GetActiveTab() int {
 	return w.activeTab

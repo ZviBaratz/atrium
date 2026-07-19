@@ -57,6 +57,7 @@ var HelpGroups = []HelpGroup{
 		{Keys: []KeyName{KeyKill}, Desc: "kill the selected/attached session (twice to confirm)"},
 		{Keys: []KeyName{KeySessionCycle}, Desc: "cycle to prev / next session in the repo group"},
 		{Keys: []KeyName{KeyQuickSend}, Desc: "send a message (without attaching)"},
+		{Keys: []KeyName{KeyDiffComment}, Desc: "diff tab: comment on a line or range → queue it to the agent (↑↓/j/k move, shift+↑↓/J/K extend, enter comment, esc exit)"},
 		{Keys: []KeyName{KeyQueue}, Desc: "manage queued prompts (list / cancel)"},
 		{Keys: []KeyName{KeyApprove}, Desc: "approve the agent's prompt (enter picks its default); on idle claude, accept the suggested prompt"},
 		{Keys: []KeyName{KeyPause}, Desc: "pause: commit changes + free the worktree"},

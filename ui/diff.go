@@ -29,6 +29,16 @@ type DiffPane struct {
 	stats    string
 	width    int
 	height   int
+
+	// Comment mode (#383): while commenting, the pane is frozen on a snapshot of
+	// rows so the line cursor is stable and its anchor reliable — SetDiff becomes a
+	// no-op until ExitComment, and cursor indexes an annotatable row in rows. anchor
+	// is the fixed end of a multi-line selection: j/k move both (collapsing to one
+	// line), J/K move only the cursor to grow/shrink a contiguous range.
+	rows       []diffRow
+	commenting bool
+	cursor     int
+	anchor     int
 }
 
 // NewDiffPane returns an empty DiffPane.
@@ -54,6 +64,11 @@ func (d *DiffPane) SetSize(width, height int) {
 // SetDiff recomputes and renders the instance's diff, falling back to a
 // centered placeholder when there are no changes (or no instance).
 func (d *DiffPane) SetDiff(instance *session.Instance) {
+	// Frozen in comment mode (#383): ignore live refreshes so the line cursor and
+	// its anchor stay put on the snapshot the user is annotating.
+	if d.commenting {
+		return
+	}
 	centeredFallbackMessage := centerInBox(d.width, d.height, metaStyle().Render("No changes"))
 
 	if instance == nil || !instance.Started() {
@@ -92,6 +107,7 @@ func (d *DiffPane) SetDiff(instance *session.Instance) {
 	if stats.IsEmpty() {
 		d.stats = ""
 		d.diff = ""
+		d.rows = nil
 		d.viewport.SetContent(centeredFallbackMessage)
 	} else {
 		lineStats := diffStatLine(stats)
@@ -106,6 +122,9 @@ func (d *DiffPane) SetDiff(instance *session.Instance) {
 		// Decompose font-dependent emoji clusters in the diff so the width we lay out
 		// matches what the terminal renders and the pane can't wrap (see theme.SanitizeWidth).
 		d.diff = colorizeDiff(theme.SanitizeWidth(stats.Content), d.width)
+		// Snapshot the rows for comment mode (#383): a line cursor and its file:line
+		// anchor are recovered from these, and EnterComment freezes on them.
+		d.rows = parseDiffRows(stats.Content)
 		d.viewport.SetContent(lipgloss.JoinVertical(lipgloss.Left, d.stats, d.diff))
 	}
 }

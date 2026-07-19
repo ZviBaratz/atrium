@@ -54,6 +54,12 @@ func (m *home) selectedActionable() (*session.Instance, tea.Cmd, bool) {
 // handlePromptState routes a key to the text-input overlay (new-session form or
 // quick-send compose box) and handles submit/cancel/retarget/debounce.
 func (m *home) handlePromptState(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	// #383 diff comment: this composer was opened from the diff line cursor. Route
+	// it to its own submit/cancel so a queued comment (or a cancel) returns to
+	// comment mode rather than the list, and never runs the quick-send/create paths.
+	if m.composingDiffComment {
+		return m.handleDiffCommentComposer(msg)
+	}
 	// Handle cancel via ctrl+c before delegating to the overlay
 	if msg.String() == "ctrl+c" {
 		return m, m.cancelPromptOverlay()

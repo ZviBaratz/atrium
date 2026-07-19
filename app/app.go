@@ -174,6 +174,10 @@ const (
 	// highlighted session and a lifecycle action (pause/resume/kill) applies to
 	// the marked set; esc clears the marks and exits.
 	stateVisual
+	// stateDiffComment is the diff-tab line-cursor mode (#383): j/k move the cursor
+	// over code lines, enter opens the composer for the current line, esc exits. The
+	// diff pane is frozen on a snapshot while this state is active.
+	stateDiffComment
 	// stateWelcome is the interactive first-launch setup modal: pick a default
 	// agent from the ones detected on PATH, then start the first session.
 	stateWelcome
@@ -342,6 +346,11 @@ type home struct {
 	// draggingDivider is true while the user holds the list/preview seam and drags
 	// it; motion events then map the cursor column to the split (see handleMouse).
 	draggingDivider bool
+
+	// composingDiffComment is true while the diff-comment composer overlay is up
+	// (#383): it routes handlePromptState to the diff-comment submit/cancel and
+	// returns to stateDiffComment (not stateDefault) when the composer closes.
+	composingDiffComment bool
 
 	// -- UI Components --
 

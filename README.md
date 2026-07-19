@@ -146,6 +146,7 @@ in-app keymap and this section ever drift apart, so it stays complete.
 | `ctrl-x` | kill the selected/attached session (twice to confirm) |
 | `ctrl-pgup/pgdn` | in a session: cycle to prev / next session in the repo group |
 | `s` | send a message (without attaching) |
+| `C` | diff tab: comment on a line or range → queue it to the agent (↑↓/j/k move, shift+↑↓/J/K extend, enter comment, esc exit) |
 | `Q` | manage queued prompts (list / cancel) |
 | `a` | approve the agent's prompt (`↵` picks its default); on idle claude, accept the suggested prompt |
 | `p` | pause: commit changes + free the worktree |

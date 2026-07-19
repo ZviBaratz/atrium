@@ -99,6 +99,10 @@ var Registry = []Entry{
 		key.WithKeys("s"),
 		key.WithHelp("s", "send"),
 	)},
+	{Name: KeyDiffComment, Binding: key.NewBinding(
+		key.WithKeys("C"),
+		key.WithHelp("C", "comment on a diff line"),
+	)},
 	{Name: KeyQueue, Binding: key.NewBinding(
 		key.WithKeys("Q"),
 		key.WithHelp("Q", "manage queued prompts"),
@@ -350,6 +354,15 @@ var (
 	VisualModeHints = []key.Binding{
 		key.NewBinding(key.WithKeys(" "), key.WithHelp("space", "mark")),
 		key.NewBinding(key.WithKeys("p", "r", "x"), key.WithHelp("p/r/x", "pause/resume/kill marked")),
+		key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "exit")),
+	}
+	// DiffCommentModeHints teaches diff-comment mode's move/comment/exit gestures
+	// (StateDiffComment): the line cursor steps code lines, enter composes the
+	// comment, esc leaves.
+	DiffCommentModeHints = []key.Binding{
+		key.NewBinding(key.WithHelp("↑↓/jk", "move")),
+		key.NewBinding(key.WithHelp("shift+↑↓/JK", "extend")),
+		key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "comment")),
 		key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "exit")),
 	}
 )

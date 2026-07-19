@@ -43,6 +43,7 @@ func TestGlobalKeyStringsMap_GoldenInventory(t *testing.T) {
 		"R":          KeyRename,
 		"A":          KeyAutoName,
 		"s":          KeyQuickSend,
+		"C":          KeyDiffComment,
 		"Q":          KeyQueue,
 		"L":          KeyCmdLog,
 		"y":          KeyCopyBranch,
@@ -111,11 +112,38 @@ func TestRegistry_NoDuplicateKeyStrings(t *testing.T) {
 // every generated help surface (the cheatsheet coverage guard and the hint
 // bar both walk that map). Its dispatch line is appended by hand in
 // registry.go instead. app/help_coverage_test.go guards the rendered half.
+//
+// That hand-append also makes the backtick unclaimable by anything else, which
+// neither the golden inventory nor the duplicate-string guard can see: the
+// append runs last, so the map still reads '`' → KeyScreensaver even when a
+// Registry entry collides with it. Hence the third check below.
 func TestRegistry_OmitsScreensaver(t *testing.T) {
 	for _, e := range Registry {
 		if e.Name == KeyScreensaver {
 			t.Fatal("KeyScreensaver must not appear in Registry — the easter egg's " +
 				"exclusion from help is structural, not a flag")
+		}
+		for _, s := range e.Binding.Keys() {
+			if s != "`" {
+				continue
+			}
+			// Which half of the easter egg breaks depends on whether the
+			// claimant reaches the dispatch map at all: a dispatched entry is
+			// clobbered by the hand-append that runs after the derivation
+			// loop, while a DocOnly one never enters the map (the loop skips
+			// it) and instead swallows the key upstream — before the lookup,
+			// or in the attach layer — so the screensaver stops firing.
+			// KeyName is a bare int, so name it by its help label — %v alone
+			// would report the collision as "entry 0".
+			label := e.Binding.Help().Desc
+			if e.DocOnly {
+				t.Errorf("DocOnly Registry entry %q claims the screensaver key '`'; "+
+					"it never enters GlobalKeyStringsMap, so it would intercept the "+
+					"key before the hand-appended dispatch line is ever reached", label)
+				continue
+			}
+			t.Errorf("Registry entry %q claims the screensaver key '`'; "+
+				"the hand-append in GlobalKeyStringsMap would silently overwrite it", label)
 		}
 	}
 	if _, ok := GlobalKeyBindings[KeyScreensaver]; ok {

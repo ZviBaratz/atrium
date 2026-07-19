@@ -52,6 +52,9 @@ const (
 	// StateVisual is shown while multi-select ("visual") mode is active: the bar
 	// teaches the mark/act/exit gestures instead of the usual options.
 	StateVisual
+	// StateDiffComment is shown while diff-comment mode is active: the bar teaches
+	// the line cursor's move/comment/exit gestures instead of the usual options.
+	StateDiffComment
 )
 
 // defaultHintKeys are the high-value bindings the always-on bar surfaces during
@@ -384,6 +387,8 @@ func (m *Menu) String() string {
 		line = m.renderModeLine(keys.HintModeHints)
 	case StateVisual:
 		line = m.renderModeLine(keys.VisualModeHints)
+	case StateDiffComment:
+		line = m.renderModeLine(keys.DiffCommentModeHints)
 	case StateEmpty:
 		line = m.renderHintLine(emptyHintKeys)
 	default: // StateDefault

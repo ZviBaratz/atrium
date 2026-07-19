@@ -167,6 +167,47 @@ func TestCycleKeyLeavesFocus(t *testing.T) {
 	require.False(t, h.listHidden(), "cycling onward from focus must leave focus mode")
 }
 
+// TestExitFocusLayoutDirect pins the state contract of exitFocusLayout one layer
+// below TestEscLeavesFocusToPriorPreset (which goes through key dispatch): the
+// function itself must restore layoutIndex to layoutPrev, leave focus (listHidden
+// false), and land on the preset that preceded focus. The override-clearing half
+// of the contract needs a custom override to actually clear, which un-hides the
+// list and so cannot coexist with the listHidden assertion here — it lives in
+// TestExitFocusLayoutClearsCustomOverride.
+func TestExitFocusLayoutDirect(t *testing.T) {
+	h := newPresetHome(t)
+
+	cycleTo(t, h, "review") // layoutPrev = default index, layoutIndex = review index
+	cycleTo(t, h, "focus")  // layoutPrev = review index, layoutIndex = focus index
+	prevIdx := h.layoutPrev // capture review index before the call
+	require.True(t, h.listHidden(), "focus must hide the list going in, so the assertion below can catch the leave")
+
+	_ = h.exitFocusLayout()
+
+	require.Equal(t, prevIdx, h.layoutIndex, "exitFocusLayout must restore layoutIndex to layoutPrev")
+	require.False(t, h.listHidden(), "exitFocusLayout must leave focus mode")
+	require.Equal(t, "review", h.currentPreset().name, "the active preset must be the one that preceded focus")
+}
+
+// TestExitFocusLayoutClearsCustomOverride pins the one leg of exitFocusLayout's
+// contract that TestExitFocusLayoutDirect structurally cannot: clearing
+// layoutCustom. It needs the flag actually set first — cycleLayoutPreset clears it
+// on every step, so cycling into focus alone leaves nothing to clear and the
+// assertion would hold even with the clear deleted.
+func TestExitFocusLayoutClearsCustomOverride(t *testing.T) {
+	h := newPresetHome(t)
+
+	cycleTo(t, h, "review")
+	cycleTo(t, h, "focus")
+	h.handleKeyPress(runeKey(">")) // an explicit split adjustment sets the override
+	require.True(t, h.layoutCustom, "precondition: > must set the custom override")
+
+	_ = h.exitFocusLayout()
+
+	require.False(t, h.layoutCustom, "exitFocusLayout must clear the custom override")
+	require.Equal(t, "review", h.currentPreset().name, "clearing the override must not disturb the restored preset")
+}
+
 // TestFocusModeSeamIsInert: in focus the list is hidden, so there is no visible
 // seam to grab — a press at the column the seam would occupy must not start a
 // divider drag (the !listHidden guard on the grab).

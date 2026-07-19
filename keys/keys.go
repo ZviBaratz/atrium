@@ -71,6 +71,8 @@ const (
 
 	KeyQuickSend // Open a compose box to send a message to the selected session without attaching
 
+	KeyDiffComment // Enter diff-comment mode: a line cursor on the diff tab whose comment queues to the agent
+
 	KeyQueue // Open the pending-prompt management overlay for the selected session
 
 	KeyCmdLog // Open the command-log overlay (tmux/git/gh subprocesses Atrium ran)
