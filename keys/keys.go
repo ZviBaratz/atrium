@@ -71,7 +71,11 @@ const (
 
 	KeyQuickSend // Open a compose box to send a message to the selected session without attaching
 
+	KeyDiffComment // Enter diff-comment mode: a line cursor on the diff tab whose comment queues to the agent
+
 	KeyQueue // Open the pending-prompt management overlay for the selected session
+
+	KeyCmdLog // Open the command-log overlay (tmux/git/gh subprocesses Atrium ran)
 
 	KeyAutoName // Auto-generate a display name for the selected session via claude
 
@@ -120,6 +124,13 @@ const (
 	// KeyToggleMark marks/unmarks the highlighted session while in multi-select
 	// mode. It is consumed only by the mode handler, never the default state.
 	KeyToggleMark
+
+	// KeyLayoutPreset cycles the named layout presets (monitor / default / review
+	// / focus; see app.layoutPresets) on a single key. Each preset sets the
+	// list/preview split (or hides the list entirely, in focus), the active
+	// preset persists across relaunch, and < / > still fine-tune the split as a
+	// custom override that never fights this cycle.
+	KeyLayoutPreset
 
 	// KeyScreensaver shows the configured splash pattern full-window until any
 	// key (or click) dismisses it. A deliberate easter egg: it has no Registry

@@ -1,7 +1,6 @@
 package app
 
 import (
-	"strings"
 	"testing"
 
 	"github.com/ZviBaratz/atrium/session"
@@ -101,26 +100,19 @@ func TestWelcome_MarkedSeenOnStart(t *testing.T) {
 	require.NotZero(t, h.appState.GetHelpScreensSeen()&flag, "a successful start must mark the welcome seen")
 }
 
-// First-run guidance must come from exactly one surface: the bottom bar when it
-// is on (the list's centered hint is suppressed), the centered in-list hint when
-// the bar is off. "keys" appears only in the in-list hint; "quit" only in the
-// bar's empty-state line. Both homes mirror newHome's SetShowEmptyHint wiring.
-func TestView_EmptyStateGuidanceSingleSurface(t *testing.T) {
-	h := newCreateFormHome(t) // no instances; default config (bar on)
-	h.list.SetShowEmptyHint(!h.appConfig.GetHintBar())
-	h.state = stateDefault
-	h.updateHandleWindowSizeEvent(tea.WindowSizeMsg{Width: 120, Height: 30})
-	view := h.View()
-	require.Contains(t, view, "quit", "the bar carries the empty-state keys")
-	require.False(t, strings.Contains(view, "keys"), "the in-list hint is suppressed while the bar is on")
-
-	off := false
-	h2 := newCreateFormHome(t)
-	h2.appConfig.HintBar = &off
-	h2.list.SetShowEmptyHint(!h2.appConfig.GetHintBar())
-	h2.state = stateDefault
-	h2.updateHandleWindowSizeEvent(tea.WindowSizeMsg{Width: 120, Height: 30})
-	view2 := h2.View()
-	require.Contains(t, view2, "keys", "with the bar off, the in-list hint is the onboarding surface")
-	require.False(t, strings.Contains(view2, "quit"), "no bottom bar with hint_bar=false")
+// An empty session list shows a CTA card — why the panel is empty plus the
+// single next action — regardless of the hint_bar setting (#381). The card is
+// content, not a duplicate of the bar's keys, so the old "single surface"
+// suppression is gone. A filtered-empty list keeps its own filter feedback and
+// does not show the CTA (asserted at the ui.List level in ui/list_test.go).
+func TestView_EmptyStateShowsCTA(t *testing.T) {
+	for _, barOn := range []bool{true, false} {
+		on := barOn
+		h := newCreateFormHome(t) // no instances
+		h.appConfig.HintBar = &on
+		h.state = stateDefault
+		h.updateHandleWindowSizeEvent(tea.WindowSizeMsg{Width: 120, Height: 30})
+		require.Contains(t, h.View(), "No sessions yet",
+			"an empty list shows the why-empty CTA (hint_bar=%v)", barOn)
+	}
 }

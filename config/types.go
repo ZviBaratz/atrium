@@ -195,7 +195,18 @@ type Config struct {
 	// plain Unicode that renders on any font, so a bare terminal never shows tofu
 	// boxes. Orthogonal to Theme: it applies on top of whichever color theme is
 	// selected. Turn it on only if your terminal uses a patched Nerd Font.
+	//
+	// Superseded by GlyphSet, which adds the third ("ascii") rung. Kept for
+	// back-compat: when GlyphSet is empty this bool still decides nerd vs plain
+	// (see GetGlyphSet), so configs predating GlyphSet keep their exact glyph set.
 	NerdFont *bool `json:"nerd_font,omitempty"`
+	// GlyphSet selects the glyph-fidelity rung: "nerd" (vendor Nerd-Font icons,
+	// needs a patched font), "plain" (non-PUA Unicode that renders on any font —
+	// the default), or "ascii" (a 7-bit floor for terminals where even plain
+	// Unicode shows tofu). Empty (a config predating this key) falls back to the
+	// legacy NerdFont bool: true → nerd, else plain (see GetGlyphSet). When both
+	// are set, GlyphSet wins. Orthogonal to Theme (the color palette).
+	GlyphSet string `json:"glyph_set,omitempty"`
 	// SessionContextBar, when true, renders a thin tmux status line inside each
 	// attached session (name · repo · branch · status + a strip of sibling
 	// sessions in the same repo group). nil means use the default (on), so the
@@ -207,6 +218,26 @@ type Config struct {
 	// false restores the chrome-free interface, where the bar appears only for
 	// inline interactions that need it (naming, filtering, progress).
 	HintBar *bool `json:"hint_bar,omitempty"`
+	// Mouse, when true (the default), enables mouse capture: clickable session
+	// rows / repo headers / tabs / hint-bar entries, wheel scrolling, and a
+	// draggable list/preview divider. nil means use the default (on), so configs
+	// written before this key keep the mouse. Setting it false omits
+	// tea.WithMouseCellMotion entirely, handing every mouse event back to the
+	// terminal — the escape hatch for users whose terminal's native
+	// select-to-copy is broken by capture (Shift+drag is the per-gesture escape
+	// while capture is on). Live-togglable from the Settings panel.
+	Mouse *bool `json:"mouse,omitempty"`
+	// RecordPromptHistory, when true (the default), records submitted prompts in
+	// state.json so they can be reused from the create form and quick-send. nil
+	// means the default (on). Setting it false stops new prompts being recorded;
+	// clearing existing history is a separate action.
+	RecordPromptHistory *bool `json:"record_prompt_history,omitempty"`
+	// OSChrome, when true (the default), surfaces fleet state in the terminal's OS
+	// chrome: the window title ("atrium · 2 need you · 5 running") and an OSC 9;4
+	// taskbar progress bar. nil means the default (on). Set it false when your
+	// shell or multiplexer owns the title; terminals that ignore the escapes show
+	// nothing either way.
+	OSChrome *bool `json:"os_chrome,omitempty"`
 	// MaxSessions is an opt-in cap on how many sessions can exist at once;
 	// creating one beyond it is rejected with an error in the UI. nil (or a
 	// non-positive value) means unlimited — there is no cap by default.

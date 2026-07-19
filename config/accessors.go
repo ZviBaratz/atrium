@@ -67,7 +67,7 @@ const SplashRandom = "random"
 // Neither package can import the other; app imports both and holds them to each
 // other (see TestSplashVocabularyAgrees against fresco.Variants).
 func SplashVariants() []string {
-	return []string{"rain", "tunnel", "ripple", "galaxy"}
+	return []string{"rain", "tunnel", "ripple", "galaxy", "aurora"}
 }
 
 // GetSplash returns the normalized splash mode: a known variant name when set
@@ -184,6 +184,36 @@ func (c *Config) GetNerdFont() bool {
 	return boolOr(c.NerdFont, false)
 }
 
+// GlyphSet fidelity rungs (see Config.GlyphSet). These mirror the theme package's
+// glyph-set vocabulary (theme.GlyphSet*) verbatim, so the app passes GetGlyphSet()
+// straight to theme.SetGlyphSet without a translation table.
+const (
+	GlyphSetNerd  = "nerd"
+	GlyphSetPlain = "plain"
+	GlyphSetASCII = "ascii"
+)
+
+// GetGlyphSet returns the normalized glyph-fidelity rung: GlyphSetNerd,
+// GlyphSetPlain, or GlyphSetASCII. An explicit GlyphSet wins. When it is empty (a
+// config predating this key) the legacy NerdFont bool decides — true → nerd,
+// false/absent → plain — so existing configs keep their exact glyph set. A nil
+// Config, or any unrecognized value, normalizes to plain: the safe rung that
+// never renders tofu, so a typo can't strand the UI on the ascii floor or on
+// vendor icons the font lacks.
+func (c *Config) GetGlyphSet() string {
+	if c == nil {
+		return GlyphSetPlain
+	}
+	switch c.GlyphSet {
+	case GlyphSetNerd, GlyphSetPlain, GlyphSetASCII:
+		return c.GlyphSet
+	}
+	if c.GetNerdFont() {
+		return GlyphSetNerd
+	}
+	return GlyphSetPlain
+}
+
 // GetHintBar reports whether the always-on bottom hint bar is enabled. A nil
 // HintBar (e.g. an older config file with no such key) — or a nil Config —
 // defaults to on.
@@ -192,6 +222,36 @@ func (c *Config) GetHintBar() bool {
 		return true
 	}
 	return boolOr(c.HintBar, true)
+}
+
+// GetMouse reports whether mouse capture is enabled. A nil Mouse (e.g. an older
+// config file with no such key) — or a nil Config — defaults to on, so the
+// mouse works out of the box; setting it false is the opt-out for terminals
+// whose native select-to-copy the capture would otherwise break.
+func (c *Config) GetMouse() bool {
+	if c == nil {
+		return true
+	}
+	return boolOr(c.Mouse, true)
+}
+
+// GetRecordPromptHistory reports whether submitted prompts are recorded for
+// reuse. A nil field (an older config file) — or a nil Config — defaults to on.
+func (c *Config) GetRecordPromptHistory() bool {
+	if c == nil {
+		return true
+	}
+	return boolOr(c.RecordPromptHistory, true)
+}
+
+// GetOSChrome reports whether fleet state is surfaced in the terminal's OS chrome
+// (window title + OSC 9;4 taskbar progress). A nil OSChrome — or a nil Config —
+// defaults to on.
+func (c *Config) GetOSChrome() bool {
+	if c == nil {
+		return true
+	}
+	return boolOr(c.OSChrome, true)
 }
 
 // GetAutoAttach reports whether new sessions should auto-attach on creation.

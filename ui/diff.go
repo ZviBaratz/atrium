@@ -29,6 +29,16 @@ type DiffPane struct {
 	stats    string
 	width    int
 	height   int
+
+	// Comment mode (#383): while commenting, the pane is frozen on a snapshot of
+	// rows so the line cursor is stable and its anchor reliable — SetDiff becomes a
+	// no-op until ExitComment, and cursor indexes an annotatable row in rows. anchor
+	// is the fixed end of a multi-line selection: j/k move both (collapsing to one
+	// line), J/K move only the cursor to grow/shrink a contiguous range.
+	rows       []diffRow
+	commenting bool
+	cursor     int
+	anchor     int
 }
 
 // NewDiffPane returns an empty DiffPane.
@@ -54,6 +64,11 @@ func (d *DiffPane) SetSize(width, height int) {
 // SetDiff recomputes and renders the instance's diff, falling back to a
 // centered placeholder when there are no changes (or no instance).
 func (d *DiffPane) SetDiff(instance *session.Instance) {
+	// Frozen in comment mode (#383): ignore live refreshes so the line cursor and
+	// its anchor stay put on the snapshot the user is annotating.
+	if d.commenting {
+		return
+	}
 	centeredFallbackMessage := centerInBox(d.width, d.height, metaStyle().Render("No changes"))
 
 	if instance == nil || !instance.Started() {
@@ -92,21 +107,46 @@ func (d *DiffPane) SetDiff(instance *session.Instance) {
 	if stats.IsEmpty() {
 		d.stats = ""
 		d.diff = ""
+		d.rows = nil
 		d.viewport.SetContent(centeredFallbackMessage)
 	} else {
-		additions := additionStyle().Render(fmt.Sprintf("%d additions(+)", stats.Added))
-		deletions := deletionStyle().Render(fmt.Sprintf("%d deletions(-)", stats.Removed))
-		lineStats := lipgloss.JoinHorizontal(lipgloss.Center, additions, " ", deletions)
-		if header := gitContextHeader(instance, stats); header != "" {
+		lineStats := diffStatLine(stats)
+		switch header := gitContextHeader(instance, stats); {
+		case header != "" && lineStats != "":
 			d.stats = lipgloss.JoinVertical(lipgloss.Left, header, lineStats)
-		} else {
+		case header != "":
+			d.stats = header
+		default:
 			d.stats = lineStats
 		}
 		// Decompose font-dependent emoji clusters in the diff so the width we lay out
 		// matches what the terminal renders and the pane can't wrap (see theme.SanitizeWidth).
 		d.diff = colorizeDiff(theme.SanitizeWidth(stats.Content), d.width)
+		// Snapshot the rows for comment mode (#383): a line cursor and its file:line
+		// anchor are recovered from these, and EnterComment freezes on them.
+		d.rows = parseDiffRows(stats.Content)
 		d.viewport.SetContent(lipgloss.JoinVertical(lipgloss.Left, d.stats, d.diff))
 	}
+}
+
+// diffStatLine renders the "N additions(+)  M deletions(-)" summary above the
+// patch. Both sides always render; a zero side recedes to the dim/meta style
+// instead of the semantic green/red, so a red "0 deletions(-)" never flags
+// attention at nothing (#378). This matches the row's +adds/−dels chip, which
+// dims its zero side too — one −0 rule everywhere. A content-only diff (a pure
+// rename that nets to zero lines) thus still shows a dim "0 additions(+) 0
+// deletions(-)" rather than vanishing.
+func diffStatLine(stats *git.DiffStats) string {
+	addStyle := additionStyle()
+	if stats.Added == 0 {
+		addStyle = metaStyle()
+	}
+	delStyle := deletionStyle()
+	if stats.Removed == 0 {
+		delStyle = metaStyle()
+	}
+	return addStyle.Render(fmt.Sprintf("%d additions(+)", stats.Added)) + " " +
+		delStyle.Render(fmt.Sprintf("%d deletions(-)", stats.Removed))
 }
 
 // gitContextHeader builds the one-line git-context summary shown above the
@@ -143,7 +183,14 @@ func gitContextHeader(instance *session.Instance, stats *git.DiffStats) string {
 	// decision. Omitted entirely when there is no PR, so a session whose branch
 	// isn't pushed shows nothing extra (silent degradation, like the diff stats).
 	if pr := instance.GetPRStatus(); pr != nil && pr.HasPR {
-		segs = append(segs, metaStyle().Render(fmt.Sprintf("PR #%d %s", pr.Number, prStateWord(pr))))
+		// The PR segment becomes an OSC 8 hyperlink when a URL is known. The
+		// escapes are zero-width (lipgloss.Width ignores them), so embedding them
+		// in the joined header does not shift the summary line's layout.
+		prText := metaStyle().Render(fmt.Sprintf("PR #%d %s", pr.Number, prStateWord(pr)))
+		if pr.URL != "" {
+			prText = hyperlink(pr.URL, prText)
+		}
+		segs = append(segs, prText)
 		if pr.ChecksPass+pr.ChecksFail+pr.ChecksPending > 0 {
 			checks := fmt.Sprintf("checks %d✓ %d✗ %d•", pr.ChecksPass, pr.ChecksFail, pr.ChecksPending)
 			if pr.CI == git.CIFailing {

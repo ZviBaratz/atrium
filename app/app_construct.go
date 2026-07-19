@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 
+	"github.com/ZviBaratz/atrium/chrome"
 	"github.com/ZviBaratz/atrium/cmd"
 	"github.com/ZviBaratz/atrium/config"
 	"github.com/ZviBaratz/atrium/notify"
@@ -41,6 +42,7 @@ func assembleHome(
 		storage:      storage,
 		lostStrikes:  make(map[*session.Instance]int),
 		notifier:     notify.New(os.Stdout, cmd.MakeExecutor()),
+		chrome:       chrome.New(os.Stdout, appConfig.GetOSChrome()),
 		notifySeen:   make(map[*session.Instance]*notifyState),
 		appConfig:    appConfig,
 		program:      program,
@@ -51,6 +53,20 @@ func assembleHome(
 		appState:     appState,
 		listRatio:    appState.GetListRatio(),
 	}
+	// Restore the persisted layout preset (see app_presets.go). When the split is
+	// not a custom override, the preset owns the ratio, so seed listRatio from it —
+	// this keeps a restored monitor/review at its preset width even if the stored
+	// ratio drifted, while a custom override or focus (ratio 0) keeps the stored
+	// value. layoutPrev seeds to the default so an Esc out of a restored focus lands
+	// somewhere sane rather than back in focus.
+	h.layoutIndex = presetIndexByName(appState.GetLayoutPreset())
+	h.layoutPrev = defaultPresetIndex
+	h.layoutCustom = appState.GetLayoutCustom()
+	if !h.layoutCustom {
+		if p := layoutPresets[h.layoutIndex]; p.ratio > 0 {
+			h.listRatio = p.ratio
+		}
+	}
 	// Seed the picker's scanned-repo candidates from the persisted cache so the
 	// first form-open after launch is populated before the startup scan lands.
 	// Gated on the feature being enabled: with project_search_depth ≤ 0, a
@@ -59,9 +75,6 @@ func assembleHome(
 		h.scannedRepos, h.lastScanAt = appState.GetScannedRepos()
 	}
 	h.list = ui.NewList(&h.spinner)
-	// With the always-on hint bar enabled, the bar already carries the first-run
-	// keys; suppress the list's centered empty hint so guidance isn't duplicated.
-	h.list.SetShowEmptyHint(!appConfig.GetHintBar())
 	// Hide the redundant branch namespace (e.g. "zvi/") from each row's branch
 	// label — it repeats on every session and only crowds the diff off the line.
 	h.list.SetBranchPrefix(appConfig.GetBranchPrefix())

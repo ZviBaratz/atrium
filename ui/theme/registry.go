@@ -21,15 +21,38 @@ const (
 	nfNote   = 0xf249 // nf-fa-sticky_note
 )
 
-// miniDotFrames are the Braille spinner frames (each width 1, widely supported).
+// miniDotFrames are the Braille spinner frames (each width 1). They render on a
+// patched Nerd Font and most modern monospaces but tofu under stock DejaVu, so they
+// drive the nerd rung only; the plain rung uses blockSpinnerFrames.
 var miniDotFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
 
-// plainGlyphs is the safe glyph set: every icon is non-PUA Unicode that measures
-// width 1 (or empty for AutoBadge) and renders on any terminal/font — no patched
-// Nerd Font required. It is the default, so a bare terminal never shows tofu.
+// blockSpinnerFrames are a btop-style pulsing bar drawn from the Unicode Block
+// Elements — each width 1 and present in stock DejaVu and virtually every
+// monospace. This is the plain rung's spinner, so the default install never tofus
+// the busy marker (the Braille frames it replaces did, on a bare font).
+var blockSpinnerFrames = []string{"▁", "▃", "▄", "▅", "▆", "▇", "▆", "▅", "▃"}
+
+// Glyph-fidelity rungs, highest to lowest. The set descends from vendor Nerd-Font
+// icons (need a patched font), through plain non-PUA Unicode (the safe default),
+// to a 7-bit-ASCII floor that renders on literally any terminal/font/locale — the
+// answer to the plain set still showing tofu under stock monospaces (⧗, ⎇, ⇄; the
+// spinner is handled separately — the plain rung uses block bars, not Braille).
+// These strings are the on-disk config vocabulary too: they match config.GlyphSet*
+// verbatim, so app can pass config.GetGlyphSet() straight to SetGlyphSet.
+const (
+	GlyphSetNerd  = "nerd"
+	GlyphSetPlain = "plain"
+	GlyphSetASCII = "ascii"
+)
+
+// plainGlyphs is the safe default glyph set: every icon is non-PUA Unicode that
+// measures width 1 (or empty for AutoBadge) and needs no patched Nerd Font. The
+// spinner is block bars (blockSpinnerFrames) so the busy marker never tofus on a
+// stock monospace; a few status marks (⧗ ⎇ ⇄) can still tofu on a sparse font,
+// which is what the ascii rung is the floor for.
 func plainGlyphs() Glyphs {
 	return Glyphs{
-		SpinnerFrames: miniDotFrames,
+		SpinnerFrames: blockSpinnerFrames,
 		SpinnerFPS:    time.Second / 10, // matches the 100ms preview repaint tick so frames never lag a paint
 		Ready:         "●",
 		ReadySeen:     "○",
@@ -56,11 +79,14 @@ func plainGlyphs() Glyphs {
 }
 
 // nerdGlyphs is plainGlyphs with the five vendor icons overlaid from the Nerd-Font
-// private-use area. These render only on a patched Nerd Font, so this set is chosen
-// solely when the nerd-font preference is on (see current.go). Everything else stays
-// shared with plainGlyphs so the two sets can never drift apart.
+// private-use area, plus the Braille spinner: a patched font renders it cleanly, so
+// the nerd rung keeps the finer motion the plain rung trades away for coverage.
+// These render only on a patched Nerd Font, so this set is chosen solely when the
+// nerd-font preference is on (see current.go). Everything else stays shared with
+// plainGlyphs so the sets can never drift apart.
 func nerdGlyphs() Glyphs {
 	g := plainGlyphs()
+	g.SpinnerFrames = miniDotFrames
 	g.Branch = string(rune(nfBranch))
 	g.Dirty = string(rune(nfPencil))
 	g.Note = string(rune(nfNote))
@@ -69,12 +95,51 @@ func nerdGlyphs() Glyphs {
 	return g
 }
 
-// glyphsFor returns the glyph set for the given nerd-font preference.
-func glyphsFor(nerd bool) Glyphs {
-	if nerd {
+// asciiGlyphs is the bottom fidelity rung: every icon is a 7-bit ASCII character
+// that renders identically on any terminal, font, or locale — the floor for
+// environments where even the plain set (⧗, ⎇, ⇄, and any non-ASCII spinner) shows
+// tofu. It is built from plainGlyphs so a glyph added later inherits a Unicode
+// default here until it is given an explicit ASCII form.
+//
+// The values are the #378 "Set A" (iconic) choice: symbolic marks picked to stay
+// distinct within each render context (status gutter / git line / badges never
+// reuse a glyph ambiguously). Every value is width 1 (guarded by TestGlyphWidths).
+func asciiGlyphs() Glyphs {
+	g := plainGlyphs()
+	g.SpinnerFrames = []string{"|", "/", "-", "\\"}
+	g.Ready = "*"
+	g.ReadySeen = "o"
+	g.Waiting = "?"
+	g.Pending = "~"
+	g.Paused = "="
+	g.Branch = "Y"
+	g.Ahead = "^"
+	g.Warn = "!"
+	g.Behind = "v"
+	g.Dirty = "%"
+	g.Note = "#"
+	g.Queued = ">"
+	g.PR = "&"
+	g.FoldOpen = "v"
+	g.FoldClosed = ">"
+	g.SelectionMark = "|"
+	g.MarkChecked = "x"
+	g.TextCursor = "_"
+	// AutoBadge, DiffAdd, DiffDel are already ASCII/empty in plainGlyphs — inherited.
+	return g
+}
+
+// glyphsFor returns the glyph set for a given fidelity rung. An unrecognized rung
+// resolves to the plain set — the safe default that never renders tofu.
+func glyphsFor(set string) Glyphs {
+	switch set {
+	case GlyphSetNerd:
 		return nerdGlyphs()
+	case GlyphSetASCII:
+		return asciiGlyphs()
+	default:
+		return plainGlyphs()
 	}
-	return plainGlyphs()
 }
 
 var tokyoNight = &Theme{

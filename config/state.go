@@ -6,6 +6,7 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -54,6 +55,16 @@ type AppState interface {
 	GetListRatio() float64
 	// SetListRatio stores the list/preview split (clamped to a sane range)
 	SetListRatio(ratio float64) error
+	// GetLayoutPreset returns the name of the active layout preset ("" when none
+	// has been chosen — an older state file — which the app reads as the default)
+	GetLayoutPreset() string
+	// GetLayoutCustom reports whether the live listRatio is a < / > (or drag)
+	// override of the active preset's ratio, rather than the preset's own value
+	GetLayoutCustom() bool
+	// SetLayout stores the active layout preset, whether the split is a custom
+	// override of it, and the live listRatio (clamped) — in one persist, so the
+	// three stay consistent
+	SetLayout(preset string, custom bool, ratio float64) error
 	// GetLastNotesVersion returns the version whose release notes were last
 	// shown after an update ("" if none ever were)
 	GetLastNotesVersion() string
@@ -73,6 +84,24 @@ type AppState interface {
 	// ClearDraft drops any stashed new-session draft. A no-op (no write) when none
 	// is stashed.
 	ClearDraft() error
+	// GetPromptHistory returns recently-submitted prompts, most-recent-first.
+	GetPromptHistory() []PromptHistoryEntry
+	// AddPromptHistory records a submitted prompt at the front of the history,
+	// deduplicating a consecutive repeat and capping the list; persists once.
+	AddPromptHistory(text string) error
+	// ClearPromptHistory empties the prompt history. A no-op (no write) when empty.
+	ClearPromptHistory() error
+}
+
+// maxPromptHistory caps how many recently-submitted prompts are retained for
+// reuse. Prompts are cheap to store; the cap just keeps state.json bounded.
+const maxPromptHistory = 50
+
+// PromptHistoryEntry is one persisted, reusable prompt: the submitted text plus
+// when it was sent (unix seconds, so omitempty works and old files read cleanly).
+type PromptHistoryEntry struct {
+	Text   string `json:"text"`
+	AtUnix int64  `json:"at_unix,omitempty"`
 }
 
 // maxRecentPaths caps how many recently-used project directories are retained.
@@ -90,6 +119,17 @@ const (
 	defaultListRatio = 0.30
 	minListRatio     = 0.15
 	maxListRatio     = 0.60
+)
+
+// Exported list-ratio bounds for callers that build layout presets pinned to
+// the clamp (app/app_presets.go): the "monitor" preset is the widest allowed
+// list and "review" the thinnest, so pinning them here means a preset can never
+// name a split the divider itself couldn't reach, and the clamp can't silently
+// reshape a preset if it ever changes.
+const (
+	DefaultListRatio = defaultListRatio
+	MinListRatio     = minListRatio
+	MaxListRatio     = maxListRatio
 )
 
 // clampListRatio bounds r to [minListRatio, maxListRatio].
@@ -135,6 +175,16 @@ type State struct {
 	// ListRatio is the fraction of the terminal width given to the session list.
 	// Zero (an older state file with no such key) reads back as defaultListRatio.
 	ListRatio float64 `json:"list_ratio,omitempty"`
+	// LayoutPreset is the name of the active layout preset (see app.layoutPresets:
+	// monitor / default / review / focus), cycled with the layout key and restored
+	// on relaunch. Empty (an older state file) reads as the default preset.
+	LayoutPreset string `json:"layout_preset,omitempty"`
+	// LayoutCustom records that ListRatio is a < / > (or divider-drag) override of
+	// LayoutPreset's own ratio rather than the preset's value. It lets a manual
+	// split coexist with a named preset (btop's per-box override): the layout key
+	// still cycles from the preset, and in focus it un-hides the list. False (an
+	// older state file) means the ratio is the preset's own.
+	LayoutCustom bool `json:"layout_custom,omitempty"`
 	// KnownProjects is every project directory ever used for a session (git or
 	// direct), most-recent-first, capped at maxKnownProjects. It is maintained
 	// alongside RecentPaths by AddRecentPath and feeds the new-session picker's
@@ -161,6 +211,10 @@ type State struct {
 	// (an older state file, or no stash) means there is nothing to restore. It mirrors
 	// the in-memory home.stashedDraft and is cleared on submit / restore / clear-form.
 	Draft *SessionDraft `json:"draft,omitempty"`
+	// PromptHistory is the most-recent-first ring of submitted prompts, capped at
+	// maxPromptHistory, offered for reuse in the create form and quick-send. Absent
+	// (an older state file) reads back as no history.
+	PromptHistory []PromptHistoryEntry `json:"prompt_history,omitempty"`
 }
 
 // SessionDraft is the persisted, serializable projection of a stashed new-session
@@ -338,6 +392,28 @@ func (s *State) SetListRatio(ratio float64) error {
 	return SaveState(s)
 }
 
+// GetLayoutPreset returns the stored layout-preset name, "" when none was ever
+// chosen (an older state file); the app maps that to its default preset.
+func (s *State) GetLayoutPreset() string {
+	return s.LayoutPreset
+}
+
+// GetLayoutCustom reports whether the stored ListRatio is a manual override of
+// the active preset's ratio (see LayoutCustom).
+func (s *State) GetLayoutCustom() bool {
+	return s.LayoutCustom
+}
+
+// SetLayout stores the active preset, its custom-override flag, and the live
+// listRatio (clamped like SetListRatio) in a single persist, so a preset switch
+// or a split adjustment never leaves the three fields inconsistent on disk.
+func (s *State) SetLayout(preset string, custom bool, ratio float64) error {
+	s.LayoutPreset = preset
+	s.LayoutCustom = custom
+	s.ListRatio = clampListRatio(ratio)
+	return SaveState(s)
+}
+
 // GetLastNotesVersion returns the version whose post-update notes were last
 // shown, or "" if none ever were.
 func (s *State) GetLastNotesVersion() string {
@@ -401,5 +477,39 @@ func (s *State) ClearDraft() error {
 		return nil
 	}
 	s.Draft = nil
+	return SaveState(s)
+}
+
+// GetPromptHistory returns the reusable prompt history, most-recent-first.
+func (s *State) GetPromptHistory() []PromptHistoryEntry {
+	return s.PromptHistory
+}
+
+// AddPromptHistory records a submitted prompt at the front of the history. It
+// skips a blank prompt and a *consecutive* repeat of the current head (so
+// re-sending the same thing twice in a row does not pile up), but keeps
+// non-consecutive repeats — a prompt reused after others is genuinely recent
+// again. The list is capped at maxPromptHistory and persisted once.
+func (s *State) AddPromptHistory(text string) error {
+	if strings.TrimSpace(text) == "" {
+		return nil
+	}
+	if len(s.PromptHistory) > 0 && s.PromptHistory[0].Text == text {
+		return nil
+	}
+	s.PromptHistory = append([]PromptHistoryEntry{{Text: text, AtUnix: time.Now().Unix()}}, s.PromptHistory...)
+	if len(s.PromptHistory) > maxPromptHistory {
+		s.PromptHistory = s.PromptHistory[:maxPromptHistory]
+	}
+	return SaveState(s)
+}
+
+// ClearPromptHistory empties the prompt history and persists. A no-op (no write)
+// when it is already empty.
+func (s *State) ClearPromptHistory() error {
+	if len(s.PromptHistory) == 0 {
+		return nil
+	}
+	s.PromptHistory = nil
 	return SaveState(s)
 }

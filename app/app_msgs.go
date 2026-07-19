@@ -236,7 +236,11 @@ func (m *home) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 				return m, nil
 			case tea.MouseActionRelease:
 				m.draggingDivider = false
-				if err := m.appState.SetListRatio(m.listRatio); err != nil {
+				// A drag is a manual split, so it is a custom override of the active
+				// preset (like < / >): persist preset+override+ratio together so it
+				// complements the preset cycle rather than resetting on relaunch.
+				m.layoutCustom = true
+				if err := m.appState.SetLayout(m.currentPreset().name, true, m.listRatio); err != nil {
 					return m, m.handleError(err)
 				}
 				// One content refresh at the end of the gesture, now that the width
@@ -249,12 +253,14 @@ func (m *home) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	}
 	// Begin a divider drag when the left button presses on (or adjacent to) the
 	// seam between the panes. Default state only; the seam column is listWidth and
-	// the grab is bounded to the pane rows so a press on the hint/error strip below
-	// them doesn't start a drag. This runs before the press-only early return and
-	// the row/tab click logic, so a seam press starts a drag instead of selecting
-	// the row behind it.
+	// the grab is bounded to the pane rows so a press on the safety banner above or
+	// the hint/error strip below them doesn't start a drag. This runs before the
+	// press-only early return and the row/tab click logic, so a seam press starts a
+	// drag instead of selecting the row behind it.
+	bannerH := m.topBannerHeight()
 	if msg.Button == tea.MouseButtonLeft && msg.Action == tea.MouseActionPress &&
-		m.state == stateDefault && m.windowWidth > 0 && msg.Y < m.paneContentHeight() {
+		m.state == stateDefault && m.windowWidth > 0 &&
+		msg.Y >= bannerH && msg.Y < bannerH+m.paneContentHeight() && !m.listHidden() {
 		listWidth := int(float32(m.windowWidth) * float32(m.listRatio))
 		if msg.X >= listWidth-dividerGrab && msg.X <= listWidth+dividerGrab {
 			m.draggingDivider = true
@@ -319,6 +325,22 @@ func (m *home) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	}
+	// A left-click on a hint-bar entry mirrors pressing its key. The bar carries
+	// click zones in the default view and the three modal bars (filter / hint /
+	// visual); KeyAtZone resolves nothing in any other state — an overlay owns
+	// the screen, or the bar shows progress, not keys — so this is inert there,
+	// like the row/tab path ignoring rows behind an overlay. The resolved key is
+	// re-injected through handleKeyPress so it runs the exact same dispatch
+	// (state routing + guards) as the keypress it advertises: nothing here
+	// becomes mouse-only.
+	if msg.Button == tea.MouseButtonLeft && m.hintBarClickState() {
+		if k, ok := m.menu.KeyAtZone(msg); ok {
+			if kmsg, ok := synthKeyMsg(k); ok {
+				return m.handleKeyPress(kmsg)
+			}
+			return m, nil // a marked entry with no synthesizable key: no-op
+		}
+	}
 	// Left-click selects a session row, switches the active tab, or (on a quick
 	// second click of the same row) attaches. Only in the default state — when
 	// an overlay is up the rows behind it still have recorded bounds, so a click
@@ -369,6 +391,49 @@ func (m *home) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// hintBarClickState reports whether the hint bar is the live surface a click can
+// act on: the default view and the three modal bars (filter / hint / visual). In
+// every other state an overlay owns the screen (or the bar shows non-key
+// progress), so a click on the bar's last-scanned zones must be ignored — the
+// same reason the row/tab path gates itself to stateDefault.
+func (m *home) hintBarClickState() bool {
+	switch m.state {
+	case stateDefault, stateFilter, stateHints, stateVisual:
+		return true
+	default:
+		return false
+	}
+}
+
+// synthKeyMsg builds the tea.KeyMsg a hint-bar click re-injects to fire the
+// clicked entry's key. The dispatch path keys off msg.String(), so the returned
+// message must stringify back to k: the special keys the bars can show (enter,
+// esc, space, ctrl+x, the shift arrows) map to their KeyType, and every other
+// bar key is a single rune whose KeyRunes message stringifies to that rune. A
+// key it can't represent reports false, so an unrecognized entry is a no-op
+// rather than a wrong action.
+func synthKeyMsg(k string) (tea.KeyMsg, bool) {
+	switch k {
+	case "enter":
+		return tea.KeyMsg{Type: tea.KeyEnter}, true
+	case "esc":
+		return tea.KeyMsg{Type: tea.KeyEsc}, true
+	case " ":
+		return tea.KeyMsg{Type: tea.KeySpace}, true
+	case "ctrl+x":
+		return tea.KeyMsg{Type: tea.KeyCtrlX}, true
+	case "shift+up":
+		return tea.KeyMsg{Type: tea.KeyShiftUp}, true
+	case "shift+down":
+		return tea.KeyMsg{Type: tea.KeyShiftDown}, true
+	default:
+		if r := []rune(k); len(r) == 1 {
+			return tea.KeyMsg{Type: tea.KeyRunes, Runes: r}, true
+		}
+		return tea.KeyMsg{}, false
+	}
+}
+
 func (m *home) handleTargetValidityResult(msg targetValidityResultMsg) (tea.Model, tea.Cmd) {
 	// Apply only if the result is for the still-current target, so a stale check
 	// (the user has navigated on) can't clobber the indicator.
@@ -402,6 +467,9 @@ func (m *home) handleAttachFinished(msg attachFinishedMsg) (tea.Model, tea.Cmd) 
 	// start). tea.Exec's RestoreTerminal has already repainted the frame; refine
 	// the layout and selection-derived panes from here.
 	m.state = stateDefault
+	// Re-assert the OS chrome the attach handed to tmux (onAttached reset it); the
+	// next metadata tick refines it, this repaints the known state immediately.
+	m.applyOSChrome(false)
 	if msg.err != nil {
 		// A failed sibling-cycle re-attach still carries keeper losses from the
 		// previous attach (attachExecCarry seeds them before Run can fail); surface

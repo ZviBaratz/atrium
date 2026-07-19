@@ -4,12 +4,32 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ZviBaratz/atrium/ui/theme"
 	"github.com/ZviBaratz/fresco"
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/stretchr/testify/require"
 )
+
+// TestSplashPalettesAreCanonicalHex validates that every registered theme maps to
+// a fresco.Palette of canonical hex anchors, via fresco.Palette.Validate (the
+// opt-in check added in the fresco #15–#19 API cluster). Atrium's palettes are
+// compile-time constants, so fresco never rejects them at runtime — a bad anchor
+// would silently degrade to fresco's documented fallback on screen. This test is
+// where that surfaces instead: a theme-author typo in a splash token (Danger,
+// Purple, Accent, Cyan, or Fg) fails here at CI rather than shipping a miscoloured
+// field. Validate is stricter than the renderer's parser on purpose, so it also
+// flags shorthands the renderer would still paint.
+func TestSplashPalettesAreCanonicalHex(t *testing.T) {
+	names := theme.Names()
+	require.NotEmpty(t, names, "expected at least one registered theme")
+	for _, name := range names {
+		th := theme.Get(name)
+		require.NoErrorf(t, splashPalette(th.Palette).Validate(),
+			"theme %q: every splash anchor must be canonical hex", name)
+	}
+}
 
 // stripLines strips SGR and splits into visible lines.
 func stripLines(s string) []string {

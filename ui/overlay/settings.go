@@ -193,10 +193,18 @@ func newSettingRows(cfg *config.Config) []settingRow {
 				return append([]string{config.SplashRandom}, config.SplashVariants()...)
 			},
 		},
-		boolRow("nerd_font", "Appearance", "Nerd Font icons",
-			"Vendor icons (branch, PR, dirty, auto) from a patched Nerd Font; off = plain Unicode.", "",
-			(*config.Config).GetNerdFont,
-			func(c *config.Config, v bool) { c.NerdFont = &v }),
+		{
+			key: "glyph_set", section: "Appearance", label: "Glyph set", kind: kindEnum,
+			description: "Icon fidelity: nerd = vendor Nerd-Font icons (needs a patched font), plain = Unicode that renders on any font (the default), ascii = a 7-bit floor for terminals where even plain Unicode shows tofu.",
+			get:         func(c *config.Config) string { return c.GetGlyphSet() },
+			set: func(c *config.Config, v string) error {
+				c.GlyphSet = v
+				return nil
+			},
+			options: func(c *config.Config) []string {
+				return []string{config.GlyphSetNerd, config.GlyphSetPlain, config.GlyphSetASCII}
+			},
+		},
 		{
 			key: "model_indicator", section: "Appearance", label: "Model chip", kind: kindEnum,
 			description: "Per-session model chip in the list, shown whenever the model is known.",
@@ -243,6 +251,10 @@ func newSettingRows(cfg *config.Config) []settingRow {
 			"Always-on key-hint bar at the bottom of the screen.", "",
 			(*config.Config).GetHintBar,
 			func(c *config.Config, v bool) { c.HintBar = &v }),
+		boolRow("os_chrome", "Appearance", "OS chrome",
+			"Show fleet state in the window title and taskbar progress (OSC 9;4). Off if your shell owns the title.", "",
+			(*config.Config).GetOSChrome,
+			func(c *config.Config, v bool) { c.OSChrome = &v }),
 		boolRow("session_context_bar", "Appearance", "Session context bar",
 			"In-session status line.", "affects new sessions",
 			(*config.Config).GetSessionContextBar,
@@ -251,10 +263,18 @@ func newSettingRows(cfg *config.Config) []settingRow {
 			"Attach to a new session as soon as it starts.", "",
 			(*config.Config).GetAutoAttach,
 			func(c *config.Config, v bool) { c.AutoAttach = &v }),
+		boolRow("mouse", "Behavior", "Mouse",
+			"Clickable rows / headers / tabs / hint bar, wheel scroll, draggable divider. Off hands the mouse back to the terminal so native select-to-copy works (Shift+drag is the per-gesture escape while on).", "",
+			(*config.Config).GetMouse,
+			func(c *config.Config, v bool) { c.Mouse = &v }),
 		boolRow("auto_yes", "Behavior", "Auto-yes",
 			"Auto-accept agent prompts (a daemon takes over after quit).", "",
 			func(c *config.Config) bool { return c.AutoYes },
 			func(c *config.Config, v bool) { c.AutoYes = v }),
+		boolRow("record_prompt_history", "Behavior", "Record prompt history",
+			"Remember submitted prompts to reuse them (up-arrow in an empty prompt).", "",
+			(*config.Config).GetRecordPromptHistory,
+			func(c *config.Config, v bool) { c.RecordPromptHistory = &v }),
 		boolRow("show_release_notes_after_update", "Behavior", "Release notes after update",
 			"Show a \"what's new\" overlay once after updating to a new version.", "",
 			(*config.Config).GetShowReleaseNotesAfterUpdate,
