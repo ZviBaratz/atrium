@@ -60,9 +60,9 @@ func (m *home) handleDiffCommentState(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.tabbedWindow.DiffCursorUp()
 		case keys.KeyDown:
 			m.tabbedWindow.DiffCursorDown()
-		case keys.KeyMoveUp: // K — extend the selection up
+		case keys.KeyMoveUp, keys.KeyShiftUp: // K or shift+↑ — extend the selection up
 			m.tabbedWindow.DiffExtendUp()
-		case keys.KeyMoveDown: // J — extend the selection down
+		case keys.KeyMoveDown, keys.KeyShiftDown: // J or shift+↓ — extend the selection down
 			m.tabbedWindow.DiffExtendDown()
 		case keys.KeyDiffComment:
 			return m, m.exitDiffComment()
