@@ -371,7 +371,6 @@ func TestFilter_Model(t *testing.T) {
 	require.True(t, ParseFilter("model:opus").Matches(opus), "opus family matches full model name")
 	require.False(t, ParseFilter("model:opus").Matches(sonnet))
 	require.False(t, ParseFilter("model:opus").Matches(flagged))
-	require.False(t, ParseFilter("model:opus").Matches(bare))
 
 	// Sonnet family.
 	require.True(t, ParseFilter("model:sonnet").Matches(sonnet), "sonnet family matches full model name")

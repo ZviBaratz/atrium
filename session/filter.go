@@ -250,9 +250,13 @@ func effortTerm(value string) term {
 // Sessions with no resolved model (ModelInfo == "") match only that empty
 // predicate — an empty haystack contains no non-empty needle.
 //
-// Unlike account:none / pr:none / effort:none there is deliberately no "none"
-// sentinel: under substring matching an exact "none" check would shadow any model
-// whose name happens to contain "none", and the vendor's name space is open.
+// There is deliberately no "none" sentinel, following noteTerm rather than
+// account:none / pr:none / effort:none: a sentinel is only safe where the value
+// space cannot collide with the literal, and the vendor's name space is open.
+// Substring matching also makes the collision wider here than it would be for
+// those predicates — they check an exact "none" against a prefix match, so they
+// only shadow values *starting* with "none", whereas this would shadow any model
+// containing "none" anywhere.
 func modelTerm(value string) term {
 	return func(i *Instance) bool {
 		return strings.Contains(strings.ToLower(i.ModelInfo()), value)
