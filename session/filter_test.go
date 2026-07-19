@@ -385,8 +385,18 @@ func TestFilter_Model(t *testing.T) {
 	require.True(t, ParseFilter("model:fable").Matches(flagged), "short flag name matched")
 	require.False(t, ParseFilter("model:fable").Matches(opus))
 
-	// Case-insensitive.
+	// Case-insensitive on the query side. Note this alone does NOT pin modelTerm's
+	// own strings.ToLower: ParseFilter already lowercases the whole token, so this
+	// passes with that call removed.
 	require.True(t, ParseFilter("MODEL:OPUS").Matches(opus), "case-insensitive")
+
+	// ...so pin the value side too. ModelInfo is a --model flag value or a
+	// transcript-reported id, neither normalised on the way in, so a mixed-case
+	// name must still match. Without this, dropping modelTerm's ToLower is a
+	// mutation the suite does not catch.
+	shouty, err := NewInstance(InstanceOptions{Title: "shouty", Path: "/tmp/repoA", Program: "claude --model Claude-OPUS-4-8"})
+	require.NoError(t, err)
+	require.True(t, ParseFilter("model:opus").Matches(shouty), "mixed-case model name")
 
 	// Empty value is a no-op (matches all including bare).
 	require.True(t, ParseFilter("model:").Matches(opus))
