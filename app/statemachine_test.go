@@ -100,6 +100,7 @@ func TestStateMachine_BackgroundMessagesNeverPanic(t *testing.T) {
 		{"history", stateHistory, func(h *home, _ *session.Instance) {
 			h.promptHistoryOverlay = overlay.NewPromptHistoryOverlay([]string{"remembered"})
 		}},
+		{"screensaver", stateScreensaver, nil}, // nil wire: no overlay field to arm. Note: 100x40 survives ui.SplashFits in WindowSizeMsg sweep.
 	}
 
 	// Each factory takes the home's selected instance so payload-bearing messages
