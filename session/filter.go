@@ -191,7 +191,7 @@ func accountTerm(value string) term {
 // substring. It only widens which rows match: the list's grouped, status-sorted
 // order is deliberately left untouched here (row position is muscle memory on that
 // surface), so free-text does not re-rank the session list — a follow-up if wanted.
-// Predicate terms (status:/dirty/behind/pr:/account:/note:) keep exact semantics.
+// Predicate terms (status:/dirty/behind/pr:/account:/note:/effort:) keep exact semantics.
 func substringTerm(q string) term {
 	return func(i *Instance) bool {
 		match := func(s string) bool { ok, _ := fuzzy.Match(q, s); return ok }
@@ -213,18 +213,26 @@ func noteTerm(value string) term {
 }
 
 // effortTerm matches the session's resolved effort level (EffortInfo) by
-// case-insensitive prefix. An empty value is a no-op (matches every session)
-// so a mid-typed "effort:" never blinks the list empty. A session with no
-// known effort level (EffortInfo returns "") only matches the empty predicate.
-// Effort values are: low, medium, high, xhigh, max. Prefix matching means
-// "effort:m" matches both "medium" and "max", narrowing further to one as
-// the user continues typing.
+// case-insensitive prefix, mirroring accountTerm. An empty value is a no-op
+// (matches every session) so a mid-typed "effort:" never blinks the list empty.
+// The claude CLI offers low, medium, high, xhigh and max, so prefix matching
+// means "effort:m" matches both "medium" and "max", narrowing to one as the user
+// keeps typing. That set is the offered one, not a closed one: EffortInfo prefers
+// raw hook truth, which session/effort.go leaves deliberately unvalidated so a
+// level a newer CLI resolves still reaches the list.
+//
+// The literal value "none" matches sessions with no resolved effort
+// (EffortInfo == ""), mirroring account:none and pr:none. As with account:none —
+// and unlike pr:none — this is an exact match rather than a prefix one, and for
+// the same reason: the level set is open, so "effort:no" must stay able to
+// prefix-match a level a newer CLI reports rather than being silently swallowed
+// as meaning no-effort.
 func effortTerm(value string) term {
 	return func(i *Instance) bool {
 		info := strings.ToLower(i.EffortInfo())
-		if value == "" {
-			return true
+		if value == "none" {
+			return info == ""
 		}
-		return info != "" && strings.HasPrefix(info, value)
+		return strings.HasPrefix(info, value)
 	}
 }

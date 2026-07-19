@@ -27,7 +27,7 @@ var separator = " · "
 // filterSyntaxHint is the filter bar's predicate-vocabulary tail — syntax
 // help rendered desc-only, not a key hint. The bar scan guard whitelists it
 // by exact match; any other free text added to a bar fails that guard.
-const filterSyntaxHint = "filter: status: dirty behind pr: account: note:"
+const filterSyntaxHint = "filter: status: dirty behind pr: account: note: effort:"
 
 // MenuState represents different states the menu can be in
 type MenuState int

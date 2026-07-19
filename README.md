@@ -196,6 +196,7 @@ list narrows as you type rather than blinking empty mid-word.
 | `pr:<state>` | PR state prefixing `<state>` — `open`, `merged`, `closed`, or `none` (no PR) |
 | `account:<name>` | Claude account name prefixing `<name>`; `account:none` for sessions with no resolved account |
 | `note:<text>` | sessions whose note prefixes `<text>` |
+| `effort:<level>` | reasoning-effort level prefixing `<level>` — `low`, `medium`, `high`, `xhigh`, `max`; `effort:none` for sessions with no resolved effort |
 | `<text>` | plain substring in the session's name, branch, or note |
 
 Worked examples (each is exercised verbatim against the parser by
@@ -204,6 +205,7 @@ Worked examples (each is exercised verbatim against the parser by
 - `status:need dirty` — sessions that need input **and** have uncommitted changes.
 - `behind:>0 pr:open` — sessions behind their base **and** with an open PR.
 - `account:work note:release` — `work`-account sessions whose note starts with `release`.
+- `effort:max dirty` — sessions running at `max` effort **and** with uncommitted changes.
 - `auth` — any session with `auth` in its name, branch, or note.
 
 Press `esc` to clear the committed filter.

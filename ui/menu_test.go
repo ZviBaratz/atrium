@@ -17,7 +17,7 @@ import (
 // to the words or separators is a deliberate UX decision, not a side effect.
 func TestMenu_ModeBarsExactText(t *testing.T) {
 	for state, want := range map[MenuState]string{
-		StateFilter: "enter accept · esc clear · filter: status: dirty behind pr: account: note:",
+		StateFilter: "enter accept · esc clear · filter: status: dirty behind pr: account: note: effort:",
 		StateHints:  "a–z copy · A–Z copy + open · esc cancel",
 		StateVisual: "space mark · p/r/x pause/resume/kill marked · esc exit",
 	} {

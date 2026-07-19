@@ -314,8 +314,15 @@ func TestFilter_Effort(t *testing.T) {
 	require.True(t, ParseFilter("effort:ma").Matches(maxed))
 	require.False(t, ParseFilter("effort:ma").Matches(medium))
 
-	// Case-insensitive.
+	// Case-insensitive on the query side.
 	require.True(t, ParseFilter("EFFORT:LOW").Matches(low))
+
+	// ...and on the value side: EffortInfo is raw hook truth, deliberately
+	// unvalidated (session/effort.go), so a level can arrive in any case. This
+	// pins effortTerm's own strings.ToLower — without it that call is dead.
+	shouty := newFilterInstance(t, "shouty", "b")
+	shouty.SetEffortMeta("HIGH")
+	require.True(t, ParseFilter("effort:high").Matches(shouty))
 
 	// Empty value is a no-op (match all) so "effort:" never blinks the list empty.
 	require.True(t, ParseFilter("effort:").Matches(low))
@@ -324,7 +331,21 @@ func TestFilter_Effort(t *testing.T) {
 	// A value prefixing no known level matches nothing.
 	require.False(t, ParseFilter("effort:xyz").Matches(low))
 
-	// Sessions with no effort only match the empty predicate, not specific ones.
+	// "none" is the sentinel for sessions with no resolved effort, mirroring
+	// account:none / pr:none.
+	require.True(t, ParseFilter("effort:none").Matches(none))
+	require.False(t, ParseFilter("effort:none").Matches(low))
+
+	// The sentinel is an EXACT match, not a prefix one, mirroring account:none:
+	// EffortInfo is unvalidated, so a level a newer CLI resolves could begin with
+	// "n" and must stay reachable rather than being swallowed to mean no-effort.
+	novel := newFilterInstance(t, "novel", "b")
+	novel.SetEffortMeta("nova")
+	require.True(t, ParseFilter("effort:no").Matches(novel))
+	require.False(t, ParseFilter("effort:no").Matches(none))
+
+	// Sessions with no effort match only the empty predicate and the sentinel,
+	// never a specific level.
 	require.False(t, ParseFilter("effort:low").Matches(none))
 }
 

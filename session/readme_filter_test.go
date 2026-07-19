@@ -42,6 +42,13 @@ func TestReadmeFilterExamples(t *testing.T) {
 	require.True(t, ParseFilter("account:work note:release").Matches(workRelease))
 	require.False(t, ParseFilter("account:work note:release").Matches(needsDirty))
 
+	// `effort:max dirty` — max effort AND uncommitted changes.
+	maxDirty := newFilterInstance(t, "hard-refactor", "feat/v")
+	maxDirty.SetEffortMeta("max")
+	maxDirty.SetDiffStats(&git.DiffStats{Dirty: true})
+	require.True(t, ParseFilter("effort:max dirty").Matches(maxDirty))
+	require.False(t, ParseFilter("effort:max dirty").Matches(readyClean))
+
 	// `auth` — plain substring in name/branch/note.
 	require.True(t, ParseFilter("auth").Matches(authNamed))
 	require.False(t, ParseFilter("auth").Matches(readyClean))
