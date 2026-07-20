@@ -14,10 +14,12 @@ import (
 //
 // A query is split on whitespace into terms that are combined with AND. Each term
 // is either a predicate over cached instance state (status:, dirty, behind[:expr],
-// pr:, account:, note:, effort:, mode:) or a plain substring matched against DisplayName,
-// Branch, or the session note. Predicate values are matched by case-insensitive
-// prefix so the list narrows progressively as the user types rather than blinking
-// empty mid-word (see the package tests).
+// pr:, account:, note:, effort:, model:, mode:) or a plain substring matched
+// against DisplayName, Branch, or the session note. Predicate values are matched
+// by case-insensitive prefix so the list narrows progressively as the user types
+// rather than blinking empty mid-word (see the package tests). model: is the sole
+// exception and matches a substring instead, because model names are
+// vendor-prefixed — see modelTerm for why.
 type Filter struct {
 	terms []term
 }
@@ -79,6 +81,11 @@ func parseTerm(tok string) term {
 		return noteTerm(strings.TrimPrefix(tok, "note:"))
 	case strings.HasPrefix(tok, "effort:"):
 		return effortTerm(strings.TrimPrefix(tok, "effort:"))
+	case strings.HasPrefix(tok, "model:"):
+		return modelTerm(strings.TrimPrefix(tok, "model:"))
+	// The trailing colon is what keeps these two apart: "model:opus" does not
+	// have the prefix "mode:", so the order of these arms carries no meaning.
+	// Drop either colon and one predicate silently swallows the other.
 	case strings.HasPrefix(tok, "mode:"):
 		return modeTerm(strings.TrimPrefix(tok, "mode:"))
 	default:
@@ -240,28 +247,54 @@ func effortTerm(value string) term {
 	}
 }
 
-// modeTerm matches the session's permission mode (PermissionModeInfo) by
-// case-insensitive prefix against the display label, mirroring effortTerm. An
-// empty value is a no-op (matches every session) so a mid-typed "mode:" never
-// blinks the list empty.
+
+// modelTerm matches the session's resolved model (ModelInfo) by case-insensitive
+// SUBSTRING — the one predicate that does not prefix-match. Model names are
+// vendor-prefixed ("claude-opus-4-8"), so a natural query like "opus" or "sonnet"
+// has to reach the family segment without the user typing the leading "claude-".
+// An empty value is a no-op (matches every session), since Contains reports true
+// for an empty needle, so a mid-typed "model:" never blinks the list empty.
+// Sessions with no resolved model (ModelInfo == "") match only that empty
+// predicate — an empty haystack contains no non-empty needle.
 //
-// The match is against the display label — the value the chip shows — rather
-// than the raw enum value (e.g. "accept-edits" rather than "acceptEdits", and
-// "bypass" rather than "bypassPermissions"), so filter terms follow what is
-// visible in the list. The labels are the single source of truth in
-// session/agent.ClaudePermissionModeLabel; any new mode the CLI introduces
-// gets a label there and becomes immediately filterable without further changes
-// here.
+// There is deliberately no "none" sentinel, following noteTerm rather than
+// account:none / pr:none / effort:none: a sentinel is only safe where the value
+// space cannot collide with the literal, and the vendor's name space is open.
+// Substring matching also makes the collision wider here than it would be for
+// those predicates — they check an exact "none" against a prefix match, so they
+// only shadow values *starting* with "none", whereas this would shadow any model
+// containing "none" anywhere.
+func modelTerm(value string) term {
+	return func(i *Instance) bool {
+		return strings.Contains(strings.ToLower(i.ModelInfo()), value)
+	}
+}
+
+// modeTerm matches the session's permission mode (PermissionModeInfo) by
+// case-insensitive prefix, mirroring effortTerm. An empty value is a no-op
+// (matches every session) so a mid-typed "mode:" never blinks the list empty.
+//
+// The match is against the display label rather than the raw enum value — so
+// "mode:accept-edits" for acceptEdits and "mode:bypass" for bypassPermissions —
+// because the label is what the row's chip shows, and a filter the user types
+// should follow what they can see. agent.ClaudePermissionModeLabel is the one
+// place that mapping lives, so this predicate cannot drift from the chip. It
+// falls back to the raw value for an unlabelled mode, which is what keeps a mode
+// a newer CLI introduces (or one only ever detected at runtime, like dontAsk)
+// filterable without a change here.
 //
 // The literal value "none" matches sessions with no resolved mode
-// (PermissionModeInfo == ""), mirroring effort:none and account:none.
+// (PermissionModeInfo == ""), mirroring effort:none and account:none. Those two
+// match "none" exactly rather than by prefix to protect an open value space;
+// here the reason is weaker — claude rejects an unknown --permission-mode at
+// argv parse time, so the set is closed and no label starts with "none" — but
+// the exact match costs nothing and keeps the three sentinels identical.
 func modeTerm(value string) term {
 	return func(i *Instance) bool {
 		info := i.PermissionModeInfo()
 		if value == "none" {
 			return info == ""
 		}
-		label := strings.ToLower(agent.ClaudePermissionModeLabel(info))
-		return strings.HasPrefix(label, value)
+		return strings.HasPrefix(strings.ToLower(agent.ClaudePermissionModeLabel(info)), value)
 	}
 }
