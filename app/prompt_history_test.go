@@ -81,7 +81,7 @@ func TestPromptHistory_UpWithTextDoesNotOpen(t *testing.T) {
 }
 
 // Up-arrow on an empty prompt in the CREATE FORM also opens the picker (#388).
-// The trigger code is shared (app_keys.go:handlePrompt), but the create form's
+// The trigger code is shared (app_keys.go:handlePromptState), but the create form's
 // multi-field focus ring makes PromptFocusedAndEmpty() return false unless the
 // textarea is the active stop — this test pins that the correct stop is reached
 // via Tab and that the picker opens, inserts, and returns to compose.
