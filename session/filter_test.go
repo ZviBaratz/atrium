@@ -349,6 +349,68 @@ func TestFilter_Effort(t *testing.T) {
 	require.False(t, ParseFilter("effort:low").Matches(none))
 }
 
+func TestFilter_Model(t *testing.T) {
+	// Transcript-derived full model names (after the first turn).
+	opus, err := NewInstance(InstanceOptions{Title: "big", Path: "/tmp/repoA", Program: "claude"})
+	require.NoError(t, err)
+	opus.modelID = "claude-opus-4-8"
+
+	sonnet, err := NewInstance(InstanceOptions{Title: "fast", Path: "/tmp/repoA", Program: "claude"})
+	require.NoError(t, err)
+	sonnet.modelID = "claude-sonnet-4-6"
+
+	// Flag-only model (before the first turn).
+	flagged, err := NewInstance(InstanceOptions{Title: "flag", Path: "/tmp/repoA", Program: "claude --model fable"})
+	require.NoError(t, err)
+
+	// No model at all.
+	bare, err := NewInstance(InstanceOptions{Title: "bare", Path: "/tmp/repoA", Program: "claude"})
+	require.NoError(t, err)
+
+	// Family-name containment: "opus" lives inside "claude-opus-4-8".
+	require.True(t, ParseFilter("model:opus").Matches(opus), "opus family matches full model name")
+	require.False(t, ParseFilter("model:opus").Matches(sonnet))
+	require.False(t, ParseFilter("model:opus").Matches(flagged))
+
+	// Sonnet family.
+	require.True(t, ParseFilter("model:sonnet").Matches(sonnet), "sonnet family matches full model name")
+	require.False(t, ParseFilter("model:sonnet").Matches(opus))
+
+	// Full-name narrowing.
+	require.True(t, ParseFilter("model:claude-opus-4-8").Matches(opus), "exact full model name")
+	require.False(t, ParseFilter("model:claude-opus-4-8").Matches(sonnet))
+
+	// Flag-only short name matches itself.
+	require.True(t, ParseFilter("model:fable").Matches(flagged), "short flag name matched")
+	require.False(t, ParseFilter("model:fable").Matches(opus))
+
+	// Case-insensitive on the query side. Note this alone does NOT pin modelTerm's
+	// own strings.ToLower: ParseFilter already lowercases the whole token, so this
+	// passes with that call removed.
+	require.True(t, ParseFilter("MODEL:OPUS").Matches(opus), "case-insensitive")
+
+	// ...so pin the value side too. ModelInfo is a --model flag value or a
+	// transcript-reported id, neither normalised on the way in, so a mixed-case
+	// name must still match. Without this, dropping modelTerm's ToLower is a
+	// mutation the suite does not catch.
+	shouty, err := NewInstance(InstanceOptions{Title: "shouty", Path: "/tmp/repoA", Program: "claude --model Claude-OPUS-4-8"})
+	require.NoError(t, err)
+	require.True(t, ParseFilter("model:opus").Matches(shouty), "mixed-case model name")
+
+	// Empty value is a no-op (matches all including bare).
+	require.True(t, ParseFilter("model:").Matches(opus))
+	require.True(t, ParseFilter("model:").Matches(sonnet))
+	require.True(t, ParseFilter("model:").Matches(flagged))
+	require.True(t, ParseFilter("model:").Matches(bare), "empty predicate matches no-model session")
+
+	// A session with no model does not match a specific predicate.
+	require.False(t, ParseFilter("model:opus").Matches(bare), "no-model session does not match a specific predicate")
+
+	// Unknown string matches nothing (typo feedback).
+	require.False(t, ParseFilter("model:gemini").Matches(opus))
+	require.False(t, ParseFilter("model:gemini").Matches(sonnet))
+}
+
 func TestFilter_MixedPredicateAndSubstringANDed(t *testing.T) {
 	inst := newFilterInstance(t, "feat login", "feat/login")
 	inst.SetStatus(Ready)

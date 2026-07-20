@@ -13,10 +13,12 @@ import (
 //
 // A query is split on whitespace into terms that are combined with AND. Each term
 // is either a predicate over cached instance state (status:, dirty, behind[:expr],
-// pr:, account:, note:, effort:) or a plain substring matched against DisplayName,
-// Branch, or the session note. Predicate values are matched by case-insensitive
-// prefix so the list narrows progressively as the user types rather than blinking
-// empty mid-word (see the package tests).
+// pr:, account:, note:, effort:, model:) or a plain substring matched against
+// DisplayName, Branch, or the session note. Predicate values are matched by
+// case-insensitive prefix so the list narrows progressively as the user types
+// rather than blinking empty mid-word (see the package tests). model: is the sole
+// exception and matches a substring instead, because model names are
+// vendor-prefixed — see modelTerm for why.
 type Filter struct {
 	terms []term
 }
@@ -78,6 +80,8 @@ func parseTerm(tok string) term {
 		return noteTerm(strings.TrimPrefix(tok, "note:"))
 	case strings.HasPrefix(tok, "effort:"):
 		return effortTerm(strings.TrimPrefix(tok, "effort:"))
+	case strings.HasPrefix(tok, "model:"):
+		return modelTerm(strings.TrimPrefix(tok, "model:"))
 	default:
 		return substringTerm(tok)
 	}
@@ -234,5 +238,27 @@ func effortTerm(value string) term {
 			return info == ""
 		}
 		return strings.HasPrefix(info, value)
+	}
+}
+
+// modelTerm matches the session's resolved model (ModelInfo) by case-insensitive
+// SUBSTRING — the one predicate that does not prefix-match. Model names are
+// vendor-prefixed ("claude-opus-4-8"), so a natural query like "opus" or "sonnet"
+// has to reach the family segment without the user typing the leading "claude-".
+// An empty value is a no-op (matches every session), since Contains reports true
+// for an empty needle, so a mid-typed "model:" never blinks the list empty.
+// Sessions with no resolved model (ModelInfo == "") match only that empty
+// predicate — an empty haystack contains no non-empty needle.
+//
+// There is deliberately no "none" sentinel, following noteTerm rather than
+// account:none / pr:none / effort:none: a sentinel is only safe where the value
+// space cannot collide with the literal, and the vendor's name space is open.
+// Substring matching also makes the collision wider here than it would be for
+// those predicates — they check an exact "none" against a prefix match, so they
+// only shadow values *starting* with "none", whereas this would shadow any model
+// containing "none" anywhere.
+func modelTerm(value string) term {
+	return func(i *Instance) bool {
+		return strings.Contains(strings.ToLower(i.ModelInfo()), value)
 	}
 }
