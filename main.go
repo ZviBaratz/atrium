@@ -446,8 +446,14 @@ func init() {
 
 	lsCmd.Flags().BoolVar(&lsJSONFlag, "json", false, "Emit machine-readable JSON instead of a table")
 
+	peekCmd.Flags().IntVar(&peekLinesFlag, "lines", 0,
+		"Number of lines to print, reaching into scrollback (default: the visible pane)")
+	peekCmd.Flags().BoolVar(&peekColorFlag, "color", false, "Keep ANSI color escapes in the output")
+	peekCmd.Flags().StringVar(&peekPathFlag, "path", "", "Repo path, to disambiguate a title used in more than one repo")
+
 	profilesCmd.AddCommand(profilesDetectCmd)
 	rootCmd.AddCommand(lsCmd)
+	rootCmd.AddCommand(peekCmd)
 	rootCmd.AddCommand(debugCmd)
 	rootCmd.AddCommand(versionCmd)
 	rootCmd.AddCommand(resetCmd)
