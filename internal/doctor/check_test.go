@@ -2,6 +2,7 @@ package doctor
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"testing"
 
@@ -74,5 +75,40 @@ func TestDriftedFilter(t *testing.T) {
 	out := Drifted(in)
 	if len(out) != 1 || out[0].Key != agent.KeyClaude {
 		t.Errorf("Drifted() = %+v, want only claude", out)
+	}
+}
+
+// TestCheck_NonInstalledError_IsUnknown guards the case where the runner returns
+// a non-ErrNotInstalled error (e.g. the binary is on PATH but exec fails with
+// a signal or timeout). That path is distinct from ErrNotInstalled — the binary
+// exists but its output is unavailable, so the result is StatusUnknown, not
+// StatusNotInstalled.
+func TestCheck_NonInstalledError_IsUnknown(t *testing.T) {
+	r := fakeRunner{
+		err: map[string]error{
+			"claude": errors.New("exec: signal: killed"),
+		},
+	}
+	got := Check(context.Background(), agent.Adapters(), r)
+	if s := statusFor(got, agent.KeyClaude); s != StatusUnknown {
+		t.Errorf("claude status = %v, want StatusUnknown for non-ErrNotInstalled error", s)
+	}
+}
+
+// TestCheck_BadVerifiedVersionIsUnknown guards the classify() → driftExceeds error
+// path: if an adapter carries a non-semver VerifiedVersion (guarded in the real
+// registry by TestRegistryVerifiedVersionsParse), the result is StatusUnknown
+// rather than panicking. The installed output is valid so parseVersion succeeds
+// and driftExceeds is reached; it is driftExceeds that errors on the bad verified
+// string, and classify must propagate that as StatusUnknown.
+func TestCheck_BadVerifiedVersionIsUnknown(t *testing.T) {
+	bad := &agent.Adapter{
+		Key: agent.KeyClaude, DisplayName: "Claude Code",
+		VerifiedVersion: "not-semver",
+	}
+	r := fakeRunner{out: map[string]string{"claude": "2.1.0\n"}}
+	got := Check(context.Background(), []*agent.Adapter{bad}, r)
+	if s := statusFor(got, agent.KeyClaude); s != StatusUnknown {
+		t.Errorf("claude status = %v, want StatusUnknown when VerifiedVersion is invalid semver", s)
 	}
 }

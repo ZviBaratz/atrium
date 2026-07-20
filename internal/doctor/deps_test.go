@@ -211,3 +211,45 @@ func TestRenderDeps_MissingRowNotContradictory(t *testing.T) {
 		t.Errorf("missing-dep row contradictorily claims the binary is installed: %q", row)
 	}
 }
+
+// TestCheckDeps_ProbeErrorIsDepPresentUnknown guards the case where the binary is
+// found on PATH but the version command exits nonzero (e.g. killed by a signal).
+// That path is distinct from ErrNotInstalled (binary absent) and from an unparseable
+// version output (successful exit, garbage output): the probe itself errors, but the
+// binary IS present — so the result is DepPresentUnknown, never DepMissing, and
+// MissingRequired stays false.
+func TestCheckDeps_ProbeErrorIsDepPresentUnknown(t *testing.T) {
+	r := fakeDepRunner{
+		err: map[string]error{
+			"tmux": errors.New("exec: signal: killed"),
+		},
+		out: map[string]string{
+			"git": "git version 2.53.0\n",
+			"gh":  "gh version 2.46.0\n",
+		},
+	}
+	got := checkDeps(context.Background(), coreDeps, r, "linux", nil)
+	d := stateFor(got, "tmux")
+	if d.State != DepPresentUnknown {
+		t.Fatalf("tmux State = %v, want DepPresentUnknown when probe errors (not ErrNotInstalled)", d.State)
+	}
+	if MissingRequired(got) {
+		t.Error("MissingRequired = true, want false when tmux probe errors (binary present, just unreportable)")
+	}
+	if strings.Contains(d.Hint, "install:") {
+		t.Errorf("tmux Hint = %q, must not advise reinstall for a present binary", d.Hint)
+	}
+}
+
+// TestRenderDeps_PresentUnknownVersion pins the DepState.label() default case
+// ("⚠ unknown version"), reached when a binary is on PATH but its version
+// is unreadable. The label is the user-visible signal that the tool exists
+// but its version could not be parsed.
+func TestRenderDeps_PresentUnknownVersion(t *testing.T) {
+	out := RenderDeps([]DepResult{
+		{Name: "tmux", Kind: DepRequired, State: DepPresentUnknown},
+	})
+	if !strings.Contains(out, "unknown version") {
+		t.Errorf("RenderDeps() with DepPresentUnknown missing 'unknown version'\n%s", out)
+	}
+}
