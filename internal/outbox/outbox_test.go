@@ -382,6 +382,23 @@ func TestSweepRejectionsKeepsFreshReceipts(t *testing.T) {
 	assert.False(t, ok, "a receipt past the horizon has no reader left")
 }
 
+// TestSweepRejectionsKeepsReceiptForExpiredMessage guards the one rejection whose
+// message carries an old timestamp. A prompt spooled over a TTL ago is rejected as
+// expired, but its receipt is written now — so the sweep must age the receipt by
+// its own mtime, not by the message's CreatedAt embedded in the filename. Keying
+// off that stamp would delete the receipt on the very next drain tick, seconds
+// after it appears, before a --wait sender could read the failure.
+func TestSweepRejectionsKeepsReceiptForExpiredMessage(t *testing.T) {
+	sandbox(t)
+	path, err := Write(Message{Title: "t", Path: "/repo", Text: "x", CreatedAt: time.Now().Add(-2 * TTL)})
+	require.NoError(t, err)
+	require.NoError(t, Reject(path, "expired"))
+
+	SweepRejections(time.Now())
+	_, ok := Rejection(path)
+	assert.True(t, ok, "a just-written receipt must survive even when the message it rejects is TTL-old")
+}
+
 // TestRemoveToleratesMissingFile: the drain and a waiting sender can both clear
 // the same path, so a second removal is not a failure.
 func TestRemoveToleratesMissingFile(t *testing.T) {

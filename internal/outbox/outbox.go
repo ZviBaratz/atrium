@@ -26,7 +26,6 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"strconv"
 	"strings"
 	"time"
 
@@ -246,6 +245,12 @@ func ClearRejection(path string) error {
 // SweepRejections deletes receipts past the TTL horizon. A receipt is only ever
 // read by a sender still blocked in --wait, so one this old has no reader left
 // and would otherwise accumulate for the life of the data dir.
+//
+// Age is the receipt file's own mtime, not the timestamp in its name. That name
+// carries the *message's* CreatedAt, which for a receipt written because the
+// message expired is already a full TTL in the past — keying off it would delete
+// the receipt on the very next drain tick, seconds after Reject wrote it and long
+// before a waiting sender could read the failure.
 func SweepRejections(now time.Time) {
 	dir, err := Dir()
 	if err != nil {
@@ -261,11 +266,11 @@ func SweepRejections(now time.Time) {
 		if !ok || !isMessageFile(base) {
 			continue
 		}
-		stamp, err := strconv.ParseInt(base[:19], 10, 64)
+		info, err := de.Info()
 		if err != nil {
-			continue
+			continue // vanished between ReadDir and Info; nothing left to sweep
 		}
-		if now.Sub(time.Unix(0, stamp)) > TTL {
+		if now.Sub(info.ModTime()) > TTL {
 			_ = os.Remove(filepath.Join(dir, name))
 		}
 	}

@@ -367,15 +367,19 @@ func TestDrainSweepsStaleRejections(t *testing.T) {
 	dir, err := outbox.Dir()
 	require.NoError(t, err)
 	require.NoError(t, os.MkdirAll(dir, 0o755))
-	old := time.Now().Add(-outbox.TTL - time.Hour).UnixNano()
-	stale := filepath.Join(dir, fmt.Sprintf("%019d-aaaaaaaa.json.rejected", old))
+	stale := filepath.Join(dir, fmt.Sprintf("%019d-aaaaaaaa.json.rejected", time.Now().UnixNano()))
 	fresh := filepath.Join(dir, fmt.Sprintf("%019d-bbbbbbbb.json.rejected", time.Now().UnixNano()))
 	require.NoError(t, os.WriteFile(stale, []byte("old reason"), 0o644))
 	require.NoError(t, os.WriteFile(fresh, []byte("new reason"), 0o644))
+	// A receipt ages by its own mtime, not the timestamp in its name — the two
+	// diverge for an expired-message rejection, whose name carries the message's
+	// long-past CreatedAt. Backdate the file itself to put it past the horizon.
+	old := time.Now().Add(-outbox.TTL - time.Hour)
+	require.NoError(t, os.Chtimes(stale, old, old))
 
 	h.drainOutbox()
 
-	assert.NoFileExists(t, stale, "a receipt past the horizon has no reader left")
+	assert.NoFileExists(t, stale, "a receipt whose mtime is past the horizon has no reader left")
 	assert.FileExists(t, fresh, "a fresh receipt may still be collected by a waiting sender")
 }
 
