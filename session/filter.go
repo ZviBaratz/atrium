@@ -247,7 +247,6 @@ func effortTerm(value string) term {
 	}
 }
 
-
 // modelTerm matches the session's resolved model (ModelInfo) by case-insensitive
 // SUBSTRING — the one predicate that does not prefix-match. Model names are
 // vendor-prefixed ("claude-opus-4-8"), so a natural query like "opus" or "sonnet"
