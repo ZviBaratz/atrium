@@ -191,6 +191,68 @@ func TestDiffCommentRange(t *testing.T) {
 	require.Equal(t, "+add1", rows[0].text)
 }
 
+// TestParseDiffRows_DeletedFile checks that del-row line numbers are correct when the
+// hunk header has a zero new-file start (@@ -1,N +0,0 @@), which occurs for completely
+// deleted files. Before the fix, parseHunkHeader returned ok=false for this header and
+// parseDiffRows left oldLine at 0, causing all del rows to carry lineNo: 0.
+func TestParseDiffRows_DeletedFile(t *testing.T) {
+	diff := "diff --git a/gone.go b/gone.go\n" +
+		"@@ -1,3 +0,0 @@\n" +
+		"-package gone\n" +
+		"-func A() {}\n" +
+		"-func B() {}\n"
+	rows := parseDiffRows(diff)
+	var delRows []diffRow
+	for _, r := range rows {
+		if r.kind == rowDel {
+			delRows = append(delRows, r)
+		}
+	}
+	require.Len(t, delRows, 3)
+	require.Equal(t, 1, delRows[0].lineNo, "first del row must carry old-file line 1, not 0")
+	require.Equal(t, 2, delRows[1].lineNo)
+	require.Equal(t, 3, delRows[2].lineNo)
+}
+
+// TestParseDiffRows_NewFile is the mirror for @@ -0,0 +1,N @@ (new file): add rows
+// must carry the correct new-file line numbers even when oldStart == 0.
+func TestParseDiffRows_NewFile(t *testing.T) {
+	diff := "diff --git a/new.go b/new.go\n" +
+		"@@ -0,0 +1,2 @@\n" +
+		"+package newpkg\n" +
+		"+func C() {}\n"
+	rows := parseDiffRows(diff)
+	var addRows []diffRow
+	for _, r := range rows {
+		if r.kind == rowAdd {
+			addRows = append(addRows, r)
+		}
+	}
+	require.Len(t, addRows, 2)
+	require.Equal(t, 1, addRows[0].lineNo, "first add row must carry new-file line 1, not 0")
+	require.Equal(t, 2, addRows[1].lineNo)
+}
+
+// TestDiffCommentSetSize_RefreshesOnResize is the regression guard for the
+// resize-in-comment-mode bug: when the terminal is resized while the diff pane is
+// frozen in comment mode, SetSize must re-render the snapshot at the new width.
+// Before the fix, d.diff was rendered at the old width, so the cursor highlight bar
+// was padded/truncated to the wrong column count after a resize.
+func TestDiffCommentSetSize_RefreshesOnResize(t *testing.T) {
+	d := NewDiffPane()
+	d.SetSize(80, 20)
+	d.rows = parseDiffRows(cursorDiff)
+	require.True(t, d.EnterComment())
+
+	wideDiff := d.diff // rendered at width 80
+	d.SetSize(40, 20) // narrow — must re-render, not keep the 80-wide snapshot
+	narrowDiff := d.diff
+
+	require.NotEqual(t, wideDiff, narrowDiff,
+		"SetSize must re-render the frozen comment snapshot at the new width")
+	require.True(t, d.IsCommenting(), "comment mode must survive a resize")
+}
+
 // TestParseHunkHeader exercises parseHunkHeader directly for edge cases that
 // TestParseDiffRows only covers indirectly via the full parser:
 //   - standard hunk with explicit counts ("@@ -1,3 +1,4 @@")

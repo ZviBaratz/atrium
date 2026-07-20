@@ -285,8 +285,17 @@ func parseDiffRows(content string) []diffRow {
 				diffRow{kind: rowRule},
 				diffRow{kind: rowFileHeader, text: line, file: file})
 		case strings.HasPrefix(line, "@@"):
-			if o, n, ok := parseHunkHeader(line); ok {
-				oldLine, newLine = o, n
+			// Update each counter independently: a start of 0 is valid (deleted or
+			// newly-added files), so we cannot require both sides to be > 0 the way
+			// the original ok-gate did.  A truly malformed header leaves both at 0
+			// and neither counter is touched (same behaviour as before the fix).
+			if o, n, _ := parseHunkHeader(line); o > 0 || n > 0 {
+				if o > 0 {
+					oldLine = o
+				}
+				if n > 0 {
+					newLine = n
+				}
 			}
 			rows = append(rows, diffRow{kind: rowHunk, text: line})
 		case line[0] == '+' && (len(line) == 1 || line[1] != '+'):

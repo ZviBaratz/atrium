@@ -55,6 +55,12 @@ func (d *DiffPane) SetSize(width, height int) {
 	d.height = height
 	d.viewport.Width = width
 	d.viewport.Height = height
+	// In comment mode the frozen snapshot must be re-rendered at the new width so
+	// the cursor highlight bar and line truncation use the correct column count.
+	if d.commenting {
+		d.refreshCommentView()
+		return
+	}
 	// Update viewport content if diff exists
 	if d.diff != "" || d.stats != "" {
 		d.viewport.SetContent(lipgloss.JoinVertical(lipgloss.Left, d.stats, d.diff))
