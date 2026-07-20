@@ -193,8 +193,9 @@ func TestDiffCommentRange(t *testing.T) {
 
 // TestParseDiffRows_DeletedFile checks that del-row line numbers are correct when the
 // hunk header has a zero new-file start (@@ -1,N +0,0 @@), which occurs for completely
-// deleted files. Before the fix, parseHunkHeader returned ok=false for this header and
-// parseDiffRows left oldLine at 0, causing all del rows to carry lineNo: 0.
+// deleted files. Before the fix, parseDiffRows required both sides of the header to be
+// > 0 before advancing either counter, so the zero new-file start suppressed the update
+// entirely and left oldLine at 0, causing all del rows to carry lineNo: 0.
 func TestParseDiffRows_DeletedFile(t *testing.T) {
 	diff := "diff --git a/gone.go b/gone.go\n" +
 		"@@ -1,3 +0,0 @@\n" +
@@ -245,7 +246,7 @@ func TestDiffCommentSetSize_RefreshesOnResize(t *testing.T) {
 	require.True(t, d.EnterComment())
 
 	wideDiff := d.diff // rendered at width 80
-	d.SetSize(40, 20) // narrow — must re-render, not keep the 80-wide snapshot
+	d.SetSize(40, 20)  // narrow — must re-render, not keep the 80-wide snapshot
 	narrowDiff := d.diff
 
 	require.NotEqual(t, wideDiff, narrowDiff,
@@ -254,34 +255,33 @@ func TestDiffCommentSetSize_RefreshesOnResize(t *testing.T) {
 }
 
 // TestParseHunkHeader exercises parseHunkHeader directly for edge cases that
-// TestParseDiffRows only covers indirectly via the full parser:
-//   - standard hunk with explicit counts ("@@ -1,3 +1,4 @@")
-//   - count-omitted form used by git for single-line hunks ("@@ -10 +10 @@")
-//   - trailing context text after the closing "@@" ("@@ -1,3 +1,4 @@ func Foo() {")
-//   - malformed line that produces ok=false
+// TestParseDiffRows only covers indirectly via the full parser: the count-omitted
+// form git uses for single-line hunks, trailing context text after the closing "@@",
+// the whole-file delete/add headers whose zero side this fix hinges on, and malformed
+// lines. Every case asserts both returned values — a header that parses to 0 must be
+// pinned to 0 just as tightly as one that parses to a real line, since 0 is what tells
+// parseDiffRows to leave that side's counter alone.
 func TestParseHunkHeader(t *testing.T) {
 	tests := []struct {
 		line     string
 		oldStart int
 		newStart int
-		ok       bool
 	}{
-		{"@@ -1,3 +1,4 @@", 1, 1, true},
-		{"@@ -10,2 +10,3 @@", 10, 10, true},
-		{"@@ -10 +10 @@", 10, 10, true},              // count omitted (single-line hunk)
-		{"@@ -1,3 +1,4 @@ func Foo() {", 1, 1, true}, // trailing context text
-		{"@@ -5,0 +6,3 @@", 5, 6, true},              // zero-count old side
-		{"not a hunk header", 0, 0, false},
-		{"@@ missing fields", 0, 0, false},
+		{"@@ -1,3 +1,4 @@", 1, 1},
+		{"@@ -10,2 +10,3 @@", 10, 10},
+		{"@@ -10 +10 @@", 10, 10},              // count omitted (single-line hunk)
+		{"@@ -1,3 +1,4 @@ func Foo() {", 1, 1}, // trailing context text
+		{"@@ -5,0 +6,3 @@", 5, 6},              // zero-count old side
+		{"@@ -1,3 +0,0 @@", 1, 0},              // whole file deleted: new side has no lines
+		{"@@ -0,0 +1,3 @@", 0, 1},              // new file: old side has no lines
+		{"not a hunk header", 0, 0},
+		{"@@ missing fields", 0, 0},
 	}
 	for _, tc := range tests {
 		t.Run(tc.line, func(t *testing.T) {
-			oldStart, newStart, ok := parseHunkHeader(tc.line)
-			require.Equal(t, tc.ok, ok, "ok mismatch")
-			if tc.ok {
-				require.Equal(t, tc.oldStart, oldStart, "oldStart mismatch")
-				require.Equal(t, tc.newStart, newStart, "newStart mismatch")
-			}
+			oldStart, newStart := parseHunkHeader(tc.line)
+			require.Equal(t, tc.oldStart, oldStart, "oldStart mismatch")
+			require.Equal(t, tc.newStart, newStart, "newStart mismatch")
 		})
 	}
 }

@@ -285,17 +285,17 @@ func parseDiffRows(content string) []diffRow {
 				diffRow{kind: rowRule},
 				diffRow{kind: rowFileHeader, text: line, file: file})
 		case strings.HasPrefix(line, "@@"):
-			// Update each counter independently: a start of 0 is valid (deleted or
-			// newly-added files), so we cannot require both sides to be > 0 the way
-			// the original ok-gate did.  A truly malformed header leaves both at 0
-			// and neither counter is touched (same behaviour as before the fix).
-			if o, n, _ := parseHunkHeader(line); o > 0 || n > 0 {
-				if o > 0 {
-					oldLine = o
-				}
-				if n > 0 {
-					newLine = n
-				}
+			// Each side's counter advances on its own. Requiring both to be > 0 would
+			// skip the update for a completely deleted file ("+0,0") or a new one
+			// ("-0,0") and leave every code row in the hunk numbered 0. A side that
+			// reads 0 carries no lines, so its counter keeps its previous value —
+			// nothing in such a hunk references that side anyway.
+			o, n := parseHunkHeader(line)
+			if o > 0 {
+				oldLine = o
+			}
+			if n > 0 {
+				newLine = n
 			}
 			rows = append(rows, diffRow{kind: rowHunk, text: line})
 		case line[0] == '+' && (len(line) == 1 || line[1] != '+'):
@@ -319,8 +319,11 @@ func parseDiffRows(content string) []diffRow {
 
 // parseHunkHeader reads the starting line numbers from a "@@ -old,count +new,count @@"
 // header (the counts are optional — git omits them when they are 1). It returns the
-// 1-based old and new starting lines, or ok=false when the header is malformed.
-func parseHunkHeader(line string) (oldStart, newStart int, ok bool) {
+// 1-based old and new starting lines; a side reads 0 when it carries no lines (a
+// completely deleted file's header is "+0,0", a new file's is "-0,0") or when that
+// side could not be parsed. Callers must treat 0 as "no information" rather than as
+// line 0 — the two cases are indistinguishable here, and neither names a real line.
+func parseHunkHeader(line string) (oldStart, newStart int) {
 	fields := strings.Fields(line)
 	// fields[0] is "@@"; the old range starts with '-', the new range with '+'.
 	for _, f := range fields[1:] {
@@ -331,7 +334,7 @@ func parseHunkHeader(line string) (oldStart, newStart int, ok bool) {
 			newStart = leadingInt(f[1:])
 		}
 	}
-	return oldStart, newStart, oldStart > 0 && newStart > 0
+	return oldStart, newStart
 }
 
 // leadingInt parses the integer prefix of s up to an optional "," (the hunk range's
