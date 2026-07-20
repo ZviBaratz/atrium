@@ -201,7 +201,8 @@ func accountTerm(value string) term {
 // substring. It only widens which rows match: the list's grouped, status-sorted
 // order is deliberately left untouched here (row position is muscle memory on that
 // surface), so free-text does not re-rank the session list — a follow-up if wanted.
-// Predicate terms (status:/dirty/behind/pr:/account:/note:/effort:) keep exact semantics.
+// Predicate terms (status:/dirty/behind/pr:/account:/note:/effort:/model:/mode:)
+// keep exact semantics.
 func substringTerm(q string) term {
 	return func(i *Instance) bool {
 		match := func(s string) bool { ok, _ := fuzzy.Match(q, s); return ok }
