@@ -16,7 +16,10 @@ type fakeDepRunner struct {
 
 func (f fakeDepRunner) probe(_ context.Context, bin, _ string) (string, error) {
 	if e, ok := f.err[bin]; ok {
-		return "", e
+		// Canned output rides along with the error for the same reason as
+		// fakeRunner.version: an empty-output error is indistinguishable from
+		// unparseable output, since checkDeps maps both to DepPresentUnknown.
+		return f.out[bin], e
 	}
 	if o, ok := f.out[bin]; ok {
 		return o, nil
@@ -218,20 +221,30 @@ func TestRenderDeps_MissingRowNotContradictory(t *testing.T) {
 // version output (successful exit, garbage output): the probe itself errors, but the
 // binary IS present — so the result is DepPresentUnknown, never DepMissing, and
 // MissingRequired stays false.
+//
+// tmux's canned output is parseable and paired with the error on purpose: an
+// erroring probe that returns "" also lands on DepPresentUnknown via the default
+// branch's failed parseVersion, so a test using "" would still pass with the
+// err != nil branch deleted. With parseable output, deleting it yields DepOK — and
+// a version string the caller was told not to trust — so this test fails.
 func TestCheckDeps_ProbeErrorIsDepPresentUnknown(t *testing.T) {
 	r := fakeDepRunner{
 		err: map[string]error{
 			"tmux": errors.New("exec: signal: killed"),
 		},
 		out: map[string]string{
-			"git": "git version 2.53.0\n",
-			"gh":  "gh version 2.46.0\n",
+			"tmux": "tmux 3.4\n",
+			"git":  "git version 2.53.0\n",
+			"gh":   "gh version 2.46.0\n",
 		},
 	}
 	got := checkDeps(context.Background(), coreDeps, r, "linux", nil)
 	d := stateFor(got, "tmux")
 	if d.State != DepPresentUnknown {
 		t.Fatalf("tmux State = %v, want DepPresentUnknown when probe errors (not ErrNotInstalled)", d.State)
+	}
+	if d.Version != "" {
+		t.Errorf("tmux Version = %q, want empty: output from a failed probe must not be reported", d.Version)
 	}
 	if MissingRequired(got) {
 		t.Error("MissingRequired = true, want false when tmux probe errors (binary present, just unreportable)")
