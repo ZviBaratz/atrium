@@ -17,6 +17,7 @@ import (
 	"strings"
 
 	"github.com/ZviBaratz/atrium/cmd"
+	"github.com/ZviBaratz/atrium/log"
 )
 
 // CaptureOpts tunes a headless pane capture.
@@ -36,7 +37,9 @@ type CaptureOpts struct {
 // documents at length: tmux resolves a session-name target to the *active* pane
 // of the current window, so a split the user opened while attached would
 // silently redirect the capture to the wrong pane. When the id cannot be
-// resolved this falls back to the session name, matching Session.paneTarget.
+// resolved this falls back to the session name, matching Session.paneTarget —
+// and logs it the same way, so a capture quietly redirected to the wrong pane is
+// at least diagnosable rather than an unexplained wrong answer.
 //
 // The capture is read-only — it neither attaches to the session nor alters it.
 func CapturePaneForSession(ctx context.Context, exec cmd.Executor, sessionName string, o CaptureOpts) (string, error) {
@@ -45,11 +48,10 @@ func CapturePaneForSession(ctx context.Context, exec cmd.Executor, sessionName s
 	}
 
 	target := sessionName
-	listed, err := exec.Output(tmuxCommand(ctx, "list-panes", "-s", "-t", sessionName, "-F", "#{pane_id}"))
-	if err == nil {
-		if id, idErr := smallestPaneID(listed); idErr == nil {
-			target = id
-		}
+	if id, err := resolvePaneID(ctx, exec, sessionName); err != nil {
+		log.WarningLog.Printf("could not resolve pane id for %s (peek falls back to the session name): %v", sessionName, err)
+	} else {
+		target = id
 	}
 
 	args := []string{"capture-pane", "-p", "-J"}
@@ -70,6 +72,17 @@ func CapturePaneForSession(ctx context.Context, exec cmd.Executor, sessionName s
 		return "", fmt.Errorf("failed to capture pane for tmux session %q: %w", sessionName, err)
 	}
 	return trimCapture(string(out), o.Lines), nil
+}
+
+// resolvePaneID returns the agent pane's id for a session, or an error when the
+// listing fails or yields no usable id. It is the headless counterpart to
+// Session.resolvePaneIDLocked; callers fall back to the session name on error.
+func resolvePaneID(ctx context.Context, exec cmd.Executor, sessionName string) (string, error) {
+	listed, err := exec.Output(tmuxCommand(ctx, "list-panes", "-s", "-t", sessionName, "-F", "#{pane_id}"))
+	if err != nil {
+		return "", err
+	}
+	return smallestPaneID(listed)
 }
 
 // trimCapture drops the blank rows tmux pads a partly-filled pane with, then
