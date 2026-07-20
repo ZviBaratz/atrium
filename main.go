@@ -40,7 +40,9 @@ var (
 	daemonFlag      bool
 	updateCheckOnly bool
 	verboseFlag     bool
-	binName         string
+	// binName is overwritten from os.Args[0] in main(); the default keeps help
+	// and error text sensible for any code path that reads it before then.
+	binName = "atrium"
 	// quitSignals is the set that drives a graceful shutdown. Registering SIGHUP
 	// is load-bearing: it overrides Go's default "terminate without running
 	// defers" disposition, so closing the terminal / losing SSH cancels the
@@ -442,7 +444,10 @@ func init() {
 	hookEventCmd.Flags().StringVar(&hookEventArg, "event", "", "hook event name (internal)")
 	hookEventCmd.Flags().StringVar(&hookStateFileArg, "state-file", "", "session status file path (internal)")
 
+	lsCmd.Flags().BoolVar(&lsJSONFlag, "json", false, "Emit machine-readable JSON instead of a table")
+
 	profilesCmd.AddCommand(profilesDetectCmd)
+	rootCmd.AddCommand(lsCmd)
 	rootCmd.AddCommand(debugCmd)
 	rootCmd.AddCommand(versionCmd)
 	rootCmd.AddCommand(resetCmd)

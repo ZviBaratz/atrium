@@ -29,17 +29,6 @@ func noopExec() cmd_test.MockCmdExec {
 	}
 }
 
-// sandboxDataDir sandboxes HOME per the repo's hermetic-test convention and
-// returns the resolved (created) data dir.
-func sandboxDataDir(t *testing.T) string {
-	t.Helper()
-	t.Setenv("HOME", t.TempDir())
-	dir, err := config.GetConfigDir()
-	require.NoError(t, err)
-	require.NoError(t, os.MkdirAll(dir, 0o755))
-	return dir
-}
-
 // seedInstance persists one stored (paused) instance and returns the state.json
 // path.
 func seedInstance(t *testing.T, dir string) string {
@@ -54,14 +43,6 @@ func seedInstance(t *testing.T, dir string) string {
 	require.NoError(t, err)
 	require.NoError(t, config.LoadState().SaveInstances(data))
 	return filepath.Join(dir, config.StateFileName)
-}
-
-// storedInstances re-reads state.json from disk and returns its instance list.
-func storedInstances(t *testing.T) []session.InstanceData {
-	t.Helper()
-	var data []session.InstanceData
-	require.NoError(t, json.Unmarshal(config.LoadState().GetInstances(), &data))
-	return data
 }
 
 // startFakeDaemon launches a stand-in for the autoyes daemon: on SIGTERM it
