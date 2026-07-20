@@ -57,6 +57,13 @@ func TestReadmeFilterExamples(t *testing.T) {
 	require.True(t, ParseFilter("model:opus behind").Matches(opusBehind))
 	require.False(t, ParseFilter("model:opus behind").Matches(readyClean))
 
+	// `mode:plan status:need` — planning sessions AND waiting on you.
+	planNeeds := newFilterInstance(t, "spec-work", "feat/u")
+	planNeeds.SetModeMeta("plan")
+	planNeeds.SetStatus(NeedsInput)
+	require.True(t, ParseFilter("mode:plan status:need").Matches(planNeeds))
+	require.False(t, ParseFilter("mode:plan status:need").Matches(readyClean))
+
 	// `auth` — plain substring in name/branch/note.
 	require.True(t, ParseFilter("auth").Matches(authNamed))
 	require.False(t, ParseFilter("auth").Matches(readyClean))

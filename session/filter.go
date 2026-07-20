@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/ZviBaratz/atrium/internal/fuzzy"
+	"github.com/ZviBaratz/atrium/session/agent"
 )
 
 // Filter is a compiled list-filter query. It is produced by ParseFilter and
@@ -13,9 +14,9 @@ import (
 //
 // A query is split on whitespace into terms that are combined with AND. Each term
 // is either a predicate over cached instance state (status:, dirty, behind[:expr],
-// pr:, account:, note:, effort:, model:) or a plain substring matched against
-// DisplayName, Branch, or the session note. Predicate values are matched by
-// case-insensitive prefix so the list narrows progressively as the user types
+// pr:, account:, note:, effort:, model:, mode:) or a plain substring matched
+// against DisplayName, Branch, or the session note. Predicate values are matched
+// by case-insensitive prefix so the list narrows progressively as the user types
 // rather than blinking empty mid-word (see the package tests). model: is the sole
 // exception and matches a substring instead, because model names are
 // vendor-prefixed — see modelTerm for why.
@@ -82,6 +83,12 @@ func parseTerm(tok string) term {
 		return effortTerm(strings.TrimPrefix(tok, "effort:"))
 	case strings.HasPrefix(tok, "model:"):
 		return modelTerm(strings.TrimPrefix(tok, "model:"))
+	// The trailing colon is what keeps these two apart: "model:opus" does not
+	// carry the prefix "mode:", so swapping these two arms changes nothing. The
+	// colon is still load-bearing — a bare "mode" prefix ahead of the model: arm
+	// would swallow every model: query.
+	case strings.HasPrefix(tok, "mode:"):
+		return modeTerm(strings.TrimPrefix(tok, "mode:"))
 	default:
 		return substringTerm(tok)
 	}
@@ -195,7 +202,8 @@ func accountTerm(value string) term {
 // substring. It only widens which rows match: the list's grouped, status-sorted
 // order is deliberately left untouched here (row position is muscle memory on that
 // surface), so free-text does not re-rank the session list — a follow-up if wanted.
-// Predicate terms (status:/dirty/behind/pr:/account:/note:/effort:) keep exact semantics.
+// Predicate terms (status:/dirty/behind/pr:/account:/note:/effort:/model:/mode:)
+// keep exact semantics.
 func substringTerm(q string) term {
 	return func(i *Instance) bool {
 		match := func(s string) bool { ok, _ := fuzzy.Match(q, s); return ok }
@@ -260,5 +268,58 @@ func effortTerm(value string) term {
 func modelTerm(value string) term {
 	return func(i *Instance) bool {
 		return strings.Contains(strings.ToLower(i.ModelInfo()), value)
+	}
+}
+
+// modeTerm matches the session's permission mode (PermissionModeInfo) by
+// case-insensitive prefix, mirroring effortTerm. An empty value is a no-op
+// (matches every session) so a mid-typed "mode:" never blinks the list empty.
+//
+// The match is against the display label rather than the raw enum value — so
+// "mode:accept-edits" for acceptEdits and "mode:bypass" for bypassPermissions —
+// because the label is what the row's chip shows, and a filter the user types
+// should follow what they can see. agent.ClaudePermissionModeLabel is the one
+// place that mapping lives, so this predicate cannot drift from the chip. It
+// falls back to the raw value for an unlabelled mode (dontAsk, which only a
+// profile-pinned flag can reach, or one a newer CLI introduces), which keeps
+// such a mode filterable without a change here.
+//
+// "default" is the one mode folded into the no-mode sentinel rather than matched
+// on its own, because the row renderer hides the chip for it exactly as it does
+// for no-mode-yet (see ui/list_render.go). It is also the common case — an
+// ordinary manual-mode session reports it from the footer marker table. Matching
+// it literally would break this predicate's own rule twice over: "mode:d" would
+// select rows displaying no mode at all, and two rows that look identical on
+// screen would answer "mode:none" differently.
+//
+// "default" is nonetheless accepted as a second spelling of the sentinel, on the
+// same exact-match terms as "none". The word is in the product's vocabulary even
+// though the list never prints it — it is the create form's first chip
+// (ui/overlay/modeField.go) — so a user who types it deserves the set it plainly
+// denotes rather than an empty list. Both spellings select the same rows: the
+// ones showing no mode chip. Note the create-form chip means "pin no flag"
+// while this matches "currently resolving to default", which are not the same
+// set under a profile pin — but that gap is uniform across the predicate
+// ("mode:plan" is likewise about the live mode, not how the session was
+// composed), so the two spellings do not need to disagree here.
+//
+// The literal value "none" matches sessions showing no mode chip, mirroring
+// effort:none and account:none — and, as with those two, it matches "none"
+// exactly rather than by prefix so that "mode:no" stays able to prefix-match a
+// real mode. That guard is live rather than theoretical here: PermissionModeInfo
+// prefers runtimeMode, which tmux.setPermissionMode stores straight off the hook
+// payload with no enum validation, so the value space reaching this predicate is
+// open — the CLI's argv-time rejection of an unknown --permission-mode only
+// constrains the pinned-flag fallback.
+func modeTerm(value string) term {
+	return func(i *Instance) bool {
+		info := i.PermissionModeInfo()
+		if info == "default" {
+			info = "" // no chip on the row; no separate identity in the filter
+		}
+		if value == "none" || value == "default" {
+			return info == ""
+		}
+		return strings.HasPrefix(strings.ToLower(agent.ClaudePermissionModeLabel(info)), value)
 	}
 }

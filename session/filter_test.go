@@ -349,6 +349,102 @@ func TestFilter_Effort(t *testing.T) {
 	require.False(t, ParseFilter("effort:low").Matches(none))
 }
 
+func TestFilter_Mode(t *testing.T) {
+	plan := newFilterInstance(t, "planner", "b")
+	plan.SetModeMeta("plan")
+	acceptEdits := newFilterInstance(t, "editor", "b")
+	acceptEdits.SetModeMeta("acceptEdits")
+	auto := newFilterInstance(t, "autonomous", "b")
+	auto.SetModeMeta("auto")
+	bypass := newFilterInstance(t, "bypasser", "b")
+	bypass.SetModeMeta("bypassPermissions")
+	none := newFilterInstance(t, "default-session", "b") // no mode set
+
+	// Exact label matches.
+	require.True(t, ParseFilter("mode:plan").Matches(plan))
+	require.False(t, ParseFilter("mode:plan").Matches(acceptEdits))
+	require.False(t, ParseFilter("mode:plan").Matches(none))
+
+	// "accept-edits" is the display label for acceptEdits — users type what they see.
+	require.True(t, ParseFilter("mode:accept-edits").Matches(acceptEdits))
+	require.True(t, ParseFilter("mode:accept").Matches(acceptEdits))
+	require.False(t, ParseFilter("mode:accept").Matches(plan))
+
+	// "a" is a prefix of both "auto" and "accept-edits"; both match, then narrow.
+	require.True(t, ParseFilter("mode:a").Matches(auto))
+	require.True(t, ParseFilter("mode:a").Matches(acceptEdits))
+	require.True(t, ParseFilter("mode:au").Matches(auto))
+	require.False(t, ParseFilter("mode:au").Matches(acceptEdits))
+	require.True(t, ParseFilter("mode:ac").Matches(acceptEdits))
+	require.False(t, ParseFilter("mode:ac").Matches(auto))
+
+	// "bypass" is the display label for bypassPermissions.
+	require.True(t, ParseFilter("mode:bypass").Matches(bypass))
+	require.False(t, ParseFilter("mode:bypass").Matches(plan))
+
+	// Case-insensitive on the query side.
+	require.True(t, ParseFilter("MODE:PLAN").Matches(plan))
+
+	// Empty value is a no-op (match all) so "mode:" never blinks the list empty.
+	require.True(t, ParseFilter("mode:").Matches(plan))
+	require.True(t, ParseFilter("mode:").Matches(none))
+
+	// A value prefixing no known label matches nothing.
+	require.False(t, ParseFilter("mode:xyz").Matches(plan))
+
+	// "none" is the sentinel for sessions with no resolved mode.
+	require.True(t, ParseFilter("mode:none").Matches(none))
+	require.False(t, ParseFilter("mode:none").Matches(plan))
+
+	// Sessions with no mode match only the empty predicate and the sentinel.
+	require.False(t, ParseFilter("mode:auto").Matches(none))
+
+	// The sentinel is an EXACT match, not a prefix one, so a shorter "no"/"n"
+	// still prefix-matches real modes rather than being swallowed into meaning
+	// no-mode. Nothing above pins this: relaxing the == to a prefix test keeps
+	// every other assertion here green, because no label happens to start with
+	// "no". mirrors effortTerm's own guard (TestFilter_Effort).
+	require.False(t, ParseFilter("mode:no").Matches(none), "mode:no is a label prefix, not the sentinel")
+	require.False(t, ParseFilter("mode:n").Matches(none))
+
+	// "default" is folded into the sentinel: the row renderer hides the chip for
+	// it exactly as for a session with no mode yet, so the filter must not give
+	// it a separate identity the user cannot see. Without the fold, these two
+	// visually identical rows answer mode:none differently and "mode:d" selects
+	// rows displaying no mode at all.
+	def := newFilterInstance(t, "manual-session", "b")
+	def.SetModeMeta("default")
+	require.True(t, ParseFilter("mode:none").Matches(def), "detected default shows no chip, so it is none")
+	require.False(t, ParseFilter("mode:d").Matches(def), "no chip on screen, so nothing to match by prefix")
+	require.True(t, ParseFilter("mode:").Matches(def), "empty predicate still matches it")
+
+	// "default" is a second spelling of the sentinel — the create form teaches
+	// the word even though the list never prints it — so it selects the same
+	// rows as mode:none and nothing else. Exact, like the sentinel it aliases:
+	// "mode:d" above must stay free to prefix-match a real label (dontAsk).
+	require.True(t, ParseFilter("mode:default").Matches(def))
+	require.True(t, ParseFilter("mode:default").Matches(none), "same set as mode:none")
+	require.False(t, ParseFilter("mode:default").Matches(plan))
+	require.False(t, ParseFilter("mode:defaul").Matches(def), "alias is exact, not a prefix")
+
+	// A mode with no label in ClaudePermissionModeLabel falls back to its raw
+	// enum value, which is how a runtime-only mode stays filterable. dontAsk is
+	// the live case: the CLI accepts it, the create form never offers it, and it
+	// has no label — so the fallback is the only thing that matches it. (Unlike
+	// "default" above, dontAsk does render a chip, so it stays matchable.)
+	//
+	// It is also the one case that pins modeTerm's own strings.ToLower. The
+	// MODE:PLAN assertion above does not: ParseFilter lowercases the whole token,
+	// so it passes with that call removed, and every *labelled* mode is already
+	// lowercase. Only a raw mixed-case value reaching the fallback can catch that
+	// mutation (same trap #426 documented for modelTerm).
+	dontAsk := newFilterInstance(t, "ci-runner", "b")
+	dontAsk.SetModeMeta("dontAsk")
+	require.True(t, ParseFilter("mode:dontask").Matches(dontAsk), "unlabelled mode matches its lowercased raw value")
+	require.True(t, ParseFilter("mode:dont").Matches(dontAsk))
+	require.False(t, ParseFilter("mode:dont").Matches(plan))
+}
+
 func TestFilter_Model(t *testing.T) {
 	// Transcript-derived full model names (after the first turn).
 	opus, err := NewInstance(InstanceOptions{Title: "big", Path: "/tmp/repoA", Program: "claude"})

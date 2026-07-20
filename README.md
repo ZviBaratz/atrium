@@ -200,6 +200,7 @@ prefix in `claude-opus-4-8`.
 | `note:<text>` | sessions whose note prefixes `<text>` |
 | `effort:<level>` | reasoning-effort level prefixing `<level>` — `low`, `medium`, `high`, `xhigh`, `max`; `effort:none` for sessions with no resolved effort |
 | `model:<name>` | resolved model *containing* `<name>` — `model:opus` matches `claude-opus-4-8`. The one predicate that matches a substring, not a prefix, so a family name reaches past the vendor prefix |
+| `mode:<name>` | permission mode prefixing `<name>` — matched against the label the row's chip shows: `plan`, `accept-edits`, `auto`, `bypass`, or the raw mode name if it has no label. `mode:none` — or equivalently `mode:default` — matches sessions showing no mode chip, which is what the default (manual) mode renders as |
 | `<text>` | plain substring in the session's name, branch, or note |
 
 Worked examples (each is exercised verbatim against the parser by
@@ -210,6 +211,7 @@ Worked examples (each is exercised verbatim against the parser by
 - `account:work note:release` — `work`-account sessions whose note starts with `release`.
 - `effort:max dirty` — sessions running at `max` effort **and** with uncommitted changes.
 - `model:opus behind` — `opus`-family sessions **and** behind their base branch.
+- `mode:plan status:need` — planning sessions **and** waiting on you.
 - `auth` — any session with `auth` in its name, branch, or note.
 
 Press `esc` to clear the committed filter.
