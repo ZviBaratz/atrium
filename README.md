@@ -200,7 +200,7 @@ prefix in `claude-opus-4-8`.
 | `note:<text>` | sessions whose note prefixes `<text>` |
 | `effort:<level>` | reasoning-effort level prefixing `<level>` — `low`, `medium`, `high`, `xhigh`, `max`; `effort:none` for sessions with no resolved effort |
 | `model:<name>` | resolved model *containing* `<name>` — `model:opus` matches `claude-opus-4-8`. The one predicate that matches a substring, not a prefix, so a family name reaches past the vendor prefix |
-| `mode:<name>` | permission mode prefixing `<name>` — matched against the label the row's chip shows: `plan`, `accept-edits`, `auto`, `bypass`; `mode:none` for sessions with no resolved mode |
+| `mode:<name>` | permission mode prefixing `<name>` — matched against the label the row's chip shows: `plan`, `accept-edits`, `auto`, `bypass`, or the raw mode name if it has no label. `mode:none` matches sessions showing no mode chip, which includes the default (manual) mode |
 | `<text>` | plain substring in the session's name, branch, or note |
 
 Worked examples (each is exercised verbatim against the parser by

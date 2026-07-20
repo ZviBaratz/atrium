@@ -84,8 +84,9 @@ func parseTerm(tok string) term {
 	case strings.HasPrefix(tok, "model:"):
 		return modelTerm(strings.TrimPrefix(tok, "model:"))
 	// The trailing colon is what keeps these two apart: "model:opus" does not
-	// have the prefix "mode:", so the order of these arms carries no meaning.
-	// Drop either colon and one predicate silently swallows the other.
+	// carry the prefix "mode:", so swapping these two arms changes nothing. The
+	// colon is still load-bearing — a bare "mode" prefix ahead of the model: arm
+	// would swallow every model: query.
 	case strings.HasPrefix(tok, "mode:"):
 		return modeTerm(strings.TrimPrefix(tok, "mode:"))
 	default:
@@ -279,19 +280,32 @@ func modelTerm(value string) term {
 // because the label is what the row's chip shows, and a filter the user types
 // should follow what they can see. agent.ClaudePermissionModeLabel is the one
 // place that mapping lives, so this predicate cannot drift from the chip. It
-// falls back to the raw value for an unlabelled mode, which is what keeps a mode
-// a newer CLI introduces (or one only ever detected at runtime, like dontAsk)
-// filterable without a change here.
+// falls back to the raw value for an unlabelled mode (dontAsk, which only a
+// profile-pinned flag can reach, or one a newer CLI introduces), which keeps
+// such a mode filterable without a change here.
 //
-// The literal value "none" matches sessions with no resolved mode
-// (PermissionModeInfo == ""), mirroring effort:none and account:none. Those two
-// match "none" exactly rather than by prefix to protect an open value space;
-// here the reason is weaker — claude rejects an unknown --permission-mode at
-// argv parse time, so the set is closed and no label starts with "none" — but
-// the exact match costs nothing and keeps the three sentinels identical.
+// "default" is the one mode folded into the no-mode sentinel rather than matched
+// on its own, because the row renderer hides the chip for it exactly as it does
+// for no-mode-yet (see ui/list_render.go). It is also the common case — an
+// ordinary manual-mode session reports it from the footer marker table. Matching
+// it literally would break this predicate's own rule twice over: "mode:d" would
+// select rows displaying no mode at all, and two rows that look identical on
+// screen would answer "mode:none" differently.
+//
+// The literal value "none" matches sessions showing no mode chip, mirroring
+// effort:none and account:none — and, as with those two, it matches "none"
+// exactly rather than by prefix so that "mode:no" stays able to prefix-match a
+// real mode. That guard is live rather than theoretical here: PermissionModeInfo
+// prefers runtimeMode, which tmux.setPermissionMode stores straight off the hook
+// payload with no enum validation, so the value space reaching this predicate is
+// open — the CLI's argv-time rejection of an unknown --permission-mode only
+// constrains the pinned-flag fallback.
 func modeTerm(value string) term {
 	return func(i *Instance) bool {
 		info := i.PermissionModeInfo()
+		if info == "default" {
+			info = "" // no chip on the row; no separate identity in the filter
+		}
 		if value == "none" {
 			return info == ""
 		}

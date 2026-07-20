@@ -397,13 +397,33 @@ func TestFilter_Mode(t *testing.T) {
 	require.False(t, ParseFilter("mode:none").Matches(plan))
 
 	// Sessions with no mode match only the empty predicate and the sentinel.
-	require.False(t, ParseFilter("mode:plan").Matches(none))
 	require.False(t, ParseFilter("mode:auto").Matches(none))
+
+	// The sentinel is an EXACT match, not a prefix one, so a shorter "no"/"n"
+	// still prefix-matches real modes rather than being swallowed into meaning
+	// no-mode. Nothing above pins this: relaxing the == to a prefix test keeps
+	// every other assertion here green, because no label happens to start with
+	// "no". mirrors effortTerm's own guard (TestFilter_Effort).
+	require.False(t, ParseFilter("mode:no").Matches(none), "mode:no is a label prefix, not the sentinel")
+	require.False(t, ParseFilter("mode:n").Matches(none))
+
+	// "default" is folded into the sentinel: the row renderer hides the chip for
+	// it exactly as for a session with no mode yet, so the filter must not give
+	// it a separate identity the user cannot see. Without the fold, these two
+	// visually identical rows answer mode:none differently and "mode:d" selects
+	// rows displaying no mode at all.
+	def := newFilterInstance(t, "manual-session", "b")
+	def.SetModeMeta("default")
+	require.True(t, ParseFilter("mode:none").Matches(def), "detected default shows no chip, so it is none")
+	require.False(t, ParseFilter("mode:d").Matches(def), "no chip on screen, so nothing to match")
+	require.False(t, ParseFilter("mode:default").Matches(def))
+	require.True(t, ParseFilter("mode:").Matches(def), "empty predicate still matches it")
 
 	// A mode with no label in ClaudePermissionModeLabel falls back to its raw
 	// enum value, which is how a runtime-only mode stays filterable. dontAsk is
 	// the live case: the CLI accepts it, the create form never offers it, and it
-	// has no label — so the fallback is the only thing that matches it.
+	// has no label — so the fallback is the only thing that matches it. (Unlike
+	// "default" above, dontAsk does render a chip, so it stays matchable.)
 	//
 	// It is also the one case that pins modeTerm's own strings.ToLower. The
 	// MODE:PLAN assertion above does not: ParseFilter lowercases the whole token,
