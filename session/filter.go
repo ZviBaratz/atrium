@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/ZviBaratz/atrium/internal/fuzzy"
+	"github.com/ZviBaratz/atrium/session/agent"
 )
 
 // Filter is a compiled list-filter query. It is produced by ParseFilter and
@@ -13,7 +14,7 @@ import (
 //
 // A query is split on whitespace into terms that are combined with AND. Each term
 // is either a predicate over cached instance state (status:, dirty, behind[:expr],
-// pr:, account:, note:, effort:) or a plain substring matched against DisplayName,
+// pr:, account:, note:, effort:, mode:) or a plain substring matched against DisplayName,
 // Branch, or the session note. Predicate values are matched by case-insensitive
 // prefix so the list narrows progressively as the user types rather than blinking
 // empty mid-word (see the package tests).
@@ -78,6 +79,8 @@ func parseTerm(tok string) term {
 		return noteTerm(strings.TrimPrefix(tok, "note:"))
 	case strings.HasPrefix(tok, "effort:"):
 		return effortTerm(strings.TrimPrefix(tok, "effort:"))
+	case strings.HasPrefix(tok, "mode:"):
+		return modeTerm(strings.TrimPrefix(tok, "mode:"))
 	default:
 		return substringTerm(tok)
 	}
@@ -234,5 +237,31 @@ func effortTerm(value string) term {
 			return info == ""
 		}
 		return strings.HasPrefix(info, value)
+	}
+}
+
+// modeTerm matches the session's permission mode (PermissionModeInfo) by
+// case-insensitive prefix against the display label, mirroring effortTerm. An
+// empty value is a no-op (matches every session) so a mid-typed "mode:" never
+// blinks the list empty.
+//
+// The match is against the display label — the value the chip shows — rather
+// than the raw enum value (e.g. "accept-edits" rather than "acceptEdits", and
+// "bypass" rather than "bypassPermissions"), so filter terms follow what is
+// visible in the list. The labels are the single source of truth in
+// session/agent.ClaudePermissionModeLabel; any new mode the CLI introduces
+// gets a label there and becomes immediately filterable without further changes
+// here.
+//
+// The literal value "none" matches sessions with no resolved mode
+// (PermissionModeInfo == ""), mirroring effort:none and account:none.
+func modeTerm(value string) term {
+	return func(i *Instance) bool {
+		info := i.PermissionModeInfo()
+		if value == "none" {
+			return info == ""
+		}
+		label := strings.ToLower(agent.ClaudePermissionModeLabel(info))
+		return strings.HasPrefix(label, value)
 	}
 }

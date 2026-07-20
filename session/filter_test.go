@@ -349,6 +349,58 @@ func TestFilter_Effort(t *testing.T) {
 	require.False(t, ParseFilter("effort:low").Matches(none))
 }
 
+func TestFilter_Mode(t *testing.T) {
+	plan := newFilterInstance(t, "planner", "b")
+	plan.SetModeMeta("plan")
+	acceptEdits := newFilterInstance(t, "editor", "b")
+	acceptEdits.SetModeMeta("acceptEdits")
+	auto := newFilterInstance(t, "autonomous", "b")
+	auto.SetModeMeta("auto")
+	bypass := newFilterInstance(t, "bypasser", "b")
+	bypass.SetModeMeta("bypassPermissions")
+	none := newFilterInstance(t, "default-session", "b") // no mode set
+
+	// Exact label matches.
+	require.True(t, ParseFilter("mode:plan").Matches(plan))
+	require.False(t, ParseFilter("mode:plan").Matches(acceptEdits))
+	require.False(t, ParseFilter("mode:plan").Matches(none))
+
+	// "accept-edits" is the display label for acceptEdits — users type what they see.
+	require.True(t, ParseFilter("mode:accept-edits").Matches(acceptEdits))
+	require.True(t, ParseFilter("mode:accept").Matches(acceptEdits))
+	require.False(t, ParseFilter("mode:accept").Matches(plan))
+
+	// "a" is a prefix of both "auto" and "accept-edits"; both match, then narrow.
+	require.True(t, ParseFilter("mode:a").Matches(auto))
+	require.True(t, ParseFilter("mode:a").Matches(acceptEdits))
+	require.True(t, ParseFilter("mode:au").Matches(auto))
+	require.False(t, ParseFilter("mode:au").Matches(acceptEdits))
+	require.True(t, ParseFilter("mode:ac").Matches(acceptEdits))
+	require.False(t, ParseFilter("mode:ac").Matches(auto))
+
+	// "bypass" is the display label for bypassPermissions.
+	require.True(t, ParseFilter("mode:bypass").Matches(bypass))
+	require.False(t, ParseFilter("mode:bypass").Matches(plan))
+
+	// Case-insensitive on the query side.
+	require.True(t, ParseFilter("MODE:PLAN").Matches(plan))
+
+	// Empty value is a no-op (match all) so "mode:" never blinks the list empty.
+	require.True(t, ParseFilter("mode:").Matches(plan))
+	require.True(t, ParseFilter("mode:").Matches(none))
+
+	// A value prefixing no known label matches nothing.
+	require.False(t, ParseFilter("mode:xyz").Matches(plan))
+
+	// "none" is the sentinel for sessions with no resolved mode.
+	require.True(t, ParseFilter("mode:none").Matches(none))
+	require.False(t, ParseFilter("mode:none").Matches(plan))
+
+	// Sessions with no mode match only the empty predicate and the sentinel.
+	require.False(t, ParseFilter("mode:plan").Matches(none))
+	require.False(t, ParseFilter("mode:auto").Matches(none))
+}
+
 func TestFilter_MixedPredicateAndSubstringANDed(t *testing.T) {
 	inst := newFilterInstance(t, "feat login", "feat/login")
 	inst.SetStatus(Ready)
