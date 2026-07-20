@@ -185,7 +185,9 @@ Press `/` to filter the session list incrementally. A query is split on
 whitespace into terms combined with **AND**; each term is either a predicate over
 cached session state or a plain substring matched (case-insensitively) against a
 session's name, branch, or note. Predicate values match by **prefix**, so the
-list narrows as you type rather than blinking empty mid-word.
+list narrows as you type rather than blinking empty mid-word — except `model:`,
+which matches a substring so a family name like `opus` reaches past the vendor
+prefix in `claude-opus-4-8`.
 
 | Term | Matches |
 |------|---------|
@@ -197,6 +199,7 @@ list narrows as you type rather than blinking empty mid-word.
 | `account:<name>` | Claude account name prefixing `<name>`; `account:none` for sessions with no resolved account |
 | `note:<text>` | sessions whose note prefixes `<text>` |
 | `effort:<level>` | reasoning-effort level prefixing `<level>` — `low`, `medium`, `high`, `xhigh`, `max`; `effort:none` for sessions with no resolved effort |
+| `model:<name>` | resolved model *containing* `<name>` — `model:opus` matches `claude-opus-4-8`. The one predicate that matches a substring, not a prefix, so a family name reaches past the vendor prefix |
 | `<text>` | plain substring in the session's name, branch, or note |
 
 Worked examples (each is exercised verbatim against the parser by
@@ -206,6 +209,7 @@ Worked examples (each is exercised verbatim against the parser by
 - `behind:>0 pr:open` — sessions behind their base **and** with an open PR.
 - `account:work note:release` — `work`-account sessions whose note starts with `release`.
 - `effort:max dirty` — sessions running at `max` effort **and** with uncommitted changes.
+- `model:opus behind` — `opus`-family sessions **and** behind their base branch.
 - `auth` — any session with `auth` in its name, branch, or note.
 
 Press `esc` to clear the committed filter.
