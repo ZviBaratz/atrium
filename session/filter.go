@@ -292,6 +292,17 @@ func modelTerm(value string) term {
 // select rows displaying no mode at all, and two rows that look identical on
 // screen would answer "mode:none" differently.
 //
+// "default" is nonetheless accepted as a second spelling of the sentinel, on the
+// same exact-match terms as "none". The word is in the product's vocabulary even
+// though the list never prints it — it is the create form's first chip
+// (ui/overlay/modeField.go) — so a user who types it deserves the set it plainly
+// denotes rather than an empty list. Both spellings select the same rows: the
+// ones showing no mode chip. Note the create-form chip means "pin no flag"
+// while this matches "currently resolving to default", which are not the same
+// set under a profile pin — but that gap is uniform across the predicate
+// ("mode:plan" is likewise about the live mode, not how the session was
+// composed), so the two spellings do not need to disagree here.
+//
 // The literal value "none" matches sessions showing no mode chip, mirroring
 // effort:none and account:none — and, as with those two, it matches "none"
 // exactly rather than by prefix so that "mode:no" stays able to prefix-match a
@@ -306,7 +317,7 @@ func modeTerm(value string) term {
 		if info == "default" {
 			info = "" // no chip on the row; no separate identity in the filter
 		}
-		if value == "none" {
+		if value == "none" || value == "default" {
 			return info == ""
 		}
 		return strings.HasPrefix(strings.ToLower(agent.ClaudePermissionModeLabel(info)), value)

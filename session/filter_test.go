@@ -415,9 +415,17 @@ func TestFilter_Mode(t *testing.T) {
 	def := newFilterInstance(t, "manual-session", "b")
 	def.SetModeMeta("default")
 	require.True(t, ParseFilter("mode:none").Matches(def), "detected default shows no chip, so it is none")
-	require.False(t, ParseFilter("mode:d").Matches(def), "no chip on screen, so nothing to match")
-	require.False(t, ParseFilter("mode:default").Matches(def))
+	require.False(t, ParseFilter("mode:d").Matches(def), "no chip on screen, so nothing to match by prefix")
 	require.True(t, ParseFilter("mode:").Matches(def), "empty predicate still matches it")
+
+	// "default" is a second spelling of the sentinel — the create form teaches
+	// the word even though the list never prints it — so it selects the same
+	// rows as mode:none and nothing else. Exact, like the sentinel it aliases:
+	// "mode:d" above must stay free to prefix-match a real label (dontAsk).
+	require.True(t, ParseFilter("mode:default").Matches(def))
+	require.True(t, ParseFilter("mode:default").Matches(none), "same set as mode:none")
+	require.False(t, ParseFilter("mode:default").Matches(plan))
+	require.False(t, ParseFilter("mode:defaul").Matches(def), "alias is exact, not a prefix")
 
 	// A mode with no label in ClaudePermissionModeLabel falls back to its raw
 	// enum value, which is how a runtime-only mode stays filterable. dontAsk is
