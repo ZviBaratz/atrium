@@ -1,6 +1,7 @@
 package main
 
 import (
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -97,12 +98,10 @@ func TestHeadlessCommandsTakeNoTUILock(t *testing.T) {
 
 	seedInstances(t, inst("fix-auth", "/repo/web"))
 
-	require.NoError(t, runLs(newDiscardWriter(), true), "ls must work while a TUI holds the lock")
+	require.NoError(t, runLs(io.Discard, true), "ls must work while a TUI holds the lock")
 	_, _, err = send(t, "fix-auth", "", "hello", 0)
 	require.NoError(t, err, "send must work while a TUI holds the lock")
 }
-
-func newDiscardWriter() *strings.Builder { return &strings.Builder{} }
 
 // hasCommandRow reports whether the section contains a markdown table row whose
 // first cell is exactly the backticked command name.
