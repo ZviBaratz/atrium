@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -102,16 +104,39 @@ func TestCaptureFallsBackWhenPaneListIsUnparseable(t *testing.T) {
 	assert.Equal(t, "atrium_web_fix", argAfter(r.captureArgs(t), "-t"))
 }
 
-// TestCaptureUsesAtriumSocket pins the identity rule from CLAUDE.md: the socket
-// must be derived from config.RuntimeName(), never hardcoded, so a legacy
-// install still talks to its own tmux server.
-func TestCaptureUsesAtriumSocket(t *testing.T) {
-	r := &captureRecorder{panes: "%1\n", content: "x\n"}
-	_, err := CapturePaneForSession(context.Background(), r.exec(), "s", CaptureOpts{})
-	require.NoError(t, err)
+// TestCaptureUsesRuntimeSocket pins the identity rule from CLAUDE.md: the socket
+// must be derived from config.RuntimeName(), never hardcoded, so a legacy install
+// keeps talking to the tmux server its live sessions are on.
+//
+// The legacy HOME is the whole point. Under the package's normal sandbox
+// RuntimeName() is always "atrium", so comparing against it would pass just as
+// happily against a hardcoded literal — the assertion only bites where the two
+// differ.
+func TestCaptureUsesRuntimeSocket(t *testing.T) {
+	t.Run("fresh install", func(t *testing.T) {
+		home := t.TempDir()
+		require.NoError(t, os.MkdirAll(filepath.Join(home, ".atrium"), 0o755))
+		t.Setenv("HOME", home)
+		require.Equal(t, "atrium", config.RuntimeName())
 
-	args := r.captureArgs(t)
-	assert.Equal(t, config.RuntimeName(), argAfter(args, "-L"))
+		r := &captureRecorder{panes: "%1\n", content: "x\n"}
+		_, err := CapturePaneForSession(context.Background(), r.exec(), "s", CaptureOpts{})
+		require.NoError(t, err)
+		assert.Equal(t, "atrium", argAfter(r.captureArgs(t), "-L"))
+	})
+
+	t.Run("legacy install", func(t *testing.T) {
+		home := t.TempDir()
+		require.NoError(t, os.MkdirAll(filepath.Join(home, ".claude-squad"), 0o755))
+		t.Setenv("HOME", home)
+		require.Equal(t, "claudesquad", config.RuntimeName(), "fixture must actually be a legacy dir")
+
+		r := &captureRecorder{panes: "%1\n", content: "x\n"}
+		_, err := CapturePaneForSession(context.Background(), r.exec(), "s", CaptureOpts{})
+		require.NoError(t, err)
+		assert.Equal(t, "claudesquad", argAfter(r.captureArgs(t), "-L"),
+			"a hardcoded socket name would send a legacy install to the wrong server")
+	})
 }
 
 // TestCaptureAlwaysJoinsWrappedLines: -J reassembles a wrapped line into one,

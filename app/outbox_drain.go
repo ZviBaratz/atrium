@@ -49,8 +49,11 @@ func (m *home) drainOutbox() tea.Cmd {
 	}
 
 	now := time.Now()
+	outbox.SweepRejections(now)
+
 	var spent, queued int
-	var consumed []string
+	var delivered []string
+	rejected := map[string]string{} // path -> reason the sender should see
 
 	for _, e := range entries {
 		if m.outboxPoisoned[e.Path] {
@@ -60,7 +63,6 @@ func (m *home) drainOutbox() tea.Cmd {
 			break
 		}
 		spent++
-		consumed = append(consumed, e.Path)
 
 		switch {
 		case e.Err != nil:
@@ -69,10 +71,13 @@ func (m *home) drainOutbox() tea.Cmd {
 			// every tick forever. outbox.List only ever surfaces files matching
 			// the spool's own name format, so this can only discard our own.
 			log.ErrorLog.Printf("discarding an unreadable outbox message: %v", e.Err)
+			rejected[e.Path] = "the message could not be read"
 
 		case e.Message.Expired(now):
+			age := now.Sub(e.Message.CreatedAt).Round(time.Minute)
 			log.WarningLog.Printf("discarding an outbox message for %q: spooled %s ago, past the %s horizon",
-				e.Message.Title, now.Sub(e.Message.CreatedAt).Round(time.Minute), outbox.TTL)
+				e.Message.Title, age, outbox.TTL)
+			rejected[e.Path] = fmt.Sprintf("the message was spooled %s ago, past the %s horizon", age, outbox.TTL)
 
 		default:
 			// Matched on the (Title, Path) pair, never the title alone: titles are
@@ -82,15 +87,14 @@ func (m *home) drainOutbox() tea.Cmd {
 			if inst == nil {
 				log.WarningLog.Printf("discarding an outbox message for %q (%s): no such session",
 					e.Message.Title, e.Message.Path)
+				rejected[e.Path] = fmt.Sprintf("no session %q in %s — it may have been killed since the message was sent",
+					e.Message.Title, e.Message.Path)
 				continue
 			}
 			inst.QueueFollowupPrompt(e.Message.Text)
+			delivered = append(delivered, e.Path)
 			queued++
 		}
-	}
-
-	if len(consumed) == 0 {
-		return nil
 	}
 
 	// Persist before unlinking so a crash cannot lose a queued prompt that no
@@ -103,23 +107,37 @@ func (m *home) drainOutbox() tea.Cmd {
 			log.ErrorLog.Printf("failed to persist prompts drained from the outbox: %v", err)
 		}
 	}
-	for _, path := range consumed {
-		if err := outbox.Remove(path); err != nil {
-			// Poison it rather than retry. An unlink that keeps failing (a
-			// read-only spool, a permissions problem) would otherwise re-deliver
-			// the same prompt every tick, for as long as the TUI runs.
-			log.ErrorLog.Printf("could not remove a drained outbox message, ignoring it for the rest of this run: %v", err)
-			if m.outboxPoisoned == nil {
-				m.outboxPoisoned = make(map[string]bool)
-			}
-			m.outboxPoisoned[path] = true
-		}
+	for _, path := range delivered {
+		m.discardSpoolFile(path, func() error { return outbox.Remove(path) })
+	}
+	for path, reason := range rejected {
+		// Leaves a receipt so `send --wait` reports the failure instead of
+		// reading the unlink as a successful delivery.
+		m.discardSpoolFile(path, func() error { return outbox.Reject(path, reason) })
 	}
 
 	if queued == 0 {
 		return nil
 	}
 	return m.flashNotice(queuedPromptsNotice(queued), ui.NoticeInfo)
+}
+
+// discardSpoolFile runs a spool-file removal and poisons the path if it fails.
+//
+// Poisoning rather than retrying is what keeps a persistent failure — a
+// read-only spool, a permissions problem — from re-delivering the same prompt
+// every tick for as long as the TUI runs. It is in-memory only, so the next
+// launch re-tries the file rather than inheriting a verdict from what may have
+// been transient; the cost is that a genuinely persistent failure re-delivers
+// once per launch, which is the lesser of the two.
+func (m *home) discardSpoolFile(path string, remove func() error) {
+	if err := remove(); err != nil {
+		log.ErrorLog.Printf("could not clear a drained outbox message, ignoring it for the rest of this run: %v", err)
+		if m.outboxPoisoned == nil {
+			m.outboxPoisoned = make(map[string]bool)
+		}
+		m.outboxPoisoned[path] = true
+	}
 }
 
 func queuedPromptsNotice(n int) string {

@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -307,4 +308,98 @@ func TestDrainRunsOnStaleAttachTick(t *testing.T) {
 
 	assert.Equal(t, 1, inst.QueueLen())
 	assert.Zero(t, spoolCount(t))
+}
+
+// TestDrainLeavesRejectionReceiptForUnknownTarget is what makes `send --wait`
+// truthful. The drain unlinks the message whether it queued the prompt or threw
+// it away, so without a receipt a discard is indistinguishable from a delivery —
+// and the realistic discard is a session killed between resolve and drain, which
+// is exactly when a sender must not be told "delivered".
+func TestDrainLeavesRejectionReceiptForUnknownTarget(t *testing.T) {
+	h := drainHome(t)
+	addInstance(t, h, "fix-auth", t.TempDir())
+	path := spool(t, outbox.Message{Title: "gone", Path: "/repo/nowhere", Text: "hello"})
+
+	h.drainOutbox()
+
+	reason, ok := outbox.Rejection(path)
+	require.True(t, ok, "a discarded message must leave a receipt")
+	assert.Contains(t, reason, "gone", "the reason should name the session")
+	assert.Zero(t, spoolCount(t), "the message itself is still cleared")
+}
+
+// TestDrainLeavesRejectionReceiptForExpired covers the other discard path.
+func TestDrainLeavesRejectionReceiptForExpired(t *testing.T) {
+	h := drainHome(t)
+	inst := addInstance(t, h, "fix-auth", t.TempDir())
+	path := spool(t, outbox.Message{
+		Title: "fix-auth", Path: inst.Path, Text: "stale",
+		CreatedAt: time.Now().Add(-outbox.TTL - time.Minute),
+	})
+
+	h.drainOutbox()
+
+	reason, ok := outbox.Rejection(path)
+	require.True(t, ok)
+	assert.Contains(t, reason, "horizon")
+}
+
+// TestDrainLeavesNoReceiptOnDelivery: a receipt means failure, so a delivered
+// message must not leave one or --wait would report a false negative.
+func TestDrainLeavesNoReceiptOnDelivery(t *testing.T) {
+	h := drainHome(t)
+	inst := addInstance(t, h, "fix-auth", t.TempDir())
+	path := spool(t, outbox.Message{Title: "fix-auth", Path: inst.Path, Text: "hello"})
+
+	h.drainOutbox()
+
+	_, ok := outbox.Rejection(path)
+	assert.False(t, ok, "a delivered message must leave no rejection receipt")
+}
+
+// TestDrainSweepsStaleRejections: a receipt is only read by a sender still
+// blocked in --wait, so one past the horizon has no reader left and would
+// otherwise accumulate for the life of the data dir.
+func TestDrainSweepsStaleRejections(t *testing.T) {
+	h := drainHome(t)
+	addInstance(t, h, "fix-auth", t.TempDir())
+
+	dir, err := outbox.Dir()
+	require.NoError(t, err)
+	require.NoError(t, os.MkdirAll(dir, 0o755))
+	old := time.Now().Add(-outbox.TTL - time.Hour).UnixNano()
+	stale := filepath.Join(dir, fmt.Sprintf("%019d-aaaaaaaa.json.rejected", old))
+	fresh := filepath.Join(dir, fmt.Sprintf("%019d-bbbbbbbb.json.rejected", time.Now().UnixNano()))
+	require.NoError(t, os.WriteFile(stale, []byte("old reason"), 0o644))
+	require.NoError(t, os.WriteFile(fresh, []byte("new reason"), 0o644))
+
+	h.drainOutbox()
+
+	assert.NoFileExists(t, stale, "a receipt past the horizon has no reader left")
+	assert.FileExists(t, fresh, "a fresh receipt may still be collected by a waiting sender")
+}
+
+// TestDrainClearsSpoolEvenIfPersistFails: the prompt is already live in the
+// session's queue by this point, and the TUI persists on every later mutation
+// anyway — so leaving the file would only re-queue a duplicate on the next tick.
+// A persist failure must therefore be logged, not retried.
+func TestDrainClearsSpoolEvenIfPersistFails(t *testing.T) {
+	h := drainHome(t)
+	inst := addInstance(t, h, "fix-auth", t.TempDir())
+	spool(t, outbox.Message{Title: "fix-auth", Path: inst.Path, Text: "hello"})
+
+	// Make state.json unwritable while leaving the spool dir writable: the
+	// atomic write needs to create a temp file in the data dir itself.
+	dir, err := config.GetConfigDir()
+	require.NoError(t, err)
+	require.NoError(t, os.Chmod(dir, 0o500))
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
+	// Without this the test would pass just as happily if the chmod had no effect
+	// and the persist actually succeeded.
+	require.Error(t, h.persistInstances(), "fixture must genuinely make persisting fail")
+
+	h.drainOutbox()
+
+	assert.Equal(t, 1, inst.QueueLen(), "the prompt is still queued in memory")
+	assert.Zero(t, spoolCount(t), "and the spool file is cleared rather than left to re-queue")
 }

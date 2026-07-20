@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"io"
 	"os"
 	"path/filepath"
@@ -99,8 +100,13 @@ func TestHeadlessCommandsTakeNoTUILock(t *testing.T) {
 	seedInstances(t, inst("fix-auth", "/repo/web"))
 
 	require.NoError(t, runLs(io.Discard, true), "ls must work while a TUI holds the lock")
+
 	_, _, err = send(t, "fix-auth", "", "hello", 0)
 	require.NoError(t, err, "send must work while a TUI holds the lock")
+
+	f := &fakeTmux{content: "pane\n"}
+	require.NoError(t, runPeek(context.Background(), io.Discard, f.exec(), "fix-auth", "", 0, false),
+		"peek must work while a TUI holds the lock")
 }
 
 // hasCommandRow reports whether the section contains a markdown table row whose

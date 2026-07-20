@@ -179,11 +179,17 @@ whole, so an outside append would be clobbered rather than merged.
 
 This makes `send` durable rather than conditional. With no Atrium running it
 warns on stderr and still exits 0: the message stays queued and is delivered the
-next time one starts. Pass `--wait` to block until it has actually been queued
-and fail if it has not. Undelivered messages expire after 24 hours, on the
-grounds that a day-old prompt describes a tree that has moved on. Sending to a
-paused session is allowed — the queue is persisted, so the prompt waits for the
-resume.
+next time one starts. Pass `--wait` to block until it has actually been queued,
+and fail if it has not — including when Atrium picked the message up but could
+not deliver it, for instance because the session was killed in the meantime.
+
+Undelivered messages expire after 24 hours, on the grounds that a day-old prompt
+describes a tree that has moved on. Sending to a paused session is allowed — the
+queue is persisted, so the prompt waits for the resume.
+
+`ls` and `peek` only ever read: they will not create, rewrite, or clean up
+anything in the data directory, so running `atrium ls` on a loop alongside a live
+Atrium is safe.
 
 If a title exists in more than one repo, any of the three commands will report
 the ambiguity and list the candidates; `--path <repo>` picks one.

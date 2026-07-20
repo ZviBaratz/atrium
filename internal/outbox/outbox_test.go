@@ -1,7 +1,6 @@
 package outbox
 
 import (
-	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -276,23 +275,44 @@ func TestWriteCreatesDirWithSaneMode(t *testing.T) {
 	assert.Equal(t, os.FileMode(0o700), info.Mode().Perm()&0o700)
 }
 
-// TestWriteIsAtomic asserts the spool never exposes a torn file: Write must go
-// through config.WriteFileAtomic, which commits by rename.
-func TestWriteIsAtomic(t *testing.T) {
+// TestRejectWriteIsAtomic pins that the spool's writes commit by rename rather
+// than being written in place.
+//
+// It matters more than "no torn JSON": a reader that decodes a half-written file
+// gets an Entry carrying Err, and the drain's only answer to an undecodable
+// message is to delete it, so a non-atomic write lets a listing that races a
+// send destroy that send's message.
+//
+// Reject is where this is testable: its target path is derived from the message
+// path rather than a random nonce, so the test can occupy it. A read-only file
+// refuses os.WriteFile's open outright, while a rename over it succeeds —
+// renaming needs write permission on the directory, not on the file it replaces.
+func TestRejectWriteIsAtomic(t *testing.T) {
 	sandbox(t)
-	name, err := Write(msg("t", "/repo", "x"))
+	path, err := Write(msg("t", "/repo", "x"))
 	require.NoError(t, err)
 
-	data, err := os.ReadFile(name)
+	require.NoError(t, os.WriteFile(path+rejectedSuffix, []byte("stale"), 0o400))
+
+	require.NoError(t, Reject(path, "the session was killed"),
+		"an in-place write would fail on the read-only target; a rename replaces it")
+	reason, ok := Rejection(path)
+	require.True(t, ok)
+	assert.Equal(t, "the session was killed", reason)
+}
+
+// TestWriteLeavesNoTempFile: a completed write cleans up after itself, so the
+// spool does not accumulate orphans.
+func TestWriteLeavesNoTempFile(t *testing.T) {
+	sandbox(t)
+	_, err := Write(msg("t", "/repo", "x"))
 	require.NoError(t, err)
-	var m Message
-	require.NoError(t, json.Unmarshal(data, &m), "a committed spool file is always complete JSON")
 
 	dir, err := Dir()
 	require.NoError(t, err)
 	left, err := filepath.Glob(filepath.Join(dir, ".*.tmp-*"))
 	require.NoError(t, err)
-	assert.Empty(t, left, "no temp file should survive a successful write")
+	assert.Empty(t, left)
 }
 
 func writeRaw(t *testing.T, name, content string) {
@@ -301,4 +321,73 @@ func writeRaw(t *testing.T, name, content string) {
 	require.NoError(t, err)
 	require.NoError(t, os.MkdirAll(dir, 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644))
+}
+
+// TestRejectWritesReceiptBeforeUnlinking pins the ordering that makes a
+// rejection impossible to observe as a delivery. A sender in --wait polls for
+// the message to vanish; if the unlink landed first, the gap before the receipt
+// appeared would read as a successful delivery.
+//
+// The two orders are told apart by making the unlink fail: os.Remove refuses a
+// non-empty directory. Receipt-first leaves the receipt behind; unlink-first
+// returns before ever writing one.
+func TestRejectWritesReceiptBeforeUnlinking(t *testing.T) {
+	sandbox(t)
+	dir, err := Dir()
+	require.NoError(t, err)
+
+	// A "message" that cannot be unlinked.
+	stuck := filepath.Join(dir, "0000000000000000001-aaaaaaaa.json")
+	require.NoError(t, os.MkdirAll(stuck, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(stuck, "occupant"), []byte("x"), 0o644))
+
+	err = Reject(stuck, "the session was killed")
+	require.Error(t, err, "the failed unlink must be reported")
+
+	reason, ok := Rejection(stuck)
+	require.True(t, ok, "the receipt must already exist when the unlink is attempted")
+	assert.Equal(t, "the session was killed", reason)
+}
+
+// TestRejectRemovesMessageEvenIfReceiptFails: an unreported failure beats a
+// message that is re-read, re-rejected and never cleared.
+func TestRejectRemovesMessageEvenIfReceiptFails(t *testing.T) {
+	sandbox(t)
+	path, err := Write(msg("t", "/repo", "x"))
+	require.NoError(t, err)
+
+	// Occupy the receipt path with a non-empty directory so the write cannot land.
+	require.NoError(t, os.MkdirAll(path+rejectedSuffix, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(path+rejectedSuffix, "occupant"), []byte("x"), 0o644))
+
+	err = Reject(path, "why")
+	require.Error(t, err, "the failure to record a reason must be reported")
+	assert.NoFileExists(t, path, "the message is cleared regardless, so it is not re-rejected forever")
+}
+
+// TestSweepRejectionsKeepsFreshReceipts is the other half of the sweep: a
+// receipt inside the horizon may still have a sender blocked on it.
+func TestSweepRejectionsKeepsFreshReceipts(t *testing.T) {
+	sandbox(t)
+	path, err := Write(msg("t", "/repo", "x"))
+	require.NoError(t, err)
+	require.NoError(t, Reject(path, "gone"))
+
+	SweepRejections(time.Now())
+	_, ok := Rejection(path)
+	assert.True(t, ok, "a fresh receipt must survive the sweep")
+
+	SweepRejections(time.Now().Add(TTL + time.Hour))
+	_, ok = Rejection(path)
+	assert.False(t, ok, "a receipt past the horizon has no reader left")
+}
+
+// TestRemoveToleratesMissingFile: the drain and a waiting sender can both clear
+// the same path, so a second removal is not a failure.
+func TestRemoveToleratesMissingFile(t *testing.T) {
+	sandbox(t)
+	dir, err := Dir()
+	require.NoError(t, err)
+	require.NoError(t, os.MkdirAll(dir, 0o755))
+	assert.NoError(t, Remove(filepath.Join(dir, "0000000000000000009-bbbbbbbb.json")))
 }

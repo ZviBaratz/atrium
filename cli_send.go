@@ -52,10 +52,8 @@ var (
 // that argument is absent or "-". Reading from stdin is what makes multi-line
 // prompts practical to pipe in from a script.
 func messageText(args []string, stdin io.Reader) (string, error) {
-	for _, inline := range args[1:] {
-		if inline != "-" {
-			return inline, nil
-		}
+	if len(args) > 1 && args[1] != "-" {
+		return args[1], nil
 	}
 	data, err := io.ReadAll(stdin)
 	if err != nil {
@@ -118,13 +116,23 @@ func runSend(out, errOut io.Writer, selector, path, text string, wait time.Durat
 	return nil
 }
 
-// waitForDrain blocks until the spooled file is gone, which happens only after a
-// drainer has queued the prompt on its instance and persisted it. The file's
-// disappearance is therefore the delivery receipt — there is no separate ack to
-// keep in sync with it.
+// waitForDrain blocks until the spooled message has been accounted for.
+//
+// The drain unlinks the file whether it queued the prompt or threw it away — a
+// session killed between resolve and drain is the realistic case — so the file's
+// disappearance alone only means some Atrium consumed it. A discard therefore
+// leaves a receipt naming the reason, and that is checked first: it is written
+// before the message is unlinked, so a rejection can never be observed as a
+// successful delivery.
 func waitForDrain(path string, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 	for {
+		if reason, ok := outbox.Rejection(path); ok {
+			if err := outbox.ClearRejection(path); err != nil {
+				log.ErrorLog.Printf("failed to clear an outbox rejection receipt: %v", err)
+			}
+			return fmt.Errorf("atrium did not deliver the prompt: %s", reason)
+		}
 		if _, err := os.Stat(path); errors.Is(err, fs.ErrNotExist) {
 			return nil
 		}

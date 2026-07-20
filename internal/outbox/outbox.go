@@ -26,6 +26,8 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/ZviBaratz/atrium/config"
@@ -205,4 +207,66 @@ func read(path string) Entry {
 			"message %s has version %d, this atrium understands %d", filepath.Base(path), m.Version, currentVersion)}
 	}
 	return Entry{Path: path, Message: m}
+}
+
+// rejectedSuffix names the receipt left behind when a message could not be
+// delivered. It exists so `atrium send --wait` can tell "delivered" from
+// "discarded": the drain removes the message file either way, so the file's
+// disappearance alone says only that some Atrium consumed it, not that any
+// session received it.
+const rejectedSuffix = ".rejected"
+
+// Reject records why a message could not be delivered and then removes it.
+//
+// The receipt is written before the message is unlinked so a waiting sender
+// cannot observe the gap as a successful delivery. If the receipt cannot be
+// written the message is still removed: an unreported failure is better than a
+// message that is re-read, re-rejected, and never cleared.
+func Reject(path, reason string) error {
+	if err := config.WriteFileAtomic(path+rejectedSuffix, []byte(reason), 0o644); err != nil {
+		return errors.Join(fmt.Errorf("outbox: write rejection receipt: %w", err), Remove(path))
+	}
+	return Remove(path)
+}
+
+// Rejection returns the recorded reason a message was discarded, if there is one.
+func Rejection(path string) (string, bool) {
+	data, err := os.ReadFile(path + rejectedSuffix)
+	if err != nil {
+		return "", false
+	}
+	return string(data), true
+}
+
+// ClearRejection discards a receipt the sender has already reported.
+func ClearRejection(path string) error {
+	return Remove(path + rejectedSuffix)
+}
+
+// SweepRejections deletes receipts past the TTL horizon. A receipt is only ever
+// read by a sender still blocked in --wait, so one this old has no reader left
+// and would otherwise accumulate for the life of the data dir.
+func SweepRejections(now time.Time) {
+	dir, err := Dir()
+	if err != nil {
+		return
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	for _, de := range entries {
+		name := de.Name()
+		base, ok := strings.CutSuffix(name, rejectedSuffix)
+		if !ok || !isMessageFile(base) {
+			continue
+		}
+		stamp, err := strconv.ParseInt(base[:19], 10, 64)
+		if err != nil {
+			continue
+		}
+		if now.Sub(time.Unix(0, stamp)) > TTL {
+			_ = os.Remove(filepath.Join(dir, name))
+		}
+	}
 }

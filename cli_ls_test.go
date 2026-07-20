@@ -46,6 +46,7 @@ func TestLsJSONEmitsStatusNames(t *testing.T) {
 		{session.Loading, "loading"},
 		{session.Paused, "paused"},
 		{session.NeedsInput, "needs-input"},
+		{session.Pending, "pending"},
 	} {
 		d := inst("s", "/repo/web")
 		d.Status = tc.status

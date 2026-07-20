@@ -2,7 +2,10 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -10,28 +13,63 @@ import (
 	"github.com/ZviBaratz/atrium/session"
 )
 
-// loadStoredInstances reads the persisted session list without touching tmux or
-// taking any lock.
+// loadStoredInstances reads the persisted session list without touching tmux,
+// taking any lock, or writing anything at all.
 //
-// It deliberately does not go through session.Storage.LoadInstances, which calls
-// reattach() on every instance and so probes the live tmux server: the headless
-// commands must stay read-only and must work with no server running at all. The
-// cost is that everything read here is last-known state, which is why `ls`
-// publishes updated_at.
+// It deliberately does NOT call config.LoadState(). That helper is a loader, not
+// a reader, and every one of its side effects is hostile from a headless process
+// running beside a live TUI:
 //
-// Reading state.json unsynchronised is safe because every write commits by
-// rename (config.writeFileAtomic), so a reader sees the previous file or the new
-// one, never a torn mix.
+//   - it sweeps orphaned "<file>.tmp-*" files, which is exactly another
+//     process's in-flight atomic write — deleting one makes the owner's rename
+//     fail, silently losing that save
+//   - it creates state.json from defaults when the file is absent
+//   - it quarantines an unparseable file by renaming it to <file>.corrupt
+//
+// All three are right for the TUI, which owns the data dir and runs alone. None
+// are acceptable here: `atrium ls` in a watch loop is the advertised usage, so
+// this runs concurrently with a TUI's saves as a matter of routine.
+//
+// It also does not go through session.Storage.LoadInstances, which calls
+// reattach() on every instance and so probes the live tmux server. The cost of
+// reading the file directly is that everything here is last-known state, which
+// is why `ls` publishes updated_at.
+//
+// Reading unsynchronised is safe because every write commits by rename, so a
+// reader sees the previous file or the new one, never a torn mix.
 func loadStoredInstances() ([]session.InstanceData, error) {
-	raw := config.LoadState().GetInstances()
-	if len(raw) == 0 {
+	dir, err := config.GetConfigDir()
+	if err != nil {
+		return nil, fmt.Errorf("failed to locate the data directory: %w", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(dir, config.StateFileName))
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			// No state file yet. That is a fleet with no sessions, not an error —
+			// and emphatically not a reason to create one.
+			return nil, nil
+		}
+		return nil, fmt.Errorf("failed to read %s: %w", config.StateFileName, err)
+	}
+
+	// Only the instance list is decoded. The rest of state.json is UI state that
+	// a headless command has no business parsing, and must not fail on.
+	var state struct {
+		Instances json.RawMessage `json:"instances"`
+	}
+	if err := json.Unmarshal(data, &state); err != nil {
+		return nil, fmt.Errorf("failed to parse %s: %w", config.StateFileName, err)
+	}
+	if len(state.Instances) == 0 {
 		return nil, nil
 	}
-	var data []session.InstanceData
-	if err := json.Unmarshal(raw, &data); err != nil {
+
+	var instances []session.InstanceData
+	if err := json.Unmarshal(state.Instances, &instances); err != nil {
 		return nil, fmt.Errorf("failed to read stored sessions: %w", err)
 	}
-	return data, nil
+	return instances, nil
 }
 
 // resolveSession finds the one session a selector names.

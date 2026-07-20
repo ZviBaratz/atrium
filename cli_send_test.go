@@ -201,3 +201,54 @@ func TestMessageText(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "explicit stdin", got)
 }
+
+// TestSendWaitFailsOnRejection is the guarantee --wait exists to provide. The
+// drain unlinks a message it could not deliver just as it unlinks one it
+// delivered, so watching only for the file to vanish would report a hard
+// "confirmed" for a prompt that was thrown away. The realistic case is a session
+// killed in the TUI between resolve and drain.
+func TestSendWaitFailsOnRejection(t *testing.T) {
+	sandboxDataDir(t)
+	seedInstances(t, inst("fix-auth", "/repo/web"))
+
+	// Stand in for the drain rejecting the message.
+	go func() {
+		for range 200 {
+			if entries, err := outbox.List(); err == nil && len(entries) == 1 {
+				_ = outbox.Reject(entries[0].Path, `no session "fix-auth" in /repo/web — it may have been killed`)
+				return
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+	}()
+
+	_, _, err := send(t, "fix-auth", "", "hello", 5*time.Second)
+	require.Error(t, err, "a discarded message must not be reported as delivered")
+	assert.Contains(t, err.Error(), "killed", "the reason the drain gave should reach the user")
+}
+
+// TestSendWaitClearsConsumedReceipt: the receipt is addressed to this sender, so
+// once reported it must not linger in the spool.
+func TestSendWaitClearsConsumedReceipt(t *testing.T) {
+	sandboxDataDir(t)
+	seedInstances(t, inst("fix-auth", "/repo/web"))
+
+	go func() {
+		for range 200 {
+			if entries, err := outbox.List(); err == nil && len(entries) == 1 {
+				_ = outbox.Reject(entries[0].Path, "gone")
+				return
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+	}()
+
+	_, _, err := send(t, "fix-auth", "", "hello", 5*time.Second)
+	require.Error(t, err)
+
+	dir, dErr := outbox.Dir()
+	require.NoError(t, dErr)
+	left, gErr := filepath.Glob(filepath.Join(dir, "*.rejected"))
+	require.NoError(t, gErr)
+	assert.Empty(t, left, "a reported receipt must be cleared")
+}
