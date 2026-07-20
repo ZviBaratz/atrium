@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/charmbracelet/lipgloss"
 	"github.com/stretchr/testify/require"
 )
 
@@ -191,35 +192,169 @@ func TestDiffCommentRange(t *testing.T) {
 	require.Equal(t, "+add1", rows[0].text)
 }
 
+// TestParseDiffRows_DeletedFile checks that del-row line numbers are correct when the
+// hunk header has a zero new-file start (@@ -1,N +0,0 @@), which occurs for completely
+// deleted files. Before the fix, parseDiffRows required both sides of the header to be
+// > 0 before advancing either counter, so the zero new-file start suppressed the update
+// entirely, leaving oldLine at 0 and the first del row numbered 0 (later rows carried
+// 1, 2, … since oldLine++ still ran — so the whole hunk was off by one).
+func TestParseDiffRows_DeletedFile(t *testing.T) {
+	diff := "diff --git a/gone.go b/gone.go\n" +
+		"@@ -1,3 +0,0 @@\n" +
+		"-package gone\n" +
+		"-func A() {}\n" +
+		"-func B() {}\n"
+	rows := parseDiffRows(diff)
+	var delRows []diffRow
+	for _, r := range rows {
+		if r.kind == rowDel {
+			delRows = append(delRows, r)
+		}
+	}
+	require.Len(t, delRows, 3)
+	require.Equal(t, 1, delRows[0].lineNo, "first del row must carry old-file line 1, not 0")
+	require.Equal(t, 2, delRows[1].lineNo)
+	require.Equal(t, 3, delRows[2].lineNo)
+}
+
+// TestParseDiffRows_NewFile is the mirror for @@ -0,0 +1,N @@ (new file): add rows
+// must carry the correct new-file line numbers even when oldStart == 0.
+func TestParseDiffRows_NewFile(t *testing.T) {
+	diff := "diff --git a/new.go b/new.go\n" +
+		"@@ -0,0 +1,2 @@\n" +
+		"+package newpkg\n" +
+		"+func C() {}\n"
+	rows := parseDiffRows(diff)
+	var addRows []diffRow
+	for _, r := range rows {
+		if r.kind == rowAdd {
+			addRows = append(addRows, r)
+		}
+	}
+	require.Len(t, addRows, 2)
+	require.Equal(t, 1, addRows[0].lineNo, "first add row must carry new-file line 1, not 0")
+	require.Equal(t, 2, addRows[1].lineNo)
+}
+
+// wideCursorDiff mirrors cursorDiff but carries a context line longer than 40 columns,
+// so re-truncation at a narrowed width is observable and not just re-padding.
+const wideCursorDiff = "diff --git a/foo.go b/foo.go\n" +
+	"@@ -1,2 +1,3 @@\n" +
+	" ctx1\n" +
+	"+add1\n" +
+	" this context line is definitely longer than forty columns wide\n"
+
+// TestDiffCommentSetSize_RefreshesOnResize is the regression guard for the
+// resize-in-comment-mode bug: when the terminal is resized while the diff pane is
+// frozen in comment mode, SetSize must re-render the snapshot at the new width.
+// Before the fix, d.diff kept its old-width render, so the cursor highlight bar was
+// padded/truncated to the wrong column count after a resize.
+//
+// It asserts the rendered column count rather than merely that the snapshot changed:
+// renderDiffRows paints the selected row via diffCursorStyle().Width(width), so the
+// cursor row's width IS the width the snapshot was rendered at. A "did it change"
+// assertion alone passes against a re-render at the wrong width, and against one that
+// drops the highlight entirely — both of which are the bug, not the fix.
+func TestDiffCommentSetSize_RefreshesOnResize(t *testing.T) {
+	d := NewDiffPane()
+	d.SetSize(80, 20)
+	d.rows = parseDiffRows(wideCursorDiff)
+	require.True(t, d.EnterComment())
+
+	line := func(i int) string { return strings.Split(d.diff, "\n")[i] }
+	cursorRow := func() string { return line(d.cursor) }
+
+	require.Equal(t, 80, lipgloss.Width(cursorRow()), "cursor bar spans the pane at width 80")
+
+	d.SetSize(40, 20)
+
+	require.Equal(t, 40, lipgloss.Width(cursorRow()),
+		"SetSize must re-render the frozen comment snapshot at the new width")
+	require.Contains(t, cursorRow(), "ctx1", "the re-rendered bar still carries its own row's text")
+	// An unselected row is not padded, so the width above came from the highlight bar
+	// rather than from blanket padding of every line.
+	require.Equal(t, 5, lipgloss.Width(line(d.cursor+1)), "unselected rows are not padded")
+	// Over-long rows re-truncate to the new width: fit() truncates to width-1 and
+	// appends a one-column ellipsis, so a truncated row lands at width-1.
+	require.Equal(t, 39, lipgloss.Width(line(d.cursor+2)), "long rows truncate to the new width")
+	require.True(t, d.IsCommenting(), "comment mode must survive a resize")
+}
+
+// noNewlineDiff is verbatim `git diff` output for a repo where one file with no
+// trailing newline is deleted and another is added. It is the case that makes the
+// whole-file delete/add headers interact: git emits "\ No newline at end of file"
+// *inside* the zero-side hunks, and both files appear in one diff.
+const noNewlineDiff = "diff --git a/brand.txt b/brand.txt\n" +
+	"new file mode 100644\nindex 0000000..5fe505c\n--- /dev/null\n+++ b/brand.txt\n" +
+	"@@ -0,0 +1,2 @@\n+n1\n+n2\n\\ No newline at end of file\n" +
+	"diff --git a/gone.txt b/gone.txt\n" +
+	"deleted file mode 100644\nindex 1b32298..0000000\n--- a/gone.txt\n+++ /dev/null\n" +
+	"@@ -1,2 +0,0 @@\n-x\n-y\n\\ No newline at end of file\n"
+
+// TestParseDiffRows_NoNewlineMarkerAcrossFiles pins two things the single-file
+// delete/add tests cannot see, both of which produced a wrong "Re: file:N" reference.
+//
+// First, git's "\ No newline at end of file" is a marker, not content: it must not be
+// annotatable (a comment cannot anchor to it) and must not advance either counter —
+// when it did, every row after it was numbered one too high.
+//
+// Second, a zero side must not inherit the previous file's counter. gone.txt is deleted
+// whole, so its new side has no lines; carrying brand.txt's count across the file
+// boundary made the marker row report gone.txt:4 — a confident, entirely wrong line
+// number for a two-line file. Only real code rows may be annotatable, each numbered
+// against its own file.
+func TestParseDiffRows_NoNewlineMarkerAcrossFiles(t *testing.T) {
+	type ref struct {
+		file   string
+		lineNo int
+		text   string
+	}
+	var got []ref
+	for _, r := range parseDiffRows(noNewlineDiff) {
+		if r.annotatable() {
+			got = append(got, ref{r.file, r.lineNo, r.text})
+		}
+	}
+	require.Equal(t, []ref{
+		{"brand.txt", 1, "+n1"},
+		{"brand.txt", 2, "+n2"},
+		{"gone.txt", 1, "-x"},
+		{"gone.txt", 2, "-y"},
+	}, got, "only real code lines anchor comments, each numbered against its own file")
+}
+
 // TestParseHunkHeader exercises parseHunkHeader directly for edge cases that
-// TestParseDiffRows only covers indirectly via the full parser:
-//   - standard hunk with explicit counts ("@@ -1,3 +1,4 @@")
-//   - count-omitted form used by git for single-line hunks ("@@ -10 +10 @@")
-//   - trailing context text after the closing "@@" ("@@ -1,3 +1,4 @@ func Foo() {")
-//   - malformed line that produces ok=false
+// TestParseDiffRows only covers indirectly via the full parser: the count-omitted
+// form git uses for single-line hunks, trailing context text after the closing "@@",
+// the whole-file delete/add headers whose zero side this fix hinges on, and malformed
+// lines. Every case asserts both returned values — a header that parses to 0 must be
+// pinned to 0 just as tightly as one that parses to a real line, since 0 is what tells
+// parseDiffRows to leave that side's counter alone.
 func TestParseHunkHeader(t *testing.T) {
 	tests := []struct {
 		line     string
 		oldStart int
 		newStart int
-		ok       bool
 	}{
-		{"@@ -1,3 +1,4 @@", 1, 1, true},
-		{"@@ -10,2 +10,3 @@", 10, 10, true},
-		{"@@ -10 +10 @@", 10, 10, true},              // count omitted (single-line hunk)
-		{"@@ -1,3 +1,4 @@ func Foo() {", 1, 1, true}, // trailing context text
-		{"@@ -5,0 +6,3 @@", 5, 6, true},              // zero-count old side
-		{"not a hunk header", 0, 0, false},
-		{"@@ missing fields", 0, 0, false},
+		{"@@ -1,3 +1,4 @@", 1, 1},
+		{"@@ -10,2 +10,3 @@", 10, 10},
+		{"@@ -10 +10 @@", 10, 10},              // count omitted (single-line hunk)
+		{"@@ -1,3 +1,4 @@ func Foo() {", 1, 1}, // trailing context text
+		{"@@ -5,0 +6,3 @@", 5, 6},              // zero-count old side
+		{"@@ -1,3 +0,0 @@", 1, 0},              // whole file deleted: new side has no lines
+		{"@@ -0,0 +1,3 @@", 0, 1},              // new file: old side has no lines
+		{"not a hunk header", 0, 0},
+		{"@@ missing fields", 0, 0},
+		// Trailing context text may itself start with '-' or '+'. Only the first field
+		// per side counts, so a zero side stays 0 instead of being claimed by that text.
+		{"@@ -0,0 +1,3 @@ -7 items", 0, 1},
+		{"@@ -1,3 +0,0 @@ +5 more", 1, 0},
 	}
 	for _, tc := range tests {
 		t.Run(tc.line, func(t *testing.T) {
-			oldStart, newStart, ok := parseHunkHeader(tc.line)
-			require.Equal(t, tc.ok, ok, "ok mismatch")
-			if tc.ok {
-				require.Equal(t, tc.oldStart, oldStart, "oldStart mismatch")
-				require.Equal(t, tc.newStart, newStart, "newStart mismatch")
-			}
+			oldStart, newStart := parseHunkHeader(tc.line)
+			require.Equal(t, tc.oldStart, oldStart, "oldStart mismatch")
+			require.Equal(t, tc.newStart, newStart, "newStart mismatch")
 		})
 	}
 }

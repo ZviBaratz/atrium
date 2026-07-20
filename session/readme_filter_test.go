@@ -49,6 +49,21 @@ func TestReadmeFilterExamples(t *testing.T) {
 	require.True(t, ParseFilter("effort:max dirty").Matches(maxDirty))
 	require.False(t, ParseFilter("effort:max dirty").Matches(readyClean))
 
+	// `model:opus behind` — opus family AND behind base.
+	opusBehind, err := NewInstance(InstanceOptions{Title: "opus-behind", Path: "/tmp/repoR", Program: "claude"})
+	require.NoError(t, err)
+	opusBehind.modelID = "claude-opus-4-8"
+	opusBehind.SetDiffStats(&git.DiffStats{Behind: 1})
+	require.True(t, ParseFilter("model:opus behind").Matches(opusBehind))
+	require.False(t, ParseFilter("model:opus behind").Matches(readyClean))
+
+	// `mode:plan status:need` — planning sessions AND waiting on you.
+	planNeeds := newFilterInstance(t, "spec-work", "feat/u")
+	planNeeds.SetModeMeta("plan")
+	planNeeds.SetStatus(NeedsInput)
+	require.True(t, ParseFilter("mode:plan status:need").Matches(planNeeds))
+	require.False(t, ParseFilter("mode:plan status:need").Matches(readyClean))
+
 	// `auth` — plain substring in name/branch/note.
 	require.True(t, ParseFilter("auth").Matches(authNamed))
 	require.False(t, ParseFilter("auth").Matches(readyClean))
