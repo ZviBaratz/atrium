@@ -285,18 +285,15 @@ func parseDiffRows(content string) []diffRow {
 				diffRow{kind: rowRule},
 				diffRow{kind: rowFileHeader, text: line, file: file})
 		case strings.HasPrefix(line, "@@"):
-			// Each side's counter advances on its own. Requiring both to be > 0 would
-			// skip the update for a completely deleted file ("+0,0") or a new one
-			// ("-0,0") and leave every code row in the hunk numbered 0. A side that
-			// reads 0 carries no lines, so its counter keeps its previous value —
-			// nothing in such a hunk references that side anyway.
-			o, n := parseHunkHeader(line)
-			if o > 0 {
-				oldLine = o
-			}
-			if n > 0 {
-				newLine = n
-			}
+			// Both counters follow the header verbatim, zeros included. Requiring both
+			// sides to be > 0 before updating either — as this did before — skipped the
+			// update entirely for a wholly deleted file ("+0,0") or a new one ("-0,0"),
+			// leaving every code row in the hunk numbered 0. Carrying a zero side's
+			// previous value forward instead is worse than the 0: it dresses a stale
+			// count from the *previous file* up as this file's line number. 0 is the
+			// honest reading — that side has no lines (and parseHunkHeader also returns
+			// 0 for a header it cannot parse, where "unknown" is likewise the truth).
+			oldLine, newLine = parseHunkHeader(line)
 			rows = append(rows, diffRow{kind: rowHunk, text: line})
 		case line[0] == '+' && (len(line) == 1 || line[1] != '+'):
 			rows = append(rows, diffRow{kind: rowAdd, text: line, file: file, lineNo: newLine})
@@ -325,13 +322,18 @@ func parseDiffRows(content string) []diffRow {
 // line 0 — the two cases are indistinguishable here, and neither names a real line.
 func parseHunkHeader(line string) (oldStart, newStart int) {
 	fields := strings.Fields(line)
-	// fields[0] is "@@"; the old range starts with '-', the new range with '+'.
+	// fields[0] is "@@"; the old range starts with '-', the new range with '+'. Only
+	// the first field per side counts — trailing context text ("@@ … @@ func f(-1)")
+	// must not overwrite a range already read. That is tracked with explicit flags
+	// rather than a "still 0" test, because 0 is a legitimate range start here and
+	// would otherwise leave the zero side open to being claimed by such text.
+	var haveOld, haveNew bool
 	for _, f := range fields[1:] {
 		switch {
-		case strings.HasPrefix(f, "-") && oldStart == 0:
-			oldStart = leadingInt(f[1:])
-		case strings.HasPrefix(f, "+") && newStart == 0:
-			newStart = leadingInt(f[1:])
+		case strings.HasPrefix(f, "-") && !haveOld:
+			oldStart, haveOld = leadingInt(f[1:]), true
+		case strings.HasPrefix(f, "+") && !haveNew:
+			newStart, haveNew = leadingInt(f[1:]), true
 		}
 	}
 	return oldStart, newStart

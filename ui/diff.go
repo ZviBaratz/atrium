@@ -243,10 +243,13 @@ func (d *DiffPane) ScrollDown() {
 
 // diffMetaPrefixes mark the per-file metadata lines git emits after a
 // "diff --git" header; they render dimmed so the content lines stand out.
+// "\\ " catches git's "\ No newline at end of file", which is a marker rather than
+// content: it must not be commentable and must not advance either line counter, or
+// every row after it in the hunk is numbered one too high.
 var diffMetaPrefixes = []string{
 	"index ", "--- ", "+++ ", "old mode", "new mode", "new file mode",
 	"deleted file mode", "rename from", "rename to", "similarity index",
-	"copy from", "copy to", "Binary files", "---", "+++",
+	"copy from", "copy to", "Binary files", "---", "+++", "\\ ",
 }
 
 func isDiffMeta(line string) bool {
