@@ -282,7 +282,18 @@ func TestFileGateReaderRejectsRelativeDir(t *testing.T) {
 	dir := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(dir, ".claude.json"),
 		[]byte(`{"cachedGrowthBookFeatures": {"tengu_copper_thistle": true}}`), 0o600))
-	t.Chdir(dir) // the cwd a relative path would resolve against
+
+	// Use a manual chdir instead of t.Chdir so the test skips gracefully when the
+	// environment forbids directory changes (e.g. container restrictions), rather
+	// than panicking during cleanup.
+	prev, err := os.Getwd()
+	if err != nil {
+		t.Skip("cannot determine working directory")
+	}
+	if err := os.Chdir(dir); err != nil {
+		t.Skip("chdir not available in this environment")
+	}
+	t.Cleanup(func() { _ = os.Chdir(prev) })
 
 	for _, configDir := range []string{"", ".", "relative/dir"} {
 		got, ok := fileGateReader{}.gates(configDir)

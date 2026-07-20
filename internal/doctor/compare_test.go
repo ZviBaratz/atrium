@@ -56,3 +56,12 @@ func TestDriftExceedsBadVersionErrors(t *testing.T) {
 		t.Error("expected error for unparseable installed version")
 	}
 }
+
+// TestDriftExceedsBadVerifiedVersionErrors mirrors TestDriftExceedsBadVersionErrors
+// for the verified (second) argument. driftExceeds must error — never panic or
+// return a spurious bool — when the verified string is unparseable semver.
+func TestDriftExceedsBadVerifiedVersionErrors(t *testing.T) {
+	if _, err := driftExceeds("2.1.0", "not-semver", agent.GranularityPatch); err == nil {
+		t.Error("expected error for unparseable verified version")
+	}
+}
