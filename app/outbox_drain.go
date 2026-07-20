@@ -32,6 +32,15 @@ const outboxDrainBudget = 50
 // quick-send uses, so a spooled prompt inherits its guarantee for free: a
 // zero-valued queue clock means strictly idle-only delivery, never an injection
 // mid-turn.
+//
+// One way this is a broader caller than quick-send: `s` can only target the
+// selected session, which is necessarily past Loading, while a spooled message
+// can name one that is still starting up or has never idled. That is still the
+// right call rather than QueuePrompt's timeout valve — force-injecting into a
+// startup banner is exactly what the idle-only rule exists to prevent — but it
+// does mean a session whose agent never idles holds its prompt indefinitely.
+// That prompt stays visible and cancelable: the queue overlay lists it, and
+// `atrium ls` reports it as queued_prompts.
 func (m *home) drainOutbox() tea.Cmd {
 	entries, err := outbox.List()
 	if err != nil {
