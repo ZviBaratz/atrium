@@ -10,3 +10,11 @@ package main
 func acquireTUILock(path string) (release func(), err error) {
 	return func() {}, nil
 }
+
+// tuiRunning cannot answer on Windows: acquireTUILock is a no-op there, so a
+// try-acquire always succeeds and would report "no TUI is running" even while
+// one is. Reporting "unknown" keeps callers from printing a confidently wrong
+// warning on a platform that has no single-instance lock to consult.
+func tuiRunning() (running, known bool) {
+	return false, false
+}

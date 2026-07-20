@@ -451,9 +451,14 @@ func init() {
 	peekCmd.Flags().BoolVar(&peekColorFlag, "color", false, "Keep ANSI color escapes in the output")
 	peekCmd.Flags().StringVar(&peekPathFlag, "path", "", "Repo path, to disambiguate a title used in more than one repo")
 
+	sendCmd.Flags().DurationVar(&sendWaitFlag, "wait", 0,
+		"Block until a running Atrium has queued the prompt, e.g. --wait 10s")
+	sendCmd.Flags().StringVar(&sendPathFlag, "path", "", "Repo path, to disambiguate a title used in more than one repo")
+
 	profilesCmd.AddCommand(profilesDetectCmd)
 	rootCmd.AddCommand(lsCmd)
 	rootCmd.AddCommand(peekCmd)
+	rootCmd.AddCommand(sendCmd)
 	rootCmd.AddCommand(debugCmd)
 	rootCmd.AddCommand(versionCmd)
 	rootCmd.AddCommand(resetCmd)
