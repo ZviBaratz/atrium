@@ -1313,10 +1313,10 @@ func TestShouldAutoOpen(t *testing.T) {
 	}
 
 	t.Run("flag off, no prompt", func(t *testing.T) {
-		assert.False(t, newHomeWithAutoAttach(false).shouldAutoOpen(newInst(""), false))
+		assert.False(t, newHomeWithAutoAttach(false).shouldAutoOpen(newInst(""), false, false))
 	})
 	t.Run("flag on, prompt set", func(t *testing.T) {
-		assert.False(t, newHomeWithAutoAttach(true).shouldAutoOpen(newInst("do a thing"), true))
+		assert.False(t, newHomeWithAutoAttach(true).shouldAutoOpen(newInst("do a thing"), true, false))
 	})
 	t.Run("flag on, prompt delivered before the parked start message", func(t *testing.T) {
 		// The keeper can deliver (and clear) the prompt while instanceStartedMsg is
@@ -1324,13 +1324,29 @@ func TestShouldAutoOpen(t *testing.T) {
 		// suppression so detaching from another session doesn't force-attach this one.
 		inst := newInst("do a thing")
 		inst.ClearPrompt("do a thing")
-		assert.False(t, newHomeWithAutoAttach(true).shouldAutoOpen(inst, true))
+		assert.False(t, newHomeWithAutoAttach(true).shouldAutoOpen(inst, true, false))
 	})
 	t.Run("flag on, no prompt, but not started", func(t *testing.T) {
 		// The most eligible case by policy, yet still false because the session is not
 		// running — the Started/TmuxAlive guard holds.
-		assert.False(t, newHomeWithAutoAttach(true).shouldAutoOpen(newInst(""), false))
+		assert.False(t, newHomeWithAutoAttach(true).shouldAutoOpen(newInst(""), false, false))
 	})
+}
+
+// TestAutoAttachEligible covers the pure auto-attach policy (independent of session
+// liveness), including the #387 rule that a fan-out variant never auto-attaches — a
+// bake-off must land on the list, not chain the user through every spawned session.
+func TestAutoAttachEligible(t *testing.T) {
+	on := func() *home {
+		cfg := config.DefaultConfig()
+		enabled := true
+		cfg.AutoAttach = &enabled
+		return &home{ctx: context.Background(), appConfig: cfg}
+	}
+	assert.True(t, on().autoAttachEligible(false, false), "flag on, no prompt, single create → eligible")
+	assert.False(t, on().autoAttachEligible(true, false), "a boot prompt suppresses auto-attach")
+	assert.False(t, on().autoAttachEligible(false, true), "a fan-out variant never auto-attaches")
+	assert.False(t, on().autoAttachEligible(true, true), "prompt and batch together stay suppressed")
 }
 
 // The off-cadence poll handler applies the polled state to the instance immediately, and

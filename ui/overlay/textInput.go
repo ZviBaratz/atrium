@@ -24,7 +24,7 @@ type TextInputOverlay struct {
 	width           int
 	height          int
 	directoryPicker *DirectoryPicker
-	profilePicker   *ProfilePicker
+	variantPicker   *VariantPicker
 	modelField      *ModelField
 	modeField       *ModeField
 	effortField     *EffortField

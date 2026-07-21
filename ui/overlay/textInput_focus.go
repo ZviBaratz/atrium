@@ -8,7 +8,7 @@ type focusStop int
 const (
 	stopTitle focusStop = iota
 	stopDirectory
-	stopProfile
+	stopVariants
 	stopModel
 	stopEffort
 	stopMode
@@ -76,7 +76,7 @@ func (t *TextInputOverlay) TitleFocused() bool { return t.isTitle() }
 
 func (t *TextInputOverlay) isTitle() bool           { return t.currentStop() == stopTitle }
 func (t *TextInputOverlay) isDirectoryPicker() bool { return t.currentStop() == stopDirectory }
-func (t *TextInputOverlay) isProfilePicker() bool   { return t.currentStop() == stopProfile }
+func (t *TextInputOverlay) isVariantPicker() bool   { return t.currentStop() == stopVariants }
 func (t *TextInputOverlay) isModelField() bool      { return t.currentStop() == stopModel }
 func (t *TextInputOverlay) isModeField() bool       { return t.currentStop() == stopMode }
 func (t *TextInputOverlay) isEffortField() bool     { return t.currentStop() == stopEffort }
@@ -159,11 +159,11 @@ func (t *TextInputOverlay) updateFocusState() {
 			t.branchPicker.Blur()
 		}
 	}
-	if t.profilePicker != nil {
-		if t.isProfilePicker() {
-			t.profilePicker.Focus()
+	if t.variantPicker != nil {
+		if t.isVariantPicker() {
+			t.variantPicker.Focus()
 		} else {
-			t.profilePicker.Blur()
+			t.variantPicker.Blur()
 		}
 	}
 	if t.modelField != nil {

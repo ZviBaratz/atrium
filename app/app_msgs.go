@@ -585,7 +585,7 @@ func (m *home) handleInstanceStarted(msg instanceStartedMsg) (tea.Model, tea.Cmd
 	// a successful start with no auto-open, if the user navigated to another session
 	// during the slow async Start(), preserve their cursor instead of snapping it
 	// back to the new session.
-	if msg.err != nil || m.shouldAutoOpen(msg.instance, msg.hadPrompt) ||
+	if msg.err != nil || m.shouldAutoOpen(msg.instance, msg.hadPrompt, msg.fromBatch) ||
 		m.list.GetSelectedInstance() == msg.instance {
 		m.list.SelectInstance(msg.instance)
 	}
@@ -661,7 +661,7 @@ func (m *home) handleInstanceStarted(msg instanceStartedMsg) (tea.Model, tea.Cmd
 		m.menu.SetState(ui.StateDefault)
 	}
 
-	if m.shouldAutoOpen(msg.instance, msg.hadPrompt) {
+	if m.shouldAutoOpen(msg.instance, msg.hadPrompt, msg.fromBatch) {
 		// Drop straight into the new session, mirroring the KeyEnter attach path.
 		// Attach msg.instance directly rather than via m.list.Attach(): a background
 		// instanceStartedMsg from another freshly-created session could have moved

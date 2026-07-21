@@ -231,8 +231,8 @@ func (t *TextInputOverlay) renderCreateForm(divider string) string {
 	t.titleInput.Width = inputWidth
 	section(titleLabel + "  " + t.titleInput.View() + suffix)
 	section(tiLabelStyle().Render("Prompt") + "\n" + t.textarea.View())
-	if t.profilePicker != nil {
-		section(t.profilePicker.Render())
+	if t.variantPicker != nil {
+		section(t.variantPicker.Render())
 	}
 	if t.modelField != nil {
 		section(t.modelField.Render())
