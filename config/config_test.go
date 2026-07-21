@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -134,6 +135,14 @@ func TestResolveClaudeCandidate(t *testing.T) {
 	tempDir := t.TempDir()
 	claudePath := filepath.Join(tempDir, "claude")
 	require.NoError(t, os.WriteFile(claudePath, []byte("#!/bin/sh\n"), 0o755))
+
+	// Guard: on systems where os.TempDir() is mounted noexec (e.g. container
+	// environments), exec.LookPath silently skips the fake binary, causing
+	// the positive cases to fail against the real claude in PATH. Skip rather
+	// than produce misleading failures.
+	if _, err := exec.LookPath(claudePath); err != nil {
+		t.Skipf("temp dir does not support executable files (noexec): %v", err)
+	}
 
 	t.Setenv("PATH", tempDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 

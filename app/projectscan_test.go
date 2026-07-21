@@ -71,7 +71,17 @@ func TestProjectScanDone_PersistsAndLiveUpdatesForm(t *testing.T) {
 	// fuzzy-matches full paths. A worktree path containing the subsequence
 	// z-e-b-r-a would otherwise match the "zebra" filter and pin the selection
 	// to cwd, masking the scanned repo (issue #169).
-	t.Chdir(t.TempDir())
+	// Use a manual chdir instead of t.Chdir so the test skips gracefully when the
+	// environment forbids directory changes (e.g. container restrictions), rather
+	// than panicking during cleanup.
+	prev, err := os.Getwd()
+	if err != nil {
+		t.Skip("cannot determine working directory")
+	}
+	if err := os.Chdir(t.TempDir()); err != nil {
+		t.Skip("chdir not available in this environment")
+	}
+	t.Cleanup(func() { _ = os.Chdir(prev) })
 
 	scannedRepo := t.TempDir() + "/zebra-service"
 	require.NoError(t, os.MkdirAll(scannedRepo, 0o755))
