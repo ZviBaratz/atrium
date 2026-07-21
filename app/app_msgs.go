@@ -579,7 +579,7 @@ func (m *home) handleInstanceStarted(msg instanceStartedMsg) (tea.Model, tea.Cmd
 	// a successful start with no auto-open, if the user navigated to another session
 	// during the slow async Start(), preserve their cursor instead of snapping it
 	// back to the new session.
-	if msg.err != nil || m.shouldAutoOpen(msg.instance, msg.hadPrompt) ||
+	if msg.err != nil || m.shouldAutoOpen(msg.instance, msg.hadPrompt, msg.fromBatch) ||
 		m.list.GetSelectedInstance() == msg.instance {
 		m.list.SelectInstance(msg.instance)
 	}
