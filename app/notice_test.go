@@ -186,3 +186,20 @@ func TestHandleInfoNotice_HintBarOffNoLayoutShift(t *testing.T) {
 	assert.False(t, h.menu.HasNotice(), "the notice clears")
 	assert.Equal(t, before, h.paneContentHeight(), "the panes must not grow when the notice clears")
 }
+
+// paneContentHeight must count the errBox row for ANY notice level, matching the
+// real widget-sizing budget in updateHandleWindowSizeEvent (both use HasContent).
+// It previously used HasError, so an info-level notice riding the errBox silently
+// did not shrink the divider Y-bound — a one-row hit-testing drift (#438 review).
+// Driven from an overlay state so menuVisible() is false and only the errBox row
+// is in question.
+func TestPaneContentHeight_CountsInfoNoticeRow(t *testing.T) {
+	h := newCreateFormHome(t)
+	h.state = stateHelp // menuVisible() is false here, isolating the errBox row
+	h.windowWidth, h.windowHeight = 80, 24
+
+	base := h.paneContentHeight()
+	h.errBox.SetNotice("branch copied", ui.NoticeInfo)
+	assert.Equal(t, base-1, h.paneContentHeight(),
+		"an info-level errBox notice must claim a pane row (HasContent, not HasError)")
+}

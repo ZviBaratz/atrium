@@ -173,7 +173,7 @@ func (m *home) paneContentHeight() int {
 		menuHeight = 1
 	}
 	errHeight := 0
-	if m.errBox.HasError() {
+	if m.errBox.HasContent() {
 		errHeight = 1
 	}
 	return max(1, m.windowHeight-m.topBannerHeight()-menuHeight-errHeight)
