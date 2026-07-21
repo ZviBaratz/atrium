@@ -275,3 +275,37 @@ func TestDeferredQuitSurfacesStartErrorWhileSiblingLoads(t *testing.T) {
 	require.True(t, h.menu.HasNotice(), "a notice is shown")
 	assert.Contains(t, h.menu.NoticeText(), "worktree boom", "the start error is surfaced, not swallowed")
 }
+
+// #439: a slow background Start() must not steal the selection. If the user
+// navigated to another session while the new one was starting, the completing
+// instanceStartedMsg must preserve their cursor rather than snapping it back to
+// the just-started session. (newQuitTestHome disables auto-attach, so the
+// auto-open path — which would legitimately re-select and attach — is off.)
+func TestInstanceStartedPreservesNavigatedAwaySelection(t *testing.T) {
+	h := newQuitTestHome(t)
+	first := addLoadingInstance(t, h, "loading-first")   // the just-created session
+	second := addLoadingInstance(t, h, "loading-second") // where the user navigated to
+	h.list.SelectInstance(second)
+
+	_, _ = h.Update(instanceStartedMsg{instance: first, hadPrompt: true})
+
+	assert.Same(t, second, h.list.GetSelectedInstance(),
+		"a completed async start must not steal the cursor from the user's chosen row")
+	assert.Equal(t, session.Running, first.GetStatus(),
+		"the start still completes normally — only the selection is left alone")
+}
+
+// #439 companion: when the user has NOT navigated away, the started instance
+// stays selected (the common case must be untouched), and it still transitions
+// to Running.
+func TestInstanceStartedKeepsSelectionWhenNotNavigated(t *testing.T) {
+	h := newQuitTestHome(t)
+	inst := addLoadingInstance(t, h, "loading-one")
+	h.list.SelectInstance(inst)
+
+	_, _ = h.Update(instanceStartedMsg{instance: inst, hadPrompt: true})
+
+	assert.Same(t, inst, h.list.GetSelectedInstance(),
+		"the started session stays selected when the user never moved")
+	assert.Equal(t, session.Running, inst.GetStatus())
+}

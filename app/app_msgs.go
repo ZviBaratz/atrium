@@ -579,8 +579,16 @@ func (m *home) handleAttachFinished(msg attachFinishedMsg) (tea.Model, tea.Cmd) 
 }
 
 func (m *home) handleInstanceStarted(msg instanceStartedMsg) (tea.Model, tea.Cmd) {
-	// Select the instance that just started (or failed)
-	m.list.SelectInstance(msg.instance)
+	// Normally re-select the just-started instance: it corrects a possibly-stale
+	// selection index, the failure path's teardown (m.list.Kill below) targets the
+	// selected row, and an auto-open attach drops into it. The exception is #439: on
+	// a successful start with no auto-open, if the user navigated to another session
+	// during the slow async Start(), preserve their cursor instead of snapping it
+	// back to the new session.
+	if msg.err != nil || m.shouldAutoOpen(msg.instance, msg.hadPrompt) ||
+		m.list.GetSelectedInstance() == msg.instance {
+		m.list.SelectInstance(msg.instance)
+	}
 
 	if msg.err != nil {
 		// Tear down the session that failed to start. Any teardown error is already
