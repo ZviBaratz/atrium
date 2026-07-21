@@ -111,3 +111,39 @@ func TestDriftFoundMsg_AckRecordedWhenHintShown(t *testing.T) {
 		t.Errorf("drift badge should NOT be set when the hint was shown; panel:\n%s", out)
 	}
 }
+
+// With the hint bar off, a background drift hint stays badge-only (#108/#438): the
+// clean-mode row is always reserved, so without the guard the unsolicited toast
+// would ride it. No toast, the persistent badge carries it, and the hint stays
+// re-armed (no ack) — exactly as when a modal owns the screen.
+func TestDriftFoundMsg_HintBarOffStaysBadgeOnly(t *testing.T) {
+	st := config.DefaultState()
+	s := spinner.New()
+	off := false
+	m := &home{
+		ctx:       context.Background(),
+		state:     stateDefault,
+		list:      ui.NewList(&s),
+		menu:      ui.NewMenu(),
+		appConfig: config.DefaultConfig(),
+		appState:  st,
+	}
+	m.appConfig.HintBar = &off
+	m.menu.SetQuiet(true)
+
+	agents := []doctor.Result{
+		{Key: agent.KeyClaude, Name: "Claude Code", Installed: "2.1.179", Status: doctor.StatusDrifted},
+	}
+	m.Update(driftFoundMsg{agents: agents})
+
+	if m.menu.HasNotice() {
+		t.Errorf("a drift toast rendered with the hint bar off; it must stay badge-only (#108)")
+	}
+	if got := m.appState.GetAckedDrift(); len(got) != 0 {
+		t.Fatalf("ack recorded despite the badge-only path: %v", got)
+	}
+	m.list.SetSize(80, 24)
+	if out := m.list.String(); !strings.Contains(out, "stale") {
+		t.Errorf("drift badge not shown in clean mode; panel:\n%s", out)
+	}
+}

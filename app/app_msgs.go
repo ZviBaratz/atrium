@@ -28,7 +28,13 @@ func (m *home) handleDriftFound(msg driftFoundMsg) (tea.Model, tea.Cmd) {
 	// screen); in that case record no ack so the hint re-arms on a later
 	// startup instead of being silently consumed. atrium doctor remains the
 	// durable surface meanwhile.
-	cmd := m.showMenuNotice(fmt.Sprintf("⚠ agent heuristics may be stale — run `%s doctor`", m.hintBinName()), ui.NoticeInfo)
+	// With the hint bar off, the drift hint stays badge-only (#108/#438): don't even
+	// attempt the toast (the clean-mode row is always reserved and would carry it).
+	// Leaving cmd nil falls through to the persistent-badge path below.
+	var cmd tea.Cmd
+	if m.appConfig.GetHintBar() {
+		cmd = m.showMenuNotice(fmt.Sprintf("⚠ agent heuristics may be stale — run `%s doctor`", m.hintBinName()), ui.NoticeInfo)
+	}
 	if cmd == nil {
 		// Toast dropped (hint bar off, or a modal owns the screen). Surface the
 		// drift via the persistent panel badge instead — the durable fallback

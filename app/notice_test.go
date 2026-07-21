@@ -28,17 +28,19 @@ func TestHandleError_MenuCarriesToastWithoutLayoutShift(t *testing.T) {
 	assert.Equal(t, before, lipgloss.Height(h.View()), "feedback must never move the layout")
 }
 
-// When the user disabled the hint bar (chrome-free mode) there is no reserved
-// row to ride, so errors fall back to the pre-existing error-box row.
-func TestHandleError_HintBarOffFallsBackToErrRow(t *testing.T) {
+// With the hint bar off, a short error rides the always-reserved menu row in
+// stateDefault (blank until the notice lands) rather than growing a separate
+// errBox row — so feedback never reflows the panes (#438).
+func TestHandleError_HintBarOffRidesReservedMenuRow(t *testing.T) {
 	h := newCreateFormHome(t)
 	off := false
 	h.appConfig.HintBar = &off
+	h.menu.SetQuiet(true)
 
 	h.handleError(fmt.Errorf("boom"))
 
-	assert.True(t, h.errBox.HasError())
-	assert.False(t, h.menu.HasNotice())
+	assert.True(t, h.menu.HasNotice(), "the reserved menu row carries the error")
+	assert.False(t, h.errBox.HasContent(), "no separate errBox row is claimed")
 }
 
 // Neutral acknowledgments ("branch copied") use the info level on the same row.
@@ -52,20 +54,19 @@ func TestHandleInfoNotice_MenuCarriesIt(t *testing.T) {
 	assert.False(t, h.errBox.HasError(), "info must never look like an error")
 }
 
-// Info acknowledgments used to be dropped with the hint bar off (#287). They now
-// fall back to the errBox row — shown, not silently discarded — but styled
-// neutrally so they never read as an error.
-func TestHandleInfoNotice_HintBarOffFallsBackToErrRow(t *testing.T) {
+// Info acknowledgments with the hint bar off ride the reserved menu row too —
+// shown, not dropped (#287), and without a reflow (#438).
+func TestHandleInfoNotice_HintBarOffRidesReservedMenuRow(t *testing.T) {
 	h := newCreateFormHome(t)
 	off := false
 	h.appConfig.HintBar = &off
+	h.menu.SetQuiet(true)
 
 	cmd := h.handleInfoNotice("branch copied")
 
 	require.NotNil(t, cmd, "a fallen-back info notice still schedules its own hide")
-	assert.True(t, h.errBox.HasContent(), "the notice must claim the errBox row")
-	assert.False(t, h.errBox.HasError(), "info must never look like an error")
-	assert.False(t, h.menu.HasNotice(), "the hidden hint bar carries nothing")
+	assert.True(t, h.menu.HasNotice(), "the reserved menu row carries the ack")
+	assert.False(t, h.errBox.HasContent(), "no separate errBox row is claimed")
 }
 
 // pressKey drives a single rune keybinding through the default-state handler.
@@ -123,48 +124,65 @@ func TestHideNotice_StaleGenerationIgnored(t *testing.T) {
 	assert.False(t, h.menu.HasNotice(), "the matching hide clears the notice")
 }
 
-// With the hint bar off, the missing-program warning must land on the errBox row
-// rather than vanish — it goes through the same flashNotice fallback (#287).
-func TestWarnMissingProgram_HintBarOffFallsBackToErrRow(t *testing.T) {
+// The missing-program warning with the hint bar off rides the reserved menu row
+// (error-level) rather than a separate errBox row (#287/#438).
+func TestWarnMissingProgram_HintBarOffRidesReservedMenuRow(t *testing.T) {
 	h := newCreateFormHome(t)
 	off := false
 	h.appConfig.HintBar = &off
+	h.menu.SetQuiet(true)
 
 	cmd := h.warnMissingProgram("definitely-not-a-real-program")
 
 	require.NotNil(t, cmd, "the warning schedules its own hide")
-	assert.True(t, h.errBox.HasContent(), "the warning must claim the errBox row")
-	assert.True(t, h.errBox.HasError(), "a missing-program warning is error-level")
-	assert.False(t, h.menu.HasNotice())
+	assert.True(t, h.menu.HasNotice(), "the reserved menu row carries the warning")
+	assert.False(t, h.errBox.HasContent(), "no separate errBox row is claimed")
 }
 
-// flashNotice holds only one transient surface at a time: when a later notice
-// can ride the menu row, any stale errBox fallback row from an earlier notice is
-// cleared, so the two never double-display (#287). Clearing that row must also
-// recompute the layout so the panes reclaim it — otherwise, when the menu is
-// already occupying its own row, the frame renders one line short of the
-// terminal.
+// flashNotice holds only one transient surface at a time. A notice raised while an
+// overlay owns the screen (menuVisible false) falls back to the errBox row; when a
+// later notice can ride the menu row it must clear that stale errBox row AND
+// recompute, so the frame never renders a line short (#287).
 func TestFlashNotice_MenuNoticeClearsStaleErrBox(t *testing.T) {
 	h := newCreateFormHome(t)
-	off := false
-	h.appConfig.HintBar = &off
 	h.updateHandleWindowSizeEvent(tea.WindowSizeMsg{Width: 80, Height: 24})
 
-	// Hint bar off, menu hidden: the notice falls back to the errBox row.
-	h.flashNotice("branch copied", ui.NoticeInfo)
-	require.True(t, h.errBox.HasContent(), "hint bar off routes the notice to the errBox row")
+	// An overlay-state notice takes the errBox fallback (the menu row is hidden
+	// behind the overlay there).
+	h.state = stateHelp
+	h.flashNotice("earlier notice", ui.NoticeInfo)
+	require.True(t, h.errBox.HasContent(), "an overlay-state notice falls back to the errBox row")
 
-	// An action forces the menu visible alongside the errBox row (its own line):
-	// menu + errBox both claim a row, so the panes shrink to keep the frame full.
-	h.actionInFlight = true
-	h.recomputeLayout()
-	require.Equal(t, 24, lipgloss.Height(h.View()), "menu + errBox rows keep the frame full")
-
-	// The next notice now rides the menu row; the stale errBox row is dropped and
-	// the panes must grow back so the frame stays exactly the terminal height.
+	// Back in stateDefault the next notice rides the menu row; the stale errBox row
+	// must be dropped and the panes must grow back so the frame stays 24 rows.
+	h.state = stateDefault
 	h.flashNotice("pushed changes", ui.NoticeInfo)
 	assert.True(t, h.menu.HasNotice(), "the new notice rides the menu row")
 	assert.False(t, h.errBox.HasContent(), "the stale errBox row must be cleared")
 	assert.Equal(t, 24, lipgloss.Height(h.View()),
 		"reclaiming the errBox row must recompute the layout, not leave the frame a line short")
+}
+
+// #438: with the hint bar hidden, a transient user-action ack must not shift the
+// pane content. The bottom row is always reserved in stateDefault (blank when the
+// bar is off), so the notice rides it instead of growing an errBox row —
+// paneContentHeight is identical before, during, and after the notice.
+func TestHandleInfoNotice_HintBarOffNoLayoutShift(t *testing.T) {
+	h := newCreateFormHome(t)
+	off := false
+	h.appConfig.HintBar = &off
+	h.menu.SetQuiet(true) // assembleHome seeds this from hint_bar in production
+	h.updateHandleWindowSizeEvent(tea.WindowSizeMsg{Width: 80, Height: 24})
+
+	before := h.paneContentHeight()
+
+	cmd := h.handleInfoNotice("branch copied")
+	require.NotNil(t, cmd)
+	assert.True(t, h.menu.HasNotice(), "the reserved menu row carries the notice")
+	assert.False(t, h.errBox.HasContent(), "no errBox row is claimed, so nothing reflows")
+	assert.Equal(t, before, h.paneContentHeight(), "the panes must not shrink when the notice appears")
+
+	h.Update(hideErrMsg{gen: h.noticeGen})
+	assert.False(t, h.menu.HasNotice(), "the notice clears")
+	assert.Equal(t, before, h.paneContentHeight(), "the panes must not grow when the notice clears")
 }

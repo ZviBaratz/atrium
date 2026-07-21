@@ -129,8 +129,9 @@ func (m *home) updateHandleWindowSizeEvent(msg tea.WindowSizeMsg) {
 // background name generation its progress). Modal overlays
 // (prompt/rename/confirm/help/info) render their own instructions, so the bar
 // behind them would be a redundant strip. Plain navigation shows the always-on
-// hint line unless the user turned it off (hint_bar in config.json), which
-// restores the chrome-free interface.
+// hint line; with it turned off (hint_bar in config.json) the row stays reserved
+// but renders blank (Menu.quiet) instead of disappearing, so a transient notice
+// can ride it without shifting the layout (#438).
 func (m *home) menuVisible() bool {
 	switch m.state {
 	case stateFilter, stateVisual, stateDiffComment:
@@ -140,9 +141,12 @@ func (m *home) menuVisible() bool {
 	case statePrompt, stateRename, stateQueue, stateCmdLog, stateConfirm, stateHelp, stateInfo, stateSettings, stateWelcome, stateAccounts, stateHistory:
 		return false
 	default: // stateDefault (and the empty list)
-		// generatingName and actionInFlight each force the bar visible so their
-		// progress row shows even when the always-on hint bar is turned off.
-		return m.generatingName || m.actionInFlight || m.appConfig.GetHintBar()
+		// The bottom row is always reserved during plain navigation, so a transient
+		// notice never resizes the frame (#438). generatingName / actionInFlight are
+		// subsumed here — they still drive the menu's StateGeneratingName / StateBusy
+		// content. With hint_bar off the row renders blank (Menu.quiet, seeded from the
+		// setting), giving a still chrome-free frame a notice can ride without a shift.
+		return true
 	}
 }
 
@@ -252,7 +256,12 @@ func (m *home) applySettingChange(key string) tea.Cmd {
 			m.list.SetGroupMode(m.appConfig.GetGroupMode())
 		}
 	case "hint_bar":
-		m.recomputeLayout() // the bar claims or releases its row
+		// The row is always reserved (menuVisible stays true in stateDefault); hint_bar
+		// only toggles the bar between its hints and a blank line, so the row count no
+		// longer changes on toggle — the panes don't resize either. Update the flag and
+		// repaint.
+		m.menu.SetQuiet(!m.appConfig.GetHintBar())
+		m.recomputeLayout()
 	case "mouse":
 		// Toggle mouse capture live so the change takes effect without a restart
 		// (the app.Run gate only covers the initial launch). Disabling hands every
