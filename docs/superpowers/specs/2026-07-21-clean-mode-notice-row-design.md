@@ -81,6 +81,30 @@ and those states survive the periodic `SetInstance` ticks
 (`ui/menu.go:174-184`, which only rewrites `StateDefault`/`StateEmpty`). So
 blanking `StateDefault`/`StateEmpty` can never erase a progress or inline line.
 
+### Background notices stay badge-only (#108) — scope guard
+
+Two notice classes reach the bottom bar, and they are treated differently:
+
+- **User-action acks and errors** (`handleInfoNotice`, `handleError`,
+  `warnMissingProgram`) go through `flashNotice`. These are the ones the #438
+  reflow afflicts — with the bar off they fall back to the errBox row. The fix
+  routes them onto the always-reserved menu row; that is the intent.
+- **Background/unsolicited notices** — the update-available toast
+  (`handleUpdateNotice`, `app_updatecheck.go:137-144`) and the drift hint
+  (`handleDriftFound`, `app_msgs.go:25-51`) — call `showMenuNotice` **directly**
+  and, with the bar off, deliberately show **no toast**: the persistent
+  Sessions-panel badge carries them, keeping the chrome-free frame quiet (#108).
+  `TestUpdateBadge_PersistsWithHintBarOff` pins this.
+
+Flipping `menuVisible()` to always-true in `stateDefault` would make
+`showMenuNotice` *succeed* for these background callers in clean mode, flashing a
+toast the #108 design deliberately suppresses. **Decision (confirmed with the
+maintainer): preserve #108** — background notices stay badge-only when the bar is
+off. Each background caller gets a `!GetHintBar()` guard so the always-reserved
+row never pulls its unsolicited toast onto the quieted frame (changes 5–6).
+`showMenuNotice`'s existing nil-return still covers the orthogonal "a modal owns
+the screen" case for both.
+
 ## Changes
 
 ### 1. `ui/menu.go` — a `quiet` flag
@@ -160,6 +184,43 @@ literal (where `appConfig` is in scope):
 h.menu.SetQuiet(!appConfig.GetHintBar())
 ```
 
+### 5. `app/app_updatecheck.go` — `handleUpdateNotice` guard
+
+Keep the background update notice badge-only with the bar off. Guard at the top,
+before the `showMenuNotice` attempt:
+
+```go
+// With the hint bar off, the update notice stays badge-only (#108): the row is
+// always reserved in clean mode now (#438), so without this guard the toast would
+// ride it — an unsolicited flash on the frame the user quieted. Buffer it like any
+// undeliverable toast; the panel badge (set by the caller) is the durable signal.
+if !m.appConfig.GetHintBar() {
+    m.pendingUpdateNotice = text
+    return nil
+}
+```
+
+This reproduces today's outcome (buffered notice + persistent badge) and leaves
+`showMenuNotice`'s nil path to handle the modal-overlay case unchanged.
+
+### 6. `app/app_msgs.go` — `handleDriftFound` guard
+
+Gate the toast attempt on the bar being on, so drift stays badge-only with the bar
+off (badge shown, no ack, hint re-arms):
+
+```go
+// With the hint bar off, the drift hint stays badge-only (#108/#438): don't even
+// attempt the toast (the clean-mode row is always reserved and would carry it).
+// Leaving cmd nil falls through to the persistent-badge path below.
+var cmd tea.Cmd
+if m.appConfig.GetHintBar() {
+    cmd = m.showMenuNotice(fmt.Sprintf("⚠ agent heuristics may be stale — run `%s doctor`", m.hintBinName()), ui.NoticeInfo)
+}
+if cmd == nil {
+    // ... existing badge path: SetDriftBadge, no ack, return m, nil
+}
+```
+
 ## Testing
 
 ### New — the regression pin for #438 (`app/notice_test.go`)
@@ -203,16 +264,37 @@ these in `app/notice_test.go`:
   no gen/inflight case now expects `menuVisible() == true` (line ~51); reword the
   comment ("the row is always reserved in stateDefault; the bar renders blank").
   The gen/inflight/filter cases (still true) are unchanged.
-- `TestView_HintBarContextual`: the bar-off assertion `NotContains("kill")` still
-  holds (the menu renders blank). Strengthen it: assert the composed `View()` is
-  the **same height** with the bar on vs off (both reserve the row) — the core
-  no-reflow property at the view level.
+- `TestView_HintBarContextual`: the bar-off branch must now call
+  `h.menu.SetQuiet(true)` when it turns `hint_bar` off (production seeds this via
+  `applySettingChange`/`assembleHome`; this struct-literal home bypasses both).
+  With quiet set, the menu renders blank so `NotContains("kill")` still holds.
+  Strengthen it: capture `paneContentHeight()` while bar-on and assert it is
+  **equal** bar-off — both reserve the row, so the panes no longer grow when the
+  bar is hidden (the reserved-row invariant; frame height alone is trivially
+  `windowHeight` either way and proves nothing).
+
+### Background-notice guards (#108)
+
+- **Update guard — already pinned.** `TestUpdateBadge_PersistsWithHintBarOff`
+  runs in `stateDefault` (`newUpdateHome` → `newCreateFormHome`). After the
+  `menuVisible()` flip, *without* the guard this test would fail (the toast would
+  ride the reserved row); *with* the guard it passes (buffered + badge,
+  `menu.HasNotice()` false). So the existing test now pins the update guard — no
+  new update test needed. It stays green.
+- **New drift-guard test (`app/app_driftcheck_test.go`)**
+  `TestDriftFoundMsg_HintBarOffStaysBadgeOnly`: mirror
+  `TestDriftFoundMsg_AckRecordedWhenHintShown` (state `stateDefault`, menu
+  present) but with `hint_bar` off + `SetQuiet(true)`. Assert `menu.HasNotice()`
+  is false, `GetAckedDrift()` is empty (hint re-arms), and the list render
+  contains "stale" (the badge carries it). The existing drift tests run with
+  `hint_bar: true`, so this is the only test covering the bar-off drift path.
 
 ### Unchanged and still green
 
 `TestHandleError_MenuCarriesToastWithoutLayoutShift` (bar-on guarantee),
 `ui/menu_notice_test.go`'s existing notice tests (default `quiet == false`), the
-divider tests, and the welcome test (all run with the default bar-on config).
+two existing drift tests (`hint_bar: true`; the nil-menu and ack-recorded paths
+are unchanged), the divider tests, and the welcome test (all run bar-on).
 
 ## Edge cases
 
