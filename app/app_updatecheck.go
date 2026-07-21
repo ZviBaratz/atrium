@@ -135,6 +135,14 @@ func updateBadgeText(version string, installed bool) string {
 // Sessions-panel badge (updateBadgeText), which renders regardless of
 // overlays and hint_bar.
 func (m *home) handleUpdateNotice(text string) tea.Cmd {
+	// With the hint bar off, the background update notice stays badge-only (#108):
+	// the row is always reserved in clean mode now (#438), so without this guard the
+	// unsolicited toast would ride it. Buffer it like any undeliverable toast; the
+	// panel badge (set by the caller) is the durable signal.
+	if !m.appConfig.GetHintBar() {
+		m.pendingUpdateNotice = text
+		return nil
+	}
 	if cmd := m.showMenuNotice(text, ui.NoticeInfo); cmd != nil {
 		m.pendingUpdateNotice = ""
 		return cmd

@@ -23,12 +23,18 @@ import (
 )
 
 func (m *home) handleDriftFound(msg driftFoundMsg) (tea.Model, tea.Cmd) {
-	// Try to show the hint first. showMenuNotice returns nil when the hint
-	// bar can't render right now (e.g. hint_bar off, or a modal owns the
-	// screen); in that case record no ack so the hint re-arms on a later
-	// startup instead of being silently consumed. atrium doctor remains the
-	// durable surface meanwhile.
-	cmd := m.showMenuNotice(fmt.Sprintf("⚠ agent heuristics may be stale — run `%s doctor`", m.hintBinName()), ui.NoticeInfo)
+	// Try to show the hint on the bar's reserved row. Two cases leave cmd nil and fall
+	// through to the persistent-badge path below, where we record no ack so the hint
+	// re-arms on a later startup instead of being silently consumed (atrium doctor
+	// stays the durable surface meanwhile):
+	//   - hint_bar off: the drift hint stays badge-only (#108/#438). Don't even attempt
+	//     the toast — the clean-mode row is always reserved now and would otherwise
+	//     carry this unsolicited flash onto the frame the user quieted.
+	//   - a modal owns the screen: showMenuNotice itself returns nil (menuVisible false).
+	var cmd tea.Cmd
+	if m.appConfig.GetHintBar() {
+		cmd = m.showMenuNotice(fmt.Sprintf("⚠ agent heuristics may be stale — run `%s doctor`", m.hintBinName()), ui.NoticeInfo)
+	}
 	if cmd == nil {
 		// Toast dropped (hint bar off, or a modal owns the screen). Surface the
 		// drift via the persistent panel badge instead — the durable fallback

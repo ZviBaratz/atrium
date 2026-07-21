@@ -85,6 +85,9 @@ func assembleHome(
 	h.list.SetEffortIndicator(appConfig.GetEffortIndicator())
 	// Seed the permission-mode chip (on/off; see config.GetPermissionIndicator).
 	h.list.SetPermissionIndicator(appConfig.GetPermissionIndicator())
+	// Seed the hint bar's chrome-free flag: with hint_bar off the menu row stays
+	// reserved but renders blank, so notices ride it without a shift (#438).
+	h.menu.SetQuiet(!appConfig.GetHintBar())
 	// Seed the splash pattern (a pinned name, or a fresh random pick; see
 	// config.GetSplash). ui takes the normalized name, no config import needed.
 	ui.SetSplashVariant(appConfig.GetSplash())
