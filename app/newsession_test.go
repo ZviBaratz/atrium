@@ -165,8 +165,8 @@ func TestCreateSessionFromForm_ExplicitPathOnlyAccountIsAccented(t *testing.T) {
 	dir := t.TempDir() // direct (non-git) target → no remote, hermetic
 
 	h := newCreateFormHome(t)
-	// A non-claude program keeps the model stop out of the form, so the Tab path
-	// below (prompt → account) stays two hops; this test is about accounts only.
+	// A non-claude program keeps the model/effort/mode stops out of the form, so the
+	// Tab path below is prompt → variants → account; this test is about accounts only.
 	h.appConfig.DefaultProgram = "echo"
 	h.appConfig.ClaudeAccounts = []config.ClaudeAccount{
 		{Name: "personal", ConfigDir: "~/.claude"},                                // catch-all default
@@ -184,7 +184,8 @@ func TestCreateSessionFromForm_ExplicitPathOnlyAccountIsAccented(t *testing.T) {
 	ov.FocusTitle()
 	ov.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("feature")})
 	ov.HandleKeyPress(tea.KeyMsg{Type: tea.KeyTab})   // title → prompt
-	ov.HandleKeyPress(tea.KeyMsg{Type: tea.KeyTab})   // prompt → account
+	ov.HandleKeyPress(tea.KeyMsg{Type: tea.KeyTab})   // prompt → variants
+	ov.HandleKeyPress(tea.KeyMsg{Type: tea.KeyTab})   // variants → account
 	ov.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRight}) // personal → work, marks touched
 
 	acct, ok := ov.GetSelectedAccount()
@@ -213,13 +214,14 @@ func TestCreateSessionFromForm_ModelComposedIntoProgram(t *testing.T) {
 	ov, _ := h.newSessionFormOverlay()
 	h.textInputOverlay = ov
 
-	// Stops: [directory, branch, title, prompt, model, effort, mode, enter] (one
-	// profile → no profile stop; claude → model/effort/mode stops present). This
-	// test only navigates as far as the model stop.
+	// Stops: [directory, branch, title, prompt, variants, model, effort, mode, enter]
+	// (the variant control is always a stop; claude → model/effort/mode stops present).
+	// This test only navigates as far as the model stop.
 	ov.FocusTitle()
 	ov.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("feature")})
 	ov.HandleKeyPress(tea.KeyMsg{Type: tea.KeyTab}) // title → prompt
-	ov.HandleKeyPress(tea.KeyMsg{Type: tea.KeyTab}) // prompt → model
+	ov.HandleKeyPress(tea.KeyMsg{Type: tea.KeyTab}) // prompt → variants
+	ov.HandleKeyPress(tea.KeyMsg{Type: tea.KeyTab}) // variants → model
 	ov.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("opus")})
 	require.Equal(t, "opus", ov.GetModel())
 
@@ -244,8 +246,9 @@ func TestCreateSessionFromForm_ModelOverridesProfilePin(t *testing.T) {
 
 	ov.FocusTitle()
 	ov.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("feature")})
-	ov.HandleKeyPress(tea.KeyMsg{Type: tea.KeyTab})
-	ov.HandleKeyPress(tea.KeyMsg{Type: tea.KeyTab})
+	ov.HandleKeyPress(tea.KeyMsg{Type: tea.KeyTab}) // title → prompt
+	ov.HandleKeyPress(tea.KeyMsg{Type: tea.KeyTab}) // prompt → variants
+	ov.HandleKeyPress(tea.KeyMsg{Type: tea.KeyTab}) // variants → model
 	ov.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("opus")})
 
 	require.NotNil(t, h.createSessionFromForm(""))
@@ -376,7 +379,8 @@ func TestCreateSessionFromForm_PermissionModeComposedIntoProgram(t *testing.T) {
 	ov.FocusTitle()
 	ov.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("feature")})
 	ov.HandleKeyPress(tea.KeyMsg{Type: tea.KeyTab})   // title → prompt
-	ov.HandleKeyPress(tea.KeyMsg{Type: tea.KeyTab})   // prompt → model
+	ov.HandleKeyPress(tea.KeyMsg{Type: tea.KeyTab})   // prompt → variants
+	ov.HandleKeyPress(tea.KeyMsg{Type: tea.KeyTab})   // variants → model
 	ov.HandleKeyPress(tea.KeyMsg{Type: tea.KeyTab})   // model (empty → advance) → effort
 	ov.HandleKeyPress(tea.KeyMsg{Type: tea.KeyTab})   // leave effort on default → mode
 	ov.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRight}) // default → plan
@@ -405,7 +409,8 @@ func TestCreateSessionFromForm_PermissionModeOverridesProfilePin(t *testing.T) {
 	ov.FocusTitle()
 	ov.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("feature")})
 	ov.HandleKeyPress(tea.KeyMsg{Type: tea.KeyTab})   // title → prompt
-	ov.HandleKeyPress(tea.KeyMsg{Type: tea.KeyTab})   // prompt → model
+	ov.HandleKeyPress(tea.KeyMsg{Type: tea.KeyTab})   // prompt → variants
+	ov.HandleKeyPress(tea.KeyMsg{Type: tea.KeyTab})   // variants → model
 	ov.HandleKeyPress(tea.KeyMsg{Type: tea.KeyTab})   // model (empty → advance) → effort
 	ov.HandleKeyPress(tea.KeyMsg{Type: tea.KeyTab})   // leave effort on default → mode
 	ov.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRight}) // default → plan
@@ -457,7 +462,8 @@ func TestCreateSessionFromForm_ModelAndModeCompose(t *testing.T) {
 	ov.FocusTitle()
 	ov.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("feature")})
 	ov.HandleKeyPress(tea.KeyMsg{Type: tea.KeyTab}) // title → prompt
-	ov.HandleKeyPress(tea.KeyMsg{Type: tea.KeyTab}) // prompt → model
+	ov.HandleKeyPress(tea.KeyMsg{Type: tea.KeyTab}) // prompt → variants
+	ov.HandleKeyPress(tea.KeyMsg{Type: tea.KeyTab}) // variants → model
 	ov.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("opus")})
 	ov.HandleKeyPress(tea.KeyMsg{Type: tea.KeyTab})   // "opus" is a complete alias → advance to effort
 	ov.HandleKeyPress(tea.KeyMsg{Type: tea.KeyTab})   // leave effort on default → advance to mode

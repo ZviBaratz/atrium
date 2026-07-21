@@ -99,6 +99,31 @@ func tab(o *TextInputOverlay)      { o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyTa
 func shiftTab(o *TextInputOverlay) { o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyShiftTab}) }
 func ctrlR(o *TextInputOverlay)    { o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyCtrlR}) }
 
+// vpPlus/vpMinus press the count +/- keys on the (assumed focused) variant control.
+func vpPlus(o *TextInputOverlay) {
+	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("+")})
+}
+func vpMinus(o *TextInputOverlay) { o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyDown}) }
+
+// selectOnlyNonClaude drives the variant control to Claude ×0 + non-claude ×1 for a
+// two-profile [claude, non-claude] form (mixedProfiles order), so no selected variant
+// is claude and the claude-only override fields go inert. It leaves focus and the
+// cursor on the claude (first) profile so selectClaude can raise it back.
+func selectOnlyNonClaude(o *TextInputOverlay) {
+	o.focusStop(stopVariants)
+	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRight}) // cursor → non-claude
+	vpPlus(o)                                        // non-claude 0 → 1
+	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyLeft})  // cursor → claude
+	vpMinus(o)                                       // claude 1 → 0
+}
+
+// selectClaude raises the claude variant back to ×1 (the cursor is left on claude by
+// selectOnlyNonClaude), re-enabling the claude-only override fields.
+func selectClaude(o *TextInputOverlay) {
+	o.focusStop(stopVariants)
+	vpPlus(o) // claude 0 → 1
+}
+
 func TestSessionCreateOverlay_DoubleCtrlRClears(t *testing.T) {
 	o := NewSessionCreateOverlay(nil, nil, []string{"/repo/a"}, "")
 
@@ -784,18 +809,16 @@ func TestSessionCreateOverlay_ModelDisabledForNonClaudeProfile(t *testing.T) {
 	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("opus")})
 	assert.Equal(t, "opus", o.GetModel())
 
-	// Switch to the aider profile: the field goes inert and contributes nothing.
-	o.focusStop(stopProfile)
-	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyDown})
-	assert.Equal(t, "", o.GetModel(), "a non-claude profile must drop the override")
+	// Drop claude from the batch (Claude ×0, Aider ×1): the field goes inert.
+	selectOnlyNonClaude(o)
+	assert.Equal(t, "", o.GetModel(), "no claude variant must drop the override")
 	o.focusStop(stopTextarea)
-	tab(o) // textarea → profile
-	tab(o) // profile → (model skipped) …
+	tab(o) // textarea → variants
+	tab(o) // variants → (model skipped) …
 	assert.False(t, o.isModelField(), "Tab must skip the disabled model field")
 
-	// Back to claude: the field re-enables and the typed value applies again.
-	o.focusStop(stopProfile)
-	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyUp})
+	// Re-add claude: the field re-enables and the typed value applies again.
+	selectClaude(o)
 	assert.Equal(t, "opus", o.GetModel(), "returning to claude restores the override")
 }
 
@@ -811,8 +834,7 @@ func TestSessionCreateOverlay_ModelSectionHeightConstant(t *testing.T) {
 	titleFocused := strings.Count(o.Render(), "\n")
 	assert.Equal(t, modelFocused, titleFocused, "overlay height must not change with model focus")
 
-	o.focusStop(stopProfile)
-	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyDown}) // aider → model field inert
+	selectOnlyNonClaude(o) // Claude ×0, Aider ×1 → model field inert
 	disabled := strings.Count(o.Render(), "\n")
 	assert.Equal(t, titleFocused, disabled, "overlay height must not change when the model field is inert")
 }
@@ -917,18 +939,16 @@ func TestSessionCreateOverlay_ModeDisabledForNonClaudeProfile(t *testing.T) {
 	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyDown}) // default → plan
 	assert.Equal(t, "plan", o.GetPermissionMode())
 
-	// Switch to the aider profile: the field goes inert and contributes nothing.
-	o.focusStop(stopProfile)
-	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyDown})
-	assert.Equal(t, "", o.GetPermissionMode(), "a non-claude profile must drop the override")
+	// Drop claude from the batch (Claude ×0, Aider ×1): the field goes inert.
+	selectOnlyNonClaude(o)
+	assert.Equal(t, "", o.GetPermissionMode(), "no claude variant must drop the override")
 	o.focusStop(stopTextarea)
-	tab(o) // textarea → profile
-	tab(o) // profile → (model and mode both skipped) …
+	tab(o) // textarea → variants
+	tab(o) // variants → (model and mode both skipped) …
 	assert.False(t, o.isModeField(), "Tab must skip the disabled mode field")
 
-	// Back to claude: the field re-enables and the chip selection applies again.
-	o.focusStop(stopProfile)
-	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyUp})
+	// Re-add claude: the field re-enables and the chip selection applies again.
+	selectClaude(o)
 	assert.Equal(t, "plan", o.GetPermissionMode(), "returning to claude restores the override")
 }
 
@@ -954,8 +974,7 @@ func TestSessionCreateOverlay_ModeSectionHeightConstant(t *testing.T) {
 	titleFocused := strings.Count(o.Render(), "\n")
 	assert.Equal(t, modeFocused, titleFocused, "overlay height must not change with mode focus")
 
-	o.focusStop(stopProfile)
-	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyDown}) // aider → mode field inert
+	selectOnlyNonClaude(o) // Claude ×0, Aider ×1 → mode field inert
 	disabled := strings.Count(o.Render(), "\n")
 	assert.Equal(t, titleFocused, disabled, "overlay height must not change when the mode field is inert")
 }
