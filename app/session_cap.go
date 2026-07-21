@@ -94,11 +94,14 @@ type spawnPlan struct {
 type proceedOverCapMsg struct{}
 
 // confirmOverCap stages plan behind a host-capacity confirmation, dismisses the
-// create form, and returns the confirm command. On acceptance the staged action
-// emits proceedOverCapMsg (handled in Update → spawnVariants); on decline nothing
-// is spawned and the stale plan is inert (overwritten by the next stage).
+// create form, and returns the confirm command. The dismissed form is stashed as a
+// restorable draft first, so declining is non-destructive (the accept path clears it
+// via closeCreateForm on commit). On acceptance the staged action emits
+// proceedOverCapMsg (handled in Update → spawnVariants); on decline nothing is
+// spawned and the stale plan is inert (overwritten by the next stage).
 func (m *home) confirmOverCap(plan spawnPlan, limit, active int) tea.Cmd {
 	m.pendingOverCap = &plan
+	m.stashDirtyCreateForm()
 	m.textInputOverlay = nil
 	m.menu.SetState(ui.StateDefault)
 	m.resetTitleCheck()

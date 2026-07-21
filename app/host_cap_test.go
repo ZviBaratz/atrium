@@ -84,6 +84,8 @@ func TestConfirmOverCap_SpawnsStagedSession(t *testing.T) {
 	assert.Equal(t, before+1, h.list.NumInstances(), "confirming spawns the staged session")
 	assert.Nil(t, h.pendingOverCap, "the stage is consumed")
 	assert.Equal(t, stateDefault, h.state)
+	assert.Nil(t, h.stashedDraft, "a committed create clears the draft stashed behind the confirm")
+	assert.Nil(t, config.LoadState().GetDraft(), "the on-disk draft is cleared on commit")
 }
 
 // Declining the host-capacity prompt spawns nothing and drops the stage.
@@ -103,6 +105,30 @@ func TestDeclineOverCap_SpawnsNothing(t *testing.T) {
 
 	assert.Equal(t, before, h.list.NumInstances(), "declining spawns nothing")
 	assert.NotEqual(t, stateConfirm, h.state, "the confirm closes")
+}
+
+// Declining the host-capacity prompt must not discard the typed form. The soft cap
+// is the friendlier alternative to a hard-cap block (which keeps the form open), so
+// it must not lose more than the block it replaces: the title and prompt are stashed
+// in memory and mirrored to disk, exactly as a non-destructive Escape would.
+func TestDeclineOverCap_PreservesDraft(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	h := newFanOutHome(t, gitInitRepo(t))
+	h.hostCap = 2
+	h.appConfig.MaxSessions = nil
+	addStubInstances(t, h, 2)
+
+	typeString(h, "race")
+	ctrlS(h)
+	require.Equal(t, stateConfirm, h.state)
+
+	h.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("n")}) // decline
+
+	require.NotNil(t, h.stashedDraft, "declining must stash the dirty form, not discard it")
+	assert.Equal(t, "race", h.stashedDraft.GetTitle(), "the typed title survives the decline")
+	if d := config.LoadState().GetDraft(); assert.NotNil(t, d, "the draft is mirrored to disk") {
+		assert.Equal(t, "race", d.Title, "the persisted draft holds the typed title")
+	}
 }
 
 // Paused sessions impose no host load, so they do not count toward the soft cap:

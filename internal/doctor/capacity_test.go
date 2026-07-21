@@ -23,13 +23,38 @@ func TestCheckCapacity(t *testing.T) {
 	}
 }
 
-// RenderCapacity names the host size, the recommended cap, and how to override it.
+// capacityRow returns the rendered line whose text contains label, so a value
+// assertion tests the value in its own row rather than anywhere in the block — the
+// "8" of "hardware threads" must not be satisfiable by an unrelated figure elsewhere.
+func capacityRow(t *testing.T, out, label string) string {
+	t.Helper()
+	for _, line := range strings.Split(out, "\n") {
+		if strings.Contains(line, label) {
+			return line
+		}
+	}
+	t.Fatalf("no %q row in RenderCapacity output:\n%s", label, out)
+	return ""
+}
+
+// RenderCapacity names the host size, the recommended cap, and how to override it —
+// each value on its own labeled row.
 func TestRenderCapacity_ShowsHostAndOverride(t *testing.T) {
 	out := RenderCapacity(CapacityResult{Threads: 8, RAMBytes: 32 * (1 << 30), RAMKnown: true, RecommendedCap: 4})
-	for _, want := range []string{"Host capacity", "hardware threads", "8", "recommended cap", "4 sessions", "32.0 GiB", "max_sessions"} {
-		if !strings.Contains(out, want) {
-			t.Errorf("RenderCapacity output missing %q\n%s", want, out)
+	if !strings.Contains(out, "Host capacity") {
+		t.Errorf("RenderCapacity output missing the \"Host capacity\" header:\n%s", out)
+	}
+	for _, tc := range []struct{ label, want string }{
+		{"hardware threads", "8"},
+		{"total RAM", "32.0 GiB"},
+		{"recommended cap", "4 sessions"},
+	} {
+		if row := capacityRow(t, out, tc.label); !strings.Contains(row, tc.want) {
+			t.Errorf("%q row = %q, want it to contain %q", tc.label, row, tc.want)
 		}
+	}
+	if row := capacityRow(t, out, "max_sessions"); !strings.Contains(row, "unlimited") {
+		t.Errorf("the override row must explain the escape hatch, got %q", row)
 	}
 }
 

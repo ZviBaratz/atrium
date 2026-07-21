@@ -268,12 +268,14 @@ func (m *home) handleSmartDispatchSubmit(line string) tea.Cmd {
 	return tea.Batch(formCmd, m.runSmartDispatchCmd(line, candidates, m.textInputOverlay))
 }
 
-// autoDispatch creates a session directly from a confident match, returning (cmd, true)
-// on success. It returns (nil, false) when the target is invalid or the title would
-// collide, so the caller can fall back to the confirmation form. Because it bypasses the
-// form, the session launches with the agent's default permission mode — opting into
-// smart_dispatch_auto deliberately trades away the per-session permission choice the
-// form's Permissions chip would otherwise offer.
+// autoDispatch handles a confident match without the form, returning (cmd, true) when it
+// takes ownership of the line and (nil, false) when it declines — an invalid target or a
+// title collision — so the caller falls back to the confirmation form. Taking ownership
+// usually means the session is created directly, but crossing the host-derived soft cap
+// instead returns the confirmation command (still true): nothing is created until the
+// user accepts. Because it bypasses the form, the session launches with the agent's
+// default permission mode — opting into smart_dispatch_auto deliberately trades away the
+// per-session permission choice the form's Permissions chip would otherwise offer.
 func (m *home) autoDispatch(res PrefillResult) (tea.Cmd, bool) {
 	valid, direct, _ := targetValidity(m.ctx, res.Path)
 	if !valid {
@@ -1395,26 +1397,35 @@ func (m *home) clearPersistedDraft() {
 	}
 }
 
+// stashDirtyCreateForm preserves a dirty create form as a restorable draft — in
+// memory (m.stashedDraft) and mirrored to disk — so a non-committing exit never
+// discards typed input. It backs every such exit: a deliberate Escape-to-check-
+// something and declining the host-capacity confirmation alike. Everything else
+// (a clean form, quick-send, smart-dispatch) leaves no stash, and the caller is
+// still responsible for clearing m.textInputOverlay afterward.
+func (m *home) stashDirtyCreateForm() {
+	if m.textInputOverlay == nil || !m.textInputOverlay.IsCreateForm() || !m.textInputOverlay.IsDirty() {
+		return
+	}
+	// Drop any pending "⌃R again" arm so it can't survive a Ctrl+C cancel (which
+	// bypasses the overlay's own disarm) and make the next single Ctrl+R a wipe.
+	m.textInputOverlay.DisarmClear()
+	// The stash reuses this very overlay, whose Canceled flag may have been set by the
+	// Escape that triggered it (or Submitted by the Ctrl+S that hit the cap). Clear the
+	// transient submit/cancel flags so the restored draft is a clean, submittable form —
+	// otherwise handlePromptState checks IsCanceled before IsSubmitted, so every later
+	// Enter/Ctrl+S on the restored form is misread as a cancel and the session is never
+	// created.
+	m.textInputOverlay.Canceled = false
+	m.textInputOverlay.Submitted = false
+	m.stashedDraft = m.textInputOverlay
+	// Mirror the stash to disk so it outlives a crash/quit before the reopen.
+	m.persistDraft(m.textInputOverlay)
+}
+
 // cancelPromptOverlay cancels the prompt overlay.
 func (m *home) cancelPromptOverlay() tea.Cmd {
-	// Keep a dirty create form as a draft so a deliberate Escape-to-check-something
-	// is non-destructive; everything else (clean form, quick-send, smart-dispatch)
-	// is discarded as before.
-	if m.textInputOverlay != nil && m.textInputOverlay.IsCreateForm() && m.textInputOverlay.IsDirty() {
-		// Drop any pending "⌃R again" arm so it can't survive a Ctrl+C cancel (which
-		// bypasses the overlay's own disarm) and make the next single Ctrl+R a wipe.
-		m.textInputOverlay.DisarmClear()
-		// The stash reuses this very overlay, whose Canceled flag was just set by the
-		// Escape that triggered this stash. Clear the transient submit/cancel flags so
-		// the restored draft is a clean, submittable form — otherwise handlePromptState
-		// checks IsCanceled before IsSubmitted, so every later Enter/Ctrl+S on the
-		// restored form is misread as a cancel and the session is never created.
-		m.textInputOverlay.Canceled = false
-		m.textInputOverlay.Submitted = false
-		m.stashedDraft = m.textInputOverlay
-		// Mirror the stash to disk so it outlives a crash/quit before the reopen.
-		m.persistDraft(m.textInputOverlay)
-	}
+	m.stashDirtyCreateForm()
 	m.textInputOverlay = nil
 	m.state = stateDefault
 	m.resetTitleCheck()
