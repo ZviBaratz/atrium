@@ -485,6 +485,13 @@ func newHome(ctx context.Context, program string, autoYes bool, version, binName
 	// Load application config
 	appConfig := config.LoadConfig()
 
+	// Resolve the agent OOM margin once, before any session is constructed (instance
+	// restore below and every later new/resume all read it through newSession), so
+	// each agent pane raises its Linux oom_score_adj above the shared tmux server's
+	// and the kernel OOM killer sheds one recoverable session instead of the server
+	// (every session). Off Linux / when disabled this resolves to a harmless no-op.
+	tmux.SetAgentOOMMargin(appConfig.GetAgentOOMMargin())
+
 	// Pre-accept Claude's workspace trust for the worktrees root before any
 	// session starts (opt-in; best-effort — on failure the trust dialog simply
 	// appears per worktree, as it would without the feature). Done once here on

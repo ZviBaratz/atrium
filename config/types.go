@@ -246,6 +246,14 @@ type Config struct {
 	// explicit non-positive value (0) is "unlimited" — no cap and, being explicit,
 	// no warning (the escape hatch). See Config.SessionCap.
 	MaxSessions *int `json:"max_sessions,omitempty"`
+	// AgentOOMMargin raises each agent pane's Linux oom_score_adj this many points
+	// above the shared tmux server's, so under memory pressure the kernel OOM killer
+	// sheds one recoverable session before the server (which holds every session).
+	// Three states: nil (unset, the default) resolves to a built-in default margin —
+	// the protection is on out of the box; an explicit positive value is that margin;
+	// an explicit non-positive value (0) disables it (the opt-out). A no-op on
+	// non-Linux hosts, which have no oom_score_adj. See Config.GetAgentOOMMargin.
+	AgentOOMMargin *int `json:"agent_oom_margin,omitempty"`
 	// TrustWorktreesRoot, when true, pre-accepts Claude Code's workspace-trust
 	// dialog for the worktrees root in ~/.claude.json before sessions start.
 	// Claude's trust check walks up parent directories, so trusting the root
