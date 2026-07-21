@@ -42,8 +42,9 @@ func TestMenuVisible_ByState(t *testing.T) {
 	}
 	h.actionInFlight = false
 
-	// hint_bar off: plain navigation goes chrome-free again, but a background
-	// name generation still claims the row, and inline interactions keep theirs.
+	// hint_bar off keeps the bottom row reserved in stateDefault (rendered blank,
+	// not absent — #438); a background name generation or inline interaction still
+	// fills that same row.
 	off := false
 	h.appConfig.HintBar = &off
 	h.state = stateDefault
