@@ -109,9 +109,12 @@ func TestStartWrapsLaunchCommandWithOOMRaise(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skipf("the OOM wrapper only applies on linux; GOOS=%s", runtime.GOOS)
 	}
+	prev := agentOOMMargin.Load()
+	t.Cleanup(func() { agentOOMMargin.Store(prev) })
+	SetAgentOOMMargin(300)
+
 	ptyFactory := NewMockPtyFactory(t)
 	session := NewSessionWithDeps(context.Background(), "oom-on", "claude", ptyFactory, startMockExec())
-	session.SetOOMScoreMargin(300)
 
 	require.NoError(t, session.Start(t.TempDir()))
 
@@ -125,9 +128,12 @@ func TestStartWrapsLaunchCommandWithOOMRaise(t *testing.T) {
 	require.NoError(t, parseOnly.Run(), "wrapped launch command must be valid shell: %q", program)
 }
 
-// With the feature disabled (the default, margin 0), the launch command carries no
-// OOM wrapper.
+// With the feature disabled (margin 0), the launch command carries no OOM wrapper.
 func TestStartWithoutOOMMarginIsUnwrapped(t *testing.T) {
+	prev := agentOOMMargin.Load()
+	t.Cleanup(func() { agentOOMMargin.Store(prev) })
+	SetAgentOOMMargin(0)
+
 	ptyFactory := NewMockPtyFactory(t)
 	session := NewSessionWithDeps(context.Background(), "oom-off", "claude", ptyFactory, startMockExec())
 
@@ -138,14 +144,28 @@ func TestStartWithoutOOMMarginIsUnwrapped(t *testing.T) {
 	require.NotContains(t, program, "oom_score_adj")
 }
 
-// A freshly constructed session inherits the process-wide default OOM margin the
-// app resolves once at startup (SetAgentOOMMargin), so every creation path — new,
-// resume, restore — is protected uniformly without per-session threading.
-func TestNewSessionInheritsProcessDefaultOOMMargin(t *testing.T) {
+// The margin is read from the process-wide default at each launch, not baked in at
+// construction. A session constructed under one margin but launched under another
+// (as happens when the user changes the setting mid-run and then relaunches the
+// session via pause → resume) applies the value current at launch — the guarantee
+// the doctor's "pause and resume those sessions" remedy depends on.
+func TestStartAppliesCurrentMarginNotConstructionTime(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skipf("the OOM wrapper only applies on linux; GOOS=%s", runtime.GOOS)
+	}
 	prev := agentOOMMargin.Load()
 	t.Cleanup(func() { agentOOMMargin.Store(prev) })
-	SetAgentOOMMargin(250)
 
-	session := NewSession(context.Background(), "oom-default", "claude")
-	require.Equal(t, 250, session.oomMargin)
+	SetAgentOOMMargin(100)
+	ptyFactory := NewMockPtyFactory(t)
+	session := NewSessionWithDeps(context.Background(), "oom-relaunch", "claude", ptyFactory, startMockExec())
+	// Change the process-wide margin after construction but before launch.
+	SetAgentOOMMargin(400)
+
+	require.NoError(t, session.Start(t.TempDir()))
+
+	launchArgs := ptyFactory.cmds[0].Args
+	program := launchArgs[len(launchArgs)-1]
+	require.Contains(t, program, "+400", "start must apply the margin current at launch")
+	require.NotContains(t, program, "+100", "start must not apply the margin from construction time")
 }

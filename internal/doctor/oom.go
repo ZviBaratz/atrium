@@ -92,26 +92,66 @@ func discoverTmuxOOM(ctx context.Context) (serverPID int, panes []paneRef, ok bo
 	if err != nil {
 		return 0, nil, false
 	}
-	paneOut, err := exec.CommandContext(ctx, "tmux", "-L", socket, "list-panes", "-a", "-F", "#{pane_pid} #{session_name}").Output()
+	paneOut, err := exec.CommandContext(ctx, "tmux", "-L", socket, "list-panes", "-a", "-F", "#{pane_id} #{pane_pid} #{session_name}").Output()
 	if err != nil {
 		return serverPID, nil, true // server found; panes just unreadable
 	}
-	for _, line := range strings.Split(strings.TrimSpace(string(paneOut)), "\n") {
+	return serverPID, agentPanes(paneOut), true
+}
+
+// agentPanes reduces `list-panes -a` output to one pane per session: the agent's.
+// An Atrium session can hold more than one pane — a user can split the window while
+// attached, since the attach proxy forwards the tmux prefix — and only the
+// numerically smallest pane id is the pane new-session created for the agent; the
+// rest are the user's own splits and must not be scored as agents (session/tmux's
+// smallestPaneID applies the same rule for capture and keystrokes). Otherwise a
+// stray split's oom_score would inflate the session count and could flip the
+// verdict. Input lines are "%<pane-id> <pid> <session>"; first-seen session order
+// is preserved for stable output.
+func agentPanes(out []byte) []paneRef {
+	type winner struct {
+		ref    paneRef
+		paneID int
+	}
+	best := map[string]winner{}
+	var order []string
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
 		if line == "" {
 			continue
 		}
-		fields := strings.SplitN(line, " ", 2)
-		pid, err := strconv.Atoi(fields[0])
+		fields := strings.SplitN(line, " ", 3)
+		if len(fields) < 3 {
+			continue
+		}
+		paneID, err := paneNum(fields[0])
 		if err != nil {
 			continue
 		}
-		session := ""
-		if len(fields) > 1 {
-			session = fields[1]
+		pid, err := strconv.Atoi(fields[1])
+		if err != nil {
+			continue
 		}
-		panes = append(panes, paneRef{PID: pid, Session: session})
+		session := fields[2]
+		if cur, seen := best[session]; !seen {
+			order = append(order, session)
+			best[session] = winner{ref: paneRef{PID: pid, Session: session}, paneID: paneID}
+		} else if paneID < cur.paneID {
+			best[session] = winner{ref: paneRef{PID: pid, Session: session}, paneID: paneID}
+		}
 	}
-	return serverPID, panes, true
+	panes := make([]paneRef, 0, len(order))
+	for _, session := range order {
+		panes = append(panes, best[session].ref)
+	}
+	return panes
+}
+
+// paneNum parses a tmux pane id ("%3") to its numeric part (3).
+func paneNum(s string) (int, error) {
+	if !strings.HasPrefix(s, "%") {
+		return 0, fmt.Errorf("not a pane id: %q", s)
+	}
+	return strconv.Atoi(s[1:])
 }
 
 // configuredOOMMargin reads the effective agent_oom_margin from config.json
@@ -178,12 +218,13 @@ func RenderOOM(r OOMResult) string {
 			b.WriteString("         → agents outrank the tmux server; an OOM kill sheds one recoverable session, not all\n")
 		} else {
 			fmt.Fprintf(&b, "         → ⚠ %d of %d agents rank at or below the server (oom_score %d); an OOM kill could take every session\n", belowOrEqual, known, r.ServerScore)
-			// The margin is baked in at session start, so an at/below agent is either
-			// unprotected (margin off) or predates the setting (restart applies it).
+			// Each launch applies the current margin, so an at/below agent is either
+			// unprotected (margin off) or predates the setting; relaunching it via
+			// pause → resume re-applies the current margin.
 			if r.Margin > 0 {
-				b.WriteString("           restart those sessions to apply the margin\n")
+				b.WriteString("           pause and resume those sessions to apply the margin\n")
 			} else {
-				b.WriteString("           enable agent_oom_margin in Settings and restart sessions\n")
+				b.WriteString("           enable agent_oom_margin in Settings, then pause and resume those sessions\n")
 			}
 		}
 	}

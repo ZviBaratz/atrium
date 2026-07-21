@@ -80,12 +80,6 @@ type Session struct {
 	// never persisted; only the names are creation-fixed (SetGitHubTokenEnv). Empty
 	// = inject no token.
 	githubTokenEnv []string
-	// oomMargin, when > 0, raises this agent pane's Linux oom_score_adj that many
-	// points above the shared tmux server's at launch (see wrapOOMScore), so the
-	// kernel OOM killer sheds this one recoverable session before the server, which
-	// holds every session. 0 (the default) disables it; it is a no-op off Linux. Set
-	// once before Start (SetOOMScoreMargin), from config.GetAgentOOMMargin.
-	oomMargin int
 	// adapter holds the per-agent heuristics resolved once from program at
 	// construction; never nil (unknown programs get agent.Generic).
 	adapter *agent.Adapter
@@ -275,13 +269,6 @@ func (t *Session) SetGitHubTokenEnv(names []string) {
 	t.githubTokenEnv = names
 }
 
-// SetOOMScoreMargin sets how many points to raise this agent's Linux oom_score_adj
-// above the shared tmux server's at launch (see wrapOOMScore). 0 disables it. Call
-// before Start; the wrapper is baked into the launch command at session birth.
-func (t *Session) SetOOMScoreMargin(margin int) {
-	t.oomMargin = margin
-}
-
 // atriumMarkerEnv is injected into every session's env so external shell hooks
 // (e.g. a per-repo gh/Claude account switcher in the user's zshrc) can detect an
 // Atrium session and defer to the CLAUDE_CONFIG_DIR / GH_CONFIG_DIR / token env
@@ -300,7 +287,6 @@ func newSession(ctx context.Context, sessionName, windowName, program string, pt
 		cmdExec:       cmdExec,
 		captureErrLog: log.NewEvery(60 * time.Second),
 		monitor:       newStatusMonitor(program),
-		oomMargin:     int(agentOOMMargin.Load()),
 	}
 }
 
@@ -412,7 +398,9 @@ func (t *Session) start(workDir string, program string) error {
 	// prefix a shell snippet that raises the pane's oom_score_adj above the server's
 	// before exec'ing the agent, so memory pressure sheds one recoverable session
 	// rather than the server (every session). A no-op when disabled or off Linux.
-	program = wrapOOMScore(program, t.oomMargin, runtime.GOOS)
+	// The margin is read here, at each launch, so a session relaunched after a
+	// mid-run Settings change (pause → resume, pane recreate) picks up the new value.
+	program = wrapOOMScore(program, int(agentOOMMargin.Load()), runtime.GOOS)
 
 	// Create a new detached tmux session and start claude in it. -n gives the
 	// window the human-readable title (the conf disables auto-rename).

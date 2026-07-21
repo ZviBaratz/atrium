@@ -3,6 +3,7 @@ package doctor
 import (
 	"context"
 	"os"
+	"reflect"
 	"runtime"
 	"strings"
 	"testing"
@@ -91,6 +92,39 @@ func TestRenderOOM_UnprotectedVerdictWarns(t *testing.T) {
 	}
 	if !strings.Contains(out, "below") {
 		t.Errorf("render = %q, want it to name the at/below-server risk", out)
+	}
+}
+
+// An agent whose score exactly equals the server's is at risk: a tie is not safe
+// (the kernel could pick either), so the boundary is <=, not <.
+func TestRenderOOM_TieWithServerCountsAsAtRisk(t *testing.T) {
+	r := OOMResult{
+		Supported: true, Margin: 300,
+		ServerFound: true, ServerPID: 12589, ServerScore: 800, ServerAdj: 200, ServerKnown: true,
+		Agents: []OOMAgent{
+			{Session: "repo_A", PID: 111, Score: 800, Adj: 200, Known: true}, // exactly ties the server
+		},
+	}
+	out := RenderOOM(r)
+	if !strings.Contains(out, "⚠") {
+		t.Errorf("an agent tying the server must warn: %q", out)
+	}
+	if !strings.Contains(out, "1 of 1") {
+		t.Errorf("render = %q, want the tying agent counted at/below the server", out)
+	}
+}
+
+// list-panes -a returns every pane, including any split the user opened while
+// attached. Only the smallest pane id per session is the agent; splits must not be
+// scored as extra agents.
+func TestAgentPanes_OneAgentPerSessionSmallestPaneID(t *testing.T) {
+	// repo_A has a user split (%3) whose row precedes the agent's (%0); repo_B has a
+	// single pane. The split must be dropped and first-seen session order kept.
+	out := []byte("%3 999 repo_A\n%0 111 repo_A\n%1 222 repo_B\n")
+	got := agentPanes(out)
+	want := []paneRef{{PID: 111, Session: "repo_A"}, {PID: 222, Session: "repo_B"}}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("agentPanes = %+v, want %+v (one agent pane per session, smallest id)", got, want)
 	}
 }
 
