@@ -86,6 +86,13 @@ func (t *Session) resolvePaneIDLocked() (string, error) {
 	if err != nil {
 		return "", err
 	}
+	return smallestPaneID(out)
+}
+
+// smallestPaneID picks the numerically smallest %N from list-panes output. It is
+// shared with the headless capture path (see capture.go) so both resolve the
+// agent pane by the same rule.
+func smallestPaneID(out []byte) (string, error) {
 	best, bestN := "", 0
 	for _, line := range strings.Split(string(out), "\n") {
 		line = strings.TrimSpace(line)

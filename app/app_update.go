@@ -135,6 +135,12 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// PanePrompt would tap whatever dialog is up now. The post-detach sweep
 		// re-polls everything, so nothing is lost — but the tick must still re-arm.
 		var cmds []tea.Cmd
+		// Deliver anything `atrium send` spooled since the last tick. Outside the
+		// attachGen guard on purpose: a spooled prompt is not a pane observation,
+		// so an attach having happened gives no reason to drop it.
+		if cmd := m.drainOutbox(); cmd != nil {
+			cmds = append(cmds, cmd)
+		}
 		if msg.attachGen == m.attachGen {
 			recoveries := recoverLostInstances(msg.results, m.lostStrikes)
 			if len(recoveries) > 0 {

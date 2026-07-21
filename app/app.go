@@ -231,6 +231,12 @@ type home struct {
 	// lostStrikes counts consecutive ticks each instance has been seen with a dead
 	// tmux session, debouncing auto-recovery to Paused (see recoverLostInstances).
 	lostStrikes map[*session.Instance]int
+
+	// outboxPoisoned holds spool files whose unlink failed, so a message that
+	// cannot be removed is not re-delivered on every tick for the rest of the run.
+	// Deliberately in-memory only: the next launch should re-try the file rather
+	// than inherit a verdict from a transient failure.
+	outboxPoisoned map[string]bool
 	// notifier emits the terminal bell / desktop notification when a background
 	// session finishes a turn or blocks on a prompt (see app_notify.go, config
 	// Notifications). nil disables notification (hand-built test homes).

@@ -69,33 +69,40 @@ checkouts) report a dev version and never self-update.
 
 ### Usage
 
-```
-Usage:
-  atrium [flags]
-  atrium [command]
-
-Available Commands:
-  completion  Generate the autocompletion script for the specified shell
-  debug       Print debug information like config paths
-  doctor      Check the environment for common misconfigurations
-  help        Help about any command
-  profiles    Manage agent profiles (e.g. `profiles detect`)
-  reset       Reset all stored instances
-  update      Download, verify, and install the latest release
-  version     Print the version number of atrium
-
-Flags:
-  -y, --autoyes          [experimental] If enabled, all instances will automatically accept prompts for claude code & aider
-  -h, --help             help for atrium
-  -p, --program string   Program to run in new instances (e.g. 'aider --model ollama_chat/gemma3:1b')
-```
-
 Run the application with:
 
 ```bash
 atrium
 ```
+
 NOTE: The default program is `claude` and we recommend using the latest version.
+
+Atrium also ships a set of subcommands. `atrium <command> --help` prints the full
+detail for any of them; a test (`TestReadmeDocumentsEveryCommand`) fails the build
+if one is missing from this table.
+
+| Command | What it does |
+|---------|--------------|
+| *(none)* | Start the TUI |
+| `ls` | List sessions, as a table or as JSON for scripts |
+| `peek` | Print what a session's pane is showing, without attaching |
+| `send` | Queue a prompt for a session |
+| `doctor` | Check core dependencies (tmux, git, gh) and agent CLI heuristic versions |
+| `profiles` | Manage agent profiles (e.g. `profiles detect`) |
+| `debug` | Print debug information like config paths |
+| `update` | Download, verify, and install the latest release |
+| `reset` | Reset all stored instances |
+| `version` | Print the version number of atrium |
+| `completion` | Generate the autocompletion script for the specified shell |
+| `help` | Help about any command |
+
+Global flags:
+
+| Flag | Effect |
+|------|--------|
+| `-p, --program` | Program to run in new instances (e.g. `aider --model ollama_chat/gemma3:1b`) |
+| `-y, --autoyes` | [experimental] Automatically accept prompts |
+| `-v, --verbose` | Print the log file path on exit |
 
 <br />
 
@@ -106,6 +113,88 @@ NOTE: The default program is `claude` and we recommend using the latest version.
    - Aider: `atrium -p "aider ..."`
    - Gemini: `atrium -p "gemini"`
 - Make this the default, by modifying the config file (locate with `atrium debug`)
+
+<br />
+
+#### Scripting Atrium
+
+`ls`, `peek` and `send` are the headless surface: three primitives — list the
+fleet, read a screen, send a message — that let a script or an orchestrator agent
+drive Atrium without a TTY. None of them start the TUI, take its lock, or need a
+terminal.
+
+**`atrium ls`** prints a table; `--json` emits an array for `jq`. It reads stored
+state and never touches tmux, so it works with no tmux server running at all.
+
+```bash
+atrium ls
+atrium ls --json | jq -r '.[] | select(.status == "needs-input") | .title'
+```
+
+Status, diff figures and queue depth are **last-known** values recorded by the
+running TUI, not live probes. Each entry carries `updated_at` so a consumer can
+judge how stale they are; with no Atrium running they stop advancing.
+
+| Field | Notes |
+|-------|-------|
+| `title` | The session's identity, and what `peek`/`send` accept |
+| `display_name` | Cosmetic label; falls back to `title` |
+| `path`, `worktree`, `branch` | Repo path, isolated worktree, branch |
+| `status` | `running`, `ready`, `loading`, `paused`, `needs-input`, `pending` |
+| `program`, `model`, `permission_mode`, `effort`, `account` | What is running, and how |
+| `tmux_name` | The tmux session name, for scripts that want tmux directly |
+| `queued_prompts` | Prompts waiting to be delivered |
+| `auto_yes`, `direct`, `unread`, `note` | Session flags and annotation |
+| `created_at`, `updated_at` | RFC 3339, or `null` when unrecorded |
+| `diff` | `added`, `removed`, `files_changed`, `commits`, `behind`, `dirty`, and `unpushed` (`null` when not yet computed) |
+
+The schema evolves additively: fields may be added, never removed or repurposed.
+
+**`atrium peek`** captures a session's pane. It is read-only — it never attaches,
+sends keys, or otherwise disturbs the session — but it does need a live tmux
+server, so a paused session cannot be peeked.
+
+```bash
+atrium peek fix-auth              # the visible pane, as plain text
+atrium peek fix-auth --lines 200  # the last 200 lines, reaching into scrollback
+atrium peek fix-auth --color      # keep ANSI colors
+```
+
+**`atrium send`** queues a prompt. Delivery matches the TUI's own quick-send
+(`s`): the prompt reaches the agent strictly when it next goes idle, and is never
+injected mid-turn.
+
+```bash
+atrium send fix-auth "rebase onto main and re-run the tests"
+git log --oneline -5 | atrium send fix-auth -    # prompt from stdin
+atrium send fix-auth "ship it" --wait 30s        # block until it is queued
+```
+
+Delivery is **asynchronous**. `send` writes the message to a spool directory
+(`outbox/` in the data dir) and the running Atrium picks it up within about a
+second. It deliberately never writes `state.json`: that file has exactly one
+writer at any instant — the TUI, which holds `tui.lock` for its whole life, or
+the autoyes daemon in the window where no TUI is alive — and both rewrite it
+whole, so an outside append would be clobbered rather than merged.
+
+This makes `send` durable rather than conditional. With no Atrium running it
+warns on stderr and still exits 0: the message stays queued and is delivered the
+next time one starts. Pass `--wait` to block until it has actually been queued,
+and fail if it has not — including when Atrium picked the message up but could
+not deliver it, for instance because the session was killed in the meantime.
+
+Undelivered messages expire after 24 hours, on the grounds that a day-old prompt
+describes a tree that has moved on. Sending to a paused session is allowed — the
+queue is persisted, so the prompt waits for the resume.
+
+`ls` and `peek` only ever read: they will not create, rewrite, or clean up
+anything in the data directory, so running `atrium ls` on a loop alongside a live
+Atrium is safe.
+
+If a title exists in more than one repo, any of the three commands will report
+the ambiguity and list the candidates; `--path <repo>` picks one.
+
+All three exit 0 on success and 1 on failure, with the reason on stderr.
 
 <br />
 

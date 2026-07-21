@@ -1,0 +1,161 @@
+package main
+
+import (
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io/fs"
+	"os"
+	"path/filepath"
+	"strings"
+
+	"github.com/ZviBaratz/atrium/config"
+	"github.com/ZviBaratz/atrium/session"
+)
+
+// loadStoredInstances reads the persisted session list without touching tmux,
+// taking any lock, or writing anything at all.
+//
+// It deliberately does NOT call config.LoadState(). That helper is a loader, not
+// a reader, and every one of its side effects is hostile from a headless process
+// running beside a live TUI:
+//
+//   - it sweeps orphaned "<file>.tmp-*" files, which is exactly another
+//     process's in-flight atomic write — deleting one makes the owner's rename
+//     fail, silently losing that save
+//   - it creates state.json from defaults when the file is absent
+//   - it quarantines an unparseable file by renaming it to <file>.corrupt
+//
+// All three are right for the TUI, which owns the data dir and runs alone. None
+// are acceptable here: `atrium ls` in a watch loop is the advertised usage, so
+// this runs concurrently with a TUI's saves as a matter of routine.
+//
+// It also does not go through session.Storage.LoadInstances, which calls
+// reattach() on every instance and so probes the live tmux server. The cost of
+// reading the file directly is that everything here is last-known state, which
+// is why `ls` publishes updated_at.
+//
+// Reading unsynchronised is safe because every write commits by rename, so a
+// reader sees the previous file or the new one, never a torn mix.
+func loadStoredInstances() ([]session.InstanceData, error) {
+	dir, err := config.GetConfigDir()
+	if err != nil {
+		return nil, fmt.Errorf("failed to locate the data directory: %w", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(dir, config.StateFileName))
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			// No state file yet. That is a fleet with no sessions, not an error —
+			// and emphatically not a reason to create one.
+			return nil, nil
+		}
+		return nil, fmt.Errorf("failed to read %s: %w", config.StateFileName, err)
+	}
+
+	// Only the instance list is decoded. The rest of state.json is UI state that
+	// a headless command has no business parsing, and must not fail on.
+	var state struct {
+		Instances json.RawMessage `json:"instances"`
+	}
+	if err := json.Unmarshal(data, &state); err != nil {
+		return nil, fmt.Errorf("failed to parse %s: %w", config.StateFileName, err)
+	}
+	if len(state.Instances) == 0 {
+		return nil, nil
+	}
+
+	var instances []session.InstanceData
+	if err := json.Unmarshal(state.Instances, &instances); err != nil {
+		return nil, fmt.Errorf("failed to read stored sessions: %w", err)
+	}
+	return instances, nil
+}
+
+// resolveSession finds the one session a selector names.
+//
+// Identity is the (Title, Path) pair, not the title: titles are unique only
+// within a repo group, so the same title can legitimately exist in two repos —
+// which is why session.Storage matches instances on that pair too. When a
+// selector hits more than one, this reports every candidate rather than picking
+// one, and pathFilter (the --path flag) is how the caller breaks the tie.
+//
+// Matching runs in tiers and stops at the first tier that hits, so an exact name
+// always wins over a substring. Without that, a user with sessions "api" and
+// "api-v2" could never address "api" at all — it would be permanently ambiguous.
+func resolveSession(instances []session.InstanceData, selector, pathFilter string) (session.InstanceData, error) {
+	if len(instances) == 0 {
+		return session.InstanceData{}, fmt.Errorf("no sessions — run %s to create one", binName)
+	}
+	if strings.TrimSpace(selector) == "" {
+		return session.InstanceData{}, fmt.Errorf("no session named: give a session name (see `%s ls`)", binName)
+	}
+
+	pool := instances
+	if pathFilter != "" {
+		// Guarded, because filepath.Clean("") is "." — cleaning an unset flag
+		// would filter every session against the literal path "." and match none.
+		want := filepath.Clean(pathFilter)
+		pool = nil
+		for _, d := range instances {
+			if filepath.Clean(d.Path) == want {
+				pool = append(pool, d)
+			}
+		}
+		if len(pool) == 0 {
+			return session.InstanceData{}, fmt.Errorf("no sessions in %q (see `%s ls`)", pathFilter, binName)
+		}
+	}
+
+	lower := strings.ToLower(selector)
+	label := func(d session.InstanceData) string {
+		if d.DisplayName != "" {
+			return d.DisplayName
+		}
+		return d.Title
+	}
+
+	tiers := []func(session.InstanceData) bool{
+		func(d session.InstanceData) bool { return d.Title == selector },
+		func(d session.InstanceData) bool { return d.TmuxName == selector },
+		func(d session.InstanceData) bool {
+			return strings.EqualFold(d.Title, selector) || strings.EqualFold(label(d), selector)
+		},
+		func(d session.InstanceData) bool {
+			return strings.Contains(strings.ToLower(d.Title), lower) ||
+				strings.Contains(strings.ToLower(label(d)), lower)
+		},
+	}
+
+	for _, match := range tiers {
+		var hits []session.InstanceData
+		for _, d := range pool {
+			if match(d) {
+				hits = append(hits, d)
+			}
+		}
+		switch len(hits) {
+		case 0:
+			continue
+		case 1:
+			return hits[0], nil
+		default:
+			return session.InstanceData{}, ambiguousError(selector, hits)
+		}
+	}
+
+	if pathFilter != "" {
+		return session.InstanceData{}, fmt.Errorf("no session named %q in %q (see `%s ls`)", selector, pathFilter, binName)
+	}
+	return session.InstanceData{}, fmt.Errorf("no session named %q (see `%s ls`)", selector, binName)
+}
+
+func ambiguousError(selector string, hits []session.InstanceData) error {
+	var b strings.Builder
+	fmt.Fprintf(&b, "%q is ambiguous — it matches:", selector)
+	for _, d := range hits {
+		fmt.Fprintf(&b, "\n  %s  (%s)", d.Title, d.Path)
+	}
+	b.WriteString("\nuse --path to pick one")
+	return fmt.Errorf("%s", b.String())
+}
