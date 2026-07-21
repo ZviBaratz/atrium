@@ -278,6 +278,11 @@ func (m *home) applySettingChange(key string) tea.Cmd {
 		if err := tmux.Init(m.appConfig.TmuxConfigOverride, m.appConfig.GetSessionContextBar()); err != nil {
 			return m.handleError(err)
 		}
+	case "agent_oom_margin":
+		// Re-sync the process-wide default so sessions started from now on pick the
+		// change up; live sessions keep the margin baked into their launch command
+		// at birth (oom_score_adj is set once, before the agent execs).
+		tmux.SetAgentOOMMargin(m.appConfig.GetAgentOOMMargin())
 	case "auto_yes":
 		// In-TUI auto-accept is driven by each instance's AutoYes flag (the
 		// daemon only runs while the TUI is closed — main.go stops it before

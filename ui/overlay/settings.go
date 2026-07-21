@@ -171,6 +171,43 @@ func newSettingRows(cfg *config.Config) []settingRow {
 			},
 		},
 		{
+			key: "agent_oom_margin", section: "General", label: "Agent OOM margin", kind: kindInt,
+			description: "Linux only: raise each agent's oom_score_adj this far above the tmux server so a kill sheds one session, not all. Empty = on; 0 = off; N = margin.",
+			get: func(c *config.Config) string {
+				switch {
+				case c.AgentOOMMargin == nil:
+					return fmt.Sprintf("on (%d)", config.DefaultOOMMargin())
+				case *c.AgentOOMMargin < 1:
+					return "off"
+				default:
+					return strconv.Itoa(*c.AgentOOMMargin)
+				}
+			},
+			editGet: func(c *config.Config) string {
+				switch {
+				case c.AgentOOMMargin == nil:
+					return "" // empty selects the default margin (on)
+				case *c.AgentOOMMargin < 1:
+					return "0" // explicit disabled edits as 0
+				default:
+					return strconv.Itoa(*c.AgentOOMMargin)
+				}
+			},
+			set: func(c *config.Config, v string) error {
+				v = strings.TrimSpace(v)
+				if v == "" {
+					c.AgentOOMMargin = nil // default margin (on)
+					return nil
+				}
+				n, err := strconv.Atoi(v)
+				if err != nil || n < 0 {
+					return fmt.Errorf("agent OOM margin must be a non-negative number (0 = off, empty = on)")
+				}
+				c.AgentOOMMargin = &n // 0 = explicit off; positive = margin
+				return nil
+			},
+		},
+		{
 			key: "theme", section: "Appearance", label: "Theme", kind: kindEnum,
 			description: "UI color palette and border style.",
 			get: func(c *config.Config) string {
