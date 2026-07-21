@@ -612,7 +612,7 @@ added without a row here.
 | `os_chrome` | bool | `true` | fleet state in the terminal title + OSC 9;4 taskbar progress |
 | `record_prompt_history` | bool | `true` | remember submitted prompts for reuse in the create form and quick-send |
 | `mouse` | bool | `true` | mouse capture (clickable rows/tabs/hint bar, wheel, divider drag); `false` frees native select-to-copy |
-| `max_sessions` | int | unlimited | opt-in cap on concurrent sessions |
+| `max_sessions` | int | auto (½ CPU threads) | concurrent-session cap. Unset = host-aware soft cap that warns past it; `N` = hard cap; `0` = unlimited (no warning) |
 | `trust_worktrees_root` | bool | `false` | pre-accept Claude's workspace-trust for the worktrees root |
 | `carry_files` | array | `[".claude/settings.local.json"]` | gitignored files copied into each worktree ([Carried files](#carried-files)) |
 | `pr_create_draft` | bool | `true` | `c` opens a draft PR |

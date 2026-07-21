@@ -45,6 +45,7 @@ func assembleHome(
 		chrome:       chrome.New(os.Stdout, appConfig.GetOSChrome()),
 		notifySeen:   make(map[*session.Instance]*notifyState),
 		appConfig:    appConfig,
+		hostCap:      config.DefaultSessionCap(),
 		program:      program,
 		autoYes:      autoYes,
 		version:      version,

@@ -417,6 +417,21 @@ func (l *List) NumInstances() int {
 	return len(l.items)
 }
 
+// NumActiveInstances returns the number of live (non-Paused) sessions, ignoring
+// filtering and collapsed groups (like NumInstances). A Paused session has no
+// worktree and no agent process, so it imposes no host load; the host-aware soft
+// session cap counts only these live sessions. Loading and direct sessions do
+// count — both are already running (or starting) an agent.
+func (l *List) NumActiveInstances() int {
+	n := 0
+	for _, it := range l.items {
+		if !it.Paused() {
+			n++
+		}
+	}
+	return n
+}
+
 // InPanelBounds reports whether the mouse event lands within the list panel's
 // rendered box. Used to route wheel events to selection movement. False before
 // the first zone scan (zero ZoneInfo), so early frames route nowhere.

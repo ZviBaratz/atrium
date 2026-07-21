@@ -105,15 +105,6 @@ func (c *Config) GetCarryFiles() []string {
 	return c.CarryFiles
 }
 
-// GetMaxSessions returns the configured session cap, or 0 (no cap) for a nil
-// or non-positive value. Callers must treat 0 as unlimited.
-func (c *Config) GetMaxSessions() int {
-	if c.MaxSessions == nil || *c.MaxSessions < 1 {
-		return 0
-	}
-	return *c.MaxSessions
-}
-
 // Project-scan depth bounds (see Config.ProjectSearchDepth).
 const (
 	defaultProjectSearchDepth = 3

@@ -135,30 +135,38 @@ func newSettingRows(cfg *config.Config) []settingRow {
 		},
 		{
 			key: "max_sessions", section: "General", label: "Max sessions", kind: kindInt,
-			description: "Cap on concurrent sessions; empty or 0 means unlimited.",
+			description: "Concurrent-session cap. Empty = auto (host-derived, warns past it); 0 = unlimited; N = hard cap.",
 			get: func(c *config.Config) string {
-				if n := c.GetMaxSessions(); n > 0 {
-					return strconv.Itoa(n)
+				switch {
+				case c.MaxSessions == nil:
+					return fmt.Sprintf("auto (%d)", config.DefaultSessionCap())
+				case *c.MaxSessions < 1:
+					return "unlimited"
+				default:
+					return strconv.Itoa(*c.MaxSessions)
 				}
-				return "unlimited"
 			},
 			editGet: func(c *config.Config) string {
-				if n := c.GetMaxSessions(); n > 0 {
-					return strconv.Itoa(n)
+				switch {
+				case c.MaxSessions == nil:
+					return "" // empty selects the host-derived auto default
+				case *c.MaxSessions < 1:
+					return "0" // explicit unlimited edits as 0
+				default:
+					return strconv.Itoa(*c.MaxSessions)
 				}
-				return ""
 			},
 			set: func(c *config.Config, v string) error {
 				v = strings.TrimSpace(v)
-				if v == "" || v == "0" {
-					c.MaxSessions = nil
+				if v == "" {
+					c.MaxSessions = nil // auto (host-derived)
 					return nil
 				}
 				n, err := strconv.Atoi(v)
 				if err != nil || n < 0 {
-					return fmt.Errorf("max sessions must be a non-negative number")
+					return fmt.Errorf("max sessions must be a non-negative number (0 = unlimited, empty = auto)")
 				}
-				c.MaxSessions = &n
+				c.MaxSessions = &n // 0 = explicit unlimited; positive = hard cap
 				return nil
 			},
 		},

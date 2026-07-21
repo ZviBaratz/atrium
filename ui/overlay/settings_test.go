@@ -305,7 +305,24 @@ func TestSettingsOverlay_PollIntervalClampedToFloor(t *testing.T) {
 	assert.Equal(t, 1000, cfg.DaemonPollInterval)
 }
 
-func TestSettingsOverlay_MaxSessionsEmptyMeansUnlimited(t *testing.T) {
+// maxSessionsRow returns the rendered "Max sessions" row line (not the description
+// footer, which also mentions the words — asserting on Render() as a whole would be
+// satisfied by the description and never test the value).
+func maxSessionsRow(t *testing.T, o *SettingsOverlay) string {
+	t.Helper()
+	o.SetSize(80, 40)
+	for _, line := range strings.Split(stripANSI(o.Render()), "\n") {
+		if strings.Contains(line, "Max sessions") {
+			return line
+		}
+	}
+	t.Fatal("no \"Max sessions\" row in the render")
+	return ""
+}
+
+// Clearing the field to empty selects the host-derived "auto" default (nil), which
+// the row shows as "auto (N)" — not "unlimited" (that is now the explicit 0).
+func TestSettingsOverlay_MaxSessionsEmptyMeansAuto(t *testing.T) {
 	cfg := config.DefaultConfig()
 	five := 5
 	cfg.MaxSessions = &five
@@ -318,11 +335,30 @@ func TestSettingsOverlay_MaxSessionsEmptyMeansUnlimited(t *testing.T) {
 	}
 	_, changed := o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyEnter})
 	assert.Equal(t, "max_sessions", changed)
-	assert.Nil(t, cfg.MaxSessions, "an empty cap clears back to unlimited")
+	assert.Nil(t, cfg.MaxSessions, "an empty cap selects the host-derived auto default")
 
-	// And the row displays "unlimited" rather than an empty value.
-	o.SetSize(80, 40)
-	assert.Contains(t, stripANSI(o.Render()), "unlimited")
+	row := maxSessionsRow(t, o)
+	assert.Contains(t, row, "auto", "the row shows the auto default")
+	assert.NotContains(t, row, "unlimited", "auto is not unlimited")
+}
+
+// An explicit 0 is the "unlimited" escape hatch: it persists as a non-nil pointer
+// (distinct from auto) and the row shows "unlimited".
+func TestSettingsOverlay_MaxSessionsZeroMeansUnlimited(t *testing.T) {
+	cfg := config.DefaultConfig() // MaxSessions nil (auto)
+	o := NewSettingsOverlay(cfg)
+	settingsAt(t, o, "max_sessions")
+
+	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyEnter}) // edit (pre-filled empty for auto)
+	o.HandleKeyPress(keyRunes("0"))
+	_, changed := o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyEnter})
+	assert.Equal(t, "max_sessions", changed)
+	require.NotNil(t, cfg.MaxSessions, "explicit unlimited is a non-nil pointer, distinct from auto")
+	assert.Equal(t, 0, *cfg.MaxSessions)
+
+	row := maxSessionsRow(t, o)
+	assert.Contains(t, row, "unlimited")
+	assert.NotContains(t, row, "auto", "explicit unlimited is not the auto default")
 }
 
 func TestSettingsOverlay_TextEditCommits(t *testing.T) {
