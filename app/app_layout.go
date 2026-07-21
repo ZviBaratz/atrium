@@ -34,12 +34,12 @@ func (m *home) updateHandleWindowSizeEvent(msg tea.WindowSizeMsg) {
 
 	m.windowWidth, m.windowHeight = msg.Width, msg.Height
 
-	// The hint bar is contextual (see menuVisible): it claims a row only during the
-	// inline interactions where it carries unique information, and the panes reclaim
-	// that row during plain navigation and behind overlays. The error box likewise
-	// takes a row only while a notice is showing. Whichever rows are claimed, the
-	// composed frame is always exactly msg.Height tall and never floats in a
-	// centered band; transitions that flip menuVisible call recomputeLayout.
+	// The hint bar is contextual (see menuVisible): during plain navigation it always
+	// claims a row — blank when hint_bar is off, so a transient notice rides it with no
+	// reflow (#438) — and the panes reclaim that row only behind overlays. The error
+	// box likewise takes a row only while a notice is showing. Whichever rows are
+	// claimed, the composed frame is always exactly msg.Height tall and never floats in
+	// a centered band; transitions that flip menuVisible call recomputeLayout.
 	menuHeight := 0
 	if m.menuVisible() {
 		menuHeight = 1
