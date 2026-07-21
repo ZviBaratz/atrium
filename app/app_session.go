@@ -206,11 +206,14 @@ func (m *home) handleSmartDispatchSubmit(line string) tea.Cmd {
 		m.state = stateDefault
 		return nil
 	}
-	if limit := m.appConfig.GetMaxSessions(); limit > 0 && m.list.NumInstances() >= limit {
+	// Refuse only a hard (explicit) cap up front; a host-derived soft cap lets the
+	// route/form proceed and confirms at the actual create (autoDispatch below or the
+	// form submit).
+	if sc := m.sessionCap(); capVerdict(sc, m.list.NumInstances(), 1) == capBlock {
 		m.textInputOverlay = nil
 		m.state = stateDefault
 		return m.handleError(
-			fmt.Errorf("you can't create more than %d sessions (max_sessions in config.json)", limit))
+			fmt.Errorf("you can't create more than %d sessions (max_sessions in config.json)", sc.Limit))
 	}
 
 	// Refuse before routing when tmux is missing: no session can be created without
@@ -265,12 +268,14 @@ func (m *home) handleSmartDispatchSubmit(line string) tea.Cmd {
 	return tea.Batch(formCmd, m.runSmartDispatchCmd(line, candidates, m.textInputOverlay))
 }
 
-// autoDispatch creates a session directly from a confident match, returning (cmd, true)
-// on success. It returns (nil, false) when the target is invalid or the title would
-// collide, so the caller can fall back to the confirmation form. Because it bypasses the
-// form, the session launches with the agent's default permission mode — opting into
-// smart_dispatch_auto deliberately trades away the per-session permission choice the
-// form's Permissions chip would otherwise offer.
+// autoDispatch handles a confident match without the form, returning (cmd, true) when it
+// takes ownership of the line and (nil, false) when it declines — an invalid target or a
+// title collision — so the caller falls back to the confirmation form. Taking ownership
+// usually means the session is created directly, but crossing the host-derived soft cap
+// instead returns the confirmation command (still true): nothing is created until the
+// user accepts. Because it bypasses the form, the session launches with the agent's
+// default permission mode — opting into smart_dispatch_auto deliberately trades away the
+// per-session permission choice the form's Permissions chip would otherwise offer.
 func (m *home) autoDispatch(res PrefillResult) (tea.Cmd, bool) {
 	valid, direct, _ := targetValidity(m.ctx, res.Path)
 	if !valid {
@@ -279,6 +284,21 @@ func (m *home) autoDispatch(res PrefillResult) (tea.Cmd, bool) {
 	m.newSessionGroup = git.RepoGroupKey(m.ctx, res.Path)
 	if m.titleConflict(res.Title) != "" {
 		return nil, false
+	}
+	// Host-capacity gate for the formless auto-dispatch. A hard cap can't have been
+	// reached here (the pre-route guard refused it), but fall back to the form if it
+	// somehow is; a soft cap over budget confirms before creating.
+	sc := m.sessionCap()
+	count := m.capCount(sc)
+	switch capVerdict(sc, count, 1) {
+	case capBlock:
+		return nil, false
+	case capConfirm:
+		plan := spawnPlan{
+			titles: []string{res.Title}, path: res.Path, direct: direct,
+			programs: []string{m.program}, prompt: res.Prompt,
+		}
+		return m.confirmOverCap(plan, sc.Limit, count), true
 	}
 	cmd, err := m.startNewSession(res.Title, res.Path, direct, m.program, "", res.Prompt, nil, false)
 	if err != nil {
@@ -823,9 +843,11 @@ func (m *home) openCreateForm(focusTitle bool) tea.Cmd {
 // project). prefill, when non-nil, pre-fills the prompt/title and pre-selects the
 // project, and a confident prefill lands focus on Create rather than the title.
 func (m *home) openCreateFormSeeded(seedPath string, focusTitle bool, prefill *PrefillResult) tea.Cmd {
-	if limit := m.appConfig.GetMaxSessions(); limit > 0 && m.list.NumInstances() >= limit {
+	// A hard (explicit) cap refuses opening a form that could not be submitted; a
+	// host-derived soft cap lets the form open and confirms at submit instead.
+	if sc := m.sessionCap(); capVerdict(sc, m.list.NumInstances(), 1) == capBlock {
 		return m.handleError(
-			fmt.Errorf("you can't create more than %d sessions (max_sessions in config.json)", limit))
+			fmt.Errorf("you can't create more than %d sessions (max_sessions in config.json)", sc.Limit))
 	}
 
 	// Refuse to open the form when tmux is missing: every session runs inside tmux,
@@ -1023,9 +1045,10 @@ func composeProgramFlags(program, model, mode, effort string) (string, error) {
 
 const (
 	// maxVariantBatch caps how many sessions a single create-form submit may fan out
-	// to (#387). It is a sanity bound for when max_sessions is unset (unlimited); with
-	// a cap configured, GetMaxSessions is the tighter limit. The per-profile stepper is
-	// bounded too, but a multi-profile total is enforced here.
+	// to (#387) — a fixed sanity bound on one batch, independent of max_sessions. The
+	// effective session cap (SessionCap: the host-derived soft default or an explicit
+	// value) is enforced separately and is usually the tighter limit. The per-profile
+	// stepper is bounded too, but a multi-profile total is enforced here.
 	maxVariantBatch = 20
 	// variantTitleScan bounds how far past the requested count the suffix search
 	// probes for free <title>-N names, so a repo dense with orphan <title>-N branches
@@ -1084,9 +1107,11 @@ func (m *home) planVariantTitles(stem string, total int, path string, direct boo
 // entered prompt. A plain submit creates a single session; the variant control fans the
 // one prompt + base branch out across N sessions for a bake-off (#387) — which needs a git
 // target, since each variant wants its own worktree. The whole batch is validated up front —
-// a git target, title uniqueness, the max_sessions cap, the batch ceiling — and refused as a
-// unit before any session is created, so a rejected batch never spawns partially. Past
-// validation the sessions are created in a loop; a deep per-variant start failure (rare — the
+// a git target, title uniqueness, the session cap, the batch ceiling — before any session is
+// created, so a rejected batch never spawns partially. An explicit (hard) cap refuses an
+// over-budget batch outright; the host-derived soft cap instead confirms once and, on
+// acceptance, spawns via proceedOverCapMsg. Past validation the sessions are created in a
+// loop; a deep per-variant start failure (rare — the
 // pre-flight has cleared every checkable cause) closes the form and surfaces the error
 // alongside whatever variants did start. On a validation error it leaves the overlay open
 // (clearing the submitted flag) and surfaces the error so the user can correct the offending
@@ -1150,16 +1175,6 @@ func (m *home) createSessionFromForm(prompt string) tea.Cmd {
 		ov.SetVariantError(fmt.Sprintf("batch of %d exceeds the %d-session limit", total, maxVariantBatch))
 		return nil
 	}
-	if limit := m.appConfig.GetMaxSessions(); limit > 0 && m.list.NumInstances()+total > limit {
-		free := limit - m.list.NumInstances()
-		if free < 0 {
-			free = 0
-		}
-		ov.Submitted = false
-		ov.SetVariantError(fmt.Sprintf("batch needs %d but only %d of %d free (max_sessions)", total, free, limit))
-		return nil
-	}
-
 	// Allocate one unique title per variant before spawning any (AC2). A single
 	// session keeps the bare title (the pre-#387 contract); a batch derives
 	// <title>-1, <title>-2, … The conflict verdict surfaces inline on the title, with
@@ -1194,45 +1209,32 @@ func (m *home) createSessionFromForm(prompt string) tea.Cmd {
 		accountOverride = &acct
 	}
 
-	// Spawn each variant with the same prompt and base branch (AC1). Pre-flight has
-	// validated the cap and every title, so the loop cannot be interrupted by a cap or
-	// naming refusal mid-batch.
+	// Host-capacity gate, evaluated once for the whole batch now that every title and
+	// program has passed pre-flight. An explicit cap refuses an over-budget batch as a
+	// unit (unchanged); the host-derived soft cap instead asks once and, on confirm,
+	// spawns the staged plan via proceedOverCapMsg. An explicit "unlimited"
+	// (max_sessions ≤ 0) yields Limit 0 and never fires.
 	branch := ov.GetSelectedBranch()
-	cmds := make([]tea.Cmd, 0, total)
-	for i := range programs {
-		created, err := m.startNewSession(titles[i], path, direct, programs[i], branch, prompt, accountOverride, total > 1)
-		if err != nil {
-			ov.Submitted = false
-			if i == 0 {
-				// Nothing spawned yet — keep the form open so the user can correct and retry.
-				return m.handleError(err)
-			}
-			// Some variants are already live; a resubmit would double-spawn them, so
-			// close the form and surface this deep per-variant failure alongside the
-			// batch that did start. Those variants carry the boot prompt, so record it
-			// for reuse just as the all-succeeded path does.
-			m.recordPrompt(prompt)
-			m.textInputOverlay = nil
-			m.state = stateDefault
-			m.menu.SetState(ui.StateDefault)
-			m.resetTitleCheck()
-			return tea.Batch(append(cmds, m.handleError(err))...)
-		}
-		cmds = append(cmds, created)
+	plan := spawnPlan{
+		titles: titles, path: path, direct: direct, programs: programs,
+		branch: branch, prompt: prompt, account: accountOverride,
 	}
-	// The boot prompt is now committed to real sessions — record it once for reuse
-	// (a no-op for an empty prompt or when recording is disabled).
-	m.recordPrompt(prompt)
+	sc := m.sessionCap()
+	count := m.capCount(sc)
+	switch capVerdict(sc, count, total) {
+	case capBlock:
+		ov.Submitted = false
+		free := sc.Limit - count
+		if free < 0 {
+			free = 0
+		}
+		ov.SetVariantError(fmt.Sprintf("batch needs %d but only %d of %d free (max_sessions)", total, free, sc.Limit))
+		return nil
+	case capConfirm:
+		return m.confirmOverCap(plan, sc.Limit, count)
+	}
 
-	m.textInputOverlay = nil
-	m.stashedDraft = nil
-	// The form was submitted, so any persisted draft is now stale — drop it.
-	m.clearPersistedDraft()
-	m.state = stateDefault
-	m.menu.SetState(ui.StateDefault)
-	m.resetTitleCheck()
-
-	return tea.Batch(cmds...)
+	return m.spawnVariants(plan)
 }
 
 // startNewSession builds, registers, and starts a new session from already-validated
@@ -1395,26 +1397,35 @@ func (m *home) clearPersistedDraft() {
 	}
 }
 
+// stashDirtyCreateForm preserves a dirty create form as a restorable draft — in
+// memory (m.stashedDraft) and mirrored to disk — so a non-committing exit never
+// discards typed input. It backs every such exit: a deliberate Escape-to-check-
+// something and declining the host-capacity confirmation alike. Everything else
+// (a clean form, quick-send, smart-dispatch) leaves no stash, and the caller is
+// still responsible for clearing m.textInputOverlay afterward.
+func (m *home) stashDirtyCreateForm() {
+	if m.textInputOverlay == nil || !m.textInputOverlay.IsCreateForm() || !m.textInputOverlay.IsDirty() {
+		return
+	}
+	// Drop any pending "⌃R again" arm so it can't survive a Ctrl+C cancel (which
+	// bypasses the overlay's own disarm) and make the next single Ctrl+R a wipe.
+	m.textInputOverlay.DisarmClear()
+	// The stash reuses this very overlay, whose Canceled flag may have been set by the
+	// Escape that triggered it (or Submitted by the Ctrl+S that hit the cap). Clear the
+	// transient submit/cancel flags so the restored draft is a clean, submittable form —
+	// otherwise handlePromptState checks IsCanceled before IsSubmitted, so every later
+	// Enter/Ctrl+S on the restored form is misread as a cancel and the session is never
+	// created.
+	m.textInputOverlay.Canceled = false
+	m.textInputOverlay.Submitted = false
+	m.stashedDraft = m.textInputOverlay
+	// Mirror the stash to disk so it outlives a crash/quit before the reopen.
+	m.persistDraft(m.textInputOverlay)
+}
+
 // cancelPromptOverlay cancels the prompt overlay.
 func (m *home) cancelPromptOverlay() tea.Cmd {
-	// Keep a dirty create form as a draft so a deliberate Escape-to-check-something
-	// is non-destructive; everything else (clean form, quick-send, smart-dispatch)
-	// is discarded as before.
-	if m.textInputOverlay != nil && m.textInputOverlay.IsCreateForm() && m.textInputOverlay.IsDirty() {
-		// Drop any pending "⌃R again" arm so it can't survive a Ctrl+C cancel (which
-		// bypasses the overlay's own disarm) and make the next single Ctrl+R a wipe.
-		m.textInputOverlay.DisarmClear()
-		// The stash reuses this very overlay, whose Canceled flag was just set by the
-		// Escape that triggered this stash. Clear the transient submit/cancel flags so
-		// the restored draft is a clean, submittable form — otherwise handlePromptState
-		// checks IsCanceled before IsSubmitted, so every later Enter/Ctrl+S on the
-		// restored form is misread as a cancel and the session is never created.
-		m.textInputOverlay.Canceled = false
-		m.textInputOverlay.Submitted = false
-		m.stashedDraft = m.textInputOverlay
-		// Mirror the stash to disk so it outlives a crash/quit before the reopen.
-		m.persistDraft(m.textInputOverlay)
-	}
+	m.stashDirtyCreateForm()
 	m.textInputOverlay = nil
 	m.state = stateDefault
 	m.resetTitleCheck()

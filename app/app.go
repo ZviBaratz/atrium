@@ -407,6 +407,15 @@ type home struct {
 	// for a confirm action that should run off the UI thread. Empty means run the
 	// action inline (the legacy synchronous path). Set by confirmAsyncAction.
 	pendingConfirmBusyLabel string
+	// hostCap is the host-derived soft session cap (config.DefaultSessionCap() at
+	// construction). It is the Limit used when max_sessions is unset; a field rather
+	// than a live call so tests can pin it independent of the runner's CPU count.
+	hostCap int
+	// pendingOverCap holds the fully-resolved creation staged behind a host-capacity
+	// confirmation: crossing the soft cap opens a confirm whose acceptance emits
+	// proceedOverCapMsg, and Update then spawns this plan. Nil when no confirm is
+	// pending; consumed (set nil) when the plan is spawned.
+	pendingOverCap *spawnPlan
 	// quitRequested records that the user asked to quit while a session was still
 	// Loading. handleQuit defers the exit (a Loading session isn't yet persisted,
 	// so quitting would drop it); handleInstanceStarted re-invokes handleQuit once

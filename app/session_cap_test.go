@@ -27,15 +27,18 @@ func addStubInstances(t *testing.T, h *home, n int) {
 	}
 }
 
-// With no max_sessions configured there is no cap: creating session #13 (past
-// the old default of 10) must still open the create form.
-func TestOpenCreateForm_UnlimitedByDefault(t *testing.T) {
+// With no max_sessions configured the default cap is host-derived and *soft*: it
+// never blocks the form from opening (the confirmation happens at submit), so the
+// create form still opens even well past the derived cap. (test homes leave hostCap
+// at 0, so the soft cap here is effectively unlimited — the point is only that a
+// soft cap does not block at form-open.)
+func TestOpenCreateForm_SoftCapNeverBlocksFormOpen(t *testing.T) {
 	h := newCreateFormHome(t)
 	addStubInstances(t, h, 12)
 
 	h.handleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("n")})
 
-	assert.Equal(t, statePrompt, h.state, "no configured cap must not block creation")
+	assert.Equal(t, statePrompt, h.state, "a soft cap must not block the form from opening")
 	require.NotNil(t, h.textInputOverlay)
 	assert.True(t, h.textInputOverlay.IsCreateForm())
 }

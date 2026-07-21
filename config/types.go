@@ -238,9 +238,13 @@ type Config struct {
 	// shell or multiplexer owns the title; terminals that ignore the escapes show
 	// nothing either way.
 	OSChrome *bool `json:"os_chrome,omitempty"`
-	// MaxSessions is an opt-in cap on how many sessions can exist at once;
-	// creating one beyond it is rejected with an error in the UI. nil (or a
-	// non-positive value) means unlimited — there is no cap by default.
+	// MaxSessions caps concurrent sessions and has three states. nil (unset, the
+	// default) resolves to a host-derived soft cap — max(2, CPU threads/2) — which
+	// warns with a single confirmation when exceeded but does not block, so a fresh
+	// install degrades gracefully instead of oversubscribing the host. An explicit
+	// positive value is a hard cap: creating beyond it is refused in the UI. An
+	// explicit non-positive value (0) is "unlimited" — no cap and, being explicit,
+	// no warning (the escape hatch). See Config.SessionCap.
 	MaxSessions *int `json:"max_sessions,omitempty"`
 	// TrustWorktreesRoot, when true, pre-accepts Claude Code's workspace-trust
 	// dialog for the worktrees root in ~/.claude.json before sessions start.

@@ -321,6 +321,11 @@ var (
 				fmt.Print(gates)
 			}
 
+			// Host capacity: pure introspection (thread count + RAM), no subprocess and
+			// no config/tmux access, so it is safe beside a live TUI and needs no budget.
+			fmt.Println()
+			fmt.Print(doctor.RenderCapacity(doctor.CheckCapacity()))
+
 			if doctor.MissingRequired(deps) {
 				// Nonzero exit for CI/scripts. The root command already sets
 				// SilenceErrors/SilenceUsage, so main() prints just this message to

@@ -129,6 +129,15 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case smartDispatchDoneMsg:
 		return m.handleSmartDispatchDone(msg)
+	case proceedOverCapMsg:
+		// The user accepted the host-capacity confirmation: spawn the staged plan on
+		// the UI thread (AddInstance mutates shared model state).
+		if m.pendingOverCap == nil {
+			return m, nil
+		}
+		plan := *m.pendingOverCap
+		m.pendingOverCap = nil
+		return m, m.spawnVariants(plan)
 	case metadataUpdateDoneMsg:
 		// Drop results captured before a terminal attach ran (see home.attachGen):
 		// the keeper may have advanced those panes mid-attach, so replaying a stale
