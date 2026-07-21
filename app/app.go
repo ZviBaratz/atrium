@@ -552,12 +552,14 @@ func (m *home) View() string {
 		parts = append(parts, m.autoYesBanner(m.windowWidth))
 	}
 	parts = append(parts, listAndPreview)
-	// The hint bar and error box each claim a row only when they have something to
-	// show; otherwise the last visible component sits flush on the final row with no
-	// trailing blank line. (JoinVertical treats an empty string as a blank line, so
-	// an unused component must be omitted, not just rendered empty.) menuVisible and
-	// menuHeight in updateHandleWindowSizeEvent stay in lockstep so the row the menu
-	// occupies here is exactly the row the layout reserved for it.
+	// The hint bar claims a row whenever menuVisible (in plain navigation, always —
+	// blank when the bar is off, #438); the error box claims one only while a notice is
+	// showing. A component that claims no row is omitted entirely: JoinVertical treats
+	// an empty string as a blank line, so an unused component must be dropped, not
+	// rendered empty — whereas the reserved-but-quiet menu row renders a real blank
+	// line on purpose. menuVisible and menuHeight in updateHandleWindowSizeEvent stay
+	// in lockstep so the row the menu occupies here is exactly the row the layout
+	// reserved for it.
 	if m.menuVisible() {
 		parts = append(parts, m.menu.String())
 	}

@@ -93,13 +93,15 @@ func (m *home) hiddenNeighborNotice(scope string) string {
 	return "reorder won't swap past a folded " + scope + " (→ to expand)"
 }
 
-// showMenuNotice shows a transient toast on the hint bar's reserved row when the
-// bar is up, returning the command that auto-hides it; it returns nil (showing
-// nothing) when the row isn't available — the hint bar is off, or a modal owns
-// the screen. On success it clears any stale errBox fallback row so only one
-// surface ever carries a toast. Callers that have their own persistent fallback
-// for the row-unavailable case (the drift panel badge, the buffered update
-// notice) use this directly so they don't spill onto the errBox row (#287/#108).
+// showMenuNotice shows a transient toast on the hint bar's reserved row when that
+// row is available, returning the command that auto-hides it; it returns nil (showing
+// nothing) when it isn't — a modal overlay owns the screen (menuVisible false) or
+// there is no menu. In plain navigation the row is always reserved now, even with the
+// hint bar off (it renders blank — #438), so a notice rides it there rather than
+// falling back. On success it clears any stale errBox fallback row so only one surface
+// ever carries a toast. Callers that have their own persistent fallback for the
+// row-unavailable case (the drift panel badge, the buffered update notice) use this
+// directly so they don't spill onto the errBox row (#287/#108).
 func (m *home) showMenuNotice(text string, level ui.NoticeLevel) tea.Cmd {
 	if !m.menuVisible() || m.menu == nil {
 		return nil
@@ -115,10 +117,11 @@ func (m *home) showMenuNotice(text string, level ui.NoticeLevel) tea.Cmd {
 	return m.scheduleNoticeHide()
 }
 
-// flashNotice shows a transient toast on the hint bar's reserved row when the
-// bar is visible, else on the errBox's fallback row, styled by level. The toast
-// auto-hides after errToastDuration via scheduleNoticeHide. It is the single
-// chokepoint for menu-or-errBox fallback shared by handleError,
+// flashNotice shows a transient toast on the hint bar's reserved row when that row
+// is available (see showMenuNotice — in plain navigation it always is, blank bar
+// included), else on the errBox's fallback row when an overlay owns the screen,
+// styled by level. The toast auto-hides after errToastDuration via scheduleNoticeHide.
+// It is the single chokepoint for menu-or-errBox fallback shared by handleError,
 // handleInfoNotice, and warnMissingProgram (#287).
 func (m *home) flashNotice(text string, level ui.NoticeLevel) tea.Cmd {
 	if cmd := m.showMenuNotice(text, level); cmd != nil {
@@ -132,9 +135,10 @@ func (m *home) flashNotice(text string, level ui.NoticeLevel) tea.Cmd {
 	return m.scheduleNoticeHide()
 }
 
-// handleInfoNotice flashes a neutral acknowledgment ("branch copied"). When the
-// hint bar is up it rides the bar's reserved row; when the bar is off it falls
-// back to the errBox row (#287) rather than being dropped.
+// handleInfoNotice flashes a neutral acknowledgment ("branch copied"). It rides the
+// hint bar's reserved row, which stays reserved in plain navigation even with the bar
+// off (blank), so the ack shows without a reflow (#438) rather than being dropped
+// (#287); only behind an overlay does it fall back to the errBox row.
 func (m *home) handleInfoNotice(text string) tea.Cmd {
 	return m.flashNotice(text, ui.NoticeInfo)
 }

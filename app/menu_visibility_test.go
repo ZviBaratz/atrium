@@ -42,13 +42,15 @@ func TestMenuVisible_ByState(t *testing.T) {
 	}
 	h.actionInFlight = false
 
-	// hint_bar off: plain navigation goes chrome-free again, but a background
-	// name generation still claims the row, and inline interactions keep theirs.
+	// hint_bar off keeps the bottom row reserved in stateDefault (rendered blank,
+	// not absent — #438); a background name generation or inline interaction still
+	// fills that same row.
 	off := false
 	h.appConfig.HintBar = &off
 	h.state = stateDefault
 	h.generatingName = false
-	require.False(t, h.menuVisible(), "hint_bar=false restores clean navigation")
+	require.True(t, h.menuVisible(),
+		"the bottom row is always reserved in stateDefault; hint_bar off renders it blank, not absent (#438)")
 	h.generatingName = true
 	require.True(t, h.menuVisible(), "name-gen progress still claims its row with the bar off")
 	h.generatingName = false
@@ -75,15 +77,21 @@ func TestView_HintBarContextual(t *testing.T) {
 	h.menu.SetInstance(inst)
 	h.updateHandleWindowSizeEvent(tea.WindowSizeMsg{Width: 120, Height: 30})
 	require.Contains(t, h.View(), "kill", "default navigation renders the hint bar")
+	withBar := h.paneContentHeight()
 
-	// hint_bar off: plain navigation goes chrome-free.
+	// hint_bar off: plain navigation goes chrome-free. The bottom row stays reserved
+	// (so the panes don't grow), but it renders blank instead of the hints —
+	// assembleHome/applySettingChange seed menu.quiet from the setting.
 	off := false
 	h.appConfig.HintBar = &off
+	h.menu.SetQuiet(true)
 	h.updateHandleWindowSizeEvent(tea.WindowSizeMsg{Width: 120, Height: 30})
-	require.NotContains(t, h.View(), "kill", "hint_bar=false must not render the bar")
+	require.NotContains(t, h.View(), "kill", "hint_bar=false must not render the bar's hints")
+	require.Equal(t, withBar, h.paneContentHeight(),
+		"the reserved row keeps the panes the same height with the bar off (#438)")
 	on := true
 	h.appConfig.HintBar = &on
-
+	h.menu.SetQuiet(false)
 }
 
 // The first successful session start retires the welcome. This is the single

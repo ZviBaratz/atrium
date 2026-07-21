@@ -127,7 +127,13 @@ type Menu struct {
 	activeTab     int
 	notice        string
 	noticeLevel   NoticeLevel
-	contextHints  []keys.KeyName
+	// quiet blanks the always-on hint line (StateDefault/StateEmpty) so chrome-free
+	// mode (hint_bar off) keeps the reserved row but renders nothing on it. A notice
+	// still overrides the blank — it is checked first in String — and the contextual
+	// states (Filter/Visual/DiffComment/Busy/GeneratingName) still render, since they
+	// are forced visible to teach a gesture or report progress even with the bar off.
+	quiet        bool
+	contextHints []keys.KeyName
 	// busyText is the progress line shown in StateBusy ("pushing…", "resuming 5
 	// sessions…"), set by SetBusy while an action runs off the UI thread.
 	busyText string
@@ -236,6 +242,11 @@ func (m *Menu) SetNotice(text string, level NoticeLevel) {
 	m.notice = strings.Join(strings.Split(text, "\n"), "//")
 	m.noticeLevel = level
 }
+
+// SetQuiet toggles chrome-free rendering of the always-on hint line. The menu row
+// is still reserved by the layout (menuVisible stays true in stateDefault); quiet
+// only decides whether that reserved row shows the hints or a blank line.
+func (m *Menu) SetQuiet(quiet bool) { m.quiet = quiet }
 
 // ClearNotice restores the hint line.
 func (m *Menu) ClearNotice() {
@@ -366,6 +377,15 @@ func (m *Menu) String() string {
 			text = runewidth.Truncate(text, limit, "…")
 		}
 		return centerInBox(m.width, m.height, style.Render(text))
+	}
+
+	// Chrome-free: the reserved row (menuVisible stays true in stateDefault) renders
+	// blank instead of the hints. Only the always-on hint sets blank — the contextual
+	// states in the switch below (Filter/Visual/DiffComment/Busy/GeneratingName) are
+	// forced visible to teach a gesture or report progress, so they render even with
+	// the bar off.
+	if m.quiet && (m.state == StateDefault || m.state == StateEmpty) {
+		return centerInBox(m.width, m.height, "")
 	}
 
 	var line string

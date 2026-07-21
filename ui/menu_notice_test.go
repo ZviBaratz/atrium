@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/charmbracelet/lipgloss"
@@ -52,4 +53,30 @@ func TestMenu_NoticeTruncatesToWidth(t *testing.T) {
 	out := m.String()
 	require.Equal(t, 1, lipgloss.Height(out), "notice must stay a single row")
 	require.LessOrEqual(t, lipgloss.Width(out), 20, "notice must not exceed the menu width")
+}
+
+// quiet blanks the always-on hint sets so chrome-free mode (hint_bar off) keeps
+// the reserved row but shows nothing on it. A notice still overrides the blank,
+// and contextual states (Busy/…) still render — they carry unique info even with
+// the bar off.
+func TestMenu_QuietBlanksHintsNotNotices(t *testing.T) {
+	m := NewMenu()
+	m.SetSize(200, 1)
+	m.SetQuiet(true)
+
+	m.SetState(StateDefault)
+	require.Empty(t, strings.TrimSpace(m.String()), "quiet blanks the default hint line")
+	require.Equal(t, 1, lipgloss.Height(m.String()), "the reserved row is still exactly one line")
+
+	m.SetState(StateEmpty)
+	require.Empty(t, strings.TrimSpace(m.String()), "quiet blanks the empty hint line too")
+
+	// A notice overrides the blank.
+	m.SetNotice("branch copied", NoticeInfo)
+	require.Contains(t, m.String(), "branch copied", "a notice still shows despite quiet")
+	m.ClearNotice()
+
+	// Contextual states still render — they are forced visible even with the bar off.
+	m.SetBusy("pushing…")
+	require.Contains(t, m.String(), "pushing…", "busy progress renders despite quiet")
 }
