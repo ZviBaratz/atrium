@@ -1005,10 +1005,73 @@ func composeProgramFlags(program, model, mode, effort string) (string, error) {
 	return program, nil
 }
 
-// createSessionFromForm validates the submitted new-session form, creates the session,
-// adds it to the list, and starts it in the background with the entered prompt. On a
-// validation error it leaves the overlay open (clearing the submitted flag) and surfaces
-// the error so the user can correct the offending field.
+const (
+	// maxVariantBatch caps how many sessions a single create-form submit may fan out
+	// to (#387). It is a sanity bound for when max_sessions is unset (unlimited); with
+	// a cap configured, GetMaxSessions is the tighter limit. The per-profile stepper is
+	// bounded too, but a multi-profile total is enforced here.
+	maxVariantBatch = 20
+	// variantTitleScan bounds how far past the requested count the suffix search
+	// probes for free <title>-N names, so a repo dense with orphan <title>-N branches
+	// cannot loop unboundedly. Generous — the common case finds names immediately.
+	variantTitleScan = 100
+)
+
+// variantTitleConflict reports why candidate cannot be used as a new session title
+// in the current target group ("" = free). It is titleConflict plus the synchronous
+// local-branch-exists check the single-create submit runs, so every generated variant
+// title is validated to the same bar (an orphan branch from a killed session would
+// otherwise make a background Start fail late).
+func (m *home) variantTitleConflict(candidate, path string, direct bool) string {
+	if c := m.titleConflict(candidate); c != "" {
+		return c
+	}
+	if !direct {
+		branch := git.BranchNameForSession(m.appConfig.BranchPrefix, candidate)
+		if git.LocalBranchExists(m.ctx, path, branch) {
+			return fmt.Sprintf("branch %s exists in %s", branch, m.newSessionGroup)
+		}
+	}
+	return ""
+}
+
+// planVariantTitles allocates total unique session titles from stem for a batch (#387).
+// A single session keeps the bare stem — the pre-#387 contract, so an ordinary create is
+// unchanged. A batch of N derives stem-1, stem-2, … in ascending order, skipping any suffix
+// that collides with an existing session or an orphan branch in the target repo (the
+// candidates are distinct by construction, so no in-batch bookkeeping is needed). It returns
+// a non-empty conflict reason when the bare single title collides (mirroring the old inline
+// error) or the suffix search is exhausted; otherwise the titles and "".
+func (m *home) planVariantTitles(stem string, total int, path string, direct bool) ([]string, string) {
+	if total <= 1 {
+		if c := m.variantTitleConflict(stem, path, direct); c != "" {
+			return nil, c
+		}
+		return []string{stem}, ""
+	}
+	titles := make([]string, 0, total)
+	for n := 1; len(titles) < total && n <= total+variantTitleScan; n++ {
+		cand := fmt.Sprintf("%s-%d", stem, n)
+		if m.variantTitleConflict(cand, path, direct) != "" {
+			continue
+		}
+		titles = append(titles, cand)
+	}
+	if len(titles) < total {
+		return nil, fmt.Sprintf("couldn't find %d free names for %q", total, stem)
+	}
+	return titles, ""
+}
+
+// createSessionFromForm validates the submitted new-session form and spawns one or more
+// sessions from it, adding each to the list and starting it in the background with the
+// entered prompt. A plain submit creates a single session; the variant control fans the
+// one prompt + base branch out across N sessions for a bake-off (#387) — which needs a git
+// target, since each variant wants its own worktree. The whole batch is validated up front —
+// a git target, title uniqueness, the max_sessions cap, the batch ceiling — so it is
+// spawned in full or refused in full, never partially. On a validation error it leaves the
+// overlay open (clearing the submitted flag) and surfaces the error so the user can correct
+// the offending field.
 func (m *home) createSessionFromForm(prompt string) tea.Cmd {
 	ov := m.textInputOverlay
 
@@ -1035,19 +1098,53 @@ func (m *home) createSessionFromForm(prompt string) tea.Cmd {
 		return m.handleError(fmt.Errorf("%q is not a directory", path))
 	}
 
-	// Duplicate gate. Re-derive the group for the path actually being submitted
-	// (the picker may have moved without an async verdict landing yet), re-run
-	// the in-memory conflict checks, and re-verify branch existence synchronously
-	// — one local ref lookup — so a submit that beats the debounce can't slip
-	// through and die in the background Start. On conflict the form stays open
-	// with the inline error and focus on the title; no toast to miss.
+	// Re-derive the group for the path actually being submitted (the picker may
+	// have moved without an async verdict landing yet); title de-duplication and
+	// branch checks below scope to it.
 	m.newSessionGroup = git.RepoGroupKey(m.ctx, path)
-	conflict := m.titleConflict(title)
-	if conflict == "" && !direct {
-		if branch := git.BranchNameForSession(m.appConfig.BranchPrefix, title); git.LocalBranchExists(m.ctx, path, branch) {
-			conflict = fmt.Sprintf("branch %s exists in %s", branch, m.newSessionGroup)
-		}
+
+	// The variant multiset: one program string per session to spawn (#387). An
+	// untouched form yields a single default-program session, so the common path is
+	// unchanged; a fan-out batch repeats the one prompt + base branch across the
+	// chosen profiles for a side-by-side bake-off.
+	variants := ov.GetVariants()
+	if len(variants) == 0 {
+		variants = []string{m.program} // defensive: the stepper guarantees ≥1, but never spawn zero
 	}
+	total := len(variants)
+
+	// Whole-batch pre-flight (AC3): validate the entire batch up front and refuse it
+	// as a unit — never a partial spawn. The reason rides the variant control (an
+	// inline message visible with the form open; a toast is swallowed behind the modal).
+	ov.SetVariantError("")
+	// A batch needs worktree isolation so the variants don't clobber one another; a
+	// direct (non-git) session runs the agent in the target directory itself, so N of
+	// them would share it. Refuse a fan-out on a direct target (a single one is fine).
+	if direct && total > 1 {
+		ov.Submitted = false
+		ov.SetVariantError("fan-out needs a git repo (each variant needs its own worktree)")
+		return nil
+	}
+	if total > maxVariantBatch {
+		ov.Submitted = false
+		ov.SetVariantError(fmt.Sprintf("batch of %d exceeds the %d-session limit", total, maxVariantBatch))
+		return nil
+	}
+	if limit := m.appConfig.GetMaxSessions(); limit > 0 && m.list.NumInstances()+total > limit {
+		free := limit - m.list.NumInstances()
+		if free < 0 {
+			free = 0
+		}
+		ov.Submitted = false
+		ov.SetVariantError(fmt.Sprintf("batch needs %d but only %d of %d free (max_sessions)", total, free, limit))
+		return nil
+	}
+
+	// Allocate one unique title per variant before spawning any (AC2). A single
+	// session keeps the bare title (the pre-#387 contract); a batch derives
+	// <title>-1, <title>-2, … The conflict verdict surfaces inline on the title, with
+	// focus returned there — no toast to miss.
+	titles, conflict := m.planVariantTitles(title, total, path, direct)
 	if conflict != "" {
 		ov.Submitted = false
 		ov.SetTitleError(conflict)
@@ -1055,31 +1152,53 @@ func (m *home) createSessionFromForm(prompt string) tea.Cmd {
 		return nil
 	}
 
-	program := m.program
-	if p := ov.GetSelectedProgram(); p != "" {
-		program = p
-	}
-	// Fold the model and permission-mode overrides into the persisted program
-	// string, so launch, pause/resume, and the daemon all see them with no extra
-	// plumbing. composeProgramFlags re-validates each as a backstop behind the
-	// form's own gating (the fields are inert for non-claude programs, and the
-	// model field filters keystrokes to the valid charset).
-	program, err := composeProgramFlags(program, ov.GetModel(), ov.GetPermissionMode(), ov.GetEffort())
-	if err != nil {
-		ov.Submitted = false
-		return m.handleError(err)
+	// Pre-compose each variant's program so an invalid model/effort/mode override
+	// aborts the whole batch before any session is created. composeProgramFlags gates
+	// the claude overrides on each program independently, so a mixed batch (AC5)
+	// carries the flags on its claude sessions alone and leaves codex/aider variants
+	// untouched. The flags are folded into the persisted program string, so launch,
+	// pause/resume, and the daemon all see them with no extra plumbing.
+	model, mode, effort := ov.GetModel(), ov.GetPermissionMode(), ov.GetEffort()
+	programs := make([]string, total)
+	for i, vprog := range variants {
+		program, err := composeProgramFlags(vprog, model, mode, effort)
+		if err != nil {
+			ov.Submitted = false
+			return m.handleError(err)
+		}
+		programs[i] = program
 	}
 
 	var accountOverride *config.ClaudeAccount
 	if acct, ok := ov.GetSelectedAccount(); ok && acct.Name != "" {
 		accountOverride = &acct
 	}
-	created, err := m.startNewSession(title, path, direct, program, ov.GetSelectedBranch(), prompt, accountOverride)
-	if err != nil {
-		ov.Submitted = false
-		return m.handleError(err)
+
+	// Spawn each variant with the same prompt and base branch (AC1). Pre-flight has
+	// validated the cap and every title, so the loop cannot be interrupted by a cap or
+	// naming refusal mid-batch.
+	branch := ov.GetSelectedBranch()
+	cmds := make([]tea.Cmd, 0, total)
+	for i := range programs {
+		created, err := m.startNewSession(titles[i], path, direct, programs[i], branch, prompt, accountOverride)
+		if err != nil {
+			ov.Submitted = false
+			if i == 0 {
+				// Nothing spawned yet — keep the form open so the user can correct and retry.
+				return m.handleError(err)
+			}
+			// Some variants are already live; a resubmit would double-spawn them, so
+			// close the form and surface this deep per-variant failure alongside the
+			// batch that did start.
+			m.textInputOverlay = nil
+			m.state = stateDefault
+			m.menu.SetState(ui.StateDefault)
+			m.resetTitleCheck()
+			return tea.Batch(append(cmds, m.handleError(err))...)
+		}
+		cmds = append(cmds, created)
 	}
-	// The boot prompt is now committed to a real session — record it for reuse
+	// The boot prompt is now committed to real sessions — record it once for reuse
 	// (a no-op for an empty prompt or when recording is disabled).
 	m.recordPrompt(prompt)
 
@@ -1091,7 +1210,7 @@ func (m *home) createSessionFromForm(prompt string) tea.Cmd {
 	m.menu.SetState(ui.StateDefault)
 	m.resetTitleCheck()
 
-	return created
+	return tea.Batch(cmds...)
 }
 
 // startNewSession builds, registers, and starts a new session from already-validated

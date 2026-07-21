@@ -110,12 +110,11 @@ func (t *TextInputOverlay) HandleKeyPress(msg tea.KeyMsg) (bool, bool) {
 			t.directoryPicker.HandleKeyPress(msg)
 			return false, false
 		}
-		if t.isProfilePicker() {
-			switch msg.Type {
-			case tea.KeyLeft, tea.KeyRight, tea.KeyUp, tea.KeyDown:
-				t.profilePicker.HandleKeyPress(msg)
-				// The model and permission-mode overrides only apply to claude; keep
-				// their enabled state in step with the newly selected profile's agent.
+		if t.isVariantPicker() {
+			if t.variantPicker.HandleKeyPress(msg) {
+				// The model, effort, and permission-mode overrides only apply to claude;
+				// a count/profile change can flip whether any selected variant is claude,
+				// so keep those fields' enabled state in step.
 				t.syncClaudeFieldsEnabled()
 			}
 			return false, false

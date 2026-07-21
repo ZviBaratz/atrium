@@ -53,10 +53,9 @@ func TestCreateForm_EffortField_DisabledForNonClaudeProfile(t *testing.T) {
 		{Name: "aider", Program: "aider"},
 	}
 	ov := NewSessionCreateOverlay(profiles, nil, []string{t.TempDir()}, "claude")
-	ov.focusStop(stopProfile)
-	ov.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRight}) // claude -> aider
+	selectOnlyNonClaude(ov) // Claude ×0, Aider ×1 → no claude variant selected
 	if !ov.effortField.Disabled() {
-		t.Error("effort field should be disabled when a non-claude profile is selected")
+		t.Error("effort field should be disabled when no claude variant is selected")
 	}
 	if ov.GetEffort() != "" {
 		t.Errorf("disabled GetEffort() = %q, want \"\"", ov.GetEffort())

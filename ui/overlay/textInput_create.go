@@ -8,15 +8,14 @@ import (
 )
 
 // NewSessionCreateOverlay creates the unified new-session form: a title field, a prompt
-// textarea, a project (directory) picker, an optional profile picker (only when more than
-// one profile exists), an optional Claude model override (only when a selectable program
-// resolves to claude), and a branch picker. Focus starts on the project picker (the `N`
-// flow); the quick flow (`n`) moves it to the title via FocusTitle. Every section renders
-// at a constant height so the centered overlay does not jump as focus moves. dirCandidates
-// is the ordered list of candidate repo paths with the default/contextual target first.
-// defaultProgram is the program used when no profile is selected; with profiles present
-// the selected profile's program always wins (see createSessionFromForm), so the model
-// field keys its visibility and enabled state off the profiles instead.
+// textarea, a project (directory) picker, a variant (fan-out) control, an optional Claude
+// model override (only when a selectable program resolves to claude), and a branch picker.
+// Focus starts on the project picker (the `N` flow); the quick flow (`n`) moves it to the
+// title via FocusTitle. Every section renders at a constant height so the centered overlay
+// does not jump as focus moves. dirCandidates is the ordered list of candidate repo paths
+// with the default/contextual target first. defaultProgram is the fallback program when no
+// profiles are configured; with profiles present the variant control's selected programs
+// win (see createSessionFromForm), so the model field keys its visibility off the profiles.
 func NewSessionCreateOverlay(profiles []config.Profile, accounts []config.ClaudeAccount, dirCandidates []string, defaultProgram string) *TextInputOverlay {
 	ti := newTextarea("")
 	// The prompt is optional and auto-sent to the agent once the session boots, so say so.
@@ -24,9 +23,12 @@ func NewSessionCreateOverlay(profiles []config.Profile, accounts []config.Claude
 	bp := NewBranchPicker()
 	dp := NewDirectoryPicker(dirCandidates)
 
-	var pp *ProfilePicker
+	// The variant control is the #387 fan-out stepper: one count per profile, defaulting
+	// to a single session of the default profile. Always present (even with one profile,
+	// so claude ×N works) whenever there is a profile to spawn.
+	var vp *VariantPicker
 	if len(profiles) > 0 {
-		pp = NewProfilePicker(profiles)
+		vp = NewVariantPicker(profiles)
 	}
 
 	var ap *AccountPicker
@@ -65,8 +67,11 @@ func NewSessionCreateOverlay(profiles []config.Profile, accounts []config.Claude
 	// dependent claude overrides (model, effort, permission mode, in that order), and finally
 	// the optional Claude-account override.
 	stops := []focusStop{stopDirectory, stopBranch, stopTitle, stopTextarea}
-	if pp != nil && pp.HasMultiple() {
-		stops = append(stops, stopProfile)
+	if vp != nil {
+		// Always focusable (unlike the old single-select profile picker, which was
+		// skipped for a lone profile): the count stepper is useful even with one
+		// profile — that is how claude ×N is dialed with no profiles configured.
+		stops = append(stops, stopVariants)
 	}
 	if mf != nil {
 		stops = append(stops, stopModel)
@@ -87,7 +92,7 @@ func NewSessionCreateOverlay(profiles []config.Profile, accounts []config.Claude
 		titleInput:      newTitleInput(),
 		Title:           "New session",
 		directoryPicker: dp,
-		profilePicker:   pp,
+		variantPicker:   vp,
 		modelField:      mf,
 		modeField:       pmf,
 		effortField:     ef,
@@ -103,23 +108,23 @@ func NewSessionCreateOverlay(profiles []config.Profile, accounts []config.Claude
 }
 
 // syncClaudeFieldsEnabled re-derives the model, effort, and permission-mode fields'
-// enabled state from the effective program (the selected profile's program when a
-// picker exists, else the configured default). Called at construction and after
-// every profile-picker keypress.
+// enabled state from the variant selection: the overrides apply only where a session's
+// program is claude, so they stay live as long as the batch includes at least one claude
+// variant, and go inert (present-but-disabled) once it does not. Called at construction
+// and after every variant-control keypress.
 func (t *TextInputOverlay) syncClaudeFieldsEnabled() {
 	// The three fields are created together or not at all (see NewSessionCreateOverlay),
 	// so one presence check covers all of them.
 	if t.modelField == nil {
 		return
 	}
-	program := t.defaultProgram
-	if t.profilePicker != nil {
-		program = t.profilePicker.GetSelectedProfile().Program
+	includesClaude := agent.Resolve(t.defaultProgram).Key == agent.KeyClaude
+	if t.variantPicker != nil {
+		includesClaude = t.variantPicker.SelectedIncludesClaude()
 	}
-	disabled := agent.Resolve(program).Key != agent.KeyClaude
-	t.modelField.SetDisabled(disabled)
-	t.modeField.SetDisabled(disabled)
-	t.effortField.SetDisabled(disabled)
+	t.modelField.SetDisabled(!includesClaude)
+	t.modeField.SetDisabled(!includesClaude)
+	t.effortField.SetDisabled(!includesClaude)
 }
 
 // FocusTitle moves focus to the title field. The quick-create flow (`n`) calls
@@ -279,14 +284,39 @@ func (t *TextInputOverlay) GetSelectedBranch() string {
 	return t.branchPicker.GetSelectedBranch()
 }
 
-// GetSelectedProgram returns the program string from the selected profile.
-// Returns empty string if no profile picker is present.
-func (t *TextInputOverlay) GetSelectedProgram() string {
-	if t.profilePicker == nil {
+// GetVariants returns the flattened list of programs to spawn — one entry per
+// session, each profile's program repeated by its count in the variant control
+// (create form only). Falls back to a single default-program session when there is
+// no variant picker. The list is never empty (the stepper keeps a floor of one).
+func (t *TextInputOverlay) GetVariants() []string {
+	if t.variantPicker == nil {
+		return []string{t.defaultProgram}
+	}
+	return t.variantPicker.Variants()
+}
+
+// SetVariantError sets (or, with "", clears) the inline batch-validation message on
+// the variant control — used to refuse an over-cap or over-large batch while keeping
+// the form open, where a toast would be swallowed behind the modal. No-op without a
+// variant picker.
+func (t *TextInputOverlay) SetVariantError(msg string) {
+	if t.variantPicker != nil {
+		t.variantPicker.SetError(msg)
+	}
+}
+
+// VariantError returns the current inline batch-validation message on the variant
+// control ("" = none) — the counterpart to SetVariantError, mirroring TitleError.
+func (t *TextInputOverlay) VariantError() string {
+	if t.variantPicker == nil {
 		return ""
 	}
-	return t.profilePicker.GetSelectedProfile().Program
+	return t.variantPicker.errMsg
 }
+
+// FocusVariants moves focus to the variant (fan-out) control when present, mirroring
+// FocusTitle/FocusMode.
+func (t *TextInputOverlay) FocusVariants() { t.focusStop(stopVariants) }
 
 // GetModel returns the Claude model override typed into the model field, or ""
 // when no flag should be composed: the form has no model field, the field is

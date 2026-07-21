@@ -22,14 +22,16 @@ const (
 	// field and its divider, each picker's header/blank/divider, the prompt label and its
 	// divider, the help line, and the Create button. Used to size the form to the terminal.
 	formChromeLines = 18
-	// accountSectionLines is the height the account section adds when present, mirroring
-	// profileSectionLines (label + blank + options row + spacing).
+	// accountSectionLines is the height the account section adds when present
+	// (label + blank + options row + a divider).
 	accountSectionLines = 4
-	// profileSectionLines is the height the profile section adds when present (label + blank
-	// + the names row + a divider).
-	profileSectionLines = 4
-	// modelSectionLines is the height the model section adds when present, mirroring
-	// profileSectionLines (label + blank + input row + a divider).
+	// variantSectionLines is the height the variant section adds when present (label +
+	// blank + the profile-count row + a divider). The session total and any batch error
+	// ride the label line, not a separate row (see VariantPicker.Render), so this matches
+	// the other picker sections and the tallest claude form still fits 80×24.
+	variantSectionLines = 4
+	// modelSectionLines is the height the model section adds when present
+	// (label + blank + input row + a divider).
 	modelSectionLines = 4
 	// modeSectionLines is the height the permission-mode section adds when present,
 	// mirroring modelSectionLines (label + blank + chips row + a divider).
@@ -65,8 +67,8 @@ func (t *TextInputOverlay) SetSize(width, height int) {
 	if t.branchPicker != nil {
 		t.branchPicker.SetWidth(width - 6)
 	}
-	if t.profilePicker != nil {
-		t.profilePicker.SetWidth(width - 6)
+	if t.variantPicker != nil {
+		t.variantPicker.SetWidth(width - 6)
 	}
 	if t.modelField != nil {
 		t.modelField.SetWidth(width - 6)
@@ -84,8 +86,8 @@ func (t *TextInputOverlay) SetSize(width, height int) {
 func (t *TextInputOverlay) fitRows(height int) (pickerRows, promptRows int) {
 	pickerRows, promptRows = defaultPickerRows, defaultPromptRows
 	chrome := formChromeLines
-	if t.profilePicker != nil {
-		chrome += profileSectionLines
+	if t.variantPicker != nil {
+		chrome += variantSectionLines
 	}
 	if t.modelField != nil {
 		chrome += modelSectionLines
