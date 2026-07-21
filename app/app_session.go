@@ -119,21 +119,37 @@ type instanceStartedMsg struct {
 	// the prompt before it is handled, which would otherwise flip shouldAutoOpen and
 	// force-attach the user into this session the moment they detach.
 	hadPrompt bool
+	// fromBatch marks a session spawned as one variant of a multi-session fan-out
+	// (#387). Auto-attach is suppressed for a batch: attaching into one variant and
+	// then, on each detach, chaining through the rest would bury the list the bake-off
+	// is meant to be viewed from.
+	fromBatch bool
+}
+
+// autoAttachEligible is the pure auto-attach policy, independent of session liveness:
+// attach on the auto_attach flag, but never for a session created with a boot prompt
+// (hadPrompt — see shouldAutoOpen) and never for a fan-out variant (fromBatch — a
+// bake-off spawns N sessions from one submit; dropping the user into one and chaining
+// them through the rest on each detach is never what they want, so they should land on
+// the list). Split from shouldAutoOpen so the policy is unit-testable without a live
+// (Started/TmuxAlive) session.
+func (m *home) autoAttachEligible(hadPrompt, fromBatch bool) bool {
+	return m.appConfig.GetAutoAttach() && !hadPrompt && !fromBatch
 }
 
 // shouldAutoOpen reports whether a freshly started session should be attached
-// automatically. It is gated by the auto_attach config flag and skipped when the
-// session was created with an initial prompt (hadPrompt): delivery is asynchronous
-// (metadata tick), and while attached only the keeper delivers — which excludes the
-// attached session itself, so auto-opening it would starve its own prompt. The
-// creation-time flag, not the live Prompt(), is the signal: the keeper may already
-// have delivered and cleared the prompt while this message was parked. The
-// Started/TmuxAlive guards avoid attaching a
-// session that did not come up — and, because Started() short-circuits before
-// TmuxAlive() (which dereferences tmuxSession), keep unstarted instances (e.g. in
-// tests) off both the panic and the attach path.
-func (m *home) shouldAutoOpen(inst *session.Instance, hadPrompt bool) bool {
-	return m.appConfig.GetAutoAttach() && !hadPrompt && inst.Started() && inst.TmuxAlive()
+// automatically. It is the auto-attach policy (autoAttachEligible) gated by session
+// liveness. The policy is skipped when the session was created with an initial prompt
+// (hadPrompt): delivery is asynchronous (metadata tick), and while attached only the
+// keeper delivers — which excludes the attached session itself, so auto-opening it
+// would starve its own prompt. The creation-time flag, not the live Prompt(), is the
+// signal: the keeper may already have delivered and cleared the prompt while this
+// message was parked. The Started/TmuxAlive guards avoid attaching a session that did
+// not come up — and, because Started() short-circuits before TmuxAlive() (which
+// dereferences tmuxSession), keep unstarted instances (e.g. in tests) off both the
+// panic and the attach path.
+func (m *home) shouldAutoOpen(inst *session.Instance, hadPrompt, fromBatch bool) bool {
+	return m.autoAttachEligible(hadPrompt, fromBatch) && inst.Started() && inst.TmuxAlive()
 }
 
 // autoNameDoneMsg is sent when a background name generation completes. instance
@@ -264,7 +280,7 @@ func (m *home) autoDispatch(res PrefillResult) (tea.Cmd, bool) {
 	if m.titleConflict(res.Title) != "" {
 		return nil, false
 	}
-	cmd, err := m.startNewSession(res.Title, res.Path, direct, m.program, "", res.Prompt, nil)
+	cmd, err := m.startNewSession(res.Title, res.Path, direct, m.program, "", res.Prompt, nil, false)
 	if err != nil {
 		return nil, false
 	}
@@ -1068,10 +1084,13 @@ func (m *home) planVariantTitles(stem string, total int, path string, direct boo
 // entered prompt. A plain submit creates a single session; the variant control fans the
 // one prompt + base branch out across N sessions for a bake-off (#387) — which needs a git
 // target, since each variant wants its own worktree. The whole batch is validated up front —
-// a git target, title uniqueness, the max_sessions cap, the batch ceiling — so it is
-// spawned in full or refused in full, never partially. On a validation error it leaves the
-// overlay open (clearing the submitted flag) and surfaces the error so the user can correct
-// the offending field.
+// a git target, title uniqueness, the max_sessions cap, the batch ceiling — and refused as a
+// unit before any session is created, so a rejected batch never spawns partially. Past
+// validation the sessions are created in a loop; a deep per-variant start failure (rare — the
+// pre-flight has cleared every checkable cause) closes the form and surfaces the error
+// alongside whatever variants did start. On a validation error it leaves the overlay open
+// (clearing the submitted flag) and surfaces the error so the user can correct the offending
+// field.
 func (m *home) createSessionFromForm(prompt string) tea.Cmd {
 	ov := m.textInputOverlay
 
@@ -1113,9 +1132,10 @@ func (m *home) createSessionFromForm(prompt string) tea.Cmd {
 	}
 	total := len(variants)
 
-	// Whole-batch pre-flight (AC3): validate the entire batch up front and refuse it
-	// as a unit — never a partial spawn. The reason rides the variant control (an
-	// inline message visible with the form open; a toast is swallowed behind the modal).
+	// Whole-batch pre-flight (AC3): validate the entire batch up front and refuse it as
+	// a unit before any session is created — a rejected batch never spawns partially. The
+	// reason rides the variant control (an inline message visible with the form open; a
+	// toast is swallowed behind the modal).
 	ov.SetVariantError("")
 	// A batch needs worktree isolation so the variants don't clobber one another; a
 	// direct (non-git) session runs the agent in the target directory itself, so N of
@@ -1180,7 +1200,7 @@ func (m *home) createSessionFromForm(prompt string) tea.Cmd {
 	branch := ov.GetSelectedBranch()
 	cmds := make([]tea.Cmd, 0, total)
 	for i := range programs {
-		created, err := m.startNewSession(titles[i], path, direct, programs[i], branch, prompt, accountOverride)
+		created, err := m.startNewSession(titles[i], path, direct, programs[i], branch, prompt, accountOverride, total > 1)
 		if err != nil {
 			ov.Submitted = false
 			if i == 0 {
@@ -1189,7 +1209,9 @@ func (m *home) createSessionFromForm(prompt string) tea.Cmd {
 			}
 			// Some variants are already live; a resubmit would double-spawn them, so
 			// close the form and surface this deep per-variant failure alongside the
-			// batch that did start.
+			// batch that did start. Those variants carry the boot prompt, so record it
+			// for reuse just as the all-succeeded path does.
+			m.recordPrompt(prompt)
 			m.textInputOverlay = nil
 			m.state = stateDefault
 			m.menu.SetState(ui.StateDefault)
@@ -1218,7 +1240,7 @@ func (m *home) createSessionFromForm(prompt string) tea.Cmd {
 // the form-submit and smart-auto-dispatch paths: caller-supplied validation (title
 // conflict, target validity) must already have passed. accountOverride, when non-nil, is
 // an explicit Claude-account choice that wins over auto-routing.
-func (m *home) startNewSession(title, path string, direct bool, program, branch, prompt string, accountOverride *config.ClaudeAccount) (tea.Cmd, error) {
+func (m *home) startNewSession(title, path string, direct bool, program, branch, prompt string, accountOverride *config.ClaudeAccount, fromBatch bool) (tea.Cmd, error) {
 	instance, err := session.NewInstance(session.InstanceOptions{
 		Title:   title,
 		Path:    path,
@@ -1274,7 +1296,7 @@ func (m *home) startNewSession(title, path string, direct bool, program, branch,
 	startCmd := func() tea.Msg {
 		defer m.startWG.Done()
 		err := instance.Start(true)
-		return instanceStartedMsg{instance: instance, err: err, hadPrompt: prompt != ""}
+		return instanceStartedMsg{instance: instance, err: err, hadPrompt: prompt != "", fromBatch: fromBatch}
 	}
 	return tea.Batch(tea.WindowSize(), m.instanceChanged(), startCmd), nil
 }

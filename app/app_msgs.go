@@ -647,7 +647,7 @@ func (m *home) handleInstanceStarted(msg instanceStartedMsg) (tea.Model, tea.Cmd
 		m.menu.SetState(ui.StateDefault)
 	}
 
-	if m.shouldAutoOpen(msg.instance, msg.hadPrompt) {
+	if m.shouldAutoOpen(msg.instance, msg.hadPrompt, msg.fromBatch) {
 		// Drop straight into the new session, mirroring the KeyEnter attach path.
 		// Attach msg.instance directly rather than via m.list.Attach(): a background
 		// instanceStartedMsg from another freshly-created session could have moved

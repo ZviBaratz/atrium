@@ -1,12 +1,21 @@
 package overlay
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/ZviBaratz/atrium/config"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/stretchr/testify/assert"
 )
+
+// lastLine returns the final line of a rendered block — the chip row, below the label
+// line and the blank separator.
+func lastLine(s string) string {
+	lines := strings.Split(s, "\n")
+	return lines[len(lines)-1]
+}
 
 func vpProfiles() []config.Profile {
 	return []config.Profile{
@@ -91,6 +100,37 @@ func TestVariantPicker_CountChangeClearsError(t *testing.T) {
 	vp.SetError("too many")
 	vp.HandleKeyPress(key("+"))
 	assert.NotContains(t, vp.Render(), "too many")
+}
+
+// A generous width renders every chip on one line with no ellipsis marker.
+func TestVariantPicker_ChipRowFullWhenFits(t *testing.T) {
+	vp := NewVariantPicker(vpProfiles())
+	vp.SetWidth(200)
+	row := lastLine(vp.Render())
+	for _, name := range []string{"claude", "codex", "aider"} {
+		assert.Contains(t, row, name, "every chip is shown when the row fits")
+	}
+	assert.NotContains(t, row, "…", "no marker when nothing is clipped")
+}
+
+// When the width is too small for every chip, the row is windowed around the cursor:
+// it stays within the width, keeps the focused chip visible, and marks the clipped
+// ends with "…" — so a many-profile bake-off never overflows or hides the chip the
+// count keys act on.
+func TestVariantPicker_ChipRowWindowsAroundCursor(t *testing.T) {
+	vp := NewVariantPicker(vpProfiles()) // claude, codex, aider
+	vp.HandleKeyPress(key("right"))      // cursor -> codex (the middle chip)
+
+	// Just enough width for the cursor chip plus both "…" markers, but not a neighbor.
+	width := lipgloss.Width(vp.chipLabel(1)) + 8 // + two ellipses (1 each) + two separators (3 each)
+	vp.SetWidth(width)
+
+	row := lastLine(vp.Render())
+	assert.LessOrEqual(t, lipgloss.Width(row), width, "the chip row must fit the width")
+	assert.Contains(t, row, "codex", "the focused chip stays visible")
+	assert.Contains(t, row, "…", "clipped ends are marked with an ellipsis")
+	assert.NotContains(t, row, "claude", "an unaffordable neighbor is clipped")
+	assert.NotContains(t, row, "aider", "an unaffordable neighbor is clipped")
 }
 
 // Non-navigation keys are not consumed, so they fall through to the form.

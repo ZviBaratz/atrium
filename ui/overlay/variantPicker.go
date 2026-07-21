@@ -150,6 +150,9 @@ func vpDimStyle() lipgloss.Style      { return overlayDimStyle() }
 // overlay does not jump as focus moves — variantSectionLines in textInput_size.go must
 // match. Total and error ride the label line rather than a fourth row so the tallest
 // claude form (variants + model + effort + mode + accounts) still fits an 80×24 screen.
+// When the chip row would overflow the set width it is windowed around the cursor with
+// "…" markers, so the row keeps to one line and the focused chip — the one the count
+// keys act on — is always visible.
 func (vp *VariantPicker) Render() string {
 	var s strings.Builder
 	s.WriteString(vpLabelStyle().Render("Variants"))
@@ -167,23 +170,104 @@ func (vp *VariantPicker) Render() string {
 		}
 	}
 	s.WriteString("\n\n")
+	s.WriteString(vp.renderChips())
+	return s.String()
+}
 
-	for i, p := range vp.profiles {
-		// Prefix each profile with its agent's identity glyph (the same glyph the
-		// session list shows) so a mixed bake-off reads at a glance.
-		glyph, _ := theme.Current().AgentGlyph(string(agent.Resolve(p.Program).Key))
-		label := fmt.Sprintf(" %s %s ×%d ", glyph, p.Name, vp.counts[i])
-		switch {
-		case i == vp.cursor && vp.focused:
-			s.WriteString(vpSelectedStyle().Render(label))
-		case i == vp.cursor:
-			s.WriteString(label)
-		default:
-			s.WriteString(vpDimStyle().Render(label))
+// chipLabel is the plain (unstyled) text of profile i's chip: its agent glyph, name,
+// and count. Both the styled render and the width measurement for windowing derive from
+// this one form, so they can never disagree on a chip's width.
+func (vp *VariantPicker) chipLabel(i int) string {
+	// Prefix each profile with its agent's identity glyph (the same glyph the session
+	// list shows) so a mixed bake-off reads at a glance.
+	glyph, _ := theme.Current().AgentGlyph(string(agent.Resolve(vp.profiles[i].Program).Key))
+	return fmt.Sprintf(" %s %s ×%d ", glyph, vp.profiles[i].Name, vp.counts[i])
+}
+
+// styledChip renders profile i's chip: highlighted when it is the focused cursor, plain
+// when it is the cursor but the picker is blurred, dim otherwise.
+func (vp *VariantPicker) styledChip(i int) string {
+	label := vp.chipLabel(i)
+	switch {
+	case i == vp.cursor && vp.focused:
+		return vpSelectedStyle().Render(label)
+	case i == vp.cursor:
+		return label
+	default:
+		return vpDimStyle().Render(label)
+	}
+}
+
+// renderChips lays the profile chips out on one line, joined by " | ". With a width set
+// (SetWidth) and more chips than fit, it shows a contiguous window around the cursor
+// bracketed by "…" markers, so the row never overflows and the focused chip stays
+// visible. Width 0 (unsized, e.g. in unit tests) renders every chip.
+func (vp *VariantPicker) renderChips() string {
+	n := len(vp.profiles)
+	if n == 0 {
+		return ""
+	}
+	lo, hi := 0, n-1
+	if vp.width > 0 {
+		lo, hi = vp.chipWindow()
+	}
+	sep := vpDimStyle().Render(" | ")
+	ellipsis := vpDimStyle().Render("…")
+	parts := make([]string, 0, (hi-lo)+3)
+	if lo > 0 {
+		parts = append(parts, ellipsis)
+	}
+	for i := lo; i <= hi; i++ {
+		parts = append(parts, vp.styledChip(i))
+	}
+	if hi < n-1 {
+		parts = append(parts, ellipsis)
+	}
+	return strings.Join(parts, sep)
+}
+
+// chipWindow picks the widest contiguous run of chips that contains the cursor and fits
+// within width, accounting for the " | " separators and the "…" markers shown when
+// either end is clipped. It grows outward from the cursor, so the focused chip is always
+// in view — even when a single chip alone would overflow (the window can't shrink below
+// the cursor, and fitOverlay clips the overflow as a last resort).
+func (vp *VariantPicker) chipWindow() (int, int) {
+	n := len(vp.profiles)
+	const sepW, ellipsisW = 3, 1 // lipgloss.Width(" | ") and lipgloss.Width("…")
+	chipW := make([]int, n)
+	for i := range vp.profiles {
+		chipW[i] = lipgloss.Width(vp.chipLabel(i))
+	}
+	fits := func(lo, hi int) bool {
+		parts := hi - lo + 1
+		w := 0
+		for i := lo; i <= hi; i++ {
+			w += chipW[i]
 		}
-		if i < len(vp.profiles)-1 {
-			s.WriteString(vpDimStyle().Render(" | "))
+		if lo > 0 {
+			w += ellipsisW
+			parts++
+		}
+		if hi < n-1 {
+			w += ellipsisW
+			parts++
+		}
+		return w+sepW*(parts-1) <= vp.width
+	}
+	lo, hi := vp.cursor, vp.cursor
+	for {
+		grew := false
+		if hi < n-1 && fits(lo, hi+1) {
+			hi++
+			grew = true
+		}
+		if lo > 0 && fits(lo-1, hi) {
+			lo--
+			grew = true
+		}
+		if !grew {
+			break
 		}
 	}
-	return s.String()
+	return lo, hi
 }
