@@ -29,3 +29,30 @@ func acquireTUILock(path string) (release func(), err error) {
 	// Closing the descriptor releases the flock.
 	return func() { _ = f.Close() }, nil
 }
+
+// tuiRunning reports whether an interactive atrium currently holds tui.lock for
+// this data dir, by try-acquiring the lock and immediately releasing it.
+//
+// The answer is advisory and inherently racy: a TUI can start or exit the
+// instant after this returns. Callers must therefore use it only to phrase a
+// message, never to decide whether an operation is safe. `atrium send` is safe
+// either way — it never writes state.json, it only spools.
+//
+// known is false when the question could not be answered at all (an unresolvable
+// data dir, or a lock that cannot be opened), so a caller can stay silent rather
+// than assert something wrong.
+func tuiRunning() (running, known bool) {
+	path, err := tuiLockPath()
+	if err != nil {
+		return false, false
+	}
+	release, err := acquireTUILock(path)
+	if err != nil {
+		if errors.Is(err, errTUIAlreadyRunning) {
+			return true, true
+		}
+		return false, false
+	}
+	release()
+	return false, true
+}

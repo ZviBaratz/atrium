@@ -1257,9 +1257,14 @@ func (i *Instance) QueuePrompt(prompt string) {
 
 // QueueFollowupPrompt appends a follow-up (quick-send) prompt with a zero clock, so
 // promptDeliveryReady delivers it strictly when the agent next idles rather than
-// force-injecting it mid-turn. An empty prompt is a no-op. Safe because a follow-up
-// only ever targets a session past Loading — one that has idled at least once and so
-// will idle again.
+// force-injecting it mid-turn. An empty prompt is a no-op.
+//
+// The zero clock is what makes this safe, not any state of the target: idle-only
+// delivery holds whether or not the session has idled before. Quick-send targets
+// the selected (necessarily past-Loading) session, but the outbox drain
+// (app/outbox_drain.go) also queues here for a session that may still be starting
+// up — a prompt for one whose agent never idles simply waits in the queue,
+// cancelable, rather than being injected into a startup banner.
 func (i *Instance) QueueFollowupPrompt(prompt string) {
 	i.enqueue(prompt, time.Time{})
 }

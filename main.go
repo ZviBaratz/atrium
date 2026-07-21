@@ -40,7 +40,9 @@ var (
 	daemonFlag      bool
 	updateCheckOnly bool
 	verboseFlag     bool
-	binName         string
+	// binName is overwritten from os.Args[0] in main(); the default keeps help
+	// and error text sensible for any code path that reads it before then.
+	binName = "atrium"
 	// quitSignals is the set that drives a graceful shutdown. Registering SIGHUP
 	// is load-bearing: it overrides Go's default "terminate without running
 	// defers" disposition, so closing the terminal / losing SSH cancels the
@@ -442,7 +444,21 @@ func init() {
 	hookEventCmd.Flags().StringVar(&hookEventArg, "event", "", "hook event name (internal)")
 	hookEventCmd.Flags().StringVar(&hookStateFileArg, "state-file", "", "session status file path (internal)")
 
+	lsCmd.Flags().BoolVar(&lsJSONFlag, "json", false, "Emit machine-readable JSON instead of a table")
+
+	peekCmd.Flags().IntVar(&peekLinesFlag, "lines", 0,
+		"Number of lines to print, reaching into scrollback (default: the visible pane)")
+	peekCmd.Flags().BoolVar(&peekColorFlag, "color", false, "Keep ANSI color escapes in the output")
+	peekCmd.Flags().StringVar(&peekPathFlag, "path", "", "Repo path, to disambiguate a title used in more than one repo")
+
+	sendCmd.Flags().DurationVar(&sendWaitFlag, "wait", 0,
+		"Block until a running Atrium has queued the prompt, e.g. --wait 10s")
+	sendCmd.Flags().StringVar(&sendPathFlag, "path", "", "Repo path, to disambiguate a title used in more than one repo")
+
 	profilesCmd.AddCommand(profilesDetectCmd)
+	rootCmd.AddCommand(lsCmd)
+	rootCmd.AddCommand(peekCmd)
+	rootCmd.AddCommand(sendCmd)
 	rootCmd.AddCommand(debugCmd)
 	rootCmd.AddCommand(versionCmd)
 	rootCmd.AddCommand(resetCmd)
