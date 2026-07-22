@@ -118,6 +118,23 @@ func TestProjectScanDone_StaleGenerationDropped(t *testing.T) {
 	assert.Empty(t, h.scannedRepos)
 }
 
+// A walk that lands after the user switched the scan off must not deliver its
+// results: the settings panel can now disable the feature mid-session, and the
+// in-flight walk is the one path that could put repos back after the retire.
+func TestProjectScanDone_DroppedWhenDisabledMidFlight(t *testing.T) {
+	h := newCreateFormHome(t)
+	h.scanGen = 3
+	h.scanInFlight = true
+	h.appConfig.ProjectSearchDepth = intp(0)
+
+	_, _ = h.Update(projectScanDoneMsg{repos: []string{"/late"}, gen: 3})
+
+	assert.False(t, h.scanInFlight, "the walk did complete, so it is no longer in flight")
+	assert.Empty(t, h.scannedRepos, "a disabled scan's results must not surface")
+	persisted, _ := h.appState.GetScannedRepos()
+	assert.Empty(t, persisted, "nor be cached for the next launch")
+}
+
 // Depth 0 disables the feature: no scan command, ever.
 func TestStartProjectScan_DisabledByDepthZero(t *testing.T) {
 	h := newCreateFormHome(t)

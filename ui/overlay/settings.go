@@ -359,7 +359,7 @@ func newSettingRows(cfg *config.Config) []settingRow {
 		},
 		{
 			key: "project_search_roots", section: "Behavior", label: "Project scan roots", kind: kindText,
-			description: "Directories the background repo scan walks to stock the project picker; comma-separated, ~ allowed. A changed scope applies to the next scan.",
+			description: "Directories the background repo scan walks to stock the project picker; comma-separated, ~ allowed. A changed scope re-scans the next time the create form opens.",
 			get: func(c *config.Config) string {
 				return strings.Join(c.GetProjectSearchRoots(), ", ")
 			},
