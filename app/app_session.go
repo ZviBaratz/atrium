@@ -725,6 +725,12 @@ func (m *home) killInstances(insts []*session.Instance, message string) tea.Cmd 
 	// Kill is destructive, so it wears the danger border (confirmAction created
 	// m.confirmationOverlay synchronously above).
 	m.confirmationOverlay.SetBorderColor(theme.Current().Palette.Danger)
+	// Mirror confirmKill's double-tap shortcut: with kill_double_tap_confirm on,
+	// pressing the kill key again confirms the batch dialog, matching single-kill
+	// muscle memory (Ctrl+X Ctrl+X).
+	if m.appConfig.GetKillDoubleTapConfirm() {
+		m.confirmationOverlay.SetConfirmAltKey(keys.KillKey)
+	}
 	return cmd
 }
 

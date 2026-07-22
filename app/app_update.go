@@ -987,6 +987,9 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 			}
 			return m, m.instanceChanged()
 		}
+		if m.list.HasMultipleGroups() {
+			return m, m.handleInfoNotice("already collapsed")
+		}
 		return m, nil
 	case keys.KeyExpand:
 		if m.list.Expand() {
@@ -994,6 +997,9 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 				return m, m.handleError(err)
 			}
 			return m, m.instanceChanged()
+		}
+		if m.list.HasMultipleGroups() {
+			return m, m.handleInfoNotice("already expanded")
 		}
 		return m, nil
 	case keys.KeyCollapseAll:
