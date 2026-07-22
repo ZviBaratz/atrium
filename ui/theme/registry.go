@@ -65,6 +65,7 @@ func plainGlyphs() Glyphs {
 		Behind:        "⇣",
 		Dirty:         "*",
 		Note:          "✎",
+		Muted:         "⊘", // silenced-notifications marker (circled slash = "off")
 		Queued:        "↦", // plain-unicode "queued to send" marker
 		PR:            "⇄", // plain-unicode pull-request marker
 		AutoBadge:     "",  // text-only "AUTO" chip
@@ -118,6 +119,7 @@ func asciiGlyphs() Glyphs {
 	g.Behind = "v"
 	g.Dirty = "%"
 	g.Note = "#"
+	g.Muted = "x" // silenced-notifications marker (ascii floor)
 	g.Queued = ">"
 	g.PR = "&"
 	g.FoldOpen = "v"

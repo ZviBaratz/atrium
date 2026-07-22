@@ -59,6 +59,18 @@ func (m *home) maybeNotify(inst *session.Instance, old session.Status, prevUnrea
 		m.notifySeen[inst] = &notifyState{}
 		return
 	}
+	// While Atrium's terminal is focused the user is watching the fleet, so nothing
+	// notifies (unless notify_when_focused overrides it). This sits after the
+	// first-observation gate so notifySeen stays maintained while focused — the first
+	// edge after a blur isn't mistaken for a first observation — and before the
+	// throttle so a suppressed edge doesn't consume its budget. A terminal that never
+	// reports focus leaves m.focused false, so this never fires (AC #2).
+	if m.focused && !m.appConfig.GetNotifyWhenFocused() {
+		return
+	}
+	if inst.Muted() {
+		return // the user has silenced this session (M)
+	}
 	if inst == m.list.GetSelectedInstance() {
 		return // the user is already looking at this row
 	}

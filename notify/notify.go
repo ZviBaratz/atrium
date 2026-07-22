@@ -20,6 +20,7 @@ import (
 	"github.com/ZviBaratz/atrium/cmd"
 	"github.com/ZviBaratz/atrium/config"
 	"github.com/ZviBaratz/atrium/log"
+	"github.com/charmbracelet/x/ansi"
 )
 
 // notifyCommandTimeout bounds a single desktop-notification command. A notification
@@ -90,6 +91,8 @@ func (n *Notifier) Emit(mode, command, session string, ev Event) {
 	switch mode {
 	case config.NotificationsBell:
 		n.bell()
+	case config.NotificationsOSC:
+		n.osc(session, ev)
 	case config.NotificationsDesktop:
 		go n.desktop(command, session, ev)
 	}
@@ -101,6 +104,18 @@ func (n *Notifier) Emit(mode, command, session string, ev Event) {
 func (n *Notifier) bell() {
 	if _, err := io.WriteString(n.out, "\a"); err != nil {
 		log.WarningLog.Printf("notify: bell write failed: %v", err)
+	}
+}
+
+// osc writes an OSC 9 desktop notification to the TUI's stdout, naming the session in
+// the body. Like the bell it is a single synchronous write of an out-of-band control
+// string — it draws nothing in the cell grid, so it's alt-screen-safe — and because
+// the escape is emitted by the user's own terminal it reaches them over SSH with no
+// local notifier. Control characters in the body (a user-editable display name) are
+// folded so an embedded BEL/ST can't truncate the sequence.
+func (n *Notifier) osc(session string, ev Event) {
+	if _, err := io.WriteString(n.out, ansi.Notify(foldControls(ev.headline(session)))); err != nil {
+		log.WarningLog.Printf("notify: osc write failed: %v", err)
 	}
 }
 
@@ -171,11 +186,18 @@ func (n *Notifier) defaultCommand(ctx context.Context, goos, session string, ev 
 func osaQuote(s string) string {
 	s = strings.ReplaceAll(s, "\\", "\\\\")
 	s = strings.ReplaceAll(s, "\"", "\\\"")
-	s = strings.Map(func(r rune) rune {
+	return "\"" + foldControls(s) + "\""
+}
+
+// foldControls replaces every C0 control character and DEL with a space. A
+// display name is user-editable, so it may hold control bytes that would break a
+// single-line AppleScript literal or truncate an OSC control string at an embedded
+// BEL/ST; folding them keeps the generated sequence well-formed.
+func foldControls(s string) string {
+	return strings.Map(func(r rune) rune {
 		if r < 0x20 || r == 0x7f {
 			return ' '
 		}
 		return r
 	}, s)
-	return "\"" + s + "\""
 }

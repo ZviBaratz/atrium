@@ -13,6 +13,7 @@ import (
 	"github.com/ZviBaratz/atrium/session/tmux"
 	"github.com/ZviBaratz/atrium/ui"
 	"github.com/charmbracelet/bubbles/spinner"
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -149,6 +150,90 @@ func TestMaybeNotifySelectedSessionStaysSilent(t *testing.T) {
 	inst.SetStatus(session.Ready)
 	h.maybeNotify(inst, session.Running, time.Time{}, config.NotificationsBell)
 	require.Empty(t, buf.String(), "the selected session the user is watching never notifies")
+}
+
+// finishOnce marks the background target observed, then drives a genuine finish edge
+// and reports whatever maybeNotify wrote. Shared by the focus/mute gate tests.
+func finishOnce(h *home, target *session.Instance) {
+	h.maybeNotify(target, session.Running, time.Time{}, config.NotificationsBell) // observe (gate)
+	target.SetStatus(session.Ready)                                               // genuine finish edge
+	h.maybeNotify(target, session.Running, time.Time{}, config.NotificationsBell)
+}
+
+// TestMaybeNotifyFocusedStaysSilent covers AC #1: with the terminal focused, no
+// notification fires — even a genuine finish on a background session.
+func TestMaybeNotifyFocusedStaysSilent(t *testing.T) {
+	var buf bytes.Buffer
+	h, list := newNotifyHome(&buf)
+	h.focused = true
+	finishOnce(h, notifyTarget(t, list))
+	require.Empty(t, buf.String(), "a focused terminal notifies nothing")
+}
+
+// TestMaybeNotifyNotifiesAfterBlur covers AC #1's second half: the same edge notifies
+// once the terminal is blurred.
+func TestMaybeNotifyNotifiesAfterBlur(t *testing.T) {
+	var buf bytes.Buffer
+	h, list := newNotifyHome(&buf)
+	target := notifyTarget(t, list)
+
+	h.focused = true
+	finishOnce(h, target) // suppressed while focused
+	require.Empty(t, buf.String())
+
+	// Blur, then re-trigger a finish edge: now it rings.
+	h.focused = false
+	target.SetStatus(session.Running)
+	target.SetStatus(session.Ready)
+	h.maybeNotify(target, session.Running, time.Time{}, config.NotificationsBell)
+	require.Equal(t, "\a", buf.String(), "the edge notifies after blur")
+}
+
+// TestMaybeNotifyUnknownFocusNotifies covers AC #2: a terminal that never reports
+// focus (focused is never set true) behaves exactly like today — it notifies.
+func TestMaybeNotifyUnknownFocusNotifies(t *testing.T) {
+	var buf bytes.Buffer
+	h, list := newNotifyHome(&buf)
+	// h.focused is left at its zero value (false) — "no focus event yet" is never
+	// treated as focused, so notifications are never permanently silenced.
+	finishOnce(h, notifyTarget(t, list))
+	require.Equal(t, "\a", buf.String(), "unknown focus notifies, never permanent silence")
+}
+
+// TestMaybeNotifyFocusedWithNotifyWhenFocusedNotifies covers the escape hatch: with
+// notify_when_focused on, a focused terminal still notifies.
+func TestMaybeNotifyFocusedWithNotifyWhenFocusedNotifies(t *testing.T) {
+	var buf bytes.Buffer
+	h, list := newNotifyHome(&buf)
+	h.focused = true
+	h.appConfig.NotifyWhenFocused = true
+	finishOnce(h, notifyTarget(t, list))
+	require.Equal(t, "\a", buf.String(), "notify_when_focused overrides focus-gating")
+}
+
+// TestMaybeNotifyMutedStaysSilent covers AC #5: a muted session never notifies, even
+// on a genuine background finish edge.
+func TestMaybeNotifyMutedStaysSilent(t *testing.T) {
+	var buf bytes.Buffer
+	h, list := newNotifyHome(&buf)
+	target := notifyTarget(t, list)
+	target.SetMuted(true)
+	finishOnce(h, target)
+	require.Empty(t, buf.String(), "a muted session never notifies")
+}
+
+// TestFocusBlurMsgTogglesFocused covers the Update wiring: tea.FocusMsg/BlurMsg set and
+// clear m.focused.
+func TestFocusBlurMsgTogglesFocused(t *testing.T) {
+	var buf bytes.Buffer
+	h, _ := newNotifyHome(&buf)
+	require.False(t, h.focused, "starts unknown (not focused)")
+
+	h.Update(tea.FocusMsg{})
+	require.True(t, h.focused, "FocusMsg marks the terminal focused")
+
+	h.Update(tea.BlurMsg{})
+	require.False(t, h.focused, "BlurMsg marks it blurred")
 }
 
 // notifyTarget adds two instances and returns the one that is NOT selected, plus the

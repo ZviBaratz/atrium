@@ -224,6 +224,7 @@ in-app keymap and this section ever drift apart, so it stays complete.
 | `i` | smart new (describe it; auto-routes to a project) |
 | `R` | rename session (label only) |
 | `A` | auto-name session (via its agent) |
+| `M` | mute / unmute this session's notifications (see [Notifications](#notifications)) |
 | `/` | filter sessions (see [Filtering](#filtering)) |
 | `v` | multi-select: `space` marks, `p`/`r`/`x` act on the marked set |
 
@@ -364,9 +365,19 @@ session finishes a turn or blocks on a prompt. `notifications` selects how:
 - `"desktop"` — fires a desktop notification. With `notify_command` unset, Atrium
   uses a built-in per-OS notifier (`notify-send` on Linux, `terminal-notifier` or
   `osascript` on macOS); a missing notifier is a silent no-op.
+- `"osc"` — writes an OSC 9 desktop notification to Atrium's own stdout, so the
+  escape is emitted by **your** terminal and reaches you over SSH with no local
+  notifier binary. Supported by iTerm2, kitty, WezTerm, Ghostty, ConEmu, and foot;
+  terminals that don't recognize it simply show nothing.
 
 The session you're currently on — the selected row, or one you're attached to —
 never notifies, so only agents you've navigated away from can interrupt you.
+**While Atrium's terminal is focused nothing notifies at all** (you're already
+watching the fleet); set `notify_when_focused` to `true` to keep notifying even
+then. A terminal that doesn't report focus — a plain `tmux` without `focus-events
+on`, or one without DECSET 1004 — is never treated as focused, so it always
+notifies exactly as before. You can also **mute an individual session** with `M`;
+a muted session never notifies, and the mute persists across restarts.
 
 ```json
 {
@@ -381,7 +392,7 @@ never notifies, so only agents you've navigated away from can interrupt you.
 environment — the session name rides in the environment, never interpolated into
 the command, so it can't break argument parsing. Use it for `terminal-notifier`,
 webhooks (`curl`), or any custom notifier. A failing command is logged, never
-fatal. Both settings are also editable live from the Settings panel (`,`).
+fatal. These settings are also editable live from the Settings panel (`,`).
 
 #### Clipboard
 
@@ -630,8 +641,9 @@ added without a row here.
 | `session_sort` | string | `"creation"` | within-group order: `creation` / `status` |
 | `group_mode` | string | `"repo"` | list grouping: `repo` / `account` |
 | `smart_dispatch_auto` **†** | bool | `false` | let a confident `i` match create the session without the form |
-| `notifications` | string | `"off"` | background-session signal: `off` / `bell` / `desktop` ([Notifications](#notifications)) |
+| `notifications` | string | `"off"` | background-session signal: `off` / `bell` / `desktop` / `osc` (SSH-friendly OSC 9) ([Notifications](#notifications)) |
 | `notify_command` | string | built-in | shell command for `desktop` notifications ([Notifications](#notifications)) |
+| `notify_when_focused` | bool | `false` | keep notifying while Atrium's terminal is focused; `false` stays silent while you're watching ([Notifications](#notifications)) |
 
 ### FAQs
 

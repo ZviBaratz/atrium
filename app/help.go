@@ -124,6 +124,7 @@ func legendGroups() []legendGroup {
 		{"badges", []legendEntry{
 			{glyph: g.Queued, style: t.AccentStyle(), label: "queued"},
 			{glyph: g.Note, style: t.PurpleStyle(), label: "note"},
+			{glyph: g.Muted, style: t.DimStyle(), label: "muted"},
 			{glyph: g.Warn, style: t.AttentionStyle(), label: "stale"},
 			{glyph: g.AutoBadge, rendered: t.BadgeStyle().Render(" " + g.AutoBadge + "AUTO "), label: "auto-accepting"},
 		}},

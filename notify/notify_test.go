@@ -9,12 +9,14 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/ZviBaratz/atrium/cmd"
 	"github.com/ZviBaratz/atrium/config"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/stretchr/testify/require"
 )
 
@@ -50,6 +52,25 @@ func TestEmitBellWritesBEL(t *testing.T) {
 	n := New(&buf, &fakeExec{})
 	n.Emit(config.NotificationsBell, "", "sess", EventFinished)
 	require.Equal(t, "\a", buf.String())
+}
+
+func TestEmitOSCWritesOSC9(t *testing.T) {
+	var buf bytes.Buffer
+	n := New(&buf, &fakeExec{})
+	n.Emit(config.NotificationsOSC, "", "myagent", EventFinished)
+	// OSC 9 is written to the TUI's own stdout (like the bell) with the session named
+	// in the body, so it reaches the terminal over SSH and satisfies "names the session".
+	require.Equal(t, ansi.Notify("myagent finished"), buf.String())
+	require.True(t, strings.HasPrefix(buf.String(), "\x1b]9;"), "is an OSC 9 sequence")
+	require.Contains(t, buf.String(), "myagent finished")
+}
+
+func TestEmitOSCFoldsControlCharsInBody(t *testing.T) {
+	var buf bytes.Buffer
+	n := New(&buf, &fakeExec{})
+	// A display name with an embedded BEL would otherwise truncate the OSC sequence.
+	n.Emit(config.NotificationsOSC, "", "my\aagent", EventNeedsInput)
+	require.Equal(t, ansi.Notify("my agent needs input"), buf.String())
 }
 
 func TestEmitOffAndUnknownDoNothing(t *testing.T) {
