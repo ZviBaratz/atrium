@@ -450,6 +450,18 @@ func newSettingRows(cfg *config.Config) []settingRow {
 			},
 		},
 		{
+			key: "notifications_finished", section: "Behavior", label: "Finished turns", kind: kindEnum,
+			description: "A quieter signal for a finished turn than for a session blocking on you: same uses the Notifications mode for both, off leaves a finished turn to the list's unread marker alone, bell rings the terminal. Only the quieter rungs are offered, so a finished turn can never outrank a blocked session. Ignored while Notifications is off.",
+			get:         func(c *config.Config) string { return c.GetNotificationsFinished() },
+			set: func(c *config.Config, v string) error {
+				c.NotificationsFinished = v
+				return nil
+			},
+			options: func(c *config.Config) []string {
+				return []string{config.NotificationsSame, config.NotificationsOff, config.NotificationsBell}
+			},
+		},
+		{
 			key: "notify_command", section: "Behavior", label: "Notify command", kind: kindText,
 			description: "Shell command run for each desktop notification, with $ATRIUM_SESSION, $ATRIUM_STATUS, $ATRIUM_EVENT in its environment. Empty uses a built-in per-OS notifier.",
 			get: func(c *config.Config) string {

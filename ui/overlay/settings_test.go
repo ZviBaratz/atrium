@@ -70,6 +70,41 @@ func TestSettingsOverlay_NotificationsIncludesOSC(t *testing.T) {
 	assert.Contains(t, row.options(cfg), config.NotificationsOSC, "the notifications enum must offer osc")
 }
 
+// The finished-turn rung is reachable from the panel and offers ONLY the quieter rungs:
+// admitting desktop or osc here would let the panel configure a finished turn that is
+// louder than a session blocking on input, which is the one thing the ladder rules out.
+func TestSettingsOverlay_FinishedTurnsOffersOnlyQuieterRungs(t *testing.T) {
+	cfg := config.DefaultConfig()
+	var row settingRow
+	for _, r := range newSettingRows(cfg) {
+		if r.key == "notifications_finished" {
+			row = r
+		}
+	}
+	require.Equal(t, "notifications_finished", row.key, "settings panel should have a notifications_finished row")
+	require.Equal(t, []string{config.NotificationsSame, config.NotificationsOff, config.NotificationsBell}, row.options(cfg),
+		"only rungs at or below every notification mode may be offered")
+}
+
+// Cycling the finished-turn rung writes the config field and reports the row key so home
+// persists it.
+func TestSettingsOverlay_CycleFinishedTurns(t *testing.T) {
+	cfg := config.DefaultConfig()
+	o := NewSettingsOverlay(cfg)
+	settingsAt(t, o, "notifications_finished")
+
+	require.Equal(t, config.NotificationsSame, cfg.GetNotificationsFinished(), "defaults to following notifications")
+	_, changed := o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRight})
+	assert.Equal(t, "notifications_finished", changed, "a cycle must report its row key so home can persist")
+	assert.Equal(t, config.NotificationsOff, cfg.GetNotificationsFinished(), "same → off")
+
+	_, _ = o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRight})
+	assert.Equal(t, config.NotificationsBell, cfg.GetNotificationsFinished(), "off → bell")
+
+	_, _ = o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRight})
+	assert.Equal(t, config.NotificationsSame, cfg.GetNotificationsFinished(), "bell wraps back to same")
+}
+
 // The mouse off-switch is reachable from the panel (not JSON-only) and toggles
 // the default-on capture, so a user whose terminal's select-to-copy the capture
 // breaks can turn it off without hand-editing config.json.

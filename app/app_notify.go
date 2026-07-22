@@ -40,14 +40,31 @@ func notifyEventFor(old, current session.Status, unreadAdvanced bool) (notify.Ev
 	}
 }
 
+// notifyRungFor resolves which notification mode delivers ev — the attention ladder. A
+// session blocking on input always uses base (the configured mode), so it can never be
+// out-shouted by an agent that merely finished a turn; a finished turn may use a quieter
+// rung when the user configured one. The two rungs are named by *event* and never compared
+// with each other, so the ladder needs no ordering over the modes — which is what lets it
+// exist at all, since "one rung quieter than bell" would be silence and desktop and osc are
+// peers. finished is the normalized selector from config.GetNotificationsFinished, whose
+// restricted vocabulary is what keeps the finished rung from outranking base.
+func notifyRungFor(base, finished string, ev notify.Event) string {
+	if ev != notify.EventFinished || finished == config.NotificationsSame {
+		return base
+	}
+	return finished
+}
+
 // maybeNotify emits a notification for one instance's status transition, applying the
-// suppression rules: the startup replay, a focused terminal (unless notify_when_focused),
-// a muted session, and the selected/attached session all stay silent, and repeats of
-// the same edge are throttled. old/prevUnreadAt are snapshots taken immediately before
-// ApplyPaneState in applyMetadataResults; mode is the live config value (never off —
-// the caller gates on that). Runs on the main Update thread, so it
-// never fires while attached (the event loop is suspended) and never races the bell
-// write with the renderer beyond the documented single-BEL window.
+// suppression rules in order: the startup replay, a focused terminal (unless
+// notify_when_focused), a muted session, and the selected/attached session all stay
+// silent; a finished turn stays silent when a follow-up prompt is queued or when the
+// attention ladder puts its rung at off; and repeats of the same edge are throttled.
+// old/prevUnreadAt are snapshots taken immediately before ApplyPaneState in
+// applyMetadataResults; mode is the live configured mode (never off — the caller gates on
+// that), from which the ladder derives the rung actually emitted. Runs on the main Update
+// thread, so it never fires while attached (the event loop is suspended) and never races
+// the bell write with the renderer beyond the documented single-BEL window.
 func (m *home) maybeNotify(inst *session.Instance, old session.Status, prevUnreadAt time.Time, mode string) {
 	if m.notifier == nil {
 		return // hand-built test home without a notifier
@@ -89,10 +106,21 @@ func (m *home) maybeNotify(inst *session.Instance, old session.Status, prevUnrea
 	if ev == notify.EventFinished && (inst.Prompt() != "" || inst.PromptSending()) {
 		return
 	}
+	// The attention ladder picks WHICH signal fires, strictly downstream of every gate
+	// above, which decide WHETHER one does — a muted or focused session stays silent no
+	// matter how loud its rung. It sits ahead of the throttle so a rung the user silenced
+	// doesn't consume the edge's budget (same reasoning as the focus gate above), and the
+	// throttle stays keyed on the event rather than the resolved rung, so a block still
+	// rings when a finish moments earlier resolved to the same mode. An off rung is not
+	// silence: the list's unread marker still flags the row.
+	rung := notifyRungFor(mode, m.appConfig.GetNotificationsFinished(), ev)
+	if rung == config.NotificationsOff {
+		return
+	}
 	if st.throttled(ev) {
 		return
 	}
-	m.notifier.Emit(mode, m.appConfig.GetNotifyCommand(), inst.DisplayName(), ev)
+	m.notifier.Emit(rung, m.appConfig.GetNotifyCommand(), inst.DisplayName(), ev)
 }
 
 // throttled reports whether an edge of type ev fired too recently to signal again,
