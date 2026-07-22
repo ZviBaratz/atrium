@@ -1,9 +1,10 @@
-// Package notify emits an out-of-band signal — a terminal bell or an external
-// desktop-notification command — when a background session finishes a turn or
-// blocks on a prompt. Agents run inside Atrium's dedicated tmux server and the TUI
-// shows capture-pane content, so an agent's own bell never reaches the user's
-// terminal; Atrium emits its own here, on the TUI's real stdout (bell) or via a
-// spawned process (desktop).
+// Package notify emits an out-of-band signal — a terminal bell, an OSC 9 escape, or
+// an external desktop-notification command — when a background session finishes a
+// turn or blocks on a prompt. Agents run inside Atrium's dedicated tmux server and
+// the TUI shows capture-pane content, so an agent's own bell never reaches the user's
+// terminal; Atrium emits its own here, on the TUI's real stdout (bell, osc) or via a
+// spawned process (desktop). The two stdout modes cost nothing on a remote host: the
+// user's own terminal renders them, so they traverse SSH with no local notifier.
 package notify
 
 import (

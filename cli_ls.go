@@ -57,6 +57,7 @@ type sessionJSON struct {
 	AutoYes        bool       `json:"auto_yes"`
 	Direct         bool       `json:"direct"`
 	Unread         bool       `json:"unread"`
+	Muted          bool       `json:"muted"`
 	QueuedPrompts  int        `json:"queued_prompts"`
 	CreatedAt      *time.Time `json:"created_at"`
 	UpdatedAt      *time.Time `json:"updated_at"`
@@ -127,6 +128,7 @@ func toSessionJSON(d session.InstanceData) sessionJSON {
 		AutoYes:        d.AutoYes,
 		Direct:         d.Direct,
 		Unread:         d.Unread,
+		Muted:          d.Muted,
 		QueuedPrompts:  len(d.PromptQueue),
 		CreatedAt:      nilIfZero(d.CreatedAt),
 		UpdatedAt:      nilIfZero(d.UpdatedAt),

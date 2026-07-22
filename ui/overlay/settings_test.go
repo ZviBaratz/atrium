@@ -44,9 +44,6 @@ func TestSettingsOverlay_ToggleBool(t *testing.T) {
 	assert.True(t, cfg.GetAutoAttach())
 }
 
-// The mouse off-switch is reachable from the panel (not JSON-only) and toggles
-// the default-on capture, so a user whose terminal's select-to-copy the capture
-// breaks can turn it off without hand-editing config.json.
 // The focus-gate toggle is reachable from the panel (AC #4) and flips the
 // default-off notify_when_focused: on = keep notifying while focused.
 func TestSettingsOverlay_ToggleNotifyWhenFocused(t *testing.T) {
@@ -73,6 +70,9 @@ func TestSettingsOverlay_NotificationsIncludesOSC(t *testing.T) {
 	assert.Contains(t, row.options(cfg), config.NotificationsOSC, "the notifications enum must offer osc")
 }
 
+// The mouse off-switch is reachable from the panel (not JSON-only) and toggles
+// the default-on capture, so a user whose terminal's select-to-copy the capture
+// breaks can turn it off without hand-editing config.json.
 func TestSettingsOverlay_ToggleMouse(t *testing.T) {
 	cfg := config.DefaultConfig()
 	o := NewSettingsOverlay(cfg)

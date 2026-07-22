@@ -144,7 +144,7 @@ judge how stale they are; with no Atrium running they stop advancing.
 | `program`, `model`, `permission_mode`, `effort`, `account` | What is running, and how |
 | `tmux_name` | The tmux session name, for scripts that want tmux directly |
 | `queued_prompts` | Prompts waiting to be delivered |
-| `auto_yes`, `direct`, `unread`, `note` | Session flags and annotation |
+| `auto_yes`, `direct`, `unread`, `muted`, `note` | Session flags and annotation |
 | `created_at`, `updated_at` | RFC 3339, or `null` when unrecorded |
 | `diff` | `added`, `removed`, `files_changed`, `commits`, `behind`, `dirty`, and `unpushed` (`null` when not yet computed) |
 

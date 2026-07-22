@@ -41,10 +41,11 @@ func notifyEventFor(old, current session.Status, unreadAdvanced bool) (notify.Ev
 }
 
 // maybeNotify emits a notification for one instance's status transition, applying the
-// suppression rules: the selected/attached session and the startup replay stay silent,
-// and repeats of the same edge are throttled. old/prevUnreadAt are snapshots taken
-// immediately before ApplyPaneState in applyMetadataResults; mode is the live config
-// value (never off — the caller gates on that). Runs on the main Update thread, so it
+// suppression rules: the startup replay, a focused terminal (unless notify_when_focused),
+// a muted session, and the selected/attached session all stay silent, and repeats of
+// the same edge are throttled. old/prevUnreadAt are snapshots taken immediately before
+// ApplyPaneState in applyMetadataResults; mode is the live config value (never off —
+// the caller gates on that). Runs on the main Update thread, so it
 // never fires while attached (the event loop is suspended) and never races the bell
 // write with the renderer beyond the documented single-BEL window.
 func (m *home) maybeNotify(inst *session.Instance, old session.Status, prevUnreadAt time.Time, mode string) {
