@@ -44,6 +44,32 @@ func TestSettingsOverlay_ToggleBool(t *testing.T) {
 	assert.True(t, cfg.GetAutoAttach())
 }
 
+// The focus-gate toggle is reachable from the panel (AC #4) and flips the
+// default-off notify_when_focused: on = keep notifying while focused.
+func TestSettingsOverlay_ToggleNotifyWhenFocused(t *testing.T) {
+	cfg := config.DefaultConfig()
+	o := NewSettingsOverlay(cfg)
+	settingsAt(t, o, "notify_when_focused")
+
+	require.False(t, cfg.GetNotifyWhenFocused(), "focus-gating is on by default (silent while focused)")
+	_, changed := o.HandleKeyPress(tea.KeyMsg{Type: tea.KeySpace})
+	assert.Equal(t, "notify_when_focused", changed, "a toggle must report its row key so home can persist")
+	assert.True(t, cfg.GetNotifyWhenFocused(), "space turns notify-while-focused on")
+}
+
+// The notifications enum offers the SSH-friendly osc mode (AC #4).
+func TestSettingsOverlay_NotificationsIncludesOSC(t *testing.T) {
+	cfg := config.DefaultConfig()
+	var row settingRow
+	for _, r := range newSettingRows(cfg) {
+		if r.key == "notifications" {
+			row = r
+		}
+	}
+	require.Equal(t, "notifications", row.key)
+	assert.Contains(t, row.options(cfg), config.NotificationsOSC, "the notifications enum must offer osc")
+}
+
 // The mouse off-switch is reachable from the panel (not JSON-only) and toggles
 // the default-on capture, so a user whose terminal's select-to-copy the capture
 // breaks can turn it off without hand-editing config.json.

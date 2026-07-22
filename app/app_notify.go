@@ -41,10 +41,11 @@ func notifyEventFor(old, current session.Status, unreadAdvanced bool) (notify.Ev
 }
 
 // maybeNotify emits a notification for one instance's status transition, applying the
-// suppression rules: the selected/attached session and the startup replay stay silent,
-// and repeats of the same edge are throttled. old/prevUnreadAt are snapshots taken
-// immediately before ApplyPaneState in applyMetadataResults; mode is the live config
-// value (never off — the caller gates on that). Runs on the main Update thread, so it
+// suppression rules: the startup replay, a focused terminal (unless notify_when_focused),
+// a muted session, and the selected/attached session all stay silent, and repeats of
+// the same edge are throttled. old/prevUnreadAt are snapshots taken immediately before
+// ApplyPaneState in applyMetadataResults; mode is the live config value (never off —
+// the caller gates on that). Runs on the main Update thread, so it
 // never fires while attached (the event loop is suspended) and never races the bell
 // write with the renderer beyond the documented single-BEL window.
 func (m *home) maybeNotify(inst *session.Instance, old session.Status, prevUnreadAt time.Time, mode string) {
@@ -58,6 +59,18 @@ func (m *home) maybeNotify(inst *session.Instance, old session.Status, prevUnrea
 		// batch of restored NeedsInput/Ready sessions can't ring on launch.
 		m.notifySeen[inst] = &notifyState{}
 		return
+	}
+	// While Atrium's terminal is focused the user is watching the fleet, so nothing
+	// notifies (unless notify_when_focused overrides it). This sits after the
+	// first-observation gate so notifySeen stays maintained while focused — the first
+	// edge after a blur isn't mistaken for a first observation — and before the
+	// throttle so a suppressed edge doesn't consume its budget. A terminal that never
+	// reports focus leaves m.focused false, so this never fires (AC #2).
+	if m.focused && !m.appConfig.GetNotifyWhenFocused() {
+		return
+	}
+	if inst.Muted() {
+		return // the user has silenced this session (M)
 	}
 	if inst == m.list.GetSelectedInstance() {
 		return // the user is already looking at this row

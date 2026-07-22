@@ -42,6 +42,7 @@ func TestGlobalKeyStringsMap_GoldenInventory(t *testing.T) {
 		"ctrl+x":     KeyKill,
 		"R":          KeyRename,
 		"A":          KeyAutoName,
+		"M":          KeyMute,
 		"s":          KeyQuickSend,
 		"C":          KeyDiffComment,
 		"Q":          KeyQueue,
