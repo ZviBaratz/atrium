@@ -167,3 +167,54 @@ func TestColorizeDiff_SinglePlusAndMinus(t *testing.T) {
 		}
 	}
 }
+
+// The colorizeDiff half of the issue #435 fix: "---divider"/"+++banner" collide
+// with the "--- a/x" and "+++ b/x" file-header prefixes, and only position tells
+// them apart — the headers appear between "diff --git" and the first "@@", the
+// content lines only inside a hunk. Both readings must survive in one diff, so
+// this pins the header rows as meta *and* the in-hunk rows as del/add. Comparing
+// against the styles themselves (rather than "is it styled at all") is what
+// discriminates a deletion from metadata; both are styled.
+func TestColorizeDiff_DashDashContentInHunk(t *testing.T) {
+	defer theme.Set("unicode")()
+	forceColorProfile(t)
+
+	// The second file is what pins the "diff --git" reset: its headers follow a
+	// hunk, so they only read as metadata if the boundary cleared the in-hunk state.
+	in := []string{
+		"diff --git a/x.go b/x.go",
+		"--- a/x.go",
+		"+++ b/x.go",
+		"@@ -1,3 +1,3 @@",
+		" ctx",
+		"---divider",
+		"+++banner",
+		"diff --git a/y.go b/y.go",
+		"--- a/y.go",
+		"+++ b/y.go",
+		"@@ -1 +1 @@",
+		"-gone",
+	}
+	// The "diff --git" header expands to a rule row plus the bold path, so output
+	// rows run one ahead of input rows from index 1 on.
+	out := strings.Split(colorizeDiff(strings.Join(in, "\n"), 80), "\n")
+
+	for _, tc := range []struct {
+		outIdx int
+		text   string
+		want   string
+		why    string
+	}{
+		{2, "--- a/x.go", metaStyle().Render("--- a/x.go"), "pre-hunk file header stays metadata"},
+		{3, "+++ b/x.go", metaStyle().Render("+++ b/x.go"), "pre-hunk file header stays metadata"},
+		{6, "---divider", deletionStyle().Render("---divider"), "in-hunk '---' line is a deletion"},
+		{7, "+++banner", additionStyle().Render("+++banner"), "in-hunk '+++' line is an addition"},
+		{10, "--- a/y.go", metaStyle().Render("--- a/y.go"), "next file's header is metadata again"},
+		{11, "+++ b/y.go", metaStyle().Render("+++ b/y.go"), "next file's header is metadata again"},
+		{13, "-gone", deletionStyle().Render("-gone"), "the following hunk still colors deletions"},
+	} {
+		if out[tc.outIdx] != tc.want {
+			t.Errorf("%q: %s — got %q, want %q", tc.text, tc.why, out[tc.outIdx], tc.want)
+		}
+	}
+}
