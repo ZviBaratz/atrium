@@ -4,6 +4,8 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/ZviBaratz/atrium/config"
+	"github.com/ZviBaratz/atrium/keys"
 	"github.com/ZviBaratz/atrium/ui"
 	"github.com/ZviBaratz/atrium/ui/theme"
 
@@ -179,4 +181,52 @@ func TestBatchKill_SummaryNamesFailures(t *testing.T) {
 func TestBatchKill_SummaryEmptyOnAllSuccess(t *testing.T) {
 	msg := batchKillDoneMsg{killed: 4}
 	assert.Empty(t, msg.summary())
+}
+
+// The batch dialog's double-tap must echo the key that opened it. Visual mode
+// advertises plain x and accepts ctrl+x, so a hard-coded chord printed "(or ctrl+x)"
+// at a user who pressed x — and left x x stalling, which is the muscle memory the
+// double-tap exists to serve.
+func TestMultiSelect_KillDoubleTapEchoesTheOpeningKey(t *testing.T) {
+	openWith := func(t *testing.T, open func(*home)) *home {
+		t.Helper()
+		h := newCreateFormHome(t)
+		a := addActive(t, h, "alpha")
+		pressRune(h, 'v')
+		h.list.ToggleMark(a)
+		open(h)
+		require.Equal(t, stateConfirm, h.state)
+		require.NotNil(t, h.confirmationOverlay)
+		return h
+	}
+
+	t.Run("the advertised x confirms on a second x", func(t *testing.T) {
+		h := openWith(t, func(h *home) { pressRune(h, 'x') })
+
+		assert.Equal(t, "x", h.confirmationOverlay.ConfirmAltKey)
+		assert.Contains(t, h.confirmationOverlay.Render(), "(or x)",
+			"the dialog teaches the key the user actually pressed")
+		require.True(t, h.confirmationOverlay.HandleKeyPress(
+			tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'x'}}), "x x must kill in one motion")
+		assert.True(t, h.confirmationOverlay.Confirmed)
+	})
+
+	t.Run("the ctrl+x chord confirms on a second ctrl+x", func(t *testing.T) {
+		h := openWith(t, func(h *home) { _, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyCtrlX}) })
+
+		assert.Equal(t, keys.KillKey, h.confirmationOverlay.ConfirmAltKey)
+		require.True(t, h.confirmationOverlay.HandleKeyPress(tea.KeyMsg{Type: tea.KeyCtrlX}))
+		assert.True(t, h.confirmationOverlay.Confirmed)
+	})
+
+	t.Run("with the toggle off neither key confirms", func(t *testing.T) {
+		off := false
+		cfg := config.DefaultConfig()
+		cfg.KillDoubleTapConfirm = &off
+		h := openWith(t, func(h *home) { h.appConfig = cfg; pressRune(h, 'x') })
+
+		assert.Equal(t, "", h.confirmationOverlay.ConfirmAltKey)
+		assert.False(t, h.confirmationOverlay.HandleKeyPress(
+			tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'x'}}))
+	})
 }

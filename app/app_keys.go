@@ -33,6 +33,12 @@ const stillStartingNotice = "session is still starting — try again in a moment
 // the force-quit escape (a second quit) for a Start that never finishes.
 const quitAfterStartupNotice = "finishing session startup before quitting… (q again to abandon)"
 
+// filterFoldNotice explains a fold refused because a filter is live. Shared by the
+// fold keys and the header click so the two cannot drift apart — they are the same
+// gesture, and a filter silences both. Phrased as the standing rule it is, naming its
+// ladder ("folding") and the key that lifts it, like the sibling reorder refusals (#346).
+const filterFoldNotice = "folding is off while a filter is live (esc to clear)"
+
 // selectedActionable returns the selected instance when a per-session action may
 // run against it. The bool is false (with the command to return) when there is no
 // selection or it is still starting — the two guards almost every session action
@@ -423,8 +429,9 @@ func (m *home) handleMultiSelectState(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, m.instanceChanged()
 	case "x":
 		// Plain x kills the marked set (the bar advertises "x"); ctrl+x (the global
-		// kill chord, KeyKill below) does the same.
-		return m, m.killMarked()
+		// kill chord, KeyKill below) does the same. Each hands its own key to the
+		// confirmation so the double-tap is the key the user actually pressed.
+		return m, m.killMarked("x")
 	}
 
 	name, ok := keys.GlobalKeyStringsMap[msg.String()]
@@ -450,13 +457,59 @@ func (m *home) handleMultiSelectState(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case keys.KeyResume:
 		return m, m.resumeMarked()
 	case keys.KeyKill:
-		return m, m.killMarked()
+		return m, m.killMarked(keys.KillKey)
 	default:
 		return m, nil
 	}
 }
 
 // --- Per-action key handlers (delegated from handleKeyPress's switch) ----------
+
+// foldKey runs the three repo-fold keys (← / → / Z) behind one contract: fold, persist
+// the set, or explain why the screen did not change (#399). The two guards below run
+// before the fold because both describe the *list*, not the key, so they answer all
+// three keys identically — and both outrank the per-key refusal, which would otherwise
+// promise a state change that the guard has already ruled out (#346).
+func (m *home) foldKey(name keys.KeyName) (tea.Model, tea.Cmd) {
+	// A lone repo group renders no fold marker, so folding is not a thing the user can
+	// see happen or undo. Silent on purpose: a notice here would name a state no key
+	// reaches, and unlike the filter below, nothing the user can clear lifts it.
+	if !m.list.HasMultipleGroups() {
+		return m, nil
+	}
+	// While a filter is live it is the sole visibility gate and overrides the fold in
+	// the render (see ui.List.isHidden), so a folded group is on screen *expanded*.
+	// Folding under it would rewrite the persisted set with the list standing still
+	// (#339), and "already collapsed" would describe something the user cannot see —
+	// the case hiddenNeighborNotice names the filter for. Refuse and name it here too.
+	if m.list.Filtering() {
+		return m, m.handleInfoNotice(filterFoldNotice)
+	}
+	var acted bool
+	var already string
+	switch name {
+	case keys.KeyCollapse:
+		acted, already = m.list.Collapse(), "repo group is already collapsed"
+	case keys.KeyExpand:
+		acted, already = m.list.Expand(), "repo group is already expanded"
+	case keys.KeyCollapseAll:
+		// Z always flips (fold every group unless all are folded, then unfold), so past
+		// the guards above it has no already-in-that-state refusal to report.
+		acted = m.list.ToggleCollapseAll()
+	}
+	if !acted {
+		if already == "" {
+			return m, nil
+		}
+		// The scope noun separates this from Z, which shares the fold vocabulary and is
+		// one keypress away — "already collapsed" alone reads as a claim about the list.
+		return m, m.handleInfoNotice(already)
+	}
+	if err := m.appState.SetCollapsedRepos(m.list.CollapsedRepos()); err != nil {
+		return m, m.handleError(err)
+	}
+	return m, m.instanceChanged()
+}
 
 // openQuickSend opens a compose box to fire an ad-hoc message at the selected
 // running session without attaching. Only meaningful when the agent is up and

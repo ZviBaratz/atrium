@@ -65,6 +65,13 @@ func (l *List) ToggleCollapseAll() bool {
 	return true
 }
 
+// HasMultipleGroups reports whether the list has more than one repo group — the
+// condition under which Collapse/Expand/ToggleCollapseAll can meaningfully act.
+// Used by callers to distinguish "already in that state" from "nothing to fold".
+func (l *List) HasMultipleGroups() bool {
+	return l.distinctRepoCount() > 1
+}
+
 // CollapsedRepos returns the collapsed repo keys still present in the list, sorted for stable
 // output. Pruning to live keys happens here (at save time) only — never on load, where the
 // instance set is still being assembled.
