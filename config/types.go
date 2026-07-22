@@ -66,6 +66,26 @@ const (
 	// Config.NotifyCommand if set, otherwise a built-in per-OS default (notify-send /
 	// terminal-notifier / osascript). A missing notifier is a silent no-op.
 	NotificationsDesktop = "desktop"
+	// NotificationsOSC writes an OSC 9 desktop notification to the TUI's own stdout
+	// (like the bell). Because the escape is emitted by the user's terminal, it
+	// traverses SSH and needs no local notifier binary — the remote-friendly mode.
+	// Supported by iTerm2, kitty, WezTerm, Ghostty, ConEmu, foot; terminals that
+	// ignore the escape simply show nothing.
+	NotificationsOSC = "osc"
+)
+
+// The attention ladder's finished-turn rung (Config.NotificationsFinished). Its vocabulary
+// is deliberately a *subset* of the notification modes: a session blocking on input is the
+// only one that can act on the user, so a finished turn may be signalled more quietly than
+// a block, never more loudly. Only NotificationsSame, NotificationsOff and
+// NotificationsBell are admitted — the rungs that sit at or below every mode above them —
+// which makes an inverted ladder unrepresentable without ever ranking the modes: "quieter
+// than bell" would be silence, and desktop and osc are peers that cannot be ordered against
+// each other at all. See GetNotificationsFinished for normalization.
+const (
+	// NotificationsSame leaves a finished turn on Config.Notifications, the same rung a
+	// block uses. The default, and what reproduces the pre-ladder behavior exactly.
+	NotificationsSame = "same"
 )
 
 // Profile represents a named program configuration
@@ -357,14 +377,33 @@ type Config struct {
 	// forgoes the Permissions chip), so enable this only if that default suits you.
 	SmartDispatchAuto *bool `json:"smart_dispatch_auto,omitempty"`
 	// Notifications selects how Atrium signals a background session finishing a turn
-	// or blocking on a prompt: "off" (default), "bell" (terminal BEL), or "desktop"
-	// (external notify command). Empty or unrecognized values normalize to "off"
-	// (GetNotifications). The selected and currently-attached sessions stay silent.
+	// or blocking on a prompt: "off" (default), "bell" (terminal BEL), "desktop"
+	// (external notify command), or "osc" (an OSC 9 escape on the TUI's stdout that
+	// reaches the terminal over SSH with no local binary). Empty or unrecognized
+	// values normalize to "off" (GetNotifications). The selected and currently-attached
+	// sessions stay silent, as does a muted session or (unless NotifyWhenFocused) one
+	// whose terminal is focused. This is the rung a session *blocking on input* uses, and
+	// the master switch: "off" silences every event regardless of NotificationsFinished.
 	Notifications string `json:"notifications,omitempty"`
+	// NotificationsFinished is the attention ladder's quieter rung, applied to a *finished
+	// turn* only — a session blocking on input always stays on Notifications, so it can
+	// never be out-shouted by an agent that merely stopped: "same" (default — a finished
+	// turn uses Notifications too), "off" (no out-of-band signal; the list's unread marker
+	// still flags the row), or "bell". Empty or unrecognized values — including "desktop"
+	// and "osc", excluded on purpose so the ladder never has to rank two peers — normalize
+	// to "same" (GetNotificationsFinished). Ignored entirely when Notifications is "off".
+	NotificationsFinished string `json:"notifications_finished,omitempty"`
 	// NotifyCommand is an optional shell command run for each "desktop" notification.
 	// It runs via `sh -c` with $ATRIUM_SESSION (display name), $ATRIUM_STATUS
 	// ("Ready"/"NeedsInput"), and $ATRIUM_EVENT ("finished"/"needs_input") in the
 	// environment — the session name is passed as env, never interpolated, so it can
 	// never break argument parsing. Empty falls back to a built-in per-OS default.
 	NotifyCommand string `json:"notify_command,omitempty"`
+	// NotifyWhenFocused, when true, still fires notifications while Atrium's terminal
+	// is focused. Default false: Atrium stays silent while you are watching the fleet
+	// (the terminal window has focus) and notifies only after you switch away.
+	// Terminals that never report focus (no DECSET 1004 support, e.g. a plain tmux
+	// without focus-events on) always notify — an unknown focus is never treated as
+	// focused, so this can never cause permanent silence.
+	NotifyWhenFocused bool `json:"notify_when_focused,omitempty"`
 }

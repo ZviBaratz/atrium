@@ -342,19 +342,48 @@ func (c *Config) GetGroupMode() string {
 }
 
 // GetNotifications returns the normalized notification mode: NotificationsBell,
-// NotificationsDesktop, or NotificationsOff for a nil Config, an empty value, or
-// anything unrecognized — a typo must never silently start ringing bells or firing
-// desktop popups.
+// NotificationsDesktop, NotificationsOSC, or NotificationsOff for a nil Config, an
+// empty value, or anything unrecognized — a typo must never silently start ringing
+// bells or firing desktop popups.
 func (c *Config) GetNotifications() string {
 	if c == nil {
 		return NotificationsOff
 	}
 	switch c.Notifications {
-	case NotificationsBell, NotificationsDesktop:
+	case NotificationsBell, NotificationsDesktop, NotificationsOSC:
 		return c.Notifications
 	default:
 		return NotificationsOff
 	}
+}
+
+// GetNotificationsFinished returns the normalized rung a finished turn is signalled at:
+// NotificationsOff, NotificationsBell, or NotificationsSame for a nil Config, an empty
+// value, or anything unrecognized. "desktop" and "osc" fall into that last group on
+// purpose — the finished rung may only ever be quieter than the mode a blocked session
+// uses, and admitting either would require ranking two peers. NotificationsSame defers to
+// GetNotifications, which is what makes an unset field behave exactly as before the ladder.
+func (c *Config) GetNotificationsFinished() string {
+	if c == nil {
+		return NotificationsSame
+	}
+	switch c.NotificationsFinished {
+	case NotificationsOff, NotificationsBell:
+		return c.NotificationsFinished
+	default:
+		return NotificationsSame
+	}
+}
+
+// GetNotifyWhenFocused reports whether notifications still fire while Atrium's
+// terminal is focused. False (the default, including a nil Config) means focus-gating
+// is on: Atrium stays silent while you are watching the fleet. A terminal that never
+// reports focus is never treated as focused, so this default can never silence it.
+func (c *Config) GetNotifyWhenFocused() bool {
+	if c == nil {
+		return false
+	}
+	return c.NotifyWhenFocused
 }
 
 // GetNotifyCommand returns the configured desktop-notification command, or "" for a

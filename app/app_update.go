@@ -293,6 +293,15 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		return m, m.runBranchSearch(m.textInputOverlay.BranchFilter(), m.textInputOverlay.BranchFilterVersion())
+	case tea.FocusMsg:
+		// The terminal regained focus: while focused, background sessions stay silent
+		// (the user is watching the fleet). See maybeNotify.
+		m.focused = true
+		return m, nil
+	case tea.BlurMsg:
+		// The terminal lost focus: edges may notify again.
+		m.focused = false
+		return m, nil
 	case tea.KeyMsg:
 		return m.handleKeyPress(msg)
 	case tea.WindowSizeMsg:
@@ -893,6 +902,8 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		return m.openRenameSelected()
 	case keys.KeyAutoName:
 		return m.startAutoNameSelected()
+	case keys.KeyMute:
+		return m.toggleMuteSelected()
 	case keys.KeySubmit:
 		return m.pushSelected()
 	case keys.KeyMerge:

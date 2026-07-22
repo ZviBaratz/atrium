@@ -541,6 +541,28 @@ func (m *home) openRenameSelected() (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// toggleMuteSelected flips the selected session's notification mute and persists it.
+// A muted session never notifies (see maybeNotify), and the mute survives a restart.
+// It uses the raw selection (not selectedActionable): muting is a lightweight state
+// toggle with no readiness dependency, so it works even on a still-starting session.
+// The row glyph is subtle, so a transient toast confirms which way it flipped.
+func (m *home) toggleMuteSelected() (tea.Model, tea.Cmd) {
+	selected := m.list.GetSelectedInstance()
+	if selected == nil {
+		return m, nil
+	}
+	muted := !selected.Muted()
+	selected.SetMuted(muted)
+	if err := m.persistInstances(); err != nil {
+		return m, m.handleError(err)
+	}
+	verb := "unmuted"
+	if muted {
+		verb = "muted"
+	}
+	return m, m.handleInfoNotice(fmt.Sprintf("%s %s", verb, selected.DisplayName()))
+}
+
 // openQueue opens the pending-prompt management overlay for the selected session,
 // listing its queued prompts so the user can cancel one before delivery. Unlike
 // openQuickSend it needs no live pane (management is a pure in-memory read +

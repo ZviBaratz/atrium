@@ -439,14 +439,26 @@ func newSettingRows(cfg *config.Config) []settingRow {
 		},
 		{
 			key: "notifications", section: "Behavior", label: "Notifications", kind: kindEnum,
-			description: "Signal a background session finishing or blocking: bell rings the terminal, desktop runs a notifier (Notify command, else notify-send / terminal-notifier / osascript). The selected and attached sessions stay silent.",
+			description: "Signal a background session finishing or blocking: bell rings the terminal, desktop runs a notifier (Notify command, else notify-send / terminal-notifier / osascript), osc sends an OSC 9 escape that reaches you over SSH with no local binary. The selected, attached, muted, and (unless Notify when focused) focused sessions stay silent.",
 			get:         func(c *config.Config) string { return c.GetNotifications() },
 			set: func(c *config.Config, v string) error {
 				c.Notifications = v
 				return nil
 			},
 			options: func(c *config.Config) []string {
-				return []string{config.NotificationsOff, config.NotificationsBell, config.NotificationsDesktop}
+				return []string{config.NotificationsOff, config.NotificationsBell, config.NotificationsDesktop, config.NotificationsOSC}
+			},
+		},
+		{
+			key: "notifications_finished", section: "Behavior", label: "Finished turns", kind: kindEnum,
+			description: "A quieter signal for a finished turn than for a session blocking on you: same uses the Notifications mode for both, off leaves a finished turn to the list's unread marker alone, bell rings the terminal. Only the quieter rungs are offered, so a finished turn can never outrank a blocked session. Ignored while Notifications is off.",
+			get:         func(c *config.Config) string { return c.GetNotificationsFinished() },
+			set: func(c *config.Config, v string) error {
+				c.NotificationsFinished = v
+				return nil
+			},
+			options: func(c *config.Config) []string {
+				return []string{config.NotificationsSame, config.NotificationsOff, config.NotificationsBell}
 			},
 		},
 		{
@@ -464,6 +476,10 @@ func newSettingRows(cfg *config.Config) []settingRow {
 				return nil
 			},
 		},
+		boolRow("notify_when_focused", "Behavior", "Notify when focused",
+			"Keep notifying while Atrium's terminal is focused. Off (default) stays silent while you're watching the fleet and notifies only after you switch away; a terminal that never reports focus always notifies.", "",
+			(*config.Config).GetNotifyWhenFocused,
+			func(c *config.Config, v bool) { c.NotifyWhenFocused = v }),
 		{
 			key: "tmux_config_override", section: "Behavior", label: "Tmux config override", kind: kindText,
 			description: "Custom tmux config path.", applyNote: "affects new sessions",
