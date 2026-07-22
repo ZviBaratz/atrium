@@ -324,18 +324,19 @@ func TestParseDiffRows_NoNewlineMarkerAcrossFiles(t *testing.T) {
 }
 
 // TestParseDiffRows_DashDashContent is the regression guard for issue #435: a diff
-// hunk that deletes a line starting with "--" (so the diff line is "---content")
+// hunk that deletes a line starting with "--" (so the diff line is "---divider")
 // and adds a line starting with "++" (so the diff line is "+++banner") must be
-// classified as rowDel / rowAdd — not rowMeta — inside the hunk. The old guard
-// `line[1] != '-'` excluded "---content" from the deletion case and isDiffMeta
-// matched the "---" prefix, misclassifying the row and corrupting every subsequent
-// line number in the hunk.
+// classified as rowDel / rowAdd — not rowMeta — inside the hunk. The literals are
+// deliberately three characters wide, exactly as long as the "--- a/x" file-header
+// prefix they collide with: the old guard `line[1] != '-'` excluded "---divider"
+// from the deletion case and isDiffMeta then matched the bare "---" prefix,
+// misclassifying the row and corrupting every subsequent line number in the hunk.
 func TestParseDiffRows_DashDashContent(t *testing.T) {
 	diff := "diff --git a/x.go b/x.go\n" +
-		"@@ -1,4 +1,4 @@\n" +
+		"@@ -1,3 +1,3 @@\n" +
 		" ctx\n" +
-		"----divider\n" + // delete a line that started with "--"
-		"++++banner\n" + // add a line that started with "++"
+		"---divider\n" + // delete a line that started with "--"
+		"+++banner\n" + // add a line that started with "++"
 		" after\n"
 	rows := parseDiffRows(diff)
 
