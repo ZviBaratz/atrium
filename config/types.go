@@ -66,6 +66,12 @@ const (
 	// Config.NotifyCommand if set, otherwise a built-in per-OS default (notify-send /
 	// terminal-notifier / osascript). A missing notifier is a silent no-op.
 	NotificationsDesktop = "desktop"
+	// NotificationsOSC writes an OSC 9 desktop notification to the TUI's own stdout
+	// (like the bell). Because the escape is emitted by the user's terminal, it
+	// traverses SSH and needs no local notifier binary — the remote-friendly mode.
+	// Supported by iTerm2, kitty, WezTerm, Ghostty, ConEmu, foot; terminals that
+	// ignore the escape simply show nothing.
+	NotificationsOSC = "osc"
 )
 
 // Profile represents a named program configuration
@@ -357,9 +363,12 @@ type Config struct {
 	// forgoes the Permissions chip), so enable this only if that default suits you.
 	SmartDispatchAuto *bool `json:"smart_dispatch_auto,omitempty"`
 	// Notifications selects how Atrium signals a background session finishing a turn
-	// or blocking on a prompt: "off" (default), "bell" (terminal BEL), or "desktop"
-	// (external notify command). Empty or unrecognized values normalize to "off"
-	// (GetNotifications). The selected and currently-attached sessions stay silent.
+	// or blocking on a prompt: "off" (default), "bell" (terminal BEL), "desktop"
+	// (external notify command), or "osc" (an OSC 9 escape on the TUI's stdout that
+	// reaches the terminal over SSH with no local binary). Empty or unrecognized
+	// values normalize to "off" (GetNotifications). The selected and currently-attached
+	// sessions stay silent, as does a muted session or (unless NotifyWhenFocused) one
+	// whose terminal is focused.
 	Notifications string `json:"notifications,omitempty"`
 	// NotifyCommand is an optional shell command run for each "desktop" notification.
 	// It runs via `sh -c` with $ATRIUM_SESSION (display name), $ATRIUM_STATUS
@@ -367,4 +376,11 @@ type Config struct {
 	// environment — the session name is passed as env, never interpolated, so it can
 	// never break argument parsing. Empty falls back to a built-in per-OS default.
 	NotifyCommand string `json:"notify_command,omitempty"`
+	// NotifyWhenFocused, when true, still fires notifications while Atrium's terminal
+	// is focused. Default false: Atrium stays silent while you are watching the fleet
+	// (the terminal window has focus) and notifies only after you switch away.
+	// Terminals that never report focus (no DECSET 1004 support, e.g. a plain tmux
+	// without focus-events on) always notify — an unknown focus is never treated as
+	// focused, so this can never cause permanent silence.
+	NotifyWhenFocused bool `json:"notify_when_focused,omitempty"`
 }

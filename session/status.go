@@ -97,6 +97,22 @@ func (i *Instance) Unread() bool {
 	return i.unread
 }
 
+// Muted reports whether the user has silenced notifications for this session, under
+// the read lock.
+func (i *Instance) Muted() bool {
+	i.mu.RLock()
+	defer i.mu.RUnlock()
+	return i.muted
+}
+
+// SetMuted silences (or unsilences) notifications for this session, under the write
+// lock. The caller persists the change (see home.toggleMuteSelected).
+func (i *Instance) SetMuted(v bool) {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	i.muted = v
+}
+
 // AwaitingSetup reports whether the session is blocked on a one-time startup/trust
 // gate (see the awaitingSetup field), under the read lock. The row uses it to show a
 // "waiting on setup screen" hint alongside the NeedsInput status. It is gated on the

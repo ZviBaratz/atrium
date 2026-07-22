@@ -95,6 +95,10 @@ var Registry = []Entry{
 		key.WithKeys("A"),
 		key.WithHelp("A", "auto-name"),
 	)},
+	{Name: KeyMute, Binding: key.NewBinding(
+		key.WithKeys("M"),
+		key.WithHelp("M", "mute notifications"),
+	)},
 	{Name: KeyQuickSend, Binding: key.NewBinding(
 		key.WithKeys("s"),
 		key.WithHelp("s", "send"),

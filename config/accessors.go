@@ -342,19 +342,30 @@ func (c *Config) GetGroupMode() string {
 }
 
 // GetNotifications returns the normalized notification mode: NotificationsBell,
-// NotificationsDesktop, or NotificationsOff for a nil Config, an empty value, or
-// anything unrecognized — a typo must never silently start ringing bells or firing
-// desktop popups.
+// NotificationsDesktop, NotificationsOSC, or NotificationsOff for a nil Config, an
+// empty value, or anything unrecognized — a typo must never silently start ringing
+// bells or firing desktop popups.
 func (c *Config) GetNotifications() string {
 	if c == nil {
 		return NotificationsOff
 	}
 	switch c.Notifications {
-	case NotificationsBell, NotificationsDesktop:
+	case NotificationsBell, NotificationsDesktop, NotificationsOSC:
 		return c.Notifications
 	default:
 		return NotificationsOff
 	}
+}
+
+// GetNotifyWhenFocused reports whether notifications still fire while Atrium's
+// terminal is focused. False (the default, including a nil Config) means focus-gating
+// is on: Atrium stays silent while you are watching the fleet. A terminal that never
+// reports focus is never treated as focused, so this default can never silence it.
+func (c *Config) GetNotifyWhenFocused() bool {
+	if c == nil {
+		return false
+	}
+	return c.NotifyWhenFocused
 }
 
 // GetNotifyCommand returns the configured desktop-notification command, or "" for a
