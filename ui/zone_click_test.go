@@ -17,20 +17,27 @@ func clickAt(x, y int) tea.MouseMsg {
 	return tea.MouseMsg{X: x, Y: y, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft}
 }
 
-// waitZone scans the rendered frame and waits for bubblezone's async worker to
-// register the given zone, returning it. Scan() hands marks to a background
-// goroutine, so a single Scan+Get can race it; re-scanning each tick is
-// idempotent and converges quickly. In the live TUI this race never bites
-// because Get happens a full event-loop tick after the View() that scanned.
-func waitZone(t *testing.T, render func() string, id string) *zone.ZoneInfo {
+// clickZone re-scans the rendered frame, resolves the given zone, and runs act
+// against its bounds — all inside one retry loop.
+//
+// Waiting only for a *non-zero* zone is not enough (issue #434). Scan() hands
+// marks to a background goroutine, and the zone manager is shared across the
+// whole package, so before the worker drains the scan above, Get can still be
+// serving bounds another test's differently-sized frame registered. Those bounds
+// are non-zero but wrong, and acting on them misses. Folding the action in means
+// a miss re-renders and retries instead of failing the assertion outright.
+//
+// act must therefore be inert when it misses — every caller here only reads a
+// zone lookup — and reports whether it hit, so a stale-bounds miss is a retry.
+// In the live TUI none of this bites: Get happens a full event-loop tick after
+// the View() that scanned.
+func clickZone(t *testing.T, render func() string, id string, act func(*zone.ZoneInfo) bool) {
 	t.Helper()
-	var z *zone.ZoneInfo
 	require.Eventually(t, func() bool {
 		zone.Scan(render())
-		z = zone.Get(id)
-		return !z.IsZero()
-	}, time.Second, 5*time.Millisecond, "zone %q never registered", id)
-	return z
+		z := zone.Get(id)
+		return !z.IsZero() && act(z)
+	}, time.Second, 5*time.Millisecond, "a click on zone %q never resolved to its own target", id)
 }
 
 // TestListInstanceAtZone verifies that a click landing inside a row's registered
@@ -47,9 +54,11 @@ func TestListInstanceAtZone(t *testing.T) {
 	l.SetSize(40, 14)
 
 	for _, inst := range []*session.Instance{a, b} {
-		z := waitZone(t, l.String, listRowZoneID(inst))
-		got := l.InstanceAtZone(clickAt(z.StartX, z.StartY))
-		require.Same(t, inst, got, "click inside %q's zone should resolve to it", inst.Title)
+		// The click must resolve to this row and no other — a stale-bounds hit on
+		// the neighbouring row reads as a miss and retries.
+		clickZone(t, l.String, listRowZoneID(inst), func(z *zone.ZoneInfo) bool {
+			return l.InstanceAtZone(clickAt(z.StartX, z.StartY)) == inst
+		})
 	}
 
 	// A click far outside the panel hits no row.
@@ -77,9 +86,11 @@ func TestListInstanceAtZone_SameTitleAcrossGroups(t *testing.T) {
 	require.NotEqual(t, listRowZoneID(a), listRowZoneID(b),
 		"same-titled rows in different groups need distinct zone ids")
 	for _, inst := range []*session.Instance{a, b} {
-		z := waitZone(t, l.String, listRowZoneID(inst))
-		got := l.InstanceAtZone(clickAt(z.StartX, z.StartY))
-		require.Same(t, inst, got, "click inside the zone of %q (%s) should resolve to that instance", inst.Title, inst.Path)
+		// Same-titled rows sit adjacent, so this is also the assertion that the
+		// two ids address distinct regions rather than collapsing onto one.
+		clickZone(t, l.String, listRowZoneID(inst), func(z *zone.ZoneInfo) bool {
+			return l.InstanceAtZone(clickAt(z.StartX, z.StartY)) == inst
+		})
 	}
 }
 
@@ -89,10 +100,12 @@ func TestTabAtZone(t *testing.T) {
 	w.SetSize(60, 20)
 
 	for i := range []int{PreviewTab, DiffTab, TerminalTab} {
-		z := waitZone(t, w.String, tabZoneID(i))
-		got, ok := w.TabAtZone(clickAt(z.StartX, z.StartY))
-		require.True(t, ok, "click inside tab %d should hit a tab", i)
-		require.Equal(t, i, got)
+		// Landing on a *different* tab is a miss, not a pass: the tabs abut, so
+		// stale bounds resolve to a neighbour rather than to nothing.
+		clickZone(t, w.String, tabZoneID(i), func(z *zone.ZoneInfo) bool {
+			got, ok := w.TabAtZone(clickAt(z.StartX, z.StartY))
+			return ok && got == i
+		})
 	}
 }
 
@@ -103,11 +116,15 @@ func TestHeaderAtZone_ClickTogglesFold(t *testing.T) {
 	l := newGroupList(t, "/x/repoA", "/x/repoA", "/x/repoB")
 	l.SetSelectedInstance(2) // selection elsewhere, so the snap is observable
 
-	z := waitZone(t, l.String, listHeaderZoneID("repoA"))
-	key, ok := l.HeaderAtZone(clickAt(z.StartX, z.StartY))
-	require.True(t, ok, "click inside the header's zone should hit it")
-	require.Equal(t, "repoA", key)
+	var key string
+	clickZone(t, l.String, listHeaderZoneID("repoA"), func(z *zone.ZoneInfo) bool {
+		k, ok := l.HeaderAtZone(clickAt(z.StartX, z.StartY))
+		key = k
+		return ok && k == "repoA"
+	})
 
+	// Folding runs off the resolved key, not off zone bounds, so it stays outside
+	// the retry loop — it must happen exactly once per click.
 	// First click folds the group and moves the selection to its anchor.
 	require.True(t, l.ClickHeader(key))
 	require.True(t, l.collapsed["repoA"], "first click collapses the group")
@@ -118,7 +135,7 @@ func TestHeaderAtZone_ClickTogglesFold(t *testing.T) {
 	require.False(t, l.collapsed["repoA"], "second click expands the group")
 
 	// A click outside every header hits nothing.
-	_, ok = l.HeaderAtZone(clickAt(9999, 9999))
+	_, ok := l.HeaderAtZone(clickAt(9999, 9999))
 	require.False(t, ok)
 }
 
