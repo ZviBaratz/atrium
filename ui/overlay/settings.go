@@ -358,6 +358,82 @@ func newSettingRows(cfg *config.Config) []settingRow {
 			},
 		},
 		{
+			key: "project_search_roots", section: "Behavior", label: "Project scan roots", kind: kindText,
+			description: "Directories the background repo scan walks to stock the project picker; comma-separated, ~ allowed. A changed scope re-scans the next time the create form opens.",
+			get: func(c *config.Config) string {
+				return strings.Join(c.GetProjectSearchRoots(), ", ")
+			},
+			editGet: func(c *config.Config) string {
+				return strings.Join(c.GetProjectSearchRoots(), ", ")
+			},
+			set: func(c *config.Config, v string) error {
+				// Same split/trim/drop-blanks shape as carry_files, but empty input
+				// clears the key to nil rather than storing an explicit empty list:
+				// GetProjectSearchRoots treats nil and empty alike (both fall back to
+				// ~), so nil is the honest way to say "no override".
+				parts := strings.Split(v, ",")
+				roots := make([]string, 0, len(parts))
+				for _, p := range parts {
+					if t := strings.TrimSpace(p); t != "" {
+						roots = append(roots, t)
+					}
+				}
+				if len(roots) == 0 {
+					c.ProjectSearchRoots = nil
+					return nil
+				}
+				c.ProjectSearchRoots = roots
+				return nil
+			},
+		},
+		{
+			key: "project_search_depth", section: "Behavior", label: "Project scan depth", kind: kindInt,
+			description: fmt.Sprintf("Levels below each root the scan descends. Empty = default; 0 = off (no scan); N = depth, capped at %d.", config.MaxProjectSearchDepth()),
+			get: func(c *config.Config) string {
+				switch {
+				case c.ProjectSearchDepth == nil:
+					return fmt.Sprintf("default (%d)", config.DefaultProjectSearchDepth())
+				case *c.ProjectSearchDepth < 1:
+					return "off"
+				default:
+					return strconv.Itoa(*c.ProjectSearchDepth)
+				}
+			},
+			editGet: func(c *config.Config) string {
+				switch {
+				case c.ProjectSearchDepth == nil:
+					return "" // empty selects the built-in default depth
+				case *c.ProjectSearchDepth < 1:
+					return "0" // explicit disabled edits as 0
+				default:
+					return strconv.Itoa(*c.ProjectSearchDepth)
+				}
+			},
+			set: func(c *config.Config, v string) error {
+				v = strings.TrimSpace(v)
+				if v == "" {
+					c.ProjectSearchDepth = nil // built-in default
+					return nil
+				}
+				n, err := strconv.Atoi(v)
+				if err != nil || n < 0 {
+					return fmt.Errorf("scan depth must be a non-negative number (0 = off, empty = default)")
+				}
+				// Store what the user typed and let GetProjectSearchDepth clamp, so the
+				// accessor stays the single source of the bound; but refuse a value it
+				// would silently rewrite, rather than showing back a number we ignore.
+				if n > config.MaxProjectSearchDepth() {
+					return fmt.Errorf("scan depth must be at most %d", config.MaxProjectSearchDepth())
+				}
+				c.ProjectSearchDepth = &n
+				return nil
+			},
+		},
+		boolRow("smart_dispatch_auto", "Behavior", "Smart dispatch auto-create",
+			"A confident i match creates the session straight away instead of opening the pre-filled form.", "",
+			(*config.Config).GetSmartDispatchAuto,
+			func(c *config.Config, v bool) { c.SmartDispatchAuto = &v }),
+		{
 			key: "daemon_poll_interval", section: "Behavior", label: "Poll interval (ms)", kind: kindInt,
 			description: "Auto-yes daemon polling rate.", applyNote: "applies on restart",
 			get: func(c *config.Config) string { return strconv.Itoa(c.DaemonPollInterval) },

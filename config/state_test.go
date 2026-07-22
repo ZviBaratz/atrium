@@ -257,6 +257,22 @@ func TestSetScannedRepos_RoundTripAndTimestamp(t *testing.T) {
 	assert.True(t, at.After(before), "scan timestamp not stamped: %v", at)
 }
 
+// Clearing must drop the stamp along with the list, not just the list: a
+// surviving stamp would make a re-enabled scan read the empty cache as fresh
+// (see ClearScannedRepos).
+func TestClearScannedRepos_DropsTheStampToo(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	s := DefaultState()
+	require.NoError(t, s.SetScannedRepos([]string{"/r1"}))
+
+	require.NoError(t, s.ClearScannedRepos())
+
+	repos, at := LoadState().GetScannedRepos()
+	assert.Empty(t, repos)
+	assert.True(t, at.IsZero(), "a cleared cache must read as never scanned, got %v", at)
+}
+
 func TestState_OldFileWithoutNewKeys(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)

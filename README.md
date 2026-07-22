@@ -619,9 +619,11 @@ routing can differ from Claude-login routing. Add a `gh_accounts` list:
 
 #### Configuration reference
 
-Every `config.json` key, its default, and where it is documented above. Most are
-also editable live from the Settings panel (`,`); the three marked **†** are
-JSON-only and have no Settings row. A test
+Every `config.json` key, its default, and where it is documented above. Nearly all
+are also editable live from the Settings panel (`,`). The exceptions are the three
+keys whose value is a *list of records* — `profiles`, `claude_accounts`,
+`gh_accounts` — which the one-value-per-row panel cannot express, and the
+deprecated `nerd_font`, which `glyph_set` supersedes. A test
 (`config.TestReadmeDocumentsEveryConfigField`) fails the build if a new field is
 added without a row here.
 
@@ -655,14 +657,14 @@ added without a row here.
 | `claude_accounts` | array | `[]` | per-session `CLAUDE_CONFIG_DIR` routing ([Claude accounts](#claude-accounts)) |
 | `gh_accounts` | array | `[]` | per-session `GH_CONFIG_DIR` routing ([GitHub CLI accounts](#github-cli-accounts)) |
 | `auto_update` | string | `"notify"` | startup update behavior: `notify` / `auto` / `off` ([Auto-update](#auto-update)) |
-| `project_search_roots` **†** | array | `["~"]` | directories the background repo scan walks for the project picker |
-| `project_search_depth` **†** | int | `3` | levels below each root the scan descends (`0`/negative disables it) |
+| `project_search_roots` | array | `["~"]` | directories the background repo scan walks for the project picker |
+| `project_search_depth` | int | `3` | levels below each root the scan descends (`0`/negative disables it) |
 | `model_indicator` | string | `"on"` | per-session model chip: `on` / `off` |
 | `permission_indicator` | string | `"on"` | per-session permission-mode chip: `on` / `off` |
 | `effort_indicator` | string | `"on"` | per-session reasoning-effort chip: `on` / `off` |
 | `session_sort` | string | `"creation"` | within-group order: `creation` / `status` |
 | `group_mode` | string | `"repo"` | list grouping: `repo` / `account` |
-| `smart_dispatch_auto` **†** | bool | `false` | let a confident `i` match create the session without the form |
+| `smart_dispatch_auto` | bool | `false` | let a confident `i` match create the session without the form |
 | `notifications` | string | `"off"` | background-session signal: `off` / `bell` / `desktop` / `osc` (SSH-friendly OSC 9) ([Notifications](#notifications)) |
 | `notifications_finished` | string | `"same"` | quieter rung for a *finished turn* only, so a blocked session is never out-shouted: `same` / `off` / `bell` ([Notifications](#notifications)) |
 | `notify_command` | string | built-in | shell command for `desktop` notifications ([Notifications](#notifications)) |
