@@ -56,9 +56,11 @@ func TestHintBarClick_MirrorsKeyPress(t *testing.T) {
 	// scans the composed frame itself (app.go), so just render until the ? entry's
 	// bounds register — scanning its stripped output again would corrupt them.
 	const helpZone = "hintbar:?"
-	// Collapse zone-get and click into one Eventually: if a bubblezone sentinel
-	// wipes the zone between Get and Update, the next iteration re-registers via
-	// View() and retries rather than failing (fixes the async race in issue #434).
+	// Collapse zone-get and click into one Eventually (issue #434). A non-zero
+	// zone is not necessarily *this* frame's: Scan hands bounds to an async
+	// worker, and the manager is package-global, so Get can still be serving
+	// bounds an earlier test's differently-sized frame registered. Clicking those
+	// misses. Folding the click in means a miss just re-renders and retries.
 	require.Eventually(t, func() bool {
 		_ = h.View()
 		zi := zone.Get(helpZone)
