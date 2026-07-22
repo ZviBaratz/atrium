@@ -111,6 +111,16 @@ const (
 	maxProjectSearchDepth     = 8
 )
 
+// DefaultProjectSearchDepth is the depth an unset project_search_depth resolves
+// to, exported so the settings panel can name the value it is standing in for
+// (mirroring DefaultSessionCap / DefaultOOMMargin).
+func DefaultProjectSearchDepth() int { return defaultProjectSearchDepth }
+
+// MaxProjectSearchDepth is the ceiling GetProjectSearchDepth clamps to, exported
+// so the settings row can refuse a larger value instead of echoing back a number
+// the accessor would silently rewrite.
+func MaxProjectSearchDepth() int { return maxProjectSearchDepth }
+
 // defaultProjectSearchRoots is the scan scope applied when a config predates
 // the project_search_roots key (nil or empty field).
 var defaultProjectSearchRoots = []string{"~"}
