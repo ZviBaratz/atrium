@@ -47,6 +47,7 @@ var HelpGroups = []HelpGroup{
 		{Keys: []KeyName{KeySmartDispatch}, Desc: "smart new (describe it; auto-routes to a project)"},
 		{Keys: []KeyName{KeyRename}, Desc: "rename session (label only)"},
 		{Keys: []KeyName{KeyAutoName}, Desc: "auto-name session (via its agent)"},
+		{Keys: []KeyName{KeyMute}, Desc: "mute / unmute this session's notifications"},
 		{Keys: []KeyName{KeyFilter}, Desc: "filter sessions"},
 		{Keys: []KeyName{KeyMultiSelect}, Mentions: []KeyName{KeyToggleMark},
 			Desc: "multi-select: space marks, p/r/x act on the marked set"},
