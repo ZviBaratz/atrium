@@ -681,7 +681,13 @@ func (m *home) forgetInstance(inst *session.Instance) {
 // KillInstance run on the main loop (the action is invoked there), so they don't
 // race the list. Kill is destructive, so the confirmation wears the danger
 // border like the single-kill dialog.
-func (m *home) killInstances(insts []*session.Instance, message string) tea.Cmd {
+//
+// altConfirmKey is the key that opened the dialog, which double-taps to confirm when
+// kill_double_tap_confirm is on. It is a parameter rather than keys.KillKey because
+// visual mode advertises plain "x" and accepts ctrl+x too, so the key the dialog must
+// echo is the one the user pressed — hard-coding the chord would print "(or ctrl+x)"
+// at someone who never pressed it.
+func (m *home) killInstances(insts []*session.Instance, message string, altConfirmKey string) tea.Cmd {
 	action := func() tea.Msg {
 		var res batchKillDoneMsg
 		for _, inst := range insts {
@@ -726,10 +732,10 @@ func (m *home) killInstances(insts []*session.Instance, message string) tea.Cmd 
 	// m.confirmationOverlay synchronously above).
 	m.confirmationOverlay.SetBorderColor(theme.Current().Palette.Danger)
 	// Mirror confirmKill's double-tap shortcut: with kill_double_tap_confirm on,
-	// pressing the kill key again confirms the batch dialog, matching single-kill
-	// muscle memory (Ctrl+X Ctrl+X).
-	if m.appConfig.GetKillDoubleTapConfirm() {
-		m.confirmationOverlay.SetConfirmAltKey(keys.KillKey)
+	// pressing the opening key again confirms the batch dialog, matching single-kill
+	// muscle memory (x x, or Ctrl+X Ctrl+X).
+	if altConfirmKey != "" && m.appConfig.GetKillDoubleTapConfirm() {
+		m.confirmationOverlay.SetConfirmAltKey(altConfirmKey)
 	}
 	return cmd
 }
@@ -774,8 +780,9 @@ func (m *home) resumeMarked() tea.Cmd {
 
 // killMarked tears down the killable subset of the multi-select-marked sessions
 // (everything except a still-Loading session, which single-kill also refuses).
-// Same eligibility/exit semantics as pauseMarked.
-func (m *home) killMarked() tea.Cmd {
+// Same eligibility/exit semantics as pauseMarked. openedBy is the key that got here
+// (x or ctrl+x), forwarded so the confirmation double-taps on that same key.
+func (m *home) killMarked(openedBy string) tea.Cmd {
 	var insts []*session.Instance
 	for _, inst := range m.list.MarkedInstancesInView() {
 		if inst.GetStatus() != session.Loading {
@@ -790,7 +797,7 @@ func (m *home) killMarked() tea.Cmd {
 	if n := sessionsWithUnpushedWork(insts); n > 0 {
 		message += fmt.Sprintf(" (%d of %d have unpushed work)", n, len(insts))
 	}
-	return m.killInstances(insts, message)
+	return m.killInstances(insts, message, openedBy)
 }
 
 // newSessionFormOverlay builds the unified new-session form (title, project, optional

@@ -381,6 +381,12 @@ func (m *home) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		// A click on a repo-group header toggles its fold, mirroring ←/→.
 		// Persist the new collapsed set exactly like the keyboard paths do.
 		if key, ok := m.list.HeaderAtZone(msg); ok {
+			// Mirroring ←/→ includes their filter guard: a live filter overrides the
+			// fold in the render, so this click would rewrite the persisted set with
+			// the header standing still (#339). Refuse and name the filter instead.
+			if m.list.Filtering() {
+				return m, m.handleInfoNotice(filterFoldNotice)
+			}
 			if m.list.ClickHeader(key) {
 				if err := m.appState.SetCollapsedRepos(m.list.CollapsedRepos()); err != nil {
 					return m, m.handleError(err)
