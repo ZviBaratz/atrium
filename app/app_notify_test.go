@@ -3,6 +3,7 @@ package app
 import (
 	"bytes"
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -51,6 +52,32 @@ func TestNotifyEventFor(t *testing.T) {
 			if tc.wantOK {
 				assert.Equal(t, tc.wantEvent, ev)
 			}
+		})
+	}
+}
+
+// TestNotifyRungFor pins the attention ladder: the finished-turn rung is configurable
+// and may be quieter than the configured mode, while the block edge always uses the
+// configured mode itself. The two rungs are named by event and never compared, so no
+// ordering over the modes is involved.
+func TestNotifyRungFor(t *testing.T) {
+	cases := []struct {
+		name           string
+		base, finished string
+		ev             notify.Event
+		want           string
+	}{
+		{"same follows the base on a finish", config.NotificationsDesktop, config.NotificationsSame, notify.EventFinished, config.NotificationsDesktop},
+		{"same follows the base on a block", config.NotificationsDesktop, config.NotificationsSame, notify.EventNeedsInput, config.NotificationsDesktop},
+		{"a quieter rung applies to the finish", config.NotificationsDesktop, config.NotificationsBell, notify.EventFinished, config.NotificationsBell},
+		{"the block keeps the base even with a quieter finished rung", config.NotificationsDesktop, config.NotificationsBell, notify.EventNeedsInput, config.NotificationsDesktop},
+		{"off silences the finish", config.NotificationsOSC, config.NotificationsOff, notify.EventFinished, config.NotificationsOff},
+		{"off never silences the block", config.NotificationsOSC, config.NotificationsOff, notify.EventNeedsInput, config.NotificationsOSC},
+		{"a bell base can still quiet its finish", config.NotificationsBell, config.NotificationsOff, notify.EventFinished, config.NotificationsOff},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, notifyRungFor(tc.base, tc.finished, tc.ev))
 		})
 	}
 }
@@ -222,6 +249,70 @@ func TestMaybeNotifyMutedStaysSilent(t *testing.T) {
 	require.Empty(t, buf.String(), "a muted session never notifies")
 }
 
+// blockEdge drives a genuine block edge on target and reports whatever maybeNotify wrote:
+// the unread stamp is snapshotted before the status write, exactly as applyMetadataResults
+// does, so the transition reads as EventNeedsInput and not as a finish.
+func blockEdge(h *home, target *session.Instance, mode string) {
+	old := target.GetStatus()
+	prevUnreadAt := target.UnreadAt()
+	target.SetStatus(session.NeedsInput)
+	h.maybeNotify(target, old, prevUnreadAt, mode)
+}
+
+// TestMaybeNotifyFinishedRungOffStaysSilent covers the quietest rung: with the finished
+// rung off, a finished turn is left to the list's own unread marker while a session
+// blocking on input still signals at the configured mode.
+func TestMaybeNotifyFinishedRungOffStaysSilent(t *testing.T) {
+	var buf bytes.Buffer
+	h, list := newNotifyHome(&buf)
+	h.appConfig.NotificationsFinished = config.NotificationsOff
+	target := notifyTarget(t, list)
+
+	finishOnce(h, target)
+	require.Empty(t, buf.String(), "a finished turn on the off rung emits nothing out-of-band")
+	require.True(t, target.Unread(), "but the in-app unread marker still flags the row")
+
+	blockEdge(h, target, config.NotificationsBell)
+	require.Equal(t, "\a", buf.String(), "a session blocking on input still uses the configured mode")
+}
+
+// TestMaybeNotifyFinishedRungQuieterThanBase is the ladder proper: one edge resolves to
+// the quieter rung and the other to the configured mode, in the same home, so the rung is
+// demonstrably chosen per event rather than per batch.
+func TestMaybeNotifyFinishedRungQuieterThanBase(t *testing.T) {
+	var buf bytes.Buffer
+	h, list := newNotifyHome(&buf)
+	h.appConfig.Notifications = config.NotificationsOSC
+	h.appConfig.NotificationsFinished = config.NotificationsBell
+	target := notifyTarget(t, list)
+
+	h.maybeNotify(target, session.Running, time.Time{}, config.NotificationsOSC) // observe (gate)
+	target.SetStatus(session.Ready)
+	h.maybeNotify(target, session.Running, time.Time{}, config.NotificationsOSC)
+	require.Equal(t, "\a", buf.String(), "the finish takes the quieter bell rung, not the configured osc")
+
+	buf.Reset()
+	blockEdge(h, target, config.NotificationsOSC)
+	require.True(t, strings.HasPrefix(buf.String(), "\x1b]9;"), "the block takes the configured osc rung, got %q", buf.String())
+}
+
+// TestMaybeNotifyThrottleStaysKeyedOnEvent guards the throttle's key. Both edges resolve
+// to the same rung here (bell), so keying the throttle on the resolved rung instead of the
+// event would make them share one budget and swallow the block — which is precisely the
+// edge the ladder exists to protect.
+func TestMaybeNotifyThrottleStaysKeyedOnEvent(t *testing.T) {
+	var buf bytes.Buffer
+	h, list := newNotifyHome(&buf)
+	target := notifyTarget(t, list)
+
+	finishOnce(h, target)
+	require.Equal(t, "\a", buf.String(), "the finish rings")
+
+	// Well inside notifyThrottle, but a different event, so it keeps its own budget.
+	blockEdge(h, target, config.NotificationsBell)
+	require.Equal(t, "\a\a", buf.String(), "the block has its own throttle budget")
+}
+
 // TestFocusBlurMsgTogglesFocused covers the Update wiring: tea.FocusMsg/BlurMsg set and
 // clear m.focused.
 func TestFocusBlurMsgTogglesFocused(t *testing.T) {
@@ -353,6 +444,41 @@ func TestApplyMetadataResultsBlockNotSuppressedWithQueuedPrompt(t *testing.T) {
 	h.applyMetadataResults([]instanceMetaResult{{instance: target, state: tmux.PanePromptManual}}, true)
 	require.Equal(t, session.NeedsInput, target.GetStatus())
 	require.Equal(t, "\a", buf.String(), "a blocked session rings even with a queued prompt")
+}
+
+// TestApplyMetadataResultsFinishedRungOff drives the ladder through the real production
+// path: with the finished rung off, a background session that finishes a turn stays silent
+// while the same session blocking on input still rings.
+func TestApplyMetadataResultsFinishedRungOff(t *testing.T) {
+	var buf bytes.Buffer
+	h, list := newNotifyHome(&buf)
+	h.appConfig.NotificationsFinished = config.NotificationsOff
+	target := notifyTarget(t, list)
+
+	h.applyMetadataResults([]instanceMetaResult{{instance: target, state: tmux.PaneWorking}}, true)
+	h.applyMetadataResults([]instanceMetaResult{{instance: target, state: tmux.PaneIdle}}, true)
+	require.Equal(t, session.Ready, target.GetStatus())
+	require.Empty(t, buf.String(), "a finished turn on the off rung emits nothing")
+
+	h.applyMetadataResults([]instanceMetaResult{{instance: target, state: tmux.PanePromptManual}}, true)
+	require.Equal(t, session.NeedsInput, target.GetStatus())
+	require.Equal(t, "\a", buf.String(), "blocking on a prompt still rings at the configured mode")
+}
+
+// TestApplyMetadataResultsMasterOffIgnoresFinishedRung confirms notifications=off remains
+// the master switch: applyMetadataResults skips the whole notification path, so a finished
+// rung can never revive a disabled feature.
+func TestApplyMetadataResultsMasterOffIgnoresFinishedRung(t *testing.T) {
+	var buf bytes.Buffer
+	h, list := newNotifyHome(&buf)
+	h.appConfig.Notifications = config.NotificationsOff
+	h.appConfig.NotificationsFinished = config.NotificationsBell
+	target := notifyTarget(t, list)
+
+	h.applyMetadataResults([]instanceMetaResult{{instance: target, state: tmux.PaneWorking}}, true)
+	h.applyMetadataResults([]instanceMetaResult{{instance: target, state: tmux.PaneIdle}}, true)
+	h.applyMetadataResults([]instanceMetaResult{{instance: target, state: tmux.PanePromptManual}}, true)
+	require.Empty(t, buf.String(), "notifications off silences every rung")
 }
 
 // TestForgetInstanceDropsBookkeeping confirms a killed session's per-instance maps are

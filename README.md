@@ -370,6 +370,24 @@ session finishes a turn or blocks on a prompt. `notifications` selects how:
   notifier binary. Supported by iTerm2, kitty, WezTerm, Ghostty, ConEmu, and foot;
   terminals that don't recognize it simply show nothing.
 
+Both events — a turn finishing, and a session blocking on you — use that one mode
+by default. `notifications_finished` splits them into an **attention ladder**, so
+the agent that actually needs you is never out-shouted by one that merely stopped:
+
+- `"same"` (default) — a finished turn uses the `notifications` mode too, exactly
+  as before.
+- `"off"` — a finished turn sends nothing out-of-band. This is quieter, not silent:
+  the row still carries its unread marker, and `u` still jumps to it.
+- `"bell"` — a finished turn just rings the terminal, while a session blocking on
+  you gets the fuller `notifications` mode (and `b` jumps to it).
+
+A blocked session always uses `notifications` itself, and only rungs quieter than
+every mode are offered, so a finished turn can never outrank a blocked one.
+`"desktop"` and `"osc"` are deliberately not accepted here — they are peers of each
+other, so neither is "one rung quieter" than the other; anything unrecognized reads
+as `"same"`. `notifications: "off"` remains the master switch: it silences both
+events whatever `notifications_finished` says.
+
 The session you're currently on — the selected row, or one you're attached to —
 never notifies, so only agents you've navigated away from can interrupt you.
 **While Atrium's terminal is focused nothing notifies at all** (you're already
@@ -382,9 +400,13 @@ a muted session never notifies, and the mute persists across restarts.
 ```json
 {
   "notifications": "desktop",
+  "notifications_finished": "bell",
   "notify_command": "notify-send \"Atrium\" \"$ATRIUM_SESSION $ATRIUM_STATUS\""
 }
 ```
+
+That pair reads as: a desktop popup when an agent is waiting on you, a bell when
+one merely finished its turn.
 
 `notify_command`, when set, runs via `sh -c` for each desktop notification with
 `$ATRIUM_SESSION` (the session's display name), `$ATRIUM_STATUS`
@@ -642,6 +664,7 @@ added without a row here.
 | `group_mode` | string | `"repo"` | list grouping: `repo` / `account` |
 | `smart_dispatch_auto` **†** | bool | `false` | let a confident `i` match create the session without the form |
 | `notifications` | string | `"off"` | background-session signal: `off` / `bell` / `desktop` / `osc` (SSH-friendly OSC 9) ([Notifications](#notifications)) |
+| `notifications_finished` | string | `"same"` | quieter rung for a *finished turn* only, so a blocked session is never out-shouted: `same` / `off` / `bell` ([Notifications](#notifications)) |
 | `notify_command` | string | built-in | shell command for `desktop` notifications ([Notifications](#notifications)) |
 | `notify_when_focused` | bool | `false` | keep notifying while Atrium's terminal is focused; `false` stays silent while you're watching ([Notifications](#notifications)) |
 
