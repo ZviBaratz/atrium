@@ -295,6 +295,33 @@ func TestInstanceAccountGettersAndFromData(t *testing.T) {
 	require.Nil(t, legacy.GitHubTokenEnv)
 }
 
+func TestInstanceClaudeAccountPoolRoundTrip(t *testing.T) {
+	inst, err := NewInstance(InstanceOptions{Title: "t", Path: ".", Program: "claude"})
+	require.NoError(t, err)
+
+	assert.Equal(t, "", inst.ClaudeAccountPool()) // dormant default
+
+	inst.SetClaudeAccount("work-1", "/home/tester/.claude-work", false)
+	inst.SetClaudeAccountPool("work")
+	assert.Equal(t, "work", inst.ClaudeAccountPool())
+
+	// Survives the InstanceData round-trip.
+	data := inst.ToInstanceData()
+	assert.Equal(t, "work", data.ClaudeAccountPool)
+
+	restored, err := FromInstanceData(context.Background(),
+		InstanceData{Title: "t", Path: ".", Branch: "b", Program: "claude", Direct: true,
+			ClaudeAccount: "work-1", ClaudeAccountPool: "work"}, "session/")
+	require.NoError(t, err)
+	assert.Equal(t, "work", restored.ClaudeAccountPool())
+
+	// Legacy data with no pool key decodes to empty (feature dormant).
+	legacy, err := FromInstanceData(context.Background(),
+		InstanceData{Title: "t", Path: ".", Branch: "b", Program: "claude", Direct: true}, "session/")
+	require.NoError(t, err)
+	assert.Equal(t, "", legacy.ClaudeAccountPool())
+}
+
 // TestPermissionModeRoundTrip asserts the live permission mode survives a
 // save/restore (so a paused session keeps its chip) and that a pre-feature
 // state.json — with no permission_mode key — restores to the flag fallback.
