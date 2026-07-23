@@ -603,12 +603,19 @@ instead of pinning every session in a repo to one account:
 - An account can be flagged rate-limited by hand — Atrium has no way to read
   Anthropic's own limits — from the `@` accounts overlay: press `l` on a Claude
   account to toggle it limited/available. Rotation skips a limited member and
-  cycles only through the rest.
+  cycles only through the rest. The flag is indefinite: it stays until you press
+  `l` again to clear it (a per-account reset time that auto-expires is a planned
+  follow-up).
+- The new-session form's **Account** picker lets you override routing per
+  session: pick the `<pool> ⇄` entry to rotate across the pool, or a specific
+  member (shown indented under it) to pin that account for this one session —
+  which bypasses availability, so it works even on a flagged member.
 - If **every** member of the routed pool is flagged limited, creating a session
   shows a confirm ("all `<pool>` accounts are rate-limited … create anyway on
   `<member>`?") instead of silently spawning on a limited account. Declining
-  leaves the draft in place and creates nothing; accepting pins whichever
-  member's limit resets soonest.
+  leaves the draft in place and creates nothing; accepting pins the member whose
+  limit resets soonest — which, while flags are indefinite-only, is the first
+  pool member.
 - **Setting up a second account:** each pool member needs its own
   `CLAUDE_CONFIG_DIR` with its own login. Point Claude at a fresh directory and
   log in once — `CLAUDE_CONFIG_DIR=~/.claude-work2 claude`, then run `/login`

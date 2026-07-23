@@ -103,6 +103,18 @@ func (ap *AccountPicker) SetWidth(w int) { ap.width = w }
 // HasMultiple returns true if there is more than one entry to choose from.
 func (ap *AccountPicker) HasMultiple() bool { return len(ap.entries) > 1 }
 
+// hasPools reports whether any entry is a pool ⇄ (rotating) entry, i.e. at least
+// one multi-member pool is configured. Used to gloss the picker's hint only when
+// the rotate-vs-pin distinction actually exists.
+func (ap *AccountPicker) hasPools() bool {
+	for _, e := range ap.entries {
+		if e.member == nil {
+			return true
+		}
+	}
+	return false
+}
+
 // Touched reports whether the user has driven the picker with a nav key. The form
 // uses it to decide auto-routed preselection (untouched) versus an override (touched).
 func (ap *AccountPicker) Touched() bool { return ap.touched }
@@ -150,7 +162,19 @@ func (ap *AccountPicker) Render() string {
 	var s strings.Builder
 	s.WriteString(ppLabelStyle().Render("Account"))
 	if ap.HasMultiple() && ap.focused {
-		s.WriteString(ppDimStyle().Render("  ↑↓ to change"))
+		hint := "  ↑↓ to change"
+		// When pools exist, the ⇄ entry rotates across the pool while a member entry
+		// pins one — a distinction otherwise carried only by the glyph and indent, so
+		// gloss whichever the cursor sits on.
+		if ap.hasPools() {
+			switch sel := ap.Selected(); {
+			case sel.member == nil:
+				hint += " · ⇄ rotates the pool"
+			case sel.pool != "":
+				hint += " · pins this member"
+			}
+		}
+		s.WriteString(ppDimStyle().Render(hint))
 	}
 	s.WriteString("\n\n")
 	for i, e := range ap.entries {

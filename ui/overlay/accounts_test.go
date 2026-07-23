@@ -584,3 +584,28 @@ func TestAccountForm_ClaudePoolRoundTrips(t *testing.T) {
 	assert.False(t, o.form.showPool, "GH form never shows Pool")
 	assert.Equal(t, "", o.form.Pool(), "Pool is empty on a GH form regardless of input contents")
 }
+
+// TestAccountsOverlay_AgyFormHasNoPool guards the openForm wiring: the Antigravity
+// tab must build its form with showPool=false. It once derived showPool as
+// !showToken, which — because the agy tab also passes showToken=false — wrongly
+// grew a Claude-only Pool field on the agy account form.
+func TestAccountsOverlay_AgyFormHasNoPool(t *testing.T) {
+	cfg := &config.Config{AgyAccounts: []config.AgyAccount{
+		{Name: "agy-work", ConfigDir: "~/.antigravity"},
+	}}
+	o := NewAccountsOverlay(cfg, config.DefaultState())
+	o.SetSize(80, 24)
+	o.selectTab(tabAgy)
+
+	// New agy account.
+	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
+	require.Equal(t, modeEdit, o.mode)
+	assert.False(t, o.form.showPool, "a new agy account form must not show the Pool field")
+
+	// Edit an existing agy account.
+	o.form = nil
+	o.mode = modeList
+	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'e'}})
+	require.Equal(t, modeEdit, o.mode)
+	assert.False(t, o.form.showPool, "an agy account edit form must not show the Pool field")
+}

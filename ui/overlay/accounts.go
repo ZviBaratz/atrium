@@ -192,18 +192,20 @@ func (o *AccountsOverlay) openForm(index int) {
 	o.lastErr = ""
 	switch {
 	case index < 0:
-		o.form = newAccountForm(o.showToken(), "", "", "", "", "", "")
+		// A new account: the Pool field belongs only to the Claude tab, the Token
+		// field only to GH. The Antigravity tab gets neither.
+		o.form = newAccountForm(o.showToken(), o.tab == tabClaude, "", "", "", "", "", "")
 	case o.tab == tabClaude:
 		a := o.cfg.ClaudeAccounts[index]
-		o.form = newAccountForm(false, a.Name, a.ConfigDir,
+		o.form = newAccountForm(false, true, a.Name, a.ConfigDir,
 			strings.Join(a.RemoteMatches, ", "), strings.Join(a.PathMatches, ", "), "", a.Pool)
 	case o.tab == tabAgy:
 		a := o.cfg.AgyAccounts[index]
-		o.form = newAccountForm(false, a.Name, a.ConfigDir,
+		o.form = newAccountForm(false, false, a.Name, a.ConfigDir,
 			strings.Join(a.RemoteMatches, ", "), strings.Join(a.PathMatches, ", "), "", "")
 	default: // tabGH
 		a := o.cfg.GHAccounts[index]
-		o.form = newAccountForm(true, a.Name, a.ConfigDir,
+		o.form = newAccountForm(true, false, a.Name, a.ConfigDir,
 			strings.Join(a.RemoteMatches, ", "), strings.Join(a.PathMatches, ", "),
 			strings.Join(a.TokenEnv, ", "), "")
 	}
@@ -544,7 +546,13 @@ func (o *AccountsOverlay) renderList() string {
 	if o.mode == modeConfirmDelete {
 		b.WriteString(theme.Current().DangerStyle().Render("Delete '" + o.rows()[o.cursor].name + "'?  y / n"))
 	} else {
-		b.WriteString(t.OverlayHintStyle().Render("↑/↓ move · tab switch · n new · e edit · d delete · l limited") + "\n")
+		// "l limited" toggles per-account availability, which only Claude accounts
+		// carry — advertise it only on that tab so the legend never names a dead key.
+		hint := "↑/↓ move · tab switch · n new · e edit · d delete"
+		if o.tab == tabClaude {
+			hint += " · l limited"
+		}
+		b.WriteString(t.OverlayHintStyle().Render(hint) + "\n")
 		b.WriteString(t.OverlayHintStyle().Render("t test routing · esc close"))
 	}
 	return b.String()

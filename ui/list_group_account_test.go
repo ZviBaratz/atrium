@@ -423,6 +423,28 @@ func TestGroupMode_KeepsBadgeForAccountDivergingFromRepoAnchor(t *testing.T) {
 		"the personal session under the work-clustered api block keeps its badge")
 }
 
+// Sessions rotated across a pool cluster under the pool's divider, so the divider
+// shows the POOL name while each row must keep its concrete MEMBER badge — that
+// per-member distribution is exactly what the account view exists to reveal.
+// Suppressing on the pool key (which every member shares) would hide them all.
+func TestGroupMode_PooledMembersKeepMemberBadges(t *testing.T) {
+	// Two api sessions on different members of pool "work", plus a personal repo so
+	// grouping is active (2 distinct cluster keys: "work" and "personal").
+	l := acctList(t, "api|work-1", "api|work-2", "sideproj|personal")
+	// Pin both api sessions to pool "work" so they cluster together under a "work"
+	// divider while keeping distinct member names.
+	for _, it := range l.items {
+		if filepath.Base(it.Path) == "api" {
+			it.SetClaudeAccountPool("work")
+		}
+	}
+	l.SetGroupMode("account")
+	out := ansi.Strip(l.String())
+	require.Contains(t, out, "── work", "pooled sessions cluster under the pool divider")
+	require.Contains(t, out, "work-1", "the work-1 member badge survives inside the pool cluster")
+	require.Contains(t, out, "work-2", "the work-2 member badge survives inside the pool cluster")
+}
+
 // In account-only mode (no status sort) the per-tick ApplySort must never reorder:
 // clustering keys on each session's account and repo, not its status, so a status
 // change leaves the order untouched and ApplySort reports no work done.

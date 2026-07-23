@@ -23,12 +23,13 @@ const (
 	fldPool = fldToken
 )
 
-// accountForm is the add/edit sub-form for one Claude or GitHub account. It works
-// purely in strings; the owning AccountsOverlay validates and builds the typed
-// config.ClaudeAccount / config.GHAccount on submit. showToken adds the GH-only
-// Token env field and showPool adds the Claude-only Pool field (both index
-// fldToken/fldPool, i.e. fldPool); on the other tab that field is absent from
-// inputs entirely, so nav/render/commit key off len(inputs).
+// accountForm is the add/edit sub-form for one Claude, GitHub, or Antigravity
+// account. It works purely in strings; the owning AccountsOverlay validates and
+// builds the typed config.ClaudeAccount / config.GHAccount / config.AgyAccount on
+// submit. showToken adds the GH-only Token env field and showPool adds the
+// Claude-only Pool field (both at index fldToken/fldPool); at most one is present
+// per instance, so nav/render/commit key off len(inputs). The Antigravity tab
+// passes neither — it has no token and no pool.
 type accountForm struct {
 	inputs    []textinput.Model
 	focus     int
@@ -54,11 +55,11 @@ func newFieldInput(placeholder string) textinput.Model {
 	return ti
 }
 
-func newAccountForm(showToken bool, name, configDir, remote, path, token, pool string) *accountForm {
-	// The two tabs share this form; a GH edit passes showToken=true (Claude-only
-	// Pool field absent), a Claude edit passes showToken=false, which is exactly
-	// when the Claude-only Pool field belongs — mirroring showToken's own gate.
-	showPool := !showToken
+func newAccountForm(showToken, showPool bool, name, configDir, remote, path, token, pool string) *accountForm {
+	// The three tabs share this form. showToken (GH only) and showPool (Claude only)
+	// are passed explicitly by the caller rather than derived from one another: the
+	// Antigravity tab passes both false, so it must not be told apart from Claude by
+	// a bare !showToken — that once wrongly grew a Pool field on the agy form.
 	inputs := []textinput.Model{
 		newFieldInput("e.g. work"),
 		newFieldInput("~/.claude-work  (empty = inherit ambient env)"),
