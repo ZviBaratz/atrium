@@ -452,7 +452,7 @@ func (t *Session) start(workDir string, program string) error {
 	// If an AgyConfigDir is resolved and the program is the Antigravity CLI,
 	// transparently wrap the execution in bwrap to isolate its config directory.
 	if t.agyConfigDir != "" && (program == "agy" || strings.HasPrefix(program, "agy ")) {
-		program = fmt.Sprintf("bwrap --dev-bind / / --bind %s \"$HOME/.gemini/antigravity-cli\" %s", 
+		program = fmt.Sprintf("bwrap --dev-bind / / --bind %s \"$HOME/.gemini/antigravity-cli\" %s",
 			shellSingleQuote(t.agyConfigDir), program)
 	}
 
