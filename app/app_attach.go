@@ -147,24 +147,6 @@ func (m *home) attachExecCarry(attach func() (chan struct{}, error), killTarget 
 	})
 }
 
-// repaintAfterAttach builds the command every handleAttachFinished path that
-// returns to the session list must issue. tea.Exec hands the terminal back via
-// Bubble Tea's RestoreTerminal, whose repaint only clears the diff cache and
-// re-emits a diffed frame — it never erases the screen. A tmux attach can leave
-// the real terminal grid diverged from Bubble Tea's model (tmux's own alt-screen
-// teardown is swallowed once the gated writer is disabled at detach, and chrome
-// OSC writes can interleave with the renderer's flush), and a soft diffed repaint
-// against a diverged grid lands wrong — the reclaimed list renders blank/stale
-// until a keystroke or ctrl+l forces a full redraw. tea.ClearScreen emits the hard
-// EraseEntireScreen+repaint that ctrl+l (app_update.go) and the theme-change idiom
-// (app_layout.go) already rely on, reconciling the grid; tea.WindowSize re-lays-out
-// at the reclaimed dimensions. Batched (not sequenced): both are processed before
-// any render tick so their order is immaterial, and a flat batch keeps ClearScreen
-// a directly-inspectable first element for tests.
-func (m *home) repaintAfterAttach(extra ...tea.Cmd) tea.Cmd {
-	return tea.Batch(append([]tea.Cmd{tea.ClearScreen, tea.WindowSize()}, extra...)...)
-}
-
 // attachFinishedMsg is delivered after a tea.Exec terminal attach returns (the
 // user detached or the attach errored). It carries the attach error, if any, and
 // the attached instance so the post-detach handler can surface an error and honor

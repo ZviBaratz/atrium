@@ -20,11 +20,8 @@ func TestAttachFinished_RawModeFailureOpensInfoModal(t *testing.T) {
 	h.errBox = ui.NewErrBox()
 	h.updateHandleWindowSizeEvent(tea.WindowSizeMsg{Width: 120, Height: 40})
 
-	_, cmd := h.Update(attachFinishedMsg{rawModeFailed: true, killTarget: inst})
+	_, _ = h.Update(attachFinishedMsg{rawModeFailed: true, killTarget: inst})
 
-	// A raw-mode failure falls through to the normal return path, which must still
-	// force a hard repaint of the reclaimed list under the info modal.
-	assert.True(t, firstIsClearScreen(t, cmd), "a raw-mode detach must force a repaint")
 	assert.Equal(t, stateInfo, h.state, "a raw-mode failure must open the persistent modal")
 	require.NotNil(t, h.textOverlay)
 	plain := xansi.Strip(h.textOverlay.Render())
