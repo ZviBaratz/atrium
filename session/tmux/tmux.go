@@ -80,6 +80,9 @@ type Session struct {
 	// never persisted; only the names are creation-fixed (SetGitHubTokenEnv). Empty
 	// = inject no token.
 	githubTokenEnv []string
+	// agyConfigDir, when non-empty, isolates the Antigravity CLI's configuration
+	// directory using bwrap at session launch.
+	agyConfigDir string
 	// adapter holds the per-agent heuristics resolved once from program at
 	// construction; never nil (unknown programs get agent.Generic).
 	adapter *agent.Adapter
@@ -269,6 +272,12 @@ func (t *Session) SetGitHubTokenEnv(names []string) {
 	t.githubTokenEnv = names
 }
 
+// SetAgyConfigDir sets the directory used to isolate the Antigravity CLI
+// configuration at session launch. Must be called before Start.
+func (t *Session) SetAgyConfigDir(dir string) {
+	t.agyConfigDir = dir
+}
+
 // atriumMarkerEnv is injected into every session's env so external shell hooks
 // (e.g. a per-repo gh/Claude account switcher in the user's zshrc) can detect an
 // Atrium session and defer to the CLAUDE_CONFIG_DIR / GH_CONFIG_DIR / token env
@@ -394,6 +403,16 @@ func (t *Session) start(workDir string, program string) error {
 		program = program + " --settings " + shellSingleQuote(settingsPath)
 	}
 
+	// Isolate a routed Antigravity (agy) account's config directory via bwrap. Keyed
+	// off the resolved adapter — not a string match on program — so it also covers
+	// the `antigravity` alias and the `--continue` resume command, and applied BEFORE
+	// wrapOOMScore so the OOM snippet wraps the bwrap command rather than the check
+	// running against an already-rewritten `…; exec agy` string (which never matches).
+	// A no-op off Linux, without a routed dir, or when bwrap is not installed.
+	if t.adapter.Key == agent.KeyAgy {
+		program = wrapAgyBwrap(program, t.agyConfigDir, runtime.GOOS)
+	}
+
 	// Weight this agent against the shared tmux server for the kernel OOM killer:
 	// prefix a shell snippet that raises the pane's oom_score_adj above the server's
 	// before exec'ing the agent, so memory pressure sheds one recoverable session
@@ -448,6 +467,7 @@ func (t *Session) start(workDir string, program string) error {
 			}
 		}
 	}
+
 	args = append(args, program)
 	cmd := tmuxCommand(t.baseContext(), args...)
 

@@ -749,6 +749,16 @@ var aider = &Adapter{
 	},
 }
 
+// Antigravity (agy).
+var agy = &Adapter{
+	Key:           KeyAgy,
+	DisplayName:   "Antigravity",
+	aliases:       []string{"agy", "antigravity"},
+	Resume:        func(program string) string { return program + " --continue" },
+	ResumeProbe:   "--continue",
+	HeadlessNamer: true,
+}
+
 // Generic is the adapter for programs no table entry recognizes: no markers
 // (content-change fallback), no prompt or gate detection, no resume. Strictly
 // the pre-adapter behavior for an unknown agent — except that unknown agents no
@@ -760,7 +770,7 @@ var Generic = &Adapter{
 
 // registry is ordered; Resolve returns the first alias match. Aliases are
 // disjoint today, so order is cosmetic.
-var registry = []*Adapter{claude, codex, gemini, aider}
+var registry = []*Adapter{claude, codex, gemini, aider, agy}
 
 // Resolve maps a program string to its adapter, or Generic when no entry
 // matches; it never returns nil. The program's first token is basenamed and

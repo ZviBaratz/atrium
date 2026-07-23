@@ -80,3 +80,24 @@ func runGeminiHeadless(ctx context.Context, executor cmd.Executor, geminiPath, p
 	}
 	return string(out), nil
 }
+
+// runAgyHeadless runs `agy -p` from a freshly created empty workspace dir
+// (like gemini) and returns the bare stdout text. Shared by the agy
+// naming and dispatch paths.
+func runAgyHeadless(ctx context.Context, executor cmd.Executor, agyPath, promptArg, stdin string) (string, error) {
+	workDir, err := os.MkdirTemp("", "cs-headless-agy-")
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = os.RemoveAll(workDir) }()
+
+	c := exec.CommandContext(ctx, agyPath, "-p", promptArg)
+	c.Dir = workDir
+	c.Stdin = strings.NewReader(stdin)
+
+	out, err := executor.Output(c)
+	if err != nil {
+		return "", fmt.Errorf("agy invocation failed: %w", err)
+	}
+	return string(out), nil
+}

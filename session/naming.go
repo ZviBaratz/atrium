@@ -60,9 +60,15 @@ func GenerateName(ctx context.Context, program, prompt string, stats *git.DiffSt
 				continue
 			}
 			return generateNameGemini(ctx, cmd.MakeExecutor(), geminiPath, prompt, stats)
+		case agent.KeyAgy:
+			agyPath, err := exec.LookPath(string(agent.KeyAgy))
+			if err != nil {
+				continue
+			}
+			return generateNameAgy(ctx, cmd.MakeExecutor(), agyPath, prompt, stats)
 		}
 	}
-	return "", fmt.Errorf("no agent with headless naming support found (auto-naming needs claude or gemini)")
+	return "", fmt.Errorf("no agent with headless naming support found (auto-naming needs claude, gemini, or agy)")
 }
 
 // namerPreference orders the naming-capable agents (agent.NamerKeys, the
@@ -147,6 +153,21 @@ func generateNameGemini(ctx context.Context, executor cmd.Executor, geminiPath, 
 	}
 
 	result, err := runGeminiHeadless(ctx, executor, geminiPath, namingInstruction, sessionContext)
+	if err != nil {
+		return "", err
+	}
+	return sanitizeName(result)
+}
+
+// generateNameAgy is the agy counterpart of generateName: `agy -p`
+// prints the bare response text on stdout.
+func generateNameAgy(ctx context.Context, executor cmd.Executor, agyPath, prompt string, stats *git.DiffStats) (string, error) {
+	sessionContext := buildContext(prompt, stats)
+	if sessionContext == "" {
+		return "", fmt.Errorf("no session content to name yet")
+	}
+
+	result, err := runAgyHeadless(ctx, executor, agyPath, namingInstruction, sessionContext)
 	if err != nil {
 		return "", err
 	}

@@ -54,9 +54,15 @@ func GenerateDispatch(ctx context.Context, program, line string, candidates []st
 				continue
 			}
 			return generateDispatchGemini(ctx, cmd.MakeExecutor(), geminiPath, line, basenames)
+		case agent.KeyAgy:
+			agyPath, rerr := exec.LookPath(string(agent.KeyAgy))
+			if rerr != nil {
+				continue
+			}
+			return generateDispatchAgy(ctx, cmd.MakeExecutor(), agyPath, line, basenames)
 		}
 	}
-	return "", "", fmt.Errorf("no agent with headless support found (smart dispatch needs claude or gemini)")
+	return "", "", fmt.Errorf("no agent with headless support found (smart dispatch needs claude, gemini, or agy)")
 }
 
 // generateDispatch is the dependency-injected core of GenerateDispatch (claude path),
@@ -83,6 +89,21 @@ func generateDispatchGemini(ctx context.Context, executor cmd.Executor, geminiPa
 	}
 
 	result, err := runGeminiHeadless(ctx, executor, geminiPath, dispatchInstruction(basenames), line)
+	if err != nil {
+		return "", "", err
+	}
+	return parseDispatchReply(result, basenames)
+}
+
+// generateDispatchAgy is the agy counterpart: `agy -p` prints the bare reply
+// text on stdout.
+func generateDispatchAgy(ctx context.Context, executor cmd.Executor, agyPath, line string, basenames []string) (project, title string, err error) {
+	line = strings.TrimSpace(line)
+	if line == "" {
+		return "", "", fmt.Errorf("no description to route")
+	}
+
+	result, err := runAgyHeadless(ctx, executor, agyPath, dispatchInstruction(basenames), line)
 	if err != nil {
 		return "", "", err
 	}

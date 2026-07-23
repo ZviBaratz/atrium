@@ -832,7 +832,7 @@ func TestReadmeSettingsExceptionsMatchTheRowSchema(t *testing.T) {
 	// value per row cannot express them) and one deprecated key superseded by
 	// glyph_set. Keep in sync with the legend under "#### Configuration reference".
 	exceptions := map[string]bool{
-		"profiles": true, "claude_accounts": true, "gh_accounts": true, "nerd_font": true,
+		"profiles": true, "claude_accounts": true, "gh_accounts": true, "agy_accounts": true, "nerd_font": true,
 	}
 
 	rows := map[string]bool{}

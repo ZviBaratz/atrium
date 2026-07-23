@@ -221,6 +221,12 @@ type Instance struct {
 	// without the lock, like ghConfigDir.
 	githubTokenEnv []string
 
+	// agyAccount / agyConfigDir pin the Antigravity CLI account chosen at creation.
+	// agyConfigDir is used by bwrap to isolate ~/.gemini/antigravity-cli;
+	// agyAccount is the name of the resolved route.
+	agyAccount   string
+	agyConfigDir string
+
 	// modelID is the session's model per its transcript (the newest assistant
 	// entry, e.g. "claude-opus-4-7"). Written only on the main thread
 	// (SetModelMeta), like diffStats; persisted so paused sessions keep their
@@ -367,6 +373,8 @@ func (i *Instance) ToInstanceData() InstanceData {
 		ClaudeAccountDefault: i.claudeAccountDefault,
 		GHConfigDir:          i.ghConfigDir,
 		GitHubTokenEnv:       i.githubTokenEnv,
+		AgyAccount:           i.agyAccount,
+		AgyConfigDir:         i.agyConfigDir,
 		Model:                i.modelID,
 		PermissionMode:       i.runtimeMode,
 		Effort:               i.runtimeEffort,
@@ -443,6 +451,8 @@ func FromInstanceData(ctx context.Context, data InstanceData, branchPrefix strin
 		claudeAccountDefault: data.ClaudeAccountDefault,
 		ghConfigDir:          data.GHConfigDir,
 		githubTokenEnv:       data.GitHubTokenEnv,
+		agyAccount:           data.AgyAccount,
+		agyConfigDir:         data.AgyConfigDir,
 		modelID:              data.Model,
 		runtimeMode:          data.PermissionMode,
 		runtimeEffort:        data.Effort,
@@ -517,6 +527,7 @@ func FromInstanceData(ctx context.Context, data InstanceData, branchPrefix strin
 	sess.SetClaudeConfigDir(instance.claudeConfigDir)
 	sess.SetGHConfigDir(instance.ghConfigDir)
 	sess.SetGitHubTokenEnv(instance.githubTokenEnv)
+	sess.SetAgyConfigDir(instance.agyConfigDir)
 	instance.tmuxName = sess.Name()
 	instance.tmuxSession = sess
 
@@ -975,7 +986,9 @@ func (i *Instance) Start(firstTimeSetup bool) error {
 		tmuxSession.SetClaudeConfigDir(i.claudeConfigDir)
 		tmuxSession.SetGHConfigDir(i.ghConfigDir)
 		tmuxSession.SetGitHubTokenEnv(i.githubTokenEnv)
+		tmuxSession.SetAgyConfigDir(i.agyConfigDir)
 	}
+
 	i.mu.Lock()
 	i.tmuxSession = tmuxSession
 	i.tmuxName = tmuxSession.Name()
@@ -1251,6 +1264,13 @@ func (i *Instance) enqueue(prompt string, queuedAt time.Time) {
 	i.promptMu.Lock()
 	defer i.promptMu.Unlock()
 	i.promptQueue = append(i.promptQueue, queuedPrompt{text: prompt, queuedAt: queuedAt})
+}
+
+// SetAgyAccount pins the Antigravity CLI account resolved at creation time.
+func (i *Instance) SetAgyAccount(name, configDir string) {
+	// These are read lock-free because they are written exactly once before Start.
+	i.agyAccount = name
+	i.agyConfigDir = configDir
 }
 
 // QueuePrompt appends an initial/boot prompt for tick-driven delivery with a live

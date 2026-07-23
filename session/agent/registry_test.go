@@ -1261,7 +1261,7 @@ func TestAiderConfirmShapes(t *testing.T) {
 // NamerKeys pins which agents claim headless auto-naming and their preference
 // order — each entry must have a matching invocation branch in session/naming.go.
 func TestNamerKeys(t *testing.T) {
-	require.Equal(t, []Key{KeyClaude, KeyGemini}, NamerKeys())
+	require.Equal(t, []Key{KeyClaude, KeyGemini, KeyAgy}, NamerKeys())
 }
 
 // --- Generic: an unknown agent gets no heuristics — and, unlike the

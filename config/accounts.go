@@ -26,6 +26,22 @@ func (c *Config) ResolveClaudeAccount(remoteURL, targetPath string) (name, confi
 	return a.Name, a.ResolvedConfigDir(), isDefault
 }
 
+// ResolveAgyAccount returns the name and config directory of the AgyAccount
+// matching the given git remote URL or target path.
+func (c *Config) ResolveAgyAccount(remoteURL, targetPath string) (name, configDir string, isDefault bool) {
+	if len(c.AgyAccounts) == 0 {
+		return "", "", false
+	}
+	idx, isDefault := matchRouteIndex(len(c.AgyAccounts), strings.ToLower(remoteURL), strings.ToLower(targetPath),
+		func(i int) []string { return c.AgyAccounts[i].RemoteMatches },
+		func(i int) []string { return c.AgyAccounts[i].PathMatches })
+	if idx < 0 {
+		return "", "", false
+	}
+	a := c.AgyAccounts[idx]
+	return a.Name, a.ResolvedConfigDir(), isDefault
+}
+
 // ResolveGHConfigDir picks the GH_CONFIG_DIR for a target by the same routing as
 // ResolveClaudeAccount (case-insensitive substring, per account in config order,
 // remote_matches then path_matches; first rule-less account is the fallback), but

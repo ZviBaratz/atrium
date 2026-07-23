@@ -187,7 +187,7 @@ const (
 	// stateWelcome is the interactive first-launch setup modal: pick a default
 	// agent from the ones detected on PATH, then start the first session.
 	stateWelcome
-	// stateAccounts is the Claude/GitHub account manager modal.
+	// stateAccounts is the Claude/GitHub/Antigravity account manager modal.
 	stateAccounts
 	// stateScreensaver is the full-window splash easter egg (backtick from the
 	// default state); any key or click returns to stateDefault.
@@ -443,8 +443,8 @@ type home struct {
 	// settingsOverlay is the in-TUI configuration panel. It edits appConfig in
 	// place; applySettingChange persists and live-applies each change.
 	settingsOverlay *overlay.SettingsOverlay
-	// accountsOverlay is the in-TUI Claude/GitHub account manager (stateAccounts).
-	// It edits appConfig in place; handleAccountsState persists each change.
+	// accountsOverlay is the in-TUI Claude/GitHub/Antigravity account manager
+	// (stateAccounts). It edits appConfig in place; handleAccountsState persists each change.
 	accountsOverlay *overlay.AccountsOverlay
 	// welcomeOverlay is the interactive first-run setup modal (stateWelcome).
 	welcomeOverlay *overlay.WelcomeOverlay

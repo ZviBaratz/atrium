@@ -15,10 +15,11 @@ func TestAdaptersExposesSeededVersions(t *testing.T) {
 		KeyGemini: {"0.27", GranularityMinor, nil},
 		KeyCodex:  {"", GranularityPatch, nil},
 		KeyAider:  {"0.86.2", GranularityMinor, nil},
+		KeyAgy:    {"", GranularityPatch, nil},
 	}
 	got := Adapters()
-	if len(got) != len(want) {
-		t.Fatalf("Adapters() returned %d adapters, want %d", len(got), len(want))
+	if len(got) != 5 {
+		t.Fatalf("Adapters() returned %d adapters, want 5", len(got))
 	}
 	for _, a := range got {
 		w, ok := want[a.Key]

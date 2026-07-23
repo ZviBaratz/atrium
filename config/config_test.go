@@ -775,6 +775,56 @@ func TestResolveClaudeAccount(t *testing.T) {
 	}
 }
 
+func TestResolveAgyAccount(t *testing.T) {
+	t.Setenv("HOME", "/home/tester")
+
+	personal := AgyAccount{Name: "personal", ConfigDir: "~/.agy"} // no rules → catch-all default
+	work := AgyAccount{Name: "quantivly", ConfigDir: "~/.agy-quantivly",
+		RemoteMatches: []string{"quantivly/", "github-quantivly:"},
+		PathMatches:   []string{"/quantivly/"}}
+
+	cfg := &Config{AgyAccounts: []AgyAccount{personal, work}}
+
+	cases := []struct {
+		name          string
+		accounts      []AgyAccount
+		remote        string
+		path          string
+		wantName      string
+		wantDir       string
+		wantIsDefault bool
+	}{
+		{"unconfigured -> inherit", nil, "git@github.com:quantivly/x.git", "", "", "", false},
+		{"https remote match", cfg.AgyAccounts, "https://github.com/quantivly/x.git", "", "quantivly", "/home/tester/.agy-quantivly", false},
+		{"ssh alias remote match", cfg.AgyAccounts, "github-quantivly:quantivly/x.git", "", "quantivly", "/home/tester/.agy-quantivly", false},
+		{"case-insensitive remote", cfg.AgyAccounts, "https://github.com/Quantivly/X.git", "", "quantivly", "/home/tester/.agy-quantivly", false},
+		{"no match -> rule-less catch-all", cfg.AgyAccounts, "git@github.com:someoneelse/y.git", "", "personal", "/home/tester/.agy", true},
+		{"empty remote and path -> catch-all", cfg.AgyAccounts, "", "", "personal", "/home/tester/.agy", true},
+		{"direct path match", cfg.AgyAccounts, "", "/home/zvi/quantivly/qspace", "quantivly", "/home/tester/.agy-quantivly", false},
+		{"path present but no match -> catch-all", cfg.AgyAccounts, "", "/home/zvi/personal/proj", "personal", "/home/tester/.agy", true},
+		// Unlike ResolveClaudeAccount (which returns a synthetic "default"), agy
+		// mirrors gh: no match and no catch-all inherits the ambient env ("", "", false).
+		{"no match, every account has rules -> inherit", []AgyAccount{work}, "git@github.com:other/z.git", "/tmp/other", "", "", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			c := &Config{AgyAccounts: tc.accounts}
+			name, dir, isDefault := c.ResolveAgyAccount(tc.remote, tc.path)
+			if name != tc.wantName || dir != tc.wantDir || isDefault != tc.wantIsDefault {
+				t.Fatalf("ResolveAgyAccount(%q, %q) = (%q,%q,%v), want (%q,%q,%v)",
+					tc.remote, tc.path, name, dir, isDefault, tc.wantName, tc.wantDir, tc.wantIsDefault)
+			}
+		})
+	}
+
+	// First matching account wins when two could match.
+	a := AgyAccount{Name: "a", ConfigDir: "/a", RemoteMatches: []string{"acme"}}
+	b := AgyAccount{Name: "b", ConfigDir: "/b", RemoteMatches: []string{"acme"}}
+	if name, _, _ := (&Config{AgyAccounts: []AgyAccount{a, b}}).ResolveAgyAccount("https://x/acme/r.git", ""); name != "a" {
+		t.Fatalf("first-match-wins: got %q, want %q", name, "a")
+	}
+}
+
 func TestResolveGHConfigDir(t *testing.T) {
 	t.Setenv("HOME", "/home/tester")
 

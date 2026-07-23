@@ -1,6 +1,6 @@
 # Atrium [![Website](https://img.shields.io/badge/website-zvibaratz.github.io%2Fatrium-2ea44f)](https://zvibaratz.github.io/atrium/) [![CI](https://github.com/ZviBaratz/atrium/actions/workflows/build.yml/badge.svg)](https://github.com/ZviBaratz/atrium/actions/workflows/build.yml) [![GitHub Release](https://img.shields.io/github/v/release/ZviBaratz/atrium)](https://github.com/ZviBaratz/atrium/releases/latest) [![Go Report Card](https://goreportcard.com/badge/github.com/ZviBaratz/atrium)](https://goreportcard.com/report/github.com/ZviBaratz/atrium) [![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](LICENSE.md) [![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/ZviBaratz/atrium/badge)](https://securityscorecards.dev/viewer/?uri=github.com/ZviBaratz/atrium)
 
-Atrium is a terminal command center for orchestrating multiple AI coding agents — [Claude Code](https://github.com/anthropics/claude-code), [Codex](https://github.com/openai/codex), [Gemini](https://github.com/google-gemini/gemini-cli), and other local agents including [Aider](https://github.com/Aider-AI/aider) — each in its own isolated git worktree, so you can drive several tasks at once from a single panel.
+Atrium is a terminal command center for orchestrating multiple AI coding agents — [Claude Code](https://github.com/anthropics/claude-code), [Codex](https://github.com/openai/codex), [Antigravity](https://antigravity.google/docs/cli/reference), [Gemini](https://github.com/google-gemini/gemini-cli), and other local agents including [Aider](https://github.com/Aider-AI/aider) — each in its own isolated git worktree, so you can drive several tasks at once from a single panel.
 
 ![Atrium Screenshot](assets/screenshot.png)
 
@@ -112,6 +112,7 @@ Global flags:
    - Codex: `atrium -p "codex"`
    - Aider: `atrium -p "aider ..."`
    - Gemini: `atrium -p "gemini"`
+   - Antigravity: `atrium -p "agy"`
 - Make this the default, by modifying the config file (locate with `atrium debug`)
 
 <br />
@@ -617,12 +618,48 @@ routing can differ from Claude-login routing. Add a `gh_accounts` list:
 > `~/.atrium/worktrees/`. Atrium carries no commit-identity logic; it relies on that
 > system, which keys off the same remote signal as `remote_matches` above.
 
+#### Antigravity accounts
+
+Route each session to a specific [Antigravity](https://antigravity.google/docs/cli/reference)
+(`agy`) configuration by isolating the CLI's config directory
+(`~/.gemini/antigravity-cli`), chosen by the same remote/path matching as
+`claude_accounts` but configured independently. This keeps a work agent's
+Antigravity auth and settings separate from a personal one. Add an `agy_accounts`
+list:
+
+```json
+{
+  "agy_accounts": [
+    { "name": "personal", "config_dir": "~/.agy" },
+    {
+      "name": "quantivly",
+      "config_dir": "~/.agy-quantivly",
+      "remote_matches": ["quantivly/", "github-quantivly:"],
+      "path_matches": ["/quantivly/"]
+    }
+  ]
+}
+```
+
+- Matching rules (`remote_matches`, `path_matches`, list order, the optional rule-less
+  catch-all) work exactly as for `claude_accounts` above. The resolved dir is pinned
+  at session creation; editing `agy_accounts` affects only newly created sessions.
+- Isolation is implemented with [bwrap](https://github.com/containers/bubblewrap)
+  (bubblewrap), which bind-mounts the account's `config_dir` over
+  `~/.gemini/antigravity-cli` for that session only. **This is Linux-only** — bwrap
+  is a Linux user-namespace tool, so the routing is a no-op on macOS. If `bwrap` is
+  not installed, the session still starts but runs against the ambient config (a
+  warning is logged); install bubblewrap to get isolation.
+- Omitting `agy_accounts` (or a non-matching session with no catch-all) leaves `agy`
+  on its ambient config, exactly as before.
+
 #### Configuration reference
 
 Every `config.json` key, its default, and where it is documented above. Nearly all
-are also editable live from the Settings panel (`,`). The exceptions are the three
+are also editable live from the Settings panel (`,`). The exceptions are the four
 keys whose value is a *list of records* — `profiles`, `claude_accounts`,
-`gh_accounts` — which the one-value-per-row panel cannot express, and the
+`gh_accounts`, `agy_accounts` — which the one-value-per-row panel cannot express
+(the accounts are instead managed from the Accounts overlay), and the
 deprecated `nerd_font`, which `glyph_set` supersedes. A test
 (`config.TestReadmeDocumentsEveryConfigField`) fails the build if a new field is
 added without a row here.
@@ -656,6 +693,7 @@ added without a row here.
 | `fast_forward_local_base` | bool | `false` | also fast-forward the local base branch on create |
 | `claude_accounts` | array | `[]` | per-session `CLAUDE_CONFIG_DIR` routing ([Claude accounts](#claude-accounts)) |
 | `gh_accounts` | array | `[]` | per-session `GH_CONFIG_DIR` routing ([GitHub CLI accounts](#github-cli-accounts)) |
+| `agy_accounts` | array | `[]` | per-session `agy` config directory routing via bwrap ([Antigravity accounts](#antigravity-accounts)) |
 | `auto_update` | string | `"notify"` | startup update behavior: `notify` / `auto` / `off` ([Auto-update](#auto-update)) |
 | `project_search_roots` | array | `["~"]` | directories the background repo scan walks for the project picker |
 | `project_search_depth` | int | `3` | levels below each root the scan descends (`0`/negative disables it) |
