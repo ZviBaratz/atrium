@@ -41,6 +41,7 @@ func TestIsExecutableFile(t *testing.T) {
 func TestNamerPreference(t *testing.T) {
 	require.Equal(t, []agent.Key{agent.KeyClaude, agent.KeyGemini, agent.KeyAgy}, namerPreference(agent.KeyClaude))
 	require.Equal(t, []agent.Key{agent.KeyGemini, agent.KeyClaude, agent.KeyAgy}, namerPreference(agent.KeyGemini))
+	require.Equal(t, []agent.Key{agent.KeyAgy, agent.KeyClaude, agent.KeyGemini}, namerPreference(agent.KeyAgy))
 	require.Equal(t, []agent.Key{agent.KeyClaude, agent.KeyGemini, agent.KeyAgy}, namerPreference(agent.KeyCodex))
 	require.Equal(t, []agent.Key{agent.KeyClaude, agent.KeyGemini, agent.KeyAgy}, namerPreference(agent.KeyAider))
 	require.Equal(t, []agent.Key{agent.KeyClaude, agent.KeyGemini, agent.KeyAgy}, namerPreference(agent.KeyGeneric))
