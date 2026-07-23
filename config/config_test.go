@@ -1,6 +1,7 @@
 package config
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -1007,4 +1008,28 @@ func TestConfig_AccountsRoundTrip(t *testing.T) {
 	assert.True(t, got.ClaudeAccounts[1].IsCatchAll())
 	require.Len(t, got.GHAccounts, 1)
 	assert.Equal(t, []string{"GH_TOKEN", "GITHUB_TOKEN"}, got.GHAccounts[0].TokenEnv)
+}
+
+func TestClaudeAccountPoolRoundTrip(t *testing.T) {
+	t.Setenv("HOME", "/home/tester")
+
+	// A pooled account and an ungrouped one marshal/unmarshal through JSON, and a
+	// legacy account with no "pool" key decodes to the empty pool (feature dormant).
+	in := Config{ClaudeAccounts: []ClaudeAccount{
+		{Name: "work-1", ConfigDir: "~/.claude-work", Pool: "work"},
+		{Name: "personal", ConfigDir: "~/.claude-personal"},
+	}}
+	data, err := json.Marshal(in)
+	require.NoError(t, err)
+	assert.Contains(t, string(data), `"pool":"work"`)
+	assert.NotContains(t, string(data), `"name":"personal","config_dir":"~/.claude-personal","pool"`) // omitempty: no empty pool key
+
+	var out Config
+	require.NoError(t, json.Unmarshal(data, &out))
+	assert.Equal(t, "work", out.ClaudeAccounts[0].Pool)
+	assert.Equal(t, "", out.ClaudeAccounts[1].Pool)
+
+	var legacy Config
+	require.NoError(t, json.Unmarshal([]byte(`{"claude_accounts":[{"name":"solo","config_dir":"~/.c"}]}`), &legacy))
+	assert.Equal(t, "", legacy.ClaudeAccounts[0].Pool)
 }
