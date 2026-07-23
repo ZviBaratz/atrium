@@ -75,6 +75,15 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.handleUpdateNotice(fmt.Sprintf("updating to v%s in the background…", msg.release.Version)),
 			m.installUpdateCmd(msg.release),
 		)
+	case agentCheckDoneMsg:
+		names := strings.Join(msg.newAgents, ", ")
+		var text string
+		if len(msg.newAgents) == 1 {
+			text = fmt.Sprintf("New agent `%s` detected. Run `atrium profiles detect` to add it.", names)
+		} else {
+			text = fmt.Sprintf("New agents `%s` detected. Run `atrium profiles detect` to add them.", names)
+		}
+		return m, m.handleAgentNotice(text)
 	case updateCheckDoneMsg:
 		if m.list != nil {
 			m.list.SetUpdateBadge(updateBadgeText(msg.version, msg.installed))
