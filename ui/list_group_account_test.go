@@ -434,3 +434,24 @@ func TestGroupMode_ApplySortInertWhenAccountOnly(t *testing.T) {
 	require.False(t, l.ApplySort(), "account-only mode has no status sort to re-apply")
 	require.Equal(t, before, l.items, "a status change does not reorder an account-only view")
 }
+
+// accountKey clusters on the pinned rotation pool when one is set, falling back
+// to the resolved account name otherwise — this is what lets clusterByAccount
+// group sessions rotated across a pool's accounts into one cluster (Task 4 added
+// ClaudeAccountPool; this wires it into the clustering key with no other edits).
+func TestAccountKey_PoolElseName(t *testing.T) {
+	pooled, err := session.NewInstance(session.InstanceOptions{
+		Title: "a", Path: "/tmp/api", Program: "echo",
+	})
+	require.NoError(t, err)
+	pooled.SetClaudeAccount("work-2", "", false)
+	pooled.SetClaudeAccountPool("work")
+	require.Equal(t, "work", accountKey(pooled), "pinned pool is the cluster key")
+
+	solo, err := session.NewInstance(session.InstanceOptions{
+		Title: "b", Path: "/tmp/sideproj", Program: "echo",
+	})
+	require.NoError(t, err)
+	solo.SetClaudeAccount("personal", "", false)
+	require.Equal(t, "personal", accountKey(solo), "no pool falls back to the account name")
+}
