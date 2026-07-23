@@ -482,9 +482,9 @@ func (m *home) handleAttachFinished(msg attachFinishedMsg) (tea.Model, tea.Cmd) 
 		// them alongside the attach error, honoring the promise below that only the
 		// kill and AttachExitError paths stay log-only.
 		if len(msg.keeperErrs) > 0 {
-			return m, m.handleError(errors.Join(msg.err, errors.New(strings.Join(msg.keeperErrs, "\n"))))
+			return m, m.repaintAfterAttach(m.handleError(errors.Join(msg.err, errors.New(strings.Join(msg.keeperErrs, "\n")))))
 		}
-		return m, m.handleError(msg.err)
+		return m, m.repaintAfterAttach(m.handleError(msg.err))
 	}
 	// The attach keeper cleared prompt(s) while the loop was suspended — delivered
 	// ones, or abandoned ones whose hard-failure budget ran out — but it cannot
@@ -515,7 +515,7 @@ func (m *home) handleAttachFinished(msg attachFinishedMsg) (tea.Model, tea.Cmd) 
 			m.showInfo(fmt.Sprintf(
 				"Session detach hit an error and may need re-attaching "+
 					"(pause then resume to recover):\n%v", derr))
-			return m, tea.WindowSize()
+			return m, m.repaintAfterAttach()
 		}
 	}
 	// Honor an in-session kill (Ctrl+X) requested before detach. killTarget is the
@@ -564,7 +564,7 @@ func (m *home) handleAttachFinished(msg attachFinishedMsg) (tea.Model, tea.Cmd) 
 	// instanceChanged's own (hysteresis) poll doesn't also fire for the same instance.
 	selected := m.list.GetSelectedInstance()
 	m.lastStatusPollSelection = selected
-	cmds := []tea.Cmd{tea.WindowSize(), m.instanceChanged(),
+	cmds := []tea.Cmd{m.instanceChanged(),
 		sweepMetadataNowCmd(m.ctx, m.snapshotActiveInstances(), selected, m.attachGen)}
 	// Prompts the keeper definitively failed to deliver mid-attach: surface the loss
 	// like promptSendErrorMsg would, rather than leaving sessions silently
@@ -575,7 +575,7 @@ func (m *home) handleAttachFinished(msg attachFinishedMsg) (tea.Model, tea.Cmd) 
 	if len(msg.keeperErrs) > 0 {
 		cmds = append(cmds, m.handleError(errors.New(strings.Join(msg.keeperErrs, "\n"))))
 	}
-	return m, tea.Batch(cmds...)
+	return m, m.repaintAfterAttach(cmds...)
 }
 
 func (m *home) handleInstanceStarted(msg instanceStartedMsg) (tea.Model, tea.Cmd) {

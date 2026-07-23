@@ -13,7 +13,7 @@ import (
 // knownAgentBins are the agent CLIs probed when seeding or refreshing
 // profiles, in picker order. Each name doubles as the generated profile's
 // Name and matches the binary's adapter in session/agent by basename.
-var knownAgentBins = []string{"claude", "codex", "gemini", "aider"}
+var knownAgentBins = []string{"claude", "codex", "gemini", "aider", "agy"}
 
 // detectAgentCommand resolves an agent binary name to a runnable program
 // string, or an error when it is not installed. claude keeps the

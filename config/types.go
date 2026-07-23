@@ -100,6 +100,23 @@ func (a ClaudeAccount) IsCatchAll() bool {
 	return len(a.RemoteMatches) == 0 && len(a.PathMatches) == 0
 }
 
+// AgyAccount maps a named Antigravity CLI account to a configuration directory
+// and the route rules that auto-select it.
+type AgyAccount struct {
+	Name          string   `json:"name"`
+	ConfigDir     string   `json:"config_dir"`
+	RemoteMatches []string `json:"remote_matches,omitempty"`
+	PathMatches   []string `json:"path_matches,omitempty"`
+}
+
+func (a AgyAccount) ResolvedConfigDir() string {
+	return expandHomePath(a.ConfigDir)
+}
+
+func (a AgyAccount) IsCatchAll() bool {
+	return len(a.RemoteMatches) == 0 && len(a.PathMatches) == 0
+}
+
 // GHAccount maps a GitHub CLI config dir (injected as GH_CONFIG_DIR) to the same
 // kind of route rules as ClaudeAccount. It is a separate section from
 // ClaudeAccounts so gh-account routing can differ from Claude-login routing, but
@@ -295,6 +312,9 @@ type Config struct {
 	// disables the feature: no env is injected and gh inherits the ambient
 	// (global-active) account, exactly as before this key existed.
 	GHAccounts []GHAccount `json:"gh_accounts,omitempty"`
+	// AgyAccounts routes sessions to a per-session configuration directory for
+	// the Antigravity CLI. The dir is bind-mounted via bwrap at launch.
+	AgyAccounts []AgyAccount `json:"agy_accounts,omitempty"`
 	// AutoUpdate selects the update behavior at TUI startup: "notify" (default
 	// — check for a newer release and hint at `atrium update`), "auto"
 	// (download + verify + stage in the background; applied on next launch), or

@@ -79,6 +79,9 @@ type Session struct {
 	// never persisted; only the names are creation-fixed (SetGitHubTokenEnv). Empty
 	// = inject no token.
 	githubTokenEnv []string
+	// agyConfigDir, when non-empty, isolates the Antigravity CLI's configuration
+	// directory using bwrap at session launch.
+	agyConfigDir string
 	// adapter holds the per-agent heuristics resolved once from program at
 	// construction; never nil (unknown programs get agent.Generic).
 	adapter *agent.Adapter
@@ -268,6 +271,12 @@ func (t *Session) SetGitHubTokenEnv(names []string) {
 	t.githubTokenEnv = names
 }
 
+// SetAgyConfigDir sets the directory used to isolate the Antigravity CLI
+// configuration at session launch. Must be called before Start.
+func (t *Session) SetAgyConfigDir(dir string) {
+	t.agyConfigDir = dir
+}
+
 // atriumMarkerEnv is injected into every session's env so external shell hooks
 // (e.g. a per-repo gh/Claude account switcher in the user's zshrc) can detect an
 // Atrium session and defer to the CLAUDE_CONFIG_DIR / GH_CONFIG_DIR / token env
@@ -439,6 +448,14 @@ func (t *Session) start(workDir string, program string) error {
 			}
 		}
 	}
+
+	// If an AgyConfigDir is resolved and the program is the Antigravity CLI,
+	// transparently wrap the execution in bwrap to isolate its config directory.
+	if t.agyConfigDir != "" && (program == "agy" || strings.HasPrefix(program, "agy ")) {
+		program = fmt.Sprintf("bwrap --dev-bind / / --bind %s \"$HOME/.gemini/antigravity-cli\" %s", 
+			shellSingleQuote(t.agyConfigDir), program)
+	}
+
 	args = append(args, program)
 	cmd := tmuxCommand(t.baseContext(), args...)
 

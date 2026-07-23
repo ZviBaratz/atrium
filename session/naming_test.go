@@ -39,11 +39,11 @@ func TestIsExecutableFile(t *testing.T) {
 // when it supports headless naming; unsupported agents defer to the default
 // order (claude, then gemini).
 func TestNamerPreference(t *testing.T) {
-	require.Equal(t, []agent.Key{agent.KeyClaude, agent.KeyGemini}, namerPreference(agent.KeyClaude))
-	require.Equal(t, []agent.Key{agent.KeyGemini, agent.KeyClaude}, namerPreference(agent.KeyGemini))
-	require.Equal(t, []agent.Key{agent.KeyClaude, agent.KeyGemini}, namerPreference(agent.KeyCodex))
-	require.Equal(t, []agent.Key{agent.KeyClaude, agent.KeyGemini}, namerPreference(agent.KeyAider))
-	require.Equal(t, []agent.Key{agent.KeyClaude, agent.KeyGemini}, namerPreference(agent.KeyGeneric))
+	require.Equal(t, []agent.Key{agent.KeyClaude, agent.KeyGemini, agent.KeyAgy}, namerPreference(agent.KeyClaude))
+	require.Equal(t, []agent.Key{agent.KeyGemini, agent.KeyClaude, agent.KeyAgy}, namerPreference(agent.KeyGemini))
+	require.Equal(t, []agent.Key{agent.KeyClaude, agent.KeyGemini, agent.KeyAgy}, namerPreference(agent.KeyCodex))
+	require.Equal(t, []agent.Key{agent.KeyClaude, agent.KeyGemini, agent.KeyAgy}, namerPreference(agent.KeyAider))
+	require.Equal(t, []agent.Key{agent.KeyClaude, agent.KeyGemini, agent.KeyAgy}, namerPreference(agent.KeyGeneric))
 }
 
 func TestGenerateName(t *testing.T) {

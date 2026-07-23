@@ -68,6 +68,9 @@ type InstanceData struct {
 	// serialized, so state.json never holds a credential. omitempty: legacy
 	// state.json decodes to nil -> no token injection.
 	GitHubTokenEnv []string `json:"github_token_env,omitempty"`
+	// AgyAccount and AgyConfigDir mirror the same route-forwarding mechanism for Antigravity CLI.
+	AgyAccount   string `json:"agy_account,omitempty"`
+	AgyConfigDir string `json:"agy_config_dir,omitempty"`
 
 	// Model is the session's transcript-derived model id (e.g.
 	// "claude-opus-4-7"), persisted so paused sessions keep their model chip.

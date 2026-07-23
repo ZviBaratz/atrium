@@ -1279,6 +1279,10 @@ func (m *home) startNewSession(title, path string, direct bool, program, branch,
 	instance.SetGHConfigDir(ghDir)
 	instance.SetGitHubTokenEnv(ghTokenEnv)
 
+	// Resolve the Antigravity CLI account and config directory, if applicable.
+	agyAccName, agyAccDir, _ := m.appConfig.ResolveAgyAccount(remoteURL, path)
+	instance.SetAgyAccount(agyAccName, agyAccDir)
+
 	// Create the list row only now, on submit. AddInstance may insert it mid-list under its
 	// repo group, so select it by identity.
 	finalizer := m.list.AddInstance(instance)
