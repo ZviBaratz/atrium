@@ -171,6 +171,43 @@ func newSettingRows(cfg *config.Config) []settingRow {
 			},
 		},
 		{
+			key: "agent_oom_margin", section: "General", label: "Agent OOM margin", kind: kindInt,
+			description: "Linux only: raise each agent's oom_score_adj this far above the tmux server so a kill sheds one session, not all. Empty = on; 0 = off; N = margin.",
+			get: func(c *config.Config) string {
+				switch {
+				case c.AgentOOMMargin == nil:
+					return fmt.Sprintf("on (%d)", config.DefaultOOMMargin())
+				case *c.AgentOOMMargin < 1:
+					return "off"
+				default:
+					return strconv.Itoa(*c.AgentOOMMargin)
+				}
+			},
+			editGet: func(c *config.Config) string {
+				switch {
+				case c.AgentOOMMargin == nil:
+					return "" // empty selects the default margin (on)
+				case *c.AgentOOMMargin < 1:
+					return "0" // explicit disabled edits as 0
+				default:
+					return strconv.Itoa(*c.AgentOOMMargin)
+				}
+			},
+			set: func(c *config.Config, v string) error {
+				v = strings.TrimSpace(v)
+				if v == "" {
+					c.AgentOOMMargin = nil // default margin (on)
+					return nil
+				}
+				n, err := strconv.Atoi(v)
+				if err != nil || n < 0 {
+					return fmt.Errorf("agent OOM margin must be a non-negative number (0 = off, empty = on)")
+				}
+				c.AgentOOMMargin = &n // 0 = explicit off; positive = margin
+				return nil
+			},
+		},
+		{
 			key: "theme", section: "Appearance", label: "Theme", kind: kindEnum,
 			description: "UI color palette and border style.",
 			get: func(c *config.Config) string {
@@ -321,6 +358,82 @@ func newSettingRows(cfg *config.Config) []settingRow {
 			},
 		},
 		{
+			key: "project_search_roots", section: "Behavior", label: "Project scan roots", kind: kindText,
+			description: "Directories the background repo scan walks to stock the project picker; comma-separated, ~ allowed. A changed scope re-scans the next time the create form opens.",
+			get: func(c *config.Config) string {
+				return strings.Join(c.GetProjectSearchRoots(), ", ")
+			},
+			editGet: func(c *config.Config) string {
+				return strings.Join(c.GetProjectSearchRoots(), ", ")
+			},
+			set: func(c *config.Config, v string) error {
+				// Same split/trim/drop-blanks shape as carry_files, but empty input
+				// clears the key to nil rather than storing an explicit empty list:
+				// GetProjectSearchRoots treats nil and empty alike (both fall back to
+				// ~), so nil is the honest way to say "no override".
+				parts := strings.Split(v, ",")
+				roots := make([]string, 0, len(parts))
+				for _, p := range parts {
+					if t := strings.TrimSpace(p); t != "" {
+						roots = append(roots, t)
+					}
+				}
+				if len(roots) == 0 {
+					c.ProjectSearchRoots = nil
+					return nil
+				}
+				c.ProjectSearchRoots = roots
+				return nil
+			},
+		},
+		{
+			key: "project_search_depth", section: "Behavior", label: "Project scan depth", kind: kindInt,
+			description: fmt.Sprintf("Levels below each root the scan descends. Empty = default; 0 = off (no scan); N = depth, capped at %d.", config.MaxProjectSearchDepth()),
+			get: func(c *config.Config) string {
+				switch {
+				case c.ProjectSearchDepth == nil:
+					return fmt.Sprintf("default (%d)", config.DefaultProjectSearchDepth())
+				case *c.ProjectSearchDepth < 1:
+					return "off"
+				default:
+					return strconv.Itoa(*c.ProjectSearchDepth)
+				}
+			},
+			editGet: func(c *config.Config) string {
+				switch {
+				case c.ProjectSearchDepth == nil:
+					return "" // empty selects the built-in default depth
+				case *c.ProjectSearchDepth < 1:
+					return "0" // explicit disabled edits as 0
+				default:
+					return strconv.Itoa(*c.ProjectSearchDepth)
+				}
+			},
+			set: func(c *config.Config, v string) error {
+				v = strings.TrimSpace(v)
+				if v == "" {
+					c.ProjectSearchDepth = nil // built-in default
+					return nil
+				}
+				n, err := strconv.Atoi(v)
+				if err != nil || n < 0 {
+					return fmt.Errorf("scan depth must be a non-negative number (0 = off, empty = default)")
+				}
+				// Store what the user typed and let GetProjectSearchDepth clamp, so the
+				// accessor stays the single source of the bound; but refuse a value it
+				// would silently rewrite, rather than showing back a number we ignore.
+				if n > config.MaxProjectSearchDepth() {
+					return fmt.Errorf("scan depth must be at most %d", config.MaxProjectSearchDepth())
+				}
+				c.ProjectSearchDepth = &n
+				return nil
+			},
+		},
+		boolRow("smart_dispatch_auto", "Behavior", "Smart dispatch auto-create",
+			"A confident i match creates the session straight away instead of opening the pre-filled form.", "",
+			(*config.Config).GetSmartDispatchAuto,
+			func(c *config.Config, v bool) { c.SmartDispatchAuto = &v }),
+		{
 			key: "daemon_poll_interval", section: "Behavior", label: "Poll interval (ms)", kind: kindInt,
 			description: "Auto-yes daemon polling rate.", applyNote: "applies on restart",
 			get: func(c *config.Config) string { return strconv.Itoa(c.DaemonPollInterval) },
@@ -402,14 +515,26 @@ func newSettingRows(cfg *config.Config) []settingRow {
 		},
 		{
 			key: "notifications", section: "Behavior", label: "Notifications", kind: kindEnum,
-			description: "Signal a background session finishing or blocking: bell rings the terminal, desktop runs a notifier (Notify command, else notify-send / terminal-notifier / osascript). The selected and attached sessions stay silent.",
+			description: "Signal a background session finishing or blocking: bell rings the terminal, desktop runs a notifier (Notify command, else notify-send / terminal-notifier / osascript), osc sends an OSC 9 escape that reaches you over SSH with no local binary. The selected, attached, muted, and (unless Notify when focused) focused sessions stay silent.",
 			get:         func(c *config.Config) string { return c.GetNotifications() },
 			set: func(c *config.Config, v string) error {
 				c.Notifications = v
 				return nil
 			},
 			options: func(c *config.Config) []string {
-				return []string{config.NotificationsOff, config.NotificationsBell, config.NotificationsDesktop}
+				return []string{config.NotificationsOff, config.NotificationsBell, config.NotificationsDesktop, config.NotificationsOSC}
+			},
+		},
+		{
+			key: "notifications_finished", section: "Behavior", label: "Finished turns", kind: kindEnum,
+			description: "A quieter signal for a finished turn than for a session blocking on you: same uses the Notifications mode for both, off leaves a finished turn to the list's unread marker alone, bell rings the terminal. Only the quieter rungs are offered, so a finished turn can never outrank a blocked session. Ignored while Notifications is off.",
+			get:         func(c *config.Config) string { return c.GetNotificationsFinished() },
+			set: func(c *config.Config, v string) error {
+				c.NotificationsFinished = v
+				return nil
+			},
+			options: func(c *config.Config) []string {
+				return []string{config.NotificationsSame, config.NotificationsOff, config.NotificationsBell}
 			},
 		},
 		{
@@ -427,6 +552,10 @@ func newSettingRows(cfg *config.Config) []settingRow {
 				return nil
 			},
 		},
+		boolRow("notify_when_focused", "Behavior", "Notify when focused",
+			"Keep notifying while Atrium's terminal is focused. Off (default) stays silent while you're watching the fleet and notifies only after you switch away; a terminal that never reports focus always notifies.", "",
+			(*config.Config).GetNotifyWhenFocused,
+			func(c *config.Config, v bool) { c.NotifyWhenFocused = v }),
 		{
 			key: "tmux_config_override", section: "Behavior", label: "Tmux config override", kind: kindText,
 			description: "Custom tmux config path.", applyNote: "affects new sessions",

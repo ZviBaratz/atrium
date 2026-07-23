@@ -296,11 +296,13 @@ func colorizeDiff(diff string, width int) string {
 	}
 	rule := theme.Current().FaintStyle().Render(strings.Repeat("─", ruleLen))
 
+	var inHunk bool // true between a @@ header and the next diff --git
 	for _, line := range strings.Split(diff, "\n") {
 		switch {
 		case line == "":
 			out.WriteString("\n")
 		case strings.HasPrefix(line, "diff --git"):
+			inHunk = false
 			out.WriteString(rule + "\n")
 			if path := diffFilePath(line); path != "" {
 				out.WriteString(theme.Current().FgStyle().Bold(true).Render(fit(path)) + "\n")
@@ -308,10 +310,11 @@ func colorizeDiff(diff string, width int) string {
 				out.WriteString(metaStyle().Render(fit(line)) + "\n")
 			}
 		case strings.HasPrefix(line, "@@"):
+			inHunk = true
 			out.WriteString(hunkStyle().Render(fit(line)) + "\n")
-		case line[0] == '+' && (len(line) == 1 || line[1] != '+'):
+		case line[0] == '+' && (inHunk || len(line) == 1 || line[1] != '+'):
 			out.WriteString(additionStyle().Render(fit(line)) + "\n")
-		case line[0] == '-' && (len(line) == 1 || line[1] != '-'):
+		case line[0] == '-' && (inHunk || len(line) == 1 || line[1] != '-'):
 			out.WriteString(deletionStyle().Render(fit(line)) + "\n")
 		case isDiffMeta(line):
 			out.WriteString(metaStyle().Render(fit(line)) + "\n")

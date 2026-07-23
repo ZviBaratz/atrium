@@ -75,6 +75,15 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.handleUpdateNotice(fmt.Sprintf("updating to v%s in the background…", msg.release.Version)),
 			m.installUpdateCmd(msg.release),
 		)
+	case agentCheckDoneMsg:
+		names := strings.Join(msg.newAgents, ", ")
+		var text string
+		if len(msg.newAgents) == 1 {
+			text = fmt.Sprintf("New agent `%s` detected. Run `atrium profiles detect` to add it.", names)
+		} else {
+			text = fmt.Sprintf("New agents `%s` detected. Run `atrium profiles detect` to add them.", names)
+		}
+		return m, m.handleAgentNotice(text)
 	case updateCheckDoneMsg:
 		if m.list != nil {
 			m.list.SetUpdateBadge(updateBadgeText(msg.version, msg.installed))
@@ -293,6 +302,15 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		return m, m.runBranchSearch(m.textInputOverlay.BranchFilter(), m.textInputOverlay.BranchFilterVersion())
+	case tea.FocusMsg:
+		// The terminal regained focus: while focused, background sessions stay silent
+		// (the user is watching the fleet). See maybeNotify.
+		m.focused = true
+		return m, nil
+	case tea.BlurMsg:
+		// The terminal lost focus: edges may notify again.
+		m.focused = false
+		return m, nil
 	case tea.KeyMsg:
 		return m.handleKeyPress(msg)
 	case tea.WindowSizeMsg:
@@ -893,6 +911,8 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		return m.openRenameSelected()
 	case keys.KeyAutoName:
 		return m.startAutoNameSelected()
+	case keys.KeyMute:
+		return m.toggleMuteSelected()
 	case keys.KeySubmit:
 		return m.pushSelected()
 	case keys.KeyMerge:
@@ -980,30 +1000,8 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 			return m, m.handleError(err)
 		}
 		return m, m.instanceChanged()
-	case keys.KeyCollapse:
-		if m.list.Collapse() {
-			if err := m.appState.SetCollapsedRepos(m.list.CollapsedRepos()); err != nil {
-				return m, m.handleError(err)
-			}
-			return m, m.instanceChanged()
-		}
-		return m, nil
-	case keys.KeyExpand:
-		if m.list.Expand() {
-			if err := m.appState.SetCollapsedRepos(m.list.CollapsedRepos()); err != nil {
-				return m, m.handleError(err)
-			}
-			return m, m.instanceChanged()
-		}
-		return m, nil
-	case keys.KeyCollapseAll:
-		if m.list.ToggleCollapseAll() {
-			if err := m.appState.SetCollapsedRepos(m.list.CollapsedRepos()); err != nil {
-				return m, m.handleError(err)
-			}
-			return m, m.instanceChanged()
-		}
-		return m, nil
+	case keys.KeyCollapse, keys.KeyExpand, keys.KeyCollapseAll:
+		return m.foldKey(name)
 	case keys.KeyResume:
 		return m.resumeSelectedKey()
 	case keys.KeyResumeAll:

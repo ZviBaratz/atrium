@@ -295,7 +295,9 @@ var (
 			"cannot: Claude renders parts of its UI from server-resolved feature gates, so the same\n" +
 			"version can render differently — per account — with no version change at all. It reports\n" +
 			"the value Claude last resolved in each config dir against the value those heuristics were\n" +
-			"verified under.",
+			"verified under. On Linux, OOM ranking compares the shared tmux server's oom_score against\n" +
+			"each agent pane's, and warns if an out-of-memory kill would take the server (and with it\n" +
+			"every session) instead of a single recoverable agent.",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			log.Initialize(false)
 			defer log.Close()
@@ -325,6 +327,16 @@ var (
 			// no config/tmux access, so it is safe beside a live TUI and needs no budget.
 			fmt.Println()
 			fmt.Print(doctor.RenderCapacity(doctor.CheckCapacity()))
+
+			// OOM ranking: on Linux, compares the shared tmux server's oom_score against
+			// each agent pane's so a single kill is shown to shed one recoverable session
+			// rather than the server (every session). Read-only tmux queries + /proc, and
+			// a read-only config read — safe beside a live TUI; unavailable off Linux. The
+			// tmux queries get their own probe budget so a wedged server can't hang doctor.
+			oomCtx, cancelOOM := context.WithTimeout(context.Background(), doctor.ProbeTimeout)
+			defer cancelOOM()
+			fmt.Println()
+			fmt.Print(doctor.RenderOOM(doctor.CheckOOM(oomCtx)))
 
 			if doctor.MissingRequired(deps) {
 				// Nonzero exit for CI/scripts. The root command already sets

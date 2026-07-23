@@ -1,7 +1,11 @@
 package overlay
 
 import (
+	"os"
+	"path/filepath"
+	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -42,6 +46,67 @@ func TestSettingsOverlay_ToggleBool(t *testing.T) {
 	_, changed = o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyEnter})
 	assert.Equal(t, "auto_attach", changed)
 	assert.True(t, cfg.GetAutoAttach())
+}
+
+// The focus-gate toggle is reachable from the panel (AC #4) and flips the
+// default-off notify_when_focused: on = keep notifying while focused.
+func TestSettingsOverlay_ToggleNotifyWhenFocused(t *testing.T) {
+	cfg := config.DefaultConfig()
+	o := NewSettingsOverlay(cfg)
+	settingsAt(t, o, "notify_when_focused")
+
+	require.False(t, cfg.GetNotifyWhenFocused(), "focus-gating is on by default (silent while focused)")
+	_, changed := o.HandleKeyPress(tea.KeyMsg{Type: tea.KeySpace})
+	assert.Equal(t, "notify_when_focused", changed, "a toggle must report its row key so home can persist")
+	assert.True(t, cfg.GetNotifyWhenFocused(), "space turns notify-while-focused on")
+}
+
+// The notifications enum offers the SSH-friendly osc mode (AC #4).
+func TestSettingsOverlay_NotificationsIncludesOSC(t *testing.T) {
+	cfg := config.DefaultConfig()
+	var row settingRow
+	for _, r := range newSettingRows(cfg) {
+		if r.key == "notifications" {
+			row = r
+		}
+	}
+	require.Equal(t, "notifications", row.key)
+	assert.Contains(t, row.options(cfg), config.NotificationsOSC, "the notifications enum must offer osc")
+}
+
+// The finished-turn rung is reachable from the panel and offers ONLY the quieter rungs:
+// admitting desktop or osc here would let the panel configure a finished turn that is
+// louder than a session blocking on input, which is the one thing the ladder rules out.
+func TestSettingsOverlay_FinishedTurnsOffersOnlyQuieterRungs(t *testing.T) {
+	cfg := config.DefaultConfig()
+	var row settingRow
+	for _, r := range newSettingRows(cfg) {
+		if r.key == "notifications_finished" {
+			row = r
+		}
+	}
+	require.Equal(t, "notifications_finished", row.key, "settings panel should have a notifications_finished row")
+	require.Equal(t, []string{config.NotificationsSame, config.NotificationsOff, config.NotificationsBell}, row.options(cfg),
+		"only rungs at or below every notification mode may be offered")
+}
+
+// Cycling the finished-turn rung writes the config field and reports the row key so home
+// persists it.
+func TestSettingsOverlay_CycleFinishedTurns(t *testing.T) {
+	cfg := config.DefaultConfig()
+	o := NewSettingsOverlay(cfg)
+	settingsAt(t, o, "notifications_finished")
+
+	require.Equal(t, config.NotificationsSame, cfg.GetNotificationsFinished(), "defaults to following notifications")
+	_, changed := o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRight})
+	assert.Equal(t, "notifications_finished", changed, "a cycle must report its row key so home can persist")
+	assert.Equal(t, config.NotificationsOff, cfg.GetNotificationsFinished(), "same → off")
+
+	_, _ = o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRight})
+	assert.Equal(t, config.NotificationsBell, cfg.GetNotificationsFinished(), "off → bell")
+
+	_, _ = o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRight})
+	assert.Equal(t, config.NotificationsSame, cfg.GetNotificationsFinished(), "bell wraps back to same")
 }
 
 // The mouse off-switch is reachable from the panel (not JSON-only) and toggles
@@ -675,4 +740,142 @@ func TestSettingsOverlay_CarryFilesSetBlankEntriesOptOut(t *testing.T) {
 	require.NoError(t, row.set(cfg, " , ,  "))
 	assert.NotNil(t, cfg.CarryFiles, "opt-out must be an explicit empty slice, not nil")
 	assert.Empty(t, cfg.CarryFiles)
+}
+
+// --- Project-scan and smart-dispatch rows (#399 item 5) -----------------------
+//
+// These three keys were JSON-only: the README carried a "†" legend declaring
+// them unreachable from the panel. They fit the widget kinds the panel already
+// has (a comma-separated list like carry_files, a tri-state int like
+// max_sessions, a bool), so the carve-out was accidental rather than principled.
+
+func TestSettingsOverlay_ProjectScanAndSmartDispatchRowsExist(t *testing.T) {
+	o := NewSettingsOverlay(config.DefaultConfig())
+	for _, key := range []string{"project_search_roots", "project_search_depth", "smart_dispatch_auto"} {
+		assert.Truef(t, o.SelectRow(key), "settings panel must have a %s row", key)
+	}
+}
+
+// The roots row round-trips a comma-separated list, and clearing it restores the
+// default rather than storing an explicit empty list — GetProjectSearchRoots
+// treats nil and empty alike, so nil is the honest encoding of "no override".
+func TestSettingsOverlay_ProjectSearchRootsRoundTrip(t *testing.T) {
+	cfg := config.DefaultConfig()
+	row := settingRowByKey(t, cfg, "project_search_roots")
+
+	assert.Equal(t, "~", row.get(cfg), "the unset default displays as the home directory")
+	require.NoError(t, row.set(cfg, " ~/src , ~/work "))
+	assert.Equal(t, []string{"~/src", "~/work"}, cfg.ProjectSearchRoots, "entries are split and trimmed")
+	assert.Equal(t, "~/src, ~/work", row.get(cfg))
+
+	require.NoError(t, row.set(cfg, "  ,  "))
+	assert.Nil(t, cfg.ProjectSearchRoots, "an all-blank entry clears the override")
+	assert.Equal(t, "~", row.get(cfg), "and the default comes back")
+}
+
+// The depth row is the max_sessions tri-state: empty = built-in default, 0 = off,
+// N = that depth.
+func TestSettingsOverlay_ProjectSearchDepthTriState(t *testing.T) {
+	cfg := config.DefaultConfig()
+	row := settingRowByKey(t, cfg, "project_search_depth")
+
+	assert.Contains(t, row.get(cfg), "default", "an unset depth names the value it stands in for")
+	assert.Contains(t, row.get(cfg), strconv.Itoa(config.DefaultProjectSearchDepth()))
+	assert.Equal(t, "", row.editGet(cfg), "and edits as empty, so re-saving keeps it unset")
+
+	require.NoError(t, row.set(cfg, "0"))
+	assert.Equal(t, "off", row.get(cfg), "0 disables the scan and says so")
+	assert.Equal(t, "0", row.editGet(cfg))
+
+	require.NoError(t, row.set(cfg, "5"))
+	assert.Equal(t, "5", row.get(cfg))
+	assert.Equal(t, 5, cfg.GetProjectSearchDepth())
+
+	require.NoError(t, row.set(cfg, ""))
+	assert.Nil(t, cfg.ProjectSearchDepth, "empty returns the key to unset")
+}
+
+// A depth past the accessor's clamp is refused rather than accepted and silently
+// rewritten — echoing back a number GetProjectSearchDepth ignores would be a lie.
+func TestSettingsOverlay_ProjectSearchDepthRefusesPastTheClamp(t *testing.T) {
+	cfg := config.DefaultConfig()
+	row := settingRowByKey(t, cfg, "project_search_depth")
+
+	err := row.set(cfg, strconv.Itoa(config.MaxProjectSearchDepth()+1))
+	require.Error(t, err, "a value the accessor would clamp must be refused, not stored")
+	assert.Contains(t, err.Error(), strconv.Itoa(config.MaxProjectSearchDepth()), "the error names the ceiling")
+	assert.Nil(t, cfg.ProjectSearchDepth, "and nothing is written")
+
+	require.Error(t, row.set(cfg, "-1"), "a negative depth is not the off switch; 0 is")
+	require.Error(t, row.set(cfg, "three"))
+}
+
+// settingRowByKey returns the declared row for key, failing the test if absent.
+func settingRowByKey(t *testing.T, cfg *config.Config, key string) settingRow {
+	t.Helper()
+	for _, r := range newSettingRows(cfg) {
+		if r.key == key {
+			return r
+		}
+	}
+	t.Fatalf("no settings row for %q", key)
+	return settingRow{}
+}
+
+// The README's configuration reference claims which keys the panel cannot edit.
+// That claim is hand-maintained prose, and it went stale the moment these three
+// rows landed — nothing pinned it to the schema. This is that pin: every key in
+// the README table either has a row, or is one of the documented exceptions, and
+// the exception list itself must not name a key that does have a row.
+func TestReadmeSettingsExceptionsMatchTheRowSchema(t *testing.T) {
+	// Keys the panel deliberately cannot edit: three lists *of records* (one
+	// value per row cannot express them) and one deprecated key superseded by
+	// glyph_set. Keep in sync with the legend under "#### Configuration reference".
+	exceptions := map[string]bool{
+		"profiles": true, "claude_accounts": true, "gh_accounts": true, "nerd_font": true,
+	}
+
+	rows := map[string]bool{}
+	for _, r := range newSettingRows(config.DefaultConfig()) {
+		rows[r.key] = true
+	}
+
+	readme := moduleFile(t, "README.md")
+	start := strings.Index(readme, "#### Configuration reference")
+	require.GreaterOrEqual(t, start, 0)
+	section := readme[start:]
+	if end := strings.Index(section, "### FAQs"); end > 0 {
+		section = section[:end]
+	}
+
+	for _, m := range regexp.MustCompile("(?m)^\\| `([a-z_]+)`").FindAllStringSubmatch(section, -1) {
+		key := m[1]
+		if exceptions[key] {
+			assert.Falsef(t, rows[key], "%s is listed as a panel exception but has a settings row", key)
+			continue
+		}
+		assert.Truef(t, rows[key], "%s is documented as panel-editable but has no settings row", key)
+	}
+
+	for key := range exceptions {
+		assert.Containsf(t, section, "`"+key+"`", "exception %s must appear in the README table", key)
+	}
+}
+
+// moduleFile walks up from the test's working directory to the module root and
+// reads the named file (see the identical helper in packages config and keys).
+func moduleFile(t *testing.T, name string) string {
+	t.Helper()
+	dir, err := os.Getwd()
+	require.NoError(t, err)
+	for {
+		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
+			b, err := os.ReadFile(filepath.Join(dir, name))
+			require.NoError(t, err)
+			return string(b)
+		}
+		parent := filepath.Dir(dir)
+		require.NotEqualf(t, parent, dir, "reached filesystem root without finding go.mod (looking for %s)", name)
+		dir = parent
+	}
 }

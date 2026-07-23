@@ -323,6 +323,45 @@ func TestParseDiffRows_NoNewlineMarkerAcrossFiles(t *testing.T) {
 	}, got, "only real code lines anchor comments, each numbered against its own file")
 }
 
+// TestParseDiffRows_DashDashContent is the regression guard for issue #435: a diff
+// hunk that deletes a line starting with "--" (so the diff line is "---divider")
+// and adds a line starting with "++" (so the diff line is "+++banner") must be
+// classified as rowDel / rowAdd — not rowMeta — inside the hunk. The literals are
+// deliberately three characters wide, exactly as long as the "--- a/x" file-header
+// prefix they collide with: the old guard `line[1] != '-'` excluded "---divider"
+// from the deletion case and isDiffMeta then matched the bare "---" prefix,
+// misclassifying the row and corrupting every subsequent line number in the hunk.
+func TestParseDiffRows_DashDashContent(t *testing.T) {
+	diff := "diff --git a/x.go b/x.go\n" +
+		"@@ -1,3 +1,3 @@\n" +
+		" ctx\n" +
+		"---divider\n" + // delete a line that started with "--"
+		"+++banner\n" + // add a line that started with "++"
+		" after\n"
+	rows := parseDiffRows(diff)
+
+	var codeRows []diffRow
+	for _, r := range rows {
+		if r.annotatable() {
+			codeRows = append(codeRows, r)
+		}
+	}
+	require.Len(t, codeRows, 4)
+
+	// "---divider" is a deletion.
+	require.Equal(t, rowDel, codeRows[1].kind, "---divider must be rowDel, not rowMeta")
+	require.Equal(t, 2, codeRows[1].lineNo, "del row carries the old-file line number")
+
+	// "+++banner" is an addition.
+	require.Equal(t, rowAdd, codeRows[2].kind, "+++banner must be rowAdd, not rowMeta")
+	require.Equal(t, 2, codeRows[2].lineNo, "add row carries the new-file line number")
+
+	// The context row after the mis-classified row must not have its line number
+	// corrupted by a skipped counter increment.
+	require.Equal(t, rowContext, codeRows[3].kind)
+	require.Equal(t, 3, codeRows[3].lineNo, "context row after the fix must be line 3, not 2")
+}
+
 // TestParseHunkHeader exercises parseHunkHeader directly for edge cases that
 // TestParseDiffRows only covers indirectly via the full parser: the count-omitted
 // form git uses for single-line hunks, trailing context text after the closing "@@",

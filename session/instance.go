@@ -282,6 +282,10 @@ type Instance struct {
 	// finished a turn. Set by SetStatus on a transition into Ready; cleared by
 	// MarkSeen (attach or selection dwell). Persisted in state.json. Guarded by mu.
 	unread bool
+	// muted, when set, silences all notifications for this one session (the user
+	// toggles it with M). Persisted in state.json so it survives a restart. Guarded
+	// by mu.
+	muted bool
 	// unreadAt records when unread was last flagged, so the UI can keep a fresh
 	// unread visibly bright for at least the dwell duration even when its row is
 	// already selected. In-memory only. Guarded by mu.
@@ -361,6 +365,7 @@ func (i *Instance) ToInstanceData() InstanceData {
 		Program:     i.Program,
 		AutoYes:     i.AutoYes,
 		Unread:      i.Unread(),
+		Muted:       i.Muted(),
 		Direct:      i.direct,
 
 		ClaudeAccount:        i.claudeAccount,
@@ -433,6 +438,7 @@ func FromInstanceData(ctx context.Context, data InstanceData, branchPrefix strin
 		Branch:      data.Branch,
 		status:      data.Status,
 		unread:      data.Unread,
+		muted:       data.Muted,
 		Height:      data.Height,
 		Width:       data.Width,
 		CreatedAt:   data.CreatedAt,

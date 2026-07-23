@@ -97,6 +97,7 @@ func TestLsJSONFields(t *testing.T) {
 		Effort:      "high",
 		AutoYes:     true,
 		Unread:      true,
+		Muted:       true,
 		CreatedAt:   created,
 		UpdatedAt:   updated,
 		PromptQueue: []session.QueuedPromptData{{Text: "one"}, {Text: "two"}},
@@ -124,6 +125,7 @@ func TestLsJSONFields(t *testing.T) {
 	assert.Equal(t, "high", s["effort"])
 	assert.Equal(t, true, s["auto_yes"])
 	assert.Equal(t, true, s["unread"])
+	assert.Equal(t, true, s["muted"], "a muted session is visible to scripts, like every other session flag")
 	assert.Equal(t, float64(2), s["queued_prompts"])
 	assert.Equal(t, created.Format(time.RFC3339), s["created_at"])
 	assert.Equal(t, updated.Format(time.RFC3339), s["updated_at"])

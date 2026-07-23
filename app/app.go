@@ -62,6 +62,12 @@ func Run(ctx context.Context, program string, autoYes bool, version, binName str
 		// Tie the program to the lifecycle context so a SIGTERM (which cancels
 		// ctx in main) also stops the TUI loop, not just the subprocesses.
 		tea.WithContext(ctx),
+		// Report terminal focus/blur (DECSET 1004) so notifications can stay silent
+		// while the user is watching the fleet. Atrium's TUI runs in the real
+		// terminal (not inside its private tmux server), so these events reach us
+		// directly; a terminal that ignores 1004 simply never sends them, and an
+		// unknown focus is treated as "not focused" — never permanent silence.
+		tea.WithReportFocus(),
 	}
 	// Mouse capture is opt-out (config `mouse`, default on). With it off we never
 	// enable cell-motion reporting, so every mouse event stays with the terminal
@@ -216,6 +222,10 @@ type home struct {
 	// the hint bar couldn't render it (a modal overlay was open); the preview
 	// tick re-delivers it. Empty when nothing is pending.
 	pendingUpdateNotice string
+	// pendingAgentNotice buffers a one-shot agent detection notice that arrived while
+	// the hint bar couldn't render it; the preview tick re-delivers it. Empty when
+	// nothing is pending.
+	pendingAgentNotice string
 	// pendingReleaseNotes buffers a one-shot "what's new" overlay that arrived
 	// while another modal owned the screen; the preview tick flushes it once the
 	// screen is free. nil when nothing is pending.
@@ -250,6 +260,12 @@ type home struct {
 	// timestamps). An instance absent from the map has not been observed yet, so its
 	// first status is never notified — only genuine later transitions are.
 	notifySeen map[*session.Instance]*notifyState
+	// focused reports whether Atrium's terminal window currently has focus, tracked
+	// via tea.FocusMsg/BlurMsg (WithReportFocus). Its zero value is false, so a
+	// terminal that never reports focus — no DECSET 1004 — is never treated as
+	// focused and notifies exactly as before (see maybeNotify, config
+	// NotifyWhenFocused). While focused, background sessions stay silent.
+	focused bool
 	// metadataTick counts metadata poll cycles. Non-selected sessions are only fully
 	// swept every metadataFullSweepEvery ticks (see tickUpdateMetadataCmd); the counter
 	// drives that cadence.
@@ -485,6 +501,13 @@ func newHome(ctx context.Context, program string, autoYes bool, version, binName
 	// Load application config
 	appConfig := config.LoadConfig()
 
+	// Resolve the agent OOM margin once, before any session is constructed (instance
+	// restore below and every later new/resume all read it through newSession), so
+	// each agent pane raises its Linux oom_score_adj above the shared tmux server's
+	// and the kernel OOM killer sheds one recoverable session instead of the server
+	// (every session). Off Linux / when disabled this resolves to a harmless no-op.
+	tmux.SetAgentOOMMargin(appConfig.GetAgentOOMMargin())
+
 	// Pre-accept Claude's workspace trust for the worktrees root before any
 	// session starts (opt-in; best-effort — on failure the trust dialog simply
 	// appears per worktree, as it would without the feature). Done once here on
@@ -531,6 +554,7 @@ func (m *home) Init() tea.Cmd {
 		tickUpdateMetadataCmd(m.ctx, m.snapshotActiveInstances(), m.list.GetSelectedInstance(), true, m.attachGen), // first tick: full sweep
 		m.updateCheckCmd(),   // nil (inert) is fine: tea.Batch skips nil cmds
 		m.driftCheckCmd(),    // agent-heuristic drift hint
+		m.agentCheckCmd(),    // background agent CLI detection
 		m.releaseNotesCmd(),  // nil (inert) is fine: tea.Batch skips nil cmds
 		m.startProjectScan(), // nil (disabled) is likewise skipped
 	)

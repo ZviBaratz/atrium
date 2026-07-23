@@ -71,6 +71,12 @@ func (m *home) handleProjectScanDone(msg projectScanDoneMsg) tea.Cmd {
 		return nil // superseded by a newer scan
 	}
 	m.scanInFlight = false
+	if m.appConfig.GetProjectSearchDepth() <= 0 {
+		// The settings panel switched the scan off while this walk was in flight.
+		// Delivering now would undo the retire applySettingChange just did — this
+		// is the one path that can put repos back after the user said "off".
+		return nil
+	}
 	m.lastScanAt = time.Now()
 	m.scannedRepos = msg.repos
 	// Best-effort cache: a failed write only costs the instant first paint on

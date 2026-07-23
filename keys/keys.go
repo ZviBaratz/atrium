@@ -79,6 +79,8 @@ const (
 
 	KeyAutoName // Auto-generate a display name for the selected session via claude
 
+	KeyMute // Toggle notification mute for the selected session
+
 	KeyFilter // Enter incremental filter mode to narrow the session list
 
 	KeyCopyBranch // Copy the selected session's branch name to the clipboard

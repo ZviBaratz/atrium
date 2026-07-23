@@ -3,6 +3,8 @@ package app
 // Layout, window-size, and live settings application for the home model.
 
 import (
+	"time"
+
 	"github.com/ZviBaratz/atrium/config"
 	"github.com/ZviBaratz/atrium/log"
 	"github.com/ZviBaratz/atrium/session/tmux"
@@ -241,6 +243,26 @@ func (m *home) applySettingChange(key string) tea.Cmd {
 		// no config import. With zero sessions the splash repaints in place, so
 		// cycling the enum previews each pattern behind the panel.
 		ui.SetSplashVariant(m.appConfig.GetSplash())
+	case "project_search_roots", "project_search_depth":
+		// The scan's scope changed under a live TUI. Switching it off must also
+		// retire the results already held: assembleHome gates the persisted cache
+		// on the same condition at launch, because "a cache written before the
+		// user disabled the scan must not keep surfacing" (#120) — but that gate
+		// only runs at construction, and the panel can now flip the key without a
+		// relaunch. A still-enabled scope keeps its results (the best answer until
+		// the new scope's walk lands); either way the scan is marked stale so the
+		// next form-open re-walks rather than serving the old scope for a full
+		// projectScanTTL.
+		m.lastScanAt = time.Time{}
+		if m.appConfig.GetProjectSearchDepth() <= 0 {
+			m.scannedRepos = nil
+			// Best-effort, like the write in handleProjectScanDone: a failed clear
+			// only costs a stale first paint on the next launch, which that gate
+			// discards anyway while the scan stays off.
+			if err := m.appState.ClearScannedRepos(); err != nil {
+				log.WarningLog.Printf("failed to clear the repo-scan cache: %v", err)
+			}
+		}
 	case "session_sort":
 		// Re-order the list under the new mode immediately; the list takes the
 		// normalized mode string so ui needs no config import. Selection is
@@ -278,6 +300,13 @@ func (m *home) applySettingChange(key string) tea.Cmd {
 		if err := tmux.Init(m.appConfig.TmuxConfigOverride, m.appConfig.GetSessionContextBar()); err != nil {
 			return m.handleError(err)
 		}
+	case "agent_oom_margin":
+		// Re-sync the process-wide margin. Each session applies the current value at
+		// launch, so any session the user relaunches after this change (pause → resume,
+		// or a pane recreate) picks it up; a session whose agent is already running keeps
+		// its launched oom_score_adj until it is next relaunched (the kernel sets it once,
+		// at exec).
+		tmux.SetAgentOOMMargin(m.appConfig.GetAgentOOMMargin())
 	case "auto_yes":
 		// In-TUI auto-accept is driven by each instance's AutoYes flag (the
 		// daemon only runs while the TUI is closed — main.go stops it before
@@ -326,4 +355,20 @@ func (m *home) adjustListCols(delta int) tea.Cmd {
 	// error could snap back to cols, which would make a step silently stick.
 	ratio := (float64(cols+delta) + 0.5) / float64(m.windowWidth)
 	return m.setCustomRatio(ratio)
+}
+
+// repaintAfterAttach forces a hard repaint after a full-screen tea.Exec attach
+// returns control to the app. tea.Exec's RestoreTerminal only does a soft repaint
+// (using the diff cache), which leaves the frame stale or blank if the OS/terminal
+// didn't preserve the alternate screen perfectly (tmux often clobbers it). This
+// issues a tea.ClearScreen to flush the diff cache, then re-emits a WindowSizeMsg
+// so components reflow and re-render completely. Any additional cmds are batched
+// with the repaint.
+func (m *home) repaintAfterAttach(cmds ...tea.Cmd) tea.Cmd {
+	return tea.Sequence(
+		tea.ClearScreen,
+		tea.Batch(append(cmds, func() tea.Msg {
+			return tea.WindowSizeMsg{Width: m.windowWidth, Height: m.windowHeight}
+		})...),
+	)
 }

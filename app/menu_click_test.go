@@ -56,15 +56,20 @@ func TestHintBarClick_MirrorsKeyPress(t *testing.T) {
 	// scans the composed frame itself (app.go), so just render until the ? entry's
 	// bounds register — scanning its stripped output again would corrupt them.
 	const helpZone = "hintbar:?"
-	var zi *zone.ZoneInfo
+	// Collapse zone-get and click into one Eventually (issue #434). A non-zero
+	// zone is not necessarily *this* frame's: Scan hands bounds to an async
+	// worker, and the manager is package-global, so Get can still be serving
+	// bounds an earlier test's differently-sized frame registered. Clicking those
+	// misses. Folding the click in means a miss just re-renders and retries.
 	require.Eventually(t, func() bool {
 		_ = h.View()
-		zi = zone.Get(helpZone)
-		return !zi.IsZero()
-	}, time.Second, 5*time.Millisecond, "hint-bar ? zone never registered")
-
-	h.Update(tea.MouseMsg{X: zi.StartX, Y: zi.StartY, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft})
-	require.Equal(t, stateHelp, h.state, "clicking the ? hint must open help, like pressing ?")
+		zi := zone.Get(helpZone)
+		if zi.IsZero() {
+			return false
+		}
+		h.Update(tea.MouseMsg{X: zi.StartX, Y: zi.StartY, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft})
+		return h.state == stateHelp
+	}, time.Second, 5*time.Millisecond, "clicking the ? hint must open help, like pressing ?")
 }
 
 // A click that lands on no hint-bar entry falls through to the normal row/tab

@@ -183,6 +183,12 @@ func (r *InstanceRenderer) Render(i *session.Instance, idx int, selected, marked
 	}
 
 	var right1 []rowSeg
+	// Muted marker: a durable, dim glyph on any session the user has silenced (M),
+	// so which sessions won't notify is visible at a glance. Rides the right cluster
+	// like the other per-session badges.
+	if i.Muted() {
+		right1 = append(right1, p.seg(g.Muted, th.Palette.FgDim))
+	}
 	// Pending-prompt marker: a durable signal that this session has a queued prompt
 	// awaiting delivery (waiting or in flight), so the user can tell "queued" from
 	// "delivered" without relying on the transient submit/delivery toast. Clears the
