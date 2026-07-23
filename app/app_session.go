@@ -1230,15 +1230,16 @@ func (m *home) createSessionFromForm(prompt string) tea.Cmd {
 		branch: branch, prompt: prompt, account: sel,
 	}
 
-	// All-members-rate-limited gate (once per batch), before the soft-cap gate.
-	if cmd, gated := m.gateAllExhausted(plan); gated {
-		return cmd
-	}
-
+	// Session-cap gate FIRST. A hard cap must hard-refuse an over-budget batch even
+	// when the routed pool is fully rate-limited: the all-exhausted accept path
+	// (proceedExhaustedMsg → spawnVariants) does NOT re-check the cap, so running the
+	// exhausted gate first would let accepting it spawn past the user's explicit hard
+	// limit — a safeguard bypass. Only once the batch is not hard-blocked do we run the
+	// exhausted gate; the accept path spawning without a cap re-check is then safe.
 	sc := m.sessionCap()
 	count := m.capCount(sc)
-	switch capVerdict(sc, count, total) {
-	case capBlock:
+	verdict := capVerdict(sc, count, total)
+	if verdict == capBlock {
 		ov.Submitted = false
 		free := sc.Limit - count
 		if free < 0 {
@@ -1246,7 +1247,17 @@ func (m *home) createSessionFromForm(prompt string) tea.Cmd {
 		}
 		ov.SetVariantError(fmt.Sprintf("batch needs %d but only %d of %d free (max_sessions)", total, free, sc.Limit))
 		return nil
-	case capConfirm:
+	}
+
+	// All-members-rate-limited gate (once per batch). When both a soft cap (capConfirm)
+	// and all-exhausted apply, the exhausted confirm is the one shown (accepting it then
+	// spawns — an accepted v1 simplification for the soft cap only; the hard cap is
+	// already ruled out above).
+	if cmd, gated := m.gateAllExhausted(plan); gated {
+		return cmd
+	}
+
+	if verdict == capConfirm {
 		return m.confirmOverCap(plan, sc.Limit, count)
 	}
 
@@ -1289,8 +1300,12 @@ func (m *home) startNewSession(title, path string, direct bool, program, branch,
 	switch {
 	case sel != nil && sel.Member != nil:
 		accName, accDir, accIsDefault = sel.Member.Name, sel.Member.ResolvedConfigDir(), sel.Member.IsCatchAll()
+		// A member pin clusters under its OWN pool (or its own name when ungrouped),
+		// not whatever routing resolved — otherwise pinning an ungrouped account in a
+		// repo that routes to a named pool would mis-cluster the session under that pool.
+		poolName = sel.Pool
 		if poolName == "" {
-			poolName = sel.Member.Name // an ungrouped pin clusters under its own name
+			poolName = sel.Member.Name
 		}
 	case len(members) == 0:
 		// dormant: leave everything empty
@@ -1649,7 +1664,7 @@ func (m *home) confirmAction(message string, action tea.Cmd) tea.Cmd {
 // soonestResetMember returns the index of the member whose limit resets soonest.
 // Members with a parseable Until sort by that time; indefinite or unparseable
 // sort last; all-indefinite returns 0 (the cursor's natural start).
-func soonestResetMember(members []config.ClaudeAccount, avail map[string]config.AccountAvailability, now time.Time) int {
+func soonestResetMember(members []config.ClaudeAccount, avail map[string]config.AccountAvailability) int {
 	best, bestSet := 0, false
 	var bestT time.Time
 	for i, mem := range members {
@@ -1709,7 +1724,7 @@ func (m *home) gateAllExhausted(plan spawnPlan) (tea.Cmd, bool) {
 // same rollback contract as confirmOverCap).
 func (m *home) confirmAllExhausted(plan spawnPlan, pool string, members []config.ClaudeAccount) tea.Cmd {
 	avail := m.appState.GetAccountAvailability()
-	soonest := soonestResetMember(members, avail, time.Now())
+	soonest := soonestResetMember(members, avail)
 	pinned := members[soonest]
 	plan.account = &overlay.AccountSelection{Pool: pool, Member: &pinned}
 	m.pendingExhausted = &plan
