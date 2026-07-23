@@ -571,6 +571,54 @@ list to your config file:
 - Omitting `claude_accounts` disables the feature entirely (no badge, no
   injection), so existing configs are unaffected.
 
+##### Rotation pools
+
+Give two or more accounts the same `pool` name to spread sessions across them
+instead of pinning every session in a repo to one account:
+
+```json
+{
+  "claude_accounts": [
+    {
+      "name": "work-1",
+      "config_dir": "~/.claude-work",
+      "remote_matches": ["quantivly/"],
+      "pool": "work"
+    },
+    { "name": "personal", "config_dir": "~/.claude" },
+    { "name": "work-2", "config_dir": "~/.claude-work2", "pool": "work" }
+  ]
+}
+```
+
+- Matching still resolves to a single **account** first, exactly as above; if
+  that account carries a `pool`, the session routes to the whole **pool**
+  instead — `route → pool → next available member`. Only one member needs its
+  own route rules; the rest just share its `pool` name (`work-2` above has none
+  of its own, and still rotates in).
+- Selection is **round-robin per new session**, not per workload: each pool
+  keeps a rotation cursor that advances by one every time a session is created,
+  so an idle session and one mid-task both count as "one turn" — the cursor
+  never skips back to whichever member looks less busy.
+- An account can be flagged rate-limited by hand — Atrium has no way to read
+  Anthropic's own limits — from the `@` accounts overlay: press `l` on a Claude
+  account to toggle it limited/available. Rotation skips a limited member and
+  cycles only through the rest.
+- If **every** member of the routed pool is flagged limited, creating a session
+  shows a confirm ("all `<pool>` accounts are rate-limited … create anyway on
+  `<member>`?") instead of silently spawning on a limited account. Declining
+  leaves the draft in place and creates nothing; accepting pins whichever
+  member's limit resets soonest.
+- **Setting up a second account:** each pool member needs its own
+  `CLAUDE_CONFIG_DIR` with its own login. Point Claude at a fresh directory and
+  log in once — `CLAUDE_CONFIG_DIR=~/.claude-work2 claude`, then run `/login`
+  inside it — and use that same directory as the member's `config_dir`.
+- Two members whose `config_dir` resolves to the **same** directory are the
+  same login under the hood, so rotating between them is a silent no-op (every
+  session lands on the one account regardless of the cursor). `atrium doctor`
+  flags this — a pool with two members sharing a `config_dir` prints a warning
+  naming both.
+
 #### GitHub CLI accounts
 
 `gh` keeps a single **global active account** per host, so in a multi-agent setup a

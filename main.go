@@ -338,6 +338,16 @@ var (
 			fmt.Println()
 			fmt.Print(doctor.RenderOOM(doctor.CheckOOM(oomCtx)))
 
+			// Account pools: same config.LoadConfig() read the gates section uses
+			// (installedGateDirs above) — flags pool members that share a
+			// config_dir, since that's the same Claude login and rotation across
+			// them is a silent no-op.
+			if pools := doctor.RenderPools(doctor.CheckPools(config.LoadConfig())); pools != "" {
+				fmt.Println()
+				fmt.Print(pools)
+			}
+
+
 			if doctor.MissingRequired(deps) {
 				// Nonzero exit for CI/scripts. The root command already sets
 				// SilenceErrors/SilenceUsage, so main() prints just this message to
