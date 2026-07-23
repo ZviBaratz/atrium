@@ -827,17 +827,18 @@ func seedOverlay(ov *overlay.TextInputOverlay, title, prompt, path string) {
 	}
 }
 
-// preselectAccountFor points ov's account picker at the Claude account auto-routed for
-// target, so the form shows the same account a submit would resolve. A no-op once the
-// user drives the picker (see AccountPicker.SelectByName). isGit gates the remote
-// lookup: a non-git target has no remote and routes by path.
+// preselectAccountFor points ov's account picker at the pool auto-routed for target
+// (its ⇄ entry, so a rotating pool is what highlights), so the form shows the same
+// cluster a submit would resolve. A no-op once the user drives the picker (see
+// AccountPicker.SelectByName). isGit gates the remote lookup: a non-git target has
+// no remote and routes by path.
 func (m *home) preselectAccountFor(ov *overlay.TextInputOverlay, target string, isGit bool) {
 	remoteURL := ""
 	if isGit {
 		remoteURL = git.GetRemoteURL(m.ctx, target)
 	}
-	if name, _, _ := m.appConfig.ResolveClaudeAccount(remoteURL, target); name != "" {
-		ov.PreselectAccount(name)
+	if poolName, _, _ := m.appConfig.ResolveClaudePool(remoteURL, target); poolName != "" {
+		ov.PreselectAccount(poolName)
 	}
 }
 

@@ -349,17 +349,17 @@ func (t *TextInputOverlay) GetEffort() string {
 }
 
 // GetSelectedAccount returns the deliberate account choice, or nil when the user
-// never touched the picker (an untouched preselection must not override routing).
+// never touched the picker. A pool ⇄ entry rotates (Member nil); a member entry
+// pins (Member set); Pool is the cluster key in both cases.
 func (t *TextInputOverlay) GetSelectedAccount() *AccountSelection {
 	if t.accountPicker == nil || !t.accountPicker.Touched() {
 		return nil
 	}
-	acct := t.accountPicker.GetSelectedAccount()
-	if acct.Name == "" {
+	e := t.accountPicker.Selected()
+	if e.member == nil && e.pool == "" {
 		return nil
 	}
-	// Pool is carried so the session clusters correctly; Member set = a pin.
-	return &AccountSelection{Pool: acct.Pool, Member: &acct}
+	return &AccountSelection{Pool: e.pool, Member: e.member}
 }
 
 // SelectedAccountName returns the name of the account the picker is currently pointing
