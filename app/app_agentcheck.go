@@ -11,13 +11,14 @@ type agentCheckDoneMsg struct {
 }
 
 func (m *home) agentCheckCmd() tea.Cmd {
+	profiles := m.appConfig.GetProfiles()
 	return func() tea.Msg {
 		detected := config.DetectAgentProfiles()
 		var newAgents []string
 
 		for _, d := range detected {
 			exists := false
-			for _, p := range m.appConfig.GetProfiles() {
+			for _, p := range profiles {
 				if p.Name == d.Name {
 					exists = true
 					break
@@ -37,7 +38,7 @@ func (m *home) agentCheckCmd() tea.Cmd {
 
 func (m *home) handleAgentNotice(text string) tea.Cmd {
 	if !m.appConfig.GetHintBar() {
-		m.pendingAgentNotice = text
+		m.pendingAgentNotice = ""
 		return nil
 	}
 	if cmd := m.showMenuNotice(text, ui.NoticeInfo); cmd != nil {
