@@ -5,6 +5,7 @@ import (
 
 	"github.com/ZviBaratz/atrium/config"
 	"github.com/ZviBaratz/atrium/ui"
+	"github.com/ZviBaratz/atrium/ui/overlay"
 	tea "github.com/charmbracelet/bubbletea"
 )
 
@@ -86,12 +87,16 @@ type spawnPlan struct {
 	programs []string
 	branch   string
 	prompt   string
-	account  *config.ClaudeAccount
+	account  *overlay.AccountSelection
 }
 
 // proceedOverCapMsg is emitted when the user confirms the host-capacity prompt; its
 // Update handler spawns the staged pendingOverCap plan.
 type proceedOverCapMsg struct{}
+
+// proceedExhaustedMsg is emitted when the user accepts creating a session even
+// though every member of the routed pool is rate-limited (see confirmAllExhausted).
+type proceedExhaustedMsg struct{}
 
 // confirmOverCap stages plan behind a host-capacity confirmation, dismisses the
 // create form, and returns the confirm command. The dismissed form is stashed as a

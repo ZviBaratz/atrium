@@ -348,16 +348,18 @@ func (t *TextInputOverlay) GetEffort() string {
 	return t.effortField.Value()
 }
 
-// GetSelectedAccount returns the chosen account and true only when the user has
-// deliberately driven the picker, i.e. an override. Otherwise it returns
-// (zero, false) so the caller keeps the freshly-resolved auto-route — whether the
-// form has no picker, or has one the user never touched (its selection is just the
-// auto-routed preselection, which the caller already computes itself).
-func (t *TextInputOverlay) GetSelectedAccount() (config.ClaudeAccount, bool) {
+// GetSelectedAccount returns the deliberate account choice, or nil when the user
+// never touched the picker (an untouched preselection must not override routing).
+func (t *TextInputOverlay) GetSelectedAccount() *AccountSelection {
 	if t.accountPicker == nil || !t.accountPicker.Touched() {
-		return config.ClaudeAccount{}, false
+		return nil
 	}
-	return t.accountPicker.GetSelectedAccount(), true
+	acct := t.accountPicker.GetSelectedAccount()
+	if acct.Name == "" {
+		return nil
+	}
+	// Pool is carried so the session clusters correctly; Member set = a pin.
+	return &AccountSelection{Pool: acct.Pool, Member: &acct}
 }
 
 // SelectedAccountName returns the name of the account the picker is currently pointing

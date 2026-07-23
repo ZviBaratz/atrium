@@ -432,6 +432,10 @@ type home struct {
 	// proceedOverCapMsg, and Update then spawns this plan. Nil when no confirm is
 	// pending; consumed (set nil) when the plan is spawned.
 	pendingOverCap *spawnPlan
+	// pendingExhausted holds a creation staged behind an all-members-rate-limited
+	// confirmation (see confirmAllExhausted). Its account is already pinned to the
+	// soonest-to-reset member. Nil when no such confirm is pending.
+	pendingExhausted *spawnPlan
 	// quitRequested records that the user asked to quit while a session was still
 	// Loading. handleQuit defers the exit (a Loading session isn't yet persisted,
 	// so quitting would drop it); handleInstanceStarted re-invokes handleQuit once
