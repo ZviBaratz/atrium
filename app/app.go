@@ -222,6 +222,10 @@ type home struct {
 	// the hint bar couldn't render it (a modal overlay was open); the preview
 	// tick re-delivers it. Empty when nothing is pending.
 	pendingUpdateNotice string
+	// pendingAgentNotice buffers a one-shot agent detection notice that arrived while
+	// the hint bar couldn't render it; the preview tick re-delivers it. Empty when
+	// nothing is pending.
+	pendingAgentNotice string
 	// pendingReleaseNotes buffers a one-shot "what's new" overlay that arrived
 	// while another modal owned the screen; the preview tick flushes it once the
 	// screen is free. nil when nothing is pending.
@@ -550,6 +554,7 @@ func (m *home) Init() tea.Cmd {
 		tickUpdateMetadataCmd(m.ctx, m.snapshotActiveInstances(), m.list.GetSelectedInstance(), true, m.attachGen), // first tick: full sweep
 		m.updateCheckCmd(),   // nil (inert) is fine: tea.Batch skips nil cmds
 		m.driftCheckCmd(),    // agent-heuristic drift hint
+		m.agentCheckCmd(),    // background agent CLI detection
 		m.releaseNotesCmd(),  // nil (inert) is fine: tea.Batch skips nil cmds
 		m.startProjectScan(), // nil (disabled) is likewise skipped
 	)

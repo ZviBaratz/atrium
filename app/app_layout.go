@@ -356,3 +356,19 @@ func (m *home) adjustListCols(delta int) tea.Cmd {
 	ratio := (float64(cols+delta) + 0.5) / float64(m.windowWidth)
 	return m.setCustomRatio(ratio)
 }
+
+// repaintAfterAttach forces a hard repaint after a full-screen tea.Exec attach
+// returns control to the app. tea.Exec's RestoreTerminal only does a soft repaint
+// (using the diff cache), which leaves the frame stale or blank if the OS/terminal
+// didn't preserve the alternate screen perfectly (tmux often clobbers it). This
+// issues a tea.ClearScreen to flush the diff cache, then re-emits a WindowSizeMsg
+// so components reflow and re-render completely. Any additional cmds are batched
+// with the repaint.
+func (m *home) repaintAfterAttach(cmds ...tea.Cmd) tea.Cmd {
+	return tea.Sequence(
+		tea.ClearScreen,
+		tea.Batch(append(cmds, func() tea.Msg {
+			return tea.WindowSizeMsg{Width: m.windowWidth, Height: m.windowHeight}
+		})...),
+	)
+}

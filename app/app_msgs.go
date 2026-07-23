@@ -151,6 +151,8 @@ func (m *home) handlePreviewTick(msg previewTickMsg) (tea.Model, tea.Cmd) {
 		// An update notice that arrived while an overlay owned the screen
 		// is buffered; deliver it as soon as the hint bar is back.
 		m.flushPendingUpdateNotice(),
+		// Likewise for agent detection notices.
+		m.flushPendingAgentNotice(),
 		// Likewise for "what's new" notes buffered behind another overlay.
 		m.flushPendingReleaseNotes(),
 		// Likewise for a crash-at-launch modal buffered behind another overlay.
@@ -476,8 +478,11 @@ func (m *home) handleTargetValidityResult(msg targetValidityResultMsg) (tea.Mode
 
 func (m *home) handleAttachFinished(msg attachFinishedMsg) (tea.Model, tea.Cmd) {
 	// A tea.Exec terminal attach returned (the user detached, or it failed to
-	// start). tea.Exec's RestoreTerminal has already repainted the frame; refine
-	// the layout and selection-derived panes from here.
+	// start). tea.Exec's RestoreTerminal only does a soft (diff-cache) repaint,
+	// which can leave the reclaimed frame blank/stale after tmux hands the terminal
+	// back; every path that returns to the list therefore forces a hard repaint via
+	// repaintAfterAttach (see its doc). Refine the layout and selection-derived
+	// panes from here.
 	m.state = stateDefault
 	// Re-assert the OS chrome the attach handed to tmux (onAttached reset it); the
 	// next metadata tick refines it, this repaints the known state immediately.
@@ -488,9 +493,9 @@ func (m *home) handleAttachFinished(msg attachFinishedMsg) (tea.Model, tea.Cmd) 
 		// them alongside the attach error, honoring the promise below that only the
 		// kill and AttachExitError paths stay log-only.
 		if len(msg.keeperErrs) > 0 {
-			return m, m.handleError(errors.Join(msg.err, errors.New(strings.Join(msg.keeperErrs, "\n"))))
+			return m, m.repaintAfterAttach(m.handleError(errors.Join(msg.err, errors.New(strings.Join(msg.keeperErrs, "\n")))))
 		}
-		return m, m.handleError(msg.err)
+		return m, m.repaintAfterAttach(m.handleError(msg.err))
 	}
 	// The attach keeper cleared prompt(s) while the loop was suspended — delivered
 	// ones, or abandoned ones whose hard-failure budget ran out — but it cannot
@@ -513,23 +518,25 @@ func (m *home) handleAttachFinished(msg attachFinishedMsg) (tea.Model, tea.Cmd) 
 		// A detach that hit a pty close/restore error can't ride msg.err (that
 		// comes from Run(), nil on a normal detach). Surface it via the persistent
 		// modal — it's actionable — and short-circuit the kill/cycle so we don't
-		// hop siblings while this session is half-broken. Keep tea.WindowSize() so
-		// the modal and layout redraw at the correct dimensions after the
-		// full-screen attach, matching the other detach returns below. (The
-		// terminal tab, killTarget nil, has no such teardown to report.)
+		// hop siblings while this session is half-broken. Force a full repaint +
+		// relayout (repaintAfterAttach) so the modal and layout redraw cleanly at the
+		// correct dimensions after the full-screen attach, matching the other detach
+		// returns below. (The terminal tab, killTarget nil, has no such teardown to
+		// report.)
 		if derr := msg.killTarget.AttachExitError(); derr != nil {
 			m.showInfo(fmt.Sprintf(
 				"Session detach hit an error and may need re-attaching "+
 					"(pause then resume to recover):\n%v", derr))
-			return m, tea.WindowSize()
+			return m, m.repaintAfterAttach()
 		}
 	}
 	// Honor an in-session kill (Ctrl+X) requested before detach. killTarget is the
-	// attached instance (nil for the terminal tab, which has no kill key); keep
-	// tea.WindowSize() so the confirmation overlay redraws at the correct
-	// dimensions after the full-screen attach (confirmKill only mutates state).
+	// attached instance (nil for the terminal tab, which has no kill key); force a
+	// full repaint + relayout (repaintAfterAttach) so the confirmation overlay
+	// redraws cleanly at the correct dimensions after the full-screen attach
+	// (confirmKill only mutates state).
 	if msg.killTarget != nil && msg.killTarget.AttachKillRequested() {
-		return m, tea.Batch(tea.WindowSize(), m.confirmKill(msg.killTarget))
+		return m, m.repaintAfterAttach(m.confirmKill(msg.killTarget))
 	}
 	// A sibling-cycle key (Ctrl+PgUp/PgDn) detaches with a direction; re-attach the
 	// neighbouring session in the repo group, keeping cycling inside Atrium's model.
@@ -570,7 +577,7 @@ func (m *home) handleAttachFinished(msg attachFinishedMsg) (tea.Model, tea.Cmd) 
 	// instanceChanged's own (hysteresis) poll doesn't also fire for the same instance.
 	selected := m.list.GetSelectedInstance()
 	m.lastStatusPollSelection = selected
-	cmds := []tea.Cmd{tea.WindowSize(), m.instanceChanged(),
+	cmds := []tea.Cmd{m.instanceChanged(),
 		sweepMetadataNowCmd(m.ctx, m.snapshotActiveInstances(), selected, m.attachGen)}
 	// Prompts the keeper definitively failed to deliver mid-attach: surface the loss
 	// like promptSendErrorMsg would, rather than leaving sessions silently
@@ -581,7 +588,7 @@ func (m *home) handleAttachFinished(msg attachFinishedMsg) (tea.Model, tea.Cmd) 
 	if len(msg.keeperErrs) > 0 {
 		cmds = append(cmds, m.handleError(errors.New(strings.Join(msg.keeperErrs, "\n"))))
 	}
-	return m, tea.Batch(cmds...)
+	return m, m.repaintAfterAttach(cmds...)
 }
 
 func (m *home) handleInstanceStarted(msg instanceStartedMsg) (tea.Model, tea.Cmd) {
