@@ -347,7 +347,6 @@ var (
 				fmt.Print(pools)
 			}
 
-
 			if doctor.MissingRequired(deps) {
 				// Nonzero exit for CI/scripts. The root command already sets
 				// SilenceErrors/SilenceUsage, so main() prints just this message to

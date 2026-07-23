@@ -233,7 +233,7 @@ func TestAccountsOverlay_GHCommitIncludesTokenEnv(t *testing.T) {
 // Tab cycles Claude → GitHub → Antigravity → Claude, and the Antigravity tab is
 // backed by AgyAccounts.
 func TestAccountsOverlay_TabCyclesThroughAgy(t *testing.T) {
-	o := NewAccountsOverlay(twoTabCfg())
+	o := NewAccountsOverlay(twoTabCfg(), config.DefaultState())
 	o.SetSize(80, 24)
 	require.Equal(t, tabClaude, o.tab)
 
@@ -253,7 +253,7 @@ func TestAccountsOverlay_TabCyclesThroughAgy(t *testing.T) {
 // AgyAccounts (no token field, unlike GitHub).
 func TestAccountsOverlay_AgyAddAppendsToAgyAccounts(t *testing.T) {
 	cfg := &config.Config{}
-	o := NewAccountsOverlay(cfg)
+	o := NewAccountsOverlay(cfg, config.DefaultState())
 	o.SetSize(80, 24)
 	o.selectTab(tabAgy)
 	assert.Contains(t, o.Render(), "No Antigravity accounts")
@@ -279,7 +279,7 @@ func TestAccountsOverlay_AgyDeleteRemovesFromAgyAccounts(t *testing.T) {
 		{Name: "work", ConfigDir: "~/.agy-work"},
 		{Name: "personal", ConfigDir: "~/.agy"},
 	}}
-	o := NewAccountsOverlay(cfg)
+	o := NewAccountsOverlay(cfg, config.DefaultState())
 	o.SetSize(80, 24)
 	o.selectTab(tabAgy)
 
@@ -298,7 +298,7 @@ func TestAccountsOverlay_PreviewShowsAgy(t *testing.T) {
 	cfg := &config.Config{AgyAccounts: []config.AgyAccount{
 		{Name: "acme", ConfigDir: "~/.agy-acme", RemoteMatches: []string{"github.com/acme"}},
 	}}
-	o := NewAccountsOverlay(cfg)
+	o := NewAccountsOverlay(cfg, config.DefaultState())
 	o.SetSize(80, 24)
 	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'t'}})
 	typeInto(o, "github.com/acme/widgets")
