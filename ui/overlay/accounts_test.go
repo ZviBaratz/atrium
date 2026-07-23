@@ -24,7 +24,7 @@ func twoTabCfg() *config.Config {
 }
 
 func TestAccountsOverlay_NavAndTabSwitchClampsCursor(t *testing.T) {
-	o := NewAccountsOverlay(twoTabCfg())
+	o := NewAccountsOverlay(twoTabCfg(), config.DefaultState())
 	o.SetSize(80, 24)
 	require.Equal(t, tabClaude, o.tab)
 
@@ -38,7 +38,7 @@ func TestAccountsOverlay_NavAndTabSwitchClampsCursor(t *testing.T) {
 }
 
 func TestAccountsOverlay_EmptyTabIsSafe(t *testing.T) {
-	o := NewAccountsOverlay(&config.Config{})
+	o := NewAccountsOverlay(&config.Config{}, config.DefaultState())
 	o.SetSize(80, 24)
 	// No accounts on either tab; nav/tab/render must not panic.
 	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyDown})
@@ -48,7 +48,7 @@ func TestAccountsOverlay_EmptyTabIsSafe(t *testing.T) {
 }
 
 func TestAccountsOverlay_EscCloses(t *testing.T) {
-	o := NewAccountsOverlay(twoTabCfg())
+	o := NewAccountsOverlay(twoTabCfg(), config.DefaultState())
 	o.SetSize(80, 24)
 	closed, dirty := o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyEsc})
 	assert.True(t, closed)
@@ -61,7 +61,7 @@ func TestAccountsOverlay_BadgesMarkCatchAllAndUnreachable(t *testing.T) {
 		{Name: "b"}, // second rule-less → unreachable
 		{Name: "c", RemoteMatches: []string{"github.com/x"}}, // routed
 	}}
-	o := NewAccountsOverlay(cfg)
+	o := NewAccountsOverlay(cfg, config.DefaultState())
 	o.SetSize(80, 24)
 	out := o.Render()
 	assert.Contains(t, out, "default")
@@ -78,7 +78,7 @@ func typeInto(o *AccountsOverlay, s string) {
 
 func TestAccountsOverlay_AddAppendsOnCommit(t *testing.T) {
 	cfg := &config.Config{}
-	o := NewAccountsOverlay(cfg)
+	o := NewAccountsOverlay(cfg, config.DefaultState())
 	o.SetSize(80, 24)
 
 	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}}) // new
@@ -97,7 +97,7 @@ func TestAccountsOverlay_AddAppendsOnCommit(t *testing.T) {
 
 func TestAccountsOverlay_ValidationRejectsEmptyAndDuplicateName(t *testing.T) {
 	cfg := &config.Config{ClaudeAccounts: []config.ClaudeAccount{{Name: "work"}}}
-	o := NewAccountsOverlay(cfg)
+	o := NewAccountsOverlay(cfg, config.DefaultState())
 	o.SetSize(80, 24)
 
 	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
@@ -118,7 +118,7 @@ func TestAccountsOverlay_CancelDiscardsEdits(t *testing.T) {
 	cfg := &config.Config{ClaudeAccounts: []config.ClaudeAccount{
 		{Name: "work", RemoteMatches: []string{"github.com/acme"}},
 	}}
-	o := NewAccountsOverlay(cfg)
+	o := NewAccountsOverlay(cfg, config.DefaultState())
 	o.SetSize(80, 24)
 
 	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'e'}}) // edit row 0
@@ -141,7 +141,7 @@ func TestAccountsOverlay_EditInPlaceUnrenamedCommits(t *testing.T) {
 	cfg := &config.Config{ClaudeAccounts: []config.ClaudeAccount{
 		{Name: "work", ConfigDir: "~/.claude-work"},
 	}}
-	o := NewAccountsOverlay(cfg)
+	o := NewAccountsOverlay(cfg, config.DefaultState())
 	o.SetSize(80, 24)
 
 	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'e'}}) // edit row 0
@@ -175,7 +175,7 @@ func TestAccountsOverlay_EditRenameToDuplicateRejected(t *testing.T) {
 	cfg := &config.Config{ClaudeAccounts: []config.ClaudeAccount{
 		{Name: "work"}, {Name: "personal"},
 	}}
-	o := NewAccountsOverlay(cfg)
+	o := NewAccountsOverlay(cfg, config.DefaultState())
 	o.SetSize(80, 24)
 
 	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'e'}}) // edit row 0 ("work")
@@ -198,7 +198,7 @@ func TestAccountsOverlay_EditRenameToDuplicateRejected(t *testing.T) {
 
 func TestAccountsOverlay_DeleteWithConfirm(t *testing.T) {
 	cfg := &config.Config{ClaudeAccounts: []config.ClaudeAccount{{Name: "a"}, {Name: "b"}}}
-	o := NewAccountsOverlay(cfg)
+	o := NewAccountsOverlay(cfg, config.DefaultState())
 	o.SetSize(80, 24)
 	o.cursor = 1
 
@@ -213,7 +213,7 @@ func TestAccountsOverlay_DeleteWithConfirm(t *testing.T) {
 
 func TestAccountsOverlay_GHCommitIncludesTokenEnv(t *testing.T) {
 	cfg := &config.Config{}
-	o := NewAccountsOverlay(cfg)
+	o := NewAccountsOverlay(cfg, config.DefaultState())
 	o.SetSize(80, 24)
 	o.selectTab(tabGH)
 
@@ -314,7 +314,7 @@ func TestAccountsOverlay_PreviewResolves(t *testing.T) {
 		{Name: "work", ConfigDir: "~/.claude-work", RemoteMatches: []string{"github.com/acme"}},
 		{Name: "personal", ConfigDir: "~/.claude"}, // catch-all
 	}}
-	o := NewAccountsOverlay(cfg)
+	o := NewAccountsOverlay(cfg, config.DefaultState())
 	o.SetSize(80, 24)
 
 	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'t'}})
@@ -328,7 +328,7 @@ func TestAccountsOverlay_PreviewResolves(t *testing.T) {
 
 func TestAccountsOverlay_PreviewEmptyAndRuleOnlyInheritAmbient(t *testing.T) {
 	// 0 accounts
-	o := NewAccountsOverlay(&config.Config{})
+	o := NewAccountsOverlay(&config.Config{}, config.DefaultState())
 	o.SetSize(80, 24)
 	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'t'}})
 	typeInto(o, "github.com/acme")
@@ -340,7 +340,7 @@ func TestAccountsOverlay_PreviewEmptyAndRuleOnlyInheritAmbient(t *testing.T) {
 	cfg := &config.Config{ClaudeAccounts: []config.ClaudeAccount{
 		{Name: "work", RemoteMatches: []string{"github.com/acme"}},
 	}}
-	o2 := NewAccountsOverlay(cfg)
+	o2 := NewAccountsOverlay(cfg, config.DefaultState())
 	o2.SetSize(80, 24)
 	o2.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'t'}})
 	typeInto(o2, "github.com/other")
@@ -361,7 +361,7 @@ func TestAccountsOverlay_PreviewCatchAllNamedShowsName(t *testing.T) {
 	cfg := &config.Config{ClaudeAccounts: []config.ClaudeAccount{
 		{Name: "personal"}, // catch-all: no rules, empty ConfigDir
 	}}
-	o := NewAccountsOverlay(cfg)
+	o := NewAccountsOverlay(cfg, config.DefaultState())
 	o.SetSize(80, 24)
 	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'t'}})
 	typeInto(o, "github.com/unmatched")
@@ -378,7 +378,7 @@ func TestAccountsOverlay_PreviewRuleMatchedNamedDefaultShowsName(t *testing.T) {
 	cfg := &config.Config{ClaudeAccounts: []config.ClaudeAccount{
 		{Name: "default", RemoteMatches: []string{"github.com/acme"}},
 	}}
-	o := NewAccountsOverlay(cfg)
+	o := NewAccountsOverlay(cfg, config.DefaultState())
 	o.SetSize(80, 24)
 	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'t'}})
 	typeInto(o, "github.com/acme/x")
@@ -391,7 +391,7 @@ func TestAccountsOverlay_PreviewPathFieldRoutes(t *testing.T) {
 	cfg := &config.Config{ClaudeAccounts: []config.ClaudeAccount{
 		{Name: "pathacct", ConfigDir: "~/.claude-path", PathMatches: []string{"~/work/"}},
 	}}
-	o := NewAccountsOverlay(cfg)
+	o := NewAccountsOverlay(cfg, config.DefaultState())
 	o.SetSize(80, 24)
 	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'t'}})
 	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyTab}) // focus: remote → path
@@ -406,7 +406,7 @@ func TestAccountsOverlay_PreviewGHMatchShowsDirAndToken(t *testing.T) {
 	cfg := &config.Config{GHAccounts: []config.GHAccount{
 		{Name: "gh", ConfigDir: "~/.config/gh-work", RemoteMatches: []string{"github.com/acme"}, TokenEnv: []string{"GH_TOKEN"}},
 	}}
-	o := NewAccountsOverlay(cfg)
+	o := NewAccountsOverlay(cfg, config.DefaultState())
 	o.SetSize(80, 24)
 	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'t'}})
 	typeInto(o, "github.com/acme")
@@ -422,7 +422,7 @@ func TestAccountsOverlay_PreviewGHTokenWithoutDirSurfacesToken(t *testing.T) {
 	cfg := &config.Config{GHAccounts: []config.GHAccount{
 		{Name: "gh", RemoteMatches: []string{"github.com/acme"}, TokenEnv: []string{"GH_TOKEN"}},
 	}}
-	o := NewAccountsOverlay(cfg)
+	o := NewAccountsOverlay(cfg, config.DefaultState())
 	o.SetSize(80, 24)
 	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'t'}})
 	typeInto(o, "github.com/acme")
@@ -441,7 +441,7 @@ func TestAccountsOverlay_ListWindowsRowsOnShortTerminal(t *testing.T) {
 			RemoteMatches: []string{fmt.Sprintf("github.com/org%02d", i)},
 		})
 	}
-	o := NewAccountsOverlay(cfg)
+	o := NewAccountsOverlay(cfg, config.DefaultState())
 	o.SetSize(80, 24)
 
 	for i := 0; i < 25; i++ {
@@ -476,7 +476,7 @@ func TestAccountsOverlay_CatchAllBadgeSurvivesWindowScroll(t *testing.T) {
 		}
 		cfg.ClaudeAccounts = append(cfg.ClaudeAccounts, acct)
 	}
-	o := NewAccountsOverlay(cfg)
+	o := NewAccountsOverlay(cfg, config.DefaultState())
 	o.SetSize(80, 24) // budget 12 rows
 
 	for i := 0; i < 20; i++ {
@@ -493,4 +493,94 @@ func TestAccountsOverlay_CatchAllBadgeSurvivesWindowScroll(t *testing.T) {
 	assert.NotContains(t, out, "default",
 		"the only 'default' badge belonged to the scrolled-off first catch-all; a broken "+
 			"pre-scan would wrongly render the visible later catch-all as 'default'")
+}
+
+// TestAccountsOverlay_ToggleAvailability covers the 'l' key: it flags the
+// cursored Claude account rate-limited via state.SetAccountLimited and clears
+// it back via state.ClearAccountLimited on a second press. Off the Claude tab
+// (or with no accounts) the key must no-op, which the sibling tab-scoped tests
+// below cover.
+func TestAccountsOverlay_ToggleAvailability(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	cfg := &config.Config{ClaudeAccounts: []config.ClaudeAccount{
+		{Name: "work-1", ConfigDir: "~/.claude-work", Pool: "work"},
+		{Name: "work-2", ConfigDir: "~/.claude-work2", Pool: "work"},
+	}}
+	st := config.DefaultState()
+	o := NewAccountsOverlay(cfg, st)
+	o.SetSize(80, 24)
+
+	// Cursor on work-1; 'l' flags it limited.
+	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("l")})
+	assert.True(t, st.GetAccountAvailability()["work-1"].Limited, "l flags the cursored account limited")
+
+	// 'l' again clears it.
+	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("l")})
+	assert.Empty(t, st.GetAccountAvailability(), "l again clears the flag")
+}
+
+// TestAccountsOverlay_RendersPoolAndAvailability covers row rendering: the
+// pool name and a "limited" marker must both appear for an account flagged
+// unavailable.
+func TestAccountsOverlay_RendersPoolAndAvailability(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	cfg := &config.Config{ClaudeAccounts: []config.ClaudeAccount{{Name: "work-1", ConfigDir: "~/.claude-work", Pool: "work"}}}
+	st := config.DefaultState()
+	require.NoError(t, st.SetAccountLimited("work-1", ""))
+	o := NewAccountsOverlay(cfg, st)
+	o.SetSize(80, 24)
+
+	view := o.Render()
+	assert.Contains(t, view, "pool:work")
+	assert.Contains(t, view, "limited")
+}
+
+// TestAccountsOverlay_ToggleIgnoredOnGHTab guards the o.tab == tabClaude gate:
+// the 'l' key must not panic or mutate state when the GH tab (whose rows are
+// GHAccount, not ClaudeAccount) is active.
+func TestAccountsOverlay_ToggleIgnoredOnGHTab(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	cfg := twoTabCfg()
+	st := config.DefaultState()
+	o := NewAccountsOverlay(cfg, st)
+	o.SetSize(80, 24)
+	o.selectTab(tabGH)
+
+	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("l")})
+	assert.Empty(t, st.GetAccountAvailability(), "l on the GH tab must not flag anything")
+}
+
+// TestAccountForm_ClaudePoolRoundTrips covers the shared-form gating: a Claude
+// edit seeds and commits the Pool field, and the field is entirely absent
+// (showPool false) on a GH edit so it can never leak into a GHAccount.
+func TestAccountForm_ClaudePoolRoundTrips(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	cfg := &config.Config{ClaudeAccounts: []config.ClaudeAccount{
+		{Name: "work-1", ConfigDir: "~/.claude-work", Pool: "work"},
+	}}
+	o := NewAccountsOverlay(cfg, config.DefaultState())
+	o.SetSize(80, 24)
+
+	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'e'}}) // edit row 0
+	require.Equal(t, modeEdit, o.mode)
+	require.True(t, o.form.showPool, "Claude edit shows the Pool field")
+	assert.Equal(t, "work", o.form.Pool(), "seeded from the account")
+
+	// Focus starts on Name; tab forward to the Pool field (index fldPool),
+	// clear it, and retype a new value.
+	for i := 0; i < fldPool; i++ {
+		o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyTab})
+	}
+	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyCtrlU})
+	typeInto(o, "otherpool")
+	_, dirty := o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyEnter})
+
+	assert.True(t, dirty)
+	assert.Equal(t, "otherpool", cfg.ClaudeAccounts[0].Pool, "commit writes the edited Pool")
+
+	// GH tab: the field must not exist at all.
+	o.selectTab(tabGH)
+	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
+	assert.False(t, o.form.showPool, "GH form never shows Pool")
+	assert.Equal(t, "", o.form.Pool(), "Pool is empty on a GH form regardless of input contents")
 }

@@ -16,23 +16,25 @@ func TestParseList_TrimsAndDropsBlanks(t *testing.T) {
 }
 
 func TestAccountForm_SeedAndParse(t *testing.T) {
-	f := newAccountForm(false, "work", "~/.claude-work", "github.com/acme, gh.com/x", "~/work/", "")
+	f := newAccountForm(false, "work", "~/.claude-work", "github.com/acme, gh.com/x", "~/work/", "", "team-a")
 	assert.Equal(t, "work", f.Name())
 	assert.Equal(t, "~/.claude-work", f.ConfigDir())
 	assert.Equal(t, []string{"github.com/acme", "gh.com/x"}, f.RemoteMatches())
 	assert.Equal(t, []string{"~/work/"}, f.PathMatches())
 	assert.Nil(t, f.TokenEnv(), "Claude form has no token field")
-	assert.Len(t, f.inputs, 4)
+	assert.Equal(t, "team-a", f.Pool(), "Claude form seeds the Pool field")
+	assert.Len(t, f.inputs, 5, "Claude form: name/configDir/remote/path/pool")
 }
 
 func TestAccountForm_GHHasTokenField(t *testing.T) {
-	f := newAccountForm(true, "gh", "~/.config/gh-work", "", "", "GH_TOKEN, GITHUB_TOKEN")
-	assert.Len(t, f.inputs, 5)
+	f := newAccountForm(true, "gh", "~/.config/gh-work", "", "", "GH_TOKEN, GITHUB_TOKEN", "")
+	assert.Len(t, f.inputs, 5, "GH form: name/configDir/remote/path/token, no pool")
 	assert.Equal(t, []string{"GH_TOKEN", "GITHUB_TOKEN"}, f.TokenEnv())
+	assert.Equal(t, "", f.Pool(), "GH form never exposes a Pool field")
 }
 
 func TestAccountForm_NavAndSubmitCancel(t *testing.T) {
-	f := newAccountForm(false, "", "", "", "", "")
+	f := newAccountForm(false, "", "", "", "", "", "")
 	assert.Equal(t, fldName, f.focus)
 	f.HandleKeyPress(tea.KeyMsg{Type: tea.KeyTab})
 	assert.Equal(t, fldConfigDir, f.focus, "tab advances focus")
@@ -42,13 +44,13 @@ func TestAccountForm_NavAndSubmitCancel(t *testing.T) {
 	assert.True(t, f.HandleKeyPress(tea.KeyMsg{Type: tea.KeyEnter}))
 	assert.True(t, f.Submitted())
 
-	g := newAccountForm(false, "", "", "", "", "")
+	g := newAccountForm(false, "", "", "", "", "", "")
 	assert.True(t, g.HandleKeyPress(tea.KeyMsg{Type: tea.KeyEsc}))
 	assert.True(t, g.Canceled())
 }
 
 func TestAccountForm_CtrlOOpensPickerOnConfigDirOnly(t *testing.T) {
-	f := newAccountForm(false, "", "", "", "", "")
+	f := newAccountForm(false, "", "", "", "", "", "")
 	f.HandleKeyPress(tea.KeyMsg{Type: tea.KeyCtrlO}) // focus is Name
 	assert.Nil(t, f.picker, "ctrl+o does nothing unless the config-dir field is focused")
 
@@ -66,7 +68,7 @@ func TestAccountForm_CtrlOOpensPickerOnConfigDirOnly(t *testing.T) {
 
 func TestAccountForm_PickerEnterWritesBack(t *testing.T) {
 	dir := t.TempDir()
-	f := newAccountForm(false, "", dir, "", "", "")
+	f := newAccountForm(false, "", dir, "", "", "", "")
 	f.focus = fldConfigDir
 	f.applyFocus()
 	f.HandleKeyPress(tea.KeyMsg{Type: tea.KeyCtrlO})
@@ -78,12 +80,12 @@ func TestAccountForm_PickerEnterWritesBack(t *testing.T) {
 
 func TestAccountForm_ConfigDirExistsHint(t *testing.T) {
 	dir := t.TempDir()
-	f := newAccountForm(false, "", dir, "", "", "")
+	f := newAccountForm(false, "", dir, "", "", "", "")
 	assert.Contains(t, f.configDirHint(), "exists")
 
-	g := newAccountForm(false, "", "/no/such/path/xyzzy", "", "", "")
+	g := newAccountForm(false, "", "/no/such/path/xyzzy", "", "", "", "")
 	assert.Contains(t, g.configDirHint(), "not found")
 
-	h := newAccountForm(false, "", "", "", "", "")
+	h := newAccountForm(false, "", "", "", "", "", "")
 	assert.Equal(t, "", h.configDirHint(), "empty config dir shows no hint")
 }

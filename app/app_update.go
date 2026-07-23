@@ -811,7 +811,7 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		return m, tea.WindowSize()
 	case keys.KeyAccounts:
 		m.state = stateAccounts
-		m.accountsOverlay = overlay.NewAccountsOverlay(m.appConfig)
+		m.accountsOverlay = overlay.NewAccountsOverlay(m.appConfig, m.appState)
 		m.recomputeLayout() // the hint bar hides behind the modal; panes reclaim its row
 		return m, tea.WindowSize()
 	case keys.KeyScreensaver:
