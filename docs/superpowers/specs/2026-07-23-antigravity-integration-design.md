@@ -135,3 +135,38 @@ Update `README.md` to reference the new support, appending Antigravity (`agy`) i
 - Test detection via `atrium profiles detect` with `agy` installed.
 - Verify session runs with `atrium -p agy`.
 - Create a test session and verify background naming works (inspect the TUI list to see if the session was renamed from the original prompt).
+
+## Addendum: profile separation (`agy_accounts`)
+
+Beyond the original scope above, this integration also ships per-session profile
+separation for `agy`, mirroring `claude_accounts` and `gh_accounts`:
+
+- **Config model** — an `AgyAccount` record (`config/types.go`) and an
+  `AgyAccounts` section, resolved by `Config.ResolveAgyAccount` through the same
+  `matchRouteIndex` routing (remote-then-path, first rule-less account is the
+  catch-all). Like `ResolveGHAccount` — and unlike `ResolveClaudeAccount` — a
+  no-match with no catch-all returns `("", "", false)` (inherit the ambient
+  config), with no synthetic `"default"` sentinel.
+- **Isolation via bwrap** — unlike Claude/gh, which pass a `*_CONFIG_DIR` env var,
+  the Antigravity CLI has no config-dir env, so the routed dir is bind-mounted over
+  `~/.gemini/antigravity-cli` with `bwrap` (`session/tmux/agy.go`,
+  `wrapAgyBwrap`). This is **Linux-only** (bwrap is a Linux user-namespace tool):
+  a no-op off Linux, and a logged fail-open when bwrap is not installed, matching
+  the OOM/gh-token wraps' "never block a launch" convention.
+- **Ordering constraint (important)** — the bwrap wrap MUST be applied to the bare
+  program *before* `wrapOOMScore`, and be keyed off the resolved adapter
+  (`t.adapter.Key == agent.KeyAgy`), not a string match on `program`. `wrapOOMScore`
+  rewrites `program` into a `…; exec <program>` snippet, so a string check running
+  after it never matches — the bug that made the feature a silent no-op under the
+  default (on-by-default) OOM margin. The OOM snippet then wraps and `exec`s the
+  bwrap command; the raised `oom_score_adj` is inherited across `execve` and the
+  namespace, so the agent stays protected. Covered by `session/tmux/agy_test.go`.
+- **Management UI** — `agy_accounts` is a first-class peer in the Accounts overlay
+  (`ui/overlay/accounts.go`), which now has a third **Antigravity** tab (no token
+  field, unlike GitHub), and in the routing-preview pane.
+
+### Out of scope (still)
+- A startup-trust `Gate` for `agy`: no Antigravity first-run trust-dialog string has
+  been verified against a live capture, and this repo pins gate/prompt heuristics to
+  captured versions. Add one only when the dialog is observed and its literal
+  recorded — an unverified gate string risks false positives.

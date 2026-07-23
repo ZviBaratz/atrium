@@ -403,6 +403,16 @@ func (t *Session) start(workDir string, program string) error {
 		program = program + " --settings " + shellSingleQuote(settingsPath)
 	}
 
+	// Isolate a routed Antigravity (agy) account's config directory via bwrap. Keyed
+	// off the resolved adapter — not a string match on program — so it also covers
+	// the `antigravity` alias and the `--continue` resume command, and applied BEFORE
+	// wrapOOMScore so the OOM snippet wraps the bwrap command rather than the check
+	// running against an already-rewritten `…; exec agy` string (which never matches).
+	// A no-op off Linux, without a routed dir, or when bwrap is not installed.
+	if t.adapter.Key == agent.KeyAgy {
+		program = wrapAgyBwrap(program, t.agyConfigDir, runtime.GOOS)
+	}
+
 	// Weight this agent against the shared tmux server for the kernel OOM killer:
 	// prefix a shell snippet that raises the pane's oom_score_adj above the server's
 	// before exec'ing the agent, so memory pressure sheds one recoverable session
@@ -456,13 +466,6 @@ func (t *Session) start(workDir string, program string) error {
 				args = append(args, "-e", name+"="+tok)
 			}
 		}
-	}
-
-	// If an AgyConfigDir is resolved and the program is the Antigravity CLI,
-	// transparently wrap the execution in bwrap to isolate its config directory.
-	if t.agyConfigDir != "" && (program == "agy" || strings.HasPrefix(program, "agy ")) {
-		program = fmt.Sprintf("bwrap --dev-bind / / --bind %s \"$HOME/.gemini/antigravity-cli\" %s",
-			shellSingleQuote(t.agyConfigDir), program)
 	}
 
 	args = append(args, program)

@@ -230,6 +230,85 @@ func TestAccountsOverlay_GHCommitIncludesTokenEnv(t *testing.T) {
 	assert.Equal(t, []string{"GH_TOKEN"}, cfg.GHAccounts[0].TokenEnv)
 }
 
+// Tab cycles Claude → GitHub → Antigravity → Claude, and the Antigravity tab is
+// backed by AgyAccounts.
+func TestAccountsOverlay_TabCyclesThroughAgy(t *testing.T) {
+	o := NewAccountsOverlay(twoTabCfg())
+	o.SetSize(80, 24)
+	require.Equal(t, tabClaude, o.tab)
+
+	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyTab})
+	require.Equal(t, tabGH, o.tab)
+	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyTab})
+	require.Equal(t, tabAgy, o.tab, "third tab is Antigravity")
+	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyTab})
+	require.Equal(t, tabClaude, o.tab, "wraps back to Claude")
+
+	// shift+tab goes backward.
+	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyShiftTab})
+	require.Equal(t, tabAgy, o.tab, "shift+tab wraps backward to Antigravity")
+}
+
+// The Antigravity tab surfaces its own empty state and add/commit path, writing to
+// AgyAccounts (no token field, unlike GitHub).
+func TestAccountsOverlay_AgyAddAppendsToAgyAccounts(t *testing.T) {
+	cfg := &config.Config{}
+	o := NewAccountsOverlay(cfg)
+	o.SetSize(80, 24)
+	o.selectTab(tabAgy)
+	assert.Contains(t, o.Render(), "No Antigravity accounts")
+
+	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
+	require.Equal(t, modeEdit, o.mode)
+	typeInto(o, "work")
+	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyTab}) // → Config dir
+	typeInto(o, "~/.agy-work")
+	_, dirty := o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyEnter})
+
+	assert.True(t, dirty)
+	require.Len(t, cfg.AgyAccounts, 1)
+	assert.Equal(t, "work", cfg.AgyAccounts[0].Name)
+	assert.Equal(t, "~/.agy-work", cfg.AgyAccounts[0].ConfigDir)
+	// The agy form must not expose the GitHub-only token field.
+	assert.False(t, o.showToken())
+}
+
+// Deleting on the Antigravity tab removes from AgyAccounts, not another section.
+func TestAccountsOverlay_AgyDeleteRemovesFromAgyAccounts(t *testing.T) {
+	cfg := &config.Config{AgyAccounts: []config.AgyAccount{
+		{Name: "work", ConfigDir: "~/.agy-work"},
+		{Name: "personal", ConfigDir: "~/.agy"},
+	}}
+	o := NewAccountsOverlay(cfg)
+	o.SetSize(80, 24)
+	o.selectTab(tabAgy)
+
+	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
+	require.Equal(t, modeConfirmDelete, o.mode)
+	_, dirty := o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+
+	assert.True(t, dirty)
+	require.Len(t, cfg.AgyAccounts, 1)
+	assert.Equal(t, "personal", cfg.AgyAccounts[0].Name)
+}
+
+// The routing preview resolves and displays the Antigravity account alongside
+// Claude and GitHub.
+func TestAccountsOverlay_PreviewShowsAgy(t *testing.T) {
+	cfg := &config.Config{AgyAccounts: []config.AgyAccount{
+		{Name: "acme", ConfigDir: "~/.agy-acme", RemoteMatches: []string{"github.com/acme"}},
+	}}
+	o := NewAccountsOverlay(cfg)
+	o.SetSize(80, 24)
+	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'t'}})
+	typeInto(o, "github.com/acme/widgets")
+	out := o.renderPreview()
+	assert.Contains(t, out, "Antigravity → ")
+	// ResolvedConfigDir expands ~, so the rendered dir is absolute.
+	assert.Contains(t, out, "acme (", "routed agy account shows its name")
+	assert.Contains(t, out, ".agy-acme)", "routed agy account shows its config dir")
+}
+
 func TestAccountsOverlay_PreviewResolves(t *testing.T) {
 	cfg := &config.Config{ClaudeAccounts: []config.ClaudeAccount{
 		{Name: "work", ConfigDir: "~/.claude-work", RemoteMatches: []string{"github.com/acme"}},

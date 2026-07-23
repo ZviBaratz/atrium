@@ -16,6 +16,8 @@ type accountsTab int
 const (
 	tabClaude accountsTab = iota
 	tabGH
+	tabAgy
+	numTabs = iota // count of tabs above; keep last
 )
 
 type accountsMode int
@@ -27,9 +29,10 @@ const (
 	modePreview
 )
 
-// AccountsOverlay is the in-TUI manager for Claude and GitHub accounts. It holds the
-// same *config.Config the app holds and mutates ClaudeAccounts/GHAccounts in place;
-// the app persists (SaveConfig) whenever HandleKeyPress reports dirty.
+// AccountsOverlay is the in-TUI manager for Claude, GitHub, and Antigravity (agy)
+// accounts. It holds the same *config.Config the app holds and mutates
+// ClaudeAccounts/GHAccounts/AgyAccounts in place; the app persists (SaveConfig)
+// whenever HandleKeyPress reports dirty.
 type AccountsOverlay struct {
 	cfg    *config.Config
 	tab    accountsTab
@@ -68,16 +71,34 @@ type acctRow struct {
 
 func (o *AccountsOverlay) rows() []acctRow {
 	var rows []acctRow
-	if o.tab == tabClaude {
+	switch o.tab {
+	case tabClaude:
 		for _, a := range o.cfg.ClaudeAccounts {
 			rows = append(rows, acctRow{a.Name, a.ConfigDir, a.IsCatchAll()})
 		}
-		return rows
-	}
-	for _, a := range o.cfg.GHAccounts {
-		rows = append(rows, acctRow{a.Name, a.ConfigDir, a.IsCatchAll()})
+	case tabGH:
+		for _, a := range o.cfg.GHAccounts {
+			rows = append(rows, acctRow{a.Name, a.ConfigDir, a.IsCatchAll()})
+		}
+	case tabAgy:
+		for _, a := range o.cfg.AgyAccounts {
+			rows = append(rows, acctRow{a.Name, a.ConfigDir, a.IsCatchAll()})
+		}
 	}
 	return rows
+}
+
+// tabKind is the human label for the active tab, used in headings and empty-state
+// hints ("No <kind> accounts").
+func (o *AccountsOverlay) tabKind() string {
+	switch o.tab {
+	case tabGH:
+		return "GitHub"
+	case tabAgy:
+		return "Antigravity"
+	default:
+		return "Claude"
+	}
 }
 
 func (o *AccountsOverlay) activeLen() int { return len(o.rows()) }
@@ -123,12 +144,12 @@ func (o *AccountsOverlay) handleListKey(msg tea.KeyMsg) (closed bool, dirty bool
 		if o.cursor < o.activeLen()-1 {
 			o.cursor++
 		}
-	case "tab", "left", "right":
-		if o.tab == tabClaude {
-			o.tab = tabGH
-		} else {
-			o.tab = tabClaude
-		}
+	case "tab", "right":
+		o.tab = (o.tab + 1) % numTabs
+		o.clampCursor()
+		o.lastErr = ""
+	case "shift+tab", "left":
+		o.tab = (o.tab + numTabs - 1) % numTabs
 		o.clampCursor()
 		o.lastErr = ""
 	case "n":
@@ -155,13 +176,18 @@ func (o *AccountsOverlay) showToken() bool { return o.tab == tabGH }
 func (o *AccountsOverlay) openForm(index int) {
 	o.editIndex = index
 	o.lastErr = ""
-	if index < 0 {
+	switch {
+	case index < 0:
 		o.form = newAccountForm(o.showToken(), "", "", "", "", "")
-	} else if o.tab == tabClaude {
+	case o.tab == tabClaude:
 		a := o.cfg.ClaudeAccounts[index]
 		o.form = newAccountForm(false, a.Name, a.ConfigDir,
 			strings.Join(a.RemoteMatches, ", "), strings.Join(a.PathMatches, ", "), "")
-	} else {
+	case o.tab == tabAgy:
+		a := o.cfg.AgyAccounts[index]
+		o.form = newAccountForm(false, a.Name, a.ConfigDir,
+			strings.Join(a.RemoteMatches, ", "), strings.Join(a.PathMatches, ", "), "")
+	default: // tabGH
 		a := o.cfg.GHAccounts[index]
 		o.form = newAccountForm(true, a.Name, a.ConfigDir,
 			strings.Join(a.RemoteMatches, ", "), strings.Join(a.PathMatches, ", "),
@@ -207,7 +233,8 @@ func (o *AccountsOverlay) validate() string {
 }
 
 func (o *AccountsOverlay) commit() {
-	if o.tab == tabClaude {
+	switch o.tab {
+	case tabClaude:
 		a := config.ClaudeAccount{
 			Name: o.form.Name(), ConfigDir: o.form.ConfigDir(),
 			RemoteMatches: o.form.RemoteMatches(), PathMatches: o.form.PathMatches(),
@@ -217,26 +244,39 @@ func (o *AccountsOverlay) commit() {
 		} else {
 			o.cfg.ClaudeAccounts[o.editIndex] = a
 		}
-		return
-	}
-	a := config.GHAccount{
-		Name: o.form.Name(), ConfigDir: o.form.ConfigDir(),
-		RemoteMatches: o.form.RemoteMatches(), PathMatches: o.form.PathMatches(),
-		TokenEnv: o.form.TokenEnv(),
-	}
-	if o.editIndex < 0 {
-		o.cfg.GHAccounts = append(o.cfg.GHAccounts, a)
-	} else {
-		o.cfg.GHAccounts[o.editIndex] = a
+	case tabAgy:
+		a := config.AgyAccount{
+			Name: o.form.Name(), ConfigDir: o.form.ConfigDir(),
+			RemoteMatches: o.form.RemoteMatches(), PathMatches: o.form.PathMatches(),
+		}
+		if o.editIndex < 0 {
+			o.cfg.AgyAccounts = append(o.cfg.AgyAccounts, a)
+		} else {
+			o.cfg.AgyAccounts[o.editIndex] = a
+		}
+	default: // tabGH
+		a := config.GHAccount{
+			Name: o.form.Name(), ConfigDir: o.form.ConfigDir(),
+			RemoteMatches: o.form.RemoteMatches(), PathMatches: o.form.PathMatches(),
+			TokenEnv: o.form.TokenEnv(),
+		}
+		if o.editIndex < 0 {
+			o.cfg.GHAccounts = append(o.cfg.GHAccounts, a)
+		} else {
+			o.cfg.GHAccounts[o.editIndex] = a
+		}
 	}
 }
 
 func (o *AccountsOverlay) handleConfirmKey(msg tea.KeyMsg) (closed bool, dirty bool) {
 	switch msg.String() {
 	case "y", "enter":
-		if o.tab == tabClaude {
+		switch o.tab {
+		case tabClaude:
 			o.cfg.ClaudeAccounts = append(o.cfg.ClaudeAccounts[:o.cursor], o.cfg.ClaudeAccounts[o.cursor+1:]...)
-		} else {
+		case tabAgy:
+			o.cfg.AgyAccounts = append(o.cfg.AgyAccounts[:o.cursor], o.cfg.AgyAccounts[o.cursor+1:]...)
+		default: // tabGH
 			o.cfg.GHAccounts = append(o.cfg.GHAccounts[:o.cursor], o.cfg.GHAccounts[o.cursor+1:]...)
 		}
 		o.clampCursor()
@@ -331,10 +371,7 @@ func (o *AccountsOverlay) Render() string {
 
 func (o *AccountsOverlay) renderEdit() string {
 	t := theme.Current()
-	kind := "Claude"
-	if o.tab == tabGH {
-		kind = "GitHub"
-	}
+	kind := o.tabKind()
 	verb := "New"
 	if o.editIndex >= 0 {
 		verb = "Edit"
@@ -390,22 +427,40 @@ func (o *AccountsOverlay) renderPreview() string {
 		gh += " [" + strings.Join(ghTok, ", ") + "]"
 	}
 
+	// Antigravity has no synthetic "default" sentinel (ResolveAgyAccount returns
+	// ("","",false) when nothing matches and there's no catch-all), so the three
+	// cases map cleanly: no account, a routed/catch-all dir, or a named account
+	// with no dir (bwrap isolation off — inherits the ambient config).
+	agyName, agyDir, _ := o.cfg.ResolveAgyAccount(remote, path)
+	agy := "inherit ambient env"
+	switch {
+	case agyName == "":
+	case agyDir != "":
+		agy = agyName + " (" + agyDir + ")"
+	default:
+		agy = agyName + " (inherit ambient env)"
+	}
+
 	var b strings.Builder
 	b.WriteString(t.AccentStyle().Render("Test routing") + "\n\n")
 	b.WriteString(t.DimStyle().Render("Remote URL") + "\n" + o.previewInputs[0].View() + "\n")
 	b.WriteString(t.DimStyle().Render("Path") + "\n" + o.previewInputs[1].View() + "\n\n")
 	b.WriteString(t.DimStyle().Render("Claude → ") + claude + "\n")
-	b.WriteString(t.DimStyle().Render("GitHub → ") + gh + "\n\n")
+	b.WriteString(t.DimStyle().Render("GitHub → ") + gh + "\n")
+	b.WriteString(t.DimStyle().Render("Antigravity → ") + agy + "\n\n")
 	b.WriteString(t.OverlayHintStyle().Render("tab switch field · esc back"))
 	return b.String()
 }
 
 func (o *AccountsOverlay) renderTabs() string {
 	t := theme.Current()
-	if o.tab == tabClaude {
-		return t.AccentStyle().Render("‹Claude›") + "  " + t.DimStyle().Render("GitHub")
+	label := func(tab accountsTab, name string) string {
+		if o.tab == tab {
+			return t.AccentStyle().Render("‹" + name + "›")
+		}
+		return t.DimStyle().Render(name)
 	}
-	return t.DimStyle().Render("Claude") + "  " + t.AccentStyle().Render("‹GitHub›")
+	return label(tabClaude, "Claude") + "  " + label(tabGH, "GitHub") + "  " + label(tabAgy, "Antigravity")
 }
 
 func (o *AccountsOverlay) renderList() string {
@@ -415,11 +470,7 @@ func (o *AccountsOverlay) renderList() string {
 
 	rows := o.rows()
 	if len(rows) == 0 {
-		kind := "Claude"
-		if o.tab == tabGH {
-			kind = "GitHub"
-		}
-		b.WriteString(t.DimStyle().Render("No "+kind+" accounts — press n to add") + "\n")
+		b.WriteString(t.DimStyle().Render("No "+o.tabKind()+" accounts — press n to add") + "\n")
 	} else {
 		start, end := o.rowWindow(len(rows))
 		// Catch-all badges depend on order across the whole list (the first
