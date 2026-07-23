@@ -69,6 +69,29 @@ func TestStartNewSession_PinnedBypassesAvailability(t *testing.T) {
 	assert.Equal(t, "work", inst.ClaudeAccountPool())
 }
 
+// TestStartNewSession_NoPoolStaysDormant is the dormancy guarantee: a user with
+// claude_accounts but NO pool on any of them must gain no new state keys. The
+// singleton "solo" account routes as the catch-all, so without the Fix-1 guards it
+// would stamp claude_account_pool="solo" and write account_rotation["solo"]=1 (both
+// functionally invisible, since a singleton pool name equals the account name — but
+// they add keys to state.json). With the guards the pool stamp is empty (accountKey
+// falls back to the account name), and neither a rotation cursor nor an availability
+// entry is persisted — byte-for-byte pre-feature behavior.
+func TestStartNewSession_NoPoolStaysDormant(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	h := newCreateFormHome(t)
+	h.appConfig.ClaudeAccounts = []config.ClaudeAccount{
+		{Name: "solo", ConfigDir: "~/.claude"}, // no Pool, no rules → the catch-all
+	}
+
+	inst := startDirect(t, h, nil)
+
+	assert.Equal(t, "solo", inst.ClaudeAccountName(), "the catch-all account still routes")
+	assert.Equal(t, "", inst.ClaudeAccountPool(), "no real pool → no cluster-pool stamp (dormant)")
+	assert.Equal(t, 0, h.appState.GetAccountRotation("solo"), "no rotation cursor persisted for a singleton")
+	assert.Len(t, h.appState.GetAccountAvailability(), 0, "no availability entry persisted")
+}
+
 func TestSoonestResetMember(t *testing.T) {
 	members := []config.ClaudeAccount{{Name: "a"}, {Name: "b"}, {Name: "c"}}
 	avail := map[string]config.AccountAvailability{

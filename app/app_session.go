@@ -1301,13 +1301,12 @@ func (m *home) startNewSession(title, path string, direct bool, program, branch,
 	switch {
 	case sel != nil && sel.Member != nil:
 		accName, accDir, accIsDefault = sel.Member.Name, sel.Member.ResolvedConfigDir(), sel.Member.IsCatchAll()
-		// A member pin clusters under its OWN pool (or its own name when ungrouped),
-		// not whatever routing resolved — otherwise pinning an ungrouped account in a
-		// repo that routes to a named pool would mis-cluster the session under that pool.
+		// A member pin clusters under its OWN declared pool (sel.Pool), not whatever
+		// routing resolved — otherwise pinning an ungrouped account in a repo that
+		// routes to a named pool would mis-cluster the session under that pool. An
+		// ungrouped pin (sel.Pool == "") stamps no pool, so accountKey falls back to
+		// the account name — byte-for-byte dormant, matching the rotate branch.
 		poolName = sel.Pool
-		if poolName == "" {
-			poolName = sel.Member.Name
-		}
 	case len(members) == 0:
 		// dormant: leave everything empty
 	default:
@@ -1322,10 +1321,22 @@ func (m *home) startNewSession(title, path string, direct bool, program, branch,
 				break
 			}
 		}
-		if err := m.appState.SetAccountRotation(poolName, chosen+1); err != nil {
-			log.WarningLog.Printf("failed to persist rotation cursor: %v", err)
+		// Only advance a rotation cursor for a real (multi-member) pool: a 1-member
+		// pool has nothing to rotate, and writing the cursor would add an
+		// account_rotation key for an accounts-configured-but-no-pool user.
+		if len(members) > 1 {
+			if err := m.appState.SetAccountRotation(poolName, chosen+1); err != nil {
+				log.WarningLog.Printf("failed to persist rotation cursor: %v", err)
+			}
 		}
 		accName, accDir, accIsDefault = members[chosen].Name, members[chosen].ResolvedConfigDir(), members[chosen].IsCatchAll()
+		// Stamp a cluster pool only for a REAL declared pool (the chosen member has a
+		// non-empty Pool); an ungrouped account leaves the stamp empty so accountKey
+		// falls back to the account name — byte-for-byte dormant for a has-accounts-
+		// no-pool config. (len(members) > 1 already implies a shared non-empty Pool.)
+		if members[chosen].Pool == "" {
+			poolName = ""
+		}
 	}
 	instance.SetClaudeAccount(accName, accDir, accIsDefault)
 	instance.SetClaudeAccountPool(poolName)

@@ -501,6 +501,10 @@ func (o *AccountsOverlay) renderList() string {
 				seenCatchAll = true
 			}
 		}
+		// Fetch the availability snapshot (a full maps.Clone) and the clock once for
+		// the whole window rather than per row — the map is indexed per account below.
+		avail := o.state.GetAccountAvailability()
+		now := time.Now()
 		for i := start; i < end; i++ {
 			r := rows[i]
 			marker := "  "
@@ -523,7 +527,7 @@ func (o *AccountsOverlay) renderList() string {
 				if acct.Pool != "" {
 					extra += "  " + t.DimStyle().Render("pool:"+acct.Pool)
 				}
-				if config.AccountAvailable(o.state.GetAccountAvailability()[acct.Name], time.Now()) {
+				if config.AccountAvailable(avail[acct.Name], now) {
 					extra += "  " + t.DimStyle().Render("● available")
 				} else {
 					extra += "  " + t.DangerStyle().Render("⛔ limited")

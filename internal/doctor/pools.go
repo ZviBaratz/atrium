@@ -52,7 +52,7 @@ func RenderPools(warns []PoolWarning) string {
 		return ""
 	}
 	var b strings.Builder
-	b.WriteString("Account pools\n")
+	b.WriteString("Account pools:\n")
 	for _, w := range warns {
 		fmt.Fprintf(&b, "  ⚠ pool %q: %s\n", w.Pool, w.Detail)
 	}
