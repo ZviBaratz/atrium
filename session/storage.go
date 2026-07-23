@@ -44,6 +44,10 @@ type InstanceData struct {
 	// absence deserializes to false (= seen), so upgrades stay quiet.
 	Unread bool `json:"unread,omitempty"`
 
+	// Muted marks a session the user has silenced (M): it never notifies. omitempty
+	// keeps old state files compact; absence deserializes to false (= not muted).
+	Muted bool `json:"muted,omitempty"`
+
 	// Direct marks a direct (non-git) session: no worktree or diff is serialized, and on
 	// load the instance is rehydrated with a nil worktree.
 	Direct bool `json:"direct,omitempty"`

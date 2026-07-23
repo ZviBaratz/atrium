@@ -43,6 +43,8 @@ type AppState interface {
 	GetScannedRepos() ([]string, time.Time)
 	// SetScannedRepos stores a completed repo scan's results, stamped now
 	SetScannedRepos(paths []string) error
+	// ClearScannedRepos drops the cached repo-scan results and their stamp
+	ClearScannedRepos() error
 	// GetCollapsedRepos returns the repo group keys that should render folded
 	GetCollapsedRepos() []string
 	// SetCollapsedRepos replaces the set of folded repo group keys
@@ -351,6 +353,17 @@ func (s *State) GetScannedRepos() ([]string, time.Time) {
 func (s *State) SetScannedRepos(paths []string) error {
 	s.ScannedRepos = paths
 	s.LastRepoScanUnix = time.Now().Unix()
+	return SaveState(s)
+}
+
+// ClearScannedRepos drops the cached results *and* their stamp, returning the
+// state to the "no scan has ever completed" encoding GetScannedRepos documents
+// for a zero time. Clearing via SetScannedRepos(nil) would leave a fresh stamp
+// behind, and a later re-enable would then treat the empty cache as current for
+// a full TTL instead of re-walking on the next form open.
+func (s *State) ClearScannedRepos() error {
+	s.ScannedRepos = nil
+	s.LastRepoScanUnix = 0
 	return SaveState(s)
 }
 

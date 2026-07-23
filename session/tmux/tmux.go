@@ -19,6 +19,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -392,6 +393,14 @@ func (t *Session) start(workDir string, program string) error {
 		// the apostrophe killed the window's shell at launch and start timed out.
 		program = program + " --settings " + shellSingleQuote(settingsPath)
 	}
+
+	// Weight this agent against the shared tmux server for the kernel OOM killer:
+	// prefix a shell snippet that raises the pane's oom_score_adj above the server's
+	// before exec'ing the agent, so memory pressure sheds one recoverable session
+	// rather than the server (every session). A no-op when disabled or off Linux.
+	// The margin is read here, at each launch, so a session relaunched after a
+	// mid-run Settings change (pause → resume, pane recreate) picks up the new value.
+	program = wrapOOMScore(program, int(agentOOMMargin.Load()), runtime.GOOS)
 
 	// Create a new detached tmux session and start claude in it. -n gives the
 	// window the human-readable title (the conf disables auto-rename).

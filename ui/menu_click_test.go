@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/ZviBaratz/atrium/session"
+	zone "github.com/lrstanley/bubblezone"
 	"github.com/stretchr/testify/require"
 )
 
@@ -72,10 +73,12 @@ func TestMenu_KeyAtZoneResolvesClick(t *testing.T) {
 	m.SetInstance(nil) // empty bar: n / ? / q, deterministic
 
 	for _, key := range []string{"n", "?", "q"} {
-		z := waitZone(t, m.String, hintZoneID(key))
-		got, ok := m.KeyAtZone(clickAt(z.StartX, z.StartY))
-		require.True(t, ok, "click inside %q's zone should hit it", key)
-		require.Equal(t, key, got)
+		// Entries abut on one row, so stale bounds resolve to the neighbouring
+		// key rather than to nothing — require this key, not merely a hit.
+		clickZone(t, m.String, hintZoneID(key), func(z *zone.ZoneInfo) bool {
+			got, ok := m.KeyAtZone(clickAt(z.StartX, z.StartY))
+			return ok && got == key
+		})
 	}
 
 	// A click far outside the bar hits no entry.

@@ -274,12 +274,14 @@ func parseDiffRows(content string) []diffRow {
 	var rows []diffRow
 	var file string
 	var oldLine, newLine int // next file line for the '-' and '+' sides within a hunk
+	var inHunk bool          // true between a @@ header and the next diff --git
 
 	for _, line := range strings.Split(content, "\n") {
 		switch {
 		case line == "":
 			rows = append(rows, diffRow{kind: rowBlank})
 		case strings.HasPrefix(line, "diff --git"):
+			inHunk = false
 			file = diffFilePath(line)
 			rows = append(rows,
 				diffRow{kind: rowRule},
@@ -293,12 +295,15 @@ func parseDiffRows(content string) []diffRow {
 			// count from the *previous file* up as this file's line number. 0 is the
 			// honest reading — that side has no lines (and parseHunkHeader also returns
 			// 0 for a header it cannot parse, where "unknown" is likewise the truth).
+			inHunk = true
 			oldLine, newLine = parseHunkHeader(line)
 			rows = append(rows, diffRow{kind: rowHunk, text: line})
-		case line[0] == '+' && (len(line) == 1 || line[1] != '+'):
+		case line[0] == '+' && (inHunk || len(line) == 1 || line[1] != '+'):
+			// inHunk: inside a hunk any '+' line is an addition, even "+++banner".
 			rows = append(rows, diffRow{kind: rowAdd, text: line, file: file, lineNo: newLine})
 			newLine++
-		case line[0] == '-' && (len(line) == 1 || line[1] != '-'):
+		case line[0] == '-' && (inHunk || len(line) == 1 || line[1] != '-'):
+			// inHunk: inside a hunk any '-' line is a deletion, even "---divider".
 			rows = append(rows, diffRow{kind: rowDel, text: line, file: file, lineNo: oldLine})
 			oldLine++
 		case isDiffMeta(line):

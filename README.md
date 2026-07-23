@@ -144,7 +144,7 @@ judge how stale they are; with no Atrium running they stop advancing.
 | `program`, `model`, `permission_mode`, `effort`, `account` | What is running, and how |
 | `tmux_name` | The tmux session name, for scripts that want tmux directly |
 | `queued_prompts` | Prompts waiting to be delivered |
-| `auto_yes`, `direct`, `unread`, `note` | Session flags and annotation |
+| `auto_yes`, `direct`, `unread`, `muted`, `note` | Session flags and annotation |
 | `created_at`, `updated_at` | RFC 3339, or `null` when unrecorded |
 | `diff` | `added`, `removed`, `files_changed`, `commits`, `behind`, `dirty`, and `unpushed` (`null` when not yet computed) |
 
@@ -224,6 +224,7 @@ in-app keymap and this section ever drift apart, so it stays complete.
 | `i` | smart new (describe it; auto-routes to a project) |
 | `R` | rename session (label only) |
 | `A` | auto-name session (via its agent) |
+| `M` | mute / unmute this session's notifications (see [Notifications](#notifications)) |
 | `/` | filter sessions (see [Filtering](#filtering)) |
 | `v` | multi-select: `space` marks, `p`/`r`/`x` act on the marked set |
 
@@ -364,16 +365,48 @@ session finishes a turn or blocks on a prompt. `notifications` selects how:
 - `"desktop"` — fires a desktop notification. With `notify_command` unset, Atrium
   uses a built-in per-OS notifier (`notify-send` on Linux, `terminal-notifier` or
   `osascript` on macOS); a missing notifier is a silent no-op.
+- `"osc"` — writes an OSC 9 desktop notification to Atrium's own stdout, so the
+  escape is emitted by **your** terminal and reaches you over SSH with no local
+  notifier binary. Supported by iTerm2, kitty, WezTerm, Ghostty, ConEmu, and foot;
+  terminals that don't recognize it simply show nothing.
+
+Both events — a turn finishing, and a session blocking on you — use that one mode
+by default. `notifications_finished` splits them into an **attention ladder**, so
+the agent that actually needs you is never out-shouted by one that merely stopped:
+
+- `"same"` (default) — a finished turn uses the `notifications` mode too, exactly
+  as before.
+- `"off"` — a finished turn sends nothing out-of-band. This is quieter, not silent:
+  the row still carries its unread marker, and `u` still jumps to it.
+- `"bell"` — a finished turn just rings the terminal, while a session blocking on
+  you gets the fuller `notifications` mode (and `b` jumps to it).
+
+A blocked session always uses `notifications` itself, and only rungs quieter than
+every mode are offered, so a finished turn can never outrank a blocked one.
+`"desktop"` and `"osc"` are deliberately not accepted here — they are peers of each
+other, so neither is "one rung quieter" than the other; anything unrecognized reads
+as `"same"`. `notifications: "off"` remains the master switch: it silences both
+events whatever `notifications_finished` says.
 
 The session you're currently on — the selected row, or one you're attached to —
 never notifies, so only agents you've navigated away from can interrupt you.
+**While Atrium's terminal is focused nothing notifies at all** (you're already
+watching the fleet); set `notify_when_focused` to `true` to keep notifying even
+then. A terminal that doesn't report focus — a plain `tmux` without `focus-events
+on`, or one without DECSET 1004 — is never treated as focused, so it always
+notifies exactly as before. You can also **mute an individual session** with `M`;
+a muted session never notifies, and the mute persists across restarts.
 
 ```json
 {
   "notifications": "desktop",
+  "notifications_finished": "bell",
   "notify_command": "notify-send \"Atrium\" \"$ATRIUM_SESSION $ATRIUM_STATUS\""
 }
 ```
+
+That pair reads as: a desktop popup when an agent is waiting on you, a bell when
+one merely finished its turn.
 
 `notify_command`, when set, runs via `sh -c` for each desktop notification with
 `$ATRIUM_SESSION` (the session's display name), `$ATRIUM_STATUS`
@@ -381,7 +414,7 @@ never notifies, so only agents you've navigated away from can interrupt you.
 environment — the session name rides in the environment, never interpolated into
 the command, so it can't break argument parsing. Use it for `terminal-notifier`,
 webhooks (`curl`), or any custom notifier. A failing command is logged, never
-fatal. Both settings are also editable live from the Settings panel (`,`).
+fatal. These settings are also editable live from the Settings panel (`,`).
 
 #### Clipboard
 
@@ -586,9 +619,11 @@ routing can differ from Claude-login routing. Add a `gh_accounts` list:
 
 #### Configuration reference
 
-Every `config.json` key, its default, and where it is documented above. Most are
-also editable live from the Settings panel (`,`); the three marked **†** are
-JSON-only and have no Settings row. A test
+Every `config.json` key, its default, and where it is documented above. Nearly all
+are also editable live from the Settings panel (`,`). The exceptions are the three
+keys whose value is a *list of records* — `profiles`, `claude_accounts`,
+`gh_accounts` — which the one-value-per-row panel cannot express, and the
+deprecated `nerd_font`, which `glyph_set` supersedes. A test
 (`config.TestReadmeDocumentsEveryConfigField`) fails the build if a new field is
 added without a row here.
 
@@ -613,6 +648,7 @@ added without a row here.
 | `record_prompt_history` | bool | `true` | remember submitted prompts for reuse in the create form and quick-send |
 | `mouse` | bool | `true` | mouse capture (clickable rows/tabs/hint bar, wheel, divider drag); `false` frees native select-to-copy |
 | `max_sessions` | int | auto (½ CPU threads) | concurrent-session cap. Unset = host-aware soft cap that warns past it; `N` = hard cap; `0` = unlimited (no warning) |
+| `agent_oom_margin` | int | `on (300)` | Linux only: raise each agent's `oom_score_adj` this far above the shared tmux server's so a kernel OOM kill sheds one recoverable session, not the server (every session). Unset = on (default margin); `N` = margin; `0` = off |
 | `trust_worktrees_root` | bool | `false` | pre-accept Claude's workspace-trust for the worktrees root |
 | `carry_files` | array | `[".claude/settings.local.json"]` | gitignored files copied into each worktree ([Carried files](#carried-files)) |
 | `pr_create_draft` | bool | `true` | `c` opens a draft PR |
@@ -621,16 +657,18 @@ added without a row here.
 | `claude_accounts` | array | `[]` | per-session `CLAUDE_CONFIG_DIR` routing ([Claude accounts](#claude-accounts)) |
 | `gh_accounts` | array | `[]` | per-session `GH_CONFIG_DIR` routing ([GitHub CLI accounts](#github-cli-accounts)) |
 | `auto_update` | string | `"notify"` | startup update behavior: `notify` / `auto` / `off` ([Auto-update](#auto-update)) |
-| `project_search_roots` **†** | array | `["~"]` | directories the background repo scan walks for the project picker |
-| `project_search_depth` **†** | int | `3` | levels below each root the scan descends (`0`/negative disables it) |
+| `project_search_roots` | array | `["~"]` | directories the background repo scan walks for the project picker |
+| `project_search_depth` | int | `3` | levels below each root the scan descends (`0`/negative disables it) |
 | `model_indicator` | string | `"on"` | per-session model chip: `on` / `off` |
 | `permission_indicator` | string | `"on"` | per-session permission-mode chip: `on` / `off` |
 | `effort_indicator` | string | `"on"` | per-session reasoning-effort chip: `on` / `off` |
 | `session_sort` | string | `"creation"` | within-group order: `creation` / `status` |
 | `group_mode` | string | `"repo"` | list grouping: `repo` / `account` |
-| `smart_dispatch_auto` **†** | bool | `false` | let a confident `i` match create the session without the form |
-| `notifications` | string | `"off"` | background-session signal: `off` / `bell` / `desktop` ([Notifications](#notifications)) |
+| `smart_dispatch_auto` | bool | `false` | let a confident `i` match create the session without the form |
+| `notifications` | string | `"off"` | background-session signal: `off` / `bell` / `desktop` / `osc` (SSH-friendly OSC 9) ([Notifications](#notifications)) |
+| `notifications_finished` | string | `"same"` | quieter rung for a *finished turn* only, so a blocked session is never out-shouted: `same` / `off` / `bell` ([Notifications](#notifications)) |
 | `notify_command` | string | built-in | shell command for `desktop` notifications ([Notifications](#notifications)) |
+| `notify_when_focused` | bool | `false` | keep notifying while Atrium's terminal is focused; `false` stays silent while you're watching ([Notifications](#notifications)) |
 
 ### FAQs
 
