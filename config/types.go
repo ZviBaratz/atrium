@@ -129,10 +129,12 @@ type AgyAccount struct {
 	PathMatches   []string `json:"path_matches,omitempty"`
 }
 
+// ResolvedConfigDir returns the expanded path to the account's config directory.
 func (a AgyAccount) ResolvedConfigDir() string {
 	return expandHomePath(a.ConfigDir)
 }
 
+// IsCatchAll reports whether this account acts as a fallback for any path.
 func (a AgyAccount) IsCatchAll() bool {
 	return len(a.RemoteMatches) == 0 && len(a.PathMatches) == 0
 }
