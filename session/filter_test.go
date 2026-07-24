@@ -205,6 +205,24 @@ func TestFilter_Account(t *testing.T) {
 	require.True(t, ParseFilter("account:").Matches(personal), "empty value is a no-op")
 }
 
+func TestFilter_AccountPool(t *testing.T) {
+	// Account name deliberately does NOT share a prefix with the pool name (unlike
+	// the brief's "work-1"/"work" example), so these assertions can only pass via
+	// pool-awareness in accountTerm, not by accident through the pre-existing
+	// name-only prefix match.
+	work1 := newFilterInstance(t, "a", "b")
+	work1.SetClaudeAccount("acct-1", "", false)
+	work1.SetClaudeAccountPool("work")
+
+	require.True(t, ParseFilter("account:work").Matches(work1), "pool name matches a member")
+	require.True(t, ParseFilter("account:acct-1").Matches(work1), "member name still matches")
+	require.True(t, ParseFilter("account:wo").Matches(work1), "prefix matches the pool")
+
+	none := newFilterInstance(t, "c", "d")
+	require.True(t, ParseFilter("account:none").Matches(none), "no account and no pool")
+	require.False(t, ParseFilter("account:none").Matches(work1))
+}
+
 func TestFilter_StatusPending(t *testing.T) {
 	pending := newFilterInstance(t, "sub", "b")
 	pending.SetStatus(Pending)

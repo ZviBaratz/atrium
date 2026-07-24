@@ -14,6 +14,10 @@ func (i *Instance) SetClaudeAccount(name, configDir string, isDefault bool) {
 	i.claudeAccountDefault = isDefault
 }
 
+// SetClaudeAccountPool pins the rotation pool this session belongs to (the list
+// cluster key; the badge still shows the concrete member). Empty = singleton/none.
+func (i *Instance) SetClaudeAccountPool(pool string) { i.claudeAccountPool = pool }
+
 // SetGHConfigDir pins the GH_CONFIG_DIR for this session. Call before Start: it is
 // injected at session birth (into the tmux env, and onto the worktree for Atrium's
 // own gh calls) and cannot change after. It is resolved independently of the
@@ -47,3 +51,6 @@ func (i *Instance) GitHubTokenEnv() []string { return i.githubTokenEnv }
 // ClaudeAccountIsDefault reports whether this session is on the default/fallback
 // account (the list renders that badge dim rather than accented).
 func (i *Instance) ClaudeAccountIsDefault() bool { return i.claudeAccountDefault }
+
+// ClaudeAccountPool returns the pinned rotation pool ("" when none).
+func (i *Instance) ClaudeAccountPool() string { return i.claudeAccountPool }

@@ -464,12 +464,17 @@ func (l *List) String() string {
 					continue
 				}
 				// Suppress the per-row account badge only when it is redundant with the
-				// cluster this row renders under — i.e. its account matches the block
-				// anchor's, the one the divider and tinted header already show. A session
-				// whose account diverges from its repo anchor (a mixed-account repo) keeps
-				// its badge, so the divider/tint never silently mislabel its identity.
+				// divider this row renders under — i.e. the row's concrete account name
+				// equals the cluster's divider label (accountKey of the block anchor: the
+				// pool name for a pooled cluster, else the account name). Comparing
+				// accountKey-to-accountKey would hide EVERY member badge inside a pool
+				// cluster (all members share the one pool key), erasing the per-member
+				// distribution the account view exists to reveal; the badge shows the
+				// concrete member, so it is redundant only against a same-named divider. A
+				// session whose account diverges from its repo anchor (a mixed-account
+				// repo) likewise keeps its badge, so the divider/tint never mislabel it.
 				if accountGroupingVisible {
-					l.renderer.hideAccountBadge = accountKey(l.items[j]) == accountKey(l.items[start])
+					l.renderer.hideAccountBadge = l.items[j].ClaudeAccountName() == accountKey(l.items[start])
 				}
 				at := appendBlock(zone.Mark(listRowZoneID(l.items[j]), l.renderer.Render(l.items[j], j+1, j == l.selectedIdx, l.IsMarked(l.items[j]))))
 				if j == l.selectedIdx {

@@ -53,6 +53,16 @@ type AppState interface {
 	GetAccountOrder() []string
 	// SetAccountOrder replaces the chosen order of account clusters
 	SetAccountOrder(accounts []string) error
+	// GetAccountAvailability returns a copy of the per-account rate-limit flags.
+	GetAccountAvailability() map[string]AccountAvailability
+	// SetAccountLimited flags an account rate-limited until untilRFC3339 ("" = indefinite).
+	SetAccountLimited(name, untilRFC3339 string) error
+	// ClearAccountLimited removes an account's rate-limit flag.
+	ClearAccountLimited(name string) error
+	// GetAccountRotation returns the round-robin cursor for a pool (0 if unset).
+	GetAccountRotation(pool string) int
+	// SetAccountRotation stores the round-robin cursor for a pool.
+	SetAccountRotation(pool string, idx int) error
 	// GetListRatio returns the fraction of width given to the session list
 	GetListRatio() float64
 	// SetListRatio stores the list/preview split (clamped to a sane range)
@@ -157,6 +167,14 @@ type StateManager interface {
 	AppState
 }
 
+// AccountAvailability is the per-account runtime rate-limit flag. It lives in
+// state.json (not config.json) because it auto-expires and must survive a
+// restart — a real 5-hour limit does. Keyed by account name.
+type AccountAvailability struct {
+	Limited bool   `json:"limited"`
+	Until   string `json:"until,omitempty"` // RFC3339; "" while Limited means indefinite
+}
+
 // State represents the application state that persists between sessions
 type State struct {
 	// HelpScreensSeen is a bitmask tracking which help screens have been shown
@@ -174,6 +192,13 @@ type State struct {
 	// Names with no live sessions are kept rather than pruned: they cost nothing in the
 	// view and are what restores an account's slot when a session for it returns.
 	AccountOrder []string `json:"account_order,omitempty"`
+	// AccountAvailability marks Claude accounts the user flagged rate-limited,
+	// keyed by account name. Pool rotation skips a limited member until its
+	// window elapses. Empty = every account available (feature dormant).
+	AccountAvailability map[string]AccountAvailability `json:"account_availability,omitempty"`
+	// AccountRotation is the per-pool round-robin cursor (pool name -> next
+	// member index), advanced at each session creation.
+	AccountRotation map[string]int `json:"account_rotation,omitempty"`
 	// ListRatio is the fraction of the terminal width given to the session list.
 	// Zero (an older state file with no such key) reads back as defaultListRatio.
 	ListRatio float64 `json:"list_ratio,omitempty"`
@@ -387,6 +412,63 @@ func (s *State) GetAccountOrder() []string {
 func (s *State) SetAccountOrder(accounts []string) error {
 	s.AccountOrder = accounts
 	return SaveState(s)
+}
+
+// GetAccountAvailability returns a copy of the rate-limit flags (empty when unset).
+func (s *State) GetAccountAvailability() map[string]AccountAvailability {
+	if len(s.AccountAvailability) == 0 {
+		return map[string]AccountAvailability{}
+	}
+	return maps.Clone(s.AccountAvailability)
+}
+
+// SetAccountLimited flags name rate-limited until untilRFC3339 ("" = indefinite).
+func (s *State) SetAccountLimited(name, untilRFC3339 string) error {
+	if s.AccountAvailability == nil {
+		s.AccountAvailability = map[string]AccountAvailability{}
+	}
+	s.AccountAvailability[name] = AccountAvailability{Limited: true, Until: untilRFC3339}
+	return SaveState(s)
+}
+
+// ClearAccountLimited removes name's rate-limit flag.
+func (s *State) ClearAccountLimited(name string) error {
+	if s.AccountAvailability == nil {
+		return nil
+	}
+	delete(s.AccountAvailability, name)
+	return SaveState(s)
+}
+
+// GetAccountRotation returns the round-robin cursor for pool (0 when unset).
+func (s *State) GetAccountRotation(pool string) int {
+	return s.AccountRotation[pool] // nil-map read yields 0
+}
+
+// SetAccountRotation stores the round-robin cursor for pool.
+func (s *State) SetAccountRotation(pool string, idx int) error {
+	if s.AccountRotation == nil {
+		s.AccountRotation = map[string]int{}
+	}
+	s.AccountRotation[pool] = idx
+	return SaveState(s)
+}
+
+// AccountAvailable reports whether an account may take a new session now. A
+// limited account with an elapsed reset window counts as available again; a
+// malformed or empty Until while Limited counts as unavailable.
+func AccountAvailable(av AccountAvailability, now time.Time) bool {
+	if !av.Limited {
+		return true
+	}
+	if av.Until == "" {
+		return false // indefinite
+	}
+	t, err := time.Parse(time.RFC3339, av.Until)
+	if err != nil {
+		return false // malformed -> treat as still limited
+	}
+	return now.After(t)
 }
 
 // GetListRatio returns the fraction of width given to the session list. A zero or

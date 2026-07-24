@@ -178,21 +178,25 @@ func prTerm(value string) term {
 	}
 }
 
-// accountTerm matches the session's Claude account name by case-insensitive
-// prefix, mirroring statusTerm. An empty value is a no-op (matches every session)
-// so a mid-typed "account:" never blinks the list empty. The literal value "none"
-// matches sessions with no resolved account (ClaudeAccountName == ""), mirroring
-// pr:none. Unlike pr:none this is an exact match, not a prefix match, and that is
-// intentional: account names are an open, user-defined namespace (unlike the
-// fixed pr: states), so "account:no" must prefix-match a real account (e.g.
-// "nova"), not silently be swallowed as meaning no-account.
+// accountTerm matches the session's Claude account name OR its pinned rotation
+// pool by case-insensitive prefix, mirroring statusTerm. Matching the pool too
+// means "account:<pool>" finds every session rotated across that pool's members,
+// not just one whose concrete account name happens to match. An empty value is a
+// no-op (matches every session) so a mid-typed "account:" never blinks the list
+// empty. The literal value "none" matches sessions with neither a resolved
+// account nor a pinned pool, mirroring pr:none. Unlike pr:none this is an exact
+// match, not a prefix match, and that is intentional: account names are an open,
+// user-defined namespace (unlike the fixed pr: states), so "account:no" must
+// prefix-match a real account (e.g. "nova"), not silently be swallowed as meaning
+// no-account.
 func accountTerm(value string) term {
 	return func(i *Instance) bool {
 		name := strings.ToLower(i.ClaudeAccountName())
+		pool := strings.ToLower(i.ClaudeAccountPool())
 		if value == "none" {
-			return name == ""
+			return name == "" && pool == ""
 		}
-		return strings.HasPrefix(name, value)
+		return strings.HasPrefix(name, value) || (pool != "" && strings.HasPrefix(pool, value))
 	}
 }
 

@@ -17,17 +17,24 @@ const (
 	fldRemote
 	fldPath
 	fldToken
+	// fldPool aliases fldToken: showToken (GH tab) and showPool (Claude tab) are
+	// mutually exclusive per form instance, so whichever optional 5th field is
+	// actually built lands at this same index. Never both present at once.
+	fldPool = fldToken
 )
 
-// accountForm is the add/edit sub-form for one Claude or GitHub account. It works
-// purely in strings; the owning AccountsOverlay validates and builds the typed
-// config.ClaudeAccount / config.GHAccount on submit. showToken adds the GH-only
-// Token env field (index fldToken); on the Claude tab that field is absent from
-// inputs entirely, so nav/render/commit key off len(inputs).
+// accountForm is the add/edit sub-form for one Claude, GitHub, or Antigravity
+// account. It works purely in strings; the owning AccountsOverlay validates and
+// builds the typed config.ClaudeAccount / config.GHAccount / config.AgyAccount on
+// submit. showToken adds the GH-only Token env field and showPool adds the
+// Claude-only Pool field (both at index fldToken/fldPool); at most one is present
+// per instance, so nav/render/commit key off len(inputs). The Antigravity tab
+// passes neither — it has no token and no pool.
 type accountForm struct {
 	inputs    []textinput.Model
 	focus     int
 	showToken bool
+	showPool  bool
 
 	picker *DirectoryPicker // non-nil only while browsing the config dir (Task 3)
 
@@ -48,7 +55,11 @@ func newFieldInput(placeholder string) textinput.Model {
 	return ti
 }
 
-func newAccountForm(showToken bool, name, configDir, remote, path, token string) *accountForm {
+func newAccountForm(showToken, showPool bool, name, configDir, remote, path, token, pool string) *accountForm {
+	// The three tabs share this form. showToken (GH only) and showPool (Claude only)
+	// are passed explicitly by the caller rather than derived from one another: the
+	// Antigravity tab passes both false, so it must not be told apart from Claude by
+	// a bare !showToken — that once wrongly grew a Pool field on the agy form.
 	inputs := []textinput.Model{
 		newFieldInput("e.g. work"),
 		newFieldInput("~/.claude-work  (empty = inherit ambient env)"),
@@ -64,7 +75,12 @@ func newAccountForm(showToken bool, name, configDir, remote, path, token string)
 		tok.SetValue(token)
 		inputs = append(inputs, tok)
 	}
-	f := &accountForm{inputs: inputs, showToken: showToken}
+	if showPool {
+		p := newFieldInput("optional; rotation-pool name, e.g. work")
+		p.SetValue(pool)
+		inputs = append(inputs, p)
+	}
+	f := &accountForm{inputs: inputs, showToken: showToken, showPool: showPool}
 	f.applyFocus()
 	return f
 }
@@ -169,6 +185,15 @@ func (f *accountForm) TokenEnv() []string {
 	return parseList(f.inputs[fldToken].Value())
 }
 
+// Pool returns the Claude-only rotation-pool field's value, or "" when this form
+// is a GH-tab edit (showPool false, the field was never built).
+func (f *accountForm) Pool() string {
+	if !f.showPool {
+		return ""
+	}
+	return strings.TrimSpace(f.inputs[fldPool].Value())
+}
+
 func (f *accountForm) Submitted() bool { return f.submitted }
 func (f *accountForm) Canceled() bool  { return f.canceled }
 
@@ -192,7 +217,13 @@ func (f *accountForm) Render(inner int) string {
 		f.picker.SetWidth(inner)
 		return t.DimStyle().Render("Browse config dir") + "\n\n" + f.picker.Render()
 	}
-	labels := []string{"Name", "Config dir", "Remote match", "Path match", "Token env"}
+	labels := []string{"Name", "Config dir", "Remote match", "Path match"}
+	switch {
+	case f.showToken:
+		labels = append(labels, "Token env")
+	case f.showPool:
+		labels = append(labels, "Pool")
+	}
 	var b strings.Builder
 	for i := range f.inputs {
 		label := t.DimStyle().Render(labels[i])

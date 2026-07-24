@@ -2,6 +2,7 @@ package overlay
 
 import (
 	"strings"
+	"time"
 
 	"github.com/ZviBaratz/atrium/config"
 	"github.com/ZviBaratz/atrium/ui/theme"
@@ -32,9 +33,12 @@ const (
 // AccountsOverlay is the in-TUI manager for Claude, GitHub, and Antigravity (agy)
 // accounts. It holds the same *config.Config the app holds and mutates
 // ClaudeAccounts/GHAccounts/AgyAccounts in place; the app persists (SaveConfig)
-// whenever HandleKeyPress reports dirty.
+// whenever HandleKeyPress reports dirty. It also holds the app's config.AppState to
+// read/write per-account rate-limit availability (state.json); those setters
+// self-persist, so no dirty flag is needed for them.
 type AccountsOverlay struct {
 	cfg    *config.Config
+	state  config.AppState
 	tab    accountsTab
 	mode   accountsMode
 	cursor int
@@ -50,10 +54,11 @@ type AccountsOverlay struct {
 	previewFocus  int
 }
 
-// NewAccountsOverlay creates the account manager over cfg. It seeds a default
-// 80x24 so Render works before the first SetSize.
-func NewAccountsOverlay(cfg *config.Config) *AccountsOverlay {
-	return &AccountsOverlay{cfg: cfg, width: 80, height: 24} // floor so Render works pre-SetSize
+// NewAccountsOverlay creates the account manager over cfg, using state to read and
+// toggle per-account rate-limit availability. It seeds a default 80x24 so Render
+// works before the first SetSize.
+func NewAccountsOverlay(cfg *config.Config, state config.AppState) *AccountsOverlay {
+	return &AccountsOverlay{cfg: cfg, state: state, width: 80, height: 24} // floor so Render works pre-SetSize
 }
 
 // SetSize records the terminal dimensions; the overlay caps its own box width and
@@ -162,6 +167,15 @@ func (o *AccountsOverlay) handleListKey(msg tea.KeyMsg) (closed bool, dirty bool
 		if o.activeLen() > 0 {
 			o.mode = modeConfirmDelete
 		}
+	case "l":
+		if o.tab == tabClaude && o.activeLen() > 0 {
+			name := o.cfg.ClaudeAccounts[o.cursor].Name
+			if o.state.GetAccountAvailability()[name].Limited {
+				_ = o.state.ClearAccountLimited(name)
+			} else {
+				_ = o.state.SetAccountLimited(name, "") // indefinite; reset-time entry is a future polish
+			}
+		}
 	case "t":
 		o.previewInputs = []textinput.Model{newFieldInput("remote URL (optional)"), newFieldInput("path (optional)")}
 		o.previewInputs[0].Focus()
@@ -178,20 +192,22 @@ func (o *AccountsOverlay) openForm(index int) {
 	o.lastErr = ""
 	switch {
 	case index < 0:
-		o.form = newAccountForm(o.showToken(), "", "", "", "", "")
+		// A new account: the Pool field belongs only to the Claude tab, the Token
+		// field only to GH. The Antigravity tab gets neither.
+		o.form = newAccountForm(o.showToken(), o.tab == tabClaude, "", "", "", "", "", "")
 	case o.tab == tabClaude:
 		a := o.cfg.ClaudeAccounts[index]
-		o.form = newAccountForm(false, a.Name, a.ConfigDir,
-			strings.Join(a.RemoteMatches, ", "), strings.Join(a.PathMatches, ", "), "")
+		o.form = newAccountForm(false, true, a.Name, a.ConfigDir,
+			strings.Join(a.RemoteMatches, ", "), strings.Join(a.PathMatches, ", "), "", a.Pool)
 	case o.tab == tabAgy:
 		a := o.cfg.AgyAccounts[index]
-		o.form = newAccountForm(false, a.Name, a.ConfigDir,
-			strings.Join(a.RemoteMatches, ", "), strings.Join(a.PathMatches, ", "), "")
+		o.form = newAccountForm(false, false, a.Name, a.ConfigDir,
+			strings.Join(a.RemoteMatches, ", "), strings.Join(a.PathMatches, ", "), "", "")
 	default: // tabGH
 		a := o.cfg.GHAccounts[index]
-		o.form = newAccountForm(true, a.Name, a.ConfigDir,
+		o.form = newAccountForm(true, false, a.Name, a.ConfigDir,
 			strings.Join(a.RemoteMatches, ", "), strings.Join(a.PathMatches, ", "),
-			strings.Join(a.TokenEnv, ", "))
+			strings.Join(a.TokenEnv, ", "), "")
 	}
 	o.mode = modeEdit
 }
@@ -238,6 +254,7 @@ func (o *AccountsOverlay) commit() {
 		a := config.ClaudeAccount{
 			Name: o.form.Name(), ConfigDir: o.form.ConfigDir(),
 			RemoteMatches: o.form.RemoteMatches(), PathMatches: o.form.PathMatches(),
+			Pool: o.form.Pool(),
 		}
 		if o.editIndex < 0 {
 			o.cfg.ClaudeAccounts = append(o.cfg.ClaudeAccounts, a)
@@ -310,8 +327,12 @@ func (o *AccountsOverlay) handlePreviewKey(msg tea.KeyMsg) (closed bool, dirty b
 
 func (o *AccountsOverlay) boxWidth() int {
 	w := o.width - 2
-	if w > 64 {
-		w = 64
+	// Capped higher than SettingsOverlay's 64 (which has no pool/availability
+	// columns): a Claude row's "pool:<name>  ⛔ limited" tail needs the extra
+	// room, or a full 30-row list wraps every line and blows the row-window
+	// budget (see TestAccountsOverlay_ListWindowsRowsOnShortTerminal).
+	if w > 84 {
+		w = 84
 	}
 	if w < 20 {
 		w = 20
@@ -482,6 +503,10 @@ func (o *AccountsOverlay) renderList() string {
 				seenCatchAll = true
 			}
 		}
+		// Fetch the availability snapshot (a full maps.Clone) and the clock once for
+		// the whole window rather than per row — the map is indexed per account below.
+		avail := o.state.GetAccountAvailability()
+		now := time.Now()
 		for i := start; i < end; i++ {
 			r := rows[i]
 			marker := "  "
@@ -498,7 +523,19 @@ func (o *AccountsOverlay) renderList() string {
 			} else {
 				dir = truncTail(dir, 26)
 			}
-			b.WriteString(marker + padRight(name, 12) + " " + padRight(dir, 28) + " " + o.badge(r.catchAll, &seenCatchAll) + "\n")
+			extra := ""
+			if o.tab == tabClaude {
+				acct := o.cfg.ClaudeAccounts[i]
+				if acct.Pool != "" {
+					extra += "  " + t.DimStyle().Render("pool:"+acct.Pool)
+				}
+				if config.AccountAvailable(avail[acct.Name], now) {
+					extra += "  " + t.DimStyle().Render("● available")
+				} else {
+					extra += "  " + t.DangerStyle().Render("⛔ limited")
+				}
+			}
+			b.WriteString(marker + padRight(name, 12) + " " + padRight(dir, 28) + " " + o.badge(r.catchAll, &seenCatchAll) + extra + "\n")
 		}
 		if !o.hasCatchAll() {
 			b.WriteString(t.DimStyle().Render("unmatched repos inherit the ambient account") + "\n")
@@ -509,7 +546,13 @@ func (o *AccountsOverlay) renderList() string {
 	if o.mode == modeConfirmDelete {
 		b.WriteString(theme.Current().DangerStyle().Render("Delete '" + o.rows()[o.cursor].name + "'?  y / n"))
 	} else {
-		b.WriteString(t.OverlayHintStyle().Render("↑/↓ move · tab switch · n new · e edit · d delete") + "\n")
+		// "l limited" toggles per-account availability, which only Claude accounts
+		// carry — advertise it only on that tab so the legend never names a dead key.
+		hint := "↑/↓ move · tab switch · n new · e edit · d delete"
+		if o.tab == tabClaude {
+			hint += " · l limited"
+		}
+		b.WriteString(t.OverlayHintStyle().Render(hint) + "\n")
 		b.WriteString(t.OverlayHintStyle().Render("t test routing · esc close"))
 	}
 	return b.String()

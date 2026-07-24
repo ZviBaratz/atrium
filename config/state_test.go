@@ -292,3 +292,48 @@ func TestState_OldFileWithoutNewKeys(t *testing.T) {
 	assert.Nil(t, s.GetDraft())
 	assert.Equal(t, []string{"/old"}, s.GetRecentPaths())
 }
+
+func TestState_AccountAvailabilityRoundTrip(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	assert.Empty(t, DefaultState().GetAccountAvailability())
+
+	s := DefaultState()
+	require.NoError(t, s.SetAccountLimited("work-1", "2026-07-23T16:32:00Z"))
+
+	got := LoadState().GetAccountAvailability()
+	assert.Equal(t, AccountAvailability{Limited: true, Until: "2026-07-23T16:32:00Z"}, got["work-1"])
+
+	require.NoError(t, LoadState().ClearAccountLimited("work-1"))
+	assert.Empty(t, LoadState().GetAccountAvailability())
+}
+
+func TestState_AccountRotationRoundTrip(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	assert.Zero(t, DefaultState().GetAccountRotation("work")) // unset pool reads 0
+
+	s := DefaultState()
+	require.NoError(t, s.SetAccountRotation("work", 2))
+	assert.Equal(t, 2, LoadState().GetAccountRotation("work"))
+}
+
+func TestAccountAvailable(t *testing.T) {
+	now := time.Date(2026, 7, 23, 16, 0, 0, 0, time.UTC)
+	cases := []struct {
+		name string
+		av   AccountAvailability
+		want bool
+	}{
+		{"not limited", AccountAvailability{}, true},
+		{"indefinite", AccountAvailability{Limited: true}, false},
+		{"future until", AccountAvailability{Limited: true, Until: "2026-07-23T17:00:00Z"}, false},
+		{"past until", AccountAvailability{Limited: true, Until: "2026-07-23T15:00:00Z"}, true},
+		{"malformed until", AccountAvailability{Limited: true, Until: "not-a-time"}, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, AccountAvailable(tc.av, now))
+		})
+	}
+}

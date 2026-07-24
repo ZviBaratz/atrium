@@ -75,3 +75,64 @@ func TestAccountPicker_PreselectNoopAfterTouch(t *testing.T) {
 	ap.SelectByName("personal") // a later auto-route attempt
 	assert.Equal(t, "quantivly", ap.GetSelectedAccount().Name, "explicit choice survives auto-route")
 }
+
+func (ap *AccountPicker) entryLabels() []string {
+	out := make([]string, len(ap.entries))
+	for i, e := range ap.entries {
+		out[i] = e.label
+	}
+	return out
+}
+func (ap *AccountPicker) selectIndex(i int) { ap.cursor = i; ap.touched = true }
+
+func TestAccountPicker_PoolEntries(t *testing.T) {
+	accounts := []config.ClaudeAccount{
+		{Name: "work-1", ConfigDir: "~/.claude-work", Pool: "work"},
+		{Name: "work-2", ConfigDir: "~/.claude-work2", Pool: "work"},
+		{Name: "personal", ConfigDir: "~/.claude-personal"},
+	}
+	ap := NewAccountPicker(accounts)
+
+	// A pool contributes one rotating entry then one entry per member; ungrouped
+	// accounts contribute one entry each.
+	labels := ap.entryLabels()
+	require.Equal(t, []string{"work ⇄", "  work-1", "  work-2", "personal"}, labels)
+
+	// The ⇄ entry rotates the pool (no Member); a member entry pins with its pool.
+	ap.selectIndex(0)
+	e := ap.Selected()
+	assert.Equal(t, "work", e.pool)
+	assert.Nil(t, e.member)
+
+	ap.selectIndex(1)
+	e = ap.Selected()
+	assert.Equal(t, "work", e.pool)
+	require.NotNil(t, e.member)
+	assert.Equal(t, "work-1", e.member.Name)
+
+	ap.selectIndex(3)
+	e = ap.Selected()
+	assert.Equal(t, "", e.pool)
+	require.NotNil(t, e.member)
+	assert.Equal(t, "personal", e.member.Name)
+}
+
+func TestAccountPicker_NoPoolsUnchanged(t *testing.T) {
+	accounts := []config.ClaudeAccount{
+		{Name: "personal", ConfigDir: "~/.claude"},
+		{Name: "quantivly", ConfigDir: "~/.claude-quantivly", RemoteMatches: []string{"quantivly/"}},
+	}
+	ap := NewAccountPicker(accounts)
+	assert.Equal(t, []string{"personal", "quantivly"}, ap.entryLabels(), "no pools: one entry per account, config order")
+}
+
+func TestAccountPicker_PreselectPool(t *testing.T) {
+	accounts := []config.ClaudeAccount{
+		{Name: "work-1", Pool: "work"}, {Name: "work-2", Pool: "work"}, {Name: "personal"},
+	}
+	ap := NewAccountPicker(accounts)
+	ap.SelectByName("work") // preselect the pool ⇄ entry
+	e := ap.Selected()
+	assert.Equal(t, "work", e.pool)
+	assert.Nil(t, e.member, "preselecting a pool lands on its rotating entry")
+}

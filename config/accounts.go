@@ -26,6 +26,43 @@ func (c *Config) ResolveClaudeAccount(remoteURL, targetPath string) (name, confi
 	return a.Name, a.ResolvedConfigDir(), isDefault
 }
 
+// ResolveClaudePool finds the account routing selects (first-match, identical to
+// ResolveClaudeAccount) and returns the whole pool that account belongs to: the
+// pool name and its members in config order. An account with no Pool is a
+// singleton pool whose name is the account name. isDefault mirrors
+// ResolveClaudeAccount (the matched account was the rule-less catch-all). Empty
+// claude_accounts returns ("", nil, false) — the feature is dormant.
+func (c *Config) ResolveClaudePool(remoteURL, targetPath string) (pool string, members []ClaudeAccount, isDefault bool) {
+	if len(c.ClaudeAccounts) == 0 {
+		return "", nil, false
+	}
+	idx, isDefault := matchRouteIndex(len(c.ClaudeAccounts), strings.ToLower(remoteURL), strings.ToLower(targetPath),
+		func(i int) []string { return c.ClaudeAccounts[i].RemoteMatches },
+		func(i int) []string { return c.ClaudeAccounts[i].PathMatches })
+	if idx < 0 {
+		// No match and no catch-all: mirror ResolveClaudeAccount's synthetic default.
+		return "default", []ClaudeAccount{{Name: "default"}}, true
+	}
+	matched := c.ClaudeAccounts[idx]
+	if matched.Pool == "" {
+		return matched.Name, []ClaudeAccount{matched}, isDefault
+	}
+	return matched.Pool, c.PoolMembers(matched.Pool), isDefault
+}
+
+// PoolMembers returns the accounts in the named pool, in config order. A name
+// matching a single ungrouped account (Pool == "") returns that account as a
+// singleton pool, so any pool name — grouped or singleton — resolves uniformly.
+func (c *Config) PoolMembers(pool string) []ClaudeAccount {
+	var members []ClaudeAccount
+	for _, a := range c.ClaudeAccounts {
+		if a.Pool == pool || (a.Pool == "" && a.Name == pool) {
+			members = append(members, a)
+		}
+	}
+	return members
+}
+
 // ResolveAgyAccount returns the name and config directory of the AgyAccount
 // matching the given git remote URL or target path.
 func (c *Config) ResolveAgyAccount(remoteURL, targetPath string) (name, configDir string, isDefault bool) {

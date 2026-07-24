@@ -1090,9 +1090,10 @@ func TestValidityResultRepreselectsAccount(t *testing.T) {
 	ov.HandleKeyPress(tea.KeyMsg{Type: tea.KeyTab}) // title → prompt
 	ov.HandleKeyPress(tea.KeyMsg{Type: tea.KeyTab}) // prompt → account
 	ov.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRight})
-	acct, ok := ov.GetSelectedAccount()
-	require.True(t, ok, "driving the picker marks it touched/overriding")
-	assert.Equal(t, "c", acct.Name, "the picker must have been re-preselected to b")
+	sel := ov.GetSelectedAccount()
+	require.NotNil(t, sel, "driving the picker marks it touched/overriding")
+	require.NotNil(t, sel.Member, "a picker choice pins a specific member")
+	assert.Equal(t, "c", sel.Member.Name, "the picker must have been re-preselected to b")
 }
 
 // TestValidityCheckRoutesDirectSessionByPath verifies that runValidityCheck routes a
