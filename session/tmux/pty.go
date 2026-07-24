@@ -17,9 +17,20 @@ type PtyFactory interface {
 // Pty starts a "real" pseudo-terminal (PTY) using the creack/pty package.
 type Pty struct{}
 
-// Start launches cmd inside a new pty and returns its master end.
+// Start launches cmd inside a new pty and returns its master end. It also
+// spawns a goroutine that Waits on cmd so the tmux client is reaped instead of
+// parking as a zombie (#362). The goroutine is fire-and-forget: it is not
+// tracked by any WaitGroup and self-terminates when the client exits (normally
+// once a caller closes the returned master). Wait's error is discarded because
+// the exit status carries no signal here — a closed master routinely surfaces
+// as "signal: hangup".
 func (pt Pty) Start(cmd *exec.Cmd) (*os.File, error) {
-	return pty.Start(cmd)
+	ptmx, err := pty.Start(cmd)
+	if err != nil {
+		return nil, err
+	}
+	go func() { _ = cmd.Wait() }()
+	return ptmx, nil
 }
 
 // Close is a no-op: the real pty's lifetime is tied to the file returned by
