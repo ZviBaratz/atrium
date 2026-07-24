@@ -9,8 +9,9 @@ import "strings"
 // dialog ("WARNING… Yes, I accept") would block the session boot, and a user
 // who wants it can pin it in a profile program — and dontAsk, the
 // non-interactive CI mode that auto-denies anything not allowlisted. The
-// field's first chip ("default") is rendered by ModeField itself and
-// contributes no flag.
+// field's first chip ("inherit", the shared noOverrideChip) is rendered by
+// ModeField itself and contributes no flag — deliberately not "default", which
+// names a real member of the full enum below.
 var ClaudePermissionModes = []string{"plan", "acceptEdits", "auto"}
 
 // claudePermissionModeLabels maps a --permission-mode enum value to its display
@@ -80,6 +81,16 @@ func PermissionModeFlag(program string) string {
 	}
 	return value
 }
+
+// PermissionModePin returns the raw value of a --permission-mode pin in program
+// ("" = the flag is absent), deliberately unvalidated — the counterpart to
+// PermissionModeFlag for a caller that must know a pin *exists* even when its value
+// falls outside the enum snapshot above. PermissionModeFlag drops such a value on
+// purpose (an unknown mode is not one a session could be running in, so it is not a
+// mode to report), but the create form's no-op-chip hint needs the other
+// distinction: reporting "a flag Atrium cannot name" as "claude's default" would
+// state the opposite of the truth to the user.
+func PermissionModePin(program string) string { return flagValue(program, "--permission-mode") }
 
 // WithPermissionModeFlag returns program with `--permission-mode mode`
 // applied: verbatim append when the program carries no pin, replace when it
