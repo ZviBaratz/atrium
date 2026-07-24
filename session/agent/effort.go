@@ -1,7 +1,7 @@
 package agent
 
 // ClaudeEffortLevels are the reasoning-effort levels the create form offers as
-// chips (after the field's own "default" chip). The claude CLI (2.1.207 --help)
+// chips (after the field's own "inherit" chip). The claude CLI (2.1.207 --help)
 // documents exactly these for --effort: "Effort level for the current session
 // (low, medium, high, xhigh, max)". Unlike --permission-mode the CLI does not
 // reject an unknown value — it prints a warning and falls back to the default

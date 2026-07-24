@@ -423,9 +423,10 @@ func TestCreateSessionFromForm_PermissionModeOverridesProfilePin(t *testing.T) {
 	assert.Equal(t, "claude --permission-mode plan", inst.Program)
 }
 
-// The default chip leaves the program untouched — including an existing
-// profile pin, which "default" deliberately does not clear (it means
-// "inherit": don't clobber deliberate config).
+// The no-op chip leaves the program untouched — including an existing profile
+// pin, which it deliberately does not clear. That is what the chip's label says:
+// "inherit" defers to whatever resolves the value rather than clobbering
+// deliberate config.
 func TestCreateSessionFromForm_DefaultModeChipLeavesProgramUntouched(t *testing.T) {
 	dir := t.TempDir()
 

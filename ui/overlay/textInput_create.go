@@ -110,8 +110,9 @@ func NewSessionCreateOverlay(profiles []config.Profile, accounts []config.Claude
 // syncClaudeFieldsEnabled re-derives the model, effort, and permission-mode fields'
 // enabled state from the variant selection: the overrides apply only where a session's
 // program is claude, so they stay live as long as the batch includes at least one claude
-// variant, and go inert (present-but-disabled) once it does not. Called at construction
-// and after every variant-control keypress.
+// variant, and go inert (present-but-disabled) once it does not. It also refreshes each
+// field's no-op-chip hint from the pins the selected claude programs carry (see
+// SetProfilePin). Called at construction and after every variant-control keypress.
 func (t *TextInputOverlay) syncClaudeFieldsEnabled() {
 	// The three fields are created together or not at all (see NewSessionCreateOverlay),
 	// so one presence check covers all of them.
@@ -125,6 +126,83 @@ func (t *TextInputOverlay) syncClaudeFieldsEnabled() {
 	t.modelField.SetDisabled(!includesClaude)
 	t.modeField.SetDisabled(!includesClaude)
 	t.effortField.SetDisabled(!includesClaude)
+
+	// Push the pin state each field's no-op-chip hint names. Every field reports
+	// whether a pin exists separately from what to call it: the raw pin decides
+	// "pinned", and a label is supplied only when Atrium can name the value. All
+	// three extractors read the raw flag (ModelFlag and EffortFlag are unvalidated by
+	// design, and PermissionModePin is the unvalidated counterpart of
+	// PermissionModeFlag), so a pin Atrium does not recognise still reads as a pin
+	// rather than as "claude's default" — and withholding its label is what keeps an
+	// arbitrarily long profile token from overflowing the row.
+	progs := t.claudePrograms()
+	mv, mMixed := profilePin(progs, agent.ModelFlag)
+	t.modelField.SetProfilePin("", mv != "", mMixed) // model never echoes its value
+	ev, eMixed := profilePin(progs, agent.EffortFlag)
+	t.effortField.SetProfilePin(effortPinLabel(ev), ev != "", eMixed)
+	pv, pMixed := profilePin(progs, agent.PermissionModePin)
+	t.modeField.SetProfilePin(permissionModePinLabel(pv), pv != "", pMixed)
+}
+
+// effortPinLabel returns the display label for a pinned --effort level, or "" when
+// the level is outside the set Atrium offers. agent.EffortFlag is deliberately
+// unvalidated — a newer CLI may resolve a level this list has not caught up to — so
+// the raw token can be any length; withholding the label leaves the hint saying
+// "program pins it" instead of echoing something that would truncate the row.
+func effortPinLabel(level string) string {
+	if !agent.ValidEffort(level) {
+		return ""
+	}
+	return agent.ClaudeEffortLabel(level)
+}
+
+// permissionModePinLabel returns the display label for a pinned --permission-mode
+// value, or "" when the value falls outside Atrium's enum snapshot. Paired with
+// agent.PermissionModePin (the raw read), this is what lets the hint distinguish "no
+// flag" from "a flag Atrium cannot name" — the latter must not read as "claude's
+// default", which would tell the user the opposite of the truth.
+func permissionModePinLabel(mode string) string {
+	if !agent.ValidPermissionMode(mode) {
+		return ""
+	}
+	return agent.ClaudePermissionModeLabel(mode)
+}
+
+// claudePrograms returns the selected variant programs that resolve to claude —
+// the set the model/effort/mode overrides apply to, and whose pins the focused
+// no-op-chip hints describe. GetVariants already falls back to the configured
+// defaultProgram when there is no variant picker, so a pin in that program counts
+// too — which is why the hints say "program pins …" rather than naming a profile
+// that, in exactly that case, does not exist (see chipRow.noOverrideHint).
+func (t *TextInputOverlay) claudePrograms() []string {
+	var out []string
+	for _, p := range t.GetVariants() {
+		if agent.Resolve(p).Key == agent.KeyClaude {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// profilePin folds the per-program value of one flag across programs into the
+// (value, mixed) pair the hint needs: value is the common value when every program
+// pins the flag to it ("" when none does), and mixed is true when the programs
+// disagree or only some pin — the case no single value can summarize. flag extracts
+// the raw pin from one program (agent.ModelFlag / EffortFlag / PermissionModePin);
+// it must be the *unvalidated* read, so that a value Atrium cannot name still folds
+// as a pin.
+func profilePin(programs []string, flag func(string) string) (value string, mixed bool) {
+	for i, p := range programs {
+		v := flag(p)
+		if i == 0 {
+			value = v
+			continue
+		}
+		if v != value {
+			return "", true
+		}
+	}
+	return value, false
 }
 
 // FocusTitle moves focus to the title field. The quick-create flow (`n`) calls
@@ -320,7 +398,8 @@ func (t *TextInputOverlay) FocusVariants() { t.focusStop(stopVariants) }
 
 // GetModel returns the Claude model override typed into the model field, or ""
 // when no flag should be composed: the form has no model field, the field is
-// inert (non-claude profile selected), or it was left empty / "default".
+// inert (non-claude profile selected), or it was left empty or typed as the no-op
+// word ("inherit", or the "default" it replaced — see ModelField.Value).
 func (t *TextInputOverlay) GetModel() string {
 	if t.modelField == nil {
 		return ""
@@ -330,7 +409,7 @@ func (t *TextInputOverlay) GetModel() string {
 
 // GetPermissionMode returns the selected Claude permission-mode override, or
 // "" when no flag should be composed: no mode field, the field is inert
-// (non-claude profile selected), or it sits on the default chip.
+// (non-claude profile selected), or it sits on the no-op ("inherit") chip.
 func (t *TextInputOverlay) GetPermissionMode() string {
 	if t.modeField == nil {
 		return ""
@@ -340,7 +419,7 @@ func (t *TextInputOverlay) GetPermissionMode() string {
 
 // GetEffort returns the selected Claude effort-level override, or "" when no
 // flag should be composed: no effort field, the field is inert (non-claude
-// profile selected), or it sits on the default chip.
+// profile selected), or it sits on the no-op ("inherit") chip.
 func (t *TextInputOverlay) GetEffort() string {
 	if t.effortField == nil {
 		return ""
