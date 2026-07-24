@@ -13,27 +13,47 @@ import (
 // chip row must render within it, or fitOverlay truncates the rightmost chips.
 const claudeFieldInnerWidth = 42
 
+// chipField is the shared surface the width guard renders each override field
+// through, including the pin setter whose hints the widest lines now come from.
+type chipField interface {
+	Focus()
+	Render() string
+	SetProfilePin(value string, mixed bool)
+}
+
 // TestClaudeChipFields_FitInnerWidth guards the shared width budget the three
 // claude fields stack under: with full labels the effort row was 45 cells and the
 // "max" chip truncated on an 80-col terminal (hence "medium" → "med"). Rendered
-// focused (the widest state — the hint row is shorter than the chips), each
-// field's widest line must stay within the inner width.
+// focused, each field's widest line must stay within the inner width — across the
+// no-op-chip hint states, since those label lines (e.g. "profile pins
+// accept-edits") can now exceed the chip row. The pin values are each field's
+// widest realistic label. (Pre-existing gap, not covered here: the model field's
+// custom-mode hint is 61 cells and truncates at 80 cols — see the PR body.)
 func TestClaudeChipFields_FitInnerWidth(t *testing.T) {
 	for _, tc := range []struct {
-		name string
-		f    interface {
-			Focus()
-			Render() string
-		}
+		name    string
+		f       chipField
+		pinWide string // widest single-pin label this field can show
 	}{
-		{"model", NewModelField()},
-		{"mode", NewModeField()},
-		{"effort", NewEffortField()},
+		{"model", NewModelField(), "claude-opus-4-6"},
+		{"mode", NewModeField(), "accept-edits"},
+		{"effort", NewEffortField(), "xhigh"},
 	} {
-		tc.f.Focus()
-		if w := lipgloss.Width(tc.f.Render()); w > claudeFieldInnerWidth {
-			t.Errorf("%s field render width = %d, want <= %d (overflows the 80-col overlay inner width; rightmost chips truncate)",
-				tc.name, w, claudeFieldInnerWidth)
+		for _, st := range []struct {
+			name  string
+			value string
+			mixed bool
+		}{
+			{"no pin", "", false},
+			{"shared pin", tc.pinWide, false},
+			{"mixed pins", "", true},
+		} {
+			tc.f.SetProfilePin(st.value, st.mixed)
+			tc.f.Focus()
+			if w := lipgloss.Width(tc.f.Render()); w > claudeFieldInnerWidth {
+				t.Errorf("%s field (%s) render width = %d, want <= %d (overflows the 80-col overlay inner width; content truncates)",
+					tc.name, st.name, w, claudeFieldInnerWidth)
+			}
 		}
 	}
 }

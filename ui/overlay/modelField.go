@@ -9,13 +9,6 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
-// modelDefault is the chip that contributes no --model flag. It is labeled
-// "default" (matching the mode field's no-op chip) rather than "inherit":
-// what actually happens is that Claude resolves its own default — per-account
-// settings.json, env, or the current recommended model — and Atrium cannot
-// know which, so the label promises only "Claude's default, whatever that is".
-const modelDefault = "default"
-
 // ModelField is the create form's optional Claude model override. It is a
 // two-mode component: a horizontal chip row over the known aliases (the
 // profile/account picker idiom — typo-proof for the common path), and a
@@ -37,19 +30,19 @@ const modelDefault = "default"
 // form's effective program does not resolve to claude — the only agent whose
 // --model flag this composes.
 type ModelField struct {
-	chipRow // modelDefault + agent.ClaudeModelAliases
+	chipRow // noOverrideChip + agent.ClaudeModelAliases
 	custom  bool
 	input   textinput.Model
 	width   int
 }
 
-// NewModelField builds the model field, starting on the default chip.
+// NewModelField builds the model field, starting on the no-op chip.
 func NewModelField() *ModelField {
 	in := textinput.New()
 	in.Prompt = ""
 	in.CharLimit = 64 // matches agent.ValidModelName's length cap
 	return &ModelField{
-		chipRow: chipRow{options: append([]string{modelDefault}, agent.ClaudeModelAliases...)},
+		chipRow: chipRow{options: append([]string{noOverrideChip}, agent.ClaudeModelAliases...)},
 		input:   in,
 	}
 }
@@ -165,15 +158,17 @@ func (mf *ModelField) CompletePrefix() bool {
 }
 
 // Value returns the model override, or "" when the field should contribute no
-// flag: disabled, the default chip, or a custom value left empty (or typed as
-// "default").
+// flag: disabled, the no-op chip, or a custom value left empty (or typed as the
+// no-op word). Both "inherit" (the chip's label) and "default" (the label it
+// replaced, and never itself a valid --model) map to no override: a user typing
+// either means "let claude resolve it", and --model default is not a real model.
 func (mf *ModelField) Value() string {
 	if mf.disabled {
 		return ""
 	}
 	if mf.custom {
 		val := strings.TrimSpace(mf.input.Value())
-		if strings.EqualFold(val, modelDefault) {
+		if strings.EqualFold(val, noOverrideChip) || strings.EqualFold(val, "default") {
 			return ""
 		}
 		return val
@@ -200,7 +195,16 @@ func (mf *ModelField) Render() string {
 		if mf.custom {
 			s.WriteString(mfDimStyle().Render("  ←/clear to go back · Tab completes · checked at launch"))
 		} else {
-			s.WriteString(mfDimStyle().Render("  ↑↓ change · type a custom name"))
+			// "type a name" is the custom-entry affordance — not redundant with the
+			// form footer's "↑↓ select", so it stays on every chip. The no-op-chip
+			// hint appends only on the first chip (it explains that chip); echoValue is
+			// false — model values are unbounded, so it says "profile pins it", never
+			// the value (see chipRow.noOverrideHint).
+			hint := "  type a name"
+			if mf.cursor == 0 {
+				hint += " · " + mf.noOverrideHint(false)
+			}
+			s.WriteString(mfDimStyle().Render(hint))
 		}
 	}
 	s.WriteString("\n\n")

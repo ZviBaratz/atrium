@@ -7,17 +7,6 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 )
 
-// modeInherit is the chip that contributes no --permission-mode flag. It is
-// labeled "default" — the mode vocabulary claude users know — rather than
-// "inherit": no flag IS default mode unless the user's settings.json pins
-// defaultMode or the profile pins --permission-mode, and in those cases not
-// clobbering the deliberate config is exactly what the chip should mean. The
-// flip side is accepted: with a profile pin the row still renders "default"
-// as selected (the form cannot see settings.json, so reflecting only the
-// profile half would mislead in the other direction), and clearing a pin
-// back to true default mode means editing the profile, not the form.
-const modeInherit = "default"
-
 // ModeField is the create form's optional Claude permission-mode override: a
 // pure chip row (the profile-picker idiom) over agent.ClaudePermissionModes.
 // Unlike ModelField there is no free-text custom mode — --permission-mode is
@@ -31,6 +20,17 @@ const modeInherit = "default"
 // plan-approval dialog a plan-mode session ends with is autoyes-safe via the
 // NoAutoTap "plan" matcher in session/agent/registry.go.
 //
+// The first chip is the shared noOverrideChip ("inherit"): it composes no
+// --permission-mode flag, deferring to whatever claude resolves — default
+// (manual) mode unless the user's settings.json pins defaultMode or the profile
+// pins --permission-mode. "inherit" rather than "default" matters most for this
+// field: "default" is a real member of the enum this row also offers via its
+// superset, so the word would name two different things one chip apart (see
+// noOverrideChip). The form cannot read settings.json, but it can read a profile
+// pin, so a profile pinning the flag surfaces in the focused hint ("profile pins
+// accept-edits") rather than misleading the user into thinking no mode is set;
+// clearing a pin still means editing the profile, not the form.
+//
 // The chip row totals 37 cells, inside the 41-cell budget modelField.go
 // established for the worst realistic overlay width (80-col terminal → 42
 // inner cells). The field is disabled (dim, skipped in Tab order,
@@ -40,11 +40,11 @@ type ModeField struct {
 	chipRow
 }
 
-// NewModeField builds the mode field, starting on the default chip.
+// NewModeField builds the mode field, starting on the no-op chip.
 func NewModeField() *ModeField {
 	return &ModeField{chipRow{
-		options: append([]string{modeInherit}, agent.ClaudePermissionModes...),
-		labels:  append([]string{modeInherit}, agent.ClaudePermissionModeLabels...),
+		options: append([]string{noOverrideChip}, agent.ClaudePermissionModes...),
+		labels:  append([]string{noOverrideChip}, agent.ClaudePermissionModeLabels...),
 	}}
 }
 
@@ -58,7 +58,7 @@ func (f *ModeField) HandleKeyPress(msg tea.KeyMsg) {
 }
 
 // Value returns the permission-mode override, or "" when the field should
-// contribute no flag: disabled, or sitting on the default chip.
+// contribute no flag: disabled, or sitting on the no-op chip.
 func (f *ModeField) Value() string { return f.selected() }
 
 // Render renders the field: label + a constant-height hint row, then the chip
@@ -72,8 +72,11 @@ func (f *ModeField) Render() string {
 		s.WriteString(mfDimStyle().Render(claudeFieldNA))
 		return s.String()
 	}
-	if f.focused {
-		s.WriteString(mfDimStyle().Render("  ↑↓ change"))
+	// The hint explains the no-op chip, so it shows only while focused and on it
+	// (see EffortField.Render); on a real value it would confuse. echoValue=true —
+	// permission modes are a closed enum with known-max labels.
+	if f.focused && f.cursor == 0 {
+		s.WriteString(mfDimStyle().Render("  " + f.noOverrideHint(true)))
 	}
 	s.WriteString("\n\n")
 	s.WriteString(f.render())

@@ -110,8 +110,9 @@ func NewSessionCreateOverlay(profiles []config.Profile, accounts []config.Claude
 // syncClaudeFieldsEnabled re-derives the model, effort, and permission-mode fields'
 // enabled state from the variant selection: the overrides apply only where a session's
 // program is claude, so they stay live as long as the batch includes at least one claude
-// variant, and go inert (present-but-disabled) once it does not. Called at construction
-// and after every variant-control keypress.
+// variant, and go inert (present-but-disabled) once it does not. It also refreshes each
+// field's no-op-chip hint from the pins the selected claude programs carry (see
+// SetProfilePin). Called at construction and after every variant-control keypress.
 func (t *TextInputOverlay) syncClaudeFieldsEnabled() {
 	// The three fields are created together or not at all (see NewSessionCreateOverlay),
 	// so one presence check covers all of them.
@@ -125,6 +126,51 @@ func (t *TextInputOverlay) syncClaudeFieldsEnabled() {
 	t.modelField.SetDisabled(!includesClaude)
 	t.modeField.SetDisabled(!includesClaude)
 	t.effortField.SetDisabled(!includesClaude)
+
+	// Push the pin state that each field's no-op-chip hint names. Model values are
+	// unbounded, so it stores the raw pin only as a present/absent signal (its hint
+	// never echoes it); the enum fields store the display label so the hint can.
+	progs := t.claudePrograms()
+	mv, mMixed := profilePin(progs, agent.ModelFlag)
+	t.modelField.SetProfilePin(mv, mMixed)
+	ev, eMixed := profilePin(progs, agent.EffortFlag)
+	t.effortField.SetProfilePin(agent.ClaudeEffortLabel(ev), eMixed)
+	pv, pMixed := profilePin(progs, agent.PermissionModeFlag)
+	t.modeField.SetProfilePin(agent.ClaudePermissionModeLabel(pv), pMixed)
+}
+
+// claudePrograms returns the selected variant programs that resolve to claude —
+// the set the model/effort/mode overrides apply to, and whose pins the focused
+// no-op-chip hints describe. GetVariants already falls back to the configured
+// defaultProgram when there is no variant picker, so a pin in that program counts too.
+func (t *TextInputOverlay) claudePrograms() []string {
+	var out []string
+	for _, p := range t.GetVariants() {
+		if agent.Resolve(p).Key == agent.KeyClaude {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// profilePin folds the per-program value of one flag across programs into the
+// (value, mixed) pair SetProfilePin wants: value is the common value when every
+// program pins the flag to it ("" when none does), and mixed is true when the
+// programs disagree or only some pin — the case no single value can summarize.
+// flag extracts the pin from one program (agent.ModelFlag / EffortFlag /
+// PermissionModeFlag).
+func profilePin(programs []string, flag func(string) string) (value string, mixed bool) {
+	for i, p := range programs {
+		v := flag(p)
+		if i == 0 {
+			value = v
+			continue
+		}
+		if v != value {
+			return "", true
+		}
+	}
+	return value, false
 }
 
 // FocusTitle moves focus to the title field. The quick-create flow (`n`) calls

@@ -7,12 +7,6 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 )
 
-// effortInherit is the chip that contributes no --effort flag. Labeled "default"
-// (matching the ModeField idiom): no flag means claude uses its resolved default
-// effort — the user's settings.json effortLevel, or the built-in default — which
-// is exactly what the chip should preserve.
-const effortInherit = "default"
-
 // EffortField is the create form's optional Claude reasoning-effort override: a
 // pure chip row over agent.ClaudeEffortLevels, a sibling of ModeField. The chosen
 // level rides the persisted Program string as --effort, so it is re-applied on
@@ -32,11 +26,11 @@ type EffortField struct {
 	chipRow
 }
 
-// NewEffortField builds the effort field, starting on the default chip.
+// NewEffortField builds the effort field, starting on the no-op chip.
 func NewEffortField() *EffortField {
 	return &EffortField{chipRow{
-		options: append([]string{effortInherit}, agent.ClaudeEffortLevels...),
-		labels:  append([]string{effortInherit}, agent.ClaudeEffortLabels...),
+		options: append([]string{noOverrideChip}, agent.ClaudeEffortLevels...),
+		labels:  append([]string{noOverrideChip}, agent.ClaudeEffortLabels...),
 	}}
 }
 
@@ -50,7 +44,7 @@ func (f *EffortField) HandleKeyPress(msg tea.KeyMsg) {
 }
 
 // Value returns the effort override, or "" when the field should contribute no
-// flag: disabled, or sitting on the default chip.
+// flag: disabled, or sitting on the no-op chip.
 func (f *EffortField) Value() string { return f.selected() }
 
 // Render renders the field: label + a constant-height hint row, then the chip
@@ -64,8 +58,11 @@ func (f *EffortField) Render() string {
 		s.WriteString(mfDimStyle().Render(claudeFieldNA))
 		return s.String()
 	}
-	if f.focused {
-		s.WriteString(mfDimStyle().Render("  ↑↓ change"))
+	// The hint explains the no-op chip, so it shows only while focused and sitting
+	// on it; on a real value it would confuse. It replaces the former "↑↓ change",
+	// which duplicated the form footer's "↑↓ select".
+	if f.focused && f.cursor == 0 {
+		s.WriteString(mfDimStyle().Render("  " + f.noOverrideHint(true)))
 	}
 	s.WriteString("\n\n")
 	s.WriteString(f.render())
