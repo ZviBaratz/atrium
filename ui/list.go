@@ -75,11 +75,17 @@ func distinctCount(items []*session.Instance, key func(*session.Instance) string
 	return len(seen)
 }
 
-// accountKey returns the Claude-account grouping key for an instance — its resolved
-// account name, or "" for a session with no account (feature off / legacy). Account
-// is derived from the repo's remote/path, so every session in a repo shares it,
-// which is what lets clusterByAccount move whole repo blocks intact.
+// accountKey returns the Claude-account grouping key for an instance — its pinned
+// rotation pool when one is set, else its resolved account name, or "" for a
+// session with no account (feature off / legacy). Clustering on the pool rather
+// than the concrete member is what lets sessions rotated across a pool's accounts
+// stay in one visual cluster; the row itself still shows the concrete member.
+// Account is derived from the repo's remote/path, so every session in a repo
+// shares it, which is what lets clusterByAccount move whole repo blocks intact.
 func accountKey(i *session.Instance) string {
+	if p := i.ClaudeAccountPool(); p != "" {
+		return p
+	}
 	return i.ClaudeAccountName()
 }
 

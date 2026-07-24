@@ -54,6 +54,7 @@ type sessionJSON struct {
 	PermissionMode string     `json:"permission_mode,omitempty"`
 	Effort         string     `json:"effort,omitempty"`
 	Account        string     `json:"account,omitempty"`
+	Pool           string     `json:"pool,omitempty"`
 	AutoYes        bool       `json:"auto_yes"`
 	Direct         bool       `json:"direct"`
 	Unread         bool       `json:"unread"`
@@ -125,6 +126,7 @@ func toSessionJSON(d session.InstanceData) sessionJSON {
 		PermissionMode: d.PermissionMode,
 		Effort:         d.Effort,
 		Account:        d.ClaudeAccount,
+		Pool:           d.ClaudeAccountPool,
 		AutoYes:        d.AutoYes,
 		Direct:         d.Direct,
 		Unread:         d.Unread,

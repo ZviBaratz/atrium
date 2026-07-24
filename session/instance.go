@@ -206,6 +206,7 @@ type Instance struct {
 	claudeAccount        string
 	claudeConfigDir      string
 	claudeAccountDefault bool
+	claudeAccountPool    string // rotation pool this session was pinned under (cluster key); "" = singleton/none
 	// ghConfigDir is the GH_CONFIG_DIR for this session, resolved at creation from
 	// config.GHAccounts by the same remote/path routing as claudeConfigDir. It is
 	// injected into the tmux session (so the agent's own `gh` and any https
@@ -371,6 +372,7 @@ func (i *Instance) ToInstanceData() InstanceData {
 		ClaudeAccount:        i.claudeAccount,
 		ClaudeConfigDir:      i.claudeConfigDir,
 		ClaudeAccountDefault: i.claudeAccountDefault,
+		ClaudeAccountPool:    i.claudeAccountPool,
 		GHConfigDir:          i.ghConfigDir,
 		GitHubTokenEnv:       i.githubTokenEnv,
 		AgyAccount:           i.agyAccount,
@@ -449,6 +451,7 @@ func FromInstanceData(ctx context.Context, data InstanceData, branchPrefix strin
 		claudeAccount:        data.ClaudeAccount,
 		claudeConfigDir:      data.ClaudeConfigDir,
 		claudeAccountDefault: data.ClaudeAccountDefault,
+		claudeAccountPool:    data.ClaudeAccountPool,
 		ghConfigDir:          data.GHConfigDir,
 		githubTokenEnv:       data.GitHubTokenEnv,
 		agyAccount:           data.AgyAccount,

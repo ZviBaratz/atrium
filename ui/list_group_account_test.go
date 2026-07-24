@@ -423,6 +423,28 @@ func TestGroupMode_KeepsBadgeForAccountDivergingFromRepoAnchor(t *testing.T) {
 		"the personal session under the work-clustered api block keeps its badge")
 }
 
+// Sessions rotated across a pool cluster under the pool's divider, so the divider
+// shows the POOL name while each row must keep its concrete MEMBER badge — that
+// per-member distribution is exactly what the account view exists to reveal.
+// Suppressing on the pool key (which every member shares) would hide them all.
+func TestGroupMode_PooledMembersKeepMemberBadges(t *testing.T) {
+	// Two api sessions on different members of pool "work", plus a personal repo so
+	// grouping is active (2 distinct cluster keys: "work" and "personal").
+	l := acctList(t, "api|work-1", "api|work-2", "sideproj|personal")
+	// Pin both api sessions to pool "work" so they cluster together under a "work"
+	// divider while keeping distinct member names.
+	for _, it := range l.items {
+		if filepath.Base(it.Path) == "api" {
+			it.SetClaudeAccountPool("work")
+		}
+	}
+	l.SetGroupMode("account")
+	out := ansi.Strip(l.String())
+	require.Contains(t, out, "── work", "pooled sessions cluster under the pool divider")
+	require.Contains(t, out, "work-1", "the work-1 member badge survives inside the pool cluster")
+	require.Contains(t, out, "work-2", "the work-2 member badge survives inside the pool cluster")
+}
+
 // In account-only mode (no status sort) the per-tick ApplySort must never reorder:
 // clustering keys on each session's account and repo, not its status, so a status
 // change leaves the order untouched and ApplySort reports no work done.
@@ -433,4 +455,25 @@ func TestGroupMode_ApplySortInertWhenAccountOnly(t *testing.T) {
 	l.items[1].SetStatus(session.NeedsInput) // would float to the top under a status sort
 	require.False(t, l.ApplySort(), "account-only mode has no status sort to re-apply")
 	require.Equal(t, before, l.items, "a status change does not reorder an account-only view")
+}
+
+// accountKey clusters on the pinned rotation pool when one is set, falling back
+// to the resolved account name otherwise — this is what lets clusterByAccount
+// group sessions rotated across a pool's accounts into one cluster (Task 4 added
+// ClaudeAccountPool; this wires it into the clustering key with no other edits).
+func TestAccountKey_PoolElseName(t *testing.T) {
+	pooled, err := session.NewInstance(session.InstanceOptions{
+		Title: "a", Path: "/tmp/api", Program: "echo",
+	})
+	require.NoError(t, err)
+	pooled.SetClaudeAccount("work-2", "", false)
+	pooled.SetClaudeAccountPool("work")
+	require.Equal(t, "work", accountKey(pooled), "pinned pool is the cluster key")
+
+	solo, err := session.NewInstance(session.InstanceOptions{
+		Title: "b", Path: "/tmp/sideproj", Program: "echo",
+	})
+	require.NoError(t, err)
+	solo.SetClaudeAccount("personal", "", false)
+	require.Equal(t, "personal", accountKey(solo), "no pool falls back to the account name")
 }

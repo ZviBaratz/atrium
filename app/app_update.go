@@ -147,6 +147,15 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		plan := *m.pendingOverCap
 		m.pendingOverCap = nil
 		return m, m.spawnVariants(plan)
+	case proceedExhaustedMsg:
+		// The user accepted spawning on a fully-rate-limited pool: spawn the staged
+		// plan (already pinned to the soonest-to-reset member) on the UI thread.
+		if m.pendingExhausted == nil {
+			return m, nil
+		}
+		plan := *m.pendingExhausted
+		m.pendingExhausted = nil
+		return m, m.spawnVariants(plan)
 	case metadataUpdateDoneMsg:
 		// Drop results captured before a terminal attach ran (see home.attachGen):
 		// the keeper may have advanced those panes mid-attach, so replaying a stale
@@ -802,7 +811,7 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		return m, tea.WindowSize()
 	case keys.KeyAccounts:
 		m.state = stateAccounts
-		m.accountsOverlay = overlay.NewAccountsOverlay(m.appConfig)
+		m.accountsOverlay = overlay.NewAccountsOverlay(m.appConfig, m.appState)
 		m.recomputeLayout() // the hint bar hides behind the modal; panes reclaim its row
 		return m, tea.WindowSize()
 	case keys.KeyScreensaver:

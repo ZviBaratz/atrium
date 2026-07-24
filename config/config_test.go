@@ -1,6 +1,7 @@
 package config
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -1007,4 +1008,81 @@ func TestConfig_AccountsRoundTrip(t *testing.T) {
 	assert.True(t, got.ClaudeAccounts[1].IsCatchAll())
 	require.Len(t, got.GHAccounts, 1)
 	assert.Equal(t, []string{"GH_TOKEN", "GITHUB_TOKEN"}, got.GHAccounts[0].TokenEnv)
+}
+
+func TestClaudeAccountPoolRoundTrip(t *testing.T) {
+	t.Setenv("HOME", "/home/tester")
+
+	// A pooled account and an ungrouped one marshal/unmarshal through JSON, and a
+	// legacy account with no "pool" key decodes to the empty pool (feature dormant).
+	in := Config{ClaudeAccounts: []ClaudeAccount{
+		{Name: "work-1", ConfigDir: "~/.claude-work", Pool: "work"},
+		{Name: "personal", ConfigDir: "~/.claude-personal"},
+	}}
+	data, err := json.Marshal(in)
+	require.NoError(t, err)
+	assert.Contains(t, string(data), `"pool":"work"`)
+	assert.NotContains(t, string(data), `"name":"personal","config_dir":"~/.claude-personal","pool"`) // omitempty: no empty pool key
+
+	var out Config
+	require.NoError(t, json.Unmarshal(data, &out))
+	assert.Equal(t, "work", out.ClaudeAccounts[0].Pool)
+	assert.Equal(t, "", out.ClaudeAccounts[1].Pool)
+
+	var legacy Config
+	require.NoError(t, json.Unmarshal([]byte(`{"claude_accounts":[{"name":"solo","config_dir":"~/.c"}]}`), &legacy))
+	assert.Equal(t, "", legacy.ClaudeAccounts[0].Pool)
+}
+
+func TestResolveClaudePool(t *testing.T) {
+	t.Setenv("HOME", "/home/tester")
+
+	work1 := ClaudeAccount{Name: "work-1", ConfigDir: "~/.claude-work", Pool: "work",
+		RemoteMatches: []string{"quantivly"}, PathMatches: []string{"/quantivly/"}}
+	// Own rule so work-2 isn't ALSO a rule-less catch-all candidate ahead of
+	// personal below (matchRouteIndex picks the FIRST rule-less account).
+	work2 := ClaudeAccount{Name: "work-2", ConfigDir: "~/.claude-work2", Pool: "work",
+		RemoteMatches: []string{"work2-only"}}
+	personal := ClaudeAccount{Name: "personal", ConfigDir: "~/.claude-personal"} // no rules -> catch-all
+	cfg := &Config{ClaudeAccounts: []ClaudeAccount{work1, work2, personal}}
+
+	// A remote hit on work-1 returns the whole work pool, members in config order.
+	pool, members, isDefault := cfg.ResolveClaudePool("github.com/quantivly/app", "/x")
+	assert.Equal(t, "work", pool)
+	assert.False(t, isDefault)
+	require.Len(t, members, 2)
+	assert.Equal(t, "work-1", members[0].Name)
+	assert.Equal(t, "work-2", members[1].Name)
+
+	// No route hit -> catch-all personal as a singleton pool named for the account.
+	pool, members, isDefault = cfg.ResolveClaudePool("github.com/other/repo", "/y")
+	assert.Equal(t, "personal", pool)
+	assert.True(t, isDefault)
+	require.Len(t, members, 1)
+	assert.Equal(t, "personal", members[0].Name)
+
+	// Empty config -> dormant.
+	pool, members, isDefault = (&Config{}).ResolveClaudePool("x", "y")
+	assert.Equal(t, "", pool)
+	assert.Nil(t, members)
+	assert.False(t, isDefault)
+}
+
+func TestPoolMembers(t *testing.T) {
+	cfg := &Config{ClaudeAccounts: []ClaudeAccount{
+		{Name: "work-1", Pool: "work"},
+		{Name: "personal"},
+		{Name: "work-2", Pool: "work"},
+	}}
+	work := cfg.PoolMembers("work")
+	require.Len(t, work, 2)
+	assert.Equal(t, "work-1", work[0].Name)
+	assert.Equal(t, "work-2", work[1].Name)
+
+	// An ungrouped account is addressable as a singleton pool by its own name.
+	solo := cfg.PoolMembers("personal")
+	require.Len(t, solo, 1)
+	assert.Equal(t, "personal", solo[0].Name)
+
+	assert.Empty(t, cfg.PoolMembers("nope"))
 }

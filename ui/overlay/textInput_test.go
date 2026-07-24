@@ -56,29 +56,29 @@ func TestNewSmartDispatchOverlay(t *testing.T) {
 func TestSessionCreateOverlay_AccountOverrideOnlyWhenTouched(t *testing.T) {
 	o := NewSessionCreateOverlay(nil, twoAccounts, []string{"/repo/a"}, "")
 
-	_, ok := o.GetSelectedAccount()
-	assert.False(t, ok, "an untouched picker must not override auto-routing")
+	sel := o.GetSelectedAccount()
+	assert.Nil(t, sel, "an untouched picker must not override auto-routing")
 
 	// Auto-routed preselection is not a user override.
 	o.PreselectAccount("quantivly")
-	_, ok = o.GetSelectedAccount()
-	assert.False(t, ok, "auto preselect alone must not override")
+	sel = o.GetSelectedAccount()
+	assert.Nil(t, sel, "auto preselect alone must not override")
 
 	// The user drives the picker: now it overrides with the chosen account. From the
 	// preselected quantivly (last of two), one step wraps around to personal — the
 	// point is that the override is engaged, whichever account it lands on.
 	o.focusStop(stopAccount)
 	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyDown})
-	acct, ok := o.GetSelectedAccount()
-	require.True(t, ok, "a user choice overrides auto-routing")
-	assert.Equal(t, "personal", acct.Name)
+	sel = o.GetSelectedAccount()
+	require.NotNil(t, sel, "a user choice overrides auto-routing")
+	require.NotNil(t, sel.Member, "a user choice pins a specific member")
+	assert.Equal(t, "personal", sel.Member.Name)
 }
 
 // A form with no configured accounts never overrides — the feature is dormant.
 func TestSessionCreateOverlay_NoAccountsNeverOverrides(t *testing.T) {
 	o := NewSessionCreateOverlay(nil, nil, []string{"/repo/a"}, "")
-	_, ok := o.GetSelectedAccount()
-	assert.False(t, ok)
+	assert.Nil(t, o.GetSelectedAccount())
 }
 
 // A single configured account renders no Account section (and adds no chrome): with

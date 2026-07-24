@@ -107,6 +107,7 @@ type ClaudeAccount struct {
 	ConfigDir     string   `json:"config_dir"`
 	RemoteMatches []string `json:"remote_matches,omitempty"`
 	PathMatches   []string `json:"path_matches,omitempty"`
+	Pool          string   `json:"pool,omitempty"` // rotation-pool membership; empty = singleton pool (own name)
 }
 
 // ResolvedConfigDir expands a leading ~ in ConfigDir to the user's home directory.

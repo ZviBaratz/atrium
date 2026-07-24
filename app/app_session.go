@@ -827,17 +827,18 @@ func seedOverlay(ov *overlay.TextInputOverlay, title, prompt, path string) {
 	}
 }
 
-// preselectAccountFor points ov's account picker at the Claude account auto-routed for
-// target, so the form shows the same account a submit would resolve. A no-op once the
-// user drives the picker (see AccountPicker.SelectByName). isGit gates the remote
-// lookup: a non-git target has no remote and routes by path.
+// preselectAccountFor points ov's account picker at the pool auto-routed for target
+// (its ⇄ entry, so a rotating pool is what highlights), so the form shows the same
+// cluster a submit would resolve. A no-op once the user drives the picker (see
+// AccountPicker.SelectByName). isGit gates the remote lookup: a non-git target has
+// no remote and routes by path.
 func (m *home) preselectAccountFor(ov *overlay.TextInputOverlay, target string, isGit bool) {
 	remoteURL := ""
 	if isGit {
 		remoteURL = git.GetRemoteURL(m.ctx, target)
 	}
-	if name, _, _ := m.appConfig.ResolveClaudeAccount(remoteURL, target); name != "" {
-		ov.PreselectAccount(name)
+	if poolName, _, _ := m.appConfig.ResolveClaudePool(remoteURL, target); poolName != "" {
+		ov.PreselectAccount(poolName)
 	}
 }
 
@@ -1217,10 +1218,7 @@ func (m *home) createSessionFromForm(prompt string) tea.Cmd {
 		programs[i] = program
 	}
 
-	var accountOverride *config.ClaudeAccount
-	if acct, ok := ov.GetSelectedAccount(); ok && acct.Name != "" {
-		accountOverride = &acct
-	}
+	sel := ov.GetSelectedAccount() // *overlay.AccountSelection, nil when untouched
 
 	// Host-capacity gate, evaluated once for the whole batch now that every title and
 	// program has passed pre-flight. An explicit cap refuses an over-budget batch as a
@@ -1230,12 +1228,19 @@ func (m *home) createSessionFromForm(prompt string) tea.Cmd {
 	branch := ov.GetSelectedBranch()
 	plan := spawnPlan{
 		titles: titles, path: path, direct: direct, programs: programs,
-		branch: branch, prompt: prompt, account: accountOverride,
+		branch: branch, prompt: prompt, account: sel,
 	}
+
+	// Session-cap gate FIRST. A hard cap must hard-refuse an over-budget batch even
+	// when the routed pool is fully rate-limited: the all-exhausted accept path
+	// (proceedExhaustedMsg → spawnVariants) does NOT re-check the cap, so running the
+	// exhausted gate first would let accepting it spawn past the user's explicit hard
+	// limit — a safeguard bypass. Only once the batch is not hard-blocked do we run the
+	// exhausted gate; the accept path spawning without a cap re-check is then safe.
 	sc := m.sessionCap()
 	count := m.capCount(sc)
-	switch capVerdict(sc, count, total) {
-	case capBlock:
+	verdict := capVerdict(sc, count, total)
+	if verdict == capBlock {
 		ov.Submitted = false
 		free := sc.Limit - count
 		if free < 0 {
@@ -1243,7 +1248,17 @@ func (m *home) createSessionFromForm(prompt string) tea.Cmd {
 		}
 		ov.SetVariantError(fmt.Sprintf("batch needs %d but only %d of %d free (max_sessions)", total, free, sc.Limit))
 		return nil
-	case capConfirm:
+	}
+
+	// All-members-rate-limited gate (once per batch). When both a soft cap (capConfirm)
+	// and all-exhausted apply, the exhausted confirm is the one shown (accepting it then
+	// spawns — an accepted v1 simplification for the soft cap only; the hard cap is
+	// already ruled out above).
+	if cmd, gated := m.gateAllExhausted(plan); gated {
+		return cmd
+	}
+
+	if verdict == capConfirm {
 		return m.confirmOverCap(plan, sc.Limit, count)
 	}
 
@@ -1253,9 +1268,10 @@ func (m *home) createSessionFromForm(prompt string) tea.Cmd {
 // startNewSession builds, registers, and starts a new session from already-validated
 // inputs, returning the batch that boots it in the background. It is the shared core of
 // the form-submit and smart-auto-dispatch paths: caller-supplied validation (title
-// conflict, target validity) must already have passed. accountOverride, when non-nil, is
-// an explicit Claude-account choice that wins over auto-routing.
-func (m *home) startNewSession(title, path string, direct bool, program, branch, prompt string, accountOverride *config.ClaudeAccount, fromBatch bool) (tea.Cmd, error) {
+// conflict, target validity) must already have passed. sel, when non-nil, is the
+// create-form's account choice: a member pin wins over auto-routing (and availability),
+// while a bare pool routes rotation to that pool.
+func (m *home) startNewSession(title, path string, direct bool, program, branch, prompt string, sel *overlay.AccountSelection, fromBatch bool) (tea.Cmd, error) {
 	instance, err := session.NewInstance(session.InstanceOptions{
 		Title:   title,
 		Path:    path,
@@ -1267,22 +1283,63 @@ func (m *home) startNewSession(title, path string, direct bool, program, branch,
 	}
 	instance.SetBaseContext(m.ctx)
 
-	// Resolve which Claude Code account this worktree runs under from its origin
-	// remote (or, for a direct/non-git session with no remote, its directory path),
-	// and pin it on the instance (stored verbatim, injected at launch). Empty
-	// claude_accounts leaves all fields empty (feature dormant).
+	// Resolve the pool this worktree routes to, then pick the account: a picker
+	// member-pin wins outright; otherwise rotate to the next available member and
+	// advance the per-pool cursor (so an unpinned fan-out batch spreads across the
+	// pool). Empty claude_accounts leaves all fields empty (feature dormant).
 	remoteURL := ""
 	if !direct {
 		remoteURL = git.GetRemoteURL(m.ctx, path)
 	}
-	accName, accDir, accIsDefault := m.appConfig.ResolveClaudeAccount(remoteURL, path)
-	if accountOverride != nil {
-		// An explicit picker choice wins over auto-routing. Picking the catch-all
-		// (no-rule) account stays dim; a routed account shows accented — the same
-		// rule the resolver applies.
-		accName, accDir, accIsDefault = accountOverride.Name, accountOverride.ResolvedConfigDir(), accountOverride.IsCatchAll()
+	poolName, members, _ := m.appConfig.ResolveClaudePool(remoteURL, path)
+	if sel != nil && sel.Pool != "" {
+		poolName, members = sel.Pool, m.appConfig.PoolMembers(sel.Pool)
+	}
+
+	var accName, accDir string
+	var accIsDefault bool
+	switch {
+	case sel != nil && sel.Member != nil:
+		accName, accDir, accIsDefault = sel.Member.Name, sel.Member.ResolvedConfigDir(), sel.Member.IsCatchAll()
+		// A member pin clusters under its OWN declared pool (sel.Pool), not whatever
+		// routing resolved — otherwise pinning an ungrouped account in a repo that
+		// routes to a named pool would mis-cluster the session under that pool. An
+		// ungrouped pin (sel.Pool == "") stamps no pool, so accountKey falls back to
+		// the account name — byte-for-byte dormant, matching the rotate branch.
+		poolName = sel.Pool
+	case len(members) == 0:
+		// dormant: leave everything empty
+	default:
+		avail := m.appState.GetAccountAvailability()
+		now := time.Now()
+		start := ((m.appState.GetAccountRotation(poolName) % len(members)) + len(members)) % len(members)
+		chosen := start // defensive fallback: the batch gate should have caught all-exhausted
+		for k := 0; k < len(members); k++ {
+			idx := (start + k) % len(members)
+			if config.AccountAvailable(avail[members[idx].Name], now) {
+				chosen = idx
+				break
+			}
+		}
+		// Only advance a rotation cursor for a real (multi-member) pool: a 1-member
+		// pool has nothing to rotate, and writing the cursor would add an
+		// account_rotation key for an accounts-configured-but-no-pool user.
+		if len(members) > 1 {
+			if err := m.appState.SetAccountRotation(poolName, chosen+1); err != nil {
+				log.WarningLog.Printf("failed to persist rotation cursor: %v", err)
+			}
+		}
+		accName, accDir, accIsDefault = members[chosen].Name, members[chosen].ResolvedConfigDir(), members[chosen].IsCatchAll()
+		// Stamp a cluster pool only for a REAL declared pool (the chosen member has a
+		// non-empty Pool); an ungrouped account leaves the stamp empty so accountKey
+		// falls back to the account name — byte-for-byte dormant for a has-accounts-
+		// no-pool config. (len(members) > 1 already implies a shared non-empty Pool.)
+		if members[chosen].Pool == "" {
+			poolName = ""
+		}
 	}
 	instance.SetClaudeAccount(accName, accDir, accIsDefault)
+	instance.SetClaudeAccountPool(poolName)
 	// The gh account routes from the origin remote (or path) independently of the
 	// Claude-account override: gh access is determined by the actual repo, not by
 	// which Claude login was picked. "" leaves gh on the ambient global account.
@@ -1614,6 +1671,100 @@ func (m *home) confirmAction(message string, action tea.Cmd) tea.Cmd {
 	m.confirmationOverlay.SetWidth(confirmWidth(m.windowWidth))
 
 	return nil
+}
+
+// soonestResetMember returns the index of the member whose limit resets soonest.
+// Members with a parseable Until sort by that time; indefinite or unparseable
+// sort last; all-indefinite returns 0 (the cursor's natural start).
+func soonestResetMember(members []config.ClaudeAccount, avail map[string]config.AccountAvailability) int {
+	best, bestSet := 0, false
+	var bestT time.Time
+	for i, mem := range members {
+		av := avail[mem.Name]
+		if av.Until == "" {
+			continue
+		}
+		t, err := time.Parse(time.RFC3339, av.Until)
+		if err != nil {
+			continue
+		}
+		if !bestSet || t.Before(bestT) {
+			best, bestT, bestSet = i, t, true
+		}
+	}
+	return best
+}
+
+// resolveSpawnPool returns the pool a plan rotates within: the picker's chosen
+// pool if set, else the route-resolved pool.
+func (m *home) resolveSpawnPool(plan spawnPlan) (string, []config.ClaudeAccount) {
+	if plan.account != nil && plan.account.Pool != "" {
+		return plan.account.Pool, m.appConfig.PoolMembers(plan.account.Pool)
+	}
+	remoteURL := ""
+	if !plan.direct {
+		remoteURL = git.GetRemoteURL(m.ctx, plan.path)
+	}
+	poolName, members, _ := m.appConfig.ResolveClaudePool(remoteURL, plan.path)
+	return poolName, members
+}
+
+// gateAllExhausted returns (cmd, true) and stages a confirm when an unpinned
+// multi-member pool has no currently-available member; (nil, false) to proceed.
+// Evaluated once per batch, mirroring the soft-cap gate.
+func (m *home) gateAllExhausted(plan spawnPlan) (tea.Cmd, bool) {
+	if plan.account != nil && plan.account.Member != nil {
+		return nil, false // a deliberate member pin bypasses availability
+	}
+	poolName, members := m.resolveSpawnPool(plan)
+	if len(members) < 2 {
+		return nil, false // singleton/empty pool: nothing to skip
+	}
+	avail := m.appState.GetAccountAvailability()
+	now := time.Now()
+	for _, mem := range members {
+		if config.AccountAvailable(avail[mem.Name], now) {
+			return nil, false
+		}
+	}
+	return m.confirmAllExhausted(plan, poolName, members), true
+}
+
+// confirmAllExhausted stages a confirm for a fully-rate-limited pool. On accept
+// it pins the soonest-to-reset member for the whole batch and spawns; on decline
+// nothing is created (the dismissed form is stashed as a restorable draft, the
+// same rollback contract as confirmOverCap).
+func (m *home) confirmAllExhausted(plan spawnPlan, pool string, members []config.ClaudeAccount) tea.Cmd {
+	avail := m.appState.GetAccountAvailability()
+	soonest := soonestResetMember(members, avail)
+	pinned := members[soonest]
+	plan.account = &overlay.AccountSelection{Pool: pool, Member: &pinned}
+	m.pendingExhausted = &plan
+	m.stashDirtyCreateForm()
+	m.textInputOverlay = nil
+	m.menu.SetState(ui.StateDefault)
+	m.resetTitleCheck()
+	return m.confirmAction(
+		allExhaustedMessage(pool, members, avail, pinned.Name),
+		func() tea.Msg { return proceedExhaustedMsg{} })
+}
+
+// allExhaustedMessage renders the confirm body: the pool, each member's reset
+// time (or "indefinitely"), and which member the batch will use.
+func allExhaustedMessage(pool string, members []config.ClaudeAccount, avail map[string]config.AccountAvailability, pinned string) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "⚠ all %s accounts are rate-limited\n", pool)
+	for _, mem := range members {
+		when := "indefinitely"
+		if u := avail[mem.Name].Until; u != "" {
+			if t, err := time.Parse(time.RFC3339, u); err == nil {
+				when = "resets " + t.Local().Format("15:04")
+			}
+		}
+		fmt.Fprintf(&b, "  %s %s\n", mem.Name, when)
+	}
+	fmt.Fprintf(&b, "create anyway on %s?", pinned)
+	return b.String()
 }
 
 // confirmAsyncAction is confirmAction for a confirmed action that should run off

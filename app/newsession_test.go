@@ -188,9 +188,10 @@ func TestCreateSessionFromForm_ExplicitPathOnlyAccountIsAccented(t *testing.T) {
 	ov.HandleKeyPress(tea.KeyMsg{Type: tea.KeyTab})   // variants → account
 	ov.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRight}) // personal → work, marks touched
 
-	acct, ok := ov.GetSelectedAccount()
-	require.True(t, ok, "driving the picker marks it an explicit override")
-	require.Equal(t, "work", acct.Name, "the picker must have moved to the path-only account")
+	sel := ov.GetSelectedAccount()
+	require.NotNil(t, sel, "driving the picker marks it an explicit override")
+	require.NotNil(t, sel.Member, "a picker choice pins a specific member")
+	require.Equal(t, "work", sel.Member.Name, "the picker must have moved to the path-only account")
 
 	require.NotNil(t, h.createSessionFromForm("do the thing"))
 
