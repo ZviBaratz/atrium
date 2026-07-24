@@ -712,8 +712,9 @@ func TestSessionCreateOverlay_ModelCharsetFiltered(t *testing.T) {
 	assert.Equal(t, "opus", o.GetModel())
 }
 
-// An explicit "default" (the default chip's label, typed out in custom mode)
-// contributes no override, same as leaving the field untouched.
+// An explicit "default" (the word the no-op chip used to be labeled, typed out in
+// custom mode) contributes no override, same as leaving the field untouched. See
+// TestModelField_InheritOrDefaultTypedMeansNoOverride for the "inherit" half.
 func TestSessionCreateOverlay_ModelDefaultMeansNoOverride(t *testing.T) {
 	o := NewSessionCreateOverlay(nil, nil, []string{"/repo/a"}, "claude")
 	o.focusStop(stopModel)
@@ -722,13 +723,13 @@ func TestSessionCreateOverlay_ModelDefaultMeansNoOverride(t *testing.T) {
 }
 
 // Arrowing across the chip row selects aliases without any typing — the
-// typo-proof path. The first chip is default (no override).
+// typo-proof path. The first chip is the no-op "inherit" (no override).
 func TestSessionCreateOverlay_ModelChipCycle(t *testing.T) {
 	o := NewSessionCreateOverlay(nil, nil, []string{"/repo/a"}, "claude")
 	o.focusStop(stopModel)
-	assert.Equal(t, "", o.GetModel(), "the default chip contributes no override")
+	assert.Equal(t, "", o.GetModel(), "the no-op chip contributes no override")
 
-	for i := 0; i < 3; i++ { // default → fable → haiku → opus
+	for i := 0; i < 3; i++ { // inherit → fable → haiku → opus
 		o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyDown})
 	}
 	assert.Equal(t, "opus", o.GetModel())
@@ -739,13 +740,13 @@ func TestSessionCreateOverlay_ModelChipCycle(t *testing.T) {
 	assert.Equal(t, "", o.GetModel(), "cycling back to default drops the override")
 }
 
-// One step back from the default chip wraps to the last alias — the motivating
+// One step back from the no-op chip wraps to the last alias — the motivating
 // case: reach "sonnet" with a single ← instead of arrowing all the way right.
 func TestSessionCreateOverlay_ModelChipWrapsToLast(t *testing.T) {
 	o := NewSessionCreateOverlay(nil, nil, []string{"/repo/a"}, "claude")
 	o.focusStop(stopModel)
 	require.True(t, o.isModelField())
-	assert.Equal(t, "", o.GetModel(), "starts on the default chip")
+	assert.Equal(t, "", o.GetModel(), "starts on the no-op chip")
 
 	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyLeft})
 	assert.Equal(t, "sonnet", o.GetModel(), "← from default wraps to the last alias")
@@ -886,7 +887,7 @@ func TestSessionCreateOverlay_ModeChipCycle(t *testing.T) {
 	o := NewSessionCreateOverlay(nil, nil, []string{"/repo/a"}, "claude")
 	o.focusStop(stopMode)
 	require.True(t, o.isModeField())
-	assert.Equal(t, "", o.GetPermissionMode(), "the default chip contributes no flag")
+	assert.Equal(t, "", o.GetPermissionMode(), "the no-op chip contributes no flag")
 
 	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyDown})
 	assert.Equal(t, "plan", o.GetPermissionMode())
@@ -895,11 +896,11 @@ func TestSessionCreateOverlay_ModeChipCycle(t *testing.T) {
 	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyDown})
 	assert.Equal(t, "auto", o.GetPermissionMode())
 	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyDown}) // wraps past the last chip
-	assert.Equal(t, "", o.GetPermissionMode(), "past the last chip wraps to default")
+	assert.Equal(t, "", o.GetPermissionMode(), "past the last chip wraps to the no-op chip")
 
-	// From the default chip, one step back wraps to the last chip.
+	// From the no-op chip, one step back wraps to the last chip.
 	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyUp})
-	assert.Equal(t, "auto", o.GetPermissionMode(), "before the default chip wraps to the last")
+	assert.Equal(t, "auto", o.GetPermissionMode(), "before the no-op chip wraps to the last")
 }
 
 // The chip row displays the kebab-case label (accept-edits) while the value it

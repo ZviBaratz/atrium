@@ -18,37 +18,45 @@ const claudeFieldInnerWidth = 42
 type chipField interface {
 	Focus()
 	Render() string
-	SetProfilePin(value string, mixed bool)
+	SetProfilePin(label string, pinned, mixed bool)
 }
 
 // TestClaudeChipFields_FitInnerWidth guards the shared width budget the three
 // claude fields stack under: with full labels the effort row was 45 cells and the
 // "max" chip truncated on an 80-col terminal (hence "medium" → "med"). Rendered
 // focused, each field's widest line must stay within the inner width — across the
-// no-op-chip hint states, since those label lines (e.g. "profile pins
-// accept-edits") can now exceed the chip row. The pin values are each field's
-// widest realistic label. (Pre-existing gap, not covered here: the model field's
-// custom-mode hint is 61 cells and truncates at 80 cols — see the PR body.)
+// no-op-chip hint states, since those label lines (e.g. "program pins
+// accept-edits") can now exceed the chip row.
+//
+// pinWide is each field's widest *nameable* label, which is the whole reason the
+// budget holds: syncClaudeFieldsEnabled hands over a label only for a value inside
+// Atrium's enum, so these are genuine maxima rather than optimistic samples. The
+// "unnameable pin" state below is the other half of that contract — an unvalidated
+// --effort token arrives pinned with no label, and must fall back to the short
+// "program pins it" rather than being echoed. (Pre-existing gap, not covered here:
+// the model field's custom-mode hint is 61 cells and truncates at 80 cols.)
 func TestClaudeChipFields_FitInnerWidth(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
 		f       chipField
-		pinWide string // widest single-pin label this field can show
+		pinWide string // widest nameable single-pin label this field can show
 	}{
 		{"model", NewModelField(), "claude-opus-4-6"},
 		{"mode", NewModeField(), "accept-edits"},
 		{"effort", NewEffortField(), "xhigh"},
 	} {
 		for _, st := range []struct {
-			name  string
-			value string
-			mixed bool
+			name   string
+			label  string
+			pinned bool
+			mixed  bool
 		}{
-			{"no pin", "", false},
-			{"shared pin", tc.pinWide, false},
-			{"mixed pins", "", true},
+			{"no pin", "", false, false},
+			{"shared pin", tc.pinWide, true, false},
+			{"unnameable pin", "", true, false},
+			{"mixed pins", "", false, true},
 		} {
-			tc.f.SetProfilePin(st.value, st.mixed)
+			tc.f.SetProfilePin(st.label, st.pinned, st.mixed)
 			tc.f.Focus()
 			if w := lipgloss.Width(tc.f.Render()); w > claudeFieldInnerWidth {
 				t.Errorf("%s field (%s) render width = %d, want <= %d (overflows the 80-col overlay inner width; content truncates)",
@@ -61,7 +69,7 @@ func TestClaudeChipFields_FitInnerWidth(t *testing.T) {
 func TestEffortField_DefaultChipContributesNoFlag(t *testing.T) {
 	f := NewEffortField()
 	if got := f.Value(); got != "" {
-		t.Errorf("new EffortField Value() = %q, want \"\" (default chip)", got)
+		t.Errorf("new EffortField Value() = %q, want \"\" (no-op chip)", got)
 	}
 }
 

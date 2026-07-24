@@ -22,9 +22,16 @@ const claudeFieldNA = "  n/a — the selected profile is not Claude Code"
 // "send no flag" was the one place the word meant something different. "inherit"
 // says what the chip does — defer to whatever resolves the value (claude's own
 // default, or a profile/settings.json pin) — and is 7 cells, exactly the width of
-// "default", so every chip row keeps its fit under the 42-cell budget
-// (modelField.go). One const, three fields, so the word can never drift between
-// them.
+// "default", so every chip row keeps the width it already had: model 41,
+// permissions 38, effort 42, the last sitting exactly on the 42 inner cells an
+// 80-col terminal yields (see modelField.go). One const, three fields, so the word
+// can never drift between them.
+//
+// "inherit" was in fact the original label: #116 renamed it to "default" because
+// Atrium cannot know which default claude will resolve. That objection is answered
+// rather than ignored — the focused hint now names the nearest source Atrium can
+// see (noOverrideHint), so the chip no longer has to carry that meaning alone. The
+// round trip is recorded here so a third flip has to argue with both decisions.
 const noOverrideChip = "inherit"
 
 // chipRow is the state machine behind the chip-style fields: a horizontal row
@@ -38,13 +45,16 @@ type chipRow struct {
 	cursor   int
 	focused  bool
 	disabled bool
-	// pinValue / pinMixed describe where the flag's effective value comes from
-	// across the selected claude programs, for the focused no-op-chip hint (see
-	// noOverrideHint). pinValue is the single value every selected program pins the
-	// flag to ("" when none does — its display label for the enum fields, so the
-	// hint can echo it verbatim); pinMixed is set when the programs disagree or only
-	// some pin. Set by syncClaudeFieldsEnabled via SetProfilePin.
-	pinValue string
+	// pinned / pinLabel / pinMixed describe where the flag's effective value comes
+	// from across the selected claude programs, for the focused no-op-chip hint (see
+	// noOverrideHint). pinned reports that every selected program pins the flag;
+	// pinLabel is that pin's display label, or "" when Atrium cannot name the value
+	// (outside its enum snapshot, or a field whose values are unbounded); pinMixed is
+	// set when the programs disagree or only some pin. Set by syncClaudeFieldsEnabled
+	// via SetProfilePin. pinned is deliberately separate from pinLabel: "a pin Atrium
+	// cannot name" must not render as "no pin".
+	pinned   bool
+	pinLabel string
 	pinMixed bool
 }
 
@@ -61,36 +71,48 @@ func (c *chipRow) SetDisabled(disabled bool) { c.disabled = disabled }
 func (c *chipRow) Disabled() bool { return c.disabled }
 
 // SetProfilePin records where the flag's effective value comes from across the
-// selected claude programs, for the focused no-op-chip hint. value is the single
-// value every selected program pins the flag to ("" when none does — pass its
-// display label for the enum fields so the hint can echo it verbatim); mixed is
-// true when the selected programs disagree or only some pin. Recomputed by
+// selected claude programs, for the focused no-op-chip hint. pinned is true when
+// every selected program pins the flag; label is that pin's display label, or ""
+// when Atrium cannot name the value (pass "" and pinned=true for a pin outside the
+// enum snapshot, so the hint says a pin exists without echoing it); mixed is true
+// when the selected programs disagree or only some pin. Recomputed by
 // syncClaudeFieldsEnabled at construction and after every variant-control change.
-func (c *chipRow) SetProfilePin(value string, mixed bool) {
-	c.pinValue = value
+func (c *chipRow) SetProfilePin(label string, pinned, mixed bool) {
+	c.pinLabel = label
+	c.pinned = pinned
 	c.pinMixed = mixed
 }
 
-// noOverrideHint returns the focused hint for the no-op chip: it names the
-// nearest source Atrium can see with zero I/O, so the user knows what "inherit"
-// defers to before selecting a real value. echoValue controls whether a single
-// shared pin names its value: the enum fields (effort, permission mode) pass true
-// because their labels have a known small max, but the model field passes false
-// and says "profile pins it" instead — model values are unbounded (64-char,
-// vendor-prefixed IDs) and VariantPicker never renders a profile's program, so
-// echoing one risks overflowing the 42-cell budget for no gain. The three states
-// mirror SetProfilePin's inputs.
+// noOverrideHint returns the focused hint for the no-op chip: it names the nearest
+// source Atrium can see with zero I/O, so the user knows what "inherit" defers to
+// before selecting a real value.
+//
+// It says "program", not "profile", because the pin can come from either: with no
+// profiles configured the selected program is the `default_program` config key (see
+// claudePrograms), and naming a profile that does not exist would misdescribe the
+// one thing this hint exists to name. "varies by profile" keeps its wording — it
+// needs two disagreeing programs, which only a variant picker can select, and that
+// exists only when profiles do.
+//
+// echoValue controls whether a single shared pin names its value. The enum fields
+// (effort, permission mode) pass true, which is bounded because
+// syncClaudeFieldsEnabled supplies a label only for a value inside Atrium's own
+// enum: the widest is "accept-edits", so "Permissions  program pins accept-edits"
+// is 38 of the 42 cells available. An out-of-enum pin arrives pinned with no label
+// and falls through to "program pins it" — that is what keeps an unvalidated
+// --effort token (see agent.EffortFlag) from overflowing the row. The model field
+// passes false outright: model values are unbounded (64-char, vendor-prefixed IDs)
+// and VariantPicker never renders a profile's program, so echoing one buys nothing.
 func (c *chipRow) noOverrideHint(echoValue bool) string {
 	switch {
 	case c.pinMixed:
 		return "varies by profile"
-	case c.pinValue != "":
-		if echoValue {
-			return "profile pins " + c.pinValue
-		}
-		return "profile pins it"
-	default:
+	case !c.pinned:
 		return "claude's default"
+	case echoValue && c.pinLabel != "":
+		return "program pins " + c.pinLabel
+	default:
+		return "program pins it"
 	}
 }
 

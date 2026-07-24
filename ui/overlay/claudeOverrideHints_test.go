@@ -5,6 +5,7 @@ import (
 
 	"github.com/ZviBaratz/atrium/config"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 	xansi "github.com/charmbracelet/x/ansi"
 	"github.com/stretchr/testify/assert"
 )
@@ -80,22 +81,22 @@ func TestClaudeFields_HintNoPin_ClaudesDefault(t *testing.T) {
 	}
 }
 
-// TestModeField_HintSharedPin_EchoesLabel: mode is a closed enum with known-max
-// labels, so the shared-pin hint names the value — as its display label.
+// TestModeField_HintSharedPin_EchoesLabel: an in-enum mode can be named, so the
+// shared-pin hint echoes it — as its display label, never the raw enum value.
 func TestModeField_HintSharedPin_EchoesLabel(t *testing.T) {
 	ov := NewSessionCreateOverlay(claudeProfile("claude --permission-mode acceptEdits"), nil, []string{t.TempDir()}, "claude")
 	ov.focusStop(stopMode)
 	out := xansi.Strip(ov.modeField.Render())
-	assert.Contains(t, out, "profile pins accept-edits")
+	assert.Contains(t, out, "program pins accept-edits")
 }
 
-// TestEffortField_HintSharedPin_EchoesValue: effort is likewise a closed enum, so
-// the shared-pin hint names the level.
+// TestEffortField_HintSharedPin_EchoesValue: an offered level can be named, so the
+// shared-pin hint echoes it.
 func TestEffortField_HintSharedPin_EchoesValue(t *testing.T) {
 	ov := NewSessionCreateOverlay(claudeProfile("claude --effort high"), nil, []string{t.TempDir()}, "claude")
 	ov.focusStop(stopEffort)
 	out := xansi.Strip(ov.effortField.Render())
-	assert.Contains(t, out, "profile pins high")
+	assert.Contains(t, out, "program pins high")
 }
 
 // TestModelField_HintSharedPin_DoesNotEchoValue: model values are unbounded
@@ -105,8 +106,50 @@ func TestModelField_HintSharedPin_DoesNotEchoValue(t *testing.T) {
 	ov := NewSessionCreateOverlay(claudeProfile("claude --model claude-opus-4-6"), nil, []string{t.TempDir()}, "claude")
 	ov.focusStop(stopModel)
 	out := xansi.Strip(ov.modelField.Render())
-	assert.Contains(t, out, "profile pins it", "model names the source without the value")
+	assert.Contains(t, out, "program pins it", "model names the source without the value")
 	assert.NotContains(t, out, "claude-opus-4-6", "model must not echo the unbounded pinned value")
+}
+
+// TestClaudeFields_HintNoProfiles_SaysProgramNotProfile: with no profiles at all the
+// pin lives in the configured default_program, and GetVariants falls back to it — so
+// the hint must not credit a profile that does not exist. This is the whole reason
+// the wording is "program pins", not "profile pins".
+func TestClaudeFields_HintNoProfiles_SaysProgramNotProfile(t *testing.T) {
+	ov := NewSessionCreateOverlay(nil, nil, []string{t.TempDir()}, "claude --effort high")
+	ov.focusStop(stopEffort)
+	out := xansi.Strip(ov.effortField.Render())
+	assert.Contains(t, out, "program pins high")
+	assert.NotContains(t, out, "profile", "no profile exists, so the hint must not name one")
+}
+
+// TestEffortField_HintUnvalidatedPin_DoesNotEchoValue: agent.EffortFlag is
+// deliberately unvalidated, so a profile can pin a level Atrium does not offer, of
+// any length. Echoing it would overflow the shared width budget, so such a pin is
+// reported as a pin without being named — and must never read as "claude's default",
+// which is the opposite of the truth.
+func TestEffortField_HintUnvalidatedPin_DoesNotEchoValue(t *testing.T) {
+	const bogus = "experimental-max-reasoning"
+	ov := NewSessionCreateOverlay(claudeProfile("claude --effort "+bogus), nil, []string{t.TempDir()}, "claude")
+	ov.focusStop(stopEffort)
+	out := xansi.Strip(ov.effortField.Render())
+	assert.Contains(t, out, "program pins it")
+	assert.NotContains(t, out, bogus, "an out-of-enum level must not be echoed")
+	assert.NotContains(t, out, "claude's default", "a pin Atrium cannot name is still a pin")
+	assert.LessOrEqual(t, lipgloss.Width(ov.effortField.Render()), claudeFieldInnerWidth,
+		"the unnamed fallback is what keeps an unbounded pin inside the width budget")
+}
+
+// TestModeField_HintOutOfEnumPin_StillReadsAsPinned: PermissionModeFlag drops a mode
+// outside Atrium's snapshot, which would make a pinned field claim "claude's
+// default". The hint reads the raw pin (agent.PermissionModePin) so it reports a pin
+// it cannot name instead of asserting the opposite.
+func TestModeField_HintOutOfEnumPin_StillReadsAsPinned(t *testing.T) {
+	ov := NewSessionCreateOverlay(claudeProfile("claude --permission-mode reviewEdits"), nil, []string{t.TempDir()}, "claude")
+	ov.focusStop(stopMode)
+	out := xansi.Strip(ov.modeField.Render())
+	assert.Contains(t, out, "program pins it")
+	assert.NotContains(t, out, "claude's default", "a mode Atrium cannot name is still pinned")
+	assert.NotContains(t, out, "reviewEdits", "an unrecognised mode must not be echoed")
 }
 
 // TestEffortField_HintMixedPins_Varies: two selected claude profiles pinning

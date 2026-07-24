@@ -24,14 +24,20 @@ import (
 // --permission-mode flag, deferring to whatever claude resolves — default
 // (manual) mode unless the user's settings.json pins defaultMode or the profile
 // pins --permission-mode. "inherit" rather than "default" matters most for this
-// field: "default" is a real member of the enum this row also offers via its
-// superset, so the word would name two different things one chip apart (see
-// noOverrideChip). The form cannot read settings.json, but it can read a profile
-// pin, so a profile pinning the flag surfaces in the focused hint ("profile pins
-// accept-edits") rather than misleading the user into thinking no mode is set;
-// clearing a pin still means editing the profile, not the form.
+// field: "default" is a real member of the CLI's full enum, of which the modes
+// this row offers are a subset (agent.ClaudePermissionModes), and it is already
+// the word the session list and the `mode:` filter use for "no chip shown" — so
+// spending it here on "send no flag" made one word name two different states (see
+// noOverrideChip). The row itself never renders a "default" chip.
 //
-// The chip row totals 37 cells, inside the 41-cell budget modelField.go
+// The form cannot read settings.json, but it can read the program's pin, so a
+// pinned flag surfaces in the focused hint ("program pins accept-edits"). That
+// narrows — it does not retire — the tradeoff #106 accepted: the hint shows only
+// while this field is focused with the cursor on the no-op chip, so the *selected
+// chip* still cannot reflect the pin, and clearing a pin still means editing the
+// program, not the form.
+//
+// The chip row totals 38 cells, inside the 41-cell budget modelField.go
 // established for the worst realistic overlay width (80-col terminal → 42
 // inner cells). The field is disabled (dim, skipped in Tab order,
 // Value() == "") while the form's effective program does not resolve to
@@ -74,7 +80,8 @@ func (f *ModeField) Render() string {
 	}
 	// The hint explains the no-op chip, so it shows only while focused and on it
 	// (see EffortField.Render); on a real value it would confuse. echoValue=true —
-	// permission modes are a closed enum with known-max labels.
+	// syncClaudeFieldsEnabled labels a pin only when it is inside the enum, whose
+	// widest label ("accept-edits") leaves the line 4 cells clear.
 	if f.focused && f.cursor == 0 {
 		s.WriteString(mfDimStyle().Render("  " + f.noOverrideHint(true)))
 	}

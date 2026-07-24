@@ -294,11 +294,14 @@ func modelTerm(value string) term {
 //
 // "default" is nonetheless accepted as a second spelling of the sentinel, on the
 // same exact-match terms as "none". The word is in the product's vocabulary even
-// though the list never prints it — it is the create form's first chip
-// (ui/overlay/modeField.go) — so a user who types it deserves the set it plainly
-// denotes rather than an empty list. Both spellings select the same rows: the
-// ones showing no mode chip. Note the create-form chip means "pin no flag"
-// while this matches "currently resolving to default", which are not the same
+// though the list never prints it — it is a real member of claude's
+// --permission-mode enum (session/agent/permissionmode.go) and the mode an
+// ordinary manual-mode session reports — so a user who types it deserves the set
+// it plainly denotes rather than an empty list. Both spellings select the same
+// rows: the ones showing no mode chip. The create form deliberately does *not*
+// spell its no-op chip "default" (it reads "inherit"; see ui/overlay/chiprow.go),
+// precisely because that chip means "pin no flag" while this matches "currently
+// resolving to default", which are not the same
 // set under a profile pin — but that gap is uniform across the predicate
 // ("mode:plan" is likewise about the live mode, not how the session was
 // composed), so the two spellings do not need to disagree here.

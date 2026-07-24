@@ -198,7 +198,7 @@ func (mf *ModelField) Render() string {
 			// "type a name" is the custom-entry affordance — not redundant with the
 			// form footer's "↑↓ select", so it stays on every chip. The no-op-chip
 			// hint appends only on the first chip (it explains that chip); echoValue is
-			// false — model values are unbounded, so it says "profile pins it", never
+			// false — model values are unbounded, so it says "program pins it", never
 			// the value (see chipRow.noOverrideHint).
 			hint := "  type a name"
 			if mf.cursor == 0 {

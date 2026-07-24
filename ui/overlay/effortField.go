@@ -60,7 +60,10 @@ func (f *EffortField) Render() string {
 	}
 	// The hint explains the no-op chip, so it shows only while focused and sitting
 	// on it; on a real value it would confuse. It replaces the former "↑↓ change",
-	// which duplicated the form footer's "↑↓ select".
+	// which duplicated the form footer's "↑↓ select". echoValue=true is safe only
+	// because syncClaudeFieldsEnabled withholds the label for a level outside
+	// agent.ClaudeEffortLevels — agent.EffortFlag is unvalidated, so the raw pin can
+	// be any length (see chipRow.noOverrideHint).
 	if f.focused && f.cursor == 0 {
 		s.WriteString(mfDimStyle().Render("  " + f.noOverrideHint(true)))
 	}
