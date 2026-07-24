@@ -736,3 +736,73 @@ func TestAccountsOverlay_ReorderSingleAccountIsInert(t *testing.T) {
 	assert.Equal(t, []string{"solo"}, claudeNames(cfg))
 	assert.Equal(t, 0, o.cursorIndex())
 }
+
+// rowLine returns the single rendered line containing name, so a test can assert
+// which row a badge landed on rather than merely that the badge exists somewhere in
+// the whole view — an assert.Contains over the entire view is order-blind and can't
+// tell rows apart.
+func rowLine(t *testing.T, view, name string) string {
+	t.Helper()
+	for _, line := range strings.Split(view, "\n") {
+		if strings.Contains(line, name) {
+			return line
+		}
+	}
+	t.Fatalf("no rendered line contains %q; full view:\n%s", name, view)
+	return ""
+}
+
+// The point of reordering: order is first-match precedence and the FIRST rule-less
+// account is the catch-all, so moving a rule-less account to the top changes which
+// account an unmatched repo resolves to — and the rendered badges follow.
+func TestAccountsOverlay_ReorderChangesCatchAll(t *testing.T) {
+	cfg := &config.Config{ClaudeAccounts: []config.ClaudeAccount{
+		{Name: "alpha"}, // first rule-less → the catch-all
+		{Name: "bravo"}, // rule-less but later → unreachable
+	}}
+	o := NewAccountsOverlay(cfg, config.DefaultState())
+	o.SetSize(80, 24)
+
+	name, _, isDefault := cfg.ResolveClaudeAccount("", "/tmp/anything")
+	require.Equal(t, "alpha", name)
+	require.True(t, isDefault)
+	assert.Contains(t, rowLine(t, o.Render(), "alpha"), "default")
+	assert.Contains(t, rowLine(t, o.Render(), "bravo"), "unreachable")
+
+	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'J'}}) // alpha down
+
+	name, _, _ = cfg.ResolveClaudeAccount("", "/tmp/anything")
+	assert.Equal(t, "bravo", name, "the new first rule-less account is the catch-all")
+	assert.Contains(t, rowLine(t, o.Render(), "bravo"), "default")
+	assert.Contains(t, rowLine(t, o.Render(), "alpha"), "unreachable")
+}
+
+// Same for the rule-matching case: two accounts whose rules both match a remote
+// resolve to whichever is first, so reorder flips the winner. GH tab, to pin that
+// the GH section's order is load-bearing too. Both rows carry a rule (neither is a
+// catch-all), so their badges both read "routed" before and after — reordering
+// doesn't touch the badge in this case, only which resolved dir wins the match —
+// so the rowLine checks here guard against a broken reorder scrambling a row's
+// fields (e.g. dropping RemoteMatches), while the config-level dir flip below is
+// what actually pins the precedence change.
+func TestAccountsOverlay_ReorderChangesGHMatchPriority(t *testing.T) {
+	cfg := &config.Config{GHAccounts: []config.GHAccount{
+		{Name: "alpha", ConfigDir: "/cfg/alpha", RemoteMatches: []string{"github.com/acme"}},
+		{Name: "bravo", ConfigDir: "/cfg/bravo", RemoteMatches: []string{"github.com/acme"}},
+	}}
+	o := NewAccountsOverlay(cfg, config.DefaultState())
+	o.SetSize(80, 24)
+	o.selectTab(tabGH)
+
+	dir := cfg.ResolveGHConfigDir("github.com/acme/widgets", "")
+	require.Equal(t, "/cfg/alpha", dir, "first match wins")
+	assert.Contains(t, rowLine(t, o.Render(), "alpha"), "routed")
+	assert.Contains(t, rowLine(t, o.Render(), "bravo"), "routed")
+
+	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'J'}}) // alpha down, cursor starts on row 0
+
+	dir = cfg.ResolveGHConfigDir("github.com/acme/widgets", "")
+	assert.Equal(t, "/cfg/bravo", dir, "the newly-first account now wins the match")
+	assert.Contains(t, rowLine(t, o.Render(), "alpha"), "routed")
+	assert.Contains(t, rowLine(t, o.Render(), "bravo"), "routed")
+}
