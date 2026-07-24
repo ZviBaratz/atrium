@@ -122,6 +122,32 @@ func (o *AccountsOverlay) clampCursor() {
 	}
 }
 
+// moveAccount swaps the cursored account with its neighbour delta slots away and
+// moves the cursor with it, reporting whether the config changed. Account order is
+// routing precedence — first-match wins and the first rule-less account is the
+// catch-all (config.matchRouteIndex) — so this is a routing edit, not a cosmetic
+// one, and the caller persists it. A move off either end is a no-op that reports
+// no change, so a boundary press never triggers a config write.
+func (o *AccountsOverlay) moveAccount(delta int) bool {
+	i, j := o.cursor, o.cursor+delta
+	if i < 0 || j < 0 || i >= o.activeLen() || j >= o.activeLen() {
+		return false
+	}
+	switch o.tab {
+	case tabClaude:
+		a := o.cfg.ClaudeAccounts
+		a[i], a[j] = a[j], a[i]
+	case tabAgy:
+		a := o.cfg.AgyAccounts
+		a[i], a[j] = a[j], a[i]
+	default: // tabGH
+		a := o.cfg.GHAccounts
+		a[i], a[j] = a[j], a[i]
+	}
+	o.cursor = j
+	return true
+}
+
 // HandleKeyPress routes a key to the active mode and reports whether the overlay
 // should close and whether the config was mutated (the app persists on dirty).
 func (o *AccountsOverlay) HandleKeyPress(msg tea.KeyMsg) (closed bool, dirty bool) {
@@ -149,6 +175,10 @@ func (o *AccountsOverlay) handleListKey(msg tea.KeyMsg) (closed bool, dirty bool
 		if o.cursor < o.activeLen()-1 {
 			o.cursor++
 		}
+	case "K", "shift+up":
+		return false, o.moveAccount(-1)
+	case "J", "shift+down":
+		return false, o.moveAccount(+1)
 	case "tab", "right":
 		o.tab = (o.tab + 1) % numTabs
 		o.clampCursor()

@@ -23,6 +23,33 @@ func twoTabCfg() *config.Config {
 	}
 }
 
+// claudeNames returns Claude account names in config order (== routing precedence).
+func claudeNames(cfg *config.Config) []string {
+	names := make([]string, len(cfg.ClaudeAccounts))
+	for i, a := range cfg.ClaudeAccounts {
+		names[i] = a.Name
+	}
+	return names
+}
+
+// ghNames returns GitHub account names in config order.
+func ghNames(cfg *config.Config) []string {
+	names := make([]string, len(cfg.GHAccounts))
+	for i, a := range cfg.GHAccounts {
+		names[i] = a.Name
+	}
+	return names
+}
+
+// agyNames returns Antigravity account names in config order.
+func agyNames(cfg *config.Config) []string {
+	names := make([]string, len(cfg.AgyAccounts))
+	for i, a := range cfg.AgyAccounts {
+		names[i] = a.Name
+	}
+	return names
+}
+
 func TestAccountsOverlay_NavAndTabSwitchClampsCursor(t *testing.T) {
 	o := NewAccountsOverlay(twoTabCfg(), config.DefaultState())
 	o.SetSize(80, 24)
@@ -608,4 +635,104 @@ func TestAccountsOverlay_AgyFormHasNoPool(t *testing.T) {
 	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'e'}})
 	require.Equal(t, modeEdit, o.mode)
 	assert.False(t, o.form.showPool, "an agy account edit form must not show the Pool field")
+}
+
+// TestAccountsOverlay_ReorderSwapsAndFollowsCursor: J moves the cursored account
+// down one slot in config order (which IS routing precedence) and the cursor
+// tracks the account, not the position, so a second J keeps moving the same one.
+func TestAccountsOverlay_ReorderSwapsAndFollowsCursor(t *testing.T) {
+	cfg := twoTabCfg() // Claude: work, personal
+	o := NewAccountsOverlay(cfg, config.DefaultState())
+	o.SetSize(80, 24)
+
+	closed, dirty := o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'J'}})
+	assert.False(t, closed)
+	assert.True(t, dirty, "reorder mutates config, so the app must persist it")
+	assert.Equal(t, []string{"personal", "work"}, claudeNames(cfg))
+	assert.Equal(t, 1, o.cursorIndex(), "cursor follows the moved account")
+
+	// K moves it back.
+	_, dirty = o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'K'}})
+	assert.True(t, dirty)
+	assert.Equal(t, []string{"work", "personal"}, claudeNames(cfg))
+	assert.Equal(t, 0, o.cursorIndex())
+}
+
+// Boundary presses must not report dirty — a no-op must not trigger a config write.
+func TestAccountsOverlay_ReorderAtBoundsIsNoOp(t *testing.T) {
+	cfg := twoTabCfg() // Claude: work, personal
+	o := NewAccountsOverlay(cfg, config.DefaultState())
+	o.SetSize(80, 24)
+
+	// Cursor starts at row 0 — K (up) is already at the top boundary.
+	_, dirty := o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'K'}})
+	assert.False(t, dirty, "K at row 0 is a no-op")
+	assert.Equal(t, []string{"work", "personal"}, claudeNames(cfg))
+	assert.Equal(t, 0, o.cursorIndex())
+
+	// Move to the last row: J (down) is now at the bottom boundary.
+	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyDown})
+	require.Equal(t, 1, o.cursorIndex())
+	_, dirty = o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'J'}})
+	assert.False(t, dirty, "J at the last row is a no-op")
+	assert.Equal(t, []string{"work", "personal"}, claudeNames(cfg))
+	assert.Equal(t, 1, o.cursorIndex())
+}
+
+// Order is first-match precedence in every section, so reorder works on all tabs.
+func TestAccountsOverlay_ReorderWorksOnGHAndAgyTabs(t *testing.T) {
+	cfg := &config.Config{
+		GHAccounts: []config.GHAccount{
+			{Name: "gh-work", ConfigDir: "~/.config/gh-work"},
+			{Name: "gh-personal", ConfigDir: "~/.config/gh-personal"},
+		},
+		AgyAccounts: []config.AgyAccount{
+			{Name: "agy-work", ConfigDir: "~/.agy-work"},
+			{Name: "agy-personal", ConfigDir: "~/.agy-personal"},
+		},
+	}
+	o := NewAccountsOverlay(cfg, config.DefaultState())
+	o.SetSize(80, 24)
+
+	o.selectTab(tabGH)
+	_, dirty := o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'J'}})
+	assert.True(t, dirty)
+	assert.Equal(t, []string{"gh-personal", "gh-work"}, ghNames(cfg))
+
+	o.selectTab(tabAgy)
+	o.cursor = 0 // selectTab only clamps; it does not reset the cursor across tabs
+	_, dirty = o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'J'}})
+	assert.True(t, dirty)
+	assert.Equal(t, []string{"agy-personal", "agy-work"}, agyNames(cfg))
+}
+
+// The shift+arrow aliases must behave identically to J/K.
+func TestAccountsOverlay_ReorderShiftArrowAliases(t *testing.T) {
+	cfg := twoTabCfg() // Claude: work, personal
+	o := NewAccountsOverlay(cfg, config.DefaultState())
+	o.SetSize(80, 24)
+
+	_, dirty := o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyShiftDown})
+	assert.True(t, dirty)
+	assert.Equal(t, []string{"personal", "work"}, claudeNames(cfg))
+	assert.Equal(t, 1, o.cursorIndex())
+
+	_, dirty = o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyShiftUp})
+	assert.True(t, dirty)
+	assert.Equal(t, []string{"work", "personal"}, claudeNames(cfg))
+	assert.Equal(t, 0, o.cursorIndex())
+}
+
+// Dormancy: a single-account tab cannot reorder and must report no change.
+func TestAccountsOverlay_ReorderSingleAccountIsInert(t *testing.T) {
+	cfg := &config.Config{ClaudeAccounts: []config.ClaudeAccount{{Name: "solo"}}}
+	o := NewAccountsOverlay(cfg, config.DefaultState())
+	o.SetSize(80, 24)
+
+	_, dirty := o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'J'}})
+	assert.False(t, dirty, "J with a single account is a no-op")
+	_, dirty = o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'K'}})
+	assert.False(t, dirty, "K with a single account is a no-op")
+	assert.Equal(t, []string{"solo"}, claudeNames(cfg))
+	assert.Equal(t, 0, o.cursorIndex())
 }
