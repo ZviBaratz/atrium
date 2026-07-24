@@ -358,6 +358,40 @@ func newSettingRows(cfg *config.Config) []settingRow {
 			},
 		},
 		{
+			key: "link_paths", section: "Behavior", label: "Link paths", kind: kindText,
+			description: "Gitignored paths symlinked (not copied) into each new worktree, e.g. node_modules; comma-separated repo-relative paths. Ignore them with a pattern that has no trailing slash.",
+			applyNote:   "affects new sessions",
+			get: func(c *config.Config) string {
+				paths := c.GetLinkPaths()
+				if len(paths) == 0 {
+					return "(none)"
+				}
+				return strings.Join(paths, ", ")
+			},
+			editGet: func(c *config.Config) string {
+				return strings.Join(c.GetLinkPaths(), ", ")
+			},
+			set: func(c *config.Config, v string) error {
+				// Same split/trim/drop-blanks shape as carry_files, but empty input
+				// clears the key to nil rather than storing an explicit empty list:
+				// GetLinkPaths has no default, so nil and empty both mean off and nil
+				// is the honest way to say "not configured".
+				parts := strings.Split(v, ",")
+				paths := make([]string, 0, len(parts))
+				for _, p := range parts {
+					if t := strings.TrimSpace(p); t != "" {
+						paths = append(paths, t)
+					}
+				}
+				if len(paths) == 0 {
+					c.LinkPaths = nil
+					return nil
+				}
+				c.LinkPaths = paths
+				return nil
+			},
+		},
+		{
 			key: "project_search_roots", section: "Behavior", label: "Project scan roots", kind: kindText,
 			description: "Directories the background repo scan walks to stock the project picker; comma-separated, ~ allowed. A changed scope re-scans the next time the create form opens.",
 			get: func(c *config.Config) string {

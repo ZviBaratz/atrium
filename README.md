@@ -527,6 +527,42 @@ Carried files are re-seeded from the original checkout whenever the worktree
 is created, including on resume after a pause — edits made to them inside a
 session do not survive a pause/resume cycle.
 
+#### Linked paths
+
+Some gitignored paths should not be copied at all. An installed dependency tree
+like `node_modules` is large and slow to duplicate per session, and the tooling
+resolves through a symlink perfectly well — so `link_paths` names repo-relative
+paths that Atrium **symlinks** into each new worktree, pointing at the original
+checkout's copy:
+
+```json
+{
+  "link_paths": ["node_modules", "container/agent-runner/node_modules"]
+}
+```
+
+The default is `[]` (off). The link target is absolute, so it stays valid however
+deep the worktree sits under the data dir, and a path that does not exist in the
+original checkout yet (no `npm install` run) is skipped silently.
+
+Entries must be gitignored, and — unlike `carry_files` — the pattern must not end
+in a slash:
+
+```gitignore
+node_modules      # ignores the directory *and* the symlink — use this
+node_modules/     # directories only: the symlink would NOT be ignored
+```
+
+Git stores a symlink as a file, so a directory-only pattern leaves the link
+un-ignored, which would commit it into the session branch on pause and show it in
+the session diff. Atrium checks this the way git will see it in the worktree and
+skips the entry with a warning rather than creating a link that leaks.
+
+Like carried files, links are re-created whenever the worktree is materialized,
+including on resume after a pause. On Windows, creating a symlink requires
+Developer Mode or an elevated process; without it the entry is skipped with a
+warning and the session still starts.
+
 #### Claude accounts
 
 Route each session to a specific Claude Code account by injecting a per-session
@@ -743,6 +779,7 @@ added without a row here.
 | `agent_oom_margin` | int | `on (300)` | Linux only: raise each agent's `oom_score_adj` this far above the shared tmux server's so a kernel OOM kill sheds one recoverable session, not the server (every session). Unset = on (default margin); `N` = margin; `0` = off |
 | `trust_worktrees_root` | bool | `false` | pre-accept Claude's workspace-trust for the worktrees root |
 | `carry_files` | array | `[".claude/settings.local.json"]` | gitignored files copied into each worktree ([Carried files](#carried-files)) |
+| `link_paths` | array | `[]` | gitignored paths symlinked into each worktree, e.g. `node_modules` ([Linked paths](#linked-paths)) |
 | `pr_create_draft` | bool | `true` | `c` opens a draft PR |
 | `update_base_on_create` | bool | `true` | branch off the freshest remote base tip |
 | `fast_forward_local_base` | bool | `false` | also fast-forward the local base branch on create |

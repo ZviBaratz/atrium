@@ -310,6 +310,19 @@ type Config struct {
 	// explicit [] must survive a save/load cycle instead of being dropped and
 	// reverting to the default.
 	CarryFiles []string `json:"carry_files"`
+	// LinkPaths lists repo-relative paths that are symlinked — not copied — from
+	// the origin checkout into each newly materialized session worktree, with an
+	// absolute target. It exists for dependency trees a copy would be wrong for:
+	// node_modules is huge and slow to duplicate, and Node resolves through a
+	// symlink fine. Empty/nil is off (omitempty keeps the key out of configs that
+	// never use it); there is no default list.
+	//
+	// Entries must be gitignored *as a symlink*, i.e. by a pattern without a
+	// trailing slash: a dir-only pattern (`node_modules/`) matches the origin
+	// directory but not the link, which git stores as a file. Otherwise the link
+	// leaks into the session branch (pause commits with `git add .`) and into the
+	// live diff (which stages untracked paths every poll tick).
+	LinkPaths []string `json:"link_paths,omitempty"`
 	// PRCreateDraft selects whether a PR opened with the create key (c) starts as
 	// a draft. nil means use the default (draft), so configs predating this key
 	// open drafts. Note: a draft PR cannot be merged with m until it is marked

@@ -644,6 +644,40 @@ func TestGetCarryFiles(t *testing.T) {
 	})
 }
 
+func TestGetLinkPaths(t *testing.T) {
+	t.Run("off by default", func(t *testing.T) {
+		assert.Empty(t, DefaultConfig().GetLinkPaths())
+		assert.Empty(t, (&Config{}).GetLinkPaths())
+	})
+	t.Run("custom list returned as-is", func(t *testing.T) {
+		custom := []string{"node_modules", "container/agent-runner/node_modules"}
+		assert.Equal(t, custom, (&Config{LinkPaths: custom}).GetLinkPaths())
+	})
+	// Unlike carry_files there is no nil-vs-empty contract to preserve (both mean
+	// off), so omitempty is fine — but a configured list must still round-trip.
+	t.Run("configured list survives save and load", func(t *testing.T) {
+		tempHome := t.TempDir()
+		t.Setenv("HOME", tempHome)
+
+		cfg := DefaultConfig()
+		cfg.LinkPaths = []string{"node_modules"}
+		require.NoError(t, SaveConfig(cfg))
+
+		assert.Equal(t, []string{"node_modules"}, LoadConfig().GetLinkPaths())
+	})
+	t.Run("unset key stays out of the saved file", func(t *testing.T) {
+		tempHome := t.TempDir()
+		t.Setenv("HOME", tempHome)
+
+		require.NoError(t, SaveConfig(DefaultConfig()))
+		dir, err := GetConfigDir()
+		require.NoError(t, err)
+		raw, err := os.ReadFile(filepath.Join(dir, ConfigFileName))
+		require.NoError(t, err)
+		assert.NotContains(t, string(raw), "link_paths")
+	})
+}
+
 // GetAutoUpdateMode must normalize every input to a valid mode. The default is
 // notify; a typo must never silently disable update hints ("off") nor enable
 // unattended binary swaps ("auto").

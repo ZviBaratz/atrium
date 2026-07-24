@@ -742,6 +742,55 @@ func TestSettingsOverlay_CarryFilesSetBlankEntriesOptOut(t *testing.T) {
 	assert.Empty(t, cfg.CarryFiles)
 }
 
+func TestSettingsOverlay_LinkPathsRowExists(t *testing.T) {
+	o := NewSettingsOverlay(config.DefaultConfig())
+	assert.True(t, o.SelectRow("link_paths"), "settings panel must have a link_paths row")
+}
+
+func TestSettingsOverlay_LinkPathsGetDisplaysNoneWhenUnset(t *testing.T) {
+	cfg := config.DefaultConfig() // link_paths has no default: off until configured
+	o := NewSettingsOverlay(cfg)
+	settingsAt(t, o, "link_paths")
+	row := o.rows[o.cursor]
+	assert.Equal(t, "(none)", row.get(cfg))
+}
+
+func TestSettingsOverlay_LinkPathsEditCommitsMultipleEntries(t *testing.T) {
+	cfg := config.DefaultConfig()
+	o := NewSettingsOverlay(cfg)
+	settingsAt(t, o, "link_paths")
+
+	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyEnter})
+	o.HandleKeyPress(keyRunes("node_modules, container/agent-runner/node_modules"))
+	_, changed := o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyEnter})
+	assert.Equal(t, "link_paths", changed)
+	assert.Equal(t, []string{"node_modules", "container/agent-runner/node_modules"}, cfg.LinkPaths)
+}
+
+func TestSettingsOverlay_LinkPathsSetBlankEntriesClearToNil(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.LinkPaths = []string{"node_modules"}
+	o := NewSettingsOverlay(cfg)
+	settingsAt(t, o, "link_paths")
+	row := o.rows[o.cursor]
+
+	// Unlike carry_files there is no nil-vs-empty contract: nil and empty both
+	// mean off, so nil is the honest "not configured" and keeps the key out of
+	// the saved file (link_paths is omitempty).
+	require.NoError(t, row.set(cfg, " , ,  "))
+	assert.Nil(t, cfg.LinkPaths)
+}
+
+func TestSettingsOverlay_LinkPathsEditGetReturnsRawList(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.LinkPaths = []string{"node_modules", ".husky/_"}
+	o := NewSettingsOverlay(cfg)
+	settingsAt(t, o, "link_paths")
+	row := o.rows[o.cursor]
+	require.NotNil(t, row.editGet)
+	assert.Equal(t, "node_modules, .husky/_", row.editGet(cfg))
+}
+
 // --- Project-scan and smart-dispatch rows (#399 item 5) -----------------------
 //
 // These three keys were JSON-only: the README carried a "†" legend declaring
