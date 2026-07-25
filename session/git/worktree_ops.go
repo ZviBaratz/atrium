@@ -39,9 +39,10 @@ func (g *Worktree) Setup() error {
 		return setupErr
 	}
 
-	// The worktree is materialized; carry configured gitignored files from the
-	// origin checkout into it (best-effort, never an error — see carry.go).
-	g.carryLocalFiles()
+	// The worktree is materialized; seed the configured gitignored paths from the
+	// origin checkout into it — carry_files copied, link_paths symlinked
+	// (best-effort, never an error — see carry.go).
+	g.seedLocalPaths()
 	return nil
 }
 

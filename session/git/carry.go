@@ -2,6 +2,7 @@ package git
 
 import (
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 
@@ -9,24 +10,81 @@ import (
 	"github.com/ZviBaratz/atrium/log"
 )
 
-// carryLocalFiles copies the configured gitignored files (config carry_files)
-// from the origin checkout into a freshly materialized worktree. Worktrees
-// carry only tracked files, so local project config (hooks, output style, MCP
-// allowlists) would otherwise never reach a session.
+// seedLocalPaths materializes the configured gitignored paths from the origin
+// checkout into a freshly created worktree: carry_files are copied, link_paths
+// are symlinked. Worktrees carry only tracked files, so local project config
+// (hooks, output style, MCP allowlists) and installed dependency trees would
+// otherwise never reach a session.
 //
 // Strictly best-effort by contract: every failure logs a warning and is
 // skipped. Nothing here may ever surface as a Setup error — Setup's callers
 // (Instance.Start's deferred Kill, Resume) tear the whole worktree down on
 // error, which would turn a cosmetic copy failure into a destroyed session.
 //
-// Carried files are seeded from the origin checkout on every Setup, including
-// the paused→resume recreation: being gitignored they are never committed by
-// pause, so edits made to them inside a session do not survive a pause/resume
-// cycle — the origin copy wins.
-func (g *Worktree) carryLocalFiles() {
-	for _, rel := range config.LoadConfig().GetCarryFiles() {
+// Seeding runs on every Setup, including the paused→resume recreation: being
+// gitignored these paths are never committed by pause, so edits made to a
+// carried file inside a session do not survive a pause/resume cycle — the origin
+// copy wins.
+//
+// The two lists differ in write direction, which is the sharp edge of link_paths.
+// A carried file is a per-session copy, so a session's writes are private to it.
+// A linked path is the origin's own tree under another name: writes through it
+// land in the user's checkout and are visible to every other session at once, so
+// an agent running `npm install` or `rm -rf node_modules` inside one session
+// mutates the real dependency tree and every sibling's. That is the point (it is
+// why a copy would be wrong) but it is the one place a session is deliberately
+// not isolated.
+//
+// The config is loaded once for both lists: config.LoadConfig also sweeps and
+// quarantines files in the data dir, so it is not a free read.
+func (g *Worktree) seedLocalPaths() {
+	cfg := config.LoadConfig()
+	for _, rel := range cfg.GetCarryFiles() {
 		g.carryLocalFile(rel)
 	}
+	for _, rel := range cfg.GetLinkPaths() {
+		g.linkLocalPath(rel)
+	}
+}
+
+// resolveSeedPaths maps one repo-relative entry to its canonical spelling and
+// its (src, dst) pair, or reports ok=false after warning when the entry is not a
+// safe repo-relative path. kind names the config key in that warning.
+//
+// canon is the slash-separated form the filesystem paths were derived from, and
+// is what callers must hand to git as a pathspec. Deriving the two from the same
+// spelling is load-bearing rather than tidiness: filepath.Join silently drops a
+// trailing separator, so passing the raw entry to `git check-ignore` would ask
+// about a different path than the one being created. git resolves a
+// slash-terminated pathspec as a *directory*, which a dir-only pattern
+// (`node_modules/`) matches — while the symlink actually created is slash-less
+// and, being a file to git, is not matched by it. The ignore guard would report
+// "ignored" and the link would still leak into pause's `git add .`.
+func (g *Worktree) resolveSeedPaths(kind, rel string) (canon, src, dst string, ok bool) {
+	// path.Clean, not filepath.Clean: git pathspecs are always slash-separated,
+	// including on Windows, and ToSlash first folds an entry a Windows user spelled
+	// with backslashes into that same form.
+	canon = path.Clean(filepath.ToSlash(rel))
+	if rel == "" || !filepath.IsLocal(canon) {
+		log.WarningLog.Printf("%s: skipping %q: entries must be repo-relative paths inside the repo", kind, rel)
+		return "", "", "", false
+	}
+
+	src = filepath.Join(g.repoPath, canon)
+	dst = filepath.Join(g.worktreePath, canon)
+	// IsLocal above already rejects escapes; verify the joined results stayed
+	// inside their roots anyway (also marks the paths clean for taint analysis).
+	// This is also what refuses an entry naming the repo root: IsLocal accepts ".",
+	// but Join collapses it to the root itself, which is not strictly inside.
+	// Both checks are lexical: a symlinked path component could still point
+	// elsewhere, but the repo, the worktree, and the seed lists are all the
+	// user's own content — no trust boundary is crossed.
+	if !strings.HasPrefix(src, g.repoPath+string(filepath.Separator)) ||
+		!strings.HasPrefix(dst, g.worktreePath+string(filepath.Separator)) {
+		log.WarningLog.Printf("%s: skipping %q: resolves outside the repo or worktree", kind, rel)
+		return "", "", "", false
+	}
+	return canon, src, dst, true
 }
 
 // carryLocalFile copies one repo-relative file from repoPath into the
@@ -34,28 +92,16 @@ func (g *Worktree) carryLocalFiles() {
 //
 //   - the path must stay inside the repo (relative, no ".." escape);
 //   - the source must exist as a regular file (absence is the silent common
-//     case — most repos never created the file);
+//     case — most repos never created the file). A directory belongs in
+//     link_paths, which symlinks it instead of duplicating it;
 //   - the destination must not already exist (a tracked file matching an
 //     ignore pattern still materializes; never clobber it);
 //   - git must ignore the path: pause commits the worktree with `git add .`,
 //     so carrying a non-ignored file would silently leak it into the session
 //     branch and any PR cut from it.
 func (g *Worktree) carryLocalFile(rel string) {
-	if rel == "" || !filepath.IsLocal(rel) {
-		log.WarningLog.Printf("carry_files: skipping %q: entries must be repo-relative paths inside the repo", rel)
-		return
-	}
-
-	src := filepath.Join(g.repoPath, rel)
-	dst := filepath.Join(g.worktreePath, rel)
-	// IsLocal above already rejects escapes; verify the joined results stayed
-	// inside their roots anyway (also marks the paths clean for taint analysis).
-	// Both checks are lexical: a symlinked path component could still point
-	// elsewhere, but the repo, the worktree, and the carry list are all the
-	// user's own content — no trust boundary is crossed.
-	if !strings.HasPrefix(src, g.repoPath+string(filepath.Separator)) ||
-		!strings.HasPrefix(dst, g.worktreePath+string(filepath.Separator)) {
-		log.WarningLog.Printf("carry_files: skipping %q: resolves outside the repo or worktree", rel)
+	canon, src, dst, ok := g.resolveSeedPaths("carry_files", rel)
+	if !ok {
 		return
 	}
 
@@ -64,13 +110,13 @@ func (g *Worktree) carryLocalFile(rel string) {
 		return // not present in the origin checkout: nothing to carry
 	}
 	if !info.Mode().IsRegular() {
-		log.WarningLog.Printf("carry_files: skipping %q: not a regular file", rel)
+		log.WarningLog.Printf("carry_files: skipping %q: not a regular file (a directory belongs in link_paths, which symlinks it)", rel)
 		return
 	}
 	if _, err := os.Lstat(dst); err == nil {
 		return // already materialized (e.g. force-tracked): never clobber
 	}
-	if _, err := g.runGitCommand(g.repoPath, "check-ignore", "-q", "--", rel); err != nil {
+	if _, err := g.runGitCommand(g.repoPath, "check-ignore", "-q", "--", canon); err != nil {
 		log.WarningLog.Printf("carry_files: skipping %q: not gitignored in %s (it would be committed on pause — add it to .gitignore)", rel, g.repoPath)
 		return
 	}
@@ -87,6 +133,67 @@ func (g *Worktree) carryLocalFile(rel string) {
 	// Preserve the source mode: local config may hold secrets kept at 0600.
 	if err := os.WriteFile(dst, data, info.Mode().Perm()); err != nil {
 		log.WarningLog.Printf("carry_files: write %q: %v", dst, err)
+		return
+	}
+}
+
+// linkLocalPath symlinks one repo-relative path (config link_paths) from the
+// origin checkout into the worktree, with an absolute target. It exists for
+// dependency trees a copy would be wrong for — node_modules is huge and slow to
+// duplicate, and the tooling resolves through a symlink fine.
+//
+// Writes through the link reach the origin checkout and every other session —
+// see seedLocalPaths on the two lists' write directions.
+//
+// It shares carryLocalFile's guards. The deliberate divergences: the source is
+// Lstat'd rather than Stat'd and needs no IsRegular check (a directory is the
+// whole point), and — the load-bearing one — the gitignore
+// check runs in the *worktree*, not the origin repo. A dir-only
+// pattern (`node_modules/`) matches the origin directory but not the symlink,
+// which git stores as a file — checking in the origin checkout would pass and
+// then leak the link into `git add .` (pause) and into the untracked paths the
+// diff stages every poll tick. Checking the not-yet-created path in the worktree
+// is conservative in exactly the right direction: git cannot match a dir-only
+// pattern there either, so only a slash-less pattern is accepted.
+func (g *Worktree) linkLocalPath(rel string) {
+	canon, src, dst, ok := g.resolveSeedPaths("link_paths", rel)
+	if !ok {
+		return
+	}
+
+	// Lstat, not Stat: an origin path that is itself a symlink (a shared package
+	// store) is still worth linking to. Absence is the silent common case — the
+	// dependencies simply are not installed yet.
+	if _, err := os.Lstat(src); err != nil {
+		return
+	}
+	// Never clobber. Unlike carry's equivalent this warns: git-tracked content is
+	// only one way to get here, since carry_files entries and earlier link_paths
+	// entries also create directories under the worktree, and a link silently not
+	// made leaves the session without the dependencies it was configured to get.
+	if _, err := os.Lstat(dst); err == nil {
+		log.WarningLog.Printf("link_paths: skipping %q: something already exists at that path in the worktree (tracked content, or a directory an earlier carry_files/link_paths entry created) — never clobbered", rel)
+		return
+	}
+	if _, err := g.runGitCommand(g.worktreePath, "check-ignore", "-q", "--", canon); err != nil {
+		// Cause-agnostic by design: the worktree is checked out from HEAD, so this
+		// also fires when the ignore rule exists but is not committed yet, or when
+		// the session branched off a base predating it. Naming only the dir-only
+		// pattern would misdiagnose those into a dead end, so lead with the state
+		// and offer the most common cause as a hint.
+		log.WarningLog.Printf("link_paths: skipping %q: git would not ignore a symlink at that path in %s (it would be committed on pause). The rule must be committed on this session's base, and must not end in a slash — %q ignores the symlink, %q only the directory", rel, g.worktreePath, canon, canon+"/")
+		return
+	}
+
+	if err := os.MkdirAll(filepath.Dir(dst), 0755); err != nil {
+		log.WarningLog.Printf("link_paths: create parent dirs for %q: %v", rel, err)
+		return
+	}
+	// An absolute target keeps the link valid regardless of how deep the worktree
+	// sits under the data dir. Symlink creation needs a privilege on Windows, so
+	// a failure here is logged and skipped like any other best-effort miss.
+	if err := os.Symlink(src, dst); err != nil {
+		log.WarningLog.Printf("link_paths: symlink %q -> %q: %v", dst, src, err)
 		return
 	}
 }

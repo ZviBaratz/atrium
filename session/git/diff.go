@@ -176,7 +176,12 @@ func (g *Worktree) snapshotWorktreePath() string {
 // ignored that setting (a status-based scan would silently drop them). `--exclude-standard`
 // applies .gitignore/exclude exactly like `add -N .` did, and `--directory` collapses a
 // wholly-untracked directory to a single `dir/` entry that `add -N -- dir/` recurses into,
-// bounding the argument list.
+// bounding the argument list. `--no-empty-directory` then drops the entries that hold
+// nothing addable: git cannot track an empty directory, so listing one only ever produces
+// a no-op `add -N`. Without it a directory containing solely ignored content — the parent
+// dirs seedLocalPaths creates for a nested link_paths entry, for instance — is reported as
+// untracked forever, which would run the add on every tick for the life of the session and
+// defeat the "only when there is something to add" guarantee above.
 //
 // It is best-effort and never blocks the diff: on failure the untracked files are simply
 // absent from this tick (tracked changes still render) and the next poll retries. In
@@ -184,21 +189,32 @@ func (g *Worktree) snapshotWorktreePath() string {
 // creates and then deletes an untracked temp/swap file between the listing and the add —
 // failing the whole command there would otherwise blank the diff on every editor write.
 func (g *Worktree) intentAddUntracked(wt string) {
-	// -z emits raw, NUL-terminated paths so names with spaces/tabs/unicode round-trip
-	// through `add -N --` without the C-quoting git applies by default.
-	out, err := g.runGitCommand(wt, "ls-files", "--others", "--exclude-standard", "--directory", "-z")
-	if err != nil {
-		log.WarningLog.Printf("intent-add: list untracked files failed: %v", err)
+	paths := g.untrackedPathsToIntentAdd(wt)
+	if len(paths) == 0 {
 		return
 	}
-	out = strings.TrimRight(out, "\x00")
-	if out == "" {
-		return
-	}
-	paths := strings.Split(out, "\x00")
 	// Tolerate a path that vanished between the listing and the add (see above); the
 	// next poll recovers, so a transient race must not surface as a diff error.
 	_, _ = g.runGitCommand(wt, append([]string{"add", "-N", "--"}, paths...)...)
+}
+
+// untrackedPathsToIntentAdd lists the paths intentAddUntracked will stage, and is
+// empty in the steady state — that emptiness is what skips the index write, so it
+// is asserted on directly by tests rather than inferred from index residue (an
+// `add -N` of a directory holding only ignored content leaves none either way).
+func (g *Worktree) untrackedPathsToIntentAdd(wt string) []string {
+	// -z emits raw, NUL-terminated paths so names with spaces/tabs/unicode round-trip
+	// through `add -N --` without the C-quoting git applies by default.
+	out, err := g.runGitCommand(wt, "ls-files", "--others", "--exclude-standard", "--directory", "--no-empty-directory", "-z")
+	if err != nil {
+		log.WarningLog.Printf("intent-add: list untracked files failed: %v", err)
+		return nil
+	}
+	out = strings.TrimRight(out, "\x00")
+	if out == "" {
+		return nil
+	}
+	return strings.Split(out, "\x00")
 }
 
 // computeRepoStats fills in the commit/behind/dirty fields on stats. It is
