@@ -576,14 +576,22 @@ func (o *AccountsOverlay) renderList() string {
 	if o.mode == modeConfirmDelete {
 		b.WriteString(theme.Current().DangerStyle().Render("Delete '" + o.rows()[o.cursor].name + "'?  y / n"))
 	} else {
-		// "l limited" toggles per-account availability, which only Claude accounts
-		// carry — advertise it only on that tab so the legend never names a dead key.
-		hint := "↑/↓ move · tab switch · n new · e edit · d delete"
+		// J/K reorder only does something with a second row to swap against, and
+		// "l limited" only toggles availability for Claude accounts — advertise
+		// each only where it's live, so the legend never names a dead key. l
+		// limited lives on the second line (not alongside J/K reorder on the
+		// first) purely to keep line 1 under the box's inner width at an
+		// 80-column terminal; it isn't grouped there by key purpose.
+		hint := "↑/↓ select · tab switch · n new · e edit · d delete"
+		if o.activeLen() > 1 {
+			hint = "↑/↓ select · J/K reorder · tab switch · n new · e edit · d delete"
+		}
+		extras := "t test routing · esc close"
 		if o.tab == tabClaude {
-			hint += " · l limited"
+			extras = "l limited · " + extras
 		}
 		b.WriteString(t.OverlayHintStyle().Render(hint) + "\n")
-		b.WriteString(t.OverlayHintStyle().Render("t test routing · esc close"))
+		b.WriteString(t.OverlayHintStyle().Render(extras))
 	}
 	return b.String()
 }

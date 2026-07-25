@@ -7,6 +7,7 @@ import (
 
 	"github.com/ZviBaratz/atrium/config"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -805,4 +806,62 @@ func TestAccountsOverlay_ReorderChangesGHMatchPriority(t *testing.T) {
 	assert.Equal(t, "/cfg/bravo", dir, "the newly-first account now wins the match")
 	assert.Contains(t, rowLine(t, o.Render(), "alpha"), "routed")
 	assert.Contains(t, rowLine(t, o.Render(), "bravo"), "routed")
+}
+
+// TestAccountsOverlay_LegendAdvertisesReorder pins the "select" vs "move" split
+// (cursor keys read "select" now that J/K owns "move" as its own verb) and
+// gates the reorder hint on there being a second row to swap with —
+// advertising J/K on a tab where it's a no-op would violate the "never name a
+// dead key" convention this legend already follows for "l limited".
+func TestAccountsOverlay_LegendAdvertisesReorder(t *testing.T) {
+	cfg := twoTabCfg() // Claude: 2 accounts (reorder live); GH: 1 account (reorder dead)
+	o := NewAccountsOverlay(cfg, config.DefaultState())
+	o.SetSize(80, 24)
+
+	out := o.Render()
+	assert.Contains(t, out, "↑/↓ select")
+	assert.NotContains(t, out, "↑/↓ move")
+	assert.Contains(t, out, "J/K reorder", "2 Claude accounts: reorder is live")
+
+	// A single account: J/K can't move anything, so it must not be advertised.
+	solo := &config.Config{ClaudeAccounts: []config.ClaudeAccount{{Name: "solo"}}}
+	oSolo := NewAccountsOverlay(solo, config.DefaultState())
+	oSolo.SetSize(80, 24)
+	assert.NotContains(t, oSolo.Render(), "J/K reorder", "1 account: reorder is dead")
+
+	// GH tab of twoTabCfg also has only 1 row.
+	o.selectTab(tabGH)
+	out = o.Render()
+	assert.NotContains(t, out, "J/K reorder", "GH tab has 1 row: reorder is dead")
+	assert.Contains(t, out, "t test routing")
+}
+
+// TestAccountsOverlay_LegendFitsAndKeepsLimitedClaudeOnly pins where "l
+// limited" landed after the reflow (line 2, alongside "t test routing", so
+// line 1 doesn't wrap once it also carries "J/K reorder") and that it stays
+// Claude-scoped. It also guards the 80-column budget directly on the widest
+// case (Claude tab, >=2 accounts, both new hint segments present): every
+// rendered line of the bordered box must not exceed the terminal width
+// (o.width) — o.boxWidth() is the pre-border content+padding width the style
+// is given, but the box itself renders 2 columns wider once the 1-column
+// border is added on each side, so o.width is the real outer boundary a
+// wrapped (taller) render could blow through.
+func TestAccountsOverlay_LegendFitsAndKeepsLimitedClaudeOnly(t *testing.T) {
+	cfg := twoTabCfg() // Claude: 2 accounts — widest case (J/K reorder + l limited both shown)
+	o := NewAccountsOverlay(cfg, config.DefaultState())
+	o.SetSize(80, 24)
+
+	out := o.Render()
+	// "l limited" must share a line with "t test routing" (line 2), not with
+	// "d delete"/"J/K reorder" (line 1) — the actual move this task makes.
+	assert.Contains(t, rowLine(t, out, "l limited"), "t test routing",
+		"l limited moved onto the second hint line alongside t test routing")
+
+	for _, line := range strings.Split(out, "\n") {
+		assert.LessOrEqual(t, lipgloss.Width(line), o.width, "line %q must not overflow the terminal width", line)
+	}
+	assert.LessOrEqual(t, strings.Count(out, "\n")+1, 24, "overlay fits within the terminal height")
+
+	o.selectTab(tabGH)
+	assert.NotContains(t, o.Render(), "l limited", "l limited is Claude-only")
 }
