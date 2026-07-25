@@ -103,17 +103,20 @@ func TestSetup_SkipsNonGitignoredCarryFile(t *testing.T) {
 
 // The ignore check must be answered from the worktree, not the origin checkout:
 // only the worktree's view decides what pause's `git add .` will stage, and the
-// two disagree whenever the ignore rule is not committed on this session's base.
-// This is the default configuration's own shape — carry_files ships pointing at
+// two disagree whenever a rule reaches the origin's working tree without reaching
+// the worktree. An uncommitted .gitignore edit is that case (not the only way to
+// satisfy the guard — .git/info/exclude and a global excludes file both reach the
+// worktree uncommitted — but the way that diverges). It is also the default
+// configuration's own shape: carry_files ships pointing at
 // .claude/settings.local.json, whose ignore rule an agent commonly adds without
-// committing it — and that file can hold secrets, so leaking it into the session
+// committing it, and that file can hold secrets, so leaking it into the session
 // branch is the worst outcome here.
 func TestSetup_SkipsCarryFileWhoseIgnoreRuleIsUncommitted(t *testing.T) {
 	repoPath := newTestRepo(t)
 	const rel = ".claude/settings.local.json"
 
 	// The rule exists in the origin's working tree but was never committed, so the
-	// worktree — checked out from HEAD — does not have it.
+	// commit this worktree is checked out from does not carry it.
 	if err := os.WriteFile(filepath.Join(repoPath, ".gitignore"), []byte(rel+"\n"), 0644); err != nil {
 		t.Fatalf("write .gitignore: %v", err)
 	}
