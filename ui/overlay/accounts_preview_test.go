@@ -127,6 +127,9 @@ func TestPreviewDecisionLine(t *testing.T) {
 		assert.Equal(t, "work-3 limited → rotating to work-1", got)
 	})
 
+	// allLimited callers must pass the caller's own config.SoonestResetMember
+	// pick as chosen (previewDecisionLine no longer recomputes it) — here that
+	// pick is index 0 (work-1), same as renderPoolDecision's marked would be.
 	t.Run("all limited, all indefinite: falls back to the first member", func(t *testing.T) {
 		avail := map[string]config.AccountAvailability{
 			"work-1": {Limited: true},
@@ -134,17 +137,19 @@ func TestPreviewDecisionLine(t *testing.T) {
 			"work-3": {Limited: true},
 		}
 		got := previewDecisionLine(members, avail, 0, 0, true, now)
-		assert.Equal(t, "creating asks to confirm, then uses work-1 (first member)", got)
+		assert.Equal(t, "creating from the form asks to confirm, then uses work-1 (first member)", got)
 	})
 
+	// SoonestResetMember picks index 1 (work-2) here, so chosen must be 1 — the
+	// value renderPoolDecision's marked would hold — not the cursor 0.
 	t.Run("all limited, one has a parseable Until: resets soonest", func(t *testing.T) {
 		avail := map[string]config.AccountAvailability{
 			"work-1": {Limited: true},
 			"work-2": {Limited: true, Until: "2026-07-25T18:00:00Z"},
 			"work-3": {Limited: true},
 		}
-		got := previewDecisionLine(members, avail, 0, 0, true, now)
-		assert.Equal(t, "creating asks to confirm, then uses work-2 (resets soonest)", got)
+		got := previewDecisionLine(members, avail, 0, 1, true, now)
+		assert.Equal(t, "creating from the form asks to confirm, then uses work-2 (resets soonest)", got)
 	})
 
 	// SoonestResetMember itself treats an unparseable Until as indefinite (it
@@ -159,7 +164,7 @@ func TestPreviewDecisionLine(t *testing.T) {
 			"work-3": {Limited: true},
 		}
 		got := previewDecisionLine(members, avail, 0, 0, true, now)
-		assert.Equal(t, "creating asks to confirm, then uses work-1 (first member)", got)
+		assert.Equal(t, "creating from the form asks to confirm, then uses work-1 (first member)", got)
 	})
 
 	t.Run("empty members: nothing to report", func(t *testing.T) {

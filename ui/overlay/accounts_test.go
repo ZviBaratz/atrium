@@ -1268,10 +1268,10 @@ func TestAccountsOverlay_PreviewAllLimitedShowsConfirmDecision(t *testing.T) {
 
 	out := o.renderPreview()
 	assert.Contains(t, rowLine(t, out, "Claude → "), "⚠ all 'work' accounts limited")
-	assert.Contains(t, rowLine(t, out, "work-1"), "← on confirm",
+	assert.Contains(t, poolRowLine(t, out, "work-1"), "← on confirm",
 		"both members are indefinite, so SoonestResetMember falls back to the first")
-	assert.NotContains(t, rowLine(t, out, "work-2"), "← on confirm")
-	assert.Contains(t, out, "creating asks to confirm, then uses work-1 (first member)")
+	assert.NotContains(t, poolRowLine(t, out, "work-2"), "← on confirm")
+	assert.Contains(t, out, "creating from the form asks to confirm, then uses work-1 (first member)")
 }
 
 // Dormancy: a config with no pool must render exactly as it did before this feature.
@@ -1291,13 +1291,40 @@ func TestAccountsOverlay_PreviewNoPoolUnchanged(t *testing.T) {
 	assert.Contains(t, out, ".claude-solo)", "still shows its config dir")
 }
 
+// Dormancy: a DECLARED pool with exactly one member is also fewer than two
+// members, so gateAllExhausted's asymmetry (spec §3) requires the block stay
+// suppressed here too — this is a genuinely pooled account, not "no pool" or
+// an ungrouped single account, so it exercises a different corner of the
+// len(members) < 2 branch than TestAccountsOverlay_PreviewNoPoolUnchanged.
+func TestAccountsOverlay_PreviewSingletonPoolUnchanged(t *testing.T) {
+	cfg := &config.Config{ClaudeAccounts: []config.ClaudeAccount{
+		{Name: "solo", ConfigDir: "~/.claude-solo", Pool: "work"},
+	}}
+	o := NewAccountsOverlay(cfg, config.DefaultState())
+	o.SetSize(80, 24)
+	openPreview(o)
+
+	out := o.renderPreview()
+	assert.NotContains(t, out, "pool '")
+	assert.NotContains(t, out, "⇄")
+	assert.NotContains(t, out, "← next")
+	assert.Contains(t, out, "solo (", "still resolves to the account")
+	assert.Contains(t, out, ".claude-solo)", "still shows its config dir")
+}
+
 // The cap keeps the overlay usable AND keeps the decision visible.
+//
+// ConfigDir deliberately has no leading "~": ResolvedConfigDir expands that
+// against the ambient $HOME, and the headline embeds it, so a "~"-prefixed
+// dir would make this test's 24-row assert depend on len($HOME) — passing at
+// a short home directory and wrapping (thus failing, for an unrelated reason)
+// at a deep one. An absolute path here sidesteps that dependency entirely.
 func TestAccountsOverlay_PreviewCapsLongPool(t *testing.T) {
 	cfg := &config.Config{}
 	for i := 1; i <= 12; i++ {
 		cfg.ClaudeAccounts = append(cfg.ClaudeAccounts, config.ClaudeAccount{
 			Name:      fmt.Sprintf("work-%02d", i),
-			ConfigDir: fmt.Sprintf("~/.claude-work%02d", i),
+			ConfigDir: fmt.Sprintf("/claude-work%02d", i),
 			Pool:      "work",
 		})
 	}

@@ -69,17 +69,26 @@ func previewMemberWindow(n, chosen, budget int) (start, end, hidden int) {
 // own cursor, start, was already available and chosen == start).
 //
 // start and chosen are both indices into members, normalized the same way
-// config.SelectPoolMember normalizes its cursor — callers pass it the same
-// cursor and the idx SelectPoolMember returned.
+// config.SelectPoolMember normalizes its cursor.
 //
-// When allLimited, SelectPoolMember's chosen is only its defensive fallback
-// (the cursor's own member), not a member picked for any reason a user would
-// recognize — so this asks config.SoonestResetMember directly for the member
-// worth naming instead of trusting chosen. Rate-limit flags are indefinite-only
-// in the current UI, so SoonestResetMember's "soonest" is frequently a
-// same-as-first fallback rather than an actual soonest reset: the "(resets
-// soonest)" wording is only honest when that pinned member has a Until that
-// actually parses, and falls back to "(first member)" otherwise.
+// When allLimited, chosen must be the caller's already-computed
+// config.SoonestResetMember pick, not SelectPoolMember's own chosen —
+// SelectPoolMember's chosen on an exhausted pool is only its defensive
+// fallback (the cursor's own member), not a member picked for any reason a
+// user would recognize. Requiring the caller to pass the same pinned index it
+// uses for the "← on confirm" marker (renderPoolDecision's marked) makes the
+// row and the sentence structurally agree, rather than agreeing only because
+// both call sites happen to compute the same thing independently. Rate-limit
+// flags are indefinite-only in the current UI, so SoonestResetMember's
+// "soonest" is frequently a same-as-first fallback rather than an actual
+// soonest reset: the "(resets soonest)" wording is only honest when that
+// pinned member has a Until that actually parses, and falls back to "(first
+// member)" otherwise.
+//
+// The confirm this sentence describes only fires on the create-form path
+// (gateAllExhausted); smart auto-dispatch bypasses it and can silently spawn
+// on a different member (#483), so the wording is deliberately scoped to
+// "creating from the form".
 func previewDecisionLine(members []config.ClaudeAccount, avail map[string]config.AccountAvailability,
 	start, chosen int, allLimited bool, now time.Time) string {
 	n := len(members)
@@ -88,14 +97,14 @@ func previewDecisionLine(members []config.ClaudeAccount, avail map[string]config
 	}
 
 	if allLimited {
-		pinned := config.SoonestResetMember(members, avail)
+		pinned := chosen
 		reason := "(first member)"
 		if until := avail[members[pinned].Name].Until; until != "" {
 			if _, err := time.Parse(time.RFC3339, until); err == nil {
 				reason = "(resets soonest)"
 			}
 		}
-		return fmt.Sprintf("creating asks to confirm, then uses %s %s", members[pinned].Name, reason)
+		return fmt.Sprintf("creating from the form asks to confirm, then uses %s %s", members[pinned].Name, reason)
 	}
 
 	s := ((start % n) + n) % n
@@ -164,7 +173,12 @@ func (o *AccountsOverlay) renderPoolDecision(pool string, members []config.Claud
 		headline = members[chosen].Name + " (inherit ambient env)"
 	}
 
-	decision := previewDecisionLine(members, avail, cursor, chosen, allLimited, now)
+	// marked, not chosen, goes to previewDecisionLine: on an exhausted pool
+	// chosen is only SelectPoolMember's defensive fallback, while marked is
+	// already the SoonestResetMember pick the decision sentence must name —
+	// passing the same value the "← on confirm" marker uses keeps the two
+	// structurally in agreement (see previewDecisionLine's doc comment).
+	decision := previewDecisionLine(members, avail, cursor, marked, allLimited, now)
 	budget := previewMemberBudget(o.height, decision != "")
 	start, end, hidden := previewMemberWindow(len(members), marked, budget)
 	// poolGutter can return nil even for this 2+-member slice: PoolMembers

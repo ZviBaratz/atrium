@@ -73,7 +73,13 @@ runs `gateAllExhausted`. On a fully-limited pool it therefore falls through to t
 `start` fallback with no confirm — the comment at `:1409` calling that branch
 "defensive" is not accurate for that caller. Returning `allLimited` from the shared
 selector makes the condition *detectable* at both call sites, which is the
-precondition for fixing it; the fix itself is a separate PR. Filed as an issue.
+precondition for fixing it; the fix itself is a separate PR. Filed as #483.
+
+This is also why the preview's all-limited sentence (`previewDecisionLine`, "Design"
+§2 below) is scoped to *"creating from the form"* rather than "creating" bare: the
+confirm it describes is real on the create-form path and does not exist on smart
+auto-dispatch's, so the copy must not imply it does. The two decisions are linked —
+#483 is the reason the sentence needs the qualifier, not a coincidence.
 
 ## Design
 
