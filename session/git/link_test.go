@@ -1,7 +1,9 @@
 package git
 
 import (
+	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -180,11 +182,13 @@ func TestSetup_LinkMissingOriginIsNoop(t *testing.T) {
 }
 
 // A destination that already holds tracked content survives Setup. Note which
-// guard does the work: `git check-ignore` consults the index, so a directory
-// with a force-tracked file inside reports as NOT ignored (verified: the same
-// path is ignored under --no-index), and the ignore check refuses the entry
-// before the clobber guard is even consulted. The clobber guard is tested
-// directly by TestLinkLocalPath_NeverClobbersExistingDestination.
+// guard does the work: the force-tracked file makes `git worktree add`
+// materialize node_modules/ as a real directory, so the clobber guard's
+// Lstat(dst) matches and returns first — the ignore check below it is never
+// reached here (it would also refuse the entry, since check-ignore consults the
+// index and reports force-tracked content as NOT ignored, so it is a backstop
+// rather than the gate). TestLinkLocalPath_NeverClobbersExistingDestination
+// exercises the clobber guard where nothing else can stand in for it.
 func TestSetup_LinkDoesNotClobberExistingDestination(t *testing.T) {
 	repoPath := newTestRepo(t)
 	const rel = "node_modules"
@@ -316,6 +320,64 @@ func TestSetup_LinksNestedPath(t *testing.T) {
 	}
 }
 
+// Seeding is itself a writer of destination directories, so an earlier entry can
+// occupy a later entry's destination: linking node_modules/.cache first creates
+// node_modules/ as a real directory, after which node_modules can only be skipped.
+// The never-clobber guard must hold (the .cache link stays intact) — and unlike
+// carry's silent equivalent this skip is warned about, because nothing the user
+// did put that directory there, and a session missing its dependencies otherwise
+// looks like the feature simply not working.
+func TestSetup_LinkSkippedWhenAnEarlierEntryOccupiedTheDestination(t *testing.T) {
+	repoPath := newTestRepo(t)
+	commitGitignore(t, repoPath, "node_modules")
+	makeDepsDir(t, repoPath, "node_modules/.cache")
+	writeLinkConfig(t, []string{"node_modules/.cache", "node_modules"})
+
+	wt := setupSessionWorktree(t, repoPath, "link-order")
+	wtPath := wt.GetWorktreePath()
+
+	cache, err := os.Lstat(filepath.Join(wtPath, "node_modules/.cache"))
+	if err != nil {
+		t.Fatalf("the first entry must still be linked: %v", err)
+	}
+	if cache.Mode()&os.ModeSymlink == 0 {
+		t.Errorf("node_modules/.cache must be a symlink, got mode %v", cache.Mode())
+	}
+	parent, err := os.Lstat(filepath.Join(wtPath, "node_modules"))
+	if err != nil {
+		t.Fatalf("lstat node_modules: %v", err)
+	}
+	if parent.Mode()&os.ModeSymlink != 0 {
+		t.Errorf("node_modules was created as a parent dir, so it must not be replaced by a link; got mode %v", parent.Mode())
+	}
+}
+
+// A nested entry whose parent dirs are not in the checkout makes seedLocalPaths
+// create them, leaving a directory whose only content is the ignored link. Such a
+// directory must not read as untracked: the diff intent-adds every untracked path
+// on each 500ms tick, so a permanently-listed one would run `add -N` for the life
+// of the session — the churn #167 removed.
+func TestSetup_NestedLinkLeavesNothingUntracked(t *testing.T) {
+	repoPath := newTestRepo(t)
+	const rel = "container/agent-runner/node_modules"
+	commitGitignore(t, repoPath, "node_modules")
+	makeDepsDir(t, repoPath, rel)
+	writeLinkConfig(t, []string{rel})
+
+	wt := setupSessionWorktree(t, repoPath, "link-nested-untracked")
+	wtPath := wt.GetWorktreePath()
+
+	if _, err := os.Lstat(filepath.Join(wtPath, rel)); err != nil {
+		t.Fatalf("nested link missing: %v", err)
+	}
+	// Assert on the production listing itself: it being empty is exactly what stops
+	// the per-tick `add -N` from running. Index residue cannot stand in for it —
+	// adding a directory of ignored content leaves none whether or not it was added.
+	if paths := wt.untrackedPathsToIntentAdd(wtPath); len(paths) != 0 {
+		t.Errorf("the parent dirs created for a nested link must not read as untracked (the diff would intent-add them every tick), got %q", paths)
+	}
+}
+
 // Data-loss guard: tearing a session down must never delete through the link.
 // Both removal paths are exercised — git's own `worktree remove -f` (Cleanup)
 // and the RemoveAll fallback Cleanup/pause use when git can no longer manage the
@@ -385,5 +447,128 @@ func TestSetup_LinkReappliesAfterPauseResume(t *testing.T) {
 	}
 	if info.Mode()&os.ModeSymlink == 0 {
 		t.Fatalf("resumed worktree must hold a symlink, got mode %v", info.Mode())
+	}
+}
+
+// An entry is canonicalized before anything derives from it, so the path the
+// ignore guard asks git about is always the path the symlink is created at.
+// Without that they diverge: filepath.Join silently drops a trailing separator
+// while the raw entry still reaches `git check-ignore`, and a trailing slash
+// makes git resolve the pathspec as a *directory* — which a dir-only pattern
+// matches even though the slash-less symlink (a file to git) does not. The guard
+// would report "ignored", the link would be created un-ignored, and pause's
+// `git add .` would commit it. Spellings that mean the same path must therefore
+// reach the same verdict as the plain one.
+func TestSetup_LinkEntrySpellingsAreCanonicalized(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		entry    string
+		pattern  string
+		wantLink bool
+	}{
+		// A dir-only pattern never covers the symlink, however the entry is spelled.
+		{"trailing slash, dir-only pattern", "node_modules/", "node_modules/", false},
+		{"dot suffix, dir-only pattern", "node_modules/.", "node_modules/", false},
+		// A slash-less pattern does cover it, and canonicalizing must not break that.
+		{"trailing slash, slash-less pattern", "node_modules/", "node_modules", true},
+		{"dot-slash prefix, slash-less pattern", "./node_modules", "node_modules", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			repoPath := newTestRepo(t)
+			const rel = "node_modules"
+			commitGitignore(t, repoPath, tc.pattern)
+			makeDepsDir(t, repoPath, rel)
+			writeLinkConfig(t, []string{tc.entry})
+
+			wt := setupSessionWorktree(t, repoPath, "link-canon")
+			wtPath := wt.GetWorktreePath()
+
+			info, err := os.Lstat(filepath.Join(wtPath, rel))
+			if !tc.wantLink {
+				if err == nil {
+					t.Fatalf("entry %q under pattern %q must be refused (it would leak into `git add .`), got mode %v",
+						tc.entry, tc.pattern, info.Mode())
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("entry %q under pattern %q must still be linked: %v", tc.entry, tc.pattern, err)
+			}
+			if info.Mode()&os.ModeSymlink == 0 {
+				t.Fatalf("entry %q must be linked as a symlink, got mode %v", tc.entry, info.Mode())
+			}
+			// The link the guard did allow must genuinely be ignored.
+			mustRunGit(t, wtPath, "add", ".")
+			if staged := mustRunGit(t, wtPath, "ls-files", "-s"); strings.Contains(staged, rel) {
+				t.Fatalf("linked path must not be staged by `git add .`, got:\n%s", staged)
+			}
+		})
+	}
+}
+
+// Hermeticity guard for every ignore-state assertion in this package. git reads
+// its global excludes from $XDG_CONFIG_HOME/git/ignore *before*
+// $HOME/.config/git/ignore, so sandboxing HOME alone leaves the developer's real
+// global gitignore deciding these tests. A host that globally ignores
+// node_modules — a common entry — makes a correct implementation fail
+// TestSetup_LinkRefusesDirOnlyIgnorePattern, because the link then really is
+// ignored and is created as designed.
+func TestTestReposSeeNoGlobalGitignore(t *testing.T) {
+	if v, ok := os.LookupEnv("XDG_CONFIG_HOME"); ok {
+		t.Fatalf("XDG_CONFIG_HOME must be unset for tests (git prefers $XDG_CONFIG_HOME/git/ignore over the sandboxed $HOME/.config/git/ignore); got %q", v)
+	}
+
+	repoPath := newTestRepo(t)
+	// Plant a rule where the per-user lookups would find it, then confirm none of
+	// them reaches the repo: only the committed .gitignore may decide ignore state.
+	globalIgnore := filepath.Join(os.Getenv("HOME"), ".config", "git", "ignore")
+	if err := os.MkdirAll(filepath.Dir(globalIgnore), 0755); err != nil {
+		t.Fatalf("mkdir global ignore dir: %v", err)
+	}
+	if err := os.WriteFile(globalIgnore, []byte("node_modules\n"), 0644); err != nil {
+		t.Fatalf("write global ignore: %v", err)
+	}
+
+	cmd := exec.CommandContext(context.Background(), "git", "-C", repoPath, "check-ignore", "-q", "--", "node_modules")
+	if err := cmd.Run(); err == nil {
+		t.Fatal("node_modules reads as ignored in a repo whose .gitignore is empty — a global gitignore is leaking into the tests")
+	}
+}
+
+// resolveSeedPaths is the only thing standing between an unsafe entry and the
+// filesystem, so it is asserted directly: the Setup-level test cannot observe it
+// (the later Lstat/check-ignore guards refuse the same inputs for their own
+// reasons, so it passes with the containment checks deleted).
+func TestResolveSeedPaths_RejectsUnsafeEntries(t *testing.T) {
+	repoPath := newTestRepo(t)
+	wt := setupSessionWorktree(t, repoPath, "resolve-unsafe")
+
+	for _, entry := range []string{"", "/etc", "../escape", "node_modules/../../escape", "."} {
+		if _, _, _, ok := wt.resolveSeedPaths("link_paths", entry); ok {
+			t.Errorf("entry %q must be rejected as unsafe", entry)
+		}
+	}
+}
+
+// The canonical form is what callers must use as the git pathspec, since that is
+// the spelling the filesystem paths were derived from.
+func TestResolveSeedPaths_CanonicalizesEntries(t *testing.T) {
+	repoPath := newTestRepo(t)
+	wt := setupSessionWorktree(t, repoPath, "resolve-canon")
+
+	for _, entry := range []string{"node_modules", "node_modules/", "./node_modules", "node_modules/."} {
+		canon, src, dst, ok := wt.resolveSeedPaths("link_paths", entry)
+		if !ok {
+			t.Fatalf("entry %q must resolve", entry)
+		}
+		if canon != "node_modules" {
+			t.Errorf("entry %q: canon = %q, want %q", entry, canon, "node_modules")
+		}
+		if want := filepath.Join(repoPath, "node_modules"); src != want {
+			t.Errorf("entry %q: src = %q, want %q", entry, src, want)
+		}
+		if want := filepath.Join(wt.GetWorktreePath(), "node_modules"); dst != want {
+			t.Errorf("entry %q: dst = %q, want %q", entry, dst, want)
+		}
 	}
 }

@@ -2,6 +2,7 @@ package git
 
 import (
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 
@@ -25,6 +26,15 @@ import (
 // carried file inside a session do not survive a pause/resume cycle — the origin
 // copy wins.
 //
+// The two lists differ in write direction, which is the sharp edge of link_paths.
+// A carried file is a per-session copy, so a session's writes are private to it.
+// A linked path is the origin's own tree under another name: writes through it
+// land in the user's checkout and are visible to every other session at once, so
+// an agent running `npm install` or `rm -rf node_modules` inside one session
+// mutates the real dependency tree and every sibling's. That is the point (it is
+// why a copy would be wrong) but it is the one place a session is deliberately
+// not isolated.
+//
 // The config is loaded once for both lists: config.LoadConfig also sweeps and
 // quarantines files in the data dir, so it is not a free read.
 func (g *Worktree) seedLocalPaths() {
@@ -37,28 +47,44 @@ func (g *Worktree) seedLocalPaths() {
 	}
 }
 
-// resolveSeedPaths maps one repo-relative entry to its (src, dst) pair, or
-// reports ok=false after warning when the entry is not a safe repo-relative
-// path. kind names the config key in that warning.
-func (g *Worktree) resolveSeedPaths(kind, rel string) (src, dst string, ok bool) {
-	if rel == "" || !filepath.IsLocal(rel) {
+// resolveSeedPaths maps one repo-relative entry to its canonical spelling and
+// its (src, dst) pair, or reports ok=false after warning when the entry is not a
+// safe repo-relative path. kind names the config key in that warning.
+//
+// canon is the slash-separated form the filesystem paths were derived from, and
+// is what callers must hand to git as a pathspec. Deriving the two from the same
+// spelling is load-bearing rather than tidiness: filepath.Join silently drops a
+// trailing separator, so passing the raw entry to `git check-ignore` would ask
+// about a different path than the one being created. git resolves a
+// slash-terminated pathspec as a *directory*, which a dir-only pattern
+// (`node_modules/`) matches — while the symlink actually created is slash-less
+// and, being a file to git, is not matched by it. The ignore guard would report
+// "ignored" and the link would still leak into pause's `git add .`.
+func (g *Worktree) resolveSeedPaths(kind, rel string) (canon, src, dst string, ok bool) {
+	// path.Clean, not filepath.Clean: git pathspecs are always slash-separated,
+	// including on Windows, and ToSlash first folds an entry a Windows user spelled
+	// with backslashes into that same form.
+	canon = path.Clean(filepath.ToSlash(rel))
+	if rel == "" || !filepath.IsLocal(canon) {
 		log.WarningLog.Printf("%s: skipping %q: entries must be repo-relative paths inside the repo", kind, rel)
-		return "", "", false
+		return "", "", "", false
 	}
 
-	src = filepath.Join(g.repoPath, rel)
-	dst = filepath.Join(g.worktreePath, rel)
+	src = filepath.Join(g.repoPath, canon)
+	dst = filepath.Join(g.worktreePath, canon)
 	// IsLocal above already rejects escapes; verify the joined results stayed
 	// inside their roots anyway (also marks the paths clean for taint analysis).
+	// This is also what refuses an entry naming the repo root: IsLocal accepts ".",
+	// but Join collapses it to the root itself, which is not strictly inside.
 	// Both checks are lexical: a symlinked path component could still point
 	// elsewhere, but the repo, the worktree, and the seed lists are all the
 	// user's own content — no trust boundary is crossed.
 	if !strings.HasPrefix(src, g.repoPath+string(filepath.Separator)) ||
 		!strings.HasPrefix(dst, g.worktreePath+string(filepath.Separator)) {
 		log.WarningLog.Printf("%s: skipping %q: resolves outside the repo or worktree", kind, rel)
-		return "", "", false
+		return "", "", "", false
 	}
-	return src, dst, true
+	return canon, src, dst, true
 }
 
 // carryLocalFile copies one repo-relative file from repoPath into the
@@ -74,7 +100,7 @@ func (g *Worktree) resolveSeedPaths(kind, rel string) (src, dst string, ok bool)
 //     so carrying a non-ignored file would silently leak it into the session
 //     branch and any PR cut from it.
 func (g *Worktree) carryLocalFile(rel string) {
-	src, dst, ok := g.resolveSeedPaths("carry_files", rel)
+	canon, src, dst, ok := g.resolveSeedPaths("carry_files", rel)
 	if !ok {
 		return
 	}
@@ -90,7 +116,7 @@ func (g *Worktree) carryLocalFile(rel string) {
 	if _, err := os.Lstat(dst); err == nil {
 		return // already materialized (e.g. force-tracked): never clobber
 	}
-	if _, err := g.runGitCommand(g.repoPath, "check-ignore", "-q", "--", rel); err != nil {
+	if _, err := g.runGitCommand(g.repoPath, "check-ignore", "-q", "--", canon); err != nil {
 		log.WarningLog.Printf("carry_files: skipping %q: not gitignored in %s (it would be committed on pause — add it to .gitignore)", rel, g.repoPath)
 		return
 	}
@@ -116,8 +142,13 @@ func (g *Worktree) carryLocalFile(rel string) {
 // dependency trees a copy would be wrong for — node_modules is huge and slow to
 // duplicate, and the tooling resolves through a symlink fine.
 //
-// It shares carryLocalFile's guards, with one deliberate difference: the
-// gitignore check runs in the *worktree*, not the origin repo. A dir-only
+// Writes through the link reach the origin checkout and every other session —
+// see seedLocalPaths on the two lists' write directions.
+//
+// It shares carryLocalFile's guards. The deliberate divergences: the source is
+// Lstat'd rather than Stat'd and needs no IsRegular check (a directory is the
+// whole point), and — the load-bearing one — the gitignore
+// check runs in the *worktree*, not the origin repo. A dir-only
 // pattern (`node_modules/`) matches the origin directory but not the symlink,
 // which git stores as a file — checking in the origin checkout would pass and
 // then leak the link into `git add .` (pause) and into the untracked paths the
@@ -125,7 +156,7 @@ func (g *Worktree) carryLocalFile(rel string) {
 // is conservative in exactly the right direction: git cannot match a dir-only
 // pattern there either, so only a slash-less pattern is accepted.
 func (g *Worktree) linkLocalPath(rel string) {
-	src, dst, ok := g.resolveSeedPaths("link_paths", rel)
+	canon, src, dst, ok := g.resolveSeedPaths("link_paths", rel)
 	if !ok {
 		return
 	}
@@ -136,11 +167,21 @@ func (g *Worktree) linkLocalPath(rel string) {
 	if _, err := os.Lstat(src); err != nil {
 		return
 	}
+	// Never clobber. Unlike carry's equivalent this warns: git-tracked content is
+	// only one way to get here, since carry_files entries and earlier link_paths
+	// entries also create directories under the worktree, and a link silently not
+	// made leaves the session without the dependencies it was configured to get.
 	if _, err := os.Lstat(dst); err == nil {
-		return // already materialized (e.g. force-tracked content): never clobber
+		log.WarningLog.Printf("link_paths: skipping %q: something already exists at that path in the worktree (tracked content, or a directory an earlier carry_files/link_paths entry created) — never clobbered", rel)
+		return
 	}
-	if _, err := g.runGitCommand(g.worktreePath, "check-ignore", "-q", "--", rel); err != nil {
-		log.WarningLog.Printf("link_paths: skipping %q: git would not ignore a symlink at that path (it would be committed on pause). Ignore it with a pattern that has no trailing slash — %q, not %q", rel, rel, rel+"/")
+	if _, err := g.runGitCommand(g.worktreePath, "check-ignore", "-q", "--", canon); err != nil {
+		// Cause-agnostic by design: the worktree is checked out from HEAD, so this
+		// also fires when the ignore rule exists but is not committed yet, or when
+		// the session branched off a base predating it. Naming only the dir-only
+		// pattern would misdiagnose those into a dead end, so lead with the state
+		// and offer the most common cause as a hint.
+		log.WarningLog.Printf("link_paths: skipping %q: git would not ignore a symlink at that path in %s (it would be committed on pause). The rule must be committed on this session's base, and must not end in a slash — %q ignores the symlink, %q only the directory", rel, g.worktreePath, canon, canon+"/")
 		return
 	}
 
