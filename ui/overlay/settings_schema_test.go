@@ -435,3 +435,59 @@ func TestGroupModeHasNoConfigOnlyInertPredicate(t *testing.T) {
 		"group_mode's real gate is session-derived (see this test's comment); a "+
 			"config-only predicate would be wrong in both directions")
 }
+
+// TestDetailRetainsTheMovedProse pins the specific facts that moved from the old
+// one-paragraph descriptions into detail. Each was the only place Atrium documented
+// something a user cannot discover from the UI, and PR A does not render detail yet —
+// so without this test, losing one in transcription is invisible until PR B ships.
+func TestDetailRetainsTheMovedProse(t *testing.T) {
+	want := map[string][]string{
+		"group_mode": {
+			"an account boundary is refused", // the {/} reorder rule
+			"`[` / `]`",                      // the cluster-reorder keys
+		},
+		"link_paths": {
+			"no trailing slash", // the ignore-pattern trap from #471
+		},
+		"agent_oom_margin": {
+			"Linux only",
+			"oom_score_adj", // names the kernel knob so the setting is searchable
+		},
+		"max_sessions": {
+			"paused ones included", // the hard-cap contract
+		},
+		"notify_command": {
+			"ATRIUM_SESSION", // the env contract
+		},
+		"mouse": {
+			"Shift+drag", // the per-gesture escape hatch
+		},
+		"notifications": {
+			"muted", // which sessions stay silent
+		},
+		"fast_forward_local_base": {
+			"writes outside a session worktree", // the caution that was an applyNote
+		},
+		"carry_files": {
+			"explicit opt-out", // the nil-vs-empty contract
+		},
+		"session_context_bar": {
+			"when a server starts", // why a running session keeps its old bar
+		},
+	}
+
+	rows := newSettingRows(config.DefaultConfig())
+	byKey := make(map[string]settingRow, len(rows))
+	for _, r := range rows {
+		byKey[r.key] = r
+	}
+
+	for key, phrases := range want {
+		row, ok := byKey[key]
+		require.Truef(t, ok, "no row %q", key)
+		for _, p := range phrases {
+			assert.Containsf(t, row.detail, p,
+				"row %q lost %q from its help — it documents something the UI cannot show", key, p)
+		}
+	}
+}
