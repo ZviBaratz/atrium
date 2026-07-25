@@ -87,10 +87,20 @@ func previewMemberWindow(n, chosen, budget int) (start, end, hidden int) {
 //
 // The confirm this sentence describes only fires on the create-form path
 // (gateAllExhausted); smart auto-dispatch bypasses it and can silently spawn
-// on a different member (#483), so the wording is deliberately scoped to
-// "creating from the form".
+// on a different member (#483), so the wording is deliberately scoped to name
+// "the form" rather than asserting the confirm bare.
+//
+// width bounds every string this returns: it's the space renderPoolDecision
+// actually has left for a block line (o.inner() minus previewIndentWidth),
+// the same budget the member rows are held to. Unlike those rows this
+// sentence has no fixed-width column to truncate into, so a phrasing chosen
+// without regard for width wraps — costing the block a row previewMemberBudget
+// never counted (the defect this parameter exists to fix). The cascades below
+// mirror splitPoolNote's: try the clearest wording, degrade to shorter ones,
+// and only ever drop information forward (never substitute the wrong reason
+// or assert a confirm the dropped wording no longer supports).
 func previewDecisionLine(members []config.ClaudeAccount, avail map[string]config.AccountAvailability,
-	start, chosen int, allLimited bool, now time.Time) string {
+	start, chosen int, allLimited bool, now time.Time, width int) string {
 	n := len(members)
 	if n == 0 {
 		return ""
@@ -104,7 +114,7 @@ func previewDecisionLine(members []config.ClaudeAccount, avail map[string]config
 				reason = "(resets soonest)"
 			}
 		}
-		return fmt.Sprintf("creating from the form asks to confirm, then uses %s %s", members[pinned].Name, reason)
+		return allLimitedDecision(members[pinned].Name, reason, width)
 	}
 
 	s := ((start % n) + n) % n
@@ -119,16 +129,112 @@ func previewDecisionLine(members []config.ClaudeAccount, avail map[string]config
 	case 0:
 		return ""
 	case 1:
-		return fmt.Sprintf("%s limited → rotating to %s", members[s].Name, members[c].Name)
+		return skipOneDecision(members[s].Name, members[c].Name, width)
 	default:
-		return fmt.Sprintf("%d members limited → rotating to %s", skipped, members[c].Name)
+		return skipManyDecision(skipped, members[c].Name, width)
 	}
+}
+
+// allLimitedDecision phrases the exhausted-pool confirm sentence, degrading
+// through shorter wordings until one fits width. No rung ever collapses the
+// (first member)/(resets soonest) distinction onto the other's case — that
+// would misreport whichever one didn't happen — and no rung keeps "confirm"
+// once it can no longer also say "form": the confirm this describes only
+// fires on the create-form path (previewDecisionLine's doc comment / #483),
+// so a wording that dropped "form" but kept "asks to confirm" would read as
+// true for auto-dispatch too, which it isn't. Once the width can't hold that
+// pairing, the sentence states only the outcome instead.
+//
+// The full wording runs 57-59 cells for a 6-letter name against the
+// 65-column width the default 80-column terminal actually leaves this line
+// (o.inner() 74 minus previewIndentWidth 9) — but a 23-letter pool name
+// already pushes it to 76, over budget even at that "full" width, so the
+// second rung is reachable there too, not only on a narrower terminal.
+func allLimitedDecision(name, reason string, width int) string {
+	full := fmt.Sprintf("the form asks to confirm, then uses %s %s", name, reason)
+	if lipgloss.Width(full) <= width {
+		return full
+	}
+	terse := fmt.Sprintf("form confirm → %s %s", name, reason)
+	if lipgloss.Width(terse) <= width {
+		return terse
+	}
+	noConfirm := fmt.Sprintf("all limited → %s %s", name, reason)
+	if lipgloss.Width(noConfirm) <= width {
+		return noConfirm
+	}
+	named := fmt.Sprintf("all limited → %s", name)
+	if lipgloss.Width(named) <= width {
+		return named
+	}
+	const floor = "all limited"
+	if lipgloss.Width(floor) <= width {
+		return floor
+	}
+	// The floor itself is 11 cells, and boxWidth's 20-column minimum leaves
+	// this line only 7 (inner() 16 minus previewIndentWidth 9) — so this is
+	// reachable at the smallest terminal Atrium still renders a box for, not
+	// just a defensive case. Say nothing rather than overflow the box.
+	return ""
+}
+
+// skipOneDecision and skipManyDecision phrase the shorter rotation-skip
+// sentences with the same width discipline as allLimitedDecision: these run
+// far shorter today (35 cells for two 6-letter names, well inside the
+// 65-column default), but a long enough member name overflows them too, and
+// this preview has no special case for "not today's fixture" — the cascade
+// applies regardless of how unlikely a given width is in practice.
+func skipOneDecision(from, to string, width int) string {
+	full := fmt.Sprintf("%s limited → rotating to %s", from, to)
+	if lipgloss.Width(full) <= width {
+		return full
+	}
+	terse := fmt.Sprintf("%s limited → %s", from, to)
+	if lipgloss.Width(terse) <= width {
+		return terse
+	}
+	arrow := "→ " + to
+	if lipgloss.Width(arrow) <= width {
+		return arrow
+	}
+	const floor = "limited → rotating"
+	if lipgloss.Width(floor) <= width {
+		return floor
+	}
+	// See allLimitedDecision's matching comment: reachable at the smallest
+	// box Atrium still renders, so say nothing rather than overflow.
+	return ""
+}
+
+func skipManyDecision(skipped int, to string, width int) string {
+	full := fmt.Sprintf("%d members limited → rotating to %s", skipped, to)
+	if lipgloss.Width(full) <= width {
+		return full
+	}
+	terse := fmt.Sprintf("%d limited → %s", skipped, to)
+	if lipgloss.Width(terse) <= width {
+		return terse
+	}
+	arrow := "→ " + to
+	if lipgloss.Width(arrow) <= width {
+		return arrow
+	}
+	const floor = "limited → rotating"
+	if lipgloss.Width(floor) <= width {
+		return floor
+	}
+	return ""
 }
 
 // previewIndent aligns every pool-block line under the "Claude → " label —
 // its printed width, so the block reads as a sub-list of that line rather
 // than a new left-aligned column.
 const previewIndent = "         " // 9 spaces
+
+// previewIndentWidth is previewIndent's printed width, derived once so a
+// caller computing how much room is left for a block line after the indent
+// (see previewDecisionLine's width parameter) doesn't hardcode 9.
+var previewIndentWidth = lipgloss.Width(previewIndent)
 
 // previewChipWidth right-pads the shorter "⛔ limited" chip to the same
 // printed width as the longer "● available" chip, so a row's "← next" /
@@ -177,8 +283,11 @@ func (o *AccountsOverlay) renderPoolDecision(pool string, members []config.Claud
 	// chosen is only SelectPoolMember's defensive fallback, while marked is
 	// already the SoonestResetMember pick the decision sentence must name —
 	// passing the same value the "← on confirm" marker uses keeps the two
-	// structurally in agreement (see previewDecisionLine's doc comment).
-	decision := previewDecisionLine(members, avail, cursor, marked, allLimited, now)
+	// structurally in agreement (see previewDecisionLine's doc comment). The
+	// width passed is what's left for a block line after previewIndent, the
+	// same budget every member row below is held to, so the sentence can
+	// never wrap the box regardless of member name or reason length.
+	decision := previewDecisionLine(members, avail, cursor, marked, allLimited, now, o.inner()-previewIndentWidth)
 	budget := previewMemberBudget(o.height, decision != "")
 	start, end, hidden := previewMemberWindow(len(members), marked, budget)
 	// poolGutter can return nil even for this 2+-member slice: PoolMembers

@@ -1271,7 +1271,33 @@ func TestAccountsOverlay_PreviewAllLimitedShowsConfirmDecision(t *testing.T) {
 	assert.Contains(t, poolRowLine(t, out, "work-1"), "← on confirm",
 		"both members are indefinite, so SoonestResetMember falls back to the first")
 	assert.NotContains(t, poolRowLine(t, out, "work-2"), "← on confirm")
-	assert.Contains(t, out, "creating from the form asks to confirm, then uses work-1 (first member)")
+	assert.Contains(t, out, "the form asks to confirm, then uses work-1 (first member)")
+}
+
+// The defect this guards: the all-limited decision sentence used to run to
+// 80 columns against a 74-column inner width (9-column previewIndent + a
+// 71-column sentence), so it wrapped at the default 80x24 terminal and its
+// unindented continuation line cost the block a row previewMemberBudget
+// never counted for. Measuring o.Render() can't catch this — Style().Width()
+// on the bordered box pads every line to the same width, so a post-render
+// width assert can never fail (this project has shipped that tautology
+// before) — so this measures o.renderPreview()'s own lines instead, which
+// are unpadded. lipgloss.Width is ANSI-aware, so the theme styling
+// renderPreview applies to parts of each line doesn't throw off the count.
+func TestAccountsOverlay_PreviewAllLimitedDecisionNeverExceedsInnerWidth(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	cfg := twoMemberPoolCfg()
+	st := config.DefaultState()
+	require.NoError(t, st.SetAccountLimited("work-1", ""))
+	require.NoError(t, st.SetAccountLimited("work-2", ""))
+	o := NewAccountsOverlay(cfg, st)
+	o.SetSize(80, 24)
+	openPreview(o)
+
+	out := o.renderPreview()
+	for _, line := range strings.Split(out, "\n") {
+		assert.LessOrEqualf(t, lipgloss.Width(line), o.inner(), "line exceeds the box's inner width: %q", line)
+	}
 }
 
 // The marker and the decision sentence must name the SAME member even when
@@ -1299,7 +1325,7 @@ func TestAccountsOverlay_PreviewAllLimitedMarkerAndSentenceNameSameMember(t *tes
 		"SoonestResetMember picks work-1 (its Until parses and is earliest), not the rotation cursor's work-2")
 	assert.NotContains(t, poolRowLine(t, out, "work-2"), "← on confirm",
 		"the rotation cursor's own member must not carry the marker once the pool is exhausted")
-	assert.Contains(t, out, "creating from the form asks to confirm, then uses work-1 (resets soonest)",
+	assert.Contains(t, out, "the form asks to confirm, then uses work-1 (resets soonest)",
 		"the decision sentence must name the same member the marker landed on")
 }
 
