@@ -106,7 +106,11 @@ func TestMultiSelect_PauseConfirmsPausableSubset(t *testing.T) {
 
 	require.Equal(t, stateConfirm, h.state, "p opens a confirmation")
 	require.NotNil(t, h.confirmationOverlay)
-	assert.Contains(t, h.confirmationOverlay.Render(), "Pause 2 marked sessions?")
+	rendered := flattenOverlay(h.confirmationOverlay.Render())
+	assert.Contains(t, rendered,
+		"Pause 2 marked sessions? (commits any work in progress, then removes each "+
+			"worktree — gitignored files like .env or build caches are deleted for good)")
+	assert.Contains(t, rendered, "Press y to pause 2 sessions, n or esc to cancel")
 }
 
 // r confirms over only the *paused* subset of the marked set.
@@ -122,7 +126,10 @@ func TestMultiSelect_ResumeConfirmsPausedSubset(t *testing.T) {
 	pressRune(h, 'r')
 
 	require.Equal(t, stateConfirm, h.state)
-	assert.Contains(t, h.confirmationOverlay.Render(), "Resume 1 marked session?")
+	rendered := flattenOverlay(h.confirmationOverlay.Render())
+	assert.Contains(t, rendered,
+		"Resume 1 marked session? (rebuilds each worktree and reattaches its agent)")
+	assert.Contains(t, rendered, "Press y to resume 1 session, n or esc to cancel")
 }
 
 // x confirms over the killable subset and wears the danger border (kill is the
@@ -139,7 +146,7 @@ func TestMultiSelect_KillConfirmsWithDangerBorder(t *testing.T) {
 	pressRune(h, 'x')
 
 	require.Equal(t, stateConfirm, h.state)
-	assert.Contains(t, h.confirmationOverlay.Render(), "Kill 2 marked sessions?")
+	assert.Contains(t, flattenOverlay(h.confirmationOverlay.Render()), "Kill 2 marked sessions?")
 	assert.Equal(t, theme.Current().Palette.Danger, h.confirmationOverlay.BorderColor(),
 		"a batch kill must wear the danger border")
 }

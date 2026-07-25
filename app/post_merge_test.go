@@ -38,8 +38,9 @@ func TestPostMerge_OffersCleanup(t *testing.T) {
 		"the offer announces the merge and names the session")
 }
 
-// The offer carries the kill dialog's consequence-first data warning when the
-// session still has at-risk local work.
+// The offer carries the kill dialog's risk-only data warning when the session
+// still has at-risk local work (and, like the kill dialog, nothing at all when it
+// doesn't — see the confirmation-voice rule in app_feedback.go).
 func TestPostMerge_OfferWarnsOnUncommittedWork(t *testing.T) {
 	h, inst := postMergeHome(t)
 	inst.SetDiffStats(&git.DiffStats{Dirty: true})

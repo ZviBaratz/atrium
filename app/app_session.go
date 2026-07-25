@@ -510,8 +510,24 @@ func (m *home) resumeAll() tea.Cmd {
 	if len(paused) == 0 {
 		return m.handleInfoNotice("no paused sessions to resume")
 	}
-	message := fmt.Sprintf("Resume %d paused session%s?", len(paused), plural(len(paused)))
-	return m.resumeInstances(paused, message)
+	return m.resumeInstances(paused, resumeConfirmMessage("paused", len(paused)))
+}
+
+// resumeConfirmMessage is the batch-resume question for n sessions described by kind
+// ("paused" for the whole view, "marked" for a multi-select subset), plus what resume
+// puts back — the confirmation-voice rule in app_feedback.go: ask with the verb, then
+// name what the user cannot see. What the list cannot show is that resume is the exact
+// inverse of pause: the worktree is materialized again at the same path (with the
+// auto-WIP commit unwound) and the agent comes back.
+//
+// It says *reattaches* because pause detaches tmux rather than closing it
+// (session.Instance.pause), so the agent process is normally still alive and Resume
+// only restores the PTY; "restarts" would read as losing the conversation and scare
+// the user off a non-destructive action. One literal, shared by both entry points, so
+// resumeAll and resumeMarked cannot drift apart.
+func resumeConfirmMessage(kind string, n int) string {
+	return fmt.Sprintf("Resume %d %s session%s? (rebuilds each worktree and reattaches its agent)",
+		n, kind, plural(n))
 }
 
 // resumeInstances resumes an explicit set of (already-paused) sessions behind a
@@ -536,7 +552,12 @@ func (m *home) resumeInstances(insts []*session.Instance, message string) tea.Cm
 		return res
 	}
 	label := fmt.Sprintf("resuming %d session%s…", len(insts), plural(len(insts)))
-	return m.confirmAsyncAction(message, label, action)
+	cmd := m.confirmAsyncAction(message, label, action)
+	// The hint names the action rather than saying "confirm" (#399). Set here, in the
+	// shared core, so both entry points get the same label from the same count
+	// (confirmAsyncAction created m.confirmationOverlay synchronously above).
+	m.confirmationOverlay.SetConfirmLabel(fmt.Sprintf("resume %d session%s", len(insts), plural(len(insts))))
+	return cmd
 }
 
 // plural returns the "s" suffix for a count: "" for exactly one, "s" otherwise.
@@ -596,8 +617,28 @@ func (m *home) pauseAll() tea.Cmd {
 	if len(active) == 0 {
 		return m.handleInfoNotice("no active sessions to pause")
 	}
-	message := fmt.Sprintf("Pause %d active session%s?", len(active), plural(len(active)))
-	return m.pauseInstances(active, message)
+	return m.pauseInstances(active, pauseConfirmMessage("active", len(active)))
+}
+
+// pauseConfirmMessage is the batch-pause question for n sessions described by kind
+// ("active" for the whole view, "marked" for a multi-select subset), plus the
+// consequence — the confirmation-voice rule in app_feedback.go: ask with the verb,
+// then name what the user cannot see. Pause stages and commits everything git tracks
+// (Worktree.CommitChanges) and then removes the worktree, so the gitignored files
+// living in it — a local .env, a build cache, downloaded dependencies — go with it,
+// and resume rebuilds the worktree from the branch. Nothing in the UI or the README
+// says so, and no undo exists.
+//
+// Unconditional, unlike killDataWarning: every pause removes the worktree, so only
+// the magnitude of the loss varies, and measuring that would mean a per-session
+// `git status --ignored` on the UI thread. It claims deletion rather than "not
+// restored on resume" because carry_files re-seeds its own (gitignored) entries into
+// every fresh worktree, resume included — the deleted copy is still gone, but a
+// blanket "nothing ignored comes back" would be false for those.
+func pauseConfirmMessage(kind string, n int) string {
+	return fmt.Sprintf("Pause %d %s session%s? (commits any work in progress, then removes "+
+		"each worktree — gitignored files like .env or build caches are deleted for good)",
+		n, kind, plural(n))
 }
 
 // pauseInstances parks an explicit set of (pausable) sessions behind a count
@@ -624,7 +665,12 @@ func (m *home) pauseInstances(insts []*session.Instance, message string) tea.Cmd
 		return res
 	}
 	label := fmt.Sprintf("pausing %d session%s…", len(insts), plural(len(insts)))
-	return m.confirmAsyncAction(message, label, action)
+	cmd := m.confirmAsyncAction(message, label, action)
+	// The hint names the action rather than saying "confirm" (#399). Set here, in the
+	// shared core, so both entry points get the same label from the same count
+	// (confirmAsyncAction created m.confirmationOverlay synchronously above).
+	m.confirmationOverlay.SetConfirmLabel(fmt.Sprintf("pause %d session%s", len(insts), plural(len(insts))))
+	return cmd
 }
 
 // killFailure records one instance that could not be killed during a batch kill,
@@ -757,8 +803,7 @@ func (m *home) pauseMarked() tea.Cmd {
 		return m.handleInfoNotice("no marked sessions to pause")
 	}
 	m.exitVisualMode()
-	message := fmt.Sprintf("Pause %d marked session%s?", len(insts), plural(len(insts)))
-	return m.pauseInstances(insts, message)
+	return m.pauseInstances(insts, pauseConfirmMessage("marked", len(insts)))
 }
 
 // resumeMarked resumes the paused subset of the multi-select-marked sessions.
@@ -774,8 +819,7 @@ func (m *home) resumeMarked() tea.Cmd {
 		return m.handleInfoNotice("no marked sessions to resume")
 	}
 	m.exitVisualMode()
-	message := fmt.Sprintf("Resume %d marked session%s?", len(insts), plural(len(insts)))
-	return m.resumeInstances(insts, message)
+	return m.resumeInstances(insts, resumeConfirmMessage("marked", len(insts)))
 }
 
 // killMarked tears down the killable subset of the multi-select-marked sessions
@@ -1629,11 +1673,14 @@ func (m *home) confirmKill(inst *session.Instance) tea.Cmd {
 }
 
 // offerCleanupAfterMerge presents a follow-up confirmation to tear down a
-// just-merged session, reusing the kill teardown path and its consequence-first
-// data warning (#384). Its message announces the merge, so it doubles as the
-// merge acknowledgment. Declining leaves the session untouched — its row keeps
-// rendering the merged (purple) PR chip. Returns false when there is no session
-// to offer cleanup for, so the caller can fall back to a plain notice.
+// just-merged session, reusing the kill teardown path and its risk-only data
+// warning (killDataWarning, #384 — a question with a parenthetical that appears
+// only when work is at risk, not a consequence-first dialog; see the
+// confirmation-voice rule above hiddenNeighborNotice). Its message announces the
+// merge, so it doubles as the merge acknowledgment. Declining leaves the session
+// untouched — its row keeps rendering the merged (purple) PR chip. Returns false
+// when there is no session to offer cleanup for, so the caller can fall back to a
+// plain notice.
 func (m *home) offerCleanupAfterMerge(inst *session.Instance, number int) bool {
 	if inst == nil {
 		return false

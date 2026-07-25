@@ -67,6 +67,36 @@ func (m *home) moveAndPersist(move func() bool) (tea.Model, tea.Cmd) {
 	return m, m.instanceChanged()
 }
 
+// --- The confirmation and refusal voice (#399) --------------------------------
+//
+// One rule governs every confirmation dialog and every refusal notice in Atrium:
+// ask with the verb, then name what the user cannot see — and only then.
+//
+// *Ask with the verb.* The question leads with the action in the user's words
+// ("Pause 3 marked sessions?", "Merge PR #12 from 'x' as a squash merge?"), and the
+// key hint names that same verb rather than the generic "confirm" (see
+// overlay.ConfirmationOverlay.SetConfirmLabel — hint text only; the keys stay
+// y / n / esc).
+//
+// *Name what the user cannot see.* A parenthetical follows only for a consequence or
+// a blocker that is off-screen at the moment of asking: the work a kill would destroy
+// (killDataWarning), the gitignored files a pause deletes (pauseConfirmMessage), CI
+// still running behind a merge, the host capacity a create would exceed
+// (overCapMessage). Nothing invisible, no parenthetical — push already names its
+// destination, so it says nothing more.
+//
+// The converse is #399's amended AC #2, which the refusal notices obey: a refusal the
+// user can SEE stays silent — a cluster already at the top of the order, a lone repo
+// group with nothing to fold — because toasting it is noise, while "already folded"
+// under a live filter describes a group rendering expanded and must be explained
+// (#448). One rule read from both ends: dialogs add what is invisible, notices skip
+// what is visible.
+//
+// The rule prunes itself, which is the evidence it is real: of the fourteen
+// confirmAction sites it changed five. The kill dialog is not consequence-*first* and
+// was never meant to be — it is question-first with a risk-only parenthetical, and
+// that shape is what the others adopted.
+
 // hiddenNeighborNotice explains a reorder refused because the thing it would swap with
 // is not on screen — the move would change, and persist, an order with nothing visibly
 // moving (#339). scope names what the key moves ("session", "group", "cluster") — the
