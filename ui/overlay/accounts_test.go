@@ -505,14 +505,14 @@ func TestAccountsOverlay_CatchAllBadgeSurvivesWindowScroll(t *testing.T) {
 		cfg.ClaudeAccounts = append(cfg.ClaudeAccounts, acct)
 	}
 	o := NewAccountsOverlay(cfg, config.DefaultState())
-	o.SetSize(80, 24) // budget 12 rows
+	o.SetSize(80, 24) // budget 11 rows
 
 	for i := 0; i < 20; i++ {
 		o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyDown})
 	}
 	require.Equal(t, 20, o.cursorIndex())
 
-	// Window is [9,21): the first catch-all (index 0) scrolled off; the later one
+	// Window is [10,21): the first catch-all (index 0) scrolled off; the later one
 	// (index 15) is still visible.
 	out := o.Render()
 	require.NotContains(t, out, "firstcatch", "the first catch-all scrolled off the top")
@@ -870,4 +870,129 @@ func TestAccountsOverlay_LegendFitsAndKeepsLimitedClaudeOnly(t *testing.T) {
 
 	o.selectTab(tabGH)
 	assert.NotContains(t, o.Render(), "l limited", "l limited is Claude-only")
+}
+
+// TestAccountsOverlay_PooledMembersRenderBracketed pins the render-level wiring of
+// poolGutter into renderList: two adjacent Claude accounts sharing a pool are
+// bracketed top-to-bottom by the gutter glyphs, not merely named as a pool via the
+// existing "pool:x" chip.
+func TestAccountsOverlay_PooledMembersRenderBracketed(t *testing.T) {
+	cfg := &config.Config{ClaudeAccounts: []config.ClaudeAccount{
+		{Name: "work-1", ConfigDir: "~/.claude-work1", Pool: "work"},
+		{Name: "work-2", ConfigDir: "~/.claude-work2", Pool: "work"},
+	}}
+	o := NewAccountsOverlay(cfg, config.DefaultState())
+	o.SetSize(80, 24)
+
+	out := o.Render()
+	assert.Contains(t, rowLine(t, out, "work-1"), "┌", "run head carries the top bracket")
+	assert.Contains(t, rowLine(t, out, "work-2"), "└", "run tail carries the bottom bracket")
+}
+
+// TestAccountsOverlay_SplitPoolShowsNoteAndNoBracket covers the case poolGutter
+// cannot bracket: when a pool's members are not adjacent, no bracket glyph renders
+// at all, and the list instead prints the nudge to use J/K to bring them together.
+func TestAccountsOverlay_SplitPoolShowsNoteAndNoBracket(t *testing.T) {
+	cfg := &config.Config{ClaudeAccounts: []config.ClaudeAccount{
+		{Name: "work-1", ConfigDir: "~/.claude-work1", Pool: "work"},
+		{Name: "personal", ConfigDir: "~/.claude"},
+		{Name: "work-2", ConfigDir: "~/.claude-work2", Pool: "work"},
+	}}
+	o := NewAccountsOverlay(cfg, config.DefaultState())
+	o.SetSize(80, 24)
+
+	out := o.Render()
+	assert.NotContains(t, out, "┌", "non-adjacent members can't be bracketed")
+	assert.Contains(t, out, "pool 'work' is split")
+}
+
+// TestAccountsOverlay_NoPoolsRendersFlat pins the dormancy contract: with no pools
+// configured, no gutter glyph renders (not even blank padding) and no split note
+// appears — the table renders exactly as it did before this feature existed.
+func TestAccountsOverlay_NoPoolsRendersFlat(t *testing.T) {
+	o := NewAccountsOverlay(twoTabCfg(), config.DefaultState())
+	o.SetSize(80, 24)
+
+	// renderList (not Render) so the box border's own "│" edge can't collide with
+	// the gutter's middle-connector glyph in the assertion below.
+	out := o.renderList()
+	assert.NotContains(t, out, "┌")
+	assert.NotContains(t, out, "│")
+	assert.NotContains(t, out, "└")
+	assert.NotContains(t, out, "is split")
+}
+
+// TestAccountsOverlay_GutterIsClaudeTabOnly guards the o.tab == tabClaude gate:
+// only ClaudeAccount carries a Pool field, so the gutter and split note must never
+// appear on the GH tab even when its account names happen to look like pool
+// members. The Claude side deliberately carries BOTH an adjacent run (would
+// bracket) and a genuinely split pool (would print a note) so this test can't
+// pass merely because poolGutter/splitPools happen to return nil for this
+// fixture regardless of the tab gate — a config with only a split pool leaves
+// poolGutter nil on its own, so removing the gate around the gutter
+// computation specifically would go undetected.
+func TestAccountsOverlay_GutterIsClaudeTabOnly(t *testing.T) {
+	cfg := &config.Config{
+		ClaudeAccounts: []config.ClaudeAccount{
+			{Name: "work-1", Pool: "work"}, // adjacent run: would bracket on the Claude tab
+			{Name: "work-2", Pool: "work"},
+			{Name: "personal"},
+			{Name: "home-1", Pool: "home"}, // split: would print a note on the Claude tab
+			{Name: "mid"},
+			{Name: "home-2", Pool: "home"},
+		},
+		GHAccounts: []config.GHAccount{
+			{Name: "work-1", ConfigDir: "~/.config/gh-work1"},
+			{Name: "work-2", ConfigDir: "~/.config/gh-work2"},
+		},
+	}
+	o := NewAccountsOverlay(cfg, config.DefaultState())
+	o.SetSize(80, 24)
+	o.selectTab(tabGH)
+
+	out := o.Render()
+	assert.NotContains(t, out, "┌")
+	assert.NotContains(t, out, "is split")
+}
+
+// TestAccountsOverlay_GutterSurvivesWindowScroll mirrors
+// TestAccountsOverlay_CatchAllBadgeSurvivesWindowScroll: poolGutter is computed over
+// the whole account slice before windowing, so scrolling until the run head lands
+// exactly on the window's first visible row still renders its "┌" correctly. A bug
+// that recomputed the gutter on the windowed sub-slice, or indexed it by
+// window-relative position instead of the absolute config index, would show a blank
+// gutter cell (or the wrong glyph) on this row instead.
+func TestAccountsOverlay_GutterSurvivesWindowScroll(t *testing.T) {
+	cfg := &config.Config{}
+	for i := 0; i < 10; i++ {
+		cfg.ClaudeAccounts = append(cfg.ClaudeAccounts, config.ClaudeAccount{
+			Name: fmt.Sprintf("acct%02d", i), ConfigDir: "~/.claude",
+		})
+	}
+	cfg.ClaudeAccounts = append(cfg.ClaudeAccounts,
+		config.ClaudeAccount{Name: "work-1", ConfigDir: "~/.claude-work1", Pool: "work"},
+		config.ClaudeAccount{Name: "work-2", ConfigDir: "~/.claude-work2", Pool: "work"},
+	)
+	for i := 12; i < 30; i++ {
+		cfg.ClaudeAccounts = append(cfg.ClaudeAccounts, config.ClaudeAccount{
+			Name: fmt.Sprintf("acct%02d", i), ConfigDir: "~/.claude",
+		})
+	}
+
+	o := NewAccountsOverlay(cfg, config.DefaultState())
+	o.SetSize(80, 24) // budget 11 rows after the chrome bump
+
+	for i := 0; i < 20; i++ {
+		o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyDown})
+	}
+	require.Equal(t, 20, o.cursorIndex())
+
+	// Window is [10,21): rows 0-9 (including the run head's would-be predecessors)
+	// scrolled off, and the run (10,11) is fully in view with work-1 landing on the
+	// window's very first visible row.
+	out := o.Render()
+	require.NotContains(t, out, "acct09", "rows above the window scrolled off")
+	require.Contains(t, out, "work-1", "the run head is in the window")
+	assert.Contains(t, rowLine(t, out, "work-1"), "┌", "run head keeps its top bracket even as the window's first visible row")
+	assert.Contains(t, rowLine(t, out, "work-2"), "└")
 }

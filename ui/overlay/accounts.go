@@ -376,10 +376,13 @@ func (o *AccountsOverlay) inner() int { return o.boxWidth() - 4 } // Padding(1,2
 // list fits a short terminal with the cursor kept in view. Everything outside
 // the rows costs a fixed number of lines (border 2 + padding 2 + title/blank 2
 // + tabs/blank 2 + trailing blank 1 + two hint lines 2 + the unmatched-repos
-// hint 1 = 12), so the remaining height budgets the rows. Mirrors the windowing
-// SettingsOverlay applies to its own body.
+// hint 1 + the split-pool note 1 = 13), so the remaining height budgets the
+// rows. chrome is a static worst-case allowance, not a dynamic count of the
+// notes actually rendered: a config with no split pool still budgets for one,
+// so adding pools never shifts the scroll behavior of a config that has none.
+// Mirrors the windowing SettingsOverlay applies to its own body.
 func (o *AccountsOverlay) rowWindow(n int) (start, end int) {
-	const chrome = 12
+	const chrome = 13
 	budget := o.height - chrome
 	if budget < 3 {
 		budget = 3
@@ -537,11 +540,23 @@ func (o *AccountsOverlay) renderList() string {
 		// the whole window rather than per row — the map is indexed per account below.
 		avail := o.state.GetAccountAvailability()
 		now := time.Now()
+		// Same reasoning as seenCatchAll above: a pool run can straddle the window
+		// boundary, so the gutter is computed over the whole slice (never re-sliced
+		// to the window) and rows are indexed into it by absolute config index, not
+		// window-relative position.
+		var gut []string
+		if o.tab == tabClaude {
+			gut = poolGutter(o.cfg.ClaudeAccounts)
+		}
 		for i := start; i < end; i++ {
 			r := rows[i]
 			marker := "  "
 			if i == o.cursor {
 				marker = t.AccentStyle().Render("› ")
+			}
+			gutter := ""
+			if gut != nil {
+				gutter = t.DimStyle().Render(gut[i])
 			}
 			name := r.name
 			if name == "" {
@@ -565,10 +580,15 @@ func (o *AccountsOverlay) renderList() string {
 					extra += "  " + t.DangerStyle().Render("⛔ limited")
 				}
 			}
-			b.WriteString(marker + padRight(name, 12) + " " + padRight(dir, 28) + " " + o.badge(r.catchAll, &seenCatchAll) + extra + "\n")
+			b.WriteString(marker + gutter + padRight(name, 12) + " " + padRight(dir, 28) + " " + o.badge(r.catchAll, &seenCatchAll) + extra + "\n")
 		}
 		if !o.hasCatchAll() {
 			b.WriteString(t.DimStyle().Render("unmatched repos inherit the ambient account") + "\n")
+		}
+		if o.tab == tabClaude {
+			if names := splitPools(o.cfg.ClaudeAccounts); len(names) > 0 {
+				b.WriteString(t.DimStyle().Render(splitPoolNote(names, o.inner())) + "\n")
+			}
 		}
 	}
 
