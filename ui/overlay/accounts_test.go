@@ -672,6 +672,128 @@ func TestAccountsOverlay_AgyFormHasNoPool(t *testing.T) {
 	assert.False(t, o.form.showPool, "an agy account edit form must not show the Pool field")
 }
 
+// A rate-limit flag is keyed by account NAME, so a rename must carry it — otherwise
+// renaming an exhausted account silently reports it as available again, and rotation
+// hands it the next session (#470).
+func TestAccountsOverlay_RenameCarriesAvailability(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	cfg := &config.Config{ClaudeAccounts: []config.ClaudeAccount{
+		{Name: "work", ConfigDir: "~/.claude-work", Pool: "quantivly"},
+	}}
+	st := config.DefaultState()
+	require.NoError(t, st.SetAccountLimited("work", "2026-07-25T12:00:00Z"))
+	o := NewAccountsOverlay(cfg, st)
+	o.SetSize(80, 24)
+
+	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'e'}}) // edit row 0
+	require.Equal(t, modeEdit, o.mode)
+	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyCtrlU}) // focus starts on Name
+	typeInto(o, "zvi.baratz")
+	_, dirty := o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyEnter})
+
+	require.True(t, dirty)
+	avail := st.GetAccountAvailability()
+	assert.True(t, avail["zvi.baratz"].Limited, "the flag follows the account to its new name")
+	assert.Equal(t, "2026-07-25T12:00:00Z", avail["zvi.baratz"].Until, "including when it lifts")
+	assert.NotContains(t, avail, "work", "the old key is not left behind as an orphan")
+}
+
+// Editing anything OTHER than the name must leave availability exactly as it was —
+// the carry is keyed off a name change, not off committing the form.
+func TestAccountsOverlay_EditKeepingNameLeavesAvailability(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	cfg := &config.Config{ClaudeAccounts: []config.ClaudeAccount{
+		{Name: "work", ConfigDir: "~/.claude-work", Pool: "quantivly"},
+	}}
+	st := config.DefaultState()
+	require.NoError(t, st.SetAccountLimited("work", ""))
+	o := NewAccountsOverlay(cfg, st)
+	o.SetSize(80, 24)
+
+	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'e'}})
+	for i := 0; i < fldPool; i++ {
+		o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyTab})
+	}
+	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyCtrlU})
+	typeInto(o, "renamed-pool")
+	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyEnter})
+
+	assert.True(t, st.GetAccountAvailability()["work"].Limited)
+}
+
+// Deleting an account drops its rate-limit flag: state keys availability by name, so
+// a leftover entry would silently apply to a future account that reuses the name.
+func TestAccountsOverlay_DeleteClearsAvailability(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	cfg := &config.Config{ClaudeAccounts: []config.ClaudeAccount{
+		{Name: "work", ConfigDir: "~/.claude-work"},
+	}}
+	st := config.DefaultState()
+	require.NoError(t, st.SetAccountLimited("work", ""))
+	o := NewAccountsOverlay(cfg, st)
+	o.SetSize(80, 24)
+
+	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
+	require.Equal(t, modeConfirmDelete, o.mode)
+	_, dirty := o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+
+	require.True(t, dirty)
+	assert.Empty(t, st.GetAccountAvailability())
+}
+
+// An availability entry outlives the account it belonged to whenever one is deleted
+// or renamed away from — exactly the orphaned keys `atrium doctor` reports. validate()
+// only rejects a name a LIVE account holds, so a rename can land squarely on one.
+// The renamed account is the authority on its own new name: its flag must win, not be
+// swallowed by the stale entry sitting there.
+func TestAccountsOverlay_RenameOntoOrphanedAvailability(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	cfg := &config.Config{ClaudeAccounts: []config.ClaudeAccount{
+		{Name: "work", ConfigDir: "~/.claude-work"},
+	}}
+	st := config.DefaultState()
+	require.NoError(t, st.SetAccountLimited("work", "2026-07-25T12:00:00Z"))
+	// No account is named zvi.baratz — a leftover from an earlier rename or delete.
+	require.NoError(t, st.SetAccountLimited("zvi.baratz", "2019-01-01T00:00:00Z"))
+	o := NewAccountsOverlay(cfg, st)
+	o.SetSize(80, 24)
+
+	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'e'}})
+	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyCtrlU})
+	typeInto(o, "zvi.baratz")
+	_, dirty := o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyEnter})
+
+	require.True(t, dirty)
+	avail := st.GetAccountAvailability()
+	assert.True(t, avail["zvi.baratz"].Limited, "the renamed account is still rate-limited")
+	assert.Equal(t, "2026-07-25T12:00:00Z", avail["zvi.baratz"].Until,
+		"the carried entry overwrites the orphan rather than losing to it")
+	assert.NotContains(t, avail, "work", "the old key is not left behind")
+}
+
+// The mirror case: an account with NO flag renamed onto an orphaned entry. Carrying
+// nothing must also mean leaving nothing — otherwise the stale flag comes back to
+// life under a name that is now live, and rotation skips a perfectly usable login.
+func TestAccountsOverlay_RenameOntoOrphanClearsStaleFlag(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	cfg := &config.Config{ClaudeAccounts: []config.ClaudeAccount{
+		{Name: "work", ConfigDir: "~/.claude-work"},
+	}}
+	st := config.DefaultState()
+	require.NoError(t, st.SetAccountLimited("zvi.baratz", "")) // orphan; work has no flag
+	o := NewAccountsOverlay(cfg, st)
+	o.SetSize(80, 24)
+
+	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'e'}})
+	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyCtrlU})
+	typeInto(o, "zvi.baratz")
+	_, dirty := o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyEnter})
+
+	require.True(t, dirty)
+	assert.Empty(t, st.GetAccountAvailability(),
+		"an unlimited account must not inherit an orphan's exhaustion")
+}
+
 // TestAccountsOverlay_ReorderSwapsAndFollowsCursor: J moves the cursored account
 // down one slot in config order (which IS routing precedence) and the cursor
 // tracks the account, not the position, so a second J keeps moving the same one.

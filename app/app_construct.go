@@ -92,6 +92,12 @@ func assembleHome(
 	// config.GetSplash). ui takes the normalized name, no config import needed.
 	ui.SetSplashVariant(appConfig.GetSplash())
 
+	// Re-derive each restored session's account labels from live config before the
+	// first cluster build, so a rename made since the last run adopts its sessions
+	// instead of stranding them under a name config no longer has (#470). Pure
+	// in-memory: flushAccountStamps (called from newHome) does the IO half.
+	h.accountSync = syncAccountStamps(appConfig, instances)
+
 	// Add loaded instances to the list
 	for _, instance := range instances {
 		// Call the finalizer immediately.
@@ -109,7 +115,10 @@ func assembleHome(
 	// Restore the chosen account-cluster order. Applying it before the grouping means
 	// the first cluster build already honors it; SetAccountOrder rebuilds an active view
 	// itself, so the reverse order would also land correctly, just via a second build.
-	h.list.SetAccountOrder(appState.GetAccountOrder())
+	// A cluster whose key was just renamed carries its slot over, rather than falling to
+	// the bottom of the list as a key the stored order does not name (#470).
+	restoredOrder, _ := remapAccountOrder(appState.GetAccountOrder(), h.accountSync.clusterMoves)
+	h.list.SetAccountOrder(restoredOrder)
 	// Apply the persisted top-level grouping after the full list is in place, so its
 	// canonical-order snapshot is the real creation order.
 	h.list.SetGroupMode(appConfig.GetGroupMode())
