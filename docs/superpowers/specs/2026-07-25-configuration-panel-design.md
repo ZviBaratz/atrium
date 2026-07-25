@@ -214,8 +214,12 @@ now", never "you may not touch this".
 
 ## 6. Copy — verbatim
 
-Every summary is ≤ 74 cells, which is one unwrapped line at the 80-column floor
-(`boxWidth(78) − 4 = 74`). Summaries state what the setting *does*; `detail` carries the
+Every summary is ≤ 74 cells — one unwrapped line at the 80-column floor **once §10 widens
+the box** to `min(96, width−2)`: at width 80 that is a 78-cell box, inner 74. Today's
+`boxWidth` is capped at 64 (inner 60), so under the PR A renderer a summary near the bound
+wraps onto a second footer line. That is harmless — PR A keeps today's variable-height
+footer — and it resolves when PR B lands the wider box together with the fixed-height help
+pane. Summaries state what the setting *does*; `detail` carries the
 value grammar, cautions, and cross-references. `gloss` explains enum options individually,
 which is what dissolves the 300–443-char run-on descriptions.
 
