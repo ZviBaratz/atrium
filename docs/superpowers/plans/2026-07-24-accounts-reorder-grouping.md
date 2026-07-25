@@ -29,7 +29,7 @@ New files:
 - `ui/overlay/accounts_pool_test.go` — unit tests for those three.
 
 Modified files:
-- `ui/overlay/accounts.go` — `moveAccount` + the key cases in `handleListKey`; gutter + split note + legend in `renderList`; `rowWindow` chrome 12 → 13.
+- `ui/overlay/accounts.go` — `moveAccount` + the key cases in `handleListKey`; gutter + split note + legend in `renderList`; `rowWindow` chrome conditional +1 (Claude tab with a split pool only).
 - `ui/overlay/accounts_test.go` — overlay-level key, render, routing and persistence tests.
 - `README.md` — pools prose (`README:574-628`).
 
@@ -355,7 +355,7 @@ if o.tab == tabClaude {
 }
 ```
 
-And `rowWindow`: `const chrome = 12` → `13`, extending its comment to say the second (split-pool) note line is budgeted. Keep it static — a dynamic chrome would widen the window for configs that render no note and shift existing scroll behaviour.
+And `rowWindow`: chrome's allowance for the split-pool note is conditional — `12` stays `12` unless the Claude tab actually has a split pool to report, in which case it's `13`. The pre-existing unmatched-repos note keeps its unconditional budget for continuity (it predates this feature). Conditioning only the new line is what keeps a pool-free config's row count unchanged; a static `13` would cost every such config a row it never used to lose.
 
 - [ ] **Step 4: Verify green** — `go test ./ui/overlay/...`, and confirm the four pre-existing order/window tests still pass by name: `TestAccountsOverlay_ListWindowsRowsOnShortTerminal`, `TestAccountsOverlay_CatchAllBadgeSurvivesWindowScroll`, `TestAccountsOverlay_BadgesMarkCatchAllAndUnreachable`, `TestAccountsOverlay_RendersPoolAndAvailability`.
 - [ ] **Step 5: Commit** — `feat(accounts): render adjacent pool members as one bracketed group`

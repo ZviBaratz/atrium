@@ -265,7 +265,7 @@ in-app keymap and this section ever drift apart, so it stays complete.
 |-----|--------|
 | `?` | toggle this cheatsheet |
 | `,` | settings |
-| `@` | accounts (Claude / GitHub) |
+| `@` | accounts (Claude / GitHub / Antigravity) |
 | `L` | command log — the tmux / git / gh commands Atrium runs |
 | `ctrl-l` | force a full redraw of the screen |
 | `q` | quit |

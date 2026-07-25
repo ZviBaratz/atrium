@@ -156,11 +156,18 @@ account" (`accounts.go:540`), Claude tab only:
 pool 'work' is split — J/K to group its members
 ```
 
-`rowWindow`'s `const chrome = 12` becomes `13` to budget that second line. The
-constant stays a static worst-case allowance, matching what it already is (the
-unmatched-repos note is likewise conditional but always budgeted). Making chrome
-dynamic was rejected: it would *widen* the window for configs that render no
-note, changing existing scroll behaviour for no user-visible gain.
+`rowWindow`'s chrome allowance for this new line is conditional: it stays `12`
+by default and becomes `13` only when the Claude tab actually has a split pool
+to report. The pre-existing unmatched-repos note keeps its unconditional
+budget — it predates this feature and has always cost a row regardless of
+whether it renders, so leaving it alone is what keeps a config that already
+existed rendering unchanged. The new note gets no such exemption: `12` rows
+*is* the existing behaviour (`24 - 12` at an 80×24 terminal), so a static `13`
+would be the change — it costs every config, including one with no `pool` key
+anywhere, a visible row it used to have (30 routed accounts at 80×24: 12 rows
+becomes 11). Conditioning the new line's allowance on the note it actually
+budgets for isn't a cosmetic widening; it's what makes a pool-free config
+byte-identical to today's, as promised below.
 
 The legend becomes two lines, reflowed so neither wraps at an 80-column terminal
 (74 inner columns), which is why `l limited` moves to the second line:
