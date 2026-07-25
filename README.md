@@ -629,9 +629,15 @@ list to your config file:
   update live as rows move, and the new order is saved to `config.json`
   immediately.
 - The resolved account is **pinned at session creation** and shown as a badge in
-  the session list (dim for the default account, accented for a routed one). It
-  is injected once at launch and is not re-resolved on restart or `--continue`;
-  editing `claude_accounts` affects only newly created sessions.
+  the session list (dim for the default account, accented for a routed one). The
+  `CLAUDE_CONFIG_DIR` it injects is set once at launch and is never re-resolved —
+  no config edit can move a running session to a different login, on restart or
+  `--continue`. The **badge and the account cluster** are re-derived from that
+  directory, at launch and whenever the `@` panel commits an edit, so renaming an
+  account (or moving it into a pool) adopts its existing sessions instead of
+  leaving them grouped under a name the config no longer has. Deleting an account
+  from the config leaves its sessions' badges as they were — the last known truth
+  about the login they run under.
 - When more than one account is configured, the new-session form shows an
   **Account** picker, preset to the auto-routed account, to override the choice.
 - Omitting `claude_accounts` disables the feature entirely (no badge, no
@@ -718,6 +724,11 @@ instead of pinning every session in a repo to one account:
   session lands on the one account regardless of the cursor). `atrium doctor`
   flags this — a pool with two members sharing a `config_dir` prints a warning
   naming both.
+- **Renaming a pool** means retyping the same `pool` name on each of its members
+  (a pool is just that shared string — there is no pool entity to rename). Open
+  sessions follow the rename, and the cluster keeps the position `[` / `]` gave it.
+  What does not follow is state keyed by the *old* name: `atrium doctor` reports
+  any leftover rotation cursor or cluster slot, all of them harmless.
 
 #### GitHub CLI accounts
 

@@ -264,6 +264,39 @@ func (o *AccountsOverlay) handleEditKey(msg tea.KeyMsg) (closed bool, dirty bool
 	return false, true
 }
 
+// carryAvailability moves a Claude account's rate-limit flag (the `l` toggle) with
+// it across a rename. State keys availability by account NAME, and this commit is
+// the only place that still knows the old one — without the carry, renaming an
+// account silently clears its flag and the panel reports an exhausted login as
+// available (#470). Not a config-anchored heal like the session labels: nothing else
+// records which account an availability entry belonged to.
+//
+// The renamed account is the sole authority on its new name. An entry may already
+// be sitting there — validate() only rejects a name a LIVE account holds, so a
+// rename can land on one of the orphans `atrium doctor` reports (a login deleted
+// while limited, a hand-edited state.json) — and such an entry is stale by
+// construction. It is overwritten when there is a flag to carry and cleared when
+// there is not, so a rename can neither lose the account's real reset time to an
+// orphan's nor resurrect an orphan's exhaustion onto a login that has none.
+//
+// Write errors are dropped, as everywhere the `l` toggle writes this flag: it is a
+// hint the next keypress can correct, not something worth failing a rename over.
+func (o *AccountsOverlay) carryAvailability(oldName, newName string) {
+	if oldName == newName {
+		return
+	}
+	avail := o.state.GetAccountAvailability()
+	from, carry := avail[oldName]
+	if carry && from.Limited {
+		_ = o.state.SetAccountLimited(newName, from.Until)
+	} else if _, stale := avail[newName]; stale {
+		_ = o.state.ClearAccountLimited(newName)
+	}
+	if carry {
+		_ = o.state.ClearAccountLimited(oldName)
+	}
+}
+
 // validate rejects an empty or duplicate (within the active tab) name.
 func (o *AccountsOverlay) validate() string {
 	name := o.form.Name()
@@ -289,6 +322,7 @@ func (o *AccountsOverlay) commit() {
 		if o.editIndex < 0 {
 			o.cfg.ClaudeAccounts = append(o.cfg.ClaudeAccounts, a)
 		} else {
+			o.carryAvailability(o.cfg.ClaudeAccounts[o.editIndex].Name, a.Name)
 			o.cfg.ClaudeAccounts[o.editIndex] = a
 		}
 	case tabAgy:
@@ -320,6 +354,10 @@ func (o *AccountsOverlay) handleConfirmKey(msg tea.KeyMsg) (closed bool, dirty b
 	case "y", "enter":
 		switch o.tab {
 		case tabClaude:
+			// Drop the deleted account's rate-limit flag: state keys it by NAME, so a
+			// leftover entry would silently apply to a future account that reuses the
+			// name (and would otherwise linger as an orphan `atrium doctor` reports).
+			_ = o.state.ClearAccountLimited(o.cfg.ClaudeAccounts[o.cursor].Name)
 			o.cfg.ClaudeAccounts = append(o.cfg.ClaudeAccounts[:o.cursor], o.cfg.ClaudeAccounts[o.cursor+1:]...)
 		case tabAgy:
 			o.cfg.AgyAccounts = append(o.cfg.AgyAccounts[:o.cursor], o.cfg.AgyAccounts[o.cursor+1:]...)
