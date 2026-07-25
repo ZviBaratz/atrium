@@ -92,19 +92,6 @@ func TestStartNewSession_NoPoolStaysDormant(t *testing.T) {
 	assert.Len(t, h.appState.GetAccountAvailability(), 0, "no availability entry persisted")
 }
 
-func TestSoonestResetMember(t *testing.T) {
-	members := []config.ClaudeAccount{{Name: "a"}, {Name: "b"}, {Name: "c"}}
-	avail := map[string]config.AccountAvailability{
-		"a": {Limited: true, Until: "2026-07-23T18:00:00Z"},
-		"b": {Limited: true, Until: "2026-07-23T17:00:00Z"},
-		"c": {Limited: true}, // indefinite sorts last
-	}
-	assert.Equal(t, 1, soonestResetMember(members, avail), "b resets soonest")
-
-	allIndef := map[string]config.AccountAvailability{"a": {Limited: true}, "b": {Limited: true}, "c": {Limited: true}}
-	assert.Equal(t, 0, soonestResetMember(members, allIndef), "all indefinite -> fallback 0")
-}
-
 func TestCreateForm_AllExhaustedAsksConfirm(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	h := newFanOutHome(t, gitInitRepo(t))

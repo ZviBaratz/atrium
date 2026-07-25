@@ -34,7 +34,7 @@ func SelectPoolMember(members []ClaudeAccount, avail map[string]AccountAvailabil
 
 // SoonestResetMember returns the index of the member whose limit resets soonest.
 // Members with a parseable Until sort by that time; indefinite or unparseable
-// sort last; all-indefinite returns 0 (the cursor's natural start).
+// sort last; all-indefinite returns 0 (the first member).
 func SoonestResetMember(members []ClaudeAccount, avail map[string]AccountAvailability) int {
 	best, bestSet := 0, false
 	var bestT time.Time
