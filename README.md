@@ -805,50 +805,55 @@ deprecated `nerd_font`, which `glyph_set` supersedes. A test
 (`config.TestReadmeDocumentsEveryConfigField`) fails the build if a new field is
 added without a row here.
 
-| Key | Type | Default | Notes |
-|-----|------|---------|-------|
-| `default_program` | string | `"claude"` | launch command when no matching profile ([Profiles](#profiles)) |
-| `auto_yes` | bool | `false` | auto-accept all prompts (experimental; the `-y` flag) |
-| `daemon_poll_interval` | int | `1000` | autoyes daemon poll interval, milliseconds |
-| `branch_prefix` | string | `"<user>/"` | prefix for created git branches |
-| `profiles` | array | detected | named program configs ([Profiles](#profiles)) |
-| `tmux_config_override` | string | `""` | path to a custom tmux config for sessions |
-| `auto_attach` | bool | `true` | attach to a new session as soon as it starts ([Auto-attach](#auto-attach)) |
-| `show_release_notes_after_update` | bool | `true` | "what's new" overlay once after an update |
-| `kill_double_tap_confirm` | bool | `true` | a second `ctrl-x` confirms the kill dialog |
-| `theme` | string | `"tokyo-night"` | color palette + border style |
-| `splash` | string | random | empty-state splash pattern (`""`/`"random"` = fresh each launch) |
-| `glyph_set` | string | `"plain"` | icon fidelity rung: `nerd` (vendor Nerd-Font icons, needs a patched font), `plain` (Unicode that renders on any font — the default), `ascii` (7-bit floor for terminals where even plain Unicode shows tofu) |
-| `nerd_font` | bool | `false` | *deprecated* — superseded by `glyph_set`; still read for back-compat (`true` → `glyph_set: nerd` when `glyph_set` is unset) |
-| `session_context_bar` | bool | `true` | thin tmux status line inside attached sessions |
-| `hint_bar` | bool | `true` | always-on bottom key-hint bar |
-| `os_chrome` | bool | `true` | fleet state in the terminal title + OSC 9;4 taskbar progress |
-| `record_prompt_history` | bool | `true` | remember submitted prompts for reuse in the create form and quick-send |
-| `mouse` | bool | `true` | mouse capture (clickable rows/tabs/hint bar, wheel, divider drag); `false` frees native select-to-copy |
-| `max_sessions` | int | auto (½ CPU threads) | session cap. Unset = host-aware soft cap on *live* sessions, warning once when a create or a resume crosses it; `N` = hard cap on *every* session, paused included, refused when creating; `0` = unlimited (no warning) |
-| `agent_oom_margin` | int | `on (300)` | Linux only: raise each agent's `oom_score_adj` this far above the shared tmux server's so a kernel OOM kill sheds one recoverable session, not the server (every session). Unset = on (default margin); `N` = margin; `0` = off |
-| `trust_worktrees_root` | bool | `false` | pre-accept Claude's workspace-trust for the worktrees root |
-| `carry_files` | array | `[".claude/settings.local.json"]` | gitignored files copied into each worktree ([Carried files](#carried-files)) |
-| `link_paths` | array | `[]` | gitignored paths symlinked into each worktree, e.g. `node_modules` ([Linked paths](#linked-paths)) |
-| `pr_create_draft` | bool | `true` | `c` opens a draft PR |
-| `update_base_on_create` | bool | `true` | branch off the freshest remote base tip |
-| `fast_forward_local_base` | bool | `false` | also fast-forward the local base branch on create |
-| `claude_accounts` | array | `[]` | per-session `CLAUDE_CONFIG_DIR` routing ([Claude accounts](#claude-accounts)) |
-| `gh_accounts` | array | `[]` | per-session `GH_CONFIG_DIR` routing ([GitHub CLI accounts](#github-cli-accounts)) |
-| `agy_accounts` | array | `[]` | per-session `agy` config directory routing via bwrap ([Antigravity accounts](#antigravity-accounts)) |
-| `auto_update` | string | `"notify"` | startup update behavior: `notify` / `auto` / `off` ([Auto-update](#auto-update)) |
-| `project_search_roots` | array | `["~"]` | directories the background repo scan walks for the project picker |
-| `project_search_depth` | int | `3` | levels below each root the scan descends (`0`/negative disables it) |
-| `model_indicator` | string | `"on"` | per-session model chip: `on` / `off` |
-| `permission_indicator` | string | `"on"` | per-session permission-mode chip: `on` / `off` |
-| `effort_indicator` | string | `"on"` | per-session reasoning-effort chip: `on` / `off` |
-| `session_sort` | string | `"creation"` | within-group order: `creation` / `status` |
-| `group_mode` | string | `"repo"` | list grouping: `repo` / `account` |
-| `smart_dispatch_auto` | bool | `false` | let a confident `i` match create the session without the form |
-| `notifications` | string | `"off"` | background-session signal: `off` / `bell` / `desktop` / `osc` (SSH-friendly OSC 9) ([Notifications](#notifications)) |
-| `notifications_finished` | string | `"same"` | quieter rung for a *finished turn* only, so a blocked session is never out-shouted: `same` / `off` / `bell` ([Notifications](#notifications)) |
-| `notify_command` | string | built-in | shell command for `desktop` notifications ([Notifications](#notifications)) |
-| `notify_when_focused` | bool | `false` | keep notifying while Atrium's terminal is focused; `false` stays silent while you're watching ([Notifications](#notifications)) |
+The panel groups these keys into ten categories — Sessions, Worktrees & git,
+Appearance, Session list, Notifications, Automation, Input, Projects, Updates, and
+Advanced — shown in the Category column below. The five keys with no panel row carry
+`—` instead.
+
+| Key | Category | Type | Default | Notes |
+|-----|----------|------|---------|-------|
+| `default_program` | Sessions | string | `"claude"` | launch command when no matching profile ([Profiles](#profiles)) |
+| `auto_yes` | Automation | bool | `false` | auto-accept all prompts (experimental; the `-y` flag) |
+| `daemon_poll_interval` | Automation | int | `1000` | autoyes daemon poll interval, milliseconds |
+| `branch_prefix` | Worktrees & git | string | `"<user>/"` | prefix for created git branches |
+| `profiles` | — | array | detected | named program configs ([Profiles](#profiles)) |
+| `tmux_config_override` | Advanced | string | `""` | path to a custom tmux config for sessions |
+| `auto_attach` | Sessions | bool | `true` | attach to a new session as soon as it starts ([Auto-attach](#auto-attach)) |
+| `show_release_notes_after_update` | Updates | bool | `true` | "what's new" overlay once after an update |
+| `kill_double_tap_confirm` | Input | bool | `true` | a second `ctrl-x` confirms the kill dialog |
+| `theme` | Appearance | string | `"tokyo-night"` | color palette + border style |
+| `splash` | Appearance | string | random | empty-state splash pattern (`""`/`"random"` = fresh each launch) |
+| `glyph_set` | Appearance | string | `"plain"` | icon fidelity rung: `nerd` (vendor Nerd-Font icons, needs a patched font), `plain` (Unicode that renders on any font — the default), `ascii` (7-bit floor for terminals where even plain Unicode shows tofu) |
+| `nerd_font` | — | bool | `false` | *deprecated* — superseded by `glyph_set`; still read for back-compat (`true` → `glyph_set: nerd` when `glyph_set` is unset) |
+| `session_context_bar` | Sessions | bool | `true` | thin tmux status line inside attached sessions |
+| `hint_bar` | Appearance | bool | `true` | always-on bottom key-hint bar |
+| `os_chrome` | Appearance | bool | `true` | fleet state in the terminal title + OSC 9;4 taskbar progress |
+| `record_prompt_history` | Input | bool | `true` | remember submitted prompts for reuse in the create form and quick-send |
+| `mouse` | Input | bool | `true` | mouse capture (clickable rows/tabs/hint bar, wheel, divider drag); `false` frees native select-to-copy |
+| `max_sessions` | Sessions | int | auto (½ CPU threads) | session cap. Unset = host-aware soft cap on *live* sessions, warning once when a create or a resume crosses it; `N` = hard cap on *every* session, paused included, refused when creating; `0` = unlimited (no warning) |
+| `agent_oom_margin` | Advanced | int | `on (300)` | Linux only: raise each agent's `oom_score_adj` this far above the shared tmux server's so a kernel OOM kill sheds one recoverable session, not the server (every session). Unset = on (default margin); `N` = margin; `0` = off |
+| `trust_worktrees_root` | Automation | bool | `false` | pre-accept Claude's workspace-trust for the worktrees root |
+| `carry_files` | Worktrees & git | array | `[".claude/settings.local.json"]` | gitignored files copied into each worktree ([Carried files](#carried-files)) |
+| `link_paths` | Worktrees & git | array | `[]` | gitignored paths symlinked into each worktree, e.g. `node_modules` ([Linked paths](#linked-paths)) |
+| `pr_create_draft` | Worktrees & git | bool | `true` | `c` opens a draft PR |
+| `update_base_on_create` | Worktrees & git | bool | `true` | branch off the freshest remote base tip |
+| `fast_forward_local_base` | Worktrees & git | bool | `false` | also fast-forward the local base branch on create |
+| `claude_accounts` | — | array | `[]` | per-session `CLAUDE_CONFIG_DIR` routing ([Claude accounts](#claude-accounts)) |
+| `gh_accounts` | — | array | `[]` | per-session `GH_CONFIG_DIR` routing ([GitHub CLI accounts](#github-cli-accounts)) |
+| `agy_accounts` | — | array | `[]` | per-session `agy` config directory routing via bwrap ([Antigravity accounts](#antigravity-accounts)) |
+| `auto_update` | Updates | string | `"notify"` | startup update behavior: `notify` / `auto` / `off` ([Auto-update](#auto-update)) |
+| `project_search_roots` | Projects | array | `["~"]` | directories the background repo scan walks for the project picker |
+| `project_search_depth` | Projects | int | `3` | levels below each root the scan descends (`0`/negative disables it) |
+| `model_indicator` | Session list | string | `"on"` | per-session model chip: `on` / `off` |
+| `permission_indicator` | Session list | string | `"on"` | per-session permission-mode chip: `on` / `off` |
+| `effort_indicator` | Session list | string | `"on"` | per-session reasoning-effort chip: `on` / `off` |
+| `session_sort` | Session list | string | `"creation"` | within-group order: `creation` / `status` |
+| `group_mode` | Session list | string | `"repo"` | list grouping: `repo` / `account` |
+| `smart_dispatch_auto` | Automation | bool | `false` | let a confident `i` match create the session without the form |
+| `notifications` | Notifications | string | `"off"` | background-session signal: `off` / `bell` / `desktop` / `osc` (SSH-friendly OSC 9) ([Notifications](#notifications)) |
+| `notifications_finished` | Notifications | string | `"same"` | quieter rung for a *finished turn* only, so a blocked session is never out-shouted: `same` / `off` / `bell` ([Notifications](#notifications)) |
+| `notify_command` | Notifications | string | built-in | shell command for `desktop` notifications ([Notifications](#notifications)) |
+| `notify_when_focused` | Notifications | bool | `false` | keep notifying while Atrium's terminal is focused; `false` stays silent while you're watching ([Notifications](#notifications)) |
 
 ### FAQs
 
