@@ -2,9 +2,13 @@ package overlay
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/ZviBaratz/atrium/config"
+	"github.com/ZviBaratz/atrium/ui/theme"
+
+	"github.com/charmbracelet/lipgloss"
 )
 
 // previewChrome is the number of lines renderPreview costs outside the pool
@@ -110,4 +114,88 @@ func previewDecisionLine(members []config.ClaudeAccount, avail map[string]config
 	default:
 		return fmt.Sprintf("%d members limited → rotating to %s", skipped, members[c].Name)
 	}
+}
+
+// previewIndent aligns every pool-block line under the "Claude → " label —
+// its printed width, so the block reads as a sub-list of that line rather
+// than a new left-aligned column.
+const previewIndent = "         " // 9 spaces
+
+// previewChipWidth right-pads the shorter "⛔ limited" chip to the same
+// printed width as the longer "● available" chip, so a row's "← next" /
+// "← on confirm" marker lands in the same column regardless of which chip
+// the row renders.
+var previewChipWidth = lipgloss.Width("● available")
+
+// renderPoolDecision computes what renderPreview's Claude line and pool block
+// show when the routed account belongs to a rotation pool of two or more
+// members: the headline (the member creating a session here would use, or the
+// all-limited warning) and the indented block beneath it (the "pool '<name>'
+// ⇄" header, one row per member in the visible window, an optional "N more
+// members not shown" line, and the decision sentence).
+//
+// Selection is delegated entirely to config.SelectPoolMember and, on an
+// exhausted pool, config.SoonestResetMember — the exact pair
+// app_session.go's creation path calls — so what this preview shows and what
+// creating a session here actually does can never drift apart. It reads
+// state (GetAccountAvailability, GetAccountRotation) but never writes it:
+// Bubble Tea re-renders on every keystroke, and a writing preview would
+// rotate the pool once per typed character.
+func (o *AccountsOverlay) renderPoolDecision(pool string, members []config.ClaudeAccount, now time.Time) (headline, block string) {
+	t := theme.Current()
+	avail := o.state.GetAccountAvailability()
+	cursor := o.state.GetAccountRotation(pool)
+	chosen, allLimited := config.SelectPoolMember(members, avail, cursor, now)
+
+	// marked is the member row that carries the "← next" / "← on confirm"
+	// marker, and the index previewMemberWindow must keep visible: on an
+	// exhausted pool that's SoonestResetMember's pick (what creation actually
+	// pins on confirm), not SelectPoolMember's defensive cursor fallback.
+	marked := chosen
+	marker := "← next"
+	switch {
+	case allLimited:
+		marked = config.SoonestResetMember(members, avail)
+		marker = "← on confirm"
+		headline = "⚠ all '" + pool + "' accounts limited"
+	case members[chosen].ResolvedConfigDir() != "":
+		headline = members[chosen].Name + " (" + members[chosen].ResolvedConfigDir() + ")"
+	default:
+		headline = members[chosen].Name + " (inherit ambient env)"
+	}
+
+	decision := previewDecisionLine(members, avail, cursor, chosen, allLimited, now)
+	budget := previewMemberBudget(o.height, decision != "")
+	start, end, hidden := previewMemberWindow(len(members), marked, budget)
+	// poolGutter can return nil even for this 2+-member slice: PoolMembers
+	// also matches an ungrouped account whose name equals the pool name, and
+	// that member's own Pool field is "", breaking the contiguous run
+	// poolGutter looks for. Indexing a nil slice would panic, so every read
+	// below falls back to two blank cells instead.
+	gut := poolGutter(members)
+
+	var b strings.Builder
+	b.WriteString(previewIndent + "pool '" + pool + "' ⇄\n")
+	for i := start; i < end; i++ {
+		gutter := "  "
+		if gut != nil {
+			gutter = t.DimStyle().Render(gut[i])
+		}
+		chip := t.DimStyle().Render("● available")
+		if !config.AccountAvailable(avail[members[i].Name], now) {
+			chip = t.DangerStyle().Render("⛔ limited")
+		}
+		line := previewIndent + gutter + padRight(members[i].Name, 12) + " " + padRight(chip, previewChipWidth)
+		if i == marked {
+			line += "  " + marker
+		}
+		b.WriteString(line + "\n")
+	}
+	if hidden > 0 {
+		fmt.Fprintf(&b, "%s… %d more members not shown\n", previewIndent, hidden)
+	}
+	if decision != "" {
+		b.WriteString(previewIndent + decision + "\n")
+	}
+	return headline, b.String()
 }

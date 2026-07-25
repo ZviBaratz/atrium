@@ -1184,3 +1184,147 @@ func TestAccountsOverlay_ReorderPersists(t *testing.T) {
 	assert.Equal(t, []string{"personal", "work"}, claudeNames(loaded),
 		"the permuted order survives a save/load round trip, not just an in-memory swap")
 }
+
+// twoMemberPoolCfg returns a two-member "work" pool where both accounts are
+// rule-less (so an empty remote/path preview input still routes to the pool
+// via the catch-all), work-1 first in config order.
+func twoMemberPoolCfg() *config.Config {
+	return &config.Config{ClaudeAccounts: []config.ClaudeAccount{
+		{Name: "work-1", ConfigDir: "~/.claude-work1", Pool: "work"},
+		{Name: "work-2", ConfigDir: "~/.claude-work2", Pool: "work"},
+	}}
+}
+
+// openPreview presses 't' to enter the routing-preview mode.
+func openPreview(o *AccountsOverlay) {
+	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'t'}})
+}
+
+// poolRowLine returns a member's row inside the pool block, not the "Claude →
+// <name> (...)" headline above it — which, when the headline names that same
+// member (it picked them), also contains the member's name and would
+// otherwise satisfy rowLine's plain substring search on the wrong line. Every
+// pool-block member row carries an availability chip ("available" or
+// "limited"); the headline never does, so requiring one disambiguates them.
+func poolRowLine(t *testing.T, view, name string) string {
+	t.Helper()
+	for _, line := range strings.Split(view, "\n") {
+		if strings.Contains(line, name) && (strings.Contains(line, "available") || strings.Contains(line, "limited")) {
+			return line
+		}
+	}
+	t.Fatalf("no pool-block row for %q; full view:\n%s", name, view)
+	return ""
+}
+
+// The pool, both members, and the limited marker all render — the "no pool
+// information" half of the report.
+func TestAccountsOverlay_PreviewShowsPoolAndMembers(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	cfg := twoMemberPoolCfg()
+	st := config.DefaultState()
+	require.NoError(t, st.SetAccountLimited("work-2", ""))
+	o := NewAccountsOverlay(cfg, st)
+	o.SetSize(80, 24)
+	openPreview(o)
+
+	out := o.renderPreview()
+	assert.Contains(t, out, "pool 'work' ⇄", "the pool header names the pool and carries the rotation glyph")
+	assert.Contains(t, poolRowLine(t, out, "work-1"), "● available", "the available member shows the available chip")
+	assert.Contains(t, poolRowLine(t, out, "work-2"), "⛔ limited", "the limited member shows the limited chip")
+}
+
+// The report's other half: a limited member must not be presented as the pick.
+func TestAccountsOverlay_PreviewSkipsLimitedAndSaysWhy(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	cfg := twoMemberPoolCfg()
+	st := config.DefaultState()
+	require.NoError(t, st.SetAccountLimited("work-1", ""))
+	o := NewAccountsOverlay(cfg, st)
+	o.SetSize(80, 24)
+	openPreview(o)
+
+	out := o.renderPreview()
+	// work-1 limited -> headline names work-2, work-2 row has "← next", and the
+	// decision line reads "work-1 limited → rotating to work-2".
+	assert.Contains(t, rowLine(t, out, "Claude → "), "work-2", "headline names the non-limited member")
+	assert.NotContains(t, rowLine(t, out, "Claude → "), "work-1", "the limited member must not be the headline pick")
+	assert.Contains(t, poolRowLine(t, out, "work-2"), "← next", "work-2's own row carries the rotation marker")
+	assert.NotContains(t, poolRowLine(t, out, "work-1"), "← next", "the limited member must not carry the marker")
+	assert.Contains(t, out, "work-1 limited → rotating to work-2")
+}
+
+// Mirrors what creation ACTUALLY does when everything is limited: the confirm,
+// pinned to the soonest-to-reset member.
+func TestAccountsOverlay_PreviewAllLimitedShowsConfirmDecision(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	cfg := twoMemberPoolCfg()
+	st := config.DefaultState()
+	require.NoError(t, st.SetAccountLimited("work-1", ""))
+	require.NoError(t, st.SetAccountLimited("work-2", ""))
+	o := NewAccountsOverlay(cfg, st)
+	o.SetSize(80, 24)
+	openPreview(o)
+
+	out := o.renderPreview()
+	assert.Contains(t, rowLine(t, out, "Claude → "), "⚠ all 'work' accounts limited")
+	assert.Contains(t, rowLine(t, out, "work-1"), "← on confirm",
+		"both members are indefinite, so SoonestResetMember falls back to the first")
+	assert.NotContains(t, rowLine(t, out, "work-2"), "← on confirm")
+	assert.Contains(t, out, "creating asks to confirm, then uses work-1 (first member)")
+}
+
+// Dormancy: a config with no pool must render exactly as it did before this feature.
+func TestAccountsOverlay_PreviewNoPoolUnchanged(t *testing.T) {
+	cfg := &config.Config{ClaudeAccounts: []config.ClaudeAccount{
+		{Name: "solo", ConfigDir: "~/.claude-solo"},
+	}}
+	o := NewAccountsOverlay(cfg, config.DefaultState())
+	o.SetSize(80, 24)
+	openPreview(o)
+
+	out := o.renderPreview()
+	assert.NotContains(t, out, "pool '")
+	assert.NotContains(t, out, "⇄")
+	assert.NotContains(t, out, "← next")
+	assert.Contains(t, out, "solo (", "still resolves to the account")
+	assert.Contains(t, out, ".claude-solo)", "still shows its config dir")
+}
+
+// The cap keeps the overlay usable AND keeps the decision visible.
+func TestAccountsOverlay_PreviewCapsLongPool(t *testing.T) {
+	cfg := &config.Config{}
+	for i := 1; i <= 12; i++ {
+		cfg.ClaudeAccounts = append(cfg.ClaudeAccounts, config.ClaudeAccount{
+			Name:      fmt.Sprintf("work-%02d", i),
+			ConfigDir: fmt.Sprintf("~/.claude-work%02d", i),
+			Pool:      "work",
+		})
+	}
+	o := NewAccountsOverlay(cfg, config.DefaultState())
+	o.SetSize(80, 24)
+	openPreview(o)
+
+	out := o.renderPreview()
+	assert.Contains(t, out, "esc back", "the hint bar must survive the capped block")
+	assert.Contains(t, out, "more members not shown")
+	assert.Contains(t, poolRowLine(t, out, "work-01"), "← next", "the chosen member's row stays in the capped window")
+	assert.LessOrEqual(t, strings.Count(o.Render(), "\n")+1, 24, "the whole overlay must still fit the terminal")
+}
+
+// The read-only contract. Bubble Tea re-renders per keystroke; a writing preview
+// would rotate the pool once per typed character.
+func TestAccountsOverlay_PreviewNeverAdvancesRotation(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	cfg := twoMemberPoolCfg()
+	st := config.DefaultState()
+	require.NoError(t, st.SetAccountRotation("work", 1))
+	o := NewAccountsOverlay(cfg, st)
+	o.SetSize(80, 24)
+	openPreview(o)
+
+	o.renderPreview()
+	o.renderPreview()
+	o.renderPreview()
+	assert.Equal(t, 1, st.GetAccountRotation("work"), "rendering the preview must never advance the pool cursor")
+}
