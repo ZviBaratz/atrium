@@ -199,14 +199,18 @@ type Instance struct {
 	// claudeAccount / claudeConfigDir / claudeAccountDefault pin the Claude Code
 	// account chosen at creation. claudeConfigDir is injected into the tmux
 	// session as CLAUDE_CONFIG_DIR at launch; claudeAccount is the badge label;
-	// claudeAccountDefault marks the default/fallback account (dim badge). Set
-	// once before Start (or restored by FromInstanceData) and never re-resolved,
-	// mirroring Program — the tmux env can only be set at session birth. Read
-	// without the lock (creation-fixed, like direct).
+	// claudeAccountDefault marks the default/fallback account (dim badge).
+	//
+	// Only claudeConfigDir is truly creation-fixed: set once before Start (or
+	// restored by FromInstanceData) and never re-resolved, mirroring Program — the
+	// tmux env can only be set at session birth. The other three are LABELS
+	// re-derived from that dir by RestampClaudeAccount when config renames the
+	// account out from under them (#470). Read without the lock: the labels are
+	// written only on the Bubble Tea update goroutine (or before publication).
 	claudeAccount        string
 	claudeConfigDir      string
 	claudeAccountDefault bool
-	claudeAccountPool    string // rotation pool this session was pinned under (cluster key); "" = singleton/none
+	claudeAccountPool    string // rotation pool this session clusters under; "" = singleton/none
 	// ghConfigDir is the GH_CONFIG_DIR for this session, resolved at creation from
 	// config.GHAccounts by the same remote/path routing as claudeConfigDir. It is
 	// injected into the tmux session (so the agent's own `gh` and any https
@@ -224,7 +228,8 @@ type Instance struct {
 
 	// agyAccount / agyConfigDir pin the Antigravity CLI account chosen at creation.
 	// agyConfigDir is used by bwrap to isolate ~/.gemini/antigravity-cli;
-	// agyAccount is the name of the resolved route.
+	// agyAccount is the name of the resolved route (a label, re-derived from the dir
+	// by RestampAgyAccount — same split as the claude* fields above).
 	agyAccount   string
 	agyConfigDir string
 

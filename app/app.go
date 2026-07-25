@@ -300,6 +300,12 @@ type home struct {
 	appConfig *config.Config
 	// appState stores persistent application state like seen help screens
 	appState config.AppState
+	// accountSync carries what the startup re-stamp pass changed (#470) from the
+	// IO-free constructor to flushAccountStamps, which persists it and zeroes this.
+	accountSync accountStampSync
+	// pendingAccountNotice holds the "N sessions regrouped …" line an accounts edit
+	// produced, until the panel closes and the list it describes is visible again.
+	pendingAccountNotice string
 
 	// -- State --
 
@@ -542,7 +548,13 @@ func newHome(ctx context.Context, program string, autoYes bool, version, binName
 		return nil, fmt.Errorf("failed to load instances: %w", err)
 	}
 
-	return assembleHome(ctx, program, autoYes, version, binName, appConfig, appState, storage, instances), nil
+	h := assembleHome(ctx, program, autoYes, version, binName, appConfig, appState, storage, instances)
+	// Write back any account identities assembleHome healed (#470). Doing it here
+	// keeps that constructor IO-free, and persisting eagerly is what lets `atrium ls`
+	// and the daemon — separate processes that read the stored rows raw — agree with
+	// what the list shows.
+	h.flushAccountStamps()
+	return h, nil
 }
 
 func (m *home) Init() tea.Cmd {

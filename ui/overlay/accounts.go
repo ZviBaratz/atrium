@@ -234,6 +234,30 @@ func (o *AccountsOverlay) handleEditKey(msg tea.KeyMsg) (closed bool, dirty bool
 	return false, true
 }
 
+// carryAvailability moves a Claude account's rate-limit flag (the `l` toggle) with
+// it across a rename. State keys availability by account NAME, and this commit is
+// the only place that still knows the old one — without the carry, renaming an
+// account silently clears its flag and the panel reports an exhausted login as
+// available (#470). Not a config-anchored heal like the session labels: nothing else
+// records which account an availability entry belonged to.
+//
+// Best-effort and non-destructive: nothing to carry, or an entry already sitting
+// under the new name, leaves state untouched.
+func (o *AccountsOverlay) carryAvailability(oldName, newName string) {
+	if oldName == newName {
+		return
+	}
+	avail := o.state.GetAccountAvailability()
+	from, ok := avail[oldName]
+	if !ok {
+		return
+	}
+	if _, taken := avail[newName]; !taken && from.Limited {
+		_ = o.state.SetAccountLimited(newName, from.Until)
+	}
+	_ = o.state.ClearAccountLimited(oldName)
+}
+
 // validate rejects an empty or duplicate (within the active tab) name.
 func (o *AccountsOverlay) validate() string {
 	name := o.form.Name()
@@ -259,6 +283,7 @@ func (o *AccountsOverlay) commit() {
 		if o.editIndex < 0 {
 			o.cfg.ClaudeAccounts = append(o.cfg.ClaudeAccounts, a)
 		} else {
+			o.carryAvailability(o.cfg.ClaudeAccounts[o.editIndex].Name, a.Name)
 			o.cfg.ClaudeAccounts[o.editIndex] = a
 		}
 	case tabAgy:
@@ -290,6 +315,10 @@ func (o *AccountsOverlay) handleConfirmKey(msg tea.KeyMsg) (closed bool, dirty b
 	case "y", "enter":
 		switch o.tab {
 		case tabClaude:
+			// Drop the deleted account's rate-limit flag: state keys it by NAME, so a
+			// leftover entry would silently apply to a future account that reuses the
+			// name (and would otherwise linger as an orphan `atrium doctor` reports).
+			_ = o.state.ClearAccountLimited(o.cfg.ClaudeAccounts[o.cursor].Name)
 			o.cfg.ClaudeAccounts = append(o.cfg.ClaudeAccounts[:o.cursor], o.cfg.ClaudeAccounts[o.cursor+1:]...)
 		case tabAgy:
 			o.cfg.AgyAccounts = append(o.cfg.AgyAccounts[:o.cursor], o.cfg.AgyAccounts[o.cursor+1:]...)

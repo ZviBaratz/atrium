@@ -477,3 +477,24 @@ func TestAccountKey_PoolElseName(t *testing.T) {
 	solo.SetClaudeAccount("personal", "", false)
 	require.Equal(t, "personal", accountKey(solo), "no pool falls back to the account name")
 }
+
+// A config-side rename moves a session's cluster key without adding or removing
+// anything, so the list needs an explicit way to re-cluster: Add/Kill rebuild the
+// view, and the metadata tick's ApplySort deliberately does not (see its doc).
+func TestRegroupAccounts_ReclustersAfterIdentityChange(t *testing.T) {
+	l := acctList(t, "api|work", "sideproj|personal", "infra|work")
+	l.SetGroupMode("account")
+	require.Equal(t, []string{"api|work", "infra|work", "sideproj|personal"}, orderKeys(l))
+
+	// The work account is renamed into the pool personal's sessions already cluster
+	// under — the two clusters become one.
+	for _, it := range l.items {
+		if it.ClaudeAccountName() == "work" {
+			it.RestampClaudeAccount("work", false, "personal")
+		}
+	}
+	require.False(t, l.ApplySort(), "the metadata tick must not silently re-cluster")
+
+	require.True(t, l.RegroupAccounts(), "an identity change under the list re-clusters on request")
+	require.Equal(t, 1, l.distinctAccountCount(), "both blocks now key to one cluster")
+}

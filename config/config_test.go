@@ -1120,3 +1120,81 @@ func TestPoolMembers(t *testing.T) {
 
 	assert.Empty(t, cfg.PoolMembers("nope"))
 }
+
+// FindClaudeAccount is how an existing session's stale labels get re-derived
+// (#470): it matches on the config dir the session was born with, never on
+// routing, and refuses to guess.
+func TestFindClaudeAccount(t *testing.T) {
+	t.Setenv("HOME", "/home/tester")
+
+	renamed := ClaudeAccount{Name: "zvi.baratz", ConfigDir: "~/.claude-work", Pool: "quantivly",
+		RemoteMatches: []string{"quantivly"}}
+	personal := ClaudeAccount{Name: "personal", ConfigDir: "~/.claude-personal"}
+	inherit := ClaudeAccount{Name: "ambient"} // no config_dir: inherits the ambient env
+	cfg := &Config{ClaudeAccounts: []ClaudeAccount{renamed, personal, inherit}}
+
+	for _, tc := range []struct {
+		desc            string
+		cfg             *Config
+		name, configDir string
+		want            string // matched account name; "" = no match
+	}{
+		{"a renamed account is found by the dir its sessions injected",
+			cfg, "work", "/home/tester/.claude-work", "zvi.baratz"},
+		{"an untouched account matches on dir and name alike",
+			cfg, "personal", "/home/tester/.claude-personal", "personal"},
+		{"a hand-edited config_dir spelling still names the same directory",
+			cfg, "work", "/home/tester/.claude-work/", "zvi.baratz"},
+		{"an empty dir never matches, not even the account that declares none",
+			cfg, "ambient", "", ""},
+		{"the synthetic default (no route, no catch-all) resolves to nothing",
+			cfg, "default", "", ""},
+		{"a stale name alone is not enough: its dir is a login config no longer declares",
+			cfg, "personal", "/home/tester/.claude-gone", ""},
+		{"no accounts configured",
+			&Config{}, "work", "/home/tester/.claude-work", ""},
+	} {
+		t.Run(tc.desc, func(t *testing.T) {
+			got, ok := tc.cfg.FindClaudeAccount(tc.name, tc.configDir)
+			if tc.want == "" {
+				assert.False(t, ok)
+				assert.Equal(t, ClaudeAccount{}, got)
+				return
+			}
+			require.True(t, ok)
+			assert.Equal(t, tc.want, got.Name)
+		})
+	}
+
+	// Two accounts may legally share a config_dir (doctor warns; it is also the only
+	// way to put one login in two pools). The stamped name breaks the tie; without
+	// it, guessing could move a session into the wrong pool, so nothing matches.
+	shared := &Config{ClaudeAccounts: []ClaudeAccount{
+		{Name: "twin-a", ConfigDir: "~/.claude-work", Pool: "alpha"},
+		{Name: "twin-b", ConfigDir: "~/.claude-work", Pool: "beta"},
+	}}
+	got, ok := shared.FindClaudeAccount("twin-b", "/home/tester/.claude-work")
+	require.True(t, ok)
+	assert.Equal(t, "twin-b", got.Name, "the stamped name picks its own account, not the first declaration")
+
+	_, ok = shared.FindClaudeAccount("work", "/home/tester/.claude-work")
+	assert.False(t, ok, "an ambiguous dir with no name to break the tie must not be guessed")
+}
+
+// The Antigravity section resolves by the same anchor, independently of the
+// Claude one.
+func TestFindAgyAccount(t *testing.T) {
+	t.Setenv("HOME", "/home/tester")
+
+	cfg := &Config{
+		AgyAccounts:    []AgyAccount{{Name: "agy-new", ConfigDir: "~/.agy-work"}},
+		ClaudeAccounts: []ClaudeAccount{{Name: "zvi.baratz", ConfigDir: "~/.claude-work"}},
+	}
+
+	got, ok := cfg.FindAgyAccount("agy-old", "/home/tester/.agy-work")
+	require.True(t, ok)
+	assert.Equal(t, "agy-new", got.Name)
+
+	_, ok = cfg.FindAgyAccount("agy-old", "/home/tester/.claude-work")
+	assert.False(t, ok, "the Claude section must not answer for the Antigravity one")
+}

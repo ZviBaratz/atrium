@@ -1,6 +1,9 @@
 package config
 
-import "strings"
+import (
+	"path/filepath"
+	"strings"
+)
 
 // ResolveClaudeAccount picks the Claude Code account for a target whose origin
 // remote is remoteURL and whose directory is targetPath. It returns the account
@@ -61,6 +64,83 @@ func (c *Config) PoolMembers(pool string) []ClaudeAccount {
 		}
 	}
 	return members
+}
+
+// FindClaudeAccount resolves which configured account an EXISTING session belongs
+// to, anchored on the CLAUDE_CONFIG_DIR that session was born with (its stamped
+// name is only a tie-breaker). The dir is the durable identity: renaming an
+// account, or moving it into a pool, never changes which directory a live session
+// injected, so this is what lets a rename adopt its sessions instead of stranding
+// them under a name config no longer has (#470).
+//
+// Deliberately NOT routing: ResolveClaudeAccount/ResolveClaudePool answer "where
+// should a NEW session go", which for an existing session would discard a picker
+// pin or the rotated member it actually launched on.
+//
+// An empty configDir never matches, even against an account that also declares
+// none: unset means "inherit the ambient env", and the synthetic default this
+// package returns when nothing routes (see ResolveClaudeAccount) persists exactly
+// that. There is no name-only fallback either — a name that matches while the dir
+// does not means the account's config_dir was edited, i.e. the session is still
+// running a different login, and adopting that account's pool would cluster it
+// with a login it is not on.
+//
+// Returns (ClaudeAccount{}, false) when the anchor hits nothing, or when it hits
+// more than one account and none of them carries the stamped name (two accounts
+// may legally share a config_dir — `atrium doctor` warns about it — and a
+// mis-guess would move a session into the wrong pool with no undo). Callers keep
+// their last-known stamp on false: a rename must heal, a deletion must not blank a
+// badge.
+func (c *Config) FindClaudeAccount(name, configDir string) (ClaudeAccount, bool) {
+	idx := findAccountIndex(len(c.ClaudeAccounts), name, configDir,
+		func(i int) string { return c.ClaudeAccounts[i].Name },
+		func(i int) string { return c.ClaudeAccounts[i].ResolvedConfigDir() })
+	if idx < 0 {
+		return ClaudeAccount{}, false
+	}
+	return c.ClaudeAccounts[idx], true
+}
+
+// FindAgyAccount is FindClaudeAccount over the independent AgyAccounts section,
+// with the same anchor and the same rules.
+func (c *Config) FindAgyAccount(name, configDir string) (AgyAccount, bool) {
+	idx := findAccountIndex(len(c.AgyAccounts), name, configDir,
+		func(i int) string { return c.AgyAccounts[i].Name },
+		func(i int) string { return c.AgyAccounts[i].ResolvedConfigDir() })
+	if idx < 0 {
+		return AgyAccount{}, false
+	}
+	return c.AgyAccounts[idx], true
+}
+
+// findAccountIndex runs the shared config-dir anchor lookup over an account
+// section of length n, returning the matched index or -1. An exact (dir AND name)
+// hit wins outright; a single dir hit wins; several dir hits with no name among
+// them are ambiguous and match nothing. The accessor closures let the Claude and
+// Antigravity sections share this loop without a common interface, mirroring
+// matchRouteIndex.
+func findAccountIndex(n int, name, configDir string, names, dirs func(i int) string) int {
+	if configDir == "" {
+		return -1
+	}
+	want := filepath.Clean(configDir)
+	dirHit, hits := -1, 0
+	for i := 0; i < n; i++ {
+		if filepath.Clean(dirs(i)) != want {
+			continue
+		}
+		if names(i) == name {
+			return i // the account did not move at all
+		}
+		hits++
+		if dirHit < 0 {
+			dirHit = i
+		}
+	}
+	if hits == 1 {
+		return dirHit // renamed (and/or re-pooled) under a stable dir
+	}
+	return -1
 }
 
 // ResolveAgyAccount returns the name and config directory of the AgyAccount

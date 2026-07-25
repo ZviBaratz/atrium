@@ -609,3 +609,72 @@ func TestAccountsOverlay_AgyFormHasNoPool(t *testing.T) {
 	require.Equal(t, modeEdit, o.mode)
 	assert.False(t, o.form.showPool, "an agy account edit form must not show the Pool field")
 }
+
+// A rate-limit flag is keyed by account NAME, so a rename must carry it — otherwise
+// renaming an exhausted account silently reports it as available again, and rotation
+// hands it the next session (#470).
+func TestAccountsOverlay_RenameCarriesAvailability(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	cfg := &config.Config{ClaudeAccounts: []config.ClaudeAccount{
+		{Name: "work", ConfigDir: "~/.claude-work", Pool: "quantivly"},
+	}}
+	st := config.DefaultState()
+	require.NoError(t, st.SetAccountLimited("work", "2026-07-25T12:00:00Z"))
+	o := NewAccountsOverlay(cfg, st)
+	o.SetSize(80, 24)
+
+	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'e'}}) // edit row 0
+	require.Equal(t, modeEdit, o.mode)
+	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyCtrlU}) // focus starts on Name
+	typeInto(o, "zvi.baratz")
+	_, dirty := o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyEnter})
+
+	require.True(t, dirty)
+	avail := st.GetAccountAvailability()
+	assert.True(t, avail["zvi.baratz"].Limited, "the flag follows the account to its new name")
+	assert.Equal(t, "2026-07-25T12:00:00Z", avail["zvi.baratz"].Until, "including when it lifts")
+	assert.NotContains(t, avail, "work", "the old key is not left behind as an orphan")
+}
+
+// Editing anything OTHER than the name must leave availability exactly as it was —
+// the carry is keyed off a name change, not off committing the form.
+func TestAccountsOverlay_EditKeepingNameLeavesAvailability(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	cfg := &config.Config{ClaudeAccounts: []config.ClaudeAccount{
+		{Name: "work", ConfigDir: "~/.claude-work", Pool: "quantivly"},
+	}}
+	st := config.DefaultState()
+	require.NoError(t, st.SetAccountLimited("work", ""))
+	o := NewAccountsOverlay(cfg, st)
+	o.SetSize(80, 24)
+
+	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'e'}})
+	for i := 0; i < fldPool; i++ {
+		o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyTab})
+	}
+	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyCtrlU})
+	typeInto(o, "renamed-pool")
+	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyEnter})
+
+	assert.True(t, st.GetAccountAvailability()["work"].Limited)
+}
+
+// Deleting an account drops its rate-limit flag: state keys availability by name, so
+// a leftover entry would silently apply to a future account that reuses the name.
+func TestAccountsOverlay_DeleteClearsAvailability(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	cfg := &config.Config{ClaudeAccounts: []config.ClaudeAccount{
+		{Name: "work", ConfigDir: "~/.claude-work"},
+	}}
+	st := config.DefaultState()
+	require.NoError(t, st.SetAccountLimited("work", ""))
+	o := NewAccountsOverlay(cfg, st)
+	o.SetSize(80, 24)
+
+	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
+	require.Equal(t, modeConfirmDelete, o.mode)
+	_, dirty := o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+
+	require.True(t, dirty)
+	assert.Empty(t, st.GetAccountAvailability())
+}

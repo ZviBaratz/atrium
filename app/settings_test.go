@@ -9,18 +9,28 @@ import (
 	"github.com/ZviBaratz/atrium/session"
 	"github.com/ZviBaratz/atrium/ui"
 	"github.com/ZviBaratz/atrium/ui/theme"
+	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 // newSettingsTestHome builds the minimal home model the settings paths touch.
-// HOME is sandboxed by TestMain, so config persistence stays hermetic.
+// HOME is sandboxed by TestMain, so config persistence stays hermetic. The list
+// and state are empty but present: an accounts edit re-derives every open
+// session's account labels from the new config (#470), which asks the list for
+// them.
 func newSettingsTestHome() *home {
+	s := spinner.New()
+	st := config.DefaultState()
+	storage, _ := session.NewStorage(st)
 	return &home{
 		ctx:       context.Background(),
 		state:     stateDefault,
 		appConfig: config.DefaultConfig(),
+		appState:  st,
+		storage:   storage,
+		list:      ui.NewList(&s),
 		menu:      ui.NewMenu(),
 	}
 }
