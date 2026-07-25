@@ -31,7 +31,11 @@ func TestPauseAll_OpensCountConfirmation(t *testing.T) {
 
 	require.Equal(t, stateConfirm, h.state, "ctrl+p must open the confirmation overlay")
 	require.NotNil(t, h.confirmationOverlay)
-	assert.Contains(t, h.confirmationOverlay.Render(), "Pause 2 active sessions?")
+	rendered := flattenOverlay(h.confirmationOverlay.Render())
+	assert.Contains(t, rendered,
+		"Pause 2 active sessions? (commits any work in progress, then removes each "+
+			"worktree — gitignored files like .env or build caches are deleted for good)")
+	assert.Contains(t, rendered, "Press y to pause 2 sessions, n or esc to cancel")
 }
 
 // The count is grammatical for a single session.
@@ -42,7 +46,9 @@ func TestPauseAll_SingularMessage(t *testing.T) {
 	_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyCtrlP})
 
 	require.Equal(t, stateConfirm, h.state)
-	assert.Contains(t, h.confirmationOverlay.Render(), "Pause 1 active session?")
+	assert.Contains(t, flattenOverlay(h.confirmationOverlay.Render()),
+		"Pause 1 active session? (commits any work in progress, then removes each "+
+			"worktree — gitignored files like .env or build caches are deleted for good)")
 }
 
 // ctrl+p with nothing active must not open a confirmation; it explains itself
