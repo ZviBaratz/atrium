@@ -784,7 +784,7 @@ added without a row here.
 | `os_chrome` | bool | `true` | fleet state in the terminal title + OSC 9;4 taskbar progress |
 | `record_prompt_history` | bool | `true` | remember submitted prompts for reuse in the create form and quick-send |
 | `mouse` | bool | `true` | mouse capture (clickable rows/tabs/hint bar, wheel, divider drag); `false` frees native select-to-copy |
-| `max_sessions` | int | auto (½ CPU threads) | concurrent-session cap. Unset = host-aware soft cap that warns past it; `N` = hard cap; `0` = unlimited (no warning) |
+| `max_sessions` | int | auto (½ CPU threads) | session cap. Unset = host-aware soft cap on *live* sessions, warning once when a create or a resume crosses it; `N` = hard cap on *every* session, paused included, refused when creating; `0` = unlimited (no warning) |
 | `agent_oom_margin` | int | `on (300)` | Linux only: raise each agent's `oom_score_adj` this far above the shared tmux server's so a kernel OOM kill sheds one recoverable session, not the server (every session). Unset = on (default margin); `N` = margin; `0` = off |
 | `trust_worktrees_root` | bool | `false` | pre-accept Claude's workspace-trust for the worktrees root |
 | `carry_files` | array | `[".claude/settings.local.json"]` | gitignored files copied into each worktree ([Carried files](#carried-files)) |

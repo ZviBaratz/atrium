@@ -135,7 +135,7 @@ func newSettingRows(cfg *config.Config) []settingRow {
 		},
 		{
 			key: "max_sessions", section: "General", label: "Max sessions", kind: kindInt,
-			description: "Concurrent-session cap. Empty = auto (host-derived, warns past it); 0 = unlimited; N = hard cap.",
+			description: "Session cap. Empty = auto (host-derived; warns when live sessions pass it); 0 = unlimited; N = hard cap on all sessions.",
 			get: func(c *config.Config) string {
 				switch {
 				case c.MaxSessions == nil:
