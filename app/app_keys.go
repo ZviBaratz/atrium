@@ -891,7 +891,11 @@ func (m *home) pauseSelected() (tea.Model, tea.Cmd) {
 	})
 }
 
-// resumeSelectedKey resumes the selected paused session (rebuilding its worktree).
+// resumeSelectedKey resumes the selected paused session, rebuilding its worktree if
+// the pause removed one — a parked direct session never had one and a commit-failure
+// pause kept its own, and this key reaches both (it gates on Paused() alone, which is
+// also why the batch scope can keep them: `r` is not the only way back). Same
+// qualification as resumeConfirmMessage's copy, for the same reason.
 func (m *home) resumeSelectedKey() (tea.Model, tea.Cmd) {
 	selected, cmd, ok := m.selectedActionable()
 	if !ok {
