@@ -896,6 +896,9 @@ func (m *home) pauseSelected() (tea.Model, tea.Cmd) {
 // pause kept its own, and this key reaches both (it gates on Paused() alone, which is
 // also why the batch scope can keep them: `r` is not the only way back). Same
 // qualification as resumeConfirmMessage's copy, for the same reason.
+//
+// One resume away from the host budget it asks first (resumeSelected); every resume
+// that fits is immediate, as it always was.
 func (m *home) resumeSelectedKey() (tea.Model, tea.Cmd) {
 	selected, cmd, ok := m.selectedActionable()
 	if !ok {

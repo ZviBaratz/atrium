@@ -51,11 +51,26 @@ func (m *home) sessionCap() config.SessionCap {
 // capCount returns the population to compare against sc: live (non-Paused)
 // sessions for the host-derived soft cap — a paused session imposes no load — and
 // all sessions for an explicit hard cap, whose contract is a total-session limit.
+// This is the creation count, and a creation is the one action that grows both
+// populations at once; a resume grows only the live one, which is why it measures
+// itself (see resumeCapConfirm).
 func (m *home) capCount(sc config.SessionCap) int {
 	if sc.Soft {
 		return m.list.NumActiveInstances()
 	}
 	return m.list.NumInstances()
+}
+
+// hostCapacityLine states the capacity and how much of it is spoken for — the one
+// fact both the create confirmation (overCapMessage) and the resume clause
+// (resumeCapClause) open with, written once so they cannot drift.
+//
+// It carries no noun on the count because the call sites reach it with 0, 1 and many
+// live sessions: the earlier phrasing ("%d sessions are already running") printed "1
+// sessions are already running" for a fan-out batch of 3 over a capacity of 2 with a
+// single session live.
+func hostCapacityLine(limit, live int) string {
+	return fmt.Sprintf("Host capacity is %d, with %d already running", limit, live)
 }
 
 // overCapMessage is the host-capacity confirmation text: it names the derived cap
@@ -64,16 +79,68 @@ func (m *home) capCount(sc config.SessionCap) int {
 func overCapMessage(limit, active, adding int) string {
 	if adding > 1 {
 		return fmt.Sprintf(
-			"Host capacity is %d and %d sessions are already running.\n"+
-				"Spawning %d more will queue, not parallelize, and drive up load.\n"+
+			"%s.\nSpawning %d more will queue, not parallelize, and drive up load.\n"+
 				"Create them anyway? (set max_sessions in config.json to change this)",
-			limit, active, adding)
+			hostCapacityLine(limit, active), adding)
 	}
 	return fmt.Sprintf(
-		"Host capacity is %d and %d sessions are already running.\n"+
-			"Another will queue, not parallelize, and drive up load.\n"+
+		"%s.\nAnother will queue, not parallelize, and drive up load.\n"+
 			"Create it anyway? (set max_sessions in config.json to change this)",
-		limit, active)
+		hostCapacityLine(limit, active))
+}
+
+// resumeCapConfirm reports whether resuming n paused sessions must ask the user
+// first: it is capVerdict read from the resume side, and it differs from a creation
+// in both of its inputs (#463).
+//
+// The count is the *live* population, because that is the only one a resume changes —
+// the sessions themselves already exist. And only a soft cap is consulted, because a
+// hard cap cannot be crossed by resuming: capCount measures it against
+// NumInstances(), paused sessions included, and every creation gate holds
+// total + adding ≤ Limit, so live + n ≤ total ≤ Limit for any set of paused sessions.
+// The one state where live + n could pass an explicit Limit is a total that already
+// does — max_sessions lowered under an existing fleet — where creation is refused
+// outright and refusing to restore parked work as well would strand it.
+//
+// So resume confirms or proceeds; it never blocks. Nothing it starts is a session the
+// user does not already have.
+func resumeCapConfirm(sc config.SessionCap, live, n int) bool {
+	return sc.Soft && capVerdict(sc, live, n) != capAllow
+}
+
+// resumeCapClause is the host-capacity paragraph appended to a resume confirmation
+// when the batch would cross the soft cap. It states the capacity and then what the
+// extra sessions cost, in fewer words than overCapMessage spends: the resume question
+// already owns the dialog's first two rendered lines (it wraps at 46 cells), and the
+// create dialog is where the max_sessions escape hatch is taught.
+//
+// n is the batch the user was asked about, and is ≥ 1 the way capVerdict's adding is:
+// resumeAll and resumeMarked both refuse an empty set before they ask, so the singular
+// branch is exactly one session and never none. A resume that then fails — a branch
+// checked out elsewhere — leaves the live count lower than this predicted, and the
+// batch summary reports it; a confirmation does not enumerate error paths the run
+// itself surfaces (the same call pauseConfirmMessage makes).
+func resumeCapClause(limit, live, n int) string {
+	if n > 1 {
+		return fmt.Sprintf("%s — %d more will queue rather than parallelize.",
+			hostCapacityLine(limit, live), n)
+	}
+	return fmt.Sprintf("%s — another will queue rather than parallelize.",
+		hostCapacityLine(limit, live))
+}
+
+// resumeCapNotice returns the host-capacity clause for a resume of n paused sessions,
+// or "" when it fits the budget (or no soft cap applies) — the model-reading half of
+// resumeCapConfirm. It reads NumActiveInstances() rather than capCount(sc) because the
+// live population is the only one a resume changes; whether that reading decides
+// anything is resumeCapConfirm's call.
+func (m *home) resumeCapNotice(n int) string {
+	sc := m.sessionCap()
+	live := m.list.NumActiveInstances()
+	if !resumeCapConfirm(sc, live, n) {
+		return ""
+	}
+	return resumeCapClause(sc.Limit, live, n)
 }
 
 // spawnPlan is a fully-validated, ready-to-spawn creation: title conflicts,
