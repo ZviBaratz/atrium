@@ -111,13 +111,18 @@ func (g *Worktree) resolveSeedPaths(kind, rel string) (canon, src, dst string, o
 // Like linkLocalPath, that last check is answered from the *worktree*, because
 // only the worktree's view of the ignore rules decides what pause will stage. The
 // origin checkout's answer can differ, and in the direction that leaks: a
-// .gitignore edit that is uncommitted there (or a rule committed after this
-// session's base) makes the origin report "ignored" while the worktree — checked
-// out from HEAD — does not, so the file is carried and then committed. Refusing
-// instead is the conservative side of that trade: the session loses local config
-// it can be told about, rather than silently publishing it, which matters because
-// the default entry (.claude/settings.local.json) is exactly the kind of file
-// kept at 0600 for holding secrets.
+// .gitignore edit that is uncommitted there (or a rule committed after the commit
+// this worktree is checked out from) makes the origin report "ignored" while the
+// worktree does not, so the file is carried and then committed. Refusing instead is
+// the conservative side of that trade: the session loses local config it can be
+// told about, rather than silently publishing it, which matters because the default
+// entry (.claude/settings.local.json) is the kind of file that can hold secrets.
+//
+// "git ignores it in the worktree" is the whole condition, and committing the rule
+// is only one way to meet it: .git/info/exclude lives in the *common* git dir and
+// is therefore shared by every linked worktree, and core.excludesFile is global —
+// a rule in either reaches the worktree without being committed anywhere. The
+// warning below must not promise otherwise.
 func (g *Worktree) carryLocalFile(rel string) {
 	canon, src, dst, ok := g.resolveSeedPaths("carry_files", rel)
 	if !ok {
@@ -136,7 +141,11 @@ func (g *Worktree) carryLocalFile(rel string) {
 		return // already materialized (e.g. force-tracked): never clobber
 	}
 	if _, err := g.runGitCommand(g.worktreePath, "check-ignore", "-q", "--", canon); err != nil {
-		log.WarningLog.Printf("carry_files: skipping %q: git would not ignore it at that path in %s (it would be committed on pause). The rule must be committed on this session's base — a .gitignore edit that only exists in %s does not reach the worktree", rel, g.worktreePath, g.repoPath)
+		// Cause-agnostic, like linkLocalPath's equivalent: the commonest cause is no
+		// ignore rule at all, so lead with the state and give that fix first. The
+		// uncommitted-rule case is the same warning (the check runs in the worktree),
+		// and .git/info/exclude satisfies it without touching the branch.
+		log.WarningLog.Printf("carry_files: skipping %q: git would not ignore it in the session worktree (it would be committed on pause) — add it to .gitignore and commit that on this session's base, or add it to .git/info/exclude. A .gitignore edit left uncommitted in %s does not reach the worktree", rel, g.repoPath)
 		return
 	}
 
@@ -164,16 +173,17 @@ func (g *Worktree) carryLocalFile(rel string) {
 // Writes through the link reach the origin checkout and every other session —
 // see seedLocalPaths on the two lists' write directions.
 //
-// It shares carryLocalFile's guards. The deliberate divergences: the source is
-// Lstat'd rather than Stat'd and needs no IsRegular check (a directory is the
-// whole point), and — the load-bearing one — the gitignore
-// check runs in the *worktree*, not the origin repo. A dir-only
-// pattern (`node_modules/`) matches the origin directory but not the symlink,
-// which git stores as a file — checking in the origin checkout would pass and
-// then leak the link into `git add .` (pause) and into the untracked paths the
-// diff stages every poll tick. Checking the not-yet-created path in the worktree
-// is conservative in exactly the right direction: git cannot match a dir-only
-// pattern there either, so only a slash-less pattern is accepted.
+// It shares carryLocalFile's guards, including the worktree-side ignore check and
+// every reason given there for it. The deliberate divergences: the source is
+// Lstat'd rather than Stat'd and needs no IsRegular check (a directory is the whole
+// point), the clobber guard warns instead of returning silently, and the ignore
+// check has a second reason to run in the *worktree* that carry has no equivalent
+// of. A dir-only pattern (`node_modules/`) matches the origin directory but not the
+// symlink, which git stores as a file — checking in the origin checkout would pass
+// and then leak the link into `git add .` (pause) and into the untracked paths the
+// diff stages every poll tick. Checking the not-yet-created path in the worktree is
+// conservative in exactly the right direction: git cannot match a dir-only pattern
+// there either, so only a slash-less pattern is accepted.
 func (g *Worktree) linkLocalPath(rel string) {
 	canon, src, dst, ok := g.resolveSeedPaths("link_paths", rel)
 	if !ok {
@@ -195,12 +205,13 @@ func (g *Worktree) linkLocalPath(rel string) {
 		return
 	}
 	if _, err := g.runGitCommand(g.worktreePath, "check-ignore", "-q", "--", canon); err != nil {
-		// Cause-agnostic by design: the worktree is checked out from HEAD, so this
+		// Cause-agnostic by design: the worktree is checked out from a commit (the
+		// resolved start point at creation, the session branch on resume), so this
 		// also fires when the ignore rule exists but is not committed yet, or when
 		// the session branched off a base predating it. Naming only the dir-only
 		// pattern would misdiagnose those into a dead end, so lead with the state
 		// and offer the most common cause as a hint.
-		log.WarningLog.Printf("link_paths: skipping %q: git would not ignore a symlink at that path in %s (it would be committed on pause). The rule must be committed on this session's base, and must not end in a slash — %q ignores the symlink, %q only the directory", rel, g.worktreePath, canon, canon+"/")
+		log.WarningLog.Printf("link_paths: skipping %q: git would not ignore a symlink at that path in the session worktree (it would be committed on pause). The rule must reach the worktree — committed on this session's base, or in .git/info/exclude — and must not end in a slash: %q ignores the symlink, %q only the directory", rel, canon, canon+"/")
 		return
 	}
 

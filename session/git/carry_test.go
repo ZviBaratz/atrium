@@ -106,8 +106,8 @@ func TestSetup_SkipsNonGitignoredCarryFile(t *testing.T) {
 // two disagree whenever the ignore rule is not committed on this session's base.
 // This is the default configuration's own shape — carry_files ships pointing at
 // .claude/settings.local.json, whose ignore rule an agent commonly adds without
-// committing it — and the file is kept at 0600 precisely because it can hold
-// secrets, so leaking it into the session branch is the worst outcome here.
+// committing it — and that file can hold secrets, so leaking it into the session
+// branch is the worst outcome here.
 func TestSetup_SkipsCarryFileWhoseIgnoreRuleIsUncommitted(t *testing.T) {
 	repoPath := newTestRepo(t)
 	const rel = ".claude/settings.local.json"
@@ -143,7 +143,9 @@ func TestSetup_CarriedFilesNeverEnterAPauseCommit(t *testing.T) {
 	const uncommittedRule = "local-notes.txt"
 
 	addGitignoredFile(t, repoPath, committed, `{"hooks":{}}`)
-	// A second entry whose rule lands in .gitignore without being committed.
+	// A second entry whose rule lands in .gitignore without being committed. This
+	// rewrites rather than appends, so it must restate `committed` — addGitignoredFile
+	// wrote .gitignore with that single entry and committed it.
 	gitignore := filepath.Join(repoPath, ".gitignore")
 	body := committed + "\n" + uncommittedRule + "\n"
 	if err := os.WriteFile(gitignore, []byte(body), 0644); err != nil {
@@ -156,6 +158,14 @@ func TestSetup_CarriedFilesNeverEnterAPauseCommit(t *testing.T) {
 
 	wt := setupSessionWorktree(t, repoPath, "carry-pause-commit")
 	wtPath := wt.GetWorktreePath()
+
+	// Assert the copy happened before asserting it stays out of the index: without
+	// this the test passes with carry disabled entirely (nothing materialized, so
+	// nothing can leak), which would make the guard's purpose unobservable — the
+	// very thing this test exists to show.
+	if _, err := os.Stat(filepath.Join(wtPath, committed)); err != nil {
+		t.Fatalf("%s was not carried, so the no-leak assertion below proves nothing: %v", committed, err)
+	}
 
 	// Exactly what pause does.
 	mustRunGit(t, wtPath, "add", ".")

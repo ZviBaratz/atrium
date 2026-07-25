@@ -523,11 +523,15 @@ opt out. Entries must be gitignored — anything else is skipped with a warning,
 because pausing a session commits its worktree and a non-ignored file would leak
 into the session branch.
 
-The ignore rule has to be **committed** on the branch the session starts from,
-since that is the state its worktree is checked out from: a `.gitignore` edit
-sitting uncommitted in your own checkout never reaches the session, so an entry
-covered only by such an edit is skipped and the warning says so. Committing the
-rule is the fix. The same applies to [linked paths](#linked-paths).
+"Gitignored" is decided **in the session's worktree**, which is what pause stages —
+not in your own checkout. A `.gitignore` edit you have not committed never reaches
+the worktree, so an entry covered only by such an edit is skipped. Two ways to fix
+it: commit the rule on the branch the session starts from, or add it to
+`.git/info/exclude`, which every worktree of the repo shares and which keeps the
+rule out of the branch entirely. The same applies to [linked paths](#linked-paths).
+
+Skips are recorded in the log rather than shown in the TUI, so a missing carried
+file is quiet — `atrium --verbose` prints the log's path on exit.
 
 Carried files are re-seeded from the original checkout whenever the worktree
 is created, including on resume after a pause — edits made to them inside a
@@ -562,7 +566,9 @@ node_modules/     # directories only: the symlink would NOT be ignored
 Git stores a symlink as a file, so a directory-only pattern leaves the link
 un-ignored, which would commit it into the session branch on pause and show it in
 the session diff. Atrium checks this the way git will see it in the worktree and
-skips the entry with a warning rather than creating a link that leaks.
+skips the entry with a warning rather than creating a link that leaks. As with
+[carried files](#carried-files), the rule has to reach that worktree — committed on
+the branch the session starts from, or in `.git/info/exclude`.
 
 Links are re-created whenever the worktree is materialized, including on resume
 after a pause. On Windows, creating a symlink requires Developer Mode or an

@@ -310,10 +310,11 @@ type Config struct {
 	// explicit [] must survive a save/load cycle instead of being dropped and
 	// reverting to the default.
 	//
-	// An entry is carried only when git ignores it *in the worktree*, i.e. the rule
-	// is committed on the session's base: an uncommitted .gitignore edit in the
-	// origin checkout does not count, because pause would then commit the file into
-	// the session branch.
+	// An entry is carried only when git ignores it *in the worktree*: an uncommitted
+	// .gitignore edit in the origin checkout does not count, because pause would then
+	// commit the file into the session branch. Committing the rule on the session's
+	// base satisfies that; so does .git/info/exclude, which lives in the common git
+	// dir and is shared by every linked worktree, or a global excludes file.
 	CarryFiles []string `json:"carry_files"`
 	// LinkPaths lists repo-relative paths that are symlinked — not copied — from
 	// the origin checkout into each newly materialized session worktree, with an
@@ -326,7 +327,8 @@ type Config struct {
 	// trailing slash: a dir-only pattern (`node_modules/`) matches the origin
 	// directory but not the link, which git stores as a file. Otherwise the link
 	// leaks into the session branch (pause commits with `git add .`) and into the
-	// live diff (which stages untracked paths every poll tick).
+	// live diff (which stages untracked paths every poll tick). The rule must reach
+	// the worktree on the same terms as CarryFiles above.
 	LinkPaths []string `json:"link_paths,omitempty"`
 	// PRCreateDraft selects whether a PR opened with the create key (c) starts as
 	// a draft. nil means use the default (draft), so configs predating this key
