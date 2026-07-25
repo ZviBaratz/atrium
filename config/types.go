@@ -278,11 +278,13 @@ type Config struct {
 	// shell or multiplexer owns the title; terminals that ignore the escapes show
 	// nothing either way.
 	OSChrome *bool `json:"os_chrome,omitempty"`
-	// MaxSessions caps concurrent sessions and has three states. nil (unset, the
-	// default) resolves to a host-derived soft cap — max(2, CPU threads/2) — which
-	// warns with a single confirmation when exceeded but does not block, so a fresh
-	// install degrades gracefully instead of oversubscribing the host. An explicit
-	// positive value is a hard cap: creating beyond it is refused in the UI. An
+	// MaxSessions caps sessions and has three states. nil (unset, the default)
+	// resolves to a host-derived soft cap — max(2, CPU threads/2) — over the *live*
+	// sessions, which warns with a single confirmation when a create or a resume
+	// crosses it but does not block, so a fresh install degrades gracefully instead
+	// of oversubscribing the host. An explicit positive value is a hard cap over
+	// *every* session, paused ones included: creating beyond it is refused in the UI
+	// (resuming cannot cross it, since the sessions it restores already count). An
 	// explicit non-positive value (0) is "unlimited" — no cap and, being explicit,
 	// no warning (the escape hatch). See Config.SessionCap.
 	MaxSessions *int `json:"max_sessions,omitempty"`
