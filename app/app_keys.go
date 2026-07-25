@@ -725,8 +725,11 @@ func (m *home) pushSelected() (tea.Model, tea.Cmd) {
 		}
 		return pushedMsg{}
 	})
-	// The question already names the destination, so this dialog gains only the verb
-	// label — nothing about the push is off-screen (#399).
+	// Verb label only, deliberately scoped that way (#399). Note for whoever revisits
+	// this: PushChanges commits any uncommitted work first (with the auto message
+	// above) and then opens the branch in a browser, neither of which this question
+	// names — by the confirmation-voice rule in app_feedback.go that is a candidate
+	// clause, left out of a copy-only PR rather than decided silently.
 	m.confirmationOverlay.SetConfirmLabel("push")
 	return m, confirm
 }
