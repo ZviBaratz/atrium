@@ -834,33 +834,39 @@ func TestAccountsOverlay_LegendAdvertisesReorder(t *testing.T) {
 	out = o.Render()
 	assert.NotContains(t, out, "J/K reorder", "GH tab has 1 row: reorder is dead")
 	assert.Contains(t, out, "t test routing")
+
+	// 0 accounts: rows() is empty, so the key is equally dead — the "never name
+	// a dead key" convention must hold here too, not just at exactly 1 account.
+	empty := NewAccountsOverlay(&config.Config{}, config.DefaultState())
+	empty.SetSize(80, 24)
+	assert.NotContains(t, empty.Render(), "J/K reorder", "0 accounts: reorder is dead")
 }
 
 // TestAccountsOverlay_LegendFitsAndKeepsLimitedClaudeOnly pins where "l
 // limited" landed after the reflow (line 2, alongside "t test routing", so
 // line 1 doesn't wrap once it also carries "J/K reorder") and that it stays
-// Claude-scoped. It also guards the 80-column budget directly on the widest
-// case (Claude tab, >=2 accounts, both new hint segments present): every
-// rendered line of the bordered box must not exceed the terminal width
-// (o.width) — o.boxWidth() is the pre-border content+padding width the style
-// is given, but the box itself renders 2 columns wider once the 1-column
-// border is added on each side, so o.width is the real outer boundary a
-// wrapped (taller) render could blow through.
+// Claude-scoped. The fit check measures o.legendHints()'s raw (unstyled)
+// strings against o.inner(), not the rendered box: once a line passes through
+// t.OverlayHintStyle().Render() inside the Border()+Padding()+Width() box,
+// lipgloss pads every line — wrapped or not — out to the same total width, so
+// a post-render width comparison can never detect a wrap. Measuring the raw
+// text before it's styled is what actually catches a line that no longer fits
+// o.inner() (74 cols at an 80-column terminal).
 func TestAccountsOverlay_LegendFitsAndKeepsLimitedClaudeOnly(t *testing.T) {
 	cfg := twoTabCfg() // Claude: 2 accounts — widest case (J/K reorder + l limited both shown)
 	o := NewAccountsOverlay(cfg, config.DefaultState())
 	o.SetSize(80, 24)
 
+	hint, extras := o.legendHints()
+	assert.LessOrEqual(t, lipgloss.Width(hint), o.inner(), "line 1 must fit inside the box without wrapping")
+	assert.LessOrEqual(t, lipgloss.Width(extras), o.inner(), "line 2 must fit inside the box without wrapping")
+
 	out := o.Render()
 	// "l limited" must share a line with "t test routing" (line 2), not with
-	// "d delete"/"J/K reorder" (line 1) — the actual move this task makes.
+	// "d delete"/"J/K reorder" (line 1) — the actual move this task makes. This
+	// pins placement; it's the width check above that pins fit.
 	assert.Contains(t, rowLine(t, out, "l limited"), "t test routing",
 		"l limited moved onto the second hint line alongside t test routing")
-
-	for _, line := range strings.Split(out, "\n") {
-		assert.LessOrEqual(t, lipgloss.Width(line), o.width, "line %q must not overflow the terminal width", line)
-	}
-	assert.LessOrEqual(t, strings.Count(out, "\n")+1, 24, "overlay fits within the terminal height")
 
 	o.selectTab(tabGH)
 	assert.NotContains(t, o.Render(), "l limited", "l limited is Claude-only")

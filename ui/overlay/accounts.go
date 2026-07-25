@@ -576,24 +576,34 @@ func (o *AccountsOverlay) renderList() string {
 	if o.mode == modeConfirmDelete {
 		b.WriteString(theme.Current().DangerStyle().Render("Delete '" + o.rows()[o.cursor].name + "'?  y / n"))
 	} else {
-		// J/K reorder only does something with a second row to swap against, and
-		// "l limited" only toggles availability for Claude accounts — advertise
-		// each only where it's live, so the legend never names a dead key. l
-		// limited lives on the second line (not alongside J/K reorder on the
-		// first) purely to keep line 1 under the box's inner width at an
-		// 80-column terminal; it isn't grouped there by key purpose.
-		hint := "↑/↓ select · tab switch · n new · e edit · d delete"
-		if o.activeLen() > 1 {
-			hint = "↑/↓ select · J/K reorder · tab switch · n new · e edit · d delete"
-		}
-		extras := "t test routing · esc close"
-		if o.tab == tabClaude {
-			extras = "l limited · " + extras
-		}
+		hint, extras := o.legendHints()
 		b.WriteString(t.OverlayHintStyle().Render(hint) + "\n")
 		b.WriteString(t.OverlayHintStyle().Render(extras))
 	}
 	return b.String()
+}
+
+// legendHints returns the list legend's two hint lines, unstyled. J/K reorder
+// only does something with a second row to swap against, and "l limited" only
+// toggles availability for Claude accounts — advertise each only where it's
+// live, so the legend never names a dead key. l limited lives on line 2 (not
+// alongside J/K reorder on line 1) purely to keep line 1 under the box's inner
+// width at an 80-column terminal; it isn't grouped there by key purpose.
+// Returned unstyled (not yet passed through OverlayHintStyle) so callers —
+// renderList and tests — can measure the raw text against o.inner() directly;
+// once lipgloss pads a rendered line to the box's full width, every line reads
+// the same width whether or not it wrapped, so that measurement can't be taken
+// after rendering.
+func (o *AccountsOverlay) legendHints() (hint, extras string) {
+	hint = "↑/↓ select · tab switch · n new · e edit · d delete"
+	if o.activeLen() > 1 {
+		hint = "↑/↓ select · J/K reorder · tab switch · n new · e edit · d delete"
+	}
+	extras = "t test routing · esc close"
+	if o.tab == tabClaude {
+		extras = "l limited · " + extras
+	}
+	return hint, extras
 }
 
 func (o *AccountsOverlay) badge(catchAll bool, seen *bool) string {
