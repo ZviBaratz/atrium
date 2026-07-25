@@ -16,7 +16,8 @@ import (
 )
 
 // settingKind selects how a settings row is displayed and edited: bools toggle
-// in place, enums cycle with ←/→, ints and texts open an inline line editor.
+// in place, enums cycle with ←/→, ints and texts open an inline line editor, and
+// read-only rows display a resolved fact with no editor at all.
 type settingKind int
 
 const (
@@ -24,6 +25,10 @@ const (
 	kindEnum
 	kindInt
 	kindText
+	// kindReadOnly is a display-only row: it has no set, no reset, and no options,
+	// and every edit key is a no-op on it. Used for the resolved config.json path
+	// (spec §4, Advanced).
+	kindReadOnly
 )
 
 // minPollIntervalMs is the floor for the daemon poll interval; anything lower
