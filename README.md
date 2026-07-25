@@ -519,9 +519,15 @@ into each newly created session worktree:
 ```
 
 The default is `[".claude/settings.local.json"]`; set an empty list (`[]`) to
-opt out. Entries must be gitignored in the project — anything else is skipped
-with a warning, because pausing a session commits its worktree and a
-non-ignored file would leak into the session branch.
+opt out. Entries must be gitignored — anything else is skipped with a warning,
+because pausing a session commits its worktree and a non-ignored file would leak
+into the session branch.
+
+The ignore rule has to be **committed** on the branch the session starts from,
+since that is the state its worktree is checked out from: a `.gitignore` edit
+sitting uncommitted in your own checkout never reaches the session, so an entry
+covered only by such an edit is skipped and the warning says so. Committing the
+rule is the fix. The same applies to [linked paths](#linked-paths).
 
 Carried files are re-seeded from the original checkout whenever the worktree
 is created, including on resume after a pause — edits made to them inside a

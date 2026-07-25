@@ -309,6 +309,11 @@ type Config struct {
 	// an explicitly empty list opts out. Deliberately NOT omitempty: an
 	// explicit [] must survive a save/load cycle instead of being dropped and
 	// reverting to the default.
+	//
+	// An entry is carried only when git ignores it *in the worktree*, i.e. the rule
+	// is committed on the session's base: an uncommitted .gitignore edit in the
+	// origin checkout does not count, because pause would then commit the file into
+	// the session branch.
 	CarryFiles []string `json:"carry_files"`
 	// LinkPaths lists repo-relative paths that are symlinked — not copied — from
 	// the origin checkout into each newly materialized session worktree, with an

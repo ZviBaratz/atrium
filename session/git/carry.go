@@ -36,7 +36,15 @@ import (
 // not isolated.
 //
 // The config is loaded once for both lists: config.LoadConfig also sweeps and
-// quarantines files in the data dir, so it is not a free read.
+// quarantines files in the data dir, so it is not a free read. It is deliberately
+// read here rather than captured on the Worktree at construction, even though
+// that would save the read: instances are rebuilt once at startup (see
+// session.LoadInstances), and Resume reuses that same Worktree, so a captured
+// list would freeze whatever the config said when the app launched and a
+// settings-panel edit would never reach a resumed session. Nor can this bail out
+// early when both lists are empty — knowing they are empty is what the read is
+// for, and carry_files has a non-empty default, so the common case must read it
+// anyway.
 func (g *Worktree) seedLocalPaths() {
 	cfg := config.LoadConfig()
 	for _, rel := range cfg.GetCarryFiles() {
@@ -99,6 +107,17 @@ func (g *Worktree) resolveSeedPaths(kind, rel string) (canon, src, dst string, o
 //   - git must ignore the path: pause commits the worktree with `git add .`,
 //     so carrying a non-ignored file would silently leak it into the session
 //     branch and any PR cut from it.
+//
+// Like linkLocalPath, that last check is answered from the *worktree*, because
+// only the worktree's view of the ignore rules decides what pause will stage. The
+// origin checkout's answer can differ, and in the direction that leaks: a
+// .gitignore edit that is uncommitted there (or a rule committed after this
+// session's base) makes the origin report "ignored" while the worktree — checked
+// out from HEAD — does not, so the file is carried and then committed. Refusing
+// instead is the conservative side of that trade: the session loses local config
+// it can be told about, rather than silently publishing it, which matters because
+// the default entry (.claude/settings.local.json) is exactly the kind of file
+// kept at 0600 for holding secrets.
 func (g *Worktree) carryLocalFile(rel string) {
 	canon, src, dst, ok := g.resolveSeedPaths("carry_files", rel)
 	if !ok {
@@ -116,8 +135,8 @@ func (g *Worktree) carryLocalFile(rel string) {
 	if _, err := os.Lstat(dst); err == nil {
 		return // already materialized (e.g. force-tracked): never clobber
 	}
-	if _, err := g.runGitCommand(g.repoPath, "check-ignore", "-q", "--", canon); err != nil {
-		log.WarningLog.Printf("carry_files: skipping %q: not gitignored in %s (it would be committed on pause — add it to .gitignore)", rel, g.repoPath)
+	if _, err := g.runGitCommand(g.worktreePath, "check-ignore", "-q", "--", canon); err != nil {
+		log.WarningLog.Printf("carry_files: skipping %q: git would not ignore it at that path in %s (it would be committed on pause). The rule must be committed on this session's base — a .gitignore edit that only exists in %s does not reach the worktree", rel, g.worktreePath, g.repoPath)
 		return
 	}
 

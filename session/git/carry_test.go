@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/ZviBaratz/atrium/config"
@@ -97,6 +98,72 @@ func TestSetup_SkipsNonGitignoredCarryFile(t *testing.T) {
 
 	if _, err := os.Stat(filepath.Join(wt.GetWorktreePath(), rel)); !os.IsNotExist(err) {
 		t.Fatalf("non-gitignored file must not be carried, stat err = %v", err)
+	}
+}
+
+// The ignore check must be answered from the worktree, not the origin checkout:
+// only the worktree's view decides what pause's `git add .` will stage, and the
+// two disagree whenever the ignore rule is not committed on this session's base.
+// This is the default configuration's own shape — carry_files ships pointing at
+// .claude/settings.local.json, whose ignore rule an agent commonly adds without
+// committing it — and the file is kept at 0600 precisely because it can hold
+// secrets, so leaking it into the session branch is the worst outcome here.
+func TestSetup_SkipsCarryFileWhoseIgnoreRuleIsUncommitted(t *testing.T) {
+	repoPath := newTestRepo(t)
+	const rel = ".claude/settings.local.json"
+
+	// The rule exists in the origin's working tree but was never committed, so the
+	// worktree — checked out from HEAD — does not have it.
+	if err := os.WriteFile(filepath.Join(repoPath, ".gitignore"), []byte(rel+"\n"), 0644); err != nil {
+		t.Fatalf("write .gitignore: %v", err)
+	}
+	abs := filepath.Join(repoPath, rel)
+	if err := os.MkdirAll(filepath.Dir(abs), 0755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(abs, []byte(`{"hooks":{}}`), 0600); err != nil {
+		t.Fatalf("write %s: %v", rel, err)
+	}
+	writeCarryConfig(t, []string{rel})
+
+	wt := setupSessionWorktree(t, repoPath, "carry-uncommitted-rule")
+
+	if _, err := os.Stat(filepath.Join(wt.GetWorktreePath(), rel)); !os.IsNotExist(err) {
+		t.Fatalf("a file git will not ignore in the worktree must not be carried, stat err = %v", err)
+	}
+}
+
+// The same property stated as its consequence: whatever carry materializes must
+// survive pause's `git add .` without entering the index. Asserting on the commit
+// rather than on the copy is what makes the guard's purpose observable — a
+// worktree-side ignore verdict is the only thing that can promise this.
+func TestSetup_CarriedFilesNeverEnterAPauseCommit(t *testing.T) {
+	repoPath := newTestRepo(t)
+	const committed = ".claude/settings.local.json"
+	const uncommittedRule = "local-notes.txt"
+
+	addGitignoredFile(t, repoPath, committed, `{"hooks":{}}`)
+	// A second entry whose rule lands in .gitignore without being committed.
+	gitignore := filepath.Join(repoPath, ".gitignore")
+	body := committed + "\n" + uncommittedRule + "\n"
+	if err := os.WriteFile(gitignore, []byte(body), 0644); err != nil {
+		t.Fatalf("rewrite .gitignore: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repoPath, uncommittedRule), []byte("notes"), 0600); err != nil {
+		t.Fatalf("write %s: %v", uncommittedRule, err)
+	}
+	writeCarryConfig(t, []string{committed, uncommittedRule})
+
+	wt := setupSessionWorktree(t, repoPath, "carry-pause-commit")
+	wtPath := wt.GetWorktreePath()
+
+	// Exactly what pause does.
+	mustRunGit(t, wtPath, "add", ".")
+	staged := mustRunGit(t, wtPath, "ls-files", "-s")
+	for _, rel := range []string{committed, uncommittedRule} {
+		if strings.Contains(staged, rel) {
+			t.Fatalf("carried path %q entered the index — pause would commit it into the session branch:\n%s", rel, staged)
+		}
 	}
 }
 
