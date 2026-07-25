@@ -516,9 +516,17 @@ func (m *home) resumeAll() tea.Cmd {
 // resumeConfirmMessage is the batch-resume question for n sessions described by kind
 // ("paused" for the whole view, "marked" for a multi-select subset), plus what resume
 // puts back — the confirmation-voice rule in app_feedback.go: ask with the verb, then
-// name what the user cannot see. What the list cannot show is that resume is the exact
+// name what the user cannot see. What the list cannot show is that resume is the
 // inverse of pause: the worktree is materialized again at the same path (with the
 // auto-WIP commit unwound) and the agent comes back.
+//
+// It says "each *removed* worktree", not "each worktree", because two of
+// Instance.Resume's three paths rebuild nothing, and both are reachable from a batch:
+// a direct session has no worktree at all — Pause refuses one, but RecoverLostSession
+// parks it when its pane dies, and PausedInstancesInView cannot exclude it without
+// making it unresumable — and a commit-failure pause leaves its worktree in place, so
+// Resume deliberately reuses it rather than re-adding it over the WIP. Reattaching the
+// agent is the half true of every path, so that half carries no qualifier.
 //
 // It says *reattaches* because pause detaches tmux rather than closing it
 // (session.Instance.pause), so the agent process is normally still alive and Resume
@@ -526,7 +534,7 @@ func (m *home) resumeAll() tea.Cmd {
 // the user off a non-destructive action. One literal, shared by both entry points, so
 // resumeAll and resumeMarked cannot drift apart.
 func resumeConfirmMessage(kind string, n int) string {
-	return fmt.Sprintf("Resume %d %s session%s? (rebuilds each worktree and reattaches its agent)",
+	return fmt.Sprintf("Resume %d %s session%s? (rebuilds each removed worktree and reattaches every agent)",
 		n, kind, plural(n))
 }
 
@@ -626,15 +634,26 @@ func (m *home) pauseAll() tea.Cmd {
 // then name what the user cannot see. Pause stages and commits everything git tracks
 // (Worktree.CommitChanges) and then removes the worktree, so the gitignored files
 // living in it — a local .env, a build cache, downloaded dependencies — go with it,
-// and resume rebuilds the worktree from the branch. Nothing in the UI or the README
-// says so, and no undo exists.
+// and resume rebuilds the worktree from the branch. The README documents only the
+// carry_files slice of this (those entries are re-seeded on every Setup, resume
+// included); nothing names the general loss, and no undo exists.
 //
-// Unconditional, unlike killDataWarning: every pause removes the worktree, so only
-// the magnitude of the loss varies, and measuring that would mean a per-session
-// `git status --ignored` on the UI thread. It claims deletion rather than "not
-// restored on resume" because carry_files re-seeds its own (gitignored) entries into
-// every fresh worktree, resume included — the deleted copy is still gone, but a
-// blanket "nothing ignored comes back" would be false for those.
+// Unconditional, unlike killDataWarning: a pause that completes removes the worktree,
+// so only the magnitude of the loss varies, and measuring that would mean a
+// per-session `git status --ignored` on the UI thread. The one path that keeps the
+// worktree is a failure — when the auto-WIP commit fails, pause deliberately leaves it
+// on disk rather than destroy the work it exists to protect (session.Instance.pause)
+// and reports the error through the batch summary, so the promise here is the one a
+// successful pause keeps, not a claim the dialog can break silently.
+//
+// It claims deletion rather than "not restored on resume" because carry_files re-seeds
+// its own (gitignored) entries into every fresh worktree, resume included — the
+// deleted copy is still gone, but a blanket "nothing ignored comes back" would be
+// false for those. That cuts against .env as the example, since .env is the archetypal
+// carry_files entry: a user who listed it sees the origin's copy reappear, having lost
+// only the session's edits to it. It stays because the default carry list is just
+// .claude/settings.local.json (config.defaultCarryFiles), so for an unconfigured user
+// — the one this dialog is warning — .env really is gone.
 func pauseConfirmMessage(kind string, n int) string {
 	return fmt.Sprintf("Pause %d %s session%s? (commits any work in progress, then removes "+
 		"each worktree — gitignored files like .env or build caches are deleted for good)",

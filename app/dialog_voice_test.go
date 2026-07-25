@@ -11,9 +11,11 @@ import (
 
 // The batch-pause question names the consequence the screen cannot show: pause
 // commits WIP and then removes the worktree, taking every gitignored file in it
-// (#399 item 4). It is unconditional by design — every pause removes the worktree,
-// so only the magnitude varies, and measuring it would mean a per-session
-// `git status --ignored` on the UI thread.
+// (#399 item 4). This pins the literal only — that the consequence clause is present
+// and identical for both kinds. Whether pause really removes the worktree is
+// session/pause.go's to keep, and the reasoning for warning unconditionally (only the
+// magnitude varies, and measuring it would mean a per-session `git status --ignored`
+// on the UI thread) lives on pauseConfirmMessage.
 func TestPauseConfirmMessage(t *testing.T) {
 	require.Equal(t,
 		"Pause 3 active sessions? (commits any work in progress, then removes each "+
@@ -25,16 +27,18 @@ func TestPauseConfirmMessage(t *testing.T) {
 		pauseConfirmMessage("marked", 1))
 }
 
-// The batch-resume question names what resume rebuilds. It says "reattaches"
-// because pause only detaches tmux (session/pause.go): the agent process is
-// normally still alive and keeps its conversation, so "restarts" would frighten
-// the user off a non-destructive action.
+// The batch-resume question names what resume rebuilds. It says "reattaches" because
+// pause only detaches tmux (session/pause.go): the agent process is normally still
+// alive and keeps its conversation, so "restarts" would frighten the user off a
+// non-destructive action. The worktree half is qualified ("each removed worktree") and
+// the agent half is not, because a batch can hold sessions Resume rebuilds nothing for
+// — a parked direct session, a commit-failure park — while every path reattaches.
 func TestResumeConfirmMessage(t *testing.T) {
 	require.Equal(t,
-		"Resume 3 paused sessions? (rebuilds each worktree and reattaches its agent)",
+		"Resume 3 paused sessions? (rebuilds each removed worktree and reattaches every agent)",
 		resumeConfirmMessage("paused", 3))
 	require.Equal(t,
-		"Resume 1 marked session? (rebuilds each worktree and reattaches its agent)",
+		"Resume 1 marked session? (rebuilds each removed worktree and reattaches every agent)",
 		resumeConfirmMessage("marked", 1))
 }
 

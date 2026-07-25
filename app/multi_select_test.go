@@ -128,7 +128,7 @@ func TestMultiSelect_ResumeConfirmsPausedSubset(t *testing.T) {
 	require.Equal(t, stateConfirm, h.state)
 	rendered := flattenOverlay(h.confirmationOverlay.Render())
 	assert.Contains(t, rendered,
-		"Resume 1 marked session? (rebuilds each worktree and reattaches its agent)")
+		"Resume 1 marked session? (rebuilds each removed worktree and reattaches every agent)")
 	assert.Contains(t, rendered, "Press y to resume 1 session, n or esc to cancel")
 }
 

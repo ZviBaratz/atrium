@@ -34,7 +34,7 @@ func TestResumeAll_OpensCountConfirmation(t *testing.T) {
 	require.NotNil(t, h.confirmationOverlay)
 	rendered := flattenOverlay(h.confirmationOverlay.Render())
 	assert.Contains(t, rendered,
-		"Resume 2 paused sessions? (rebuilds each worktree and reattaches its agent)")
+		"Resume 2 paused sessions? (rebuilds each removed worktree and reattaches every agent)")
 	assert.Contains(t, rendered, "Press y to resume 2 sessions, n or esc to cancel")
 }
 
@@ -47,7 +47,7 @@ func TestResumeAll_SingularMessage(t *testing.T) {
 
 	require.Equal(t, stateConfirm, h.state)
 	assert.Contains(t, flattenOverlay(h.confirmationOverlay.Render()),
-		"Resume 1 paused session? (rebuilds each worktree and reattaches its agent)")
+		"Resume 1 paused session? (rebuilds each removed worktree and reattaches every agent)")
 }
 
 // ctrl+r with nothing paused must not open a confirmation; it explains itself
