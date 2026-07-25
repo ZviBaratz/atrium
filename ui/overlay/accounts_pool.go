@@ -51,8 +51,10 @@ func poolGutter(accts []config.ClaudeAccount) []string {
 }
 
 // splitPools names the pools whose members are not all adjacent, in first-appearance
-// order — the case poolGutter cannot bracket. renderList turns this into the nudge to
-// reorder them together.
+// order — the case poolGutter cannot bracket as ONE group. Each contiguous run of two
+// or more still gets its own brackets, so the trigger here is non-contiguity, not the
+// absence of brackets: a pool broken into two runs renders both bracketed AND named
+// below. renderList turns this into the nudge to reorder them together.
 func splitPools(accts []config.ClaudeAccount) []string {
 	type span struct{ first, last, count int }
 	spans := make(map[string]*span)
@@ -88,8 +90,9 @@ func splitPools(accts []config.ClaudeAccount) []string {
 // width. The single-pool case additionally degrades to a terse form when even
 // the count form does not fit a very narrow terminal: a bare count form is
 // otherwise reachable and grammatically wrong for exactly one pool ("1 pools
-// are split"), and reachable in practice — any pool name of 11+ characters
-// (e.g. "quantivly-work") already overflows a 60-column terminal's naming form.
+// are split"), and reachable in practice — the naming form's fixed text is 43
+// cells against a 60-column terminal's inner() of 54, so any pool name of 12+
+// characters (e.g. "quantivly-work") already overflows it.
 func splitPoolNote(names []string, width int) string {
 	switch {
 	case len(names) == 0:

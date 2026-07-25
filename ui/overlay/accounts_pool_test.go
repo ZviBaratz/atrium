@@ -1,6 +1,7 @@
 package overlay
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/ZviBaratz/atrium/config"
@@ -146,5 +147,20 @@ func TestSplitPoolNote(t *testing.T) {
 	// than wrap.
 	t.Run("one name at a genuinely narrow width falls back to the terse form", func(t *testing.T) {
 		assert.Equal(t, "pool split — J/K to group", splitPoolNote([]string{"quantivly-work"}, 38))
+	})
+
+	// Pins the exact fallback threshold splitPoolNote's doc comment names, so the
+	// comment can't drift off by one again: the naming form's fixed text is 43 cells,
+	// so at a 60-column terminal (inner() == 54) an 11-character name lands exactly on
+	// the limit and still names the pool, and only 12 tips it into the count form.
+	t.Run("the naming form's fallback threshold at a 60-column terminal is 12 characters", func(t *testing.T) {
+		const inner60 = 54
+		fits := strings.Repeat("a", 11)
+		assert.Equal(t, "pool '"+fits+"' is split — J/K to group its members",
+			splitPoolNote([]string{fits}, inner60),
+			"11 characters measures exactly inner() and must still name the pool")
+		assert.Equal(t, "1 pool is split — J/K to group its members",
+			splitPoolNote([]string{strings.Repeat("a", 12)}, inner60),
+			"12 characters is the first width that overflows and falls back")
 	})
 }
