@@ -116,6 +116,17 @@ func TestPreviewDecisionLine(t *testing.T) {
 		assert.Equal(t, "2 members limited → rotating to work-3", got)
 	})
 
+	// The cursor is the common case that actually wraps in real rotation: it
+	// advances past the end of the pool and lands back at the front. start=2
+	// (work-3, the last member) is limited, so the walk must cross the n%n
+	// boundary to reach chosen=0 (work-1) rather than reading the loop as
+	// only ever counting forward without wraparound.
+	t.Run("one member skipped, cursor wraps past the end", func(t *testing.T) {
+		avail := map[string]config.AccountAvailability{"work-3": {Limited: true}}
+		got := previewDecisionLine(members, avail, 2, 0, false, now)
+		assert.Equal(t, "work-3 limited → rotating to work-1", got)
+	})
+
 	t.Run("all limited, all indefinite: falls back to the first member", func(t *testing.T) {
 		avail := map[string]config.AccountAvailability{
 			"work-1": {Limited: true},

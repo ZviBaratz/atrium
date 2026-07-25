@@ -16,11 +16,12 @@ const previewChrome = 18
 // previewMemberBudget returns how many pool-member rows fit under the
 // pool-free chrome (previewChrome) at the given overlay height. The pool
 // block itself pays two costs previewChrome does not count, because they
-// belong to the block, not to renderPreview's fixed body: a blank line that
-// separates the block from the rest of the preview (always paid), and one
-// more line for the decision sentence beneath the members, paid only when
-// there is one to show. The result is floored at 2 so a very small overlay
-// still shows something rather than collapsing the block away entirely.
+// belong to the block, not to renderPreview's fixed body: its header line
+// ("pool 'work' ⇄", always paid, always present above the member rows), and
+// one more line for the decision sentence beneath the members, paid only
+// when there is one to show. The result is floored at 2 so a very small
+// overlay still shows something rather than collapsing the block away
+// entirely.
 func previewMemberBudget(height int, decision bool) int {
 	budget := height - previewChrome - 1
 	if decision {
