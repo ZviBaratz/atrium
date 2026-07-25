@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/ZviBaratz/atrium/config"
+	"github.com/mattn/go-runewidth"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -109,4 +110,129 @@ func TestEveryRowKeyIsAConfigFieldOrReadOnly(t *testing.T) {
 		}
 		assert.Truef(t, fields[r.key], "row %q matches no config.Config json field", r.key)
 	}
+}
+
+// summaryBudget is the widest a summary may be: the panel's inner width at the
+// project's 80-column floor once PR B widens the box to min(96, width-2) — a 78-cell
+// box, inner 74. Today's boxWidth is capped at 64 (inner 60), so a summary near this
+// bound wraps onto a second footer line under the current renderer; that is harmless
+// while the footer is still variable-height, and PR B's wider box plus fixed-height
+// help pane makes it one line. The bound is enforced now so the copy does not have to
+// be revisited when the box grows — do not lower it to 60.
+const summaryBudget = 74
+
+// TestSummaryFitsOneLine pins the summary bound from spec §6. A summary that wraps
+// is not a defect on its own, but the bound is what keeps the fixed-height help pane
+// PR B introduces from needing to scroll for an ordinary row.
+func TestSummaryFitsOneLine(t *testing.T) {
+	for _, r := range newSettingRows(config.DefaultConfig()) {
+		require.NotEmptyf(t, r.summary, "row %q has no summary", r.key)
+		assert.LessOrEqualf(t, runewidth.StringWidth(r.summary), summaryBudget,
+			"row %q summary is %d cells, over the %d-cell budget: %q",
+			r.key, runewidth.StringWidth(r.summary), summaryBudget, r.summary)
+	}
+}
+
+// TestEveryRowHasAKnownCategoryAndScope pins that no row carries a category outside
+// allCategories() (which would render under no section header at all) and that the
+// scope seam is uniform. The scope assertion is also what keeps the `unused` linter
+// from flagging a field PR A stores but does not yet render.
+func TestEveryRowHasAKnownCategoryAndScope(t *testing.T) {
+	known := map[settingCategory]bool{}
+	for _, c := range allCategories() {
+		known[c] = true
+	}
+	for _, r := range newSettingRows(config.DefaultConfig()) {
+		assert.Truef(t, known[r.category], "row %q has a category outside allCategories()", r.key)
+		assert.Equalf(t, scopeGlobal, r.scope, "row %q must be scopeGlobal until #477 adds a layer", r.key)
+	}
+}
+
+// glossExemptRows are the enum rows whose options carry no gloss, each for one of two
+// reasons: the vocabulary is *dynamic* (it grows when a profile, theme or splash
+// variant is added, so an exhaustive map would rot silently), or it is a bare on/off
+// pair that glosses itself and whose meaning is already in the row's summary.
+//
+// Spec §6 supplies glosses for the five enums whose options are a fixed, non-obvious
+// vocabulary — those are exactly where the 300-443-char run-on descriptions lived, so
+// the guard below stays strict where it earns its keep.
+var glossExemptRows = map[string]string{
+	"default_program":      "dynamic: option list is the user's profile names",
+	"theme":                "dynamic: grows with every theme added to the registry",
+	"splash":               "dynamic: grows with every splash variant (random is glossed)",
+	"group_mode":           "self-glossing on/off; the summary carries the meaning",
+	"model_indicator":      "self-glossing on/off",
+	"effort_indicator":     "self-glossing on/off",
+	"permission_indicator": "self-glossing on/off",
+}
+
+// TestEnumRowsGlossEveryOption pins that each fixed-vocabulary enum option carries a
+// one-line gloss. This is what replaced the run-on descriptions: if an option has no
+// gloss, its meaning went missing rather than moving.
+func TestEnumRowsGlossEveryOption(t *testing.T) {
+	cfg := config.DefaultConfig()
+	seenExempt := map[string]bool{}
+	for _, r := range newSettingRows(cfg) {
+		if r.kind != kindEnum {
+			assert.NotContainsf(t, glossExemptRows, r.key,
+				"row %q is exempted from the gloss guard but is not an enum row", r.key)
+			continue
+		}
+		if reason, ok := glossExemptRows[r.key]; ok {
+			seenExempt[r.key] = true
+			t.Logf("row %q exempt from the gloss guard: %s", r.key, reason)
+			continue
+		}
+		for _, opt := range r.options(cfg) {
+			assert.NotEmptyf(t, r.gloss[opt], "enum row %q has no gloss for option %q", r.key, opt)
+		}
+	}
+	// The exemption list must not outlive the rows it names, or it would silently
+	// excuse a future row that reuses a retired key.
+	for key := range glossExemptRows {
+		assert.Truef(t, seenExempt[key], "glossExemptRows names %q, which is no longer an enum row", key)
+	}
+}
+
+// TestCategoryRowCounts pins the spec §4 taxonomy row-by-row, so a row cannot drift
+// to a neighbouring category unnoticed during a later refactor. The Advanced count
+// includes the read-only config-file row.
+func TestCategoryRowCounts(t *testing.T) {
+	want := map[settingCategory]int{
+		catSessions:      4,
+		catWorktrees:     6,
+		catAppearance:    5,
+		catSessionList:   5,
+		catNotifications: 4,
+		catAutomation:    4,
+		catInput:         3,
+		catProjects:      2,
+		catUpdates:       2,
+		catAdvanced:      3, // 2 settings + the read-only config-file row
+	}
+	got := map[settingCategory]int{}
+	total := 0
+	for _, r := range newSettingRows(config.DefaultConfig()) {
+		got[r.category]++
+		total++
+	}
+	assert.Equal(t, 38, total, "37 config rows plus the read-only config-file row")
+	for _, c := range allCategories() {
+		assert.Equalf(t, want[c], got[c], "category %q row count", c.label())
+	}
+}
+
+// TestRowsAreGroupedByCategory pins that rows are declared in contiguous category
+// blocks, in allCategories() order. renderBody derives its section headers from
+// consecutive rows sharing a category, so a row declared out of position would render
+// a second header for a category that already had one.
+func TestRowsAreGroupedByCategory(t *testing.T) {
+	var order []settingCategory
+	for _, r := range newSettingRows(config.DefaultConfig()) {
+		if len(order) == 0 || order[len(order)-1] != r.category {
+			order = append(order, r.category)
+		}
+	}
+	assert.Equal(t, allCategories(), order,
+		"rows must be declared in contiguous blocks, in allCategories() order")
 }
