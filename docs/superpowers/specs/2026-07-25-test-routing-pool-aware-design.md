@@ -147,7 +147,7 @@ Claude → ⚠ all 'work' accounts limited
          pool 'work' ⇄
          ┌ work-1       ⛔ limited    ← on confirm
          └ work-2       ⛔ limited
-         creating asks to confirm, then uses work-1 (first member)
+         creating from the form asks to confirm, then uses work-1 (first member)
 ```
 
 Decisions encoded in that layout:

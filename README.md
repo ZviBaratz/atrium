@@ -686,11 +686,13 @@ instead of pinning every session in a repo to one account:
   member (shown indented under it) to pin that account for this one session —
   which bypasses availability, so it works even on a flagged member.
 - If **every** member of the routed pool is flagged limited, creating a session
-  shows a confirm ("all `<pool>` accounts are rate-limited … create anyway on
-  `<member>`?") instead of silently spawning on a limited account. Declining
-  leaves the draft in place and creates nothing; accepting pins the member whose
-  limit resets soonest — which, while flags are indefinite-only, is the first
-  pool member.
+  from the new-session form shows a confirm ("all `<pool>` accounts are
+  rate-limited … create anyway on `<member>`?") instead of silently spawning on
+  a limited account. Declining leaves the draft in place and creates nothing;
+  accepting pins the member whose limit resets soonest — which, while flags are
+  indefinite-only, is the first pool member. Smart auto-dispatch skips this
+  all-exhausted gate, so a fully-limited pool can still spawn silently there
+  (#483).
 - Press `t` in the `@` accounts overlay to preview where an input (remote URL
   and/or path) would route right now, without creating anything. When the
   matched account belongs to a pool, the `Claude →` line names the member a

@@ -97,7 +97,7 @@ func previewDecisionLine(members []config.ClaudeAccount, avail map[string]config
 	}
 
 	if allLimited {
-		pinned := chosen
+		pinned := ((chosen % n) + n) % n
 		reason := "(first member)"
 		if until := avail[members[pinned].Name].Until; until != "" {
 			if _, err := time.Parse(time.RFC3339, until); err == nil {

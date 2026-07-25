@@ -202,7 +202,7 @@ func TestPreviewDecisionLine(t *testing.T) {
 	// no skip                      -> ""
 	// one skipped                  -> "work-1 limited → rotating to work-2"
 	// two skipped                  -> "2 members limited → rotating to work-3"
-	// all limited, all indefinite  -> "creating asks to confirm, then uses work-1 (first member)"
+	// all limited, all indefinite  -> "creating from the form asks to confirm, then uses work-1 (first member)"
 	// all limited, one has Until   -> "... uses work-2 (resets soonest)"
 }
 ```

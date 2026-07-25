@@ -1274,6 +1274,35 @@ func TestAccountsOverlay_PreviewAllLimitedShowsConfirmDecision(t *testing.T) {
 	assert.Contains(t, out, "creating from the form asks to confirm, then uses work-1 (first member)")
 }
 
+// The marker and the decision sentence must name the SAME member even when
+// the rotation cursor points elsewhere. renderPoolDecision's marked is
+// config.SoonestResetMember's pick, not SelectPoolMember's defensive cursor
+// fallback (chosen) — the two disagree here on purpose: the cursor sits on
+// work-2, but work-1 carries a parseable, later Until, so SoonestResetMember
+// picks work-1 instead. If renderPoolDecision ever passed chosen (the cursor
+// fallback) to previewDecisionLine instead of marked, the marker would stay
+// on work-1 (it's rendered from marked directly) while the sentence would
+// start naming work-2 — the exact drift this test exists to catch.
+func TestAccountsOverlay_PreviewAllLimitedMarkerAndSentenceNameSameMember(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	cfg := twoMemberPoolCfg()
+	st := config.DefaultState()
+	require.NoError(t, st.SetAccountLimited("work-1", "2099-01-01T00:00:00Z"))
+	require.NoError(t, st.SetAccountLimited("work-2", ""))
+	require.NoError(t, st.SetAccountRotation("work", 1))
+	o := NewAccountsOverlay(cfg, st)
+	o.SetSize(80, 24)
+	openPreview(o)
+
+	out := o.renderPreview()
+	assert.Contains(t, poolRowLine(t, out, "work-1"), "← on confirm",
+		"SoonestResetMember picks work-1 (its Until parses and is earliest), not the rotation cursor's work-2")
+	assert.NotContains(t, poolRowLine(t, out, "work-2"), "← on confirm",
+		"the rotation cursor's own member must not carry the marker once the pool is exhausted")
+	assert.Contains(t, out, "creating from the form asks to confirm, then uses work-1 (resets soonest)",
+		"the decision sentence must name the same member the marker landed on")
+}
+
 // Dormancy: a config with no pool must render exactly as it did before this feature.
 func TestAccountsOverlay_PreviewNoPoolUnchanged(t *testing.T) {
 	cfg := &config.Config{ClaudeAccounts: []config.ClaudeAccount{
