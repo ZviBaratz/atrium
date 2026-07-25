@@ -41,6 +41,37 @@ func TestCapVerdict(t *testing.T) {
 	}
 }
 
+// resumeCapConfirm is capVerdict read from the resume side (#463). Two things differ
+// from a creation, and the table pins both: a resume grows only the *live* population,
+// so it is measured against the live count; and it is measured against the *soft* cap
+// alone, because a hard cap counts every session (paused included) and so cannot be
+// crossed by restoring sessions that already count. It never blocks.
+func TestResumeCapConfirm(t *testing.T) {
+	soft := func(n int) config.SessionCap { return config.SessionCap{Limit: n, Soft: true} }
+	hard := func(n int) config.SessionCap { return config.SessionCap{Limit: n, Soft: false} }
+	cases := []struct {
+		name    string
+		sc      config.SessionCap
+		live, n int
+		want    bool
+	}{
+		{"soft under", soft(4), 1, 2, false},
+		{"soft at boundary", soft(4), 3, 1, false}, // 3+1 == 4, not over
+		{"soft over by one", soft(4), 4, 1, true},
+		{"soft batch over from nothing live", soft(2), 0, 3, true},
+		{"soft unlimited", soft(0), 5, 5, false},
+		{"hard cap: resume adds no counted session", hard(2), 2, 3, false},
+		{"hard cap already exceeded by total", hard(2), 2, 1, false},
+		{"explicit unlimited", hard(0), 9, 9, false},
+	}
+	for _, tc := range cases {
+		if got := resumeCapConfirm(tc.sc, tc.live, tc.n); got != tc.want {
+			t.Errorf("%s: resumeCapConfirm(%+v, %d, %d) = %v, want %v",
+				tc.name, tc.sc, tc.live, tc.n, got, tc.want)
+		}
+	}
+}
+
 // With max_sessions unset, crossing the host-derived cap opens a confirmation
 // (not a hard block): the create is staged, nothing spawns yet, and the form is
 // dismissed behind the confirm.

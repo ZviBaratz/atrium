@@ -42,6 +42,48 @@ func TestResumeConfirmMessage(t *testing.T) {
 		resumeConfirmMessage("marked", 1))
 }
 
+// The host-capacity fact is one sentence shared by the create confirmation and the
+// resume clause, so the two cannot drift. It carries no noun ("with 2 already
+// running") because the count is 0, 1 or many at different call sites and the
+// earlier "%d sessions are already running" printed "1 sessions" for a fan-out batch
+// over a cap of 2 with one session live. The limit comes first — a swapped pair
+// reads as a plausible sentence, which is why this pins the order.
+func TestHostCapacityLine(t *testing.T) {
+	require.Equal(t, "Host capacity is 4, with 2 already running", hostCapacityLine(4, 2))
+	require.Equal(t, "Host capacity is 2, with 1 already running", hostCapacityLine(2, 1))
+	require.Equal(t, "Host capacity is 2, with 0 already running", hostCapacityLine(2, 0))
+}
+
+// The over-cap create confirmation states the capacity, the consequence, and the
+// escape hatch, in that order — the one dialog that leads with facts rather than the
+// verb (#399 left it as it was). Pinned in both its branches now that the capacity
+// sentence is shared with resume.
+func TestOverCapMessage(t *testing.T) {
+	require.Equal(t,
+		"Host capacity is 2, with 1 already running.\n"+
+			"Another will queue, not parallelize, and drive up load.\n"+
+			"Create it anyway? (set max_sessions in config.json to change this)",
+		overCapMessage(2, 1, 1))
+	require.Equal(t,
+		"Host capacity is 2, with 1 already running.\n"+
+			"Spawning 3 more will queue, not parallelize, and drive up load.\n"+
+			"Create them anyway? (set max_sessions in config.json to change this)",
+		overCapMessage(2, 1, 3))
+}
+
+// The resume clause is the second paragraph of the resume confirmations: the same
+// capacity sentence, then what resuming this many more costs. "queue rather than
+// parallelize" is overCapMessage's point in fewer words — the resume question already
+// occupies the first two rendered lines, and the dialog wraps at 46 cells.
+func TestResumeCapClause(t *testing.T) {
+	require.Equal(t,
+		"Host capacity is 2, with 2 already running — 3 more will queue rather than parallelize.",
+		resumeCapClause(2, 2, 3))
+	require.Equal(t,
+		"Host capacity is 2, with 2 already running — another will queue rather than parallelize.",
+		resumeCapClause(2, 2, 1))
+}
+
 // Push already names its destination in the question, so it gains only the verb
 // label: the hint says what y does instead of the generic "confirm".
 func TestPushConfirm_VerbLabel(t *testing.T) {
