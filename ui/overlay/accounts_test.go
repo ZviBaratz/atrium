@@ -996,3 +996,90 @@ func TestAccountsOverlay_GutterSurvivesWindowScroll(t *testing.T) {
 	assert.Contains(t, rowLine(t, out, "work-1"), "┌", "run head keeps its top bracket even as the window's first visible row")
 	assert.Contains(t, rowLine(t, out, "work-2"), "└")
 }
+
+// TestAccountsOverlay_SplitPoolTwoRunsRendersBracketsAndNote covers the Task 4
+// review's uncovered interaction: a pool with two SEPARATE adjacent runs (not one
+// contiguous block) is bracketed at each run by poolGutter *and* still flagged split
+// by splitPools, so the brackets and the split note render together in the same
+// frame. poolGutter and splitPools are each unit-tested alone; this pins that
+// combination specifically.
+func TestAccountsOverlay_SplitPoolTwoRunsRendersBracketsAndNote(t *testing.T) {
+	cfg := &config.Config{ClaudeAccounts: []config.ClaudeAccount{
+		{Name: "w1", ConfigDir: "~/.claude-w1", Pool: "work"},
+		{Name: "w2", ConfigDir: "~/.claude-w2", Pool: "work"},
+		{Name: "other", ConfigDir: "~/.claude-other"},
+		{Name: "w3", ConfigDir: "~/.claude-w3", Pool: "work"},
+		{Name: "w4", ConfigDir: "~/.claude-w4", Pool: "work"},
+	}}
+	o := NewAccountsOverlay(cfg, config.DefaultState())
+	o.SetSize(80, 24)
+
+	out := o.Render()
+	assert.Contains(t, rowLine(t, out, "w1"), "┌", "first run's head is bracketed")
+	assert.Contains(t, rowLine(t, out, "w2"), "└", "first run's tail is bracketed")
+	assert.Contains(t, rowLine(t, out, "w3"), "┌", "second run's head is bracketed")
+	assert.Contains(t, rowLine(t, out, "w4"), "└", "second run's tail is bracketed")
+	assert.Contains(t, out, "pool 'work' is split",
+		"two runs are still not ONE contiguous block, so splitPools flags the pool "+
+			"even though every member sits inside some bracketed run")
+}
+
+// TestAccountsOverlay_ReorderGroupsSplitPool is the end-to-end pin for the note's own
+// advice: pressing J on the account between two split-pool members actually groups
+// them, the bracket appears, and the note clears. Fixture: work-1 (pool work),
+// personal, work-2 (pool work) — cursor moves down to personal, then J swaps
+// personal past work-2, landing the order work-1, work-2, personal.
+func TestAccountsOverlay_ReorderGroupsSplitPool(t *testing.T) {
+	cfg := &config.Config{ClaudeAccounts: []config.ClaudeAccount{
+		{Name: "work-1", ConfigDir: "~/.claude-work1", Pool: "work"},
+		{Name: "personal", ConfigDir: "~/.claude"},
+		{Name: "work-2", ConfigDir: "~/.claude-work2", Pool: "work"},
+	}}
+	o := NewAccountsOverlay(cfg, config.DefaultState())
+	o.SetSize(80, 24)
+
+	// Before: the pool's members are not adjacent — no bracket anywhere, and the
+	// note names exactly this pool as split.
+	before := o.Render()
+	assert.NotContains(t, before, "┌", "non-adjacent pool members render no bracket yet")
+	assert.Contains(t, before, "pool 'work' is split")
+
+	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyDown})
+	require.Equal(t, 1, o.cursorIndex(), "cursor now on personal")
+
+	closed, dirty := o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'J'}})
+	assert.False(t, closed)
+	assert.True(t, dirty, "reorder mutates config, so the app must persist it")
+	assert.Equal(t, []string{"work-1", "work-2", "personal"}, claudeNames(cfg),
+		"personal swapped past work-2, grouping the pool")
+
+	// After: the note's fix worked — the pool is now one contiguous run, bracketed,
+	// and the split note is gone.
+	after := o.Render()
+	assert.Contains(t, rowLine(t, after, "work-1"), "┌", "run head carries the top bracket")
+	assert.Contains(t, rowLine(t, after, "work-2"), "└", "run tail carries the bottom bracket")
+	assert.NotContains(t, after, "is split", "the pool is no longer split, so the nudge clears")
+}
+
+// TestAccountsOverlay_ReorderPersists is the persistence half of Task 5: dirty is
+// the app's ONLY cue to call config.SaveConfig (app/app_accounts.go:14) — the
+// overlay itself never writes to disk. This proves the permuted order actually
+// round-trips through a real save/load cycle, not merely that SaveConfig didn't
+// error.
+func TestAccountsOverlay_ReorderPersists(t *testing.T) {
+	t.Setenv("HOME", t.TempDir()) // hermetic: LoadConfig/SaveConfig must never touch the real data dir
+
+	cfg := twoTabCfg() // Claude: work, personal
+	o := NewAccountsOverlay(cfg, config.DefaultState())
+	o.SetSize(80, 24)
+
+	_, dirty := o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'J'}})
+	require.True(t, dirty, "reorder must report dirty so the app knows to persist")
+	require.Equal(t, []string{"personal", "work"}, claudeNames(cfg), "in-memory order after the swap")
+
+	require.NoError(t, config.SaveConfig(cfg))
+
+	loaded := config.LoadConfig()
+	assert.Equal(t, []string{"personal", "work"}, claudeNames(loaded),
+		"the permuted order survives a save/load round trip, not just an in-memory swap")
+}
