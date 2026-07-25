@@ -114,10 +114,12 @@ func resumeCapConfirm(sc config.SessionCap, live, n int) bool {
 // already owns the dialog's first two rendered lines (it wraps at 46 cells), and the
 // create dialog is where the max_sessions escape hatch is taught.
 //
-// n is the batch the user was asked about. A resume that then fails — a branch checked
-// out elsewhere — leaves the live count lower than this predicted, and the batch
-// summary reports it; a confirmation does not enumerate error paths the run itself
-// surfaces (the same call pauseConfirmMessage makes).
+// n is the batch the user was asked about, and is ≥ 1 the way capVerdict's adding is:
+// resumeAll and resumeMarked both refuse an empty set before they ask, so the singular
+// branch is exactly one session and never none. A resume that then fails — a branch
+// checked out elsewhere — leaves the live count lower than this predicted, and the
+// batch summary reports it; a confirmation does not enumerate error paths the run
+// itself surfaces (the same call pauseConfirmMessage makes).
 func resumeCapClause(limit, live, n int) string {
 	if n > 1 {
 		return fmt.Sprintf("%s — %d more will queue rather than parallelize.",

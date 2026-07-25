@@ -414,15 +414,18 @@ func (m *home) resumeSelected(selected *session.Instance) tea.Cmd {
 			worktree:    wt,
 		}
 	}
-	clause := m.resumeCapNotice(1)
-	if clause == "" {
-		return m.beginAsyncAction("resuming…", action)
+	// One label for both paths, so the progress row reads the same whether the resume
+	// was immediate or came through the capacity confirmation — the same anti-drift
+	// reason SetConfirmLabel sits next to the message it labels.
+	const busyLabel = "resuming…"
+	if clause := m.resumeCapNotice(1); clause != "" {
+		cmd := m.confirmAsyncAction(
+			fmt.Sprintf("Resume session '%s'?\n%s", selected.DisplayName(), clause),
+			busyLabel, action)
+		m.confirmationOverlay.SetConfirmLabel("resume")
+		return cmd
 	}
-	cmd := m.confirmAsyncAction(
-		fmt.Sprintf("Resume session '%s'?\n%s", selected.DisplayName(), clause),
-		"resuming…", action)
-	m.confirmationOverlay.SetConfirmLabel("resume")
-	return cmd
+	return m.beginAsyncAction(busyLabel, action)
 }
 
 // handlePauseDone completes a single pause on the Update loop: it tears down the

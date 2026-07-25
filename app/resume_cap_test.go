@@ -3,6 +3,8 @@ package app
 import (
 	"testing"
 
+	"github.com/ZviBaratz/atrium/session"
+
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -68,6 +70,44 @@ func TestResumeAll_WithinBudgetKeepsPlainQuestion(t *testing.T) {
 	assert.Contains(t, rendered, "Resume 3 paused sessions?")
 	assert.NotContains(t, rendered, "Host capacity",
 		"a resume that fits the budget says nothing about capacity")
+}
+
+// The clause is computed in the shared core, but the count it weighs is derived
+// differently by each entry point: resumeAll takes PausedInstancesInView() whole,
+// while resumeMarked filters the marked set down to its paused subset. So the marked
+// batch needs its own guard on the number — the resumeAll test cannot reach that
+// filter. 2 live, 4 marked of which 3 are paused, 4 paused in the view: the clause
+// must weigh 3, which is neither the marked count nor the view's paused count (both 4,
+// and both would still be over budget — a fleet where the wrong reading merely stayed
+// silent would prove nothing) and not 1 either (2+1 fits capacity 4, so weighing one
+// session drops the clause entirely).
+func TestResumeMarked_OverSoftCapWeighsTheMarkedPausedSubset(t *testing.T) {
+	h := newCreateFormHome(t)
+	h.hostCap = 4
+	h.appConfig.MaxSessions = nil
+	live := addActive(t, h, "live-1")
+	addActive(t, h, "live-2")
+	paused := make([]*session.Instance, 0, 4)
+	for _, title := range []string{"alpha", "bravo", "charlie", "delta"} {
+		paused = append(paused, addPaused(t, h, title))
+	}
+
+	pressRune(h, 'v')
+	h.list.ToggleMark(live) // live — filtered out of a resume
+	for _, inst := range paused[:3] {
+		h.list.ToggleMark(inst)
+	}
+	pressRune(h, 'r')
+
+	require.Equal(t, stateConfirm, h.state, "the marked batch must confirm before resuming")
+	require.NotNil(t, h.confirmationOverlay)
+	rendered := flattenOverlay(h.confirmationOverlay.Render())
+	assert.Contains(t, rendered, "Resume 3 marked sessions?")
+	assert.Contains(t, rendered,
+		"Host capacity is 4, with 2 already running — 3 more will queue rather than parallelize.")
+	for _, inst := range paused {
+		assert.True(t, inst.Paused(), "nothing resumes until the user confirms")
+	}
 }
 
 // An explicit max_sessions counts every session, paused included, so the sessions a
