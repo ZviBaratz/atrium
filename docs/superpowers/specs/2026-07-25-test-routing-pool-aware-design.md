@@ -76,7 +76,7 @@ selector makes the condition *detectable* at both call sites, which is the
 precondition for fixing it; the fix itself is a separate PR. Filed as #483.
 
 This is also why the preview's all-limited sentence (`previewDecisionLine`, "Design"
-§2 below) is scoped to *"creating from the form"* rather than "creating" bare: the
+§2 below) names *"the form"* rather than "creating" bare: the
 confirm it describes is real on the create-form path and does not exist on smart
 auto-dispatch's, so the copy must not imply it does. The two decisions are linked —
 #483 is the reason the sentence needs the qualifier, not a coincidence.
@@ -147,7 +147,7 @@ Claude → ⚠ all 'work' accounts limited
          pool 'work' ⇄
          ┌ work-1       ⛔ limited    ← on confirm
          └ work-2       ⛔ limited
-         creating from the form asks to confirm, then uses work-1 (first member)
+         the form asks to confirm, then uses work-1 (first member)
 ```
 
 Decisions encoded in that layout:
