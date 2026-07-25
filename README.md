@@ -607,6 +607,15 @@ list to your config file:
 - The **first account with no `remote_matches` and no `path_matches`** is the
   catch-all default, used when no route matches. It is optional: with no such
   account, non-matching sessions inherit the current environment.
+- Order is **match priority**, not just display order: press `J` / `K` (or
+  `shift+↑` / `shift+↓`) in the `@` accounts overlay to move the row under the
+  cursor up or down one slot — the cursor follows the row, and a press at either
+  end, or on a tab with fewer than two accounts, does nothing. This is how you
+  change which account is the catch-all, or break a tie between two accounts
+  whose rules both match; it works the same on all three tabs (Claude, GitHub,
+  Antigravity). The `default` / `catch-all (unreachable)` / `routed` badges
+  update live as rows move, and the new order is saved to `config.json`
+  immediately.
 - The resolved account is **pinned at session creation** and shown as a badge in
   the session list (dim for the default account, accented for a routed one). It
   is injected once at launch and is not re-resolved on restart or `--continue`;
@@ -645,6 +654,14 @@ instead of pinning every session in a repo to one account:
   keeps a rotation cursor that advances by one every time a session is created,
   so an idle session and one mid-task both count as "one turn" — the cursor
   never skips back to whichever member looks less busy.
+- Adjacent members of one pool render as a bracketed group in the `@` overlay's
+  Claude tab (`┌`/`│`/`└` in a dim gutter column to the row's left); the
+  per-row `pool:<name>` chip stays either way. A pool whose members are **not**
+  adjacent can't be bracketed, so the list prints a note instead — `pool
+  '<name>' is split — J/K to group its members`. One consequence of
+  reordering: a pool's rotation cursor is an index into its members in config
+  order, so reordering members *within* a pool can repeat or skip one member
+  once — harmless for round-robin.
 - An account can be flagged rate-limited by hand — Atrium has no way to read
   Anthropic's own limits — from the `@` accounts overlay: press `l` on a Claude
   account to toggle it limited/available. Rotation skips a limited member and
