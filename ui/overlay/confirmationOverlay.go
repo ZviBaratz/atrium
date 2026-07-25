@@ -25,6 +25,9 @@ type ConfirmationOverlay struct {
 	ConfirmAltKey string
 	// Custom cancel key (defaults to 'n')
 	CancelKey string
+	// confirmLabel names what confirming does ("pause 3 sessions"), replacing the
+	// generic "confirm" in the key hint. Empty keeps "confirm" — see SetConfirmLabel.
+	confirmLabel string
 	// Custom styling options
 	borderColor lipgloss.Color
 }
@@ -78,8 +81,14 @@ func (c *ConfirmationOverlay) Render(opts ...WhitespaceOption) string {
 	if c.ConfirmAltKey != "" {
 		confirmHint += hintStyle.Render(" (or ") + keyStyle.Render(c.ConfirmAltKey) + hintStyle.Render(")")
 	}
+	// A call site that set a verb label has the hint name the action instead of the
+	// generic "confirm" (#399); the keys it names are the same either way.
+	action := "confirm"
+	if c.confirmLabel != "" {
+		action = c.confirmLabel
+	}
 	content := c.message + "\n\n" +
-		hintStyle.Render("Press ") + confirmHint + hintStyle.Render(" to confirm, ") +
+		hintStyle.Render("Press ") + confirmHint + hintStyle.Render(" to "+action+", ") +
 		keyStyle.Render(c.CancelKey) + hintStyle.Render(" or ") +
 		keyStyle.Render("esc") + hintStyle.Render(" to cancel")
 
@@ -116,4 +125,16 @@ func (c *ConfirmationOverlay) SetConfirmAltKey(key string) {
 // SetCancelKey sets the key used to cancel the action
 func (c *ConfirmationOverlay) SetCancelKey(key string) {
 	c.CancelKey = key
+}
+
+// SetConfirmLabel names what confirming does, as a verb phrase in the caller's own
+// words ("pause 3 sessions"), so the hint reads "Press y to pause 3 sessions, n or
+// esc to cancel" instead of the generic "to confirm" (#399). Empty (the default)
+// keeps "confirm", so adoption is opt-in per dialog.
+//
+// This is hint text only: the keys stay y / n / esc, deliberately — a verb-labeled
+// confirmation is a copy change, not a muscle-memory one, and the single alternate
+// confirm slot is already spoken for by the kill chord (see SetConfirmAltKey, #448).
+func (c *ConfirmationOverlay) SetConfirmLabel(label string) {
+	c.confirmLabel = label
 }

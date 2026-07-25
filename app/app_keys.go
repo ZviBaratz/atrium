@@ -717,7 +717,7 @@ func (m *home) pushSelected() (tea.Model, tea.Cmd) {
 
 	// Show confirmation modal; the push runs off the UI thread only on confirm.
 	message := fmt.Sprintf("Push changes from session '%s'?", selected.DisplayName())
-	return m, m.confirmWorktreeAction(message, "pushing…", selected, func(worktree *git.Worktree) tea.Msg {
+	confirm := m.confirmWorktreeAction(message, "pushing…", selected, func(worktree *git.Worktree) tea.Msg {
 		// Default commit message with timestamp.
 		commitMsg := fmt.Sprintf("[atrium] update from '%s' on %s", selected.DisplayName(), time.Now().Format(time.RFC822))
 		if err := worktree.PushChanges(commitMsg, true); err != nil {
@@ -725,6 +725,13 @@ func (m *home) pushSelected() (tea.Model, tea.Cmd) {
 		}
 		return pushedMsg{}
 	})
+	// Verb label only, deliberately scoped that way (#399). Note for whoever revisits
+	// this: PushChanges commits any uncommitted work first (with the auto message
+	// above) and then opens the branch in a browser, neither of which this question
+	// names — by the confirmation-voice rule in app_feedback.go that is a candidate
+	// clause, left out of a copy-only PR rather than decided silently.
+	m.confirmationOverlay.SetConfirmLabel("push")
+	return m, confirm
 }
 
 // mergeSelected confirms and squash-merges the selected session's open PR, gated
@@ -750,18 +757,24 @@ func (m *home) mergeSelected() (tea.Model, tea.Cmd) {
 		return m, m.handleInfoNotice(reason)
 	}
 	number := status.Number
-	message := fmt.Sprintf("Merge PR #%d from '%s' (squash)?", number, selected.DisplayName())
+	// The squash is stated in the question itself, freeing the parenthetical for the
+	// caveat that trailed it as a second sentence: unmerged CI is exactly the thing
+	// the user cannot see from here, so it belongs in the kill dialog's shape
+	// (see the confirmation-voice rule in app_feedback.go).
+	message := fmt.Sprintf("Merge PR #%d from '%s' as a squash merge?", number, selected.DisplayName())
 	if status.CI == git.CIPending {
-		message += " CI is still running."
+		message += " (CI is still running)"
 	}
 	// Defer the worktree lookup and network merge into the confirm action, run off
 	// the UI thread only if the user confirms.
-	return m, m.confirmWorktreeAction(message, fmt.Sprintf("merging PR #%d…", number), selected, func(worktree *git.Worktree) tea.Msg {
+	confirm := m.confirmWorktreeAction(message, fmt.Sprintf("merging PR #%d…", number), selected, func(worktree *git.Worktree) tea.Msg {
 		if err := worktree.MergePR(); err != nil {
 			return err
 		}
 		return prMergedMsg{number: number, instance: selected}
 	})
+	m.confirmationOverlay.SetConfirmLabel(fmt.Sprintf("merge PR #%d", number))
+	return m, confirm
 }
 
 // createPRForSelected confirms and opens a PR for the selected session, gated on
@@ -803,13 +816,17 @@ func (m *home) createPRForSelected() (tea.Model, tea.Cmd) {
 	message := fmt.Sprintf("Create %s PR from '%s'?", adjective, selected.DisplayName())
 	// Defer the worktree lookup and network create into the confirm action, run off
 	// the UI thread only if the user confirms.
-	return m, m.confirmWorktreeAction(message, "creating PR…", selected, func(worktree *git.Worktree) tea.Msg {
+	confirm := m.confirmWorktreeAction(message, "creating PR…", selected, func(worktree *git.Worktree) tea.Msg {
 		number, err := worktree.CreatePR(draft)
 		if err != nil {
 			return err
 		}
 		return prCreatedMsg{number: number}
 	})
+	// The label names only what this action does: CreateBlockedReason above already
+	// refused an unpushed branch, so the PR is all that gets created here (#399).
+	m.confirmationOverlay.SetConfirmLabel("create the PR")
+	return m, confirm
 }
 
 // openPRForSelected launches the browser at the selected session's PR. Viewing is
@@ -874,7 +891,11 @@ func (m *home) pauseSelected() (tea.Model, tea.Cmd) {
 	})
 }
 
-// resumeSelectedKey resumes the selected paused session (rebuilding its worktree).
+// resumeSelectedKey resumes the selected paused session, rebuilding its worktree if
+// the pause removed one — a parked direct session never had one and a commit-failure
+// pause kept its own, and this key reaches both (it gates on Paused() alone, which is
+// also why the batch scope can keep them: `r` is not the only way back). Same
+// qualification as resumeConfirmMessage's copy, for the same reason.
 func (m *home) resumeSelectedKey() (tea.Model, tea.Cmd) {
 	selected, cmd, ok := m.selectedActionable()
 	if !ok {
