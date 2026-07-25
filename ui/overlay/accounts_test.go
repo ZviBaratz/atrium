@@ -505,14 +505,14 @@ func TestAccountsOverlay_CatchAllBadgeSurvivesWindowScroll(t *testing.T) {
 		cfg.ClaudeAccounts = append(cfg.ClaudeAccounts, acct)
 	}
 	o := NewAccountsOverlay(cfg, config.DefaultState())
-	o.SetSize(80, 24) // budget 11 rows
+	o.SetSize(80, 24) // budget 12 rows: no pool anywhere in this fixture, so chrome stays 12
 
 	for i := 0; i < 20; i++ {
 		o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyDown})
 	}
 	require.Equal(t, 20, o.cursorIndex())
 
-	// Window is [10,21): the first catch-all (index 0) scrolled off; the later one
+	// Window is [9,21): the first catch-all (index 0) scrolled off; the later one
 	// (index 15) is still visible.
 	out := o.Render()
 	require.NotContains(t, out, "firstcatch", "the first catch-all scrolled off the top")
@@ -521,6 +521,40 @@ func TestAccountsOverlay_CatchAllBadgeSurvivesWindowScroll(t *testing.T) {
 	assert.NotContains(t, out, "default",
 		"the only 'default' badge belonged to the scrolled-off first catch-all; a broken "+
 			"pre-scan would wrongly render the visible later catch-all as 'default'")
+}
+
+// TestAccountsOverlay_RowWindowChromeConditionalOnSplitPoolNote pins the dormancy
+// fix: rowWindow's chrome allowance for the split-pool note must be conditional on
+// that note actually being able to render (Claude tab with a genuinely split pool),
+// not a static worst case charged to every config. A pool-free config keeps the
+// full pre-existing 12-row budget; a config with a split pool loses exactly the one
+// row its own note occupies — never more, and never for a config that has no
+// pools at all.
+func TestAccountsOverlay_RowWindowChromeConditionalOnSplitPoolNote(t *testing.T) {
+	mk := func(withSplitPool bool) *config.Config {
+		cfg := &config.Config{}
+		for i := 0; i < 30; i++ {
+			cfg.ClaudeAccounts = append(cfg.ClaudeAccounts, config.ClaudeAccount{
+				Name: fmt.Sprintf("acct%02d", i), ConfigDir: "~/.claude",
+			})
+		}
+		if withSplitPool {
+			// Non-adjacent members of the same pool: splitPools flags this "work".
+			cfg.ClaudeAccounts[0].Pool = "work"
+			cfg.ClaudeAccounts[2].Pool = "work"
+		}
+		return cfg
+	}
+
+	flat := NewAccountsOverlay(mk(false), config.DefaultState())
+	flat.SetSize(80, 24)
+	start, end := flat.rowWindow(flat.activeLen())
+	assert.Equal(t, 12, end-start, "a pool-free config gets the full 12-row budget")
+
+	split := NewAccountsOverlay(mk(true), config.DefaultState())
+	split.SetSize(80, 24)
+	start, end = split.rowWindow(split.activeLen())
+	assert.Equal(t, 11, end-start, "a split pool costs exactly the one row its own note occupies")
 }
 
 // TestAccountsOverlay_ToggleAvailability covers the 'l' key: it flags the
@@ -901,7 +935,10 @@ func TestAccountsOverlay_SplitPoolShowsNoteAndNoBracket(t *testing.T) {
 	o := NewAccountsOverlay(cfg, config.DefaultState())
 	o.SetSize(80, 24)
 
-	out := o.Render()
+	// renderList (not Render) so the box border's own top-left corner glyph can't
+	// collide with the "no bracket" assertion below — see
+	// TestAccountsOverlay_NoPoolsRendersFlat, which documents why.
+	out := o.renderList()
 	assert.NotContains(t, out, "┌", "non-adjacent members can't be bracketed")
 	assert.Contains(t, out, "pool 'work' is split")
 }
@@ -950,7 +987,10 @@ func TestAccountsOverlay_GutterIsClaudeTabOnly(t *testing.T) {
 	o.SetSize(80, 24)
 	o.selectTab(tabGH)
 
-	out := o.Render()
+	// renderList (not Render): the box border's own top-left corner glyph must not
+	// collide with the "no bracket" assertion — see
+	// TestAccountsOverlay_NoPoolsRendersFlat, which documents why.
+	out := o.renderList()
 	assert.NotContains(t, out, "┌")
 	assert.NotContains(t, out, "is split")
 }
@@ -980,14 +1020,16 @@ func TestAccountsOverlay_GutterSurvivesWindowScroll(t *testing.T) {
 	}
 
 	o := NewAccountsOverlay(cfg, config.DefaultState())
-	o.SetSize(80, 24) // budget 11 rows after the chrome bump
+	// budget 12 rows: this pool run is adjacent (not split), so splitPools is empty
+	// and the split-pool note never renders — chrome stays 12.
+	o.SetSize(80, 24)
 
-	for i := 0; i < 20; i++ {
+	for i := 0; i < 21; i++ {
 		o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyDown})
 	}
-	require.Equal(t, 20, o.cursorIndex())
+	require.Equal(t, 21, o.cursorIndex())
 
-	// Window is [10,21): rows 0-9 (including the run head's would-be predecessors)
+	// Window is [10,22): rows 0-9 (including the run head's would-be predecessors)
 	// scrolled off, and the run (10,11) is fully in view with work-1 landing on the
 	// window's very first visible row.
 	out := o.Render()
@@ -1039,8 +1081,10 @@ func TestAccountsOverlay_ReorderGroupsSplitPool(t *testing.T) {
 	o.SetSize(80, 24)
 
 	// Before: the pool's members are not adjacent — no bracket anywhere, and the
-	// note names exactly this pool as split.
-	before := o.Render()
+	// note names exactly this pool as split. renderList (not Render): the box
+	// border's own top-left corner glyph must not collide with the "no bracket"
+	// assertion — see TestAccountsOverlay_NoPoolsRendersFlat, which documents why.
+	before := o.renderList()
 	assert.NotContains(t, before, "┌", "non-adjacent pool members render no bracket yet")
 	assert.Contains(t, before, "pool 'work' is split")
 
@@ -1106,7 +1150,9 @@ func TestAccountsOverlay_GutterNarrowsDirNotRowWidth(t *testing.T) {
 	assert.Equal(t, lipgloss.Width(flatLine), lipgloss.Width(gutterLine),
 		"the gutter's 2 columns must come out of the row, not add to it")
 	assert.LessOrEqual(t, lipgloss.Width(gutterLine), oGutter.inner(),
-		"the widest row (catch-all (unreachable) badge + availability chip) must still fit inside the box")
+		"the widest row THAT FITS (catch-all (unreachable) badge + availability chip, zero slack to spare) is "+
+			"the sharp test for the gutter's two columns; the genuinely widest realistic row — a pooled rule-less "+
+			"member — already wraps pre-existing (from #458's pool chip) and is out of scope here")
 
 	// A wrap only shows up once the row is laid out inside the bordered,
 	// Width()-constrained box — lipgloss pads every line of that box to the same

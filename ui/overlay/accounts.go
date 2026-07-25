@@ -376,13 +376,20 @@ func (o *AccountsOverlay) inner() int { return o.boxWidth() - 4 } // Padding(1,2
 // list fits a short terminal with the cursor kept in view. Everything outside
 // the rows costs a fixed number of lines (border 2 + padding 2 + title/blank 2
 // + tabs/blank 2 + trailing blank 1 + two hint lines 2 + the unmatched-repos
-// hint 1 + the split-pool note 1 = 13), so the remaining height budgets the
-// rows. chrome is a static worst-case allowance, not a dynamic count of the
-// notes actually rendered: a config with no split pool still budgets for one,
-// so adding pools never shifts the scroll behavior of a config that has none.
-// Mirrors the windowing SettingsOverlay applies to its own body.
+// hint 1 = 12), so the remaining height budgets the rows. The unmatched-repos
+// hint is itself conditional but predates this feature, so it keeps its
+// unconditional allowance for continuity — a pool-free config must keep
+// scrolling exactly as it always has. The split-pool note is new, so ITS
+// allowance is conditional on the note actually being able to render (Claude
+// tab with a genuinely split pool): charging every config a row for a note
+// that only some configs print would cost a pool-free config a visible row it
+// never used to lose. Mirrors the windowing SettingsOverlay applies to its own
+// body.
 func (o *AccountsOverlay) rowWindow(n int) (start, end int) {
-	const chrome = 13
+	chrome := 12
+	if o.tab == tabClaude && len(splitPools(o.cfg.ClaudeAccounts)) > 0 {
+		chrome++ // the split-pool note occupies one more line
+	}
 	budget := o.height - chrome
 	if budget < 3 {
 		budget = 3
@@ -636,10 +643,11 @@ func (o *AccountsOverlay) renderList() string {
 // the same width whether or not it wrapped, so that measurement can't be taken
 // after rendering.
 func (o *AccountsOverlay) legendHints() (hint, extras string) {
-	hint = "↑/↓ select · tab switch · n new · e edit · d delete"
+	hint = "↑/↓ select"
 	if o.activeLen() > 1 {
-		hint = "↑/↓ select · J/K reorder · tab switch · n new · e edit · d delete"
+		hint += " · J/K reorder"
 	}
+	hint += " · tab switch · n new · e edit · d delete"
 	extras = "t test routing · esc close"
 	if o.tab == tabClaude {
 		extras = "l limited · " + extras

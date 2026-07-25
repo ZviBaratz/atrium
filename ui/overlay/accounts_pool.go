@@ -84,23 +84,34 @@ func splitPools(accts []config.ClaudeAccount) []string {
 }
 
 // splitPoolNote phrases splitPools' result for the list footer, naming at most two
-// pools and falling back to a bounded count form when the names would not fit width.
+// pools and falling back to a bounded count form when the names would not fit
+// width. The single-pool case additionally degrades to a terse form when even
+// the count form does not fit a very narrow terminal: a bare count form is
+// otherwise reachable and grammatically wrong for exactly one pool ("1 pools
+// are split"), and reachable in practice — any pool name of 11+ characters
+// (e.g. "quantivly-work") already overflows a 60-column terminal's naming form.
 func splitPoolNote(names []string, width int) string {
-	countForm := fmt.Sprintf("%d pools are split — J/K to group their members", len(names))
-	var namingForm string
 	switch {
 	case len(names) == 0:
 		return ""
 	case len(names) == 1:
-		namingForm = fmt.Sprintf("pool '%s' is split — J/K to group its members", names[0])
+		naming := fmt.Sprintf("pool '%s' is split — J/K to group its members", names[0])
+		if lipgloss.Width(naming) <= width {
+			return naming
+		}
+		count := "1 pool is split — J/K to group its members"
+		if lipgloss.Width(count) <= width {
+			return count
+		}
+		return "pool split — J/K to group"
 	case len(names) == 2:
 		first, second := names[0], names[1]
-		namingForm = fmt.Sprintf("pools '%s', '%s' are split — J/K to group their members", first, second)
+		naming := fmt.Sprintf("pools '%s', '%s' are split — J/K to group their members", first, second)
+		if lipgloss.Width(naming) <= width {
+			return naming
+		}
+		return fmt.Sprintf("%d pools are split — J/K to group their members", len(names))
 	default:
-		return countForm
+		return fmt.Sprintf("%d pools are split — J/K to group their members", len(names))
 	}
-	if lipgloss.Width(namingForm) > width {
-		return countForm
-	}
-	return namingForm
 }
