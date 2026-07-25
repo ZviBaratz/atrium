@@ -517,6 +517,18 @@ func (o *AccountsOverlay) renderTabs() string {
 	return label(tabClaude, "Claude") + "  " + label(tabGH, "GitHub") + "  " + label(tabAgy, "Antigravity")
 }
 
+// gutterCellWidth is the display width of one poolGutter cell ("┌ ", "│ ", "└ ",
+// or the blank "  "). dirTruncWidthBase/dirPadWidthBase are the dir column's
+// truncTail/padRight widths when no gutter renders; renderList subtracts
+// gutterCellWidth from both when a gutter is present, so the gutter's columns
+// come OUT of the row rather than adding to it — the row's total rendered width
+// is the same either way.
+const (
+	gutterCellWidth   = 2
+	dirTruncWidthBase = 26
+	dirPadWidthBase   = 28
+)
+
 func (o *AccountsOverlay) renderList() string {
 	t := theme.Current()
 	var b strings.Builder
@@ -548,6 +560,15 @@ func (o *AccountsOverlay) renderList() string {
 		if o.tab == tabClaude {
 			gut = poolGutter(o.cfg.ClaudeAccounts)
 		}
+		// dirTruncWidth/dirPadWidth size the dir column when no gutter renders at
+		// all; when it does, both shrink by gutterCellWidth so the gutter's two
+		// columns come OUT of the row instead of adding to it — the row's total
+		// width must not depend on whether the gutter is present.
+		dirTruncWidth, dirPadWidth := dirTruncWidthBase, dirPadWidthBase
+		if gut != nil {
+			dirTruncWidth -= gutterCellWidth
+			dirPadWidth -= gutterCellWidth
+		}
 		for i := start; i < end; i++ {
 			r := rows[i]
 			marker := "  "
@@ -566,7 +587,7 @@ func (o *AccountsOverlay) renderList() string {
 			if dir == "" {
 				dir = t.DimStyle().Render("(inherit ambient env)")
 			} else {
-				dir = truncTail(dir, 26)
+				dir = truncTail(dir, dirTruncWidth)
 			}
 			extra := ""
 			if o.tab == tabClaude {
@@ -580,7 +601,7 @@ func (o *AccountsOverlay) renderList() string {
 					extra += "  " + t.DangerStyle().Render("⛔ limited")
 				}
 			}
-			b.WriteString(marker + gutter + padRight(name, 12) + " " + padRight(dir, 28) + " " + o.badge(r.catchAll, &seenCatchAll) + extra + "\n")
+			b.WriteString(marker + gutter + padRight(name, 12) + " " + padRight(dir, dirPadWidth) + " " + o.badge(r.catchAll, &seenCatchAll) + extra + "\n")
 		}
 		if !o.hasCatchAll() {
 			b.WriteString(t.DimStyle().Render("unmatched repos inherit the ambient account") + "\n")

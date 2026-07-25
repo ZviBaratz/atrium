@@ -1061,6 +1061,61 @@ func TestAccountsOverlay_ReorderGroupsSplitPool(t *testing.T) {
 	assert.NotContains(t, after, "is split", "the pool is no longer split, so the nudge clears")
 }
 
+// TestAccountsOverlay_GutterNarrowsDirNotRowWidth pins the fix for the pool-gutter
+// width regression a manual smoke test found: the gutter's 2 columns must come OUT
+// of the dir field, not get added on top of the row, so a row that fit before the
+// gutter existed still fits with it. Fixture mirrors the smoke's exact repro: an
+// adjacent pool run (work-1, work-2) plus a third, UNPOOLED account ("personal")
+// with a dir long enough to hit truncTail's cap either way, so its row carries the
+// widest realistic badge, "catch-all (unreachable)" (23 cols) — it's the second
+// rule-less account — plus the Claude tab's availability chip (13 cols), at a
+// 100-column terminal (boxWidth caps at 84 -> inner() == 80). "personal" itself
+// belongs to no pool, so its `extra` pool chip is identical (absent) whether or not
+// the OTHER two accounts form a run: the only thing that can change its row width is
+// the gutter column itself (poolGutter emits a blank "  " cell for every row once
+// any run exists elsewhere in the list, not just the run's own rows) — isolating
+// exactly the bug, rather than conflating it with the deliberately-independent
+// pool:<name> chip.
+//
+// Per this file's own note on TestAccountsOverlay_LegendFitsAndKeepsLimitedClaudeOnly:
+// comparing rendered widths AFTER lipgloss pads a Border()+Padding()+Width() box
+// can't detect a wrap — every line, wrapped or not, comes out at the same padded
+// width. So this measures (a) the unstyled row string renderList builds, directly,
+// and (b) the number of lines Render() actually produces, which DOES grow by one
+// per wrapped row.
+func TestAccountsOverlay_GutterNarrowsDirNotRowWidth(t *testing.T) {
+	longDir := "~/.claude-configs/some/very/long/nested/directory/path"
+	mk := func(pool string) *config.Config {
+		return &config.Config{ClaudeAccounts: []config.ClaudeAccount{
+			{Name: "work-1", ConfigDir: "~/.claude-work1", Pool: pool, RemoteMatches: []string{"acme/"}},
+			{Name: "work-2", ConfigDir: "~/.claude-work2", Pool: pool}, // rule-less #1 → "default"
+			{Name: "personal", ConfigDir: longDir},                     // rule-less #2 → "catch-all (unreachable)"
+		}}
+	}
+
+	oGutter := NewAccountsOverlay(mk("work"), config.DefaultState()) // work-1/work-2 form a run → gutter renders
+	oGutter.SetSize(100, 30)
+	oFlat := NewAccountsOverlay(mk(""), config.DefaultState()) // no pool anywhere → no gutter column at all
+	oFlat.SetSize(100, 30)
+
+	require.Equal(t, 80, oGutter.inner(), "pinning the reproduction's 100-col/84-cap/80-inner numbers")
+
+	gutterLine := rowLine(t, oGutter.renderList(), "personal")
+	flatLine := rowLine(t, oFlat.renderList(), "personal")
+
+	assert.Equal(t, lipgloss.Width(flatLine), lipgloss.Width(gutterLine),
+		"the gutter's 2 columns must come out of the row, not add to it")
+	assert.LessOrEqual(t, lipgloss.Width(gutterLine), oGutter.inner(),
+		"the widest row (catch-all (unreachable) badge + availability chip) must still fit inside the box")
+
+	// A wrap only shows up once the row is laid out inside the bordered,
+	// Width()-constrained box — lipgloss pads every line of that box to the same
+	// width regardless of wrapping, so line COUNT (not width) is what proves it.
+	gutterLines := strings.Count(oGutter.Render(), "\n")
+	flatLines := strings.Count(oFlat.Render(), "\n")
+	assert.Equal(t, flatLines, gutterLines, "the gutter must not add a wrapped extra line")
+}
+
 // TestAccountsOverlay_ReorderPersists is the persistence half of Task 5: dirty is
 // the app's ONLY cue to call config.SaveConfig (app/app_accounts.go:14) — the
 // overlay itself never writes to disk. This proves the permuted order actually
