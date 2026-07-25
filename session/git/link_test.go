@@ -564,7 +564,10 @@ func TestResolveSeedPaths_CanonicalizesEntries(t *testing.T) {
 		if canon != "node_modules" {
 			t.Errorf("entry %q: canon = %q, want %q", entry, canon, "node_modules")
 		}
-		if want := filepath.Join(repoPath, "node_modules"); src != want {
+		// Expected against the worktree's own repo path, not the test's: on macOS
+		// /var is a symlink to /private/var, so the resolved form the Worktree holds
+		// is the only thing src can be compared to.
+		if want := filepath.Join(wt.repoPath, "node_modules"); src != want {
 			t.Errorf("entry %q: src = %q, want %q", entry, src, want)
 		}
 		if want := filepath.Join(wt.GetWorktreePath(), "node_modules"); dst != want {
