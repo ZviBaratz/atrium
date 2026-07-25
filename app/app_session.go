@@ -377,8 +377,16 @@ type resumeDoneMsg struct {
 // dismissible modal naming the holder rather than auto-touching another live
 // worktree. The whole diagnosis runs in the goroutine; handleResumeDone only
 // decides the UI.
+//
+// One session is a small overshoot, but r pressed twelve times is the same host load
+// as one "resume all", so it takes the same host-capacity question (#463) — only when
+// it crosses, leaving the key as frictionless as it was for every resume that fits.
+// The question names the session and the capacity and stops there: r has never
+// described what resume does, and the batch dialog is where those semantics are named.
+// Accepting runs this same action off the UI thread behind the same progress row
+// (handleConfirmState re-arms beginAsyncAction with the busy label).
 func (m *home) resumeSelected(selected *session.Instance) tea.Cmd {
-	return m.beginAsyncAction("resuming…", func() tea.Msg {
+	action := func() tea.Msg {
 		err := selected.Resume()
 		if err == nil {
 			return resumeDoneMsg{instance: selected}
@@ -405,7 +413,16 @@ func (m *home) resumeSelected(selected *session.Instance) tea.Cmd {
 			branchName:  wt.GetBranchName(),
 			worktree:    wt,
 		}
-	})
+	}
+	clause := m.resumeCapNotice(1)
+	if clause == "" {
+		return m.beginAsyncAction("resuming…", action)
+	}
+	cmd := m.confirmAsyncAction(
+		fmt.Sprintf("Resume session '%s'?\n%s", selected.DisplayName(), clause),
+		"resuming…", action)
+	m.confirmationOverlay.SetConfirmLabel("resume")
+	return cmd
 }
 
 // handlePauseDone completes a single pause on the Update loop: it tears down the
@@ -546,7 +563,16 @@ func resumeConfirmMessage(kind string, n int) string {
 // thread (confirmAsyncAction); state is persisted once, on the Update loop, in the
 // batchResumeDoneMsg handler. Resume is non-destructive, so it keeps the default
 // accent border (only kill wears the danger border).
+//
+// A batch that would put the live population past the host-derived budget says so in
+// this same dialog rather than a second one (#463): resume is the only action that
+// grows that population without creating a session, and the confirmation the user
+// already has to answer is where the cost belongs. Computed here, in the shared core,
+// so resumeAll and resumeMarked cannot drift — the reason SetConfirmLabel is here too.
 func (m *home) resumeInstances(insts []*session.Instance, message string) tea.Cmd {
+	if clause := m.resumeCapNotice(len(insts)); clause != "" {
+		message += "\n" + clause
+	}
 	action := func() tea.Msg {
 		var res batchResumeDoneMsg
 		for _, inst := range insts {

@@ -81,10 +81,11 @@ func (m *home) moveAndPersist(move func() bool) (tea.Model, tea.Cmd) {
 // *Name what the user cannot see.* A parenthetical follows only for a consequence or
 // a blocker that is off-screen at the moment of asking: the work a kill would destroy
 // (killDataWarning), the gitignored files a pause deletes (pauseConfirmMessage), CI
-// still running behind a merge, the host capacity a create would exceed
-// (overCapMessage). Nothing invisible, no parenthetical: create-PR does exactly what
-// it says, because the branch was already pushed before the key was even offered
-// (PRStatus.CreateBlockedReason), so it gains a verb label and nothing else.
+// still running behind a merge, the host capacity a create (overCapMessage) or a
+// resume (resumeCapClause) would exceed. Nothing invisible, no parenthetical:
+// create-PR does exactly what it says, because the branch was already pushed before
+// the key was even offered (PRStatus.CreateBlockedReason), so it gains a verb label
+// and nothing else.
 //
 // The converse is #399's amended AC #2, which the refusal notices obey: a refusal the
 // user can SEE stays silent — a cluster already at the top of the order, a lone repo
