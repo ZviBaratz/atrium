@@ -678,3 +678,56 @@ func TestAccountsOverlay_DeleteClearsAvailability(t *testing.T) {
 	require.True(t, dirty)
 	assert.Empty(t, st.GetAccountAvailability())
 }
+
+// An availability entry outlives the account it belonged to whenever one is deleted
+// or renamed away from — exactly the orphaned keys `atrium doctor` reports. validate()
+// only rejects a name a LIVE account holds, so a rename can land squarely on one.
+// The renamed account is the authority on its own new name: its flag must win, not be
+// swallowed by the stale entry sitting there.
+func TestAccountsOverlay_RenameOntoOrphanedAvailability(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	cfg := &config.Config{ClaudeAccounts: []config.ClaudeAccount{
+		{Name: "work", ConfigDir: "~/.claude-work"},
+	}}
+	st := config.DefaultState()
+	require.NoError(t, st.SetAccountLimited("work", "2026-07-25T12:00:00Z"))
+	// No account is named zvi.baratz — a leftover from an earlier rename or delete.
+	require.NoError(t, st.SetAccountLimited("zvi.baratz", "2019-01-01T00:00:00Z"))
+	o := NewAccountsOverlay(cfg, st)
+	o.SetSize(80, 24)
+
+	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'e'}})
+	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyCtrlU})
+	typeInto(o, "zvi.baratz")
+	_, dirty := o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyEnter})
+
+	require.True(t, dirty)
+	avail := st.GetAccountAvailability()
+	assert.True(t, avail["zvi.baratz"].Limited, "the renamed account is still rate-limited")
+	assert.Equal(t, "2026-07-25T12:00:00Z", avail["zvi.baratz"].Until,
+		"the carried entry overwrites the orphan rather than losing to it")
+	assert.NotContains(t, avail, "work", "the old key is not left behind")
+}
+
+// The mirror case: an account with NO flag renamed onto an orphaned entry. Carrying
+// nothing must also mean leaving nothing — otherwise the stale flag comes back to
+// life under a name that is now live, and rotation skips a perfectly usable login.
+func TestAccountsOverlay_RenameOntoOrphanClearsStaleFlag(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	cfg := &config.Config{ClaudeAccounts: []config.ClaudeAccount{
+		{Name: "work", ConfigDir: "~/.claude-work"},
+	}}
+	st := config.DefaultState()
+	require.NoError(t, st.SetAccountLimited("zvi.baratz", "")) // orphan; work has no flag
+	o := NewAccountsOverlay(cfg, st)
+	o.SetSize(80, 24)
+
+	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'e'}})
+	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyCtrlU})
+	typeInto(o, "zvi.baratz")
+	_, dirty := o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyEnter})
+
+	require.True(t, dirty)
+	assert.Empty(t, st.GetAccountAvailability(),
+		"an unlimited account must not inherit an orphan's exhaustion")
+}

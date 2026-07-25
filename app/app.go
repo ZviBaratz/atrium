@@ -303,9 +303,10 @@ type home struct {
 	// accountSync carries what the startup re-stamp pass changed (#470) from the
 	// IO-free constructor to flushAccountStamps, which persists it and zeroes this.
 	accountSync accountStampSync
-	// pendingAccountNotice holds the "N sessions regrouped …" line an accounts edit
-	// produced, until the panel closes and the list it describes is visible again.
-	pendingAccountNotice string
+	// pendingAccountSync accumulates what the accounts panel's edits re-stamped, until
+	// it closes and the list they rearranged is visible again. Accumulated rather than
+	// rendered per edit, so one visit's several renames become one honest notice.
+	pendingAccountSync accountStampSync
 
 	// -- State --
 

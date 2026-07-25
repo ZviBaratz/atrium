@@ -241,21 +241,30 @@ func (o *AccountsOverlay) handleEditKey(msg tea.KeyMsg) (closed bool, dirty bool
 // available (#470). Not a config-anchored heal like the session labels: nothing else
 // records which account an availability entry belonged to.
 //
-// Best-effort and non-destructive: nothing to carry, or an entry already sitting
-// under the new name, leaves state untouched.
+// The renamed account is the sole authority on its new name. An entry may already
+// be sitting there — validate() only rejects a name a LIVE account holds, so a
+// rename can land on one of the orphans `atrium doctor` reports (a login deleted
+// while limited, a hand-edited state.json) — and such an entry is stale by
+// construction. It is overwritten when there is a flag to carry and cleared when
+// there is not, so a rename can neither lose the account's real reset time to an
+// orphan's nor resurrect an orphan's exhaustion onto a login that has none.
+//
+// Write errors are dropped, as everywhere the `l` toggle writes this flag: it is a
+// hint the next keypress can correct, not something worth failing a rename over.
 func (o *AccountsOverlay) carryAvailability(oldName, newName string) {
 	if oldName == newName {
 		return
 	}
 	avail := o.state.GetAccountAvailability()
-	from, ok := avail[oldName]
-	if !ok {
-		return
-	}
-	if _, taken := avail[newName]; !taken && from.Limited {
+	from, carry := avail[oldName]
+	if carry && from.Limited {
 		_ = o.state.SetAccountLimited(newName, from.Until)
+	} else if _, stale := avail[newName]; stale {
+		_ = o.state.ClearAccountLimited(newName)
 	}
-	_ = o.state.ClearAccountLimited(oldName)
+	if carry {
+		_ = o.state.ClearAccountLimited(oldName)
+	}
 }
 
 // validate rejects an empty or duplicate (within the active tab) name.

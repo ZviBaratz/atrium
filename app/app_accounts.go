@@ -23,10 +23,10 @@ func (m *home) handleAccountsState(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// the next open rebuilds from live config and can't pin a just-deleted account.
 		m.stashedDraft = nil
 		// The regrouping is held over rather than announced now: the panel still covers
-		// the list it describes, and a toast behind a modal would expire unseen.
-		if notice := m.resyncAccountStamps(); notice != "" {
-			m.pendingAccountNotice = notice
-		}
+		// the list it describes, and a toast behind a modal would expire unseen. A visit
+		// can commit several edits, so the passes accumulate — one visit, one notice
+		// covering all of them, rather than the last edit erasing its predecessors.
+		m.pendingAccountSync.merge(m.resyncAccountStamps())
 	}
 	if closed {
 		m.accountsOverlay = nil
@@ -37,13 +37,13 @@ func (m *home) handleAccountsState(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// flushAccountNotice shows the notice an accounts edit held over, now that the panel
-// no longer covers the list it explains. nil when there is nothing to say.
+// flushAccountNotice announces everything the visit's edits moved, now that the
+// panel no longer covers the list it explains. nil when there is nothing to say.
 func (m *home) flushAccountNotice() tea.Cmd {
-	if m.pendingAccountNotice == "" {
+	sync := m.pendingAccountSync
+	m.pendingAccountSync = accountStampSync{}
+	if !sync.changed() {
 		return nil
 	}
-	text := m.pendingAccountNotice
-	m.pendingAccountNotice = ""
-	return m.handleInfoNotice(text)
+	return m.handleInfoNotice(accountSyncNotice(sync))
 }

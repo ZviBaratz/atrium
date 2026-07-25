@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -343,15 +344,140 @@ func TestAccountsPanel_RenameRegroupsOpenSessions(t *testing.T) {
 func TestAccountSyncNotice(t *testing.T) {
 	assert.Equal(t, `3 sessions regrouped under "quantivly"`,
 		accountSyncNotice(accountStampSync{restamped: 3, regrouped: 3,
-			clusterMoves: map[string]string{"work": "quantivly"}}))
+			clusterMoves: map[string]string{"work": "quantivly"},
+			destinations: map[string]bool{"quantivly": true}}))
 	assert.Equal(t, "1 session regrouped under \"quantivly\"",
 		accountSyncNotice(accountStampSync{restamped: 1, regrouped: 1,
-			clusterMoves: map[string]string{"work": "quantivly"}}))
+			clusterMoves: map[string]string{"work": "quantivly"},
+			destinations: map[string]bool{"quantivly": true}}))
 	assert.Equal(t, "4 sessions regrouped to match the renamed accounts",
 		accountSyncNotice(accountStampSync{restamped: 4, regrouped: 4,
-			clusterMoves: map[string]string{"work": "quantivly", "old": "personal"}}))
+			clusterMoves: map[string]string{"work": "quantivly", "old": "personal"},
+			destinations: map[string]bool{"quantivly": true, "personal": true}}))
+	// A cluster the sessions LEFT can still hold a session that could not be healed,
+	// which drops it from clusterMoves — but they all landed in one place, so the
+	// notice can still name it.
+	assert.Equal(t, `1 session regrouped under "quantivly"`,
+		accountSyncNotice(accountStampSync{restamped: 1, regrouped: 1,
+			destinations: map[string]bool{"quantivly": true}}))
 	// Renaming a POOLED account moves no cluster — only the badges change, and the
 	// notice must not claim a regrouping the user cannot see.
 	assert.Equal(t, "2 badges renamed to match the accounts config",
 		accountSyncNotice(accountStampSync{restamped: 2}))
+}
+
+// A stale cluster key can fan OUT: two sessions stamped with the same pool whose
+// accounts were later split into different pools both leave "work", but for
+// different destinations. clusterMoves keeps only the first — one persisted slot
+// cannot be split — so it is not a trustworthy count of where sessions landed, and
+// the notice must not name one of two landing spots as if it were the only one.
+func TestSyncAccountStamps_FanOutKeepsOneSlotAndStaysGeneric(t *testing.T) {
+	home := homeDir(t)
+	cfg := config.DefaultConfig()
+	cfg.ClaudeAccounts = []config.ClaudeAccount{
+		{Name: "a", ConfigDir: "~/.claude-a", Pool: "alpha"},
+		{Name: "b", ConfigDir: "~/.claude-b", Pool: "beta"},
+	}
+	instances := []*session.Instance{
+		stampedInstance(t, "api", "a", filepath.Join(home, ".claude-a"), "work", false),
+		stampedInstance(t, "web", "b", filepath.Join(home, ".claude-b"), "work", false),
+	}
+
+	sync := syncAccountStamps(cfg, instances)
+
+	assert.Equal(t, 2, sync.regrouped, "both sessions left the stale 'work' cluster")
+	assert.Equal(t, map[string]bool{"alpha": true, "beta": true}, sync.destinations,
+		"they landed in two different clusters")
+	require.Len(t, sync.clusterMoves, 1,
+		"one vanished key carries one slot; the second destination appends instead")
+	assert.Equal(t, "alpha", sync.clusterMoves["work"], "first session's cluster keeps the slot")
+	assert.Equal(t, "2 sessions regrouped to match the renamed accounts",
+		accountSyncNotice(sync), "naming just one of two destinations would be a lie")
+}
+
+// Committing two edits without closing the panel must announce BOTH. Each commit
+// re-syncs from the already-healed list, so the second pass only knows about its own
+// rename: holding the raw text would let it overwrite the first, and the panel is
+// exactly the place where a dropped notice is never seen (it fires behind a modal).
+func TestAccountsPanel_TwoRenamesInOneVisitAnnounceBoth(t *testing.T) {
+	resetSettingsTestState(t)
+	home := homeDir(t)
+	h := newSettingsTestHome()
+	h.appConfig.GroupMode = config.GroupModeAccount
+	h.appConfig.ClaudeAccounts = []config.ClaudeAccount{
+		{Name: "work", ConfigDir: "~/.claude-work"},
+		{Name: "personal", ConfigDir: "~/.claude-personal"},
+	}
+	for _, spec := range []struct{ repo, acct, dir string }{
+		{"api", "work", filepath.Join(home, ".claude-work")},
+		{"sideproj", "personal", filepath.Join(home, ".claude-personal")},
+	} {
+		h.list.AddInstance(stampedInstance(t, spec.repo, spec.acct, spec.dir, "", false))()
+	}
+	h.list.SetGroupMode("account")
+	withCapturingStore(t, h)
+
+	renameRow := func(row int, to string) {
+		for i := 0; i < row; i++ {
+			_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
+		}
+		_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("e")})
+		_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyCtrlU}) // focus starts on Name
+		for _, r := range to {
+			_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+		}
+		_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyEnter})
+	}
+
+	_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("@")})
+	require.Equal(t, stateAccounts, h.state)
+	renameRow(0, "zvi.baratz")
+	renameRow(1, "zvi.personal")
+	require.False(t, h.menu.HasNotice(), "both notices wait behind the panel")
+
+	_, cmd := h.handleKeyPress(tea.KeyMsg{Type: tea.KeyEsc})
+	require.Equal(t, stateDefault, h.state)
+	require.NotNil(t, cmd, "closing the panel carries the held-over notice")
+
+	assert.Contains(t, h.menu.String(), "2 sessions regrouped",
+		"the held notice counts both renames, not just the last one")
+}
+
+// failingOrderState is the real State with a broken account-order write, to pin what
+// the label write does when the carry it depends on could not land.
+type failingOrderState struct {
+	*config.State
+	calls int
+}
+
+func (s *failingOrderState) SetAccountOrder([]string) error {
+	s.calls++
+	return errors.New("state.json is not writable")
+}
+
+// The order carry is the half of the flush with no second chance: clusterMoves is a
+// diff between the stamp on disk and live config, so once healed labels land nothing
+// disagrees and no later pass can recompute it. A failed order write must therefore
+// NOT be followed by the label write — leaving both halves stale is what lets the
+// next launch retry the pair, instead of stranding the user's [ / ] slot behind
+// labels that will never disagree again.
+func TestAccountSync_FailedOrderWriteLeavesLabelsUnpersisted(t *testing.T) {
+	home := homeDir(t)
+	cfg := renamedPoolConfig()
+	st := config.DefaultState()
+	st.AccountOrder = []string{"work", "personal"}
+	storage, instances := loadStamped(t, st, []session.InstanceData{
+		{Title: "hub", ClaudeAccount: "work", ClaudeConfigDir: filepath.Join(home, ".claude-work")},
+	})
+
+	h := assembleHome(context.Background(), "claude", false, "v", "atr", cfg, st, storage, instances)
+	cs := withCapturingStore(t, h)
+	failing := &failingOrderState{State: st}
+	h.appState = failing
+
+	h.flushAccountStamps()
+
+	require.Equal(t, 1, failing.calls, "the order carry is attempted before the labels")
+	assert.Equal(t, 0, cs.saves,
+		"labels stay stale on disk so the next launch recomputes the move and retries both")
 }
