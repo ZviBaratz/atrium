@@ -656,8 +656,9 @@ instead of pinning every session in a repo to one account:
   never skips back to whichever member looks less busy.
 - Adjacent members of one pool render as a bracketed group in the `@` overlay's
   Claude tab (`┌`/`│`/`└` in a dim gutter column to the row's left); the
-  per-row `pool:<name>` chip stays either way. A pool whose members are **not**
-  adjacent can't be bracketed, so the list prints a note instead — `pool
+  per-row `pool:<name>` chip stays either way. Brackets are per contiguous
+  run: a pool split into two clusters gets two brackets *and* the split
+  note, since the trigger is non-contiguity, not "no brackets" — `pool
   '<name>' is split — J/K to group its members`. One consequence of
   reordering: a pool's rotation cursor is an index into its members in config
   order, so reordering members *within* a pool can repeat or skip one member
