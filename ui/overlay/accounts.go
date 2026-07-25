@@ -122,6 +122,32 @@ func (o *AccountsOverlay) clampCursor() {
 	}
 }
 
+// moveAccount swaps the cursored account with its neighbour delta slots away and
+// moves the cursor with it, reporting whether the config changed. Account order is
+// routing precedence — first-match wins and the first rule-less account is the
+// catch-all (config.matchRouteIndex) — so this is a routing edit, not a cosmetic
+// one, and the caller persists it. A move off either end is a no-op that reports
+// no change, so a boundary press never triggers a config write.
+func (o *AccountsOverlay) moveAccount(delta int) bool {
+	i, j := o.cursor, o.cursor+delta
+	if i < 0 || j < 0 || i >= o.activeLen() || j >= o.activeLen() {
+		return false
+	}
+	switch o.tab {
+	case tabClaude:
+		a := o.cfg.ClaudeAccounts
+		a[i], a[j] = a[j], a[i]
+	case tabAgy:
+		a := o.cfg.AgyAccounts
+		a[i], a[j] = a[j], a[i]
+	default: // tabGH
+		a := o.cfg.GHAccounts
+		a[i], a[j] = a[j], a[i]
+	}
+	o.cursor = j
+	return true
+}
+
 // HandleKeyPress routes a key to the active mode and reports whether the overlay
 // should close and whether the config was mutated (the app persists on dirty).
 func (o *AccountsOverlay) HandleKeyPress(msg tea.KeyMsg) (closed bool, dirty bool) {
@@ -149,6 +175,10 @@ func (o *AccountsOverlay) handleListKey(msg tea.KeyMsg) (closed bool, dirty bool
 		if o.cursor < o.activeLen()-1 {
 			o.cursor++
 		}
+	case "K", "shift+up":
+		return false, o.moveAccount(-1)
+	case "J", "shift+down":
+		return false, o.moveAccount(+1)
 	case "tab", "right":
 		o.tab = (o.tab + 1) % numTabs
 		o.clampCursor()
@@ -384,10 +414,20 @@ func (o *AccountsOverlay) inner() int { return o.boxWidth() - 4 } // Padding(1,2
 // list fits a short terminal with the cursor kept in view. Everything outside
 // the rows costs a fixed number of lines (border 2 + padding 2 + title/blank 2
 // + tabs/blank 2 + trailing blank 1 + two hint lines 2 + the unmatched-repos
-// hint 1 = 12), so the remaining height budgets the rows. Mirrors the windowing
-// SettingsOverlay applies to its own body.
+// hint 1 = 12), so the remaining height budgets the rows. The unmatched-repos
+// hint is itself conditional but predates this feature, so it keeps its
+// unconditional allowance for continuity — a pool-free config must keep
+// scrolling exactly as it always has. The split-pool note is new, so ITS
+// allowance is conditional on the note actually being able to render (Claude
+// tab with a genuinely split pool): charging every config a row for a note
+// that only some configs print would cost a pool-free config a visible row it
+// never used to lose. Mirrors the windowing SettingsOverlay applies to its own
+// body.
 func (o *AccountsOverlay) rowWindow(n int) (start, end int) {
-	const chrome = 12
+	chrome := 12
+	if o.tab == tabClaude && len(splitPools(o.cfg.ClaudeAccounts)) > 0 {
+		chrome++ // the split-pool note occupies one more line
+	}
 	budget := o.height - chrome
 	if budget < 3 {
 		budget = 3
@@ -522,6 +562,18 @@ func (o *AccountsOverlay) renderTabs() string {
 	return label(tabClaude, "Claude") + "  " + label(tabGH, "GitHub") + "  " + label(tabAgy, "Antigravity")
 }
 
+// gutterCellWidth is the display width of one poolGutter cell ("┌ ", "│ ", "└ ",
+// or the blank "  "). dirTruncWidthBase/dirPadWidthBase are the dir column's
+// truncTail/padRight widths when no gutter renders; renderList subtracts
+// gutterCellWidth from both when a gutter is present, so the gutter's columns
+// come OUT of the row rather than adding to it — the row's total rendered width
+// is the same either way.
+const (
+	gutterCellWidth   = 2
+	dirTruncWidthBase = 26
+	dirPadWidthBase   = 28
+)
+
 func (o *AccountsOverlay) renderList() string {
 	t := theme.Current()
 	var b strings.Builder
@@ -545,11 +597,32 @@ func (o *AccountsOverlay) renderList() string {
 		// the whole window rather than per row — the map is indexed per account below.
 		avail := o.state.GetAccountAvailability()
 		now := time.Now()
+		// Same reasoning as seenCatchAll above: a pool run can straddle the window
+		// boundary, so the gutter is computed over the whole slice (never re-sliced
+		// to the window) and rows are indexed into it by absolute config index, not
+		// window-relative position.
+		var gut []string
+		if o.tab == tabClaude {
+			gut = poolGutter(o.cfg.ClaudeAccounts)
+		}
+		// dirTruncWidth/dirPadWidth size the dir column when no gutter renders at
+		// all; when it does, both shrink by gutterCellWidth so the gutter's two
+		// columns come OUT of the row instead of adding to it — the row's total
+		// width must not depend on whether the gutter is present.
+		dirTruncWidth, dirPadWidth := dirTruncWidthBase, dirPadWidthBase
+		if gut != nil {
+			dirTruncWidth -= gutterCellWidth
+			dirPadWidth -= gutterCellWidth
+		}
 		for i := start; i < end; i++ {
 			r := rows[i]
 			marker := "  "
 			if i == o.cursor {
 				marker = t.AccentStyle().Render("› ")
+			}
+			gutter := ""
+			if gut != nil {
+				gutter = t.DimStyle().Render(gut[i])
 			}
 			name := r.name
 			if name == "" {
@@ -559,7 +632,7 @@ func (o *AccountsOverlay) renderList() string {
 			if dir == "" {
 				dir = t.DimStyle().Render("(inherit ambient env)")
 			} else {
-				dir = truncTail(dir, 26)
+				dir = truncTail(dir, dirTruncWidth)
 			}
 			extra := ""
 			if o.tab == tabClaude {
@@ -573,10 +646,15 @@ func (o *AccountsOverlay) renderList() string {
 					extra += "  " + t.DangerStyle().Render("⛔ limited")
 				}
 			}
-			b.WriteString(marker + padRight(name, 12) + " " + padRight(dir, 28) + " " + o.badge(r.catchAll, &seenCatchAll) + extra + "\n")
+			b.WriteString(marker + gutter + padRight(name, 12) + " " + padRight(dir, dirPadWidth) + " " + o.badge(r.catchAll, &seenCatchAll) + extra + "\n")
 		}
 		if !o.hasCatchAll() {
 			b.WriteString(t.DimStyle().Render("unmatched repos inherit the ambient account") + "\n")
+		}
+		if o.tab == tabClaude {
+			if names := splitPools(o.cfg.ClaudeAccounts); len(names) > 0 {
+				b.WriteString(t.DimStyle().Render(splitPoolNote(names, o.inner())) + "\n")
+			}
 		}
 	}
 
@@ -584,16 +662,35 @@ func (o *AccountsOverlay) renderList() string {
 	if o.mode == modeConfirmDelete {
 		b.WriteString(theme.Current().DangerStyle().Render("Delete '" + o.rows()[o.cursor].name + "'?  y / n"))
 	} else {
-		// "l limited" toggles per-account availability, which only Claude accounts
-		// carry — advertise it only on that tab so the legend never names a dead key.
-		hint := "↑/↓ move · tab switch · n new · e edit · d delete"
-		if o.tab == tabClaude {
-			hint += " · l limited"
-		}
+		hint, extras := o.legendHints()
 		b.WriteString(t.OverlayHintStyle().Render(hint) + "\n")
-		b.WriteString(t.OverlayHintStyle().Render("t test routing · esc close"))
+		b.WriteString(t.OverlayHintStyle().Render(extras))
 	}
 	return b.String()
+}
+
+// legendHints returns the list legend's two hint lines, unstyled. J/K reorder
+// only does something with a second row to swap against, and "l limited" only
+// toggles availability for Claude accounts — advertise each only where it's
+// live, so the legend never names a dead key. l limited lives on line 2 (not
+// alongside J/K reorder on line 1) purely to keep line 1 under the box's inner
+// width at an 80-column terminal; it isn't grouped there by key purpose.
+// Returned unstyled (not yet passed through OverlayHintStyle) so callers —
+// renderList and tests — can measure the raw text against o.inner() directly;
+// once lipgloss pads a rendered line to the box's full width, every line reads
+// the same width whether or not it wrapped, so that measurement can't be taken
+// after rendering.
+func (o *AccountsOverlay) legendHints() (hint, extras string) {
+	hint = "↑/↓ select"
+	if o.activeLen() > 1 {
+		hint += " · J/K reorder"
+	}
+	hint += " · tab switch · n new · e edit · d delete"
+	extras = "t test routing · esc close"
+	if o.tab == tabClaude {
+		extras = "l limited · " + extras
+	}
+	return hint, extras
 }
 
 func (o *AccountsOverlay) badge(catchAll bool, seen *bool) string {

@@ -525,3 +525,33 @@ func TestAccountSync_FailedOrderWriteLeavesLabelsUnpersisted(t *testing.T) {
 	assert.Equal(t, 0, cs.saves,
 		"labels stay stale on disk so the next launch recomputes the move and retries both")
 }
+
+// J/K in the accounts panel reorders routing precedence (#475) and reports the
+// config dirty, which runs the re-stamp pass. It must find nothing: the pass reads
+// each account's OWN catch-all flag and pool, never routing, so moving accounts
+// around cannot relabel a session or claim a regrouping the user did not ask for.
+// This is the guard for re-deriving from routing instead of the anchor, which would
+// drag pinned and rotated sessions onto whatever routes first today.
+func TestAccountsPanel_ReorderDoesNotRestamp(t *testing.T) {
+	resetSettingsTestState(t)
+	home := homeDir(t)
+	h := newSettingsTestHome()
+	h.appConfig.GroupMode = config.GroupModeAccount
+	h.appConfig.ClaudeAccounts = []config.ClaudeAccount{
+		{Name: "work", ConfigDir: "~/.claude-work", RemoteMatches: []string{"quantivly"}},
+		{Name: "personal", ConfigDir: "~/.claude-personal"},
+	}
+	h.list.AddInstance(stampedInstance(t, "api", "work", filepath.Join(home, ".claude-work"), "", false))()
+	h.list.AddInstance(stampedInstance(t, "side", "personal", filepath.Join(home, ".claude-personal"), "", true))()
+	h.list.SetGroupMode("account")
+	cs := withCapturingStore(t, h)
+
+	_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("@")})
+	_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("J")}) // work moves below personal
+	require.Equal(t, "personal", h.appConfig.ClaudeAccounts[0].Name, "the reorder landed")
+	_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyEsc})
+
+	assert.False(t, h.menu.HasNotice(),
+		"a routing reorder relabels nothing, so there is nothing to announce")
+	assert.Equal(t, 0, cs.saves, "no session row was rewritten")
+}

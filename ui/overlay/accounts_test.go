@@ -7,6 +7,7 @@ import (
 
 	"github.com/ZviBaratz/atrium/config"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -21,6 +22,33 @@ func twoTabCfg() *config.Config {
 			{Name: "gh-work", ConfigDir: "~/.config/gh-work", RemoteMatches: []string{"github.com/acme"}},
 		},
 	}
+}
+
+// claudeNames returns Claude account names in config order (== routing precedence).
+func claudeNames(cfg *config.Config) []string {
+	names := make([]string, len(cfg.ClaudeAccounts))
+	for i, a := range cfg.ClaudeAccounts {
+		names[i] = a.Name
+	}
+	return names
+}
+
+// ghNames returns GitHub account names in config order.
+func ghNames(cfg *config.Config) []string {
+	names := make([]string, len(cfg.GHAccounts))
+	for i, a := range cfg.GHAccounts {
+		names[i] = a.Name
+	}
+	return names
+}
+
+// agyNames returns Antigravity account names in config order.
+func agyNames(cfg *config.Config) []string {
+	names := make([]string, len(cfg.AgyAccounts))
+	for i, a := range cfg.AgyAccounts {
+		names[i] = a.Name
+	}
+	return names
 }
 
 func TestAccountsOverlay_NavAndTabSwitchClampsCursor(t *testing.T) {
@@ -477,7 +505,7 @@ func TestAccountsOverlay_CatchAllBadgeSurvivesWindowScroll(t *testing.T) {
 		cfg.ClaudeAccounts = append(cfg.ClaudeAccounts, acct)
 	}
 	o := NewAccountsOverlay(cfg, config.DefaultState())
-	o.SetSize(80, 24) // budget 12 rows
+	o.SetSize(80, 24) // budget 12 rows: no pool anywhere in this fixture, so chrome stays 12
 
 	for i := 0; i < 20; i++ {
 		o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyDown})
@@ -493,6 +521,40 @@ func TestAccountsOverlay_CatchAllBadgeSurvivesWindowScroll(t *testing.T) {
 	assert.NotContains(t, out, "default",
 		"the only 'default' badge belonged to the scrolled-off first catch-all; a broken "+
 			"pre-scan would wrongly render the visible later catch-all as 'default'")
+}
+
+// TestAccountsOverlay_RowWindowChromeConditionalOnSplitPoolNote pins the dormancy
+// fix: rowWindow's chrome allowance for the split-pool note must be conditional on
+// that note actually being able to render (Claude tab with a genuinely split pool),
+// not a static worst case charged to every config. A pool-free config keeps the
+// full pre-existing 12-row budget; a config with a split pool loses exactly the one
+// row its own note occupies — never more, and never for a config that has no
+// pools at all.
+func TestAccountsOverlay_RowWindowChromeConditionalOnSplitPoolNote(t *testing.T) {
+	mk := func(withSplitPool bool) *config.Config {
+		cfg := &config.Config{}
+		for i := 0; i < 30; i++ {
+			cfg.ClaudeAccounts = append(cfg.ClaudeAccounts, config.ClaudeAccount{
+				Name: fmt.Sprintf("acct%02d", i), ConfigDir: "~/.claude",
+			})
+		}
+		if withSplitPool {
+			// Non-adjacent members of the same pool: splitPools flags this "work".
+			cfg.ClaudeAccounts[0].Pool = "work"
+			cfg.ClaudeAccounts[2].Pool = "work"
+		}
+		return cfg
+	}
+
+	flat := NewAccountsOverlay(mk(false), config.DefaultState())
+	flat.SetSize(80, 24)
+	start, end := flat.rowWindow(flat.activeLen())
+	assert.Equal(t, 12, end-start, "a pool-free config gets the full 12-row budget")
+
+	split := NewAccountsOverlay(mk(true), config.DefaultState())
+	split.SetSize(80, 24)
+	start, end = split.rowWindow(split.activeLen())
+	assert.Equal(t, 11, end-start, "a split pool costs exactly the one row its own note occupies")
 }
 
 // TestAccountsOverlay_ToggleAvailability covers the 'l' key: it flags the
@@ -730,4 +792,517 @@ func TestAccountsOverlay_RenameOntoOrphanClearsStaleFlag(t *testing.T) {
 	require.True(t, dirty)
 	assert.Empty(t, st.GetAccountAvailability(),
 		"an unlimited account must not inherit an orphan's exhaustion")
+}
+
+// TestAccountsOverlay_ReorderSwapsAndFollowsCursor: J moves the cursored account
+// down one slot in config order (which IS routing precedence) and the cursor
+// tracks the account, not the position, so a second J keeps moving the same one.
+func TestAccountsOverlay_ReorderSwapsAndFollowsCursor(t *testing.T) {
+	cfg := twoTabCfg() // Claude: work, personal
+	o := NewAccountsOverlay(cfg, config.DefaultState())
+	o.SetSize(80, 24)
+
+	closed, dirty := o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'J'}})
+	assert.False(t, closed)
+	assert.True(t, dirty, "reorder mutates config, so the app must persist it")
+	assert.Equal(t, []string{"personal", "work"}, claudeNames(cfg))
+	assert.Equal(t, 1, o.cursorIndex(), "cursor follows the moved account")
+
+	// K moves it back.
+	_, dirty = o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'K'}})
+	assert.True(t, dirty)
+	assert.Equal(t, []string{"work", "personal"}, claudeNames(cfg))
+	assert.Equal(t, 0, o.cursorIndex())
+}
+
+// Boundary presses must not report dirty — a no-op must not trigger a config write.
+func TestAccountsOverlay_ReorderAtBoundsIsNoOp(t *testing.T) {
+	cfg := twoTabCfg() // Claude: work, personal
+	o := NewAccountsOverlay(cfg, config.DefaultState())
+	o.SetSize(80, 24)
+
+	// Cursor starts at row 0 — K (up) is already at the top boundary.
+	_, dirty := o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'K'}})
+	assert.False(t, dirty, "K at row 0 is a no-op")
+	assert.Equal(t, []string{"work", "personal"}, claudeNames(cfg))
+	assert.Equal(t, 0, o.cursorIndex())
+
+	// Move to the last row: J (down) is now at the bottom boundary.
+	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyDown})
+	require.Equal(t, 1, o.cursorIndex())
+	_, dirty = o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'J'}})
+	assert.False(t, dirty, "J at the last row is a no-op")
+	assert.Equal(t, []string{"work", "personal"}, claudeNames(cfg))
+	assert.Equal(t, 1, o.cursorIndex())
+}
+
+// Order is first-match precedence in every section, so reorder works on all tabs.
+func TestAccountsOverlay_ReorderWorksOnGHAndAgyTabs(t *testing.T) {
+	cfg := &config.Config{
+		GHAccounts: []config.GHAccount{
+			{Name: "gh-work", ConfigDir: "~/.config/gh-work"},
+			{Name: "gh-personal", ConfigDir: "~/.config/gh-personal"},
+		},
+		AgyAccounts: []config.AgyAccount{
+			{Name: "agy-work", ConfigDir: "~/.agy-work"},
+			{Name: "agy-personal", ConfigDir: "~/.agy-personal"},
+		},
+	}
+	o := NewAccountsOverlay(cfg, config.DefaultState())
+	o.SetSize(80, 24)
+
+	o.selectTab(tabGH)
+	_, dirty := o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'J'}})
+	assert.True(t, dirty)
+	assert.Equal(t, []string{"gh-personal", "gh-work"}, ghNames(cfg))
+
+	o.selectTab(tabAgy)
+	o.cursor = 0 // selectTab only clamps; it does not reset the cursor across tabs
+	_, dirty = o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'J'}})
+	assert.True(t, dirty)
+	assert.Equal(t, []string{"agy-personal", "agy-work"}, agyNames(cfg))
+}
+
+// The shift+arrow aliases must behave identically to J/K.
+func TestAccountsOverlay_ReorderShiftArrowAliases(t *testing.T) {
+	cfg := twoTabCfg() // Claude: work, personal
+	o := NewAccountsOverlay(cfg, config.DefaultState())
+	o.SetSize(80, 24)
+
+	_, dirty := o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyShiftDown})
+	assert.True(t, dirty)
+	assert.Equal(t, []string{"personal", "work"}, claudeNames(cfg))
+	assert.Equal(t, 1, o.cursorIndex())
+
+	_, dirty = o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyShiftUp})
+	assert.True(t, dirty)
+	assert.Equal(t, []string{"work", "personal"}, claudeNames(cfg))
+	assert.Equal(t, 0, o.cursorIndex())
+}
+
+// Dormancy: a single-account tab cannot reorder and must report no change.
+func TestAccountsOverlay_ReorderSingleAccountIsInert(t *testing.T) {
+	cfg := &config.Config{ClaudeAccounts: []config.ClaudeAccount{{Name: "solo"}}}
+	o := NewAccountsOverlay(cfg, config.DefaultState())
+	o.SetSize(80, 24)
+
+	_, dirty := o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'J'}})
+	assert.False(t, dirty, "J with a single account is a no-op")
+	_, dirty = o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'K'}})
+	assert.False(t, dirty, "K with a single account is a no-op")
+	assert.Equal(t, []string{"solo"}, claudeNames(cfg))
+	assert.Equal(t, 0, o.cursorIndex())
+}
+
+// rowLine returns the single rendered line containing name, so a test can assert
+// which row a badge landed on rather than merely that the badge exists somewhere in
+// the whole view — an assert.Contains over the entire view is order-blind and can't
+// tell rows apart.
+func rowLine(t *testing.T, view, name string) string {
+	t.Helper()
+	for _, line := range strings.Split(view, "\n") {
+		if strings.Contains(line, name) {
+			return line
+		}
+	}
+	t.Fatalf("no rendered line contains %q; full view:\n%s", name, view)
+	return ""
+}
+
+// The point of reordering: order is first-match precedence and the FIRST rule-less
+// account is the catch-all, so moving a rule-less account to the top changes which
+// account an unmatched repo resolves to — and the rendered badges follow.
+func TestAccountsOverlay_ReorderChangesCatchAll(t *testing.T) {
+	cfg := &config.Config{ClaudeAccounts: []config.ClaudeAccount{
+		{Name: "alpha"}, // first rule-less → the catch-all
+		{Name: "bravo"}, // rule-less but later → unreachable
+	}}
+	o := NewAccountsOverlay(cfg, config.DefaultState())
+	o.SetSize(80, 24)
+
+	name, _, isDefault := cfg.ResolveClaudeAccount("", "/tmp/anything")
+	require.Equal(t, "alpha", name)
+	require.True(t, isDefault)
+	assert.Contains(t, rowLine(t, o.Render(), "alpha"), "default")
+	assert.Contains(t, rowLine(t, o.Render(), "bravo"), "unreachable")
+
+	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'J'}}) // alpha down
+
+	name, _, _ = cfg.ResolveClaudeAccount("", "/tmp/anything")
+	assert.Equal(t, "bravo", name, "the new first rule-less account is the catch-all")
+	assert.Contains(t, rowLine(t, o.Render(), "bravo"), "default")
+	assert.Contains(t, rowLine(t, o.Render(), "alpha"), "unreachable")
+}
+
+// Same for the rule-matching case: two accounts whose rules both match a remote
+// resolve to whichever is first, so reorder flips the winner. GH tab, to pin that
+// the GH section's order is load-bearing too. Both rows carry a rule (neither is a
+// catch-all), so their badges both read "routed" before and after — reordering
+// doesn't touch the badge in this case, only which resolved dir wins the match —
+// so the rowLine checks here guard against a broken reorder scrambling a row's
+// fields (e.g. dropping RemoteMatches), while the config-level dir flip below is
+// what actually pins the precedence change.
+func TestAccountsOverlay_ReorderChangesGHMatchPriority(t *testing.T) {
+	cfg := &config.Config{GHAccounts: []config.GHAccount{
+		{Name: "alpha", ConfigDir: "/cfg/alpha", RemoteMatches: []string{"github.com/acme"}},
+		{Name: "bravo", ConfigDir: "/cfg/bravo", RemoteMatches: []string{"github.com/acme"}},
+	}}
+	o := NewAccountsOverlay(cfg, config.DefaultState())
+	o.SetSize(80, 24)
+	o.selectTab(tabGH)
+
+	dir := cfg.ResolveGHConfigDir("github.com/acme/widgets", "")
+	require.Equal(t, "/cfg/alpha", dir, "first match wins")
+	assert.Contains(t, rowLine(t, o.Render(), "alpha"), "routed")
+	assert.Contains(t, rowLine(t, o.Render(), "bravo"), "routed")
+
+	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'J'}}) // alpha down, cursor starts on row 0
+
+	dir = cfg.ResolveGHConfigDir("github.com/acme/widgets", "")
+	assert.Equal(t, "/cfg/bravo", dir, "the newly-first account now wins the match")
+	assert.Contains(t, rowLine(t, o.Render(), "alpha"), "routed")
+	assert.Contains(t, rowLine(t, o.Render(), "bravo"), "routed")
+}
+
+// TestAccountsOverlay_LegendAdvertisesReorder pins the "select" vs "move" split
+// (cursor keys read "select" now that J/K owns "move" as its own verb) and
+// gates the reorder hint on there being a second row to swap with —
+// advertising J/K on a tab where it's a no-op would violate the "never name a
+// dead key" convention this legend already follows for "l limited".
+func TestAccountsOverlay_LegendAdvertisesReorder(t *testing.T) {
+	cfg := twoTabCfg() // Claude: 2 accounts (reorder live); GH: 1 account (reorder dead)
+	o := NewAccountsOverlay(cfg, config.DefaultState())
+	o.SetSize(80, 24)
+
+	out := o.Render()
+	assert.Contains(t, out, "↑/↓ select")
+	assert.NotContains(t, out, "↑/↓ move")
+	assert.Contains(t, out, "J/K reorder", "2 Claude accounts: reorder is live")
+
+	// A single account: J/K can't move anything, so it must not be advertised.
+	solo := &config.Config{ClaudeAccounts: []config.ClaudeAccount{{Name: "solo"}}}
+	oSolo := NewAccountsOverlay(solo, config.DefaultState())
+	oSolo.SetSize(80, 24)
+	assert.NotContains(t, oSolo.Render(), "J/K reorder", "1 account: reorder is dead")
+
+	// GH tab of twoTabCfg also has only 1 row.
+	o.selectTab(tabGH)
+	out = o.Render()
+	assert.NotContains(t, out, "J/K reorder", "GH tab has 1 row: reorder is dead")
+	assert.Contains(t, out, "t test routing")
+
+	// 0 accounts: rows() is empty, so the key is equally dead — the "never name
+	// a dead key" convention must hold here too, not just at exactly 1 account.
+	empty := NewAccountsOverlay(&config.Config{}, config.DefaultState())
+	empty.SetSize(80, 24)
+	assert.NotContains(t, empty.Render(), "J/K reorder", "0 accounts: reorder is dead")
+}
+
+// TestAccountsOverlay_LegendFitsAndKeepsLimitedClaudeOnly pins where "l
+// limited" landed after the reflow (line 2, alongside "t test routing", so
+// line 1 doesn't wrap once it also carries "J/K reorder") and that it stays
+// Claude-scoped. The fit check measures o.legendHints()'s raw (unstyled)
+// strings against o.inner(), not the rendered box: once a line passes through
+// t.OverlayHintStyle().Render() inside the Border()+Padding()+Width() box,
+// lipgloss pads every line — wrapped or not — out to the same total width, so
+// a post-render width comparison can never detect a wrap. Measuring the raw
+// text before it's styled is what actually catches a line that no longer fits
+// o.inner() (74 cols at an 80-column terminal).
+func TestAccountsOverlay_LegendFitsAndKeepsLimitedClaudeOnly(t *testing.T) {
+	cfg := twoTabCfg() // Claude: 2 accounts — widest case (J/K reorder + l limited both shown)
+	o := NewAccountsOverlay(cfg, config.DefaultState())
+	o.SetSize(80, 24)
+
+	hint, extras := o.legendHints()
+	assert.LessOrEqual(t, lipgloss.Width(hint), o.inner(), "line 1 must fit inside the box without wrapping")
+	assert.LessOrEqual(t, lipgloss.Width(extras), o.inner(), "line 2 must fit inside the box without wrapping")
+
+	out := o.Render()
+	// "l limited" must share a line with "t test routing" (line 2), not with
+	// "d delete"/"J/K reorder" (line 1) — the actual move this task makes. This
+	// pins placement; it's the width check above that pins fit.
+	assert.Contains(t, rowLine(t, out, "l limited"), "t test routing",
+		"l limited moved onto the second hint line alongside t test routing")
+
+	o.selectTab(tabGH)
+	assert.NotContains(t, o.Render(), "l limited", "l limited is Claude-only")
+}
+
+// TestAccountsOverlay_PooledMembersRenderBracketed pins the render-level wiring of
+// poolGutter into renderList: two adjacent Claude accounts sharing a pool are
+// bracketed top-to-bottom by the gutter glyphs, not merely named as a pool via the
+// existing "pool:x" chip.
+func TestAccountsOverlay_PooledMembersRenderBracketed(t *testing.T) {
+	cfg := &config.Config{ClaudeAccounts: []config.ClaudeAccount{
+		{Name: "work-1", ConfigDir: "~/.claude-work1", Pool: "work"},
+		{Name: "work-2", ConfigDir: "~/.claude-work2", Pool: "work"},
+	}}
+	o := NewAccountsOverlay(cfg, config.DefaultState())
+	o.SetSize(80, 24)
+
+	out := o.Render()
+	assert.Contains(t, rowLine(t, out, "work-1"), "┌", "run head carries the top bracket")
+	assert.Contains(t, rowLine(t, out, "work-2"), "└", "run tail carries the bottom bracket")
+}
+
+// TestAccountsOverlay_SplitPoolShowsNoteAndNoBracket covers the case poolGutter
+// cannot bracket: when a pool's members are not adjacent, no bracket glyph renders
+// at all, and the list instead prints the nudge to use J/K to bring them together.
+func TestAccountsOverlay_SplitPoolShowsNoteAndNoBracket(t *testing.T) {
+	cfg := &config.Config{ClaudeAccounts: []config.ClaudeAccount{
+		{Name: "work-1", ConfigDir: "~/.claude-work1", Pool: "work"},
+		{Name: "personal", ConfigDir: "~/.claude"},
+		{Name: "work-2", ConfigDir: "~/.claude-work2", Pool: "work"},
+	}}
+	o := NewAccountsOverlay(cfg, config.DefaultState())
+	o.SetSize(80, 24)
+
+	// renderList (not Render) so the box border's own top-left corner glyph can't
+	// collide with the "no bracket" assertion below — see
+	// TestAccountsOverlay_NoPoolsRendersFlat, which documents why.
+	out := o.renderList()
+	assert.NotContains(t, out, "┌", "non-adjacent members can't be bracketed")
+	assert.Contains(t, out, "pool 'work' is split")
+}
+
+// TestAccountsOverlay_NoPoolsRendersFlat pins the dormancy contract: with no pools
+// configured, no gutter glyph renders (not even blank padding) and no split note
+// appears — the table renders exactly as it did before this feature existed.
+func TestAccountsOverlay_NoPoolsRendersFlat(t *testing.T) {
+	o := NewAccountsOverlay(twoTabCfg(), config.DefaultState())
+	o.SetSize(80, 24)
+
+	// renderList (not Render) so the box border's own "│" edge can't collide with
+	// the gutter's middle-connector glyph in the assertion below.
+	out := o.renderList()
+	assert.NotContains(t, out, "┌")
+	assert.NotContains(t, out, "│")
+	assert.NotContains(t, out, "└")
+	assert.NotContains(t, out, "is split")
+}
+
+// TestAccountsOverlay_GutterIsClaudeTabOnly guards the o.tab == tabClaude gate:
+// only ClaudeAccount carries a Pool field, so the gutter and split note must never
+// appear on the GH tab even when its account names happen to look like pool
+// members. The Claude side deliberately carries BOTH an adjacent run (would
+// bracket) and a genuinely split pool (would print a note) so this test can't
+// pass merely because poolGutter/splitPools happen to return nil for this
+// fixture regardless of the tab gate — a config with only a split pool leaves
+// poolGutter nil on its own, so removing the gate around the gutter
+// computation specifically would go undetected.
+func TestAccountsOverlay_GutterIsClaudeTabOnly(t *testing.T) {
+	cfg := &config.Config{
+		ClaudeAccounts: []config.ClaudeAccount{
+			{Name: "work-1", Pool: "work"}, // adjacent run: would bracket on the Claude tab
+			{Name: "work-2", Pool: "work"},
+			{Name: "personal"},
+			{Name: "home-1", Pool: "home"}, // split: would print a note on the Claude tab
+			{Name: "mid"},
+			{Name: "home-2", Pool: "home"},
+		},
+		GHAccounts: []config.GHAccount{
+			{Name: "work-1", ConfigDir: "~/.config/gh-work1"},
+			{Name: "work-2", ConfigDir: "~/.config/gh-work2"},
+		},
+	}
+	o := NewAccountsOverlay(cfg, config.DefaultState())
+	o.SetSize(80, 24)
+	o.selectTab(tabGH)
+
+	// renderList (not Render): the box border's own top-left corner glyph must not
+	// collide with the "no bracket" assertion — see
+	// TestAccountsOverlay_NoPoolsRendersFlat, which documents why.
+	out := o.renderList()
+	assert.NotContains(t, out, "┌")
+	assert.NotContains(t, out, "is split")
+}
+
+// TestAccountsOverlay_GutterSurvivesWindowScroll mirrors
+// TestAccountsOverlay_CatchAllBadgeSurvivesWindowScroll: poolGutter is computed over
+// the whole account slice before windowing, so scrolling until the run head lands
+// exactly on the window's first visible row still renders its "┌" correctly. A bug
+// that recomputed the gutter on the windowed sub-slice, or indexed it by
+// window-relative position instead of the absolute config index, would show a blank
+// gutter cell (or the wrong glyph) on this row instead.
+func TestAccountsOverlay_GutterSurvivesWindowScroll(t *testing.T) {
+	cfg := &config.Config{}
+	for i := 0; i < 10; i++ {
+		cfg.ClaudeAccounts = append(cfg.ClaudeAccounts, config.ClaudeAccount{
+			Name: fmt.Sprintf("acct%02d", i), ConfigDir: "~/.claude",
+		})
+	}
+	cfg.ClaudeAccounts = append(cfg.ClaudeAccounts,
+		config.ClaudeAccount{Name: "work-1", ConfigDir: "~/.claude-work1", Pool: "work"},
+		config.ClaudeAccount{Name: "work-2", ConfigDir: "~/.claude-work2", Pool: "work"},
+	)
+	for i := 12; i < 30; i++ {
+		cfg.ClaudeAccounts = append(cfg.ClaudeAccounts, config.ClaudeAccount{
+			Name: fmt.Sprintf("acct%02d", i), ConfigDir: "~/.claude",
+		})
+	}
+
+	o := NewAccountsOverlay(cfg, config.DefaultState())
+	// budget 12 rows: this pool run is adjacent (not split), so splitPools is empty
+	// and the split-pool note never renders — chrome stays 12.
+	o.SetSize(80, 24)
+
+	for i := 0; i < 21; i++ {
+		o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyDown})
+	}
+	require.Equal(t, 21, o.cursorIndex())
+
+	// Window is [10,22): rows 0-9 (including the run head's would-be predecessors)
+	// scrolled off, and the run (10,11) is fully in view with work-1 landing on the
+	// window's very first visible row.
+	out := o.Render()
+	require.NotContains(t, out, "acct09", "rows above the window scrolled off")
+	require.Contains(t, out, "work-1", "the run head is in the window")
+	assert.Contains(t, rowLine(t, out, "work-1"), "┌", "run head keeps its top bracket even as the window's first visible row")
+	assert.Contains(t, rowLine(t, out, "work-2"), "└")
+}
+
+// TestAccountsOverlay_SplitPoolTwoRunsRendersBracketsAndNote covers the Task 4
+// review's uncovered interaction: a pool with two SEPARATE adjacent runs (not one
+// contiguous block) is bracketed at each run by poolGutter *and* still flagged split
+// by splitPools, so the brackets and the split note render together in the same
+// frame. poolGutter and splitPools are each unit-tested alone; this pins that
+// combination specifically.
+func TestAccountsOverlay_SplitPoolTwoRunsRendersBracketsAndNote(t *testing.T) {
+	cfg := &config.Config{ClaudeAccounts: []config.ClaudeAccount{
+		{Name: "w1", ConfigDir: "~/.claude-w1", Pool: "work"},
+		{Name: "w2", ConfigDir: "~/.claude-w2", Pool: "work"},
+		{Name: "other", ConfigDir: "~/.claude-other"},
+		{Name: "w3", ConfigDir: "~/.claude-w3", Pool: "work"},
+		{Name: "w4", ConfigDir: "~/.claude-w4", Pool: "work"},
+	}}
+	o := NewAccountsOverlay(cfg, config.DefaultState())
+	o.SetSize(80, 24)
+
+	out := o.Render()
+	assert.Contains(t, rowLine(t, out, "w1"), "┌", "first run's head is bracketed")
+	assert.Contains(t, rowLine(t, out, "w2"), "└", "first run's tail is bracketed")
+	assert.Contains(t, rowLine(t, out, "w3"), "┌", "second run's head is bracketed")
+	assert.Contains(t, rowLine(t, out, "w4"), "└", "second run's tail is bracketed")
+	assert.Contains(t, out, "pool 'work' is split",
+		"two runs are still not ONE contiguous block, so splitPools flags the pool "+
+			"even though every member sits inside some bracketed run")
+}
+
+// TestAccountsOverlay_ReorderGroupsSplitPool is the end-to-end pin for the note's own
+// advice: pressing J on the account between two split-pool members actually groups
+// them, the bracket appears, and the note clears. Fixture: work-1 (pool work),
+// personal, work-2 (pool work) — cursor moves down to personal, then J swaps
+// personal past work-2, landing the order work-1, work-2, personal.
+func TestAccountsOverlay_ReorderGroupsSplitPool(t *testing.T) {
+	cfg := &config.Config{ClaudeAccounts: []config.ClaudeAccount{
+		{Name: "work-1", ConfigDir: "~/.claude-work1", Pool: "work"},
+		{Name: "personal", ConfigDir: "~/.claude"},
+		{Name: "work-2", ConfigDir: "~/.claude-work2", Pool: "work"},
+	}}
+	o := NewAccountsOverlay(cfg, config.DefaultState())
+	o.SetSize(80, 24)
+
+	// Before: the pool's members are not adjacent — no bracket anywhere, and the
+	// note names exactly this pool as split. renderList (not Render): the box
+	// border's own top-left corner glyph must not collide with the "no bracket"
+	// assertion — see TestAccountsOverlay_NoPoolsRendersFlat, which documents why.
+	before := o.renderList()
+	assert.NotContains(t, before, "┌", "non-adjacent pool members render no bracket yet")
+	assert.Contains(t, before, "pool 'work' is split")
+
+	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyDown})
+	require.Equal(t, 1, o.cursorIndex(), "cursor now on personal")
+
+	closed, dirty := o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'J'}})
+	assert.False(t, closed)
+	assert.True(t, dirty, "reorder mutates config, so the app must persist it")
+	assert.Equal(t, []string{"work-1", "work-2", "personal"}, claudeNames(cfg),
+		"personal swapped past work-2, grouping the pool")
+
+	// After: the note's fix worked — the pool is now one contiguous run, bracketed,
+	// and the split note is gone.
+	after := o.Render()
+	assert.Contains(t, rowLine(t, after, "work-1"), "┌", "run head carries the top bracket")
+	assert.Contains(t, rowLine(t, after, "work-2"), "└", "run tail carries the bottom bracket")
+	assert.NotContains(t, after, "is split", "the pool is no longer split, so the nudge clears")
+}
+
+// TestAccountsOverlay_GutterNarrowsDirNotRowWidth pins the fix for the pool-gutter
+// width regression a manual smoke test found: the gutter's 2 columns must come OUT
+// of the dir field, not get added on top of the row, so a row that fit before the
+// gutter existed still fits with it. Fixture mirrors the smoke's exact repro: an
+// adjacent pool run (work-1, work-2) plus a third, UNPOOLED account ("personal")
+// with a dir long enough to hit truncTail's cap either way, so its row carries the
+// widest realistic badge, "catch-all (unreachable)" (23 cols) — it's the second
+// rule-less account — plus the Claude tab's availability chip (13 cols), at a
+// 100-column terminal (boxWidth caps at 84 -> inner() == 80). "personal" itself
+// belongs to no pool, so its `extra` pool chip is identical (absent) whether or not
+// the OTHER two accounts form a run: the only thing that can change its row width is
+// the gutter column itself (poolGutter emits a blank "  " cell for every row once
+// any run exists elsewhere in the list, not just the run's own rows) — isolating
+// exactly the bug, rather than conflating it with the deliberately-independent
+// pool:<name> chip.
+//
+// Per this file's own note on TestAccountsOverlay_LegendFitsAndKeepsLimitedClaudeOnly:
+// comparing rendered widths AFTER lipgloss pads a Border()+Padding()+Width() box
+// can't detect a wrap — every line, wrapped or not, comes out at the same padded
+// width. So this measures (a) the unstyled row string renderList builds, directly,
+// and (b) the number of lines Render() actually produces, which DOES grow by one
+// per wrapped row.
+func TestAccountsOverlay_GutterNarrowsDirNotRowWidth(t *testing.T) {
+	longDir := "~/.claude-configs/some/very/long/nested/directory/path"
+	mk := func(pool string) *config.Config {
+		return &config.Config{ClaudeAccounts: []config.ClaudeAccount{
+			{Name: "work-1", ConfigDir: "~/.claude-work1", Pool: pool, RemoteMatches: []string{"acme/"}},
+			{Name: "work-2", ConfigDir: "~/.claude-work2", Pool: pool}, // rule-less #1 → "default"
+			{Name: "personal", ConfigDir: longDir},                     // rule-less #2 → "catch-all (unreachable)"
+		}}
+	}
+
+	oGutter := NewAccountsOverlay(mk("work"), config.DefaultState()) // work-1/work-2 form a run → gutter renders
+	oGutter.SetSize(100, 30)
+	oFlat := NewAccountsOverlay(mk(""), config.DefaultState()) // no pool anywhere → no gutter column at all
+	oFlat.SetSize(100, 30)
+
+	require.Equal(t, 80, oGutter.inner(), "pinning the reproduction's 100-col/84-cap/80-inner numbers")
+
+	gutterLine := rowLine(t, oGutter.renderList(), "personal")
+	flatLine := rowLine(t, oFlat.renderList(), "personal")
+
+	assert.Equal(t, lipgloss.Width(flatLine), lipgloss.Width(gutterLine),
+		"the gutter's 2 columns must come out of the row, not add to it")
+	assert.LessOrEqual(t, lipgloss.Width(gutterLine), oGutter.inner(),
+		"the widest row THAT FITS (catch-all (unreachable) badge + availability chip, zero slack to spare) is "+
+			"the sharp test for the gutter's two columns; the genuinely widest realistic row — a pooled rule-less "+
+			"member — already wraps pre-existing (from #458's pool chip) and is out of scope here")
+
+	// A wrap only shows up once the row is laid out inside the bordered,
+	// Width()-constrained box — lipgloss pads every line of that box to the same
+	// width regardless of wrapping, so line COUNT (not width) is what proves it.
+	gutterLines := strings.Count(oGutter.Render(), "\n")
+	flatLines := strings.Count(oFlat.Render(), "\n")
+	assert.Equal(t, flatLines, gutterLines, "the gutter must not add a wrapped extra line")
+}
+
+// TestAccountsOverlay_ReorderPersists is the persistence half of Task 5: dirty is
+// the app's ONLY cue to call config.SaveConfig (app/app_accounts.go:14) — the
+// overlay itself never writes to disk. This proves the permuted order actually
+// round-trips through a real save/load cycle, not merely that SaveConfig didn't
+// error.
+func TestAccountsOverlay_ReorderPersists(t *testing.T) {
+	t.Setenv("HOME", t.TempDir()) // hermetic: LoadConfig/SaveConfig must never touch the real data dir
+
+	cfg := twoTabCfg() // Claude: work, personal
+	o := NewAccountsOverlay(cfg, config.DefaultState())
+	o.SetSize(80, 24)
+
+	_, dirty := o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'J'}})
+	require.True(t, dirty, "reorder must report dirty so the app knows to persist")
+	require.Equal(t, []string{"personal", "work"}, claudeNames(cfg), "in-memory order after the swap")
+
+	require.NoError(t, config.SaveConfig(cfg))
+
+	loaded := config.LoadConfig()
+	assert.Equal(t, []string{"personal", "work"}, claudeNames(loaded),
+		"the permuted order survives a save/load round trip, not just an in-memory swap")
 }
