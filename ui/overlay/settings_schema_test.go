@@ -1,8 +1,11 @@
 package overlay
 
 import (
+	"reflect"
+	"strings"
 	"testing"
 
+	"github.com/ZviBaratz/atrium/config"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -46,4 +49,64 @@ func TestApplyTimingProjections(t *testing.T) {
 	assert.Equal(t, "live", timingLive.badge())
 	assert.Equal(t, "new sessions", timingNewSessions.badge())
 	assert.Equal(t, "restart", timingRestart.badge())
+}
+
+// TestEveryScalarConfigFieldHasARow is the panel twin of
+// config.TestReadmeDocumentsEveryConfigField: a new scalar config key must not ship
+// reachable only by hand-editing config.json, because that makes it invisible to
+// every user who configures Atrium through the panel.
+//
+// Exempt are the four list-of-record keys, which a one-value-per-row panel cannot
+// express (accounts are managed from the Accounts overlay; profiles get their own
+// editor in PR D, which is not a settingRow either), and the deprecated nerd_font,
+// superseded by glyph_set.
+func TestEveryScalarConfigFieldHasARow(t *testing.T) {
+	exempt := map[string]string{
+		"profiles":        "list of records — Profiles editor (PR D), not a settingRow",
+		"claude_accounts": "list of records — Accounts overlay",
+		"gh_accounts":     "list of records — Accounts overlay",
+		"agy_accounts":    "list of records — Accounts overlay",
+		"nerd_font":       "deprecated, superseded by glyph_set",
+	}
+
+	count := map[string]int{}
+	for _, r := range newSettingRows(config.DefaultConfig()) {
+		count[r.key]++
+	}
+
+	tp := reflect.TypeOf(config.Config{})
+	for i := 0; i < tp.NumField(); i++ {
+		name := strings.Split(tp.Field(i).Tag.Get("json"), ",")[0]
+		if name == "" || name == "-" {
+			continue
+		}
+		if reason, ok := exempt[name]; ok {
+			assert.Zerof(t, count[name], "%s is exempt (%s) but has a settings row", name, reason)
+			continue
+		}
+		assert.Equalf(t, 1, count[name],
+			"config field %s (json:%q) must have exactly one settings row", tp.Field(i).Name, name)
+	}
+}
+
+// TestEveryRowKeyIsAConfigFieldOrReadOnly is the reverse direction: a row whose key
+// matches no config field would persist nothing, and applySettingChange would switch
+// on a key that can never arrive. kindReadOnly rows are exempt — they display a
+// resolved fact (the config.json path) rather than a config value.
+func TestEveryRowKeyIsAConfigFieldOrReadOnly(t *testing.T) {
+	fields := map[string]bool{}
+	tp := reflect.TypeOf(config.Config{})
+	for i := 0; i < tp.NumField(); i++ {
+		if name := strings.Split(tp.Field(i).Tag.Get("json"), ",")[0]; name != "" && name != "-" {
+			fields[name] = true
+		}
+	}
+
+	for _, r := range newSettingRows(config.DefaultConfig()) {
+		if r.kind == kindReadOnly {
+			assert.Nil(t, r.set, "a read-only row must have no setter: %s", r.key)
+			continue
+		}
+		assert.Truef(t, fields[r.key], "row %q matches no config.Config json field", r.key)
+	}
 }
