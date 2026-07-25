@@ -691,6 +691,21 @@ instead of pinning every session in a repo to one account:
   leaves the draft in place and creates nothing; accepting pins the member whose
   limit resets soonest — which, while flags are indefinite-only, is the first
   pool member.
+- Press `t` in the `@` accounts overlay to preview where an input (remote URL
+  and/or path) would route right now, without creating anything. When the
+  matched account belongs to a pool, the `Claude →` line names the member a
+  session would actually take, and a block beneath it (`pool '<name>' ⇄`)
+  lists every member with its available/limited chip, marking the one it
+  picked `← next` — and, when getting there meant skipping a limited member,
+  naming why, e.g. `work-1 limited → rotating to work-2`. If every member is
+  limited, the block shows `⚠ all '<pool>' accounts limited` and marks the
+  member the confirm above would pin on accept with `← on confirm` — the one
+  whose limit resets soonest, which, while flags are indefinite-only, is the
+  first pool member. The preview only reads availability and the rotation
+  cursor, never advances it, so unlike creating a session — which does move
+  the cursor — the same input can preview a different member afterward. A
+  no-pool or single-account config previews exactly as before, with no pool
+  block.
 - **Setting up a second account:** each pool member needs its own
   `CLAUDE_CONFIG_DIR` with its own login. Point Claude at a fresh directory and
   log in once — `CLAUDE_CONFIG_DIR=~/.claude-work2 claude`, then run `/login`
