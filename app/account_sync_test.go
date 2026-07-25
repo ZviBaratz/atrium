@@ -341,29 +341,39 @@ func TestAccountsPanel_RenameRegroupsOpenSessions(t *testing.T) {
 		"the notice names the cluster they landed in, once the list is visible again")
 }
 
+// regroupedSet is n distinct sessions — the notice only counts these sets, so unique
+// placeholders are enough to pin the wording.
+func regroupedSet(n int) map[*session.Instance]bool {
+	out := make(map[*session.Instance]bool, n)
+	for i := 0; i < n; i++ {
+		out[&session.Instance{}] = true
+	}
+	return out
+}
+
 func TestAccountSyncNotice(t *testing.T) {
 	assert.Equal(t, `3 sessions regrouped under "quantivly"`,
-		accountSyncNotice(accountStampSync{restamped: 3, regrouped: 3,
+		accountSyncNotice(accountStampSync{restampedSessions: regroupedSet(3), regroupedSessions: regroupedSet(3),
 			clusterMoves: map[string]string{"work": "quantivly"},
 			destinations: map[string]bool{"quantivly": true}}))
 	assert.Equal(t, "1 session regrouped under \"quantivly\"",
-		accountSyncNotice(accountStampSync{restamped: 1, regrouped: 1,
+		accountSyncNotice(accountStampSync{restampedSessions: regroupedSet(1), regroupedSessions: regroupedSet(1),
 			clusterMoves: map[string]string{"work": "quantivly"},
 			destinations: map[string]bool{"quantivly": true}}))
 	assert.Equal(t, "4 sessions regrouped to match the renamed accounts",
-		accountSyncNotice(accountStampSync{restamped: 4, regrouped: 4,
+		accountSyncNotice(accountStampSync{restampedSessions: regroupedSet(4), regroupedSessions: regroupedSet(4),
 			clusterMoves: map[string]string{"work": "quantivly", "old": "personal"},
 			destinations: map[string]bool{"quantivly": true, "personal": true}}))
 	// A cluster the sessions LEFT can still hold a session that could not be healed,
 	// which drops it from clusterMoves — but they all landed in one place, so the
 	// notice can still name it.
 	assert.Equal(t, `1 session regrouped under "quantivly"`,
-		accountSyncNotice(accountStampSync{restamped: 1, regrouped: 1,
+		accountSyncNotice(accountStampSync{restampedSessions: regroupedSet(1), regroupedSessions: regroupedSet(1),
 			destinations: map[string]bool{"quantivly": true}}))
 	// Renaming a POOLED account moves no cluster — only the badges change, and the
 	// notice must not claim a regrouping the user cannot see.
 	assert.Equal(t, "2 badges renamed to match the accounts config",
-		accountSyncNotice(accountStampSync{restamped: 2}))
+		accountSyncNotice(accountStampSync{restampedSessions: regroupedSet(2)}))
 }
 
 // A stale cluster key can fan OUT: two sessions stamped with the same pool whose
@@ -385,7 +395,7 @@ func TestSyncAccountStamps_FanOutKeepsOneSlotAndStaysGeneric(t *testing.T) {
 
 	sync := syncAccountStamps(cfg, instances)
 
-	assert.Equal(t, 2, sync.regrouped, "both sessions left the stale 'work' cluster")
+	assert.Equal(t, 2, sync.regrouped(), "both sessions left the stale 'work' cluster")
 	assert.Equal(t, map[string]bool{"alpha": true, "beta": true}, sync.destinations,
 		"they landed in two different clusters")
 	require.Len(t, sync.clusterMoves, 1,
@@ -441,6 +451,40 @@ func TestAccountsPanel_TwoRenamesInOneVisitAnnounceBoth(t *testing.T) {
 
 	assert.Contains(t, h.menu.String(), "2 sessions regrouped",
 		"the held notice counts both renames, not just the last one")
+}
+
+// The mirror of the test above: renaming the SAME account twice in one visit moves
+// the same sessions again. Accumulating the passes must not count them twice —
+// summing a per-pass counter would announce more sessions rearranged than exist,
+// which is why the accumulated view holds a set of sessions rather than a number.
+func TestAccountsPanel_RenamingOneAccountTwiceCountsItsSessionsOnce(t *testing.T) {
+	resetSettingsTestState(t)
+	home := homeDir(t)
+	h := newSettingsTestHome()
+	h.appConfig.GroupMode = config.GroupModeAccount
+	h.appConfig.ClaudeAccounts = []config.ClaudeAccount{{Name: "work", ConfigDir: "~/.claude-work"}}
+	for _, repo := range []string{"api", "web"} {
+		h.list.AddInstance(stampedInstance(t, repo, "work", filepath.Join(home, ".claude-work"), "", false))()
+	}
+	h.list.SetGroupMode("account")
+	withCapturingStore(t, h)
+
+	rename := func(to string) {
+		_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("e")})
+		_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyCtrlU})
+		for _, r := range to {
+			_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+		}
+		_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyEnter})
+	}
+
+	_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("@")})
+	rename("zvi.baratz")  // first attempt
+	rename("zvi.baratz2") // corrected
+	_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyEsc})
+
+	assert.Contains(t, h.menu.String(), "2 sessions regrouped",
+		"there are only two sessions, however many times they were re-stamped")
 }
 
 // failingOrderState is the real State with a broken account-order write, to pin what

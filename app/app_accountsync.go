@@ -25,13 +25,21 @@ import (
 
 // accountStampSync is what one re-stamp pass changed.
 type accountStampSync struct {
-	// restamped counts sessions whose labels moved — i.e. whether the healed
-	// identities are worth writing back to state.json.
-	restamped int
-	// regrouped counts sessions whose CLUSTER KEY moved, the subset of restamped the
-	// user actually sees rearrange. Renaming a pooled account, or an Antigravity
-	// account, refreshes a label without moving any cluster.
-	regrouped int
+	// restampedSessions is the set of sessions whose labels moved — what decides
+	// whether the healed identities are worth writing back to state.json, and the
+	// count the badge-only notice reports. A set for the same reason as
+	// regroupedSessions below, and because one session can be re-stamped twice in a
+	// single pass when both its Claude and its Antigravity account were renamed.
+	restampedSessions map[*session.Instance]bool
+	// regroupedSessions is the set of sessions whose CLUSTER KEY moved — the subset
+	// of restampedSessions the user actually sees rearrange (renaming a pooled account, or an
+	// Antigravity one, refreshes a label without moving any cluster). A SET, not a
+	// counter, because merging a visit's passes must count a session that moved twice
+	// once: two renames of the same account move the same sessions again, and summing
+	// would report more sessions rearranged than exist. Pointer identity is safe to
+	// hold here — the accounts panel is modal, so nothing can be killed between the
+	// passes it accumulates, and the set is only ever counted, never dereferenced.
+	regroupedSessions map[*session.Instance]bool
 	// clusterMoves maps a cluster key that no longer has any session to the key its
 	// sessions moved to ("work" -> "quantivly" after the account was renamed into a
 	// pool). Only VANISHED keys are listed, so carrying the persisted cluster order
@@ -46,15 +54,32 @@ type accountStampSync struct {
 }
 
 // changed reports whether the pass has anything to persist or announce.
-func (s accountStampSync) changed() bool { return s.restamped > 0 || len(s.clusterMoves) > 0 }
+func (s accountStampSync) changed() bool {
+	return len(s.restampedSessions) > 0 || len(s.clusterMoves) > 0
+}
+
+// restamped is how many sessions had a label re-derived, and regrouped how many of
+// them visibly changed cluster.
+func (s accountStampSync) restamped() int { return len(s.restampedSessions) }
+func (s accountStampSync) regrouped() int { return len(s.regroupedSessions) }
 
 // merge folds a later pass into this one. The accounts panel commits one pass per
 // edit, each re-derived from the already-healed list, so only the accumulated view
 // knows about every rename of a visit — holding one pass would let the last edit
 // silently replace the rest.
 func (s *accountStampSync) merge(other accountStampSync) {
-	s.restamped += other.restamped
-	s.regrouped += other.regrouped
+	for inst := range other.restampedSessions {
+		if s.restampedSessions == nil {
+			s.restampedSessions = map[*session.Instance]bool{}
+		}
+		s.restampedSessions[inst] = true
+	}
+	for inst := range other.regroupedSessions {
+		if s.regroupedSessions == nil {
+			s.regroupedSessions = map[*session.Instance]bool{}
+		}
+		s.regroupedSessions[inst] = true
+	}
 	for from, to := range other.clusterMoves {
 		if s.clusterMoves == nil {
 			s.clusterMoves = map[string]string{}
@@ -89,6 +114,8 @@ func syncAccountStamps(cfg *config.Config, instances []*session.Instance) accoun
 	moves := map[string]string{}
 	dests := map[string]bool{}
 	live := map[string]bool{}
+	moved := map[*session.Instance]bool{}
+	touched := map[*session.Instance]bool{}
 	for _, inst := range instances {
 		if inst == nil {
 			continue
@@ -99,18 +126,18 @@ func syncAccountStamps(cfg *config.Config, instances []*session.Instance) accoun
 			// pass and a fresh session can never disagree: the catch-all flag drives the
 			// dim badge, and only a REAL declared pool becomes a cluster key.
 			if inst.RestampClaudeAccount(acct.Name, acct.IsCatchAll(), acct.Pool) {
-				out.restamped++
+				touched[inst] = true
 			}
 		}
 		if acct, ok := cfg.FindAgyAccount(inst.AgyAccountName(), inst.AgyConfigDir()); ok {
 			if inst.RestampAgyAccount(acct.Name) {
-				out.restamped++
+				touched[inst] = true
 			}
 		}
 		after := inst.AccountClusterKey()
 		live[after] = true
 		if before != after {
-			out.regrouped++
+			moved[inst] = true
 			dests[after] = true
 			// First destination wins: one persisted slot cannot be split, so when a
 			// stale key fans out — two sessions sharing a pool whose accounts were
@@ -128,6 +155,12 @@ func syncAccountStamps(cfg *config.Config, instances []*session.Instance) accoun
 		if live[old] {
 			delete(moves, old)
 		}
+	}
+	if len(touched) > 0 {
+		out.restampedSessions = touched
+	}
+	if len(moved) > 0 {
+		out.regroupedSessions = moved
 	}
 	if len(moves) > 0 {
 		out.clusterMoves = moves
@@ -176,9 +209,14 @@ func remapAccountOrder(order []string, moves map[string]string) ([]string, bool)
 // clusterMoves is a DIFF between the stamp on disk and live config, and once healed
 // labels land nothing disagrees any more, so no later pass can recompute it. Writing
 // labels first would let a failed order write strand the user's [ / ] slot behind
-// them permanently. In this order a failure leaves both halves stale and the next
-// launch simply recomputes and retries the pair — which is why the label write is
-// skipped once the order write has failed.
+// them permanently. In this order a failure leaves both halves stale, so the next
+// launch recomputes the move and retries the pair — which is why the label write is
+// skipped once the order write has failed. That retry is best-effort rather than
+// guaranteed: the healed labels are live in memory, so an ordinary save later in the
+// same run persists them anyway and the carry is lost. It costs nothing to order the
+// writes this way, and both go to the same state.json — a failure that hits one
+// almost certainly hits the other — so this narrows the window rather than closing
+// it.
 //
 // Best-effort: failures are logged, not surfaced. Returns the carried order and
 // whether it moved, so the caller can rebuild the view it belongs to.
@@ -190,7 +228,7 @@ func (m *home) persistAccountSync(sync accountStampSync) ([]string, bool) {
 			return order, moved
 		}
 	}
-	if sync.restamped > 0 {
+	if sync.restamped() > 0 {
 		if err := m.persistInstances(); err != nil {
 			log.WarningLog.Printf("failed to persist healed account identities: %v", err)
 		}
@@ -236,16 +274,17 @@ func (m *home) resyncAccountStamps() accountStampSync {
 // them; a rename that moved no cluster (a pooled account, or an Antigravity one)
 // only refreshed badges, and says so.
 func accountSyncNotice(sync accountStampSync) string {
-	if sync.regrouped == 0 {
+	regrouped := sync.regrouped()
+	if regrouped == 0 {
+		restamped := sync.restamped()
 		return fmt.Sprintf("%d badge%s renamed to match the accounts config",
-			sync.restamped, plural(sync.restamped))
+			restamped, plural(restamped))
 	}
 	if len(sync.destinations) == 1 {
 		for to := range sync.destinations {
-			return fmt.Sprintf("%d session%s regrouped under %q",
-				sync.regrouped, plural(sync.regrouped), to)
+			return fmt.Sprintf("%d session%s regrouped under %q", regrouped, plural(regrouped), to)
 		}
 	}
 	return fmt.Sprintf("%d session%s regrouped to match the renamed accounts",
-		sync.regrouped, plural(sync.regrouped))
+		regrouped, plural(regrouped))
 }
