@@ -79,6 +79,17 @@ func TestPreviewMemberWindow(t *testing.T) {
 		assert.Equal(t, 3, hidden)
 		assert.True(t, 4 >= start && 4 < end, "chosen index must fall inside [start, end)")
 	})
+
+	// previewMemberBudget floors at 2 for a very small overlay, giving a
+	// one-row window (shown = budget - 1 = 1). The decisive member must still
+	// be the one row shown, not scrolled out by the tightest possible budget.
+	t.Run("at the floored minimum budget: still exactly the chosen row", func(t *testing.T) {
+		start, end, hidden := previewMemberWindow(5, 3, 2)
+		assert.Equal(t, 3, start)
+		assert.Equal(t, 4, end)
+		assert.Equal(t, 4, hidden)
+		assert.True(t, 3 >= start && 3 < end, "chosen index must fall inside [start, end)")
+	})
 }
 
 func TestPreviewDecisionLine(t *testing.T) {
