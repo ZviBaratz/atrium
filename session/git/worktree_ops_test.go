@@ -20,6 +20,12 @@ func newTestRepo(t *testing.T) string {
 	mustRunGit(t, "", "init", repoPath)
 	mustRunGit(t, repoPath, "config", "user.name", "Test User")
 	mustRunGit(t, repoPath, "config", "user.email", "test@example.com")
+	// Many tests here assert on ignore state, so no global excludes file may reach
+	// them. HOME is sandboxed above and SandboxHomeMain unsets XDG_CONFIG_HOME
+	// (which git consults first), covering the per-user lookups; pointing
+	// core.excludesFile at a path that does not exist also neutralizes a
+	// system-level /etc/gitconfig that sets it.
+	mustRunGit(t, repoPath, "config", "core.excludesFile", filepath.Join(tempHome, "absent-global-gitignore"))
 	if err := os.WriteFile(filepath.Join(repoPath, "README.md"), []byte("hello\n"), 0644); err != nil {
 		t.Fatalf("write README: %v", err)
 	}

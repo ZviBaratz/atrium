@@ -558,10 +558,19 @@ un-ignored, which would commit it into the session branch on pause and show it i
 the session diff. Atrium checks this the way git will see it in the worktree and
 skips the entry with a warning rather than creating a link that leaks.
 
-Like carried files, links are re-created whenever the worktree is materialized,
-including on resume after a pause. On Windows, creating a symlink requires
-Developer Mode or an elevated process; without it the entry is skipped with a
-warning and the session still starts.
+Links are re-created whenever the worktree is materialized, including on resume
+after a pause. On Windows, creating a symlink requires Developer Mode or an
+elevated process; without it the entry is skipped with a warning and the session
+still starts.
+
+Unlike a carried file, a linked path is **shared and writable, not a per-session
+copy** — it is the original checkout's tree under another name. Writes through it
+land in your own working copy and are visible to every other session at once, so
+an agent that runs `npm install` (or `rm -rf node_modules`) inside one session
+changes the dependency tree for all of them. That is exactly why linking beats
+copying for a large tree, but it is the one place a session is deliberately not
+isolated: link paths whose contents you are content to share, and prefer
+`carry_files` when a session needs its own copy.
 
 #### Claude accounts
 
