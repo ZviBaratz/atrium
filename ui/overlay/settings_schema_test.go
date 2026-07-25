@@ -2,6 +2,7 @@ package overlay
 
 import (
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -311,4 +312,126 @@ func TestResetIsPresentWhereverADefaultIs(t *testing.T) {
 		assert.Equalf(t, r.defaultDisplay == nil, r.reset == nil,
 			"row %q must declare defaultDisplay and reset together", r.key)
 	}
+}
+
+// rowByKey returns the row with the given key, failing the test when absent.
+func rowByKey(t *testing.T, cfg *config.Config, key string) settingRow {
+	t.Helper()
+	for _, r := range newSettingRows(cfg) {
+		if r.key == key {
+			return r
+		}
+	}
+	t.Fatalf("no settings row with key %q", key)
+	return settingRow{}
+}
+
+// TestInertPredicates pins each activeWhen from spec §5: a row is inert exactly when
+// changing it cannot currently do anything. Each case toggles the parent and asserts
+// both directions, so a predicate stuck at true or false fails.
+func TestInertPredicates(t *testing.T) {
+	tests := []struct {
+		name       string
+		row        string
+		makeInert  func(*config.Config)
+		makeActive func(*config.Config)
+	}{
+		{
+			name:       "finished turns follows notifications",
+			row:        "notifications_finished",
+			makeInert:  func(c *config.Config) { c.Notifications = config.NotificationsOff },
+			makeActive: func(c *config.Config) { c.Notifications = config.NotificationsBell },
+		},
+		{
+			name:       "notify when focused follows notifications",
+			row:        "notify_when_focused",
+			makeInert:  func(c *config.Config) { c.Notifications = config.NotificationsOff },
+			makeActive: func(c *config.Config) { c.Notifications = config.NotificationsBell },
+		},
+		{
+			name:       "notify command needs desktop mode specifically",
+			row:        "notify_command",
+			makeInert:  func(c *config.Config) { c.Notifications = config.NotificationsBell },
+			makeActive: func(c *config.Config) { c.Notifications = config.NotificationsDesktop },
+		},
+		{
+			name:       "fast-forward follows update base on create",
+			row:        "fast_forward_local_base",
+			makeInert:  func(c *config.Config) { f := false; c.UpdateBaseOnCreate = &f },
+			makeActive: func(c *config.Config) { tr := true; c.UpdateBaseOnCreate = &tr },
+		},
+		{
+			name:       "poll interval follows auto-yes",
+			row:        "daemon_poll_interval",
+			makeInert:  func(c *config.Config) { c.AutoYes = false },
+			makeActive: func(c *config.Config) { c.AutoYes = true },
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := config.DefaultConfig()
+			row := rowByKey(t, cfg, tc.row)
+			require.NotNil(t, row.activeWhen, "row %q must declare activeWhen", tc.row)
+
+			tc.makeInert(cfg)
+			assert.False(t, row.activeWhen(cfg), "expected inert")
+			tc.makeActive(cfg)
+			assert.True(t, row.activeWhen(cfg), "expected active")
+		})
+	}
+}
+
+// TestInertRowsStayEditable pins the rule from spec §5: inert means "changing this has
+// no effect right now", never "you may not touch this" — a user may configure ahead of
+// enabling the parent. An inert row keeps its setter and its reset.
+func TestInertRowsStayEditable(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.Notifications = config.NotificationsOff
+	row := rowByKey(t, cfg, "notifications_finished")
+
+	require.False(t, row.activeWhen(cfg), "the row is inert with notifications off")
+	require.NoError(t, row.set(cfg, config.NotificationsBell), "an inert row is still settable")
+	assert.Equal(t, config.NotificationsBell, cfg.NotificationsFinished)
+	assert.NotNil(t, row.reset, "an inert row keeps its reset")
+}
+
+// TestOOMMarginIsLinuxOnly pins the one platform predicate. It asserts against the
+// build's own GOOS rather than a hardcoded expectation, so it is meaningful on the
+// macOS CI job too.
+func TestOOMMarginIsLinuxOnly(t *testing.T) {
+	cfg := config.DefaultConfig()
+	row := rowByKey(t, cfg, "agent_oom_margin")
+	require.NotNil(t, row.activeWhen)
+	assert.Equal(t, runtime.GOOS == "linux", row.activeWhen(cfg))
+}
+
+// TestGroupModeHasNoConfigOnlyInertPredicate pins a deliberate *absence*, because it is
+// the one predicate spec §5 derived from prose rather than code — and the code disagrees.
+//
+// The spec proposed `len(cfg.ClaudeAccounts) >= 2` with the reason chip "needs 2+
+// accounts". ui.List's actual visual gate is
+//
+//	accountGroupingVisible := l.accountGrouped() && l.distinctAccountCount() > 1
+//
+// (ui/list_render.go), where distinctAccountCount counts distinct
+// Instance.AccountClusterKey() values over the *live session list* — and that key is the
+// session's rotation *pool* when it has one, else its account. So the configured account
+// count is the wrong thing on both axes:
+//
+//   - Several configured accounts sharing one pool collapse to a single key, so
+//     clustering is a visual no-op while len(ClaudeAccounts) >= 2 would call it active.
+//   - Sessions with no account attribution key on "" and still form a second cluster, so
+//     clustering can be visible with fewer than two accounts configured.
+//
+// A settingRow predicate only sees *config.Config, never the session list, so the honest
+// gate is not expressible here and group_mode stays always-active rather than shipping a
+// chip that is wrong in both directions. PR B owns the reason strings and has the list in
+// hand; the gate belongs there. (ui.List.AccountReorderEnabled uses a *third* count —
+// clusters, not accounts — so "cluster count != account count" holds here too.)
+func TestGroupModeHasNoConfigOnlyInertPredicate(t *testing.T) {
+	row := rowByKey(t, config.DefaultConfig(), "group_mode")
+	assert.Nil(t, row.activeWhen,
+		"group_mode's real gate is session-derived (see this test's comment); a "+
+			"config-only predicate would be wrong in both directions")
 }

@@ -3,6 +3,7 @@ package overlay
 import (
 	"fmt"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"sort"
 	"strconv"
@@ -238,6 +239,14 @@ func groupModeOnOff(c *config.Config) string {
 	return "off"
 }
 
+// withActiveWhen attaches an inert predicate to an already-built row. boolRow's
+// signature is already long, and only two of the fifteen bool rows have a parent to
+// follow, so those two are decorated here rather than every call site growing a nil.
+func withActiveWhen(r settingRow, activeWhen func(c *config.Config) bool) settingRow {
+	r.activeWhen = activeWhen
+	return r
+}
+
 // configFilePath is the resolved config.json path shown by the read-only Config file
 // row. It is resolved once at init rather than per render (GetConfigDir stats the
 // filesystem) and degrades to a legible placeholder rather than an empty cell when
@@ -374,13 +383,15 @@ func newSettingRows(cfg *config.Config) []settingRow {
 			timingNewSessions, true,
 			(*config.Config).GetUpdateBaseOnCreate,
 			func(c *config.Config, v bool) { c.UpdateBaseOnCreate = &v }),
-		boolRow("fast_forward_local_base", catWorktrees, "Fast-forward local base",
+		withActiveWhen(boolRow("fast_forward_local_base", catWorktrees, "Fast-forward local base",
 			"Also advance your own local base branch to origin during create.",
 			"This is the one setting here that writes outside a session worktree — it moves "+
 				"your local branch. Clean fast-forward only: a diverged local base is left alone.",
 			timingNewSessions, false,
 			(*config.Config).GetFastForwardLocalBase,
 			func(c *config.Config, v bool) { c.FastForwardLocalBase = &v }),
+			// nothing to fast-forward if the base is not refreshed in the first place
+			(*config.Config).GetUpdateBaseOnCreate),
 		{
 			key: "carry_files", category: catWorktrees, label: "Carry files", kind: kindText,
 			scope:          scopeGlobal,
@@ -658,8 +669,11 @@ func newSettingRows(cfg *config.Config) []settingRow {
 		},
 		{
 			key: "notifications_finished", category: catNotifications, label: "Finished turns", kind: kindEnum,
-			scope:          scopeGlobal,
-			timing:         timingLive,
+			scope:  scopeGlobal,
+			timing: timingLive,
+			activeWhen: func(c *config.Config) bool {
+				return c.GetNotifications() != config.NotificationsOff
+			},
 			defaultDisplay: func() string { return (&config.Config{}).GetNotificationsFinished() },
 			reset:          func(c *config.Config) { c.NotificationsFinished = "" },
 			summary:        "A quieter signal for a finished turn than for a blocked session.",
@@ -681,8 +695,12 @@ func newSettingRows(cfg *config.Config) []settingRow {
 		},
 		{
 			key: "notify_command", category: catNotifications, label: "Notify command", kind: kindText,
-			scope:          scopeGlobal,
-			timing:         timingLive,
+			scope:  scopeGlobal,
+			timing: timingLive,
+			activeWhen: func(c *config.Config) bool {
+				// desktop is the only mode that runs a command
+				return c.GetNotifications() == config.NotificationsDesktop
+			},
 			defaultDisplay: func() string { return displayBuiltIn },
 			reset:          func(c *config.Config) { c.NotifyCommand = "" },
 			summary:        "Shell command run for each desktop notification.",
@@ -701,13 +719,16 @@ func newSettingRows(cfg *config.Config) []settingRow {
 				return nil
 			},
 		},
-		boolRow("notify_when_focused", catNotifications, "Notify when focused",
+		withActiveWhen(boolRow("notify_when_focused", catNotifications, "Notify when focused",
 			"Keep notifying while Atrium's own terminal is focused.",
 			"Off stays silent while you are watching the fleet and notifies once you switch "+
 				"away. A terminal that never reports focus always notifies.",
 			timingLive, false,
 			(*config.Config).GetNotifyWhenFocused,
 			func(c *config.Config, v bool) { c.NotifyWhenFocused = v }),
+			func(c *config.Config) bool {
+				return c.GetNotifications() != config.NotificationsOff
+			}),
 
 		// ── Automation ────────────────────────────────────────────────────────
 		boolRow("auto_yes", catAutomation, "Auto-yes",
@@ -718,8 +739,12 @@ func newSettingRows(cfg *config.Config) []settingRow {
 			func(c *config.Config, v bool) { c.AutoYes = v }),
 		{
 			key: "daemon_poll_interval", category: catAutomation, label: "Auto-yes poll interval", kind: kindInt,
-			scope:          scopeGlobal,
-			timing:         timingRestart,
+			scope:  scopeGlobal,
+			timing: timingRestart,
+			activeWhen: func(c *config.Config) bool {
+				// the daemon only runs while auto-yes is on
+				return c.AutoYes
+			},
 			defaultDisplay: func() string { return strconv.Itoa(config.DefaultDaemonPollIntervalMs) },
 			reset:          func(c *config.Config) { c.DaemonPollInterval = config.DefaultDaemonPollIntervalMs },
 			summary:        "How often the auto-yes daemon checks for prompts, in milliseconds.",
@@ -911,8 +936,12 @@ func newSettingRows(cfg *config.Config) []settingRow {
 		},
 		{
 			key: "agent_oom_margin", category: catAdvanced, label: "Agent OOM margin", kind: kindInt,
-			scope:          scopeGlobal,
-			timing:         timingNewSessions,
+			scope:  scopeGlobal,
+			timing: timingNewSessions,
+			activeWhen: func(c *config.Config) bool {
+				// the kernel knob is Linux-only
+				return runtime.GOOS == "linux"
+			},
 			defaultDisplay: func() string { return fmt.Sprintf("on (%d)", config.DefaultOOMMargin()) },
 			reset:          func(c *config.Config) { c.AgentOOMMargin = nil },
 			summary:        "Raise each agent above the tmux server in the kernel's OOM ranking.",
