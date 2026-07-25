@@ -82,6 +82,17 @@ func (s *SettingsOverlay) SelectRow(key string) bool {
 	return false
 }
 
+// isModified reports whether row i's value differs from its built-in default, for
+// the "changed from default" marker. A row with no fixed default (see
+// settingRow.defaultDisplay) is never modified.
+func (s *SettingsOverlay) isModified(i int) bool {
+	row := s.rows[i]
+	if row.defaultDisplay == nil {
+		return false
+	}
+	return row.get(s.cfg) != row.defaultDisplay()
+}
+
 // SetSize is given the full terminal dimensions; the panel sizes itself within
 // them and windows its rows when the terminal is too short to show all.
 func (s *SettingsOverlay) SetSize(width, height int) {

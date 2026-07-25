@@ -208,6 +208,36 @@ func boolRow(key string, category settingCategory, label, summary, detail string
 	}
 }
 
+// Placeholder value displays, shared between a row's get and its defaultDisplay so
+// the two cannot disagree about what an unset field looks like. The panel shows these
+// in the value column where the stored value is empty but a default is in force.
+const (
+	displayNone     = "(none)"     // an empty list
+	displayBuiltIn  = "(built-in)" // notify_command falls back to a per-OS notifier
+	displayManaged  = "(managed)"  // tmux_config_override falls back to Atrium's conf
+	displayUnresolv = "(unresolved)"
+)
+
+// displayList renders a list-valued row's value: the joined entries, or displayNone
+// when the list is empty. Both get and defaultDisplay route through it so an empty
+// default renders identically to an emptied value.
+func displayList(items []string) string {
+	if len(items) == 0 {
+		return displayNone
+	}
+	return strings.Join(items, ", ")
+}
+
+// groupModeOnOff projects the stored group_mode vocabulary (repo/account) onto the
+// plain on/off the row presents. Both get and defaultDisplay route through it, so the
+// row's value and its advertised default cannot disagree about which mode is "off".
+func groupModeOnOff(c *config.Config) string {
+	if c.GetGroupMode() == config.GroupModeAccount {
+		return "on"
+	}
+	return "off"
+}
+
 // configFilePath is the resolved config.json path shown by the read-only Config file
 // row. It is resolved once at init rather than per render (GetConfigDir stats the
 // filesystem) and degrades to a legible placeholder rather than an empty cell when
@@ -215,7 +245,7 @@ func boolRow(key string, category settingCategory, label, summary, detail string
 var configFilePath = func() string {
 	dir, err := config.GetConfigDir()
 	if err != nil {
-		return "(unresolved)"
+		return displayUnresolv
 	}
 	return filepath.Join(dir, "config.json")
 }()
@@ -268,9 +298,11 @@ func newSettingRows(cfg *config.Config) []settingRow {
 		},
 		{
 			key: "max_sessions", category: catSessions, label: "Session limit", kind: kindInt,
-			scope:   scopeGlobal,
-			timing:  timingLive,
-			summary: "How many sessions Atrium will hold. Empty auto-derives from this host.",
+			scope:          scopeGlobal,
+			timing:         timingLive,
+			defaultDisplay: func() string { return fmt.Sprintf("auto (%d)", config.DefaultSessionCap()) },
+			reset:          func(c *config.Config) { c.MaxSessions = nil },
+			summary:        "How many sessions Atrium will hold. Empty auto-derives from this host.",
 			detail: "Empty is a soft cap of half your CPU threads (minimum 2), counting only " +
 				"live sessions — a create or resume past it asks for confirmation rather than " +
 				"refusing. A number is a hard cap on every session, paused ones included, and a " +
@@ -351,19 +383,15 @@ func newSettingRows(cfg *config.Config) []settingRow {
 			func(c *config.Config, v bool) { c.FastForwardLocalBase = &v }),
 		{
 			key: "carry_files", category: catWorktrees, label: "Carry files", kind: kindText,
-			scope:   scopeGlobal,
-			timing:  timingNewSessions,
-			summary: "Gitignored files copied into each new worktree.",
+			scope:          scopeGlobal,
+			timing:         timingNewSessions,
+			defaultDisplay: func() string { return displayList((&config.Config{}).GetCarryFiles()) },
+			reset:          func(c *config.Config) { c.CarryFiles = nil },
+			summary:        "Gitignored files copied into each new worktree.",
 			detail: "Comma-separated repo-relative paths. Copies, so later edits in a worktree " +
 				"do not travel back. An empty list is an explicit opt-out, not a fall back to " +
 				"the default `.claude/settings.local.json`.",
-			get: func(c *config.Config) string {
-				files := c.GetCarryFiles()
-				if len(files) == 0 {
-					return "(none)"
-				}
-				return strings.Join(files, ", ")
-			},
+			get: func(c *config.Config) string { return displayList(c.GetCarryFiles()) },
 			editGet: func(c *config.Config) string {
 				return strings.Join(c.GetCarryFiles(), ", ")
 			},
@@ -384,20 +412,16 @@ func newSettingRows(cfg *config.Config) []settingRow {
 		},
 		{
 			key: "link_paths", category: catWorktrees, label: "Link paths", kind: kindText,
-			scope:   scopeGlobal,
-			timing:  timingNewSessions,
-			summary: "Gitignored paths symlinked into each new worktree, e.g. node_modules.",
+			scope:          scopeGlobal,
+			timing:         timingNewSessions,
+			defaultDisplay: func() string { return displayList((&config.Config{}).GetLinkPaths()) },
+			reset:          func(c *config.Config) { c.LinkPaths = nil },
+			summary:        "Gitignored paths symlinked into each new worktree, e.g. node_modules.",
 			detail: "Comma-separated repo-relative paths. A symlink, not a copy, so every " +
 				"session shares one directory. Ignore the path with a pattern that has no " +
 				"trailing slash — with one, git does not treat the symlink as ignored and it " +
 				"lands in pause commits.",
-			get: func(c *config.Config) string {
-				paths := c.GetLinkPaths()
-				if len(paths) == 0 {
-					return "(none)"
-				}
-				return strings.Join(paths, ", ")
-			},
+			get: func(c *config.Config) string { return displayList(c.GetLinkPaths()) },
 			editGet: func(c *config.Config) string {
 				return strings.Join(c.GetLinkPaths(), ", ")
 			},
@@ -431,9 +455,11 @@ func newSettingRows(cfg *config.Config) []settingRow {
 		// ── Appearance ────────────────────────────────────────────────────────
 		{
 			key: "theme", category: catAppearance, label: "Theme", kind: kindEnum,
-			scope:   scopeGlobal,
-			timing:  timingLive,
-			summary: "Colour palette and border style.",
+			scope:          scopeGlobal,
+			timing:         timingLive,
+			defaultDisplay: func() string { return theme.DefaultThemeName },
+			reset:          func(c *config.Config) { c.Theme = "" },
+			summary:        "Colour palette and border style.",
 			get: func(c *config.Config) string {
 				if c.Theme == "" {
 					return theme.DefaultThemeName
@@ -452,9 +478,11 @@ func newSettingRows(cfg *config.Config) []settingRow {
 		},
 		{
 			key: "splash", category: catAppearance, label: "Splash", kind: kindEnum,
-			scope:   scopeGlobal,
-			timing:  timingLive,
-			summary: "Animation behind the empty session list.",
+			scope:          scopeGlobal,
+			timing:         timingLive,
+			defaultDisplay: func() string { return (&config.Config{}).GetSplash() },
+			reset:          func(c *config.Config) { c.Splash = "" },
+			summary:        "Animation behind the empty session list.",
 			gloss: map[string]string{
 				config.SplashRandom: "a different pattern each launch",
 			},
@@ -469,9 +497,11 @@ func newSettingRows(cfg *config.Config) []settingRow {
 		},
 		{
 			key: "glyph_set", category: catAppearance, label: "Glyph set", kind: kindEnum,
-			scope:   scopeGlobal,
-			timing:  timingLive,
-			summary: "Icon fidelity. Drop a rung if you see boxes instead of icons.",
+			scope:          scopeGlobal,
+			timing:         timingLive,
+			defaultDisplay: func() string { return (&config.Config{}).GetGlyphSet() },
+			reset:          func(c *config.Config) { c.GlyphSet = "" },
+			summary:        "Icon fidelity. Drop a rung if you see boxes instead of icons.",
 			gloss: map[string]string{
 				config.GlyphSetNerd:  "vendor Nerd-Font icons; needs a patched font",
 				config.GlyphSetPlain: "Unicode that renders on any font (the default)",
@@ -502,10 +532,12 @@ func newSettingRows(cfg *config.Config) []settingRow {
 		// ── Session list ──────────────────────────────────────────────────────
 		{
 			key: "session_sort", category: catSessionList, label: "Sort within group", kind: kindEnum,
-			scope:   scopeGlobal,
-			timing:  timingLive,
-			summary: "Row order inside each repo group.",
-			detail:  "Group order stays manual either way (`{` / `}`).",
+			scope:          scopeGlobal,
+			timing:         timingLive,
+			defaultDisplay: func() string { return (&config.Config{}).GetSessionSort() },
+			reset:          func(c *config.Config) { c.SessionSort = "" },
+			summary:        "Row order inside each repo group.",
+			detail:         "Group order stays manual either way (`{` / `}`).",
 			gloss: map[string]string{
 				config.SessionSortCreation: "the manual order you set with J/K",
 				config.SessionSortStatus:   "floats blocked and unread sessions to the top",
@@ -521,20 +553,17 @@ func newSettingRows(cfg *config.Config) []settingRow {
 		},
 		{
 			key: "group_mode", category: catSessionList, label: "Account clustering", kind: kindEnum,
-			scope:   scopeGlobal,
-			timing:  timingLive,
-			summary: "Add a top-level cluster per Claude account above the repo groups.",
+			scope:          scopeGlobal,
+			timing:         timingLive,
+			defaultDisplay: func() string { return groupModeOnOff(&config.Config{}) },
+			reset:          func(c *config.Config) { c.GroupMode = "" },
+			summary:        "Add a top-level cluster per Claude account above the repo groups.",
 			detail: "A divider and tinted headers per account. Manual reordering stays " +
 				"available: J/K within a repo group, `{` / `}` for groups inside one cluster " +
 				"(a move across an account boundary is refused), `[` / `]` for whole clusters.",
 			// Display value is off/on; the stored config value stays repo/account, so
 			// config.json and a future third grouping axis keep their vocabulary.
-			get: func(c *config.Config) string {
-				if c.GetGroupMode() == config.GroupModeAccount {
-					return "on"
-				}
-				return "off"
-			},
+			get: groupModeOnOff,
 			set: func(c *config.Config, v string) error {
 				if v == "on" {
 					c.GroupMode = config.GroupModeAccount
@@ -549,9 +578,11 @@ func newSettingRows(cfg *config.Config) []settingRow {
 		},
 		{
 			key: "model_indicator", category: catSessionList, label: "Model chip", kind: kindEnum,
-			scope:   scopeGlobal,
-			timing:  timingLive,
-			summary: "Per-session model chip, shown whenever the model is known.",
+			scope:          scopeGlobal,
+			timing:         timingLive,
+			defaultDisplay: func() string { return (&config.Config{}).GetModelIndicator() },
+			reset:          func(c *config.Config) { c.ModelIndicator = "" },
+			summary:        "Per-session model chip, shown whenever the model is known.",
 			get: func(c *config.Config) string {
 				return c.GetModelIndicator()
 			},
@@ -565,9 +596,11 @@ func newSettingRows(cfg *config.Config) []settingRow {
 		},
 		{
 			key: "effort_indicator", category: catSessionList, label: "Effort chip", kind: kindEnum,
-			scope:   scopeGlobal,
-			timing:  timingLive,
-			summary: "Per-session reasoning-effort chip; claude only.",
+			scope:          scopeGlobal,
+			timing:         timingLive,
+			defaultDisplay: func() string { return (&config.Config{}).GetEffortIndicator() },
+			reset:          func(c *config.Config) { c.EffortIndicator = "" },
+			summary:        "Per-session reasoning-effort chip; claude only.",
 			get: func(c *config.Config) string {
 				return c.GetEffortIndicator()
 			},
@@ -581,9 +614,11 @@ func newSettingRows(cfg *config.Config) []settingRow {
 		},
 		{
 			key: "permission_indicator", category: catSessionList, label: "Permission chip", kind: kindEnum,
-			scope:   scopeGlobal,
-			timing:  timingLive,
-			summary: "Per-session permission-mode chip: plan, accept-edits, auto.",
+			scope:          scopeGlobal,
+			timing:         timingLive,
+			defaultDisplay: func() string { return (&config.Config{}).GetPermissionIndicator() },
+			reset:          func(c *config.Config) { c.PermissionIndicator = "" },
+			summary:        "Per-session permission-mode chip: plan, accept-edits, auto.",
 			get: func(c *config.Config) string {
 				return c.GetPermissionIndicator()
 			},
@@ -599,9 +634,11 @@ func newSettingRows(cfg *config.Config) []settingRow {
 		// ── Notifications ─────────────────────────────────────────────────────
 		{
 			key: "notifications", category: catNotifications, label: "Notifications", kind: kindEnum,
-			scope:   scopeGlobal,
-			timing:  timingLive,
-			summary: "How Atrium signals a background session that finishes or blocks.",
+			scope:          scopeGlobal,
+			timing:         timingLive,
+			defaultDisplay: func() string { return (&config.Config{}).GetNotifications() },
+			reset:          func(c *config.Config) { c.Notifications = "" },
+			summary:        "How Atrium signals a background session that finishes or blocks.",
 			detail: "The selected, attached and muted sessions always stay silent, and so " +
 				"does a focused terminal unless Notify when focused is on.",
 			gloss: map[string]string{
@@ -621,9 +658,11 @@ func newSettingRows(cfg *config.Config) []settingRow {
 		},
 		{
 			key: "notifications_finished", category: catNotifications, label: "Finished turns", kind: kindEnum,
-			scope:   scopeGlobal,
-			timing:  timingLive,
-			summary: "A quieter signal for a finished turn than for a blocked session.",
+			scope:          scopeGlobal,
+			timing:         timingLive,
+			defaultDisplay: func() string { return (&config.Config{}).GetNotificationsFinished() },
+			reset:          func(c *config.Config) { c.NotificationsFinished = "" },
+			summary:        "A quieter signal for a finished turn than for a blocked session.",
 			detail: "Only rungs quieter than Notifications are offered, so a finished turn can " +
 				"never out-shout a session blocked on you.",
 			gloss: map[string]string{
@@ -642,15 +681,17 @@ func newSettingRows(cfg *config.Config) []settingRow {
 		},
 		{
 			key: "notify_command", category: catNotifications, label: "Notify command", kind: kindText,
-			scope:   scopeGlobal,
-			timing:  timingLive,
-			summary: "Shell command run for each desktop notification.",
+			scope:          scopeGlobal,
+			timing:         timingLive,
+			defaultDisplay: func() string { return displayBuiltIn },
+			reset:          func(c *config.Config) { c.NotifyCommand = "" },
+			summary:        "Shell command run for each desktop notification.",
 			detail: "`$ATRIUM_SESSION`, `$ATRIUM_STATUS` and `$ATRIUM_EVENT` are in its " +
 				"environment. Empty uses a built-in per-OS notifier (notify-send, " +
 				"terminal-notifier, or osascript).",
 			get: func(c *config.Config) string {
 				if c.NotifyCommand == "" {
-					return "(built-in)"
+					return displayBuiltIn
 				}
 				return c.NotifyCommand
 			},
@@ -677,9 +718,11 @@ func newSettingRows(cfg *config.Config) []settingRow {
 			func(c *config.Config, v bool) { c.AutoYes = v }),
 		{
 			key: "daemon_poll_interval", category: catAutomation, label: "Auto-yes poll interval", kind: kindInt,
-			scope:   scopeGlobal,
-			timing:  timingRestart,
-			summary: "How often the auto-yes daemon checks for prompts, in milliseconds.",
+			scope:          scopeGlobal,
+			timing:         timingRestart,
+			defaultDisplay: func() string { return strconv.Itoa(config.DefaultDaemonPollIntervalMs) },
+			reset:          func(c *config.Config) { c.DaemonPollInterval = config.DefaultDaemonPollIntervalMs },
+			summary:        "How often the auto-yes daemon checks for prompts, in milliseconds.",
 			detail: fmt.Sprintf("At least %dms — below that the daemon hammers tmux in a hot "+
 				"loop. Applies the next time the daemon starts.", minPollIntervalMs),
 			get: func(c *config.Config) string { return strconv.Itoa(c.DaemonPollInterval) },
@@ -732,9 +775,11 @@ func newSettingRows(cfg *config.Config) []settingRow {
 		// ── Projects ──────────────────────────────────────────────────────────
 		{
 			key: "project_search_roots", category: catProjects, label: "Project scan roots", kind: kindText,
-			scope:   scopeGlobal,
-			timing:  timingLive,
-			summary: "Directories the background scan walks to stock the project picker.",
+			scope:          scopeGlobal,
+			timing:         timingLive,
+			defaultDisplay: func() string { return strings.Join((&config.Config{}).GetProjectSearchRoots(), ", ") },
+			reset:          func(c *config.Config) { c.ProjectSearchRoots = nil },
+			summary:        "Directories the background scan walks to stock the project picker.",
 			detail: "Comma-separated; `~` is allowed. A changed scope re-scans the next time " +
 				"the create form opens.",
 			get: func(c *config.Config) string {
@@ -765,9 +810,11 @@ func newSettingRows(cfg *config.Config) []settingRow {
 		},
 		{
 			key: "project_search_depth", category: catProjects, label: "Project scan depth", kind: kindInt,
-			scope:   scopeGlobal,
-			timing:  timingLive,
-			summary: "How many levels below each root the scan descends. 0 turns it off.",
+			scope:          scopeGlobal,
+			timing:         timingLive,
+			defaultDisplay: func() string { return fmt.Sprintf("default (%d)", config.DefaultProjectSearchDepth()) },
+			reset:          func(c *config.Config) { c.ProjectSearchDepth = nil },
+			summary:        "How many levels below each root the scan descends. 0 turns it off.",
 			detail: fmt.Sprintf("Empty uses the default of %d; the maximum is %d.",
 				config.DefaultProjectSearchDepth(), config.MaxProjectSearchDepth()),
 			get: func(c *config.Config) string {
@@ -814,9 +861,11 @@ func newSettingRows(cfg *config.Config) []settingRow {
 		// ── Updates ───────────────────────────────────────────────────────────
 		{
 			key: "auto_update", category: catUpdates, label: "Auto-update", kind: kindEnum,
-			scope:   scopeGlobal,
-			timing:  timingRestart,
-			summary: "What the startup update check does when a new version exists.",
+			scope:          scopeGlobal,
+			timing:         timingRestart,
+			defaultDisplay: func() string { return (&config.Config{}).GetAutoUpdateMode() },
+			reset:          func(c *config.Config) { c.AutoUpdate = "" },
+			summary:        "What the startup update check does when a new version exists.",
 			gloss: map[string]string{
 				config.AutoUpdateNotify: "show a hint",
 				config.AutoUpdateAuto:   "install in the background",
@@ -841,14 +890,16 @@ func newSettingRows(cfg *config.Config) []settingRow {
 		// ── Advanced ──────────────────────────────────────────────────────────
 		{
 			key: "tmux_config_override", category: catAdvanced, label: "Tmux config override", kind: kindText,
-			scope:   scopeGlobal,
-			timing:  timingNewSessions,
-			summary: "Path to your own tmux config for session panes.",
+			scope:          scopeGlobal,
+			timing:         timingNewSessions,
+			defaultDisplay: func() string { return displayManaged },
+			reset:          func(c *config.Config) { c.TmuxConfigOverride = "" },
+			summary:        "Path to your own tmux config for session panes.",
 			detail: "Empty uses Atrium's managed conf. Sessions already running keep the " +
 				"config their server started with.",
 			get: func(c *config.Config) string {
 				if c.TmuxConfigOverride == "" {
-					return "(managed)"
+					return displayManaged
 				}
 				return c.TmuxConfigOverride
 			},
@@ -860,9 +911,11 @@ func newSettingRows(cfg *config.Config) []settingRow {
 		},
 		{
 			key: "agent_oom_margin", category: catAdvanced, label: "Agent OOM margin", kind: kindInt,
-			scope:   scopeGlobal,
-			timing:  timingNewSessions,
-			summary: "Raise each agent above the tmux server in the kernel's OOM ranking.",
+			scope:          scopeGlobal,
+			timing:         timingNewSessions,
+			defaultDisplay: func() string { return fmt.Sprintf("on (%d)", config.DefaultOOMMargin()) },
+			reset:          func(c *config.Config) { c.AgentOOMMargin = nil },
+			summary:        "Raise each agent above the tmux server in the kernel's OOM ranking.",
 			detail: fmt.Sprintf("Linux only. A kernel OOM kill then sheds one recoverable "+
 				"session instead of the shared server and every session with it. Empty is on at "+
 				"the default margin of %d, 0 is off, a number sets the margin. The kernel fixes "+

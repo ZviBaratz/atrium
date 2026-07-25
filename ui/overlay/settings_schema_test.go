@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/ZviBaratz/atrium/config"
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/mattn/go-runewidth"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -235,4 +236,79 @@ func TestRowsAreGroupedByCategory(t *testing.T) {
 	}
 	assert.Equal(t, allCategories(), order,
 		"rows must be declared in contiguous blocks, in allCategories() order")
+}
+
+// TestNoRowIsModifiedOnAFreshConfig is the cheapest guard on defaultDisplay: on a
+// default config, nothing may claim to be changed. It catches every default that was
+// transcribed wrong, in one assertion per row, without enumerating the expected
+// values a second time (which would just move the transcription risk).
+func TestNoRowIsModifiedOnAFreshConfig(t *testing.T) {
+	cfg := config.DefaultConfig()
+	o := NewSettingsOverlay(cfg)
+	for i, r := range o.rows {
+		if r.defaultDisplay == nil {
+			continue // default_program and branch_prefix — machine-derived, spec §5
+		}
+		assert.Falsef(t, o.isModified(i),
+			"row %q is marked modified on a fresh config: value %q vs default %q",
+			r.key, r.get(cfg), r.defaultDisplay())
+	}
+}
+
+// TestOnlyMachineDerivedRowsOptOutOfDefaults pins *which* rows are allowed to have no
+// default, so a future row cannot quietly skip the marker by leaving the field nil.
+func TestOnlyMachineDerivedRowsOptOutOfDefaults(t *testing.T) {
+	var optedOut []string
+	for _, r := range newSettingRows(config.DefaultConfig()) {
+		if r.defaultDisplay == nil && r.kind != kindReadOnly {
+			optedOut = append(optedOut, r.key)
+		}
+	}
+	assert.ElementsMatch(t, []string{"default_program", "branch_prefix"}, optedOut,
+		"only the two machine-derived rows may have no default (spec §5)")
+}
+
+// TestModifiedTracksAnEdit pins the positive direction: after a change, the row does
+// report modified. Without this the suite would pass with isModified hardwired false.
+func TestModifiedTracksAnEdit(t *testing.T) {
+	cfg := config.DefaultConfig()
+	o := NewSettingsOverlay(cfg)
+	settingsAt(t, o, "mouse")
+	i := o.cursor
+
+	require.False(t, o.isModified(i), "mouse starts at its default")
+	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeySpace}) // toggle off
+	assert.True(t, o.isModified(i), "a toggled row reports modified")
+}
+
+// TestResetRestoresTheDefault pins that every resettable row's reset returns it to the
+// value defaultDisplay advertises — the two must agree, or `r` would leave a row still
+// marked modified.
+func TestResetRestoresTheDefault(t *testing.T) {
+	cfg := config.DefaultConfig()
+	o := NewSettingsOverlay(cfg)
+	for i, r := range o.rows {
+		if r.reset == nil || r.defaultDisplay == nil {
+			continue
+		}
+		r.reset(cfg)
+		assert.Equalf(t, r.defaultDisplay(), r.get(cfg),
+			"row %q: reset must produce the advertised default", r.key)
+		assert.Falsef(t, o.isModified(i), "row %q is still modified after reset", r.key)
+	}
+}
+
+// TestResetIsPresentWhereverADefaultIs pins that the two mechanisms travel together:
+// a row advertising a default the user can diverge from must offer the way back, and
+// a read-only row must offer neither.
+func TestResetIsPresentWhereverADefaultIs(t *testing.T) {
+	for _, r := range newSettingRows(config.DefaultConfig()) {
+		if r.kind == kindReadOnly {
+			assert.Nilf(t, r.defaultDisplay, "read-only row %q must have no default", r.key)
+			assert.Nilf(t, r.reset, "read-only row %q must have no reset", r.key)
+			continue
+		}
+		assert.Equalf(t, r.defaultDisplay == nil, r.reset == nil,
+			"row %q must declare defaultDisplay and reset together", r.key)
+	}
 }
