@@ -386,13 +386,11 @@ func (s *SettingsOverlay) renderFooter(inner int) []string {
 	t := theme.Current()
 	row := s.rows[s.cursor]
 
-	desc := row.summary
+	desc := row.footerText()
 	style := t.DimStyle()
 	if s.lastErr != "" {
 		desc = s.lastErr
 		style = t.DangerStyle()
-	} else if note := row.timing.footerNote(); note != "" {
-		desc += " · " + note
 	}
 
 	// Wrap the raw description to the inner width so long help is shown in full

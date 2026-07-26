@@ -161,8 +161,15 @@ type settingRow struct {
 **`applyTiming` is a closed enum: `timingLive`, `timingNewSessions`, `timingRestart`.**
 No empty value, exhaustively rendered. A restricted vocabulary makes the badge's
 correctness structural rather than a matter of copy review (the lesson from #450). The
-old fourth value, `modifies your local branch`, was never a timing — it becomes a
-sentence in `fast_forward_local_base`'s `detail`.
+old fourth value, `modifies your local branch`, was never a timing — it moves to a
+separate `settingRow.caution` field, which the footer renders after the summary and
+before the timing note.
+
+It cannot simply become a sentence in `detail`: PR A does not render `detail`, so
+parking it there would delete a warning that #168 added deliberately, and it is the
+only setting whose effect escapes the session worktree. `caution` keeps the enum about
+scheduling while the warning stays on the surface PR A actually draws.
+`fast_forward_local_base`'s `detail` still carries the fuller version for PR B.
 
 Derived from `applySettingChange` and each field's point of use:
 
@@ -238,7 +245,7 @@ which is what dissolves the 300–443-char run-on descriptions.
 |---|---|---|
 | Branch prefix | `Prefix for branches Atrium creates, e.g. zvi/ makes zvi/my-feature.` | — |
 | Update base on create | `Branch new sessions off the freshest remote tip, not a stale local copy.` | — |
-| Fast-forward local base | `Also advance your own local base branch to origin during create.` | **detail:** This is the one setting here that writes outside a session worktree — it moves your local branch. Clean fast-forward only: a diverged local base is left alone. |
+| Fast-forward local base | `Also advance your own local base branch to origin during create.` | **caution:** modifies your local branch<br>**detail:** This is the one setting here that writes outside a session worktree — it moves your local branch. Clean fast-forward only: a diverged local base is left alone. |
 | Carry files | `Gitignored files copied into each new worktree.` | **detail:** Comma-separated repo-relative paths. Copies, so later edits in a worktree do not travel back. An empty list is an explicit opt-out, not a fall back to the default `.claude/settings.local.json`. |
 | Link paths | `Gitignored paths symlinked into each new worktree, e.g. node_modules.` | **detail:** Comma-separated repo-relative paths. A symlink, not a copy, so every session shares one directory. Ignore the path with a pattern that has **no trailing slash** — with one, git does not treat the symlink as ignored and it lands in pause commits. |
 | Create PRs as draft | `Open PRs as drafts. Turn off to merge them with m in-app.` | — |

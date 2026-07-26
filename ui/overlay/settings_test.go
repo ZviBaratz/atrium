@@ -32,6 +32,72 @@ func settingsAt(t *testing.T, o *SettingsOverlay, key string) {
 	require.True(t, o.SelectRow(key), "settings panel should have a %q row", key)
 }
 
+// widestFooterRow returns the key of the row whose footer help is widest, so the
+// footer-height guards test the actual worst case instead of a key that was the worst
+// case when they were written. It measures settingRow.footerText — the composition the
+// renderer itself uses — so the two cannot disagree.
+func widestFooterRow(t *testing.T) string {
+	t.Helper()
+	key, widest := "", -1
+	for _, r := range newSettingRows(config.DefaultConfig()) {
+		if w := ansi.StringWidth(r.footerText()); w > widest {
+			key, widest = r.key, w
+		}
+	}
+	require.NotEmpty(t, key, "the schema must declare at least one row")
+	// A one-line footer would make the callers' capping assertions vacuous.
+	require.Greater(t, widest, 60,
+		"the widest footer (%q, %d cells) must exceed the 80-col inner width to wrap",
+		key, widest)
+	return key
+}
+
+// TestFooterTextFitsTwoLines caps the whole footer composition, not just the summary.
+//
+// TestSummaryFitsOneLine already holds summary to 74 cells, but the footer appends a
+// caution and a timing note after it, so the rendered help can be far wider than any
+// single field's cap — fast_forward_local_base's is 116 cells. Two wrapped lines at the
+// 80-column floor is what the body budget is sized against; a third would silently take
+// a row from the list above it. This is the guard a new caution has to clear.
+func TestFooterTextFitsTwoLines(t *testing.T) {
+	o := NewSettingsOverlay(config.DefaultConfig())
+	o.SetSize(80, 24) // the project's degradation floor
+	inner := o.innerWidth()
+
+	for _, r := range newSettingRows(config.DefaultConfig()) {
+		lines := strings.Split(ansi.Wrap(r.footerText(), inner, ""), "\n")
+		assert.LessOrEqualf(t, len(lines), 2,
+			"row %q wraps its footer to %d lines at inner width %d (%d cells); trim the "+
+				"summary or the caution", r.key, len(lines), inner, ansi.StringWidth(r.footerText()))
+	}
+}
+
+// TestEveryCautionReachesTheFooter pins that a row's caution is actually rendered,
+// for every row that declares one.
+//
+// This guards a specific bug class rather than one string: help copy that lives in a
+// field the renderer never reads is invisible, and a test that only pins the field's
+// contents still passes. fast_forward_local_base's "modifies your local branch" note
+// was rendered from applyNote before the taxonomy rewrite and was briefly lost that
+// way — the caution moved into detail, which no render path reads in PR A.
+func TestEveryCautionReachesTheFooter(t *testing.T) {
+	cautions := 0
+	for _, r := range newSettingRows(config.DefaultConfig()) {
+		if r.caution == "" {
+			continue
+		}
+		cautions++
+		o := NewSettingsOverlay(config.DefaultConfig())
+		o.SetSize(80, 40)
+		settingsAt(t, o, r.key)
+		footer := stripANSI(strings.Join(o.renderFooter(o.innerWidth()), " "))
+		assert.Containsf(t, footer, r.caution,
+			"row %q declares a caution the footer never renders", r.key)
+	}
+	// Without this the loop body could stop running and the test would still pass.
+	require.Positive(t, cautions, "at least one row must declare a caution")
+}
+
 func TestSettingsOverlay_ToggleBool(t *testing.T) {
 	cfg := config.DefaultConfig()
 	o := NewSettingsOverlay(cfg)
@@ -535,14 +601,16 @@ func TestSettingsOverlay_LongSummaryShownInFull(t *testing.T) {
 // budget (renderBody) and the description cap (renderFooter) are two separate
 // formulas that must stay in numeric lockstep for the box to fit, so a dense
 // sweep catches any future drift between them. It also exercises the height
-// (12, with update_base_on_create's help) at which the footer's full-width cut
-// line trips the ellipsis hard-truncate branch — without which that line would
-// soft-wrap in Render, grow the box, and clip the hint.
+// (12) at which the footer's full-width cut line trips the ellipsis hard-truncate
+// branch — without which that line would soft-wrap in Render, grow the box, and clip
+// the hint.
 func TestSettingsOverlay_FooterNeverClipsHint(t *testing.T) {
 	o := NewSettingsOverlay(config.DefaultConfig())
-	// The widest footer text: a 71-cell summary plus its apply note. group_mode held
-	// this role before the copy rewrite, when its description ran to 443 chars.
-	settingsAt(t, o, "update_base_on_create")
+	// The worst case is whichever row has the widest footer, so derive it rather than
+	// naming one: group_mode held the role before the copy rewrite (443-char
+	// description), update_base_on_create held it after, and adding one caution moved
+	// it again. A hardcoded key silently stops testing the worst case.
+	settingsAt(t, o, widestFooterRow(t))
 	for h := 12; h <= 40; h++ {
 		o.SetSize(80, h)
 		out := o.Render()
@@ -558,15 +626,14 @@ func TestSettingsOverlay_FooterNeverClipsHint(t *testing.T) {
 // still renders.
 //
 // Height 12 is the size the cap needs now: maxDescLines is height-11, and the widest
-// footer text (update_base_on_create's summary plus its "affects new sessions" note,
-// 95 cells) wraps to two lines at inner width 60. The summary/detail split shortened
-// every help string from as much as 443 chars to at most 74, so the heights this test
-// used before (14/15) no longer reach the capping branch at all — they would pass
-// whether or not the cap works.
+// footer text wraps to more than one line at inner width 60. The summary/detail split
+// shortened every help string from as much as 443 chars to at most 74, so the heights
+// this test used before (14/15) no longer reach the capping branch at all — they would
+// pass whether or not the cap works.
 func TestSettingsOverlay_LongDescriptionCapsWithEllipsis(t *testing.T) {
 	o := NewSettingsOverlay(config.DefaultConfig())
-	o.SetSize(80, 12) // maxDescLines = 1, against a two-line footer
-	settingsAt(t, o, "update_base_on_create")
+	o.SetSize(80, 12) // maxDescLines = 1, against a multi-line footer
+	settingsAt(t, o, widestFooterRow(t))
 	out := stripANSI(o.Render())
 	assert.Contains(t, out, "…", "a short terminal caps the description with an ellipsis")
 	assert.Contains(t, out, "esc close", "the hint must remain visible")
@@ -581,11 +648,24 @@ func TestSettingsOverlay_LongDescriptionCapsWithEllipsis(t *testing.T) {
 // 80x12 with update_base_on_create is the case that trips xansi.Truncate under the
 // summary budget: its footer text wraps so that the first (and only kept) line is
 // exactly 60 cells — one over the inner-1 threshold the branch guards.
+//
+// This row is named rather than derived, and it is deliberately *not* the widest
+// footer: the widest row's first line wraps at 56 cells and never reaches the
+// truncate branch at all. Width alone does not select for this shape, so the
+// precondition is asserted below — a copy edit that moves the wrap point fails here
+// loudly instead of quietly downgrading this to a test of the ellipsis alone.
 func TestSettingsOverlay_FooterCutLineStaysWithinInner(t *testing.T) {
 	o := NewSettingsOverlay(config.DefaultConfig())
 	o.SetSize(80, 12)
 	settingsAt(t, o, "update_base_on_create")
 	inner := o.innerWidth()
+
+	firstLine := strings.Split(
+		ansi.Wrap(rowByKey(t, config.DefaultConfig(), "update_base_on_create").footerText(),
+			inner, ""), "\n")[0]
+	require.Greater(t, ansi.StringWidth(firstLine), inner-1,
+		"the first wrapped line must exceed inner-1, or the hard-truncate branch never fires")
+
 	footer := o.renderFooter(inner)
 	for i, line := range footer {
 		assert.LessOrEqualf(t, ansi.StringWidth(line), inner,

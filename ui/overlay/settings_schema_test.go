@@ -1,6 +1,8 @@
 package overlay
 
 import (
+	"os"
+	"path/filepath"
 	"reflect"
 	"runtime"
 	"strings"
@@ -312,6 +314,29 @@ func TestResetIsPresentWhereverADefaultIs(t *testing.T) {
 		assert.Equalf(t, r.defaultDisplay == nil, r.reset == nil,
 			"row %q must declare defaultDisplay and reset together", r.key)
 	}
+}
+
+// TestConfigFilePathHonoursSandboxedHome pins that the read-only Config file row
+// resolves under the *current* HOME, so TestMain's sandbox actually contains it.
+//
+// This is a real constraint, not a tautology: config.GetConfigDir stats
+// $HOME/.atrium and $HOME/.claude-squad, so resolving it from a package-level var
+// initializer would capture the developer's real home before TestMain could set
+// HOME, and this assertion would fail with a path under the real /home/<user>.
+// Resolution must stay lazy (sync.OnceValue) for the sandbox to bite.
+func TestConfigFilePathHonoursSandboxedHome(t *testing.T) {
+	home, err := os.UserHomeDir()
+	require.NoError(t, err)
+	require.NotEmpty(t, home, "TestMain sandboxes HOME for this package")
+
+	cfg := config.DefaultConfig()
+	got := rowByKey(t, cfg, "config_file").get(cfg)
+
+	require.NotEqual(t, displayUnresolv, got, "the sandboxed home must resolve")
+	assert.Equal(t, "config.json", filepath.Base(got), "the row must name config.json")
+	assert.Truef(t, strings.HasPrefix(got, home+string(filepath.Separator)),
+		"config_file resolved to %q, outside the sandboxed HOME %q — resolution "+
+			"ran before TestMain could sandbox it", got, home)
 }
 
 // rowByKey returns the row with the given key, failing the test when absent.

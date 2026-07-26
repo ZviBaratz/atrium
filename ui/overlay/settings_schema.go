@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/ZviBaratz/atrium/config"
 	"github.com/ZviBaratz/atrium/ui/theme"
@@ -84,8 +85,9 @@ func (c settingCategory) label() string {
 // two-pane renderer adds in PR B.
 //
 // It deliberately has no "modifies your local branch" member. That was one of the old
-// free-text applyNote's four values, and it is a caution rather than a timing; it now
-// lives in fast_forward_local_base's detail (spec §5).
+// free-text applyNote's four values, and it is a caution rather than a timing, so it
+// moved to the settingRow.caution field the footer renders alongside this note —
+// keeping this enum about scheduling without dropping the warning (spec §5).
 type applyTiming int
 
 const (
@@ -151,6 +153,11 @@ type settingRow struct {
 	// that shows it exists.
 	detail string
 	timing applyTiming // when a change takes effect
+	// caution is a short warning the footer appends after "·", for a setting whose
+	// effect reaches somewhere the user would not expect. It is deliberately separate
+	// from both timing (a caution is not a schedule) and detail (which PR A does not
+	// render, so a caution parked there would be invisible). Keep it to a clause.
+	caution string
 
 	get func(c *config.Config) string // display value
 	// editGet returns the raw value to prefill the inline editor with; nil
@@ -165,8 +172,9 @@ type settingRow struct {
 	gloss map[string]string
 
 	// defaultDisplay returns the display string of the built-in default, for the
-	// "changed from default" marker. It MUST stay pure — no exec, no filesystem —
-	// because it is reached from the render path; in particular it must never call
+	// "changed from default" marker. PR B's renderer calls it per row per frame; PR A
+	// only stores it, so the constraint is stated here before the caller exists. It
+	// MUST stay pure — no exec, no filesystem — and in particular must never call
 	// config.DefaultConfig(), which resolves the OS user to derive branch_prefix.
 	//
 	// A nil defaultDisplay means the row has no fixed default to diverge from and is
@@ -180,9 +188,26 @@ type settingRow struct {
 	// with no fixed default.
 	reset func(c *config.Config)
 	// activeWhen reports whether changing the row currently has any effect. nil means
-	// always active. An inert row is dimmed and carries a reason chip but stays fully
-	// editable — a user may configure ahead of enabling the parent (spec §5).
+	// always active. PR B dims an inert row and gives it a reason chip while leaving it
+	// fully editable — a user may configure ahead of enabling the parent (spec §5); PR A
+	// only stores the predicate, so nothing is dimmed yet.
 	activeWhen func(c *config.Config) bool
+}
+
+// footerText composes the row's single-column footer help: the summary, then any
+// caution, then any timing note, each after a "·". It is the one place that ordering
+// lives, so the width guards in settings_test.go measure what the renderer actually
+// emits rather than a second copy of this composition that could drift from it.
+func (r settingRow) footerText() string {
+	desc := r.summary
+	// The caution precedes the timing note: it qualifies what the setting does, which
+	// reads ahead of when the change lands.
+	for _, note := range []string{r.caution, r.timing.footerNote()} {
+		if note != "" {
+			desc += " · " + note
+		}
+	}
+	return desc
 }
 
 // boolRow builds a kindBool row over a getter and a setter; get displays
@@ -247,17 +272,30 @@ func withActiveWhen(r settingRow, activeWhen func(c *config.Config) bool) settin
 	return r
 }
 
-// configFilePath is the resolved config.json path shown by the read-only Config file
-// row. It is resolved once at init rather than per render (GetConfigDir stats the
-// filesystem) and degrades to a legible placeholder rather than an empty cell when
-// the home directory cannot be determined.
-var configFilePath = func() string {
+// withCaution attaches a footer warning to an already-built row, for the same reason
+// withActiveWhen exists: only one row needs it, so boolRow's signature does not grow.
+func withCaution(r settingRow, caution string) settingRow {
+	r.caution = caution
+	return r
+}
+
+// configFilePath returns the resolved config.json path shown by the read-only Config
+// file row, degrading to a legible placeholder rather than an empty cell when the home
+// directory cannot be determined.
+//
+// It resolves once (GetConfigDir stats the filesystem, and the render path should not
+// do that per frame) but resolves *lazily*, on first render. That distinction is
+// load-bearing for tests, not just style: a package-level var initializer runs before
+// TestMain, so it would capture the developer's real HOME no matter what the suite
+// sandboxes, and no TestMain could fix it (CLAUDE.md: "Tests must never read or write
+// the user's real data dir"). Pinned by TestConfigFilePathHonoursSandboxedHome.
+var configFilePath = sync.OnceValue(func() string {
 	dir, err := config.GetConfigDir()
 	if err != nil {
 		return displayUnresolv
 	}
 	return filepath.Join(dir, "config.json")
-}()
+})
 
 // newSettingRows declares the panel contents in display order, grouped by category in
 // allCategories() order. Section headers are derived at render time from consecutive
@@ -383,15 +421,20 @@ func newSettingRows(cfg *config.Config) []settingRow {
 			timingNewSessions, true,
 			(*config.Config).GetUpdateBaseOnCreate,
 			func(c *config.Config, v bool) { c.UpdateBaseOnCreate = &v }),
-		withActiveWhen(boolRow("fast_forward_local_base", catWorktrees, "Fast-forward local base",
-			"Also advance your own local base branch to origin during create.",
-			"This is the one setting here that writes outside a session worktree — it moves "+
-				"your local branch. Clean fast-forward only: a diverged local base is left alone.",
-			timingNewSessions, false,
-			(*config.Config).GetFastForwardLocalBase,
-			func(c *config.Config, v bool) { c.FastForwardLocalBase = &v }),
-			// nothing to fast-forward if the base is not refreshed in the first place
-			(*config.Config).GetUpdateBaseOnCreate),
+		withCaution(
+			withActiveWhen(boolRow("fast_forward_local_base", catWorktrees, "Fast-forward local base",
+				"Also advance your own local base branch to origin during create.",
+				"This is the one setting here that writes outside a session worktree — it moves "+
+					"your local branch. Clean fast-forward only: a diverged local base is left alone.",
+				timingNewSessions, false,
+				(*config.Config).GetFastForwardLocalBase,
+				func(c *config.Config, v bool) { c.FastForwardLocalBase = &v }),
+				// nothing to fast-forward if the base is not refreshed in the first place
+				(*config.Config).GetUpdateBaseOnCreate),
+			// The literal #168 shipped in applyNote. This is the one row whose effect
+			// escapes the session worktree, so the warning has to be on the surface PR A
+			// renders — detail carries the fuller version for PR B.
+			"modifies your local branch"),
 		{
 			key: "carry_files", category: catWorktrees, label: "Carry files", kind: kindText,
 			scope:          scopeGlobal,
@@ -985,9 +1028,9 @@ func newSettingRows(cfg *config.Config) []settingRow {
 			},
 		},
 		// The resolved config.json path, so the file the panel writes is discoverable
-		// from inside the panel. Resolved once at init rather than per render:
-		// GetConfigDir stats the filesystem, and #380 is explicit that the render path
-		// does not.
+		// from inside the panel. Memoized rather than re-resolved per render, since
+		// GetConfigDir stats the filesystem; see configFilePath for why the memo has to
+		// be lazy rather than a package var.
 		{
 			key: "config_file", category: catAdvanced, label: "Config file", kind: kindReadOnly,
 			scope:   scopeGlobal,
@@ -996,7 +1039,7 @@ func newSettingRows(cfg *config.Config) []settingRow {
 			detail: "Atrium reads this file at launch and rewrites it whenever you change a " +
 				"setting here, so an edit made by hand while the TUI is running will be " +
 				"overwritten.",
-			get: func(c *config.Config) string { return configFilePath },
+			get: func(c *config.Config) string { return configFilePath() },
 		},
 	}
 }
