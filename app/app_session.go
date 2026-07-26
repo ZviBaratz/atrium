@@ -1405,15 +1405,9 @@ func (m *home) startNewSession(title, path string, direct bool, program, branch,
 	default:
 		avail := m.appState.GetAccountAvailability()
 		now := time.Now()
-		start := ((m.appState.GetAccountRotation(poolName) % len(members)) + len(members)) % len(members)
-		chosen := start // defensive fallback: the batch gate should have caught all-exhausted
-		for k := 0; k < len(members); k++ {
-			idx := (start + k) % len(members)
-			if config.AccountAvailable(avail[members[idx].Name], now) {
-				chosen = idx
-				break
-			}
-		}
+		// Shared with the accounts overlay's routing preview, so what the preview shows
+		// and what creation does cannot drift.
+		chosen, _ := config.SelectPoolMember(members, avail, m.appState.GetAccountRotation(poolName), now)
 		// Only advance a rotation cursor for a real (multi-member) pool: a 1-member
 		// pool has nothing to rotate, and writing the cursor would add an
 		// account_rotation key for an accounts-configured-but-no-pool user.
@@ -1769,28 +1763,6 @@ func (m *home) confirmAction(message string, action tea.Cmd) tea.Cmd {
 	return nil
 }
 
-// soonestResetMember returns the index of the member whose limit resets soonest.
-// Members with a parseable Until sort by that time; indefinite or unparseable
-// sort last; all-indefinite returns 0 (the cursor's natural start).
-func soonestResetMember(members []config.ClaudeAccount, avail map[string]config.AccountAvailability) int {
-	best, bestSet := 0, false
-	var bestT time.Time
-	for i, mem := range members {
-		av := avail[mem.Name]
-		if av.Until == "" {
-			continue
-		}
-		t, err := time.Parse(time.RFC3339, av.Until)
-		if err != nil {
-			continue
-		}
-		if !bestSet || t.Before(bestT) {
-			best, bestT, bestSet = i, t, true
-		}
-	}
-	return best
-}
-
 // resolveSpawnPool returns the pool a plan rotates within: the picker's chosen
 // pool if set, else the route-resolved pool.
 func (m *home) resolveSpawnPool(plan spawnPlan) (string, []config.ClaudeAccount) {
@@ -1817,11 +1789,11 @@ func (m *home) gateAllExhausted(plan spawnPlan) (tea.Cmd, bool) {
 		return nil, false // singleton/empty pool: nothing to skip
 	}
 	avail := m.appState.GetAccountAvailability()
-	now := time.Now()
-	for _, mem := range members {
-		if config.AccountAvailable(avail[mem.Name], now) {
-			return nil, false
-		}
+	// The len(members) < 2 guard above is deliberate and NOT redundant with allLimited:
+	// SelectPoolMember reports allLimited for a singleton pool whose one account is
+	// limited, but a pool of one has nothing to rotate, so it must not raise the confirm.
+	if _, allLimited := config.SelectPoolMember(members, avail, m.appState.GetAccountRotation(poolName), time.Now()); !allLimited {
+		return nil, false
 	}
 	return m.confirmAllExhausted(plan, poolName, members), true
 }
@@ -1832,7 +1804,7 @@ func (m *home) gateAllExhausted(plan spawnPlan) (tea.Cmd, bool) {
 // same rollback contract as confirmOverCap).
 func (m *home) confirmAllExhausted(plan spawnPlan, pool string, members []config.ClaudeAccount) tea.Cmd {
 	avail := m.appState.GetAccountAvailability()
-	soonest := soonestResetMember(members, avail)
+	soonest := config.SoonestResetMember(members, avail)
 	pinned := members[soonest]
 	plan.account = &overlay.AccountSelection{Pool: pool, Member: &pinned}
 	m.pendingExhausted = &plan

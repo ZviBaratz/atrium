@@ -490,28 +490,43 @@ func (o *AccountsOverlay) renderPreview() string {
 	remote := strings.TrimSpace(o.previewInputs[0].Value())
 	path := strings.TrimSpace(o.previewInputs[1].Value())
 
-	name, cdir, isDefault := o.cfg.ResolveClaudeAccount(remote, path)
+	// ResolveClaudePool answers the same routing question as ResolveClaudeAccount
+	// but names the WHOLE pool the matched account belongs to. Fewer than two
+	// members — no pool, a singleton pool, an ungrouped account, zero accounts,
+	// or the synthetic ("default", [{Name:"default"}], true) sentinel — means
+	// the pool feature is dormant here, so the preview falls back to today's
+	// exact ResolveClaudeAccount rendering, unchanged.
+	pool, members, _ := o.cfg.ResolveClaudePool(remote, path)
 	claude := "inherit ambient env"
-	switch {
-	case name == "":
-		// 0 accounts configured.
-	case cdir != "":
-		claude = name + " (" + cdir + ")"
-	case !isDefault:
-		// A rule matched a named account that has no config dir.
-		claude = name + " (inherit ambient env)"
-	case name != "default":
-		// A real catch-all with an empty dir (non-sentinel name) — show its name.
-		claude = name + " (inherit ambient env)"
-	default:
-		// Either the synthetic sentinel ("default", "", true) that
-		// ResolveClaudeAccount returns when nothing matches and there's no
-		// catch-all, or a real catch-all account literally named "default"
-		// with an empty config dir — the two are byte-identical in this
-		// return value and genuinely indistinguishable here, an inherent
-		// limitation of ResolveClaudeAccount's (name, dir, isDefault) shape.
-		// Rendering them the same is cosmetic only: both mean no
-		// CLAUDE_CONFIG_DIR is injected. claude keeps its initial value.
+	poolBlock := ""
+	if len(members) < 2 {
+		name, cdir, isDefault := o.cfg.ResolveClaudeAccount(remote, path)
+		switch {
+		case name == "":
+			// 0 accounts configured.
+		case cdir != "":
+			claude = name + " (" + cdir + ")"
+		case !isDefault:
+			// A rule matched a named account that has no config dir.
+			claude = name + " (inherit ambient env)"
+		case name != "default":
+			// A real catch-all with an empty dir (non-sentinel name) — show its name.
+			claude = name + " (inherit ambient env)"
+		default:
+			// Either the synthetic sentinel ("default", "", true) that
+			// ResolveClaudeAccount returns when nothing matches and there's no
+			// catch-all, or a real catch-all account literally named "default"
+			// with an empty config dir — the two are byte-identical in this
+			// return value and genuinely indistinguishable here, an inherent
+			// limitation of ResolveClaudeAccount's (name, dir, isDefault) shape.
+			// Rendering them the same is cosmetic only: both mean no
+			// CLAUDE_CONFIG_DIR is injected. claude keeps its initial value.
+		}
+	} else {
+		// A real rotation pool: resolve which member creating a session here
+		// would actually use (availability-aware, never the raw first match)
+		// and render the pool block beneath the Claude line.
+		claude, poolBlock = o.renderPoolDecision(pool, members, time.Now())
 	}
 
 	ghDir, ghTok := o.cfg.ResolveGHAccount(remote, path)
@@ -545,6 +560,7 @@ func (o *AccountsOverlay) renderPreview() string {
 	b.WriteString(t.DimStyle().Render("Remote URL") + "\n" + o.previewInputs[0].View() + "\n")
 	b.WriteString(t.DimStyle().Render("Path") + "\n" + o.previewInputs[1].View() + "\n\n")
 	b.WriteString(t.DimStyle().Render("Claude → ") + claude + "\n")
+	b.WriteString(poolBlock)
 	b.WriteString(t.DimStyle().Render("GitHub → ") + gh + "\n")
 	b.WriteString(t.DimStyle().Render("Antigravity → ") + agy + "\n\n")
 	b.WriteString(t.OverlayHintStyle().Render("tab switch field · esc back"))
