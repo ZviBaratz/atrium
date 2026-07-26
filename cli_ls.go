@@ -41,28 +41,32 @@ var (
 // every one of those an accidental part of the contract. Fields here may be
 // added, but never removed or repurposed.
 type sessionJSON struct {
-	Title          string     `json:"title"`
-	DisplayName    string     `json:"display_name"`
-	Note           string     `json:"note,omitempty"`
-	Path           string     `json:"path"`
-	Worktree       string     `json:"worktree"`
-	Branch         string     `json:"branch"`
-	Status         string     `json:"status"`
-	Program        string     `json:"program"`
-	TmuxName       string     `json:"tmux_name"`
-	Model          string     `json:"model,omitempty"`
-	PermissionMode string     `json:"permission_mode,omitempty"`
-	Effort         string     `json:"effort,omitempty"`
-	Account        string     `json:"account,omitempty"`
-	Pool           string     `json:"pool,omitempty"`
-	AutoYes        bool       `json:"auto_yes"`
-	Direct         bool       `json:"direct"`
-	Unread         bool       `json:"unread"`
-	Muted          bool       `json:"muted"`
-	QueuedPrompts  int        `json:"queued_prompts"`
-	CreatedAt      *time.Time `json:"created_at"`
-	UpdatedAt      *time.Time `json:"updated_at"`
-	Diff           diffJSON   `json:"diff"`
+	Title          string `json:"title"`
+	DisplayName    string `json:"display_name"`
+	Note           string `json:"note,omitempty"`
+	Path           string `json:"path"`
+	Worktree       string `json:"worktree"`
+	Branch         string `json:"branch"`
+	Status         string `json:"status"`
+	Program        string `json:"program"`
+	TmuxName       string `json:"tmux_name"`
+	Model          string `json:"model,omitempty"`
+	PermissionMode string `json:"permission_mode,omitempty"`
+	Effort         string `json:"effort,omitempty"`
+	// Account and Pool are the labels last written to state.json. They track the
+	// config: a TUI launch re-derives them from the session's CLAUDE_CONFIG_DIR, so
+	// after an account is renamed these report the new name from the first launch
+	// onward — not the name in force when the session was created (#470).
+	Account       string     `json:"account,omitempty"`
+	Pool          string     `json:"pool,omitempty"`
+	AutoYes       bool       `json:"auto_yes"`
+	Direct        bool       `json:"direct"`
+	Unread        bool       `json:"unread"`
+	Muted         bool       `json:"muted"`
+	QueuedPrompts int        `json:"queued_prompts"`
+	CreatedAt     *time.Time `json:"created_at"`
+	UpdatedAt     *time.Time `json:"updated_at"`
+	Diff          diffJSON   `json:"diff"`
 }
 
 type diffJSON struct {

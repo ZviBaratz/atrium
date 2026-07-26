@@ -7,14 +7,16 @@ import (
 	"github.com/ZviBaratz/atrium/session"
 	"github.com/ZviBaratz/atrium/session/git"
 
+	xansi "github.com/charmbracelet/x/ansi"
 	"github.com/stretchr/testify/require"
 )
 
-// flattenOverlay strips the confirmation overlay's box-drawing and line wrapping so
-// a test can assert on the logical message regardless of where Render wraps it.
+// flattenOverlay strips the confirmation overlay's styling, box-drawing and line
+// wrapping so a test can assert on the logical message — or on the key hint, which
+// is assembled from separately styled fragments — regardless of where Render wraps.
 func flattenOverlay(s string) string {
 	r := strings.NewReplacer("│", " ", "╭", " ", "╮", " ", "╰", " ", "╯", " ", "─", " ")
-	return strings.Join(strings.Fields(r.Replace(s)), " ")
+	return strings.Join(strings.Fields(r.Replace(xansi.Strip(s))), " ")
 }
 
 // TestKillDataWarning covers the kill-confirmation suffix across the four states of

@@ -122,6 +122,32 @@ func (o *AccountsOverlay) clampCursor() {
 	}
 }
 
+// moveAccount swaps the cursored account with its neighbour delta slots away and
+// moves the cursor with it, reporting whether the config changed. Account order is
+// routing precedence — first-match wins and the first rule-less account is the
+// catch-all (config.matchRouteIndex) — so this is a routing edit, not a cosmetic
+// one, and the caller persists it. A move off either end is a no-op that reports
+// no change, so a boundary press never triggers a config write.
+func (o *AccountsOverlay) moveAccount(delta int) bool {
+	i, j := o.cursor, o.cursor+delta
+	if i < 0 || j < 0 || i >= o.activeLen() || j >= o.activeLen() {
+		return false
+	}
+	switch o.tab {
+	case tabClaude:
+		a := o.cfg.ClaudeAccounts
+		a[i], a[j] = a[j], a[i]
+	case tabAgy:
+		a := o.cfg.AgyAccounts
+		a[i], a[j] = a[j], a[i]
+	default: // tabGH
+		a := o.cfg.GHAccounts
+		a[i], a[j] = a[j], a[i]
+	}
+	o.cursor = j
+	return true
+}
+
 // HandleKeyPress routes a key to the active mode and reports whether the overlay
 // should close and whether the config was mutated (the app persists on dirty).
 func (o *AccountsOverlay) HandleKeyPress(msg tea.KeyMsg) (closed bool, dirty bool) {
@@ -149,6 +175,10 @@ func (o *AccountsOverlay) handleListKey(msg tea.KeyMsg) (closed bool, dirty bool
 		if o.cursor < o.activeLen()-1 {
 			o.cursor++
 		}
+	case "K", "shift+up":
+		return false, o.moveAccount(-1)
+	case "J", "shift+down":
+		return false, o.moveAccount(+1)
 	case "tab", "right":
 		o.tab = (o.tab + 1) % numTabs
 		o.clampCursor()
@@ -234,6 +264,39 @@ func (o *AccountsOverlay) handleEditKey(msg tea.KeyMsg) (closed bool, dirty bool
 	return false, true
 }
 
+// carryAvailability moves a Claude account's rate-limit flag (the `l` toggle) with
+// it across a rename. State keys availability by account NAME, and this commit is
+// the only place that still knows the old one — without the carry, renaming an
+// account silently clears its flag and the panel reports an exhausted login as
+// available (#470). Not a config-anchored heal like the session labels: nothing else
+// records which account an availability entry belonged to.
+//
+// The renamed account is the sole authority on its new name. An entry may already
+// be sitting there — validate() only rejects a name a LIVE account holds, so a
+// rename can land on one of the orphans `atrium doctor` reports (a login deleted
+// while limited, a hand-edited state.json) — and such an entry is stale by
+// construction. It is overwritten when there is a flag to carry and cleared when
+// there is not, so a rename can neither lose the account's real reset time to an
+// orphan's nor resurrect an orphan's exhaustion onto a login that has none.
+//
+// Write errors are dropped, as everywhere the `l` toggle writes this flag: it is a
+// hint the next keypress can correct, not something worth failing a rename over.
+func (o *AccountsOverlay) carryAvailability(oldName, newName string) {
+	if oldName == newName {
+		return
+	}
+	avail := o.state.GetAccountAvailability()
+	from, carry := avail[oldName]
+	if carry && from.Limited {
+		_ = o.state.SetAccountLimited(newName, from.Until)
+	} else if _, stale := avail[newName]; stale {
+		_ = o.state.ClearAccountLimited(newName)
+	}
+	if carry {
+		_ = o.state.ClearAccountLimited(oldName)
+	}
+}
+
 // validate rejects an empty or duplicate (within the active tab) name.
 func (o *AccountsOverlay) validate() string {
 	name := o.form.Name()
@@ -259,6 +322,7 @@ func (o *AccountsOverlay) commit() {
 		if o.editIndex < 0 {
 			o.cfg.ClaudeAccounts = append(o.cfg.ClaudeAccounts, a)
 		} else {
+			o.carryAvailability(o.cfg.ClaudeAccounts[o.editIndex].Name, a.Name)
 			o.cfg.ClaudeAccounts[o.editIndex] = a
 		}
 	case tabAgy:
@@ -290,6 +354,10 @@ func (o *AccountsOverlay) handleConfirmKey(msg tea.KeyMsg) (closed bool, dirty b
 	case "y", "enter":
 		switch o.tab {
 		case tabClaude:
+			// Drop the deleted account's rate-limit flag: state keys it by NAME, so a
+			// leftover entry would silently apply to a future account that reuses the
+			// name (and would otherwise linger as an orphan `atrium doctor` reports).
+			_ = o.state.ClearAccountLimited(o.cfg.ClaudeAccounts[o.cursor].Name)
 			o.cfg.ClaudeAccounts = append(o.cfg.ClaudeAccounts[:o.cursor], o.cfg.ClaudeAccounts[o.cursor+1:]...)
 		case tabAgy:
 			o.cfg.AgyAccounts = append(o.cfg.AgyAccounts[:o.cursor], o.cfg.AgyAccounts[o.cursor+1:]...)
@@ -346,10 +414,20 @@ func (o *AccountsOverlay) inner() int { return o.boxWidth() - 4 } // Padding(1,2
 // list fits a short terminal with the cursor kept in view. Everything outside
 // the rows costs a fixed number of lines (border 2 + padding 2 + title/blank 2
 // + tabs/blank 2 + trailing blank 1 + two hint lines 2 + the unmatched-repos
-// hint 1 = 12), so the remaining height budgets the rows. Mirrors the windowing
-// SettingsOverlay applies to its own body.
+// hint 1 = 12), so the remaining height budgets the rows. The unmatched-repos
+// hint is itself conditional but predates this feature, so it keeps its
+// unconditional allowance for continuity — a pool-free config must keep
+// scrolling exactly as it always has. The split-pool note is new, so ITS
+// allowance is conditional on the note actually being able to render (Claude
+// tab with a genuinely split pool): charging every config a row for a note
+// that only some configs print would cost a pool-free config a visible row it
+// never used to lose. Mirrors the windowing SettingsOverlay applies to its own
+// body.
 func (o *AccountsOverlay) rowWindow(n int) (start, end int) {
-	const chrome = 12
+	chrome := 12
+	if o.tab == tabClaude && len(splitPools(o.cfg.ClaudeAccounts)) > 0 {
+		chrome++ // the split-pool note occupies one more line
+	}
 	budget := o.height - chrome
 	if budget < 3 {
 		budget = 3
@@ -412,28 +490,43 @@ func (o *AccountsOverlay) renderPreview() string {
 	remote := strings.TrimSpace(o.previewInputs[0].Value())
 	path := strings.TrimSpace(o.previewInputs[1].Value())
 
-	name, cdir, isDefault := o.cfg.ResolveClaudeAccount(remote, path)
+	// ResolveClaudePool answers the same routing question as ResolveClaudeAccount
+	// but names the WHOLE pool the matched account belongs to. Fewer than two
+	// members — no pool, a singleton pool, an ungrouped account, zero accounts,
+	// or the synthetic ("default", [{Name:"default"}], true) sentinel — means
+	// the pool feature is dormant here, so the preview falls back to today's
+	// exact ResolveClaudeAccount rendering, unchanged.
+	pool, members, _ := o.cfg.ResolveClaudePool(remote, path)
 	claude := "inherit ambient env"
-	switch {
-	case name == "":
-		// 0 accounts configured.
-	case cdir != "":
-		claude = name + " (" + cdir + ")"
-	case !isDefault:
-		// A rule matched a named account that has no config dir.
-		claude = name + " (inherit ambient env)"
-	case name != "default":
-		// A real catch-all with an empty dir (non-sentinel name) — show its name.
-		claude = name + " (inherit ambient env)"
-	default:
-		// Either the synthetic sentinel ("default", "", true) that
-		// ResolveClaudeAccount returns when nothing matches and there's no
-		// catch-all, or a real catch-all account literally named "default"
-		// with an empty config dir — the two are byte-identical in this
-		// return value and genuinely indistinguishable here, an inherent
-		// limitation of ResolveClaudeAccount's (name, dir, isDefault) shape.
-		// Rendering them the same is cosmetic only: both mean no
-		// CLAUDE_CONFIG_DIR is injected. claude keeps its initial value.
+	poolBlock := ""
+	if len(members) < 2 {
+		name, cdir, isDefault := o.cfg.ResolveClaudeAccount(remote, path)
+		switch {
+		case name == "":
+			// 0 accounts configured.
+		case cdir != "":
+			claude = name + " (" + cdir + ")"
+		case !isDefault:
+			// A rule matched a named account that has no config dir.
+			claude = name + " (inherit ambient env)"
+		case name != "default":
+			// A real catch-all with an empty dir (non-sentinel name) — show its name.
+			claude = name + " (inherit ambient env)"
+		default:
+			// Either the synthetic sentinel ("default", "", true) that
+			// ResolveClaudeAccount returns when nothing matches and there's no
+			// catch-all, or a real catch-all account literally named "default"
+			// with an empty config dir — the two are byte-identical in this
+			// return value and genuinely indistinguishable here, an inherent
+			// limitation of ResolveClaudeAccount's (name, dir, isDefault) shape.
+			// Rendering them the same is cosmetic only: both mean no
+			// CLAUDE_CONFIG_DIR is injected. claude keeps its initial value.
+		}
+	} else {
+		// A real rotation pool: resolve which member creating a session here
+		// would actually use (availability-aware, never the raw first match)
+		// and render the pool block beneath the Claude line.
+		claude, poolBlock = o.renderPoolDecision(pool, members, time.Now())
 	}
 
 	ghDir, ghTok := o.cfg.ResolveGHAccount(remote, path)
@@ -467,6 +560,7 @@ func (o *AccountsOverlay) renderPreview() string {
 	b.WriteString(t.DimStyle().Render("Remote URL") + "\n" + o.previewInputs[0].View() + "\n")
 	b.WriteString(t.DimStyle().Render("Path") + "\n" + o.previewInputs[1].View() + "\n\n")
 	b.WriteString(t.DimStyle().Render("Claude → ") + claude + "\n")
+	b.WriteString(poolBlock)
 	b.WriteString(t.DimStyle().Render("GitHub → ") + gh + "\n")
 	b.WriteString(t.DimStyle().Render("Antigravity → ") + agy + "\n\n")
 	b.WriteString(t.OverlayHintStyle().Render("tab switch field · esc back"))
@@ -483,6 +577,18 @@ func (o *AccountsOverlay) renderTabs() string {
 	}
 	return label(tabClaude, "Claude") + "  " + label(tabGH, "GitHub") + "  " + label(tabAgy, "Antigravity")
 }
+
+// gutterCellWidth is the display width of one poolGutter cell ("┌ ", "│ ", "└ ",
+// or the blank "  "). dirTruncWidthBase/dirPadWidthBase are the dir column's
+// truncTail/padRight widths when no gutter renders; renderList subtracts
+// gutterCellWidth from both when a gutter is present, so the gutter's columns
+// come OUT of the row rather than adding to it — the row's total rendered width
+// is the same either way.
+const (
+	gutterCellWidth   = 2
+	dirTruncWidthBase = 26
+	dirPadWidthBase   = 28
+)
 
 func (o *AccountsOverlay) renderList() string {
 	t := theme.Current()
@@ -507,11 +613,32 @@ func (o *AccountsOverlay) renderList() string {
 		// the whole window rather than per row — the map is indexed per account below.
 		avail := o.state.GetAccountAvailability()
 		now := time.Now()
+		// Same reasoning as seenCatchAll above: a pool run can straddle the window
+		// boundary, so the gutter is computed over the whole slice (never re-sliced
+		// to the window) and rows are indexed into it by absolute config index, not
+		// window-relative position.
+		var gut []string
+		if o.tab == tabClaude {
+			gut = poolGutter(o.cfg.ClaudeAccounts)
+		}
+		// dirTruncWidth/dirPadWidth size the dir column when no gutter renders at
+		// all; when it does, both shrink by gutterCellWidth so the gutter's two
+		// columns come OUT of the row instead of adding to it — the row's total
+		// width must not depend on whether the gutter is present.
+		dirTruncWidth, dirPadWidth := dirTruncWidthBase, dirPadWidthBase
+		if gut != nil {
+			dirTruncWidth -= gutterCellWidth
+			dirPadWidth -= gutterCellWidth
+		}
 		for i := start; i < end; i++ {
 			r := rows[i]
 			marker := "  "
 			if i == o.cursor {
 				marker = t.AccentStyle().Render("› ")
+			}
+			gutter := ""
+			if gut != nil {
+				gutter = t.DimStyle().Render(gut[i])
 			}
 			name := r.name
 			if name == "" {
@@ -521,7 +648,7 @@ func (o *AccountsOverlay) renderList() string {
 			if dir == "" {
 				dir = t.DimStyle().Render("(inherit ambient env)")
 			} else {
-				dir = truncTail(dir, 26)
+				dir = truncTail(dir, dirTruncWidth)
 			}
 			extra := ""
 			if o.tab == tabClaude {
@@ -535,10 +662,15 @@ func (o *AccountsOverlay) renderList() string {
 					extra += "  " + t.DangerStyle().Render("⛔ limited")
 				}
 			}
-			b.WriteString(marker + padRight(name, 12) + " " + padRight(dir, 28) + " " + o.badge(r.catchAll, &seenCatchAll) + extra + "\n")
+			b.WriteString(marker + gutter + padRight(name, 12) + " " + padRight(dir, dirPadWidth) + " " + o.badge(r.catchAll, &seenCatchAll) + extra + "\n")
 		}
 		if !o.hasCatchAll() {
 			b.WriteString(t.DimStyle().Render("unmatched repos inherit the ambient account") + "\n")
+		}
+		if o.tab == tabClaude {
+			if names := splitPools(o.cfg.ClaudeAccounts); len(names) > 0 {
+				b.WriteString(t.DimStyle().Render(splitPoolNote(names, o.inner())) + "\n")
+			}
 		}
 	}
 
@@ -546,16 +678,35 @@ func (o *AccountsOverlay) renderList() string {
 	if o.mode == modeConfirmDelete {
 		b.WriteString(theme.Current().DangerStyle().Render("Delete '" + o.rows()[o.cursor].name + "'?  y / n"))
 	} else {
-		// "l limited" toggles per-account availability, which only Claude accounts
-		// carry — advertise it only on that tab so the legend never names a dead key.
-		hint := "↑/↓ move · tab switch · n new · e edit · d delete"
-		if o.tab == tabClaude {
-			hint += " · l limited"
-		}
+		hint, extras := o.legendHints()
 		b.WriteString(t.OverlayHintStyle().Render(hint) + "\n")
-		b.WriteString(t.OverlayHintStyle().Render("t test routing · esc close"))
+		b.WriteString(t.OverlayHintStyle().Render(extras))
 	}
 	return b.String()
+}
+
+// legendHints returns the list legend's two hint lines, unstyled. J/K reorder
+// only does something with a second row to swap against, and "l limited" only
+// toggles availability for Claude accounts — advertise each only where it's
+// live, so the legend never names a dead key. l limited lives on line 2 (not
+// alongside J/K reorder on line 1) purely to keep line 1 under the box's inner
+// width at an 80-column terminal; it isn't grouped there by key purpose.
+// Returned unstyled (not yet passed through OverlayHintStyle) so callers —
+// renderList and tests — can measure the raw text against o.inner() directly;
+// once lipgloss pads a rendered line to the box's full width, every line reads
+// the same width whether or not it wrapped, so that measurement can't be taken
+// after rendering.
+func (o *AccountsOverlay) legendHints() (hint, extras string) {
+	hint = "↑/↓ select"
+	if o.activeLen() > 1 {
+		hint += " · J/K reorder"
+	}
+	hint += " · tab switch · n new · e edit · d delete"
+	extras = "t test routing · esc close"
+	if o.tab == tabClaude {
+		extras = "l limited · " + extras
+	}
+	return hint, extras
 }
 
 func (o *AccountsOverlay) badge(catchAll bool, seen *bool) string {

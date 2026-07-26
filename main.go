@@ -347,6 +347,18 @@ var (
 				fmt.Print(pools)
 			}
 
+			// Account state keys: state.json indexes the cluster order, the rate-limit
+			// flags and the rotation cursors by account/pool NAME, so a rename can leave
+			// entries naming something config no longer has. Harmless (unknown names are
+			// kept on purpose, so a slot survives its sessions), which is why they are
+			// only reported. state.json is read directly, never via config.LoadState —
+			// doctor must not mutate a data dir a live TUI owns.
+			if keys := doctor.RenderAccountKeys(
+				doctor.CheckAccountKeys(config.LoadConfig(), loadStoredAccountKeys())); keys != "" {
+				fmt.Println()
+				fmt.Print(keys)
+			}
+
 			if doctor.MissingRequired(deps) {
 				// Nonzero exit for CI/scripts. The root command already sets
 				// SilenceErrors/SilenceUsage, so main() prints just this message to

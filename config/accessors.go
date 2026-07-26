@@ -105,6 +105,14 @@ func (c *Config) GetCarryFiles() []string {
 	return c.CarryFiles
 }
 
+// GetLinkPaths returns the repo-relative paths to symlink into each new session
+// worktree, pointing at the origin checkout's copy. Unlike GetCarryFiles there
+// is no default list: the feature is off until configured, so nil and an empty
+// list mean the same thing and no nil-vs-empty contract has to be defended.
+func (c *Config) GetLinkPaths() []string {
+	return c.LinkPaths
+}
+
 // Project-scan depth bounds (see Config.ProjectSearchDepth).
 const (
 	defaultProjectSearchDepth = 3

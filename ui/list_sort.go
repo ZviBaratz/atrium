@@ -124,14 +124,24 @@ func (l *List) SetGroupMode(mode string) {
 // ApplySort re-derives the status-sensitive view from the latest statuses; the
 // metadata poll calls it each tick. Only the within-group status sort shifts as
 // statuses update, so this is a no-op unless a sort mode is active: account
-// clustering keys on each session's account and repo, both fixed at creation and
-// changed only via Add/Kill (which rebuild the view directly), so re-clustering on
-// every tick would allocate and recompute a result that never moved. Returns whether
-// the order changed.
+// clustering keys on each session's account and repo, which change only via
+// Add/Kill (which rebuild the view directly) and via an explicit RegroupAccounts
+// after config renames an account under the list, so re-clustering on every tick
+// would allocate and recompute a result that never moved. Returns whether the order
+// changed.
 func (l *List) ApplySort() bool {
 	if !l.sortActive() {
 		return false
 	}
+	return l.rebuildView()
+}
+
+// RegroupAccounts re-clusters the view after the account identity of sessions
+// already in the list changed under it — renaming an account in the accounts panel
+// re-derives their labels (see app.syncAccountStamps), which can move a session's
+// cluster key without adding or removing anything. Returns whether the order
+// changed; a no-op when no view is active.
+func (l *List) RegroupAccounts() bool {
 	return l.rebuildView()
 }
 

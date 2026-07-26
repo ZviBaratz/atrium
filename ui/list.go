@@ -82,11 +82,10 @@ func distinctCount(items []*session.Instance, key func(*session.Instance) string
 // stay in one visual cluster; the row itself still shows the concrete member.
 // Account is derived from the repo's remote/path, so every session in a repo
 // shares it, which is what lets clusterByAccount move whole repo blocks intact.
+// The rule itself lives on session.Instance (mirroring GroupKey/repoKey) so this
+// package and the persisted cluster order cannot disagree about a session's key.
 func accountKey(i *session.Instance) string {
-	if p := i.ClaudeAccountPool(); p != "" {
-		return p
-	}
-	return i.ClaudeAccountName()
+	return i.AccountClusterKey()
 }
 
 // distinctAccountCount returns how many distinct Claude accounts are present across
