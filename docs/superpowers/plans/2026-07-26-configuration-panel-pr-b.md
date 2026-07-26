@@ -1434,16 +1434,42 @@ Append to `ui/overlay/settings_render.go`'s const block:
 const (
 	rowMarkerCells = 3 // selection + modified + the space after them
 	rowLabelGap    = 2
-	// rowMinValueCells is the narrowest value column worth offering: enough for
-	// "‹ creation ›" (12), "[ ] off" (7) and "auto (8)" (8). It is what makes
-	// minRowsPaneWidth — and so the single-pane threshold — a derived number.
+	// rowMinValueCells is the narrowest value column worth offering: enough for every row's
+	// compact value rendering, the widest of which is "‹ creation ›" at 12 cells. It is what
+	// makes minRowsPaneWidth — and so the single-pane threshold — a derived number, and
+	// TestRowMinValueCellsHoldsEveryFixedVocabularyValue ties it to the real schema.
 	rowMinValueCells = 14
 )
-
-// paneDividerCells is what the vertical rail/rows divider costs: a space, the theme's own
-// left-border rune, and a space.
-const paneDividerCells = 3
 ```
+
+`paneDividerCells` belongs with the divider it measures and lands in **Task 5** instead —
+nothing here reads it, and `unused` fails the build on a constant no code touches.
+
+**A guard for `rowMinValueCells` belongs in this task**, because it is the constant the whole
+degradation threshold is derived from. Written and run, it turned up a real miss: `theme`'s
+compact value is **15** cells (`‹ tokyo-night ›`), not the ≤ 12 this constant was sized
+against. The resolution is *not* to raise the constant — theme names grow with the registry,
+and the panel's geometry must not be coupled to them. Three enums have vocabularies that grow
+outside this package (`theme`, `splash`, `default_program` — the same three `glossExemptRows`
+already exempts, for the same underlying reason), so they are excluded from the bound and
+truncate by a cell or two at the very narrowest two-pane width, with the help pane showing the
+value in full. That is the designed degradation. Every fixed-vocabulary value is ≤ 12, so 14
+keeps headroom.
+
+```go
+// dynamicValueRows are the enum rows whose option strings are not a fixed vocabulary, so
+// their rendered width is not something the panel's geometry can be budgeted against.
+var dynamicValueRows = map[string]string{
+	"theme":           "theme names grow with the registry; tokyo-night alone is 15 cells",
+	"splash":          "variant names grow with every splash added",
+	"default_program": "options are the user's own profile names",
+}
+```
+
+The test loops the schema, skips those three and every int/text row, asserts the widest
+remainder is within `rowMinValueCells`, and then asserts the exemption list itself has not
+rotted (each key must still be an enum row with a documented reason). Mutation: set the
+constant to 11 and it fails naming `session_sort` at 12 cells.
 
 - [ ] **Step 4: Add the composer**
 
@@ -1558,10 +1584,14 @@ Each mutation targets a different rung, because a single mutation would only pro
    `labelW` < label cases — which is precisely why those cases were added; with
    `labelW == len(label)` throughout, `padRight` never truncates and the mutation would
    have gone undetected. Revert.
-3. **Remove the label clamp.** Delete the `if maxLabel := ...` block. Expected:
-   `TestComposeRowLineNeverExceedsThePaneEvenWhenTheLabelCannotFit` FAILS at the narrow
-   widths, while every other composer test still passes — the clamp only matters below the
-   floor. Revert.
+3. ~~**Remove the label clamp.**~~ **Resolved during implementation: there is no clamp.**
+   The draft had `composeRowLine` clamp `labelW` to `width - rowMarkerCells - rowLabelGap`
+   before building the head. Removing it changed **no test** — and that was the code being
+   wrong, not the test being weak: `padRight` only ever pads, so the clamp could never
+   shorten an over-long label, and the `ansi.StringWidth(p.head) > width` hard-truncate
+   below it already covered every case it appeared to. The clamp is dead and is not in the
+   implementation; the truncate branch carries the reasoning. **A mutation that fails to
+   fail is worth reading twice: sometimes it is telling you the code is unnecessary.**
 4. **Break the width invariant.** Drop the final `p.gap = strings.Repeat(...)`. Expected:
    `TestComposeRowLineIsExactlyThePaneWidth` FAILS on the `no badge at all` case, and
    `TestComposeRowLineRightAlignsTheBadge` still passes — which is why the exact-width
