@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/ZviBaratz/atrium/config"
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/stretchr/testify/assert"
@@ -504,4 +505,95 @@ func TestBoxNeverOutgrowsTheTerminal(t *testing.T) {
 		assert.LessOrEqualf(t, lipgloss.Height(o.Render()), 24, "box must fit 24 rows at width %d", w)
 		assert.Containsf(t, stripANSI(o.Render()), "esc", "a hint must survive at width %d", w)
 	}
+}
+
+// TestSinglePaneFallbackBelowTheThreshold is spec §13's guard 10: below the derived width the
+// panel shows one pane at a time, and both are reachable. The two widths are taken from
+// twoPaneMinInner() rather than written as literals, so the test follows the threshold instead
+// of pinning today's value of it.
+func TestSinglePaneFallbackBelowTheThreshold(t *testing.T) {
+	o := NewSettingsOverlay(config.DefaultConfig())
+	o.SetSize(200, 24) // wide, so twoPaneMinInner() is measured against a stable rail
+	minInner := o.twoPaneMinInner()
+
+	// boxWidth = min(96, width-2) and innerWidth = boxWidth-4, so inner == width-6 below the
+	// 96 cap. One cell either side of the threshold.
+	wide, narrow := minInner+6, minInner+5
+
+	o.SetSize(wide, 24)
+	require.True(t, o.twoPane(), "inner %d must afford two panes", o.innerWidth())
+	body := stripANSI(strings.Join(o.bodyLines(), "\n"))
+	assert.Contains(t, body, "Sessions", "the rail is visible")
+	assert.Contains(t, body, "Session limit", "and so are the rows, side by side")
+
+	o.SetSize(narrow, 24)
+	require.False(t, o.twoPane(), "inner %d must fall back to one pane", o.innerWidth())
+
+	// Focused on the rail: the rail is the whole body.
+	require.Equal(t, focusRail, o.focus)
+	railOnly := stripANSI(strings.Join(o.bodyLines(), "\n"))
+	assert.Contains(t, railOnly, "Worktrees & git", "the rail is the whole pane")
+	assert.NotContains(t, railOnly, "Session limit", "the rows are a separate screen now")
+
+	// Enter drills in; the rows become the whole body and the rail steps aside.
+	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyEnter})
+	require.Equal(t, focusRows, o.focus)
+	rowsOnly := stripANSI(strings.Join(o.bodyLines(), "\n"))
+	assert.Contains(t, rowsOnly, "Session limit", "the rows are reachable")
+	assert.NotContains(t, rowsOnly, "Worktrees & git", "the rail is not drawn beside them")
+
+	// Esc returns, so nothing is a one-way door.
+	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyEsc})
+	assert.Equal(t, focusRail, o.focus)
+	assert.Contains(t, stripANSI(strings.Join(o.bodyLines(), "\n")), "Worktrees & git")
+}
+
+// TestThresholdIsDerivedFromTheParts pins spec §10's requirement that the threshold be
+// "computed from the parts, not hardcoded as a magic number".
+//
+// Be precise about what this catches, because it is less than it looks: replacing the sum with
+// the literal 67 passes today, since 67 *is* the sum. What it catches is the literal going
+// STALE — rename a category and the expected value moves to 84 while the literal stays at 67,
+// which is exactly when a hardcoded threshold starts offering two panes at a width where the
+// rail has eaten the rows pane. That is the real failure mode, and it is verified by mutation:
+// hardcode the threshold, widen the longest rail label, and this fails alongside
+// TestRailWidthTracksItsLongestLabel.
+func TestThresholdIsDerivedFromTheParts(t *testing.T) {
+	o := NewSettingsOverlay(config.DefaultConfig())
+	o.SetSize(200, 24)
+
+	assert.Equal(t, railWidth()+paneDividerCells+o.minRowsPaneWidth(), o.twoPaneMinInner(),
+		"the threshold is the sum of its parts, not a literal")
+	assert.Equal(t, rowMarkerCells+o.longestRowLabel()+rowLabelGap+rowMinValueCells,
+		o.minRowsPaneWidth(),
+		"the minimum rows pane holds the widest label untruncated plus a legible value")
+
+	// At the threshold the rows pane can still show the widest label without truncating it —
+	// which is what the threshold is FOR.
+	o.SetSize(o.twoPaneMinInner()+6, 24)
+	require.True(t, o.twoPane())
+	assert.GreaterOrEqual(t, o.rowsPaneWidth(), rowMarkerCells+o.longestRowLabel(),
+		"at the threshold the widest label must still fit whole")
+}
+
+// TestSinglePaneFallbackShowsTheCategoryName pins that drilling in does not lose the
+// orientation the rail was providing. Below the threshold the rail is not drawn, so without a
+// header the user is looking at an unlabelled list of rows — D2, the defect this redesign
+// exists to fix, reintroduced at narrow widths.
+func TestSinglePaneFallbackShowsTheCategoryName(t *testing.T) {
+	o := NewSettingsOverlay(config.DefaultConfig())
+	o.SetSize(200, 24)
+	o.SetSize(o.twoPaneMinInner()+5, 24) // one cell under the threshold
+	require.False(t, o.twoPane())
+
+	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyEnter}) // drill in
+	require.Equal(t, focusRows, o.focus)
+	assert.Contains(t, stripANSI(strings.Join(o.bodyLines(), "\n")), o.selectedEntry().label,
+		"the drilled-in pane must name the category the rail is no longer showing")
+
+	// And the header must NOT appear in two-pane mode, where the rail already names it.
+	o.SetSize(100, 32)
+	require.True(t, o.twoPane())
+	assert.NotContains(t, stripANSI(strings.Join(o.rowsPaneLines(), "\n")), o.selectedEntry().label,
+		"a header beside the rail would only repeat it")
 }

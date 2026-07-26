@@ -2791,9 +2791,17 @@ Expected: PASS.
 Then the mutations:
 
 1. **Hardcode the threshold.** Change `twoPaneMinInner` to `return 67`. Run the tests.
-   Expected: `TestThresholdIsDerivedFromTheParts` FAILS on the sum assertion — *even
-   though 67 is the correct value today*. That is the point: the test rejects the literal,
-   not the number. Revert.
+   Expected: **everything passes** — because 67 *is* the sum today. The draft claimed this
+   guard "rejects the literal, not the number"; run, it does not, and the claim was too
+   strong.
+
+   What it does catch is the literal going **stale**, which is the actual failure mode. Apply
+   the literal *and* widen the longest rail label (rename `catWorktrees` to
+   `"Worktrees, git and pull requests"`): the expected threshold moves to 84 while the
+   literal stays at 67, and `TestThresholdIsDerivedFromTheParts` fails alongside
+   `TestRailWidthTracksItsLongestLabel`. Then keep the rename but restore the sum, and
+   confirm both pass — the derived version absorbs the rename, which is the property worth
+   having. Revert both.
 2. **Rename a category.** Change `catWorktrees`'s label to
    `"Worktrees, git and pull requests"` in `settings_schema.go`. Run the tests. Expected:
    Task 2's `TestRailWidthTracksItsLongestLabel` FAILS naming the new widest label, while

@@ -353,6 +353,16 @@ func (s *SettingsOverlay) rowsPaneContent(width int) []paneLine {
 	labelW := s.visibleLabelWidth()
 
 	var lines []paneLine
+	// Single-pane drill-in hides the rail, so the pane has to name the category itself —
+	// otherwise the user is looking at an unlabelled list of rows, which is D2 (no
+	// orientation) reintroduced at narrow widths. In two-pane mode the rail already names it
+	// and a header would only repeat it.
+	if !s.twoPane() && e.kind == railCategory {
+		lines = append(lines, paneLine{
+			text:   t.DimStyle().Bold(true).Render(e.label),
+			rowIdx: -1,
+		})
+	}
 	// The explicit `first` flag is required because catSessions is 0: an uninitialized
 	// lastCategory would equal the first row's category and swallow its header.
 	first := true
