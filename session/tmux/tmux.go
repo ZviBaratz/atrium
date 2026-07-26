@@ -83,6 +83,10 @@ type Session struct {
 	// agyConfigDir, when non-empty, isolates the Antigravity CLI's configuration
 	// directory using bwrap at session launch.
 	agyConfigDir string
+	// sessionBrief carries the per-session facts the injected SessionStart context brief is
+	// rendered from (#485). Set before Start (SetSessionBrief), like the config dirs above;
+	// a zero value means "say nothing", which is what a direct (non-git) session gets.
+	sessionBrief SessionBrief
 	// adapter holds the per-agent heuristics resolved once from program at
 	// construction; never nil (unknown programs get agent.Generic).
 	adapter *agent.Adapter
@@ -278,6 +282,13 @@ func (t *Session) SetAgyConfigDir(dir string) {
 	t.agyConfigDir = dir
 }
 
+// SetSessionBrief sets the facts the injected SessionStart context brief is rendered from
+// (#485). Call before Start: the brief is baked into the settings.json written at launch.
+// A zero brief injects no SessionStart hook at all.
+func (t *Session) SetSessionBrief(b SessionBrief) {
+	t.sessionBrief = b
+}
+
 // atriumMarkerEnv is injected into every session's env so external shell hooks
 // (e.g. a per-repo gh/Claude account switcher in the user's zshrc) can detect an
 // Atrium session and defer to the CLAUDE_CONFIG_DIR / GH_CONFIG_DIR / token env
@@ -390,11 +401,12 @@ func (t *Session) start(workDir string, program string) error {
 	// previous generation (pause → resume reuses this Session object).
 	t.resetPaneID()
 
-	// Inject the authoritative status hooks for claude (a no-op for other agents or when
-	// --settings is unsupported). The settings path is appended to the launch command only;
-	// t.program (the persisted value) is never mutated. A failure here just disables hooks —
-	// the launch still proceeds on the scrape classifier.
-	if settingsPath, err := ensureHookSettings(t.sanitizedName, t.program); err != nil {
+	// Inject the authoritative status hooks for claude, plus the SessionStart context brief
+	// (a no-op for other agents or when --settings is unsupported). The settings path is
+	// appended to the launch command only; t.program (the persisted value) is never mutated.
+	// A failure here just disables hooks — the launch still proceeds on the scrape classifier,
+	// and without a brief.
+	if settingsPath, err := ensureHookSettings(t.sanitizedName, t.program, t.sessionBrief); err != nil {
 		log.ErrorLog.Printf("status hooks disabled for %s: %v", t.sanitizedName, err)
 	} else if settingsPath != "" {
 		// tmux hands the launch command to `sh -c`, and the path embeds the session name,
