@@ -184,10 +184,16 @@ what keeps both halves reviewable.
 
 > **A new glyph costs FIVE sites, not four.** Beyond the struct, the rungs,
 > `assertGlyphWidths` and `TestGlyphsForFidelityRungs`, `app/help_legend_test.go:39-52`
-> reflects over **every** `Glyphs` field and fails on any new one unless it appears in the
-> `?` legend or in the documented `excluded` map. Both new glyphs are panel chrome, not
-> row vocabulary, so both go in `excluded` — following the `SelectionMark` / `FoldOpen`
-> precedent already there.
+> reflects over **every** `Glyphs` field and requires each one to appear in the `?` legend or
+> in the documented `excluded` map. Both new glyphs are panel chrome, not row vocabulary, so
+> both go in `excluded` — following the `SelectionMark` / `FoldOpen` precedent already there.
+>
+> One caveat, established by running it rather than reading it: the loop asserts
+> `Contains(legendContent, glyphValue)`, so it only *fails* when the glyph's character is
+> absent from the legend prose. `•` is absent, so `Modified` genuinely needs its entry; `→`
+> already occurs in the legend, so `Handoff` would pass without one — accidentally, not by
+> design. Both are categorized regardless, and Step 7 mutates `Modified` because it is the
+> only one of the two that can demonstrate the site.
 >
 > Note also that `registry.go` has only **one** complete literal, `plainGlyphs()`.
 > `nerdGlyphs()` and `asciiGlyphs()` *derive* from it, so a plain-Unicode glyph needs an
@@ -289,10 +295,22 @@ Mandatory. A guard nobody has watched fail proves nothing.
 
 1. Set `Modified: "✅"` in `plainGlyphs()` (a width-2 emoji). Run `TestGlyphWidths`.
    Expected: FAIL — `glyph Modified = "✅" has width 2, want 1`. Restore `"•"`.
-2. Delete the `"Handoff"` line from `help_legend_test.go`'s `excluded` map. Run
-   `TestLegendCoversRowVocabulary`. Expected: FAIL — `row-vocabulary glyph Handoff ("→")
-   must appear in the legend`. Restore it. **This is the fifth site proving itself.**
+2. Delete the `"Modified"` line from `help_legend_test.go`'s `excluded` map. Run
+   `TestLegendCoversRowVocabulary`. Expected: FAIL — `row-vocabulary glyph Modified ("•")
+   must appear in the legend`. Restore it **by editing the line back**. This is the fifth
+   site proving itself.
+
+   **Mutate `Modified`, not `Handoff`.** The loop's assertion is
+   `Contains(legendContent, glyphValue)`, and `→` already occurs elsewhere in the legend
+   prose — so deleting `Handoff`'s entry leaves the test **passing**, by coincidence rather
+   than by design. `•` does not occur there, which is why it is the target that demonstrates
+   the site. `Handoff` is still categorized in `excluded`: a copy edit that drops that arrow
+   from the legend would otherwise turn this into a surprise failure in an unrelated PR.
 3. Re-run both and confirm green.
+
+> **Do not `git checkout <file>` to undo a mutation.** It reverts the file to HEAD, taking
+> this task's real edits with it — which is how the first run of this step destroyed both
+> new `excluded` entries and had to redo them. Edit the mutated line back instead.
 
 - [ ] **Step 8: Lint and commit**
 

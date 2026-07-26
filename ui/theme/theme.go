@@ -57,6 +57,8 @@ type Glyphs struct {
 	FoldClosed    string // collapsed repo group
 	SelectionMark string // left accent bar on the selected row
 	MarkChecked   string // leading mark on a multi-select-marked row
+	Modified      string // settings row changed from its built-in default
+	Handoff       string // settings rail entry whose config lives in another overlay
 	DiffAdd       string // "+" in diff stats
 	DiffDel       string // "-" in diff stats
 	TextCursor    string // hand-rolled "you are typing here" cursor (list filter, picker filters)

@@ -34,6 +34,12 @@ func TestLegendCoversRowVocabulary(t *testing.T) {
 		"SelectionMark": "cursor selection bar (affordance, not a row status)",
 		"MarkChecked":   "multi-select mark (affordance, not a row status)",
 		"TextCursor":    "text-input caret (not a row status)",
+		"Modified":      "settings-panel modified marker (panel chrome, not a row status)",
+		// Handoff's "→" happens to occur elsewhere in the legend prose, so the loop below
+		// would pass without this entry — by coincidence, not by design. It is categorized
+		// here anyway: the glyph is panel chrome, and a copy edit that drops that arrow
+		// would otherwise turn this into a surprise failure in an unrelated PR.
+		"Handoff": "settings-rail handoff arrow (panel chrome, not a row status)",
 	}
 
 	g := theme.Current().Glyphs
