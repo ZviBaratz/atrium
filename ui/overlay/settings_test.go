@@ -653,20 +653,25 @@ func TestSettingsOverlay_LongDescriptionCapsWithEllipsis(t *testing.T) {
 // footer — widest and worst-case are different selectors here. The widest row's first
 // line happens to wrap well short of the threshold, so it never reaches the truncate
 // branch at all; swapping widestFooterRow in here would quietly downgrade this to a
-// test of the ellipsis alone. Hence the precondition below, which is the part that
-// actually holds the choice in place: a copy edit that moves the wrap point fails it
-// rather than rotting this comment.
+// test of the ellipsis alone. The precondition below is what holds the choice in place,
+// and it measures `key` — the same row the cursor is on — so it fails both ways it can
+// rot: a copy edit that moves the wrap point, and a swap to a row that never reaches
+// the branch. Reading the key from a literal a second time would leave the two free to
+// diverge, and the swap would pass.
 func TestSettingsOverlay_FooterCutLineStaysWithinInner(t *testing.T) {
+	const key = "update_base_on_create"
+
 	o := NewSettingsOverlay(config.DefaultConfig())
 	o.SetSize(80, 12)
-	settingsAt(t, o, "update_base_on_create")
+	settingsAt(t, o, key)
 	inner := o.innerWidth()
 
 	firstLine := strings.Split(
-		ansi.Wrap(rowByKey(t, config.DefaultConfig(), "update_base_on_create").footerText(),
-			inner, ""), "\n")[0]
+		ansi.Wrap(rowByKey(t, config.DefaultConfig(), key).footerText(), inner, ""), "\n")[0]
 	require.Greater(t, ansi.StringWidth(firstLine), inner-1,
-		"the first wrapped line must exceed inner-1, or the hard-truncate branch never fires")
+		"row %q's first wrapped line is %d cells, not over inner-1 (%d): the hard-truncate "+
+			"branch never fires, so this test would only be checking the ellipsis",
+		key, ansi.StringWidth(firstLine), inner-1)
 
 	footer := o.renderFooter(inner)
 	for i, line := range footer {
