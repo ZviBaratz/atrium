@@ -61,7 +61,15 @@ func TestSettingsPanel_OpenEditPersistClose(t *testing.T) {
 	assert.False(t, config.LoadConfig().GetAutoAttach(),
 		"a change must reach disk immediately so it survives a crash")
 
-	// Esc closes the panel and returns to the list.
+	// Esc is layered since the two-pane redesign: SelectRow focuses the rows pane, so the
+	// first Esc backs out to the rail and only the second closes. This is the only place the
+	// layering is observable end to end, so it is asserted rather than worked around — the
+	// hint line says "esc back" and then "esc close" so the extra level is advertised
+	// (spec §7/§15).
+	_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyEsc})
+	require.Equal(t, stateSettings, h.state, "the first esc backs out of the rows pane")
+	require.NotNil(t, h.settingsOverlay)
+
 	_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyEsc})
 	assert.Equal(t, stateDefault, h.state)
 	assert.Nil(t, h.settingsOverlay)

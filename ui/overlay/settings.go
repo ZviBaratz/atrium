@@ -32,25 +32,38 @@ const (
 // would have the daemon hammering tmux capture-pane in a hot loop.
 const minPollIntervalMs = 100
 
-// Vertical chrome around the settings body that is neither body nor footer:
+// settingsVChrome is the vertical chrome around the panes and the help pane:
 // border (2) + Padding(1,2) verticals (2) + title (1) + blank-after-title (1)
-// + blank-before-footer (1). Used to size the body window against the terminal
-// height so the box (with its now variable-height footer) never overflows.
+// + hint (1).
+//
+// The pane/help separator is deliberately NOT counted here — it is counted with the help
+// pane (helpBlockHeight), because it is only drawn when there is a help pane to separate.
 const settingsVChrome = 7
 
-// settingsMinBody is the minimum number of body rows kept visible, which keeps
-// the cursor row on screen; it is also the floor the wrapped-description cap
-// reserves for the body on short terminals.
+// settingsMinBody is the minimum number of pane rows kept visible, which keeps the cursor
+// row on screen. On a terminal too short for the full layout the help pane sheds lines
+// down to zero before this floor is touched — the row list is what the panel is for.
 const settingsMinBody = 3
 
-// SettingsOverlay is the in-TUI configuration panel: a navigable list of every
-// scalar config field, edited in place. It mutates the *live* Config it was
+// helpPaneLines is the help pane's height whenever the terminal can afford it (spec §10).
+// Fixed height is the entire point: the old footer grew with the help text and stole rows
+// from the list, so selecting Account clustering at 80x24 left 8 visible rows while its
+// help took 8 lines (D5).
+const helpPaneLines = 3
+
+// SettingsOverlay is the in-TUI configuration panel: a rail of categories beside the
+// highlighted category's rows, edited in place. It mutates the *live* Config it was
 // constructed with; the home model persists and live-applies after each change
 // (see HandleKeyPress's changedKey return).
 type SettingsOverlay struct {
 	rows   []settingRow
 	cfg    *config.Config
-	cursor int
+	cursor int // index into rows; global, not per category
+
+	// focus selects which pane consumes navigation keys. railCursor indexes
+	// railEntries(); the rows pane shows whatever that entry owns.
+	focus      settingsFocus
+	railCursor int
 
 	width, height int
 
@@ -59,25 +72,41 @@ type SettingsOverlay struct {
 	lastErr string
 }
 
-// NewSettingsOverlay builds the settings panel over the given live config.
+// NewSettingsOverlay builds the settings panel over the given live config, focused on
+// the rail at its default category.
 func NewSettingsOverlay(cfg *config.Config) *SettingsOverlay {
-	return &SettingsOverlay{
-		rows: newSettingRows(cfg),
-		cfg:  cfg,
+	s := &SettingsOverlay{
+		rows:       newSettingRows(cfg),
+		cfg:        cfg,
+		focus:      focusRail,
+		railCursor: railDefaultIndex(),
 		// Sensible floor so Render works before the first SetSize.
 		width:  80,
 		height: 24,
 	}
+	s.syncCursorToRail()
+	return s
 }
 
-// SelectRow moves the cursor onto the row with the given key, reporting
-// whether it exists.
+// SelectRow moves the cursor onto the row with the given key, reporting whether it
+// exists. It also syncs the rail to that row's category and focuses the rows pane:
+// selecting a row the pane is not showing would leave the cursor invisible.
+//
+// That composite behavior is the deep-link contract — it is what makes a jump from a
+// dialog or a notice land somewhere usable — and PR C promotes it to
+// OpenAt(category, key) with two real call sites. It is also what keeps the ~40 tests
+// that reach a row through settingsAt working: they select a row, then send keys
+// expecting them to reach it.
 func (s *SettingsOverlay) SelectRow(key string) bool {
 	for i, r := range s.rows {
-		if r.key == key {
-			s.cursor = i
-			return true
+		if r.key != key {
+			continue
 		}
+		s.cursor = i
+		s.railCursor = railIndexForCategory(r.category)
+		s.focus = focusRows
+		s.lastErr = ""
+		return true
 	}
 	return false
 }
@@ -104,44 +133,19 @@ func (s *SettingsOverlay) SetSize(width, height int) {
 // HandleKeyPress processes one key press. It reports whether the panel should
 // close, and — when a value changed — the changed row's key so the home model
 // can persist the config and run that field's live-apply hook.
+//
+// The order of these guards is the grammar: an open editor swallows everything (so j/k
+// type rather than navigate), then the focused pane. Task 8 inserts the expanded-help
+// view between them.
 func (s *SettingsOverlay) HandleKeyPress(msg tea.KeyMsg) (closed bool, changedKey string) {
-	if s.editing {
+	switch {
+	case s.editing:
 		return false, s.handleEditKey(msg)
+	case s.focus == focusRail:
+		return s.handleRailKey(msg), ""
+	default:
+		return s.handleRowsKey(msg)
 	}
-
-	row := &s.rows[s.cursor]
-	switch msg.String() {
-	case "esc", "ctrl+c":
-		return true, ""
-	case "up", "k":
-		if s.cursor > 0 {
-			s.cursor--
-			s.lastErr = ""
-		}
-	case "down", "j":
-		if s.cursor < len(s.rows)-1 {
-			s.cursor++
-			s.lastErr = ""
-		}
-	case "left":
-		return false, s.cycleEnum(row, -1)
-	case "right":
-		return false, s.cycleEnum(row, +1)
-	case " ":
-		if row.kind == kindBool {
-			return false, s.toggleBool(row)
-		}
-	case "enter":
-		switch row.kind {
-		case kindBool:
-			return false, s.toggleBool(row)
-		case kindEnum:
-			return false, s.cycleEnum(row, +1)
-		case kindInt, kindText:
-			s.startEdit(row)
-		}
-	}
-	return false, ""
 }
 
 // handleEditKey routes keys while the inline editor is open: enter commits

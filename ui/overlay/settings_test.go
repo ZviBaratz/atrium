@@ -511,24 +511,11 @@ func TestSettingsOverlay_EscCloses(t *testing.T) {
 	assert.True(t, closed)
 }
 
-func TestSettingsOverlay_NavigationClampsAtEnds(t *testing.T) {
-	o := NewSettingsOverlay(config.DefaultConfig())
-	assert.Equal(t, 0, o.cursor)
-
-	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyUp})
-	assert.Equal(t, 0, o.cursor, "up at the top clamps")
-
-	for range o.rows {
-		o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyDown})
-	}
-	assert.Equal(t, len(o.rows)-1, o.cursor, "down at the bottom clamps")
-
-	// j/k vi keys navigate too.
-	o.HandleKeyPress(keyRunes("k"))
-	assert.Equal(t, len(o.rows)-2, o.cursor)
-	o.HandleKeyPress(keyRunes("j"))
-	assert.Equal(t, len(o.rows)-1, o.cursor)
-}
+// Navigation clamping now lives in settings_nav_test.go, split by pane:
+// TestRailNavigationClampsAtEnds and TestRowNavigationStaysWithinTheCategory (plus
+// TestPagingKeysStayWithinTheCategory for PgUp/PgDn/Home/End). A single test cannot cover
+// both any more — ↑/↓ mean "category" on the rail and "row" in the rows pane, and a fresh
+// overlay opens on the rail (TestPanelOpensOnTheRail).
 
 func TestSettingsOverlay_RenderSmoke(t *testing.T) {
 	o := NewSettingsOverlay(config.DefaultConfig())
