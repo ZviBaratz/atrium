@@ -650,10 +650,12 @@ func TestSettingsOverlay_LongDescriptionCapsWithEllipsis(t *testing.T) {
 // exactly 60 cells — one over the inner-1 threshold the branch guards.
 //
 // This row is named rather than derived, and it is deliberately *not* the widest
-// footer: the widest row's first line wraps at 56 cells and never reaches the
-// truncate branch at all. Width alone does not select for this shape, so the
-// precondition is asserted below — a copy edit that moves the wrap point fails here
-// loudly instead of quietly downgrading this to a test of the ellipsis alone.
+// footer — widest and worst-case are different selectors here. The widest row's first
+// line happens to wrap well short of the threshold, so it never reaches the truncate
+// branch at all; swapping widestFooterRow in here would quietly downgrade this to a
+// test of the ellipsis alone. Hence the precondition below, which is the part that
+// actually holds the choice in place: a copy edit that moves the wrap point fails it
+// rather than rotting this comment.
 func TestSettingsOverlay_FooterCutLineStaysWithinInner(t *testing.T) {
 	o := NewSettingsOverlay(config.DefaultConfig())
 	o.SetSize(80, 12)
