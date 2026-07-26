@@ -434,22 +434,60 @@ func (s *SettingsOverlay) renderRowLine(i, width, labelW int) string {
 		}
 	}
 
+	modified := " "
+	if s.isModified(i) {
+		modified = t.Glyphs.Modified
+	}
+
 	if s.editing && selected {
 		// The live text input carries its own cursor styling, so it is appended rather than
 		// composed — an editor is not a value cell and must not be truncated.
 		//
 		// The head must spend the SAME three marker cells composeRowLine does (selection,
 		// modified, space), or every label jumps sideways the instant Enter opens the editor.
-		// Task 7 fills the middle cell in; here it is a space.
-		head := sel + " " + " " + padRight(row.label, labelW) + strings.Repeat(" ", rowLabelGap)
+		head := sel + modified + " " + padRight(row.label, labelW) + strings.Repeat(" ", rowLabelGap)
 		return t.AccentStyle().Render(head) + s.input.View()
 	}
 
-	p := composeRowLine(width, labelW, sel, " ", row.label, s.valueCell(i, width, labelW, ""), "")
-	if selected {
-		return rowStyle.Render(p.plain())
+	// The badge column carries the apply timing — unless the row is inert, in which case the
+	// reason takes it: a row that does nothing right now has more urgent news than when it
+	// would take effect. Either way spec §10 drops this column first when the pane is narrow,
+	// which is why the help pane repeats both in prose.
+	// An inert row's chip takes the badge column: a row that does nothing right now has more
+	// urgent news than when it would take effect. Unlike a timing badge it degrades rather than
+	// dropping — see inertBadgeShort.
+	inert := s.inertReason(i)
+	candidates := []string{row.timing.badge()}
+	if inert != "" {
+		candidates = inertBadgeCandidates(inert)
 	}
-	return t.DimStyle().Render(p.head) + t.FgStyle().Render(p.value+p.gap+p.badge)
+
+	// The value is sized against the SHORTEST badge candidate, not the widest. This refines
+	// spec §10, which ordered badge-before-value but never contemplated an enum's inline
+	// alternatives competing with the badge — at the 80-column floor they do.
+	//
+	// Reserving against the widest was the first attempt and it fails in a way worth recording:
+	// at 73 columns the rich value found no room beside the 19-cell reason, fell back to the
+	// full slack, took 15 cells for itself, and left nothing for the chip the ladder was
+	// supposed to guarantee. Reserving against the form that always survives is what makes the
+	// guarantee real.
+	value := s.valueCell(i, width, labelW, candidates[len(candidates)-1])
+	badge := fitBadge(candidates, width, labelW, value)
+	p := composeRowLine(width, labelW, sel, modified, row.label, value, badge)
+	switch {
+	case selected:
+		// Accent wins over dimming: the row under the cursor must stay legible. The chip still
+		// says the row is inert, and the help pane spells it out.
+		return rowStyle.Render(p.plain())
+	case inert != "":
+		// Dimmed, not hidden. Inert means "changing this has no effect right now", never "you
+		// may not touch this" — a user may configure ahead of enabling the parent (spec §5).
+		return t.FaintStyle().Render(p.plain())
+	default:
+		return t.DimStyle().Render(p.head) +
+			t.FgStyle().Render(p.value+p.gap) +
+			t.FaintStyle().Render(p.badge)
+	}
 }
 
 // valueCell formats a row's value by kind.
@@ -490,6 +528,19 @@ func (s *SettingsOverlay) valueCell(i, width, labelW int, badge string) string {
 		// editor affordance.
 		return v
 	}
+}
+
+// fitBadge returns the widest candidate that fits beside the value, or "" when none does.
+// composeRowLine would drop an over-wide badge silently; this is what lets a caller offer a
+// shorter rendering instead of losing the column.
+func fitBadge(candidates []string, width, labelW int, value string) string {
+	avail := width - rowMarkerCells - labelW - rowLabelGap - ansi.StringWidth(value) - 1
+	for _, c := range candidates {
+		if ansi.StringWidth(c) <= avail {
+			return c
+		}
+	}
+	return ""
 }
 
 // valueWasTruncated reports whether the selected row's value cell had to be shortened to fit
@@ -637,10 +688,29 @@ func (s *SettingsOverlay) contextLine(width int) string {
 	pos := fmt.Sprintf("%d/%d", s.cursor-start+1, end-start)
 
 	var body string
-	if s.valueWasTruncated() {
+	switch chip := s.inertReason(s.cursor); {
+	case s.valueWasTruncated():
 		// Spec §10: a truncated value must be shown in full here, or the truncation loses
 		// information rather than deferring it.
 		body = s.selectedRow().get(s.cfg)
+	case chip != "":
+		// The chip is three words in a column and is easy to misread as a prohibition; this is
+		// the sentence that says what it actually means.
+		body = "No effect right now — " + chip + "."
+	default:
+		// The current option's gloss, which is what makes cycling an enum teach rather than
+		// guess (D8) — and failing that, the first sentence of detail.
+		//
+		// The detail fallback is what makes spec §3's mockup literal: its second help line for
+		// Notifications ("The selected, attached and muted sessions stay silent.") is that
+		// row's detail, not its summary. Without it a row whose long-form help is only detail
+		// shows one prose line and a blank, and the prose PR A moved into detail stays
+		// invisible until `?`.
+		row := s.selectedRow()
+		body = row.gloss[row.get(s.cfg)]
+		if body == "" {
+			body = firstSentence(row.detail)
+		}
 	}
 
 	budget := width - ansi.StringWidth(pos) - 1
@@ -720,4 +790,88 @@ func (s *SettingsOverlay) hintLine() string {
 		}
 	}
 	return ansi.Truncate(theme.Current().OverlayHintStyle().Render(hint), inner, "…")
+}
+
+// inertReasons is the right-aligned chip for each row whose change currently has no effect
+// (spec §5's table). Reason strings live here rather than in the schema because they are
+// rendered text: PR A deliberately gave settingRow only the predicate, leaving the wording to
+// the renderer that positions it.
+//
+// Every predicated row must appear here — a row dimmed with no explanation is worse than a row
+// not dimmed at all, because the user can see something is off and has nothing to act on.
+// TestEveryInertPredicateHasAReason enforces both directions.
+var inertReasons = map[string]string{
+	"notifications_finished":  "needs Notifications",
+	"notify_when_focused":     "needs Notifications",
+	"notify_command":          "needs desktop mode",
+	"fast_forward_local_base": "needs Update base on create",
+	"daemon_poll_interval":    "needs Auto-yes",
+	"agent_oom_margin":        "Linux only",
+	// group_mode is here even though it declares no activeWhen: its gate is session-derived and
+	// injected by home, not expressible as a config predicate. Keeping the string in this map
+	// rather than inline in inertReason is what keeps every reason chip in one place, and it is
+	// the one key TestEveryInertPredicateHasAReason must exempt from its "no stale entries"
+	// direction.
+	"group_mode": "nothing to cluster",
+}
+
+// inertReasonsWithoutPredicate names the rows whose reason chip is driven by something other
+// than settingRow.activeWhen, so the completeness guard can tell a deliberate exception from a
+// stale entry.
+var inertReasonsWithoutPredicate = map[string]string{
+	"group_mode": "gate is session-derived; home injects it via SetAccountClusteringVisible",
+}
+
+// inertBadgeShort is the one-word fallback an inert row's chip degrades to when the full reason
+// cannot fit the pane.
+//
+// It exists because dropping the chip entirely is the one degradation this column must not
+// make: a dimmed row with no marker at all reads as broken, and the help pane only describes
+// the SELECTED row, so an unexplained dim two rows down has nothing to explain it. Degrading to
+// a word keeps the signal; the full reason is one keypress away. Timing badges, by contrast, are
+// reference information and are dropped outright, which is spec §10's stated priority.
+const inertBadgeShort = "inactive"
+
+// inertBadgeCandidates returns an inert row's chip renderings widest first, for the same
+// take-the-widest-that-fits ladder the enum value and the hint line use.
+func inertBadgeCandidates(reason string) []string {
+	if reason == "" {
+		return nil
+	}
+	return []string{reason, inertBadgeShort}
+}
+
+// inertReason returns row i's reason chip when changing it currently has no effect, or "" when
+// the row is live.
+func (s *SettingsOverlay) inertReason(i int) string {
+	row := s.rows[i]
+	if row.key == "group_mode" {
+		// The one row whose gate is not a config predicate: ui.List clusters only when
+		// accountGrouped AND more than one distinct cluster key is present across the LIVE
+		// sessions, and that key is a session's rotation pool when it has one. It is inert when
+		// clustering is switched ON but the list has nothing to cluster — "off" is not inert,
+		// it is off, and a chip there would be noise. clusteringVisible is nil until home
+		// injects the list's own answer.
+		if groupModeOnOff(s.cfg) == "on" && s.clusteringVisible != nil && !*s.clusteringVisible {
+			return inertReasons["group_mode"]
+		}
+		return ""
+	}
+	if row.activeWhen == nil || row.activeWhen(s.cfg) {
+		return ""
+	}
+	return inertReasons[row.key]
+}
+
+// firstSentence returns s up to and including its first sentence-ending period, or "" when
+// there is none. It surfaces one line of a row's detail in the help pane without the pane
+// trying to render a paragraph it has no room for.
+func firstSentence(s string) string {
+	if i := strings.Index(s, ". "); i >= 0 {
+		return s[:i+1]
+	}
+	if strings.HasSuffix(s, ".") {
+		return s
+	}
+	return ""
 }

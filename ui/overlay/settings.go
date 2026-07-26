@@ -68,6 +68,13 @@ type SettingsOverlay struct {
 	editing bool
 	input   textinput.Model
 	lastErr string
+
+	// clusteringVisible is home's answer to "does ui.List currently render account clusters?"
+	// — nil until home injects it. It is a *bool rather than a bool because nil must mean
+	// "unknown, show no chip": group_mode's honest gate is session-derived and a panel that
+	// cannot see the session list must not guess. See SetAccountClusteringVisible and
+	// TestGroupModeHasNoConfigOnlyInertPredicate.
+	clusteringVisible *bool
 }
 
 // NewSettingsOverlay builds the settings panel over the given live config, focused on

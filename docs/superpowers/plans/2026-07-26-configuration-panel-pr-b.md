@@ -3301,9 +3301,23 @@ Four mutations, one per signal, because a single mutation only proves one net.
    catches it as stale — proving the exception is an exception and not a hole. Revert all
    three.
 5. **Stop reserving the badge's width.** Pass `""` as `valueCell`'s `badge`. Expected:
-   `TestVisibilitySignalsSurviveTheDegradationFloor` FAILS at 80×24 on
+   `TestVisibilitySignalsSurviveTheDegradationFloor` FAILS at 73×24 on
    `notifications_finished` — and every other test in this task still passes, because they
    all run at 100×32. That contrast is the entire reason the sweep exists. Revert.
+
+   **Two corrections from implementing this.** First, the chip does not merely need
+   *reserving* for — it needs a **ladder**. `needs Update base on create` is 27 cells against
+   the 24 the Worktrees pane leaves at 80 columns, on a *bool* row with no enum alternatives
+   to shrink, so no amount of reservation fits it. Inert chips therefore degrade to a
+   one-word `inactive` rather than dropping, because a dimmed row with no marker at all reads
+   as broken and the help pane only describes the *selected* row. Timing badges keep dropping
+   outright — they are reference information, which is spec §10's stated priority.
+
+   Second, the reservation must be against the **shortest** candidate, not the widest. That
+   was the first attempt and it failed instructively: at 73 columns the rich enum value found
+   no room beside the 19-cell reason, fell back to the full slack, took 15 cells for itself,
+   and left nothing for the chip the ladder was supposed to guarantee. Reserving against the
+   form that always survives is what makes the guarantee real.
 6. **Misalign the editor.** In `renderRowLine`'s editing branch, drop one of the two spaces
    after `sel`. Expected: `TestEditingRowKeepsTheLabelColumn` (Task 7 Step 1a below) FAILS.
    Revert.

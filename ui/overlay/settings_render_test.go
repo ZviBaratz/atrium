@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/ZviBaratz/atrium/config"
+	"github.com/ZviBaratz/atrium/ui/theme"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
@@ -596,4 +597,329 @@ func TestSinglePaneFallbackShowsTheCategoryName(t *testing.T) {
 	require.True(t, o.twoPane())
 	assert.NotContains(t, stripANSI(strings.Join(o.rowsPaneLines(), "\n")), o.selectedEntry().label,
 		"a header beside the rail would only repeat it")
+}
+
+// TestModifiedMarkerAndSelectionMarkAreSeparateColumns pins spec §10's requirement, and the
+// trap it exists to prevent: a row that is both selected and modified must show BOTH marks.
+// Reusing the SelectionMark cell for the modified marker would make "changed from default"
+// invisible on exactly the row the user is looking at.
+func TestModifiedMarkerAndSelectionMarkAreSeparateColumns(t *testing.T) {
+	cfg := config.DefaultConfig()
+	o := NewSettingsOverlay(cfg)
+	o.SetSize(100, 32)
+	settingsAt(t, o, "mouse")
+	i := o.cursor
+	require.False(t, o.isModified(i), "mouse starts at its default")
+
+	_, changed := o.HandleKeyPress(tea.KeyMsg{Type: tea.KeySpace})
+	require.Equal(t, "mouse", changed)
+	require.True(t, o.isModified(i))
+
+	g := theme.Current().Glyphs
+	line := stripANSI(o.renderRowLine(i, o.rowsPaneWidth(), o.visibleLabelWidth()))
+	assert.Containsf(t, line, g.SelectionMark+g.Modified,
+		"a selected+modified row shows both marks in adjacent cells: %q", line)
+}
+
+// TestUnmodifiedRowShowsNoMarker pins the negative direction — the render twin of guard 2.
+// Without it the marker could be hardwired on and every assertion above would still pass.
+func TestUnmodifiedRowShowsNoMarker(t *testing.T) {
+	o := NewSettingsOverlay(config.DefaultConfig())
+	o.SetSize(100, 32)
+	settingsAt(t, o, "theme")
+	marked := 0
+	for i := range o.rows {
+		if strings.Contains(stripANSI(o.renderRowLine(i, o.rowsPaneWidth(), o.visibleLabelWidth())),
+			theme.Current().Glyphs.Modified) {
+			marked++
+		}
+	}
+	assert.Zero(t, marked, "no row may show a modified marker on a fresh DefaultConfig")
+}
+
+// TestEditingRowKeepsTheLabelColumn pins that opening the inline editor does not shift the
+// label. The editing branch builds its own head rather than going through composeRowLine, so it
+// has to spend the same three marker cells — otherwise every label jumps sideways the instant
+// Enter is pressed, which reads as the panel glitching.
+func TestEditingRowKeepsTheLabelColumn(t *testing.T) {
+	o := NewSettingsOverlay(config.DefaultConfig())
+	o.SetSize(100, 32)
+	settingsAt(t, o, "branch_prefix")
+	i := o.cursor
+	labelW, width := o.visibleLabelWidth(), o.rowsPaneWidth()
+
+	at := func(line string) int {
+		return ansi.StringWidth(line[:strings.Index(line, "Branch prefix")])
+	}
+	before := at(stripANSI(o.renderRowLine(i, width, labelW)))
+	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyEnter})
+	require.True(t, o.editing)
+	after := at(stripANSI(o.renderRowLine(i, width, labelW)))
+
+	assert.Equal(t, before, after, "the label column must not move when editing opens")
+	assert.Equal(t, rowMarkerCells, after)
+}
+
+// TestTimingBadgeRendersForEveryNonLiveRow pins that applyTiming.badge() reaches the screen.
+// PR A declared badge() and nothing called it; a projection no renderer reads is the same bug
+// class TestEveryCautionReachesTheFooter caught.
+func TestTimingBadgeRendersForEveryNonLiveRow(t *testing.T) {
+	o := NewSettingsOverlay(config.DefaultConfig())
+	o.SetSize(100, 32) // wide, so no badge is dropped for width
+
+	badged := 0
+	for i, r := range o.rows {
+		if r.timing == timingLive || o.inertReason(i) != "" {
+			continue // an inert row's chip replaces its badge, tested separately below
+		}
+		badged++
+		o.railCursor = railIndexForCategory(r.category)
+		o.syncCursorToRail()
+		line := stripANSI(o.renderRowLine(i, o.rowsPaneWidth(), o.visibleLabelWidth()))
+		assert.Containsf(t, line, r.timing.badge(),
+			"row %q must render its %q badge: %q", r.key, r.timing.badge(), line)
+	}
+	require.Positive(t, badged, "the schema must declare rows that are not timingLive")
+}
+
+// TestEveryInertPredicateHasAReason pins the drift guard that matters most here: a row dimmed
+// with no explanation is worse than a row not dimmed at all, because the user sees something is
+// off and has nothing to act on. Adding a seventh activeWhen predicate without a reason chip
+// fails here.
+func TestEveryInertPredicateHasAReason(t *testing.T) {
+	predicated := map[string]bool{}
+	for _, r := range newSettingRows(config.DefaultConfig()) {
+		if r.activeWhen == nil {
+			continue
+		}
+		predicated[r.key] = true
+		assert.NotEmptyf(t, inertReasons[r.key],
+			"row %q declares activeWhen but has no reason chip — it would dim with no explanation", r.key)
+	}
+	require.NotEmpty(t, predicated, "the schema must declare at least one activeWhen")
+
+	for key := range inertReasons {
+		if reason, ok := inertReasonsWithoutPredicate[key]; ok {
+			assert.NotEmptyf(t, reason, "exception %q must document why it has no predicate", key)
+			continue
+		}
+		assert.Truef(t, predicated[key],
+			"inertReasons names %q, which declares no activeWhen — a stale entry that can never render", key)
+	}
+
+	// The exception list itself must not rot: an entry naming a row that has since gained a
+	// predicate would silently disable the guard for it.
+	for key := range inertReasonsWithoutPredicate {
+		assert.NotEmptyf(t, inertReasons[key], "exception %q names no reason chip", key)
+		assert.Falsef(t, predicated[key],
+			"row %q now declares activeWhen, so it no longer needs an exception", key)
+	}
+}
+
+// TestInertRowIsDimmedAndChippedAndStillEditable is spec §13's guard 7, all three clauses. The
+// transitions are driven through the real config so the predicate is exercised rather than the
+// map: Notifications off makes Finished turns inert, and switching to desktop makes Notify
+// command active.
+func TestInertRowIsDimmedAndChippedAndStillEditable(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.Notifications = config.NotificationsOff
+	o := NewSettingsOverlay(cfg)
+	o.SetSize(100, 32)
+
+	// Park the cursor elsewhere: a selected row is accented, so dimming can only be observed
+	// on an unselected one.
+	settingsAt(t, o, "notifications")
+	finished := indexOfRowKey(t, o, "notifications_finished")
+	require.NotEqual(t, o.cursor, finished)
+
+	raw := o.renderRowLine(finished, o.rowsPaneWidth(), o.visibleLabelWidth())
+	assert.Equal(t, "needs Notifications", o.inertReason(finished))
+	assert.Contains(t, stripANSI(raw), "needs Notifications", "the reason chip must be on the row")
+	assert.Equal(t, theme.Current().FaintStyle().Render(stripANSI(raw)), raw,
+		"an inert row is rendered in the faint style")
+
+	// Still fully editable: inert means "changing this has no effect right now", never "you may
+	// not touch this" (spec §5).
+	settingsAt(t, o, "notifications_finished")
+	_, changed := o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRight})
+	assert.Equal(t, "notifications_finished", changed, "an inert row still cycles")
+
+	// And the transition works the other way: desktop mode activates Notify command.
+	cfg.Notifications = config.NotificationsDesktop
+	cmd := indexOfRowKey(t, o, "notify_command")
+	assert.Empty(t, o.inertReason(cmd), "desktop mode activates notify_command")
+	assert.NotContains(t, stripANSI(o.renderRowLine(cmd, o.rowsPaneWidth(), o.visibleLabelWidth())),
+		"needs desktop", "an active row carries no chip")
+}
+
+// TestInertChipReplacesTheTimingBadge pins that the two do not both try to occupy the
+// right-aligned column. A row that currently does nothing has more urgent news than when it
+// would take effect.
+func TestInertChipReplacesTheTimingBadge(t *testing.T) {
+	cfg := config.DefaultConfig()
+	f := false
+	cfg.UpdateBaseOnCreate = &f // makes fast_forward_local_base inert
+	o := NewSettingsOverlay(cfg)
+	o.SetSize(100, 32)
+
+	i := indexOfRowKey(t, o, "fast_forward_local_base")
+	require.Equal(t, timingNewSessions, o.rows[i].timing)
+	o.railCursor = railIndexForCategory(o.rows[i].category)
+	o.syncCursorToRail()
+	line := stripANSI(o.renderRowLine(i, o.rowsPaneWidth(), o.visibleLabelWidth()))
+	assert.Contains(t, line, "needs Update base on create")
+	assert.NotContains(t, line, timingNewSessions.badge(), "the chip takes the badge's column")
+}
+
+// TestVisibilitySignalsSurviveTheDegradationFloor is the guard the first draft was missing
+// entirely: every other test in this task runs at 100x32, where nothing competes for width.
+//
+// At 80x24 — the project's floor, and the size the whole design is budgeted against — the rows
+// pane is 52 cells, and an inline enum rendering that spends all of it leaves no room for the
+// badge. The badge is what carries the inert reason, so the row would dim with no explanation:
+// exactly what inertReasons' own doc comment calls worse than not dimming at all. Two rows in
+// Notifications would disagree about it, one explained and one not.
+func TestVisibilitySignalsSurviveTheDegradationFloor(t *testing.T) {
+	for _, size := range []struct{ w, h int }{{100, 32}, {80, 24}, {76, 24}, {73, 24}} {
+		t.Run(fmt.Sprintf("%dx%d", size.w, size.h), func(t *testing.T) {
+			cfg := config.DefaultConfig()
+			cfg.Notifications = config.NotificationsOff // inerts two Notifications rows
+			f := false
+			cfg.UpdateBaseOnCreate = &f // inerts fast_forward_local_base
+			o := NewSettingsOverlay(cfg)
+			o.SetSize(size.w, size.h)
+
+			checked, degraded := 0, 0
+			for i, r := range o.rows {
+				chip := o.inertReason(i)
+				if chip == "" {
+					continue
+				}
+				checked++
+				o.railCursor = railIndexForCategory(r.category)
+				o.syncCursorToRail()
+				line := stripANSI(o.renderRowLine(i, o.rowsPaneWidth(), o.visibleLabelWidth()))
+
+				// The full reason where it fits, the one-word fallback where it does not — but
+				// never nothing. A dimmed row with no marker at all reads as broken, and the
+				// help pane only describes the SELECTED row.
+				switch {
+				case strings.Contains(line, chip):
+				case strings.Contains(line, inertBadgeShort):
+					degraded++
+				default:
+					assert.Failf(t, "inert row lost its chip",
+						"row %q is dimmed with no marker at %dx%d (reason %q): %q",
+						r.key, size.w, size.h, chip, line)
+				}
+			}
+			require.Positive(t, checked, "the fixture must make at least one row inert")
+			if size.w >= 100 {
+				assert.Zero(t, degraded, "a 100-column pane has room for every full reason")
+			}
+		})
+	}
+}
+
+// TestContextLineExplainsAnInertRowInProse pins the help pane's half of the signal. The chip is
+// three words in a column and is easy to misread as a prohibition; the sentence says what it
+// actually means.
+func TestContextLineExplainsAnInertRowInProse(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.AutoYes = false
+	o := NewSettingsOverlay(cfg)
+	o.SetSize(100, 32)
+	settingsAt(t, o, "daemon_poll_interval")
+
+	ctx := stripANSI(o.contextLine(o.innerWidth()))
+	assert.Contains(t, ctx, "No effect right now")
+	assert.Contains(t, ctx, "needs Auto-yes")
+}
+
+// TestContextLineShowsAGlossForTheCurrentEnumOption pins that gloss reaches the help pane on an
+// ordinary row, which is what makes cycling an enum teach rather than guess.
+func TestContextLineShowsAGlossForTheCurrentEnumOption(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.Notifications = config.NotificationsOSC
+	o := NewSettingsOverlay(cfg)
+	o.SetSize(100, 32)
+	settingsAt(t, o, "notifications")
+
+	row := o.selectedRow()
+	require.NotEmpty(t, row.gloss[config.NotificationsOSC], "the schema glosses osc")
+	assert.Contains(t, stripANSI(o.contextLine(o.innerWidth())), row.gloss[config.NotificationsOSC])
+}
+
+// TestContextLineFallsBackToDetail pins the fallback that makes spec §3's mockup literal: its
+// second help line for Notifications is that row's DETAIL, not its summary. Without it, a row
+// whose long-form help is only detail shows one prose line and a blank.
+func TestContextLineFallsBackToDetail(t *testing.T) {
+	o := NewSettingsOverlay(config.DefaultConfig())
+	o.SetSize(100, 32)
+	settingsAt(t, o, "mouse") // has detail, no gloss, no chip, an untruncated value
+	row := o.selectedRow()
+	require.NotEmpty(t, row.detail)
+	require.Empty(t, row.gloss)
+
+	want := firstSentence(row.detail)
+	require.NotEmpty(t, want, "the row's detail must have a first sentence to show")
+	assert.Contains(t, stripANSI(o.contextLine(o.innerWidth())), want)
+}
+
+// TestContextLineShowsATruncatedValueInFull pins spec §10's obligation: the value column may be
+// shortened, but the full value must appear in the help pane, or the truncation loses
+// information outright.
+func TestContextLineShowsATruncatedValueInFull(t *testing.T) {
+	cfg := config.DefaultConfig()
+	o := NewSettingsOverlay(cfg)
+	o.SetSize(80, 24)
+	settingsAt(t, o, "carry_files")
+
+	full := o.selectedRow().get(cfg)
+	require.True(t, o.valueWasTruncated(),
+		"carry_files' default (%d cells) must not fit an 80-col rows pane (%d cells), or this "+
+			"test proves nothing", ansi.StringWidth(full), o.rowsPaneWidth())
+	assert.Contains(t, stripANSI(o.contextLine(o.innerWidth())), full,
+		"a truncated value must be shown in full in the help pane")
+}
+
+// TestPositionReadoutSurvivesInTheRenderedPane pins the orientation readout (D2: scrolled to
+// the bottom of the old list you could not tell where you were).
+//
+// It asserts through helpLines(), NOT through contextLine() directly. That distinction is the
+// whole test: a draft called contextLine and would have passed while the rendered pane threw
+// the counter away — helpLines appended it and *then* capped the list, so any row whose prose
+// filled the pane evicted it silently.
+func TestPositionReadoutSurvivesInTheRenderedPane(t *testing.T) {
+	for _, size := range []struct{ w, h int }{{100, 32}, {80, 24}, {56, 24}, {40, 24}} {
+		t.Run(fmt.Sprintf("%dx%d", size.w, size.h), func(t *testing.T) {
+			o := NewSettingsOverlay(config.DefaultConfig())
+			o.SetSize(size.w, size.h)
+			for _, key := range []string{
+				"default_program", "carry_files", "notifications", "config_file",
+				"fast_forward_local_base", // the widest footer: the eviction case
+			} {
+				settingsAt(t, o, key)
+				start, end := o.rowRange(o.selectedEntry())
+				want := fmt.Sprintf("%d/%d", o.cursor-start+1, end-start)
+				pane := stripANSI(strings.Join(o.helpLines(), "\n"))
+				assert.Containsf(t, pane, want,
+					"row %q's help pane must carry the position %q at %dx%d:\n%s",
+					key, want, size.w, size.h, pane)
+			}
+		})
+	}
+}
+
+// indexOfRowKey returns the row index for a key without moving the cursor, so a test can render
+// a row it is not sitting on.
+func indexOfRowKey(t *testing.T, o *SettingsOverlay, key string) int {
+	t.Helper()
+	for i, r := range o.rows {
+		if r.key == key {
+			return i
+		}
+	}
+	t.Fatalf("no settings row with key %q", key)
+	return -1
 }
