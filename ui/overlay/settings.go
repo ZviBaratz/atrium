@@ -1,7 +1,6 @@
 package overlay
 
 import (
-	"fmt"
 	"strings"
 
 	"github.com/ZviBaratz/atrium/config"
@@ -9,7 +8,6 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	xansi "github.com/charmbracelet/x/ansi"
 )
 
 // settingKind selects how a settings row is displayed and edited: bools toggle
@@ -122,12 +120,12 @@ func (s *SettingsOverlay) isModified(i int) bool {
 	return row.get(s.cfg) != row.defaultDisplay()
 }
 
-// SetSize is given the full terminal dimensions; the panel sizes itself within
-// them and windows its rows when the terminal is too short to show all.
+// SetSize is given the full terminal dimensions; the panel sizes itself within them, falls
+// back to a single pane on a narrow terminal, and windows its rows on a short one.
 func (s *SettingsOverlay) SetSize(width, height int) {
 	s.width = width
 	s.height = height
-	s.input.Width = max(10, s.innerWidth()-s.labelColWidth()-4)
+	s.input.Width = s.editorWidth()
 }
 
 // HandleKeyPress processes one key press. It reports whether the panel should
@@ -215,7 +213,7 @@ func (s *SettingsOverlay) startEdit(row *settingRow) {
 	in := textinput.New()
 	in.Prompt = ""
 	in.SetValue(raw(s.cfg))
-	in.Width = max(10, s.innerWidth()-s.labelColWidth()-4)
+	in.Width = s.editorWidth()
 	in.Focus()
 	in.CursorEnd()
 	s.input = in
@@ -223,10 +221,14 @@ func (s *SettingsOverlay) startEdit(row *settingRow) {
 	s.lastErr = ""
 }
 
-// boxWidth is the lipgloss .Width of the panel (content + padding, excluding
-// the border); innerWidth is the usable text width inside the padding.
+// boxWidth is the lipgloss .Width of the panel (content + padding, excluding the border);
+// innerWidth is the usable text width inside the padding.
+//
+// The 96 cap replaces the old fixed 64, which wasted a third of a 100-column terminal (D12).
+// At the 80-column floor the box is 78 and the inner width 74 — which is exactly the
+// summaryBudget PR A wrote the copy against.
 func (s *SettingsOverlay) boxWidth() int {
-	w := 64
+	w := 96
 	if limit := s.width - 2; w > limit { // leave room for the border
 		w = limit
 	}
@@ -238,193 +240,27 @@ func (s *SettingsOverlay) boxWidth() int {
 
 func (s *SettingsOverlay) innerWidth() int { return s.boxWidth() - 4 }
 
-// labelColWidth returns the fixed label column width: the longest label plus
-// the cursor marker and a separating gap.
-func (s *SettingsOverlay) labelColWidth() int {
-	w := 0
-	for _, r := range s.rows {
-		if len(r.label) > w {
-			w = len(r.label)
-		}
-	}
-	return w + 4 // "▸ " marker + 2-space gap
-}
-
-// Render draws the panel as a centered bordered box: a title, section-grouped
-// rows windowed around the cursor on short terminals, then the selected row's
-// description (or validation error) and the key hints.
+// Render draws the panel as a centered bordered box: a title, the rail beside the highlighted
+// category's rows, a separator, the fixed-height help pane, and the key hints.
+//
+// The box's height is a function of the terminal size alone, so it never changes as the rail
+// or row cursor moves — a centered overlay that resizes gets re-centered under the user
+// mid-navigation.
 func (s *SettingsOverlay) Render() string {
 	t := theme.Current()
-	inner := s.innerWidth()
 
-	// Footer first: its (now variable) line count feeds the body's height budget.
-	footer := s.renderFooter(inner)
-	body := s.renderBody(inner, len(footer))
+	lines := s.bodyLines()
+	if sep := s.separatorLine(); sep != "" {
+		lines = append(lines, sep)
+	}
+	lines = append(lines, s.helpLines()...)
+	lines = append(lines, s.hintLine())
 
 	title := t.OverlayTitleStyle().Render("Settings")
-	content := title + "\n\n" + strings.Join(body, "\n") + "\n\n" + strings.Join(footer, "\n")
-
 	return lipgloss.NewStyle().
 		Border(t.Borders.Style).
 		BorderForeground(t.Palette.Accent).
 		Padding(1, 2).
 		Width(s.boxWidth()).
-		Render(content)
-}
-
-// renderBody renders the section headers + rows, windowed so the cursor's row
-// is always visible within the height budget.
-func (s *SettingsOverlay) renderBody(inner, footerHeight int) []string {
-	t := theme.Current()
-	headerStyle := t.DimStyle().Bold(true)
-	dim := t.DimStyle()
-	sel := t.AccentStyle()
-
-	labelW := s.labelColWidth() - 2 // marker is rendered separately
-
-	type bodyLine struct {
-		text   string
-		rowIdx int // -1 for headers/spacers
-	}
-	var lines []bodyLine
-	// The old loop used `lastSection != ""` as its "first iteration" test, which a
-	// zero-valued settingCategory cannot express — catSessions is 0, so an
-	// uninitialized lastCategory would equal the first row's category and swallow
-	// its header. Hence the explicit `first` flag.
-	first := true
-	lastCategory := allCategories()[0]
-	for i, r := range s.rows {
-		if first || r.category != lastCategory {
-			if !first {
-				lines = append(lines, bodyLine{text: "", rowIdx: -1})
-			}
-			lines = append(lines, bodyLine{text: headerStyle.Render(r.category.label()), rowIdx: -1})
-			lastCategory = r.category
-			first = false
-		}
-
-		marker := "  "
-		if i == s.cursor {
-			marker = t.Glyphs.SelectionMark + " "
-		}
-		value := s.renderValue(i)
-		label := fmt.Sprintf("%-*s", labelW, r.label)
-		line := marker + label + value
-		switch {
-		case i == s.cursor && s.editing:
-			// The live text input carries its own cursor styling.
-			line = sel.Render(marker+label) + value
-		case i == s.cursor:
-			line = sel.Render(line)
-		default:
-			line = dim.Render(marker+label) + t.FgStyle().Render(value)
-		}
-		lines = append(lines, bodyLine{text: xansi.Truncate(line, inner, "…"), rowIdx: i})
-	}
-
-	// Window the lines so the cursor's line stays visible on short terminals.
-	// Budget = terminal height minus the fixed chrome and the now variable-height
-	// footer (wrapped description + hint line); reduces to the old height-9 when
-	// the description is a single line (footerHeight == 2).
-	budget := s.height - settingsVChrome - footerHeight
-	if budget < settingsMinBody {
-		budget = settingsMinBody
-	}
-	if len(lines) <= budget {
-		out := make([]string, len(lines))
-		for i, l := range lines {
-			out[i] = l.text
-		}
-		return out
-	}
-	cursorLine := 0
-	for i, l := range lines {
-		if l.rowIdx == s.cursor {
-			cursorLine = i
-			break
-		}
-	}
-	start := 0
-	if cursorLine >= budget {
-		start = cursorLine - budget + 1
-	}
-	end := start + budget
-	if end > len(lines) {
-		end = len(lines)
-	}
-	out := make([]string, 0, budget)
-	for _, l := range lines[start:end] {
-		out = append(out, l.text)
-	}
-	return out
-}
-
-// renderValue formats a row's value cell by kind (or the live editor).
-func (s *SettingsOverlay) renderValue(i int) string {
-	if s.editing && i == s.cursor {
-		return s.input.View()
-	}
-	row := s.rows[i]
-	v := row.get(s.cfg)
-	switch row.kind {
-	case kindBool:
-		if v == "on" {
-			return "[x] on"
-		}
-		return "[ ] off"
-	case kindEnum:
-		return "‹ " + v + " ›"
-	case kindReadOnly:
-		// No editor affordance: a read-only row shows its resolved value bare.
-		return v
-	default:
-		return v
-	}
-}
-
-// renderFooter renders the selected row's description (or pending validation
-// error) with its apply note, wrapped across as many lines as it needs, followed
-// by the key-hint line. It returns one string per rendered line so Render can
-// size the body window against the footer's actual height.
-func (s *SettingsOverlay) renderFooter(inner int) []string {
-	t := theme.Current()
-	row := s.rows[s.cursor]
-
-	desc := row.footerText()
-	style := t.DimStyle()
-	if s.lastErr != "" {
-		desc = s.lastErr
-		style = t.DangerStyle()
-	}
-
-	// Wrap the raw description to the inner width so long help is shown in full
-	// rather than clipped to one line. xansi.Wrap hard-breaks over-long tokens, so
-	// every line stays within inner (keeping the box within its width). Cap the
-	// line count on short terminals — reserving chrome, the hint, and a minimum
-	// body — so that on any terminal tall enough for the minimum layout the box
-	// stays within the terminal and PlaceOverlay can't bottom-clip the pinned hint
-	// line. On terminals shorter than that (below settingsVChrome + settingsMinBody
-	// + a two-line footer) the box still degrades exactly like the pre-existing
-	// body windowing. The cap only bites on short terminals; normally the full
-	// description fits.
-	lines := strings.Split(xansi.Wrap(desc, inner, ""), "\n")
-	maxDescLines := max(1, s.height-settingsVChrome-1-settingsMinBody)
-	if len(lines) > maxDescLines {
-		lines = lines[:maxDescLines]
-		last := lines[maxDescLines-1]
-		if xansi.StringWidth(last) > inner-1 {
-			last = xansi.Truncate(last, inner-1, "")
-		}
-		lines[maxDescLines-1] = last + "…"
-	}
-	// Style each wrapped line for color only; the outer box .Width pads them.
-	for i, l := range lines {
-		lines[i] = style.Render(l)
-	}
-
-	hint := "↑/↓ move · ←/→ change · ↵ edit · esc close"
-	if s.editing {
-		hint = "↵ save · esc cancel"
-	}
-	return append(lines, xansi.Truncate(t.OverlayHintStyle().Render(hint), inner, "…"))
+		Render(title + "\n\n" + strings.Join(lines, "\n"))
 }

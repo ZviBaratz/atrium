@@ -1,8 +1,11 @@
 package overlay
 
 import (
+	"fmt"
 	"strings"
 
+	"github.com/ZviBaratz/atrium/ui/theme"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 )
 
@@ -28,6 +31,10 @@ const (
 	// TestRowMinValueCellsHoldsTheWidestCompactValue ties it to the real schema.
 	rowMinValueCells = 14
 )
+
+// paneDividerCells is what the vertical rail/rows divider costs: a space, the theme's own
+// left-border rune, and a space.
+const paneDividerCells = 3
 
 // railWidth is the rail's fixed width: the widest rail label plus its marker and
 // handoff cells. Derived from railEntries() rather than a literal, so renaming a
@@ -163,4 +170,544 @@ func enumValueCandidates(cur string, opts []string) []string {
 		parts = append(parts, o)
 	}
 	return []string{strings.Join(parts, " "), compact}
+}
+
+// visibleLabelWidth is the label column width for the rows currently on screen: the widest
+// label among them.
+//
+// It is per-entry rather than global on purpose. Padding every pane to the schema's widest
+// label (26 cells, "Smart dispatch auto-create") would spend that width in Input, whose
+// widest is 21, for no gain. The degradation threshold still budgets for the global worst
+// case (minRowsPaneWidth), so a narrow pane is never a surprise.
+func (s *SettingsOverlay) visibleLabelWidth() int {
+	start, end := s.rowRange(s.selectedEntry())
+	w := 0
+	for _, r := range s.rows[start:end] {
+		if n := ansi.StringWidth(r.label); n > w {
+			w = n
+		}
+	}
+	return w
+}
+
+// longestRowLabel is the widest label in the whole schema — the worst case the rows pane
+// must hold without truncating one, and so the basis of the single-pane threshold.
+func (s *SettingsOverlay) longestRowLabel() int {
+	w := 0
+	for _, r := range s.rows {
+		if n := ansi.StringWidth(r.label); n > w {
+			w = n
+		}
+	}
+	return w
+}
+
+// minRowsPaneWidth is the narrowest rows pane worth rendering: the widest label untruncated —
+// spec §10 never truncates a label — plus a legible value column.
+func (s *SettingsOverlay) minRowsPaneWidth() int {
+	return rowMarkerCells + s.longestRowLabel() + rowLabelGap + rowMinValueCells
+}
+
+// twoPaneMinInner is the inner width below which the panel falls back to single-pane
+// drill-in.
+//
+// It is computed from the parts — rail, divider, minimum rows pane — because spec §10
+// requires exactly that. A hardcoded threshold would silently stop tracking a renamed
+// category or a longer label, offering two panes at a width where the rows pane can no
+// longer show one. Pinned by TestThresholdIsDerivedFromTheParts.
+func (s *SettingsOverlay) twoPaneMinInner() int {
+	return railWidth() + paneDividerCells + s.minRowsPaneWidth()
+}
+
+// twoPane reports whether the terminal is wide enough for the rail and rows side by side.
+func (s *SettingsOverlay) twoPane() bool { return s.innerWidth() >= s.twoPaneMinInner() }
+
+// rowsPaneWidth is the rows pane's width: the inner width less the rail and divider in
+// two-pane mode, or the whole inner width when the rail is a separate screen.
+func (s *SettingsOverlay) rowsPaneWidth() int {
+	if s.twoPane() {
+		return s.innerWidth() - railWidth() - paneDividerCells
+	}
+	return s.innerWidth()
+}
+
+// editorWidth is the inline editor's width: the rows pane less the marker columns, the
+// visible label column and its gap.
+func (s *SettingsOverlay) editorWidth() int {
+	return max(10, s.rowsPaneWidth()-rowMarkerCells-s.visibleLabelWidth()-rowLabelGap)
+}
+
+// windowPane windows lines around a cursor index, padding to exactly budget lines and
+// replacing the edge lines with "n more" markers when content is hidden.
+//
+// The cursor is kept one line INSIDE the window whenever the budget allows, so a marker
+// overwriting an edge line can never hide the line the user is pointing at. Getting this
+// wrong is not cosmetic: with the cursor pinned to the last visible line, the "↓ n more"
+// marker lands on top of it and the selected row disappears for every cursor position except
+// the very last. Pinned by TestSelectedRowIsAlwaysVisible and
+// TestCurrentRailEntryIsAlwaysVisible.
+func windowPane(lines []string, cursor, budget int) []string {
+	if budget < 1 {
+		return nil
+	}
+	out := make([]string, 0, budget)
+	if len(lines) <= budget {
+		out = append(out, lines...)
+		for len(out) < budget {
+			out = append(out, "")
+		}
+		return out
+	}
+
+	// Leave one line of margin below the cursor when there is room for it. settingsMinBody is
+	// 3, so the budget never drops below the width this needs.
+	margin := 0
+	if budget >= 3 {
+		margin = 1
+	}
+	start := 0
+	if cursor >= budget-margin {
+		start = cursor - budget + 1 + margin
+	}
+	if maxStart := len(lines) - budget; start > maxStart {
+		start = maxStart
+	}
+	if start < 0 {
+		start = 0
+	}
+
+	out = append(out, lines[start:start+budget]...)
+	faint := theme.Current().FaintStyle()
+	if start > 0 {
+		out[0] = faint.Render(fmt.Sprintf("  ↑ %d more", start))
+	}
+	if hidden := len(lines) - start - budget; hidden > 0 {
+		out[budget-1] = faint.Render(fmt.Sprintf("  ↓ %d more", hidden))
+	}
+	return out
+}
+
+// railLines renders the left rail, padded to the shared pane height so the divider column
+// runs its full length.
+//
+// At the 80x24 floor all thirteen entries fit unscrolled — spec §4's invariant, pinned by
+// TestRailFitsUnscrolledAtTheFloor. Below 24 rows they cannot, so the rail windows around its
+// cursor exactly as the rows pane does. Spec §4 anticipates this ("the rail windows like
+// today's body does"); what it must never do is silently drop the entries past the budget,
+// leaving the current entry off-screen with no indication of where you are.
+func (s *SettingsOverlay) railLines() []string {
+	t := theme.Current()
+	labelW := railWidth() - railMarkerCells - railTrailCells
+	entries := railEntries()
+
+	rendered := make([]string, 0, len(entries))
+	for i, e := range entries {
+		mark := " "
+		if i == s.railCursor {
+			mark = t.Glyphs.SelectionMark
+		}
+		trail := " "
+		if e.kind == railHandoff {
+			trail = t.Glyphs.Handoff
+		}
+		line := mark + " " + padRight(e.label, labelW) + " " + trail
+
+		style := t.DimStyle()
+		switch {
+		case i == s.railCursor && s.focus == focusRail:
+			style = t.AccentStyle()
+		case i == s.railCursor:
+			// Current but unfocused: still legible, but the accent belongs to whichever pane
+			// is taking keys, so exactly one bright marker is on screen at a time.
+			style = t.FgStyle()
+		case e.kind == railHandoff:
+			// Dimmer than an ordinary entry: PR B cannot open these yet.
+			style = t.FaintStyle()
+		}
+		rendered = append(rendered, style.Render(line))
+	}
+	return windowPane(rendered, s.railCursor, s.paneHeight())
+}
+
+// paneLine is one rows-pane line together with the row it belongs to, so the windowing can
+// locate the cursor without re-deriving it from the text. rowIdx is -1 for a category header,
+// a spacer, an overflow marker, or a handoff note.
+type paneLine struct {
+	text   string
+	rowIdx int
+}
+
+// rowsPaneContent builds every line the current rail entry could show, unwindowed.
+//
+// The All settings view adds a header per category and a blank spacer between them — the
+// shape of the pre-redesign list, which is what makes it usable for auditing a config. A
+// single category shows its rows bare: the rail entry already names it, so a header would
+// only repeat itself.
+func (s *SettingsOverlay) rowsPaneContent(width int) []paneLine {
+	e := s.selectedEntry()
+	if e.kind == railHandoff {
+		return s.handoffPaneContent(e, width)
+	}
+	t := theme.Current()
+	start, end := s.rowRange(e)
+	labelW := s.visibleLabelWidth()
+
+	var lines []paneLine
+	// The explicit `first` flag is required because catSessions is 0: an uninitialized
+	// lastCategory would equal the first row's category and swallow its header.
+	first := true
+	lastCategory := allCategories()[0]
+	for i := start; i < end; i++ {
+		if e.kind == railAll && (first || s.rows[i].category != lastCategory) {
+			if !first {
+				lines = append(lines, paneLine{text: "", rowIdx: -1})
+			}
+			lines = append(lines, paneLine{
+				text:   t.DimStyle().Bold(true).Render(s.rows[i].category.label()),
+				rowIdx: -1,
+			})
+			lastCategory = s.rows[i].category
+		}
+		first = false
+		lines = append(lines, paneLine{text: s.renderRowLine(i, width, labelW), rowIdx: i})
+	}
+	return lines
+}
+
+// handoffPaneContent is the rows pane for an entry that owns no rows: its note, wrapped.
+// Naming the surface that does own the config is the honest thing to render until PR C wires
+// Accounts to the @ overlay and PR D builds the Profiles editor — an empty pane would read as
+// a bug.
+func (s *SettingsOverlay) handoffPaneContent(e railEntry, width int) []paneLine {
+	style := theme.Current().DimStyle()
+	var lines []paneLine
+	for _, l := range strings.Split(ansi.Wrap(e.note, width, ""), "\n") {
+		lines = append(lines, paneLine{text: style.Render(l), rowIdx: -1})
+	}
+	return lines
+}
+
+// rowsPaneLines renders the highlighted entry's rows, windowed around the cursor and padded
+// to the shared pane height. When the entry outgrows the pane — All settings always does — an
+// edge line becomes an "n more" marker, so the panel says that more exists rather than just
+// ending (D2: no orientation).
+func (s *SettingsOverlay) rowsPaneLines() []string {
+	content := s.rowsPaneContent(s.rowsPaneWidth())
+	lines := make([]string, len(content))
+	cursorLine := 0
+	for i, l := range content {
+		lines[i] = l.text
+		if l.rowIdx == s.cursor {
+			cursorLine = i
+		}
+	}
+	return windowPane(lines, cursorLine, s.paneHeight())
+}
+
+// renderRowLine composes and styles one row's line. Task 7 fills in the modified marker, the
+// badge and the inert dimming; here the marker columns are reserved but empty, so the layout
+// is final before the signals land on it.
+func (s *SettingsOverlay) renderRowLine(i, width, labelW int) string {
+	t := theme.Current()
+	row := s.rows[i]
+	selected := i == s.cursor
+
+	// Both panes always show their cursor — hiding the rows pane's while the rail has focus
+	// would leave the user unable to see where → would land. Only the STYLE differs, so
+	// exactly one accent-bright marker is on screen at a time.
+	sel := " "
+	rowStyle := t.FgStyle()
+	if selected {
+		sel = t.Glyphs.SelectionMark
+		if s.focus == focusRows {
+			rowStyle = t.AccentStyle()
+		}
+	}
+
+	if s.editing && selected {
+		// The live text input carries its own cursor styling, so it is appended rather than
+		// composed — an editor is not a value cell and must not be truncated.
+		//
+		// The head must spend the SAME three marker cells composeRowLine does (selection,
+		// modified, space), or every label jumps sideways the instant Enter opens the editor.
+		// Task 7 fills the middle cell in; here it is a space.
+		head := sel + " " + " " + padRight(row.label, labelW) + strings.Repeat(" ", rowLabelGap)
+		return t.AccentStyle().Render(head) + s.input.View()
+	}
+
+	p := composeRowLine(width, labelW, sel, " ", row.label, s.valueCell(i, width, labelW, ""), "")
+	if selected {
+		return rowStyle.Render(p.plain())
+	}
+	return t.DimStyle().Render(p.head) + t.FgStyle().Render(p.value+p.gap+p.badge)
+}
+
+// valueCell formats a row's value by kind.
+//
+// For an enum it takes the widest rendering that fits — and `badge` is what the caller intends
+// to put in the right-aligned column, so the ladder can step down to the compact form rather
+// than squeezing the badge out. That ordering matters: the badge carries the inert reason, and
+// a rich value that evicted it would dim a row with no explanation. See Task 7, where a real
+// badge is passed; here it is always "".
+func (s *SettingsOverlay) valueCell(i, width, labelW int, badge string) string {
+	row := s.rows[i]
+	v := row.get(s.cfg)
+	switch row.kind {
+	case kindBool:
+		if v == "on" {
+			return "[x] on"
+		}
+		return "[ ] off"
+	case kindEnum:
+		avail := width - rowMarkerCells - labelW - rowLabelGap
+		// Try to fit beside the badge first, then to fit the pane at all. The inline
+		// alternatives are an enrichment, so they are the first thing to go; the compact
+		// "‹ v ›" loses nothing about the current value (it is the pre-PR-B rendering).
+		budgets := []int{avail}
+		if badge != "" {
+			budgets = []int{avail - ansi.StringWidth(badge) - 1, avail}
+		}
+		for _, budget := range budgets {
+			for _, c := range enumValueCandidates(v, row.options(s.cfg)) {
+				if ansi.StringWidth(c) <= budget {
+					return c
+				}
+			}
+		}
+		return "‹ " + v + " ›"
+	default:
+		// kindInt, kindText and kindReadOnly all show the value bare; a read-only row gets no
+		// editor affordance.
+		return v
+	}
+}
+
+// valueWasTruncated reports whether the selected row's value cell had to be shortened to fit
+// its pane, which is what obliges the help pane to show it in full (spec §10).
+func (s *SettingsOverlay) valueWasTruncated() bool {
+	labelW := s.visibleLabelWidth()
+	width := s.rowsPaneWidth()
+	p := composeRowLine(width, labelW, " ", " ", s.selectedRow().label,
+		s.valueCell(s.cursor, width, labelW, ""), "")
+	return strings.HasSuffix(p.value, "…")
+}
+
+// paneDivider is the vertical rule between the rail and the rows pane, taken from the theme's
+// own border rune so it matches the box's rounded/square style.
+func paneDivider() string {
+	left := theme.Current().Borders.Style.Left
+	if lipgloss.Width(left) != 1 {
+		// A border style with no single-cell vertical would break every column below it.
+		return "|"
+	}
+	return left
+}
+
+// bodyLines is the pane region: the rail beside the rows on a wide terminal, or one of them
+// on a narrow one.
+//
+// Below twoPaneMinInner the panel becomes single-pane drill-in (spec §10) — the rail, then
+// Enter opens a category's rows and Esc returns. It is the same mental model and the same
+// focus state; only the drawing changes, which is why the navigation tests do not care which
+// layout is active.
+//
+// The fallback is load-bearing, not cosmetic: rowsPaneWidth() returns the WHOLE inner width
+// when !twoPane(), so joining it beside the rail anyway would emit lines of
+// railWidth+divider+inner cells — 56 in a 34-cell box at 40 columns — which lipgloss
+// soft-wraps, doubling every body line and growing the box past the terminal.
+func (s *SettingsOverlay) bodyLines() []string {
+	if !s.twoPane() {
+		if s.focus == focusRows {
+			return s.rowsPaneLines()
+		}
+		return s.railLines()
+	}
+
+	rail := s.railLines()
+	rows := s.rowsPaneLines()
+	div := paneDivider()
+	out := make([]string, 0, len(rail))
+	for i := range rail {
+		// Pad each side explicitly rather than using JoinHorizontal: the panes are already
+		// exactly railWidth() and rowsPaneWidth() cells, and JoinHorizontal would pad to its
+		// own idea of the widest line — which for a styled line is not the same number.
+		out = append(out, padRight(rail[i], railWidth())+" "+div+" "+rows[i])
+	}
+	return out
+}
+
+// helpLines renders the fixed-height help pane: the selected row's summary with its caution
+// and timing note, wrapped, then one context line — capped and padded to exactly helpHeight()
+// lines.
+//
+// The prose is settingRow.footerText() unchanged from PR A, which appends the caution and the
+// timing note after the summary. The timing therefore appears twice on a wide pane — once as
+// the row's badge, once here. That is deliberate: the badge is a scannable column for
+// comparing rows, the prose is the sentence for the selected one, and because spec §10 drops
+// the badge first on a narrow pane, the prose is its fallback rather than pure duplication.
+// Reusing footerText also keeps TestEveryCautionReachesTheFooter and TestFooterTextFitsTwoLines
+// live with no schema change.
+func (s *SettingsOverlay) helpLines() []string {
+	h := s.helpHeight()
+	if h == 0 {
+		return nil
+	}
+	t := theme.Current()
+	inner := s.innerWidth()
+
+	style := t.DimStyle()
+	prose := s.selectedRow().footerText()
+	if s.selectedEntry().kind == railHandoff {
+		// A handoff entry's note is already the whole content of the rows pane, so echoing it
+		// here would print the same sentence twice in one frame. The pane stays blank.
+		prose = ""
+	}
+	if s.lastErr != "" {
+		prose, style = s.lastErr, t.DangerStyle()
+	}
+
+	// The context line carries the position readout, so it must never be the thing that gets
+	// evicted when the prose is long: capping the prose at h-1 is what makes contextLine's
+	// "always" true of the rendered panel rather than only of the function.
+	ctx := ""
+	if s.lastErr == "" && s.selectedEntry().kind != railHandoff {
+		ctx = s.contextLine(inner)
+	}
+	proseBudget := h
+	if ctx != "" {
+		proseBudget = h - 1
+	}
+
+	var lines []string
+	if prose != "" {
+		lines = strings.Split(ansi.Wrap(prose, inner, ""), "\n")
+	}
+	if len(lines) > proseBudget {
+		lines = lines[:max(0, proseBudget)]
+		if len(lines) > 0 {
+			last := lines[len(lines)-1]
+			// Appending the ellipsis to an already-full line would push it past inner, and the
+			// lipgloss box would soft-wrap it, add a row, and clip the pinned hint.
+			if ansi.StringWidth(last) > inner-1 {
+				last = ansi.Truncate(last, inner-1, "")
+			}
+			lines[len(lines)-1] = last + "…"
+		}
+	}
+	for i, l := range lines {
+		lines[i] = style.Render(l)
+	}
+	if ctx != "" {
+		// Pad first, so the context line — and with it the position readout — is always the
+		// pane's LAST line rather than floating up under a short summary.
+		for len(lines) < h-1 {
+			lines = append(lines, "")
+		}
+		lines = append(lines, ctx)
+	}
+	for len(lines) < h {
+		lines = append(lines, "")
+	}
+	return lines
+}
+
+// contextLine is the help pane's last line: whatever the row line could not say. Task 7 fills
+// in the inert reason and the enum gloss; here it carries the full value when the row line
+// truncated it, plus the position readout.
+//
+// The position counter always rides this line, right-aligned, so the pane says where you are
+// in the category even when there is nothing else to add (D2: no orientation, no position).
+// Content is truncated to make room for it, never the other way round — the counter is five
+// cells and the content is recoverable from `?`.
+func (s *SettingsOverlay) contextLine(width int) string {
+	start, end := s.rowRange(s.selectedEntry())
+	if end <= start {
+		return ""
+	}
+	pos := fmt.Sprintf("%d/%d", s.cursor-start+1, end-start)
+
+	var body string
+	if s.valueWasTruncated() {
+		// Spec §10: a truncated value must be shown in full here, or the truncation loses
+		// information rather than deferring it.
+		body = s.selectedRow().get(s.cfg)
+	}
+
+	budget := width - ansi.StringWidth(pos) - 1
+	if budget < 1 {
+		return theme.Current().FaintStyle().Render(pos)
+	}
+	if ansi.StringWidth(body) > budget {
+		body = ansi.Truncate(body, budget, "…")
+	}
+	gap := width - ansi.StringWidth(body) - ansi.StringWidth(pos)
+	return theme.Current().FaintStyle().Render(body + strings.Repeat(" ", gap) + pos)
+}
+
+// separatorLine is the horizontal rule between the panes and the help pane, with a tee where
+// the vertical divider meets it.
+//
+// It sits inside the box padding rather than spliced into the border: lipgloss v1 has no API
+// for a mid-border row (theme.PanelWithBadges hand-composes its top border for exactly this
+// reason), and a rule two cells short of the border reads the same. It is omitted entirely
+// when the terminal is too short for a help pane, since there is then nothing to separate.
+func (s *SettingsOverlay) separatorLine() string {
+	if s.helpHeight() == 0 {
+		return ""
+	}
+	b := theme.Current().Borders.Style
+	h := b.Bottom
+	if lipgloss.Width(h) != 1 {
+		h = "─"
+	}
+	inner := s.innerWidth()
+	rule := strings.Repeat(h, inner)
+	if s.twoPane() {
+		tee := b.MiddleBottom
+		if lipgloss.Width(tee) != 1 {
+			tee = h
+		}
+		at := railWidth() + 1 // the divider sits one cell into the three-cell gap
+		rule = strings.Repeat(h, at) + tee + strings.Repeat(h, inner-at-1)
+	}
+	return theme.Current().FaintStyle().Render(rule)
+}
+
+// hintLine is the key hints for the current focus, at the widest wording that fits.
+//
+// The hints differ per focus rather than being one static string, because Esc closes from the
+// rail but only backs out of the rows pane — advertising the wrong one is how a layered Esc
+// becomes surprising instead of discoverable (spec §15). The ladder guarantees that "esc back"
+// / "esc close" survives at any width: it is the hint a user stuck in the panel needs most.
+//
+// It deliberately does not advertise `/` or `r`. Search and reset are PR C, and a hint for a
+// key that does nothing is worse than no hint at all.
+func (s *SettingsOverlay) hintLine() string {
+	var ladder []string
+	switch {
+	case s.editing:
+		ladder = []string{"↵ save · esc cancel", "esc cancel"}
+	case s.focus == focusRows:
+		ladder = []string{
+			"↑/↓ move · ←/→ change · ↵ edit · ⇥ pane · esc back",
+			"↑/↓ · ←/→ · ↵ edit · esc back",
+			"↵ edit · esc back",
+			"esc back",
+		}
+	default:
+		ladder = []string{
+			"↑/↓ category · → rows · ⇥ pane · esc close",
+			"↑/↓ · → rows · esc close",
+			"esc close",
+		}
+	}
+	inner := s.innerWidth()
+	hint := ladder[len(ladder)-1]
+	for _, h := range ladder {
+		if ansi.StringWidth(h) <= inner {
+			hint = h
+			break
+		}
+	}
+	return ansi.Truncate(theme.Current().OverlayHintStyle().Render(hint), inner, "…")
 }

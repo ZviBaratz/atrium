@@ -88,11 +88,11 @@ func TestEveryCautionReachesTheFooter(t *testing.T) {
 		}
 		cautions++
 		o := NewSettingsOverlay(config.DefaultConfig())
-		o.SetSize(80, 40)
+		o.SetSize(100, 32) // wide and tall, so the help pane is at its full three lines
 		settingsAt(t, o, r.key)
-		footer := stripANSI(strings.Join(o.renderFooter(o.innerWidth()), " "))
-		assert.Containsf(t, footer, r.caution,
-			"row %q declares a caution the footer never renders", r.key)
+		help := stripANSI(strings.Join(o.helpLines(), " "))
+		assert.Containsf(t, help, r.caution,
+			"row %q declares a caution the help pane never renders", r.key)
 	}
 	// Without this the loop body could stop running and the test would still pass.
 	require.Positive(t, cautions, "at least one row must declare a caution")
@@ -519,22 +519,26 @@ func TestSettingsOverlay_EscCloses(t *testing.T) {
 
 func TestSettingsOverlay_RenderSmoke(t *testing.T) {
 	o := NewSettingsOverlay(config.DefaultConfig())
-	o.SetSize(80, 40)
+	o.SetSize(100, 32)
 	out := stripANSI(o.Render())
 
-	for _, want := range []string{"Settings", "Theme", "esc close"} {
-		assert.Contains(t, out, want)
+	assert.Contains(t, out, "Settings")
+	assert.Contains(t, out, "Session limit", "the landing category's rows are visible")
+	assert.Contains(t, out, "esc close", "the rail's hint")
+
+	// Every rail entry is visible at once — the two-pane rail is the orientation the old
+	// single column lacked (D2), so this no longer needs an artificially tall terminal.
+	// Derived from railEntries() rather than a second hardcoded list.
+	for _, e := range railEntries() {
+		assert.Containsf(t, out, e.label, "rail entry %q is not rendered", e.label)
 	}
 
-	// Every category must reach the render as a section header. Derived from
-	// allCategories() rather than a second hardcoded list, so the test cannot drift
-	// from the vocabulary. The panel windows its body, so this needs a terminal tall
-	// enough for all ten sections plus their rows.
-	o.SetSize(80, 80)
-	tall := stripANSI(o.Render())
-	for _, c := range allCategories() {
-		assert.Containsf(t, tall, c.label(), "category %q has no section header", c.label())
-	}
+	// A row from another category becomes visible once selected, and the hint changes with
+	// the focus (spec §15).
+	settingsAt(t, o, "theme")
+	selected := stripANSI(o.Render())
+	assert.Contains(t, selected, "Theme")
+	assert.Contains(t, selected, "esc back", "the rows pane advertises a different esc")
 }
 
 func TestSettingsOverlay_RenderFitsWidth(t *testing.T) {
@@ -555,120 +559,107 @@ func TestSettingsOverlay_ShortTerminalScrollsToCursor(t *testing.T) {
 	assert.Contains(t, out, "Tmux config override", "the selected row must be visible on short terminals")
 }
 
-// TestSettingsOverlay_LongSummaryShownInFull pins that a summary too wide for the box
-// wraps and is shown in full rather than clipped to one line. The assertion is on the
-// summary's tail *and* on its absence from the first footer line, so it cannot pass
-// vacuously on a summary that simply fit.
+// TestSettingsOverlay_LongSummaryWrapsWithinTheHelpPane pins that a summary too wide for one
+// line is wrapped and shown whole inside the fixed-height help pane, rather than clipped. The
+// assertion is on the tail *and* on its absence from the first line, so it cannot pass on a
+// summary that simply fit.
 //
-// (Before the summary/detail split this test used group_mode's 443-char description;
-// that prose now lives in detail, which PR B renders behind `?`. The phrase itself is
-// pinned by TestDetailRetainsTheMovedProse.)
-func TestSettingsOverlay_LongSummaryShownInFull(t *testing.T) {
+// (Before PR B the footer grew to fit and this test asserted on renderFooter's line count. The
+// pane is now fixed at three lines — that is the D5 fix — so what is pinned here is that the
+// text still arrives, not that the pane resized. The prose that used to be asserted on is
+// group_mode's detail, pinned by TestDetailRetainsTheMovedProse.)
+func TestSettingsOverlay_LongSummaryWrapsWithinTheHelpPane(t *testing.T) {
 	o := NewSettingsOverlay(config.DefaultConfig())
-	o.SetSize(50, 40) // narrow box, tall terminal: the summary must wrap, not be capped
+	o.SetSize(56, 40) // narrow: single-pane, so the summary must wrap
 	settingsAt(t, o, "max_sessions")
 
-	footer := o.renderFooter(o.innerWidth())
-	require.Greater(t, len(footer), 2, "the summary must wrap onto more than one line")
-	assert.NotContains(t, stripANSI(footer[0]), "host",
+	help := o.helpLines()
+	require.Len(t, help, o.helpHeight(), "the pane is exactly helpHeight() lines")
+	assert.NotContains(t, stripANSI(help[0]), "host",
 		"the tail must be on a wrapped line, or this test proves nothing")
-
-	out := stripANSI(o.Render())
-	assert.Contains(t, out, "host", "the summary's tail must survive wrapping")
-	assert.Contains(t, out, "esc close", "the key hint stays visible")
+	assert.Contains(t, stripANSI(strings.Join(help, "\n")), "host",
+		"the summary's tail must survive wrapping")
+	assert.Contains(t, stripANSI(o.Render()), "esc back", "the key hint stays visible")
 }
 
-// TestSettingsOverlay_FooterNeverClipsHint guards the regression that a
-// variable-height (wrapped) footer could push the box past the terminal, making
-// PlaceOverlay bottom-clip the pinned hint line. The rendered box height must
-// stay within the terminal for any terminal >= 12 rows (below that it degrades
-// like the pre-existing windowing).
+// The height sweep that used to live here is now TestBoxNeverOutgrowsTheTerminal in
+// settings_render_test.go, which also sweeps WIDTH. The mechanism it guards is unchanged and
+// more important than before — paneHeight and helpHeight are two separate formulas that must
+// stay in numeric lockstep, and PR B adds a second way to overflow (a body line too wide for
+// the box soft-wraps rather than degrading, growing the box a row at a time).
+
+// TestSettingsOverlay_HelpPaneCapsWithEllipsis pins that help too long for the fixed pane is
+// capped with a trailing ellipsis and the pane stays exactly its budgeted height.
 //
-// The sweep covers every height in the range, not just a few samples: the body
-// budget (renderBody) and the description cap (renderFooter) are two separate
-// formulas that must stay in numeric lockstep for the box to fit, so a dense
-// sweep catches any future drift between them. It also exercises the height
-// (12) at which the footer's full-width cut line trips the ellipsis hard-truncate
-// branch — without which that line would soft-wrap in Render, grow the box, and clip
-// the hint.
-func TestSettingsOverlay_FooterNeverClipsHint(t *testing.T) {
+// The width matters and is the reason the old heights (14/15, then 12) no longer work: this
+// used to test renderFooter's maxDescLines, which scaled with terminal HEIGHT. The pane is now
+// a fixed three lines, so the cap is reached by making the box NARROW instead — at the
+// 80-column inner width of 74 the widest footer wraps to two lines and never reaches it.
+func TestSettingsOverlay_HelpPaneCapsWithEllipsis(t *testing.T) {
 	o := NewSettingsOverlay(config.DefaultConfig())
-	// The worst case is whichever row has the widest footer, so derive it rather than
-	// naming one: group_mode held the role before the copy rewrite (443-char
-	// description), update_base_on_create held it after, and adding one caution moved
-	// it again. A hardcoded key silently stops testing the worst case.
+	o.SetSize(40, 24)
 	settingsAt(t, o, widestFooterRow(t))
-	for h := 12; h <= 40; h++ {
-		o.SetSize(80, h)
-		out := o.Render()
-		assert.LessOrEqualf(t, lipgloss.Height(out), h,
-			"box height must fit terminal height %d", h)
-		assert.Containsf(t, stripANSI(out), "esc close",
-			"the hint must survive at terminal height %d", h)
-	}
+
+	help := o.helpLines()
+	require.Len(t, help, o.helpHeight())
+	// Precondition: the prose must actually exceed the budget the pane leaves it, or the
+	// ellipsis below proves nothing. The context line claims one row, so the prose gets
+	// helpHeight()-1.
+	proseBudget := o.helpHeight() - 1
+	wrapped := strings.Split(ansi.Wrap(o.selectedRow().footerText(), o.innerWidth(), ""), "\n")
+	require.Greater(t, len(wrapped), proseBudget,
+		"the footer must need more than %d lines at inner width %d", proseBudget, o.innerWidth())
+
+	assert.Contains(t, stripANSI(strings.Join(help, "\n")), "…",
+		"the capped help ends with an ellipsis")
+	assert.Contains(t, stripANSI(o.Render()), "esc back", "the hint must remain visible")
 }
 
-// TestSettingsOverlay_LongDescriptionCapsWithEllipsis pins that on a terminal too
-// short to show the whole summary, it is capped with a trailing ellipsis and the hint
-// still renders.
+// TestSettingsOverlay_HelpCutLineStaysWithinInner pins the help pane's inner defense
+// directly: when the prose is capped to the pane's height and the last kept line is already
+// full-width, appending the ellipsis must not push it past the inner width. If it did, the
+// lipgloss box would soft-wrap that line, add a row, and clip the pinned hint.
 //
-// Height 12 is the size the cap needs now: maxDescLines is height-11, and the widest
-// footer text wraps to more than one line at inner width 60. The summary/detail split
-// shortened every help string from as much as 443 chars to at most 74, so the heights
-// this test used before (14/15) no longer reach the capping branch at all — they would
-// pass whether or not the cap works.
-func TestSettingsOverlay_LongDescriptionCapsWithEllipsis(t *testing.T) {
-	o := NewSettingsOverlay(config.DefaultConfig())
-	o.SetSize(80, 12) // maxDescLines = 1, against a multi-line footer
-	settingsAt(t, o, widestFooterRow(t))
-	out := stripANSI(o.Render())
-	assert.Contains(t, out, "…", "a short terminal caps the description with an ellipsis")
-	assert.Contains(t, out, "esc close", "the hint must remain visible")
-}
-
-// TestSettingsOverlay_FooterCutLineStaysWithinInner pins the footer's inner
-// defense directly: when the description is capped on a short terminal and the
-// last kept line is already full-width, appending the ellipsis must not push it
-// past the inner width. If it did, Render's lipgloss box would soft-wrap that
-// line, add a row, and clip the pinned hint.
-//
-// 80x12 with update_base_on_create is the case that trips xansi.Truncate under the
-// summary budget: its footer text wraps so that the first (and only kept) line is
-// exactly 60 cells — one over the inner-1 threshold the branch guards.
-//
-// This row is named rather than derived, and it is deliberately *not* the widest
-// footer — widest and worst-case are different selectors here. The widest row's first
-// line happens to wrap well short of the threshold, so it never reaches the truncate
-// branch at all; swapping widestFooterRow in here would quietly downgrade this to a
-// test of the ellipsis alone. The precondition below is what holds the choice in place,
-// and it measures `key` — the same row the cursor is on — so it fails both ways it can
-// rot: a copy edit that moves the wrap point, and a swap to a row that never reaches
-// the branch. Reading the key from a literal a second time would leave the two free to
-// diverge, and the swap would pass.
-func TestSettingsOverlay_FooterCutLineStaysWithinInner(t *testing.T) {
-	const key = "update_base_on_create"
-
-	o := NewSettingsOverlay(config.DefaultConfig())
-	o.SetSize(80, 12)
-	settingsAt(t, o, key)
-	inner := o.innerWidth()
-
-	firstLine := strings.Split(
-		ansi.Wrap(rowByKey(t, config.DefaultConfig(), key).footerText(), inner, ""), "\n")[0]
-	require.Greater(t, ansi.StringWidth(firstLine), inner-1,
-		"row %q's first wrapped line is %d cells, not over inner-1 (%d): the hard-truncate "+
-			"branch never fires, so this test would only be checking the ellipsis",
-		key, ansi.StringWidth(firstLine), inner-1)
-
-	footer := o.renderFooter(inner)
-	for i, line := range footer {
-		assert.LessOrEqualf(t, ansi.StringWidth(line), inner,
-			"footer line %d must stay within inner width %d after capping", i, inner)
+// The case is DERIVED rather than named. The pre-PR-B version hardcoded update_base_on_create
+// at 80x12 because its first wrapped line was exactly 60 cells at the old inner width of 60 —
+// a fact PR B invalidates by widening the box and by capping against a prose budget that
+// reserves a row for the context line. Searching for a real case keeps the test honest across
+// the next copy edit; if no case exists the test says so rather than quietly checking nothing.
+func TestSettingsOverlay_HelpCutLineStaysWithinInner(t *testing.T) {
+	type hit struct {
+		key           string
+		width, height int
 	}
-	// The ellipsis confirms the cap actually fired, so the width check above is
-	// exercising the truncate path rather than a description that simply fit.
-	assert.Contains(t, stripANSI(strings.Join(footer, "\n")), "…",
-		"the capped description must end with an ellipsis")
+	var found []hit
+	for _, size := range []struct{ w, h int }{{40, 24}, {36, 20}, {32, 16}, {50, 13}, {44, 12}} {
+		o := NewSettingsOverlay(config.DefaultConfig())
+		o.SetSize(size.w, size.h)
+		for _, r := range newSettingRows(config.DefaultConfig()) {
+			settingsAt(t, o, r.key)
+			if strings.Contains(stripANSI(strings.Join(o.helpLines(), "\n")), "…") {
+				found = append(found, hit{r.key, size.w, size.h})
+			}
+		}
+	}
+	require.NotEmpty(t, found,
+		"no row's help is capped at any tested size, so the ellipsis-append branch is "+
+			"unreachable under the current copy — report this rather than weakening the test")
+
+	for _, f := range found {
+		o := NewSettingsOverlay(config.DefaultConfig())
+		o.SetSize(f.width, f.height)
+		settingsAt(t, o, f.key)
+		inner := o.innerWidth()
+		for i, line := range o.helpLines() {
+			assert.LessOrEqualf(t, ansi.StringWidth(stripANSI(line)), inner,
+				"help line %d must stay within inner width %d after capping (row %q at %dx%d)",
+				i, inner, f.key, f.width, f.height)
+		}
+		// The box must not have grown either: a soft-wrapped help line is exactly how the
+		// pinned hint used to get clipped.
+		assert.LessOrEqualf(t, lipgloss.Height(o.Render()), f.height,
+			"row %q at %dx%d grew the box past the terminal", f.key, f.width, f.height)
+	}
 }
 
 func TestSettingsOverlay_ErrShownInRender(t *testing.T) {
