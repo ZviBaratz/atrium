@@ -15,10 +15,45 @@ vocabulary and key grammar go to a new `settings_nav.go`. `settings_schema.go` i
 The one new fact the panel needs from outside is session-derived: whether `ui.List`
 currently renders account clusters, injected by `home`.
 
-**Tech Stack:** Go 1.26, Bubble Tea, lipgloss, `charmbracelet/x/ansi`, testify. Design
-record: `docs/superpowers/specs/2026-07-25-configuration-panel-design.md` (below: "the
-spec"). Predecessor: `docs/superpowers/plans/2026-07-25-configuration-panel-pr-a.md`
-(below: "PR A's plan"), merged as #482.
+**Tech Stack:** Go 1.25 (`go.mod:3`), Bubble Tea, lipgloss, `charmbracelet/x/ansi`,
+testify. Design record: `docs/superpowers/specs/2026-07-25-configuration-panel-design.md`
+(below: "the spec"). Predecessor:
+`docs/superpowers/plans/2026-07-25-configuration-panel-pr-a.md` (below: "PR A's plan"),
+merged as #482.
+
+## Review corrections (read this first)
+
+This plan was reviewed adversarially before implementation and revised. Two reviewers
+converged on the same top defects; the fixes are folded into the tasks below, but they are
+listed here because several **change the design**, not just a test:
+
+1. **The overflow marker used to overwrite the cursor's own line**, hiding the selected
+   row whenever anything was below it. `rowsPaneLines` now keeps the cursor one line inside
+   the window (Task 5 Step 6), and `TestSelectedRowIsAlwaysVisible` sweeps for it.
+2. **The inert reason chip was dropped at 80×24** — the degradation floor — because
+   `valueCell` spent the whole slack on inline enum alternatives with nothing reserved for
+   the badge. The priority is now **alternatives first to go, then the badge, then the
+   value** (Task 7 Step 4), which refines spec §10: §10 never contemplated the
+   alternatives competing with the badge.
+3. **The rail truncated silently below 24 rows**, so the current entry could be off-screen
+   with no indication. It now windows around its cursor (Task 5 Step 5).
+4. **`home.settingsRail`'s zero value is 0 — All settings** — which spec §4 explicitly
+   excludes as the landing, so every fresh run would have opened on the flat view. It is
+   now a `*int` (Task 9 Step 6).
+5. **One new sweep replaces three blind spots.** Every visibility guard ran at 100×32,
+   guard 4 ran at the one height where 13 entries fit by exactly 0, and guard 6's narrowest
+   sample was 3 cells above the overflow. Tasks 5 and 7 each add a width × height sweep.
+6. Smaller, all real: the editing row was misaligned by one cell; the position counter was
+   the first thing the help pane dropped despite its doc saying "always"; `detail` never
+   reached the help pane, contradicting spec §3's mockup; single-pane drill-in showed no
+   category name anywhere; `group_mode`'s chip escaped the completeness guard written for
+   it; `composeRowLine`'s narrow branch returned a line *wider* than the pane; and D3's
+   PgUp/PgDn were handled in the `?` view but not in the rows pane.
+
+Six prescribed tests could not have passed as written and are corrected in place. The
+recurring cause is worth naming, because it will recur: **a test whose arithmetic was
+reasoned about rather than run.** Where a step below says "verify by printing it once
+while iterating", do that rather than trusting the number.
 
 ## Global Constraints
 
@@ -44,7 +79,7 @@ spec"). Predecessor: `docs/superpowers/plans/2026-07-25-configuration-panel-pr-a
   fail. Overflow assertions go on the plain-text composition functions
   (`rowLineParts.plain()`, `railLines()`, `helpLines()`), not on `Render()`'s output.
 - **Never resolve a filesystem-derived display value at package init.** `sync.OnceValue`,
-  as `configFilePath` does (`settings_schema.go:296`). A package-level var initializer
+  as `configFilePath` does (`settings_schema.go:289`). A package-level var initializer
   runs *before* `TestMain`, so it captures the developer's real `HOME` no matter what the
   suite sandboxes, and no `TestMain` can repair it (CLAUDE.md: tests must never read the
   user's real data dir).
@@ -97,7 +132,7 @@ box height        = settingsVChrome + paneHeight() + helpBlockHeight()
 |---|---|---|---|---|---|
 | 24 | 3 | 4 | **13** | 24 | pane 13 **== the 13 rail entries** — exactly the budget `TestCategoryCountFitsTheRailBudget` reserves |
 | 40 | 3 | 4 | 29 | 40 | |
-| 14 | 3 | 4 | 3 | 10 | ...no: `clamp(14−7−4=3, 3, 57)=3`, box 10 ≤ 14 |
+| 14 | 3 | 4 | 3 | **14** | zero slack: `paneHeight` is at its `settingsMinBody` floor and the box exactly fills the terminal |
 | 12 | 1 | 2 | 3 | 12 | help sheds lines rather than eating the list |
 | 11 | 0 | 0 | 4 | 11 | |
 | 10 | 0 | 0 | 3 | 10 | |
@@ -122,7 +157,7 @@ That independence is the fix for D5 and is what guard 5 pins.
 | **Create** `ui/overlay/settings_render.go` | The two-pane renderer: `railLines`, `rowsPaneLines`, `rowLineParts`/`composeRowLine`, `enumValueCandidates`, `helpLines`, `contextLine`, `inertReason`, separator/divider, single-pane fallback, `expandedHelpContent`/`expandedHelpLines`, `hintLine` |
 | **Create** `ui/overlay/settings_nav_test.go` | Focus transitions, layered `Esc`, `←`/`→`-is-always-the-value, `rowRange`, guard 11 |
 | **Create** `ui/overlay/settings_render_test.go` | Guards 4, 5, 6, 7, 10; unstyled overflow; the derived threshold; the visibility signals; expanded help |
-| **Modify** `ui/overlay/settings_test.go` | The 13 enumerated adaptations (Task 10) |
+| **Modify** `ui/overlay/settings_test.go` | The enumerated adaptations (Task 10 Steps 1–11) |
 | **Modify** `ui/theme/theme.go`, `ui/theme/registry.go`, `ui/theme/theme_test.go` | The two new glyphs |
 | **Modify** `app/help_legend_test.go` | The **fifth** glyph site: the reflection loop's `excluded` map |
 | **Modify** `ui/list.go`, `ui/list_render.go` | Export `AccountClusteringVisible()` as the single definition of the clustering gate |
@@ -139,8 +174,8 @@ what keeps both halves reviewable.
 **Files:**
 - Modify: `ui/theme/theme.go:38-63` (the `Glyphs` struct)
 - Modify: `ui/theme/registry.go:53-80` (`plainGlyphs`), `:99-132` (`asciiGlyphs`)
-- Modify: `ui/theme/theme_test.go:110-132` (`assertGlyphWidths`), `:84-105` (`TestGlyphsForFidelityRungs`)
-- Modify: `app/help_legend_test.go:29-37` (the `excluded` map)
+- Modify: `ui/theme/theme_test.go:110-132` (`assertGlyphWidths`), `:89-105` (`TestGlyphsForFidelityRungs`)
+- Modify: `app/help_legend_test.go:30-37` (the `excluded` map)
 
 **Interfaces:**
 - Consumes: nothing.
@@ -148,7 +183,7 @@ what keeps both halves reviewable.
   palette × rung. Every later task's renderer reads them.
 
 > **A new glyph costs FIVE sites, not four.** Beyond the struct, the rungs,
-> `assertGlyphWidths` and `TestGlyphsForFidelityRungs`, `app/help_legend_test.go:38-52`
+> `assertGlyphWidths` and `TestGlyphsForFidelityRungs`, `app/help_legend_test.go:39-52`
 > reflects over **every** `Glyphs` field and fails on any new one unless it appears in the
 > `?` legend or in the documented `excluded` map. Both new glyphs are panel chrome, not
 > row vocabulary, so both go in `excluded` — following the `SelectionMark` / `FoldOpen`
@@ -223,6 +258,13 @@ and in `asciiGlyphs()`:
 
 `nerdGlyphs()` needs no override: a Nerd Font renders both plain runes, and inventing a
 PUA icon for a bullet would only risk a width-2 glyph.
+
+Two ascii collisions are deliberate and worth noting in review before someone raises them:
+`Modified = "*"` also spells `Ready`, and `Handoff = ">"` also spells `FoldClosed`. Neither
+glyph ever shares a frame with its twin — `Modified` and `Handoff` appear only inside the
+settings panel, `Ready` and `FoldClosed` only on a session row — so no single screen shows
+both meanings. Inventing a distinct 7-bit glyph would mean a less legible one, which is the
+opposite of what the ascii rung is a floor *for*.
 
 - [ ] **Step 5: Categorize them in the legend guard**
 
@@ -368,15 +410,21 @@ func TestRailIndexForCategoryFindsEveryCategory(t *testing.T) {
 	}
 }
 
-// TestRailLabelsFitTheRailWidth pins that railWidth() is wide enough for every label —
-// the rail never truncates, because a truncated category name is unrecognizable and the
-// rail is the panel's only orientation.
-func TestRailLabelsFitTheRailWidth(t *testing.T) {
-	budget := railWidth() - railMarkerCells - railTrailCells
+// TestRailWidthTracksItsLongestLabel pins that railWidth() is MEASURED rather than written
+// down, which is what makes the degradation threshold move when a category is renamed
+// (Task 6). Asserting that each label fits railWidth() would be a tautology — railWidth()
+// is defined as the max of those very labels — so what is pinned here is the derivation,
+// and Task 5's TestRailRendersEveryLabelWhole pins that nothing truncates in practice.
+func TestRailWidthTracksItsLongestLabel(t *testing.T) {
+	widest, label := -1, ""
 	for _, e := range railEntries() {
-		assert.LessOrEqualf(t, ansi.StringWidth(e.label), budget,
-			"rail label %q is %d cells, over the %d-cell budget", e.label, ansi.StringWidth(e.label), budget)
+		if n := ansi.StringWidth(e.label); n > widest {
+			widest, label = n, e.label
+		}
 	}
+	assert.Equal(t, railMarkerCells+widest+railTrailCells, railWidth())
+	assert.Equal(t, "Worktrees & git", label,
+		"the widest rail label today; if this changed, the threshold moved with it")
 }
 ```
 
@@ -389,6 +437,10 @@ PATH="/home/zvi/.local/share/mise/installs/go/1.26.4/bin:$PATH" \
 Expected: FAIL to build — `undefined: railEntries`, `undefined: railWidth`.
 
 - [ ] **Step 3: Create `settings_nav.go` with the rail vocabulary**
+
+Task 3 adds key handlers to this file, so it will need
+`tea "github.com/charmbracelet/bubbletea"` then — but **not yet**: an unused import does not
+compile. Add it in Task 3, with the handlers.
 
 ```go
 package overlay
@@ -436,7 +488,10 @@ func railEntries() []railEntry {
 	return append(entries,
 		railEntry{
 			label: "Profiles", kind: railHandoff,
-			note: "Agent profiles are the profiles list in config.json for now.",
+			// Stated as a plain fact about where the data lives, not as a roadmap promise:
+			// PR D replaces this entry with an editor, and a note saying "not yet" would be
+			// the first thing to go stale.
+			note: "Agent profiles are edited in config.json, under the profiles key.",
 		},
 		railEntry{
 			label: "Accounts", kind: railHandoff,
@@ -976,6 +1031,14 @@ func (s *SettingsOverlay) handleRowsKey(msg tea.KeyMsg) (closed bool, changedKey
 			s.cursor++
 			s.lastErr = ""
 		}
+	case "pgup", "pgdown", "home", "end":
+		// The rest of D3: reaching the last row of the old flat list took 36 keypresses,
+		// and the rail only fixes the "jump to a section" half. Spec §7's table omits these,
+		// but D3 names them explicitly, and handleHelpKey already scrolls with the same keys
+		// — a panel where PgDn works in the help view and not in the list is just
+		// inconsistent.
+		s.cursor = clamp(s.pagedCursor(msg.String(), start, end), start, end-1)
+		s.lastErr = ""
 	case "left":
 		return false, s.cycleEnum(row, -1)
 	case "right":
@@ -996,7 +1059,28 @@ func (s *SettingsOverlay) handleRowsKey(msg tea.KeyMsg) (closed bool, changedKey
 	}
 	return false, ""
 }
+
+// pagedCursor resolves a paging key to a target row index within [start,end). It is a
+// separate function only so the four keys read as one rule instead of four cases.
+func (s *SettingsOverlay) pagedCursor(key string, start, end int) int {
+	page := max(1, s.paneHeight()-1) // overlap one row so context is never lost
+	switch key {
+	case "pgup":
+		return s.cursor - page
+	case "pgdown":
+		return s.cursor + page
+	case "home":
+		return start
+	default: // "end"
+		return end - 1
+	}
+}
 ```
+
+`paneHeight` arrives in Task 5. To keep this task's package green on its own, write
+`pagedCursor` with a literal page size of `10` now and switch it to `s.paneHeight()-1` in
+Task 5 Step 4 — or implement Task 5 before running the full suite. Do not leave a stub
+behind.
 
 Task 8 adds the `case "?":` arm here alongside the view it opens.
 
@@ -1154,16 +1238,20 @@ func TestComposeRowLineIsExactlyThePaneWidth(t *testing.T) {
 // the value for no reason.
 func TestComposeRowLineDropsTheBadgeBeforeTruncatingTheValue(t *testing.T) {
 	const (
-		width  = 38
+		width  = 50
 		labelW = 20
 		value  = "‹off› bell desktop osc"
 		badge  = "new sessions"
 	)
-	// Precondition: at this width the label, value and badge cannot all fit. Asserted
-	// rather than assumed, so a later constant change cannot make this test vacuous.
-	require.Greater(t,
-		rowMarkerCells+labelW+rowLabelGap+ansi.StringWidth(value)+ansi.StringWidth(badge)+1,
-		width, "the case must actually be over budget or this proves nothing")
+	// TWO preconditions, because the case only exercises the priority order when both
+	// hold: the badge must not fit, AND the value must fit once it is gone. With only the
+	// first, the value is truncated too and the second assertion below is impossible —
+	// which is exactly how the first draft of this test was unpassable.
+	avail := width - (rowMarkerCells + labelW + rowLabelGap)
+	require.Greater(t, ansi.StringWidth(value)+ansi.StringWidth(badge)+1, avail,
+		"the badge must not fit in the %d-cell slack, or nothing is dropped", avail)
+	require.LessOrEqual(t, ansi.StringWidth(value), avail,
+		"the value must fit once the badge is gone, or this tests truncation instead")
 
 	p := composeRowLine(width, labelW, "▎", " ", "Notifications", value, badge)
 	assert.Empty(t, p.badge, "the badge is dropped first")
@@ -1181,16 +1269,41 @@ func TestComposeRowLineTruncatesTheValueWithATailEllipsis(t *testing.T) {
 	assert.Equal(t, 30, ansi.StringWidth(p.plain()))
 }
 
-// TestComposeRowLineNeverTruncatesTheLabel pins the rule spec §10 states most emphatically:
-// a half-written label makes the row unidentifiable, so the label is the one column that is
-// never sacrificed. On a pane too narrow even for the label, the LINE goes short rather
-// than the label going partial.
-func TestComposeRowLineNeverTruncatesTheLabel(t *testing.T) {
-	const label = "Smart dispatch auto-create"
-	for _, width := range []int{10, 20, 28, 31, 32, 40} {
-		p := composeRowLine(width, len(label), "▎", "•", label, "[ ] off", "live")
-		assert.Containsf(t, p.head, label, "label truncated at pane width %d: %q", width, p.head)
-		assert.NotContainsf(t, p.head, "…", "no ellipsis may appear in the label column (width %d)", width)
+// TestComposeRowLineNeverTruncatesTheLabelThatFits pins the rule spec §10 states most
+// emphatically: a half-written label makes the row unidentifiable, so the label is the last
+// column sacrificed. The value goes first, then it goes short — but as long as the label
+// column fits the pane, it is rendered whole.
+//
+// The labelW values are deliberately SMALLER than the label, which is where padRight cannot
+// save the test: the first draft passed labelW = len(label) and therefore proved only that
+// padRight does not truncate, which it never does.
+func TestComposeRowLineNeverTruncatesTheLabelThatFits(t *testing.T) {
+	const label = "Smart dispatch auto-create" // 26 cells
+	for _, tc := range []struct{ width, labelW int }{
+		{52, 26}, {40, 26}, {34, 26}, {31, 26}, // labelW == the label
+		{52, 12}, {40, 10}, {34, 8}, // labelW UNDER it: padRight must not clip either
+	} {
+		p := composeRowLine(tc.width, tc.labelW, "▎", "•", label, "[ ] off", "live")
+		assert.Containsf(t, p.head, label,
+			"label truncated at width %d / labelW %d: %q", tc.width, tc.labelW, p.head)
+		assert.NotContainsf(t, p.head, "…",
+			"no ellipsis may appear in the label column (width %d)", tc.width)
+	}
+}
+
+// TestComposeRowLineNeverExceedsThePaneEvenWhenTheLabelCannotFit pins the floor below which
+// the label rule yields. Below rowMarkerCells + label + rowLabelGap there is no line that
+// both shows the label whole and fits the pane, and an over-wide line is the worse failure:
+// lipgloss soft-wraps it, the box grows a row, and the pinned hint gets clipped off the
+// bottom.
+//
+// Hard-clipping there is parity with the pre-PR-B renderer, which truncated every body line
+// to the inner width (settings.go:318) — not a new regression.
+func TestComposeRowLineNeverExceedsThePaneEvenWhenTheLabelCannotFit(t *testing.T) {
+	for width := 4; width <= 40; width++ {
+		p := composeRowLine(width, 26, "▎", "•", "Smart dispatch auto-create", "[ ] off", "live")
+		assert.LessOrEqualf(t, ansi.StringWidth(p.plain()), width,
+			"composed line must never exceed the pane, even at width %d: %q", width, p.plain())
 	}
 }
 
@@ -1198,16 +1311,15 @@ func TestComposeRowLineNeverTruncatesTheLabel(t *testing.T) {
 // right edge — the whole point of a badge column is that it lines up across rows so a
 // user can scan "which of these apply on restart?" without reading each line.
 func TestComposeRowLineRightAlignsTheBadge(t *testing.T) {
-	var ends []int
 	for _, label := range []string{"Theme", "Glyph set", "Hint bar"} {
 		p := composeRowLine(52, 12, " ", " ", label, "‹ on ›", "live")
-		require.NotEmpty(t, p.badge, "the badge must fit at this width")
-		assert.True(t, strings.HasSuffix(p.plain(), "live"), "the badge must be flush right")
-		ends = append(ends, ansi.StringWidth(p.plain()))
+		require.NotEmptyf(t, p.badge, "the badge must fit at this width (label %q)", label)
+		assert.Truef(t, strings.HasSuffix(p.plain(), "live"),
+			"the badge must be flush right for label %q: %q", label, p.plain())
 	}
-	for _, e := range ends {
-		assert.Equal(t, ends[0], e, "every row's badge must end in the same column")
-	}
+	// (Alignment ACROSS rows follows from every line being exactly the pane width, which
+	// TestComposeRowLineIsExactlyThePaneWidth pins. Re-asserting it here by comparing three
+	// widths that are all `width` by construction would be a tautology.)
 }
 
 // TestComposeRowLineKeepsTheMarkerColumnsSeparate pins spec §10's explicit requirement:
@@ -1221,12 +1333,16 @@ func TestComposeRowLineKeepsTheMarkerColumnsSeparate(t *testing.T) {
 
 	// And the columns hold their positions when only one mark is present, so labels stay
 	// aligned down the pane.
-	selOnly := composeRowLine(52, 12, "▎", " ", "Theme", "‹ atrium ›", "live")
-	modOnly := composeRowLine(52, 12, " ", "•", "Theme", "‹ atrium ›", "live")
-	neither := composeRowLine(52, 12, " ", " ", "Theme", "‹ atrium ›", "live")
-	for _, p := range []rowLineParts{selOnly, modOnly, neither} {
-		assert.Equal(t, rowMarkerCells, strings.Index(p.head, "T"),
-			"the label must start at the same column whatever the marks: %q", p.head)
+	//
+	// The offset is measured in CELLS, not bytes: strings.Index would return 5 for the
+	// glyph cases, since "▎" and "•" are three bytes each, and comparing that to
+	// rowMarkerCells (3) would fail two of the three cases for the wrong reason.
+	for _, marks := range [][2]string{{"▎", " "}, {" ", "•"}, {" ", " "}, {"▎", "•"}} {
+		p := composeRowLine(52, 12, marks[0], marks[1], "Theme", "‹ atrium ›", "live")
+		at := strings.Index(p.head, "Theme")
+		require.GreaterOrEqualf(t, at, 0, "the label must be present: %q", p.head)
+		assert.Equalf(t, rowMarkerCells, ansi.StringWidth(p.head[:at]),
+			"the label must start at cell %d whatever the marks %v: %q", rowMarkerCells, marks, p.head)
 	}
 }
 
@@ -1342,13 +1458,23 @@ func (p rowLineParts) plain() string { return p.head + p.value + p.gap + p.badge
 // sel and modified are single-cell strings (a glyph or a space); passing an empty string
 // would collapse the columns and misalign every label below.
 func composeRowLine(width, labelW int, sel, modified, label, value, badge string) rowLineParts {
+	// Clamp the label column to what the pane can hold. The never-truncate-the-label rule
+	// holds wherever the label CAN fit; below that there is no line that both shows it whole
+	// and fits, and an over-wide line is the worse failure — lipgloss soft-wraps it, the box
+	// grows a row, and the pinned hint gets clipped. The pre-PR-B renderer hard-clipped every
+	// body line to the inner width (settings.go:318), so this is parity, not a regression.
+	if maxLabel := width - rowMarkerCells - rowLabelGap; labelW > maxLabel {
+		labelW = max(0, maxLabel)
+	}
 	p := rowLineParts{
 		head: sel + modified + " " + padRight(label, labelW) + strings.Repeat(" ", rowLabelGap),
 	}
+	if ansi.StringWidth(p.head) > width {
+		p.head = ansi.Truncate(p.head, width, "")
+		return p
+	}
 	avail := width - ansi.StringWidth(p.head)
 	if avail < 1 {
-		// The label alone overruns the pane. Keep it whole and let the line run short —
-		// the alternative is a row you cannot identify.
 		return p
 	}
 	// Keep the badge if the value, the badge and at least one separating space all fit.
@@ -1409,18 +1535,24 @@ Each mutation targets a different rung, because a single mutation would only pro
    `TestComposeRowLineDropsTheBadgeBeforeTruncatingTheValue` FAILS (`p.badge` non-empty).
    Revert by editing the block back.
 2. **Truncate the label.** Change `padRight(label, labelW)` to
-   `ansi.Truncate(padRight(label, labelW), labelW, "…")` and shrink the case: call
-   `composeRowLine(20, 10, ...)` with the 26-cell label. Expected:
-   `TestComposeRowLineNeverTruncatesTheLabel` FAILS on the ellipsis assertion. Revert.
-3. **Break the width invariant.** Drop the final `p.gap = strings.Repeat(...)`. Expected:
+   `ansi.Truncate(padRight(label, labelW), labelW, "…")`. Expected:
+   `TestComposeRowLineNeverTruncatesTheLabelThatFits` FAILS on one of the
+   `labelW` < label cases — which is precisely why those cases were added; with
+   `labelW == len(label)` throughout, `padRight` never truncates and the mutation would
+   have gone undetected. Revert.
+3. **Remove the label clamp.** Delete the `if maxLabel := ...` block. Expected:
+   `TestComposeRowLineNeverExceedsThePaneEvenWhenTheLabelCannotFit` FAILS at the narrow
+   widths, while every other composer test still passes — the clamp only matters below the
+   floor. Revert.
+4. **Break the width invariant.** Drop the final `p.gap = strings.Repeat(...)`. Expected:
    `TestComposeRowLineIsExactlyThePaneWidth` FAILS on the `no badge at all` case, and
    `TestComposeRowLineRightAlignsTheBadge` still passes — which is why the exact-width
    test is separate from the alignment test. Revert.
-4. **Reverse the candidate order.** Return `[]string{compact, rich}` from
+5. **Reverse the candidate order.** Return `[]string{compact, rich}` from
    `enumValueCandidates`. Expected:
    `TestEnumValueCandidatesLeadWithTheAlternatives` FAILS on the widest-first assertion.
    Revert.
-5. Re-run and confirm green.
+6. Re-run and confirm green.
 
 - [ ] **Step 7: Lint and commit**
 
@@ -1443,12 +1575,23 @@ git commit -m "feat(settings): row line composer with spec 10's truncation prior
 
 **Interfaces:**
 - Consumes: Tasks 2–4.
-- Produces: `helpPaneLines`; `(*SettingsOverlay).helpHeight()`, `.helpBlockHeight()`,
-  `.paneHeight()`, `.maxPaneLines()`, `.rowsPaneWidth()`, `.visibleLabelWidth()`,
-  `.longestRowLabel()`, `.minRowsPaneWidth()`, `.twoPaneMinInner()`, `.twoPane()`,
-  `.editorWidth()`; `paneLine{text, rowIdx}`; `.railLines()`, `.rowsPaneLines()`,
-  `.renderRowLine(i, width, labelW int) string`, `.helpLines()`, `.contextLine(width int)
-  string`, `.separatorLine()`, `.hintLine()`, `paneDivider()`. Tasks 6–9 extend them.
+- Produces, all in `settings_render.go` unless noted:
+  - constants: `helpPaneLines` (in `settings.go`)
+  - geometry: `(*SettingsOverlay).helpHeight()`, `.helpBlockHeight()`, `.paneHeight()`,
+    `.maxPaneLines()`, `.rowsPaneWidth()`, `.visibleLabelWidth()`, `.longestRowLabel()`,
+    `.minRowsPaneWidth()`, `.twoPaneMinInner()`, `.twoPane()`, `.editorWidth()`
+  - content: `paneLine{text, rowIdx}`, `.rowsPaneContent(width int) []paneLine`,
+    `.handoffPaneContent(e railEntry, width int) []paneLine`,
+    `.renderRowLine(i, width, labelW int) string`,
+    `.valueCell(i, width, labelW int, badge string) string`, `.valueWasTruncated() bool`
+  - layout: `windowPane(lines []string, cursor, budget int) []string`, `.railLines()`,
+    `.rowsPaneLines()`, `.bodyLines()`, `.helpLines()`, `.contextLine(width int) string`,
+    `.separatorLine()`, `.hintLine()`, `paneDivider()`
+
+  Tasks 6–9 extend `bodyLines`, `rowsPaneContent`, `renderRowLine`, `valueCell`,
+  `contextLine` and `hintLine`. **`valueCell` takes its `badge` argument from this task
+  onward** even though it is always `""` here — Task 7 is what passes a real one, and
+  changing the signature later would mean touching every call site twice.
 
 **Guard 5 is the first test written in this task**, before any renderer code. It is the
 regression test for D5 — the defect that motivated the entire redesign. At 80×24,
@@ -1586,6 +1729,66 @@ func TestNoPaneLineOverflowsItsWidth(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestSelectedRowIsAlwaysVisible pins the invariant the panel exists to serve: whatever the
+// terminal size, whatever the category, the row the cursor is on is rendered.
+//
+// This is the guard the plan's first draft lacked, and it would have caught a real defect:
+// with the cursor pinned to the LAST visible line, the "↓ n more" overflow marker lands on
+// top of it, so the selected row vanished for every cursor position except the very last —
+// in All settings at 80x24 past row 13, and in every category on a terminal of 14 rows or
+// fewer. Guard 5 counts lines and cannot see it; only asserting the label can.
+func TestSelectedRowIsAlwaysVisible(t *testing.T) {
+	sizes := []struct{ w, h int }{{100, 32}, {80, 24}, {80, 14}, {80, 12}, {72, 24}, {60, 20}, {50, 16}}
+	for _, size := range sizes {
+		t.Run(fmt.Sprintf("%dx%d", size.w, size.h), func(t *testing.T) {
+			o := NewSettingsOverlay(config.DefaultConfig())
+			o.SetSize(size.w, size.h)
+			for _, r := range newSettingRows(config.DefaultConfig()) {
+				for _, entry := range []int{railIndexForCategory(r.category), 0} {
+					require.True(t, o.SelectRow(r.key))
+					o.railCursor = entry // 0 exercises the flat view, where windowing bites
+					o.syncCursorToRail()
+					pane := stripANSI(strings.Join(o.rowsPaneLines(), "\n"))
+					assert.Containsf(t, pane, r.label,
+						"selected row %q is not rendered in entry %q at %dx%d",
+						r.key, railEntries()[entry].label, size.w, size.h)
+				}
+			}
+		})
+	}
+}
+
+// TestCurrentRailEntryIsAlwaysVisible is the rail's half of the same invariant. Below 24 rows
+// the rail cannot show all thirteen entries, and the first draft simply dropped the tail —
+// so navigating to Accounts on an 80x20 terminal left no visible selection mark anywhere.
+func TestCurrentRailEntryIsAlwaysVisible(t *testing.T) {
+	for _, size := range []struct{ w, h int }{{100, 32}, {80, 24}, {80, 20}, {80, 14}, {80, 12}} {
+		t.Run(fmt.Sprintf("%dx%d", size.w, size.h), func(t *testing.T) {
+			o := NewSettingsOverlay(config.DefaultConfig())
+			o.SetSize(size.w, size.h)
+			for i, e := range railEntries() {
+				o.railCursor = i
+				o.syncCursorToRail()
+				rail := stripANSI(strings.Join(o.railLines(), "\n"))
+				assert.Containsf(t, rail, e.label,
+					"current rail entry %q is not rendered at %dx%d", e.label, size.w, size.h)
+			}
+		})
+	}
+}
+
+// TestRailRendersEveryLabelWhole pins that no rail label is ever clipped. The rail is the
+// panel's only orientation, so a half-written category name is worse than a scrolled rail.
+func TestRailRendersEveryLabelWhole(t *testing.T) {
+	o := NewSettingsOverlay(config.DefaultConfig())
+	o.SetSize(80, 24) // the floor, where all thirteen fit unscrolled
+	rail := stripANSI(strings.Join(o.railLines(), "\n"))
+	assert.NotContains(t, rail, "…", "no rail label may be truncated")
+	for _, e := range railEntries() {
+		assert.Containsf(t, rail, e.label, "rail label %q is clipped", e.label)
 	}
 }
 
@@ -1785,15 +1988,20 @@ func (s *SettingsOverlay) paneHeight() int {
 
 ```go
 // railLines renders the left rail, padded to the shared pane height so the divider column
-// runs its full length. Every entry is always shown: the rail is the panel's only
-// orientation, and TestRailFitsUnscrolledAtTheFloor is what keeps a fourteenth entry from
-// quietly starting it scrolling.
+// runs its full length.
+//
+// At the 80x24 floor all thirteen entries fit unscrolled — spec §4's invariant, pinned by
+// TestRailFitsUnscrolledAtTheFloor. Below 24 rows they cannot, so the rail windows around
+// its cursor exactly as the rows pane does. Spec §4 anticipates this ("the rail windows like
+// today's body does"); what it must never do is silently drop the entries past the budget,
+// which would leave the current entry off-screen with no indication of where you are.
 func (s *SettingsOverlay) railLines() []string {
 	t := theme.Current()
 	labelW := railWidth() - railMarkerCells - railTrailCells
+	entries := railEntries()
 
-	lines := make([]string, 0, s.paneHeight())
-	for i, e := range railEntries() {
+	rendered := make([]string, 0, len(entries))
+	for i, e := range entries {
 		mark := " "
 		if i == s.railCursor {
 			mark = t.Glyphs.SelectionMark
@@ -1810,23 +2018,70 @@ func (s *SettingsOverlay) railLines() []string {
 			style = t.AccentStyle()
 		case i == s.railCursor:
 			// Current but unfocused: still legible, but the accent belongs to whichever
-			// pane is taking keys.
+			// pane is taking keys, so exactly one bright marker is on screen at a time.
 			style = t.FgStyle()
 		case e.kind == railHandoff:
 			// Dimmer than an ordinary entry: PR B cannot open these yet.
 			style = t.FaintStyle()
 		}
-		lines = append(lines, style.Render(line))
-		if len(lines) == s.paneHeight() {
-			break
+		rendered = append(rendered, style.Render(line))
+	}
+	return windowPane(rendered, s.railCursor, s.paneHeight())
+}
+
+// windowPane windows lines around a cursor index, padding to exactly budget lines and
+// replacing the edge lines with "n more" markers when content is hidden.
+//
+// The cursor is kept one line INSIDE the window whenever the budget allows, so a marker
+// overwriting an edge line can never hide the line the user is pointing at. Getting this
+// wrong is not a cosmetic bug: with the cursor pinned to the last visible line, the "↓ n
+// more" marker lands on top of it and the selected row disappears for every cursor position
+// except the very last. Pinned by TestSelectedRowIsAlwaysVisible and
+// TestCurrentRailEntryIsAlwaysVisible.
+func windowPane(lines []string, cursor, budget int) []string {
+	if budget < 1 {
+		return nil
+	}
+	out := make([]string, 0, budget)
+	if len(lines) <= budget {
+		out = append(out, lines...)
+		for len(out) < budget {
+			out = append(out, "")
 		}
+		return out
 	}
-	for len(lines) < s.paneHeight() {
-		lines = append(lines, "")
+
+	// Leave one line of margin below the cursor when there is room for it.
+	margin := 0
+	if budget >= 3 {
+		margin = 1
 	}
-	return lines
+	start := 0
+	if cursor >= budget-margin {
+		start = cursor - budget + 1 + margin
+	}
+	if maxStart := len(lines) - budget; start > maxStart {
+		start = maxStart
+	}
+	if start < 0 {
+		start = 0
+	}
+
+	out = append(out, lines[start:start+budget]...)
+	faint := theme.Current().FaintStyle()
+	if start > 0 {
+		out[0] = faint.Render(fmt.Sprintf("  ↑ %d more", start))
+	}
+	if hidden := len(lines) - start - budget; hidden > 0 {
+		out[budget-1] = faint.Render(fmt.Sprintf("  ↓ %d more", hidden))
+	}
+	return out
 }
 ```
+
+The markers overwrite the edge lines rather than adding rows, so the pane height stays
+exactly `budget`. That is safe *because* of the margin: the cursor is never on an edge line
+while `budget >= 3`, and `settingsMinBody` is 3, so the budget never drops below it.
 
 - [ ] **Step 6: Add the rows-pane renderer and its windowing**
 
@@ -1892,49 +2147,19 @@ func (s *SettingsOverlay) handoffPaneContent(e railEntry, width int) []paneLine 
 
 // rowsPaneLines renders the highlighted entry's rows, windowed around the cursor and padded
 // to the shared pane height. When the entry outgrows the pane — All settings always does —
-// the first or last visible line becomes an "n more" marker, so the panel says that more
-// exists rather than just ending (D2: no orientation).
+// an edge line becomes an "n more" marker, so the panel says that more exists rather than
+// just ending (D2: no orientation).
 func (s *SettingsOverlay) rowsPaneLines() []string {
 	content := s.rowsPaneContent(s.rowsPaneWidth())
-	budget := s.paneHeight()
-
-	out := make([]string, 0, budget)
-	if len(content) <= budget {
-		for _, l := range content {
-			out = append(out, l.text)
-		}
-	} else {
-		cursorLine := 0
-		for i, l := range content {
-			if l.rowIdx == s.cursor {
-				cursorLine = i
-				break
-			}
-		}
-		start := 0
-		if cursorLine >= budget {
-			start = cursorLine - budget + 1
-		}
-		if maxStart := len(content) - budget; start > maxStart {
-			start = maxStart
-		}
-		for _, l := range content[start : start+budget] {
-			out = append(out, l.text)
-		}
-		// Overflow markers replace the edge lines rather than adding rows, so the pane
-		// height stays exactly budget.
-		faint := theme.Current().FaintStyle()
-		if start > 0 {
-			out[0] = faint.Render(fmt.Sprintf("  ↑ %d more", start))
-		}
-		if hidden := len(content) - start - budget; hidden > 0 {
-			out[len(out)-1] = faint.Render(fmt.Sprintf("  ↓ %d more", hidden))
+	lines := make([]string, len(content))
+	cursorLine := 0
+	for i, l := range content {
+		lines[i] = l.text
+		if l.rowIdx == s.cursor {
+			cursorLine = i
 		}
 	}
-	for len(out) < budget {
-		out = append(out, "")
-	}
-	return out
+	return windowPane(lines, cursorLine, s.paneHeight())
 }
 
 // renderRowLine composes and styles one row's line. Task 7 fills in the modified marker,
@@ -1945,28 +2170,45 @@ func (s *SettingsOverlay) renderRowLine(i, width, labelW int) string {
 	row := s.rows[i]
 	selected := i == s.cursor
 
+	// Both panes always show their cursor — hiding the rows pane's while the rail has focus
+	// would leave the user unable to see where → would land. Only the STYLE differs, so
+	// exactly one accent-bright marker is on screen at a time.
 	sel := " "
+	rowStyle := t.FgStyle()
 	if selected {
 		sel = t.Glyphs.SelectionMark
+		rowStyle = t.FgStyle()
+		if s.focus == focusRows {
+			rowStyle = t.AccentStyle()
+		}
 	}
 
 	if s.editing && selected {
 		// The live text input carries its own cursor styling, so it is appended rather
 		// than composed — an editor is not a value cell and must not be truncated.
-		head := sel + " " + padRight(row.label, labelW) + strings.Repeat(" ", rowLabelGap)
+		//
+		// The head must use the SAME three marker cells composeRowLine does (selection,
+		// modified, space), or every label jumps sideways the instant Enter opens the
+		// editor. Task 7 fills the middle cell in; here it is a space.
+		head := sel + " " + " " + padRight(row.label, labelW) + strings.Repeat(" ", rowLabelGap)
 		return t.AccentStyle().Render(head) + s.input.View()
 	}
 
-	p := composeRowLine(width, labelW, sel, " ", row.label, s.valueCell(i, width, labelW), "")
+	p := composeRowLine(width, labelW, sel, " ", row.label, s.valueCell(i, width, labelW, ""), "")
 	if selected {
-		return t.AccentStyle().Render(p.plain())
+		return rowStyle.Render(p.plain())
 	}
 	return t.DimStyle().Render(p.head) + t.FgStyle().Render(p.value+p.gap+p.badge)
 }
 
-// valueCell formats a row's value by kind, taking the widest enum rendering that fits the
-// slack the label leaves.
-func (s *SettingsOverlay) valueCell(i, width, labelW int) string {
+// valueCell formats a row's value by kind.
+//
+// For an enum it takes the widest rendering that fits — and `badge` is what the caller
+// intends to put in the right-aligned column, so the ladder can step down to the compact
+// form rather than squeezing the badge out. That ordering matters: the badge carries the
+// inert reason, and a rich value that evicted it would dim a row with no explanation. See
+// Task 7, where the badge is actually passed; here it is always "".
+func (s *SettingsOverlay) valueCell(i, width, labelW int, badge string) string {
 	row := s.rows[i]
 	v := row.get(s.cfg)
 	switch row.kind {
@@ -1977,9 +2219,18 @@ func (s *SettingsOverlay) valueCell(i, width, labelW int) string {
 		return "[ ] off"
 	case kindEnum:
 		avail := width - rowMarkerCells - labelW - rowLabelGap
-		for _, c := range enumValueCandidates(v, row.options(s.cfg)) {
-			if ansi.StringWidth(c) <= avail {
-				return c
+		// Try to fit beside the badge first, then to fit the pane at all. The inline
+		// alternatives are an enrichment, so they are the first thing to go; the compact
+		// `‹ v ›` loses nothing about the current value (it is the pre-PR-B rendering).
+		budgets := []int{avail}
+		if badge != "" {
+			budgets = []int{avail - ansi.StringWidth(badge) - 1, avail}
+		}
+		for _, budget := range budgets {
+			for _, c := range enumValueCandidates(v, row.options(s.cfg)) {
+				if ansi.StringWidth(c) <= budget {
+					return c
+				}
 			}
 		}
 		return "‹ " + v + " ›"
@@ -2016,30 +2267,50 @@ func (s *SettingsOverlay) helpLines() []string {
 	style := t.DimStyle()
 	prose := s.selectedRow().footerText()
 	if s.selectedEntry().kind == railHandoff {
-		prose = s.selectedEntry().note
+		// A handoff entry's note is already the whole content of the rows pane, so echoing
+		// it here would print the same sentence twice in one frame. The pane stays blank.
+		prose = ""
 	}
 	if s.lastErr != "" {
 		prose, style = s.lastErr, t.DangerStyle()
 	}
 
-	lines := strings.Split(ansi.Wrap(prose, inner, ""), "\n")
+	// The context line carries the position readout, so it must never be the thing that gets
+	// evicted when the prose is long: capping the prose at h-1 is what makes contextLine's
+	// "always" true of the rendered panel rather than only of the function. At h == 1 the
+	// prose yields entirely — knowing where you are beats a truncated first sentence.
+	ctx := ""
 	if s.lastErr == "" && s.selectedEntry().kind != railHandoff {
-		if ctx := s.contextLine(inner); ctx != "" {
-			lines = append(lines, ctx)
-		}
+		ctx = s.contextLine(inner)
 	}
-	if len(lines) > h {
-		lines = lines[:h]
-		last := lines[h-1]
-		// Appending the ellipsis to an already-full line would push it past inner, and the
-		// lipgloss box would soft-wrap it, add a row, and clip the pinned hint.
-		if ansi.StringWidth(last) > inner-1 {
-			last = ansi.Truncate(last, inner-1, "")
+	proseBudget := h
+	if ctx != "" {
+		proseBudget = h - 1
+	}
+
+	lines := strings.Split(ansi.Wrap(prose, inner, ""), "\n")
+	if len(lines) > proseBudget {
+		lines = lines[:max(0, proseBudget)]
+		if len(lines) > 0 {
+			last := lines[len(lines)-1]
+			// Appending the ellipsis to an already-full line would push it past inner, and
+			// the lipgloss box would soft-wrap it, add a row, and clip the pinned hint.
+			if ansi.StringWidth(last) > inner-1 {
+				last = ansi.Truncate(last, inner-1, "")
+			}
+			lines[len(lines)-1] = last + "…"
 		}
-		lines[h-1] = last + "…"
 	}
 	for i, l := range lines {
 		lines[i] = style.Render(l)
+	}
+	if ctx != "" {
+		// Pad first, so the context line — and with it the position readout — is always the
+		// pane's LAST line rather than floating up under a short summary.
+		for len(lines) < h-1 {
+			lines = append(lines, "")
+		}
+		lines = append(lines, ctx)
 	}
 	for len(lines) < h {
 		lines = append(lines, "")
@@ -2083,7 +2354,7 @@ func (s *SettingsOverlay) valueWasTruncated() bool {
 	labelW := s.visibleLabelWidth()
 	width := s.rowsPaneWidth()
 	p := composeRowLine(width, labelW, " ", " ", s.selectedRow().label,
-		s.valueCell(s.cursor, width, labelW), "")
+		s.valueCell(s.cursor, width, labelW, ""), "")
 	return strings.HasSuffix(p.value, "…")
 }
 
@@ -2251,17 +2522,31 @@ would catch that defect coming back:
    PATH="/home/zvi/.local/share/mise/installs/go/1.26.4/bin:$PATH" \
      go test ./ui/overlay/ -run 'TestSelectingTheLongest|TestHelpHeight|TestBoxHeight' -v 2>&1 | tail -30
    ```
-   Expected: **all three FAIL**, naming the row whose help is wider than one line and
-   reporting the row count it stole. That triple failure is the shape of D5.
+   Expected: `TestSelectingTheLongestHelpRowKeepsTheRowCount` and
+   `TestHelpHeightIgnoresTheCursor` **both FAIL**, naming the row whose help is wider than
+   one line and reporting the row count it stole. That double failure is the shape of D5.
+   `TestBoxHeightDependsOnlyOnTheTerminal` does **not** fail — `paneHeight` absorbs whatever
+   `helpBlockHeight` returns, so the box is `height` either way. Do not expect it to; a
+   mutation step that predicts the wrong failures teaches you to distrust the next one.
 3. Revert by editing `helpHeight` back to the terminal-only form. **Do not
    `git checkout ui/overlay/settings_render.go`** — it would discard this whole task.
-4. Second mutation: change `maxPaneLines` to `return len(railEntries())`. Expected:
-   `TestMaxPaneLinesMatchesTheFlatView` FAILS. Revert.
-5. Third mutation: in `rowsPaneLines`, drop the trailing `for len(out) < budget` padding.
-   Expected: `TestRailFitsUnscrolledAtTheFloor` still passes (it measures the rail) but
-   `TestBoxHeightDependsOnlyOnTheTerminal` FAILS on a short category — which is why the
-   two are separate tests. Revert.
-6. Re-run and confirm green.
+4. **Break the pane cap.** Change `maxPaneLines` to `return len(railEntries())`. Expected:
+   `TestMaxPaneLinesMatchesTheFlatView` FAILS, and `TestBoxHeightDependsOnlyOnTheTerminal`
+   still passes (the cap is terminal-independent) — which is why the cap needs its own test.
+   Revert.
+5. **Reintroduce the cursor-overwrite bug.** In `windowPane`, set `margin = 0`
+   unconditionally. Expected: `TestSelectedRowIsAlwaysVisible` FAILS on the 80×14 and 80×12
+   sizes, and guard 5 still passes — the row count is unchanged, only *which* rows are
+   visible is wrong. That contrast is the reason both tests exist. Revert.
+6. **Reintroduce the rail truncation.** Change `railLines`'s final line to
+   `return rendered[:min(len(rendered), s.paneHeight())]`. Expected:
+   `TestCurrentRailEntryIsAlwaysVisible` FAILS at 80×20 naming a tail entry, while
+   `TestRailFitsUnscrolledAtTheFloor` still passes — it only ever looks at 80×24, where the
+   rail fits by exactly zero rows. Revert.
+7. **Break the row-line width.** In `rowsPaneContent`, pass `s.innerWidth()` instead of
+   `width` to `renderRowLine`. Expected: `TestNoPaneLineOverflowsItsWidth` FAILS in
+   two-pane mode — this is guard 6's mutation, which the first draft omitted. Revert.
+8. Re-run and confirm green.
 
 - [ ] **Step 11: Lint and commit**
 
@@ -2356,32 +2641,32 @@ func TestThresholdIsDerivedFromTheParts(t *testing.T) {
 		"at the threshold the widest label must still fit whole")
 }
 
-// TestRailWidthTracksItsLongestLabel is the other half of the derivation: railWidth is
-// measured, not written down. Together with TestThresholdIsDerivedFromTheParts this means
-// renaming a category moves the threshold automatically.
-func TestRailWidthTracksItsLongestLabel(t *testing.T) {
-	widest := 0
-	for _, e := range railEntries() {
-		if n := ansi.StringWidth(e.label); n > widest {
-			widest = n
-		}
-	}
-	assert.Equal(t, railMarkerCells+widest+railTrailCells, railWidth())
-	assert.Equal(t, "Worktrees & git", widestRailLabel(),
-		"the widest rail label today; if this changes, the threshold moved with it")
-}
+// TestSinglePaneFallbackShowsTheCategoryName pins that drilling in does not lose the
+// orientation the rail was providing. Below the threshold the rail is not drawn, so without
+// a header the user is looking at an unlabelled list of rows — D2, the defect this redesign
+// exists to fix, reintroduced at narrow widths.
+func TestSinglePaneFallbackShowsTheCategoryName(t *testing.T) {
+	o := NewSettingsOverlay(config.DefaultConfig())
+	o.SetSize(200, 24)
+	o.SetSize(o.twoPaneMinInner()+5, 24) // one cell under the threshold
+	require.False(t, o.twoPane())
 
-// widestRailLabel returns the longest rail label, so the test above can name it.
-func widestRailLabel() string {
-	label, widest := "", -1
-	for _, e := range railEntries() {
-		if n := ansi.StringWidth(e.label); n > widest {
-			label, widest = e.label, n
-		}
-	}
-	return label
+	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyEnter}) // drill in
+	require.Equal(t, focusRows, o.focus)
+	assert.Contains(t, stripANSI(strings.Join(o.bodyLines(), "\n")), o.selectedEntry().label,
+		"the drilled-in pane must name the category the rail is no longer showing")
+
+	// And the header must NOT appear in two-pane mode, where the rail already names it.
+	o.SetSize(100, 32)
+	require.True(t, o.twoPane())
+	rows := stripANSI(strings.Join(o.rowsPaneLines(), "\n"))
+	assert.NotContains(t, rows, o.selectedEntry().label,
+		"a header beside the rail would only repeat it")
 }
 ```
+
+(`TestRailWidthTracksItsLongestLabel` lives in Task 2 — it is the derivation this task's
+threshold rests on, and it belongs with the rail vocabulary that defines it.)
 
 - [ ] **Step 2: Run to verify they fail**
 
@@ -2394,7 +2679,28 @@ panes, so the narrow case finds "Session limit" in the rail-only body. The other
 should pass already (they assert the derivation Task 5 built), which is fine: they are
 there to stop it being *un*-derived later, and Step 4 proves they would catch that.
 
-- [ ] **Step 3: Add the fallback to `bodyLines`**
+- [ ] **Step 3: Add the fallback to `bodyLines`, and the drilled-in header**
+
+First, in `rowsPaneContent` (Task 5), render the entry's own label as a header when the rail
+is not beside it. Insert directly after the `if e.kind == railHandoff` early return:
+
+```go
+	// Single-pane drill-in hides the rail, so the pane has to name the category itself —
+	// otherwise the user is looking at an unlabelled list of rows, which is D2 (no
+	// orientation) reintroduced at narrow widths. In two-pane mode the rail already names
+	// it and a header would only repeat it.
+	var lines []paneLine
+	if !s.twoPane() && e.kind == railCategory {
+		lines = append(lines, paneLine{
+			text:   theme.Current().DimStyle().Bold(true).Render(e.label),
+			rowIdx: -1,
+		})
+	}
+```
+
+and delete the later bare `var lines []paneLine` declaration so the header is not discarded.
+
+Then the layout switch:
 
 ```go
 // bodyLines is the pane region: the rail beside the rows on a wide terminal, or one of
@@ -2442,13 +2748,17 @@ Then the mutations:
    not the number. Revert.
 2. **Rename a category.** Change `catWorktrees`'s label to
    `"Worktrees, git and pull requests"` in `settings_schema.go`. Run the tests. Expected:
-   `TestRailWidthTracks` FAILS naming the new widest label, `TestRailLabelsFitTheRailWidth`
-   still passes (the rail grew with it), and `TestSinglePaneFallbackBelowTheThreshold`
-   still passes (it derives its widths). Confirm `railWidth()` grew by 16 with a temporary
-   `t.Log`. Revert the label.
+   Task 2's `TestRailWidthTracksItsLongestLabel` FAILS naming the new widest label, while
+   `TestSinglePaneFallbackBelowTheThreshold` and `TestThresholdIsDerivedFromTheParts` both
+   still pass — they derive their widths, so the threshold moved with the rail exactly as
+   intended. Confirm `railWidth()` grew by 16 with a temporary `t.Log`. Revert the label.
 3. **Invert the fallback.** Change `if !s.twoPane()` to `if s.twoPane()`. Expected:
    `TestSinglePaneFallbackBelowTheThreshold` FAILS on the wide case. Revert.
-4. Re-run and confirm green.
+4. **Drop the drilled-in header.** Remove the `!s.twoPane()` block from `rowsPaneContent`.
+   Expected: `TestSinglePaneFallbackShowsTheCategoryName` FAILS. Then make it
+   unconditional and confirm the test's *second* half FAILS instead — the header must be
+   absent beside the rail, not merely present when alone. Revert.
+5. Re-run and confirm green.
 
 - [ ] **Step 5: Lint and commit**
 
@@ -2463,13 +2773,13 @@ git commit -m "feat(settings): single-pane fallback below the derived width thre
 ## Task 7: The visibility layer
 
 **Files:**
-- Modify: `ui/overlay/settings_render.go` (`renderRowLine`, `contextLine`; add
-  `inertReasons`, `inertReason`)
+- Modify: `ui/overlay/settings_render.go` (`renderRowLine`, `valueCell`, `contextLine`; add
+  `inertReasons`, `inertReasonsWithoutPredicate`, `inertReason`, `firstSentence`)
 - Modify: `ui/overlay/settings_render_test.go`
 
 **Interfaces:**
 - Consumes: `isModified(i)` (`settings.go:88`), `row.timing.badge()`
-  (`settings_schema.go:112`), `row.activeWhen`, `row.gloss` — all four landed in PR A,
+  (`settings_schema.go:107`), `row.activeWhen`, `row.gloss` — all four landed in PR A,
   tested and unrendered. **This task renders them; it does not re-derive them.**
 - Produces: `inertReasons map[string]string`; `(*SettingsOverlay).inertReason(i int)
   string`. Task 9 adds `group_mode`'s branch to `inertReason`.
@@ -2534,7 +2844,7 @@ func TestTimingBadgeRendersForEveryNonLiveRow(t *testing.T) {
 
 	badged := 0
 	for i, r := range o.rows {
-		if r.timing == timingLive || s_inertForTest(o, i) != "" {
+		if r.timing == timingLive || o.inertReason(i) != "" {
 			continue // an inert row's chip replaces its badge, tested separately below
 		}
 		badged++
@@ -2544,9 +2854,6 @@ func TestTimingBadgeRendersForEveryNonLiveRow(t *testing.T) {
 	}
 	require.Positive(t, badged, "the schema must declare rows that are not timingLive")
 }
-
-// s_inertForTest exposes inertReason to the tests above without widening the API.
-func s_inertForTest(o *SettingsOverlay, i int) string { return o.inertReason(i) }
 
 // TestEveryInertPredicateHasAReason pins the drift guard that matters most here: a row
 // dimmed with no explanation is worse than a row not dimmed at all, because the user sees
@@ -2565,8 +2872,20 @@ func TestEveryInertPredicateHasAReason(t *testing.T) {
 	require.NotEmpty(t, predicated, "the schema must declare at least one activeWhen")
 
 	for key := range inertReasons {
+		if reason, ok := inertReasonsWithoutPredicate[key]; ok {
+			assert.NotEmptyf(t, reason, "exception %q must document why it has no predicate", key)
+			continue
+		}
 		assert.Truef(t, predicated[key],
 			"inertReasons names %q, which declares no activeWhen — a stale entry that can never render", key)
+	}
+
+	// The exception list itself must not rot: an entry naming a row that has since gained a
+	// predicate would silently disable the guard for it.
+	for key := range inertReasonsWithoutPredicate {
+		assert.NotEmptyf(t, inertReasons[key], "exception %q names no reason chip", key)
+		assert.Falsef(t, predicated[key],
+			"row %q now declares activeWhen, so it no longer needs an exception", key)
 	}
 }
 
@@ -2669,19 +2988,68 @@ func TestContextLineShowsATruncatedValueInFull(t *testing.T) {
 		"a truncated value must be shown in full in the help pane")
 }
 
-// TestContextLineAlwaysCarriesThePosition pins the orientation readout (D2: scrolled to the
-// bottom of the old list you could not tell where you were). It survives whatever else the
-// line holds, because it is five cells and the rest is recoverable from `?`.
-func TestContextLineAlwaysCarriesThePosition(t *testing.T) {
-	o := NewSettingsOverlay(config.DefaultConfig())
-	o.SetSize(80, 24)
-	for _, key := range []string{"default_program", "carry_files", "notifications", "config_file"} {
-		settingsAt(t, o, key)
-		start, end := o.rowRange(o.selectedEntry())
-		want := fmt.Sprintf("%d/%d", o.cursor-start+1, end-start)
-		assert.Truef(t, strings.HasSuffix(stripANSI(o.contextLine(o.innerWidth())), want),
-			"row %q's context line must end with the position %q: %q",
-			key, want, stripANSI(o.contextLine(o.innerWidth())))
+// TestPositionReadoutSurvivesInTheRenderedPane pins the orientation readout (D2: scrolled to
+// the bottom of the old list you could not tell where you were).
+//
+// It asserts through helpLines(), NOT through contextLine() directly. That distinction is the
+// whole test: the first draft called contextLine and would have passed while the rendered
+// pane threw the counter away — helpLines appended it and *then* capped the list, so any row
+// whose prose filled the pane evicted it silently.
+func TestPositionReadoutSurvivesInTheRenderedPane(t *testing.T) {
+	for _, size := range []struct{ w, h int }{{100, 32}, {80, 24}, {56, 24}, {40, 24}} {
+		t.Run(fmt.Sprintf("%dx%d", size.w, size.h), func(t *testing.T) {
+			o := NewSettingsOverlay(config.DefaultConfig())
+			o.SetSize(size.w, size.h)
+			for _, key := range []string{
+				"default_program", "carry_files", "notifications", "config_file",
+				"fast_forward_local_base", // the widest footer: the eviction case
+			} {
+				settingsAt(t, o, key)
+				start, end := o.rowRange(o.selectedEntry())
+				want := fmt.Sprintf("%d/%d", o.cursor-start+1, end-start)
+				pane := stripANSI(strings.Join(o.helpLines(), "\n"))
+				assert.Containsf(t, pane, want,
+					"row %q's help pane must carry the position %q at %dx%d:\n%s",
+					key, want, size.w, size.h, pane)
+			}
+		})
+	}
+}
+
+// TestVisibilitySignalsSurviveTheDegradationFloor is the guard the first draft was missing
+// entirely: every other test in this task runs at 100x32, where nothing competes for width.
+//
+// At 80x24 — the project's floor, and the size the whole design is budgeted against — the
+// rows pane is 52 cells, and an inline enum rendering that spends all of it leaves no room
+// for the badge. The badge is what carries the inert reason, so the row would dim with no
+// explanation: exactly what inertReasons' own doc comment calls worse than not dimming at
+// all. Two rows in Notifications would disagree about it, one explained and one not.
+func TestVisibilitySignalsSurviveTheDegradationFloor(t *testing.T) {
+	for _, size := range []struct{ w, h int }{{100, 32}, {80, 24}, {76, 24}, {73, 24}} {
+		t.Run(fmt.Sprintf("%dx%d", size.w, size.h), func(t *testing.T) {
+			cfg := config.DefaultConfig()
+			cfg.Notifications = config.NotificationsOff // inerts two Notifications rows
+			f := false
+			cfg.UpdateBaseOnCreate = &f // inerts fast_forward_local_base
+			o := NewSettingsOverlay(cfg)
+			o.SetSize(size.w, size.h)
+
+			checked := 0
+			for i, r := range o.rows {
+				chip := o.inertReason(i)
+				if chip == "" {
+					continue
+				}
+				checked++
+				o.railCursor = railIndexForCategory(r.category)
+				o.syncCursorToRail()
+				line := stripANSI(o.renderRowLine(i, o.rowsPaneWidth(), o.visibleLabelWidth()))
+				assert.Containsf(t, line, chip,
+					"inert row %q lost its %q chip at %dx%d — it dims with no explanation: %q",
+					r.key, chip, size.w, size.h, line)
+			}
+			require.Positive(t, checked, "the fixture must make at least one row inert")
+		})
 	}
 }
 
@@ -2727,6 +3095,19 @@ var inertReasons = map[string]string{
 	"fast_forward_local_base": "needs Update base on create",
 	"daemon_poll_interval":    "needs Auto-yes",
 	"agent_oom_margin":        "Linux only",
+	// group_mode is here even though it declares no activeWhen: its gate is session-derived
+	// and injected by home (Task 9), not expressible as a config predicate. Keeping the
+	// string in this map rather than inline in inertReason is what keeps every reason chip
+	// in one place, and it is the one key TestEveryInertPredicateHasAReason must exempt from
+	// its "no stale entries" direction.
+	"group_mode": "nothing to cluster",
+}
+
+// inertReasonsWithoutPredicate names the rows whose reason chip is driven by something other
+// than settingRow.activeWhen, so the completeness guard can tell a deliberate exception from
+// a stale entry.
+var inertReasonsWithoutPredicate = map[string]string{
+	"group_mode": "gate is session-derived; home injects it via SetAccountClusteringVisible",
 }
 
 // inertReason returns row i's reason chip when changing it currently has no effect, or ""
@@ -2761,12 +3142,17 @@ Replace the composing branch of `renderRowLine` (the editor branch above it is u
 		badge = inert
 	}
 
-	p := composeRowLine(width, labelW, sel, modified, row.label, s.valueCell(i, width, labelW), badge)
+	// The badge is passed to valueCell so an enum's inline alternatives step down to the
+	// compact form rather than squeezing the badge out. This refines spec §10: §10 ordered
+	// badge-before-value but never contemplated the alternatives competing with the badge,
+	// and at the 80-column floor they do — a 19-cell chip against a 28-cell slack.
+	p := composeRowLine(width, labelW, sel, modified, row.label,
+		s.valueCell(i, width, labelW, badge), badge)
 	switch {
 	case selected:
 		// Accent wins over dimming: the row under the cursor must stay legible. The chip
 		// still says the row is inert, and the help pane spells it out.
-		return t.AccentStyle().Render(p.plain())
+		return rowStyle.Render(p.plain())
 	case inert != "":
 		// Dimmed, not hidden. Inert means "changing this has no effect right now", never
 		// "you may not touch this" — a user may configure ahead of enabling the parent
@@ -2796,9 +3182,36 @@ Replace its `body` computation:
 		body = "No effect right now — " + chip + "."
 	default:
 		// The current option's gloss, which is what makes cycling an enum teach rather
-		// than guess (D8).
-		body = s.selectedRow().gloss[s.selectedRow().get(s.cfg)]
+		// than guess (D8) — and failing that, the first sentence of detail.
+		//
+		// The detail fallback is what makes spec §3's mockup literal: its second help line
+		// for Notifications ("The selected, attached and muted sessions stay silent.") is
+		// that row's detail, not its summary. Without it a row whose long-form help is only
+		// detail shows one prose line and a blank, and the 443 characters PR A moved stay
+		// invisible until `?`.
+		row := s.selectedRow()
+		body = row.gloss[row.get(s.cfg)]
+		if body == "" {
+			body = firstSentence(row.detail)
+		}
 	}
+```
+
+and add the helper beside `contextLine`:
+
+```go
+// firstSentence returns s up to and including its first sentence-ending period, or "" when
+// there is none. It is used to surface one line of a row's detail in the help pane without
+// the pane trying to render a paragraph it has no room for.
+func firstSentence(s string) string {
+	if i := strings.Index(s, ". "); i >= 0 {
+		return s[:i+1]
+	}
+	if strings.HasSuffix(s, ".") {
+		return s
+	}
+	return ""
+}
 ```
 
 - [ ] **Step 6: Run the tests**
@@ -2827,8 +3240,43 @@ Four mutations, one per signal, because a single mutation only proves one net.
    both FAIL. Revert.
 4. **Delete a reason.** Remove `"agent_oom_margin"` from `inertReasons`. Expected:
    `TestEveryInertPredicateHasAReason` FAILS naming it. Then *add* a stale entry
-   (`"branch_prefix": "nope"`) and confirm the reverse assertion FAILS too. Revert both.
-5. Re-run and confirm green.
+   (`"branch_prefix": "nope"`) and confirm the reverse assertion FAILS too. Then delete
+   `"group_mode"` from `inertReasonsWithoutPredicate` and confirm the reverse assertion
+   catches it as stale — proving the exception is an exception and not a hole. Revert all
+   three.
+5. **Stop reserving the badge's width.** Pass `""` as `valueCell`'s `badge`. Expected:
+   `TestVisibilitySignalsSurviveTheDegradationFloor` FAILS at 80×24 on
+   `notifications_finished` — and every other test in this task still passes, because they
+   all run at 100×32. That contrast is the entire reason the sweep exists. Revert.
+6. **Misalign the editor.** In `renderRowLine`'s editing branch, drop one of the two spaces
+   after `sel`. Expected: `TestEditingRowKeepsTheLabelColumn` (Task 7 Step 1a below) FAILS.
+   Revert.
+7. Re-run and confirm green.
+
+- [ ] **Step 1a: also add the editor-alignment test** (it belongs with the marker columns)
+
+```go
+// TestEditingRowKeepsTheLabelColumn pins that opening the inline editor does not shift the
+// label. The editing branch builds its own head rather than going through composeRowLine, so
+// it has to spend the same three marker cells — otherwise every label jumps sideways the
+// instant Enter is pressed, which reads as the panel glitching.
+func TestEditingRowKeepsTheLabelColumn(t *testing.T) {
+	o := NewSettingsOverlay(config.DefaultConfig())
+	o.SetSize(100, 32)
+	settingsAt(t, o, "branch_prefix")
+	i := o.cursor
+	labelW, width := o.visibleLabelWidth(), o.rowsPaneWidth()
+
+	before := stripANSI(o.renderRowLine(i, width, labelW))
+	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyEnter}) // open the editor
+	require.True(t, o.editing)
+	after := stripANSI(o.renderRowLine(i, width, labelW))
+
+	at := func(line string) int { return ansi.StringWidth(line[:strings.Index(line, "Branch prefix")]) }
+	assert.Equal(t, at(before), at(after), "the label column must not move when editing opens")
+	assert.Equal(t, rowMarkerCells, at(after))
+}
+```
 
 - [ ] **Step 8: Lint and commit**
 
@@ -2941,8 +3389,16 @@ func TestQuestionMarkOpensAndClosesExpandedHelp(t *testing.T) {
 
 	o.HandleKeyPress(keyRunes("?"))
 	require.True(t, o.helpOpen)
-	assert.Contains(t, stripANSI(o.Render()), "an account boundary is refused",
-		"the expanded view must render the row's detail")
+	// Assert on the unwrapped content, not the render: ansi.Wrap breaks group_mode's detail
+	// mid-phrase at inner 92, so a Contains against Render() fails for a reason that has
+	// nothing to do with whether the detail arrived. TestEveryDetailAndGlossReachExpandedHelp
+	// covers the content; what this test needs from the render is only that `?` took over.
+	assert.Contains(t, o.expandedHelpContent(o.cursor), "an account boundary is refused",
+		"the expanded view must carry the row's detail")
+	assert.Contains(t, stripANSI(o.Render()), "Account clustering",
+		"the expanded view is titled with the row's label")
+	assert.NotContains(t, stripANSI(o.Render()), "Worktrees & git",
+		"and it takes over the box, so the rail is not drawn beside it")
 
 	o.HandleKeyPress(keyRunes("x"))
 	assert.True(t, o.helpOpen, "an unrecognized key must not dismiss the help view")
@@ -2960,12 +3416,20 @@ func TestQuestionMarkOpensAndClosesExpandedHelp(t *testing.T) {
 
 // TestExpandedHelpScrolls pins that long detail is reachable rather than clipped — the
 // content that does not fit is exactly the content `?` exists to show.
+//
+// The SIZE is chosen to guarantee overflow rather than to be representative. At 80x24 the
+// budget is paneHeight(13) + helpBlock(4) = 17 lines against inner 74, and no row in the
+// schema wraps past 17 there — the first draft asserted otherwise and could not pass. 60x20
+// gives a 13-line budget against inner 54, where max_sessions' 343-character detail alone
+// needs seven lines.
 func TestExpandedHelpScrolls(t *testing.T) {
 	o := NewSettingsOverlay(config.DefaultConfig())
-	o.SetSize(80, 24)
-	settingsAt(t, o, "max_sessions") // one of the longest details in the schema
+	o.SetSize(60, 20)
+	settingsAt(t, o, "max_sessions") // the longest detail literal in the schema
 	o.HandleKeyPress(keyRunes("?"))
-	require.Positive(t, o.maxHelpScroll(), "this row's help must overflow 80x24, or scrolling is untested")
+	require.Positive(t, o.maxHelpScroll(),
+		"this row's help must overflow a %d-line budget at inner %d, or scrolling is untested",
+		o.expandedHelpHeight(), o.innerWidth())
 
 	top := stripANSI(strings.Join(o.expandedHelpLines(), "\n"))
 	for range 40 {
@@ -2974,7 +3438,10 @@ func TestExpandedHelpScrolls(t *testing.T) {
 	assert.Equal(t, o.maxHelpScroll(), o.helpScroll, "↓ must clamp at the end, not run past it")
 	bottom := stripANSI(strings.Join(o.expandedHelpLines(), "\n"))
 	assert.NotEqual(t, top, bottom, "scrolling must change what is shown")
-	assert.Contains(t, bottom, "doctor", "max_sessions' detail ends by naming atrium doctor")
+	assert.Contains(t, bottom, "Current value",
+		"scrolling to the end must reach the last section, which no unscrolled view showed")
+	assert.NotContains(t, top, "Current value",
+		"or the assertion above proves nothing about scrolling")
 
 	for range 40 {
 		o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyUp})
@@ -3250,9 +3717,9 @@ config and nothing else. But the list's real gate is
 accountGroupingVisible := l.accountGrouped() && l.distinctAccountCount() > 1
 ```
 
-— where `distinctAccountCount` (`ui/list.go:91`) counts distinct
+— where `distinctAccountCount` (`ui/list.go:95`) counts distinct
 `Instance.AccountClusterKey()` values over the **live session list**, and that key
-(`session/account.go:56`) is the session's *rotation pool* when it has one, else its
+(`session/account.go:60`) is the session's *rotation pool* when it has one, else its
 account name, else `""`.
 
 So spec §5's proposed `len(cfg.ClaudeAccounts) >= 2` is wrong in **both** directions:
@@ -3308,7 +3775,13 @@ func TestAccountClusteringVisible(t *testing.T) {
 				Title: string(rune('a' + i)), Path: "/tmp/repo" + acct, Program: "echo",
 			})
 			require.NoError(t, err)
-			inst.SetClaudeAccount(acct, "shared", false) // both pinned to one pool
+			// SetClaudeAccount's second argument is the CLAUDE_CONFIG_DIR, not the pool
+			// (session/account.go:14). The pool has its own setter, and it is the field
+			// AccountClusterKey actually prefers (session/account.go:60) — so setting it
+			// through the wrong argument would leave two distinct keys and make this
+			// subtest assert the opposite of what it claims.
+			inst.SetClaudeAccount(acct, "", false)
+			inst.SetClaudeAccountPool("shared")
 			l.AddInstance(inst)
 		}
 		l.SetSize(80, 40)
@@ -3469,11 +3942,16 @@ In `settings_render.go`, add the branch at the top of `inertReason`:
 		// and a chip there would be noise. clusteringVisible is nil until home injects the
 		// list's own answer.
 		if groupModeOnOff(s.cfg) == "on" && s.clusteringVisible != nil && !*s.clusteringVisible {
-			return "nothing to cluster"
+			return inertReasons["group_mode"]
 		}
 		return ""
 	}
 ```
+
+The string comes from `inertReasons` rather than a literal here, so every reason chip lives in
+one place and `TestEveryInertPredicateHasAReason` covers this row too — via
+`inertReasonsWithoutPredicate`, which documents *why* it has no `activeWhen` instead of
+letting it slip past the guard unnoticed.
 
 - [ ] **Step 6: Wire it in `app`**
 
@@ -3483,7 +3961,11 @@ Add to `app/app.go`'s `home` struct, beside `settingsOverlay`:
 	// settingsRail remembers which settings category was current, so reopening the panel
 	// returns to it within a run. The overlay is reconstructed on every ',', so the memory
 	// has to live out here. Deliberately not persisted to state.json (spec §7).
-	settingsRail int
+	//
+	// It is a *int because a plain int's zero value is 0 — which is the All settings entry,
+	// the one rail entry spec §4 explicitly excludes as the landing. nil means "the panel has
+	// not been opened yet this run", so the first ',' gets railDefaultIndex().
+	settingsRail *int
 ```
 
 In `app/app_update.go`, replace the `keys.KeySettings` case body:
@@ -3492,7 +3974,9 @@ In `app/app_update.go`, replace the `keys.KeySettings` case body:
 	case keys.KeySettings:
 		m.state = stateSettings
 		m.settingsOverlay = overlay.NewSettingsOverlay(m.appConfig)
-		m.settingsOverlay.SetRailIndex(m.settingsRail)
+		if m.settingsRail != nil {
+			m.settingsOverlay.SetRailIndex(*m.settingsRail)
+		}
 		m.refreshSettingsClusteringGate()
 		m.recomputeLayout() // the hint bar hides behind the modal; panes reclaim its row
 		return m, tea.WindowSize()
@@ -3502,7 +3986,8 @@ In `app/app_keys.go`'s `handleSettingsState`, remember the rail before dropping 
 
 ```go
 	if closed {
-		m.settingsRail = m.settingsOverlay.RailIndex()
+		rail := m.settingsOverlay.RailIndex()
+		m.settingsRail = &rail
 		m.settingsOverlay = nil
 		m.state = stateDefault
 		m.recomputeLayout() // menuVisible flipped; the hint bar may reclaim its row
@@ -3549,36 +4034,81 @@ grouping on):
 func TestSettingsPanel_GroupModeChipFollowsTheLiveList(t *testing.T) {
 	resetSettingsTestState(t)
 	h := accountGroupedHome(t) // two distinct accounts, grouping on
+	// accountGroupedHome sets the LIST's mode, not the config's (app/settings_test.go:190).
+	// The chip needs both: the panel reads the setting from config and the gate from the list.
+	h.appConfig.GroupMode = config.GroupModeAccount
 	require.True(t, h.list.AccountClusteringVisible(), "the fixture must actually cluster")
 
-	_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(",")})
-	require.Equal(t, stateSettings, h.state)
-	require.True(t, h.settingsOverlay.SelectRow("group_mode"))
-	assert.NotContains(t, stripANSI(h.settingsOverlay.Render()), "nothing to cluster",
-		"two clusters are visible, so the row is not inert")
+	openPanel := func() {
+		_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(",")})
+		require.Equal(t, stateSettings, h.state)
+		require.True(t, h.settingsOverlay.SelectRow("group_mode"))
+	}
+	// Both Escs go through handleKeyPress, not straight to the overlay: home only learns the
+	// panel closed via handleSettingsState's `closed` return (app/app_keys.go:347). Calling
+	// the overlay directly leaves h.state == stateSettings, so the next ',' is routed INTO
+	// the still-open panel (app/app_update.go:712) and the overlay is never rebuilt.
+	closePanel := func() {
+		_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyEsc}) // rows pane -> rail
+		_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyEsc}) // rail -> closed
+		require.Nil(t, h.settingsOverlay)
+	}
 
-	// Collapse to one cluster and reopen: the chip must appear.
-	h.settingsOverlay.HandleKeyPress(tea.KeyMsg{Type: tea.KeyEsc})
-	h.settingsOverlay.HandleKeyPress(tea.KeyMsg{Type: tea.KeyEsc})
+	openPanel()
+	assert.NotContains(t, xansi.Strip(h.settingsOverlay.Render()), "nothing to cluster",
+		"two clusters are visible, so the row is not inert")
+	closePanel()
+
+	// Collapse to one cluster: the chip must appear on the next open.
 	for _, inst := range h.list.GetInstances() {
 		inst.SetClaudeAccount("work", "", false)
 	}
 	require.False(t, h.list.AccountClusteringVisible())
 
-	_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(",")})
-	require.True(t, h.settingsOverlay.SelectRow("group_mode"))
-	assert.Contains(t, stripANSI(h.settingsOverlay.Render()), "nothing to cluster",
+	openPanel()
+	assert.Contains(t, xansi.Strip(h.settingsOverlay.Render()), "nothing to cluster",
 		"one cluster means the setting is on but doing nothing")
 }
 
-// TestSettingsPanel_RemembersTheCategoryAcrossOpens pins spec §7's in-memory rail memory.
+// TestSettingsPanel_GroupModeChipAppearsInTheSameFrame pins the refresh in
+// applySettingChange, which the reopen-based test above cannot see. Turning clustering on
+// with a single account must flip the chip immediately, not on the next open.
+func TestSettingsPanel_GroupModeChipAppearsInTheSameFrame(t *testing.T) {
+	resetSettingsTestState(t)
+	h := accountGroupedHome(t)
+	for _, inst := range h.list.GetInstances() {
+		inst.SetClaudeAccount("work", "", false) // collapse to one cluster
+	}
+	h.appConfig.GroupMode = config.GroupModeRepo
+	h.list.SetGroupMode(config.GroupModeRepo)
+
+	_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(",")})
+	require.True(t, h.settingsOverlay.SelectRow("group_mode"))
+	require.NotContains(t, xansi.Strip(h.settingsOverlay.Render()), "nothing to cluster",
+		"off is not inert")
+
+	_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyRight}) // cycle off -> on
+	require.Equal(t, config.GroupModeAccount, h.appConfig.GetGroupMode())
+	assert.Contains(t, xansi.Strip(h.settingsOverlay.Render()), "nothing to cluster",
+		"the chip must appear without reopening the panel")
+}
+
+// TestSettingsPanel_RemembersTheCategoryAcrossOpens pins spec §7's in-memory rail memory —
+// and that a FIRST open still lands on the default category rather than on All settings,
+// which a zero-valued int would have produced.
 func TestSettingsPanel_RemembersTheCategoryAcrossOpens(t *testing.T) {
 	resetSettingsTestState(t)
 	h := newSettingsTestHome()
 
 	_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(",")})
+	assert.NotEqual(t, 0, h.settingsOverlay.RailIndex(),
+		"a fresh run must not land on All settings (spec §4)")
 	require.True(t, h.settingsOverlay.SelectRow("agent_oom_margin")) // Advanced
 	want := h.settingsOverlay.RailIndex()
+
+	// Two Escs: SelectRow focused the rows pane, and Esc is layered.
+	_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyEsc})
+	require.Equal(t, stateSettings, h.state, "the first esc backs out of the rows pane")
 	_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyEsc})
 	require.Nil(t, h.settingsOverlay)
 
@@ -3587,9 +4117,10 @@ func TestSettingsPanel_RemembersTheCategoryAcrossOpens(t *testing.T) {
 }
 ```
 
-`stripANSI` lives in `ui/overlay`; `app` needs its own — check whether `app` already has
-one (`grep -rn "func stripANSI\|ansi.Strip" app/*_test.go`) and reuse it rather than adding
-a second.
+**`app` has no `stripANSI` helper** — it strips inline (`app/help_legend_test.go:21`,
+`app/kill_warning_test.go:19`). Use `xansi.Strip` and add
+`xansi "github.com/charmbracelet/x/ansi"` to `app/settings_test.go`'s imports, which
+currently has neither ansi package.
 
 - [ ] **Step 8: Run the tests**
 
@@ -3617,11 +4148,18 @@ Expected: PASS.
    *render* test still passes — which is exactly the drift a single definition prevents.
    Revert both halves.
 4. **Drop the live refresh.** Remove `m.refreshSettingsClusteringGate()` from the
-   `group_mode` case. Expected: `TestSettingsPanel_GroupModeChipFollowsTheLiveList` still
-   passes (it reopens the panel), so **add** the same-frame assertion it is missing before
-   moving on: cycle the row with `KeyRight` on a single-account home and assert the chip
-   appears without reopening. A refresh nothing tests is a refresh that will be deleted.
-5. Re-run and confirm green.
+   `group_mode` case. Expected: `TestSettingsPanel_GroupModeChipAppearsInTheSameFrame` FAILS
+   while `TestSettingsPanel_GroupModeChipFollowsTheLiveList` still passes — the latter
+   reopens the panel, so it cannot see a missing live refresh. That is why both exist; a
+   refresh nothing tests is a refresh that will be deleted by the next reader.
+5. **Default the rail to zero.** Change `settingsRail *int` to `settingsRail int` and call
+   `SetRailIndex(m.settingsRail)` unconditionally. Expected:
+   `TestSettingsPanel_RemembersTheCategoryAcrossOpens` FAILS on its first assertion — every
+   fresh run would open on All settings, which spec §4 excludes as the landing. Note that
+   `TestRailDefaultIndexIsTheFirstCategory` and `TestPanelOpensOnTheRail` both still pass:
+   neither goes through `home`, which is exactly how this defect survived the first draft.
+   Revert.
+6. Re-run and confirm green.
 
 - [ ] **Step 10: Correct spec §5**
 
@@ -3674,7 +4212,8 @@ git commit -m "feat(settings): dim account clustering from the list's own gate"
 ## Task 10: Adapt the existing suite
 
 **Files:**
-- Modify: `ui/overlay/settings_test.go` (13 sites)
+- Modify: `ui/overlay/settings_test.go` (11 sites)
+- Modify: `app/settings_test.go:48` (one site — the layered Esc)
 
 **Interfaces:**
 - Consumes: everything above.
@@ -4006,21 +4545,52 @@ func TestSettingsOverlay_ShortTerminalScrollsToCursor(t *testing.T) {
 - `_ErrShownInRender` asserts `o.Render()` contains `o.lastErr`; the help pane renders it in
   danger style, so it should pass.
 
-- [ ] **Step 12: Run the whole affected surface**
+- [ ] **Step 12: The one `app` test that breaks — `app/settings_test.go:48`**
+
+`TestSettingsPanel_OpenEditPersistClose` does `SelectRow("auto_attach")` and then **one**
+`Esc`, asserting `stateDefault` and a nil overlay (`app/settings_test.go:64-67`). `SelectRow`
+now focuses the rows pane and `Esc` is layered, so the first Esc only backs out to the rail
+and the assertions fail.
+
+This is the **only place in the suite where the layered Esc is observable end to end**, so
+it should *assert the layering* rather than be patched around it:
+
+```go
+	// Esc is layered since the two-pane redesign: SelectRow focuses the rows pane, so the
+	// first Esc backs out to the rail and only the second closes. The hint line says "esc
+	// back" and then "esc close" so the extra level is advertised (spec §7/§15).
+	_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyEsc})
+	require.Equal(t, stateSettings, h.state, "the first esc backs out of the rows pane")
+	require.NotNil(t, h.settingsOverlay)
+
+	_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyEsc})
+	assert.Equal(t, stateDefault, h.state)
+	assert.Nil(t, h.settingsOverlay)
+```
+
+Then check the other eight for the same shape:
+
+```bash
+grep -n "KeyEsc" app/settings_test.go
+```
+
+The four `Cycle`/`Toggle` tests (`:70`, `:86`, `:103`, `:124`) never press Esc, and the three
+`GroupMode` move tests never open the panel, so this is expected to be the single site — but
+**read the grep output rather than trusting that**.
+
+- [ ] **Step 13: Run the whole affected surface**
 
 ```bash
 PATH="/home/zvi/.local/share/mise/installs/go/1.26.4/bin:$PATH" \
   go test ./ui/... ./app/... ./config/... 2>&1 | tail -25
 ```
-Expected: all PASS. `app/settings_test.go`'s nine tests reach the overlay through `SelectRow`
-plus the real key path, so they should need no edits beyond Task 9's additions — if one
-fails, read it: the likely cause is a hint literal or a value column, not a broken key path.
+Expected: all PASS.
 
-- [ ] **Step 13: Commit**
+- [ ] **Step 14: Commit**
 
 ```bash
 PATH="/home/zvi/.local/share/mise/installs/go/1.26.4/bin:$PATH" /home/zvi/go/bin/golangci-lint run ./ui/... ./app/...
-git add ui/overlay/settings_test.go
+git add ui/overlay/settings_test.go app/settings_test.go
 git commit -m "test(settings): adapt the layout assertions to the two-pane renderer"
 ```
 
@@ -4210,13 +4780,13 @@ truncation priority, the derived threshold, the four glyph sites → Tasks 1, 4,
 split → the File Structure table. §12 `OpenAt` → Task 3 proves the behavior against
 `SelectRow`; the rename and the call sites are PR C's. §13 guards 4–7, 10, 11 → Tasks 5, 4,
 7, 6, 3. §15's risks → the width sweep (Task 10 Step 8), the `group_mode` predicate (Task 9),
-and the test churn (Task 10's thirteen enumerated sites).
+and the test churn (Task 10's twelve enumerated sites, one of them in `app/`).
 
 **Deferred by design:** guards 8–9 (`r`, search) are PR C's; guard 12 (profiles) is PR D's.
 
 **Two corrections to the brief this plan makes.**
 
-1. **A new glyph costs five sites, not four.** `app/help_legend_test.go:38-52` reflects over
+1. **A new glyph costs five sites, not four.** `app/help_legend_test.go:39-52` reflects over
    every `Glyphs` field and fails on any new one unless it is in the `?` legend or the
    documented `excluded` map. Task 1 Step 7's second mutation makes that site prove itself.
    Relatedly, `ui/theme/registry.go` has only **one** complete `Glyphs` literal —
@@ -4249,10 +4819,61 @@ old inner width — a fact PR B invalidates. The replacement derives the row and
 precondition that fails both ways it can rot, and if no row reaches the branch the
 instruction is to **report that**, not to weaken the assertion.
 
-**Vacuity checks added where the geometry loosened.** Three existing tests get *easier* under
+**Vacuity checks added where the geometry loosened.** Four existing tests get *easier* under
 the wider box and would have passed while testing nothing: `TestFooterTextFitsTwoLines`
-(inner 60 → 74), `widestFooterRow`'s literal 60, and
-`TestSettingsOverlay_ShortTerminalScrollsToCursor` (whose category now trivially fits). Each
-gains a `require` that the case it exercises is real. This is the failure mode PR A's own
-Task 8 Step 4 warned about and the one most likely to be waved through in review.
+(inner 60 → 74), `widestFooterRow`'s literal 60,
+`TestSettingsOverlay_ShortTerminalScrollsToCursor` (whose category now trivially fits, since
+`SelectRow` syncs the rail), and `TestSettingsOverlay_LongDescriptionCapsWithEllipsis` (whose
+cap is unreachable at inner 74). Each gains a `require` that the case it exercises is real.
+This is the failure mode PR A's own Task 8 Step 4 warned about and the one most likely to be
+waved through in review.
+
+### What the adversarial review changed, and the pattern behind it
+
+Two independent reviewers read the first draft against the code. They converged on the same
+top findings, which is what makes them worth recording rather than just fixing.
+
+**Three of the defects were real rendering bugs, not test bugs** — the panel would have
+hidden the thing the user was pointing at, and nothing in the first draft would have noticed:
+
+1. The overflow marker overwrote the cursor's own line, so the selected row vanished for
+   every cursor position except the last.
+2. The rail dropped its tail below 24 rows, so the current entry could be off-screen with no
+   indication.
+3. The inert reason chip was squeezed out by inline enum alternatives at 80×24 — the
+   degradation floor — leaving a dimmed row with no explanation, which the code's own comment
+   calls worse than not dimming at all.
+
+**The pattern is one blind spot, not three mistakes.** Every visibility guard ran at 100×32,
+where nothing competes for width; guard 4 ran at the single height where thirteen entries fit
+by exactly zero rows; and guard 6's narrowest sample sat three cells above the overflow. Each
+guard was individually reasonable and the *set* of them tested one corner of the space. The
+fix is the two sweeps Tasks 5 and 7 now carry — `TestSelectedRowIsAlwaysVisible`,
+`TestCurrentRailEntryIsAlwaysVisible`, `TestVisibilitySignalsSurviveTheDegradationFloor` —
+each of which asserts a property across sizes rather than a value at one size. The lesson to
+carry into PR C: **a renderer guard that names one terminal size is testing that size, not the
+renderer.**
+
+**Six prescribed tests could not have passed as written.** The recurring cause was arithmetic
+reasoned about rather than run: a width of 38 that made a test's own second assertion
+impossible, a byte offset compared to a cell count, a scroll precondition against a budget
+that no row in the schema can overflow at that size. Where a step now says "verify by printing
+it once while iterating", that is not boilerplate.
+
+**Two mutation steps predicted the wrong failures**, which is its own hazard: a mutation step
+that over-claims teaches you to stop trusting the next one. Task 5's D5 mutation fails two
+tests, not three — `TestBoxHeightDependsOnlyOnTheTerminal` cannot fail, because `paneHeight`
+absorbs whatever `helpBlockHeight` returns. Both predictions are corrected in place, and three
+mutations were added for guards that had none (guard 6, the label clamp, the badge
+reservation).
+
+**One design decision is flagged as the most likely to be challenged in review**, and is
+deliberate rather than overlooked: the box now fills the terminal height, so a two-row category
+on a 40-row terminal renders 27 blank pane lines. It buys an invariant worth more than the
+compactness — the box's height depends only on the terminal, so `PlaceOverlay` never
+re-centers the panel under the user's cursor mid-navigation (the jump
+`ui/overlay/textInput_size.go:3-8` warns about), and opening `?` cannot resize it either. The
+alternative — growing only to fit the current category — jumps every time the rail crosses
+into or out of All settings. If the eyeball step makes the blank space look worse than the
+jump, the change is one clamp in `paneHeight`.
 
