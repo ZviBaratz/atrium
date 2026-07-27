@@ -472,6 +472,43 @@ than speculative:
 - the session-cap dialog → `max_sessions`
 - the "manual reorder is off" notice → `session_sort`
 
+> **Resolved in PR C: the signature is `OpenAt(key string) bool`.** `settingCategory` is
+> unexported, so `app` cannot name one. More importantly, guard 1 pins that every key belongs
+> to exactly one category, so a category parameter is a second source of truth whose only
+> possible contribution is to disagree with the row's own — and the only sane resolution of a
+> disagreement is to trust the row. `OpenAt` derives the category and syncs the rail to it,
+> which is what `TestOpenAtLandsOnEveryRowWithTheRowsPaneFocused` asserts over all 38 rows.
+> It also clears the panel's transient state (an open editor, the `?` view, an active
+> filter), because a deep link into an already-open panel must not land the cursor somewhere
+> the user cannot see.
+>
+> **PR C found six `,`-teaching messages, not two.** Every one of them names the setting in
+> its own copy, so leaving any of them landing on the remembered rail entry would have made
+> two indistinguishable classes of `,`-notice. The full list:
+>
+> | # | site | triggered by | key |
+> |---|------|--------------|-----|
+> | 1 | the session-cap dialog (`overCapMessage`) | `ctrl+s` over the cap | `max_sessions` |
+> | 2 | "session reorder is off while sorting by status" | `J` / `K` | `session_sort` |
+> | 3 | "cluster reorder needs account grouping" | `[` / `]` | `group_mode` |
+> | 4 | the setup-skipped welcome notice | skipping the welcome | `default_program` |
+> | 5 | `warnMissingProgram`, the not-on-PATH branch | `programCheckedMsg` | `default_program` |
+> | 6 | `warnMissingProgram`, the nothing-set branch | `programCheckedMsg` | `default_program` |
+>
+> Two things the bullets above got wrong. There are **two** reorder refusals, not one: `J`/`K`
+> reorders within a repo group and `[`/`]` moves an account cluster, and they refuse for
+> different reasons pointing at different keys. A count anchored on "the manual reorder notice"
+> collapses them and silently drops `group_mode`. And (1) is not a notice at all — dialog copy
+> reaches no notice path, so its `,` is armed by `pendingConfirmSettingKey` at the
+> `confirmOverCap` site instead.
+>
+> That leaves five notices (2–6) routed through `settingNotice`, across four call sites —
+> `warnMissingProgram` builds one call's text in two branches.
+> `TestEveryCommaNoticeGoesThroughSettingNotice` keeps the rule structural rather than
+> counted: it is an AST scan for `,`-advertising literals reaching `flashNotice` or
+> `handleInfoNotice`, so a seventh message added later fails it without this table being
+> updated.
+
 The cap dialog carries a second obligation: `overCapMessage` currently ends with
 `(set max_sessions in config.json to change this)`, which sends the user to a text editor
 for a setting the panel now owns. With the deep link in place that literal should teach the

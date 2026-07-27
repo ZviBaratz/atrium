@@ -204,3 +204,42 @@ func TestCreateForm_ExplicitUnlimitedSkipsConfirm(t *testing.T) {
 	assert.Nil(t, h.pendingOverCap)
 	assert.Equal(t, before+1, h.list.NumInstances(), "the session spawns silently")
 }
+
+// The over-cap dialog's ',' is a real deep link: it cancels the create, opens the settings
+// panel, and lands on the Session limit row — the setting the message just named. Without the
+// landing it would be a shortcut to a 13-entry rail, which is roughly what the old
+// "set max_sessions in config.json" tail already amounted to.
+func TestOverCapDialogCommaOpensTheSessionLimit(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	h := newFanOutHome(t, gitInitRepo(t))
+	h.hostCap = 2
+	h.appConfig.MaxSessions = nil
+	addStubInstances(t, h, 2)
+	before := h.list.NumInstances()
+
+	typeString(h, "race")
+	ctrlS(h)
+	require.Equal(t, stateConfirm, h.state)
+
+	h.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(",")})
+
+	assert.Equal(t, stateSettings, h.state, "',' leaves the dialog for the settings panel")
+	require.NotNil(t, h.settingsOverlay)
+	assert.Equal(t, "max_sessions", h.settingsOverlay.SelectedRowKey(),
+		"and lands on the row the message named")
+	assert.Nil(t, h.confirmationOverlay, "the dialog is dismissed")
+	assert.Equal(t, before, h.list.NumInstances(), "',' spawns nothing — it is a cancel")
+}
+
+// ',' is armed by the cap dialog and nothing else: an unrelated confirmation must not have a
+// key that silently cancels it and opens a panel.
+func TestCommaIsInertInAnUnarmedConfirmation(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	h := newFanOutHome(t, gitInitRepo(t))
+	h.confirmAction("Do the thing?", func() tea.Msg { return nil })
+	require.Equal(t, stateConfirm, h.state)
+
+	h.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(",")})
+	assert.Equal(t, stateConfirm, h.state, "an unarmed dialog ignores ','")
+	assert.NotNil(t, h.confirmationOverlay)
+}

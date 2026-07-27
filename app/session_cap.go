@@ -75,17 +75,25 @@ func hostCapacityLine(limit, live int) string {
 
 // overCapMessage is the host-capacity confirmation text: it names the derived cap
 // and the live count so the tradeoff — more sessions queue rather than
-// parallelize — is explicit at the moment the user crosses it.
+// parallelize — is explicit at the moment the user crosses it, and it names the key
+// that changes the limit.
+//
+// That tail used to read "(set max_sessions in config.json to change this)", which
+// sent the user to a text editor for a setting the configuration panel owns. ','
+// now opens the panel straight onto the Session limit row (confirmOverCap arms it,
+// handleConfirmState consumes it). The dialog wraps at 46 cells, so the replacement
+// is priced in rendered lines: the old tail took two and the new one takes one,
+// making the dialog shorter as well as more useful.
 func overCapMessage(limit, active, adding int) string {
 	if adding > 1 {
 		return fmt.Sprintf(
 			"%s.\nSpawning %d more will queue, not parallelize, and drive up load.\n"+
-				"Create them anyway? (set max_sessions in config.json to change this)",
+				"Create them anyway? (, to change the limit)",
 			hostCapacityLine(limit, active), adding)
 	}
 	return fmt.Sprintf(
 		"%s.\nAnother will queue, not parallelize, and drive up load.\n"+
-			"Create it anyway? (set max_sessions in config.json to change this)",
+			"Create it anyway? (, to change the limit)",
 		hostCapacityLine(limit, active))
 }
 
@@ -173,6 +181,10 @@ type proceedExhaustedMsg struct{}
 // spawned and the stale plan is inert (overwritten by the next stage).
 func (m *home) confirmOverCap(plan spawnPlan, limit, active int) tea.Cmd {
 	m.pendingOverCap = &plan
+	// The message teaches ','; handleConfirmState turns that into a deep link onto the
+	// row it names. Armed here rather than in confirmAction, because it is this dialog's
+	// copy that promises it — every other confirmation leaves ',' inert.
+	m.pendingConfirmSettingKey = "max_sessions"
 	m.stashDirtyCreateForm()
 	m.textInputOverlay = nil
 	m.menu.SetState(ui.StateDefault)

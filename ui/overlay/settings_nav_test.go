@@ -66,7 +66,7 @@ func TestRailDefaultIndexIsTheFirstCategory(t *testing.T) {
 }
 
 // TestRailIndexForCategoryFindsEveryCategory pins that every category is reachable from
-// its enum value, which is what SelectRow (and PR C's OpenAt) rely on to sync the rail
+// its enum value, which is what OpenAt relies on to sync the rail
 // to a deep-linked row.
 func TestRailIndexForCategoryFindsEveryCategory(t *testing.T) {
 	for _, c := range allCategories() {
@@ -250,9 +250,8 @@ func TestTabSwitchesPanes(t *testing.T) {
 	assert.Equal(t, focusRail, o.focus, "shift+tab switches panes too")
 }
 
-// TestRightFocusesTheRowsPaneFromTheRail pins the rail's forward keys. On a handoff entry
-// they are no-ops: there are no rows to focus, and PR C is what wires Enter to the
-// accounts overlay.
+// TestRightFocusesTheRowsPaneFromTheRail pins the rail's three forward keys on an entry that
+// owns rows.
 func TestRightFocusesTheRowsPaneFromTheRail(t *testing.T) {
 	for _, key := range []tea.KeyMsg{
 		{Type: tea.KeyRight}, {Type: tea.KeyTab}, {Type: tea.KeyEnter},
@@ -261,14 +260,121 @@ func TestRightFocusesTheRowsPaneFromTheRail(t *testing.T) {
 		o.HandleKeyPress(key)
 		assert.Equalf(t, focusRows, o.focus, "%v must focus the rows pane", key)
 	}
+}
 
+// TestAccountsEntryHandsOffToTheAccountsOverlay is spec §4's handoff and §7's rail row: all
+// three forward keys ask home to open the @ overlay, and the panel closes to make way. The
+// overlay cannot open a sibling, so a request plus closed=true is the whole protocol.
+func TestAccountsEntryHandsOffToTheAccountsOverlay(t *testing.T) {
+	for _, key := range []tea.KeyMsg{
+		{Type: tea.KeyRight}, {Type: tea.KeyTab}, {Type: tea.KeyEnter},
+	} {
+		o := NewSettingsOverlay(config.DefaultConfig())
+		o.SetRailIndex(len(railEntries()) - 1)
+		require.Equal(t, "Accounts", o.selectedEntry().label, "precondition: the last entry is Accounts")
+		require.Equal(t, HandoffNone, o.Handoff(), "precondition: nothing requested yet")
+
+		closed, changed := o.HandleKeyPress(key)
+		assert.Truef(t, closed, "%v on Accounts closes the panel to make way", key)
+		assert.Empty(t, changed, "a handoff changes no setting")
+		assert.Equal(t, HandoffAccounts, o.Handoff())
+		assert.Equal(t, focusRail, o.focus, "focus never moves into an entry with no rows")
+	}
+}
+
+// TestProfilesEntryStaysANoOp pins the deliberate asymmetry: PR D builds the profiles editor,
+// so PR C must not wire that entry to anything. A handoff to a surface that does not exist is
+// worse than the note.
+func TestProfilesEntryStaysANoOp(t *testing.T) {
 	o := NewSettingsOverlay(config.DefaultConfig())
-	o.railCursor = len(railEntries()) - 1 // Accounts, a handoff
-	require.Equal(t, railHandoff, o.selectedEntry().kind)
-	closed, changed := o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRight})
-	assert.Equal(t, focusRail, o.focus, "a handoff entry has no rows to focus")
+	o.SetRailIndex(len(railEntries()) - 2)
+	require.Equal(t, "Profiles", o.selectedEntry().label)
+
+	closed, changed := o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyEnter})
 	assert.False(t, closed)
 	assert.Empty(t, changed)
+	assert.Equal(t, HandoffNone, o.Handoff())
+	assert.Equal(t, focusRail, o.focus)
+}
+
+// TestRailHintNamesWhatTheForwardKeyDoes: the hint differs per entry because the forward key
+// does three different things — focus the rows, open another overlay, or nothing at all.
+// Advertising "→ rows" on an entry with no rows is the same class of lie as a static esc hint
+// (spec §15).
+func TestRailHintNamesWhatTheForwardKeyDoes(t *testing.T) {
+	o := NewSettingsOverlay(config.DefaultConfig())
+	o.SetSize(100, 32)
+
+	require.Equal(t, railCategory, o.selectedEntry().kind)
+	assert.Contains(t, stripANSI(o.hintLine()), "→ rows")
+
+	o.SetRailIndex(len(railEntries()) - 1)
+	accounts := stripANSI(o.hintLine())
+	assert.Contains(t, accounts, "↵ accounts")
+	assert.NotContains(t, accounts, "→ rows", "Accounts has no rows to focus")
+
+	o.SetRailIndex(len(railEntries()) - 2)
+	profiles := stripANSI(o.hintLine())
+	assert.NotContains(t, profiles, "→ rows")
+	assert.NotContains(t, profiles, "↵ accounts", "Profiles opens nothing in PR C")
+	assert.Contains(t, profiles, "esc close")
+}
+
+// TestRailHintNeverPromisesAPaneSwapWithoutRows holds "⇥ pane" to the same standard spec §15
+// sets for "→ rows". handleRailKey routes tab with right and enter, so tab IS the forward key
+// on the rail rather than a pane toggle: on an entry that owns rows it swaps panes, and on a
+// handoff it hands off or does nothing while focus stays put. So an entry with no rows must
+// advertise neither hint.
+//
+// Asserted over every rung of every entry rather than one rendered line, because the narrow
+// rungs drop "⇥ pane" on their own — a single-width check would pass on the strength of the
+// truncation and prove nothing about the wording.
+func TestRailHintNeverPromisesAPaneSwapWithoutRows(t *testing.T) {
+	o := NewSettingsOverlay(config.DefaultConfig())
+	withRows, withoutRows := 0, 0
+	for _, e := range railEntries() {
+		start, end := o.rowRange(e)
+		owns := end > start
+		if owns {
+			withRows++
+		} else {
+			withoutRows++
+		}
+		require.Equalf(t, e.kind != railHandoff, owns,
+			"entry %q: railHandoff must be exactly the no-rows case", e.label)
+		for i, rung := range railHintLadder(e) {
+			if owns {
+				continue
+			}
+			assert.NotContainsf(t, rung, "⇥ pane",
+				"entry %q rung %d promises a pane swap it cannot do: %q", e.label, i, rung)
+			assert.NotContainsf(t, rung, "→ rows",
+				"entry %q rung %d promises rows it does not own: %q", e.label, i, rung)
+		}
+	}
+	// Without these the loop could stop covering either side and the test would still pass.
+	require.Equal(t, 2, withoutRows, "Profiles and Accounts are the two entries with no rows")
+	require.Equal(t, 11, withRows, "All settings plus the ten categories own rows")
+	// The positive half: the entries that CAN swap panes still say so at the widest rung.
+	assert.Contains(t, railHintLadder(railEntries()[railDefaultIndex()])[0], "⇥ pane")
+}
+
+// TestEveryWiredHandoffNamesItsForwardKey is the drift guard for PR D. handoffHint maps a
+// handoff to its wording, and a handoff missing from it renders a ladder naming no forward key
+// at all — the panel would offer Enter with nothing on screen saying so.
+func TestEveryWiredHandoffNamesItsForwardKey(t *testing.T) {
+	wired := 0
+	for _, e := range railEntries() {
+		if e.kind != railHandoff || e.opens == HandoffNone {
+			continue
+		}
+		wired++
+		hint := handoffHint(e.opens)
+		require.NotEmptyf(t, hint, "handoff entry %q is wired but its forward key is unnamed", e.label)
+		assert.Containsf(t, railHintLadder(e)[0], hint,
+			"entry %q's widest rung must name its forward key", e.label)
+	}
+	require.Equal(t, 1, wired, "Accounts is the only wired handoff in PR C")
 }
 
 // TestEscIsLayered pins spec §7's layered Esc: from the rows pane it backs out to the
@@ -288,26 +394,440 @@ func TestEscIsLayered(t *testing.T) {
 	assert.True(t, closed, "the second esc closes the panel")
 }
 
-// TestSelectRowFocusesTheRowsPaneAndSyncsTheRail is spec §13's guard 11 in the form PR B
-// can test it: the deep-link primitive lands the cursor on the row with the rows pane
-// focused and the rail showing that row's category. Selecting a row the pane is not
-// showing would leave the cursor invisible.
-//
-// PR C promotes this exact behavior to OpenAt(category, key) and adds the two real call
-// sites (the session-cap dialog and the manual-reorder notice); the behavior is proven
-// here so that promotion is a rename rather than new semantics.
-func TestSelectRowFocusesTheRowsPaneAndSyncsTheRail(t *testing.T) {
+// TestOpenAtLandsOnEveryRowWithTheRowsPaneFocused is spec §13's guard 11, swept over the
+// whole schema: the deep-link primitive must land the cursor on the row, focus the rows pane,
+// and sync the rail to that row's category. Selecting a row the pane is not showing would
+// leave the cursor invisible — the composite behavior IS the contract.
+func TestOpenAtLandsOnEveryRowWithTheRowsPaneFocused(t *testing.T) {
 	o := NewSettingsOverlay(config.DefaultConfig())
 	for _, r := range newSettingRows(config.DefaultConfig()) {
-		require.Truef(t, o.SelectRow(r.key), "no row %q", r.key)
+		require.Truef(t, o.OpenAt(r.key), "no row %q", r.key)
 		assert.Equalf(t, r.key, o.selectedRow().key,
-			"SelectRow(%q) must land the cursor on that row", r.key)
-		assert.Equalf(t, focusRows, o.focus, "SelectRow(%q) must focus the rows pane", r.key)
+			"OpenAt(%q) must land the cursor on that row", r.key)
+		assert.Equalf(t, focusRows, o.focus, "OpenAt(%q) must focus the rows pane", r.key)
 		assert.Equalf(t, r.category, o.selectedEntry().category,
-			"SelectRow(%q) must sync the rail to its category", r.key)
+			"OpenAt(%q) must sync the rail to its category", r.key)
 		start, end := o.rowRange(o.selectedEntry())
-		assert.GreaterOrEqualf(t, o.cursor, start, "SelectRow(%q) left the cursor outside the pane", r.key)
-		assert.Lessf(t, o.cursor, end, "SelectRow(%q) left the cursor outside the pane", r.key)
+		assert.GreaterOrEqualf(t, o.cursor, start, "OpenAt(%q) left the cursor outside the pane", r.key)
+		assert.Lessf(t, o.cursor, end, "OpenAt(%q) left the cursor outside the pane", r.key)
 	}
-	assert.False(t, o.SelectRow("not_a_row"), "an unknown key reports not-found")
+	assert.False(t, o.OpenAt("not_a_row"), "an unknown key reports not-found")
+}
+
+// TestOpenAtClearsTransientState pins the half a deep link only needs when the panel is
+// already open: landing while an editor or the ? view is up would put the cursor somewhere
+// the user cannot see. Today's call sites open a fresh panel — which is exactly why this
+// belongs in OpenAt rather than at the call sites, where omitting it would stay invisible
+// until the third one.
+func TestOpenAtClearsTransientState(t *testing.T) {
+	o := NewSettingsOverlay(config.DefaultConfig())
+	settingsAt(t, o, "branch_prefix")
+	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyEnter}) // opens the inline editor
+	require.True(t, o.editing, "precondition: an editor is open")
+
+	require.True(t, o.OpenAt("max_sessions"))
+	assert.False(t, o.editing, "a deep link must not land inside another row's editor")
+
+	o.HandleKeyPress(keyRunes("?"))
+	require.True(t, o.helpOpen, "precondition: the ? view is open")
+	require.True(t, o.OpenAt("theme"))
+	assert.False(t, o.helpOpen, "a deep link must not land behind the ? view")
+}
+
+// rowValues snapshots every row's displayed value, so a "nothing changed" assertion is about
+// what the panel shows rather than about struct equality — a Config holds slices and
+// pointers, and a deep compare of it answers a different question.
+func rowValues(o *SettingsOverlay) []string {
+	out := make([]string, len(o.rows))
+	for i, r := range o.rows {
+		out[i] = r.get(o.cfg)
+	}
+	return out
+}
+
+// TestResetRestoresTheDefaultAndReportsTheKey is spec §13's guard 8. r must behave exactly
+// like an edit: restore the built-in default AND report the changed key, so home persists the
+// config and runs that field's live-apply hook. A reset that changed the config without
+// reporting would leave disk and screen disagreeing until the next unrelated edit.
+func TestResetRestoresTheDefaultAndReportsTheKey(t *testing.T) {
+	cfg := config.DefaultConfig()
+	o := NewSettingsOverlay(cfg)
+	settingsAt(t, o, "theme")
+	require.False(t, o.isModified(o.cursor), "precondition: a fresh config starts unmodified")
+
+	_, changed := o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRight}) // cycle off the default
+	require.Equal(t, "theme", changed)
+	require.True(t, o.isModified(o.cursor), "precondition: the row is modified before reset")
+
+	_, changed = o.HandleKeyPress(keyRunes("r"))
+	assert.Equal(t, "theme", changed, "r reports the key so home persists and live-applies")
+	assert.False(t, o.isModified(o.cursor), "r restored the default")
+}
+
+// TestResetIsSilentOnAnUnmodifiedRow pins that the reported key means "this value just
+// changed". Reporting unconditionally would rewrite config.json and re-run the live-apply
+// hook — for theme, a full ClearScreen repaint — on every press of a key that did nothing.
+func TestResetIsSilentOnAnUnmodifiedRow(t *testing.T) {
+	o := NewSettingsOverlay(config.DefaultConfig())
+	settingsAt(t, o, "theme")
+	require.False(t, o.isModified(o.cursor))
+
+	_, changed := o.HandleKeyPress(keyRunes("r"))
+	assert.Empty(t, changed, "a reset that changed nothing reports nothing")
+}
+
+// The two schema-level guards r rests on are PR A's and already pass unchanged:
+// TestResetRestoresTheDefault (every reset produces the advertised default and clears the
+// modified marker) and TestResetIsPresentWhereverADefaultIs (defaultDisplay and reset travel
+// together; a read-only row has neither), both in settings_schema_test.go. The tests here are
+// only about the key that reaches them.
+
+// TestResetOnARowWithNoFixedDefaultIsASilentNoOp covers the two rows spec §5 makes nil by
+// design — default_program (the first *detected* agent) and branch_prefix (the OS username).
+// They have nowhere to go back to, so r must not pretend otherwise.
+func TestResetOnARowWithNoFixedDefaultIsASilentNoOp(t *testing.T) {
+	for _, key := range []string{"default_program", "branch_prefix"} {
+		cfg := config.DefaultConfig()
+		o := NewSettingsOverlay(cfg)
+		settingsAt(t, o, key)
+		require.Nil(t, o.rows[o.cursor].reset, "precondition: %q declares no reset", key)
+
+		before := rowValues(o)
+		_, changed := o.HandleKeyPress(keyRunes("r"))
+		assert.Emptyf(t, changed, "r on %q must report nothing", key)
+		assert.Equalf(t, before, rowValues(o), "r on %q must change nothing", key)
+	}
+}
+
+// TestResetOnTheRailIsASilentNoOp is spec §2's non-goal, made structural: there is no
+// category reset. Pressing r with the rail focused must not clear a category's worth of
+// settings, and must not say it did.
+func TestResetOnTheRailIsASilentNoOp(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.Theme = "gruvbox" // any non-default value a category reset would have destroyed
+	o := NewSettingsOverlay(cfg)
+	o.SetRailIndex(railIndexForCategory(catAppearance))
+	require.Equal(t, focusRail, o.focus)
+
+	before := rowValues(o)
+	closed, changed := o.HandleKeyPress(keyRunes("r"))
+	assert.False(t, closed)
+	assert.Empty(t, changed)
+	assert.Equal(t, before, rowValues(o), "r on the rail must not touch a single row")
+}
+
+// TestResetOnTheReadOnlyRowIsASilentNoOp: the resolved config.json path has no setter and no
+// default, and every edit key is a no-op on it (spec §5's kindReadOnly).
+func TestResetOnTheReadOnlyRowIsASilentNoOp(t *testing.T) {
+	o := NewSettingsOverlay(config.DefaultConfig())
+	settingsAt(t, o, "config_file")
+	require.Equal(t, kindReadOnly, o.rows[o.cursor].kind)
+
+	_, changed := o.HandleKeyPress(keyRunes("r"))
+	assert.Empty(t, changed)
+}
+
+// typeFilter sends each rune of s to the panel as its own key press, which is how a real
+// filter is typed — sending them as one KeyRunes would hide a per-keystroke bug.
+func typeFilter(o *SettingsOverlay, s string) {
+	for _, r := range s {
+		o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+	}
+}
+
+// resultKeys is the search result list as row keys, which is what the assertions are about.
+func resultKeys(o *SettingsOverlay) []string {
+	out := make([]string, 0, len(o.searchResults()))
+	for _, i := range o.searchResults() {
+		out = append(out, o.rows[i].key)
+	}
+	return out
+}
+
+// TestSearchFindsARowByKeyByLabelAndBySummaryWord is spec §13's guard 9. Four query shapes,
+// because the whole point of matching four fields is that a user who remembers any one of
+// them finds the row.
+func TestSearchFindsARowByKeyByLabelAndBySummaryWord(t *testing.T) {
+	cases := []struct{ name, query, want string }{
+		{"by key", "notify_command", "notify_command"},
+		{"by label", "Glyph set", "glyph_set"},
+		{"by a word from the summary", "taskbar", "os_chrome"},
+		{"by category name", "Worktrees", "branch_prefix"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			o := NewSettingsOverlay(config.DefaultConfig())
+			o.HandleKeyPress(keyRunes("/"))
+			typeFilter(o, tc.query)
+			assert.Containsf(t, resultKeys(o), tc.want, "%q must find %q", tc.query, tc.want)
+		})
+	}
+}
+
+// TestSearchRanksTheLabelAndKeyHitFirst pins the ranking bonus, on the one query shape that
+// can tell the difference: without it, "agent" is a three-way tie at 60 that stable-sorts to
+// default_program — which matches only through its summary ("Agent command new sessions
+// launch") — ahead of the row actually called Agent OOM margin. With the label and key
+// bonuses that row scores 180 and leads.
+//
+// "theme" is NOT the query for this: measured, the theme row wins 60-to-40 on the haystack
+// alone, so the bonus changes nothing and a mutation deleting it would pass.
+func TestSearchRanksTheLabelAndKeyHitFirst(t *testing.T) {
+	o := NewSettingsOverlay(config.DefaultConfig())
+	o.HandleKeyPress(keyRunes("/"))
+	typeFilter(o, "agent")
+	require.NotEmpty(t, resultKeys(o))
+	assert.Equal(t, "agent_oom_margin", resultKeys(o)[0],
+		"a label-and-key hit leads a search over a row that only matches in its summary")
+}
+
+// TestSearchFlattensAcrossCategories is spec §8's shape: results ignore the rail entry
+// entirely. A filter that only searched the current category would be a category filter, not
+// a search.
+func TestSearchFlattensAcrossCategories(t *testing.T) {
+	o := NewSettingsOverlay(config.DefaultConfig())
+	require.Equal(t, catSessions, o.selectedEntry().category, "precondition: the landing category")
+
+	o.HandleKeyPress(keyRunes("/"))
+	typeFilter(o, "in")
+	seen := map[settingCategory]bool{}
+	for _, i := range o.searchResults() {
+		seen[o.rows[i].category] = true
+	}
+	// Named categories, not len(seen) > 1: asserting the latter after requiring it would be
+	// true by construction. Measured, "in" returns 36 rows spanning all ten categories.
+	assert.True(t, seen[catSessions], "the landing category")
+	assert.True(t, seen[catAppearance], "a category the rail is not on")
+	assert.True(t, seen[catAdvanced], "and the far end of the rail")
+}
+
+// TestSlashFocusesTheRowsPaneFromEitherPane is spec §8's first focus rule, stated because it
+// is the detail that gets guessed wrong: / works from the rail as well as the rows.
+func TestSlashFocusesTheRowsPaneFromEitherPane(t *testing.T) {
+	for _, from := range []settingsFocus{focusRail, focusRows} {
+		o := NewSettingsOverlay(config.DefaultConfig())
+		if from == focusRows {
+			o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRight})
+		}
+		require.Equal(t, from, o.focus)
+
+		o.HandleKeyPress(keyRunes("/"))
+		assert.True(t, o.searching(), "/ opens the filter from either pane")
+		assert.Equal(t, focusRows, o.focus, "/ moves focus to the results")
+	}
+}
+
+// TestSlashDoesNotMoveTheCursorBeforeAnythingIsTyped. An empty query matches all 38 rows at
+// score 0, so a naive sync snaps the cursor to row 0 and the rail to Sessions the moment `/`
+// is pressed — and the Esc that "lands you on the row you found" then lands you on the top of
+// the schema instead. Opened from the landing category the bug is invisible (row 0 is already
+// the cursor), which is exactly why this opens from Advanced.
+func TestSlashDoesNotMoveTheCursorBeforeAnythingIsTyped(t *testing.T) {
+	o := NewSettingsOverlay(config.DefaultConfig())
+	settingsAt(t, o, "agent_oom_margin")
+	require.Equal(t, catAdvanced, o.selectedEntry().category, "precondition: away from the landing")
+
+	o.HandleKeyPress(keyRunes("/"))
+	assert.Equal(t, "agent_oom_margin", o.selectedRow().key, "/ must not move the cursor")
+	assert.Equal(t, catAdvanced, o.selectedEntry().category, "nor the rail")
+
+	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyEsc})
+	assert.Equal(t, "agent_oom_margin", o.selectedRow().key, "esc on an untyped filter is a no-op")
+	assert.Equal(t, catAdvanced, o.selectedEntry().category)
+}
+
+// TestRunesTypeWhileTheFilterHasFocus is spec §8's second rule and the one most likely to be
+// implemented backwards: j and k are letters in a search box, not navigation. r is here too —
+// the reset key must not fire mid-query — and space extends the filter rather than toggling
+// the highlighted bool.
+func TestRunesTypeWhileTheFilterHasFocus(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.Theme = "gruvbox" // any non-default value; r would clear it
+	o := NewSettingsOverlay(cfg)
+	o.HandleKeyPress(keyRunes("/"))
+	before := rowValues(o)
+
+	typeFilter(o, "jkr")
+	assert.Equal(t, "jkr", o.search.filter, "j, k and r type; they do not navigate or reset")
+	// Every row, not just theme: the cursor is wherever the filter left it, so asserting on
+	// the theme row alone would hold even if r had reset whatever row IS highlighted.
+	assert.Equal(t, before, rowValues(o), "r must not have reset anything")
+
+	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeySpace})
+	assert.Equal(t, "jkr ", o.search.filter, "space extends the filter")
+
+	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyBackspace})
+	assert.Equal(t, "jkr", o.search.filter)
+}
+
+// TestArrowsMoveTheResultCursor is spec §8's third rule: ↑/↓ still navigate while the filter
+// types. It also pins the coupling the rest of the panel depends on — s.cursor is the global
+// row index and must track the picker's cursor, or the help pane describes one row while the
+// list highlights another.
+func TestArrowsMoveTheResultCursor(t *testing.T) {
+	o := NewSettingsOverlay(config.DefaultConfig())
+	o.HandleKeyPress(keyRunes("/"))
+	typeFilter(o, "in")
+	results := o.searchResults()
+	require.Greater(t, len(results), 2, "the query must return enough rows to move within")
+
+	require.Equal(t, results[0], o.cursor, "the cursor starts on the best match")
+	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyDown})
+	assert.Equal(t, results[1], o.cursor)
+	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyUp})
+	assert.Equal(t, results[0], o.cursor)
+	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyUp})
+	assert.Equal(t, results[0], o.cursor, "up at the first result clamps")
+}
+
+// TestTheRailFollowsTheHighlightedResult: the rail cannot take keys while filtering, so its
+// marker must mean something else — which category the current hit lives in. It is also what
+// makes Esc's landing predictable, since clearing the filter leaves the rail already synced.
+func TestTheRailFollowsTheHighlightedResult(t *testing.T) {
+	o := NewSettingsOverlay(config.DefaultConfig())
+	require.Equal(t, catSessions, o.selectedEntry().category)
+
+	o.HandleKeyPress(keyRunes("/"))
+	typeFilter(o, "glyph")
+	require.Equal(t, "glyph_set", o.selectedRow().key)
+	assert.Equal(t, catAppearance, o.selectedEntry().category,
+		"the rail marks the highlighted result's category")
+}
+
+// TestEditingAMatchedRowWorksAndKeepsItInTheResults is spec §8's fourth rule. The result set
+// is derived from label/key/summary/category — never from the value — so an edit cannot make
+// the row you are editing disappear from under you.
+func TestEditingAMatchedRowWorksAndKeepsItInTheResults(t *testing.T) {
+	cfg := config.DefaultConfig()
+	o := NewSettingsOverlay(cfg)
+	o.HandleKeyPress(keyRunes("/"))
+	typeFilter(o, "notifications")
+	require.Equal(t, "notifications", o.selectedRow().key)
+	before := resultKeys(o)
+
+	_, changed := o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRight})
+	assert.Equal(t, "notifications", changed, "→ cycles the value, exactly as unfiltered")
+	assert.Equal(t, before, resultKeys(o), "the row stays in the result list after an edit")
+	assert.Equal(t, "notifications", o.selectedRow().key, "and stays highlighted")
+
+	_, changed = o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyEnter})
+	assert.Equal(t, "notifications", changed, "↵ cycles an enum, exactly as unfiltered")
+}
+
+// TestEnterOpensTheLineEditorFromASearchResult: an int/text row edits the same way from a
+// filtered list, and the editor — not the filter — takes the keystrokes while it is open.
+func TestEnterOpensTheLineEditorFromASearchResult(t *testing.T) {
+	o := NewSettingsOverlay(config.DefaultConfig())
+	o.HandleKeyPress(keyRunes("/"))
+	typeFilter(o, "branch_prefix")
+	require.Equal(t, "branch_prefix", o.selectedRow().key)
+
+	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyEnter})
+	require.True(t, o.editing, "↵ opens the inline editor")
+	typeFilter(o, "zz")
+	assert.Equal(t, "branch_prefix", o.search.filter,
+		"an open editor swallows runes; the filter must not grow behind it")
+
+	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyEsc})
+	assert.False(t, o.editing)
+	assert.True(t, o.searching(), "cancelling the edit returns to the filtered list")
+}
+
+// TestEscIsThreeLayeredWithAFilter is spec §8's dismissal rule and §15's warning made
+// concrete: clear, back, close. Each level is advertised by hintLine.
+func TestEscIsThreeLayeredWithAFilter(t *testing.T) {
+	o := NewSettingsOverlay(config.DefaultConfig())
+	o.HandleKeyPress(keyRunes("/"))
+	typeFilter(o, "theme")
+	require.True(t, o.searching())
+
+	closed, _ := o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyEsc})
+	assert.False(t, closed, "the first esc clears the filter")
+	assert.False(t, o.searching())
+	assert.Equal(t, focusRows, o.focus, "and keeps the rows pane focused")
+	assert.Equal(t, "theme", o.selectedRow().key, "landing on the row the search found")
+	assert.Equal(t, catAppearance, o.selectedEntry().category)
+
+	closed, _ = o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyEsc})
+	assert.False(t, closed, "the second esc backs out to the rail")
+	assert.Equal(t, focusRail, o.focus)
+
+	closed, _ = o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyEsc})
+	assert.True(t, closed, "the third esc closes the panel")
+}
+
+// TestQuestionMarkOpensHelpForTheHighlightedResult: ? is the one rune the filter does not
+// get. Spec §8 assigns it to the expanded help while also saying runes type, and no row's
+// label, key, summary or category contains a question mark — so reserving it costs the search
+// nothing.
+func TestQuestionMarkOpensHelpForTheHighlightedResult(t *testing.T) {
+	o := NewSettingsOverlay(config.DefaultConfig())
+	o.HandleKeyPress(keyRunes("/"))
+	typeFilter(o, "clustering")
+	require.Equal(t, "group_mode", o.selectedRow().key)
+
+	o.HandleKeyPress(keyRunes("?"))
+	assert.True(t, o.helpOpen, "? opens the expanded help")
+	assert.Equal(t, "clustering", o.search.filter, "? did not land in the filter")
+	assert.Contains(t, o.expandedHelpContent(o.cursor), "Account clustering")
+
+	o.HandleKeyPress(keyRunes("?"))
+	assert.False(t, o.helpOpen)
+	assert.True(t, o.searching(), "? returns to the filtered list it was opened from")
+}
+
+// TestNoRowContainsAQuestionMark is the premise the reservation above rests on, asserted
+// rather than assumed — a future summary using one would silently make it unsearchable.
+func TestNoRowContainsAQuestionMark(t *testing.T) {
+	o := NewSettingsOverlay(config.DefaultConfig())
+	for _, r := range o.rows {
+		assert.NotContainsf(t, o.searchHaystack(r), "?",
+			"row %q would be unreachable: ? is reserved for the expanded help", r.key)
+	}
+}
+
+// TestZeroMatchesIsStableAndRecoverable: a query matching nothing must not panic, must not
+// move the cursor onto a row it cannot justify, and must be typed out of.
+func TestZeroMatchesIsStableAndRecoverable(t *testing.T) {
+	o := NewSettingsOverlay(config.DefaultConfig())
+	o.HandleKeyPress(keyRunes("/"))
+	typeFilter(o, "theme")
+	require.Equal(t, "theme", o.selectedRow().key)
+
+	typeFilter(o, "zzzz")
+	require.Empty(t, o.searchResults(), "precondition: nothing matches")
+	assert.Equal(t, "theme", o.selectedRow().key, "the cursor holds its last valid row")
+
+	for range 4 {
+		o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyBackspace})
+	}
+	assert.Equal(t, "theme", o.selectedRow().key, "backspacing back to a match recovers")
+}
+
+// TestTabLeavesTheSearchForTheRail: the rail is inert while filtering, so Tab cannot focus it
+// with the filter still applied. It clears and moves — the two escs in one key — rather than
+// being a dead key that has an obvious meaning on a keyboard.
+func TestTabLeavesTheSearchForTheRail(t *testing.T) {
+	o := NewSettingsOverlay(config.DefaultConfig())
+	o.HandleKeyPress(keyRunes("/"))
+	typeFilter(o, "theme")
+
+	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyTab})
+	assert.False(t, o.searching())
+	assert.Equal(t, focusRail, o.focus)
+	assert.Equal(t, catAppearance, o.selectedEntry().category, "on the category the search found")
+}
+
+// TestOpenAtClearsAnActiveFilter completes TestOpenAtClearsTransientState: a deep link into
+// an open, filtered panel must show the row it names, not a filtered list that may exclude it.
+func TestOpenAtClearsAnActiveFilter(t *testing.T) {
+	o := NewSettingsOverlay(config.DefaultConfig())
+	o.HandleKeyPress(keyRunes("/"))
+	typeFilter(o, "theme")
+	require.True(t, o.searching())
+
+	require.True(t, o.OpenAt("max_sessions"))
+	assert.False(t, o.searching(), "a deep link clears the filter that would hide its row")
+	assert.Equal(t, "max_sessions", o.selectedRow().key)
+	assert.Equal(t, catSessions, o.selectedEntry().category)
 }
