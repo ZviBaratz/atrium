@@ -192,12 +192,6 @@ func (m *home) recomputeLayout() {
 	m.updateHandleWindowSizeEvent(tea.WindowSizeMsg{Width: m.windowWidth, Height: m.windowHeight})
 }
 
-// applySettingChange persists the config after the settings panel changed the
-// given row, then live-applies whatever that field controls. Fields without a
-// case here are read live at their point of use (auto_attach, max_sessions,
-// kill_double_tap_confirm) or only consumed by later operations (branch_prefix,
-// default_program on the next session; daemon_poll_interval on the next daemon
-// run), so persisting is all they need.
 // refreshSettingsClusteringGate hands the settings panel the list's own answer to "are account
 // clusters currently visible?", which the panel cannot derive: the gate counts distinct cluster
 // keys over live sessions, and settingRow predicates only see the config.
@@ -208,6 +202,12 @@ func (m *home) refreshSettingsClusteringGate() {
 	m.settingsOverlay.SetAccountClusteringVisible(m.list.AccountClusteringVisible())
 }
 
+// applySettingChange persists the config after the settings panel changed the
+// given row, then live-applies whatever that field controls. Fields without a
+// case here are read live at their point of use (auto_attach, max_sessions,
+// kill_double_tap_confirm) or only consumed by later operations (branch_prefix,
+// default_program on the next session; daemon_poll_interval on the next daemon
+// run), so persisting is all they need.
 func (m *home) applySettingChange(key string) tea.Cmd {
 	if err := config.SaveConfig(m.appConfig); err != nil {
 		return m.handleError(err)

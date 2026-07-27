@@ -25,10 +25,13 @@ const (
 const (
 	rowMarkerCells = 3 // selection + modified + the space after them
 	rowLabelGap    = 2
-	// rowMinValueCells is the narrowest value column worth offering: enough for every row's
-	// compact value rendering, the widest of which is "‹ creation ›" at 12 cells. It is what
-	// makes minRowsPaneWidth — and so the single-pane threshold — a derived number, and
-	// TestRowMinValueCellsHoldsTheWidestCompactValue ties it to the real schema.
+	// rowMinValueCells is the narrowest value column worth offering: enough for every
+	// bounded-vocabulary row's compact rendering, the widest of which is "‹ creation ›" at 12
+	// cells. It is what makes minRowsPaneWidth — and so the single-pane threshold — a derived
+	// number, and TestRowMinValueCellsHoldsEveryFixedVocabularyValue ties it to the real schema.
+	// Rows whose vocabulary grows outside this package (theme, splash, default_program) and the
+	// arbitrary-length int and text rows are excluded there by design: they truncate at the
+	// narrowest two-pane width and the help pane shows the value in full.
 	rowMinValueCells = 14
 )
 
