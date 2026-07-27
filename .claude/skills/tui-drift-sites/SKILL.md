@@ -109,13 +109,19 @@ lie. Don't "fix" them.
    glyph is not cosmetic — it breaks the column math and the view-bounds
    invariant, which is exactly what `TestGlyphWidths` says it guards.
 
-   Keep that separate from the neighbouring failure it is easy to borrow drama
-   from: when a cluster's *measured* width diverges from its *rendered* width the
-   line overflows, wraps, and desyncs bubbletea's incremental alt-screen renderer
-   into accumulating ghost rows. That is `SanitizeWidth`'s territory
-   (`ui/theme/panel.go`) and it concerns **untrusted captured content** — pane
-   output and diffs — not this curated table, whose glyphs are chosen. Same
-   neighbourhood, different guard; see also `verify-tui`'s `measurement.md`.
+   Distinguish what the *tests* assert from *why the rule exists*. The three tests
+   above assert width 1 for column math; none of them mentions ghosting. But the
+   underlying reason is the same divergence in both cases: when a glyph's
+   *measured* width differs from its *rendered* width, the line overflows, wraps,
+   and desyncs bubbletea's incremental alt-screen renderer into accumulating ghost
+   rows. `ui/theme/agent.go` says so about **this** table — the glyphs are plain,
+   single-cell, non-PUA precisely because of it, which is also why item 3 below
+   matters.
+
+   One mechanism, two mitigations, two guards: for glyphs **we choose**, pick safe
+   ones and pin width 1 (the tests above). For content we **don't** choose — pane
+   output, diffs — sanitize at the boundary (`SanitizeWidth`, `ui/theme/panel.go`).
+   See `verify-tui`'s `measurement.md` for the mechanism in full.
 2. **It must reach the `?` legend**, or be excluded with a reason.
    `app/help_legend_test.go`'s `TestLegendCoversRowVocabulary` reflects over the
    live `Glyphs` table, so a new field forces a decision. Note one exclusion
