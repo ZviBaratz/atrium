@@ -148,3 +148,20 @@ Tests must never read or write the user's real data dir. Packages that resolve t
 config dir, save state, or touch tmux set `HOME` to a temp dir (see
 `config/config_test.go` and `app/app_test.go` `TestMain`). Any new test that can
 reach `config`/`state`/`tmux` writes must do the same.
+
+## Facts with more than one home
+
+A keybinding, a `Config` field, a glyph and a UI state each live in several places
+on purpose, because help and docs are *projections* rather than second copies. Most
+of those sites are guarded by a drift test; a few are not, and guessing which is how
+a key ships registered, documented, and dead.
+
+`.claude/skills/tui-drift-sites/SKILL.md` is the enumerated map — every site, and
+the test that fails when you miss one. Read it before adding or rebinding any of
+those things. The headline gap: **nothing asserts that a registered key has a
+`case` in `handleKeyPress`**, so a green suite does not prove a new key does
+anything. Press it.
+
+For the general discipline of proving a TUI change is right — why a passing Go suite
+cannot see width, reflow, colour, or a click that hit the neighbouring row — use the
+`verify-tui` skill from the `charm-tui` plugin.
