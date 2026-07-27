@@ -76,6 +76,13 @@ func (s *SettingsOverlay) handleProfilesKey(msg tea.KeyMsg) (closed bool, change
 		}
 	case "/":
 		s.startSearch()
+	case "n":
+		s.profileForm = newProfileForm(-1, "", "")
+	case "e", "enter":
+		if len(s.cfg.Profiles) > 0 {
+			p := s.cfg.Profiles[s.profileCursor]
+			s.profileForm = newProfileForm(s.profileCursor, p.Name, p.Program)
+		}
 	}
 	return false, ""
 }
@@ -441,8 +448,9 @@ func (s *SettingsOverlay) profilesHintLadder() []string {
 		return []string{"y delete · n cancel · esc cancel", "y delete · n cancel", "y / n"}
 	}
 	return []string{
-		"↑/↓ move · / search · ⇥ pane · esc back",
-		"↑/↓ · / search · esc back",
+		"↑/↓ move · n new · ↵ edit · / search · ⇥ pane · esc back",
+		"↑/↓ move · n new · ↵ edit · / search · esc back",
+		"↑/↓ · n new · ↵ edit · esc back",
 		"esc back",
 	}
 }

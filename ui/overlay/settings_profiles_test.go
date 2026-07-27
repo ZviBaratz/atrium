@@ -397,3 +397,333 @@ func TestLeavingTheProfilesPaneDropsItsTransientState(t *testing.T) {
 	assert.False(t, o.profileConfirm)
 	assert.Empty(t, o.profileNote)
 }
+
+// --- Task 3: the record form -------------------------------------------------
+
+// typeProfile sends each rune of s to the overlay as individual key messages, so the form's
+// inputs see the same stream a user produces. It deliberately does NOT send Enter — the commit
+// keypress's return value is what the tests assert on.
+func typeProfile(o *SettingsOverlay, s string) {
+	for _, r := range s {
+		_, _ = o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+	}
+}
+
+// TestNewProfileRoundTripsIntoTheConfig is guard 12's first clause. n opens an empty form, tab
+// moves to the program field, and Enter appends the record and reports the changed key so home
+// persists it through applySettingChange — the panel's one writer.
+func TestNewProfileRoundTripsIntoTheConfig(t *testing.T) {
+	cfg := threeProfiles()
+	o := NewSettingsOverlay(cfg)
+	o.SetSize(100, 32)
+	profilesAt(t, o)
+
+	_, _ = o.HandleKeyPress(keyRunes("n"))
+	require.NotNil(t, o.profileForm, "n opens the form")
+	require.Equal(t, -1, o.profileForm.editIndex, "-1 is the new-record sentinel")
+
+	typeProfile(o, "gemini")
+	_, _ = o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyTab})
+	typeProfile(o, "gemini --yolo")
+	_, changed := o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyEnter})
+
+	assert.Equal(t, profilesChangedKey, changed, "the editor reports the config key it changed")
+	assert.Nil(t, o.profileForm, "a committed form closes")
+	require.Len(t, cfg.Profiles, 4)
+	assert.Equal(t, config.Profile{Name: "gemini", Program: "gemini --yolo"}, cfg.Profiles[3])
+	assert.Equal(t, 3, o.profileCursor, "the cursor lands on the record you just made")
+}
+
+// TestEditProfileReplacesInPlace: e seeds the form from the highlighted record and Enter writes
+// it back at the same index rather than appending a near-duplicate.
+func TestEditProfileReplacesInPlace(t *testing.T) {
+	cfg := threeProfiles()
+	o := NewSettingsOverlay(cfg)
+	o.SetSize(100, 32)
+	profilesAt(t, o)
+	_, _ = o.HandleKeyPress(keyRunes("j")) // onto aider
+
+	_, _ = o.HandleKeyPress(keyRunes("e"))
+	require.NotNil(t, o.profileForm)
+	assert.Equal(t, 1, o.profileForm.editIndex)
+	assert.Equal(t, "aider", o.profileForm.name(), "the form is seeded from the record")
+	assert.Equal(t, "aider --model ollama_chat/gemma3:1b", o.profileForm.program())
+
+	// applyFocus leaves the cursor at end, so typing appends rather than overtyping.
+	_, _ = o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyTab})
+	typeProfile(o, " --dark-mode")
+	_, changed := o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyEnter})
+
+	assert.Equal(t, profilesChangedKey, changed)
+	require.Len(t, cfg.Profiles, 3, "an edit replaces, it does not append")
+	assert.Equal(t, "aider --model ollama_chat/gemma3:1b --dark-mode", cfg.Profiles[1].Program)
+	assert.Equal(t, "aider", cfg.Profiles[1].Name)
+}
+
+// TestEnterIsAnAliasForEdit — spec §9 lists "e/Enter edit", and the accounts overlay binds them
+// together too.
+func TestEnterIsAnAliasForEdit(t *testing.T) {
+	o := NewSettingsOverlay(threeProfiles())
+	o.SetSize(100, 32)
+	profilesAt(t, o)
+
+	_, _ = o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyEnter})
+	require.NotNil(t, o.profileForm)
+	assert.Equal(t, 0, o.profileForm.editIndex)
+}
+
+// TestEditAndDeleteAreInertWithNoProfiles: n needs no selection, but e/↵ and d index the list.
+// On an empty pane they must do nothing rather than panic — the guard accounts.go writes as
+// `if o.activeLen() > 0`.
+func TestEditAndDeleteAreInertWithNoProfiles(t *testing.T) {
+	cfg := config.DefaultConfig()
+	o := NewSettingsOverlay(cfg)
+	o.SetSize(100, 32)
+	require.Empty(t, cfg.Profiles)
+	profilesAt(t, o)
+
+	for _, key := range []string{"e", "d"} {
+		_, changed := o.HandleKeyPress(keyRunes(key))
+		assert.Emptyf(t, changed, "%q changes nothing on an empty list", key)
+		assert.Nilf(t, o.profileForm, "%q must not open a form over nothing", key)
+		assert.Falsef(t, o.profileConfirm, "%q must not arm a delete over nothing", key)
+	}
+	_, _ = o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyEnter})
+	assert.Nil(t, o.profileForm, "↵ is the edit alias and is inert here too")
+
+	_, _ = o.HandleKeyPress(keyRunes("n"))
+	assert.NotNil(t, o.profileForm, "n needs no selection")
+}
+
+// TestFormValidationRejectsAndStaysOpen. A rejected save must be fixable in place rather than
+// thrown away, so the form stays open with the message in the help pane — and the SECOND Enter
+// in the same form instance must still reach validate, which is what the accounts overlay's
+// `o.form.submitted = false` reset exists for.
+func TestFormValidationRejectsAndStaysOpen(t *testing.T) {
+	cfg := threeProfiles()
+	o := NewSettingsOverlay(cfg)
+	o.SetSize(100, 32)
+	profilesAt(t, o)
+	_, _ = o.HandleKeyPress(keyRunes("n"))
+
+	_, changed := o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyEnter}) // empty name
+	assert.Empty(t, changed)
+	require.NotNil(t, o.profileForm, "a rejected save stays in the form")
+	assert.Contains(t, o.lastErr, "name")
+	assert.Len(t, cfg.Profiles, 3, "nothing was written")
+
+	typeProfile(o, "claude") // now a duplicate
+	_, changed = o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyEnter})
+	assert.Empty(t, changed)
+	require.NotNil(t, o.profileForm)
+	assert.Contains(t, o.lastErr, "already exists")
+	assert.Len(t, cfg.Profiles, 3)
+
+	typeProfile(o, "-fast") // unique now, but no program yet
+	_, changed = o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyEnter})
+	assert.Empty(t, changed)
+	require.NotNil(t, o.profileForm)
+	assert.Contains(t, o.lastErr, "program",
+		"an empty program is not 'inherit the default', it is a session that launches nothing")
+	assert.Len(t, cfg.Profiles, 3)
+}
+
+// TestEditingWithoutRenamingIsNotADuplicateOfItself is the self-exclusion half: validate skips
+// the record being edited, so re-saving an unrenamed edit works, while renaming ONTO another
+// record still fails.
+func TestEditingWithoutRenamingIsNotADuplicateOfItself(t *testing.T) {
+	cfg := threeProfiles()
+	o := NewSettingsOverlay(cfg)
+	o.SetSize(100, 32)
+	profilesAt(t, o)
+
+	_, _ = o.HandleKeyPress(keyRunes("e")) // claude, unrenamed
+	_, changed := o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyEnter})
+	assert.Equal(t, profilesChangedKey, changed, "an unrenamed edit is not a duplicate of itself")
+	assert.Empty(t, o.lastErr)
+
+	_, _ = o.HandleKeyPress(keyRunes("e"))
+	_, _ = o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyCtrlU}) // clear the seeded name
+	typeProfile(o, "codex")                                 // rename onto another record
+	_, changed = o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyEnter})
+	assert.Empty(t, changed)
+	assert.Contains(t, o.lastErr, "already exists")
+	assert.Equal(t, "claude", cfg.Profiles[0].Name, "the rename was refused, not applied")
+}
+
+// TestEscInTheFormDiscardsTheEdit — the form works on its own string copies, so cancelling
+// touches nothing. This is the editor's own Esc level, above the panel's three.
+func TestEscInTheFormDiscardsTheEdit(t *testing.T) {
+	cfg := threeProfiles()
+	before := cfg.Profiles[0]
+	o := NewSettingsOverlay(cfg)
+	o.SetSize(100, 32)
+	profilesAt(t, o)
+
+	_, _ = o.HandleKeyPress(keyRunes("e"))
+	typeProfile(o, "-mangled")
+	closed, changed := o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyEsc})
+
+	assert.False(t, closed, "esc in the form must not close the panel")
+	assert.Empty(t, changed)
+	assert.Nil(t, o.profileForm)
+	assert.Equal(t, before, cfg.Profiles[0], "esc discards the edit")
+	assert.Equal(t, focusRows, o.focus, "and leaves you in the editor, not on the rail")
+}
+
+// TestFormSwallowsNavigationKeys. While a form is open, j/k/d/n/D are letters — the same rule
+// the settings line editor and the `/` filter follow. Getting this wrong deletes a record while
+// the user is typing a name.
+func TestFormSwallowsNavigationKeys(t *testing.T) {
+	cfg := threeProfiles()
+	o := NewSettingsOverlay(cfg)
+	o.SetSize(100, 32)
+	profilesAt(t, o)
+	_, _ = o.HandleKeyPress(keyRunes("n"))
+
+	typeProfile(o, "jkdnD/?")
+	assert.Equal(t, "jkdnD/?", o.profileForm.name(), "every rune is text in a form")
+	assert.Len(t, cfg.Profiles, 3, "nothing was deleted")
+	assert.False(t, o.searching(), "/ does not open the filter from inside the form")
+	assert.False(t, o.helpOpen)
+	assert.Equal(t, 0, o.profileCursor, "j did not navigate")
+}
+
+// TestFormTabCyclesTheTwoFields, both directions, wrapping.
+func TestFormTabCyclesTheTwoFields(t *testing.T) {
+	o := NewSettingsOverlay(threeProfiles())
+	o.SetSize(100, 32)
+	profilesAt(t, o)
+	_, _ = o.HandleKeyPress(keyRunes("n"))
+
+	assert.Equal(t, fldProfileName, o.profileForm.focus)
+	_, _ = o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyTab})
+	assert.Equal(t, fldProfileProgram, o.profileForm.focus)
+	_, _ = o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyTab})
+	assert.Equal(t, fldProfileName, o.profileForm.focus, "tab wraps")
+	_, _ = o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyShiftTab})
+	assert.Equal(t, fldProfileProgram, o.profileForm.focus, "shift+tab wraps the other way")
+}
+
+// TestRenamingTheDefaultProfileCarriesDefaultProgramWithIt. default_program is a NAME, so a
+// rename that left it behind would silently change what new sessions launch: the pointer would
+// stop matching any profile and GetProgram would fall through to running the old name as a raw
+// shell command. Following the rename preserves exactly what launches.
+func TestRenamingTheDefaultProfileCarriesDefaultProgramWithIt(t *testing.T) {
+	cfg := threeProfiles()
+	require.Equal(t, "claude", cfg.DefaultProgram)
+	require.Equal(t, "claude --model opus", cfg.GetProgram())
+	o := NewSettingsOverlay(cfg)
+	o.SetSize(100, 32)
+	profilesAt(t, o)
+
+	_, _ = o.HandleKeyPress(keyRunes("e"))
+	_, _ = o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyCtrlU})
+	typeProfile(o, "claude-fast")
+	_, changed := o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyEnter})
+
+	assert.Equal(t, profilesChangedKey, changed)
+	assert.Equal(t, "claude-fast", cfg.DefaultProgram, "the pointer follows the record")
+	assert.Equal(t, "claude --model opus", cfg.GetProgram(),
+		"and still resolves to the profile's command rather than a raw fallthrough")
+	// Without the carry, DefaultProgram would still read "claude", match no record, and
+	// GetProgram would fall through to running the bare name as a shell command — a different
+	// program, chosen by nobody.
+}
+
+// TestRenamingANonDefaultProfileLeavesDefaultProgramAlone is the negative control that makes
+// the test above mean something: the carry is conditional on the record being the default, not
+// unconditional.
+func TestRenamingANonDefaultProfileLeavesDefaultProgramAlone(t *testing.T) {
+	cfg := threeProfiles()
+	o := NewSettingsOverlay(cfg)
+	o.SetSize(100, 32)
+	profilesAt(t, o)
+	_, _ = o.HandleKeyPress(keyRunes("j")) // aider, not the default
+
+	_, _ = o.HandleKeyPress(keyRunes("e"))
+	_, _ = o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyCtrlU})
+	typeProfile(o, "aider2")
+	_, _ = o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyEnter})
+
+	assert.Equal(t, "claude", cfg.DefaultProgram, "an unrelated rename must not move the pointer")
+}
+
+// TestProfileFormFitsEveryGeometry. The form is three lines — a heading and the two fields —
+// which is exactly paneHeight()'s floor (settingsMinBody), so it survives every terminal the
+// panel supports without a shedding ladder. Both field labels must be present at every size:
+// the Program field is the one that decides what launches, and it is the line a stacked
+// label-above-input layout would lose first.
+//
+// It sweeps BOTH a new form and a seeded edit form. Nothing bounds a form line the way
+// composeRowLine bounds a row line, so the width assertion here is a real one rather than a
+// tautology — and the seeded case is the one that catches it: textinput only recomputes its
+// visible window from Update or setCursor, so an edit form built by SetValue while Width is
+// still 0 emits its ENTIRE value until the user types. A sweep over the empty form alone cannot
+// see that.
+func TestProfileFormFitsEveryGeometry(t *testing.T) {
+	long := "aider --model ollama_chat/gemma3:1b --no-auto-commits --dark-mode"
+	forms := map[string]func() *profileForm{
+		"new":  func() *profileForm { return newProfileForm(-1, "", "") },
+		"edit": func() *profileForm { return newProfileForm(1, "aider", long) },
+	}
+	checked := 0
+	for kind, build := range forms {
+		for _, h := range []int{settingsVChrome + settingsMinBody, 16, 24, 40} {
+			for w := 40; w <= 200; w += 7 {
+				o := NewSettingsOverlay(threeProfiles())
+				o.SetSize(w, h)
+				o.SetRailIndex(profilesRailIndex())
+				o.focus = focusRows
+				o.profileForm = build()
+
+				paneW := o.rowsPaneWidth()
+				lines := o.rowsPaneContent(paneW)
+				require.LessOrEqualf(t, len(lines), o.paneHeight(),
+					"%s %dx%d: the form must fit the pane rather than scroll", kind, w, h)
+				joined := ""
+				for _, l := range lines {
+					plain := stripANSI(l.text)
+					assert.LessOrEqualf(t, ansi.StringWidth(plain), paneW,
+						"%s %dx%d: a form line overflows the pane: %q", kind, w, h, plain)
+					joined += plain + "\n"
+				}
+				assert.Containsf(t, joined, profileNameLabel, "%s %dx%d: the Name field must be visible", kind, w, h)
+				assert.Containsf(t, joined, profileProgramLabel, "%s %dx%d: the Program field must be visible", kind, w, h)
+				checked++
+			}
+		}
+	}
+	require.Greater(t, checked, 180, "the sweep must actually visit both forms at every geometry")
+}
+
+// TestFormHeadingNamesWhichOperationItIs — "New profile" vs "Edit profile" is the only thing on
+// screen distinguishing an append from a replace, and getting it wrong is how a user overwrites
+// a record they meant to add beside.
+func TestFormHeadingNamesWhichOperationItIs(t *testing.T) {
+	o := NewSettingsOverlay(threeProfiles())
+	o.SetSize(100, 32)
+	profilesAt(t, o)
+
+	_, _ = o.HandleKeyPress(keyRunes("n"))
+	assert.Contains(t, strings.Join(paneText(o), " "), "New profile")
+
+	_, _ = o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyEsc})
+	_, _ = o.HandleKeyPress(keyRunes("e"))
+	assert.Contains(t, strings.Join(paneText(o), " "), "Edit profile")
+}
+
+// TestFormHintNamesItsOwnKeys — the form is a fourth Esc level, and the hint row is the only
+// place saying so (spec §15: differing hints per focus, not one static string).
+func TestFormHintNamesItsOwnKeys(t *testing.T) {
+	o := NewSettingsOverlay(threeProfiles())
+	o.SetSize(100, 32)
+	profilesAt(t, o)
+	_, _ = o.HandleKeyPress(keyRunes("n"))
+
+	hint := stripANSI(o.hintLine())
+	assert.Contains(t, hint, "esc cancel", "the form's esc cancels rather than backing out")
+	assert.Contains(t, hint, "↵ save")
+	assert.Contains(t, hint, "⇥ field", "tab switches fields here, not panes")
+	assert.NotContains(t, hint, "…", "the ladder must fit rather than be truncated")
+}

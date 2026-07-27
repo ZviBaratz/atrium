@@ -995,6 +995,8 @@ func (s *SettingsOverlay) hintLine() string {
 	switch {
 	case s.editing:
 		ladder = []string{"↵ save · esc cancel", "esc cancel"}
+	case s.profileForm != nil:
+		ladder = []string{"⇥ field · ↵ save · esc cancel", "↵ save · esc cancel", "esc cancel"}
 	case s.helpOpen:
 		ladder = []string{"↑/↓ scroll · ? or esc back", "esc back"}
 	case s.searching():
