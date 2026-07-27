@@ -415,6 +415,46 @@ A new category, the first TUI editing of `profiles` (today JSON-only). Rows are 
   `newSettingRows` — a hand-edited raw command in `default_program` must stay a cycle
   option, and a profiles edit must not destroy it.
 
+> **Resolved in PR D.** Six decisions this section left open:
+>
+> - **Profiles is a fourth `railKind` (`railProfiles`), not an 11th category.** A category means
+>   `settingRow`s, which a list of records cannot be — and §4's rail budget has zero headroom at
+>   13. The entry owns a focusable pane but no rows, which splits an invariant PR B could state
+>   as one fact: `railHandoff` was *exactly* the no-rows case, so "→ rows" and "⇥ pane" shared a
+>   discriminator. They no longer do. `→ rows` requires `settingRow`s; `⇥ pane` requires a pane
+>   the forward key can focus, which the editor has.
+> - **Deleting the profile `default_program` names is refused, not repointed.** The setting lives
+>   in another category, so a silent repoint would change what every new session launches from a
+>   pane that cannot show the change. **A rename does carry the setting along**, because the
+>   record it names still exists and following it preserves exactly what launches; a delete has
+>   no successor that preserves anything. The refusal's wording is **conditional**: with exactly
+>   one profile, `default_program`'s enum has a single option and `cycleEnum` returns early with
+>   no error, no chip and no reset — so "change it under Sessions first" would name an action the
+>   panel makes impossible, and it says "add another with n first" instead.
+> - **`d` asks `y / n` first**, diverging from this section's bare key list. Deleting a record is
+>   the first irreversible action in the panel — `r` restores a default, an enum cycle is
+>   reversible — and the sibling record editor over the same config file already confirms.
+> - **Profiles are not searchable.** `/` matches label + key + summary + category over the
+>   setting schema; a profile is data, not a setting. `/` from the editor opens the ordinary
+>   filter and takes the rail with it, exactly as it does from a handoff entry.
+> - **`D` runs detection as a `tea.Cmd`, not inline.** `config.DetectAgentProfiles` probes claude
+>   through `config.GetClaudeCommand`, which spawns a login shell under a ten-second timeout, so
+>   a synchronous call would freeze the update loop and every session's poll with it. The overlay
+>   records a request and `home` fulfils it through the same `detectAgents` seam the startup
+>   agent check uses; the merge stays `(*config.Config).MergeDetectedProfiles`.
+> - **The merge happens in `home`, unconditionally, and the overlay only reports it.** The probe
+>   outlives the keypress, so gating the merge on the panel still being open made one set of
+>   keystrokes produce three outcomes — dropped, merged into a different overlay instance, or
+>   merged with nothing on screen. `NoteProfilesDetected` returns whether the editor's pane
+>   showed the outcome; when it did not, `home` surfaces it as a notice.
+>
+> One consequence worth recording so it is not later "fixed": after renaming or deleting the
+> record whose name `rawDefaultProgram` captured, that captured string is prepended to
+> `default_program`'s options as a *raw command*. It looks stale and is exactly what the capture
+> promises — the config genuinely held it at panel open, and `GetProgram` passes an unmatched
+> value to the shell. Narrowing the capture trades a cosmetic oddity for a real irrecoverable
+> value.
+
 ## 10. Layout and degradation
 
 - Box width becomes `min(96, width−2)` with today's floor, up from a fixed 64.
@@ -558,8 +598,8 @@ Tests must stay hermetic (`HOME` to a temp dir) per CLAUDE.md.
 | PR | Contents | Risk |
 |---|---|---|
 | **A** | Schema fields + the §4 taxonomy + the §6 copy verbatim, rendered by the **existing single-column renderer** (10 sections instead of 3) + README reference gains a category column. Guards 1–3. | Low — no layout change |
-| **B** | Two-pane renderer, nav grammar, degradation, orientation, and the full visibility layer (modified marker, timing badge, inert dimming, inline enum alternatives, `?` help). Guards 4–7. | Medium |
-| **C** | Search + `r` reset + `OpenAt` deep links + the Accounts handoff row. Guards 8–11. | Low |
+| **B** | Two-pane renderer, nav grammar, degradation, orientation, and the full visibility layer (modified marker, timing badge, inert dimming, inline enum alternatives, `?` help). Guards 4–7, 10. | Medium |
+| **C** | Search + `r` reset + `OpenAt` deep links + the Accounts handoff row. Guards 8, 9, 11. | Low |
 | **D** | Profiles editor. Guard 12. | Medium |
 
 PR A is deliberately shaped to land the highest-value change — a coherent taxonomy and
