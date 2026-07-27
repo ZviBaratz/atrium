@@ -100,6 +100,16 @@ func TestGlyphsForFidelityRungs(t *testing.T) {
 	require.Equal(t, asciiGlyphs().Branch, Current().Glyphs.Branch, "ascii rung uses the 7-bit set")
 	require.Equal(t, "|", Current().Glyphs.SpinnerFrames[0], "ascii rung swaps in the |/-\\ spinner frames")
 
+	// The two settings-panel chrome glyphs: the modified marker and the handoff arrow.
+	// Both are plain Unicode with a 7-bit floor, so the ascii rung must override them
+	// rather than inherit an arrow that tofus on a sparse font.
+	require.Equal(t, "*", Current().Glyphs.Modified, "ascii rung uses a 7-bit modified marker")
+	require.Equal(t, ">", Current().Glyphs.Handoff, "ascii rung uses a 7-bit handoff arrow")
+
+	SetGlyphSet(GlyphSetPlain)
+	require.Equal(t, "•", Current().Glyphs.Modified, "plain rung uses a bullet")
+	require.Equal(t, "→", Current().Glyphs.Handoff, "plain rung uses an arrow")
+
 	SetGlyphSet("bogus-rung")
 	require.Equal(t, plainGlyphs().Branch, Current().Glyphs.Branch, "an unknown rung falls back to plain")
 }
@@ -129,6 +139,8 @@ func assertGlyphWidths(t *testing.T, name string, g Glyphs) {
 		"DiffAdd":       g.DiffAdd,
 		"DiffDel":       g.DiffDel,
 		"TextCursor":    g.TextCursor,
+		"Modified":      g.Modified,
+		"Handoff":       g.Handoff,
 	}
 	for label, glyph := range cells {
 		if w := runewidth.StringWidth(glyph); w != 1 {
