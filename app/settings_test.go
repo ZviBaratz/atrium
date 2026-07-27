@@ -392,3 +392,29 @@ func TestSettingsPanel_RemembersTheCategoryAcrossOpens(t *testing.T) {
 	_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(",")})
 	assert.Equal(t, want, h.settingsOverlay.RailIndex(), "reopening returns to the last category")
 }
+
+// r routes through applySettingChange exactly as an edit does: the config is persisted and
+// the live-apply hook runs. Pinned on theme because its hook is observable — theme.Set swaps
+// the active palette, so a reset that persisted without live-applying would leave the running
+// UI painted in a theme config.json no longer names.
+func TestSettingsPanel_ResetPersistsAndLiveApplies(t *testing.T) {
+	resetSettingsTestState(t)
+	h := newSettingsTestHome()
+	_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(",")})
+	require.Equal(t, stateSettings, h.state)
+
+	require.True(t, h.settingsOverlay.SelectRow("theme"))
+	_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyRight}) // off the default
+	changed := h.appConfig.Theme
+	require.NotEmpty(t, changed, "precondition: the theme is now explicitly set")
+	require.Equal(t, changed, config.LoadConfig().Theme, "precondition: the edit reached disk")
+	require.Equal(t, changed, theme.Current().Name, "precondition: and live-applied")
+
+	_, cmd := h.handleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("r")})
+
+	assert.Empty(t, h.appConfig.Theme, "r cleared the explicit theme")
+	assert.Empty(t, config.LoadConfig().Theme, "r persisted, like an edit")
+	assert.Equal(t, theme.DefaultThemeName, theme.Current().Name,
+		"r live-applied: the running UI repainted in the default palette")
+	assert.NotNil(t, cmd, "a repaint command must be issued, as for an edit")
+}

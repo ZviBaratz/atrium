@@ -216,6 +216,8 @@ func (s *SettingsOverlay) handleRowsKey(msg tea.KeyMsg) (closed bool, changedKey
 		if row.kind == kindBool {
 			return false, s.toggleBool(row)
 		}
+	case "r":
+		return false, s.resetRow(row)
 	case "?":
 		s.helpOpen = true
 		s.helpScroll = 0
@@ -230,6 +232,32 @@ func (s *SettingsOverlay) handleRowsKey(msg tea.KeyMsg) (closed bool, changedKey
 		}
 	}
 	return false, ""
+}
+
+// resetRow restores a row to its built-in default and reports its key, or "" when nothing
+// changed — the same contract toggleBool and cycleEnum have, so home persists and
+// live-applies a reset exactly like an edit (spec §13's guard 8).
+//
+// The before/after comparison is what makes the reported key mean "this value just changed".
+// Reporting unconditionally would rewrite config.json and re-run the field's live-apply hook
+// — for theme, a full ClearScreen repaint — every time r is pressed on a row already at its
+// default.
+//
+// A nil reset is a silent no-op, not an error: kindReadOnly has nothing to set, and
+// default_program and branch_prefix have no fixed default to return to (spec §5). There is
+// deliberately no arm for r on the rail either: category reset is spec §2's non-goal, and the
+// absence of the arm is the implementation (TestResetOnTheRailIsASilentNoOp).
+func (s *SettingsOverlay) resetRow(row *settingRow) string {
+	s.lastErr = ""
+	if row.reset == nil {
+		return ""
+	}
+	before := row.get(s.cfg)
+	row.reset(s.cfg)
+	if row.get(s.cfg) == before {
+		return ""
+	}
+	return row.key
 }
 
 // pagedCursor resolves a paging key to a target row index within [start,end). It is a

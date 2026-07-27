@@ -311,3 +311,96 @@ func TestSelectRowFocusesTheRowsPaneAndSyncsTheRail(t *testing.T) {
 	}
 	assert.False(t, o.SelectRow("not_a_row"), "an unknown key reports not-found")
 }
+
+// rowValues snapshots every row's displayed value, so a "nothing changed" assertion is about
+// what the panel shows rather than about struct equality — a Config holds slices and
+// pointers, and a deep compare of it answers a different question.
+func rowValues(o *SettingsOverlay) []string {
+	out := make([]string, len(o.rows))
+	for i, r := range o.rows {
+		out[i] = r.get(o.cfg)
+	}
+	return out
+}
+
+// TestResetRestoresTheDefaultAndReportsTheKey is spec §13's guard 8. r must behave exactly
+// like an edit: restore the built-in default AND report the changed key, so home persists the
+// config and runs that field's live-apply hook. A reset that changed the config without
+// reporting would leave disk and screen disagreeing until the next unrelated edit.
+func TestResetRestoresTheDefaultAndReportsTheKey(t *testing.T) {
+	cfg := config.DefaultConfig()
+	o := NewSettingsOverlay(cfg)
+	settingsAt(t, o, "theme")
+	require.False(t, o.isModified(o.cursor), "precondition: a fresh config starts unmodified")
+
+	_, changed := o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRight}) // cycle off the default
+	require.Equal(t, "theme", changed)
+	require.True(t, o.isModified(o.cursor), "precondition: the row is modified before reset")
+
+	_, changed = o.HandleKeyPress(keyRunes("r"))
+	assert.Equal(t, "theme", changed, "r reports the key so home persists and live-applies")
+	assert.False(t, o.isModified(o.cursor), "r restored the default")
+}
+
+// TestResetIsSilentOnAnUnmodifiedRow pins that the reported key means "this value just
+// changed". Reporting unconditionally would rewrite config.json and re-run the live-apply
+// hook — for theme, a full ClearScreen repaint — on every press of a key that did nothing.
+func TestResetIsSilentOnAnUnmodifiedRow(t *testing.T) {
+	o := NewSettingsOverlay(config.DefaultConfig())
+	settingsAt(t, o, "theme")
+	require.False(t, o.isModified(o.cursor))
+
+	_, changed := o.HandleKeyPress(keyRunes("r"))
+	assert.Empty(t, changed, "a reset that changed nothing reports nothing")
+}
+
+// The two schema-level guards r rests on are PR A's and already pass unchanged:
+// TestResetRestoresTheDefault (every reset produces the advertised default and clears the
+// modified marker) and TestResetIsPresentWhereverADefaultIs (defaultDisplay and reset travel
+// together; a read-only row has neither), both in settings_schema_test.go. The tests here are
+// only about the key that reaches them.
+
+// TestResetOnARowWithNoFixedDefaultIsASilentNoOp covers the two rows spec §5 makes nil by
+// design — default_program (the first *detected* agent) and branch_prefix (the OS username).
+// They have nowhere to go back to, so r must not pretend otherwise.
+func TestResetOnARowWithNoFixedDefaultIsASilentNoOp(t *testing.T) {
+	for _, key := range []string{"default_program", "branch_prefix"} {
+		cfg := config.DefaultConfig()
+		o := NewSettingsOverlay(cfg)
+		settingsAt(t, o, key)
+		require.Nil(t, o.rows[o.cursor].reset, "precondition: %q declares no reset", key)
+
+		before := rowValues(o)
+		_, changed := o.HandleKeyPress(keyRunes("r"))
+		assert.Emptyf(t, changed, "r on %q must report nothing", key)
+		assert.Equalf(t, before, rowValues(o), "r on %q must change nothing", key)
+	}
+}
+
+// TestResetOnTheRailIsASilentNoOp is spec §2's non-goal, made structural: there is no
+// category reset. Pressing r with the rail focused must not clear a category's worth of
+// settings, and must not say it did.
+func TestResetOnTheRailIsASilentNoOp(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.Theme = "gruvbox" // any non-default value a category reset would have destroyed
+	o := NewSettingsOverlay(cfg)
+	o.SetRailIndex(railIndexForCategory(catAppearance))
+	require.Equal(t, focusRail, o.focus)
+
+	before := rowValues(o)
+	closed, changed := o.HandleKeyPress(keyRunes("r"))
+	assert.False(t, closed)
+	assert.Empty(t, changed)
+	assert.Equal(t, before, rowValues(o), "r on the rail must not touch a single row")
+}
+
+// TestResetOnTheReadOnlyRowIsASilentNoOp: the resolved config.json path has no setter and no
+// default, and every edit key is a no-op on it (spec §5's kindReadOnly).
+func TestResetOnTheReadOnlyRowIsASilentNoOp(t *testing.T) {
+	o := NewSettingsOverlay(config.DefaultConfig())
+	settingsAt(t, o, "config_file")
+	require.Equal(t, kindReadOnly, o.rows[o.cursor].kind)
+
+	_, changed := o.HandleKeyPress(keyRunes("r"))
+	assert.Empty(t, changed)
+}
