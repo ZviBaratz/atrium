@@ -408,7 +408,7 @@ func (l *List) String() string {
 	distinct := l.distinctRepoCount()
 	showRepos := distinct > 0
 	foldable := distinct > 1
-	accountGroupingVisible := l.accountGrouped() && l.distinctAccountCount() > 1
+	accountGroupingVisible := l.AccountClusteringVisible()
 	// Default to showing row badges; the row loop suppresses each one only when it is
 	// redundant with the cluster it renders under (see below).
 	l.renderer.hideAccountBadge = false

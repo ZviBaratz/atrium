@@ -73,6 +73,8 @@ func plainGlyphs() Glyphs {
 		FoldClosed:    "▸",
 		SelectionMark: "▎",
 		MarkChecked:   "✓",
+		Modified:      "•", // settings "changed from default" dot; its own column, never SelectionMark's
+		Handoff:       "→", // settings rail entry that hands off to another overlay
 		DiffAdd:       "+",
 		DiffDel:       "-",
 		TextCursor:    "▌",
@@ -127,6 +129,12 @@ func asciiGlyphs() Glyphs {
 	g.SelectionMark = "|"
 	g.MarkChecked = "x"
 	g.TextCursor = "_"
+	// Two collisions here are deliberate: Modified reuses Ready's "*" and Handoff reuses
+	// FoldClosed's ">". Neither pair ever shares a frame — Modified and Handoff appear only
+	// inside the settings panel, Ready and FoldClosed only on a session row — so no screen
+	// shows both meanings, and inventing a distinct 7-bit mark would mean a less legible one.
+	g.Modified = "*"
+	g.Handoff = ">"
 	// AutoBadge, DiffAdd, DiffDel are already ASCII/empty in plainGlyphs — inherited.
 	return g
 }

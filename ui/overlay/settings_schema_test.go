@@ -451,9 +451,14 @@ func TestOOMMarginIsLinuxOnly(t *testing.T) {
 //
 // A settingRow predicate only sees *config.Config, never the session list, so the honest
 // gate is not expressible here and group_mode stays always-active rather than shipping a
-// chip that is wrong in both directions. PR B owns the reason strings and has the list in
-// hand; the gate belongs there. (ui.List.AccountReorderEnabled uses a *third* count —
-// clusters, not accounts — so "cluster count != account count" holds here too.)
+// chip that is wrong in both directions. (ui.List.AccountReorderEnabled uses a *third* count
+// — clusters, not accounts — so "cluster count != account count" holds here too.)
+//
+// PR B delivered the gate where it belongs: ui.List.AccountClusteringVisible() is now the single
+// definition, ui/list_render.go calls it rather than repeating the expression, and home injects
+// its answer into the panel via SettingsOverlay.SetAccountClusteringVisible. The chip lives in
+// the renderer's inertReasons map with a documented exception, so the completeness guard covers
+// it. This test stays as the reason the schema does NOT carry a predicate.
 func TestGroupModeHasNoConfigOnlyInertPredicate(t *testing.T) {
 	row := rowByKey(t, config.DefaultConfig(), "group_mode")
 	assert.Nil(t, row.activeWhen,

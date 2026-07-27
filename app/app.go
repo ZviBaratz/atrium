@@ -454,6 +454,15 @@ type home struct {
 	// settingsOverlay is the in-TUI configuration panel. It edits appConfig in
 	// place; applySettingChange persists and live-applies each change.
 	settingsOverlay *overlay.SettingsOverlay
+
+	// settingsRail remembers which settings category was current, so reopening the panel
+	// returns to it within a run. The overlay is reconstructed on every ',', so the memory has
+	// to live out here. Deliberately not persisted to state.json (spec §7).
+	//
+	// It is a *int because a plain int's zero value is 0 — the All settings entry, the one rail
+	// entry spec §4 explicitly excludes as the landing. nil means "not opened yet this run", so
+	// the first ',' gets railDefaultIndex().
+	settingsRail *int
 	// accountsOverlay is the in-TUI Claude/GitHub/Antigravity account manager
 	// (stateAccounts). It edits appConfig in place; handleAccountsState persists each change.
 	accountsOverlay *overlay.AccountsOverlay

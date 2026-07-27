@@ -345,6 +345,8 @@ func (m *home) handleSettingsState(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	}
 	if closed {
+		rail := m.settingsOverlay.RailIndex()
+		m.settingsRail = &rail
 		m.settingsOverlay = nil
 		m.state = stateDefault
 		m.recomputeLayout() // menuVisible flipped; the hint bar may reclaim its row
