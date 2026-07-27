@@ -380,6 +380,23 @@ func TestGateRefusesExactlyWhatDoctorCallsAMismatch(t *testing.T) {
 	}
 }
 
+// The refusal names the directory in the same spelling `atrium doctor` prints for it.
+// config_dir is hand-written, so one directory reaches the two surfaces written
+// differently — and these are precisely the two outputs a user cross-references while
+// working out which dir is wrong. A trailing slash in one and not the other reads as
+// two directories.
+func TestAccountIdentityErrorNamesTheNormalisedDirectory(t *testing.T) {
+	err := accountIdentityError(
+		config.ClaudeAccount{Name: "personal", ConfigDir: "/h/.claude-personal/",
+			ExpectAccount: "me@personal.com"},
+		idByBase(map[string]config.AccountIdentity{".claude-personal": email("me@work.com")}))
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "/h/.claude-personal is signed in as",
+		"the refusal did not use the cleaned path doctor reports")
+	assert.NotContains(t, err.Error(), "/h/.claude-personal/ ")
+}
+
 // A message that names neither the account nor the two logins is not actionable —
 // the user has to guess which of several config dirs to re-login.
 func TestAccountIdentityErrorNamesTheDirectory(t *testing.T) {

@@ -340,6 +340,33 @@ func TestCollisionNamesLoginWhenFirstMemberHasNoEmail(t *testing.T) {
 	}
 }
 
+// The same group with the members the other way round. Grouping is by UUID and
+// members arrive in config order, so the emailless one can be first OR last — and
+// "first member wins" and "last member wins" are both wrong in one of those orders.
+// Without this case a last-member-wins implementation passes the test above, since
+// there the member that has an email happens to arrive last.
+func TestCollisionNamesLoginWhenLastMemberHasNoEmail(t *testing.T) {
+	r, _ := fakeReader(map[string]config.AccountIdentity{
+		"/h/named": id("real@corp.com", "u-shared"),
+		"/h/quiet": id("", "u-shared"), // UUID only: ReadAccountIdentity accepts this
+	})
+	rep := CheckAccountIdentity(cfgWith(
+		acct("named", "/h/named", ""),
+		acct("quiet", "/h/quiet", ""),
+	), r)
+
+	if len(rep.Collisions) != 1 {
+		t.Fatalf("got %d collisions, want 1: %+v", len(rep.Collisions), rep.Collisions)
+	}
+	if got := rep.Collisions[0].Login(); got != "real@corp.com" {
+		t.Errorf("collision login = %q, want real@corp.com from the member that has one", got)
+	}
+	if out := RenderAccountIdentity(rep); strings.Contains(out, "()") ||
+		strings.Contains(out, "bills ;") {
+		t.Errorf("render left the login blank:\n%s", out)
+	}
+}
+
 // And when NO member records an email, the warning still has to say what they matched
 // on. Empty parentheses would point at the answer and then not give it.
 func TestCollisionFallsBackToUUIDWhenNoMemberHasAnEmail(t *testing.T) {

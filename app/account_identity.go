@@ -48,6 +48,13 @@ func accountIdentityError(acct config.ClaudeAccount, read config.IdentityReadFun
 	state, actual := acct.CheckIdentity(read)
 	switch state {
 	case config.IdentityWrongAccount:
+		// NormalizedConfigDir, not ResolvedConfigDir: this names the directory the
+		// user has to go and fix, and it must be the same spelling `atrium doctor`
+		// prints for it. config_dir is hand-written, so "~/.claude-work2/" would
+		// otherwise show a trailing slash here and none in the report — two
+		// renderings of one directory, in the two places someone cross-references
+		// while working out which dir is wrong.
+		//
 		// No trailing period: Go error strings are composable fragments, and
 		// staticcheck's ST1005 enforces it even on prose as long as this.
 		return fmt.Errorf(
@@ -55,12 +62,12 @@ func accountIdentityError(acct config.ClaudeAccount, read config.IdentityReadFun
 				"Launching would bill %s — re-run /login in that directory, "+
 				"or correct expect_account in config.json",
 			acct.Name, strings.TrimSpace(acct.ExpectAccount),
-			acct.ResolvedConfigDir(), actual.Email, actual.Email)
+			acct.NormalizedConfigDir(), actual.Email, actual.Email)
 	case config.IdentityUnreadable:
 		if pin := strings.TrimSpace(acct.ExpectAccount); pin != "" {
 			log.WarningLog.Printf(
 				"claude account %q expects %s but no login is recorded in %s; launching unverified",
-				acct.Name, pin, acct.ResolvedConfigDir())
+				acct.Name, pin, acct.NormalizedConfigDir())
 		}
 	}
 	return nil
