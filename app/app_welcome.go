@@ -71,7 +71,8 @@ func (m *home) handleWelcomeState(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.markWelcomeSeen()
 		return m, tea.Batch(
 			tea.WindowSize(),
-			m.flashNotice("Setup skipped — press , to pick a default agent, or n to start a session", ui.NoticeInfo),
+			m.settingNotice("Setup skipped — press , to pick a default agent, or n to start a session",
+				ui.NoticeInfo, "default_program"),
 		)
 	}
 	// Confirm: adopt the detected agents as profiles and persist the pick as the
@@ -118,5 +119,6 @@ func (m *home) warnMissingProgram(program string) tea.Cmd {
 	} else {
 		text = "no default program set — press , to choose one"
 	}
-	return m.flashNotice(text, ui.NoticeError)
+	// Both branches name the default-program setting in their own copy, so ',' opens it.
+	return m.settingNotice(text, ui.NoticeError, "default_program")
 }

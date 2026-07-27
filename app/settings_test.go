@@ -56,13 +56,13 @@ func TestSettingsPanel_OpenEditPersistClose(t *testing.T) {
 	require.NotNil(t, h.settingsOverlay)
 
 	// Toggling a value persists it to config.json immediately, not on close.
-	require.True(t, h.settingsOverlay.SelectRow("auto_attach"))
+	require.True(t, h.settingsOverlay.OpenAt("auto_attach"))
 	_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeySpace})
 	assert.False(t, h.appConfig.GetAutoAttach())
 	assert.False(t, config.LoadConfig().GetAutoAttach(),
 		"a change must reach disk immediately so it survives a crash")
 
-	// Esc is layered since the two-pane redesign: SelectRow focuses the rows pane, so the
+	// Esc is layered since the two-pane redesign: OpenAt focuses the rows pane, so the
 	// first Esc backs out to the rail and only the second closes. This is the only place the
 	// layering is observable end to end, so it is asserted rather than worked around — the
 	// hint line says "esc back" and then "esc close" so the extra level is advertised
@@ -82,7 +82,7 @@ func TestSettingsPanel_ThemeChangeAppliesLive(t *testing.T) {
 
 	_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(",")})
 	require.Equal(t, stateSettings, h.state)
-	require.True(t, h.settingsOverlay.SelectRow("theme"))
+	require.True(t, h.settingsOverlay.OpenAt("theme"))
 
 	_, cmd := h.handleKeyPress(tea.KeyMsg{Type: tea.KeyRight})
 	assert.NotEqual(t, theme.DefaultThemeName, h.appConfig.Theme)
@@ -97,7 +97,7 @@ func TestSettingsPanel_AutoYesTogglePropagatesToHomeFlag(t *testing.T) {
 	h := newSettingsTestHome()
 
 	_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(",")})
-	require.True(t, h.settingsOverlay.SelectRow("auto_yes"))
+	require.True(t, h.settingsOverlay.OpenAt("auto_yes"))
 	_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeySpace})
 
 	assert.True(t, h.autoYes, "the home flag gates AutoYes on newly created instances")
@@ -114,7 +114,7 @@ func TestSettingsPanel_SplashChangePersists(t *testing.T) {
 	h := newSettingsTestHome()
 
 	_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(",")})
-	require.True(t, h.settingsOverlay.SelectRow("splash"))
+	require.True(t, h.settingsOverlay.OpenAt("splash"))
 	_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyRight})
 
 	want := config.SplashVariants()[0]
@@ -160,7 +160,7 @@ func TestGroupModeChange_ClustersList(t *testing.T) {
 
 	_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(",")})
 	require.Equal(t, stateSettings, h.state)
-	require.True(t, h.settingsOverlay.SelectRow("group_mode"))
+	require.True(t, h.settingsOverlay.OpenAt("group_mode"))
 
 	_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyRight})
 	assert.Equal(t, config.GroupModeAccount, h.appConfig.GetGroupMode(),
@@ -291,7 +291,7 @@ func TestSettingsPanel_GroupModeChipFollowsTheLiveList(t *testing.T) {
 	openPanel := func() {
 		_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(",")})
 		require.Equal(t, stateSettings, h.state)
-		require.True(t, h.settingsOverlay.SelectRow("group_mode"))
+		require.True(t, h.settingsOverlay.OpenAt("group_mode"))
 	}
 	// Both Escs go through handleKeyPress, not straight to the overlay: home only learns the
 	// panel closed via handleSettingsState's `closed` return. Calling the overlay directly would
@@ -340,7 +340,7 @@ func TestSettingsPanel_GroupModeChipTracksTheListInTheSameFrame(t *testing.T) {
 		require.False(t, h.list.AccountClusteringVisible(), "repo mode clusters nothing")
 
 		_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(",")})
-		require.True(t, h.settingsOverlay.SelectRow("group_mode"))
+		require.True(t, h.settingsOverlay.OpenAt("group_mode"))
 		_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyRight}) // off -> on
 		require.Equal(t, config.GroupModeAccount, h.appConfig.GetGroupMode())
 		require.True(t, h.list.AccountClusteringVisible(), "two accounts now cluster")
@@ -359,7 +359,7 @@ func TestSettingsPanel_GroupModeChipTracksTheListInTheSameFrame(t *testing.T) {
 		h.list.SetGroupMode(config.GroupModeRepo)
 
 		_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(",")})
-		require.True(t, h.settingsOverlay.SelectRow("group_mode"))
+		require.True(t, h.settingsOverlay.OpenAt("group_mode"))
 		require.NotContains(t, xansi.Strip(h.settingsOverlay.Render()), "nothing to cluster",
 			"off is not inert")
 
@@ -380,10 +380,10 @@ func TestSettingsPanel_RemembersTheCategoryAcrossOpens(t *testing.T) {
 	_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(",")})
 	assert.NotEqual(t, 0, h.settingsOverlay.RailIndex(),
 		"a fresh run must not land on All settings (spec §4)")
-	require.True(t, h.settingsOverlay.SelectRow("agent_oom_margin")) // Advanced
+	require.True(t, h.settingsOverlay.OpenAt("agent_oom_margin")) // Advanced
 	want := h.settingsOverlay.RailIndex()
 
-	// Two Escs: SelectRow focused the rows pane, and Esc is layered.
+	// Two Escs: OpenAt focused the rows pane, and Esc is layered.
 	_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyEsc})
 	require.Equal(t, stateSettings, h.state, "the first esc backs out of the rows pane")
 	_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyEsc})
@@ -391,4 +391,53 @@ func TestSettingsPanel_RemembersTheCategoryAcrossOpens(t *testing.T) {
 
 	_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(",")})
 	assert.Equal(t, want, h.settingsOverlay.RailIndex(), "reopening returns to the last category")
+}
+
+// r routes through applySettingChange exactly as an edit does: the config is persisted and
+// the live-apply hook runs. Pinned on theme because its hook is observable — theme.Set swaps
+// the active palette, so a reset that persisted without live-applying would leave the running
+// UI painted in a theme config.json no longer names.
+func TestSettingsPanel_ResetPersistsAndLiveApplies(t *testing.T) {
+	resetSettingsTestState(t)
+	h := newSettingsTestHome()
+	_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(",")})
+	require.Equal(t, stateSettings, h.state)
+
+	require.True(t, h.settingsOverlay.OpenAt("theme"))
+	_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyRight}) // off the default
+	changed := h.appConfig.Theme
+	require.NotEmpty(t, changed, "precondition: the theme is now explicitly set")
+	require.Equal(t, changed, config.LoadConfig().Theme, "precondition: the edit reached disk")
+	require.Equal(t, changed, theme.Current().Name, "precondition: and live-applied")
+
+	_, cmd := h.handleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("r")})
+
+	assert.Empty(t, h.appConfig.Theme, "r cleared the explicit theme")
+	assert.Empty(t, config.LoadConfig().Theme, "r persisted, like an edit")
+	assert.Equal(t, theme.DefaultThemeName, theme.Current().Name,
+		"r live-applied: the running UI repainted in the default palette")
+	assert.NotNil(t, cmd, "a repaint command must be issued, as for an edit")
+}
+
+// The rail's Accounts entry actually opens the accounts overlay: the panel closes, the @
+// overlay opens in its place, and the remembered rail brings the user back to Accounts on the
+// next ','. Home-level wiring, because an overlay cannot open a sibling.
+func TestSettingsPanel_AccountsEntryOpensTheAccountsOverlay(t *testing.T) {
+	resetSettingsTestState(t)
+	h := newSettingsTestHome()
+	_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(",")})
+	require.Equal(t, stateSettings, h.state)
+
+	h.settingsOverlay.SetRailIndex(h.settingsOverlay.RailEntryCount() - 1)
+	_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyEnter})
+
+	assert.Equal(t, stateAccounts, h.state, "Enter on Accounts opens the @ overlay")
+	assert.NotNil(t, h.accountsOverlay)
+	assert.Nil(t, h.settingsOverlay, "the settings panel closed to make way")
+
+	// Closing accounts and reopening settings lands back on the entry we left.
+	_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyEsc})
+	_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(",")})
+	require.NotNil(t, h.settingsOverlay)
+	assert.Equal(t, h.settingsOverlay.RailEntryCount()-1, h.settingsOverlay.RailIndex())
 }

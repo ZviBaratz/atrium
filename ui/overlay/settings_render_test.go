@@ -2,6 +2,7 @@ package overlay
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -276,8 +277,8 @@ func TestSelectingTheLongestHelpRowKeepsTheRowCount(t *testing.T) {
 			require.Greater(t, want, 3, "the pane must show real rows for this to mean anything")
 
 			for _, r := range newSettingRows(config.DefaultConfig()) {
-				require.True(t, o.SelectRow(r.key))
-				o.railCursor = 0 // stay in the flat view; SelectRow moved the rail
+				require.True(t, o.OpenAt(r.key))
+				o.railCursor = 0 // stay in the flat view; OpenAt moved the rail
 				assert.Equalf(t, want, len(o.rowsPaneLines()),
 					"selecting %q changed the visible row count from %d to %d — help height "+
 						"must not depend on the cursor (D5)", r.key, want, len(o.rowsPaneLines()))
@@ -298,7 +299,7 @@ func TestHelpHeightIgnoresTheCursor(t *testing.T) {
 	require.Equal(t, helpPaneLines, want, "80x24 must afford the full help pane")
 
 	for _, r := range newSettingRows(config.DefaultConfig()) {
-		require.True(t, o.SelectRow(r.key))
+		require.True(t, o.OpenAt(r.key))
 		assert.Equalf(t, want, o.helpHeight(), "row %q changed the help pane's height", r.key)
 	}
 }
@@ -354,7 +355,7 @@ func TestSelectedRowIsAlwaysVisible(t *testing.T) {
 			o.SetSize(size.w, size.h)
 			for _, r := range newSettingRows(config.DefaultConfig()) {
 				for _, entry := range []int{railIndexForCategory(r.category), 0} {
-					require.True(t, o.SelectRow(r.key))
+					require.True(t, o.OpenAt(r.key))
 					o.railCursor = entry // 0 exercises the flat view, where windowing bites
 					o.syncCursorToRail()
 					pane := stripANSI(strings.Join(o.rowsPaneLines(), "\n"))
@@ -402,7 +403,7 @@ func TestBoxHeightDependsOnlyOnTheTerminal(t *testing.T) {
 			"rail entry %q changed the box height", railEntries()[i].label)
 	}
 	for _, key := range []string{"max_sessions", "group_mode", "agent_oom_margin", "config_file"} {
-		require.True(t, o.SelectRow(key))
+		require.True(t, o.OpenAt(key))
 		assert.Equalf(t, want, lipgloss.Height(o.Render()), "row %q changed the box height", key)
 	}
 }
@@ -1136,4 +1137,454 @@ func TestRailIndexRoundTrips(t *testing.T) {
 	assert.Equal(t, len(railEntries())-1, o.RailIndex())
 	o.SetRailIndex(-5)
 	assert.Equal(t, 0, o.RailIndex())
+}
+
+// searchedPane renders the rows pane under a filter and returns its unstyled lines, which is
+// the surface every assertion below is about.
+func searchedPane(t *testing.T, o *SettingsOverlay, query string) []string {
+	t.Helper()
+	o.HandleKeyPress(keyRunes("/"))
+	typeFilter(o, query)
+	out := make([]string, 0, len(o.rowsPaneLines()))
+	for _, l := range o.rowsPaneLines() {
+		out = append(out, stripANSI(l))
+	}
+	return out
+}
+
+// TestSearchResultsShowTheirCategory is spec §8's "each hit's category shown on the row". A
+// flat list drawn from ten categories is unreadable without it.
+func TestSearchResultsShowTheirCategory(t *testing.T) {
+	o := NewSettingsOverlay(config.DefaultConfig())
+	o.SetSize(100, 32)
+	lines := searchedPane(t, o, "glyph")
+
+	require.NotEmpty(t, lines)
+	assert.Contains(t, strings.Join(lines, "\n"), "Appearance",
+		"the Glyph set hit names the category it lives in")
+}
+
+// TestSearchResultCategoryDegradesRatherThanVanishing sweeps every two-pane width. The
+// category is what tells two similarly-named results apart, so — like the inert chip, and
+// unlike the timing badge — it shortens rather than dropping.
+//
+// Three things this gets right that an obvious version does not:
+//
+//   - It asserts on the BADGE rowValueAndBadge returns, not on a substring of the rendered
+//     line. strings.Contains(line, "…") also matches a truncated VALUE, so a line-level check
+//     passes while the category is gone.
+//   - It checks each row against ITS OWN category, not a literal. "base" is a subsequence
+//     query and matches 13 rows across six categories.
+//   - It sweeps three queries. "base"'s non-inert hits are all bool rows with short values, so
+//     the badge column is never squeezed and that query proves nothing on its own; "config"
+//     and "session" each bring an enum and a long text row, which is where the eviction
+//     fitValue exists to prevent actually happens.
+//
+// update_base_on_create is switched off so fast_forward_local_base is genuinely inert: under
+// DefaultConfig it is active, the skip never fires, and the branch this claims to cover is
+// dead. require.NotZero keeps that honest.
+func TestSearchResultCategoryDegradesRatherThanVanishing(t *testing.T) {
+	skipped := 0
+	for _, q := range []string{"base", "config", "session"} {
+		for w := 73; w <= 120; w++ {
+			cfg := config.DefaultConfig()
+			off := false
+			cfg.UpdateBaseOnCreate = &off
+			o := NewSettingsOverlay(cfg)
+			o.SetSize(w, 32)
+			o.HandleKeyPress(keyRunes("/"))
+			typeFilter(o, q)
+			results := o.searchResults()
+			require.NotEmptyf(t, results, "query %q, width %d: must match", q, w)
+
+			labelW, paneW := o.visibleLabelWidth(), o.rowsPaneWidth()
+			for _, i := range results {
+				if o.inertReason(i) != "" {
+					skipped++ // the inert chip legitimately takes the column instead
+					continue
+				}
+				_, badge := o.rowValueAndBadge(i, paneW, labelW, "")
+				cat := o.rows[i].category.label()
+				require.NotEmptyf(t, badge, "query %q, width %d, row %q lost its category %q",
+					q, w, o.rows[i].key, cat)
+				assert.Truef(t, strings.HasPrefix(cat, strings.TrimSuffix(badge, "…")),
+					"query %q, width %d, row %q: badge %q is not a shortening of %q",
+					q, w, o.rows[i].key, badge, cat)
+			}
+		}
+	}
+	require.NotZero(t, skipped, "the inert branch must actually be exercised")
+}
+
+// TestInertChipBeatsTheCategoryOnASearchRow: a row that does nothing right now has more
+// urgent news than which category it lives in. The category is not lost — contextLine names
+// it for the highlighted row.
+func TestInertChipBeatsTheCategoryOnASearchRow(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.Notifications = config.NotificationsOff
+	o := NewSettingsOverlay(cfg)
+	o.SetSize(100, 32)
+	o.HandleKeyPress(keyRunes("/"))
+	typeFilter(o, "finished")
+
+	i := o.searchResults()[0]
+	require.Equal(t, "notifications_finished", o.rows[i].key)
+	require.NotEmpty(t, o.inertReason(i), "precondition: the row is inert with notifications off")
+
+	line := stripANSI(o.renderRowLine(i, o.rowsPaneWidth(), o.visibleLabelWidth()))
+	assert.Contains(t, line, "needs Notifications", "the inert chip keeps the badge column")
+}
+
+// TestSearchRowLinesFillThePaneExactlyAndKeepTheirChip sweeps widths AND queries. A search row
+// carries the widest content the panel ever composes — the label column is the widest MATCHING
+// label, and the badge is a category name rather than a five-cell timing word.
+//
+// It asserts EQUALITY, not "<=". composeRowLine bounds its own output by construction (both
+// branches set gap = avail − …, and an over-wide badge is dropped rather than overflowing), so
+// a "<= paneW" assertion is a tautology no bug in searchBadge or valueCell can trip. What can
+// actually break is the gap arithmetic, and the chip being evicted — the presence half below.
+func TestSearchRowLinesFillThePaneExactlyAndKeepTheirChip(t *testing.T) {
+	for _, q := range []string{"", "e", "s", "session", "base", "notif", "zzz"} {
+		for w := 40; w <= 120; w += 7 {
+			o := NewSettingsOverlay(config.DefaultConfig())
+			o.SetSize(w, 32)
+			o.HandleKeyPress(keyRunes("/"))
+			typeFilter(o, q)
+			labelW, paneW := o.visibleLabelWidth(), o.rowsPaneWidth()
+			for _, i := range o.searchResults() {
+				line := stripANSI(o.renderRowLine(i, paneW, labelW))
+				if rowMarkerCells+labelW+rowLabelGap+1 > paneW {
+					// Below the floor the label rule yields and the head is truncated; parity with
+					// the pre-PR-B renderer, and composeRowLine's documented branch.
+					assert.LessOrEqualf(t, ansi.StringWidth(line), paneW,
+						"query %q, width %d, row %q overflows even truncated", q, w, o.rows[i].key)
+					continue
+				}
+				assert.Equalf(t, paneW, ansi.StringWidth(line),
+					"query %q, width %d, row %q does not fill its pane: %q", q, w, o.rows[i].key, line)
+				if w >= 73 && o.inertReason(i) == "" {
+					_, badge := o.rowValueAndBadge(i, paneW, labelW, "")
+					assert.NotEmptyf(t, badge,
+						"query %q, width %d, row %q lost its category chip", q, w, o.rows[i].key)
+				}
+			}
+		}
+	}
+}
+
+// TestSearchCarriesTheCategoryBelowTheThreshold sweeps the widths the other search guards
+// cannot reach. Below 73 columns the panel is single-pane: `/` focuses the rows, so the rail —
+// and with it every match count — is not drawn at all, and the badge column is squeezed hard
+// enough that the category chip genuinely does get dropped. contextLine's category prefix is
+// the whole orientation down there, so it is what this asserts.
+func TestSearchCarriesTheCategoryBelowTheThreshold(t *testing.T) {
+	for w := 40; w < 73; w++ {
+		o := NewSettingsOverlay(config.DefaultConfig())
+		o.SetSize(w, 32)
+		o.HandleKeyPress(keyRunes("/"))
+		typeFilter(o, "config")
+		require.NotEmptyf(t, o.searchResults(), "width %d: the query must match", w)
+		require.Falsef(t, o.twoPane(), "width %d must be below the two-pane threshold", w)
+
+		ctx := stripANSI(o.contextLine(o.innerWidth()))
+		cat := o.selectedRow().category.label()
+		assert.Truef(t, strings.Contains(ctx, cat) || strings.Contains(ctx, "…"),
+			"width %d: the context line must still name %q: %q", w, cat, ctx)
+		assert.LessOrEqualf(t, ansi.StringWidth(ctx), o.innerWidth(), "width %d: %q", w, ctx)
+	}
+}
+
+// TestRailShowsPerCategoryMatchCounts is spec §8's rail behavior. The counts are the only
+// orientation left once the pane goes flat: they say where the hits are without the user
+// clearing the filter to find out.
+func TestRailShowsPerCategoryMatchCounts(t *testing.T) {
+	o := NewSettingsOverlay(config.DefaultConfig())
+	o.SetSize(100, 32)
+	o.HandleKeyPress(keyRunes("/"))
+	typeFilter(o, "notif")
+
+	counts := o.railMatchCounts()
+	require.Len(t, counts, len(railEntries()))
+	for i, e := range railEntries() {
+		if e.kind == railCategory && e.category == catNotifications {
+			assert.Greaterf(t, counts[i], 0, "the Notifications category must report its hits")
+		}
+		if e.kind != railCategory {
+			assert.Equalf(t, 0, counts[i], "%q is not a category and reports no count", e.label)
+		}
+	}
+
+	// The rendered line must CARRY the count. Asserting the rail merely contains
+	// "Notifications" would hold with or without the feature — the rail renders all thirteen
+	// labels unconditionally, filtered or not.
+	var line string
+	for _, l := range o.railLines() {
+		if strings.Contains(stripANSI(l), "Notifications") {
+			line = strings.TrimRight(stripANSI(l), " ")
+		}
+	}
+	require.NotEmpty(t, line, "the Notifications entry must be on screen")
+	want := strconv.Itoa(counts[railIndexForCategory(catNotifications)])
+	require.NotEqual(t, "0", want, "precondition: the query must hit this category")
+	assert.True(t, strings.HasSuffix(line, want),
+		"the rail entry must end in its match count %s, got %q", want, line)
+}
+
+// TestRailCountsSumToTheResultCount pins that the rail is a read-out of the result list rather
+// than a second query — the failure mode where the pane and the rail disagree about what
+// matched.
+func TestRailCountsSumToTheResultCount(t *testing.T) {
+	for _, q := range []string{"", "e", "session", "base", "zzz"} {
+		o := NewSettingsOverlay(config.DefaultConfig())
+		o.HandleKeyPress(keyRunes("/"))
+		typeFilter(o, q)
+		total := 0
+		for _, n := range o.railMatchCounts() {
+			total += n
+		}
+		assert.Equalf(t, len(o.searchResults()), total,
+			"query %q: the rail counts must account for every result", q)
+	}
+}
+
+// TestEveryCategoryMatchCountFitsTheRailsOneCell is the premise the single-cell count rests
+// on: the largest category has six rows, so a count is always one digit and fits the trail
+// cell the handoff arrow otherwise occupies — which is why railWidth() does not move when / is
+// pressed. An eleventh category of ten rows would break the rail silently; this fails first
+// and forces the decision.
+//
+// It is a premise guard, not a render assertion: TestRailShowsPerCategoryMatchCounts is what
+// checks a rendered line carries its count.
+func TestEveryCategoryMatchCountFitsTheRailsOneCell(t *testing.T) {
+	o := NewSettingsOverlay(config.DefaultConfig())
+	require.Equal(t, 1, railTrailCells-1, "the trail is one glyph after its leading space")
+	for _, c := range allCategories() {
+		start, end := o.rowRange(railEntries()[railIndexForCategory(c)])
+		assert.LessOrEqualf(t, end-start, 9,
+			"category %q has %d rows; a match count no longer fits the rail's one cell",
+			c.label(), end-start)
+	}
+}
+
+// TestRailIsInertWhileFiltering: the rail takes no keys under a filter, so nothing on it may
+// look like the focused pane. Its only bright marker is the highlighted result's category.
+func TestRailIsInertWhileFiltering(t *testing.T) {
+	o := NewSettingsOverlay(config.DefaultConfig())
+	o.SetSize(100, 32)
+	before := o.railLines()
+
+	o.HandleKeyPress(keyRunes("/"))
+	typeFilter(o, "glyph")
+	after := o.railLines()
+
+	require.Len(t, after, len(before))
+	assert.NotEqual(t, before, after, "the rail must visibly change when a filter is active")
+	for i, l := range after {
+		assert.LessOrEqualf(t, ansi.StringWidth(stripANSI(l)), railWidth(),
+			"rail line %d overflows while filtering", i)
+	}
+}
+
+// TestNoMatchesSaysSoAndSaysHowToRecover: an empty pane reads as a broken panel. The prose
+// names the two keys out of it, which is the same obligation the handoff note carries.
+func TestNoMatchesSaysSoAndSaysHowToRecover(t *testing.T) {
+	o := NewSettingsOverlay(config.DefaultConfig())
+	o.SetSize(100, 32)
+	lines := searchedPane(t, o, "zzzz")
+	require.Empty(t, o.searchResults())
+
+	assert.Contains(t, strings.Join(lines, "\n"), "No setting matches")
+
+	help := stripANSI(strings.Join(o.helpLines(), "\n"))
+	assert.Contains(t, help, "backspace")
+	assert.Contains(t, help, "esc")
+	assert.NotContains(t, help, o.selectedRow().summary,
+		"with nothing matching, the help must not describe a row the list is not showing")
+}
+
+// TestContextLineNamesTheCategoryWhileSearching closes the gap the badge column leaves: the
+// highlighted result always says where it lives, even when the badge went to an inert chip or
+// degraded to an ellipsis.
+func TestContextLineNamesTheCategoryWhileSearching(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.Notifications = config.NotificationsOff
+	o := NewSettingsOverlay(cfg)
+	o.SetSize(100, 32)
+	o.HandleKeyPress(keyRunes("/"))
+	typeFilter(o, "finished")
+	require.Equal(t, "notifications_finished", o.selectedRow().key)
+
+	ctx := stripANSI(o.contextLine(o.innerWidth()))
+	assert.Contains(t, ctx, "Notifications", "the category of the highlighted result")
+	assert.Contains(t, ctx, "1/", "the position readout counts results, not category rows")
+}
+
+// TestPositionReadoutCountsResultsWhileSearching: the counter is the pane's orientation, and
+// under a filter "3/5" must mean the third of five hits, not the third of a category.
+func TestPositionReadoutCountsResultsWhileSearching(t *testing.T) {
+	o := NewSettingsOverlay(config.DefaultConfig())
+	o.SetSize(100, 32)
+	o.HandleKeyPress(keyRunes("/"))
+	typeFilter(o, "session")
+	n := len(o.searchResults())
+	require.Greater(t, n, 1)
+
+	assert.Contains(t, stripANSI(o.contextLine(o.innerWidth())), fmt.Sprintf("1/%d", n))
+	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyDown})
+	assert.Contains(t, stripANSI(o.contextLine(o.innerWidth())), fmt.Sprintf("2/%d", n))
+}
+
+// TestFilterRidesTheTitleRow: the box's height depends on the terminal alone (PR B), so the
+// filter must not claim a line of its own — pressing / would otherwise re-centre the whole
+// panel under the user.
+func TestFilterRidesTheTitleRow(t *testing.T) {
+	o := NewSettingsOverlay(config.DefaultConfig())
+	o.SetSize(100, 32)
+	before := lipgloss.Height(o.Render())
+
+	o.HandleKeyPress(keyRunes("/"))
+	typeFilter(o, "theme")
+	assert.Equal(t, before, lipgloss.Height(o.Render()), "opening the filter must not resize the box")
+
+	title := stripANSI(o.titleLine())
+	assert.Contains(t, title, "Settings")
+	assert.Contains(t, title, "/theme")
+	assert.LessOrEqual(t, ansi.StringWidth(title), o.innerWidth())
+}
+
+// TestTitleRowSurvivesAnOverlongFilter: the filter is user input with no length bound, and a
+// title line wider than the box soft-wraps, grows the box a row and clips the pinned hint.
+// This is the discriminating case; the sibling above cannot wrap at 100 columns.
+func TestTitleRowSurvivesAnOverlongFilter(t *testing.T) {
+	o := NewSettingsOverlay(config.DefaultConfig())
+	o.SetSize(80, 24)
+	before := lipgloss.Height(o.Render())
+	o.HandleKeyPress(keyRunes("/"))
+	typeFilter(o, strings.Repeat("x", 200))
+
+	assert.LessOrEqual(t, ansi.StringWidth(stripANSI(o.titleLine())), o.innerWidth())
+	assert.Equal(t, before, lipgloss.Height(o.Render()))
+}
+
+// TestHintAdvertisesSearchAndReset: PR B deliberately shipped neither, because a hint for a
+// dead key is worse than no hint. Both are live now, so both must be advertised — and the
+// filtered hint must name the esc level that applies (spec §15).
+func TestHintAdvertisesSearchAndReset(t *testing.T) {
+	o := NewSettingsOverlay(config.DefaultConfig())
+	o.SetSize(100, 32)
+	assert.Contains(t, stripANSI(o.hintLine()), "/ search", "the rail advertises search")
+
+	settingsAt(t, o, "theme")
+	rows := stripANSI(o.hintLine())
+	assert.Contains(t, rows, "r reset")
+	assert.Contains(t, rows, "/ search")
+	assert.Contains(t, rows, "esc back")
+
+	o.HandleKeyPress(keyRunes("/"))
+	filtered := stripANSI(o.hintLine())
+	assert.Contains(t, filtered, "esc clear", "the filter's own esc level")
+	assert.NotContains(t, filtered, "esc back")
+}
+
+// TestHintFitsEveryWidth sweeps the ladder rather than sampling it. It asserts the absence of
+// an ellipsis, not a width bound: hintLine ends in ansi.Truncate(…, inner, "…"), so a width
+// assertion can never fail — what actually breaks is a shortest rung that does not fit and
+// gets clipped to something that says nothing.
+func TestHintFitsEveryWidth(t *testing.T) {
+	for w := 40; w <= 120; w++ {
+		o := NewSettingsOverlay(config.DefaultConfig())
+		o.SetSize(w, 32)
+		// One overlay walked through three states in order: rail → rows → search.
+		for _, state := range []struct {
+			name string
+			key  tea.KeyMsg
+		}{
+			{"rail", tea.KeyMsg{}},
+			{"rows", tea.KeyMsg{Type: tea.KeyRight}},
+			{"search", keyRunes("/")},
+		} {
+			if state.name != "rail" {
+				o.HandleKeyPress(state.key)
+			}
+			hint := stripANSI(o.hintLine())
+			assert.NotContainsf(t, hint, "…", "width %d, %s: the ladder has no rung that fits: %q",
+				w, state.name, hint)
+			assert.Containsf(t, hint, "esc", "width %d, %s: the esc level must survive: %q",
+				w, state.name, hint)
+		}
+	}
+}
+
+// TestALongValueCannotEvictAnInertChip is a PR B bug this PR fixes, kept as its own guard
+// because it has nothing to do with search.
+//
+// PR B's rule is that an inert chip degrades to one word but never vanishes — a dimmed row
+// with no marker reads as broken, and the help pane only describes the SELECTED row. But
+// valueCell's badge reservation bites only on kindEnum, so notify_command (kindText, inert
+// whenever Notifications is not desktop) evicted its own chip as soon as the command was long:
+// measured at 73, 80, 100 and 120 columns, the badge came back empty at every one.
+func TestALongValueCannotEvictAnInertChip(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.Notifications = config.NotificationsBell // not desktop, so notify_command is inert
+	cfg.NotifyCommand = strings.Repeat("n", 60)
+	o := NewSettingsOverlay(cfg)
+
+	var idx int
+	for i, r := range o.rows {
+		if r.key == "notify_command" {
+			idx = i
+		}
+	}
+	require.NotEmpty(t, o.inertReason(idx), "precondition: the row must be inert")
+
+	for w := 73; w <= 120; w++ {
+		o.SetSize(w, 32)
+		o.SetRailIndex(railIndexForCategory(catNotifications))
+		labelW, paneW := o.visibleLabelWidth(), o.rowsPaneWidth()
+		_, badge := o.rowValueAndBadge(idx, paneW, labelW, o.inertReason(idx))
+		assert.NotEmptyf(t, badge, "width %d: a long command evicted the inert chip", w)
+	}
+}
+
+// TestEveryHandoffNoteFitsItsPane is the width half of TestEveryHandoffEntryNamesItsSurface,
+// which pins only that a note EXISTS. A handoff pane is static prose wrapped to the rows pane,
+// and windowPane degrades an overflow into a "↓ n more" marker — a scroll affordance on the one
+// entry whose entire content is that note, with nothing to scroll to. So the note is a
+// width-bearing string, and in this repo a copy change IS a width change: PR C rewrote the
+// Accounts note from 64 characters to 79.
+//
+// Swept over the whole supported range rather than one size, because the rows pane is widest in
+// single-pane mode and narrowest just above the two-pane threshold, and paneHeight shrinks with
+// the terminal to a floor of settingsMinBody — a single geometry would test that geometry
+// rather than the note.
+func TestEveryHandoffNoteFitsItsPane(t *testing.T) {
+	notes := 0
+	for i, e := range railEntries() {
+		if e.kind != railHandoff {
+			continue
+		}
+		notes++
+		for _, h := range []int{settingsVChrome + settingsMinBody, 16, 24, 40} {
+			for w := 40; w <= 200; w++ {
+				o := NewSettingsOverlay(config.DefaultConfig())
+				o.SetSize(w, h)
+				o.SetRailIndex(i)
+				require.Equalf(t, e.label, o.selectedEntry().label,
+					"%dx%d: the rail did not land on %q", w, h, e.label)
+				paneW, paneH := o.rowsPaneWidth(), o.paneHeight()
+				lines := o.rowsPaneContent(paneW)
+				assert.LessOrEqualf(t, len(lines), paneH,
+					"%q at %dx%d: the note wraps to %d lines in a %d-line pane, so windowPane "+
+						"shows a scroll marker on a pane with nothing to scroll to",
+					e.label, w, h, len(lines), paneH)
+				for _, l := range lines {
+					assert.LessOrEqualf(t, ansi.StringWidth(stripANSI(l.text)), paneW,
+						"%q at %dx%d: a note line overflows the pane, so the box soft-wraps: %q",
+						e.label, w, h, l.text)
+				}
+			}
+		}
+	}
+	// Without this the loop could stop finding handoffs and the test would still pass.
+	require.Equal(t, 2, notes, "Profiles and Accounts are the two handoff notes")
 }

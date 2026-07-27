@@ -192,13 +192,24 @@ func CheckGatesInstalled() []GateResult {
 // Comparison is by CLEANED path, because the two spellings meeting here come from
 // different places — doctor's own env and a hand-written config_dir — and a
 // trailing slash is not a different dir. Cleaning happens here rather than in
-// ambientConfigDir so that function's ""-means-unresolvable contract survives:
-// filepath.Clean("") is ".", which would turn "no ambient dir" into a cwd-relative
-// one.
+// config.AmbientClaudeConfigDir so that function's ""-means-unresolvable contract
+// survives: filepath.Clean("") is ".", which would turn "no ambient dir" into a
+// cwd-relative one.
+//
+// The ambient dir comes from config.AmbientClaudeConfigDir, shared with the
+// worktrees-root trust in app — the two resolved it separately until #359, and
+// disagreed. Note it reads DOCTOR's env, which is a session's ambient env only
+// when the two match (a session inherits the tmux server's env, captured at server
+// start). Running `atrium doctor` from inside a Claude Code session, which exports
+// CLAUDE_CONFIG_DIR, therefore points this row at the caller's own account dir.
+// That mislabels rather than misreports: the dedupe below relabels the row to the
+// account name whenever that dir is a configured account, and the value read is a
+// real resolved value either way. Its "" (unresolvable) drops the row entirely,
+// rather than reporting on a dir this had to guess at.
 func installedGateDirs(cfg *config.Config) []gateDir {
 	var dirs []gateDir
 	ambient := -1 // index of the still-unclaimed defaultAccount row, if any
-	if dir := ambientConfigDir(); dir != "" {
+	if dir := config.AmbientClaudeConfigDir(); dir != "" {
 		dirs = append(dirs, gateDir{Account: defaultAccount, Dir: filepath.Clean(dir)})
 		ambient = 0
 	}
@@ -216,32 +227,6 @@ func installedGateDirs(cfg *config.Config) []gateDir {
 		dirs = append(dirs, gateDir{Account: a.Name, Dir: dir})
 	}
 	return dirs
-}
-
-// ambientConfigDir resolves the config dir claude would use with no account
-// routing, by claude's own rule: $CLAUDE_CONFIG_DIR if set, else the home dir,
-// with the file at that dir's root (.claude.json). This has nothing to do with
-// Atrium's data dir, so config.RuntimeName() is deliberately not involved.
-//
-// Note this reads DOCTOR's env, which is only a session's ambient env when the
-// two match — a session inherits the tmux server's env, captured at server start.
-// Running `atrium doctor` from inside a Claude Code session (which exports
-// CLAUDE_CONFIG_DIR) therefore points this row at the caller's own account dir.
-// That mislabels rather than misreports: the dedupe in installedGateDirs relabels
-// the row to the account name whenever that dir is a configured account, and the
-// value read is a real resolved value either way.
-//
-// "" means unresolvable, and the caller drops the row rather than reporting on a
-// dir it had to guess at.
-func ambientConfigDir() string {
-	if dir := os.Getenv("CLAUDE_CONFIG_DIR"); dir != "" {
-		return dir
-	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return ""
-	}
-	return home
 }
 
 // GatesFlipped reports whether any result is a confirmed flip — the only state

@@ -61,7 +61,8 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.menu.ClearNotice()
 			}
 			m.errBox.Clear()
-			m.recomputeLayout() // reclaim the error row; panes grow back by one
+			m.noticeSettingKey = "" // the advice is off screen; ',' goes back to the rail
+			m.recomputeLayout()     // reclaim the error row; panes grow back by one
 		}
 	case updateFoundMsg:
 		// Stage the download as its own command so this notice renders while
@@ -805,19 +806,13 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 	case keys.KeyHelp:
 		return m.showHelpScreen(helpTypeGeneral{}, nil)
 	case keys.KeySettings:
-		m.state = stateSettings
-		m.settingsOverlay = overlay.NewSettingsOverlay(m.appConfig)
-		if m.settingsRail != nil {
-			m.settingsOverlay.SetRailIndex(*m.settingsRail)
+		if key := m.noticeSettingKey; key != "" {
+			m.noticeSettingKey = ""
+			return m, m.openSettingsAt(key)
 		}
-		m.refreshSettingsClusteringGate()
-		m.recomputeLayout() // the hint bar hides behind the modal; panes reclaim its row
-		return m, tea.WindowSize()
+		return m, m.openSettings()
 	case keys.KeyAccounts:
-		m.state = stateAccounts
-		m.accountsOverlay = overlay.NewAccountsOverlay(m.appConfig, m.appState)
-		m.recomputeLayout() // the hint bar hides behind the modal; panes reclaim its row
-		return m, tea.WindowSize()
+		return m, m.openAccounts()
 	case keys.KeyScreensaver:
 		// The full-window splash easter egg. Silently ignored when the window
 		// is below the splash floor (nothing legible to show).
@@ -949,7 +944,9 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		// matches the ladder hiddenNeighborNotice names, and , opens the setting that
 		// lifts this — the same key the [ / ] refusal below points at.
 		if !m.list.SessionReorderEnabled() {
-			return m, m.handleInfoNotice("session reorder is off while sorting by status (, to switch)")
+			return m, m.settingNotice(
+				"session reorder is off while sorting by status (, to switch)",
+				ui.NoticeInfo, "session_sort")
 		}
 		// Refuse a swap with a sibling that is not on screen, and say so: the order would
 		// change, and persist, with nothing visibly moving (#339). Checked after the sort
@@ -989,7 +986,9 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		// cluster — so both name the cluster, not the account count, which is also the
 		// ladder word help and the settings label use ("account cluster") (#346).
 		if !m.list.AccountGrouped() {
-			return m, m.handleInfoNotice("cluster reorder needs account grouping (, to switch)")
+			return m, m.settingNotice(
+				"cluster reorder needs account grouping (, to switch)",
+				ui.NoticeInfo, "group_mode")
 		}
 		if !m.list.AccountReorderEnabled() {
 			return m, m.handleInfoNotice("only one account cluster to reorder")
@@ -1044,6 +1043,38 @@ func keyAllowedWhileBusy(name keys.KeyName) bool {
 	default:
 		return false
 	}
+}
+
+// openSettings opens the configuration panel on the rail entry the last open left it on.
+// Returns the command that re-sizes it; every caller is a key handler that returns it
+// straight through.
+func (m *home) openSettings() tea.Cmd {
+	m.state = stateSettings
+	m.settingsOverlay = overlay.NewSettingsOverlay(m.appConfig)
+	if m.settingsRail != nil {
+		m.settingsOverlay.SetRailIndex(*m.settingsRail)
+	}
+	m.refreshSettingsClusteringGate()
+	m.recomputeLayout() // the hint bar hides behind the modal; panes reclaim its row
+	return tea.WindowSize()
+}
+
+// openSettingsAt opens the configuration panel focused on one row — the deep link of spec
+// §12. It falls back to the remembered rail when the key is unknown, so a stale caller
+// degrades to today's behavior rather than opening a panel with an invisible cursor.
+func (m *home) openSettingsAt(key string) tea.Cmd {
+	cmd := m.openSettings()
+	m.settingsOverlay.OpenAt(key)
+	return cmd
+}
+
+// openAccounts opens the Claude/GitHub/Antigravity account manager — the '@' key's overlay,
+// and the surface the settings rail's Accounts entry hands off to.
+func (m *home) openAccounts() tea.Cmd {
+	m.state = stateAccounts
+	m.accountsOverlay = overlay.NewAccountsOverlay(m.appConfig, m.appState)
+	m.recomputeLayout() // the hint bar hides behind the modal; panes reclaim its row
+	return tea.WindowSize()
 }
 
 // handleInfoState dismisses the info modal on any key press (scroll keys
