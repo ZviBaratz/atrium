@@ -81,6 +81,13 @@ confirm it describes is real on the create-form path and does not exist on smart
 auto-dispatch's, so the copy must not imply it does. The two decisions are linked —
 #483 is the reason the sentence needs the qualifier, not a coincidence.
 
+> **Closed by #483.** Auto-dispatch now runs `gateAllExhausted` before spawning, so
+> the qualifier this section argued for is no longer true and the sentence has gone
+> back to "creating asks to confirm". The two decisions being linked is what made
+> that a copy change as well as a behaviour change. The sample in §2 below still
+> shows the qualified wording — it records what this design shipped, not what the
+> code says today.
+
 ## Design
 
 ### 1. The extraction — `config/rotation.go`

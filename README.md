@@ -733,13 +733,14 @@ instead of pinning every session in a repo to one account:
   member (shown indented under it) to pin that account for this one session —
   which bypasses availability, so it works even on a flagged member.
 - If **every** member of the routed pool is flagged limited, creating a session
-  from the new-session form shows a confirm ("all `<pool>` accounts are
-  rate-limited … create anyway on `<member>`?") instead of silently spawning on
-  a limited account. Declining leaves the draft in place and creates nothing;
-  accepting pins the member whose limit resets soonest — which, while flags are
-  indefinite-only, is the first pool member. Smart auto-dispatch skips this
-  all-exhausted gate, so a fully-limited pool can still spawn silently there
-  (#483).
+  shows a confirm ("all `<pool>` accounts are rate-limited … create anyway on
+  `<member>`?") instead of silently spawning on a limited account. Declining
+  creates nothing; accepting pins the member whose limit resets soonest — which,
+  while flags are indefinite-only, is the first pool member. This applies to
+  **smart auto-dispatch too**, which opts out of the form, not out of the account
+  gates: declining there creates nothing but does not preserve the line you
+  typed, since only a create form is kept as a restorable draft. A pool of one
+  never raises it — there is nothing to rotate to.
 - Press `t` in the `@` accounts overlay to preview where an input (remote URL
   and/or path) would route right now, without creating anything. When the
   matched account belongs to a pool, the `Claude →` line names the member a
@@ -749,9 +750,9 @@ instead of pinning every session in a repo to one account:
   member, naming why, e.g. `work-1 limited → rotating to work-2`. If every
   member is limited, the `Claude →` line instead shows
   `⚠ all '<pool>' accounts limited`, and the block marks the member that
-  accepting the create-form's confirm would pin, with `← on confirm` — the
-  one whose limit resets soonest, which, while flags are indefinite-only, is
-  the first pool member. The preview only reads availability and the
+  accepting the confirm would pin, with `← on confirm` — the one whose limit
+  resets soonest, which, while flags are indefinite-only, is the first pool
+  member. The preview only reads availability and the
   rotation cursor; it never advances it, so the same input can preview a
   different member after a real session moves the cursor. A pool with fewer
   than two members — including no pool at all — previews unchanged, with no
