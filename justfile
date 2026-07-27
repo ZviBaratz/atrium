@@ -10,6 +10,14 @@ go := env_var_or_default("GO", "go")
 version := `git describe --tags --always --dirty 2>/dev/null | sed 's/^v//' || echo dev`
 ldflags := "-s -w -X main.version=" + version
 
+# golangci-lint's cache is global — one directory per machine — and Atrium's own
+# workflow means many worktrees of this repo exist at once, so a stale entry makes
+# `run` report findings against files in a *sibling* worktree (#486). Key the cache
+# on this worktree's directory name instead. It stays outside the tree, so there is
+# nothing to gitignore. Two different *repos* whose basenames collide would share a
+# cache: harmless, since the cache is content-addressed within itself.
+golangci_cache := cache_directory() / "golangci-lint" / file_name(justfile_directory())
+
 # Show available recipes.
 default:
     @just --list
@@ -48,9 +56,12 @@ cover:
     {{go}} test -coverprofile=coverage.out ./...
     {{go}} tool cover -func=coverage.out | tail -1
 
-# Lint with golangci-lint (see https://golangci-lint.run for install).
-lint:
-    golangci-lint run
+# Lint with golangci-lint (see https://golangci-lint.run for install). Always lint
+# through this recipe: a bare `golangci-lint run` uses the shared global cache. To
+# scope it, pass packages here (`just lint ./ui/...`) rather than reaching for the
+# bare command.
+lint *args:
+    GOLANGCI_LINT_CACHE="{{golangci_cache}}" golangci-lint run {{args}}
 
 # Format all Go code.
 fmt:
