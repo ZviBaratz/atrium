@@ -145,7 +145,7 @@ func TestPreviewDecisionLine(t *testing.T) {
 			"work-3": {Limited: true},
 		}
 		got := previewDecisionLine(members, avail, 0, 0, true, now, previewFullWidth)
-		assert.Equal(t, "the form asks to confirm, then uses work-1 (first member)", got)
+		assert.Equal(t, "creating asks to confirm, then uses work-1 (first member)", got)
 	})
 
 	// SoonestResetMember picks index 1 (work-2) here, so chosen must be 1 — the
@@ -157,7 +157,7 @@ func TestPreviewDecisionLine(t *testing.T) {
 			"work-3": {Limited: true},
 		}
 		got := previewDecisionLine(members, avail, 0, 1, true, now, previewFullWidth)
-		assert.Equal(t, "the form asks to confirm, then uses work-2 (resets soonest)", got)
+		assert.Equal(t, "creating asks to confirm, then uses work-2 (resets soonest)", got)
 	})
 
 	// SoonestResetMember itself treats an unparseable Until as indefinite (it
@@ -172,7 +172,7 @@ func TestPreviewDecisionLine(t *testing.T) {
 			"work-3": {Limited: true},
 		}
 		got := previewDecisionLine(members, avail, 0, 0, true, now, previewFullWidth)
-		assert.Equal(t, "the form asks to confirm, then uses work-1 (first member)", got)
+		assert.Equal(t, "creating asks to confirm, then uses work-1 (first member)", got)
 	})
 
 	t.Run("empty members: nothing to report", func(t *testing.T) {
@@ -196,15 +196,20 @@ func TestAllLimitedDecisionWidthCascade(t *testing.T) {
 		want   string
 	}{
 		{"full width, short name, first member", "work-1", "(first member)", previewFullWidth,
-			"the form asks to confirm, then uses work-1 (first member)"},
+			"creating asks to confirm, then uses work-1 (first member)"},
 		{"full width, short name, resets soonest", "work-1", "(resets soonest)", previewFullWidth,
-			"the form asks to confirm, then uses work-1 (resets soonest)"},
+			"creating asks to confirm, then uses work-1 (resets soonest)"},
 		{"full width, long name: full wording overflows (76 cells), drops to the terser form",
 			"quantivly-work-longname", "(resets soonest)", previewFullWidth,
-			"form confirm → quantivly-work-longname (resets soonest)"},
-		{"narrow width: both form wordings overflow (35 fits, 36 doesn't), drops the confirm claim entirely",
-			"work-1", "(first member)", 35,
-			"all limited → work-1 (first member)"},
+			"confirm → quantivly-work-longname (resets soonest)"},
+		// The terse rung's own boundary, stated as a pair so the comment above it
+		// cannot drift into a lie: 31 cells is exactly what it costs for this name
+		// and reason, and one cell less drops both the reason and the confirm claim.
+		{"terse rung fits exactly at 31 cells", "work-1", "(first member)", 31,
+			"confirm → work-1 (first member)"},
+		{"one cell narrower: the reason no longer fits alongside the confirm claim",
+			"work-1", "(first member)", 30,
+			"all limited → work-1"},
 		{"narrower still: even the reason no longer fits alongside the name",
 			"work-1", "(first member)", 25,
 			"all limited → work-1"},
