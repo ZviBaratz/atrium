@@ -17,8 +17,11 @@ import (
 //
 // configDir is the config dir the session's claude actually reads: the ambient one
 // (config.AmbientClaudeConfigDir — $CLAUDE_CONFIG_DIR if set, else home) for an
-// unrouted session, or a routed account's own dir (#261/#262). An empty configDir
-// is a no-op: nothing to write, and never a guess at a path.
+// unrouted session, or a routed account's own dir (#261/#262). It must be
+// absolute. An empty configDir is a silent no-op (nothing is configured, and
+// there is no path to write); a relative one is refused with an error, because
+// that is a misconfiguration worth surfacing rather than a missing value. Either
+// way this function never guesses at a path — see the guard below.
 //
 // There is no sanctioned interface for this: hasTrustDialogAccepted is a
 // Claude-internal key, verified in production but undocumented. Degradation is
@@ -66,6 +69,15 @@ import (
 func EnsureWorktreesRootTrustedIn(configDir, worktreesRoot string) error {
 	if configDir == "" {
 		return nil // unresolvable: nothing to write, and never a guessed path
+	}
+	// A relative dir would have filepath.Join resolve it against ATRIUM's working
+	// directory and rewrite a real .claude.json there, while the claude that reads
+	// it resolves the same relative path against its own session worktree — so the
+	// file written is never the file read. This mirrors the read side, which
+	// refuses one for the same reason (internal/doctor's fileGateReader): the cwd
+	// claude would have resolved it against is genuinely unknown to us.
+	if !filepath.IsAbs(configDir) {
+		return fmt.Errorf("claude config dir must be absolute, got %q", configDir)
 	}
 	return ensureRootTrustedAt(filepath.Join(configDir, ".claude.json"), worktreesRoot)
 }

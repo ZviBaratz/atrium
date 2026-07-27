@@ -149,6 +149,11 @@ func maybeTrustWorktreesRoot(cfg *config.Config, program string) {
 // spelled with a trailing slash is still one write, not two. Clean is kept away
 // from the ""-means-unresolvable sentinel: filepath.Clean("") is ".", which would
 // turn "no dir" into a cwd-relative one.
+//
+// A relative dir that survives to here (a hand-written config_dir, or a relative
+// $CLAUDE_CONFIG_DIR) is deliberately NOT filtered out: the writer refuses it with
+// an error, which the caller logs, so the misconfiguration is reported instead of
+// vanishing. Dropping it here would silence that.
 func claudeTrustDirs(cfg *config.Config) []string {
 	var dirs []string
 	seen := map[string]bool{}

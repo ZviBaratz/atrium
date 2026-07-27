@@ -237,6 +237,43 @@ func TestEnsureWorktreesRootTrustedIn_EmptyConfigDirIsNoop(t *testing.T) {
 	}
 }
 
+// A relative configDir is a misconfiguration rather than a location, and unlike
+// the empty one it is reported: a hand-written config_dir (ResolvedConfigDir only
+// expands a leading ~) or a relative $CLAUDE_CONFIG_DIR would otherwise have
+// filepath.Join resolve it against ATRIUM's working directory, while the claude
+// that reads it resolves the same relative path against its own session worktree.
+// The file Atrium would rewrite is therefore never the file any session reads —
+// the exact reason the read side refuses one too (internal/doctor's
+// fileGateReader). We cannot know the cwd claude would have used, so we do not
+// guess.
+//
+// Same shape as the empty-dir test, for the same reason: a temp cwd holding a
+// real, untrusted .claude.json, because asserting only the error would still pass
+// if the guard were removed and the write landed on that bystander.
+func TestEnsureWorktreesRootTrustedIn_RelativeConfigDirIsRefused(t *testing.T) {
+	cwd := t.TempDir()
+	t.Chdir(cwd)
+	relative := ".claude-work"
+	if err := os.Mkdir(filepath.Join(cwd, relative), 0755); err != nil {
+		t.Fatalf("mkdir %s: %v", relative, err)
+	}
+	bystander := seedTrustFile(t, filepath.Join(cwd, relative))
+	root := "/home/user/.atrium/worktrees"
+
+	if err := EnsureWorktreesRootTrustedIn(relative, root); err == nil {
+		t.Fatal("a relative config dir must be reported, not silently accepted")
+	}
+
+	// Existence first: "not trusted" alone would also hold for a file the call had
+	// deleted, which would be a worse outcome than the one under test.
+	if _, err := os.Stat(bystander); err != nil {
+		t.Fatalf("the bystander .claude.json must be left in place: %v", err)
+	}
+	if trustAccepted(t, readJSONMap(t, bystander), root) {
+		t.Fatal("a relative config dir wrote a cwd-relative .claude.json")
+	}
+}
+
 // seedTrustFile writes an untrusted .claude.json into dir and returns its path.
 func seedTrustFile(t *testing.T, dir string) string {
 	t.Helper()
