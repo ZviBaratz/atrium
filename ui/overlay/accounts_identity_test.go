@@ -93,10 +93,13 @@ func TestAccountsOverlay_IdentityNotePrefersCollision(t *testing.T) {
 	assert.NotContains(t, note, "wrong account")
 }
 
-// #478 is an overlay line that wraps the box at 91 columns. Every wording this file
-// can emit must fit the width it is handed, at every width the box can be, or it
-// reintroduces exactly that bug. Measured unstyled: lipgloss pads a rendered line to
-// the box width, so a styled measurement passes regardless of the text.
+// #478 was an overlay line wrapping the box — a pooled rule-less account row at 91
+// columns against an inner width of 80, since fixed by shortening the row's copy and
+// letting its dir column flex (accounts_layout.go). Every wording this file can emit
+// must fit the width it is handed, at every width the box can be, or it reintroduces
+// exactly that bug in the one place the row layout cannot reach. Measured unstyled:
+// lipgloss pads a rendered line to the box width, so a styled measurement passes
+// regardless of the text.
 func TestAccountsOverlay_IdentityNoteNeverExceedsItsWidth(t *testing.T) {
 	rosters := map[string][]config.ClaudeAccount{
 		"two colliding": {
@@ -158,6 +161,14 @@ func TestAccountsOverlay_PreviewIdentityLineNeverExceedsItsWidth(t *testing.T) {
 
 // The whole rendered panel must not grow past the box either — the note is one more
 // line competing with rows the window budget already allocated.
+//
+// The height check is the load-bearing one, and it replaced a width check that could
+// never fail. Measuring Render's lines against the TERMINAL width is a tautology:
+// lipgloss pads every line of a Width()-constrained box to the same width, so a
+// wrapped line comes out exactly as wide as an unwrapped one — it costs a ROW, not a
+// column. This fixture proved it. Its `work2` row was the second rule-less account,
+// so it carried the old 23-cell badge and measured 80 cells against an inner width
+// of 74 at w=80: it wrapped on every run, and the test passed anyway.
 func TestAccountsOverlay_IdentityNoteDoesNotWidenTheBox(t *testing.T) {
 	o := identityOverlay(t, []config.ClaudeAccount{
 		{Name: "personal", ConfigDir: "/h/p"},
@@ -166,6 +177,8 @@ func TestAccountsOverlay_IdentityNoteDoesNotWidenTheBox(t *testing.T) {
 
 	for _, w := range []int{80, 91, 100, 120} {
 		o.SetSize(w, 40)
+		require.Equal(t, lipgloss.Height(o.renderList())+6, lipgloss.Height(o.Render()),
+			"terminal %d: the box is taller than its body, i.e. a line wrapped", w)
 		for _, line := range strings.Split(o.Render(), "\n") {
 			require.LessOrEqual(t, lipgloss.Width(line), w,
 				"terminal %d: line overflows: %q", w, line)
@@ -384,12 +397,12 @@ func TestAccountsOverlay_RowWindowChromeConditionalOnIdentityNote(t *testing.T) 
 
 	clean := mk(false)
 	clean.SetSize(80, 24)
-	start, end := clean.rowWindow(clean.activeLen())
+	start, end := clean.rowWindow(clean.activeLen(), clean.listNotes())
 	assert.Equal(t, 12, end-start, "a healthy config keeps the full 12-row budget")
 
 	dirty := mk(true)
 	dirty.SetSize(80, 24)
-	start, end = dirty.rowWindow(dirty.activeLen())
+	start, end = dirty.rowWindow(dirty.activeLen(), dirty.listNotes())
 	assert.Equal(t, 11, end-start, "the identity note costs exactly the one row it occupies")
 
 	for _, h := range []int{20, 24, 30} {

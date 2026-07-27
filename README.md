@@ -631,9 +631,8 @@ list to your config file:
   end, or on a tab with fewer than two accounts, does nothing. This is how you
   change which account is the catch-all, or break a tie between two accounts
   whose rules both match; it works the same on all three tabs (Claude, GitHub,
-  Antigravity). The `default` / `catch-all (unreachable)` / `routed` badges
-  update live as rows move, and the new order is saved to `config.json`
-  immediately.
+  Antigravity). The `default` / `unreachable` / `routed` badges update live as
+  rows move, and the new order is saved to `config.json` immediately.
 - The resolved account is **pinned at session creation** and shown as a badge in
   the session list (dim for the default account, accented for a routed one). The
   `CLAUDE_CONFIG_DIR` it injects is set once at launch and is never re-resolved —
@@ -716,10 +715,12 @@ instead of pinning every session in a repo to one account:
   once — harmless for round-robin.
 - An account can be flagged rate-limited by hand — Atrium has no way to read
   Anthropic's own limits — from the `@` accounts overlay: press `l` on a Claude
-  account to toggle it limited/available. Rotation skips a limited member and
-  cycles only through the rest. The flag is indefinite: it stays until you press
-  `l` again to clear it (a per-account reset time that auto-expires is a planned
-  follow-up).
+  account to toggle it limited/available. Each Claude row ends in a mark for its
+  current state — `●` available, `⊘` limited (`*` and `x` on the ASCII glyph
+  rung) — and the panel's second hint line names the limited one. Rotation skips
+  a limited member and cycles only through the rest. The flag is indefinite: it
+  stays until you press `l` again to clear it (a per-account reset time that
+  auto-expires is a planned follow-up).
 - The new-session form's **Account** picker lets you override routing per
   session: pick the `<pool> ⇄` entry to rotate across the pool, or a specific
   member (shown indented under it) to pin that account for this one session —

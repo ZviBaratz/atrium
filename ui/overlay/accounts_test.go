@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/ZviBaratz/atrium/config"
+	"github.com/ZviBaratz/atrium/ui/theme"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/stretchr/testify/assert"
@@ -95,6 +96,11 @@ func TestAccountsOverlay_BadgesMarkCatchAllAndUnreachable(t *testing.T) {
 	assert.Contains(t, out, "default")
 	assert.Contains(t, out, "unreachable")
 	assert.Contains(t, out, "routed")
+	// Exact, not merely "contains unreachable": the badge used to read
+	// "catch-all (unreachable)", which satisfies that substring too, so an assertion
+	// without this one passes on both sides of the rename it is supposed to pin.
+	// 23 cells for a badge is what pushed the row past the box in #478.
+	assert.NotContains(t, out, "catch-all", "the badge is `unreachable`, not `catch-all (unreachable)`")
 }
 
 // typeInto sends each rune of s to the overlay as individual key messages.
@@ -517,8 +523,10 @@ func TestAccountsOverlay_ListWindowsRowsOnShortTerminal(t *testing.T) {
 // Catch-all badges are order-dependent (first rule-less account = "default",
 // later ones = "unreachable"). When the list is windowed and the first rule-less
 // account has scrolled off the top, a later rule-less account still in view must
-// keep reading "catch-all (unreachable)" — never "default". This guards the
-// pre-scan that carries badge state across rows above the window.
+// keep reading "unreachable" — never "default". This guards the ordering carried
+// across rows above the window: it used to be a dedicated pre-scan, and is now the
+// single whole-list walk rowTails makes to build every row's badge and measure its
+// tail (accounts_layout.go).
 func TestAccountsOverlay_CatchAllBadgeSurvivesWindowScroll(t *testing.T) {
 	cfg := &config.Config{}
 	for i := 0; i < 30; i++ {
@@ -549,6 +557,7 @@ func TestAccountsOverlay_CatchAllBadgeSurvivesWindowScroll(t *testing.T) {
 	require.NotContains(t, out, "firstcatch", "the first catch-all scrolled off the top")
 	require.Contains(t, out, "latercatch", "the later catch-all is in the window")
 	assert.Contains(t, out, "unreachable", "the later rule-less account still reads unreachable")
+	assert.NotContains(t, out, "catch-all", "and reads it as the whole badge, not as a suffix")
 	assert.NotContains(t, out, "default",
 		"the only 'default' badge belonged to the scrolled-off first catch-all; a broken "+
 			"pre-scan would wrongly render the visible later catch-all as 'default'")
@@ -579,12 +588,12 @@ func TestAccountsOverlay_RowWindowChromeConditionalOnSplitPoolNote(t *testing.T)
 
 	flat := NewAccountsOverlay(mk(false), config.DefaultState())
 	flat.SetSize(80, 24)
-	start, end := flat.rowWindow(flat.activeLen())
+	start, end := flat.rowWindow(flat.activeLen(), flat.listNotes())
 	assert.Equal(t, 12, end-start, "a pool-free config gets the full 12-row budget")
 
 	split := NewAccountsOverlay(mk(true), config.DefaultState())
 	split.SetSize(80, 24)
-	start, end = split.rowWindow(split.activeLen())
+	start, end = split.rowWindow(split.activeLen(), split.listNotes())
 	assert.Equal(t, 11, end-start, "a split pool costs exactly the one row its own note occupies")
 }
 
@@ -612,20 +621,34 @@ func TestAccountsOverlay_ToggleAvailability(t *testing.T) {
 	assert.Empty(t, st.GetAccountAvailability(), "l again clears the flag")
 }
 
-// TestAccountsOverlay_RendersPoolAndAvailability covers row rendering: the
-// pool name and a "limited" marker must both appear for an account flagged
+// TestAccountsOverlay_RendersPoolAndAvailability covers row rendering: the pool name
+// and the limited mark must both appear on the row of an account flagged
 // unavailable.
+//
+// Scoped to the ROW, not the whole view. The rows stopped spelling
+// "available"/"limited" in #478 — the words cost 13 columns a 96-cell row could not
+// spare — and the legend line still says "l limited", so a whole-view assertion on
+// that word now passes no matter what the row renders.
 func TestAccountsOverlay_RendersPoolAndAvailability(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
-	cfg := &config.Config{ClaudeAccounts: []config.ClaudeAccount{{Name: "work-1", ConfigDir: "~/.claude-work", Pool: "work"}}}
+	cfg := &config.Config{ClaudeAccounts: []config.ClaudeAccount{
+		{Name: "work-1", ConfigDir: "~/.claude-work", Pool: "work"},
+		{Name: "work-2", ConfigDir: "~/.claude-work2", Pool: "work"},
+	}}
 	st := config.DefaultState()
 	require.NoError(t, st.SetAccountLimited("work-1", ""))
 	o := NewAccountsOverlay(cfg, st)
 	o.SetSize(80, 24)
 
-	view := o.Render()
-	assert.Contains(t, view, "pool:work")
-	assert.Contains(t, view, "limited")
+	g := theme.Current().Glyphs
+	limited := rowLine(t, o.renderList(), "work-1")
+	assert.Contains(t, limited, "pool:work")
+	assert.Contains(t, limited, g.AcctLimited, "the flagged account carries the limited mark")
+	assert.NotContains(t, limited, g.AcctAvailable, "and not the available one")
+
+	available := rowLine(t, o.renderList(), "work-2")
+	assert.Contains(t, available, g.AcctAvailable, "its unflagged pool-mate carries the available mark")
+	assert.NotContains(t, available, g.AcctLimited)
 }
 
 // TestAccountsOverlay_ToggleIgnoredOnGHTab guards the o.tab == tabClaude gate:
@@ -1048,6 +1071,12 @@ func TestAccountsOverlay_LegendFitsAndKeepsLimitedClaudeOnly(t *testing.T) {
 	assert.LessOrEqual(t, lipgloss.Width(hint), o.inner(), "line 1 must fit inside the box without wrapping")
 	assert.LessOrEqual(t, lipgloss.Width(extras), o.inner(), "line 2 must fit inside the box without wrapping")
 
+	// Exact, not Contains. The rows stopped spelling "limited" in #478, so this line
+	// is now the only place the mark is explained — and `Contains("l limited")`
+	// cannot tell `l limited ⊘` from `l limited`, i.e. cannot see the mark being
+	// dropped again. (SKILL.md: vocabulary guards must be exact match.)
+	assert.Equal(t, "l limited "+theme.Current().Glyphs.AcctLimited+" · t test routing · esc close", extras)
+
 	out := o.Render()
 	// "l limited" must share a line with "t test routing" (line 2), not with
 	// "d delete"/"J/K reorder" (line 1) — the actual move this task makes. This
@@ -1261,39 +1290,57 @@ func TestAccountsOverlay_ReorderGroupsSplitPool(t *testing.T) {
 // TestAccountsOverlay_GutterNarrowsDirNotRowWidth pins the fix for the pool-gutter
 // width regression a manual smoke test found: the gutter's 2 columns must come OUT
 // of the dir field, not get added on top of the row, so a row that fit before the
-// gutter existed still fits with it. Fixture mirrors the smoke's exact repro: an
-// adjacent pool run (work-1, work-2) plus a third, UNPOOLED account ("personal")
-// with a dir long enough to hit truncTail's cap either way, so its row carries the
-// widest realistic badge, "catch-all (unreachable)" (23 cols) — it's the second
-// rule-less account — plus the Claude tab's availability chip (13 cols), at a
-// 100-column terminal (boxWidth caps at 84 -> inner() == 80). "personal" itself
-// belongs to no pool, so its `extra` pool chip is identical (absent) whether or not
-// the OTHER two accounts form a run: the only thing that can change its row width is
-// the gutter column itself (poolGutter emits a blank "  " cell for every row once
-// any run exists elsewhere in the list, not just the run's own rows) — isolating
-// exactly the bug, rather than conflating it with the deliberately-independent
-// pool:<name> chip.
+// gutter existed still fits with it. The measured row is a third account
+// ("personal") with a dir long enough to hit truncTail's cap either way, carrying
+// the widest badge ("unreachable" — it's the second rule-less account) plus the
+// Claude tab's mark, at a 100-column terminal (boxWidth caps at 84 -> inner() == 80).
+//
+// FIXTURE, after #478. The original pair was "one pool" vs "no pool anywhere", which
+// isolated the gutter only because an unpooled row's chips were identical in both.
+// That stopped being true when the pool chip became a padded COLUMN: a row with no
+// pool of its own now carries a blank cell in that column whenever anything in the
+// list is pooled, so "no pool anywhere" changes the row by two things at once and
+// the comparison stops being about the gutter.
+//
+// The pair is now "one pool of two adjacent members" vs "two singleton pools with
+// same-length names". Both render the same badges and the same pool column; only the
+// first has a contiguous run for poolGutter to bracket. That is a sharper isolation
+// than the original, not a weaker one — the gutter is the single variable.
+//
+// SCOPE. The width EQUALITY below is what guards the gutter. Its two companions are
+// kept only because they cost nothing:
+//
+//   - the "<= inner()" check was sharp when this row measured exactly 80 of 80;
+//     shortening the badge and the availability chip left it with real slack, so it
+//     would now pass a badly broken gutter. The claim it used to make — that the
+//     widest realistic row fits — belongs to
+//     TestAccountsOverlay_PooledRuleLessRowFitsTheBox and the sweep beside it, which
+//     use a fixture built to sit at the boundary.
+//   - the line-count equality was sharp for the same reason and lost it the same
+//     way. accounts_layout_test.go's assertNothingWraps is the version with teeth:
+//     it compares the box against its OWN body rather than against another config.
 //
 // Per this file's own note on TestAccountsOverlay_LegendFitsAndKeepsLimitedClaudeOnly:
 // comparing rendered widths AFTER lipgloss pads a Border()+Padding()+Width() box
 // can't detect a wrap — every line, wrapped or not, comes out at the same padded
-// width. So this measures (a) the unstyled row string renderList builds, directly,
-// and (b) the number of lines Render() actually produces, which DOES grow by one
-// per wrapped row.
+// width. So this measures the unstyled row string renderList builds, directly.
 func TestAccountsOverlay_GutterNarrowsDirNotRowWidth(t *testing.T) {
 	longDir := "~/.claude-configs/some/very/long/nested/directory/path"
-	mk := func(pool string) *config.Config {
+	// secondPool names work-2's pool: the same as work-1's makes a contiguous run,
+	// a different one of the same length makes two singletons and no run at all.
+	mk := func(secondPool string) *config.Config {
 		return &config.Config{ClaudeAccounts: []config.ClaudeAccount{
-			{Name: "work-1", ConfigDir: "~/.claude-work1", Pool: pool, RemoteMatches: []string{"acme/"}},
-			{Name: "work-2", ConfigDir: "~/.claude-work2", Pool: pool}, // rule-less #1 → "default"
-			{Name: "personal", ConfigDir: longDir},                     // rule-less #2 → "catch-all (unreachable)"
+			{Name: "work-1", ConfigDir: "~/.claude-work1", Pool: "work", RemoteMatches: []string{"acme/"}},
+			{Name: "work-2", ConfigDir: "~/.claude-work2", Pool: secondPool}, // rule-less #1 → "default"
+			{Name: "personal", ConfigDir: longDir},                           // rule-less #2 → "unreachable"
 		}}
 	}
 
-	oGutter := NewAccountsOverlay(mk("work"), config.DefaultState()) // work-1/work-2 form a run → gutter renders
+	oGutter := NewAccountsOverlay(mk("work"), config.DefaultState()) // one pool, two adjacent members → gutter renders
 	oGutter.SetSize(100, 30)
-	oFlat := NewAccountsOverlay(mk(""), config.DefaultState()) // no pool anywhere → no gutter column at all
+	oFlat := NewAccountsOverlay(mk("wrk2"), config.DefaultState()) // two singleton pools → no run, no gutter column
 	oFlat.SetSize(100, 30)
+	require.Nil(t, poolGutter(oFlat.cfg.ClaudeAccounts), "the flat fixture must genuinely have no run to bracket")
 
 	require.Equal(t, 80, oGutter.inner(), "pinning the reproduction's 100-col/84-cap/80-inner numbers")
 
@@ -1303,13 +1350,14 @@ func TestAccountsOverlay_GutterNarrowsDirNotRowWidth(t *testing.T) {
 	assert.Equal(t, lipgloss.Width(flatLine), lipgloss.Width(gutterLine),
 		"the gutter's 2 columns must come out of the row, not add to it")
 	assert.LessOrEqual(t, lipgloss.Width(gutterLine), oGutter.inner(),
-		"the widest row THAT FITS (catch-all (unreachable) badge + availability chip, zero slack to spare) is "+
-			"the sharp test for the gutter's two columns; the genuinely widest realistic row — a pooled rule-less "+
-			"member — already wraps pre-existing (from #458's pool chip) and is out of scope here")
+		"a sanity floor with 22 columns of slack since #478 shortened the badge and the chip — "+
+			"TestAccountsOverlay_PooledRuleLessRowFitsTheBox is where the fit claim is actually pinned")
 
 	// A wrap only shows up once the row is laid out inside the bordered,
 	// Width()-constrained box — lipgloss pads every line of that box to the same
 	// width regardless of wrapping, so line COUNT (not width) is what proves it.
+	// Cross-config, so it can only see a wrap that hits ONE of the two; the
+	// same-config form (assertNothingWraps) is the one that survives both fitting.
 	gutterLines := strings.Count(oGutter.Render(), "\n")
 	flatLines := strings.Count(oFlat.Render(), "\n")
 	assert.Equal(t, flatLines, gutterLines, "the gutter must not add a wrapped extra line")
@@ -1383,8 +1431,11 @@ func TestAccountsOverlay_PreviewShowsPoolAndMembers(t *testing.T) {
 
 	out := o.renderPreview()
 	assert.Contains(t, out, "pool 'work' ⇄", "the pool header names the pool and carries the rotation glyph")
-	assert.Contains(t, poolRowLine(t, out, "work-1"), "● available", "the available member shows the available chip")
-	assert.Contains(t, poolRowLine(t, out, "work-2"), "⛔ limited", "the limited member shows the limited chip")
+	// The mark comes from the glyph table (theme.Glyphs.Acct*) so the ascii rung can
+	// swap it; the WORD is what this block keeps and the account rows gave up (#478).
+	g := theme.Current().Glyphs
+	assert.Contains(t, poolRowLine(t, out, "work-1"), g.AcctAvailable+" available", "the available member shows the available chip")
+	assert.Contains(t, poolRowLine(t, out, "work-2"), g.AcctLimited+" limited", "the limited member shows the limited chip")
 }
 
 // The report's other half: a limited member must not be presented as the pick.

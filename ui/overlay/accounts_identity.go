@@ -10,8 +10,10 @@ package overlay
 // every row keeps saying "personal" while the sessions bill someone else.
 //
 // Two constraints shape how it is surfaced. Rows are already at their width budget
-// (#478 has one wrapping at 91 columns), so the login goes where there is room — the
-// routing preview and a list-level note — rather than into a fourth column. And the
+// (#478 had one wrapping the box at 91 columns; the row now flexes its dir column to
+// fit, which is a guarantee it will fit, not that it has room to spare), so the login
+// goes where there is room — the routing preview and a list-level note — rather than
+// into a fourth column. And the
 // overlay redraws on every keystroke, so the logins are read ONCE when it opens and
 // cached; nothing here touches the filesystem during a render.
 

@@ -236,11 +236,29 @@ const previewIndent = "         " // 9 spaces
 // (see previewDecisionLine's width parameter) doesn't hardcode 9.
 var previewIndentWidth = lipgloss.Width(previewIndent)
 
-// previewChipWidth right-pads the shorter "⛔ limited" chip to the same
-// printed width as the longer "● available" chip, so a row's "← next" /
-// "← on confirm" marker lands in the same column regardless of which chip
-// the row renders.
-var previewChipWidth = lipgloss.Width("● available")
+// previewChipText is one member row's availability chip: the same mark the account
+// list paints, plus the word the list no longer has room for. The divergence is
+// deliberate — the list is the width-constrained surface (#478 was a row wrapping at
+// 96 cells), while this block is indented detail with room to spare, so the word
+// survives where it costs nothing. The MARK must match either way, which is why both
+// surfaces read it out of the glyph table rather than spelling it.
+func previewChipText(available bool) string {
+	g := theme.Current().Glyphs
+	if available {
+		return g.AcctAvailable + " available"
+	}
+	return g.AcctLimited + " limited"
+}
+
+// previewChipWidth right-pads the shorter chip to the same printed width as the
+// longer one, so a row's "← next" / "← on confirm" marker lands in the same column
+// regardless of which chip the row renders. Measured from the chips rather than
+// frozen as a literal: the two marks come from the active glyph set, which the user
+// can change at runtime, and a stale constant would misalign the markers by exactly
+// the difference.
+func previewChipWidth() int {
+	return max(lipgloss.Width(previewChipText(true)), lipgloss.Width(previewChipText(false)))
+}
 
 // renderPoolDecision computes what renderPreview's Claude line and pool block
 // show when the routed account belongs to a rotation pool of two or more
@@ -310,11 +328,11 @@ func (o *AccountsOverlay) renderPoolDecision(pool string, members []config.Claud
 		if gut != nil {
 			gutter = t.DimStyle().Render(gut[i])
 		}
-		chip := t.DimStyle().Render("● available")
+		chip := t.DimStyle().Render(previewChipText(true))
 		if !config.AccountAvailable(avail[members[i].Name], now) {
-			chip = t.DangerStyle().Render("⛔ limited")
+			chip = t.DangerStyle().Render(previewChipText(false))
 		}
-		line := previewIndent + gutter + padRight(members[i].Name, 12) + " " + padRight(chip, previewChipWidth)
+		line := previewIndent + gutter + padRight(members[i].Name, nameWidth) + " " + padRight(chip, previewChipWidth())
 		if i == marked {
 			line += "  " + marker
 		}

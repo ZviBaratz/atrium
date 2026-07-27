@@ -1,6 +1,7 @@
 package theme
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 
@@ -114,37 +115,32 @@ func TestGlyphsForFidelityRungs(t *testing.T) {
 	require.Equal(t, plainGlyphs().Branch, Current().Glyphs.Branch, "an unknown rung falls back to plain")
 }
 
+// exemptFromWidth1 names the Glyphs fields that assertGlyphWidths must not hold
+// to the width-1 rule, each with the reason it is exempt. Everything absent from
+// this map is measured, so a newly added glyph is guarded the day it lands rather
+// than the day someone remembers to list it — the drift this file used to invite
+// by enumerating the fields by hand.
+var exemptFromWidth1 = map[string]string{
+	"SpinnerFrames": "a []string, measured frame-by-frame below",
+	"SpinnerFPS":    "a duration, not a glyph",
+	"AutoBadge":     "an optional leading icon: empty (0) or a single cell, checked below",
+}
+
 // assertGlyphWidths checks the width-1 invariant for one resolved glyph set.
 func assertGlyphWidths(t *testing.T, name string, g Glyphs) {
 	t.Helper()
-	cells := map[string]string{
-		"Ready":         g.Ready,
-		"ReadySeen":     g.ReadySeen,
-		"Waiting":       g.Waiting,
-		"Pending":       g.Pending,
-		"Paused":        g.Paused,
-		"Branch":        g.Branch,
-		"Ahead":         g.Ahead,
-		"Warn":          g.Warn,
-		"Behind":        g.Behind,
-		"Dirty":         g.Dirty,
-		"Note":          g.Note,
-		"Muted":         g.Muted,
-		"Queued":        g.Queued,
-		"PR":            g.PR,
-		"FoldOpen":      g.FoldOpen,
-		"FoldClosed":    g.FoldClosed,
-		"SelectionMark": g.SelectionMark,
-		"MarkChecked":   g.MarkChecked,
-		"DiffAdd":       g.DiffAdd,
-		"DiffDel":       g.DiffDel,
-		"TextCursor":    g.TextCursor,
-		"Modified":      g.Modified,
-		"Handoff":       g.Handoff,
-	}
-	for label, glyph := range cells {
-		if w := runewidth.StringWidth(glyph); w != 1 {
-			t.Errorf("%s: glyph %s = %q has width %d, want 1", name, label, glyph, w)
+	rv := reflect.ValueOf(g)
+	rt := rv.Type()
+	for i := 0; i < rt.NumField(); i++ {
+		f := rt.Field(i)
+		if _, skip := exemptFromWidth1[f.Name]; skip {
+			continue
+		}
+		if f.Type.Kind() != reflect.String {
+			t.Fatalf("%s: non-string Glyphs field %s is neither measured nor documented as exempt in exemptFromWidth1", name, f.Name)
+		}
+		if w := runewidth.StringWidth(rv.Field(i).String()); w != 1 {
+			t.Errorf("%s: glyph %s = %q has width %d, want 1", name, f.Name, rv.Field(i).String(), w)
 		}
 	}
 	// AutoBadge is an optional leading icon: empty (0) or a single cell.
