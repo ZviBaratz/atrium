@@ -36,9 +36,11 @@ repos:
         types: [go]
         pass_filenames: false
       # Heavier checks run on push, not on every commit.
+      # Goes through `just lint` rather than a bare `golangci-lint run` so the cache
+      # stays keyed to this worktree (#486).
       - id: golangci-lint
         name: golangci-lint
-        entry: golangci-lint run
+        entry: just lint
         language: system
         types: [go]
         pass_filenames: false
