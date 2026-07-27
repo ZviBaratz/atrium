@@ -123,26 +123,57 @@ func maybeTrustWorktreesRoot(cfg *config.Config, program string) {
 		log.WarningLog.Printf("worktrees-root trust skipped: %v", err)
 		return
 	}
-	// The default file, for sessions that inherit the ambient CLAUDE_CONFIG_DIR
-	// (unrouted / catch-all account).
-	if err := tmux.EnsureWorktreesRootTrusted(root); err != nil {
-		log.WarningLog.Printf("worktrees-root trust skipped: %v", err)
+	for _, dir := range claudeTrustDirs(cfg) {
+		if err := tmux.EnsureWorktreesRootTrustedIn(dir, root); err != nil {
+			log.WarningLog.Printf("worktrees-root trust skipped for %s: %v", dir, err)
+		}
 	}
-	// Plus each configured Claude account's own config dir: an account-routed
-	// session reads trust from $CLAUDE_CONFIG_DIR/.claude.json, so the opt-in
-	// wouldn't cover it otherwise (#266). Dedup against the home file, which an
-	// account pointing at ~ would otherwise write twice (harmless, but noisy).
-	home, _ := os.UserHomeDir()
-	homeConfig := filepath.Join(home, ".claude.json")
+}
+
+// claudeTrustDirs lists every Claude config dir a session might read workspace
+// trust from, ambient first, deduped: the dir an unrouted / catch-all session
+// inherits, plus each configured account's own dir (an account-routed session
+// reads trust from its $CLAUDE_CONFIG_DIR/.claude.json, so the opt-in would not
+// cover it otherwise — #266).
+//
+// The ambient entry comes from config.AmbientClaudeConfigDir, claude's own rule of
+// $CLAUDE_CONFIG_DIR-then-home. Resolving it as $HOME unconditionally was #359:
+// with that variable exported — from a shell profile, or by the enclosing Claude
+// Code session when Atrium is launched from one — claude reads trust from
+// $CLAUDE_CONFIG_DIR/.claude.json while Atrium pre-accepted it in ~/.claude.json,
+// and the opt-in silently did nothing. #488's probe confirmed both halves on a
+// live claude 2.1.220: trust written to $HOME with CLAUDE_CONFIG_DIR set leaves
+// the dialog up, and written to $CLAUDE_CONFIG_DIR it does not appear.
+//
+// Dedupe is by CLEANED path, so an account whose config_dir is the ambient dir
+// spelled with a trailing slash is still one write, not two. Clean is kept away
+// from the ""-means-unresolvable sentinel: filepath.Clean("") is ".", which would
+// turn "no dir" into a cwd-relative one.
+//
+// A relative dir that survives to here (a hand-written config_dir, or a relative
+// $CLAUDE_CONFIG_DIR) is deliberately NOT filtered out: the writer refuses it with
+// an error, which the caller logs to the warning log, so the misconfiguration
+// leaves a trace instead of vanishing at this step. Dropping it here would silence
+// even that — the trust write is best-effort, so the log is the only channel it has.
+func claudeTrustDirs(cfg *config.Config) []string {
+	var dirs []string
+	seen := map[string]bool{}
+	add := func(dir string) {
+		if dir == "" {
+			return
+		}
+		clean := filepath.Clean(dir)
+		if seen[clean] {
+			return
+		}
+		seen[clean] = true
+		dirs = append(dirs, clean)
+	}
+	add(config.AmbientClaudeConfigDir())
 	for _, acct := range cfg.ClaudeAccounts {
-		dir := acct.ResolvedConfigDir()
-		if dir == "" || filepath.Join(dir, ".claude.json") == homeConfig {
-			continue
-		}
-		if err := tmux.EnsureAccountWorktreesRootTrusted(dir, root); err != nil {
-			log.WarningLog.Printf("worktrees-root trust skipped for account %q: %v", acct.Name, err)
-		}
+		add(acct.ResolvedConfigDir())
 	}
+	return dirs
 }
 
 type state int
@@ -533,7 +564,7 @@ func newHome(ctx context.Context, program string, autoYes bool, version, binName
 	// appears per worktree, as it would without the feature). Done once here on
 	// the main thread: the trust target is the root, not a per-session path,
 	// and session Starts run on background goroutines where concurrent
-	// rewrites of ~/.claude.json would race each other.
+	// rewrites of a shared .claude.json would race each other.
 	maybeTrustWorktreesRoot(appConfig, program)
 
 	// Activate the configured UI theme before any component is constructed, so

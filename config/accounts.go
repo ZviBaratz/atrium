@@ -1,9 +1,39 @@
 package config
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 )
+
+// AmbientClaudeConfigDir resolves the config dir a claude with no account routing
+// reads, by claude's own rule: $CLAUDE_CONFIG_DIR if set, else the home dir. The
+// file itself is .claude.json at that dir's root.
+//
+// This is CLAUDE's config dir, not Atrium's data dir, so RuntimeName() is
+// deliberately not involved. It lives here beside ResolvedConfigDir because the
+// unrouted session's dir and a routed account's dir are the same kind of value,
+// and resolving them in two places is what #359 was: the worktrees-root trust
+// wrote $HOME/.claude.json while `atrium doctor` read $CLAUDE_CONFIG_DIR, so the
+// opt-in silently did nothing for anyone exporting that variable.
+//
+// "" means unresolvable (no home dir). Callers must keep filepath.Clean away from
+// that sentinel — filepath.Clean("") is ".", which would turn "no dir" into a
+// cwd-relative one.
+//
+// Note the resolution reads the CALLER's env, which is a session's ambient env
+// only when the two agree: sessions inherit the tmux server's env, captured at
+// server start.
+func AmbientClaudeConfigDir() string {
+	if dir := os.Getenv("CLAUDE_CONFIG_DIR"); dir != "" {
+		return dir
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return home
+}
 
 // ResolveClaudeAccount picks the Claude Code account for a target whose origin
 // remote is remoteURL and whose directory is targetPath. It returns the account
