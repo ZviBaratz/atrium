@@ -10,6 +10,7 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/muesli/reflow/truncate"
 )
 
 type accountsTab int
@@ -427,9 +428,13 @@ func (o *AccountsOverlay) handlePreviewKey(msg tea.KeyMsg) (closed bool, dirty b
 func (o *AccountsOverlay) boxWidth() int {
 	w := o.width - 2
 	// Capped higher than SettingsOverlay's 64 (which has no pool/availability
-	// columns): a Claude row's "pool:<name>  ⛔ limited" tail needs the extra
-	// room, or a full 30-row list wraps every line and blows the row-window
-	// budget (see TestAccountsOverlay_ListWindowsRowsOnShortTerminal).
+	// columns): a Claude row's `pool:<name>` and availability tail needs the extra
+	// room. The cap is a comfort measure, not a correctness one — it was never
+	// enough for the worst case (#478's row wanted 96 against this cap's inner 80,
+	// and a pool name is free text, so no cap can be), so what actually keeps rows
+	// inside the box is the flexible dir column in accounts_layout.go and Render's
+	// line clip. What the cap still buys is that a wide terminal does not stretch
+	// this panel across the whole screen.
 	if w > 84 {
 		w = 84
 	}
@@ -441,6 +446,45 @@ func (o *AccountsOverlay) boxWidth() int {
 
 func (o *AccountsOverlay) inner() int { return o.boxWidth() - 4 } // Padding(1,2) → 4 cols
 
+// listNotes are the conditional footer lines renderList prints beneath the account
+// rows. Each one that renders must also be charged a row of rowWindow's height
+// budget: a note printed but uncounted makes the box one line taller than the
+// terminal it was measured against (9b25662, #499). The two agree here by
+// construction rather than by inspection — both notes are computed ONCE per frame,
+// in renderList, and handed to rowWindow, instead of each function deciding for
+// itself and having two chances to disagree (#479).
+type listNotes struct {
+	splitPool string // "" when no pool is split, or off the Claude tab
+	identity  string // "" when there is nothing to warn about, or off the Claude tab
+}
+
+// listNotes builds this frame's notes. Claude-tab only, because both the pool and
+// the identity features are: this is the single gate renderList and rowWindow now
+// share, where there used to be one apiece.
+func (o *AccountsOverlay) listNotes() listNotes {
+	if o.tab != tabClaude {
+		return listNotes{}
+	}
+	return listNotes{
+		splitPool: splitPoolNote(splitPools(o.cfg.ClaudeAccounts), o.inner()),
+		identity:  o.identityNote(o.inner()),
+	}
+}
+
+// lines is how many rows of the height budget these notes claim. splitPoolNote
+// returns "" exactly when there are no split pools, so an empty field means the
+// note cannot render, never merely that it is terse.
+func (n listNotes) lines() int {
+	count := 0
+	if n.splitPool != "" {
+		count++
+	}
+	if n.identity != "" {
+		count++
+	}
+	return count
+}
+
 // rowWindow returns the [start, end) slice of account rows to display so the
 // list fits a short terminal with the cursor kept in view. Everything outside
 // the rows costs a fixed number of lines (border 2 + padding 2 + title/blank 2
@@ -448,23 +492,14 @@ func (o *AccountsOverlay) inner() int { return o.boxWidth() - 4 } // Padding(1,2
 // hint 1 = 12), so the remaining height budgets the rows. The unmatched-repos
 // hint is itself conditional but predates this feature, so it keeps its
 // unconditional allowance for continuity — a pool-free config must keep
-// scrolling exactly as it always has. The split-pool note is new, so ITS
-// allowance is conditional on the note actually being able to render (Claude
-// tab with a genuinely split pool): charging every config a row for a note
-// that only some configs print would cost a pool-free config a visible row it
-// never used to lose. The identity note is charged the same way and for the
-// same reason — a note renderList prints but rowWindow does not count makes the
-// box one line taller than the terminal it was measured against. Mirrors the
-// windowing SettingsOverlay applies to its own body.
-func (o *AccountsOverlay) rowWindow(n int) (start, end int) {
-	chrome := 12
-	if o.tab == tabClaude && len(splitPools(o.cfg.ClaudeAccounts)) > 0 {
-		chrome++ // the split-pool note occupies one more line
-	}
-	if o.tab == tabClaude && o.identityNote(o.inner()) != "" {
-		chrome++ // so does the identity warning
-	}
-	budget := o.height - chrome
+// scrolling exactly as it always has. The split-pool and identity notes are
+// newer, so THEIR allowance is conditional on the note actually rendering:
+// charging every config a row for a note that only some configs print would cost
+// a pool-free config a visible row it never used to lose. Which of them render is
+// not decided here — notes comes from renderList, which is also what prints them.
+// Mirrors the windowing SettingsOverlay applies to its own body.
+func (o *AccountsOverlay) rowWindow(n int, notes listNotes) (start, end int) {
+	budget := o.height - (12 + notes.lines())
 	if budget < 3 {
 		budget = 3
 	}
@@ -501,7 +536,32 @@ func (o *AccountsOverlay) Render() string {
 		body = o.renderList()
 	}
 	title := t.OverlayTitleStyle().Render("Accounts")
-	return style.Render(title + "\n\n" + body)
+	return style.Render(clipLines(title+"\n\n"+body, o.inner()))
+}
+
+// clipLines truncates every line of s to width cells. It is the overlay's last rung
+// and the only unconditional one: the row layout sizes its flexible column so rows
+// fit (accounts_layout.go), and each note picks a wording that fits (fitOneOf), but
+// several strings in this box have no ladder at all — a delete-confirm carrying an
+// arbitrary account name, the legend's longest line on a narrow terminal, the
+// preview's resolved dirs and token lists. Any one of them wrapping costs a line the
+// height budget never counted, which is #478's actual failure mode rather than the
+// cosmetic dangling chip. So the guarantee is taken here, once, for every mode.
+//
+// Same shape and helper as the create-form overlay's fitOverlay
+// (textInput_render.go) — truncate.StringWithTail is ANSI-aware, so a styled line
+// keeps its escape sequences intact.
+func clipLines(s string, width int) string {
+	if width <= 0 {
+		return s
+	}
+	lines := strings.Split(s, "\n")
+	for i, l := range lines {
+		if lipgloss.Width(l) > width {
+			lines[i] = truncate.StringWithTail(l, uint(width), "…")
+		}
+	}
+	return strings.Join(lines, "\n")
 }
 
 func (o *AccountsOverlay) renderEdit() string {
@@ -643,37 +703,33 @@ func (o *AccountsOverlay) renderList() string {
 	if len(rows) == 0 {
 		b.WriteString(t.DimStyle().Render("No "+o.tabKind()+" accounts — press n to add") + "\n")
 	} else {
-		start, end := o.rowWindow(len(rows))
-		// Catch-all badges depend on order across the whole list (the first
-		// rule-less account is "default", later ones "unreachable"), so account
-		// for any catch-all scrolled off the top before rendering the window.
-		seenCatchAll := false
-		for i := 0; i < start; i++ {
-			if rows[i].catchAll {
-				seenCatchAll = true
-			}
-		}
+		// Built here, inside the branch that prints them, and handed to rowWindow: one
+		// decision per frame, taken where the printing happens. An empty tab reaches
+		// neither, so no note is ever counted for a frame that prints none.
+		notes := o.listNotes()
+		start, end := o.rowWindow(len(rows), notes)
 		// Fetch the availability snapshot (a full maps.Clone) and the clock once for
-		// the whole window rather than per row — the map is indexed per account below.
+		// the whole list rather than per row — the map is indexed per account below.
 		avail := o.state.GetAccountAvailability()
 		now := time.Now()
-		// Same reasoning as seenCatchAll above: a pool run can straddle the window
-		// boundary, so the gutter is computed over the whole slice (never re-sliced
-		// to the window) and rows are indexed into it by absolute config index, not
-		// window-relative position.
+		// Both of these are computed over the WHOLE slice and indexed by absolute
+		// config index, never re-sliced to the window: a pool run can straddle the
+		// window boundary, and a catch-all badge depends on rows that scrolled off the
+		// top (rowTails threads that ordering, which is why there is no longer a
+		// separate pre-scan here).
 		var gut []string
 		if o.tab == tabClaude {
 			gut = poolGutter(o.cfg.ClaudeAccounts)
 		}
-		// dirTruncWidth/dirPadWidth size the dir column when no gutter renders at
-		// all; when it does, both shrink by gutterCellWidth so the gutter's two
-		// columns come OUT of the row instead of adding to it — the row's total
-		// width must not depend on whether the gutter is present.
-		dirTruncWidth, dirPadWidth := dirTruncWidthBase, dirPadWidthBase
+		tails, tailMax := o.rowTails(rows, avail, now)
+		// The gutter's columns come out of the dir column rather than adding to the
+		// row (#475), and so does everything the tail needs beyond its usual share
+		// (#478) — see accounts_layout.go.
+		gutterWidth := 0
 		if gut != nil {
-			dirTruncWidth -= gutterCellWidth
-			dirPadWidth -= gutterCellWidth
+			gutterWidth = gutterCellWidth
 		}
+		dirTruncWidth, dirPadWidth := dirWidths(o.inner(), gutterWidth, tailMax)
 		for i := start; i < end; i++ {
 			r := rows[i]
 			marker := "  "
@@ -684,42 +740,32 @@ func (o *AccountsOverlay) renderList() string {
 			if gut != nil {
 				gutter = t.DimStyle().Render(gut[i])
 			}
-			name := r.name
-			if name == "" {
-				name = t.DangerStyle().Render("(unnamed)")
+			// Bound BEFORE styling, in both columns: clipWidth and truncTail slice
+			// runes, so clipping an already-styled string would cut its escape
+			// sequence in half and bleed colour across the rest of the row.
+			name := clipWidth(r.name, nameWidth)
+			if r.name == "" {
+				name = t.DangerStyle().Render(clipWidth("(unnamed)", nameWidth))
 			}
-			dir := r.dir
-			if dir == "" {
-				dir = t.DimStyle().Render("(inherit ambient env)")
-			} else {
-				dir = truncTail(dir, dirTruncWidth)
+			// A real path keeps its leaf (truncTail); the placeholder is a phrase, so
+			// it keeps its head (clipWidth) — the same split accounts_identity.go makes
+			// between paths and sentences.
+			dir := truncTail(r.dir, dirTruncWidth)
+			if r.dir == "" {
+				dir = t.DimStyle().Render(clipWidth("(inherit ambient env)", dirTruncWidth))
 			}
-			extra := ""
-			if o.tab == tabClaude {
-				acct := o.cfg.ClaudeAccounts[i]
-				if acct.Pool != "" {
-					extra += "  " + t.DimStyle().Render("pool:"+acct.Pool)
-				}
-				if config.AccountAvailable(avail[acct.Name], now) {
-					extra += "  " + t.DimStyle().Render("● available")
-				} else {
-					extra += "  " + t.DangerStyle().Render("⛔ limited")
-				}
-			}
-			b.WriteString(marker + gutter + padRight(name, 12) + " " + padRight(dir, dirPadWidth) + " " + o.badge(r.catchAll, &seenCatchAll) + extra + "\n")
+			b.WriteString(marker + gutter + padRight(name, nameWidth) + " " + padRight(dir, dirPadWidth) + " " + tails[i].rendered + "\n")
 		}
 		if !o.hasCatchAll() {
 			b.WriteString(t.DimStyle().Render("unmatched repos inherit the ambient account") + "\n")
 		}
-		if o.tab == tabClaude {
-			if names := splitPools(o.cfg.ClaudeAccounts); len(names) > 0 {
-				b.WriteString(t.DimStyle().Render(splitPoolNote(names, o.inner())) + "\n")
-			}
-			// Danger, not dim: unlike the notes above it, this one says something
-			// is wrong right now rather than suggesting a tidier arrangement.
-			if note := o.identityNote(o.inner()); note != "" {
-				b.WriteString(t.DangerStyle().Render(note) + "\n")
-			}
+		if notes.splitPool != "" {
+			b.WriteString(t.DimStyle().Render(notes.splitPool) + "\n")
+		}
+		// Danger, not dim: unlike the notes above it, this one says something
+		// is wrong right now rather than suggesting a tidier arrangement.
+		if notes.identity != "" {
+			b.WriteString(t.DangerStyle().Render(notes.identity) + "\n")
 		}
 	}
 
@@ -753,21 +799,12 @@ func (o *AccountsOverlay) legendHints() (hint, extras string) {
 	hint += " · tab switch · n new · e edit · d delete"
 	extras = "t test routing · esc close"
 	if o.tab == tabClaude {
-		extras = "l limited · " + extras
+		// The mark, not a literal, and named here because it is now the only thing a
+		// row says about availability — the words moved out of the rows to buy back
+		// the columns #478 needed, so the legend is where they survive.
+		extras = "l limited " + theme.Current().Glyphs.AcctLimited + " · " + extras
 	}
 	return hint, extras
-}
-
-func (o *AccountsOverlay) badge(catchAll bool, seen *bool) string {
-	t := theme.Current()
-	if !catchAll {
-		return t.AccentStyle().Render("routed")
-	}
-	if *seen {
-		return t.DangerStyle().Render("catch-all (unreachable)")
-	}
-	*seen = true
-	return t.DimStyle().Render("default")
 }
 
 func (o *AccountsOverlay) hasCatchAll() bool {
@@ -786,10 +823,28 @@ func padRight(s string, n int) string {
 	return s
 }
 
+// truncTail bounds s to at most maxLen display cells, keeping its TAIL and marking
+// the cut with a leading ellipsis — the right end for a path, whose leaf is the
+// informative part. clipWidth is its mirror for sentences.
+//
+// It counts cells, not runes: a rune budget lets a path of wide characters
+// (~/项目/…) pass a 26-rune cap at up to 52 cells, and the dir column is the row's
+// width guarantee (accounts_layout.go), which a rune count would quietly void. For
+// the same reason the degenerate cases return a bounded string rather than s — a
+// guarantee whose edge case hands back the unbounded input is not one.
 func truncTail(s string, maxLen int) string {
-	r := []rune(s)
-	if maxLen <= 1 || len(r) <= maxLen {
+	if maxLen <= 0 {
+		return ""
+	}
+	if lipgloss.Width(s) <= maxLen {
 		return s
 	}
-	return "…" + string(r[len(r)-maxLen+1:])
+	if maxLen == 1 {
+		return "…"
+	}
+	r := []rune(s)
+	for len(r) > 0 && lipgloss.Width(string(r))+1 > maxLen {
+		r = r[1:]
+	}
+	return "…" + string(r)
 }
