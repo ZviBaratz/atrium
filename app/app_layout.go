@@ -203,16 +203,32 @@ func (m *home) refreshSettingsClusteringGate() {
 }
 
 // applySettingChange persists the config after the settings panel changed the
-// given row, then live-applies whatever that field controls. Fields without a
-// case here are read live at their point of use (auto_attach, max_sessions,
-// kill_double_tap_confirm) or only consumed by later operations (branch_prefix,
-// default_program on the next session; daemon_poll_interval on the next daemon
-// run), so persisting is all they need.
+// given row — or, for "profiles", after its record editor changed the profile
+// list — then live-applies whatever that field controls. Fields without a case
+// here are read live at their point of use (auto_attach, max_sessions,
+// kill_double_tap_confirm) or only consumed by later operations (branch_prefix;
+// daemon_poll_interval on the next daemon run), so persisting is all they need.
 func (m *home) applySettingChange(key string) tea.Cmd {
 	if err := config.SaveConfig(m.appConfig); err != nil {
 		return m.handleError(err)
 	}
 	switch key {
+	case "default_program", "profiles":
+		// m.program is the create form's fallback launch command, resolved once at startup from
+		// GetProgram(). With no variant picker — zero or one profile — it IS the command a new
+		// session runs, so a changed default, or an edited profile the default names, must
+		// re-resolve it or the form keeps launching the previous command until relaunch.
+		//
+		// Running sessions are untouched by design: session.Instance.Program stores its own
+		// resolved command and is never re-derived, so a profile edit cannot reach a session
+		// that already exists.
+		m.program = m.appConfig.GetProgram()
+		m.stashedDraft = nil
+		// A stashed create-form draft snapshotted GetProfiles() and m.program when it was built,
+		// and VariantPicker replays each profile's Program verbatim — so a restored draft would
+		// offer a renamed-away profile and launch its OLD command. Drop it so the next open
+		// rebuilds from live config. handleAccountsState does exactly this, for exactly this
+		// reason.
 	case "theme", "glyph_set":
 		// Styles read theme.Current() lazily at render time, so swapping the
 		// palette / glyph set plus a forced repaint restyles the whole UI in place.

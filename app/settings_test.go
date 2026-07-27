@@ -10,6 +10,7 @@ import (
 	"github.com/ZviBaratz/atrium/config"
 	"github.com/ZviBaratz/atrium/session"
 	"github.com/ZviBaratz/atrium/ui"
+	"github.com/ZviBaratz/atrium/ui/overlay"
 	"github.com/ZviBaratz/atrium/ui/theme"
 	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
@@ -571,4 +572,83 @@ func TestProfilesDetectedTextMirrorsTheCLI(t *testing.T) {
 	assert.Equal(t, "no new agents detected; profiles unchanged", profilesDetectedText(nil))
 	assert.Equal(t, "added profiles: codex", profilesDetectedText([]string{"codex"}))
 	assert.Equal(t, "added profiles: codex, gemini", profilesDetectedText([]string{"codex", "gemini"}))
+}
+
+// TestSettingsPanel_EditingTheDefaultProfileReResolvesTheLaunchCommand closes a live-apply gap
+// the Profiles editor makes reachable.
+//
+// m.program is resolved once at launch and is the create form's fallback launch command
+// whenever there is no variant picker — which is exactly the single-profile case below. Editing
+// that profile's command without re-resolving leaves the form launching the previous one until
+// the app is relaunched, which contradicts the whole point of guarding default_program.
+func TestSettingsPanel_EditingTheDefaultProfileReResolvesTheLaunchCommand(t *testing.T) {
+	resetSettingsTestState(t)
+	h := newSettingsTestHome()
+	h.appConfig.Profiles = []config.Profile{{Name: "claude", Program: "claude"}}
+	h.appConfig.DefaultProgram = "claude"
+	h.program = h.appConfig.GetProgram()
+	require.Equal(t, "claude", h.program)
+
+	openProfilesEditor(t, h)
+	_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("e")})
+	_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyTab})
+	for _, r := range " --model opus" {
+		_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+	}
+	_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyEnter})
+
+	assert.Equal(t, "claude --model opus", h.appConfig.Profiles[0].Program)
+	assert.Equal(t, "claude --model opus", config.LoadConfig().Profiles[0].Program,
+		"the edit reached disk through the panel's one writer")
+	assert.Equal(t, "claude --model opus", h.program,
+		"and the resolved launch command was re-derived, not left at launch-time")
+}
+
+// TestSettingsPanel_DefaultProgramReResolvesTheLaunchCommand is the same gap on the row that has
+// always existed — cycling default_program. It is here because the fix covers both keys and a
+// test for only one would let a later edit drop the other.
+func TestSettingsPanel_DefaultProgramReResolvesTheLaunchCommand(t *testing.T) {
+	resetSettingsTestState(t)
+	h := newSettingsTestHome()
+	h.appConfig.Profiles = []config.Profile{
+		{Name: "claude", Program: "claude"},
+		{Name: "codex", Program: "codex --sandbox"},
+	}
+	h.appConfig.DefaultProgram = "claude"
+	h.program = h.appConfig.GetProgram()
+
+	_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(",")})
+	require.True(t, h.settingsOverlay.OpenAt("default_program"))
+	_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyRight})
+
+	require.Equal(t, "codex", h.appConfig.DefaultProgram)
+	assert.Equal(t, "codex --sandbox", h.program,
+		"the launch command follows the setting rather than the launch-time snapshot")
+}
+
+// TestSettingsPanel_ProfileEditDropsAStashedDraft. A create form escaped with a dirty title is
+// stashed whole and restored by the next bare n — including the []config.Profile it snapshotted
+// at build time, which VariantPicker replays as launch commands verbatim. So a draft stashed
+// before a profiles edit would offer a renamed-away profile and launch its OLD command.
+//
+// handleAccountsState already drops the stash for exactly this reason (app_accounts.go); this is
+// the same line for the same hazard on the other record editor.
+func TestSettingsPanel_ProfileEditDropsAStashedDraft(t *testing.T) {
+	resetSettingsTestState(t)
+	h := newSettingsTestHome()
+	// TWO profiles: cycleEnum is a silent no-op on a single-option enum, so a one-profile
+	// fixture would never reach applySettingChange and the test would pass for the wrong reason.
+	h.appConfig.Profiles = []config.Profile{
+		{Name: "claude", Program: "claude"},
+		{Name: "codex", Program: "codex"},
+	}
+	h.appConfig.DefaultProgram = "claude"
+	h.stashedDraft = &overlay.TextInputOverlay{} // a draft pinned to the old profile list
+
+	_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(",")})
+	require.True(t, h.settingsOverlay.OpenAt("default_program"))
+	_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyRight})
+	require.Equal(t, "codex", h.appConfig.DefaultProgram, "precondition: the cycle landed")
+
+	assert.Nil(t, h.stashedDraft, "a stale draft must not survive a change to what launches")
 }
