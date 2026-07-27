@@ -684,10 +684,12 @@ func (o *AccountsOverlay) renderTabs() string {
 
 // gutterCellWidth is the display width of one poolGutter cell ("┌ ", "│ ", "└ ",
 // or the blank "  "). dirTruncWidthBase/dirPadWidthBase are the dir column's
-// truncTail/padRight widths when no gutter renders; renderList subtracts
-// gutterCellWidth from both when a gutter is present, so the gutter's columns
-// come OUT of the row rather than adding to it — the row's total rendered width
-// is the same either way.
+// truncTail/padRight widths at their widest: no gutter, and a tail short enough
+// to leave the column whole. They are a ceiling, not the rendered width — dirWidths
+// (accounts_layout.go) is what renderList actually calls, and it takes the gutter
+// AND the widest tail in the list out of this base, clamping at dirMinWidth. So the
+// dir is the row's one flexible column: the gutter and the badge/chip tail come OUT
+// of it rather than adding to the row, which is what keeps the row inside the box.
 const (
 	gutterCellWidth   = 2
 	dirTruncWidthBase = 26
