@@ -1545,3 +1545,46 @@ func TestALongValueCannotEvictAnInertChip(t *testing.T) {
 		assert.NotEmptyf(t, badge, "width %d: a long command evicted the inert chip", w)
 	}
 }
+
+// TestEveryHandoffNoteFitsItsPane is the width half of TestEveryHandoffEntryNamesItsSurface,
+// which pins only that a note EXISTS. A handoff pane is static prose wrapped to the rows pane,
+// and windowPane degrades an overflow into a "↓ n more" marker — a scroll affordance on the one
+// entry whose entire content is that note, with nothing to scroll to. So the note is a
+// width-bearing string, and in this repo a copy change IS a width change: PR C rewrote the
+// Accounts note from 64 characters to 79.
+//
+// Swept over the whole supported range rather than one size, because the rows pane is widest in
+// single-pane mode and narrowest just above the two-pane threshold, and paneHeight shrinks with
+// the terminal to a floor of settingsMinBody — a single geometry would test that geometry
+// rather than the note.
+func TestEveryHandoffNoteFitsItsPane(t *testing.T) {
+	notes := 0
+	for i, e := range railEntries() {
+		if e.kind != railHandoff {
+			continue
+		}
+		notes++
+		for _, h := range []int{settingsVChrome + settingsMinBody, 16, 24, 40} {
+			for w := 40; w <= 200; w++ {
+				o := NewSettingsOverlay(config.DefaultConfig())
+				o.SetSize(w, h)
+				o.SetRailIndex(i)
+				require.Equalf(t, e.label, o.selectedEntry().label,
+					"%dx%d: the rail did not land on %q", w, h, e.label)
+				paneW, paneH := o.rowsPaneWidth(), o.paneHeight()
+				lines := o.rowsPaneContent(paneW)
+				assert.LessOrEqualf(t, len(lines), paneH,
+					"%q at %dx%d: the note wraps to %d lines in a %d-line pane, so windowPane "+
+						"shows a scroll marker on a pane with nothing to scroll to",
+					e.label, w, h, len(lines), paneH)
+				for _, l := range lines {
+					assert.LessOrEqualf(t, ansi.StringWidth(stripANSI(l.text)), paneW,
+						"%q at %dx%d: a note line overflows the pane, so the box soft-wraps: %q",
+						e.label, w, h, l.text)
+				}
+			}
+		}
+	}
+	// Without this the loop could stop finding handoffs and the test would still pass.
+	require.Equal(t, 2, notes, "Profiles and Accounts are the two handoff notes")
+}
