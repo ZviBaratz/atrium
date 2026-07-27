@@ -19,8 +19,13 @@ them** — one `grep -c` is cheaper than a wrong claim:
 ```sh
 grep -cE '^\t\{Name:' keys/registry.go        # registry entries
 grep -c 'case keys.Key' app/app_update.go      # dispatch cases
-grep -cE '`json:' config/types.go              # Config fields
+awk '/^type Config struct/,/^}/' config/types.go | grep -cE '`json:'   # Config fields
 ```
+
+That last one has to be scoped to the struct. Counting json tags across the whole
+file gives 59, because `Profile`, `ClaudeAccount`, `AgyAccount` and `GHAccount` live
+there too and carry their own — and a recount recipe that answers a different
+question than the claim above it is how the wrong number got here in the first place.
 
 Verification, hermeticity, and the `just lint` / `golangci-lint` traps are in
 `CLAUDE.md` — not repeated here. The gate is `just ci`.
@@ -29,6 +34,15 @@ For the *general* discipline behind all of this — why a green Go suite is near
 blind to a TUI, the width tautology, bubblezone's stale bounds, mutation testing —
 use the **`verify-tui`** skill from the `charm-tui` plugin. This file is only
 Atrium's site map.
+
+`charm-tui` lives outside this repo, so `.claude/settings.json` can enable it but
+cannot install it. Once per machine:
+
+```
+/plugin marketplace add ZviBaratz/claude-plugins
+```
+
+`enabledPlugins` does the rest. Until you run it the skill simply will not resolve.
 
 ## Adding a keybinding — 7 sites, 6 guarded
 
@@ -68,7 +82,7 @@ Two cross-layer pins worth knowing exist, because they fail in surprising places
 
 ## Adding a `Config` field — 4 sites, 3 guarded bidirectionally
 
-45 json-tagged fields at last count.
+42 json-tagged fields on `Config` itself at last count.
 
 | # | Site | Guarded by |
 |---|---|---|
@@ -92,9 +106,16 @@ lie. Don't "fix" them.
 1. **It must measure width 1.** Guarded across every palette × glyph-set
    combination by `TestGlyphWidths`, `TestAgentGlyphWidths`,
    `TestNoteGlyphIsSingleCellEverywhere` in `ui/theme/theme_test.go`. A 2-cell
-   glyph is not a cosmetic bug: it desyncs the alt-screen renderer into
-   accumulating ghost rows (see `ui/theme/panel.go`'s `SanitizeWidth` docstring,
-   and `verify-tui`'s `measurement.md`).
+   glyph is not cosmetic — it breaks the column math and the view-bounds
+   invariant, which is exactly what `TestGlyphWidths` says it guards.
+
+   Keep that separate from the neighbouring failure it is easy to borrow drama
+   from: when a cluster's *measured* width diverges from its *rendered* width the
+   line overflows, wraps, and desyncs bubbletea's incremental alt-screen renderer
+   into accumulating ghost rows. That is `SanitizeWidth`'s territory
+   (`ui/theme/panel.go`) and it concerns **untrusted captured content** — pane
+   output and diffs — not this curated table, whose glyphs are chosen. Same
+   neighbourhood, different guard; see also `verify-tui`'s `measurement.md`.
 2. **It must reach the `?` legend**, or be excluded with a reason.
    `app/help_legend_test.go`'s `TestLegendCoversRowVocabulary` reflects over the
    live `Glyphs` table, so a new field forces a decision. Note one exclusion

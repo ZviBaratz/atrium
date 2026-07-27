@@ -164,4 +164,7 @@ anything. Press it.
 
 For the general discipline of proving a TUI change is right — why a passing Go suite
 cannot see width, reflow, colour, or a click that hit the neighbouring row — use the
-`verify-tui` skill from the `charm-tui` plugin.
+`verify-tui` skill from the `charm-tui` plugin. It is enabled in
+`.claude/settings.json` but lives in an external marketplace, which that file cannot
+install for you: run `/plugin marketplace add ZviBaratz/claude-plugins` once per
+machine, or the skill will not resolve.

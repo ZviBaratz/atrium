@@ -1,6 +1,7 @@
 {
   "enabledPlugins": {
-    "gopls-lsp@claude-plugins-official": true
+    "gopls-lsp@claude-plugins-official": true,
+    "charm-tui@zvibaratz": true
   },
   "permissions": {
     "allow": [
@@ -16,13 +17,13 @@
       "Bash(gh pr diff:*)",
       "Bash(gh issue view:*)",
       "Bash(gh issue list:*)",
-      "Bash(gh api:*)",
       "Bash(gh auth status:*)",
       "Bash(git log:*)",
       "Bash(git diff:*)",
       "Bash(git status:*)",
       "Bash(git show:*)",
-      "Bash(git branch:*)",
+      "Bash(git branch --list:*)",
+      "Bash(git branch --show-current)",
       "Bash(shellcheck:*)"
     ]
   },

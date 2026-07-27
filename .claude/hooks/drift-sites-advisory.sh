@@ -67,8 +67,14 @@ case "$path" in
 		  - a new glyph must reach the ? legend or be excluded with a reason
 		    (TestLegendCoversRowVocabulary reflects over the live Glyphs table)
 
-		A 2-cell glyph desyncs the alt-screen renderer into accumulating ghost rows —
-		it is not a cosmetic bug. See ui/theme/panel.go's SanitizeWidth docstring.
+		A 2-cell glyph breaks the column math the list and panel layout depend on —
+		that is what TestGlyphWidths says it guards, and it is not cosmetic.
+
+		Do not confuse it with the adjacent hazard: a *measured* width diverging from
+		the *rendered* one wraps the line and desyncs bubbletea's alt-screen renderer
+		into accumulating ghost rows. That is SanitizeWidth's problem
+		(ui/theme/panel.go), and it is about untrusted captured pane content, not
+		about this curated table.
 	EOF
 	exit 2
 	;;
