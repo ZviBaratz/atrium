@@ -49,7 +49,7 @@ func forceSettingsFlag(t *testing.T, supported bool) {
 }
 
 func TestBuildHookSettings(t *testing.T) {
-	data, err := buildHookSettings("/abs/bin/atrium", "/abs/dir/state")
+	data, err := buildHookSettings("/abs/bin/atrium", "/abs/dir/state", sentinelBrief)
 	require.NoError(t, err)
 
 	var parsed struct {
@@ -67,18 +67,24 @@ func TestBuildHookSettings(t *testing.T) {
 	// subcommand with the state path baked in. PostToolUse re-latches working (#311): it
 	// bumps the heartbeat at each tool boundary so an active turn holds working between tools
 	// even when the below-box marker is absent and the above-box spinner is reworded.
-	allEvents := []string{"UserPromptSubmit", "PreToolUse", "PostToolUse", "Stop", "StopFailure", "SubagentStart", "SubagentStop"}
+	// statusEvents are the inward-facing ones: every command mutates the state record, so every
+	// one of them bakes the absolute state path. SessionStart is the outward-facing exception —
+	// it prints the brief and touches no record — so it is asserted separately below.
+	statusEvents := []string{"UserPromptSubmit", "PreToolUse", "PostToolUse", "Stop", "StopFailure", "SubagentStart", "SubagentStop"}
+	allEvents := append(append([]string{}, statusEvents...), "SessionStart")
 	require.Len(t, parsed.Hooks, len(allEvents), "no unexpected events wired")
 	for _, ev := range allEvents {
 		require.Len(t, parsed.Hooks[ev], 1, "event %s has one matcher group", ev)
 		require.Len(t, parsed.Hooks[ev][0].Hooks, 1, "event %s has one command", ev)
 		require.Equal(t, "command", parsed.Hooks[ev][0].Hooks[0].Type)
-		require.Contains(t, parsed.Hooks[ev][0].Hooks[0].Command, "/abs/dir/state",
-			"the absolute state path is baked into the command for %s", ev)
 		require.Contains(t, parsed.Hooks[ev][0].Hooks[0].Command, "/abs/bin/atrium",
 			"the hook re-invokes the atrium binary for %s", ev)
 		require.Contains(t, parsed.Hooks[ev][0].Hooks[0].Command, HookSubcommand,
 			"the hook uses the %q subcommand for %s", HookSubcommand, ev)
+	}
+	for _, ev := range statusEvents {
+		require.Contains(t, parsed.Hooks[ev][0].Hooks[0].Command, "/abs/dir/state",
+			"the absolute state path is baked into the command for %s", ev)
 	}
 	// PreToolUse and PostToolUse match all tools; the matcher-less events omit it.
 	require.Equal(t, "*", parsed.Hooks["PreToolUse"][0].Matcher)
@@ -112,6 +118,29 @@ func TestBuildHookSettings(t *testing.T) {
 	require.Equal(t, HookEventReady, verb("StopFailure"))
 	require.Equal(t, HookEventSubagentStart, verb("SubagentStart"))
 	require.Equal(t, HookEventSubagentStop, verb("SubagentStop"))
+	require.Equal(t, HookEventSessionStart, verb("SessionStart"))
+
+	// The SessionStart brief (#485). Its matcher is the one place in this file where the string
+	// is evaluated by Claude against something other than a tool name — it matches the session
+	// SOURCE — so it is pinned exactly, and `resume` is called out on its own line. Atrium
+	// resurrects a paused session with `claude --continue` (the claude adapter's Resume in
+	// session/agent/registry.go), which fires source "resume"; drop that alternative and the
+	// brief silently vanishes after every pause→resume, with no error anywhere. A live probe
+	// against claude 2.1.220 confirmed the matcher really is evaluated: the same hook with
+	// "startup" removed does not fire on a fresh session. See sessionStartMatcher.
+	require.Equal(t, "startup|resume|clear|compact", parsed.Hooks["SessionStart"][0].Matcher)
+	require.Contains(t, parsed.Hooks["SessionStart"][0].Matcher, "resume",
+		"claude --continue (Atrium's resume) fires source \"resume\"; without it the brief is lost on every pause→resume")
+
+	// The brief's facts are baked into the command line, not read from state.json when the
+	// hook fires (see brief.go's package comment for why).
+	sessionStart := parsed.Hooks["SessionStart"][0].Hooks[0].Command
+	require.Contains(t, sessionStart, "--session '"+sentinelBrief.Name+"'")
+	require.Contains(t, sessionStart, "--origin '"+sentinelBrief.Origin+"'")
+	require.Contains(t, sessionStart, "--branch '"+sentinelBrief.Branch+"'")
+	require.Contains(t, sessionStart, "--worktrees-root '"+sentinelBrief.WorktreesRoot+"'")
+	require.NotContains(t, sessionStart, "--state-file",
+		"the brief mutates no state record, so it must not be handed the state path")
 
 	// The stdin contract the wiring depends on: only the once-per-turn and sub-agent edges
 	// read a payload, so the N-per-turn tool edges stay off stdin entirely — which is exactly
@@ -120,6 +149,24 @@ func TestBuildHookSettings(t *testing.T) {
 	require.True(t, HookEventReadsStdin(verb("Stop")))
 	require.False(t, HookEventReadsStdin(verb("PreToolUse")), "the per-tool hot path never reads stdin")
 	require.False(t, HookEventReadsStdin(verb("PostToolUse")), "the per-tool hot path never reads stdin")
+}
+
+// TestBuildHookSettingsWithoutBrief: a session with no renderable brief gets the status hooks
+// and no SessionStart key at all. A direct (non-git) session has no worktree and no branch, so
+// every load-bearing claim in the copy would be false for it — silence beats a brief that
+// confidently describes a worktree that does not exist.
+func TestBuildHookSettingsWithoutBrief(t *testing.T) {
+	data, err := buildHookSettings("/abs/bin/atrium", "/abs/dir/state", SessionBrief{})
+	require.NoError(t, err)
+
+	var parsed struct {
+		Hooks map[string]json.RawMessage `json:"hooks"`
+	}
+	require.NoError(t, json.Unmarshal(data, &parsed))
+	require.NotContains(t, parsed.Hooks, "SessionStart", "no facts → no brief")
+	require.Contains(t, parsed.Hooks, "Stop", "the inward-facing status hooks are unaffected")
+	require.NotContains(t, string(data), HookEventSessionStart,
+		"the session-start verb must not appear anywhere when there is nothing to say")
 }
 
 // The hook command re-invokes the atrium binary (never a shell printf), single-quoting the
@@ -144,7 +191,7 @@ func TestEnsureHookSettingsClaude(t *testing.T) {
 	require.NoError(t, os.MkdirAll(dir, 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "state"), []byte(hookStateWorking), 0o644))
 
-	settingsPath, err := ensureHookSettings(name, "claude")
+	settingsPath, err := ensureHookSettings(name, "claude", sentinelBrief)
 	require.NoError(t, err)
 	require.Equal(t, filepath.Join(dir, "settings.json"), settingsPath)
 	require.FileExists(t, settingsPath)
@@ -154,16 +201,18 @@ func TestEnsureHookSettingsClaude(t *testing.T) {
 	data, err := os.ReadFile(settingsPath)
 	require.NoError(t, err)
 	require.NoError(t, json.Unmarshal(data, &map[string]any{}), "written settings is valid JSON")
+	require.Contains(t, string(data), "SessionStart", "the brief reaches the file the agent is launched with")
+	require.Contains(t, string(data), sentinelBrief.Branch)
 }
 
 func TestEnsureHookSettingsSkips(t *testing.T) {
 	forceSettingsFlag(t, true)
-	p, err := ensureHookSettings("claudesquad_"+t.Name()+"_aider", "aider")
+	p, err := ensureHookSettings("claudesquad_"+t.Name()+"_aider", "aider", sentinelBrief)
 	require.NoError(t, err)
 	require.Empty(t, p, "non-claude program gets no hooks")
 
 	forceSettingsFlag(t, false)
-	p, err = ensureHookSettings("claudesquad_"+t.Name()+"_unsupported", "claude")
+	p, err = ensureHookSettings("claudesquad_"+t.Name()+"_unsupported", "claude", sentinelBrief)
 	require.NoError(t, err)
 	require.Empty(t, p, "no --settings support → no hooks")
 }
