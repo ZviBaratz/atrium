@@ -655,17 +655,17 @@ list to your config file:
   { "name": "personal", "config_dir": "~/.claude", "expect_account": "me@example.com" }
   ```
 
-  Setting it does two things. **Creating or resuming** a session whose config dir
-  holds a *different* login is **refused**, naming both logins and the directory to
-  fix — a wrong launch cannot be undone by noticing it afterwards, and a resumed
-  session re-injects the same directory, so it is gated identically. And `atrium
-  doctor`'s **Claude account identities** section marks the account verified rather
-  than unpinned.
+  **Creating or resuming** a session whose config dir holds a *different* login is
+  **refused**, naming both logins and the directory to fix — a wrong launch cannot be
+  undone by noticing it afterwards, and a resumed session re-injects the same
+  directory, so it is gated identically. And `atrium doctor`'s **Claude account
+  identities** section marks the account verified rather than unpinned.
 
   Only a confirmed mismatch refuses. An account with no `expect_account` is never
   blocked, and a directory with no login recorded is allowed through — `claude` will
   prompt for login in the pane, which cannot silently mis-bill, and refusing would
-  strand you mid-onboarding. Comparison is on email, case- and whitespace-insensitive.
+  strand you mid-onboarding; a pinned account logs a warning when it launches
+  unverified that way. Comparison is on email, case- and whitespace-insensitive.
 
   Separately, and with no configuration at all, `doctor` warns when two accounts you
   believe are separate turn out to hold the **same** login, naming which one the

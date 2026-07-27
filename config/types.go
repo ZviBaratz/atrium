@@ -121,12 +121,15 @@ type ClaudeAccount struct {
 	// declares no expectation is reported as unpinned, and no launch is ever refused
 	// on its behalf. Verification is strictly opt-in.
 	//
-	// Setting it has two effects and no others. `atrium doctor` reports the account
-	// as verified or mismatched instead of unpinned, and creating or resuming a
-	// session on a config dir holding a DIFFERENT login is refused outright. Routing
-	// still does not consult it: it decides whether a chosen account may launch, never
-	// which account is chosen. See CheckIdentity for the single classifier behind both
-	// the report and the gate.
+	// What setting it does: `atrium doctor` reports the account as verified or
+	// mismatched instead of unpinned; creating or resuming a session on a config dir
+	// holding a DIFFERENT login is refused outright; and launching onto a dir with no
+	// login recorded at all logs a warning, because only a pinned account asserted
+	// something that could not be checked.
+	//
+	// What it does not do: routing never consults it. It decides whether a chosen
+	// account may launch, never which account is chosen. See CheckIdentity for the
+	// single classifier behind both the report and the gate.
 	ExpectAccount string `json:"expect_account,omitempty"`
 }
 
