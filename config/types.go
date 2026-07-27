@@ -118,12 +118,18 @@ type ClaudeAccount struct {
 	// usage figure on a webpage.
 	//
 	// Optional, and unset means unverified, not "expect nothing": an account that
-	// declares no expectation is reported as unpinned and otherwise left alone.
+	// declares no expectation is reported as unpinned, and no launch is ever refused
+	// on its behalf. Verification is strictly opt-in.
 	//
-	// Today `atrium doctor` is the only thing that reads it. Setting it changes what
-	// that report says and nothing else — routing does not consult it, and no launch
-	// is refused on a mismatch. See ReadIdentity/MatchesPin for the comparison and
-	// doctor.CheckAccountIdentity for the report.
+	// What setting it does: `atrium doctor` reports the account as verified or
+	// mismatched instead of unpinned; creating or resuming a session on a config dir
+	// holding a DIFFERENT login is refused outright; and launching onto a dir with no
+	// login recorded at all logs a warning, because only a pinned account asserted
+	// something that could not be checked.
+	//
+	// What it does not do: routing never consults it. It decides whether a chosen
+	// account may launch, never which account is chosen. See CheckIdentity for the
+	// single classifier behind both the report and the gate.
 	ExpectAccount string `json:"expect_account,omitempty"`
 }
 

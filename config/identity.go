@@ -109,10 +109,89 @@ func ReadAccountIdentity(configDir string) (AccountIdentity, bool) {
 	return id, true
 }
 
-// ReadIdentity is ReadAccountIdentity for a configured account, resolving its
-// config_dir (expanding ~) first. An inherit-env account — config_dir "" — reads
-// nothing and reports ok=false: it injects no CLAUDE_CONFIG_DIR, so it has no dir of
-// its own whose identity could be verified.
+// NormalizedConfigDir is ResolvedConfigDir cleaned — the spelling identity work
+// reads, caches and compares on. config_dir is hand-written, so one directory
+// reaches these checks written several ways, and gates.go's installedGateDirs
+// already cleans for exactly this reason: a trailing slash is not a different dir.
+// Left raw, "/h/x" and "/h/x/" would be read twice, defeating the single-read
+// guarantee, and then reported as two dirs that had drifted onto one login — sending
+// the user after a second directory that does not exist.
+//
+// An account naming no dir returns "" rather than a cleaned one, because
+// filepath.Clean("") is ".": every inherit-env account would otherwise acquire a
+// config dir pointing at the process's working directory, and be reported and gated
+// on a login no session ever routed there.
+func (a ClaudeAccount) NormalizedConfigDir() string {
+	dir := a.ResolvedConfigDir()
+	if dir == "" {
+		return ""
+	}
+	return filepath.Clean(dir)
+}
+
+// ReadIdentity is ReadAccountIdentity for a configured account, resolving and
+// normalizing its config_dir (expanding ~) first. An inherit-env account — config_dir
+// "" — reads nothing and reports ok=false: it injects no CLAUDE_CONFIG_DIR, so it has
+// no dir of its own whose identity could be verified.
 func (a ClaudeAccount) ReadIdentity() (AccountIdentity, bool) {
-	return ReadAccountIdentity(a.ResolvedConfigDir())
+	return ReadAccountIdentity(a.NormalizedConfigDir())
+}
+
+// IdentityReadFunc reads the login recorded in a config dir. A function rather than
+// an interface because two packages inject it — doctor's report and the app's
+// launch gate — and both only ever need the one call.
+type IdentityReadFunc func(configDir string) (AccountIdentity, bool)
+
+// IdentityCheck is how an account's declared expectation compares with the login its
+// config dir actually holds.
+type IdentityCheck int
+
+const (
+	// IdentityNoDir means the account injects no CLAUDE_CONFIG_DIR, so it has no
+	// directory of its own to verify and rides whatever the ambient env supplies.
+	// Distinct from IdentityUnreadable: there is no dir here to be wrong about, so
+	// callers must not report or warn about one.
+	IdentityNoDir IdentityCheck = iota
+	// IdentityUnreadable means the dir names no login (claude was never onboarded
+	// there, or wrote a file this build cannot parse). Never evidence of a WRONG
+	// login — only of an unanswered question.
+	IdentityUnreadable
+	// IdentityUnpinned means the login was read but the account declares no
+	// expect_account, so there is nothing to verify it against.
+	IdentityUnpinned
+	// IdentityVerified means expect_account is set and the dir holds that login.
+	IdentityVerified
+	// IdentityWrongAccount means expect_account is set and the dir holds a
+	// DIFFERENT login: work sent here bills someone the user did not choose. This
+	// is the only state that justifies refusing to launch.
+	IdentityWrongAccount
+)
+
+// CheckIdentity classifies a against the login its config dir actually holds,
+// returning that login too (zero when none could be read).
+//
+// This is the single classifier behind both `atrium doctor`'s report and the
+// launch-time gate. They must never disagree — a report saying "ok" beside an
+// account the gate then refuses would send the user hunting the wrong problem — and
+// the only way to guarantee that is for there to be one implementation of the rules
+// rather than two that look alike.
+//
+// Order matters: an unreadable dir is classified before the pin is consulted, so an
+// account is never called verified or wrong on the strength of a read that failed.
+func (a ClaudeAccount) CheckIdentity(read IdentityReadFunc) (IdentityCheck, AccountIdentity) {
+	dir := a.NormalizedConfigDir()
+	if dir == "" {
+		return IdentityNoDir, AccountIdentity{}
+	}
+	actual, ok := read(dir)
+	if !ok {
+		return IdentityUnreadable, AccountIdentity{}
+	}
+	if strings.TrimSpace(a.ExpectAccount) == "" {
+		return IdentityUnpinned, actual
+	}
+	if actual.MatchesPin(a.ExpectAccount) {
+		return IdentityVerified, actual
+	}
+	return IdentityWrongAccount, actual
 }

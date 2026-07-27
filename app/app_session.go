@@ -386,6 +386,11 @@ type resumeDoneMsg struct {
 // Accepting runs this same action off the UI thread behind the same progress row
 // (handleConfirmState re-arms beginAsyncAction with the busy label).
 func (m *home) resumeSelected(selected *session.Instance) tea.Cmd {
+	// Before the confirmation, not inside the action: a session that must not run on
+	// this login should not first ask the user whether to spend host capacity on it.
+	if err := m.verifyResumeIdentity(selected); err != nil {
+		return m.handleError(err)
+	}
 	action := func() tea.Msg {
 		err := selected.Resume()
 		if err == nil {
@@ -579,6 +584,14 @@ func (m *home) resumeInstances(insts []*session.Instance, message string) tea.Cm
 	action := func() tea.Msg {
 		var res batchResumeDoneMsg
 		for _, inst := range insts {
+			// Per instance, not as a pre-filter: a batch may mix sessions on
+			// different accounts, and one wrong login must not cancel the resume of
+			// every session beside it. A refusal reports like any other resume
+			// failure, so the batch summary names it.
+			if err := m.verifyResumeIdentity(inst); err != nil {
+				res.failures = append(res.failures, resumeFailure{inst.Title, err})
+				continue
+			}
 			if err := inst.Resume(); err != nil {
 				res.failures = append(res.failures, resumeFailure{inst.Title, err})
 				continue
@@ -1391,9 +1404,14 @@ func (m *home) startNewSession(title, path string, direct bool, program, branch,
 
 	var accName, accDir string
 	var accIsDefault bool
+	// chosenAcct is the account the switch settled on, kept whole for the identity
+	// gate below: it needs the expect_account that accName/accDir do not carry. Nil
+	// in the dormant case (no claude_accounts), which the gate treats as "proceed".
+	var chosenAcct *config.ClaudeAccount
 	switch {
 	case sel != nil && sel.Member != nil:
 		accName, accDir, accIsDefault = sel.Member.Name, sel.Member.ResolvedConfigDir(), sel.Member.IsCatchAll()
+		chosenAcct = sel.Member
 		// A member pin clusters under its OWN declared pool (sel.Pool), not whatever
 		// routing resolved — otherwise pinning an ungrouped account in a repo that
 		// routes to a named pool would mis-cluster the session under that pool. An
@@ -1417,6 +1435,7 @@ func (m *home) startNewSession(title, path string, direct bool, program, branch,
 			}
 		}
 		accName, accDir, accIsDefault = members[chosen].Name, members[chosen].ResolvedConfigDir(), members[chosen].IsCatchAll()
+		chosenAcct = &members[chosen]
 		// Stamp a cluster pool only for a REAL declared pool (the chosen member has a
 		// non-empty Pool); an ungrouped account leaves the stamp empty so accountKey
 		// falls back to the account name — byte-for-byte dormant for a has-accounts-
@@ -1425,6 +1444,18 @@ func (m *home) startNewSession(title, path string, direct bool, program, branch,
 			poolName = ""
 		}
 	}
+	// Verify the resolved account really holds the login it claims, before anything
+	// is committed: no list row, no worktree, no tmux session. A refusal here is
+	// indistinguishable to the caller from any other pre-flight failure, so
+	// spawnVariants keeps the create form open on the first variant and the user can
+	// correct config without losing what they typed.
+	//
+	// After rotation, not before — a pool picks its member here, and the member that
+	// will actually be injected is the only one worth checking.
+	if err := m.verifyAccountIdentity(chosenAcct); err != nil {
+		return nil, err
+	}
+
 	instance.SetClaudeAccount(accName, accDir, accIsDefault)
 	instance.SetClaudeAccountPool(poolName)
 	// The gh account routes from the origin remote (or path) independently of the

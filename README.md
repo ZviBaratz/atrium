@@ -655,13 +655,22 @@ list to your config file:
   { "name": "personal", "config_dir": "~/.claude", "expect_account": "me@example.com" }
   ```
 
-  It is read by `atrium doctor` and nothing else — setting it changes what that
-  report says, never what a session does. `doctor`'s **Claude account
-  identities** section lists every account's real login, marks a pinned one `ok` or
-  flags the mismatch, and — with no configuration at all — warns when two accounts you
+  **Creating or resuming** a session whose config dir holds a *different* login is
+  **refused**, naming both logins and the directory to fix — a wrong launch cannot be
+  undone by noticing it afterwards, and a resumed session re-injects the same
+  directory, so it is gated identically. And `atrium doctor`'s **Claude account
+  identities** section marks the account verified rather than unpinned.
+
+  Only a confirmed mismatch refuses. An account with no `expect_account` is never
+  blocked, and a directory with no login recorded is allowed through — `claude` will
+  prompt for login in the pane, which cannot silently mis-bill, and refusing would
+  strand you mid-onboarding; a pinned account logs a warning when it launches
+  unverified that way. Comparison is on email, case- and whitespace-insensitive.
+
+  Separately, and with no configuration at all, `doctor` warns when two accounts you
   believe are separate turn out to hold the **same** login, naming which one the
-  combined work is billing. Comparison is on email, case- and whitespace-insensitive.
-  There is no field for it in the `@` accounts overlay; edits there preserve it.
+  combined work is billing. There is no field for `expect_account` in the `@` accounts
+  overlay; edits there preserve it.
 - Omitting `claude_accounts` disables the feature entirely (no badge, no
   injection), so existing configs are unaffected.
 

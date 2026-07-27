@@ -465,6 +465,12 @@ type home struct {
 	// construction). It is the Limit used when max_sessions is unset; a field rather
 	// than a live call so tests can pin it independent of the runner's CPU count.
 	hostCap int
+	// readIdentity reads the Claude login recorded in a config dir, for the
+	// launch-time identity gate (see account_identity.go). A field for the same
+	// reason as hostCap: tests pin an identity without needing a real config dir.
+	// Nil falls back to config.ReadAccountIdentity, so a home built anywhere still
+	// verifies rather than silently skipping the check.
+	readIdentity config.IdentityReadFunc
 	// pendingOverCap holds the fully-resolved creation staged behind a host-capacity
 	// confirmation: crossing the soft cap opens a confirm whose acceptance emits
 	// proceedOverCapMsg, and Update then spawns this plan. Nil when no confirm is

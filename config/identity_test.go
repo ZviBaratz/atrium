@@ -183,6 +183,95 @@ func TestAccountIdentityCollisionKey(t *testing.T) {
 	}
 }
 
+// CheckIdentity is the one classifier behind both `atrium doctor`'s report and the
+// launch gate, so every distinction it draws is one both consumers can rely on.
+//
+// IdentityNoDir and IdentityUnreadable are the pair worth being careful about: both
+// mean "no login was read", and callers that collapse them warn about a directory
+// that does not exist. They must stay distinguishable here even though neither
+// blocks anything.
+func TestClaudeAccountCheckIdentity(t *testing.T) {
+	read := func(m map[string]AccountIdentity) IdentityReadFunc {
+		return func(dir string) (AccountIdentity, bool) {
+			id, ok := m[dir]
+			return id, ok
+		}
+	}
+	known := read(map[string]AccountIdentity{
+		"/h/dir": {Email: "actual@corp.com", UUID: "u-1"},
+	})
+
+	cases := []struct {
+		name  string
+		acct  ClaudeAccount
+		read  IdentityReadFunc
+		want  IdentityCheck
+		email string
+	}{{
+		name: "no config dir at all",
+		acct: ClaudeAccount{Name: "ambient", ExpectAccount: "who@corp.com"},
+		read: known,
+		want: IdentityNoDir,
+	}, {
+		name: "dir names no login",
+		acct: ClaudeAccount{Name: "a", ConfigDir: "/h/absent", ExpectAccount: "who@corp.com"},
+		read: known,
+		want: IdentityUnreadable,
+	}, {
+		// Unreadable is classified before the pin, so a failed read can never be
+		// reported as a verified or a wrong account.
+		name: "unreadable outranks an unset pin",
+		acct: ClaudeAccount{Name: "a", ConfigDir: "/h/absent"},
+		read: known,
+		want: IdentityUnreadable,
+	}, {
+		name:  "readable but nothing to check it against",
+		acct:  ClaudeAccount{Name: "a", ConfigDir: "/h/dir"},
+		read:  known,
+		want:  IdentityUnpinned,
+		email: "actual@corp.com",
+	}, {
+		name:  "pin satisfied",
+		acct:  ClaudeAccount{Name: "a", ConfigDir: "/h/dir", ExpectAccount: " ACTUAL@corp.com "},
+		read:  known,
+		want:  IdentityVerified,
+		email: "actual@corp.com",
+	}, {
+		name:  "pin unsatisfied",
+		acct:  ClaudeAccount{Name: "a", ConfigDir: "/h/dir", ExpectAccount: "someone@else.com"},
+		read:  known,
+		want:  IdentityWrongAccount,
+		email: "actual@corp.com",
+	}}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, actual := tc.acct.CheckIdentity(tc.read)
+			if got != tc.want {
+				t.Errorf("state = %v, want %v", got, tc.want)
+			}
+			if actual.Email != tc.email {
+				t.Errorf("actual email = %q, want %q", actual.Email, tc.email)
+			}
+		})
+	}
+}
+
+// An account with no dir must not be handed to the reader at all: "" would otherwise
+// reach a reader that resolves it against the working directory.
+func TestCheckIdentityNeverReadsAnAbsentDir(t *testing.T) {
+	called := false
+	state, _ := ClaudeAccount{Name: "ambient", ExpectAccount: "x@y.com"}.CheckIdentity(
+		func(string) (AccountIdentity, bool) { called = true; return AccountIdentity{}, false })
+
+	if called {
+		t.Error("CheckIdentity read a config dir for an inherit-env account")
+	}
+	if state != IdentityNoDir {
+		t.Errorf("state = %v, want IdentityNoDir", state)
+	}
+}
+
 // ReadIdentity must expand a leading ~ the same way routing does, or an account
 // configured the normal way would report as unverifiable.
 func TestClaudeAccountReadIdentity(t *testing.T) {
