@@ -297,7 +297,7 @@ var (
 	doctorCmd = &cobra.Command{
 		Use:   "doctor",
 		Short: "Check Atrium's core dependencies (tmux, git, gh) and agent CLI heuristic versions",
-		Long: "Reports three sections. Core dependencies probes tmux, git, and gh: tmux and git are\n" +
+		Long: "Core dependencies probes tmux, git, and gh: tmux and git are\n" +
 			"required (a missing one exits nonzero so scripts/CI can gate); gh is optional, needed\n" +
 			"only for push/PR flows, and its authentication is reported but never fatal. Agent\n" +
 			"heuristics probes installed agent CLIs (claude, codex, gemini, aider) and reports whether\n" +
@@ -309,7 +309,10 @@ var (
 			"the value Claude last resolved in each config dir against the value those heuristics were\n" +
 			"verified under. On Linux, OOM ranking compares the shared tmux server's oom_score against\n" +
 			"each agent pane's, and warns if an out-of-memory kill would take the server (and with it\n" +
-			"every session) instead of a single recoverable agent.",
+			"every session) instead of a single recoverable agent. Claude account identities reports\n" +
+			"which login each configured account's config_dir is actually signed in as, checks it\n" +
+			"against that account's expect_account, and flags separate accounts that turn out to share\n" +
+			"one login — the state in which sessions silently bill an account nobody routed them to.",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			log.Initialize(false)
 			defer log.Close()
@@ -350,10 +353,23 @@ var (
 			fmt.Println()
 			fmt.Print(doctor.RenderOOM(doctor.CheckOOM(oomCtx)))
 
+			// Claude account identities: reads the login recorded in each account's
+			// config dir and compares it against that account's expect_account. No
+			// probe budget for the same reason as the gates section — one local JSON
+			// read per dir, no subprocess. This is the only check that can see an
+			// account whose directory was re-logged-in to a different login: routing
+			// verifies a path, and every other section takes the name beside it on
+			// trust.
+			if ids := doctor.RenderAccountIdentity(doctor.CheckAccountIdentityInstalled()); ids != "" {
+				fmt.Println()
+				fmt.Print(ids)
+			}
+
 			// Account pools: same config.LoadConfig() read the gates section uses
 			// (installedGateDirs above) — flags pool members that share a
 			// config_dir, since that's the same Claude login and rotation across
-			// them is a silent no-op.
+			// them is a silent no-op. Distinct from the identity section above, which
+			// catches the inverse: different dirs that turn out to be one login.
 			if pools := doctor.RenderPools(doctor.CheckPools(config.LoadConfig())); pools != "" {
 				fmt.Println()
 				fmt.Print(pools)
