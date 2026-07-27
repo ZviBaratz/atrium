@@ -168,6 +168,47 @@ func TestAccountsOverlay_DirColumnIsUniformAcrossRows(t *testing.T) {
 		"so does the widest row's — it is what the column was sized for")
 }
 
+// columnOf is the printed width of everything before the first occurrence of want —
+// i.e. the column want starts in. Same ANSI reasoning as badgeColumn.
+func columnOf(t *testing.T, line, want string) int {
+	t.Helper()
+	i := strings.Index(line, want)
+	require.GreaterOrEqualf(t, i, 0, "row %q does not contain %q", line, want)
+	return lipgloss.Width(line[:i])
+}
+
+// The badge is a column, so what follows it lines up. `routed` is 6 cells and
+// `unreachable` is 11, and without a pad the pool chip and the availability mark
+// start five columns apart on adjacent rows.
+func TestAccountsOverlay_BadgeIsPaddedSoTheChipsLineUp(t *testing.T) {
+	o := NewAccountsOverlay(pooledCatchAllCfg("quantivly-work"), config.DefaultState())
+	o.SetSize(100, 30)
+	out := o.renderList()
+
+	g := theme.Current().Glyphs
+	want := columnOf(t, rowLine(t, out, "work-1"), "pool:") // the `routed` row, shortest badge
+	for _, name := range []string{"work-2", "work-3"} {     // `default` and `unreachable`
+		line := rowLine(t, out, name)
+		assert.Equalf(t, want, columnOf(t, line, "pool:"), "%s: the pool chip starts in its own column", name)
+		assert.Equalf(t, columnOf(t, rowLine(t, out, "work-1"), g.AcctAvailable),
+			columnOf(t, line, g.AcctAvailable), "%s: so does the availability mark", name)
+	}
+}
+
+// The pad belongs to the tab that has something after the badge. On the GitHub and
+// Antigravity tabs the badge ends the row, so padding it would be trailing
+// whitespace — charged against the dir column, invisible on screen.
+func TestAccountsOverlay_BadgeIsNotPaddedWithoutChips(t *testing.T) {
+	cfg := twoTabCfg()
+	cfg.GHAccounts = append(cfg.GHAccounts, config.GHAccount{Name: "third", ConfigDir: "~/.config/gh3"})
+	o := NewAccountsOverlay(cfg, config.DefaultState())
+	o.SetSize(100, 30)
+	o.selectTab(tabGH)
+
+	line := rowLine(t, o.renderList(), cfg.GHAccounts[0].Name)
+	assert.False(t, strings.HasSuffix(line, " "), "a GitHub row ends at its badge, with no pad behind it: %q", line)
+}
+
 // And it is sized from the whole list, not the visible window, so scrolling never
 // moves it. (The same reason poolGutter and the catch-all ordering are whole-slice.)
 func TestAccountsOverlay_DirColumnIsStableWhileScrolling(t *testing.T) {

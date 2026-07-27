@@ -94,13 +94,34 @@ type rowTail struct {
 // alone would change width as the list scrolls.
 func (o *AccountsOverlay) rowTails(rows []acctRow, avail map[string]config.AccountAvailability, now time.Time) ([]rowTail, int) {
 	t := theme.Current()
-	tails := make([]rowTail, len(rows))
+
+	// The badge is a column, not a word: `routed` is 6 cells and `unreachable` is 11,
+	// so everything after it — the pool chip, the availability mark — only lines up if
+	// every badge occupies the same width. Sized from the badges this list actually
+	// renders rather than from the longest one that exists, so a list with no dead
+	// catch-all pays nothing for a badge it never shows. This is also the reason the
+	// badges are computed in their own pass: the width has to be known before the
+	// first row is assembled, and badgeText's ordering must be threaded exactly once.
+	badges := make([]string, len(rows))
+	badgeWidth := 0
 	seen := false
-	widest := 0
 	for i, r := range rows {
-		text := badgeText(r.catchAll, &seen)
+		badges[i] = badgeText(r.catchAll, &seen)
+		if w := lipgloss.Width(badges[i]); w > badgeWidth {
+			badgeWidth = w
+		}
+	}
+
+	tails := make([]rowTail, len(rows))
+	widest := 0
+	for i := range rows {
+		text := badges[i]
 		tail := rowTail{rendered: styleBadge(text), width: lipgloss.Width(text)}
 		if o.tab == tabClaude {
+			// Padded only where something follows it. On the GitHub and Antigravity
+			// tabs the badge ends the row, so a pad there would be trailing whitespace
+			// charged against the dir column for nothing.
+			tail.rendered, tail.width = padRight(tail.rendered, badgeWidth), badgeWidth
 			// rows is index-parallel to ClaudeAccounts on this tab only; the other two
 			// tabs have their own lengths and must never reach this lookup.
 			acct := o.cfg.ClaudeAccounts[i]
