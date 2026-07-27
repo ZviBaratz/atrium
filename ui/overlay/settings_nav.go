@@ -216,6 +216,9 @@ func (s *SettingsOverlay) handleRowsKey(msg tea.KeyMsg) (closed bool, changedKey
 		if row.kind == kindBool {
 			return false, s.toggleBool(row)
 		}
+	case "?":
+		s.helpOpen = true
+		s.helpScroll = 0
 	case "enter":
 		switch row.kind {
 		case kindBool:
@@ -242,5 +245,27 @@ func (s *SettingsOverlay) pagedCursor(key string, start, end int) int {
 		return start
 	default: // "end"
 		return end - 1
+	}
+}
+
+// handleHelpKey routes a key while `?` is open: up/down and PgUp/PgDn scroll, esc or a second ?
+// returns to whatever was focused before (spec §8).
+//
+// Unlike TextOverlay — where any unrecognized key dismisses — a stray keystroke here is
+// ignored. The settings panel is a working surface with a rail position and a row cursor worth
+// keeping; dismissing on an accidental key would lose both.
+func (s *SettingsOverlay) handleHelpKey(msg tea.KeyMsg) {
+	switch msg.String() {
+	case "esc", "ctrl+c", "?":
+		s.helpOpen = false
+		s.helpScroll = 0
+	case "up", "k":
+		s.helpScroll = max(0, s.helpScroll-1)
+	case "down", "j":
+		s.helpScroll = min(s.maxHelpScroll(), s.helpScroll+1)
+	case "pgup":
+		s.helpScroll = max(0, s.helpScroll-s.paneHeight())
+	case "pgdown":
+		s.helpScroll = min(s.maxHelpScroll(), s.helpScroll+s.paneHeight())
 	}
 }

@@ -923,3 +923,155 @@ func indexOfRowKey(t *testing.T, o *SettingsOverlay, key string) int {
 	t.Fatalf("no settings row with key %q", key)
 	return -1
 }
+
+// TestEveryDetailAndGlossReachExpandedHelp is the render-level twin of
+// TestDetailRetainsTheMovedProse, and it guards the same bug class as
+// TestEveryCautionReachesTheFooter: help copy living in a field the renderer never reads is
+// invisible, and a test that only pins the field's contents still passes.
+//
+// PR A moved as much as 443 characters per row out of `description` into `detail` and rendered
+// none of it. This is the test that says it is now visible.
+func TestEveryDetailAndGlossReachExpandedHelp(t *testing.T) {
+	cfg := config.DefaultConfig()
+	o := NewSettingsOverlay(cfg)
+	o.SetSize(100, 32)
+
+	details, glosses := 0, 0
+	for i, r := range o.rows {
+		content := o.expandedHelpContent(i)
+		assert.Containsf(t, content, r.label, "row %q's expanded help must name the row", r.key)
+		assert.Containsf(t, content, r.summary, "row %q's summary must reach expanded help", r.key)
+		if r.detail != "" {
+			details++
+			assert.Containsf(t, content, r.detail, "row %q's detail must reach expanded help", r.key)
+		}
+		if r.caution != "" {
+			assert.Containsf(t, content, r.caution, "row %q's caution must reach expanded help", r.key)
+		}
+		if r.kind != kindEnum {
+			continue
+		}
+		for _, opt := range r.options(cfg) {
+			assert.Containsf(t, content, opt, "row %q's option %q must be listed", r.key, opt)
+			if g := r.gloss[opt]; g != "" {
+				glosses++
+				assert.Containsf(t, content, g, "row %q's gloss for %q must reach expanded help", r.key, g)
+			}
+		}
+	}
+	// Without these the loops could stop running and the test would still pass.
+	require.Positive(t, details, "the schema must declare rows with detail")
+	require.Positive(t, glosses, "the schema must declare glossed enum options")
+}
+
+// TestExpandedHelpShowsTheCurrentValueInFull pins that `?` is the escape hatch for a value the
+// row line and even the help pane's context line had to shorten.
+func TestExpandedHelpShowsTheCurrentValueInFull(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.ProjectSearchRoots = []string{strings.Repeat("~/deeply/nested/path", 8)}
+	o := NewSettingsOverlay(cfg)
+	o.SetSize(80, 24)
+	i := indexOfRowKey(t, o, "project_search_roots")
+	assert.Contains(t, o.expandedHelpContent(i), cfg.ProjectSearchRoots[0])
+}
+
+// TestExpandedHelpNamesTheApplyTimingForEveryRow pins that the timing is stated in words rather
+// than only as a badge, since `?` is where a user goes when the badge was not enough.
+func TestExpandedHelpNamesTheApplyTimingForEveryRow(t *testing.T) {
+	o := NewSettingsOverlay(config.DefaultConfig())
+	o.SetSize(100, 32)
+	for i, r := range o.rows {
+		want := r.timing.footerNote()
+		if want == "" {
+			want = "applies immediately" // timingLive has no footer note by design
+		}
+		assert.Containsf(t, o.expandedHelpContent(i), want,
+			"row %q's expanded help must state its apply timing", r.key)
+	}
+}
+
+// TestQuestionMarkOpensAndClosesExpandedHelp pins the key grammar of spec §8: `?` opens from the
+// rows pane, esc or a second `?` returns to whatever was focused, and an unrecognized key does
+// NOT dismiss — the panel is a working surface, and closing on a stray keystroke would lose the
+// user's place in the rail.
+func TestQuestionMarkOpensAndClosesExpandedHelp(t *testing.T) {
+	o := NewSettingsOverlay(config.DefaultConfig())
+	o.SetSize(100, 32)
+	settingsAt(t, o, "group_mode")
+
+	o.HandleKeyPress(keyRunes("?"))
+	require.True(t, o.helpOpen)
+	// Assert on the unwrapped content, not the render: ansi.Wrap breaks group_mode's detail
+	// mid-phrase at inner 92, so a Contains against Render() would fail for a reason that has
+	// nothing to do with whether the detail arrived.
+	assert.Contains(t, o.expandedHelpContent(o.cursor), "an account boundary is refused",
+		"the expanded view must carry the row's detail")
+	assert.Contains(t, stripANSI(o.Render()), "Account clustering",
+		"the expanded view is titled with the row's label")
+	assert.NotContains(t, stripANSI(o.Render()), "Worktrees & git",
+		"and it takes over the box, so the rail is not drawn beside it")
+
+	o.HandleKeyPress(keyRunes("x"))
+	assert.True(t, o.helpOpen, "an unrecognized key must not dismiss the help view")
+
+	o.HandleKeyPress(keyRunes("?"))
+	assert.False(t, o.helpOpen, "a second ? closes it")
+	assert.Equal(t, focusRows, o.focus, "and returns to the pane that was focused")
+
+	o.HandleKeyPress(keyRunes("?"))
+	require.True(t, o.helpOpen)
+	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyEsc})
+	assert.False(t, o.helpOpen, "esc closes it too")
+	assert.Equal(t, focusRows, o.focus, "esc must not also back out of the rows pane")
+}
+
+// TestExpandedHelpScrolls pins that long detail is reachable rather than clipped — the content
+// that does not fit is exactly the content `?` exists to show.
+//
+// The SIZE is chosen to guarantee overflow rather than to be representative. At 80x24 the budget
+// is paneHeight(13) + helpBlock(4) = 17 lines against inner 74, and no row in the schema wraps
+// past 17 there. 60x20 gives a smaller budget against inner 54, where max_sessions' 343-character
+// detail alone needs several lines.
+func TestExpandedHelpScrolls(t *testing.T) {
+	o := NewSettingsOverlay(config.DefaultConfig())
+	o.SetSize(60, 20)
+	settingsAt(t, o, "max_sessions") // the longest detail literal in the schema
+	o.HandleKeyPress(keyRunes("?"))
+	require.Positive(t, o.maxHelpScroll(),
+		"this row's help must overflow a %d-line budget at inner %d, or scrolling is untested",
+		o.expandedHelpHeight(), o.innerWidth())
+
+	top := stripANSI(strings.Join(o.expandedHelpLines(), "\n"))
+	for range 40 {
+		o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyDown})
+	}
+	assert.Equal(t, o.maxHelpScroll(), o.helpScroll, "↓ must clamp at the end, not run past it")
+	bottom := stripANSI(strings.Join(o.expandedHelpLines(), "\n"))
+	assert.NotEqual(t, top, bottom, "scrolling must change what is shown")
+	assert.Contains(t, bottom, "Current value",
+		"scrolling to the end must reach the last section, which no unscrolled view showed")
+	assert.NotContains(t, top, "Current value",
+		"or the assertion above proves nothing about scrolling")
+
+	for range 40 {
+		o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyUp})
+	}
+	assert.Zero(t, o.helpScroll, "↑ must clamp at the top")
+}
+
+// TestExpandedHelpDoesNotChangeTheBoxHeight pins that opening `?` cannot resize the panel.
+// PlaceOverlay centers the box, so a height change would re-center it under the user's cursor
+// the instant they press `?`.
+func TestExpandedHelpDoesNotChangeTheBoxHeight(t *testing.T) {
+	for _, size := range []struct{ w, h int }{{100, 32}, {80, 24}, {60, 20}, {80, 12}} {
+		t.Run(fmt.Sprintf("%dx%d", size.w, size.h), func(t *testing.T) {
+			o := NewSettingsOverlay(config.DefaultConfig())
+			o.SetSize(size.w, size.h)
+			settingsAt(t, o, "agent_oom_margin")
+			closed := lipgloss.Height(o.Render())
+			o.HandleKeyPress(keyRunes("?"))
+			require.True(t, o.helpOpen)
+			assert.Equal(t, closed, lipgloss.Height(o.Render()), "opening ? must not resize the box")
+		})
+	}
+}

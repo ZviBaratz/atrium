@@ -767,11 +767,13 @@ func (s *SettingsOverlay) hintLine() string {
 	switch {
 	case s.editing:
 		ladder = []string{"↵ save · esc cancel", "esc cancel"}
+	case s.helpOpen:
+		ladder = []string{"↑/↓ scroll · ? or esc back", "esc back"}
 	case s.focus == focusRows:
 		ladder = []string{
-			"↑/↓ move · ←/→ change · ↵ edit · ⇥ pane · esc back",
-			"↑/↓ · ←/→ · ↵ edit · esc back",
-			"↵ edit · esc back",
+			"↑/↓ move · ←/→ change · ↵ edit · ? more · ⇥ pane · esc back",
+			"↑/↓ · ←/→ · ↵ edit · ? more · esc back",
+			"↵ edit · ? more · esc back",
 			"esc back",
 		}
 	default:
@@ -874,4 +876,91 @@ func firstSentence(s string) string {
 		return s
 	}
 	return ""
+}
+
+// expandedHelpContent assembles everything the panel knows about row i, in reading order: what
+// it does, the caution, when a change takes effect, the long-form detail, one line per enum
+// option from gloss, and the current value in full.
+//
+// This is the surface settingRow.detail and settingRow.gloss were written for. PR A stored both
+// and rendered neither, so up to 443 characters per row existed only in the source until now —
+// see TestEveryDetailAndGlossReachExpandedHelp.
+func (s *SettingsOverlay) expandedHelpContent(i int) string {
+	row := s.rows[i]
+	var b strings.Builder
+
+	b.WriteString(row.label + "\n\n" + row.summary + "\n")
+	if row.caution != "" {
+		b.WriteString("\nCaution: " + row.caution + ".\n")
+	}
+	if note := row.timing.footerNote(); note != "" {
+		b.WriteString("\nA change " + note + ".\n")
+	} else {
+		// timingLive has no footer note by design — saying "live" on 25 of 38 rows would be
+		// noise in the help pane. Here there is room to say it.
+		b.WriteString("\nA change applies immediately.\n")
+	}
+	if chip := s.inertReason(i); chip != "" {
+		b.WriteString("\nNo effect right now — " + chip + ". You can still change it now and it " +
+			"will apply once the parent setting is on.\n")
+	}
+	if row.detail != "" {
+		b.WriteString("\n" + row.detail + "\n")
+	}
+	if row.kind == kindEnum {
+		if opts := row.options(s.cfg); len(opts) > 0 {
+			b.WriteString("\nOptions:\n")
+			for _, o := range opts {
+				if g := row.gloss[o]; g != "" {
+					b.WriteString("  " + o + " — " + g + "\n")
+					continue
+				}
+				b.WriteString("  " + o + "\n")
+			}
+		}
+	}
+	b.WriteString("\nCurrent value: " + row.get(s.cfg) + "\n")
+	return b.String()
+}
+
+// expandedHelpHeight is the number of lines `?` may fill: the panes plus the help block, so the
+// box's height is identical open or closed. A centered overlay that resized on `?` would jump
+// under the user's cursor.
+func (s *SettingsOverlay) expandedHelpHeight() int {
+	return s.paneHeight() + s.helpBlockHeight()
+}
+
+// expandedHelpWrapped is the content wrapped to the inner width, unwindowed.
+func (s *SettingsOverlay) expandedHelpWrapped() []string {
+	return strings.Split(ansi.Wrap(s.expandedHelpContent(s.cursor), s.innerWidth(), ""), "\n")
+}
+
+// maxHelpScroll is the furthest the expanded help can scroll, so both the key handler and the
+// renderer clamp to the same number.
+func (s *SettingsOverlay) maxHelpScroll() int {
+	return max(0, len(s.expandedHelpWrapped())-s.expandedHelpHeight())
+}
+
+// expandedHelpLines renders the `?` view: the wrapped content, scrolled and padded to exactly
+// expandedHelpHeight() lines, with a position readout when it overflows.
+func (s *SettingsOverlay) expandedHelpLines() []string {
+	t := theme.Current()
+	lines := s.expandedHelpWrapped()
+	budget := s.expandedHelpHeight()
+
+	s.helpScroll = clamp(s.helpScroll, 0, s.maxHelpScroll())
+	end := min(len(lines), s.helpScroll+budget)
+
+	out := make([]string, 0, budget)
+	for _, l := range lines[s.helpScroll:end] {
+		out = append(out, t.DimStyle().Render(ansi.Truncate(l, s.innerWidth(), "")))
+	}
+	for len(out) < budget {
+		out = append(out, "")
+	}
+	if s.maxHelpScroll() > 0 {
+		// Overwrite the last line rather than adding one, so the height holds.
+		out[budget-1] = t.FaintStyle().Render(fmt.Sprintf("  %d/%d", end, len(lines)))
+	}
+	return out
 }

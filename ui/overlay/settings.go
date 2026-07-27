@@ -63,6 +63,12 @@ type SettingsOverlay struct {
 	focus      settingsFocus
 	railCursor int
 
+	// helpOpen is the `?` expanded-help view, with its own scroll offset. It takes over the box
+	// rather than opening a second overlay, so the panel's focus and rail cursor survive it
+	// untouched.
+	helpOpen   bool
+	helpScroll int
+
 	width, height int
 
 	editing bool
@@ -139,13 +145,15 @@ func (s *SettingsOverlay) SetSize(width, height int) {
 // close, and — when a value changed — the changed row's key so the home model
 // can persist the config and run that field's live-apply hook.
 //
-// The order of these guards is the grammar: an open editor swallows everything (so j/k
-// type rather than navigate), then the focused pane. Task 8 inserts the expanded-help
-// view between them.
+// The order of these guards is the grammar: an open editor swallows everything (so j/k type
+// rather than navigate), then the expanded-help view, then the focused pane.
 func (s *SettingsOverlay) HandleKeyPress(msg tea.KeyMsg) (closed bool, changedKey string) {
 	switch {
 	case s.editing:
 		return false, s.handleEditKey(msg)
+	case s.helpOpen:
+		s.handleHelpKey(msg)
+		return false, ""
 	case s.focus == focusRail:
 		return s.handleRailKey(msg), ""
 	default:
@@ -256,11 +264,18 @@ func (s *SettingsOverlay) innerWidth() int { return s.boxWidth() - 4 }
 func (s *SettingsOverlay) Render() string {
 	t := theme.Current()
 
-	lines := s.bodyLines()
-	if sep := s.separatorLine(); sep != "" {
-		lines = append(lines, sep)
+	var lines []string
+	if s.helpOpen {
+		// The expanded view fills the panes and the help block together, so the box's height
+		// does not change when it opens.
+		lines = s.expandedHelpLines()
+	} else {
+		lines = s.bodyLines()
+		if sep := s.separatorLine(); sep != "" {
+			lines = append(lines, sep)
+		}
+		lines = append(lines, s.helpLines()...)
 	}
-	lines = append(lines, s.helpLines()...)
 	lines = append(lines, s.hintLine())
 
 	title := t.OverlayTitleStyle().Render("Settings")
