@@ -36,7 +36,14 @@ type dispatchReply struct {
 // user's CLI auth, throwaway HOME, and Haiku). project is a candidate basename, or ""
 // when none clearly fits; the caller maps it back to a path. It returns an error on
 // any failure so the caller can fall back to deterministic/blank prefill.
-func GenerateDispatch(ctx context.Context, program, line string, candidates []string) (project, title string, err error) {
+//
+// claudeConfigDir is the account this call bills. Unlike GenerateName there is no
+// session to inherit it from — proposing the route is this call's whole job, so it
+// runs before any project, and therefore any account, has been chosen. The caller
+// resolves the catch-all for it: the account a session with no matching route would
+// get is the honest answer for a call that has no route yet (#497). "" means inherit
+// the ambient environment, which is also what a config with no catch-all yields.
+func GenerateDispatch(ctx context.Context, program, claudeConfigDir, line string, candidates []string) (project, title string, err error) {
 	ctx, cancel := context.WithTimeout(ctx, nameGenTimeout)
 	defer cancel()
 	basenames := dispatchBasenames(candidates, maxDispatchCandidates)
@@ -47,7 +54,7 @@ func GenerateDispatch(ctx context.Context, program, line string, candidates []st
 			if rerr != nil {
 				continue
 			}
-			return generateDispatch(ctx, cmd.MakeExecutor(), claudePath, os.TempDir(), line, basenames)
+			return generateDispatch(ctx, cmd.MakeExecutor(), claudePath, os.TempDir(), claudeConfigDir, line, basenames)
 		case agent.KeyGemini:
 			geminiPath, rerr := exec.LookPath(string(agent.KeyGemini))
 			if rerr != nil {
@@ -67,13 +74,13 @@ func GenerateDispatch(ctx context.Context, program, line string, candidates []st
 
 // generateDispatch is the dependency-injected core of GenerateDispatch (claude path),
 // kept separate so tests can supply a mock executor and a fixed working directory.
-func generateDispatch(ctx context.Context, executor cmd.Executor, claudePath, workDir, line string, basenames []string) (project, title string, err error) {
+func generateDispatch(ctx context.Context, executor cmd.Executor, claudePath, workDir, claudeConfigDir, line string, basenames []string) (project, title string, err error) {
 	line = strings.TrimSpace(line)
 	if line == "" {
 		return "", "", fmt.Errorf("no description to route")
 	}
 
-	result, err := runClaudeHeadless(ctx, executor, claudePath, workDir, dispatchInstruction(basenames), dispatchSystemPrompt, line)
+	result, err := runClaudeHeadless(ctx, executor, claudePath, workDir, claudeConfigDir, dispatchInstruction(basenames), dispatchSystemPrompt, line)
 	if err != nil {
 		return "", "", err
 	}
