@@ -164,7 +164,9 @@ type autoNameDoneMsg struct {
 // runAutoNameCmd returns a Cmd that generates a display name in a background
 // goroutine (the agent subprocess can take a few seconds) so the UI stays
 // responsive. The session's own agent does the naming when it supports
-// headless one-shot prompting (see session.GenerateName).
+// headless one-shot prompting (see session.GenerateName), billed to the session's
+// own Claude account — ClaudeConfigDir is the dir this session actually launched
+// under, so naming a session cannot spend an account the session never touched.
 func runAutoNameCmd(ctx context.Context, instance *session.Instance, prompt string) tea.Cmd {
 	return func() tea.Msg {
 		// Compute the full diff here, off the UI thread. The cached stats are often the
@@ -178,7 +180,7 @@ func runAutoNameCmd(ctx context.Context, instance *session.Instance, prompt stri
 				stats = cached
 			}
 		}
-		name, err := session.GenerateName(ctx, instance.Program, prompt, stats)
+		name, err := session.GenerateName(ctx, instance.Program, instance.ClaudeConfigDir(), prompt, stats)
 		return autoNameDoneMsg{instance: instance, name: name, err: err}
 	}
 }
@@ -314,11 +316,20 @@ func (m *home) autoDispatch(res PrefillResult) (tea.Cmd, bool) {
 // runSmartDispatchCmd routes line against the candidate repos in a background goroutine
 // (the agent subprocess takes a few seconds) so the form stays responsive. The result
 // is tagged with the originating form so a stale answer is dropped by the handler.
+//
+// The account is resolved here, on the Update goroutine, for the same reason ctx and
+// program are: the closure runs off it and must not read the model. Routing is asked
+// with no remote and no path, which is not a placeholder — it is this call's actual
+// situation, and the router already answers it with the catch-all account (or "",
+// inherit the ambient env, when no catch-all is configured). A routing call cannot
+// use the route it exists to propose, so it bills the account an unroutable session
+// would get (#497).
 func (m *home) runSmartDispatchCmd(line string, candidates []string, form *overlay.TextInputOverlay) tea.Cmd {
 	ctx := m.ctx
 	program := m.program
+	_, acctDir, _ := m.appConfig.ResolveClaudeAccount("", "")
 	return func() tea.Msg {
-		project, title, err := session.GenerateDispatch(ctx, program, line, candidates)
+		project, title, err := session.GenerateDispatch(ctx, program, acctDir, line, candidates)
 		return smartDispatchDoneMsg{form: form, project: project, title: title, err: err}
 	}
 }

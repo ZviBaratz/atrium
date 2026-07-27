@@ -670,6 +670,15 @@ list to your config file:
   believe are separate turn out to hold the **same** login, naming which one the
   combined work is billing. There is no field for `expect_account` in the `@` accounts
   overlay; edits there preserve it.
+- Atrium's own short background calls — the one-shot used by auto-naming (`N`) and
+  by smart dispatch's routing (`i`) — are billed the same way. Auto-naming runs on
+  the **session's own account**, since the session it is naming already has one.
+  The routing call has no session yet (proposing the project *is* its job, so it
+  runs before one is chosen), so it uses the **catch-all** — the account a session
+  that matched no route would get, and the ambient environment when no catch-all is
+  configured. Neither call can see the account's `CLAUDE.md` or `settings.json`:
+  they run under a throwaway home holding nothing but a link to that account's
+  credentials.
 - Omitting `claude_accounts` disables the feature entirely (no badge, no
   injection), so existing configs are unaffected.
 

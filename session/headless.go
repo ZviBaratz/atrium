@@ -27,8 +27,14 @@ type claudeResult struct {
 // parseDispatchReply). Keeping the subprocess/JSON/error plumbing in one place
 // means a change to the invocation (a flag, the model, the env) can't drift
 // between the two call sites.
-func runClaudeHeadless(ctx context.Context, executor cmd.Executor, claudePath, workDir, promptArg, systemPrompt, stdin string) (string, error) {
-	namingHome, cleanup, _ := prepareNamingHome(realCredsPath())
+//
+// Being that shared chokepoint is also why claudeConfigDir is a parameter rather
+// than something resolved here: which account this call bills is the caller's
+// decision, and the two callers answer it differently. Naming knows the session and
+// uses its account; dispatch runs before any project is chosen and uses the
+// catch-all. "" means inherit the ambient environment.
+func runClaudeHeadless(ctx context.Context, executor cmd.Executor, claudePath, workDir, claudeConfigDir, promptArg, systemPrompt, stdin string) (string, error) {
+	namingHome, cleanup, _ := prepareNamingHome(headlessCredsPath(claudeConfigDir))
 	defer cleanup()
 
 	c := exec.CommandContext(ctx, claudePath,
