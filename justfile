@@ -14,9 +14,17 @@ ldflags := "-s -w -X main.version=" + version
 # workflow means many worktrees of this repo exist at once, so a stale entry makes
 # `run` report findings against files in a *sibling* worktree (#486). Key the cache
 # on this worktree's directory name instead. It stays outside the tree, so there is
-# nothing to gitignore. Two different *repos* whose basenames collide would share a
-# cache: harmless, since the cache is content-addressed within itself.
-golangci_cache := cache_directory() / "golangci-lint" / file_name(justfile_directory())
+# nothing to gitignore. A basename is only a good-enough key: two checkouts sharing
+# one would share a cache and could still hit #486. Atrium's own worktrees carry a
+# unique suffix, so only hand-made directories can collide.
+#
+# The cache root is derived from XDG by hand rather than via just's `cache_directory()`
+# so that an older `just` still works: these assignments are evaluated at parse time,
+# so one function the local `just` lacks breaks *every* recipe, not just `lint`. An
+# empty XDG_CACHE_HOME counts as unset, as the spec says it should.
+xdg_cache_home := env_var_or_default("XDG_CACHE_HOME", "")
+cache_root := if xdg_cache_home == "" { env_var("HOME") / ".cache" } else { xdg_cache_home }
+golangci_cache := cache_root / "golangci-lint" / file_name(justfile_directory())
 
 # Show available recipes.
 default:
@@ -56,10 +64,11 @@ cover:
     {{go}} test -coverprofile=coverage.out ./...
     {{go}} tool cover -func=coverage.out | tail -1
 
-# Lint with golangci-lint (see https://golangci-lint.run for install). Always lint
-# through this recipe: a bare `golangci-lint run` uses the shared global cache. To
-# scope it, pass packages here (`just lint ./ui/...`) rather than reaching for the
-# bare command.
+# Always lint through this recipe rather than a bare `golangci-lint run`, which
+# shares one global cache across every worktree (#486). To scope a run, pass the
+# packages here: `just lint ./ui/...`. Keep the summary on the last comment line —
+# that is the only one `just --list` shows.
+# Lint with golangci-lint, cached per worktree (see https://golangci-lint.run).
 lint *args:
     GOLANGCI_LINT_CACHE="{{golangci_cache}}" golangci-lint run {{args}}
 
