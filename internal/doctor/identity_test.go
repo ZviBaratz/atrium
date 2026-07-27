@@ -250,6 +250,131 @@ func TestCheckAccountIdentitySameDirCollision(t *testing.T) {
 	}
 }
 
+// The hint may only offer what the tree actually does. Nothing consults expect_account
+// on a launch path, so wording that promises to refuse the wrong login is a guarantee
+// the user discovers is missing by NOT being stopped — the precise failure this
+// section was built to end, re-created by the sentence advertising the cure. When a
+// launch gate does land, this test is what should force the sentence to be rewritten
+// deliberately rather than let it quietly come true.
+func TestRenderAccountIdentityHintPromisesOnlyReporting(t *testing.T) {
+	r := &fakeIdentityReader{m: map[string]config.AccountIdentity{
+		"/h/a": id("who@corp.com", "u-a"),
+	}}
+	out := RenderAccountIdentity(CheckAccountIdentity(cfgWith(acct("a", "/h/a", "")), r))
+
+	if !strings.Contains(out, "unpinned: a") {
+		t.Fatalf("no hint rendered for an unpinned account:\n%s", out)
+	}
+	for _, forbidden := range []string{"refuse", "refuses", "refusing", "block", "prevent"} {
+		if strings.Contains(strings.ToLower(out), forbidden) {
+			t.Errorf("hint promises enforcement (%q) that no launch path implements:\n%s",
+				forbidden, out)
+		}
+	}
+}
+
+// config_dir is hand-written, so one directory reaches this check spelled two ways.
+// Left unnormalised it is read twice — which the single-read guarantee exists to
+// prevent — and then described with the wrong sentence: "different config dirs" and
+// "re-run /login in the wrong dir" send the user hunting for a second directory that
+// does not exist.
+func TestCheckAccountIdentityNormalisesConfigDirSpelling(t *testing.T) {
+	r := &fakeIdentityReader{m: map[string]config.AccountIdentity{
+		"/h/shared": id("one@corp.com", "u-1"),
+	}}
+	rep := CheckAccountIdentity(cfgWith(
+		acct("a", "/h/shared", ""),
+		acct("b", "/h/shared/", ""),
+		acct("c", "/h/sub/../shared", ""),
+	), r)
+
+	if got := r.reads["/h/shared"]; got != 1 {
+		t.Errorf("read /h/shared %d times, want 1", got)
+	}
+	if len(r.reads) != 1 {
+		t.Errorf("reads = %v, want only the cleaned /h/shared", r.reads)
+	}
+	if len(rep.Collisions) != 1 {
+		t.Fatalf("got %d collisions, want 1: %+v", len(rep.Collisions), rep.Collisions)
+	}
+	if !rep.Collisions[0].SameDir {
+		t.Error("SameDir = false for one directory spelled three ways")
+	}
+	out := RenderAccountIdentity(rep)
+	if !strings.Contains(out, "share one config_dir") {
+		t.Errorf("one dir spelled three ways used the drifted-dirs wording:\n%s", out)
+	}
+	// Every row must show the cleaned path, or the roster itself reads as three dirs.
+	for _, name := range []string{"a", "b", "c"} {
+		if got := rowFor(t, rep, name).Dir; got != "/h/shared" {
+			t.Errorf("%s dir = %q, want the cleaned \"/h/shared\"", name, got)
+		}
+	}
+}
+
+// The empty check must come BEFORE the clean: filepath.Clean("") is ".", which would
+// turn every inherit-env account into a row reporting on the process's working
+// directory — a login no session routed to it.
+func TestCheckAccountIdentityDoesNotCleanTheEmptyDir(t *testing.T) {
+	r := &fakeIdentityReader{m: map[string]config.AccountIdentity{}}
+	rep := CheckAccountIdentity(cfgWith(acct("ambient", "", "")), r)
+
+	if len(rep.Rows) != 0 {
+		t.Fatalf("inherit-env account produced rows: %+v", rep.Rows)
+	}
+	if _, read := r.reads["."]; read {
+		t.Error(`the empty config dir was cleaned to "." and read`)
+	}
+}
+
+// Grouping is by UUID, so members can disagree about the email — including a dir that
+// records none. Taking the first member's email blanks the login out of the very
+// sentence naming who gets billed, for a group that names it perfectly well.
+func TestCollisionNamesLoginWhenFirstMemberHasNoEmail(t *testing.T) {
+	r := &fakeIdentityReader{m: map[string]config.AccountIdentity{
+		"/h/quiet": id("", "u-shared"), // UUID only: ReadAccountIdentity accepts this
+		"/h/named": id("real@corp.com", "u-shared"),
+	}}
+	rep := CheckAccountIdentity(cfgWith(
+		acct("quiet", "/h/quiet", ""),
+		acct("named", "/h/named", ""),
+	), r)
+
+	if len(rep.Collisions) != 1 {
+		t.Fatalf("got %d collisions, want 1: %+v", len(rep.Collisions), rep.Collisions)
+	}
+	if got := rep.Collisions[0].Login(); got != "real@corp.com" {
+		t.Errorf("collision login = %q, want real@corp.com from the member that has one", got)
+	}
+	out := RenderAccountIdentity(rep)
+	if !strings.Contains(out, "bills real@corp.com") {
+		t.Errorf("render does not name who gets billed:\n%s", out)
+	}
+	if strings.Contains(out, "()") || strings.Contains(out, "bills ;") {
+		t.Errorf("render left the login blank:\n%s", out)
+	}
+}
+
+// And when NO member records an email, the warning still has to say what they matched
+// on. Empty parentheses would point at the answer and then not give it.
+func TestCollisionFallsBackToUUIDWhenNoMemberHasAnEmail(t *testing.T) {
+	r := &fakeIdentityReader{m: map[string]config.AccountIdentity{
+		"/h/a": id("", "u-shared"),
+		"/h/b": id("", "u-shared"),
+	}}
+	rep := CheckAccountIdentity(cfgWith(acct("a", "/h/a", ""), acct("b", "/h/b", "")), r)
+
+	if len(rep.Collisions) != 1 {
+		t.Fatalf("got %d collisions, want 1: %+v", len(rep.Collisions), rep.Collisions)
+	}
+	if got := rep.Collisions[0].Login(); got != "u-shared" {
+		t.Errorf("collision login = %q, want the UUID u-shared", got)
+	}
+	if out := RenderAccountIdentity(rep); !strings.Contains(out, "u-shared") {
+		t.Errorf("render does not name the UUID the dirs matched on:\n%s", out)
+	}
+}
+
 // An inherit-env account injects no CLAUDE_CONFIG_DIR, so it has no directory whose
 // login could be verified. Reporting one would attribute the ambient login to an
 // account that never selected it.

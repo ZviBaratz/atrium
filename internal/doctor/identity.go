@@ -16,6 +16,7 @@ package doctor
 
 import (
 	"fmt"
+	"path/filepath"
 	"sort"
 	"strings"
 
@@ -54,8 +55,20 @@ type AccountIdentityRow struct {
 // usage the user expected to see on the others never appears.
 type IdentityCollision struct {
 	Accounts []string // configured names, in config order
-	Email    string   // the shared login
+	Email    string   // the shared login's email, "" when no member recorded one
+	Key      string   // what they matched on: an account UUID, or a lowercased email
 	SameDir  bool     // true when they also share one config_dir
+}
+
+// Login names the shared account for a reader. It prefers the email, the form a user
+// recognises and can act on, and falls back to the key — a UUID — so a group whose
+// dirs all recorded only a UUID still names what they matched on. Rendering the empty
+// string here would put nothing in exactly the place the warning is pointing at.
+func (c IdentityCollision) Login() string {
+	if c.Email != "" {
+		return c.Email
+	}
+	return c.Key
 }
 
 // AccountIdentityReport is the whole section: one row per account that names a
@@ -89,9 +102,10 @@ func (fileIdentityReader) identity(configDir string) (config.AccountIdentity, bo
 // whatever the ambient env supplies. Reporting them would attribute the ambient
 // login to an account that never selected it.
 //
-// Each distinct dir is read once, so two accounts pointing at one directory cost one
-// read and — more to the point — cannot be made to disagree with each other by a
-// file rewritten between two reads.
+// Each distinct dir is read once — compared by CLEANED path, since config_dir is
+// hand-written and a trailing slash is not a different dir — so two accounts pointing
+// at one directory cost one read and, more to the point, cannot be made to disagree
+// with each other by a file rewritten between two reads.
 //
 // Dormant when no Claude accounts are configured, matching CheckAccountKeys: with no
 // roster there is nothing to verify and an empty section is noise.
@@ -108,10 +122,16 @@ func CheckAccountIdentity(cfg *config.Config, r identityReader) AccountIdentityR
 	seen := map[string]readResult{}
 
 	for _, a := range cfg.ClaudeAccounts {
-		dir := a.ResolvedConfigDir()
-		if dir == "" {
+		raw := a.ResolvedConfigDir()
+		if raw == "" {
 			continue // inherit-env account: no dir of its own
 		}
+		// Clean before the path becomes a cache key or a SameDir comparison, the way
+		// gates.go's installedGateDirs does and for the same reason: config_dir is
+		// hand-written, and "/h/x" and "/h/x/" are one directory that would otherwise
+		// be read twice and then reported as two dirs that drifted onto one login.
+		// After the empty check, never before it — filepath.Clean("") is ".".
+		dir := filepath.Clean(raw)
 		got, cached := seen[dir]
 		if !cached {
 			got.id, got.ok = r.identity(dir)
@@ -161,12 +181,19 @@ func collisions(rows []AccountIdentityRow) []IdentityCollision {
 		}
 		g := groups[key]
 		if g == nil {
-			g = &group{dirs: map[string]bool{}, email: row.Actual.Email}
+			g = &group{dirs: map[string]bool{}}
 			groups[key] = g
 			order = append(order, key)
 		}
 		g.accounts = append(g.accounts, row.Account)
 		g.dirs[row.Dir] = true
+		// Take the first member that names an email, not the first member. Grouping
+		// is by UUID, and a dir can record a UUID with no email at all — so keying
+		// the label to arrival order lets one such dir blank out the login for a
+		// group whose other members name it perfectly well.
+		if g.email == "" {
+			g.email = row.Actual.Email
+		}
 	}
 
 	var out []IdentityCollision
@@ -176,7 +203,7 @@ func collisions(rows []AccountIdentityRow) []IdentityCollision {
 			continue
 		}
 		out = append(out, IdentityCollision{
-			Accounts: g.accounts, Email: g.email, SameDir: len(g.dirs) == 1,
+			Accounts: g.accounts, Email: g.email, Key: key, SameDir: len(g.dirs) == 1,
 		})
 	}
 	return out
@@ -237,20 +264,24 @@ func RenderAccountIdentity(rep AccountIdentityReport) string {
 		fmt.Fprintf(&b, "  %-14s %-32s %s\n", r.Account, r.identityLabel(), r.status())
 	}
 	for _, c := range rep.Collisions {
-		names := quotedList(c.Accounts)
+		names, login := quotedList(c.Accounts), c.Login()
 		if c.SameDir {
 			fmt.Fprintf(&b, "  ⚠ %s share one config_dir,\n    so they are one login (%s)\n",
-				names, c.Email)
+				names, login)
 		} else {
 			fmt.Fprintf(&b, "  ⚠ %s are different config dirs\n    holding the SAME login (%s)\n",
-				names, c.Email)
+				names, login)
 		}
-		fmt.Fprintf(&b, "    → work spread across them all bills %s; only\n", c.Email)
+		fmt.Fprintf(&b, "    → work spread across them all bills %s; only\n", login)
 		b.WriteString("      one of these accounts is really separate. Re-run /login in the wrong dir.\n")
 	}
+	// The hint offers only what the tree actually does. This report is the sole
+	// consumer of expect_account: no launch path consults it, so promising to refuse
+	// the wrong login would sell a guarantee nothing keeps — and the way a user finds
+	// out is by not being stopped, which is the failure this section exists to catch.
 	if unpinned := unpinnedNames(rep.Rows); len(unpinned) > 0 {
-		fmt.Fprintf(&b, "    → set expect_account to have Atrium verify a login and refuse to launch\n"+
-			"      on the wrong one (unpinned: %s)\n", strings.Join(unpinned, ", "))
+		fmt.Fprintf(&b, "    → set expect_account on an account to have this check verify its\n"+
+			"      login rather than just report it (unpinned: %s)\n", strings.Join(unpinned, ", "))
 	}
 	return b.String()
 }

@@ -644,6 +644,24 @@ list to your config file:
   about the login they run under.
 - When more than one account is configured, the new-session form shows an
   **Account** picker, preset to the auto-routed account, to override the choice.
+- `expect_account` (optional) is the email address that `config_dir` is supposed to
+  be logged in as. `name` is only a label: running `/login` inside a config dir
+  re-points it at a different Claude account in place, and nothing about the routing
+  notices — every badge and pool keeps the old name while the sessions bill a login
+  you never picked, with a usage figure on a webpage as the only symptom. Setting it
+  gives that drift something to fail against:
+
+  ```json
+  { "name": "personal", "config_dir": "~/.claude", "expect_account": "me@example.com" }
+  ```
+
+  It is read by `atrium doctor` and nothing else — setting it changes what that
+  report says, never what a session does. `doctor`'s **Claude account
+  identities** section lists every account's real login, marks a pinned one `ok` or
+  flags the mismatch, and — with no configuration at all — warns when two accounts you
+  believe are separate turn out to hold the **same** login, naming which one the
+  combined work is billing. Comparison is on email, case- and whitespace-insensitive.
+  There is no field for it in the `@` accounts overlay; edits there preserve it.
 - Omitting `claude_accounts` disables the feature entirely (no badge, no
   injection), so existing configs are unaffected.
 
