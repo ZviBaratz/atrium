@@ -85,6 +85,14 @@ type SettingsOverlay struct {
 	// handoff is the sibling surface a rail entry asked home to open in this panel's place.
 	// Read once, as the panel closes — see Handoff.
 	handoff SettingsHandoff
+
+	// search is the `/` filter (spec §8). It is a NAMED field rather than an embedded Picker:
+	// embedding would promote Focus/Blur/SetWidth/SetVisibleRows/SetPreviewHook onto this
+	// type's public API, where five of the six are meaningless for a panel that sizes itself.
+	// The picker owns the filter text, the result cursor and the shared key grammar; its
+	// IsFocused() is the "a filter is active" flag, so there is no second bool to keep in step
+	// with it.
+	search Picker
 }
 
 // NewSettingsOverlay builds the settings panel over the given live config, focused on
@@ -95,6 +103,8 @@ func NewSettingsOverlay(cfg *config.Config) *SettingsOverlay {
 		cfg:        cfg,
 		focus:      focusRail,
 		railCursor: railDefaultIndex(),
+		// Sync source: a filter edit re-ranks and resets the cursor to the top.
+		search: newPicker(false),
 		// Sensible floor so Render works before the first SetSize.
 		width:  80,
 		height: 24,
@@ -128,6 +138,7 @@ func (s *SettingsOverlay) OpenAt(key string) bool {
 		s.editing = false
 		s.helpOpen = false
 		s.helpScroll = 0
+		s.clearSearch()
 		s.lastErr = ""
 		return true
 	}
@@ -189,7 +200,8 @@ func (s *SettingsOverlay) SetSize(width, height int) {
 // can persist the config and run that field's live-apply hook.
 //
 // The order of these guards is the grammar: an open editor swallows everything (so j/k type
-// rather than navigate), then the expanded-help view, then the focused pane.
+// rather than navigate), then the expanded-help view, then an active filter (which swallows
+// runes for the same reason), then the focused pane.
 func (s *SettingsOverlay) HandleKeyPress(msg tea.KeyMsg) (closed bool, changedKey string) {
 	switch {
 	case s.editing:
@@ -197,6 +209,8 @@ func (s *SettingsOverlay) HandleKeyPress(msg tea.KeyMsg) (closed bool, changedKe
 	case s.helpOpen:
 		s.handleHelpKey(msg)
 		return false, ""
+	case s.searching():
+		return s.handleSearchKey(msg)
 	case s.focus == focusRail:
 		return s.handleRailKey(msg), ""
 	default:

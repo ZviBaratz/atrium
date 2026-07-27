@@ -186,10 +186,9 @@ func enumValueCandidates(cur string, opts []string) []string {
 // widest is 21, for no gain. The degradation threshold still budgets for the global worst
 // case (minRowsPaneWidth), so a narrow pane is never a surprise.
 func (s *SettingsOverlay) visibleLabelWidth() int {
-	start, end := s.rowRange(s.selectedEntry())
 	w := 0
-	for _, r := range s.rows[start:end] {
-		if n := ansi.StringWidth(r.label); n > w {
+	for _, i := range s.visibleRowIndices() {
+		if n := ansi.StringWidth(s.rows[i].label); n > w {
 			w = n
 		}
 	}

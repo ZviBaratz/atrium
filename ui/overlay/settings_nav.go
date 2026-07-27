@@ -1,6 +1,9 @@
 package overlay
 
 import (
+	"sort"
+
+	"github.com/ZviBaratz/atrium/internal/fuzzy"
 	tea "github.com/charmbracelet/bubbletea"
 )
 
@@ -179,6 +182,8 @@ func (s *SettingsOverlay) handleRailKey(msg tea.KeyMsg) (closed bool) {
 			s.railCursor++
 			s.syncCursorToRail()
 		}
+	case "/":
+		s.startSearch()
 	case "right", "tab", "enter":
 		if start, end := s.rowRange(s.selectedEntry()); end > start {
 			s.focus = focusRows
@@ -240,6 +245,8 @@ func (s *SettingsOverlay) handleRowsKey(msg tea.KeyMsg) (closed bool, changedKey
 		}
 	case "r":
 		return false, s.resetRow(row)
+	case "/":
+		s.startSearch()
 	case "?":
 		s.helpOpen = true
 		s.helpScroll = 0
@@ -254,6 +261,204 @@ func (s *SettingsOverlay) handleRowsKey(msg tea.KeyMsg) (closed bool, changedKey
 		}
 	}
 	return false, ""
+}
+
+// searching reports whether the `/` filter is active. The picker's own focus flag is the
+// single source of truth, so there is no second bool to fall out of step with it.
+func (s *SettingsOverlay) searching() bool { return s.search.IsFocused() }
+
+// startSearch opens the filter and moves focus to the results (spec §8: `/` works from either
+// pane). It always starts from an empty query — a `/` that resumed the last search would
+// surprise a user who pressed it to look for something else.
+//
+// The picker's cursor is seeded FROM the current row, not the other way round. An empty query
+// matches every row at score 0 (fuzzy.Match returns true for ""), so syncing in the usual
+// direction would snap the cursor to row 0 and the rail to Sessions the instant `/` was
+// pressed — before a character was typed — and Esc would then "return" you to the top of the
+// schema rather than where you were. Seeding keeps both cursors in step, so the position
+// readout is honest on the first frame too.
+func (s *SettingsOverlay) startSearch() {
+	s.search = newPicker(false)
+	s.search.Focus()
+	s.focus = focusRows
+	s.lastErr = ""
+	for i, row := range s.searchResults() {
+		if row == s.cursor {
+			s.search.cursor = i
+			break
+		}
+	}
+	s.syncCursorToSearch()
+}
+
+// clearSearch drops the filter, leaving the cursor on whatever row was highlighted and the
+// rail already synced to its category — because syncCursorToSearch kept it there throughout.
+// That is what makes Esc land you on the row you found rather than back where the search
+// started.
+func (s *SettingsOverlay) clearSearch() {
+	s.search = newPicker(false) // a fresh sync picker is already blurred and unfiltered
+	s.lastErr = ""
+}
+
+// searchHaystack is the text one row is matched against: its label, its key, its summary and
+// its category name, so a user who remembers any one of them finds the row (spec §8).
+func (s *SettingsOverlay) searchHaystack(r settingRow) string {
+	return r.label + " " + r.key + " " + r.summary + " " + r.category.label()
+}
+
+// searchResults returns the indices of the rows matching the current filter, best first.
+//
+// The matcher is internal/fuzzy — the one subsequence matcher in the tree (#373) — and this
+// is its ranking helper for settings rows, exactly as rankCandidates is the pickers' for
+// paths. The bonus is the same idea as that function's basename bonus: a hit on the label or
+// the key outranks an equal-scoring hit buried in a summary, because those are what a user
+// types. An empty filter matches everything at score 0, so the list stays in schema order.
+func (s *SettingsOverlay) searchResults() []int {
+	q := s.search.filter
+	type scored struct{ idx, score int }
+	matches := make([]scored, 0, len(s.rows))
+	for i, r := range s.rows {
+		ok, score := fuzzy.Match(q, s.searchHaystack(r))
+		if !ok {
+			continue
+		}
+		if ok, bonus := fuzzy.Match(q, r.label); ok {
+			score += bonus
+		}
+		if ok, bonus := fuzzy.Match(q, r.key); ok {
+			score += bonus
+		}
+		matches = append(matches, scored{i, score})
+	}
+	sort.SliceStable(matches, func(a, b int) bool { return matches[a].score > matches[b].score })
+	out := make([]int, len(matches))
+	for i, m := range matches {
+		out[i] = m.idx
+	}
+	return out
+}
+
+// syncCursorToSearch pulls the global row cursor — and with it the rail — onto the
+// highlighted result.
+//
+// s.cursor stays the index into s.rows because isModified, inertReason, renderRowLine and
+// expandedHelpContent all read it; the picker's cursor indexes the result list. Keeping the
+// rail on the result's category is not decoration: the rail takes no keys while filtering, so
+// its marker has to mean something else, and it is what lets clearSearch leave the user on
+// the row they found.
+//
+// With no results the cursor is left where it was. It is still a valid row index — nothing
+// renders it as selected, because the pane draws the no-match line instead.
+func (s *SettingsOverlay) syncCursorToSearch() {
+	results := s.searchResults()
+	if len(results) == 0 {
+		return
+	}
+	s.search.clampCursor(len(results))
+	s.cursor = results[s.search.cursor]
+	s.railCursor = railIndexForCategory(s.rows[s.cursor].category)
+	s.lastErr = ""
+}
+
+// visibleRowIndices is the set of rows the rows pane is showing: the search results while a
+// filter is active, else the current rail entry's own contiguous range. Every width and
+// content decision that used to read rowRange directly goes through this, so the search
+// inherits them instead of duplicating them.
+func (s *SettingsOverlay) visibleRowIndices() []int {
+	if s.searching() {
+		return s.searchResults()
+	}
+	start, end := s.rowRange(s.selectedEntry())
+	out := make([]int, 0, max(0, end-start))
+	for i := start; i < end; i++ {
+		out = append(out, i)
+	}
+	return out
+}
+
+// handleSearchKey routes a key while the `/` filter is active (spec §8).
+//
+// The division is: the filter owns every rune, space and backspace — j and k are letters in a
+// search box, and r must not reset a row mid-query — while the value keys (enter, left,
+// right) still edit the highlighted row exactly as they do unfiltered, and up/down still move
+// the result cursor. Space is the one casualty of that split: it extends the filter rather
+// than toggling a bool, and enter is the toggle while filtering.
+//
+// `?` is the single rune the filter does not get, because spec §8 also assigns it to the
+// expanded help. TestNoRowContainsAQuestionMark pins the premise that makes the reservation
+// free.
+//
+// Keys the shared Picker does not consume — it takes only KeyUp, KeyDown, KeyBackspace,
+// KeyRunes and KeySpace — fall through to nothing and are deliberately inert. One consequence
+// worth knowing: bubbletea makes ctrl+h a distinct key type from backspace, so ctrl+h does
+// not delete here even though the session-list filter treats it as backspace. That is the
+// shared Picker's behavior across every picker in the tree, not this panel's, so it is left
+// alone rather than special-cased in one place.
+func (s *SettingsOverlay) handleSearchKey(msg tea.KeyMsg) (closed bool, changedKey string) {
+	results := s.searchResults()
+	switch msg.String() {
+	case "esc", "ctrl+c":
+		// Layer one of three: clear, back to the rail, close (spec §8).
+		s.clearSearch()
+		return false, ""
+	case "tab", "shift+tab":
+		// The rail is inert while a filter is active, so Tab cannot focus it with the filter
+		// still applied — it is the two escs in one key.
+		s.clearSearch()
+		s.focus = focusRail
+		return false, ""
+	case "?":
+		if len(results) > 0 {
+			s.helpOpen, s.helpScroll = true, 0
+		}
+		return false, ""
+	case "pgup", "pgdown", "home", "end":
+		if len(results) > 0 {
+			s.search.cursor = clamp(s.pagedSearchCursor(msg.String(), len(results)), 0, len(results)-1)
+			s.syncCursorToSearch()
+		}
+		return false, ""
+	}
+	if len(results) > 0 {
+		row := &s.rows[s.cursor]
+		switch msg.String() {
+		case "left":
+			return false, s.cycleEnum(row, -1)
+		case "right":
+			return false, s.cycleEnum(row, +1)
+		case "enter":
+			switch row.kind {
+			case kindBool:
+				return false, s.toggleBool(row)
+			case kindEnum:
+				return false, s.cycleEnum(row, +1)
+			case kindInt, kindText:
+				s.startEdit(row)
+			}
+			return false, ""
+		}
+	}
+	if consumed, filterChanged, cursorMoved := s.search.handleKey(msg, len(results)); consumed &&
+		(filterChanged || cursorMoved) {
+		s.syncCursorToSearch()
+	}
+	return false, ""
+}
+
+// pagedSearchCursor resolves a paging key to a result index, mirroring pagedCursor's rule for
+// the unfiltered list so PgDn does not mean two different distances in one panel.
+func (s *SettingsOverlay) pagedSearchCursor(key string, count int) int {
+	page := max(1, s.paneHeight()-1) // overlap one row so context is never lost
+	switch key {
+	case "pgup":
+		return s.search.cursor - page
+	case "pgdown":
+		return s.search.cursor + page
+	case "home":
+		return 0
+	default: // "end"
+		return count - 1
+	}
 }
 
 // resetRow restores a row to its built-in default and reports its key, or "" when nothing
