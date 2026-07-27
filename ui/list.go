@@ -1150,6 +1150,21 @@ func (l *List) AccountGrouped() bool {
 	return l.accountGrouped()
 }
 
+// AccountClusteringVisible reports whether the list currently renders account clusters:
+// account grouping must be on AND more than one distinct cluster key must be present across
+// the live items. With one key, "account" mode renders exactly like repo mode.
+//
+// Exposed so the settings panel can dim its Account clustering row when the setting is on but
+// doing nothing. The rule lives here, and list_render.go's own gate calls this method, so the
+// two cannot disagree — the drift accountKey's comment warns about.
+//
+// Note this is NOT AccountReorderEnabled's count. That one counts *clusters* (repo-block
+// anchors), because a repo whose sessions span accounts still renders as one cluster; this one
+// counts distinct cluster keys, which is what the divider and tinting gate on.
+func (l *List) AccountClusteringVisible() bool {
+	return l.accountGrouped() && l.distinctAccountCount() > 1
+}
+
 // AccountReorderEnabled reports whether [ / ] can move an account cluster: there must be
 // account clustering to reorder, and at least two clusters to swap. It mirrors
 // SessionReorderEnabled so the app can explain a refusal instead of leaving a silent

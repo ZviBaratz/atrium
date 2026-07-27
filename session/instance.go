@@ -5,6 +5,7 @@
 package session
 
 import (
+	"github.com/ZviBaratz/atrium/config"
 	"github.com/ZviBaratz/atrium/internal/teardown"
 	"github.com/ZviBaratz/atrium/log"
 	"github.com/ZviBaratz/atrium/session/git"
@@ -536,6 +537,13 @@ func FromInstanceData(ctx context.Context, data InstanceData, branchPrefix strin
 	sess.SetGHConfigDir(instance.ghConfigDir)
 	sess.SetGitHubTokenEnv(instance.githubTokenEnv)
 	sess.SetAgyConfigDir(instance.agyConfigDir)
+	// Bound here as well as in Start, because a restored instance can be relaunched without
+	// going through Start at all: recoverInPlace calls the tmux session's Start/StartContinue
+	// directly when the pane could not be reattached. Binding the method value rather than a
+	// snapshot is the point: Rename rewrites the two facts this renders from (Title, Branch)
+	// without touching the tmux session, and Resume/recoverInPlace relaunch without going
+	// through Start — so the read has to happen at launch, not here.
+	sess.SetSessionBriefFunc(instance.sessionBrief)
 	instance.tmuxName = sess.Name()
 	instance.tmuxSession = sess
 
@@ -898,6 +906,38 @@ func (i *Instance) WorkingDir() string {
 	return i.Path
 }
 
+// sessionBrief collects the facts the injected SessionStart context brief is rendered from
+// (#485): who this session is, the origin checkout the worktree came from, the branch it is
+// already on, and the tree its siblings live under.
+//
+// It returns the zero brief — "say nothing" — for a session with no worktree. That is both a
+// direct (non-git) session, whose cwd is the user's real checkout with no branch and nothing
+// disposable about it, and an unstarted one, which has no facts yet. Every load-bearing
+// sentence in the copy is about an Atrium-managed worktree, so a session without one gets no
+// SessionStart hook rather than a brief that describes something that does not exist.
+//
+// The repo path comes from the worktree, not i.Path: i.Path is whatever directory the user
+// picked, which may be a subdirectory of the repo, while the worktree holds the resolved root.
+func (i *Instance) sessionBrief() tmux.SessionBrief {
+	wt := i.worktree()
+	if wt == nil {
+		return tmux.SessionBrief{}
+	}
+	root, err := config.WorktreesDir()
+	if err != nil {
+		// Without the root there is no sibling-worktree warning to give, and ok() rejects a
+		// partial brief anyway. Degrade to no brief rather than to a brief with a hole.
+		log.ErrorLog.Printf("session brief disabled for %s: cannot resolve worktrees dir: %v", i.Title, err)
+		return tmux.SessionBrief{}
+	}
+	return tmux.SessionBrief{
+		Name:          i.Title,
+		Origin:        wt.GetRepoPath(),
+		Branch:        i.Branch,
+		WorktreesRoot: root,
+	}
+}
+
 // SetBaseBranch sets the existing branch the session branch will be based on when the
 // instance starts. The session still gets its own branch; this only sets the start point.
 func (i *Instance) SetBaseBranch(branch string) {
@@ -996,6 +1036,12 @@ func (i *Instance) Start(firstTimeSetup bool) error {
 		tmuxSession.SetGitHubTokenEnv(i.githubTokenEnv)
 		tmuxSession.SetAgyConfigDir(i.agyConfigDir)
 	}
+
+	// Bind the SessionStart brief unconditionally: a restored instance arrives with its tmux
+	// session already built (and bound) by FromInstanceData, a first-time one was only just
+	// constructed above. Rebinding the same method value is a no-op; what matters is that a
+	// Session built anywhere else never reaches start() unbound.
+	tmuxSession.SetSessionBriefFunc(i.sessionBrief)
 
 	i.mu.Lock()
 	i.tmuxSession = tmuxSession

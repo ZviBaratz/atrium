@@ -206,18 +206,44 @@ value to diverge from, and a marker there would be a lie. This is deliberate —
 | `fast_forward_local_base` | `GetUpdateBaseOnCreate()` | `needs Update base on create` |
 | `daemon_poll_interval` | `AutoYes` | `needs Auto-yes` |
 | `agent_oom_margin` | `runtime.GOOS == "linux"` | `Linux only` |
-| `group_mode` | ≥ 2 Claude accounts configured | `needs 2+ accounts` |
+| `group_mode` | **not an `activeWhen` predicate** — see below | `nothing to cluster` |
 
 **An inert row is dimmed and carries a reason chip, but stays fully editable** — a user
 may configure ahead of enabling the parent. Inert means "changing this has no effect right
 now", never "you may not touch this".
 
-> **Implementer: verify the `group_mode` predicate against `ui.List`'s actual clustering
-> gate before shipping the reason chip.** The spec's `len(cfg.ClaudeAccounts) >= 2` is
-> derived from the row's own prose ("a visual no-op unless two or more accounts are
-> present"), and cluster count is known not to equal account count in general (see
-> `atrium-account-cluster-reorder`). If the list's real gate differs, the predicate follows
-> the list, not this table.
+**Every chip degrades rather than vanishing.** `needs Update base on create` is 27 cells and
+the Worktrees pane leaves 24 at the 80-column floor, on a bool row with no enum alternatives
+to shrink — so an inert chip falls back to a one-word `inactive` rather than being dropped. A
+dimmed row with no marker at all reads as broken, and the help pane only describes the
+*selected* row. Timing badges are dropped outright, per §10: they are reference information.
+
+> **Resolved in PR B: `group_mode` has no `activeWhen` predicate.** The predicate this spec
+> originally proposed, `len(cfg.ClaudeAccounts) >= 2` with the chip `needs 2+ accounts`, was
+> derived from the row's own prose and is wrong in **both** directions. `ui.List`'s real gate is
+> `AccountClusteringVisible() == accountGrouped() && distinctAccountCount() > 1`
+> (`ui/list.go`), where `distinctAccountCount` counts distinct
+> `session.Instance.AccountClusterKey()` values over the **live session list** — and that key is
+> a session's *rotation pool* when it has one, else its account, else `""`. So:
+>
+> - Several configured accounts sharing one pool collapse to a single cluster key, so clustering
+>   is a visual no-op while the config count says it is active. (Pinned by
+>   `TestAccountClusteringVisible`'s pooled subtest.)
+> - Sessions with no account attribution key on `""` and still form a second cluster, so
+>   clustering can be visible with fewer than two accounts configured.
+>
+> A `settingRow` predicate only sees `*config.Config`, so the honest gate is not expressible in
+> the schema. `group_mode.activeWhen` stays `nil`
+> (`TestGroupModeHasNoConfigOnlyInertPredicate`), `ui.List.AccountClusteringVisible()` is the
+> single definition of the gate — `ui/list_render.go` calls it rather than repeating it — and
+> `home` injects its answer via `SettingsOverlay.SetAccountClusteringVisible`. Until it does,
+> the panel shows **no chip at all**: a panel that cannot see the session list must not guess.
+>
+> The chip shows only when the setting is **on** and the list reports nothing to cluster. "Off"
+> is not inert, it is off, and a chip there would be noise on a row doing exactly what it says.
+>
+> Note a *third* count exists and is not a substitute: `AccountReorderEnabled` counts *clusters*
+> (repo-block anchors), because a repo whose sessions span accounts renders as one.
 
 ## 6. Copy — verbatim
 
