@@ -463,6 +463,18 @@ type home struct {
 	// entry spec §4 explicitly excludes as the landing. nil means "not opened yet this run", so
 	// the first ',' gets railDefaultIndex().
 	settingsRail *int
+
+	// noticeSettingKey is the settings row the transient notice currently on screen points
+	// at, so the ',' that notice advertises lands on that row instead of the remembered
+	// category. Armed with the notice and cleared when it goes, so an unrelated ',' minutes
+	// later is unaffected. See settingNotice.
+	noticeSettingKey string
+
+	// pendingConfirmSettingKey is the settings row the open confirmation dialog's copy
+	// promises ',' will open — the host-capacity dialog and nothing else today. Empty means
+	// ',' is inert in stateConfirm, which is what keeps the key from silently cancelling an
+	// unrelated confirmation.
+	pendingConfirmSettingKey string
 	// accountsOverlay is the in-TUI Claude/GitHub/Antigravity account manager
 	// (stateAccounts). It edits appConfig in place; handleAccountsState persists each change.
 	accountsOverlay *overlay.AccountsOverlay

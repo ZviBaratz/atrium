@@ -198,6 +198,16 @@ func (m *home) handlePromptState(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 // Either way only the resulting message flows back through the runtime, so a
 // returned error reaches the error box.
 func (m *home) handleConfirmState(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	// A dialog whose copy promises ',' opens the setting it named. It is a cancel: nothing
+	// staged is run, and the stashed create form stays restorable exactly as declining leaves
+	// it. Armed per-dialog (confirmOverCap), so ',' stays inert in every other confirmation.
+	if key := m.pendingConfirmSettingKey; key != "" && msg.String() == "," {
+		m.pendingConfirmSettingKey = ""
+		m.pendingConfirmAction = nil
+		m.pendingConfirmBusyLabel = ""
+		m.confirmationOverlay = nil
+		return m, m.openSettingsAt(key)
+	}
 	shouldClose := m.confirmationOverlay.HandleKeyPress(msg)
 	if shouldClose {
 		confirmed := m.confirmationOverlay.Confirmed
@@ -207,6 +217,7 @@ func (m *home) handleConfirmState(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.confirmationOverlay = nil
 		m.pendingConfirmAction = nil
 		m.pendingConfirmBusyLabel = ""
+		m.pendingConfirmSettingKey = ""
 		if confirmed && action != nil {
 			if busyLabel != "" {
 				return m, m.beginAsyncAction(busyLabel, action)

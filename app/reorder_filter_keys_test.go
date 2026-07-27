@@ -1,10 +1,17 @@
 package app
 
 import (
+	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"os"
+	"strings"
 	"testing"
 
 	"github.com/ZviBaratz/atrium/config"
 	"github.com/ZviBaratz/atrium/session"
+	"github.com/ZviBaratz/atrium/ui"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -186,4 +193,218 @@ func TestReorderKeys_AccountBoundaryRefusalOutranksTheFilterRefusal(t *testing.T
 
 	assert.Contains(t, h.menu.String(), "within an account",
 		"the boundary a cleared filter would not lift is named first")
+}
+
+// The refusal notices that advertise ',' land on the setting they are about. Advertising a
+// key that opens a 13-entry rail is barely better than not advertising it — the notice knows
+// exactly which row it means.
+func TestReorderNoticesDeepLinkToTheirSetting(t *testing.T) {
+	cases := []struct {
+		name, want string
+		setup      func(h *home)
+		key        rune
+	}{
+		{
+			name: "status sort refusal", want: "session_sort", key: 'J',
+			setup: func(h *home) { h.list.SetSortMode("status") },
+		},
+		{
+			name: "cluster reorder refusal", want: "group_mode", key: '[',
+			setup: func(h *home) { h.list.SetGroupMode("repo") },
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			h := filterReorderHome(t,
+				[3]string{"api-one", "repoA", ""},
+				[3]string{"api-two", "repoA", ""},
+				[3]string{"infra-one", "repoB", ""})
+			tc.setup(h)
+			h.list.SetSelectedInstance(0)
+
+			pressKey(h, tc.key)
+			require.True(t, h.menu.HasNotice(), "precondition: the key must be refused with a notice")
+			require.Contains(t, h.menu.String(), ", to switch")
+
+			pressKey(h, ',')
+			require.Equal(t, stateSettings, h.state)
+			require.NotNil(t, h.settingsOverlay)
+			assert.Equal(t, tc.want, h.settingsOverlay.SelectedRowKey())
+		})
+	}
+}
+
+// The arm lives exactly as long as the advice. A ',' pressed after the notice has gone opens
+// the panel where the user left it, not on a row a refusal mentioned a minute ago.
+func TestSettingsJumpExpiresWithItsNotice(t *testing.T) {
+	h := filterReorderHome(t,
+		[3]string{"api-one", "repoA", ""},
+		[3]string{"api-two", "repoA", ""},
+		[3]string{"infra-one", "repoB", ""})
+	h.list.SetSortMode("status")
+	h.list.SetSelectedInstance(0)
+
+	pressKey(h, 'J')
+	require.True(t, h.menu.HasNotice())
+	h.Update(hideErrMsg{gen: h.noticeGen}) // the toast's own timer fires
+
+	pressKey(h, ',')
+	require.NotNil(t, h.settingsOverlay)
+	assert.NotEqual(t, "session_sort", h.settingsOverlay.SelectedRowKey(),
+		"an expired notice must not still be steering ','")
+}
+
+// A BACKGROUND notice disarms the jump too. This is the path that made scheduleNoticeHide the
+// clear site rather than flashNotice: the drift, agent and update notices reach the hint row
+// through showMenuNotice directly, and each bumps noticeGen — so the original toast's timer
+// mismatches, hideErrMsg skips its clear, and ',' stays pointed at a setting whose advice left
+// the screen five seconds ago.
+func TestABackgroundNoticeDisarmsTheSettingsJump(t *testing.T) {
+	h := filterReorderHome(t,
+		[3]string{"api-one", "repoA", ""},
+		[3]string{"api-two", "repoA", ""},
+		[3]string{"infra-one", "repoB", ""})
+	h.list.SetSortMode("status")
+	h.list.SetSelectedInstance(0)
+
+	pressKey(h, 'J')
+	require.True(t, h.menu.HasNotice())
+	gen := h.noticeGen
+
+	// A background notice that never passes through flashNotice.
+	_ = h.showMenuNotice("⚠ agent heuristics may be stale", ui.NoticeInfo)
+	require.NotEqual(t, gen, h.noticeGen, "precondition: the background notice bumped the generation")
+	h.Update(hideErrMsg{gen: gen}) // the ORIGINAL timer fires and is ignored as stale
+
+	pressKey(h, ',')
+	require.NotNil(t, h.settingsOverlay)
+	assert.NotEqual(t, "session_sort", h.settingsOverlay.SelectedRowKey(),
+		"a notice the user can no longer see must not still be steering ','")
+}
+
+// A second notice replaces the first one's arm rather than stacking on it.
+func TestANewNoticeReplacesTheSettingsJump(t *testing.T) {
+	h := filterReorderHome(t,
+		[3]string{"api-one", "repoA", ""},
+		[3]string{"api-two", "repoA", ""},
+		[3]string{"infra-one", "repoB", ""})
+	h.list.SetSortMode("status")
+	h.list.SetSelectedInstance(0)
+
+	pressKey(h, 'J')                         // arms session_sort
+	_ = h.handleInfoNotice("something else") // an unarmed notice takes the row
+	pressKey(h, ',')
+	require.NotNil(t, h.settingsOverlay)
+	assert.NotEqual(t, "session_sort", h.settingsOverlay.SelectedRowKey())
+}
+
+// Every notice that advertises ',' must go through settingNotice, so the key it teaches
+// lands on the setting the notice is about. flashNotice and handleInfoNotice are the generic
+// paths and actively DISARM a jump, so a ','-advertising notice built on one of them is the
+// bug this catches — five such notices exist today and they read identically at a glance.
+//
+// The scope is the call plus, when its text argument is a bare identifier, the literals
+// assigned to that identifier in the same function. Both narrower and wider rules were tried
+// and rejected against the real tree: a call-only check misses warnMissingProgram, which
+// builds its text into a variable across two branches (verified by reverting that site and
+// watching the check stay green), while a whole-function check flags handleKeyPress, a
+// 400-line switch that legitimately holds both converted ','-notices and a dozen unrelated
+// ones.
+//
+// Dialog copy is out of scope by construction: overCapMessage advertises ',' but calls no
+// notice path at all — its ',' is armed by pendingConfirmSettingKey at the confirmAction site
+// instead — so it never trips this.
+func TestEveryCommaNoticeGoesThroughSettingNotice(t *testing.T) {
+	advertises := func(lit *ast.BasicLit) bool {
+		return lit.Kind == token.STRING &&
+			(strings.Contains(lit.Value, "press ,") || strings.Contains(lit.Value, "(, to"))
+	}
+	hasCommaLiteral := func(n ast.Node) bool {
+		found := false
+		ast.Inspect(n, func(x ast.Node) bool {
+			if lit, ok := x.(*ast.BasicLit); ok && advertises(lit) {
+				found = true
+			}
+			return true
+		})
+		return found
+	}
+	// assignsCommaLiteral reports whether fn assigns a ','-advertising literal to name.
+	assignsCommaLiteral := func(fn *ast.FuncDecl, name string) bool {
+		found := false
+		ast.Inspect(fn.Body, func(x ast.Node) bool {
+			assign, ok := x.(*ast.AssignStmt)
+			if !ok {
+				return true
+			}
+			for i, lhs := range assign.Lhs {
+				id, ok := lhs.(*ast.Ident)
+				if !ok || id.Name != name || i >= len(assign.Rhs) {
+					continue
+				}
+				if hasCommaLiteral(assign.Rhs[i]) {
+					found = true
+				}
+			}
+			return true
+		})
+		return found
+	}
+
+	// An explicit walk rather than parser.ParseDir, which staticcheck flags as deprecated
+	// (SA1019) since Go 1.25.
+	entries, err := os.ReadDir(".")
+	require.NoError(t, err)
+	fset := token.NewFileSet()
+	var files []*ast.File
+	for _, e := range entries {
+		name := e.Name()
+		if e.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		f, err := parser.ParseFile(fset, name, nil, 0)
+		require.NoErrorf(t, err, "parsing %s", name)
+		files = append(files, f)
+	}
+	require.NotEmpty(t, files, "the package must have source files to walk")
+
+	var offenders []string
+	checked := 0
+	for _, file := range files {
+		for _, decl := range file.Decls {
+			fn, ok := decl.(*ast.FuncDecl)
+			if !ok || fn.Body == nil {
+				continue
+			}
+			ast.Inspect(fn.Body, func(x ast.Node) bool {
+				call, ok := x.(*ast.CallExpr)
+				if !ok {
+					return true
+				}
+				sel, ok := call.Fun.(*ast.SelectorExpr)
+				if !ok {
+					return true
+				}
+				if sel.Sel.Name != "flashNotice" && sel.Sel.Name != "handleInfoNotice" {
+					return true
+				}
+				checked++
+				bad := hasCommaLiteral(call)
+				if !bad && len(call.Args) > 0 {
+					if id, ok := call.Args[0].(*ast.Ident); ok {
+						bad = assignsCommaLiteral(fn, id.Name)
+					}
+				}
+				if bad {
+					offenders = append(offenders, fmt.Sprintf("%s: %s advertises ',' — use settingNotice",
+						fset.Position(call.Pos()), sel.Sel.Name))
+				}
+				return true
+			})
+		}
+	}
+	// Without this the walk could stop finding calls at all and the test would still pass.
+	require.Positive(t, checked, "the walk must actually visit the generic notice paths")
+	assert.Empty(t, offenders,
+		"a notice advertising ',' must use settingNotice so the key lands on its setting")
 }

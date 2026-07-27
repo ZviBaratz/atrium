@@ -166,6 +166,10 @@ func (s *SettingsOverlay) RailIndex() int { return s.railCursor }
 // HandoffNone. home reads it when HandleKeyPress reports the panel closed.
 func (s *SettingsOverlay) Handoff() SettingsHandoff { return s.handoff }
 
+// SelectedRowKey is the key of the row the rows pane has highlighted, so home's tests can
+// assert where a deep link landed without reaching into the panel's cursor.
+func (s *SettingsOverlay) SelectedRowKey() string { return s.selectedRow().key }
+
 // RailEntryCount is how many entries the rail has, so home (and its tests) can address the
 // last one without importing the rail's vocabulary.
 func (s *SettingsOverlay) RailEntryCount() int { return len(railEntries()) }
