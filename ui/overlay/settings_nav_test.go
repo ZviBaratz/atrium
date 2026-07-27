@@ -66,7 +66,7 @@ func TestRailDefaultIndexIsTheFirstCategory(t *testing.T) {
 }
 
 // TestRailIndexForCategoryFindsEveryCategory pins that every category is reachable from
-// its enum value, which is what SelectRow (and PR C's OpenAt) rely on to sync the rail
+// its enum value, which is what OpenAt relies on to sync the rail
 // to a deep-linked row.
 func TestRailIndexForCategoryFindsEveryCategory(t *testing.T) {
 	for _, c := range allCategories() {
@@ -288,28 +288,44 @@ func TestEscIsLayered(t *testing.T) {
 	assert.True(t, closed, "the second esc closes the panel")
 }
 
-// TestSelectRowFocusesTheRowsPaneAndSyncsTheRail is spec §13's guard 11 in the form PR B
-// can test it: the deep-link primitive lands the cursor on the row with the rows pane
-// focused and the rail showing that row's category. Selecting a row the pane is not
-// showing would leave the cursor invisible.
-//
-// PR C promotes this exact behavior to OpenAt(category, key) and adds the two real call
-// sites (the session-cap dialog and the manual-reorder notice); the behavior is proven
-// here so that promotion is a rename rather than new semantics.
-func TestSelectRowFocusesTheRowsPaneAndSyncsTheRail(t *testing.T) {
+// TestOpenAtLandsOnEveryRowWithTheRowsPaneFocused is spec §13's guard 11, swept over the
+// whole schema: the deep-link primitive must land the cursor on the row, focus the rows pane,
+// and sync the rail to that row's category. Selecting a row the pane is not showing would
+// leave the cursor invisible — the composite behavior IS the contract.
+func TestOpenAtLandsOnEveryRowWithTheRowsPaneFocused(t *testing.T) {
 	o := NewSettingsOverlay(config.DefaultConfig())
 	for _, r := range newSettingRows(config.DefaultConfig()) {
-		require.Truef(t, o.SelectRow(r.key), "no row %q", r.key)
+		require.Truef(t, o.OpenAt(r.key), "no row %q", r.key)
 		assert.Equalf(t, r.key, o.selectedRow().key,
-			"SelectRow(%q) must land the cursor on that row", r.key)
-		assert.Equalf(t, focusRows, o.focus, "SelectRow(%q) must focus the rows pane", r.key)
+			"OpenAt(%q) must land the cursor on that row", r.key)
+		assert.Equalf(t, focusRows, o.focus, "OpenAt(%q) must focus the rows pane", r.key)
 		assert.Equalf(t, r.category, o.selectedEntry().category,
-			"SelectRow(%q) must sync the rail to its category", r.key)
+			"OpenAt(%q) must sync the rail to its category", r.key)
 		start, end := o.rowRange(o.selectedEntry())
-		assert.GreaterOrEqualf(t, o.cursor, start, "SelectRow(%q) left the cursor outside the pane", r.key)
-		assert.Lessf(t, o.cursor, end, "SelectRow(%q) left the cursor outside the pane", r.key)
+		assert.GreaterOrEqualf(t, o.cursor, start, "OpenAt(%q) left the cursor outside the pane", r.key)
+		assert.Lessf(t, o.cursor, end, "OpenAt(%q) left the cursor outside the pane", r.key)
 	}
-	assert.False(t, o.SelectRow("not_a_row"), "an unknown key reports not-found")
+	assert.False(t, o.OpenAt("not_a_row"), "an unknown key reports not-found")
+}
+
+// TestOpenAtClearsTransientState pins the half a deep link only needs when the panel is
+// already open: landing while an editor or the ? view is up would put the cursor somewhere
+// the user cannot see. Today's call sites open a fresh panel — which is exactly why this
+// belongs in OpenAt rather than at the call sites, where omitting it would stay invisible
+// until the third one.
+func TestOpenAtClearsTransientState(t *testing.T) {
+	o := NewSettingsOverlay(config.DefaultConfig())
+	settingsAt(t, o, "branch_prefix")
+	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyEnter}) // opens the inline editor
+	require.True(t, o.editing, "precondition: an editor is open")
+
+	require.True(t, o.OpenAt("max_sessions"))
+	assert.False(t, o.editing, "a deep link must not land inside another row's editor")
+
+	o.HandleKeyPress(keyRunes("?"))
+	require.True(t, o.helpOpen, "precondition: the ? view is open")
+	require.True(t, o.OpenAt("theme"))
+	assert.False(t, o.helpOpen, "a deep link must not land behind the ? view")
 }
 
 // rowValues snapshots every row's displayed value, so a "nothing changed" assertion is about

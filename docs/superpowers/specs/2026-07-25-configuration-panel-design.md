@@ -472,6 +472,23 @@ than speculative:
 - the session-cap dialog → `max_sessions`
 - the "manual reorder is off" notice → `session_sort`
 
+> **Resolved in PR C: the signature is `OpenAt(key string) bool`.** `settingCategory` is
+> unexported, so `app` cannot name one. More importantly, guard 1 pins that every key belongs
+> to exactly one category, so a category parameter is a second source of truth whose only
+> possible contribution is to disagree with the row's own — and the only sane resolution of a
+> disagreement is to trust the row. `OpenAt` derives the category and syncs the rail to it,
+> which is what `TestOpenAtLandsOnEveryRowWithTheRowsPaneFocused` asserts over all 38 rows.
+> It also clears the panel's transient state (an open editor, the `?` view, an active
+> filter), because a deep link into an already-open panel must not land the cursor somewhere
+> the user cannot see.
+>
+> **PR C found five call sites, not two.** Besides the two above, `app/app_welcome.go` has
+> three notices that tell the user to press `,` and *name the setting in their own copy* —
+> the setup-skipped notice and both `warnMissingProgram` branches, all pointing at
+> `default_program`. Leaving them landing on the remembered rail entry while the two above
+> land on their row would have made two indistinguishable classes of `,`-notice, so all five
+> are wired and `TestEveryCommaNoticeGoesThroughSettingNotice` keeps the rule structural.
+
 The cap dialog carries a second obligation: `overCapMessage` currently ends with
 `(set max_sessions in config.json to change this)`, which sends the user to a text editor
 for a setting the panel now owns. With the deep link in place that literal should teach the

@@ -276,8 +276,8 @@ func TestSelectingTheLongestHelpRowKeepsTheRowCount(t *testing.T) {
 			require.Greater(t, want, 3, "the pane must show real rows for this to mean anything")
 
 			for _, r := range newSettingRows(config.DefaultConfig()) {
-				require.True(t, o.SelectRow(r.key))
-				o.railCursor = 0 // stay in the flat view; SelectRow moved the rail
+				require.True(t, o.OpenAt(r.key))
+				o.railCursor = 0 // stay in the flat view; OpenAt moved the rail
 				assert.Equalf(t, want, len(o.rowsPaneLines()),
 					"selecting %q changed the visible row count from %d to %d — help height "+
 						"must not depend on the cursor (D5)", r.key, want, len(o.rowsPaneLines()))
@@ -298,7 +298,7 @@ func TestHelpHeightIgnoresTheCursor(t *testing.T) {
 	require.Equal(t, helpPaneLines, want, "80x24 must afford the full help pane")
 
 	for _, r := range newSettingRows(config.DefaultConfig()) {
-		require.True(t, o.SelectRow(r.key))
+		require.True(t, o.OpenAt(r.key))
 		assert.Equalf(t, want, o.helpHeight(), "row %q changed the help pane's height", r.key)
 	}
 }
@@ -354,7 +354,7 @@ func TestSelectedRowIsAlwaysVisible(t *testing.T) {
 			o.SetSize(size.w, size.h)
 			for _, r := range newSettingRows(config.DefaultConfig()) {
 				for _, entry := range []int{railIndexForCategory(r.category), 0} {
-					require.True(t, o.SelectRow(r.key))
+					require.True(t, o.OpenAt(r.key))
 					o.railCursor = entry // 0 exercises the flat view, where windowing bites
 					o.syncCursorToRail()
 					pane := stripANSI(strings.Join(o.rowsPaneLines(), "\n"))
@@ -402,7 +402,7 @@ func TestBoxHeightDependsOnlyOnTheTerminal(t *testing.T) {
 			"rail entry %q changed the box height", railEntries()[i].label)
 	}
 	for _, key := range []string{"max_sessions", "group_mode", "agent_oom_margin", "config_file"} {
-		require.True(t, o.SelectRow(key))
+		require.True(t, o.OpenAt(key))
 		assert.Equalf(t, want, lipgloss.Height(o.Render()), "row %q changed the box height", key)
 	}
 }

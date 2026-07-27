@@ -99,16 +99,21 @@ func NewSettingsOverlay(cfg *config.Config) *SettingsOverlay {
 	return s
 }
 
-// SelectRow moves the cursor onto the row with the given key, reporting whether it
-// exists. It also syncs the rail to that row's category and focuses the rows pane:
-// selecting a row the pane is not showing would leave the cursor invisible.
+// OpenAt moves the panel to the row with the given key, reporting whether it exists. It
+// syncs the rail to that row's category, focuses the rows pane, and drops any transient
+// state (an open editor, the ? view) so the cursor lands somewhere the user can actually
+// see.
 //
-// That composite behavior is the deep-link contract — it is what makes a jump from a
-// dialog or a notice land somewhere usable — and PR C promotes it to
-// OpenAt(category, key) with two real call sites. It is also what keeps the ~40 tests
-// that reach a row through settingsAt working: they select a row, then send keys
-// expecting them to reach it.
-func (s *SettingsOverlay) SelectRow(key string) bool {
+// That composite behavior is the deep-link contract of spec §12 — it is what makes a jump
+// from a dialog or a notice land somewhere usable. It is also the path most of this
+// package's tests take to reach a row, through the settingsAt helper: they select a row,
+// then send keys expecting them to reach it.
+//
+// It takes the key alone, where spec §12 wrote OpenAt(category, key). settingCategory is
+// unexported, so app cannot name one; and guard 1 pins that every key belongs to exactly one
+// category, so a passed category would be a second source of truth that can only ever
+// disagree with the row's own. The spec is amended to match.
+func (s *SettingsOverlay) OpenAt(key string) bool {
 	for i, r := range s.rows {
 		if r.key != key {
 			continue
@@ -116,6 +121,9 @@ func (s *SettingsOverlay) SelectRow(key string) bool {
 		s.cursor = i
 		s.railCursor = railIndexForCategory(r.category)
 		s.focus = focusRows
+		s.editing = false
+		s.helpOpen = false
+		s.helpScroll = 0
 		s.lastErr = ""
 		return true
 	}
