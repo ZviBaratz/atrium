@@ -309,8 +309,8 @@ func TestClaudeAccountReadIdentity(t *testing.T) {
 //
 // This is the single place that guarantee is enforced, so it is the single place it can
 // be tested. The doctor report and the accounts overlay both group on CollisionKey and
-// would silently inherit any leak from here; it is what lets each of them skip an
-// unreadable row without a guard of its own.
+// would silently inherit any leak from here — the overlay rests on it alone, while
+// doctor's collisions() keeps a belt-and-braces IdentityUnreadable skip in front of it.
 func TestCheckIdentityDiscardsPayloadFromAFailedRead(t *testing.T) {
 	leaky := func(string) (AccountIdentity, bool) {
 		return AccountIdentity{Email: "stale@corp.com", UUID: "u-stale"}, false

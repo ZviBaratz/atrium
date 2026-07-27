@@ -53,11 +53,21 @@ type AccountsOverlay struct {
 	previewInputs []textinput.Model // [remote, path]
 	previewFocus  int
 
-	// identities caches which login each Claude account's config dir holds,
-	// parallel by index to cfg.ClaudeAccounts. Filled once at construction (see
-	// loadIdentities) because Render runs on every keystroke and must not do IO.
+	// logins caches which login each Claude config DIR holds, keyed by
+	// NormalizedConfigDir and filled when the overlay opens (see loadIdentities),
+	// because Render runs on every keystroke and must not do IO.
+	//
+	// What is cached is the READ, never a per-row verdict: this panel reorders (J/K),
+	// edits and deletes accounts in place, so a snapshot parallel by index to
+	// cfg.ClaudeAccounts would name another account's login the moment any of those
+	// ran — the exact wrong-login failure the feature exists to surface. Directories
+	// are what a read is about, and they survive every one of those mutations.
+	//
 	// Nil when nothing was read, which renders as if the feature were off.
-	identities []acctIdentity
+	logins map[string]acctLogin
+	// readIdentity is retained so commit() can fill in a dir the roster did not name
+	// when the panel opened. It is a keypress, not a render, so it may do IO.
+	readIdentity config.IdentityReadFunc
 }
 
 // NewAccountsOverlay creates the account manager over cfg, using state to read and
@@ -342,6 +352,10 @@ func (o *AccountsOverlay) commit() {
 			o.carryAvailability(o.cfg.ClaudeAccounts[o.editIndex].Name, a.Name)
 			o.cfg.ClaudeAccounts[o.editIndex] = a
 		}
+		// An add or an edit is the one mutation that can name a dir nobody held when
+		// the panel opened; without this it would stay blank until the panel is
+		// reopened. Safe to read here — commit runs on a keypress, not a render.
+		o.cacheLogins()
 	case tabAgy:
 		a := config.AgyAccount{
 			Name: o.form.Name(), ConfigDir: o.form.ConfigDir(),
@@ -438,12 +452,17 @@ func (o *AccountsOverlay) inner() int { return o.boxWidth() - 4 } // Padding(1,2
 // allowance is conditional on the note actually being able to render (Claude
 // tab with a genuinely split pool): charging every config a row for a note
 // that only some configs print would cost a pool-free config a visible row it
-// never used to lose. Mirrors the windowing SettingsOverlay applies to its own
-// body.
+// never used to lose. The identity note is charged the same way and for the
+// same reason — a note renderList prints but rowWindow does not count makes the
+// box one line taller than the terminal it was measured against. Mirrors the
+// windowing SettingsOverlay applies to its own body.
 func (o *AccountsOverlay) rowWindow(n int) (start, end int) {
 	chrome := 12
 	if o.tab == tabClaude && len(splitPools(o.cfg.ClaudeAccounts)) > 0 {
 		chrome++ // the split-pool note occupies one more line
+	}
+	if o.tab == tabClaude && o.identityNote(o.inner()) != "" {
+		chrome++ // so does the identity warning
 	}
 	budget := o.height - chrome
 	if budget < 3 {

@@ -1,6 +1,7 @@
 package overlay
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -235,7 +236,7 @@ func TestAccountsOverlay_NoIdentitiesRendersNothingExtra(t *testing.T) {
 	o.SetSize(100, 40)
 	o.loadIdentities(nil)
 
-	assert.Nil(t, o.identities)
+	assert.Nil(t, o.logins)
 	assert.Empty(t, o.identityNote(80))
 	assert.Empty(t, o.previewIdentityLine("/h/a", 80))
 	assert.NotPanics(t, func() { o.Render() })
@@ -257,9 +258,148 @@ func TestNewAccountsOverlay_ReadsIdentitiesOnOpen(t *testing.T) {
 		{Name: "real", ConfigDir: "~/.claude-real"},
 	}}, config.DefaultState())
 
-	require.Len(t, o.identities, 1, "the constructor read no identities")
-	assert.Equal(t, "opened@corp.com", o.identities[0].actual.Email)
-	assert.Equal(t, config.IdentityUnpinned, o.identities[0].state)
+	require.Len(t, o.logins, 1, "the constructor read no identities")
+	got, ok := o.identityFor(o.cfg.ClaudeAccounts[0])
+	require.True(t, ok)
+	assert.Equal(t, "opened@corp.com", got.actual.Email)
+	assert.Equal(t, config.IdentityUnpinned, got.state)
+}
+
+// The cache holds READS, keyed by directory — not a verdict per row position. The
+// overlay reorders (J/K), edits and deletes accounts in place while it is open, so a
+// snapshot taken at construction and indexed by position names another account's
+// login the moment any of those runs. Every account must keep reporting its own dir's
+// login across all three mutations.
+func TestAccountsOverlay_IdentitySurvivesInPlaceMutations(t *testing.T) {
+	logins := map[string]string{"/h/p": "personal@corp.com", "/h/w": "work@corp.com"}
+	// A fresh slice per subtest: moveAccount swaps in place, so a shared backing
+	// array would leak one subtest's reorder into the next.
+	open := func(t *testing.T) *AccountsOverlay {
+		return identityOverlay(t, []config.ClaudeAccount{
+			{Name: "personal", ConfigDir: "/h/p"},
+			{Name: "work", ConfigDir: "/h/w"},
+		}, logins)
+	}
+
+	t.Run("reorder", func(t *testing.T) {
+		o := open(t)
+		o.selectTab(tabClaude)
+		require.True(t, o.moveAccount(1), "J/K reorder is reachable with the panel open")
+
+		assert.Contains(t, o.previewIdentityLine("/h/p", 80), "personal@corp.com")
+		assert.Contains(t, o.previewIdentityLine("/h/w", 80), "work@corp.com")
+	})
+
+	t.Run("delete", func(t *testing.T) {
+		o := open(t)
+		o.selectTab(tabClaude)
+		o.cfg.ClaudeAccounts = o.cfg.ClaudeAccounts[1:] // 'personal' deleted
+
+		assert.Contains(t, o.previewIdentityLine("/h/w", 80), "work@corp.com")
+	})
+
+	t.Run("edit retargets a dir", func(t *testing.T) {
+		o := open(t)
+		o.cfg.ClaudeAccounts = []config.ClaudeAccount{{Name: "personal", ConfigDir: "/h/w"}}
+
+		assert.Contains(t, o.previewIdentityLine("/h/w", 80), "work@corp.com",
+			"the login must follow the dir the account now names")
+	})
+}
+
+// An edit can name a dir nobody had when the panel opened. commit() is a keypress, not
+// a render, so it may read — otherwise the newly named dir stays permanently blank.
+func TestAccountsOverlay_CommitReadsANewlyNamedDir(t *testing.T) {
+	o := identityOverlay(t, []config.ClaudeAccount{{Name: "a", ConfigDir: "/h/a"}},
+		map[string]string{"/h/a": "a@corp.com", "/h/late": "late@corp.com"})
+
+	o.selectTab(tabClaude)
+	o.editIndex = 0
+	o.form = newAccountForm(false, true, "a", "/h/late", "", "", "", "")
+	o.commit()
+
+	assert.Contains(t, o.previewIdentityLine("/h/late", 80), "late@corp.com")
+}
+
+// Two accounts sharing one login is one collision; two SEPARATE pairs are two, and
+// saying "all four are the same login" is simply false. The doctor report words each
+// group on its own line; the panel has one line, so it must count groups rather than
+// flatten them into a single claim.
+func TestAccountsOverlay_IdentityNoteSeparatesDistinctCollisionGroups(t *testing.T) {
+	o := identityOverlay(t, []config.ClaudeAccount{
+		{Name: "a", ConfigDir: "/h/a"}, {Name: "b", ConfigDir: "/h/b"},
+		{Name: "c", ConfigDir: "/h/c"}, {Name: "d", ConfigDir: "/h/d"},
+	}, map[string]string{
+		"/h/a": "x@corp.com", "/h/b": "x@corp.com",
+		"/h/c": "y@corp.com", "/h/d": "y@corp.com",
+	})
+
+	for w := 16; w <= 120; w++ {
+		note := o.identityNote(w)
+		require.LessOrEqual(t, lipgloss.Width(note), w, "width %d: %q overflows", w, note)
+		assert.NotContains(t, note, "'a', 'b', 'c' and 'd'",
+			"width %d: two separate pairs reported as one shared login", w)
+	}
+	assert.Contains(t, o.identityNote(120), "2", "the note must say how many groups there are")
+}
+
+// One group keeps naming its members — the count wording is for several groups only.
+func TestAccountsOverlay_IdentityNoteStillNamesASingleGroup(t *testing.T) {
+	o := identityOverlay(t, []config.ClaudeAccount{
+		{Name: "a", ConfigDir: "/h/a"}, {Name: "b", ConfigDir: "/h/b"},
+		{Name: "c", ConfigDir: "/h/c"},
+	}, map[string]string{
+		"/h/a": "x@corp.com", "/h/b": "x@corp.com", "/h/c": "lonely@corp.com",
+	})
+
+	note := o.identityNote(80)
+	assert.Contains(t, note, "'a'")
+	assert.Contains(t, note, "'b'")
+	assert.NotContains(t, note, "'c'")
+}
+
+// rowWindow's chrome must budget the identity note the same way it budgets the
+// split-pool note (see TestAccountsOverlay_RowWindowChromeConditionalOnSplitPoolNote
+// and commit 9b25662): a note printed by renderList but uncounted by rowWindow makes
+// the box one line taller than the terminal it was measured against.
+func TestAccountsOverlay_RowWindowChromeConditionalOnIdentityNote(t *testing.T) {
+	mk := func(collide bool) *AccountsOverlay {
+		var accts []config.ClaudeAccount
+		logins := map[string]string{}
+		for i := 0; i < 30; i++ {
+			dir := fmt.Sprintf("/h/d%02d", i)
+			accts = append(accts, config.ClaudeAccount{
+				Name: fmt.Sprintf("acct%02d", i), ConfigDir: dir,
+				// Route rules mean no catch-all, so the "unmatched repos" hint
+				// renders too — that is the line whose slack the note ate.
+				RemoteMatches: []string{dir},
+			})
+			logins[dir] = dir + "@corp.com"
+		}
+		if collide {
+			logins["/h/d01"] = logins["/h/d00"]
+		}
+		return identityOverlay(t, accts, logins)
+	}
+
+	clean := mk(false)
+	clean.SetSize(80, 24)
+	start, end := clean.rowWindow(clean.activeLen())
+	assert.Equal(t, 12, end-start, "a healthy config keeps the full 12-row budget")
+
+	dirty := mk(true)
+	dirty.SetSize(80, 24)
+	start, end = dirty.rowWindow(dirty.activeLen())
+	assert.Equal(t, 11, end-start, "the identity note costs exactly the one row it occupies")
+
+	for _, h := range []int{20, 24, 30} {
+		dirty.SetSize(80, h)
+		for _, line := range strings.Split(dirty.Render(), "\n") {
+			require.LessOrEqual(t, lipgloss.Width(line), 80, "height %d: line overflows", h)
+		}
+		require.LessOrEqual(t, len(strings.Split(dirty.Render(), "\n")), h,
+			"height %d: the box is taller than the terminal", h)
+	}
 }
 
 // On a fully rate-limited pool, creation does NOT use SelectPoolMember's defensive

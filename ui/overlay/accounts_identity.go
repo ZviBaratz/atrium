@@ -23,14 +23,22 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
-// acctIdentity is one account's cached verification outcome, parallel by index to
-// cfg.ClaudeAccounts.
+// acctIdentity is one account's verification outcome, computed on demand from the
+// cached reads rather than stored per row.
 type acctIdentity struct {
 	state  config.IdentityCheck
 	actual config.AccountIdentity
 }
 
-// loadIdentities reads the login behind every Claude account once, memoising per
+// acctLogin is one directory's cached read: what it held, and whether it could be
+// read at all. The two are kept together because a failed read must stay
+// distinguishable from a dir holding nothing.
+type acctLogin struct {
+	id config.AccountIdentity
+	ok bool
+}
+
+// loadIdentities reads the login behind every Claude config dir once, memoising per
 // directory so two accounts naming one dir cost a single read. Called when the
 // overlay is constructed — i.e. when the user opens it — and never during a render.
 //
@@ -38,38 +46,71 @@ type acctIdentity struct {
 // no note, no preview line. That is the honest rendering of "not looked", and it is
 // what keeps every existing overlay test unaffected by this file.
 func (o *AccountsOverlay) loadIdentities(read config.IdentityReadFunc) {
-	o.identities = nil
+	o.logins, o.readIdentity = nil, read
 	if read == nil || o.cfg == nil {
 		return
 	}
-	cache := map[string]config.AccountIdentity{}
-	okCache := map[string]bool{}
-	memo := func(dir string) (config.AccountIdentity, bool) {
-		if _, seen := okCache[dir]; !seen {
-			cache[dir], okCache[dir] = read(dir)
-		}
-		return cache[dir], okCache[dir]
+	o.logins = map[string]acctLogin{}
+	o.cacheLogins()
+}
+
+// cacheLogins reads any account dir not already cached, and is idempotent. Called
+// when the panel opens and again after commit(), which is the one mutation that can
+// introduce a directory nobody named before; reorder and delete need no refresh
+// because nothing here is keyed on a row's position.
+func (o *AccountsOverlay) cacheLogins() {
+	if o.logins == nil || o.readIdentity == nil || o.cfg == nil {
+		return
 	}
 	for _, a := range o.cfg.ClaudeAccounts {
-		state, actual := a.CheckIdentity(memo)
-		o.identities = append(o.identities, acctIdentity{state: state, actual: actual})
+		dir := a.NormalizedConfigDir()
+		if dir == "" {
+			continue // inherit-env: no dir of its own to read
+		}
+		if _, seen := o.logins[dir]; seen {
+			continue
+		}
+		id, ok := o.readIdentity(dir)
+		o.logins[dir] = acctLogin{id: id, ok: ok}
 	}
 }
 
-// identityForDir returns the cached outcome for the account at a config dir, and
-// whether one is cached. Keyed on the resolved dir rather than the name because the
+// cachedRead answers CheckIdentity out of the cache alone, never touching the
+// filesystem, so classification is safe during a render. An uncached dir reads as
+// unreadable — "not looked" and "read and found nothing" render the same, and both
+// are honest here.
+func (o *AccountsOverlay) cachedRead(dir string) (config.AccountIdentity, bool) {
+	got, seen := o.logins[dir]
+	if !seen {
+		return config.AccountIdentity{}, false
+	}
+	return got.id, got.ok
+}
+
+// identityFor classifies one account against the cached reads. Recomputed per call
+// rather than stored per row: the pin it checks lives on the account, the login it
+// checks lives on the directory, and both move when the user edits or reorders the
+// list. Cheap — CheckIdentity is a map lookup and a string compare once the read is
+// cached.
+func (o *AccountsOverlay) identityFor(a config.ClaudeAccount) (acctIdentity, bool) {
+	if o.logins == nil {
+		return acctIdentity{}, false
+	}
+	state, actual := a.CheckIdentity(o.cachedRead)
+	return acctIdentity{state: state, actual: actual}, true
+}
+
+// identityForDir returns the outcome for the account at a config dir, and whether one
+// could be computed. Keyed on the resolved dir rather than the name because the
 // preview resolves routing to a directory, and because a renamed account keeps its
 // directory (the #470 anchor).
 func (o *AccountsOverlay) identityForDir(dir string) (acctIdentity, bool) {
-	if dir == "" {
+	if dir == "" || o.logins == nil || o.cfg == nil {
 		return acctIdentity{}, false
 	}
-	for i, a := range o.cfg.ClaudeAccounts {
-		if i >= len(o.identities) {
-			break
-		}
+	for _, a := range o.cfg.ClaudeAccounts {
 		if a.ResolvedConfigDir() == dir {
-			return o.identities[i], true
+			return o.identityFor(a)
 		}
 	}
 	return acctIdentity{}, false
@@ -106,15 +147,15 @@ func (o *AccountsOverlay) previewIdentityLine(dir string, width int) string {
 // and the work spread across them lands on a single quota. A mismatch at least means
 // someone wrote down an expectation that can be compared.
 func (o *AccountsOverlay) identityNote(width int) string {
+	if o.cfg == nil || o.logins == nil {
+		return "" // nothing was read: the honest rendering is no note at all
+	}
 	var wrong []string
 	byLogin := map[string][]string{}
 	var loginOrder []string
 
-	for i, a := range o.cfg.ClaudeAccounts {
-		if i >= len(o.identities) {
-			break
-		}
-		got := o.identities[i]
+	for _, a := range o.cfg.ClaudeAccounts {
+		got, _ := o.identityFor(a)
 		if got.state == config.IdentityWrongAccount {
 			wrong = append(wrong, a.Name)
 		}
@@ -130,35 +171,52 @@ func (o *AccountsOverlay) identityNote(width int) string {
 		byLogin[key] = append(byLogin[key], a.Name)
 	}
 
-	var collided []string
+	// Groups stay groups. Flattening them into one list of names would let two
+	// separate pairs render as "all four are the same login", which is false and
+	// points the user at a merge that isn't there.
+	var groups [][]string
 	for _, key := range loginOrder {
 		if len(byLogin[key]) > 1 {
-			collided = append(collided, byLogin[key]...)
+			groups = append(groups, byLogin[key])
 		}
 	}
 
-	if note := collisionNote(collided, width); note != "" {
+	if note := collisionNote(groups, width); note != "" {
 		return note
 	}
 	return wrongLoginNote(wrong, width)
 }
 
-// collisionNote words the "these are one login" warning, longest form first.
-func collisionNote(names []string, width int) string {
-	if len(names) < 2 {
+// collisionNote words the "these are one login" warning, longest form first. One
+// group names its members, because naming them is what makes the warning actionable.
+// Several groups can only be counted: the panel has one line, and there is no wording
+// that names two separate sets of accounts without either overflowing the box or
+// implying they share a login. `atrium doctor` prints one line per group and is where
+// the detail lives, so the note says so rather than pretending to be complete.
+func collisionNote(groups [][]string, width int) string {
+	switch len(groups) {
+	case 0:
 		return ""
-	}
-	if len(names) == 2 {
+	case 1:
+		names := groups[0]
+		if len(names) == 2 {
+			return fitOneOf(width,
+				fmt.Sprintf("'%s' and '%s' are the same login — both bill one account", names[0], names[1]),
+				fmt.Sprintf("'%s' and '%s' are the same login", names[0], names[1]),
+				"2 accounts are the same login",
+				"same login")
+		}
 		return fitOneOf(width,
-			fmt.Sprintf("'%s' and '%s' are the same login — both bill one account", names[0], names[1]),
-			fmt.Sprintf("'%s' and '%s' are the same login", names[0], names[1]),
-			"2 accounts are the same login",
+			fmt.Sprintf("%s are the same login — all bill one account", quotedNames(names)),
+			fmt.Sprintf("%d accounts are the same login", len(names)),
 			"same login")
+	default:
+		return fitOneOf(width,
+			fmt.Sprintf("%d sets of accounts each share one login — atrium doctor names them", len(groups)),
+			fmt.Sprintf("%d sets of accounts each share one login", len(groups)),
+			fmt.Sprintf("%d duplicated logins", len(groups)),
+			"duplicated logins")
 	}
-	return fitOneOf(width,
-		fmt.Sprintf("%s are the same login — all bill one account", quotedNames(names)),
-		fmt.Sprintf("%d accounts are the same login", len(names)),
-		"same login")
 }
 
 // wrongLoginNote words the expect_account-violated warning, longest form first.
