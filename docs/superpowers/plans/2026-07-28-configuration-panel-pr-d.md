@@ -3681,6 +3681,41 @@ overflow) is exactly the failure mode a later edit to the fixture would reintrod
 
 ---
 
+## What changed during implementation
+
+The plan above is the reviewed version. Six things moved while executing it, each because
+running the code said so:
+
+1. **The empty-state pane drops the single-pane header.** The new sweep did its job on its first
+   run: at 40x10 the header plus the wrapped line came to 4 lines in a 3-line pane, so
+   `windowPane` would have drawn a scroll marker on a pane with nothing to scroll to. The line
+   already names the pane's subject, so the header is redundant there — and the copy shortened
+   from 68 to 60 cells, which buys a line of margin at the floor rather than sitting at zero.
+2. **Two symbols had to move to the task that reads them.** `profileNames` (a test helper) and
+   `profileDetectPending` were written in Task 2 but not read until Tasks 4 and 5, and `unused`
+   fails a commit that lands a helper ahead of its reader. The plan's own Global Constraints say
+   a flagged helper means a missing test; here it meant a missing *task boundary*.
+3. **The refusal-length mutation needs ~122 cells, not "one more clause".** Measured at inner 34
+   (w=40): the shipped 72-cell message wraps to 3 lines, and so does a 94-cell one — word
+   boundaries absorb the difference. At 122 cells it wraps to 4 and the sweep fires at widths
+   **40-45**. So the guard is falsifiable, but its granularity is coarser than the plan claimed;
+   the wording has roughly 20 cells of headroom, not one clause.
+4. **One mutation returned a false negative because its restore silently failed.** Task 4's
+   `max(0, ...)` mutation came back green — but only because the preceding mutation's restore had
+   not applied, leaving the clamp call absent entirely. Re-run against a repaired file it fired
+   immediately. A mutation harness that does not verify its own restore can report a live guard
+   as missing.
+5. **The eyeball confirmed the one-profile dead key, and showed why it is easy to miss.** In the
+   session where profiles had been added and removed, `Default program` offered two options and
+   cycled fine — because `rawDefaultProgram` had captured a name that was no longer a profile and
+   prepended it as the documented phantom. Only a **fresh** panel shows the real state:
+   `‹ codex ›` with `→` doing nothing. The phantom and the dead key look alike on screen and are
+   not the same thing.
+6. **`tmux kill-server` does not kill the atrium process in the pane.** The stale flock then
+   refuses the next launch with "atrium is already running for this data directory". Kill the
+   process explicitly when tearing an eyeball session down, or the next relaunch looks like a
+   crash.
+
 ## What the adversarial review changed
 
 Three reviewers read the first draft **against the tree** before any code was written: one
