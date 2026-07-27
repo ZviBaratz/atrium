@@ -8,6 +8,7 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 )
 
 // settingKind selects how a settings row is displayed and edited: bools toggle
@@ -312,6 +313,26 @@ func (s *SettingsOverlay) boxWidth() int {
 
 func (s *SettingsOverlay) innerWidth() int { return s.boxWidth() - 4 }
 
+// titleLine is the panel's first row: its name, plus the active filter.
+//
+// The filter rides this row rather than claiming one of its own because the box's height
+// depends only on the terminal size — a taller box on `/` would re-centre the whole panel
+// under the user mid-keystroke (the jump ui/overlay/textInput_size.go:3-8 warns about). The
+// query is truncated to the inner width for the same reason: an over-wide line soft-wraps,
+// grows the box a row, and clips the pinned hint off the bottom.
+func (s *SettingsOverlay) titleLine() string {
+	t := theme.Current()
+	if !s.searching() {
+		return t.OverlayTitleStyle().Render("Settings")
+	}
+	const gap = "   "
+	filter := "/" + s.search.filter + t.Glyphs.TextCursor
+	if budget := s.innerWidth() - ansi.StringWidth("Settings"+gap); ansi.StringWidth(filter) > budget {
+		filter = ansi.Truncate(filter, max(0, budget), "…")
+	}
+	return t.OverlayTitleStyle().Render("Settings") + gap + overlayFilterStyle().Render(filter)
+}
+
 // Render draws the panel as a centered bordered box: a title, the rail beside the highlighted
 // category's rows, a separator, the fixed-height help pane, and the key hints.
 //
@@ -335,7 +356,7 @@ func (s *SettingsOverlay) Render() string {
 	}
 	lines = append(lines, s.hintLine())
 
-	title := t.OverlayTitleStyle().Render("Settings")
+	title := s.titleLine()
 	return lipgloss.NewStyle().
 		Border(t.Borders.Style).
 		BorderForeground(t.Palette.Accent).
