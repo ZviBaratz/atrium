@@ -51,6 +51,33 @@ func TestAutoDispatch_AllExhaustedAsksConfirm(t *testing.T) {
 	assert.Equal(t, before, h.list.NumInstances(), "nothing spawned yet")
 }
 
+// stateConfirm being set is not the same as the dialog being on screen, and this
+// entry into it is new: every other confirm arrives from a create form, this one
+// from statePrompt with a smart-dispatch overlay open. So render the frame and read
+// what it says — the reason and the member accepting would use, which is the whole
+// content the user makes the decision on.
+//
+// Deliberately *not* asserted: that the dispatch overlay does not render underneath.
+// View() selects exactly one overlay by m.state, so in stateConfirm a stale
+// textInputOverlay pointer cannot reach the frame — an assertion about it would pass
+// on any input, including one where confirmAllExhausted stopped clearing it (checked
+// by mutation, it did).
+func TestAutoDispatch_AllExhaustedConfirmActuallyRenders(t *testing.T) {
+	h := autoDispatchPoolHome(t)
+	require.NoError(t, h.appState.SetAccountLimited("work-1", ""))
+	require.NoError(t, h.appState.SetAccountLimited("work-2", ""))
+	h.updateHandleWindowSizeEvent(tea.WindowSizeMsg{Width: 120, Height: 40})
+
+	h.handleSmartDispatchSubmit("Review box#123")
+	require.Equal(t, stateConfirm, h.state)
+
+	view := h.View()
+	assert.Contains(t, view, "all work accounts are rate-limited",
+		"the dialog states why it is asking")
+	assert.Contains(t, view, "create anyway on work-1?",
+		"and which member accepting would use")
+}
+
 // The divergence had two halves — no confirm, and a different member — so the
 // fixture forces them apart: the cursor sits on work-1 (the pre-fix answer) while
 // work-2 resets soonest (the confirm's answer). A fix that raised the confirm but
