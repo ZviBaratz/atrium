@@ -38,10 +38,10 @@ func TestRailEntriesAreTheThirteen(t *testing.T) {
 	assert.Equal(t, railHandoff, entries[12].kind)
 }
 
-// TestEveryHandoffEntryNamesItsSurface pins that a rail entry owning no rows still says
-// where its config lives. An entry that renders an empty pane teaches the user nothing
-// and reads as a bug; PR C wires Accounts to the @ overlay and PR D builds the Profiles
-// editor, so until then the note is the whole content of that pane.
+// TestEveryHandoffEntryNamesItsSurface pins that a rail entry owning no rows and no pane
+// still says where its config lives. An entry that renders an empty pane teaches the user
+// nothing and reads as a bug, so the note is the whole content of that pane — and the
+// forward key that note names must actually open something.
 func TestEveryHandoffEntryNamesItsSurface(t *testing.T) {
 	handoffs := 0
 	for _, e := range railEntries() {

@@ -476,10 +476,10 @@ func (s *SettingsOverlay) searchPaneContent(width int) []paneLine {
 	return lines
 }
 
-// handoffPaneContent is the rows pane for an entry that owns no rows: its note, wrapped.
-// Naming the surface that does own the config is the honest thing to render until PR C wires
-// Accounts to the @ overlay and PR D builds the Profiles editor — an empty pane would read as
-// a bug.
+// handoffPaneContent is the rows pane for a handoff entry: its note, wrapped. Naming the
+// surface that does own the config is the honest thing to render for config this panel
+// cannot edit — an empty pane would read as a bug. Accounts is the only entry that needs
+// it; Profiles has an editor of its own (profilesPaneContent).
 func (s *SettingsOverlay) handoffPaneContent(e railEntry, width int) []paneLine {
 	return wrappedPaneLines(e.note, width, theme.Current().DimStyle())
 }
@@ -1081,8 +1081,8 @@ func railHintLadder(e railEntry) []string {
 //
 // A handoff with no wording here would silently render a ladder that names no forward key at
 // all — the same lie railHintLadder exists to prevent — so
-// TestEveryWiredHandoffNamesItsForwardKey fails rather than letting PR D's Profiles editor
-// arrive without one.
+// TestEveryWiredHandoffNamesItsForwardKey fails rather than letting a new handoff arrive
+// without one.
 func handoffHint(h SettingsHandoff) string {
 	if h == HandoffAccounts {
 		return "↵ accounts"

@@ -20,9 +20,14 @@ const (
 	HandoffAccounts
 )
 
-// railKind distinguishes the three things a settings rail entry can be. Ten of the
-// thirteen entries project a settingCategory; the other three own no rows of their own,
-// which is why the rail is its own vocabulary rather than allCategories() alone.
+// railKind distinguishes the four things a settings rail entry can be. Ten of the
+// thirteen entries project a settingCategory; the other three own no settingRows of
+// their own, which is why the rail is its own vocabulary rather than allCategories()
+// alone.
+//
+// "Owns no rows" stopped being one fact when railProfiles arrived: it owns a focusable
+// pane over cfg.Profiles, while railHandoff owns no pane either. That split is stated by
+// TestRailHintNeverPromisesAPaneSwapWithoutRows.
 type railKind int
 
 const (
@@ -53,16 +58,18 @@ type railEntry struct {
 	// note is the single line a handoff entry's pane shows, naming the surface that owns
 	// its config. Empty for every other kind (TestEveryHandoffEntryNamesItsSurface).
 	note string
-	// opens is the surface this entry hands off to, for a railHandoff entry that has one.
-	// Profiles is HandoffNone until PR D replaces it with a real editor: a handoff to a
-	// surface that does not exist would be worse than the note.
+	// opens is the surface this entry hands off to. Meaningful only when kind ==
+	// railHandoff, and every one of those has a surface: an entry with no rows, no pane and
+	// nothing to open would have no reason to exist, which is what
+	// TestEveryHandoffEntryNamesItsSurface asserts. Every other kind leaves it HandoffNone.
 	opens SettingsHandoff
 }
 
 // railEntries returns the rail in display order: the flat view, the ten scalar
-// categories, then the two handoffs. Thirteen entries fit the 80x24 pane budget exactly
-// (spec §4's invariant, pinned by TestRailFitsUnscrolledAtTheFloor) — a fourteenth has
-// to displace another rather than start the rail scrolling.
+// categories, then the Profiles editor and the Accounts handoff. Thirteen entries fit the
+// 80x24 pane budget exactly (spec §4's invariant, pinned by
+// TestRailFitsUnscrolledAtTheFloor) — a fourteenth has to displace another rather than
+// start the rail scrolling.
 func railEntries() []railEntry {
 	entries := make([]railEntry, 0, len(allCategories())+3)
 	entries = append(entries, railEntry{label: "All settings", kind: railAll})
