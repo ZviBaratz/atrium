@@ -537,10 +537,12 @@ func FromInstanceData(ctx context.Context, data InstanceData, branchPrefix strin
 	sess.SetGHConfigDir(instance.ghConfigDir)
 	sess.SetGitHubTokenEnv(instance.githubTokenEnv)
 	sess.SetAgyConfigDir(instance.agyConfigDir)
-	// Set here as well as in Start, because a restored instance can be relaunched without
+	// Bound here as well as in Start, because a restored instance can be relaunched without
 	// going through Start at all: recoverInPlace calls the tmux session's Start/StartContinue
-	// directly when the pane could not be reattached.
-	sess.SetSessionBrief(instance.sessionBrief())
+	// directly when the pane could not be reattached. Binding the method value rather than a
+	// snapshot is the point — Rename and Resume mutate this instance without touching the
+	// tmux session, and each launch re-reads through it.
+	sess.SetSessionBriefFunc(instance.sessionBrief)
 	instance.tmuxName = sess.Name()
 	instance.tmuxSession = sess
 
@@ -1034,10 +1036,11 @@ func (i *Instance) Start(firstTimeSetup bool) error {
 		tmuxSession.SetAgyConfigDir(i.agyConfigDir)
 	}
 
-	// Refresh the SessionStart brief on every launch, and unconditionally — a restored
-	// instance arrives with its tmux session already built by FromInstanceData, and a
-	// first-time one only just minted i.Branch above.
-	tmuxSession.SetSessionBrief(i.sessionBrief())
+	// Bind the SessionStart brief unconditionally: a restored instance arrives with its tmux
+	// session already built (and bound) by FromInstanceData, a first-time one was only just
+	// constructed above. Rebinding the same method value is a no-op; what matters is that a
+	// Session built anywhere else never reaches start() unbound.
+	tmuxSession.SetSessionBriefFunc(i.sessionBrief)
 
 	i.mu.Lock()
 	i.tmuxSession = tmuxSession

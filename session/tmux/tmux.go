@@ -83,10 +83,14 @@ type Session struct {
 	// agyConfigDir, when non-empty, isolates the Antigravity CLI's configuration
 	// directory using bwrap at session launch.
 	agyConfigDir string
-	// sessionBrief carries the per-session facts the injected SessionStart context brief is
-	// rendered from (#485). Set before Start (SetSessionBrief), like the config dirs above;
-	// a zero value means "say nothing", which is what a direct (non-git) session gets.
-	sessionBrief SessionBrief
+	// sessionBriefFn yields the per-session facts the injected SessionStart context brief is
+	// rendered from (#485). Unlike the creation-fixed values above this is a PROVIDER, not a
+	// value: a Session object outlives its tmux session (pause→resume and recover-in-place
+	// relaunch through start() on this same object) and a deep rename changes the title and
+	// branch in between, so start() has to re-read them at each launch rather than trust
+	// whatever was stamped at the last one. nil, or a provider yielding a zero brief, means
+	// "say nothing" — what a direct (non-git) session and every non-claude pane get.
+	sessionBriefFn func() SessionBrief
 	// adapter holds the per-agent heuristics resolved once from program at
 	// construction; never nil (unknown programs get agent.Generic).
 	adapter *agent.Adapter
@@ -282,11 +286,22 @@ func (t *Session) SetAgyConfigDir(dir string) {
 	t.agyConfigDir = dir
 }
 
-// SetSessionBrief sets the facts the injected SessionStart context brief is rendered from
-// (#485). Call before Start: the brief is baked into the settings.json written at launch.
-// A zero brief injects no SessionStart hook at all.
-func (t *Session) SetSessionBrief(b SessionBrief) {
-	t.sessionBrief = b
+// SetSessionBriefFunc binds the source of the facts the injected SessionStart context brief is
+// rendered from (#485). It takes a provider rather than a value on purpose: every launch calls
+// it afresh, so a session renamed between two launches describes itself correctly on the second
+// one. Bind it once, before the first Start; a nil provider (or one yielding an incomplete
+// brief) injects no SessionStart hook at all.
+func (t *Session) SetSessionBriefFunc(fn func() SessionBrief) {
+	t.sessionBriefFn = fn
+}
+
+// sessionBrief reads the current facts from the bound provider, or the zero brief when none is
+// bound. Called at launch — see sessionBriefFn for why it is not read any earlier.
+func (t *Session) sessionBrief() SessionBrief {
+	if t.sessionBriefFn == nil {
+		return SessionBrief{}
+	}
+	return t.sessionBriefFn()
 }
 
 // atriumMarkerEnv is injected into every session's env so external shell hooks
@@ -406,7 +421,7 @@ func (t *Session) start(workDir string, program string) error {
 	// appended to the launch command only; t.program (the persisted value) is never mutated.
 	// A failure here just disables hooks — the launch still proceeds on the scrape classifier,
 	// and without a brief.
-	if settingsPath, err := ensureHookSettings(t.sanitizedName, t.program, t.sessionBrief); err != nil {
+	if settingsPath, err := ensureHookSettings(t.sanitizedName, t.program, t.sessionBrief()); err != nil {
 		log.ErrorLog.Printf("status hooks disabled for %s: %v", t.sanitizedName, err)
 	} else if settingsPath != "" {
 		// tmux hands the launch command to `sh -c`, and the path embeds the session name,

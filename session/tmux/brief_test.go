@@ -136,15 +136,15 @@ func TestSessionStartHookOutput(t *testing.T) {
 }
 
 // TestStartInjectsSessionBrief pins the pass-through that every other test in this file is
-// blind to: the brief set on the Session has to reach the settings.json claude is actually
-// launched with. Swapping t.sessionBrief for a zero value in start() would leave every unit
-// test above green and every real session silent, because a session with no SessionStart hook
-// looks exactly like a session whose hook never fired.
+// blind to: the brief bound on the Session has to reach the settings.json claude is actually
+// launched with. Dropping the provider's result in start() would leave every unit test above
+// green and every real session silent, because a session with no SessionStart hook looks
+// exactly like a session whose hook never fired.
 func TestStartInjectsSessionBrief(t *testing.T) {
 	forceSettingsFlag(t, true)
 	ptyFactory := NewMockPtyFactory(t)
 	session := NewSessionWithDeps(context.Background(), t.Name(), "claude", ptyFactory, startMockExec())
-	session.SetSessionBrief(sentinelBrief)
+	session.SetSessionBriefFunc(func() SessionBrief { return sentinelBrief })
 
 	require.NoError(t, session.Start(t.TempDir()))
 
@@ -162,6 +162,71 @@ func TestStartInjectsSessionBrief(t *testing.T) {
 	require.NoError(t, err)
 	require.Contains(t, string(data), "SessionStart", "the brief is wired into the launched session")
 	require.Contains(t, string(data), sentinelBrief.Branch, "with this session's own facts, not a zero brief")
+}
+
+// TestStartRederivesSessionBriefAtLaunch pins WHEN the facts are read, which is the whole
+// difference between a correct brief and a confidently wrong one.
+//
+// A Session object outlives its tmux session: pause→resume and recover-in-place both relaunch
+// through start() on the SAME Session, and a deep rename changes the instance's title and
+// branch in between. Holding an evaluated SessionBrief would freeze those facts at whichever
+// launch happened to set them, so the next relaunch writes a fresh settings.json that names
+// the PREVIOUS title and branch — the agent is then told, with authority, that it is a session
+// it is not, on a branch it is not on. Taking a provider instead makes every launch re-read
+// live state, and there is no second place to remember to refresh.
+//
+// The mutation this catches: evaluating the provider in SetSessionBriefFunc instead of in
+// start(). Every other test in this file still passes under it, because they never change a
+// fact between wiring and launch.
+func TestStartRederivesSessionBriefAtLaunch(t *testing.T) {
+	forceSettingsFlag(t, true)
+	ptyFactory := NewMockPtyFactory(t)
+	session := NewSessionWithDeps(context.Background(), t.Name(), "claude", ptyFactory, startMockExec())
+
+	live := sentinelBrief
+	session.SetSessionBriefFunc(func() SessionBrief { return live })
+
+	// The rename lands after the Session is wired and before this launch. The post-rename
+	// values deliberately share no substring with the pre-rename ones, so the NotContains
+	// assertions below cannot be satisfied by the new value spelling the old one.
+	live.Name = "POST-RENAME-TITLE"
+	live.Branch = "POST-RENAME-BRANCH"
+
+	require.NoError(t, session.Start(t.TempDir()))
+
+	dir, err := hookSessionDir(session.snapshotName())
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+
+	data, err := os.ReadFile(filepath.Join(dir, "settings.json"))
+	require.NoError(t, err)
+	require.Contains(t, string(data), "POST-RENAME-TITLE", "the launch reads the title live")
+	require.Contains(t, string(data), "POST-RENAME-BRANCH", "the launch reads the branch live")
+	require.NotContains(t, string(data), sentinelBrief.Name,
+		"the pre-rename title must not survive into the settings.json this launch writes")
+	require.NotContains(t, string(data), sentinelBrief.Branch,
+		"the pre-rename branch must not survive into the settings.json this launch writes")
+}
+
+// TestNilSessionBriefFuncInjectsNoBrief: a Session nobody wired a provider onto launches
+// normally and silently. Terminal panes (ui/terminal.go) and any non-claude agent take this
+// path, and a nil provider must read as "say nothing", never panic the launch.
+func TestNilSessionBriefFuncInjectsNoBrief(t *testing.T) {
+	forceSettingsFlag(t, true)
+	ptyFactory := NewMockPtyFactory(t)
+	session := NewSessionWithDeps(context.Background(), t.Name(), "claude", ptyFactory, startMockExec())
+
+	require.NoError(t, session.Start(t.TempDir()))
+
+	dir, err := hookSessionDir(session.snapshotName())
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+
+	// The status hooks still ship — only the brief is absent.
+	data, err := os.ReadFile(filepath.Join(dir, "settings.json"))
+	require.NoError(t, err)
+	require.NotContains(t, string(data), "SessionStart", "no provider means no SessionStart hook")
+	require.Contains(t, string(data), "hooks", "the status hooks are unaffected")
 }
 
 // TestHookSessionStartCommand: the facts are baked into the command line the same way the

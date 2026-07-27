@@ -275,8 +275,10 @@ func buildHookSettings(binPath, stateFile string, brief SessionBrief) ([]byte, e
 // as "skip injection" so the launch still proceeds.
 //
 // brief carries the per-session facts the SessionStart context brief is rendered from (#485).
-// It is regenerated here on every launch — session create AND pause→resume both route through
-// start() — so the baked facts are re-read from live state each time.
+// The caller reads it from the Session's provider immediately before calling this, so the facts
+// baked into the file are the ones live at THIS launch — session create, pause→resume and
+// recover-in-place all route through start(), and a rename between two of them must not leave
+// the second describing the first.
 func ensureHookSettings(sanitizedName, program string, brief SessionBrief) (string, error) {
 	if !agent.Resolve(program).HookSupport || !claudeSupportsSettingsFlag() {
 		return "", nil

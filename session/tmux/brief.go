@@ -27,12 +27,14 @@ import (
 //   - config.LoadState() mutates the data dir, so it is unsafe to call from a subprocess
 //     running beside a live TUI (doctor hand-rolls a raw read for exactly this reason), and a
 //     hook would additionally need a sanitizedName→instance join that does not exist.
-//   - The facts are creation-fixed. The one thing that changes them mid-session is a deep
-//     rename, which already strands the whole hook channel (Session.Rename does not move
-//     <configDir>/hooks/<sanitizedName>/), so reading late would buy nothing there either.
-//   - Only the FACTS freeze. The copy is rendered by the binary at fire time, so it stays a
+//   - Baking is not freezing. The Session holds a PROVIDER for the facts, not a value
+//     (SetSessionBriefFunc), and start() reads it at each launch — so a deep rename, the one
+//     thing that changes them mid-session, is picked up by the next launch that rewrites the
+//     file. What a rename does strand is the OLD <configDir>/hooks/<sanitizedName>/ directory,
+//     which Session.Rename leaves behind; the live session writes and reads under the new name.
+//   - Only the FACTS are baked. The copy is rendered by the binary at fire time, so it stays a
 //     single pure function here and an upgraded atrium improves the wording for an already-
-//     running session on its next /clear.
+//     running session on its next /clear, without relaunching it.
 
 // HookEventSessionStart is the `atrium hook --event` verb for the SessionStart brief. Unlike
 // every other verb it is deliberately NOT part of the state-record vocabulary in hookstate.go:
@@ -91,8 +93,8 @@ const sessionBriefTemplate = "You are running in Atrium session %q. " +
 	"Other worktrees under %s belong to other Atrium sessions — never touch them."
 
 // SessionBrief is the set of per-session facts the brief is rendered from, baked into the hook
-// command line at launch. Set on the Session before Start (SetSessionBrief), like the other
-// creation-fixed launch values.
+// command line at launch. Supplied by the provider bound with SetSessionBriefFunc, which start()
+// calls once per launch — the values are a snapshot of that moment, not of session creation.
 type SessionBrief struct {
 	// Name is the Atrium session's title, as the user sees it in the list.
 	Name string
