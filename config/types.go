@@ -278,11 +278,13 @@ type Config struct {
 	// shell or multiplexer owns the title; terminals that ignore the escapes show
 	// nothing either way.
 	OSChrome *bool `json:"os_chrome,omitempty"`
-	// MaxSessions caps concurrent sessions and has three states. nil (unset, the
-	// default) resolves to a host-derived soft cap — max(2, CPU threads/2) — which
-	// warns with a single confirmation when exceeded but does not block, so a fresh
-	// install degrades gracefully instead of oversubscribing the host. An explicit
-	// positive value is a hard cap: creating beyond it is refused in the UI. An
+	// MaxSessions caps sessions and has three states. nil (unset, the default)
+	// resolves to a host-derived soft cap — max(2, CPU threads/2) — over the *live*
+	// sessions, which warns with a single confirmation when a create or a resume
+	// crosses it but does not block, so a fresh install degrades gracefully instead
+	// of oversubscribing the host. An explicit positive value is a hard cap over
+	// *every* session, paused ones included: creating beyond it is refused in the UI
+	// (resuming cannot cross it, since the sessions it restores already count). An
 	// explicit non-positive value (0) is "unlimited" — no cap and, being explicit,
 	// no warning (the escape hatch). See Config.SessionCap.
 	MaxSessions *int `json:"max_sessions,omitempty"`
@@ -309,7 +311,27 @@ type Config struct {
 	// an explicitly empty list opts out. Deliberately NOT omitempty: an
 	// explicit [] must survive a save/load cycle instead of being dropped and
 	// reverting to the default.
+	//
+	// An entry is carried only when git ignores it *in the worktree*: an uncommitted
+	// .gitignore edit in the origin checkout does not count, because pause would then
+	// commit the file into the session branch. Committing the rule on the session's
+	// base satisfies that; so does .git/info/exclude, which lives in the common git
+	// dir and is shared by every linked worktree, or a global excludes file.
 	CarryFiles []string `json:"carry_files"`
+	// LinkPaths lists repo-relative paths that are symlinked — not copied — from
+	// the origin checkout into each newly materialized session worktree, with an
+	// absolute target. It exists for dependency trees a copy would be wrong for:
+	// node_modules is huge and slow to duplicate, and Node resolves through a
+	// symlink fine. Empty/nil is off (omitempty keeps the key out of configs that
+	// never use it); there is no default list.
+	//
+	// Entries must be gitignored *as a symlink*, i.e. by a pattern without a
+	// trailing slash: a dir-only pattern (`node_modules/`) matches the origin
+	// directory but not the link, which git stores as a file. Otherwise the link
+	// leaks into the session branch (pause commits with `git add .`) and into the
+	// live diff (which stages untracked paths every poll tick). The rule must reach
+	// the worktree on the same terms as CarryFiles above.
+	LinkPaths []string `json:"link_paths,omitempty"`
 	// PRCreateDraft selects whether a PR opened with the create key (c) starts as
 	// a draft. nil means use the default (draft), so configs predating this key
 	// open drafts. Note: a draft PR cannot be merged with m until it is marked

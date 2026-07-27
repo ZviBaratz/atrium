@@ -9,18 +9,29 @@ import (
 	"github.com/ZviBaratz/atrium/session"
 	"github.com/ZviBaratz/atrium/ui"
 	"github.com/ZviBaratz/atrium/ui/theme"
+	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
+	xansi "github.com/charmbracelet/x/ansi"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 // newSettingsTestHome builds the minimal home model the settings paths touch.
-// HOME is sandboxed by TestMain, so config persistence stays hermetic.
+// HOME is sandboxed by TestMain, so config persistence stays hermetic. The list
+// and state are empty but present: an accounts edit re-derives every open
+// session's account labels from the new config (#470), which asks the list for
+// them.
 func newSettingsTestHome() *home {
+	s := spinner.New()
+	st := config.DefaultState()
+	storage, _ := session.NewStorage(st)
 	return &home{
 		ctx:       context.Background(),
 		state:     stateDefault,
 		appConfig: config.DefaultConfig(),
+		appState:  st,
+		storage:   storage,
+		list:      ui.NewList(&s),
 		menu:      ui.NewMenu(),
 	}
 }
@@ -51,7 +62,15 @@ func TestSettingsPanel_OpenEditPersistClose(t *testing.T) {
 	assert.False(t, config.LoadConfig().GetAutoAttach(),
 		"a change must reach disk immediately so it survives a crash")
 
-	// Esc closes the panel and returns to the list.
+	// Esc is layered since the two-pane redesign: SelectRow focuses the rows pane, so the
+	// first Esc backs out to the rail and only the second closes. This is the only place the
+	// layering is observable end to end, so it is asserted rather than worked around — the
+	// hint line says "esc back" and then "esc close" so the extra level is advertised
+	// (spec §7/§15).
+	_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyEsc})
+	require.Equal(t, stateSettings, h.state, "the first esc backs out of the rows pane")
+	require.NotNil(t, h.settingsOverlay)
+
 	_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyEsc})
 	assert.Equal(t, stateDefault, h.state)
 	assert.Nil(t, h.settingsOverlay)
@@ -256,4 +275,120 @@ func TestSettingsPanel_HidesHintBarLikeOtherModals(t *testing.T) {
 	_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(",")})
 	require.Equal(t, stateSettings, h.state)
 	assert.False(t, h.menuVisible(), "the panel renders its own key hints; the bar would be redundant")
+}
+
+// TestSettingsPanel_GroupModeChipFollowsTheLiveList pins the wiring that carries the
+// session-derived gate into the panel. It is an app-level test because neither package can answer
+// it alone: ui.List owns the count and ui/overlay owns the chip.
+func TestSettingsPanel_GroupModeChipFollowsTheLiveList(t *testing.T) {
+	resetSettingsTestState(t)
+	h := accountGroupedHome(t) // two distinct accounts, grouping on
+	// accountGroupedHome sets the LIST's mode, not the config's. The chip needs both: the panel
+	// reads the setting from config and the gate from the list.
+	h.appConfig.GroupMode = config.GroupModeAccount
+	require.True(t, h.list.AccountClusteringVisible(), "the fixture must actually cluster")
+
+	openPanel := func() {
+		_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(",")})
+		require.Equal(t, stateSettings, h.state)
+		require.True(t, h.settingsOverlay.SelectRow("group_mode"))
+	}
+	// Both Escs go through handleKeyPress, not straight to the overlay: home only learns the
+	// panel closed via handleSettingsState's `closed` return. Calling the overlay directly would
+	// leave h.state == stateSettings, so the next ',' is routed INTO the still-open panel and the
+	// overlay is never rebuilt.
+	closePanel := func() {
+		_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyEsc}) // rows pane -> rail
+		_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyEsc}) // rail -> closed
+		require.Nil(t, h.settingsOverlay)
+	}
+
+	openPanel()
+	assert.NotContains(t, xansi.Strip(h.settingsOverlay.Render()), "nothing to cluster",
+		"two clusters are visible, so the row is not inert")
+	closePanel()
+
+	// Collapse to one cluster: the chip must appear on the next open.
+	for _, inst := range h.list.GetInstances() {
+		inst.SetClaudeAccount("work", "", false)
+	}
+	require.False(t, h.list.AccountClusteringVisible())
+
+	openPanel()
+	assert.Contains(t, xansi.Strip(h.settingsOverlay.Render()), "nothing to cluster",
+		"one cluster means the setting is on but doing nothing")
+}
+
+// TestSettingsPanel_GroupModeChipTracksTheListInTheSameFrame pins the refresh in
+// applySettingChange, which the reopen-based test above cannot see.
+//
+// The direction matters, and getting it wrong is why a first draft of this test passed with the
+// refresh deleted. SetGroupMode changes accountGrouped(), which is HALF the gate — so the value
+// the panel holds has to be recomputed, not merely re-read. With two distinct accounts starting
+// in repo mode, the gate is false at construction (not grouped) and true the instant clustering
+// is switched on; a stale false would put "nothing to cluster" on a row that is, in fact,
+// clustering two accounts.
+//
+// The one-account direction is asserted too, but on its own it proves nothing about the refresh:
+// there the gate is false before and after, so a stale value is accidentally correct.
+func TestSettingsPanel_GroupModeChipTracksTheListInTheSameFrame(t *testing.T) {
+	t.Run("two accounts: turning it on must clear the chip", func(t *testing.T) {
+		resetSettingsTestState(t)
+		h := accountGroupedHome(t) // api|work, infra|personal
+		h.appConfig.GroupMode = config.GroupModeRepo
+		h.list.SetGroupMode(config.GroupModeRepo)
+		require.False(t, h.list.AccountClusteringVisible(), "repo mode clusters nothing")
+
+		_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(",")})
+		require.True(t, h.settingsOverlay.SelectRow("group_mode"))
+		_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyRight}) // off -> on
+		require.Equal(t, config.GroupModeAccount, h.appConfig.GetGroupMode())
+		require.True(t, h.list.AccountClusteringVisible(), "two accounts now cluster")
+
+		assert.NotContains(t, xansi.Strip(h.settingsOverlay.Render()), "nothing to cluster",
+			"the panel must recompute the gate, not keep the false it was built with")
+	})
+
+	t.Run("one account: turning it on must show the chip", func(t *testing.T) {
+		resetSettingsTestState(t)
+		h := accountGroupedHome(t)
+		for _, inst := range h.list.GetInstances() {
+			inst.SetClaudeAccount("work", "", false) // collapse to one cluster
+		}
+		h.appConfig.GroupMode = config.GroupModeRepo
+		h.list.SetGroupMode(config.GroupModeRepo)
+
+		_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(",")})
+		require.True(t, h.settingsOverlay.SelectRow("group_mode"))
+		require.NotContains(t, xansi.Strip(h.settingsOverlay.Render()), "nothing to cluster",
+			"off is not inert")
+
+		_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyRight}) // off -> on
+		require.Equal(t, config.GroupModeAccount, h.appConfig.GetGroupMode())
+		assert.Contains(t, xansi.Strip(h.settingsOverlay.Render()), "nothing to cluster",
+			"the chip must appear without reopening the panel")
+	})
+}
+
+// TestSettingsPanel_RemembersTheCategoryAcrossOpens pins spec §7's in-memory rail memory — and
+// that a FIRST open still lands on the default category rather than on All settings, which a
+// zero-valued int would have produced.
+func TestSettingsPanel_RemembersTheCategoryAcrossOpens(t *testing.T) {
+	resetSettingsTestState(t)
+	h := newSettingsTestHome()
+
+	_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(",")})
+	assert.NotEqual(t, 0, h.settingsOverlay.RailIndex(),
+		"a fresh run must not land on All settings (spec §4)")
+	require.True(t, h.settingsOverlay.SelectRow("agent_oom_margin")) // Advanced
+	want := h.settingsOverlay.RailIndex()
+
+	// Two Escs: SelectRow focused the rows pane, and Esc is layered.
+	_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyEsc})
+	require.Equal(t, stateSettings, h.state, "the first esc backs out of the rows pane")
+	_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyEsc})
+	require.Nil(t, h.settingsOverlay)
+
+	_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(",")})
+	assert.Equal(t, want, h.settingsOverlay.RailIndex(), "reopening returns to the last category")
 }

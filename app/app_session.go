@@ -377,8 +377,16 @@ type resumeDoneMsg struct {
 // dismissible modal naming the holder rather than auto-touching another live
 // worktree. The whole diagnosis runs in the goroutine; handleResumeDone only
 // decides the UI.
+//
+// One session is a small overshoot, but r pressed twelve times is the same host load
+// as one "resume all", so it takes the same host-capacity question (#463) — only when
+// it crosses, leaving the key as frictionless as it was for every resume that fits.
+// The question names the session and the capacity and stops there: r has never
+// described what resume does, and the batch dialog is where those semantics are named.
+// Accepting runs this same action off the UI thread behind the same progress row
+// (handleConfirmState re-arms beginAsyncAction with the busy label).
 func (m *home) resumeSelected(selected *session.Instance) tea.Cmd {
-	return m.beginAsyncAction("resuming…", func() tea.Msg {
+	action := func() tea.Msg {
 		err := selected.Resume()
 		if err == nil {
 			return resumeDoneMsg{instance: selected}
@@ -405,7 +413,19 @@ func (m *home) resumeSelected(selected *session.Instance) tea.Cmd {
 			branchName:  wt.GetBranchName(),
 			worktree:    wt,
 		}
-	})
+	}
+	// One label for both paths, so the progress row reads the same whether the resume
+	// was immediate or came through the capacity confirmation — the same anti-drift
+	// reason SetConfirmLabel sits next to the message it labels.
+	const busyLabel = "resuming…"
+	if clause := m.resumeCapNotice(1); clause != "" {
+		cmd := m.confirmAsyncAction(
+			fmt.Sprintf("Resume session '%s'?\n%s", selected.DisplayName(), clause),
+			busyLabel, action)
+		m.confirmationOverlay.SetConfirmLabel("resume")
+		return cmd
+	}
+	return m.beginAsyncAction(busyLabel, action)
 }
 
 // handlePauseDone completes a single pause on the Update loop: it tears down the
@@ -510,8 +530,33 @@ func (m *home) resumeAll() tea.Cmd {
 	if len(paused) == 0 {
 		return m.handleInfoNotice("no paused sessions to resume")
 	}
-	message := fmt.Sprintf("Resume %d paused session%s?", len(paused), plural(len(paused)))
-	return m.resumeInstances(paused, message)
+	return m.resumeInstances(paused, resumeConfirmMessage("paused", len(paused)))
+}
+
+// resumeConfirmMessage is the batch-resume question for n sessions described by kind
+// ("paused" for the whole view, "marked" for a multi-select subset), plus what resume
+// puts back — the confirmation-voice rule in app_feedback.go: ask with the verb, then
+// name what the user cannot see. What the list cannot show is that resume is the
+// inverse of pause: the worktree is materialized again at the same path (with the
+// auto-WIP commit unwound) and the agent comes back.
+//
+// It says "each *removed* worktree", not "each worktree", because two of
+// Instance.Resume's three paths rebuild nothing, and both are reachable from a batch:
+// a direct session has no worktree at all — Pause refuses one, but RecoverLostSession
+// parks it when its pane dies, and PausedInstancesInView takes every Paused row, where
+// ActiveInstancesInView (pause's scope) filters IsDirect out, so the two batch scopes
+// are not mirror images — and a commit-failure pause leaves its worktree in place, so
+// Resume deliberately reuses it rather than re-adding it over the WIP. Reattaching the
+// agent is the half true of every path, so that half carries no qualifier.
+//
+// It says *reattaches* because pause detaches tmux rather than closing it
+// (session.Instance.pause), so the agent process is normally still alive and Resume
+// only restores the PTY; "restarts" would read as losing the conversation and scare
+// the user off a non-destructive action. One literal, shared by both entry points, so
+// resumeAll and resumeMarked cannot drift apart.
+func resumeConfirmMessage(kind string, n int) string {
+	return fmt.Sprintf("Resume %d %s session%s? (rebuilds each removed worktree and reattaches every agent)",
+		n, kind, plural(n))
 }
 
 // resumeInstances resumes an explicit set of (already-paused) sessions behind a
@@ -521,7 +566,16 @@ func (m *home) resumeAll() tea.Cmd {
 // thread (confirmAsyncAction); state is persisted once, on the Update loop, in the
 // batchResumeDoneMsg handler. Resume is non-destructive, so it keeps the default
 // accent border (only kill wears the danger border).
+//
+// A batch that would put the live population past the host-derived budget says so in
+// this same dialog rather than a second one (#463): resume is the only action that
+// grows that population without creating a session, and the confirmation the user
+// already has to answer is where the cost belongs. Computed here, in the shared core,
+// so resumeAll and resumeMarked cannot drift — the reason SetConfirmLabel is here too.
 func (m *home) resumeInstances(insts []*session.Instance, message string) tea.Cmd {
+	if clause := m.resumeCapNotice(len(insts)); clause != "" {
+		message += "\n" + clause
+	}
 	action := func() tea.Msg {
 		var res batchResumeDoneMsg
 		for _, inst := range insts {
@@ -536,7 +590,12 @@ func (m *home) resumeInstances(insts []*session.Instance, message string) tea.Cm
 		return res
 	}
 	label := fmt.Sprintf("resuming %d session%s…", len(insts), plural(len(insts)))
-	return m.confirmAsyncAction(message, label, action)
+	cmd := m.confirmAsyncAction(message, label, action)
+	// The hint names the action rather than saying "confirm" (#399). Set here, in the
+	// shared core, so both entry points get the same label from the same count
+	// (confirmAsyncAction created m.confirmationOverlay synchronously above).
+	m.confirmationOverlay.SetConfirmLabel(fmt.Sprintf("resume %d session%s", len(insts), plural(len(insts))))
+	return cmd
 }
 
 // plural returns the "s" suffix for a count: "" for exactly one, "s" otherwise.
@@ -596,8 +655,39 @@ func (m *home) pauseAll() tea.Cmd {
 	if len(active) == 0 {
 		return m.handleInfoNotice("no active sessions to pause")
 	}
-	message := fmt.Sprintf("Pause %d active session%s?", len(active), plural(len(active)))
-	return m.pauseInstances(active, message)
+	return m.pauseInstances(active, pauseConfirmMessage("active", len(active)))
+}
+
+// pauseConfirmMessage is the batch-pause question for n sessions described by kind
+// ("active" for the whole view, "marked" for a multi-select subset), plus the
+// consequence — the confirmation-voice rule in app_feedback.go: ask with the verb,
+// then name what the user cannot see. Pause stages and commits everything git tracks
+// (Worktree.CommitChanges) and then removes the worktree, so the gitignored files
+// living in it — a local .env, a build cache, downloaded dependencies — go with it,
+// and resume rebuilds the worktree from the branch. The README documents only the
+// carry_files slice of this (those entries are re-seeded on every Setup, resume
+// included); nothing names the general loss, and no undo exists.
+//
+// Unconditional, unlike killDataWarning: a pause that completes removes the worktree,
+// so only the magnitude of the loss varies, and measuring that would mean a
+// per-session `git status --ignored` on the UI thread. The one path that keeps the
+// worktree is a failure — when the auto-WIP commit fails, pause deliberately leaves it
+// on disk rather than destroy the work it exists to protect (session.Instance.pause)
+// and reports the error through the batch summary, so the promise here is the one a
+// successful pause keeps, not a claim the dialog can break silently.
+//
+// It claims deletion rather than "not restored on resume" because carry_files re-seeds
+// its own (gitignored) entries into every fresh worktree, resume included — the
+// deleted copy is still gone, but a blanket "nothing ignored comes back" would be
+// false for those. That cuts against .env as the example, since .env is the archetypal
+// carry_files entry: a user who listed it sees the origin's copy reappear, having lost
+// only the session's edits to it. It stays because the default carry list is just
+// .claude/settings.local.json (config.defaultCarryFiles), so for an unconfigured user
+// — the one this dialog is warning — .env really is gone.
+func pauseConfirmMessage(kind string, n int) string {
+	return fmt.Sprintf("Pause %d %s session%s? (commits any work in progress, then removes "+
+		"each worktree — gitignored files like .env or build caches are deleted for good)",
+		n, kind, plural(n))
 }
 
 // pauseInstances parks an explicit set of (pausable) sessions behind a count
@@ -624,7 +714,12 @@ func (m *home) pauseInstances(insts []*session.Instance, message string) tea.Cmd
 		return res
 	}
 	label := fmt.Sprintf("pausing %d session%s…", len(insts), plural(len(insts)))
-	return m.confirmAsyncAction(message, label, action)
+	cmd := m.confirmAsyncAction(message, label, action)
+	// The hint names the action rather than saying "confirm" (#399). Set here, in the
+	// shared core, so both entry points get the same label from the same count
+	// (confirmAsyncAction created m.confirmationOverlay synchronously above).
+	m.confirmationOverlay.SetConfirmLabel(fmt.Sprintf("pause %d session%s", len(insts), plural(len(insts))))
+	return cmd
 }
 
 // killFailure records one instance that could not be killed during a batch kill,
@@ -757,8 +852,7 @@ func (m *home) pauseMarked() tea.Cmd {
 		return m.handleInfoNotice("no marked sessions to pause")
 	}
 	m.exitVisualMode()
-	message := fmt.Sprintf("Pause %d marked session%s?", len(insts), plural(len(insts)))
-	return m.pauseInstances(insts, message)
+	return m.pauseInstances(insts, pauseConfirmMessage("marked", len(insts)))
 }
 
 // resumeMarked resumes the paused subset of the multi-select-marked sessions.
@@ -774,8 +868,7 @@ func (m *home) resumeMarked() tea.Cmd {
 		return m.handleInfoNotice("no marked sessions to resume")
 	}
 	m.exitVisualMode()
-	message := fmt.Sprintf("Resume %d marked session%s?", len(insts), plural(len(insts)))
-	return m.resumeInstances(insts, message)
+	return m.resumeInstances(insts, resumeConfirmMessage("marked", len(insts)))
 }
 
 // killMarked tears down the killable subset of the multi-select-marked sessions
@@ -1312,15 +1405,9 @@ func (m *home) startNewSession(title, path string, direct bool, program, branch,
 	default:
 		avail := m.appState.GetAccountAvailability()
 		now := time.Now()
-		start := ((m.appState.GetAccountRotation(poolName) % len(members)) + len(members)) % len(members)
-		chosen := start // defensive fallback: the batch gate should have caught all-exhausted
-		for k := 0; k < len(members); k++ {
-			idx := (start + k) % len(members)
-			if config.AccountAvailable(avail[members[idx].Name], now) {
-				chosen = idx
-				break
-			}
-		}
+		// Shared with the accounts overlay's routing preview, so what the preview shows
+		// and what creation does cannot drift.
+		chosen, _ := config.SelectPoolMember(members, avail, m.appState.GetAccountRotation(poolName), now)
 		// Only advance a rotation cursor for a real (multi-member) pool: a 1-member
 		// pool has nothing to rotate, and writing the cursor would add an
 		// account_rotation key for an accounts-configured-but-no-pool user.
@@ -1629,11 +1716,14 @@ func (m *home) confirmKill(inst *session.Instance) tea.Cmd {
 }
 
 // offerCleanupAfterMerge presents a follow-up confirmation to tear down a
-// just-merged session, reusing the kill teardown path and its consequence-first
-// data warning (#384). Its message announces the merge, so it doubles as the
-// merge acknowledgment. Declining leaves the session untouched — its row keeps
-// rendering the merged (purple) PR chip. Returns false when there is no session
-// to offer cleanup for, so the caller can fall back to a plain notice.
+// just-merged session, reusing the kill teardown path and its risk-only data
+// warning (killDataWarning, #384 — a question with a parenthetical that appears
+// only when work is at risk, not a consequence-first dialog; see the
+// confirmation-voice rule above hiddenNeighborNotice). Its message announces the
+// merge, so it doubles as the merge acknowledgment. Declining leaves the session
+// untouched — its row keeps rendering the merged (purple) PR chip. Returns false
+// when there is no session to offer cleanup for, so the caller can fall back to a
+// plain notice.
 func (m *home) offerCleanupAfterMerge(inst *session.Instance, number int) bool {
 	if inst == nil {
 		return false
@@ -1673,28 +1763,6 @@ func (m *home) confirmAction(message string, action tea.Cmd) tea.Cmd {
 	return nil
 }
 
-// soonestResetMember returns the index of the member whose limit resets soonest.
-// Members with a parseable Until sort by that time; indefinite or unparseable
-// sort last; all-indefinite returns 0 (the cursor's natural start).
-func soonestResetMember(members []config.ClaudeAccount, avail map[string]config.AccountAvailability) int {
-	best, bestSet := 0, false
-	var bestT time.Time
-	for i, mem := range members {
-		av := avail[mem.Name]
-		if av.Until == "" {
-			continue
-		}
-		t, err := time.Parse(time.RFC3339, av.Until)
-		if err != nil {
-			continue
-		}
-		if !bestSet || t.Before(bestT) {
-			best, bestT, bestSet = i, t, true
-		}
-	}
-	return best
-}
-
 // resolveSpawnPool returns the pool a plan rotates within: the picker's chosen
 // pool if set, else the route-resolved pool.
 func (m *home) resolveSpawnPool(plan spawnPlan) (string, []config.ClaudeAccount) {
@@ -1721,11 +1789,11 @@ func (m *home) gateAllExhausted(plan spawnPlan) (tea.Cmd, bool) {
 		return nil, false // singleton/empty pool: nothing to skip
 	}
 	avail := m.appState.GetAccountAvailability()
-	now := time.Now()
-	for _, mem := range members {
-		if config.AccountAvailable(avail[mem.Name], now) {
-			return nil, false
-		}
+	// The len(members) < 2 guard above is deliberate and NOT redundant with allLimited:
+	// SelectPoolMember reports allLimited for a singleton pool whose one account is
+	// limited, but a pool of one has nothing to rotate, so it must not raise the confirm.
+	if _, allLimited := config.SelectPoolMember(members, avail, m.appState.GetAccountRotation(poolName), time.Now()); !allLimited {
+		return nil, false
 	}
 	return m.confirmAllExhausted(plan, poolName, members), true
 }
@@ -1736,7 +1804,7 @@ func (m *home) gateAllExhausted(plan spawnPlan) (tea.Cmd, bool) {
 // same rollback contract as confirmOverCap).
 func (m *home) confirmAllExhausted(plan spawnPlan, pool string, members []config.ClaudeAccount) tea.Cmd {
 	avail := m.appState.GetAccountAvailability()
-	soonest := soonestResetMember(members, avail)
+	soonest := config.SoonestResetMember(members, avail)
 	pinned := members[soonest]
 	plan.account = &overlay.AccountSelection{Pool: pool, Member: &pinned}
 	m.pendingExhausted = &plan

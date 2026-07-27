@@ -75,4 +75,26 @@ func TestMerge_MergeablePROpensConfirmation(t *testing.T) {
 
 	assert.Equal(t, stateConfirm, h.state, "an unblocked PR must open the confirmation")
 	require.NotNil(t, h.pendingConfirmAction, "the confirmed merge action must be staged")
+	rendered := flattenOverlay(h.confirmationOverlay.Render())
+	assert.Contains(t, rendered, "Merge PR #42 from 'feat' as a squash merge?")
+	assert.Contains(t, rendered, "Press y to merge PR #42, n or esc to cancel")
+	assert.NotContains(t, rendered, "CI is still running", "passing CI has no caveat")
+}
+
+// Merging while CI is still running is allowed (gh decides), but the dialog must say
+// so — CI state is not on the screen the user is confirming from. The caveat rides in
+// the kill dialog's parenthetical rather than trailing the question as a second
+// sentence (#399 item 4).
+func TestMerge_PendingCIWarnsInParenthetical(t *testing.T) {
+	h := newCreateFormHome(t)
+	inst := newBranchInstance(t, "feat", "zvi/feat")
+	inst.SetStatus(session.Running)
+	inst.SetPRStatus(&git.PRStatus{HasPR: true, Number: 7, State: "OPEN", CI: git.CIPending, Mergeable: "MERGEABLE"})
+	h.list.AddInstance(inst)
+
+	pressKey(h, 'm')
+
+	require.Equal(t, stateConfirm, h.state)
+	assert.Contains(t, flattenOverlay(h.confirmationOverlay.Render()),
+		"Merge PR #7 from 'feat' as a squash merge? (CI is still running)")
 }

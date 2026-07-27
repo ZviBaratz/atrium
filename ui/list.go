@@ -82,11 +82,10 @@ func distinctCount(items []*session.Instance, key func(*session.Instance) string
 // stay in one visual cluster; the row itself still shows the concrete member.
 // Account is derived from the repo's remote/path, so every session in a repo
 // shares it, which is what lets clusterByAccount move whole repo blocks intact.
+// The rule itself lives on session.Instance (mirroring GroupKey/repoKey) so this
+// package and the persisted cluster order cannot disagree about a session's key.
 func accountKey(i *session.Instance) string {
-	if p := i.ClaudeAccountPool(); p != "" {
-		return p
-	}
-	return i.ClaudeAccountName()
+	return i.AccountClusterKey()
 }
 
 // distinctAccountCount returns how many distinct Claude accounts are present across
@@ -1149,6 +1148,21 @@ func (l *List) AccountOrder() []string {
 // when explaining a refused move.
 func (l *List) AccountGrouped() bool {
 	return l.accountGrouped()
+}
+
+// AccountClusteringVisible reports whether the list currently renders account clusters:
+// account grouping must be on AND more than one distinct cluster key must be present across
+// the live items. With one key, "account" mode renders exactly like repo mode.
+//
+// Exposed so the settings panel can dim its Account clustering row when the setting is on but
+// doing nothing. The rule lives here, and list_render.go's own gate calls this method, so the
+// two cannot disagree — the drift accountKey's comment warns about.
+//
+// Note this is NOT AccountReorderEnabled's count. That one counts *clusters* (repo-block
+// anchors), because a repo whose sessions span accounts still renders as one cluster; this one
+// counts distinct cluster keys, which is what the divider and tinting gate on.
+func (l *List) AccountClusteringVisible() bool {
+	return l.accountGrouped() && l.distinctAccountCount() > 1
 }
 
 // AccountReorderEnabled reports whether [ / ] can move an account cluster: there must be

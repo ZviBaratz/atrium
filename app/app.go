@@ -300,6 +300,13 @@ type home struct {
 	appConfig *config.Config
 	// appState stores persistent application state like seen help screens
 	appState config.AppState
+	// accountSync carries what the startup re-stamp pass changed (#470) from the
+	// IO-free constructor to flushAccountStamps, which persists it and zeroes this.
+	accountSync accountStampSync
+	// pendingAccountSync accumulates what the accounts panel's edits re-stamped, until
+	// it closes and the list they rearranged is visible again. Accumulated rather than
+	// rendered per edit, so one visit's several renames become one honest notice.
+	pendingAccountSync accountStampSync
 
 	// -- State --
 
@@ -447,6 +454,15 @@ type home struct {
 	// settingsOverlay is the in-TUI configuration panel. It edits appConfig in
 	// place; applySettingChange persists and live-applies each change.
 	settingsOverlay *overlay.SettingsOverlay
+
+	// settingsRail remembers which settings category was current, so reopening the panel
+	// returns to it within a run. The overlay is reconstructed on every ',', so the memory has
+	// to live out here. Deliberately not persisted to state.json (spec §7).
+	//
+	// It is a *int because a plain int's zero value is 0 — the All settings entry, the one rail
+	// entry spec §4 explicitly excludes as the landing. nil means "not opened yet this run", so
+	// the first ',' gets railDefaultIndex().
+	settingsRail *int
 	// accountsOverlay is the in-TUI Claude/GitHub/Antigravity account manager
 	// (stateAccounts). It edits appConfig in place; handleAccountsState persists each change.
 	accountsOverlay *overlay.AccountsOverlay
@@ -542,7 +558,13 @@ func newHome(ctx context.Context, program string, autoYes bool, version, binName
 		return nil, fmt.Errorf("failed to load instances: %w", err)
 	}
 
-	return assembleHome(ctx, program, autoYes, version, binName, appConfig, appState, storage, instances), nil
+	h := assembleHome(ctx, program, autoYes, version, binName, appConfig, appState, storage, instances)
+	// Write back any account identities assembleHome healed (#470). Doing it here
+	// keeps that constructor IO-free, and persisting eagerly is what lets `atrium ls`
+	// and the daemon — separate processes that read the stored rows raw — agree with
+	// what the list shows.
+	h.flushAccountStamps()
+	return h, nil
 }
 
 func (m *home) Init() tea.Cmd {

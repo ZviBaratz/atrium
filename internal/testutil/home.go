@@ -37,5 +37,14 @@ func SandboxHomeMain(m *testing.M) int {
 	if err := os.Unsetenv("CLAUDE_CONFIG_DIR"); err != nil {
 		panic("testutil: failed to unset CLAUDE_CONFIG_DIR: " + err.Error())
 	}
+	// XDG_CONFIG_HOME outranks HOME the same way for git: it resolves its global
+	// excludes file from $XDG_CONFIG_HOME/git/ignore *before* $HOME/.config/git/ignore.
+	// Tests that assert on ignore state (session/git) would otherwise read the
+	// developer's real global gitignore, so a host that globally ignores a name a
+	// test uses — node_modules is the obvious one — fails it on correct code.
+	// Unsetting it lets the lookup fall through to the sandboxed HOME.
+	if err := os.Unsetenv("XDG_CONFIG_HOME"); err != nil {
+		panic("testutil: failed to unset XDG_CONFIG_HOME: " + err.Error())
+	}
 	return m.Run()
 }

@@ -265,7 +265,7 @@ in-app keymap and this section ever drift apart, so it stays complete.
 |-----|--------|
 | `?` | toggle this cheatsheet |
 | `,` | settings |
-| `@` | accounts (Claude / GitHub) |
+| `@` | accounts (Claude / GitHub / Antigravity) |
 | `L` | command log — the tmux / git / gh commands Atrium runs |
 | `ctrl-l` | force a full redraw of the screen |
 | `q` | quit |
@@ -523,13 +523,70 @@ into each newly created session worktree:
 ```
 
 The default is `[".claude/settings.local.json"]`; set an empty list (`[]`) to
-opt out. Entries must be gitignored in the project — anything else is skipped
-with a warning, because pausing a session commits its worktree and a
-non-ignored file would leak into the session branch.
+opt out. Entries must be gitignored — anything else is skipped with a warning,
+because pausing a session commits its worktree and a non-ignored file would leak
+into the session branch.
+
+"Gitignored" is decided **in the session's worktree**, which is what pause stages —
+not in your own checkout. A `.gitignore` edit you have not committed never reaches
+the worktree, so an entry covered only by such an edit is skipped. Two ways to fix
+it: commit the rule on the branch the session starts from, or add it to
+`.git/info/exclude`, which every worktree of the repo shares and which keeps the
+rule out of the branch entirely. The same applies to [linked paths](#linked-paths).
+
+Skips are recorded in the log rather than shown in the TUI, so a missing carried
+file is quiet — `atrium --verbose` prints the log's path on exit.
 
 Carried files are re-seeded from the original checkout whenever the worktree
 is created, including on resume after a pause — edits made to them inside a
 session do not survive a pause/resume cycle.
+
+#### Linked paths
+
+Some gitignored paths should not be copied at all. An installed dependency tree
+like `node_modules` is large and slow to duplicate per session, and the tooling
+resolves through a symlink perfectly well — so `link_paths` names repo-relative
+paths that Atrium **symlinks** into each new worktree, pointing at the original
+checkout's copy:
+
+```json
+{
+  "link_paths": ["node_modules", "container/agent-runner/node_modules"]
+}
+```
+
+The default is `[]` (off). The link target is absolute, so it stays valid however
+deep the worktree sits under the data dir, and a path that does not exist in the
+original checkout yet (no `npm install` run) is skipped silently.
+
+Entries must be gitignored, and — unlike `carry_files` — the pattern must not end
+in a slash:
+
+```gitignore
+node_modules      # ignores the directory *and* the symlink — use this
+node_modules/     # directories only: the symlink would NOT be ignored
+```
+
+Git stores a symlink as a file, so a directory-only pattern leaves the link
+un-ignored, which would commit it into the session branch on pause and show it in
+the session diff. Atrium checks this the way git will see it in the worktree and
+skips the entry with a warning rather than creating a link that leaks. As with
+[carried files](#carried-files), the rule has to reach that worktree — committed on
+the branch the session starts from, or in `.git/info/exclude`.
+
+Links are re-created whenever the worktree is materialized, including on resume
+after a pause. On Windows, creating a symlink requires Developer Mode or an
+elevated process; without it the entry is skipped with a warning and the session
+still starts.
+
+Unlike a carried file, a linked path is **shared and writable, not a per-session
+copy** — it is the original checkout's tree under another name. Writes through it
+land in your own working copy and are visible to every other session at once, so
+an agent that runs `npm install` (or `rm -rf node_modules`) inside one session
+changes the dependency tree for all of them. That is exactly why linking beats
+copying for a large tree, but it is the one place a session is deliberately not
+isolated: link paths whose contents you are content to share, and prefer
+`carry_files` when a session needs its own copy.
 
 #### Claude accounts
 
@@ -566,10 +623,25 @@ list to your config file:
 - The **first account with no `remote_matches` and no `path_matches`** is the
   catch-all default, used when no route matches. It is optional: with no such
   account, non-matching sessions inherit the current environment.
+- Order is **match priority**, not just display order: press `J` / `K` (or
+  `shift+↑` / `shift+↓`) in the `@` accounts overlay to move the row under the
+  cursor up or down one slot — the cursor follows the row, and a press at either
+  end, or on a tab with fewer than two accounts, does nothing. This is how you
+  change which account is the catch-all, or break a tie between two accounts
+  whose rules both match; it works the same on all three tabs (Claude, GitHub,
+  Antigravity). The `default` / `catch-all (unreachable)` / `routed` badges
+  update live as rows move, and the new order is saved to `config.json`
+  immediately.
 - The resolved account is **pinned at session creation** and shown as a badge in
-  the session list (dim for the default account, accented for a routed one). It
-  is injected once at launch and is not re-resolved on restart or `--continue`;
-  editing `claude_accounts` affects only newly created sessions.
+  the session list (dim for the default account, accented for a routed one). The
+  `CLAUDE_CONFIG_DIR` it injects is set once at launch and is never re-resolved —
+  no config edit can move a running session to a different login, on restart or
+  `--continue`. The **badge and the account cluster** are re-derived from that
+  directory, at launch and whenever the `@` panel commits an edit, so renaming an
+  account (or moving it into a pool) adopts its existing sessions instead of
+  leaving them grouped under a name the config no longer has. Deleting an account
+  from the config leaves its sessions' badges as they were — the last known truth
+  about the login they run under.
 - When more than one account is configured, the new-session form shows an
   **Account** picker, preset to the auto-routed account, to override the choice.
 - Omitting `claude_accounts` disables the feature entirely (no badge, no
@@ -604,6 +676,15 @@ instead of pinning every session in a repo to one account:
   keeps a rotation cursor that advances by one every time a session is created,
   so an idle session and one mid-task both count as "one turn" — the cursor
   never skips back to whichever member looks less busy.
+- Adjacent members of one pool render as a bracketed group in the `@` overlay's
+  Claude tab (`┌`/`│`/`└` in a dim gutter column to the row's left); the
+  per-row `pool:<name>` chip stays either way. Brackets are per contiguous
+  run: a pool split into two clusters gets two brackets *and* the split
+  note, since the trigger is non-contiguity, not "no brackets" — `pool
+  '<name>' is split — J/K to group its members`. One consequence of
+  reordering: a pool's rotation cursor is an index into its members in config
+  order, so reordering members *within* a pool can repeat or skip one member
+  once — harmless for round-robin.
 - An account can be flagged rate-limited by hand — Atrium has no way to read
   Anthropic's own limits — from the `@` accounts overlay: press `l` on a Claude
   account to toggle it limited/available. Rotation skips a limited member and
@@ -615,11 +696,29 @@ instead of pinning every session in a repo to one account:
   member (shown indented under it) to pin that account for this one session —
   which bypasses availability, so it works even on a flagged member.
 - If **every** member of the routed pool is flagged limited, creating a session
-  shows a confirm ("all `<pool>` accounts are rate-limited … create anyway on
-  `<member>`?") instead of silently spawning on a limited account. Declining
-  leaves the draft in place and creates nothing; accepting pins the member whose
-  limit resets soonest — which, while flags are indefinite-only, is the first
-  pool member.
+  from the new-session form shows a confirm ("all `<pool>` accounts are
+  rate-limited … create anyway on `<member>`?") instead of silently spawning on
+  a limited account. Declining leaves the draft in place and creates nothing;
+  accepting pins the member whose limit resets soonest — which, while flags are
+  indefinite-only, is the first pool member. Smart auto-dispatch skips this
+  all-exhausted gate, so a fully-limited pool can still spawn silently there
+  (#483).
+- Press `t` in the `@` accounts overlay to preview where an input (remote URL
+  and/or path) would route right now, without creating anything. When the
+  matched account belongs to a pool, the `Claude →` line names the member a
+  session would actually take, and a block beneath it (`pool '<name>' ⇄`)
+  lists the pool's members with their available/limited chip, marking the
+  one it picked `← next` — and, when getting there meant skipping a limited
+  member, naming why, e.g. `work-1 limited → rotating to work-2`. If every
+  member is limited, the `Claude →` line instead shows
+  `⚠ all '<pool>' accounts limited`, and the block marks the member that
+  accepting the create-form's confirm would pin, with `← on confirm` — the
+  one whose limit resets soonest, which, while flags are indefinite-only, is
+  the first pool member. The preview only reads availability and the
+  rotation cursor; it never advances it, so the same input can preview a
+  different member after a real session moves the cursor. A pool with fewer
+  than two members — including no pool at all — previews unchanged, with no
+  pool block.
 - **Setting up a second account:** each pool member needs its own
   `CLAUDE_CONFIG_DIR` with its own login. Point Claude at a fresh directory and
   log in once — `CLAUDE_CONFIG_DIR=~/.claude-work2 claude`, then run `/login`
@@ -629,6 +728,11 @@ instead of pinning every session in a repo to one account:
   session lands on the one account regardless of the cursor). `atrium doctor`
   flags this — a pool with two members sharing a `config_dir` prints a warning
   naming both.
+- **Renaming a pool** means retyping the same `pool` name on each of its members
+  (a pool is just that shared string — there is no pool entity to rename). Open
+  sessions follow the rename, and the cluster keeps the position `[` / `]` gave it.
+  What does not follow is state keyed by the *old* name: `atrium doctor` reports
+  any leftover rotation cursor or cluster slot, all of them harmless.
 
 #### GitHub CLI accounts
 
@@ -723,49 +827,55 @@ deprecated `nerd_font`, which `glyph_set` supersedes. A test
 (`config.TestReadmeDocumentsEveryConfigField`) fails the build if a new field is
 added without a row here.
 
-| Key | Type | Default | Notes |
-|-----|------|---------|-------|
-| `default_program` | string | `"claude"` | launch command when no matching profile ([Profiles](#profiles)) |
-| `auto_yes` | bool | `false` | auto-accept all prompts (experimental; the `-y` flag) |
-| `daemon_poll_interval` | int | `1000` | autoyes daemon poll interval, milliseconds |
-| `branch_prefix` | string | `"<user>/"` | prefix for created git branches |
-| `profiles` | array | detected | named program configs ([Profiles](#profiles)) |
-| `tmux_config_override` | string | `""` | path to a custom tmux config for sessions |
-| `auto_attach` | bool | `true` | attach to a new session as soon as it starts ([Auto-attach](#auto-attach)) |
-| `show_release_notes_after_update` | bool | `true` | "what's new" overlay once after an update |
-| `kill_double_tap_confirm` | bool | `true` | a second `ctrl-x` confirms the kill dialog |
-| `theme` | string | `"tokyo-night"` | color palette + border style |
-| `splash` | string | random | empty-state splash pattern (`""`/`"random"` = fresh each launch) |
-| `glyph_set` | string | `"plain"` | icon fidelity rung: `nerd` (vendor Nerd-Font icons, needs a patched font), `plain` (Unicode that renders on any font — the default), `ascii` (7-bit floor for terminals where even plain Unicode shows tofu) |
-| `nerd_font` | bool | `false` | *deprecated* — superseded by `glyph_set`; still read for back-compat (`true` → `glyph_set: nerd` when `glyph_set` is unset) |
-| `session_context_bar` | bool | `true` | thin tmux status line inside attached sessions |
-| `hint_bar` | bool | `true` | always-on bottom key-hint bar |
-| `os_chrome` | bool | `true` | fleet state in the terminal title + OSC 9;4 taskbar progress |
-| `record_prompt_history` | bool | `true` | remember submitted prompts for reuse in the create form and quick-send |
-| `mouse` | bool | `true` | mouse capture (clickable rows/tabs/hint bar, wheel, divider drag); `false` frees native select-to-copy |
-| `max_sessions` | int | auto (½ CPU threads) | concurrent-session cap. Unset = host-aware soft cap that warns past it; `N` = hard cap; `0` = unlimited (no warning) |
-| `agent_oom_margin` | int | `on (300)` | Linux only: raise each agent's `oom_score_adj` this far above the shared tmux server's so a kernel OOM kill sheds one recoverable session, not the server (every session). Unset = on (default margin); `N` = margin; `0` = off |
-| `trust_worktrees_root` | bool | `false` | pre-accept Claude's workspace-trust for the worktrees root |
-| `carry_files` | array | `[".claude/settings.local.json"]` | gitignored files copied into each worktree ([Carried files](#carried-files)) |
-| `pr_create_draft` | bool | `true` | `c` opens a draft PR |
-| `update_base_on_create` | bool | `true` | branch off the freshest remote base tip |
-| `fast_forward_local_base` | bool | `false` | also fast-forward the local base branch on create |
-| `claude_accounts` | array | `[]` | per-session `CLAUDE_CONFIG_DIR` routing ([Claude accounts](#claude-accounts)) |
-| `gh_accounts` | array | `[]` | per-session `GH_CONFIG_DIR` routing ([GitHub CLI accounts](#github-cli-accounts)) |
-| `agy_accounts` | array | `[]` | per-session `agy` config directory routing via bwrap ([Antigravity accounts](#antigravity-accounts)) |
-| `auto_update` | string | `"notify"` | startup update behavior: `notify` / `auto` / `off` ([Auto-update](#auto-update)) |
-| `project_search_roots` | array | `["~"]` | directories the background repo scan walks for the project picker |
-| `project_search_depth` | int | `3` | levels below each root the scan descends (`0`/negative disables it) |
-| `model_indicator` | string | `"on"` | per-session model chip: `on` / `off` |
-| `permission_indicator` | string | `"on"` | per-session permission-mode chip: `on` / `off` |
-| `effort_indicator` | string | `"on"` | per-session reasoning-effort chip: `on` / `off` |
-| `session_sort` | string | `"creation"` | within-group order: `creation` / `status` |
-| `group_mode` | string | `"repo"` | list grouping: `repo` / `account` |
-| `smart_dispatch_auto` | bool | `false` | let a confident `i` match create the session without the form |
-| `notifications` | string | `"off"` | background-session signal: `off` / `bell` / `desktop` / `osc` (SSH-friendly OSC 9) ([Notifications](#notifications)) |
-| `notifications_finished` | string | `"same"` | quieter rung for a *finished turn* only, so a blocked session is never out-shouted: `same` / `off` / `bell` ([Notifications](#notifications)) |
-| `notify_command` | string | built-in | shell command for `desktop` notifications ([Notifications](#notifications)) |
-| `notify_when_focused` | bool | `false` | keep notifying while Atrium's terminal is focused; `false` stays silent while you're watching ([Notifications](#notifications)) |
+The panel groups these keys into ten categories — Sessions, Worktrees & git,
+Appearance, Session list, Notifications, Automation, Input, Projects, Updates, and
+Advanced — shown in the Category column below. The five keys with no panel row carry
+`—` instead.
+
+| Key | Category | Type | Default | Notes |
+|-----|----------|------|---------|-------|
+| `default_program` | Sessions | string | `"claude"` | launch command when no matching profile ([Profiles](#profiles)) |
+| `auto_yes` | Automation | bool | `false` | auto-accept all prompts (experimental; the `-y` flag) |
+| `daemon_poll_interval` | Automation | int | `1000` | autoyes daemon poll interval, milliseconds |
+| `branch_prefix` | Worktrees & git | string | `"<user>/"` | prefix for created git branches |
+| `profiles` | — | array | detected | named program configs ([Profiles](#profiles)) |
+| `tmux_config_override` | Advanced | string | `""` | path to a custom tmux config for sessions |
+| `auto_attach` | Sessions | bool | `true` | attach to a new session as soon as it starts ([Auto-attach](#auto-attach)) |
+| `show_release_notes_after_update` | Updates | bool | `true` | "what's new" overlay once after an update |
+| `kill_double_tap_confirm` | Input | bool | `true` | a second `ctrl-x` confirms the kill dialog |
+| `theme` | Appearance | string | `"tokyo-night"` | color palette + border style |
+| `splash` | Appearance | string | random | empty-state splash pattern (`""`/`"random"` = fresh each launch) |
+| `glyph_set` | Appearance | string | `"plain"` | icon fidelity rung: `nerd` (vendor Nerd-Font icons, needs a patched font), `plain` (Unicode that renders on any font — the default), `ascii` (7-bit floor for terminals where even plain Unicode shows tofu) |
+| `nerd_font` | — | bool | `false` | *deprecated* — superseded by `glyph_set`; still read for back-compat (`true` → `glyph_set: nerd` when `glyph_set` is unset) |
+| `session_context_bar` | Sessions | bool | `true` | thin tmux status line inside attached sessions |
+| `hint_bar` | Appearance | bool | `true` | always-on bottom key-hint bar |
+| `os_chrome` | Appearance | bool | `true` | fleet state in the terminal title + OSC 9;4 taskbar progress |
+| `record_prompt_history` | Input | bool | `true` | remember submitted prompts for reuse in the create form and quick-send |
+| `mouse` | Input | bool | `true` | mouse capture (clickable rows/tabs/hint bar, wheel, divider drag); `false` frees native select-to-copy |
+| `max_sessions` | Sessions | int | auto (½ CPU threads) | session cap. Unset = host-aware soft cap on *live* sessions, warning once when a create or a resume crosses it; `N` = hard cap on *every* session, paused included, refused when creating; `0` = unlimited (no warning) |
+| `agent_oom_margin` | Advanced | int | `on (300)` | Linux only: raise each agent's `oom_score_adj` this far above the shared tmux server's so a kernel OOM kill sheds one recoverable session, not the server (every session). Unset = on (default margin); `N` = margin; `0` = off |
+| `trust_worktrees_root` | Automation | bool | `false` | pre-accept Claude's workspace-trust for the worktrees root |
+| `carry_files` | Worktrees & git | array | `[".claude/settings.local.json"]` | gitignored files copied into each worktree ([Carried files](#carried-files)) |
+| `link_paths` | Worktrees & git | array | `[]` | gitignored paths symlinked into each worktree, e.g. `node_modules` ([Linked paths](#linked-paths)) |
+| `pr_create_draft` | Worktrees & git | bool | `true` | `c` opens a draft PR |
+| `update_base_on_create` | Worktrees & git | bool | `true` | branch off the freshest remote base tip |
+| `fast_forward_local_base` | Worktrees & git | bool | `false` | also fast-forward the local base branch on create |
+| `claude_accounts` | — | array | `[]` | per-session `CLAUDE_CONFIG_DIR` routing ([Claude accounts](#claude-accounts)) |
+| `gh_accounts` | — | array | `[]` | per-session `GH_CONFIG_DIR` routing ([GitHub CLI accounts](#github-cli-accounts)) |
+| `agy_accounts` | — | array | `[]` | per-session `agy` config directory routing via bwrap ([Antigravity accounts](#antigravity-accounts)) |
+| `auto_update` | Updates | string | `"notify"` | startup update behavior: `notify` / `auto` / `off` ([Auto-update](#auto-update)) |
+| `project_search_roots` | Projects | array | `["~"]` | directories the background repo scan walks for the project picker |
+| `project_search_depth` | Projects | int | `3` | levels below each root the scan descends (`0`/negative disables it) |
+| `model_indicator` | Session list | string | `"on"` | per-session model chip: `on` / `off` |
+| `permission_indicator` | Session list | string | `"on"` | per-session permission-mode chip: `on` / `off` |
+| `effort_indicator` | Session list | string | `"on"` | per-session reasoning-effort chip: `on` / `off` |
+| `session_sort` | Session list | string | `"creation"` | within-group order: `creation` / `status` |
+| `group_mode` | Session list | string | `"repo"` | list grouping: `repo` / `account` |
+| `smart_dispatch_auto` | Automation | bool | `false` | let a confident `i` match create the session without the form |
+| `notifications` | Notifications | string | `"off"` | background-session signal: `off` / `bell` / `desktop` / `osc` (SSH-friendly OSC 9) ([Notifications](#notifications)) |
+| `notifications_finished` | Notifications | string | `"same"` | quieter rung for a *finished turn* only, so a blocked session is never out-shouted: `same` / `off` / `bell` ([Notifications](#notifications)) |
+| `notify_command` | Notifications | string | built-in | shell command for `desktop` notifications ([Notifications](#notifications)) |
+| `notify_when_focused` | Notifications | bool | `false` | keep notifying while Atrium's terminal is focused; `false` stays silent while you're watching ([Notifications](#notifications)) |
 
 ### FAQs
 

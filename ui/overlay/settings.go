@@ -1,10 +1,6 @@
 package overlay
 
 import (
-	"fmt"
-	"slices"
-	"sort"
-	"strconv"
 	"strings"
 
 	"github.com/ZviBaratz/atrium/config"
@@ -12,11 +8,11 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	xansi "github.com/charmbracelet/x/ansi"
 )
 
 // settingKind selects how a settings row is displayed and edited: bools toggle
-// in place, enums cycle with ←/→, ints and texts open an inline line editor.
+// in place, enums cycle with ←/→, ints and texts open an inline line editor, and
+// read-only rows display a resolved fact with no editor at all.
 type settingKind int
 
 const (
@@ -24,644 +20,168 @@ const (
 	kindEnum
 	kindInt
 	kindText
+	// kindReadOnly is a display-only row: it has no set, no reset, and no options,
+	// and every edit key is a no-op on it. Used for the resolved config.json path
+	// (spec §4, Advanced).
+	kindReadOnly
 )
 
 // minPollIntervalMs is the floor for the daemon poll interval; anything lower
 // would have the daemon hammering tmux capture-pane in a hot loop.
 const minPollIntervalMs = 100
 
-// Vertical chrome around the settings body that is neither body nor footer:
+// settingsVChrome is the vertical chrome around the panes and the help pane:
 // border (2) + Padding(1,2) verticals (2) + title (1) + blank-after-title (1)
-// + blank-before-footer (1). Used to size the body window against the terminal
-// height so the box (with its now variable-height footer) never overflows.
+// + hint (1).
+//
+// The pane/help separator is deliberately NOT counted here — it is counted with the help
+// pane (helpBlockHeight), because it is only drawn when there is a help pane to separate.
 const settingsVChrome = 7
 
-// settingsMinBody is the minimum number of body rows kept visible, which keeps
-// the cursor row on screen; it is also the floor the wrapped-description cap
-// reserves for the body on short terminals.
+// settingsMinBody is the minimum number of pane rows kept visible, which keeps the cursor
+// row on screen. On a terminal too short for the full layout the help pane sheds lines
+// down to zero before this floor is touched — the row list is what the panel is for.
 const settingsMinBody = 3
 
-// settingRow declares one editable config field. The panel is driven entirely
-// by this schema, so exposing a new Config field is a matter of appending a
-// row in newSettingRows — the navigation, editing, and rendering are generic.
-//
-// Rows are presentational + value plumbing only: set mutates the Config (with
-// validation), but persisting to disk and live-applying side effects (theme
-// repaint, tmux conf re-render) are the home model's job, keyed off the row's
-// key (see app.applySettingChange).
-type settingRow struct {
-	key         string // stable identifier home switches on for live-apply
-	section     string // "General" | "Appearance" | "Behavior"
-	label       string
-	kind        settingKind
-	description string // one-line help shown while the row is selected
-	applyNote   string // "" | "affects new sessions" | "applies on restart"
+// helpPaneLines is the help pane's height whenever the terminal can afford it (spec §10).
+// Fixed height is the entire point: the old footer grew with the help text and stole rows
+// from the list, so selecting Account clustering at 80x24 left 8 visible rows while its
+// help took 8 lines (D5).
+const helpPaneLines = 3
 
-	get func(c *config.Config) string // display value
-	// editGet returns the raw value to prefill the inline editor with; nil
-	// means use get. Needed where display and raw differ (e.g. "unlimited").
-	editGet func(c *config.Config) string
-	set     func(c *config.Config, v string) error
-	options func(c *config.Config) []string // enum rows only
-}
-
-// boolRow builds a kindBool row over a getter and a setter; get displays
-// "on"/"off" and set accepts the same strings (the toggle handler flips them).
-func boolRow(key, section, label, description, applyNote string, get func(c *config.Config) bool, set func(c *config.Config, v bool)) settingRow {
-	return settingRow{
-		key: key, section: section, label: label, kind: kindBool,
-		description: description, applyNote: applyNote,
-		get: func(c *config.Config) string {
-			if get(c) {
-				return "on"
-			}
-			return "off"
-		},
-		set: func(c *config.Config, v string) error {
-			set(c, v == "on")
-			return nil
-		},
-	}
-}
-
-// newSettingRows declares the panel contents in display order. Section headers
-// are derived at render time from consecutive rows sharing a section.
-func newSettingRows(cfg *config.Config) []settingRow {
-	// Captured at panel open: a hand-edited config may hold a raw command in
-	// default_program rather than a profile name (GetProgram passes it through
-	// as-is). The enum's options must keep offering that original value even
-	// after cycling overwrites it in the live config — otherwise the first
-	// ←/→/enter press would persist a profile name over it and the raw command
-	// would be irrecoverable.
-	rawDefaultProgram := cfg.DefaultProgram
-
-	return []settingRow{
-		{
-			key: "default_program", section: "General", label: "Default program", kind: kindEnum,
-			description: "Agent launched in new sessions.",
-			get:         func(c *config.Config) string { return c.DefaultProgram },
-			set: func(c *config.Config, v string) error {
-				c.DefaultProgram = v
-				return nil
-			},
-			// Walk the declared profile order, not GetProfiles(): that helper
-			// reorders the default first, which would make cycling ping-pong
-			// between the first two profiles and never reach the rest.
-			options: func(c *config.Config) []string {
-				if len(c.Profiles) == 0 {
-					return []string{c.DefaultProgram}
-				}
-				names := make([]string, len(c.Profiles))
-				for i, p := range c.Profiles {
-					names[i] = p.Name
-				}
-				// Keep the captured raw value (see newSettingRows) as a cycle
-				// option so touching the row can never silently destroy it —
-				// cycling must always be able to return.
-				if !slices.Contains(names, rawDefaultProgram) {
-					names = append([]string{rawDefaultProgram}, names...)
-				}
-				return names
-			},
-		},
-		{
-			key: "branch_prefix", section: "General", label: "Branch prefix", kind: kindText,
-			description: "Prefix for new session branches.", applyNote: "affects new sessions",
-			get: func(c *config.Config) string { return c.BranchPrefix },
-			set: func(c *config.Config, v string) error {
-				c.BranchPrefix = strings.TrimSpace(v)
-				return nil
-			},
-		},
-		{
-			key: "max_sessions", section: "General", label: "Max sessions", kind: kindInt,
-			description: "Concurrent-session cap. Empty = auto (host-derived, warns past it); 0 = unlimited; N = hard cap.",
-			get: func(c *config.Config) string {
-				switch {
-				case c.MaxSessions == nil:
-					return fmt.Sprintf("auto (%d)", config.DefaultSessionCap())
-				case *c.MaxSessions < 1:
-					return "unlimited"
-				default:
-					return strconv.Itoa(*c.MaxSessions)
-				}
-			},
-			editGet: func(c *config.Config) string {
-				switch {
-				case c.MaxSessions == nil:
-					return "" // empty selects the host-derived auto default
-				case *c.MaxSessions < 1:
-					return "0" // explicit unlimited edits as 0
-				default:
-					return strconv.Itoa(*c.MaxSessions)
-				}
-			},
-			set: func(c *config.Config, v string) error {
-				v = strings.TrimSpace(v)
-				if v == "" {
-					c.MaxSessions = nil // auto (host-derived)
-					return nil
-				}
-				n, err := strconv.Atoi(v)
-				if err != nil || n < 0 {
-					return fmt.Errorf("max sessions must be a non-negative number (0 = unlimited, empty = auto)")
-				}
-				c.MaxSessions = &n // 0 = explicit unlimited; positive = hard cap
-				return nil
-			},
-		},
-		{
-			key: "agent_oom_margin", section: "General", label: "Agent OOM margin", kind: kindInt,
-			description: "Linux only: raise each agent's oom_score_adj this far above the tmux server so a kill sheds one session, not all. Empty = on; 0 = off; N = margin.",
-			get: func(c *config.Config) string {
-				switch {
-				case c.AgentOOMMargin == nil:
-					return fmt.Sprintf("on (%d)", config.DefaultOOMMargin())
-				case *c.AgentOOMMargin < 1:
-					return "off"
-				default:
-					return strconv.Itoa(*c.AgentOOMMargin)
-				}
-			},
-			editGet: func(c *config.Config) string {
-				switch {
-				case c.AgentOOMMargin == nil:
-					return "" // empty selects the default margin (on)
-				case *c.AgentOOMMargin < 1:
-					return "0" // explicit disabled edits as 0
-				default:
-					return strconv.Itoa(*c.AgentOOMMargin)
-				}
-			},
-			set: func(c *config.Config, v string) error {
-				v = strings.TrimSpace(v)
-				if v == "" {
-					c.AgentOOMMargin = nil // default margin (on)
-					return nil
-				}
-				n, err := strconv.Atoi(v)
-				if err != nil || n < 0 {
-					return fmt.Errorf("agent OOM margin must be a non-negative number (0 = off, empty = on)")
-				}
-				c.AgentOOMMargin = &n // 0 = explicit off; positive = margin
-				return nil
-			},
-		},
-		{
-			key: "theme", section: "Appearance", label: "Theme", kind: kindEnum,
-			description: "UI color palette and border style.",
-			get: func(c *config.Config) string {
-				if c.Theme == "" {
-					return theme.DefaultThemeName
-				}
-				return c.Theme
-			},
-			set: func(c *config.Config, v string) error {
-				c.Theme = v
-				return nil
-			},
-			options: func(c *config.Config) []string {
-				names := theme.Names()
-				sort.Strings(names)
-				return names
-			},
-		},
-		{
-			key: "splash", section: "Appearance", label: "Splash", kind: kindEnum,
-			description: "Empty-state splash pattern; random picks one each launch.",
-			get:         func(c *config.Config) string { return c.GetSplash() },
-			set: func(c *config.Config, v string) error {
-				c.Splash = v
-				return nil
-			},
-			options: func(c *config.Config) []string {
-				return append([]string{config.SplashRandom}, config.SplashVariants()...)
-			},
-		},
-		{
-			key: "glyph_set", section: "Appearance", label: "Glyph set", kind: kindEnum,
-			description: "Icon fidelity: nerd = vendor Nerd-Font icons (needs a patched font), plain = Unicode that renders on any font (the default), ascii = a 7-bit floor for terminals where even plain Unicode shows tofu.",
-			get:         func(c *config.Config) string { return c.GetGlyphSet() },
-			set: func(c *config.Config, v string) error {
-				c.GlyphSet = v
-				return nil
-			},
-			options: func(c *config.Config) []string {
-				return []string{config.GlyphSetNerd, config.GlyphSetPlain, config.GlyphSetASCII}
-			},
-		},
-		{
-			key: "model_indicator", section: "Appearance", label: "Model chip", kind: kindEnum,
-			description: "Per-session model chip in the list, shown whenever the model is known.",
-			get: func(c *config.Config) string {
-				return c.GetModelIndicator()
-			},
-			set: func(c *config.Config, v string) error {
-				c.ModelIndicator = v
-				return nil
-			},
-			options: func(c *config.Config) []string {
-				return []string{config.ModelIndicatorOn, config.ModelIndicatorOff}
-			},
-		},
-		{
-			key: "effort_indicator", section: "Appearance", label: "Effort chip", kind: kindEnum,
-			description: "Per-session reasoning-effort chip (claude) in the list, shown whenever the level is known.",
-			get: func(c *config.Config) string {
-				return c.GetEffortIndicator()
-			},
-			set: func(c *config.Config, v string) error {
-				c.EffortIndicator = v
-				return nil
-			},
-			options: func(c *config.Config) []string {
-				return []string{config.EffortIndicatorOn, config.EffortIndicatorOff}
-			},
-		},
-		{
-			key: "permission_indicator", section: "Appearance", label: "Permission chip", kind: kindEnum,
-			description: "Per-session permission-mode chip (plan/accept-edits/auto) in the list.",
-			get: func(c *config.Config) string {
-				return c.GetPermissionIndicator()
-			},
-			set: func(c *config.Config, v string) error {
-				c.PermissionIndicator = v
-				return nil
-			},
-			options: func(c *config.Config) []string {
-				return []string{config.PermissionIndicatorOn, config.PermissionIndicatorOff}
-			},
-		},
-		boolRow("hint_bar", "Appearance", "Hint bar",
-			"Always-on key-hint bar at the bottom of the screen.", "",
-			(*config.Config).GetHintBar,
-			func(c *config.Config, v bool) { c.HintBar = &v }),
-		boolRow("os_chrome", "Appearance", "OS chrome",
-			"Show fleet state in the window title and taskbar progress (OSC 9;4). Off if your shell owns the title.", "",
-			(*config.Config).GetOSChrome,
-			func(c *config.Config, v bool) { c.OSChrome = &v }),
-		boolRow("session_context_bar", "Appearance", "Session context bar",
-			"In-session status line.", "affects new sessions",
-			(*config.Config).GetSessionContextBar,
-			func(c *config.Config, v bool) { c.SessionContextBar = &v }),
-		boolRow("auto_attach", "Behavior", "Auto-attach",
-			"Attach to a new session as soon as it starts.", "",
-			(*config.Config).GetAutoAttach,
-			func(c *config.Config, v bool) { c.AutoAttach = &v }),
-		boolRow("mouse", "Behavior", "Mouse",
-			"Clickable rows / headers / tabs / hint bar, wheel scroll, draggable divider. Off hands the mouse back to the terminal so native select-to-copy works (Shift+drag is the per-gesture escape while on).", "",
-			(*config.Config).GetMouse,
-			func(c *config.Config, v bool) { c.Mouse = &v }),
-		boolRow("auto_yes", "Behavior", "Auto-yes",
-			"Auto-accept agent prompts (a daemon takes over after quit).", "",
-			func(c *config.Config) bool { return c.AutoYes },
-			func(c *config.Config, v bool) { c.AutoYes = v }),
-		boolRow("record_prompt_history", "Behavior", "Record prompt history",
-			"Remember submitted prompts to reuse them (up-arrow in an empty prompt).", "",
-			(*config.Config).GetRecordPromptHistory,
-			func(c *config.Config, v bool) { c.RecordPromptHistory = &v }),
-		boolRow("show_release_notes_after_update", "Behavior", "Release notes after update",
-			"Show a \"what's new\" overlay once after updating to a new version.", "",
-			(*config.Config).GetShowReleaseNotesAfterUpdate,
-			func(c *config.Config, v bool) { c.ShowReleaseNotesAfterUpdate = &v }),
-		boolRow("trust_worktrees_root", "Behavior", "Trust worktrees root",
-			"Pre-accept Claude's workspace-trust dialog for all session worktrees.", "applies on restart",
-			(*config.Config).GetTrustWorktreesRoot,
-			func(c *config.Config, v bool) { c.TrustWorktreesRoot = &v }),
-		{
-			key: "carry_files", section: "Behavior", label: "Carry files", kind: kindText,
-			description: "Gitignored files copied into each new worktree; comma-separated repo-relative paths.",
-			applyNote:   "affects new sessions",
-			get: func(c *config.Config) string {
-				files := c.GetCarryFiles()
-				if len(files) == 0 {
-					return "(none)"
-				}
-				return strings.Join(files, ", ")
-			},
-			editGet: func(c *config.Config) string {
-				return strings.Join(c.GetCarryFiles(), ", ")
-			},
-			set: func(c *config.Config, v string) error {
-				// Split on commas, trim each entry, drop blanks. Empty or
-				// all-blank input collapses to a non-nil empty slice — the
-				// explicit opt-out per GetCarryFiles's nil-vs-empty contract.
-				parts := strings.Split(v, ",")
-				files := make([]string, 0, len(parts))
-				for _, p := range parts {
-					if t := strings.TrimSpace(p); t != "" {
-						files = append(files, t)
-					}
-				}
-				c.CarryFiles = files
-				return nil
-			},
-		},
-		{
-			key: "project_search_roots", section: "Behavior", label: "Project scan roots", kind: kindText,
-			description: "Directories the background repo scan walks to stock the project picker; comma-separated, ~ allowed. A changed scope re-scans the next time the create form opens.",
-			get: func(c *config.Config) string {
-				return strings.Join(c.GetProjectSearchRoots(), ", ")
-			},
-			editGet: func(c *config.Config) string {
-				return strings.Join(c.GetProjectSearchRoots(), ", ")
-			},
-			set: func(c *config.Config, v string) error {
-				// Same split/trim/drop-blanks shape as carry_files, but empty input
-				// clears the key to nil rather than storing an explicit empty list:
-				// GetProjectSearchRoots treats nil and empty alike (both fall back to
-				// ~), so nil is the honest way to say "no override".
-				parts := strings.Split(v, ",")
-				roots := make([]string, 0, len(parts))
-				for _, p := range parts {
-					if t := strings.TrimSpace(p); t != "" {
-						roots = append(roots, t)
-					}
-				}
-				if len(roots) == 0 {
-					c.ProjectSearchRoots = nil
-					return nil
-				}
-				c.ProjectSearchRoots = roots
-				return nil
-			},
-		},
-		{
-			key: "project_search_depth", section: "Behavior", label: "Project scan depth", kind: kindInt,
-			description: fmt.Sprintf("Levels below each root the scan descends. Empty = default; 0 = off (no scan); N = depth, capped at %d.", config.MaxProjectSearchDepth()),
-			get: func(c *config.Config) string {
-				switch {
-				case c.ProjectSearchDepth == nil:
-					return fmt.Sprintf("default (%d)", config.DefaultProjectSearchDepth())
-				case *c.ProjectSearchDepth < 1:
-					return "off"
-				default:
-					return strconv.Itoa(*c.ProjectSearchDepth)
-				}
-			},
-			editGet: func(c *config.Config) string {
-				switch {
-				case c.ProjectSearchDepth == nil:
-					return "" // empty selects the built-in default depth
-				case *c.ProjectSearchDepth < 1:
-					return "0" // explicit disabled edits as 0
-				default:
-					return strconv.Itoa(*c.ProjectSearchDepth)
-				}
-			},
-			set: func(c *config.Config, v string) error {
-				v = strings.TrimSpace(v)
-				if v == "" {
-					c.ProjectSearchDepth = nil // built-in default
-					return nil
-				}
-				n, err := strconv.Atoi(v)
-				if err != nil || n < 0 {
-					return fmt.Errorf("scan depth must be a non-negative number (0 = off, empty = default)")
-				}
-				// Store what the user typed and let GetProjectSearchDepth clamp, so the
-				// accessor stays the single source of the bound; but refuse a value it
-				// would silently rewrite, rather than showing back a number we ignore.
-				if n > config.MaxProjectSearchDepth() {
-					return fmt.Errorf("scan depth must be at most %d", config.MaxProjectSearchDepth())
-				}
-				c.ProjectSearchDepth = &n
-				return nil
-			},
-		},
-		boolRow("smart_dispatch_auto", "Behavior", "Smart dispatch auto-create",
-			"A confident i match creates the session straight away instead of opening the pre-filled form.", "",
-			(*config.Config).GetSmartDispatchAuto,
-			func(c *config.Config, v bool) { c.SmartDispatchAuto = &v }),
-		{
-			key: "daemon_poll_interval", section: "Behavior", label: "Poll interval (ms)", kind: kindInt,
-			description: "Auto-yes daemon polling rate.", applyNote: "applies on restart",
-			get: func(c *config.Config) string { return strconv.Itoa(c.DaemonPollInterval) },
-			set: func(c *config.Config, v string) error {
-				n, err := strconv.Atoi(strings.TrimSpace(v))
-				if err != nil {
-					return fmt.Errorf("poll interval must be a number of milliseconds")
-				}
-				if n < minPollIntervalMs {
-					return fmt.Errorf("poll interval must be at least %dms", minPollIntervalMs)
-				}
-				c.DaemonPollInterval = n
-				return nil
-			},
-		},
-		boolRow("kill_double_tap_confirm", "Behavior", "Kill double-tap",
-			"A second Ctrl+X confirms the kill dialog in one motion.", "",
-			(*config.Config).GetKillDoubleTapConfirm,
-			func(c *config.Config, v bool) { c.KillDoubleTapConfirm = &v }),
-		boolRow("pr_create_draft", "Behavior", "Create PRs as draft",
-			"PRs opened with c start as drafts (turn off to merge them with m in-app).", "",
-			(*config.Config).GetPRCreateDraft,
-			func(c *config.Config, v bool) { c.PRCreateDraft = &v }),
-		boolRow("update_base_on_create", "Behavior", "Update base on create",
-			"Branch new sessions off the latest remote tip of their base, not a stale local copy.", "affects new sessions",
-			(*config.Config).GetUpdateBaseOnCreate,
-			func(c *config.Config, v bool) { c.UpdateBaseOnCreate = &v }),
-		boolRow("fast_forward_local_base", "Behavior", "Fast-forward local base",
-			"Also advance your local base branch to origin during create (clean fast-forward only).", "modifies your local branch",
-			(*config.Config).GetFastForwardLocalBase,
-			func(c *config.Config, v bool) { c.FastForwardLocalBase = &v }),
-		{
-			key: "session_sort", section: "Behavior", label: "Session sort", kind: kindEnum,
-			description: "Order within each repo group: creation keeps the manual order (reorderable with J/K); status floats NeedsInput and unread sessions to the top. Group order stays manual ({ / }).",
-			get:         func(c *config.Config) string { return c.GetSessionSort() },
-			set: func(c *config.Config, v string) error {
-				c.SessionSort = v
-				return nil
-			},
-			options: func(c *config.Config) []string {
-				return []string{config.SessionSortCreation, config.SessionSortStatus}
-			},
-		},
-		{
-			key: "group_mode", section: "Behavior", label: "Account clustering", kind: kindEnum,
-			description: "Off (the default) keeps the list grouped by repo. On adds a top-level cluster by Claude account above the repo groups — a divider and tinted headers per account. The clustering is a visual no-op unless two or more accounts are present. Manual reordering stays available: J/K reorders within a repo group, { / } reorders groups within an account cluster (a move across an account boundary is refused), and [ / ] moves a whole account cluster.",
-			// Display value is off/on; the stored config value stays repo/account, so
-			// config.json and a future third grouping axis keep their vocabulary.
-			get: func(c *config.Config) string {
-				if c.GetGroupMode() == config.GroupModeAccount {
-					return "on"
-				}
-				return "off"
-			},
-			set: func(c *config.Config, v string) error {
-				if v == "on" {
-					c.GroupMode = config.GroupModeAccount
-				} else {
-					c.GroupMode = config.GroupModeRepo
-				}
-				return nil
-			},
-			options: func(c *config.Config) []string {
-				return []string{"off", "on"}
-			},
-		},
-		{
-			key: "auto_update", section: "Behavior", label: "Auto-update", kind: kindEnum,
-			description: "Update check at startup: notify shows a hint, auto installs in the background, off disables.",
-			applyNote:   "applies on restart",
-			get:         func(c *config.Config) string { return c.GetAutoUpdateMode() },
-			set: func(c *config.Config, v string) error {
-				c.AutoUpdate = v
-				return nil
-			},
-			options: func(c *config.Config) []string {
-				return []string{config.AutoUpdateNotify, config.AutoUpdateAuto, config.AutoUpdateOff}
-			},
-		},
-		{
-			key: "notifications", section: "Behavior", label: "Notifications", kind: kindEnum,
-			description: "Signal a background session finishing or blocking: bell rings the terminal, desktop runs a notifier (Notify command, else notify-send / terminal-notifier / osascript), osc sends an OSC 9 escape that reaches you over SSH with no local binary. The selected, attached, muted, and (unless Notify when focused) focused sessions stay silent.",
-			get:         func(c *config.Config) string { return c.GetNotifications() },
-			set: func(c *config.Config, v string) error {
-				c.Notifications = v
-				return nil
-			},
-			options: func(c *config.Config) []string {
-				return []string{config.NotificationsOff, config.NotificationsBell, config.NotificationsDesktop, config.NotificationsOSC}
-			},
-		},
-		{
-			key: "notifications_finished", section: "Behavior", label: "Finished turns", kind: kindEnum,
-			description: "A quieter signal for a finished turn than for a session blocking on you: same uses the Notifications mode for both, off leaves a finished turn to the list's unread marker alone, bell rings the terminal. Only the quieter rungs are offered, so a finished turn can never outrank a blocked session. Ignored while Notifications is off.",
-			get:         func(c *config.Config) string { return c.GetNotificationsFinished() },
-			set: func(c *config.Config, v string) error {
-				c.NotificationsFinished = v
-				return nil
-			},
-			options: func(c *config.Config) []string {
-				return []string{config.NotificationsSame, config.NotificationsOff, config.NotificationsBell}
-			},
-		},
-		{
-			key: "notify_command", section: "Behavior", label: "Notify command", kind: kindText,
-			description: "Shell command run for each desktop notification, with $ATRIUM_SESSION, $ATRIUM_STATUS, $ATRIUM_EVENT in its environment. Empty uses a built-in per-OS notifier.",
-			get: func(c *config.Config) string {
-				if c.NotifyCommand == "" {
-					return "(built-in)"
-				}
-				return c.NotifyCommand
-			},
-			editGet: func(c *config.Config) string { return c.NotifyCommand },
-			set: func(c *config.Config, v string) error {
-				c.NotifyCommand = strings.TrimSpace(v)
-				return nil
-			},
-		},
-		boolRow("notify_when_focused", "Behavior", "Notify when focused",
-			"Keep notifying while Atrium's terminal is focused. Off (default) stays silent while you're watching the fleet and notifies only after you switch away; a terminal that never reports focus always notifies.", "",
-			(*config.Config).GetNotifyWhenFocused,
-			func(c *config.Config, v bool) { c.NotifyWhenFocused = v }),
-		{
-			key: "tmux_config_override", section: "Behavior", label: "Tmux config override", kind: kindText,
-			description: "Custom tmux config path.", applyNote: "affects new sessions",
-			get: func(c *config.Config) string {
-				if c.TmuxConfigOverride == "" {
-					return "(managed)"
-				}
-				return c.TmuxConfigOverride
-			},
-			editGet: func(c *config.Config) string { return c.TmuxConfigOverride },
-			set: func(c *config.Config, v string) error {
-				c.TmuxConfigOverride = strings.TrimSpace(v)
-				return nil
-			},
-		},
-	}
-}
-
-// SettingsOverlay is the in-TUI configuration panel: a navigable list of every
-// scalar config field, edited in place. It mutates the *live* Config it was
+// SettingsOverlay is the in-TUI configuration panel: a rail of categories beside the
+// highlighted category's rows, edited in place. It mutates the *live* Config it was
 // constructed with; the home model persists and live-applies after each change
 // (see HandleKeyPress's changedKey return).
 type SettingsOverlay struct {
 	rows   []settingRow
 	cfg    *config.Config
-	cursor int
+	cursor int // index into rows; global, not per category
+
+	// focus selects which pane consumes navigation keys. railCursor indexes
+	// railEntries(); the rows pane shows whatever that entry owns.
+	focus      settingsFocus
+	railCursor int
+
+	// helpOpen is the `?` expanded-help view, with its own scroll offset. It takes over the box
+	// rather than opening a second overlay, so the panel's focus and rail cursor survive it
+	// untouched.
+	helpOpen   bool
+	helpScroll int
 
 	width, height int
 
 	editing bool
 	input   textinput.Model
 	lastErr string
+
+	// clusteringVisible is home's answer to "does ui.List currently render account clusters?"
+	// — nil until home injects it. It is a *bool rather than a bool because nil must mean
+	// "unknown, show no chip": group_mode's honest gate is session-derived and a panel that
+	// cannot see the session list must not guess. See SetAccountClusteringVisible and
+	// TestGroupModeHasNoConfigOnlyInertPredicate.
+	clusteringVisible *bool
 }
 
-// NewSettingsOverlay builds the settings panel over the given live config.
+// NewSettingsOverlay builds the settings panel over the given live config, focused on
+// the rail at its default category.
 func NewSettingsOverlay(cfg *config.Config) *SettingsOverlay {
-	return &SettingsOverlay{
-		rows: newSettingRows(cfg),
-		cfg:  cfg,
+	s := &SettingsOverlay{
+		rows:       newSettingRows(cfg),
+		cfg:        cfg,
+		focus:      focusRail,
+		railCursor: railDefaultIndex(),
 		// Sensible floor so Render works before the first SetSize.
 		width:  80,
 		height: 24,
 	}
+	s.syncCursorToRail()
+	return s
 }
 
-// SelectRow moves the cursor onto the row with the given key, reporting
-// whether it exists.
+// SelectRow moves the cursor onto the row with the given key, reporting whether it
+// exists. It also syncs the rail to that row's category and focuses the rows pane:
+// selecting a row the pane is not showing would leave the cursor invisible.
+//
+// That composite behavior is the deep-link contract — it is what makes a jump from a
+// dialog or a notice land somewhere usable — and PR C promotes it to
+// OpenAt(category, key) with two real call sites. It is also what keeps the ~40 tests
+// that reach a row through settingsAt working: they select a row, then send keys
+// expecting them to reach it.
 func (s *SettingsOverlay) SelectRow(key string) bool {
 	for i, r := range s.rows {
-		if r.key == key {
-			s.cursor = i
-			return true
+		if r.key != key {
+			continue
 		}
+		s.cursor = i
+		s.railCursor = railIndexForCategory(r.category)
+		s.focus = focusRows
+		s.lastErr = ""
+		return true
 	}
 	return false
 }
 
-// SetSize is given the full terminal dimensions; the panel sizes itself within
-// them and windows its rows when the terminal is too short to show all.
+// SetAccountClusteringVisible records whether ui.List currently renders account clusters, so the
+// Account clustering row can be dimmed when the setting is on but doing nothing.
+//
+// It exists because that gate is session-derived and settingRow.activeWhen can only see
+// *config.Config. Until home calls this, the panel shows no chip for the row at all: spec §5's
+// config-only predicate was wrong in both directions (accounts sharing a rotation pool collapse
+// to one cluster; unattributed sessions form one anyway), so a panel that cannot see the session
+// list must not guess. See TestGroupModeHasNoConfigOnlyInertPredicate.
+func (s *SettingsOverlay) SetAccountClusteringVisible(visible bool) {
+	s.clusteringVisible = &visible
+}
+
+// RailIndex reports which rail entry is current, so home can restore it the next time the panel
+// opens (spec §7). Persisting it to state.json is a deliberate non-goal.
+func (s *SettingsOverlay) RailIndex() int { return s.railCursor }
+
+// SetRailIndex moves the rail to the given entry, clamping out-of-range values — a remembered
+// index can outlive a rail that shrank — and pulling the row cursor with it.
+func (s *SettingsOverlay) SetRailIndex(i int) {
+	s.railCursor = clamp(i, 0, len(railEntries())-1)
+	s.syncCursorToRail()
+}
+
+// isModified reports whether row i's value differs from its built-in default, for
+// the "changed from default" marker. A row with no fixed default (see
+// settingRow.defaultDisplay) is never modified.
+func (s *SettingsOverlay) isModified(i int) bool {
+	row := s.rows[i]
+	if row.defaultDisplay == nil {
+		return false
+	}
+	return row.get(s.cfg) != row.defaultDisplay()
+}
+
+// SetSize is given the full terminal dimensions; the panel sizes itself within them, falls
+// back to a single pane on a narrow terminal, and windows its rows on a short one.
 func (s *SettingsOverlay) SetSize(width, height int) {
 	s.width = width
 	s.height = height
-	s.input.Width = max(10, s.innerWidth()-s.labelColWidth()-4)
+	s.input.Width = s.editorWidth()
 }
 
 // HandleKeyPress processes one key press. It reports whether the panel should
 // close, and — when a value changed — the changed row's key so the home model
 // can persist the config and run that field's live-apply hook.
+//
+// The order of these guards is the grammar: an open editor swallows everything (so j/k type
+// rather than navigate), then the expanded-help view, then the focused pane.
 func (s *SettingsOverlay) HandleKeyPress(msg tea.KeyMsg) (closed bool, changedKey string) {
-	if s.editing {
+	switch {
+	case s.editing:
 		return false, s.handleEditKey(msg)
+	case s.helpOpen:
+		s.handleHelpKey(msg)
+		return false, ""
+	case s.focus == focusRail:
+		return s.handleRailKey(msg), ""
+	default:
+		return s.handleRowsKey(msg)
 	}
-
-	row := &s.rows[s.cursor]
-	switch msg.String() {
-	case "esc", "ctrl+c":
-		return true, ""
-	case "up", "k":
-		if s.cursor > 0 {
-			s.cursor--
-			s.lastErr = ""
-		}
-	case "down", "j":
-		if s.cursor < len(s.rows)-1 {
-			s.cursor++
-			s.lastErr = ""
-		}
-	case "left":
-		return false, s.cycleEnum(row, -1)
-	case "right":
-		return false, s.cycleEnum(row, +1)
-	case " ":
-		if row.kind == kindBool {
-			return false, s.toggleBool(row)
-		}
-	case "enter":
-		switch row.kind {
-		case kindBool:
-			return false, s.toggleBool(row)
-		case kindEnum:
-			return false, s.cycleEnum(row, +1)
-		case kindInt, kindText:
-			s.startEdit(row)
-		}
-	}
-	return false, ""
 }
 
 // handleEditKey routes keys while the inline editor is open: enter commits
@@ -731,7 +251,7 @@ func (s *SettingsOverlay) startEdit(row *settingRow) {
 	in := textinput.New()
 	in.Prompt = ""
 	in.SetValue(raw(s.cfg))
-	in.Width = max(10, s.innerWidth()-s.labelColWidth()-4)
+	in.Width = s.editorWidth()
 	in.Focus()
 	in.CursorEnd()
 	s.input = in
@@ -739,10 +259,14 @@ func (s *SettingsOverlay) startEdit(row *settingRow) {
 	s.lastErr = ""
 }
 
-// boxWidth is the lipgloss .Width of the panel (content + padding, excluding
-// the border); innerWidth is the usable text width inside the padding.
+// boxWidth is the lipgloss .Width of the panel (content + padding, excluding the border);
+// innerWidth is the usable text width inside the padding.
+//
+// The 96 cap replaces the old fixed 64, which wasted a third of a 100-column terminal (D12).
+// At the 80-column floor the box is 78 and the inner width 74 — which is exactly the
+// summaryBudget PR A wrote the copy against.
 func (s *SettingsOverlay) boxWidth() int {
-	w := 64
+	w := 96
 	if limit := s.width - 2; w > limit { // leave room for the border
 		w = limit
 	}
@@ -754,186 +278,34 @@ func (s *SettingsOverlay) boxWidth() int {
 
 func (s *SettingsOverlay) innerWidth() int { return s.boxWidth() - 4 }
 
-// labelColWidth returns the fixed label column width: the longest label plus
-// the cursor marker and a separating gap.
-func (s *SettingsOverlay) labelColWidth() int {
-	w := 0
-	for _, r := range s.rows {
-		if len(r.label) > w {
-			w = len(r.label)
-		}
-	}
-	return w + 4 // "▸ " marker + 2-space gap
-}
-
-// Render draws the panel as a centered bordered box: a title, section-grouped
-// rows windowed around the cursor on short terminals, then the selected row's
-// description (or validation error) and the key hints.
+// Render draws the panel as a centered bordered box: a title, the rail beside the highlighted
+// category's rows, a separator, the fixed-height help pane, and the key hints.
+//
+// The box's height is a function of the terminal size alone, so it never changes as the rail
+// or row cursor moves — a centered overlay that resizes gets re-centered under the user
+// mid-navigation.
 func (s *SettingsOverlay) Render() string {
 	t := theme.Current()
-	inner := s.innerWidth()
 
-	// Footer first: its (now variable) line count feeds the body's height budget.
-	footer := s.renderFooter(inner)
-	body := s.renderBody(inner, len(footer))
+	var lines []string
+	if s.helpOpen {
+		// The expanded view fills the panes and the help block together, so the box's height
+		// does not change when it opens.
+		lines = s.expandedHelpLines()
+	} else {
+		lines = s.bodyLines()
+		if sep := s.separatorLine(); sep != "" {
+			lines = append(lines, sep)
+		}
+		lines = append(lines, s.helpLines()...)
+	}
+	lines = append(lines, s.hintLine())
 
 	title := t.OverlayTitleStyle().Render("Settings")
-	content := title + "\n\n" + strings.Join(body, "\n") + "\n\n" + strings.Join(footer, "\n")
-
 	return lipgloss.NewStyle().
 		Border(t.Borders.Style).
 		BorderForeground(t.Palette.Accent).
 		Padding(1, 2).
 		Width(s.boxWidth()).
-		Render(content)
-}
-
-// renderBody renders the section headers + rows, windowed so the cursor's row
-// is always visible within the height budget.
-func (s *SettingsOverlay) renderBody(inner, footerHeight int) []string {
-	t := theme.Current()
-	headerStyle := t.DimStyle().Bold(true)
-	dim := t.DimStyle()
-	sel := t.AccentStyle()
-
-	labelW := s.labelColWidth() - 2 // marker is rendered separately
-
-	type bodyLine struct {
-		text   string
-		rowIdx int // -1 for headers/spacers
-	}
-	var lines []bodyLine
-	lastSection := ""
-	for i, r := range s.rows {
-		if r.section != lastSection {
-			if lastSection != "" {
-				lines = append(lines, bodyLine{text: "", rowIdx: -1})
-			}
-			lines = append(lines, bodyLine{text: headerStyle.Render(r.section), rowIdx: -1})
-			lastSection = r.section
-		}
-
-		marker := "  "
-		if i == s.cursor {
-			marker = t.Glyphs.SelectionMark + " "
-		}
-		value := s.renderValue(i)
-		label := fmt.Sprintf("%-*s", labelW, r.label)
-		line := marker + label + value
-		switch {
-		case i == s.cursor && s.editing:
-			// The live text input carries its own cursor styling.
-			line = sel.Render(marker+label) + value
-		case i == s.cursor:
-			line = sel.Render(line)
-		default:
-			line = dim.Render(marker+label) + t.FgStyle().Render(value)
-		}
-		lines = append(lines, bodyLine{text: xansi.Truncate(line, inner, "…"), rowIdx: i})
-	}
-
-	// Window the lines so the cursor's line stays visible on short terminals.
-	// Budget = terminal height minus the fixed chrome and the now variable-height
-	// footer (wrapped description + hint line); reduces to the old height-9 when
-	// the description is a single line (footerHeight == 2).
-	budget := s.height - settingsVChrome - footerHeight
-	if budget < settingsMinBody {
-		budget = settingsMinBody
-	}
-	if len(lines) <= budget {
-		out := make([]string, len(lines))
-		for i, l := range lines {
-			out[i] = l.text
-		}
-		return out
-	}
-	cursorLine := 0
-	for i, l := range lines {
-		if l.rowIdx == s.cursor {
-			cursorLine = i
-			break
-		}
-	}
-	start := 0
-	if cursorLine >= budget {
-		start = cursorLine - budget + 1
-	}
-	end := start + budget
-	if end > len(lines) {
-		end = len(lines)
-	}
-	out := make([]string, 0, budget)
-	for _, l := range lines[start:end] {
-		out = append(out, l.text)
-	}
-	return out
-}
-
-// renderValue formats a row's value cell by kind (or the live editor).
-func (s *SettingsOverlay) renderValue(i int) string {
-	if s.editing && i == s.cursor {
-		return s.input.View()
-	}
-	row := s.rows[i]
-	v := row.get(s.cfg)
-	switch row.kind {
-	case kindBool:
-		if v == "on" {
-			return "[x] on"
-		}
-		return "[ ] off"
-	case kindEnum:
-		return "‹ " + v + " ›"
-	default:
-		return v
-	}
-}
-
-// renderFooter renders the selected row's description (or pending validation
-// error) with its apply note, wrapped across as many lines as it needs, followed
-// by the key-hint line. It returns one string per rendered line so Render can
-// size the body window against the footer's actual height.
-func (s *SettingsOverlay) renderFooter(inner int) []string {
-	t := theme.Current()
-	row := s.rows[s.cursor]
-
-	desc := row.description
-	style := t.DimStyle()
-	if s.lastErr != "" {
-		desc = s.lastErr
-		style = t.DangerStyle()
-	} else if row.applyNote != "" {
-		desc += " · " + row.applyNote
-	}
-
-	// Wrap the raw description to the inner width so long help is shown in full
-	// rather than clipped to one line. xansi.Wrap hard-breaks over-long tokens, so
-	// every line stays within inner (keeping the box within its width). Cap the
-	// line count on short terminals — reserving chrome, the hint, and a minimum
-	// body — so that on any terminal tall enough for the minimum layout the box
-	// stays within the terminal and PlaceOverlay can't bottom-clip the pinned hint
-	// line. On terminals shorter than that (below settingsVChrome + settingsMinBody
-	// + a two-line footer) the box still degrades exactly like the pre-existing
-	// body windowing. The cap only bites on short terminals; normally the full
-	// description fits.
-	lines := strings.Split(xansi.Wrap(desc, inner, ""), "\n")
-	maxDescLines := max(1, s.height-settingsVChrome-1-settingsMinBody)
-	if len(lines) > maxDescLines {
-		lines = lines[:maxDescLines]
-		last := lines[maxDescLines-1]
-		if xansi.StringWidth(last) > inner-1 {
-			last = xansi.Truncate(last, inner-1, "")
-		}
-		lines[maxDescLines-1] = last + "…"
-	}
-	// Style each wrapped line for color only; the outer box .Width pads them.
-	for i, l := range lines {
-		lines[i] = style.Render(l)
-	}
-
-	hint := "↑/↓ move · ←/→ change · ↵ edit · esc close"
-	if s.editing {
-		hint = "↵ save · esc cancel"
-	}
-	return append(lines, xansi.Truncate(t.OverlayHintStyle().Render(hint), inner, "…"))
+		Render(title + "\n\n" + strings.Join(lines, "\n"))
 }

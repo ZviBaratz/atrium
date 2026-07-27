@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/ZviBaratz/atrium/config"
+	"github.com/ZviBaratz/atrium/internal/doctor"
 	"github.com/ZviBaratz/atrium/session"
 )
 
@@ -38,19 +39,9 @@ import (
 // Reading unsynchronised is safe because every write commits by rename, so a
 // reader sees the previous file or the new one, never a torn mix.
 func loadStoredInstances() ([]session.InstanceData, error) {
-	dir, err := config.GetConfigDir()
-	if err != nil {
-		return nil, fmt.Errorf("failed to locate the data directory: %w", err)
-	}
-
-	data, err := os.ReadFile(filepath.Join(dir, config.StateFileName))
-	if err != nil {
-		if errors.Is(err, fs.ErrNotExist) {
-			// No state file yet. That is a fleet with no sessions, not an error —
-			// and emphatically not a reason to create one.
-			return nil, nil
-		}
-		return nil, fmt.Errorf("failed to read %s: %w", config.StateFileName, err)
+	data, err := readStateFile()
+	if err != nil || data == nil {
+		return nil, err
 	}
 
 	// Only the instance list is decoded. The rest of state.json is UI state that
@@ -70,6 +61,64 @@ func loadStoredInstances() ([]session.InstanceData, error) {
 		return nil, fmt.Errorf("failed to read stored sessions: %w", err)
 	}
 	return instances, nil
+}
+
+// readStateFile reads state.json's raw bytes, creating and touching nothing —
+// (nil, nil) when the file does not exist yet. Every headless read of persisted
+// state goes through here, for all the reasons loadStoredInstances documents above.
+func readStateFile() ([]byte, error) {
+	dir, err := config.GetConfigDir()
+	if err != nil {
+		return nil, fmt.Errorf("failed to locate the data directory: %w", err)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, config.StateFileName))
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			// No state file yet. That is a fleet with no sessions, not an error —
+			// and emphatically not a reason to create one.
+			return nil, nil
+		}
+		return nil, fmt.Errorf("failed to read %s: %w", config.StateFileName, err)
+	}
+	return data, nil
+}
+
+// loadStoredAccountKeys reads the account/pool-keyed slice of state.json for
+// doctor's orphaned-key section: the cluster order, the rate-limit flags and the
+// rotation cursors. Read-only, like every other headless state read (doctor can run
+// beside a live TUI). A missing or unparseable file yields an empty set rather than
+// an error: this is one diagnostic section, not a reason to fail the command.
+func loadStoredAccountKeys() doctor.AccountKeyState {
+	data, err := readStateFile()
+	if err != nil || data == nil {
+		return doctor.AccountKeyState{}
+	}
+	var state struct {
+		AccountOrder        []string                   `json:"account_order"`
+		AccountAvailability map[string]json.RawMessage `json:"account_availability"`
+		AccountRotation     map[string]json.RawMessage `json:"account_rotation"`
+	}
+	if err := json.Unmarshal(data, &state); err != nil {
+		return doctor.AccountKeyState{}
+	}
+	return doctor.AccountKeyState{
+		Order:        state.AccountOrder,
+		Availability: mapKeys(state.AccountAvailability),
+		Rotation:     mapKeys(state.AccountRotation),
+	}
+}
+
+// mapKeys returns a map's keys; only the names matter to the orphaned-key check, so
+// the values stay undecoded and a future field on them cannot break this read.
+func mapKeys(m map[string]json.RawMessage) []string {
+	if len(m) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	return out
 }
 
 // resolveSession finds the one session a selector names.

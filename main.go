@@ -263,7 +263,11 @@ var (
 
 	hookEventArg     string
 	hookStateFileArg string
-	hookEventCmd     = &cobra.Command{
+	// The SessionStart brief's facts, baked into that hook's command line at launch (#485).
+	// They are flags rather than a state.json read because config.LoadState mutates the data
+	// dir, which a subprocess running beside a live TUI must not do — see session/tmux/brief.go.
+	hookBrief    tmux.SessionBrief
+	hookEventCmd = &cobra.Command{
 		Use:    tmux.HookSubcommand,
 		Short:  "Internal: record a Claude Code hook event into a session's status file",
 		Hidden: true,
@@ -276,7 +280,15 @@ var (
 		// a hook must never fail or stall the agent, so this always exits 0, reads stdin only
 		// for the events that need a payload field (tmux.HookEventReadsStdin), and bounds that
 		// read in both size and time.
+		//
+		// One event runs the other way: session-start prints a situational brief on stdout for
+		// Claude to read back into the agent's context (#485). It touches no state file, so it
+		// is routed before the state-record path rather than through it.
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if hookEventArg == tmux.HookEventSessionStart {
+				runSessionStartHook(os.Stdout, hookBrief)
+				return nil
+			}
 			runHookEvent(hookStateFileArg, hookEventArg, os.Stdin)
 			return nil
 		},
@@ -347,6 +359,18 @@ var (
 				fmt.Print(pools)
 			}
 
+			// Account state keys: state.json indexes the cluster order, the rate-limit
+			// flags and the rotation cursors by account/pool NAME, so a rename can leave
+			// entries naming something config no longer has. Harmless (unknown names are
+			// kept on purpose, so a slot survives its sessions), which is why they are
+			// only reported. state.json is read directly, never via config.LoadState —
+			// doctor must not mutate a data dir a live TUI owns.
+			if keys := doctor.RenderAccountKeys(
+				doctor.CheckAccountKeys(config.LoadConfig(), loadStoredAccountKeys())); keys != "" {
+				fmt.Println()
+				fmt.Print(keys)
+			}
+
 			if doctor.MissingRequired(deps) {
 				// Nonzero exit for CI/scripts. The root command already sets
 				// SilenceErrors/SilenceUsage, so main() prints just this message to
@@ -395,6 +419,29 @@ func runHookEvent(stateFile, event string, stdin io.Reader) {
 	// support (and stale on UserPromptSubmit) — UpdateHookState's write rule sorts that out.
 	if err := tmux.UpdateHookState(stateFile, event, payload, os.Getenv("CLAUDE_EFFORT")); err != nil {
 		fmt.Fprintf(os.Stderr, "atrium hook: %v\n", err)
+	}
+}
+
+// runSessionStartHook prints the SessionStart context brief for Claude to fold into the
+// agent's context (#485). It is the only hook that writes TO the agent, and the only one whose
+// stdout is part of the contract.
+//
+// Best-effort in the same way its sibling is, and for a sharper reason: Claude discards a
+// malformed or empty hook payload silently, so every failure here is already indistinguishable
+// from "no brief". An incomplete set of facts prints nothing rather than a sentence with a hole
+// in it, a marshal error goes to stderr (which Claude captures for its own hook logs), and the
+// caller always exits 0 so a brief can never disturb the agent.
+func runSessionStartHook(w io.Writer, b tmux.SessionBrief) {
+	out, err := tmux.SessionStartHookOutput(b)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "atrium hook: session brief: %v\n", err)
+		return
+	}
+	if out == nil {
+		return
+	}
+	if _, err := fmt.Fprintln(w, string(out)); err != nil {
+		fmt.Fprintf(os.Stderr, "atrium hook: session brief: %v\n", err)
 	}
 }
 
@@ -469,6 +516,11 @@ func init() {
 
 	hookEventCmd.Flags().StringVar(&hookEventArg, "event", "", "hook event name (internal)")
 	hookEventCmd.Flags().StringVar(&hookStateFileArg, "state-file", "", "session status file path (internal)")
+	// SessionStart brief facts (internal, #485).
+	hookEventCmd.Flags().StringVar(&hookBrief.Name, "session", "", "atrium session name (internal)")
+	hookEventCmd.Flags().StringVar(&hookBrief.Origin, "origin", "", "origin repo path (internal)")
+	hookEventCmd.Flags().StringVar(&hookBrief.Branch, "branch", "", "session branch (internal)")
+	hookEventCmd.Flags().StringVar(&hookBrief.WorktreesRoot, "worktrees-root", "", "worktrees root (internal)")
 
 	lsCmd.Flags().BoolVar(&lsJSONFlag, "json", false, "Emit machine-readable JSON instead of a table")
 

@@ -477,3 +477,81 @@ func TestAccountKey_PoolElseName(t *testing.T) {
 	solo.SetClaudeAccount("personal", "", false)
 	require.Equal(t, "personal", accountKey(solo), "no pool falls back to the account name")
 }
+
+// A config-side rename moves a session's cluster key without adding or removing
+// anything, so the list needs an explicit way to re-cluster: Add/Kill rebuild the
+// view, and the metadata tick's ApplySort deliberately does not (see its doc).
+func TestRegroupAccounts_ReclustersAfterIdentityChange(t *testing.T) {
+	l := acctList(t, "api|work", "sideproj|personal", "infra|work")
+	l.SetGroupMode("account")
+	require.Equal(t, []string{"api|work", "infra|work", "sideproj|personal"}, orderKeys(l))
+
+	// The work account is renamed into the pool personal's sessions already cluster
+	// under — the two clusters become one.
+	for _, it := range l.items {
+		if it.ClaudeAccountName() == "work" {
+			it.RestampClaudeAccount("work", false, "personal")
+		}
+	}
+	require.False(t, l.ApplySort(), "the metadata tick must not silently re-cluster")
+
+	require.True(t, l.RegroupAccounts(), "an identity change under the list re-clusters on request")
+	require.Equal(t, 1, l.distinctAccountCount(), "both blocks now key to one cluster")
+}
+
+// TestAccountClusteringVisible pins the exported gate as the single definition of "does the list
+// currently render account clusters?". The settings panel's group_mode reason chip reads it, so a
+// second copy of the rule in another package is exactly the drift ui.accountKey's doc comment
+// warns about.
+//
+// The pooled case is the one a config-only predicate gets wrong: two configured accounts pinned
+// to one rotation pool share a cluster key, so there is nothing to cluster even though two
+// accounts exist.
+func TestAccountClusteringVisible(t *testing.T) {
+	t.Run("off when not account-grouped", func(t *testing.T) {
+		l := acctList(t, "api|work", "infra|personal")
+		require.False(t, l.AccountClusteringVisible(), "repo grouping renders no clusters")
+	})
+
+	t.Run("off with a single account", func(t *testing.T) {
+		l := acctList(t, "api|work", "infra|work")
+		l.SetGroupMode("account")
+		require.False(t, l.AccountClusteringVisible(), "one account is one cluster: a visual no-op")
+	})
+
+	t.Run("on with two accounts", func(t *testing.T) {
+		l := acctList(t, "api|work", "infra|personal")
+		l.SetGroupMode("account")
+		require.True(t, l.AccountClusteringVisible())
+	})
+
+	t.Run("off when two accounts share one pool", func(t *testing.T) {
+		s := spinner.New()
+		l := NewList(&s)
+		for i, acct := range []string{"work", "personal"} {
+			inst, err := session.NewInstance(session.InstanceOptions{
+				Title: string(rune('a' + i)), Path: "/tmp/repo" + acct, Program: "echo",
+			})
+			require.NoError(t, err)
+			// SetClaudeAccount's second argument is the CLAUDE_CONFIG_DIR, not the pool
+			// (session/account.go:14). The pool has its own setter, and it is the field
+			// AccountClusterKey actually prefers (session/account.go:60) — so setting it through
+			// the wrong argument would leave two distinct keys and make this subtest assert the
+			// opposite of what it claims.
+			inst.SetClaudeAccount(acct, "", false)
+			inst.SetClaudeAccountPool("shared")
+			l.AddInstance(inst)
+		}
+		l.SetSize(80, 40)
+		l.SetGroupMode("account")
+		require.False(t, l.AccountClusteringVisible(),
+			"two accounts in one pool share a cluster key — len(ClaudeAccounts) >= 2 would be wrong here")
+	})
+
+	t.Run("on with an unattributed session", func(t *testing.T) {
+		l := acctList(t, "api|work", "infra|")
+		l.SetGroupMode("account")
+		require.True(t, l.AccountClusteringVisible(),
+			`a session with no account keys on "" and still forms a second cluster`)
+	})
+}

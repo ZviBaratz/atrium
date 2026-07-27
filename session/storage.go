@@ -59,12 +59,19 @@ type InstanceData struct {
 	// actually injected into the tmux session, and whether it is the
 	// default/fallback account (dim badge). All omitempty: a state.json predating
 	// the feature decodes to empty -> no badge, no injection.
+	//
+	// ClaudeConfigDir is the durable identity — it is what the session actually
+	// runs under, and no config edit can change it after launch. The other two, and
+	// ClaudeAccountPool below, are a CACHE of config re-derived from it at startup
+	// and whenever the accounts panel commits, so renaming an account or moving it
+	// into a pool adopts its existing sessions instead of stranding them under a
+	// name config no longer has (#470).
 	ClaudeAccount        string `json:"claude_account,omitempty"`
 	ClaudeConfigDir      string `json:"claude_config_dir,omitempty"`
 	ClaudeAccountDefault bool   `json:"claude_account_is_default,omitempty"`
-	// ClaudeAccountPool is the rotation pool this session was pinned under (the
-	// list cluster key; the badge still shows the concrete member). omitempty: a
-	// state.json predating the feature decodes to empty -> singleton/none.
+	// ClaudeAccountPool is the rotation pool this session clusters under (the
+	// badge still shows the concrete member). omitempty: a state.json predating
+	// the feature decodes to empty -> singleton/none.
 	ClaudeAccountPool string `json:"claude_account_pool,omitempty"`
 	// GHConfigDir is the GH_CONFIG_DIR resolved at creation and injected into the
 	// tmux session + Atrium's gh subprocesses. omitempty: a state.json predating
