@@ -482,12 +482,32 @@ than speculative:
 > filter), because a deep link into an already-open panel must not land the cursor somewhere
 > the user cannot see.
 >
-> **PR C found five call sites, not two.** Besides the two above, `app/app_welcome.go` has
-> three notices that tell the user to press `,` and *name the setting in their own copy* —
-> the setup-skipped notice and both `warnMissingProgram` branches, all pointing at
-> `default_program`. Leaving them landing on the remembered rail entry while the two above
-> land on their row would have made two indistinguishable classes of `,`-notice, so all five
-> are wired and `TestEveryCommaNoticeGoesThroughSettingNotice` keeps the rule structural.
+> **PR C found six `,`-teaching messages, not two.** Every one of them names the setting in
+> its own copy, so leaving any of them landing on the remembered rail entry would have made
+> two indistinguishable classes of `,`-notice. The full list:
+>
+> | # | site | triggered by | key |
+> |---|------|--------------|-----|
+> | 1 | the session-cap dialog (`overCapMessage`) | `ctrl+s` over the cap | `max_sessions` |
+> | 2 | "session reorder is off while sorting by status" | `J` / `K` | `session_sort` |
+> | 3 | "cluster reorder needs account grouping" | `[` / `]` | `group_mode` |
+> | 4 | the setup-skipped welcome notice | skipping the welcome | `default_program` |
+> | 5 | `warnMissingProgram`, the not-on-PATH branch | `programCheckedMsg` | `default_program` |
+> | 6 | `warnMissingProgram`, the nothing-set branch | `programCheckedMsg` | `default_program` |
+>
+> Two things the bullets above got wrong. There are **two** reorder refusals, not one: `J`/`K`
+> reorders within a repo group and `[`/`]` moves an account cluster, and they refuse for
+> different reasons pointing at different keys. A count anchored on "the manual reorder notice"
+> collapses them and silently drops `group_mode`. And (1) is not a notice at all — dialog copy
+> reaches no notice path, so its `,` is armed by `pendingConfirmSettingKey` at the
+> `confirmOverCap` site instead.
+>
+> That leaves five notices (2–6) routed through `settingNotice`, across four call sites —
+> `warnMissingProgram` builds one call's text in two branches.
+> `TestEveryCommaNoticeGoesThroughSettingNotice` keeps the rule structural rather than
+> counted: it is an AST scan for `,`-advertising literals reaching `flashNotice` or
+> `handleInfoNotice`, so a seventh message added later fails it without this table being
+> updated.
 
 The cap dialog carries a second obligation: `overCapMessage` currently ends with
 `(set max_sessions in config.json to change this)`, which sends the user to a text editor
