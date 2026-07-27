@@ -119,9 +119,10 @@ func collisions(rows []AccountIdentityRow) []IdentityCollision {
 	var order []string
 
 	for _, row := range rows {
-		if row.State == config.IdentityUnreadable {
-			continue // unknown is not evidence of sameness
-		}
+		// An unreadable dir contributes nothing: CheckIdentity discards whatever a
+		// failed read returned, so its Actual is the zero identity and keys to "".
+		// Unknown is not evidence of sameness, and grouping on a shared empty key
+		// would accuse every not-yet-onboarded install of a collision.
 		key := row.Actual.CollisionKey()
 		if key == "" {
 			continue

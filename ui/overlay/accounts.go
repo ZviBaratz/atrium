@@ -52,13 +52,24 @@ type AccountsOverlay struct {
 
 	previewInputs []textinput.Model // [remote, path]
 	previewFocus  int
+
+	// identities caches which login each Claude account's config dir holds,
+	// parallel by index to cfg.ClaudeAccounts. Filled once at construction (see
+	// loadIdentities) because Render runs on every keystroke and must not do IO.
+	// Nil when nothing was read, which renders as if the feature were off.
+	identities []acctIdentity
 }
 
 // NewAccountsOverlay creates the account manager over cfg, using state to read and
 // toggle per-account rate-limit availability. It seeds a default 80x24 so Render
 // works before the first SetSize.
 func NewAccountsOverlay(cfg *config.Config, state config.AppState) *AccountsOverlay {
-	return &AccountsOverlay{cfg: cfg, state: state, width: 80, height: 24} // floor so Render works pre-SetSize
+	o := &AccountsOverlay{cfg: cfg, state: state, width: 80, height: 24} // floor so Render works pre-SetSize
+	// Read the accounts' real logins now, while the user is opening the panel, so
+	// every later render is pure. Opening is also exactly when the snapshot should
+	// be taken: it is the moment the user asked what their accounts are.
+	o.loadIdentities(config.ReadAccountIdentity)
+	return o
 }
 
 // SetSize records the terminal dimensions; the overlay caps its own box width and
@@ -505,8 +516,13 @@ func (o *AccountsOverlay) renderPreview() string {
 	pool, members, _ := o.cfg.ResolveClaudePool(remote, path)
 	claude := "inherit ambient env"
 	poolBlock := ""
+	// claudeDir is the config dir this routing actually lands on, carried out of
+	// both branches so the login line below can name who a session created here
+	// would bill. Empty means no dir is injected, which has no login to report.
+	claudeDir := ""
 	if len(members) < 2 {
 		name, cdir, isDefault := o.cfg.ResolveClaudeAccount(remote, path)
+		claudeDir = cdir
 		switch {
 		case name == "":
 			// 0 accounts configured.
@@ -532,7 +548,7 @@ func (o *AccountsOverlay) renderPreview() string {
 		// A real rotation pool: resolve which member creating a session here
 		// would actually use (availability-aware, never the raw first match)
 		// and render the pool block beneath the Claude line.
-		claude, poolBlock = o.renderPoolDecision(pool, members, time.Now())
+		claude, poolBlock, claudeDir = o.renderPoolDecision(pool, members, time.Now())
 	}
 
 	ghDir, ghTok := o.cfg.ResolveGHAccount(remote, path)
@@ -566,6 +582,9 @@ func (o *AccountsOverlay) renderPreview() string {
 	b.WriteString(t.DimStyle().Render("Remote URL") + "\n" + o.previewInputs[0].View() + "\n")
 	b.WriteString(t.DimStyle().Render("Path") + "\n" + o.previewInputs[1].View() + "\n\n")
 	b.WriteString(t.DimStyle().Render("Claude → ") + claude + "\n")
+	if line := o.previewIdentityLine(claudeDir, o.inner()-previewIndentWidth); line != "" {
+		b.WriteString(previewIndent + t.DimStyle().Render(line) + "\n")
+	}
 	b.WriteString(poolBlock)
 	b.WriteString(t.DimStyle().Render("GitHub → ") + gh + "\n")
 	b.WriteString(t.DimStyle().Render("Antigravity → ") + agy + "\n\n")
@@ -676,6 +695,11 @@ func (o *AccountsOverlay) renderList() string {
 		if o.tab == tabClaude {
 			if names := splitPools(o.cfg.ClaudeAccounts); len(names) > 0 {
 				b.WriteString(t.DimStyle().Render(splitPoolNote(names, o.inner())) + "\n")
+			}
+			// Danger, not dim: unlike the notes above it, this one says something
+			// is wrong right now rather than suggesting a tidier arrangement.
+			if note := o.identityNote(o.inner()); note != "" {
+				b.WriteString(t.DangerStyle().Render(note) + "\n")
 			}
 		}
 	}

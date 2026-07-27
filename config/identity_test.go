@@ -301,3 +301,29 @@ func TestClaudeAccountReadIdentity(t *testing.T) {
 		t.Error("an account with no config_dir reported an identity")
 	}
 }
+
+// The invariant every downstream collision check now relies on: a failed read
+// contributes NO identity, whatever payload the reader handed back. Two dirs that
+// merely could not be read must never look like two dirs holding one account —
+// otherwise a machine where claude is not yet onboarded reports a collision.
+//
+// This is the single place that guarantee is enforced, so it is the single place it
+// can be tested; the doctor report and the accounts overlay both group on
+// CollisionKey and would silently inherit any leak from here.
+func TestCheckIdentityDiscardsPayloadFromAFailedRead(t *testing.T) {
+	leaky := func(string) (AccountIdentity, bool) {
+		return AccountIdentity{Email: "stale@corp.com", UUID: "u-stale"}, false
+	}
+
+	state, actual := ClaudeAccount{Name: "a", ConfigDir: "/h/dir"}.CheckIdentity(leaky)
+
+	if state != IdentityUnreadable {
+		t.Errorf("state = %v, want IdentityUnreadable", state)
+	}
+	if actual != (AccountIdentity{}) {
+		t.Errorf("actual = %+v, want the zero identity", actual)
+	}
+	if key := actual.CollisionKey(); key != "" {
+		t.Errorf("a failed read produced collision key %q; two unreadable dirs would group", key)
+	}
+}

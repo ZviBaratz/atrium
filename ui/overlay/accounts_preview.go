@@ -256,7 +256,7 @@ var previewChipWidth = lipgloss.Width("● available")
 // state (GetAccountAvailability, GetAccountRotation) but never writes it:
 // Bubble Tea re-renders on every keystroke, and a writing preview would
 // rotate the pool once per typed character.
-func (o *AccountsOverlay) renderPoolDecision(pool string, members []config.ClaudeAccount, now time.Time) (headline, block string) {
+func (o *AccountsOverlay) renderPoolDecision(pool string, members []config.ClaudeAccount, now time.Time) (headline, block, chosenDir string) {
 	t := theme.Current()
 	avail := o.state.GetAccountAvailability()
 	cursor := o.state.GetAccountRotation(pool)
@@ -278,6 +278,12 @@ func (o *AccountsOverlay) renderPoolDecision(pool string, members []config.Claud
 	default:
 		headline = members[chosen].Name + " (inherit ambient env)"
 	}
+
+	// The dir behind the "signed in as" line the caller renders. It follows marked
+	// for the same reason previewDecisionLine does: on an exhausted pool, creation
+	// pins SoonestResetMember on confirm, so that — not SelectPoolMember's
+	// defensive cursor fallback — is the account a session here would bill.
+	chosenDir = members[marked].ResolvedConfigDir()
 
 	// marked, not chosen, goes to previewDecisionLine: on an exhausted pool
 	// chosen is only SelectPoolMember's defensive fallback, while marked is
@@ -320,5 +326,5 @@ func (o *AccountsOverlay) renderPoolDecision(pool string, members []config.Claud
 	if decision != "" {
 		b.WriteString(previewIndent + decision + "\n")
 	}
-	return headline, b.String()
+	return headline, b.String(), chosenDir
 }
