@@ -113,13 +113,23 @@ type ClaudeAccount struct {
 	// assertion that turns Name from an unverified label into a checkable claim.
 	// Nothing about a config dir stops `/login` from re-pointing it at a different
 	// account in place, and when that happens every route keeps its old name while
-	// the sessions it sends bill a login the user never picked. Setting this makes
-	// that drift an error instead of a surprise on a usage page.
+	// the sessions it sends bill a login the user never picked. Setting this gives
+	// that drift something to fail against, instead of leaving it to surface as a
+	// usage figure on a webpage.
 	//
-	// Optional, and unset means unverified, not "expect nothing": routing is
-	// unchanged and no launch is ever refused for an account that declares no
-	// expectation. See ReadIdentity/MatchesPin for the comparison and
-	// doctor.CheckAccountIdentity for what is reported.
+	// Optional, and unset means unverified, not "expect nothing": an account that
+	// declares no expectation is reported as unpinned, and no launch is ever refused
+	// on its behalf. Verification is strictly opt-in.
+	//
+	// What setting it does: `atrium doctor` reports the account as verified or
+	// mismatched instead of unpinned; creating or resuming a session on a config dir
+	// holding a DIFFERENT login is refused outright; and launching onto a dir with no
+	// login recorded at all logs a warning, because only a pinned account asserted
+	// something that could not be checked.
+	//
+	// What it does not do: routing never consults it. It decides whether a chosen
+	// account may launch, never which account is chosen. See CheckIdentity for the
+	// single classifier behind both the report and the gate.
 	ExpectAccount string `json:"expect_account,omitempty"`
 }
 

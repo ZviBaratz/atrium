@@ -302,14 +302,15 @@ func TestClaudeAccountReadIdentity(t *testing.T) {
 	}
 }
 
-// The invariant every downstream collision check now relies on: a failed read
-// contributes NO identity, whatever payload the reader handed back. Two dirs that
-// merely could not be read must never look like two dirs holding one account —
-// otherwise a machine where claude is not yet onboarded reports a collision.
+// The invariant every downstream collision check relies on: a failed read contributes
+// NO identity, whatever payload the reader handed back. Two dirs that merely could not
+// be read must never look like two dirs holding one account — otherwise a machine
+// where claude is not yet onboarded reports a collision.
 //
-// This is the single place that guarantee is enforced, so it is the single place it
-// can be tested; the doctor report and the accounts overlay both group on
-// CollisionKey and would silently inherit any leak from here.
+// This is the single place that guarantee is enforced, so it is the single place it can
+// be tested. The doctor report and the accounts overlay both group on CollisionKey and
+// would silently inherit any leak from here; it is what lets each of them skip an
+// unreadable row without a guard of its own.
 func TestCheckIdentityDiscardsPayloadFromAFailedRead(t *testing.T) {
 	leaky := func(string) (AccountIdentity, bool) {
 		return AccountIdentity{Email: "stale@corp.com", UUID: "u-stale"}, false

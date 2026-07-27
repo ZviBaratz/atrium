@@ -8,6 +8,7 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 )
 
 // settingKind selects how a settings row is displayed and edited: bools toggle
@@ -81,6 +82,18 @@ type SettingsOverlay struct {
 	// cannot see the session list must not guess. See SetAccountClusteringVisible and
 	// TestGroupModeHasNoConfigOnlyInertPredicate.
 	clusteringVisible *bool
+
+	// handoff is the sibling surface a rail entry asked home to open in this panel's place.
+	// Read once, as the panel closes — see Handoff.
+	handoff SettingsHandoff
+
+	// search is the `/` filter (spec §8). It is a NAMED field rather than an embedded Picker:
+	// embedding would promote Focus/Blur/SetWidth/SetVisibleRows/SetPreviewHook onto this
+	// type's public API, where five of the six are meaningless for a panel that sizes itself.
+	// The picker owns the filter text, the result cursor and the shared key grammar; its
+	// IsFocused() is the "a filter is active" flag, so there is no second bool to keep in step
+	// with it.
+	search Picker
 }
 
 // NewSettingsOverlay builds the settings panel over the given live config, focused on
@@ -91,6 +104,8 @@ func NewSettingsOverlay(cfg *config.Config) *SettingsOverlay {
 		cfg:        cfg,
 		focus:      focusRail,
 		railCursor: railDefaultIndex(),
+		// Sync source: a filter edit re-ranks and resets the cursor to the top.
+		search: newPicker(false),
 		// Sensible floor so Render works before the first SetSize.
 		width:  80,
 		height: 24,
@@ -99,16 +114,21 @@ func NewSettingsOverlay(cfg *config.Config) *SettingsOverlay {
 	return s
 }
 
-// SelectRow moves the cursor onto the row with the given key, reporting whether it
-// exists. It also syncs the rail to that row's category and focuses the rows pane:
-// selecting a row the pane is not showing would leave the cursor invisible.
+// OpenAt moves the panel to the row with the given key, reporting whether it exists. It
+// syncs the rail to that row's category, focuses the rows pane, and drops any transient
+// state (an open editor, the ? view) so the cursor lands somewhere the user can actually
+// see.
 //
-// That composite behavior is the deep-link contract — it is what makes a jump from a
-// dialog or a notice land somewhere usable — and PR C promotes it to
-// OpenAt(category, key) with two real call sites. It is also what keeps the ~40 tests
-// that reach a row through settingsAt working: they select a row, then send keys
-// expecting them to reach it.
-func (s *SettingsOverlay) SelectRow(key string) bool {
+// That composite behavior is the deep-link contract of spec §12 — it is what makes a jump
+// from a dialog or a notice land somewhere usable. It is also the path most of this
+// package's tests take to reach a row, through the settingsAt helper: they select a row,
+// then send keys expecting them to reach it.
+//
+// It takes the key alone, where spec §12 wrote OpenAt(category, key). settingCategory is
+// unexported, so app cannot name one; and guard 1 pins that every key belongs to exactly one
+// category, so a passed category would be a second source of truth that can only ever
+// disagree with the row's own. The spec is amended to match.
+func (s *SettingsOverlay) OpenAt(key string) bool {
 	for i, r := range s.rows {
 		if r.key != key {
 			continue
@@ -116,6 +136,10 @@ func (s *SettingsOverlay) SelectRow(key string) bool {
 		s.cursor = i
 		s.railCursor = railIndexForCategory(r.category)
 		s.focus = focusRows
+		s.editing = false
+		s.helpOpen = false
+		s.helpScroll = 0
+		s.clearSearch()
 		s.lastErr = ""
 		return true
 	}
@@ -137,6 +161,18 @@ func (s *SettingsOverlay) SetAccountClusteringVisible(visible bool) {
 // RailIndex reports which rail entry is current, so home can restore it the next time the panel
 // opens (spec §7). Persisting it to state.json is a deliberate non-goal.
 func (s *SettingsOverlay) RailIndex() int { return s.railCursor }
+
+// Handoff reports which sibling surface the panel asked to open in its place, or
+// HandoffNone. home reads it when HandleKeyPress reports the panel closed.
+func (s *SettingsOverlay) Handoff() SettingsHandoff { return s.handoff }
+
+// SelectedRowKey is the key of the row the rows pane has highlighted, so home's tests can
+// assert where a deep link landed without reaching into the panel's cursor.
+func (s *SettingsOverlay) SelectedRowKey() string { return s.selectedRow().key }
+
+// RailEntryCount is how many entries the rail has, so home (and its tests) can address the
+// last one without importing the rail's vocabulary.
+func (s *SettingsOverlay) RailEntryCount() int { return len(railEntries()) }
 
 // SetRailIndex moves the rail to the given entry, clamping out-of-range values — a remembered
 // index can outlive a rail that shrank — and pulling the row cursor with it.
@@ -169,7 +205,8 @@ func (s *SettingsOverlay) SetSize(width, height int) {
 // can persist the config and run that field's live-apply hook.
 //
 // The order of these guards is the grammar: an open editor swallows everything (so j/k type
-// rather than navigate), then the expanded-help view, then the focused pane.
+// rather than navigate), then the expanded-help view, then an active filter (which swallows
+// runes for the same reason), then the focused pane.
 func (s *SettingsOverlay) HandleKeyPress(msg tea.KeyMsg) (closed bool, changedKey string) {
 	switch {
 	case s.editing:
@@ -177,6 +214,8 @@ func (s *SettingsOverlay) HandleKeyPress(msg tea.KeyMsg) (closed bool, changedKe
 	case s.helpOpen:
 		s.handleHelpKey(msg)
 		return false, ""
+	case s.searching():
+		return s.handleSearchKey(msg)
 	case s.focus == focusRail:
 		return s.handleRailKey(msg), ""
 	default:
@@ -278,6 +317,26 @@ func (s *SettingsOverlay) boxWidth() int {
 
 func (s *SettingsOverlay) innerWidth() int { return s.boxWidth() - 4 }
 
+// titleLine is the panel's first row: its name, plus the active filter.
+//
+// The filter rides this row rather than claiming one of its own because the box's height
+// depends only on the terminal size — a taller box on `/` would re-centre the whole panel
+// under the user mid-keystroke (the jump ui/overlay/textInput_size.go:3-8 warns about). The
+// query is truncated to the inner width for the same reason: an over-wide line soft-wraps,
+// grows the box a row, and clips the pinned hint off the bottom.
+func (s *SettingsOverlay) titleLine() string {
+	t := theme.Current()
+	if !s.searching() {
+		return t.OverlayTitleStyle().Render("Settings")
+	}
+	const gap = "   "
+	filter := "/" + s.search.filter + t.Glyphs.TextCursor
+	if budget := s.innerWidth() - ansi.StringWidth("Settings"+gap); ansi.StringWidth(filter) > budget {
+		filter = ansi.Truncate(filter, max(0, budget), "…")
+	}
+	return t.OverlayTitleStyle().Render("Settings") + gap + overlayFilterStyle().Render(filter)
+}
+
 // Render draws the panel as a centered bordered box: a title, the rail beside the highlighted
 // category's rows, a separator, the fixed-height help pane, and the key hints.
 //
@@ -301,7 +360,7 @@ func (s *SettingsOverlay) Render() string {
 	}
 	lines = append(lines, s.hintLine())
 
-	title := t.OverlayTitleStyle().Render("Settings")
+	title := s.titleLine()
 	return lipgloss.NewStyle().
 		Border(t.Borders.Style).
 		BorderForeground(t.Palette.Accent).

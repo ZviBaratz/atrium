@@ -644,6 +644,33 @@ list to your config file:
   about the login they run under.
 - When more than one account is configured, the new-session form shows an
   **Account** picker, preset to the auto-routed account, to override the choice.
+- `expect_account` (optional) is the email address that `config_dir` is supposed to
+  be logged in as. `name` is only a label: running `/login` inside a config dir
+  re-points it at a different Claude account in place, and nothing about the routing
+  notices — every badge and pool keeps the old name while the sessions bill a login
+  you never picked, with a usage figure on a webpage as the only symptom. Setting it
+  gives that drift something to fail against:
+
+  ```json
+  { "name": "personal", "config_dir": "~/.claude", "expect_account": "me@example.com" }
+  ```
+
+  **Creating or resuming** a session whose config dir holds a *different* login is
+  **refused**, naming both logins and the directory to fix — a wrong launch cannot be
+  undone by noticing it afterwards, and a resumed session re-injects the same
+  directory, so it is gated identically. And `atrium doctor`'s **Claude account
+  identities** section marks the account verified rather than unpinned.
+
+  Only a confirmed mismatch refuses. An account with no `expect_account` is never
+  blocked, and a directory with no login recorded is allowed through — `claude` will
+  prompt for login in the pane, which cannot silently mis-bill, and refusing would
+  strand you mid-onboarding; a pinned account logs a warning when it launches
+  unverified that way. Comparison is on email, case- and whitespace-insensitive.
+
+  Separately, and with no configuration at all, `doctor` warns when two accounts you
+  believe are separate turn out to hold the **same** login, naming which one the
+  combined work is billing. There is no field for `expect_account` in the `@` accounts
+  overlay; edits there preserve it.
 - Omitting `claude_accounts` disables the feature entirely (no badge, no
   injection), so existing configs are unaffected.
 

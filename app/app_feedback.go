@@ -178,6 +178,21 @@ func (m *home) handleInfoNotice(text string) tea.Cmd {
 	return m.flashNotice(text, ui.NoticeInfo)
 }
 
+// settingNotice flashes a notice that names ',' and points that ',' at the setting it is
+// about. The notice already told the user which key to press; this is what makes the key
+// land somewhere useful instead of on the rail entry they last visited.
+//
+// It takes the level because the call sites disagree: a reorder refusal is informational,
+// while a missing default program is an error. The arm lives exactly as long as the advice —
+// scheduleNoticeHide clears it for any newer notice, and the hideErrMsg handler clears it
+// when the toast expires. TestEveryCommaNoticeGoesThroughSettingNotice is what keeps every
+// ','-advertising notice on this path rather than the generic one.
+func (m *home) settingNotice(text string, level ui.NoticeLevel, key string) tea.Cmd {
+	cmd := m.flashNotice(text, level)
+	m.noticeSettingKey = key
+	return cmd
+}
+
 // surfaceLostRecoveries makes lost-session recoveries visible instead of a silent
 // Running→Paused that looks like a user pause (#270). It picks one message by
 // priority: a failed recovery (most urgent) → an error the user must act on; a
@@ -246,6 +261,12 @@ func (m *home) flushPendingLaunchCrash() tea.Cmd {
 // returns the command that clears it after errToastDuration. The generation
 // keeps an older toast's timer from clearing a newer toast early.
 func (m *home) scheduleNoticeHide() tea.Cmd {
+	// Any new notice supersedes the previous one's settings jump, including the background
+	// notices (drift, agent, update) that reach showMenuNotice without passing through
+	// flashNotice — each of those bumps the generation below, so clearing in flashNotice
+	// alone would strand an arm behind an unrelated toast. settingNotice re-arms after this
+	// returns, so it is unaffected.
+	m.noticeSettingKey = ""
 	m.noticeGen++
 	gen := m.noticeGen
 	return func() tea.Msg {

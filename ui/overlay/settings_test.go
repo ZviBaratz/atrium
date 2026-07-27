@@ -29,7 +29,7 @@ func keyRunes(s string) tea.KeyMsg {
 // the test if no such row exists.
 func settingsAt(t *testing.T, o *SettingsOverlay, key string) {
 	t.Helper()
-	require.True(t, o.SelectRow(key), "settings panel should have a %q row", key)
+	require.True(t, o.OpenAt(key), "settings panel should have a %q row", key)
 }
 
 // widestFooterRow returns the key of the row whose footer help is widest, so the
@@ -571,7 +571,7 @@ func TestSettingsOverlay_ShortTerminalScrollsToCursor(t *testing.T) {
 	o.SetSize(80, 14)
 	settingsAt(t, o, "tmux_config_override")
 
-	// The flat view, not Advanced. SelectRow now syncs the rail to the row's category, and
+	// The flat view, not Advanced. OpenAt syncs the rail to the row's category, and
 	// Advanced has three rows — which fit any pane — so asserting there would test nothing about
 	// windowing. All settings is 57 lines into a pane of three.
 	o.railCursor = 0
@@ -771,7 +771,7 @@ func TestSettingsOverlay_AccountClusteringRowMapsOffOn(t *testing.T) {
 
 func TestSettingsOverlay_CarryFilesRowExists(t *testing.T) {
 	o := NewSettingsOverlay(config.DefaultConfig())
-	assert.True(t, o.SelectRow("carry_files"), "settings panel must have a carry_files row")
+	assert.True(t, o.OpenAt("carry_files"), "settings panel must have a carry_files row")
 }
 
 func TestSettingsOverlay_CarryFilesGetDisplaysDefault(t *testing.T) {
@@ -875,7 +875,7 @@ func TestSettingsOverlay_CarryFilesSetBlankEntriesOptOut(t *testing.T) {
 
 func TestSettingsOverlay_LinkPathsRowExists(t *testing.T) {
 	o := NewSettingsOverlay(config.DefaultConfig())
-	assert.True(t, o.SelectRow("link_paths"), "settings panel must have a link_paths row")
+	assert.True(t, o.OpenAt("link_paths"), "settings panel must have a link_paths row")
 }
 
 func TestSettingsOverlay_LinkPathsGetDisplaysNoneWhenUnset(t *testing.T) {
@@ -932,7 +932,7 @@ func TestSettingsOverlay_LinkPathsEditGetReturnsRawList(t *testing.T) {
 func TestSettingsOverlay_ProjectScanAndSmartDispatchRowsExist(t *testing.T) {
 	o := NewSettingsOverlay(config.DefaultConfig())
 	for _, key := range []string{"project_search_roots", "project_search_depth", "smart_dispatch_auto"} {
-		assert.Truef(t, o.SelectRow(key), "settings panel must have a %s row", key)
+		assert.Truef(t, o.OpenAt(key), "settings panel must have a %s row", key)
 	}
 }
 
