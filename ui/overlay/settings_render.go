@@ -2,6 +2,7 @@ package overlay
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/ZviBaratz/atrium/ui/theme"
@@ -186,10 +187,9 @@ func enumValueCandidates(cur string, opts []string) []string {
 // widest is 21, for no gain. The degradation threshold still budgets for the global worst
 // case (minRowsPaneWidth), so a narrow pane is never a surprise.
 func (s *SettingsOverlay) visibleLabelWidth() int {
-	start, end := s.rowRange(s.selectedEntry())
 	w := 0
-	for _, r := range s.rows[start:end] {
-		if n := ansi.StringWidth(r.label); n > w {
+	for _, i := range s.visibleRowIndices() {
+		if n := ansi.StringWidth(s.rows[i].label); n > w {
 			w = n
 		}
 	}
@@ -293,6 +293,30 @@ func windowPane(lines []string, cursor, budget int) []string {
 	return out
 }
 
+// railMatchCounts is the per-entry match count the rail shows while a filter is active
+// (spec §8), or nil when there is none.
+//
+// It is a read-out of searchResults rather than a second query — a rail that counted matches
+// its own way could disagree with the pane about what matched. Only real categories are
+// counted: All settings is a view whose count is the total (which the pane already shows),
+// and a handoff owns no rows.
+func (s *SettingsOverlay) railMatchCounts() []int {
+	if !s.searching() {
+		return nil
+	}
+	byCategory := make(map[settingCategory]int, len(allCategories()))
+	for _, i := range s.searchResults() {
+		byCategory[s.rows[i].category]++
+	}
+	counts := make([]int, len(railEntries()))
+	for i, e := range railEntries() {
+		if e.kind == railCategory {
+			counts[i] = byCategory[e.category]
+		}
+	}
+	return counts
+}
+
 // railLines renders the left rail, padded to the shared pane height so the divider column
 // runs its full length.
 //
@@ -306,6 +330,7 @@ func (s *SettingsOverlay) railLines() []string {
 	labelW := railWidth() - railMarkerCells - railTrailCells
 	entries := railEntries()
 
+	counts := s.railMatchCounts()
 	rendered := make([]string, 0, len(entries))
 	for i, e := range entries {
 		mark := " "
@@ -313,7 +338,13 @@ func (s *SettingsOverlay) railLines() []string {
 			mark = t.Glyphs.SelectionMark
 		}
 		trail := " "
-		if e.kind == railHandoff {
+		switch {
+		case counts != nil && counts[i] > 0:
+			// One digit always: the largest category has six rows
+			// (TestEveryCategoryMatchCountFitsTheRailsOneCell), so the count fits the cell the
+			// handoff arrow otherwise occupies and railWidth() does not move when / is pressed.
+			trail = strconv.Itoa(counts[i])
+		case e.kind == railHandoff:
 			trail = t.Glyphs.Handoff
 		}
 		line := mark + " " + padRight(e.label, labelW) + " " + trail
@@ -321,13 +352,16 @@ func (s *SettingsOverlay) railLines() []string {
 		style := t.DimStyle()
 		switch {
 		case i == s.railCursor && s.focus == focusRail:
+			// searching() cannot hold here: startSearch always sets focusRows, and every exit
+			// from a filter clears it first.
 			style = t.AccentStyle()
 		case i == s.railCursor:
-			// Current but unfocused: still legible, but the accent belongs to whichever pane
-			// is taking keys, so exactly one bright marker is on screen at a time.
+			// Current but not taking keys — including throughout a search, where the marker
+			// tracks the highlighted result's category rather than a cursor the user can move.
 			style = t.FgStyle()
-		case e.kind == railHandoff:
-			// Dimmer than an ordinary entry: PR B cannot open these yet.
+		case s.searching(), e.kind == railHandoff:
+			// The rail is inert under a filter (spec §8: "the rail dims"), and a handoff entry
+			// is dimmer than an ordinary one at all times.
 			style = t.FaintStyle()
 		}
 		rendered = append(rendered, style.Render(line))
@@ -350,6 +384,9 @@ type paneLine struct {
 // single category shows its rows bare: the rail entry already names it, so a header would
 // only repeat itself.
 func (s *SettingsOverlay) rowsPaneContent(width int) []paneLine {
+	if s.searching() {
+		return s.searchPaneContent(width)
+	}
 	e := s.selectedEntry()
 	if e.kind == railHandoff {
 		return s.handoffPaneContent(e, width)
@@ -385,6 +422,30 @@ func (s *SettingsOverlay) rowsPaneContent(width int) []paneLine {
 			lastCategory = s.rows[i].category
 		}
 		first = false
+		lines = append(lines, paneLine{text: s.renderRowLine(i, width, labelW), rowIdx: i})
+	}
+	return lines
+}
+
+// searchPaneContent is the rows pane under a filter: a flat list of every match, in rank
+// order, each carrying its category (spec §8). It ignores the rail entry entirely — a filter
+// that only searched the current category would be a category filter, not a search.
+func (s *SettingsOverlay) searchPaneContent(width int) []paneLine {
+	results := s.searchResults()
+	if len(results) == 0 {
+		// An empty pane reads as a broken panel. Naming the query and the way out of it is the
+		// same obligation a handoff entry's note carries.
+		style := theme.Current().FaintStyle()
+		text := "No setting matches " + strconv.Quote(s.search.filter) + "."
+		var lines []paneLine
+		for _, l := range strings.Split(ansi.Wrap(text, width, ""), "\n") {
+			lines = append(lines, paneLine{text: style.Render(l), rowIdx: -1})
+		}
+		return lines
+	}
+	labelW := s.visibleLabelWidth()
+	lines := make([]paneLine, 0, len(results))
+	for _, i := range results {
 		lines = append(lines, paneLine{text: s.renderRowLine(i, width, labelW), rowIdx: i})
 	}
 	return lines
@@ -455,30 +516,8 @@ func (s *SettingsOverlay) renderRowLine(i, width, labelW int) string {
 		return t.AccentStyle().Render(head) + s.input.View()
 	}
 
-	// The badge column carries the apply timing — unless the row is inert, in which case the
-	// reason takes it: a row that does nothing right now has more urgent news than when it
-	// would take effect. Either way spec §10 drops this column first when the pane is narrow,
-	// which is why the help pane repeats both in prose.
-	// An inert row's chip takes the badge column: a row that does nothing right now has more
-	// urgent news than when it would take effect. Unlike a timing badge it degrades rather than
-	// dropping — see inertBadgeShort.
 	inert := s.inertReason(i)
-	candidates := []string{row.timing.badge()}
-	if inert != "" {
-		candidates = inertBadgeCandidates(inert)
-	}
-
-	// The value is sized against the SHORTEST badge candidate, not the widest. This refines
-	// spec §10, which ordered badge-before-value but never contemplated an enum's inline
-	// alternatives competing with the badge — at the 80-column floor they do.
-	//
-	// Reserving against the widest was the first attempt and it fails in a way worth recording:
-	// at 73 columns the rich value found no room beside the 19-cell reason, fell back to the
-	// full slack, took 15 cells for itself, and left nothing for the chip the ladder was
-	// supposed to guarantee. Reserving against the form that always survives is what makes the
-	// guarantee real.
-	value := s.valueCell(i, width, labelW, candidates[len(candidates)-1])
-	badge := fitBadge(candidates, width, labelW, value)
+	value, badge := s.rowValueAndBadge(i, width, labelW, inert)
 	p := composeRowLine(width, labelW, sel, modified, row.label, value, badge)
 	switch {
 	case selected:
@@ -493,6 +532,43 @@ func (s *SettingsOverlay) renderRowLine(i, width, labelW int) string {
 		return t.DimStyle().Render(p.head) +
 			t.FgStyle().Render(p.value+p.gap) +
 			t.FaintStyle().Render(p.badge)
+	}
+}
+
+// rowValueAndBadge sizes a row's value cell and picks its right-aligned badge. There are
+// three claims on that column, in priority order:
+//
+//   - an inert reason chip, which degrades to one word but never drops: a dimmed row with no
+//     marker reads as broken, and the help pane only describes the SELECTED row;
+//   - a search result's category, which degrades by truncation for the same reason — a flat
+//     list drawn from ten categories needs it — and is why the timing badge yields while a
+//     filter is active;
+//   - the apply timing, which is reference information and is dropped outright (spec §10).
+//
+// For the first two the value is sized against the SHORTEST form the badge can take, never
+// the widest: reserving against the widest lets a rich enum value find no room beside a long
+// chip, fall back to the whole slack, and evict the very chip the ladder was supposed to
+// guarantee. fitValue then covers the kinds valueCell's own reservation does not reach.
+func (s *SettingsOverlay) rowValueAndBadge(i, width, labelW int, inert string) (value, badge string) {
+	avail := valueAvail(width, labelW)
+	switch {
+	case inert != "":
+		candidates := inertBadgeCandidates(inert)
+		shortest := candidates[len(candidates)-1]
+		value = fitValue(s.valueCell(i, width, labelW, shortest), avail, ansi.StringWidth(shortest))
+		return value, fitBadge(candidates, width, labelW, value)
+	case s.searching():
+		// The stand-in's WIDTH is the reservation; valueCell reads nothing else from it.
+		value = fitValue(
+			s.valueCell(i, width, labelW, strings.Repeat("x", searchBadgeMinCells)),
+			avail, searchBadgeMinCells)
+		return value, searchBadge(s.rows[i].category.label(), badgeAvail(width, labelW, value))
+	default:
+		// No fitValue here, deliberately: spec §10 drops a timing badge before touching the
+		// value, and a timing badge is reference information that loses nothing by going.
+		candidates := []string{s.rows[i].timing.badge()}
+		value = s.valueCell(i, width, labelW, candidates[0])
+		return value, fitBadge(candidates, width, labelW, value)
 	}
 }
 
@@ -536,11 +612,77 @@ func (s *SettingsOverlay) valueCell(i, width, labelW int, badge string) string {
 	}
 }
 
+// badgeAvail is the room left for the right-aligned badge column once the head and the value
+// have taken theirs, including the one space that separates them. One definition, so fitBadge
+// and searchBadge cannot disagree about how much room there is.
+func badgeAvail(width, labelW int, value string) int {
+	return width - rowMarkerCells - labelW - rowLabelGap - ansi.StringWidth(value) - 1
+}
+
+// valueAvail is the room the value column has before any badge is considered.
+func valueAvail(width, labelW int) int { return width - rowMarkerCells - labelW - rowLabelGap }
+
+// searchBadgeMinCells is the floor a category chip degrades to before it is dropped: three
+// cells of name plus the ellipsis. Below that the chip carries no information a user could
+// act on, and the column is better spent on the value.
+const searchBadgeMinCells = 4
+
+// searchBadge is the category chip on a search result row.
+//
+// Unlike a timing badge — reference information, dropped outright by spec §10 — the category
+// is what tells two similarly-named results apart in a list flattened across ten categories,
+// so it degrades the way an inert chip does: "Worktr…" still does the job a blank column
+// cannot. fitValue is what makes that promise keepable; see its comment.
+func searchBadge(category string, avail int) string {
+	if avail < searchBadgeMinCells {
+		return ""
+	}
+	if ansi.StringWidth(category) <= avail {
+		return category
+	}
+	return ansi.Truncate(category, avail, "…")
+}
+
+// squeezedValueCells is the narrowest a value may be squeezed to keep a chip beside it: seven
+// cells and the ellipsis. Below it the value says nothing at all and the chip is dropped
+// instead.
+//
+// It is deliberately smaller than rowMinValueCells, which is a different number for a
+// different job: that one sizes the degradation *threshold* — the value column the panel
+// promises before it gives up on two panes — while this is the last-resort squeeze once the
+// pane is already that narrow. Measured, the tightest two-pane geometry (width 73, the flat
+// 26-cell label column) leaves a 14-cell value column, so reserving 4 for the chip leaves 9 —
+// above this floor across the whole two-pane range. TestSearchRowLinesFillThePaneExactlyAndKeepTheirChip
+// is what fails if that geometry moves.
+const squeezedValueCells = 8
+
+// fitValue shortens a value so a badge of `reserve` cells survives beside it — unless doing
+// so would squeeze the value below squeezedValueCells, at which point the value is the more
+// useful of the two and the badge is dropped instead.
+//
+// It exists because valueCell's own reservation bites ONLY on kindEnum: kindBool, kindInt,
+// kindText and kindReadOnly return their value bare and ignore the badge argument entirely,
+// so a long path or a long command evicts the chip beside it. Measured on the real schema,
+// that drops "Advanced" from the Config file row at EVERY terminal width, and the category
+// from Carry files up to 90 columns.
+//
+// That eviction is correct for a timing badge — spec §10 drops it first — and wrong for the
+// two badges that must not vanish: an inert reason chip (a dimmed row with no marker reads as
+// broken) and a search result's category. So only those two callers reserve. Nothing is lost
+// either way: contextLine renders a squeezed value in full (spec §10).
+func fitValue(v string, avail, reserve int) string {
+	budget := avail - reserve - 1
+	if budget < squeezedValueCells || ansi.StringWidth(v) <= budget {
+		return v
+	}
+	return ansi.Truncate(v, budget, "…")
+}
+
 // fitBadge returns the widest candidate that fits beside the value, or "" when none does.
 // composeRowLine would drop an over-wide badge silently; this is what lets a caller offer a
 // shorter rendering instead of losing the column.
 func fitBadge(candidates []string, width, labelW int, value string) string {
-	avail := width - rowMarkerCells - labelW - rowLabelGap - ansi.StringWidth(value) - 1
+	avail := badgeAvail(width, labelW, value)
 	for _, c := range candidates {
 		if ansi.StringWidth(c) <= avail {
 			return c
@@ -551,11 +693,18 @@ func fitBadge(candidates []string, width, labelW int, value string) string {
 
 // valueWasTruncated reports whether the selected row's value cell had to be shortened to fit
 // its pane, which is what obliges the help pane to show it in full (spec §10).
+// It asks rowValueAndBadge for the value the renderer actually draws, not a second
+// composition of its own: the value can be shortened twice over — once by fitValue, to keep a
+// chip beside it, and again by composeRowLine — and a helper that re-derived only the second
+// would report a squeezed value as whole and quietly drop the obligation.
 func (s *SettingsOverlay) valueWasTruncated() bool {
 	labelW := s.visibleLabelWidth()
 	width := s.rowsPaneWidth()
-	p := composeRowLine(width, labelW, " ", " ", s.selectedRow().label,
-		s.valueCell(s.cursor, width, labelW, ""), "")
+	value, badge := s.rowValueAndBadge(s.cursor, width, labelW, s.inertReason(s.cursor))
+	if strings.HasSuffix(value, "…") {
+		return true
+	}
+	p := composeRowLine(width, labelW, " ", " ", s.selectedRow().label, value, badge)
 	return strings.HasSuffix(p.value, "…")
 }
 
@@ -629,6 +778,11 @@ func (s *SettingsOverlay) helpLines() []string {
 		// here would print the same sentence twice in one frame. The pane stays blank.
 		prose = ""
 	}
+	if s.searching() && len(s.searchResults()) == 0 {
+		// With nothing matching, describing s.cursor's row would describe a row the list is not
+		// showing. Say what happened and name the way out instead.
+		prose = "Nothing matches — backspace to widen the search, esc to clear it."
+	}
 	if s.lastErr != "" {
 		prose, style = s.lastErr, t.DangerStyle()
 	}
@@ -637,7 +791,11 @@ func (s *SettingsOverlay) helpLines() []string {
 	// evicted when the prose is long: capping the prose at h-1 is what makes contextLine's
 	// "always" true of the rendered panel rather than only of the function.
 	ctx := ""
-	if s.lastErr == "" && s.selectedEntry().kind != railHandoff {
+	// Written as (!A || B) rather than !(A && B): staticcheck's QF1001 flags the negated
+	// conjunction, and .golangci.yml excludes only QF1003 — so the negated form fails lint
+	// while build, vet, fmt and the whole suite stay green.
+	if s.lastErr == "" && s.selectedEntry().kind != railHandoff &&
+		(!s.searching() || len(s.searchResults()) > 0) {
 		ctx = s.contextLine(inner)
 	}
 	proseBudget := h
@@ -687,11 +845,22 @@ func (s *SettingsOverlay) helpLines() []string {
 // Content is truncated to make room for it, never the other way round — the counter is five
 // cells and the content is recoverable from `?`.
 func (s *SettingsOverlay) contextLine(width int) string {
-	start, end := s.rowRange(s.selectedEntry())
-	if end <= start {
-		return ""
+	var pos string
+	if s.searching() {
+		results := s.searchResults()
+		if len(results) == 0 {
+			return ""
+		}
+		// Under a filter the counter counts RESULTS: "3/5" must mean the third of five hits, not
+		// the third row of whatever category the rail happens to mark.
+		pos = fmt.Sprintf("%d/%d", s.search.cursor+1, len(results))
+	} else {
+		start, end := s.rowRange(s.selectedEntry())
+		if end <= start {
+			return ""
+		}
+		pos = fmt.Sprintf("%d/%d", s.cursor-start+1, end-start)
 	}
-	pos := fmt.Sprintf("%d/%d", s.cursor-start+1, end-start)
 
 	var body string
 	switch chip := s.inertReason(s.cursor); {
@@ -716,6 +885,19 @@ func (s *SettingsOverlay) contextLine(width int) string {
 		body = row.gloss[row.get(s.cfg)]
 		if body == "" {
 			body = firstSentence(row.detail)
+		}
+	}
+
+	if s.searching() {
+		// The badge column carries the category only when the row is live and the pane is wide
+		// enough for it — and below the two-pane threshold there is no rail and no match counts
+		// at all. Naming it here means the highlighted result ALWAYS says where it lives, which
+		// is what keeps a flat cross-category list navigable.
+		category := s.selectedRow().category.label()
+		if body == "" {
+			body = category
+		} else {
+			body = category + " · " + body
 		}
 	}
 
@@ -766,8 +948,8 @@ func (s *SettingsOverlay) separatorLine() string {
 // becomes surprising instead of discoverable (spec §15). The ladder guarantees that "esc back"
 // / "esc close" survives at any width: it is the hint a user stuck in the panel needs most.
 //
-// It deliberately does not advertise `/` or `r`. Search and reset are PR C, and a hint for a
-// key that does nothing is worse than no hint at all.
+// Both `/` and `r` are advertised now that PR C makes them live; PR B deliberately shipped
+// neither, because a hint for a key that does nothing is worse than no hint at all.
 func (s *SettingsOverlay) hintLine() string {
 	var ladder []string
 	switch {
@@ -775,19 +957,26 @@ func (s *SettingsOverlay) hintLine() string {
 		ladder = []string{"↵ save · esc cancel", "esc cancel"}
 	case s.helpOpen:
 		ladder = []string{"↑/↓ scroll · ? or esc back", "esc back"}
+	case s.searching():
+		// The filter's own esc level, the third of three (spec §8: clear, back, close). "type to
+		// filter" is the affordance, since nothing else on screen says the runes are going
+		// somewhere.
+		ladder = []string{
+			"type to filter · ↑/↓ move · ↵ edit · ? more · esc clear",
+			"↑/↓ move · ↵ edit · ? more · esc clear",
+			"↑/↓ · ↵ edit · esc clear",
+			"esc clear",
+		}
 	case s.focus == focusRows:
 		ladder = []string{
-			"↑/↓ move · ←/→ change · ↵ edit · ? more · ⇥ pane · esc back",
-			"↑/↓ · ←/→ · ↵ edit · ? more · esc back",
-			"↵ edit · ? more · esc back",
+			"↑/↓ move · ←/→ change · ↵ edit · r reset · / search · ? more · ⇥ pane · esc back",
+			"↑/↓ · ←/→ · ↵ edit · r reset · / search · ? more · esc back",
+			"↵ edit · r reset · / search · esc back",
+			"/ search · esc back",
 			"esc back",
 		}
 	default:
-		ladder = []string{
-			"↑/↓ category · → rows · ⇥ pane · esc close",
-			"↑/↓ · → rows · esc close",
-			"esc close",
-		}
+		ladder = railHintLadder(s.selectedEntry())
 	}
 	inner := s.innerWidth()
 	hint := ladder[len(ladder)-1]
@@ -798,6 +987,59 @@ func (s *SettingsOverlay) hintLine() string {
 		}
 	}
 	return ansi.Truncate(theme.Current().OverlayHintStyle().Render(hint), inner, "…")
+}
+
+// railHintLadder is the rail's key hints for one entry, widest wording first.
+//
+// The forward key does three different things on the rail — focus the rows, open another
+// overlay, or nothing at all — so the hint names the one that applies. A static "→ rows" on
+// an entry with no rows is the same class of lie a static esc hint would be (spec §15).
+//
+// "⇥ pane" is held to that same standard, which is why it is not a constant rung. handleRailKey
+// routes tab together with right and enter, so tab is not a pane toggle on the rail at all: it
+// is the forward key. On an entry that owns rows that amounts to a pane swap and the hint is
+// honest; on a handoff it hands off or does nothing, and focus never enters the empty pane
+// either way. So the two hints stand or fall together, and both leave a handoff entry's ladder
+// (TestRailHintNeverPromisesAPaneSwapWithoutRows).
+func railHintLadder(e railEntry) []string {
+	if e.kind == railHandoff {
+		forward := handoffHint(e.opens)
+		if forward == "" {
+			// Profiles: PR D gives it an editor; until then the forward key does nothing, so the
+			// ladder names only the keys that do work.
+			return []string{
+				"↑/↓ category · / search · esc close",
+				"↑/↓ · / search · esc close",
+				"esc close",
+			}
+		}
+		return []string{
+			"↑/↓ category · " + forward + " · / search · esc close",
+			"↑/↓ · " + forward + " · / search · esc close",
+			"/ search · esc close",
+			"esc close",
+		}
+	}
+	return []string{
+		"↑/↓ category · → rows · / search · ⇥ pane · esc close",
+		"↑/↓ · → rows · / search · esc close",
+		"/ search · esc close",
+		"esc close",
+	}
+}
+
+// handoffHint names the forward key's effect for an entry that hands off, in the rail's hint
+// voice: the key the note tells the user to press, then the surface it opens.
+//
+// A handoff with no wording here would silently render a ladder that names no forward key at
+// all — the same lie railHintLadder exists to prevent — so
+// TestEveryWiredHandoffNamesItsForwardKey fails rather than letting PR D's Profiles editor
+// arrive without one.
+func handoffHint(h SettingsHandoff) string {
+	if h == HandoffAccounts {
+		return "↵ accounts"
+	}
+	return ""
 }
 
 // inertReasons is the right-aligned chip for each row whose change currently has no effect

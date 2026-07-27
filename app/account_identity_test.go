@@ -392,3 +392,33 @@ func TestAccountIdentityErrorNamesTheDirectory(t *testing.T) {
 	assert.True(t, strings.Contains(err.Error(), "/h/.claude-personal"),
 		"the error must name the directory to fix: %s", err)
 }
+
+// `atrium doctor` advertises this gate: its hint offers to "refuse to start a session
+// on the wrong one" to anyone who has not pinned an account. That is a promise made
+// in one package about behaviour implemented in another, and the test above only
+// checks that the two agree about STATE — a report and a gate can classify an account
+// identically while the sentence describing the consequence is fiction. #496 shipped
+// exactly that: the hint offered a refusal, and no launch path performed one.
+//
+// So assert the advertisement against the enforcer, in both directions. The refusal
+// must be real for the pinned mismatch the hint is selling, and must NOT already
+// apply to the unpinned account it is addressed to — otherwise the hint is offering a
+// change that has already happened.
+func TestDoctorHintMatchesGate(t *testing.T) {
+	unpinned := config.ClaudeAccount{Name: "a", ConfigDir: "/h/dir"}
+	surprising := idByBase(map[string]config.AccountIdentity{"dir": email("someone@else.com")})
+
+	hint := doctor.RenderAccountIdentity(doctor.CheckAccountIdentity(
+		&config.Config{ClaudeAccounts: []config.ClaudeAccount{unpinned}}, surprising))
+	require.Contains(t, hint, "unpinned: a", "no hint rendered, so there is nothing to check")
+	assert.Contains(t, hint, "refuse",
+		"the hint stopped advertising the refusal this gate performs; if the gate was "+
+			"removed, remove this test with it")
+
+	pinned := unpinned
+	pinned.ExpectAccount = "me@corp.com"
+	assert.Error(t, accountIdentityError(pinned, surprising),
+		"the hint promises a refusal the gate does not perform")
+	assert.NoError(t, accountIdentityError(unpinned, surprising),
+		"an unpinned account is already refused, so the hint offers nothing new")
+}

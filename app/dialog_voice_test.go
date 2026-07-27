@@ -1,11 +1,14 @@
 package app
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/ZviBaratz/atrium/session"
 	"github.com/ZviBaratz/atrium/session/git"
 
+	xansi "github.com/charmbracelet/x/ansi"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -56,19 +59,37 @@ func TestHostCapacityLine(t *testing.T) {
 
 // The over-cap create confirmation states the capacity, the consequence, and the
 // escape hatch, in that order — the one dialog that leads with facts rather than the
-// verb (#399 left it as it was). Pinned in both its branches now that the capacity
-// sentence is shared with resume.
+// verb (#399 left it as it was). Its tail used to send the user to a text editor;
+// since PR C the panel owns max_sessions and ',' opens the dialog straight onto that
+// row.
 func TestOverCapMessage(t *testing.T) {
 	require.Equal(t,
 		"Host capacity is 2, with 1 already running.\n"+
 			"Another will queue, not parallelize, and drive up load.\n"+
-			"Create it anyway? (set max_sessions in config.json to change this)",
+			"Create it anyway? (, to change the limit)",
 		overCapMessage(2, 1, 1))
 	require.Equal(t,
 		"Host capacity is 2, with 1 already running.\n"+
 			"Spawning 3 more will queue, not parallelize, and drive up load.\n"+
-			"Create them anyway? (set max_sessions in config.json to change this)",
+			"Create them anyway? (, to change the limit)",
 		overCapMessage(2, 1, 3))
+}
+
+// The dialog wraps at 46 cells, so a message is priced in RENDERED lines, not characters.
+// Teaching the key costs less than pointing at config.json did: the old tail wrapped onto a
+// second line and the new one does not.
+func TestOverCapMessageIsShorterThanThePathItReplaced(t *testing.T) {
+	// confirmWidth's preferred 50 less Padding(1,2)'s four cells. Stated as a literal because
+	// the dialog is only this wide on a terminal that can afford it; a narrower terminal wraps
+	// harder, and this is the case the wording was chosen against.
+	const wrap = 46
+	for _, m := range []string{overCapMessage(2, 1, 1), overCapMessage(2, 1, 3)} {
+		lines := 0
+		for _, para := range strings.Split(m, "\n") {
+			lines += len(strings.Split(xansi.Wrap(para, wrap, ""), "\n"))
+		}
+		assert.LessOrEqualf(t, lines, 4, "the confirmation must fit four rendered lines: %q", m)
+	}
 }
 
 // The resume clause is the second paragraph of the resume confirmations: the same

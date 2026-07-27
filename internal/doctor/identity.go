@@ -39,8 +39,20 @@ type AccountIdentityRow struct {
 // usage the user expected to see on the others never appears.
 type IdentityCollision struct {
 	Accounts []string // configured names, in config order
-	Email    string   // the shared login
+	Email    string   // the shared login's email, "" when no member recorded one
+	Key      string   // what they matched on: an account UUID, or a lowercased email
 	SameDir  bool     // true when they also share one config_dir
+}
+
+// Login names the shared account for a reader. It prefers the email, the form a user
+// recognises and can act on, and falls back to the key — a UUID — so a group whose
+// dirs all recorded only a UUID still names what they matched on. Rendering the empty
+// string here would put nothing in exactly the place the warning is pointing at.
+func (c IdentityCollision) Login() string {
+	if c.Email != "" {
+		return c.Email
+	}
+	return c.Key
 }
 
 // AccountIdentityReport is the whole section: one row per account that names a
@@ -58,9 +70,10 @@ type AccountIdentityReport struct {
 // whatever the ambient env supplies. Reporting them would attribute the ambient
 // login to an account that never selected it.
 //
-// Each distinct dir is read once, so two accounts pointing at one directory cost one
-// read and — more to the point — cannot be made to disagree with each other by a
-// file rewritten between two reads.
+// Each distinct dir is read once — compared by CLEANED path, since config_dir is
+// hand-written and a trailing slash is not a different dir — so two accounts pointing
+// at one directory cost one read and, more to the point, cannot be made to disagree
+// with each other by a file rewritten between two reads.
 //
 // Dormant when no Claude accounts are configured, matching CheckAccountKeys: with no
 // roster there is nothing to verify and an empty section is noise.
@@ -76,8 +89,12 @@ func CheckAccountIdentity(cfg *config.Config, r config.IdentityReadFunc) Account
 		if state == config.IdentityNoDir {
 			continue // inherit-env account: no dir of its own to report on
 		}
+		// NormalizedConfigDir, not ResolvedConfigDir: this is the same cleaned path
+		// CheckIdentity read and cached under, and the value SameDir compares. A raw
+		// one here would let "/h/x" and "/h/x/" render as two dirs in the roster and
+		// then be accused of having drifted onto one login.
 		report.Rows = append(report.Rows, AccountIdentityRow{
-			Account: a.Name, Dir: a.ResolvedConfigDir(), Actual: actual,
+			Account: a.Name, Dir: a.NormalizedConfigDir(), Actual: actual,
 			Expected: strings.TrimSpace(a.ExpectAccount), State: state,
 		})
 	}
@@ -128,12 +145,19 @@ func collisions(rows []AccountIdentityRow) []IdentityCollision {
 		}
 		g := groups[key]
 		if g == nil {
-			g = &group{dirs: map[string]bool{}, email: row.Actual.Email}
+			g = &group{dirs: map[string]bool{}}
 			groups[key] = g
 			order = append(order, key)
 		}
 		g.accounts = append(g.accounts, row.Account)
 		g.dirs[row.Dir] = true
+		// Take the first member that names an email, not the first member. Grouping
+		// is by UUID, and a dir can record a UUID with no email at all — so keying
+		// the label to arrival order lets one such dir blank out the login for a
+		// group whose other members name it perfectly well.
+		if g.email == "" {
+			g.email = row.Actual.Email
+		}
 	}
 
 	var out []IdentityCollision
@@ -143,7 +167,7 @@ func collisions(rows []AccountIdentityRow) []IdentityCollision {
 			continue
 		}
 		out = append(out, IdentityCollision{
-			Accounts: g.accounts, Email: g.email, SameDir: len(g.dirs) == 1,
+			Accounts: g.accounts, Email: g.email, Key: key, SameDir: len(g.dirs) == 1,
 		})
 	}
 	return out
@@ -204,20 +228,26 @@ func RenderAccountIdentity(rep AccountIdentityReport) string {
 		fmt.Fprintf(&b, "  %-14s %-32s %s\n", r.Account, r.identityLabel(), r.status())
 	}
 	for _, c := range rep.Collisions {
-		names := quotedList(c.Accounts)
+		names, login := quotedList(c.Accounts), c.Login()
 		if c.SameDir {
 			fmt.Fprintf(&b, "  ⚠ %s share one config_dir,\n    so they are one login (%s)\n",
-				names, c.Email)
+				names, login)
 		} else {
 			fmt.Fprintf(&b, "  ⚠ %s are different config dirs\n    holding the SAME login (%s)\n",
-				names, c.Email)
+				names, login)
 		}
-		fmt.Fprintf(&b, "    → work spread across them all bills %s; only\n", c.Email)
+		fmt.Fprintf(&b, "    → work spread across them all bills %s; only\n", login)
 		b.WriteString("      one of these accounts is really separate. Re-run /login in the wrong dir.\n")
 	}
+	// The hint offers exactly what the gate delivers and no more. app's
+	// accountIdentityError refuses only IdentityWrongAccount, and only for an account
+	// that pinned something — so this sentence is honest only while that stays true.
+	// It is enforced across the package boundary by TestDoctorHintMatchesGate: an
+	// advertisement for a check nothing performs is the failure this whole feature
+	// exists to end, and it would be a poor joke to reintroduce it here.
 	if unpinned := unpinnedNames(rep.Rows); len(unpinned) > 0 {
-		fmt.Fprintf(&b, "    → set expect_account to have Atrium verify a login and refuse to launch\n"+
-			"      on the wrong one (unpinned: %s)\n", strings.Join(unpinned, ", "))
+		fmt.Fprintf(&b, "    → set expect_account to have Atrium verify these logins and refuse\n"+
+			"      to start a session on the wrong one (unpinned: %s)\n", strings.Join(unpinned, ", "))
 	}
 	return b.String()
 }

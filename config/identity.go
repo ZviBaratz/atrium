@@ -109,12 +109,32 @@ func ReadAccountIdentity(configDir string) (AccountIdentity, bool) {
 	return id, true
 }
 
-// ReadIdentity is ReadAccountIdentity for a configured account, resolving its
-// config_dir (expanding ~) first. An inherit-env account — config_dir "" — reads
-// nothing and reports ok=false: it injects no CLAUDE_CONFIG_DIR, so it has no dir of
-// its own whose identity could be verified.
+// NormalizedConfigDir is ResolvedConfigDir cleaned — the spelling identity work
+// reads, caches and compares on. config_dir is hand-written, so one directory
+// reaches these checks written several ways, and gates.go's installedGateDirs
+// already cleans for exactly this reason: a trailing slash is not a different dir.
+// Left raw, "/h/x" and "/h/x/" would be read twice, defeating the single-read
+// guarantee, and then reported as two dirs that had drifted onto one login — sending
+// the user after a second directory that does not exist.
+//
+// An account naming no dir returns "" rather than a cleaned one, because
+// filepath.Clean("") is ".": every inherit-env account would otherwise acquire a
+// config dir pointing at the process's working directory, and be reported and gated
+// on a login no session ever routed there.
+func (a ClaudeAccount) NormalizedConfigDir() string {
+	dir := a.ResolvedConfigDir()
+	if dir == "" {
+		return ""
+	}
+	return filepath.Clean(dir)
+}
+
+// ReadIdentity is ReadAccountIdentity for a configured account, resolving and
+// normalizing its config_dir (expanding ~) first. An inherit-env account — config_dir
+// "" — reads nothing and reports ok=false: it injects no CLAUDE_CONFIG_DIR, so it has
+// no dir of its own whose identity could be verified.
 func (a ClaudeAccount) ReadIdentity() (AccountIdentity, bool) {
-	return ReadAccountIdentity(a.ResolvedConfigDir())
+	return ReadAccountIdentity(a.NormalizedConfigDir())
 }
 
 // IdentityReadFunc reads the login recorded in a config dir. A function rather than
@@ -159,7 +179,7 @@ const (
 // Order matters: an unreadable dir is classified before the pin is consulted, so an
 // account is never called verified or wrong on the strength of a read that failed.
 func (a ClaudeAccount) CheckIdentity(read IdentityReadFunc) (IdentityCheck, AccountIdentity) {
-	dir := a.ResolvedConfigDir()
+	dir := a.NormalizedConfigDir()
 	if dir == "" {
 		return IdentityNoDir, AccountIdentity{}
 	}
