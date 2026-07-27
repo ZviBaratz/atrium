@@ -3366,6 +3366,40 @@ do not break. Each is corrected in place. They are recorded rather than quietly 
 the "if ~40 tests fail" line was a *triage heuristic* an implementer would have reasoned
 from.
 
+## What changed during implementation
+
+The plan above is the reviewed version. Five things moved while executing it, each because
+running the code said so:
+
+1. **`fitValue`'s floor is `squeezedValueCells` (8), not `rowMinValueCells` (14).** With 14
+   the promise the plan had just fixed still failed: measured, the tightest two-pane geometry
+   leaves a 14-cell value column, so a 14-cell floor never squeezes and the chip drops
+   anyway. 8 was chosen against that measurement — reserving 4 for the chip leaves 9 — and
+   the sweep is what fails if the geometry moves.
+2. **`valueWasTruncated` now asks `rowValueAndBadge`** instead of re-deriving the value. A
+   value can be shortened twice — by `fitValue` and again by `composeRowLine` — and the old
+   helper saw only the second, so a squeezed value was reported as whole and the help pane
+   dropped its obligation to show it in full.
+3. **The comma-notice guard is scoped to the call plus the variable feeding it.** Two other
+   scopes were tried against the tree and rejected: call-only misses `warnMissingProgram`
+   (which builds its text into a variable across two branches — confirmed by reverting that
+   site and watching the check stay green), and whole-function flags `handleKeyPress`, a
+   400-line switch that legitimately holds both converted notices and a dozen unrelated ones.
+   `parser.ParseDir` also had to go — `staticcheck` deprecates it (SA1019), which only `lint`
+   sees.
+4. **The plan's one ordering compromise was avoidable.** Task 4 was told to put `/ search` in
+   the rail ladder before Task 5 wired the key; instead the ladder shipped without it and
+   Task 6 added it alongside the working key, so no commit ever advertised a dead key.
+5. **Two prescribed tests were duplicates of PR A guards** (`TestResetRestoresTheDefault`,
+   `TestResetIsPresentWhereverADefaultIs`) and were dropped rather than added, with a comment
+   pointing at the originals. The plan's own Global Constraints warned about exactly this for
+   schema *fields*; it holds for schema *guards* too.
+
+One PR B bug surfaced and is fixed with its own guard: a long `notify_command` evicted its
+inert chip at every width. The mutation for it came back negative at first — no existing test
+failed — so the case was constructed, the eviction confirmed by measurement at 73/80/100/120
+columns, and `TestALongValueCannotEvictAnInertChip` written before the fix was trusted.
+
 ## Self-Review
 
 **Spec coverage.** §8 search → Tasks 5 and 6, clause by clause: `/` from either pane
