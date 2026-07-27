@@ -807,6 +807,10 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 	case keys.KeySettings:
 		m.state = stateSettings
 		m.settingsOverlay = overlay.NewSettingsOverlay(m.appConfig)
+		if m.settingsRail != nil {
+			m.settingsOverlay.SetRailIndex(*m.settingsRail)
+		}
+		m.refreshSettingsClusteringGate()
 		m.recomputeLayout() // the hint bar hides behind the modal; panes reclaim its row
 		return m, tea.WindowSize()
 	case keys.KeyAccounts:

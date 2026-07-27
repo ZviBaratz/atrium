@@ -122,6 +122,29 @@ func (s *SettingsOverlay) SelectRow(key string) bool {
 	return false
 }
 
+// SetAccountClusteringVisible records whether ui.List currently renders account clusters, so the
+// Account clustering row can be dimmed when the setting is on but doing nothing.
+//
+// It exists because that gate is session-derived and settingRow.activeWhen can only see
+// *config.Config. Until home calls this, the panel shows no chip for the row at all: spec §5's
+// config-only predicate was wrong in both directions (accounts sharing a rotation pool collapse
+// to one cluster; unattributed sessions form one anyway), so a panel that cannot see the session
+// list must not guess. See TestGroupModeHasNoConfigOnlyInertPredicate.
+func (s *SettingsOverlay) SetAccountClusteringVisible(visible bool) {
+	s.clusteringVisible = &visible
+}
+
+// RailIndex reports which rail entry is current, so home can restore it the next time the panel
+// opens (spec §7). Persisting it to state.json is a deliberate non-goal.
+func (s *SettingsOverlay) RailIndex() int { return s.railCursor }
+
+// SetRailIndex moves the rail to the given entry, clamping out-of-range values — a remembered
+// index can outlive a rail that shrank — and pulling the row cursor with it.
+func (s *SettingsOverlay) SetRailIndex(i int) {
+	s.railCursor = clamp(i, 0, len(railEntries())-1)
+	s.syncCursorToRail()
+}
+
 // isModified reports whether row i's value differs from its built-in default, for
 // the "changed from default" marker. A row with no fixed default (see
 // settingRow.defaultDisplay) is never modified.

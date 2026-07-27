@@ -198,6 +198,16 @@ func (m *home) recomputeLayout() {
 // kill_double_tap_confirm) or only consumed by later operations (branch_prefix,
 // default_program on the next session; daemon_poll_interval on the next daemon
 // run), so persisting is all they need.
+// refreshSettingsClusteringGate hands the settings panel the list's own answer to "are account
+// clusters currently visible?", which the panel cannot derive: the gate counts distinct cluster
+// keys over live sessions, and settingRow predicates only see the config.
+func (m *home) refreshSettingsClusteringGate() {
+	if m.settingsOverlay == nil || m.list == nil {
+		return
+	}
+	m.settingsOverlay.SetAccountClusteringVisible(m.list.AccountClusteringVisible())
+}
+
 func (m *home) applySettingChange(key string) tea.Cmd {
 	if err := config.SaveConfig(m.appConfig); err != nil {
 		return m.handleError(err)
@@ -277,6 +287,10 @@ func (m *home) applySettingChange(key string) tea.Cmd {
 		if m.list != nil {
 			m.list.SetGroupMode(m.appConfig.GetGroupMode())
 		}
+		// Re-ask the list: the mode change alters accountGrouped(), which is half the gate, so
+		// the panel's copy must be recomputed rather than re-read — otherwise a row that has
+		// just started clustering two accounts still shows "nothing to cluster".
+		m.refreshSettingsClusteringGate()
 	case "hint_bar":
 		// The row is always reserved (menuVisible stays true in stateDefault); hint_bar
 		// only toggles the bar between its hints and a blank line, so the row count no

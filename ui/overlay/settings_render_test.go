@@ -1075,3 +1075,65 @@ func TestExpandedHelpDoesNotChangeTheBoxHeight(t *testing.T) {
 		})
 	}
 }
+
+// TestGroupModeChipIsSilentUntilTheGateIsInjected pins the tri-state. A panel that cannot see the
+// session list must not guess: the honest gate is session-derived, and a default of "inert" would
+// put "nothing to cluster" on every row on every open, while a default of "active" would be a
+// silent wrong answer. nil means no chip.
+func TestGroupModeChipIsSilentUntilTheGateIsInjected(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.GroupMode = config.GroupModeAccount
+	o := NewSettingsOverlay(cfg)
+	o.SetSize(100, 32)
+	assert.Empty(t, o.inertReason(indexOfRowKey(t, o, "group_mode")),
+		"with no injected gate the panel says nothing")
+}
+
+// TestGroupModeChipTracksTheInjectedGate pins all four combinations of (setting, gate). The chip
+// appears only when the setting is ON and the list says clustering is invisible — "off" is not
+// inert, it is simply off, and a chip there would be noise on a row doing exactly what it says.
+func TestGroupModeChipTracksTheInjectedGate(t *testing.T) {
+	cases := []struct {
+		name    string
+		mode    string
+		visible bool
+		want    string
+	}{
+		{"on and clustering", config.GroupModeAccount, true, ""},
+		{"on but nothing to cluster", config.GroupModeAccount, false, "nothing to cluster"},
+		{"off and clustering", config.GroupModeRepo, true, ""},
+		{"off and not clustering", config.GroupModeRepo, false, ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := config.DefaultConfig()
+			cfg.GroupMode = tc.mode
+			o := NewSettingsOverlay(cfg)
+			o.SetSize(100, 32)
+			o.SetAccountClusteringVisible(tc.visible)
+			assert.Equal(t, tc.want, o.inertReason(indexOfRowKey(t, o, "group_mode")))
+		})
+	}
+}
+
+// TestRailIndexRoundTrips pins the accessor pair home uses to remember the category across opens
+// within a run (spec §7). Persisting it to state.json is a deliberate non-goal — a fresh launch
+// starting at the top is fine — so an in-memory int on home is the whole mechanism.
+func TestRailIndexRoundTrips(t *testing.T) {
+	o := NewSettingsOverlay(config.DefaultConfig())
+	for i := range railEntries() {
+		o.SetRailIndex(i)
+		assert.Equal(t, i, o.RailIndex())
+		start, end := o.rowRange(o.selectedEntry())
+		if end > start {
+			assert.GreaterOrEqualf(t, o.cursor, start, "SetRailIndex(%d) left the cursor outside the pane", i)
+			assert.Less(t, o.cursor, end)
+		}
+	}
+	// Out-of-range values are clamped rather than panicking: home's remembered index could
+	// outlive a rail that shrank.
+	o.SetRailIndex(999)
+	assert.Equal(t, len(railEntries())-1, o.RailIndex())
+	o.SetRailIndex(-5)
+	assert.Equal(t, 0, o.RailIndex())
+}
