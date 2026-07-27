@@ -1,7 +1,6 @@
 package app
 
 import (
-	"github.com/ZviBaratz/atrium/config"
 	"github.com/ZviBaratz/atrium/ui"
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -13,7 +12,7 @@ type agentCheckDoneMsg struct {
 func (m *home) agentCheckCmd() tea.Cmd {
 	profiles := m.appConfig.GetProfiles()
 	return func() tea.Msg {
-		detected := config.DetectAgentProfiles()
+		detected := detectAgents()
 		var newAgents []string
 
 		for _, d := range detected {

@@ -110,6 +110,34 @@ func TestFilter_Dirty(t *testing.T) {
 	require.False(t, ParseFilter("dirty").Matches(unknown), "nil diffStats is not dirty")
 }
 
+func TestFilter_Muted(t *testing.T) {
+	muted := newFilterInstance(t, "m", "b")
+	muted.SetMuted(true)
+	live := newFilterInstance(t, "l", "b")
+
+	require.True(t, ParseFilter("muted").Matches(muted))
+	require.False(t, ParseFilter("muted").Matches(live))
+
+	// compound: muted AND a status predicate
+	muted.SetStatus(Running)
+	require.True(t, ParseFilter("muted status:running").Matches(muted))
+	require.False(t, ParseFilter("muted status:ready").Matches(muted))
+}
+
+func TestFilter_Unread(t *testing.T) {
+	unread := newFilterInstance(t, "u", "b")
+	unread.unread = true
+	seen := newFilterInstance(t, "s", "b")
+
+	require.True(t, ParseFilter("unread").Matches(unread))
+	require.False(t, ParseFilter("unread").Matches(seen))
+
+	// compound: unread AND a pr predicate
+	unread.SetPRStatus(&git.PRStatus{HasPR: true, State: "OPEN"})
+	require.True(t, ParseFilter("unread pr:open").Matches(unread))
+	require.False(t, ParseFilter("unread pr:merged").Matches(unread))
+}
+
 func TestFilter_Behind(t *testing.T) {
 	behind3 := newFilterInstance(t, "a", "b")
 	behind3.SetDiffStats(&git.DiffStats{Behind: 3})
