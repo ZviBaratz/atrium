@@ -61,6 +61,10 @@ func (s *SettingsOverlay) resetProfileTransients() {
 // whatever settingRow the cursor last sat on — help about a setting the user is not looking at,
 // or a reset of one they cannot see.
 func (s *SettingsOverlay) handleProfilesKey(msg tea.KeyMsg) (closed bool, changedKey string) {
+	if s.profileConfirm {
+		// Checked BEFORE the clear below, because the prompt has to survive its own render.
+		return false, s.handleProfileConfirmKey(msg)
+	}
 	s.lastErr, s.profileNote = "", ""
 	switch msg.String() {
 	case "esc", "ctrl+c", "tab", "shift+tab":
@@ -83,8 +87,61 @@ func (s *SettingsOverlay) handleProfilesKey(msg tea.KeyMsg) (closed bool, change
 			p := s.cfg.Profiles[s.profileCursor]
 			s.profileForm = newProfileForm(s.profileCursor, p.Name, p.Program)
 		}
+	case "d":
+		if len(s.cfg.Profiles) > 0 {
+			s.armProfileDelete()
+		}
 	}
 	return false, ""
+}
+
+// armProfileDelete refuses when the highlighted record is the one default_program names, and
+// otherwise arms the confirmation.
+//
+// Refusing is spec §9's guard 12, taken over the repoint alternative. default_program lives in
+// another category, so a silent repoint would change what every new session launches from a
+// pane that cannot show the change; and there is no successor record that preserves the launch
+// command, unlike a rename (see commitProfile). It is also the panel's existing voice for a
+// value it will not silently rewrite — project_search_depth refuses a value past the accessor's
+// clamp rather than echoing back a number the accessor ignores.
+//
+// The message leads with the setting's own label, because the help pane caps prose at
+// helpHeight() lines with a tail ellipsis and that label is the one word the user needs to find
+// the row.
+//
+// The one-profile wording is not politeness. default_program's options are the profile names
+// plus the captured raw command, and cycleEnum returns early on a single-option enum with no
+// error, no inert chip and no reset — a silent dead key. seededDefaultConfig points
+// default_program at Profiles[0], so a machine with one agent installed lands in exactly that
+// state on first run, and "change it under Sessions first" would send that user to a row the
+// panel makes impossible to change. Name the action that actually works instead.
+func (s *SettingsOverlay) armProfileDelete() {
+	if s.cfg.Profiles[s.profileCursor].Name != s.cfg.DefaultProgram {
+		s.profileConfirm = true
+		return
+	}
+	if len(s.cfg.Profiles) == 1 {
+		s.lastErr = "Default program points at your only profile — add another with n first."
+		return
+	}
+	s.lastErr = "Default program points at this profile — change it under Sessions first."
+}
+
+// handleProfileConfirmKey routes the delete confirmation. y or ↵ deletes; n, esc or ctrl+c backs
+// out; every other key is ignored, so a stray press can neither confirm nor silently disarm
+// (the accounts overlay's rule).
+func (s *SettingsOverlay) handleProfileConfirmKey(msg tea.KeyMsg) (changedKey string) {
+	switch msg.String() {
+	case "y", "enter":
+		s.profileConfirm = false
+		i := s.profileCursor
+		s.cfg.Profiles = append(s.cfg.Profiles[:i], s.cfg.Profiles[i+1:]...)
+		s.clampProfileCursor()
+		return profilesChangedKey
+	case "n", "esc", "ctrl+c":
+		s.profileConfirm = false
+	}
+	return ""
 }
 
 // The form's fields, as slice indices. profileFieldCount closes the block so nav wraps on the
@@ -448,9 +505,10 @@ func (s *SettingsOverlay) profilesHintLadder() []string {
 		return []string{"y delete · n cancel · esc cancel", "y delete · n cancel", "y / n"}
 	}
 	return []string{
-		"↑/↓ move · n new · ↵ edit · / search · ⇥ pane · esc back",
-		"↑/↓ move · n new · ↵ edit · / search · esc back",
-		"↑/↓ · n new · ↵ edit · esc back",
+		"↑/↓ move · n new · ↵ edit · d delete · / search · ⇥ pane · esc back",
+		"↑/↓ move · n new · ↵ edit · d delete · / search · esc back",
+		"↑/↓ · n new · ↵ edit · d delete · esc back",
+		"n new · ↵ edit · d delete · esc back",
 		"esc back",
 	}
 }

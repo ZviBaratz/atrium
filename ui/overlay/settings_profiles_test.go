@@ -727,3 +727,274 @@ func TestFormHintNamesItsOwnKeys(t *testing.T) {
 	assert.Contains(t, hint, "⇥ field", "tab switches fields here, not panes")
 	assert.NotContains(t, hint, "…", "the ladder must fit rather than be truncated")
 }
+
+// --- Task 4: delete ----------------------------------------------------------
+
+// profileNames collapses the list to its names so an ordering assertion is one require.Equal.
+func profileNames(cfg *config.Config) []string {
+	out := make([]string, len(cfg.Profiles))
+	for i, p := range cfg.Profiles {
+		out[i] = p.Name
+	}
+	return out
+}
+
+// TestDeleteAsksBeforeRemoving. Deleting a record is the first irreversible action in this
+// panel — r restores a default and an enum cycle is reversible, this is not — and the sibling
+// record editor over the same config file confirms too. d alone must change nothing.
+func TestDeleteAsksBeforeRemoving(t *testing.T) {
+	cfg := threeProfiles()
+	o := NewSettingsOverlay(cfg)
+	o.SetSize(100, 32)
+	profilesAt(t, o)
+	_, _ = o.HandleKeyPress(keyRunes("j")) // aider, not the default
+
+	_, changed := o.HandleKeyPress(keyRunes("d"))
+	assert.Empty(t, changed, "arming the confirmation changes no config")
+	require.True(t, o.profileConfirm)
+	assert.Len(t, cfg.Profiles, 3, "d alone deletes nothing")
+
+	prose, danger := o.profilesHelp()
+	assert.True(t, danger, "the prompt is a warning, and the help pane must paint it as one")
+	assert.Contains(t, prose, "aider", "the prompt names the record it is about to destroy")
+
+	hint := stripANSI(o.hintLine())
+	assert.Contains(t, hint, "y delete")
+	assert.Contains(t, hint, "n cancel")
+	assert.NotContains(t, hint, "…")
+}
+
+// TestConfirmDeletesAndReportsTheKey — y (and ↵) removes the record and reports "profiles", so
+// home persists through the panel's one writer.
+func TestConfirmDeletesAndReportsTheKey(t *testing.T) {
+	for _, key := range []tea.KeyMsg{keyRunes("y"), {Type: tea.KeyEnter}} {
+		cfg := threeProfiles()
+		o := NewSettingsOverlay(cfg)
+		o.SetSize(100, 32)
+		profilesAt(t, o)
+		_, _ = o.HandleKeyPress(keyRunes("j"))
+		_, _ = o.HandleKeyPress(keyRunes("d"))
+
+		_, changed := o.HandleKeyPress(key)
+		assert.Equal(t, profilesChangedKey, changed)
+		assert.False(t, o.profileConfirm, "the prompt closes")
+		require.Len(t, cfg.Profiles, 2)
+		assert.Equal(t, []string{"claude", "codex"}, profileNames(cfg))
+	}
+}
+
+// TestCancelKeepsTheProfile: n, esc and ctrl+c all back out, and every OTHER key is ignored
+// rather than treated as a cancel — a stray press must not confirm, and must not silently
+// disarm either (the accounts overlay's rule).
+func TestCancelKeepsTheProfile(t *testing.T) {
+	for _, key := range []tea.KeyMsg{keyRunes("n"), {Type: tea.KeyEsc}, {Type: tea.KeyCtrlC}} {
+		cfg := threeProfiles()
+		o := NewSettingsOverlay(cfg)
+		o.SetSize(100, 32)
+		profilesAt(t, o)
+		// Off the default record first: d on THAT one is refused and never arms, so a loop
+		// starting at index 0 would be testing the guard rather than the cancel.
+		_, _ = o.HandleKeyPress(keyRunes("j"))
+		_, _ = o.HandleKeyPress(keyRunes("d"))
+		require.True(t, o.profileConfirm)
+
+		closed, changed := o.HandleKeyPress(key)
+		assert.False(t, closed, "cancelling a delete must not close the panel")
+		assert.Empty(t, changed)
+		assert.False(t, o.profileConfirm)
+		assert.Len(t, cfg.Profiles, 3)
+	}
+
+	cfg := threeProfiles()
+	o := NewSettingsOverlay(cfg)
+	o.SetSize(100, 32)
+	profilesAt(t, o)
+	_, _ = o.HandleKeyPress(keyRunes("j"))
+	_, _ = o.HandleKeyPress(keyRunes("d"))
+	_, changed := o.HandleKeyPress(keyRunes("z"))
+	assert.Empty(t, changed)
+	assert.True(t, o.profileConfirm, "an unrecognized key leaves the prompt up")
+	assert.Len(t, cfg.Profiles, 3)
+}
+
+// TestDeletingTheLastProfileClampsTheCursor is the off-by-one clampProfileCursor exists for.
+// The splice shortens the list while the cursor stays put, so deleting the LAST record leaves
+// it one past the end — and the very next render, or the next d, indexes out of range and
+// panics. Deleting a middle record needs no clamp, which is why this test deletes the last one.
+func TestDeletingTheLastProfileClampsTheCursor(t *testing.T) {
+	cfg := threeProfiles()
+	o := NewSettingsOverlay(cfg)
+	o.SetSize(100, 32)
+	profilesAt(t, o)
+	_, _ = o.HandleKeyPress(keyRunes("j"))
+	_, _ = o.HandleKeyPress(keyRunes("j"))
+	require.Equal(t, 2, o.profileCursor, "precondition: on the last record")
+
+	_, _ = o.HandleKeyPress(keyRunes("d"))
+	_, _ = o.HandleKeyPress(keyRunes("y"))
+
+	assert.Equal(t, 1, o.profileCursor, "the cursor clamps onto the new last record")
+	assert.NotPanics(t, func() { _ = o.Render() }, "and the very next render is safe")
+	// The next d must also be safe: the confirm prompt indexes the list to name the record.
+	assert.NotPanics(t, func() {
+		_, _ = o.HandleKeyPress(keyRunes("d"))
+		_, _ = o.HandleKeyPress(keyRunes("y"))
+	})
+	assert.Len(t, cfg.Profiles, 1)
+}
+
+// TestDeletingAMiddleProfileLandsOnTheNextOne is the negative control that keeps the clamp from
+// being written as "always move up": deleting from the middle should leave the cursor where it
+// is, which now points at what was the following record.
+func TestDeletingAMiddleProfileLandsOnTheNextOne(t *testing.T) {
+	cfg := threeProfiles()
+	o := NewSettingsOverlay(cfg)
+	o.SetSize(100, 32)
+	profilesAt(t, o)
+	_, _ = o.HandleKeyPress(keyRunes("j")) // aider
+
+	_, _ = o.HandleKeyPress(keyRunes("d"))
+	_, _ = o.HandleKeyPress(keyRunes("y"))
+
+	assert.Equal(t, 1, o.profileCursor)
+	assert.Equal(t, "codex", cfg.Profiles[o.profileCursor].Name,
+		"the cursor stays put and now points at what followed")
+}
+
+// TestDeletingTheOnlyProfileIsSafe — the n == 0 case, where a naive clamp yields -1.
+func TestDeletingTheOnlyProfileIsSafe(t *testing.T) {
+	cfg := profilesCfg("something-else", config.Profile{Name: "solo", Program: "solo"})
+	o := NewSettingsOverlay(cfg)
+	o.SetSize(100, 32)
+	profilesAt(t, o)
+
+	_, _ = o.HandleKeyPress(keyRunes("d"))
+	_, changed := o.HandleKeyPress(keyRunes("y"))
+
+	assert.Equal(t, profilesChangedKey, changed)
+	assert.Empty(t, cfg.Profiles)
+	assert.Equal(t, 0, o.profileCursor)
+	assert.NotPanics(t, func() { _ = o.Render() })
+	assert.Contains(t, strings.Join(paneText(o), " "), "No profiles yet",
+		"an emptied list falls back to the empty-state line")
+}
+
+// TestDeletingTheDefaultProfileIsRefused is spec §13's guard 12, the clause a passing test can
+// most easily misrepresent. The refusal must be all three of: nothing removed, nothing reported
+// as changed (so no SaveConfig runs), and a message naming the SETTING — because the user has
+// to go somewhere else to clear it, and "Default program" is the label they will be looking for.
+//
+// The message leads with that label so the help pane's truncation ladder cannot eat it.
+func TestDeletingTheDefaultProfileIsRefused(t *testing.T) {
+	cfg := threeProfiles()
+	o := NewSettingsOverlay(cfg)
+	o.SetSize(100, 32)
+	profilesAt(t, o)
+	require.Equal(t, cfg.Profiles[o.profileCursor].Name, cfg.DefaultProgram,
+		"precondition: the cursor is on the profile default_program names")
+
+	closed, changed := o.HandleKeyPress(keyRunes("d"))
+
+	assert.False(t, closed)
+	assert.Empty(t, changed, "a refused delete must not reach SaveConfig")
+	assert.False(t, o.profileConfirm, "and must not even arm the confirmation")
+	assert.Len(t, cfg.Profiles, 3, "nothing was removed")
+	assert.True(t, strings.HasPrefix(o.lastErr, "Default program"),
+		"the refusal leads with the setting's own label: %q", o.lastErr)
+	assert.Contains(t, o.lastErr, "under Sessions",
+		"with alternatives available, the refusal names where to go")
+}
+
+// TestRefusingTheOnlyProfileNamesAnActionThatWorks. With exactly one profile, "change it under
+// Sessions first" is advice the panel makes impossible to follow: default_program's options are
+// the profile names plus the captured raw command, so a single profile means a single option,
+// and cycleEnum returns early on len(opts) < 2 with no error, no inert chip and no reset — a
+// silent dead key.
+//
+// This is not an exotic state. seededDefaultConfig sets DefaultProgram = Profiles[0].Name, so a
+// machine with only claude installed lands here on first run. The refusal has to name an action
+// that exists.
+func TestRefusingTheOnlyProfileNamesAnActionThatWorks(t *testing.T) {
+	cfg := profilesCfg("solo", config.Profile{Name: "solo", Program: "solo --flag"})
+	o := NewSettingsOverlay(cfg)
+	o.SetSize(100, 32)
+
+	// The premise, asserted rather than assumed: the row this refusal would point at cannot move.
+	settingsAt(t, o, "default_program")
+	require.Len(t, o.rows[o.cursor].options(cfg), 1, "precondition: one profile, one option")
+	_, changed := o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRight})
+	require.Empty(t, changed, "precondition: cycling a single-option enum is a silent no-op")
+
+	profilesAt(t, o)
+	_, changed = o.HandleKeyPress(keyRunes("d"))
+
+	assert.Empty(t, changed)
+	assert.False(t, o.profileConfirm)
+	assert.Len(t, cfg.Profiles, 1)
+	assert.True(t, strings.HasPrefix(o.lastErr, "Default program"), "%q", o.lastErr)
+	assert.NotContains(t, o.lastErr, "under Sessions",
+		"that row cannot be changed here, so the refusal must not send the user to it")
+	assert.Contains(t, o.lastErr, "with n", "it names the key that creates the alternative instead")
+}
+
+// TestTheRefusalFitsTheHelpPaneAtEveryWidth. A guard message the user cannot read is not a
+// guard, and this one is prose in a FIXED-height pane: helpLines wraps lastErr to innerWidth,
+// keeps the first proseBudget lines and marks the cut with an ellipsis.
+//
+// Asserting that "Default program" survives would prove nothing — it leads the sentence, so it
+// is always in line 0 whatever the cap does. Measured, a 211-cell message left that assertion
+// green. The falsifiable half is the TAIL plus the absence of an ellipsis, and the margin is
+// real: at 40 columns (inner 34) the 71-cell refusal wraps to exactly 3 lines against a
+// proseBudget of 3. One more clause and it is cut. That is the same zero-margin-at-the-floor
+// shape PR C measured for the handoff notes.
+func TestTheRefusalFitsTheHelpPaneAtEveryWidth(t *testing.T) {
+	for w := 40; w <= 200; w++ {
+		cfg := threeProfiles()
+		o := NewSettingsOverlay(cfg)
+		o.SetSize(w, 24)
+		o.SetRailIndex(profilesRailIndex())
+		o.focus = focusRows
+		_, _ = o.HandleKeyPress(keyRunes("d"))
+		require.NotEmptyf(t, o.lastErr, "%d: the delete must be refused", w)
+
+		help := stripANSI(strings.Join(o.helpLines(), " "))
+		assert.Containsf(t, help, "Default program", "%d: the refusal lost the setting's name: %q", w, help)
+		assert.NotContainsf(t, help, "…", "%d: the refusal was cut by the help pane's cap: %q", w, help)
+		assert.Containsf(t, help, "first.", "%d: the refusal lost its tail: %q", w, help)
+	}
+}
+
+// TestARefusalDoesNotOutliveTheNextKey. lastErr is cleared at the top of handleProfilesKey, so
+// the message describes the key that produced it and nothing later — a stale refusal sitting
+// under a different record would be read as being about that record.
+func TestARefusalDoesNotOutliveTheNextKey(t *testing.T) {
+	o := NewSettingsOverlay(threeProfiles())
+	o.SetSize(100, 32)
+	profilesAt(t, o)
+	_, _ = o.HandleKeyPress(keyRunes("d"))
+	require.NotEmpty(t, o.lastErr)
+
+	_, _ = o.HandleKeyPress(keyRunes("j"))
+	assert.Empty(t, o.lastErr, "moving off the record clears its refusal")
+}
+
+// TestDeletingAProfileWhileDefaultProgramIsARawCommand is the guard's OTHER direction: the
+// refusal is about the pointer, not about being first in the list. With default_program holding
+// a raw command that matches no record, every record is deletable.
+func TestDeletingAProfileWhileDefaultProgramIsARawCommand(t *testing.T) {
+	cfg := profilesCfg("/home/user/launch-claude.sh",
+		config.Profile{Name: "claude", Program: "claude"},
+		config.Profile{Name: "codex", Program: "codex"},
+	)
+	o := NewSettingsOverlay(cfg)
+	o.SetSize(100, 32)
+	profilesAt(t, o)
+
+	_, _ = o.HandleKeyPress(keyRunes("d"))
+	require.True(t, o.profileConfirm, "no record is the default, so none is protected")
+	_, changed := o.HandleKeyPress(keyRunes("y"))
+
+	assert.Equal(t, profilesChangedKey, changed)
+	assert.Equal(t, []string{"codex"}, profileNames(cfg))
+	assert.Equal(t, "/home/user/launch-claude.sh", cfg.DefaultProgram, "and the raw command is untouched")
+}
