@@ -29,9 +29,12 @@ const (
 	// bounded-vocabulary row's compact rendering, the widest of which is "‹ creation ›" at 12
 	// cells. It is what makes minRowsPaneWidth — and so the single-pane threshold — a derived
 	// number, and TestRowMinValueCellsHoldsEveryFixedVocabularyValue ties it to the real schema.
-	// Rows whose vocabulary grows outside this package (theme, splash, default_program) and the
-	// arbitrary-length int and text rows are excluded there by design: they truncate at the
-	// narrowest two-pane width and the help pane shows the value in full.
+	//
+	// Three enum rows are excluded from that bound (theme, splash, default_program), along with
+	// every int and text row: their widths are not bounded by anything this package controls — a
+	// theme name grows with the registry, a path can be any length. Excluding them keeps the
+	// threshold from widening to chase them; when one does outgrow its pane the truncation ladder
+	// shortens it and the help pane shows the value in full (see contextLine).
 	rowMinValueCells = 14
 )
 
