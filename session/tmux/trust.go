@@ -20,7 +20,7 @@ import (
 // unrouted session, or a routed account's own dir (#261/#262). It must be
 // absolute. An empty configDir is a silent no-op (nothing is configured, and
 // there is no path to write); a relative one is refused with an error, because
-// that is a misconfiguration worth surfacing rather than a missing value. Either
+// that is a misconfiguration worth reporting rather than a missing value. Either
 // way this function never guesses at a path — see the guard below.
 //
 // There is no sanctioned interface for this: hasTrustDialogAccepted is a

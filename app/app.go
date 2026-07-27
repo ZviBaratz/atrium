@@ -152,8 +152,9 @@ func maybeTrustWorktreesRoot(cfg *config.Config, program string) {
 //
 // A relative dir that survives to here (a hand-written config_dir, or a relative
 // $CLAUDE_CONFIG_DIR) is deliberately NOT filtered out: the writer refuses it with
-// an error, which the caller logs, so the misconfiguration is reported instead of
-// vanishing. Dropping it here would silence that.
+// an error, which the caller logs to the warning log, so the misconfiguration
+// leaves a trace instead of vanishing at this step. Dropping it here would silence
+// even that — the trust write is best-effort, so the log is the only channel it has.
 func claudeTrustDirs(cfg *config.Config) []string {
 	var dirs []string
 	seen := map[string]bool{}

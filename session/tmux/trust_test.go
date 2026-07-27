@@ -247,9 +247,12 @@ func TestEnsureWorktreesRootTrustedIn_EmptyConfigDirIsNoop(t *testing.T) {
 // fileGateReader). We cannot know the cwd claude would have used, so we do not
 // guess.
 //
-// Same shape as the empty-dir test, for the same reason: a temp cwd holding a
-// real, untrusted .claude.json, because asserting only the error would still pass
-// if the guard were removed and the write landed on that bystander.
+// Same temp-cwd shape as the empty-dir test but NOT for the same reason: there,
+// the return is nil whether or not the guard runs, so only the bystander file can
+// tell the two apart. Here dropping the guard turns the error into a nil, which
+// the first assertion already catches. The bystander stays for the narrower shape
+// the return value cannot see — a guard that reports the misconfiguration and
+// writes anyway.
 func TestEnsureWorktreesRootTrustedIn_RelativeConfigDirIsRefused(t *testing.T) {
 	cwd := t.TempDir()
 	t.Chdir(cwd)
