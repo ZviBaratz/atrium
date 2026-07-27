@@ -211,8 +211,10 @@ type hookSettings struct {
 }
 
 // buildHookSettings marshals the settings.json content wiring the status hooks. binPath
-// is the atrium binary each hook re-invokes (see hookEventCommand).
-func buildHookSettings(binPath, stateFile string) ([]byte, error) {
+// is the atrium binary each hook re-invokes (see hookEventCommand). brief adds the outward-
+// facing SessionStart entry (#485) when its facts are complete; a zero brief omits that event
+// entirely, which is how a direct (non-git) session — no worktree, no branch — stays silent.
+func buildHookSettings(binPath, stateFile string, brief SessionBrief) ([]byte, error) {
 	cmd := func(event string) hookCommand {
 		return hookCommand{Type: "command", Command: hookEventCommand(binPath, stateFile, event)}
 	}
@@ -253,6 +255,16 @@ func buildHookSettings(binPath, stateFile string) ([]byte, error) {
 		"SubagentStart": {{Hooks: []hookCommand{cmd(HookEventSubagentStart)}}},
 		"SubagentStop":  {{Hooks: []hookCommand{cmd(HookEventSubagentStop)}}},
 	}}
+	// The only event that writes TO the agent rather than reading it: a short situational brief
+	// delivered as SessionStart additionalContext (see brief.go). Hooks from all settings
+	// sources are merged and deduped by command string, so this cannot clobber a user's own
+	// SessionStart hooks. It carries no state path — it mutates nothing.
+	if brief.ok() {
+		s.Hooks["SessionStart"] = []hookMatcherGroup{{
+			Matcher: sessionStartMatcher,
+			Hooks:   []hookCommand{{Type: "command", Command: hookSessionStartCommand(binPath, brief)}},
+		}}
+	}
 	return json.MarshalIndent(s, "", "  ")
 }
 
@@ -261,7 +273,13 @@ func buildHookSettings(binPath, stateFile string) ([]byte, error) {
 // returns ("", nil) when injection should be skipped (non-claude program, or no --settings
 // support); it returns ("", err) only on a real IO failure, which the caller logs and treats
 // as "skip injection" so the launch still proceeds.
-func ensureHookSettings(sanitizedName, program string) (string, error) {
+//
+// brief carries the per-session facts the SessionStart context brief is rendered from (#485).
+// The caller reads it from the Session's provider immediately before calling this, so the facts
+// baked into the file are the ones live at THIS launch — session create, pause→resume and
+// recover-in-place all route through start(), and a rename between two of them must not leave
+// the second describing the first.
+func ensureHookSettings(sanitizedName, program string, brief SessionBrief) (string, error) {
 	if !agent.Resolve(program).HookSupport || !claudeSupportsSettingsFlag() {
 		return "", nil
 	}
@@ -283,7 +301,7 @@ func ensureHookSettings(sanitizedName, program string) (string, error) {
 	stateFile := filepath.Join(dir, "state")
 	// A reused name must not read a prior incarnation's value before the first hook fires.
 	_ = os.Remove(stateFile)
-	data, err := buildHookSettings(binPath, stateFile)
+	data, err := buildHookSettings(binPath, stateFile, brief)
 	if err != nil {
 		return "", err
 	}

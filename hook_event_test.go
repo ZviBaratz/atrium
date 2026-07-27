@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"io"
 	"os"
@@ -118,6 +119,43 @@ func TestRunHookEventEffort(t *testing.T) {
 	t.Setenv("CLAUDE_EFFORT", "")
 	runHookEvent(path, tmux.HookEventWorking, strings.NewReader(""))
 	require.Equal(t, "max", readState(t, path).Effort, "an empty env must not clear a known effort")
+}
+
+// TestRunSessionStartHook drives the one hook that writes TO the agent instead of reading it
+// (#485), through the seam the hidden subcommand actually calls. It pins the wire bytes exactly
+// — envelope shape, field names and the brief inside — because Claude discards a malformed hook
+// payload SILENTLY: no error in the pane, none in atrium's log, the brief simply never appears.
+// A shape typo would otherwise ship undetected.
+func TestRunSessionStartHook(t *testing.T) {
+	brief := tmux.SessionBrief{
+		Name:          "issue-485",
+		Origin:        "/repos/atrium",
+		Branch:        "zvi/issue-485",
+		WorktreesRoot: "/home/z/.atrium/worktrees",
+	}
+
+	var out bytes.Buffer
+	runSessionStartHook(&out, brief)
+
+	expected, err := tmux.SessionStartHookOutput(brief)
+	require.NoError(t, err)
+	require.Equal(t, string(expected)+"\n", out.String(), "the subcommand prints the envelope and nothing else")
+	require.Contains(t, out.String(), `{"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"`)
+	require.Contains(t, out.String(), "zvi/issue-485", "the baked facts reach the payload")
+	require.Contains(t, out.String(), "never run `git worktree remove`", "the ownership prohibition reaches the wire")
+
+	// Every fact is required: a partial command line (an older atrium's settings.json, a direct
+	// session that somehow reached here) prints nothing rather than a sentence with a hole in
+	// it. Claude then has nothing to parse, which is the intended fail-open degradation.
+	for _, partial := range []tmux.SessionBrief{
+		{},
+		{Name: "issue-485"},
+		{Name: "issue-485", Origin: "/repos/atrium", Branch: "zvi/issue-485"},
+	} {
+		var empty bytes.Buffer
+		runSessionStartHook(&empty, partial)
+		require.Empty(t, empty.String(), "an incomplete brief prints nothing: %+v", partial)
+	}
 }
 
 type stateFileView struct {
