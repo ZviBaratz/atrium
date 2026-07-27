@@ -91,8 +91,71 @@ func (s *SettingsOverlay) handleProfilesKey(msg tea.KeyMsg) (closed bool, change
 		if len(s.cfg.Profiles) > 0 {
 			s.armProfileDelete()
 		}
+	case "D":
+		s.requestProfileDetect()
 	}
 	return false, ""
+}
+
+// requestProfileDetect asks home to run agent detection off the update loop.
+//
+// It cannot run inline: config.DetectAgentProfiles probes claude through
+// config.GetClaudeCommand, which spawns a login shell sourcing the user's rc file under a
+// ten-second timeout (config/detect.go). A synchronous call would freeze the update loop — and
+// with it every session's poll — for as long as that takes. home runs it as a tea.Cmd through
+// the same detectAgents seam the startup agent check already uses, so the panel and
+// `atrium profiles detect` cannot probe differently, and hands the result to
+// NoteProfilesDetected.
+//
+// The latch is what stops a held key spawning a shell per repeat; NoteProfilesDetected releases
+// it. It sets no note: profilesHelp derives "Detecting installed agents…" from the flag instead,
+// because handleProfilesKey clears the note on every key — so a note would vanish the moment the
+// user pressed j while waiting, and a second D would visibly REMOVE the only explanation on
+// screen rather than repeat it.
+func (s *SettingsOverlay) requestProfileDetect() {
+	if s.profileDetecting {
+		return
+	}
+	s.profileDetecting, s.profileDetectPending = true, true
+}
+
+// TakeProfileDetect reports whether the Profiles editor has asked for a detection run,
+// consuming the request. home calls it after every key press, exactly as it reads Handoff on
+// close: an overlay cannot run a command itself.
+func (s *SettingsOverlay) TakeProfileDetect() bool {
+	if !s.profileDetectPending {
+		return false
+	}
+	s.profileDetectPending = false
+	return true
+}
+
+// NoteProfilesDetected records a completed detection's outcome for the editor's help pane and
+// reports whether the user will actually see it there.
+//
+// home does the merging and owns the wording; this half exists only so the result is REPORTED
+// where the user is looking. When the editor's pane is not on screen — the rail moved, a filter
+// is up, the panel closed — it returns false and home surfaces the outcome as a notice instead.
+// Without that split the merge could rewrite config.json with nothing whatever on screen: the
+// probe outlives the keypress, and syncCursorToRail clears the note on the way past.
+//
+// The cursor follows the first added record, so D and n agree about where you end up.
+func (s *SettingsOverlay) NoteProfilesDetected(added []string, text string) (shown bool) {
+	s.profileDetecting = false
+	if len(added) > 0 {
+		for i, p := range s.cfg.Profiles {
+			if p.Name == added[0] {
+				s.profileCursor = i
+				break
+			}
+		}
+	}
+	s.clampProfileCursor()
+	if !s.profilesPaneActive() {
+		return false
+	}
+	s.profileNote = text
+	return true
 }
 
 // armProfileDelete refuses when the highlighted record is the one default_program names, and
@@ -505,9 +568,9 @@ func (s *SettingsOverlay) profilesHintLadder() []string {
 		return []string{"y delete · n cancel · esc cancel", "y delete · n cancel", "y / n"}
 	}
 	return []string{
-		"↑/↓ move · n new · ↵ edit · d delete · / search · ⇥ pane · esc back",
-		"↑/↓ move · n new · ↵ edit · d delete · / search · esc back",
-		"↑/↓ · n new · ↵ edit · d delete · esc back",
+		"↑/↓ move · n new · ↵ edit · d delete · D detect · / search · ⇥ pane · esc back",
+		"↑/↓ move · n new · ↵ edit · d delete · D detect · / search · esc back",
+		"↑/↓ · n new · ↵ edit · d delete · D detect · esc back",
 		"n new · ↵ edit · d delete · esc back",
 		"esc back",
 	}

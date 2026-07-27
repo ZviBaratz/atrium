@@ -105,10 +105,11 @@ type SettingsOverlay struct {
 	// result. It is not lastErr: "no new agents detected" is an outcome, not a failure, and the
 	// help pane paints lastErr in DangerStyle.
 	profileNote string
-	// profileDetecting stays set from a D press until the detection result lands, so a second D
-	// cannot queue a second shell probe and the pane can say a probe is running. See
-	// requestProfileDetect.
-	profileDetecting bool
+	// profileDetectPending is D's request for home to run detection off the update loop;
+	// profileDetecting stays set until the result lands, so a second D cannot queue a second
+	// shell probe and the pane can say a probe is running. See requestProfileDetect.
+	profileDetectPending bool
+	profileDetecting     bool
 }
 
 // NewSettingsOverlay builds the settings panel over the given live config, focused on

@@ -2,8 +2,10 @@ package app
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/ZviBaratz/atrium/config"
 	"github.com/ZviBaratz/atrium/session"
@@ -440,4 +442,133 @@ func TestSettingsPanel_AccountsEntryOpensTheAccountsOverlay(t *testing.T) {
 	_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(",")})
 	require.NotNil(t, h.settingsOverlay)
 	assert.Equal(t, h.settingsOverlay.RailEntryCount()-1, h.settingsOverlay.RailIndex())
+}
+
+// --- The Profiles editor (PR D) ---------------------------------------------
+
+// profileNamesOf collapses a config's profile list to its names.
+func profileNamesOf(cfg *config.Config) []string {
+	out := make([]string, len(cfg.Profiles))
+	for i, p := range cfg.Profiles {
+		out[i] = p.Name
+	}
+	return out
+}
+
+// openProfilesEditor opens the settings panel and focuses the Profiles editor's pane.
+func openProfilesEditor(t *testing.T, h *home) {
+	t.Helper()
+	_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(",")})
+	require.Equal(t, stateSettings, h.state)
+	h.settingsOverlay.SetRailIndex(h.settingsOverlay.RailEntryCount() - 2)
+	_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyEnter})
+}
+
+// TestSettingsPanel_ProfileDetectRunsOffTheUpdateLoop pins the whole D path through home: the
+// panel records a request, home turns it into a command rather than probing inline, and the
+// result merges and persists.
+//
+// It stubs detectAgents — the same package var the startup agent check uses — which is what
+// makes the TUI and `atrium profiles detect` share one detector.
+func TestSettingsPanel_ProfileDetectRunsOffTheUpdateLoop(t *testing.T) {
+	resetSettingsTestState(t)
+	stubDetect(t, []config.Profile{
+		{Name: "claude", Program: "/usr/local/bin/claude"},
+		{Name: "codex", Program: "codex"},
+	})
+	h := newSettingsTestHome()
+	h.appConfig.Profiles = []config.Profile{{Name: "claude", Program: "claude --model opus"}}
+	h.appConfig.DefaultProgram = "claude"
+	openProfilesEditor(t, h)
+
+	_, cmd := h.handleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("D")})
+	require.NotNil(t, cmd, "D must produce a command rather than probing inline")
+	msg := cmd()
+	detected, ok := msg.(profilesDetectedMsg)
+	require.Truef(t, ok, "expected a profilesDetectedMsg, got %T", msg)
+
+	_, _ = h.Update(detected)
+
+	assert.Equal(t, []string{"claude", "codex"}, profileNamesOf(h.appConfig))
+	assert.Equal(t, "claude --model opus", h.appConfig.Profiles[0].Program,
+		"detection never modifies an existing profile")
+	assert.Equal(t, []string{"claude", "codex"}, profileNamesOf(config.LoadConfig()),
+		"the merge reached disk through applySettingChange")
+
+	// A second run adds nothing, so it must not rewrite config.json at all.
+	before := configFileModTime(t)
+	_, _ = h.Update(profilesDetectedMsg{detected: []config.Profile{{Name: "codex", Program: "codex"}}})
+	assert.Equal(t, before, configFileModTime(t),
+		"a detection that added nothing must not persist, mirroring the CLI's early return")
+}
+
+// configFileModTime is the resolved config.json's mtime, for asserting a write did NOT happen.
+func configFileModTime(t *testing.T) time.Time {
+	t.Helper()
+	dir, err := config.GetConfigDir()
+	require.NoError(t, err)
+	info, err := os.Stat(filepath.Join(dir, "config.json"))
+	require.NoError(t, err)
+	return info.ModTime()
+}
+
+// TestSettingsPanel_ProfileDetectAfterCloseStillMergesAndSaysSo. The probe takes long enough
+// that the user can close the panel before it returns; the merge is what they asked for, so it
+// happens, and home is the one that reports it.
+//
+// The alternative — dropping the result — made one set of keystrokes produce three different
+// outcomes depending on how fast the user moved, including a silent config.json write.
+func TestSettingsPanel_ProfileDetectAfterCloseStillMergesAndSaysSo(t *testing.T) {
+	resetSettingsTestState(t)
+	h := newSettingsTestHome()
+	h.appConfig.Profiles = []config.Profile{{Name: "claude", Program: "claude --model opus"}}
+	require.Nil(t, h.settingsOverlay, "precondition: no panel")
+
+	_, cmd := h.Update(profilesDetectedMsg{detected: []config.Profile{
+		{Name: "claude", Program: "/usr/local/bin/claude"},
+		{Name: "codex", Program: "codex"},
+	}})
+
+	assert.Equal(t, []string{"claude", "codex"}, profileNamesOf(h.appConfig))
+	assert.Equal(t, "claude --model opus", h.appConfig.Profiles[0].Program,
+		"detection never modifies an existing profile, panel or no panel")
+	assert.Equal(t, []string{"claude", "codex"}, profileNamesOf(config.LoadConfig()),
+		"and it reached disk")
+	// handleAgentNotice either shows the toast now (a cmd) or holds it over in
+	// pendingAgentNotice when the hint row is busy. Both are "announced"; neither is silence.
+	assert.True(t, cmd != nil || h.pendingAgentNotice != "",
+		"the outcome must be announced, not swallowed")
+	if h.pendingAgentNotice != "" {
+		assert.Contains(t, h.pendingAgentNotice, "codex", "the held-over notice names what was added")
+	}
+}
+
+// TestSettingsPanel_ProfileDetectWhileTheRailMovedAwayIsAnnounced is the silent-write guard at
+// the app level: the pane is not showing the editor, so nothing in the panel can report the
+// merge, and without the handback the user sees a rewritten config.json and no explanation.
+func TestSettingsPanel_ProfileDetectWhileTheRailMovedAwayIsAnnounced(t *testing.T) {
+	resetSettingsTestState(t)
+	h := newSettingsTestHome()
+	h.appConfig.Profiles = []config.Profile{{Name: "claude", Program: "claude"}}
+	openProfilesEditor(t, h)
+
+	_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("D")})
+	_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyEsc}) // back to the rail, note cleared
+	_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyUp})  // and off the Profiles entry
+
+	_, cmd := h.Update(profilesDetectedMsg{detected: []config.Profile{{Name: "codex", Program: "codex"}}})
+
+	assert.Equal(t, []string{"claude", "codex"}, profileNamesOf(h.appConfig))
+	assert.True(t, cmd != nil || h.pendingAgentNotice != "",
+		"a merge the panel cannot report must still be announced")
+}
+
+// TestProfilesDetectedTextMirrorsTheCLI pins the wording against `atrium profiles detect`'s own
+// output (main.go's profilesDetectCmd). Two surfaces for one operation should not describe it in
+// two voices, and this is the assertion that keeps them together — the notice path itself is
+// covered above, where the exact rendering depends on whether the hint row is free.
+func TestProfilesDetectedTextMirrorsTheCLI(t *testing.T) {
+	assert.Equal(t, "no new agents detected; profiles unchanged", profilesDetectedText(nil))
+	assert.Equal(t, "added profiles: codex", profilesDetectedText([]string{"codex"}))
+	assert.Equal(t, "added profiles: codex, gemini", profilesDetectedText([]string{"codex", "gemini"}))
 }

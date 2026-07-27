@@ -998,3 +998,153 @@ func TestDeletingAProfileWhileDefaultProgramIsARawCommand(t *testing.T) {
 	assert.Equal(t, []string{"codex"}, profileNames(cfg))
 	assert.Equal(t, "/home/user/launch-claude.sh", cfg.DefaultProgram, "and the raw command is untouched")
 }
+
+// --- Task 5: detect ----------------------------------------------------------
+
+// TestDetectRequestsRatherThanProbing. D must not call into config detection itself: the claude
+// probe spawns a login shell under a ten-second timeout, and running it inside HandleKeyPress
+// freezes the update loop and every session's poll with it. The key records a request, says so,
+// and returns immediately.
+func TestDetectRequestsRatherThanProbing(t *testing.T) {
+	o := NewSettingsOverlay(threeProfiles())
+	o.SetSize(100, 32)
+	profilesAt(t, o)
+
+	closed, changed := o.HandleKeyPress(keyRunes("D"))
+	assert.False(t, closed)
+	assert.Empty(t, changed, "nothing has been detected yet, so nothing has changed")
+	prose, danger := o.profilesHelp()
+	assert.Contains(t, prose, "Detecting", "the pane says a probe is running")
+	assert.False(t, danger)
+
+	assert.True(t, o.TakeProfileDetect(), "home is told to run it")
+	assert.False(t, o.TakeProfileDetect(), "and told exactly once")
+}
+
+// TestASecondDetectDoesNotQueueASecondProbe: holding D must not spawn a shell per keypress.
+func TestASecondDetectDoesNotQueueASecondProbe(t *testing.T) {
+	o := NewSettingsOverlay(threeProfiles())
+	o.SetSize(100, 32)
+	profilesAt(t, o)
+
+	_, _ = o.HandleKeyPress(keyRunes("D"))
+	require.True(t, o.TakeProfileDetect())
+	_, _ = o.HandleKeyPress(keyRunes("D"))
+	assert.False(t, o.TakeProfileDetect(), "a run is already in flight")
+
+	// And the message survives the wait: it is derived from the in-flight flag, not from the
+	// one-keypress note, so pressing j while the probe runs must not erase it — nor may the
+	// second D, which would otherwise be a key that REMOVES feedback.
+	_, _ = o.HandleKeyPress(keyRunes("j"))
+	prose, _ := o.profilesHelp()
+	assert.Contains(t, prose, "Detecting", "navigating while a probe runs must not erase it")
+	_, _ = o.HandleKeyPress(keyRunes("D"))
+	prose, _ = o.profilesHelp()
+	assert.Contains(t, prose, "Detecting", "a second D repeats the message rather than clearing it")
+
+	// The result releases the latch, so a later D works.
+	o.NoteProfilesDetected(nil, "")
+	_, _ = o.HandleKeyPress(keyRunes("D"))
+	assert.True(t, o.TakeProfileDetect())
+}
+
+// TestDetectionOutcomeLandsOnTheRecordItAdded. The pane's report is a one-keypress note, and the
+// cursor follows the first added record so D and n agree about where you end up.
+func TestDetectionOutcomeLandsOnTheRecordItAdded(t *testing.T) {
+	cfg := threeProfiles()
+	o := NewSettingsOverlay(cfg)
+	o.SetSize(100, 32)
+	profilesAt(t, o)
+	cfg.Profiles = append(cfg.Profiles, config.Profile{Name: "gemini", Program: "gemini"})
+
+	shown := o.NoteProfilesDetected([]string{"gemini"}, "added profiles: gemini")
+
+	assert.True(t, shown, "the editor's pane is on screen, so it reports the outcome itself")
+	assert.Equal(t, 3, o.profileCursor, "the cursor lands on what was added")
+	prose, danger := o.profilesHelp()
+	assert.Contains(t, prose, "gemini")
+	assert.False(t, danger, "an outcome is not a failure")
+}
+
+// TestDetectionOutcomeIsHandedBackWhenThePaneCannotShowIt is the guard against the silent write.
+//
+// The probe outlives the keypress that started it, and syncCursorToRail clears the note on the
+// way past — so a user who presses D and then moves the rail would otherwise have config.json
+// rewritten underneath them with nothing at all on screen. Returning false is how home learns it
+// has to say so itself.
+func TestDetectionOutcomeIsHandedBackWhenThePaneCannotShowIt(t *testing.T) {
+	cfg := profilesCfg("claude", config.Profile{Name: "claude", Program: "claude"})
+	o := NewSettingsOverlay(cfg)
+	o.SetSize(100, 32)
+	profilesAt(t, o)
+	_, _ = o.HandleKeyPress(keyRunes("D"))
+	require.True(t, o.TakeProfileDetect())
+
+	o.SetRailIndex(railDefaultIndex()) // wander off while the probe runs
+	require.True(t, o.profileDetecting,
+		"resetProfileTransients must NOT clear the in-flight latch — the probe is still running")
+
+	cfg.Profiles = append(cfg.Profiles, config.Profile{Name: "codex", Program: "codex"})
+	shown := o.NoteProfilesDetected([]string{"codex"}, "added profiles: codex")
+
+	assert.False(t, shown, "the pane is not on screen, so home must report the outcome")
+	assert.False(t, o.profileDetecting, "and the latch is released either way")
+}
+
+// TestDetectionOutcomeIsHandedBackWhileAFilterIsUp: a filter takes the pane over regardless of
+// the rail, so the editor cannot report there either.
+func TestDetectionOutcomeIsHandedBackWhileAFilterIsUp(t *testing.T) {
+	o := NewSettingsOverlay(threeProfiles())
+	o.SetSize(100, 32)
+	profilesAt(t, o)
+	_, _ = o.HandleKeyPress(keyRunes("D"))
+	_, _ = o.HandleKeyPress(keyRunes("/"))
+	require.True(t, o.searching())
+
+	assert.False(t, o.NoteProfilesDetected([]string{"codex"}, "added profiles: codex"))
+}
+
+// TestProfilesHintNamesEveryLiveKey — every key the pane binds appears in its widest rung, and
+// every key that rung names actually does something.
+//
+// The second half is the gap `.claude/skills/tui-drift-sites/SKILL.md` calls the headline one:
+// nothing in this repo asserts that an advertised key has a handler, so a key can ship hinted,
+// documented and completely dead. A Contains over the ladder cannot see it — only pressing the
+// key can. This closes the gap for this pane.
+func TestProfilesHintNamesEveryLiveKey(t *testing.T) {
+	o := NewSettingsOverlay(threeProfiles())
+	o.SetSize(100, 32)
+	profilesAt(t, o)
+
+	widest := o.profilesHintLadder()[0]
+	for _, k := range []string{"n new", "↵ edit", "d delete", "D detect", "/ search", "esc back"} {
+		assert.Containsf(t, widest, k, "the widest rung must name %q", k)
+	}
+	assert.NotContains(t, widest, "r reset", "r is not bound here")
+	assert.NotContains(t, widest, "? more", "? is not bound here")
+	assert.NotContains(t, widest, "←/→", "a profile has no cyclable value")
+
+	// The other direction: press each advertised key on a fresh panel and assert an observable
+	// effect. j first, so d lands on a record the default_program guard does not protect.
+	press := func(k tea.KeyMsg) *SettingsOverlay {
+		fresh := NewSettingsOverlay(threeProfiles())
+		fresh.SetSize(100, 32)
+		profilesAt(t, fresh)
+		_, _ = fresh.HandleKeyPress(keyRunes("j"))
+		_, _ = fresh.HandleKeyPress(k)
+		return fresh
+	}
+	assert.NotNil(t, press(keyRunes("n")).profileForm, "n new: opens a form")
+	assert.NotNil(t, press(tea.KeyMsg{Type: tea.KeyEnter}).profileForm, "↵ edit: opens a form")
+	assert.True(t, press(keyRunes("d")).profileConfirm, "d delete: arms the confirmation")
+	assert.True(t, press(keyRunes("D")).profileDetecting, "D detect: starts a detection")
+	assert.True(t, press(keyRunes("/")).searching(), "/ search: opens the filter")
+	assert.Equal(t, focusRail, press(tea.KeyMsg{Type: tea.KeyEsc}).focus, "esc back: returns to the rail")
+
+	hint := stripANSI(o.hintLine())
+	assert.NotContains(t, hint, "…", "the ladder must fit at 100 columns rather than truncate")
+	o.SetSize(80, 24)
+	assert.NotContains(t, stripANSI(o.hintLine()), "…", "and at the 80-column floor")
+	assert.Contains(t, stripANSI(o.hintLine()), "/ search",
+		"the filter stays advertised at the floor — ⇥ pane yields before it")
+}
