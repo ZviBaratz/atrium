@@ -17,6 +17,7 @@ package overlay
 
 import (
 	"fmt"
+	"path/filepath"
 	"strings"
 
 	"github.com/ZviBaratz/atrium/config"
@@ -101,15 +102,22 @@ func (o *AccountsOverlay) identityFor(a config.ClaudeAccount) (acctIdentity, boo
 }
 
 // identityForDir returns the outcome for the account at a config dir, and whether one
-// could be computed. Keyed on the resolved dir rather than the name because the
-// preview resolves routing to a directory, and because a renamed account keeps its
-// directory (the #470 anchor).
+// could be computed. Keyed on the directory rather than the name because the preview
+// resolves routing to a directory, and because a renamed account keeps its directory
+// (the #470 anchor).
+//
+// Both sides are compared CLEANED, the spelling everything else here already uses:
+// the login cache is keyed by NormalizedConfigDir and CheckIdentity looks up the same.
+// This lookup is the one place that was still matching raw against raw — correct only
+// because every caller happens to arrive raw today, and silent when it is not, since a
+// miss drops the login line rather than reporting anything.
 func (o *AccountsOverlay) identityForDir(dir string) (acctIdentity, bool) {
 	if dir == "" || o.logins == nil || o.cfg == nil {
 		return acctIdentity{}, false
 	}
+	want := filepath.Clean(dir)
 	for _, a := range o.cfg.ClaudeAccounts {
-		if a.ResolvedConfigDir() == dir {
+		if a.NormalizedConfigDir() == want {
 			return o.identityFor(a)
 		}
 	}
@@ -118,23 +126,32 @@ func (o *AccountsOverlay) identityForDir(dir string) (acctIdentity, bool) {
 
 // previewIdentityLine is the "signed in as …" line under the preview's Claude row —
 // the answer to which login a session created here would actually bill. Empty when
-// nothing is cached for the dir or no login could be read, so the preview gains a
-// line only when it has something to say.
+// nothing is cached for the dir, or when no login could be read at all, so the preview
+// gains a line only when it has something to say.
+//
+// It names the UUID when a dir records one with no email, the same fallback and for
+// the same reason as doctor's IdentityCollision.Login: a dir identified only by a UUID
+// is still a login being billed, and naming it in the report while staying silent here
+// would leave the two surfaces disagreeing about whether the account is known at all.
 //
 // A mismatch leads with the warning glyph: the login being billed is the fact, and
 // the glyph is what makes it read as wrong rather than merely unfamiliar.
 func (o *AccountsOverlay) previewIdentityLine(dir string, width int) string {
 	got, ok := o.identityForDir(dir)
-	if !ok || got.actual.Email == "" {
+	if !ok {
+		return ""
+	}
+	login := got.actual.Email
+	if login == "" {
+		login = got.actual.UUID
+	}
+	if login == "" {
 		return ""
 	}
 	if got.state == config.IdentityWrongAccount {
-		return fitOneOf(width,
-			"⚠ signed in as "+got.actual.Email,
-			"⚠ "+got.actual.Email,
-			"⚠ wrong login")
+		return fitOneOf(width, "⚠ signed in as "+login, "⚠ "+login, "⚠ wrong login")
 	}
-	return fitOneOf(width, "signed in as "+got.actual.Email, got.actual.Email)
+	return fitOneOf(width, "signed in as "+login, login)
 }
 
 // identityNote is the list-level warning under the account rows, in the same place

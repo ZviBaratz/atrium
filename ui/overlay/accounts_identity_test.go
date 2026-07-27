@@ -432,3 +432,55 @@ func TestAccountsOverlay_PreviewLoginFollowsTheConfirmedMemberWhenAllLimited(t *
 		"the preview names a login other than the member creation would pin")
 	assert.NotContains(t, out, "w1@corp.com")
 }
+
+// config_dir is hand-written, and everything else in this file compares on the
+// normalised spelling — the login cache is keyed by it, and CheckIdentity looks it up.
+// The dir lookup has to agree, or a caller arriving with one spelling misses an
+// account written with the other, and misses by rendering NOTHING: the preview simply
+// loses its login line rather than reporting a problem.
+func TestAccountsOverlay_IdentityLookupIgnoresDirSpelling(t *testing.T) {
+	o := identityOverlay(t, []config.ClaudeAccount{
+		{Name: "trailing", ConfigDir: "/h/p/"},
+		{Name: "dotted", ConfigDir: "/h/sub/../q"},
+	}, map[string]string{"/h/p": "p@corp.com", "/h/q": "q@corp.com"})
+
+	for _, tc := range []struct{ dir, want string }{
+		{"/h/p", "p@corp.com"},        // raw caller, trailing-slash account
+		{"/h/p/", "p@corp.com"},       // both spelled with the slash
+		{"/h/q", "q@corp.com"},        // raw caller, dotted account
+		{"/h/sub/../q", "q@corp.com"}, // both spelled with the dots
+	} {
+		assert.Contains(t, o.previewIdentityLine(tc.dir, 80), tc.want,
+			"lookup for %q found nothing", tc.dir)
+	}
+}
+
+// A dir can record a UUID and no email — ReadAccountIdentity accepts exactly that, and
+// doctor's IdentityCollision.Login names the UUID rather than render a blank. The
+// preview has to agree: staying silent about a login the report names would leave the
+// two surfaces disagreeing about whether the account is known at all.
+func TestAccountsOverlay_PreviewNamesAUUIDOnlyLogin(t *testing.T) {
+	o := NewAccountsOverlay(&config.Config{ClaudeAccounts: []config.ClaudeAccount{
+		{Name: "quiet", ConfigDir: "/h/quiet"},
+	}}, config.DefaultState())
+	o.SetSize(120, 40)
+	o.loadIdentities(func(string) (config.AccountIdentity, bool) {
+		return config.AccountIdentity{UUID: "u-shared"}, true // no email at all
+	})
+
+	assert.Contains(t, o.previewIdentityLine("/h/quiet", 80), "u-shared")
+}
+
+// A readable dir recording neither still renders nothing: there is no login to name,
+// and "signed in as " with a blank after it points at an answer it does not have.
+func TestAccountsOverlay_PreviewSilentWithoutAnyLogin(t *testing.T) {
+	o := NewAccountsOverlay(&config.Config{ClaudeAccounts: []config.ClaudeAccount{
+		{Name: "blank", ConfigDir: "/h/blank"},
+	}}, config.DefaultState())
+	o.SetSize(120, 40)
+	o.loadIdentities(func(string) (config.AccountIdentity, bool) {
+		return config.AccountIdentity{}, true // readable, but says nothing
+	})
+
+	assert.Empty(t, o.previewIdentityLine("/h/blank", 80))
+}
