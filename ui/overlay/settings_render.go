@@ -994,27 +994,52 @@ func (s *SettingsOverlay) hintLine() string {
 // The forward key does three different things on the rail — focus the rows, open another
 // overlay, or nothing at all — so the hint names the one that applies. A static "→ rows" on
 // an entry with no rows is the same class of lie a static esc hint would be (spec §15).
+//
+// "⇥ pane" is held to that same standard, which is why it is not a constant rung. handleRailKey
+// routes tab together with right and enter, so tab is not a pane toggle on the rail at all: it
+// is the forward key. On an entry that owns rows that amounts to a pane swap and the hint is
+// honest; on a handoff it hands off or does nothing, and focus never enters the empty pane
+// either way. So the two hints stand or fall together, and both leave a handoff entry's ladder
+// (TestRailHintNeverPromisesAPaneSwapWithoutRows).
 func railHintLadder(e railEntry) []string {
-	forward := "→ rows"
 	if e.kind == railHandoff {
-		forward = "" // Profiles: PR D gives it an editor; until then the key does nothing
-		if e.opens == HandoffAccounts {
-			forward = "↵ accounts"
+		forward := handoffHint(e.opens)
+		if forward == "" {
+			// Profiles: PR D gives it an editor; until then the forward key does nothing, so the
+			// ladder names only the keys that do work.
+			return []string{
+				"↑/↓ category · / search · esc close",
+				"↑/↓ · / search · esc close",
+				"esc close",
+			}
 		}
-	}
-	if forward == "" {
 		return []string{
-			"↑/↓ category · / search · ⇥ pane · esc close",
-			"↑/↓ · / search · esc close",
+			"↑/↓ category · " + forward + " · / search · esc close",
+			"↑/↓ · " + forward + " · / search · esc close",
+			"/ search · esc close",
 			"esc close",
 		}
 	}
 	return []string{
-		"↑/↓ category · " + forward + " · / search · ⇥ pane · esc close",
-		"↑/↓ · " + forward + " · / search · esc close",
+		"↑/↓ category · → rows · / search · ⇥ pane · esc close",
+		"↑/↓ · → rows · / search · esc close",
 		"/ search · esc close",
 		"esc close",
 	}
+}
+
+// handoffHint names the forward key's effect for an entry that hands off, in the rail's hint
+// voice: the key the note tells the user to press, then the surface it opens.
+//
+// A handoff with no wording here would silently render a ladder that names no forward key at
+// all — the same lie railHintLadder exists to prevent — so
+// TestEveryWiredHandoffNamesItsForwardKey fails rather than letting PR D's Profiles editor
+// arrive without one.
+func handoffHint(h SettingsHandoff) string {
+	if h == HandoffAccounts {
+		return "↵ accounts"
+	}
+	return ""
 }
 
 // inertReasons is the right-aligned chip for each row whose change currently has no effect

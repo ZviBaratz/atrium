@@ -320,6 +320,63 @@ func TestRailHintNamesWhatTheForwardKeyDoes(t *testing.T) {
 	assert.Contains(t, profiles, "esc close")
 }
 
+// TestRailHintNeverPromisesAPaneSwapWithoutRows holds "⇥ pane" to the same standard spec §15
+// sets for "→ rows". handleRailKey routes tab with right and enter, so tab IS the forward key
+// on the rail rather than a pane toggle: on an entry that owns rows it swaps panes, and on a
+// handoff it hands off or does nothing while focus stays put. So an entry with no rows must
+// advertise neither hint.
+//
+// Asserted over every rung of every entry rather than one rendered line, because the narrow
+// rungs drop "⇥ pane" on their own — a single-width check would pass on the strength of the
+// truncation and prove nothing about the wording.
+func TestRailHintNeverPromisesAPaneSwapWithoutRows(t *testing.T) {
+	o := NewSettingsOverlay(config.DefaultConfig())
+	withRows, withoutRows := 0, 0
+	for _, e := range railEntries() {
+		start, end := o.rowRange(e)
+		owns := end > start
+		if owns {
+			withRows++
+		} else {
+			withoutRows++
+		}
+		require.Equalf(t, e.kind != railHandoff, owns,
+			"entry %q: railHandoff must be exactly the no-rows case", e.label)
+		for i, rung := range railHintLadder(e) {
+			if owns {
+				continue
+			}
+			assert.NotContainsf(t, rung, "⇥ pane",
+				"entry %q rung %d promises a pane swap it cannot do: %q", e.label, i, rung)
+			assert.NotContainsf(t, rung, "→ rows",
+				"entry %q rung %d promises rows it does not own: %q", e.label, i, rung)
+		}
+	}
+	// Without these the loop could stop covering either side and the test would still pass.
+	require.Equal(t, 2, withoutRows, "Profiles and Accounts are the two entries with no rows")
+	require.Equal(t, 11, withRows, "All settings plus the ten categories own rows")
+	// The positive half: the entries that CAN swap panes still say so at the widest rung.
+	assert.Contains(t, railHintLadder(railEntries()[railDefaultIndex()])[0], "⇥ pane")
+}
+
+// TestEveryWiredHandoffNamesItsForwardKey is the drift guard for PR D. handoffHint maps a
+// handoff to its wording, and a handoff missing from it renders a ladder naming no forward key
+// at all — the panel would offer Enter with nothing on screen saying so.
+func TestEveryWiredHandoffNamesItsForwardKey(t *testing.T) {
+	wired := 0
+	for _, e := range railEntries() {
+		if e.kind != railHandoff || e.opens == HandoffNone {
+			continue
+		}
+		wired++
+		hint := handoffHint(e.opens)
+		require.NotEmptyf(t, hint, "handoff entry %q is wired but its forward key is unnamed", e.label)
+		assert.Containsf(t, railHintLadder(e)[0], hint,
+			"entry %q's widest rung must name its forward key", e.label)
+	}
+	require.Equal(t, 1, wired, "Accounts is the only wired handoff in PR C")
+}
+
 // TestEscIsLayered pins spec §7's layered Esc: from the rows pane it backs out to the
 // rail, and only a second Esc closes. The hint line says "esc back" in the rows pane and
 // "esc close" on the rail, so the extra level is advertised rather than surprising
