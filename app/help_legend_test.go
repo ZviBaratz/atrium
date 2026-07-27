@@ -40,6 +40,13 @@ func TestLegendCoversRowVocabulary(t *testing.T) {
 		// here anyway: the glyph is panel chrome, and a copy edit that drops that arrow
 		// would otherwise turn this into a surprise failure in an unrelated PR.
 		"Handoff": "settings-rail handoff arrow (panel chrome, not a row status)",
+		// The accounts panel's availability marks say something about a Claude ACCOUNT,
+		// not about a session row, and the @ overlay's own legend line names them
+		// ("l limited <mark>"). Both would pass the loop below by coincidence anyway —
+		// AcctAvailable's "●" is Ready's glyph and the ascii rung's "*"/"x" are shared
+		// too — which is exactly why they are categorized here instead.
+		"AcctAvailable": "accounts-panel availability mark (panel chrome, not a row status)",
+		"AcctLimited":   "accounts-panel availability mark (panel chrome, not a row status)",
 	}
 
 	g := theme.Current().Glyphs

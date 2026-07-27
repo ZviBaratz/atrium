@@ -75,6 +75,14 @@ func plainGlyphs() Glyphs {
 		MarkChecked:   "✓",
 		Modified:      "•", // settings "changed from default" dot; its own column, never SelectionMark's
 		Handoff:       "→", // settings rail entry that hands off to another overlay
+		// The accounts panel's availability pair. Both deliberately reuse a mark from
+		// elsewhere in this set — Ready's dot for "fine" and Muted's circled slash for
+		// "switched off" — because that is the vocabulary those two marks already carry
+		// and no frame shows both meanings (these render only in the @ accounts overlay,
+		// Ready and Muted only on a session row). They are their own fields anyway, so
+		// the accounts panel can diverge later without dragging the session list with it.
+		AcctAvailable: "●",
+		AcctLimited:   "⊘",
 		DiffAdd:       "+",
 		DiffDel:       "-",
 		TextCursor:    "▌",
@@ -129,12 +137,16 @@ func asciiGlyphs() Glyphs {
 	g.SelectionMark = "|"
 	g.MarkChecked = "x"
 	g.TextCursor = "_"
-	// Two collisions here are deliberate: Modified reuses Ready's "*" and Handoff reuses
-	// FoldClosed's ">". Neither pair ever shares a frame — Modified and Handoff appear only
-	// inside the settings panel, Ready and FoldClosed only on a session row — so no screen
-	// shows both meanings, and inventing a distinct 7-bit mark would mean a less legible one.
+	// Four collisions here are deliberate: Modified reuses Ready's "*", Handoff reuses
+	// FoldClosed's ">", and the accounts pair reuses Ready's "*" and Muted's "x". No pair
+	// ever shares a frame — Modified and Handoff appear only inside the settings panel, the
+	// accounts pair only inside the @ accounts overlay, Ready/FoldClosed/Muted only on a
+	// session row — so no screen shows both meanings, and inventing a distinct 7-bit mark
+	// would mean a less legible one.
 	g.Modified = "*"
 	g.Handoff = ">"
+	g.AcctAvailable = "*"
+	g.AcctLimited = "x"
 	// AutoBadge, DiffAdd, DiffDel are already ASCII/empty in plainGlyphs — inherited.
 	return g
 }
