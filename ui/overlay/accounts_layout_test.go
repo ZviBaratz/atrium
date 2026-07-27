@@ -195,6 +195,46 @@ func TestAccountsOverlay_BadgeIsPaddedSoTheChipsLineUp(t *testing.T) {
 	}
 }
 
+// The pool chip is a column too, which is what squares up the availability mark: a
+// row in no pool would otherwise put its mark where a pooled row puts `pool:`.
+func TestAccountsOverlay_PoolChipIsPaddedSoTheMarksLineUp(t *testing.T) {
+	cfg := pooledCatchAllCfg("quantivly")
+	// An account in no pool at all, and one in a pool with a shorter name: the mark
+	// has to land in the same column for all three shapes.
+	cfg.ClaudeAccounts = append(cfg.ClaudeAccounts,
+		config.ClaudeAccount{Name: "solo", ConfigDir: "~/.claude-solo"},
+		config.ClaudeAccount{Name: "other", ConfigDir: "~/.claude-other", Pool: "eu"})
+
+	o := NewAccountsOverlay(cfg, config.DefaultState())
+	o.SetSize(100, 30)
+	out := o.renderList()
+
+	g := theme.Current().Glyphs
+	want := columnOf(t, rowLine(t, out, "work-1"), g.AcctAvailable)
+	for _, name := range []string{"work-2", "work-3", "solo", "other"} {
+		assert.Equalf(t, want, columnOf(t, rowLine(t, out, name), g.AcctAvailable),
+			"%s: the availability mark has its own column, whatever the row's pool", name)
+	}
+}
+
+// But only when something in the list is pooled. A pool-free config must keep
+// rendering exactly the row it always has — the dormancy contract 9b25662 restored
+// after #475 charged every config for a note only some of them print.
+func TestAccountsOverlay_PoolFreeConfigGetsNoPoolColumn(t *testing.T) {
+	o := NewAccountsOverlay(&config.Config{ClaudeAccounts: []config.ClaudeAccount{
+		{Name: "work", ConfigDir: "~/.claude-work", RemoteMatches: []string{"acme/"}},
+		{Name: "personal", ConfigDir: "~/.claude"},
+	}}, config.DefaultState())
+	o.SetSize(100, 30)
+
+	g := theme.Current().Glyphs
+	line := rowLine(t, o.renderList(), "work")
+	// Badge, two spaces, mark — no third column in between.
+	assert.Equal(t, badgeColumn(t, line, badgeRouted)+lipgloss.Width(badgeDefault)+2,
+		columnOf(t, line, g.AcctAvailable),
+		"with nothing pooled, the mark follows the badge directly")
+}
+
 // The pad belongs to the tab that has something after the badge. On the GitHub and
 // Antigravity tabs the badge ends the row, so padding it would be trailing
 // whitespace — charged against the dir column, invisible on screen.

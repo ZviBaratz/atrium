@@ -1290,37 +1290,35 @@ func TestAccountsOverlay_ReorderGroupsSplitPool(t *testing.T) {
 // TestAccountsOverlay_GutterNarrowsDirNotRowWidth pins the fix for the pool-gutter
 // width regression a manual smoke test found: the gutter's 2 columns must come OUT
 // of the dir field, not get added on top of the row, so a row that fit before the
-// gutter existed still fits with it. Fixture mirrors the smoke's exact repro: an
-// adjacent pool run (work-1, work-2) plus a third, UNPOOLED account ("personal")
-// with a dir long enough to hit truncTail's cap either way, so its row carries the
-// widest badge ("unreachable" — it's the second rule-less account) plus the Claude
-// tab's availability mark, at a 100-column terminal (boxWidth caps at 84 ->
-// inner() == 80). "personal" itself belongs to no pool, so its `extra` pool chip is
-// identical (absent) whether or not the OTHER two accounts form a run: the only
-// thing that can change its row width is the gutter column itself (poolGutter emits
-// a blank "  " cell for every row once any run exists elsewhere in the list, not
-// just the run's own rows) — isolating exactly the bug, rather than conflating it
-// with the deliberately-independent pool:<name> chip.
+// gutter existed still fits with it. The measured row is a third account
+// ("personal") with a dir long enough to hit truncTail's cap either way, carrying
+// the widest badge ("unreachable" — it's the second rule-less account) plus the
+// Claude tab's mark, at a 100-column terminal (boxWidth caps at 84 -> inner() == 80).
 //
-// SCOPE, after #478. The width EQUALITY below is what still guards the gutter, and
-// it is as sharp as it ever was. Its two companions are not, and are kept only
-// because they cost nothing:
+// FIXTURE, after #478. The original pair was "one pool" vs "no pool anywhere", which
+// isolated the gutter only because an unpooled row's chips were identical in both.
+// That stopped being true when the pool chip became a padded COLUMN: a row with no
+// pool of its own now carries a blank cell in that column whenever anything in the
+// list is pooled, so "no pool anywhere" changes the row by two things at once and
+// the comparison stops being about the gutter.
+//
+// The pair is now "one pool of two adjacent members" vs "two singleton pools with
+// same-length names". Both render the same badges and the same pool column; only the
+// first has a contiguous run for poolGutter to bracket. That is a sharper isolation
+// than the original, not a weaker one — the gutter is the single variable.
+//
+// SCOPE. The width EQUALITY below is what guards the gutter. Its two companions are
+// kept only because they cost nothing:
 //
 //   - the "<= inner()" check was sharp when this row measured exactly 80 of 80;
-//     shortening the badge and the availability chip dropped it to 58, so it now has
-//     22 columns of slack and would pass a badly broken gutter. The claim it used to
-//     make — that the widest realistic row fits — belongs to
+//     shortening the badge and the availability chip left it with real slack, so it
+//     would now pass a badly broken gutter. The claim it used to make — that the
+//     widest realistic row fits — belongs to
 //     TestAccountsOverlay_PooledRuleLessRowFitsTheBox and the sweep beside it, which
 //     use a fixture built to sit at the boundary.
 //   - the line-count equality was sharp for the same reason and lost it the same
 //     way. accounts_layout_test.go's assertNothingWraps is the version with teeth:
 //     it compares the box against its OWN body rather than against another config.
-//
-// One caveat on the equality itself: it holds while neither side is squeezed. The
-// pooled config carries pool chips the flat one does not, so its dir column starts
-// giving up cells at a wider terminal (around 70 columns) — below that the two
-// configs legitimately differ, which is a fact about the two fixtures, not about the
-// gutter.
 //
 // Per this file's own note on TestAccountsOverlay_LegendFitsAndKeepsLimitedClaudeOnly:
 // comparing rendered widths AFTER lipgloss pads a Border()+Padding()+Width() box
@@ -1328,18 +1326,21 @@ func TestAccountsOverlay_ReorderGroupsSplitPool(t *testing.T) {
 // width. So this measures the unstyled row string renderList builds, directly.
 func TestAccountsOverlay_GutterNarrowsDirNotRowWidth(t *testing.T) {
 	longDir := "~/.claude-configs/some/very/long/nested/directory/path"
-	mk := func(pool string) *config.Config {
+	// secondPool names work-2's pool: the same as work-1's makes a contiguous run,
+	// a different one of the same length makes two singletons and no run at all.
+	mk := func(secondPool string) *config.Config {
 		return &config.Config{ClaudeAccounts: []config.ClaudeAccount{
-			{Name: "work-1", ConfigDir: "~/.claude-work1", Pool: pool, RemoteMatches: []string{"acme/"}},
-			{Name: "work-2", ConfigDir: "~/.claude-work2", Pool: pool}, // rule-less #1 → "default"
-			{Name: "personal", ConfigDir: longDir},                     // rule-less #2 → "unreachable"
+			{Name: "work-1", ConfigDir: "~/.claude-work1", Pool: "work", RemoteMatches: []string{"acme/"}},
+			{Name: "work-2", ConfigDir: "~/.claude-work2", Pool: secondPool}, // rule-less #1 → "default"
+			{Name: "personal", ConfigDir: longDir},                           // rule-less #2 → "unreachable"
 		}}
 	}
 
-	oGutter := NewAccountsOverlay(mk("work"), config.DefaultState()) // work-1/work-2 form a run → gutter renders
+	oGutter := NewAccountsOverlay(mk("work"), config.DefaultState()) // one pool, two adjacent members → gutter renders
 	oGutter.SetSize(100, 30)
-	oFlat := NewAccountsOverlay(mk(""), config.DefaultState()) // no pool anywhere → no gutter column at all
+	oFlat := NewAccountsOverlay(mk("wrk2"), config.DefaultState()) // two singleton pools → no run, no gutter column
 	oFlat.SetSize(100, 30)
+	require.Nil(t, poolGutter(oFlat.cfg.ClaudeAccounts), "the flat fixture must genuinely have no run to bracket")
 
 	require.Equal(t, 80, oGutter.inner(), "pinning the reproduction's 100-col/84-cap/80-inner numbers")
 

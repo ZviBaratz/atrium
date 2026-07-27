@@ -22,6 +22,7 @@ package overlay
 // fitOneOf makes the same argument about note wordings).
 
 import (
+	"strings"
 	"time"
 
 	"github.com/ZviBaratz/atrium/config"
@@ -48,6 +49,10 @@ const (
 	badgeRouted      = "routed"
 	badgeDefault     = "default"
 	badgeUnreachable = "unreachable"
+
+	// poolChip prefixes the pool name on a Claude row. Named because the column is
+	// sized from it before any row is assembled.
+	poolChip = "pool:"
 )
 
 // badgeText names a row's routing state. It is order-dependent across the WHOLE
@@ -112,6 +117,23 @@ func (o *AccountsOverlay) rowTails(rows []acctRow, avail map[string]config.Accou
 		}
 	}
 
+	// The pool chip is a column for the same reason, and it is the one that squares
+	// up the availability mark: a row not in a pool would otherwise put its mark
+	// where a pooled row puts `pool:`. Zero when nothing in the list is pooled, and
+	// then no column renders at all — a pool-free config keeps exactly the row it has
+	// always had, which is the dormancy contract #475 was fixed to honour (9b25662).
+	poolWidth := 0
+	if o.tab == tabClaude {
+		for _, a := range o.cfg.ClaudeAccounts {
+			if a.Pool == "" {
+				continue
+			}
+			if w := lipgloss.Width(poolChip + a.Pool); w > poolWidth {
+				poolWidth = w
+			}
+		}
+	}
+
 	tails := make([]rowTail, len(rows))
 	widest := 0
 	for i := range rows {
@@ -125,10 +147,15 @@ func (o *AccountsOverlay) rowTails(rows []acctRow, avail map[string]config.Accou
 			// rows is index-parallel to ClaudeAccounts on this tab only; the other two
 			// tabs have their own lengths and must never reach this lookup.
 			acct := o.cfg.ClaudeAccounts[i]
-			if acct.Pool != "" {
-				chip := "pool:" + acct.Pool
-				tail.rendered += "  " + t.DimStyle().Render(chip)
-				tail.width += 2 + lipgloss.Width(chip)
+			if poolWidth > 0 {
+				// Blank, not styled-empty, for a row with no pool: rendering "" through a
+				// style emits an escape pair around nothing.
+				chip := strings.Repeat(" ", poolWidth)
+				if acct.Pool != "" {
+					chip = padRight(t.DimStyle().Render(poolChip+acct.Pool), poolWidth)
+				}
+				tail.rendered += "  " + chip
+				tail.width += 2 + poolWidth
 			}
 			mark, style := t.Glyphs.AcctLimited, t.DangerStyle()
 			if config.AccountAvailable(avail[acct.Name], now) {
