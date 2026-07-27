@@ -22,30 +22,15 @@ import (
 	"github.com/ZviBaratz/atrium/config"
 )
 
-// IdentityState is one account's verification outcome.
-type IdentityState int
-
-const (
-	// IdentityOK means expect_account is set and the config dir holds that login.
-	IdentityOK IdentityState = iota
-	// IdentityMismatch means expect_account is set and the dir holds a DIFFERENT
-	// login: sessions routed here bill the account in Actual, not the pinned one.
-	IdentityMismatch
-	// IdentityUnpinned means the dir's login was read, but the account declares no
-	// expectation, so there is nothing to verify it against.
-	IdentityUnpinned
-	// IdentityUnreadable means no login could be read from the dir (never onboarded,
-	// or a file this build cannot parse). Never treated as a wrong login.
-	IdentityUnreadable
-)
-
-// AccountIdentityRow is the reported state of one configured account.
+// AccountIdentityRow is the reported state of one configured account. State is
+// config.IdentityCheck, the same classifier the launch gate decides on, so this
+// report cannot call an account fine that the gate would refuse to launch.
 type AccountIdentityRow struct {
 	Account  string
 	Dir      string
 	Actual   config.AccountIdentity
 	Expected string // the account's expect_account, "" when unpinned
-	State    IdentityState
+	State    config.IdentityCheck
 }
 
 // IdentityCollision is two or more accounts whose config dirs hold the SAME real
@@ -65,22 +50,6 @@ type AccountIdentityReport struct {
 	Collisions []IdentityCollision
 }
 
-// identityReader reads the login recorded in one config dir. Unexported so only
-// in-package fakes implement it, mirroring gateReader and Runner; ok=false means
-// "no identity readable here" and collapses every distinct failure, none of which a
-// user could act on differently.
-type identityReader interface {
-	identity(configDir string) (config.AccountIdentity, bool)
-}
-
-// fileIdentityReader is the production reader, delegating to the strictly
-// read-only config.ReadAccountIdentity.
-type fileIdentityReader struct{}
-
-func (fileIdentityReader) identity(configDir string) (config.AccountIdentity, bool) {
-	return config.ReadAccountIdentity(configDir)
-}
-
 // CheckAccountIdentity builds the report for cfg's Claude accounts. Pure apart from
 // the injected reader, so tests never touch a real config dir.
 //
@@ -95,47 +64,45 @@ func (fileIdentityReader) identity(configDir string) (config.AccountIdentity, bo
 //
 // Dormant when no Claude accounts are configured, matching CheckAccountKeys: with no
 // roster there is nothing to verify and an empty section is noise.
-func CheckAccountIdentity(cfg *config.Config, r identityReader) AccountIdentityReport {
+func CheckAccountIdentity(cfg *config.Config, r config.IdentityReadFunc) AccountIdentityReport {
 	if cfg == nil || len(cfg.ClaudeAccounts) == 0 {
 		return AccountIdentityReport{}
 	}
 
 	var report AccountIdentityReport
-	type readResult struct {
-		id config.AccountIdentity
-		ok bool
-	}
-	seen := map[string]readResult{}
-
+	read := cachedRead(r) // one cache for the whole report, not one per account
 	for _, a := range cfg.ClaudeAccounts {
-		dir := a.ResolvedConfigDir()
-		if dir == "" {
-			continue // inherit-env account: no dir of its own
+		state, actual := a.CheckIdentity(read)
+		if state == config.IdentityNoDir {
+			continue // inherit-env account: no dir of its own to report on
 		}
-		got, cached := seen[dir]
-		if !cached {
-			got.id, got.ok = r.identity(dir)
-			seen[dir] = got
-		}
-		row := AccountIdentityRow{
-			Account: a.Name, Dir: dir, Actual: got.id,
-			Expected: strings.TrimSpace(a.ExpectAccount),
-		}
-		switch {
-		case !got.ok:
-			row.State = IdentityUnreadable
-		case row.Expected == "":
-			row.State = IdentityUnpinned
-		case got.id.MatchesPin(row.Expected):
-			row.State = IdentityOK
-		default:
-			row.State = IdentityMismatch
-		}
-		report.Rows = append(report.Rows, row)
+		report.Rows = append(report.Rows, AccountIdentityRow{
+			Account: a.Name, Dir: a.ResolvedConfigDir(), Actual: actual,
+			Expected: strings.TrimSpace(a.ExpectAccount), State: state,
+		})
 	}
 
 	report.Collisions = collisions(report.Rows)
 	return report
+}
+
+// cachedRead memoises r per directory for the life of one report, so two accounts
+// naming one directory cost a single read — and, more to the point, cannot be made
+// to disagree with each other by a file rewritten between two of them.
+func cachedRead(r config.IdentityReadFunc) config.IdentityReadFunc {
+	type result struct {
+		id config.AccountIdentity
+		ok bool
+	}
+	seen := map[string]result{}
+	return func(dir string) (config.AccountIdentity, bool) {
+		got, cached := seen[dir]
+		if !cached {
+			got.id, got.ok = r(dir)
+			seen[dir] = got
+		}
+		return got.id, got.ok
+	}
 }
 
 // collisions groups readable rows by the login they resolve to and returns every
@@ -152,7 +119,7 @@ func collisions(rows []AccountIdentityRow) []IdentityCollision {
 	var order []string
 
 	for _, row := range rows {
-		if row.State == IdentityUnreadable {
+		if row.State == config.IdentityUnreadable {
 			continue // unknown is not evidence of sameness
 		}
 		key := row.Actual.CollisionKey()
@@ -187,7 +154,7 @@ func collisions(rows []AccountIdentityRow) []IdentityCollision {
 // seeds config.json when absent, which is a write and must stay out of the pure
 // CheckAccountIdentity that tests call.
 func CheckAccountIdentityInstalled() AccountIdentityReport {
-	return CheckAccountIdentity(config.LoadConfig(), fileIdentityReader{})
+	return CheckAccountIdentity(config.LoadConfig(), config.ReadAccountIdentity)
 }
 
 // status renders one row's verification outcome, carrying the value that makes it
@@ -195,11 +162,11 @@ func CheckAccountIdentityInstalled() AccountIdentityReport {
 // cross-referencing config.json.
 func (r AccountIdentityRow) status() string {
 	switch r.State {
-	case IdentityOK:
+	case config.IdentityVerified:
 		return "ok"
-	case IdentityMismatch:
+	case config.IdentityWrongAccount:
 		return "⚠ expected " + r.Expected
-	case IdentityUnpinned:
+	case config.IdentityUnpinned:
 		return "unpinned"
 	default:
 		return "⚠ no login recorded"
@@ -210,7 +177,7 @@ func (r AccountIdentityRow) status() string {
 // when there is no login to name, so an unreadable row still says WHICH directory
 // came up empty.
 func (r AccountIdentityRow) identityLabel() string {
-	if r.State == IdentityUnreadable {
+	if r.State == config.IdentityUnreadable {
 		return r.Dir
 	}
 	if r.Actual.Email == "" {
@@ -260,7 +227,7 @@ func RenderAccountIdentity(rep AccountIdentityReport) string {
 func unpinnedNames(rows []AccountIdentityRow) []string {
 	var out []string
 	for _, r := range rows {
-		if r.State == IdentityUnpinned {
+		if r.State == config.IdentityUnpinned {
 			out = append(out, r.Account)
 		}
 	}

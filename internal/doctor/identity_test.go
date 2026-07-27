@@ -7,28 +7,23 @@ import (
 	"github.com/ZviBaratz/atrium/config"
 )
 
-// fakeIdentityReader maps a config dir to the login recorded there and counts reads.
+// fakeReader maps a config dir to the login recorded there, and counts reads per dir.
 // A dir absent from the map reads as "no identity", the same as a dir claude was
 // never onboarded in.
-type fakeIdentityReader struct {
-	m     map[string]config.AccountIdentity
-	reads map[string]int
+func fakeReader(m map[string]config.AccountIdentity) (config.IdentityReadFunc, map[string]int) {
+	reads := map[string]int{}
+	return func(dir string) (config.AccountIdentity, bool) {
+		reads[dir]++
+		id, ok := m[dir]
+		return id, ok
+	}, reads
 }
 
-func (f *fakeIdentityReader) identity(configDir string) (config.AccountIdentity, bool) {
-	if f.reads == nil {
-		f.reads = map[string]int{}
-	}
-	f.reads[configDir]++
-	id, ok := f.m[configDir]
-	return id, ok
-}
-
-// leakyReader always fails, but returns a populated identity anyway — the interface
+// leakyReader always fails, but returns a populated identity anyway — the contract
 // violation CheckAccountIdentity must not be fooled by.
-type leakyReader struct{ id config.AccountIdentity }
-
-func (l leakyReader) identity(string) (config.AccountIdentity, bool) { return l.id, false }
+func leakyReader(leak config.AccountIdentity) config.IdentityReadFunc {
+	return func(string) (config.AccountIdentity, bool) { return leak, false }
+}
 
 func acct(name, dir, expect string) config.ClaudeAccount {
 	return config.ClaudeAccount{Name: name, ConfigDir: dir, ExpectAccount: expect}
@@ -58,11 +53,11 @@ func rowFor(t *testing.T, rep AccountIdentityReport, name string) AccountIdentit
 // separate, on two different config dirs, that turn out to be one login. Every route,
 // badge and pool keeps them apart while the sessions bill one account.
 func TestCheckAccountIdentityFlagsDistinctDirsOnOneLogin(t *testing.T) {
-	r := &fakeIdentityReader{m: map[string]config.AccountIdentity{
+	r, _ := fakeReader(map[string]config.AccountIdentity{
 		"/h/.claude-personal": id("work2@corp.com", "u-work2"),
 		"/h/.claude-work":     id("work@corp.com", "u-work"),
 		"/h/.claude-work2":    id("work2@corp.com", "u-work2"),
-	}}
+	})
 	rep := CheckAccountIdentity(cfgWith(
 		acct("personal", "/h/.claude-personal", ""),
 		acct("work", "/h/.claude-work", ""),
@@ -98,10 +93,10 @@ func TestCheckAccountIdentityFlagsDistinctDirsOnOneLogin(t *testing.T) {
 // The negative control. Without it, a check that fired unconditionally would pass
 // every test above.
 func TestCheckAccountIdentityQuietWhenLoginsDiffer(t *testing.T) {
-	r := &fakeIdentityReader{m: map[string]config.AccountIdentity{
+	r, _ := fakeReader(map[string]config.AccountIdentity{
 		"/h/a": id("a@corp.com", "u-a"),
 		"/h/b": id("b@corp.com", "u-b"),
-	}}
+	})
 	rep := CheckAccountIdentity(cfgWith(acct("a", "/h/a", ""), acct("b", "/h/b", "")), r)
 
 	if len(rep.Collisions) != 0 {
@@ -116,14 +111,14 @@ func TestCheckAccountIdentityQuietWhenLoginsDiffer(t *testing.T) {
 // that they are the same account, and grouping them on their shared empty key would
 // accuse every fresh install of a collision.
 func TestCheckAccountIdentityUnreadableDirsDoNotCollide(t *testing.T) {
-	r := &fakeIdentityReader{m: map[string]config.AccountIdentity{}}
+	r, _ := fakeReader(nil)
 	rep := CheckAccountIdentity(cfgWith(acct("a", "/h/a", ""), acct("b", "/h/b", "")), r)
 
 	if len(rep.Collisions) != 0 {
 		t.Fatalf("two unreadable dirs were reported as one login: %+v", rep.Collisions)
 	}
 	for _, name := range []string{"a", "b"} {
-		if got := rowFor(t, rep, name).State; got != IdentityUnreadable {
+		if got := rowFor(t, rep, name).State; got != config.IdentityUnreadable {
 			t.Errorf("%s state = %v, want IdentityUnreadable", name, got)
 		}
 	}
@@ -138,18 +133,18 @@ func TestCheckAccountIdentityUnreadableDirsDoNotCollide(t *testing.T) {
 // other is exercised alone; together they are why neither can be deleted as
 // redundant.
 
-// A reader that returns data alongside ok=false is violating the interface, but the
+// A reader that returns data alongside ok=false is violating the contract, but the
 // cost of trusting it is accusing two accounts of sharing a login on the strength of
 // a read that failed. State, not payload, decides.
 func TestCheckAccountIdentityIgnoresPayloadFromFailedRead(t *testing.T) {
 	rep := CheckAccountIdentity(cfgWith(acct("a", "/h/a", ""), acct("b", "/h/b", "")),
-		leakyReader{id("stale@corp.com", "u-stale")})
+		leakyReader(id("stale@corp.com", "u-stale")))
 
 	if len(rep.Collisions) != 0 {
 		t.Fatalf("collided on an identity from a failed read: %+v", rep.Collisions)
 	}
 	for _, name := range []string{"a", "b"} {
-		if got := rowFor(t, rep, name).State; got != IdentityUnreadable {
+		if got := rowFor(t, rep, name).State; got != config.IdentityUnreadable {
 			t.Errorf("%s state = %v, want IdentityUnreadable", name, got)
 		}
 	}
@@ -158,9 +153,7 @@ func TestCheckAccountIdentityIgnoresPayloadFromFailedRead(t *testing.T) {
 // A successful read carrying nothing identifying cannot be compared to anything.
 // Grouping such rows would collide every account a future claude stopped naming.
 func TestCheckAccountIdentityIgnoresEmptyIdentity(t *testing.T) {
-	r := &fakeIdentityReader{m: map[string]config.AccountIdentity{
-		"/h/a": {}, "/h/b": {},
-	}}
+	r, _ := fakeReader(map[string]config.AccountIdentity{"/h/a": {}, "/h/b": {}})
 	rep := CheckAccountIdentity(cfgWith(acct("a", "/h/a", ""), acct("b", "/h/b", "")), r)
 
 	if len(rep.Collisions) != 0 {
@@ -169,11 +162,11 @@ func TestCheckAccountIdentityIgnoresEmptyIdentity(t *testing.T) {
 }
 
 func TestCheckAccountIdentityPinStates(t *testing.T) {
-	r := &fakeIdentityReader{m: map[string]config.AccountIdentity{
+	r, _ := fakeReader(map[string]config.AccountIdentity{
 		"/h/ok":       id("right@corp.com", "u-1"),
 		"/h/wrong":    id("actual@corp.com", "u-2"),
 		"/h/unpinned": id("who@corp.com", "u-3"),
-	}}
+	})
 	rep := CheckAccountIdentity(cfgWith(
 		acct("ok", "/h/ok", "right@corp.com"),
 		acct("wrong", "/h/wrong", "expected@corp.com"),
@@ -183,12 +176,12 @@ func TestCheckAccountIdentityPinStates(t *testing.T) {
 
 	for _, tc := range []struct {
 		name string
-		want IdentityState
+		want config.IdentityCheck
 	}{
-		{"ok", IdentityOK},
-		{"wrong", IdentityMismatch},
-		{"unpinned", IdentityUnpinned},
-		{"gone", IdentityUnreadable}, // pinned but unreadable is NOT a mismatch
+		{"ok", config.IdentityVerified},
+		{"wrong", config.IdentityWrongAccount},
+		{"unpinned", config.IdentityUnpinned},
+		{"gone", config.IdentityUnreadable}, // pinned but unreadable is NOT a mismatch
 	} {
 		if got := rowFor(t, rep, tc.name).State; got != tc.want {
 			t.Errorf("%s state = %v, want %v", tc.name, got, tc.want)
@@ -209,15 +202,13 @@ func TestCheckAccountIdentityPinStates(t *testing.T) {
 	}
 }
 
-// A pin is satisfied by the login regardless of case — the same rule MatchesPin
-// applies — so a config written with different capitalisation is not a mismatch.
+// A pin is satisfied by the login regardless of case, so a config written with
+// different capitalisation is not a mismatch.
 func TestCheckAccountIdentityPinIsCaseInsensitive(t *testing.T) {
-	r := &fakeIdentityReader{m: map[string]config.AccountIdentity{
-		"/h/a": id("Zvi@Example.com", "u-1"),
-	}}
+	r, _ := fakeReader(map[string]config.AccountIdentity{"/h/a": id("Zvi@Example.com", "u-1")})
 	rep := CheckAccountIdentity(cfgWith(acct("a", "/h/a", " zvi@example.com ")), r)
-	if got := rowFor(t, rep, "a").State; got != IdentityOK {
-		t.Errorf("state = %v, want IdentityOK", got)
+	if got := rowFor(t, rep, "a").State; got != config.IdentityVerified {
+		t.Errorf("state = %v, want IdentityVerified", got)
 	}
 }
 
@@ -225,9 +216,9 @@ func TestCheckAccountIdentityPinIsCaseInsensitive(t *testing.T) {
 // CheckPools only covers pool members, so an unpooled pair is otherwise unreported —
 // but it is a different sentence from two dirs that drifted onto one account.
 func TestCheckAccountIdentitySameDirCollision(t *testing.T) {
-	r := &fakeIdentityReader{m: map[string]config.AccountIdentity{
+	r, reads := fakeReader(map[string]config.AccountIdentity{
 		"/h/shared": id("one@corp.com", "u-1"),
-	}}
+	})
 	rep := CheckAccountIdentity(cfgWith(
 		acct("a", "/h/shared", ""),
 		acct("b", "/h/shared", ""),
@@ -245,7 +236,7 @@ func TestCheckAccountIdentitySameDirCollision(t *testing.T) {
 
 	// One directory is read once however many accounts name it: a file rewritten
 	// between two reads must not be able to make an account disagree with itself.
-	if got := r.reads["/h/shared"]; got != 1 {
+	if got := reads["/h/shared"]; got != 1 {
 		t.Errorf("read /h/shared %d times, want 1", got)
 	}
 }
@@ -254,24 +245,19 @@ func TestCheckAccountIdentitySameDirCollision(t *testing.T) {
 // login could be verified. Reporting one would attribute the ambient login to an
 // account that never selected it.
 func TestCheckAccountIdentitySkipsInheritEnvAccounts(t *testing.T) {
-	r := &fakeIdentityReader{m: map[string]config.AccountIdentity{
-		"/h/a": id("a@corp.com", "u-a"),
-	}}
-	rep := CheckAccountIdentity(cfgWith(
-		acct("ambient", "", ""),
-		acct("a", "/h/a", ""),
-	), r)
+	r, reads := fakeReader(map[string]config.AccountIdentity{"/h/a": id("a@corp.com", "u-a")})
+	rep := CheckAccountIdentity(cfgWith(acct("ambient", "", ""), acct("a", "/h/a", "")), r)
 
 	if len(rep.Rows) != 1 || rep.Rows[0].Account != "a" {
 		t.Fatalf("rows = %+v, want only \"a\"", rep.Rows)
 	}
-	if _, read := r.reads[""]; read {
+	if _, read := reads[""]; read {
 		t.Error("the empty config dir was read")
 	}
 }
 
 func TestCheckAccountIdentityDormantWithoutAccounts(t *testing.T) {
-	r := &fakeIdentityReader{m: map[string]config.AccountIdentity{}}
+	r, _ := fakeReader(nil)
 	for _, cfg := range []*config.Config{nil, cfgWith()} {
 		rep := CheckAccountIdentity(cfg, r)
 		if len(rep.Rows) != 0 || len(rep.Collisions) != 0 {
@@ -291,11 +277,12 @@ func TestCheckAccountIdentityIsDeterministic(t *testing.T) {
 		acct("z", "/h/z", ""), acct("m", "/h/m", ""),
 		acct("a", "/h/a", ""), acct("m2", "/h/m2", ""),
 	}
-	r := &fakeIdentityReader{m: map[string]config.AccountIdentity{
+	ids := map[string]config.AccountIdentity{
 		"/h/z": id("z@c.com", "u-z"), "/h/m": id("m@c.com", "u-m"),
 		"/h/a": id("a@c.com", "u-a"), "/h/m2": id("m@c.com", "u-m"),
-	}}
+	}
 
+	r, _ := fakeReader(ids)
 	rep := CheckAccountIdentity(cfgWith(accounts...), r)
 	if got := strings.Join(namesOf(rep), ","); got != "z,m,a,m2" {
 		t.Errorf("rows = %q, want config order \"z,m,a,m2\"", got)
@@ -310,7 +297,8 @@ func TestCheckAccountIdentityIsDeterministic(t *testing.T) {
 	// Repeat enough times that Go's randomised map iteration would surface.
 	first := RenderAccountIdentity(rep)
 	for i := 0; i < 50; i++ {
-		if got := RenderAccountIdentity(CheckAccountIdentity(cfgWith(accounts...), r)); got != first {
+		fresh, _ := fakeReader(ids)
+		if got := RenderAccountIdentity(CheckAccountIdentity(cfgWith(accounts...), fresh)); got != first {
 			t.Fatalf("render differed on run %d:\n%s\n--- vs ---\n%s", i, got, first)
 		}
 	}
