@@ -369,12 +369,39 @@ func (s *SettingsOverlay) railLines() []string {
 	return windowPane(rendered, s.railCursor, s.paneHeight())
 }
 
-// paneLine is one rows-pane line together with the row it belongs to, so the windowing can
-// locate the cursor without re-deriving it from the text. rowIdx is -1 for a category header,
-// a spacer, an overflow marker, or a handoff note.
+// paneLine is one rows-pane line together with the record it belongs to, so the windowing can
+// locate the cursor without re-deriving it from the text.
+//
+// rowIdx indexes whatever list the pane is over — s.rows for a category or the flat view,
+// cfg.Profiles for the Profiles editor — and is -1 for a category header, a spacer, an overflow
+// marker, or wrapped prose. See paneCursor for why the distinction matters.
 type paneLine struct {
 	text   string
 	rowIdx int
+}
+
+// wrappedPaneLines wraps prose to the pane width as styled, rowIdx -1 pane lines — the shape
+// every non-row pane content uses: a handoff note, a no-match line, an empty editor.
+func wrappedPaneLines(text string, width int, style lipgloss.Style) []paneLine {
+	var lines []paneLine
+	for _, l := range strings.Split(ansi.Wrap(text, width, ""), "\n") {
+		lines = append(lines, paneLine{text: style.Render(l), rowIdx: -1})
+	}
+	return lines
+}
+
+// paneCursor is the index rowsPaneLines matches paneLine.rowIdx against: the row cursor for a
+// settingRow pane, the profile cursor for the Profiles editor.
+//
+// The two index DIFFERENT lists. Before the editor there was one index space and rowsPaneLines
+// could read s.cursor directly; a profile line carries a profile index, and s.cursor is a small
+// int too, so matching against the wrong one silently windows around an unrelated line and the
+// selected profile scrolls off screen.
+func (s *SettingsOverlay) paneCursor() int {
+	if s.profilesPaneActive() {
+		return s.profileCursor
+	}
+	return s.cursor
 }
 
 // rowsPaneContent builds every line the current rail entry could show, unwindowed.
@@ -390,6 +417,9 @@ func (s *SettingsOverlay) rowsPaneContent(width int) []paneLine {
 	e := s.selectedEntry()
 	if e.kind == railHandoff {
 		return s.handoffPaneContent(e, width)
+	}
+	if e.kind == railProfiles {
+		return s.profilesPaneContent(width)
 	}
 	t := theme.Current()
 	start, end := s.rowRange(e)
@@ -435,13 +465,8 @@ func (s *SettingsOverlay) searchPaneContent(width int) []paneLine {
 	if len(results) == 0 {
 		// An empty pane reads as a broken panel. Naming the query and the way out of it is the
 		// same obligation a handoff entry's note carries.
-		style := theme.Current().FaintStyle()
 		text := "No setting matches " + strconv.Quote(s.search.filter) + "."
-		var lines []paneLine
-		for _, l := range strings.Split(ansi.Wrap(text, width, ""), "\n") {
-			lines = append(lines, paneLine{text: style.Render(l), rowIdx: -1})
-		}
-		return lines
+		return wrappedPaneLines(text, width, theme.Current().FaintStyle())
 	}
 	labelW := s.visibleLabelWidth()
 	lines := make([]paneLine, 0, len(results))
@@ -456,12 +481,7 @@ func (s *SettingsOverlay) searchPaneContent(width int) []paneLine {
 // Accounts to the @ overlay and PR D builds the Profiles editor — an empty pane would read as
 // a bug.
 func (s *SettingsOverlay) handoffPaneContent(e railEntry, width int) []paneLine {
-	style := theme.Current().DimStyle()
-	var lines []paneLine
-	for _, l := range strings.Split(ansi.Wrap(e.note, width, ""), "\n") {
-		lines = append(lines, paneLine{text: style.Render(l), rowIdx: -1})
-	}
-	return lines
+	return wrappedPaneLines(e.note, width, theme.Current().DimStyle())
 }
 
 // rowsPaneLines renders the highlighted entry's rows, windowed around the cursor and padded
@@ -474,7 +494,7 @@ func (s *SettingsOverlay) rowsPaneLines() []string {
 	cursorLine := 0
 	for i, l := range content {
 		lines[i] = l.text
-		if l.rowIdx == s.cursor {
+		if l.rowIdx == s.paneCursor() {
 			cursorLine = i
 		}
 	}
@@ -772,11 +792,21 @@ func (s *SettingsOverlay) helpLines() []string {
 	inner := s.innerWidth()
 
 	style := t.DimStyle()
-	prose := s.selectedRow().footerText()
-	if s.selectedEntry().kind == railHandoff {
+	var prose string
+	switch {
+	case s.selectedEntry().kind == railHandoff:
 		// A handoff entry's note is already the whole content of the rows pane, so echoing it
 		// here would print the same sentence twice in one frame. The pane stays blank.
-		prose = ""
+	case s.profilesPaneActive():
+		// s.cursor still points at whatever settingRow it last sat on, so footerText() would
+		// describe an unrelated setting under a list of profiles.
+		var danger bool
+		prose, danger = s.profilesHelp()
+		if danger {
+			style = t.DangerStyle()
+		}
+	default:
+		prose = s.selectedRow().footerText()
 	}
 	if s.searching() && len(s.searchResults()) == 0 {
 		// With nothing matching, describing s.cursor's row would describe a row the list is not
@@ -845,6 +875,9 @@ func (s *SettingsOverlay) helpLines() []string {
 // Content is truncated to make room for it, never the other way round — the counter is five
 // cells and the content is recoverable from `?`.
 func (s *SettingsOverlay) contextLine(width int) string {
+	if s.profilesPaneActive() {
+		return s.profilesContextLine(width)
+	}
 	var pos string
 	if s.searching() {
 		results := s.searchResults()
@@ -901,6 +934,13 @@ func (s *SettingsOverlay) contextLine(width int) string {
 		}
 	}
 
+	return rightAligned(body, pos, width)
+}
+
+// rightAligned lays a body string and a right-aligned position readout into exactly width
+// cells, truncating the body to make room. The counter is five cells and the body is
+// recoverable from `?`, so content yields to it and never the other way round.
+func rightAligned(body, pos string, width int) string {
 	budget := width - ansi.StringWidth(pos) - 1
 	if budget < 1 {
 		return theme.Current().FaintStyle().Render(pos)
@@ -967,6 +1007,8 @@ func (s *SettingsOverlay) hintLine() string {
 			"↑/↓ · ↵ edit · esc clear",
 			"esc clear",
 		}
+	case s.profilesPaneActive() && s.focus == focusRows:
+		ladder = s.profilesHintLadder()
 	case s.focus == focusRows:
 		ladder = []string{
 			"↑/↓ move · ←/→ change · ↵ edit · r reset · / search · ? more · ⇥ pane · esc back",
@@ -1002,17 +1044,21 @@ func (s *SettingsOverlay) hintLine() string {
 // either way. So the two hints stand or fall together, and both leave a handoff entry's ladder
 // (TestRailHintNeverPromisesAPaneSwapWithoutRows).
 func railHintLadder(e railEntry) []string {
-	if e.kind == railHandoff {
-		forward := handoffHint(e.opens)
-		if forward == "" {
-			// Profiles: PR D gives it an editor; until then the forward key does nothing, so the
-			// ladder names only the keys that do work.
-			return []string{
-				"↑/↓ category · / search · esc close",
-				"↑/↓ · / search · esc close",
-				"esc close",
-			}
+	if e.kind == railProfiles {
+		// The editor owns a pane but no rows, so the forward key names the editor rather than
+		// "rows" — and "⇥ pane" is honest here, because tab really does focus it.
+		return []string{
+			"↑/↓ category · → profiles · / search · ⇥ pane · esc close",
+			"↑/↓ · → profiles · / search · esc close",
+			"/ search · esc close",
+			"esc close",
 		}
+	}
+	if e.kind == railHandoff {
+		// Every handoff is wired — TestEveryHandoffEntryNamesItsSurface is what keeps that true,
+		// and an unwired one would render a ladder naming no forward key at all, the lie this
+		// function exists to prevent.
+		forward := handoffHint(e.opens)
 		return []string{
 			"↑/↓ category · " + forward + " · / search · esc close",
 			"↑/↓ · " + forward + " · / search · esc close",
