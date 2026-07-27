@@ -8,19 +8,45 @@ import (
 	"path/filepath"
 )
 
-// EnsureWorktreesRootTrusted pre-accepts Claude Code's workspace-trust dialog
-// for worktreesRoot by setting projects[worktreesRoot].hasTrustDialogAccepted
-// in ~/.claude.json. Claude's trust check walks up parent directories, so
+// EnsureWorktreesRootTrustedIn pre-accepts Claude Code's workspace-trust dialog
+// for worktreesRoot by setting projects[worktreesRoot].hasTrustDialogAccepted in
+// configDir/.claude.json. Claude's trust check walks up parent directories, so
 // trusting the root once covers every session worktree beneath it — the
-// per-worktree dialog never appears and project-scoped skills/hooks/MCP
-// servers load immediately.
+// per-worktree dialog never appears and project-scoped skills/hooks/MCP servers
+// load immediately.
+//
+// configDir is the config dir the session's claude actually reads: the ambient one
+// (config.AmbientClaudeConfigDir — $CLAUDE_CONFIG_DIR if set, else home) for an
+// unrouted session, or a routed account's own dir (#261/#262). An empty configDir
+// is a no-op: nothing to write, and never a guess at a path.
 //
 // There is no sanctioned interface for this: hasTrustDialogAccepted is a
 // Claude-internal key, verified in production but undocumented. Degradation is
 // graceful — if the schema ever changes, the trust dialog simply reappears and
 // the agent-gate detection holds queued prompts as before.
 //
-// ~/.claude.json is Claude's file, holds OAuth tokens, and is rewritten by
+// #488 re-probed the parent-walk premise above rather than trusting it, because
+// an observation on one machine suggested it was gone: across 35 `projects` keys
+// and 458 lifetime sessions, not one was a worktree path. It is NOT gone. Driving
+// a real claude in a worktree under a never-trusted root, with a fresh config dir
+// (isolated HOME, one tmux socket per cell), on claude 2.0.77, 2.1.170 and
+// 2.1.220:
+//
+//   - with nothing trusted, the dialog appears — on all three;
+//   - with only the worktrees root trusted, it does not — on all three. This
+//     function still does exactly what it claims.
+//
+// What DID change, at some point between 2.0.77 and 2.1.170, is the key claude
+// RECORDS a session under: 2.0.77 wrote the worktree's own path (cwd), while
+// 2.1.x writes the enclosing repo — the git common dir's checkout — so a worktree
+// path never appears as a `projects` key again. That is why the evidence above
+// looked conclusive and was not: the recording key and the trust check are
+// different mechanisms, and "cwd never appears as a key" does not mean "trust is
+// no longer keyed by cwd". The 2.1.x change does mean a worktree of an
+// already-trusted repo is not prompted (it was, at 2.0.77) — so what this buys on
+// a current claude is the first session on a repo claude has not seen before.
+//
+// configDir/.claude.json is Claude's file, holds OAuth tokens, and is rewritten by
 // every live claude process, so this function is deliberately conservative:
 //
 //   - missing, malformed, or unexpectedly-shaped files are left untouched
@@ -37,31 +63,17 @@ import (
 // No flock: concurrent writers of this key write the same value (last-wins is
 // correct), claude itself takes no lock anyway, and the stat guard covers the
 // realistic race without a unix-only dependency.
-func EnsureWorktreesRootTrusted(worktreesRoot string) error {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return fmt.Errorf("resolve home dir: %w", err)
-	}
-	return ensureRootTrustedAt(filepath.Join(home, ".claude.json"), worktreesRoot)
-}
-
-// EnsureAccountWorktreesRootTrusted pre-accepts the trust dialog for worktreesRoot in
-// a specific Claude account's config dir. Sessions routed to an account via
-// CLAUDE_CONFIG_DIR (#261/#262) read trust from $CLAUDE_CONFIG_DIR/.claude.json, not
-// ~/.claude.json, so the trust_worktrees_root opt-in must be written into each
-// account's file too. Same conservative posture as EnsureWorktreesRootTrusted: a
-// missing file (account not onboarded) is a silent no-op.
-func EnsureAccountWorktreesRootTrusted(configDir, worktreesRoot string) error {
+func EnsureWorktreesRootTrustedIn(configDir, worktreesRoot string) error {
 	if configDir == "" {
-		return nil // inherit-env account: its trust lives in ~/.claude.json, handled separately
+		return nil // unresolvable: nothing to write, and never a guessed path
 	}
 	return ensureRootTrustedAt(filepath.Join(configDir, ".claude.json"), worktreesRoot)
 }
 
 // ensureRootTrustedAt sets projects[worktreesRoot].hasTrustDialogAccepted=true in the
 // .claude.json at claudeJSONPath, with all the conservative safety documented on
-// EnsureWorktreesRootTrusted (symlink-follow, UseNumber, defensive shape checks, 0600
-// temp, mode match, stat race-guard, atomic rename).
+// EnsureWorktreesRootTrustedIn (symlink-follow, UseNumber, defensive shape checks,
+// 0600 temp, mode match, stat race-guard, atomic rename).
 func ensureRootTrustedAt(claudeJSONPath, worktreesRoot string) error {
 	// Follow a dotfile-manager symlink to the real file: the temp+rename below
 	// must replace the target, not the link.
