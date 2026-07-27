@@ -783,11 +783,7 @@ func (s *SettingsOverlay) hintLine() string {
 			"esc back",
 		}
 	default:
-		ladder = []string{
-			"↑/↓ category · → rows · ⇥ pane · esc close",
-			"↑/↓ · → rows · esc close",
-			"esc close",
-		}
+		ladder = railHintLadder(s.selectedEntry())
 	}
 	inner := s.innerWidth()
 	hint := ladder[len(ladder)-1]
@@ -798,6 +794,33 @@ func (s *SettingsOverlay) hintLine() string {
 		}
 	}
 	return ansi.Truncate(theme.Current().OverlayHintStyle().Render(hint), inner, "…")
+}
+
+// railHintLadder is the rail's key hints for one entry, widest wording first.
+//
+// The forward key does three different things on the rail — focus the rows, open another
+// overlay, or nothing at all — so the hint names the one that applies. A static "→ rows" on
+// an entry with no rows is the same class of lie a static esc hint would be (spec §15).
+func railHintLadder(e railEntry) []string {
+	forward := "→ rows"
+	if e.kind == railHandoff {
+		forward = "" // Profiles: PR D gives it an editor; until then the key does nothing
+		if e.opens == HandoffAccounts {
+			forward = "↵ accounts"
+		}
+	}
+	if forward == "" {
+		return []string{
+			"↑/↓ category · ⇥ pane · esc close",
+			"↑/↓ · esc close",
+			"esc close",
+		}
+	}
+	return []string{
+		"↑/↓ category · " + forward + " · ⇥ pane · esc close",
+		"↑/↓ · " + forward + " · esc close",
+		"esc close",
+	}
 }
 
 // inertReasons is the right-aligned chip for each row whose change currently has no effect

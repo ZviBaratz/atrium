@@ -4,6 +4,19 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 )
 
+// SettingsHandoff names a surface the settings panel has asked the home model to open in its
+// place. The panel cannot open a sibling overlay itself, so a rail entry that owns no rows
+// records a request and closes; home reads it as it tears the panel down.
+type SettingsHandoff int
+
+const (
+	// HandoffNone means the panel closed on its own terms.
+	HandoffNone SettingsHandoff = iota
+	// HandoffAccounts asks home to open the Claude/GitHub/Antigravity account manager — the
+	// same overlay the '@' key opens from the session list.
+	HandoffAccounts
+)
+
 // railKind distinguishes the three things a settings rail entry can be. Ten of the
 // thirteen entries project a settingCategory; the other three own no rows of their own,
 // which is why the rail is its own vocabulary rather than allCategories() alone.
@@ -32,6 +45,10 @@ type railEntry struct {
 	// note is the single line a handoff entry's pane shows, naming the surface that owns
 	// its config. Empty for every other kind (TestEveryHandoffEntryNamesItsSurface).
 	note string
+	// opens is the surface this entry hands off to, for a railHandoff entry that has one.
+	// Profiles is HandoffNone until PR D replaces it with a real editor: a handoff to a
+	// surface that does not exist would be worse than the note.
+	opens SettingsHandoff
 }
 
 // railEntries returns the rail in display order: the flat view, the ten scalar
@@ -53,8 +70,8 @@ func railEntries() []railEntry {
 			note: "Agent profiles are edited in config.json, under the profiles key.",
 		},
 		railEntry{
-			label: "Accounts", kind: railHandoff,
-			note: "Managed in the accounts overlay — press @ from the session list.",
+			label: "Accounts", kind: railHandoff, opens: HandoffAccounts,
+			note: "Claude, GitHub and Antigravity accounts — press ↵ to open the accounts overlay.",
 		},
 	)
 }
@@ -163,11 +180,16 @@ func (s *SettingsOverlay) handleRailKey(msg tea.KeyMsg) (closed bool) {
 			s.syncCursorToRail()
 		}
 	case "right", "tab", "enter":
-		// A handoff entry owns no rows, so there is nothing to focus. PR C wires Enter on
-		// Accounts to the @ overlay; until then this is deliberately a no-op rather than
-		// focus on an empty pane.
 		if start, end := s.rowRange(s.selectedEntry()); end > start {
 			s.focus = focusRows
+			return false
+		}
+		// An entry with no rows either hands off to another surface or does nothing. The
+		// panel closes on a handoff so the surface it names takes the screen; focus never
+		// moves into an empty pane either way.
+		if opens := s.selectedEntry().opens; opens != HandoffNone {
+			s.handoff = opens
+			return true
 		}
 	}
 	return false

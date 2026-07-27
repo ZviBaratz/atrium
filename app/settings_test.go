@@ -418,3 +418,26 @@ func TestSettingsPanel_ResetPersistsAndLiveApplies(t *testing.T) {
 		"r live-applied: the running UI repainted in the default palette")
 	assert.NotNil(t, cmd, "a repaint command must be issued, as for an edit")
 }
+
+// The rail's Accounts entry actually opens the accounts overlay: the panel closes, the @
+// overlay opens in its place, and the remembered rail brings the user back to Accounts on the
+// next ','. Home-level wiring, because an overlay cannot open a sibling.
+func TestSettingsPanel_AccountsEntryOpensTheAccountsOverlay(t *testing.T) {
+	resetSettingsTestState(t)
+	h := newSettingsTestHome()
+	_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(",")})
+	require.Equal(t, stateSettings, h.state)
+
+	h.settingsOverlay.SetRailIndex(h.settingsOverlay.RailEntryCount() - 1)
+	_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyEnter})
+
+	assert.Equal(t, stateAccounts, h.state, "Enter on Accounts opens the @ overlay")
+	assert.NotNil(t, h.accountsOverlay)
+	assert.Nil(t, h.settingsOverlay, "the settings panel closed to make way")
+
+	// Closing accounts and reopening settings lands back on the entry we left.
+	_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyEsc})
+	_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(",")})
+	require.NotNil(t, h.settingsOverlay)
+	assert.Equal(t, h.settingsOverlay.RailEntryCount()-1, h.settingsOverlay.RailIndex())
+}

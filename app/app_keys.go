@@ -345,11 +345,20 @@ func (m *home) handleSettingsState(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	}
 	if closed {
+		// Read the handoff BEFORE dropping the overlay: a rail entry that owns no rows can ask
+		// home to open a sibling surface in the panel's place, and the request lives on the
+		// overlay we are about to discard.
+		handoff := m.settingsOverlay.Handoff()
 		rail := m.settingsOverlay.RailIndex()
 		m.settingsRail = &rail
 		m.settingsOverlay = nil
 		m.state = stateDefault
 		m.recomputeLayout() // menuVisible flipped; the hint bar may reclaim its row
+		if handoff == overlay.HandoffAccounts {
+			// openAccounts sets the state and returns its own WindowSize, so the default one
+			// below is not also needed.
+			return m, tea.Batch(append(cmds, m.openAccounts())...)
+		}
 		cmds = append(cmds, tea.WindowSize())
 	}
 	return m, tea.Batch(cmds...)

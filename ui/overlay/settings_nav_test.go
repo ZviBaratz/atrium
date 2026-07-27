@@ -250,9 +250,8 @@ func TestTabSwitchesPanes(t *testing.T) {
 	assert.Equal(t, focusRail, o.focus, "shift+tab switches panes too")
 }
 
-// TestRightFocusesTheRowsPaneFromTheRail pins the rail's forward keys. On a handoff entry
-// they are no-ops: there are no rows to focus, and PR C is what wires Enter to the
-// accounts overlay.
+// TestRightFocusesTheRowsPaneFromTheRail pins the rail's three forward keys on an entry that
+// owns rows.
 func TestRightFocusesTheRowsPaneFromTheRail(t *testing.T) {
 	for _, key := range []tea.KeyMsg{
 		{Type: tea.KeyRight}, {Type: tea.KeyTab}, {Type: tea.KeyEnter},
@@ -261,14 +260,64 @@ func TestRightFocusesTheRowsPaneFromTheRail(t *testing.T) {
 		o.HandleKeyPress(key)
 		assert.Equalf(t, focusRows, o.focus, "%v must focus the rows pane", key)
 	}
+}
 
+// TestAccountsEntryHandsOffToTheAccountsOverlay is spec §4's handoff and §7's rail row: all
+// three forward keys ask home to open the @ overlay, and the panel closes to make way. The
+// overlay cannot open a sibling, so a request plus closed=true is the whole protocol.
+func TestAccountsEntryHandsOffToTheAccountsOverlay(t *testing.T) {
+	for _, key := range []tea.KeyMsg{
+		{Type: tea.KeyRight}, {Type: tea.KeyTab}, {Type: tea.KeyEnter},
+	} {
+		o := NewSettingsOverlay(config.DefaultConfig())
+		o.SetRailIndex(len(railEntries()) - 1)
+		require.Equal(t, "Accounts", o.selectedEntry().label, "precondition: the last entry is Accounts")
+		require.Equal(t, HandoffNone, o.Handoff(), "precondition: nothing requested yet")
+
+		closed, changed := o.HandleKeyPress(key)
+		assert.Truef(t, closed, "%v on Accounts closes the panel to make way", key)
+		assert.Empty(t, changed, "a handoff changes no setting")
+		assert.Equal(t, HandoffAccounts, o.Handoff())
+		assert.Equal(t, focusRail, o.focus, "focus never moves into an entry with no rows")
+	}
+}
+
+// TestProfilesEntryStaysANoOp pins the deliberate asymmetry: PR D builds the profiles editor,
+// so PR C must not wire that entry to anything. A handoff to a surface that does not exist is
+// worse than the note.
+func TestProfilesEntryStaysANoOp(t *testing.T) {
 	o := NewSettingsOverlay(config.DefaultConfig())
-	o.railCursor = len(railEntries()) - 1 // Accounts, a handoff
-	require.Equal(t, railHandoff, o.selectedEntry().kind)
-	closed, changed := o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRight})
-	assert.Equal(t, focusRail, o.focus, "a handoff entry has no rows to focus")
+	o.SetRailIndex(len(railEntries()) - 2)
+	require.Equal(t, "Profiles", o.selectedEntry().label)
+
+	closed, changed := o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyEnter})
 	assert.False(t, closed)
 	assert.Empty(t, changed)
+	assert.Equal(t, HandoffNone, o.Handoff())
+	assert.Equal(t, focusRail, o.focus)
+}
+
+// TestRailHintNamesWhatTheForwardKeyDoes: the hint differs per entry because the forward key
+// does three different things — focus the rows, open another overlay, or nothing at all.
+// Advertising "→ rows" on an entry with no rows is the same class of lie as a static esc hint
+// (spec §15).
+func TestRailHintNamesWhatTheForwardKeyDoes(t *testing.T) {
+	o := NewSettingsOverlay(config.DefaultConfig())
+	o.SetSize(100, 32)
+
+	require.Equal(t, railCategory, o.selectedEntry().kind)
+	assert.Contains(t, stripANSI(o.hintLine()), "→ rows")
+
+	o.SetRailIndex(len(railEntries()) - 1)
+	accounts := stripANSI(o.hintLine())
+	assert.Contains(t, accounts, "↵ accounts")
+	assert.NotContains(t, accounts, "→ rows", "Accounts has no rows to focus")
+
+	o.SetRailIndex(len(railEntries()) - 2)
+	profiles := stripANSI(o.hintLine())
+	assert.NotContains(t, profiles, "→ rows")
+	assert.NotContains(t, profiles, "↵ accounts", "Profiles opens nothing in PR C")
+	assert.Contains(t, profiles, "esc close")
 }
 
 // TestEscIsLayered pins spec §7's layered Esc: from the rows pane it backs out to the

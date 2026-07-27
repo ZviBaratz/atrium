@@ -81,6 +81,10 @@ type SettingsOverlay struct {
 	// cannot see the session list must not guess. See SetAccountClusteringVisible and
 	// TestGroupModeHasNoConfigOnlyInertPredicate.
 	clusteringVisible *bool
+
+	// handoff is the sibling surface a rail entry asked home to open in this panel's place.
+	// Read once, as the panel closes — see Handoff.
+	handoff SettingsHandoff
 }
 
 // NewSettingsOverlay builds the settings panel over the given live config, focused on
@@ -145,6 +149,14 @@ func (s *SettingsOverlay) SetAccountClusteringVisible(visible bool) {
 // RailIndex reports which rail entry is current, so home can restore it the next time the panel
 // opens (spec §7). Persisting it to state.json is a deliberate non-goal.
 func (s *SettingsOverlay) RailIndex() int { return s.railCursor }
+
+// Handoff reports which sibling surface the panel asked to open in its place, or
+// HandoffNone. home reads it when HandleKeyPress reports the panel closed.
+func (s *SettingsOverlay) Handoff() SettingsHandoff { return s.handoff }
+
+// RailEntryCount is how many entries the rail has, so home (and its tests) can address the
+// last one without importing the rail's vocabulary.
+func (s *SettingsOverlay) RailEntryCount() int { return len(railEntries()) }
 
 // SetRailIndex moves the rail to the given entry, clamping out-of-range values — a remembered
 // index can outlive a rail that shrank — and pulling the row cursor with it.

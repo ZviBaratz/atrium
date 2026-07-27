@@ -805,19 +805,9 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 	case keys.KeyHelp:
 		return m.showHelpScreen(helpTypeGeneral{}, nil)
 	case keys.KeySettings:
-		m.state = stateSettings
-		m.settingsOverlay = overlay.NewSettingsOverlay(m.appConfig)
-		if m.settingsRail != nil {
-			m.settingsOverlay.SetRailIndex(*m.settingsRail)
-		}
-		m.refreshSettingsClusteringGate()
-		m.recomputeLayout() // the hint bar hides behind the modal; panes reclaim its row
-		return m, tea.WindowSize()
+		return m, m.openSettings()
 	case keys.KeyAccounts:
-		m.state = stateAccounts
-		m.accountsOverlay = overlay.NewAccountsOverlay(m.appConfig, m.appState)
-		m.recomputeLayout() // the hint bar hides behind the modal; panes reclaim its row
-		return m, tea.WindowSize()
+		return m, m.openAccounts()
 	case keys.KeyScreensaver:
 		// The full-window splash easter egg. Silently ignored when the window
 		// is below the splash floor (nothing legible to show).
@@ -1044,6 +1034,29 @@ func keyAllowedWhileBusy(name keys.KeyName) bool {
 	default:
 		return false
 	}
+}
+
+// openSettings opens the configuration panel on the rail entry the last open left it on.
+// Returns the command that re-sizes it; every caller is a key handler that returns it
+// straight through.
+func (m *home) openSettings() tea.Cmd {
+	m.state = stateSettings
+	m.settingsOverlay = overlay.NewSettingsOverlay(m.appConfig)
+	if m.settingsRail != nil {
+		m.settingsOverlay.SetRailIndex(*m.settingsRail)
+	}
+	m.refreshSettingsClusteringGate()
+	m.recomputeLayout() // the hint bar hides behind the modal; panes reclaim its row
+	return tea.WindowSize()
+}
+
+// openAccounts opens the Claude/GitHub/Antigravity account manager — the '@' key's overlay,
+// and the surface the settings rail's Accounts entry hands off to.
+func (m *home) openAccounts() tea.Cmd {
+	m.state = stateAccounts
+	m.accountsOverlay = overlay.NewAccountsOverlay(m.appConfig, m.appState)
+	m.recomputeLayout() // the hint bar hides behind the modal; panes reclaim its row
+	return tea.WindowSize()
 }
 
 // handleInfoState dismisses the info modal on any key press (scroll keys
