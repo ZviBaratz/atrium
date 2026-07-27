@@ -226,7 +226,10 @@ func TestNilSessionBriefFuncInjectsNoBrief(t *testing.T) {
 	data, err := os.ReadFile(filepath.Join(dir, "settings.json"))
 	require.NoError(t, err)
 	require.NotContains(t, string(data), "SessionStart", "no provider means no SessionStart hook")
-	require.Contains(t, string(data), "hooks", "the status hooks are unaffected")
+	// Named events, not the "hooks" key — that key is in every settings.json ever written here,
+	// so asserting on it would pass even if every event had vanished.
+	require.Contains(t, string(data), `"Stop"`, "the status hooks are unaffected")
+	require.Contains(t, string(data), `"PreToolUse"`, "the status hooks are unaffected")
 }
 
 // TestHookSessionStartCommand: the facts are baked into the command line the same way the

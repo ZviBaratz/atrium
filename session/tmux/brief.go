@@ -30,8 +30,11 @@ import (
 //   - Baking is not freezing. The Session holds a PROVIDER for the facts, not a value
 //     (SetSessionBriefFunc), and start() reads it at each launch — so a deep rename, the one
 //     thing that changes them mid-session, is picked up by the next launch that rewrites the
-//     file. What a rename does strand is the OLD <configDir>/hooks/<sanitizedName>/ directory,
-//     which Session.Rename leaves behind; the live session writes and reads under the new name.
+//     file. Until that relaunch a rename does sever the hook STATE channel, which is a separate
+//     pre-existing wart: Session.Rename moves nothing under <configDir>/hooks/, so the live
+//     claude keeps writing the state path frozen into the settings.json it was launched with
+//     (the OLD name) while Poll reads under the new one — status falls back to the scrape
+//     classifier, and the old directory is left behind. Verified by probe, not inferred.
 //   - Only the FACTS are baked. The copy is rendered by the binary at fire time, so it stays a
 //     single pure function here and an upgraded atrium improves the wording for an already-
 //     running session on its next /clear, without relaunching it.

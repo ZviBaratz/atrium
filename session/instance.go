@@ -540,8 +540,9 @@ func FromInstanceData(ctx context.Context, data InstanceData, branchPrefix strin
 	// Bound here as well as in Start, because a restored instance can be relaunched without
 	// going through Start at all: recoverInPlace calls the tmux session's Start/StartContinue
 	// directly when the pane could not be reattached. Binding the method value rather than a
-	// snapshot is the point — Rename and Resume mutate this instance without touching the
-	// tmux session, and each launch re-reads through it.
+	// snapshot is the point: Rename rewrites the two facts this renders from (Title, Branch)
+	// without touching the tmux session, and Resume/recoverInPlace relaunch without going
+	// through Start — so the read has to happen at launch, not here.
 	sess.SetSessionBriefFunc(instance.sessionBrief)
 	instance.tmuxName = sess.Name()
 	instance.tmuxSession = sess

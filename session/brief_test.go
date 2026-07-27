@@ -1,11 +1,13 @@
 package session
 
 import (
+	"context"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/ZviBaratz/atrium/config"
+	"github.com/ZviBaratz/atrium/session/git"
 	"github.com/ZviBaratz/atrium/session/tmux"
 
 	"github.com/stretchr/testify/require"
@@ -41,6 +43,46 @@ func TestSessionBriefFacts(t *testing.T) {
 	// root is above the worktree but not immediately above it.
 	require.True(t, strings.HasPrefix(wt.GetWorktreePath(), root+string(filepath.Separator)),
 		"the named root (%s) must contain this session's own worktree (%s)", root, wt.GetWorktreePath())
+}
+
+// TestSessionBriefFollowsRename is the Instance half of what keeps the brief honest across a
+// deep rename. The tmux half — start() reading the provider at each launch instead of trusting a
+// value stamped at the last one — is TestStartRederivesSessionBriefAtLaunch; this pins the other
+// end, that the provider bound onto the Session (this method) really yields the NEW title and
+// branch once Rename has moved them, rather than anything memoized.
+//
+// Together they close the path that made the provider necessary: rename, then pause→resume or
+// recover-in-place, both of which relaunch through start() WITHOUT going through Instance.Start
+// and so rewrite settings.json from whatever the brief says at that moment. A stale one would
+// tell the agent it is on a branch it is not on — and that clause is instruction-bearing
+// ("already the session branch, so do not create another").
+func TestSessionBriefFollowsRename(t *testing.T) {
+	repoPath := renameTestRepo(t)
+	wt, _, err := git.NewWorktree(context.Background(), repoPath, "formalize-packaing")
+	require.NoError(t, err)
+	require.NoError(t, wt.Setup())
+
+	inst := &Instance{
+		Title:       "formalize-packaing",
+		status:      Running,
+		started:     true,
+		gitWorktree: wt,
+		tmuxSession: liveTmux(t, "formalize-packaing"),
+		Branch:      wt.GetBranchName(),
+	}
+	before := inst.sessionBrief()
+	require.Equal(t, "formalize-packaing", before.Name)
+
+	require.NoError(t, inst.Rename("formalize-packaging"))
+
+	after := inst.sessionBrief()
+	require.Equal(t, "formalize-packaging", after.Name, "the provider yields the renamed title")
+	require.Equal(t, wt.GetBranchName(), after.Branch, "and the renamed branch")
+	require.NotEqual(t, before.Branch, after.Branch, "the branch really did move, so this is not a no-op rename")
+	// "packaing" is not a substring of "packaging", so this catches any pre-rename spelling
+	// surviving into the copy the agent would actually be handed.
+	require.NotContains(t, tmux.RenderSessionBrief(after), "packaing",
+		"no pre-rename spelling may survive into the rendered brief")
 }
 
 // TestSessionBriefEmptyWithoutWorktree: a session with no worktree says nothing. Every
