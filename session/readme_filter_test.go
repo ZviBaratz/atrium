@@ -67,4 +67,18 @@ func TestReadmeFilterExamples(t *testing.T) {
 	// `auth` — plain substring in name/branch/note.
 	require.True(t, ParseFilter("auth").Matches(authNamed))
 	require.False(t, ParseFilter("auth").Matches(readyClean))
+
+	// `muted unread` — silenced AND has a new unread turn.
+	mutedUnread := newFilterInstance(t, "muted-unread", "feat/q")
+	mutedUnread.SetMuted(true)
+	mutedUnread.unread = true
+	require.True(t, ParseFilter("muted unread").Matches(mutedUnread))
+	require.False(t, ParseFilter("muted unread").Matches(readyClean))
+
+	// `unread pr:open` — unacknowledged turn AND an open PR.
+	unreadOpen := newFilterInstance(t, "unread-open", "feat/p")
+	unreadOpen.unread = true
+	unreadOpen.SetPRStatus(&git.PRStatus{HasPR: true, State: "OPEN"})
+	require.True(t, ParseFilter("unread pr:open").Matches(unreadOpen))
+	require.False(t, ParseFilter("unread pr:open").Matches(readyClean))
 }

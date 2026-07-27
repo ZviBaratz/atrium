@@ -284,6 +284,8 @@ prefix in `claude-opus-4-8`.
 |------|---------|
 | `status:<name>` | sessions whose status prefixes `<name>` — `running`, `ready`, `loading`, `paused`, `needsinput`, `pending` |
 | `dirty` | sessions with uncommitted changes |
+| `muted` | sessions whose notifications are silenced (`M` key) |
+| `unread` | sessions with a finished turn not yet acknowledged |
 | `behind` | sessions behind their base branch |
 | `behind:<expr>` | `behind:3` (exactly 3), `behind:>0`, `behind:>=2`, `behind:<5`, `behind:<=1` |
 | `pr:<state>` | PR state prefixing `<state>` — `open`, `merged`, `closed`, or `none` (no PR) |
@@ -304,6 +306,8 @@ Worked examples (each is exercised verbatim against the parser by
 - `model:opus behind` — `opus`-family sessions **and** behind their base branch.
 - `mode:plan status:need` — planning sessions **and** waiting on you.
 - `auth` — any session with `auth` in its name, branch, or note.
+- `muted unread` — sessions that are silenced **and** have a new unread turn.
+- `unread pr:open` — unacknowledged turns **and** an open PR.
 
 Press `esc` to clear the committed filter.
 

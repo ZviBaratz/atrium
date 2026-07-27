@@ -14,7 +14,7 @@ import (
 //
 // A query is split on whitespace into terms that are combined with AND. Each term
 // is either a predicate over cached instance state (status:, dirty, behind[:expr],
-// pr:, account:, note:, effort:, model:, mode:) or a plain substring matched
+// pr:, account:, note:, effort:, model:, mode:, muted, unread) or a plain substring matched
 // against DisplayName, Branch, or the session note. Predicate values are matched
 // by case-insensitive prefix so the list narrows progressively as the user types
 // rather than blinking empty mid-word (see the package tests). model: is the sole
@@ -69,6 +69,10 @@ func parseTerm(tok string) term {
 		return statusTerm(strings.TrimPrefix(tok, "status:"))
 	case tok == "dirty":
 		return dirtyTerm()
+	case tok == "muted":
+		return mutedTerm()
+	case tok == "unread":
+		return unreadTerm()
 	case tok == "behind":
 		return behindTerm(func(b int) bool { return b > 0 })
 	case strings.HasPrefix(tok, "behind:"):
@@ -107,6 +111,14 @@ func dirtyTerm() term {
 		s := i.GetDiffStats()
 		return s != nil && s.Dirty
 	}
+}
+
+func mutedTerm() term {
+	return func(i *Instance) bool { return i.Muted() }
+}
+
+func unreadTerm() term {
+	return func(i *Instance) bool { return i.Unread() }
 }
 
 // behindTerm applies pred to the cached Behind count; a nil diff (count unknown) is
