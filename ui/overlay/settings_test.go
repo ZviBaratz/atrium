@@ -45,10 +45,15 @@ func widestFooterRow(t *testing.T) string {
 		}
 	}
 	require.NotEmpty(t, key, "the schema must declare at least one row")
-	// A one-line footer would make the callers' capping assertions vacuous.
-	require.Greater(t, widest, 60,
-		"the widest footer (%q, %d cells) must exceed the 80-col inner width to wrap",
-		key, widest)
+	// A one-line footer would make the callers' capping assertions vacuous. The bound is the
+	// panel's own inner width at the 80-column floor — 74 since PR B widened the box from a
+	// fixed 64 — read from the overlay rather than restated as a literal, so a further width
+	// change cannot leave a stale number here.
+	o := NewSettingsOverlay(config.DefaultConfig())
+	o.SetSize(80, 24)
+	require.Greater(t, widest, o.innerWidth(),
+		"the widest footer (%q, %d cells) must exceed the inner width %d to wrap",
+		key, widest, o.innerWidth())
 	return key
 }
 
@@ -64,12 +69,22 @@ func TestFooterTextFitsTwoLines(t *testing.T) {
 	o.SetSize(80, 24) // the project's degradation floor
 	inner := o.innerWidth()
 
+	wrapped := 0
 	for _, r := range newSettingRows(config.DefaultConfig()) {
 		lines := strings.Split(ansi.Wrap(r.footerText(), inner, ""), "\n")
+		if len(lines) == 2 {
+			wrapped++
+		}
 		assert.LessOrEqualf(t, len(lines), 2,
 			"row %q wraps its footer to %d lines at inner width %d (%d cells); trim the "+
 				"summary or the caution", r.key, len(lines), inner, ansi.StringWidth(r.footerText()))
 	}
+	// PR B widened the box from inner 60 to inner 74, so without this the cap could pass with
+	// every footer on one line — proving nothing about the two-line budget the help pane's prose
+	// is sized against.
+	require.Positive(t, wrapped,
+		"at least one footer must actually need two lines at inner width %d, or this cap is vacuous",
+		inner)
 }
 
 // TestEveryCautionReachesTheFooter pins that a row's caution is actually rendered,
@@ -553,10 +568,19 @@ func TestSettingsOverlay_RenderFitsWidth(t *testing.T) {
 
 func TestSettingsOverlay_ShortTerminalScrollsToCursor(t *testing.T) {
 	o := NewSettingsOverlay(config.DefaultConfig())
-	o.SetSize(80, 14) // far fewer lines than rows+headers need
+	o.SetSize(80, 14)
 	settingsAt(t, o, "tmux_config_override")
-	out := stripANSI(o.Render())
-	assert.Contains(t, out, "Tmux config override", "the selected row must be visible on short terminals")
+
+	// The flat view, not Advanced. SelectRow now syncs the rail to the row's category, and
+	// Advanced has three rows — which fit any pane — so asserting there would test nothing about
+	// windowing. All settings is 57 lines into a pane of three.
+	o.railCursor = 0
+	o.syncCursorToRail()
+	require.Greater(t, len(o.rowsPaneContent(o.rowsPaneWidth())), o.paneHeight(),
+		"the flat view must overflow the pane, or windowing is untested")
+
+	assert.Contains(t, stripANSI(o.Render()), "Tmux config override",
+		"the selected row must be visible on a short terminal")
 }
 
 // TestSettingsOverlay_LongSummaryWrapsWithinTheHelpPane pins that a summary too wide for one
@@ -753,12 +777,25 @@ func TestSettingsOverlay_CarryFilesRowExists(t *testing.T) {
 func TestSettingsOverlay_CarryFilesGetDisplaysDefault(t *testing.T) {
 	cfg := config.DefaultConfig()
 	o := NewSettingsOverlay(cfg)
-	o.SetSize(80, 40)
+	o.SetSize(80, 24)
 	settingsAt(t, o, "carry_files")
-	out := stripANSI(o.Render())
-	// The default carry list is [".claude/settings.local.json"]; the row must
-	// show it rather than "(none)".
-	assert.Contains(t, out, ".claude/settings.local.json")
+
+	// The default carry list is [".claude/settings.local.json"]; the row must show it rather
+	// than "(none)". At 80 columns it does not fit the Worktrees rows pane — 27 cells of value
+	// against the slack a 23-cell label leaves — so it is truncated on the row and shown in full
+	// in the help pane. Spec §10 requires exactly that, so asserting WHERE it appears turns this
+	// into a free check on the requirement; asserting on Render() as a whole would pass either
+	// way and say nothing about it.
+	require.True(t, o.valueWasTruncated(),
+		"the default must not fit an 80-col rows pane (%d cells), or this test proves nothing "+
+			"about the help pane's obligation", o.rowsPaneWidth())
+	assert.Contains(t, stripANSI(strings.Join(o.helpLines(), "\n")), ".claude/settings.local.json",
+		"a truncated value must be recoverable from the help pane")
+
+	// Given room, it renders on the row itself.
+	o.SetSize(120, 32)
+	require.False(t, o.valueWasTruncated())
+	assert.Contains(t, stripANSI(o.Render()), ".claude/settings.local.json")
 }
 
 func TestSettingsOverlay_CarryFilesGetDisplaysNoneWhenEmpty(t *testing.T) {
