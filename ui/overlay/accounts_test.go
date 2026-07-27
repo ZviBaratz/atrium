@@ -189,6 +189,37 @@ func TestAccountsOverlay_EditInPlaceUnrenamedCommits(t *testing.T) {
 	assert.Equal(t, modeList, o.mode)
 }
 
+// expect_account has no field on this form, and commit() replaces the whole struct
+// at the edited index — so without an explicit carry, any edit at all silently
+// unpins the account. That is the worst possible moment to lose it: the pin exists
+// to stop sessions billing the wrong login, and it would vanish exactly when
+// someone was paying the account enough attention to open it.
+//
+// The edit here renames, so the assertion cannot pass by the row being left alone.
+func TestAccountsOverlay_EditPreservesExpectAccount(t *testing.T) {
+	cfg := &config.Config{ClaudeAccounts: []config.ClaudeAccount{
+		{Name: "personal", ConfigDir: "~/.claude-personal", ExpectAccount: "me@example.com"},
+	}}
+	o := NewAccountsOverlay(cfg, config.DefaultState())
+	o.SetSize(80, 24)
+
+	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'e'}}) // edit row 0
+	require.Equal(t, modeEdit, o.mode)
+
+	// Name starts focused with the cursor at the end; ctrl+u clears it (see
+	// TestAccountsOverlay_EditRenameToDuplicateRejected).
+	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyCtrlU})
+	typeInto(o, "home")
+	require.Equal(t, "home", o.form.Name(), "rename did not take; the carry is untested")
+
+	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyEnter})
+
+	require.Len(t, cfg.ClaudeAccounts, 1)
+	assert.Equal(t, "home", cfg.ClaudeAccounts[0].Name)
+	assert.Equal(t, "me@example.com", cfg.ClaudeAccounts[0].ExpectAccount,
+		"editing an account wiped its expect_account pin")
+}
+
 // TestAccountsOverlay_EditRenameToDuplicateRejected covers the other half of
 // validate's self-exclusion: renaming the account being edited TO a different
 // existing account's name must still be rejected (self-exclusion only forgives

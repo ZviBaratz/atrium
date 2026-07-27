@@ -322,6 +322,12 @@ func (o *AccountsOverlay) commit() {
 		if o.editIndex < 0 {
 			o.cfg.ClaudeAccounts = append(o.cfg.ClaudeAccounts, a)
 		} else {
+			// This form has no expect_account field, and the assignment below
+			// replaces the whole struct — so carry the existing pin across or a
+			// rename, a pool change, any edit at all would silently drop it. The
+			// account would go back to unverified exactly when someone was paying
+			// it enough attention to edit it.
+			a.ExpectAccount = o.cfg.ClaudeAccounts[o.editIndex].ExpectAccount
 			o.carryAvailability(o.cfg.ClaudeAccounts[o.editIndex].Name, a.Name)
 			o.cfg.ClaudeAccounts[o.editIndex] = a
 		}

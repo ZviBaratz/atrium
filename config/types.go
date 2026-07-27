@@ -108,6 +108,23 @@ type ClaudeAccount struct {
 	RemoteMatches []string `json:"remote_matches,omitempty"`
 	PathMatches   []string `json:"path_matches,omitempty"`
 	Pool          string   `json:"pool,omitempty"` // rotation-pool membership; empty = singleton pool (own name)
+
+	// ExpectAccount is the email address config_dir must be logged in as — the
+	// assertion that turns Name from an unverified label into a checkable claim.
+	// Nothing about a config dir stops `/login` from re-pointing it at a different
+	// account in place, and when that happens every route keeps its old name while
+	// the sessions it sends bill a login the user never picked. Setting this gives
+	// that drift something to fail against, instead of leaving it to surface as a
+	// usage figure on a webpage.
+	//
+	// Optional, and unset means unverified, not "expect nothing": an account that
+	// declares no expectation is reported as unpinned and otherwise left alone.
+	//
+	// Today `atrium doctor` is the only thing that reads it. Setting it changes what
+	// that report says and nothing else — routing does not consult it, and no launch
+	// is refused on a mismatch. See ReadIdentity/MatchesPin for the comparison and
+	// doctor.CheckAccountIdentity for the report.
+	ExpectAccount string `json:"expect_account,omitempty"`
 }
 
 // ResolvedConfigDir expands a leading ~ in ConfigDir to the user's home directory.
