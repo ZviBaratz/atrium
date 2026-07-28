@@ -138,9 +138,24 @@ func (p *CommandPaletteOverlay) visibleItems() []int {
 	}
 	var hits []scored
 	for i, a := range p.actions {
+		// The query IS a key: "p" must find pause, not the first row that happens
+		// to contain a p. Single-character queries otherwise tie on score across
+		// dozens of rows and fall back to list order, which puts "prev tab" above
+		// "pause" — and a palette whose premise is that every row shows its key
+		// should answer when you type one.
+		//
+		// Case-SENSITIVE, unlike the fuzzy tiers below. The keymap binds both cases
+		// of the same letter to different actions — m merges, M mutes; r resumes,
+		// R renames — so a case-insensitive compare here surfaces the wrong one of
+		// each pair, which is worse than not having the rule. The other case is
+		// still reachable: it falls through to the tiers, which do fold case.
+		if p.filter == a.Key {
+			hits = append(hits, scored{idx: i, tier: tierExactKey})
+			continue
+		}
 		for tier, field := range []string{a.Key + " " + a.Label, a.Detail, a.Group} {
 			if ok, score := fuzzy.Match(p.filter, field); ok {
-				hits = append(hits, scored{idx: i, tier: tier, score: score})
+				hits = append(hits, scored{idx: i, tier: tierVerb + tier, score: score})
 				break
 			}
 		}
@@ -325,6 +340,13 @@ func (p *CommandPaletteOverlay) renderRow(a PaletteAction, selected bool, width 
 }
 
 const (
+	// The match tiers, best first. The tier outranks the score, so a hit in a
+	// better field always leads regardless of how well it scored in a worse one.
+	// tierVerb is the base the field loop offsets from: verb, then prose, then
+	// section.
+	tierExactKey = 0
+	tierVerb     = 1
+
 	// paletteMinLabelWidth floors the verb column on a terminal too narrow for a
 	// third of its width to hold a verb — below this the column stops carrying
 	// enough letters to tell two actions apart.

@@ -93,6 +93,10 @@ func (m *home) openCommandPalette() (tea.Model, tea.Cmd) {
 	actions := make([]overlay.PaletteAction, len(m.paletteRows))
 	for i, row := range m.paletteRows {
 		actions[i] = row.action
+		// Evaluated at open, against the selection as it stands. The palette is
+		// modal, so nothing can move the selection out from under a row while it
+		// is up (see palette_gates.go for why the gate may pre-empt at all).
+		actions[i].Inert = m.paletteInertReason(row.name)
 	}
 	m.commandPaletteOverlay = overlay.NewCommandPaletteOverlay(actions)
 	m.state = stateCommandPalette
@@ -148,6 +152,14 @@ func (m *home) dismissCommandPalette() {
 func (m *home) runPaletteAction(name keys.KeyName) (tea.Model, tea.Cmd) {
 	if m.actionInFlight && !keyAllowedWhileBusy(name) {
 		return m, m.handleInfoNotice("busy — " + m.menu.BusyText())
+	}
+	// A dimmed row is still selectable — the settings panel's rule is "dimmed,
+	// not hidden", and a row you cannot reach cannot teach you its key. So enter
+	// on one has to answer, and the gate is what knows the answer: several of the
+	// handlers below would refuse this silently, which from the palette is
+	// indistinguishable from the key doing nothing.
+	if reason := m.paletteInertReason(name); reason != "" {
+		return m, m.handleInfoNotice(reason)
 	}
 	return m.dispatchAction(name)
 }

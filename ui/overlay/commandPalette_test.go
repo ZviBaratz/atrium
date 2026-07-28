@@ -19,8 +19,13 @@ import (
 // whichever came first. Ordering resume first is what makes the tier the only
 // thing that can put pause on top; with the fixture the other way round the
 // ranking test passes whether the tiering exists or not.
+// "prev tab" is listed first and starts a word with p, so it scores a boundary
+// hit on the query "p" identical to pause's own — the real tie that put it above
+// pause in the live keymap. Without it the exact-key rule looks like it works
+// while doing nothing: every other row's p is mid-word and loses on score alone.
 func paletteFixture() []PaletteAction {
 	return []PaletteAction{
+		{Key: "shift-tab", Label: "prev tab", Detail: "next / prev pane", Group: "Navigate"},
 		{Key: "↑/k", Label: "up", Detail: "move selection", Group: "Navigate"},
 		{Key: "r", Label: "resume", Detail: "resume a paused session", Group: "Handoff"},
 		{Key: "p", Label: "pause", Detail: "commit changes + free the worktree", Group: "Handoff"},
@@ -80,6 +85,43 @@ func TestPaletteRanksVerbHitsAboveProseHits(t *testing.T) {
 	action, _, ok := p.Chosen()
 	require.True(t, ok)
 	assert.Equal(t, "pause", action.Label, "the verb hit must lead, not the action whose prose says 'paused'")
+}
+
+// Typing an action's key finds that action. A one-character query otherwise ties
+// on score across every row containing that letter and falls back to list order,
+// so "p" surfaced whichever row came first rather than pause — in a palette whose
+// premise is that every row shows its key.
+func TestPaletteExactKeyMatchWins(t *testing.T) {
+	p := NewCommandPaletteOverlay(paletteFixture())
+	typePalette(p, "p")
+
+	p.HandleKeyPress(tea.KeyMsg{Type: tea.KeyEnter})
+
+	action, _, ok := p.Chosen()
+	require.True(t, ok)
+	assert.Equal(t, "pause", action.Label, "typing a key must lead with the action bound to it")
+}
+
+// And the exact-key match is case-sensitive, because the keymap is: m merges and
+// M mutes, r resumes and R renames. Folding case here surfaces the wrong half of
+// every such pair — which it did, until this test.
+func TestPaletteExactKeyMatchIsCaseSensitive(t *testing.T) {
+	actions := []PaletteAction{
+		{Key: "M", Label: "mute notifications", Detail: "mute / unmute", Group: "Manage"},
+		{Key: "m", Label: "merge PR", Detail: "merge the session's PR", Group: "Handoff"},
+	}
+	for _, tc := range []struct{ query, want string }{
+		{"m", "merge PR"},
+		{"M", "mute notifications"},
+	} {
+		p := NewCommandPaletteOverlay(actions)
+		typePalette(p, tc.query)
+		p.HandleKeyPress(tea.KeyMsg{Type: tea.KeyEnter})
+
+		action, _, ok := p.Chosen()
+		require.True(t, ok)
+		assert.Equalf(t, tc.want, action.Label, "query %q must lead with the action actually bound to it", tc.query)
+	}
 }
 
 // Prose stays searchable: the pause action's verb never says "worktree", and
