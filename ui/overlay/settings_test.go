@@ -1059,3 +1059,70 @@ func moduleFile(t *testing.T, name string) string {
 		dir = parent
 	}
 }
+
+// TestSettingsOverlay_RawDefaultProgramSurvivesAProfilesEdit is spec §9's third obligation and
+// guard 12's last clause. TestSettingsOverlay_RawDefaultProgramSurvivesCycle pins that a
+// hand-edited raw command stays a cycle option across a CYCLE; this pins that it stays one
+// across a PROFILES edit, which is the new way to reach it.
+//
+// The mechanism is a lexical capture taken once in newSettingRows. It survives precisely because
+// s.rows is built once and never rebuilt: a refresh would recompute the capture from the
+// CURRENT DefaultProgram — by then a profile name — and the raw command would be gone with no
+// way back. So this test is also the guard against a well-meaning "re-read the row after a
+// profiles edit" change.
+func TestSettingsOverlay_RawDefaultProgramSurvivesAProfilesEdit(t *testing.T) {
+	const raw = "/home/user/launch-claude.sh"
+	cfg := config.DefaultConfig()
+	cfg.DefaultProgram = raw
+	cfg.Profiles = []config.Profile{{Name: "claude", Program: "claude"}}
+	o := NewSettingsOverlay(cfg)
+	o.SetSize(100, 32)
+
+	settingsAt(t, o, "default_program")
+	row := o.rows[o.cursor]
+	require.Contains(t, row.options(cfg), raw, "precondition: the raw command is a cycle option")
+
+	// Cycle off it, so the live config no longer holds the raw string anywhere.
+	_, _ = o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRight})
+	require.NotEqual(t, raw, cfg.DefaultProgram, "precondition: the raw value is only in the capture now")
+
+	// Now edit the profile list from the editor: add one, then delete it again.
+	profilesAt(t, o)
+	_, _ = o.HandleKeyPress(keyRunes("n"))
+	typeProfile(o, "codex")
+	_, _ = o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyTab})
+	typeProfile(o, "codex")
+	_, _ = o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyEnter})
+	_, _ = o.HandleKeyPress(keyRunes("d"))
+	_, _ = o.HandleKeyPress(keyRunes("y"))
+
+	settingsAt(t, o, "default_program")
+	opts := o.rows[o.cursor].options(cfg)
+	assert.Contains(t, opts, raw, "a profiles edit must not destroy the captured raw command")
+	assert.Contains(t, opts, "claude", "and the live profile names are still there")
+}
+
+// TestSettingsOverlay_NewProfileBecomesACycleOption is the other direction: options() walks
+// cfg.Profiles live, so a record added by the editor is immediately cyclable — no row rebuild
+// needed, and none wanted (see the sibling above).
+func TestSettingsOverlay_NewProfileBecomesACycleOption(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.DefaultProgram = "claude"
+	cfg.Profiles = []config.Profile{{Name: "claude", Program: "claude"}}
+	o := NewSettingsOverlay(cfg)
+	o.SetSize(100, 32)
+
+	settingsAt(t, o, "default_program")
+	require.NotContains(t, o.rows[o.cursor].options(cfg), "gemini")
+
+	profilesAt(t, o)
+	_, _ = o.HandleKeyPress(keyRunes("n"))
+	typeProfile(o, "gemini")
+	_, _ = o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyTab})
+	typeProfile(o, "gemini")
+	_, _ = o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyEnter})
+
+	settingsAt(t, o, "default_program")
+	assert.Contains(t, o.rows[o.cursor].options(cfg), "gemini",
+		"the enum reads cfg.Profiles live, so a new record is cyclable at once")
+}

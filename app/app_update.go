@@ -85,6 +85,31 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			text = fmt.Sprintf("New agents `%s` detected. Run `atrium profiles detect` to add them.", names)
 		}
 		return m, m.handleAgentNotice(text)
+	case profilesDetectedMsg:
+		// The merge is unconditional. The user asked for it, and the probe takes long enough
+		// that gating it on the panel still being open made one set of keystrokes produce three
+		// different outcomes — dropped if they closed the panel, merged if they reopened it (a
+		// DIFFERENT overlay instance), merged-but-silent if they only moved the rail. What
+		// varies is where the outcome is reported, never whether it happens.
+		added := m.appConfig.MergeDetectedProfiles(msg.detected)
+		text := profilesDetectedText(added)
+		shown := m.settingsOverlay != nil && m.settingsOverlay.NoteProfilesDetected(added, text)
+		var cmds []tea.Cmd
+		if len(added) > 0 {
+			// Nothing added means nothing to persist, mirroring the CLI's early return.
+			if cmd := m.applySettingChange("profiles"); cmd != nil {
+				cmds = append(cmds, cmd)
+			}
+		}
+		if !shown {
+			// handleAgentNotice is the held-over path the startup agent check already uses: it
+			// shows now if the hint bar is free, and otherwise waits — which is exactly right
+			// while a panel is covering the row.
+			if cmd := m.handleAgentNotice(text); cmd != nil {
+				cmds = append(cmds, cmd)
+			}
+		}
+		return m, tea.Batch(cmds...)
 	case updateCheckDoneMsg:
 		if m.list != nil {
 			m.list.SetUpdateBadge(updateBadgeText(msg.version, msg.installed))

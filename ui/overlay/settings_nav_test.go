@@ -28,17 +28,20 @@ func TestRailEntriesAreTheThirteen(t *testing.T) {
 		assert.Equalf(t, c.label(), e.label, "a rail label must be the category's own label")
 	}
 
-	for _, e := range entries[11:] {
-		assert.Equalf(t, railHandoff, e.kind, "%q must be a handoff", e.label)
-	}
+	// The last two entries own no settingRows, but for different reasons: Profiles has a pane
+	// of its own (PR D's editor) and Accounts hands off to the @ overlay.
 	assert.Equal(t, "Profiles", entries[11].label)
+	assert.Equal(t, railProfiles, entries[11].kind)
+	assert.Empty(t, entries[11].note, "an entry with a pane of its own has no note to render")
+	assert.Equal(t, HandoffNone, entries[11].opens, "the editor is not a handoff")
 	assert.Equal(t, "Accounts", entries[12].label)
+	assert.Equal(t, railHandoff, entries[12].kind)
 }
 
-// TestEveryHandoffEntryNamesItsSurface pins that a rail entry owning no rows still says
-// where its config lives. An entry that renders an empty pane teaches the user nothing
-// and reads as a bug; PR C wires Accounts to the @ overlay and PR D builds the Profiles
-// editor, so until then the note is the whole content of that pane.
+// TestEveryHandoffEntryNamesItsSurface pins that a rail entry owning no rows and no pane
+// still says where its config lives. An entry that renders an empty pane teaches the user
+// nothing and reads as a bug, so the note is the whole content of that pane — and the
+// forward key that note names must actually open something.
 func TestEveryHandoffEntryNamesItsSurface(t *testing.T) {
 	handoffs := 0
 	for _, e := range railEntries() {
@@ -48,9 +51,14 @@ func TestEveryHandoffEntryNamesItsSurface(t *testing.T) {
 		}
 		handoffs++
 		assert.NotEmptyf(t, e.note, "handoff entry %q must name the surface that owns it", e.label)
+		assert.NotEqualf(t, HandoffNone, e.opens,
+			"handoff entry %q opens nothing — an entry with no rows, no pane and no surface has "+
+				"no reason to exist, and railHintLadder now assumes it cannot", e.label)
 	}
-	// Without this the loop could stop running and the test would still pass.
-	require.Equal(t, 2, handoffs, "Profiles and Accounts are the two handoffs")
+	// Without this the loop could stop running and the test would still pass. Accounts is the
+	// only handoff left: PR D replaced the Profiles note with an editor, and the assert.Emptyf
+	// above is what stops that note being left behind on the new kind.
+	require.Equal(t, 1, handoffs, "Accounts is the only handoff")
 }
 
 // TestRailDefaultIndexIsTheFirstCategory pins the landing entry. Spec §4 is explicit
@@ -282,21 +290,6 @@ func TestAccountsEntryHandsOffToTheAccountsOverlay(t *testing.T) {
 	}
 }
 
-// TestProfilesEntryStaysANoOp pins the deliberate asymmetry: PR D builds the profiles editor,
-// so PR C must not wire that entry to anything. A handoff to a surface that does not exist is
-// worse than the note.
-func TestProfilesEntryStaysANoOp(t *testing.T) {
-	o := NewSettingsOverlay(config.DefaultConfig())
-	o.SetRailIndex(len(railEntries()) - 2)
-	require.Equal(t, "Profiles", o.selectedEntry().label)
-
-	closed, changed := o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyEnter})
-	assert.False(t, closed)
-	assert.Empty(t, changed)
-	assert.Equal(t, HandoffNone, o.Handoff())
-	assert.Equal(t, focusRail, o.focus)
-}
-
 // TestRailHintNamesWhatTheForwardKeyDoes: the hint differs per entry because the forward key
 // does three different things — focus the rows, open another overlay, or nothing at all.
 // Advertising "→ rows" on an entry with no rows is the same class of lie as a static esc hint
@@ -313,50 +306,60 @@ func TestRailHintNamesWhatTheForwardKeyDoes(t *testing.T) {
 	assert.Contains(t, accounts, "↵ accounts")
 	assert.NotContains(t, accounts, "→ rows", "Accounts has no rows to focus")
 
-	o.SetRailIndex(len(railEntries()) - 2)
+	o.SetRailIndex(profilesRailIndex())
 	profiles := stripANSI(o.hintLine())
-	assert.NotContains(t, profiles, "→ rows")
-	assert.NotContains(t, profiles, "↵ accounts", "Profiles opens nothing in PR C")
+	assert.Contains(t, profiles, "→ profiles", "the forward key opens the editor, and says so")
+	assert.NotContains(t, profiles, "→ rows", "Profiles owns no settingRows")
+	assert.NotContains(t, profiles, "↵ accounts", "the editor is not a handoff")
 	assert.Contains(t, profiles, "esc close")
 }
 
-// TestRailHintNeverPromisesAPaneSwapWithoutRows holds "⇥ pane" to the same standard spec §15
-// sets for "→ rows". handleRailKey routes tab with right and enter, so tab IS the forward key
-// on the rail rather than a pane toggle: on an entry that owns rows it swaps panes, and on a
-// handoff it hands off or does nothing while focus stays put. So an entry with no rows must
-// advertise neither hint.
+// TestRailHintNeverPromisesAPaneSwapWithoutRows holds "⇥ pane" and "→ rows" to spec §15's
+// standard, restated for PR D's fourth rail kind.
 //
-// Asserted over every rung of every entry rather than one rendered line, because the narrow
-// rungs drop "⇥ pane" on their own — a single-width check would pass on the strength of the
-// truncation and prove nothing about the wording.
+// Before the editor the two promises had ONE discriminator: railHandoff was exactly the no-rows
+// case, so an entry with no rows also had no pane to swap into. railProfiles splits them. It
+// owns a focusable pane — tab genuinely swaps into it, so "⇥ pane" is honest — while owning no
+// settingRows, so "→ rows" is not. The invariant is therefore two facts, not one:
+//
+//   - "→ rows" requires settingRows: exactly railAll and railCategory have them.
+//   - "⇥ pane" requires a pane the forward key can focus: everything except railHandoff.
 func TestRailHintNeverPromisesAPaneSwapWithoutRows(t *testing.T) {
 	o := NewSettingsOverlay(config.DefaultConfig())
-	withRows, withoutRows := 0, 0
+	withRows, panes, handoffs := 0, 0, 0
 	for _, e := range railEntries() {
 		start, end := o.rowRange(e)
 		owns := end > start
+		require.Equalf(t, e.kind == railAll || e.kind == railCategory, owns,
+			"entry %q: settingRows belong to railAll and railCategory alone", e.label)
+		focusable := e.kind != railHandoff
 		if owns {
 			withRows++
-		} else {
-			withoutRows++
 		}
-		require.Equalf(t, e.kind != railHandoff, owns,
-			"entry %q: railHandoff must be exactly the no-rows case", e.label)
+		if focusable {
+			panes++
+		} else {
+			handoffs++
+		}
 		for i, rung := range railHintLadder(e) {
-			if owns {
-				continue
+			if !owns {
+				assert.NotContainsf(t, rung, "→ rows",
+					"entry %q rung %d promises rows it does not own: %q", e.label, i, rung)
 			}
-			assert.NotContainsf(t, rung, "⇥ pane",
-				"entry %q rung %d promises a pane swap it cannot do: %q", e.label, i, rung)
-			assert.NotContainsf(t, rung, "→ rows",
-				"entry %q rung %d promises rows it does not own: %q", e.label, i, rung)
+			if !focusable {
+				assert.NotContainsf(t, rung, "⇥ pane",
+					"entry %q rung %d promises a pane swap it cannot do: %q", e.label, i, rung)
+			}
 		}
 	}
-	// Without these the loop could stop covering either side and the test would still pass.
-	require.Equal(t, 2, withoutRows, "Profiles and Accounts are the two entries with no rows")
+	// Without these the loop could stop covering a side and the test would still pass.
 	require.Equal(t, 11, withRows, "All settings plus the ten categories own rows")
-	// The positive half: the entries that CAN swap panes still say so at the widest rung.
+	require.Equal(t, 12, panes, "every entry but Accounts owns a focusable pane")
+	require.Equal(t, 1, handoffs, "Accounts is the only handoff")
+	// The positive half, on both kinds that can swap panes.
 	assert.Contains(t, railHintLadder(railEntries()[railDefaultIndex()])[0], "⇥ pane")
+	assert.Contains(t, railHintLadder(railEntries()[profilesRailIndex()])[0], "⇥ pane",
+		"the editor's pane is focusable, so its widest rung says so")
 }
 
 // TestEveryWiredHandoffNamesItsForwardKey is the drift guard for PR D. handoffHint maps a
@@ -374,7 +377,7 @@ func TestEveryWiredHandoffNamesItsForwardKey(t *testing.T) {
 		assert.Containsf(t, railHintLadder(e)[0], hint,
 			"entry %q's widest rung must name its forward key", e.label)
 	}
-	require.Equal(t, 1, wired, "Accounts is the only wired handoff in PR C")
+	require.Equal(t, 1, wired, "Accounts is the only handoff left")
 }
 
 // TestEscIsLayered pins spec §7's layered Esc: from the rows pane it backs out to the

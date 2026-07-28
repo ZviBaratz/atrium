@@ -20,9 +20,13 @@ const (
 	HandoffAccounts
 )
 
-// railKind distinguishes the three things a settings rail entry can be. Ten of the
-// thirteen entries project a settingCategory; the other three own no rows of their own,
-// which is why the rail is its own vocabulary rather than allCategories() alone.
+// railKind distinguishes the four things a settings rail entry can be. Ten of the
+// thirteen entries project a settingCategory; the other three do not, which is why the
+// rail is its own vocabulary rather than allCategories() alone.
+//
+// "Owns no rows" stopped being one fact when railProfiles arrived: it owns a focusable
+// pane over cfg.Profiles, while railHandoff owns no pane either. That split is stated by
+// TestRailHintNeverPromisesAPaneSwapWithoutRows.
 type railKind int
 
 const (
@@ -33,9 +37,14 @@ const (
 	railAll railKind = iota
 	// railCategory shows one category's rows.
 	railCategory
-	// railHandoff owns no rows: that config lives on another surface. PR B renders these
-	// dimmed with the handoff glyph and their note; PR C wires Accounts to the @ overlay
-	// and PR D builds the Profiles editor.
+	// railProfiles is the Profiles record editor (spec §9). It owns a focusable pane exactly as
+	// a category does, but that pane is over cfg.Profiles rather than over settingRows — so
+	// rowRange reports zero rows for it, newSettingRows never sees it, and
+	// TestEveryScalarConfigFieldHasARow's `profiles` exemption stays true. PR D.
+	railProfiles
+	// railHandoff owns no rows AND no pane: that config lives on another surface, and the
+	// forward key opens it. PR B renders these dimmed with the handoff glyph and their note;
+	// after PR D, Accounts is the only one.
 	railHandoff
 )
 
@@ -48,16 +57,18 @@ type railEntry struct {
 	// note is the single line a handoff entry's pane shows, naming the surface that owns
 	// its config. Empty for every other kind (TestEveryHandoffEntryNamesItsSurface).
 	note string
-	// opens is the surface this entry hands off to, for a railHandoff entry that has one.
-	// Profiles is HandoffNone until PR D replaces it with a real editor: a handoff to a
-	// surface that does not exist would be worse than the note.
+	// opens is the surface this entry hands off to. Meaningful only when kind ==
+	// railHandoff, and every one of those has a surface: an entry with no rows, no pane and
+	// nothing to open would have no reason to exist, which is what
+	// TestEveryHandoffEntryNamesItsSurface asserts. Every other kind leaves it HandoffNone.
 	opens SettingsHandoff
 }
 
 // railEntries returns the rail in display order: the flat view, the ten scalar
-// categories, then the two handoffs. Thirteen entries fit the 80x24 pane budget exactly
-// (spec §4's invariant, pinned by TestRailFitsUnscrolledAtTheFloor) — a fourteenth has
-// to displace another rather than start the rail scrolling.
+// categories, then the Profiles editor and the Accounts handoff. Thirteen entries fit the
+// 80x24 pane budget exactly (spec §4's invariant, pinned by
+// TestRailFitsUnscrolledAtTheFloor) — a fourteenth has to displace another rather than
+// start the rail scrolling.
 func railEntries() []railEntry {
 	entries := make([]railEntry, 0, len(allCategories())+3)
 	entries = append(entries, railEntry{label: "All settings", kind: railAll})
@@ -65,13 +76,7 @@ func railEntries() []railEntry {
 		entries = append(entries, railEntry{label: c.label(), kind: railCategory, category: c})
 	}
 	return append(entries,
-		railEntry{
-			label: "Profiles", kind: railHandoff,
-			// Stated as a plain fact about where the data lives, not as a roadmap promise:
-			// PR D replaces this entry with an editor, and a note saying "not yet" would be
-			// the first thing to go stale.
-			note: "Agent profiles are edited in config.json, under the profiles key.",
-		},
+		railEntry{label: "Profiles", kind: railProfiles},
 		railEntry{
 			label: "Accounts", kind: railHandoff, opens: HandoffAccounts,
 			note: "Claude, GitHub and Antigravity accounts — press ↵ to open the accounts overlay.",
@@ -144,7 +149,7 @@ func (s *SettingsOverlay) rowRange(e railEntry) (start, end int) {
 		}
 		return start, end
 	}
-	return 0, 0 // railHandoff owns no rows
+	return 0, 0 // railProfiles and railHandoff own no settingRows
 }
 
 // syncCursorToRail pulls the row cursor into the current entry's range, so moving the
@@ -156,6 +161,7 @@ func (s *SettingsOverlay) rowRange(e railEntry) (start, end int) {
 // spans every row. Moving from Appearance to All settings and back keeps your place.
 func (s *SettingsOverlay) syncCursorToRail() {
 	s.lastErr = ""
+	s.resetProfileTransients()
 	start, end := s.rowRange(s.selectedEntry())
 	if end <= start {
 		return
@@ -189,9 +195,16 @@ func (s *SettingsOverlay) handleRailKey(msg tea.KeyMsg) (closed bool) {
 			s.focus = focusRows
 			return false
 		}
-		// An entry with no rows either hands off to another surface or does nothing. The
-		// panel closes on a handoff so the surface it names takes the screen; focus never
-		// moves into an empty pane either way.
+		if s.selectedEntry().kind == railProfiles {
+			// The editor owns a pane the same way a category does; it just is not driven by
+			// settingRows, so the rowRange gate above cannot see it. Focus moves in and the
+			// panel stays open — unlike a handoff, which gives the screen to another overlay.
+			s.focus = focusRows
+			s.clampProfileCursor()
+			return false
+		}
+		// An entry with no rows and no pane hands off to another surface. The panel closes so
+		// the surface it names takes the screen; focus never moves into an empty pane.
 		if opens := s.selectedEntry().opens; opens != HandoffNone {
 			s.handoff = opens
 			return true

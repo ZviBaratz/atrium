@@ -1586,5 +1586,5 @@ func TestEveryHandoffNoteFitsItsPane(t *testing.T) {
 		}
 	}
 	// Without this the loop could stop finding handoffs and the test would still pass.
-	require.Equal(t, 2, notes, "Profiles and Accounts are the two handoff notes")
+	require.Equal(t, 1, notes, "Accounts is the only handoff note")
 }

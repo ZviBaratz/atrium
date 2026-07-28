@@ -94,6 +94,27 @@ type SettingsOverlay struct {
 	// IsFocused() is the "a filter is active" flag, so there is no second bool to keep in step
 	// with it.
 	search Picker
+
+	// The Profiles editor's state (spec §9). profileCursor indexes cfg.Profiles — a SECOND
+	// index space beside s.cursor, which indexes s.rows; see paneCursor for the one place that
+	// distinction is load-bearing. The rest are transient and cleared by resetProfileTransients.
+	profileCursor  int
+	profileForm    *profileForm
+	profileConfirm bool
+	// profileConfirmIdx is the record an armed delete is about, captured when it is armed —
+	// the same discipline profileForm.editIndex uses. The cursor can move between the key
+	// that arms the confirmation and the key that answers it (a detection landing follows
+	// the record it added), and a prompt that named one record must not delete another.
+	profileConfirmIdx int
+	// profileNote is a one-keypress informational line for the editor's help pane — a detection
+	// result. It is not lastErr: "no new agents detected" is an outcome, not a failure, and the
+	// help pane paints lastErr in DangerStyle.
+	profileNote string
+	// profileDetectPending is D's request for home to run detection off the update loop;
+	// profileDetecting stays set until the result lands, so a second D cannot queue a second
+	// shell probe and the pane can say a probe is running. See requestProfileDetect.
+	profileDetectPending bool
+	profileDetecting     bool
 }
 
 // NewSettingsOverlay builds the settings panel over the given live config, focused on
@@ -140,6 +161,7 @@ func (s *SettingsOverlay) OpenAt(key string) bool {
 		s.helpOpen = false
 		s.helpScroll = 0
 		s.clearSearch()
+		s.resetProfileTransients()
 		s.lastErr = ""
 		return true
 	}
@@ -205,12 +227,15 @@ func (s *SettingsOverlay) SetSize(width, height int) {
 // can persist the config and run that field's live-apply hook.
 //
 // The order of these guards is the grammar: an open editor swallows everything (so j/k type
-// rather than navigate), then the expanded-help view, then an active filter (which swallows
-// runes for the same reason), then the focused pane.
+// rather than navigate) — the inline line editor or the Profiles record form — then the
+// expanded-help view, then an active filter (which swallows runes for the same reason), then
+// the focused pane, where the Profiles editor takes its own keys.
 func (s *SettingsOverlay) HandleKeyPress(msg tea.KeyMsg) (closed bool, changedKey string) {
 	switch {
 	case s.editing:
 		return false, s.handleEditKey(msg)
+	case s.profileForm != nil:
+		return false, s.handleProfileFormKey(msg)
 	case s.helpOpen:
 		s.handleHelpKey(msg)
 		return false, ""
@@ -218,6 +243,8 @@ func (s *SettingsOverlay) HandleKeyPress(msg tea.KeyMsg) (closed bool, changedKe
 		return s.handleSearchKey(msg)
 	case s.focus == focusRail:
 		return s.handleRailKey(msg), ""
+	case s.profilesPaneActive():
+		return s.handleProfilesKey(msg)
 	default:
 		return s.handleRowsKey(msg)
 	}

@@ -468,8 +468,9 @@ func TestGroupModeHasNoConfigOnlyInertPredicate(t *testing.T) {
 
 // TestDetailRetainsTheMovedProse pins the specific facts that moved from the old
 // one-paragraph descriptions into detail. Each was the only place Atrium documented
-// something a user cannot discover from the UI, and PR A does not render detail yet —
-// so without this test, losing one in transcription is invisible until PR B ships.
+// something a user cannot discover from the UI, and detail is only rendered behind `?` —
+// so a fact lost in transcription would be invisible in the default view, and this test is
+// the only thing that would notice.
 func TestDetailRetainsTheMovedProse(t *testing.T) {
 	want := map[string][]string{
 		"group_mode": {

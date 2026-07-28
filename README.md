@@ -478,7 +478,9 @@ Also editable live from the Settings panel (`,`).
 
 Profiles let you define multiple named program configurations and switch between them when creating a new session. When more than one profile is defined, the session creation overlay shows a profile picker that you can navigate with `←`/`→`.
 
-On first run, Atrium probes for installed agent CLIs (`claude`, `codex`, `gemini`, `aider`) and seeds a profile for each one it finds. After installing a new agent, run:
+Profiles are edited in the Settings panel (`,` → **Profiles**): `n` adds one, `e` or `↵` edits the highlighted record, `d` deletes it, and `D` probes for installed agent CLIs and appends any that are missing. A profile named by `default_program` cannot be deleted until that setting points elsewhere; renaming it carries the setting along.
+
+On first run, Atrium probes for installed agent CLIs (`claude`, `codex`, `gemini`, `aider`, `agy`) and seeds a profile for each one it finds. After installing a new agent, press `D` in the panel's Profiles category, or run:
 
 ```bash
 atrium profiles detect
@@ -486,7 +488,7 @@ atrium profiles detect
 
 to add it as a profile — existing profiles and your default program are never modified.
 
-To configure profiles by hand, add a `profiles` array to your config file and set `default_program` to the name of the profile to select by default:
+To configure profiles by hand instead, add a `profiles` array to your config file and set `default_program` to the name of the profile to select by default:
 
 ```json
 {
@@ -857,18 +859,19 @@ list:
 #### Configuration reference
 
 Every `config.json` key, its default, and where it is documented above. Nearly all
-are also editable live from the Settings panel (`,`). The exceptions are the four
-keys whose value is a *list of records* — `profiles`, `claude_accounts`,
-`gh_accounts`, `agy_accounts` — which the one-value-per-row panel cannot express
-(the accounts are instead managed from the Accounts overlay), and the
-deprecated `nerd_font`, which `glyph_set` supersedes. A test
+are also editable live from the Settings panel (`,`). The exceptions are the three
+account lists — `claude_accounts`, `gh_accounts`, `agy_accounts` — which the
+one-value-per-row panel cannot express and which are managed from the Accounts
+overlay instead, and the deprecated `nerd_font`, which `glyph_set` supersedes.
+`profiles` is a list of records too, but the panel gives it a record editor of
+its own under Profiles rather than a row. A test
 (`config.TestReadmeDocumentsEveryConfigField`) fails the build if a new field is
 added without a row here.
 
 The panel groups these keys into ten categories — Sessions, Worktrees & git,
 Appearance, Session list, Notifications, Automation, Input, Projects, Updates, and
-Advanced — shown in the Category column below. The five keys with no panel row carry
-`—` instead.
+Advanced — shown in the Category column below. The four keys with no panel row carry
+`—` instead; `profiles` names its editor.
 
 | Key | Category | Type | Default | Notes |
 |-----|----------|------|---------|-------|
@@ -876,7 +879,7 @@ Advanced — shown in the Category column below. The five keys with no panel row
 | `auto_yes` | Automation | bool | `false` | auto-accept all prompts (experimental; the `-y` flag) |
 | `daemon_poll_interval` | Automation | int | `1000` | autoyes daemon poll interval, milliseconds |
 | `branch_prefix` | Worktrees & git | string | `"<user>/"` | prefix for created git branches |
-| `profiles` | — | array | detected | named program configs ([Profiles](#profiles)) |
+| `profiles` | Profiles | array | detected | named program configs ([Profiles](#profiles)) |
 | `tmux_config_override` | Advanced | string | `""` | path to a custom tmux config for sessions |
 | `auto_attach` | Sessions | bool | `true` | attach to a new session as soon as it starts ([Auto-attach](#auto-attach)) |
 | `show_release_notes_after_update` | Updates | bool | `true` | "what's new" overlay once after an update |

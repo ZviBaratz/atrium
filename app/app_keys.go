@@ -355,6 +355,12 @@ func (m *home) handleSettingsState(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			cmds = append(cmds, cmd)
 		}
 	}
+	if m.settingsOverlay.TakeProfileDetect() {
+		// Agent detection spawns a login shell (config.GetClaudeCommand), so it runs as a
+		// command rather than inline: a synchronous probe would freeze the update loop — and
+		// with it every session's poll — for up to its ten-second timeout.
+		cmds = append(cmds, m.detectProfilesCmd())
+	}
 	if closed {
 		// Read the handoff BEFORE dropping the overlay: a rail entry that owns no rows can ask
 		// home to open a sibling surface in the panel's place, and the request lives on the
