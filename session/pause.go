@@ -73,6 +73,10 @@ func (i *Instance) pause() error {
 	if i.Paused() {
 		return fmt.Errorf("instance is already paused")
 	}
+	// Past the guards every path below ends Paused, so this is the one place the
+	// cached pane frame can be dropped without repeating it per exit. A paused
+	// session renders its own fallback, never a frame.
+	i.dropPaneFrame()
 
 	ts := i.tmux()
 	wt := i.worktree()

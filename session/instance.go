@@ -263,6 +263,15 @@ type Instance struct {
 	// flag).
 	runtimeEffort string
 
+	// paneFrame is the last successfully captured tmux pane content, paneFrameAt
+	// when it was captured, and paneFrameOK whether any capture has ever
+	// succeeded. Written by the main loop from a background capture's result and
+	// read by the View — unguarded on purpose, exactly like diffStats above. See
+	// session/paneframe.go for the contract.
+	paneFrame   string
+	paneFrameAt time.Time
+	paneFrameOK bool
+
 	// baseCtx is the lifecycle context the instance's tmux/git subprocesses derive
 	// from; cancelling it (app/daemon shutdown) kills in-flight subprocesses. Set via
 	// SetBaseContext (or FromInstanceData) before Start, i.e. before any background

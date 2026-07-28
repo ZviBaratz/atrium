@@ -27,7 +27,10 @@ func (m *home) instanceChanged() tea.Cmd {
 	// Update menu with current instance
 	m.menu.SetInstance(selected)
 
-	// If there's no selected instance, we don't need to update the preview.
+	// Render the panes from cached state. The preview's frame comes from the capture
+	// chain in app_frames.go, never from a capture here: this function runs on every
+	// 100ms tick AND from ~60 key handlers, so a tmux round trip in it was a latency
+	// floor under every keystroke, and an unresponsive server froze the app (#380).
 	if err := m.tabbedWindow.UpdatePreview(selected); err != nil {
 		return m.handleError(err)
 	}
@@ -42,6 +45,11 @@ func (m *home) instanceChanged() tea.Cmd {
 	if selected != m.lastStatusPollSelection {
 		m.lastStatusPollSelection = selected
 		m.selectedSince = time.Now()
+		// The new selection's frame is whatever was last captured for it, which may be
+		// nothing at all — either way it is new, not stale, so restamp freshness. The
+		// capture chain notices the changed target when its in-flight capture lands and
+		// re-arms without waiting out another interval (see handlePaneFrame).
+		m.noteFrameTargetChange()
 		return pollSelectedCmd(selected, m.attachGen)
 	}
 	return nil

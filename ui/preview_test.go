@@ -7,6 +7,7 @@ import (
 	"github.com/ZviBaratz/atrium/log"
 	"github.com/ZviBaratz/atrium/session"
 	"github.com/ZviBaratz/atrium/session/tmux"
+	"github.com/ZviBaratz/atrium/ui/theme"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -371,8 +372,7 @@ func TestPreviewContentWithoutScrolling(t *testing.T) {
 	previewPane.SetSize(80, 30) // Set reasonable size for testing
 
 	// Update the preview content (this should display the content without scrolling)
-	err := previewPane.UpdateContent(setup.instance)
-	require.NoError(t, err)
+	showLive(t, previewPane, setup.instance)
 
 	// Verify we're not in scrolling mode
 	require.False(t, previewPane.isScrolling, "Should not be in scrolling mode")
@@ -428,7 +428,7 @@ func TestPreviewDoesNotPinLoadingSplashForLiveSession(t *testing.T) {
 
 	pane := NewPreviewPane()
 	pane.SetSize(80, 30)
-	require.NoError(t, pane.UpdateContent(setup.instance))
+	showLive(t, pane, setup.instance)
 
 	require.False(t, pane.previewState.fallback,
 		"a started, tmux-alive session must not fall back to the setup splash")
@@ -477,17 +477,37 @@ func TestPreviewSplashClearsOnceContentArrives(t *testing.T) {
 	pane.SetSize(80, 30)
 
 	// Tick 1: blank pane while still coming up → the setup splash.
-	require.NoError(t, pane.UpdateContent(setup.instance))
+	showLive(t, pane, setup.instance)
 	require.True(t, pane.previewState.fallback, "a blank, still-loading pane shows the setup splash")
 	require.Contains(t, pane.String(), "Setting up workspace")
 
 	// Tick 2: the pane produces output. The status flag is still a stale Loading, but live
 	// content must win and the splash must clear without any restart/reselect.
 	paneContent = "agent is working"
-	require.NoError(t, pane.UpdateContent(setup.instance))
+	showLive(t, pane, setup.instance)
 	require.False(t, pane.previewState.fallback,
 		"live pane content must clear the splash even while status is still Loading")
 	require.Contains(t, pane.String(), "agent is working")
+}
+
+// primeFrame runs one capture through the instance's fake executor and applies the
+// result, standing in for the app's background capture loop (app/app_frames.go).
+// The pane no longer captures for itself — that is the point of #380 — so a test
+// that wants live content must supply a frame first. The mock still serves the
+// capture-pane call, so these tests keep exercising the real capture path.
+func primeFrame(t *testing.T, inst *session.Instance) {
+	t.Helper()
+	text, err := inst.CapturePaneFrame()
+	require.NoError(t, err)
+	inst.SetPaneFrame(theme.SanitizeWidth(text), time.Now())
+}
+
+// showLive is primeFrame followed by UpdateContent: the two steps the app performs
+// per frame, collapsed for tests that just want the live pane on screen.
+func showLive(t *testing.T, pane *PreviewPane, inst *session.Instance) {
+	t.Helper()
+	primeFrame(t, inst)
+	require.NoError(t, pane.UpdateContent(inst))
 }
 
 // liveContentCmdExec returns a MockCmdExec that serves *content for every
@@ -532,7 +552,7 @@ func TestPreviewScrollStepHonorsLines(t *testing.T) {
 
 	pane := NewPreviewPane()
 	pane.SetSize(80, 30)
-	require.NoError(t, pane.UpdateContent(setup.instance))
+	showLive(t, pane, setup.instance)
 
 	// Enter scroll mode (lands at bottom), then a 3-line and a 1-line step up.
 	require.NoError(t, pane.ScrollUp(setup.instance, 1))
@@ -565,14 +585,14 @@ func TestPreviewScrollSnapshotUnpinsOnInstanceSwitch(t *testing.T) {
 	pane.SetSize(80, 30)
 
 	// Show A live, then enter scroll mode (snapshot of A's full history).
-	require.NoError(t, pane.UpdateContent(setupA.instance))
+	showLive(t, pane, setupA.instance)
 	require.NoError(t, pane.ScrollUp(setupA.instance, 1))
 	require.True(t, pane.isScrolling, "ScrollUp must enter scroll mode")
 	require.Contains(t, pane.String(), contentA)
 
 	// Selecting another session must exit the snapshot and show B's live pane —
 	// this is the exact "preview stuck on the same state for all sessions" symptom.
-	require.NoError(t, pane.UpdateContent(setupB.instance))
+	showLive(t, pane, setupB.instance)
 	require.False(t, pane.isScrolling, "switching instances must exit scroll mode")
 	rendered := pane.String()
 	require.Contains(t, rendered, contentB, "the newly selected session's live pane must be shown")
@@ -592,7 +612,7 @@ func TestPreviewScrollExitNeverRefuses(t *testing.T) {
 	pane.SetSize(80, 30)
 
 	// Enter scroll mode, then pause the session while the snapshot is up.
-	require.NoError(t, pane.UpdateContent(setup.instance))
+	showLive(t, pane, setup.instance)
 	require.NoError(t, pane.ScrollUp(setup.instance, 1))
 	require.True(t, pane.isScrolling)
 	setup.instance.SetStatus(session.Paused)
@@ -623,20 +643,20 @@ func TestPreviewScrollSnapshotDropsWhenInstancePauses(t *testing.T) {
 	pane := NewPreviewPane()
 	pane.SetSize(80, 30)
 
-	require.NoError(t, pane.UpdateContent(setup.instance))
+	showLive(t, pane, setup.instance)
 	require.NoError(t, pane.ScrollUp(setup.instance, 1))
 	require.True(t, pane.isScrolling)
 
 	// Pausing the displayed instance must drop the snapshot, not just hide it.
 	setup.instance.SetStatus(session.Paused)
-	require.NoError(t, pane.UpdateContent(setup.instance))
+	showLive(t, pane, setup.instance)
 	require.False(t, pane.isScrolling, "pausing the displayed instance must exit scroll mode")
 	require.Contains(t, pane.String(), "paused", "the paused fallback must be shown")
 
 	// The latch this guards against: after resume, the live view must return —
 	// not the stale paused fallback.
 	setup.instance.SetStatus(session.Running)
-	require.NoError(t, pane.UpdateContent(setup.instance))
+	showLive(t, pane, setup.instance)
 	rendered := pane.String()
 	require.Contains(t, rendered, content, "resuming must restore the live view")
 	require.NotContains(t, rendered, "paused", "the paused fallback must not pin after resume")
@@ -663,7 +683,7 @@ func TestPreviewScrollDownAtBottomExitsToLive(t *testing.T) {
 
 	pane := NewPreviewPane()
 	pane.SetSize(80, 30)
-	require.NoError(t, pane.UpdateContent(setup.instance))
+	showLive(t, pane, setup.instance)
 
 	// Enter scroll mode: the viewport starts at the bottom of the snapshot.
 	require.NoError(t, pane.ScrollUp(setup.instance, 1))
@@ -731,16 +751,28 @@ func TestPreviewKeepsContentOnTransientCaptureError(t *testing.T) {
 	pane := NewPreviewPane()
 	pane.SetSize(80, 30)
 
-	// Establish live content.
+	// Establish live content, stamped far enough back that the marker is due — the
+	// pane is about to stop receiving frames, which is exactly when it must say so.
+	primeFrame(t, setup.instance)
+	setup.instance.SetPaneFrame(liveContent, time.Now().Add(-3*time.Second))
 	require.NoError(t, pane.UpdateContent(setup.instance))
 	require.False(t, pane.previewState.fallback)
 	require.Contains(t, pane.String(), liveContent)
 
-	// A transient capture error must surface but leave the last good content intact.
+	// A failing capture no longer reaches the pane at all: the app records it
+	// (NotePaneFrameFailure) and the frame — and its stamp — stay put. The pane keeps
+	// the last good content and grows the overdue marker instead of an error box that
+	// used to fire ten times a second.
 	captureFails = true
-	require.Error(t, pane.UpdateContent(setup.instance))
+	_, captureErr := setup.instance.CapturePaneFrame()
+	require.Error(t, captureErr, "the capture itself must still fail — otherwise this proves nothing")
+	setup.instance.NotePaneFrameFailure(captureErr, time.Now())
+
+	require.NoError(t, pane.UpdateContent(setup.instance), "a failed capture must not surface as a pane error")
 	require.False(t, pane.previewState.fallback, "a capture error must not flip to a stale fallback")
-	require.Contains(t, pane.String(), liveContent, "the last good content must be retained")
+	rendered := pane.String()
+	require.Contains(t, rendered, liveContent, "the last good content must be retained")
+	require.Contains(t, rendered, "stale", "a frame this overdue must announce itself")
 }
 
 // writeClaudeTranscript plants a Claude session JSONL for workingDir under the
@@ -783,7 +815,7 @@ func TestPreviewScrollUsesTranscriptForClaude(t *testing.T) {
 
 	pane := NewPreviewPane()
 	pane.SetSize(80, 30)
-	require.NoError(t, pane.UpdateContent(setup.instance))
+	showLive(t, pane, setup.instance)
 	require.NoError(t, pane.ScrollUp(setup.instance, 1))
 	require.True(t, pane.isScrolling)
 
@@ -820,7 +852,7 @@ func TestPreviewScrollDedupesOverlapDropsDivider(t *testing.T) {
 
 	pane := NewPreviewPane()
 	pane.SetSize(80, 30)
-	require.NoError(t, pane.UpdateContent(setup.instance))
+	showLive(t, pane, setup.instance)
 	require.NoError(t, pane.ScrollUp(setup.instance, 1))
 
 	rendered := pane.String()
@@ -839,7 +871,7 @@ func TestPreviewScrollFallsBackToTmuxForAider(t *testing.T) {
 
 	pane := NewPreviewPane()
 	pane.SetSize(80, 30)
-	require.NoError(t, pane.UpdateContent(setup.instance))
+	showLive(t, pane, setup.instance)
 	require.NoError(t, pane.ScrollUp(setup.instance, 1))
 	require.True(t, pane.isScrolling)
 
@@ -859,7 +891,7 @@ func TestPreviewScrollClaudeWithoutTranscriptFallsBack(t *testing.T) {
 
 	pane := NewPreviewPane()
 	pane.SetSize(80, 30)
-	require.NoError(t, pane.UpdateContent(setup.instance))
+	showLive(t, pane, setup.instance)
 	require.NoError(t, pane.ScrollUp(setup.instance, 1))
 	require.True(t, pane.isScrolling)
 

@@ -12,6 +12,7 @@ import (
 
 	"github.com/charmbracelet/bubbles/viewport"
 	"github.com/charmbracelet/lipgloss"
+	xansi "github.com/charmbracelet/x/ansi"
 )
 
 // previewFallbackLog rate-limits the diagnostic emitted whenever the preview falls
@@ -22,14 +23,20 @@ var previewFallbackLog = log.NewEvery(5 * time.Second)
 
 // logPreviewFallback records the instance's observable readiness signals when the
 // preview cannot show live content, so the lying signal (stale Loading vs. !Started
-// vs. !TmuxAlive vs. a persistent capture error) can be identified from the log.
+// vs. a pane that has never captured) can be identified from the log.
+//
+// It reports frame liveness from the cached capture rather than calling
+// TmuxAlive(): this runs on the update thread, and that probe was a has-session
+// subprocess fired from a *logging* helper on every fallback tick (#380).
 func logPreviewFallback(instance *session.Instance, reason string, err error) {
 	if instance == nil || !previewFallbackLog.ShouldLog() {
 		return
 	}
+	_, frameAt, captured := instance.PaneFrame()
 	log.InfoLog.Printf(
-		"preview fallback (%s): title=%q status=%d started=%t tmuxAlive=%t err=%v",
-		reason, instance.Title, instance.GetStatus(), instance.Started(), instance.TmuxAlive(), err,
+		"preview fallback (%s): title=%q status=%d started=%t captured=%t frameAt=%s err=%v",
+		reason, instance.Title, instance.GetStatus(), instance.Started(), captured,
+		frameAt.Format(time.RFC3339), err,
 	)
 }
 
@@ -47,6 +54,63 @@ func scrollExitFooter(source session.ScrollbackSource) string {
 		label = "transcript"
 	}
 	return theme.Current().DimStyle().Render("— " + label + " · ESC to resume live view")
+}
+
+// previewStaleAfter is how overdue a frame must be before the pane says so.
+//
+// It is ~12 missed frames at the 100ms capture cadence — two orders of magnitude
+// above the measured capture cost (p50 7ms, max 11ms against a live 11-session
+// server), so ordinary load never blinks it at the user, and ~8.8s ahead of the
+// tmux operation timeout, so a wedged server is announced long before the
+// subprocess gives up. Marking a frozen pane is the whole point: stale-but-marked
+// beats fresh-but-frozen, but *silently* stale is worse than both — a wedged
+// server would be indistinguishable from an idle agent.
+const previewStaleAfter = 1200 * time.Millisecond
+
+// staleMarker is the dim overdue notice, styled like scrollExitFooter so every
+// "what you see is not live" message on this pane reads the same way.
+//
+// It stays silent in the modes that already say so themselves (scroll and hint
+// mode carry their own footer/overlay), in a fallback (there is no frame to be
+// stale), and while nothing has been stamped at all — the last of which is what
+// makes the marker invisible to every pane a test builds by hand.
+func (p *PreviewPane) staleMarker(now time.Time) string {
+	if p.isScrolling || p.hintContent != "" || p.previewState.fallback || p.frameAt.IsZero() {
+		return ""
+	}
+	age := now.Sub(p.freshFrom())
+	if age < previewStaleAfter {
+		return ""
+	}
+	return theme.Current().DimStyle().Render(fmt.Sprintf("— stale %ds", int(age.Seconds())))
+}
+
+// NoteTargetChange restamps freshness because the pane was pointed somewhere new
+// (a different session, or back from a tab that captures nothing). Without it,
+// returning to the preview tab would flash the age of the frame it left behind
+// before the first new capture lands — reporting a real number about the wrong
+// question.
+func (p *PreviewPane) NoteTargetChange(now time.Time) { p.targetChangedAt = now }
+
+// stampRight lays marker flush against the right edge of a width-wide row,
+// truncating base to make room. It overwrites a row that already exists (the one
+// holding the truncation ellipsis or its padding) rather than appending one, so
+// the marker cannot change the block's height — the pane must never inflate the
+// frame, or View's JoinHorizontal pushes the whole layout past the terminal.
+func stampRight(width int, base, marker string) string {
+	if width <= 0 || marker == "" {
+		return base
+	}
+	markerWidth := xansi.StringWidth(marker)
+	if markerWidth >= width {
+		return marker
+	}
+	// Truncate ANSI-aware: pane rows carry the agent's own escape sequences
+	// (capture-pane -e), and a byte-wise cut would slice one in half.
+	room := width - markerWidth - 1 // one column of breathing space
+	base = xansi.Truncate(base, room, "")
+	pad := width - markerWidth - xansi.StringWidth(base)
+	return base + strings.Repeat(" ", max(0, pad)) + marker
 }
 
 // PreviewPane renders the selected instance's captured tmux pane content, with
@@ -74,6 +138,26 @@ type PreviewPane struct {
 	// instance — or the owner once paused — is rendered).
 	hintContent  string
 	hintInstance *session.Instance
+
+	// frameAt is the capture stamp of the frame on screen, and targetChangedAt the
+	// last time the pane was pointed somewhere new (another session, or back from a
+	// tab that captures nothing). Freshness is the LATER of the two — see freshFrom:
+	// a target with no capture yet is new, not stale, and keeping them as separate
+	// fields is what stops the per-tick frame stamp from immediately overwriting the
+	// target change (they are written by different callers at different rates).
+	// A zero frameAt means no frame has ever been applied, which is what keeps the
+	// marker off every pane a test builds by hand.
+	frameAt         time.Time
+	targetChangedAt time.Time
+}
+
+// freshFrom is the moment the pane last had a good reason to consider itself
+// current. staleMarker measures the overdue age from here.
+func (p *PreviewPane) freshFrom() time.Time {
+	if p.targetChangedAt.After(p.frameAt) {
+		return p.targetChangedAt
+	}
+	return p.frameAt
 }
 
 type previewState struct {
@@ -204,18 +288,12 @@ func (p *PreviewPane) UpdateContent(instance *session.Instance) error {
 		return nil
 	}
 
-	// Normal mode.
-	content, err := instance.Preview()
-	if err != nil {
-		// Never freeze a stale fallback (e.g. the setup splash) on a transient capture
-		// error: leave previewState untouched so the last good content stays, and surface
-		// the error rather than masking it.
-		logPreviewFallback(instance, "capture error", err)
-		return err
-	}
-	// Untrusted agent output: decompose font-dependent emoji clusters so the line
-	// width we lay out matches what the terminal renders (see theme.SanitizeWidth).
-	content = theme.SanitizeWidth(content)
+	// Normal mode. The frame comes from the cache the app's background capture
+	// fills (session/paneframe.go), never from a capture on this thread: this
+	// function runs inside Update, so a tmux round trip here delayed every repaint
+	// and every keypress, and a wedged server froze the app outright (#380).
+	content, frameAt, captured := instance.PaneFrame()
+	p.frameAt = frameAt
 
 	// A live pane always wins, regardless of the Status flag — this is the guarantee
 	// that the splash can never pin once the session is actually producing output.
@@ -226,8 +304,10 @@ func (p *PreviewPane) UpdateContent(instance *session.Instance) error {
 
 	// No content to show. Pick a fallback that reflects the session's real state.
 	switch {
-	case instance.GetStatus() == session.Loading || !instance.Started() || !instance.TmuxAlive():
-		// Still coming up (or its pane isn't readable yet): show the setup splash.
+	case !captured || instance.GetStatus() == session.Loading || !instance.Started():
+		// Still coming up, or its pane has never yielded a readable frame: show the
+		// setup splash. "No capture has ever succeeded" is the same statement the old
+		// TmuxAlive() probe made here, without spending a subprocess to make it.
 		p.setFallbackState("Setting up workspace...")
 		logPreviewFallback(instance, "empty pane, not ready", nil)
 	default:
@@ -291,6 +371,13 @@ func (p *PreviewPane) String() string {
 			padding := availableHeight - len(lines)
 			lines = append(lines, make([]string, padding)...)
 		}
+	}
+
+	// An overdue frame says so on the row it already has — the ellipsis row when the
+	// capture was truncated, its padding otherwise. Overwriting keeps the row count
+	// identical whether or not the marker is showing (see stampRight).
+	if marker := p.staleMarker(time.Now()); marker != "" && len(lines) > 0 {
+		lines[len(lines)-1] = stampRight(p.width, lines[len(lines)-1], marker)
 	}
 
 	content := strings.Join(lines, "\n")

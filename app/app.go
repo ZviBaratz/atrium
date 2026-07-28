@@ -336,6 +336,11 @@ type home struct {
 	// generation, so it can still apply a capture taken concurrently with that next
 	// attach's keeper — the next attach's own bump retires it one attach later.
 	attachGen uint64
+	// frameInFlight marks a dispatched pane capture whose paneFrameMsg has not come
+	// back yet. It is the whole no-overlap guarantee for the capture chain: exactly
+	// one is ever in flight, so an unresponsive tmux server parks one goroutine
+	// instead of accumulating a new one every 100ms. See app_frames.go.
+	frameInFlight bool
 	// appConfig stores persistent application configuration
 	appConfig *config.Config
 	// appState stores persistent application state like seen help screens
@@ -641,7 +646,8 @@ func (m *home) Init() tea.Cmd {
 			time.Sleep(100 * time.Millisecond)
 			return previewTickMsg{}
 		},
-		m.armSplashTick(), // idle splash animation, live from the first frame
+		m.armFrameCapture(0), // pane-capture chain: the only place tmux content is read
+		m.armSplashTick(),    // idle splash animation, live from the first frame
 		tickUpdateMetadataCmd(m.ctx, m.snapshotActiveInstances(), m.list.GetSelectedInstance(), true, m.attachGen), // first tick: full sweep
 		m.updateCheckCmd(),   // nil (inert) is fine: tea.Batch skips nil cmds
 		m.driftCheckCmd(),    // agent-heuristic drift hint

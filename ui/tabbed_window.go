@@ -2,6 +2,7 @@ package ui
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/ZviBaratz/atrium/log"
 	"github.com/ZviBaratz/atrium/session"
@@ -222,6 +223,11 @@ func (w *TabbedWindow) UpdateTerminal(instance *session.Instance) error {
 func (w *TabbedWindow) ResetPreviewToNormalMode(instance *session.Instance) error {
 	return w.preview.ResetToNormalMode(instance)
 }
+
+// NoteFrameTargetChange tells the preview pane its frame source just changed, so
+// the staleness marker measures from now rather than from a frame captured for a
+// different session (or before a stint on a tab that captures nothing).
+func (w *TabbedWindow) NoteFrameTargetChange(now time.Time) { w.preview.NoteTargetChange(now) }
 
 // PreviewLiveContent exposes the preview pane's live text for hint mode.
 func (w *TabbedWindow) PreviewLiveContent() (string, bool) {

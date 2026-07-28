@@ -168,6 +168,8 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.showReleaseNotes(msg.version, msg.notes, msg.url)
 	case previewTickMsg:
 		return m.handlePreviewTick(msg)
+	case paneFrameMsg:
+		return m.handlePaneFrame(msg)
 	case splashTickMsg:
 		return m.handleSplashTick()
 	case autoNameDoneMsg:
@@ -966,19 +968,16 @@ func (m *home) dispatchAction(name keys.KeyName) (tea.Model, tea.Cmd) {
 		return m, m.cycleLayoutPreset()
 	case keys.KeyTab:
 		m.tabbedWindow.Toggle()
-		m.menu.SetActiveTab(m.tabbedWindow.GetActiveTab())
-		return m, m.instanceChanged()
+		return m, m.tabChanged()
 	case keys.KeyShiftTab:
 		m.tabbedWindow.ToggleReverse()
-		m.menu.SetActiveTab(m.tabbedWindow.GetActiveTab())
-		return m, m.instanceChanged()
+		return m, m.tabChanged()
 	case keys.KeyTabPreview, keys.KeyTabDiff, keys.KeyTabTerminal:
 		// Direct tab jump by number, complementing Tab/Shift+Tab cycling. The
 		// three KeyNames are consecutive, so the offset from KeyTabPreview is the
 		// tab index (PreviewTab/DiffTab/TerminalTab are likewise 0/1/2).
 		m.tabbedWindow.SetActiveTab(int(name - keys.KeyTabPreview))
-		m.menu.SetActiveTab(m.tabbedWindow.GetActiveTab())
-		return m, m.instanceChanged()
+		return m, m.tabChanged()
 	case keys.KeyKill:
 		return m, m.confirmKill(m.list.GetSelectedInstance())
 	case keys.KeyFilter:
