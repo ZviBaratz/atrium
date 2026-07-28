@@ -357,7 +357,7 @@ one. Scrollback is bound prefix-free instead:
 
 `shift-↑/↓` is the same chord that scrolls the preview pane from the session list,
 and moves the same one line per press. Copy mode is vi-keyed, and the wheel scrolls
-the same history when `mouse` is on, three lines per notch as in the preview.
+the same history when `mouse` is on, the same distance per notch as in the preview.
 Note that `ctrl-b` — tmux's default prefix, and the key Claude Code uses to
 background a task — is not needed for any of this.
 

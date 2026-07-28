@@ -45,10 +45,25 @@ var configOverridePath string
 // only when a client attaches, locking the user out of the pane.
 var managedConfigInvalid bool
 
+// WheelScrollLines is how many lines one mouse-wheel notch scrolls, in BOTH surfaces a
+// notch can land on: the tmux pane of an attached session (rendered into the managed
+// config's copy-mode-vi wheel bindings, overriding tmux's default of 5) and the preview
+// pane in the session list (app.wheelScrollLines aliases this). A notch moves several
+// lines for a fluid feel, where the keyboard scroll keys move one for precise positioning.
+//
+// It lives here, not in app, because the template that consumes it is embedded in this
+// package and app already imports it — the reverse direction would be an import cycle.
+// Single-sourcing it is the point: the value used to be spelled independently in the
+// template and in app, with a comment in each claiming they matched, so changing one
+// silently made a notch travel a different distance in a pane than in the preview.
+const WheelScrollLines = 3
+
 // renderManagedConfig renders the embedded template. ContextBar toggles the header
 // strip; BarBg/BarFg fill that strip's full-width background from the active theme's
 // dedicated header-bar token (a slate a clear step above BgElevated) so the header
-// reads as a distinct band over the agent's near-black pane.
+// reads as a distinct band over the agent's near-black pane. WheelScrollLines is
+// interpolated rather than written into the template so it cannot drift from the
+// preview pane's notch distance.
 func renderManagedConfig(contextBar bool) ([]byte, error) {
 	tmpl, err := template.New("atrium.conf").Parse(embeddedTmuxConfigTemplate)
 	if err != nil {
@@ -56,12 +71,14 @@ func renderManagedConfig(contextBar bool) ([]byte, error) {
 	}
 	th := theme.Current()
 	data := struct {
-		ContextBar   bool
-		BarBg, BarFg string
+		ContextBar       bool
+		BarBg, BarFg     string
+		WheelScrollLines int
 	}{
-		ContextBar: contextBar,
-		BarBg:      string(th.Palette.BarBg),
-		BarFg:      string(th.Palette.Fg),
+		ContextBar:       contextBar,
+		BarBg:            string(th.Palette.BarBg),
+		BarFg:            string(th.Palette.Fg),
+		WheelScrollLines: WheelScrollLines,
 	}
 	var buf bytes.Buffer
 	if err := tmpl.Execute(&buf, data); err != nil {

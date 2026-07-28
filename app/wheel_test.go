@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/ZviBaratz/atrium/session"
+	"github.com/ZviBaratz/atrium/session/tmux"
 
 	tea "github.com/charmbracelet/bubbletea"
 	zone "github.com/lrstanley/bubblezone"
@@ -100,6 +101,25 @@ func TestGlobalZoneManagerSurvivesWheelTests(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("global zone manager worker is dead: zone.Scan blocked on a full channel")
 	}
+}
+
+// TestWheelNotchMatchesAttachedPane pins the two surfaces a wheel notch can land on to
+// one distance. The preview pane scrolls wheelScrollLines here; a tmux pane of an
+// ATTACHED session scrolls whatever the managed config's copy-mode-vi wheel bindings say,
+// and that count is rendered from tmux.WheelScrollLines. Those used to be independent
+// literals — 3 in app, 3 in atrium.conf.tmpl — each with a comment claiming they matched,
+// so changing one made a notch travel a different distance depending on whether the user
+// happened to be attached, with nothing to catch it.
+//
+// The alias makes divergence a compile error rather than a behaviour change; this
+// asserts the alias is still an alias, which is the one thing an editor can undo by
+// writing a literal back. The rendered half is pinned by
+// tmux.TestRenderManagedConfigScrollKeys, which builds its expectation from the same
+// constant.
+func TestWheelNotchMatchesAttachedPane(t *testing.T) {
+	require.Equal(t, tmux.WheelScrollLines, wheelScrollLines,
+		"the preview pane and an attached tmux pane must scroll the same distance per notch")
+	require.Positive(t, wheelScrollLines, "a notch that scrolls nothing is a dead wheel")
 }
 
 // TestWheelOverListMovesSelectionWithoutScrollMode is the core routing

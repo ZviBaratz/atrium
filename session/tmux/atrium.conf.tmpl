@@ -67,10 +67,12 @@ bind-key -n S-Down if-shell -F '#{alternate_on}' 'send-keys S-Down' { copy-mode 
 bind-key -T copy-mode-vi S-Up   send-keys -X scroll-up
 bind-key -T copy-mode-vi S-Down send-keys -X scroll-down
 
-# One wheel notch travels 3 lines rather than tmux's default 5, so a pane scrolls the
-# same distance per notch as the preview pane does in the TUI (wheelScrollLines).
-bind-key -T copy-mode-vi WheelUpPane   select-pane \; send-keys -X -N 3 scroll-up
-bind-key -T copy-mode-vi WheelDownPane select-pane \; send-keys -X -N 3 scroll-down
+# One wheel notch travels fewer lines than tmux's default 5, so a pane scrolls the same
+# distance per notch as the preview pane does in the TUI. The count is interpolated from
+# tmux.WheelScrollLines, which app.wheelScrollLines also aliases — writing the number here
+# would be a second home for it, and the two surfaces would drift apart silently.
+bind-key -T copy-mode-vi WheelUpPane   select-pane \; send-keys -X -N {{.WheelScrollLines}} scroll-up
+bind-key -T copy-mode-vi WheelDownPane select-pane \; send-keys -X -N {{.WheelScrollLines}} scroll-down
 
 # vi copy mode: g/G, j/k, C-u/C-d and / search come free with mode-keys, but tmux's
 # vi defaults bind v to rectangle-toggle and leave y unbound — so mode-keys alone
