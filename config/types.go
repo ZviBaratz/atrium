@@ -251,7 +251,8 @@ type Config struct {
 	Theme string `json:"theme,omitempty"`
 	// Splash selects the animated empty-state splash pattern by name (see
 	// SplashVariants for the pinnable names). Empty, "random", or an unknown
-	// value picks a fresh pattern each launch.
+	// value picks a fresh pattern each launch; SplashOff turns the animation off
+	// entirely and leaves the plain wordmark (see SplashEnabled).
 	Splash string `json:"splash,omitempty"`
 	// NerdFont, when true, draws the branch / pull-request / dirty / auto markers
 	// with vendor icons from a patched Nerd Font. nil/false (the default) uses

@@ -244,7 +244,11 @@ func (p *PreviewPane) String() string {
 		return strings.Repeat("\n", p.height)
 	}
 
-	if p.previewState.splash && splashFits(p.width, p.height) {
+	// splashEnabled is checked here rather than inside splashScene because the
+	// screensaver renders through that same function and is out of the setting's
+	// scope (#316). Turning it off falls through to the fallback arm below — the
+	// plain centered wordmark this pane already shows below the size floor.
+	if p.previewState.splash && splashEnabled() && splashFits(p.width, p.height) {
 		return splashScene(p.width, p.height, p.splashFrame, p.previewState.splashMessage)
 	}
 

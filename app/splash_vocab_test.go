@@ -50,3 +50,14 @@ func TestSplashRandomIsNotAVariantName(t *testing.T) {
 	require.NotContains(t, splashVariantNames(), config.SplashRandom,
 		"%q is the random sentinel and cannot also name a pattern", config.SplashRandom)
 }
+
+// TestSplashOffIsNotAVariantName guards the second sentinel the same way, and it
+// fails worse than the first: a generator named "off" would be unreachable *and*
+// picking it in the settings panel would disable the splash instead of drawing
+// it, so the panel would offer a pattern whose only effect is to turn the field
+// off. Nothing else notices — GetSplash round-trips both, and the vocabulary test
+// above only compares config's list against the engine's.
+func TestSplashOffIsNotAVariantName(t *testing.T) {
+	require.NotContains(t, splashVariantNames(), config.SplashOff,
+		"%q is the disable sentinel and cannot also name a pattern", config.SplashOff)
+}

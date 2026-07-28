@@ -313,23 +313,36 @@ func TestSettingsOverlay_CycleEffortIndicator(t *testing.T) {
 }
 
 // TestSettingsOverlay_CycleSplash pins the splash enum: defaults to random,
-// right steps into the named patterns, and a full cycle wraps back to random.
+// right steps into the named patterns, off is the last stop, and a full lap
+// wraps back to random.
+//
+// The lap length is derived from the row's own options rather than written out,
+// so adding a pattern (or another mode) does not silently turn "a full cycle"
+// into "most of one" — the shape this test asserts is the wrap, not the count.
 func TestSettingsOverlay_CycleSplash(t *testing.T) {
 	cfg := config.DefaultConfig()
 	o := NewSettingsOverlay(cfg)
 	settingsAt(t, o, "splash")
+	options := rowByKey(t, cfg, "splash").options(cfg)
 
 	require.Equal(t, config.SplashRandom, cfg.GetSplash(), "splash defaults to random")
+	require.Equal(t, config.SplashOff, options[len(options)-1], "off is the last option offered")
 
 	_, changed := o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRight})
 	assert.Equal(t, "splash", changed, "the cycle must report its row key so home can persist")
 	assert.Equal(t, config.SplashVariants()[0], cfg.GetSplash())
 
-	// Stepping over every named pattern wraps back to random.
-	for range config.SplashVariants() {
+	// One right short of a full lap lands on off — the rung #316 added, and the
+	// only value that reaches config as something other than a pattern name.
+	for i := 0; i < len(options)-2; i++ {
 		o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRight})
 	}
+	assert.Equal(t, config.SplashOff, cfg.GetSplash(), "off must be reachable by cycling")
+	assert.False(t, cfg.SplashEnabled(), "picking off must disable the splash")
+
+	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRight})
 	assert.Equal(t, config.SplashRandom, cfg.GetSplash(), "the enum wraps")
+	assert.True(t, cfg.SplashEnabled(), "cycling past off re-enables the splash")
 }
 
 func indexOf(ss []string, s string) int {

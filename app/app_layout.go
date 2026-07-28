@@ -202,6 +202,19 @@ func (m *home) refreshSettingsClusteringGate() {
 	m.settingsOverlay.SetAccountClusteringVisible(m.list.AccountClusteringVisible())
 }
 
+// applySplashConfig pushes the `splash` key's two halves into ui: whether the
+// idle panes animate at all (config.SplashOff, #316) and which pattern they draw.
+// ui takes both normalized, so it needs no config import.
+//
+// One function rather than two adjacent calls at each site, because the pair has
+// no guard: a future third caller that seeded the variant and forgot the enable
+// flag would leave the animation running for a user who turned it off, and no
+// test would say so. Called from newHome and from applySettingChange.
+func applySplashConfig(cfg *config.Config) {
+	ui.SetSplashEnabled(cfg.SplashEnabled())
+	ui.SetSplashVariant(cfg.GetSplash())
+}
+
 // applySettingChange persists the config after the settings panel changed the
 // given row — or, for "profiles", after its record editor changed the profile
 // list — then live-applies whatever that field controls. Fields without a case
@@ -265,10 +278,12 @@ func (m *home) applySettingChange(key string) tea.Cmd {
 			m.applyOSChrome(false)
 		}
 	case "splash":
-		// Mirror the newHome seeding; ui takes the normalized name so it needs
-		// no config import. With zero sessions the splash repaints in place, so
-		// cycling the enum previews each pattern behind the panel.
-		ui.SetSplashVariant(m.appConfig.GetSplash())
+		// With zero sessions the splash repaints in place, so cycling the enum
+		// previews each pattern — and the off rung — behind the panel. The
+		// animation loop itself is gated in splashAnimating, which the 100ms
+		// preview tick re-reads, so turning it back on revives motion within a
+		// tick without anything here re-arming it.
+		applySplashConfig(m.appConfig)
 	case "project_search_roots", "project_search_depth":
 		// The scan's scope changed under a live TUI. Switching it off must also
 		// retire the results already held: assembleHome gates the persisted cache
