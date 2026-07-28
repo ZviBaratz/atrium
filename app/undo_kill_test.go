@@ -354,3 +354,40 @@ func TestSweepLeavesLiveRecordsAndTheirCommitsAlone(t *testing.T) {
 	require.NoError(t, err)
 	assert.Len(t, stored, 1)
 }
+
+// TestBatchKillJournalsEverySessionAndCountsThem drives killInstances' real action
+// rather than journalKill directly, because the batch path is a second
+// implementation of the teardown and the count it reports is what decides whether
+// the notice offers an undo at all.
+func TestBatchKillJournalsEverySessionAndCountsThem(t *testing.T) {
+	undoSandbox(t)
+	h := undoHome(t)
+	h.windowWidth = 120
+
+	var insts []*session.Instance
+	for _, title := range []string{"alpha", "beta"} {
+		inst, _ := gitSession(t, title)
+		h.list.AddInstance(inst)()
+		insts = append(insts, inst)
+	}
+	storage, err := session.NewStorage(config.DefaultState())
+	require.NoError(t, err)
+	require.NoError(t, storage.SaveInstances(insts))
+	h.storage = storage
+
+	h.killInstances(insts, "Kill 2 marked sessions?", "x")
+	require.NotNil(t, h.pendingConfirmAction, "the batch action is stashed for the confirmation")
+
+	msg, ok := h.pendingConfirmAction().(batchKillDoneMsg)
+	require.True(t, ok)
+	assert.Equal(t, 2, msg.killed)
+	assert.Equal(t, 2, msg.undoable, "every recorded session must be counted, or the notice hides the undo")
+	assert.Equal(t, "killed 2 sessions · U to undo", batchKilledNotice(msg.killed, msg.undoable))
+
+	// One batch, one action: undo offers all of it back.
+	group, ok := undo.LatestBatch(time.Now())
+	require.True(t, ok)
+	require.Len(t, group, 2)
+	assert.Equal(t, group[0].BatchID, group[1].BatchID)
+	assert.NotEmpty(t, group[0].BatchID)
+}
