@@ -642,7 +642,18 @@ func (m *home) Init() tea.Cmd {
 		m.agentCheckCmd(),    // background agent CLI detection
 		m.releaseNotesCmd(),  // nil (inert) is fine: tea.Batch skips nil cmds
 		m.startProjectScan(), // nil (disabled) is likewise skipped
+		m.sweepUndoCmd(),     // release undo records past their horizon
 	)
+}
+
+// sweepUndoCmd expires the undo journal off the render path. A data dir left
+// closed for a month has records to release, and this is the one moment we know
+// the sweep has not run in a while.
+func (m *home) sweepUndoCmd() tea.Cmd {
+	return func() tea.Msg {
+		m.sweepUndoJournal(time.Now())
+		return nil
+	}
 }
 
 func (m *home) View() string {

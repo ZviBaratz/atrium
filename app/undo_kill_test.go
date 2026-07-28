@@ -51,7 +51,11 @@ func gitSession(t *testing.T, title string) (*session.Instance, string) {
 	runGitIn(t, repo, "add", ".")
 	runGitIn(t, repo, "commit", "-m", "initial")
 
-	inst, err := session.NewInstance(session.InstanceOptions{Title: title, Path: repo, Program: "echo"})
+	// "sleep 300", not "echo": Start waits for the tmux session to come up, and a
+	// program that exits immediately can take the pane down first — a flake, not a
+	// bug in the code under test. The real-tmux tests in session/tmux use the same
+	// long-lived stand-in.
+	inst, err := session.NewInstance(session.InstanceOptions{Title: title, Path: repo, Program: "sleep 300"})
 	require.NoError(t, err)
 	require.NoError(t, inst.Start(true))
 	t.Cleanup(func() { _ = inst.Kill() })
@@ -175,7 +179,7 @@ func TestJournalKillOnADirectSessionRunsNoGit(t *testing.T) {
 
 	testutil.RequireTmux(t)
 	inst, err := session.NewInstance(session.InstanceOptions{
-		Title: "scratch", Path: t.TempDir(), Program: "echo", Direct: true,
+		Title: "scratch", Path: t.TempDir(), Program: "sleep 300", Direct: true,
 	})
 	require.NoError(t, err)
 	require.NoError(t, inst.Start(true))
@@ -247,4 +251,106 @@ func TestKilledNoticeOnlyAdvertisesARecoveryThatExists(t *testing.T) {
 func TestNoticeNamesTheRegisteredKey(t *testing.T) {
 	assert.Equal(t, "U", undoKeyLabel())
 	assert.Contains(t, killedNotice("x", true), undoKeyLabel())
+}
+
+// TestSupersedeRetiresARecordWhoseIdentityIsReclaimed. Creating a session takes
+// back a title, a path and a tmux name a killed one may still hold a record for.
+// Creation wins on purpose — a user who killed a session to free its name must not
+// be locked out — and an undo offered afterwards would rebuild onto a live tmux
+// session, which is the collision nothing else makes visible.
+func TestSupersedeRetiresARecordWhoseIdentityIsReclaimed(t *testing.T) {
+	undoSandbox(t)
+	h := undoHome(t)
+	path := t.TempDir()
+
+	snapshot, err := json.Marshal(session.InstanceData{Title: "fix-auth", Path: path})
+	require.NoError(t, err)
+	_, err = undo.Write(undo.Entry{
+		Title: "fix-auth", Display: "fix-auth", Path: path,
+		RepoPath: path, Branch: "zvi/fix-auth", SHA: "deadbeef",
+		TmuxName: "atrium_repo_fix-auth", Snapshot: snapshot,
+	})
+	require.NoError(t, err)
+	_, ok := undo.Latest(time.Now())
+	require.True(t, ok, "the record is offerable before the name is reclaimed")
+
+	reclaimed, err := session.NewInstance(session.InstanceOptions{
+		Title: "fix-auth", Path: path, Program: "sleep 300",
+	})
+	require.NoError(t, err)
+	h.supersedeUndoFor(reclaimed)
+
+	_, ok = undo.Latest(time.Now())
+	assert.False(t, ok, "the reclaimed identity's record must stop being offered")
+
+	stored, err := undo.Load()
+	require.NoError(t, err)
+	require.Len(t, stored, 1)
+	assert.True(t, stored[0].Superseded)
+	assert.NotEmpty(t, stored[0].Ref,
+		"the ref survives, so the commits stay recoverable by hand until the horizon")
+}
+
+// TestSupersedeLeavesUnrelatedRecordsAlone — it matches on the (Title, Path) pair
+// storage identifies an instance by, because titles are unique only within a repo
+// group. A same-titled session in another project is a different session.
+func TestSupersedeLeavesUnrelatedRecordsAlone(t *testing.T) {
+	undoSandbox(t)
+	h := undoHome(t)
+	killedIn := t.TempDir()
+
+	snapshot, err := json.Marshal(session.InstanceData{Title: "fix-auth", Path: killedIn})
+	require.NoError(t, err)
+	_, err = undo.Write(undo.Entry{
+		Title: "fix-auth", Display: "fix-auth", Path: killedIn,
+		RepoPath: killedIn, Branch: "zvi/fix-auth", SHA: "deadbeef",
+		TmuxName: "atrium_alpha_fix-auth", Snapshot: snapshot,
+	})
+	require.NoError(t, err)
+
+	elsewhere, err := session.NewInstance(session.InstanceOptions{
+		Title: "fix-auth", Path: t.TempDir(), Program: "sleep 300",
+	})
+	require.NoError(t, err)
+	h.supersedeUndoFor(elsewhere)
+
+	_, ok := undo.Latest(time.Now())
+	assert.True(t, ok, "a same-titled session in another project must not retire this record")
+}
+
+// TestSweepReleasesTheCommitsAnExpiredRecordWasHolding. The retention ref is what
+// makes the objects gc-immune, so expiry has to drop it — otherwise a killed
+// session's history sits in the user's repository forever.
+func TestSweepReleasesTheCommitsAnExpiredRecordWasHolding(t *testing.T) {
+	entry, repo := retainedRepo(t, "fix-auth")
+	h := undoHome(t)
+	h.ctx = context.Background()
+
+	_, ok := git.RefExists(context.Background(), repo, entry.Ref)
+	require.True(t, ok, "the ref is there before the horizon passes")
+
+	h.sweepUndoJournal(entry.At.Add(undo.TTL + time.Hour))
+
+	_, ok = git.RefExists(context.Background(), repo, entry.Ref)
+	assert.False(t, ok, "an expired record must release its retained branch")
+	stored, err := undo.Load()
+	require.NoError(t, err)
+	assert.Empty(t, stored)
+}
+
+// TestSweepLeavesLiveRecordsAndTheirCommitsAlone — the control. A sweep that
+// released a record inside its window would destroy the very work undo exists to
+// protect.
+func TestSweepLeavesLiveRecordsAndTheirCommitsAlone(t *testing.T) {
+	entry, repo := retainedRepo(t, "fix-auth")
+	h := undoHome(t)
+	h.ctx = context.Background()
+
+	h.sweepUndoJournal(entry.At.Add(undo.TTL - time.Hour))
+
+	_, ok := git.RefExists(context.Background(), repo, entry.Ref)
+	assert.True(t, ok)
+	stored, err := undo.Load()
+	require.NoError(t, err)
+	assert.Len(t, stored, 1)
 }

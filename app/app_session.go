@@ -1535,6 +1535,14 @@ func (m *home) startNewSession(title, path string, direct bool, program, branch,
 	agyAccName, agyAccDir, _ := m.appConfig.ResolveAgyAccount(remoteURL, path)
 	instance.SetAgyAccount(agyAccName, agyAccDir)
 
+	// Creating a session reclaims an identity a killed one may still hold a record
+	// for, so that record stops being offered. Creation wins deliberately: a user
+	// who killed a session to free its name must not be locked out of the name, and
+	// an undo that fired afterwards would rebuild onto a live tmux session. The
+	// retention ref is left alone, so the refusal path can still point at it and the
+	// commits stay recoverable by hand until the horizon passes.
+	m.supersedeUndoFor(instance)
+
 	// Create the list row only now, on submit. AddInstance may insert it mid-list under its
 	// repo group, so select it by identity.
 	finalizer := m.list.AddInstance(instance)
