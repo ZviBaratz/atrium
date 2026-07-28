@@ -72,3 +72,53 @@ func TestRenderManagedConfig(t *testing.T) {
 		}
 	}
 }
+
+// TestRenderManagedConfigScrollKeys pins the prefix-free scrollback chords. The
+// isolated socket never reads the host ~/.tmux.conf, so whatever this file binds is
+// the entire keyboard route into a session's history — and two halves have to agree
+// for it to work: the root binding enters copy mode, and the copy-mode-vi entries
+// are what page *further* once you are in it. A root-only config scrolls exactly one
+// page and then goes dead, which is why both tables are asserted.
+func TestRenderManagedConfigScrollKeys(t *testing.T) {
+	for _, contextBar := range []bool{true, false} {
+		rendered, err := renderManagedConfig(contextBar)
+		if err != nil {
+			t.Fatalf("renderManagedConfig(%v) error: %v", contextBar, err)
+		}
+		got := collapseWS(string(rendered))
+
+		// Entry: -u lands a page back on the first press, -e drops back out at the
+		// bottom so a scrolled pane can't swallow keys sent to it (autoyes' Enter, a
+		// queued prompt). Both spellings enter; Shift is the terminal-native one.
+		for _, want := range []string{
+			"bind-key -n S-PPage copy-mode -eu",
+			"bind-key -n M-PPage copy-mode -eu",
+			"bind-key -T copy-mode-vi S-PPage send-keys -X page-up",
+			"bind-key -T copy-mode-vi S-NPage send-keys -X page-down",
+			"bind-key -T copy-mode-vi M-PPage send-keys -X page-up",
+			"bind-key -T copy-mode-vi M-NPage send-keys -X page-down",
+			// The copy-mode-vi table is only reachable with mode-keys vi; without
+			// this line every binding above lands in a table tmux never consults.
+			"set-window-option -g mode-keys vi",
+			// mode-keys vi alone maps v to rectangle-toggle and leaves y unbound, so
+			// the habitual select-and-copy silently does the wrong thing.
+			"bind-key -T copy-mode-vi v send-keys -X begin-selection",
+			"bind-key -T copy-mode-vi y send-keys -X copy-selection-and-cancel",
+		} {
+			if !strings.Contains(got, want) {
+				t.Errorf("contextBar=%v: managed config missing %q (scroll keys are unconditional)\n---\n%s",
+					contextBar, want, got)
+			}
+		}
+
+		// Ctrl+PageUp/PageDown belong to the attach layer, which intercepts them for
+		// sibling-session cycling (navReason) before tmux is handed the bytes. Binding
+		// them here would register a key that can never fire.
+		for _, forbidden := range []string{"C-PPage", "C-NPage"} {
+			if strings.Contains(got, forbidden) {
+				t.Errorf("contextBar=%v: managed config binds %s, which the attach layer intercepts for sibling cycling\n---\n%s",
+					contextBar, forbidden, got)
+			}
+		}
+	}
+}

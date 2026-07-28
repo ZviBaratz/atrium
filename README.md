@@ -236,6 +236,7 @@ in-app keymap and this section ever drift apart, so it stays complete.
 | `ctrl-q` | toggle attach/detach (detach when in, attach from the list) |
 | `ctrl-x` | kill the selected/attached session (twice to confirm) |
 | `ctrl-pgup/pgdn` | in a session: cycle to prev / next session in the repo group |
+| `shift-pgup/pgdn` | in a session: scroll the agent's scrollback (see [Scrolling an attached session](#scrolling-an-attached-session)) |
 | `s` | send a message (without attaching) |
 | `C` | diff tab: comment on a line or range → queue it to the agent (↑↓/j/k move, shift+↑↓/J/K extend, enter comment, esc exit) |
 | `Q` | manage queued prompts (list / cancel) |
@@ -337,6 +338,31 @@ Mouse capture is on by default: clickable session rows, repo headers, tabs, and 
 ```
 
 With `mouse` off, Atrium never enables mouse reporting, so selection, copy, and paste behave exactly as they would in any non-mouse program. The setting is also togglable live from the Settings panel (`,`).
+
+#### Scrolling an attached session
+
+Atrium's sessions run on their own tmux server with their own config, so your
+`~/.tmux.conf` — prefix, copy-mode keys, scroll chords — does not apply inside
+one. Scrollback is bound prefix-free instead:
+
+| Key | Action |
+|-----|--------|
+| `shift-pgup` / `alt-pgup` | scroll back a page (enters tmux copy mode) |
+| `shift-pgdn` / `alt-pgdn` | scroll forward; at the bottom it exits copy mode for you |
+| `g` / `G`, `j` / `k`, `ctrl-u` / `ctrl-d` | while scrolled: top / bottom, line, half page |
+| `?` / `/`, then `n` / `N` | while scrolled: search up / down, next / previous match |
+| `v`, `y` | while scrolled: start a selection, copy it (to the system clipboard) |
+| `q` | leave the scrollback and return to the agent |
+
+Copy mode is vi-keyed, and the wheel scrolls the same history when `mouse` is on.
+Note that `ctrl-b` — tmux's default prefix, and the key Claude Code uses to
+background a task — is not needed for any of this.
+
+Scrolling reaches `history-limit` lines back (10000). An agent that draws on the
+*alternate* screen keeps its conversation out of that history entirely: with
+Claude Code, `/tui fullscreen` moves scrolling into the agent itself (`pgup` /
+`pgdn`) and leaves the tmux scrollback, the preview pane's `shift-↑/↓`, and
+`atrium peek --lines` with only the visible screen to show.
 
 #### Auto-attach
 
