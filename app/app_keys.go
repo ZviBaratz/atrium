@@ -908,6 +908,15 @@ func (m *home) pauseSelected() (tea.Model, tea.Cmd) {
 		return m, m.handleError(fmt.Errorf("pause is not available for a direct (non-git) session; it runs in place with no worktree to free"))
 	}
 
+	// Pausing what is already paused re-runs commit + worktree removal against a
+	// worktree the last pause already freed. The hint bar drops p from a paused
+	// session's cues, which is why this went unnoticed — a hidden hint is not a
+	// guard, and the command palette (#374) reaches every action regardless of
+	// which cues are showing. Mirrors resume's "already running" refusal.
+	if selected.Paused() {
+		return m, m.handleInfoNotice("session is already paused — press r to resume")
+	}
+
 	// Pause off the UI thread: Pause() commits any dirty work and removes the
 	// worktree, keeping the branch to check out elsewhere. The completion handler
 	// (pauseDoneMsg) tears down the terminal, persists, and opens the rename overlay.
