@@ -85,10 +85,11 @@ func previewMemberWindow(n, chosen, budget int) (start, end, hidden int) {
 // pinned member has a Until that actually parses, and falls back to "(first
 // member)" otherwise.
 //
-// The confirm this sentence describes only fires on the create-form path
-// (gateAllExhausted); smart auto-dispatch bypasses it and can silently spawn
-// on a different member (#483), so the wording is deliberately scoped to name
-// "the form" rather than asserting the confirm bare.
+// The confirm this sentence describes fires on every path that creates a
+// session: the create form and smart auto-dispatch both run gateAllExhausted,
+// so the sentence asserts it bare. It was once scoped to "the form" because
+// auto-dispatch bypassed the gate and could silently spawn on a different
+// member — fixing that (#483) is what made the unqualified wording true.
 //
 // width bounds every string this returns: it's the space renderPoolDecision
 // actually has left for a block line (o.inner() minus previewIndentWidth),
@@ -138,30 +139,32 @@ func previewDecisionLine(members []config.ClaudeAccount, avail map[string]config
 // allLimitedDecision phrases the exhausted-pool confirm sentence, degrading
 // through shorter wordings until one fits width. No rung ever collapses the
 // (first member)/(resets soonest) distinction onto the other's case — that
-// would misreport whichever one didn't happen — and no rung keeps "confirm"
-// once it can no longer also say "form": the confirm this describes only
-// fires on the create-form path (previewDecisionLine's doc comment / #483),
-// so a wording that dropped "form" but kept "asks to confirm" would read as
-// true for auto-dispatch too, which it isn't. Once the width can't hold that
-// pairing, the sentence states only the outcome instead.
+// would misreport whichever one didn't happen.
+//
+// "creating", not "the form": every path that creates a session now runs
+// gateAllExhausted, so the confirm is what a user gets from the create form
+// and from smart auto-dispatch alike (#483). While that was false the wording
+// was deliberately narrowed to name the form, and a third rung existed purely
+// to drop "confirm" at widths where "form" no longer fit — a rung that said
+// "all limited → <name> <reason>". It is gone: with the qualifier unnecessary,
+// the terse rung is 4 cells *shorter* than that one, so it fit wherever the
+// third rung would have and the third rung could never be reached.
 //
 // The full wording runs 57-59 cells for a 6-letter name against the
 // 65-column width the default 80-column terminal actually leaves this line
-// (o.inner() 74 minus previewIndentWidth 9) — but a 23-letter pool name
+// (o.inner() 74 minus previewIndentWidth 9) — but a 23-letter member name
 // already pushes it to 76, over budget even at that "full" width, so the
-// second rung is reachable there too, not only on a narrower terminal.
+// second rung is reachable there too, not only on a narrower terminal. That
+// second rung holds the reason down to 31 cells, below which only the name
+// survives, and then only "all limited".
 func allLimitedDecision(name, reason string, width int) string {
-	full := fmt.Sprintf("the form asks to confirm, then uses %s %s", name, reason)
+	full := fmt.Sprintf("creating asks to confirm, then uses %s %s", name, reason)
 	if lipgloss.Width(full) <= width {
 		return full
 	}
-	terse := fmt.Sprintf("form confirm → %s %s", name, reason)
+	terse := fmt.Sprintf("confirm → %s %s", name, reason)
 	if lipgloss.Width(terse) <= width {
 		return terse
-	}
-	noConfirm := fmt.Sprintf("all limited → %s %s", name, reason)
-	if lipgloss.Width(noConfirm) <= width {
-		return noConfirm
 	}
 	named := fmt.Sprintf("all limited → %s", name)
 	if lipgloss.Width(named) <= width {

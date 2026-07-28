@@ -672,6 +672,15 @@ list to your config file:
   believe are separate turn out to hold the **same** login, naming which one the
   combined work is billing. There is no field for `expect_account` in the `@` accounts
   overlay; edits there preserve it.
+- Atrium's own short background calls — the one-shot used by auto-naming (`N`) and
+  by smart dispatch's routing (`i`) — are billed the same way. Auto-naming runs on
+  the **session's own account**, since the session it is naming already has one.
+  The routing call has no session yet (proposing the project *is* its job, so it
+  runs before one is chosen), so it uses the **catch-all** — the account a session
+  that matched no route would get, and the ambient environment when no catch-all is
+  configured. Neither call can see the account's `CLAUDE.md` or `settings.json`:
+  they run under a throwaway home holding nothing but a link to that account's
+  credentials.
 - Omitting `claude_accounts` disables the feature entirely (no badge, no
   injection), so existing configs are unaffected.
 
@@ -726,13 +735,14 @@ instead of pinning every session in a repo to one account:
   member (shown indented under it) to pin that account for this one session —
   which bypasses availability, so it works even on a flagged member.
 - If **every** member of the routed pool is flagged limited, creating a session
-  from the new-session form shows a confirm ("all `<pool>` accounts are
-  rate-limited … create anyway on `<member>`?") instead of silently spawning on
-  a limited account. Declining leaves the draft in place and creates nothing;
-  accepting pins the member whose limit resets soonest — which, while flags are
-  indefinite-only, is the first pool member. Smart auto-dispatch skips this
-  all-exhausted gate, so a fully-limited pool can still spawn silently there
-  (#483).
+  shows a confirm ("all `<pool>` accounts are rate-limited … create anyway on
+  `<member>`?") instead of silently spawning on a limited account. Declining
+  creates nothing; accepting pins the member whose limit resets soonest — which,
+  while flags are indefinite-only, is the first pool member. This applies to
+  **smart auto-dispatch too**, which opts out of the form, not out of the account
+  gates: declining there creates nothing but does not preserve the line you
+  typed, since only a create form is kept as a restorable draft. A pool of one
+  never raises it — there is nothing to rotate to.
 - Press `t` in the `@` accounts overlay to preview where an input (remote URL
   and/or path) would route right now, without creating anything. When the
   matched account belongs to a pool, the `Claude →` line names the member a
@@ -742,9 +752,9 @@ instead of pinning every session in a repo to one account:
   member, naming why, e.g. `work-1 limited → rotating to work-2`. If every
   member is limited, the `Claude →` line instead shows
   `⚠ all '<pool>' accounts limited`, and the block marks the member that
-  accepting the create-form's confirm would pin, with `← on confirm` — the
-  one whose limit resets soonest, which, while flags are indefinite-only, is
-  the first pool member. The preview only reads availability and the
+  accepting the confirm would pin, with `← on confirm` — the one whose limit
+  resets soonest, which, while flags are indefinite-only, is the first pool
+  member. The preview only reads availability and the
   rotation cursor; it never advances it, so the same input can preview a
   different member after a real session moves the cursor. A pool with fewer
   than two members — including no pool at all — previews unchanged, with no

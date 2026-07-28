@@ -1475,7 +1475,7 @@ func TestAccountsOverlay_PreviewAllLimitedShowsConfirmDecision(t *testing.T) {
 	assert.Contains(t, poolRowLine(t, out, "work-1"), "← on confirm",
 		"both members are indefinite, so SoonestResetMember falls back to the first")
 	assert.NotContains(t, poolRowLine(t, out, "work-2"), "← on confirm")
-	assert.Contains(t, out, "the form asks to confirm, then uses work-1 (first member)")
+	assert.Contains(t, out, "creating asks to confirm, then uses work-1 (first member)")
 }
 
 // The defect this guards: the all-limited decision sentence used to run to
@@ -1529,7 +1529,7 @@ func TestAccountsOverlay_PreviewAllLimitedMarkerAndSentenceNameSameMember(t *tes
 		"SoonestResetMember picks work-1 (its Until parses and is earliest), not the rotation cursor's work-2")
 	assert.NotContains(t, poolRowLine(t, out, "work-2"), "← on confirm",
 		"the rotation cursor's own member must not carry the marker once the pool is exhausted")
-	assert.Contains(t, out, "the form asks to confirm, then uses work-1 (resets soonest)",
+	assert.Contains(t, out, "creating asks to confirm, then uses work-1 (resets soonest)",
 		"the decision sentence must name the same member the marker landed on")
 }
 

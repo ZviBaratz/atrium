@@ -164,7 +164,9 @@ type autoNameDoneMsg struct {
 // runAutoNameCmd returns a Cmd that generates a display name in a background
 // goroutine (the agent subprocess can take a few seconds) so the UI stays
 // responsive. The session's own agent does the naming when it supports
-// headless one-shot prompting (see session.GenerateName).
+// headless one-shot prompting (see session.GenerateName), billed to the session's
+// own Claude account — ClaudeConfigDir is the dir this session actually launched
+// under, so naming a session cannot spend an account the session never touched.
 func runAutoNameCmd(ctx context.Context, instance *session.Instance, prompt string) tea.Cmd {
 	return func() tea.Msg {
 		// Compute the full diff here, off the UI thread. The cached stats are often the
@@ -178,7 +180,7 @@ func runAutoNameCmd(ctx context.Context, instance *session.Instance, prompt stri
 				stats = cached
 			}
 		}
-		name, err := session.GenerateName(ctx, instance.Program, prompt, stats)
+		name, err := session.GenerateName(ctx, instance.Program, instance.ClaudeConfigDir(), prompt, stats)
 		return autoNameDoneMsg{instance: instance, name: name, err: err}
 	}
 }
@@ -271,11 +273,18 @@ func (m *home) handleSmartDispatchSubmit(line string) tea.Cmd {
 // autoDispatch handles a confident match without the form, returning (cmd, true) when it
 // takes ownership of the line and (nil, false) when it declines — an invalid target or a
 // title collision — so the caller falls back to the confirmation form. Taking ownership
-// usually means the session is created directly, but crossing the host-derived soft cap
-// instead returns the confirmation command (still true): nothing is created until the
-// user accepts. Because it bypasses the form, the session launches with the agent's
-// default permission mode — opting into smart_dispatch_auto deliberately trades away the
-// per-session permission choice the form's Permissions chip would otherwise offer.
+// usually means the session is created directly, but crossing the host-derived soft cap,
+// or routing to a pool with no available member, instead returns a confirmation command
+// (still true): nothing is created until the user accepts. Because it bypasses the form,
+// the session launches with the agent's default permission mode — opting into
+// smart_dispatch_auto deliberately trades away the per-session permission choice the
+// form's Permissions chip would otherwise offer.
+//
+// What it does not trade away is the account gates. Opting into smart_dispatch_auto says
+// "don't make me confirm the routing", not "spend an account I have flagged unusable" —
+// so this path runs the same all-exhausted gate the create form does, and gets the same
+// answer (#483). Skipping it was how a fully rate-limited pool spawned silently here, on
+// the rotation cursor's member rather than the soonest-to-reset one the confirm pins.
 func (m *home) autoDispatch(res PrefillResult) (tea.Cmd, bool) {
 	valid, direct, _ := targetValidity(m.ctx, res.Path)
 	if !valid {
@@ -290,14 +299,26 @@ func (m *home) autoDispatch(res PrefillResult) (tea.Cmd, bool) {
 	// somehow is; a soft cap over budget confirms before creating.
 	sc := m.sessionCap()
 	count := m.capCount(sc)
-	switch capVerdict(sc, count, 1) {
-	case capBlock:
+	plan := spawnPlan{
+		titles: []string{res.Title}, path: res.Path, direct: direct,
+		programs: []string{m.program}, prompt: res.Prompt,
+	}
+	verdict := capVerdict(sc, count, 1)
+	if verdict == capBlock {
 		return nil, false
-	case capConfirm:
-		plan := spawnPlan{
-			titles: []string{res.Title}, path: res.Path, direct: direct,
-			programs: []string{m.program}, prompt: res.Prompt,
-		}
+	}
+
+	// Gate order mirrors createSessionFromForm, and is load-bearing for the same
+	// reason: neither accept path re-checks the other gate, so whichever confirm is
+	// staged first is the only one that ever runs. Hard cap first (already refused
+	// above), then all-exhausted, then the soft cap — staging the soft-cap confirm
+	// ahead of this would let accepting it spawn on a fully rate-limited pool without
+	// ever asking.
+	if cmd, gated := m.gateAllExhausted(plan); gated {
+		return cmd, true
+	}
+
+	if verdict == capConfirm {
 		return m.confirmOverCap(plan, sc.Limit, count), true
 	}
 	cmd, err := m.startNewSession(res.Title, res.Path, direct, m.program, "", res.Prompt, nil, false)
@@ -314,11 +335,20 @@ func (m *home) autoDispatch(res PrefillResult) (tea.Cmd, bool) {
 // runSmartDispatchCmd routes line against the candidate repos in a background goroutine
 // (the agent subprocess takes a few seconds) so the form stays responsive. The result
 // is tagged with the originating form so a stale answer is dropped by the handler.
+//
+// The account is resolved here, on the Update goroutine, for the same reason ctx and
+// program are: the closure runs off it and must not read the model. Routing is asked
+// with no remote and no path, which is not a placeholder — it is this call's actual
+// situation, and the router already answers it with the catch-all account (or "",
+// inherit the ambient env, when no catch-all is configured). A routing call cannot
+// use the route it exists to propose, so it bills the account an unroutable session
+// would get (#497).
 func (m *home) runSmartDispatchCmd(line string, candidates []string, form *overlay.TextInputOverlay) tea.Cmd {
 	ctx := m.ctx
 	program := m.program
+	_, acctDir, _ := m.appConfig.ResolveClaudeAccount("", "")
 	return func() tea.Msg {
-		project, title, err := session.GenerateDispatch(ctx, program, line, candidates)
+		project, title, err := session.GenerateDispatch(ctx, program, acctDir, line, candidates)
 		return smartDispatchDoneMsg{form: form, project: project, title: title, err: err}
 	}
 }
@@ -1425,7 +1455,24 @@ func (m *home) startNewSession(title, path string, direct bool, program, branch,
 		now := time.Now()
 		// Shared with the accounts overlay's routing preview, so what the preview shows
 		// and what creation does cannot drift.
-		chosen, _ := config.SelectPoolMember(members, avail, m.appState.GetAccountRotation(poolName), now)
+		chosen, allLimited := config.SelectPoolMember(members, avail, m.appState.GetAccountRotation(poolName), now)
+		// Fail closed rather than silently. Both spawn paths run gateAllExhausted
+		// before reaching this, so an unpinned all-limited pool should be impossible
+		// here — but "should be impossible" is exactly what this branch quietly
+		// assumed while smart auto-dispatch skipped the gate and spawned on the
+		// cursor's member for a whole release (#483). A third caller that forgets the
+		// gate now gets a refusal it has to handle, not a session on an account the
+		// user marked unusable.
+		//
+		// len(members) > 1 is not a nicety: SelectPoolMember reports allLimited for a
+		// singleton pool whose one account is limited, and gateAllExhausted
+		// deliberately exempts that case because a pool of one has nothing to rotate.
+		// Without the same exemption, flagging a lone unpooled account would start
+		// refusing every session it routes.
+		if allLimited && len(members) > 1 {
+			return nil, fmt.Errorf(
+				"every account in pool %q is rate-limited; pick a member explicitly to override", poolName)
+		}
 		// Only advance a rotation cursor for a real (multi-member) pool: a 1-member
 		// pool has nothing to rotate, and writing the cursor would add an
 		// account_rotation key for an accounts-configured-but-no-pool user.

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -56,14 +57,14 @@ func TestGenerateName(t *testing.T) {
 
 	t.Run("returns the sanitized result on success", func(t *testing.T) {
 		out := `{"type":"result","is_error":false,"result":"\"Retry backoff\""}`
-		name, err := generateName(context.Background(), okExec(out), "claude", t.TempDir(), "add retry", nil)
+		name, err := generateName(context.Background(), okExec(out), "claude", t.TempDir(), "", "add retry", nil)
 		require.NoError(t, err)
 		require.Equal(t, "Retry backoff", name)
 	})
 
 	t.Run("maps is_error to a failure instead of using the text as a name", func(t *testing.T) {
 		out := `{"type":"result","is_error":true,"result":"Not logged in · Please run /login"}`
-		name, err := generateName(context.Background(), okExec(out), "claude", t.TempDir(), "add retry", nil)
+		name, err := generateName(context.Background(), okExec(out), "claude", t.TempDir(), "", "add retry", nil)
 		require.Error(t, err)
 		require.Empty(t, name)
 		require.NotContains(t, name, "Not logged in")
@@ -73,12 +74,12 @@ func TestGenerateName(t *testing.T) {
 		failExec := cmd_test.MockCmdExec{
 			OutputFunc: func(*exec.Cmd) ([]byte, error) { return nil, exec.ErrNotFound },
 		}
-		_, err := generateName(context.Background(), failExec, "claude", t.TempDir(), "add retry", nil)
+		_, err := generateName(context.Background(), failExec, "claude", t.TempDir(), "", "add retry", nil)
 		require.Error(t, err)
 	})
 
 	t.Run("errors on unparseable output", func(t *testing.T) {
-		_, err := generateName(context.Background(), okExec("not json"), "claude", t.TempDir(), "add retry", nil)
+		_, err := generateName(context.Background(), okExec("not json"), "claude", t.TempDir(), "", "add retry", nil)
 		require.Error(t, err)
 	})
 
@@ -101,7 +102,7 @@ func TestGenerateName(t *testing.T) {
 		probe := cmd_test.MockCmdExec{
 			OutputFunc: func(*exec.Cmd) ([]byte, error) { called = true; return nil, nil },
 		}
-		_, err := generateName(context.Background(), probe, "claude", t.TempDir(), "  ", &git.DiffStats{})
+		_, err := generateName(context.Background(), probe, "claude", t.TempDir(), "", "  ", &git.DiffStats{})
 		require.Error(t, err)
 		require.False(t, called, "claude must not be invoked when there is nothing to summarize")
 	})
@@ -123,7 +124,7 @@ func TestGenerateName(t *testing.T) {
 				return []byte(`{"is_error":false,"result":"Login form"}`), nil
 			},
 		}
-		_, err := generateName(context.Background(), inspect, "/usr/bin/claude", "/tmp/neutral", "wire login form", nil)
+		_, err := generateName(context.Background(), inspect, "/usr/bin/claude", "/tmp/neutral", "", "wire login form", nil)
 		require.NoError(t, err)
 		joined := strings.Join(gotArgs, " ")
 		require.Contains(t, joined, "-p")
@@ -141,6 +142,35 @@ func TestGenerateName(t *testing.T) {
 		require.Contains(t, joined, "--append-system-prompt")
 		require.Contains(t, gotArgs, nameSystemPrompt)
 	})
+
+	// The whole of #497 in one assertion: the call authenticates as the session's
+	// own account, not as whichever login the ambient environment happens to hold.
+	// The ambient CLAUDE_CONFIG_DIR and its credentials are real files here, so a
+	// regression picks a genuinely different account rather than merely failing to
+	// find one.
+	t.Run("authenticates as the session's account, not the ambient login", func(t *testing.T) {
+		acct := t.TempDir()
+		require.NoError(t, os.WriteFile(filepath.Join(acct, ".credentials.json"), []byte("{}"), 0o600))
+		ambient := t.TempDir()
+		require.NoError(t, os.WriteFile(filepath.Join(ambient, ".credentials.json"), []byte("{}"), 0o600))
+		t.Setenv("CLAUDE_CONFIG_DIR", ambient)
+
+		var linkedCreds, gotConfigDir string
+		inspect := cmd_test.MockCmdExec{
+			OutputFunc: func(c *exec.Cmd) ([]byte, error) {
+				linkedCreds = credsLinkedInto(envValue(c.Env, "HOME"))
+				gotConfigDir = envValue(c.Env, "CLAUDE_CONFIG_DIR")
+				return []byte(`{"is_error":false,"result":"Login form"}`), nil
+			},
+		}
+		_, err := generateName(context.Background(), inspect, "/usr/bin/claude", "/tmp/neutral", acct, "wire login form", nil)
+		require.NoError(t, err)
+
+		require.Equal(t, filepath.Join(acct, ".credentials.json"), linkedCreds,
+			"naming a session must bill the account that session runs under")
+		require.Empty(t, gotConfigDir,
+			"an inherited config dir would outrank the isolated HOME and undo the choice above")
+	})
 }
 
 func TestSlugTitle(t *testing.T) {
@@ -157,6 +187,74 @@ func TestSlugTitle(t *testing.T) {
 		got := SlugTitle("The hub is failing with a migration error somewhere")
 		require.LessOrEqual(t, len([]rune(got)), maxNameLen)
 		require.Equal(t, "The hub is failing with a", got)
+	})
+}
+
+// envValue returns the value of key in a KEY=VALUE environment slice, or "" when
+// it is absent. Last entry wins, matching how exec resolves a duplicated key.
+func envValue(env []string, key string) string {
+	val := ""
+	for _, kv := range env {
+		if after, ok := strings.CutPrefix(kv, key+"="); ok {
+			val = after
+		}
+	}
+	return val
+}
+
+// credsLinkedInto returns the credentials file the isolated naming home at home
+// points at, or "" when there is no isolated home or no link. Call it from inside a
+// mock executor: runClaudeHeadless deletes the home on return, so anything read
+// afterwards is gone and an assertion against it would pass on any input.
+func credsLinkedInto(home string) string {
+	if home == "" {
+		return ""
+	}
+	target, err := os.Readlink(filepath.Join(home, ".claude", ".credentials.json"))
+	if err != nil {
+		return ""
+	}
+	return target
+}
+
+func TestHeadlessCredsPath(t *testing.T) {
+	// A routed session names its own directory, and claude keeps that directory's
+	// credentials at its root — the case the hardcoded ~/.claude path got wrong for
+	// every account-routed session (#497).
+	t.Run("a routed account's credentials sit at the config dir's root", func(t *testing.T) {
+		require.Equal(t, filepath.Join("/home/u/.claude-work2", ".credentials.json"),
+			headlessCredsPath("/home/u/.claude-work2"))
+	})
+
+	// The ambient layout is the odd one out: .claude.json sits at $HOME while the
+	// credentials sit one level down in $HOME/.claude. That asymmetry is why
+	// config.AmbientClaudeConfigDir cannot simply be joined with the filename.
+	t.Run("an inherit-env session falls back to the ambient home layout", func(t *testing.T) {
+		t.Setenv("HOME", "/home/u")
+		t.Setenv("CLAUDE_CONFIG_DIR", "/will-be-removed")
+		require.NoError(t, os.Unsetenv("CLAUDE_CONFIG_DIR"))
+		require.Equal(t, filepath.Join("/home/u", ".claude", ".credentials.json"), headlessCredsPath(""))
+	})
+
+	t.Run("an inherit-env session honors an exported CLAUDE_CONFIG_DIR", func(t *testing.T) {
+		t.Setenv("HOME", "/home/u")
+		t.Setenv("CLAUDE_CONFIG_DIR", "/ambient/dir")
+		require.Equal(t, filepath.Join("/ambient/dir", ".credentials.json"), headlessCredsPath(""),
+			"inheriting the environment means inheriting the variable that outranks HOME")
+	})
+
+	// A routed account is an explicit choice and must not be silently overridden by
+	// whatever the surrounding shell exported.
+	t.Run("a routed account outranks an exported CLAUDE_CONFIG_DIR", func(t *testing.T) {
+		t.Setenv("CLAUDE_CONFIG_DIR", "/ambient/dir")
+		require.Equal(t, filepath.Join("/routed", ".credentials.json"), headlessCredsPath("/routed"))
+	})
+
+	t.Run("returns empty when the home directory cannot be resolved", func(t *testing.T) {
+		t.Setenv("CLAUDE_CONFIG_DIR", "/x")
+		require.NoError(t, os.Unsetenv("CLAUDE_CONFIG_DIR"))
+		t.Setenv("HOME", "")
+		require.Empty(t, headlessCredsPath(""), "prepareNamingHome reads this as don't isolate")
 	})
 }
 
@@ -185,6 +283,44 @@ func TestPrepareNamingHome(t *testing.T) {
 		cleanup()
 		_, err = os.Stat(home)
 		require.True(t, os.IsNotExist(err), "cleanup removes the isolated home")
+	})
+
+	// The trap in the #497 fix. The credentials now come from an account's own
+	// config dir, and those dirs carry a CLAUDE.md and a settings.json of their
+	// own — the very files the isolated home exists to keep out. Linking one file
+	// rather than pointing claude at the directory is what keeps them out; this
+	// fails the moment someone "simplifies" that into a directory symlink, a copy,
+	// or a CLAUDE_CONFIG_DIR pointing at the account.
+	t.Run("takes only the credentials from an account dir, never its memory files", func(t *testing.T) {
+		acct := t.TempDir()
+		creds := filepath.Join(acct, ".credentials.json")
+		require.NoError(t, os.WriteFile(creds, []byte("{}"), 0o600))
+		require.NoError(t, os.WriteFile(filepath.Join(acct, "CLAUDE.md"), []byte("# account memory"), 0o600))
+		require.NoError(t, os.WriteFile(filepath.Join(acct, "settings.json"), []byte("{}"), 0o600))
+
+		home, cleanup, err := prepareNamingHome(creds)
+		require.NoError(t, err)
+		require.NotEmpty(t, home)
+		defer cleanup()
+
+		target, err := os.Readlink(filepath.Join(home, ".claude", ".credentials.json"))
+		require.NoError(t, err)
+		require.Equal(t, creds, target)
+
+		// Walk it: naming the two files by their expected paths would miss a copy
+		// that landed them anywhere else in the home.
+		var leaked []string
+		require.NoError(t, filepath.WalkDir(home, func(path string, d fs.DirEntry, err error) error {
+			if err != nil {
+				return err
+			}
+			switch d.Name() {
+			case "CLAUDE.md", "settings.json":
+				leaked = append(leaked, path)
+			}
+			return nil
+		}))
+		require.Empty(t, leaked, "the account's own memory and settings must not reach the naming context")
 	})
 
 	t.Run("skips isolation when the creds file is missing", func(t *testing.T) {
@@ -223,6 +359,26 @@ func TestNamingEnv(t *testing.T) {
 		require.Contains(t, env, "MAX_THINKING_TOKENS=0")
 		require.Contains(t, env, "HOME="+os.Getenv("HOME"))
 	})
+
+	// CLAUDE_CONFIG_DIR outranks HOME in claude's own resolution, so an inherited
+	// one would send the call to that directory and defeat the isolation entirely —
+	// both the account whose credentials were just linked in and the CLAUDE.md
+	// suppression. Isolating HOME is not enough on its own.
+	t.Run("drops an inherited CLAUDE_CONFIG_DIR when isolating", func(t *testing.T) {
+		t.Setenv("CLAUDE_CONFIG_DIR", "/some/other/account")
+		env := namingEnv("/tmp/iso-home")
+		require.Equal(t, "/tmp/iso-home", envValue(env, "HOME"))
+		require.Empty(t, envValue(env, "CLAUDE_CONFIG_DIR"),
+			"an ambient config dir would outrank the isolated HOME and pick a different account")
+	})
+
+	// The other half of "isolate fully or not at all": with no isolated home there
+	// is nothing to protect, and headlessCredsPath has already resolved the same
+	// variable — stripping it here would only break auth.
+	t.Run("keeps CLAUDE_CONFIG_DIR when not isolating", func(t *testing.T) {
+		t.Setenv("CLAUDE_CONFIG_DIR", "/some/other/account")
+		require.Equal(t, "/some/other/account", envValue(namingEnv(""), "CLAUDE_CONFIG_DIR"))
+	})
 }
 
 // TestGenerateNameIntegration exercises the whole path against the real `claude`
@@ -241,7 +397,7 @@ func TestGenerateNameIntegration(t *testing.T) {
 	stats := &git.DiffStats{FilesChanged: 3, Added: 4, Removed: 1, Content: diff}
 
 	start := time.Now()
-	name, err := GenerateName(context.Background(), "claude", "", stats)
+	name, err := GenerateName(context.Background(), "claude", "", "", stats)
 	elapsed := time.Since(start)
 	require.NoError(t, err)
 	require.NotEmpty(t, name)

@@ -41,7 +41,13 @@ const nameGenTimeout = 30 * time.Second
 // any failure so the caller can surface it and leave the session's name
 // untouched. Only binary resolution falls through to the next agent — a real
 // invocation failure (e.g. "Not logged in") is reported, not papered over.
-func GenerateName(ctx context.Context, program, prompt string, stats *git.DiffStats) (string, error) {
+//
+// claudeConfigDir is the session's own CLAUDE_CONFIG_DIR (Instance.ClaudeConfigDir,
+// "" = inherit the ambient environment): naming a session bills the account that
+// session runs under, not whichever login the ambient ~/.claude happens to hold
+// (#497). The gemini and agy branches ignore it — neither isolates $HOME at all
+// today, so neither has anywhere to put an account's credentials.
+func GenerateName(ctx context.Context, program, claudeConfigDir, prompt string, stats *git.DiffStats) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, nameGenTimeout)
 	defer cancel()
 	for _, key := range namerPreference(agent.Resolve(program).Key) {
@@ -53,7 +59,7 @@ func GenerateName(ctx context.Context, program, prompt string, stats *git.DiffSt
 			}
 			// Run from a neutral directory so a session worktree's CLAUDE.md can't bloat
 			// every naming call; all the context we need is supplied on stdin.
-			return generateName(ctx, cmd.MakeExecutor(), claudePath, os.TempDir(), prompt, stats)
+			return generateName(ctx, cmd.MakeExecutor(), claudePath, os.TempDir(), claudeConfigDir, prompt, stats)
 		case agent.KeyGemini:
 			geminiPath, err := exec.LookPath(string(agent.KeyGemini))
 			if err != nil {
@@ -124,7 +130,7 @@ func isExecutableFile(path string) bool {
 
 // generateName is the dependency-injected core of GenerateName, kept separate so
 // tests can supply a mock executor and a fixed working directory.
-func generateName(ctx context.Context, executor cmd.Executor, claudePath, workDir, prompt string, stats *git.DiffStats) (string, error) {
+func generateName(ctx context.Context, executor cmd.Executor, claudePath, workDir, claudeConfigDir, prompt string, stats *git.DiffStats) (string, error) {
 	sessionContext := buildContext(prompt, stats)
 	if sessionContext == "" {
 		return "", fmt.Errorf("no session content to name yet")
@@ -135,7 +141,7 @@ func generateName(ctx context.Context, executor cmd.Executor, claudePath, workDi
 	// weak, derails the title toward whatever it emphasizes — a packaging session once
 	// got named "Refactor Memory System". The shared helper falls back to the real
 	// $HOME when no isolated home can be built, trading the optimization, never auth.
-	result, err := runClaudeHeadless(ctx, executor, claudePath, workDir, namingInstruction, nameSystemPrompt, sessionContext)
+	result, err := runClaudeHeadless(ctx, executor, claudePath, workDir, claudeConfigDir, namingInstruction, nameSystemPrompt, sessionContext)
 	if err != nil {
 		return "", err
 	}
@@ -174,11 +180,31 @@ func generateNameAgy(ctx context.Context, executor cmd.Executor, agyPath, prompt
 	return sanitizeName(result)
 }
 
-// realCredsPath returns the path to the user's claude credentials file — the one
-// piece of $HOME the headless naming call needs to authenticate. It returns "" when
-// the home directory can't be determined, which prepareNamingHome treats as "don't
-// isolate".
-func realCredsPath() string {
+// headlessCredsPath returns the claude credentials file the headless one-shot must
+// authenticate as — the one piece of $HOME prepareNamingHome links into its
+// throwaway home. claudeConfigDir is the session's own CLAUDE_CONFIG_DIR; "" is the
+// inherit-the-ambient-environment case (the same sentinel Instance.ClaudeConfigDir
+// uses), and only there does the ambient login remain the right answer.
+//
+// The two on-disk layouts differ, and the asymmetry is claude's, not ours:
+//
+//	CLAUDE_CONFIG_DIR=<dir>   .claude.json at <dir>/, credentials at <dir>/
+//	unset                     .claude.json at $HOME/, credentials at $HOME/.claude/
+//
+// config.AmbientClaudeConfigDir encodes the first half of that rule, but its
+// home-dir answer names the directory holding .claude.json, not the one holding the
+// credentials — so it cannot simply be joined with .credentials.json here. The two
+// agree only in the branch where CLAUDE_CONFIG_DIR is set.
+//
+// It returns "" when the home directory can't be determined, which
+// prepareNamingHome treats as "don't isolate".
+func headlessCredsPath(claudeConfigDir string) string {
+	if claudeConfigDir != "" {
+		return filepath.Join(claudeConfigDir, ".credentials.json")
+	}
+	if ambient := os.Getenv("CLAUDE_CONFIG_DIR"); ambient != "" {
+		return filepath.Join(ambient, ".credentials.json")
+	}
 	home, err := os.UserHomeDir()
 	if err != nil || home == "" {
 		return ""
@@ -193,6 +219,12 @@ func realCredsPath() string {
 // real file. cleanup is always non-nil and safe to call. When credsPath is empty or
 // missing — or the home can't be built — it returns an empty homeDir so the caller
 // leaves $HOME untouched, trading the optimization for guaranteed auth.
+//
+// One file, never the directory it came from: credsPath now names an account's own
+// config dir (headlessCredsPath), and those hold a CLAUDE.md and a settings.json of
+// their own. Linking the file rather than pointing claude at the directory is what
+// keeps the account's memory file out of the naming context as surely as the global
+// one — the account dir is never named to claude at all.
 func prepareNamingHome(credsPath string) (homeDir string, cleanup func(), err error) {
 	noop := func() {}
 	if credsPath == "" {
@@ -228,6 +260,13 @@ func prepareNamingHome(credsPath string) (homeDir string, cleanup func(), err er
 // loss in name quality. When home is non-empty, HOME is redirected to the isolated
 // naming home — replaced in place rather than appended, because duplicate HOME
 // entries are resolved inconsistently across platforms.
+//
+// An inherited CLAUDE_CONFIG_DIR is dropped along with HOME, because it outranks
+// HOME in claude's own resolution: left in place it would send the call to that
+// directory and silently defeat both halves of the isolation at once — the account
+// whose credentials were just linked in, and the CLAUDE.md suppression the throwaway
+// home exists for. Isolate fully or not at all: when home is "" nothing here is
+// rewritten, and headlessCredsPath has already honored the same ambient variable.
 func namingEnv(home string) []string {
 	base := append(os.Environ(), "MAX_THINKING_TOKENS=0")
 	if home == "" {
@@ -235,7 +274,7 @@ func namingEnv(home string) []string {
 	}
 	out := make([]string, 0, len(base)+1)
 	for _, kv := range base {
-		if strings.HasPrefix(kv, "HOME=") {
+		if strings.HasPrefix(kv, "HOME=") || strings.HasPrefix(kv, "CLAUDE_CONFIG_DIR=") {
 			continue
 		}
 		out = append(out, kv)
