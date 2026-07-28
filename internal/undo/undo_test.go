@@ -25,6 +25,7 @@ func entry(title string) Entry {
 		Path:     "/repo/web",
 		RepoPath: "/repo/web",
 		Branch:   "zvi/" + title,
+		SHA:      "0123456789abcdef0123456789abcdef01234567",
 		TmuxName: "atrium_web_" + title,
 		Snapshot: json.RawMessage(`{"title":"` + title + `"}`),
 	}
@@ -225,6 +226,49 @@ func TestAnEntryWithNoSnapshotIsNotOffered(t *testing.T) {
 
 	_, ok := Latest(now)
 	assert.False(t, ok, "an entry with no snapshot is not an undo target")
+}
+
+// TestAnEntryWhoseBranchWasNeverPinnedIsNotOffered. When retention fails — the
+// repository moved, the ref could not be written — the kill still proceeds and the
+// record is still kept so it expires normally. But there is nothing to restore
+// from, and offering it would fail after the confirmation, with the session
+// already gone.
+func TestAnEntryWhoseBranchWasNeverPinnedIsNotOffered(t *testing.T) {
+	sandbox(t)
+	now := time.Date(2026, 7, 10, 12, 0, 0, 0, time.UTC)
+
+	e := entry("unpinned")
+	e.At = now.Add(-time.Hour)
+	e.SHA = ""
+	_, err := Write(e)
+	require.NoError(t, err)
+
+	got, err := Load()
+	require.NoError(t, err)
+	require.Len(t, got, 1, "the record is kept so the sweep can expire it")
+
+	_, ok := Latest(now)
+	assert.False(t, ok, "a kill whose commits were never pinned is not an undo target")
+}
+
+// TestADirectEntryNeedsNoSHA — the sibling of the test above. A direct session has
+// no repository, so the absence of a SHA is its normal state, not a failure.
+func TestADirectEntryNeedsNoSHA(t *testing.T) {
+	sandbox(t)
+	now := time.Date(2026, 7, 10, 12, 0, 0, 0, time.UTC)
+
+	e := entry("scratch")
+	e.At = now.Add(-time.Hour)
+	e.Direct = true
+	e.SHA = ""
+	e.RepoPath = ""
+	e.Branch = ""
+	_, err := Write(e)
+	require.NoError(t, err)
+
+	got, ok := Latest(now)
+	require.True(t, ok)
+	assert.Equal(t, "scratch", got.Title)
 }
 
 // TestLatestOnAnEmptyJournal reports absence rather than a zero Entry the caller

@@ -127,7 +127,16 @@ func (e Entry) Expired(now time.Time) bool {
 }
 
 // Restorable reports whether e may still be offered as an undo target as of now.
+//
+// A non-direct entry with no SHA is a record of a kill whose commits could not be
+// pinned — the repository had moved, or the ref could not be written. The teardown
+// keeps the record anyway (so it expires normally rather than lingering), but
+// offering it would promise a restore that fails after the confirmation. A direct
+// session legitimately has neither ref nor SHA: its snapshot is the whole record.
 func (e Entry) Restorable(now time.Time) bool {
+	if !e.Direct && e.SHA == "" {
+		return false
+	}
 	return !e.Superseded && !e.Expired(now) && len(e.Snapshot) > 0
 }
 

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/ZviBaratz/atrium/config"
+	"github.com/ZviBaratz/atrium/internal/undo"
 	"github.com/ZviBaratz/atrium/keys"
 	"github.com/ZviBaratz/atrium/log"
 	"github.com/ZviBaratz/atrium/session"
@@ -781,6 +782,9 @@ type batchKillDoneMsg struct {
 	killed          int
 	killedInstances []*session.Instance
 	failures        []killFailure
+	// undoable counts the entries the journal actually recorded, so the notice can
+	// only advertise a recovery that exists.
+	undoable int
 }
 
 // summary renders the dismissible-modal text for a batch kill that had at least
@@ -826,6 +830,12 @@ func (m *home) forgetInstance(inst *session.Instance) {
 // echo is the one the user pressed — hard-coding the chord would print "(or ctrl+x)"
 // at someone who never pressed it.
 func (m *home) killInstances(insts []*session.Instance, message string, altConfirmKey string) tea.Cmd {
+	// One ID for the whole run, minted when the batch is armed rather than inside
+	// the loop, so every entry it writes belongs to the same undoable action.
+	batchID, err := undo.NewID(time.Now())
+	if err != nil {
+		log.WarningLog.Printf("undo: cannot mint a batch id, this kill will not be undoable: %v", err)
+	}
 	action := func() tea.Msg {
 		var res batchKillDoneMsg
 		for _, inst := range insts {
@@ -844,6 +854,13 @@ func (m *home) killInstances(insts []*session.Instance, message string, altConfi
 						fmt.Errorf("branch checked out in the main repo")})
 					continue
 				}
+			}
+			// Record and pin before the session stops existing, exactly as the
+			// single-kill path does — visual-mode `x` tears down everything marked,
+			// which is the kill an undo is most wanted for. One batch ID groups the
+			// whole run so undoing it reverses the one action the user took.
+			if _, undoable := m.journalKill(inst, batchID); undoable {
+				res.undoable++
 			}
 			if err := m.storage.DeleteInstance(inst.Title, inst.Path); err != nil {
 				res.failures = append(res.failures, killFailure{inst.Title, err})
@@ -1745,6 +1762,13 @@ func (m *home) instanceTeardownCmd(inst *session.Instance) tea.Cmd {
 		// Clean up terminal session for this instance
 		m.tabbedWindow.CleanupTerminalForInstance(inst)
 
+		// Record what this kill is about to destroy, and pin the branch's commits
+		// so `branch -D` cannot take them with it. It runs after the refusal above
+		// (a kill that does not happen needs no record) and before the storage
+		// delete, so a failure there still leaves the session recoverable. Never
+		// fatal: an unrecordable kill is still a kill.
+		_, undoable := m.journalKill(inst, "")
+
 		// Delete from storage first
 		if err := m.storage.DeleteInstance(inst.Title, inst.Path); err != nil {
 			return err
@@ -1759,7 +1783,7 @@ func (m *home) instanceTeardownCmd(inst *session.Instance) tea.Cmd {
 		if killErr != nil {
 			return fmt.Errorf("killed '%s' but teardown was incomplete: %w", inst.DisplayName(), killErr)
 		}
-		return instanceChangedMsg{}
+		return instanceChangedMsg{notice: killedNotice(inst.DisplayName(), undoable)}
 	}
 }
 

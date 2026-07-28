@@ -235,6 +235,7 @@ in-app keymap and this section ever drift apart, so it stays complete.
 | `↵/o` | attach to the selected session |
 | `ctrl-q` | toggle attach/detach (detach when in, attach from the list) |
 | `ctrl-x` | kill the selected/attached session (twice to confirm) |
+| `U` | undo the last kill: rebuild its branch, worktree and agent (see [Undoing a kill](#undoing-a-kill)) |
 | `ctrl-pgup/pgdn` | in a session: cycle to prev / next session in the repo group |
 | `shift-pgup/pgdn` | in a session: scroll the agent's scrollback (see [Scrolling an attached session](#scrolling-an-attached-session)) |
 | `s` | send a message (without attaching) |

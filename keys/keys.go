@@ -30,6 +30,10 @@ const (
 	KeyPause    // Commit changes and pause the session, freeing its worktree
 	KeyPauseAll // Pause every active session in the current view (batch park)
 	KeyResume
+	// KeyUndoKill brings back the most recently killed session (or the whole
+	// batch one visual-mode kill removed), rebuilding its branch and worktree
+	// from the retention ref the teardown left behind.
+	KeyUndoKill
 	KeyResumeAll // Resume every paused session in the current view (batch restore)
 	KeyPrompt    // Open the new-session form focused on the project picker
 	KeyHelp      // Key for showing help screen

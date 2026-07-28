@@ -82,7 +82,11 @@ func (m *home) markSeenAfterDwell(now time.Time) {
 // previewTickMsg implements tea.Msg and triggers a preview update
 type previewTickMsg struct{}
 
-type instanceChangedMsg struct{}
+// instanceChangedMsg asks Update to refresh after a confirmed action changed the
+// list. notice, when set, is flashed alongside the refresh — it exists so the kill
+// teardown can tell the user their session is recoverable without needing a second
+// message type for what is one event.
+type instanceChangedMsg struct{ notice string }
 
 // instanceMetaResult holds the results of a single instance's metadata update,
 // computed in a background goroutine.

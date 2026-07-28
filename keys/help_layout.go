@@ -56,6 +56,7 @@ var HelpGroups = []HelpGroup{
 		{Keys: []KeyName{KeyEnter}, Desc: "attach to the selected session"},
 		{Keys: []KeyName{KeyAttachToggle}, Desc: "toggle attach/detach (detach when in, attach from the list)"},
 		{Keys: []KeyName{KeyKill}, Desc: "kill the selected/attached session (twice to confirm)"},
+		{Keys: []KeyName{KeyUndoKill}, Desc: "undo the last kill: rebuild its branch, worktree and agent"},
 		{Keys: []KeyName{KeySessionCycle}, Desc: "cycle to prev / next session in the repo group"},
 		{Keys: []KeyName{KeyQuickSend}, Desc: "send a message (without attaching)"},
 		{Keys: []KeyName{KeyDiffComment}, Desc: "diff tab: comment on a line or range → queue it to the agent (↑↓/j/k move, shift+↑↓/J/K extend, enter comment, esc exit)"},
