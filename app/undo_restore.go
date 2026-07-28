@@ -347,6 +347,12 @@ func undoFailureReport(msg undoDoneMsg) string {
 	for _, f := range msg.failures {
 		fmt.Fprintf(&b, "\n  • %s — %s", f.title, f.reason)
 	}
+	// Say what the next press will do. The records are kept, but undo steps past
+	// them for the rest of this run so a permanently-refused one cannot hide every
+	// older record — which means acting on a refusal and pressing again offers
+	// something else, and that is surprising unless it is stated.
+	b.WriteString("\n\nThese are still recorded. Undo moves on to older sessions" +
+		" for now; restart Atrium to offer them again.")
 	return b.String()
 }
 

@@ -253,6 +253,12 @@ func TestUndoFailureReportNamesEverySessionAndWhy(t *testing.T) {
 	report := undoFailureReport(partial)
 	require.Contains(t, report, "Restored 1 of 2 sessions. 1 could not come back:")
 	require.Contains(t, report, "a — branch moved on")
+
+	// And it says what the next press will do: undo steps past a refused record for
+	// the rest of the run, so acting on the refusal and pressing again offers
+	// something else — surprising unless stated.
+	require.Contains(t, report, "still recorded")
+	require.Contains(t, report, "restart Atrium")
 }
 
 // TestLiveSessionNamesSeesASessionThatHasNotStartedYet. A session between creation
