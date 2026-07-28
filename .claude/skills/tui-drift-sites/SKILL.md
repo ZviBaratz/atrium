@@ -167,9 +167,10 @@ lie. Don't "fix" them.
   Hiding the bar hands its row to the panes; closing without recomputing the
   layout leaves the frame a line taller than the terminal, and the alt-screen
   renderer never erases it. `view_bounds_test` cannot see this: it only measures
-  a *freshly armed* overlay, never one that has been closed. Since the guard for
-  the recompute itself lives in `handleKeyPress`, a state that closes on a
-  **message** rather than a key still needs its own `recomputeLayout()`.
+  a *freshly armed* overlay, never one that has been closed. The recompute itself
+  is guarded once, in `Update` — it compares `menuVisible` before and after every
+  message — so a state left by an async message is covered as well as one closed
+  by a key, and no `dismiss*` helper needs a `recomputeLayout()` of its own.
 - Overlay states must be handled **before** the global quit/esc keys in
   `app/app_update.go`'s prelude, or `q` quits while the user is typing. Each
   branch there carries its ordering constraint as a comment; keep that up.
