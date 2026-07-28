@@ -31,6 +31,24 @@ import (
 // last resolved per account and reports a mismatch. So provenance here names a
 // version AND a gate state: every capture in this file is an UNGATED capture.
 //
+// Nor can a version pin express what the USER changed. Claude composes most of its
+// key hints at render time as "<chord> to <action>" (the Be/Sn components), and Sn
+// resolves the chord through the keybinding registry — so a hint's leading half is
+// whatever the user bound in <CLAUDE_CONFIG_DIR>/keybindings.json, hot-reloaded with
+// no restart. Match the action half, never the chord. Two consequences for sweeps:
+//
+//   - Bundle ABSENCE is not evidence, the converse of the rule below. A composed hint
+//     has zero contiguous hits in the binary while rendering perfectly: at 2.1.220
+//     "esc to interrupt", "manual mode on", "bypass permissions on" and "Tab to amend"
+//     all grep to 0, and all four are in captured panes in registry_test.go. A sweep
+//     that greps to ask whether a marker still renders learns nothing in either
+//     direction.
+//   - Composed is not the same as variable. Only a registry-fed chord moves.
+//     claudePermissionModeMarkers is composed from constants (the label words, with
+//     the "(shift+tab to cycle)" chord deliberately excluded), and the #354 A/B found
+//     every chord in the permission and selection footers hardcoded. Prove which is
+//     which by REBINDING and re-capturing, not by reading the bundle.
+//
 // Remediation is ADDITIVE, never replace-in-place: when a CLI rewords a gating
 // string, ADD the new variant alongside the old in the same matcher list and
 // keep both through a deprecation window, e.g.
@@ -71,6 +89,15 @@ var claude = &Adapter{
 	// sufficient — a literal can survive while nothing renders it, and the bundle cannot
 	// tell you what surrounds it on screen.
 	//
+	// #354 (2026-07-28) drove a TARGETED set against a live 2.1.220 pane — the busy
+	// marker under a rebound and restored chat:cancel, the Write-approval footer, the
+	// AskUserQuestion selection footer, the folder-trust gate and the default
+	// permission-mode footer — and the VerifiedVersion below is deliberately NOT bumped
+	// for it. The pin is a claim about the WHOLE surface; the fetch and MCP dialogs, the
+	// plan and model-error prompts, the live spinner, the suggestion and paste heuristics
+	// were not re-driven. Bumping on a partial drive is how a pin starts lying, which is
+	// the failure the three misses above all share.
+	//
 	// Minor granularity (matching gemini): claude ships patch releases every few days, so
 	// patch-level drift would fire the warning almost constantly — alert fatigue, not
 	// signal. A patch reword is already handled additively (both old and new variants kept
@@ -102,20 +129,46 @@ var claude = &Adapter{
 	// bundle reading of a branch nobody has rendered, and this file's own rule is that
 	// bundle presence is necessary and not sufficient. It is not a reason to skip
 	// re-verifying. (Sharpening the point: "esc to interrupt" is not even a contiguous
-	// literal in the 2.1.210 binary — it is assembled at runtime — so grepping for it
-	// proves nothing in either direction, on either branch.)
+	// literal in the binary — 0 hits at 2.1.210 and again at 2.1.220 — so grepping for
+	// it proves nothing in either direction, on either branch. See the header on
+	// composed hints.)
 	//
 	// Detecting a flip is therefore what we get instead of auditing for one, and why
 	// this is a pin rather than a comment — see internal/doctor/gates.go.
 	VerifiedGates: []VerifiedGate{{Name: "tengu_copper_thistle", Value: false}},
 
-	// The below-box footer renders "esc to interrupt" while working. #308 read its
-	// absence on a busy pane as a *responsive* hint area crowding the marker out at
-	// narrow widths; that was wrong, and the sweep in #332 corrected it. The hint list
-	// is built by plain concatenation with no width term and no priority — the interrupt
-	// hint and the "ctrl+t to hide tasks" chip render together, so a chip never displaces
-	// the marker. Confirmed live at 2.1.210: a busy pane keeps "esc to interrupt" intact
-	// at widths 200, 60 and 56.
+	// The below-box footer renders "<chord> to interrupt" while working, and the chord
+	// half is the USER'S: claude builds the hint as Be({chord: t, action: "interrupt"}),
+	// where action is a hardcoded literal but t = pc("chat:cancel", "Chat", "esc") — the
+	// display text of whatever the user bound chat:cancel to. So the marker is keyed on
+	// the invariant half. Driven at 2.1.220 (#354, 2026-07-28): rebinding chat:cancel to
+	// ctrl+q in <CLAUDE_CONFIG_DIR>/keybindings.json hot-reloaded the SAME live pane's
+	// footer from "esc to interrupt" to "ctrl+q to interrupt" and back on restore, so the
+	// old marker missed and a working session read Ready.
+	//
+	// "to interrupt" is a strict superset of the shape it replaces, so this is the #271
+	// broadening, not the two-variant union: keeping "esc to interrupt" beside it would
+	// be dead string, and TestClaudeBusyMarker still pins the default-binding footer.
+	//
+	// It does not cover UNBINDING. Be returns null on an empty chord, so chat:cancel set
+	// to null renders no hint at all — nothing is left to match and the live spinner
+	// below carries alone. That is the same fail-safe as the two causes listed further
+	// down, not a new hole.
+	//
+	// The widening it does buy: MarkerWindow 0 falls back to the last three non-empty
+	// lines when the pane shows no box border, and unlike LiveSpinner the marker has no
+	// animation gate, so a static match holds Working. Prose ending in "… to interrupt"
+	// on a borderless pane now matches where "esc to interrupt" did not. Pinned in
+	// TestClaudeBusyMarker as a known cost rather than fixed here: narrowing footerRegion
+	// would also move permission-mode detection, which shares it, and a claude pane with
+	// no border is one whose TUI is not up.
+	//
+	// #308 read the marker's absence on a busy pane as a *responsive* hint area crowding
+	// it out at narrow widths; that was wrong, and the sweep in #332 corrected it. The
+	// hint list is built by plain concatenation with no width term and no priority — the
+	// interrupt hint and the "ctrl+t to hide tasks" chip render together, so a chip never
+	// displaces the marker. Confirmed live at 2.1.210: a busy pane keeps the interrupt
+	// hint intact at widths 200, 60 and 56.
 	//
 	// Two real reasons the marker can still go missing on a working pane:
 	//   - The footer gates it on the CLI's narrowest notion of busy. The bundle tracks
@@ -128,7 +181,7 @@ var claude = &Adapter{
 	//     line overflowing, not hint selection: the hint is present, just clipped.
 	// Both fail safe — a missing marker reads idle, never a wrong action — and the live
 	// spinner below covers them, so the marker stays a valid positive signal.
-	BusyMarkers:  []string{"esc to interrupt"},
+	BusyMarkers:  []string{"to interrupt"},
 	MarkerWindow: 0, // status hints render below the input box border
 
 	// The above-box spinner status line ("<glyph> <Gerund>… (<elapsed> · …)") proves work

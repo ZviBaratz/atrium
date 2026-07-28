@@ -17,7 +17,7 @@ import (
 
 // Status hooks: an authoritative state signal for Claude Code sessions.
 //
-// Scraping the pane for the "esc to interrupt" marker cannot distinguish a "between turns"
+// Scraping the pane for the interrupt-hint marker cannot distinguish a "between turns"
 // pane from a genuinely-finished one — both lack the marker, and only what happens next
 // tells them apart. Claude Code itself knows the difference and emits it via hooks, so we
 // inject a tiny settings file (via --settings, merged with the user's own config) whose

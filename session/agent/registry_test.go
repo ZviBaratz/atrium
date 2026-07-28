@@ -83,8 +83,41 @@ func TestAutoTapRequiresAnAnchoredMatcher(t *testing.T) {
 // --- Claude fixtures (mirroring the session/tmux poll tests, which remain the
 // behavioral regression gate; these pin the same heuristics at the table level).
 
+// claudeBusyDefaultPane and claudeBusyRebindPane are the #354 A/B: the SAME live
+// claude 2.1.220 pane (tmux capture-pane, width 100, 2026-07-28), streaming the same
+// kind of turn, captured once with the default keybindings and once after rebinding
+// chat:cancel to ctrl+q in <CLAUDE_CONFIG_DIR>/keybindings.json. Claude hot-reloads
+// that file with no restart, so the two differ ONLY in the chord half of the interrupt
+// hint — which is the whole point: "esc" is the user's, "to interrupt" is claude's.
+//
+// The trailing "/rc" is a custom statusLine sharing the footer row; kept because it is
+// what the pane really rendered. The footer sits below the last horizontal rule, so
+// footerRegion finds it without the no-border fallback.
+const claudeBusyDefaultPane = `  10. The name outlived the paper. Ask it why
+
+────────────────────────────────────────────────────────────────────────────────────────────────────
+❯
+────────────────────────────────────────────────────────────────────────────────────────────────────
+  ⏸ manual mode on · esc to interrupt · ← for agents                                            /rc`
+
+const claudeBusyRebindPane = `  60. the git status, and the thing that broke, as well.
+
+────────────────────────────────────────────────────────────────────────────────────────────────────
+❯
+────────────────────────────────────────────────────────────────────────────────────────────────────
+  ⏸ manual mode on · ctrl+q to interrupt · ← for agents                                         /rc`
+
 func TestClaudeBusyMarker(t *testing.T) {
 	require.True(t, claude.HasBusyMarker("✻ Cogitating… (5s · esc to interrupt)"))
+
+	// #354: the chord is whatever the user bound chat:cancel to, so the marker must key
+	// on the action half. Both captures are live panes, not variants of one string.
+	require.True(t, claude.HasBusyMarker(claudeBusyDefaultPane), "default binding")
+	require.True(t, claude.HasBusyMarker(claudeBusyRebindPane), "rebound chat:cancel")
+	// Guards the fixture rather than the matcher: if this capture ever carried the old
+	// literal, the assertion above would pass without exercising the broadening at all.
+	require.NotContains(t, claudeBusyRebindPane, "esc to interrupt",
+		"the rebound capture must not also carry the default chord")
 
 	// The marker is found in the footer below the input box even when a
 	// variable-height team selector renders below it.
@@ -101,8 +134,11 @@ func TestClaudeBusyMarker(t *testing.T) {
 	require.True(t, claude.HasBusyMarker(working))
 
 	// The same marker text above the input box (in the transcript) must not count.
+	// This is the guard the #354 broadening had to leave intact: the box border, not the
+	// chord, is what separates live chrome from a quote, so widening the literal does not
+	// widen this. Phrased without the chord so it exercises the broadened matcher.
 	scrollback := strings.Join([]string{
-		"  I will add the \"esc to interrupt\" marker check now.",
+		"  I will add the \"to interrupt\" marker check now.",
 		"╭────────────────────────────────────────╮",
 		"│ >                                        │",
 		"╰────────────────────────────────────────╯",
@@ -110,6 +146,17 @@ func TestClaudeBusyMarker(t *testing.T) {
 		"  ● main",
 	}, "\n")
 	require.False(t, claude.HasBusyMarker(scrollback))
+
+	// The surface the broadening DOES buy, pinned so it is a known cost rather than a
+	// later surprise. With no box border on the pane, MarkerWindow 0 falls back to the
+	// last three non-empty lines (chrome.go footerRegion), and the marker carries no
+	// animation gate, so a static match holds Working. Prose that names a different chord
+	// now matches where "esc to interrupt" did not. Accepted, not desired: narrowing
+	// footerRegion would also move permission-mode detection, which shares it, and a
+	// borderless claude pane is one whose TUI is not up.
+	borderless := "  Press ctrl+c to interrupt the running command."
+	require.True(t, claude.HasBusyMarker(borderless),
+		"borderless prose matches: the accepted cost of dropping the chord")
 }
 
 func TestClaudePrompts(t *testing.T) {
