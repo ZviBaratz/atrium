@@ -226,6 +226,9 @@ const (
 	// stateHistory is the prompt-history picker, opened from an empty prompt field
 	// (create form or quick-send) to reuse a previously-submitted prompt (#388).
 	stateHistory
+	// stateCommandPalette is the fuzzy-over-every-action picker (#374): type what
+	// you want to do, enter runs it against the current selection.
+	stateCommandPalette
 )
 
 type home struct {
@@ -438,6 +441,13 @@ type home struct {
 	queueOverlay *overlay.QueueOverlay
 	// cmdLogOverlay shows the recorded tmux/git/gh subprocesses (#372).
 	cmdLogOverlay *overlay.CmdLogOverlay
+	// commandPaletteOverlay is the fuzzy-over-every-action picker (#374).
+	commandPaletteOverlay *overlay.CommandPaletteOverlay
+	// paletteRows is what the open palette's row indices mean: the overlay reports
+	// a chosen index, and this says which action that index runs. Rebuilt on every
+	// open (an action's availability is a function of the moment) and dropped on
+	// close, so a stale index can never resolve to an action.
+	paletteRows []paletteRow
 	// queueTarget is the instance the queue overlay was opened for; a cancel acts
 	// on it even if the selection moves (mirrors renameTarget).
 	queueTarget *session.Instance
@@ -717,6 +727,11 @@ func (m *home) View() string {
 			log.ErrorLog.Printf("command-log overlay is nil")
 		}
 		return overlay.PlaceOverlay(0, 0, m.cmdLogOverlay.Render(), mainView, true)
+	} else if m.state == stateCommandPalette {
+		if m.commandPaletteOverlay == nil {
+			log.ErrorLog.Printf("command palette overlay is nil")
+		}
+		return overlay.PlaceOverlay(0, 0, m.commandPaletteOverlay.Render(), mainView, true)
 	} else if m.state == stateSettings {
 		if m.settingsOverlay == nil {
 			log.ErrorLog.Printf("settings overlay is nil")

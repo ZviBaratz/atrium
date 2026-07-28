@@ -18,9 +18,14 @@ them** — one `grep -c` is cheaper than a wrong claim:
 
 ```sh
 grep -cE '^\t\{Name:' keys/registry.go        # registry entries
-grep -c 'case keys.Key' app/app_update.go      # dispatch cases
+grep -c 'case keys.Key' app/app_update.go      # dispatch-case LINES, not names
+grep -c '^func Test' app/dispatch_coverage_test.go   # the site-4 guards
 awk '/^type Config struct/,/^}/' config/types.go | grep -cE '`json:'   # Config fields
 ```
+
+The dispatch count is *lines*, and several cases carry two or three names
+(`case keys.KeyMoveUp, keys.KeyMoveDown:`), so it is always below the number of
+actions — that is expected, not a shortfall.
 
 That last one has to be scoped to the struct. Counting json tags across the whole
 file gives 59, because `Profile`, `ClaudeAccount`, `AgyAccount` and `GHAccount` live
@@ -44,17 +49,17 @@ cannot install it. Once per machine:
 
 `enabledPlugins` does the rest. Until you run it the skill simply will not resolve.
 
-## Adding a keybinding — 7 sites, 6 guarded
+## Adding a keybinding — 7 sites, all guarded
 
-At last count: **57 registry entries, 46 dispatch cases, 12 drift guards** across
-`keys/*_test.go`.
+At last count: **58 registry entries, 48 dispatch-case lines, 12 drift guards** in
+`keys/*_test.go` plus **4** in `app/dispatch_coverage_test.go`.
 
 | # | Site | Guarded by |
 |---|---|---|
-| 1 | `keys/keys.go` — the `KeyName` const, with a doc comment | `revive:exported` via `just lint` |
+| 1 | `keys/keys.go` — the `KeyName` const, with a doc comment | `revive:exported` via `just lint`; `TestKeyNames_AllRegisteredOrDeliberatelyAbsent` |
 | 2 | `keys/registry.go` — the `Entry` (`WithKeys` + `WithHelp`, plus `Layer`/`DocOnly`) | `TestRegistry_NoDuplicateKeyStrings`, `TestRegistry_LayerTags`, `TestRegistry_DocumentedOnlyEntries` |
 | 3 | `keys/help_layout.go` — a `HelpRow` in `HelpGroups`, or a `Mentions` entry | `TestHelpGroups_CoverEveryBinding` (fails structurally, before any rendering) |
-| 4 | `app/app_update.go` — `case keys.KeyX:` in `handleKeyPress` | **nothing — see below** |
+| 4 | `app/app_update.go` — `case keys.KeyX:` in `dispatchAction` | `TestEveryRegistryActionHasADispatchCase` — see below |
 | 5 | `keys/registry_test.go` — the string→action pair in the golden inventory | itself (`TestGlobalKeyStringsMap_GoldenInventory`) |
 | 6 | `README.md` `#### Keybindings` — backtick-wrapped, in that section | `TestReadmeDocumentsEveryBinding` |
 | 7 | `app/app_update.go` `keyAllowedWhileBusy` — *only if* it must work during an async action | manual |
@@ -63,14 +68,24 @@ Plus, situationally: `ui/menu.go`'s context hint sets (`defaultHintKeys` and
 friends) if the key should appear in the bar — guarded in the reverse direction
 only, by `ui/menu_scan_test.go`.
 
-**Site 4 is the real gap, and it is unguarded for a legitimate reason.** 57
-entries against 46 cases is not 11 missing cases: 3 entries are `DocOnly`, the
-screensaver is deliberately absent from the registry, and several keys are handled
-in the state prelude's if-chain (`esc`, `ctrl+l`, mode keys) rather than the
-switch. So a naive "every entry has a case" assertion would false-positive, which
-is why nobody wrote one. **Consequence: a key can be registered, documented,
-README'd, and completely dead.** After adding one, press it — or drive it through
-`handleKeyPress` in a test. Do not infer from a green suite that it works.
+**Site 4 was the gap until #374 closed it.** The count mismatch is why nobody had
+written the obvious assertion: 58 entries against 48 case *lines* is not 10
+missing cases, because several cases carry two or three names at once, 3 entries
+are `DocOnly`, the screensaver is deliberately absent from the registry, and
+`space` is consumed by the multi-select handler rather than the switch — so
+"every entry has a case" would false-positive on all of them.
+
+What closed it was extracting the switch into `dispatchAction` and then reading
+its `case` labels **out of the source** with `go/ast`.
+`TestEveryRegistryActionHasADispatchCase` requires every dispatched entry to have
+a case or a `dispatchExempt` reason naming the handler that owns its key instead,
+and `TestEveryDispatchExemptionIsRealAndReasoned` rejects an exemption that names
+a nonexistent key, one that already has a case, or offers no reason.
+
+**It still only proves the case exists.** A case that dispatches to the wrong
+handler, or to one whose guards refuse silently, passes. After adding a key,
+press it — or drive it through `handleKeyPress` in a test. Do not infer from a
+green suite that it does what you meant.
 
 Two cross-layer pins worth knowing exist, because they fail in surprising places:
 
@@ -137,7 +152,16 @@ lie. Don't "fix" them.
 
 - Add it to `app/statemachine_test.go`'s `states[]` **with a `wire` func** that
   arms the overlay production would keep, or the state is swept in a
-  half-constructed shape and the interesting dereference never happens.
+  half-constructed shape and the interesting dereference never happens. Prefer
+  wiring through the real opener over assigning the overlay field by hand: an
+  overlay that comes with sibling state (the palette's row table) is only
+  half-armed otherwise, which is the dereference the sweep exists to find.
+- Add it to `app/view_bounds_test.go`'s overlay map if it renders a box. That is
+  the test that actually holds a state to 80×24 — it asserts the *composed frame*,
+  so it is the only one that sees an overlay whose own tests measured lines
+  lipgloss had already padded to a uniform width. `SetSize` semantics are the
+  usual defect here: lipgloss sizes the content box and draws the border *outside*
+  it, so a style given `Width(w)` renders `w+2` columns.
 - Overlay states must be handled **before** the global quit/esc keys in
   `app/app_update.go`'s prelude, or `q` quits while the user is typing. Each
   branch there carries its ordering constraint as a comment; keep that up.

@@ -27,19 +27,23 @@ fi
 case "$path" in
 *keys/registry.go)
 	cat >&2 <<-'EOF'
-		keys/registry.go touched — a keybinding has 7 sites. 6 are guarded; site 4 is not.
+		keys/registry.go touched — a keybinding has 7 sites, and all 7 are now guarded.
 
 		  1 keys/keys.go            KeyName const + doc comment
 		  2 keys/registry.go        the Entry                      <- you are here
 		  3 keys/help_layout.go     a HelpRow (or a Mentions)
-		  4 app/app_update.go       case keys.KeyX: in handleKeyPress   <- NO GUARD
+		  4 app/app_update.go       case keys.KeyX: in dispatchAction
 		  5 keys/registry_test.go   the golden inventory pair
 		  6 README.md               `#### Keybindings`, backticked
 		  7 app/app_update.go       keyAllowedWhileBusy, if it must work mid-action
 
-		Nothing asserts a registered key has a dispatch case, so a key can ship
-		registered, documented, README'd — and dead. Press it, or drive it through
-		handleKeyPress in a test. See .claude/skills/tui-drift-sites/SKILL.md.
+		Site 4 used to be the hole — a key could ship registered, documented,
+		README'd and dead. TestEveryRegistryActionHasADispatchCase closes it by
+		reading dispatchAction's case labels out of the source.
+
+		It proves the case exists, not that it does the right thing. Still press the
+		key, or drive it through handleKeyPress in a test.
+		See .claude/skills/tui-drift-sites/SKILL.md.
 	EOF
 	exit 2
 	;;

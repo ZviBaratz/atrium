@@ -132,6 +132,13 @@ const (
 	// custom override that never fights this cycle.
 	KeyLayoutPreset
 
+	// KeyCommandPalette opens the fuzzy-over-every-action picker: type what you
+	// want to do, run it in the current context. Its rows are generated from this
+	// registry and each shows its own key, so the palette documents the keymap it
+	// substitutes for. ctrl+p, the palette convention elsewhere, is taken here by
+	// pause-all.
+	KeyCommandPalette
+
 	// KeyScreensaver shows the configured splash pattern full-window until any
 	// key (or click) dismisses it. A deliberate easter egg: it has no Registry
 	// entry (and therefore no GlobalKeyBindings entry), so it never appears in

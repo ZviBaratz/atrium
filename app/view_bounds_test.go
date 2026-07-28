@@ -44,6 +44,13 @@ func TestViewFitsTerminalBounds(t *testing.T) {
 		// "unmatched repos" hint renders — it is the one line rowWindow charges
 		// unconditionally, and without it the budget has a spare row that absorbs the
 		// first wrap.
+		// The palette is the widest generated surface in the app: three columns of
+		// registry-derived text, none of it authored to a width. At 80x24 its box is
+		// 68 columns against prose written for the ? screen, so the row builder has
+		// to be the thing that truncates — this is what proves it is.
+		"command palette": func(_ *testing.T, h *home) {
+			h.openCommandPalette()
+		},
 		"accounts": func(_ *testing.T, h *home) {
 			for i := 0; i < 30; i++ {
 				h.appConfig.ClaudeAccounts = append(h.appConfig.ClaudeAccounts, config.ClaudeAccount{

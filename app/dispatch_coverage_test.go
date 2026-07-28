@@ -27,14 +27,6 @@ import (
 // actions and runs them by name, so a missing case stops being a key nobody
 // noticed was dead and becomes a visible row that does nothing.
 
-// dispatchExempt names the registered actions that deliberately have no case in
-// dispatchAction, and why. An exemption is a claim that the action is handled
-// somewhere else — never that it is unhandled.
-var dispatchExempt = map[keys.KeyName]string{
-	keys.KeyToggleMark: "consumed only by handleMultiSelectState; space marks a row in " +
-		"multi-select mode and does nothing in the default state (keys.go says so too)",
-}
-
 // TestEveryRegistryActionHasADispatchCase is direction 1: every dispatched
 // Registry entry must have somewhere to land.
 func TestEveryRegistryActionHasADispatchCase(t *testing.T) {

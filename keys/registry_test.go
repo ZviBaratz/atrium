@@ -69,6 +69,7 @@ func TestGlobalKeyStringsMap_GoldenInventory(t *testing.T) {
 		"3":          KeyTabTerminal,
 		",":          KeySettings,
 		"@":          KeyAccounts,
+		"ctrl+k":     KeyCommandPalette,
 		"ctrl+q":     KeyAttachToggle,
 		"f":          KeyHints,
 		"a":          KeyApprove,
