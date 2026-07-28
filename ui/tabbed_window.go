@@ -2,8 +2,10 @@ package ui
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
+	"github.com/ZviBaratz/atrium/hints"
 	"github.com/ZviBaratz/atrium/log"
 	"github.com/ZviBaratz/atrium/session"
 	"github.com/ZviBaratz/atrium/session/tmux"
@@ -223,6 +225,47 @@ func (w *TabbedWindow) UpdateTerminal(instance *session.Instance) error {
 // ResetPreviewToNormalMode resets the preview pane to normal mode
 func (w *TabbedWindow) ResetPreviewToNormalMode(instance *session.Instance) error {
 	return w.preview.ResetToNormalMode(instance)
+}
+
+// CopyableContent returns the active tab's content as plain text, and a label
+// naming what it is, for the copy action (#380). "Plain" is the whole point: the
+// alt-screen makes a mouse selection take borders and gutters with it, and the
+// rendered diff is colorized, tab-expanded and truncated to the pane, so neither
+// is worth pasting anywhere.
+//
+//   - Diff tab: the raw `git diff` output the pane rendered FROM — or, in comment
+//     mode, just the rows the cursor has selected.
+//   - Preview / Terminal: the captured pane with its ANSI stripped.
+//
+// ok is false when there is nothing to copy (an empty diff, a pane that has never
+// captured, a fallback state), so the caller can say so rather than copying "".
+func (w *TabbedWindow) CopyableContent(instance *session.Instance) (text, what string, ok bool) {
+	switch w.activeTab {
+	case DiffTab:
+		if sel := w.diff.SelectedText(); sel != "" {
+			return sel, "selected diff lines", true
+		}
+		if instance == nil {
+			return "", "", false
+		}
+		stats := instance.GetDiffStats()
+		if stats == nil || strings.TrimSpace(stats.Content) == "" {
+			return "", "", false
+		}
+		return stats.Content, "diff", true
+	case TerminalTab:
+		content, live := w.terminal.LiveContent()
+		if !live {
+			return "", "", false
+		}
+		return hints.StripANSI(content), "terminal", true
+	default:
+		content, live := w.preview.LiveContent()
+		if !live {
+			return "", "", false
+		}
+		return hints.StripANSI(content), "pane", true
+	}
 }
 
 // TerminalCaptureTarget exposes the terminal pane's shell session for the app's

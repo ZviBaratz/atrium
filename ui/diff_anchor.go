@@ -143,6 +143,24 @@ func (d *DiffPane) selectedRows() []diffRow {
 	return out
 }
 
+// SelectedText returns the raw text of the rows the comment cursor has selected,
+// exactly as git wrote them — no styling, no truncation, no line numbers. It is
+// what the copy action yields in comment mode, so a reviewer can lift the hunk
+// they were reading straight into a message.
+//
+// Empty when not in comment mode: the caller falls back to the whole diff.
+func (d *DiffPane) SelectedText() string {
+	rows := d.selectedRows()
+	if len(rows) == 0 {
+		return ""
+	}
+	lines := make([]string, 0, len(rows))
+	for _, r := range rows {
+		lines = append(lines, r.text)
+	}
+	return strings.Join(lines, "\n")
+}
+
 // nextAnnotatable returns the index of the first annotatable row strictly past
 // `from` in direction dir (+1/-1), or -1 if there is none (so ends clamp).
 func (d *DiffPane) nextAnnotatable(from, dir int) int {

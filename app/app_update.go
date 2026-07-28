@@ -1001,6 +1001,8 @@ func (m *home) dispatchAction(name keys.KeyName) (tea.Model, tea.Cmd) {
 		return m.openCommandPalette()
 	case keys.KeyApprove:
 		return m.approveSelected()
+	case keys.KeyCopyContent:
+		return m.copyPaneContent()
 	case keys.KeyCopyBranch:
 		return m.copySelectedBranch()
 	case keys.KeyHints:
@@ -1201,7 +1203,10 @@ func keyAllowedWhileBusy(name keys.KeyName) bool {
 		keys.KeyShiftUp, keys.KeyShiftDown, keys.KeyShrinkList, keys.KeyGrowList,
 		keys.KeyLayoutPreset,
 		keys.KeyTab, keys.KeyShiftTab, keys.KeyTabPreview, keys.KeyTabDiff, keys.KeyTabTerminal,
-		keys.KeyCollapse, keys.KeyExpand, keys.KeyCollapseAll:
+		keys.KeyCollapse, keys.KeyExpand, keys.KeyCollapseAll,
+		// Copying reads cached content and writes the clipboard; it mutates no
+		// session state, so there is nothing for an in-flight action to race.
+		keys.KeyCopyContent:
 		return true
 	default:
 		return false

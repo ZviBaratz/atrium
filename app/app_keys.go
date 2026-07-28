@@ -8,6 +8,7 @@ package app
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/ZviBaratz/atrium/config"
@@ -616,6 +617,27 @@ func (m *home) copySelectedBranch() (tea.Model, tea.Cmd) {
 		return m, m.handleError(fmt.Errorf("copy branch: %w", err))
 	}
 	return m, m.handleInfoNotice(fmt.Sprintf("branch '%s' copied", selected.Branch))
+}
+
+// copyPaneContent copies the active tab's content to the clipboard, unstyled.
+//
+// This is the answer to the standing complaint about full-screen TUIs: dragging a
+// mouse selection across the alt-screen takes the borders, the gutter and the
+// neighbouring pane's text with it, so nothing copied that way is worth pasting.
+// The clipboard transport is already SSH-safe (OSC 52, #395); what was missing was
+// content clean enough to send through it.
+func (m *home) copyPaneContent() (tea.Model, tea.Cmd) {
+	text, what, ok := m.tabbedWindow.CopyableContent(m.list.GetSelectedInstance())
+	if !ok {
+		return m, m.handleInfoNotice("nothing to copy from this tab yet")
+	}
+	if err := actions.CopyToClipboard(text); err != nil {
+		return m, m.handleError(fmt.Errorf("copy %s: %w", what, err))
+	}
+	// The line count is the receipt: a clipboard write is otherwise invisible, and
+	// "copied" alone cannot distinguish the whole diff from one selected hunk.
+	lines := strings.Count(strings.TrimRight(text, "\n"), "\n") + 1
+	return m, m.handleInfoNotice(fmt.Sprintf("%s copied (%d line%s)", what, lines, plural(lines)))
 }
 
 // openRenameSelected opens the rename overlay for the selected session.

@@ -197,6 +197,19 @@ func (t *TerminalPane) UpdateContent(instance *session.Instance) error {
 	return nil
 }
 
+// LiveContent returns the shell text the pane is currently rendering, and whether
+// it is real content rather than a fallback or a frozen scroll snapshot. It is the
+// terminal twin of PreviewPane.LiveContent, and exists for the same reason: the
+// copy action needs the captured text, not String()'s trimmed and styled render.
+func (t *TerminalPane) LiveContent() (string, bool) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.fallback || t.isScrolling {
+		return "", false
+	}
+	return t.content, t.content != ""
+}
+
 // CaptureTarget returns the shell session to capture for instance, its cache key,
 // and whether one exists yet. Main-thread, lock-only, and deliberately free of the
 // has-session probe liveCurrentSession used to run *while holding t.mu* — the same
