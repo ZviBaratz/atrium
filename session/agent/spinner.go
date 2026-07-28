@@ -7,7 +7,8 @@ import (
 
 // Live-spinner detection for claude (2.1.210).
 //
-// Claude's busy footer marker ("esc to interrupt") is not guaranteed on a working pane.
+// Claude's busy footer marker (the interrupt hint, matched on "to interrupt" since #354
+// broadened it off the user-rebindable chord) is not guaranteed on a working pane.
 // #308 attributed that to a responsive, prioritized hint area crowding the marker out
 // when a session accrues contextual chips (a "PR #NNN" link, "ctrl+t to hide tasks",
 // "N shell", "1 monitor", "↓ to manage"). The #332 sweep falsified that: the footer's

@@ -757,6 +757,24 @@ func TestMarkerWorkingAnchorsBelowInputBox(t *testing.T) {
 		"a marker above the input box (in the transcript) is ignored")
 }
 
+// #354: the chord in claude's interrupt hint is the display text of whatever the user
+// bound chat:cancel to, so a rebind used to make a working session read Ready. Driven at
+// 2.1.220 — the same live pane rendered "esc to interrupt" and then "ctrl+q to interrupt"
+// under a hot-reloaded keybindings.json (session/agent/registry_test.go carries both
+// captures). This is the behavioral half: the table test proves HasBusyMarker matches,
+// this proves the poller reaches PaneWorking through it.
+func TestPollWorkingSurvivesRebindOfChatCancel(t *testing.T) {
+	rule := strings.Repeat("─", 60)
+	for name, footer := range map[string]string{
+		"default binding":     "  ⏸ manual mode on · esc to interrupt · ← for agents",
+		"rebound chat:cancel": "  ⏸ manual mode on · ctrl+q to interrupt · ← for agents",
+	} {
+		c := "⏺ Writing the poem…\n" + rule + "\n❯ \n" + rule + "\n" + footer
+		s := pollSession(t, "claude", &c, nil)
+		require.Equal(t, PaneWorking, s.Poll(), "%s: a busy pane must not read idle", name)
+	}
+}
+
 // Codex renders its status row ("Working (12s • esc to interrupt)") *above* the
 // composer, outside claude's below-the-box footer anchor; the adapter's bottom-window
 // confinement must still find it, hold across counter ticks, and read its approval
