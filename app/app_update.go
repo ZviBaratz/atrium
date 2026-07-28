@@ -11,6 +11,7 @@ import (
 	"github.com/ZviBaratz/atrium/keys"
 	"github.com/ZviBaratz/atrium/log"
 	"github.com/ZviBaratz/atrium/session"
+	"github.com/ZviBaratz/atrium/session/tmux"
 	"github.com/ZviBaratz/atrium/ui"
 	"github.com/ZviBaratz/atrium/ui/overlay"
 
@@ -21,7 +22,12 @@ import (
 // wheelScrollLines is how many lines one mouse-wheel notch scrolls the preview
 // pane in scroll mode. A notch moves several lines for a fluid feel; the
 // keyboard scroll keys move one line for precise positioning.
-const wheelScrollLines = 3
+//
+// Aliased from the tmux package rather than spelled again: the same notch distance is
+// rendered into the managed tmux config's wheel bindings, so a pane of an attached
+// session and the preview pane of the same session scroll the same amount. Two
+// independent literals (which is what this was) drift with nothing to catch it.
+const wheelScrollLines = tmux.WheelScrollLines
 
 // cleanupTerminalForInstance tears down an instance's cached preview terminal.
 // It is a package var (method expression) so batch-outcome tests can swap in a
