@@ -1148,3 +1148,71 @@ func TestProfilesHintNamesEveryLiveKey(t *testing.T) {
 	assert.Contains(t, stripANSI(o.hintLine()), "/ search",
 		"the filter stays advertised at the floor — ⇥ pane yields before it")
 }
+
+// TestAnArmedDeleteTargetsTheRecordItNamed. The prompt names a record and `y` deletes one; those
+// must be the same record.
+//
+// They are not automatically: a detection landing between the two moves the cursor onto the
+// record it just added (so D and n agree about where you end up), and the confirmation used to
+// splice at the live cursor. Press D, arm a delete, let the probe return — and `y` deleted the
+// freshly detected profile while the prompt on screen named a different one. The window is real:
+// the shell probe takes long enough to press `d` inside it.
+//
+// The form already captures its target as editIndex; this is the same discipline for the
+// confirmation, and it is what makes the prompt and the splice read one source across time
+// rather than the same expression at two instants.
+func TestAnArmedDeleteTargetsTheRecordItNamed(t *testing.T) {
+	cfg := threeProfiles()
+	o := NewSettingsOverlay(cfg)
+	o.SetSize(100, 32)
+	profilesAt(t, o)
+	_, _ = o.HandleKeyPress(keyRunes("j")) // aider, not the default
+	_, _ = o.HandleKeyPress(keyRunes("D"))
+	_, _ = o.HandleKeyPress(keyRunes("d"))
+	require.True(t, o.profileConfirm)
+	prose, _ := o.profilesHelp()
+	require.Contains(t, prose, "aider", "precondition: the prompt names aider")
+
+	// The probe returns and appends a record; the cursor follows it.
+	cfg.Profiles = append(cfg.Profiles, config.Profile{Name: "gemini", Program: "gemini"})
+	o.NoteProfilesDetected([]string{"gemini"}, "added profiles: gemini")
+
+	prose, _ = o.profilesHelp()
+	assert.Contains(t, prose, "aider", "the prompt still names the record it armed on")
+
+	_, changed := o.HandleKeyPress(keyRunes("y"))
+	assert.Equal(t, profilesChangedKey, changed)
+	assert.Equal(t, []string{"claude", "codex", "gemini"}, profileNames(cfg),
+		"y deletes the record the prompt named, not the one the cursor drifted to")
+}
+
+// TestDeletingAboveTheCursorKeepsItOnItsRecord. The confirmation splices at its captured target,
+// which need not be where the cursor is — so the cursor has to move with the list rather than
+// keep an index that now names its neighbour.
+//
+// The case is CONSTRUCTED. The only thing that moves the cursor while a confirmation is armed is
+// a detection landing, and detection appends, so the cursor is always last and clampProfileCursor
+// masks the difference. That coincidence is exactly why this is pinned directly: a future mover
+// that inserts rather than appends would otherwise slide the selection onto the wrong record with
+// nothing failing.
+func TestDeletingAboveTheCursorKeepsItOnItsRecord(t *testing.T) {
+	cfg := profilesCfg("none",
+		config.Profile{Name: "a", Program: "a"},
+		config.Profile{Name: "b", Program: "b"},
+		config.Profile{Name: "c", Program: "c"},
+		config.Profile{Name: "d", Program: "d"},
+	)
+	o := NewSettingsOverlay(cfg)
+	o.SetSize(100, 32)
+	profilesAt(t, o)
+
+	_, _ = o.HandleKeyPress(keyRunes("d")) // arm on "a", index 0
+	require.True(t, o.profileConfirm)
+	o.profileCursor = 2 // the cursor drifted onto "c", below the armed record
+	_, changed := o.HandleKeyPress(keyRunes("y"))
+
+	assert.Equal(t, profilesChangedKey, changed)
+	require.Equal(t, []string{"b", "c", "d"}, profileNames(cfg), "the armed record went")
+	assert.Equal(t, "c", cfg.Profiles[o.profileCursor].Name,
+		"the cursor follows its own record down, rather than keeping an index that now names d")
+}

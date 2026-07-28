@@ -148,15 +148,16 @@ type settingRow struct {
 	// at 74 cells so it never wraps at the 80-column floor (TestSummaryFitsOneLine).
 	summary string
 	// detail is the optional long-form help: the value grammar, cautions, and
-	// cross-references that used to be crammed into one description. PR B renders it
-	// behind `?`; PR A only stores it, so the content is in place before the surface
-	// that shows it exists.
+	// cross-references that used to be crammed into one description. It is rendered
+	// behind `?` (expandedHelpContent), and its first sentence is the help pane's
+	// fallback for a row whose current value has no gloss.
 	detail string
 	timing applyTiming // when a change takes effect
 	// caution is a short warning the footer appends after "·", for a setting whose
 	// effect reaches somewhere the user would not expect. It is deliberately separate
-	// from both timing (a caution is not a schedule) and detail (which PR A does not
-	// render, so a caution parked there would be invisible). Keep it to a clause.
+	// from both timing (a caution is not a schedule) and detail (which is only visible
+	// behind `?`, so a caution parked there would wait to be asked for). Keep it to a
+	// clause.
 	caution string
 
 	get func(c *config.Config) string // display value
@@ -172,8 +173,7 @@ type settingRow struct {
 	gloss map[string]string
 
 	// defaultDisplay returns the display string of the built-in default, for the
-	// "changed from default" marker. PR B's renderer calls it per row per frame; PR A
-	// only stores it, so the constraint is stated here before the caller exists. It
+	// "changed from default" marker. The renderer calls it per row per frame, so it
 	// MUST stay pure — no exec, no filesystem — and in particular must never call
 	// config.DefaultConfig(), which resolves the OS user to derive branch_prefix.
 	//
@@ -188,9 +188,8 @@ type settingRow struct {
 	// with no fixed default.
 	reset func(c *config.Config)
 	// activeWhen reports whether changing the row currently has any effect. nil means
-	// always active. PR B dims an inert row and gives it a reason chip while leaving it
-	// fully editable — a user may configure ahead of enabling the parent (spec §5); PR A
-	// only stores the predicate, so nothing is dimmed yet.
+	// always active. An inert row is dimmed and carries a reason chip while staying
+	// fully editable — a user may configure ahead of enabling the parent (spec §5).
 	activeWhen func(c *config.Config) bool
 }
 

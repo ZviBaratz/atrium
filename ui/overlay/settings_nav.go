@@ -21,9 +21,8 @@ const (
 )
 
 // railKind distinguishes the four things a settings rail entry can be. Ten of the
-// thirteen entries project a settingCategory; the other three own no settingRows of
-// their own, which is why the rail is its own vocabulary rather than allCategories()
-// alone.
+// thirteen entries project a settingCategory; the other three do not, which is why the
+// rail is its own vocabulary rather than allCategories() alone.
 //
 // "Owns no rows" stopped being one fact when railProfiles arrived: it owns a focusable
 // pane over cfg.Profiles, while railHandoff owns no pane either. That split is stated by

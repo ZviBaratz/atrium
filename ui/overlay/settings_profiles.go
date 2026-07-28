@@ -180,7 +180,7 @@ func (s *SettingsOverlay) NoteProfilesDetected(added []string, text string) (sho
 // panel makes impossible to change. Name the action that actually works instead.
 func (s *SettingsOverlay) armProfileDelete() {
 	if s.cfg.Profiles[s.profileCursor].Name != s.cfg.DefaultProgram {
-		s.profileConfirm = true
+		s.profileConfirm, s.profileConfirmIdx = true, s.profileCursor
 		return
 	}
 	if len(s.cfg.Profiles) == 1 {
@@ -197,8 +197,12 @@ func (s *SettingsOverlay) handleProfileConfirmKey(msg tea.KeyMsg) (changedKey st
 	switch msg.String() {
 	case "y", "enter":
 		s.profileConfirm = false
-		i := s.profileCursor
+		i := s.profileConfirmIdx
 		s.cfg.Profiles = append(s.cfg.Profiles[:i], s.cfg.Profiles[i+1:]...)
+		if s.profileCursor > i {
+			// The cursor was below the deleted record, so it stays on whatever it was on.
+			s.profileCursor--
+		}
 		s.clampProfileCursor()
 		return profilesChangedKey
 	case "n", "esc", "ctrl+c":
@@ -323,8 +327,8 @@ func (s *SettingsOverlay) handleProfileFormKey(msg tea.KeyMsg) (changedKey strin
 	}
 }
 
-// validateProfile rejects an empty name, an empty program, and a name another record already
-// uses. It returns "" when valid, matching AccountsOverlay.validate — a string rather than an
+// validateProfile rejects an empty name, a name another record already uses, and an empty
+// program — in that order, for the reason below. It returns "" when valid, matching AccountsOverlay.validate — a string rather than an
 // error because it is rendered prose, not a wrapped failure.
 //
 // A program is required where the accounts form lets a config dir be blank: an empty program is
@@ -521,9 +525,10 @@ func (s *SettingsOverlay) profileFormLines(width int) []paneLine {
 func (s *SettingsOverlay) profilesHelp() (prose string, danger bool) {
 	switch {
 	case s.profileConfirm:
-		// Armed by armProfileDelete. It outranks everything below because the other states are
-		// impossible while it is up, and stating the order makes that structural.
-		return "Delete profile " + strconv.Quote(s.cfg.Profiles[s.profileCursor].Name) +
+		// Armed by armProfileDelete. It outranks everything below deliberately: a detection can
+		// still land while a confirmation is up, and a background result must not displace the
+		// question the user is being asked. The note is not lost — it shows once y or n answers.
+		return "Delete profile " + strconv.Quote(s.cfg.Profiles[s.profileConfirmIdx].Name) +
 			"? This cannot be undone.", true
 	case s.profileDetecting:
 		// Derived from the in-flight flag, NOT from profileNote — which handleProfilesKey clears

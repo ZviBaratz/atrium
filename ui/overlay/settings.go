@@ -101,6 +101,11 @@ type SettingsOverlay struct {
 	profileCursor  int
 	profileForm    *profileForm
 	profileConfirm bool
+	// profileConfirmIdx is the record an armed delete is about, captured when it is armed —
+	// the same discipline profileForm.editIndex uses. The cursor can move between the key
+	// that arms the confirmation and the key that answers it (a detection landing follows
+	// the record it added), and a prompt that named one record must not delete another.
+	profileConfirmIdx int
 	// profileNote is a one-keypress informational line for the editor's help pane — a detection
 	// result. It is not lastErr: "no new agents detected" is an outcome, not a failure, and the
 	// help pane paints lastErr in DangerStyle.
