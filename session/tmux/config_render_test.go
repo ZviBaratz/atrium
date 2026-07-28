@@ -1,6 +1,7 @@
 package tmux
 
 import (
+	"fmt"
 	"regexp"
 	"strings"
 	"testing"
@@ -107,9 +108,12 @@ func TestRenderManagedConfigScrollKeys(t *testing.T) {
 			`bind-key -n S-Down if-shell -F '#{alternate_on}' 'send-keys S-Down' { copy-mode -e ; send-keys -X scroll-down }`,
 			"bind-key -T copy-mode-vi S-Up send-keys -X scroll-up",
 			"bind-key -T copy-mode-vi S-Down send-keys -X scroll-down",
-			// A wheel notch matches the TUI's wheelScrollLines, not tmux's 5.
-			`bind-key -T copy-mode-vi WheelUpPane select-pane \; send-keys -X -N 3 scroll-up`,
-			`bind-key -T copy-mode-vi WheelDownPane select-pane \; send-keys -X -N 3 scroll-down`,
+			// A wheel notch matches the preview pane's, not tmux's 5. Built from the
+			// shared constant, not a literal: a literal here would re-create the second
+			// home the constant exists to remove, and would keep passing while the
+			// template hardcoded a number the preview pane no longer uses.
+			fmt.Sprintf(`bind-key -T copy-mode-vi WheelUpPane select-pane \; send-keys -X -N %d scroll-up`, WheelScrollLines),
+			fmt.Sprintf(`bind-key -T copy-mode-vi WheelDownPane select-pane \; send-keys -X -N %d scroll-down`, WheelScrollLines),
 			// The copy-mode-vi table is only reachable with mode-keys vi; without
 			// this line every binding above lands in a table tmux never consults.
 			"set-window-option -g mode-keys vi",
