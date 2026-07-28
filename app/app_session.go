@@ -710,7 +710,10 @@ func (m *home) pauseAll() tea.Cmd {
 // living in it — a local .env, a build cache, downloaded dependencies — go with it,
 // and resume rebuilds the worktree from the branch. The README documents only the
 // carry_files slice of this (those entries are re-seeded on every Setup, resume
-// included); nothing names the general loss, and no undo exists.
+// included); nothing names the general loss, and nothing brings those files back.
+// Undo (#391) does not change that: it restores the branch, the worktree and the
+// agent, but a gitignored file was never in a commit for it to restore from — which
+// is why the undo confirmation names the same loss in its own words.
 //
 // Unconditional, unlike killDataWarning: a pause that completes removes the worktree,
 // so only the magnitude of the loss varies, and measuring that would mean a
@@ -1703,25 +1706,39 @@ func (m *home) cancelPromptOverlay() tea.Cmd {
 }
 
 // killDataWarning returns a parenthetical suffix for the kill confirmation that
-// warns when killing would discard local work, or "" when nothing is at risk.
+// names the local work a kill puts at stake, or "" when there is none.
+//
 // unpushed is the count of commits that exist nowhere but this branch: kill runs
 // `git branch -D` and never touches origin, so a pushed commit survives the session
 // and must not be warned about — a branch sitting in an open PR loses nothing.
 // Pause folds its auto-WIP commit in via noteAutoPauseCommit, so a paused-then-dirty
-// session reads Dirty=false with unpushed>=1. Every non-empty case names the
-// consequence: kill removes the worktree and `branch -D`s the branch, so uncommitted
-// changes are destroyed just as permanently as unpushed commits, with no user-facing
-// recovery path for either.
+// session reads Dirty=false with unpushed>=1.
+//
+// The consequence clause used to read "deleting discards this work", and that was
+// true for as long as kill was the one unrecoverable thing Atrium did. It is not
+// any more: the teardown commits what is uncommitted and pins the branch under a
+// retention ref, so the work comes back with the session (#391). What stays
+// off-screen at the moment of asking — and so what this still has to say — is that
+// the work exists and that the window is finite. The horizon is read from
+// undo.TTL rather than spelled out, so the sentence cannot outlive the constant.
 func killDataWarning(dirty bool, unpushed int) string {
 	switch {
 	case dirty && unpushed > 0:
-		return fmt.Sprintf(" (has uncommitted changes and %d unpushed commit%s — deleting discards this work)", unpushed, plural(unpushed))
+		return fmt.Sprintf(" (has uncommitted changes and %d unpushed commit%s — %s)",
+			unpushed, plural(unpushed), undoWindowClause())
 	case dirty:
-		return " (has uncommitted changes — deleting discards this work)"
+		return fmt.Sprintf(" (has uncommitted changes — %s)", undoWindowClause())
 	case unpushed > 0:
-		return fmt.Sprintf(" (has %d unpushed commit%s — deleting discards this work)", unpushed, plural(unpushed))
+		return fmt.Sprintf(" (has %d unpushed commit%s — %s)", unpushed, plural(unpushed), undoWindowClause())
 	}
 	return ""
+}
+
+// undoWindowClause names the key and the horizon a kill can be taken back within.
+// Both are derived — the key from the registry, the horizon from undo.TTL — so a
+// rebinding or a retention change cannot leave this sentence lying.
+func undoWindowClause() string {
+	return fmt.Sprintf("%s restores it for %d days", undoKeyLabel(), int(undo.TTL.Hours()/24))
 }
 
 // sessionsWithUnpushedWork counts how many of insts carry uncommitted changes or

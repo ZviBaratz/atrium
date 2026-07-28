@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/ZviBaratz/atrium/internal/undo"
+	"github.com/ZviBaratz/atrium/keys"
 	"github.com/ZviBaratz/atrium/session"
 	"github.com/ZviBaratz/atrium/session/git"
 	"github.com/stretchr/testify/assert"
@@ -293,4 +294,14 @@ func TestARefusedRestoreCreatesNothing(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, stored, 1, "the record survives so the user can act on the refusal")
 	assert.True(t, stored[0].Restorable(time.Now()))
+}
+
+// TestUndoIsSingleFlight. Two presses before the restore returns would run the same
+// record twice, and the second would try to recreate a branch and a worktree the
+// first already claimed. Nothing in the undo path guards that — the busy gate does,
+// by NOT listing the key, which is why an accidental addition to
+// keyAllowedWhileBusy has to fail here.
+func TestUndoIsSingleFlight(t *testing.T) {
+	assert.False(t, keyAllowedWhileBusy(keys.KeyUndoKill),
+		"undo must be blocked while an action is in flight, or a double press restores twice")
 }

@@ -1114,6 +1114,11 @@ var dispatchExempt = map[keys.KeyName]string{
 // is in flight (see the guard in handleKeyPress). The allowlist is deliberately
 // narrow: pure navigation, scrolling, pane sizing, tab switching, list collapse,
 // and help — nothing that mutates a session, opens an overlay, or drives tmux/git.
+//
+// KeyUndoKill's absence is load-bearing rather than an oversight: this gate is the
+// only thing making an undo single-flight. Two presses before the restore returns
+// would run the same record twice, and the second run would recreate a branch and
+// a worktree the first one has already claimed.
 func keyAllowedWhileBusy(name keys.KeyName) bool {
 	switch name {
 	case keys.KeyHelp,

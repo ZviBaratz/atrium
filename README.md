@@ -375,6 +375,49 @@ in `keybindings.json` so the same chord works in both kinds of pane. The trade-o
 is elsewhere: the preview pane's `shift-↑/↓` and `atrium peek --lines` read tmux
 history too, so against a fullscreen agent they see only the visible screen.
 
+#### Undoing a kill
+
+`ctrl-x` used to be the one thing Atrium did that you could not take back: it
+removes the session's worktree and runs `git branch -D`, which leaves the branch's
+commits reachable from nothing — and `git gc`, which your own work in the project
+triggers, prunes unreachable objects. Press `U` and the session comes back:
+its branch, its worktree, and its agent, resumed into the conversation it was
+having.
+
+That works because the teardown does two things first. It commits anything
+uncommitted, exactly as pause does — and the restore unwinds that commit again, so
+the worktree comes back as you left it, with no artifact in the history. Then it
+points a ref at the branch head under `refs/atrium/undo/`, which is what keeps the
+commits alive after `branch -D` and immune to `git gc`. Those refs live outside
+`refs/heads`, so `git branch` never lists them, and `git push` and `git fetch` do
+not touch them.
+
+Killing several sessions at once in multi-select mode is one action, so `U`
+reverses it as one and brings the whole batch back.
+
+Records expire after **7 days**, and expiry is what releases the retained commits
+to git. `atrium reset` clears them all. To see what is currently held:
+
+```bash
+git -C <your repo> for-each-ref refs/atrium/undo/
+```
+
+**What does not come back.** The terminal scrollback is gone — the pane is
+destroyed and rebuilt. So are gitignored files that lived in the worktree: a
+local `.env`, a build cache, downloaded dependencies. They were never in a commit
+to restore from, and only the paths named by
+[`carry_files`](#carried-files) and [`link_paths`](#linked-paths) are re-seeded.
+The agent's conversation usually returns — Atrium resumes it the same way it does
+after a pause, for the agents that support it — but when there is no resumable
+transcript the session comes back with a fresh agent, and the notice after the
+restore tells you which happened.
+
+Atrium refuses rather than guessing when the world has moved on: if you have
+already created a session with the same name, if the branch has been recreated
+pointing somewhere else, or if the project directory is gone. Every refusal names
+the ref that still holds the commits, so `git branch <name> <ref>` recovers them
+by hand.
+
 #### Auto-attach
 
 By default, Atrium attaches you to a new session as soon as it starts, so you land directly in the agent. Detach with `ctrl-q` to return to the session list. When you create a session with the `N` form and provide an initial prompt, auto-attach is skipped — the session stays in the list so the prompt is delivered automatically once the agent is ready, and you can attach with `↵`/`o` whenever you like.
