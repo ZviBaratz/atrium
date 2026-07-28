@@ -611,7 +611,28 @@ var codex = &Adapter{
 		// Decline options across the approval overlays: command/patch approvals
 		// ("No, and tell Codex…"), permission and elicitation prompts ("No,
 		// continue without…" / "No, but continue without it").
-		{Name: "approval", Window: WindowPrompt,
+		//
+		// NoAutoTap, pending a captured overlay (#347). Two independent reasons,
+		// either of which is enough:
+		//
+		//   - The window is flat, so this matches the literals above wherever they
+		//     land in the bottom 15 lines — including this file quoted in a
+		//     session's own transcript, which is #343 verbatim with codex's name in
+		//     it. Enter on a real overlay approves a shell command or a patch.
+		//   - Position cannot rescue it the way it rescued claude. The overlay is
+		//     built by approval_overlay.rs as title → body → options → footer hint,
+		//     so the agent-controlled text (the command, the diff) renders BELOW the
+		//     title rather than above it — the inverse of claude, where "the last
+		//     question wins" made the dialog's own question unforgeable (#350). And
+		//     codex echoes the command INTO an option label ("Yes, and don't ask
+		//     again for commands that start with `…`"), so option text is
+		//     agent-controlled too.
+		//
+		// Anchoring it needs a new primitive as well: the overlay draws no box
+		// border at all, so footerBelowBox finds no anchor (and on a pane where the
+		// agent printed its own rule, finds the wrong one). All of that has to be
+		// designed off a captured pane, not off these labels.
+		{Name: "approval", Window: WindowPrompt, NoAutoTap: true,
 			Any: []string{
 				"No, and tell Codex what to do differently",
 				"No, continue without",
@@ -669,7 +690,18 @@ var gemini = &Adapter{
 	MarkerWindow: 8,
 
 	Prompts: []PromptMatcher{
-		{Name: "confirmation", Window: WindowPrompt,
+		// NoAutoTap, and unlike codex's this is the settled answer rather than a
+		// holding position (#347). The literal is quotable from this file exactly as
+		// codex's is, and Enter on a real confirmation runs the shell command or
+		// writes the file — but the CLI is deprecated in favour of Antigravity
+		// (docs/superpowers/specs/2026-07-23-antigravity-integration-design.md), and
+		// anchoring it would take a primitive nothing else needs: the confirmation
+		// renders INSIDE a rounded box with the app footer below it, so
+		// footerBelowBox hands back the footer and never the dialog, and
+		// aboveBoxBlock anchors on a composer the confirmation has replaced.
+		// Surfacing as needs-input costs a gemini user one keystroke; autoyes users
+		// who want the taps have gemini's own --yolo / --approval-mode.
+		{Name: "confirmation", Window: WindowPrompt, NoAutoTap: true,
 			All: []string{"No, suggest changes (esc)"}},
 	},
 
