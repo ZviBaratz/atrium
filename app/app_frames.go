@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/ZviBaratz/atrium/session"
+	"github.com/ZviBaratz/atrium/session/tmux"
 	"github.com/ZviBaratz/atrium/ui/theme"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -37,11 +38,22 @@ const paneFrameInterval = 100 * time.Millisecond
 // state. The zero target means "no I/O this round"; the chain still ticks, so it
 // self-heals the moment something worth capturing is selected.
 type frameTarget struct {
+	// instance is the session whose agent pane to capture (preview tab).
 	instance *session.Instance
+	// terminal is the session whose shell pane to capture (terminal tab), with
+	// termKey naming its cache slot. A nil terminal with a non-empty termKey means
+	// "the shell has to be created first" — deliberately part of the background
+	// work, since creating one runs tmux new-session.
+	terminal *tmux.Session
+	termKey  string
+	// termInstance is the instance the shell belongs to, needed to create it.
+	termInstance *session.Instance
 }
 
 // empty reports a target with nothing to capture.
-func (t frameTarget) empty() bool { return t.instance == nil }
+func (t frameTarget) empty() bool {
+	return t.instance == nil && t.termInstance == nil
+}
 
 // paneFrameMsg carries one background capture back to the main thread. It names
 // the target it was captured for, and the handler stores it under that identity
@@ -62,14 +74,22 @@ type paneFrameMsg struct {
 // The attached case is skipped inside CapturePaneFrame rather than here, because
 // an attach can begin after the target is resolved.
 func (m *home) resolveFrameTarget() frameTarget {
-	if !m.tabbedWindow.IsInPreviewTab() {
-		return frameTarget{}
-	}
 	selected := m.list.GetSelectedInstance()
-	if selected == nil || selected.Paused() {
+	if selected == nil || selected.Paused() || !selected.Started() {
 		return frameTarget{}
 	}
-	return frameTarget{instance: selected}
+	switch {
+	case m.tabbedWindow.IsInPreviewTab():
+		return frameTarget{instance: selected}
+	case m.tabbedWindow.IsInTerminalTab():
+		// A missing shell is not a reason to skip: creating one is tmux work too,
+		// and doing it here on the main thread is what this change removes.
+		sess, key, _ := m.tabbedWindow.TerminalCaptureTarget(selected)
+		return frameTarget{terminal: sess, termKey: key, termInstance: selected}
+	default:
+		// The diff tab renders from cached git metadata and captures nothing.
+		return frameTarget{}
+	}
 }
 
 // captureFrameCmd sleeps for delay, then captures off the update thread.
@@ -78,7 +98,7 @@ func (m *home) resolveFrameTarget() frameTarget {
 // only ever assigns a finished string. An empty target still returns a message
 // after the sleep, without touching tmux: that is what keeps the chain alive
 // across a paused selection or a stint on the diff tab.
-func captureFrameCmd(ctx context.Context, target frameTarget, delay time.Duration) tea.Cmd {
+func captureFrameCmd(ctx context.Context, target frameTarget, delay time.Duration, ensure terminalEnsurer) tea.Cmd {
 	return func() tea.Msg {
 		if delay > 0 {
 			select {
@@ -90,15 +110,50 @@ func captureFrameCmd(ctx context.Context, target frameTarget, delay time.Duratio
 		if ctx.Err() != nil || target.empty() {
 			return paneFrameMsg{target: target, at: time.Now()}
 		}
-		text, err := target.instance.CapturePaneFrame()
-		return paneFrameMsg{
-			target: target,
-			text:   theme.SanitizeWidth(text),
-			err:    err,
-			at:     time.Now(),
+		if target.instance != nil {
+			text, err := target.instance.CapturePaneFrame()
+			return paneFrameMsg{
+				target: target,
+				text:   theme.SanitizeWidth(text),
+				err:    err,
+				at:     time.Now(),
+			}
 		}
+		return captureTerminalFrame(target, ensure)
 	}
 }
+
+// captureTerminalFrame captures the terminal tab's shell pane, creating the shell
+// first when it does not exist yet. Both halves run here, on the capture
+// goroutine — including tmux new-session, which the pane used to run inline on a
+// 100ms tick the moment the user opened the tab.
+func captureTerminalFrame(target frameTarget, ensure terminalEnsurer) paneFrameMsg {
+	sess := target.terminal
+	if sess == nil {
+		created, err := ensure(target.termInstance)
+		if err != nil {
+			return paneFrameMsg{target: target, err: err, at: time.Now()}
+		}
+		if created == "" {
+			return paneFrameMsg{target: target, at: time.Now()}
+		}
+		// The shell exists now, but this round has no frame for it: the next one
+		// captures it, and the pane shows "Opening terminal…" until then.
+		return paneFrameMsg{target: frameTarget{termKey: created, termInstance: target.termInstance}, at: time.Now()}
+	}
+	text, err := sess.CapturePaneContent()
+	return paneFrameMsg{
+		target: target,
+		text:   theme.SanitizeWidth(text),
+		err:    err,
+		at:     time.Now(),
+	}
+}
+
+// terminalEnsurer creates the shell session for an instance and returns its cache
+// key. It is a function rather than a direct call so captureFrameCmd stays free of
+// the ui type — and so a test can drive the create path without a pane.
+type terminalEnsurer func(*session.Instance) (string, error)
 
 // armFrameCapture dispatches the next capture.
 //
@@ -112,7 +167,7 @@ func (m *home) armFrameCapture(delay time.Duration) tea.Cmd {
 		return nil
 	}
 	m.frameInFlight = true
-	return captureFrameCmd(m.ctx, m.resolveFrameTarget(), delay)
+	return captureFrameCmd(m.ctx, m.resolveFrameTarget(), delay, m.tabbedWindow.EnsureTerminalSession)
 }
 
 // handlePaneFrame applies a captured frame and re-arms the chain.
@@ -124,16 +179,19 @@ func (m *home) armFrameCapture(delay time.Duration) tea.Cmd {
 func (m *home) handlePaneFrame(msg paneFrameMsg) (tea.Model, tea.Cmd) {
 	m.frameInFlight = false
 
-	if inst := msg.target.instance; inst != nil {
+	switch {
+	case msg.target.instance != nil:
 		if msg.err != nil {
 			// A failed capture deliberately does not reach the error box. It used to,
 			// ten times a second, through instanceChanged's handleError — while the
 			// pane it was describing kept rendering fine. The frame and its stamp stay
 			// put; the pane reports the growing age itself.
-			inst.NotePaneFrameFailure(msg.err, msg.at)
+			msg.target.instance.NotePaneFrameFailure(msg.err, msg.at)
 		} else {
-			inst.SetPaneFrame(msg.text, msg.at)
+			msg.target.instance.SetPaneFrame(msg.text, msg.at)
 		}
+	case msg.target.termKey != "":
+		m.tabbedWindow.ApplyTerminalFrame(msg.target.termKey, msg.text, msg.err, msg.at)
 	}
 
 	// A capture that came back for a target the user has since moved off leaves the
@@ -157,6 +215,9 @@ func (m *home) handlePaneFrame(msg paneFrameMsg) (tea.Model, tea.Cmd) {
 func (m *home) refreshPanes() tea.Cmd {
 	selected := m.list.GetSelectedInstance()
 	if err := m.tabbedWindow.UpdatePreview(selected); err != nil {
+		return m.handleError(err)
+	}
+	if err := m.tabbedWindow.UpdateTerminal(selected); err != nil {
 		return m.handleError(err)
 	}
 	return nil

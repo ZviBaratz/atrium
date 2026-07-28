@@ -56,6 +56,22 @@ func (i *Instance) CapturePaneFrame() (string, error) {
 	return ts.CapturePaneContent()
 }
 
+// HarvestPaneFrame returns the frame the metadata poll already captured for this
+// instance, so the cache can be warmed without forking a second capture-pane.
+//
+// Poll captures the pane to classify it and then discards the bytes; this hands
+// them over instead. It is what makes selecting a session the user has not looked
+// at yet paint its last frame immediately rather than flashing the setup splash
+// while a fresh capture is dispatched. Safe on a background goroutine (the read is
+// under the monitor's own lock); ok is false for a session that has never polled.
+func (i *Instance) HarvestPaneFrame() (raw string, at time.Time, ok bool) {
+	ts := i.tmux()
+	if ts == nil || i.Paused() {
+		return "", time.Time{}, false
+	}
+	return ts.LastCapture()
+}
+
 // SetPaneFrame records a successful capture. Main-loop only, like SetDiffStats.
 // An empty capture is recorded too: a live-but-blank pane is a real observation,
 // and the preview distinguishes "captured blank" from "never captured".
@@ -82,6 +98,29 @@ func (i *Instance) NotePaneFrameFailure(err error, at time.Time) {
 // TmuxAlive() probe made, without the subprocess.
 func (i *Instance) PaneFrame() (text string, at time.Time, ok bool) {
 	return i.paneFrame, i.paneFrameAt, i.paneFrameOK
+}
+
+// SetPaneLive / PaneLive memo the last observed tmux liveness for this instance,
+// fed from the metadata poll's own has-session (its PaneState) so the UI never
+// forks a second probe to answer the same question (#380).
+//
+// PaneLive is optimistically true for a started instance that has not been polled
+// yet: the only consumer is the context-bar push, whose cost of being wrong is one
+// tmux command that fails and logs, while recoverLostInstances owns real death
+// within a couple of ticks. A pessimistic default would instead blank the bar on
+// every freshly started session until its first poll.
+func (i *Instance) SetPaneLive(live bool) {
+	i.paneLive = live
+	i.paneLiveKnown = true
+}
+
+// PaneLive reports the last observed liveness — see SetPaneLive for why an
+// unpolled instance reads as live.
+func (i *Instance) PaneLive() bool {
+	if !i.paneLiveKnown {
+		return true
+	}
+	return i.paneLive
 }
 
 // dropPaneFrame forgets the cached frame. Called from pause(), which runs on the

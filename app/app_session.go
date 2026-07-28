@@ -48,20 +48,53 @@ func (m *home) cycleTarget(attached *session.Instance) *session.Instance {
 	return nil
 }
 
-// pushSessionContexts refreshes the in-session context bar for every live session.
-// SetContext caches per session, so an unchanged tick costs only string comparisons
-// rather than tmux subprocesses. No-op when the feature is disabled.
-func (m *home) pushSessionContexts() {
+// pushSessionContexts refreshes the in-session context bar for every live session,
+// returning a Cmd that performs the tmux writes off the update thread.
+//
+// Composition and the change check stay here (they are pure string work over
+// main-thread state, and the cache they consult is main-thread-only); only the
+// sessions whose bar actually changed are handed to the goroutine. This runs from
+// the 500ms metadata apply, where it used to fire a has-session per instance plus a
+// set-option batch per changed one — inline, on the thread that also handles keys
+// (#380). Liveness now comes from the poll's own verdict instead of a second probe.
+//
+// No-op when the feature is disabled.
+func (m *home) pushSessionContexts() tea.Cmd {
 	if !m.appConfig.GetSessionContextBar() {
-		return
+		return nil
 	}
+	type armed struct {
+		inst       *session.Instance
+		name, left string
+	}
+	var pending []armed
 	for _, inst := range m.list.GetInstances() {
-		m.pushOneContext(inst)
+		if !inst.Started() || inst.Paused() || !inst.PaneLive() {
+			continue
+		}
+		name, left := ui.ComposeSessionContext(inst, ui.RepoKey(inst))
+		if inst.ArmContext(name, left) {
+			pending = append(pending, armed{inst: inst, name: name, left: left})
+		}
+	}
+	if len(pending) == 0 {
+		return nil
+	}
+	return func() tea.Msg {
+		var failed []*session.Instance
+		for _, p := range pending {
+			if err := p.inst.PushContext(p.name, p.left); err != nil {
+				log.WarningLog.Printf("failed to push session context for %q: %v", p.inst.Title, err)
+				failed = append(failed, p.inst)
+			}
+		}
+		return contextPushFailedMsg{instances: failed}
 	}
 }
 
-// pushOneContext composes and pushes the context bar for a single session, skipping
-// sessions that have no live tmux pane to render it in (unstarted, paused, dead).
+// pushOneContext composes and pushes the context bar for a single session
+// synchronously, for the one caller that needs it to land before it hands the
+// terminal over (the attach cycle). Skips sessions with no live pane to render in.
 func (m *home) pushOneContext(inst *session.Instance) {
 	if !m.appConfig.GetSessionContextBar() || !inst.Started() || inst.Paused() || !inst.TmuxAlive() {
 		return

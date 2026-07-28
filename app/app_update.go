@@ -170,6 +170,13 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.handlePreviewTick(msg)
 	case paneFrameMsg:
 		return m.handlePaneFrame(msg)
+	case contextPushFailedMsg:
+		// Un-arm the optimistic cache for the pushes that didn't land, so the next
+		// metadata tick tries again instead of believing a value tmux never got.
+		for _, inst := range msg.instances {
+			inst.ClearContextCache()
+		}
+		return m, nil
 	case splashTickMsg:
 		return m.handleSplashTick()
 	case autoNameDoneMsg:

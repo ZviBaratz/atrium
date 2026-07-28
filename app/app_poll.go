@@ -14,6 +14,7 @@ import (
 	"github.com/ZviBaratz/atrium/session/git"
 	"github.com/ZviBaratz/atrium/session/tmux"
 	"github.com/ZviBaratz/atrium/session/transcript"
+	"github.com/ZviBaratz/atrium/ui/theme"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -90,6 +91,14 @@ func (m *home) markSeenAfterDwell(now time.Time) {
 // previewTickMsg implements tea.Msg and triggers a preview update
 type previewTickMsg struct{}
 
+// contextPushFailedMsg carries the sessions whose context-bar push failed, so the
+// main thread can un-arm their caches and the next tick retries. Arming is
+// optimistic (see tmux.ArmContext) precisely so the common unchanged tick costs
+// nothing; this message is the other half of that bargain.
+type contextPushFailedMsg struct {
+	instances []*session.Instance
+}
+
 type instanceChangedMsg struct{}
 
 // instanceMetaResult holds the results of a single instance's metadata update,
@@ -118,6 +127,12 @@ type instanceMetaResult struct {
 	// or none reported yet).
 	effort   string
 	effortOK bool
+	// paneFrame / paneFrameAt carry the pane capture Poll already paid for, so every
+	// polled session's preview cache stays warm without a second capture-pane;
+	// paneFrameOK is false for a session that has never polled successfully.
+	paneFrame   string
+	paneFrameAt time.Time
+	paneFrameOK bool
 }
 
 // instancePolledMsg carries the result of an off-cadence status poll of a single instance,
@@ -500,6 +515,11 @@ func collectMetadata(ctx context.Context, poll []*session.Instance, selected *se
 			// Effort reads the value Poll just lifted off the hook record — no extra
 			// I/O; only applied when it changed.
 			r.effort, r.effortOK = instance.ComputeEffort()
+			// Take the frame Poll just captured. It costs nothing — Poll captured the
+			// pane to classify it and used to throw the bytes away — and it means a
+			// session the user has not selected this run still has a frame to paint
+			// the moment they do, instead of the setup splash (#380).
+			r.paneFrame, r.paneFrameAt, r.paneFrameOK = instance.HarvestPaneFrame()
 		}(idx, inst)
 	}
 	wg.Wait()
@@ -552,13 +572,42 @@ func (m *home) applyMetadataResults(results []instanceMetaResult, emit bool) []t
 		if r.effortOK {
 			r.instance.SetEffortMeta(r.effort)
 		}
+		// Record the liveness this poll already established, so the context-bar push
+		// below reads a memo instead of forking its own has-session per session. A
+		// PaneUnknown result is inconclusive (attached, unstarted, a transient probe
+		// failure) and deliberately leaves the memo alone rather than claiming death.
+		if r.state != tmux.PaneUnknown {
+			r.instance.SetPaneLive(r.state != tmux.PaneDead)
+		}
+		applyHarvestedFrame(r)
 	}
 	// Re-apply the status sort now that pane states are fresh, so urgent sessions keep
 	// floating to the top of their group. No-op in creation mode; the selected session
 	// stays under the cursor (preserved by identity).
 	m.list.ApplySort()
-	m.pushSessionContexts()
-	return deliverReadyPrompts(results)
+	cmds := deliverReadyPrompts(results)
+	// Appended only when there is something to push, so a quiet tick returns an
+	// empty slice rather than one holding a nil Cmd.
+	if push := m.pushSessionContexts(); push != nil {
+		cmds = append(cmds, push)
+	}
+	return cmds
+}
+
+// applyHarvestedFrame stores the pane capture the poll already paid for, but only
+// when it is newer than the cached one. The order matters: the 100ms capture chain
+// and this 500ms sweep both feed the same cache, and the chain's frames are fresher
+// for the selected session — an unconditional write here would rewind the watched
+// pane by up to half a second, ten times a second. Main thread only, like the
+// Set*Meta calls it sits beside.
+func applyHarvestedFrame(r instanceMetaResult) {
+	if !r.paneFrameOK {
+		return
+	}
+	if _, cachedAt, cached := r.instance.PaneFrame(); cached && !r.paneFrameAt.After(cachedAt) {
+		return
+	}
+	r.instance.SetPaneFrame(theme.SanitizeWidth(r.paneFrame), r.paneFrameAt)
 }
 
 // applyDiffStats stores freshly computed diff stats on an instance (main thread only),

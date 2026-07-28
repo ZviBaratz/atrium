@@ -271,6 +271,12 @@ type Instance struct {
 	paneFrame   string
 	paneFrameAt time.Time
 	paneFrameOK bool
+	// paneLive memos the liveness the metadata poll last observed, so the UI can
+	// answer "does this session still have a pane?" without forking its own
+	// has-session. paneLiveKnown distinguishes "observed dead" from "never polled".
+	// Main-loop only, like the frame fields above.
+	paneLive      bool
+	paneLiveKnown bool
 
 	// baseCtx is the lifecycle context the instance's tmux/git subprocesses derive
 	// from; cancelling it (app/daemon shutdown) kills in-flight subprocesses. Set via
@@ -1570,6 +1576,32 @@ func (i *Instance) SetContext(name, left string) error {
 		return nil
 	}
 	return ts.SetContext(name, left)
+}
+
+// ArmContext records the context strings this session should show and reports
+// whether they changed, without touching tmux. Main-loop only (it writes the
+// session's context cache); pair it with PushContext on a background goroutine.
+func (i *Instance) ArmContext(name, left string) bool {
+	ts := i.tmux()
+	return ts != nil && ts.ArmContext(name, left)
+}
+
+// PushContext writes the armed context strings into tmux. Safe on a background
+// goroutine — it reads and writes no cached state.
+func (i *Instance) PushContext(name, left string) error {
+	ts := i.tmux()
+	if ts == nil {
+		return nil
+	}
+	return ts.PushContext(name, left)
+}
+
+// ClearContextCache un-arms the context cache after a failed push so the next
+// tick retries. Main-loop only, like ArmContext.
+func (i *Instance) ClearContextCache() {
+	if ts := i.tmux(); ts != nil {
+		ts.ClearContextCache()
+	}
 }
 
 // SetPreviewSize resizes the detached tmux session to match the preview pane,

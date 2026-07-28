@@ -6,6 +6,7 @@ import (
 
 	"github.com/ZviBaratz/atrium/log"
 	"github.com/ZviBaratz/atrium/session"
+	"github.com/ZviBaratz/atrium/session/tmux"
 	"github.com/ZviBaratz/atrium/ui/theme"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -222,6 +223,36 @@ func (w *TabbedWindow) UpdateTerminal(instance *session.Instance) error {
 // ResetPreviewToNormalMode resets the preview pane to normal mode
 func (w *TabbedWindow) ResetPreviewToNormalMode(instance *session.Instance) error {
 	return w.preview.ResetToNormalMode(instance)
+}
+
+// TerminalCaptureTarget exposes the terminal pane's shell session for the app's
+// background capture chain. ok=false means the shell has yet to be created —
+// EnsureTerminalSession does that, off the update thread.
+func (w *TabbedWindow) TerminalCaptureTarget(instance *session.Instance) (*tmux.Session, string, bool) {
+	return w.terminal.CaptureTarget(instance)
+}
+
+// EnsureTerminalSession creates the instance's shell session. Runs on the capture
+// goroutine: it starts a tmux session, which is exactly the work that must not
+// happen inside Update.
+func (w *TabbedWindow) EnsureTerminalSession(instance *session.Instance) (string, error) {
+	return w.terminal.EnsureSession(instance)
+}
+
+// HasTerminalSession reports whether a shell session has been created for
+// instance. Exposed so a test can observe *when* creation happens — the pane's own
+// sessions are built with the real executor, so a fake one cannot see them.
+func (w *TabbedWindow) HasTerminalSession(instance *session.Instance) bool {
+	_, _, ok := w.terminal.CaptureTarget(instance)
+	return ok
+}
+
+// CloseTerminal tears down every shell session the terminal pane opened.
+func (w *TabbedWindow) CloseTerminal() { w.terminal.Close() }
+
+// ApplyTerminalFrame installs a background shell capture (main thread).
+func (w *TabbedWindow) ApplyTerminalFrame(key, content string, err error, at time.Time) {
+	w.terminal.ApplyFrame(key, content, err, at)
 }
 
 // NoteFrameTargetChange tells the preview pane its frame source just changed, so

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/ZviBaratz/atrium/cmd/cmd_test"
+	"github.com/ZviBaratz/atrium/internal/testutil"
 	"github.com/ZviBaratz/atrium/session"
 	"github.com/ZviBaratz/atrium/session/tmux"
 	"github.com/ZviBaratz/atrium/ui"
@@ -285,6 +286,112 @@ func TestUpdateLoopSurvivesAWedgedCapture(t *testing.T) {
 	}
 }
 
+// TestTerminalTab_CreatesItsShellOffTheUpdateThread extends the anti-jank guard to
+// the terminal tab, whose cold path was the worst of the three: opening the tab on
+// a session with no shell yet ran `tmux new-session` inline inside Update, while
+// holding the very mutex String() takes to render.
+//
+// It cannot use the executor counter the preview guards use. The pane builds its
+// shell sessions with tmux.NewSessionWithName, which bakes in the real executor, so
+// a test spy attached to the *instance* never sees them. What is observable — and
+// what the old code did on the update thread — is the sessions map gaining an
+// entry, so that is what this asserts: nothing appears during Update, and the entry
+// shows up only once the returned Cmd runs.
+func TestTerminalTab_CreatesItsShellOffTheUpdateThread(t *testing.T) {
+	testutil.RequireTmux(t)
+	spy := newFrameSpy("shell prompt $")
+	h, inst := newFrameHome(t, spy)
+	h.tabbedWindow.SetActiveTab(ui.TerminalTab)
+	t.Cleanup(h.tabbedWindow.CloseTerminal)
+
+	require.False(t, h.tabbedWindow.HasTerminalSession(inst),
+		"precondition: no shell session for this instance yet")
+
+	// Update must return without creating anything...
+	_, cmd := h.Update(paneFrameMsg{at: time.Now()})
+	require.False(t, h.tabbedWindow.HasTerminalSession(inst),
+		"opening the terminal tab must not create a tmux session on the update thread")
+
+	// ...and the creation must happen in the Cmd it returned.
+	require.NotNil(t, cmd)
+	cmd()
+	require.True(t, h.tabbedWindow.HasTerminalSession(inst),
+		"the shell must be created by the background capture instead")
+}
+
+// TestTickPaths_LaunchNoSubprocessOnTheUpdateThread is the standing invariant for
+// #380: no timer-driven message may shell out on the Bubble Tea event-loop
+// goroutine, in its handler or in the View that follows it.
+//
+// What this test can and cannot see, stated plainly so it is not mistaken for more
+// than it is:
+//
+//   - It observes tmux ONLY. session/git builds exec.CommandContext directly rather
+//     than going through cmd.Executor (see session/git/cmdrec.go), so a git call added
+//     to a tick path would be invisible here.
+//   - It observes the SELECTED INSTANCE's tmux only. The terminal pane builds its
+//     shell sessions with the real executor, so work done against a shell is invisible
+//     to this spy — TestTerminalTab_CreatesItsShellOffTheUpdateThread covers that path
+//     by observing the sessions map instead.
+//   - It covers timer-driven messages only. Key paths legitimately still shell out —
+//     attach, deep rename, and AcceptSuggestion's capture wait-loop — and are the
+//     subject of the named-loading leg of #380, not this one.
+//   - tea.WindowSizeMsg is excluded: SetSessionPreviewSize genuinely fires one
+//     resize-window per instance on the update thread. That is a real main-thread
+//     burst, but resize-triggered rather than tick-triggered, and out of scope here.
+//   - Scroll mode is excluded: UpdateContent's lazy viewport refill still captures
+//     synchronously on the rare path where the viewport was cleared.
+//
+// A new timer-driven message must be added to this table, or the loop quietly stops
+// being covered.
+func TestTickPaths_LaunchNoSubprocessOnTheUpdateThread(t *testing.T) {
+	// Messages are built against the live instance, the way the loop emits them: a
+	// zero-valued one would test a shape production never produces.
+	cases := []struct {
+		name string
+		msg  func(*session.Instance) tea.Msg
+	}{
+		{"preview tick", func(*session.Instance) tea.Msg { return previewTickMsg{} }},
+		{"splash tick", func(*session.Instance) tea.Msg { return splashTickMsg{} }},
+		{"pane frame", func(i *session.Instance) tea.Msg {
+			return paneFrameMsg{target: frameTarget{instance: i}, text: "frame", at: time.Now()}
+		}},
+		{"metadata done", func(i *session.Instance) tea.Msg {
+			return metadataUpdateDoneMsg{results: []instanceMetaResult{{instance: i, state: tmux.PaneIdle}}}
+		}},
+		{"metadata sweep", func(i *session.Instance) tea.Msg {
+			return metadataSweepDoneMsg{results: []instanceMetaResult{{instance: i, state: tmux.PaneIdle}}}
+		}},
+		{"instance polled", func(i *session.Instance) tea.Msg {
+			return instancePolledMsg{instance: i, state: tmux.PaneIdle}
+		}},
+		{"context push failed", func(i *session.Instance) tea.Msg {
+			return contextPushFailedMsg{instances: []*session.Instance{i}}
+		}},
+		{"spinner tick", func(*session.Instance) tea.Msg { return spinner.TickMsg{} }},
+	}
+	for _, tab := range []struct {
+		name string
+		idx  int
+	}{{"preview", ui.PreviewTab}, {"diff", ui.DiffTab}, {"terminal", ui.TerminalTab}} {
+		for _, c := range cases {
+			t.Run(tab.name+"/"+c.name, func(t *testing.T) {
+				spy := newFrameSpy("agent output")
+				h, inst := newFrameHome(t, spy)
+				h.tabbedWindow.SetActiveTab(tab.idx)
+				h.appConfig.SessionContextBar = boolPtr(true)
+
+				before := spy.count()
+				h.Update(c.msg(inst))
+				h.View()
+				require.Equal(t, before, spy.count(),
+					"%s on the %s tab shelled out on the update thread: %v",
+					c.name, tab.name, spy.seen()[before:])
+			})
+		}
+	}
+}
+
 // TestPaneFrameFailures_NeverReachTheErrorBox guards the flood this change ends.
 //
 // A capture error used to return from UpdateContent into instanceChanged's
@@ -341,6 +448,114 @@ func TestStaleMarker_SurvivesThePreviewTick(t *testing.T) {
 		h.Update(previewTickMsg{})
 	}
 	require.Contains(t, h.tabbedWindow.String(), "stale", "the marker must survive steady-state ticks")
+}
+
+// TestMetadataPoll_WarmsTheFrameCacheForFree is the harvest guarantee.
+//
+// Poll captures the pane to classify it and used to discard the bytes. Keeping
+// them means a session the user has never selected still has a frame to paint the
+// moment they do — instead of the setup splash — and the assertion that makes it
+// meaningful is the *count*: the sweep must not fork a second capture-pane to do it.
+func TestMetadataPoll_WarmsTheFrameCacheForFree(t *testing.T) {
+	spy := newFrameSpy("background session output")
+	h, inst := newFrameHome(t, spy)
+
+	_, _, captured := inst.PaneFrame()
+	require.False(t, captured, "precondition: no frame yet")
+
+	before := countVerb(spy.seen(), "capture-pane")
+	results := collectMetadata(h.ctx, []*session.Instance{inst}, nil, false)
+	afterPoll := countVerb(spy.seen(), "capture-pane")
+	h.applyMetadataResults(results, false)
+
+	text, _, captured := inst.PaneFrame()
+	require.True(t, captured, "the sweep must leave the session with a frame")
+	require.Contains(t, text, "background session output")
+	require.Equal(t, 1, afterPoll-before,
+		"the sweep must reuse Poll's own capture, not fork a second one; saw %v", spy.seen()[before:])
+}
+
+// TestHarvestedFrame_NeverRewindsAFresherFrame: the 100ms chain and the 500ms
+// sweep write the same cache, and the chain's frames are newer for the watched
+// session. An unconditional harvest would rewind the visible pane by up to half a
+// second, ten times a second.
+func TestHarvestedFrame_NeverRewindsAFresherFrame(t *testing.T) {
+	spy := newFrameSpy("older")
+	_, inst := newFrameHome(t, spy)
+
+	now := time.Now()
+	inst.SetPaneFrame("newer frame from the capture chain", now)
+
+	applyHarvestedFrame(instanceMetaResult{
+		instance:    inst,
+		paneFrame:   "older frame from the sweep",
+		paneFrameAt: now.Add(-500 * time.Millisecond),
+		paneFrameOK: true,
+	})
+
+	text, at, _ := inst.PaneFrame()
+	require.Equal(t, "newer frame from the capture chain", text, "an older harvest must not rewind the pane")
+	require.Equal(t, now, at)
+}
+
+// TestMetadataApply_LaunchesNoSubprocessOnTheUpdateThread covers the offender the
+// issue did not name and that turned out to be larger than the one it did.
+//
+// applyMetadataResults runs on the update thread and called pushSessionContexts,
+// which fired inst.TmuxAlive() — a has-session subprocess — for EVERY instance,
+// twice a second, plus a set-option batch for each changed bar. Liveness now comes
+// from the verdict the poll already reached, and the writes move into a Cmd.
+func TestMetadataApply_LaunchesNoSubprocessOnTheUpdateThread(t *testing.T) {
+	spy := newFrameSpy("agent output")
+	h, inst := newFrameHome(t, spy)
+	h.appConfig.SessionContextBar = boolPtr(true)
+
+	results := collectMetadata(h.ctx, []*session.Instance{inst}, inst, false)
+
+	before := spy.count()
+	cmds := h.applyMetadataResults(results, false)
+	require.Equal(t, before, spy.count(),
+		"applying metadata must not shell out on the update thread; saw %v", spy.seen()[before:])
+
+	// And the work must still happen — in the returned Cmd.
+	require.NotEmpty(t, cmds, "a changed context bar must return a push Cmd")
+	for _, c := range cmds {
+		if c != nil {
+			c()
+		}
+	}
+	require.Contains(t, spy.seen(), "set-option", "the push must reach tmux from the goroutine")
+}
+
+// TestContextPush_UsesThePollsLivenessNotASecondProbe pins where liveness comes
+// from. The poll's has-session already answered this question for every session;
+// asking again per session was the whole cost.
+func TestContextPush_UsesThePollsLivenessNotASecondProbe(t *testing.T) {
+	spy := newFrameSpy("agent output")
+	h, inst := newFrameHome(t, spy)
+	h.appConfig.SessionContextBar = boolPtr(true)
+
+	require.True(t, inst.PaneLive(), "a started, never-polled session reads as live")
+
+	inst.SetPaneLive(false) // what a PaneDead poll records
+	before := spy.count()
+	require.Nil(t, h.pushSessionContexts(), "a session the poll saw die must not be pushed to")
+	require.Equal(t, before, spy.count(), "and must not be probed either")
+
+	inst.SetPaneLive(true)
+	require.NotNil(t, h.pushSessionContexts(), "a live session's bar is pushed")
+}
+
+func boolPtr(b bool) *bool { return &b }
+
+func countVerb(calls []string, verb string) int {
+	n := 0
+	for _, c := range calls {
+		if c == verb {
+			n++
+		}
+	}
+	return n
 }
 
 // TestFrameChain_NeverForksAndNeverDies pins the two failure modes of a
