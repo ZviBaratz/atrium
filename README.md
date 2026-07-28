@@ -236,6 +236,7 @@ in-app keymap and this section ever drift apart, so it stays complete.
 | `ctrl-q` | toggle attach/detach (detach when in, attach from the list) |
 | `ctrl-x` | kill the selected/attached session (twice to confirm) |
 | `ctrl-pgup/pgdn` | in a session: cycle to prev / next session in the repo group |
+| `shift-pgup/pgdn` | in a session: scroll the agent's scrollback (see [Scrolling an attached session](#scrolling-an-attached-session)) |
 | `s` | send a message (without attaching) |
 | `C` | diff tab: comment on a line or range → queue it to the agent (↑↓/j/k move, shift+↑↓/J/K extend, enter comment, esc exit) |
 | `Q` | manage queued prompts (list / cancel) |
@@ -337,6 +338,40 @@ Mouse capture is on by default: clickable session rows, repo headers, tabs, and 
 ```
 
 With `mouse` off, Atrium never enables mouse reporting, so selection, copy, and paste behave exactly as they would in any non-mouse program. The setting is also togglable live from the Settings panel (`,`).
+
+#### Scrolling an attached session
+
+Atrium's sessions run on their own tmux server with their own config, so your
+`~/.tmux.conf` — prefix, copy-mode keys, scroll chords — does not apply inside
+one. Scrollback is bound prefix-free instead:
+
+| Key | Action |
+|-----|--------|
+| `shift-↑` / `shift-↓` | scroll one line — hold to scroll continuously |
+| `shift-pgup` / `alt-pgup` | scroll back a page (enters tmux copy mode) |
+| `shift-pgdn` / `alt-pgdn` | scroll forward; at the bottom it exits copy mode for you |
+| `g` / `G`, `j` / `k`, `ctrl-u` / `ctrl-d` | while scrolled: top / bottom, line, half page |
+| `?` / `/`, then `n` / `N` | while scrolled: search up / down, next / previous match |
+| `v`, `y` | while scrolled: start a selection, copy it (to the system clipboard) |
+| `q` | leave the scrollback and return to the agent |
+
+`shift-↑/↓` is the same chord that scrolls the preview pane from the session list,
+and moves the same one line per press. Copy mode is vi-keyed, and the wheel scrolls
+the same history when `mouse` is on, three lines per notch as in the preview.
+Note that `ctrl-b` — tmux's default prefix, and the key Claude Code uses to
+background a task — is not needed for any of this.
+
+Scrolling reaches `history-limit` lines back (10000).
+
+**Agents that draw on the alternate screen** — Claude Code with fullscreen
+rendering (`/tui fullscreen`, or `CLAUDE_CODE_NO_FLICKER=1`), and anything else
+vim-like — accumulate no tmux history at all, so there is nothing for copy mode to
+show. Atrium detects that and hands the chord to the agent instead, letting it
+scroll its own view; in Claude Code, `pgup`/`pgdn` and `ctrl-home`/`ctrl-end` do
+that out of the box, and `shift-↑/↓` can be mapped to `scroll:lineUp`/`lineDown`
+in `keybindings.json` so the same chord works in both kinds of pane. The trade-off
+is elsewhere: the preview pane's `shift-↑/↓` and `atrium peek --lines` read tmux
+history too, so against a fullscreen agent they see only the visible screen.
 
 #### Auto-attach
 

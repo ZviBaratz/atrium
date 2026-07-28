@@ -24,6 +24,63 @@ set-option -g  set-titles-string  "Atrium · #{?@atrium_name,#{@atrium_name},#{s
 set-option -g  history-limit      10000
 set-option -g  mouse              on
 
+# Prefix-free keyboard scrollback. Sessions run on this isolated socket, so none of
+# the host ~/.tmux.conf's scroll chords exist here and the only keyboard route into
+# the history is tmux's default `prefix PageUp` — a chord whose prefix (C-b) is also
+# Claude Code's "background this task" key, which is why its docs tell tmux users to
+# press C-b twice. Shift+PageUp is the terminal-native chord for the same intent and
+# collides with nothing the agents bind; Alt+PageUp is the common host spelling, kept
+# as an alias so muscle memory from a personal config carries over.
+#
+# -u enters copy mode already scrolled one page back, so a single press scrolls. -e
+# leaves copy mode again as soon as you page back to the bottom, so scrolling can
+# never strand a pane in a mode that eats the next keystroke sent to it — copy mode
+# consumes send-keys, including the autoyes daemon's Enter and a queued prompt.
+#
+# Ctrl+PageUp/PageDown are deliberately NOT used: the attach layer intercepts them
+# for sibling-session cycling (navReason in detach.go) before tmux ever sees them.
+# An agent that draws on the alternate screen (Claude Code's fullscreen renderer,
+# and anything else vim-like) accumulates NO tmux history, so entering copy mode
+# there yields an empty `[0/0]` view and swallows the keypress. Hand the chord to
+# the agent instead and let it scroll its own conversation — the same test tmux's
+# own default wheel binding makes. On a normal pane the else-branch runs and copy
+# mode works as below.
+bind-key -n S-PPage if-shell -F '#{alternate_on}' 'send-keys S-PPage' { copy-mode -eu }
+bind-key -n M-PPage if-shell -F '#{alternate_on}' 'send-keys M-PPage' { copy-mode -eu }
+bind-key -T copy-mode-vi S-PPage send-keys -X page-up
+bind-key -T copy-mode-vi S-NPage send-keys -X page-down
+bind-key -T copy-mode-vi M-PPage send-keys -X page-up
+bind-key -T copy-mode-vi M-NPage send-keys -X page-down
+
+# Line-granular scrolling, for the reason a scrollbar beats a page key: a page jump
+# loses your place. shift-up/down move one line and hold-to-repeat turns that into
+# continuous motion (40 repeats land 40 lines, nothing dropped), which is what makes
+# scrolling feel smooth rather than stepped. They pair with the page keys above —
+# page to the right region, then nudge.
+#
+# `copy-mode -e` here deliberately omits the -u the page bindings use: entering at
+# the bottom is what keeps the first nudge one line instead of a page. scroll-up
+# moves the view and leaves the cursor, unlike vi's j/k, which move the cursor and
+# only scroll once it hits an edge.
+bind-key -n S-Up   if-shell -F '#{alternate_on}' 'send-keys S-Up'   { copy-mode -e ; send-keys -X scroll-up }
+bind-key -n S-Down if-shell -F '#{alternate_on}' 'send-keys S-Down' { copy-mode -e ; send-keys -X scroll-down }
+bind-key -T copy-mode-vi S-Up   send-keys -X scroll-up
+bind-key -T copy-mode-vi S-Down send-keys -X scroll-down
+
+# One wheel notch travels 3 lines rather than tmux's default 5, so a pane scrolls the
+# same distance per notch as the preview pane does in the TUI (wheelScrollLines).
+bind-key -T copy-mode-vi WheelUpPane   select-pane \; send-keys -X -N 3 scroll-up
+bind-key -T copy-mode-vi WheelDownPane select-pane \; send-keys -X -N 3 scroll-down
+
+# vi copy mode: g/G, j/k, C-u/C-d and / search come free with mode-keys, but tmux's
+# vi defaults bind v to rectangle-toggle and leave y unbound — so mode-keys alone
+# would make the muscle-memory v/y do the wrong thing rather than nothing. Rectangle
+# select moves to C-v, as in vim; r keeps tmux's own refresh-from-pane.
+set-window-option -g mode-keys    vi
+bind-key -T copy-mode-vi v   send-keys -X begin-selection
+bind-key -T copy-mode-vi C-v send-keys -X rectangle-toggle
+bind-key -T copy-mode-vi y   send-keys -X copy-selection-and-cancel
+
 # Make tmux's own copy reach the system clipboard via OSC 52, even though the
 # tmux-256color terminfo lacks an Ms entry. Without this, mouse / copy-mode
 # selections land only in a tmux paste buffer and never update the OS clipboard,
