@@ -14,6 +14,15 @@ import (
 // otherwise read as a "lost session". If the session isn't live (e.g. paused
 // after a reboot) it updates the cached names only, so a later restore targets
 // the new name.
+//
+// It deliberately does NOT move this session's status-hook directory, which is
+// keyed by the session name too (<configDir>/hooks/<name>/). The running agent
+// was launched with that directory's absolute state path baked into every hook
+// command, so moving the directory out from under it would break its writes
+// silently — the same outage in a different costume. Instead the hook name is
+// frozen at launch and every reader follows it, so a rename simply leaves the
+// channel pointed where it already was; the next relaunch re-keys it and sweeps
+// the superseded directory. See Session.hookName / freezeHookName and #492.
 func (t *Session) Rename(newWindowName, newSessionName string) error {
 	newSanitized := newSessionName
 

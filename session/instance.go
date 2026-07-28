@@ -387,6 +387,7 @@ func (i *Instance) ToInstanceData() InstanceData {
 		PermissionMode:       i.runtimeMode,
 		Effort:               i.runtimeEffort,
 		TmuxName:             i.TmuxSessionName(),
+		HookName:             i.hookSessionName(),
 
 		// Persist the undelivered prompt queue so it survives a restart and is re-delivered
 		// in order on reload (delivered prompts have already been popped, so this is usually
@@ -537,6 +538,14 @@ func FromInstanceData(ctx context.Context, data InstanceData, branchPrefix strin
 	sess.SetGHConfigDir(instance.ghConfigDir)
 	sess.SetGitHubTokenEnv(instance.githubTokenEnv)
 	sess.SetAgyConfigDir(instance.agyConfigDir)
+	// Restore the name the surviving agent's hooks are keyed by. It diverges from TmuxName
+	// only between a deep rename and the next relaunch — but in exactly that window the
+	// session is rebuilt here under the POST-rename name while the agent that outlived the
+	// restart still writes to the PRE-rename directory, and reattach (Restore) never re-runs
+	// the bake that would re-key it. Empty (a legacy state.json, or a session Atrium never
+	// launched) pins the name resolved just above instead of leaving a lazy fallback that a
+	// later Rename would move out from under a surviving agent — see SetHookSessionName (#492).
+	sess.SetHookSessionName(data.HookName)
 	// Bound here as well as in Start, because a restored instance can be relaunched without
 	// going through Start at all: recoverInPlace calls the tmux session's Start/StartContinue
 	// directly when the pane could not be reattached. Binding the method value rather than a
@@ -767,6 +776,19 @@ func (i *Instance) TmuxSessionName() string {
 	i.mu.RLock()
 	defer i.mu.RUnlock()
 	return i.tmuxName
+}
+
+// hookSessionName returns the tmux name this instance's status-hook artifacts are keyed by
+// (InstanceData.HookName), or "" when there is no tmux session yet or it has never been
+// launched. It reads through to the tmux Session rather than caching on the Instance: the
+// value is frozen inside start(), so the Session is its only writer and a second copy here
+// could only ever be stale. See tmux.Session.HookSessionName.
+func (i *Instance) hookSessionName() string {
+	ts := i.tmux()
+	if ts == nil {
+		return ""
+	}
+	return ts.HookSessionName()
 }
 
 // GroupKey returns the repo-group key the session list files this instance

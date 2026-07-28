@@ -3,6 +3,7 @@ package tmux
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -33,6 +34,10 @@ import (
 //
 // Artifacts live under <configDir>/hooks/<sanitizedName>/ — outside the git worktree, so
 // they survive pause (worktree removal) and never pollute the agent's git status / diff.
+// The name is the one the session had AT LAUNCH, not its current one: ensureHookSettings
+// bakes the resulting absolute path into every hook command, so the agent's write path is
+// fixed for the life of its process and only a relaunch can re-key it. Session.hookName is
+// the single source of that name for every reader (see #492).
 
 // Hook state words written by the injected hook commands and read back by Poll.
 const (
@@ -65,7 +70,15 @@ func hooksRoot() (string, error) {
 }
 
 // hookSessionDir is the per-session directory holding settings.json and the state file.
+//
+// An empty name is rejected rather than joined: it would resolve to the hooks ROOT, which
+// cleanupHookSession would then RemoveAll — destroying every live session's status channel,
+// not just this one's. Callers reach this with a name derived from Session.hookName, which
+// never returns empty; the guard is here because that one call's blast radius is the feature.
 func hookSessionDir(sanitizedName string) (string, error) {
+	if sanitizedName == "" {
+		return "", errors.New("hook session dir: empty session name")
+	}
 	root, err := hooksRoot()
 	if err != nil {
 		return "", err
@@ -312,12 +325,88 @@ func ensureHookSettings(sanitizedName, program string, brief SessionBrief) (stri
 	return settingsPath, nil
 }
 
+// freezeHookName records the name this launch's hook artifacts are keyed by, and returns it.
+// Called from start() immediately before ensureHookSettings, so the name the reader will use
+// and the name the writer's baked --state-file is derived from are the same read of
+// sanitizedName — a concurrent deep Rename can land either side of it, never between.
+//
+// It also sweeps the previous launch's directory when the session was renamed in between.
+// start() is the only caller and it runs solely when no live session exists (its has-session
+// entry guard), so that agent is provably dead and its directory is referenced by nothing.
+// Sweeping HERE rather than in Close is what bounds the leak to zero at all times: Close knows
+// at most two names, while rename→relaunch repeated N times strands N directories, so a
+// "Close sweeps both" rule would still leak on the third rename and every one after it.
+func (t *Session) freezeHookName() string {
+	t.mu.Lock()
+	stale := t.hookSessionName
+	name := t.sanitizedName
+	t.hookSessionName = name
+	t.mu.Unlock()
+
+	if stale != "" && stale != name {
+		cleanupHookSession(stale)
+	}
+	return name
+}
+
+// hookName is the session name this session's hook artifacts are keyed by — the name frozen
+// at the last launch (see the hookSessionName field), falling back to the current session
+// name for a Session that has neither launched nor been rehydrated: one freshly constructed
+// in this process and not yet through start(). Rehydration pins the name even when the
+// persisted value is empty (see SetHookSessionName), so the fallback is not what carries a
+// restored session. Never empty, which is what keeps hookSessionDir's empty-name guard
+// unreachable from here.
+func (t *Session) hookName() string {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	if t.hookSessionName != "" {
+		return t.hookSessionName
+	}
+	return t.sanitizedName
+}
+
+// HookSessionName returns the frozen hook name verbatim — empty only for a Session that has
+// neither launched in this process nor been rehydrated from persisted state. It is the value
+// Instance persists (InstanceData.HookName); the empty case is meaningful there (an instance
+// with no hook directory to name yet), so this deliberately does NOT apply hookName's fallback.
+func (t *Session) HookSessionName() string {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	return t.hookSessionName
+}
+
+// SetHookSessionName restores the frozen hook name when rehydrating a Session from persisted
+// state. It must run before the instance is published to the poll loop. Restoring it is what
+// makes the #492 fix survive a TUI restart: the rebuilt Session carries the POST-rename tmux
+// name, while the agent that outlived the restart is still writing to the PRE-rename
+// directory, and reattach (Restore) never re-runs the bake that would re-freeze it.
+//
+// An empty value — a state.json predating the field — PINS the name the session carries right
+// now rather than leaving hookName's lazy fallback in place. The fallback resolves through
+// sanitizedName, which Rename mutates, so a session that was already running when the user
+// upgraded would lose its channel to the first deep rename: #492 again, in the one window a
+// persisted name cannot cover, because that agent was launched before anything recorded one.
+// Pinning is inert for a session with no live agent — every relaunch routes through
+// freezeHookName, which re-keys and sweeps — and Close wants it either way, since a paused
+// session's artifacts on disk are under the pre-rename name.
+func (t *Session) SetHookSessionName(name string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if name == "" {
+		name = t.sanitizedName
+	}
+	t.hookSessionName = name
+}
+
 // HookStateFile returns the absolute path of this session's structured hook state file
 // (the working/ready latch plus the in-flight sub-agent set), or an error if the config
 // dir can't be resolved. Shared by the record reader and the watchdog's ClearInflight;
 // exported so it also names the canonical status-record location for diagnostics.
+//
+// It keys off hookName, not the current session name: the running agent writes to the
+// absolute path baked into its launch settings, so the reader has to follow the writer (#492).
 func (t *Session) HookStateFile() (string, error) {
-	dir, err := hookSessionDir(t.snapshotName())
+	dir, err := hookSessionDir(t.hookName())
 	if err != nil {
 		return "", err
 	}
