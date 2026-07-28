@@ -867,6 +867,48 @@ func TestContextLineFallsBackToDetail(t *testing.T) {
 	assert.Contains(t, stripANSI(o.contextLine(o.innerWidth())), want)
 }
 
+// TestContextLineNeverDescribesAnUnselectedOption is the rendered half of
+// TestDetailFallbackIsTrueOfEveryUnglossedOption, on the row that motivated it. Splash is
+// partially glossed — random and off carry one, the five patterns deliberately do not — so
+// cycling it walks both branches of contextLine's default arm, and the fallback branch is
+// where a detail written about one rung surfaces under a different one.
+//
+// The guard above works on the schema alone and would still pass if contextLine stopped
+// consulting detail; this one drives the real render at a real width.
+func TestContextLineNeverDescribesAnUnselectedOption(t *testing.T) {
+	cfg := config.DefaultConfig()
+	o := NewSettingsOverlay(cfg)
+	o.SetSize(100, 32)
+	settingsAt(t, o, "splash")
+	row := o.selectedRow()
+
+	options := row.options(cfg)
+	require.Contains(t, options, config.SplashOff, "off must be on offer for this test to mean anything")
+	sawFallback := false
+
+	for _, opt := range options {
+		cfg.Splash = opt
+		require.Equalf(t, opt, row.get(cfg), "%q must survive normalization", opt)
+
+		ctx := strings.TrimSpace(stripANSI(o.contextLine(o.innerWidth())))
+		require.NotEmptyf(t, ctx, "%q: the context line must still say something", opt)
+
+		if row.gloss[opt] != "" {
+			assert.Containsf(t, ctx, row.gloss[opt], "%q: a glossed option shows its own gloss", opt)
+			continue
+		}
+		sawFallback = true
+		for _, other := range options {
+			if other == opt {
+				continue
+			}
+			assert.Falsef(t, leadsWithOptionName(ctx, other),
+				"splash is on %q but the context line opens by describing %q: %q", opt, other, ctx)
+		}
+	}
+	require.True(t, sawFallback, "no unglossed option was exercised — the fallback went untested")
+}
+
 // TestContextLineShowsATruncatedValueInFull pins spec §10's obligation: the value column may be
 // shortened, but the full value must appear in the help pane, or the truncation loses
 // information outright.

@@ -281,7 +281,7 @@ which is what dissolves the 300–443-char run-on descriptions.
 | Row | Summary | Detail / gloss |
 |---|---|---|
 | Theme | `Colour palette and border style.` | — |
-| Splash | `Animation behind the empty session list.` | **gloss:** `random` = a different pattern each launch. `off` = no animation; the plain wordmark. **detail:** Off leaves the plain wordmark and stops the repaint entirely. The full-window screensaver is a separate, explicit keypress and still animates. (`off` added by #316.) |
+| Splash | `Animation behind the empty session list.` | **gloss:** `random` = a different pattern each launch. `off` = no animation; the plain wordmark. **detail:** Patterns animate behind the idle session list; off leaves the plain wordmark. Off also stops the repaint entirely. The full-window screensaver is a separate, explicit keypress and still animates. (`off` added by #316; the first sentence is the context line for the unglossed pattern names, so it cannot describe `off` alone.) |
 | Glyph set | `Icon fidelity. Drop a rung if you see boxes instead of icons.` | **gloss:** `nerd` = vendor Nerd-Font icons; needs a patched font. `plain` = Unicode that renders on any font (the default). `ascii` = a 7-bit floor for terminals that show boxes even on plain. |
 | Hint bar | `Show key hints on the bottom row. Off leaves the row blank.` | **detail:** The row is reserved either way, so turning hints off does not resize the panes. |
 | OS chrome | `Put fleet state in the window title and taskbar progress.` | **detail:** Sends OSC 9;4. Turn it off if your shell owns the terminal title. |

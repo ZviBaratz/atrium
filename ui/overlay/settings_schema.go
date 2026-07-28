@@ -536,7 +536,12 @@ func newSettingRows(cfg *config.Config) []settingRow {
 			defaultDisplay: func() string { return (&config.Config{}).GetSplash() },
 			reset:          func(c *config.Config) { c.Splash = "" },
 			summary:        "Animation behind the empty session list.",
-			detail: "Off leaves the plain wordmark and stops the repaint entirely. " +
+			// The first sentence is the context line for every option this row leaves
+			// unglossed — the five pattern names — so it has to hold for all of them
+			// rather than describe the off rung alone
+			// (TestDetailFallbackIsTrueOfEveryUnglossedOption).
+			detail: "Patterns animate behind the idle session list; off leaves the plain wordmark. " +
+				"Off also stops the repaint entirely. " +
 				"The full-window screensaver is a separate, explicit keypress and still animates.",
 			gloss: map[string]string{
 				config.SplashRandom: "a different pattern each launch",

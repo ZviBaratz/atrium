@@ -339,6 +339,71 @@ func TestConfigFilePathHonoursSandboxedHome(t *testing.T) {
 			"ran before TestMain could sandbox it", got, home)
 }
 
+// leadsWithOptionName reports whether s opens by naming opt. That is the shape that makes a
+// sentence read as being *about* one option, which is the thing a shared fallback cannot be.
+func leadsWithOptionName(s, opt string) bool {
+	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(s)), strings.ToLower(opt)+" ")
+}
+
+// unglossedOptions returns the row's options that carry no gloss — exactly the values whose
+// context line falls through to firstSentence(detail) (settings_render.go's contextLine).
+func unglossedOptions(r settingRow, cfg *config.Config) []string {
+	var out []string
+	for _, o := range r.options(cfg) {
+		if r.gloss[o] == "" {
+			out = append(out, o)
+		}
+	}
+	return out
+}
+
+// TestDetailFallbackIsTrueOfEveryUnglossedOption guards settingRow.detail's stated contract —
+// "its first sentence is the help pane's fallback for a row whose current value has no gloss" —
+// from the side the gloss guard is blind to. contextLine shows that ONE sentence for EVERY
+// option a row leaves unglossed, so on a partially-glossed row it cannot be about a single one
+// of them.
+//
+// Splash is that row and is why this exists: its pattern vocabulary is dynamic, so only random
+// and off are glossed (see glossExemptRows), and a detail opening "Off leaves the plain
+// wordmark ..." is what the panel then said while rain, tunnel, ripple, galaxy or aurora was
+// selected — copy about the one rung the user had not picked.
+//
+// Nothing else catches it: TestEnumRowsGlossEveryOption skips precisely these rows, and
+// TestContextLineFallsBackToDetail only ever exercises a row with no gloss at all.
+func TestDetailFallbackIsTrueOfEveryUnglossedOption(t *testing.T) {
+	cfg := config.DefaultConfig()
+	for _, r := range newSettingRows(cfg) {
+		if r.kind != kindEnum || r.detail == "" {
+			continue
+		}
+		first := firstSentence(r.detail)
+		if first == "" {
+			continue // nothing reaches the fallback
+		}
+		unglossed := unglossedOptions(r, cfg)
+		if len(unglossed) == 0 {
+			continue // every option glosses itself; the fallback never fires
+		}
+		for _, opt := range r.options(cfg) {
+			if !leadsWithOptionName(first, opt) {
+				continue
+			}
+			// Naming one option is only honest when it is the sole option the
+			// sentence can be shown for.
+			var others []string
+			for _, u := range unglossed {
+				if u != opt {
+					others = append(others, u)
+				}
+			}
+			assert.Emptyf(t, others,
+				"row %q: detail opens by naming the %q option, but its first sentence is also "+
+					"the context line for %v — write it so it holds for every unglossed option",
+				r.key, opt, others)
+		}
+	}
+}
+
 // rowByKey returns the row with the given key, failing the test when absent.
 func rowByKey(t *testing.T, cfg *config.Config, key string) settingRow {
 	t.Helper()
