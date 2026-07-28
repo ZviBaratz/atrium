@@ -833,6 +833,20 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		return m, m.handleInfoNotice("busy — " + m.menu.BusyText())
 	}
 
+	return m.dispatchAction(name)
+}
+
+// dispatchAction runs the action name identifies, against the current selection
+// and state. It is the one place a KeyName becomes work, so a caller that is not
+// a keypress — the command palette (#374) — runs exactly what the key runs, and
+// TestEveryRegistryActionHasADispatchCase can prove every registered action has
+// somewhere to land.
+//
+// The prelude stays in handleKeyPress: state routing, esc's contextual roles,
+// quit, and the actionInFlight gate all run before a name is even resolved. A
+// caller reaching this directly bypasses all of them and must re-apply whichever
+// it needs (the palette re-checks the busy gate; see runPaletteAction).
+func (m *home) dispatchAction(name keys.KeyName) (tea.Model, tea.Cmd) {
 	switch name {
 	case keys.KeyHelp:
 		return m.showHelpScreen(helpTypeGeneral{}, nil)
@@ -1053,6 +1067,13 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		return m, m.pauseAll()
 	case keys.KeyEnter, keys.KeyAttachToggle:
 		return m.attachSelected()
+	case keys.KeyQuit:
+		// Unreachable from a keypress: handleKeyPress matches "q" (and ctrl+c,
+		// which no Registry entry claims) before it ever resolves a name, so that
+		// the quit path stays live inside every mode. This case exists for the
+		// callers that arrive by name instead — the command palette — and is what
+		// keeps quit from being the one registered action with nowhere to land.
+		return m.handleQuit()
 	default:
 		return m, nil
 	}
