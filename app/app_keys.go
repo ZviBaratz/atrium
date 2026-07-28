@@ -742,6 +742,18 @@ func (m *home) pushSelected() (tea.Model, tea.Cmd) {
 	if selected.IsDirect() {
 		return m, m.handleError(fmt.Errorf("push is not available for a direct (non-git) session"))
 	}
+	// A paused session has had its worktree freed, and PushChanges runs git from
+	// that path (commit first, then push). Same reasoning — and the same refusal —
+	// as createPRForSelected: merge and open-PR survive a pause because gh runs
+	// from the repo root, push and create do not. Without this the user confirms a
+	// dialog and gets a raw "cannot change to directory" from git.
+	//
+	// pausedHintKeys drops P from a paused session's cues, which is why this went
+	// unnoticed: a hidden hint is not a guard, and the command palette (#374)
+	// reaches every action regardless of which cues are showing.
+	if selected.Paused() {
+		return m, m.handleInfoNotice("resume the session first — pausing freed its worktree, so there's nothing to push from")
+	}
 
 	// Show confirmation modal; the push runs off the UI thread only on confirm.
 	message := fmt.Sprintf("Push changes from session '%s'?", selected.DisplayName())

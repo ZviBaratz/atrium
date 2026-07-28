@@ -256,3 +256,24 @@ func TestPaletteGroupNameDoesNotDonateLettersToTheProse(t *testing.T) {
 	_, _, ok := p.Chosen()
 	assert.False(t, ok, "no field of this row contains 'merge'; only prose+group glued together does")
 }
+
+// The box's height must not depend on its width. Every line the palette draws is
+// measured against the box except the footer, which is authored to a fixed length —
+// so on a narrow terminal it is the one that wraps, and a wrap costs the box a row
+// its height budget never counted. Whoever composes the palette then loses that row
+// off the bottom, taking the border with it.
+//
+// Counting lines rather than measuring them is what makes this able to fail:
+// lipgloss pads every line of a bordered block out to the same width whether or not
+// the content wrapped, so a width assertion here passes either way.
+func TestPaletteHeightDoesNotDependOnWidth(t *testing.T) {
+	wide := NewCommandPaletteOverlay(paletteFixture())
+	wide.SetSize(80, 24)
+	narrow := NewCommandPaletteOverlay(paletteFixture())
+	narrow.SetSize(34, 24)
+
+	assert.Equal(t,
+		strings.Count(wide.Render(), "\n"),
+		strings.Count(narrow.Render(), "\n"),
+		"the narrow box is taller: something wrapped instead of truncating")
+}

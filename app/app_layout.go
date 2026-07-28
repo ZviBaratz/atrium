@@ -127,9 +127,15 @@ func (m *home) updateHandleWindowSizeEvent(msg tea.WindowSizeMsg) {
 		if w > 100 {
 			w = 100
 		}
-		h := int(float32(msg.Height) * 0.85)
-		if h > 40 {
-			h = 40
+		// The share is of the *box*, border and padding included, so it is the room
+		// the palette may occupy rather than the room it fills and then overruns.
+		// The +3 keeps the rendered size where it was before that was true.
+		h := int(float32(msg.Height)*0.85) + 3
+		if h > 43 {
+			h = 43
+		}
+		if h > msg.Height {
+			h = msg.Height
 		}
 		m.commandPaletteOverlay.SetSize(w, h)
 	}

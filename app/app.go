@@ -229,6 +229,12 @@ const (
 	// stateCommandPalette is the fuzzy-over-every-action picker (#374): type what
 	// you want to do, enter runs it against the current selection.
 	stateCommandPalette
+
+	// numStates counts the states above and must stay last. It exists so a test can
+	// walk the enum rather than hand-listing it: TestEveryBarHidingStateRestoresTheFrame
+	// requires every state that hides the hint bar to be driven or exempted, and a new
+	// state added without one fails there instead of shipping unchecked.
+	numStates
 )
 
 type home struct {

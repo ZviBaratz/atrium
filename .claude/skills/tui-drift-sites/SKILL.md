@@ -162,6 +162,15 @@ lie. Don't "fix" them.
   lipgloss had already padded to a uniform width. `SetSize` semantics are the
   usual defect here: lipgloss sizes the content box and draws the border *outside*
   it, so a style given `Width(w)` renders `w+2` columns.
+- Add it to `app/frame_restore_test.go` if it hides the hint bar (`menuVisible`),
+  or exempt it there with a reason — the walk over `numStates` fails otherwise.
+  Hiding the bar hands its row to the panes; closing without recomputing the
+  layout leaves the frame a line taller than the terminal, and the alt-screen
+  renderer never erases it. `view_bounds_test` cannot see this: it only measures
+  a *freshly armed* overlay, never one that has been closed. The recompute itself
+  is guarded once, in `Update` — it compares `menuVisible` before and after every
+  message — so a state left by an async message is covered as well as one closed
+  by a key, and no `dismiss*` helper needs a `recomputeLayout()` of its own.
 - Overlay states must be handled **before** the global quit/esc keys in
   `app/app_update.go`'s prelude, or `q` quits while the user is typing. Each
   branch there carries its ordering constraint as a comment; keep that up.

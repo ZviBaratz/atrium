@@ -186,9 +186,15 @@ var paletteGates = map[keys.KeyName]paletteGate{
 		return ""
 	}),
 
+	// Push, like create-PR, runs git from the worktree a pause has freed; merge and
+	// open-PR run gh from the repo root and survive one. That split is the reason
+	// these four are not gated alike.
 	keys.KeySubmit: perSession(func(inst *session.Instance) string {
 		if inst.IsDirect() {
 			return directReason
+		}
+		if inst.Paused() {
+			return pausedWorktreeReason
 		}
 		return ""
 	}),
