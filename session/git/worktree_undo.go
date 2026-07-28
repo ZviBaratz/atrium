@@ -95,23 +95,3 @@ func DeleteRef(ctx context.Context, repoPath, ref string) error {
 	}
 	return nil
 }
-
-// ListRefs returns the full refnames under prefix, which must be the caller's own
-// subtree.
-//
-// The narrow prefix is the point. refs/atrium/ is not exclusively Atrium's — a
-// PR-review workflow writes refs/atrium/pr-NNN into this very repository — and two
-// data dirs (~/.atrium and a legacy ~/.claude-squad, or a sandboxed test HOME) can
-// retain into the same project. Anything that enumerates refs in order to delete
-// them must therefore be scoped to one install's subtree, or one install cleans up
-// another's only copy of a killed branch.
-func ListRefs(ctx context.Context, repoPath, prefix string) ([]string, error) {
-	out, err := localGit(ctx, repoPath, "for-each-ref", "--format=%(refname)", prefix)
-	if err != nil {
-		return nil, fmt.Errorf("list refs under %s: %w", prefix, err)
-	}
-	if out == "" {
-		return nil, nil
-	}
-	return strings.Split(out, "\n"), nil
-}

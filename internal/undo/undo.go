@@ -19,7 +19,14 @@
 // One file per entry also means appending is a single atomic rename and
 // discarding one is an unlink — there is no read-modify-write to lose.
 //
-// Every mutation here runs on the TUI's Update loop, which is the only writer.
+// There is no locking, and the reason is the file layout rather than a threading
+// rule: writes commit by rename, entry filenames are minted from a timestamp plus
+// a nonce, and every read and delete is scoped to that filename shape. So a write
+// landing during a sweep is benign, and a write landing during another write
+// cannot collide. (Do not restate this as "only the Update loop writes" — it does
+// not: journalKill runs inside the teardown's tea.Cmd goroutine and the startup
+// sweep in its own. Only Remove and MarkSuperseded are on Update.)
+//
 // The autoyes daemon must never sweep: it would run `update-ref -d` inside user
 // repositories, headless, against an instance snapshot it took at startup.
 package undo
@@ -95,18 +102,17 @@ type Entry struct {
 	// again would attach the rebuilt session to another session's pane.
 	TmuxName string `json:"tmux_name,omitempty"`
 	Direct   bool   `json:"direct,omitempty"`
-	// ExistingBranch marks a session that was created on a branch the user already
-	// had. Kill never deletes such a branch, so the restore must not recreate it —
-	// and the teardown must not write a WIP commit onto it either.
-	ExistingBranch bool `json:"existing_branch,omitempty"`
 	// Ref is the full retention refname; empty for a direct session, which has no
 	// repository. SHA is what it pointed at when the session was killed, so a
 	// restore can tell a branch that came back from a branch that moved on.
 	Ref string `json:"ref,omitempty"`
 	SHA string `json:"sha,omitempty"`
-	// Committed records that the teardown's auto-commit of dirty work succeeded.
-	// When it is false the working tree at kill time is not in the retained
-	// commits, and the restore must say so rather than imply otherwise.
+	// Dirty records that the session had uncommitted changes when it was killed, and
+	// Committed that the teardown managed to fold them into the retained commits.
+	// Dirty && !Committed is the one shape where a restore comes back incomplete —
+	// `git worktree remove -f` destroyed work the retained commits do not hold — so
+	// the post-restore notice reads both and says so rather than implying otherwise.
+	Dirty     bool `json:"dirty,omitempty"`
 	Committed bool `json:"committed,omitempty"`
 	// Superseded marks an entry whose identity has been reused by a new session.
 	// Creation wins — a user who kills a session to free its name must not be
@@ -261,18 +267,26 @@ func Load() ([]Entry, error) {
 	return entries, nil
 }
 
-// Latest returns the newest entry that may still be restored as of now.
+// Latest returns the newest entry that may still be restored as of now, skipping
+// any whose ID is in skip (nil skips nothing).
 //
 // The horizon is checked here, on read, and not only by Sweep: a session killed a
 // week before the TUI was last opened must never be offered, however long it is
 // until the next sweep runs.
-func Latest(now time.Time) (Entry, bool) {
+//
+// skip exists because a refusal is not a state this package can see. An entry
+// whose repository has been deleted is refused every time and removed never, so
+// without a way to step past it the newest record wedges the stack and hides every
+// older one for the whole retention window. The caller passes the entries it has
+// already been refused; keeping that in the caller rather than on disk means a
+// relaunch re-offers them, which is right — the world may have changed.
+func Latest(now time.Time, skip map[string]bool) (Entry, bool) {
 	entries, err := Load()
 	if err != nil {
 		return Entry{}, false
 	}
 	for i := len(entries) - 1; i >= 0; i-- {
-		if entries[i].Restorable(now) {
+		if entries[i].Restorable(now) && !skip[entries[i].ID] {
 			return entries[i], true
 		}
 	}
@@ -282,8 +296,8 @@ func Latest(now time.Time) (Entry, bool) {
 // LatestBatch returns the newest restorable entry together with the rest of its
 // batch, oldest first. A visual-mode kill of five sessions is one user action, so
 // undo reverses it as one.
-func LatestBatch(now time.Time) ([]Entry, bool) {
-	newest, ok := Latest(now)
+func LatestBatch(now time.Time, skip map[string]bool) ([]Entry, bool) {
+	newest, ok := Latest(now, skip)
 	if !ok {
 		return nil, false
 	}
@@ -296,7 +310,7 @@ func LatestBatch(now time.Time) ([]Entry, bool) {
 	}
 	group := make([]Entry, 0, len(entries))
 	for _, e := range entries {
-		if e.BatchID == newest.BatchID && e.Restorable(now) {
+		if e.BatchID == newest.BatchID && e.Restorable(now) && !skip[e.ID] {
 			group = append(group, e)
 		}
 	}
@@ -452,6 +466,15 @@ func read(path string) (Entry, error) {
 	if e.Version != currentVersion {
 		return Entry{}, fmt.Errorf("%w: %s has version %d, this atrium understands %d",
 			errForeignVersion, filepath.Base(path), e.Version, currentVersion)
+	}
+	// The ID is a path component — Write and Remove both join it onto the journal
+	// directory — so it is checked against the filename it arrived in rather than
+	// trusted. A hand-edited or half-restored file whose id disagrees with its name
+	// would otherwise make Remove a silent no-op (offering a consumed record again),
+	// and an id containing a traversal would reach outside the journal entirely.
+	if e.ID+".json" != filepath.Base(path) {
+		return Entry{}, fmt.Errorf("undo: %s carries id %q, which is not its filename",
+			filepath.Base(path), e.ID)
 	}
 	return e, nil
 }

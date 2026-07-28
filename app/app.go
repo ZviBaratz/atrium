@@ -467,6 +467,11 @@ type home struct {
 	// off the UI thread via beginAsyncAction. Either way its returned message is fed
 	// back through Update so errors surface in the error box.
 	pendingConfirmAction tea.Cmd
+	// undoRefused holds the journal records this run has already been refused, so
+	// the undo key steps past them instead of re-offering the same refusal every
+	// press. In memory on purpose: a relaunch re-offers them, because the reason
+	// (a moved repository, a reclaimed name) may have gone away in the meantime.
+	undoRefused map[string]bool
 	// pendingConfirmBusyLabel is the progress label ("pushing…", "merging PR #12…")
 	// for a confirm action that should run off the UI thread. Empty means run the
 	// action inline (the legacy synchronous path). Set by confirmAsyncAction.

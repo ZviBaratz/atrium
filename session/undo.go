@@ -22,6 +22,9 @@ type UndoCapture struct {
 	// SHA is the branch head that was retained. Empty for a direct session, which
 	// has no repository.
 	SHA string
+	// Dirty records that the worktree had uncommitted changes to deal with. Paired
+	// with Committed it distinguishes "nothing to save" from "could not save it".
+	Dirty bool
 	// Committed reports that dirty work was folded into the retained commits. When
 	// it is false the working tree at kill time is not in what was retained, and
 	// the restore must say so rather than imply the tree comes back whole.
@@ -63,6 +66,7 @@ func (i *Instance) PrepareUndo(ref string) (UndoCapture, error) {
 			// asked for. The entry records that the tree was not preserved.
 			log.WarningLog.Printf("undo %s: cannot check for uncommitted changes: %v", i.Title, err)
 		} else if dirty {
+			capture.Dirty = true
 			msg := fmt.Sprintf("%s'%s' on %s %s",
 				autoPauseCommitPrefix, i.Title, time.Now().Format(time.RFC822), autoPauseCommitSuffix)
 			if err := wt.CommitChanges(msg); err != nil {

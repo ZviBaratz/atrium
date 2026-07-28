@@ -13,6 +13,7 @@ import (
 	"github.com/ZviBaratz/atrium/keys"
 	"github.com/ZviBaratz/atrium/session"
 	"github.com/ZviBaratz/atrium/session/git"
+	"github.com/ZviBaratz/atrium/session/tmux"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -254,22 +255,61 @@ func TestUndoFailureReportNamesEverySessionAndWhy(t *testing.T) {
 	require.Contains(t, report, "a — branch moved on")
 }
 
-// TestLiveSessionNamesSeesTheWholeFleet, not just the visible slice: a filtered or
-// folded list still owns every tmux name it holds, and a restore that consulted only
-// what is on screen would collide with a session the user cannot currently see.
-func TestLiveSessionNamesSeesTheWholeFleet(t *testing.T) {
+// TestLiveSessionNamesSeesASessionThatHasNotStartedYet. A session between creation
+// and the end of its Start goroutine reports no tmux name at all — and that is the
+// window a restore must not walk into, because Resume would bind the rebuilt
+// instance to the pane that session is about to take. Reading the field alone makes
+// the fleet invisible exactly when it matters, so the name is derived the way Start
+// derives it.
+//
+// The earlier version of this test guarded the assertion with `if name != ""`, which
+// for an unstarted instance is always false — it asserted nothing at all.
+func TestLiveSessionNamesSeesASessionThatHasNotStartedYet(t *testing.T) {
 	undoSandbox(t)
 	h := undoHome(t)
+	repo := t.TempDir()
 	inst, err := session.NewInstance(session.InstanceOptions{
-		Title: "visible", Path: t.TempDir(), Program: "echo",
+		Title: "not-started-yet", Path: repo, Program: "sleep 300",
 	})
 	require.NoError(t, err)
 	h.list.AddInstance(inst)()
+	require.Empty(t, inst.TmuxSessionName(), "precondition: Start has not minted the name")
 
 	names := h.liveSessionNames()
-	if name := inst.TmuxSessionName(); name != "" {
-		assert.Contains(t, names, name)
-	}
+	want := tmux.QualifiedSessionName(inst.GroupKey(), inst.Title)
+	require.NotEmpty(t, want)
+	assert.Contains(t, names, want, "the fleet must include the name Start is about to take")
+}
+
+// TestRestoreRefusesASessionRecreatedInASiblingClone is the hole the derived name
+// closes. supersedeUndoFor matches the (Title, Path) pair, but two clones of one
+// repository share a group key — so the same title in ~/a/atrium and ~/b/atrium
+// yields the same tmux name from different paths, and the record survives creation
+// while describing a name that is live again.
+func TestRestoreRefusesASessionRecreatedInASiblingClone(t *testing.T) {
+	entry, repo := retainedRepo(t, "fix-auth")
+	h := undoHome(t)
+
+	// A sibling clone: a different path whose basename — and so whose group key —
+	// matches, which is what makes the derived tmux names collide.
+	sibling := filepath.Join(t.TempDir(), filepath.Base(repo))
+	runGitIn(t, filepath.Dir(sibling), "clone", "-q", repo, sibling)
+
+	twin, err := session.NewInstance(session.InstanceOptions{
+		Title: entry.Title, Path: sibling, Program: "sleep 300",
+	})
+	require.NoError(t, err)
+	h.list.AddInstance(twin)()
+
+	// Creation did not retire the record: the paths differ.
+	h.supersedeUndoFor(twin)
+	_, stillOffered := undo.Latest(time.Now(), nil)
+	require.True(t, stillOffered, "precondition: (Title, Path) does not match, so the record survives")
+
+	reason := h.restoreBlocker(entry, h.liveSessionNames())
+	require.NotEmpty(t, reason,
+		"restoring would bind the rebuilt session to the sibling clone's pane")
+	assert.Contains(t, reason, entry.Ref)
 }
 
 // TestARefusedRestoreCreatesNothing. The refusals run before any git write, so a
@@ -373,4 +413,67 @@ func TestAFailedPersistKeepsTheRestoreOnOffer(t *testing.T) {
 	require.Len(t, stored, 1, "an undurable restore must stay undoable")
 	_, refStillThere := git.RefExists(context.Background(), repo, entry.Ref)
 	assert.True(t, refStillThere, "and its commits must stay pinned")
+}
+
+// TestARefusalStepsPastTheWedgedRecord. A refusal is not a state the journal can
+// see: an entry whose repository has been deleted is refused every time and removed
+// never. Without stepping past it the newest record wedges the stack and hides every
+// older one for the whole retention window — and killDataWarning's promise that "U
+// restores it" is false for everything underneath.
+func TestARefusalStepsPastTheWedgedRecord(t *testing.T) {
+	wedged, goneRepo := retainedRepo(t, "doomed")
+	h := undoHome(t)
+	h.ctx = context.Background()
+
+	// An older record that is perfectly restorable, written first so the wedged one
+	// sits above it.
+	older := wedged
+	older.ID = ""
+	older.Ref = ""
+	older.Title, older.Display = "rescuable", "rescuable"
+	older.At = wedged.At.Add(-time.Hour)
+	older, err := undo.Write(older)
+	require.NoError(t, err)
+	runGitIn(t, goneRepo, "update-ref", older.Ref, older.SHA)
+
+	// Now make the newer one permanently unrestorable.
+	require.NoError(t, os.RemoveAll(goneRepo))
+
+	group, ok := undo.LatestBatch(time.Now(), h.undoRefused)
+	require.True(t, ok)
+	require.Equal(t, "doomed", group[0].Title, "the wedged record is on top")
+
+	h.handleUndoDone(h.restoreKilled(group, map[string]struct{}{}))
+	require.Contains(t, h.undoRefused, wedged.ID, "the refusal is remembered")
+
+	// Through the key handler, not the store: the point is that the next press
+	// offers the older record, which only holds if undoLastKill consults the set.
+	h.state = stateDefault
+	h.windowWidth = 120
+	h.undoLastKill()
+	require.Equal(t, stateConfirm, h.state, "the next press must find something to offer")
+	require.NotNil(t, h.confirmationOverlay)
+	rendered := flattenOverlay(h.confirmationOverlay.Render())
+	assert.Contains(t, rendered, "rescuable", "the older record becomes reachable")
+	assert.NotContains(t, rendered, "doomed", "and the wedged one is not re-offered")
+}
+
+// TestRestoredNoticeAdmitsWorkItCouldNotSave. Dirty && !Committed is the one shape
+// where a restore comes back incomplete: `git worktree remove -f` destroyed changes
+// the retained commits do not hold. Reporting that identically to a whole restore
+// would be the same over-claim the confirmation copy avoids.
+func TestRestoredNoticeAdmitsWorkItCouldNotSave(t *testing.T) {
+	inst := &session.Instance{Title: "fix-auth"}
+	one := []*session.Instance{inst}
+
+	assert.Equal(t, "restored 'fix-auth'",
+		restoredNotice(one, []undo.Entry{{Dirty: true, Committed: true}}))
+	assert.Equal(t, "restored 'fix-auth'",
+		restoredNotice(one, []undo.Entry{{Dirty: false, Committed: false}}),
+		"a clean session had nothing to save, so there is nothing to admit")
+	assert.Equal(t, "restored 'fix-auth' — uncommitted changes could not be saved and are gone",
+		restoredNotice(one, []undo.Entry{{Dirty: true, Committed: false}}))
+	assert.Equal(t, "restored 'fix-auth'",
+		restoredNotice(one, []undo.Entry{{Direct: true, Dirty: true}}),
+		"a direct session has no worktree the teardown could have committed")
 }

@@ -180,32 +180,6 @@ func TestRetentionRefIsInvisibleToBranchListings(t *testing.T) {
 	assert.NotContains(t, out, "atrium/undo")
 }
 
-// TestListRefsOnlyReportsItsOwnSubtree. refs/atrium/ is not exclusively ours —
-// this very repo carries refs/atrium/pr-NNN from a human review workflow — and two
-// data dirs can retain into one project. A sweep that enumerated the whole prefix
-// would delete refs it did not write.
-func TestListRefsOnlyReportsItsOwnSubtree(t *testing.T) {
-	repo := newTestRepo(t)
-	wt, _ := sessionWorktree(t, repo)
-	_, err := wt.RetainBranch(testUndoRef)
-	require.NoError(t, err)
-
-	head := revParse(t, repo, "HEAD")
-	require.NoError(t, gitCmd(t, repo, "update-ref", "refs/atrium/pr-508", head))
-	require.NoError(t, gitCmd(t, repo, "update-ref", "refs/atrium/undo/otherinstall/0000000000000000001-f00d", head))
-
-	mine := "refs/atrium/undo/deadbeefcafe/"
-	got, err := ListRefs(context.Background(), repo, mine)
-	require.NoError(t, err)
-	assert.Equal(t, []string{testUndoRef}, got)
-
-	// And the ones we must not touch are still there.
-	_, ok := RefExists(context.Background(), repo, "refs/atrium/pr-508")
-	assert.True(t, ok)
-	_, ok = RefExists(context.Background(), repo, "refs/atrium/undo/otherinstall/0000000000000000001-f00d")
-	assert.True(t, ok)
-}
-
 // TestRefExistsRejectsAnAmbiguousShorthand — RefExists is the gate a restore trusts
 // before recreating a branch, so it must verify a full refname rather than let git
 // resolve some other object that happens to answer to the same shorthand.

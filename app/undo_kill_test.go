@@ -229,7 +229,7 @@ func TestJournalKillGroupsABatchUnderOneID(t *testing.T) {
 		require.True(t, undoable)
 	}
 
-	group, ok := undo.LatestBatch(time.Now())
+	group, ok := undo.LatestBatch(time.Now(), nil)
 	require.True(t, ok)
 	require.Len(t, group, 2)
 	assert.Equal(t, []string{"a", "b"}, []string{group[0].Title, group[1].Title})
@@ -274,7 +274,7 @@ func TestSupersedeRetiresARecordWhoseIdentityIsReclaimed(t *testing.T) {
 		TmuxName: "atrium_repo_fix-auth", Snapshot: snapshot,
 	})
 	require.NoError(t, err)
-	_, ok := undo.Latest(time.Now())
+	_, ok := undo.Latest(time.Now(), nil)
 	require.True(t, ok, "the record is offerable before the name is reclaimed")
 
 	reclaimed, err := session.NewInstance(session.InstanceOptions{
@@ -283,7 +283,7 @@ func TestSupersedeRetiresARecordWhoseIdentityIsReclaimed(t *testing.T) {
 	require.NoError(t, err)
 	h.supersedeUndoFor(reclaimed)
 
-	_, ok = undo.Latest(time.Now())
+	_, ok = undo.Latest(time.Now(), nil)
 	assert.False(t, ok, "the reclaimed identity's record must stop being offered")
 
 	stored, err := undo.Load()
@@ -317,7 +317,7 @@ func TestSupersedeLeavesUnrelatedRecordsAlone(t *testing.T) {
 	require.NoError(t, err)
 	h.supersedeUndoFor(elsewhere)
 
-	_, ok := undo.Latest(time.Now())
+	_, ok := undo.Latest(time.Now(), nil)
 	assert.True(t, ok, "a same-titled session in another project must not retire this record")
 }
 
@@ -388,7 +388,7 @@ func TestBatchKillJournalsEverySessionAndCountsThem(t *testing.T) {
 	assert.Equal(t, "killed 2 sessions · U to undo", batchKilledNotice(msg.killed, msg.undoable))
 
 	// One batch, one action: undo offers all of it back.
-	group, ok := undo.LatestBatch(time.Now())
+	group, ok := undo.LatestBatch(time.Now(), nil)
 	require.True(t, ok)
 	require.Len(t, group, 2)
 	assert.Equal(t, group[0].BatchID, group[1].BatchID)

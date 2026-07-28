@@ -142,7 +142,6 @@ func (m *home) journalKill(inst *session.Instance, batchID string) (undo.Entry, 
 		}
 		pending.RepoPath = wt.GetRepoPath()
 		pending.Branch = wt.GetBranchName()
-		pending.ExistingBranch = wt.IsExistingBranch()
 	}
 
 	entry, err := undo.Write(pending)
@@ -170,6 +169,7 @@ func (m *home) journalKill(inst *session.Instance, batchID string) (undo.Entry, 
 		return entry, false
 	}
 	entry.SHA = captured.SHA
+	entry.Dirty = captured.Dirty
 	entry.Committed = captured.Committed
 
 	written, err := undo.Write(entry)

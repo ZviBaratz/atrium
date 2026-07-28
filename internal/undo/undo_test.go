@@ -180,7 +180,7 @@ func TestLatestSkipsExpiredAndSuperseded(t *testing.T) {
 	_, err = Write(live)
 	require.NoError(t, err)
 
-	got, ok := Latest(now)
+	got, ok := Latest(now, nil)
 	require.True(t, ok)
 	assert.Equal(t, "live", got.Title)
 }
@@ -199,10 +199,10 @@ func TestLatestRefusesAJournalThatIsOnlyStale(t *testing.T) {
 	_, err := Write(old)
 	require.NoError(t, err)
 
-	_, ok := Latest(now)
+	_, ok := Latest(now, nil)
 	assert.False(t, ok, "an entry past the horizon is not an undo target")
 
-	_, ok = LatestBatch(now)
+	_, ok = LatestBatch(now, nil)
 	assert.False(t, ok)
 }
 
@@ -224,7 +224,7 @@ func TestAnEntryWithNoSnapshotIsNotOffered(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, got, 1, "the record is still readable, so the ref can still be swept")
 
-	_, ok := Latest(now)
+	_, ok := Latest(now, nil)
 	assert.False(t, ok, "an entry with no snapshot is not an undo target")
 }
 
@@ -247,7 +247,7 @@ func TestAnEntryWhoseBranchWasNeverPinnedIsNotOffered(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, got, 1, "the record is kept so the sweep can expire it")
 
-	_, ok := Latest(now)
+	_, ok := Latest(now, nil)
 	assert.False(t, ok, "a kill whose commits were never pinned is not an undo target")
 }
 
@@ -266,7 +266,7 @@ func TestADirectEntryNeedsNoSHA(t *testing.T) {
 	_, err := Write(e)
 	require.NoError(t, err)
 
-	got, ok := Latest(now)
+	got, ok := Latest(now, nil)
 	require.True(t, ok)
 	assert.Equal(t, "scratch", got.Title)
 }
@@ -276,7 +276,7 @@ func TestADirectEntryNeedsNoSHA(t *testing.T) {
 func TestLatestOnAnEmptyJournal(t *testing.T) {
 	sandbox(t)
 
-	_, ok := Latest(time.Now())
+	_, ok := Latest(time.Now(), nil)
 	assert.False(t, ok)
 }
 
@@ -300,7 +300,7 @@ func TestLatestBatchReturnsTheWholeGroup(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	group, ok := LatestBatch(now)
+	group, ok := LatestBatch(now, nil)
 	require.True(t, ok)
 	require.Len(t, group, 3)
 	assert.Equal(t, []string{"a", "b", "c"},
@@ -320,7 +320,7 @@ func TestLatestBatchOnASoloKillReturnsJustIt(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	group, ok := LatestBatch(now)
+	group, ok := LatestBatch(now, nil)
 	require.True(t, ok)
 	require.Len(t, group, 1)
 	assert.Equal(t, "second", group[0].Title)
@@ -448,7 +448,7 @@ func TestMarkSupersededHidesTheEntryWithoutDroppingTheRef(t *testing.T) {
 
 	require.NoError(t, MarkSuperseded(func(c Entry) bool { return c.Branch == "zvi/fix-auth" }))
 
-	_, ok := Latest(now)
+	_, ok := Latest(now, nil)
 	assert.False(t, ok, "a superseded entry is never offered")
 
 	got, err := Load()
@@ -562,4 +562,28 @@ func TestWriteKeepsACallerSuppliedID(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "0000000000000000042-cafebabe", written.ID)
 	assert.Equal(t, "refs/atrium/undo/deadbeef/0000000000000000042-cafebabe", written.Ref)
+}
+
+// TestAnEntryWhoseIDDisagreesWithItsFilenameIsRejected. The ID is a path component
+// — Write and Remove both join it onto the journal directory — so it is checked
+// against the name it arrived in rather than trusted. A hand-edited or half-restored
+// file would otherwise make Remove a silent no-op, offering a consumed record again;
+// an ID carrying a traversal would reach outside the journal entirely.
+func TestAnEntryWhoseIDDisagreesWithItsFilenameIsRejected(t *testing.T) {
+	sandbox(t)
+
+	e, err := Write(entry("fix-auth"))
+	require.NoError(t, err)
+	dir, err := Dir()
+	require.NoError(t, err)
+	path := filepath.Join(dir, e.ID+".json")
+	raw, err := os.ReadFile(path)
+	require.NoError(t, err)
+	tampered := strings.Replace(string(raw), `"id":"`+e.ID+`"`, `"id":"../../escaped"`, 1)
+	require.NotEqual(t, string(raw), tampered, "the id field must be present to tamper with")
+	require.NoError(t, os.WriteFile(path, []byte(tampered), 0o600))
+
+	got, err := Load()
+	require.NoError(t, err)
+	assert.Empty(t, got, "an entry that does not own its filename is not readable")
 }

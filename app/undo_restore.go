@@ -13,6 +13,7 @@ import (
 	"github.com/ZviBaratz/atrium/keys"
 	"github.com/ZviBaratz/atrium/session"
 	"github.com/ZviBaratz/atrium/session/git"
+	"github.com/ZviBaratz/atrium/session/tmux"
 	"github.com/ZviBaratz/atrium/ui"
 )
 
@@ -34,6 +35,9 @@ type undoDoneMsg struct {
 	instances []*session.Instance
 	entries   []undo.Entry
 	failures  []undoFailure
+	// refusedIDs are the records that could not be restored, so the next press can
+	// step past them instead of re-offering the same refusal forever.
+	refusedIDs []string
 }
 
 type undoFailure struct {
@@ -45,7 +49,7 @@ type undoFailure struct {
 // the last thing the user did was a visual-mode kill, because that was one action
 // and undo should reverse one action.
 func (m *home) undoLastKill() tea.Cmd {
-	group, ok := undo.LatestBatch(time.Now())
+	group, ok := undo.LatestBatch(time.Now(), m.undoRefused)
 	if !ok {
 		return m.handleInfoNotice("nothing to undo")
 	}
@@ -84,11 +88,13 @@ func (m *home) restoreKilled(group []undo.Entry, live map[string]struct{}) undoD
 	for _, e := range group {
 		if reason := m.restoreBlocker(e, live); reason != "" {
 			res.failures = append(res.failures, undoFailure{e.Display, reason})
+			res.refusedIDs = append(res.refusedIDs, e.ID)
 			continue
 		}
 		inst, err := m.restoreOne(e, branchPrefix)
 		if err != nil {
 			res.failures = append(res.failures, undoFailure{e.Display, err.Error()})
+			res.refusedIDs = append(res.refusedIDs, e.ID)
 			continue
 		}
 		// Reserve the restored session's tmux name for the rest of this batch, so
@@ -171,11 +177,27 @@ func (m *home) restoreBlocker(e undo.Entry, live map[string]struct{}) string {
 	return ""
 }
 
-// liveSessionNames is the set of tmux names the running fleet already owns.
+// liveSessionNames is the set of tmux names the running fleet owns — including
+// the ones it has not taken yet.
+//
+// `TmuxSessionName()` is minted inside Start, so a session between creation and
+// the end of its Start goroutine reports "". That is precisely the window a
+// restore must not walk into, so reading the field alone would make the fleet
+// invisible exactly when it matters. The name is derived the same way Start
+// derives it instead.
+//
+// This is not covered by supersedeUndoFor, which matches the (Title, Path) pair:
+// two clones of one repository share a group key, so the same title in
+// ~/a/atrium and ~/b/atrium produces the same tmux name from different paths.
+// Deriving here closes both holes at once.
 func (m *home) liveSessionNames() map[string]struct{} {
 	live := make(map[string]struct{})
 	for _, inst := range m.list.GetInstances() {
-		if name := inst.TmuxSessionName(); name != "" {
+		name := inst.TmuxSessionName()
+		if name == "" {
+			name = tmux.QualifiedSessionName(inst.GroupKey(), inst.Title)
+		}
+		if name != "" {
 			live[name] = struct{}{}
 		}
 	}
@@ -206,10 +228,21 @@ func (m *home) handleUndoDone(msg undoDoneMsg) tea.Cmd {
 	}
 
 	if len(msg.failures) > 0 {
+		// Step past what was refused. A refusal is not a state the journal can see:
+		// an entry whose repository has been deleted is refused every time and
+		// removed never, so without this the newest record wedges the stack and
+		// hides every older one until the horizon passes. In memory only — a
+		// relaunch re-offers them, because by then the world may have changed.
+		if m.undoRefused == nil {
+			m.undoRefused = map[string]bool{}
+		}
+		for _, id := range msg.refusedIDs {
+			m.undoRefused[id] = true
+		}
 		return tea.Batch(m.instanceChanged(), m.showInfo(undoFailureReport(msg)))
 	}
 	return tea.Batch(m.instanceChanged(),
-		m.flashNotice(restoredNotice(msg.instances), ui.NoticeInfo))
+		m.flashNotice(restoredNotice(msg.instances, msg.entries), ui.NoticeInfo))
 }
 
 // --- copy ---------------------------------------------------------------------
@@ -274,13 +307,30 @@ func undoBusyLabel(n int) string {
 	return fmt.Sprintf("restoring %d session%s…", n, plural(n))
 }
 
-// restoredNotice reports what came back, naming the agent's own answer about the
-// conversation rather than the one the dialog would have liked to give.
-func restoredNotice(instances []*session.Instance) string {
-	if len(instances) == 1 {
-		return fmt.Sprintf("restored '%s'", instances[0].DisplayName())
+// restoredNotice reports what came back — and, when the teardown could not fold
+// the working tree into the retained commits, that it did not.
+//
+// Entry.Committed is false when the dirty check or the commit itself failed at
+// kill time, which are the two ways `git worktree remove -f` destroys uncommitted
+// work despite everything else here. Saying nothing would report that restore
+// exactly like a whole one.
+func restoredNotice(instances []*session.Instance, entries []undo.Entry) string {
+	lost := 0
+	for _, e := range entries {
+		if !e.Direct && !e.Committed && e.Dirty {
+			lost++
+		}
 	}
-	return fmt.Sprintf("restored %d session%s", len(instances), plural(len(instances)))
+	var base string
+	if len(instances) == 1 {
+		base = fmt.Sprintf("restored '%s'", instances[0].DisplayName())
+	} else {
+		base = fmt.Sprintf("restored %d session%s", len(instances), plural(len(instances)))
+	}
+	if lost > 0 {
+		return base + " — uncommitted changes could not be saved and are gone"
+	}
+	return base
 }
 
 // undoFailureReport is the modal a partial (or wholly refused) restore earns. A
