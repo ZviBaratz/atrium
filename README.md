@@ -361,11 +361,17 @@ the same history when `mouse` is on, three lines per notch as in the preview.
 Note that `ctrl-b` — tmux's default prefix, and the key Claude Code uses to
 background a task — is not needed for any of this.
 
-Scrolling reaches `history-limit` lines back (10000). An agent that draws on the
-*alternate* screen keeps its conversation out of that history entirely: with
-Claude Code, `/tui fullscreen` moves scrolling into the agent itself (`pgup` /
-`pgdn`) and leaves the tmux scrollback, the preview pane's `shift-↑/↓`, and
-`atrium peek --lines` with only the visible screen to show.
+Scrolling reaches `history-limit` lines back (10000).
+
+**Agents that draw on the alternate screen** — Claude Code with fullscreen
+rendering (`/tui fullscreen`, or `CLAUDE_CODE_NO_FLICKER=1`), and anything else
+vim-like — accumulate no tmux history at all, so there is nothing for copy mode to
+show. Atrium detects that and hands the chord to the agent instead, letting it
+scroll its own view; in Claude Code, `pgup`/`pgdn` and `ctrl-home`/`ctrl-end` do
+that out of the box, and `shift-↑/↓` can be mapped to `scroll:lineUp`/`lineDown`
+in `keybindings.json` so the same chord works in both kinds of pane. The trade-off
+is elsewhere: the preview pane's `shift-↑/↓` and `atrium peek --lines` read tmux
+history too, so against a fullscreen agent they see only the visible screen.
 
 #### Auto-attach
 

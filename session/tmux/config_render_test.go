@@ -91,16 +91,20 @@ func TestRenderManagedConfigScrollKeys(t *testing.T) {
 		// bottom so a scrolled pane can't swallow keys sent to it (autoyes' Enter, a
 		// queued prompt). Both spellings enter; Shift is the terminal-native one.
 		for _, want := range []string{
-			"bind-key -n S-PPage copy-mode -eu",
-			"bind-key -n M-PPage copy-mode -eu",
+			// Every root chord is gated on alternate_on: an agent drawing on the
+			// alternate screen (Claude Code's fullscreen renderer) keeps NO tmux
+			// history, so entering copy mode there shows an empty [0/0] and eats the
+			// key. Forwarding it lets the agent scroll its own view instead.
+			`bind-key -n S-PPage if-shell -F '#{alternate_on}' 'send-keys S-PPage' { copy-mode -eu }`,
+			`bind-key -n M-PPage if-shell -F '#{alternate_on}' 'send-keys M-PPage' { copy-mode -eu }`,
 			"bind-key -T copy-mode-vi S-PPage send-keys -X page-up",
 			"bind-key -T copy-mode-vi S-NPage send-keys -X page-down",
 			"bind-key -T copy-mode-vi M-PPage send-keys -X page-up",
 			"bind-key -T copy-mode-vi M-NPage send-keys -X page-down",
 			// Line granularity is what makes scrolling feel smooth rather than
 			// stepped: one line per press, continuous under key repeat.
-			`bind-key -n S-Up copy-mode -e \; send-keys -X scroll-up`,
-			`bind-key -n S-Down copy-mode -e \; send-keys -X scroll-down`,
+			`bind-key -n S-Up if-shell -F '#{alternate_on}' 'send-keys S-Up' { copy-mode -e ; send-keys -X scroll-up }`,
+			`bind-key -n S-Down if-shell -F '#{alternate_on}' 'send-keys S-Down' { copy-mode -e ; send-keys -X scroll-down }`,
 			"bind-key -T copy-mode-vi S-Up send-keys -X scroll-up",
 			"bind-key -T copy-mode-vi S-Down send-keys -X scroll-down",
 			// A wheel notch matches the TUI's wheelScrollLines, not tmux's 5.
@@ -123,7 +127,7 @@ func TestRenderManagedConfigScrollKeys(t *testing.T) {
 		// The nudge keys must enter copy mode at the bottom (-e), not a page back
 		// (-eu): with -u the first shift-up would jump a page, which is exactly the
 		// stepped feel the line bindings exist to avoid.
-		if strings.Contains(got, "S-Up copy-mode -eu") {
+		if strings.Contains(got, `'send-keys S-Up' { copy-mode -eu`) {
 			t.Errorf("contextBar=%v: shift-up enters with -u, so its first press pages instead of nudging one line\n---\n%s",
 				contextBar, got)
 		}

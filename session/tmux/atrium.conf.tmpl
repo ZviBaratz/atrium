@@ -39,8 +39,14 @@ set-option -g  mouse              on
 #
 # Ctrl+PageUp/PageDown are deliberately NOT used: the attach layer intercepts them
 # for sibling-session cycling (navReason in detach.go) before tmux ever sees them.
-bind-key -n S-PPage copy-mode -eu
-bind-key -n M-PPage copy-mode -eu
+# An agent that draws on the alternate screen (Claude Code's fullscreen renderer,
+# and anything else vim-like) accumulates NO tmux history, so entering copy mode
+# there yields an empty `[0/0]` view and swallows the keypress. Hand the chord to
+# the agent instead and let it scroll its own conversation — the same test tmux's
+# own default wheel binding makes. On a normal pane the else-branch runs and copy
+# mode works as below.
+bind-key -n S-PPage if-shell -F '#{alternate_on}' 'send-keys S-PPage' { copy-mode -eu }
+bind-key -n M-PPage if-shell -F '#{alternate_on}' 'send-keys M-PPage' { copy-mode -eu }
 bind-key -T copy-mode-vi S-PPage send-keys -X page-up
 bind-key -T copy-mode-vi S-NPage send-keys -X page-down
 bind-key -T copy-mode-vi M-PPage send-keys -X page-up
@@ -56,8 +62,8 @@ bind-key -T copy-mode-vi M-NPage send-keys -X page-down
 # the bottom is what keeps the first nudge one line instead of a page. scroll-up
 # moves the view and leaves the cursor, unlike vi's j/k, which move the cursor and
 # only scroll once it hits an edge.
-bind-key -n S-Up   copy-mode -e \; send-keys -X scroll-up
-bind-key -n S-Down copy-mode -e \; send-keys -X scroll-down
+bind-key -n S-Up   if-shell -F '#{alternate_on}' 'send-keys S-Up'   { copy-mode -e ; send-keys -X scroll-up }
+bind-key -n S-Down if-shell -F '#{alternate_on}' 'send-keys S-Down' { copy-mode -e ; send-keys -X scroll-down }
 bind-key -T copy-mode-vi S-Up   send-keys -X scroll-up
 bind-key -T copy-mode-vi S-Down send-keys -X scroll-down
 
