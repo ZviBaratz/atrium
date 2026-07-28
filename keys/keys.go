@@ -19,8 +19,6 @@ const (
 	KeyNew
 	KeyKill
 	KeyQuit
-	KeyReview
-	KeyPush
 	KeySubmit
 	KeyCreate // Open a pull request for the pushed branch via gh
 	KeyMerge  // Squash-merge the selected session's pull request via gh
@@ -156,6 +154,13 @@ const (
 	KeyEscape
 	// KeyRedraw is ctrl+l, the universal manual-repaint escape hatch.
 	KeyRedraw
+
+	// NumKeyNames is the count of the constants above, and must stay last. It is
+	// pinned against the registry by TestKeyNames_AllRegisteredOrDeliberatelyAbsent,
+	// so a name declared here without an Entry — or an Entry deleted without its
+	// name — fails loudly. KeyReview and KeyPush lived here unregistered and
+	// unreferenced until #374 went looking; this is what stops the next pair.
+	NumKeyNames
 )
 
 // KillKey is the chord that triggers a kill from the session list. It mirrors the
