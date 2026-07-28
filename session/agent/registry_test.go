@@ -39,6 +39,47 @@ func TestResolve(t *testing.T) {
 	}
 }
 
+// TestAutoTapRequiresAnAnchoredMatcher is #347's audit as an executable invariant, and it is
+// the only thing in the tree that states the rule rather than checking one matcher that
+// happens to follow it.
+//
+// Poll maps a matched prompt to PanePrompt unless the matcher sets NoAutoTap, and autoyes
+// taps Enter on PanePrompt (session/tmux/poll.go, session/instance.go ApplyPaneState). A
+// matcher with no Match reads a flat bottom-N window, which is a budget and not a liveness
+// test (#342, #343): the literals such a matcher keys on live verbatim in registry.go, so an
+// agent that greps, reads or discusses this file prints them into its own pane. Flat window
+// AND auto-tap together is how a quote in a transcript came to approve a shell command.
+//
+// So the requirement is structural: a matcher autoyes answers must carry a Match that proves
+// its dialog is live chrome AND that it is the dialog it claims — the two halves #350 found
+// were both load-bearing. Anything less surfaces as needs-input, which is always safe.
+func TestAutoTapRequiresAnAnchoredMatcher(t *testing.T) {
+	var autoTapped, unanchored []string
+	for _, a := range registry {
+		for _, m := range a.Prompts {
+			if m.NoAutoTap {
+				continue
+			}
+			name := string(a.Key) + "/" + m.Name
+			autoTapped = append(autoTapped, name)
+			if m.Match == nil {
+				unanchored = append(unanchored, name)
+			}
+		}
+	}
+	require.Empty(t, unanchored,
+		"a flat-window matcher (Match == nil) must set NoAutoTap: its literals are quotable "+
+			"from this file, and autoyes answers what it matches")
+
+	// The allowlist is the other direction: dropping NoAutoTap from an anchored matcher is
+	// just as much a decision as adding a flat one, and a diff that does it silently reads
+	// like a cleanup. Both entries below earned it by being driven — claude's fetch dialog in
+	// #350, aider's confirm shapes in #271.
+	require.Equal(t, []string{"claude/permission", "aider/confirm"}, autoTapped,
+		"the set of matchers autoyes may answer changed; each addition needs a captured "+
+			"dialog and a positive identifier, not just an anchor")
+}
+
 // --- Claude fixtures (mirroring the session/tmux poll tests, which remain the
 // behavioral regression gate; these pin the same heuristics at the table level).
 
@@ -1064,15 +1105,36 @@ func TestCodexPrompts(t *testing.T) {
 	m, ok := codex.DetectPrompt(approval)
 	require.True(t, ok)
 	require.Equal(t, "approval", m.Name)
+	require.True(t, m.NoAutoTap, "an unanchored approval must never be Enter-approved (#347)")
 
 	permissions := "Codex needs your approval.\n› 1. Yes, grant these permissions for this turn\n" +
 		"  2. No, continue without permissions"
-	_, ok = codex.DetectPrompt(permissions)
+	m, ok = codex.DetectPrompt(permissions)
 	require.True(t, ok, "permission prompt variant")
+	require.True(t, m.NoAutoTap)
 
 	idle := "• Done. The tests pass.\n\n› \n\n  ? for shortcuts"
 	_, ok = codex.DetectPrompt(idle)
 	require.False(t, ok)
+
+	// #347 as filed, and the half NoAutoTap does not fix: the decline literals live verbatim
+	// in registry.go, so a session that greps or discusses this file prints them into its own
+	// pane, and the flat bottom-15 window reads the quote as a live prompt. Composed rather
+	// than captured — it measures the window's reach, not codex's overlay shape, which is
+	// exactly why the fix for it is a captured anchor and not a tighter literal. Until then
+	// NoAutoTap is what keeps this from tapping Enter into whatever is on screen.
+	quoted := strings.Join([]string{
+		"• I grepped the matcher table. The codex entry keys on",
+		"  \"No, and tell Codex what to do differently\", which is the",
+		"  decline option of the command-approval overlay.",
+		"",
+		"› ",
+		"",
+		"  ? for shortcuts",
+	}, "\n")
+	m, ok = codex.DetectPrompt(quoted)
+	require.True(t, ok, "the flat window still reads a quoted literal as a live prompt")
+	require.True(t, m.NoAutoTap, "…so the quote must surface as needs-input, never tap Enter")
 }
 
 func TestCodexGateAndResume(t *testing.T) {
@@ -1116,6 +1178,7 @@ func TestGeminiPrompts(t *testing.T) {
 	m, ok := gemini.DetectPrompt(confirm)
 	require.True(t, ok)
 	require.Equal(t, "confirmation", m.Name)
+	require.True(t, m.NoAutoTap, "an unanchored confirmation must never be Enter-approved (#347)")
 
 	// The pre-adapter matcher ("Yes, allow once") no longer exists in
 	// gemini-cli; current panes must match on the decline option.
@@ -1125,6 +1188,23 @@ func TestGeminiPrompts(t *testing.T) {
 	idle := "✦ Done.\n\n╭───╮\n│ > │\n╰───╯\n~/project   no sandbox   gemini-2.5-pro"
 	_, ok = gemini.DetectPrompt(idle)
 	require.False(t, ok)
+
+	// The #347 quote, composed the same way as codex's above and standing for the same
+	// measurement. For gemini this is where it stops: the CLI is deprecated in favour of
+	// Antigravity (docs/superpowers/specs/2026-07-23-antigravity-integration-design.md), so
+	// the false positive is accepted and made harmless rather than anchored away.
+	quoted := strings.Join([]string{
+		"✦ The gemini entry keys on \"No, suggest changes (esc)\",",
+		"  the decline label of the tool-confirmation dialog.",
+		"",
+		"╭───╮",
+		"│ > │",
+		"╰───╯",
+		"~/project   no sandbox   gemini-2.5-pro",
+	}, "\n")
+	m, ok = gemini.DetectPrompt(quoted)
+	require.True(t, ok, "the flat window still reads a quoted literal as a live prompt")
+	require.True(t, m.NoAutoTap, "…so the quote must surface as needs-input, never tap Enter")
 }
 
 func TestGeminiGateAndResume(t *testing.T) {

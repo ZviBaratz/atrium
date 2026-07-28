@@ -771,7 +771,9 @@ func TestPollCodex(t *testing.T) {
 
 	c = "Would you like to run the following command?\n\n  rm -rf build/\n\n" +
 		"› 1. Yes, proceed\n  3. No, and tell Codex what to do differently"
-	require.Equal(t, PanePrompt, s.Poll(), "an approval overlay is a needs-input state")
+	require.Equal(t, PanePromptManual, s.Poll(),
+		"an approval overlay is a needs-input state — manual, since the matcher reads a flat "+
+			"window and Enter here approves a shell command (#347)")
 
 	c = "• Done. The tests pass.\n\n› \n\n  ? for shortcuts"
 	require.Equal(t, PaneIdle, s.Poll(), "marker gone after a prompt commits idle at face value")
@@ -788,7 +790,9 @@ func TestPollGemini(t *testing.T) {
 	require.Equal(t, PaneWorking, s.Poll())
 
 	c = "Apply this change?\n  1. Allow once\n  2. Allow always\n  3. No, suggest changes (esc)"
-	require.Equal(t, PanePrompt, s.Poll(), "a tool confirmation is a needs-input state")
+	require.Equal(t, PanePromptManual, s.Poll(),
+		"a tool confirmation is a needs-input state — manual, for the same reason as codex's "+
+			"approval overlay (#347)")
 
 	// PollNow (the post-detach face-value refresh): gemini is marker-bearing, so —
 	// unlike aider's PaneUnknown — an absent marker with no hook file reads as idle,

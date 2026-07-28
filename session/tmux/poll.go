@@ -344,7 +344,12 @@ func (t *Session) Poll() PaneState {
 	// one autoyes answers, so it tapped Enter into the composer. Claude's permission
 	// matchers are anchored structurally now (agent/registry.go claudeLiveDialogRegion);
 	// codex and gemini still use the flat window, so for them the sentence remains
-	// aspirational — and both still lack NoAutoTap, so their false positives still tap.
+	// aspirational — they still false-fire on their own literals quoted in a transcript.
+	// What #347 removed is the second half: both carry NoAutoTap now, so such a quote
+	// surfaces as needs-input instead of Enter-approving a shell command. The remaining cost
+	// is a row parked on needs-input with its queued prompt undelivered, which is #342's
+	// direction; fixing that for codex needs its overlay captured and anchored, and for
+	// gemini it is accepted (deprecated CLI — see the matcher's own comment).
 	if matcher, ok := t.adapter.DetectPrompt(content); ok {
 		t.monitor.idleStreak = 0
 		state := PanePrompt
