@@ -58,16 +58,37 @@ func (m *home) sweepUndoJournal(now time.Time) {
 // can still point at it and the commits remain recoverable by hand until the
 // horizon passes.
 //
-// Matching on the (Title, Path) pair, which is the same composite storage uses to
-// identify an instance: titles are unique only within a repo group.
+// Matching is on the (Title, Path) pair, which is the same composite storage uses
+// to identify an instance: titles are unique only within a repo group. Deliberately
+// NOT also on the tmux name — this runs before Start, where TmuxSessionName() is
+// still empty, so such a clause would read as a second safety net while never once
+// being true. The tmux collision is caught where it can be: restoreBlocker, against
+// the live fleet.
 func (m *home) supersedeUndoFor(inst *session.Instance) {
 	if err := undo.MarkSuperseded(func(e undo.Entry) bool {
-		if e.Title == inst.Title && e.Path == inst.Path {
-			return true
-		}
-		return e.TmuxName != "" && e.TmuxName == inst.TmuxSessionName()
+		return e.Title == inst.Title && e.Path == inst.Path
 	}); err != nil {
 		log.WarningLog.Printf("undo: cannot retire the record %s reclaimed: %v", inst.Title, err)
+	}
+}
+
+// retireUndoRecord releases a record the restore has consumed: the retained ref
+// first, then the entry naming it.
+//
+// Dropping the ref matters as much as dropping the entry. The restored branch now
+// holds those commits itself, so the ref buys nothing — and once the entry is gone
+// the sweep can never reach it again, so a ref left here is stranded in the user's
+// repository forever: gc-immune, invisible to `git branch`, and named by nothing.
+// Ref before entry for the same reason the sweep uses that order: a crash in
+// between leaves a record the sweep can still expire, never an orphan.
+func (m *home) retireUndoRecord(e undo.Entry) {
+	if e.Ref != "" && e.RepoPath != "" {
+		if err := git.DeleteRef(m.ctx, e.RepoPath, e.Ref); err != nil {
+			log.WarningLog.Printf("undo: could not release retained branch %s in %s: %v", e.Ref, e.RepoPath, err)
+		}
+	}
+	if err := undo.Remove(e.ID); err != nil {
+		log.WarningLog.Printf("undo: cannot drop consumed journal entry: %v", err)
 	}
 }
 
@@ -98,7 +119,7 @@ func (m *home) journalKill(inst *session.Instance, batchID string) (undo.Entry, 
 		return undo.Entry{}, false
 	}
 
-	entry, err := undo.Write(undo.Entry{
+	pending := undo.Entry{
 		BatchID:  batchID,
 		Title:    inst.Title,
 		Display:  inst.DisplayName(),
@@ -106,7 +127,25 @@ func (m *home) journalKill(inst *session.Instance, batchID string) (undo.Entry, 
 		Direct:   inst.IsDirect(),
 		TmuxName: inst.TmuxSessionName(),
 		Snapshot: snapshot,
-	})
+	}
+
+	// The repository is resolved *before* the first write, not after it. That write
+	// is the record that lands on disk before the ref exists, so it is the one a
+	// crash leaves behind — and a record that names a ref but not the repository it
+	// lives in is one the sweep cannot act on, stranding the objects it points at
+	// forever.
+	if !pending.Direct {
+		wt, err := inst.GetGitWorktree()
+		if err != nil {
+			log.WarningLog.Printf("undo %s: cannot resolve worktree, kill will not be undoable: %v", inst.Title, err)
+			return undo.Entry{}, false
+		}
+		pending.RepoPath = wt.GetRepoPath()
+		pending.Branch = wt.GetBranchName()
+		pending.ExistingBranch = wt.IsExistingBranch()
+	}
+
+	entry, err := undo.Write(pending)
 	if err != nil {
 		log.WarningLog.Printf("undo %s: cannot write journal entry, kill will not be undoable: %v", inst.Title, err)
 		return undo.Entry{}, false
@@ -115,17 +154,9 @@ func (m *home) journalKill(inst *session.Instance, batchID string) (undo.Entry, 
 	// A direct session runs in the user's own directory: there is no worktree to
 	// remove and no branch to delete, so the snapshot alone is the whole record.
 	if entry.Direct {
+		m.sweepUndoJournal(time.Now())
 		return entry, true
 	}
-
-	wt, err := inst.GetGitWorktree()
-	if err != nil {
-		log.WarningLog.Printf("undo %s: cannot resolve worktree, kill will not be undoable: %v", inst.Title, err)
-		return entry, false
-	}
-	entry.RepoPath = wt.GetRepoPath()
-	entry.Branch = wt.GetBranchName()
-	entry.ExistingBranch = wt.IsExistingBranch()
 
 	captured, err := inst.PrepareUndo(entry.Ref)
 	if err != nil {

@@ -138,8 +138,12 @@ var paletteGates = map[keys.KeyName]paletteGate{
 	// refusals (a filter-hidden neighbour, a sort that disables the ladder) are
 	// explained by the handlers and are not selection-derived, so they are not
 	// pre-empted here.
-	keys.KeyPauseAll:        global(),
-	keys.KeyResumeAll:       global(),
+	keys.KeyPauseAll:  global(),
+	keys.KeyResumeAll: global(),
+	// Undo reads the journal, not the list: its target is a session that no longer
+	// exists, so nothing about the current selection — including there being none —
+	// can stop it. undoLastKill explains the empty case itself.
+	keys.KeyUndoKill:        global(),
 	keys.KeyMoveUp:          global(),
 	keys.KeyMoveDown:        global(),
 	keys.KeyMoveGroupUp:     global(),

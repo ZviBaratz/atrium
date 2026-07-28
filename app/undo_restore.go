@@ -11,7 +11,6 @@ import (
 	"github.com/ZviBaratz/atrium/config"
 	"github.com/ZviBaratz/atrium/internal/undo"
 	"github.com/ZviBaratz/atrium/keys"
-	"github.com/ZviBaratz/atrium/log"
 	"github.com/ZviBaratz/atrium/session"
 	"github.com/ZviBaratz/atrium/session/git"
 	"github.com/ZviBaratz/atrium/ui"
@@ -186,20 +185,23 @@ func (m *home) liveSessionNames() map[string]struct{} {
 // handleUndoDone lands a finished restore on the Update loop: rows in, state
 // persisted, consumed records dropped, and an honest report of what came back.
 func (m *home) handleUndoDone(msg undoDoneMsg) tea.Cmd {
-	for i, inst := range msg.instances {
+	for _, inst := range msg.instances {
 		finalize := m.list.AddInstance(inst)
 		finalize()
 		m.list.SelectInstance(inst)
-		// Only now is the record spent. Dropping it earlier would make a restore
-		// that dies half-way unrepeatable; the retention ref outlives it either way
-		// and the sweep is what eventually releases the objects.
-		if err := undo.Remove(msg.entries[i].ID); err != nil {
-			log.WarningLog.Printf("undo: cannot drop consumed journal entry: %v", err)
-		}
 	}
 	if len(msg.instances) > 0 {
 		if err := m.persistInstances(); err != nil {
+			// The records stay, so the restore is still on offer. Rows and branches
+			// exist but nothing is on disk, and leaving the journal intact is what
+			// keeps that recoverable rather than merely reported.
 			return m.handleError(err)
+		}
+		// Only once the restore is durable is a record spent — and it is spent
+		// whole: entry and retained ref together, or the ref is stranded with
+		// nothing left that names it.
+		for _, e := range msg.entries {
+			m.retireUndoRecord(e)
 		}
 	}
 

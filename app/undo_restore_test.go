@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ZviBaratz/atrium/config"
 	"github.com/ZviBaratz/atrium/internal/undo"
 	"github.com/ZviBaratz/atrium/keys"
 	"github.com/ZviBaratz/atrium/session"
@@ -304,4 +305,72 @@ func TestARefusedRestoreCreatesNothing(t *testing.T) {
 func TestUndoIsSingleFlight(t *testing.T) {
 	assert.False(t, keyAllowedWhileBusy(keys.KeyUndoKill),
 		"undo must be blocked while an action is in flight, or a double press restores twice")
+}
+
+// TestASuccessfulRestoreReleasesTheRetainedBranch. The restored branch holds those
+// commits itself now, so the ref buys nothing — and the record that named it is
+// spent, which means the sweep can never reach it again. A ref left behind here
+// would sit in the user's repository forever: gc-immune, invisible to `git branch`,
+// and named by nothing.
+func TestASuccessfulRestoreReleasesTheRetainedBranch(t *testing.T) {
+	entry, repo := retainedRepo(t, "fix-auth")
+	h := undoHome(t)
+	h.ctx = context.Background()
+	storage, err := session.NewStorage(config.DefaultState())
+	require.NoError(t, err)
+	h.storage = storage
+
+	inst, err := session.NewInstance(session.InstanceOptions{
+		Title: "fix-auth", Path: repo, Program: "sleep 300",
+	})
+	require.NoError(t, err)
+
+	h.handleUndoDone(undoDoneMsg{
+		instances: []*session.Instance{inst},
+		entries:   []undo.Entry{entry},
+	})
+
+	stored, err := undo.Load()
+	require.NoError(t, err)
+	require.Empty(t, stored, "the record is spent")
+
+	_, refStillThere := git.RefExists(context.Background(), repo, entry.Ref)
+	assert.False(t, refStillThere,
+		"the retained branch must be released with the record, or nothing can ever release it")
+}
+
+// TestAFailedPersistKeepsTheRestoreOnOffer. Rows and branches exist but nothing is
+// on disk, so the record has to survive: retiring it there would leave the user
+// with an error message and no second attempt.
+func TestAFailedPersistKeepsTheRestoreOnOffer(t *testing.T) {
+	entry, repo := retainedRepo(t, "fix-auth")
+	h := undoHome(t)
+	h.ctx = context.Background()
+	storage, err := session.NewStorage(config.DefaultState())
+	require.NoError(t, err)
+	h.storage = storage
+
+	inst, err := session.NewInstance(session.InstanceOptions{
+		Title: "fix-auth", Path: repo, Program: "sleep 300",
+	})
+	require.NoError(t, err)
+
+	// Make the data dir unwritable so the state save fails the way a full disk or a
+	// permissions problem would.
+	dataDir, err := config.GetConfigDir()
+	require.NoError(t, err)
+	require.NoError(t, os.Chmod(dataDir, 0o500))
+	t.Cleanup(func() { _ = os.Chmod(dataDir, 0o700) })
+
+	h.handleUndoDone(undoDoneMsg{
+		instances: []*session.Instance{inst},
+		entries:   []undo.Entry{entry},
+	})
+	require.NoError(t, os.Chmod(dataDir, 0o700))
+
+	stored, err := undo.Load()
+	require.NoError(t, err)
+	require.Len(t, stored, 1, "an undurable restore must stay undoable")
+	_, refStillThere := git.RefExists(context.Background(), repo, entry.Ref)
+	assert.True(t, refStillThere, "and its commits must stay pinned")
 }

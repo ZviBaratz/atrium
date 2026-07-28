@@ -84,7 +84,10 @@ func TestJournalKillRetainsTheBranchSoTeardownCannotDestroyIt(t *testing.T) {
 	require.True(t, undoable)
 	assert.Equal(t, head, entry.SHA)
 	assert.Equal(t, wt.GetBranchName(), entry.Branch)
-	assert.Equal(t, repo, entry.RepoPath)
+	// Against the worktree's own resolved repo path, not the temp dir it was built
+	// from: on macOS /var is a symlink to /private/var, so the two differ and it is
+	// the resolved one a restore has to run git in.
+	assert.Equal(t, wt.GetRepoPath(), entry.RepoPath)
 
 	require.NoError(t, inst.Kill())
 	require.Error(t, git.CreateBranchAt(context.Background(), repo, wt.GetBranchName(), "HEAD~0~1"),
@@ -390,4 +393,39 @@ func TestBatchKillJournalsEverySessionAndCountsThem(t *testing.T) {
 	require.Len(t, group, 2)
 	assert.Equal(t, group[0].BatchID, group[1].BatchID)
 	assert.NotEmpty(t, group[0].BatchID)
+}
+
+// TestTheRecordWrittenBeforeTheRefCanReleaseIt. The first write is the record a
+// crash leaves behind — it lands before the ref exists — so it has to carry the
+// repository the ref lives in. Without that the sweep has a refname it cannot act
+// on, and the objects it points at are stranded: gc-immune, invisible to
+// `git branch`, and unreachable by any later cleanup.
+func TestTheRecordWrittenBeforeTheRefCanReleaseIt(t *testing.T) {
+	undoSandbox(t)
+	inst, repo := gitSession(t, "fix-auth")
+	h := undoHome(t)
+
+	entry, undoable := h.journalKill(inst, "")
+	require.True(t, undoable)
+
+	// Reproduce the crash window: the ref exists, but only the first write landed.
+	crashed := entry
+	crashed.SHA = ""
+	crashed.Committed = false
+	crashed.At = time.Now().Add(-undo.TTL - time.Hour)
+	_, err := undo.Write(crashed)
+	require.NoError(t, err)
+	require.NotEmpty(t, crashed.RepoPath, "the first write must already name the repository")
+
+	_, before := git.RefExists(context.Background(), repo, entry.Ref)
+	require.True(t, before)
+
+	h.ctx = context.Background()
+	h.sweepUndoJournal(time.Now())
+
+	_, after := git.RefExists(context.Background(), repo, entry.Ref)
+	assert.False(t, after, "the sweep must be able to release a half-written record's ref")
+	stored, err := undo.Load()
+	require.NoError(t, err)
+	assert.Empty(t, stored)
 }
