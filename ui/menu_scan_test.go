@@ -19,9 +19,10 @@ import (
 func TestMenuBars_KeysExistInRegistry(t *testing.T) {
 	// A new MenuState shifts this count and fails here on purpose: decide
 	// whether its bar carries key hints (add it to the scan) or runtime
-	// progress text (StateGeneratingName and StateBusy are exempt — their
-	// lines are progress, not keys).
-	require.Equal(t, 6, int(StateVisual), "MenuState enum changed — classify the new state for this scan")
+	// progress text (StateBusy is exempt — its line is progress, not keys).
+	// The count dropped by one when StateGeneratingName was folded into
+	// StateBusy's two-owner row (#380).
+	require.Equal(t, 5, int(StateVisual), "MenuState enum changed — classify the new state for this scan")
 
 	known := map[string]bool{}
 	for _, b := range keys.GlobalKeyBindings {

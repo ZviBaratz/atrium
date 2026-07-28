@@ -77,6 +77,6 @@ func TestMenu_QuietBlanksHintsNotNotices(t *testing.T) {
 	m.ClearNotice()
 
 	// Contextual states still render — they are forced visible even with the bar off.
-	m.SetBusy("pushing…")
+	m.SetBusy(BusyAction, "pushing…")
 	require.Contains(t, m.String(), "pushing…", "busy progress renders despite quiet")
 }

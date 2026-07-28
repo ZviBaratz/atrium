@@ -54,6 +54,16 @@ type pushedMsg struct{}
 // through the runtime, carrying the new PR number (0 if gh's output had none).
 type prCreatedMsg struct{ number int }
 
+// suggestionAcceptedMsg carries the result of accepting claude's ghost-text
+// suggestion. The accept runs off the update thread (it polls the pane for up to a
+// second), so the optimistic status flip and the acknowledgment land here, on the
+// main loop, rather than in the goroutine that did the tmux work.
+type suggestionAcceptedMsg struct {
+	instance *session.Instance
+	accepted bool
+	err      error
+}
+
 // prOpenedMsg is returned by the open-PR action once gh has launched the browser,
 // carrying the PR number for the acknowledgment. Unlike a merge it changes no
 // state, so its handler only shows a notice.
@@ -184,14 +194,13 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.err != nil {
 			// The progress row goes away and we return to plain navigation; surface the
 			// failure and leave the name untouched rather than applying a junk fallback.
-			// Don't clobber a concurrent "busy" row: if an action is in flight, leave
-			// StateBusy in place (asyncActionDoneMsg restores StateDefault later).
-			if !m.actionInFlight {
-				m.menu.SetState(ui.StateDefault)
-			}
+			// A concurrent modal action keeps the row — that is the owner ranking's job
+			// now, not a hand-rolled actionInFlight check here.
+			m.menu.ClearBusy(ui.BusyBackground)
 			m.recomputeLayout() // the progress bar gave up its row; panes reclaim it
 			return m, m.handleError(msg.err)
 		}
+		m.menu.ClearBusy(ui.BusyBackground)
 		// Offer the generated name through the existing rename overlay so the user
 		// can confirm or edit it before it commits.
 		m.renameTarget = msg.instance
@@ -232,7 +241,7 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			cmds = append(cmds, cmd)
 		}
 		if msg.attachGen == m.attachGen {
-			recoveries := recoverLostInstances(msg.results, m.lostStrikes)
+			recoveries := recoverLostInstances(msg.results, m.lostStrikes, m.retiring)
 			if len(recoveries) > 0 {
 				// Every recovery ends the instance Paused (even a failed one), so its
 				// status genuinely changed — persist. Then make the transition visible
@@ -437,12 +446,15 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.finishBatch(msg.pausedInstances, len(msg.failures) > 0,
 			fmt.Sprintf("paused %d session%s", msg.paused, plural(msg.paused)),
 			msg.summary())
+	case killDoneMsg:
+		// A single kill finished its I/O; apply the model half here.
+		return m, m.applyKillDone(msg)
 	case batchKillDoneMsg:
-		// A confirmed batch kill finished. Tear down each killed session's preview
-		// terminal on the main loop (single-session kill does the same). All-success
-		// gets a transient notice; any failures go to a persistent modal naming which
-		// sessions survived and why. Either way, refresh the list so the now-gone rows
-		// disappear.
+		// A confirmed batch kill finished its I/O. Apply every model change it implies
+		// here, on the main loop — storage deletes, row removals, bookkeeping — then
+		// report. All-success gets a transient notice; any failures go to a persistent
+		// modal naming which sessions survived and why.
+		msg = m.applyBatchKill(msg)
 		return m, m.finishBatch(msg.killedInstances, len(msg.failures) > 0,
 			fmt.Sprintf("killed %d session%s", msg.killed, plural(msg.killed)),
 			msg.summary())
@@ -452,10 +464,52 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// result back through the runtime so its own case handles it (a success
 		// message, an error, or a harmless nil).
 		m.actionInFlight = false
-		m.menu.SetState(ui.StateDefault) // SetInstance corrects to Empty if the list emptied
-		m.recomputeLayout()              // the progress row gave up its line; panes reclaim it
+		// ClearBusy, not SetState: a background operation may still be running, and
+		// its line should come back rather than being wiped by the action that was
+		// covering it. (SetInstance corrects to Empty if the list emptied.)
+		m.menu.ClearBusy(ui.BusyAction)
+		m.recomputeLayout() // the progress row gave up its line; panes reclaim it
 		result := msg.result
 		return m, func() tea.Msg { return result }
+	case backgroundActionDoneMsg:
+		// A background operation finished. It never armed actionInFlight, so this
+		// must not clear it — a modal action may be running concurrently, and
+		// releasing its key gate mid-teardown is exactly the interleave the gate
+		// exists to prevent.
+		m.menu.ClearBusy(ui.BusyBackground)
+		m.recomputeLayout()
+		result := msg.result
+		return m, func() tea.Msg { return result }
+	case renameDoneMsg:
+		if msg.err != nil {
+			// The rename failed partway (tmux renamed but git did not, say). Reopen
+			// the dialog with what the user typed, exactly as the validation-failure
+			// path does, so neither the name nor the note is lost.
+			m.renameTarget = msg.instance
+			m.renameOverlay = overlay.NewRenameOverlay(msg.value, msg.note, false)
+			m.state = stateRename
+			return m, m.handleError(msg.err)
+		}
+		// The deep rename replaced the real title, so the cosmetic label must go or
+		// it would keep shadowing it.
+		msg.instance.SetDisplayName("")
+		msg.instance.SetNote(msg.note)
+		if err := m.persistInstances(); err != nil {
+			return m, m.handleError(err)
+		}
+		return m, m.instanceChanged()
+	case suggestionAcceptedMsg:
+		if msg.err != nil {
+			return m, m.handleError(fmt.Errorf("accept suggestion: %w", msg.err))
+		}
+		if !msg.accepted {
+			return m, m.handleInfoNotice("agent isn't waiting on a prompt — nothing to approve or accept")
+		}
+		// Optimistic flip on the main thread: it updates the row glyph immediately
+		// and turns a double-press into the guard notice instead of a second Enter.
+		// Self-correcting — the next poll tick reclassifies the pane.
+		msg.instance.SetStatus(session.Running)
+		return m, m.handleInfoNotice(fmt.Sprintf("accepted suggestion — sent to '%s'", msg.instance.DisplayName()))
 	case pushedMsg:
 		// A confirmed push succeeded: acknowledge it and refresh so the create-PR
 		// hint flips now that the branch is pushed (matching prCreatedMsg).
@@ -560,7 +614,7 @@ func (m *home) handleQuit() (tea.Model, tea.Cmd) {
 			// hence the confirm.
 			return m, m.confirmAction(
 				"A session is still starting.\n\nQuit and abandon it? Its branch/worktree may be left behind.",
-				tea.Quit,
+				instantAction, tea.Quit,
 			)
 		}
 		m.quitRequested = true
@@ -570,7 +624,7 @@ func (m *home) handleQuit() (tea.Model, tea.Cmd) {
 	if err := m.persistInstances(); err != nil {
 		return m, m.confirmAction(
 			"Could not save state: "+err.Error()+"\n\nQuit anyway? Unsaved state will be lost.",
-			tea.Quit,
+			instantAction, tea.Quit,
 		)
 	}
 	return m, tea.Quit
@@ -868,7 +922,16 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 	// overlay that a completion handler (pause → rename) would then clobber. Quit
 	// and ctrl+l are handled above, so a wedged action stays escapable.
 	if m.actionInFlight && !keyAllowedWhileBusy(name) {
-		return m, m.handleInfoNotice("busy — " + m.menu.BusyText())
+		// Fix the SENTENCE for a missing label rather than inventing copy for it:
+		// "busy — " only parses because the label is a gerund, so with no label the
+		// dash dangled at the user. "busy" alone is at least true. The required
+		// label parameter makes this unreachable in practice; it is the belt to
+		// that braces.
+		notice := "busy"
+		if label := m.menu.BusyText(); label != "" {
+			notice = "busy — " + label
+		}
+		return m, m.handleInfoNotice(notice)
 	}
 
 	return m.dispatchAction(name)

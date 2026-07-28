@@ -236,7 +236,7 @@ func TestOverCapDialogCommaOpensTheSessionLimit(t *testing.T) {
 func TestCommaIsInertInAnUnarmedConfirmation(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	h := newFanOutHome(t, gitInitRepo(t))
-	h.confirmAction("Do the thing?", func() tea.Msg { return nil })
+	h.confirmAction("Do the thing?", instantAction, func() tea.Msg { return nil })
 	require.Equal(t, stateConfirm, h.state)
 
 	h.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(",")})

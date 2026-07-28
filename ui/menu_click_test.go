@@ -95,7 +95,7 @@ func TestMenu_NoClickZonesWithoutKeys(t *testing.T) {
 	_ = m.String()
 	require.NotEmpty(t, m.clickTargets, "the empty bar has clickable keys")
 
-	m.SetBusy("pushing…")
+	m.SetBusy(BusyAction, "pushing…")
 	_ = m.String()
 	require.Empty(t, m.clickTargets, "a busy progress bar carries no keys")
 

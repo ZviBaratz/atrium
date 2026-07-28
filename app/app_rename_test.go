@@ -31,14 +31,14 @@ func newRenameTestHome(t *testing.T) (*home, []*session.Instance) {
 // be rejected (before any side effects) rather than silently colliding two sessions.
 func TestDeepRename_RejectsDuplicateTitle(t *testing.T) {
 	h, insts := newRenameTestHome(t)
-	require.Error(t, h.deepRename(insts[0], "beta"))
+	require.Error(t, h.validateDeepRename(insts[0], "beta"))
 	// The instance is untouched.
 	require.Equal(t, "alpha", insts[0].Title)
 }
 
 func TestDeepRename_RejectsEmptyTitle(t *testing.T) {
 	h, insts := newRenameTestHome(t)
-	require.Error(t, h.deepRename(insts[0], ""))
+	require.Error(t, h.validateDeepRename(insts[0], ""))
 }
 
 // Duplicate rejection is scoped to the repo group: a session in another group may
@@ -51,12 +51,9 @@ func TestDeepRename_AllowsSameTitleAcrossGroups(t *testing.T) {
 	require.NoError(t, err)
 	h.list.AddInstance(other)()
 
-	// alpha is unstarted so the rename still fails — but at the started check,
-	// AFTER the duplicate guard. An "already exists" error would mean the guard
-	// wrongly counted a session from another group.
-	err = h.deepRename(insts[0], "elsewhere")
-	require.Error(t, err)
-	require.NotContains(t, err.Error(), "already exists")
+	// A session in another group may take the same title: validation must pass.
+	require.NoError(t, h.validateDeepRename(insts[0], "elsewhere"),
+		"the duplicate guard must not count a session from another group")
 }
 
 // Same-group rejection compares derived names, not raw titles: a variant that
@@ -64,7 +61,7 @@ func TestDeepRename_AllowsSameTitleAcrossGroups(t *testing.T) {
 func TestDeepRename_RejectsDerivedVariantInGroup(t *testing.T) {
 	h, insts := newRenameTestHome(t)
 	// insts[1] is "beta" in the same group; "Beta" differs only by case.
-	err := h.deepRename(insts[0], "Beta")
+	err := h.validateDeepRename(insts[0], "Beta")
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "already exists")
 }
@@ -73,10 +70,8 @@ func TestDeepRename_RejectsDerivedVariantInGroup(t *testing.T) {
 // title — keeping its current title must not trip the duplicate guard.
 func TestDeepRename_AllowsKeepingOwnTitle(t *testing.T) {
 	h, insts := newRenameTestHome(t)
-	// alpha is unstarted, so Rename() will fail at the started check — but only AFTER the
-	// duplicate guard passes. A duplicate-title error here would mean the guard wrongly
-	// flagged the instance's own title.
-	err := h.deepRename(insts[0], "alpha")
-	require.Error(t, err)
-	require.NotContains(t, err.Error(), "already exists")
+	// Keeping its own title must pass the duplicate guard: the instance is
+	// deliberately skipped when scanning for collisions.
+	require.NoError(t, h.validateDeepRename(insts[0], "alpha"),
+		"the duplicate guard must not flag the instance's own title")
 }

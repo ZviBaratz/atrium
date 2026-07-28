@@ -344,11 +344,15 @@ type lostRecovery struct {
 // the next tick's Paused check clears the strike. Returns one lostRecovery per
 // instance acted on so the caller can persist and surface them. Runs on the main
 // thread — the only place model state may be mutated.
-func recoverLostInstances(results []instanceMetaResult, strikes map[*session.Instance]int) []lostRecovery {
+func recoverLostInstances(results []instanceMetaResult, strikes map[*session.Instance]int, retiring map[*session.Instance]bool) []lostRecovery {
 	var recovered []lostRecovery
 	for _, r := range results {
-		if !r.sessionLost || r.instance.Paused() {
-			delete(strikes, r.instance) // alive (or already paused): clear any prior strikes
+		// A retiring session's pane is SUPPOSED to die: its kill is in flight and
+		// its row still exists for the length of that window. Recovering it would
+		// park it as Paused and toast "terminal exited" — a notice that is both
+		// false and painted over the kill's own progress row (#380).
+		if !r.sessionLost || r.instance.Paused() || retiring[r.instance] {
+			delete(strikes, r.instance) // alive, paused, or retiring: clear any prior strikes
 			continue
 		}
 		strikes[r.instance]++

@@ -253,7 +253,10 @@ func (m *home) handleRenameState(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	if submitted && target != nil {
 		if deep {
-			if err := m.deepRename(target, value); err != nil {
+			// Validate here, on the main thread — the collision check reads the whole
+			// instance list. Only the I/O half (tmux rename, git branch rename, and a
+			// worktree directory move) goes to the goroutine, behind its label.
+			if err := m.validateDeepRename(target, value); err != nil {
 				// The rename was rejected before anything changed (e.g. a name
 				// collision). Reopen the dialog pre-filled with the attempted name
 				// and note so neither is lost — nothing is persisted until a rename
@@ -263,9 +266,12 @@ func (m *home) handleRenameState(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.state = stateRename
 				return m, m.handleError(err)
 			}
-		} else {
-			target.SetDisplayName(value)
+			// The note lands with the rename, in renameDoneMsg — the deep path
+			// persists once, after the I/O succeeds.
+			return m, m.beginAsyncAction(fmt.Sprintf("renaming to '%s'…", value),
+				renameIOCmd(target, value, note))
 		}
+		target.SetDisplayName(value)
 		target.SetNote(note)
 		if err := m.persistInstances(); err != nil {
 			return m, m.handleError(err)
@@ -581,15 +587,17 @@ func (m *home) approveSelected() (tea.Model, tea.Cmd) {
 	// with no live pane on the guarded-notice path rather than surfacing
 	// AcceptSuggestion's "not running" error for a no-op keypress.
 	if selected.GetStatus() == session.Ready && selected.Started() {
-		accepted, err := selected.AcceptSuggestion()
-		if err != nil {
-			return m, m.handleError(fmt.Errorf("accept suggestion: %w", err))
-		}
-		if accepted {
-			// Same optimistic flip as approve, for the same reasons.
-			selected.SetStatus(session.Running)
-			return m, m.handleInfoNotice(fmt.Sprintf("accepted suggestion — sent to '%s'", selected.DisplayName()))
-		}
+		// The one branch here that must leave the update thread. AcceptSuggestion
+		// captures the pane, sends Right, then POLLS the pane every 20ms for up to a
+		// second waiting for the ghost text to commit — up to ~52 tmux subprocesses
+		// and a full second of frozen UI, from a bare keypress with no dialog in
+		// front of it. It was the worst per-keystroke stall in the app (#380).
+		// The ApprovePrompt branch above stays inline: it is one send-keys.
+		inst := selected
+		return m, m.beginAsyncAction("accepting suggestion…", func() tea.Msg {
+			accepted, err := inst.AcceptSuggestion()
+			return suggestionAcceptedMsg{instance: inst, accepted: accepted, err: err}
+		})
 	}
 	return m, m.handleInfoNotice("agent isn't waiting on a prompt — nothing to approve or accept")
 }
@@ -700,9 +708,10 @@ func (m *home) startAutoNameSelected() (tea.Model, tea.Cmd) {
 		return m, m.handleInfoNotice(stillStartingNotice)
 	}
 	m.generatingName = true
-	m.menu.SetState(ui.StateGeneratingName)
-	m.recomputeLayout() // the progress bar now claims a row; shrink the panes to fit
-	return m, runAutoNameCmd(m.ctx, selected, selected.Prompt())
+	// Background, not modal: an LLM name generation takes seconds, and freezing
+	// every mutating key for that long would be a far worse trade than the double-A
+	// press m.generatingName already refuses. The row still names it (#380).
+	return m, m.beginBackgroundAction("generating name…", runAutoNameCmd(m.ctx, selected, selected.Prompt()))
 }
 
 // worktreeAction builds a deferred command that resolves selected's git worktree
@@ -727,8 +736,8 @@ func worktreeAction(selected *session.Instance, fn func(worktree *git.Worktree) 
 // -> message shape; the read-only openPR uses worktreeAction directly without a
 // prompt. fn must be UI-thread-safe (touch only worktree/selected, return a
 // message) since it runs in a goroutine.
-func (m *home) confirmWorktreeAction(message, busyLabel string, selected *session.Instance, fn func(worktree *git.Worktree) tea.Msg) tea.Cmd {
-	return m.confirmAsyncAction(message, busyLabel, worktreeAction(selected, fn))
+func (m *home) confirmWorktreeAction(message string, label busyLabel, selected *session.Instance, fn func(worktree *git.Worktree) tea.Msg) tea.Cmd {
+	return m.confirmAction(message, label, worktreeAction(selected, fn))
 }
 
 // pushSelected confirms and pushes the selected session's branch.
@@ -807,7 +816,7 @@ func (m *home) mergeSelected() (tea.Model, tea.Cmd) {
 	}
 	// Defer the worktree lookup and network merge into the confirm action, run off
 	// the UI thread only if the user confirms.
-	confirm := m.confirmWorktreeAction(message, fmt.Sprintf("merging PR #%d…", number), selected, func(worktree *git.Worktree) tea.Msg {
+	confirm := m.confirmWorktreeAction(message, busyLabel(fmt.Sprintf("merging PR #%d…", number)), selected, func(worktree *git.Worktree) tea.Msg {
 		if err := worktree.MergePR(); err != nil {
 			return err
 		}
@@ -894,12 +903,17 @@ func (m *home) openPRForSelected() (tea.Model, tea.Cmd) {
 	number := status.Number
 	// Defer the worktree lookup + browser launch into a tea.Cmd so a slow gh
 	// never blocks the UI thread. No confirmation: opening a browser is read-only.
-	return m, worktreeAction(selected, func(worktree *git.Worktree) tea.Msg {
-		if err := worktree.OpenPRURL(); err != nil {
-			return err
-		}
-		return prOpenedMsg{number: number}
-	})
+	// Background rather than modal for the same reason — `gh pr view --web` is a
+	// network round trip that can stall on auth, so it earns a name on the row, but
+	// freezing every mutating key for a read-only browser launch would be a heavier
+	// promise than the work deserves.
+	return m, m.beginBackgroundAction(fmt.Sprintf("opening PR #%d…", number),
+		worktreeAction(selected, func(worktree *git.Worktree) tea.Msg {
+			if err := worktree.OpenPRURL(); err != nil {
+				return err
+			}
+			return prOpenedMsg{number: number}
+		}))
 }
 
 // pauseSelected commits the selected session's changes, frees its worktree, and

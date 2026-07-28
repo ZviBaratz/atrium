@@ -107,17 +107,20 @@ func (m *home) pushOneContext(inst *session.Instance) {
 
 // instanceChanged updates the preview pane, menu, and diff pane based on the selected instance. It returns an error
 // Cmd if there was any error.
-// deepRename renames the selected instance's title, git branch, worktree directory, and tmux
-// session to value, then clears the cosmetic label so the list shows the corrected name.
-// Persisting the result is the caller's responsibility, so the rename and any note edit land
-// in a single state.json write. It rejects an empty title or one already used in the instance's
+// validateDeepRename checks whether selected may be renamed to value. It performs
+// no I/O and changes nothing: the rename itself (tmux session, git branch, worktree
+// directory) runs off the update thread in renameIOCmd, and persisting is the
+// caller's responsibility so the rename and any note edit land in a single
+// state.json write.
+//
+// The check stays on the main thread because it reads the whole instance list. It rejects an empty title or one already used in the instance's
 // repo group — comparing derived
 // names (tmux segment, branch slug), not raw titles, and also reserving the qualified tmux
 // name the rename would mint (plus its "_term" terminal-shell sibling) against every session.
 // Same-titled sessions in other groups are fine: their qualified tmux names differ.
 // Runs synchronously on the main event loop — the rename is a handful of instant subprocesses,
 // and the git/tmux structs guard the fields the background poll loop reads.
-func (m *home) deepRename(selected *session.Instance, value string) error {
+func (m *home) validateDeepRename(selected *session.Instance, value string) error {
 	if value == "" {
 		return fmt.Errorf("session name cannot be empty")
 	}
@@ -136,11 +139,28 @@ func (m *home) deepRename(selected *session.Instance, value string) error {
 			}
 		}
 	}
-	if err := selected.Rename(value); err != nil {
-		return err
-	}
-	selected.SetDisplayName("")
 	return nil
+}
+
+// renameDoneMsg carries a deep rename's result back to the main loop. value and
+// note are echoed so a failure can reopen the overlay with exactly what the user
+// typed — nothing is persisted until a rename succeeds.
+type renameDoneMsg struct {
+	instance *session.Instance
+	value    string
+	note     string
+	err      error
+}
+
+// renameIOCmd performs the deep rename off the update thread: a tmux
+// rename-session, a git branch rename, and a worktree DIRECTORY MOVE. The old
+// doc comment called that "a handful of instant subprocesses" — an unmeasured
+// claim of exactly the kind the named-loading policy exists to stop (#380).
+// Validation stays on the main thread (it reads m.list); only the I/O moves.
+func renameIOCmd(inst *session.Instance, value, note string) tea.Cmd {
+	return func() tea.Msg {
+		return renameDoneMsg{instance: inst, value: value, note: note, err: inst.Rename(value)}
+	}
 }
 
 type instanceStartedMsg struct {
@@ -485,15 +505,15 @@ func (m *home) resumeSelected(selected *session.Instance) tea.Cmd {
 	// One label for both paths, so the progress row reads the same whether the resume
 	// was immediate or came through the capacity confirmation — the same anti-drift
 	// reason SetConfirmLabel sits next to the message it labels.
-	const busyLabel = "resuming…"
+	const resumeLabel busyLabel = "resuming…"
 	if clause := m.resumeCapNotice(1); clause != "" {
-		cmd := m.confirmAsyncAction(
+		cmd := m.confirmAction(
 			fmt.Sprintf("Resume session '%s'?\n%s", selected.DisplayName(), clause),
-			busyLabel, action)
+			resumeLabel, action)
 		m.confirmationOverlay.SetConfirmLabel("resume")
 		return cmd
 	}
-	return m.beginAsyncAction(busyLabel, action)
+	return m.beginAsyncAction(string(resumeLabel), action)
 }
 
 // handlePauseDone completes a single pause on the Update loop: it tears down the
@@ -538,7 +558,7 @@ func (m *home) handleResumeDone(msg resumeDoneMsg) tea.Cmd {
 	}
 	selected, wt := msg.instance, msg.worktree
 	message := fmt.Sprintf("Branch '%s' is checked out in the main repo. Detach it and resume?", msg.branchName)
-	return m.confirmAsyncAction(message, "resuming…", func() tea.Msg {
+	return m.confirmAction(message, "resuming…", func() tea.Msg {
 		if derr := wt.DetachBranchInBaseRepo(); derr != nil {
 			// e.g. the dirty-repo refusal — show it in a modal the user can read.
 			return infoMsg(derr.Error())
@@ -666,7 +686,7 @@ func (m *home) resumeInstances(insts []*session.Instance, message string) tea.Cm
 		return res
 	}
 	label := fmt.Sprintf("resuming %d session%s…", len(insts), plural(len(insts)))
-	cmd := m.confirmAsyncAction(message, label, action)
+	cmd := m.confirmAction(message, busyLabel(label), action)
 	// The hint names the action rather than saying "confirm" (#399). Set here, in the
 	// shared core, so both entry points get the same label from the same count
 	// (confirmAsyncAction created m.confirmationOverlay synchronously above).
@@ -790,7 +810,7 @@ func (m *home) pauseInstances(insts []*session.Instance, message string) tea.Cmd
 		return res
 	}
 	label := fmt.Sprintf("pausing %d session%s…", len(insts), plural(len(insts)))
-	cmd := m.confirmAsyncAction(message, label, action)
+	cmd := m.confirmAction(message, busyLabel(label), action)
 	// The hint names the action rather than saying "confirm" (#399). Set here, in the
 	// shared core, so both entry points get the same label from the same count
 	// (confirmAsyncAction created m.confirmationOverlay synchronously above).
@@ -805,12 +825,24 @@ type killFailure struct {
 	err   error
 }
 
-// batchKillDoneMsg reports the outcome of a batch kill back through Update so the
-// feedback (notice vs. modal), preview-terminal teardown, and list refresh all
-// run on the main loop. killed counts the successes; killedInstances carries the
-// torn-down instances so Update can clean up their preview terminals; failures
-// lists the rest, in list order.
+// killOutcome pairs one instance with the result of tearing its tmux session and
+// worktree down. It is what the goroutine half of a kill produces; the model half
+// (storage, row, bookkeeping) is applied from it on the update thread.
+type killOutcome struct {
+	inst *session.Instance
+	err  error
+}
+
+// batchKillDoneMsg carries a batch kill's teardown results back to the main loop,
+// which applies every model change they imply — storage deletes, row removals,
+// preview-terminal cleanup — and then reports the outcome (notice vs. modal).
+//
+// torndown holds one entry per instance that got as far as teardown, successful or
+// not; failures holds the ones refused before that (a branch held by the base
+// repo). killed and killedInstances are filled in by the handler as it applies the
+// results, so the counts describe what actually happened to the model.
 type batchKillDoneMsg struct {
+	torndown        []killOutcome
 	killed          int
 	killedInstances []*session.Instance
 	failures        []killFailure
@@ -831,6 +863,39 @@ func (msg batchKillDoneMsg) summary() string {
 		fmt.Fprintf(&b, "\n  • %s — %s", f.title, f.err.Error())
 	}
 	return b.String()
+}
+
+// applyBatchKill lands a batch kill's teardown results on the model: it deletes
+// each retired session from storage, drops its row, and forgets its bookkeeping.
+// Main thread only — every line here touches shared model state, which is exactly
+// why it is not in the goroutine that did the tearing down.
+//
+// Ordering note: the split means the tmux session and worktree are already gone by
+// the time storage is written, so a DeleteInstance failure can no longer abort the
+// removal — the session is retired whether or not its record could be cleared. The
+// row goes regardless (a row pointing at a deleted worktree is worse than none)
+// and the failure is named, so a persisted ghost is reported rather than silent.
+func (m *home) applyBatchKill(msg batchKillDoneMsg) batchKillDoneMsg {
+	for _, out := range msg.torndown {
+		inst := out.inst
+		m.tabbedWindow.CleanupTerminalForInstance(inst)
+		storeErr := m.storage.DeleteInstance(inst.Title, inst.Path)
+		m.list.RemoveInstance(inst)
+		m.forgetInstance(inst)
+
+		switch {
+		case out.err != nil:
+			msg.failures = append(msg.failures, killFailure{inst.Title,
+				fmt.Errorf("removed, but teardown was incomplete: %w", out.err)})
+		case storeErr != nil:
+			msg.failures = append(msg.failures, killFailure{inst.Title,
+				fmt.Errorf("removed, but its saved state could not be cleared: %w", storeErr)})
+		default:
+			msg.killed++
+		}
+		msg.killedInstances = append(msg.killedInstances, inst)
+	}
+	return msg
 }
 
 // forgetInstance drops the per-instance bookkeeping a removed session leaves behind: its
@@ -859,6 +924,11 @@ func (m *home) forgetInstance(inst *session.Instance) {
 // echo is the one the user pressed — hard-coding the chord would print "(or ctrl+x)"
 // at someone who never pressed it.
 func (m *home) killInstances(insts []*session.Instance, message string, altConfirmKey string) tea.Cmd {
+	// The teardown I/O only. Everything that touches the model — storage, the row,
+	// per-instance bookkeeping — is applied by the batchKillDoneMsg handler on the
+	// update thread. Before the split this whole loop ran inline on that thread with
+	// no progress row at all: ten sessions is ~60 subprocesses and ten recursive
+	// worktree deletes, so the UI simply stopped for seconds (#380).
 	action := func() tea.Msg {
 		var res batchKillDoneMsg
 		for _, inst := range insts {
@@ -878,27 +948,15 @@ func (m *home) killInstances(insts []*session.Instance, message string, altConfi
 					continue
 				}
 			}
-			if err := m.storage.DeleteInstance(inst.Title, inst.Path); err != nil {
-				res.failures = append(res.failures, killFailure{inst.Title, err})
-				continue
-			}
-			// KillInstance removes the row regardless of teardown outcome, so its
-			// preview terminal must be cleaned up either way. A teardown failure is
-			// recorded (naming what leaked) but does not count toward killed, so the
-			// "killed N" notice reflects only clean teardowns. The row and storage
-			// entry are already gone, so the message says so rather than implying the
-			// session survived.
-			if err := m.list.KillInstance(inst); err != nil {
-				res.failures = append(res.failures, killFailure{inst.Title,
-					fmt.Errorf("removed, but teardown was incomplete: %w", err)})
-			} else {
-				res.killed++
-			}
-			res.killedInstances = append(res.killedInstances, inst)
+			// Tear the session down (tmux + worktree + branch). A failure is recorded
+			// naming what leaked, but the row still goes: the session is retired either
+			// way, and the handler says so rather than implying it survived.
+			res.torndown = append(res.torndown, killOutcome{inst: inst, err: inst.Kill()})
 		}
 		return res
 	}
-	cmd := m.confirmAction(message, action)
+	label := fmt.Sprintf("killing %d session%s…", len(insts), plural(len(insts)))
+	cmd := m.confirmAction(message, busyLabel(label), action)
 	// Kill is destructive, so it wears the danger border (confirmAction created
 	// m.confirmationOverlay synchronously above).
 	m.confirmationOverlay.SetBorderColor(theme.Current().Palette.Danger)
@@ -1746,13 +1804,16 @@ func sessionsWithUnpushedWork(insts []*session.Instance) int {
 	return n
 }
 
-// instanceTeardownCmd returns the command that tears down inst — terminal
-// cleanup, storage delete, kill, and bookkeeping forget — emitting
-// instanceChangedMsg on success. It is shared by the kill confirmation and the
-// post-merge cleanup offer (#384) so both retire a session by exactly the same
-// path. The closure is UI-thread-safe to the extent the original kill action was:
-// it touches only m.tabbedWindow/m.storage/m.list/m.forgetInstance and inst.
-func (m *home) instanceTeardownCmd(inst *session.Instance) tea.Cmd {
+// killIOCmd is the goroutine half of a kill: the branch-safety check and the
+// teardown itself (tmux session, worktree, branch). It touches no model state, so
+// it is safe off the update thread — which it must be, because a single kill is
+// ~6 subprocesses plus a recursive worktree delete that routinely takes seconds on
+// a fat tree, and it used to run inline with no progress row at all (#380). The
+// model half is applyKillDone.
+//
+// Shared by the kill confirmation and the post-merge cleanup offer (#384) so both
+// retire a session by exactly the same path.
+func killIOCmd(inst *session.Instance) tea.Cmd {
 	return func() tea.Msg {
 		// Refuse to kill only when the branch is checked out in the primary repo
 		// itself (deleting it would strand the user's main checkout on a dangling
@@ -1771,29 +1832,76 @@ func (m *home) instanceTeardownCmd(inst *session.Instance) tea.Cmd {
 			} else if heldByBase, cerr := worktree.IsBranchHeldByBaseRepo(); cerr != nil {
 				log.WarningLog.Printf("kill %s: cannot verify branch checkout, proceeding: %v", inst.Title, cerr)
 			} else if heldByBase {
-				return fmt.Errorf("branch for %s is checked out in the main repo; switch it away before deleting", inst.DisplayName())
+				return killDoneMsg{outcome: killOutcome{inst: inst}, refused: fmt.Errorf(
+					"branch for %s is checked out in the main repo; switch it away before deleting",
+					inst.DisplayName())}
 			}
 		}
-
-		// Clean up terminal session for this instance
-		m.tabbedWindow.CleanupTerminalForInstance(inst)
-
-		// Delete from storage first
-		if err := m.storage.DeleteInstance(inst.Title, inst.Path); err != nil {
-			return err
-		}
-
-		// Then kill the instance. The row and storage entry are gone regardless, but
-		// if teardown left something behind (a live tmux session or a leftover
-		// branch) name the session and surface what leaked instead of reporting a
-		// clean kill.
-		killErr := m.list.KillInstance(inst)
-		m.forgetInstance(inst) // the row is gone regardless of teardown outcome; drop its bookkeeping
-		if killErr != nil {
-			return fmt.Errorf("killed '%s' but teardown was incomplete: %w", inst.DisplayName(), killErr)
-		}
-		return instanceChangedMsg{}
+		return killDoneMsg{outcome: killOutcome{inst: inst, err: inst.Kill()}}
 	}
+}
+
+// armKill marks inst as retiring and returns its teardown Cmd. The mark is what
+// stops the metadata poll from "recovering" a session that is deliberately being
+// torn down: for the duration of the async window the row still exists, so the
+// poll would see the dying pane, trip recoverLostInstances, and toast "terminal
+// exited — parked as paused" over the busy row. That notice would be a lie AND it
+// would hide the label — the two failures compound.
+func (m *home) armKill(inst *session.Instance) tea.Cmd {
+	if m.retiring == nil {
+		m.retiring = map[*session.Instance]bool{}
+	}
+	m.retiring[inst] = true
+	// Joined on shutdown like an in-flight Start: quitting midway through a
+	// teardown can strand a half-removed worktree. Add() here, on the update
+	// thread, happens-before app.Run's wait.
+	m.startWG.Add(1)
+	io := killIOCmd(inst)
+	return func() tea.Msg {
+		defer m.startWG.Done()
+		return io()
+	}
+}
+
+// killDoneMsg carries a single kill's teardown result back to the main loop, which
+// applies the model half. refused marks a kill the goroutine declined before
+// touching anything, so the handler leaves the session entirely alone.
+type killDoneMsg struct {
+	outcome killOutcome
+	refused error
+}
+
+// applyKillDone lands a single kill on the model: preview-terminal cleanup, the
+// storage delete, the row, and the per-instance bookkeeping. Main thread only.
+//
+// Ordering note: the split tears tmux and the worktree down before storage is
+// written, so a DeleteInstance failure can no longer abort the removal — the
+// session is retired either way. The row goes regardless (a row pointing at a
+// deleted worktree is worse than no row) and the failure is named, so a persisted
+// ghost is reported rather than left silent.
+func (m *home) applyKillDone(msg killDoneMsg) tea.Cmd {
+	if msg.refused != nil {
+		return m.handleError(msg.refused)
+	}
+	inst := msg.outcome.inst
+	if inst == nil {
+		return nil
+	}
+	m.tabbedWindow.CleanupTerminalForInstance(inst)
+	storeErr := m.storage.DeleteInstance(inst.Title, inst.Path)
+	m.list.RemoveInstance(inst)
+	m.forgetInstance(inst)
+	delete(m.retiring, inst)
+
+	switch {
+	case msg.outcome.err != nil:
+		return m.handleError(fmt.Errorf("killed '%s' but teardown was incomplete: %w",
+			inst.DisplayName(), msg.outcome.err))
+	case storeErr != nil:
+		return m.handleError(fmt.Errorf("removed '%s' but its saved state could not be cleared: %w",
+			inst.DisplayName(), storeErr))
+	}
+	return func() tea.Msg { return instanceChangedMsg{} }
 }
 
 // confirmKill shows the kill-confirmation overlay for inst and stashes the
@@ -1806,13 +1914,16 @@ func (m *home) confirmKill(inst *session.Instance) tea.Cmd {
 		return nil
 	}
 
-	killAction := m.instanceTeardownCmd(inst)
-
 	message := fmt.Sprintf("Kill session '%s'?", inst.DisplayName())
 	if stats := inst.GetDiffStats(); stats != nil {
 		message += killDataWarning(stats.Dirty, stats.Unpushed)
 	}
-	cmd := m.confirmAction(message, killAction)
+	// The label names its object because this dialog need not target the SELECTED
+	// session: the in-session chord and the auto-open path both kill a specific one
+	// (see the doc above). pausing…/resuming… stay object-less for the opposite
+	// reason — they always act on the highlighted row. Don't "fix" that asymmetry.
+	cmd := m.confirmAction(message, busyLabel(fmt.Sprintf("killing '%s'…", inst.DisplayName())),
+		m.armKill(inst))
 	// Kill is the one destructive confirmation, so it alone wears the danger
 	// border (the default is accent); confirmAction created m.confirmationOverlay
 	// synchronously above.
@@ -1843,7 +1954,7 @@ func (m *home) offerCleanupAfterMerge(inst *session.Instance, number int) bool {
 	if stats := inst.GetDiffStats(); stats != nil {
 		message += killDataWarning(stats.Dirty, stats.Unpushed)
 	}
-	m.confirmAction(message, m.instanceTeardownCmd(inst))
+	m.confirmAction(message, busyLabel(fmt.Sprintf("killing '%s'…", inst.DisplayName())), m.armKill(inst))
 	return true
 }
 
@@ -1859,13 +1970,36 @@ func confirmWidth(termWidth int) int {
 	return max(20, min(preferred, termWidth-4))
 }
 
+// busyLabel is a progress-row label: the specific, named promise an operation
+// makes before it starts working. Its own type so a caller cannot forget it —
+// see instantAction for the one legal way to pass nothing.
+type busyLabel string
+
+// instantAction declares that a confirmed action does no I/O and finishes well
+// inside a frame, so it needs no progress row and runs inline. It is the ONLY
+// legal empty label, and it is greppable, which is the point: the set of
+// operations claiming to be instant should be auditable at a glance rather than
+// inferred from an argument someone left off.
+//
+// Every current user returns a message and nothing else (tea.Quit, the
+// proceed-anyway confirmations whose real work has its own affordance later).
+const instantAction busyLabel = ""
+
 // confirmAction shows a confirmation modal and stores the action to execute on
 // confirm. The action is run (and its result dispatched) by the stateConfirm key
 // handler, not here, so its returned message — including any error — flows through
 // Update instead of being discarded.
-func (m *home) confirmAction(message string, action tea.Cmd) tea.Cmd {
+//
+// label is what the user sees while the action runs. A named action runs off the
+// UI thread behind that label; instantAction runs inline (see handleConfirmState).
+// The label is a required parameter rather than an optional one because "no
+// feedback" was previously the default an author got by not thinking about it,
+// and the operations that most needed a label — kill, batch kill — are exactly
+// the ones that had none (#380).
+func (m *home) confirmAction(message string, label busyLabel, action tea.Cmd) tea.Cmd {
 	m.state = stateConfirm
 	m.pendingConfirmAction = action
+	m.pendingConfirmBusyLabel = string(label)
 
 	// Create and show the confirmation overlay using ConfirmationOverlay
 	m.confirmationOverlay = overlay.NewConfirmationOverlay(message)
@@ -1925,6 +2059,10 @@ func (m *home) confirmAllExhausted(plan spawnPlan, pool string, members []config
 	m.resetTitleCheck()
 	return m.confirmAction(
 		allExhaustedMessage(pool, members, avail, pinned.Name),
+		// The spawn this unblocks happens later, in the proceedExhaustedMsg handler,
+		// and announces itself with its own per-row Loading spinner. A label here
+		// would name an operation that is not running yet.
+		instantAction,
 		func() tea.Msg { return proceedExhaustedMsg{} })
 }
 
@@ -1946,19 +2084,6 @@ func allExhaustedMessage(pool string, members []config.ClaudeAccount, avail map[
 	return b.String()
 }
 
-// confirmAsyncAction is confirmAction for a confirmed action that should run off
-// the UI thread. It stashes busyLabel so handleConfirmState launches the action
-// through beginAsyncAction (goroutine + "busy" progress row) instead of running it
-// inline. The action closure must be UI-thread-safe: touch only its captured
-// instance/worktree and return a message — never read or mutate m.* (list, storage,
-// menu), which belongs on the Update loop. The overlay is still built synchronously
-// (via confirmAction) so callers that restyle it keep working.
-func (m *home) confirmAsyncAction(message, busyLabel string, action tea.Cmd) tea.Cmd {
-	cmd := m.confirmAction(message, action)
-	m.pendingConfirmBusyLabel = busyLabel
-	return cmd
-}
-
 // asyncActionDoneMsg wraps the result of an off-UI-thread action (see
 // beginAsyncAction) so Update can clear the in-flight state before the inner
 // message is handled. result is whatever the action returned (a success message,
@@ -1972,7 +2097,7 @@ type asyncActionDoneMsg struct{ result tea.Msg }
 // in-flight state is cleared and the inner message dispatched on the Update loop.
 func (m *home) beginAsyncAction(label string, cmd tea.Cmd) tea.Cmd {
 	m.actionInFlight = true
-	m.menu.SetBusy(label)
+	m.menu.SetBusy(ui.BusyAction, label)
 	m.recomputeLayout() // the progress row now claims a line; shrink the panes to fit
 	return func() tea.Msg {
 		var result tea.Msg
@@ -1982,3 +2107,31 @@ func (m *home) beginAsyncAction(label string, cmd tea.Cmd) tea.Cmd {
 		return asyncActionDoneMsg{result: result}
 	}
 }
+
+// beginBackgroundAction names an operation on the progress row WITHOUT gating
+// keys. It is the counterpart to beginAsyncAction, whose actionInFlight freeze
+// exists because its operations mutate the list or storage and must not interleave.
+//
+// Use it for work the user can safely act around: generating a name, opening a PR
+// in the browser. Those take long enough to need naming — an LLM call runs for
+// seconds — but freezing the whole keyboard for a read-only operation would be a
+// heavier promise than the work deserves. A modal action arriving mid-flight wins
+// the row and this one returns to it when that finishes.
+func (m *home) beginBackgroundAction(label string, cmd tea.Cmd) tea.Cmd {
+	m.menu.SetBusy(ui.BusyBackground, label)
+	m.recomputeLayout()
+	return func() tea.Msg {
+		var result tea.Msg
+		if cmd != nil {
+			result = cmd()
+		}
+		return backgroundActionDoneMsg{result: result}
+	}
+}
+
+// backgroundActionDoneMsg wraps a background action's result so Update can clear
+// its progress line before the inner message is handled. Distinct from
+// asyncActionDoneMsg because it must NOT touch actionInFlight — a modal action may
+// be running at the same time, and clearing its gate would let mutating keys
+// through mid-teardown.
+type backgroundActionDoneMsg struct{ result tea.Msg }
