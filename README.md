@@ -347,6 +347,7 @@ one. Scrollback is bound prefix-free instead:
 
 | Key | Action |
 |-----|--------|
+| `shift-↑` / `shift-↓` | scroll one line — hold to scroll continuously |
 | `shift-pgup` / `alt-pgup` | scroll back a page (enters tmux copy mode) |
 | `shift-pgdn` / `alt-pgdn` | scroll forward; at the bottom it exits copy mode for you |
 | `g` / `G`, `j` / `k`, `ctrl-u` / `ctrl-d` | while scrolled: top / bottom, line, half page |
@@ -354,7 +355,9 @@ one. Scrollback is bound prefix-free instead:
 | `v`, `y` | while scrolled: start a selection, copy it (to the system clipboard) |
 | `q` | leave the scrollback and return to the agent |
 
-Copy mode is vi-keyed, and the wheel scrolls the same history when `mouse` is on.
+`shift-↑/↓` is the same chord that scrolls the preview pane from the session list,
+and moves the same one line per press. Copy mode is vi-keyed, and the wheel scrolls
+the same history when `mouse` is on, three lines per notch as in the preview.
 Note that `ctrl-b` — tmux's default prefix, and the key Claude Code uses to
 background a task — is not needed for any of this.
 

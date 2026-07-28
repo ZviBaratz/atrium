@@ -97,6 +97,15 @@ func TestRenderManagedConfigScrollKeys(t *testing.T) {
 			"bind-key -T copy-mode-vi S-NPage send-keys -X page-down",
 			"bind-key -T copy-mode-vi M-PPage send-keys -X page-up",
 			"bind-key -T copy-mode-vi M-NPage send-keys -X page-down",
+			// Line granularity is what makes scrolling feel smooth rather than
+			// stepped: one line per press, continuous under key repeat.
+			`bind-key -n S-Up copy-mode -e \; send-keys -X scroll-up`,
+			`bind-key -n S-Down copy-mode -e \; send-keys -X scroll-down`,
+			"bind-key -T copy-mode-vi S-Up send-keys -X scroll-up",
+			"bind-key -T copy-mode-vi S-Down send-keys -X scroll-down",
+			// A wheel notch matches the TUI's wheelScrollLines, not tmux's 5.
+			`bind-key -T copy-mode-vi WheelUpPane select-pane \; send-keys -X -N 3 scroll-up`,
+			`bind-key -T copy-mode-vi WheelDownPane select-pane \; send-keys -X -N 3 scroll-down`,
 			// The copy-mode-vi table is only reachable with mode-keys vi; without
 			// this line every binding above lands in a table tmux never consults.
 			"set-window-option -g mode-keys vi",
@@ -109,6 +118,14 @@ func TestRenderManagedConfigScrollKeys(t *testing.T) {
 				t.Errorf("contextBar=%v: managed config missing %q (scroll keys are unconditional)\n---\n%s",
 					contextBar, want, got)
 			}
+		}
+
+		// The nudge keys must enter copy mode at the bottom (-e), not a page back
+		// (-eu): with -u the first shift-up would jump a page, which is exactly the
+		// stepped feel the line bindings exist to avoid.
+		if strings.Contains(got, "S-Up copy-mode -eu") {
+			t.Errorf("contextBar=%v: shift-up enters with -u, so its first press pages instead of nudging one line\n---\n%s",
+				contextBar, got)
 		}
 
 		// Ctrl+PageUp/PageDown belong to the attach layer, which intercepts them for
