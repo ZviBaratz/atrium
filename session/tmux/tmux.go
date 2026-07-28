@@ -41,7 +41,7 @@ type Session struct {
 	// the metadata poll loop reads sanitizedName from a background goroutine. Rename holds
 	// the write lock across its rename-session subprocess and the field swap, so a reader
 	// never observes the brief window where the old session name no longer exists.
-	// It also guards the paneID/paneIDTried cache below.
+	// It also guards the paneID/paneIDTried cache and hookSessionName below.
 	mu sync.RWMutex
 	// paneID caches the agent pane's immutable tmux id (%N) so pane reads
 	// (capture-pane) and keystroke writes (send-keys) target the agent's pane,
@@ -59,7 +59,19 @@ type Session struct {
 	// name (-n) so windows aren't shown under the sanitized session name or
 	// auto-renamed to the running program.
 	windowName string
-	program    string
+	// hookSessionName is the session name this session's hook artifacts are keyed by:
+	// the value of sanitizedName at the LAST launch, not the current one. start() bakes
+	// an absolute --state-file into every hook command, so the launched agent's write
+	// path is frozen for the life of its process and a later deep Rename cannot move it;
+	// re-deriving the read path from the current name is what severed the channel in #492.
+	// Empty means "never launched by this Atrium" — hookName then falls back to
+	// sanitizedName, which is the pre-#492 behaviour and the right answer for a session
+	// that has no live agent writing anywhere. Persisted (InstanceData.HookName) because a
+	// TUI restart rebuilds the Session from the post-rename name while the surviving agent
+	// still writes to the pre-rename directory, and reattach never re-runs the bake.
+	// Guarded by mu: written from start() on a background goroutine, read by the poller.
+	hookSessionName string
+	program         string
 	// configDir, when non-empty, is injected into the session's environment as
 	// CLAUDE_CONFIG_DIR via `new-session -e` at launch, selecting which Claude
 	// Code account the agent runs under. Empty = inherit the inherited env. Set
@@ -416,13 +428,23 @@ func (t *Session) start(workDir string, program string) error {
 	// previous generation (pause → resume reuses this Session object).
 	t.resetPaneID()
 
+	// Freeze the name this launch's hook artifacts are keyed by BEFORE ensureHookSettings
+	// derives the state path from it and bakes that absolute path into every hook command.
+	// The agent's write path is fixed the moment it is exec'd, so a later deep Rename can
+	// only move the reader — and did, silently, until #492. Freezing here (rather than at
+	// construction) is also what makes every relaunch re-key: pause→resume, recover-in-place
+	// and a fresh create all route through start(), so a resumed session reads the directory
+	// its NEW process writes to. See freezeHookName for why the superseded directory is swept
+	// here too, and hookSessionName for why the value is persisted.
+	hookName := t.freezeHookName()
+
 	// Inject the authoritative status hooks for claude, plus the SessionStart context brief
 	// (a no-op for other agents or when --settings is unsupported). The settings path is
 	// appended to the launch command only; t.program (the persisted value) is never mutated.
 	// A failure here just disables hooks — the launch still proceeds on the scrape classifier,
 	// and without a brief.
-	if settingsPath, err := ensureHookSettings(t.sanitizedName, t.program, t.sessionBrief()); err != nil {
-		log.ErrorLog.Printf("status hooks disabled for %s: %v", t.sanitizedName, err)
+	if settingsPath, err := ensureHookSettings(hookName, t.program, t.sessionBrief()); err != nil {
+		log.ErrorLog.Printf("status hooks disabled for %s: %v", hookName, err)
 	} else if settingsPath != "" {
 		// tmux hands the launch command to `sh -c`, and the path embeds the session name,
 		// which can carry shell metacharacters (a title like "Surya's comment"). Unquoted,
@@ -790,7 +812,13 @@ func (t *Session) sendKeysToPane(keys ...string) error {
 // Close terminates the tmux session and cleans up resources
 func (t *Session) Close() error {
 	// Remove the per-session status-hook artifacts; harmless if the session never had any.
-	cleanupHookSession(t.snapshotName())
+	// Keyed by the LAUNCHED name, not the current one: a killed session that had been deep-
+	// renamed used to clean a directory that never existed and leave its real one behind
+	// forever (#492), recoverable only by `atrium reset` — which wipes every session's hook
+	// state, not just this one's. Cleaning the frozen name alone is sufficient because
+	// freezeHookName already swept any superseded directory at the relaunch that superseded
+	// it, so a session owns exactly one hook directory at any moment.
+	cleanupHookSession(t.hookName())
 
 	// The pane dies with the session; a resumed session must re-resolve.
 	t.resetPaneID()

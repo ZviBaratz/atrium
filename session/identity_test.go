@@ -67,6 +67,77 @@ func TestFromInstanceDataLegacyTmuxNameFallback(t *testing.T) {
 	require.Equal(t, legacy, inst.ToInstanceData().TmuxName, "legacy name must persist on next save")
 }
 
+// The hook directory a live agent writes to is frozen at ITS launch, so after a deep rename
+// it no longer matches the session's tmux name. That divergence has to round-trip through
+// InstanceData: a TUI restart rebuilds the Session from the post-rename tmux name while the
+// agent that outlived the restart keeps writing to the pre-rename directory, and reattach
+// restores the pane without re-running the bake that would re-key it. Drop the field and the
+// #492 fix holds only until the user quits atrium (#492).
+func TestHookNameRoundTripsThroughInstanceData(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	launched := tmux.QualifiedSessionName("myrepo", "before rename")
+	current := tmux.QualifiedSessionName("myrepo", "after rename")
+	require.NotEqual(t, launched, current, "the fixture must actually exercise the divergence")
+
+	data := InstanceData{
+		Title:    "after rename",
+		Path:     "/nonexistent/myrepo",
+		Status:   Paused, // Paused: rehydrates without touching a tmux server
+		Program:  "claude",
+		TmuxName: current,
+		HookName: launched,
+		Worktree: GitWorktreeData{
+			RepoPath:     "/nonexistent/myrepo",
+			WorktreePath: "/nonexistent/wt",
+			SessionName:  "after rename",
+			BranchName:   "zvi/after-rename",
+		},
+	}
+
+	inst, err := FromInstanceData(context.Background(), data, "zvi/")
+	require.NoError(t, err)
+	require.Equal(t, current, inst.TmuxSessionName(), "the session keeps its post-rename name")
+	require.Equal(t, launched, inst.ToInstanceData().HookName, "and re-persists the launched one")
+
+	// The point of persisting it: the restored session reads where the surviving agent writes.
+	statePath, err := inst.tmux().HookStateFile()
+	require.NoError(t, err)
+	require.Contains(t, statePath, string(filepath.Separator)+launched+string(filepath.Separator),
+		"the rehydrated session reads the LAUNCHED session's hook directory")
+	require.NotContains(t, statePath, current,
+		"not the post-rename directory, which nothing has ever written to")
+}
+
+// A state.json written before the hook name was persisted has no hook_name field, and neither
+// does a session Atrium has never launched. Both must fall back to the tmux name — the
+// pre-#492 behaviour, and the right answer when no live agent is writing anywhere else.
+func TestFromInstanceDataLegacyHookNameFallback(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	name := tmux.QualifiedSessionName("myrepo", "legacy")
+	data := InstanceData{
+		Title:    "legacy",
+		Path:     "/nonexistent/myrepo",
+		Status:   Paused,
+		Program:  "claude",
+		TmuxName: name,
+		Worktree: GitWorktreeData{
+			RepoPath:     "/nonexistent/myrepo",
+			WorktreePath: "/nonexistent/wt",
+			SessionName:  "legacy",
+			BranchName:   "zvi/legacy",
+		},
+	}
+
+	inst, err := FromInstanceData(context.Background(), data, "zvi/")
+	require.NoError(t, err)
+	require.Empty(t, inst.ToInstanceData().HookName, "nothing launched it, so nothing is frozen")
+
+	statePath, err := inst.tmux().HookStateFile()
+	require.NoError(t, err)
+	require.Contains(t, statePath, string(filepath.Separator)+name+string(filepath.Separator),
+		"an unfrozen session keys off its tmux name, exactly as before the field existed")
+}
+
 // GroupKey must report the repo-root basename even before Start — a Loading
 // instance created from a repo subdirectory has to land in (and be duplicate-
 // checked against) the same group it will join once started.

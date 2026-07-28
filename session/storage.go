@@ -113,6 +113,16 @@ type InstanceData struct {
 	// to the legacy title-derived name its live session still has.
 	TmuxName string `json:"tmux_name,omitempty"`
 
+	// HookName is the session name the agent's status-hook artifacts are keyed by:
+	// the tmux name as of the session's LAST launch, which a later deep rename does not
+	// change. The running agent was exec'd with an absolute --state-file baked in, so its
+	// write path outlives every rename; persisting the name is what lets a restarted TUI
+	// keep reading it, since reattach restores the pane without re-running the bake (#492).
+	// Usually equal to TmuxName — they diverge only between a rename and the next relaunch.
+	// omitempty: a state.json predating the field, or a session Atrium never launched,
+	// decodes to "" -> fall back to TmuxName, which is the pre-#492 behaviour.
+	HookName string `json:"hook_name,omitempty"`
+
 	Worktree  GitWorktreeData `json:"worktree"`
 	DiffStats DiffStatsData   `json:"diff_stats"`
 }
