@@ -739,6 +739,13 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		return m.handleCmdLogState(msg)
 	}
 
+	// The palette, like the other overlay states, must run before the global quit
+	// handling so that q and every other printable key narrows the filter instead
+	// of quitting the app mid-query.
+	if m.state == stateCommandPalette {
+		return m.handleCommandPaletteState(msg)
+	}
+
 	// Settings, like the other overlay states, must run before the global quit
 	// handling so q/esc and printable keys reach the panel.
 	if m.state == stateSettings {
@@ -896,6 +903,8 @@ func (m *home) dispatchAction(name keys.KeyName) (tea.Model, tea.Cmd) {
 		return m.openQueue()
 	case keys.KeyCmdLog:
 		return m.openCmdLog()
+	case keys.KeyCommandPalette:
+		return m.openCommandPalette()
 	case keys.KeyApprove:
 		return m.approveSelected()
 	case keys.KeyCopyBranch:
@@ -1077,6 +1086,17 @@ func (m *home) dispatchAction(name keys.KeyName) (tea.Model, tea.Cmd) {
 	default:
 		return m, nil
 	}
+}
+
+// dispatchExempt names the registered actions that deliberately have no case in
+// dispatchAction, and why. An exemption is a claim that the action is handled
+// somewhere else — never that it is unhandled — and
+// TestEveryDispatchExemptionIsRealAndReasoned rejects the three ways that claim
+// could rot. The command palette reads it too: an action it cannot run by name is
+// an action it must not offer.
+var dispatchExempt = map[keys.KeyName]string{
+	keys.KeyToggleMark: "consumed only by handleMultiSelectState; space marks a row in " +
+		"multi-select mode and does nothing in the default state (keys.go says so too)",
 }
 
 // keyAllowedWhileBusy reports whether a key may act while an off-UI-thread action

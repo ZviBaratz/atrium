@@ -265,6 +265,7 @@ in-app keymap and this section ever drift apart, so it stays complete.
 | Key | Action |
 |-----|--------|
 | `?` | toggle this cheatsheet |
+| `ctrl-k` | command palette — find any action by name and run it |
 | `,` | settings |
 | `@` | accounts (Claude / GitHub / Antigravity) |
 | `L` | command log — the tmux / git / gh commands Atrium runs |

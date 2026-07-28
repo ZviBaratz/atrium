@@ -118,6 +118,21 @@ func (m *home) updateHandleWindowSizeEvent(msg tea.WindowSizeMsg) {
 		}
 		m.cmdLogOverlay.SetSize(w, h)
 	}
+	if m.commandPaletteOverlay != nil {
+		// Three columns wide (key, verb, prose) and as many rows as it can get:
+		// the palette's whole value is seeing a lot of the keymap at once. Capped
+		// like the command log so a very wide terminal doesn't stretch the prose
+		// column past comfortable reading.
+		w := int(float32(msg.Width) * 0.85)
+		if w > 100 {
+			w = 100
+		}
+		h := int(float32(msg.Height) * 0.85)
+		if h > 40 {
+			h = 40
+		}
+		m.commandPaletteOverlay.SetSize(w, h)
+	}
 
 	previewWidth, previewHeight := m.tabbedWindow.GetPreviewSize()
 	if err := m.list.SetSessionPreviewSize(previewWidth, previewHeight); err != nil {
@@ -140,7 +155,7 @@ func (m *home) menuVisible() bool {
 		// These inline interactions teach their gestures on the bar, so it stays
 		// even when the always-on hint bar is turned off.
 		return true
-	case statePrompt, stateRename, stateQueue, stateCmdLog, stateConfirm, stateHelp, stateInfo, stateSettings, stateWelcome, stateAccounts, stateHistory:
+	case statePrompt, stateRename, stateQueue, stateCmdLog, stateCommandPalette, stateConfirm, stateHelp, stateInfo, stateSettings, stateWelcome, stateAccounts, stateHistory:
 		return false
 	default: // stateDefault (and the empty list)
 		// The bottom row is always reserved during plain navigation, so a transient

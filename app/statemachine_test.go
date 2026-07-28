@@ -100,6 +100,12 @@ func TestStateMachine_BackgroundMessagesNeverPanic(t *testing.T) {
 		{"history", stateHistory, func(h *home, _ *session.Instance) {
 			h.promptHistoryOverlay = overlay.NewPromptHistoryOverlay([]string{"remembered"})
 		}},
+		{"commandPalette", stateCommandPalette, func(h *home, _ *session.Instance) {
+			// Wired through the opener, not by hand: the overlay and paletteRows must
+			// stay in step, and a half-armed palette (one without the other) is the
+			// dereference this sweep exists to find.
+			h.openCommandPalette()
+		}},
 		{"screensaver", stateScreensaver, nil}, // nil wire: no overlay field to arm. Note: 100x40 survives ui.SplashFits in WindowSizeMsg sweep.
 	}
 
