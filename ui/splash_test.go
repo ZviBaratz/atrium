@@ -175,6 +175,77 @@ func TestPreviewSplashFallbackBelowFloor(t *testing.T) {
 	}
 }
 
+// disableSplash turns the animation off for one test and restores the previous
+// setting afterwards. splashOn is process-wide state shared with every other test
+// in this package (see the note above TestSplashSelectionConcurrent), so a test that
+// left it off would silently blank the field for whatever ran next.
+func disableSplash(t *testing.T) {
+	t.Helper()
+	prev := splashEnabled()
+	SetSplashEnabled(false)
+	t.Cleanup(func() { SetSplashEnabled(prev) })
+}
+
+// TestSplashEnabledDefaultsOn pins the initializer on splashOn. It is a bool, so
+// the zero value is the *disabled* state: were the `= true` dropped, every launch
+// that never reached SetSplashEnabled — and every test in this package — would
+// render the plain wordmark, which reads as "the splash broke" rather than as a
+// missing default.
+func TestSplashEnabledDefaultsOn(t *testing.T) {
+	require.True(t, splashEnabled(), "the splash must animate until something turns it off")
+}
+
+// TestSplashDisabledFallsBackToWordmark is the #316 contract on the two idle
+// panes: with the animation off, a pane *well above* the size floor renders the
+// plain centered placeholder — wordmark and message intact, no field.
+//
+// The size matters. TestPreviewSplashFallbackBelowFloor asserts the same absence
+// below the floor, where the field is already gone for an unrelated reason, so a
+// gate that never fired would still pass there. Every size here is one splashFits
+// admits, which is the only place this can be proven.
+func TestSplashDisabledFallsBackToWordmark(t *testing.T) {
+	disableSplash(t)
+
+	for _, s := range [][2]int{{50, 18}, {80, 30}, {120, 40}} {
+		w, h := s[0], s[1]
+		require.Truef(t, splashFits(w, h), "%dx%d must be above the floor for this test to mean anything", w, h)
+
+		p := NewPreviewPane()
+		p.SetSize(w, h)
+		p.SetSplashFrame(6)
+		require.NoError(t, p.UpdateContent(nil))
+		require.Truef(t, p.previewState.splash, "%dx%d: the idle screen still flags the splash", w, h)
+
+		out := p.String()
+		lines := strings.Split(out, "\n")
+		require.LessOrEqualf(t, len(lines), h, "%dx%d: too many lines", w, h)
+		for i, l := range lines {
+			require.LessOrEqualf(t, lipgloss.Width(l), w, "%dx%d: line %d width", w, h, i)
+		}
+		stripped := ansi.Strip(out)
+		require.Falsef(t, strings.ContainsAny(stripped, fieldGlyphs),
+			"%dx%d: a disabled splash must render the plain placeholder, not the field", w, h)
+		require.Containsf(t, stripped, "No agents running yet", "%dx%d: the onboarding message must survive", w, h)
+		require.Containsf(t, stripped, "█", "%dx%d: the wordmark must survive", w, h)
+	}
+}
+
+// TestSplashDisabledLeavesTheScreensaverAnimating is the negative control for the
+// gate's *placement*. splashScene is shared by the idle panes and by the
+// screensaver, so the obvious simplification — one check inside splashScene —
+// would pass every other test here while silently killing an easter egg that is
+// an explicit keypress and out of the setting's scope (#316).
+//
+// Nothing else in the suite would notice, because nothing else renders the
+// screensaver with the splash off. This is that test.
+func TestSplashDisabledLeavesTheScreensaverAnimating(t *testing.T) {
+	disableSplash(t)
+
+	stripped := ansi.Strip(SplashScreensaver(80, 30, 7))
+	require.True(t, strings.ContainsAny(stripped, fieldGlyphs),
+		"the screensaver is an explicit keypress and must animate even with the idle splash off")
+}
+
 // TestSplashFitsExported pins the exported gate the screensaver entry uses —
 // the same floor as the internal splashFits.
 func TestSplashFitsExported(t *testing.T) {

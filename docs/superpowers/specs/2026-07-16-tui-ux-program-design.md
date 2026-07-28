@@ -100,7 +100,9 @@ was delivered as a session artifact.
 
 ## Relations to existing state
 
-- #316 (reduced-motion splash) stays open; T2/T6 reference it.
+- #316 (reduced-motion splash) is closed: `splash: off` on the existing enum, no
+  second key. T2/T6 referenced it; #394 still owns the `NO_COLOR`-style detection
+  ladder, and nothing here sniffs the environment for motion preference.
 - #298 (per-account budget) stays deferred; issue 22 is per-session and
   transcript-parsed — a different thing.
 - #357 (help-text nit) is retired by issue 01's registry.

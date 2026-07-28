@@ -166,11 +166,17 @@ func parseSplashLumRange(s string) (float64, bool) {
 // vars replaced a sync.OnceValue that was safe by construction; a leaf mutex
 // keeps the invariant enforced instead of merely documented, at one
 // uncontended lock per frame.
+// splashOn is the same state for a different question — not which pattern, but
+// whether the idle panes render one at all (config.SplashOff, #316). It defaults
+// to *true* rather than to the zero value on purpose: a caller that never seeds
+// it, including every test in this package, must get the animation, not a blank
+// screen from an unset flag.
 var (
 	splashSelMu      sync.Mutex
 	splashRandomMode = true
 	splashPicked     bool
 	splashPick       fresco.Variant
+	splashOn         = true
 )
 
 // splashActiveVariant resolves the variant splashScene renders: the dev env
@@ -191,11 +197,36 @@ func splashActiveVariant() fresco.Variant {
 	return splashPick
 }
 
+// SetSplashEnabled turns the idle-state splash on or off (config.SplashEnabled).
+// Called at startup and on a live settings change, alongside SetSplashVariant —
+// app applies both through one helper so a third call site cannot seed one and
+// forget the other.
+//
+// Only the two idle panes consult this. splashScene does not, because the
+// full-window screensaver renders through it and keeps animating whatever the
+// setting says (see config.SplashOff).
+func SetSplashEnabled(on bool) {
+	splashSelMu.Lock()
+	defer splashSelMu.Unlock()
+	splashOn = on
+}
+
+// splashEnabled reports the current setting for the pane render gates.
+func splashEnabled() bool {
+	splashSelMu.Lock()
+	defer splashSelMu.Unlock()
+	return splashOn
+}
+
 // SetSplashVariant applies the config's splash mode (config.GetSplash): a
 // known pattern name pins that generator; anything else (config.SplashRandom,
 // or an unknown value) re-rolls a fresh random pick. Called at startup and on
 // a live settings change — with the settings panel open over the idle empty
 // state, cycling the enum previews each pattern in place.
+//
+// config.SplashOff lands in that last branch and re-rolls a pick the idle panes
+// will not render. That is inert rather than wrong: the screensaver still draws
+// a pattern, and a config switched back on wanted a fresh one anyway.
 func SetSplashVariant(name string) {
 	splashSelMu.Lock()
 	defer splashSelMu.Unlock()

@@ -56,6 +56,21 @@ func (c *Config) GetEffortIndicator() string {
 // the default (see Config.Splash).
 const SplashRandom = "random"
 
+// SplashOff is the Splash mode that turns the empty-state animation off: the
+// idle panes render the plain centered wordmark they already fall back to below
+// the size floor, and the animation loop never arms, so an idle Atrium repaints
+// nothing at all (#316).
+//
+// It is deliberately a *mode* beside SplashRandom rather than a member of
+// SplashVariants: that list is pinned element-for-element against the engine's
+// own generators (app's TestSplashVocabularyAgrees), and a name in it with no
+// generator silently means "random".
+//
+// Scope is the idle empty state, which is what the setting describes. The
+// full-window screensaver easter egg is an explicit keypress and keeps animating
+// — see app's KeyScreensaver, which gates on size alone.
+const SplashOff = "off"
+
 // SplashVariants lists the pinnable splash pattern names in settings-panel
 // display order. The generators live in the fresco package (fresco.Variants),
 // which takes no config import; ui resolves a config name to a fresco.Variant via
@@ -70,9 +85,9 @@ func SplashVariants() []string {
 	return []string{"rain", "tunnel", "ripple", "galaxy", "aurora"}
 }
 
-// GetSplash returns the normalized splash mode: a known variant name when set
-// to one, else SplashRandom (including a nil Config, the empty default, and
-// unknown values from a hand-edited config).
+// GetSplash returns the normalized splash mode: a known variant name or
+// SplashOff when set to one, else SplashRandom (including a nil Config, the
+// empty default, and unknown values from a hand-edited config).
 //
 // A *retired* name lands in that last case, and silently: V5 dropped six
 // patterns, so a config pinning "nebula" now reports random and the user gets a
@@ -82,11 +97,20 @@ func SplashVariants() []string {
 // never writes back), so nothing is destroyed. Pinned by
 // TestGetSplashDefaultsToRandom.
 func (c *Config) GetSplash() string {
-	if c != nil && slices.Contains(SplashVariants(), c.Splash) {
+	if c == nil {
+		return SplashRandom
+	}
+	if c.Splash == SplashOff || slices.Contains(SplashVariants(), c.Splash) {
 		return c.Splash
 	}
 	return SplashRandom
 }
+
+// SplashEnabled reports whether the empty-state splash animation should render
+// at all. It is the only thing ui and app ask about SplashOff, so neither has to
+// know the string — the same way ui takes a normalized variant name and never
+// imports config.
+func (c *Config) SplashEnabled() bool { return c.GetSplash() != SplashOff }
 
 // defaultCarryFiles is the carry list applied when a config predates the
 // carry_files key (nil field). Claude Code's gitignored local project config

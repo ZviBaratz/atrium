@@ -86,11 +86,18 @@ type splashTickMsg struct{}
 // up, and motion churning behind a modal the user is reading is distracting),
 // or the full-window screensaver, which is the splash regardless of how many
 // sessions exist.
+//
+// config.SplashOff bars the idle arm only, and that is what makes the opt-out
+// worth having: the loop never arms, so an idle Atrium repaints nothing rather
+// than pushing 60 frames a second at a screen the panes now render as a static
+// wordmark (#316). The screensaver above it is an explicit keypress and stays
+// exempt — the same scope ui's pane gates keep.
 func (m *home) splashAnimating() bool {
 	if m.state == stateScreensaver {
 		return true
 	}
-	return m.state == stateDefault && m.list != nil && m.list.NumInstances() == 0
+	return m.state == stateDefault && m.appConfig.SplashEnabled() &&
+		m.list != nil && m.list.NumInstances() == 0
 }
 
 // armSplashTick starts the splash animation loop, unless one is already live

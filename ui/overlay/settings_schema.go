@@ -536,16 +536,23 @@ func newSettingRows(cfg *config.Config) []settingRow {
 			defaultDisplay: func() string { return (&config.Config{}).GetSplash() },
 			reset:          func(c *config.Config) { c.Splash = "" },
 			summary:        "Animation behind the empty session list.",
+			detail: "Off leaves the plain wordmark and stops the repaint entirely. " +
+				"The full-window screensaver is a separate, explicit keypress and still animates.",
 			gloss: map[string]string{
 				config.SplashRandom: "a different pattern each launch",
+				config.SplashOff:    "no animation; the plain wordmark",
 			},
 			get: func(c *config.Config) string { return c.GetSplash() },
 			set: func(c *config.Config, v string) error {
 				c.Splash = v
 				return nil
 			},
+			// Off sits last so random keeps the home position and the list reads
+			// as patterns-then-none. It is not a member of SplashVariants: that
+			// list is pinned against the engine's own generators (app's
+			// TestSplashVocabularyAgrees), so a mode has to be appended here.
 			options: func(c *config.Config) []string {
-				return append([]string{config.SplashRandom}, config.SplashVariants()...)
+				return append(append([]string{config.SplashRandom}, config.SplashVariants()...), config.SplashOff)
 			},
 		},
 		{

@@ -88,9 +88,9 @@ func assembleHome(
 	// Seed the hint bar's chrome-free flag: with hint_bar off the menu row stays
 	// reserved but renders blank, so notices ride it without a shift (#438).
 	h.menu.SetQuiet(!appConfig.GetHintBar())
-	// Seed the splash pattern (a pinned name, or a fresh random pick; see
-	// config.GetSplash). ui takes the normalized name, no config import needed.
-	ui.SetSplashVariant(appConfig.GetSplash())
+	// Seed the splash: whether it animates at all, and the pattern (a pinned
+	// name, or a fresh random pick; see config.GetSplash and config.SplashOff).
+	applySplashConfig(appConfig)
 
 	// Re-derive each restored session's account labels from live config before the
 	// first cluster build, so a rename made since the last run adopts its sessions

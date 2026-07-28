@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ZviBaratz/atrium/config"
 	"github.com/ZviBaratz/atrium/ui"
 
 	"github.com/charmbracelet/bubbles/spinner"
@@ -57,6 +58,60 @@ func TestSplashTickAnimatesWhenIdle(t *testing.T) {
 	require.Equal(t, 1, m.splashFrame, "each tick advances one frame")
 	_, _ = m.handleSplashTick()
 	require.Equal(t, 2, m.splashFrame)
+}
+
+// TestSplashTickNeverArmsWhenDisabled is the #316 opt-out at the tick, which is
+// the half the render gate cannot deliver: with the animation off the panes draw
+// a static wordmark, so a loop still running would push 60 identical frames a
+// second at a screen that never changes — exactly the cost the setting exists to
+// remove. The loop must not arm, and a live one must die.
+func TestSplashTickNeverArmsWhenDisabled(t *testing.T) {
+	m := splashTestHome()
+	m.state = stateDefault
+	m.appConfig = &config.Config{Splash: config.SplashOff}
+
+	require.Nil(t, m.armSplashTick(), "a disabled splash must not arm the loop")
+	require.False(t, m.splashTicking)
+
+	// And a loop already running when the user turns it off dies on its next
+	// tick without advancing, the same way one behind an overlay does.
+	m.splashTicking = true
+	_, cmd := m.handleSplashTick()
+	require.Nil(t, cmd, "a disabled splash must stop the loop")
+	require.False(t, m.splashTicking, "a dead loop must clear its flag")
+	require.Zero(t, m.splashFrame, "a disabled splash must not advance")
+}
+
+// TestSplashTickAnimatesWhenEnabled is the positive control for the test above:
+// the same home with the setting on still animates, so a failure there means the
+// gate fired rather than that the fixture stopped reaching the idle branch.
+func TestSplashTickAnimatesWhenEnabled(t *testing.T) {
+	for name, cfg := range map[string]*config.Config{
+		"nil config": nil,
+		"unset":      {},
+		"random":     {Splash: config.SplashRandom},
+		"pinned":     {Splash: config.SplashVariants()[0]},
+	} {
+		m := splashTestHome()
+		m.state = stateDefault
+		m.appConfig = cfg
+		require.NotNilf(t, m.armSplashTick(), "%s: the idle empty state must arm the loop", name)
+	}
+}
+
+// TestScreensaverAnimatesWithSplashDisabled pins the scope of the opt-out in app,
+// mirroring ui's TestSplashDisabledLeavesTheScreensaverAnimating. The easter egg
+// is an explicit keypress; folding it into the setting would leave the backtick
+// a silently dead key, with no hint anywhere saying why.
+func TestScreensaverAnimatesWithSplashDisabled(t *testing.T) {
+	m := screensaverTestHome()
+	m.state = stateDefault
+	m.appConfig = &config.Config{Splash: config.SplashOff}
+
+	_, cmd := m.handleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("`")})
+	require.Equal(t, stateScreensaver, m.state, "the easter egg must still enter")
+	require.NotNil(t, cmd, "entering must arm the splash tick")
+	require.True(t, m.splashTicking, "the screensaver must animate whatever the setting says")
 }
 
 // screensaverTestHome is splashTestHome at a window size the splash fits.

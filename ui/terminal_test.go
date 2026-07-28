@@ -312,6 +312,29 @@ func TestTerminalSplashParity(t *testing.T) {
 		"below the floor the terminal must render the plain placeholder, not the field")
 }
 
+// TestTerminalSplashDisabled is the #316 gate on the second idle pane. The
+// SetSplashFrame fan-out feeds both panes, so a disable wired into only the
+// preview would leave the terminal tab animating on the very same empty screen —
+// and nothing in TestTerminalSplashParity would notice, since it never turns the
+// setting off.
+func TestTerminalSplashDisabled(t *testing.T) {
+	log.Initialize(false)
+	defer log.Close()
+
+	disableSplash(t)
+
+	tp := NewTerminalPane(context.Background())
+	tp.SetSize(80, 30)
+	tp.SetSplashFrame(6)
+	require.NoError(t, tp.UpdateContent(nil))
+
+	stripped := ansi.Strip(tp.String())
+	require.False(t, strings.ContainsAny(stripped, fieldGlyphs),
+		"a disabled splash must render the plain placeholder, not the field")
+	require.Contains(t, stripped, "Select an instance", "terminal prompt must survive")
+	require.Contains(t, stripped, "█", "wordmark must survive")
+}
+
 func TestTerminalSessionCaching(t *testing.T) {
 	log.Initialize(false)
 	defer log.Close()

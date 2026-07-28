@@ -163,7 +163,7 @@ func TestEveryRowHasAKnownCategoryAndScope(t *testing.T) {
 var glossExemptRows = map[string]string{
 	"default_program":      "dynamic: option list is the user's profile names",
 	"theme":                "dynamic: grows with every theme added to the registry",
-	"splash":               "dynamic: grows with every splash variant (random is glossed)",
+	"splash":               "dynamic: grows with every splash variant (the random and off modes are glossed)",
 	"group_mode":           "self-glossing on/off; the summary carries the meaning",
 	"model_indicator":      "self-glossing on/off",
 	"effort_indicator":     "self-glossing on/off",

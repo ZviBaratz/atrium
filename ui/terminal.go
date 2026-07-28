@@ -349,7 +349,10 @@ func (t *TerminalPane) String() string {
 		return t.viewport.View()
 	}
 
-	if t.splash && splashFits(width, height) {
+	// Gated at the call site, not inside splashScene, so the screensaver that
+	// shares that function keeps animating (#316); off falls through to the
+	// plain fallback below, which setSplashState has already armed.
+	if t.splash && splashEnabled() && splashFits(width, height) {
 		return splashScene(width, height, t.splashFrame, t.splashMessage)
 	}
 
