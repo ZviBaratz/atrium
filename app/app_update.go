@@ -60,6 +60,28 @@ type prCreatedMsg struct{ number int }
 type prOpenedMsg struct{ number int }
 
 func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	// Whatever this message does, if it flips menuVisible the vertical budget just
+	// changed and the panes are sized against the old one. Opening an overlay is
+	// fine either way — the openers size themselves — but closing one returns to
+	// the list with the panes still holding the row the hint bar is about to take
+	// back, so the frame renders one line taller than the terminal. The alt-screen
+	// renderer never erases lines: that row scrolls the frame's top border away for
+	// good, and no later tick recomputes the layout to bring it back.
+	//
+	// Guarded here rather than in each dismiss* helper because it is the property
+	// that matters (the budget changed), not the site: five helpers were missing it
+	// (palette, command log, queue, rename, confirm) and a sixth would be one
+	// forgotten line away. The handlers that already recompute stay as they are —
+	// recomputeLayout is a resize replay, so running it twice costs nothing. It is
+	// also why this sits on Update rather than handleKeyPress: a state can be
+	// entered or left by a message (an async action completing), not only by a key.
+	barBefore := m.menuVisible()
+	defer func() {
+		if m.menuVisible() != barBefore {
+			m.recomputeLayout()
+		}
+	}()
+
 	switch msg := msg.(type) {
 	case hideErrMsg:
 		if msg.gen == m.noticeGen {

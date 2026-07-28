@@ -250,11 +250,13 @@ func (p *CommandPaletteOverlay) Render() string {
 	b.WriteString(th.OverlayTitleStyle().Render("Command Palette") + "\n")
 	b.WriteString(p.renderQueryLine(inner, len(visible)) + "\n\n")
 
-	// Reserve rows for the title, the query line, their blank, the footer and its
-	// blank. What is left is the list.
-	rows := p.height - 7
-	if rows < 3 {
-		rows = 3
+	// What is left for the list once the chrome is paid for. height is the box's
+	// total height on screen, so the border and padding lipgloss draws around the
+	// content count too — leaving them out is how a box asked for 20 rows rendered
+	// 23 and lost its bottom border to the composer on a short terminal.
+	rows := p.height - paletteChrome
+	if rows < 1 {
+		rows = 1
 	}
 	if len(visible) == 0 {
 		b.WriteString(overlayDimStyle().Render("  no action matches "+quoted(p.filter)) + "\n\n")
@@ -273,7 +275,11 @@ func (p *CommandPaletteOverlay) Render() string {
 		b.WriteString("\n")
 	}
 
-	b.WriteString(th.OverlayHintStyle().Render("type to filter · ↑↓ move · ↵ run · esc close"))
+	// Truncated, never wrapped: the footer is the one line here written to a fixed
+	// length rather than measured against the box, so on a terminal narrow enough it
+	// is what wraps — and a wrap costs the box a row its height budget never counted,
+	// which PlaceOverlay then takes off the bottom border.
+	b.WriteString(th.OverlayHintStyle().Render(truncate.StringWithTail(paletteFooterHint, uint(inner), "…")))
 	return box.Render(b.String())
 }
 
@@ -346,6 +352,17 @@ const (
 	// section.
 	tierExactKey = 0
 	tierVerb     = 1
+
+	// paletteFooterHint is the key grammar shown under the list.
+	paletteFooterHint = "type to filter · ↑↓ move · ↵ run · esc close"
+
+	// paletteChrome is every row of the box that is not a list row: the border (2)
+	// and vertical padding (2) lipgloss draws around the content, the title, the
+	// query line and their blank, the footer and its blank (5), and the "… N more"
+	// line the list grows when it is windowed (1). Charged in full so the box
+	// occupies exactly the height SetSize was given — a budget that undercounts its
+	// own frame is a box that overflows the terminal it was sized against.
+	paletteChrome = 4 + 5 + 1
 
 	// paletteMinLabelWidth floors the verb column on a terminal too narrow for a
 	// third of its width to hold a verb — below this the column stops carrying
