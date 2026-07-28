@@ -542,8 +542,9 @@ func FromInstanceData(ctx context.Context, data InstanceData, branchPrefix strin
 	// only between a deep rename and the next relaunch — but in exactly that window the
 	// session is rebuilt here under the POST-rename name while the agent that outlived the
 	// restart still writes to the PRE-rename directory, and reattach (Restore) never re-runs
-	// the bake that would re-key it. Empty (a legacy state.json) leaves the fallback to the
-	// tmux name in place, which is the pre-#492 behaviour (#492).
+	// the bake that would re-key it. Empty (a legacy state.json, or a session Atrium never
+	// launched) pins the name resolved just above instead of leaving a lazy fallback that a
+	// later Rename would move out from under a surviving agent — see SetHookSessionName (#492).
 	sess.SetHookSessionName(data.HookName)
 	// Bound here as well as in Start, because a restored instance can be relaunched without
 	// going through Start at all: recoverInPlace calls the tmux session's Start/StartContinue

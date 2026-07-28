@@ -70,6 +70,16 @@ func relaunchMockExec(alive *bool) cmd_test.MockCmdExec {
 	}
 }
 
+// liveMockExec answers every tmux command successfully, so has-session reports the session as
+// already alive. That is the shape a session restored across a TUI restart has: its agent
+// outlived the restart, and nothing relaunches it.
+func liveMockExec() cmd_test.MockCmdExec {
+	return cmd_test.MockCmdExec{
+		RunFunc:    func(*exec.Cmd) error { return nil },
+		OutputFunc: func(*exec.Cmd) ([]byte, error) { return []byte("output"), nil },
+	}
+}
+
 // hookArtifacts returns the hook directory and settings path for a session name.
 func hookArtifacts(t *testing.T, name string) (dir, settings string) {
 	t.Helper()
@@ -232,9 +242,11 @@ func TestHookSessionDirRejectsEmptyName(t *testing.T) {
 		"cleaning an empty name is a no-op, not a wipe of the whole tree")
 }
 
-// TestHookNameFallsBackToCurrentName: a Session that has never launched in this process and
-// carries no persisted frozen name — a legacy state.json, or a paused instance rehydrated for
-// a later Resume — must key off its current name, exactly as before #492.
+// TestHookNameFallsBackToCurrentName: a Session freshly constructed in this process and not yet
+// through start() carries no frozen name at all, and must key off its current name — exactly as
+// before #492, and the right answer while no agent is writing anywhere. (A REHYDRATED session
+// never reaches this fallback: SetHookSessionName pins a name even when the persisted one is
+// absent. See TestRestoredLegacyHookNameSurvivesRename for why that distinction is load-bearing.)
 func TestHookNameFallsBackToCurrentName(t *testing.T) {
 	s := NewSessionWithDeps(context.Background(), t.Name(), "claude", NewMockPtyFactory(t), cmd_test.MockCmdExec{})
 	require.Empty(t, s.HookSessionName(), "nothing launched, nothing frozen")
@@ -268,4 +280,53 @@ func TestSetHookSessionNameSurvivesRestart(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, filepath.Join(dir, "state"), path,
 		"a rehydrated session reads where the surviving agent writes")
+}
+
+// TestRestoredLegacyHookNameSurvivesRename covers the one population the persisted name cannot
+// protect by being persisted: a session that was ALREADY RUNNING when the user upgraded. Its
+// state.json predates hook_name, so rehydration hands the setter "", and reattach (Restore)
+// never runs the bake that would fill it — the frozen name would stay empty for the whole life
+// of that process. Leave hookName's lazy fallback in place for it and the read resolves through
+// sanitizedName, which Rename mutates, so the first deep rename walks the reader straight off
+// the surviving agent's directory. That is #492 again, in the window the field exists to close.
+//
+// So restoring an empty name PINS the name the session has at that moment instead. The pin is
+// inert for a session with no live agent — every relaunch routes through freezeHookName, which
+// re-keys and sweeps — and Close wants it either way, since the artifacts on disk are under the
+// pre-rename name.
+func TestRestoredLegacyHookNameSurvivesRename(t *testing.T) {
+	s := NewSessionWithDeps(context.Background(), t.Name(), "claude", NewMockPtyFactory(t), liveMockExec())
+	legacy := s.snapshotName()
+
+	// Stand in for the pre-upgrade agent: launched by the old binary, still running, still
+	// writing to the directory whose absolute path it was exec'd with.
+	legacyDir, _ := hookArtifacts(t, legacy)
+	require.NoError(t, os.MkdirAll(legacyDir, 0o755))
+	t.Cleanup(func() { _ = os.RemoveAll(legacyDir) })
+	written := filepath.Join(legacyDir, "state")
+	require.NoError(t, UpdateHookState(written, HookEventWorking, HookPayload{}, ""))
+
+	// Rehydration of a state.json that predates the field: FromInstanceData hands it "".
+	s.SetHookSessionName("")
+	require.Equal(t, legacy, s.HookSessionName(),
+		"an absent persisted name pins the name the session carries at rehydration")
+
+	require.NoError(t, s.Rename("after", Prefix()+"after"))
+	require.Equal(t, Prefix()+"after", s.snapshotName(), "the rename really landed")
+
+	readPath, err := s.HookStateFile()
+	require.NoError(t, err)
+	require.Equal(t, written, readPath,
+		"the restored session still reads where its pre-upgrade agent writes")
+
+	// The behavioural assertion, at the level the bug bites: the signal still arrives. Path
+	// equality alone would pass on a fix that agreed on a path nothing writes to.
+	require.NoError(t, UpdateHookState(written, HookEventReady, HookPayload{}, ""))
+	rec, ok := s.readHookRecord()
+	require.True(t, ok, "the renamed legacy session still reads the live agent's hook record")
+	require.Equal(t, hookStateReady, rec.State)
+
+	// And teardown sweeps the directory that actually exists, not the post-rename name.
+	require.NoError(t, s.Close())
+	require.NoDirExists(t, legacyDir, "Close removes the directory the pre-upgrade agent used")
 }

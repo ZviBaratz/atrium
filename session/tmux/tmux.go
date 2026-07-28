@@ -64,11 +64,13 @@ type Session struct {
 	// an absolute --state-file into every hook command, so the launched agent's write
 	// path is frozen for the life of its process and a later deep Rename cannot move it;
 	// re-deriving the read path from the current name is what severed the channel in #492.
-	// Empty means "never launched by this Atrium" — hookName then falls back to
-	// sanitizedName, which is the pre-#492 behaviour and the right answer for a session
-	// that has no live agent writing anywhere. Persisted (InstanceData.HookName) because a
-	// TUI restart rebuilds the Session from the post-rename name while the surviving agent
-	// still writes to the pre-rename directory, and reattach never re-runs the bake.
+	// Persisted (InstanceData.HookName) because a TUI restart rebuilds the Session from the
+	// post-rename name while the surviving agent still writes to the pre-rename directory,
+	// and reattach never re-runs the bake. Empty means "neither launched nor rehydrated" —
+	// only a Session freshly constructed in this process and not yet through start(), since
+	// SetHookSessionName pins a name even when the persisted one is absent. hookName then
+	// falls back to sanitizedName, the right answer for a session with no agent writing
+	// anywhere yet.
 	// Guarded by mu: written from start() on a background goroutine, read by the poller.
 	hookSessionName string
 	program         string

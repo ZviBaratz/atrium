@@ -351,9 +351,11 @@ func (t *Session) freezeHookName() string {
 
 // hookName is the session name this session's hook artifacts are keyed by — the name frozen
 // at the last launch (see the hookSessionName field), falling back to the current session
-// name for a Session that has neither launched in this process nor carried a persisted frozen
-// name: a legacy state.json, or an instance rehydrated for a later Resume. Never empty, which
-// is what keeps hookSessionDir's empty-name guard unreachable from here.
+// name for a Session that has neither launched nor been rehydrated: one freshly constructed
+// in this process and not yet through start(). Rehydration pins the name even when the
+// persisted value is empty (see SetHookSessionName), so the fallback is not what carries a
+// restored session. Never empty, which is what keeps hookSessionDir's empty-name guard
+// unreachable from here.
 func (t *Session) hookName() string {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
@@ -363,9 +365,10 @@ func (t *Session) hookName() string {
 	return t.sanitizedName
 }
 
-// HookSessionName returns the frozen hook name verbatim — empty when this session has never
-// been launched by this Atrium. It is the value Instance persists (InstanceData.HookName); the
-// empty case is meaningful there, so this deliberately does NOT apply hookName's fallback.
+// HookSessionName returns the frozen hook name verbatim — empty only for a Session that has
+// neither launched in this process nor been rehydrated from persisted state. It is the value
+// Instance persists (InstanceData.HookName); the empty case is meaningful there (an instance
+// with no hook directory to name yet), so this deliberately does NOT apply hookName's fallback.
 func (t *Session) HookSessionName() string {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
@@ -376,11 +379,22 @@ func (t *Session) HookSessionName() string {
 // state. It must run before the instance is published to the poll loop. Restoring it is what
 // makes the #492 fix survive a TUI restart: the rebuilt Session carries the POST-rename tmux
 // name, while the agent that outlived the restart is still writing to the PRE-rename
-// directory, and reattach (Restore) never re-runs the bake that would re-freeze it. An empty
-// value — a state.json predating the field — leaves the fallback in place.
+// directory, and reattach (Restore) never re-runs the bake that would re-freeze it.
+//
+// An empty value — a state.json predating the field — PINS the name the session carries right
+// now rather than leaving hookName's lazy fallback in place. The fallback resolves through
+// sanitizedName, which Rename mutates, so a session that was already running when the user
+// upgraded would lose its channel to the first deep rename: #492 again, in the one window a
+// persisted name cannot cover, because that agent was launched before anything recorded one.
+// Pinning is inert for a session with no live agent — every relaunch routes through
+// freezeHookName, which re-keys and sweeps — and Close wants it either way, since a paused
+// session's artifacts on disk are under the pre-rename name.
 func (t *Session) SetHookSessionName(name string) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	if name == "" {
+		name = t.sanitizedName
+	}
 	t.hookSessionName = name
 }
 

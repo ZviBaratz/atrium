@@ -109,8 +109,11 @@ func TestHookNameRoundTripsThroughInstanceData(t *testing.T) {
 }
 
 // A state.json written before the hook name was persisted has no hook_name field, and neither
-// does a session Atrium has never launched. Both must fall back to the tmux name — the
-// pre-#492 behaviour, and the right answer when no live agent is writing anywhere else.
+// does a session Atrium has never launched. Both resolve to the tmux name — the pre-#492
+// answer, and the right one when no live agent is writing anywhere else — but they resolve to
+// it by PINNING it at rehydration, not by re-reading the session's name on every access. The
+// difference only shows up under a later rename, which is the whole point: see
+// tmux.TestRestoredLegacyHookNameSurvivesRename.
 func TestFromInstanceDataLegacyHookNameFallback(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	name := tmux.QualifiedSessionName("myrepo", "legacy")
@@ -130,7 +133,8 @@ func TestFromInstanceDataLegacyHookNameFallback(t *testing.T) {
 
 	inst, err := FromInstanceData(context.Background(), data, "zvi/")
 	require.NoError(t, err)
-	require.Empty(t, inst.ToInstanceData().HookName, "nothing launched it, so nothing is frozen")
+	require.Equal(t, name, inst.ToInstanceData().HookName,
+		"an absent hook_name is pinned to the tmux name, and persists so the next load is not legacy")
 
 	statePath, err := inst.tmux().HookStateFile()
 	require.NoError(t, err)

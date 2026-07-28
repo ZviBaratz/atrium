@@ -120,7 +120,9 @@ type InstanceData struct {
 	// keep reading it, since reattach restores the pane without re-running the bake (#492).
 	// Usually equal to TmuxName — they diverge only between a rename and the next relaunch.
 	// omitempty: a state.json predating the field, or a session Atrium never launched,
-	// decodes to "" -> fall back to TmuxName, which is the pre-#492 behaviour.
+	// decodes to "". Rehydration then pins the session's current name (a downgrade-safe
+	// no-op when the two agree) rather than re-resolving it on every read, so a later
+	// rename cannot move the read path off a pre-upgrade agent's directory.
 	HookName string `json:"hook_name,omitempty"`
 
 	Worktree  GitWorktreeData `json:"worktree"`
