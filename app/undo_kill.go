@@ -81,6 +81,13 @@ func (m *home) supersedeUndoFor(inst *session.Instance) {
 // repository forever: gc-immune, invisible to `git branch`, and named by nothing.
 // Ref before entry for the same reason the sweep uses that order: a crash in
 // between leaves a record the sweep can still expire, never an orphan.
+//
+// This runs on the Update loop, which is a `git update-ref -d` per restored
+// record on the render path — bounded, and deliberate. It cannot move off-thread
+// or earlier: the ref is what makes a failed persist retryable. Drop it in the
+// restore goroutine instead and a persist failure leaves the record on offer
+// while restoreBlocker reports "the retained commits are gone", pointing the user
+// away from the branch that is sitting right there.
 func (m *home) retireUndoRecord(e undo.Entry) {
 	if e.Ref != "" && e.RepoPath != "" {
 		if err := git.DeleteRef(m.ctx, e.RepoPath, e.Ref); err != nil {
