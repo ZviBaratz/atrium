@@ -1,0 +1,66 @@
+### 80x24
+╭─ Ses╭──────────────────────────────────────────────────────────────────╮─────╮
+│ FIXT│                                                                  │     │
+│▎○ pa│  Command Palette                                                 │─────┤
+│▎    │  ▏  56 actions                                                   │     │
+│     │                                                                  │     │
+│     │    Navigate                                                      │     │
+│     │  ▸ ↑/k        up                    move selection               │     │
+│     │    ↓/j        down                  move selection               │     │
+│     │    u          next unread           jump to next unread / bloc…  │     │
+│     │    b          next blocked          jump to next unread / bloc…  │     │
+│     │    tab        switch tab            next / prev pane             │     │
+│     │    shift-tab  prev tab              next / prev pane             │     │
+│     │    1          preview tab           jump to preview / diff / t…  │     │
+│     │    2          diff tab              jump to preview / diff / t…  │     │
+│     │    3          terminal tab          jump to preview / diff / t…  │     │
+│     │    shift-↑    scroll                scroll the active pane       │     │
+│     │    shift-↓    scroll                scroll the active pane       │     │
+│     │    <          shrink list           shrink / grow the session …  │     │
+│     │    … 48 more                                                     │     │
+│     │                                                                  │     │
+│     │  type to filter · ↑↓ move · ↵ run · esc close                    │     │
+│     │                                                                  │     │
+│     ╰──────────────────────────────────────────────────────────────────╯     │
+╰──────────────────────╯╰──────────────────────────────────────────────────────╯
+### 120x40
+╭─ Sessions ───────────────────────╮╭──────────────────────────╮╭──────────────────────────╮╭──────────────────────────╮
+│ FIXTURE ╭──────────────────────────────────────────────────────────────────────────────────────────────────╮         │
+│▎○ parity│                                                                                                  │─────────┤
+│▎        │  Command Palette                                                                                 │         │
+│         │  ▏  56 actions                                                                                   │         │
+│         │                                                                                                  │         │
+│         │    Navigate                                                                                      │         │
+│         │  ▸ ↑/k        up                         move selection                                          │         │
+│         │    ↓/j        down                       move selection                                          │         │
+│         │    u          next unread                jump to next unread / blocked                           │         │
+│         │    b          next blocked               jump to next unread / blocked                           │         │
+│         │    tab        switch tab                 next / prev pane                                        │         │
+│         │    shift-tab  prev tab                   next / prev pane                                        │         │
+│         │    1          preview tab                jump to preview / diff / terminal                       │         │
+│         │    2          diff tab                   jump to preview / diff / terminal                       │         │
+│         │    3          terminal tab               jump to preview / diff / terminal                       │         │
+│         │    shift-↑    scroll                     scroll the active pane                                  │         │
+│         │    shift-↓    scroll                     scroll the active pane                                  │         │
+│         │    <          shrink list                shrink / grow the session list (or drag the divider)    │         │
+│         │    >          grow list                  shrink / grow the session list (or drag the divider)    │         │
+│         │    \          cycle layout               cycle layout presets (monitor / default / review / fo…  │         │
+│         │    Manage                                                                                        │         │
+│         │    n          new                        new session (form, name first)                          │         │
+│         │    N          new (pick project)         new session (form, project first)                       │         │
+│         │    i          smart new                  smart new (describe it; auto-routes to a project)       │         │
+│         │    R          rename                     rename session (label only)                             │         │
+│         │    A          auto-name                  auto-name session (via its agent)                       │         │
+│         │    M          mute notifications         mute / unmute this session's notifications              │         │
+│         │    /          filter sessions            filter sessions                                         │         │
+│         │    v          multi-select               multi-select: space marks, p/r/x act on the marked se…  │         │
+│         │    Handoff                                                                                       │         │
+│         │    ↵/o        open                       terminal has exited                                     │         │
+│         │    ctrl-q     attach/detach              terminal has exited                                     │         │
+│         │    … 34 more                                                                                     │         │
+│         │                                                                                                  │         │
+│         │  type to filter · ↑↓ move · ↵ run · esc close                                                    │         │
+│         │                                                                                                  │         │
+│         ╰──────────────────────────────────────────────────────────────────────────────────────────────────╯         │
+│                                  ││                                                                                  │
+╰──────────────────────────────────╯╰──────────────────────────────────────────────────────────────────────────────────╯
