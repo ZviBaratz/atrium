@@ -23,6 +23,14 @@ func (i *Instance) GetStatus() Status {
 // (a synthetic lifecycle transition — see suppressNextUnread); any non-Ready write
 // clears a pending suppression, since an observed working phase means the next
 // completion is genuine.
+//
+// It edge-detects Paused the same way, to drop the cached pane frame. That belongs
+// on the edge rather than in pause(): parking does its git I/O while the session is
+// still un-paused, so the capture chain is still targeting it and a frame landing
+// mid-pause would refill a cache cleared any earlier. Once the status is Paused, no
+// further capture is armed (resolveFrameTarget skips paused sessions), so this is
+// the point after which the drop sticks — and it covers RecoverLostSession's park
+// as well as the user's.
 func (i *Instance) SetStatus(status Status) {
 	i.mu.Lock()
 	defer i.mu.Unlock()
@@ -35,6 +43,9 @@ func (i *Instance) SetStatus(status Status) {
 		}
 	} else if status != Ready {
 		i.suppressNextUnread = false
+	}
+	if status == Paused {
+		i.clearPaneFrameLocked()
 	}
 	i.recordStatusChange(status)
 	i.status = status

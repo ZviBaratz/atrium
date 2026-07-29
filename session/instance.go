@@ -263,6 +263,25 @@ type Instance struct {
 	// flag).
 	runtimeEffort string
 
+	// paneFrame is the last successfully captured tmux pane content, paneFrameAt
+	// when it was captured, and paneFrameOK whether any capture has ever
+	// succeeded. Written by the main loop from a background capture's result and
+	// read by the View. See session/paneframe.go for the contract.
+	//
+	// Guarded by mu, unlike diffStats above, because these three do NOT have a
+	// single writer: parking a session clears them from whichever goroutine ran the
+	// pause (pause() is reached from an async action and from RecoverLostSession),
+	// while the capture chain applies frames on the update thread.
+	paneFrame   string
+	paneFrameAt time.Time
+	paneFrameOK bool
+	// paneLive memos the liveness the metadata poll last observed, so the UI can
+	// answer "does this session still have a pane?" without forking its own
+	// has-session. paneLiveKnown distinguishes "observed dead" from "never polled".
+	// Main-loop only, like the frame fields above.
+	paneLive      bool
+	paneLiveKnown bool
+
 	// baseCtx is the lifecycle context the instance's tmux/git subprocesses derive
 	// from; cancelling it (app/daemon shutdown) kills in-flight subprocesses. Set via
 	// SetBaseContext (or FromInstanceData) before Start, i.e. before any background
@@ -1563,6 +1582,32 @@ func (i *Instance) SetContext(name, left string) error {
 	return ts.SetContext(name, left)
 }
 
+// ArmContext records the context strings this session should show and reports
+// whether they changed, without touching tmux. Main-loop only (it writes the
+// session's context cache); pair it with PushContext on a background goroutine.
+func (i *Instance) ArmContext(name, left string) bool {
+	ts := i.tmux()
+	return ts != nil && ts.ArmContext(name, left)
+}
+
+// PushContext writes the armed context strings into tmux. Safe on a background
+// goroutine — it reads and writes no cached state.
+func (i *Instance) PushContext(name, left string) error {
+	ts := i.tmux()
+	if ts == nil {
+		return nil
+	}
+	return ts.PushContext(name, left)
+}
+
+// ClearContextCache un-arms the context cache after a failed push so the next
+// tick retries. Main-loop only, like ArmContext.
+func (i *Instance) ClearContextCache() {
+	if ts := i.tmux(); ts != nil {
+		ts.ClearContextCache()
+	}
+}
+
 // SetPreviewSize resizes the detached tmux session to match the preview pane,
 // so captured content wraps the way it will be displayed. Fails for an
 // unstarted or paused instance.
@@ -1629,21 +1674,36 @@ func (i *Instance) SetTitle(title string) error {
 	return nil
 }
 
+// RenamedIdentity is the identity a completed deep rename has earned but not yet
+// adopted: the I/O is done, and these are the fields the main loop must write.
+// It exists so Rename can run off the update thread without touching Title or
+// Branch — see AdoptRename.
+type RenamedIdentity struct {
+	Title    string
+	Branch   string
+	TmuxName string
+}
+
 // Rename performs an in-place "deep" rename of a started instance to newTitle: it renames
-// the tmux session, then the git branch and worktree directory, then updates Title and the
-// rendered Branch field. Unlike SetDisplayName (which only changes the cosmetic label) this
-// fixes the identity everywhere it surfaces — git, GitHub/PRs, the worktree path — without
-// killing the running agent. The order (tmux → git) keeps rollback exact: a git failure only
-// has to undo the tmux rename (reversible by name), never a worktree move that already minted
-// a fresh path. Title/Branch are written here on the main thread; no background reader touches
-// them, so they need no lock (the git/tmux structs guard their own fields).
-func (i *Instance) Rename(newTitle string) error {
+// the tmux session, then the git branch and worktree directory. Unlike SetDisplayName
+// (which only changes the cosmetic label) this fixes the identity everywhere it surfaces —
+// git, GitHub/PRs, the worktree path — without killing the running agent. The order
+// (tmux → git) keeps rollback exact: a git failure only has to undo the tmux rename
+// (reversible by name), never a worktree move that already minted a fresh path.
+//
+// This is the I/O half only: it runs on a background goroutine (renameIOCmd) and
+// deliberately writes NEITHER Title NOR Branch. Those are unguarded fields read by the
+// main thread on every render (listRowZoneID keys a row on Title), so writing them here
+// would be a data race — the reason the returned identity is applied by AdoptRename on the
+// update thread instead. Everything this function does touch (the git/tmux structs) guards
+// its own fields.
+func (i *Instance) Rename(newTitle string) (RenamedIdentity, error) {
 	newTitle = strings.TrimSpace(newTitle)
 	if newTitle == "" {
-		return fmt.Errorf("cannot rename to an empty title")
+		return RenamedIdentity{}, fmt.Errorf("cannot rename to an empty title")
 	}
 	if !i.isStarted() {
-		return fmt.Errorf("cannot deep-rename an instance that has not been started")
+		return RenamedIdentity{}, fmt.Errorf("cannot deep-rename an instance that has not been started")
 	}
 
 	oldTitle := i.Title
@@ -1659,8 +1719,10 @@ func (i *Instance) Rename(newTitle string) error {
 
 	// 1. Rename the tmux session first: atomic and exactly reversible by name.
 	if err := ts.Rename(newTitle, newName); err != nil {
-		return fmt.Errorf("failed to rename tmux session: %w", err)
+		return RenamedIdentity{}, fmt.Errorf("failed to rename tmux session: %w", err)
 	}
+
+	renamed := RenamedIdentity{Title: newTitle, TmuxName: newName}
 
 	// 2. Rename the git branch + move the worktree. On failure (incl. its own internal
 	// rollback of a half-done branch rename), roll the tmux session back to its old name.
@@ -1670,17 +1732,25 @@ func (i *Instance) Rename(newTitle string) error {
 			if rbErr := ts.Rename(oldTitle, oldName); rbErr != nil {
 				log.ErrorLog.Printf("failed to roll back tmux rename %q->%q: %v", newTitle, oldTitle, rbErr)
 			}
-			return fmt.Errorf("failed to rename git worktree: %w", err)
+			return RenamedIdentity{}, fmt.Errorf("failed to rename git worktree: %w", err)
 		}
-		i.Branch = wt.GetBranchName()
+		renamed.Branch = wt.GetBranchName()
 	}
+	return renamed, nil
+}
 
-	// 3. Adopt the corrected identity.
-	i.Title = newTitle
+// AdoptRename writes the identity a successful Rename earned. Main-loop only, for the
+// same single-writer reason as SetDiffStats: Title is read unguarded by the renderer.
+// A zero Branch is left alone — a direct session has no worktree to derive one from, so
+// overwriting would blank a field the rename never owned.
+func (i *Instance) AdoptRename(renamed RenamedIdentity) {
+	i.Title = renamed.Title
+	if renamed.Branch != "" {
+		i.Branch = renamed.Branch
+	}
 	i.mu.Lock()
-	i.tmuxName = newName
+	i.tmuxName = renamed.TmuxName
 	i.mu.Unlock()
-	return nil
 }
 
 // DisplayName returns the cosmetic label shown for the instance, falling back to Title when

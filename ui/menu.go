@@ -39,12 +39,9 @@ const (
 	StateEmpty
 	// StateFilter is the bar shown while typing an incremental filter query.
 	StateFilter
-	// StateGeneratingName is shown while a session name is being generated in the
-	// background; the hint bar reports progress instead of the usual options.
-	StateGeneratingName
-	// StateBusy is shown while a confirm/pause/resume action runs off the UI thread;
-	// the bar reports the operation ("pushing…", "resuming 5 sessions…") via busyText
-	// instead of the usual options. Set through SetBusy.
+	// StateBusy is shown while an operation runs off the UI thread; the bar reports
+	// it by name ("pushing…", "resuming 5 sessions…", "generating name…") via
+	// busyText instead of the usual options. Set through SetBusy.
 	StateBusy
 	// StateHints is shown while hint (fingers) mode overlays the preview:
 	// the bar teaches the mode's three gestures instead of the usual options.
@@ -130,13 +127,20 @@ type Menu struct {
 	// quiet blanks the always-on hint line (StateDefault/StateEmpty) so chrome-free
 	// mode (hint_bar off) keeps the reserved row but renders nothing on it. A notice
 	// still overrides the blank — it is checked first in String — and the contextual
-	// states (Filter/Visual/DiffComment/Busy/GeneratingName) still render, since they
+	// states (Filter/Visual/DiffComment/Busy) still render, since they
 	// are forced visible to teach a gesture or report progress even with the bar off.
 	quiet        bool
 	contextHints []keys.KeyName
-	// busyText is the progress line shown in StateBusy ("pushing…", "resuming 5
-	// sessions…"), set by SetBusy while an action runs off the UI thread.
-	busyText string
+	// busy holds one progress line per owner. Two kinds of operation compete for
+	// this single row: a modal action (kill, push, resume) that also freezes the
+	// keyboard, and a background one (name generation, opening a PR) that does
+	// not. BusyAction outranks BusyBackground so the row always names the thing
+	// the user is actually blocked on.
+	//
+	// This replaces two hand-rolled half-fixes in the app package whose only job
+	// was stopping the name-generation row and the action row from clobbering each
+	// other — each guarding one direction only.
+	busy [busyOwnerCount]string
 	// clickTargets are the dispatch keys of the hint-bar entries the last
 	// String() marked as click zones, in render order. KeyAtZone walks them to
 	// resolve a click back to the key it fires. Rebuilt every String() so a state
@@ -154,12 +158,51 @@ func (m *Menu) SetState(state MenuState) {
 	m.state = state
 }
 
-// SetBusy switches the bar to StateBusy and sets the progress line shown there
-// (e.g. "pushing…"). Like StateGeneratingName, this state survives the periodic
-// instanceChanged ticks (SetInstance only rewrites Default/Empty).
-func (m *Menu) SetBusy(text string) {
+// BusyOwner distinguishes the two kinds of operation that can claim the progress
+// row. They differ in whether the user is blocked, so they must not overwrite each
+// other arbitrarily — see Menu.busy.
+type BusyOwner int
+
+const (
+	// BusyAction is a modal operation: it mutates shared state and gates keys
+	// (home.actionInFlight). It wins the row.
+	BusyAction BusyOwner = iota
+	// BusyBackground is a read-only or additive operation the user can act
+	// around. It shows only while no action is in flight.
+	BusyBackground
+	busyOwnerCount
+)
+
+// SetBusy switches the bar to StateBusy and sets owner's progress line (e.g.
+// "pushing…"). This state survives the periodic instanceChanged ticks (SetInstance
+// only rewrites Default/Empty).
+//
+// It also clears any live notice. The incoming progress row is strictly newer than
+// whatever toast is on screen, and a notice is rendered ahead of every state — so
+// without this a 5s toast could hide a just-armed label for its whole lifetime,
+// leaving the app looking frozen while it refused keys with a notice.
+func (m *Menu) SetBusy(owner BusyOwner, text string) {
 	m.state = StateBusy
-	m.busyText = text
+	m.busy[owner] = text
+	m.notice, m.noticeLevel = "", NoticeInfo
+}
+
+// ClearBusy drops owner's progress line. When the other owner still holds one the
+// bar keeps reporting that instead of falling back to the hints.
+func (m *Menu) ClearBusy(owner BusyOwner) {
+	m.busy[owner] = ""
+	if m.busyText() == "" && m.state == StateBusy {
+		m.state = StateDefault
+	}
+}
+
+// busyText is the line the row should show: the action's if one is in flight,
+// else the background operation's.
+func (m *Menu) busyText() string {
+	if m.busy[BusyAction] != "" {
+		return m.busy[BusyAction]
+	}
+	return m.busy[BusyBackground]
 }
 
 // State returns the menu's current state (which hint set the bar shows).
@@ -167,15 +210,15 @@ func (m *Menu) State() MenuState {
 	return m.state
 }
 
-// BusyText returns the current StateBusy progress line (empty if never set). The
-// in-flight input gate reuses it so a swallowed key names the operation.
+// BusyText returns the progress line the row is currently showing (empty if none).
+// The in-flight input gate reuses it so a swallowed key names the operation.
 func (m *Menu) BusyText() string {
-	return m.busyText
+	return m.busyText()
 }
 
 // SetInstance records the selected session and derives the hint set from its
 // status, so the bar only advertises actions the selection can actually take.
-// Special states (Filter, GeneratingName, Busy) persist across the periodic
+// Special states (Filter, Busy) persist across the periodic
 // instanceChanged ticks.
 func (m *Menu) SetInstance(instance *session.Instance) {
 	m.hasInstance = instance != nil
@@ -381,7 +424,7 @@ func (m *Menu) String() string {
 
 	// Chrome-free: the reserved row (menuVisible stays true in stateDefault) renders
 	// blank instead of the hints. Only the always-on hint sets blank — the contextual
-	// states in the switch below (Filter/Visual/DiffComment/Busy/GeneratingName) are
+	// states in the switch below (Filter/Visual/DiffComment/Busy) are
 	// forced visible to teach a gesture or report progress, so they render even with
 	// the bar off.
 	if m.quiet && (m.state == StateDefault || m.state == StateEmpty) {
@@ -390,12 +433,9 @@ func (m *Menu) String() string {
 
 	var line string
 	switch m.state {
-	case StateGeneratingName:
-		// While generating a name, the bar shows a single status line.
-		line = progressStyle().Render("✨ Generating name…")
 	case StateBusy:
-		// While an action runs off the UI thread, the bar shows its progress line.
-		line = progressStyle().Render(m.busyText)
+		// While an operation runs off the UI thread, the bar names it.
+		line = progressStyle().Render(m.busyText())
 	case StateFilter:
 		// Actions first (see keys.FilterModeHints) so that on a narrow terminal
 		// the width truncation below drops the predicate vocabulary tail, never

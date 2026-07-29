@@ -222,6 +222,10 @@ var Registry = []Entry{
 		key.WithKeys("y"),
 		key.WithHelp("y", "copy branch name"),
 	)},
+	{Name: KeyCopyContent, Binding: key.NewBinding(
+		key.WithKeys("Y"),
+		key.WithHelp("Y", "copy pane/diff"),
+	)},
 	{Name: KeyShrinkList, Binding: key.NewBinding(
 		key.WithKeys("<"),
 		key.WithHelp("<", "shrink list"),

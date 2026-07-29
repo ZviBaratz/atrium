@@ -397,3 +397,22 @@ func TestParseHunkHeader(t *testing.T) {
 		})
 	}
 }
+
+// TestSelectedText_YieldsTheRawSelectedLines pins what the copy action lifts in
+// comment mode: the lines the cursor has selected, exactly as git wrote them —
+// no numbers, no styling, no truncation. Copying the rendered rows instead would
+// paste the pane's colorized, tab-expanded, width-clipped approximation.
+func TestSelectedText_YieldsTheRawSelectedLines(t *testing.T) {
+	d := NewDiffPane()
+	d.SetSize(80, 20)
+	d.rows = parseDiffRows(cursorDiff)
+
+	require.Empty(t, d.SelectedText(), "outside comment mode there is no selection to copy")
+
+	require.True(t, d.EnterComment())
+	require.Equal(t, " ctx1", d.SelectedText(), "a single-line selection copies that line")
+
+	d.ExtendDown()
+	require.Equal(t, " ctx1\n+add1", d.SelectedText(), "an extended range copies every line in it")
+	require.NotContains(t, d.SelectedText(), "@@", "chrome rows are never annotatable, so never copied")
+}

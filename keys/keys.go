@@ -83,6 +83,12 @@ const (
 
 	KeyCopyBranch // Copy the selected session's branch name to the clipboard
 
+	// KeyCopyContent copies the active tab's content to the clipboard, unstyled:
+	// the raw diff, or the captured pane with its ANSI stripped. It is the
+	// answer to "you cannot cleanly copy anything out of a full-screen TUI" —
+	// dragging a selection across the alt-screen takes borders and gutters with it.
+	KeyCopyContent
+
 	// KeyShrinkList and KeyGrowList resize the session list relative to the
 	// preview pane.
 	KeyShrinkList

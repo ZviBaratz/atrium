@@ -117,7 +117,7 @@ func TestDirectSession_RecoverLostSessionParks(t *testing.T) {
 func TestDirectSession_RenameRenamesTmuxOnly(t *testing.T) {
 	inst := &Instance{Title: "old", status: Running, started: true, direct: true, Path: t.TempDir(), tmuxSession: directTmux("old")}
 
-	require.NoError(t, inst.Rename("new"))
+	require.NoError(t, renameAndAdopt(inst, "new"))
 	assert.Equal(t, "new", inst.Title)
 	assert.Empty(t, inst.Branch, "a direct session never gains a branch on rename")
 }

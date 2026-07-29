@@ -585,6 +585,21 @@ func (l *List) Kill() error {
 // target need not be the selected item — the in-session kill path (Ctrl+X) and
 // the auto-open path target a specific instance regardless of current selection.
 func (l *List) KillInstance(target *session.Instance) error {
+	killErr := target.Kill()
+	if killErr != nil {
+		log.ErrorLog.Printf("could not kill instance: %v", killErr)
+	}
+	l.RemoveInstance(target)
+	return killErr
+}
+
+// RemoveInstance drops target's row and recovers the selection, without touching
+// tmux or git. It is the main-thread half of a teardown: the I/O half
+// (Instance.Kill) runs in a goroutine, and this applies its outcome to the model
+// once the result comes back (#380). Removing the row regardless of whether the
+// teardown succeeded is deliberate and unchanged — the session is gone from
+// storage either way, and the caller reports what leaked.
+func (l *List) RemoveInstance(target *session.Instance) {
 	idx := -1
 	for i, item := range l.items {
 		if item == target {
@@ -593,7 +608,7 @@ func (l *List) KillInstance(target *session.Instance) error {
 		}
 	}
 	if idx == -1 {
-		return nil
+		return
 	}
 
 	// Under an active view (sort mode or account grouping), drop the target from the
@@ -610,15 +625,6 @@ func (l *List) KillInstance(target *session.Instance) error {
 		}()
 	}
 
-	// Kill the tmux session and clean up the worktree. Still remove the row even
-	// when teardown fails — the instance is already gone from storage — but return
-	// the error so the caller can tell the user what leaked (a live tmux session
-	// or a leftover branch) instead of reporting a clean kill.
-	killErr := target.Kill()
-	if killErr != nil {
-		log.ErrorLog.Printf("could not kill instance: %v", killErr)
-	}
-
 	l.items = append(l.items[:idx], l.items[idx+1:]...)
 
 	// Removing an item before the selection shifts every later index down by one;
@@ -630,8 +636,6 @@ func (l *List) KillInstance(target *session.Instance) error {
 	// Removing an item can still shift the selection onto a now-hidden index (or
 	// off the end), so re-establish the navigable-selection invariant.
 	l.clampSelectionToNavigable()
-
-	return killErr
 }
 
 // Up selects the prev visible item in the list, wrapping at the top and skipping the hidden

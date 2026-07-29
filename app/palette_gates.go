@@ -246,6 +246,13 @@ var paletteGates = map[keys.KeyName]paletteGate{
 		}
 		return ""
 	}),
+
+	// Copying the active tab reads the PANE, not the session. The diff pane can
+	// hold a frozen comment-mode selection that outlives the selection moving, and
+	// the action declines by name ("nothing to copy from this tab yet") when there
+	// is genuinely nothing — so gating it on a live selection would dim a key that
+	// works, to prevent a case that already explains itself.
+	keys.KeyCopyContent: global(),
 }
 
 // attachBlocked is shared by enter and the attach toggle, which are the same

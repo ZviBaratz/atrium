@@ -191,6 +191,10 @@ func (m *home) confirmOverCap(plan spawnPlan, limit, active int) tea.Cmd {
 	m.resetTitleCheck()
 	return m.confirmAction(
 		overCapMessage(limit, active, len(plan.programs)),
+		// The spawn this unblocks happens later, in the proceedOverCapMsg handler,
+		// and each new row announces itself with its own Loading spinner. A label
+		// here would name an operation that is not running yet.
+		instantAction,
 		func() tea.Msg { return proceedOverCapMsg{} })
 }
 
