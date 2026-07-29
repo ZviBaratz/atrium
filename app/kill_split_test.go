@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/ZviBaratz/atrium/config"
 	"github.com/ZviBaratz/atrium/session"
@@ -156,4 +157,119 @@ func TestBatchKill_MutatesTheModelOnlyOnTheMainThread(t *testing.T) {
 	require.True(t, ok, "a labelled action returns through asyncActionDoneMsg, got %T", msg)
 	h.Update(done.result)
 	require.Empty(t, h.list.GetInstances(), "applying the result is what removes the row")
+}
+
+// TestKill_CancelledDialogArmsNothing is the reason a teardown's bookkeeping is
+// staged as a confirm-time hook instead of being applied where the dialog is built.
+//
+// A confirmation stores its action and a declined one throws it away without ever
+// running it. So arming at build time left two things behind on every cancel, and
+// cancelling a kill dialog is a routine thing to do:
+//
+//   - a retiring mark that nothing ever clears, which exempts a perfectly live
+//     session from lost-session recovery for the rest of the run;
+//   - a startWG count whose matching Done lives in the action that never ran, so
+//     every subsequent quit burns the full drainStarts timeout waiting for a
+//     goroutine that does not exist.
+func TestKill_CancelledDialogArmsNothing(t *testing.T) {
+	h, inst := newKillHome(t)
+
+	h.confirmKill(inst)
+	require.Empty(t, h.retiring, "opening the dialog must not arm anything yet")
+
+	_, cmd := h.handleConfirmState(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
+	require.Nil(t, cmd, "a declined kill runs nothing")
+	require.Empty(t, h.retiring, "and leaves no mark behind")
+
+	// The cancelled session must still be recoverable — the mark's only job is to
+	// suppress recovery, so a leaked one is invisible until a pane dies much later.
+	lost := []instanceMetaResult{{instance: inst, sessionLost: true}}
+	var recovered []lostRecovery
+	for range lostSessionRecoverThreshold + 1 {
+		// Recovery fires on the exact threshold strike, so collect across ticks
+		// rather than reading only the last one.
+		recovered = append(recovered, recoverLostInstances(lost, h.lostStrikes, h.retiring)...)
+	}
+	require.NotEmpty(t, recovered, "a session whose kill was cancelled is still a live session")
+
+	// Nothing was joined, so the shutdown drain returns at once rather than timing out.
+	require.True(t, h.drainStarts(time.Second), "a cancelled kill must leave startWG balanced")
+}
+
+// TestKill_RefusedTeardownClearsTheRetiringMark: a refusal leaves the session alive,
+// so it must leave it recoverable too. The mark used to outlive the refusal because
+// the handler reported the error before reaching the clear — and since the mark only
+// ever suppresses recovery, the damage showed up much later, when that session's pane
+// died for an unrelated reason and was never parked.
+func TestKill_RefusedTeardownClearsTheRetiringMark(t *testing.T) {
+	h, inst := newKillHome(t)
+
+	h.confirmKill(inst)
+	h.handleConfirmState(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+	require.True(t, h.retiring[inst], "control: the confirmed kill armed the mark")
+
+	h.applyKillDone(killDoneMsg{
+		outcome: killOutcome{inst: inst},
+		refused: errors.New("branch for doomed is checked out in the main repo"),
+	})
+	require.Empty(t, h.retiring, "a refused kill must release the session it never took")
+
+	lost := []instanceMetaResult{{instance: inst, sessionLost: true}}
+	var recovered []lostRecovery
+	for range lostSessionRecoverThreshold + 1 {
+		// Recovery fires on the exact threshold strike, so collect across ticks
+		// rather than reading only the last one.
+		recovered = append(recovered, recoverLostInstances(lost, h.lostStrikes, h.retiring)...)
+	}
+	require.NotEmpty(t, recovered, "and must leave it recoverable when its pane later dies")
+}
+
+// TestBatchKill_ArmsTheSameGuardsAsASingleKill closes the asymmetry the split left:
+// both guards existed, and both were wired to the single-kill path only. The batch is
+// where they matter most — it is the longest teardown window in the app (ten sessions
+// is ~60 subprocesses and ten recursive worktree deletes), so it is the likeliest to
+// have a poll tick land mid-flight and the costliest to leave un-joined at quit.
+func TestBatchKill_ArmsTheSameGuardsAsASingleKill(t *testing.T) {
+	h, inst := newKillHome(t)
+
+	h.killInstances([]*session.Instance{inst}, "Kill 1 session?", "x")
+	require.Empty(t, h.retiring, "staging the batch dialog must not arm anything")
+
+	h.handleConfirmState(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+	require.True(t, h.retiring[inst], "a confirmed batch must mark its sessions retiring")
+
+	lost := []instanceMetaResult{{instance: inst, sessionLost: true}}
+	for range lostSessionRecoverThreshold + 1 {
+		require.Empty(t, recoverLostInstances(lost, h.lostStrikes, h.retiring),
+			"a session in a batch teardown must never be 'recovered' as paused")
+	}
+
+	// The join is what stops a quit mid-batch from stranding a half-removed worktree,
+	// so it must not settle until the teardown reports back.
+	require.False(t, h.drainStarts(50*time.Millisecond),
+		"an in-flight batch teardown must hold the shutdown drain")
+}
+
+// TestBatchKill_ClearsEveryMarkItArmed including the ones it never tore down. A
+// session refused for a base-repo branch checkout is recorded as a failure and keeps
+// its row, so clearing only the torn-down set would strand exactly the sessions that
+// survived — which is why the batch carries its armed set back on the message rather
+// than letting the handler infer it from the outcomes.
+func TestBatchKill_ClearsEveryMarkItArmed(t *testing.T) {
+	h, inst := newKillHome(t)
+	h.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+	h.state = stateDefault
+
+	h.killInstances([]*session.Instance{inst}, "Kill 1 session?", "x")
+	h.handleConfirmState(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+	require.True(t, h.retiring[inst], "control: the batch armed the mark")
+
+	// A refusal: recorded as a failure, never torn down, row intact.
+	h.applyBatchKill(batchKillDoneMsg{
+		armed:    []*session.Instance{inst},
+		failures: []killFailure{{inst.Title, errors.New("branch checked out in the main repo")}},
+	})
+
+	require.Empty(t, h.retiring, "a refused session must not keep the mark its batch armed")
+	require.Len(t, h.list.GetInstances(), 1, "control: it really did survive the batch")
 }

@@ -188,13 +188,13 @@ func (m *home) handlePromptState(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 // handleConfirmState routes a key to the confirmation overlay and, on a confirmed
 // close, runs the pending action. The action runs one of two ways depending on how
 // it was armed:
-//   - confirmAsyncAction set a busy label → run it off the UI thread via
-//     beginAsyncAction (a real tea.Cmd goroutine) behind a "busy" progress row.
-//     These closures are UI-thread-safe (they touch only their captured
-//     instance/worktree); their model mutation happens in the completion handler.
-//   - confirmAction (no label) → run it inline on the main loop, as before. Kill and
-//     the other list/terminal-mutating confirms take this path deliberately: a
-//     goroutine would race Update on shared model state.
+//   - confirmAction with a busy label → run it off the UI thread via beginAsyncAction
+//     (a real tea.Cmd goroutine) behind a "busy" progress row. These closures are
+//     UI-thread-safe (they touch only their captured instance/worktree); their model
+//     mutation happens in the completion handler.
+//   - confirmAction with instantAction → run it inline on the main loop. The
+//     remaining users return a message and nothing else; anything that touches the
+//     list or storage from a goroutine would race Update.
 //
 // Either way only the resulting message flows back through the runtime, so a
 // returned error reaches the error box.
@@ -206,6 +206,7 @@ func (m *home) handleConfirmState(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.pendingConfirmSettingKey = ""
 		m.pendingConfirmAction = nil
 		m.pendingConfirmBusyLabel = ""
+		m.pendingConfirmArm = nil
 		m.confirmationOverlay = nil
 		return m, m.openSettingsAt(key)
 	}
@@ -214,12 +215,20 @@ func (m *home) handleConfirmState(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		confirmed := m.confirmationOverlay.Confirmed
 		action := m.pendingConfirmAction
 		busyLabel := m.pendingConfirmBusyLabel
+		arm := m.pendingConfirmArm
 		m.state = stateDefault
 		m.confirmationOverlay = nil
 		m.pendingConfirmAction = nil
 		m.pendingConfirmBusyLabel = ""
+		m.pendingConfirmArm = nil
 		m.pendingConfirmSettingKey = ""
 		if confirmed && action != nil {
+			// Here, on the update thread, is the only place a staged action's
+			// bookkeeping may be applied: a declined dialog returns below having
+			// touched nothing, which is what keeps a cancel free of side effects.
+			if arm != nil {
+				arm()
+			}
 			if busyLabel != "" {
 				return m, m.beginAsyncAction(busyLabel, action)
 			}

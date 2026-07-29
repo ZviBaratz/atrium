@@ -73,7 +73,7 @@ func TestSessionBriefFollowsRename(t *testing.T) {
 	before := inst.sessionBrief()
 	require.Equal(t, "formalize-packaing", before.Name)
 
-	require.NoError(t, inst.Rename("formalize-packaging"))
+	require.NoError(t, renameAndAdopt(inst, "formalize-packaging"))
 
 	after := inst.sessionBrief()
 	require.Equal(t, "formalize-packaging", after.Name, "the provider yields the renamed title")

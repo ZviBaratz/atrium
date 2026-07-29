@@ -148,9 +148,12 @@ func (p *framePtyFactory) Start(cmd *exec.Cmd) (*os.File, error) {
 
 func (p *framePtyFactory) Close() {}
 
-// newFrameHome builds a home with one started, selected instance whose tmux
+// newCaptureHome builds a home with one started, selected instance whose tmux
 // session runs on spy, sized and parked in the default state on the preview tab.
-func newFrameHome(t *testing.T, spy *frameSpy) (*home, *session.Instance) {
+//
+// Named for the capture chain rather than "frames": app/frame_restore_test.go owns
+// newFrameHome, where "frame" means the rendered layout, not a pane capture.
+func newCaptureHome(t *testing.T, spy *frameSpy) (*home, *session.Instance) {
 	t.Helper()
 	h := newCreateFormHome(t)
 	h.spinner = spinner.New()
@@ -184,7 +187,7 @@ func newFrameHome(t *testing.T, spy *frameSpy) (*home, *session.Instance) {
 // flaky: returned Cmds are never run here, so anything counted was inline.
 func TestPreviewTick_LaunchesNoSubprocessOnTheUpdateThread(t *testing.T) {
 	spy := newFrameSpy("agent output")
-	h, _ := newFrameHome(t, spy)
+	h, _ := newCaptureHome(t, spy)
 
 	before := spy.count()
 	h.Update(previewTickMsg{})
@@ -203,7 +206,7 @@ func TestPreviewTick_LaunchesNoSubprocessOnTheUpdateThread(t *testing.T) {
 // must still happen, just somewhere else.
 func TestPaneFrameCmd_CapturesOffThreadAndPaints(t *testing.T) {
 	spy := newFrameSpy("agent is working")
-	h, inst := newFrameHome(t, spy)
+	h, inst := newCaptureHome(t, spy)
 
 	cmd := h.armFrameCapture(0)
 	require.NotNil(t, cmd, "the chain must arm a capture for a live selected session")
@@ -229,7 +232,7 @@ func TestPaneFrameCmd_CapturesOffThreadAndPaints(t *testing.T) {
 // when it lands.
 func TestPaneFrame_NeverPaintsOneSessionsFrameIntoAnother(t *testing.T) {
 	spy := newFrameSpy("session A output")
-	h, instA := newFrameHome(t, spy)
+	h, instA := newCaptureHome(t, spy)
 
 	instB, err := session.NewInstance(session.InstanceOptions{
 		Title: "other", Path: t.TempDir(), Program: "claude", Direct: true,
@@ -263,7 +266,7 @@ func TestPaneFrame_NeverPaintsOneSessionsFrameIntoAnother(t *testing.T) {
 func TestUpdateLoopSurvivesAWedgedCapture(t *testing.T) {
 	spy := newFrameSpy("agent output")
 	spy.blockOn = "capture-pane"
-	h, _ := newFrameHome(t, spy)
+	h, _ := newCaptureHome(t, spy)
 	defer close(spy.release)
 
 	// Park a capture in a goroutine: it hangs inside the executor, exactly as it
@@ -300,7 +303,7 @@ func TestUpdateLoopSurvivesAWedgedCapture(t *testing.T) {
 func TestTerminalTab_CreatesItsShellOffTheUpdateThread(t *testing.T) {
 	testutil.RequireTmux(t)
 	spy := newFrameSpy("shell prompt $")
-	h, inst := newFrameHome(t, spy)
+	h, inst := newCaptureHome(t, spy)
 	h.tabbedWindow.SetActiveTab(ui.TerminalTab)
 	t.Cleanup(h.tabbedWindow.CloseTerminal)
 
@@ -377,7 +380,7 @@ func TestTickPaths_LaunchNoSubprocessOnTheUpdateThread(t *testing.T) {
 		for _, c := range cases {
 			t.Run(tab.name+"/"+c.name, func(t *testing.T) {
 				spy := newFrameSpy("agent output")
-				h, inst := newFrameHome(t, spy)
+				h, inst := newCaptureHome(t, spy)
 				h.tabbedWindow.SetActiveTab(tab.idx)
 				h.appConfig.SessionContextBar = boolPtr(true)
 
@@ -401,7 +404,7 @@ func TestTickPaths_LaunchNoSubprocessOnTheUpdateThread(t *testing.T) {
 // the pane's own staleness marker instead.
 func TestPaneFrameFailures_NeverReachTheErrorBox(t *testing.T) {
 	spy := newFrameSpy("agent output")
-	h, inst := newFrameHome(t, spy)
+	h, inst := newCaptureHome(t, spy)
 
 	for range 20 {
 		h.Update(paneFrameMsg{
@@ -425,7 +428,7 @@ func TestPaneFrameFailures_NeverReachTheErrorBox(t *testing.T) {
 // go silently stale, which is the one outcome this feature exists to prevent.
 func TestStaleMarker_SurvivesThePreviewTick(t *testing.T) {
 	spy := newFrameSpy("agent output line")
-	h, inst := newFrameHome(t, spy)
+	h, inst := newCaptureHome(t, spy)
 
 	h.Update(paneFrameMsg{
 		target: frameTarget{instance: inst},
@@ -458,7 +461,7 @@ func TestStaleMarker_SurvivesThePreviewTick(t *testing.T) {
 // meaningful is the *count*: the sweep must not fork a second capture-pane to do it.
 func TestMetadataPoll_WarmsTheFrameCacheForFree(t *testing.T) {
 	spy := newFrameSpy("background session output")
-	h, inst := newFrameHome(t, spy)
+	h, inst := newCaptureHome(t, spy)
 
 	_, _, captured := inst.PaneFrame()
 	require.False(t, captured, "precondition: no frame yet")
@@ -481,7 +484,7 @@ func TestMetadataPoll_WarmsTheFrameCacheForFree(t *testing.T) {
 // second, ten times a second.
 func TestHarvestedFrame_NeverRewindsAFresherFrame(t *testing.T) {
 	spy := newFrameSpy("older")
-	_, inst := newFrameHome(t, spy)
+	_, inst := newCaptureHome(t, spy)
 
 	now := time.Now()
 	inst.SetPaneFrame("newer frame from the capture chain", now)
@@ -507,7 +510,7 @@ func TestHarvestedFrame_NeverRewindsAFresherFrame(t *testing.T) {
 // from the verdict the poll already reached, and the writes move into a Cmd.
 func TestMetadataApply_LaunchesNoSubprocessOnTheUpdateThread(t *testing.T) {
 	spy := newFrameSpy("agent output")
-	h, inst := newFrameHome(t, spy)
+	h, inst := newCaptureHome(t, spy)
 	h.appConfig.SessionContextBar = boolPtr(true)
 
 	results := collectMetadata(h.ctx, []*session.Instance{inst}, inst, false)
@@ -532,7 +535,7 @@ func TestMetadataApply_LaunchesNoSubprocessOnTheUpdateThread(t *testing.T) {
 // asking again per session was the whole cost.
 func TestContextPush_UsesThePollsLivenessNotASecondProbe(t *testing.T) {
 	spy := newFrameSpy("agent output")
-	h, inst := newFrameHome(t, spy)
+	h, inst := newCaptureHome(t, spy)
 	h.appConfig.SessionContextBar = boolPtr(true)
 
 	require.True(t, inst.PaneLive(), "a started, never-polled session reads as live")
@@ -564,7 +567,7 @@ func countVerb(calls []string, verb string) int {
 // forever with no way back.
 func TestFrameChain_NeverForksAndNeverDies(t *testing.T) {
 	spy := newFrameSpy("agent output")
-	h, _ := newFrameHome(t, spy)
+	h, _ := newCaptureHome(t, spy)
 
 	first := h.armFrameCapture(0)
 	require.NotNil(t, first)
@@ -578,7 +581,7 @@ func TestFrameChain_NeverForksAndNeverDies(t *testing.T) {
 	// session paused while selected would freeze the loop and the preview would
 	// never come back when it resumes.
 	paused := newFrameSpy("unused")
-	ph, pinst := newFrameHome(t, paused)
+	ph, pinst := newCaptureHome(t, paused)
 	pinst.SetStatus(session.Paused)
 
 	cmd := ph.armFrameCapture(0)
@@ -599,7 +602,7 @@ func TestFrameChain_NeverForksAndNeverDies(t *testing.T) {
 // another interval first.
 func TestFrameChain_ReArmsImmediatelyWhenTheTargetMoved(t *testing.T) {
 	spy := newFrameSpy("agent output")
-	h, instA := newFrameHome(t, spy)
+	h, instA := newCaptureHome(t, spy)
 
 	instB, err := session.NewInstance(session.InstanceOptions{
 		Title: "other", Path: t.TempDir(), Program: "claude", Direct: true,

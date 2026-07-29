@@ -105,21 +105,18 @@ func (m *home) pushOneContext(inst *session.Instance) {
 	}
 }
 
-// instanceChanged updates the preview pane, menu, and diff pane based on the selected instance. It returns an error
-// Cmd if there was any error.
 // validateDeepRename checks whether selected may be renamed to value. It performs
 // no I/O and changes nothing: the rename itself (tmux session, git branch, worktree
 // directory) runs off the update thread in renameIOCmd, and persisting is the
 // caller's responsibility so the rename and any note edit land in a single
 // state.json write.
 //
-// The check stays on the main thread because it reads the whole instance list. It rejects an empty title or one already used in the instance's
-// repo group — comparing derived
-// names (tmux segment, branch slug), not raw titles, and also reserving the qualified tmux
-// name the rename would mint (plus its "_term" terminal-shell sibling) against every session.
-// Same-titled sessions in other groups are fine: their qualified tmux names differ.
-// Runs synchronously on the main event loop — the rename is a handful of instant subprocesses,
-// and the git/tmux structs guard the fields the background poll loop reads.
+// The check stays on the main thread because it reads the whole instance list. It
+// rejects an empty title or one already used in the instance's repo group — comparing
+// derived names (tmux segment, branch slug), not raw titles, and also reserving the
+// qualified tmux name the rename would mint (plus its "_term" terminal-shell sibling)
+// against every session. Same-titled sessions in other groups are fine: their qualified
+// tmux names differ.
 func (m *home) validateDeepRename(selected *session.Instance, value string) error {
 	if value == "" {
 		return fmt.Errorf("session name cannot be empty")
@@ -144,11 +141,13 @@ func (m *home) validateDeepRename(selected *session.Instance, value string) erro
 
 // renameDoneMsg carries a deep rename's result back to the main loop. value and
 // note are echoed so a failure can reopen the overlay with exactly what the user
-// typed — nothing is persisted until a rename succeeds.
+// typed — nothing is persisted until a rename succeeds. renamed is the identity
+// the I/O earned, applied on the update thread by the handler (see AdoptRename).
 type renameDoneMsg struct {
 	instance *session.Instance
 	value    string
 	note     string
+	renamed  session.RenamedIdentity
 	err      error
 }
 
@@ -157,9 +156,14 @@ type renameDoneMsg struct {
 // doc comment called that "a handful of instant subprocesses" — an unmeasured
 // claim of exactly the kind the named-loading policy exists to stop (#380).
 // Validation stays on the main thread (it reads m.list); only the I/O moves.
+//
+// The I/O half writes no model state at all: Instance.Rename returns the new
+// identity rather than assigning Title/Branch, because those are read unguarded
+// by the renderer on every frame. The handler adopts it.
 func renameIOCmd(inst *session.Instance, value, note string) tea.Cmd {
 	return func() tea.Msg {
-		return renameDoneMsg{instance: inst, value: value, note: note, err: inst.Rename(value)}
+		renamed, err := inst.Rename(value)
+		return renameDoneMsg{instance: inst, value: value, note: note, renamed: renamed, err: err}
 	}
 }
 
@@ -651,7 +655,7 @@ func resumeConfirmMessage(kind string, n int) string {
 // count confirmation — the shared core of resumeAll and resumeMarked. A
 // per-instance failure (e.g. BranchCheckedOutError) is recorded and the run
 // continues; the outcome is surfaced as a summary. The resume runs off the UI
-// thread (confirmAsyncAction); state is persisted once, on the Update loop, in the
+// thread (confirmAction with a busy label); state is persisted once, on the Update loop, in the
 // batchResumeDoneMsg handler. Resume is non-destructive, so it keeps the default
 // accent border (only kill wears the danger border).
 //
@@ -689,7 +693,7 @@ func (m *home) resumeInstances(insts []*session.Instance, message string) tea.Cm
 	cmd := m.confirmAction(message, busyLabel(label), action)
 	// The hint names the action rather than saying "confirm" (#399). Set here, in the
 	// shared core, so both entry points get the same label from the same count
-	// (confirmAsyncAction created m.confirmationOverlay synchronously above).
+	// (confirmAction created m.confirmationOverlay synchronously above).
 	m.confirmationOverlay.SetConfirmLabel(fmt.Sprintf("resume %d session%s", len(insts), plural(len(insts))))
 	return cmd
 }
@@ -790,7 +794,7 @@ func pauseConfirmMessage(kind string, n int) string {
 // confirmation — the shared core of pauseAll and pauseMarked. Each Pause commits
 // WIP, detaches tmux, and removes the worktree (keeping the branch); a
 // per-instance failure is recorded and the run continues, with the outcome
-// surfaced as a summary. The run happens off the UI thread (confirmAsyncAction);
+// surfaced as a summary. The run happens off the UI thread (confirmAction with a label);
 // state is persisted once, on the Update loop, in the batchPauseDoneMsg handler.
 // Pause is non-destructive (every branch is kept), so it keeps the default accent
 // border.
@@ -813,7 +817,7 @@ func (m *home) pauseInstances(insts []*session.Instance, message string) tea.Cmd
 	cmd := m.confirmAction(message, busyLabel(label), action)
 	// The hint names the action rather than saying "confirm" (#399). Set here, in the
 	// shared core, so both entry points get the same label from the same count
-	// (confirmAsyncAction created m.confirmationOverlay synchronously above).
+	// (confirmAction created m.confirmationOverlay synchronously above).
 	m.confirmationOverlay.SetConfirmLabel(fmt.Sprintf("pause %d session%s", len(insts), plural(len(insts))))
 	return cmd
 }
@@ -846,6 +850,11 @@ type batchKillDoneMsg struct {
 	killed          int
 	killedInstances []*session.Instance
 	failures        []killFailure
+	// armed is every instance the confirm-time hook marked retiring, carried back so
+	// the handler can clear all of them. It is not the same set as torndown: an
+	// instance refused for a base-repo branch checkout is recorded as a failure and
+	// never torn down, but its mark still has to go.
+	armed []*session.Instance
 }
 
 // summary renders the dismissible-modal text for a batch kill that had at least
@@ -876,6 +885,9 @@ func (msg batchKillDoneMsg) summary() string {
 // row goes regardless (a row pointing at a deleted worktree is worse than none)
 // and the failure is named, so a persisted ghost is reported rather than silent.
 func (m *home) applyBatchKill(msg batchKillDoneMsg) batchKillDoneMsg {
+	// Every instance the batch armed, not just the ones it managed to tear down —
+	// a refused session keeps its row and must keep its recovery.
+	m.endTeardown(msg.armed)
 	for _, out := range msg.torndown {
 		inst := out.inst
 		m.tabbedWindow.CleanupTerminalForInstance(inst)
@@ -913,10 +925,14 @@ func (m *home) forgetInstance(inst *session.Instance) {
 // confirmation — the batch counterpart of confirmKill, used by killMarked. Each
 // teardown reuses confirmKill's per-instance logic: it refuses only when the
 // branch is held by the base repo itself (recorded as a failure so the run
-// continues), then deletes from storage and kills. Storage deletion and
-// KillInstance run on the main loop (the action is invoked there), so they don't
-// race the list. Kill is destructive, so the confirmation wears the danger
-// border like the single-kill dialog.
+// continues), then kills. Kill is destructive, so the confirmation wears the
+// danger border like the single-kill dialog.
+//
+// Only the I/O runs in the goroutine; storage, the rows and the per-instance
+// bookkeeping are applied by applyBatchKill on the update thread. It arms through
+// the same armTeardown as the single kill, which matters most here: this is the
+// LONGEST teardown window in the app, so it is the likeliest to have a poll tick
+// land mid-flight and the costliest to leave un-joined at quit.
 //
 // altConfirmKey is the key that opened the dialog, which double-taps to confirm when
 // kill_double_tap_confirm is on. It is a parameter rather than keys.KillKey because
@@ -929,8 +945,8 @@ func (m *home) killInstances(insts []*session.Instance, message string, altConfi
 	// update thread. Before the split this whole loop ran inline on that thread with
 	// no progress row at all: ten sessions is ~60 subprocesses and ten recursive
 	// worktree deletes, so the UI simply stopped for seconds (#380).
-	action := func() tea.Msg {
-		var res batchKillDoneMsg
+	io := func() tea.Msg {
+		res := batchKillDoneMsg{armed: insts}
 		for _, inst := range insts {
 			// Mirror confirmKill: refuse only when the branch is checked out in the
 			// primary repo itself; a live session's branch is in its own worktree, so
@@ -956,7 +972,9 @@ func (m *home) killInstances(insts []*session.Instance, message string, altConfi
 		return res
 	}
 	label := fmt.Sprintf("killing %d session%s…", len(insts), plural(len(insts)))
+	arm, action := m.armTeardown(insts, io)
 	cmd := m.confirmAction(message, busyLabel(label), action)
+	m.armOnConfirm(arm)
 	// Kill is destructive, so it wears the danger border (confirmAction created
 	// m.confirmationOverlay synchronously above).
 	m.confirmationOverlay.SetBorderColor(theme.Current().Palette.Danger)
@@ -1841,25 +1859,51 @@ func killIOCmd(inst *session.Instance) tea.Cmd {
 	}
 }
 
-// armKill marks inst as retiring and returns its teardown Cmd. The mark is what
-// stops the metadata poll from "recovering" a session that is deliberately being
-// torn down: for the duration of the async window the row still exists, so the
-// poll would see the dying pane, trip recoverLostInstances, and toast "terminal
-// exited — parked as paused" over the busy row. That notice would be a lie AND it
-// would hide the label — the two failures compound.
-func (m *home) armKill(inst *session.Instance) tea.Cmd {
-	if m.retiring == nil {
-		m.retiring = map[*session.Instance]bool{}
+// armTeardown pairs a teardown's bookkeeping with the Cmd that performs it: the
+// returned hook is staged with armOnConfirm and the Cmd with confirmAction, so both
+// halves are decided in one place and neither can be given to one path and forgotten
+// on the other. Single kill and batch kill both go through here.
+//
+// The hook does two things, and both must happen on the update thread:
+//
+//   - marks every instance retiring, which stops the metadata poll from "recovering"
+//     a session that is deliberately being torn down. The row still exists for the
+//     whole async window, so without the mark the poll sees the dying pane, trips
+//     recoverLostInstances, and toasts "terminal exited — parked as paused" over the
+//     busy row: a notice that both lies and hides the teardown's own label.
+//   - joins startWG, so quitting midway cannot strand a half-removed worktree
+//     (#282/#315). Add() on the update thread happens-before app.Run's wait; one
+//     Add per dispatched goroutine, released by the wrapper below.
+//
+// Why a hook rather than doing it here: this runs while the dialog is being BUILT,
+// and a declined confirmation drops its action without running it. Arming at build
+// time therefore leaks a retiring mark that never clears (the session becomes exempt
+// from lost-session recovery for the rest of the run) and a startWG count that never
+// reaches zero (so every later quit burns the full drainStarts timeout) — on every
+// cancel, which is a routine thing to do to a kill dialog.
+func (m *home) armTeardown(insts []*session.Instance, io tea.Cmd) (arm func(), action tea.Cmd) {
+	arm = func() {
+		if m.retiring == nil {
+			m.retiring = map[*session.Instance]bool{}
+		}
+		for _, inst := range insts {
+			m.retiring[inst] = true
+		}
+		m.startWG.Add(1)
 	}
-	m.retiring[inst] = true
-	// Joined on shutdown like an in-flight Start: quitting midway through a
-	// teardown can strand a half-removed worktree. Add() here, on the update
-	// thread, happens-before app.Run's wait.
-	m.startWG.Add(1)
-	io := killIOCmd(inst)
-	return func() tea.Msg {
+	action = func() tea.Msg {
 		defer m.startWG.Done()
 		return io()
+	}
+	return arm, action
+}
+
+// endTeardown clears the retiring marks for a finished teardown. Main-thread only,
+// and called for EVERY outcome — including a refusal, which leaves the session alive
+// and so must leave it recoverable too.
+func (m *home) endTeardown(insts []*session.Instance) {
+	for _, inst := range insts {
+		delete(m.retiring, inst)
 	}
 }
 
@@ -1880,6 +1924,12 @@ type killDoneMsg struct {
 // deleted worktree is worse than no row) and the failure is named, so a persisted
 // ghost is reported rather than left silent.
 func (m *home) applyKillDone(msg killDoneMsg) tea.Cmd {
+	// Release the mark first, so every exit below is covered by one statement. A
+	// refusal in particular leaves the session alive: it must leave it recoverable
+	// too, and it used to return before reaching the clear.
+	if inst := msg.outcome.inst; inst != nil {
+		m.endTeardown([]*session.Instance{inst})
+	}
 	if msg.refused != nil {
 		return m.handleError(msg.refused)
 	}
@@ -1891,7 +1941,6 @@ func (m *home) applyKillDone(msg killDoneMsg) tea.Cmd {
 	storeErr := m.storage.DeleteInstance(inst.Title, inst.Path)
 	m.list.RemoveInstance(inst)
 	m.forgetInstance(inst)
-	delete(m.retiring, inst)
 
 	switch {
 	case msg.outcome.err != nil:
@@ -1922,8 +1971,9 @@ func (m *home) confirmKill(inst *session.Instance) tea.Cmd {
 	// session: the in-session chord and the auto-open path both kill a specific one
 	// (see the doc above). pausing…/resuming… stay object-less for the opposite
 	// reason — they always act on the highlighted row. Don't "fix" that asymmetry.
-	cmd := m.confirmAction(message, busyLabel(fmt.Sprintf("killing '%s'…", inst.DisplayName())),
-		m.armKill(inst))
+	arm, action := m.armTeardown([]*session.Instance{inst}, killIOCmd(inst))
+	cmd := m.confirmAction(message, busyLabel(fmt.Sprintf("killing '%s'…", inst.DisplayName())), action)
+	m.armOnConfirm(arm)
 	// Kill is the one destructive confirmation, so it alone wears the danger
 	// border (the default is accent); confirmAction created m.confirmationOverlay
 	// synchronously above.
@@ -1954,7 +2004,9 @@ func (m *home) offerCleanupAfterMerge(inst *session.Instance, number int) bool {
 	if stats := inst.GetDiffStats(); stats != nil {
 		message += killDataWarning(stats.Dirty, stats.Unpushed)
 	}
-	m.confirmAction(message, busyLabel(fmt.Sprintf("killing '%s'…", inst.DisplayName())), m.armKill(inst))
+	arm, action := m.armTeardown([]*session.Instance{inst}, killIOCmd(inst))
+	m.confirmAction(message, busyLabel(fmt.Sprintf("killing '%s'…", inst.DisplayName())), action)
+	m.armOnConfirm(arm)
 	return true
 }
 
@@ -2000,12 +2052,27 @@ func (m *home) confirmAction(message string, label busyLabel, action tea.Cmd) te
 	m.state = stateConfirm
 	m.pendingConfirmAction = action
 	m.pendingConfirmBusyLabel = string(label)
+	// Clear any hook the previous dialog staged. A caller that needs one sets it
+	// AFTER this returns (armOnConfirm), so ordering cannot silently drop it.
+	m.pendingConfirmArm = nil
 
 	// Create and show the confirmation overlay using ConfirmationOverlay
 	m.confirmationOverlay = overlay.NewConfirmationOverlay(message)
 	m.confirmationOverlay.SetWidth(confirmWidth(m.windowWidth))
 
 	return nil
+}
+
+// armOnConfirm stages bookkeeping to apply on the update thread if — and only if —
+// the pending confirmation is accepted. Call it after confirmAction, which resets
+// the slot.
+//
+// The distinction it exists for: a confirmation's action is stored, not run, and a
+// declined dialog throws it away without ever invoking it. So anything paired with
+// that action (a WaitGroup join, a "this is going away" mark) must be applied here,
+// beside the dispatch, rather than where the dialog is built.
+func (m *home) armOnConfirm(arm func()) {
+	m.pendingConfirmArm = arm
 }
 
 // resolveSpawnPool returns the pool a plan rotates within: the picker's chosen

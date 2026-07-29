@@ -72,24 +72,28 @@ func (i *Instance) HarvestPaneFrame() (raw string, at time.Time, ok bool) {
 	return ts.LastCapture()
 }
 
-// SetPaneFrame records a successful capture. Main-loop only, like SetDiffStats.
-// An empty capture is recorded too: a live-but-blank pane is a real observation,
-// and the preview distinguishes "captured blank" from "never captured".
+// SetPaneFrame records a successful capture. Called on the main loop, under the
+// lock because parking clears the same fields from whichever goroutine ran the
+// pause. An empty capture is recorded too: a live-but-blank pane is a real
+// observation, and the preview distinguishes "captured blank" from "never captured".
 func (i *Instance) SetPaneFrame(text string, at time.Time) {
+	i.mu.Lock()
+	defer i.mu.Unlock()
 	i.paneFrame = text
 	i.paneFrameAt = at
 	i.paneFrameOK = true
 }
 
-// NotePaneFrameFailure records a failed capture. Main-loop only. It deliberately
-// leaves the last good frame and its stamp alone: the frame stays on screen and
-// its age keeps growing, which is exactly what the staleness marker reports.
+// NotePaneFrameFailure records a failed capture. It deliberately leaves the last
+// good frame and its stamp alone: the frame stays on screen and its age keeps
+// growing, which is exactly what the staleness marker reports.
 func (i *Instance) NotePaneFrameFailure(err error, at time.Time) {
 	if err == nil || !paneFrameLog.ShouldLog() {
 		return
 	}
+	_, frameAt, _ := i.PaneFrame()
 	log.WarningLog.Printf("pane capture failed: title=%q status=%d age=%s err=%v",
-		i.Title, i.GetStatus(), at.Sub(i.paneFrameAt), err)
+		i.Title, i.GetStatus(), at.Sub(frameAt), err)
 }
 
 // PaneFrame returns the last successfully captured frame, when it was captured,
@@ -97,6 +101,8 @@ func (i *Instance) NotePaneFrameFailure(err error, at time.Time) {
 // "still coming up" fallback keys on — the same statement the old main-thread
 // TmuxAlive() probe made, without the subprocess.
 func (i *Instance) PaneFrame() (text string, at time.Time, ok bool) {
+	i.mu.RLock()
+	defer i.mu.RUnlock()
 	return i.paneFrame, i.paneFrameAt, i.paneFrameOK
 }
 
@@ -123,11 +129,17 @@ func (i *Instance) PaneLive() bool {
 	return i.paneLive
 }
 
-// dropPaneFrame forgets the cached frame. Called from pause(), which runs on the
-// main event loop, so it shares the "main loop only" contract above. A paused
-// session renders its own fallback rather than a frame, so holding one would be
-// pure memory — and a resumed pane must not flash the pre-pause picture.
-func (i *Instance) dropPaneFrame() {
+// clearPaneFrameLocked forgets the cached frame. A paused session renders its own
+// fallback rather than a frame, so holding one would be pure memory — and a resumed
+// pane must not flash the pre-pause picture.
+//
+// Its one caller is the transition INTO Paused (SetStatus), which already holds the
+// write lock — hence the Locked suffix. It is deliberately NOT called at the top of
+// pause(): parking commits dirty work and removes a worktree first, and for that
+// whole window the session is not yet Paused, so the capture chain is still
+// targeting it and a frame landing mid-pause would refill a cache dropped before the
+// I/O started. The status edge is the point after which no further capture is armed.
+func (i *Instance) clearPaneFrameLocked() {
 	i.paneFrame = ""
 	i.paneFrameAt = time.Time{}
 	i.paneFrameOK = false

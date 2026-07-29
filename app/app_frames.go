@@ -137,9 +137,14 @@ func captureTerminalFrame(target frameTarget, ensure terminalEnsurer) paneFrameM
 		if created == "" {
 			return paneFrameMsg{target: target, at: time.Now()}
 		}
-		// The shell exists now, but this round has no frame for it: the next one
-		// captures it, and the pane shows "Opening terminal…" until then.
-		return paneFrameMsg{target: frameTarget{termKey: created, termInstance: target.termInstance}, at: time.Now()}
+		// The shell exists now, but this round has no frame for it. Report the
+		// creation with NO cache slot named (termKey empty), so the handler applies
+		// nothing and the pane keeps showing "Opening terminal…": applying a blank
+		// frame would stamp frameAt, and a non-zero stamp is exactly what
+		// TerminalPane.UpdateContent reads as "a frame has arrived", painting an
+		// empty pane instead of the fallback. The next round captures it — the
+		// target has changed, so it is armed with no delay.
+		return paneFrameMsg{target: frameTarget{termInstance: target.termInstance}, at: time.Now()}
 	}
 	text, err := sess.CapturePaneContent()
 	return paneFrameMsg{
@@ -232,8 +237,9 @@ func (m *home) noteFrameTargetChange() {
 }
 
 // tabChanged is the shared tail of every tab switch: sync the hint bar's tab
-// state, restamp preview freshness (only the preview tab captures, so arriving
-// there is arriving at a new frame source), and re-render the panes.
+// state, restamp preview freshness (a tab switch changes which pane is being
+// captured — only the diff tab captures nothing — so arriving is arriving at a
+// new frame source), and re-render the panes.
 func (m *home) tabChanged() tea.Cmd {
 	m.menu.SetActiveTab(m.tabbedWindow.GetActiveTab())
 	m.noteFrameTargetChange()

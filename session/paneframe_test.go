@@ -124,13 +124,34 @@ func TestNotePaneFrameFailure_KeepsTheLastFrameAndItsStamp(t *testing.T) {
 		"the stamp must stay put so the frame's age keeps growing — that age IS the staleness marker")
 }
 
-func TestDropPaneFrame_ClearsTheCache(t *testing.T) {
-	inst, _ := frameInstance(t, "content", nil)
-	inst.SetPaneFrame("content", time.Now())
+// The cache is cleared through the Paused transition rather than a standalone drop —
+// see TestPaneFrame_DroppedOnTheFlipToPaused, which asserts both the clearing and the
+// placement that makes it stick.
 
-	inst.dropPaneFrame()
+// TestPaneFrame_DroppedOnTheFlipToPaused pins WHERE the cached frame is released.
+//
+// It used to be released at the top of pause(), before the commit and the worktree
+// removal. For that whole window the session is not yet Paused, so resolveFrameTarget
+// still targets it and the capture chain keeps applying frames — refilling the cache
+// the drop had just cleared, and leaving a resumed pane free to flash its pre-pause
+// picture. The status edge is the first moment after which no further capture is
+// armed, so it is the only point where the drop sticks.
+func TestPaneFrame_DroppedOnTheFlipToPaused(t *testing.T) {
+	inst, _ := frameInstance(t, "pane contents", nil)
 
-	text, _, ok := inst.PaneFrame()
-	require.False(t, ok, "a dropped frame must read as never-captured, not as a stale one")
+	inst.SetPaneFrame("pane contents", time.Now())
+	_, _, ok := inst.PaneFrame()
+	require.True(t, ok, "control: the cache holds a frame to begin with")
+
+	// A frame landing while the pause is still doing its I/O — the session is not
+	// Paused yet, so this is exactly what the capture chain is still allowed to do.
+	inst.SetStatus(Running)
+	inst.SetPaneFrame("mid-pause frame", time.Now())
+
+	inst.SetStatus(Paused)
+
+	text, at, ok := inst.PaneFrame()
+	require.False(t, ok, "parking a session must leave no frame to paint")
 	require.Empty(t, text)
+	require.True(t, at.IsZero(), "and no stamp for the staleness marker to age")
 }

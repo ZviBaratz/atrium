@@ -33,7 +33,7 @@ func captureClipboard(t *testing.T) *string {
 func TestCopyContent_DiffTabYieldsRawGitOutput(t *testing.T) {
 	got := captureClipboard(t)
 	spy := newFrameSpy("")
-	h, inst := newFrameHome(t, spy)
+	h, inst := newCaptureHome(t, spy)
 	h.tabbedWindow.SetActiveTab(ui.DiffTab)
 
 	const raw = "diff --git a/main.go b/main.go\n@@ -1,3 +1,4 @@\n+\tif err != nil {\treturn err }\n"
@@ -50,7 +50,7 @@ func TestCopyContent_DiffTabYieldsRawGitOutput(t *testing.T) {
 func TestCopyContent_PaneTabStripsStyling(t *testing.T) {
 	got := captureClipboard(t)
 	spy := newFrameSpy("")
-	h, inst := newFrameHome(t, spy)
+	h, inst := newCaptureHome(t, spy)
 
 	h.Update(paneFrameMsg{
 		target: frameTarget{instance: inst},
@@ -70,7 +70,7 @@ func TestCopyContent_PaneTabStripsStyling(t *testing.T) {
 func TestCopyContent_SaysSoWhenThereIsNothing(t *testing.T) {
 	got := captureClipboard(t)
 	spy := newFrameSpy("")
-	h, _ := newFrameHome(t, spy)
+	h, _ := newCaptureHome(t, spy)
 	h.tabbedWindow.SetActiveTab(ui.DiffTab)
 
 	pressKey(h, 'Y')
@@ -86,7 +86,7 @@ func TestCopyContent_SaysSoWhenThereIsNothing(t *testing.T) {
 func TestCopyContent_KeyIsWired(t *testing.T) {
 	got := captureClipboard(t)
 	spy := newFrameSpy("")
-	h, inst := newFrameHome(t, spy)
+	h, inst := newCaptureHome(t, spy)
 	h.Update(paneFrameMsg{target: frameTarget{instance: inst}, text: "content", at: time.Now()})
 
 	h.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'Y'}})
@@ -100,7 +100,7 @@ func TestCopyContent_KeyIsWired(t *testing.T) {
 func TestCopyContent_AllowedWhileBusy(t *testing.T) {
 	got := captureClipboard(t)
 	spy := newFrameSpy("")
-	h, inst := newFrameHome(t, spy)
+	h, inst := newCaptureHome(t, spy)
 	h.Update(paneFrameMsg{target: frameTarget{instance: inst}, text: "still copyable", at: time.Now()})
 	h.beginAsyncAction("pushing…", nil)
 
