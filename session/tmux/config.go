@@ -76,8 +76,8 @@ func renderManagedConfig(contextBar bool) ([]byte, error) {
 		WheelScrollLines int
 	}{
 		ContextBar:       contextBar,
-		BarBg:            string(th.Palette.BarBg),
-		BarFg:            string(th.Palette.Fg),
+		BarBg:            theme.Hex(th.Palette.BarBg),
+		BarFg:            theme.Hex(th.Palette.Fg),
 		WheelScrollLines: WheelScrollLines,
 	}
 	var buf bytes.Buffer

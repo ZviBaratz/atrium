@@ -31,22 +31,22 @@ func tmuxEsc(s string) string { return strings.ReplaceAll(s, "#", "##") }
 func barState(s session.Status, th *theme.Theme) (glyph, color string) {
 	switch s {
 	case session.Running:
-		return "●", string(th.Palette.Working)
+		return "●", theme.Hex(th.Palette.Working)
 	case session.Loading:
-		return "●", string(th.Palette.Working)
+		return "●", theme.Hex(th.Palette.Working)
 	case session.Pending:
 		// Still busy with autonomous work (a background sub-agent is finishing, #290), but
 		// not foreground work: a steady cyan pending glyph — never the "done" glyph, and
 		// distinct from Running's working marker — matching the list's stateGlyph.
-		return th.Glyphs.Pending, string(th.Palette.Pending)
+		return th.Glyphs.Pending, theme.Hex(th.Palette.Pending)
 	case session.Ready:
-		return th.Glyphs.Ready, string(th.Palette.Success)
+		return th.Glyphs.Ready, theme.Hex(th.Palette.Success)
 	case session.NeedsInput:
-		return th.Glyphs.Waiting, string(th.Palette.Attention)
+		return th.Glyphs.Waiting, theme.Hex(th.Palette.Attention)
 	case session.Paused:
-		return th.Glyphs.Paused, string(th.Palette.FgDim)
+		return th.Glyphs.Paused, theme.Hex(th.Palette.FgDim)
 	default:
-		return " ", string(th.Palette.FgDim)
+		return " ", theme.Hex(th.Palette.FgDim)
 	}
 }
 

@@ -12,24 +12,24 @@ import (
 // Palette holds the semantic color tokens for a theme. Colors are truecolor
 // hex strings; lipgloss down-samples automatically on lesser terminals.
 type Palette struct {
-	Bg          lipgloss.Color // window background
-	BgElevated  lipgloss.Color // selected-row / panel fill
-	BarBg       lipgloss.Color // in-session header bar fill (a step above BgElevated so the bar separates over a near-black agent pane)
-	Fg          lipgloss.Color // primary text
-	FgDim       lipgloss.Color // secondary text (line-2 git info)
-	FgFaint     lipgloss.Color // tertiary text / inactive borders & rules
-	Accent      lipgloss.Color // active border, selection
-	AccentMuted lipgloss.Color // dimmed accent
-	Purple      lipgloss.Color // app title / banner
-	Success     lipgloss.Color // ready, additions
-	SuccessDim  lipgloss.Color // seen-ready: a Ready session the user already visited
-	Working     lipgloss.Color // working/starting spinner tint; recedes (dim) so Attention stands alone
-	Pending     lipgloss.Color // pending autonomous work — a background sub-agent is still in flight (#290); a calm cyan-family tint, distinct from Working/Success/Attention
-	Attention   lipgloss.Color // waiting / behind (the one attention color — nothing else may use it)
-	Danger      lipgloss.Color // deletions, errors, destructive actions
-	Cyan        lipgloss.Color // hunks, info
-	BadgeBg     lipgloss.Color // AUTO badge background
-	BadgeFg     lipgloss.Color // AUTO badge foreground
+	Bg          Color // window background
+	BgElevated  Color // selected-row / panel fill
+	BarBg       Color // in-session header bar fill (a step above BgElevated so the bar separates over a near-black agent pane)
+	Fg          Color // primary text
+	FgDim       Color // secondary text (line-2 git info)
+	FgFaint     Color // tertiary text / inactive borders & rules
+	Accent      Color // active border, selection
+	AccentMuted Color // dimmed accent
+	Purple      Color // app title / banner
+	Success     Color // ready, additions
+	SuccessDim  Color // seen-ready: a Ready session the user already visited
+	Working     Color // working/starting spinner tint; recedes (dim) so Attention stands alone
+	Pending     Color // pending autonomous work — a background sub-agent is still in flight (#290); a calm cyan-family tint, distinct from Working/Success/Attention
+	Attention   Color // waiting / behind (the one attention color — nothing else may use it)
+	Danger      Color // deletions, errors, destructive actions
+	Cyan        Color // hunks, info
+	BadgeBg     Color // AUTO badge background
+	BadgeFg     Color // AUTO badge foreground
 }
 
 // Glyphs holds every icon as a token so themes can swap Nerd-Font glyphs for

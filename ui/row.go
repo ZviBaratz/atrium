@@ -53,11 +53,11 @@ func rawSeg(plain, styled string) rowSeg {
 // render plain.
 type rowPaint struct {
 	th *theme.Theme
-	bg lipgloss.TerminalColor
+	bg theme.AnyColor
 }
 
 func newRowPaint(th *theme.Theme, selected bool) rowPaint {
-	var bg lipgloss.TerminalColor = lipgloss.NoColor{}
+	bg := theme.NoColor()
 	if selected {
 		bg = th.Palette.BgElevated
 	}
@@ -65,13 +65,13 @@ func newRowPaint(th *theme.Theme, selected bool) rowPaint {
 }
 
 // seg builds a fixed (non-elastic) colored segment.
-func (p rowPaint) seg(text string, c lipgloss.Color) rowSeg {
+func (p rowPaint) seg(text string, c theme.Color) rowSeg {
 	return rowSeg{plain: text, style: lipgloss.NewStyle().Foreground(c).Background(p.bg)}
 }
 
 // flexSeg builds the single elastic segment for a line (truncated to fit by
 // composeLine). bold renders the selected row's name.
-func (p rowPaint) flexSeg(text string, c lipgloss.Color, bold bool) rowSeg {
+func (p rowPaint) flexSeg(text string, c theme.Color, bold bool) rowSeg {
 	st := lipgloss.NewStyle().Foreground(c).Background(p.bg)
 	if bold {
 		st = st.Bold(true)
@@ -174,7 +174,7 @@ func (p rowPaint) agentSeg(i *session.Instance) rowSeg {
 // agentColor is the identity color for i's agent (brand accent when the agent
 // has one, theme foreground otherwise) — the chip-tinting counterpart of
 // agentSeg, so the model chip can ride the icon as one brand-colored unit.
-func (p rowPaint) agentColor(i *session.Instance) lipgloss.Color {
+func (p rowPaint) agentColor(i *session.Instance) theme.Color {
 	_, c := p.th.AgentGlyph(string(agent.Resolve(i.Program).Key))
 	return c
 }

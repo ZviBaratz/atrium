@@ -66,10 +66,10 @@ func fadeSGR() (fg, bg string) {
 	p := theme.Current().Palette
 	fg = "\x1b[38;5;240m"
 	bg = "\x1b[48;5;236m"
-	if r, g, b, ok := hexRGB(string(p.FgFaint)); ok {
+	if r, g, b, ok := hexRGB(theme.Hex(p.FgFaint)); ok {
 		fg = fmt.Sprintf("\x1b[38;2;%d;%d;%dm", r, g, b)
 	}
-	if r, g, b, ok := hexRGB(string(p.Bg)); ok {
+	if r, g, b, ok := hexRGB(theme.Hex(p.Bg)); ok {
 		bg = fmt.Sprintf("\x1b[48;2;%d;%d;%dm", r, g, b)
 	}
 	return fg, bg
