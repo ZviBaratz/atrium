@@ -3,8 +3,8 @@ package overlay
 import (
 	"strings"
 
+	"charm.land/lipgloss/v2"
 	"github.com/ZviBaratz/atrium/ui/theme"
-	"github.com/charmbracelet/lipgloss"
 	"github.com/muesli/reflow/truncate"
 )
 
@@ -228,7 +228,7 @@ func (t *TextInputOverlay) renderCreateForm(divider string) string {
 		// suffix tail be what the row truncation eats.
 		inputWidth = 10
 	}
-	t.titleInput.Width = inputWidth
+	t.titleInput.SetWidth(inputWidth)
 	section(titleLabel + "  " + t.titleInput.View() + suffix)
 	section(tiLabelStyle().Render("Prompt") + "\n" + t.textarea.View())
 	if t.variantPicker != nil {

@@ -1,12 +1,13 @@
 package app
 
 import (
+	"github.com/ZviBaratz/atrium/internal/testutil"
 	"testing"
 
 	"github.com/ZviBaratz/atrium/session"
 
-	"github.com/charmbracelet/bubbles/spinner"
-	tea "github.com/charmbracelet/bubbletea"
+	"charm.land/bubbles/v2/spinner"
+	tea "charm.land/bubbletea/v2"
 	"github.com/stretchr/testify/require"
 )
 
@@ -63,7 +64,7 @@ func TestStateMachine_BackgroundMessagesNeverPanic(t *testing.T) {
 		{"smartDispatchDoneMsg", func(*session.Instance) tea.Msg { return smartDispatchDoneMsg{} }},
 		{"spinnerTickMsg", func(*session.Instance) tea.Msg { return spinner.TickMsg{} }},
 		{"mousePress", func(*session.Instance) tea.Msg {
-			return tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonLeft}
+			return testutil.MouseClick(0, 0, tea.MouseLeft)
 		}},
 	}
 
@@ -86,7 +87,7 @@ func TestStateMachine_BackgroundMessagesNeverPanic(t *testing.T) {
 				// Update-only sweep never touches the fields each wire callback arms.
 				// Bubble Tea always renders after Update, so a state whose overlay the
 				// message invalidated panics here, not above.
-				require.NotEmpty(t, model.View(), "View must render in every state")
+				require.NotEmpty(t, model.View().Content, "View must render in every state")
 			})
 		}
 	}

@@ -11,8 +11,8 @@ import (
 	"github.com/ZviBaratz/atrium/ui"
 	"github.com/ZviBaratz/atrium/ui/theme"
 
-	"github.com/charmbracelet/bubbles/spinner"
-	tea "github.com/charmbracelet/bubbletea"
+	"charm.land/bubbles/v2/spinner"
+	tea "charm.land/bubbletea/v2"
 )
 
 // updateHandleWindowSizeEvent sets the sizes of the components.
@@ -276,7 +276,7 @@ func (m *home) applySettingChange(key string) tea.Cmd {
 			Frames: theme.Current().Glyphs.SpinnerFrames,
 			FPS:    theme.Current().Glyphs.SpinnerFPS,
 		}
-		return tea.Sequence(tea.ClearScreen, tea.WindowSize())
+		return tea.Sequence(tea.ClearScreen, tea.RequestWindowSize)
 	case "model_indicator":
 		// Mirror the newHome seeding; the renderer takes the normalized mode
 		// string so ui needs no config import.
@@ -351,14 +351,12 @@ func (m *home) applySettingChange(key string) tea.Cmd {
 		m.menu.SetQuiet(!m.appConfig.GetHintBar())
 		m.recomputeLayout()
 	case "mouse":
-		// Toggle mouse capture live so the change takes effect without a restart
-		// (the app.Run gate only covers the initial launch). Disabling hands every
-		// mouse event back to the terminal — restoring native select-to-copy —
-		// while enabling turns cell-motion reporting back on.
-		if m.appConfig.GetMouse() {
-			return tea.EnableMouseCellMotion
-		}
-		return tea.DisableMouse
+		// Nothing to command. View() sets MouseMode from the config on every frame,
+		// so the next render after this change already carries the new mode and
+		// Bubble Tea reconciles the terminal to it. Under v1 this had to send
+		// EnableMouseCellMotion/DisableMouse by hand; the declarative View is what
+		// removed the second place the setting had to be applied.
+		return nil
 	case "session_context_bar", "tmux_config_override":
 		// Re-render the managed tmux conf so sessions started from now on pick
 		// the change up; live sessions keep their current status line (tmux only

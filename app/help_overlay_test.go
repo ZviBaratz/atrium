@@ -1,10 +1,11 @@
 package app
 
 import (
+	"github.com/ZviBaratz/atrium/internal/testutil"
 	"strings"
 	"testing"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 	xansi "github.com/charmbracelet/x/ansi"
 )
 
@@ -26,7 +27,7 @@ func TestHelpOverlayFitsShortTerminal(t *testing.T) {
 	}
 	home.showHelpScreen(helpTypeGeneral{}, nil)
 
-	lines := strings.Split(home.View(), "\n")
+	lines := strings.Split(home.View().Content, "\n")
 	if len(lines) > h {
 		t.Fatalf("View() emitted %d lines, exceeds terminal height %d", len(lines), h)
 	}
@@ -36,7 +37,7 @@ func TestHelpOverlayFitsShortTerminal(t *testing.T) {
 		}
 	}
 
-	plain := xansi.Strip(home.View())
+	plain := xansi.Strip(home.View().Content)
 	if !strings.Contains(plain, "Atrium — Keys") {
 		t.Fatal("help title not visible; the dialog top is cut off")
 	}
@@ -62,7 +63,11 @@ func TestHelpOverlayMouse(t *testing.T) {
 	const w, h = 80, 15
 
 	mouse := func(btn tea.MouseButton, x, y int) tea.MouseMsg {
-		return tea.MouseMsg{X: x, Y: y, Action: tea.MouseActionPress, Button: btn}
+		if btn == tea.MouseWheelUp || btn == tea.MouseWheelDown ||
+			btn == tea.MouseWheelLeft || btn == tea.MouseWheelRight {
+			return testutil.MouseWheel(x, y, btn)
+		}
+		return testutil.MouseClick(x, y, btn)
 	}
 
 	home := newCreateFormHome(t)
@@ -71,21 +76,21 @@ func TestHelpOverlayMouse(t *testing.T) {
 
 	// At 80×15 the overflowing dialog spans the full height and is centered
 	// horizontally (78 cols wide → x ∈ [1, 78]), so column 0 is outside.
-	before := xansi.Strip(home.View())
-	home.Update(mouse(tea.MouseButtonWheelDown, w/2, h/2))
+	before := xansi.Strip(home.View().Content)
+	home.Update(mouse(tea.MouseWheelDown, w/2, h/2))
 	if home.state != stateHelp {
 		t.Fatal("wheel closed the help overlay; want it to scroll")
 	}
-	if after := xansi.Strip(home.View()); after == before {
+	if after := xansi.Strip(home.View().Content); after == before {
 		t.Fatal("wheel down did not scroll the help overlay")
 	}
 
-	home.Update(mouse(tea.MouseButtonLeft, w/2, h/2))
+	home.Update(mouse(tea.MouseLeft, w/2, h/2))
 	if home.state != stateHelp {
 		t.Fatal("a click inside the box closed the help overlay; want it inert")
 	}
 
-	home.Update(mouse(tea.MouseButtonLeft, 0, h/2))
+	home.Update(mouse(tea.MouseLeft, 0, h/2))
 	if home.state != stateDefault {
 		t.Fatal("a click outside the box did not close the help overlay")
 	}

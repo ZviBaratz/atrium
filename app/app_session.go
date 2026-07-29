@@ -23,7 +23,7 @@ import (
 	"github.com/ZviBaratz/atrium/ui/overlay"
 	"github.com/ZviBaratz/atrium/ui/theme"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 )
 
 // tmuxAvailable is the tmux-presence seam for the new-session pre-flight guards
@@ -551,7 +551,7 @@ func (m *home) handleResumeDone(msg resumeDoneMsg) tea.Cmd {
 		if serr := m.persistInstances(); serr != nil {
 			log.WarningLog.Printf("failed to persist resumed instance %s: %v", msg.instance.Title, serr)
 		}
-		return tea.WindowSize()
+		return tea.RequestWindowSize
 	}
 	if !msg.recoverable {
 		return m.handleError(msg.err)
@@ -1221,7 +1221,7 @@ func (m *home) openCreateFormSeeded(seedPath string, focusTitle bool, prefill *P
 	// Branch plumbing only applies to a git target: seed the fetched-once set and
 	// kick the background fetch plus the initial (undebounced) branch search.
 	m.fetchedPaths = map[string]bool{}
-	cmds := []tea.Cmd{tea.WindowSize()}
+	cmds := []tea.Cmd{tea.RequestWindowSize}
 	// Refresh the repo scan when the last completed one has gone stale (a
 	// long-running TUI would otherwise serve launch-time results forever). The
 	// completion live-updates this form's picker in place.
@@ -1680,7 +1680,7 @@ func (m *home) startNewSession(title, path string, direct bool, program, branch,
 		err := instance.Start(true)
 		return instanceStartedMsg{instance: instance, err: err, hadPrompt: prompt != "", fromBatch: fromBatch}
 	}
-	return tea.Batch(tea.WindowSize(), m.instanceChanged(), startCmd), nil
+	return tea.Batch(tea.RequestWindowSize, m.instanceChanged(), startCmd), nil
 }
 
 // defaultNewSessionPath returns the contextual target repo for a new session: the
@@ -1810,7 +1810,7 @@ func (m *home) cancelPromptOverlay() tea.Cmd {
 	m.state = stateDefault
 	m.resetTitleCheck()
 	return tea.Sequence(
-		tea.WindowSize(),
+		tea.RequestWindowSize,
 		func() tea.Msg {
 			m.menu.SetState(ui.StateDefault)
 			return nil

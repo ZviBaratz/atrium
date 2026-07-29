@@ -6,20 +6,23 @@ import (
 
 	"github.com/ZviBaratz/atrium/ui/theme"
 
-	"github.com/charmbracelet/lipgloss"
-	"github.com/muesli/termenv"
+	"charm.land/lipgloss/v2"
 )
 
 // forceColorProfile pins lipgloss to ANSI256 so styled lines carry escape
 // sequences even without a TTY — go test detects Ascii and strips all styling,
 // which would make style assertions vacuous. Restored via t.Cleanup, same
 // pattern as overhaul_test.go.
-func forceColorProfile(t *testing.T) {
-	t.Helper()
-	prof := lipgloss.ColorProfile()
-	lipgloss.SetColorProfile(termenv.ANSI256)
-	t.Cleanup(func() { lipgloss.SetColorProfile(prof) })
-}
+// forceColorProfile is now a no-op, kept so the tests below still say why they
+// need colour.
+//
+// It used to pin Lip Gloss's global profile to ANSI256, because a test binary's
+// stdout is not a TTY and the global would otherwise resolve to Ascii — leaving
+// the "is this styled?" assertions comparing plain text against plain text. v2
+// removed the global: Style always emits full fidelity and Bubble Tea
+// down-samples at the writer, so the styling these tests look for is always
+// present.
+func forceColorProfile(t *testing.T) { t.Helper() }
 
 // styled reports whether s carries ANSI escape bytes.
 func styled(s string) bool { return strings.Contains(s, "\x1b[") }

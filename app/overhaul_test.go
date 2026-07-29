@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 	"github.com/muesli/ansi"
 	"github.com/stretchr/testify/require"
 )
@@ -53,7 +53,7 @@ func TestViewFitsTerminalBounds_ManyInstances(t *testing.T) {
 		}
 		home.updateHandleWindowSizeEvent(tea.WindowSizeMsg{Width: w, Height: h})
 
-		lines := strings.Split(home.View(), "\n")
+		lines := strings.Split(home.View().Content, "\n")
 		require.LessOrEqualf(t, len(lines), h, "size=%dx%d: too many lines", w, h)
 		for i, l := range lines {
 			require.Equalf(t, w, ansi.PrintableRuneWidth(l), "size=%dx%d: line %d wrong width", w, h, i)

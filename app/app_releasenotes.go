@@ -8,7 +8,7 @@ import (
 	"github.com/ZviBaratz/atrium/log"
 	"github.com/ZviBaratz/atrium/ui/overlay"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 )
 
 // fetchReleaseNotes is a package var so tests can fake the network (same pattern

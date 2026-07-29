@@ -19,7 +19,7 @@ import (
 	"github.com/ZviBaratz/atrium/session"
 	"github.com/ZviBaratz/atrium/ui"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 )
 
 func (m *home) handleDriftFound(msg driftFoundMsg) (tea.Model, tea.Cmd) {
@@ -208,14 +208,61 @@ func (m *home) handleSmartDispatchDone(msg smartDispatchDoneMsg) (tea.Model, tea
 // grabbing the divider, so the user doesn't have to land the exact border column.
 const dividerGrab = 1
 
+// mouseAction is the gesture kind handleMouse routes on.
+//
+// Bubble Tea v2 splits mouse input into one message type per kind
+// (MouseClickMsg / MouseReleaseMsg / MouseMotionMsg / MouseWheelMsg) where v1
+// carried a flat Action field. handleMouse is a single ~180-line state machine
+// over press/motion/release — a divider drag, a double-click window, wheel
+// routing by hover — so it is flattened back rather than split four ways: the
+// gesture logic is what has the tests, and re-shaping it into four entry points
+// would have moved risk into the one part of this migration that has no
+// compile-time check.
+type mouseAction int
+
+const (
+	mousePress mouseAction = iota
+	mouseRelease
+	mouseMotion
+)
+
+// mouseGesture is the (action, button, position) shape handleMouse was written
+// against, reconstructed from whichever v2 message arrived.
+type mouseGesture struct {
+	action mouseAction
+	button tea.MouseButton
+	x, y   int
+}
+
+// newMouseGesture flattens a v2 mouse message.
+//
+// Wheel deltas map to mousePress deliberately, preserving v1's encoding (a wheel
+// tick was a press whose Button was MouseWheelUp/Down). handleMouse's early
+// return drops everything that is not a press before the wheel-routing block, so
+// classifying the wheel as anything else would silently disable scrolling — and
+// the screensaver's "a nudged mouse must not dismiss it" guard reads the same
+// press/button pair.
+func newMouseGesture(msg tea.MouseMsg) mouseGesture {
+	mouse := msg.Mouse()
+	g := mouseGesture{action: mousePress, button: mouse.Button, x: mouse.X, y: mouse.Y}
+	switch msg.(type) {
+	case tea.MouseReleaseMsg:
+		g.action = mouseRelease
+	case tea.MouseMotionMsg:
+		g.action = mouseMotion
+	}
+	return g
+}
+
 func (m *home) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
+	g := newMouseGesture(msg)
 	// The screensaver dismisses on a click, mirroring the any-key exit; wheel
 	// and motion events are ignored so a nudged mouse doesn't tear it down.
 	if m.state == stateScreensaver {
-		if msg.Action == tea.MouseActionPress {
-			switch msg.Button {
-			case tea.MouseButtonWheelUp, tea.MouseButtonWheelDown,
-				tea.MouseButtonWheelLeft, tea.MouseButtonWheelRight:
+		if g.action == mousePress {
+			switch g.button {
+			case tea.MouseWheelUp, tea.MouseWheelDown,
+				tea.MouseWheelLeft, tea.MouseWheelRight:
 				// Wheel deltas arrive as presses; not a deliberate wake.
 			default:
 				m.state = stateDefault
@@ -233,15 +280,15 @@ func (m *home) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	// Without this a lost release would swallow every click and let the next
 	// press-drag anywhere snap the divider to the cursor.
 	if m.draggingDivider {
-		if m.state != stateDefault || msg.Action == tea.MouseActionPress {
+		if m.state != stateDefault || g.action == mousePress {
 			m.draggingDivider = false
 		} else {
-			switch msg.Action {
-			case tea.MouseActionMotion:
+			switch g.action {
+			case mouseMotion:
 				if m.windowWidth <= 0 {
 					return m, nil
 				}
-				m.listRatio = config.ClampListRatio(float64(msg.X) / float64(m.windowWidth))
+				m.listRatio = config.ClampListRatio(float64(g.x) / float64(m.windowWidth))
 				// Reflow the panes so the divider tracks the cursor live. The pane
 				// content (tmux/diff capture) is intentionally left to the periodic
 				// preview tick rather than re-fetched here: a full instanceChanged()
@@ -249,7 +296,7 @@ func (m *home) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 				// re-clamps the already-captured text to the new width in the meantime.
 				m.recomputeLayout()
 				return m, nil
-			case tea.MouseActionRelease:
+			case mouseRelease:
 				m.draggingDivider = false
 				// A drag is a manual split, so it is a custom override of the active
 				// preset (like < / >): persist preset+override+ratio together so it
@@ -273,16 +320,16 @@ func (m *home) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	// press-only early return and the row/tab click logic, so a seam press starts a
 	// drag instead of selecting the row behind it.
 	bannerH := m.topBannerHeight()
-	if msg.Button == tea.MouseButtonLeft && msg.Action == tea.MouseActionPress &&
+	if g.button == tea.MouseLeft && g.action == mousePress &&
 		m.state == stateDefault && m.windowWidth > 0 &&
-		msg.Y >= bannerH && msg.Y < bannerH+m.paneContentHeight() && !m.listHidden() {
+		g.y >= bannerH && g.y < bannerH+m.paneContentHeight() && !m.listHidden() {
 		listWidth := int(float32(m.windowWidth) * float32(m.listRatio))
-		if msg.X >= listWidth-dividerGrab && msg.X <= listWidth+dividerGrab {
+		if g.x >= listWidth-dividerGrab && g.x <= listWidth+dividerGrab {
 			m.draggingDivider = true
 			return m, nil
 		}
 	}
-	if msg.Action != tea.MouseActionPress {
+	if g.action != mousePress {
 		return m, nil
 	}
 	// Modal text overlays (help / info) own the screen: the wheel scrolls
@@ -291,13 +338,13 @@ func (m *home) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	// (scroll keys scroll, anything else closes). Clicks inside the box
 	// are inert so a stray selection click doesn't tear the dialog down.
 	if (m.state == stateHelp || m.state == stateInfo) && m.textOverlay != nil {
-		switch msg.Button {
-		case tea.MouseButtonWheelUp:
+		switch g.button {
+		case tea.MouseWheelUp:
 			m.textOverlay.ScrollBy(-1)
-		case tea.MouseButtonWheelDown:
+		case tea.MouseWheelDown:
 			m.textOverlay.ScrollBy(1)
-		case tea.MouseButtonLeft:
-			if !m.textOverlayContains(msg.X, msg.Y) {
+		case tea.MouseLeft:
+			if !m.textOverlayContains(g.x, g.y) {
 				return m.closeTextOverlay()
 			}
 		}
@@ -310,14 +357,14 @@ func (m *home) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	// hint bar / error rows) it is ignored. Zones are resolved against the
 	// frame scanned in View(); before the first scan both InBounds checks
 	// return false, so the wheel does nothing.
-	if msg.Button == tea.MouseButtonWheelDown || msg.Button == tea.MouseButtonWheelUp {
+	if g.button == tea.MouseWheelDown || g.button == tea.MouseWheelUp {
 		if m.state != stateDefault {
 			return m, nil
 		}
 		// Over the list: move the selection, regardless of the selected
 		// instance's state (paused / nil), exactly like the keyboard paths.
 		if m.list.InPanelBounds(msg) {
-			if msg.Button == tea.MouseButtonWheelUp {
+			if g.button == tea.MouseWheelUp {
 				m.list.Up()
 			} else {
 				m.list.Down()
@@ -331,7 +378,7 @@ func (m *home) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 			if selected == nil || selected.Paused() {
 				return m, nil
 			}
-			if msg.Button == tea.MouseButtonWheelUp {
+			if g.button == tea.MouseWheelUp {
 				m.tabbedWindow.ScrollUp(wheelScrollLines)
 			} else {
 				m.tabbedWindow.ScrollDown(wheelScrollLines)
@@ -348,7 +395,7 @@ func (m *home) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	// re-injected through handleKeyPress so it runs the exact same dispatch
 	// (state routing + guards) as the keypress it advertises: nothing here
 	// becomes mouse-only.
-	if msg.Button == tea.MouseButtonLeft && m.hintBarClickState() {
+	if g.button == tea.MouseLeft && m.hintBarClickState() {
 		if k, ok := m.menu.KeyAtZone(msg); ok {
 			if kmsg, ok := synthKeyMsg(k); ok {
 				return m.handleKeyPress(kmsg)
@@ -361,7 +408,7 @@ func (m *home) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	// an overlay is up the rows behind it still have recorded bounds, so a click
 	// there must be ignored. Click regions are resolved against the frame
 	// scanned in View().
-	if msg.Button == tea.MouseButtonLeft && m.state == stateDefault {
+	if g.button == tea.MouseLeft && m.state == stateDefault {
 		if inst := m.list.InstanceAtZone(msg); inst != nil {
 			m.list.SelectInstance(inst)
 			// A second click on the same row within doubleClickWindow attaches,
@@ -433,25 +480,27 @@ func (m *home) hintBarClickState() bool {
 // bar key is a single rune whose KeyRunes message stringifies to that rune. A
 // key it can't represent reports false, so an unrecognized entry is a no-op
 // rather than a wrong action.
-func synthKeyMsg(k string) (tea.KeyMsg, bool) {
+func synthKeyMsg(k string) (tea.KeyPressMsg, bool) {
 	switch k {
 	case "enter":
-		return tea.KeyMsg{Type: tea.KeyEnter}, true
+		return tea.KeyPressMsg{Code: tea.KeyEnter}, true
 	case "esc":
-		return tea.KeyMsg{Type: tea.KeyEsc}, true
-	case " ":
-		return tea.KeyMsg{Type: tea.KeySpace}, true
+		return tea.KeyPressMsg{Code: tea.KeyEsc}, true
+	case "space", " ":
+		// Both spellings: v2 reports the space bar as "space" where v1 said " ",
+		// and a stale bar entry must still resolve rather than silently no-op.
+		return tea.KeyPressMsg{Code: tea.KeySpace}, true
 	case "ctrl+x":
-		return tea.KeyMsg{Type: tea.KeyCtrlX}, true
+		return tea.KeyPressMsg{Code: 'x', Mod: tea.ModCtrl}, true
 	case "shift+up":
-		return tea.KeyMsg{Type: tea.KeyShiftUp}, true
+		return tea.KeyPressMsg{Code: tea.KeyUp, Mod: tea.ModShift}, true
 	case "shift+down":
-		return tea.KeyMsg{Type: tea.KeyShiftDown}, true
+		return tea.KeyPressMsg{Code: tea.KeyDown, Mod: tea.ModShift}, true
 	default:
 		if r := []rune(k); len(r) == 1 {
-			return tea.KeyMsg{Type: tea.KeyRunes, Runes: r}, true
+			return tea.KeyPressMsg{Code: r[0], Text: k}, true
 		}
-		return tea.KeyMsg{}, false
+		return tea.KeyPressMsg{}, false
 	}
 }
 
@@ -693,5 +742,5 @@ func (m *home) handleInstanceStarted(msg instanceStartedMsg) (tea.Model, tea.Cmd
 		return m, m.attachExec(msg.instance.Attach, msg.instance)
 	}
 
-	return m, tea.Batch(tea.WindowSize(), m.instanceChanged())
+	return m, tea.Batch(tea.RequestWindowSize, m.instanceChanged())
 }

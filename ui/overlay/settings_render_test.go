@@ -6,10 +6,10 @@ import (
 	"strings"
 	"testing"
 
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/ZviBaratz/atrium/config"
 	"github.com/ZviBaratz/atrium/ui/theme"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -1539,9 +1539,11 @@ func TestHintFitsEveryWidth(t *testing.T) {
 		// One overlay walked through three states in order: rail → rows → search.
 		for _, state := range []struct {
 			name string
-			key  tea.KeyMsg
+			key  tea.KeyPressMsg
 		}{
-			{"rail", tea.KeyMsg{}},
+			// The zero value means "send no key at all"; the loop below skips this
+			// row by name rather than dispatching it.
+			{"rail", tea.KeyPressMsg{}},
 			{"rows", keyMsg("right")},
 			{"search", keyRunes("/")},
 		} {

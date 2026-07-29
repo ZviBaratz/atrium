@@ -76,8 +76,10 @@ func TestGlobalKeyStringsMap_GoldenInventory(t *testing.T) {
 		"f":          KeyHints,
 		"a":          KeyApprove,
 		"v":          KeyMultiSelect,
-		" ":          KeyToggleMark,
-		"`":          KeyScreensaver,
+		// "space": Bubble Tea v2 names the space bar, where v1 reported a literal
+		// space. The registry moved with it — see the note on KeyToggleMark.
+		"space": KeyToggleMark,
+		"`":     KeyScreensaver,
 	}
 	if !maps.Equal(GlobalKeyStringsMap, want) {
 		for s, name := range want {

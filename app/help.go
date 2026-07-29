@@ -8,8 +8,8 @@ import (
 	"github.com/ZviBaratz/atrium/ui/overlay"
 	"github.com/ZviBaratz/atrium/ui/theme"
 
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/mattn/go-runewidth"
 )
 
@@ -262,7 +262,7 @@ func (m *home) maybeShowWelcome() tea.Cmd {
 }
 
 // handleHelpState handles key events when in help state
-func (m *home) handleHelpState(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m *home) handleHelpState(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	// The overlay scrolls on navigation keys while its content overflows;
 	// any other key closes it.
 	if m.textOverlay.HandleKeyPress(msg) {
@@ -278,7 +278,7 @@ func (m *home) closeTextOverlay() (tea.Model, tea.Cmd) {
 	m.textOverlay.Dismiss()
 	m.state = stateDefault
 	return m, tea.Sequence(
-		tea.WindowSize(),
+		tea.RequestWindowSize,
 		func() tea.Msg {
 			m.menu.SetState(ui.StateDefault)
 			return nil

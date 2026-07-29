@@ -9,14 +9,14 @@ import (
 	"github.com/ZviBaratz/atrium/session"
 	"github.com/ZviBaratz/atrium/ui"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 	xansi "github.com/charmbracelet/x/ansi"
 	"github.com/muesli/ansi"
 	"github.com/stretchr/testify/require"
 )
 
 // escKey builds the Esc key event (runeKey only covers printable runes).
-func escKey() tea.KeyMsg { return keyMsg("esc") }
+func escKey() tea.KeyPressMsg { return keyMsg("esc") }
 
 // cycleLayoutKey is the single key that steps the layout presets. Kept next to
 // the tests so a rebind of KeyLayoutPreset fails here loudly rather than
@@ -80,14 +80,14 @@ func TestLayoutFocusHidesListAndFillsWidth(t *testing.T) {
 	listCol := int(float32(h.windowWidth) * float32(h.listRatio)) // 120*0.30 = 36
 	require.Greater(t, listCol, 0)
 	defW, _ := h.tabbedWindow.GetPreviewSize()
-	require.Contains(t, xansi.Strip(h.View()), "Sessions", "the list panel renders outside focus")
+	require.Contains(t, xansi.Strip(h.View().Content), "Sessions", "the list panel renders outside focus")
 
 	cycleTo(t, h, "focus")
 	require.True(t, h.listHidden(), "focus must hide the list")
 
 	focusW, _ := h.tabbedWindow.GetPreviewSize()
 	require.Equal(t, defW+listCol, focusW, "the tabbed window must reclaim the full list column in focus")
-	require.NotContains(t, xansi.Strip(h.View()), "Sessions", "the list panel must not render in focus")
+	require.NotContains(t, xansi.Strip(h.View().Content), "Sessions", "the list panel must not render in focus")
 }
 
 // TestLayoutReviewFocusesDiffTab: the review preset jumps to the Diff tab
@@ -139,7 +139,7 @@ func TestLayoutCustomRatioUnhidesFocus(t *testing.T) {
 	h.handleKeyPress(runeKey(">"))
 	require.True(t, h.layoutCustom)
 	require.False(t, h.listHidden(), "a custom split must show the list even on the focus base")
-	require.Contains(t, xansi.Strip(h.View()), "Sessions", "the list must render once dragged back out of focus")
+	require.Contains(t, xansi.Strip(h.View().Content), "Sessions", "the list must render once dragged back out of focus")
 }
 
 // TestEscLeavesFocusToPriorPreset: Esc backs focus out to the preset that
@@ -278,7 +278,7 @@ func TestLayoutPresetsDegradeAt80x24(t *testing.T) {
 
 	for i := 0; i < len(layoutPresets); i++ {
 		name := h.currentPreset().name
-		lines := strings.Split(h.View(), "\n")
+		lines := strings.Split(h.View().Content, "\n")
 		require.LessOrEqualf(t, len(lines), ht, "preset %q: %d rows exceeds height %d", name, len(lines), ht)
 		for j, l := range lines {
 			require.Equalf(t, w, ansi.PrintableRuneWidth(l), "preset %q: line %d width", name, j)

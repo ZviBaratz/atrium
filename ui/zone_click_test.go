@@ -2,19 +2,20 @@ package ui
 
 import (
 	"context"
+	"github.com/ZviBaratz/atrium/internal/testutil"
 	"testing"
 	"time"
 
+	"charm.land/bubbles/v2/spinner"
+	tea "charm.land/bubbletea/v2"
 	"github.com/ZviBaratz/atrium/session"
-	"github.com/charmbracelet/bubbles/spinner"
-	tea "github.com/charmbracelet/bubbletea"
-	zone "github.com/lrstanley/bubblezone"
+	zone "github.com/lrstanley/bubblezone/v2"
 	"github.com/stretchr/testify/require"
 )
 
 // clickAt builds a left-button press at the given absolute frame coordinates.
 func clickAt(x, y int) tea.MouseMsg {
-	return tea.MouseMsg{X: x, Y: y, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft}
+	return testutil.MouseClick(x, y, tea.MouseLeft)
 }
 
 // clickZone re-scans the rendered frame, resolves the given zone, and runs act

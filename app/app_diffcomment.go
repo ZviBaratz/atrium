@@ -15,7 +15,7 @@ import (
 	"github.com/ZviBaratz/atrium/ui"
 	"github.com/ZviBaratz/atrium/ui/overlay"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 )
 
 // enterDiffComment focuses the diff tab, renders its diff, and drops the line
@@ -44,7 +44,7 @@ func (m *home) enterDiffComment() (tea.Model, tea.Cmd) {
 // handleDiffCommentState routes a key while the line cursor is active: j/k move it
 // over code lines, enter opens the composer for the current line, esc (or C again)
 // leaves comment mode.
-func (m *home) handleDiffCommentState(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m *home) handleDiffCommentState(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "esc":
 		return m, m.exitDiffComment()
@@ -92,13 +92,13 @@ func (m *home) openDiffCommentComposer() (tea.Model, tea.Cmd) {
 	m.state = statePrompt
 	m.textInputOverlay = overlay.NewQuickSendOverlay("Comment on " + loc)
 	m.recomputeLayout() // the hint bar hides behind the composer; panes reclaim its row
-	return m, tea.WindowSize()
+	return m, tea.RequestWindowSize
 }
 
 // handleDiffCommentComposer routes keys while the diff-comment composer is up. On
 // submit it queues the composed comment; on cancel (esc/ctrl+c) it returns to the
 // line cursor rather than the list.
-func (m *home) handleDiffCommentComposer(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m *home) handleDiffCommentComposer(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if msg.String() == "ctrl+c" {
 		return m, m.cancelDiffComment()
 	}
@@ -119,7 +119,7 @@ func (m *home) cancelDiffComment() tea.Cmd {
 	m.state = stateDiffComment
 	m.menu.SetState(ui.StateDiffComment)
 	m.recomputeLayout()
-	return tea.WindowSize()
+	return tea.RequestWindowSize
 }
 
 // submitDiffComment composes the anchored comment and queues it to the selected
@@ -136,11 +136,11 @@ func (m *home) submitDiffComment(note string) tea.Cmd {
 	selected := m.list.GetSelectedInstance()
 	msg, ok := m.tabbedWindow.DiffCommentMessage(note)
 	if selected == nil || !ok || strings.TrimSpace(note) == "" {
-		return tea.Sequence(tea.WindowSize(), m.handleInfoNotice("empty comment — nothing queued"))
+		return tea.Sequence(tea.RequestWindowSize, m.handleInfoNotice("empty comment — nothing queued"))
 	}
 	selected.QueueFollowupPrompt(msg)
 	if err := m.persistInstances(); err != nil {
 		log.ErrorLog.Printf("failed to persist diff comment: %v", err)
 	}
-	return tea.Sequence(tea.WindowSize(), m.handleInfoNotice(fmt.Sprintf("comment queued for %q", selected.DisplayName())))
+	return tea.Sequence(tea.RequestWindowSize, m.handleInfoNotice(fmt.Sprintf("comment queued for %q", selected.DisplayName())))
 }

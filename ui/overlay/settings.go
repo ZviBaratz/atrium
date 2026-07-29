@@ -3,11 +3,11 @@ package overlay
 import (
 	"strings"
 
+	"charm.land/bubbles/v2/textinput"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/ZviBaratz/atrium/config"
 	"github.com/ZviBaratz/atrium/ui/theme"
-	"github.com/charmbracelet/bubbles/textinput"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 )
 
@@ -219,7 +219,7 @@ func (s *SettingsOverlay) isModified(i int) bool {
 func (s *SettingsOverlay) SetSize(width, height int) {
 	s.width = width
 	s.height = height
-	s.input.Width = s.editorWidth()
+	s.input.SetWidth(s.editorWidth())
 }
 
 // HandleKeyPress processes one key press. It reports whether the panel should
@@ -230,7 +230,7 @@ func (s *SettingsOverlay) SetSize(width, height int) {
 // rather than navigate) — the inline line editor or the Profiles record form — then the
 // expanded-help view, then an active filter (which swallows runes for the same reason), then
 // the focused pane, where the Profiles editor takes its own keys.
-func (s *SettingsOverlay) HandleKeyPress(msg tea.KeyMsg) (closed bool, changedKey string) {
+func (s *SettingsOverlay) HandleKeyPress(msg tea.KeyPressMsg) (closed bool, changedKey string) {
 	switch {
 	case s.editing:
 		return false, s.handleEditKey(msg)
@@ -253,7 +253,7 @@ func (s *SettingsOverlay) HandleKeyPress(msg tea.KeyMsg) (closed bool, changedKe
 // handleEditKey routes keys while the inline editor is open: enter commits
 // (staying in edit mode on a validation error so the value can be fixed), esc
 // abandons the edit, and everything else goes to the text input.
-func (s *SettingsOverlay) handleEditKey(msg tea.KeyMsg) (changedKey string) {
+func (s *SettingsOverlay) handleEditKey(msg tea.KeyPressMsg) (changedKey string) {
 	row := &s.rows[s.cursor]
 	switch msg.String() {
 	case "enter":
@@ -317,7 +317,7 @@ func (s *SettingsOverlay) startEdit(row *settingRow) {
 	in := textinput.New()
 	in.Prompt = ""
 	in.SetValue(raw(s.cfg))
-	in.Width = s.editorWidth()
+	in.SetWidth(s.editorWidth())
 	in.Focus()
 	in.CursorEnd()
 	s.input = in
@@ -392,6 +392,7 @@ func (s *SettingsOverlay) Render() string {
 		Border(t.Borders.Style).
 		BorderForeground(t.Palette.Accent).
 		Padding(1, 2).
-		Width(s.boxWidth()).
+		// +2 for the left/right border — v2 counts it inside Width. See theme.Panel.
+		Width(s.boxWidth() + 2).
 		Render(title + "\n\n" + strings.Join(lines, "\n"))
 }

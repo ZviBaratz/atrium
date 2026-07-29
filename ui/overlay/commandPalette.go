@@ -8,8 +8,8 @@ import (
 	"github.com/ZviBaratz/atrium/internal/fuzzy"
 	"github.com/ZviBaratz/atrium/ui/theme"
 
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/muesli/reflow/truncate"
 )
 
@@ -84,7 +84,7 @@ func (p *CommandPaletteOverlay) SetSize(width, height int) {
 
 // HandleKeyPress narrows, moves, runs or closes. It reports true when the overlay
 // is finished: check Chosen to tell "ran something" from "changed my mind".
-func (p *CommandPaletteOverlay) HandleKeyPress(msg tea.KeyMsg) (shouldClose bool) {
+func (p *CommandPaletteOverlay) HandleKeyPress(msg tea.KeyPressMsg) (shouldClose bool) {
 	visible := p.visibleItems()
 	switch msg.String() {
 	case "esc", "ctrl+c":
@@ -236,7 +236,8 @@ func (p *CommandPaletteOverlay) Render() string {
 		Border(th.Borders.Style).
 		BorderForeground(th.Palette.Accent).
 		Padding(1, 2).
-		Width(p.width - 2)
+		// +2 for the left/right border — v2 counts it inside Width. See theme.Panel.
+		Width(p.width)
 
 	inner := p.width - 6 // border (2) + horizontal padding (2*2)
 	if inner < 20 {

@@ -4,11 +4,11 @@ import (
 	"strings"
 	"testing"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 	"github.com/stretchr/testify/require"
 )
 
-func runeKey(s string) tea.KeyMsg { return textMsg(s) }
+func runeKey(s string) tea.KeyPressMsg { return textMsg(s) }
 
 func TestQueueOverlay_RendersHeadFirstWithInFlightMark(t *testing.T) {
 	o := NewQueueOverlay("auth")

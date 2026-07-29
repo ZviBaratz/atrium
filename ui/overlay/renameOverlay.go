@@ -5,9 +5,9 @@ import (
 
 	"github.com/ZviBaratz/atrium/ui/theme"
 
-	"github.com/charmbracelet/bubbles/textinput"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/bubbles/v2/textinput"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 )
 
 // RenameOverlay is a lightweight two-field dialog: a session's cosmetic display
@@ -36,7 +36,10 @@ func NewRenameOverlay(currentLabel, currentNote string, focusNote bool) *RenameO
 	note.Placeholder = "note (optional) — e.g. blocked on review"
 	note.SetValue(currentNote)
 
-	o := &RenameOverlay{name: name, note: note, focusNote: focusNote, width: 50, deep: false}
+	o := &RenameOverlay{name: name, note: note, focusNote: focusNote, deep: false}
+	// Through SetWidth, not by setting the field: the inputs have to be sized with
+	// the box (bubbles v2 renders an unsized field as one character).
+	o.SetWidth(50)
 	o.applyFocus()
 	return o
 }
@@ -58,7 +61,7 @@ func (r *RenameOverlay) applyFocus() {
 // HandleKeyPress processes a key press and returns true if the overlay should close.
 // enter submits, esc/ctrl+c cancel, tab/shift+tab switch field, ctrl+d toggles deep,
 // everything else edits the focused field.
-func (r *RenameOverlay) HandleKeyPress(msg tea.KeyMsg) bool {
+func (r *RenameOverlay) HandleKeyPress(msg tea.KeyPressMsg) bool {
 	switch msg.String() {
 	case "enter":
 		r.submitted = true
@@ -98,8 +101,22 @@ func (r *RenameOverlay) IsSubmitted() bool { return r.submitted }
 // IsCanceled reports whether the user dismissed the dialog.
 func (r *RenameOverlay) IsCanceled() bool { return r.canceled }
 
-// SetWidth sets the width of the overlay.
-func (r *RenameOverlay) SetWidth(width int) { r.width = width }
+// SetWidth sets the width of the overlay, and sizes the fields inside it.
+//
+// Sizing the inputs is not optional under bubbles v2. v1 treated a zero Width as
+// "unbounded" and rendered the whole value and placeholder; v2's placeholder view
+// builds a rune buffer of exactly Width()+1, so an unsized field shows a single
+// character — which is what the frame goldens caught here as a placeholder
+// rendered as "n".
+//
+// The inner width is the box minus its padding (2 each side) and border (1 each
+// side); Render adds the border back onto width (see the note there).
+func (r *RenameOverlay) SetWidth(width int) {
+	r.width = width
+	inner := max(1, width-4)
+	r.name.SetWidth(inner)
+	r.note.SetWidth(inner)
+}
 
 // Render renders the overlay as a bordered box.
 func (r *RenameOverlay) Render() string {
@@ -107,7 +124,8 @@ func (r *RenameOverlay) Render() string {
 		Border(theme.Current().Borders.Style).
 		BorderForeground(theme.Current().Palette.Accent).
 		Padding(1, 2).
-		Width(r.width)
+		// +2 for the left/right border — v2 counts it inside Width. See theme.Panel.
+		Width(r.width + 2)
 
 	deepMark, labelMark := "○", "○"
 	if r.deep {

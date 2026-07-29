@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/charmbracelet/bubbles/spinner"
+	"charm.land/bubbles/v2/spinner"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/stretchr/testify/require"
 )
@@ -335,20 +335,26 @@ func TestRender_SessionAge(t *testing.T) {
 	// Match an age token (digits followed by m/h/d at a word boundary) so the
 	// assertion targets the label specifically, not any incidental "m"/"h"/"d"
 	// in a branch name or status word.
+	//
+	// The render is stripped before matching. Under Lip Gloss v1 a test binary's
+	// output carried no colour (no TTY, so the global profile resolved to Ascii)
+	// and this regex only ever saw text; v2 always emits full fidelity, and an SGR
+	// parameter list ends in "m" — "38;2;106;138;74m" matches \d+[mhd]\b and would
+	// report an age label on every row.
 	ageToken := regexp.MustCompile(`\d+[mhd]\b`)
 
 	// Brand-new session (CreatedAt = time.Now()) → no age label.
-	out := r.Render(inst, 0, false, false)
+	out := ansi.Strip(r.Render(inst, 0, false, false))
 	require.NotRegexp(t, ageToken, out, "fresh session should not show age")
 
 	// Simulate a 3-hour-old session.
 	inst.CreatedAt = time.Now().Add(-3 * time.Hour)
-	out = r.Render(inst, 0, false, false)
+	out = ansi.Strip(r.Render(inst, 0, false, false))
 	require.Contains(t, out, "3h", "3-hour-old session should show '3h'")
 
 	// Simulate a 2-day-old session.
 	inst.CreatedAt = time.Now().Add(-48 * time.Hour)
-	out = r.Render(inst, 0, false, false)
+	out = ansi.Strip(r.Render(inst, 0, false, false))
 	require.Contains(t, out, "2d", "2-day-old session should show '2d'")
 }
 
@@ -367,13 +373,13 @@ func TestRender_SessionAge_Direct(t *testing.T) {
 	ageToken := regexp.MustCompile(`\d+[mhd]\b`)
 
 	// Brand-new direct session → no age label.
-	out := r.Render(inst, 0, false, false)
+	out := ansi.Strip(r.Render(inst, 0, false, false))
 	require.NotRegexp(t, ageToken, out, "fresh direct session should not show age")
 
 	// Simulate a 3-hour-old direct session: the label renders alongside the
 	// direct marker.
 	inst.CreatedAt = time.Now().Add(-3 * time.Hour)
-	out = r.Render(inst, 0, false, false)
+	out = ansi.Strip(r.Render(inst, 0, false, false))
 	require.Contains(t, out, "3h", "3-hour-old direct session should show '3h'")
 	require.Contains(t, out, "direct", "the direct marker must survive the age label")
 }

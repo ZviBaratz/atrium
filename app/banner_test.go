@@ -1,14 +1,14 @@
 package app
 
 import (
+	"image/color"
 	"strings"
 	"testing"
 
 	"github.com/ZviBaratz/atrium/ui/theme"
 
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/lipgloss/v2"
 	xansi "github.com/charmbracelet/x/ansi"
-	"github.com/muesli/termenv"
 	"github.com/stretchr/testify/require"
 )
 
@@ -25,7 +25,7 @@ func TestAutoYesArmedAndBannerHeight(t *testing.T) {
 // bgParams renders a background-only style and returns just its SGR parameter body
 // (e.g. "48;2;224;175;104"), so a test can assert a combined style embeds that exact
 // background without hard-coding the theme's RGB.
-func bgParams(c lipgloss.TerminalColor) string {
+func bgParams(c color.Color) string {
 	r := lipgloss.NewStyle().Background(c).Render("X")
 	open := r[:strings.IndexByte(r, 'X')]
 	return strings.TrimSuffix(strings.TrimPrefix(open, "\x1b["), "m")
@@ -38,9 +38,9 @@ func bgParams(c lipgloss.TerminalColor) string {
 // yields nothing, so an unarmed/zero-width frame reserves no row.
 func TestAutoYesBanner_ExactWidthAndColor(t *testing.T) {
 	defer theme.Set("unicode")()
-	prof := lipgloss.ColorProfile()
-	lipgloss.SetColorProfile(termenv.TrueColor)
-	defer lipgloss.SetColorProfile(prof)
+	// No colour profile to pin: Lip Gloss v2 styles always emit full fidelity,
+	// and Bubble Tea down-samples at the writer. v1 needed the global forced to
+	// TrueColor here or the assertions below saw plain text.
 
 	m := &home{autoYes: true}
 

@@ -7,8 +7,8 @@ import (
 	"github.com/ZviBaratz/atrium/config"
 	"github.com/ZviBaratz/atrium/ui/theme"
 
-	"github.com/charmbracelet/bubbles/textinput"
-	tea "github.com/charmbracelet/bubbletea"
+	"charm.land/bubbles/v2/textinput"
+	tea "charm.land/bubbletea/v2"
 )
 
 const (
@@ -100,7 +100,7 @@ func (f *accountForm) applyFocus() {
 // HandleKeyPress edits the focused field; returns true when the form is done
 // (submitted or canceled). While the directory picker is open (f.picker != nil),
 // key presses are routed to it instead and the form itself never finishes.
-func (f *accountForm) HandleKeyPress(msg tea.KeyMsg) (done bool) {
+func (f *accountForm) HandleKeyPress(msg tea.KeyPressMsg) (done bool) {
 	if f.picker != nil {
 		switch msg.String() {
 		case "enter":

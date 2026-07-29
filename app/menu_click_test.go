@@ -1,11 +1,12 @@
 package app
 
 import (
+	"github.com/ZviBaratz/atrium/internal/testutil"
 	"testing"
 	"time"
 
-	tea "github.com/charmbracelet/bubbletea"
-	zone "github.com/lrstanley/bubblezone"
+	tea "charm.land/bubbletea/v2"
+	zone "github.com/lrstanley/bubblezone/v2"
 	"github.com/stretchr/testify/require"
 )
 
@@ -13,7 +14,7 @@ import (
 // given: the dispatch path keys off msg.String(), so a mismatch would fire the
 // wrong action (or none). Covers every special key a bar can show, plus a rune.
 func TestSynthKeyMsg_RoundTrips(t *testing.T) {
-	for _, k := range []string{"enter", "esc", " ", "ctrl+x", "shift+up", "shift+down", "n", "?", "q", "s"} {
+	for _, k := range []string{"enter", "esc", "space", "ctrl+x", "shift+up", "shift+down", "n", "?", "q", "s"} {
 		msg, ok := synthKeyMsg(k)
 		require.True(t, ok, "synthKeyMsg(%q) should succeed", k)
 		require.Equal(t, k, msg.String(), "synthesized key must stringify back to %q", k)
@@ -62,12 +63,12 @@ func TestHintBarClick_MirrorsKeyPress(t *testing.T) {
 	// bounds an earlier test's differently-sized frame registered. Clicking those
 	// misses. Folding the click in means a miss just re-renders and retries.
 	require.Eventually(t, func() bool {
-		_ = h.View()
+		_ = h.View().Content
 		zi := zone.Get(helpZone)
 		if zi.IsZero() {
 			return false
 		}
-		h.Update(tea.MouseMsg{X: zi.StartX, Y: zi.StartY, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft})
+		h.Update(testutil.MouseClick(zi.StartX, zi.StartY, tea.MouseLeft))
 		return h.state == stateHelp
 	}, time.Second, 5*time.Millisecond, "clicking the ? hint must open help, like pressing ?")
 }
@@ -78,8 +79,8 @@ func TestHintBarClick_MissIsInert(t *testing.T) {
 	h := newCreateFormHome(t)
 	h.updateHandleWindowSizeEvent(tea.WindowSizeMsg{Width: 120, Height: 30})
 	h.menu.SetInstance(nil)
-	_ = h.View() // internally scans the frame's zones
+	_ = h.View().Content // internally scans the frame's zones
 
-	h.Update(tea.MouseMsg{X: 0, Y: 0, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft})
+	h.Update(testutil.MouseClick(0, 0, tea.MouseLeft))
 	require.Equal(t, stateDefault, h.state, "a click off every hint entry must not open an overlay")
 }

@@ -3,7 +3,7 @@ package overlay
 import (
 	"strings"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 )
 
 // claudeFieldNA is the dim placeholder the claude-only fields (model and
@@ -130,8 +130,8 @@ func wrapIndex(cur, delta, n int) int {
 // Left/Right, matching the profile picker), wrapping at both ends so one keypress
 // reaches the opposite end. Every other key is a no-op — in particular Esc is
 // never consumed, staying the form's close key.
-func (c *chipRow) moveCursor(msg tea.KeyMsg) {
-	switch msg.Type {
+func (c *chipRow) moveCursor(msg tea.KeyPressMsg) {
+	switch msg.Code {
 	case tea.KeyLeft, tea.KeyUp:
 		c.cursor = wrapIndex(c.cursor, -1, len(c.options))
 	case tea.KeyRight, tea.KeyDown:

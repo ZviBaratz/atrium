@@ -7,7 +7,7 @@ import (
 	"github.com/ZviBaratz/atrium/log"
 	"github.com/ZviBaratz/atrium/ui"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 )
 
 // detectAgents is the agent-detection seam. A package var (matching the app's
@@ -50,7 +50,7 @@ func (m *home) checkProgramInstalledCmd() tea.Cmd {
 // the detected agents into the profiles, persists the picked default program,
 // and retires the welcome; on skip it just closes (the seen-bit stays unset so
 // the welcome re-shows until the user engages or creates a session).
-func (m *home) handleWelcomeState(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m *home) handleWelcomeState(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	shouldClose := m.welcomeOverlay.HandleKeyPress(msg)
 	if !shouldClose {
 		return m, nil
@@ -70,7 +70,7 @@ func (m *home) handleWelcomeState(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// and returning users are still covered by the missing-program check.
 		m.markWelcomeSeen()
 		return m, tea.Batch(
-			tea.WindowSize(),
+			tea.RequestWindowSize,
 			m.settingNotice("Setup skipped — press , to pick a default agent, or n to start a session",
 				ui.NoticeInfo, "default_program"),
 		)
@@ -88,7 +88,7 @@ func (m *home) handleWelcomeState(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		log.WarningLog.Printf("failed to persist welcome setup: %v", err)
 	}
 	m.markWelcomeSeen()
-	return m, tea.WindowSize()
+	return m, tea.RequestWindowSize
 }
 
 // markWelcomeSeen persists the one-time welcome's seen-bit when it is not already

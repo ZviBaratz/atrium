@@ -4,10 +4,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/charmbracelet/bubbles/spinner"
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/bubbles/v2/spinner"
 	"github.com/charmbracelet/x/ansi"
-	"github.com/muesli/termenv"
 	"github.com/stretchr/testify/require"
 
 	"github.com/ZviBaratz/atrium/session"
@@ -81,9 +79,9 @@ func TestRender_ModelChip(t *testing.T) {
 // of whether the value came from a --model flag or the transcript.
 func TestRender_ModelChip_BrandUnit(t *testing.T) {
 	t.Cleanup(theme.Set("unicode"))
-	prof := lipgloss.ColorProfile()
-	lipgloss.SetColorProfile(termenv.TrueColor)
-	t.Cleanup(func() { lipgloss.SetColorProfile(prof) })
+	// No colour profile to pin: Lip Gloss v2 styles always emit full fidelity,
+	// and Bubble Tea down-samples at the writer. v1 needed the global forced to
+	// TrueColor here or the assertions below saw plain text.
 
 	s := spinner.New()
 	r := &InstanceRenderer{spinner: &s}

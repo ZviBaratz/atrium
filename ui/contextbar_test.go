@@ -5,7 +5,7 @@ import (
 
 	"github.com/ZviBaratz/atrium/session"
 
-	"github.com/charmbracelet/bubbles/spinner"
+	"charm.land/bubbles/v2/spinner"
 	"github.com/stretchr/testify/require"
 )
 

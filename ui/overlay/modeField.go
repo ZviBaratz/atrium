@@ -3,8 +3,8 @@ package overlay
 import (
 	"strings"
 
+	tea "charm.land/bubbletea/v2"
 	"github.com/ZviBaratz/atrium/session/agent"
-	tea "github.com/charmbracelet/bubbletea"
 )
 
 // ModeField is the create form's optional Claude permission-mode override: a
@@ -56,7 +56,7 @@ func NewModeField() *ModeField {
 
 // HandleKeyPress cycles the chips with the arrow keys; every other key is a
 // no-op (see chipRow.moveCursor).
-func (f *ModeField) HandleKeyPress(msg tea.KeyMsg) {
+func (f *ModeField) HandleKeyPress(msg tea.KeyPressMsg) {
 	if f.disabled {
 		return
 	}

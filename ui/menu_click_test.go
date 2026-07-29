@@ -4,7 +4,7 @@ import (
 	"testing"
 
 	"github.com/ZviBaratz/atrium/session"
-	zone "github.com/lrstanley/bubblezone"
+	zone "github.com/lrstanley/bubblezone/v2"
 	"github.com/stretchr/testify/require"
 )
 
@@ -50,7 +50,7 @@ func TestMenu_HintClickTargetsPerState(t *testing.T) {
 			name:  "visual",
 			setup: func(m *Menu) { m.SetState(StateVisual) },
 			// space marks, esc exits; p/r/x is a three-key compound → inert.
-			want: []string{" ", "esc"},
+			want: []string{"space", "esc"},
 		},
 	}
 	for _, tc := range cases {

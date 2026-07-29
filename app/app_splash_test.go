@@ -2,15 +2,16 @@ package app
 
 import (
 	"context"
+	"github.com/ZviBaratz/atrium/internal/testutil"
 	"strings"
 	"testing"
 
 	"github.com/ZviBaratz/atrium/config"
 	"github.com/ZviBaratz/atrium/ui"
 
-	"github.com/charmbracelet/bubbles/spinner"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/bubbles/v2/spinner"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/stretchr/testify/require"
 )
@@ -141,7 +142,7 @@ func TestScreensaverEntersAndAnyKeyExits(t *testing.T) {
 // TestScreensaverConsumesQuitKeys guards against rage-quits: q / ctrl+c wake
 // the screen instead of tearing the app down.
 func TestScreensaverConsumesQuitKeys(t *testing.T) {
-	for _, k := range []tea.KeyMsg{
+	for _, k := range []tea.KeyPressMsg{
 		textMsg("q"),
 		keyMsg("ctrl+c"),
 	} {
@@ -181,7 +182,7 @@ func TestScreensaverViewIsFullWindow(t *testing.T) {
 	m.state = stateScreensaver
 	m.splashFrame = 5
 
-	lines := strings.Split(ansi.Strip(m.View()), "\n")
+	lines := strings.Split(ansi.Strip(m.View().Content), "\n")
 	require.Len(t, lines, m.windowHeight)
 	for i, ln := range lines {
 		require.LessOrEqual(t, lipgloss.Width(ln), m.windowWidth, "row %d overflows", i)
@@ -194,12 +195,12 @@ func TestScreensaverMouse(t *testing.T) {
 	m := screensaverTestHome()
 	m.state = stateScreensaver
 
-	_, _ = m.handleMouse(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonWheelUp})
+	_, _ = m.handleMouse(testutil.MouseWheel(0, 0, tea.MouseWheelUp))
 	require.Equal(t, stateScreensaver, m.state, "wheel must not wake")
-	_, _ = m.handleMouse(tea.MouseMsg{Action: tea.MouseActionMotion})
+	_, _ = m.handleMouse(testutil.MouseMotion(0, 0, tea.MouseNone))
 	require.Equal(t, stateScreensaver, m.state, "motion must not wake")
 
-	_, _ = m.handleMouse(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonLeft})
+	_, _ = m.handleMouse(testutil.MouseClick(0, 0, tea.MouseLeft))
 	require.Equal(t, stateDefault, m.state, "a click wakes")
 }
 

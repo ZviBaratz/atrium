@@ -4,8 +4,8 @@ import (
 	"github.com/ZviBaratz/atrium/ui/theme"
 	"strings"
 
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 )
 
 // The default base choice: the session branches off the repo's current HEAD. Every
@@ -109,7 +109,7 @@ func (bp *BranchPicker) Invalidate() uint64 {
 // each edit so in-flight results are rejected on arrival. On an edit we also enter
 // the loading state and clear any previous error (it described the previous
 // search), reproducing the old beginSearch step.
-func (bp *BranchPicker) HandleKeyPress(msg tea.KeyMsg) (consumed bool, filterChanged bool) {
+func (bp *BranchPicker) HandleKeyPress(msg tea.KeyPressMsg) (consumed bool, filterChanged bool) {
 	if bp.disabled {
 		// Unreachable through normal navigation (the form skips a disabled picker), but
 		// guard anyway so no input path can mutate an inert picker.

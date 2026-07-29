@@ -6,8 +6,8 @@ import (
 
 	"github.com/ZviBaratz/atrium/ui/theme"
 
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	xansi "github.com/charmbracelet/x/ansi"
 )
 
@@ -43,7 +43,7 @@ func NewTextOverlay(content string) *TextOverlay {
 
 // HandleKeyPress processes a key press and updates the state
 // Returns true if the overlay should be closed
-func (t *TextOverlay) HandleKeyPress(msg tea.KeyMsg) bool {
+func (t *TextOverlay) HandleKeyPress(msg tea.KeyPressMsg) bool {
 	// While the content overflows, navigation keys scroll instead of closing.
 	if t.maxScroll() > 0 {
 		_, budget, _ := t.window()
@@ -107,7 +107,10 @@ func (t *TextOverlay) Render() string {
 		Border(theme.Current().Borders.Style).
 		BorderForeground(theme.Current().Palette.Accent).
 		Padding(1, 2).
-		Width(t.boxWidth())
+		// +2 for the left/right border: Lip Gloss v2 counts the border inside
+		// Width, where v1 added it outside. Same silent semantic change as in
+		// theme.Panel — see the note there.
+		Width(t.boxWidth() + 2)
 
 	return style.Render(strings.Join(append(body, footer...), "\n"))
 }

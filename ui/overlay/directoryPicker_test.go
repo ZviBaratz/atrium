@@ -5,12 +5,12 @@ import (
 	"strings"
 	"testing"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-func runes(s string) tea.KeyMsg {
+func runes(s string) tea.KeyPressMsg {
 	return textMsg(s)
 }
 

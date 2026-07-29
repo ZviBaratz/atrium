@@ -11,7 +11,7 @@ import (
 	"github.com/ZviBaratz/atrium/internal/doctor"
 	"github.com/ZviBaratz/atrium/ui/theme"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 )
 
 // checkDrift is a package var so tests can fake the probe (same pattern as

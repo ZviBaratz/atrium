@@ -7,8 +7,8 @@ import (
 	"github.com/ZviBaratz/atrium/session"
 	"github.com/ZviBaratz/atrium/ui"
 
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -19,13 +19,13 @@ import (
 func TestHandleError_MenuCarriesToastWithoutLayoutShift(t *testing.T) {
 	h := newCreateFormHome(t)
 	h.updateHandleWindowSizeEvent(tea.WindowSizeMsg{Width: 80, Height: 24})
-	before := lipgloss.Height(h.View())
+	before := lipgloss.Height(h.View().Content)
 
 	h.handleError(fmt.Errorf("session is paused"))
 
 	assert.True(t, h.menu.HasNotice(), "the hint bar must carry the toast")
 	assert.False(t, h.errBox.HasError(), "the error box must not claim a second row")
-	assert.Equal(t, before, lipgloss.Height(h.View()), "feedback must never move the layout")
+	assert.Equal(t, before, lipgloss.Height(h.View().Content), "feedback must never move the layout")
 }
 
 // With the hint bar off, a short error rides the always-reserved menu row in
@@ -159,7 +159,7 @@ func TestFlashNotice_MenuNoticeClearsStaleErrBox(t *testing.T) {
 	h.flashNotice("pushed changes", ui.NoticeInfo)
 	assert.True(t, h.menu.HasNotice(), "the new notice rides the menu row")
 	assert.False(t, h.errBox.HasContent(), "the stale errBox row must be cleared")
-	assert.Equal(t, 24, lipgloss.Height(h.View()),
+	assert.Equal(t, 24, lipgloss.Height(h.View().Content),
 		"reclaiming the errBox row must recompute the layout, not leave the frame a line short")
 }
 

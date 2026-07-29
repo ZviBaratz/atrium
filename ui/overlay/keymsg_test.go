@@ -3,7 +3,7 @@ package overlay
 import (
 	"github.com/ZviBaratz/atrium/internal/testutil"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 )
 
 // keyMsg and textMsg are this package's spelling of testutil.Key / testutil.Runes.
@@ -18,8 +18,8 @@ import (
 // The spec vocabulary is the one msg.String() emits, which is also the one
 // keys.GlobalKeyStringsMap is keyed by, so a test now presses the same string the
 // dispatch matches. See internal/testutil/keys.go for the full contract.
-func keyMsg(spec string) tea.KeyMsg { return testutil.Key(spec) }
+func keyMsg(spec string) tea.KeyPressMsg { return testutil.Key(spec) }
 
 // textMsg builds typed text, with no keystroke-name interpretation — textMsg("enter")
 // types six letters where keyMsg("enter") presses return.
-func textMsg(s string) tea.KeyMsg { return testutil.Runes(s) }
+func textMsg(s string) tea.KeyPressMsg { return testutil.Runes(s) }

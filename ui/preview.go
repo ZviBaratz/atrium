@@ -10,8 +10,8 @@ import (
 	"github.com/ZviBaratz/atrium/session/transcript"
 	"github.com/ZviBaratz/atrium/ui/theme"
 
-	"github.com/charmbracelet/bubbles/viewport"
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/bubbles/v2/viewport"
+	"charm.land/lipgloss/v2"
 	xansi "github.com/charmbracelet/x/ansi"
 )
 
@@ -183,7 +183,7 @@ type previewState struct {
 // NewPreviewPane returns an empty PreviewPane.
 func NewPreviewPane() *PreviewPane {
 	return &PreviewPane{
-		viewport: viewport.New(0, 0),
+		viewport: viewport.New(),
 	}
 }
 
@@ -192,8 +192,8 @@ func NewPreviewPane() *PreviewPane {
 func (p *PreviewPane) SetSize(width, maxHeight int) {
 	p.width = width
 	p.height = maxHeight
-	p.viewport.Width = width
-	p.viewport.Height = maxHeight
+	p.viewport.SetWidth(width)
+	p.viewport.SetHeight(maxHeight)
 }
 
 // SetSplashFrame stores the current splash animation frame, pushed from the
@@ -279,7 +279,7 @@ func (p *PreviewPane) UpdateContent(instance *session.Instance) error {
 
 	// Scroll mode: capture full scrollback into the viewport once.
 	if p.isScrolling {
-		if p.viewport.Height > 0 && len(p.viewport.View()) == 0 {
+		if p.viewport.Height() > 0 && len(p.viewport.View()) == 0 {
 			if err := p.fillScrollViewport(instance); err != nil {
 				logPreviewFallback(instance, "scroll capture error", err)
 				return err
@@ -416,7 +416,7 @@ func (p *PreviewPane) ScrollUp(instance *session.Instance, lines int) error {
 	}
 
 	// Already in scroll mode, just scroll the viewport
-	p.viewport.LineUp(lines)
+	p.viewport.ScrollUp(lines)
 	return nil
 }
 
@@ -436,7 +436,7 @@ func (p *PreviewPane) ScrollDown(instance *session.Instance, lines int) error {
 	if p.viewport.AtBottom() {
 		return p.ResetToNormalMode(instance)
 	}
-	p.viewport.LineDown(lines)
+	p.viewport.ScrollDown(lines)
 	return nil
 }
 

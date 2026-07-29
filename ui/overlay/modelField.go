@@ -3,10 +3,10 @@ package overlay
 import (
 	"strings"
 
+	"charm.land/bubbles/v2/textinput"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/ZviBaratz/atrium/session/agent"
-	"github.com/charmbracelet/bubbles/textinput"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
 )
 
 // ModelField is the create form's optional Claude model override. It is a
@@ -63,7 +63,7 @@ func (mf *ModelField) Blur() {
 // SetWidth sets the rendering width.
 func (mf *ModelField) SetWidth(w int) {
 	mf.width = w
-	mf.input.Width = w
+	mf.input.SetWidth(w)
 }
 
 // HandleKeyPress routes a key by mode. Chips: arrows cycle (Up/Down accepted
@@ -72,13 +72,13 @@ func (mf *ModelField) SetWidth(w int) {
 // outside the safe model-name charset are dropped so the field can never hold
 // a value the launch command would need to quote, and Left at position 0
 // returns to the chips. Esc is never consumed — it stays the form's close key.
-func (mf *ModelField) HandleKeyPress(msg tea.KeyMsg) {
+func (mf *ModelField) HandleKeyPress(msg tea.KeyPressMsg) {
 	if mf.disabled {
 		return
 	}
 	if !mf.custom {
-		if msg.Type == tea.KeyRunes {
-			if kept := mf.keepValidRunes(msg.Runes, ""); len(kept) > 0 {
+		if msg.Text != "" {
+			if kept := mf.keepValidRunes([]rune(msg.Text), ""); len(kept) > 0 {
 				mf.custom = true
 				mf.input.SetValue(string(kept))
 				mf.input.CursorEnd()
@@ -88,16 +88,16 @@ func (mf *ModelField) HandleKeyPress(msg tea.KeyMsg) {
 		mf.moveCursor(msg)
 		return
 	}
-	if msg.Type == tea.KeyLeft && mf.input.Position() == 0 {
+	if msg.Code == tea.KeyLeft && mf.input.Position() == 0 {
 		mf.custom = false
 		return
 	}
-	if msg.Type == tea.KeyRunes {
-		kept := mf.keepValidRunes(msg.Runes, strings.TrimSpace(mf.input.Value()))
+	if msg.Text != "" {
+		kept := mf.keepValidRunes([]rune(msg.Text), strings.TrimSpace(mf.input.Value()))
 		if len(kept) == 0 {
 			return
 		}
-		msg.Runes = kept
+		msg.Text = string(kept)
 	}
 	// The rune filter above checks runes as if appended, but the text cursor can
 	// sit anywhere (Home/Ctrl+A), so an accepted rune can still realize an

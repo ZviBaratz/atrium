@@ -4,8 +4,8 @@ import (
 	"strings"
 	"testing"
 
+	"charm.land/bubbles/v2/key"
 	"github.com/ZviBaratz/atrium/keys"
-	"github.com/charmbracelet/bubbles/key"
 	xansi "github.com/charmbracelet/x/ansi"
 	"github.com/stretchr/testify/require"
 )

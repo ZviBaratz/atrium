@@ -6,7 +6,7 @@ import (
 
 	"github.com/ZviBaratz/atrium/session"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 	"github.com/muesli/ansi"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -19,7 +19,7 @@ import (
 // line taller than the terminal: it scrolls, and the alt-screen renderer never
 // erases lines, so the top border is gone until a full repaint. Five states left
 // it that way permanently (command palette, command log, queue, rename, confirm);
-// the rest recomputed only inside the tea.WindowSize() they returned, which is a
+// the rest recomputed only inside the tea.RequestWindowSize they returned, which is a
 // frame late — bubbletea renders the model as soon as Update returns, without
 // waiting for the command. So the assertion is deliberately synchronous: the frame
 // must be right in the very render that follows the key.
@@ -76,20 +76,20 @@ func TestEveryBarHidingStateRestoresTheFrame(t *testing.T) {
 			w, h := dim[0], dim[1]
 			t.Run(tc.name, func(t *testing.T) {
 				home := newFrameHome(t, w, h)
-				before := strings.Split(home.View(), "\n")
+				before := strings.Split(home.View().Content, "\n")
 
 				tc.open(home)
 				require.Equal(t, st, home.state, "%s did not open", tc.name)
-				// What the opener's tea.WindowSize() does once the runtime delivers it.
+				// What the opener's tea.RequestWindowSize does once the runtime delivers it.
 				home.recomputeLayout()
 				require.Falsef(t, home.menuVisible(),
 					"%s is meant to hide the hint bar; if it no longer does, this case proves nothing", tc.name)
-				open := strings.Split(home.View(), "\n")
+				open := strings.Split(home.View().Content, "\n")
 				assert.LessOrEqualf(t, len(open), h, "%s: the open frame already overflows %d rows", tc.name, h)
 
 				home.Update(keyMsg("esc"))
 				require.Equalf(t, stateDefault, home.state, "%s did not close on esc", tc.name)
-				after := strings.Split(home.View(), "\n")
+				after := strings.Split(home.View().Content, "\n")
 
 				assert.LessOrEqualf(t, len(after), h,
 					"%s: after closing, View() emits %d lines into a %d-row terminal — the frame "+

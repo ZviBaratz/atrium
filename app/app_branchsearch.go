@@ -11,7 +11,7 @@ import (
 	"github.com/ZviBaratz/atrium/log"
 	"github.com/ZviBaratz/atrium/session/git"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 )
 
 // branchSearchDebounceMsg fires after the debounce interval to trigger a search.

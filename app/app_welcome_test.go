@@ -6,8 +6,8 @@ import (
 
 	"github.com/ZviBaratz/atrium/config"
 
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/muesli/ansi"
 	"github.com/stretchr/testify/require"
 )
@@ -34,7 +34,7 @@ func TestWelcome_FitsNarrowTerminal(t *testing.T) {
 	require.LessOrEqual(t, lipgloss.Width(h.welcomeOverlay.Render()), w,
 		"welcome overlay must be width-clamped at creation, not just truncated on render")
 
-	for i, line := range strings.Split(h.View(), "\n") {
+	for i, line := range strings.Split(h.View().Content, "\n") {
 		require.LessOrEqualf(t, ansi.PrintableRuneWidth(line), w,
 			"line %d exceeds terminal width %d in the welcome on a narrow terminal", i, w)
 	}
@@ -150,7 +150,7 @@ func TestWelcome_ConfirmFrameFitsAfterClose(t *testing.T) {
 	h = model.(*home)
 
 	require.Equal(t, stateDefault, h.state, "confirm closes the welcome")
-	require.Equal(t, 40, lipgloss.Height(h.View()),
+	require.Equal(t, 40, lipgloss.Height(h.View().Content),
 		"frame must be exactly the terminal height after the welcome closes via confirm")
 }
 
@@ -169,7 +169,7 @@ func TestWelcome_SkipFrameFitsAfterClose(t *testing.T) {
 	h = model.(*home)
 
 	require.Equal(t, stateDefault, h.state, "esc closes the welcome")
-	require.Equal(t, 40, lipgloss.Height(h.View()),
+	require.Equal(t, 40, lipgloss.Height(h.View().Content),
 		"frame must be exactly the terminal height after the welcome closes via skip")
 }
 

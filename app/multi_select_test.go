@@ -2,6 +2,7 @@ package app
 
 import (
 	"errors"
+	"github.com/charmbracelet/x/ansi"
 	"testing"
 
 	"github.com/ZviBaratz/atrium/config"
@@ -210,7 +211,11 @@ func TestMultiSelect_KillDoubleTapEchoesTheOpeningKey(t *testing.T) {
 		h := openWith(t, func(h *home) { pressRune(h, 'x') })
 
 		assert.Equal(t, "x", h.confirmationOverlay.ConfirmAltKey)
-		assert.Contains(t, h.confirmationOverlay.Render(), "(or x)",
+		// Stripped: the hint is assembled from separately-styled runs ("(or ", the
+		// bolded key, ")"), so the phrase is only contiguous once styling is
+		// removed. v1 got that for free — a test binary has no TTY, so its global
+		// profile emitted no colour at all — while v2 always renders full fidelity.
+		assert.Contains(t, ansi.Strip(h.confirmationOverlay.Render()), "(or x)",
 			"the dialog teaches the key the user actually pressed")
 		require.True(t, h.confirmationOverlay.HandleKeyPress(
 			textMsg("x")), "x x must kill in one motion")

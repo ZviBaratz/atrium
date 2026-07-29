@@ -10,7 +10,7 @@ import (
 	"github.com/ZviBaratz/atrium/session/agent"
 	"github.com/ZviBaratz/atrium/ui"
 
-	"github.com/charmbracelet/bubbles/spinner"
+	"charm.land/bubbles/v2/spinner"
 )
 
 func TestDriftCheckCmdEmitsUnackedDrift(t *testing.T) {

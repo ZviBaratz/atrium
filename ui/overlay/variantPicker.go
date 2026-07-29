@@ -8,8 +8,8 @@ import (
 	"github.com/ZviBaratz/atrium/session/agent"
 	"github.com/ZviBaratz/atrium/ui/theme"
 
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 )
 
 // variantCountMax caps how many sessions a single profile may contribute to one
@@ -63,7 +63,7 @@ func (vp *VariantPicker) SetError(msg string) { vp.errMsg = msg }
 // HandleKeyPress processes a key event, returning true if consumed. Left/Right
 // move between profiles (wrapping); Up/Down and +/- (and = for the unshifted +)
 // adjust the focused profile's count. Any count change clears a stale error.
-func (vp *VariantPicker) HandleKeyPress(msg tea.KeyMsg) bool {
+func (vp *VariantPicker) HandleKeyPress(msg tea.KeyPressMsg) bool {
 	if len(vp.profiles) == 0 {
 		return false
 	}

@@ -1,6 +1,6 @@
 package theme
 
-import "github.com/charmbracelet/lipgloss"
+import "charm.land/lipgloss/v2"
 
 // Agent identity: one glyph + accent per agent key (the canonical keys from
 // session/agent, passed as plain strings so theme stays a leaf package). The

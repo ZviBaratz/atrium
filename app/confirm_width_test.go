@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 	"github.com/muesli/ansi"
 	"github.com/stretchr/testify/assert"
 )
@@ -27,7 +27,7 @@ func TestConfirmDialogFitsNarrowTerminal(t *testing.T) {
 
 	h.confirmAction("Push changes from session 'a-rather-long-session-name'?", instantAction, nil)
 
-	for i, l := range strings.Split(h.View(), "\n") {
+	for i, l := range strings.Split(h.View().Content, "\n") {
 		if w := ansi.PrintableRuneWidth(l); w > 44 {
 			t.Fatalf("line %d width %d exceeds the 44-column terminal", i, w)
 		}
@@ -42,7 +42,7 @@ func TestConfirmDialogRefitsOnResize(t *testing.T) {
 
 	h.updateHandleWindowSizeEvent(tea.WindowSizeMsg{Width: 40, Height: 20})
 
-	for i, l := range strings.Split(h.View(), "\n") {
+	for i, l := range strings.Split(h.View().Content, "\n") {
 		if w := ansi.PrintableRuneWidth(l); w > 40 {
 			t.Fatalf("line %d width %d exceeds the 40-column terminal after resize", i, w)
 		}

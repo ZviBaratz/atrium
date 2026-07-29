@@ -5,10 +5,10 @@ import (
 	"testing"
 	"time"
 
+	"charm.land/bubbles/v2/spinner"
 	"github.com/ZviBaratz/atrium/config"
 	"github.com/ZviBaratz/atrium/session"
 	"github.com/ZviBaratz/atrium/ui"
-	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/stretchr/testify/require"
 )
 

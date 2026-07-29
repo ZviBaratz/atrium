@@ -557,14 +557,14 @@ func TestPreviewScrollStepHonorsLines(t *testing.T) {
 	// Enter scroll mode (lands at bottom), then a 3-line and a 1-line step up.
 	require.NoError(t, pane.ScrollUp(setup.instance, 1))
 	require.True(t, pane.isScrolling)
-	bottom := pane.viewport.YOffset
+	bottom := pane.viewport.YOffset()
 
 	require.NoError(t, pane.ScrollUp(setup.instance, 3))
-	require.Equal(t, 3, bottom-pane.viewport.YOffset, "a wheel notch must move three lines")
+	require.Equal(t, 3, bottom-pane.viewport.YOffset(), "a wheel notch must move three lines")
 
-	after3 := pane.viewport.YOffset
+	after3 := pane.viewport.YOffset()
 	require.NoError(t, pane.ScrollUp(setup.instance, 1))
-	require.Equal(t, 1, after3-pane.viewport.YOffset, "a key must move one line")
+	require.Equal(t, 1, after3-pane.viewport.YOffset(), "a key must move one line")
 }
 
 // TestPreviewScrollSnapshotUnpinsOnInstanceSwitch reproduces the stuck-preview bug:
