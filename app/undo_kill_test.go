@@ -122,28 +122,33 @@ func TestJournalKillWritesTheEntryBeforeTheRef(t *testing.T) {
 	assert.False(t, stored[0].Restorable(time.Now()))
 }
 
-// TestTeardownJournalsBeforeItDeletesFromStorage. The two orderings are
-// indistinguishable on the happy path and differ entirely on a half-kill: the
-// storage delete is the first step that can fail, and a record written after it
-// would never exist for exactly the teardown the user most needs to undo.
-func TestTeardownJournalsBeforeItDeletesFromStorage(t *testing.T) {
+// TestTeardownJournalsInTheIOHalfSoAModelFailureCannotCostTheRecord. #380 split a
+// kill into an I/O half (killIOCmd, off-thread) and a model half (applyKillDone, on
+// the update loop), which moved the storage delete to *after* the teardown — so it
+// can no longer abort a kill, but it can still fail, and by then the session is
+// already gone. Journalling therefore has to sit in the I/O half, before the Kill
+// it describes: recorded there, the entry survives every later failure, which is
+// exactly the half-torn-down session a user most wants back.
+func TestTeardownJournalsInTheIOHalfSoAModelFailureCannotCostTheRecord(t *testing.T) {
 	undoSandbox(t)
 	inst, _ := gitSession(t, "fix-auth")
 	h := undoHome(t)
-	// An empty storage makes DeleteInstance fail with "instance not found", which
-	// is the earliest failure the teardown can hit.
+	// An empty storage makes the model half's DeleteInstance fail with "instance
+	// not found" — the one step there that can.
 	storage, err := session.NewStorage(config.DefaultState())
 	require.NoError(t, err)
 	h.storage = storage
 
-	msg := h.instanceTeardownCmd(inst)()
-	err, isErr := msg.(error)
-	require.True(t, isErr, "the teardown must surface the storage failure, got %T", msg)
-	require.Error(t, err)
+	msg := killIOCmd(h, inst)()
+	done, isKillDone := msg.(killDoneMsg)
+	require.True(t, isKillDone, "the I/O half must report a killDoneMsg, got %T", msg)
+	assert.True(t, done.undoable, "the kill was recorded, so the notice may advertise undo")
+
+	h.applyKillDone(done)
 
 	stored, err := undo.Load()
 	require.NoError(t, err)
-	require.Len(t, stored, 1, "the session was recorded before the step that failed")
+	require.Len(t, stored, 1, "the record is written before the teardown, so nothing after it can cost the undo")
 	assert.Equal(t, "fix-auth", stored[0].Title)
 	assert.True(t, stored[0].Restorable(time.Now()))
 }
@@ -380,11 +385,19 @@ func TestBatchKillJournalsEverySessionAndCountsThem(t *testing.T) {
 
 	h.killInstances(insts, "Kill 2 marked sessions?", "x")
 	require.NotNil(t, h.pendingConfirmAction, "the batch action is stashed for the confirmation")
+	require.NotNil(t, h.pendingConfirmArm, "and so is the bookkeeping it is paired with")
+	// The arm is what a confirmed dialog applies before dispatching; the action's own
+	// join settles against it, so running one without the other is not the real path.
+	h.pendingConfirmArm()
 
 	msg, ok := h.pendingConfirmAction().(batchKillDoneMsg)
 	require.True(t, ok)
-	assert.Equal(t, 2, msg.killed)
 	assert.Equal(t, 2, msg.undoable, "every recorded session must be counted, or the notice hides the undo")
+
+	// killed is decided by the model half (#380 split the two), and the notice is
+	// built from both halves together.
+	msg = h.applyBatchKill(msg)
+	assert.Equal(t, 2, msg.killed)
 	assert.Equal(t, "killed 2 sessions · U to undo", batchKilledNotice(msg.killed, msg.undoable))
 
 	// One batch, one action: undo offers all of it back.

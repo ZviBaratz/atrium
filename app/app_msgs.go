@@ -675,9 +675,9 @@ func (m *home) handleInstanceStarted(msg instanceStartedMsg) (tea.Model, tea.Cmd
 	// once the agent is past its startup/trust screen and ready for input
 	// (see deliverReadyPrompts). Sending here races the agent's boot and lands
 	// keystrokes in the trust dialog instead of the input box.
-	// Don't clobber a "busy" progress row if an action is in flight — asyncActionDoneMsg
-	// restores StateDefault when it completes.
-	if !m.actionInFlight {
+	// Leave a live progress row alone: its owner clears it when the operation
+	// finishes (the ranking in ui.Menu decides which line shows meanwhile).
+	if m.menu.State() != ui.StateBusy {
 		m.menu.SetState(ui.StateDefault)
 	}
 

@@ -25,7 +25,7 @@ func TestConfirmDialogFitsNarrowTerminal(t *testing.T) {
 	h := newCreateFormHome(t)
 	h.updateHandleWindowSizeEvent(tea.WindowSizeMsg{Width: 44, Height: 20})
 
-	h.confirmAction("Push changes from session 'a-rather-long-session-name'?", nil)
+	h.confirmAction("Push changes from session 'a-rather-long-session-name'?", instantAction, nil)
 
 	for i, l := range strings.Split(h.View(), "\n") {
 		if w := ansi.PrintableRuneWidth(l); w > 44 {
@@ -38,7 +38,7 @@ func TestConfirmDialogFitsNarrowTerminal(t *testing.T) {
 func TestConfirmDialogRefitsOnResize(t *testing.T) {
 	h := newCreateFormHome(t)
 	h.updateHandleWindowSizeEvent(tea.WindowSizeMsg{Width: 120, Height: 30})
-	h.confirmAction("Push?", nil)
+	h.confirmAction("Push?", instantAction, nil)
 
 	h.updateHandleWindowSizeEvent(tea.WindowSizeMsg{Width: 40, Height: 20})
 

@@ -970,6 +970,14 @@ func (t *Session) DoesSessionExist() bool {
 	return t.liveness() == sessionAlive
 }
 
+// Attached reports whether an interactive tmux client currently owns this
+// session. Background capturers use it the way Poll does (see its comment): a
+// capture while attached contends the shared socket for a frame nobody is
+// looking at, since the user is watching the real pane.
+func (t *Session) Attached() bool {
+	return t.attached.Load()
+}
+
 // snapshotName reads sanitizedName under the read lock so background polling can't race
 // the in-place field swap a deep Rename performs.
 func (t *Session) snapshotName() string {

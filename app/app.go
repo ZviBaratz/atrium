@@ -240,11 +240,13 @@ const (
 type home struct {
 	ctx context.Context
 
-	// startWG tracks in-flight new-session Start goroutines so app.Run can join
-	// them after p.Run() returns and reconcile a session the Bubble Tea event loop
-	// bypassed on signal shutdown / force-quit (#282). Add() runs on the Update
-	// goroutine (happens-before app.Run's wait); Done() is deferred inside the
-	// start command.
+	// startWG tracks in-flight session lifecycle goroutines — new-session Starts
+	// and, since the kill split, teardowns — so app.Run can join them after
+	// p.Run() returns and reconcile work the Bubble Tea event loop bypassed on
+	// signal shutdown / force-quit (#282). A teardown belongs here for the same
+	// reason a start does: quitting midway through one can strand a half-removed
+	// worktree. Add() runs on the Update goroutine (happens-before app.Run's
+	// wait); Done() is deferred inside the command.
 	startWG sync.WaitGroup
 
 	// -- Storage and Configuration --
@@ -336,6 +338,21 @@ type home struct {
 	// generation, so it can still apply a capture taken concurrently with that next
 	// attach's keeper — the next attach's own bump retires it one attach later.
 	attachGen uint64
+	// retiring marks instances whose teardown is in flight. The row still exists
+	// during the async window, so without this the metadata poll would observe the
+	// dying pane and "recover" it to Paused with a notice that both lies and hides
+	// the kill's own progress row. Main-thread only, like lostStrikes.
+	//
+	// A mark is armed when a teardown is CONFIRMED, never when its dialog opens:
+	// an entry here suppresses recovery for as long as it exists, so a mark left
+	// behind by a cancelled dialog would exempt a perfectly live session from
+	// lost-session recovery for the rest of the run. See armTeardown.
+	retiring map[*session.Instance]bool
+	// frameInFlight marks a dispatched pane capture whose paneFrameMsg has not come
+	// back yet. It is the whole no-overlap guarantee for the capture chain: exactly
+	// one is ever in flight, so an unresponsive tmux server parks one goroutine
+	// instead of accumulating a new one every 100ms. See app_frames.go.
+	frameInFlight bool
 	// appConfig stores persistent application configuration
 	appConfig *config.Config
 	// appState stores persistent application state like seen help screens
@@ -480,8 +497,15 @@ type home struct {
 	undoRefused map[string]bool
 	// pendingConfirmBusyLabel is the progress label ("pushing…", "merging PR #12…")
 	// for a confirm action that should run off the UI thread. Empty means run the
-	// action inline (the legacy synchronous path). Set by confirmAsyncAction.
+	// action inline (the legacy synchronous path). Set by confirmAction.
 	pendingConfirmBusyLabel string
+	// pendingConfirmArm is bookkeeping the staged action needs applied on the update
+	// thread the moment it is CONFIRMED — never when the dialog merely opens. A
+	// teardown uses it to mark its instances retiring and join startWG (armTeardown);
+	// doing that at dialog-open time leaks both on every cancel, because a declined
+	// confirmation drops its action without ever running it. Reset by confirmAction,
+	// so a dialog that stages none cannot inherit the previous one's.
+	pendingConfirmArm func()
 	// hostCap is the host-derived soft session cap (config.DefaultSessionCap() at
 	// construction). It is the Limit used when max_sessions is unset; a field rather
 	// than a live call so tests can pin it independent of the runner's CPU count.
@@ -546,7 +570,7 @@ type home struct {
 	// list selection moves while the overlay is open (e.g. during async auto-naming).
 	renameTarget *session.Instance
 	// generatingName guards against launching a second auto-name request while one
-	// is already in flight, and drives the "Generating name…" hint-bar state.
+	// is already in flight; the row itself is now a background busy line.
 	generatingName bool
 	// actionInFlight is true while a confirm/pause/resume action runs off the UI
 	// thread (see beginAsyncAction). It drives the StateBusy progress row, gates
@@ -646,7 +670,8 @@ func (m *home) Init() tea.Cmd {
 			time.Sleep(100 * time.Millisecond)
 			return previewTickMsg{}
 		},
-		m.armSplashTick(), // idle splash animation, live from the first frame
+		m.armFrameCapture(0), // pane-capture chain: the only place tmux content is read
+		m.armSplashTick(),    // idle splash animation, live from the first frame
 		tickUpdateMetadataCmd(m.ctx, m.snapshotActiveInstances(), m.list.GetSelectedInstance(), true, m.attachGen), // first tick: full sweep
 		m.updateCheckCmd(),   // nil (inert) is fine: tea.Batch skips nil cmds
 		m.driftCheckCmd(),    // agent-heuristic drift hint

@@ -10,6 +10,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/charmbracelet/bubbles/viewport"
 	"github.com/charmbracelet/lipgloss"
@@ -19,10 +20,20 @@ import (
 func terminalPaneStyle() lipgloss.Style   { return theme.Current().FgStyle() }
 func terminalFooterStyle() lipgloss.Style { return theme.Current().DimStyle() }
 
-// terminalSession holds a cached tmux session for a specific instance.
+// terminalCaptureLog throttles the background capture's failure trail, which would
+// otherwise repeat at the frame cadence.
+var terminalCaptureLog = log.NewEvery(5 * time.Second)
+
+// terminalSession holds a cached tmux session for a specific instance, plus the
+// last frame captured from it. The frame lives here rather than on the Instance
+// (where the agent pane's does) because the shell is this pane's own resource: the
+// map is already keyed and already pruned by Close/CloseForInstance, so the frame
+// needs no lifecycle of its own.
 type terminalSession struct {
 	tmuxSession *tmux.Session
 	cwd         string
+	content     string
+	frameAt     time.Time
 }
 
 // TerminalPane manages shell tmux sessions in the working directory of selected instances.
@@ -160,35 +171,105 @@ func (t *TerminalPane) UpdateContent(instance *session.Instance) error {
 		return nil
 	}
 
-	// Ensure we have a terminal session for this instance
-	if err := t.ensureSessionLocked(instance); err != nil {
-		return err
-	}
-
-	s, ok := t.liveCurrentSession()
-	if !ok {
+	// Point the pane at this instance's shell and render whatever was last captured
+	// for it. No I/O happens here: UpdateContent runs inside Update, and this pane
+	// used to create a tmux session and capture it inline on every 100ms tick (#380).
+	// The app's capture chain fills the cache; ApplyFrame installs it.
+	key := terminalKey(instance)
+	if key == "" {
+		// No persisted tmux name (an instance fabricated without Start, e.g. in
+		// tests): there is no stable key to cache a shell under.
 		t.setFallbackState("Terminal session not available.")
 		return nil
 	}
+	t.currentKey = key
 
-	content, err := s.tmuxSession.CapturePaneContent()
-	if err != nil {
-		return fmt.Errorf("terminal pane: failed to capture content: %w", err)
+	s, ok := t.sessions[key]
+	if !ok || s.frameAt.IsZero() {
+		// The shell is still being created, or its first capture has not landed.
+		t.setFallbackState("Opening terminal…")
+		return nil
 	}
 
 	t.fallback = false
 	t.splash = false
-	// Decompose font-dependent emoji clusters so our laid-out width matches the
-	// terminal's rendered width and the pane can't wrap (see theme.SanitizeWidth).
-	t.content = theme.SanitizeWidth(content)
+	t.content = s.content
 	return nil
 }
 
-// ensureSessionLocked creates or reuses a cached terminal tmux session for the
-// given instance. Caller must hold t.mu.
-func (t *TerminalPane) ensureSessionLocked(instance *session.Instance) error {
+// LiveContent returns the shell text the pane is currently rendering, and whether
+// it is real content rather than a fallback or a frozen scroll snapshot. It is the
+// terminal twin of PreviewPane.LiveContent, and exists for the same reason: the
+// copy action needs the captured text, not String()'s trimmed and styled render.
+func (t *TerminalPane) LiveContent() (string, bool) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.fallback || t.isScrolling {
+		return "", false
+	}
+	return t.content, t.content != ""
+}
+
+// CaptureTarget returns the shell session to capture for instance, its cache key,
+// and whether one exists yet. Main-thread, lock-only, and deliberately free of the
+// has-session probe liveCurrentSession used to run *while holding t.mu* — the same
+// lock String() takes, so an unresponsive server could block View itself.
+//
+// ok=false means "create it first" (see EnsureSession), not "give up".
+func (t *TerminalPane) CaptureTarget(instance *session.Instance) (sess *tmux.Session, key string, ok bool) {
 	if instance == nil || !instance.Started() || instance.Paused() {
-		return nil
+		return nil, "", false
+	}
+	key = terminalKey(instance)
+	if key == "" {
+		return nil, "", false
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	s, cached := t.sessions[key]
+	if !cached || s.tmuxSession == nil {
+		return nil, key, false
+	}
+	return s.tmuxSession, key, true
+}
+
+// ApplyFrame installs a background capture against its cache key. Main thread only
+// — it writes the state String() reads. A failed capture leaves the last content in
+// place, exactly as the preview pane does.
+func (t *TerminalPane) ApplyFrame(key, content string, err error, at time.Time) {
+	if key == "" {
+		return
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	s, ok := t.sessions[key]
+	if !ok {
+		return
+	}
+	if err != nil {
+		if terminalCaptureLog.ShouldLog() {
+			log.WarningLog.Printf("terminal pane: capture failed for %s: %v", key, err)
+		}
+		return
+	}
+	s.content = content
+	s.frameAt = at
+}
+
+// EnsureSession creates (or restores, or reaps-legacy-and-recreates) the shell
+// session for instance and returns its cache key.
+//
+// It is the old ensureSessionLocked with the I/O moved OUT of t.mu: the lock is
+// taken only to read the cached entry, to read the pane size, and to install the
+// finished session. That matters twice over — this runs on the app's capture
+// goroutine now, and t.mu is the lock String() takes, so holding it across a tmux
+// round trip could block rendering even before the update-thread question.
+//
+// Safe against concurrent entry because the capture chain keeps exactly one
+// capture in flight at a time.
+func (t *TerminalPane) EnsureSession(instance *session.Instance) (string, error) {
+	if instance == nil || !instance.Started() || instance.Paused() {
+		return "", nil
 	}
 
 	// Host the shell in the same cwd as the agent: the worktree for a git session, or
@@ -196,24 +277,27 @@ func (t *TerminalPane) ensureSessionLocked(instance *session.Instance) error {
 	// session and wrongly skip terminal creation, so use WorkingDir().
 	cwd := instance.WorkingDir()
 	if cwd == "" {
-		return nil
+		return "", nil
 	}
 	key := terminalKey(instance)
 	if key == "" {
 		// No persisted tmux name (an instance fabricated without Start, e.g. in
 		// tests): there is no stable key to cache a shell under.
-		return nil
+		return "", nil
 	}
 
-	t.currentKey = key
-
-	// Check if we already have a cached session for this instance
-	if s, ok := t.sessions[key]; ok {
-		if s.tmuxSession != nil && s.tmuxSession.DoesSessionExist() {
-			return nil
+	// Check if we already have a cached session for this instance.
+	t.mu.Lock()
+	cached, ok := t.sessions[key]
+	t.mu.Unlock()
+	if ok && cached.tmuxSession != nil {
+		if cached.tmuxSession.DoesSessionExist() {
+			return key, nil
 		}
-		// Session died, remove stale entry and recreate below
+		// Session died; drop the stale entry and recreate below.
+		t.mu.Lock()
 		delete(t.sessions, key)
+		t.mu.Unlock()
 	}
 
 	shell := os.Getenv("SHELL")
@@ -248,28 +332,28 @@ func (t *TerminalPane) ensureSessionLocked(instance *session.Instance) error {
 			_ = ts.Close()
 			ts = tmux.NewSessionWithName(t.baseContext(), termName, "term: "+instance.Title, shell)
 			if err := ts.Start(cwd); err != nil {
-				return fmt.Errorf("terminal pane: failed to start session: %w", err)
+				return "", fmt.Errorf("terminal pane: failed to start session: %w", err)
 			}
 		}
 	} else {
 		if err := ts.Start(cwd); err != nil {
-			return fmt.Errorf("terminal pane: failed to start session: %w", err)
+			return "", fmt.Errorf("terminal pane: failed to start session: %w", err)
 		}
 	}
 
-	t.sessions[key] = &terminalSession{
-		tmuxSession: ts,
-		cwd:         cwd,
-	}
+	t.mu.Lock()
+	t.sessions[key] = &terminalSession{tmuxSession: ts, cwd: cwd}
+	width, height := t.width, t.height
+	t.mu.Unlock()
 
 	// Set the size
-	if t.width > 0 && t.height > 0 {
-		if err := ts.SetDetachedSize(t.width, t.height); err != nil {
+	if width > 0 && height > 0 {
+		if err := ts.SetDetachedSize(width, height); err != nil {
 			log.InfoLog.Printf("terminal pane: failed to set size: %v", err)
 		}
 	}
 
-	return nil
+	return key, nil
 }
 
 // Attach attaches to the terminal tmux session (full-screen).

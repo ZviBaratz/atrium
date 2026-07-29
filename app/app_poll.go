@@ -14,6 +14,7 @@ import (
 	"github.com/ZviBaratz/atrium/session/git"
 	"github.com/ZviBaratz/atrium/session/tmux"
 	"github.com/ZviBaratz/atrium/session/transcript"
+	"github.com/ZviBaratz/atrium/ui/theme"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -27,7 +28,10 @@ func (m *home) instanceChanged() tea.Cmd {
 	// Update menu with current instance
 	m.menu.SetInstance(selected)
 
-	// If there's no selected instance, we don't need to update the preview.
+	// Render the panes from cached state. The preview's frame comes from the capture
+	// chain in app_frames.go, never from a capture here: this function runs on every
+	// 100ms tick AND from ~60 key handlers, so a tmux round trip in it was a latency
+	// floor under every keystroke, and an unresponsive server froze the app (#380).
 	if err := m.tabbedWindow.UpdatePreview(selected); err != nil {
 		return m.handleError(err)
 	}
@@ -42,6 +46,11 @@ func (m *home) instanceChanged() tea.Cmd {
 	if selected != m.lastStatusPollSelection {
 		m.lastStatusPollSelection = selected
 		m.selectedSince = time.Now()
+		// The new selection's frame is whatever was last captured for it, which may be
+		// nothing at all — either way it is new, not stale, so restamp freshness. The
+		// capture chain notices the changed target when its in-flight capture lands and
+		// re-arms without waiting out another interval (see handlePaneFrame).
+		m.noteFrameTargetChange()
 		return pollSelectedCmd(selected, m.attachGen)
 	}
 	return nil
@@ -82,6 +91,14 @@ func (m *home) markSeenAfterDwell(now time.Time) {
 // previewTickMsg implements tea.Msg and triggers a preview update
 type previewTickMsg struct{}
 
+// contextPushFailedMsg carries the sessions whose context-bar push failed, so the
+// main thread can un-arm their caches and the next tick retries. Arming is
+// optimistic (see tmux.ArmContext) precisely so the common unchanged tick costs
+// nothing; this message is the other half of that bargain.
+type contextPushFailedMsg struct {
+	instances []*session.Instance
+}
+
 // instanceChangedMsg asks Update to refresh after a confirmed action changed the
 // list. notice, when set, is flashed alongside the refresh — it exists so the kill
 // teardown can tell the user their session is recoverable without needing a second
@@ -114,6 +131,12 @@ type instanceMetaResult struct {
 	// or none reported yet).
 	effort   string
 	effortOK bool
+	// paneFrame / paneFrameAt carry the pane capture Poll already paid for, so every
+	// polled session's preview cache stays warm without a second capture-pane;
+	// paneFrameOK is false for a session that has never polled successfully.
+	paneFrame   string
+	paneFrameAt time.Time
+	paneFrameOK bool
 }
 
 // instancePolledMsg carries the result of an off-cadence status poll of a single instance,
@@ -325,11 +348,15 @@ type lostRecovery struct {
 // the next tick's Paused check clears the strike. Returns one lostRecovery per
 // instance acted on so the caller can persist and surface them. Runs on the main
 // thread — the only place model state may be mutated.
-func recoverLostInstances(results []instanceMetaResult, strikes map[*session.Instance]int) []lostRecovery {
+func recoverLostInstances(results []instanceMetaResult, strikes map[*session.Instance]int, retiring map[*session.Instance]bool) []lostRecovery {
 	var recovered []lostRecovery
 	for _, r := range results {
-		if !r.sessionLost || r.instance.Paused() {
-			delete(strikes, r.instance) // alive (or already paused): clear any prior strikes
+		// A retiring session's pane is SUPPOSED to die: its kill is in flight and
+		// its row still exists for the length of that window. Recovering it would
+		// park it as Paused and toast "terminal exited" — a notice that is both
+		// false and painted over the kill's own progress row (#380).
+		if !r.sessionLost || r.instance.Paused() || retiring[r.instance] {
+			delete(strikes, r.instance) // alive, paused, or retiring: clear any prior strikes
 			continue
 		}
 		strikes[r.instance]++
@@ -496,6 +523,11 @@ func collectMetadata(ctx context.Context, poll []*session.Instance, selected *se
 			// Effort reads the value Poll just lifted off the hook record — no extra
 			// I/O; only applied when it changed.
 			r.effort, r.effortOK = instance.ComputeEffort()
+			// Take the frame Poll just captured. It costs nothing — Poll captured the
+			// pane to classify it and used to throw the bytes away — and it means a
+			// session the user has not selected this run still has a frame to paint
+			// the moment they do, instead of the setup splash (#380).
+			r.paneFrame, r.paneFrameAt, r.paneFrameOK = instance.HarvestPaneFrame()
 		}(idx, inst)
 	}
 	wg.Wait()
@@ -548,13 +580,42 @@ func (m *home) applyMetadataResults(results []instanceMetaResult, emit bool) []t
 		if r.effortOK {
 			r.instance.SetEffortMeta(r.effort)
 		}
+		// Record the liveness this poll already established, so the context-bar push
+		// below reads a memo instead of forking its own has-session per session. A
+		// PaneUnknown result is inconclusive (attached, unstarted, a transient probe
+		// failure) and deliberately leaves the memo alone rather than claiming death.
+		if r.state != tmux.PaneUnknown {
+			r.instance.SetPaneLive(r.state != tmux.PaneDead)
+		}
+		applyHarvestedFrame(r)
 	}
 	// Re-apply the status sort now that pane states are fresh, so urgent sessions keep
 	// floating to the top of their group. No-op in creation mode; the selected session
 	// stays under the cursor (preserved by identity).
 	m.list.ApplySort()
-	m.pushSessionContexts()
-	return deliverReadyPrompts(results)
+	cmds := deliverReadyPrompts(results)
+	// Appended only when there is something to push, so a quiet tick returns an
+	// empty slice rather than one holding a nil Cmd.
+	if push := m.pushSessionContexts(); push != nil {
+		cmds = append(cmds, push)
+	}
+	return cmds
+}
+
+// applyHarvestedFrame stores the pane capture the poll already paid for, but only
+// when it is newer than the cached one. The order matters: the 100ms capture chain
+// and this 500ms sweep both feed the same cache, and the chain's frames are fresher
+// for the selected session — an unconditional write here would rewind the watched
+// pane by up to half a second, ten times a second. Main thread only, like the
+// Set*Meta calls it sits beside.
+func applyHarvestedFrame(r instanceMetaResult) {
+	if !r.paneFrameOK {
+		return
+	}
+	if _, cachedAt, cached := r.instance.PaneFrame(); cached && !r.paneFrameAt.After(cachedAt) {
+		return
+	}
+	r.instance.SetPaneFrame(theme.SanitizeWidth(r.paneFrame), r.paneFrameAt)
 }
 
 // applyDiffStats stores freshly computed diff stats on an instance (main thread only),

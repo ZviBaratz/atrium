@@ -71,7 +71,7 @@ func (m *home) confirmUndoKill(group []undo.Entry) tea.Cmd {
 	// is written to avoid.
 	live := m.liveSessionNames()
 	message := undoConfirmMessage(group)
-	cmd := m.confirmAsyncAction(message, undoBusyLabel(len(group)), func() tea.Msg {
+	cmd := m.confirmAction(message, busyLabel(undoBusyLabel(len(group))), func() tea.Msg {
 		return m.restoreKilled(group, live)
 	})
 	m.confirmationOverlay.SetConfirmLabel(undoConfirmLabel(len(group)))

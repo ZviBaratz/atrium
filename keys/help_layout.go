@@ -71,6 +71,7 @@ var HelpGroups = []HelpGroup{
 		{Keys: []KeyName{KeyResume}, Desc: "resume a paused session"},
 		{Keys: []KeyName{KeyResumeAll}, Desc: "resume all paused sessions in the current view"},
 		{Keys: []KeyName{KeyCopyBranch}, Desc: "copy branch name to clipboard"},
+		{Keys: []KeyName{KeyCopyContent}, Desc: "copy the active tab's content, unstyled"},
 		{Keys: []KeyName{KeyHints}, Desc: "copy/open URLs & paths from the preview"},
 	}},
 	{Title: "Groups", Rows: []HelpRow{

@@ -234,7 +234,7 @@ func TestInstanceRenameMintsQualifiedTmuxName(t *testing.T) {
 		Branch:      wt.GetBranchName(),
 	}
 
-	require.NoError(t, inst.Rename("new-name"))
+	require.NoError(t, renameAndAdopt(inst, "new-name"))
 	want := tmux.QualifiedSessionName(filepath.Base(repoPath), "new-name")
 	require.Equal(t, want, inst.TmuxSessionName())
 }

@@ -251,6 +251,7 @@ in-app keymap and this section ever drift apart, so it stays complete.
 | `r` | resume a paused session |
 | `ctrl-r` | resume all paused sessions in the current view |
 | `y` | copy branch name to clipboard (works over SSH — see [Clipboard](#clipboard)) |
+| `Y` | copy the active tab's content — the raw diff, or the pane with styling stripped |
 | `f` | copy/open URLs & paths from the preview |
 
 ##### Groups

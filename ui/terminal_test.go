@@ -8,6 +8,7 @@ import (
 	"github.com/ZviBaratz/atrium/log"
 	"github.com/ZviBaratz/atrium/session"
 	"github.com/ZviBaratz/atrium/session/tmux"
+	"github.com/ZviBaratz/atrium/ui/theme"
 	"os/exec"
 	"strings"
 	"testing"
@@ -120,6 +121,28 @@ func injectSession(tp *TerminalPane, key string, ts *tmux.Session, cwd string) {
 	tp.currentKey = key
 }
 
+// primeTerminalFrame runs one capture through the injected session's fake executor
+// and applies it, standing in for the app's background capture chain
+// (app/app_frames.go). The pane no longer captures for itself — that is the point
+// of #380 — so a test that wants shell content must supply a frame first. The mock
+// still serves the capture-pane call, so the real capture path stays exercised.
+func primeTerminalFrame(t *testing.T, tp *TerminalPane, inst *session.Instance) {
+	t.Helper()
+	sess, key, ok := tp.CaptureTarget(inst)
+	require.True(t, ok, "the shell session must be injected before priming a frame")
+	content, err := sess.CapturePaneContent()
+	require.NoError(t, err)
+	tp.ApplyFrame(key, theme.SanitizeWidth(content), nil, time.Now())
+}
+
+// showTerminal is primeTerminalFrame followed by UpdateContent: the two steps the
+// app performs per frame.
+func showTerminal(t *testing.T, tp *TerminalPane, inst *session.Instance) {
+	t.Helper()
+	primeTerminalFrame(t, tp, inst)
+	require.NoError(t, tp.UpdateContent(inst))
+}
+
 func TestTerminalUpdateContent(t *testing.T) {
 	log.Initialize(false)
 	defer log.Close()
@@ -139,9 +162,8 @@ func TestTerminalUpdateContent(t *testing.T) {
 	// Start the session so DoesSessionExist returns true
 	injectSession(tp, terminalKey(instance), ts, t.TempDir())
 
-	// UpdateContent should set fallback=false and capture content
-	err := tp.UpdateContent(instance)
-	require.NoError(t, err)
+	// UpdateContent renders the frame the app's capture chain supplied.
+	showTerminal(t, tp, instance)
 
 	tp.mu.Lock()
 	require.False(t, tp.fallback, "should not be in fallback mode after successful content update")
@@ -370,8 +392,7 @@ func TestTerminalSessionCaching(t *testing.T) {
 	tp.currentKey = terminalKey(instance1)
 	tp.mu.Unlock()
 
-	err := tp.UpdateContent(instance1)
-	require.NoError(t, err)
+	showTerminal(t, tp, instance1)
 	tp.mu.Lock()
 	require.Equal(t, content1, tp.content)
 	tp.mu.Unlock()
@@ -381,8 +402,7 @@ func TestTerminalSessionCaching(t *testing.T) {
 	tp.currentKey = terminalKey(instance2)
 	tp.mu.Unlock()
 
-	err = tp.UpdateContent(instance2)
-	require.NoError(t, err)
+	showTerminal(t, tp, instance2)
 	tp.mu.Lock()
 	require.Equal(t, content2, tp.content)
 	tp.mu.Unlock()
@@ -392,8 +412,7 @@ func TestTerminalSessionCaching(t *testing.T) {
 	tp.currentKey = terminalKey(instance1)
 	tp.mu.Unlock()
 
-	err = tp.UpdateContent(instance1)
-	require.NoError(t, err)
+	require.NoError(t, tp.UpdateContent(instance1))
 	tp.mu.Lock()
 	require.Equal(t, content1, tp.content, "should get cached session content when switching back")
 	// Verify both sessions are still in the map
@@ -536,13 +555,13 @@ func TestTerminalScrollSnapshotUnpinsOnInstanceSwitch(t *testing.T) {
 	injectSession(tp, terminalKey(instB), newMockTmuxSession(t, "mock-scroll-b", mockCmdExec(contentB, true)), t.TempDir())
 
 	// Show A live, then enter scroll mode (snapshot of A's shell history).
-	require.NoError(t, tp.UpdateContent(instA))
+	showTerminal(t, tp, instA)
 	require.NoError(t, tp.ScrollUp())
 	require.True(t, tp.IsScrolling(), "ScrollUp must enter scroll mode")
 	require.Contains(t, tp.String(), contentA)
 
 	// Selecting another session must exit the snapshot and show B's live shell.
-	require.NoError(t, tp.UpdateContent(instB))
+	showTerminal(t, tp, instB)
 	require.False(t, tp.IsScrolling(), "switching instances must exit scroll mode")
 	rendered := tp.String()
 	require.Contains(t, rendered, contentB, "the newly selected session's live shell must be shown")
@@ -596,7 +615,11 @@ func TestEnsureSessionReapsLegacyTermSession(t *testing.T) {
 	tp.SetSize(80, 30)
 	t.Cleanup(tp.Close)
 
-	require.NoError(t, tp.UpdateContent(instance))
+	// EnsureSession is the create path — it now runs on the app's capture
+	// goroutine rather than inside UpdateContent, so drive it directly.
+	key, err := tp.EnsureSession(instance)
+	require.NoError(t, err)
+	require.NotEmpty(t, key)
 
 	tp.mu.Lock()
 	_, created := tp.sessions[terminalKey(instance)]

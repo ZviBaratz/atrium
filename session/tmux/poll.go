@@ -103,6 +103,12 @@ type statusMonitor struct {
 	// effort leaves it untouched rather than blanking the chip. Read under monitorMu via
 	// RuntimeEffort.
 	effort string
+	// lastCapture is the raw pane content Poll captured, and lastCaptureAt when. Poll
+	// has always paid for this capture to classify the pane and then thrown the bytes
+	// away; keeping them lets the preview's frame cache be warmed for every polled
+	// session at no extra subprocess (#380). Read under monitorMu via LastCapture.
+	lastCapture   string
+	lastCaptureAt time.Time
 }
 
 func newStatusMonitor(program string) *statusMonitor {
@@ -211,6 +217,19 @@ func (t *Session) RuntimeEffort() string {
 	return t.monitor.effort
 }
 
+// LastCapture returns the raw pane content Poll last captured and when, so the
+// preview's frame cache can be warmed from a capture that was already paid for
+// rather than forking a second one (#380). ok is false until a poll has captured
+// successfully — a dead, attached, or never-polled session has nothing to give.
+//
+// Read under monitorMu, like the other monitor accessors, so it stays consistent
+// with a concurrent poll.
+func (t *Session) LastCapture() (raw string, at time.Time, ok bool) {
+	t.monitorMu.Lock()
+	defer t.monitorMu.Unlock()
+	return t.monitor.lastCapture, t.monitor.lastCaptureAt, !t.monitor.lastCaptureAt.IsZero()
+}
+
 // stashEffort lifts a hook record's effort onto the monitor. Sticky: an effort-less record
 // (a session that hasn't run a tool yet, a model without effort support) leaves the last
 // known level in place instead of blanking the chip. The record's own write rule already
@@ -264,6 +283,12 @@ func (t *Session) Poll() PaneState {
 		}
 		return PaneUnknown
 	}
+	// Keep the bytes this capture already cost. cleanForDetection below is lossy
+	// (it strips what classification must ignore), so the raw frame is retained
+	// as-is for the preview cache to harvest.
+	t.monitor.lastCapture = raw
+	t.monitor.lastCaptureAt = time.Now()
+
 	content := cleanForDetection(raw)
 	name := t.snapshotName()
 

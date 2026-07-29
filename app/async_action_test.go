@@ -39,7 +39,7 @@ func TestBeginAsyncAction_ArmsBusyAndWrapsResult(t *testing.T) {
 func TestAsyncActionDone_ClearsStateAndForwardsInner(t *testing.T) {
 	h := newCreateFormHome(t)
 	h.actionInFlight = true
-	h.menu.SetBusy("pushing…")
+	h.menu.SetBusy(ui.BusyAction, "pushing…")
 
 	_, cmd := h.Update(asyncActionDoneMsg{result: sentinelMsg{id: 9}})
 
@@ -65,7 +65,7 @@ func TestAsyncActionDone_NilInnerIsNoop(t *testing.T) {
 // in-flight state and hands back a command that wraps the action's result.
 func TestConfirmAsyncAction_ConfirmRunsOffThread(t *testing.T) {
 	h := newCreateFormHome(t)
-	h.confirmAsyncAction("Push?", "pushing…", func() tea.Msg { return sentinelMsg{id: 3} })
+	h.confirmAction("Push?", "pushing…", func() tea.Msg { return sentinelMsg{id: 3} })
 	require.Equal(t, stateConfirm, h.state)
 
 	_, cmd := h.handleConfirmState(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
@@ -79,13 +79,19 @@ func TestConfirmAsyncAction_ConfirmRunsOffThread(t *testing.T) {
 	assert.Equal(t, sentinelMsg{id: 3}, done.result)
 }
 
-// A confirm armed without a busy label keeps the legacy inline path: the action
-// runs synchronously on the loop and its result is returned directly (unwrapped),
-// with no in-flight state. Kill and other list-mutating confirms rely on this.
-func TestConfirmAction_NoLabelRunsInline(t *testing.T) {
+// instantAction is the one legal empty label, and it keeps the inline path: the
+// action runs synchronously on the loop and its result is returned directly
+// (unwrapped), with no in-flight state.
+//
+// This test used to assert the same thing about *any* unlabelled confirm, which is
+// how kill — six subprocesses and a recursive worktree delete — ended up running
+// inline with no feedback at all. The label is now a required parameter, so the
+// inline path is something an author opts into by name rather than something they
+// get by omission (#380).
+func TestConfirmAction_InstantActionRunsInline(t *testing.T) {
 	h := newCreateFormHome(t)
 	ran := false
-	h.confirmAction("Kill?", func() tea.Msg { ran = true; return sentinelMsg{id: 1} })
+	h.confirmAction("Quit?", instantAction, func() tea.Msg { ran = true; return sentinelMsg{id: 1} })
 
 	_, cmd := h.handleConfirmState(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
 
@@ -103,7 +109,7 @@ func TestInputGate_SwallowsMutatingKeysWhileBusy(t *testing.T) {
 	inst.SetStatus(session.Running)
 	h.list.AddInstance(inst)
 	h.actionInFlight = true
-	h.menu.SetBusy("pushing…")
+	h.menu.SetBusy(ui.BusyAction, "pushing…")
 
 	// A navigation key is allowed: it must not raise the busy notice.
 	pressKey(h, 'j')

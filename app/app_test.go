@@ -378,13 +378,13 @@ func TestRecoverLostInstances(t *testing.T) {
 	}
 
 	acted := func(inst *session.Instance, strikes map[*session.Instance]int) bool {
-		return len(recoverLostInstances(lost(inst), strikes)) > 0
+		return len(recoverLostInstances(lost(inst), strikes, nil)) > 0
 	}
 
 	t.Run("a live instance is left untouched and clears its strikes", func(t *testing.T) {
 		inst := newInst()
 		strikes := map[*session.Instance]int{inst: 1}
-		recovered := recoverLostInstances([]instanceMetaResult{{instance: inst, sessionLost: false}}, strikes)
+		recovered := recoverLostInstances([]instanceMetaResult{{instance: inst, sessionLost: false}}, strikes, nil)
 		require.Empty(t, recovered)
 		require.False(t, inst.Paused())
 		require.Zero(t, strikes[inst], "a live observation resets the dead-strike count")
@@ -400,8 +400,8 @@ func TestRecoverLostInstances(t *testing.T) {
 	t.Run("a live observation between misses resets the count", func(t *testing.T) {
 		inst := newInst()
 		strikes := map[*session.Instance]int{}
-		recoverLostInstances(lost(inst), strikes)                                                 // strike 1
-		recoverLostInstances([]instanceMetaResult{{instance: inst, sessionLost: false}}, strikes) // reset
+		recoverLostInstances(lost(inst), strikes, nil)                                                 // strike 1
+		recoverLostInstances([]instanceMetaResult{{instance: inst, sessionLost: false}}, strikes, nil) // reset
 		require.False(t, acted(inst, strikes), "strike 1 again after a reset must not recover")
 		require.Equal(t, 1, strikes[inst])
 	})
@@ -424,14 +424,14 @@ func TestRecoverLostInstances(t *testing.T) {
 		inst := newInst()
 		strikes := map[*session.Instance]int{}
 		for i := 0; i < lostSessionRecoverThreshold-1; i++ {
-			require.Empty(t, recoverLostInstances(lost(inst), strikes))
+			require.Empty(t, recoverLostInstances(lost(inst), strikes, nil))
 		}
-		out := recoverLostInstances(lost(inst), strikes) // threshold: the one attempt
+		out := recoverLostInstances(lost(inst), strikes, nil) // threshold: the one attempt
 		require.Len(t, out, 1)
 		require.Error(t, out[0].err, "an unstarted instance cannot be paused, so recovery fails")
 		// Subsequent ticks keep seeing it lost but must NOT re-attempt.
-		require.Empty(t, recoverLostInstances(lost(inst), strikes), "a failed recovery must not retry")
-		require.Empty(t, recoverLostInstances(lost(inst), strikes), "still no retry on the next tick")
+		require.Empty(t, recoverLostInstances(lost(inst), strikes, nil), "a failed recovery must not retry")
+		require.Empty(t, recoverLostInstances(lost(inst), strikes, nil), "still no retry on the next tick")
 	})
 
 	t.Run("an already-paused instance is skipped", func(t *testing.T) {
@@ -766,7 +766,7 @@ func TestConfirmKillDoubleTapAltKey(t *testing.T) {
 
 	t.Run("generic confirmAction never gets the alt key", func(t *testing.T) {
 		h, _ := newHomeWithInstance(t, config.DefaultConfig())
-		h.confirmAction("Push branch?", func() tea.Msg { return nil })
+		h.confirmAction("Push branch?", instantAction, func() tea.Msg { return nil })
 		require.NotNil(t, h.confirmationOverlay)
 		assert.Equal(t, "", h.confirmationOverlay.ConfirmAltKey)
 	})
@@ -856,7 +856,7 @@ func TestConfirmActionWithDifferentTypes(t *testing.T) {
 	t.Run("nil result yields a command carrying a nil message", func(t *testing.T) {
 		h := newHome()
 		actionCalled := false
-		_ = h.confirmAction("Test action?", func() tea.Msg {
+		_ = h.confirmAction("Test action?", instantAction, func() tea.Msg {
 			actionCalled = true
 			return nil
 		})
@@ -868,7 +868,7 @@ func TestConfirmActionWithDifferentTypes(t *testing.T) {
 	t.Run("error result is routed back through the runtime", func(t *testing.T) {
 		h := newHome()
 		expectedErr := fmt.Errorf("test error")
-		_ = h.confirmAction("Error action?", func() tea.Msg { return expectedErr })
+		_ = h.confirmAction("Error action?", instantAction, func() tea.Msg { return expectedErr })
 		msg := confirmAndCollect(t, h)
 		err, ok := msg.(error)
 		require.True(t, ok, "expected an error message, got %T", msg)
@@ -877,7 +877,7 @@ func TestConfirmActionWithDifferentTypes(t *testing.T) {
 
 	t.Run("custom message result is routed back through the runtime", func(t *testing.T) {
 		h := newHome()
-		_ = h.confirmAction("Custom message action?", func() tea.Msg { return instanceChangedMsg{} })
+		_ = h.confirmAction("Custom message action?", instantAction, func() tea.Msg { return instanceChangedMsg{} })
 		msg := confirmAndCollect(t, h)
 		_, ok := msg.(instanceChangedMsg)
 		assert.True(t, ok, "expected instanceChangedMsg but got %T", msg)
@@ -902,7 +902,7 @@ func TestMultipleConfirmationsDontInterfere(t *testing.T) {
 		h := newHome()
 
 		action1Called := false
-		_ = h.confirmAction("First action?", func() tea.Msg {
+		_ = h.confirmAction("First action?", instantAction, func() tea.Msg {
 			action1Called = true
 			return nil
 		})
@@ -917,7 +917,7 @@ func TestMultipleConfirmationsDontInterfere(t *testing.T) {
 
 		// A second, independent confirmation, this time confirmed.
 		action2Called := false
-		_ = h.confirmAction("Second action?", func() tea.Msg {
+		_ = h.confirmAction("Second action?", instantAction, func() tea.Msg {
 			action2Called = true
 			return fmt.Errorf("action2 error")
 		})
@@ -936,14 +936,14 @@ func TestMultipleConfirmationsDontInterfere(t *testing.T) {
 		h := newHome()
 
 		firstCalled := false
-		_ = h.confirmAction("First action?", func() tea.Msg {
+		_ = h.confirmAction("First action?", instantAction, func() tea.Msg {
 			firstCalled = true
 			return nil
 		})
 
 		// Replace it before confirming — the second action overwrites the slot.
 		secondCalled := false
-		_ = h.confirmAction("Second action?", func() tea.Msg {
+		_ = h.confirmAction("Second action?", instantAction, func() tea.Msg {
 			secondCalled = true
 			return nil
 		})
@@ -971,7 +971,7 @@ func TestConfirmActionSurfacesActionResult(t *testing.T) {
 	}
 
 	wantErr := fmt.Errorf("kill failed")
-	_ = h.confirmAction("Kill it?", func() tea.Msg { return wantErr })
+	_ = h.confirmAction("Kill it?", instantAction, func() tea.Msg { return wantErr })
 
 	assert.Equal(t, stateConfirm, h.state)
 	require.NotNil(t, h.pendingConfirmAction, "confirmAction must stash the action")
@@ -1251,7 +1251,7 @@ func TestConfirmActionCancelDoesNotRun(t *testing.T) {
 	}
 
 	ran := false
-	_ = h.confirmAction("Kill it?", func() tea.Msg { ran = true; return nil })
+	_ = h.confirmAction("Kill it?", instantAction, func() tea.Msg { ran = true; return nil })
 
 	_, cmd := h.handleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("n")})
 	assert.Nil(t, cmd)

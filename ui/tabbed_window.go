@@ -2,9 +2,13 @@ package ui
 
 import (
 	"fmt"
+	"strings"
+	"time"
 
+	"github.com/ZviBaratz/atrium/hints"
 	"github.com/ZviBaratz/atrium/log"
 	"github.com/ZviBaratz/atrium/session"
+	"github.com/ZviBaratz/atrium/session/tmux"
 	"github.com/ZviBaratz/atrium/ui/theme"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -222,6 +226,82 @@ func (w *TabbedWindow) UpdateTerminal(instance *session.Instance) error {
 func (w *TabbedWindow) ResetPreviewToNormalMode(instance *session.Instance) error {
 	return w.preview.ResetToNormalMode(instance)
 }
+
+// CopyableContent returns the active tab's content as plain text, and a label
+// naming what it is, for the copy action (#380). "Plain" is the whole point: the
+// alt-screen makes a mouse selection take borders and gutters with it, and the
+// rendered diff is colorized, tab-expanded and truncated to the pane, so neither
+// is worth pasting anywhere.
+//
+//   - Diff tab: the raw `git diff` output the pane rendered FROM — or, in comment
+//     mode, just the rows the cursor has selected.
+//   - Preview / Terminal: the captured pane with its ANSI stripped.
+//
+// ok is false when there is nothing to copy (an empty diff, a pane that has never
+// captured, a fallback state), so the caller can say so rather than copying "".
+func (w *TabbedWindow) CopyableContent(instance *session.Instance) (text, what string, ok bool) {
+	switch w.activeTab {
+	case DiffTab:
+		if sel := w.diff.SelectedText(); sel != "" {
+			return sel, "selected diff lines", true
+		}
+		if instance == nil {
+			return "", "", false
+		}
+		stats := instance.GetDiffStats()
+		if stats == nil || strings.TrimSpace(stats.Content) == "" {
+			return "", "", false
+		}
+		return stats.Content, "diff", true
+	case TerminalTab:
+		content, live := w.terminal.LiveContent()
+		if !live {
+			return "", "", false
+		}
+		return hints.StripANSI(content), "terminal", true
+	default:
+		content, live := w.preview.LiveContent()
+		if !live {
+			return "", "", false
+		}
+		return hints.StripANSI(content), "pane", true
+	}
+}
+
+// TerminalCaptureTarget exposes the terminal pane's shell session for the app's
+// background capture chain. ok=false means the shell has yet to be created —
+// EnsureTerminalSession does that, off the update thread.
+func (w *TabbedWindow) TerminalCaptureTarget(instance *session.Instance) (*tmux.Session, string, bool) {
+	return w.terminal.CaptureTarget(instance)
+}
+
+// EnsureTerminalSession creates the instance's shell session. Runs on the capture
+// goroutine: it starts a tmux session, which is exactly the work that must not
+// happen inside Update.
+func (w *TabbedWindow) EnsureTerminalSession(instance *session.Instance) (string, error) {
+	return w.terminal.EnsureSession(instance)
+}
+
+// HasTerminalSession reports whether a shell session has been created for
+// instance. Exposed so a test can observe *when* creation happens — the pane's own
+// sessions are built with the real executor, so a fake one cannot see them.
+func (w *TabbedWindow) HasTerminalSession(instance *session.Instance) bool {
+	_, _, ok := w.terminal.CaptureTarget(instance)
+	return ok
+}
+
+// CloseTerminal tears down every shell session the terminal pane opened.
+func (w *TabbedWindow) CloseTerminal() { w.terminal.Close() }
+
+// ApplyTerminalFrame installs a background shell capture (main thread).
+func (w *TabbedWindow) ApplyTerminalFrame(key, content string, err error, at time.Time) {
+	w.terminal.ApplyFrame(key, content, err, at)
+}
+
+// NoteFrameTargetChange tells the preview pane its frame source just changed, so
+// the staleness marker measures from now rather than from a frame captured for a
+// different session (or before a stint on a tab that captures nothing).
+func (w *TabbedWindow) NoteFrameTargetChange(now time.Time) { w.preview.NoteTargetChange(now) }
 
 // PreviewLiveContent exposes the preview pane's live text for hint mode.
 func (w *TabbedWindow) PreviewLiveContent() (string, bool) {
