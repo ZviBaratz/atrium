@@ -167,6 +167,10 @@ var Registry = []Entry{
 		key.WithKeys("ctrl+r"),
 		key.WithHelp("ctrl-r", "resume all"),
 	)},
+	{Name: KeyUndoKill, Binding: key.NewBinding(
+		key.WithKeys("U"),
+		key.WithHelp("U", "undo the last kill"),
+	)},
 	{Name: KeyMultiSelect, Binding: key.NewBinding(
 		key.WithKeys("v"),
 		key.WithHelp("v", "multi-select"),

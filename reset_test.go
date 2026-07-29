@@ -10,12 +10,15 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/ZviBaratz/atrium/cmd/cmd_test"
 	"github.com/ZviBaratz/atrium/config"
+	"github.com/ZviBaratz/atrium/internal/undo"
 	"github.com/ZviBaratz/atrium/session"
+	"github.com/ZviBaratz/atrium/session/git"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -146,4 +149,70 @@ func TestRunReset_AbortsWhenStopDaemonFails(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "nothing was deleted")
 	assert.Len(t, storedInstances(t), 1, "an aborted reset must not delete stored instances")
+}
+
+// gitRepoWithRetainedBranch builds a repo holding a killed session's commits under
+// a retention ref, and returns the journal entry naming it.
+func gitRepoWithRetainedBranch(t *testing.T, title string) (undo.Entry, string) {
+	t.Helper()
+	run := func(dir string, args ...string) string {
+		cmd := exec.CommandContext(context.Background(), "git", args...)
+		cmd.Dir = dir
+		out, err := cmd.CombinedOutput()
+		require.NoErrorf(t, err, "git %v: %s", args, out)
+		return strings.TrimSpace(string(out))
+	}
+	repo := filepath.Join(t.TempDir(), "repo")
+	run(t.TempDir(), "init", repo)
+	run(repo, "config", "user.email", "test@example.com")
+	run(repo, "config", "user.name", "Test User")
+	require.NoError(t, os.WriteFile(filepath.Join(repo, "README.md"), []byte("hello\n"), 0o644))
+	run(repo, "add", ".")
+	run(repo, "commit", "-m", "initial")
+	head := run(repo, "rev-parse", "HEAD")
+
+	entry, err := undo.Write(undo.Entry{
+		Title: title, Display: title, Path: repo, RepoPath: repo,
+		Branch: "zvi/" + title, SHA: head,
+		Snapshot: []byte(`{"title":"` + title + `"}`),
+	})
+	require.NoError(t, err)
+	run(repo, "update-ref", entry.Ref, head)
+	return entry, repo
+}
+
+// TestRunReset_ReleasesRetainedBranches. Nothing else in reset can reach these:
+// CleanupWorktrees enumerates branches from `git worktree list`, which cannot see a
+// ref outside refs/heads. Left behind, they would keep every killed session's
+// objects alive in the user's repositories forever, gc-immune and with no record
+// left to expire them — a permanent leak caused by the command whose entire job is
+// cleanup.
+func TestRunReset_ReleasesRetainedBranches(t *testing.T) {
+	dir := sandboxDataDir(t)
+	seedInstance(t, dir)
+	entry, repo := gitRepoWithRetainedBranch(t, "fix-auth")
+
+	require.NoError(t, runReset(context.Background(), noopExec()))
+
+	_, ok := git.RefExists(context.Background(), repo, entry.Ref)
+	assert.False(t, ok, "reset must release the retained branch")
+	stored, err := undo.Load()
+	require.NoError(t, err)
+	assert.Empty(t, stored, "and clear the journal that named it")
+}
+
+// TestRunReset_SurvivesARepositoryThatMoved — the retained refs live in the user's
+// projects, which reset does not own. A project that has since been renamed or
+// deleted must not fail a reset whose real work is already done.
+func TestRunReset_SurvivesARepositoryThatMoved(t *testing.T) {
+	dir := sandboxDataDir(t)
+	seedInstance(t, dir)
+	_, repo := gitRepoWithRetainedBranch(t, "fix-auth")
+	require.NoError(t, os.RemoveAll(repo))
+
+	require.NoError(t, runReset(context.Background(), noopExec()))
+
+	stored, err := undo.Load()
+	require.NoError(t, err)
+	assert.Empty(t, stored, "the record goes even when its repository cannot be reached")
 }

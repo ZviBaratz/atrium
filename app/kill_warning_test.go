@@ -1,8 +1,11 @@
 package app
 
 import (
+	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/ZviBaratz/atrium/internal/undo"
 
 	"github.com/ZviBaratz/atrium/session"
 	"github.com/ZviBaratz/atrium/session/git"
@@ -22,16 +25,29 @@ func flattenOverlay(s string) string {
 // TestKillDataWarning covers the kill-confirmation suffix across the four states of
 // the branch: clean, dirty-only, unpushed-only (the paused auto-WIP case reads here,
 // Dirty=false), and both. The count is pluralized and the consequence is spelled out
-// so the danger is explicit. The count is the *unpushed* one — kill runs
+// so the stakes are explicit. The count is the *unpushed* one — kill runs
 // `git branch -D`, which only destroys commits that exist nowhere else.
+//
+// The consequence is a recovery window rather than a loss because kill is undoable
+// (#391); the clause is built from the registered key and undo.TTL, so a rebinding
+// or a retention change cannot leave it lying.
 func TestKillDataWarning(t *testing.T) {
 	require.Equal(t, "", killDataWarning(false, 0))
-	require.Equal(t, " (has uncommitted changes — deleting discards this work)", killDataWarning(true, 0))
-	require.Equal(t, " (has 1 unpushed commit — deleting discards this work)", killDataWarning(false, 1))
-	require.Equal(t, " (has 3 unpushed commits — deleting discards this work)", killDataWarning(false, 3))
+	require.Equal(t, " (has uncommitted changes — U restores it for 7 days)", killDataWarning(true, 0))
+	require.Equal(t, " (has 1 unpushed commit — U restores it for 7 days)", killDataWarning(false, 1))
+	require.Equal(t, " (has 3 unpushed commits — U restores it for 7 days)", killDataWarning(false, 3))
 	require.Equal(t,
-		" (has uncommitted changes and 2 unpushed commits — deleting discards this work)",
+		" (has uncommitted changes and 2 unpushed commits — U restores it for 7 days)",
 		killDataWarning(true, 2))
+}
+
+// TestUndoWindowClauseIsDerived pins both halves to their source. A hand-typed "U"
+// or "7 days" would go stale silently the moment either changed — the exact shape
+// ui/key_prose_test.go exists to catch on the key side, with no equivalent for a
+// duration.
+func TestUndoWindowClauseIsDerived(t *testing.T) {
+	require.Contains(t, undoWindowClause(), undoKeyLabel())
+	require.Contains(t, undoWindowClause(), strconv.Itoa(int(undo.TTL.Hours()/24)))
 }
 
 // TestSessionsWithUnpushedWork verifies the batch-kill aggregate counts a session
@@ -74,7 +90,7 @@ func TestConfirmKill_WarnsUnpushedCommits(t *testing.T) {
 
 	require.Equal(t, stateConfirm, h.state)
 	require.NotNil(t, h.confirmationOverlay)
-	require.Contains(t, flattenOverlay(h.confirmationOverlay.Render()), "has 1 unpushed commit — deleting discards this work")
+	require.Contains(t, flattenOverlay(h.confirmationOverlay.Render()), "has 1 unpushed commit — U restores it for 7 days")
 }
 
 // TestConfirmKill_SilentWhenAllCommitsPushed is the regression test for the bug

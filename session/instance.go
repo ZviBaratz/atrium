@@ -304,6 +304,16 @@ type Instance struct {
 	// so it is in-memory only and never serialized. Guarded by mu.
 	awaitingSetup bool
 
+	// conversationResumed / conversationKnown record which way the last relaunch
+	// went: whether the agent came back into its prior conversation, and whether
+	// startResuming could tell at all. Only that function knows — it asks the
+	// transcript adapter and then elects `--continue` or a blank launch — and undo's
+	// post-restore notice is the one place that has to report it. In-memory only:
+	// it describes a single relaunch, not the session. Both guarded by mu, because
+	// the relaunch runs off the UI thread that reads them. See ResumedConversation.
+	conversationResumed bool
+	conversationKnown   bool
+
 	// unread marks a Ready session the user has not visited since the agent last
 	// finished a turn. Set by SetStatus on a transition into Ready; cleared by
 	// MarkSeen (attach or selection dwell). Persisted in state.json. Guarded by mu.
@@ -642,10 +652,39 @@ func (i *Instance) reattach() {
 // tmux.resumeCommand, so their behavior is unchanged.
 func (i *Instance) startResuming(ts *tmux.Session, workDir string) error {
 	resumable, supported := transcript.HasResumable(i.Program, workDir, transcript.Options{Root: i.claudeConfigDir})
+	// Record which way this went before acting on it: undo's post-restore notice
+	// has to tell the user whether the conversation came back, and this is the only
+	// place that knows. supported == false stays unknown rather than false — the
+	// agent's own resume probe decides, out of our sight, and reporting a guess as
+	// a fact is the thing the confirmation copy already refuses to do.
+	i.noteConversationOutcome(resumable, supported)
 	if supported && !resumable {
 		return ts.Start(workDir)
 	}
 	return ts.StartContinue(workDir)
+}
+
+// noteConversationOutcome records what startResuming learned from the transcript
+// adapter, so a later restore can report it.
+func (i *Instance) noteConversationOutcome(resumable, supported bool) {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	i.conversationKnown = supported
+	i.conversationResumed = supported && resumable
+}
+
+// ResumedConversation reports whether the agent's last relaunch came back into its
+// prior conversation, and whether that is knowable at all.
+//
+// known is false in two shapes that must not be confused with "started fresh":
+// nothing has relaunched yet, and an agent with no native-transcript adapter
+// (codex/gemini), whose own resume probe decides after we have stopped looking.
+// A caller that flattens the two would tell the user their conversation was lost
+// on the strength of not having looked.
+func (i *Instance) ResumedConversation() (resumed, known bool) {
+	i.mu.RLock()
+	defer i.mu.RUnlock()
+	return i.conversationResumed, i.conversationKnown
 }
 
 // recoverInPlace brings a loaded instance back online after its tmux session

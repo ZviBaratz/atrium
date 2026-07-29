@@ -414,7 +414,12 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Handle errors from confirmation actions
 		return m, m.handleError(msg)
 	case instanceChangedMsg:
-		// Handle instance changed after confirmation action
+		// Handle instance changed after confirmation action. A carried notice (the
+		// kill teardown's "U to undo") flashes alongside the refresh, because a
+		// recovery nobody can see is not a recovery.
+		if msg.notice != "" {
+			return m, tea.Batch(m.instanceChanged(), m.flashNotice(msg.notice, ui.NoticeInfo))
+		}
 		return m, m.instanceChanged()
 	case batchResumeDoneMsg:
 		// A confirmed "resume all" finished off the UI thread. Persist here on the
@@ -456,8 +461,12 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// modal naming which sessions survived and why.
 		msg = m.applyBatchKill(msg)
 		return m, m.finishBatch(msg.killedInstances, len(msg.failures) > 0,
-			fmt.Sprintf("killed %d session%s", msg.killed, plural(msg.killed)),
+			batchKilledNotice(msg.killed, msg.undoable),
 			msg.summary())
+	case undoDoneMsg:
+		// A confirmed undo finished off the UI thread. The rows, the persist and the
+		// journal bookkeeping all land here, where touching m.list is safe.
+		return m, m.handleUndoDone(msg)
 	case asyncActionDoneMsg:
 		// An off-UI-thread action (see beginAsyncAction) finished. Clear the
 		// in-flight state and progress row on the main loop, then feed the inner
@@ -1168,6 +1177,8 @@ func (m *home) dispatchAction(name keys.KeyName) (tea.Model, tea.Cmd) {
 		return m.resumeSelectedKey()
 	case keys.KeyResumeAll:
 		return m, m.resumeAll()
+	case keys.KeyUndoKill:
+		return m, m.undoLastKill()
 	case keys.KeyPauseAll:
 		return m, m.pauseAll()
 	case keys.KeyEnter, keys.KeyAttachToggle:
@@ -1199,6 +1210,11 @@ var dispatchExempt = map[keys.KeyName]string{
 // is in flight (see the guard in handleKeyPress). The allowlist is deliberately
 // narrow: pure navigation, scrolling, pane sizing, tab switching, list collapse,
 // and help — nothing that mutates a session, opens an overlay, or drives tmux/git.
+//
+// KeyUndoKill's absence is load-bearing rather than an oversight: this gate is the
+// only thing making an undo single-flight. Two presses before the restore returns
+// would run the same record twice, and the second run would recreate a branch and
+// a worktree the first one has already claimed.
 func keyAllowedWhileBusy(name keys.KeyName) bool {
 	switch name {
 	case keys.KeyHelp,

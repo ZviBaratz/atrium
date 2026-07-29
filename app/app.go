@@ -490,6 +490,11 @@ type home struct {
 	// off the UI thread via beginAsyncAction. Either way its returned message is fed
 	// back through Update so errors surface in the error box.
 	pendingConfirmAction tea.Cmd
+	// undoRefused holds the journal records this run has already been refused, so
+	// the undo key steps past them instead of re-offering the same refusal every
+	// press. In memory on purpose: a relaunch re-offers them, because the reason
+	// (a moved repository, a reclaimed name) may have gone away in the meantime.
+	undoRefused map[string]bool
 	// pendingConfirmBusyLabel is the progress label ("pushing…", "merging PR #12…")
 	// for a confirm action that should run off the UI thread. Empty means run the
 	// action inline (the legacy synchronous path). Set by confirmAction.
@@ -673,7 +678,18 @@ func (m *home) Init() tea.Cmd {
 		m.agentCheckCmd(),    // background agent CLI detection
 		m.releaseNotesCmd(),  // nil (inert) is fine: tea.Batch skips nil cmds
 		m.startProjectScan(), // nil (disabled) is likewise skipped
+		m.sweepUndoCmd(),     // release undo records past their horizon
 	)
+}
+
+// sweepUndoCmd expires the undo journal off the render path. A data dir left
+// closed for a month has records to release, and this is the one moment we know
+// the sweep has not run in a while.
+func (m *home) sweepUndoCmd() tea.Cmd {
+	return func() tea.Msg {
+		m.sweepUndoJournal(time.Now())
+		return nil
+	}
 }
 
 func (m *home) View() string {

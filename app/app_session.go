@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/ZviBaratz/atrium/config"
+	"github.com/ZviBaratz/atrium/internal/undo"
 	"github.com/ZviBaratz/atrium/keys"
 	"github.com/ZviBaratz/atrium/log"
 	"github.com/ZviBaratz/atrium/session"
@@ -766,7 +767,10 @@ func (m *home) pauseAll() tea.Cmd {
 // living in it — a local .env, a build cache, downloaded dependencies — go with it,
 // and resume rebuilds the worktree from the branch. The README documents only the
 // carry_files slice of this (those entries are re-seeded on every Setup, resume
-// included); nothing names the general loss, and no undo exists.
+// included); nothing names the general loss, and nothing brings those files back.
+// Undo (#391) does not change that: it restores the branch, the worktree and the
+// agent, but a gitignored file was never in a commit for it to restore from — which
+// is why the undo confirmation names the same loss in its own words.
 //
 // Unconditional, unlike killDataWarning: a pause that completes removes the worktree,
 // so only the magnitude of the loss varies, and measuring that would mean a
@@ -850,6 +854,9 @@ type batchKillDoneMsg struct {
 	killed          int
 	killedInstances []*session.Instance
 	failures        []killFailure
+	// undoable counts the entries the journal actually recorded, so the notice can
+	// only advertise a recovery that exists.
+	undoable int
 	// armed is every instance the confirm-time hook marked retiring, carried back so
 	// the handler can clear all of them. It is not the same set as torndown: an
 	// instance refused for a base-repo branch checkout is recorded as a failure and
@@ -940,11 +947,21 @@ func (m *home) forgetInstance(inst *session.Instance) {
 // echo is the one the user pressed — hard-coding the chord would print "(or ctrl+x)"
 // at someone who never pressed it.
 func (m *home) killInstances(insts []*session.Instance, message string, altConfirmKey string) tea.Cmd {
+	// One ID for the whole run, minted when the batch is armed rather than inside
+	// the loop, so every entry it writes belongs to the same undoable action.
+	batchID, err := undo.NewID(time.Now())
+	if err != nil {
+		log.WarningLog.Printf("undo: cannot mint a batch id, this kill will not be undoable: %v", err)
+	}
 	// The teardown I/O only. Everything that touches the model — storage, the row,
 	// per-instance bookkeeping — is applied by the batchKillDoneMsg handler on the
 	// update thread. Before the split this whole loop ran inline on that thread with
 	// no progress row at all: ten sessions is ~60 subprocesses and ten recursive
 	// worktree deletes, so the UI simply stopped for seconds (#380).
+	//
+	// Journalling belongs here rather than in the handler for the same reason the
+	// rest of it does: it is git I/O, and it has to happen before Kill destroys what
+	// it records.
 	io := func() tea.Msg {
 		res := batchKillDoneMsg{armed: insts}
 		for _, inst := range insts {
@@ -963,6 +980,13 @@ func (m *home) killInstances(insts []*session.Instance, message string, altConfi
 						fmt.Errorf("branch checked out in the main repo")})
 					continue
 				}
+			}
+			// Record and pin before the session stops existing, exactly as the
+			// single-kill path does — visual-mode `x` tears down everything marked,
+			// which is the kill an undo is most wanted for. One batch ID groups the
+			// whole run so undoing it reverses the one action the user took.
+			if _, undoable := m.journalKill(inst, batchID); undoable {
+				res.undoable++
 			}
 			// Tear the session down (tmux + worktree + branch). A failure is recorded
 			// naming what leaked, but the row still goes: the session is retired either
@@ -1627,6 +1651,14 @@ func (m *home) startNewSession(title, path string, direct bool, program, branch,
 	agyAccName, agyAccDir, _ := m.appConfig.ResolveAgyAccount(remoteURL, path)
 	instance.SetAgyAccount(agyAccName, agyAccDir)
 
+	// Creating a session reclaims an identity a killed one may still hold a record
+	// for, so that record stops being offered. Creation wins deliberately: a user
+	// who killed a session to free its name must not be locked out of the name, and
+	// an undo that fired afterwards would rebuild onto a live tmux session. The
+	// retention ref is left alone, so the refusal path can still point at it and the
+	// commits stay recoverable by hand until the horizon passes.
+	m.supersedeUndoFor(instance)
+
 	// Create the list row only now, on submit. AddInstance may insert it mid-list under its
 	// repo group, so select it by identity.
 	finalizer := m.list.AddInstance(instance)
@@ -1787,25 +1819,39 @@ func (m *home) cancelPromptOverlay() tea.Cmd {
 }
 
 // killDataWarning returns a parenthetical suffix for the kill confirmation that
-// warns when killing would discard local work, or "" when nothing is at risk.
+// names the local work a kill puts at stake, or "" when there is none.
+//
 // unpushed is the count of commits that exist nowhere but this branch: kill runs
 // `git branch -D` and never touches origin, so a pushed commit survives the session
 // and must not be warned about — a branch sitting in an open PR loses nothing.
 // Pause folds its auto-WIP commit in via noteAutoPauseCommit, so a paused-then-dirty
-// session reads Dirty=false with unpushed>=1. Every non-empty case names the
-// consequence: kill removes the worktree and `branch -D`s the branch, so uncommitted
-// changes are destroyed just as permanently as unpushed commits, with no user-facing
-// recovery path for either.
+// session reads Dirty=false with unpushed>=1.
+//
+// The consequence clause used to read "deleting discards this work", and that was
+// true for as long as kill was the one unrecoverable thing Atrium did. It is not
+// any more: the teardown commits what is uncommitted and pins the branch under a
+// retention ref, so the work comes back with the session (#391). What stays
+// off-screen at the moment of asking — and so what this still has to say — is that
+// the work exists and that the window is finite. The horizon is read from
+// undo.TTL rather than spelled out, so the sentence cannot outlive the constant.
 func killDataWarning(dirty bool, unpushed int) string {
 	switch {
 	case dirty && unpushed > 0:
-		return fmt.Sprintf(" (has uncommitted changes and %d unpushed commit%s — deleting discards this work)", unpushed, plural(unpushed))
+		return fmt.Sprintf(" (has uncommitted changes and %d unpushed commit%s — %s)",
+			unpushed, plural(unpushed), undoWindowClause())
 	case dirty:
-		return " (has uncommitted changes — deleting discards this work)"
+		return fmt.Sprintf(" (has uncommitted changes — %s)", undoWindowClause())
 	case unpushed > 0:
-		return fmt.Sprintf(" (has %d unpushed commit%s — deleting discards this work)", unpushed, plural(unpushed))
+		return fmt.Sprintf(" (has %d unpushed commit%s — %s)", unpushed, plural(unpushed), undoWindowClause())
 	}
 	return ""
+}
+
+// undoWindowClause names the key and the horizon a kill can be taken back within.
+// Both are derived — the key from the registry, the horizon from undo.TTL — so a
+// rebinding or a retention change cannot leave this sentence lying.
+func undoWindowClause() string {
+	return fmt.Sprintf("%s restores it for %d days", undoKeyLabel(), int(undo.TTL.Hours()/24))
 }
 
 // sessionsWithUnpushedWork counts how many of insts carry uncommitted changes or
@@ -1830,8 +1876,12 @@ func sessionsWithUnpushedWork(insts []*session.Instance) int {
 // model half is applyKillDone.
 //
 // Shared by the kill confirmation and the post-merge cleanup offer (#384) so both
-// retire a session by exactly the same path.
-func killIOCmd(inst *session.Instance) tea.Cmd {
+// retire a session by exactly the same path — which is also why the undo journal
+// is written here rather than at either call site: a session recoverable from one
+// entry point and not the other would be the worse kind of surprise. It takes the
+// model only to reach that journal (the data dir and the sweep's context); it
+// touches nothing else on it, and must not, because it runs off the update thread.
+func killIOCmd(m *home, inst *session.Instance) tea.Cmd {
 	return func() tea.Msg {
 		// Refuse to kill only when the branch is checked out in the primary repo
 		// itself (deleting it would strand the user's main checkout on a dangling
@@ -1855,7 +1905,14 @@ func killIOCmd(inst *session.Instance) tea.Cmd {
 					inst.DisplayName())}
 			}
 		}
-		return killDoneMsg{outcome: killOutcome{inst: inst, err: inst.Kill()}}
+		// Record what this kill is about to destroy, and pin the branch's commits so
+		// `branch -D` cannot take them with it. It runs after the refusal above (a
+		// kill that does not happen needs no record) and before the teardown it
+		// describes — the only ordering that matters, since Kill is what destroys
+		// them. Never fatal: an unrecordable kill is still a kill, and the notice
+		// simply does not advertise a recovery that is not there.
+		_, undoable := m.journalKill(inst, "")
+		return killDoneMsg{outcome: killOutcome{inst: inst, err: inst.Kill()}, undoable: undoable}
 	}
 }
 
@@ -1913,6 +1970,10 @@ func (m *home) endTeardown(insts []*session.Instance) {
 type killDoneMsg struct {
 	outcome killOutcome
 	refused error
+	// undoable reports that the journal recorded this kill, so the notice can only
+	// advertise a recovery that exists. Decided in the I/O half, next to the
+	// journalKill that settled it, and read by applyKillDone.
+	undoable bool
 }
 
 // applyKillDone lands a single kill on the model: preview-terminal cleanup, the
@@ -1950,7 +2011,9 @@ func (m *home) applyKillDone(msg killDoneMsg) tea.Cmd {
 		return m.handleError(fmt.Errorf("removed '%s' but its saved state could not be cleared: %w",
 			inst.DisplayName(), storeErr))
 	}
-	return func() tea.Msg { return instanceChangedMsg{} }
+	return func() tea.Msg {
+		return instanceChangedMsg{notice: killedNotice(inst.DisplayName(), msg.undoable)}
+	}
 }
 
 // confirmKill shows the kill-confirmation overlay for inst and stashes the
@@ -1971,7 +2034,7 @@ func (m *home) confirmKill(inst *session.Instance) tea.Cmd {
 	// session: the in-session chord and the auto-open path both kill a specific one
 	// (see the doc above). pausing…/resuming… stay object-less for the opposite
 	// reason — they always act on the highlighted row. Don't "fix" that asymmetry.
-	arm, action := m.armTeardown([]*session.Instance{inst}, killIOCmd(inst))
+	arm, action := m.armTeardown([]*session.Instance{inst}, killIOCmd(m, inst))
 	cmd := m.confirmAction(message, busyLabel(fmt.Sprintf("killing '%s'…", inst.DisplayName())), action)
 	m.armOnConfirm(arm)
 	// Kill is the one destructive confirmation, so it alone wears the danger
@@ -2004,7 +2067,7 @@ func (m *home) offerCleanupAfterMerge(inst *session.Instance, number int) bool {
 	if stats := inst.GetDiffStats(); stats != nil {
 		message += killDataWarning(stats.Dirty, stats.Unpushed)
 	}
-	arm, action := m.armTeardown([]*session.Instance{inst}, killIOCmd(inst))
+	arm, action := m.armTeardown([]*session.Instance{inst}, killIOCmd(m, inst))
 	m.confirmAction(message, busyLabel(fmt.Sprintf("killing '%s'…", inst.DisplayName())), action)
 	m.armOnConfirm(arm)
 	return true

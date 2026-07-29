@@ -56,6 +56,7 @@ func TestGlobalKeyStringsMap_GoldenInventory(t *testing.T) {
 		"ctrl+p":     KeyPauseAll,
 		"r":          KeyResume,
 		"ctrl+r":     KeyResumeAll,
+		"U":          KeyUndoKill,
 		"P":          KeySubmit,
 		"c":          KeyCreate,
 		"m":          KeyMerge,

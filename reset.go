@@ -7,6 +7,7 @@ import (
 	cmd2 "github.com/ZviBaratz/atrium/cmd"
 	"github.com/ZviBaratz/atrium/config"
 	"github.com/ZviBaratz/atrium/daemon"
+	"github.com/ZviBaratz/atrium/internal/undo"
 	"github.com/ZviBaratz/atrium/log"
 	"github.com/ZviBaratz/atrium/session"
 	"github.com/ZviBaratz/atrium/session/git"
@@ -87,5 +88,38 @@ func runReset(ctx context.Context, cmdExec cmd2.Executor) error {
 	}
 	fmt.Println("Worktrees have been cleaned up")
 
+	// The undo journal and the retention refs it names must go too, and nothing
+	// above can reach them: CleanupWorktrees enumerates branches from
+	// `git worktree list`, which cannot see a ref outside refs/heads. Left behind,
+	// those refs would keep every killed session's objects alive in the user's
+	// repositories forever, gc-immune, with no record left to expire them — a
+	// permanent leak caused by the command whose entire job is cleanup.
+	//
+	// Best-effort: a repository that has since moved must not fail a reset whose
+	// real work is already done.
+	dropped := 0
+	if err := undo.Clear(func(e undo.Entry) {
+		if e.Ref == "" || e.RepoPath == "" {
+			return
+		}
+		if derr := git.DeleteRef(ctx, e.RepoPath, e.Ref); derr != nil {
+			log.WarningLog.Printf("reset: could not drop retention ref %s in %s: %v", e.Ref, e.RepoPath, derr)
+			return
+		}
+		dropped++
+	}); err != nil {
+		log.WarningLog.Printf("reset: could not clear the undo journal: %v", err)
+	}
+	fmt.Printf("Undo journal has been cleared; %d retained branch ref%s released\n", dropped, plural(dropped))
+
 	return nil
+}
+
+// plural is the "s" suffix for a count. app has its own; reset.go is package main
+// and cannot borrow it.
+func plural(n int) string {
+	if n == 1 {
+		return ""
+	}
+	return "s"
 }
