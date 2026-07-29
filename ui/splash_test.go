@@ -106,21 +106,31 @@ func TestOverlayCenterComposites(t *testing.T) {
 }
 
 // fieldGlyphs are glyphs that only the splash field emits — none appear in the
-// wordmark art (box-drawing + ░) or the onboarding message — so their presence in
-// a stripped render proves the field engaged, and their absence proves the plain
-// fallback did.
+// wordmark art (box-drawing + ░), the panel border, or the onboarding message — so
+// their presence in a stripped render proves the field engaged, and their absence
+// proves the plain fallback did.
 //
-// It is the tunnel's mark, because the tunnel is what TestMain pins. That is a
-// real coupling and worth stating: this probe reads whatever variant the
-// String()-path tests resolve to, and each of the three has its own vocabulary —
-// rain draws katakana, ripple the density ramp, and the tunnel exactly one glyph,
-// since its lumRange is 1 and every lit cell is a full-weight mark shaded purely
-// by colour. Re-pin TestMain and this must move with it. The tunnel is also the
-// variant that makes the probe honest at every size: its wall lights 81–85% of
-// the pane across the range these tests render (measured 80.8% at 50×18, 82.7% at
-// 80×30, 85.3% at 240×60), so "no field glyphs" cannot quietly mean "the field
-// rendered, somewhere else".
-const fieldGlyphs = "@"
+// It is the punctuation tail of fresco's shared density ramp (" .·:;+=*oO0@"),
+// deliberately not the whole ramp. The ramp's alphanumeric rungs (o, O, 0) are
+// excluded because the onboarding message is prose — "No agents running yet"
+// already contains an 'o', which would satisfy the probe with the field switched
+// off entirely. '·' and '.' and ':' are excluded for the same reason one level out:
+// '·' is Atrium's own separator glyph. What is left cannot be produced by anything
+// but the field.
+//
+// This used to be "@" alone, on the stated grounds that the tunnel — what TestMain
+// pins — had lumRange 1 and so drew every lit cell as one full-weight mark. fresco
+// v1.3.0 retuned the tunnel to lumRange 0.75 so the wall takes the glyph ramp
+// (o → O → 0 → @) and reads as a textured surface; measured, it now emits '@' on
+// exactly 0% of cells at every size these tests render, and all three probes failed.
+// That is the coupling the old comment warned about, arriving from upstream rather
+// than from a re-pin.
+//
+// The set above is chosen to retire that coupling rather than re-tighten it: every
+// shipped variant emits at least one of these, measured at both 50×18 and 80×30
+// (tunnel ~22% of cells, ripple ~25%, galaxy ~47%, aurora ~14%, rain ~2%), so
+// re-pinning TestMain no longer requires moving this constant.
+const fieldGlyphs = ";+=*@"
 
 // TestPreviewSplashStringBounds drives the real idle path end to end
 // (UpdateContent(nil) → setSplashState → String) and locks the #251 box
