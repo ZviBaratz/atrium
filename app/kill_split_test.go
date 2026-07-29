@@ -63,7 +63,7 @@ func TestKill_RunsOffTheUpdateThreadBehindItsLabel(t *testing.T) {
 	require.Equal(t, "killing 'doomed'…", h.pendingConfirmBusyLabel,
 		"the kill must name its target — this dialog need not target the selected row")
 
-	_, cmd := h.handleConfirmState(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+	_, cmd := h.handleConfirmState(textMsg("y"))
 	require.True(t, h.actionInFlight, "a labelled confirm runs off the update thread")
 	require.Contains(t, h.menu.String(), "killing", "and shows that label while it runs")
 
@@ -116,7 +116,7 @@ func TestKill_RefusedTeardownLeavesTheSessionAlone(t *testing.T) {
 func TestKill_RetiringInstanceIsNotLostRecovered(t *testing.T) {
 	h, inst := newKillHome(t)
 	h.confirmKill(inst)
-	h.handleConfirmState(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+	h.handleConfirmState(textMsg("y"))
 	require.True(t, h.retiring[inst], "arming a kill must mark the session as retiring")
 
 	// The poll reports the pane as gone for as many ticks as the recovery
@@ -146,7 +146,7 @@ func TestBatchKill_MutatesTheModelOnlyOnTheMainThread(t *testing.T) {
 	require.Nil(t, cmd, "confirmAction stages the dialog and returns nil")
 	require.Equal(t, "killing 1 session…", h.pendingConfirmBusyLabel)
 
-	_, run := h.handleConfirmState(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+	_, run := h.handleConfirmState(textMsg("y"))
 	require.NotNil(t, run)
 	msg := run()
 	require.Len(t, h.list.GetInstances(), 1,
@@ -177,7 +177,7 @@ func TestKill_CancelledDialogArmsNothing(t *testing.T) {
 	h.confirmKill(inst)
 	require.Empty(t, h.retiring, "opening the dialog must not arm anything yet")
 
-	_, cmd := h.handleConfirmState(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
+	_, cmd := h.handleConfirmState(textMsg("n"))
 	require.Nil(t, cmd, "a declined kill runs nothing")
 	require.Empty(t, h.retiring, "and leaves no mark behind")
 
@@ -205,7 +205,7 @@ func TestKill_RefusedTeardownClearsTheRetiringMark(t *testing.T) {
 	h, inst := newKillHome(t)
 
 	h.confirmKill(inst)
-	h.handleConfirmState(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+	h.handleConfirmState(textMsg("y"))
 	require.True(t, h.retiring[inst], "control: the confirmed kill armed the mark")
 
 	h.applyKillDone(killDoneMsg{
@@ -235,7 +235,7 @@ func TestBatchKill_ArmsTheSameGuardsAsASingleKill(t *testing.T) {
 	h.killInstances([]*session.Instance{inst}, "Kill 1 session?", "x")
 	require.Empty(t, h.retiring, "staging the batch dialog must not arm anything")
 
-	h.handleConfirmState(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+	h.handleConfirmState(textMsg("y"))
 	require.True(t, h.retiring[inst], "a confirmed batch must mark its sessions retiring")
 
 	lost := []instanceMetaResult{{instance: inst, sessionLost: true}}
@@ -261,7 +261,7 @@ func TestBatchKill_ClearsEveryMarkItArmed(t *testing.T) {
 	h.state = stateDefault
 
 	h.killInstances([]*session.Instance{inst}, "Kill 1 session?", "x")
-	h.handleConfirmState(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+	h.handleConfirmState(textMsg("y"))
 	require.True(t, h.retiring[inst], "control: the batch armed the mark")
 
 	// A refusal: recorded as a failure, never torn down, row intact.

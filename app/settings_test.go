@@ -13,7 +13,6 @@ import (
 	"github.com/ZviBaratz/atrium/ui/overlay"
 	"github.com/ZviBaratz/atrium/ui/theme"
 	"github.com/charmbracelet/bubbles/spinner"
-	tea "github.com/charmbracelet/bubbletea"
 	xansi "github.com/charmbracelet/x/ansi"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -54,13 +53,13 @@ func TestSettingsPanel_OpenEditPersistClose(t *testing.T) {
 	h := newSettingsTestHome()
 
 	// ',' opens the settings panel.
-	_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(",")})
+	_, _ = h.handleKeyPress(textMsg(","))
 	require.Equal(t, stateSettings, h.state)
 	require.NotNil(t, h.settingsOverlay)
 
 	// Toggling a value persists it to config.json immediately, not on close.
 	require.True(t, h.settingsOverlay.OpenAt("auto_attach"))
-	_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeySpace})
+	_, _ = h.handleKeyPress(keyMsg(" "))
 	assert.False(t, h.appConfig.GetAutoAttach())
 	assert.False(t, config.LoadConfig().GetAutoAttach(),
 		"a change must reach disk immediately so it survives a crash")
@@ -70,11 +69,11 @@ func TestSettingsPanel_OpenEditPersistClose(t *testing.T) {
 	// layering is observable end to end, so it is asserted rather than worked around — the
 	// hint line says "esc back" and then "esc close" so the extra level is advertised
 	// (spec §7/§15).
-	_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyEsc})
+	_, _ = h.handleKeyPress(keyMsg("esc"))
 	require.Equal(t, stateSettings, h.state, "the first esc backs out of the rows pane")
 	require.NotNil(t, h.settingsOverlay)
 
-	_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyEsc})
+	_, _ = h.handleKeyPress(keyMsg("esc"))
 	assert.Equal(t, stateDefault, h.state)
 	assert.Nil(t, h.settingsOverlay)
 }
@@ -83,11 +82,11 @@ func TestSettingsPanel_ThemeChangeAppliesLive(t *testing.T) {
 	resetSettingsTestState(t)
 	h := newSettingsTestHome()
 
-	_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(",")})
+	_, _ = h.handleKeyPress(textMsg(","))
 	require.Equal(t, stateSettings, h.state)
 	require.True(t, h.settingsOverlay.OpenAt("theme"))
 
-	_, cmd := h.handleKeyPress(tea.KeyMsg{Type: tea.KeyRight})
+	_, cmd := h.handleKeyPress(keyMsg("right"))
 	assert.NotEqual(t, theme.DefaultThemeName, h.appConfig.Theme)
 	assert.Equal(t, h.appConfig.Theme, theme.Current().Name,
 		"the active theme must follow the config change without a restart")
@@ -99,9 +98,9 @@ func TestSettingsPanel_AutoYesTogglePropagatesToHomeFlag(t *testing.T) {
 	resetSettingsTestState(t)
 	h := newSettingsTestHome()
 
-	_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(",")})
+	_, _ = h.handleKeyPress(textMsg(","))
 	require.True(t, h.settingsOverlay.OpenAt("auto_yes"))
-	_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeySpace})
+	_, _ = h.handleKeyPress(keyMsg(" "))
 
 	assert.True(t, h.autoYes, "the home flag gates AutoYes on newly created instances")
 	assert.True(t, config.LoadConfig().AutoYes,
@@ -116,9 +115,9 @@ func TestSettingsPanel_SplashChangePersists(t *testing.T) {
 	resetSettingsTestState(t)
 	h := newSettingsTestHome()
 
-	_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(",")})
+	_, _ = h.handleKeyPress(textMsg(","))
 	require.True(t, h.settingsOverlay.OpenAt("splash"))
-	_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyRight})
+	_, _ = h.handleKeyPress(keyMsg("right"))
 
 	want := config.SplashVariants()[0]
 	assert.Equal(t, want, h.appConfig.GetSplash())
@@ -161,11 +160,11 @@ func TestGroupModeChange_ClustersList(t *testing.T) {
 
 	h := assembleHome(context.Background(), "claude", false, "v", "atr", cfg, st, storage, instances)
 
-	_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(",")})
+	_, _ = h.handleKeyPress(textMsg(","))
 	require.Equal(t, stateSettings, h.state)
 	require.True(t, h.settingsOverlay.OpenAt("group_mode"))
 
-	_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyRight})
+	_, _ = h.handleKeyPress(keyMsg("right"))
 	assert.Equal(t, config.GroupModeAccount, h.appConfig.GetGroupMode(),
 		"must report its row key so home can persist")
 
@@ -275,7 +274,7 @@ func TestSettingsPanel_HidesHintBarLikeOtherModals(t *testing.T) {
 	resetSettingsTestState(t)
 	h := newSettingsTestHome()
 
-	_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(",")})
+	_, _ = h.handleKeyPress(textMsg(","))
 	require.Equal(t, stateSettings, h.state)
 	assert.False(t, h.menuVisible(), "the panel renders its own key hints; the bar would be redundant")
 }
@@ -292,7 +291,7 @@ func TestSettingsPanel_GroupModeChipFollowsTheLiveList(t *testing.T) {
 	require.True(t, h.list.AccountClusteringVisible(), "the fixture must actually cluster")
 
 	openPanel := func() {
-		_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(",")})
+		_, _ = h.handleKeyPress(textMsg(","))
 		require.Equal(t, stateSettings, h.state)
 		require.True(t, h.settingsOverlay.OpenAt("group_mode"))
 	}
@@ -301,8 +300,8 @@ func TestSettingsPanel_GroupModeChipFollowsTheLiveList(t *testing.T) {
 	// leave h.state == stateSettings, so the next ',' is routed INTO the still-open panel and the
 	// overlay is never rebuilt.
 	closePanel := func() {
-		_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyEsc}) // rows pane -> rail
-		_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyEsc}) // rail -> closed
+		_, _ = h.handleKeyPress(keyMsg("esc")) // rows pane -> rail
+		_, _ = h.handleKeyPress(keyMsg("esc")) // rail -> closed
 		require.Nil(t, h.settingsOverlay)
 	}
 
@@ -342,9 +341,9 @@ func TestSettingsPanel_GroupModeChipTracksTheListInTheSameFrame(t *testing.T) {
 		h.list.SetGroupMode(config.GroupModeRepo)
 		require.False(t, h.list.AccountClusteringVisible(), "repo mode clusters nothing")
 
-		_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(",")})
+		_, _ = h.handleKeyPress(textMsg(","))
 		require.True(t, h.settingsOverlay.OpenAt("group_mode"))
-		_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyRight}) // off -> on
+		_, _ = h.handleKeyPress(keyMsg("right")) // off -> on
 		require.Equal(t, config.GroupModeAccount, h.appConfig.GetGroupMode())
 		require.True(t, h.list.AccountClusteringVisible(), "two accounts now cluster")
 
@@ -361,12 +360,12 @@ func TestSettingsPanel_GroupModeChipTracksTheListInTheSameFrame(t *testing.T) {
 		h.appConfig.GroupMode = config.GroupModeRepo
 		h.list.SetGroupMode(config.GroupModeRepo)
 
-		_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(",")})
+		_, _ = h.handleKeyPress(textMsg(","))
 		require.True(t, h.settingsOverlay.OpenAt("group_mode"))
 		require.NotContains(t, xansi.Strip(h.settingsOverlay.Render()), "nothing to cluster",
 			"off is not inert")
 
-		_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyRight}) // off -> on
+		_, _ = h.handleKeyPress(keyMsg("right")) // off -> on
 		require.Equal(t, config.GroupModeAccount, h.appConfig.GetGroupMode())
 		assert.Contains(t, xansi.Strip(h.settingsOverlay.Render()), "nothing to cluster",
 			"the chip must appear without reopening the panel")
@@ -380,19 +379,19 @@ func TestSettingsPanel_RemembersTheCategoryAcrossOpens(t *testing.T) {
 	resetSettingsTestState(t)
 	h := newSettingsTestHome()
 
-	_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(",")})
+	_, _ = h.handleKeyPress(textMsg(","))
 	assert.NotEqual(t, 0, h.settingsOverlay.RailIndex(),
 		"a fresh run must not land on All settings (spec §4)")
 	require.True(t, h.settingsOverlay.OpenAt("agent_oom_margin")) // Advanced
 	want := h.settingsOverlay.RailIndex()
 
 	// Two Escs: OpenAt focused the rows pane, and Esc is layered.
-	_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyEsc})
+	_, _ = h.handleKeyPress(keyMsg("esc"))
 	require.Equal(t, stateSettings, h.state, "the first esc backs out of the rows pane")
-	_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyEsc})
+	_, _ = h.handleKeyPress(keyMsg("esc"))
 	require.Nil(t, h.settingsOverlay)
 
-	_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(",")})
+	_, _ = h.handleKeyPress(textMsg(","))
 	assert.Equal(t, want, h.settingsOverlay.RailIndex(), "reopening returns to the last category")
 }
 
@@ -403,17 +402,17 @@ func TestSettingsPanel_RemembersTheCategoryAcrossOpens(t *testing.T) {
 func TestSettingsPanel_ResetPersistsAndLiveApplies(t *testing.T) {
 	resetSettingsTestState(t)
 	h := newSettingsTestHome()
-	_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(",")})
+	_, _ = h.handleKeyPress(textMsg(","))
 	require.Equal(t, stateSettings, h.state)
 
 	require.True(t, h.settingsOverlay.OpenAt("theme"))
-	_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyRight}) // off the default
+	_, _ = h.handleKeyPress(keyMsg("right")) // off the default
 	changed := h.appConfig.Theme
 	require.NotEmpty(t, changed, "precondition: the theme is now explicitly set")
 	require.Equal(t, changed, config.LoadConfig().Theme, "precondition: the edit reached disk")
 	require.Equal(t, changed, theme.Current().Name, "precondition: and live-applied")
 
-	_, cmd := h.handleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("r")})
+	_, cmd := h.handleKeyPress(textMsg("r"))
 
 	assert.Empty(t, h.appConfig.Theme, "r cleared the explicit theme")
 	assert.Empty(t, config.LoadConfig().Theme, "r persisted, like an edit")
@@ -428,19 +427,19 @@ func TestSettingsPanel_ResetPersistsAndLiveApplies(t *testing.T) {
 func TestSettingsPanel_AccountsEntryOpensTheAccountsOverlay(t *testing.T) {
 	resetSettingsTestState(t)
 	h := newSettingsTestHome()
-	_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(",")})
+	_, _ = h.handleKeyPress(textMsg(","))
 	require.Equal(t, stateSettings, h.state)
 
 	h.settingsOverlay.SetRailIndex(h.settingsOverlay.RailEntryCount() - 1)
-	_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyEnter})
+	_, _ = h.handleKeyPress(keyMsg("enter"))
 
 	assert.Equal(t, stateAccounts, h.state, "Enter on Accounts opens the @ overlay")
 	assert.NotNil(t, h.accountsOverlay)
 	assert.Nil(t, h.settingsOverlay, "the settings panel closed to make way")
 
 	// Closing accounts and reopening settings lands back on the entry we left.
-	_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyEsc})
-	_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(",")})
+	_, _ = h.handleKeyPress(keyMsg("esc"))
+	_, _ = h.handleKeyPress(textMsg(","))
 	require.NotNil(t, h.settingsOverlay)
 	assert.Equal(t, h.settingsOverlay.RailEntryCount()-1, h.settingsOverlay.RailIndex())
 }
@@ -459,10 +458,10 @@ func profileNamesOf(cfg *config.Config) []string {
 // openProfilesEditor opens the settings panel and focuses the Profiles editor's pane.
 func openProfilesEditor(t *testing.T, h *home) {
 	t.Helper()
-	_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(",")})
+	_, _ = h.handleKeyPress(textMsg(","))
 	require.Equal(t, stateSettings, h.state)
 	h.settingsOverlay.SetRailIndex(h.settingsOverlay.RailEntryCount() - 2)
-	_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyEnter})
+	_, _ = h.handleKeyPress(keyMsg("enter"))
 }
 
 // TestSettingsPanel_ProfileDetectRunsOffTheUpdateLoop pins the whole D path through home: the
@@ -482,7 +481,7 @@ func TestSettingsPanel_ProfileDetectRunsOffTheUpdateLoop(t *testing.T) {
 	h.appConfig.DefaultProgram = "claude"
 	openProfilesEditor(t, h)
 
-	_, cmd := h.handleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("D")})
+	_, cmd := h.handleKeyPress(textMsg("D"))
 	require.NotNil(t, cmd, "D must produce a command rather than probing inline")
 	msg := cmd()
 	detected, ok := msg.(profilesDetectedMsg)
@@ -553,9 +552,9 @@ func TestSettingsPanel_ProfileDetectWhileTheRailMovedAwayIsAnnounced(t *testing.
 	h.appConfig.Profiles = []config.Profile{{Name: "claude", Program: "claude"}}
 	openProfilesEditor(t, h)
 
-	_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("D")})
-	_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyEsc}) // back to the rail, note cleared
-	_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyUp})  // and off the Profiles entry
+	_, _ = h.handleKeyPress(textMsg("D"))
+	_, _ = h.handleKeyPress(keyMsg("esc")) // back to the rail, note cleared
+	_, _ = h.handleKeyPress(keyMsg("up"))  // and off the Profiles entry
 
 	_, cmd := h.Update(profilesDetectedMsg{detected: []config.Profile{{Name: "codex", Program: "codex"}}})
 
@@ -590,12 +589,12 @@ func TestSettingsPanel_EditingTheDefaultProfileReResolvesTheLaunchCommand(t *tes
 	require.Equal(t, "claude", h.program)
 
 	openProfilesEditor(t, h)
-	_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("e")})
-	_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyTab})
+	_, _ = h.handleKeyPress(textMsg("e"))
+	_, _ = h.handleKeyPress(keyMsg("tab"))
 	for _, r := range " --model opus" {
-		_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+		_, _ = h.handleKeyPress(textMsg(string(r)))
 	}
-	_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyEnter})
+	_, _ = h.handleKeyPress(keyMsg("enter"))
 
 	assert.Equal(t, "claude --model opus", h.appConfig.Profiles[0].Program)
 	assert.Equal(t, "claude --model opus", config.LoadConfig().Profiles[0].Program,
@@ -617,9 +616,9 @@ func TestSettingsPanel_DefaultProgramReResolvesTheLaunchCommand(t *testing.T) {
 	h.appConfig.DefaultProgram = "claude"
 	h.program = h.appConfig.GetProgram()
 
-	_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(",")})
+	_, _ = h.handleKeyPress(textMsg(","))
 	require.True(t, h.settingsOverlay.OpenAt("default_program"))
-	_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyRight})
+	_, _ = h.handleKeyPress(keyMsg("right"))
 
 	require.Equal(t, "codex", h.appConfig.DefaultProgram)
 	assert.Equal(t, "codex --sandbox", h.program,
@@ -645,9 +644,9 @@ func TestSettingsPanel_ProfileEditDropsAStashedDraft(t *testing.T) {
 	h.appConfig.DefaultProgram = "claude"
 	h.stashedDraft = &overlay.TextInputOverlay{} // a draft pinned to the old profile list
 
-	_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(",")})
+	_, _ = h.handleKeyPress(textMsg(","))
 	require.True(t, h.settingsOverlay.OpenAt("default_program"))
-	_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyRight})
+	_, _ = h.handleKeyPress(keyMsg("right"))
 	require.Equal(t, "codex", h.appConfig.DefaultProgram, "precondition: the cycle landed")
 
 	assert.Nil(t, h.stashedDraft, "a stale draft must not survive a change to what launches")

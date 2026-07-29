@@ -108,7 +108,7 @@ func TestScreensaverAnimatesWithSplashDisabled(t *testing.T) {
 	m.state = stateDefault
 	m.appConfig = &config.Config{Splash: config.SplashOff}
 
-	_, cmd := m.handleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("`")})
+	_, cmd := m.handleKeyPress(textMsg("`"))
 	require.Equal(t, stateScreensaver, m.state, "the easter egg must still enter")
 	require.NotNil(t, cmd, "entering must arm the splash tick")
 	require.True(t, m.splashTicking, "the screensaver must animate whatever the setting says")
@@ -128,12 +128,12 @@ func TestScreensaverEntersAndAnyKeyExits(t *testing.T) {
 	m := screensaverTestHome()
 	m.state = stateDefault
 
-	_, cmd := m.handleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("`")})
+	_, cmd := m.handleKeyPress(textMsg("`"))
 	require.Equal(t, stateScreensaver, m.state)
 	require.NotNil(t, cmd, "entering must arm the splash tick")
 	require.True(t, m.splashTicking)
 
-	_, _ = m.handleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("n")})
+	_, _ = m.handleKeyPress(textMsg("n"))
 	require.Equal(t, stateDefault, m.state)
 	require.Nil(t, m.textInputOverlay, "the waking key must be consumed, not acted on")
 }
@@ -142,8 +142,8 @@ func TestScreensaverEntersAndAnyKeyExits(t *testing.T) {
 // the screen instead of tearing the app down.
 func TestScreensaverConsumesQuitKeys(t *testing.T) {
 	for _, k := range []tea.KeyMsg{
-		{Type: tea.KeyRunes, Runes: []rune("q")},
-		{Type: tea.KeyCtrlC},
+		textMsg("q"),
+		keyMsg("ctrl+c"),
 	} {
 		m := screensaverTestHome()
 		m.state = stateScreensaver
@@ -160,7 +160,7 @@ func TestScreensaverIgnoredBelowSplashFloor(t *testing.T) {
 	m.windowWidth, m.windowHeight = 40, 10
 	m.state = stateDefault
 
-	_, _ = m.handleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("`")})
+	_, _ = m.handleKeyPress(textMsg("`"))
 	require.Equal(t, stateDefault, m.state)
 }
 

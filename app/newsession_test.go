@@ -13,7 +13,6 @@ import (
 	"testing"
 
 	"github.com/charmbracelet/bubbles/spinner"
-	tea "github.com/charmbracelet/bubbletea"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -64,7 +63,7 @@ func TestOpenCreateForm_NonGitTargetSkipsBranchPlumbing(t *testing.T) {
 	require.NoError(t, err)
 	h.list.AddInstance(inst)
 
-	h.handleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("N")})
+	h.handleKeyPress(textMsg("N"))
 
 	require.NotNil(t, h.textInputOverlay)
 	assert.Empty(t, h.fetchedPaths, "a non-git target must not be seeded for fetching")
@@ -78,7 +77,7 @@ func TestOpenCreateForm_GitTargetSeedsFetch(t *testing.T) {
 	require.True(t, git.IsGitRepo(context.Background(), cwd), "test must run inside a git repository")
 
 	h := newCreateFormHome(t) // empty list → the default target is the cwd
-	h.handleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("N")})
+	h.handleKeyPress(textMsg("N"))
 
 	assert.True(t, h.fetchedPaths[cwd], "a git target must be seeded as fetched at open")
 }
@@ -89,7 +88,7 @@ func TestKeyPrompt_OpensCreateFormWithoutAddingRow(t *testing.T) {
 	h := newCreateFormHome(t)
 	before := h.list.NumInstances()
 
-	h.handleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("N")})
+	h.handleKeyPress(textMsg("N"))
 
 	assert.Equal(t, statePrompt, h.state)
 	require.NotNil(t, h.textInputOverlay)
@@ -102,7 +101,7 @@ func TestKeyPrompt_OpensCreateFormWithoutAddingRow(t *testing.T) {
 func TestKeyPrompt_FocusesProjectPicker(t *testing.T) {
 	h := newCreateFormHome(t)
 
-	h.handleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("N")})
+	h.handleKeyPress(textMsg("N"))
 
 	require.NotNil(t, h.textInputOverlay)
 	assert.False(t, h.textInputOverlay.TitleFocused(), "N starts on the project picker, not the title")
@@ -114,7 +113,7 @@ func TestKeyNew_OpensCreateFormFocusedOnTitle(t *testing.T) {
 	h := newCreateFormHome(t)
 	before := h.list.NumInstances()
 
-	h.handleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("n")})
+	h.handleKeyPress(textMsg("n"))
 
 	assert.Equal(t, statePrompt, h.state)
 	require.NotNil(t, h.textInputOverlay)
@@ -138,9 +137,9 @@ func TestCreateSessionFromForm_CreatesOneAndClearsOverlay(t *testing.T) {
 	h.textInputOverlay = ov
 	// Focus starts on the project picker; Tab past the branch picker to the title field,
 	// then type the title.
-	ov.HandleKeyPress(tea.KeyMsg{Type: tea.KeyTab})
-	ov.HandleKeyPress(tea.KeyMsg{Type: tea.KeyTab})
-	ov.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("feature")})
+	ov.HandleKeyPress(keyMsg("tab"))
+	ov.HandleKeyPress(keyMsg("tab"))
+	ov.HandleKeyPress(textMsg("feature"))
 
 	before := h.list.NumInstances()
 	cmd := h.createSessionFromForm("do the thing")
@@ -182,11 +181,11 @@ func TestCreateSessionFromForm_ExplicitPathOnlyAccountIsAccented(t *testing.T) {
 	// of the auto-route — which, since "work"'s path_matches misses dir, would land on the
 	// "personal" default.
 	ov.FocusTitle()
-	ov.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("feature")})
-	ov.HandleKeyPress(tea.KeyMsg{Type: tea.KeyTab})   // title → prompt
-	ov.HandleKeyPress(tea.KeyMsg{Type: tea.KeyTab})   // prompt → variants
-	ov.HandleKeyPress(tea.KeyMsg{Type: tea.KeyTab})   // variants → account
-	ov.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRight}) // personal → work, marks touched
+	ov.HandleKeyPress(textMsg("feature"))
+	ov.HandleKeyPress(keyMsg("tab"))   // title → prompt
+	ov.HandleKeyPress(keyMsg("tab"))   // prompt → variants
+	ov.HandleKeyPress(keyMsg("tab"))   // variants → account
+	ov.HandleKeyPress(keyMsg("right")) // personal → work, marks touched
 
 	sel := ov.GetSelectedAccount()
 	require.NotNil(t, sel, "driving the picker marks it an explicit override")
@@ -219,11 +218,11 @@ func TestCreateSessionFromForm_ModelComposedIntoProgram(t *testing.T) {
 	// (the variant control is always a stop; claude → model/effort/mode stops present).
 	// This test only navigates as far as the model stop.
 	ov.FocusTitle()
-	ov.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("feature")})
-	ov.HandleKeyPress(tea.KeyMsg{Type: tea.KeyTab}) // title → prompt
-	ov.HandleKeyPress(tea.KeyMsg{Type: tea.KeyTab}) // prompt → variants
-	ov.HandleKeyPress(tea.KeyMsg{Type: tea.KeyTab}) // variants → model
-	ov.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("opus")})
+	ov.HandleKeyPress(textMsg("feature"))
+	ov.HandleKeyPress(keyMsg("tab")) // title → prompt
+	ov.HandleKeyPress(keyMsg("tab")) // prompt → variants
+	ov.HandleKeyPress(keyMsg("tab")) // variants → model
+	ov.HandleKeyPress(textMsg("opus"))
 	require.Equal(t, "opus", ov.GetModel())
 
 	require.NotNil(t, h.createSessionFromForm(""))
@@ -246,11 +245,11 @@ func TestCreateSessionFromForm_ModelOverridesProfilePin(t *testing.T) {
 	h.textInputOverlay = ov
 
 	ov.FocusTitle()
-	ov.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("feature")})
-	ov.HandleKeyPress(tea.KeyMsg{Type: tea.KeyTab}) // title → prompt
-	ov.HandleKeyPress(tea.KeyMsg{Type: tea.KeyTab}) // prompt → variants
-	ov.HandleKeyPress(tea.KeyMsg{Type: tea.KeyTab}) // variants → model
-	ov.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("opus")})
+	ov.HandleKeyPress(textMsg("feature"))
+	ov.HandleKeyPress(keyMsg("tab")) // title → prompt
+	ov.HandleKeyPress(keyMsg("tab")) // prompt → variants
+	ov.HandleKeyPress(keyMsg("tab")) // variants → model
+	ov.HandleKeyPress(textMsg("opus"))
 
 	require.NotNil(t, h.createSessionFromForm(""))
 
@@ -272,7 +271,7 @@ func TestCreateSessionFromForm_NonClaudeProgramUntouched(t *testing.T) {
 	h.textInputOverlay = ov
 
 	ov.FocusTitle()
-	ov.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("feature")})
+	ov.HandleKeyPress(textMsg("feature"))
 	require.Equal(t, "", ov.GetModel(), "a non-claude form must expose no model override")
 
 	require.NotNil(t, h.createSessionFromForm(""))
@@ -303,11 +302,11 @@ func TestCreateSessionFromForm_EmptyTitleKeepsFormOpen(t *testing.T) {
 // Canceling the create form (Esc) creates nothing and returns to the default state.
 func TestCreateForm_CancelCreatesNothing(t *testing.T) {
 	h := newCreateFormHome(t)
-	h.handleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("N")})
+	h.handleKeyPress(textMsg("N"))
 	require.Equal(t, statePrompt, h.state)
 	before := h.list.NumInstances()
 
-	h.handleKeyPress(tea.KeyMsg{Type: tea.KeyEsc})
+	h.handleKeyPress(keyMsg("esc"))
 
 	assert.Equal(t, stateDefault, h.state)
 	assert.Nil(t, h.textInputOverlay)
@@ -378,13 +377,13 @@ func TestCreateSessionFromForm_PermissionModeComposedIntoProgram(t *testing.T) {
 	h.textInputOverlay = ov
 
 	ov.FocusTitle()
-	ov.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("feature")})
-	ov.HandleKeyPress(tea.KeyMsg{Type: tea.KeyTab})   // title → prompt
-	ov.HandleKeyPress(tea.KeyMsg{Type: tea.KeyTab})   // prompt → variants
-	ov.HandleKeyPress(tea.KeyMsg{Type: tea.KeyTab})   // variants → model
-	ov.HandleKeyPress(tea.KeyMsg{Type: tea.KeyTab})   // model (empty → advance) → effort
-	ov.HandleKeyPress(tea.KeyMsg{Type: tea.KeyTab})   // leave effort on default → mode
-	ov.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRight}) // default → plan
+	ov.HandleKeyPress(textMsg("feature"))
+	ov.HandleKeyPress(keyMsg("tab"))   // title → prompt
+	ov.HandleKeyPress(keyMsg("tab"))   // prompt → variants
+	ov.HandleKeyPress(keyMsg("tab"))   // variants → model
+	ov.HandleKeyPress(keyMsg("tab"))   // model (empty → advance) → effort
+	ov.HandleKeyPress(keyMsg("tab"))   // leave effort on default → mode
+	ov.HandleKeyPress(keyMsg("right")) // default → plan
 	require.Equal(t, "plan", ov.GetPermissionMode())
 
 	require.NotNil(t, h.createSessionFromForm(""))
@@ -408,13 +407,13 @@ func TestCreateSessionFromForm_PermissionModeOverridesProfilePin(t *testing.T) {
 	h.textInputOverlay = ov
 
 	ov.FocusTitle()
-	ov.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("feature")})
-	ov.HandleKeyPress(tea.KeyMsg{Type: tea.KeyTab})   // title → prompt
-	ov.HandleKeyPress(tea.KeyMsg{Type: tea.KeyTab})   // prompt → variants
-	ov.HandleKeyPress(tea.KeyMsg{Type: tea.KeyTab})   // variants → model
-	ov.HandleKeyPress(tea.KeyMsg{Type: tea.KeyTab})   // model (empty → advance) → effort
-	ov.HandleKeyPress(tea.KeyMsg{Type: tea.KeyTab})   // leave effort on default → mode
-	ov.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRight}) // default → plan
+	ov.HandleKeyPress(textMsg("feature"))
+	ov.HandleKeyPress(keyMsg("tab"))   // title → prompt
+	ov.HandleKeyPress(keyMsg("tab"))   // prompt → variants
+	ov.HandleKeyPress(keyMsg("tab"))   // variants → model
+	ov.HandleKeyPress(keyMsg("tab"))   // model (empty → advance) → effort
+	ov.HandleKeyPress(keyMsg("tab"))   // leave effort on default → mode
+	ov.HandleKeyPress(keyMsg("right")) // default → plan
 
 	require.NotNil(t, h.createSessionFromForm(""))
 
@@ -439,7 +438,7 @@ func TestCreateSessionFromForm_DefaultModeChipLeavesProgramUntouched(t *testing.
 	h.textInputOverlay = ov
 
 	ov.FocusTitle()
-	ov.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("feature")})
+	ov.HandleKeyPress(textMsg("feature"))
 	require.Equal(t, "", ov.GetPermissionMode())
 
 	require.NotNil(t, h.createSessionFromForm(""))
@@ -462,14 +461,14 @@ func TestCreateSessionFromForm_ModelAndModeCompose(t *testing.T) {
 	h.textInputOverlay = ov
 
 	ov.FocusTitle()
-	ov.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("feature")})
-	ov.HandleKeyPress(tea.KeyMsg{Type: tea.KeyTab}) // title → prompt
-	ov.HandleKeyPress(tea.KeyMsg{Type: tea.KeyTab}) // prompt → variants
-	ov.HandleKeyPress(tea.KeyMsg{Type: tea.KeyTab}) // variants → model
-	ov.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("opus")})
-	ov.HandleKeyPress(tea.KeyMsg{Type: tea.KeyTab})   // "opus" is a complete alias → advance to effort
-	ov.HandleKeyPress(tea.KeyMsg{Type: tea.KeyTab})   // leave effort on default → advance to mode
-	ov.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRight}) // default → plan
+	ov.HandleKeyPress(textMsg("feature"))
+	ov.HandleKeyPress(keyMsg("tab")) // title → prompt
+	ov.HandleKeyPress(keyMsg("tab")) // prompt → variants
+	ov.HandleKeyPress(keyMsg("tab")) // variants → model
+	ov.HandleKeyPress(textMsg("opus"))
+	ov.HandleKeyPress(keyMsg("tab"))   // "opus" is a complete alias → advance to effort
+	ov.HandleKeyPress(keyMsg("tab"))   // leave effort on default → advance to mode
+	ov.HandleKeyPress(keyMsg("right")) // default → plan
 
 	require.NotNil(t, h.createSessionFromForm(""))
 

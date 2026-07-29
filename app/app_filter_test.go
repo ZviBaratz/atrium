@@ -28,7 +28,7 @@ func newFilterHome() *home {
 	}
 }
 
-func runeKey(s string) tea.KeyMsg { return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(s)} }
+func runeKey(s string) tea.KeyMsg { return textMsg(s) }
 
 func press(t *testing.T, h *home, msg tea.KeyMsg) {
 	t.Helper()
@@ -74,7 +74,7 @@ func TestFilterKeys_BackspaceTrims(t *testing.T) {
 	press(t, h, runeKey("a"))
 	press(t, h, runeKey("b"))
 
-	press(t, h, tea.KeyMsg{Type: tea.KeyBackspace})
+	press(t, h, keyMsg("backspace"))
 
 	require.Equal(t, "a", h.list.FilterQuery())
 }
@@ -85,7 +85,7 @@ func TestFilterKeys_EnterCommitsAndKeepsQuery(t *testing.T) {
 	enterFilter(t, h)
 	press(t, h, runeKey("a"))
 
-	press(t, h, tea.KeyMsg{Type: tea.KeyEnter})
+	press(t, h, keyMsg("enter"))
 
 	require.Equal(t, stateDefault, h.state)
 	require.Equal(t, "a", h.list.FilterQuery(), "committed filter stays applied")
@@ -97,7 +97,7 @@ func TestFilterKeys_EscClears(t *testing.T) {
 	enterFilter(t, h)
 	press(t, h, runeKey("a"))
 
-	press(t, h, tea.KeyMsg{Type: tea.KeyEscape})
+	press(t, h, keyMsg("esc"))
 
 	require.Equal(t, stateDefault, h.state)
 	require.Equal(t, "", h.list.FilterQuery())
@@ -108,7 +108,7 @@ func TestFilterKeys_SlashResumesCommittedQuery(t *testing.T) {
 	h := newFilterHome()
 	enterFilter(t, h)
 	press(t, h, runeKey("a"))
-	press(t, h, tea.KeyMsg{Type: tea.KeyEnter}) // commit
+	press(t, h, keyMsg("enter")) // commit
 
 	enterFilter(t, h) // press '/' again
 
@@ -121,9 +121,9 @@ func TestFilterKeys_EscInDefaultClearsCommittedFilter(t *testing.T) {
 	h := newFilterHome()
 	enterFilter(t, h)
 	press(t, h, runeKey("a"))
-	press(t, h, tea.KeyMsg{Type: tea.KeyEnter}) // commit; back to stateDefault
+	press(t, h, keyMsg("enter")) // commit; back to stateDefault
 
-	press(t, h, tea.KeyMsg{Type: tea.KeyEscape})
+	press(t, h, keyMsg("esc"))
 
 	require.Equal(t, stateDefault, h.state)
 	require.Equal(t, "", h.list.FilterQuery())

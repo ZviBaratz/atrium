@@ -31,7 +31,7 @@ func TestAttachFinished_RawModeFailureOpensInfoModal(t *testing.T) {
 	assert.Contains(t, plain, "Enter", "cooked mode line-buffers input, so the escape must tell the user to press Enter")
 
 	// Any key dismisses the modal back to the default screen.
-	_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("x")})
+	_, _ = h.handleKeyPress(textMsg("x"))
 	assert.Equal(t, stateDefault, h.state, "any key must dismiss the info modal")
 }
 

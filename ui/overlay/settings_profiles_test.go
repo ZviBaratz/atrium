@@ -61,7 +61,7 @@ func profilesAt(t *testing.T, o *SettingsOverlay) {
 	o.focus = focusRail
 	o.SetRailIndex(profilesRailIndex())
 	require.Equal(t, railProfiles, o.selectedEntry().kind)
-	_, _ = o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyEnter})
+	_, _ = o.HandleKeyPress(keyMsg("enter"))
 	require.Equal(t, focusRows, o.focus, "the forward key must focus the editor's pane")
 	require.Nil(t, o.profileForm, "landing on the editor must not open a form")
 }
@@ -83,7 +83,7 @@ func paneText(o *SettingsOverlay) []string {
 // editor lives inside the panel, unlike Accounts.
 func TestProfilesEntryFocusesItsEditor(t *testing.T) {
 	for _, key := range []tea.KeyMsg{
-		{Type: tea.KeyEnter}, {Type: tea.KeyRight}, {Type: tea.KeyTab},
+		keyMsg("enter"), keyMsg("right"), keyMsg("tab"),
 	} {
 		o := NewSettingsOverlay(threeProfiles())
 		o.SetRailIndex(profilesRailIndex())
@@ -372,11 +372,11 @@ func TestEscIsLayeredOutOfTheProfilesPane(t *testing.T) {
 	o.SetSize(100, 32)
 	profilesAt(t, o)
 
-	closed, _ := o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyEsc})
+	closed, _ := o.HandleKeyPress(keyMsg("esc"))
 	assert.False(t, closed, "the first esc backs out of the pane")
 	assert.Equal(t, focusRail, o.focus)
 
-	closed, _ = o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyEsc})
+	closed, _ = o.HandleKeyPress(keyMsg("esc"))
 	assert.True(t, closed, "the second esc closes the panel")
 }
 
@@ -405,7 +405,7 @@ func TestLeavingTheProfilesPaneDropsItsTransientState(t *testing.T) {
 // keypress's return value is what the tests assert on.
 func typeProfile(o *SettingsOverlay, s string) {
 	for _, r := range s {
-		_, _ = o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+		_, _ = o.HandleKeyPress(textMsg(string(r)))
 	}
 }
 
@@ -423,9 +423,9 @@ func TestNewProfileRoundTripsIntoTheConfig(t *testing.T) {
 	require.Equal(t, -1, o.profileForm.editIndex, "-1 is the new-record sentinel")
 
 	typeProfile(o, "gemini")
-	_, _ = o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyTab})
+	_, _ = o.HandleKeyPress(keyMsg("tab"))
 	typeProfile(o, "gemini --yolo")
-	_, changed := o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyEnter})
+	_, changed := o.HandleKeyPress(keyMsg("enter"))
 
 	assert.Equal(t, profilesChangedKey, changed, "the editor reports the config key it changed")
 	assert.Nil(t, o.profileForm, "a committed form closes")
@@ -450,9 +450,9 @@ func TestEditProfileReplacesInPlace(t *testing.T) {
 	assert.Equal(t, "aider --model ollama_chat/gemma3:1b", o.profileForm.program())
 
 	// applyFocus leaves the cursor at end, so typing appends rather than overtyping.
-	_, _ = o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyTab})
+	_, _ = o.HandleKeyPress(keyMsg("tab"))
 	typeProfile(o, " --dark-mode")
-	_, changed := o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyEnter})
+	_, changed := o.HandleKeyPress(keyMsg("enter"))
 
 	assert.Equal(t, profilesChangedKey, changed)
 	require.Len(t, cfg.Profiles, 3, "an edit replaces, it does not append")
@@ -467,7 +467,7 @@ func TestEnterIsAnAliasForEdit(t *testing.T) {
 	o.SetSize(100, 32)
 	profilesAt(t, o)
 
-	_, _ = o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyEnter})
+	_, _ = o.HandleKeyPress(keyMsg("enter"))
 	require.NotNil(t, o.profileForm)
 	assert.Equal(t, 0, o.profileForm.editIndex)
 }
@@ -488,7 +488,7 @@ func TestEditAndDeleteAreInertWithNoProfiles(t *testing.T) {
 		assert.Nilf(t, o.profileForm, "%q must not open a form over nothing", key)
 		assert.Falsef(t, o.profileConfirm, "%q must not arm a delete over nothing", key)
 	}
-	_, _ = o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyEnter})
+	_, _ = o.HandleKeyPress(keyMsg("enter"))
 	assert.Nil(t, o.profileForm, "↵ is the edit alias and is inert here too")
 
 	_, _ = o.HandleKeyPress(keyRunes("n"))
@@ -506,21 +506,21 @@ func TestFormValidationRejectsAndStaysOpen(t *testing.T) {
 	profilesAt(t, o)
 	_, _ = o.HandleKeyPress(keyRunes("n"))
 
-	_, changed := o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyEnter}) // empty name
+	_, changed := o.HandleKeyPress(keyMsg("enter")) // empty name
 	assert.Empty(t, changed)
 	require.NotNil(t, o.profileForm, "a rejected save stays in the form")
 	assert.Contains(t, o.lastErr, "name")
 	assert.Len(t, cfg.Profiles, 3, "nothing was written")
 
 	typeProfile(o, "claude") // now a duplicate
-	_, changed = o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyEnter})
+	_, changed = o.HandleKeyPress(keyMsg("enter"))
 	assert.Empty(t, changed)
 	require.NotNil(t, o.profileForm)
 	assert.Contains(t, o.lastErr, "already exists")
 	assert.Len(t, cfg.Profiles, 3)
 
 	typeProfile(o, "-fast") // unique now, but no program yet
-	_, changed = o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyEnter})
+	_, changed = o.HandleKeyPress(keyMsg("enter"))
 	assert.Empty(t, changed)
 	require.NotNil(t, o.profileForm)
 	assert.Contains(t, o.lastErr, "program",
@@ -538,14 +538,14 @@ func TestEditingWithoutRenamingIsNotADuplicateOfItself(t *testing.T) {
 	profilesAt(t, o)
 
 	_, _ = o.HandleKeyPress(keyRunes("e")) // claude, unrenamed
-	_, changed := o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyEnter})
+	_, changed := o.HandleKeyPress(keyMsg("enter"))
 	assert.Equal(t, profilesChangedKey, changed, "an unrenamed edit is not a duplicate of itself")
 	assert.Empty(t, o.lastErr)
 
 	_, _ = o.HandleKeyPress(keyRunes("e"))
-	_, _ = o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyCtrlU}) // clear the seeded name
-	typeProfile(o, "codex")                                 // rename onto another record
-	_, changed = o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyEnter})
+	_, _ = o.HandleKeyPress(keyMsg("ctrl+u")) // clear the seeded name
+	typeProfile(o, "codex")                   // rename onto another record
+	_, changed = o.HandleKeyPress(keyMsg("enter"))
 	assert.Empty(t, changed)
 	assert.Contains(t, o.lastErr, "already exists")
 	assert.Equal(t, "claude", cfg.Profiles[0].Name, "the rename was refused, not applied")
@@ -562,7 +562,7 @@ func TestEscInTheFormDiscardsTheEdit(t *testing.T) {
 
 	_, _ = o.HandleKeyPress(keyRunes("e"))
 	typeProfile(o, "-mangled")
-	closed, changed := o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyEsc})
+	closed, changed := o.HandleKeyPress(keyMsg("esc"))
 
 	assert.False(t, closed, "esc in the form must not close the panel")
 	assert.Empty(t, changed)
@@ -597,11 +597,11 @@ func TestFormTabCyclesTheTwoFields(t *testing.T) {
 	_, _ = o.HandleKeyPress(keyRunes("n"))
 
 	assert.Equal(t, fldProfileName, o.profileForm.focus)
-	_, _ = o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyTab})
+	_, _ = o.HandleKeyPress(keyMsg("tab"))
 	assert.Equal(t, fldProfileProgram, o.profileForm.focus)
-	_, _ = o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyTab})
+	_, _ = o.HandleKeyPress(keyMsg("tab"))
 	assert.Equal(t, fldProfileName, o.profileForm.focus, "tab wraps")
-	_, _ = o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyShiftTab})
+	_, _ = o.HandleKeyPress(keyMsg("shift+tab"))
 	assert.Equal(t, fldProfileProgram, o.profileForm.focus, "shift+tab wraps the other way")
 }
 
@@ -618,9 +618,9 @@ func TestRenamingTheDefaultProfileCarriesDefaultProgramWithIt(t *testing.T) {
 	profilesAt(t, o)
 
 	_, _ = o.HandleKeyPress(keyRunes("e"))
-	_, _ = o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyCtrlU})
+	_, _ = o.HandleKeyPress(keyMsg("ctrl+u"))
 	typeProfile(o, "claude-fast")
-	_, changed := o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyEnter})
+	_, changed := o.HandleKeyPress(keyMsg("enter"))
 
 	assert.Equal(t, profilesChangedKey, changed)
 	assert.Equal(t, "claude-fast", cfg.DefaultProgram, "the pointer follows the record")
@@ -642,9 +642,9 @@ func TestRenamingANonDefaultProfileLeavesDefaultProgramAlone(t *testing.T) {
 	_, _ = o.HandleKeyPress(keyRunes("j")) // aider, not the default
 
 	_, _ = o.HandleKeyPress(keyRunes("e"))
-	_, _ = o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyCtrlU})
+	_, _ = o.HandleKeyPress(keyMsg("ctrl+u"))
 	typeProfile(o, "aider2")
-	_, _ = o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyEnter})
+	_, _ = o.HandleKeyPress(keyMsg("enter"))
 
 	assert.Equal(t, "claude", cfg.DefaultProgram, "an unrelated rename must not move the pointer")
 }
@@ -708,7 +708,7 @@ func TestFormHeadingNamesWhichOperationItIs(t *testing.T) {
 	_, _ = o.HandleKeyPress(keyRunes("n"))
 	assert.Contains(t, strings.Join(paneText(o), " "), "New profile")
 
-	_, _ = o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyEsc})
+	_, _ = o.HandleKeyPress(keyMsg("esc"))
 	_, _ = o.HandleKeyPress(keyRunes("e"))
 	assert.Contains(t, strings.Join(paneText(o), " "), "Edit profile")
 }
@@ -767,7 +767,7 @@ func TestDeleteAsksBeforeRemoving(t *testing.T) {
 // TestConfirmDeletesAndReportsTheKey — y (and ↵) removes the record and reports "profiles", so
 // home persists through the panel's one writer.
 func TestConfirmDeletesAndReportsTheKey(t *testing.T) {
-	for _, key := range []tea.KeyMsg{keyRunes("y"), {Type: tea.KeyEnter}} {
+	for _, key := range []tea.KeyMsg{keyRunes("y"), keyMsg("enter")} {
 		cfg := threeProfiles()
 		o := NewSettingsOverlay(cfg)
 		o.SetSize(100, 32)
@@ -787,7 +787,7 @@ func TestConfirmDeletesAndReportsTheKey(t *testing.T) {
 // rather than treated as a cancel — a stray press must not confirm, and must not silently
 // disarm either (the accounts overlay's rule).
 func TestCancelKeepsTheProfile(t *testing.T) {
-	for _, key := range []tea.KeyMsg{keyRunes("n"), {Type: tea.KeyEsc}, {Type: tea.KeyCtrlC}} {
+	for _, key := range []tea.KeyMsg{keyRunes("n"), keyMsg("esc"), keyMsg("ctrl+c")} {
 		cfg := threeProfiles()
 		o := NewSettingsOverlay(cfg)
 		o.SetSize(100, 32)
@@ -922,7 +922,7 @@ func TestRefusingTheOnlyProfileNamesAnActionThatWorks(t *testing.T) {
 	// The premise, asserted rather than assumed: the row this refusal would point at cannot move.
 	settingsAt(t, o, "default_program")
 	require.Len(t, o.rows[o.cursor].options(cfg), 1, "precondition: one profile, one option")
-	_, changed := o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRight})
+	_, changed := o.HandleKeyPress(keyMsg("right"))
 	require.Empty(t, changed, "precondition: cycling a single-option enum is a silent no-op")
 
 	profilesAt(t, o)
@@ -1135,11 +1135,11 @@ func TestProfilesHintNamesEveryLiveKey(t *testing.T) {
 		return fresh
 	}
 	assert.NotNil(t, press(keyRunes("n")).profileForm, "n new: opens a form")
-	assert.NotNil(t, press(tea.KeyMsg{Type: tea.KeyEnter}).profileForm, "↵ edit: opens a form")
+	assert.NotNil(t, press(keyMsg("enter")).profileForm, "↵ edit: opens a form")
 	assert.True(t, press(keyRunes("d")).profileConfirm, "d delete: arms the confirmation")
 	assert.True(t, press(keyRunes("D")).profileDetecting, "D detect: starts a detection")
 	assert.True(t, press(keyRunes("/")).searching(), "/ search: opens the filter")
-	assert.Equal(t, focusRail, press(tea.KeyMsg{Type: tea.KeyEsc}).focus, "esc back: returns to the rail")
+	assert.Equal(t, focusRail, press(keyMsg("esc")).focus, "esc back: returns to the rail")
 
 	hint := stripANSI(o.hintLine())
 	assert.NotContains(t, hint, "…", "the ladder must fit at 100 columns rather than truncate")

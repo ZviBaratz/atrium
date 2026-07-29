@@ -8,7 +8,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func runeKey(s string) tea.KeyMsg { return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(s)} }
+func runeKey(s string) tea.KeyMsg { return textMsg(s) }
 
 func TestQueueOverlay_RendersHeadFirstWithInFlightMark(t *testing.T) {
 	o := NewQueueOverlay("auth")
@@ -33,7 +33,7 @@ func TestQueueOverlay_CursorMovesAndClamps(t *testing.T) {
 	o := NewQueueOverlay("x")
 	o.SetQueue([]string{"a", "b", "c"}, false)
 	require.Equal(t, 0, o.SelectedIndex())
-	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyUp}) // clamps at 0
+	o.HandleKeyPress(keyMsg("up")) // clamps at 0
 	require.Equal(t, 0, o.SelectedIndex())
 	o.HandleKeyPress(runeKey("j"))
 	o.HandleKeyPress(runeKey("j"))
@@ -68,7 +68,7 @@ func TestQueueOverlay_RemoveArmsOnceWithSelection(t *testing.T) {
 func TestQueueOverlay_EscCloses(t *testing.T) {
 	o := NewQueueOverlay("x")
 	o.SetQueue([]string{"a"}, false)
-	require.True(t, o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyEsc}), "esc closes the overlay")
+	require.True(t, o.HandleKeyPress(keyMsg("esc")), "esc closes the overlay")
 }
 
 func TestQueueOverlay_HeadInFlightReflectsQueue(t *testing.T) {

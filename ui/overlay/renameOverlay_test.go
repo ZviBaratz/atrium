@@ -4,7 +4,6 @@ import (
 	"strings"
 	"testing"
 
-	tea "github.com/charmbracelet/bubbletea"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -13,8 +12,8 @@ func TestRenameOverlay_PrefillAndSubmit(t *testing.T) {
 	o := NewRenameOverlay("current", "", false)
 	assert.Equal(t, "current", o.Value(), "overlay should be pre-filled with the current label")
 
-	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("-x")})
-	shouldClose := o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyEnter})
+	o.HandleKeyPress(textMsg("-x"))
+	shouldClose := o.HandleKeyPress(keyMsg("enter"))
 
 	assert.True(t, shouldClose)
 	assert.True(t, o.IsSubmitted())
@@ -24,7 +23,7 @@ func TestRenameOverlay_PrefillAndSubmit(t *testing.T) {
 
 func TestRenameOverlay_Cancel(t *testing.T) {
 	o := NewRenameOverlay("current", "", false)
-	shouldClose := o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyEsc})
+	shouldClose := o.HandleKeyPress(keyMsg("esc"))
 
 	assert.True(t, shouldClose)
 	assert.True(t, o.IsCanceled())
@@ -33,13 +32,13 @@ func TestRenameOverlay_Cancel(t *testing.T) {
 
 func TestRenameOverlay_TrimsValue(t *testing.T) {
 	o := NewRenameOverlay("", "", false)
-	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("  spaced  ")})
+	o.HandleKeyPress(textMsg("  spaced  "))
 	assert.Equal(t, "spaced", o.Value())
 }
 
 func TestRenameOverlay_EnforcesCharLimit(t *testing.T) {
 	o := NewRenameOverlay("", "", false)
-	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(strings.Repeat("a", 40))})
+	o.HandleKeyPress(textMsg(strings.Repeat("a", 40)))
 	assert.LessOrEqual(t, len(o.Value()), 32, "the title input is capped at 32 characters")
 }
 
@@ -54,13 +53,13 @@ func TestRenameOverlay_DefaultsToLabelOnly(t *testing.T) {
 func TestRenameOverlay_CtrlDTogglesDeepMode(t *testing.T) {
 	o := NewRenameOverlay("x", "", false)
 
-	shouldClose := o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyCtrlD})
+	shouldClose := o.HandleKeyPress(keyMsg("ctrl+d"))
 	assert.False(t, shouldClose, "ctrl+d must not close the overlay")
 	assert.True(t, o.IsDeep(), "first ctrl+d switches to deep")
 	assert.False(t, o.IsSubmitted())
 	assert.False(t, o.IsCanceled())
 
-	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyCtrlD})
+	o.HandleKeyPress(keyMsg("ctrl+d"))
 	assert.False(t, o.IsDeep(), "second ctrl+d switches back to label only")
 }
 
@@ -78,8 +77,8 @@ func TestRenameOverlay_RendersDefaultModeFirst(t *testing.T) {
 // Toggling mode via ctrl+d does not leak into the entered value, and Enter still submits.
 func TestRenameOverlay_CtrlDDoesNotAffectValue(t *testing.T) {
 	o := NewRenameOverlay("alpha", "", false)
-	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyCtrlD})
-	shouldClose := o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyEnter})
+	o.HandleKeyPress(keyMsg("ctrl+d"))
+	shouldClose := o.HandleKeyPress(keyMsg("enter"))
 	assert.True(t, shouldClose)
 	assert.True(t, o.IsSubmitted())
 	assert.Equal(t, "alpha", o.Value())
@@ -88,9 +87,9 @@ func TestRenameOverlay_CtrlDDoesNotAffectValue(t *testing.T) {
 func TestRenameOverlay_NoteFieldEditsAndReturns(t *testing.T) {
 	o := NewRenameOverlay("auth-refactor", "", true) // focus the note
 	for _, r := range "waiting on CI" {
-		o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+		o.HandleKeyPress(textMsg(string(r)))
 	}
-	require.True(t, o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyEnter}), "enter closes")
+	require.True(t, o.HandleKeyPress(keyMsg("enter")), "enter closes")
 	require.True(t, o.IsSubmitted())
 	require.Equal(t, "auth-refactor", o.Value(), "name field untouched")
 	require.Equal(t, "waiting on CI", o.NoteValue())
@@ -99,11 +98,11 @@ func TestRenameOverlay_NoteFieldEditsAndReturns(t *testing.T) {
 func TestRenameOverlay_TabCyclesNameAndNote(t *testing.T) {
 	o := NewRenameOverlay("name", "note", false) // focus the name
 	for _, r := range "X" {                      // edits the name field
-		o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+		o.HandleKeyPress(textMsg(string(r)))
 	}
-	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyTab}) // move to note
-	for _, r := range "Y" {                        // edits the note field
-		o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+	o.HandleKeyPress(keyMsg("tab")) // move to note
+	for _, r := range "Y" {         // edits the note field
+		o.HandleKeyPress(textMsg(string(r)))
 	}
 	require.Equal(t, "nameX", o.Value())
 	require.Equal(t, "noteY", o.NoteValue())
@@ -112,7 +111,7 @@ func TestRenameOverlay_TabCyclesNameAndNote(t *testing.T) {
 func TestRenameOverlay_NoteCharLimit(t *testing.T) {
 	o := NewRenameOverlay("n", "", true)
 	for i := 0; i < 200; i++ {
-		o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}})
+		o.HandleKeyPress(textMsg("a"))
 	}
 	require.LessOrEqual(t, len(o.NoteValue()), 80, "note capped at 80 chars")
 }

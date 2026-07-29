@@ -19,7 +19,7 @@ import (
 // pressQ sends the global quit key from the default list view.
 func pressQ(t *testing.T, h *home) tea.Cmd {
 	t.Helper()
-	_, cmd := h.handleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("q")})
+	_, cmd := h.handleKeyPress(textMsg("q"))
 	return cmd
 }
 
@@ -152,7 +152,7 @@ func TestQuitOnSaveFailureOpensConfirmModalAndCanForceQuit(t *testing.T) {
 	require.NotNil(t, h.pendingConfirmAction)
 
 	// Confirm -> quit anyway.
-	_, cmd = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("y")})
+	_, cmd = h.handleKeyPress(textMsg("y"))
 	assert.Equal(t, stateDefault, h.state)
 	assert.True(t, isQuit(cmd), "confirming must quit despite the save failure")
 }
@@ -167,7 +167,7 @@ func TestQuitOnSaveFailureCancelDoesNotQuit(t *testing.T) {
 	require.False(t, isQuit(pressQ(t, h)))
 	require.Equal(t, stateConfirm, h.state)
 
-	_, cmd := h.handleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("n")})
+	_, cmd := h.handleKeyPress(textMsg("n"))
 	assert.Equal(t, stateDefault, h.state)
 	assert.False(t, isQuit(cmd), "cancelling must not quit")
 }
@@ -215,7 +215,7 @@ func TestDeferredQuitOnSaveFailureOpensConfirmModal(t *testing.T) {
 	require.NotNil(t, h.confirmationOverlay)
 	assert.False(t, h.quitRequested, "the deferred quit is resolved, not stranded")
 
-	_, cmd = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("y")})
+	_, cmd = h.handleKeyPress(textMsg("y"))
 	assert.True(t, isQuit(cmd), "confirming exits despite the save failure")
 }
 
@@ -235,7 +235,7 @@ func TestSecondQuitWhileLoadingOffersForceQuit(t *testing.T) {
 	assert.Equal(t, stateConfirm, h.state, "a force-quit confirm modal opens")
 	require.NotNil(t, h.confirmationOverlay)
 
-	_, cmd := h.handleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("y")})
+	_, cmd := h.handleKeyPress(textMsg("y"))
 	assert.True(t, isQuit(cmd), "confirming abandons the starting session and exits")
 }
 
@@ -249,7 +249,7 @@ func TestForceQuitCancelKeepsWaiting(t *testing.T) {
 	require.False(t, isQuit(pressQ(t, h)), "second quit opens the force-quit modal")
 	require.Equal(t, stateConfirm, h.state)
 
-	_, cmd := h.handleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("n")})
+	_, cmd := h.handleKeyPress(textMsg("n"))
 	assert.False(t, isQuit(cmd), "cancelling force-quit does not exit")
 	assert.True(t, h.quitRequested, "still armed — the session is still starting")
 	assert.Equal(t, stateDefault, h.state)

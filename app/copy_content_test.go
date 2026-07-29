@@ -9,7 +9,6 @@ import (
 	"github.com/ZviBaratz/atrium/session/git"
 	"github.com/ZviBaratz/atrium/ui"
 
-	tea "github.com/charmbracelet/bubbletea"
 	"github.com/stretchr/testify/require"
 )
 
@@ -89,7 +88,7 @@ func TestCopyContent_KeyIsWired(t *testing.T) {
 	h, inst := newCaptureHome(t, spy)
 	h.Update(paneFrameMsg{target: frameTarget{instance: inst}, text: "content", at: time.Now()})
 
-	h.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'Y'}})
+	h.Update(textMsg("Y"))
 
 	require.Equal(t, "content", *got, "'Y' must reach copyPaneContent — nothing else asserts the case exists")
 }
@@ -104,7 +103,7 @@ func TestCopyContent_AllowedWhileBusy(t *testing.T) {
 	h.Update(paneFrameMsg{target: frameTarget{instance: inst}, text: "still copyable", at: time.Now()})
 	h.beginAsyncAction("pushing…", nil)
 
-	h.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'Y'}})
+	h.Update(textMsg("Y"))
 
 	require.Equal(t, "still copyable", *got, "a read-only copy must not be swallowed by the busy gate")
 	require.False(t, strings.Contains(h.menu.NoticeText(), "busy"))

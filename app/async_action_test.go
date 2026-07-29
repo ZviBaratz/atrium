@@ -68,7 +68,7 @@ func TestConfirmAsyncAction_ConfirmRunsOffThread(t *testing.T) {
 	h.confirmAction("Push?", "pushing…", func() tea.Msg { return sentinelMsg{id: 3} })
 	require.Equal(t, stateConfirm, h.state)
 
-	_, cmd := h.handleConfirmState(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+	_, cmd := h.handleConfirmState(textMsg("y"))
 
 	assert.Equal(t, stateDefault, h.state, "confirming closes the overlay")
 	require.True(t, h.actionInFlight, "an async confirm arms the in-flight state")
@@ -93,7 +93,7 @@ func TestConfirmAction_InstantActionRunsInline(t *testing.T) {
 	ran := false
 	h.confirmAction("Quit?", instantAction, func() tea.Msg { ran = true; return sentinelMsg{id: 1} })
 
-	_, cmd := h.handleConfirmState(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+	_, cmd := h.handleConfirmState(textMsg("y"))
 
 	assert.True(t, ran, "the inline action runs synchronously on confirm")
 	assert.False(t, h.actionInFlight, "the inline path never arms the in-flight state")

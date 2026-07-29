@@ -6,8 +6,6 @@ import (
 	"time"
 
 	"github.com/ZviBaratz/atrium/cmdlog"
-
-	tea "github.com/charmbracelet/bubbletea"
 )
 
 // The overlay reads live from the log ring: the all view shows every command, the
@@ -29,7 +27,7 @@ func TestCmdLogOverlay_FilterCycleAndExpand(t *testing.T) {
 	}
 
 	// Tab → failures filter: the successful command must drop out.
-	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyTab})
+	o.HandleKeyPress(keyMsg("tab"))
 	fails := stripANSI(o.Render())
 	if strings.Contains(fails, "git status") {
 		t.Errorf("failures view must exclude the successful command:\n%s", fails)
@@ -43,7 +41,7 @@ func TestCmdLogOverlay_FilterCycleAndExpand(t *testing.T) {
 	}
 
 	// Enter expands the failure under the cursor (index 0) to show its stderr.
-	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyEnter})
+	o.HandleKeyPress(keyMsg("enter"))
 	expanded := stripANSI(o.Render())
 	if !strings.Contains(expanded, "non-fast-forward") {
 		t.Errorf("expanded failure must show its stderr:\n%s", expanded)
@@ -58,9 +56,9 @@ func TestCmdLogOverlay_SkipsEmptySessionFilter(t *testing.T) {
 	o := NewCmdLogOverlay("") // no session
 	o.SetSize(80, 20)
 	// All -> Failures.
-	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyTab})
+	o.HandleKeyPress(keyMsg("tab"))
 	// Failures -> (Session skipped) -> All.
-	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyTab})
+	o.HandleKeyPress(keyMsg("tab"))
 	out := stripANSI(o.Render())
 	if !strings.Contains(out, "Command Log — all") {
 		t.Errorf("cycle with no session should land back on the all view:\n%s", out)

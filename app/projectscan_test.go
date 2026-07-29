@@ -7,7 +7,6 @@ import (
 
 	"github.com/ZviBaratz/atrium/config"
 
-	tea "github.com/charmbracelet/bubbletea"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -87,10 +86,10 @@ func TestProjectScanDone_PersistsAndLiveUpdatesForm(t *testing.T) {
 	require.NoError(t, os.MkdirAll(scannedRepo, 0o755))
 
 	h := newCreateFormHome(t)
-	h.handleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("N")})
+	h.handleKeyPress(textMsg("N"))
 	require.NotNil(t, h.textInputOverlay)
 	// The picker has focus in the N flow; type a fragment that matches nothing yet.
-	h.handleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("zebra")})
+	h.handleKeyPress(textMsg("zebra"))
 
 	h.scanGen = 7
 	h.scanInFlight = true
@@ -158,11 +157,11 @@ func TestStartProjectScan_InFlightGuard(t *testing.T) {
 func TestOpenCreateForm_RescanOnlyWhenStale(t *testing.T) {
 	fresh := newCreateFormHome(t)
 	fresh.lastScanAt = time.Now()
-	fresh.handleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("N")})
+	fresh.handleKeyPress(textMsg("N"))
 	assert.False(t, fresh.scanInFlight, "fresh cache must not re-scan on form open")
 
 	stale := newCreateFormHome(t)
 	stale.lastScanAt = time.Now().Add(-2 * projectScanTTL)
-	stale.handleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("N")})
+	stale.handleKeyPress(textMsg("N"))
 	assert.True(t, stale.scanInFlight, "stale cache must kick a re-scan on form open")
 }

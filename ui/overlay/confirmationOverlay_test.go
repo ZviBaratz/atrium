@@ -4,7 +4,6 @@ import (
 	"strings"
 	"testing"
 
-	tea "github.com/charmbracelet/bubbletea"
 	xansi "github.com/charmbracelet/x/ansi"
 	"github.com/stretchr/testify/assert"
 )
@@ -67,7 +66,7 @@ func TestConfirmationOverlay_ConfirmLabel(t *testing.T) {
 }
 
 func TestConfirmationOverlay_AltConfirmKey(t *testing.T) {
-	ctrlX := tea.KeyMsg{Type: tea.KeyCtrlX}
+	ctrlX := keyMsg("ctrl+x")
 
 	t.Run("alt key confirms when set", func(t *testing.T) {
 		c := NewConfirmationOverlay("Kill session?")
@@ -92,7 +91,7 @@ func TestConfirmationOverlay_AltConfirmKey(t *testing.T) {
 		c := NewConfirmationOverlay("Kill session?")
 		c.SetConfirmAltKey("ctrl+x")
 
-		shouldClose := c.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("y")})
+		shouldClose := c.HandleKeyPress(textMsg("y"))
 
 		assert.True(t, shouldClose)
 		assert.True(t, c.Confirmed)

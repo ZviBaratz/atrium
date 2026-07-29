@@ -11,7 +11,6 @@ import (
 	"github.com/ZviBaratz/atrium/config"
 	"github.com/ZviBaratz/atrium/session"
 
-	tea "github.com/charmbracelet/bubbletea"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -305,23 +304,23 @@ func TestAccountsPanel_RenameRegroupsOpenSessions(t *testing.T) {
 
 	// The user edits the work account: new name, and a pool. Driven through the real
 	// @-panel key path, so the wiring in handleAccountsState is covered too.
-	_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("@")})
+	_, _ = h.handleKeyPress(textMsg("@"))
 	require.Equal(t, stateAccounts, h.state)
-	_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("e")}) // edit row 0
-	_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyCtrlU})                     // focus starts on Name
+	_, _ = h.handleKeyPress(textMsg("e"))     // edit row 0
+	_, _ = h.handleKeyPress(keyMsg("ctrl+u")) // focus starts on Name
 	for _, r := range "zvi.baratz" {
-		_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+		_, _ = h.handleKeyPress(textMsg(string(r)))
 	}
 	for i := 0; i < 4; i++ { // Name → ConfigDir → remote → path → Pool
-		_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyTab})
+		_, _ = h.handleKeyPress(keyMsg("tab"))
 	}
 	for _, r := range "quantivly" {
-		_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+		_, _ = h.handleKeyPress(textMsg(string(r)))
 	}
-	_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyEnter}) // commit
+	_, _ = h.handleKeyPress(keyMsg("enter")) // commit
 	require.False(t, h.menu.HasNotice(), "the notice waits: the panel still covers the list")
 
-	_, cmd := h.handleKeyPress(tea.KeyMsg{Type: tea.KeyEsc}) // close the panel
+	_, cmd := h.handleKeyPress(keyMsg("esc")) // close the panel
 	require.Equal(t, stateDefault, h.state)
 
 	renamed := h.list.GetInstances()
@@ -429,23 +428,23 @@ func TestAccountsPanel_TwoRenamesInOneVisitAnnounceBoth(t *testing.T) {
 
 	renameRow := func(row int, to string) {
 		for i := 0; i < row; i++ {
-			_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
+			_, _ = h.handleKeyPress(textMsg("j"))
 		}
-		_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("e")})
-		_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyCtrlU}) // focus starts on Name
+		_, _ = h.handleKeyPress(textMsg("e"))
+		_, _ = h.handleKeyPress(keyMsg("ctrl+u")) // focus starts on Name
 		for _, r := range to {
-			_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+			_, _ = h.handleKeyPress(textMsg(string(r)))
 		}
-		_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyEnter})
+		_, _ = h.handleKeyPress(keyMsg("enter"))
 	}
 
-	_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("@")})
+	_, _ = h.handleKeyPress(textMsg("@"))
 	require.Equal(t, stateAccounts, h.state)
 	renameRow(0, "zvi.baratz")
 	renameRow(1, "zvi.personal")
 	require.False(t, h.menu.HasNotice(), "both notices wait behind the panel")
 
-	_, cmd := h.handleKeyPress(tea.KeyMsg{Type: tea.KeyEsc})
+	_, cmd := h.handleKeyPress(keyMsg("esc"))
 	require.Equal(t, stateDefault, h.state)
 	require.NotNil(t, cmd, "closing the panel carries the held-over notice")
 
@@ -470,18 +469,18 @@ func TestAccountsPanel_RenamingOneAccountTwiceCountsItsSessionsOnce(t *testing.T
 	withCapturingStore(t, h)
 
 	rename := func(to string) {
-		_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("e")})
-		_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyCtrlU})
+		_, _ = h.handleKeyPress(textMsg("e"))
+		_, _ = h.handleKeyPress(keyMsg("ctrl+u"))
 		for _, r := range to {
-			_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+			_, _ = h.handleKeyPress(textMsg(string(r)))
 		}
-		_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyEnter})
+		_, _ = h.handleKeyPress(keyMsg("enter"))
 	}
 
-	_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("@")})
+	_, _ = h.handleKeyPress(textMsg("@"))
 	rename("zvi.baratz")  // first attempt
 	rename("zvi.baratz2") // corrected
-	_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyEsc})
+	_, _ = h.handleKeyPress(keyMsg("esc"))
 
 	assert.Contains(t, h.menu.String(), "2 sessions regrouped",
 		"there are only two sessions, however many times they were re-stamped")
@@ -546,10 +545,10 @@ func TestAccountsPanel_ReorderDoesNotRestamp(t *testing.T) {
 	h.list.SetGroupMode("account")
 	cs := withCapturingStore(t, h)
 
-	_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("@")})
-	_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("J")}) // work moves below personal
+	_, _ = h.handleKeyPress(textMsg("@"))
+	_, _ = h.handleKeyPress(textMsg("J")) // work moves below personal
 	require.Equal(t, "personal", h.appConfig.ClaudeAccounts[0].Name, "the reorder landed")
-	_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyEsc})
+	_, _ = h.handleKeyPress(keyMsg("esc"))
 
 	assert.False(t, h.menu.HasNotice(),
 		"a routing reorder relabels nothing, so there is nothing to announce")

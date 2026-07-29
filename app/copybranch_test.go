@@ -69,7 +69,7 @@ func newBranchInstance(t *testing.T, title, branch string) *session.Instance {
 
 // pressY drives the y keybinding and returns the command it produced.
 func pressY(h *home) tea.Cmd {
-	_, cmd := h.handleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("y")})
+	_, cmd := h.handleKeyPress(textMsg("y"))
 	return cmd
 }
 

@@ -22,23 +22,23 @@ func tallContent(n int) string {
 func key(s string) tea.KeyMsg {
 	switch s {
 	case "up":
-		return tea.KeyMsg{Type: tea.KeyUp}
+		return keyMsg("up")
 	case "down":
-		return tea.KeyMsg{Type: tea.KeyDown}
+		return keyMsg("down")
 	case "left":
-		return tea.KeyMsg{Type: tea.KeyLeft}
+		return keyMsg("left")
 	case "right":
-		return tea.KeyMsg{Type: tea.KeyRight}
+		return keyMsg("right")
 	case "pgup":
-		return tea.KeyMsg{Type: tea.KeyPgUp}
+		return keyMsg("pgup")
 	case "pgdown":
-		return tea.KeyMsg{Type: tea.KeyPgDown}
+		return keyMsg("pgdown")
 	case "enter":
-		return tea.KeyMsg{Type: tea.KeyEnter}
+		return keyMsg("enter")
 	case "esc":
-		return tea.KeyMsg{Type: tea.KeyEsc}
+		return keyMsg("esc")
 	default:
-		return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(s)}
+		return textMsg(s)
 	}
 }
 

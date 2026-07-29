@@ -71,7 +71,7 @@ func TestHandleInfoNotice_HintBarOffRidesReservedMenuRow(t *testing.T) {
 
 // pressKey drives a single rune keybinding through the default-state handler.
 func pressKey(h *home, r rune) {
-	h.handleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+	h.handleKeyPress(textMsg(string(r)))
 }
 
 // newPausedHome builds a stateDefault home whose selected session is paused.
@@ -102,7 +102,7 @@ func TestQuickSend_PausedSessionExplains(t *testing.T) {
 func TestEnter_PausedSessionExplains(t *testing.T) {
 	h := newPausedHome(t)
 
-	_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyEnter})
+	_, _ = h.handleKeyPress(keyMsg("enter"))
 
 	require.True(t, h.menu.HasNotice())
 	assert.Contains(t, h.menu.String(), "resume")

@@ -9,14 +9,13 @@ import (
 	"github.com/ZviBaratz/atrium/ui"
 	"github.com/ZviBaratz/atrium/ui/theme"
 
-	tea "github.com/charmbracelet/bubbletea"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 // pressKey drives a single rune key through the home model.
 func pressRune(h *home, r rune) {
-	_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+	_, _ = h.handleKeyPress(textMsg(string(r)))
 }
 
 // v enters multi-select mode: it flips the discrete state and points the hint bar
@@ -66,10 +65,10 @@ func TestMultiSelect_SpaceMarksAndUnmarks(t *testing.T) {
 	pressRune(h, 'v')
 	require.Equal(t, 0, h.list.MarkedCount())
 
-	_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeySpace})
+	_, _ = h.handleKeyPress(keyMsg(" "))
 	require.Equal(t, 1, h.list.MarkedCount(), "space marks the selected session")
 
-	_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeySpace})
+	_, _ = h.handleKeyPress(keyMsg(" "))
 	require.Equal(t, 0, h.list.MarkedCount(), "space again unmarks it")
 }
 
@@ -82,7 +81,7 @@ func TestMultiSelect_EscClearsAndExits(t *testing.T) {
 	h.list.ToggleMark(a)
 	require.Equal(t, 1, h.list.MarkedCount())
 
-	_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyEsc})
+	_, _ = h.handleKeyPress(keyMsg("esc"))
 
 	assert.Equal(t, stateDefault, h.state, "esc exits multi-select mode")
 	assert.Equal(t, 0, h.list.MarkedCount(), "esc clears the marks")
@@ -214,15 +213,15 @@ func TestMultiSelect_KillDoubleTapEchoesTheOpeningKey(t *testing.T) {
 		assert.Contains(t, h.confirmationOverlay.Render(), "(or x)",
 			"the dialog teaches the key the user actually pressed")
 		require.True(t, h.confirmationOverlay.HandleKeyPress(
-			tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'x'}}), "x x must kill in one motion")
+			textMsg("x")), "x x must kill in one motion")
 		assert.True(t, h.confirmationOverlay.Confirmed)
 	})
 
 	t.Run("the ctrl+x chord confirms on a second ctrl+x", func(t *testing.T) {
-		h := openWith(t, func(h *home) { _, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyCtrlX}) })
+		h := openWith(t, func(h *home) { _, _ = h.handleKeyPress(keyMsg("ctrl+x")) })
 
 		assert.Equal(t, keys.KillKey, h.confirmationOverlay.ConfirmAltKey)
-		require.True(t, h.confirmationOverlay.HandleKeyPress(tea.KeyMsg{Type: tea.KeyCtrlX}))
+		require.True(t, h.confirmationOverlay.HandleKeyPress(keyMsg("ctrl+x")))
 		assert.True(t, h.confirmationOverlay.Confirmed)
 	})
 
@@ -234,6 +233,6 @@ func TestMultiSelect_KillDoubleTapEchoesTheOpeningKey(t *testing.T) {
 
 		assert.Equal(t, "", h.confirmationOverlay.ConfirmAltKey)
 		assert.False(t, h.confirmationOverlay.HandleKeyPress(
-			tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'x'}}))
+			textMsg("x")))
 	})
 }

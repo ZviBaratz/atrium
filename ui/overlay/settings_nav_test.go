@@ -162,7 +162,7 @@ func TestRailNavigationMovesTheRailNotTheRows(t *testing.T) {
 	o := NewSettingsOverlay(config.DefaultConfig())
 	before := o.railCursor
 
-	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyDown})
+	o.HandleKeyPress(keyMsg("down"))
 	assert.Equal(t, before+1, o.railCursor)
 	start, end := o.rowRange(o.selectedEntry())
 	assert.GreaterOrEqualf(t, o.cursor, start, "the row cursor must follow the rail")
@@ -178,12 +178,12 @@ func TestRailNavigationMovesTheRailNotTheRows(t *testing.T) {
 func TestRailNavigationClampsAtEnds(t *testing.T) {
 	o := NewSettingsOverlay(config.DefaultConfig())
 	for range railEntries() {
-		o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyUp})
+		o.HandleKeyPress(keyMsg("up"))
 	}
 	assert.Equal(t, 0, o.railCursor, "up at the top clamps")
 
 	for range railEntries() {
-		o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyDown})
+		o.HandleKeyPress(keyMsg("down"))
 	}
 	assert.Equal(t, len(railEntries())-1, o.railCursor, "down at the bottom clamps")
 }
@@ -197,11 +197,11 @@ func TestRowNavigationStaysWithinTheCategory(t *testing.T) {
 	start, end := o.rowRange(o.selectedEntry())
 	require.Equal(t, start, o.cursor, "theme is Appearance's first row")
 
-	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyUp})
+	o.HandleKeyPress(keyMsg("up"))
 	assert.Equal(t, start, o.cursor, "up at the category's first row clamps")
 
 	for range o.rows {
-		o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyDown})
+		o.HandleKeyPress(keyMsg("down"))
 	}
 	assert.Equal(t, end-1, o.cursor, "down stops at the category's last row")
 }
@@ -214,15 +214,15 @@ func TestPagingKeysStayWithinTheCategory(t *testing.T) {
 	settingsAt(t, o, "theme") // Appearance
 	start, end := o.rowRange(o.selectedEntry())
 
-	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyEnd})
+	o.HandleKeyPress(keyMsg("end"))
 	assert.Equal(t, end-1, o.cursor, "end goes to the category's last row")
-	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyHome})
+	o.HandleKeyPress(keyMsg("home"))
 	assert.Equal(t, start, o.cursor, "home goes to its first")
 
-	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyPgDown})
+	o.HandleKeyPress(keyMsg("pgdown"))
 	assert.LessOrEqual(t, o.cursor, end-1, "pgdown clamps inside the category")
 	assert.Greater(t, o.cursor, start, "and actually moves")
-	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyPgUp})
+	o.HandleKeyPress(keyMsg("pgup"))
 	assert.Equal(t, start, o.cursor, "pgup clamps at the first row")
 }
 
@@ -235,11 +235,11 @@ func TestArrowsAreAlwaysTheValueNeverAPaneSwitch(t *testing.T) {
 	settingsAt(t, o, "notifications")
 	require.Equal(t, focusRows, o.focus)
 
-	_, changed := o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRight})
+	_, changed := o.HandleKeyPress(keyMsg("right"))
 	assert.Equal(t, "notifications", changed, "→ must cycle the value")
 	assert.Equal(t, focusRows, o.focus, "→ must not move focus")
 
-	_, changed = o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyLeft})
+	_, changed = o.HandleKeyPress(keyMsg("left"))
 	assert.Equal(t, "notifications", changed, "← must cycle the value")
 	assert.Equal(t, focusRows, o.focus, "← must not move focus")
 }
@@ -249,12 +249,12 @@ func TestTabSwitchesPanes(t *testing.T) {
 	o := NewSettingsOverlay(config.DefaultConfig())
 	require.Equal(t, focusRail, o.focus)
 
-	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyTab})
+	o.HandleKeyPress(keyMsg("tab"))
 	assert.Equal(t, focusRows, o.focus)
-	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyTab})
+	o.HandleKeyPress(keyMsg("tab"))
 	assert.Equal(t, focusRail, o.focus)
-	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyTab})
-	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyShiftTab})
+	o.HandleKeyPress(keyMsg("tab"))
+	o.HandleKeyPress(keyMsg("shift+tab"))
 	assert.Equal(t, focusRail, o.focus, "shift+tab switches panes too")
 }
 
@@ -262,7 +262,7 @@ func TestTabSwitchesPanes(t *testing.T) {
 // owns rows.
 func TestRightFocusesTheRowsPaneFromTheRail(t *testing.T) {
 	for _, key := range []tea.KeyMsg{
-		{Type: tea.KeyRight}, {Type: tea.KeyTab}, {Type: tea.KeyEnter},
+		keyMsg("right"), keyMsg("tab"), keyMsg("enter"),
 	} {
 		o := NewSettingsOverlay(config.DefaultConfig())
 		o.HandleKeyPress(key)
@@ -275,7 +275,7 @@ func TestRightFocusesTheRowsPaneFromTheRail(t *testing.T) {
 // overlay cannot open a sibling, so a request plus closed=true is the whole protocol.
 func TestAccountsEntryHandsOffToTheAccountsOverlay(t *testing.T) {
 	for _, key := range []tea.KeyMsg{
-		{Type: tea.KeyRight}, {Type: tea.KeyTab}, {Type: tea.KeyEnter},
+		keyMsg("right"), keyMsg("tab"), keyMsg("enter"),
 	} {
 		o := NewSettingsOverlay(config.DefaultConfig())
 		o.SetRailIndex(len(railEntries()) - 1)
@@ -389,11 +389,11 @@ func TestEscIsLayered(t *testing.T) {
 	settingsAt(t, o, "theme")
 	require.Equal(t, focusRows, o.focus)
 
-	closed, _ := o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyEsc})
+	closed, _ := o.HandleKeyPress(keyMsg("esc"))
 	assert.False(t, closed, "the first esc backs out of the rows pane")
 	assert.Equal(t, focusRail, o.focus)
 
-	closed, _ = o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyEsc})
+	closed, _ = o.HandleKeyPress(keyMsg("esc"))
 	assert.True(t, closed, "the second esc closes the panel")
 }
 
@@ -425,7 +425,7 @@ func TestOpenAtLandsOnEveryRowWithTheRowsPaneFocused(t *testing.T) {
 func TestOpenAtClearsTransientState(t *testing.T) {
 	o := NewSettingsOverlay(config.DefaultConfig())
 	settingsAt(t, o, "branch_prefix")
-	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyEnter}) // opens the inline editor
+	o.HandleKeyPress(keyMsg("enter")) // opens the inline editor
 	require.True(t, o.editing, "precondition: an editor is open")
 
 	require.True(t, o.OpenAt("max_sessions"))
@@ -458,7 +458,7 @@ func TestResetRestoresTheDefaultAndReportsTheKey(t *testing.T) {
 	settingsAt(t, o, "theme")
 	require.False(t, o.isModified(o.cursor), "precondition: a fresh config starts unmodified")
 
-	_, changed := o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRight}) // cycle off the default
+	_, changed := o.HandleKeyPress(keyMsg("right")) // cycle off the default
 	require.Equal(t, "theme", changed)
 	require.True(t, o.isModified(o.cursor), "precondition: the row is modified before reset")
 
@@ -534,7 +534,7 @@ func TestResetOnTheReadOnlyRowIsASilentNoOp(t *testing.T) {
 // filter is typed — sending them as one KeyRunes would hide a per-keystroke bug.
 func typeFilter(o *SettingsOverlay, s string) {
 	for _, r := range s {
-		o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+		o.HandleKeyPress(textMsg(string(r)))
 	}
 }
 
@@ -610,7 +610,7 @@ func TestSlashFocusesTheRowsPaneFromEitherPane(t *testing.T) {
 	for _, from := range []settingsFocus{focusRail, focusRows} {
 		o := NewSettingsOverlay(config.DefaultConfig())
 		if from == focusRows {
-			o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRight})
+			o.HandleKeyPress(keyMsg("right"))
 		}
 		require.Equal(t, from, o.focus)
 
@@ -634,7 +634,7 @@ func TestSlashDoesNotMoveTheCursorBeforeAnythingIsTyped(t *testing.T) {
 	assert.Equal(t, "agent_oom_margin", o.selectedRow().key, "/ must not move the cursor")
 	assert.Equal(t, catAdvanced, o.selectedEntry().category, "nor the rail")
 
-	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyEsc})
+	o.HandleKeyPress(keyMsg("esc"))
 	assert.Equal(t, "agent_oom_margin", o.selectedRow().key, "esc on an untyped filter is a no-op")
 	assert.Equal(t, catAdvanced, o.selectedEntry().category)
 }
@@ -656,10 +656,10 @@ func TestRunesTypeWhileTheFilterHasFocus(t *testing.T) {
 	// the theme row alone would hold even if r had reset whatever row IS highlighted.
 	assert.Equal(t, before, rowValues(o), "r must not have reset anything")
 
-	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeySpace})
+	o.HandleKeyPress(keyMsg(" "))
 	assert.Equal(t, "jkr ", o.search.filter, "space extends the filter")
 
-	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyBackspace})
+	o.HandleKeyPress(keyMsg("backspace"))
 	assert.Equal(t, "jkr", o.search.filter)
 }
 
@@ -675,11 +675,11 @@ func TestArrowsMoveTheResultCursor(t *testing.T) {
 	require.Greater(t, len(results), 2, "the query must return enough rows to move within")
 
 	require.Equal(t, results[0], o.cursor, "the cursor starts on the best match")
-	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyDown})
+	o.HandleKeyPress(keyMsg("down"))
 	assert.Equal(t, results[1], o.cursor)
-	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyUp})
+	o.HandleKeyPress(keyMsg("up"))
 	assert.Equal(t, results[0], o.cursor)
-	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyUp})
+	o.HandleKeyPress(keyMsg("up"))
 	assert.Equal(t, results[0], o.cursor, "up at the first result clamps")
 }
 
@@ -708,12 +708,12 @@ func TestEditingAMatchedRowWorksAndKeepsItInTheResults(t *testing.T) {
 	require.Equal(t, "notifications", o.selectedRow().key)
 	before := resultKeys(o)
 
-	_, changed := o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRight})
+	_, changed := o.HandleKeyPress(keyMsg("right"))
 	assert.Equal(t, "notifications", changed, "→ cycles the value, exactly as unfiltered")
 	assert.Equal(t, before, resultKeys(o), "the row stays in the result list after an edit")
 	assert.Equal(t, "notifications", o.selectedRow().key, "and stays highlighted")
 
-	_, changed = o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyEnter})
+	_, changed = o.HandleKeyPress(keyMsg("enter"))
 	assert.Equal(t, "notifications", changed, "↵ cycles an enum, exactly as unfiltered")
 }
 
@@ -725,13 +725,13 @@ func TestEnterOpensTheLineEditorFromASearchResult(t *testing.T) {
 	typeFilter(o, "branch_prefix")
 	require.Equal(t, "branch_prefix", o.selectedRow().key)
 
-	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyEnter})
+	o.HandleKeyPress(keyMsg("enter"))
 	require.True(t, o.editing, "↵ opens the inline editor")
 	typeFilter(o, "zz")
 	assert.Equal(t, "branch_prefix", o.search.filter,
 		"an open editor swallows runes; the filter must not grow behind it")
 
-	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyEsc})
+	o.HandleKeyPress(keyMsg("esc"))
 	assert.False(t, o.editing)
 	assert.True(t, o.searching(), "cancelling the edit returns to the filtered list")
 }
@@ -744,18 +744,18 @@ func TestEscIsThreeLayeredWithAFilter(t *testing.T) {
 	typeFilter(o, "theme")
 	require.True(t, o.searching())
 
-	closed, _ := o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyEsc})
+	closed, _ := o.HandleKeyPress(keyMsg("esc"))
 	assert.False(t, closed, "the first esc clears the filter")
 	assert.False(t, o.searching())
 	assert.Equal(t, focusRows, o.focus, "and keeps the rows pane focused")
 	assert.Equal(t, "theme", o.selectedRow().key, "landing on the row the search found")
 	assert.Equal(t, catAppearance, o.selectedEntry().category)
 
-	closed, _ = o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyEsc})
+	closed, _ = o.HandleKeyPress(keyMsg("esc"))
 	assert.False(t, closed, "the second esc backs out to the rail")
 	assert.Equal(t, focusRail, o.focus)
 
-	closed, _ = o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyEsc})
+	closed, _ = o.HandleKeyPress(keyMsg("esc"))
 	assert.True(t, closed, "the third esc closes the panel")
 }
 
@@ -802,7 +802,7 @@ func TestZeroMatchesIsStableAndRecoverable(t *testing.T) {
 	assert.Equal(t, "theme", o.selectedRow().key, "the cursor holds its last valid row")
 
 	for range 4 {
-		o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyBackspace})
+		o.HandleKeyPress(keyMsg("backspace"))
 	}
 	assert.Equal(t, "theme", o.selectedRow().key, "backspacing back to a match recovers")
 }
@@ -815,7 +815,7 @@ func TestTabLeavesTheSearchForTheRail(t *testing.T) {
 	o.HandleKeyPress(keyRunes("/"))
 	typeFilter(o, "theme")
 
-	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyTab})
+	o.HandleKeyPress(keyMsg("tab"))
 	assert.False(t, o.searching())
 	assert.Equal(t, focusRail, o.focus)
 	assert.Equal(t, catAppearance, o.selectedEntry().category, "on the category the search found")

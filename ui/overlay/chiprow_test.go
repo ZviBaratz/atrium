@@ -3,7 +3,6 @@ package overlay
 import (
 	"testing"
 
-	tea "github.com/charmbracelet/bubbletea"
 	xansi "github.com/charmbracelet/x/ansi"
 	"github.com/stretchr/testify/assert"
 )
@@ -34,31 +33,31 @@ func TestWrapIndex_ZeroOrNegativeN_ReturnsZero(t *testing.T) {
 
 func TestChipRow_MoveCursor_RightWrapsToStart(t *testing.T) {
 	c := chipRow{options: []string{"a", "b", "c"}, cursor: 2}
-	c.moveCursor(tea.KeyMsg{Type: tea.KeyRight})
+	c.moveCursor(keyMsg("right"))
 	assert.Equal(t, 0, c.cursor, "right past last wraps to 0")
 }
 
 func TestChipRow_MoveCursor_LeftWrapsToEnd(t *testing.T) {
 	c := chipRow{options: []string{"a", "b", "c"}, cursor: 0}
-	c.moveCursor(tea.KeyMsg{Type: tea.KeyLeft})
+	c.moveCursor(keyMsg("left"))
 	assert.Equal(t, 2, c.cursor, "left past 0 wraps to last")
 }
 
 func TestChipRow_MoveCursor_DownAliasesRight(t *testing.T) {
 	c := chipRow{options: []string{"a", "b", "c"}}
-	c.moveCursor(tea.KeyMsg{Type: tea.KeyDown})
+	c.moveCursor(keyMsg("down"))
 	assert.Equal(t, 1, c.cursor)
 }
 
 func TestChipRow_MoveCursor_UpAliasesLeft(t *testing.T) {
 	c := chipRow{options: []string{"a", "b", "c"}, cursor: 1}
-	c.moveCursor(tea.KeyMsg{Type: tea.KeyUp})
+	c.moveCursor(keyMsg("up"))
 	assert.Equal(t, 0, c.cursor)
 }
 
 func TestChipRow_MoveCursor_OtherKeyIsNoop(t *testing.T) {
 	c := chipRow{options: []string{"a", "b", "c"}, cursor: 1}
-	c.moveCursor(tea.KeyMsg{Type: tea.KeyEsc})
+	c.moveCursor(keyMsg("esc"))
 	assert.Equal(t, 1, c.cursor, "Esc must not move cursor")
 }
 
@@ -67,9 +66,9 @@ func TestChipRow_MoveCursor_OtherKeyIsNoop(t *testing.T) {
 // moveCursor, not just wrapIndex in isolation.
 func TestChipRow_MoveCursor_EmptyOptionsNoPanic(t *testing.T) {
 	c := chipRow{}
-	c.moveCursor(tea.KeyMsg{Type: tea.KeyRight})
+	c.moveCursor(keyMsg("right"))
 	assert.Equal(t, 0, c.cursor, "empty row stays at 0")
-	c.moveCursor(tea.KeyMsg{Type: tea.KeyLeft})
+	c.moveCursor(keyMsg("left"))
 	assert.Equal(t, 0, c.cursor, "empty row stays at 0")
 }
 

@@ -7,7 +7,6 @@ import (
 	"github.com/ZviBaratz/atrium/config"
 	"github.com/ZviBaratz/atrium/ui/theme"
 
-	tea "github.com/charmbracelet/bubbletea"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -79,7 +78,7 @@ func TestApplySettingChange_ScanScopeChangeForcesARewalk(t *testing.T) {
 
 			assert.Equal(t, []string{scanned}, h.scannedRepos,
 				"results stand until the new scope's walk lands")
-			h.handleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("N")})
+			h.handleKeyPress(textMsg("N"))
 			assert.True(t, h.scanInFlight, "the next form-open must re-walk under the new scope")
 		})
 	}

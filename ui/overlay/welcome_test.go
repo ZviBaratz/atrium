@@ -5,8 +5,6 @@ import (
 	"testing"
 
 	"github.com/ZviBaratz/atrium/config"
-
-	tea "github.com/charmbracelet/bubbletea"
 )
 
 func detectedFixture() []config.Profile {
@@ -22,7 +20,7 @@ func TestWelcomeOverlay_DetectingThenPick(t *testing.T) {
 	w.SetWidth(54)
 
 	// Before detection resolves, Enter/nav must not close or confirm.
-	if w.HandleKeyPress(tea.KeyMsg{Type: tea.KeyDown}) {
+	if w.HandleKeyPress(keyMsg("down")) {
 		t.Fatal("nav during detecting should not close")
 	}
 	if !strings.Contains(w.Render(), "Detecting") {
@@ -36,12 +34,12 @@ func TestWelcomeOverlay_DetectingThenPick(t *testing.T) {
 		t.Errorf("default selection = %q, want \"claude\"", got)
 	}
 	// Down moves selection to codex.
-	w.HandleKeyPress(tea.KeyMsg{Type: tea.KeyDown})
+	w.HandleKeyPress(keyMsg("down"))
 	if got := w.SelectedProfile().Name; got != "codex" {
 		t.Errorf("after Down, selection = %q, want \"codex\"", got)
 	}
 	// Enter confirms and closes.
-	if !w.HandleKeyPress(tea.KeyMsg{Type: tea.KeyEnter}) {
+	if !w.HandleKeyPress(keyMsg("enter")) {
 		t.Fatal("Enter should close the overlay")
 	}
 	if !w.Confirmed() {
@@ -55,7 +53,7 @@ func TestWelcomeOverlay_DetectingThenPick(t *testing.T) {
 func TestWelcomeOverlay_SkipDoesNotConfirm(t *testing.T) {
 	w := NewWelcomeOverlay()
 	w.SetDetected(detectedFixture())
-	if !w.HandleKeyPress(tea.KeyMsg{Type: tea.KeyEsc}) {
+	if !w.HandleKeyPress(keyMsg("esc")) {
 		t.Fatal("Esc should close the overlay")
 	}
 	if w.Confirmed() {
@@ -68,7 +66,7 @@ func TestWelcomeOverlay_SkipDoesNotConfirm(t *testing.T) {
 func TestWelcomeOverlay_CtrlCSkips(t *testing.T) {
 	w := NewWelcomeOverlay()
 	w.SetDetected(detectedFixture())
-	if !w.HandleKeyPress(tea.KeyMsg{Type: tea.KeyCtrlC}) {
+	if !w.HandleKeyPress(keyMsg("ctrl+c")) {
 		t.Fatal("ctrl+c should close the overlay")
 	}
 	if w.Confirmed() {
@@ -163,7 +161,7 @@ func TestWelcomeOverlay_EmptyDetection(t *testing.T) {
 		t.Errorf("empty-detection render should warn about no agents, got:\n%s", out)
 	}
 	// Enter/Esc both close; Enter acknowledges (Confirmed true) but has no program.
-	if !w.HandleKeyPress(tea.KeyMsg{Type: tea.KeyEnter}) {
+	if !w.HandleKeyPress(keyMsg("enter")) {
 		t.Fatal("Enter should close even with no agents")
 	}
 }

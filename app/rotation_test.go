@@ -7,7 +7,6 @@ import (
 	"github.com/ZviBaratz/atrium/config"
 	"github.com/ZviBaratz/atrium/session"
 	"github.com/ZviBaratz/atrium/ui/overlay"
-	tea "github.com/charmbracelet/bubbletea"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -169,7 +168,7 @@ func TestCreateForm_ExhaustedAcceptSpawnsSoonest(t *testing.T) {
 	require.NotNil(t, h.pendingExhausted, "the plan is staged behind the confirm")
 
 	// Accept: y yields the staged action, whose message spawns via Update.
-	_, cmd := h.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("y")})
+	_, cmd := h.Update(textMsg("y"))
 	require.NotNil(t, cmd, "accepting must return the staged spawn command")
 	h.Update(cmd())
 

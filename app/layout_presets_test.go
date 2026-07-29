@@ -16,7 +16,7 @@ import (
 )
 
 // escKey builds the Esc key event (runeKey only covers printable runes).
-func escKey() tea.KeyMsg { return tea.KeyMsg{Type: tea.KeyEsc} }
+func escKey() tea.KeyMsg { return keyMsg("esc") }
 
 // cycleLayoutKey is the single key that steps the layout presets. Kept next to
 // the tests so a rebind of KeyLayoutPreset fails here loudly rather than

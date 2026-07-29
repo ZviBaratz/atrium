@@ -22,7 +22,7 @@ import (
 func stripANSI(s string) string { return ansi.Strip(s) }
 
 func keyRunes(s string) tea.KeyMsg {
-	return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(s)}
+	return textMsg(s)
 }
 
 // settingsAt moves the overlay cursor onto the row with the given key, failing
@@ -118,13 +118,13 @@ func TestSettingsOverlay_ToggleBool(t *testing.T) {
 	o := NewSettingsOverlay(cfg)
 	settingsAt(t, o, "auto_attach")
 
-	closed, changed := o.HandleKeyPress(tea.KeyMsg{Type: tea.KeySpace})
+	closed, changed := o.HandleKeyPress(keyMsg(" "))
 	assert.False(t, closed)
 	assert.Equal(t, "auto_attach", changed, "a toggle must report its row key so home can persist")
 	assert.False(t, cfg.GetAutoAttach(), "space flips the default-on field off")
 
 	// Enter toggles bools too.
-	_, changed = o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyEnter})
+	_, changed = o.HandleKeyPress(keyMsg("enter"))
 	assert.Equal(t, "auto_attach", changed)
 	assert.True(t, cfg.GetAutoAttach())
 }
@@ -137,7 +137,7 @@ func TestSettingsOverlay_ToggleNotifyWhenFocused(t *testing.T) {
 	settingsAt(t, o, "notify_when_focused")
 
 	require.False(t, cfg.GetNotifyWhenFocused(), "focus-gating is on by default (silent while focused)")
-	_, changed := o.HandleKeyPress(tea.KeyMsg{Type: tea.KeySpace})
+	_, changed := o.HandleKeyPress(keyMsg(" "))
 	assert.Equal(t, "notify_when_focused", changed, "a toggle must report its row key so home can persist")
 	assert.True(t, cfg.GetNotifyWhenFocused(), "space turns notify-while-focused on")
 }
@@ -179,14 +179,14 @@ func TestSettingsOverlay_CycleFinishedTurns(t *testing.T) {
 	settingsAt(t, o, "notifications_finished")
 
 	require.Equal(t, config.NotificationsSame, cfg.GetNotificationsFinished(), "defaults to following notifications")
-	_, changed := o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRight})
+	_, changed := o.HandleKeyPress(keyMsg("right"))
 	assert.Equal(t, "notifications_finished", changed, "a cycle must report its row key so home can persist")
 	assert.Equal(t, config.NotificationsOff, cfg.GetNotificationsFinished(), "same → off")
 
-	_, _ = o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRight})
+	_, _ = o.HandleKeyPress(keyMsg("right"))
 	assert.Equal(t, config.NotificationsBell, cfg.GetNotificationsFinished(), "off → bell")
 
-	_, _ = o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRight})
+	_, _ = o.HandleKeyPress(keyMsg("right"))
 	assert.Equal(t, config.NotificationsSame, cfg.GetNotificationsFinished(), "bell wraps back to same")
 }
 
@@ -199,11 +199,11 @@ func TestSettingsOverlay_ToggleMouse(t *testing.T) {
 	settingsAt(t, o, "mouse")
 
 	require.True(t, cfg.GetMouse(), "mouse defaults on")
-	_, changed := o.HandleKeyPress(tea.KeyMsg{Type: tea.KeySpace})
+	_, changed := o.HandleKeyPress(keyMsg(" "))
 	assert.Equal(t, "mouse", changed, "a toggle must report its row key so home can persist and live-apply")
 	assert.False(t, cfg.GetMouse(), "space turns capture off")
 
-	_, changed = o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyEnter})
+	_, changed = o.HandleKeyPress(keyMsg("enter"))
 	assert.Equal(t, "mouse", changed)
 	assert.True(t, cfg.GetMouse(), "enter turns it back on")
 }
@@ -214,7 +214,7 @@ func TestSettingsOverlay_ToggleTrustWorktreesRoot(t *testing.T) {
 	settingsAt(t, o, "trust_worktrees_root")
 
 	require.False(t, cfg.GetTrustWorktreesRoot(), "trust must default off (opt-in)")
-	_, changed := o.HandleKeyPress(tea.KeyMsg{Type: tea.KeySpace})
+	_, changed := o.HandleKeyPress(keyMsg(" "))
 	assert.Equal(t, "trust_worktrees_root", changed)
 	assert.True(t, cfg.GetTrustWorktreesRoot())
 }
@@ -224,7 +224,7 @@ func TestSettingsOverlay_ToggleAutoYes(t *testing.T) {
 	o := NewSettingsOverlay(cfg)
 	settingsAt(t, o, "auto_yes")
 
-	_, changed := o.HandleKeyPress(tea.KeyMsg{Type: tea.KeySpace})
+	_, changed := o.HandleKeyPress(keyMsg(" "))
 	assert.Equal(t, "auto_yes", changed)
 	assert.True(t, cfg.AutoYes)
 }
@@ -235,7 +235,7 @@ func TestSettingsOverlay_TogglePRCreateDraft(t *testing.T) {
 	settingsAt(t, o, "pr_create_draft")
 
 	require.True(t, cfg.GetPRCreateDraft(), "PRs default to draft")
-	_, changed := o.HandleKeyPress(tea.KeyMsg{Type: tea.KeySpace})
+	_, changed := o.HandleKeyPress(keyMsg(" "))
 	assert.Equal(t, "pr_create_draft", changed, "a toggle must report its row key so home can persist")
 	assert.False(t, cfg.GetPRCreateDraft(), "space flips the default-on draft field to ready-for-review")
 }
@@ -246,7 +246,7 @@ func TestSettingsOverlay_ToggleShowReleaseNotesAfterUpdate(t *testing.T) {
 	settingsAt(t, o, "show_release_notes_after_update")
 
 	require.True(t, cfg.GetShowReleaseNotesAfterUpdate(), "notes default on")
-	_, changed := o.HandleKeyPress(tea.KeyMsg{Type: tea.KeySpace})
+	_, changed := o.HandleKeyPress(keyMsg(" "))
 	assert.Equal(t, "show_release_notes_after_update", changed, "a toggle must report its row key so home can persist")
 	assert.False(t, cfg.GetShowReleaseNotesAfterUpdate(), "space flips the default-on field off")
 }
@@ -260,19 +260,19 @@ func TestSettingsOverlay_CycleThemeWraps(t *testing.T) {
 	sort.Strings(names)
 	start := cfg.Theme
 
-	_, changed := o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRight})
+	_, changed := o.HandleKeyPress(keyMsg("right"))
 	assert.Equal(t, "theme", changed)
 	assert.NotEqual(t, start, cfg.Theme, "right must advance to the next theme")
 	assert.Contains(t, names, cfg.Theme)
 
 	// A full cycle returns to the starting theme (wrap-around).
 	for i := 1; i < len(names); i++ {
-		o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRight})
+		o.HandleKeyPress(keyMsg("right"))
 	}
 	assert.Equal(t, start, cfg.Theme)
 
 	// Left cycles backwards (and wraps too).
-	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyLeft})
+	o.HandleKeyPress(keyMsg("left"))
 	assert.Equal(t, names[(indexOf(names, start)+len(names)-1)%len(names)], cfg.Theme)
 }
 
@@ -285,11 +285,11 @@ func TestSettingsOverlay_CycleModelIndicator(t *testing.T) {
 
 	require.Equal(t, config.ModelIndicatorOn, cfg.GetModelIndicator(), "chip defaults to on")
 
-	_, changed := o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRight})
+	_, changed := o.HandleKeyPress(keyMsg("right"))
 	assert.Equal(t, "model_indicator", changed, "the cycle must report its row key so home can persist")
 	assert.Equal(t, config.ModelIndicatorOff, cfg.GetModelIndicator())
 
-	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRight})
+	o.HandleKeyPress(keyMsg("right"))
 	assert.Equal(t, config.ModelIndicatorOn, cfg.GetModelIndicator(), "the enum wraps")
 }
 
@@ -304,11 +304,11 @@ func TestSettingsOverlay_CycleEffortIndicator(t *testing.T) {
 
 	require.Equal(t, config.EffortIndicatorOn, cfg.GetEffortIndicator(), "chip defaults to on")
 
-	_, changed := o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRight})
+	_, changed := o.HandleKeyPress(keyMsg("right"))
 	assert.Equal(t, "effort_indicator", changed, "the cycle must report its row key so home can persist")
 	assert.Equal(t, config.EffortIndicatorOff, cfg.GetEffortIndicator())
 
-	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRight})
+	o.HandleKeyPress(keyMsg("right"))
 	assert.Equal(t, config.EffortIndicatorOn, cfg.GetEffortIndicator(), "the enum wraps")
 }
 
@@ -328,19 +328,19 @@ func TestSettingsOverlay_CycleSplash(t *testing.T) {
 	require.Equal(t, config.SplashRandom, cfg.GetSplash(), "splash defaults to random")
 	require.Equal(t, config.SplashOff, options[len(options)-1], "off is the last option offered")
 
-	_, changed := o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRight})
+	_, changed := o.HandleKeyPress(keyMsg("right"))
 	assert.Equal(t, "splash", changed, "the cycle must report its row key so home can persist")
 	assert.Equal(t, config.SplashVariants()[0], cfg.GetSplash())
 
 	// One right short of a full lap lands on off — the rung #316 added, and the
 	// only value that reaches config as something other than a pattern name.
 	for i := 0; i < len(options)-2; i++ {
-		o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRight})
+		o.HandleKeyPress(keyMsg("right"))
 	}
 	assert.Equal(t, config.SplashOff, cfg.GetSplash(), "off must be reachable by cycling")
 	assert.False(t, cfg.SplashEnabled(), "picking off must disable the splash")
 
-	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRight})
+	o.HandleKeyPress(keyMsg("right"))
 	assert.Equal(t, config.SplashRandom, cfg.GetSplash(), "the enum wraps")
 	assert.True(t, cfg.SplashEnabled(), "cycling past off re-enables the splash")
 }
@@ -368,11 +368,11 @@ func TestSettingsOverlay_CycleDefaultProgramVisitsAllProfiles(t *testing.T) {
 	// Cycling right must walk the declared profile order — not the
 	// GetProfiles() default-first reordering, which would ping-pong between
 	// the first two profiles and never reach the third.
-	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRight})
+	o.HandleKeyPress(keyMsg("right"))
 	assert.Equal(t, "codex", cfg.DefaultProgram)
-	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRight})
+	o.HandleKeyPress(keyMsg("right"))
 	assert.Equal(t, "gemini", cfg.DefaultProgram)
-	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRight})
+	o.HandleKeyPress(keyMsg("right"))
 	assert.Equal(t, "claude", cfg.DefaultProgram, "wraps back to the first profile")
 }
 
@@ -391,14 +391,14 @@ func TestSettingsOverlay_RawDefaultProgramSurvivesCycle(t *testing.T) {
 	settingsAt(t, o, "default_program")
 
 	// One press moves onto a profile…
-	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRight})
+	o.HandleKeyPress(keyMsg("right"))
 	assert.Equal(t, "claude", cfg.DefaultProgram)
 	// …and a full cycle returns to the raw value: nothing is destroyed.
-	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRight})
-	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRight})
+	o.HandleKeyPress(keyMsg("right"))
+	o.HandleKeyPress(keyMsg("right"))
 	assert.Equal(t, "/home/user/launch-claude.sh", cfg.DefaultProgram)
 	// Cycling backwards from the raw value wraps onto the last profile.
-	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyLeft})
+	o.HandleKeyPress(keyMsg("left"))
 	assert.Equal(t, "gemini", cfg.DefaultProgram)
 }
 
@@ -407,7 +407,7 @@ func TestSettingsOverlay_SingleProfileCycleIsNoop(t *testing.T) {
 	o := NewSettingsOverlay(cfg)
 	settingsAt(t, o, "default_program")
 
-	_, changed := o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRight})
+	_, changed := o.HandleKeyPress(keyMsg("right"))
 	assert.Empty(t, changed, "cycling a single-option enum must not report a change")
 	assert.Equal(t, "claude", cfg.DefaultProgram)
 }
@@ -418,13 +418,13 @@ func TestSettingsOverlay_IntEditRejectsGarbageAndCommitsValid(t *testing.T) {
 	settingsAt(t, o, "daemon_poll_interval")
 
 	// Enter starts an inline edit pre-filled with the current value.
-	closed, changed := o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyEnter})
+	closed, changed := o.HandleKeyPress(keyMsg("enter"))
 	assert.False(t, closed)
 	assert.Empty(t, changed)
 	assert.True(t, o.editing)
 
 	o.HandleKeyPress(keyRunes("abc"))
-	closed, changed = o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyEnter})
+	closed, changed = o.HandleKeyPress(keyMsg("enter"))
 	assert.False(t, closed)
 	assert.Empty(t, changed, "an invalid value must not commit")
 	assert.True(t, o.editing, "edit mode persists so the user can fix the value")
@@ -432,17 +432,17 @@ func TestSettingsOverlay_IntEditRejectsGarbageAndCommitsValid(t *testing.T) {
 	assert.Equal(t, 1000, cfg.DaemonPollInterval)
 
 	// Esc abandons the edit without committing.
-	closed, _ = o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyEsc})
+	closed, _ = o.HandleKeyPress(keyMsg("esc"))
 	assert.False(t, closed, "esc during an edit cancels the edit, not the panel")
 	assert.False(t, o.editing)
 
 	// A valid value commits and reports the row key.
-	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyEnter})
+	o.HandleKeyPress(keyMsg("enter"))
 	for range "1000" {
-		o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyBackspace})
+		o.HandleKeyPress(keyMsg("backspace"))
 	}
 	o.HandleKeyPress(keyRunes("2000"))
-	_, changed = o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyEnter})
+	_, changed = o.HandleKeyPress(keyMsg("enter"))
 	assert.Equal(t, "daemon_poll_interval", changed)
 	assert.False(t, o.editing)
 	assert.Equal(t, 2000, cfg.DaemonPollInterval)
@@ -453,12 +453,12 @@ func TestSettingsOverlay_PollIntervalClampedToFloor(t *testing.T) {
 	o := NewSettingsOverlay(cfg)
 	settingsAt(t, o, "daemon_poll_interval")
 
-	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyEnter})
+	o.HandleKeyPress(keyMsg("enter"))
 	for range "1000" {
-		o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyBackspace})
+		o.HandleKeyPress(keyMsg("backspace"))
 	}
 	o.HandleKeyPress(keyRunes("50"))
-	_, changed := o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyEnter})
+	_, changed := o.HandleKeyPress(keyMsg("enter"))
 	assert.Empty(t, changed, "a sub-floor poll interval must be rejected")
 	assert.NotEmpty(t, o.lastErr)
 	assert.Equal(t, 1000, cfg.DaemonPollInterval)
@@ -488,11 +488,11 @@ func TestSettingsOverlay_MaxSessionsEmptyMeansAuto(t *testing.T) {
 	o := NewSettingsOverlay(cfg)
 	settingsAt(t, o, "max_sessions")
 
-	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyEnter})
+	o.HandleKeyPress(keyMsg("enter"))
 	for range "5" {
-		o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyBackspace})
+		o.HandleKeyPress(keyMsg("backspace"))
 	}
-	_, changed := o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyEnter})
+	_, changed := o.HandleKeyPress(keyMsg("enter"))
 	assert.Equal(t, "max_sessions", changed)
 	assert.Nil(t, cfg.MaxSessions, "an empty cap selects the host-derived auto default")
 
@@ -508,9 +508,9 @@ func TestSettingsOverlay_MaxSessionsZeroMeansUnlimited(t *testing.T) {
 	o := NewSettingsOverlay(cfg)
 	settingsAt(t, o, "max_sessions")
 
-	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyEnter}) // edit (pre-filled empty for auto)
+	o.HandleKeyPress(keyMsg("enter")) // edit (pre-filled empty for auto)
 	o.HandleKeyPress(keyRunes("0"))
-	_, changed := o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyEnter})
+	_, changed := o.HandleKeyPress(keyMsg("enter"))
 	assert.Equal(t, "max_sessions", changed)
 	require.NotNil(t, cfg.MaxSessions, "explicit unlimited is a non-nil pointer, distinct from auto")
 	assert.Equal(t, 0, *cfg.MaxSessions)
@@ -526,16 +526,16 @@ func TestSettingsOverlay_TextEditCommits(t *testing.T) {
 	o := NewSettingsOverlay(cfg)
 	settingsAt(t, o, "branch_prefix")
 
-	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyEnter})
+	o.HandleKeyPress(keyMsg("enter"))
 	o.HandleKeyPress(keyRunes("wip-"))
-	_, changed := o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyEnter})
+	_, changed := o.HandleKeyPress(keyMsg("enter"))
 	assert.Equal(t, "branch_prefix", changed)
 	assert.Equal(t, "zvi/wip-", cfg.BranchPrefix)
 }
 
 func TestSettingsOverlay_EscCloses(t *testing.T) {
 	o := NewSettingsOverlay(config.DefaultConfig())
-	closed, _ := o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyEsc})
+	closed, _ := o.HandleKeyPress(keyMsg("esc"))
 	assert.True(t, closed)
 }
 
@@ -703,9 +703,9 @@ func TestSettingsOverlay_ErrShownInRender(t *testing.T) {
 	o := NewSettingsOverlay(config.DefaultConfig())
 	o.SetSize(80, 40)
 	settingsAt(t, o, "daemon_poll_interval")
-	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyEnter})
+	o.HandleKeyPress(keyMsg("enter"))
 	o.HandleKeyPress(keyRunes("x"))
-	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyEnter})
+	o.HandleKeyPress(keyMsg("enter"))
 	assert.Contains(t, stripANSI(o.Render()), o.lastErr)
 }
 
@@ -718,14 +718,14 @@ func TestSettingsOverlay_CycleAutoUpdate(t *testing.T) {
 
 	require.Equal(t, config.AutoUpdateNotify, cfg.GetAutoUpdateMode(), "defaults to notify")
 
-	_, changed := o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRight})
+	_, changed := o.HandleKeyPress(keyMsg("right"))
 	assert.Equal(t, "auto_update", changed, "must report its row key so home can persist")
 	assert.Equal(t, config.AutoUpdateAuto, cfg.GetAutoUpdateMode())
 
-	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRight})
+	o.HandleKeyPress(keyMsg("right"))
 	assert.Equal(t, config.AutoUpdateOff, cfg.GetAutoUpdateMode())
 
-	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRight})
+	o.HandleKeyPress(keyMsg("right"))
 	assert.Equal(t, config.AutoUpdateNotify, cfg.GetAutoUpdateMode(), "enum wraps")
 }
 
@@ -736,11 +736,11 @@ func TestSettingsOverlay_CycleSessionSort(t *testing.T) {
 
 	require.Equal(t, config.SessionSortCreation, cfg.GetSessionSort(), "defaults to creation")
 
-	_, changed := o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRight})
+	_, changed := o.HandleKeyPress(keyMsg("right"))
 	assert.Equal(t, "session_sort", changed, "must report its row key so home can persist")
 	assert.Equal(t, config.SessionSortStatus, cfg.GetSessionSort())
 
-	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRight})
+	o.HandleKeyPress(keyMsg("right"))
 	assert.Equal(t, config.SessionSortCreation, cfg.GetSessionSort(), "enum wraps")
 }
 
@@ -751,11 +751,11 @@ func TestSettingsOverlay_CycleGroupMode(t *testing.T) {
 
 	require.Equal(t, config.GroupModeRepo, cfg.GetGroupMode(), "defaults to repo")
 
-	_, changed := o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRight})
+	_, changed := o.HandleKeyPress(keyMsg("right"))
 	assert.Equal(t, "group_mode", changed, "must report its row key so home can persist")
 	assert.Equal(t, config.GroupModeAccount, cfg.GetGroupMode())
 
-	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRight})
+	o.HandleKeyPress(keyMsg("right"))
 	assert.Equal(t, config.GroupModeRepo, cfg.GetGroupMode(), "enum wraps")
 }
 
@@ -826,9 +826,9 @@ func TestSettingsOverlay_CarryFilesEditCommitsSingleEntry(t *testing.T) {
 	o := NewSettingsOverlay(cfg)
 	settingsAt(t, o, "carry_files")
 
-	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyEnter})
+	o.HandleKeyPress(keyMsg("enter"))
 	o.HandleKeyPress(keyRunes(".env.local"))
-	_, changed := o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyEnter})
+	_, changed := o.HandleKeyPress(keyMsg("enter"))
 	assert.Equal(t, "carry_files", changed)
 	assert.Equal(t, []string{".env.local"}, cfg.CarryFiles)
 }
@@ -839,9 +839,9 @@ func TestSettingsOverlay_CarryFilesEditCommitsMultipleEntries(t *testing.T) {
 	o := NewSettingsOverlay(cfg)
 	settingsAt(t, o, "carry_files")
 
-	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyEnter})
+	o.HandleKeyPress(keyMsg("enter"))
 	o.HandleKeyPress(keyRunes(".env.local, .envrc , .secrets"))
-	_, changed := o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyEnter})
+	_, changed := o.HandleKeyPress(keyMsg("enter"))
 	assert.Equal(t, "carry_files", changed)
 	assert.Equal(t, []string{".env.local", ".envrc", ".secrets"}, cfg.CarryFiles)
 }
@@ -851,12 +851,12 @@ func TestSettingsOverlay_CarryFilesEditEmptyStringClearsList(t *testing.T) {
 	o := NewSettingsOverlay(cfg)
 	settingsAt(t, o, "carry_files")
 
-	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyEnter})
+	o.HandleKeyPress(keyMsg("enter"))
 	// editGet pre-fills with the current raw list; clear it entirely.
 	for range ".claude/settings.local.json" {
-		o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyBackspace})
+		o.HandleKeyPress(keyMsg("backspace"))
 	}
-	_, changed := o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyEnter})
+	_, changed := o.HandleKeyPress(keyMsg("enter"))
 	assert.Equal(t, "carry_files", changed)
 	assert.Empty(t, cfg.CarryFiles, "an empty field must set an explicit empty list (opt-out)")
 }
@@ -904,9 +904,9 @@ func TestSettingsOverlay_LinkPathsEditCommitsMultipleEntries(t *testing.T) {
 	o := NewSettingsOverlay(cfg)
 	settingsAt(t, o, "link_paths")
 
-	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyEnter})
+	o.HandleKeyPress(keyMsg("enter"))
 	o.HandleKeyPress(keyRunes("node_modules, container/agent-runner/node_modules"))
-	_, changed := o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyEnter})
+	_, changed := o.HandleKeyPress(keyMsg("enter"))
 	assert.Equal(t, "link_paths", changed)
 	assert.Equal(t, []string{"node_modules", "container/agent-runner/node_modules"}, cfg.LinkPaths)
 }
@@ -1096,16 +1096,16 @@ func TestSettingsOverlay_RawDefaultProgramSurvivesAProfilesEdit(t *testing.T) {
 	require.Contains(t, row.options(cfg), raw, "precondition: the raw command is a cycle option")
 
 	// Cycle off it, so the live config no longer holds the raw string anywhere.
-	_, _ = o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRight})
+	_, _ = o.HandleKeyPress(keyMsg("right"))
 	require.NotEqual(t, raw, cfg.DefaultProgram, "precondition: the raw value is only in the capture now")
 
 	// Now edit the profile list from the editor: add one, then delete it again.
 	profilesAt(t, o)
 	_, _ = o.HandleKeyPress(keyRunes("n"))
 	typeProfile(o, "codex")
-	_, _ = o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyTab})
+	_, _ = o.HandleKeyPress(keyMsg("tab"))
 	typeProfile(o, "codex")
-	_, _ = o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyEnter})
+	_, _ = o.HandleKeyPress(keyMsg("enter"))
 	_, _ = o.HandleKeyPress(keyRunes("d"))
 	_, _ = o.HandleKeyPress(keyRunes("y"))
 
@@ -1131,9 +1131,9 @@ func TestSettingsOverlay_NewProfileBecomesACycleOption(t *testing.T) {
 	profilesAt(t, o)
 	_, _ = o.HandleKeyPress(keyRunes("n"))
 	typeProfile(o, "gemini")
-	_, _ = o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyTab})
+	_, _ = o.HandleKeyPress(keyMsg("tab"))
 	typeProfile(o, "gemini")
-	_, _ = o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyEnter})
+	_, _ = o.HandleKeyPress(keyMsg("enter"))
 
 	settingsAt(t, o, "default_program")
 	assert.Contains(t, o.rows[o.cursor].options(cfg), "gemini",

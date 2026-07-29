@@ -13,7 +13,7 @@ import (
 
 // runes is a small helper to type text into the focused field.
 func draftRunes(s string) tea.KeyMsg {
-	return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(s)}
+	return textMsg(s)
 }
 
 func TestDraft_EscapeStashesDirtyForm(t *testing.T) {
@@ -23,7 +23,7 @@ func TestDraft_EscapeStashesDirtyForm(t *testing.T) {
 	h.handleKeyPress(draftRunes("n")) // open, focus on title
 	require.NotNil(t, h.textInputOverlay)
 	h.handleKeyPress(draftRunes("my-draft"))
-	h.handleKeyPress(tea.KeyMsg{Type: tea.KeyEsc})
+	h.handleKeyPress(keyMsg("esc"))
 
 	assert.Nil(t, h.textInputOverlay, "the live overlay is cleared on cancel")
 	require.NotNil(t, h.stashedDraft, "a dirty form is stashed")
@@ -36,7 +36,7 @@ func TestDraft_EscapeDiscardsCleanForm(t *testing.T) {
 	h := newCreateFormHome(t)
 
 	h.handleKeyPress(draftRunes("n")) // open, type nothing
-	h.handleKeyPress(tea.KeyMsg{Type: tea.KeyEsc})
+	h.handleKeyPress(keyMsg("esc"))
 
 	assert.Nil(t, h.stashedDraft, "an untouched form leaves no stash")
 }
@@ -48,7 +48,7 @@ func TestDraft_ReopenRestoresStash(t *testing.T) {
 	h.handleKeyPress(draftRunes("n"))
 	h.handleKeyPress(draftRunes("my-draft"))
 	h.textInputOverlay.SetPrompt("draft body")
-	h.handleKeyPress(tea.KeyMsg{Type: tea.KeyEsc})
+	h.handleKeyPress(keyMsg("esc"))
 	require.NotNil(t, h.stashedDraft)
 
 	h.handleKeyPress(draftRunes("n")) // reopen
@@ -73,14 +73,14 @@ func TestDraft_RestoredDraftIsSubmittable(t *testing.T) {
 
 	h.handleKeyPress(draftRunes("n")) // open, focus title
 	typeString(h, "my-draft")
-	h.handleKeyPress(tea.KeyMsg{Type: tea.KeyEsc}) // stash the dirty form
+	h.handleKeyPress(keyMsg("esc")) // stash the dirty form
 	require.NotNil(t, h.stashedDraft, "a dirty form is stashed on Escape")
 
 	h.handleKeyPress(draftRunes("n")) // reopen → restore the draft
 	require.NotNil(t, h.textInputOverlay)
 	require.Equal(t, "my-draft", h.textInputOverlay.GetTitle(), "the draft is restored")
 
-	h.handleKeyPress(tea.KeyMsg{Type: tea.KeyCtrlS}) // submit the restored draft
+	h.handleKeyPress(keyMsg("ctrl+s")) // submit the restored draft
 
 	assert.Nil(t, h.stashedDraft, "a submitted draft must not be re-stashed as a cancel")
 	assert.Equal(t, before+1, h.list.NumInstances(),
@@ -101,11 +101,11 @@ func TestDraft_RestoredDraftSubmitsOnEnter(t *testing.T) {
 
 	h.handleKeyPress(draftRunes("n"))
 	typeString(h, "my-draft")
-	h.handleKeyPress(tea.KeyMsg{Type: tea.KeyEsc}) // stash
-	h.handleKeyPress(draftRunes("n"))              // restore
+	h.handleKeyPress(keyMsg("esc"))   // stash
+	h.handleKeyPress(draftRunes("n")) // restore
 	require.Equal(t, "my-draft", h.textInputOverlay.GetTitle())
 
-	h.handleKeyPress(tea.KeyMsg{Type: tea.KeyEnter}) // submit via Enter on the title
+	h.handleKeyPress(keyMsg("enter")) // submit via Enter on the title
 
 	assert.Nil(t, h.stashedDraft, "Enter on a restored draft must not re-stash it as a cancel")
 	assert.Equal(t, before+1, h.list.NumInstances(), "Enter must create the restored draft's session")
@@ -122,7 +122,7 @@ func TestDraft_SurvivesRestart(t *testing.T) {
 	h.handleKeyPress(draftRunes("n"))
 	typeString(h, "my-draft")
 	h.textInputOverlay.SetPrompt("draft body")
-	h.handleKeyPress(tea.KeyMsg{Type: tea.KeyEsc}) // stash + persist
+	h.handleKeyPress(keyMsg("esc")) // stash + persist
 	require.NotNil(t, h.stashedDraft)
 	require.NotNil(t, config.LoadState().GetDraft(), "the stash is mirrored to disk")
 
@@ -157,7 +157,7 @@ func TestDraft_RehydratedDraftPreselectsRoutedAccount(t *testing.T) {
 
 	h.handleKeyPress(draftRunes("n"))
 	typeString(h, "my-draft")
-	h.handleKeyPress(tea.KeyMsg{Type: tea.KeyEsc}) // stash + persist (Path = dir)
+	h.handleKeyPress(keyMsg("esc")) // stash + persist (Path = dir)
 	d := config.LoadState().GetDraft()
 	require.NotNil(t, d)
 	require.Equal(t, dir, d.Path, "the draft persists its project")
@@ -184,12 +184,12 @@ func TestDraft_SubmitClearsPersistedDraft(t *testing.T) {
 
 	h.handleKeyPress(draftRunes("n"))
 	typeString(h, "my-draft")
-	h.handleKeyPress(tea.KeyMsg{Type: tea.KeyEsc}) // stash + persist
+	h.handleKeyPress(keyMsg("esc")) // stash + persist
 	require.NotNil(t, config.LoadState().GetDraft())
 
 	h.handleKeyPress(draftRunes("n")) // reopen → restore the draft
 	require.Equal(t, "my-draft", h.textInputOverlay.GetTitle())
-	h.handleKeyPress(tea.KeyMsg{Type: tea.KeyCtrlS}) // submit
+	h.handleKeyPress(keyMsg("ctrl+s")) // submit
 
 	require.Nil(t, h.textInputOverlay, "a successful submit closes the form")
 	assert.Nil(t, config.LoadState().GetDraft(), "submitting leaves no draft on disk")
@@ -203,12 +203,12 @@ func TestDraft_ClearFormDropsPersistedDraft(t *testing.T) {
 
 	h.handleKeyPress(draftRunes("n"))
 	typeString(h, "my-draft")
-	h.handleKeyPress(tea.KeyMsg{Type: tea.KeyEsc}) // stash + persist
-	h.handleKeyPress(draftRunes("n"))              // reopen with the restored draft
+	h.handleKeyPress(keyMsg("esc"))   // stash + persist
+	h.handleKeyPress(draftRunes("n")) // reopen with the restored draft
 	require.Equal(t, "my-draft", h.textInputOverlay.GetTitle())
 
-	h.handleKeyPress(tea.KeyMsg{Type: tea.KeyCtrlR}) // arm
-	h.handleKeyPress(tea.KeyMsg{Type: tea.KeyCtrlR}) // confirm → rebuild fresh, drop draft
+	h.handleKeyPress(keyMsg("ctrl+r")) // arm
+	h.handleKeyPress(keyMsg("ctrl+r")) // confirm → rebuild fresh, drop draft
 
 	require.NotNil(t, h.textInputOverlay)
 	assert.Equal(t, "", h.textInputOverlay.GetTitle(), "the form is rebuilt fresh")
@@ -239,12 +239,12 @@ func TestDraft_ArmDoesNotSurviveCtrlCCancel(t *testing.T) {
 
 	h.handleKeyPress(draftRunes("n"))
 	h.handleKeyPress(draftRunes("my-draft"))
-	h.handleKeyPress(tea.KeyMsg{Type: tea.KeyCtrlR}) // arm the clear
-	h.handleKeyPress(tea.KeyMsg{Type: tea.KeyCtrlC}) // cancel (bypasses the overlay's disarm)
+	h.handleKeyPress(keyMsg("ctrl+r")) // arm the clear
+	h.handleKeyPress(keyMsg("ctrl+c")) // cancel (bypasses the overlay's disarm)
 	require.NotNil(t, h.stashedDraft, "a dirty form is still stashed on Ctrl+C")
 
-	h.handleKeyPress(draftRunes("n"))                // reopen, restoring the draft
-	h.handleKeyPress(tea.KeyMsg{Type: tea.KeyCtrlR}) // a single press must only arm, not wipe
+	h.handleKeyPress(draftRunes("n"))  // reopen, restoring the draft
+	h.handleKeyPress(keyMsg("ctrl+r")) // a single press must only arm, not wipe
 
 	require.NotNil(t, h.textInputOverlay)
 	assert.Equal(t, "my-draft", h.textInputOverlay.GetTitle(),
@@ -257,12 +257,12 @@ func TestDraft_DoubleCtrlRRebuildsFresh(t *testing.T) {
 
 	h.handleKeyPress(draftRunes("n"))
 	h.handleKeyPress(draftRunes("my-draft"))
-	h.handleKeyPress(tea.KeyMsg{Type: tea.KeyEsc})
+	h.handleKeyPress(keyMsg("esc"))
 	h.handleKeyPress(draftRunes("n")) // reopen with the restored draft
 	require.Equal(t, "my-draft", h.textInputOverlay.GetTitle())
 
-	h.handleKeyPress(tea.KeyMsg{Type: tea.KeyCtrlR}) // arm
-	h.handleKeyPress(tea.KeyMsg{Type: tea.KeyCtrlR}) // confirm
+	h.handleKeyPress(keyMsg("ctrl+r")) // arm
+	h.handleKeyPress(keyMsg("ctrl+r")) // confirm
 
 	require.NotNil(t, h.textInputOverlay)
 	assert.Equal(t, "", h.textInputOverlay.GetTitle(), "the form is rebuilt fresh")

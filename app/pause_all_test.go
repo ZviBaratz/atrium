@@ -6,7 +6,6 @@ import (
 
 	"github.com/ZviBaratz/atrium/session"
 
-	tea "github.com/charmbracelet/bubbletea"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -27,7 +26,7 @@ func TestPauseAll_OpensCountConfirmation(t *testing.T) {
 	addActive(t, h, "alpha")
 	addActive(t, h, "bravo")
 
-	_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyCtrlP})
+	_, _ = h.handleKeyPress(keyMsg("ctrl+p"))
 
 	require.Equal(t, stateConfirm, h.state, "ctrl+p must open the confirmation overlay")
 	require.NotNil(t, h.confirmationOverlay)
@@ -43,7 +42,7 @@ func TestPauseAll_SingularMessage(t *testing.T) {
 	h := newCreateFormHome(t)
 	addActive(t, h, "alpha")
 
-	_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyCtrlP})
+	_, _ = h.handleKeyPress(keyMsg("ctrl+p"))
 
 	require.Equal(t, stateConfirm, h.state)
 	assert.Contains(t, flattenOverlay(h.confirmationOverlay.Render()),
@@ -57,7 +56,7 @@ func TestPauseAll_NoActiveExplains(t *testing.T) {
 	h := newCreateFormHome(t)
 	addPaused(t, h, "parked")
 
-	_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyCtrlP})
+	_, _ = h.handleKeyPress(keyMsg("ctrl+p"))
 
 	assert.Equal(t, stateDefault, h.state, "no confirmation when there is nothing to pause")
 	require.True(t, h.menu.HasNotice(), "the guard must explain itself")

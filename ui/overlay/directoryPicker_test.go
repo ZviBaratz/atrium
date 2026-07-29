@@ -11,7 +11,7 @@ import (
 )
 
 func runes(s string) tea.KeyMsg {
-	return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(s)}
+	return textMsg(s)
 }
 
 func TestDirectoryPicker_DedupAndDefaultSelection(t *testing.T) {
@@ -36,18 +36,18 @@ func TestDirectoryPicker_SelectPath(t *testing.T) {
 func TestDirectoryPicker_Navigation(t *testing.T) {
 	dp := NewDirectoryPicker([]string{"/repo/a", "/repo/b"})
 
-	consumed, changed := dp.HandleKeyPress(tea.KeyMsg{Type: tea.KeyDown})
+	consumed, changed := dp.HandleKeyPress(keyMsg("down"))
 	assert.True(t, consumed)
 	assert.True(t, changed)
 	assert.Equal(t, "/repo/b", dp.GetSelectedPath())
 
 	// Down at the end is consumed but does not change the selection.
-	consumed, changed = dp.HandleKeyPress(tea.KeyMsg{Type: tea.KeyDown})
+	consumed, changed = dp.HandleKeyPress(keyMsg("down"))
 	assert.True(t, consumed)
 	assert.False(t, changed)
 	assert.Equal(t, "/repo/b", dp.GetSelectedPath())
 
-	consumed, changed = dp.HandleKeyPress(tea.KeyMsg{Type: tea.KeyUp})
+	consumed, changed = dp.HandleKeyPress(keyMsg("up"))
 	assert.True(t, consumed)
 	assert.True(t, changed)
 	assert.Equal(t, "/repo/a", dp.GetSelectedPath())
@@ -98,7 +98,7 @@ func TestDirectoryPicker_Backspace(t *testing.T) {
 	assert.Equal(t, "/home/me/repoB", dp.GetSelectedPath())
 
 	// Removing the last char widens the filter back out.
-	consumed, changed := dp.HandleKeyPress(tea.KeyMsg{Type: tea.KeyBackspace})
+	consumed, changed := dp.HandleKeyPress(keyMsg("backspace"))
 	assert.True(t, consumed)
 	assert.True(t, changed)
 	assert.Equal(t, "repoB"[:4], dp.filter)
@@ -194,7 +194,7 @@ func TestDirectoryPicker_UpdateCandidatesPreservesFilter(t *testing.T) {
 
 func TestDirectoryPicker_UpdateCandidatesKeepsCursorOnSelection(t *testing.T) {
 	dp := NewDirectoryPicker([]string{"/a", "/b", "/c"})
-	dp.HandleKeyPress(tea.KeyMsg{Type: tea.KeyDown}) // select /b
+	dp.HandleKeyPress(keyMsg("down")) // select /b
 	if got := dp.GetSelectedPath(); got != "/b" {
 		t.Fatalf("precondition: selected %q, want /b", got)
 	}
@@ -209,8 +209,8 @@ func TestDirectoryPicker_UpdateCandidatesKeepsCursorOnSelection(t *testing.T) {
 
 func TestDirectoryPicker_UpdateCandidatesClampsCursorWhenListShrinks(t *testing.T) {
 	dp := NewDirectoryPicker([]string{"/a", "/b", "/c"})
-	dp.HandleKeyPress(tea.KeyMsg{Type: tea.KeyDown})
-	dp.HandleKeyPress(tea.KeyMsg{Type: tea.KeyDown}) // select /c
+	dp.HandleKeyPress(keyMsg("down"))
+	dp.HandleKeyPress(keyMsg("down")) // select /c
 
 	dp.UpdateCandidates([]string{"/z"})
 

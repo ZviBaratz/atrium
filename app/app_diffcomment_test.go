@@ -8,7 +8,6 @@ import (
 	"github.com/ZviBaratz/atrium/ui"
 	"github.com/ZviBaratz/atrium/ui/overlay"
 
-	tea "github.com/charmbracelet/bubbletea"
 	"github.com/stretchr/testify/require"
 )
 
@@ -59,7 +58,7 @@ func newDiffCommentHome(t *testing.T) *home {
 func TestEnterDiffComment_NoSession_ShowsNotice(t *testing.T) {
 	h := newHintsHome(t) // no instances → GetSelectedInstance() == nil
 
-	_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'C'}})
+	_, _ = h.handleKeyPress(textMsg("C"))
 
 	require.Equal(t, stateDefault, h.state)
 	// Pin the text, not just HasNotice(): the two enterDiffComment guards decline
@@ -81,7 +80,7 @@ func TestEnterDiffComment_NoDiffLines_ShowsNotice(t *testing.T) {
 	h := newHintsHome(t, inst)
 	h.list.SelectInstance(inst)
 
-	_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'C'}})
+	_, _ = h.handleKeyPress(textMsg("C"))
 
 	require.Equal(t, stateDefault, h.state)
 	require.Equal(t, "no diff lines to comment on", h.menu.NoticeText())
@@ -98,12 +97,12 @@ func TestDiffComment_Cancel_ReturnsToCommentCursor(t *testing.T) {
 	h := newDiffCommentHome(t)
 
 	// Open the composer.
-	_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyEnter})
+	_, _ = h.handleKeyPress(keyMsg("enter"))
 	require.Equal(t, statePrompt, h.state)
 	require.True(t, h.composingDiffComment, "composingDiffComment must be set when the overlay opens")
 
 	// Cancel via esc.
-	_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyEsc})
+	_, _ = h.handleKeyPress(keyMsg("esc"))
 
 	require.Equal(t, stateDiffComment, h.state, "cancel must return to the cursor, not the list")
 	require.False(t, h.composingDiffComment)
@@ -115,10 +114,10 @@ func TestDiffComment_Cancel_ReturnsToCommentCursor(t *testing.T) {
 func TestDiffComment_CtrlC_ReturnsToCommentCursor(t *testing.T) {
 	h := newDiffCommentHome(t)
 
-	_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyEnter})
+	_, _ = h.handleKeyPress(keyMsg("enter"))
 	require.Equal(t, statePrompt, h.state)
 
-	_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyCtrlC})
+	_, _ = h.handleKeyPress(keyMsg("ctrl+c"))
 
 	require.Equal(t, stateDiffComment, h.state, "ctrl+c cancel must return to the cursor")
 	require.False(t, h.composingDiffComment)
@@ -141,13 +140,13 @@ func TestDiffComment_Submit_QueuesFollowupAndReturnsToCommentMode(t *testing.T) 
 	h.storage = st
 
 	// Open the composer on the cursor's current line.
-	_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyEnter})
+	_, _ = h.handleKeyPress(keyMsg("enter"))
 	require.Equal(t, statePrompt, h.state)
 	require.True(t, h.composingDiffComment)
 
 	// Pre-fill a note and submit.
 	h.textInputOverlay.SetPrompt("handle the nil case")
-	_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyEnter})
+	_, _ = h.handleKeyPress(keyMsg("enter"))
 
 	inst := h.list.GetSelectedInstance()
 	require.NotEmpty(t, inst.Prompt(), "the note must be queued for agent delivery")
@@ -180,7 +179,7 @@ func TestDiffComment_EmptyNote_QueuesNothing(t *testing.T) {
 	h.state = statePrompt
 
 	// Submit without typing anything.
-	_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyEnter})
+	_, _ = h.handleKeyPress(keyMsg("enter"))
 
 	inst := h.list.GetSelectedInstance()
 	require.Empty(t, inst.Prompt(), "an empty note must not be queued")

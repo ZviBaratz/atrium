@@ -4,7 +4,6 @@ import (
 	"strings"
 	"testing"
 
-	tea "github.com/charmbracelet/bubbletea"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -61,7 +60,7 @@ func TestBranchPicker_HeadOptionSelectionIsPositional(t *testing.T) {
 	bp.SetResults([]string{"develop"}, bp.GetFilterVersion())
 
 	assert.Empty(t, bp.GetSelectedBranch(), "cursor on the HEAD option → no explicit base")
-	bp.HandleKeyPress(tea.KeyMsg{Type: tea.KeyDown})
+	bp.HandleKeyPress(keyMsg("down"))
 	assert.Equal(t, "develop", bp.GetSelectedBranch(), "cursor on a result → that branch")
 }
 
@@ -172,7 +171,7 @@ func TestBranchPicker_DisabledSelectionIsEmpty(t *testing.T) {
 	bp := NewBranchPicker()
 	bp.Focus()
 	bp.SetResults([]string{"main", "develop"}, bp.GetFilterVersion())
-	bp.HandleKeyPress(tea.KeyMsg{Type: tea.KeyDown})
+	bp.HandleKeyPress(keyMsg("down"))
 	require.NotEmpty(t, bp.GetSelectedBranch(), "sanity: a real branch is selected")
 
 	bp.SetDisabled(true)

@@ -8,7 +8,6 @@ import (
 	"testing"
 
 	"github.com/ZviBaratz/atrium/config"
-	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -192,7 +191,7 @@ func TestAccountsOverlay_PreviewNamesTheResolvedLogin(t *testing.T) {
 	o := identityOverlay(t, []config.ClaudeAccount{
 		{Name: "personal", ConfigDir: "/h/p"},
 	}, map[string]string{"/h/p": "surprise@corp.com"})
-	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'t'}})
+	o.HandleKeyPress(textMsg("t"))
 
 	assert.Contains(t, o.renderPreview(), "surprise@corp.com")
 }
@@ -438,7 +437,7 @@ func TestAccountsOverlay_PreviewLoginFollowsTheConfirmedMemberWhenAllLimited(t *
 		return config.AccountIdentity{Email: filepath.Base(dir) + "@corp.com",
 			UUID: "u-" + dir}, true
 	})
-	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'t'}})
+	o.HandleKeyPress(textMsg("t"))
 
 	out := o.renderPreview()
 	assert.Contains(t, out, "w2@corp.com",

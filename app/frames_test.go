@@ -196,7 +196,7 @@ func TestPreviewTick_LaunchesNoSubprocessOnTheUpdateThread(t *testing.T) {
 
 	// A keypress takes the same path through instanceChanged.
 	before = spy.count()
-	h.Update(tea.KeyMsg{Type: tea.KeyDown})
+	h.Update(keyMsg("down"))
 	require.Equal(t, before, spy.count(),
 		"a keypress must not shell out either; saw %v", spy.seen()[before:])
 }
@@ -278,7 +278,7 @@ func TestUpdateLoopSurvivesAWedgedCapture(t *testing.T) {
 
 	// The update thread stays live: keys route, tabs switch, the frame renders.
 	h.Update(previewTickMsg{})
-	h.Update(tea.KeyMsg{Type: tea.KeyTab})
+	h.Update(keyMsg("tab"))
 	require.Equal(t, ui.DiffTab, h.tabbedWindow.GetActiveTab(), "input must still be handled")
 	require.NotEmpty(t, h.View(), "the app must still render while a capture is wedged")
 

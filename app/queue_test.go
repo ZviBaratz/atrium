@@ -6,7 +6,6 @@ import (
 	"github.com/ZviBaratz/atrium/config"
 	"github.com/ZviBaratz/atrium/session"
 
-	tea "github.com/charmbracelet/bubbletea"
 	"github.com/stretchr/testify/require"
 )
 
@@ -75,7 +74,7 @@ func TestQueueOverlay_EscCloses(t *testing.T) {
 	h.list.SelectInstance(inst)
 	_, _ = h.openQueue()
 
-	_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyEsc})
+	_, _ = h.handleKeyPress(keyMsg("esc"))
 
 	require.Equal(t, stateDefault, h.state)
 	require.Nil(t, h.queueOverlay)

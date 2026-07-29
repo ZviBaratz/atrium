@@ -4,7 +4,6 @@ import (
 	"testing"
 
 	"github.com/ZviBaratz/atrium/config"
-	tea "github.com/charmbracelet/bubbletea"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -22,7 +21,7 @@ func TestAccountPicker_SelectionAndPreselect(t *testing.T) {
 	assert.Equal(t, "quantivly", ap.GetSelectedAccount().Name, "preselect by name")
 
 	ap.Focus()
-	ap.HandleKeyPress(tea.KeyMsg{Type: tea.KeyUp})
+	ap.HandleKeyPress(keyMsg("up"))
 	assert.Equal(t, "personal", ap.GetSelectedAccount().Name, "Up moves to previous")
 
 	var empty AccountPicker
@@ -38,10 +37,10 @@ func TestAccountPicker_WrapsAtEnds(t *testing.T) {
 	ap := NewAccountPicker(accounts)
 	require.Equal(t, "personal", ap.GetSelectedAccount().Name, "first account selected by default")
 
-	ap.HandleKeyPress(tea.KeyMsg{Type: tea.KeyLeft})
+	ap.HandleKeyPress(keyMsg("left"))
 	assert.Equal(t, "quantivly", ap.GetSelectedAccount().Name, "← from the first wraps to the last")
 
-	ap.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRight})
+	ap.HandleKeyPress(keyMsg("right"))
 	assert.Equal(t, "personal", ap.GetSelectedAccount().Name, "→ from the last wraps to the first")
 }
 
@@ -58,7 +57,7 @@ func TestAccountPicker_TouchedTracksInteraction(t *testing.T) {
 	ap.SelectByName("quantivly")
 	assert.False(t, ap.Touched(), "programmatic preselect does not count as a user touch")
 
-	ap.HandleKeyPress(tea.KeyMsg{Type: tea.KeyLeft})
+	ap.HandleKeyPress(keyMsg("left"))
 	assert.True(t, ap.Touched(), "a navigation keypress marks the picker touched")
 }
 
@@ -69,7 +68,7 @@ func TestAccountPicker_PreselectNoopAfterTouch(t *testing.T) {
 		{Name: "quantivly", ConfigDir: "~/.claude-quantivly", RemoteMatches: []string{"quantivly/"}},
 	}
 	ap := NewAccountPicker(accounts)
-	ap.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRight}) // user picks quantivly
+	ap.HandleKeyPress(keyMsg("right")) // user picks quantivly
 	require.Equal(t, "quantivly", ap.GetSelectedAccount().Name)
 
 	ap.SelectByName("personal") // a later auto-route attempt

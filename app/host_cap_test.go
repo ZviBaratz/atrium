@@ -108,7 +108,7 @@ func TestConfirmOverCap_SpawnsStagedSession(t *testing.T) {
 
 	// Press y to confirm; the staged action yields proceedOverCapMsg, which Update
 	// then spawns.
-	_, cmd := h.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("y")})
+	_, cmd := h.Update(textMsg("y"))
 	require.NotNil(t, cmd, "confirming must return the staged spawn command")
 	h.Update(cmd())
 
@@ -132,7 +132,7 @@ func TestDeclineOverCap_SpawnsNothing(t *testing.T) {
 	ctrlS(h)
 	require.Equal(t, stateConfirm, h.state)
 
-	h.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("n")}) // decline
+	h.Update(textMsg("n")) // decline
 
 	assert.Equal(t, before, h.list.NumInstances(), "declining spawns nothing")
 	assert.NotEqual(t, stateConfirm, h.state, "the confirm closes")
@@ -153,7 +153,7 @@ func TestDeclineOverCap_PreservesDraft(t *testing.T) {
 	ctrlS(h)
 	require.Equal(t, stateConfirm, h.state)
 
-	h.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("n")}) // decline
+	h.Update(textMsg("n")) // decline
 
 	require.NotNil(t, h.stashedDraft, "declining must stash the dirty form, not discard it")
 	assert.Equal(t, "race", h.stashedDraft.GetTitle(), "the typed title survives the decline")
@@ -221,7 +221,7 @@ func TestOverCapDialogCommaOpensTheSessionLimit(t *testing.T) {
 	ctrlS(h)
 	require.Equal(t, stateConfirm, h.state)
 
-	h.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(",")})
+	h.Update(textMsg(","))
 
 	assert.Equal(t, stateSettings, h.state, "',' leaves the dialog for the settings panel")
 	require.NotNil(t, h.settingsOverlay)
@@ -239,7 +239,7 @@ func TestCommaIsInertInAnUnarmedConfirmation(t *testing.T) {
 	h.confirmAction("Do the thing?", instantAction, func() tea.Msg { return nil })
 	require.Equal(t, stateConfirm, h.state)
 
-	h.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(",")})
+	h.Update(textMsg(","))
 	assert.Equal(t, stateConfirm, h.state, "an unarmed dialog ignores ','")
 	assert.NotNil(t, h.confirmationOverlay)
 }

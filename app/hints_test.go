@@ -62,7 +62,7 @@ func newHintsHome(t *testing.T, instances ...*session.Instance) *home {
 func pressRunes(h *home, s string) tea.Cmd {
 	var last tea.Cmd
 	for _, r := range s {
-		_, last = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+		_, last = h.handleKeyPress(textMsg(string(r)))
 	}
 	return last
 }
@@ -168,7 +168,7 @@ func TestHints_EscCancels(t *testing.T) {
 
 	_, _ = h.startHints(inst, "see /tmp/x.go\n")
 	require.Equal(t, stateHints, h.state)
-	_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyEsc})
+	_, _ = h.handleKeyPress(keyMsg("esc"))
 
 	assert.Equal(t, stateDefault, h.state)
 	assert.False(t, h.tabbedWindow.InPreviewHintMode())

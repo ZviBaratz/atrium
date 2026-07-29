@@ -9,7 +9,6 @@ import (
 	"testing"
 
 	"github.com/ZviBaratz/atrium/config"
-	tea "github.com/charmbracelet/bubbletea"
 	"github.com/mattn/go-runewidth"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -280,7 +279,7 @@ func TestModifiedTracksAnEdit(t *testing.T) {
 	i := o.cursor
 
 	require.False(t, o.isModified(i), "mouse starts at its default")
-	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeySpace}) // toggle off
+	o.HandleKeyPress(keyMsg(" ")) // toggle off
 	assert.True(t, o.isModified(i), "a toggled row reports modified")
 }
 

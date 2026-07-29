@@ -4,7 +4,6 @@ import (
 	"strings"
 	"testing"
 
-	tea "github.com/charmbracelet/bubbletea"
 	xansi "github.com/charmbracelet/x/ansi"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -35,7 +34,7 @@ func paletteFixture() []PaletteAction {
 
 func typePalette(p *CommandPaletteOverlay, q string) {
 	for _, r := range q {
-		p.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+		p.HandleKeyPress(textMsg(string(r)))
 	}
 }
 
@@ -64,7 +63,7 @@ func TestPaletteChosenMapsThroughTheRanking(t *testing.T) {
 	p := NewCommandPaletteOverlay(actions)
 	typePalette(p, "merge")
 
-	p.HandleKeyPress(tea.KeyMsg{Type: tea.KeyEnter})
+	p.HandleKeyPress(keyMsg("enter"))
 
 	action, idx, ok := p.Chosen()
 	require.True(t, ok)
@@ -80,7 +79,7 @@ func TestPaletteRanksVerbHitsAboveProseHits(t *testing.T) {
 	p := NewCommandPaletteOverlay(paletteFixture())
 	typePalette(p, "pause")
 
-	p.HandleKeyPress(tea.KeyMsg{Type: tea.KeyEnter})
+	p.HandleKeyPress(keyMsg("enter"))
 
 	action, _, ok := p.Chosen()
 	require.True(t, ok)
@@ -95,7 +94,7 @@ func TestPaletteExactKeyMatchWins(t *testing.T) {
 	p := NewCommandPaletteOverlay(paletteFixture())
 	typePalette(p, "p")
 
-	p.HandleKeyPress(tea.KeyMsg{Type: tea.KeyEnter})
+	p.HandleKeyPress(keyMsg("enter"))
 
 	action, _, ok := p.Chosen()
 	require.True(t, ok)
@@ -116,7 +115,7 @@ func TestPaletteExactKeyMatchIsCaseSensitive(t *testing.T) {
 	} {
 		p := NewCommandPaletteOverlay(actions)
 		typePalette(p, tc.query)
-		p.HandleKeyPress(tea.KeyMsg{Type: tea.KeyEnter})
+		p.HandleKeyPress(keyMsg("enter"))
 
 		action, _, ok := p.Chosen()
 		require.True(t, ok)
@@ -130,7 +129,7 @@ func TestPaletteFindsAnActionByItsProseAlone(t *testing.T) {
 	p := NewCommandPaletteOverlay(paletteFixture())
 	typePalette(p, "worktree")
 
-	p.HandleKeyPress(tea.KeyMsg{Type: tea.KeyEnter})
+	p.HandleKeyPress(keyMsg("enter"))
 
 	action, _, ok := p.Chosen()
 	require.True(t, ok)
@@ -143,7 +142,7 @@ func TestPaletteEnterOnNoMatchChoosesNothing(t *testing.T) {
 	p := NewCommandPaletteOverlay(paletteFixture())
 	typePalette(p, "zzzz")
 
-	shouldClose := p.HandleKeyPress(tea.KeyMsg{Type: tea.KeyEnter})
+	shouldClose := p.HandleKeyPress(keyMsg("enter"))
 
 	assert.True(t, shouldClose)
 	_, _, ok := p.Chosen()
@@ -155,7 +154,7 @@ func TestPaletteEnterOnNoMatchChoosesNothing(t *testing.T) {
 func TestPaletteEscapeChoosesNothing(t *testing.T) {
 	p := NewCommandPaletteOverlay(paletteFixture())
 
-	assert.True(t, p.HandleKeyPress(tea.KeyMsg{Type: tea.KeyEsc}))
+	assert.True(t, p.HandleKeyPress(keyMsg("esc")))
 	_, _, ok := p.Chosen()
 	assert.False(t, ok)
 }
@@ -251,7 +250,7 @@ func TestPaletteGroupNameDoesNotDonateLettersToTheProse(t *testing.T) {
 	})
 	typePalette(p, "merge")
 
-	p.HandleKeyPress(tea.KeyMsg{Type: tea.KeyEnter})
+	p.HandleKeyPress(keyMsg("enter"))
 
 	_, _, ok := p.Chosen()
 	assert.False(t, ok, "no field of this row contains 'merge'; only prose+group glued together does")

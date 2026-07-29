@@ -7,7 +7,6 @@ import (
 	"testing"
 
 	"github.com/ZviBaratz/atrium/config"
-	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	xansi "github.com/charmbracelet/x/ansi"
 	"github.com/stretchr/testify/assert"
@@ -68,7 +67,7 @@ func TestSessionCreateOverlay_AccountOverrideOnlyWhenTouched(t *testing.T) {
 	// preselected quantivly (last of two), one step wraps around to personal — the
 	// point is that the override is engaged, whichever account it lands on.
 	o.focusStop(stopAccount)
-	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyDown})
+	o.HandleKeyPress(keyMsg("down"))
 	sel = o.GetSelectedAccount()
 	require.NotNil(t, sel, "a user choice overrides auto-routing")
 	require.NotNil(t, sel.Member, "a user choice pins a specific member")
@@ -95,15 +94,15 @@ func TestSessionCreateOverlay_SingleAccountHidesSection(t *testing.T) {
 	assert.Contains(t, o2.Render(), "Account", "≥2 accounts render the picker section")
 }
 
-func tab(o *TextInputOverlay)      { o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyTab}) }
-func shiftTab(o *TextInputOverlay) { o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyShiftTab}) }
-func ctrlR(o *TextInputOverlay)    { o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyCtrlR}) }
+func tab(o *TextInputOverlay)      { o.HandleKeyPress(keyMsg("tab")) }
+func shiftTab(o *TextInputOverlay) { o.HandleKeyPress(keyMsg("shift+tab")) }
+func ctrlR(o *TextInputOverlay)    { o.HandleKeyPress(keyMsg("ctrl+r")) }
 
 // vpPlus/vpMinus press the count +/- keys on the (assumed focused) variant control.
 func vpPlus(o *TextInputOverlay) {
-	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("+")})
+	o.HandleKeyPress(textMsg("+"))
 }
-func vpMinus(o *TextInputOverlay) { o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyDown}) }
+func vpMinus(o *TextInputOverlay) { o.HandleKeyPress(keyMsg("down")) }
 
 // selectOnlyNonClaude drives the variant control to Claude ×0 + non-claude ×1 for a
 // two-profile [claude, non-claude] form (mixedProfiles order), so no selected variant
@@ -111,10 +110,10 @@ func vpMinus(o *TextInputOverlay) { o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyDow
 // cursor on the claude (first) profile so selectClaude can raise it back.
 func selectOnlyNonClaude(o *TextInputOverlay) {
 	o.focusStop(stopVariants)
-	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRight}) // cursor → non-claude
-	vpPlus(o)                                        // non-claude 0 → 1
-	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyLeft})  // cursor → claude
-	vpMinus(o)                                       // claude 1 → 0
+	o.HandleKeyPress(keyMsg("right")) // cursor → non-claude
+	vpPlus(o)                         // non-claude 0 → 1
+	o.HandleKeyPress(keyMsg("left"))  // cursor → claude
+	vpMinus(o)                        // claude 1 → 0
 }
 
 // selectClaude raises the claude variant back to ×1 (the cursor is left on claude by
@@ -139,7 +138,7 @@ func TestSessionCreateOverlay_CtrlRDisarmsOnOtherKey(t *testing.T) {
 	o.FocusTitle()
 
 	ctrlR(o) // arm
-	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("x")})
+	o.HandleKeyPress(textMsg("x"))
 	ctrlR(o) // this is now a first press again, not a confirm
 	assert.False(t, o.ClearRequested(), "an intervening key disarms the clear")
 }
@@ -171,9 +170,9 @@ func TestTextInputOverlay_GetSelectedPathNilWithoutPicker(t *testing.T) {
 func TestQuickSendOverlay_EnterSubmits(t *testing.T) {
 	o := NewQuickSendOverlay("Send to foo")
 	assert.True(t, o.isTextarea(), "focus should start on the textarea")
-	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("yes")})
+	o.HandleKeyPress(textMsg("yes"))
 
-	shouldClose, _ := o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyEnter})
+	shouldClose, _ := o.HandleKeyPress(keyMsg("enter"))
 	assert.True(t, shouldClose, "Enter should close the quick-send overlay")
 	assert.True(t, o.IsSubmitted(), "Enter should submit in quick-send mode")
 	assert.False(t, o.IsCanceled())
@@ -182,19 +181,19 @@ func TestQuickSendOverlay_EnterSubmits(t *testing.T) {
 
 func TestQuickSendOverlay_AltEnterInsertsNewline(t *testing.T) {
 	o := NewQuickSendOverlay("Send to foo")
-	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("line one")})
+	o.HandleKeyPress(textMsg("line one"))
 
-	shouldClose, _ := o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyEnter, Alt: true})
+	shouldClose, _ := o.HandleKeyPress(keyMsg("alt+enter"))
 	assert.False(t, shouldClose, "Alt+Enter must not submit")
 	assert.False(t, o.IsSubmitted(), "Alt+Enter must not submit")
 
-	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("line two")})
+	o.HandleKeyPress(textMsg("line two"))
 	assert.Equal(t, "line one\nline two", o.GetValue(), "Alt+Enter should insert a newline")
 }
 
 func TestQuickSendOverlay_EscCancels(t *testing.T) {
 	o := NewQuickSendOverlay("Send to foo")
-	shouldClose, _ := o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyEsc})
+	shouldClose, _ := o.HandleKeyPress(keyMsg("esc"))
 	assert.True(t, shouldClose)
 	assert.True(t, o.IsCanceled())
 	assert.False(t, o.IsSubmitted())
@@ -280,12 +279,12 @@ func TestSessionCreateOverlay_TabCompletesDirectoryThenAdvances(t *testing.T) {
 
 	// Type a unique path prefix, then Tab — completion happens in place, focus stays.
 	o.HandleKeyPress(runes(root + "/al"))
-	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyTab})
+	o.HandleKeyPress(keyMsg("tab"))
 	assert.True(t, o.isDirectoryPicker(), "Tab completes in place rather than advancing")
 	assert.Equal(t, filepath.Join(root, "alpha"), o.GetSelectedPath())
 
 	// Tab again with nothing left to complete advances to the next field (base branch).
-	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyTab})
+	o.HandleKeyPress(keyMsg("tab"))
 	assert.True(t, o.isBranchPicker(), "with nothing to complete, Tab advances focus")
 }
 
@@ -294,7 +293,7 @@ func TestSessionCreateOverlay_CtrlSSubmitsFromAnyField(t *testing.T) {
 	// Focus starts on the project picker, not the submit button.
 	assert.True(t, o.isDirectoryPicker())
 
-	shouldClose, _ := o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyCtrlS})
+	shouldClose, _ := o.HandleKeyPress(keyMsg("ctrl+s"))
 	assert.True(t, shouldClose, "Ctrl+S should close the form")
 	assert.True(t, o.IsSubmitted(), "Ctrl+S should submit from a non-button field")
 	assert.False(t, o.IsCanceled())
@@ -307,7 +306,7 @@ func TestSessionCreateOverlay_GetTitle(t *testing.T) {
 	tab(o)
 	tab(o)
 	assert.True(t, o.isTitle())
-	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("my-feature")})
+	o.HandleKeyPress(textMsg("my-feature"))
 	assert.Equal(t, "my-feature", o.GetTitle())
 	// The default candidate is exposed as the chosen project.
 	assert.Equal(t, "/repo/a", o.GetSelectedPath())
@@ -334,7 +333,7 @@ func TestSessionCreateOverlay_EnterSkipsDisabledBranch(t *testing.T) {
 	o.SetTargetValidity(true, true, "")
 	assert.True(t, o.isDirectoryPicker())
 
-	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyEnter})
+	o.HandleKeyPress(keyMsg("enter"))
 	assert.True(t, o.isTitle(), "Enter must skip the disabled branch picker")
 }
 
@@ -343,9 +342,9 @@ func TestSessionCreateOverlay_EnterSkipsDisabledBranch(t *testing.T) {
 func TestSessionCreateOverlay_EnterOnFilledTitleSubmits(t *testing.T) {
 	o := NewSessionCreateOverlay(nil, nil, []string{"/repo/a"}, "")
 	o.FocusTitle()
-	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("my-task")})
+	o.HandleKeyPress(textMsg("my-task"))
 
-	shouldClose, _ := o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyEnter})
+	shouldClose, _ := o.HandleKeyPress(keyMsg("enter"))
 
 	assert.True(t, shouldClose, "Enter on a filled title must close the form")
 	assert.True(t, o.IsSubmitted())
@@ -358,7 +357,7 @@ func TestSessionCreateOverlay_EnterOnEmptyTitleAdvances(t *testing.T) {
 	o := NewSessionCreateOverlay(nil, nil, []string{"/repo/a"}, "")
 	o.FocusTitle()
 
-	shouldClose, _ := o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyEnter})
+	shouldClose, _ := o.HandleKeyPress(keyMsg("enter"))
 
 	assert.False(t, shouldClose)
 	assert.False(t, o.IsSubmitted())
@@ -372,9 +371,9 @@ func TestSessionCreateOverlay_EnterInPromptAdvances(t *testing.T) {
 	o.FocusTitle()
 	tab(o) // title → prompt
 	require.True(t, o.isTextarea())
-	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("line one")})
+	o.HandleKeyPress(textMsg("line one"))
 
-	shouldClose, _ := o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyEnter})
+	shouldClose, _ := o.HandleKeyPress(keyMsg("enter"))
 	assert.False(t, shouldClose, "Enter in the prompt must not submit the form")
 	assert.False(t, o.IsSubmitted())
 	assert.False(t, o.isTextarea(), "Enter should move focus off the prompt")
@@ -388,13 +387,13 @@ func TestSessionCreateOverlay_AltEnterInPromptInsertsNewline(t *testing.T) {
 	o.FocusTitle()
 	tab(o)
 	require.True(t, o.isTextarea())
-	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("line one")})
+	o.HandleKeyPress(textMsg("line one"))
 
-	shouldClose, _ := o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyEnter, Alt: true})
+	shouldClose, _ := o.HandleKeyPress(keyMsg("alt+enter"))
 	assert.False(t, shouldClose)
 	assert.True(t, o.isTextarea(), "Alt+Enter stays on the prompt")
 
-	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("line two")})
+	o.HandleKeyPress(textMsg("line two"))
 	assert.Equal(t, "line one\nline two", o.GetValue())
 }
 
@@ -404,12 +403,12 @@ func TestSessionCreateOverlay_CtrlJInPromptInsertsNewline(t *testing.T) {
 	o.FocusTitle()
 	tab(o)
 	require.True(t, o.isTextarea())
-	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("line one")})
+	o.HandleKeyPress(textMsg("line one"))
 
-	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyCtrlJ})
+	o.HandleKeyPress(keyMsg("ctrl+j"))
 	assert.True(t, o.isTextarea(), "Ctrl+J stays on the prompt")
 
-	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("line two")})
+	o.HandleKeyPress(textMsg("line two"))
 	assert.Equal(t, "line one\nline two", o.GetValue())
 }
 
@@ -420,10 +419,10 @@ func TestSessionCreateOverlay_CtrlLeftJumpsWordInPrompt(t *testing.T) {
 	o.FocusTitle()
 	tab(o)
 	require.True(t, o.isTextarea())
-	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("foo bar")})
+	o.HandleKeyPress(textMsg("foo bar"))
 
-	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyCtrlLeft}) // cursor → start of "bar"
-	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("X")})
+	o.HandleKeyPress(keyMsg("ctrl+left")) // cursor → start of "bar"
+	o.HandleKeyPress(textMsg("X"))
 	assert.Equal(t, "foo Xbar", o.GetValue(), "Ctrl+Left should jump back one word")
 }
 
@@ -477,7 +476,7 @@ func TestSessionCreateOverlay_TitleRequiredMarker(t *testing.T) {
 	tab(o)
 	tab(o)
 	require.True(t, o.isTitle())
-	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("x")})
+	o.HandleKeyPress(textMsg("x"))
 	assert.NotContains(t, o.Render(), "(required)", "a typed title clears the marker")
 }
 
@@ -510,7 +509,7 @@ func TestSessionCreateOverlay_TitleVerdictsTrailInput(t *testing.T) {
 	tab(o)
 	tab(o)
 	require.True(t, o.isTitle())
-	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("x")})
+	o.HandleKeyPress(textMsg("x"))
 
 	// Typing the first character drops the hint; the input must not move.
 	typedRow := titleRow()
@@ -680,7 +679,7 @@ func TestSessionCreateOverlay_ModelTabCompletesThenAdvances(t *testing.T) {
 	o.focusStop(stopModel)
 	require.True(t, o.isModelField())
 
-	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("s")})
+	o.HandleKeyPress(textMsg("s"))
 	tab(o)
 	assert.True(t, o.isModelField(), "Tab completes in place rather than advancing")
 	assert.Equal(t, "sonnet", o.GetModel())
@@ -707,7 +706,7 @@ func TestSessionCreateOverlay_ModelCharsetFiltered(t *testing.T) {
 	o.focusStop(stopModel)
 
 	for _, r := range "op;u s$" { // ';', ' ', '$' must be dropped
-		o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+		o.HandleKeyPress(textMsg(string(r)))
 	}
 	assert.Equal(t, "opus", o.GetModel())
 }
@@ -718,7 +717,7 @@ func TestSessionCreateOverlay_ModelCharsetFiltered(t *testing.T) {
 func TestSessionCreateOverlay_ModelDefaultMeansNoOverride(t *testing.T) {
 	o := NewSessionCreateOverlay(nil, nil, []string{"/repo/a"}, "claude")
 	o.focusStop(stopModel)
-	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("default")})
+	o.HandleKeyPress(textMsg("default"))
 	assert.Equal(t, "", o.GetModel())
 }
 
@@ -730,12 +729,12 @@ func TestSessionCreateOverlay_ModelChipCycle(t *testing.T) {
 	assert.Equal(t, "", o.GetModel(), "the no-op chip contributes no override")
 
 	for i := 0; i < 3; i++ { // inherit → fable → haiku → opus
-		o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyDown})
+		o.HandleKeyPress(keyMsg("down"))
 	}
 	assert.Equal(t, "opus", o.GetModel())
 
 	for i := 0; i < 3; i++ {
-		o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyUp})
+		o.HandleKeyPress(keyMsg("up"))
 	}
 	assert.Equal(t, "", o.GetModel(), "cycling back to default drops the override")
 }
@@ -748,10 +747,10 @@ func TestSessionCreateOverlay_ModelChipWrapsToLast(t *testing.T) {
 	require.True(t, o.isModelField())
 	assert.Equal(t, "", o.GetModel(), "starts on the no-op chip")
 
-	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyLeft})
+	o.HandleKeyPress(keyMsg("left"))
 	assert.Equal(t, "sonnet", o.GetModel(), "← from default wraps to the last alias")
 
-	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRight})
+	o.HandleKeyPress(keyMsg("right"))
 	assert.Equal(t, "", o.GetModel(), "→ from the last alias wraps back to default")
 }
 
@@ -760,13 +759,13 @@ func TestSessionCreateOverlay_ModelChipWrapsToLast(t *testing.T) {
 func TestSessionCreateOverlay_ModelCustomBackToChips(t *testing.T) {
 	o := NewSessionCreateOverlay(nil, nil, []string{"/repo/a"}, "claude")
 	o.focusStop(stopModel)
-	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyDown}) // fable chip
+	o.HandleKeyPress(keyMsg("down")) // fable chip
 
-	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("x")})
+	o.HandleKeyPress(textMsg("x"))
 	assert.Equal(t, "x", o.GetModel(), "typing switches to custom mode seeded with the rune")
 
-	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyLeft}) // cursor 1 → 0
-	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyLeft}) // at 0 → back to chips
+	o.HandleKeyPress(keyMsg("left")) // cursor 1 → 0
+	o.HandleKeyPress(keyMsg("left")) // at 0 → back to chips
 	assert.Equal(t, "fable", o.GetModel(), "returning to chips restores the chip selection")
 }
 
@@ -780,9 +779,9 @@ func TestSessionCreateOverlay_ModelMidValueInsertionStaysValid(t *testing.T) {
 	o := NewSessionCreateOverlay(nil, nil, []string{"/repo/a"}, "claude")
 	o.focusStop(stopModel)
 
-	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("opus")})
-	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyHome}) // text cursor to position 0
-	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'.'}})
+	o.HandleKeyPress(textMsg("opus"))
+	o.HandleKeyPress(keyMsg("home")) // text cursor to position 0
+	o.HandleKeyPress(textMsg("."))
 	assert.Equal(t, "opus", o.GetModel(), "an insertion realizing an invalid value must be reverted")
 }
 
@@ -807,7 +806,7 @@ func TestSessionCreateOverlay_ModelDisabledForNonClaudeProfile(t *testing.T) {
 	// Claude (first profile) selected: the field takes focus and input.
 	o.focusStop(stopModel)
 	require.True(t, o.isModelField())
-	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("opus")})
+	o.HandleKeyPress(textMsg("opus"))
 	assert.Equal(t, "opus", o.GetModel())
 
 	// Drop claude from the batch (Claude ×0, Aider ×1): the field goes inert.
@@ -889,17 +888,17 @@ func TestSessionCreateOverlay_ModeChipCycle(t *testing.T) {
 	require.True(t, o.isModeField())
 	assert.Equal(t, "", o.GetPermissionMode(), "the no-op chip contributes no flag")
 
-	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyDown})
+	o.HandleKeyPress(keyMsg("down"))
 	assert.Equal(t, "plan", o.GetPermissionMode())
-	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyDown})
+	o.HandleKeyPress(keyMsg("down"))
 	assert.Equal(t, "acceptEdits", o.GetPermissionMode())
-	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyDown})
+	o.HandleKeyPress(keyMsg("down"))
 	assert.Equal(t, "auto", o.GetPermissionMode())
-	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyDown}) // wraps past the last chip
+	o.HandleKeyPress(keyMsg("down")) // wraps past the last chip
 	assert.Equal(t, "", o.GetPermissionMode(), "past the last chip wraps to the no-op chip")
 
 	// From the no-op chip, one step back wraps to the last chip.
-	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyUp})
+	o.HandleKeyPress(keyMsg("up"))
 	assert.Equal(t, "auto", o.GetPermissionMode(), "before the no-op chip wraps to the last")
 }
 
@@ -937,7 +936,7 @@ func TestSessionCreateOverlay_ModeDisabledForNonClaudeProfile(t *testing.T) {
 
 	o.focusStop(stopMode)
 	require.True(t, o.isModeField())
-	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyDown}) // default → plan
+	o.HandleKeyPress(keyMsg("down")) // default → plan
 	assert.Equal(t, "plan", o.GetPermissionMode())
 
 	// Drop claude from the batch (Claude ×0, Aider ×1): the field goes inert.
