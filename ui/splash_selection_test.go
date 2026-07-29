@@ -5,7 +5,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/ZviBaratz/fresco"
+	"github.com/ZviBaratz/fresco/v2"
 
 	"github.com/stretchr/testify/require"
 )

@@ -10,7 +10,7 @@ import (
 	"testing"
 
 	"github.com/ZviBaratz/atrium/config"
-	"github.com/ZviBaratz/fresco"
+	"github.com/ZviBaratz/fresco/v2"
 
 	"github.com/stretchr/testify/require"
 )
