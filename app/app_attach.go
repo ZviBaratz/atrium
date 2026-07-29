@@ -126,15 +126,14 @@ func (m *home) attachExecCarry(attach func() (chan struct{}, error), killTarget 
 		// Runs on the suspended event-loop goroutine (see attachCommand.onAttached),
 		// so the bump is ordered before every parked message the resumed loop
 		// processes — pre-attach captures always compare against the new generation.
-		// Reset the OS chrome as the terminal is handed to tmux, so a stale
-		// "5 running" title / progress bar doesn't linger under the attach; the
-		// post-detach handler re-asserts it. Runs on the suspended loop, before
-		// tmux writes, so the sequence lands first.
+		//
+		// The OS chrome is not cleared here. tea.Exec releases the terminal before it
+		// starts this command at all, and releasing stops the renderer, which clears
+		// the window title and taskbar progress it had set — strictly earlier than
+		// this hook, which only runs once tmux is already attached and pumping. Doing
+		// it here would race that pump.
 		onAttached: func() {
 			m.attachGen++
-			if m.chrome != nil {
-				m.chrome.Reset()
-			}
 		}}
 	return tea.Exec(cmd, func(err error) tea.Msg {
 		return attachFinishedMsg{

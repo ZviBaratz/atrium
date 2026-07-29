@@ -1,10 +1,10 @@
 package chrome
 
 import (
-	"bytes"
 	"strings"
 	"testing"
 
+	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 )
 
@@ -36,87 +36,54 @@ func TestTitle_OmitsZeroSegments(t *testing.T) {
 	}
 }
 
-func TestApply_EmitsExactBytes(t *testing.T) {
-	var buf bytes.Buffer
-	e := New(&buf, true)
-	e.Apply(2, 5, false)
-	want := ansi.SetWindowTitle("atrium · 2 need you · 5 running") + progressIndeterminate
-	if buf.String() != want {
-		t.Errorf("Apply emitted %q, want %q", buf.String(), want)
-	}
-}
-
-// A steady fleet produces no per-tick output: a second identical Apply writes
-// nothing (mutation guard for the change-detection cache in writeTitle/writeProg).
-func TestApply_ChangeDetectionSuppressesRepeat(t *testing.T) {
-	var buf bytes.Buffer
-	e := New(&buf, true)
-	e.Apply(2, 5, false)
-	buf.Reset()
-	e.Apply(2, 5, false)
-	if buf.Len() != 0 {
-		t.Errorf("repeat Apply with unchanged counts emitted %q, want nothing", buf.String())
-	}
-	// A real change does emit.
-	e.Apply(3, 5, false)
-	if buf.Len() == 0 {
-		t.Error("Apply with changed counts must emit")
-	}
-}
-
-func TestApply_ProgressStates(t *testing.T) {
+// The precedence Progress documents: an error this tick outranks a working session,
+// which outranks idle. Both "error wins" cases are covered, since a swap of the
+// switch arms would still satisfy the other three rows.
+func TestProgress_States(t *testing.T) {
 	for _, tc := range []struct {
+		name    string
 		running int
 		errored bool
-		want    string
+		want    tea.ProgressBarState
 	}{
-		{5, false, progressIndeterminate}, // working → busy
-		{0, false, progressReset},         // idle → clear
-		{5, true, progressError},          // death this tick → error, even while running
-		{0, true, progressError},          // error wins over idle
+		{"idle", 0, false, tea.ProgressBarNone},
+		{"working", 3, false, tea.ProgressBarIndeterminate},
+		{"error wins over running", 3, true, tea.ProgressBarError},
+		{"error wins over idle", 0, true, tea.ProgressBarError},
 	} {
-		if got := progressSeq(tc.running, tc.errored); got != tc.want {
-			t.Errorf("progressSeq(%d,%v) = %q, want %q", tc.running, tc.errored, got, tc.want)
+		if got := Progress(tc.running, tc.errored); got != tc.want {
+			t.Errorf("%s: Progress(%d,%v) = %v, want %v", tc.name, tc.running, tc.errored, got, tc.want)
 		}
 	}
 }
 
-func TestApply_DisabledWritesNothing(t *testing.T) {
-	var buf bytes.Buffer
-	e := New(&buf, false)
-	e.Apply(2, 5, false)
-	e.Reset()
-	if buf.Len() != 0 {
-		t.Errorf("disabled emitter wrote %q, want nothing", buf.String())
-	}
-}
-
-func TestReset_ClearsTitleAndProgress(t *testing.T) {
-	var buf bytes.Buffer
-	e := New(&buf, true)
-	e.Apply(2, 5, false)
-	buf.Reset()
-	e.Reset()
-	want := ansi.SetWindowTitle("") + progressReset
-	if buf.String() != want {
-		t.Errorf("Reset emitted %q, want %q", buf.String(), want)
-	}
-}
-
-// Turning the switch off clears any painted chrome so nothing stale lingers.
-func TestSetEnabled_OffResets(t *testing.T) {
-	var buf bytes.Buffer
-	e := New(&buf, true)
-	e.Apply(2, 5, false)
-	buf.Reset()
-	e.SetEnabled(false)
-	if !strings.Contains(buf.String(), progressReset) {
-		t.Errorf("SetEnabled(false) must clear the chrome, emitted %q", buf.String())
-	}
-	// And once off, Apply is silent.
-	buf.Reset()
-	e.Apply(9, 9, false)
-	if buf.Len() != 0 {
-		t.Errorf("disabled Apply wrote %q, want nothing", buf.String())
+// The wire contract this package's doc promises. Bubble Tea owns the mapping now,
+// so this pins that the states chosen above still resolve to the OSC 9;4 sequences
+// the terminals in that doc implement — a Bubble Tea or x/ansi bump that changed
+// them (or a state renumbered under us) fails here rather than silently in a
+// terminal nobody is watching. Reproduces cursed_renderer.go's setProgressBar arms.
+func TestProgress_StatesMapToOSC94Sequences(t *testing.T) {
+	for _, tc := range []struct {
+		state tea.ProgressBarState
+		want  string
+	}{
+		{tea.ProgressBarNone, "\x1b]9;4;0\x07"},
+		{tea.ProgressBarIndeterminate, "\x1b]9;4;3\x07"},
+		{tea.ProgressBarError, "\x1b]9;4;2;0\x07"},
+	} {
+		var got string
+		switch tc.state {
+		case tea.ProgressBarNone:
+			got = ansi.ResetProgressBar
+		case tea.ProgressBarIndeterminate:
+			got = ansi.SetIndeterminateProgressBar
+		case tea.ProgressBarError:
+			got = ansi.SetErrorProgressBar(0)
+		case tea.ProgressBarDefault, tea.ProgressBarWarning:
+			t.Fatalf("Progress never returns %v", tc.state)
+		}
+		if got != tc.want {
+			t.Errorf("%v emits %q, want %q", tc.state, got, tc.want)
+		}
 	}
 }

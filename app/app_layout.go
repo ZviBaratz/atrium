@@ -292,12 +292,10 @@ func (m *home) applySettingChange(key string) tea.Cmd {
 			m.list.SetPermissionIndicator(m.appConfig.GetPermissionIndicator())
 		}
 	case "os_chrome":
-		if m.chrome != nil {
-			m.chrome.SetEnabled(m.appConfig.GetOSChrome())
-			// Repaint now: enabling should show the current fleet immediately rather
-			// than wait a tick; disabling already cleared the chrome in SetEnabled.
-			m.applyOSChrome(false)
-		}
+		// Recompute now rather than waiting a tick: enabling shows the current fleet
+		// on the next frame, and disabling zeroes the title and bar, which the
+		// renderer turns into an empty title and a cleared bar.
+		m.refreshOSChrome(false)
 	case "splash":
 		// With zero sessions the splash repaints in place, so cycling the enum
 		// previews each pattern — and the off rung — behind the panel. The

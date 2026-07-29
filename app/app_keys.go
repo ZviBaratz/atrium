@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/ZviBaratz/atrium/config"
-	"github.com/ZviBaratz/atrium/internal/actions"
 	"github.com/ZviBaratz/atrium/keys"
 	"github.com/ZviBaratz/atrium/log"
 	"github.com/ZviBaratz/atrium/session"
@@ -631,10 +630,9 @@ func (m *home) copySelectedBranch() (tea.Model, tea.Cmd) {
 	if selected.Branch == "" {
 		return m, m.handleInfoNotice("no branch to copy yet")
 	}
-	if err := actions.CopyToClipboard(selected.Branch); err != nil {
-		return m, m.handleError(fmt.Errorf("copy branch: %w", err))
-	}
-	return m, m.handleInfoNotice(fmt.Sprintf("branch '%s' copied", selected.Branch))
+	return m, tea.Batch(
+		m.copyToClipboard(selected.Branch),
+		m.handleInfoNotice(fmt.Sprintf("branch '%s' copied", selected.Branch)))
 }
 
 // copyPaneContent copies the active tab's content to the clipboard, unstyled.
@@ -649,13 +647,12 @@ func (m *home) copyPaneContent() (tea.Model, tea.Cmd) {
 	if !ok {
 		return m, m.handleInfoNotice("nothing to copy from this tab yet")
 	}
-	if err := actions.CopyToClipboard(text); err != nil {
-		return m, m.handleError(fmt.Errorf("copy %s: %w", what, err))
-	}
 	// The line count is the receipt: a clipboard write is otherwise invisible, and
 	// "copied" alone cannot distinguish the whole diff from one selected hunk.
 	lines := strings.Count(strings.TrimRight(text, "\n"), "\n") + 1
-	return m, m.handleInfoNotice(fmt.Sprintf("%s copied (%d line%s)", what, lines, plural(lines)))
+	return m, tea.Batch(
+		m.copyToClipboard(text),
+		m.handleInfoNotice(fmt.Sprintf("%s copied (%d line%s)", what, lines, plural(lines))))
 }
 
 // openRenameSelected opens the rename overlay for the selected session.

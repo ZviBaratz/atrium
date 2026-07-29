@@ -1,11 +1,20 @@
 package app
 
-import "github.com/ZviBaratz/atrium/session"
+import (
+	"github.com/ZviBaratz/atrium/chrome"
+	"github.com/ZviBaratz/atrium/session"
 
-// applyOSChrome recomputes the fleet counts and repaints the terminal's OS chrome
-// (window title + OSC 9;4 taskbar progress) via m.chrome. It runs once per metadata
-// tick, so the title reflects a status change within one tick; the emitter itself
-// writes only when the composed strings changed, so a steady fleet is silent.
+	tea "charm.land/bubbletea/v2"
+)
+
+// refreshOSChrome recomputes the fleet counts and stores what the terminal's OS
+// chrome (window title + OSC 9;4 taskbar progress) should say; View hands the stored
+// values to Bubble Tea, which emits only what changed. It runs once per metadata
+// tick, so the title reflects a status change within one tick.
+//
+// The derivation stays here rather than in View for two reasons: errored is
+// tick-scoped (a session death observed in *this* poll, which no frame-time read can
+// recover), and the walk over every instance would otherwise run at frame rate.
 //
 //   - running: sessions actively working (Running or Loading) → the progress bar's
 //     indeterminate state and the "M running" title segment.
@@ -14,10 +23,11 @@ import "github.com/ZviBaratz/atrium/session"
 //   - errored: a session death this tick → the progress bar's error state, cleared
 //     on the next healthy tick (this recomputes every tick).
 //
-// A nil m.chrome (hand-built test homes) or the OSChrome config switch being off
-// makes this a no-op.
-func (m *home) applyOSChrome(errored bool) {
-	if m.chrome == nil {
+// With the OSChrome config switch off, both values are zeroed, which is also their
+// zero value — so a hand-built test home that never calls this renders no chrome.
+func (m *home) refreshOSChrome(errored bool) {
+	if m.appConfig == nil || !m.appConfig.GetOSChrome() {
+		m.osChromeTitle, m.osChromeProgress = "", tea.ProgressBarNone
 		return
 	}
 	var needYou, running int
@@ -36,5 +46,6 @@ func (m *home) applyOSChrome(errored bool) {
 			}
 		}
 	}
-	m.chrome.Apply(needYou, running, errored)
+	m.osChromeTitle = chrome.Title(needYou, running)
+	m.osChromeProgress = chrome.Progress(running, errored)
 }

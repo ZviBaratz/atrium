@@ -69,6 +69,17 @@ func (e Event) headline(session string) string {
 // and runs the desktop command through runner (the fakeable cmd.Executor seam), so
 // tests never ring a real bell or spawn a real process. lookPath resolves built-in
 // per-OS notifiers and is overridable in tests.
+//
+// The stdout writes stay direct rather than going through Bubble Tea's tea.Raw, and
+// that is a decision, not an oversight (#393). tea.Raw queues the bytes into the
+// program's output buffer for the renderer's next frame flush, which makes an alert
+// whose whole point is to be out-of-band depend on the render loop and arrive a
+// frame late. BEL and OSC 9 are already alt-screen-safe control strings, so there is
+// nothing for the renderer to sequence them against. The desktop leg spawns a
+// subprocess on its own goroutine and would stay imperative either way, so routing
+// the other two through the event loop would not even leave the package free of
+// direct effects — it would only trade byte-exact test evidence (every assertion
+// here and in app is on out's contents) for "a command of some shape was returned".
 type Notifier struct {
 	out      io.Writer
 	runner   cmd.Executor
