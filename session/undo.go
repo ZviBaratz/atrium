@@ -58,15 +58,21 @@ func (i *Instance) PrepareUndo(ref string) (UndoCapture, error) {
 		return UndoCapture{}, fmt.Errorf("cannot prepare undo for %s: no worktree", i.Title)
 	}
 
+	// The dirty check is unconditional; only the commit is gated. Cleanup removes the
+	// worktree with `git worktree remove -f` for every session alike — just `branch -D`
+	// is skipped for a user-owned branch — so declining to commit does not spare the
+	// working tree, it only means nothing preserved it. Recording Dirty either way is
+	// what lets the post-restore notice tell "nothing to save" from "could not save
+	// it"; gating the check too would report the second as the first.
 	var capture UndoCapture
-	if !wt.IsExistingBranch() {
-		dirty, err := wt.IsDirty()
-		if err != nil {
-			// Best-effort: an unreadable worktree must not stop the kill the user
-			// asked for. The entry records that the tree was not preserved.
-			log.WarningLog.Printf("undo %s: cannot check for uncommitted changes: %v", i.Title, err)
-		} else if dirty {
-			capture.Dirty = true
+	dirty, err := wt.IsDirty()
+	if err != nil {
+		// Best-effort: an unreadable worktree must not stop the kill the user
+		// asked for. The entry records that the tree was not preserved.
+		log.WarningLog.Printf("undo %s: cannot check for uncommitted changes: %v", i.Title, err)
+	} else if dirty {
+		capture.Dirty = true
+		if !wt.IsExistingBranch() {
 			msg := fmt.Sprintf("%s'%s' on %s %s",
 				autoPauseCommitPrefix, i.Title, time.Now().Format(time.RFC822), autoPauseCommitSuffix)
 			if err := wt.CommitChanges(msg); err != nil {

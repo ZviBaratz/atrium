@@ -473,13 +473,69 @@ func TestRestoredNoticeAdmitsWorkItCouldNotSave(t *testing.T) {
 	one := []*session.Instance{inst}
 
 	assert.Equal(t, "restored 'fix-auth'",
-		restoredNotice(one, []undo.Entry{{Dirty: true, Committed: true}}))
+		restoredNotice(one, []undo.Entry{{Dirty: true, Committed: true}}, 0))
 	assert.Equal(t, "restored 'fix-auth'",
-		restoredNotice(one, []undo.Entry{{Dirty: false, Committed: false}}),
+		restoredNotice(one, []undo.Entry{{Dirty: false, Committed: false}}, 0),
 		"a clean session had nothing to save, so there is nothing to admit")
 	assert.Equal(t, "restored 'fix-auth' — uncommitted changes could not be saved and are gone",
-		restoredNotice(one, []undo.Entry{{Dirty: true, Committed: false}}))
+		restoredNotice(one, []undo.Entry{{Dirty: true, Committed: false}}, 0))
 	assert.Equal(t, "restored 'fix-auth'",
-		restoredNotice(one, []undo.Entry{{Direct: true, Dirty: true}}),
+		restoredNotice(one, []undo.Entry{{Direct: true, Dirty: true}}, 0),
 		"a direct session has no worktree the teardown could have committed")
+}
+
+// TestRestoredNoticeReportsAnAgentThatCameBackFresh. The session comes back either
+// way, so the row looks identical — the conversation is the part the user cannot
+// see until they attach. README and the confirmation copy both say the notice
+// reports this, which is only true if it does.
+func TestRestoredNoticeReportsAnAgentThatCameBackFresh(t *testing.T) {
+	one := []*session.Instance{{Title: "fix-auth"}}
+	clean := []undo.Entry{{}}
+
+	assert.Equal(t, "restored 'fix-auth'", restoredNotice(one, clean, 0),
+		"a resumed conversation is the expected case and needs no clause")
+	assert.Equal(t,
+		"restored 'fix-auth' — no conversation to resume, so its agent started fresh",
+		restoredNotice(one, clean, 1))
+}
+
+// TestRestoredNoticeCountsFreshAgentsAcrossABatch — one visual-mode kill restores
+// as one action, so the notice speaks for the whole group rather than the first
+// session in it.
+func TestRestoredNoticeCountsFreshAgentsAcrossABatch(t *testing.T) {
+	three := []*session.Instance{{Title: "a"}, {Title: "b"}, {Title: "c"}}
+	clean := []undo.Entry{{}, {}, {}}
+
+	assert.Equal(t, "restored 3 sessions", restoredNotice(three, clean, 0))
+	assert.Equal(t,
+		"restored 3 sessions — 1 came back with a fresh agent (no conversation to resume)",
+		restoredNotice(three, clean, 1))
+}
+
+// TestCountFreshAgentsIgnoresWhatItCannotKnow. "Unknown" and "started fresh" are
+// different answers, and only one of them is the user's problem. An agent with no
+// transcript adapter (codex/gemini) resolves its own resume out of our sight, and
+// an instance that has not relaunched has told us nothing at all — counting either
+// would print a loss we never checked for, which is the exact over-claim the
+// confirmation copy refuses to make.
+func TestCountFreshAgentsIgnoresWhatItCannotKnow(t *testing.T) {
+	unrelaunched := []*session.Instance{{Title: "a"}, {Title: "b"}}
+
+	assert.Equal(t, 0, countFreshAgents(unrelaunched))
+	assert.Equal(t, "restored 2 sessions",
+		restoredNotice(unrelaunched, []undo.Entry{{}, {}}, countFreshAgents(unrelaunched)),
+		"nothing is known about these conversations, so the notice claims nothing")
+}
+
+// TestRestoredNoticeReportsBothLossesAtOnce. The two are independent — a teardown
+// that could not commit says nothing about whether a transcript existed — so a
+// restore can suffer both, and reporting only the first would leave the user to
+// discover the second by attaching.
+func TestRestoredNoticeReportsBothLossesAtOnce(t *testing.T) {
+	one := []*session.Instance{{Title: "fix-auth"}}
+
+	assert.Equal(t,
+		"restored 'fix-auth' — uncommitted changes could not be saved and are gone;"+
+			" no conversation to resume, so its agent started fresh",
+		restoredNotice(one, []undo.Entry{{Dirty: true, Committed: false}}, 1))
 }

@@ -408,9 +408,11 @@ local `.env`, a build cache, downloaded dependencies. They were never in a commi
 to restore from, and only the paths named by
 [`carry_files`](#carried-files) and [`link_paths`](#linked-paths) are re-seeded.
 The agent's conversation usually returns — Atrium resumes it the same way it does
-after a pause, for the agents that support it — but when there is no resumable
-transcript the session comes back with a fresh agent, and the notice after the
-restore tells you which happened.
+after a pause, for the agents that support it. When Atrium can see there is no
+transcript to resume, the session comes back with a fresh agent and the notice
+after the restore says so. For agents whose transcripts it cannot locate
+(everything but Claude Code today) the agent settles its own resume, so the notice
+stays quiet rather than guess.
 
 Atrium refuses rather than guessing when the world has moved on: if you have
 already created a session with the same name, if the branch has been recreated

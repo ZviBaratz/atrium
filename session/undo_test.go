@@ -136,6 +136,29 @@ func TestPrepareUndoLeavesAPreExistingBranchAlone(t *testing.T) {
 	assert.True(t, ok, "a pre-existing branch can still move, so its tip is still retained")
 }
 
+// TestPrepareUndoStillRecordsDirtItRefusedToCommit. Declining to write a commit
+// onto the user's own branch does not make the working tree survive: Cleanup runs
+// `git worktree remove -f` on every session alike, and only `branch -D` is gated on
+// the flag. So this is a restore that comes back incomplete, and the record has to
+// say so — Dirty && !Committed is exactly the shape the post-restore notice reads.
+// Leaving Dirty false would report the loss as a whole restore.
+func TestPrepareUndoStillRecordsDirtItRefusedToCommit(t *testing.T) {
+	wt := newTestWorktreeFromExistingBranch(t)
+	wtPath := wt.GetWorktreePath()
+	inst := killableInstance(t, wt)
+
+	head := gitOutput(t, wtPath, "rev-parse", "HEAD")
+	require.NoError(t, os.WriteFile(filepath.Join(wtPath, "work.txt"), []byte("in progress\n"), 0644))
+
+	captured, err := inst.PrepareUndo(undoRef)
+	require.NoError(t, err)
+
+	assert.True(t, captured.Dirty, "the tree had uncommitted work that the kill is about to destroy")
+	assert.False(t, captured.Committed, "and nothing preserved it, so the restore must admit that")
+	assert.Equal(t, head, gitOutput(t, wt.GetRepoPath(), "rev-parse", wt.GetBranchName()),
+		"recording the dirt must not start writing to the user's branch")
+}
+
 // TestPrepareUndoOnADirectSessionIsANoOp — a direct session runs in the user's own
 // directory with no worktree and no branch. There is nothing to commit and nothing
 // to retain, and reaching for git would only log a misleading failure.

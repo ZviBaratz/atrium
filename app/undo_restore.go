@@ -242,7 +242,9 @@ func (m *home) handleUndoDone(msg undoDoneMsg) tea.Cmd {
 		return tea.Batch(m.instanceChanged(), m.showInfo(undoFailureReport(msg)))
 	}
 	return tea.Batch(m.instanceChanged(),
-		m.flashNotice(restoredNotice(msg.instances, msg.entries), ui.NoticeInfo))
+		m.flashNotice(
+			restoredNotice(msg.instances, msg.entries, countFreshAgents(msg.instances)),
+			ui.NoticeInfo))
 }
 
 // --- copy ---------------------------------------------------------------------
@@ -280,8 +282,9 @@ func batchKilledNotice(killed, undoable int) string {
 //
 // What it deliberately does not promise is the conversation. Resume asks the agent
 // adapter whether a transcript is resumable and quietly starts fresh when it is
-// not, so promising it here would be a coin flip printed as a fact; the notice
-// after the restore reports what actually happened instead.
+// not, so promising it here would be a coin flip printed as a fact. restoredNotice
+// settles it afterwards instead, once the answer is known — and says so only for
+// the agents whose transcript Atrium can actually locate (countFreshAgents).
 func undoConfirmMessage(group []undo.Entry) string {
 	var subject string
 	if len(group) == 1 {
@@ -307,14 +310,22 @@ func undoBusyLabel(n int) string {
 	return fmt.Sprintf("restoring %d session%s…", n, plural(n))
 }
 
-// restoredNotice reports what came back — and, when the teardown could not fold
-// the working tree into the retained commits, that it did not.
+// restoredNotice reports what came back — and, in the two shapes where something
+// did not, that it did not.
 //
-// Entry.Committed is false when the dirty check or the commit itself failed at
-// kill time, which are the two ways `git worktree remove -f` destroys uncommitted
-// work despite everything else here. Saying nothing would report that restore
-// exactly like a whole one.
-func restoredNotice(instances []*session.Instance, entries []undo.Entry) string {
+// Entry.Committed is false when the dirty check failed at kill time, when the
+// commit itself failed, and when the teardown declined to write one onto a branch
+// the user already owned — the three ways `git worktree remove -f` destroys
+// uncommitted work despite everything else here. Saying nothing would report that
+// restore exactly like a whole one.
+//
+// freshAgents is how many came back without their conversation (see
+// countFreshAgents). It is the other invisible half: the row, the branch and the
+// worktree are identical either way, so a user who is not told discovers it only
+// by attaching and finding the agent has forgotten everything. The confirmation
+// deliberately does not promise the conversation — this is where that promise is
+// settled instead, which is only true while this reports it.
+func restoredNotice(instances []*session.Instance, entries []undo.Entry, freshAgents int) string {
 	lost := 0
 	for _, e := range entries {
 		if !e.Direct && !e.Committed && e.Dirty {
@@ -322,15 +333,54 @@ func restoredNotice(instances []*session.Instance, entries []undo.Entry) string 
 		}
 	}
 	var base string
-	if len(instances) == 1 {
+	single := len(instances) == 1
+	if single {
 		base = fmt.Sprintf("restored '%s'", instances[0].DisplayName())
 	} else {
 		base = fmt.Sprintf("restored %d session%s", len(instances), plural(len(instances)))
 	}
+
+	var clauses []string
 	if lost > 0 {
-		return base + " — uncommitted changes could not be saved and are gone"
+		clauses = append(clauses, "uncommitted changes could not be saved and are gone")
 	}
-	return base
+	if freshAgents > 0 {
+		if single {
+			clauses = append(clauses, "no conversation to resume, so its agent started fresh")
+		} else {
+			clauses = append(clauses, fmt.Sprintf(
+				"%d came back with a fresh agent (no conversation to resume)", freshAgents))
+		}
+	}
+	if len(clauses) == 0 {
+		return base
+	}
+	return base + " — " + strings.Join(clauses, "; ")
+}
+
+// countFreshAgents is how many of instances Atrium can say came back without their
+// prior conversation.
+//
+// Called where the notice is built rather than carried on undoDoneMsg, so there is
+// no separate step to forget: the count cannot drift from the sessions it counts,
+// because it is derived from them at the moment they are reported. Reading it this
+// late is safe because nothing relaunches a live session — the only other writer,
+// recoverInPlace, runs during load, before an instance is published to the poll
+// loop — so the answer Resume recorded is still the answer.
+//
+// Only the knowable case counts. An agent with no native-transcript adapter
+// (codex/gemini) resolves its own resume after Atrium has stopped looking, and an
+// instance reporting "unknown" for any other reason has told us nothing — counting
+// either as fresh would announce a loss on the strength of not having checked,
+// which is the same coin-flip-printed-as-fact the confirmation copy refuses.
+func countFreshAgents(instances []*session.Instance) int {
+	fresh := 0
+	for _, inst := range instances {
+		if resumed, known := inst.ResumedConversation(); known && !resumed {
+			fresh++
+		}
+	}
+	return fresh
 }
 
 // undoFailureReport is the modal a partial (or wholly refused) restore earns. A
