@@ -19,7 +19,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/ZviBaratz/fresco"
+	"github.com/ZviBaratz/fresco/v2"
 )
 
 // splashDefaultVariant is the fallback for an unrecognized override value; an

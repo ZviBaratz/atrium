@@ -18,10 +18,11 @@ import (
 	"strings"
 
 	"github.com/ZviBaratz/atrium/ui/theme"
-	"github.com/ZviBaratz/fresco"
+	"github.com/ZviBaratz/fresco/v2"
 
 	"github.com/charmbracelet/lipgloss"
 	xansi "github.com/charmbracelet/x/ansi"
+	"github.com/muesli/termenv"
 )
 
 const (
@@ -103,12 +104,47 @@ func splashScene(width, height, frame int, message string) string {
 		Variant:  variant,
 		FocalRow: focalRow,
 		LumRange: lum,
+		Profile:  splashProfile(),
 	})
 	scene := overlayAt(field, word, wordX, wordY)
 	if message != "" {
 		scene = overlayAt(scene, msg, msgX, msgY)
 	}
 	return lipgloss.NewStyle().MaxWidth(width).MaxHeight(height).Render(scene)
+}
+
+// splashProfile is the colour depth the splash field emits at, and it exists
+// because Atrium currently straddles two colour systems.
+//
+// fresco v2 runs on Lip Gloss v2, whose detection goes through colorprofile.
+// Everything else Atrium draws still runs on Lip Gloss v1, which downsamples
+// through its own global termenv profile. Left to its own devices (Profile unset,
+// i.e. fresco.Auto) the field would resolve its depth from a *different* detector
+// than the pane around it — normally the same answer, but nothing makes them
+// agree, and a disagreement would show as a splash rendered at a different colour
+// depth than its own border.
+//
+// So the field is told, explicitly, to match whatever the rest of the frame is
+// being rendered at. That also restores test control: the suite pins colour by
+// setting Lip Gloss v1's global, which fresco v2 has no reason to consult, so
+// without this bridge every splash-bearing colour assertion would silently become
+// a test of plain text.
+//
+// This is the seam the Bubble Tea v2 migration (#393) rewires rather than deletes:
+// after the cut there is one profile again, handed down by Bubble Tea, and this
+// becomes a read of that. It is also the last thing in non-test Atrium code that
+// names termenv.
+func splashProfile() fresco.ColorProfile {
+	switch lipgloss.ColorProfile() {
+	case termenv.TrueColor:
+		return fresco.TrueColor
+	case termenv.ANSI256:
+		return fresco.ANSI256
+	case termenv.ANSI:
+		return fresco.ANSI16
+	default: // termenv.Ascii — no colour
+		return fresco.NoColor
+	}
 }
 
 // splashPalette maps the active theme's five splash tokens onto fresco.Palette:

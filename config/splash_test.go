@@ -3,7 +3,7 @@ package config
 import (
 	"testing"
 
-	"github.com/ZviBaratz/fresco"
+	"github.com/ZviBaratz/fresco/v2"
 )
 
 // TestGetSplashDefaultsToRandom pins the normalization: nil receiver, empty
