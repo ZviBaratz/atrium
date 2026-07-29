@@ -621,7 +621,9 @@ func (m *home) approveSelected() (tea.Model, tea.Cmd) {
 }
 
 // copySelectedBranch yanks the selected session's branch name to the system
-// clipboard. Both outcomes are acknowledged on the hint row.
+// clipboard. A copy has no failure outcome — the OSC 52 leg is dispatched
+// unconditionally (see copyToClipboard) — so the hint row carries either the
+// confirmation or the "no branch yet" guard, never an error.
 func (m *home) copySelectedBranch() (tea.Model, tea.Cmd) {
 	selected := m.list.GetSelectedInstance()
 	if selected == nil {
