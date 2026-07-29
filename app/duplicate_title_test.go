@@ -8,7 +8,6 @@ import (
 	"github.com/ZviBaratz/atrium/session"
 	"github.com/ZviBaratz/atrium/session/git"
 	"github.com/ZviBaratz/atrium/session/tmux"
-	tea "github.com/charmbracelet/bubbletea"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -29,7 +28,7 @@ func addDirectInstance(t *testing.T, h *home, title, dir string) *session.Instan
 // receives it — the create form opened via `n` focuses the title).
 func typeString(h *home, s string) {
 	for _, r := range s {
-		h.handleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+		h.handleKeyPress(textMsg(string(r)))
 	}
 }
 
@@ -51,7 +50,7 @@ func TestCreateForm_IntraGroupDuplicateBlocksSubmit(t *testing.T) {
 	assert.NotEmpty(t, h.textInputOverlay.TitleError(),
 		"the inline error must appear live, while typing")
 
-	h.handleKeyPress(tea.KeyMsg{Type: tea.KeyCtrlS})
+	h.handleKeyPress(keyMsg("ctrl+s"))
 
 	assert.Equal(t, statePrompt, h.state, "a duplicate submit must keep the form open")
 	require.NotNil(t, h.textInputOverlay)

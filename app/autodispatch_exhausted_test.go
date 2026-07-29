@@ -94,7 +94,7 @@ func TestAutoDispatch_ExhaustedAcceptSpawnsSoonest(t *testing.T) {
 	h.handleSmartDispatchSubmit("Review box#123")
 	require.Equal(t, stateConfirm, h.state)
 
-	_, cmd := h.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("y")})
+	_, cmd := h.Update(textMsg("y"))
 	require.NotNil(t, cmd, "accepting must return the staged spawn command")
 	h.Update(cmd())
 
@@ -114,7 +114,7 @@ func TestAutoDispatch_ExhaustedDeclineCreatesNothing(t *testing.T) {
 	h.handleSmartDispatchSubmit("Review box#123")
 	require.Equal(t, stateConfirm, h.state)
 
-	h.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("n")})
+	h.Update(textMsg("n"))
 
 	assert.Equal(t, before, h.list.NumInstances(), "declining creates nothing")
 	assert.Equal(t, stateDefault, h.state)

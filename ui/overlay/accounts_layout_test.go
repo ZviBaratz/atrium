@@ -7,7 +7,6 @@ import (
 
 	"github.com/ZviBaratz/atrium/config"
 	"github.com/ZviBaratz/atrium/ui/theme"
-	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -275,7 +274,7 @@ func TestAccountsOverlay_DirColumnIsStableWhileScrolling(t *testing.T) {
 	top := badgeColumn(t, rowLine(t, o.renderList(), "acct00"), badgeRouted)
 
 	for i := 0; i < 31; i++ {
-		o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyDown})
+		o.HandleKeyPress(keyMsg("down"))
 	}
 	require.Equal(t, 31, o.cursorIndex(), "scrolled to the bottom of the list")
 	assert.Equal(t, top, badgeColumn(t, rowLine(t, o.renderList(), "dead"), badgeUnreachable),

@@ -5,7 +5,6 @@ import (
 	"testing"
 
 	"github.com/ZviBaratz/atrium/config"
-	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/stretchr/testify/assert"
 )
@@ -136,6 +135,6 @@ func TestVariantPicker_ChipRowWindowsAroundCursor(t *testing.T) {
 // Non-navigation keys are not consumed, so they fall through to the form.
 func TestVariantPicker_IgnoresOtherKeys(t *testing.T) {
 	vp := NewVariantPicker(vpProfiles())
-	assert.False(t, vp.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'x'}}))
+	assert.False(t, vp.HandleKeyPress(textMsg("x")))
 	assert.Equal(t, 1, vp.Total(), "an unrelated key must not change counts")
 }

@@ -4,7 +4,6 @@ import (
 	"testing"
 
 	"github.com/ZviBaratz/atrium/config"
-	tea "github.com/charmbracelet/bubbletea"
 )
 
 func claudeProfiles() []config.Profile {
@@ -27,7 +26,7 @@ func TestCreateForm_EffortField_PresentForClaude(t *testing.T) {
 func TestCreateForm_EffortField_SelectionReadOut(t *testing.T) {
 	ov := NewSessionCreateOverlay(claudeProfiles(), nil, []string{t.TempDir()}, "claude")
 	ov.focusStop(stopEffort)
-	ov.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRight}) // default -> low
+	ov.HandleKeyPress(keyMsg("right")) // default -> low
 	if got := ov.GetEffort(); got != "low" {
 		t.Errorf("GetEffort() after Right = %q, want \"low\"", got)
 	}

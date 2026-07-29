@@ -513,8 +513,8 @@ func TestConfirmationModalStateTransitions(t *testing.T) {
 		h.confirmationOverlay = overlay.NewConfirmationOverlay("Test confirmation")
 
 		// Simulate pressing 'y' using HandleKeyPress
-		keyMsg := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("y")}
-		shouldClose := h.confirmationOverlay.HandleKeyPress(keyMsg)
+		pressed := textMsg("y")
+		shouldClose := h.confirmationOverlay.HandleKeyPress(pressed)
 		if shouldClose {
 			h.state = stateDefault
 			h.confirmationOverlay = nil
@@ -530,8 +530,8 @@ func TestConfirmationModalStateTransitions(t *testing.T) {
 		h.confirmationOverlay = overlay.NewConfirmationOverlay("Test confirmation")
 
 		// Simulate pressing 'n' using HandleKeyPress
-		keyMsg := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("n")}
-		shouldClose := h.confirmationOverlay.HandleKeyPress(keyMsg)
+		pressed := textMsg("n")
+		shouldClose := h.confirmationOverlay.HandleKeyPress(pressed)
 		if shouldClose {
 			h.state = stateDefault
 			h.confirmationOverlay = nil
@@ -547,8 +547,8 @@ func TestConfirmationModalStateTransitions(t *testing.T) {
 		h.confirmationOverlay = overlay.NewConfirmationOverlay("Test confirmation")
 
 		// Simulate pressing ESC using HandleKeyPress
-		keyMsg := tea.KeyMsg{Type: tea.KeyEscape}
-		shouldClose := h.confirmationOverlay.HandleKeyPress(keyMsg)
+		pressed := keyMsg("esc")
+		shouldClose := h.confirmationOverlay.HandleKeyPress(pressed)
 		if shouldClose {
 			h.state = stateDefault
 			h.confirmationOverlay = nil
@@ -619,15 +619,15 @@ func TestConfirmationModalKeyHandling(t *testing.T) {
 			h.confirmationOverlay = overlay.NewConfirmationOverlay("Kill session?")
 
 			// Create key message
-			var keyMsg tea.KeyMsg
+			var pressed tea.KeyMsg
 			if tc.key == "esc" {
-				keyMsg = tea.KeyMsg{Type: tea.KeyEscape}
+				pressed = keyMsg("esc")
 			} else {
-				keyMsg = tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(tc.key)}
+				pressed = textMsg(tc.key)
 			}
 
 			// Call handleKeyPress
-			model, _ := h.handleKeyPress(keyMsg)
+			model, _ := h.handleKeyPress(pressed)
 			homeModel, ok := model.(*home)
 			require.True(t, ok)
 
@@ -844,7 +844,7 @@ func TestConfirmActionWithDifferentTypes(t *testing.T) {
 	// key, and return the message carried by the resulting command (if any).
 	confirmAndCollect := func(t *testing.T, h *home) tea.Msg {
 		t.Helper()
-		_, cmd := h.handleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("y")})
+		_, cmd := h.handleKeyPress(textMsg("y"))
 		assert.Equal(t, stateDefault, h.state)
 		assert.Nil(t, h.pendingConfirmAction)
 		if cmd == nil {
@@ -909,7 +909,7 @@ func TestMultipleConfirmationsDontInterfere(t *testing.T) {
 		require.NotNil(t, h.pendingConfirmAction)
 
 		// Cancel the first confirmation: its action must not run.
-		_, cmd := h.handleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("n")})
+		_, cmd := h.handleKeyPress(textMsg("n"))
 		assert.Nil(t, cmd)
 		assert.False(t, action1Called, "cancelled action must not run")
 		assert.Equal(t, stateDefault, h.state)
@@ -923,7 +923,7 @@ func TestMultipleConfirmationsDontInterfere(t *testing.T) {
 		})
 		require.NotNil(t, h.pendingConfirmAction)
 
-		_, cmd = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("y")})
+		_, cmd = h.handleKeyPress(textMsg("y"))
 		require.NotNil(t, cmd)
 		err, ok := cmd().(error)
 		require.True(t, ok)
@@ -949,7 +949,7 @@ func TestMultipleConfirmationsDontInterfere(t *testing.T) {
 		})
 		require.NotNil(t, h.pendingConfirmAction)
 
-		_, cmd := h.handleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("y")})
+		_, cmd := h.handleKeyPress(textMsg("y"))
 		if cmd != nil {
 			cmd()
 		}
@@ -976,7 +976,7 @@ func TestConfirmActionSurfacesActionResult(t *testing.T) {
 	assert.Equal(t, stateConfirm, h.state)
 	require.NotNil(t, h.pendingConfirmAction, "confirmAction must stash the action")
 
-	_, cmd := h.handleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("y")})
+	_, cmd := h.handleKeyPress(textMsg("y"))
 	require.NotNil(t, cmd, "confirming must return a command carrying the action result")
 	assert.Equal(t, stateDefault, h.state)
 	assert.Nil(t, h.pendingConfirmAction)
@@ -1032,7 +1032,7 @@ func TestValidityResultResolvesHeadLabel(t *testing.T) {
 		newSessionPath:   repo,
 	}
 	// Focus the branch picker so its list (including the HEAD option) renders.
-	_, _ = h.Update(tea.KeyMsg{Type: tea.KeyTab})
+	_, _ = h.Update(keyMsg("tab"))
 	ov.SetBranchResults(nil, ov.BranchFilterVersion())
 
 	_, _ = h.Update(targetValidityResultMsg{path: repo, valid: true, direct: false, headBranch: "main"})
@@ -1087,9 +1087,9 @@ func TestValidityResultRepreselectsAccount(t *testing.T) {
 	// From the preselected "b" (idx 1) a Right lands on "c" (idx 2); had the preselect
 	// not landed (idx 0 → "a"), Right would land on "b". Observing "c" proves it.
 	ov.FocusTitle()
-	ov.HandleKeyPress(tea.KeyMsg{Type: tea.KeyTab}) // title → prompt
-	ov.HandleKeyPress(tea.KeyMsg{Type: tea.KeyTab}) // prompt → account
-	ov.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRight})
+	ov.HandleKeyPress(keyMsg("tab")) // title → prompt
+	ov.HandleKeyPress(keyMsg("tab")) // prompt → account
+	ov.HandleKeyPress(keyMsg("right"))
 	sel := ov.GetSelectedAccount()
 	require.NotNil(t, sel, "driving the picker marks it touched/overriding")
 	require.NotNil(t, sel.Member, "a picker choice pins a specific member")
@@ -1174,7 +1174,7 @@ func TestBranchSearchErrorClearsSpinner(t *testing.T) {
 		newSessionPath:   repo,
 	}
 	// Focus the branch picker (right after the project) so its list UI renders.
-	_, _ = h.Update(tea.KeyMsg{Type: tea.KeyTab})
+	_, _ = h.Update(keyMsg("tab"))
 	version := ov.InvalidateBranchSearch()
 	require.Contains(t, ov.Render(), "searching")
 
@@ -1229,7 +1229,7 @@ func TestPathChangeResetsValidityToUnknown(t *testing.T) {
 	require.Contains(t, ov.Render(), "not a directory")
 
 	// Move the picker selection to repoB (focus starts on the project picker).
-	_, _ = h.Update(tea.KeyMsg{Type: tea.KeyDown})
+	_, _ = h.Update(keyMsg("down"))
 	require.Equal(t, repoB, h.newSessionPath, "the path change must be registered")
 
 	// repoA's verdict must not be shown for repoB; the indicator is unknown until the
@@ -1253,7 +1253,7 @@ func TestConfirmActionCancelDoesNotRun(t *testing.T) {
 	ran := false
 	_ = h.confirmAction("Kill it?", instantAction, func() tea.Msg { ran = true; return nil })
 
-	_, cmd := h.handleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("n")})
+	_, cmd := h.handleKeyPress(textMsg("n"))
 	assert.Nil(t, cmd)
 	assert.False(t, ran, "cancelled action must not run")
 	assert.Equal(t, stateDefault, h.state)

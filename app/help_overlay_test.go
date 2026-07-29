@@ -45,11 +45,11 @@ func TestHelpOverlayFitsShortTerminal(t *testing.T) {
 	}
 
 	// Scrolling must keep the help open and reveal later content.
-	home.handleKeyPress(tea.KeyMsg{Type: tea.KeyDown})
+	home.handleKeyPress(keyMsg("down"))
 	if home.state != stateHelp {
 		t.Fatal("down closed the help overlay; want it to scroll")
 	}
-	home.handleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("x")})
+	home.handleKeyPress(textMsg("x"))
 	if home.state != stateDefault {
 		t.Fatal("a non-scroll key did not close the help overlay")
 	}

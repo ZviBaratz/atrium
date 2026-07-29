@@ -7,7 +7,6 @@ import (
 	"github.com/ZviBaratz/atrium/session"
 	"github.com/ZviBaratz/atrium/session/git"
 
-	tea "github.com/charmbracelet/bubbletea"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -28,7 +27,7 @@ func TestResumeAll_OpensCountConfirmation(t *testing.T) {
 	addPaused(t, h, "alpha")
 	addPaused(t, h, "bravo")
 
-	_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyCtrlR})
+	_, _ = h.handleKeyPress(keyMsg("ctrl+r"))
 
 	require.Equal(t, stateConfirm, h.state, "ctrl+r must open the confirmation overlay")
 	require.NotNil(t, h.confirmationOverlay)
@@ -43,7 +42,7 @@ func TestResumeAll_SingularMessage(t *testing.T) {
 	h := newCreateFormHome(t)
 	addPaused(t, h, "alpha")
 
-	_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyCtrlR})
+	_, _ = h.handleKeyPress(keyMsg("ctrl+r"))
 
 	require.Equal(t, stateConfirm, h.state)
 	assert.Contains(t, flattenOverlay(h.confirmationOverlay.Render()),
@@ -58,7 +57,7 @@ func TestResumeAll_NoPausedExplains(t *testing.T) {
 	inst.SetStatus(session.Running)
 	h.list.AddInstance(inst)
 
-	_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyCtrlR})
+	_, _ = h.handleKeyPress(keyMsg("ctrl+r"))
 
 	assert.Equal(t, stateDefault, h.state, "no confirmation when there is nothing to resume")
 	require.True(t, h.menu.HasNotice(), "the guard must explain itself")

@@ -7,7 +7,6 @@ import (
 	"github.com/ZviBaratz/atrium/session"
 	"github.com/ZviBaratz/atrium/ui/overlay"
 
-	tea "github.com/charmbracelet/bubbletea"
 	"github.com/stretchr/testify/require"
 )
 
@@ -33,7 +32,7 @@ func TestQuickSendQueuesPromptForVerifiedDelivery(t *testing.T) {
 	h.textInputOverlay = overlay.NewQuickSendOverlay("Send to qs")
 	h.textInputOverlay.SetPrompt("ship it")
 
-	_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyEnter})
+	_, _ = h.handleKeyPress(keyMsg("enter"))
 
 	require.Equal(t, "ship it", inst.Prompt(), "the message must be queued for delivery, not sent inline")
 	require.True(t, inst.PromptQueuedAt().IsZero(),
@@ -63,7 +62,7 @@ func TestQuickSendAppendsWhenPromptQueued(t *testing.T) {
 	h.state = statePrompt
 	h.textInputOverlay = overlay.NewQuickSendOverlay("Send to qs")
 	h.textInputOverlay.SetPrompt("second")
-	_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyEnter})
+	_, _ = h.handleKeyPress(keyMsg("enter"))
 
 	require.Equal(t, 2, inst.QueueLen(), "the quick-send must append, not overwrite the queued prompt")
 	require.Equal(t, "first", inst.Prompt(), "the earlier prompt stays at the head and delivers first")

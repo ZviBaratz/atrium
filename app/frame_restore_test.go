@@ -42,8 +42,8 @@ func TestEveryBarHidingStateRestoresTheFrame(t *testing.T) {
 		stateRename:         {"rename", func(h *home) { h.Update(runeKey("R")) }},
 		stateQueue:          {"queue", func(h *home) { h.Update(runeKey("Q")) }},
 		stateCmdLog:         {"command log", func(h *home) { h.Update(runeKey("L")) }},
-		stateCommandPalette: {"command palette", func(h *home) { h.Update(tea.KeyMsg{Type: tea.KeyCtrlK}) }},
-		stateConfirm:        {"confirmation", func(h *home) { h.Update(tea.KeyMsg{Type: tea.KeyCtrlX}) }},
+		stateCommandPalette: {"command palette", func(h *home) { h.Update(keyMsg("ctrl+k")) }},
+		stateConfirm:        {"confirmation", func(h *home) { h.Update(keyMsg("ctrl+x")) }},
 		stateHelp:           {"cheatsheet", func(h *home) { h.Update(runeKey("?")) }},
 		stateSettings:       {"settings", func(h *home) { h.Update(runeKey(",")) }},
 		stateAccounts:       {"accounts", func(h *home) { h.Update(runeKey("@")) }},
@@ -87,7 +87,7 @@ func TestEveryBarHidingStateRestoresTheFrame(t *testing.T) {
 				open := strings.Split(home.View(), "\n")
 				assert.LessOrEqualf(t, len(open), h, "%s: the open frame already overflows %d rows", tc.name, h)
 
-				home.Update(tea.KeyMsg{Type: tea.KeyEsc})
+				home.Update(keyMsg("esc"))
 				require.Equalf(t, stateDefault, home.state, "%s did not close on esc", tc.name)
 				after := strings.Split(home.View(), "\n")
 

@@ -7,7 +7,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func pickerRunes(s string) tea.KeyMsg { return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(s)} }
+func pickerRunes(s string) tea.KeyMsg { return textMsg(s) }
 
 // A sync picker (local, re-ranked list) resets the cursor to the top on a filter
 // edit and never uses a version.
@@ -35,7 +35,7 @@ func TestPicker_AsyncEditBumpsVersionKeepsCursor(t *testing.T) {
 	require.Equal(t, uint64(1), p.filterVersion, "async edit bumps the version")
 	require.Equal(t, 2, p.cursor, "async edit does not reset the cursor")
 
-	_, _, _ = p.handleKey(tea.KeyMsg{Type: tea.KeyBackspace}, 5)
+	_, _, _ = p.handleKey(keyMsg("backspace"), 5)
 	require.Equal(t, uint64(2), p.filterVersion, "each edit bumps exactly once")
 }
 
@@ -44,16 +44,16 @@ func TestPicker_AsyncEditBumpsVersionKeepsCursor(t *testing.T) {
 func TestPicker_NavClamps(t *testing.T) {
 	p := newPicker(false)
 
-	_, _, moved := p.handleKey(tea.KeyMsg{Type: tea.KeyUp}, 3)
+	_, _, moved := p.handleKey(keyMsg("up"), 3)
 	require.False(t, moved, "Up at the top does not move")
 
-	_, fc, moved := p.handleKey(tea.KeyMsg{Type: tea.KeyDown}, 3)
+	_, fc, moved := p.handleKey(keyMsg("down"), 3)
 	require.True(t, moved)
 	require.False(t, fc, "nav is not a filter change")
 	require.Equal(t, 1, p.cursor)
 
-	p.handleKey(tea.KeyMsg{Type: tea.KeyDown}, 3) // → 2 (last)
-	_, _, moved = p.handleKey(tea.KeyMsg{Type: tea.KeyDown}, 3)
+	p.handleKey(keyMsg("down"), 3) // → 2 (last)
+	_, _, moved = p.handleKey(keyMsg("down"), 3)
 	require.False(t, moved, "cannot move past the last item")
 	require.Equal(t, 2, p.cursor)
 }

@@ -5,7 +5,6 @@ import (
 
 	"github.com/ZviBaratz/atrium/session/tmux"
 
-	tea "github.com/charmbracelet/bubbletea"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -19,7 +18,7 @@ func TestOpenCreateForm_BlockedWhenTmuxMissing(t *testing.T) {
 
 	h := newCreateFormHome(t)
 
-	h.handleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("n")})
+	h.handleKeyPress(textMsg("n"))
 
 	assert.NotEqual(t, statePrompt, h.state, "a missing tmux must block the create form from opening")
 	assert.Nil(t, h.textInputOverlay, "no form overlay should be built when tmux is missing")

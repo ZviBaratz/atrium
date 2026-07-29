@@ -3,7 +3,6 @@ package app
 import (
 	"testing"
 
-	tea "github.com/charmbracelet/bubbletea"
 	"github.com/stretchr/testify/require"
 )
 
@@ -14,9 +13,9 @@ func TestMuteKeyTogglesSelectedSession(t *testing.T) {
 	inst := insts[0]
 	require.False(t, inst.Muted(), "starts unmuted")
 
-	press(t, h, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'M'}})
+	press(t, h, textMsg("M"))
 	require.True(t, inst.Muted(), "M mutes the selected session")
 
-	press(t, h, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'M'}})
+	press(t, h, textMsg("M"))
 	require.False(t, inst.Muted(), "M again unmutes it")
 }

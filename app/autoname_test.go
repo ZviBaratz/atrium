@@ -11,7 +11,6 @@ import (
 	"github.com/ZviBaratz/atrium/ui/overlay"
 
 	"github.com/charmbracelet/bubbles/spinner"
-	tea "github.com/charmbracelet/bubbletea"
 	"github.com/stretchr/testify/require"
 )
 
@@ -96,7 +95,7 @@ func TestRename_AppliesToTargetNotMovedSelection(t *testing.T) {
 	require.Same(t, instB, h.list.GetSelectedInstance(), "precondition: selection moved off A")
 
 	// Submit the overlay.
-	h.handleKeyPress(tea.KeyMsg{Type: tea.KeyEnter})
+	h.handleKeyPress(keyMsg("enter"))
 
 	require.Equal(t, "renamed-A", instA.DisplayName(), "name must land on the overlay's target")
 	require.Equal(t, "b", instB.DisplayName(), "the now-selected session must be untouched")
@@ -110,7 +109,7 @@ func TestKeyAutoName_NoSecondRequestWhileGenerating(t *testing.T) {
 	h := newAutoNameHome(t, "a")
 	h.generatingName = true
 
-	h.handleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("A")})
+	h.handleKeyPress(textMsg("A"))
 
 	require.True(t, h.generatingName)
 	require.Equal(t, stateDefault, h.state)
@@ -121,7 +120,7 @@ func TestKeyAutoName_NoSecondRequestWhileGenerating(t *testing.T) {
 func TestKeyAutoName_StartsGeneration(t *testing.T) {
 	h := newAutoNameHome(t, "a")
 
-	_, cmd := h.handleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("A")})
+	_, cmd := h.handleKeyPress(textMsg("A"))
 
 	require.True(t, h.generatingName)
 	require.NotNil(t, cmd, "generation runs as a background command")

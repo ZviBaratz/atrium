@@ -9,7 +9,6 @@ import (
 	"github.com/ZviBaratz/atrium/session"
 	"github.com/ZviBaratz/atrium/session/agent"
 	"github.com/ZviBaratz/atrium/ui/overlay"
-	tea "github.com/charmbracelet/bubbletea"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -36,11 +35,11 @@ func newFanOutHome(t *testing.T, path string) *home {
 	return h
 }
 
-func tabKey(h *home)   { h.handleKeyPress(tea.KeyMsg{Type: tea.KeyTab}) }
-func rightKey(h *home) { h.handleKeyPress(tea.KeyMsg{Type: tea.KeyRight}) }
-func downKey(h *home)  { h.handleKeyPress(tea.KeyMsg{Type: tea.KeyDown}) }
-func plusKey(h *home)  { h.handleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("+")}) }
-func ctrlS(h *home)    { h.handleKeyPress(tea.KeyMsg{Type: tea.KeyCtrlS}) }
+func tabKey(h *home)   { h.handleKeyPress(keyMsg("tab")) }
+func rightKey(h *home) { h.handleKeyPress(keyMsg("right")) }
+func downKey(h *home)  { h.handleKeyPress(keyMsg("down")) }
+func plusKey(h *home)  { h.handleKeyPress(textMsg("+")) }
+func ctrlS(h *home)    { h.handleKeyPress(keyMsg("ctrl+s")) }
 
 func instanceByTitle(h *home, title string) *session.Instance {
 	for _, inst := range h.list.GetInstances() {

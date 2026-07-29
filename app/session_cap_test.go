@@ -6,7 +6,6 @@ import (
 
 	"github.com/ZviBaratz/atrium/session"
 
-	tea "github.com/charmbracelet/bubbletea"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -36,7 +35,7 @@ func TestOpenCreateForm_SoftCapNeverBlocksFormOpen(t *testing.T) {
 	h := newCreateFormHome(t)
 	addStubInstances(t, h, 12)
 
-	h.handleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("n")})
+	h.handleKeyPress(textMsg("n"))
 
 	assert.Equal(t, statePrompt, h.state, "a soft cap must not block the form from opening")
 	require.NotNil(t, h.textInputOverlay)
@@ -52,7 +51,7 @@ func TestOpenCreateForm_AllowedBelowConfiguredCap(t *testing.T) {
 	h.appConfig.MaxSessions = &limit
 	addStubInstances(t, h, 1)
 
-	h.handleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("n")})
+	h.handleKeyPress(textMsg("n"))
 
 	assert.Equal(t, statePrompt, h.state, "below-cap creation must not be blocked")
 	require.NotNil(t, h.textInputOverlay)
@@ -66,7 +65,7 @@ func TestOpenCreateForm_BlockedAtConfiguredCap(t *testing.T) {
 	h.appConfig.MaxSessions = &limit
 	addStubInstances(t, h, 2)
 
-	h.handleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("n")})
+	h.handleKeyPress(textMsg("n"))
 
 	assert.Equal(t, stateDefault, h.state, "configured cap must block creation")
 	assert.Nil(t, h.textInputOverlay)

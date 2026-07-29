@@ -3,7 +3,6 @@ package overlay
 import (
 	"testing"
 
-	tea "github.com/charmbracelet/bubbletea"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -48,31 +47,31 @@ func TestAccountForm_AgyHasNeitherTokenNorPool(t *testing.T) {
 func TestAccountForm_NavAndSubmitCancel(t *testing.T) {
 	f := newAccountForm(false, true, "", "", "", "", "", "")
 	assert.Equal(t, fldName, f.focus)
-	f.HandleKeyPress(tea.KeyMsg{Type: tea.KeyTab})
+	f.HandleKeyPress(keyMsg("tab"))
 	assert.Equal(t, fldConfigDir, f.focus, "tab advances focus")
-	f.HandleKeyPress(tea.KeyMsg{Type: tea.KeyShiftTab})
+	f.HandleKeyPress(keyMsg("shift+tab"))
 	assert.Equal(t, fldName, f.focus, "shift+tab retreats focus")
 
-	assert.True(t, f.HandleKeyPress(tea.KeyMsg{Type: tea.KeyEnter}))
+	assert.True(t, f.HandleKeyPress(keyMsg("enter")))
 	assert.True(t, f.Submitted())
 
 	g := newAccountForm(false, true, "", "", "", "", "", "")
-	assert.True(t, g.HandleKeyPress(tea.KeyMsg{Type: tea.KeyEsc}))
+	assert.True(t, g.HandleKeyPress(keyMsg("esc")))
 	assert.True(t, g.Canceled())
 }
 
 func TestAccountForm_CtrlOOpensPickerOnConfigDirOnly(t *testing.T) {
 	f := newAccountForm(false, true, "", "", "", "", "", "")
-	f.HandleKeyPress(tea.KeyMsg{Type: tea.KeyCtrlO}) // focus is Name
+	f.HandleKeyPress(keyMsg("ctrl+o")) // focus is Name
 	assert.Nil(t, f.picker, "ctrl+o does nothing unless the config-dir field is focused")
 
 	f.focus = fldConfigDir
 	f.applyFocus()
-	f.HandleKeyPress(tea.KeyMsg{Type: tea.KeyCtrlO})
+	f.HandleKeyPress(keyMsg("ctrl+o"))
 	assert.NotNil(t, f.picker, "ctrl+o on config dir opens the picker")
 
 	// esc closes the picker (returns to the form), does NOT finish the form.
-	done := f.HandleKeyPress(tea.KeyMsg{Type: tea.KeyEsc})
+	done := f.HandleKeyPress(keyMsg("esc"))
 	assert.False(t, done)
 	assert.Nil(t, f.picker)
 	assert.False(t, f.Canceled(), "esc in the picker must not cancel the whole form")
@@ -83,9 +82,9 @@ func TestAccountForm_PickerEnterWritesBack(t *testing.T) {
 	f := newAccountForm(false, true, "", dir, "", "", "", "")
 	f.focus = fldConfigDir
 	f.applyFocus()
-	f.HandleKeyPress(tea.KeyMsg{Type: tea.KeyCtrlO})
+	f.HandleKeyPress(keyMsg("ctrl+o"))
 	require.NotNil(t, f.picker)
-	f.HandleKeyPress(tea.KeyMsg{Type: tea.KeyEnter}) // accept current selection
+	f.HandleKeyPress(keyMsg("enter")) // accept current selection
 	assert.Nil(t, f.picker)
 	assert.Equal(t, dir, f.ConfigDir(), "the picked path is written into the config-dir field")
 }

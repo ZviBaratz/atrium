@@ -7,7 +7,6 @@ import (
 	"github.com/ZviBaratz/atrium/session"
 	"github.com/ZviBaratz/atrium/ui/overlay"
 
-	tea "github.com/charmbracelet/bubbletea"
 	"github.com/stretchr/testify/require"
 )
 
@@ -32,7 +31,7 @@ func quickSendHome(t *testing.T) (*home, *session.Instance) {
 func TestQuickSend_RecordsPromptHistory(t *testing.T) {
 	h, _ := quickSendHome(t)
 	h.textInputOverlay.SetPrompt("ship it")
-	_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyEnter})
+	_, _ = h.handleKeyPress(keyMsg("enter"))
 
 	got := h.appState.GetPromptHistory()
 	require.Len(t, got, 1)
@@ -45,7 +44,7 @@ func TestQuickSend_DisableSuppressesRecording(t *testing.T) {
 	off := false
 	h.appConfig.RecordPromptHistory = &off
 	h.textInputOverlay.SetPrompt("secret")
-	_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyEnter})
+	_, _ = h.handleKeyPress(keyMsg("enter"))
 
 	require.Empty(t, h.appState.GetPromptHistory(), "recording disabled must not persist the prompt")
 }
@@ -57,12 +56,12 @@ func TestPromptHistory_UpOnEmptyOpensPickerAndInserts(t *testing.T) {
 	require.NoError(t, h.appState.AddPromptHistory("remembered"))
 
 	// Empty prompt field + up → history picker.
-	_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyUp})
+	_, _ = h.handleKeyPress(keyMsg("up"))
 	require.Equal(t, stateHistory, h.state, "up on an empty prompt opens the history picker")
 	require.NotNil(t, h.promptHistoryOverlay)
 
 	// Enter inserts the highlighted text back into the compose field, no submit.
-	_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyEnter})
+	_, _ = h.handleKeyPress(keyMsg("enter"))
 	require.Equal(t, statePrompt, h.state, "picking returns to compose")
 	require.Nil(t, h.promptHistoryOverlay)
 	require.Equal(t, "remembered", h.textInputOverlay.GetValue(), "the picked prompt is inserted, editable")
@@ -76,7 +75,7 @@ func TestPromptHistory_UpWithTextDoesNotOpen(t *testing.T) {
 	require.NoError(t, h.appState.AddPromptHistory("remembered"))
 	h.textInputOverlay.SetPrompt("half typed")
 
-	_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyUp})
+	_, _ = h.handleKeyPress(keyMsg("up"))
 	require.Equal(t, statePrompt, h.state, "up with text present must not open history")
 }
 
@@ -94,18 +93,18 @@ func TestPromptHistory_CreateFormUpOnEmptyOpensPicker(t *testing.T) {
 	// FocusTitle() is the n quick-create entry point. One Tab moves from the
 	// title field to the prompt textarea (stopTitle → stopTextarea).
 	ov.FocusTitle()
-	_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyTab})
+	_, _ = h.handleKeyPress(keyMsg("tab"))
 
 	require.NoError(t, h.appState.AddPromptHistory("create-form prompt"))
 
-	_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyUp})
+	_, _ = h.handleKeyPress(keyMsg("up"))
 
 	require.Equal(t, stateHistory, h.state,
 		"up on an empty prompt textarea in the create form opens the history picker")
 	require.NotNil(t, h.promptHistoryOverlay)
 
 	// Enter inserts the selected text and returns to compose without submitting.
-	_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyEnter})
+	_, _ = h.handleKeyPress(keyMsg("enter"))
 	require.Equal(t, statePrompt, h.state, "picking returns to compose")
 	require.Equal(t, "create-form prompt", h.textInputOverlay.GetValue(),
 		"the picked text is inserted into the create form's prompt field, not submitted")

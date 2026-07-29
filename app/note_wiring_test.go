@@ -10,7 +10,6 @@ import (
 	"github.com/ZviBaratz/atrium/ui/overlay"
 
 	"github.com/charmbracelet/bubbles/spinner"
-	tea "github.com/charmbracelet/bubbletea"
 	"github.com/stretchr/testify/require"
 )
 
@@ -55,9 +54,9 @@ func TestRenameSubmit_PersistsNote(t *testing.T) {
 	h.state = stateRename
 
 	for _, r := range "waiting on CI" {
-		press(t, h, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+		press(t, h, textMsg(string(r)))
 	}
-	press(t, h, tea.KeyMsg{Type: tea.KeyEnter})
+	press(t, h, keyMsg("enter"))
 
 	require.Equal(t, stateDefault, h.state, "submit closes the overlay")
 	require.Equal(t, "waiting on CI", inst.Note())
@@ -74,9 +73,9 @@ func TestRenameSubmit_EmptyNoteClears(t *testing.T) {
 
 	// Backspace over the prefilled "stale", then submit.
 	for range "stale" {
-		press(t, h, tea.KeyMsg{Type: tea.KeyBackspace})
+		press(t, h, keyMsg("backspace"))
 	}
-	press(t, h, tea.KeyMsg{Type: tea.KeyEnter})
+	press(t, h, keyMsg("enter"))
 
 	require.Equal(t, stateDefault, h.state)
 	require.Empty(t, inst.Note(), "an emptied note field clears the note")
@@ -92,8 +91,8 @@ func TestRenameSubmit_DeepCollisionReopensOverlayWithNote(t *testing.T) {
 	h.renameOverlay = overlay.NewRenameOverlay("beta", "park me", false) // collides with beta
 	h.state = stateRename
 
-	press(t, h, tea.KeyMsg{Type: tea.KeyCtrlD}) // opt into deep rename
-	press(t, h, tea.KeyMsg{Type: tea.KeyEnter}) // submit -> collision
+	press(t, h, keyMsg("ctrl+d")) // opt into deep rename
+	press(t, h, keyMsg("enter"))  // submit -> collision
 
 	require.Equal(t, stateRename, h.state, "the dialog reopens instead of closing")
 	require.NotNil(t, h.renameOverlay)

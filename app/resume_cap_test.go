@@ -5,7 +5,6 @@ import (
 
 	"github.com/ZviBaratz/atrium/session"
 
-	tea "github.com/charmbracelet/bubbletea"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -33,7 +32,7 @@ func TestResumeAll_OverSoftCapNamesHostBudget(t *testing.T) {
 		addPaused(t, h, title)
 	}
 
-	_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyCtrlR})
+	_, _ = h.handleKeyPress(keyMsg("ctrl+r"))
 
 	require.Equal(t, stateConfirm, h.state, "ctrl+r must confirm before resuming")
 	require.NotNil(t, h.confirmationOverlay)
@@ -63,7 +62,7 @@ func TestResumeAll_WithinBudgetKeepsPlainQuestion(t *testing.T) {
 		addPaused(t, h, title)
 	}
 
-	_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyCtrlR})
+	_, _ = h.handleKeyPress(keyMsg("ctrl+r"))
 
 	require.Equal(t, stateConfirm, h.state)
 	rendered := flattenOverlay(h.confirmationOverlay.Render())
@@ -125,7 +124,7 @@ func TestResumeAll_HardCapNeverWarns(t *testing.T) {
 		addPaused(t, h, title)
 	}
 
-	_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyCtrlR})
+	_, _ = h.handleKeyPress(keyMsg("ctrl+r"))
 
 	require.Equal(t, stateConfirm, h.state, "the batch still asks its usual question")
 	rendered := flattenOverlay(h.confirmationOverlay.Render())
@@ -147,7 +146,7 @@ func TestResumeSelected_OverSoftCapConfirmsFirst(t *testing.T) {
 	h.list.SelectInstance(inst)
 	require.Equal(t, inst, h.list.GetSelectedInstance())
 
-	_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("r")})
+	_, _ = h.handleKeyPress(textMsg("r"))
 
 	require.Equal(t, stateConfirm, h.state, "r must confirm before resuming over budget")
 	require.NotNil(t, h.confirmationOverlay)
@@ -178,7 +177,7 @@ func TestResumeSelected_PausedSiblingsDontCount(t *testing.T) {
 	h.list.SelectInstance(inst)
 	require.Equal(t, inst, h.list.GetSelectedInstance())
 
-	_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("r")})
+	_, _ = h.handleKeyPress(textMsg("r"))
 
 	assert.NotEqual(t, stateConfirm, h.state, "a resume that fits the budget is not questioned")
 	assert.Nil(t, h.confirmationOverlay)
@@ -195,10 +194,10 @@ func TestResumeSelected_DeclineResumesNothing(t *testing.T) {
 	inst := addPaused(t, h, "alpha")
 	h.list.SelectInstance(inst)
 
-	_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("r")})
+	_, _ = h.handleKeyPress(textMsg("r"))
 	require.Equal(t, stateConfirm, h.state)
 
-	h.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("n")}) // decline
+	h.Update(textMsg("n")) // decline
 
 	assert.True(t, inst.Paused(), "declining resumes nothing")
 	assert.Equal(t, stateDefault, h.state, "the confirm closes")

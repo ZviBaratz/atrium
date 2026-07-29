@@ -218,7 +218,7 @@ func TestPaletteDimmedRowExplainsItselfOnEnter(t *testing.T) {
 
 	openPalette(t, h)
 	typeQuery(t, h, "resume")
-	_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyEnter})
+	_, _ = h.handleKeyPress(keyMsg("enter"))
 
 	assert.Equal(t, stateDefault, h.state)
 	require.True(t, h.menu.HasNotice(), "a dimmed row must say why it did nothing")

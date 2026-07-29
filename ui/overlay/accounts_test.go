@@ -7,7 +7,6 @@ import (
 
 	"github.com/ZviBaratz/atrium/config"
 	"github.com/ZviBaratz/atrium/ui/theme"
-	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -57,11 +56,11 @@ func TestAccountsOverlay_NavAndTabSwitchClampsCursor(t *testing.T) {
 	o.SetSize(80, 24)
 	require.Equal(t, tabClaude, o.tab)
 
-	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyDown})
+	o.HandleKeyPress(keyMsg("down"))
 	assert.Equal(t, 1, o.cursorIndex())
 
 	// Claude tab has 2 rows, cursor=1; GitHub tab has 1 row → cursor must clamp to 0.
-	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyTab})
+	o.HandleKeyPress(keyMsg("tab"))
 	assert.Equal(t, tabGH, o.tab)
 	assert.Equal(t, 0, o.cursorIndex(), "cursor clamped into the shorter tab (no panic later)")
 }
@@ -70,8 +69,8 @@ func TestAccountsOverlay_EmptyTabIsSafe(t *testing.T) {
 	o := NewAccountsOverlay(&config.Config{}, config.DefaultState())
 	o.SetSize(80, 24)
 	// No accounts on either tab; nav/tab/render must not panic.
-	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyDown})
-	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyTab})
+	o.HandleKeyPress(keyMsg("down"))
+	o.HandleKeyPress(keyMsg("tab"))
 	assert.Equal(t, 0, o.cursorIndex())
 	assert.Contains(t, o.Render(), "No GitHub accounts")
 }
@@ -79,7 +78,7 @@ func TestAccountsOverlay_EmptyTabIsSafe(t *testing.T) {
 func TestAccountsOverlay_EscCloses(t *testing.T) {
 	o := NewAccountsOverlay(twoTabCfg(), config.DefaultState())
 	o.SetSize(80, 24)
-	closed, dirty := o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyEsc})
+	closed, dirty := o.HandleKeyPress(keyMsg("esc"))
 	assert.True(t, closed)
 	assert.False(t, dirty)
 }
@@ -106,7 +105,7 @@ func TestAccountsOverlay_BadgesMarkCatchAllAndUnreachable(t *testing.T) {
 // typeInto sends each rune of s to the overlay as individual key messages.
 func typeInto(o *AccountsOverlay, s string) {
 	for _, r := range s {
-		o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+		o.HandleKeyPress(textMsg(string(r)))
 	}
 }
 
@@ -115,12 +114,12 @@ func TestAccountsOverlay_AddAppendsOnCommit(t *testing.T) {
 	o := NewAccountsOverlay(cfg, config.DefaultState())
 	o.SetSize(80, 24)
 
-	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}}) // new
+	o.HandleKeyPress(textMsg("n")) // new
 	require.Equal(t, modeEdit, o.mode)
-	typeInto(o, "work")                            // Name
-	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyTab}) // → Config dir
+	typeInto(o, "work")             // Name
+	o.HandleKeyPress(keyMsg("tab")) // → Config dir
 	typeInto(o, "~/.claude-work")
-	_, dirty := o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyEnter}) // commit
+	_, dirty := o.HandleKeyPress(keyMsg("enter")) // commit
 
 	assert.True(t, dirty)
 	assert.Equal(t, modeList, o.mode)
@@ -134,15 +133,15 @@ func TestAccountsOverlay_ValidationRejectsEmptyAndDuplicateName(t *testing.T) {
 	o := NewAccountsOverlay(cfg, config.DefaultState())
 	o.SetSize(80, 24)
 
-	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
-	_, dirty := o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyEnter}) // empty name
+	o.HandleKeyPress(textMsg("n"))
+	_, dirty := o.HandleKeyPress(keyMsg("enter")) // empty name
 	assert.False(t, dirty)
 	assert.Equal(t, modeEdit, o.mode, "stays in edit on validation error")
 	assert.NotEmpty(t, o.lastErr)
 	assert.Len(t, cfg.ClaudeAccounts, 1, "config not mutated")
 
 	typeInto(o, "work") // duplicate of the existing account
-	_, dirty = o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyEnter})
+	_, dirty = o.HandleKeyPress(keyMsg("enter"))
 	assert.False(t, dirty)
 	assert.Equal(t, modeEdit, o.mode)
 	assert.Len(t, cfg.ClaudeAccounts, 1)
@@ -155,10 +154,10 @@ func TestAccountsOverlay_CancelDiscardsEdits(t *testing.T) {
 	o := NewAccountsOverlay(cfg, config.DefaultState())
 	o.SetSize(80, 24)
 
-	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'e'}}) // edit row 0
+	o.HandleKeyPress(textMsg("e")) // edit row 0
 	require.Equal(t, modeEdit, o.mode)
-	typeInto(o, "-extra")                          // mutate the Name field
-	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyEsc}) // cancel
+	typeInto(o, "-extra")           // mutate the Name field
+	o.HandleKeyPress(keyMsg("esc")) // cancel
 
 	assert.Equal(t, modeList, o.mode)
 	assert.Equal(t, "work", cfg.ClaudeAccounts[0].Name, "esc discards edits")
@@ -178,15 +177,15 @@ func TestAccountsOverlay_EditInPlaceUnrenamedCommits(t *testing.T) {
 	o := NewAccountsOverlay(cfg, config.DefaultState())
 	o.SetSize(80, 24)
 
-	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'e'}}) // edit row 0
+	o.HandleKeyPress(textMsg("e")) // edit row 0
 	require.Equal(t, modeEdit, o.mode)
 
-	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyTab}) // Name → Config dir (cursor lands at end)
-	typeInto(o, "-2")                              // appends: "~/.claude-work" + "-2"
+	o.HandleKeyPress(keyMsg("tab")) // Name → Config dir (cursor lands at end)
+	typeInto(o, "-2")               // appends: "~/.claude-work" + "-2"
 
 	// Capture the commit keypress's dirty return directly (typeInto only sends
 	// rune keys, not Enter).
-	_, dirty := o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyEnter})
+	_, dirty := o.HandleKeyPress(keyMsg("enter"))
 
 	assert.True(t, dirty)
 	require.Len(t, cfg.ClaudeAccounts, 1, "replaced in place, not appended")
@@ -209,16 +208,16 @@ func TestAccountsOverlay_EditPreservesExpectAccount(t *testing.T) {
 	o := NewAccountsOverlay(cfg, config.DefaultState())
 	o.SetSize(80, 24)
 
-	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'e'}}) // edit row 0
+	o.HandleKeyPress(textMsg("e")) // edit row 0
 	require.Equal(t, modeEdit, o.mode)
 
 	// Name starts focused with the cursor at the end; ctrl+u clears it (see
 	// TestAccountsOverlay_EditRenameToDuplicateRejected).
-	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyCtrlU})
+	o.HandleKeyPress(keyMsg("ctrl+u"))
 	typeInto(o, "home")
 	require.Equal(t, "home", o.form.Name(), "rename did not take; the carry is untested")
 
-	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyEnter})
+	o.HandleKeyPress(keyMsg("enter"))
 
 	require.Len(t, cfg.ClaudeAccounts, 1)
 	assert.Equal(t, "home", cfg.ClaudeAccounts[0].Name)
@@ -243,17 +242,17 @@ func TestAccountsOverlay_EditRenameToDuplicateRejected(t *testing.T) {
 	o := NewAccountsOverlay(cfg, config.DefaultState())
 	o.SetSize(80, 24)
 
-	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'e'}}) // edit row 0 ("work")
+	o.HandleKeyPress(textMsg("e")) // edit row 0 ("work")
 	require.Equal(t, modeEdit, o.mode)
 	require.Equal(t, "work", o.form.Name(), "seeded from row 0")
 
-	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyCtrlU})
+	o.HandleKeyPress(keyMsg("ctrl+u"))
 	require.Equal(t, "", o.form.Name(), "field genuinely cleared, not a no-op")
 
 	typeInto(o, "personal")
 	require.Equal(t, "personal", o.form.Name(), "renamed to the OTHER account's name, not concatenated")
 
-	_, dirty := o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyEnter})
+	_, dirty := o.HandleKeyPress(keyMsg("enter"))
 
 	assert.False(t, dirty)
 	assert.Equal(t, modeEdit, o.mode, "stays in edit on validation error")
@@ -267,9 +266,9 @@ func TestAccountsOverlay_DeleteWithConfirm(t *testing.T) {
 	o.SetSize(80, 24)
 	o.cursor = 1
 
-	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
+	o.HandleKeyPress(textMsg("d"))
 	require.Equal(t, modeConfirmDelete, o.mode)
-	_, dirty := o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+	_, dirty := o.HandleKeyPress(textMsg("y"))
 	assert.True(t, dirty)
 	require.Len(t, cfg.ClaudeAccounts, 1)
 	assert.Equal(t, "a", cfg.ClaudeAccounts[0].Name)
@@ -282,14 +281,14 @@ func TestAccountsOverlay_GHCommitIncludesTokenEnv(t *testing.T) {
 	o.SetSize(80, 24)
 	o.selectTab(tabGH)
 
-	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
+	o.HandleKeyPress(textMsg("n"))
 	typeInto(o, "gh-work")
 	// jump to the Token env field (index fldToken) via tab presses
 	for i := 0; i < fldToken; i++ {
-		o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyTab})
+		o.HandleKeyPress(keyMsg("tab"))
 	}
 	typeInto(o, "GH_TOKEN")
-	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyEnter})
+	o.HandleKeyPress(keyMsg("enter"))
 
 	require.Len(t, cfg.GHAccounts, 1)
 	assert.Equal(t, []string{"GH_TOKEN"}, cfg.GHAccounts[0].TokenEnv)
@@ -302,15 +301,15 @@ func TestAccountsOverlay_TabCyclesThroughAgy(t *testing.T) {
 	o.SetSize(80, 24)
 	require.Equal(t, tabClaude, o.tab)
 
-	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyTab})
+	o.HandleKeyPress(keyMsg("tab"))
 	require.Equal(t, tabGH, o.tab)
-	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyTab})
+	o.HandleKeyPress(keyMsg("tab"))
 	require.Equal(t, tabAgy, o.tab, "third tab is Antigravity")
-	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyTab})
+	o.HandleKeyPress(keyMsg("tab"))
 	require.Equal(t, tabClaude, o.tab, "wraps back to Claude")
 
 	// shift+tab goes backward.
-	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyShiftTab})
+	o.HandleKeyPress(keyMsg("shift+tab"))
 	require.Equal(t, tabAgy, o.tab, "shift+tab wraps backward to Antigravity")
 }
 
@@ -323,12 +322,12 @@ func TestAccountsOverlay_AgyAddAppendsToAgyAccounts(t *testing.T) {
 	o.selectTab(tabAgy)
 	assert.Contains(t, o.Render(), "No Antigravity accounts")
 
-	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
+	o.HandleKeyPress(textMsg("n"))
 	require.Equal(t, modeEdit, o.mode)
 	typeInto(o, "work")
-	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyTab}) // → Config dir
+	o.HandleKeyPress(keyMsg("tab")) // → Config dir
 	typeInto(o, "~/.agy-work")
-	_, dirty := o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyEnter})
+	_, dirty := o.HandleKeyPress(keyMsg("enter"))
 
 	assert.True(t, dirty)
 	require.Len(t, cfg.AgyAccounts, 1)
@@ -348,9 +347,9 @@ func TestAccountsOverlay_AgyDeleteRemovesFromAgyAccounts(t *testing.T) {
 	o.SetSize(80, 24)
 	o.selectTab(tabAgy)
 
-	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
+	o.HandleKeyPress(textMsg("d"))
 	require.Equal(t, modeConfirmDelete, o.mode)
-	_, dirty := o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+	_, dirty := o.HandleKeyPress(textMsg("y"))
 
 	assert.True(t, dirty)
 	require.Len(t, cfg.AgyAccounts, 1)
@@ -365,7 +364,7 @@ func TestAccountsOverlay_PreviewShowsAgy(t *testing.T) {
 	}}
 	o := NewAccountsOverlay(cfg, config.DefaultState())
 	o.SetSize(80, 24)
-	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'t'}})
+	o.HandleKeyPress(textMsg("t"))
 	typeInto(o, "github.com/acme/widgets")
 	out := o.renderPreview()
 	assert.Contains(t, out, "Antigravity → ")
@@ -382,12 +381,12 @@ func TestAccountsOverlay_PreviewResolves(t *testing.T) {
 	o := NewAccountsOverlay(cfg, config.DefaultState())
 	o.SetSize(80, 24)
 
-	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'t'}})
+	o.HandleKeyPress(textMsg("t"))
 	require.Equal(t, modePreview, o.mode)
 	typeInto(o, "github.com/acme/widgets")
 	assert.Contains(t, o.renderPreview(), "work", "remote matches the work account")
 
-	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyEsc})
+	o.HandleKeyPress(keyMsg("esc"))
 	assert.Equal(t, modeList, o.mode)
 }
 
@@ -395,7 +394,7 @@ func TestAccountsOverlay_PreviewEmptyAndRuleOnlyInheritAmbient(t *testing.T) {
 	// 0 accounts
 	o := NewAccountsOverlay(&config.Config{}, config.DefaultState())
 	o.SetSize(80, 24)
-	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'t'}})
+	o.HandleKeyPress(textMsg("t"))
 	typeInto(o, "github.com/acme")
 	out := o.renderPreview()
 	assert.Contains(t, out, "inherit")
@@ -407,7 +406,7 @@ func TestAccountsOverlay_PreviewEmptyAndRuleOnlyInheritAmbient(t *testing.T) {
 	}}
 	o2 := NewAccountsOverlay(cfg, config.DefaultState())
 	o2.SetSize(80, 24)
-	o2.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'t'}})
+	o2.HandleKeyPress(textMsg("t"))
 	typeInto(o2, "github.com/other")
 	out2 := o2.renderPreview()
 	assert.Contains(t, out2, "inherit", "no-match with no catch-all inherits ambient")
@@ -428,7 +427,7 @@ func TestAccountsOverlay_PreviewCatchAllNamedShowsName(t *testing.T) {
 	}}
 	o := NewAccountsOverlay(cfg, config.DefaultState())
 	o.SetSize(80, 24)
-	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'t'}})
+	o.HandleKeyPress(textMsg("t"))
 	typeInto(o, "github.com/unmatched")
 	assert.Contains(t, o.renderPreview(), "personal (inherit ambient env)")
 }
@@ -445,7 +444,7 @@ func TestAccountsOverlay_PreviewRuleMatchedNamedDefaultShowsName(t *testing.T) {
 	}}
 	o := NewAccountsOverlay(cfg, config.DefaultState())
 	o.SetSize(80, 24)
-	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'t'}})
+	o.HandleKeyPress(textMsg("t"))
 	typeInto(o, "github.com/acme/x")
 	assert.Contains(t, o.renderPreview(), "default (inherit ambient env)")
 }
@@ -458,8 +457,8 @@ func TestAccountsOverlay_PreviewPathFieldRoutes(t *testing.T) {
 	}}
 	o := NewAccountsOverlay(cfg, config.DefaultState())
 	o.SetSize(80, 24)
-	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'t'}})
-	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyTab}) // focus: remote → path
+	o.HandleKeyPress(textMsg("t"))
+	o.HandleKeyPress(keyMsg("tab")) // focus: remote → path
 	typeInto(o, "~/work/x")
 	assert.Contains(t, o.renderPreview(), "pathacct", "typing into Path drives resolution")
 }
@@ -473,7 +472,7 @@ func TestAccountsOverlay_PreviewGHMatchShowsDirAndToken(t *testing.T) {
 	}}
 	o := NewAccountsOverlay(cfg, config.DefaultState())
 	o.SetSize(80, 24)
-	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'t'}})
+	o.HandleKeyPress(textMsg("t"))
 	typeInto(o, "github.com/acme")
 	out := o.renderPreview()
 	assert.Contains(t, out, "gh-work", "GitHub line shows the resolved config dir")
@@ -489,7 +488,7 @@ func TestAccountsOverlay_PreviewGHTokenWithoutDirSurfacesToken(t *testing.T) {
 	}}
 	o := NewAccountsOverlay(cfg, config.DefaultState())
 	o.SetSize(80, 24)
-	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'t'}})
+	o.HandleKeyPress(textMsg("t"))
 	typeInto(o, "github.com/acme")
 	assert.Contains(t, o.renderPreview(), "inherit ambient env [GH_TOKEN]",
 		"token env surfaces even when the account sets no config dir")
@@ -510,7 +509,7 @@ func TestAccountsOverlay_ListWindowsRowsOnShortTerminal(t *testing.T) {
 	o.SetSize(80, 24)
 
 	for i := 0; i < 25; i++ {
-		o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyDown})
+		o.HandleKeyPress(keyMsg("down"))
 	}
 	require.Equal(t, 25, o.cursorIndex())
 
@@ -547,7 +546,7 @@ func TestAccountsOverlay_CatchAllBadgeSurvivesWindowScroll(t *testing.T) {
 	o.SetSize(80, 24) // budget 12 rows: no pool anywhere in this fixture, so chrome stays 12
 
 	for i := 0; i < 20; i++ {
-		o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyDown})
+		o.HandleKeyPress(keyMsg("down"))
 	}
 	require.Equal(t, 20, o.cursorIndex())
 
@@ -613,11 +612,11 @@ func TestAccountsOverlay_ToggleAvailability(t *testing.T) {
 	o.SetSize(80, 24)
 
 	// Cursor on work-1; 'l' flags it limited.
-	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("l")})
+	o.HandleKeyPress(textMsg("l"))
 	assert.True(t, st.GetAccountAvailability()["work-1"].Limited, "l flags the cursored account limited")
 
 	// 'l' again clears it.
-	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("l")})
+	o.HandleKeyPress(textMsg("l"))
 	assert.Empty(t, st.GetAccountAvailability(), "l again clears the flag")
 }
 
@@ -662,7 +661,7 @@ func TestAccountsOverlay_ToggleIgnoredOnGHTab(t *testing.T) {
 	o.SetSize(80, 24)
 	o.selectTab(tabGH)
 
-	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("l")})
+	o.HandleKeyPress(textMsg("l"))
 	assert.Empty(t, st.GetAccountAvailability(), "l on the GH tab must not flag anything")
 }
 
@@ -677,7 +676,7 @@ func TestAccountForm_ClaudePoolRoundTrips(t *testing.T) {
 	o := NewAccountsOverlay(cfg, config.DefaultState())
 	o.SetSize(80, 24)
 
-	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'e'}}) // edit row 0
+	o.HandleKeyPress(textMsg("e")) // edit row 0
 	require.Equal(t, modeEdit, o.mode)
 	require.True(t, o.form.showPool, "Claude edit shows the Pool field")
 	assert.Equal(t, "work", o.form.Pool(), "seeded from the account")
@@ -685,18 +684,18 @@ func TestAccountForm_ClaudePoolRoundTrips(t *testing.T) {
 	// Focus starts on Name; tab forward to the Pool field (index fldPool),
 	// clear it, and retype a new value.
 	for i := 0; i < fldPool; i++ {
-		o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyTab})
+		o.HandleKeyPress(keyMsg("tab"))
 	}
-	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyCtrlU})
+	o.HandleKeyPress(keyMsg("ctrl+u"))
 	typeInto(o, "otherpool")
-	_, dirty := o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyEnter})
+	_, dirty := o.HandleKeyPress(keyMsg("enter"))
 
 	assert.True(t, dirty)
 	assert.Equal(t, "otherpool", cfg.ClaudeAccounts[0].Pool, "commit writes the edited Pool")
 
 	// GH tab: the field must not exist at all.
 	o.selectTab(tabGH)
-	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
+	o.HandleKeyPress(textMsg("n"))
 	assert.False(t, o.form.showPool, "GH form never shows Pool")
 	assert.Equal(t, "", o.form.Pool(), "Pool is empty on a GH form regardless of input contents")
 }
@@ -714,14 +713,14 @@ func TestAccountsOverlay_AgyFormHasNoPool(t *testing.T) {
 	o.selectTab(tabAgy)
 
 	// New agy account.
-	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
+	o.HandleKeyPress(textMsg("n"))
 	require.Equal(t, modeEdit, o.mode)
 	assert.False(t, o.form.showPool, "a new agy account form must not show the Pool field")
 
 	// Edit an existing agy account.
 	o.form = nil
 	o.mode = modeList
-	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'e'}})
+	o.HandleKeyPress(textMsg("e"))
 	require.Equal(t, modeEdit, o.mode)
 	assert.False(t, o.form.showPool, "an agy account edit form must not show the Pool field")
 }
@@ -739,11 +738,11 @@ func TestAccountsOverlay_RenameCarriesAvailability(t *testing.T) {
 	o := NewAccountsOverlay(cfg, st)
 	o.SetSize(80, 24)
 
-	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'e'}}) // edit row 0
+	o.HandleKeyPress(textMsg("e")) // edit row 0
 	require.Equal(t, modeEdit, o.mode)
-	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyCtrlU}) // focus starts on Name
+	o.HandleKeyPress(keyMsg("ctrl+u")) // focus starts on Name
 	typeInto(o, "zvi.baratz")
-	_, dirty := o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyEnter})
+	_, dirty := o.HandleKeyPress(keyMsg("enter"))
 
 	require.True(t, dirty)
 	avail := st.GetAccountAvailability()
@@ -764,13 +763,13 @@ func TestAccountsOverlay_EditKeepingNameLeavesAvailability(t *testing.T) {
 	o := NewAccountsOverlay(cfg, st)
 	o.SetSize(80, 24)
 
-	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'e'}})
+	o.HandleKeyPress(textMsg("e"))
 	for i := 0; i < fldPool; i++ {
-		o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyTab})
+		o.HandleKeyPress(keyMsg("tab"))
 	}
-	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyCtrlU})
+	o.HandleKeyPress(keyMsg("ctrl+u"))
 	typeInto(o, "renamed-pool")
-	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyEnter})
+	o.HandleKeyPress(keyMsg("enter"))
 
 	assert.True(t, st.GetAccountAvailability()["work"].Limited)
 }
@@ -787,9 +786,9 @@ func TestAccountsOverlay_DeleteClearsAvailability(t *testing.T) {
 	o := NewAccountsOverlay(cfg, st)
 	o.SetSize(80, 24)
 
-	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
+	o.HandleKeyPress(textMsg("d"))
 	require.Equal(t, modeConfirmDelete, o.mode)
-	_, dirty := o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+	_, dirty := o.HandleKeyPress(textMsg("y"))
 
 	require.True(t, dirty)
 	assert.Empty(t, st.GetAccountAvailability())
@@ -812,10 +811,10 @@ func TestAccountsOverlay_RenameOntoOrphanedAvailability(t *testing.T) {
 	o := NewAccountsOverlay(cfg, st)
 	o.SetSize(80, 24)
 
-	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'e'}})
-	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyCtrlU})
+	o.HandleKeyPress(textMsg("e"))
+	o.HandleKeyPress(keyMsg("ctrl+u"))
 	typeInto(o, "zvi.baratz")
-	_, dirty := o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyEnter})
+	_, dirty := o.HandleKeyPress(keyMsg("enter"))
 
 	require.True(t, dirty)
 	avail := st.GetAccountAvailability()
@@ -838,10 +837,10 @@ func TestAccountsOverlay_RenameOntoOrphanClearsStaleFlag(t *testing.T) {
 	o := NewAccountsOverlay(cfg, st)
 	o.SetSize(80, 24)
 
-	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'e'}})
-	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyCtrlU})
+	o.HandleKeyPress(textMsg("e"))
+	o.HandleKeyPress(keyMsg("ctrl+u"))
 	typeInto(o, "zvi.baratz")
-	_, dirty := o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyEnter})
+	_, dirty := o.HandleKeyPress(keyMsg("enter"))
 
 	require.True(t, dirty)
 	assert.Empty(t, st.GetAccountAvailability(),
@@ -856,14 +855,14 @@ func TestAccountsOverlay_ReorderSwapsAndFollowsCursor(t *testing.T) {
 	o := NewAccountsOverlay(cfg, config.DefaultState())
 	o.SetSize(80, 24)
 
-	closed, dirty := o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'J'}})
+	closed, dirty := o.HandleKeyPress(textMsg("J"))
 	assert.False(t, closed)
 	assert.True(t, dirty, "reorder mutates config, so the app must persist it")
 	assert.Equal(t, []string{"personal", "work"}, claudeNames(cfg))
 	assert.Equal(t, 1, o.cursorIndex(), "cursor follows the moved account")
 
 	// K moves it back.
-	_, dirty = o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'K'}})
+	_, dirty = o.HandleKeyPress(textMsg("K"))
 	assert.True(t, dirty)
 	assert.Equal(t, []string{"work", "personal"}, claudeNames(cfg))
 	assert.Equal(t, 0, o.cursorIndex())
@@ -876,15 +875,15 @@ func TestAccountsOverlay_ReorderAtBoundsIsNoOp(t *testing.T) {
 	o.SetSize(80, 24)
 
 	// Cursor starts at row 0 — K (up) is already at the top boundary.
-	_, dirty := o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'K'}})
+	_, dirty := o.HandleKeyPress(textMsg("K"))
 	assert.False(t, dirty, "K at row 0 is a no-op")
 	assert.Equal(t, []string{"work", "personal"}, claudeNames(cfg))
 	assert.Equal(t, 0, o.cursorIndex())
 
 	// Move to the last row: J (down) is now at the bottom boundary.
-	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyDown})
+	o.HandleKeyPress(keyMsg("down"))
 	require.Equal(t, 1, o.cursorIndex())
-	_, dirty = o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'J'}})
+	_, dirty = o.HandleKeyPress(textMsg("J"))
 	assert.False(t, dirty, "J at the last row is a no-op")
 	assert.Equal(t, []string{"work", "personal"}, claudeNames(cfg))
 	assert.Equal(t, 1, o.cursorIndex())
@@ -906,13 +905,13 @@ func TestAccountsOverlay_ReorderWorksOnGHAndAgyTabs(t *testing.T) {
 	o.SetSize(80, 24)
 
 	o.selectTab(tabGH)
-	_, dirty := o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'J'}})
+	_, dirty := o.HandleKeyPress(textMsg("J"))
 	assert.True(t, dirty)
 	assert.Equal(t, []string{"gh-personal", "gh-work"}, ghNames(cfg))
 
 	o.selectTab(tabAgy)
 	o.cursor = 0 // selectTab only clamps; it does not reset the cursor across tabs
-	_, dirty = o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'J'}})
+	_, dirty = o.HandleKeyPress(textMsg("J"))
 	assert.True(t, dirty)
 	assert.Equal(t, []string{"agy-personal", "agy-work"}, agyNames(cfg))
 }
@@ -923,12 +922,12 @@ func TestAccountsOverlay_ReorderShiftArrowAliases(t *testing.T) {
 	o := NewAccountsOverlay(cfg, config.DefaultState())
 	o.SetSize(80, 24)
 
-	_, dirty := o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyShiftDown})
+	_, dirty := o.HandleKeyPress(keyMsg("shift+down"))
 	assert.True(t, dirty)
 	assert.Equal(t, []string{"personal", "work"}, claudeNames(cfg))
 	assert.Equal(t, 1, o.cursorIndex())
 
-	_, dirty = o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyShiftUp})
+	_, dirty = o.HandleKeyPress(keyMsg("shift+up"))
 	assert.True(t, dirty)
 	assert.Equal(t, []string{"work", "personal"}, claudeNames(cfg))
 	assert.Equal(t, 0, o.cursorIndex())
@@ -940,9 +939,9 @@ func TestAccountsOverlay_ReorderSingleAccountIsInert(t *testing.T) {
 	o := NewAccountsOverlay(cfg, config.DefaultState())
 	o.SetSize(80, 24)
 
-	_, dirty := o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'J'}})
+	_, dirty := o.HandleKeyPress(textMsg("J"))
 	assert.False(t, dirty, "J with a single account is a no-op")
-	_, dirty = o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'K'}})
+	_, dirty = o.HandleKeyPress(textMsg("K"))
 	assert.False(t, dirty, "K with a single account is a no-op")
 	assert.Equal(t, []string{"solo"}, claudeNames(cfg))
 	assert.Equal(t, 0, o.cursorIndex())
@@ -980,7 +979,7 @@ func TestAccountsOverlay_ReorderChangesCatchAll(t *testing.T) {
 	assert.Contains(t, rowLine(t, o.Render(), "alpha"), "default")
 	assert.Contains(t, rowLine(t, o.Render(), "bravo"), "unreachable")
 
-	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'J'}}) // alpha down
+	o.HandleKeyPress(textMsg("J")) // alpha down
 
 	name, _, _ = cfg.ResolveClaudeAccount("", "/tmp/anything")
 	assert.Equal(t, "bravo", name, "the new first rule-less account is the catch-all")
@@ -1010,7 +1009,7 @@ func TestAccountsOverlay_ReorderChangesGHMatchPriority(t *testing.T) {
 	assert.Contains(t, rowLine(t, o.Render(), "alpha"), "routed")
 	assert.Contains(t, rowLine(t, o.Render(), "bravo"), "routed")
 
-	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'J'}}) // alpha down, cursor starts on row 0
+	o.HandleKeyPress(textMsg("J")) // alpha down, cursor starts on row 0
 
 	dir = cfg.ResolveGHConfigDir("github.com/acme/widgets", "")
 	assert.Equal(t, "/cfg/bravo", dir, "the newly-first account now wins the match")
@@ -1207,7 +1206,7 @@ func TestAccountsOverlay_GutterSurvivesWindowScroll(t *testing.T) {
 	o.SetSize(80, 24)
 
 	for i := 0; i < 21; i++ {
-		o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyDown})
+		o.HandleKeyPress(keyMsg("down"))
 	}
 	require.Equal(t, 21, o.cursorIndex())
 
@@ -1270,10 +1269,10 @@ func TestAccountsOverlay_ReorderGroupsSplitPool(t *testing.T) {
 	assert.NotContains(t, before, "┌", "non-adjacent pool members render no bracket yet")
 	assert.Contains(t, before, "pool 'work' is split")
 
-	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyDown})
+	o.HandleKeyPress(keyMsg("down"))
 	require.Equal(t, 1, o.cursorIndex(), "cursor now on personal")
 
-	closed, dirty := o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'J'}})
+	closed, dirty := o.HandleKeyPress(textMsg("J"))
 	assert.False(t, closed)
 	assert.True(t, dirty, "reorder mutates config, so the app must persist it")
 	assert.Equal(t, []string{"work-1", "work-2", "personal"}, claudeNames(cfg),
@@ -1375,7 +1374,7 @@ func TestAccountsOverlay_ReorderPersists(t *testing.T) {
 	o := NewAccountsOverlay(cfg, config.DefaultState())
 	o.SetSize(80, 24)
 
-	_, dirty := o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'J'}})
+	_, dirty := o.HandleKeyPress(textMsg("J"))
 	require.True(t, dirty, "reorder must report dirty so the app knows to persist")
 	require.Equal(t, []string{"personal", "work"}, claudeNames(cfg), "in-memory order after the swap")
 
@@ -1398,7 +1397,7 @@ func twoMemberPoolCfg() *config.Config {
 
 // openPreview presses 't' to enter the routing-preview mode.
 func openPreview(o *AccountsOverlay) {
-	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'t'}})
+	o.HandleKeyPress(textMsg("t"))
 }
 
 // poolRowLine returns a member's row inside the pool block, not the "Claude →

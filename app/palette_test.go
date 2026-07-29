@@ -18,7 +18,7 @@ import (
 func openPalette(t *testing.T, h *home) {
 	t.Helper()
 	h.updateHandleWindowSizeEvent(tea.WindowSizeMsg{Width: 120, Height: 40})
-	_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyCtrlK})
+	_, _ = h.handleKeyPress(keyMsg("ctrl+k"))
 	require.Equal(t, stateCommandPalette, h.state, "ctrl+k must open the palette")
 	require.NotNil(t, h.commandPaletteOverlay)
 	h.updateHandleWindowSizeEvent(tea.WindowSizeMsg{Width: 120, Height: 40})
@@ -28,7 +28,7 @@ func openPalette(t *testing.T, h *home) {
 func typeQuery(t *testing.T, h *home, q string) {
 	t.Helper()
 	for _, r := range q {
-		_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+		_, _ = h.handleKeyPress(textMsg(string(r)))
 	}
 }
 
@@ -90,7 +90,7 @@ func TestPaletteRunsTheChosenAction(t *testing.T) {
 	openPalette(t, h)
 	typeQuery(t, h, "settings")
 
-	_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyEnter})
+	_, _ = h.handleKeyPress(keyMsg("enter"))
 
 	assert.Equal(t, stateSettings, h.state, "enter must run the highlighted action, not just close")
 	assert.NotNil(t, h.settingsOverlay)
@@ -105,7 +105,7 @@ func TestPaletteEscapeRunsNothing(t *testing.T) {
 	openPalette(t, h)
 	typeQuery(t, h, "settings")
 
-	_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyEsc})
+	_, _ = h.handleKeyPress(keyMsg("esc"))
 
 	assert.Equal(t, stateDefault, h.state)
 	assert.Nil(t, h.settingsOverlay, "esc must not run the highlighted action")
@@ -119,7 +119,7 @@ func TestPaletteSwallowsTheQuitKey(t *testing.T) {
 	h := newCreateFormHome(t)
 	openPalette(t, h)
 
-	_, cmd := h.handleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("q")})
+	_, cmd := h.handleKeyPress(textMsg("q"))
 
 	require.Equal(t, stateCommandPalette, h.state, "q must narrow the filter, not quit the app")
 	assert.False(t, isQuit(cmd))
@@ -134,7 +134,7 @@ func TestPaletteRespectsTheBusyGate(t *testing.T) {
 	h := newCreateFormHome(t)
 	h.actionInFlight = true
 
-	_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyCtrlK})
+	_, _ = h.handleKeyPress(keyMsg("ctrl+k"))
 	assert.Equal(t, stateDefault, h.state, "the palette is an overlay opener; busy must swallow it")
 
 	// And a chosen action, for the window where an action goes in flight while the
@@ -145,7 +145,7 @@ func TestPaletteRespectsTheBusyGate(t *testing.T) {
 	openPalette(t, h)
 	typeQuery(t, h, "settings")
 	h.actionInFlight = true
-	_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyEnter})
+	_, _ = h.handleKeyPress(keyMsg("enter"))
 
 	assert.Nil(t, h.settingsOverlay, "a busy palette must not open the settings panel")
 	assert.True(t, h.menu.HasNotice(), "and it must say why, rather than silently doing nothing")

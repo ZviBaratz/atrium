@@ -36,12 +36,12 @@ func TestArrowKeys_CollapseAndExpandGroup(t *testing.T) {
 
 	// ← from a non-anchor member folds the whole group.
 	h.list.SetSelectedInstance(1)
-	press(t, h, tea.KeyMsg{Type: tea.KeyLeft})
+	press(t, h, keyMsg("left"))
 	require.Equal(t, []string{"repoA"}, h.list.CollapsedRepos())
 	require.Equal(t, []string{"repoA"}, h.appState.GetCollapsedRepos(), "fold set is persisted")
 
 	// → on the collapsed header unfolds it.
-	press(t, h, tea.KeyMsg{Type: tea.KeyRight})
+	press(t, h, keyMsg("right"))
 	require.Empty(t, h.list.CollapsedRepos())
 	require.Empty(t, h.appState.GetCollapsedRepos(), "persisted fold set is cleared")
 }
@@ -49,8 +49,8 @@ func TestArrowKeys_CollapseAndExpandGroup(t *testing.T) {
 // The other half of the fold contract (#399): a fold key that cannot act says why,
 // unless the reason is one the user can neither see nor clear.
 
-func left(t *testing.T, h *home)  { t.Helper(); press(t, h, tea.KeyMsg{Type: tea.KeyLeft}) }
-func right(t *testing.T, h *home) { t.Helper(); press(t, h, tea.KeyMsg{Type: tea.KeyRight}) }
+func left(t *testing.T, h *home)  { t.Helper(); press(t, h, keyMsg("left")) }
+func right(t *testing.T, h *home) { t.Helper(); press(t, h, keyMsg("right")) }
 
 // ← on a group that is already folded used to return nil, so the key felt broken.
 func TestFoldKeys_AlreadyFoldedSaysSo(t *testing.T) {

@@ -5,7 +5,6 @@ import (
 
 	"github.com/ZviBaratz/atrium/session"
 
-	tea "github.com/charmbracelet/bubbletea"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -18,7 +17,7 @@ func TestCtrlQ_OnListWithNoInstances_IsNoOp(t *testing.T) {
 	h := newTestHomeWithInstances(t) // zero instances
 	h.state = stateDefault
 
-	model, cmd := h.handleKeyPress(tea.KeyMsg{Type: tea.KeyCtrlQ})
+	model, cmd := h.handleKeyPress(keyMsg("ctrl+q"))
 
 	require.NotNil(t, model)
 	assert.Nil(t, cmd, "ctrl+q with no instances should be a no-op, like enter")
@@ -43,7 +42,7 @@ func TestCtrlQ_OnPausedInstance_IsNoOp(t *testing.T) {
 	h.list.AddInstance(inst)
 	require.Same(t, inst, h.list.GetSelectedInstance(), "the paused instance must be selected")
 
-	model, cmd := h.handleKeyPress(tea.KeyMsg{Type: tea.KeyCtrlQ})
+	model, cmd := h.handleKeyPress(keyMsg("ctrl+q"))
 
 	require.NotNil(t, model)
 	assert.Equal(t, stateDefault, h.state, "ctrl+q must not attach or change state for a paused selection")
@@ -60,11 +59,11 @@ func TestCtrlQ_OnPausedInstance_IsNoOp(t *testing.T) {
 // collecting input and no session is created.
 func TestCtrlQ_InCreateForm_DoesNotAttachOrClose(t *testing.T) {
 	h := newCreateFormHome(t)
-	h.handleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("n")})
+	h.handleKeyPress(textMsg("n"))
 	require.Equal(t, statePrompt, h.state, "precondition: the create form is open")
 	before := h.list.NumInstances()
 
-	h.handleKeyPress(tea.KeyMsg{Type: tea.KeyCtrlQ})
+	h.handleKeyPress(keyMsg("ctrl+q"))
 
 	assert.Equal(t, statePrompt, h.state, "ctrl+q must not leave the create form")
 	require.NotNil(t, h.textInputOverlay, "ctrl+q must not close the overlay")

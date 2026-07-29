@@ -4,7 +4,6 @@ import (
 	"testing"
 
 	"github.com/ZviBaratz/atrium/config"
-	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	xansi "github.com/charmbracelet/x/ansi"
 	"github.com/stretchr/testify/assert"
@@ -64,7 +63,7 @@ func TestModelField_InheritOrDefaultTypedMeansNoOverride(t *testing.T) {
 	for _, word := range []string{"inherit", "default"} {
 		o := NewSessionCreateOverlay(nil, nil, []string{"/repo/a"}, "claude")
 		o.focusStop(stopModel)
-		o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(word)})
+		o.HandleKeyPress(textMsg(word))
 		assert.Equal(t, "", o.GetModel(), "typed %q must contribute no override", word)
 	}
 }
@@ -163,8 +162,8 @@ func TestEffortField_HintMixedPins_Varies(t *testing.T) {
 	// Default counts select only profile "a" (×1); raise "b" to ×1 so both claude
 	// variants are in the batch and their pins disagree.
 	ov.focusStop(stopVariants)
-	ov.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRight}) // cursor → profile "b"
-	vpPlus(ov)                                        // "b" 0 → 1
+	ov.HandleKeyPress(keyMsg("right")) // cursor → profile "b"
+	vpPlus(ov)                         // "b" 0 → 1
 	ov.focusStop(stopEffort)
 	out := xansi.Strip(ov.effortField.Render())
 	assert.Contains(t, out, "varies by profile")
@@ -177,7 +176,7 @@ func TestClaudeFields_HintOnlyOnNoOpChip(t *testing.T) {
 		ov := NewSessionCreateOverlay(claudeProfile("claude"), nil, []string{t.TempDir()}, "claude")
 		ov.focusStop(stop)
 		onNoOp := xansi.Strip(fieldForStop(ov, stop).Render())
-		ov.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRight}) // move off the no-op chip
+		ov.HandleKeyPress(keyMsg("right")) // move off the no-op chip
 		offNoOp := xansi.Strip(fieldForStop(ov, stop).Render())
 		assert.Contains(t, onNoOp, "claude's default", "stop %v: hint present on the no-op chip", stop)
 		assert.NotContains(t, offNoOp, "claude's default", "stop %v: hint gone off the no-op chip", stop)

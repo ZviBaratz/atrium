@@ -70,8 +70,8 @@ func TestWelcome_FirstRunConfirmPersistsProgram(t *testing.T) {
 	h = model.(*home)
 
 	// Move to codex and confirm.
-	h.Update(tea.KeyMsg{Type: tea.KeyDown})
-	model, _ = h.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	h.Update(keyMsg("down"))
+	model, _ = h.Update(keyMsg("enter"))
 	h = model.(*home)
 
 	require.Equal(t, stateDefault, h.state, "confirm closes the welcome")
@@ -93,7 +93,7 @@ func TestWelcome_SkipMarksSeen(t *testing.T) {
 	model, _ = h.Update(cmd().(agentsDetectedMsg))
 	h = model.(*home)
 
-	model, skipCmd := h.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	model, skipCmd := h.Update(keyMsg("esc"))
 	h = model.(*home)
 
 	require.Equal(t, stateDefault, h.state, "esc closes the welcome")
@@ -113,7 +113,7 @@ func TestWelcome_SkipThenRelaunchDoesNotReopen(t *testing.T) {
 	h = model.(*home)
 	model, _ = h.Update(cmd().(agentsDetectedMsg))
 	h = model.(*home)
-	model, _ = h.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	model, _ = h.Update(keyMsg("esc"))
 	h = model.(*home)
 	require.NotZero(t, h.appState.GetHelpScreensSeen()&(helpTypeWelcome{}.mask()))
 
@@ -146,7 +146,7 @@ func TestWelcome_ConfirmFrameFitsAfterClose(t *testing.T) {
 	model, _ = h.Update(cmd().(agentsDetectedMsg))
 	h = model.(*home)
 
-	model, _ = h.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model, _ = h.Update(keyMsg("enter"))
 	h = model.(*home)
 
 	require.Equal(t, stateDefault, h.state, "confirm closes the welcome")
@@ -165,7 +165,7 @@ func TestWelcome_SkipFrameFitsAfterClose(t *testing.T) {
 	model, _ = h.Update(cmd().(agentsDetectedMsg))
 	h = model.(*home)
 
-	model, _ = h.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	model, _ = h.Update(keyMsg("esc"))
 	h = model.(*home)
 
 	require.Equal(t, stateDefault, h.state, "esc closes the welcome")
@@ -184,7 +184,7 @@ func TestWelcome_ConfirmStoresProfileName(t *testing.T) {
 	h = model.(*home)
 	model, _ = h.Update(cmd().(agentsDetectedMsg))
 	h = model.(*home)
-	model, _ = h.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model, _ = h.Update(keyMsg("enter"))
 	h = model.(*home)
 
 	require.Equal(t, "claude", h.appConfig.DefaultProgram, "confirm persists the profile name")
@@ -204,7 +204,7 @@ func TestWelcome_ConfirmPreservesCustomProfile(t *testing.T) {
 	h = model.(*home)
 	model, _ = h.Update(cmd().(agentsDetectedMsg))
 	h = model.(*home)
-	model, _ = h.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model, _ = h.Update(keyMsg("enter"))
 	h = model.(*home)
 
 	require.Equal(t, "claude", h.appConfig.DefaultProgram)

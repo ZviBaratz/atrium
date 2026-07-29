@@ -538,14 +538,14 @@ func TestSinglePaneFallbackBelowTheThreshold(t *testing.T) {
 	assert.NotContains(t, railOnly, "Session limit", "the rows are a separate screen now")
 
 	// Enter drills in; the rows become the whole body and the rail steps aside.
-	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyEnter})
+	o.HandleKeyPress(keyMsg("enter"))
 	require.Equal(t, focusRows, o.focus)
 	rowsOnly := stripANSI(strings.Join(o.bodyLines(), "\n"))
 	assert.Contains(t, rowsOnly, "Session limit", "the rows are reachable")
 	assert.NotContains(t, rowsOnly, "Worktrees & git", "the rail is not drawn beside them")
 
 	// Esc returns, so nothing is a one-way door.
-	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyEsc})
+	o.HandleKeyPress(keyMsg("esc"))
 	assert.Equal(t, focusRail, o.focus)
 	assert.Contains(t, stripANSI(strings.Join(o.bodyLines(), "\n")), "Worktrees & git")
 }
@@ -588,7 +588,7 @@ func TestSinglePaneFallbackShowsTheCategoryName(t *testing.T) {
 	o.SetSize(o.twoPaneMinInner()+5, 24) // one cell under the threshold
 	require.False(t, o.twoPane())
 
-	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyEnter}) // drill in
+	o.HandleKeyPress(keyMsg("enter")) // drill in
 	require.Equal(t, focusRows, o.focus)
 	assert.Contains(t, stripANSI(strings.Join(o.bodyLines(), "\n")), o.selectedEntry().label,
 		"the drilled-in pane must name the category the rail is no longer showing")
@@ -612,7 +612,7 @@ func TestModifiedMarkerAndSelectionMarkAreSeparateColumns(t *testing.T) {
 	i := o.cursor
 	require.False(t, o.isModified(i), "mouse starts at its default")
 
-	_, changed := o.HandleKeyPress(tea.KeyMsg{Type: tea.KeySpace})
+	_, changed := o.HandleKeyPress(keyMsg(" "))
 	require.Equal(t, "mouse", changed)
 	require.True(t, o.isModified(i))
 
@@ -653,7 +653,7 @@ func TestEditingRowKeepsTheLabelColumn(t *testing.T) {
 		return ansi.StringWidth(line[:strings.Index(line, "Branch prefix")])
 	}
 	before := at(stripANSI(o.renderRowLine(i, width, labelW)))
-	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyEnter})
+	o.HandleKeyPress(keyMsg("enter"))
 	require.True(t, o.editing)
 	after := at(stripANSI(o.renderRowLine(i, width, labelW)))
 
@@ -742,7 +742,7 @@ func TestInertRowIsDimmedAndChippedAndStillEditable(t *testing.T) {
 	// Still fully editable: inert means "changing this has no effect right now", never "you may
 	// not touch this" (spec §5).
 	settingsAt(t, o, "notifications_finished")
-	_, changed := o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyRight})
+	_, changed := o.HandleKeyPress(keyMsg("right"))
 	assert.Equal(t, "notifications_finished", changed, "an inert row still cycles")
 
 	// And the transition works the other way: desktop mode activates Notify command.
@@ -1063,7 +1063,7 @@ func TestQuestionMarkOpensAndClosesExpandedHelp(t *testing.T) {
 
 	o.HandleKeyPress(keyRunes("?"))
 	require.True(t, o.helpOpen)
-	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyEsc})
+	o.HandleKeyPress(keyMsg("esc"))
 	assert.False(t, o.helpOpen, "esc closes it too")
 	assert.Equal(t, focusRows, o.focus, "esc must not also back out of the rows pane")
 }
@@ -1086,7 +1086,7 @@ func TestExpandedHelpScrolls(t *testing.T) {
 
 	top := stripANSI(strings.Join(o.expandedHelpLines(), "\n"))
 	for range 40 {
-		o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyDown})
+		o.HandleKeyPress(keyMsg("down"))
 	}
 	assert.Equal(t, o.maxHelpScroll(), o.helpScroll, "↓ must clamp at the end, not run past it")
 	bottom := stripANSI(strings.Join(o.expandedHelpLines(), "\n"))
@@ -1097,7 +1097,7 @@ func TestExpandedHelpScrolls(t *testing.T) {
 		"or the assertion above proves nothing about scrolling")
 
 	for range 40 {
-		o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyUp})
+		o.HandleKeyPress(keyMsg("up"))
 	}
 	assert.Zero(t, o.helpScroll, "↑ must clamp at the top")
 }
@@ -1472,7 +1472,7 @@ func TestPositionReadoutCountsResultsWhileSearching(t *testing.T) {
 	require.Greater(t, n, 1)
 
 	assert.Contains(t, stripANSI(o.contextLine(o.innerWidth())), fmt.Sprintf("1/%d", n))
-	o.HandleKeyPress(tea.KeyMsg{Type: tea.KeyDown})
+	o.HandleKeyPress(keyMsg("down"))
 	assert.Contains(t, stripANSI(o.contextLine(o.innerWidth())), fmt.Sprintf("2/%d", n))
 }
 
@@ -1542,7 +1542,7 @@ func TestHintFitsEveryWidth(t *testing.T) {
 			key  tea.KeyMsg
 		}{
 			{"rail", tea.KeyMsg{}},
-			{"rows", tea.KeyMsg{Type: tea.KeyRight}},
+			{"rows", keyMsg("right")},
 			{"search", keyRunes("/")},
 		} {
 			if state.name != "rail" {
