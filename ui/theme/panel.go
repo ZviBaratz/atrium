@@ -3,7 +3,7 @@ package theme
 import (
 	"strings"
 
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/mattn/go-runewidth"
 )
@@ -113,11 +113,22 @@ func (t *Theme) PanelWithBadges(title string, badges []string, content string, w
 	inner := clipContent(content, width-2, height-2)
 
 	// Body: left/right/bottom borders only (top is the inset row above).
+	//
+	// Width and Height are the box's TOTAL size, borders included. That is a Lip
+	// Gloss v2 semantic change and it is silent: v1 added the border outside the
+	// requested size, so this used to subtract the frame itself (width-2,
+	// height-2) to compensate. Passing those same numbers to v2 renders every
+	// panel two columns narrower and a row shorter — which is exactly what the
+	// frame goldens caught at the cut. The upgrade guide does not mention it.
+	//
+	// Height is height-1, not height: the top border is off (the inset title row
+	// above supplies it), so the only vertical frame this style owns is the bottom
+	// border, and the topRow makes up the difference.
 	body := lipgloss.NewStyle().
 		Border(b, false, true, true, true).
 		BorderForeground(color).
-		Width(width - 2).
-		Height(height - 2).
+		Width(width).
+		Height(height - 1).
 		Render(inner)
 
 	return lipgloss.JoinVertical(lipgloss.Left, topRow, body)

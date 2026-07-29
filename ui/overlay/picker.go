@@ -6,7 +6,7 @@ import (
 
 	"github.com/ZviBaratz/atrium/internal/fuzzy"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 )
 
 // Picker is the shared type-to-filter + cursor-nav primitive behind the overlay
@@ -79,8 +79,8 @@ func (p *Picker) notifyHighlight(item string) {
 // changed, and whether the cursor moved. On a filter edit a sync picker resets the
 // cursor to the top; an async picker bumps its version so the owner can drop stale
 // results. Nav clamps to [0, itemCount).
-func (p *Picker) handleKey(msg tea.KeyMsg, itemCount int) (consumed, filterChanged, cursorMoved bool) {
-	switch msg.Type {
+func (p *Picker) handleKey(msg tea.KeyPressMsg, itemCount int) (consumed, filterChanged, cursorMoved bool) {
+	switch msg.Code {
 	case tea.KeyUp:
 		if p.cursor > 0 {
 			p.cursor--
@@ -101,12 +101,17 @@ func (p *Picker) handleKey(msg tea.KeyMsg, itemCount int) (consumed, filterChang
 			return true, true, false
 		}
 		return true, false, false
-	case tea.KeyRunes:
-		p.filter += string(msg.Runes)
-		p.onEdit()
-		return true, true, false
 	case tea.KeySpace:
 		p.filter += " "
+		p.onEdit()
+		return true, true, false
+	}
+	// Printable text extends the filter. v1 matched this as a KeyRunes case inside
+	// the switch above; v2 has no such key type — a text key's Code is the rune
+	// itself — so it becomes a guard on Text after the named keys have had their
+	// turn. Space keeps its own case above because its Code is KeySpace, not ' '.
+	if msg.Text != "" {
+		p.filter += msg.Text
 		p.onEdit()
 		return true, true, false
 	}

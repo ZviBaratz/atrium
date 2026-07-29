@@ -22,8 +22,8 @@ import (
 	"path/filepath"
 	"strings"
 
+	"charm.land/lipgloss/v2"
 	"github.com/ZviBaratz/atrium/config"
-	"github.com/charmbracelet/lipgloss"
 )
 
 // acctIdentity is one account's verification outcome, computed on demand from the

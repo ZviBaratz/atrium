@@ -6,8 +6,8 @@ import (
 
 	"github.com/ZviBaratz/atrium/ui/theme"
 
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/muesli/reflow/truncate"
 )
 
@@ -60,7 +60,7 @@ func (q *QueueOverlay) SetMessage(text string) { q.message = text }
 // HandleKeyPress moves the cursor, arms a cancel, or closes. It returns true only
 // when the overlay should close (esc/ctrl+c); a cancel (d/x) arms removeReq and
 // keeps the overlay open so the app can act and refresh.
-func (q *QueueOverlay) HandleKeyPress(msg tea.KeyMsg) (shouldClose bool) {
+func (q *QueueOverlay) HandleKeyPress(msg tea.KeyPressMsg) (shouldClose bool) {
 	switch msg.String() {
 	case "esc", "ctrl+c":
 		return true
@@ -131,7 +131,8 @@ func (q *QueueOverlay) Render() string {
 		Border(th.Borders.Style).
 		BorderForeground(th.Palette.Accent).
 		Padding(1, 2).
-		Width(q.width)
+		// +2 for the left/right border — v2 counts it inside Width. See theme.Panel.
+		Width(q.width + 2)
 
 	inner := q.width - 6 // borders (2) + horizontal padding (2*2)
 	if inner < 10 {

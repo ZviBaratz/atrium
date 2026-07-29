@@ -15,8 +15,8 @@ import (
 	"github.com/ZviBaratz/atrium/ui"
 	"github.com/ZviBaratz/atrium/ui/overlay"
 
-	"github.com/charmbracelet/bubbles/spinner"
-	tea "github.com/charmbracelet/bubbletea"
+	"charm.land/bubbles/v2/spinner"
+	tea "charm.land/bubbletea/v2"
 )
 
 // wheelScrollLines is how many lines one mouse-wheel notch scrolls the preview
@@ -392,7 +392,7 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// The terminal lost focus: edges may notify again.
 		m.focused = false
 		return m, nil
-	case tea.KeyMsg:
+	case tea.KeyPressMsg:
 		return m.handleKeyPress(msg)
 	case tea.WindowSizeMsg:
 		// A resize invalidates hint mode's frozen geometry; exit rather than
@@ -779,7 +779,7 @@ func (m *home) reconcileInFlightStarts(ctx context.Context) {
 	}
 }
 
-func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
+func (m *home) handleKeyPress(msg tea.KeyPressMsg) (mod tea.Model, cmd tea.Cmd) {
 	// Ctrl+L forces a full repaint. The alt-screen renderer updates incrementally and
 	// never erases lines, so it desyncs (leaving accumulating ghost rows) if the terminal
 	// ever renders a line wider than measured — e.g. a font lacking a combined emoji glyph.
@@ -885,7 +885,7 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 	// Exit scrolling mode when ESC is pressed and preview pane is in scrolling mode
 	// Check if Escape key was pressed and we're not in the diff tab (meaning we're in preview tab)
 	// Always check for escape key first to ensure it doesn't get intercepted elsewhere
-	if msg.Type == tea.KeyEsc {
+	if msg.Code == tea.KeyEsc {
 		// If in preview tab and in scroll mode, exit scroll mode
 		if m.tabbedWindow.IsInPreviewTab() && m.tabbedWindow.IsPreviewInScrollMode() {
 			// Use the selected instance from the list
@@ -1000,7 +1000,7 @@ func (m *home) dispatchAction(name keys.KeyName) (tea.Model, tea.Cmd) {
 		// Smart dispatch: one free-form line routed to a project and a pre-filled form.
 		m.state = statePrompt
 		m.textInputOverlay = overlay.NewSmartDispatchOverlay("Describe the session")
-		return m, tea.WindowSize()
+		return m, tea.RequestWindowSize
 	case keys.KeyQuickSend:
 		return m.openQuickSend()
 	case keys.KeyDiffComment:
@@ -1243,7 +1243,7 @@ func (m *home) openSettings() tea.Cmd {
 	}
 	m.refreshSettingsClusteringGate()
 	m.recomputeLayout() // the hint bar hides behind the modal; panes reclaim its row
-	return tea.WindowSize()
+	return tea.RequestWindowSize
 }
 
 // openSettingsAt opens the configuration panel focused on one row — the deep link of spec
@@ -1261,12 +1261,12 @@ func (m *home) openAccounts() tea.Cmd {
 	m.state = stateAccounts
 	m.accountsOverlay = overlay.NewAccountsOverlay(m.appConfig, m.appState)
 	m.recomputeLayout() // the hint bar hides behind the modal; panes reclaim its row
-	return tea.WindowSize()
+	return tea.RequestWindowSize
 }
 
 // handleInfoState dismisses the info modal on any key press (scroll keys
 // scroll first while the text overflows, exactly like the help state).
-func (m *home) handleInfoState(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m *home) handleInfoState(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if m.textOverlay.HandleKeyPress(msg) {
 		return m.closeTextOverlay()
 	}

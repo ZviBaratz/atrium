@@ -9,10 +9,10 @@ import (
 	"strings"
 	"testing"
 
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/ZviBaratz/atrium/config"
 	"github.com/ZviBaratz/atrium/ui/theme"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -21,7 +21,7 @@ import (
 // stripANSI removes escape sequences so assertions can match plain text.
 func stripANSI(s string) string { return ansi.Strip(s) }
 
-func keyRunes(s string) tea.KeyMsg {
+func keyRunes(s string) tea.KeyPressMsg {
 	return textMsg(s)
 }
 

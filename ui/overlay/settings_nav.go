@@ -3,8 +3,8 @@ package overlay
 import (
 	"sort"
 
+	tea "charm.land/bubbletea/v2"
 	"github.com/ZviBaratz/atrium/internal/fuzzy"
-	tea "github.com/charmbracelet/bubbletea"
 )
 
 // SettingsHandoff names a surface the settings panel has asked the home model to open in its
@@ -174,7 +174,7 @@ func (s *SettingsOverlay) syncCursorToRail() {
 // handleRailKey routes a key while the rail has focus. Moving the cursor re-renders the
 // right pane immediately — the rail live-previews, so there is no hidden state and no
 // drill-in feeling on a wide terminal (spec 3).
-func (s *SettingsOverlay) handleRailKey(msg tea.KeyMsg) (closed bool) {
+func (s *SettingsOverlay) handleRailKey(msg tea.KeyPressMsg) (closed bool) {
 	switch msg.String() {
 	case "esc", "ctrl+c":
 		return true
@@ -216,7 +216,7 @@ func (s *SettingsOverlay) handleRailKey(msg tea.KeyMsg) (closed bool) {
 // handleRowsKey routes a key while the rows pane has focus. Left/right are ALWAYS the
 // value — spec 7's one real collision: they cycle enums today and the hint line says so,
 // so they cannot double as a pane switch. Tab does that.
-func (s *SettingsOverlay) handleRowsKey(msg tea.KeyMsg) (closed bool, changedKey string) {
+func (s *SettingsOverlay) handleRowsKey(msg tea.KeyPressMsg) (closed bool, changedKey string) {
 	start, end := s.rowRange(s.selectedEntry())
 	if end <= start {
 		// Defensive: focus can only reach focusRows on an entry that owns rows.
@@ -252,7 +252,10 @@ func (s *SettingsOverlay) handleRowsKey(msg tea.KeyMsg) (closed bool, changedKey
 		return false, s.cycleEnum(row, -1)
 	case "right":
 		return false, s.cycleEnum(row, +1)
-	case " ":
+	// "space", not " ": Bubble Tea v2 names the space bar where v1 reported a
+	// literal space. Both are accepted so a caller synthesising the older spelling
+	// still toggles.
+	case "space", " ":
 		if row.kind == kindBool {
 			return false, s.toggleBool(row)
 		}
@@ -401,13 +404,13 @@ func (s *SettingsOverlay) visibleRowIndices() []int {
 // expanded help. TestNoRowContainsAQuestionMark pins the premise that makes the reservation
 // free.
 //
-// Keys the shared Picker does not consume — it takes only KeyUp, KeyDown, KeyBackspace,
-// KeyRunes and KeySpace — fall through to nothing and are deliberately inert. One consequence
-// worth knowing: bubbletea makes ctrl+h a distinct key type from backspace, so ctrl+h does
+// Keys the shared Picker does not consume — it takes only up, down, backspace,
+// space and printable text — fall through to nothing and are deliberately inert. One
+// consequence worth knowing: bubbletea reports ctrl+h separately from backspace, so ctrl+h does
 // not delete here even though the session-list filter treats it as backspace. That is the
 // shared Picker's behavior across every picker in the tree, not this panel's, so it is left
 // alone rather than special-cased in one place.
-func (s *SettingsOverlay) handleSearchKey(msg tea.KeyMsg) (closed bool, changedKey string) {
+func (s *SettingsOverlay) handleSearchKey(msg tea.KeyPressMsg) (closed bool, changedKey string) {
 	results := s.searchResults()
 	switch msg.String() {
 	case "esc", "ctrl+c":
@@ -522,7 +525,7 @@ func (s *SettingsOverlay) pagedCursor(key string, start, end int) int {
 // Unlike TextOverlay — where any unrecognized key dismisses — a stray keystroke here is
 // ignored. The settings panel is a working surface with a rail position and a row cursor worth
 // keeping; dismissing on an accidental key would lose both.
-func (s *SettingsOverlay) handleHelpKey(msg tea.KeyMsg) {
+func (s *SettingsOverlay) handleHelpKey(msg tea.KeyPressMsg) {
 	switch msg.String() {
 	case "esc", "ctrl+c", "?":
 		s.helpOpen = false

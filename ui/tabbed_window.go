@@ -11,9 +11,9 @@ import (
 	"github.com/ZviBaratz/atrium/session/tmux"
 	"github.com/ZviBaratz/atrium/ui/theme"
 
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
-	zone "github.com/lrstanley/bubblezone"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
+	zone "github.com/lrstanley/bubblezone/v2"
 )
 
 func tabZoneID(i int) string { return fmt.Sprintf("tab-%d", i) }
@@ -510,7 +510,9 @@ func (w *TabbedWindow) String() string {
 			border.BottomRight = "┤"
 		}
 		style = style.Border(border)
-		style = style.Width(width - style.GetHorizontalFrameSize())
+		// v2's Width is the total including the frame, so the frame size is no
+		// longer subtracted here — see the note in theme.Panel.
+		style = style.Width(width)
 		renderedTabs = append(renderedTabs, zone.Mark(tabZoneID(i), style.Render(t)))
 	}
 

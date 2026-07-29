@@ -3,8 +3,8 @@ package overlay
 import (
 	"testing"
 
+	"charm.land/lipgloss/v2"
 	"github.com/ZviBaratz/atrium/config"
-	"github.com/charmbracelet/lipgloss"
 	xansi "github.com/charmbracelet/x/ansi"
 	"github.com/stretchr/testify/assert"
 )

@@ -3,7 +3,7 @@ package testutil
 import (
 	"testing"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 	"github.com/stretchr/testify/require"
 )
 
@@ -28,7 +28,7 @@ func TestKeySpecsRoundTripThroughString(t *testing.T) {
 func TestKeyBuildsPrintableCharactersAsText(t *testing.T) {
 	for _, s := range []string{"j", "?", "/", "1", "→"} {
 		msg := Key(s)
-		require.Equal(t, tea.KeyRunes, msg.Type, "Key(%q) must be text", s)
+		require.Equal(t, s, msg.Text, "Key(%q) must be text", s)
 		require.Equal(t, s, msg.String())
 	}
 }
@@ -37,8 +37,8 @@ func TestKeyBuildsPrintableCharactersAsText(t *testing.T) {
 // than as its own key type — the field v2 folds into a Mod bitmask.
 func TestKeyAppliesTheAltModifier(t *testing.T) {
 	msg := Key("alt+enter")
-	require.True(t, msg.Alt)
-	require.Equal(t, tea.KeyEnter, msg.Type)
+	require.True(t, msg.Mod.Contains(tea.ModAlt))
+	require.Equal(t, tea.KeyEnter, msg.Code)
 	require.Equal(t, "alt+enter", msg.String())
 }
 
@@ -46,7 +46,7 @@ func TestKeyAppliesTheAltModifier(t *testing.T) {
 // must not degrade into a zero-valued message that quietly matches nothing.
 func TestKeyPanicsOnAnUnknownSpec(t *testing.T) {
 	require.PanicsWithValue(t,
-		`testutil.Key: unknown key spec "ctrl+shift+nope" — add it to specialKeys, or use Runes for literal text`,
+		`testutil.Key: unknown key spec "nope" — add it to specialKeys, or use Runes for literal text`,
 		func() { Key("ctrl+shift+nope") })
 }
 
@@ -54,8 +54,7 @@ func TestKeyPanicsOnAnUnknownSpec(t *testing.T) {
 // key name must stay text.
 func TestRunesTakesTextLiterally(t *testing.T) {
 	msg := Runes("enter")
-	require.Equal(t, tea.KeyRunes, msg.Type)
-	require.Equal(t, "enter", string(msg.Runes))
+	require.Equal(t, "enter", msg.Text)
 	require.NotEqual(t, Key("enter"), msg, "Runes must not build the return key")
 }
 
@@ -65,6 +64,6 @@ func TestRunesTakesTextLiterally(t *testing.T) {
 // session.
 func TestSpaceAcceptsBothSpellings(t *testing.T) {
 	require.Equal(t, Key(" "), Key("space"))
-	require.Equal(t, tea.KeySpace, Key("space").Type,
+	require.Equal(t, tea.KeySpace, Key("space").Code,
 		`Key("space") must build the space bar, not the letters`)
 }

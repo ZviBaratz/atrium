@@ -1,8 +1,8 @@
 package app
 
 import (
+	tea "charm.land/bubbletea/v2"
 	"github.com/ZviBaratz/atrium/ui"
-	tea "github.com/charmbracelet/bubbletea"
 )
 
 type agentCheckDoneMsg struct {

@@ -7,7 +7,7 @@ import (
 	"github.com/ZviBaratz/atrium/session/git"
 	"github.com/ZviBaratz/atrium/ui/theme"
 
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/stretchr/testify/require"
 )

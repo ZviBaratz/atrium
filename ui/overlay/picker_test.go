@@ -3,11 +3,11 @@ package overlay
 import (
 	"testing"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 	"github.com/stretchr/testify/require"
 )
 
-func pickerRunes(s string) tea.KeyMsg { return textMsg(s) }
+func pickerRunes(s string) tea.KeyPressMsg { return textMsg(s) }
 
 // A sync picker (local, re-ranked list) resets the cursor to the top on a filter
 // edit and never uses a version.

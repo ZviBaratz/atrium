@@ -73,7 +73,7 @@ func ComposeSessionContext(current *session.Instance, repo string) (name, left s
 	// #[default] after each glyph resets fg AND attributes back to the bar's
 	// status-style, so repo/separator render in the bar's bright default foreground.
 	var b strings.Builder
-	fmt.Fprintf(&b, "#[fg=%s]%s#[default] ", string(agentColor), agentIcon)
+	fmt.Fprintf(&b, "#[fg=%s]%s#[default] ", theme.Hex(agentColor), agentIcon)
 	fmt.Fprintf(&b, "#[fg=%s]%s#[default]", color, glyph)
 	if repo != "" {
 		fmt.Fprintf(&b, " %s ·", tmuxEsc(repo))

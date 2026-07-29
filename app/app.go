@@ -25,10 +25,10 @@ import (
 	"github.com/ZviBaratz/atrium/ui/overlay"
 	"github.com/ZviBaratz/atrium/ui/theme"
 
-	"github.com/charmbracelet/bubbles/spinner"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
-	zone "github.com/lrstanley/bubblezone"
+	"charm.land/bubbles/v2/spinner"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
+	zone "github.com/lrstanley/bubblezone/v2"
 )
 
 // doubleClickWindow is the maximum delay between two left-clicks on the same
@@ -54,31 +54,15 @@ func Run(ctx context.Context, program string, autoYes bool, version, binName str
 	// user's terminal (the SSH-safe path); the exec copier stays as the local
 	// fallback. Wired before the event loop, so no copy can race the setter.
 	actions.SetClipboardOutput(os.Stdout)
-	opts := []tea.ProgramOption{
-		tea.WithAltScreen(),
-		// Normalize SS3 Home/End (ESC O H/F) that a terminal left in application-cursor
-		// mode emits, which bubbletea v1 otherwise mis-decodes into literal "OH"/"OF".
-		tea.WithInput(newSS3HomeEndReader(os.Stdin)),
-		// Tie the program to the lifecycle context so a SIGTERM (which cancels
-		// ctx in main) also stops the TUI loop, not just the subprocesses.
-		tea.WithContext(ctx),
-		// Report terminal focus/blur (DECSET 1004) so notifications can stay silent
-		// while the user is watching the fleet. Atrium's TUI runs in the real
-		// terminal (not inside its private tmux server), so these events reach us
-		// directly; a terminal that ignores 1004 simply never sends them, and an
-		// unknown focus is treated as "not focused" — never permanent silence.
-		tea.WithReportFocus(),
-	}
-	// Mouse capture is opt-out (config `mouse`, default on). With it off we never
-	// enable cell-motion reporting, so every mouse event stays with the terminal
-	// and its native select-to-copy works unmodified — the fix for terminals whose
-	// selection the capture would otherwise hijack (#397). It can still be toggled
-	// live from the Settings panel (see applySettingChange). Appended before the
-	// SS3/context options only for readability; option order is irrelevant.
-	if h.appConfig.GetMouse() {
-		opts = append(opts, tea.WithMouseCellMotion())
-	}
-	p := tea.NewProgram(h, opts...)
+	// Alt screen, focus reporting and mouse capture are no longer options here:
+	// Bubble Tea v2 takes them as fields on the View this model returns every
+	// frame, so they live in View() alongside the content they apply to. The
+	// SS3 Home/End input shim is gone too — v2's decoder reads ESC O H/F natively,
+	// which is the whole of what that wrapper existed to work around.
+	//
+	// Tie the program to the lifecycle context so a SIGTERM (which cancels ctx in
+	// main) also stops the TUI loop, not just the subprocesses.
+	p := tea.NewProgram(h, tea.WithContext(ctx))
 	_, err = p.Run()
 	// The event loop has exited (graceful quit or signal shutdown): clear the OS
 	// chrome so no stale title/progress outlives the TUI.
@@ -692,7 +676,35 @@ func (m *home) sweepUndoCmd() tea.Cmd {
 	}
 }
 
-func (m *home) View() string {
+// View is the whole frame plus the terminal state it should be rendered under.
+//
+// Bubble Tea v2 made the second half declarative. Alt screen, focus reporting and
+// mouse capture used to be program options fixed at launch (and, for the mouse, a
+// command sent again whenever the setting changed); they are now fields recomputed
+// with the content on every frame, so there is exactly one place each is decided
+// and no way for the terminal's state to drift out of step with the model's.
+//
+// The content itself is unchanged — viewContent below is the v1 View body.
+func (m *home) View() tea.View {
+	v := tea.NewView(m.viewContent())
+	v.AltScreen = true
+	// Report terminal focus/blur (DECSET 1004) so notifications can stay silent
+	// while the user is watching the fleet. Atrium's TUI runs in the real terminal
+	// (not inside its private tmux server), so these events reach us directly; a
+	// terminal that ignores 1004 simply never sends them, and an unknown focus is
+	// treated as "not focused" — never permanent silence.
+	v.ReportFocus = true
+	// Mouse capture is opt-out (config `mouse`, default on). With it off we never
+	// enable cell-motion reporting, so every mouse event stays with the terminal and
+	// its native select-to-copy works unmodified — the fix for terminals whose
+	// selection the capture would otherwise hijack (#397).
+	if m.appConfig.GetMouse() {
+		v.MouseMode = tea.MouseModeCellMotion
+	}
+	return v
+}
+
+func (m *home) viewContent() string {
 	// The screensaver replaces the whole frame — no list, panes, or hint bar —
 	// so it renders (and returns) before the normal layout is even assembled.
 	if m.state == stateScreensaver {

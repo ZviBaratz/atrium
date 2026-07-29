@@ -4,9 +4,6 @@ import (
 	"errors"
 	"strings"
 	"testing"
-
-	"github.com/charmbracelet/lipgloss"
-	"github.com/muesli/termenv"
 )
 
 func TestErrBox_Fits(t *testing.T) {
@@ -104,12 +101,9 @@ func TestErrBox_SetNotice_ErrorLevelReportsHasError(t *testing.T) {
 }
 
 func TestErrBox_InfoAndErrorStyleDiffer(t *testing.T) {
-	// Force color output for this test to verify style differences.
-	oldProfile := lipgloss.ColorProfile()
-	defer func() { lipgloss.SetColorProfile(oldProfile) }()
-	// Forcing the profile mutates lipgloss's package-global renderer; safe because
-	// package ui tests run sequentially (no t.Parallel).
-	lipgloss.SetColorProfile(termenv.TrueColor)
+	// No profile to force: v2 styles always emit full fidelity, so the two styles
+	// differ in the rendered bytes without any global being mutated. v1 needed the
+	// package-global renderer pinned here or both rendered as plain text.
 
 	info := NewErrBox()
 	info.SetSize(80, 1)

@@ -7,8 +7,8 @@ import (
 	"github.com/ZviBaratz/atrium/config"
 	"github.com/ZviBaratz/atrium/ui/theme"
 
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 )
 
 // WelcomeOverlay is the interactive first-run modal: it greets the user, lets
@@ -70,14 +70,14 @@ func (w *WelcomeOverlay) SetWidth(width int) {
 // (Confirmed() == true); Esc and ctrl+c skip (ctrl+c mirrors the app's
 // overlay-cancel idiom, so a first-run quit reflex is not swallowed). While
 // detecting, only the skip keys close.
-func (w *WelcomeOverlay) HandleKeyPress(msg tea.KeyMsg) bool {
-	if msg.Type == tea.KeyEsc || msg.Type == tea.KeyCtrlC {
+func (w *WelcomeOverlay) HandleKeyPress(msg tea.KeyPressMsg) bool {
+	if msg.Code == tea.KeyEsc || msg.String() == "ctrl+c" {
 		return true
 	}
 	if w.detecting {
 		return false
 	}
-	if msg.Type == tea.KeyEnter {
+	if msg.Code == tea.KeyEnter {
 		w.confirmed = true
 		return true
 	}
@@ -139,6 +139,7 @@ func (w *WelcomeOverlay) Render() string {
 		Border(theme.Current().Borders.Style).
 		BorderForeground(theme.Current().Palette.Accent).
 		Padding(1, 2).
-		Width(w.width)
+		// +2 for the left/right border — v2 counts it inside Width. See theme.Panel.
+		Width(w.width + 2)
 	return style.Render(b.String())
 }

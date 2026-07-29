@@ -20,9 +20,8 @@ import (
 	"github.com/ZviBaratz/atrium/ui/theme"
 	"github.com/ZviBaratz/fresco/v2"
 
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/lipgloss/v2"
 	xansi "github.com/charmbracelet/x/ansi"
-	"github.com/muesli/termenv"
 )
 
 const (
@@ -113,39 +112,26 @@ func splashScene(width, height, frame int, message string) string {
 	return lipgloss.NewStyle().MaxWidth(width).MaxHeight(height).Render(scene)
 }
 
-// splashProfile is the colour depth the splash field emits at, and it exists
-// because Atrium currently straddles two colour systems.
+// splashProfile is the colour depth the splash field emits at: full fidelity,
+// always.
 //
-// fresco v2 runs on Lip Gloss v2, whose detection goes through colorprofile.
-// Everything else Atrium draws still runs on Lip Gloss v1, which downsamples
-// through its own global termenv profile. Left to its own devices (Profile unset,
-// i.e. fresco.Auto) the field would resolve its depth from a *different* detector
-// than the pane around it — normally the same answer, but nothing makes them
-// agree, and a disagreement would show as a splash rendered at a different colour
-// depth than its own border.
+// That is not a decision to ignore the terminal — it is where the decision now
+// lives. Bubble Tea v2 down-samples everything it renders, at the writer, against
+// the profile it detected; Lip Gloss v2 styles emit full-fidelity colour for the
+// same reason. The field is just more styled text in the frame, so it should
+// arrive in the same state as everything around it and be converted once, by the
+// one component that knows what the terminal can show.
 //
-// So the field is told, explicitly, to match whatever the rest of the frame is
-// being rendered at. That also restores test control: the suite pins colour by
-// setting Lip Gloss v1's global, which fresco v2 has no reason to consult, so
-// without this bridge every splash-bearing colour assertion would silently become
-// a test of plain text.
+// Pinning also keeps Render pure over its inputs, which fresco.Auto is not: Auto
+// probes stdout, so an identical Options would produce different bytes depending
+// on where the process was attached. The frame goldens depend on that purity.
 //
-// This is the seam the Bubble Tea v2 migration (#393) rewires rather than deletes:
-// after the cut there is one profile again, handed down by Bubble Tea, and this
-// becomes a read of that. It is also the last thing in non-test Atrium code that
-// names termenv.
-func splashProfile() fresco.ColorProfile {
-	switch lipgloss.ColorProfile() {
-	case termenv.TrueColor:
-		return fresco.TrueColor
-	case termenv.ANSI256:
-		return fresco.ANSI256
-	case termenv.ANSI:
-		return fresco.ANSI16
-	default: // termenv.Ascii — no colour
-		return fresco.NoColor
-	}
-}
+// Under v1 this function was a bridge between two colour systems — fresco
+// detecting through colorprofile while the rest of Atrium down-sampled through
+// Lip Gloss v1's termenv global — and it had to reconcile them by hand. There is
+// one system now, so the bridge collapses to a constant, and with it the last use
+// of termenv outside tests.
+func splashProfile() fresco.ColorProfile { return fresco.TrueColor }
 
 // splashPalette maps the active theme's five splash tokens onto fresco.Palette:
 // the warm→cool anchors (Danger→Purple→Accent→Cyan) and the highlight (Fg). It

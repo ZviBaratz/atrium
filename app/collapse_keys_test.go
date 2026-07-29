@@ -2,14 +2,15 @@ package app
 
 import (
 	"context"
+	"github.com/ZviBaratz/atrium/internal/testutil"
 	"testing"
 	"time"
 
 	"github.com/ZviBaratz/atrium/keys"
 	"github.com/ZviBaratz/atrium/ui"
 
-	tea "github.com/charmbracelet/bubbletea"
-	zone "github.com/lrstanley/bubblezone"
+	tea "charm.land/bubbletea/v2"
+	zone "github.com/lrstanley/bubblezone/v2"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -22,7 +23,7 @@ func TestKeymap_FoldArrowsQuickSendAndMarkSpace(t *testing.T) {
 	require.Equal(t, keys.KeyExpand, keys.GlobalKeyStringsMap["right"])
 	require.Equal(t, keys.KeyQuickSend, keys.GlobalKeyStringsMap["s"])
 	require.Equal(t, keys.KeyApprove, keys.GlobalKeyStringsMap["a"])
-	require.Equal(t, keys.KeyToggleMark, keys.GlobalKeyStringsMap[" "])
+	require.Equal(t, keys.KeyToggleMark, keys.GlobalKeyStringsMap["space"])
 	require.Equal(t, keys.KeyMultiSelect, keys.GlobalKeyStringsMap["v"])
 }
 
@@ -181,12 +182,12 @@ func TestFoldClick_HeaderRefusesWhileFiltering(t *testing.T) {
 	// be stale, and repo headers abut, so a stale read lands on a neighbor (#434). A
 	// miss leaves the notice unset and fails the wait — it can never pass vacuously.
 	require.Eventually(t, func() bool {
-		_ = h.View()
+		_ = h.View().Content
 		zi := zone.Get(headerZone)
 		if zi.IsZero() {
 			return false
 		}
-		h.Update(tea.MouseMsg{X: zi.StartX, Y: zi.StartY, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft})
+		h.Update(testutil.MouseClick(zi.StartX, zi.StartY, tea.MouseLeft))
 		return h.menu.HasNotice()
 	}, time.Second, 5*time.Millisecond, "the header click never reached the fold guard")
 

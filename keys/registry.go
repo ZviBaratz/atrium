@@ -1,7 +1,7 @@
 package keys
 
 import (
-	"github.com/charmbracelet/bubbles/key"
+	"charm.land/bubbles/v2/key"
 )
 
 // Layer says which input layer honors a key. Most keys are dispatched by the
@@ -176,7 +176,12 @@ var Registry = []Entry{
 		key.WithHelp("v", "multi-select"),
 	)},
 	{Name: KeyToggleMark, Binding: key.NewBinding(
-		key.WithKeys(" "),
+		// "space", not " ". Bubble Tea v1 reported the space bar from String() as a
+		// literal space; v2 names it. Dispatch is keyed on that string
+		// (GlobalKeyStringsMap), so leaving " " here would compile, pass review, and
+		// ship the mark key dead — nothing in the suite asserts that a registered key
+		// reaches a dispatch case.
+		key.WithKeys("space"),
 		key.WithHelp("space", "mark/unmark"),
 	)},
 	{Name: KeyMoveUp, Binding: key.NewBinding(
@@ -368,7 +373,7 @@ var (
 	// VisualModeHints teaches multi-select mode's mark/act/exit gestures
 	// (StateVisual).
 	VisualModeHints = []key.Binding{
-		key.NewBinding(key.WithKeys(" "), key.WithHelp("space", "mark")),
+		key.NewBinding(key.WithKeys("space"), key.WithHelp("space", "mark")),
 		key.NewBinding(key.WithKeys("p", "r", "x"), key.WithHelp("p/r/x", "pause/resume/kill marked")),
 		key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "exit")),
 	}

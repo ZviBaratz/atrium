@@ -5,8 +5,8 @@ import (
 
 	"github.com/ZviBaratz/atrium/ui/theme"
 
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 )
 
 // PromptHistoryOverlay lists previously-submitted prompts (most-recent-first) and
@@ -44,7 +44,7 @@ func (p *PromptHistoryOverlay) SetItems(items []string) {
 // true only when the overlay should close (esc/ctrl+c, or enter on a row). A
 // clear (x) arms clearReq and keeps the overlay open so the app can empty the
 // history and refresh.
-func (p *PromptHistoryOverlay) HandleKeyPress(msg tea.KeyMsg) (shouldClose bool) {
+func (p *PromptHistoryOverlay) HandleKeyPress(msg tea.KeyPressMsg) (shouldClose bool) {
 	switch msg.String() {
 	case "esc", "ctrl+c":
 		return true
@@ -109,7 +109,8 @@ func (p *PromptHistoryOverlay) Render() string {
 		Border(th.Borders.Style).
 		BorderForeground(th.Palette.Accent).
 		Padding(1, 2).
-		Width(p.width)
+		// +2 for the left/right border — v2 counts it inside Width. See theme.Panel.
+		Width(p.width + 2)
 
 	inner := p.width - 6 // borders (2) + horizontal padding (2*2)
 	if inner < 10 {

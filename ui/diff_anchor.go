@@ -7,7 +7,7 @@ import (
 
 	"github.com/ZviBaratz/atrium/ui/theme"
 
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/lipgloss/v2"
 	"github.com/mattn/go-runewidth"
 )
 
@@ -210,10 +210,10 @@ func (d *DiffPane) refreshCommentView() {
 	// The diff block sits below the stats block in the viewport; the cursor row's
 	// absolute Y is that offset plus its row index.
 	cursorY := lipgloss.Height(d.stats) + d.cursor
-	if cursorY < d.viewport.YOffset {
+	if cursorY < d.viewport.YOffset() {
 		d.viewport.SetYOffset(cursorY)
-	} else if cursorY >= d.viewport.YOffset+d.viewport.Height {
-		d.viewport.SetYOffset(cursorY - d.viewport.Height + 1)
+	} else if cursorY >= d.viewport.YOffset()+d.viewport.Height() {
+		d.viewport.SetYOffset(cursorY - d.viewport.Height() + 1)
 	}
 }
 

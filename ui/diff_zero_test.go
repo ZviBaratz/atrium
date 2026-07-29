@@ -6,9 +6,7 @@ import (
 	"github.com/ZviBaratz/atrium/session/git"
 	"github.com/ZviBaratz/atrium/ui/theme"
 
-	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
-	"github.com/muesli/termenv"
 	"github.com/stretchr/testify/require"
 )
 
@@ -20,9 +18,9 @@ import (
 func withColorProfile(t *testing.T) {
 	t.Helper()
 	t.Cleanup(theme.Set("unicode"))
-	prof := lipgloss.ColorProfile()
-	lipgloss.SetColorProfile(termenv.TrueColor)
-	t.Cleanup(func() { lipgloss.SetColorProfile(prof) })
+	// No colour profile to pin: Lip Gloss v2 styles always emit full fidelity,
+	// and Bubble Tea down-samples at the writer. v1 needed the global forced to
+	// TrueColor here or the assertions below saw plain text.
 }
 
 // TestDiffStatLine_DimsZeroSide pins the #378 header rule: the diff-tab stat line

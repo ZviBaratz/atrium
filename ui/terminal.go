@@ -12,8 +12,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/charmbracelet/bubbles/viewport"
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/bubbles/v2/viewport"
+	"charm.land/lipgloss/v2"
 )
 
 // terminalPaneStyle / terminalFooterStyle read the active theme at render time.
@@ -84,7 +84,7 @@ func NewTerminalPane(ctx context.Context) *TerminalPane {
 	return &TerminalPane{
 		ctx:      ctx,
 		sessions: make(map[string]*terminalSession),
-		viewport: viewport.New(0, 0),
+		viewport: viewport.New(),
 	}
 }
 
@@ -104,8 +104,8 @@ func (t *TerminalPane) SetSize(width, height int) {
 	defer t.mu.Unlock()
 	t.width = width
 	t.height = height
-	t.viewport.Width = width
-	t.viewport.Height = height
+	t.viewport.SetWidth(width)
+	t.viewport.SetHeight(height)
 	if s, ok := t.sessions[t.currentKey]; ok && s.tmuxSession != nil {
 		if err := s.tmuxSession.SetDetachedSize(width, height); err != nil {
 			log.InfoLog.Printf("terminal pane: failed to set detached size: %v", err)
@@ -524,7 +524,7 @@ func (t *TerminalPane) ScrollUp() error {
 	if !t.isScrolling {
 		return t.enterScrollMode()
 	}
-	t.viewport.LineUp(1)
+	t.viewport.ScrollUp(1)
 	return nil
 }
 
@@ -544,7 +544,7 @@ func (t *TerminalPane) ScrollDown() error {
 		t.exitScrollModeLocked()
 		return nil
 	}
-	t.viewport.LineDown(1)
+	t.viewport.ScrollDown(1)
 	return nil
 }
 

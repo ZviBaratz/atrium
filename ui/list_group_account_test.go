@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
+	"charm.land/bubbles/v2/spinner"
 	"github.com/ZviBaratz/atrium/session"
-	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/stretchr/testify/require"
 )

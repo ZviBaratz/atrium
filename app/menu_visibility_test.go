@@ -6,7 +6,7 @@ import (
 	"github.com/ZviBaratz/atrium/session"
 	"github.com/ZviBaratz/atrium/ui"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 	"github.com/stretchr/testify/require"
 )
 
@@ -76,7 +76,7 @@ func TestView_HintBarContextual(t *testing.T) {
 	h.menu.SetState(ui.StateDefault)
 	h.menu.SetInstance(inst)
 	h.updateHandleWindowSizeEvent(tea.WindowSizeMsg{Width: 120, Height: 30})
-	require.Contains(t, h.View(), "kill", "default navigation renders the hint bar")
+	require.Contains(t, h.View().Content, "kill", "default navigation renders the hint bar")
 	withBar := h.paneContentHeight()
 
 	// hint_bar off: plain navigation goes chrome-free. The bottom row stays reserved
@@ -86,7 +86,7 @@ func TestView_HintBarContextual(t *testing.T) {
 	h.appConfig.HintBar = &off
 	h.menu.SetQuiet(true)
 	h.updateHandleWindowSizeEvent(tea.WindowSizeMsg{Width: 120, Height: 30})
-	require.NotContains(t, h.View(), "kill", "hint_bar=false must not render the bar's hints")
+	require.NotContains(t, h.View().Content, "kill", "hint_bar=false must not render the bar's hints")
 	require.Equal(t, withBar, h.paneContentHeight(),
 		"the reserved row keeps the panes the same height with the bar off (#438)")
 	on := true
@@ -120,7 +120,7 @@ func TestView_EmptyStateShowsCTA(t *testing.T) {
 		h.appConfig.HintBar = &on
 		h.state = stateDefault
 		h.updateHandleWindowSizeEvent(tea.WindowSizeMsg{Width: 120, Height: 30})
-		require.Contains(t, h.View(), "No sessions yet",
+		require.Contains(t, h.View().Content, "No sessions yet",
 			"an empty list shows the why-empty CTA (hint_bar=%v)", barOn)
 	}
 }

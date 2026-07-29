@@ -3,8 +3,8 @@ package overlay
 import (
 	"strings"
 
+	tea "charm.land/bubbletea/v2"
 	"github.com/ZviBaratz/atrium/session/agent"
-	tea "github.com/charmbracelet/bubbletea"
 )
 
 // EffortField is the create form's optional Claude reasoning-effort override: a
@@ -36,7 +36,7 @@ func NewEffortField() *EffortField {
 
 // HandleKeyPress cycles the chips with the arrow keys; every other key is a
 // no-op (see chipRow.moveCursor).
-func (f *EffortField) HandleKeyPress(msg tea.KeyMsg) {
+func (f *EffortField) HandleKeyPress(msg tea.KeyPressMsg) {
 	if f.disabled {
 		return
 	}

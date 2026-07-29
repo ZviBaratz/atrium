@@ -5,9 +5,9 @@ import (
 	"testing"
 	"time"
 
+	"charm.land/bubbles/v2/spinner"
 	"github.com/ZviBaratz/atrium/session"
 	"github.com/ZviBaratz/atrium/ui/theme"
-	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/stretchr/testify/require"
 )
@@ -98,10 +98,10 @@ func TestBarState_Pending(t *testing.T) {
 
 	glyph, color := barState(session.Pending, th)
 	require.Equal(t, th.Glyphs.Pending, glyph)
-	require.Equal(t, string(th.Palette.Pending), color)
+	require.Equal(t, theme.Hex(th.Palette.Pending), color)
 
 	// Distinct from Running's working marker.
 	runGlyph, runColor := barState(session.Running, th)
 	require.False(t, glyph == runGlyph && color == runColor, "pending header must differ from running")
-	require.NotEqual(t, string(th.Palette.Success), color, "pending header must not reuse the done color")
+	require.NotEqual(t, theme.Hex(th.Palette.Success), color, "pending header must not reuse the done color")
 }

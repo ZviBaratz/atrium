@@ -1,10 +1,10 @@
 package overlay
 
 import (
-	"github.com/charmbracelet/bubbles/textarea"
-	"github.com/charmbracelet/bubbles/textinput"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/bubbles/v2/textarea"
+	"charm.land/bubbles/v2/textinput"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 )
 
 // TextInputOverlay represents a text input overlay with state management. A single type
@@ -90,7 +90,13 @@ func newTextarea(initialValue string) textarea.Model {
 	ti.Focus()
 	ti.ShowLineNumbers = false
 	ti.Prompt = ""
-	ti.FocusedStyle.CursorLine = lipgloss.NewStyle()
+	// v2 moved the style states behind an accessor pair, so this is a
+	// read-modify-write rather than a field poke. Same intent: the create form's
+	// prompt is a plain multi-line field, and the textarea's default cursor-line
+	// highlight would paint a band across it.
+	styles := ti.Styles()
+	styles.Focused.CursorLine = lipgloss.NewStyle()
+	ti.SetStyles(styles)
 	ti.CharLimit = 0
 	ti.MaxHeight = 0
 	// Match the single-line title field, which already binds ctrl+arrow for word

@@ -3,8 +3,8 @@ package app
 import (
 	"strings"
 
+	tea "charm.land/bubbletea/v2"
 	"github.com/ZviBaratz/atrium/config"
-	tea "github.com/charmbracelet/bubbletea"
 )
 
 // profilesDetectedMsg carries a completed agent detection back to the settings panel's Profiles

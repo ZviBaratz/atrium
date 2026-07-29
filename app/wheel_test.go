@@ -1,14 +1,15 @@
 package app
 
 import (
+	"github.com/ZviBaratz/atrium/internal/testutil"
 	"testing"
 	"time"
 
 	"github.com/ZviBaratz/atrium/session"
 	"github.com/ZviBaratz/atrium/session/tmux"
 
-	tea "github.com/charmbracelet/bubbletea"
-	zone "github.com/lrstanley/bubblezone"
+	tea "charm.land/bubbletea/v2"
+	zone "github.com/lrstanley/bubblezone/v2"
 	"github.com/stretchr/testify/require"
 )
 
@@ -22,7 +23,11 @@ const (
 
 // wheelAt builds a wheel mouse event at (x, y).
 func wheelAt(x, y int, btn tea.MouseButton) tea.MouseMsg {
-	return tea.MouseMsg{X: x, Y: y, Action: tea.MouseActionPress, Button: btn}
+	if btn == tea.MouseWheelUp || btn == tea.MouseWheelDown ||
+		btn == tea.MouseWheelLeft || btn == tea.MouseWheelRight {
+		return testutil.MouseWheel(x, y, btn)
+	}
+	return testutil.MouseClick(x, y, btn)
 }
 
 // newWheelHome builds a sized home with two selectable sessions, ready for
@@ -63,7 +68,7 @@ func waitAppZone(t *testing.T, h *home, id string) *zone.ZoneInfo {
 	t.Helper()
 	var z *zone.ZoneInfo
 	require.Eventually(t, func() bool {
-		_ = h.View()
+		_ = h.View().Content
 		list := zone.Get(listPanelZoneID)
 		tabbed := zone.Get(tabbedWindowZoneID)
 		// Both panels must come from the current frame: the tabbed window
@@ -135,7 +140,7 @@ func TestWheelOverListMovesSelectionWithoutScrollMode(t *testing.T) {
 	// Inside the panel, clear of the border row/column.
 	x, y := z.StartX+2, z.StartY+2
 
-	_, _ = h.Update(wheelAt(x, y, tea.MouseButtonWheelDown))
+	_, _ = h.Update(wheelAt(x, y, tea.MouseWheelDown))
 	require.NotSame(t, first, h.list.GetSelectedInstance(),
 		"wheel-down over the list must move the selection down")
 	require.False(t, h.tabbedWindow.IsPreviewInScrollMode(),
@@ -143,7 +148,7 @@ func TestWheelOverListMovesSelectionWithoutScrollMode(t *testing.T) {
 	require.False(t, h.tabbedWindow.IsTerminalInScrollMode(),
 		"wheel over the list must not enter terminal scroll mode")
 
-	_, _ = h.Update(wheelAt(x, y, tea.MouseButtonWheelUp))
+	_, _ = h.Update(wheelAt(x, y, tea.MouseWheelUp))
 	require.Same(t, first, h.list.GetSelectedInstance(),
 		"wheel-up over the list must move the selection back up")
 }
@@ -156,7 +161,7 @@ func TestWheelOverTabbedWindowDoesNotMoveSelection(t *testing.T) {
 	z := waitAppZone(t, h, tabbedWindowZoneID)
 	before := h.list.GetSelectedInstance()
 
-	_, _ = h.Update(wheelAt(z.StartX+2, z.StartY+2, tea.MouseButtonWheelDown))
+	_, _ = h.Update(wheelAt(z.StartX+2, z.StartY+2, tea.MouseWheelDown))
 	require.Same(t, before, h.list.GetSelectedInstance(),
 		"wheel over the right pane must not move the list selection")
 }
@@ -168,7 +173,7 @@ func TestWheelOutsideBothPanesDoesNothing(t *testing.T) {
 	waitAppZone(t, h, listPanelZoneID) // ensure the frame is scanned
 	before := h.list.GetSelectedInstance()
 
-	_, _ = h.Update(wheelAt(9999, 9999, tea.MouseButtonWheelDown))
+	_, _ = h.Update(wheelAt(9999, 9999, tea.MouseWheelDown))
 	require.Same(t, before, h.list.GetSelectedInstance())
 	require.False(t, h.tabbedWindow.IsPreviewInScrollMode())
 	require.False(t, h.tabbedWindow.IsTerminalInScrollMode())
@@ -182,7 +187,7 @@ func TestWheelInNonDefaultStateDoesNothing(t *testing.T) {
 	before := h.list.GetSelectedInstance()
 
 	h.state = statePrompt
-	_, _ = h.Update(wheelAt(z.StartX+2, z.StartY+2, tea.MouseButtonWheelDown))
+	_, _ = h.Update(wheelAt(z.StartX+2, z.StartY+2, tea.MouseWheelDown))
 	require.Same(t, before, h.list.GetSelectedInstance(),
 		"wheel must be ignored while an overlay owns the screen")
 	require.False(t, h.tabbedWindow.IsPreviewInScrollMode())

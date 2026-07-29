@@ -1,9 +1,10 @@
 package app
 
 import (
+	"github.com/ZviBaratz/atrium/internal/testutil"
 	"testing"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 	"github.com/stretchr/testify/require"
 )
 
@@ -23,13 +24,13 @@ func layoutListWidth(h *home) int {
 
 // pressAt / motionAt / releaseAt build the three mouse phases of a divider drag.
 func pressAt(x, y int) tea.MouseMsg {
-	return tea.MouseMsg{X: x, Y: y, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft}
+	return testutil.MouseClick(x, y, tea.MouseLeft)
 }
 func motionAt(x, y int) tea.MouseMsg {
-	return tea.MouseMsg{X: x, Y: y, Action: tea.MouseActionMotion, Button: tea.MouseButtonLeft}
+	return testutil.MouseMotion(x, y, tea.MouseLeft)
 }
 func releaseAt(x, y int) tea.MouseMsg {
-	return tea.MouseMsg{X: x, Y: y, Action: tea.MouseActionRelease, Button: tea.MouseButtonLeft}
+	return testutil.MouseRelease(x, y, tea.MouseLeft)
 }
 
 // TestAdjustListColsStepsExactlyOneColumn: each < / > press moves the divider by

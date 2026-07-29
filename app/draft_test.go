@@ -3,7 +3,7 @@ package app
 import (
 	"testing"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -12,7 +12,7 @@ import (
 )
 
 // runes is a small helper to type text into the focused field.
-func draftRunes(s string) tea.KeyMsg {
+func draftRunes(s string) tea.KeyPressMsg {
 	return textMsg(s)
 }
 

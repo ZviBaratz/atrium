@@ -13,7 +13,7 @@ import (
 	"github.com/ZviBaratz/atrium/discovery"
 	"github.com/ZviBaratz/atrium/log"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 )
 
 const (

@@ -3,7 +3,7 @@ package overlay
 import (
 	"github.com/ZviBaratz/atrium/ui/theme"
 
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/lipgloss/v2"
 )
 
 // Shared overlay styles. The text-input overlay and its embedded pickers (directory,

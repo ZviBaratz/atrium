@@ -5,7 +5,7 @@ import (
 	"github.com/ZviBaratz/atrium/ui"
 	"github.com/ZviBaratz/atrium/ui/overlay"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 )
 
 // The command palette (#374). Atrium has ~50 actions reachable only by memorized
@@ -101,13 +101,13 @@ func (m *home) openCommandPalette() (tea.Model, tea.Cmd) {
 	m.commandPaletteOverlay = overlay.NewCommandPaletteOverlay(actions)
 	m.state = stateCommandPalette
 	// tea.WindowSize re-runs layout so the overlay gets its responsive size.
-	return m, tea.WindowSize()
+	return m, tea.RequestWindowSize
 }
 
 // handleCommandPaletteState routes a key to the palette. Filtering and navigation
 // live inside the overlay; this handles only the two ways out — esc, and an enter
 // that carries an action to run.
-func (m *home) handleCommandPaletteState(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m *home) handleCommandPaletteState(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if !m.commandPaletteOverlay.HandleKeyPress(msg) {
 		return m, nil
 	}

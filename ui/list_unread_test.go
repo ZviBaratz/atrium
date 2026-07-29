@@ -3,9 +3,9 @@ package ui
 import (
 	"testing"
 
+	"charm.land/bubbles/v2/spinner"
 	"github.com/ZviBaratz/atrium/session"
 	"github.com/ZviBaratz/atrium/ui/theme"
-	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/stretchr/testify/require"
 )
 

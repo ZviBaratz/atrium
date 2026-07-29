@@ -6,7 +6,7 @@ package theme
 import (
 	"time"
 
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/lipgloss/v2"
 )
 
 // Palette holds the semantic color tokens for a theme. Colors are truecolor

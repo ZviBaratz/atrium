@@ -1,29 +1,40 @@
 package ui
 
 import (
+	"regexp"
 	"strings"
 	"testing"
 
+	"charm.land/bubbles/v2/spinner"
 	"github.com/ZviBaratz/atrium/session"
 	"github.com/ZviBaratz/atrium/session/git"
 	"github.com/ZviBaratz/atrium/ui/theme"
-	"github.com/charmbracelet/bubbles/spinner"
-	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/mattn/go-runewidth"
-	"github.com/muesli/termenv"
 	"github.com/stretchr/testify/require"
 )
 
-// withASCIIProfile strips ANSI so assertions compare visible text, and pins the
-// unicode theme for stable glyphs. Cleanups restore both.
+// withASCIIProfile pins the unicode theme for stable glyphs.
+//
+// It used to also force Lip Gloss's global colour profile to Ascii, so rendered
+// output came back colourless and assertions could compare visible text directly.
+// v2 has no global to force — Style is a pure value that always emits full
+// fidelity — so the stripping moved to the output side, in stripSGR below.
 func withASCIIProfile(t *testing.T) {
 	t.Helper()
 	t.Cleanup(theme.Set("unicode"))
-	prof := lipgloss.ColorProfile()
-	lipgloss.SetColorProfile(termenv.Ascii)
-	t.Cleanup(func() { lipgloss.SetColorProfile(prof) })
 }
+
+// sgrOnly matches colour and attribute escapes, and deliberately nothing else:
+// the row can also carry an OSC 8 hyperlink, and the tests that care about it
+// assert on the sequence itself (see hyperlink_test.go).
+var sgrOnly = regexp.MustCompile(`\x1b\[[0-9;:]*m`)
+
+// stripSGR returns what the row shows with colour disabled. The assertions below
+// need it because they measure with runewidth.StringWidth and match with
+// strings.HasPrefix — neither of which is ANSI-aware, so an escape would count as
+// visible width and break a prefix match.
+func stripSGR(s string) string { return sgrOnly.ReplaceAllString(s, "") }
 
 func TestComposeLine_FlexFillsAndRightAligns(t *testing.T) {
 	withASCIIProfile(t)
@@ -31,7 +42,7 @@ func TestComposeLine_FlexFillsAndRightAligns(t *testing.T) {
 	p := newRowPaint(th, false)
 	left := []rowSeg{p.seg("L", th.Palette.Fg), p.flexSeg("name", th.Palette.Fg, false)}
 	right := []rowSeg{p.seg("R", th.Palette.Fg)}
-	out := p.composeLine(20, left, right)
+	out := stripSGR(p.composeLine(20, left, right))
 	require.Equal(t, 20, runewidth.StringWidth(out), "line must total exactly the width")
 	require.True(t, strings.HasPrefix(out, "Lname"), "fixed + flex lead the line: %q", out)
 	require.True(t, strings.HasSuffix(out, "R"), "right group is flush right: %q", out)
@@ -43,7 +54,7 @@ func TestComposeLine_FlexTruncatesWithEllipsis(t *testing.T) {
 	p := newRowPaint(th, false)
 	left := []rowSeg{p.flexSeg("a-very-long-name-indeed", th.Palette.Fg, false)}
 	right := []rowSeg{p.seg("RIGHT", th.Palette.Fg)}
-	out := p.composeLine(12, left, right)
+	out := stripSGR(p.composeLine(12, left, right))
 	require.Equal(t, 12, runewidth.StringWidth(out))
 	require.Contains(t, out, "…", "an over-long flex segment is truncated with an ellipsis")
 }
@@ -59,7 +70,7 @@ func TestComposeLine_EmptiedFlexCollapsesAdjacentSeparator(t *testing.T) {
 		p.sepSeg(),
 		p.seg("#42", th.Palette.FgDim),
 	}
-	out := p.composeLine(10, left, nil)
+	out := stripSGR(p.composeLine(10, left, nil))
 	require.Equal(t, 10, runewidth.StringWidth(out))
 	require.NotContains(t, out, "·", "the separator orphaned by the emptied flex must collapse")
 	require.Contains(t, out, "#42", "the trailing chip still renders")
@@ -71,7 +82,7 @@ func TestComposeLine_NoFlexKeepsFixedSegments(t *testing.T) {
 	p := newRowPaint(th, false)
 	left := []rowSeg{p.seg("AB", th.Palette.Fg)}
 	right := []rowSeg{p.seg("CD", th.Palette.Fg)}
-	out := p.composeLine(10, left, right)
+	out := stripSGR(p.composeLine(10, left, right))
 	require.Equal(t, 10, runewidth.StringWidth(out))
 	require.True(t, strings.HasPrefix(out, "AB"))
 	require.True(t, strings.HasSuffix(out, "CD"))
@@ -94,13 +105,15 @@ func TestComposeLine_SelectedBakesBackgroundIntoGap(t *testing.T) {
 	t.Cleanup(theme.Set("tokyo-night")) // a theme with a real BgElevated color
 	// Force a color-capable profile: the test binary has no TTY, so lipgloss
 	// otherwise defaults to Ascii and strips every background.
-	prof := lipgloss.ColorProfile()
-	lipgloss.SetColorProfile(termenv.TrueColor)
-	t.Cleanup(func() { lipgloss.SetColorProfile(prof) })
+	// No colour profile to pin: Lip Gloss v2 styles always emit full fidelity,
+	// and Bubble Tea down-samples at the writer. v1 needed the global forced to
+	// TrueColor here or the assertions below saw plain text.
 
 	th := theme.Current()
 	p := newRowPaint(th, true) // selected → non-NoColor bg
 	left := []rowSeg{p.flexSeg("x", th.Palette.Fg, false)}
+	// Deliberately NOT stripped: this is the one assertion here about styling
+	// rather than layout.
 	out := p.composeLine(20, left, nil)
 	// The gap is rendered through p.pad, which sets a background; with color on,
 	// the output must contain SGR sequences (no bare-space tail).

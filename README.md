@@ -205,6 +205,18 @@ Press `?` in the app for the same cheatsheet, live. This table mirrors it group
 for group; a test (`keys.TestReadmeDocumentsEveryBinding`) fails the build if the
 in-app keymap and this section ever drift apart, so it stays complete.
 
+> **Modern terminals report more keys than they used to.** Atrium asks the
+> terminal for *key disambiguation* (the Kitty keyboard protocol, plus xterm's
+> `modifyOtherKeys`), which terminals that support it — Ghostty, Kitty, WezTerm,
+> Alacritty, foot, iTerm2, Rio, Contour — use to distinguish combinations that
+> older terminals collapsed onto the same control code: <kbd>ctrl+m</kbd> from
+> <kbd>enter</kbd>, <kbd>ctrl+i</kbd> from <kbd>tab</kbd>, <kbd>ctrl+h</kbd> from
+> <kbd>backspace</kbd>, and <kbd>ctrl+[</kbd> from <kbd>esc</kbd>. The most
+> visible effect is a good one: <kbd>esc</kbd> takes effect immediately, with no
+> wait to see whether an escape sequence follows. No binding below relies on the
+> old conflation, so nothing here changes; a terminal without the protocol simply
+> never enables it and behaves exactly as before.
+
 ##### Navigate
 | Key | Action |
 |-----|--------|

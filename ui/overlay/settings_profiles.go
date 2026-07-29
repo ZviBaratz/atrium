@@ -5,10 +5,10 @@ import (
 	"strconv"
 	"strings"
 
+	"charm.land/bubbles/v2/textinput"
+	tea "charm.land/bubbletea/v2"
 	"github.com/ZviBaratz/atrium/config"
 	"github.com/ZviBaratz/atrium/ui/theme"
-	"github.com/charmbracelet/bubbles/textinput"
-	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
 )
 
@@ -60,7 +60,7 @@ func (s *SettingsOverlay) resetProfileTransients() {
 // `?` and `r` are deliberately unbound. Both read s.rows[s.cursor], which on this pane points at
 // whatever settingRow the cursor last sat on — help about a setting the user is not looking at,
 // or a reset of one they cannot see.
-func (s *SettingsOverlay) handleProfilesKey(msg tea.KeyMsg) (closed bool, changedKey string) {
+func (s *SettingsOverlay) handleProfilesKey(msg tea.KeyPressMsg) (closed bool, changedKey string) {
 	if s.profileConfirm {
 		// Checked BEFORE the clear below, because the prompt has to survive its own render.
 		return false, s.handleProfileConfirmKey(msg)
@@ -193,7 +193,7 @@ func (s *SettingsOverlay) armProfileDelete() {
 // handleProfileConfirmKey routes the delete confirmation. y or ↵ deletes; n, esc or ctrl+c backs
 // out; every other key is ignored, so a stray press can neither confirm nor silently disarm
 // (the accounts overlay's rule).
-func (s *SettingsOverlay) handleProfileConfirmKey(msg tea.KeyMsg) (changedKey string) {
+func (s *SettingsOverlay) handleProfileConfirmKey(msg tea.KeyPressMsg) (changedKey string) {
 	switch msg.String() {
 	case "y", "enter":
 		s.profileConfirm = false
@@ -276,10 +276,10 @@ func (f *profileForm) applyFocus() {
 // SetCursor(Position()) is the no-op that forces that recompute.
 func (f *profileForm) setWidth(w int) {
 	for i := range f.inputs {
-		if f.inputs[i].Width == w {
+		if f.inputs[i].Width() == w {
 			continue
 		}
-		f.inputs[i].Width = w
+		f.inputs[i].SetWidth(w)
 		f.inputs[i].SetCursor(f.inputs[i].Position())
 	}
 }
@@ -297,7 +297,7 @@ func (f *profileForm) program() string { return strings.TrimSpace(f.inputs[fldPr
 //
 // Everything the switch does not name goes to the focused input, which is why j/k/d/n/D are
 // letters in a form — the rule the settings line editor and the `/` filter also follow.
-func (s *SettingsOverlay) handleProfileFormKey(msg tea.KeyMsg) (changedKey string) {
+func (s *SettingsOverlay) handleProfileFormKey(msg tea.KeyPressMsg) (changedKey string) {
 	f := s.profileForm
 	switch msg.String() {
 	case "esc", "ctrl+c":

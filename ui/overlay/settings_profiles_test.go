@@ -4,8 +4,8 @@ import (
 	"strings"
 	"testing"
 
+	tea "charm.land/bubbletea/v2"
 	"github.com/ZviBaratz/atrium/config"
-	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -82,7 +82,7 @@ func paneText(o *SettingsOverlay) []string {
 // focus the editor's pane, and none of them closes the panel or asks home for a handoff — the
 // editor lives inside the panel, unlike Accounts.
 func TestProfilesEntryFocusesItsEditor(t *testing.T) {
-	for _, key := range []tea.KeyMsg{
+	for _, key := range []tea.KeyPressMsg{
 		keyMsg("enter"), keyMsg("right"), keyMsg("tab"),
 	} {
 		o := NewSettingsOverlay(threeProfiles())
@@ -767,7 +767,7 @@ func TestDeleteAsksBeforeRemoving(t *testing.T) {
 // TestConfirmDeletesAndReportsTheKey — y (and ↵) removes the record and reports "profiles", so
 // home persists through the panel's one writer.
 func TestConfirmDeletesAndReportsTheKey(t *testing.T) {
-	for _, key := range []tea.KeyMsg{keyRunes("y"), keyMsg("enter")} {
+	for _, key := range []tea.KeyPressMsg{keyRunes("y"), keyMsg("enter")} {
 		cfg := threeProfiles()
 		o := NewSettingsOverlay(cfg)
 		o.SetSize(100, 32)
@@ -787,7 +787,7 @@ func TestConfirmDeletesAndReportsTheKey(t *testing.T) {
 // rather than treated as a cancel — a stray press must not confirm, and must not silently
 // disarm either (the accounts overlay's rule).
 func TestCancelKeepsTheProfile(t *testing.T) {
-	for _, key := range []tea.KeyMsg{keyRunes("n"), keyMsg("esc"), keyMsg("ctrl+c")} {
+	for _, key := range []tea.KeyPressMsg{keyRunes("n"), keyMsg("esc"), keyMsg("ctrl+c")} {
 		cfg := threeProfiles()
 		o := NewSettingsOverlay(cfg)
 		o.SetSize(100, 32)
@@ -1126,7 +1126,7 @@ func TestProfilesHintNamesEveryLiveKey(t *testing.T) {
 
 	// The other direction: press each advertised key on a fresh panel and assert an observable
 	// effect. j first, so d lands on a record the default_program guard does not protect.
-	press := func(k tea.KeyMsg) *SettingsOverlay {
+	press := func(k tea.KeyPressMsg) *SettingsOverlay {
 		fresh := NewSettingsOverlay(threeProfiles())
 		fresh.SetSize(100, 32)
 		profilesAt(t, fresh)

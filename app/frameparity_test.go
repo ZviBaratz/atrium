@@ -16,12 +16,10 @@ import (
 	"github.com/ZviBaratz/atrium/ui/overlay"
 	"github.com/ZviBaratz/atrium/ui/theme"
 
-	"github.com/charmbracelet/bubbles/spinner"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/bubbles/v2/spinner"
+	tea "charm.land/bubbletea/v2"
 	xansi "github.com/charmbracelet/x/ansi"
 	"github.com/muesli/ansi"
-	"github.com/muesli/termenv"
 	"github.com/stretchr/testify/require"
 )
 
@@ -29,23 +27,20 @@ import (
 // migration (#393). Its job is to answer one question the rest of the suite
 // cannot: did swapping the renderer change what Atrium draws?
 //
-// The oracle is deliberately COLOUR-FREE. Every existing colour-stable test in
-// this repo pins its bytes with lipgloss.SetColorProfile(termenv.Ascii), and
-// Lip Gloss v2 deletes the global renderer that makes that work — so a golden
-// baselined that way cannot be re-run after the port, which is precisely when
-// it is needed. Stripping ANSI with x/ansi.Strip instead makes the snapshot
-// renderer-independent by construction: it survives the port unchanged, and any
-// diff in it is a real layout or content change.
+// The oracle is deliberately COLOUR-FREE, and that is what let it survive the
+// cut. Every other colour-stable test in this repo pinned its bytes by forcing
+// Lip Gloss v1's global colour profile — a global v2 deletes — so a golden
+// baselined that way could not have been re-run afterwards, which is precisely
+// when it was needed. Stripping ANSI with x/ansi.Strip is renderer-independent by
+// construction: these goldens were generated on v1, and they pass unchanged on
+// v2.
 //
-// Colour is not abandoned, just separated: TestFrameColourFingerprint snapshots
-// the set of SGR sequences a frame emits. That one IS expected to move at the
-// cut (v2 renders full-fidelity and downsamples at the writer) and gets
-// re-baselined once, deliberately, with the diff read — never bulk-accepted.
+// Colour is separated rather than abandoned: TestFrameColourFingerprint snapshots
+// the set of SGR sequences a frame emits. That half was expected to move at the
+// cut and was re-baselined once, deliberately, with the diff read.
 //
-// Why plain-text parity is a fair bar: Lip Gloss v1.1.0 and v2.0.5 both measure
-// through charmbracelet/x/ansi, and go.mod already pins the version v2 wants
-// (v0.11.7). Layout should be byte-identical across the port. Anywhere it isn't
-// is a finding to explain, not a golden to refresh.
+// Why plain-text parity was a fair bar: Lip Gloss v1.1.0 and v2.0.5 both measure
+// through charmbracelet/x/ansi, and go.mod already pinned the version v2 wanted.
 
 // frameState is one UI state plus the wiring production keeps for it. A state
 // rendered without its overlay is a half-constructed shape whose frame proves
@@ -213,7 +208,7 @@ func newParityHome(t *testing.T, fs frameState, w, h int) *home {
 // runs zone.Scan, so bubblezone's markers are gone before this sees the string.
 func parityFrame(t *testing.T, fs frameState, w, h int) string {
 	t.Helper()
-	return xansi.Strip(newParityHome(t, fs, w, h).View())
+	return xansi.Strip(newParityHome(t, fs, w, h).View().Content)
 }
 
 // paritySizes are the two shapes the plain-text goldens capture: the 80×24 floor
@@ -281,15 +276,15 @@ var sgrRE = regexp.MustCompile(`\x1b\[[0-9;:]*m`)
 //
 //	CS_UPDATE_GOLDEN=1 go test ./app/ -run TestFrameColourFingerprint
 func TestFrameColourFingerprint(t *testing.T) {
-	prof := lipgloss.ColorProfile()
-	lipgloss.SetColorProfile(termenv.TrueColor)
-	t.Cleanup(func() { lipgloss.SetColorProfile(prof) })
+	// No colour profile to pin: Lip Gloss v2 styles always emit full fidelity,
+	// and Bubble Tea down-samples at the writer. v1 needed the global forced to
+	// TrueColor here or the assertions below saw plain text.
 
 	const w, h = 120, 40
 	var b strings.Builder
 	for _, fs := range frameStates() {
 		counts := map[string]int{}
-		for _, seq := range sgrRE.FindAllString(newParityHome(t, fs, w, h).View(), -1) {
+		for _, seq := range sgrRE.FindAllString(newParityHome(t, fs, w, h).View().Content, -1) {
 			counts[seq]++
 		}
 		seqs := make([]string, 0, len(counts))
@@ -326,7 +321,7 @@ func TestViewFitsTerminalBoundsEveryState(t *testing.T) {
 		t.Run(fs.name, func(t *testing.T) {
 			for _, dim := range sizes {
 				w, h := dim[0], dim[1]
-				lines := strings.Split(newParityHome(t, fs, w, h).View(), "\n")
+				lines := strings.Split(newParityHome(t, fs, w, h).View().Content, "\n")
 
 				if len(lines) > h {
 					t.Errorf("size=%dx%d: View() emitted %d lines, exceeds height %d",

@@ -3,8 +3,8 @@ package overlay
 import (
 	"github.com/ZviBaratz/atrium/ui/theme"
 
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 )
 
 // ConfirmationOverlay represents a confirmation dialog overlay
@@ -49,7 +49,7 @@ func NewConfirmationOverlay(message string) *ConfirmationOverlay {
 
 // HandleKeyPress processes a key press and updates the state
 // Returns true if the overlay should be closed
-func (c *ConfirmationOverlay) HandleKeyPress(msg tea.KeyMsg) bool {
+func (c *ConfirmationOverlay) HandleKeyPress(msg tea.KeyPressMsg) bool {
 	s := msg.String()
 	switch {
 	case s == c.ConfirmKey, c.ConfirmAltKey != "" && s == c.ConfirmAltKey:
@@ -71,7 +71,10 @@ func (c *ConfirmationOverlay) Render() string {
 		Border(theme.Current().Borders.Style).
 		BorderForeground(c.borderColor).
 		Padding(1, 2).
-		Width(c.width)
+		// +2 for the left/right border: Lip Gloss v2 counts the border inside
+		// Width, where v1 added it outside. Same silent semantic change as in
+		// theme.Panel — see the note there.
+		Width(c.width + 2)
 
 	// Add the confirmation instructions. When an alt confirm key is set (e.g. the
 	// kill chord for double-tap), surface it alongside the primary confirm key.

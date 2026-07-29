@@ -7,8 +7,8 @@ import (
 	"github.com/ZviBaratz/atrium/ui/theme"
 	"strings"
 
-	"github.com/charmbracelet/bubbles/viewport"
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/bubbles/v2/viewport"
+	"charm.land/lipgloss/v2"
 	"github.com/mattn/go-runewidth"
 )
 
@@ -44,7 +44,7 @@ type DiffPane struct {
 // NewDiffPane returns an empty DiffPane.
 func NewDiffPane() *DiffPane {
 	return &DiffPane{
-		viewport: viewport.New(0, 0),
+		viewport: viewport.New(),
 	}
 }
 
@@ -53,8 +53,8 @@ func NewDiffPane() *DiffPane {
 func (d *DiffPane) SetSize(width, height int) {
 	d.width = width
 	d.height = height
-	d.viewport.Width = width
-	d.viewport.Height = height
+	d.viewport.SetWidth(width)
+	d.viewport.SetHeight(height)
 	// In comment mode the frozen snapshot must be re-rendered at the new width so
 	// the cursor highlight bar and line truncation use the correct column count.
 	if d.commenting {
@@ -233,12 +233,12 @@ func (d *DiffPane) String() string {
 
 // ScrollUp scrolls the viewport up
 func (d *DiffPane) ScrollUp() {
-	d.viewport.LineUp(1)
+	d.viewport.ScrollUp(1)
 }
 
 // ScrollDown scrolls the viewport down
 func (d *DiffPane) ScrollDown() {
-	d.viewport.LineDown(1)
+	d.viewport.ScrollDown(1)
 }
 
 // diffMetaPrefixes mark the per-file metadata lines git emits after a

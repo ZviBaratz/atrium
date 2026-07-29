@@ -3,7 +3,7 @@ package ui
 import (
 	"testing"
 
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/lipgloss/v2"
 )
 
 // TestCenterInBox locks the fit-path contract the diff/preview/err/menu panes

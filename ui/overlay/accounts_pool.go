@@ -3,8 +3,8 @@ package overlay
 import (
 	"fmt"
 
+	"charm.land/lipgloss/v2"
 	"github.com/ZviBaratz/atrium/config"
-	"github.com/charmbracelet/lipgloss"
 )
 
 // poolGutter maps each Claude account to its gutter cell, bracketing every run of

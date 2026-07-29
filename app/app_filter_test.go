@@ -7,8 +7,8 @@ import (
 	"github.com/ZviBaratz/atrium/config"
 	"github.com/ZviBaratz/atrium/ui"
 
-	"github.com/charmbracelet/bubbles/spinner"
-	tea "github.com/charmbracelet/bubbletea"
+	"charm.land/bubbles/v2/spinner"
+	tea "charm.land/bubbletea/v2"
 	"github.com/stretchr/testify/require"
 )
 
@@ -28,9 +28,9 @@ func newFilterHome() *home {
 	}
 }
 
-func runeKey(s string) tea.KeyMsg { return textMsg(s) }
+func runeKey(s string) tea.KeyPressMsg { return textMsg(s) }
 
-func press(t *testing.T, h *home, msg tea.KeyMsg) {
+func press(t *testing.T, h *home, msg tea.KeyPressMsg) {
 	t.Helper()
 	model, _ := h.handleKeyPress(msg)
 	_, ok := model.(*home)

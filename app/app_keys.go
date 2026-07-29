@@ -20,7 +20,7 @@ import (
 	"github.com/ZviBaratz/atrium/ui"
 	"github.com/ZviBaratz/atrium/ui/overlay"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 )
 
 // stillStartingNotice is shown when a per-session action is pressed while the
@@ -60,7 +60,7 @@ func (m *home) selectedActionable() (*session.Instance, tea.Cmd, bool) {
 
 // handlePromptState routes a key to the text-input overlay (new-session form or
 // quick-send compose box) and handles submit/cancel/retarget/debounce.
-func (m *home) handlePromptState(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m *home) handlePromptState(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	// #383 diff comment: this composer was opened from the diff line cursor. Route
 	// it to its own submit/cancel so a queued comment (or a cancel) returns to
 	// comment mode rather than the list, and never runs the quick-send/create paths.
@@ -148,7 +148,7 @@ func (m *home) handlePromptState(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.state = stateDefault
 		m.menu.SetState(ui.StateDefault)
 		notice := m.handleInfoNotice(fmt.Sprintf("queued for %q", selected.DisplayName()))
-		return m, tea.Sequence(tea.WindowSize(), m.instanceChanged(), notice)
+		return m, tea.Sequence(tea.RequestWindowSize, m.instanceChanged(), notice)
 	}
 
 	// A confirmed double-tap Ctrl+R rebuilds the form fresh and drops any draft.
@@ -198,7 +198,7 @@ func (m *home) handlePromptState(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 //
 // Either way only the resulting message flows back through the runtime, so a
 // returned error reaches the error box.
-func (m *home) handleConfirmState(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m *home) handleConfirmState(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	// A dialog whose copy promises ',' opens the setting it named. It is a cancel: nothing
 	// staged is run, and the stashed create form stays restorable exactly as declining leaves
 	// it. Armed per-dialog (confirmOverCap), so ',' stays inert in every other confirmation.
@@ -242,7 +242,7 @@ func (m *home) handleConfirmState(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 // handleRenameState routes a key to the rename overlay and, on submit, applies the
 // new display name / note to the instance the overlay was opened for.
-func (m *home) handleRenameState(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m *home) handleRenameState(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	shouldClose := m.renameOverlay.HandleKeyPress(msg)
 	if !shouldClose {
 		return m, nil
@@ -298,7 +298,7 @@ func (m *home) handleRenameState(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 // the now-visible hint bar; a refusal explains itself in-overlay (since the hint
 // bar is hidden behind the box), distinguishing the in-flight head from a queue
 // that shifted under the snapshot.
-func (m *home) handleQueueState(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m *home) handleQueueState(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	shouldClose := m.queueOverlay.HandleKeyPress(msg)
 
 	if m.queueOverlay.RemoveRequested() && m.queueTarget != nil {
@@ -347,7 +347,7 @@ func (m *home) dismissQueueOverlay() {
 // handleCmdLogState routes a key to the command-log overlay. All navigation,
 // filter cycling and failure expansion live inside the overlay, which reads the
 // log ring live; only esc/ctrl+c closes.
-func (m *home) handleCmdLogState(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m *home) handleCmdLogState(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if m.cmdLogOverlay.HandleKeyPress(msg) {
 		m.dismissCmdLogOverlay()
 	}
@@ -363,7 +363,7 @@ func (m *home) dismissCmdLogOverlay() {
 
 // handleSettingsState routes a key to the settings overlay, live-applies any
 // changed row, and reclaims the menu row when the panel closes.
-func (m *home) handleSettingsState(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m *home) handleSettingsState(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	closed, changedKey := m.settingsOverlay.HandleKeyPress(msg)
 	var cmds []tea.Cmd
 	if changedKey != "" {
@@ -392,7 +392,7 @@ func (m *home) handleSettingsState(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			// below is not also needed.
 			return m, tea.Batch(append(cmds, m.openAccounts())...)
 		}
-		cmds = append(cmds, tea.WindowSize())
+		cmds = append(cmds, tea.RequestWindowSize)
 	}
 	return m, tea.Batch(cmds...)
 }
@@ -400,7 +400,7 @@ func (m *home) handleSettingsState(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 // handleFilterState routes a key while the list filter is being edited. The list
 // holds the query (single source of truth); printable keys extend it, so j/k
 // cannot be reserved as commit keys here.
-func (m *home) handleFilterState(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m *home) handleFilterState(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "esc":
 		// Esc clears the filter and returns to default.
@@ -425,8 +425,8 @@ func (m *home) handleFilterState(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, m.instanceChanged()
 	default:
 		// Append printable characters to the filter query.
-		if len(msg.Runes) > 0 {
-			m.list.SetFilter(m.list.FilterQuery() + string(msg.Runes))
+		if msg.Text != "" {
+			m.list.SetFilter(m.list.FilterQuery() + msg.Text)
 		}
 		return m, m.instanceChanged()
 	}
@@ -466,7 +466,7 @@ func (m *home) exitVisualMode() {
 // active: space marks/unmarks the highlighted session, the lifecycle keys act on
 // the marked set (each opens its own count confirmation over the eligible
 // subset), navigation still moves the cursor, and esc clears the marks and exits.
-func (m *home) handleMultiSelectState(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m *home) handleMultiSelectState(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "esc":
 		m.exitVisualMode()
@@ -571,7 +571,7 @@ func (m *home) openQuickSend() (tea.Model, tea.Cmd) {
 	}
 	m.state = statePrompt
 	m.textInputOverlay = overlay.NewQuickSendOverlay("Send to " + selected.DisplayName())
-	return m, tea.WindowSize()
+	return m, tea.RequestWindowSize
 }
 
 // approveSelected answers the selected session's visible prompt with a single
@@ -703,7 +703,7 @@ func (m *home) openQueue() (tea.Model, tea.Cmd) {
 	m.queueOverlay.SetQueue(texts, headInFlight)
 	m.state = stateQueue
 	// tea.WindowSize re-runs layout so the overlay gets its responsive width.
-	return m, tea.WindowSize()
+	return m, tea.RequestWindowSize
 }
 
 // openCmdLog opens the command-log overlay: the tmux/git/gh subprocesses Atrium
@@ -718,7 +718,7 @@ func (m *home) openCmdLog() (tea.Model, tea.Cmd) {
 	m.cmdLogOverlay = overlay.NewCmdLogOverlay(session)
 	m.state = stateCmdLog
 	// tea.WindowSize re-runs layout so the overlay gets its responsive size.
-	return m, tea.WindowSize()
+	return m, tea.RequestWindowSize
 }
 
 // startAutoNameSelected kicks off background model-driven naming for the selected
@@ -1076,7 +1076,7 @@ func (m *home) recordPrompt(text string) {
 // inserts its text into the prompt field being composed (never submits) and
 // returns to the compose overlay; x empties the history in place; esc cancels
 // back to the compose overlay.
-func (m *home) handleHistoryState(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m *home) handleHistoryState(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	shouldClose := m.promptHistoryOverlay.HandleKeyPress(msg)
 	if m.promptHistoryOverlay.ClearRequested() {
 		if err := m.appState.ClearPromptHistory(); err != nil {

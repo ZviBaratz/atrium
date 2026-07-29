@@ -4,16 +4,15 @@ import (
 	"github.com/ZviBaratz/atrium/session"
 	"github.com/ZviBaratz/atrium/session/git"
 	"github.com/ZviBaratz/atrium/ui/theme"
+	"github.com/charmbracelet/x/ansi"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/charmbracelet/bubbles/spinner"
-	"github.com/charmbracelet/lipgloss"
-	zone "github.com/lrstanley/bubblezone"
-	"github.com/muesli/termenv"
+	"charm.land/bubbles/v2/spinner"
+	zone "github.com/lrstanley/bubblezone/v2"
 	"github.com/stretchr/testify/require"
 )
 
@@ -91,9 +90,6 @@ func TestRender_DiffStatPresent(t *testing.T) {
 // changes. Regenerate with CS_UPDATE_GOLDEN=1 go test ./ui/ -run TestListGolden.
 func TestListGolden(t *testing.T) {
 	t.Cleanup(theme.Set("unicode"))
-	prof := lipgloss.ColorProfile()
-	lipgloss.SetColorProfile(termenv.Ascii) // strip color → stable bytes
-	t.Cleanup(func() { lipgloss.SetColorProfile(prof) })
 
 	s := spinner.New()
 	l := NewList(&s)
@@ -131,7 +127,11 @@ func TestListGolden(t *testing.T) {
 	// Rows carry bubblezone click-region markers; Scan strips them just as
 	// home.View() does before the frame is shown, so the golden stays the visible
 	// output rather than the marked intermediate.
-	got := zone.Scan(l.String())
+	// Strip colour so the golden stays the visible layout. v1 got this by forcing
+	// the global profile to Ascii; v2 has no global, and its styles always emit
+	// full fidelity, so the frame is stripped here instead. The golden bytes are
+	// unchanged either way — it never contained colour.
+	got := ansi.Strip(zone.Scan(l.String()))
 	golden := filepath.Join("testdata", "list_golden.txt")
 	if os.Getenv("CS_UPDATE_GOLDEN") != "" {
 		require.NoError(t, os.MkdirAll("testdata", 0o755))

@@ -60,7 +60,7 @@ func (t *TextInputOverlay) SetSize(width, height int) {
 	} else {
 		t.textarea.SetHeight(int(float32(height) * 0.4))
 	}
-	t.titleInput.Width = width - 6
+	t.titleInput.SetWidth(width - 6)
 	if t.directoryPicker != nil {
 		t.directoryPicker.SetWidth(width - 6)
 	}

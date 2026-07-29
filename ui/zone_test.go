@@ -1,6 +1,6 @@
 package ui
 
-import zone "github.com/lrstanley/bubblezone"
+import zone "github.com/lrstanley/bubblezone/v2"
 
 // The list and tabbed window Mark() clickable regions via the global bubblezone
 // manager, which panics if it was never initialized. Production code does this in

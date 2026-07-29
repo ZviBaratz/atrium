@@ -3,8 +3,8 @@ package overlay
 import (
 	"testing"
 
+	tea "charm.land/bubbletea/v2"
 	"github.com/ZviBaratz/atrium/config"
-	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -261,7 +261,7 @@ func TestTabSwitchesPanes(t *testing.T) {
 // TestRightFocusesTheRowsPaneFromTheRail pins the rail's three forward keys on an entry that
 // owns rows.
 func TestRightFocusesTheRowsPaneFromTheRail(t *testing.T) {
-	for _, key := range []tea.KeyMsg{
+	for _, key := range []tea.KeyPressMsg{
 		keyMsg("right"), keyMsg("tab"), keyMsg("enter"),
 	} {
 		o := NewSettingsOverlay(config.DefaultConfig())
@@ -274,7 +274,7 @@ func TestRightFocusesTheRowsPaneFromTheRail(t *testing.T) {
 // three forward keys ask home to open the @ overlay, and the panel closes to make way. The
 // overlay cannot open a sibling, so a request plus closed=true is the whole protocol.
 func TestAccountsEntryHandsOffToTheAccountsOverlay(t *testing.T) {
-	for _, key := range []tea.KeyMsg{
+	for _, key := range []tea.KeyPressMsg{
 		keyMsg("right"), keyMsg("tab"), keyMsg("enter"),
 	} {
 		o := NewSettingsOverlay(config.DefaultConfig())

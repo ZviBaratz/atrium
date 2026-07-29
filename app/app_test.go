@@ -17,8 +17,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/charmbracelet/bubbles/spinner"
-	tea "github.com/charmbracelet/bubbletea"
+	"charm.land/bubbles/v2/spinner"
+	tea "charm.land/bubbletea/v2"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -619,7 +619,7 @@ func TestConfirmationModalKeyHandling(t *testing.T) {
 			h.confirmationOverlay = overlay.NewConfirmationOverlay("Kill session?")
 
 			// Create key message
-			var pressed tea.KeyMsg
+			var pressed tea.KeyPressMsg
 			if tc.key == "esc" {
 				pressed = keyMsg("esc")
 			} else {

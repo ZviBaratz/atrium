@@ -3,16 +3,16 @@ package overlay
 import (
 	"strings"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 )
 
 // HandleKeyPress processes a key press and updates the state accordingly.
 // Returns (shouldClose, branchFilterChanged).
-func (t *TextInputOverlay) HandleKeyPress(msg tea.KeyMsg) (bool, bool) {
+func (t *TextInputOverlay) HandleKeyPress(msg tea.KeyPressMsg) (bool, bool) {
 	// Double-tap Ctrl+R clears the form (create form only): the first press arms,
 	// any other key disarms, a second consecutive press requests the clear. The app
 	// performs the rebuild — it owns the config/profiles the pickers need.
-	if t.isCreateForm && msg.Type == tea.KeyCtrlR {
+	if t.isCreateForm && msg.String() == "ctrl+r" {
 		if t.clearArmed {
 			t.clearArmed = false
 			t.clearRequested = true
@@ -23,8 +23,8 @@ func (t *TextInputOverlay) HandleKeyPress(msg tea.KeyMsg) (bool, bool) {
 	}
 	t.clearArmed = false
 
-	switch msg.Type {
-	case tea.KeyTab:
+	switch msg.String() {
+	case "tab":
 		// In the project field, Tab first tries shell-style path completion; only when
 		// there is nothing left to complete does it advance to the next field. The model
 		// field gets the same "complete, then advance" treatment against its alias list.
@@ -36,13 +36,13 @@ func (t *TextInputOverlay) HandleKeyPress(msg tea.KeyMsg) (bool, bool) {
 		}
 		t.setFocusIndex(t.nextEnabledIndex(1))
 		return false, false
-	case tea.KeyShiftTab:
+	case "shift+tab":
 		t.setFocusIndex(t.nextEnabledIndex(-1))
 		return false, false
-	case tea.KeyEsc:
+	case "esc":
 		t.Canceled = true
 		return true, false
-	case tea.KeyCtrlS:
+	case "ctrl+s":
 		// Submit from any field. Enter submits only on the Create button and a filled
 		// title (it advances to the next field everywhere else, including the prompt), so
 		// Ctrl+S is the submit-from-anywhere shortcut; the Create button remains the
@@ -52,7 +52,7 @@ func (t *TextInputOverlay) HandleKeyPress(msg tea.KeyMsg) (bool, bool) {
 			t.OnSubmit()
 		}
 		return true, false
-	case tea.KeyEnter:
+	case "enter", "alt+enter":
 		if t.isEnterButton() {
 			t.Submitted = true
 			if t.OnSubmit != nil {
@@ -77,7 +77,7 @@ func (t *TextInputOverlay) HandleKeyPress(msg tea.KeyMsg) (bool, bool) {
 			// terminal's Shift+Enter sends, so "shift+enter for a newline" works once the
 			// terminal is set up. The textarea's own newline binding matches the literal
 			// "enter", which is intercepted here, so insert the newline explicitly.
-			if msg.Alt {
+			if msg.Mod.Contains(tea.ModAlt) {
 				t.textarea.InsertRune('\n')
 				return false, false
 			}
@@ -134,7 +134,7 @@ func (t *TextInputOverlay) HandleKeyPress(msg tea.KeyMsg) (bool, bool) {
 			return false, false
 		}
 		if t.isAccountPicker() {
-			switch msg.Type {
+			switch msg.Code {
 			case tea.KeyLeft, tea.KeyRight, tea.KeyUp, tea.KeyDown:
 				t.accountPicker.HandleKeyPress(msg)
 			}

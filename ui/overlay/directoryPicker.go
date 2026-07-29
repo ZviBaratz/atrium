@@ -9,8 +9,8 @@ import (
 	"strings"
 	"unicode"
 
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 )
 
 // maxDirEntries bounds a single directory read so a pathological directory
@@ -119,7 +119,7 @@ func (dp *DirectoryPicker) ClearSelectionState() {
 // The shared Picker owns the key grammar (sync source: a filter edit resets the
 // cursor to the top of the re-ranked list); a directory selection changes when the
 // filter text changed or the cursor moved.
-func (dp *DirectoryPicker) HandleKeyPress(msg tea.KeyMsg) (consumed bool, selectionChanged bool) {
+func (dp *DirectoryPicker) HandleKeyPress(msg tea.KeyPressMsg) (consumed bool, selectionChanged bool) {
 	consumed, filterChanged, cursorMoved := dp.handleKey(msg, len(dp.visibleItems()))
 	return consumed, filterChanged || cursorMoved
 }

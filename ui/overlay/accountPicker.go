@@ -5,7 +5,7 @@ import (
 
 	"github.com/ZviBaratz/atrium/config"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 )
 
 // accountEntry is one selectable line in the picker: a pool "⇄" entry (member
@@ -122,8 +122,8 @@ func (ap *AccountPicker) Touched() bool { return ap.touched }
 // HandleKeyPress moves the cursor; Up/Down mirror Left/Right (the form navigates ↑↓).
 // The cursor wraps at both ends so one keypress reaches the opposite end. Any nav key
 // marks the picker touched — engaging the control signals intent.
-func (ap *AccountPicker) HandleKeyPress(msg tea.KeyMsg) bool {
-	switch msg.Type {
+func (ap *AccountPicker) HandleKeyPress(msg tea.KeyPressMsg) bool {
+	switch msg.Code {
 	case tea.KeyLeft, tea.KeyUp:
 		ap.touched = true
 		ap.cursor = wrapIndex(ap.cursor, -1, len(ap.entries))

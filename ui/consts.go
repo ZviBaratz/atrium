@@ -7,7 +7,7 @@ package ui
 import (
 	"github.com/ZviBaratz/atrium/ui/theme"
 
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/lipgloss/v2"
 )
 
 // fallbackArt is the raw "ATRIUM" wordmark shown in empty preview/terminal

@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/lipgloss/v2"
 )
 
 // renderRoot builds a fake ~/.claude tree under a temp root containing the

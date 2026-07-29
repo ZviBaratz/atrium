@@ -7,7 +7,7 @@ import (
 	"github.com/ZviBaratz/atrium/config"
 	"github.com/ZviBaratz/atrium/ui/overlay"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -71,7 +71,7 @@ func TestAutoDispatch_AllExhaustedConfirmActuallyRenders(t *testing.T) {
 	h.handleSmartDispatchSubmit("Review box#123")
 	require.Equal(t, stateConfirm, h.state)
 
-	view := h.View()
+	view := h.View().Content
 	assert.Contains(t, view, "all work accounts are rate-limited",
 		"the dialog states why it is asking")
 	assert.Contains(t, view, "create anyway on work-1?",

@@ -8,8 +8,8 @@ import (
 	"github.com/ZviBaratz/atrium/cmdlog"
 	"github.com/ZviBaratz/atrium/ui/theme"
 
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/muesli/reflow/truncate"
 )
 
@@ -79,7 +79,7 @@ func (c *CmdLogOverlay) records() []cmdlog.Record {
 
 // HandleKeyPress moves the cursor, cycles the filter, toggles a failure's
 // expansion, or closes. Returns true only on esc/ctrl+c.
-func (c *CmdLogOverlay) HandleKeyPress(msg tea.KeyMsg) (shouldClose bool) {
+func (c *CmdLogOverlay) HandleKeyPress(msg tea.KeyPressMsg) (shouldClose bool) {
 	recs := c.records()
 	switch msg.String() {
 	case "esc", "ctrl+c":
@@ -134,7 +134,8 @@ func (c *CmdLogOverlay) Render() string {
 		Border(th.Borders.Style).
 		BorderForeground(th.Palette.Accent).
 		Padding(1, 2).
-		Width(c.width)
+		// +2 for the left/right border — v2 counts it inside Width. See theme.Panel.
+		Width(c.width + 2)
 
 	inner := c.width - 6 // borders (2) + horizontal padding (2*2)
 	if inner < 20 {

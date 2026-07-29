@@ -16,7 +16,7 @@ import (
 	"github.com/ZviBaratz/atrium/ui"
 	"github.com/ZviBaratz/atrium/ui/theme"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 )
 
 // hintStyles builds the renderer's three roles from the active theme: dim
@@ -98,7 +98,7 @@ func (m *home) exitHintMode() {
 // handleHintsState consumes every key while hint mode is up: hint characters
 // narrow toward a match, anything else exits. An uppercase hint character
 // selects the copy+open variant.
-func (m *home) handleHintsState(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m *home) handleHintsState(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if !m.tabbedWindow.InPreviewHintMode() {
 		// The pane dropped the overlay out from under us (owner paused or
 		// replaced between keys); self-heal instead of acting on a stale
@@ -107,11 +107,11 @@ func (m *home) handleHintsState(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.exitHintMode()
 		return m, m.instanceChanged()
 	}
-	if msg.Type != tea.KeyRunes || len(msg.Runes) != 1 {
+	if r := []rune(msg.Text); len(r) != 1 {
 		m.exitHintMode()
 		return m, m.instanceChanged()
 	}
-	r := msg.Runes[0]
+	r := []rune(msg.Text)[0]
 	lower := unicode.ToLower(r)
 	if !strings.ContainsRune(hints.Alphabet, lower) {
 		m.exitHintMode()

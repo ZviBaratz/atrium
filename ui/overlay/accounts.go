@@ -7,9 +7,9 @@ import (
 	"github.com/ZviBaratz/atrium/config"
 	"github.com/ZviBaratz/atrium/ui/theme"
 
-	"github.com/charmbracelet/bubbles/textinput"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/bubbles/v2/textinput"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/muesli/reflow/truncate"
 )
 
@@ -172,7 +172,7 @@ func (o *AccountsOverlay) moveAccount(delta int) bool {
 
 // HandleKeyPress routes a key to the active mode and reports whether the overlay
 // should close and whether the config was mutated (the app persists on dirty).
-func (o *AccountsOverlay) HandleKeyPress(msg tea.KeyMsg) (closed bool, dirty bool) {
+func (o *AccountsOverlay) HandleKeyPress(msg tea.KeyPressMsg) (closed bool, dirty bool) {
 	switch o.mode {
 	case modeEdit:
 		return o.handleEditKey(msg)
@@ -185,7 +185,7 @@ func (o *AccountsOverlay) HandleKeyPress(msg tea.KeyMsg) (closed bool, dirty boo
 	}
 }
 
-func (o *AccountsOverlay) handleListKey(msg tea.KeyMsg) (closed bool, dirty bool) {
+func (o *AccountsOverlay) handleListKey(msg tea.KeyPressMsg) (closed bool, dirty bool) {
 	switch msg.String() {
 	case "esc", "ctrl+c":
 		return true, false
@@ -264,7 +264,7 @@ func (o *AccountsOverlay) openForm(index int) {
 	o.mode = modeEdit
 }
 
-func (o *AccountsOverlay) handleEditKey(msg tea.KeyMsg) (closed bool, dirty bool) {
+func (o *AccountsOverlay) handleEditKey(msg tea.KeyPressMsg) (closed bool, dirty bool) {
 	if !o.form.HandleKeyPress(msg) {
 		return false, false
 	}
@@ -381,7 +381,7 @@ func (o *AccountsOverlay) commit() {
 	}
 }
 
-func (o *AccountsOverlay) handleConfirmKey(msg tea.KeyMsg) (closed bool, dirty bool) {
+func (o *AccountsOverlay) handleConfirmKey(msg tea.KeyPressMsg) (closed bool, dirty bool) {
 	switch msg.String() {
 	case "y", "enter":
 		switch o.tab {
@@ -405,7 +405,7 @@ func (o *AccountsOverlay) handleConfirmKey(msg tea.KeyMsg) (closed bool, dirty b
 	return false, false
 }
 
-func (o *AccountsOverlay) handlePreviewKey(msg tea.KeyMsg) (closed bool, dirty bool) {
+func (o *AccountsOverlay) handlePreviewKey(msg tea.KeyPressMsg) (closed bool, dirty bool) {
 	switch msg.String() {
 	case "esc", "ctrl+c":
 		o.previewInputs = nil
@@ -525,7 +525,8 @@ func (o *AccountsOverlay) Render() string {
 		Border(t.Borders.Style).
 		BorderForeground(t.Palette.Accent).
 		Padding(1, 2).
-		Width(o.boxWidth())
+		// +2 for the left/right border — v2 counts it inside Width. See theme.Panel.
+		Width(o.boxWidth() + 2)
 	var body string
 	switch o.mode {
 	case modeEdit:

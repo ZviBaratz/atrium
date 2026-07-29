@@ -5,9 +5,9 @@ import (
 	"strings"
 	"testing"
 
+	tea "charm.land/bubbletea/v2"
 	"github.com/ZviBaratz/atrium/config"
 	"github.com/ZviBaratz/atrium/ui/overlay"
-	tea "github.com/charmbracelet/bubbletea"
 	"github.com/muesli/ansi"
 )
 
@@ -73,7 +73,7 @@ func TestViewFitsTerminalBounds(t *testing.T) {
 			arm(t, home)
 			home.updateHandleWindowSizeEvent(tea.WindowSizeMsg{Width: w, Height: h})
 
-			lines := strings.Split(home.View(), "\n")
+			lines := strings.Split(home.View().Content, "\n")
 
 			if len(lines) > h {
 				t.Errorf("overlay=%s size=%dx%d: View() emitted %d lines, exceeds height %d",

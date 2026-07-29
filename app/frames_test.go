@@ -16,8 +16,8 @@ import (
 	"github.com/ZviBaratz/atrium/session/tmux"
 	"github.com/ZviBaratz/atrium/ui"
 
-	"github.com/charmbracelet/bubbles/spinner"
-	tea "github.com/charmbracelet/bubbletea"
+	"charm.land/bubbles/v2/spinner"
+	tea "charm.land/bubbletea/v2"
 	"github.com/stretchr/testify/require"
 )
 
@@ -280,7 +280,7 @@ func TestUpdateLoopSurvivesAWedgedCapture(t *testing.T) {
 	h.Update(previewTickMsg{})
 	h.Update(keyMsg("tab"))
 	require.Equal(t, ui.DiffTab, h.tabbedWindow.GetActiveTab(), "input must still be handled")
-	require.NotEmpty(t, h.View(), "the app must still render while a capture is wedged")
+	require.NotEmpty(t, h.View().Content, "the app must still render while a capture is wedged")
 
 	select {
 	case <-captured:
@@ -386,7 +386,7 @@ func TestTickPaths_LaunchNoSubprocessOnTheUpdateThread(t *testing.T) {
 
 				before := spy.count()
 				h.Update(c.msg(inst))
-				h.View()
+				_ = h.View()
 				require.Equal(t, before, spy.count(),
 					"%s on the %s tab shelled out on the update thread: %v",
 					c.name, tab.name, spy.seen()[before:])

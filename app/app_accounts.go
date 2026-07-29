@@ -4,7 +4,7 @@ import (
 	"github.com/ZviBaratz/atrium/config"
 	"github.com/ZviBaratz/atrium/log"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 )
 
 // handleAccountsState routes a key to the accounts overlay, persists on change, and
@@ -13,7 +13,7 @@ import (
 // its account LABELS are: an edit here re-derives the badge and cluster of every
 // open session from that dir, so a rename lands immediately instead of splitting the
 // account across two group headers until the next launch (#470).
-func (m *home) handleAccountsState(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m *home) handleAccountsState(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	closed, dirty := m.accountsOverlay.HandleKeyPress(msg)
 	if dirty {
 		if err := config.SaveConfig(m.appConfig); err != nil {
@@ -32,7 +32,7 @@ func (m *home) handleAccountsState(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.accountsOverlay = nil
 		m.state = stateDefault
 		m.recomputeLayout()
-		return m, tea.Batch(m.flushAccountNotice(), tea.WindowSize())
+		return m, tea.Batch(m.flushAccountNotice(), tea.RequestWindowSize)
 	}
 	return m, nil
 }

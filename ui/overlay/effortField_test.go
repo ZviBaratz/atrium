@@ -3,7 +3,7 @@ package overlay
 import (
 	"testing"
 
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/lipgloss/v2"
 )
 
 // claudeFieldInnerWidth is the content width the create-form overlay has at the

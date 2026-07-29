@@ -3,10 +3,10 @@ package app
 import (
 	"fmt"
 
+	tea "charm.land/bubbletea/v2"
 	"github.com/ZviBaratz/atrium/config"
 	"github.com/ZviBaratz/atrium/ui"
 	"github.com/ZviBaratz/atrium/ui/overlay"
-	tea "github.com/charmbracelet/bubbletea"
 )
 
 // capOutcome is what a creation attempt should do under the effective session cap.
