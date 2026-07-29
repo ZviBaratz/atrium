@@ -250,6 +250,25 @@ func (s *SettingsOverlay) HandleKeyPress(msg tea.KeyPressMsg) (closed bool, chan
 	}
 }
 
+// HandlePaste inserts pasted text into whichever surface HandleKeyPress would be
+// typing into, following the same grammar and stopping at the same place: the row
+// list, the rail and the help view take no text, so a paste there is inert rather
+// than being read as the keys its characters spell. It reports no changed key —
+// like typing, a paste edits a buffer, and only enter commits it.
+func (s *SettingsOverlay) HandlePaste(msg tea.PasteMsg) {
+	switch {
+	case s.editing:
+		s.input, _ = s.input.Update(msg)
+	case s.profileForm != nil:
+		f := s.profileForm
+		f.inputs[f.focus], _ = f.inputs[f.focus].Update(msg)
+	case s.searching():
+		if _, filterChanged := s.search.handlePaste(msg.Content); filterChanged {
+			s.syncCursorToSearch()
+		}
+	}
+}
+
 // handleEditKey routes keys while the inline editor is open: enter commits
 // (staying in edit mode on a validation error so the value can be fixed), esc
 // abandons the edit, and everything else goes to the text input.

@@ -100,6 +100,19 @@ func (f *accountForm) applyFocus() {
 // HandleKeyPress edits the focused field; returns true when the form is done
 // (submitted or canceled). While the directory picker is open (f.picker != nil),
 // key presses are routed to it instead and the form itself never finishes.
+// HandlePaste inserts pasted text into the focused field, or into the config-dir
+// picker's filter when it is open. It never reports done: the key switch maps
+// "enter" to submit and "esc" to cancel, so a routed paste of either word would
+// commit or discard the record instead of typing it. A config dir is a path, and a
+// path is the thing users paste.
+func (f *accountForm) HandlePaste(msg tea.PasteMsg) {
+	if f.picker != nil {
+		f.picker.HandlePaste(msg.Content)
+		return
+	}
+	f.inputs[f.focus], _ = f.inputs[f.focus].Update(msg)
+}
+
 func (f *accountForm) HandleKeyPress(msg tea.KeyPressMsg) (done bool) {
 	if f.picker != nil {
 		switch msg.String() {

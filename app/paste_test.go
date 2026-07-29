@@ -16,9 +16,10 @@ import (
 // compile because nothing had ever named v1's Paste flag. These pin the routing
 // that puts it back.
 //
-// They assert through home.Update (not pasteAsKey directly) because the defect
-// was never in the conversion — it was that no case in Update matched a paste at
-// all.
+// They assert through home.Update rather than any conversion helper because the
+// defect was that no case in Update matched a paste at all — and because routing,
+// not formatting, is where the second defect class lives too: see
+// paste_safety_test.go for the commands a paste must never be mistaken for.
 
 // focusPromptField tabs to the multi-line prompt, which is where the reported
 // paste failed. PromptFocusedAndEmpty is true only on the textarea stop, so it
@@ -70,32 +71,42 @@ func TestPasteAppendsToTheSessionFilter(t *testing.T) {
 		"a paste must extend the filter query the way typing does")
 }
 
-// TestPasteCarriesItsFirstRuneAsTheKeyCode pins the detail that keeps paste
-// behaving as it did outside a text field: msg.String() spoke for Runes[0] under
-// v1, and dispatch is keyed on String(), so the synthesized key needs a Code.
-func TestPasteCarriesItsFirstRuneAsTheKeyCode(t *testing.T) {
-	key := pasteAsKey(tea.PasteMsg{Content: "hello"})
-	require.Equal(t, "hello", key.Text)
-	require.Equal(t, 'h', key.Code, "Code must carry the first rune, as v1's Runes[0] did")
+// TestPasteIsInertWhereNoTextCanLand pins the other half of the routing: paste is
+// enumerated per state, so a state with no text surface must ignore it outright
+// rather than fall back to interpreting the characters as keys.
+//
+// The bound single characters are the ones that matter. A word like "hello" is
+// safe by accident — no binding is five characters long — so a test that only
+// pasted prose would pass against a dispatch that happily quit on "q".
+func TestPasteIsInertWhereNoTextCanLand(t *testing.T) {
+	for name, content := range map[string]string{
+		"a bound character":   "q",
+		"another bound one":   "n",
+		"a bound punctuation": "?",
+		"ordinary prose":      "hello",
+	} {
+		t.Run(name, func(t *testing.T) {
+			h := newCreateFormHome(t)
+			h.state = stateDefault
 
-	// The safety property this buys: dispatch is keyed on String(), and a
-	// multi-character paste stringifies to the whole text, so it matches no
-	// binding. Pasting "quit now" outside a text field does nothing rather than
-	// finding whatever "q" is bound to.
-	require.Equal(t, "hello", key.String())
-	_, bound := keys.GlobalKeyStringsMap[key.String()]
-	require.False(t, bound, "a multi-character paste must not resolve to a keybinding")
+			_, cmd := h.Update(tea.PasteMsg{Content: content})
 
-	// An empty paste must not fabricate a keystroke.
-	empty := pasteAsKey(tea.PasteMsg{Content: ""})
-	require.Zero(t, empty.Code)
-	require.Empty(t, empty.Text)
+			require.Nil(t, cmd, "a paste in the list must produce no command")
+			require.Equal(t, stateDefault, h.state, "a paste in the list must not change state")
+			// Every one of these is a live binding: the assertion above is only
+			// meaningful because dispatch would otherwise have had something to find.
+			if content != "hello" {
+				_, bound := keys.GlobalKeyStringsMap[content]
+				require.True(t, bound, "%q must be a real binding for this test to bite", content)
+			}
+		})
+	}
 }
 
-// TestPasteOfMultiLineTextKeepsEveryLine guards the case a synthesized keypress
-// could plausibly mangle: the textarea inserts a key's Text through
-// insertRunesFromUserInput, the same call its own paste path uses, so newlines
-// must survive rather than being swallowed or collapsing the field.
+// TestPasteOfMultiLineTextKeepsEveryLine guards the case most easily mangled in
+// transit: the overlay hands the real tea.PasteMsg to the bubbles textarea, whose
+// native paste case inserts it through insertRunesFromUserInput, so newlines must
+// survive rather than being swallowed or collapsing the field.
 func TestPasteOfMultiLineTextKeepsEveryLine(t *testing.T) {
 	h := newCreateFormHome(t)
 	h.newSessionPath = t.TempDir()

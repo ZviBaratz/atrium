@@ -86,6 +86,17 @@ func (r *RenameOverlay) HandleKeyPress(msg tea.KeyPressMsg) bool {
 	}
 }
 
+// HandlePaste inserts pasted text into the focused field. It never closes the
+// overlay: the key switch reads msg.String(), so a routed paste of "enter" would
+// submit the rename and one of "esc" would cancel it — a paste is text.
+func (r *RenameOverlay) HandlePaste(msg tea.PasteMsg) {
+	if r.focusNote {
+		r.note, _ = r.note.Update(msg)
+		return
+	}
+	r.name, _ = r.name.Update(msg)
+}
+
 // IsDeep reports whether the user chose a deep rename (branch + worktree + tmux).
 func (r *RenameOverlay) IsDeep() bool { return r.deep }
 

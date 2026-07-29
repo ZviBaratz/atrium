@@ -124,6 +124,14 @@ func (dp *DirectoryPicker) HandleKeyPress(msg tea.KeyPressMsg) (consumed bool, s
 	return consumed, filterChanged || cursorMoved
 }
 
+// HandlePaste appends pasted text to the filter and reports whether the selection
+// changed, mirroring HandleKeyPress. Pasting a path is the reason this exists: a
+// copied path is exactly what a user drops into the project field.
+func (dp *DirectoryPicker) HandlePaste(text string) (consumed bool, selectionChanged bool) {
+	consumed, filterChanged := dp.handlePaste(text)
+	return consumed, filterChanged
+}
+
 // looksLikePath reports whether the filter should be treated as a path to enter
 // rather than a fragment to match against the candidates.
 func looksLikePath(s string) bool {

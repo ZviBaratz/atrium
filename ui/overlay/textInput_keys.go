@@ -6,6 +6,38 @@ import (
 	tea "charm.land/bubbletea/v2"
 )
 
+// HandlePaste inserts pasted text into the focused field. Returns
+// branchFilterChanged so the app schedules the same debounced branch search a
+// typed edit schedules.
+//
+// It mirrors HandleKeyPress's default branch and nothing else, which is the whole
+// point: the cases above that branch are commands, and a paste must never reach
+// them. Routing a paste through HandleKeyPress instead would make a clipboard
+// holding the word "esc" cancel the form and discard the draft, because the switch
+// is keyed on msg.String() and v2's String() returns the pasted text verbatim.
+//
+// The textarea and title input get the real tea.PasteMsg: both bubbles models
+// handle it natively via insertRunesFromUserInput, which keeps newlines intact.
+// The selection fields (variant, model, mode, effort, account) take no text, so a
+// paste there is inert — as is a paste on the Create button.
+func (t *TextInputOverlay) HandlePaste(msg tea.PasteMsg) (branchFilterChanged bool) {
+	// A paste is not the second half of a double-tap: it disarms the clear gesture
+	// exactly as any other non-Ctrl+R input does.
+	t.clearArmed = false
+
+	switch {
+	case t.isTitle():
+		t.titleInput, _ = t.titleInput.Update(msg)
+	case t.isTextarea():
+		t.textarea, _ = t.textarea.Update(msg)
+	case t.isDirectoryPicker():
+		t.directoryPicker.HandlePaste(msg.Content)
+	case t.isBranchPicker():
+		_, branchFilterChanged = t.branchPicker.HandlePaste(msg.Content)
+	}
+	return branchFilterChanged
+}
+
 // HandleKeyPress processes a key press and updates the state accordingly.
 // Returns (shouldClose, branchFilterChanged).
 func (t *TextInputOverlay) HandleKeyPress(msg tea.KeyPressMsg) (bool, bool) {

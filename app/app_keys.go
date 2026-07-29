@@ -158,6 +158,15 @@ func (m *home) handlePromptState(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, m.openCreateForm(true)
 	}
 
+	return m.afterPromptEdit(prevTitle, branchFilterChanged)
+}
+
+// afterPromptEdit runs the follow-up work an edit to the create form implies:
+// re-scoping to a newly picked repo, the debounced branch search, and the title's
+// duplicate verdict. It is shared by the key and paste paths because the follow-up
+// is owed to the *edit*, not to how the characters arrived — a pasted title needs
+// its duplicate check as much as a typed one does.
+func (m *home) afterPromptEdit(prevTitle string, branchFilterChanged bool) (tea.Model, tea.Cmd) {
 	// If the target directory changed in the picker, re-scope the form to the
 	// new repo (branch search + async target-state re-check; see
 	// retargetNewSession for why the check is debounced and async).
@@ -172,8 +181,8 @@ func (m *home) handlePromptState(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, m.scheduleBranchSearch(filter, version)
 	}
 
-	// A keystroke that edited the title refreshes the inline duplicate verdict
-	// (in-memory, instant) and schedules the async branch-existence check.
+	// An edit to the title refreshes the inline duplicate verdict (in-memory,
+	// instant) and schedules the async branch-existence check.
 	if m.textInputOverlay.IsCreateForm() {
 		if title := m.textInputOverlay.GetTitle(); title != prevTitle {
 			m.titleBranchExists = false // the old verdict was for the old title

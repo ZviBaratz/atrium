@@ -185,6 +185,17 @@ func (o *AccountsOverlay) HandleKeyPress(msg tea.KeyPressMsg) (closed bool, dirt
 	}
 }
 
+// HandlePaste inserts pasted text into the record form, the only mode that takes
+// text. The list, the delete confirmation and the preview are keyboard surfaces:
+// a paste there is inert rather than being read as the keys its characters spell —
+// "esc" in the list would close the panel, and in the confirmation the wrong
+// character would answer a delete prompt.
+func (o *AccountsOverlay) HandlePaste(msg tea.PasteMsg) {
+	if o.mode == modeEdit && o.form != nil {
+		o.form.HandlePaste(msg)
+	}
+}
+
 func (o *AccountsOverlay) handleListKey(msg tea.KeyPressMsg) (closed bool, dirty bool) {
 	switch msg.String() {
 	case "esc", "ctrl+c":

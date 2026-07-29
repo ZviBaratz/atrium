@@ -118,6 +118,23 @@ func (p *Picker) handleKey(msg tea.KeyPressMsg, itemCount int) (consumed, filter
 	return false, false, false
 }
 
+// handlePaste appends pasted text to the filter. It is deliberately not routed
+// through handleKey: that switch reads msg.Code to recognise the named keys, and
+// a paste has no single code to speak for it — the first rune of " foo" is
+// KeySpace, which appended one space and dropped the rest. Text is the whole
+// clipboard or nothing. It reports the same (consumed, filterChanged) pair the
+// key path does, so callers react to a paste exactly as they do to typing.
+func (p *Picker) handlePaste(text string) (consumed, filterChanged bool) {
+	if text == "" {
+		// Not an edit: onEdit resets a sync picker's cursor, so reporting a no-op
+		// paste as a change would move the selection for nothing.
+		return true, false
+	}
+	p.filter += text
+	p.onEdit()
+	return true, true
+}
+
 // onEdit applies the source-specific reaction to a filter edit: an async picker
 // bumps its version (so in-flight results are rejected on arrival); a sync picker
 // resets the cursor to the top of its freshly re-ranked list.
