@@ -110,7 +110,7 @@ func (l *List) distinctAccountCount() int {
 // per-row state glyphs — are hidden) the non-zero counts are appended as badges ("◆N" in the
 // attention color, "●N" in the success color) so the group still signals what wants the user
 // without being expanded.
-func (l *List) renderRepoHeader(key string, collapsed bool, count, needsInput, unread int, selected, foldable bool, accent lipgloss.TerminalColor) string {
+func (l *List) renderRepoHeader(key string, collapsed bool, count, needsInput, unread int, selected, foldable bool, accent theme.AnyColor) string {
 	th := theme.Current()
 	g := th.Glyphs
 	name := strings.ToUpper(key)

@@ -116,7 +116,7 @@ func fmtPendingElapsed(t time.Time) string {
 // the leading status gutter. Running/Loading use the animated spinner frame;
 // the others use theme glyphs. The state word is intentionally not returned —
 // the color-coded glyph carries the signal on its own.
-func (r *InstanceRenderer) stateGlyph(i *session.Instance, th *theme.Theme) (glyph string, color lipgloss.Color) {
+func (r *InstanceRenderer) stateGlyph(i *session.Instance, th *theme.Theme) (glyph string, color theme.Color) {
 	switch i.GetStatus() {
 	case session.Running, session.Loading:
 		return r.spinner.View(), th.Palette.Working
@@ -446,7 +446,7 @@ func (l *List) String() string {
 			headerSelected := collapsed && l.selectedIdx == start
 			ni := l.groupNeedsInputCount(start, end)
 			ur := l.groupUnreadCount(start, end)
-			var accent lipgloss.TerminalColor
+			var accent theme.AnyColor
 			if accountGroupingVisible {
 				anchor := l.items[start]
 				if anchor.ClaudeAccountName() != "" && !anchor.ClaudeAccountIsDefault() {

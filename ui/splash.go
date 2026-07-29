@@ -116,11 +116,11 @@ func splashScene(width, height, frame int, message string) string {
 // is the whole of Atrium's coupling to the splash engine.
 func splashPalette(pal theme.Palette) fresco.Palette {
 	return fresco.Palette{
-		A0:        string(pal.Danger),
-		A1:        string(pal.Purple),
-		A2:        string(pal.Accent),
-		A3:        string(pal.Cyan),
-		Highlight: string(pal.Fg),
+		A0:        theme.Hex(pal.Danger),
+		A1:        theme.Hex(pal.Purple),
+		A2:        theme.Hex(pal.Accent),
+		A3:        theme.Hex(pal.Cyan),
+		Highlight: theme.Hex(pal.Fg),
 	}
 }
 

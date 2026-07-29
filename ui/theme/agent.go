@@ -21,14 +21,14 @@ var agentGlyphs = map[string]string{
 // agentColors carries the brand accents that identify an agent at a glance.
 // They are brand colors, not palette colors, so they are theme-independent;
 // agents without a strong brand accent ride the theme foreground instead.
-var agentColors = map[string]lipgloss.Color{
+var agentColors = map[string]Color{
 	"claude": lipgloss.Color("#d97757"),
 	"gemini": lipgloss.Color("#4285f4"),
 }
 
 // AgentGlyph returns the identity glyph and color for an agent key (unknown
 // keys get the neutral generic marker). Key is string(agent.Resolve(p).Key).
-func (t *Theme) AgentGlyph(key string) (string, lipgloss.Color) {
+func (t *Theme) AgentGlyph(key string) (string, Color) {
 	g, ok := agentGlyphs[key]
 	if !ok {
 		key, g = "generic", agentGlyphs["generic"]

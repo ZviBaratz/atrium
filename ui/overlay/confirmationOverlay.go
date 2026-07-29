@@ -29,7 +29,7 @@ type ConfirmationOverlay struct {
 	// generic "confirm" in the key hint. Empty keeps "confirm" — see SetConfirmLabel.
 	confirmLabel string
 	// Custom styling options
-	borderColor lipgloss.Color
+	borderColor theme.Color
 }
 
 // NewConfirmationOverlay creates a new confirmation dialog overlay with the given
@@ -102,13 +102,13 @@ func (c *ConfirmationOverlay) SetWidth(width int) {
 }
 
 // SetBorderColor sets the border color of the confirmation overlay
-func (c *ConfirmationOverlay) SetBorderColor(color lipgloss.Color) {
+func (c *ConfirmationOverlay) SetBorderColor(color theme.Color) {
 	c.borderColor = color
 }
 
 // BorderColor returns the overlay's current border color (accent by default,
 // danger after SetBorderColor on a destructive confirmation).
-func (c *ConfirmationOverlay) BorderColor() lipgloss.Color {
+func (c *ConfirmationOverlay) BorderColor() theme.Color {
 	return c.borderColor
 }
 

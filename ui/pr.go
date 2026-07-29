@@ -3,15 +3,13 @@ package ui
 import (
 	"github.com/ZviBaratz/atrium/session/git"
 	"github.com/ZviBaratz/atrium/ui/theme"
-
-	"github.com/charmbracelet/lipgloss"
 )
 
 // prBadgeColor picks the list-row PR badge color by the most urgent signal, so a
 // glance at the row tells you whether the PR needs action. It deliberately does
 // not use Palette.Attention (reserved for the waiting/behind state) — a PR
 // awaiting review is a neutral, not an attention, state.
-func prBadgeColor(th *theme.Theme, pr *git.PRStatus) lipgloss.Color {
+func prBadgeColor(th *theme.Theme, pr *git.PRStatus) theme.Color {
 	switch {
 	case pr.State == "MERGED":
 		return th.Palette.Purple
