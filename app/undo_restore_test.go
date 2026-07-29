@@ -14,6 +14,7 @@ import (
 	"github.com/ZviBaratz/atrium/session"
 	"github.com/ZviBaratz/atrium/session/git"
 	"github.com/ZviBaratz/atrium/session/tmux"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -385,6 +386,45 @@ func TestASuccessfulRestoreReleasesTheRetainedBranch(t *testing.T) {
 		"the retained branch must be released with the record, or nothing can ever release it")
 }
 
+// TestHandleUndoDoneFlashesEverythingTheRestoreOwesTheUser. The notice builders are
+// pure and separately pinned; this is the wire between them and the screen, and it
+// is the only thing that makes README's promise ("the notice after the restore says
+// so") true. Both clauses are invisible in the default case — a whole restore says
+// nothing extra — so each one here could be dropped, or its count replaced with a
+// literal 0, with every other test in this file still green.
+func TestHandleUndoDoneFlashesEverythingTheRestoreOwesTheUser(t *testing.T) {
+	entry, repo := retainedRepo(t, "fix-auth")
+	entry.Dirty, entry.Committed = true, false // the teardown could not save the tree
+	h := undoHome(t)
+	h.ctx = context.Background()
+	storage, err := session.NewStorage(config.DefaultState())
+	require.NoError(t, err)
+	h.storage = storage
+
+	// The conversation outcome is written only by a real relaunch, so an instance a
+	// test can build reports "unknown" and the clause would never appear. Inject the
+	// one answer that makes it appear; see countFreshAgents.
+	live := countFreshAgents
+	countFreshAgents = func([]*session.Instance) int { return 1 }
+	t.Cleanup(func() { countFreshAgents = live })
+
+	inst, err := session.NewInstance(session.InstanceOptions{
+		Title: "fix-auth", Path: repo, Program: "sleep 300",
+	})
+	require.NoError(t, err)
+
+	h.handleUndoDone(undoDoneMsg{
+		instances: []*session.Instance{inst},
+		entries:   []undo.Entry{entry},
+	})
+
+	assert.Equal(t,
+		"restored 'fix-auth' — uncommitted changes could not be saved and are gone;"+
+			" no conversation to resume, so its agent started fresh",
+		h.menu.NoticeText(),
+		"the restore has to report both losses where the user is looking")
+}
+
 // TestAFailedPersistKeepsTheRestoreOnOffer. Rows and branches exist but nothing is
 // on disk, so the record has to survive: retiring it there would leave the user
 // with an error message and no second attempt.
@@ -508,8 +548,33 @@ func TestRestoredNoticeCountsFreshAgentsAcrossABatch(t *testing.T) {
 
 	assert.Equal(t, "restored 3 sessions", restoredNotice(three, clean, 0))
 	assert.Equal(t,
-		"restored 3 sessions — 1 came back with a fresh agent (no conversation to resume)",
+		"restored 3 sessions — 1 came back without their conversation",
 		restoredNotice(three, clean, 1))
+}
+
+// TestRestoredNoticeFitsTheNoticeRow. The hint bar truncates a notice rather than
+// wrapping it (ui.Menu, so feedback never reflows the panes), and it truncates from
+// the right — which is where every clause here lives. A clause that overflows the
+// default 80-column terminal therefore loses exactly the news it exists to carry,
+// while the "restored …" half that carries none survives. 80 minus the row's own
+// two columns of padding is the budget.
+func TestRestoredNoticeFitsTheNoticeRow(t *testing.T) {
+	const budget = 80 - 2
+	one := []*session.Instance{{Title: "fix-auth"}}
+	ten := make([]*session.Instance, 10)
+	for i := range ten {
+		ten[i] = &session.Instance{Title: "s"}
+	}
+	tenClean := make([]undo.Entry, 10)
+
+	for _, notice := range []string{
+		restoredNotice(one, []undo.Entry{{Dirty: true, Committed: false}}, 0),
+		restoredNotice(one, []undo.Entry{{}}, 1),
+		restoredNotice(ten, tenClean, 10),
+	} {
+		assert.LessOrEqual(t, lipgloss.Width(notice), budget,
+			"a notice wider than the row loses its last clause to the ellipsis: %q", notice)
+	}
 }
 
 // TestCountFreshAgentsIgnoresWhatItCannotKnow. "Unknown" and "started fresh" are

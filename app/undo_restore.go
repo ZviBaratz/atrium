@@ -348,8 +348,12 @@ func restoredNotice(instances []*session.Instance, entries []undo.Entry, freshAg
 		if single {
 			clauses = append(clauses, "no conversation to resume, so its agent started fresh")
 		} else {
+			// Shorter than the single-session wording on purpose: the batch base is
+			// longer, and the notice row truncates rather than wraps (ui.Menu), so a
+			// clause that overflows an 80-column terminal loses exactly the part that
+			// carries the news. TestRestoredNoticeFitsTheNoticeRow pins the budget.
 			clauses = append(clauses, fmt.Sprintf(
-				"%d came back with a fresh agent (no conversation to resume)", freshAgents))
+				"%d came back without their conversation", freshAgents))
 		}
 	}
 	if len(clauses) == 0 {
@@ -373,7 +377,13 @@ func restoredNotice(instances []*session.Instance, entries []undo.Entry, freshAg
 // instance reporting "unknown" for any other reason has told us nothing — counting
 // either as fresh would announce a loss on the strength of not having checked,
 // which is the same coin-flip-printed-as-fact the confirmation copy refuses.
-func countFreshAgents(instances []*session.Instance) int {
+//
+// A package-level var — the repo's existing seam idiom (worktreeCleanup,
+// checkGHCLI) — because the fields it reads are written only by a real relaunch,
+// so it returns 0 for every instance a test can build by hand. Without something
+// to inject, nothing could prove handleUndoDone passes this count rather than a
+// literal 0, and the clause it feeds could be switched off with the suite green.
+var countFreshAgents = func(instances []*session.Instance) int {
 	fresh := 0
 	for _, inst := range instances {
 		if resumed, known := inst.ResumedConversation(); known && !resumed {
