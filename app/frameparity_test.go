@@ -174,6 +174,22 @@ func newParityHome(t *testing.T, fs frameState, w, h int) *home {
 	m.spinner = spinner.New()
 	m.lostStrikes = map[*session.Instance]int{}
 
+	// Pin the session cap, because an unset max_sessions is HOST-DERIVED: the
+	// settings panel renders config.DefaultSessionCap(), which is
+	// max(2, hardware_threads/2) — "auto (4)" on an 8-thread dev box and
+	// "auto (2)" on a 2-thread CI runner. A golden carrying that number is
+	// machine-specific, which is how this first reached CI red while green
+	// locally. Reproduce with `taskset -c 0,1 go test ./app/ -run TestFrameParity`.
+	//
+	// Pinning the config rather than the thread count is deliberate: config's
+	// cpuCount seam is package-private and reaching it would mean widening config's
+	// public API for a test in another package. The cost is that this golden shows
+	// an explicit cap where a default install shows "auto (N)" — a difference the
+	// renderer cannot see (both are just a string in a row), and the "auto (N)"
+	// display shape has its own coverage in ui/overlay's settings tests.
+	sessionCap := 4
+	m.appConfig.MaxSessions = &sessionCap
+
 	dir := filepath.Join(t.TempDir(), "fixture")
 	require.NoError(t, os.MkdirAll(dir, 0o755))
 

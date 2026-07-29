@@ -4,7 +4,7 @@
 │  Settings                                                                    │
 │                                                                              │
 │    All settings      │ ▎  Default program        ‹ claude ›    new sessions  │
-│  ▎ Sessions          │    Session limit          auto (4)              live  │
+│  ▎ Sessions          │  • Session limit          4                     live  │
 │    Worktrees & git   │    Attach on create       [x] on                live  │
 │    Appearance        │    In-session status bar  [x] on        new sessions  │
 │    Session list      │                                                       │
@@ -29,7 +29,7 @@
 │▎○ parity │  Settings                                                                                      │──────────┤
 │▎         │                                                                                                │          │
 │          │    All settings      │ ▎  Default program        ‹ claude ›                      new sessions  │          │
-│          │  ▎ Sessions          │    Session limit          auto (4)                                live  │          │
+│          │  ▎ Sessions          │  • Session limit          4                                       live  │          │
 │          │    Worktrees & git   │    Attach on create       [x] on                                  live  │          │
 │          │    Appearance        │    In-session status bar  [x] on                          new sessions  │          │
 │          │    Session list      │                                                                         │          │
