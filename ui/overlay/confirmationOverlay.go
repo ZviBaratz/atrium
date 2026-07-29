@@ -66,7 +66,7 @@ func (c *ConfirmationOverlay) HandleKeyPress(msg tea.KeyMsg) bool {
 }
 
 // Render renders the confirmation overlay
-func (c *ConfirmationOverlay) Render(opts ...WhitespaceOption) string {
+func (c *ConfirmationOverlay) Render() string {
 	style := lipgloss.NewStyle().
 		Border(theme.Current().Borders.Style).
 		BorderForeground(c.borderColor).

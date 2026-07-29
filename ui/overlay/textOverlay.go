@@ -90,7 +90,7 @@ func (t *TextOverlay) ScrollBy(delta int) {
 }
 
 // Render renders the text overlay
-func (t *TextOverlay) Render(opts ...WhitespaceOption) string {
+func (t *TextOverlay) Render() string {
 	lines, budget, scrollable := t.window()
 
 	body := lines

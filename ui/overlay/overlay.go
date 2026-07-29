@@ -12,13 +12,9 @@ import (
 	"github.com/ZviBaratz/atrium/ui/theme"
 
 	xansi "github.com/charmbracelet/x/ansi"
-	"github.com/muesli/termenv"
 )
 
 // Most of this code is modified from https://github.com/charmbracelet/lipgloss/pull/102
-
-// WhitespaceOption sets a styling rule for rendering whitespace.
-type WhitespaceOption func(*whitespace)
 
 // Split a string into lines, additionally returning the size of the widest
 // line.
@@ -94,7 +90,6 @@ func PlaceOverlay(
 	x, y int,
 	fg, bg string,
 	center bool,
-	opts ...WhitespaceOption,
 ) string {
 	fgLines, fgWidth := getLines(fg)
 	bgLines, bgWidth := getLines(bg)
@@ -138,11 +133,7 @@ func PlaceOverlay(
 	placeX = clamp(placeX, 0, max(0, bgWidth-fgWidth))
 	placeY = clamp(placeY, 0, max(0, bgHeight-fgHeight))
 
-	// Apply whitespace options
 	ws := &whitespace{}
-	for _, opt := range opts {
-		opt(ws)
-	}
 
 	// Build the output string
 	var b strings.Builder
@@ -187,7 +178,6 @@ func clamp(v, lower, upper int) int {
 }
 
 type whitespace struct {
-	style termenv.Style
 	chars string
 }
 
@@ -218,5 +208,5 @@ func (w whitespace) render(width int) string {
 		b.WriteString(strings.Repeat(" ", short))
 	}
 
-	return w.style.Styled(b.String())
+	return b.String()
 }

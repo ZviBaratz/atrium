@@ -60,3 +60,38 @@ func TestFade_FollowsActiveTheme(t *testing.T) {
 		t.Errorf("tokyo-night fade missing %q", want)
 	}
 }
+
+// TestFade_PreservesResetsInEitherSpelling states the fade's contract about
+// resets in a form that survives the Lip Gloss v2 migration (#393).
+//
+// The sibling tests above assert exact bytes, including that "\x1b[0m" appears in
+// the output. That is true of Lip Gloss v1's output and will stop being true:
+// measured against lipgloss v2.0.5, a rendered style terminates with the implicit
+// reset "\x1b[m" — an empty parameter — not "\x1b[0m". Colour sequences are
+// unaffected (v2 emits the same semicolon-separated "38;2;R;G;B" and "38;5;N"
+// forms the fade's regexes already match), so this is the one shape that moves.
+//
+// The fade happens to handle both already, and for a reason worth pinning rather
+// than rediscovering: simpleColorRegex requires at least one digit, so "\x1b[m"
+// never matches it and is passed through untouched, while "\x1b[0m" matches and is
+// preserved by the explicit reset guard. Two different mechanisms, one behaviour.
+// This asserts the behaviour, so whichever spelling the renderer emits after the
+// cut, a background reset still reaches the terminal — and the byte-exact tests
+// above can be re-baselined without leaving the contract unguarded.
+func TestFade_PreservesResetsInEitherSpelling(t *testing.T) {
+	orig := theme.Current().Name
+	t.Cleanup(func() { theme.Set(orig) })
+	theme.Set("tokyo-night")
+
+	for _, reset := range []string{"\x1b[0m", "\x1b[m"} {
+		bg := "\x1b[31mcoloured" + reset + "\n" + strings.Repeat("x", 12)
+		out := PlaceOverlay(0, 0, "F", bg, false)
+
+		if !strings.Contains(out, reset) {
+			t.Errorf("fade dropped the reset %q — background styling would bleed past its span", reset)
+		}
+		if strings.Contains(out, "\x1b[31m") {
+			t.Errorf("fade left the pre-fade colour in place alongside reset %q", reset)
+		}
+	}
+}
