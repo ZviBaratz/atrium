@@ -4,7 +4,6 @@ import (
 	"testing"
 
 	"github.com/ZviBaratz/atrium/session"
-	"github.com/ZviBaratz/atrium/ui/overlay"
 
 	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
@@ -48,66 +47,7 @@ func newSmokeHome(t *testing.T, st state, wire func(h *home, inst *session.Insta
 // State-routed *key* handling is covered per-feature elsewhere; this guards the
 // cross-product that those targeted tests don't.
 func TestStateMachine_BackgroundMessagesNeverPanic(t *testing.T) {
-	states := []struct {
-		name string
-		st   state
-		wire func(h *home, inst *session.Instance)
-	}{
-		{"default", stateDefault, nil},
-		{"prompt", statePrompt, func(h *home, _ *session.Instance) {
-			h.textInputOverlay = overlay.NewSessionCreateOverlay(
-				h.appConfig.GetProfiles(), h.appConfig.ClaudeAccounts, nil, h.program)
-		}},
-		{"help", stateHelp, func(h *home, _ *session.Instance) {
-			h.textOverlay = overlay.NewTextOverlay("help")
-		}},
-		{"info", stateInfo, func(h *home, _ *session.Instance) {
-			h.textOverlay = overlay.NewTextOverlay("info")
-		}},
-		{"confirm", stateConfirm, func(h *home, _ *session.Instance) {
-			h.confirmationOverlay = overlay.NewConfirmationOverlay("sure?")
-		}},
-		{"rename", stateRename, func(h *home, inst *session.Instance) {
-			h.renameTarget = inst
-			h.renameOverlay = overlay.NewRenameOverlay("label", "", false)
-		}},
-		{"settings", stateSettings, func(h *home, _ *session.Instance) {
-			h.settingsOverlay = overlay.NewSettingsOverlay(h.appConfig)
-		}},
-		{"accounts", stateAccounts, func(h *home, _ *session.Instance) {
-			h.accountsOverlay = overlay.NewAccountsOverlay(h.appConfig, h.appState)
-		}},
-		{"filter", stateFilter, nil},
-		{"hints", stateHints, nil},
-		{"visual", stateVisual, nil},
-		{"diffComment", stateDiffComment, func(h *home, _ *session.Instance) {
-			// Populate the diff pane with annotatable rows so EnterDiffComment
-			// succeeds and IsCommenting() is true — making the state consistent:
-			// h.state == stateDiffComment and d.commenting == true both hold.
-			const diff = "diff --git a/foo.go b/foo.go\n@@ -1,2 +1,2 @@\n ctx\n+add\n"
-			h.tabbedWindow.SetDiffContent(diff)
-			h.tabbedWindow.EnterDiffComment()
-		}},
-		{"queue", stateQueue, func(h *home, inst *session.Instance) {
-			h.queueOverlay = overlay.NewQueueOverlay(inst.DisplayName())
-		}},
-		{"cmdlog", stateCmdLog, func(h *home, _ *session.Instance) {
-			h.cmdLogOverlay = overlay.NewCmdLogOverlay("test-session")
-		}},
-		{"welcome", stateWelcome, func(h *home, _ *session.Instance) {
-			h.welcomeOverlay = overlay.NewWelcomeOverlay()
-		}},
-		{"history", stateHistory, func(h *home, _ *session.Instance) {
-			h.promptHistoryOverlay = overlay.NewPromptHistoryOverlay([]string{"remembered"})
-		}},
-		{"commandPalette", stateCommandPalette, func(h *home, _ *session.Instance) {
-			// Wired through the opener, not by hand: the overlay and paletteRows must
-			// stay in step, and a half-armed palette (one without the other) is the
-			// dereference this sweep exists to find.
-			h.openCommandPalette()
-		}},
-		{"screensaver", stateScreensaver, nil}, // nil wire: no overlay field to arm. Note: 100x40 survives ui.SplashFits in WindowSizeMsg sweep.
-	}
+	states := frameStates()
 
 	// Each factory takes the home's selected instance so payload-bearing messages
 	// (autoNameDoneMsg dereferences it) carry a live target.
