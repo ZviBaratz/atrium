@@ -70,23 +70,17 @@ func (pp *ProfilePicker) GetSelectedProfile() config.Profile {
 	return pp.profiles[pp.cursor]
 }
 
-// HasMultiple returns true if there is more than one profile to choose from.
-func (pp *ProfilePicker) HasMultiple() bool {
-	return len(pp.profiles) > 1
-}
-
 func ppLabelStyle() lipgloss.Style    { return overlayLabelStyle() }
 func ppSelectedStyle() lipgloss.Style { return overlaySelectedStyle() }
 func ppDimStyle() lipgloss.Style      { return overlayDimStyle() }
 
-// Render renders the profile picker.
+// Render renders the profile picker. The label carries no key hint: the picker's one
+// live host is the welcome modal, whose footer already names the same keys ("↑/↓
+// choose") two lines below it — see WelcomeOverlay.Render, and createFormHelp for the
+// rule (#466).
 func (pp *ProfilePicker) Render() string {
 	var s strings.Builder
 	s.WriteString(ppLabelStyle().Render("Profile"))
-
-	if pp.HasMultiple() && pp.focused {
-		s.WriteString(ppDimStyle().Render("  ↑↓ to change"))
-	}
 	s.WriteString("\n\n")
 
 	for i, p := range pp.profiles {

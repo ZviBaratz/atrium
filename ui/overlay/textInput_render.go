@@ -35,6 +35,26 @@ func tiHintStyle() lipgloss.Style { return theme.Current().OverlayHintStyle() }
 // Enter advances between fields (and submits from a filled title — the one-handed quick
 // create), so submission is surfaced as Ctrl+S, which works from any field, rather than an
 // ambiguous "Enter create".
+//
+// THE RULE (#466): this footer owns the navigation keys. A per-field hint earns its
+// place on a label line only by saying something the footer does not — the form has
+// nine sections, and repeating "↑↓ …" on each turns a hint into wallpaper. #460
+// applied this to Effort and Permissions and stopped there, leaving Account and the
+// Profile picker restating it; #466 finished the sweep and pinned the result with
+// TestCreateFormHints_FooterOwnsTheNavKeys, which counts the glyph across the whole
+// rendered form once per focus stop.
+//
+// Two hints stay, on the merits, and both are asserted by that test so a later
+// consistency pass has to argue with them rather than delete them:
+//
+//   - Variants ("←→ profile · ↑↓ count") — the one field where this footer is wrong.
+//     There ↑↓ steps a count and ←→ moves between profiles, so the hint corrects the
+//     footer rather than restating it.
+//   - Model ("type a name") — a custom-entry affordance. The chips are not the whole
+//     input surface for that field, and nothing else says so.
+//
+// Account keeps a pool gloss ("⇄ rotates the pool" / "pins this member") for the same
+// reason: it names a distinction the footer cannot.
 const createFormHelp = "Tab complete/move · ↑↓ select · ↵ create from name · ⌃S create"
 
 // promptFocusHelp is the footer shown while the prompt textarea holds focus, where Enter

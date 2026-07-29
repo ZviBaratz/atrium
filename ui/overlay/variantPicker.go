@@ -153,6 +153,11 @@ func vpDimStyle() lipgloss.Style      { return overlayDimStyle() }
 // When the chip row would overflow the set width it is windowed around the cursor with
 // "…" markers, so the row keeps to one line and the focused chip — the one the count
 // keys act on — is always visible.
+//
+// The focus hint names both axes even though the form footer already names ↑↓, and it
+// is the deliberate exception to the rule at createFormHelp: this is the one field
+// where "↑↓ select" is wrong. Here ↑↓ steps a count and ←→ moves between profiles, so
+// the hint corrects the footer rather than restating it (#466).
 func (vp *VariantPicker) Render() string {
 	var s strings.Builder
 	s.WriteString(vpLabelStyle().Render("Variants"))
