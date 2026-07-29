@@ -630,3 +630,38 @@ func TestFrameChain_ReArmsImmediatelyWhenTheTargetMoved(t *testing.T) {
 		t.Fatal("a capture for a moved-on target must re-arm without waiting out an interval")
 	}
 }
+
+// TestCaptureTerminalFrame_JustCreatedShellKeepsItsFallback pins the round that
+// creates the shell but has no frame for it yet.
+//
+// Creating the shell is itself the background work (tmux new-session), so that round
+// returns having captured nothing. The temptation is to report it against the new
+// cache slot — but ApplyFrame stamps frameAt on any err-free apply, and a non-zero
+// frameAt is precisely how UpdateContent decides a frame has ARRIVED. Reporting a
+// blank one therefore retires the "Opening terminal…" fallback and paints an empty
+// pane in its place: the pane looks finished, showing nothing, until the next capture
+// lands. Naming no slot is what keeps the fallback up for that one round.
+func TestCaptureTerminalFrame_JustCreatedShellKeepsItsFallback(t *testing.T) {
+	spy := newFrameSpy("shell output")
+	h, inst := newCaptureHome(t, spy)
+
+	ensured := false
+	ensure := func(*session.Instance) (string, error) {
+		ensured = true
+		return "freshly-created-key", nil
+	}
+
+	// The terminal tab with no shell yet: a nil session, which is the create path.
+	msg := captureTerminalFrame(frameTarget{termInstance: inst}, ensure)
+
+	require.True(t, ensured, "control: this is the round that creates the shell")
+	require.Empty(t, msg.target.termKey,
+		"a round that captured nothing must name no cache slot, or the blank it carries "+
+			"stamps frameAt and retires the fallback")
+
+	// Through the handler, the pane must still offer the fallback rather than a blank.
+	h.tabbedWindow.SetActiveTab(ui.TerminalTab)
+	h.handlePaneFrame(msg)
+	require.Contains(t, h.tabbedWindow.String(), "Opening terminal",
+		"the pane must say it is opening, not render an empty frame")
+}
