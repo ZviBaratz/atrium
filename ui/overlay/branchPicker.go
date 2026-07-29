@@ -123,6 +123,21 @@ func (bp *BranchPicker) HandleKeyPress(msg tea.KeyPressMsg) (consumed bool, filt
 	return consumed, filterChanged
 }
 
+// HandlePaste appends pasted text to the filter, taking the same loading/error
+// step an edit takes in HandleKeyPress so the debounced search the app schedules
+// off filterChanged is not left describing the previous query.
+func (bp *BranchPicker) HandlePaste(text string) (consumed bool, filterChanged bool) {
+	if bp.disabled {
+		return false, false
+	}
+	consumed, filterChanged = bp.handlePaste(text)
+	if filterChanged {
+		bp.loading = true
+		bp.errored = false
+	}
+	return consumed, filterChanged
+}
+
 // SetError marks the current search as failed, clearing the loading state so the picker
 // shows an error hint instead of spinning on "searching…" forever. version must match
 // filterVersion (a stale error for an abandoned search is dropped, like stale results).

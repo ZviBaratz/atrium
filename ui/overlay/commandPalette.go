@@ -99,6 +99,13 @@ func (p *CommandPaletteOverlay) HandleKeyPress(msg tea.KeyPressMsg) (shouldClose
 	return false
 }
 
+// HandlePaste narrows the palette by the pasted text. It never closes: a paste is
+// query text, so "esc" and "enter" arriving from the clipboard extend the filter
+// rather than dismissing or running an action.
+func (p *CommandPaletteOverlay) HandlePaste(text string) {
+	p.handlePaste(text)
+}
+
 // Chosen reports the action enter accepted, and whether there was one. Rows the
 // filter left empty, and an esc, both report false.
 func (p *CommandPaletteOverlay) Chosen() (PaletteAction, int, bool) {

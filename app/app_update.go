@@ -394,6 +394,8 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case tea.KeyPressMsg:
 		return m.handleKeyPress(msg)
+	case tea.PasteMsg:
+		return m.handlePaste(msg)
 	case tea.WindowSizeMsg:
 		// A resize invalidates hint mode's frozen geometry; exit rather than
 		// redraw stale coordinates (cheap and correct — scroll-mode pragmatism).
@@ -777,6 +779,84 @@ func (m *home) reconcileInFlightStarts(ctx context.Context) {
 			log.WarningLog.Printf("shutdown: failed to persist adopted session(s): %v", err)
 		}
 	}
+}
+
+// handlePaste delivers a bracketed paste to the focused text surface.
+//
+// v1 had no paste message: a paste arrived as an ordinary KeyMsg whose Runes were
+// the pasted text, so it flowed through the normal key dispatch into whatever had
+// focus. v2 gives paste its own type — which means it stopped reaching that
+// dispatch entirely, and pasting into the new-session form silently did nothing.
+// Nothing failed to compile, because nothing had ever named the v1 Paste flag.
+//
+// The fix is not to convert the paste back into a key. v1 could afford to let one
+// flow through dispatch because its Key.String() wrapped pasted runes in "[...]"
+// specifically so a paste could never match a binding; v2's String() returns the
+// text verbatim, so a synthesized key is indistinguishable from a keypress at
+// every `switch msg.String()` site. That gap is not theoretical: a clipboard
+// holding "q" would quit the app with no confirmation, and one holding the word
+// "esc" would cancel the create form and discard the draft.
+//
+// So paste gets its own routing, and the states below are the enumeration of
+// where text can land. Anywhere else — the list, the rail, a confirmation, hint
+// mode — a paste is inert, because there is nothing there for text to mean. That
+// is the property v1's brackets bought, reached without borrowing the mechanism.
+func (m *home) handlePaste(msg tea.PasteMsg) (tea.Model, tea.Cmd) {
+	if msg.Content == "" {
+		return m, nil
+	}
+
+	// The nil checks are the belt to the state's braces: a state and its overlay are
+	// set together, so each is unreachable — but paste is the one input that can
+	// arrive without a keystroke to precede it, and a dropped paste beats a crash.
+	switch m.state {
+	case statePrompt:
+		if m.textInputOverlay == nil {
+			return m, nil
+		}
+		return m.handlePromptPaste(msg)
+
+	case stateFilter:
+		// The list owns the query; a paste extends it exactly as typing does.
+		m.list.SetFilter(m.list.FilterQuery() + msg.Content)
+		return m, m.instanceChanged()
+
+	case stateRename:
+		if m.renameOverlay != nil {
+			m.renameOverlay.HandlePaste(msg)
+		}
+
+	case stateCommandPalette:
+		if m.commandPaletteOverlay != nil {
+			m.commandPaletteOverlay.HandlePaste(msg.Content)
+		}
+
+	case stateSettings:
+		if m.settingsOverlay != nil {
+			m.settingsOverlay.HandlePaste(msg)
+		}
+
+	case stateAccounts:
+		if m.accountsOverlay != nil {
+			m.accountsOverlay.HandlePaste(msg)
+		}
+	}
+	return m, nil
+}
+
+// handlePromptPaste routes a paste inside the create/quick-send/compose overlay to
+// the focused field, then runs the same follow-up an edit owes (branch search,
+// title verdict). It cannot close the overlay, so the submit/cancel arms of
+// handlePromptState have no counterpart here.
+func (m *home) handlePromptPaste(msg tea.PasteMsg) (tea.Model, tea.Cmd) {
+	prevTitle := ""
+	if m.textInputOverlay.IsCreateForm() {
+		prevTitle = m.textInputOverlay.GetTitle()
+	}
+	branchFilterChanged := m.textInputOverlay.HandlePaste(msg)
+	// The diff-comment composer is the same overlay with a different submit path;
+	// a paste only ever edits its textarea, so it needs no separate routing.
+	return m.afterPromptEdit(prevTitle, branchFilterChanged)
 }
 
 func (m *home) handleKeyPress(msg tea.KeyPressMsg) (mod tea.Model, cmd tea.Cmd) {
