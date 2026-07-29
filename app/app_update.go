@@ -394,6 +394,8 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case tea.KeyPressMsg:
 		return m.handleKeyPress(msg)
+	case tea.PasteMsg:
+		return m.handleKeyPress(pasteAsKey(msg))
 	case tea.WindowSizeMsg:
 		// A resize invalidates hint mode's frozen geometry; exit rather than
 		// redraw stale coordinates (cheap and correct — scroll-mode pragmatism).
@@ -777,6 +779,34 @@ func (m *home) reconcileInFlightStarts(ctx context.Context) {
 			log.WarningLog.Printf("shutdown: failed to persist adopted session(s): %v", err)
 		}
 	}
+}
+
+// pasteAsKey turns a bracketed paste into the text keypress Bubble Tea v1
+// delivered, so every text surface keeps handling paste the way it always did.
+//
+// v1 had no paste message: a bracketed paste arrived as an ordinary KeyMsg whose
+// Runes were the pasted text (with a Paste flag nothing here ever read), so it
+// flowed through the normal key dispatch into whatever had focus. v2 gives paste
+// its own type — which means it stopped reaching that dispatch entirely, and
+// pasting into the new-session form silently did nothing. Nothing failed to
+// compile, because nothing had ever named the v1 flag.
+//
+// Routing it back through handleKeyPress restores that behaviour everywhere at
+// once rather than per-overlay: the bubbles textarea and textinput insert a key's
+// Text through insertRunesFromUserInput — the very same call their own PasteMsg
+// case makes — and Atrium's own text buffers (the picker filters, the session
+// list filter) already append msg.Text.
+//
+// Code carries the first rune so msg.String() behaves as it did under v1, where
+// String() spoke for Runes[0]. That matters outside a text field: in the default
+// state a paste is interpreted as keystrokes, which is what v1 did too. This is a
+// regression fix, so it reproduces v1 rather than improving on it.
+func pasteAsKey(msg tea.PasteMsg) tea.KeyPressMsg {
+	key := tea.KeyPressMsg{Text: msg.Content}
+	if r := []rune(msg.Content); len(r) > 0 {
+		key.Code = r[0]
+	}
+	return key
 }
 
 func (m *home) handleKeyPress(msg tea.KeyPressMsg) (mod tea.Model, cmd tea.Cmd) {
