@@ -103,7 +103,10 @@ func (w *WelcomeOverlay) SelectedProfile() config.Profile {
 // Detected returns the profiles detection found (for the caller to merge on confirm).
 func (w *WelcomeOverlay) Detected() []config.Profile { return w.detected }
 
-// Render draws the bordered welcome modal.
+// Render draws the bordered welcome modal. The trailing hint line is the one place
+// the modal names its keys — the profile picker above it deliberately carries none,
+// since a second spelling of ↑/↓ two lines up is noise, not guidance (#466; the same
+// rule the create form follows, stated at createFormHelp).
 func (w *WelcomeOverlay) Render() string {
 	var b strings.Builder
 	b.WriteString(theme.Current().OverlayTitleStyle().Render("Welcome to Atrium"))

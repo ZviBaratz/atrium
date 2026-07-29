@@ -165,3 +165,21 @@ func TestWelcomeOverlay_EmptyDetection(t *testing.T) {
 		t.Fatal("Enter should close even with no agents")
 	}
 }
+
+// TestWelcomeOverlay_FooterOwnsTheNavKeys applies #466's rule to the one modal that
+// still owns a ProfilePicker. The picker's old "↑↓ to change" restated this modal's
+// own footer ("↑/↓ choose") two lines below it, so a single 20-line box spelled the
+// same key two different ways. The footer is the one place the keys are named.
+func TestWelcomeOverlay_FooterOwnsTheNavKeys(t *testing.T) {
+	w := NewWelcomeOverlay()
+	w.SetWidth(54)
+	w.SetDetected(detectedFixture())
+
+	out := w.Render()
+	if n := strings.Count(out, "choose"); n != 1 {
+		t.Errorf("footer should name the nav keys exactly once, got %d:\n%s", n, out)
+	}
+	if strings.Contains(out, "to change") {
+		t.Errorf("the picker must not restate the footer's keys, got:\n%s", out)
+	}
+}

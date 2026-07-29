@@ -158,23 +158,28 @@ func (ap *AccountPicker) GetSelectedAccount() config.ClaudeAccount {
 }
 
 // Render draws the picker (label + horizontal options), mirroring ProfilePicker.
+//
+// The label line carries a hint only when pools exist: the ⇄ entry rotates across the
+// pool while a member entry pins one, a distinction otherwise carried only by the
+// glyph and indent, so gloss whichever the cursor sits on. It no longer opens with
+// "↑↓ to change" — that restated the form footer, which owns the navigation keys (see
+// createFormHelp; #466 settled the split #460 opened).
+//
+// Two things the gate no longer needs to say. HasMultiple() is implied by focused:
+// stopAccount joins the focus ring only when the picker has more than one entry (see
+// NewSessionCreateOverlay and hasAccountSection). And hasPools() cannot hide the gloss
+// from a one-member pool, because buildAccountEntries emits a pool's ⇄ line *plus*
+// each of its members — a pool always contributes at least two entries.
 func (ap *AccountPicker) Render() string {
 	var s strings.Builder
 	s.WriteString(ppLabelStyle().Render("Account"))
-	if ap.HasMultiple() && ap.focused {
-		hint := "  ↑↓ to change"
-		// When pools exist, the ⇄ entry rotates across the pool while a member entry
-		// pins one — a distinction otherwise carried only by the glyph and indent, so
-		// gloss whichever the cursor sits on.
-		if ap.hasPools() {
-			switch sel := ap.Selected(); {
-			case sel.member == nil:
-				hint += " · ⇄ rotates the pool"
-			case sel.pool != "":
-				hint += " · pins this member"
-			}
+	if ap.focused && ap.hasPools() {
+		switch sel := ap.Selected(); {
+		case sel.member == nil:
+			s.WriteString(ppDimStyle().Render("  ⇄ rotates the pool"))
+		case sel.pool != "":
+			s.WriteString(ppDimStyle().Render("  pins this member"))
 		}
-		s.WriteString(ppDimStyle().Render(hint))
 	}
 	s.WriteString("\n\n")
 	for i, e := range ap.entries {
