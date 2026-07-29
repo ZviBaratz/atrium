@@ -397,6 +397,14 @@ func Sweep(now time.Time, dropRef func(Entry)) {
 // `git worktree list`, which cannot see a ref outside refs/heads, so without this
 // a reset would leave every retained object alive in the user's repository
 // forever — a permanent leak caused by the command whose entire job is cleanup.
+//
+// It parts company with Sweep on the entry this binary cannot read. Sweep keeps
+// that file, because a newer atrium will understand it and the horizon can still
+// expire it later. Clear has no later: reset's contract is that nothing survives
+// it, so keeping the file would be a lie and deleting it while leaving its ref
+// would be the very leak above, now unreachable by any horizon. So the ref is
+// released from whatever the file yields (readUnchecked), and only then is the
+// file removed.
 func Clear(dropRef func(Entry)) error {
 	dir, err := Dir()
 	if err != nil {
@@ -409,14 +417,40 @@ func Clear(dropRef func(Entry)) error {
 	var errs []error
 	for _, name := range names {
 		path := filepath.Join(dir, name)
-		if e, err := read(path); err == nil && dropRef != nil {
-			dropRef(e)
+		if dropRef != nil {
+			if e, ok := readUnchecked(path); ok {
+				dropRef(e)
+			}
 		}
 		if err := os.Remove(path); err != nil && !errors.Is(err, fs.ErrNotExist) {
 			errs = append(errs, fmt.Errorf("undo: remove entry: %w", err))
 		}
 	}
 	return errors.Join(errs...)
+}
+
+// readUnchecked decodes an entry for teardown only: whatever JSON is there, with
+// neither the version gate nor the id-matches-filename check read applies.
+//
+// Those two checks guard *decisions* — whether to offer a record, what to say
+// about it, which file to unlink for it — and none of them may be made from a
+// record this binary does not understand. Releasing a ref decides nothing: the
+// refname either exists in that repository or `update-ref -d` is a no-op. The id
+// check in particular is not needed here because Clear never joins a path from the
+// decoded id; it unlinks the name entryFiles already handed it, so a hand-edited
+// id has nothing to reach. Fields a future schema renamed simply arrive empty, and
+// the caller (which already skips an entry with no ref or repo) does nothing —
+// no worse than not having looked.
+func readUnchecked(path string) (Entry, bool) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return Entry{}, false
+	}
+	var e Entry
+	if err := json.Unmarshal(data, &e); err != nil {
+		return Entry{}, false
+	}
+	return e, true
 }
 
 // entryFileRe matches exactly the names Write produces: 19 digits of zero-padded

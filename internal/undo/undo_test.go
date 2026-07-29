@@ -478,6 +478,33 @@ func TestClearDropsEveryRefAndEntry(t *testing.T) {
 	assert.Empty(t, got)
 }
 
+// TestClearReleasesTheRefOfAnEntryItCannotDecode. Sweep preserves a foreign-version
+// file because a newer atrium will understand it; Clear cannot, because reset's
+// whole contract is that nothing survives it. Deleting the file while leaving its
+// ref is the one outcome neither of those allows — a retained branch nothing names
+// and no horizon can ever expire, created by the command whose job is cleanup.
+// Version is not consulted for this: dropping a ref only needs the ref.
+func TestClearReleasesTheRefOfAnEntryItCannotDecode(t *testing.T) {
+	sandbox(t)
+
+	e, err := Write(entry("from-the-future"))
+	require.NoError(t, err)
+	dir, err := Dir()
+	require.NoError(t, err)
+	path := filepath.Join(dir, e.ID+".json")
+	raw, err := os.ReadFile(path)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(path,
+		[]byte(strings.Replace(string(raw), `"version":1`, `"version":99`, 1)), 0o644))
+
+	var dropped []string
+	require.NoError(t, Clear(func(e Entry) { dropped = append(dropped, e.Ref) }))
+
+	assert.Equal(t, []string{e.Ref}, dropped,
+		"reset must release the retained branch even when it cannot read the record naming it")
+	assert.NoFileExists(t, path)
+}
+
 // TestRefIsNamespacedByInstall. Two data dirs can retain into the same project
 // repo, and refs/atrium/ already carries refs this program did not write
 // (refs/atrium/pr-NNN, from a human review workflow). Anything that sweeps refs
