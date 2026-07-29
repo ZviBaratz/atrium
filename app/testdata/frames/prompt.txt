@@ -19,7 +19,7 @@
 │               │  Permissions                                 │               │
 │               │   inherit · plan · accept-edits · auto       │               │
 │               │  ──────────────────────────────────────────  │               │
-│               │  Tab complete/move · ↑↓ select · ↵ create …  │               │
+│               │  Tab/↑↓ move · ⌃S create · ⌃R clear          │               │
 │               │   Create                                     │               │
 │               │                                              │               │
 ╰───────────────╰──────────────────────────────────────────────╯───────────────╯
@@ -59,7 +59,7 @@
 │                       │                                                                      │                       │
 │                       │   inherit · plan · accept-edits · auto                               │                       │
 │                       │  ──────────────────────────────────────────────────────────────────  │                       │
-│                       │  Tab complete/move · ↑↓ select · ↵ create from name · ⌃S create · …  │                       │
+│                       │  Tab complete/move · ↑↓ select · ⌃S create · ⌃R clear                │                       │
 │                       │   Create                                                             │                       │
 │                       │                                                                      │                       │
 │                       ╰──────────────────────────────────────────────────────────────────────╯                       │

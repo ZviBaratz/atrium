@@ -108,3 +108,17 @@ func TestAccountPicker_HintGlossesPoolsOnly(t *testing.T) {
 	assert.Equal(t, "Account", strings.TrimRight(label, " "),
 		"with no pools the focused label carries no hint at all")
 }
+
+// TestCreateFormHelp_EveryRungKeepsTheNavKeys extends the rule above across width.
+// TestCreateFormHints_FooterOwnsTheNavKeys renders at one wide size, where fitHint
+// always returns the first rung, so it can only ever see createFormHelp[0]. The
+// narrow rungs exist precisely to shed cells, and "↑↓ select" is a tempting nine to
+// shed — but dropping it would leave the footer not owning the nav keys on exactly
+// the 80-col terminal where a per-field restatement is least affordable, and the
+// guard above would stay green throughout.
+func TestCreateFormHelp_EveryRungKeepsTheNavKeys(t *testing.T) {
+	for i, rung := range createFormHelp {
+		assert.Equalf(t, 1, strings.Count(rung, navKeys),
+			"rung %d must name the nav keys exactly once: %q", i, rung)
+	}
+}

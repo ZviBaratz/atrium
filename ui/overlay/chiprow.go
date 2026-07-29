@@ -6,10 +6,15 @@ import (
 	tea "charm.land/bubbletea/v2"
 )
 
-// claudeFieldNA is the dim placeholder the claude-only fields (model and
-// permission mode) render while the form's effective program is not Claude
-// Code; their enabled state is driven together by syncClaudeFieldsEnabled.
-const claudeFieldNA = "  n/a — the selected profile is not Claude Code"
+// claudeFieldNA is the dim placeholder all three claude-only fields (model,
+// effort, permission mode) render while the form's effective program is not
+// Claude Code; their enabled state is driven together by syncClaudeFieldsEnabled.
+//
+// It says "program" for the same reason noOverrideHint does: with no profiles
+// configured the field is driven by the default_program config key, and there is
+// no profile to name. It was 47 cells and truncated to "…is not Claude Co…" on an
+// 80-col terminal, in all three fields at once; 38 fits the 42 available.
+const claudeFieldNA = "  n/a — the program is not Claude Code"
 
 // noOverrideChip is the label of the first chip in every claude override field
 // (model, effort, permission mode) — the no-op choice that composes no flag. It
