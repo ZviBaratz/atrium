@@ -37,6 +37,9 @@ type BranchPicker struct {
 	// explanatory placeholder, ignores input, and reports no selection — so a branch
 	// chosen for a previous git target can't leak into a direct session's submit.
 	disabled bool
+	// target is what the selected directory turned out to be, and so which
+	// inertNote explains the absent base (see targetKind).
+	target targetKind
 }
 
 // NewBranchPicker creates a new empty branch picker. It starts in the loading state
@@ -51,10 +54,37 @@ func NewBranchPicker() *BranchPicker {
 
 // (Focus/Blur/IsFocused/SetWidth/SetVisibleRows are provided by the embedded Picker.)
 
-// SetDisabled marks the picker inert (true when the target is not a git repo). The
-// selection state is retained, so flipping back to a git target restores it.
-func (bp *BranchPicker) SetDisabled(d bool) {
-	bp.disabled = d
+// targetKind is what the create form's target directory turned out to be, which is
+// both whether this picker is inert and *why*.
+//
+// It replaced a bare disabled bool because the two inert cases are not the same fact:
+// the placeholder said "direct session — no git branching" for either, so a path that
+// was not a directory at all was reported to the user as a direct session (#545). The
+// picker is equally inert in both; only one of them is a session you can create.
+type targetKind int
+
+const (
+	targetGit     targetKind = iota // a git repo — the picker is live
+	targetDirect                    // a directory, but not a git repo
+	targetInvalid                   // not a directory at all
+)
+
+// SetTarget records what the selected target is, marking the picker inert for anything
+// but a git repo. The selection state is retained, so flipping back to a git target
+// restores it.
+func (bp *BranchPicker) SetTarget(k targetKind) {
+	bp.target = k
+	bp.disabled = k != targetGit
+}
+
+// inertNote explains why there is no base to choose. Both spellings are constants
+// bounded well inside the row's budget; "Base: " plus the longer one is 41 of the 42
+// cells an 80-col terminal gives the form.
+func (bp *BranchPicker) inertNote() string {
+	if bp.target == targetInvalid {
+		return "(not a directory)"
+	}
+	return "(direct session — no git branching)"
 }
 
 // Disabled reports whether the picker is inert (non-git target).
@@ -224,7 +254,7 @@ func (bp *BranchPicker) Render() string {
 		// Inert placeholder for a non-git target, at the exact unfocused shape (header,
 		// blank, visibleRows blank rows) so the form's height is unaffected.
 		s.WriteString(bpLabelStyle().Render("Base: "))
-		s.WriteString(bpDimStyle().Italic(true).Render("(direct session — no git branching)"))
+		s.WriteString(bpDimStyle().Italic(true).Render(bp.inertNote()))
 		s.WriteString("\n\n")
 		s.WriteString(renderPickerRows(nil, 0, bp.visibleRows, false, "", bpSelectedStyle(), bpDimStyle()))
 		return s.String()

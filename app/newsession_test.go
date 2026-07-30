@@ -569,7 +569,12 @@ func TestCreateSessionFromForm_SyncBranchExistsBlocksSubmit(t *testing.T) {
 	assert.Equal(t, before, h.list.NumInstances(), "a colliding branch must not create a session")
 	require.NotNil(t, h.textInputOverlay, "form stays open on conflict")
 	assert.False(t, h.textInputOverlay.IsSubmitted(), "submitted flag cleared")
-	assert.Contains(t, h.textInputOverlay.TitleError(), "exists in", "inline title error names the existing branch")
+	// The verdict deliberately no longer names the branch: it was interpolated, and a
+	// branch name has no ceiling, so the Title row's width was set by how the user
+	// happened to name things (#545). The name is derived from the title being typed
+	// anyway. Asserting the constant rather than a fragment keeps this pinned to the
+	// one spelling both branch-exists paths return.
+	assert.Equal(t, titleErrBranchExists, h.textInputOverlay.TitleError())
 }
 
 // composeProgramFlags is the submit-time backstop the form's field gating makes

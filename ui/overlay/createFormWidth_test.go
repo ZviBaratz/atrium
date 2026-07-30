@@ -16,6 +16,18 @@ import (
 // the copy has to survive.
 const createOverlayWidth = 48
 
+// titleVerdictBudget is how many cells a title verdict may occupy. The Title row is
+// label(5) + gap(2) + the input + " (" + verdict + ")", and renderCreateForm carves the
+// verdict's columns out of the input so the message never lands past fitOverlay's edge —
+// but the input has a floor of 10 (+1 for the end-of-line cursor cell), so past that
+// point the row grows instead. 42 - 5 - 2 - 11 - 3 = 21 is where it stops fitting.
+//
+// The floor is what makes the overflow silent: a verdict of 22 cells is the first that
+// cannot be paid for, and every message app's titleConflict produced was over it (#545).
+// Pinned by TestTitleVerdict_FillsTheRow below; the copy is held to it end-to-end by
+// app's TestTitleVerdicts_SurviveAn80ColRender.
+const titleVerdictBudget = 21
+
 // pinnedProfiles pin every claude override at its widest *nameable* value, so the
 // no-op-chip hints render "program pins accept-edits" rather than the short
 // unnamed form (see syncClaudeFieldsEnabled).
@@ -80,6 +92,21 @@ func TestCreateForm_ComposesWithinInnerWidth(t *testing.T) {
 			ctrlR(o) // arms the footer's "⌃R again" spelling
 			return o
 		}},
+		{"direct target", func() *TextInputOverlay {
+			o := NewSessionCreateOverlay(nil, nil, []string{"/repo/a"}, "claude")
+			o.SetTargetValidity(true, true, "") // a directory that is not a git repo
+			return o
+		}},
+		{"invalid target", func() *TextInputOverlay {
+			o := NewSessionCreateOverlay(nil, nil, []string{"/repo/a"}, "claude")
+			o.SetTargetValidity(false, false, "") // not a directory at all
+			return o
+		}},
+		{"title verdict", func() *TextInputOverlay {
+			o := NewSessionCreateOverlay(nil, nil, []string{"/repo/a"}, "claude")
+			o.SetTitleError(strings.Repeat("x", titleVerdictBudget))
+			return o
+		}},
 		{"variant error", func() *TextInputOverlay {
 			// The batch-refusal state (#541), which no fixture entered until now — which
 			// is exactly why this sweep missed three cut messages. The message is a
@@ -108,6 +135,10 @@ func TestCreateForm_ComposesWithinInnerWidth(t *testing.T) {
 				name string
 				kind focusStop
 			}{
+				// stopDirectory was missing from this list until #545, which is the
+				// other half of why the project row's overflow was invisible here: the
+				// focused header composes a different (wider) line than the blurred one.
+				{"project", stopDirectory},
 				{"title", stopTitle},
 				{"variants", stopVariants},
 				{"model", stopModel},
@@ -154,6 +185,49 @@ func TestPromptOverlays_ComposeWithinInnerWidth(t *testing.T) {
 			assertComposesWithin(t, content, innerWidth)
 		})
 	}
+}
+
+// A verdict of exactly titleVerdictBudget cells fills the Title row to the inner width
+// an 80-col terminal gives the form — no more, no less.
+//
+// The equality is the point, for the same reason as TestVariantPicker_ErrorFillsTheLabelLine:
+// "fits" alone would hold for any budget below the real one, leaving the number free to
+// drift low and the copy needlessly cramped. Asserting the row is *exactly* 42 pins the
+// budget together with the arithmetic around it — the label, the two-space gap, the input's
+// floor of 10, the cursor cell bubbles renders past its Width, and the " (…)" wrapper. Move
+// any of those and this fails.
+func TestTitleVerdict_FillsTheRow(t *testing.T) {
+	o := NewSessionCreateOverlay(nil, nil, []string{"/repo/a"}, "claude")
+	o.SetSize(createOverlayWidth, 24)
+	o.SetTitleError(strings.Repeat("x", titleVerdictBudget))
+
+	assert.Equal(t, claudeFieldInnerWidth, lipgloss.Width(rowContaining(t, o, "Title")),
+		"a %d-cell verdict must fill the row exactly", titleVerdictBudget)
+}
+
+// A verdict one cell over the budget must NOT fit — the negative control that keeps the
+// number honest. Without it, titleVerdictBudget could drift down to any smaller value and
+// every assertion above would still pass while the copy got needlessly terse.
+func TestTitleVerdict_OneCellOverOverflows(t *testing.T) {
+	o := NewSessionCreateOverlay(nil, nil, []string{"/repo/a"}, "claude")
+	o.SetSize(createOverlayWidth, 24)
+	o.SetTitleError(strings.Repeat("x", titleVerdictBudget+1))
+
+	assert.Greater(t, lipgloss.Width(rowContaining(t, o, "Title")), claudeFieldInnerWidth,
+		"a verdict past the budget must overflow, or the budget is understated")
+}
+
+// rowContaining returns the composed (pre-truncation) row carrying marker.
+func rowContaining(t *testing.T, o *TextInputOverlay, marker string) string {
+	t.Helper()
+	content, _, _ := o.compose()
+	for _, line := range strings.Split(content, "\n") {
+		if strings.Contains(line, marker) {
+			return line
+		}
+	}
+	t.Fatalf("no composed row contains %q:\n%s", marker, content)
+	return ""
 }
 
 // assertComposesWithin fails on any composed line wider than the overlay's inner

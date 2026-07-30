@@ -5,7 +5,10 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ZviBaratz/atrium/ui/theme"
+
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -138,35 +141,75 @@ func TestDirectoryPicker_SelectionStateIndicator(t *testing.T) {
 	dp := NewDirectoryPicker([]string{"/repo/a"})
 	dp.Focus()
 
-	// Not a directory at all → red invalid hint.
+	// Not a directory at all → red invalid marker.
 	dp.SetSelectionState(false, false)
-	assert.Contains(t, dp.Render(), "not a directory")
+	assert.Contains(t, dp.Render(), "(invalid)")
 
-	// A valid directory that is not a git repo → direct-session hint.
+	// A valid directory that is not a git repo → direct-session marker.
 	dp.SetSelectionState(true, true)
 	out := dp.Render()
-	assert.Contains(t, out, "direct session")
-	assert.NotContains(t, out, "not a directory")
+	assert.Contains(t, out, "(direct)")
+	assert.NotContains(t, out, "(invalid)")
 
-	// A valid git repo → no hint at all.
+	// A valid git repo → no marker at all.
 	dp.SetSelectionState(true, false)
 	out = dp.Render()
-	assert.NotContains(t, out, "not a directory")
-	assert.NotContains(t, out, "direct session")
+	assert.NotContains(t, out, "(invalid)")
+	assert.NotContains(t, out, "(direct)")
 }
 
-func TestDirectoryPicker_ClearSelectionStateHidesHint(t *testing.T) {
+func TestDirectoryPicker_ClearSelectionStateHidesMarker(t *testing.T) {
 	dp := NewDirectoryPicker([]string{"/repo/a"})
 	dp.Focus()
 	dp.SetSelectionState(false, false)
-	require.Contains(t, dp.Render(), "not a directory")
+	require.Contains(t, dp.Render(), "(invalid)")
 
-	// Clearing returns the indicator to "unknown": no hint of any kind until a fresh
-	// check resolves.
+	// Clearing returns the indicator to "unknown": no marker of any kind until a fresh
+	// check resolves. This is the immediacy the branch section deliberately does not
+	// have — its placeholder holds through the debounce so it cannot flicker — and it
+	// is why the marker survives here rather than being folded into that row (#545).
 	dp.ClearSelectionState()
 	out := dp.Render()
-	assert.NotContains(t, out, "not a directory")
-	assert.NotContains(t, out, "direct session")
+	assert.NotContains(t, out, "(invalid)")
+	assert.NotContains(t, out, "(direct)")
+}
+
+// The marker's cells are carved out of the header's variable middle, so an unbounded
+// path or a long typed filter truncates and the marker always survives whole.
+//
+// This is the defect #545 reported, in the form the create-form sweep cannot express:
+// that sweep deliberately uses short paths, because a failure there must mean a copy or
+// arithmetic defect rather than unbounded user content — and a long candidate overflows
+// the picker's *rows*, which is expected. Measuring the header line alone is what
+// isolates the property.
+func TestDirectoryPicker_MarkerSurvivesAnUnboundedHeader(t *testing.T) {
+	const width = claudeFieldInnerWidth
+	longPath := "/a/very/deeply/nested/project/directory/name"
+
+	t.Run("blurred, long path", func(t *testing.T) {
+		dp := NewDirectoryPicker([]string{longPath})
+		dp.SetWidth(width)
+		dp.SetSelectionState(true, true)
+
+		header := firstLine(dp.Render())
+		assert.LessOrEqual(t, lipgloss.Width(header), width, "the header must fit: %q", header)
+		assert.Contains(t, header, "(direct)", "the path truncates, never the marker")
+		assert.Contains(t, header, "…", "and the cut is marked")
+	})
+
+	t.Run("focused, long filter", func(t *testing.T) {
+		dp := NewDirectoryPicker([]string{"/repo/a"})
+		dp.SetWidth(width)
+		dp.Focus()
+		dp.HandleKeyPress(runes(longPath))
+		dp.SetSelectionState(false, false)
+
+		header := firstLine(dp.Render())
+		assert.LessOrEqual(t, lipgloss.Width(header), width, "the header must fit: %q", header)
+		assert.Contains(t, header, "(invalid)", "the filter truncates, never the marker")
+		assert.Contains(t, header, theme.Current().Glyphs.TextCursor,
+			"and the caret end of what was typed stays visible")
+	})
 }
 
 func TestDirectoryPicker_EmptyMatchHintsFreeText(t *testing.T) {
