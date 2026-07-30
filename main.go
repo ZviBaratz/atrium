@@ -15,6 +15,7 @@ import (
 	"github.com/ZviBaratz/atrium/config"
 	"github.com/ZviBaratz/atrium/daemon"
 	"github.com/ZviBaratz/atrium/internal/doctor"
+	"github.com/ZviBaratz/atrium/internal/profile"
 	"github.com/ZviBaratz/atrium/internal/update"
 	"github.com/ZviBaratz/atrium/log"
 	"github.com/ZviBaratz/atrium/session/tmux"
@@ -76,6 +77,12 @@ var (
 			defer stop()
 			log.Initialize(daemonFlag)
 			defer log.Close()
+
+			// Arm the profiling trigger for both the TUI and the daemon, after the log
+			// exists (it is where the written path is reported) and before either takes
+			// over the terminal. It costs one parked goroutine; see internal/profile for
+			// why the trigger is a signal rather than a flag.
+			defer profile.Install(ctx)()
 
 			if daemonFlag {
 				cfg := config.LoadConfig()

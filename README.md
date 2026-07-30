@@ -1024,6 +1024,37 @@ Advanced — shown in the Category column below. The four keys with no panel row
 If you get an error like `failed to start new session: timed out waiting for tmux session`, update the
 underlying program (ex. `claude`) to the latest version.
 
+#### Atrium is using a lot of CPU
+
+Atrium's cost has two halves, and they need different tools.
+
+**Its own work** — rebuilding the frame, classifying panes — is captured with a
+signal. Send `SIGUSR1` to a running `atrium` and it writes CPU, heap and goroutine
+profiles into the temp directory, beside `atrium.log`:
+
+```bash
+kill -USR1 "$(pgrep -x atrium)"     # start sampling (30s, then it stops itself)
+kill -USR1 "$(pgrep -x atrium)"     # optional: stop early
+go tool pprof "$(ls -t /tmp/atrium-cpu-*.pprof | head -1)"
+```
+
+Set `ATRIUM_PPROF_SECONDS` (1–300, default 30) to change the sampling window. The
+trigger is always armed — no flag, no restart — because the instance worth
+profiling is the one already running.
+
+**The subprocesses it launches** (git, tmux, gh) are invisible to that profile:
+Atrium is blocked waiting on them, so they contribute nothing to its own CPU
+samples. Press <kbd>L</kbd> for the command log, whose header attributes CPU by
+command verb. To see both halves at once, on Linux:
+
+```bash
+# fields 14-17 of /proc/<pid>/stat: utime stime cutime cstime, in 10ms ticks
+awk '{print "own:", $14+$15, " children:", $16+$17}' /proc/"$(pgrep -x atrium)"/stat
+```
+
+Taking that reading twice, a known interval apart, gives the split between
+Atrium's own CPU and its subprocesses'.
+
 ### Security & verifying releases
 
 Releases ship with SLSA build provenance and a keyless Sigstore signature over

@@ -25,16 +25,28 @@ const maxRecords = 500
 const stderrTailCap = 4096
 
 // Record is one finished subprocess: its (redacted) argv, the session it was run
-// for (empty when none is in scope), when it started, how long it took, its exit
-// status, and — on failure — a bounded tail of its stderr/output.
+// for (empty when none is in scope), when it started, how long it took, how much
+// CPU it burned, its exit status, and — on failure — a bounded tail of its
+// stderr/output.
 type Record struct {
 	Argv    string
 	Session string
 	Start   time.Time
 	Dur     time.Duration
-	Exit    int
-	Err     bool
-	Stderr  string
+	// CPU is the user+system CPU the child consumed, as the OS reported it on reap.
+	// It is deliberately separate from Dur: a command that waits on the network or
+	// on a contended tmux server has a large Dur and a small CPU, and only CPU
+	// belongs in a "what is heating this laptop" total.
+	//
+	// This is the half of Atrium's cost no Go profiler can see. While a child runs,
+	// Atrium is blocked in wait4 and contributes nothing to its own profile, so a
+	// pprof capture attributes zero to it — measured at 19.4% of a core against
+	// 37.2% in-process on a 14-session fleet (#546). Zero when the process never
+	// started, and on platforms that report no rusage.
+	CPU    time.Duration
+	Exit   int
+	Err    bool
+	Stderr string
 }
 
 // ring is a fixed-capacity FIFO of Records guarded by a mutex.
@@ -110,16 +122,22 @@ func Reset() {
 	defaultRing.full = false
 }
 
-// RecordCmd builds a Record from a finished subprocess and Adds it. argv is the
-// command's args (cmd.Args); it is redacted before storage. failTail is any
-// captured output used as the failure tail (only kept when err != nil). The exit
-// code and, when present, the OS-captured stderr are read from *exec.ExitError.
-func RecordCmd(argv []string, session string, start time.Time, failTail []byte, err error) {
+// RecordCmd builds a Record from a finished subprocess and Adds it. cmd must have
+// been waited on (Run/Output/Wait have returned), because that is when the kernel
+// fills in the rusage this reads; its argv is redacted before storage. failTail is
+// any captured output used as the failure tail (only kept when err != nil). The
+// exit code and, when present, the OS-captured stderr are read from
+// *exec.ExitError.
+func RecordCmd(cmd *exec.Cmd, session string, start time.Time, failTail []byte, err error) {
+	if cmd == nil {
+		return
+	}
 	rec := Record{
-		Argv:    Redact(argv),
+		Argv:    Redact(cmd.Args),
 		Session: session,
 		Start:   start,
 		Dur:     time.Since(start),
+		CPU:     childCPU(cmd),
 		Err:     err != nil,
 	}
 	if err != nil {
@@ -135,6 +153,19 @@ func RecordCmd(argv []string, session string, start time.Time, failTail []byte, 
 		rec.Stderr = tail(failTail, stderrTailCap)
 	}
 	Add(rec)
+}
+
+// childCPU sums the user and system CPU the reaped child consumed.
+//
+// ProcessState is nil until the process has been waited on, and stays nil when the
+// launch itself failed (a missing binary, a cancelled context before exec), so an
+// absent state reports zero rather than panicking. On platforms with no rusage the
+// stdlib returns zero durations, which is the same answer.
+func childCPU(cmd *exec.Cmd) time.Duration {
+	if cmd.ProcessState == nil {
+		return 0
+	}
+	return cmd.ProcessState.UserTime() + cmd.ProcessState.SystemTime()
 }
 
 func tail(b []byte, limit int) string {

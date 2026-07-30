@@ -127,14 +127,20 @@ func seedCmdLog() {
 		Session: "parity-session",
 		Start:   time.Now().Add(-2 * time.Hour),
 		Dur:     12 * time.Millisecond,
+		CPU:     8 * time.Millisecond,
 	})
 	cmdlog.Add(cmdlog.Record{
 		Argv:    "tmux has-session -t atrium-parity",
 		Session: "parity-session",
 		Start:   time.Now().Add(-3 * time.Hour),
 		Dur:     4 * time.Millisecond,
-		Exit:    1,
-		Err:     true,
+		// A non-zero CPU on a fixture record so the golden pins the summary's
+		// per-verb attribution, not just its counter. Deliberately smaller than the
+		// wall duration: a subprocess that waits does not burn CPU while it waits,
+		// and the two columns exist to be told apart.
+		CPU:  1 * time.Millisecond,
+		Exit: 1,
+		Err:  true,
 	})
 }
 

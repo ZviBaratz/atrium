@@ -76,7 +76,7 @@ func TestRecordCmd_CapturesExitAndStderr(t *testing.T) {
 	cmd := exec.CommandContext(context.Background(), "sh", "-c", "echo boom >&2; exit 3")
 	start := time.Now()
 	_, err := cmd.Output()
-	RecordCmd(cmd.Args, "sess", start, nil, err)
+	RecordCmd(cmd, "sess", start, nil, err)
 
 	got := Snapshot()
 	if len(got) != 1 {
@@ -100,10 +100,55 @@ func TestRecordCmd_Success(t *testing.T) {
 	cmd := exec.CommandContext(context.Background(), "true")
 	start := time.Now()
 	err := cmd.Run()
-	RecordCmd(cmd.Args, "", start, nil, err)
+	RecordCmd(cmd, "", start, nil, err)
 	r := Snapshot()[0]
 	if r.Err || r.Exit != 0 || r.Stderr != "" {
 		t.Errorf("success record wrong: %+v", r)
+	}
+}
+
+// A child that burns CPU records it. This is the whole point of the CPU field: it
+// is the cost a Go profiler cannot see, because Atrium is blocked in wait4 for the
+// entire time the child is running (#546). Asserting only "> 0" keeps it robust —
+// the loop is sized to burn tens of milliseconds, far above rusage's resolution,
+// but the exact figure depends on the host.
+func TestRecordCmd_CapturesChildCPU(t *testing.T) {
+	Reset()
+	cmd := exec.CommandContext(context.Background(), "sh", "-c",
+		"i=0; while [ $i -lt 30000 ]; do i=$((i+1)); done")
+	start := time.Now()
+	err := cmd.Run()
+	RecordCmd(cmd, "", start, nil, err)
+
+	r := Snapshot()[0]
+	if err != nil {
+		t.Fatalf("busy-loop command failed: %v", err)
+	}
+	if r.CPU <= 0 {
+		t.Errorf("CPU = %v, want > 0 for a child that burned a busy loop", r.CPU)
+	}
+}
+
+// A command that never launched has no ProcessState. Recording it must report zero
+// CPU rather than panicking — the negative control for childCPU's nil guard, and
+// the case that actually happens (a missing binary, a context cancelled before
+// exec).
+func TestRecordCmd_UnlaunchedChildIsZeroCPU(t *testing.T) {
+	Reset()
+	cmd := exec.CommandContext(context.Background(), "atrium-no-such-binary-546")
+	start := time.Now()
+	err := cmd.Run()
+	if err == nil {
+		t.Fatal("expected the bogus binary to fail to launch")
+	}
+	RecordCmd(cmd, "", start, nil, err)
+
+	r := Snapshot()[0]
+	if r.CPU != 0 {
+		t.Errorf("CPU = %v, want 0 when the process never started", r.CPU)
+	}
+	if !r.Err || r.Exit != -1 {
+		t.Errorf("Err=%v Exit=%d, want Err=true Exit=-1 for a launch failure", r.Err, r.Exit)
 	}
 }
 
