@@ -32,10 +32,11 @@ type BranchPicker struct {
 	// only affects the default option's label — selection is positional (see
 	// GetSelectedBranch), so the label can change freely without breaking identity.
 	headBranch string
-	// disabled marks the picker inert because the target is not a git repo (a direct
-	// session has no branches). The form skips it in Tab order; here it renders an
-	// explanatory placeholder, ignores input, and reports no selection — so a branch
-	// chosen for a previous git target can't leak into a direct session's submit.
+	// disabled marks the picker inert because the target is anything but a git repo —
+	// a directory without one, or not a directory at all (target says which). The form
+	// skips it in Tab order; here it renders an explanatory placeholder, ignores input,
+	// and reports no selection — so a branch chosen for a previous git target can't
+	// leak into a direct session's submit.
 	disabled bool
 	// target is what the selected directory turned out to be, and so which
 	// inertNote explains the absent base (see targetKind).
@@ -87,7 +88,8 @@ func (bp *BranchPicker) inertNote() string {
 	return "(direct session — no git branching)"
 }
 
-// Disabled reports whether the picker is inert (non-git target).
+// Disabled reports whether the picker is inert, which is every target but a git repo.
+// It does not say which of the two inert cases holds — see target/inertNote for that.
 func (bp *BranchPicker) Disabled() bool {
 	return bp.disabled
 }

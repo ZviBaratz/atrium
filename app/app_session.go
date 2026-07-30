@@ -1243,9 +1243,10 @@ func (m *home) openCreateFormSeeded(seedPath string, focusTitle bool, prefill *P
 }
 
 // The title field's verdicts. Each is written to titleVerdictBudget — 21 cells, the
-// room left on the Title row once the label, the two-space gap and the input's floor
-// of 10 (+1 for bubbles' end-of-line cursor cell) are paid for. Past that the row
-// grows instead of the input shrinking, and fitOverlay cuts it silently (#545).
+// room left on the Title row's 42 once the label (5), the two-space gap, the input's
+// floor of 10 (+1 for bubbles' end-of-line cursor cell) and the " (" … ")" the verdict
+// is wrapped in are paid for: 42 - 5 - 2 - 11 - 3. Past that the row grows instead of
+// the input shrinking, and fitOverlay cuts it silently (#545).
 //
 // They are constants, and that is the fix rather than an accident of wording. Every
 // one of these used to interpolate a name — the repo group, the derived branch, the
