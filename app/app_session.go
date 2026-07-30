@@ -1473,7 +1473,7 @@ func (m *home) createSessionFromForm(prompt string) tea.Cmd {
 	}
 	if total > maxVariantBatch {
 		ov.Submitted = false
-		// 17 cells plus the digits of maxVariantBatch, a compile-time constant — so
+		// 21 cells plus the digits of maxVariantBatch, a compile-time constant — so
 		// nothing here is derived from config and the width is provable. The batch's
 		// own total is deliberately not interpolated: it is variantCountMax x
 		// len(profiles), and len(profiles) has no ceiling anywhere, so a message
