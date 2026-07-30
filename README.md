@@ -531,9 +531,13 @@ machine or on a remote host:
   `wl-copy` (Linux), `pbcopy` (macOS), or the Windows clipboard. This is the
   local fallback for terminals that ignore OSC 52.
 
-A copy only reports failure when **both** paths are unavailable, and the message
-names the next step (install a clipboard utility, or use a terminal with OSC 52
-support).
+The OSC 52 leg always goes out, so a copy is never reported as failed: a missing
+clipboard utility is recorded in the log rather than shown as an error, because
+claiming a copy failed while the escape was on its way would be wrong more often
+than right. If a copy does not land, the two things to check are that your
+terminal has OSC 52 writes enabled (see the tmux note below) and that a clipboard
+utility is installed — run with `-v` to get the log file path, where a missing one
+is noted.
 
 > **Running Atrium inside your own outer tmux?** tmux swallows OSC 52 by default,
 > so the escape never reaches your terminal. Enable clipboard passthrough in that

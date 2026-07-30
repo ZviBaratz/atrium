@@ -12,6 +12,7 @@ import (
 
 	"charm.land/bubbles/v2/spinner"
 	tea "charm.land/bubbletea/v2"
+	xansi "github.com/charmbracelet/x/ansi"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -89,18 +90,22 @@ func TestKeyCopyBranch_CopiesSelectedBranchAndAcknowledges(t *testing.T) {
 	assert.NotNil(t, cmd, "the toast schedules its own hide")
 }
 
-// A clipboard failure surfaces as a toast rather than dying in the log: the
-// user needs to know the branch never reached the clipboard.
-func TestKeyCopyBranch_ClipboardErrorSurfaces(t *testing.T) {
+// A host with no clipboard utility still copies: the OSC 52 leg is a command the
+// renderer emits unconditionally, so the OS copier's failure is a missing fallback,
+// not a failed copy, and reporting it would be wrong more often than right. The
+// copy must still be acknowledged, and the escape must still be on its way.
+func TestKeyCopyBranch_MissingOSCopierStillCopiesOverOSC52(t *testing.T) {
 	h := newCopyBranchHome(t, newBranchInstance(t, "a", "feature/login"))
 	fc := withFakeClipboard(t, errors.New("no clipboard utility"))
 
 	cmd := pressY(h)
 
-	require.True(t, fc.called)
-	require.True(t, h.menu.HasNotice(), "the failure must be visible")
-	assert.NotContains(t, h.menu.String(), "copied", "a failed copy must not read as success")
-	assert.NotNil(t, cmd)
+	require.True(t, fc.called, "the OS leg is still attempted")
+	require.True(t, h.menu.HasNotice())
+	assert.Contains(t, xansi.Strip(h.menu.String()), "copied",
+		"the OSC 52 leg delivered, so this is a success")
+	require.Equal(t, "feature/login", clipboardPayload(t, cmd),
+		"the OSC 52 command carries the branch")
 }
 
 // With no session selected there is nothing to copy: the clipboard is left

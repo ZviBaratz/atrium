@@ -254,7 +254,7 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			cmds = append(cmds, m.applyMetadataResults(msg.results, true)...)
 			// Surface the fleet in the OS chrome once per tick; a session death this
 			// tick (a recovery) shows the taskbar error state, cleared next tick.
-			m.applyOSChrome(len(recoveries) > 0)
+			m.refreshOSChrome(len(recoveries) > 0)
 		}
 		m.metadataTick++
 		fullSweep := m.metadataTick%metadataFullSweepEvery == 0

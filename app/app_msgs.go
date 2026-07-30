@@ -540,9 +540,10 @@ func (m *home) handleAttachFinished(msg attachFinishedMsg) (tea.Model, tea.Cmd) 
 	// repaintAfterAttach (see its doc). Refine the layout and selection-derived
 	// panes from here.
 	m.state = stateDefault
-	// Re-assert the OS chrome the attach handed to tmux (onAttached reset it); the
-	// next metadata tick refines it, this repaints the known state immediately.
-	m.applyOSChrome(false)
+	// The renderer restored the title and progress bar it cleared for the attach, so
+	// this is not a re-assert — it refreshes the counts, which may have moved while
+	// the loop was suspended, a tick earlier than the poll would.
+	m.refreshOSChrome(false)
 	if msg.err != nil {
 		// A failed sibling-cycle re-attach still carries keeper losses from the
 		// previous attach (attachExecCarry seeds them before Run can fail); surface

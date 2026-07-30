@@ -12,8 +12,11 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// captureClipboard swaps the clipboard writer for one that records, restoring it
-// after the test. Same package-var seam the existing copy-branch tests use.
+// captureClipboard swaps the OS-copier leg for one that records, restoring it after
+// the test. It sees only that leg: the text also travels over OSC 52 as a
+// tea.SetClipboard command, which is what carries a copy across SSH and which this
+// seam cannot observe. The tests below use it to pin *what* gets copied; that the
+// OSC leg is wired up at all is TestCopyContent_PaneCopyAlsoGoesOverOSC52's job.
 func captureClipboard(t *testing.T) *string {
 	t.Helper()
 	var got string
@@ -42,6 +45,29 @@ func TestCopyContent_DiffTabYieldsRawGitOutput(t *testing.T) {
 
 	require.Equal(t, raw, *got, "the diff must be copied exactly as git wrote it")
 	require.Contains(t, h.menu.NoticeText(), "diff copied")
+}
+
+// TestCopyContent_PaneCopyAlsoGoesOverOSC52: the pane copy's whole point is content
+// clean enough to paste, and over SSH the only leg that can deliver it is OSC 52 —
+// the OS copier is on the wrong machine. Every other test here reads the OS leg via
+// captureClipboard, so a copyPaneContent rewired to call actions.CopyToClipboard
+// directly would lose the remote clipboard with all of them still green. This is the
+// only assertion that the pane copy reaches the terminal at all.
+func TestCopyContent_PaneCopyAlsoGoesOverOSC52(t *testing.T) {
+	got := captureClipboard(t)
+	spy := newFrameSpy("")
+	h, inst := newCaptureHome(t, spy)
+
+	h.Update(paneFrameMsg{
+		target: frameTarget{instance: inst},
+		text:   "build passed",
+		at:     time.Now(),
+	})
+
+	_, cmd := h.copyPaneContent()
+
+	require.Equal(t, "build passed", *got, "the OS leg carries the pane text")
+	require.Equal(t, "build passed", clipboardPayload(t, cmd), "and so does the OSC 52 leg")
 }
 
 // TestCopyContent_PaneTabStripsStyling: pane captures carry the agent's own ANSI

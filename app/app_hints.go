@@ -142,16 +142,17 @@ func (m *home) handleHintsState(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 // actHint copies the match and, on the open variant, opens URLs in the
 // browser. Non-URL kinds degrade to plain copy in v1 (see the design doc).
 func (m *home) actHint(match hints.Match, open bool) tea.Cmd {
-	if err := actions.CopyToClipboard(match.Text); err != nil {
-		return m.handleError(fmt.Errorf("copy hint: %w", err))
-	}
+	copyCmd := m.copyToClipboard(match.Text)
 	if open && match.Kind == hints.KindURL && actions.OpenableURL(match.Text) {
 		if err := actions.OpenInBrowser(match.Text); err != nil {
-			return m.handleError(fmt.Errorf("open url: %w", err))
+			// The copy still happened; report only the half that failed.
+			return tea.Batch(copyCmd, m.handleError(fmt.Errorf("open url: %w", err)))
 		}
-		return m.handleInfoNotice(fmt.Sprintf("copied + opened %s", truncateForNotice(match.Text)))
+		return tea.Batch(copyCmd,
+			m.handleInfoNotice(fmt.Sprintf("copied + opened %s", truncateForNotice(match.Text))))
 	}
-	return m.handleInfoNotice(fmt.Sprintf("'%s' copied", truncateForNotice(match.Text)))
+	return tea.Batch(copyCmd,
+		m.handleInfoNotice(fmt.Sprintf("'%s' copied", truncateForNotice(match.Text))))
 }
 
 // truncateForNotice keeps toasts one line short; the menu row truncates too,

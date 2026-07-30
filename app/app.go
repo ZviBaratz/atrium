@@ -8,15 +8,12 @@ package app
 import (
 	"context"
 	"fmt"
-	"os"
 	"path/filepath"
 	"sync"
 	"time"
 
-	"github.com/ZviBaratz/atrium/chrome"
 	"github.com/ZviBaratz/atrium/config"
 	"github.com/ZviBaratz/atrium/hints"
-	"github.com/ZviBaratz/atrium/internal/actions"
 	"github.com/ZviBaratz/atrium/log"
 	"github.com/ZviBaratz/atrium/notify"
 	"github.com/ZviBaratz/atrium/session"
@@ -50,10 +47,6 @@ func Run(ctx context.Context, program string, autoYes bool, version, binName str
 	if err != nil {
 		return err
 	}
-	// Route clipboard copies through the TUI's own output so OSC 52 reaches the
-	// user's terminal (the SSH-safe path); the exec copier stays as the local
-	// fallback. Wired before the event loop, so no copy can race the setter.
-	actions.SetClipboardOutput(os.Stdout)
 	// Alt screen, focus reporting and mouse capture are no longer options here:
 	// Bubble Tea v2 takes them as fields on the View this model returns every
 	// frame, so they live in View() alongside the content they apply to. The
@@ -64,11 +57,6 @@ func Run(ctx context.Context, program string, autoYes bool, version, binName str
 	// main) also stops the TUI loop, not just the subprocesses.
 	p := tea.NewProgram(h, tea.WithContext(ctx))
 	_, err = p.Run()
-	// The event loop has exited (graceful quit or signal shutdown): clear the OS
-	// chrome so no stale title/progress outlives the TUI.
-	if h.chrome != nil {
-		h.chrome.Reset()
-	}
 	// The event loop has exited. On signal shutdown it returned on ctx.Done()
 	// without dispatching Update, and the force-quit escape exits with a session
 	// still Loading — either way an in-flight Start was never persisted or torn
@@ -277,10 +265,13 @@ type home struct {
 	// session finishes a turn or blocks on a prompt (see app_notify.go, config
 	// Notifications). nil disables notification (hand-built test homes).
 	notifier *notify.Notifier
-	// chrome surfaces fleet state in the terminal's OS chrome — window title and
-	// OSC 9;4 taskbar progress (see chrome, config OSChrome). nil disables it
-	// (hand-built test homes); the emitter itself no-ops when the config is off.
-	chrome *chrome.Emitter
+	// osChromeTitle and osChromeProgress are the fleet's presence in the terminal's
+	// OS chrome — window title and OSC 9;4 taskbar progress (see refreshOSChrome,
+	// config OSChrome). Recomputed once per metadata tick and read by View, which
+	// hands them to Bubble Tea. Their zero values ("" and no bar) mean "no chrome",
+	// so a hand-built test home renders none without needing a guard.
+	osChromeTitle    string
+	osChromeProgress tea.ProgressBarState
 	// notifySeen tracks per-instance notification state (first-observation gate to
 	// suppress the startup replay of restored statuses, plus per-edge throttle
 	// timestamps). An instance absent from the map has not been observed yet, so its
@@ -701,6 +692,20 @@ func (m *home) View() tea.View {
 	if m.appConfig.GetMouse() {
 		v.MouseMode = tea.MouseModeCellMotion
 	}
+	// The fleet in the terminal's own chrome (config `os_chrome`, see refreshOSChrome
+	// for the derivation and chrome for what the strings mean). Declaring them here
+	// rather than writing the escapes ourselves is what makes them self-clearing: the
+	// renderer emits an empty title and a reset bar whenever it releases the terminal
+	// — to a tmux attach, at quit, and on a signal shutdown — so no stale "5 running"
+	// can outlive the frame that claimed it.
+	v.WindowTitle = m.osChromeTitle
+	// A fresh ProgressBar every frame, deliberately. The renderer keeps the pointer it
+	// is handed and diffs the value behind it, so handing back one stored pointer and
+	// mutating it in place would compare the new state against itself and find no
+	// change — freezing the bar, skipping its reset at exit, and (because the
+	// whole-view equality check reads through the same pointer) dropping entire frames
+	// whenever the content happened not to move.
+	v.ProgressBar = tea.NewProgressBar(m.osChromeProgress, 0)
 	return v
 }
 
