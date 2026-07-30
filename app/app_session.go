@@ -1445,7 +1445,7 @@ func (m *home) createSessionFromForm(prompt string) tea.Cmd {
 	// reason rides the variant control (an inline message visible with the form open; a
 	// toast is swallowed behind the modal).
 	//
-	// Every message below has 32 cells: VariantPicker.Render puts it on the section's
+	// Every message below is written to 32 cells: VariantPicker.Render puts it on the
 	// label line, so the composed line is "Variants" + two spaces + the message, against
 	// the 42 inner cells an 80-col terminal gives the overlay. fitOverlay truncates the
 	// overflow *silently*, and all three of these shipped cut mid-clause (#541) — the
@@ -1454,7 +1454,9 @@ func (m *home) createSessionFromForm(prompt string) tea.Cmd {
 	// but a refusal's tail is the reason, and a ladder would hand the short rung to the
 	// default terminal. One spelling that fits everywhere is the right shape here.
 	//
-	// The widths are bounded, not merely short — see each call site. app's
+	// The widths are bounded, not merely short: none of the three interpolates a value
+	// derived from config, which is what makes each one's worst case a thing you can
+	// state rather than assume — see each call site. app's
 	// TestVariantRefusals_SurviveAn80ColRender drives all three and fails if a reword
 	// stops fitting; ui/overlay's variantErrorBudget owns the 32.
 	ov.SetVariantError("")
@@ -1471,10 +1473,14 @@ func (m *home) createSessionFromForm(prompt string) tea.Cmd {
 	}
 	if total > maxVariantBatch {
 		ov.Submitted = false
-		// 27 cells plus the digits of total, which is bounded by variantCountMax x
-		// len(profiles) — a config value, so there is no constant to derive a worst
-		// case from. It fits the budget up to a five-digit total.
-		ov.SetVariantError(fmt.Sprintf("batch of %d over the %d limit", total, maxVariantBatch))
+		// 17 cells plus the digits of maxVariantBatch, a compile-time constant — so
+		// nothing here is derived from config and the width is provable. The batch's
+		// own total is deliberately not interpolated: it is variantCountMax x
+		// len(profiles), and len(profiles) has no ceiling anywhere, so a message
+		// carrying it would be bounded only by a claim about realistic use. Same trade
+		// as the max_sessions refusal below — the limit is the number the user has to
+		// get under, and the counts they have to lower are on the chip row.
+		ov.SetVariantError(fmt.Sprintf("batch over the %d limit", maxVariantBatch))
 		return nil
 	}
 	// Allocate one unique title per variant before spawning any (AC2). A single
