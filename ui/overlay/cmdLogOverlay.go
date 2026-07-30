@@ -218,10 +218,16 @@ func summaryLine(recs []cmdlog.Record) string {
 	}
 	var parts []string
 	for _, t := range totals {
-		if t.CPU <= 0 {
-			continue // a verb with no measured CPU says nothing about where time went
+		// Round first, then test: the rule is about what reaches the reader, so it has
+		// to be enforced on the printed value. Guarding the raw duration instead would
+		// let a sub-millisecond verb through to render as the "0s" this omits — a verb
+		// with no measured CPU says nothing about where time went, and a parenthesised
+		// list of zeroes would imply the work was free.
+		cpu := t.CPU.Round(time.Millisecond)
+		if cpu <= 0 {
+			continue
 		}
-		parts = append(parts, fmt.Sprintf("%s %s", t.Verb, t.CPU.Round(time.Millisecond)))
+		parts = append(parts, fmt.Sprintf("%s %s", t.Verb, cpu))
 	}
 	if len(parts) > 0 {
 		line += "  (" + strings.Join(parts, " · ") + ")"

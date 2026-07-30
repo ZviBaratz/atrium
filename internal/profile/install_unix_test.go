@@ -43,6 +43,66 @@ func TestTriggerSignalTogglesTheDumper(t *testing.T) {
 	}
 }
 
+// Shutdown flushes an open profile rather than abandoning it.
+//
+// main.go arms this as `defer profile.Install(ctx)()`, so stop() is what runs when
+// Atrium exits — and with a 30s default window, "send SIGUSR1, then quit" is the
+// ordinary way to use the feature, not a corner. runtime/pprof only emits the
+// protobuf when StopCPUProfile builds it, so a run that is merely disarmed leaves a
+// **zero-byte** file: existence proves nothing here, which is why this asserts on
+// size and why hasPrefixedFile is the wrong helper for it.
+func TestStopFlushesAnOpenProfile(t *testing.T) {
+	dir := t.TempDir()
+	d := NewDumper(dir, maxWindow) // long window, so only stop() can close the run
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	stop := installOn(ctx, d)
+
+	d.Toggle()
+	if !d.Running() {
+		t.Fatal("Running() = false, want a profile open going into the shutdown")
+	}
+
+	stop()
+
+	if d.Running() {
+		t.Error("Running() = true after stop(), want the shutdown to have closed the run")
+	}
+	if n := countNonEmptyPrefixedFiles(t, dir, "atrium-cpu-"); n != 1 {
+		t.Errorf("%d non-empty CPU profiles after stop(), want 1 — an unstopped profile is a zero-byte file", n)
+	}
+	for _, want := range []string{"atrium-heap-", "atrium-goroutine-"} {
+		if !hasPrefixedFile(t, dir, want) {
+			t.Errorf("no %s*.pprof written, want stop() to write the companion snapshots too", want)
+		}
+	}
+}
+
+// Cancelling the context first does not lose the profile either.
+//
+// A separate case from the one above because the orderings differ where it counts:
+// main.go's quitSignals (SIGINT/SIGTERM/SIGHUP) cancel ctx, so the listener
+// goroutine is already gone by the time the deferred stop() runs. A fix that only
+// finished the run from inside that goroutine would pass the test above and still
+// drop the profile on every signal-driven exit.
+func TestStopAfterContextCancelStillFlushes(t *testing.T) {
+	dir := t.TempDir()
+	d := NewDumper(dir, maxWindow)
+	ctx, cancel := context.WithCancel(context.Background())
+	stop := installOn(ctx, d)
+
+	d.Toggle()
+	if !d.Running() {
+		t.Fatal("Running() = false, want a profile open going into the shutdown")
+	}
+	cancel()
+	stop()
+
+	if n := countNonEmptyPrefixedFiles(t, dir, "atrium-cpu-"); n != 1 {
+		t.Errorf("%d non-empty CPU profiles after a cancel-then-stop, want 1", n)
+	}
+}
+
 // Once stopped, a further signal is ignored — the handler is disarmed and the
 // goroutine has exited, so a profile cannot be opened behind the app's back after
 // shutdown.

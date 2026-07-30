@@ -57,5 +57,16 @@ func installOn(ctx context.Context, d *Dumper) (stop func()) {
 		signal.Stop(ch)
 		close(ch)
 		<-done
+		// Flush a run that is still open, rather than disarming and walking away.
+		// runtime/pprof only emits the protobuf when StopCPUProfile builds it, so an
+		// abandoned run leaves a zero-byte file and no companion snapshots — and with
+		// a 30s default window, "send the signal, then quit" is the ordinary way to
+		// use this, not a corner. finish() is a no-op when nothing is open.
+		//
+		// It belongs here rather than in the listener's ctx.Done() branch because the
+		// two exits differ: a signal-driven quit cancels ctx and the goroutine is
+		// already gone by the time this runs, while a plain TUI quit never cancels it
+		// at all. Only stop() is on both paths.
+		d.finish()
 	}
 }

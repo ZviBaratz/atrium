@@ -1030,17 +1030,22 @@ Atrium's cost has two halves, and they need different tools.
 
 **Its own work** — rebuilding the frame, classifying panes — is captured with a
 signal. Send `SIGUSR1` to a running `atrium` and it writes CPU, heap and goroutine
-profiles into the temp directory, beside `atrium.log`:
+profiles into the temp directory, beside `atrium.log` — that is `$TMPDIR` when it is
+set, which on macOS is a per-user path like `/var/folders/…/T/`, not `/tmp`:
 
 ```bash
 kill -USR1 "$(pgrep -x atrium)"     # start sampling (30s, then it stops itself)
 kill -USR1 "$(pgrep -x atrium)"     # optional: stop early
-go tool pprof "$(ls -t /tmp/atrium-cpu-*.pprof | head -1)"
+go tool pprof "$(ls -t "${TMPDIR:-/tmp}"/atrium-cpu-*.pprof | head -1)"
 ```
+
+Each finished run logs the exact path it wrote to, so `grep pprof "${TMPDIR:-/tmp}"/atrium.log`
+is the authoritative answer if the glob above finds nothing.
 
 Set `ATRIUM_PPROF_SECONDS` (1–300, default 30) to change the sampling window. The
 trigger is always armed — no flag, no restart — because the instance worth
-profiling is the one already running.
+profiling is the one already running. Quitting Atrium mid-run closes the profile
+first, so a capture cut short by an exit is still readable.
 
 **The subprocesses it launches** (git, tmux, gh) are invisible to that profile:
 Atrium is blocked waiting on them, so they contribute nothing to its own CPU

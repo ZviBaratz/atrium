@@ -117,3 +117,29 @@ func hasPrefixedFile(t *testing.T, dir, prefix string) bool {
 	t.Helper()
 	return countPrefixedFiles(t, dir, prefix) > 0
 }
+
+// countNonEmptyPrefixedFiles is countPrefixedFiles restricted to files with bytes
+// in them. Separate because an abandoned CPU profile still leaves its file on
+// disk — os.Create ran, StopCPUProfile never did — so only the size tells a
+// completed run from a lost one.
+func countNonEmptyPrefixedFiles(t *testing.T, dir, prefix string) int {
+	t.Helper()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("ReadDir(%s): %v", dir, err)
+	}
+	n := 0
+	for _, e := range entries {
+		if !strings.HasPrefix(e.Name(), prefix) || filepath.Ext(e.Name()) != ".pprof" {
+			continue
+		}
+		info, err := e.Info()
+		if err != nil {
+			t.Fatalf("stat %s: %v", e.Name(), err)
+		}
+		if info.Size() > 0 {
+			n++
+		}
+	}
+	return n
+}

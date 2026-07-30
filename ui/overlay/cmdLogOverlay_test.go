@@ -116,6 +116,32 @@ func TestCmdLogOverlay_SummaryOmitsZeroCPUVerbs(t *testing.T) {
 	}
 }
 
+// A verb too cheap to round to a millisecond is left out on the same grounds.
+//
+// The sibling test above pins CPU == 0; this pins the gap between the guard and
+// the display. The value is real (200µs > 0) so a guard on the raw duration lets
+// it through, but the line renders rounded — so it reaches the user as the very
+// "0s" the omission rule exists to prevent. Whether rusage granularity can
+// actually produce a sub-millisecond reading is not the point: the rule is about
+// what gets printed, so it has to be enforced on the printed value.
+func TestCmdLogOverlay_SummaryOmitsVerbsTooCheapToRound(t *testing.T) {
+	cmdlog.Reset()
+	cmdlog.Add(cmdlog.Record{Argv: "git status", Start: time.Now(), CPU: 200 * time.Microsecond})
+
+	o := NewCmdLogOverlay("")
+	o.SetSize(100, 24)
+	got := stripANSI(o.Render())
+
+	// Scoped to the attribution: a bare "0s" also appears in the row's own duration
+	// columns, so asserting on it alone would fail whatever the summary does.
+	if strings.Contains(got, "git status 0s") {
+		t.Errorf("summary printed a rounded-to-zero verb, want it omitted:\n%s", got)
+	}
+	if strings.Contains(got, "(") {
+		t.Errorf("summary should carry no attribution when every verb rounds to zero:\n%s", got)
+	}
+}
+
 // The summary is a copy change, and a copy change is a width change: at the
 // narrowest box SetSize allows it must still be ONE line.
 //
