@@ -172,6 +172,10 @@ func vpDimStyle() lipgloss.Style      { return overlayDimStyle() }
 // is the deliberate exception to the rule at createFormHelp: this is the one field
 // where "↑↓ select" is wrong. Here ↑↓ steps a count and ←→ moves between profiles, so
 // the hint corrects the footer rather than restating it (#466).
+//
+// "Both axes" is the widest rung only. The narrow one keeps "↑↓ count" alone, which
+// sheds the half that agrees with the footer and keeps the half that corrects it — so
+// the exception is still earning its cells at 80 columns (see variantFocusHelp).
 func (vp *VariantPicker) Render() string {
 	var s strings.Builder
 	s.WriteString(vpLabelStyle().Render(vpLabel))

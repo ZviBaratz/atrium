@@ -58,9 +58,9 @@ func tiHintStyle() lipgloss.Style { return theme.Current().OverlayHintStyle() }
 // Two hints stay, on the merits, and both are asserted by that test so a later
 // consistency pass has to argue with them rather than delete them:
 //
-//   - Variants ("←→ profile · ↑↓ count") — the one field where this footer is wrong.
-//     There ↑↓ steps a count and ←→ moves between profiles, so the hint corrects the
-//     footer rather than restating it.
+//   - Variants (widest rung "←→ profile · ↑↓ count") — the one field where this footer
+//     is wrong. There ↑↓ steps a count and ←→ moves between profiles, so the hint
+//     corrects the footer rather than restating it.
 //   - Model ("type a name") — a custom-entry affordance. The chips are not the whole
 //     input surface for that field, and nothing else says so.
 //
@@ -71,7 +71,9 @@ func tiHintStyle() lipgloss.Style { return theme.Current().OverlayHintStyle() }
 // footer would stop owning the nav keys on exactly the narrow terminal where the
 // per-field hints are least affordable, and #466's guard — which renders at one wide
 // size — could not see it. So every rung names "↑↓" exactly once, and that is what
-// TestCreateFormHelp_EveryRungKeepsTheNavKeys pins.
+// TestCreateFormHelp_EveryRungKeepsTheNavKeys pins — with
+// TestPromptFocusHelp_NoRungNamesTheNavKeys holding the mirror image for the prompt,
+// whose count under that rule is zero at every width.
 var createFormHelp = []string{
 	"Tab complete/move · ↑↓ select · ↵ create from name · ⌃S create",
 	"Tab complete/move · ↑↓ select · ⌃S create",
