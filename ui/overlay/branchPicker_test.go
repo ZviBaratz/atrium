@@ -148,10 +148,14 @@ func TestBranchPicker_ResultsClearError(t *testing.T) {
 	assert.Contains(t, out, "main")
 }
 
-// A disabled picker (non-git target → direct session) renders an explanatory placeholder
-// instead of the filter/list UI, at the same height as the enabled unfocused render so
-// the surrounding form never jumps when the project selection crosses a git/non-git
-// boundary.
+// An inert picker renders an explanatory placeholder instead of the filter/list UI, at
+// the same height as the enabled unfocused render so the surrounding form never jumps
+// when the project selection crosses a git/non-git boundary.
+//
+// This covers the direct-target case; TestBranchPicker_InvalidTargetIsNotCalledDirect
+// covers the other one. Reading "disabled" as "direct" is what let the placeholder call
+// an invalid target a direct session for as long as it did (#545), so the two inert
+// cases get a test each rather than one test and an assumption.
 func TestBranchPicker_DisabledRendersPlaceholderAtConstantHeight(t *testing.T) {
 	bp := NewBranchPicker()
 	bp.SetResults([]string{"main"}, bp.GetFilterVersion())

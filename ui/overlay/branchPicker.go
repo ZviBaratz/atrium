@@ -253,8 +253,9 @@ func (bp *BranchPicker) Render() string {
 	var s strings.Builder
 
 	if bp.disabled {
-		// Inert placeholder for a non-git target, at the exact unfocused shape (header,
-		// blank, visibleRows blank rows) so the form's height is unaffected.
+		// Inert placeholder for any target but a git repo — inertNote says which of the
+		// two it is — at the exact unfocused shape (header, blank, visibleRows blank
+		// rows) so the form's height is unaffected.
 		s.WriteString(bpLabelStyle().Render("Base: "))
 		s.WriteString(bpDimStyle().Italic(true).Render(bp.inertNote()))
 		s.WriteString("\n\n")

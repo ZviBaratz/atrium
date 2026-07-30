@@ -108,9 +108,10 @@ func (t *TextInputOverlay) setFocusIndex(i int) {
 	t.updateFocusState()
 }
 
-// stopEnabled reports whether a stop can take focus: the branch picker is disabled when
-// the target is not a git repo, the model field when the effective program is not claude;
-// every other stop is always enabled.
+// stopEnabled reports whether a stop can take focus: the branch picker is disabled for
+// any target but a git repo — a directory without one, or not a directory at all — and
+// the model field when the effective program is not claude; every other stop is always
+// enabled.
 func (t *TextInputOverlay) stopEnabled(kind focusStop) bool {
 	if kind == stopBranch && t.branchPicker != nil && t.branchPicker.Disabled() {
 		return false
