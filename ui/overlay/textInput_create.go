@@ -335,7 +335,17 @@ func (t *TextInputOverlay) SetTargetValidity(valid, direct bool, headBranch stri
 		return
 	}
 	t.branchPicker.SetHeadLabel(headBranch)
-	t.branchPicker.SetDisabled(!valid || direct)
+	// Order matters: an invalid path is reported as invalid even though the caller
+	// also passes direct=false for it. The branch section is inert either way, but
+	// its placeholder names which one, so the two must not collapse (#545).
+	kind := targetGit
+	switch {
+	case !valid:
+		kind = targetInvalid
+	case direct:
+		kind = targetDirect
+	}
+	t.branchPicker.SetTarget(kind)
 	if t.isBranchPicker() && !t.stopEnabled(stopBranch) {
 		t.setFocusIndex(t.nextEnabledIndex(1))
 	}

@@ -1242,6 +1242,30 @@ func (m *home) openCreateFormSeeded(seedPath string, focusTitle bool, prefill *P
 	return tea.Batch(cmds...)
 }
 
+// The title field's verdicts. Each is written to titleVerdictBudget — 21 cells, the
+// room left on the Title row's 42 once the label (5), the two-space gap, the input's
+// floor of 10 (+1 for bubbles' end-of-line cursor cell) and the " (" … ")" the verdict
+// is wrapped in are paid for: 42 - 5 - 2 - 11 - 3. Past that the row grows instead of
+// the input shrinking, and fitOverlay cuts it silently (#545).
+//
+// They are constants, and that is the fix rather than an accident of wording. Every
+// one of these used to interpolate a name — the repo group, the derived branch, the
+// colliding session's title — none of which has a ceiling, so the row's width was
+// set by how long the user's branch happened to be. What the names said is on screen
+// anyway: the target is in the Project row two lines up, and the branch is derived
+// from the title being typed. Same trade as the variant refusals above.
+//
+// Naming them also makes the set enumerable, which is what
+// TestTitleVerdicts_SurviveAn80ColRender needs: titleErrNameTaken fires only against
+// a *started* session's tmux name, so it cannot be driven in a hermetic test, and a
+// guard that only covered the senders it could reach would leave it unmeasured.
+const (
+	titleErrAlreadyUsed  = "already used"
+	titleErrBranchExists = "branch already exists"
+	titleErrNameTaken    = "session name taken"
+	titleErrNoFreeNames  = "not enough free names"
+)
+
 // titleConflict reports why title cannot be used for a new session in the
 // current target group ("" = no conflict). It compares derived names — not raw
 // titles — against every listed instance regardless of status (a Paused session
@@ -1261,16 +1285,16 @@ func (m *home) titleConflict(title string) string {
 	cand := tmux.QualifiedSessionName(group, title)
 	for _, inst := range m.list.GetInstances() {
 		if inst.GroupKey() == group && session.DerivedNamesCollide(prefix, inst.Title, title) {
-			return fmt.Sprintf("already used in %s", group)
+			return titleErrAlreadyUsed
 		}
 		if name := inst.TmuxSessionName(); name != "" {
 			if cand == name || cand == name+"_term" || cand+"_term" == name {
-				return fmt.Sprintf("name collides with session %q", inst.Title)
+				return titleErrNameTaken
 			}
 		}
 	}
 	if m.titleBranchExists && m.titleBranchName == git.BranchNameForSession(prefix, title) {
-		return fmt.Sprintf("branch %s exists in %s", m.titleBranchName, group)
+		return titleErrBranchExists
 	}
 	return ""
 }
@@ -1351,7 +1375,11 @@ func (m *home) variantTitleConflict(candidate, path string, direct bool) string 
 	if !direct {
 		branch := git.BranchNameForSession(m.appConfig.BranchPrefix, candidate)
 		if git.LocalBranchExists(m.ctx, path, branch) {
-			return fmt.Sprintf("branch %s exists in %s", branch, m.newSessionGroup)
+			// The same verdict titleConflict returns for the async check, and it rides
+			// the same Title row — so it is the same constant. Two spellings of one
+			// fact is how the interpolating version survived here after the other was
+			// bounded (#545).
+			return titleErrBranchExists
 		}
 	}
 	return ""
@@ -1380,7 +1408,7 @@ func (m *home) planVariantTitles(stem string, total int, path string, direct boo
 		titles = append(titles, cand)
 	}
 	if len(titles) < total {
-		return nil, fmt.Sprintf("couldn't find %d free names for %q", total, stem)
+		return nil, titleErrNoFreeNames
 	}
 	return titles, ""
 }

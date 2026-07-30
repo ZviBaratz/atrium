@@ -488,7 +488,11 @@ func TestSessionCreateOverlay_TitleRequiredMarker(t *testing.T) {
 // message would always sit past fitOverlay's truncation edge, invisible.
 func TestSessionCreateOverlay_TitleVerdictsTrailInput(t *testing.T) {
 	o := NewSessionCreateOverlay(nil, nil, []string{"/repo/a"}, "")
-	o.SetSize(80, 40)
+	// The width the copy actually has to survive. This read SetSize(80, 40) — inner 74,
+	// a 133-col terminal — while claiming below that the error "must survive width
+	// truncation intact", so the truncation it named could never happen and every title
+	// verdict app produced overflowed the real row unnoticed (#545).
+	o.SetSize(createOverlayWidth, 40)
 
 	titleRow := func() string {
 		for _, l := range strings.Split(xansi.Strip(o.Render()), "\n") {
@@ -519,13 +523,17 @@ func TestSessionCreateOverlay_TitleVerdictsTrailInput(t *testing.T) {
 
 	// An error appearing must neither move the input nor precede it, and must
 	// survive the row's width truncation in full.
-	o.SetTitleError("already used in atrium")
+	// A budget-width verdict rather than a quoted literal: app owns the copy and this
+	// package cannot import it, so what is testable here is the geometry at the widest
+	// verdict the row affords. "z" so the filler cannot be confused with the typed "x".
+	verdict := strings.Repeat("z", titleVerdictBudget)
+	o.SetTitleError(verdict)
 	errorRow := titleRow()
-	require.Contains(t, errorRow, "(already used in atrium)",
+	require.Contains(t, errorRow, "("+verdict+")",
 		"the error must survive width truncation intact")
 	assert.Equal(t, typedCol, strings.Index(errorRow, "x"),
 		"the input must not shift when the error appears")
-	assert.Greater(t, strings.Index(errorRow, "(already used"), strings.Index(errorRow, "x"),
+	assert.Greater(t, strings.Index(errorRow, "("+verdict), strings.Index(errorRow, "x"),
 		"the error must trail the input, not precede it")
 }
 

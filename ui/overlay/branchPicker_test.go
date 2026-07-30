@@ -148,21 +148,42 @@ func TestBranchPicker_ResultsClearError(t *testing.T) {
 	assert.Contains(t, out, "main")
 }
 
-// A disabled picker (non-git target → direct session) renders an explanatory placeholder
-// instead of the filter/list UI, at the same height as the enabled unfocused render so
-// the surrounding form never jumps when the project selection crosses a git/non-git
-// boundary.
+// An inert picker renders an explanatory placeholder instead of the filter/list UI, at
+// the same height as the enabled unfocused render so the surrounding form never jumps
+// when the project selection crosses a git/non-git boundary.
+//
+// This covers the direct-target case; TestBranchPicker_InvalidTargetIsNotCalledDirect
+// covers the other one. Reading "disabled" as "direct" is what let the placeholder call
+// an invalid target a direct session for as long as it did (#545), so the two inert
+// cases get a test each rather than one test and an assumption.
 func TestBranchPicker_DisabledRendersPlaceholderAtConstantHeight(t *testing.T) {
 	bp := NewBranchPicker()
 	bp.SetResults([]string{"main"}, bp.GetFilterVersion())
 	enabledHeight := strings.Count(bp.Render(), "\n")
 
-	bp.SetDisabled(true)
+	bp.SetTarget(targetDirect)
 	out := bp.Render()
 
 	assert.Contains(t, out, "direct session", "placeholder must explain why the picker is inert")
 	assert.NotContains(t, out, "searching")
 	assert.Equal(t, enabledHeight, strings.Count(out, "\n"), "height must not change when disabled")
+}
+
+// The picker is inert for a direct target and for an invalid one alike, but the two are
+// not the same fact and the placeholder must not conflate them.
+//
+// Until #545 it said "direct session — no git branching" for both, so pointing the form
+// at a path that is not a directory produced a form claiming it would create a direct
+// session there. The bug was invisible because the only test of the disabled placeholder
+// set the disabled bit directly, never through the invalid path.
+func TestBranchPicker_InvalidTargetIsNotCalledDirect(t *testing.T) {
+	bp := NewBranchPicker()
+	bp.SetTarget(targetInvalid)
+
+	out := bp.Render()
+	assert.Contains(t, out, "not a directory", "the placeholder must name the real reason")
+	assert.NotContains(t, out, "direct session", "an invalid target is not a direct session")
+	assert.True(t, bp.Disabled(), "it is still inert — there is nothing to branch from")
 }
 
 // Disabling must clamp the selection: a branch chosen while the previous project was a git
@@ -174,10 +195,10 @@ func TestBranchPicker_DisabledSelectionIsEmpty(t *testing.T) {
 	bp.HandleKeyPress(keyMsg("down"))
 	require.NotEmpty(t, bp.GetSelectedBranch(), "sanity: a real branch is selected")
 
-	bp.SetDisabled(true)
+	bp.SetTarget(targetDirect)
 	assert.Empty(t, bp.GetSelectedBranch(), "disabled picker must report no base branch")
 
-	bp.SetDisabled(false)
+	bp.SetTarget(targetGit)
 	assert.NotEmpty(t, bp.GetSelectedBranch(), "re-enabling restores the selection")
 }
 
@@ -185,7 +206,7 @@ func TestBranchPicker_DisabledSelectionIsEmpty(t *testing.T) {
 // defensive backstop, not a reachable path).
 func TestBranchPicker_DisabledIgnoresKeys(t *testing.T) {
 	bp := NewBranchPicker()
-	bp.SetDisabled(true)
+	bp.SetTarget(targetDirect)
 	consumed, filterChanged := bp.HandleKeyPress(runes("abc"))
 	assert.False(t, consumed)
 	assert.False(t, filterChanged)

@@ -331,20 +331,59 @@ func dpDimStyle() lipgloss.Style      { return overlayDimStyle() }
 func dpInvalidStyle() lipgloss.Style  { return theme.Current().DangerStyle() }
 func dpDirectStyle() lipgloss.Style   { return theme.Current().DimStyle().Italic(true) }
 
-// selectionHint returns the inline indicator for the current selection state: a red
-// "(not a directory)" for an invalid target, a muted "(direct session — no git
-// isolation)" for a valid non-git directory, or empty for a normal git repo.
-func (dp *DirectoryPicker) selectionHint() string {
+// selectionMarker returns the inline indicator for the current selection state: a red
+// "(invalid)" for a target that is not a directory, a muted "(direct)" for a valid
+// non-git directory, or empty for a normal git repo (and while the state is unknown).
+//
+// It is a marker rather than a sentence because the branch section one row down already
+// explains both cases at length, and this row could not afford the sentence: at 80 cols
+// the form gets 42 inner cells and the header spends 24 of them before a path is typed,
+// so "(direct session — no git isolation)" composed a 61-cell line that fitOverlay cut
+// in silence (#545).
+//
+// The marker still earns its place, because the two rows differ in *timing*, not just in
+// length: this one clears the moment the selection moves (ClearSelectionState) so a
+// previous path's verdict is never asserted for the new one, while the branch section's
+// placeholder deliberately persists through the debounce window so it does not flicker on
+// every keystroke of a typed path.
+func (dp *DirectoryPicker) selectionMarker() string {
 	if !dp.validityChecked {
 		return ""
 	}
 	if !dp.selectionValid {
-		return dpInvalidStyle().Render("  (not a directory)")
+		return dpInvalidStyle().Render("  (invalid)")
 	}
 	if dp.selectionDirect {
-		return dpDirectStyle().Render("  (direct session — no git isolation)")
+		return dpDirectStyle().Render("  (direct)")
 	}
 	return ""
+}
+
+// markerCells is the marker's rendered width, which the header reserves before laying out
+// the variable part of the row. Styling adds no cells, so this measures the marker itself.
+func (dp *DirectoryPicker) markerCells() int {
+	return lipgloss.Width(dp.selectionMarker())
+}
+
+// fitHeaderBody bounds the variable middle of the header row — the typed filter when
+// focused, the selected path when not — to what is left after the fixed chrome and the
+// marker are paid for.
+//
+// This is the same move renderCreateForm makes for the title field's verdict: carve the
+// message's columns out of the variable part *up front*, because anything appended past
+// the row's budget lands beyond fitOverlay's truncation edge and is simply never seen. A
+// path is unbounded content and truncating it is expected; the marker is Atrium's own copy
+// and must not be the thing that goes.
+//
+// truncTail keeps the end and marks the cut with a leading ellipsis: for a path the leaf
+// identifies the project, and for a filter the caret sits at the end of what was typed.
+// Width 0 means unsized (a unit test, or a render before the first WindowSizeMsg) and
+// bounds nothing.
+func (dp *DirectoryPicker) fitHeaderBody(body string, chrome int) string {
+	if dp.width <= 0 {
+		return body
+	}
+	return truncTail(body, dp.width-chrome-dp.markerCells())
 }
 
 // Render renders the directory picker at a constant height (one header line, a blank
@@ -355,21 +394,26 @@ func (dp *DirectoryPicker) Render() string {
 	var s strings.Builder
 
 	if !dp.focused {
-		s.WriteString(dpLabelStyle().Render(dp.label + ": "))
+		prefix := dp.label + ": "
+		s.WriteString(dpLabelStyle().Render(prefix))
 		if sel := dp.GetSelectedPath(); sel != "" {
-			s.WriteString(dp.displayPath(sel))
+			s.WriteString(dp.fitHeaderBody(dp.displayPath(sel), lipgloss.Width(prefix)))
 		} else {
 			s.WriteString(dpDimStyle().Render("(none)"))
 		}
-		s.WriteString(dp.selectionHint())
+		s.WriteString(dp.selectionMarker())
 		s.WriteString("\n\n")
 		s.WriteString(renderPickerRows(nil, 0, dp.visibleRows, false, "", dpSelectedStyle(), dpDimStyle()))
 		return s.String()
 	}
 
+	// The filter's chrome is fixed; only the typed text between it grows.
+	const filterOpen, filterClose = " (filter/path: ", ")"
+	chrome := lipgloss.Width(dp.label + filterOpen + filterClose + theme.Current().Glyphs.TextCursor)
 	s.WriteString(dpLabelStyle().Render(dp.label))
-	s.WriteString(dpFilterStyle().Render(" (filter/path: " + dp.filter + theme.Current().Glyphs.TextCursor + ")"))
-	s.WriteString(dp.selectionHint())
+	s.WriteString(dpFilterStyle().Render(
+		filterOpen + dp.fitHeaderBody(dp.filter, chrome) + theme.Current().Glyphs.TextCursor + filterClose))
+	s.WriteString(dp.selectionMarker())
 	s.WriteString("\n\n")
 
 	items := dp.visibleItems()

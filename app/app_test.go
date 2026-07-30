@@ -1005,10 +1005,16 @@ func TestTargetValidityResultUpdatesIndicator(t *testing.T) {
 	}
 
 	_, _ = h.Update(targetValidityResultMsg{path: repo, valid: false})
-	assert.Contains(t, ov.Render(), "not a directory", "an invalid result shows the hint")
+	out := ov.Render()
+	assert.Contains(t, out, "not a directory", "an invalid result shows the hint")
+	// The branch section is inert for an invalid target and for a direct one alike, and
+	// until #545 its placeholder called both a direct session — so the form told the
+	// user that a path which is not a directory was a session it could create. There is
+	// no version of that which is true.
+	assert.NotContains(t, out, "direct session", "an invalid target is not a direct session")
 
 	_, _ = h.Update(targetValidityResultMsg{path: repo, valid: true, direct: true})
-	out := ov.Render()
+	out = ov.Render()
 	assert.NotContains(t, out, "not a directory", "a valid result clears the invalid hint")
 	assert.Contains(t, out, "direct session", "a non-git directory shows the direct-session note")
 
@@ -1224,21 +1230,27 @@ func TestPathChangeResetsValidityToUnknown(t *testing.T) {
 		newSessionPath:   repoA,
 	}
 
-	// Establish the current target as known-invalid: hint visible.
+	// Establish the current target as known-invalid: marker visible.
 	_, _ = h.Update(targetValidityResultMsg{path: repoA, valid: false})
-	require.Contains(t, ov.Render(), "not a directory")
+	require.Contains(t, ov.Render(), "(invalid)")
 
 	// Move the picker selection to repoB (focus starts on the project picker).
 	_, _ = h.Update(keyMsg("down"))
 	require.Equal(t, repoB, h.newSessionPath, "the path change must be registered")
 
 	// repoA's verdict must not be shown for repoB; the indicator is unknown until the
-	// async check resolves. ("no git isolation" is the project picker's direct-session
-	// hint; the branch picker's "direct session" placeholder deliberately persists
-	// through the unknown window so the section doesn't flicker on every keystroke.)
+	// async check resolves.
+	//
+	// The assertions are on the project picker's *marker*, which is the only indicator
+	// with this timing. The branch section's placeholder deliberately persists through
+	// the unknown window so it doesn't flicker on every keystroke of a typed path, and
+	// since #545 it spells the invalid case out ("not a directory") rather than calling
+	// every inert target a direct session — so that phrase is no longer a proxy for
+	// this row, and asserting on it here would fail for the lagging row's correct
+	// behaviour rather than catching a stale marker.
 	out := ov.Render()
-	assert.NotContains(t, out, "not a directory", "stale verdict is cleared on path change")
-	assert.NotContains(t, out, "no git isolation", "no hint at all while the state is unknown")
+	assert.NotContains(t, out, "(invalid)", "stale verdict is cleared on path change")
+	assert.NotContains(t, out, "(direct)", "no marker at all while the state is unknown")
 }
 
 // TestConfirmActionCancelDoesNotRun verifies cancelling never executes the action.
