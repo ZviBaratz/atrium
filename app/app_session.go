@@ -1444,18 +1444,37 @@ func (m *home) createSessionFromForm(prompt string) tea.Cmd {
 	// a unit before any session is created — a rejected batch never spawns partially. The
 	// reason rides the variant control (an inline message visible with the form open; a
 	// toast is swallowed behind the modal).
+	//
+	// Every message below has 32 cells: VariantPicker.Render puts it on the section's
+	// label line, so the composed line is "Variants" + two spaces + the message, against
+	// the 42 inner cells an 80-col terminal gives the overlay. fitOverlay truncates the
+	// overflow *silently*, and all three of these shipped cut mid-clause (#541) — the
+	// first losing the whole parenthetical that said what to do about it. Unlike the
+	// form's hints these are not laddered by fitHint: a hint's tail is optional detail,
+	// but a refusal's tail is the reason, and a ladder would hand the short rung to the
+	// default terminal. One spelling that fits everywhere is the right shape here.
+	//
+	// The widths are bounded, not merely short — see each call site. app's
+	// TestVariantRefusals_SurviveAn80ColRender drives all three and fails if a reword
+	// stops fitting; ui/overlay's variantErrorBudget owns the 32.
 	ov.SetVariantError("")
 	// A batch needs worktree isolation so the variants don't clobber one another; a
 	// direct (non-git) session runs the agent in the target directory itself, so N of
 	// them would share it. Refuse a fan-out on a direct target (a single one is fine).
 	if direct && total > 1 {
 		ov.Submitted = false
-		ov.SetVariantError("fan-out needs a git repo (each variant needs its own worktree)")
+		// 24 cells, no interpolation. The dropped "(each variant needs its own
+		// worktree)" was the mechanism, which the sentence above documents and the
+		// user does not need in order to act: point the form at a repo.
+		ov.SetVariantError("fan-out needs a git repo")
 		return nil
 	}
 	if total > maxVariantBatch {
 		ov.Submitted = false
-		ov.SetVariantError(fmt.Sprintf("batch of %d exceeds the %d-session limit", total, maxVariantBatch))
+		// 27 cells plus the digits of total, which is bounded by variantCountMax x
+		// len(profiles) — a config value, so there is no constant to derive a worst
+		// case from. It fits the budget up to a five-digit total.
+		ov.SetVariantError(fmt.Sprintf("batch of %d over the %d limit", total, maxVariantBatch))
 		return nil
 	}
 	// Allocate one unique title per variant before spawning any (AC2). A single
@@ -1515,7 +1534,14 @@ func (m *home) createSessionFromForm(prompt string) tea.Cmd {
 		if free < 0 {
 			free = 0
 		}
-		ov.SetVariantError(fmt.Sprintf("batch needs %d but only %d of %d free (max_sessions)", total, free, sc.Limit))
+		// 27 cells plus the digits of total and free, both provably two: total is at
+		// most maxVariantBatch because the check above returns first, and free < total
+		// because capBlock means count+total > Limit while free = Limit-count. Dropping
+		// sc.Limit is what makes this bounded at all — it is the one input here with no
+		// ceiling. That loses a fact, deliberately: the limit is on the configuration
+		// panel's Session limit row, which (max_sessions) names; the free count is not
+		// recoverable anywhere.
+		ov.SetVariantError(fmt.Sprintf("need %d, %d free (max_sessions)", total, free))
 		return nil
 	}
 

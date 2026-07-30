@@ -186,7 +186,21 @@ from them. Both wrapped at the *default* terminal size, and a wrap costs a row t
 height budget cannot see.
 
 - Bound the line the way the surrounding package already does (a fallback ladder,
-  not a shorter string — names vary).
+  not a shorter string — names vary). **Hints ladder; refusals do not.** A hint's
+  tail is optional detail, so `fitHint` dropping it on a narrow terminal is the
+  right trade. An error's tail is the *reason*, and a ladder hands the short rung
+  to the default 80-col terminal — the good spelling would exist only for the
+  developer with a wide window. #541's three batch refusals were therefore cut to
+  one spelling that fits everywhere, not laddered. A second, mechanical reason to
+  prefer shortening: a ladder built from `fmt.Sprintf` at a call site cannot join
+  `hintLadders` (`ui/overlay/hints_test.go`), so it ships without the ordering
+  guard — and `fitHint` returns the *first* rung that fits, so a mis-ordered ladder
+  skips rungs invisibly at every width.
+- Prefer a bound you can *prove* over one you measured. #541's `max_sessions`
+  refusal became provably ≤32 cells only by dropping `sc.Limit`, the one
+  interpolated value with no ceiling; the two that remain are bounded by earlier
+  returns in the same function. A message whose width depends on unbounded input
+  has no worst case to assert.
 - Pin any threshold you state in a comment as an **assertion**. A comment claiming
   "fits up to 11 characters" is unverified, and one off-by-one makes it a lie.
 - `git grep` the literal afterwards. A reworked sentence leaves stale copies in

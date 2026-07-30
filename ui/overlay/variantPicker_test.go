@@ -16,6 +16,23 @@ func lastLine(s string) string {
 	return lines[len(lines)-1]
 }
 
+// firstLine returns the opening line of a rendered block. For the variant picker that
+// is the label line, which carries the session total, the focus hint, or a batch error —
+// and which every other width test here misses, because they all measure lastLine.
+func firstLine(s string) string {
+	return strings.SplitN(s, "\n", 2)[0]
+}
+
+// variantErrorBudget is how many cells the label line affords a batch-error message:
+// claudeFieldInnerWidth (42, the inner width of an 80-col terminal's create-form
+// overlay) minus the 10-cell "Variants" + two-space prefix.
+//
+// It is the number the three refusals in app/app_session.go are written against (#541),
+// and app's TestVariantRefusals_SurviveAn80ColRender is what holds that copy to it —
+// overlay cannot import app, so it can never see the literals themselves. What this
+// package owns is the budget, pinned by TestVariantPicker_ErrorFillsTheLabelLine below.
+const variantErrorBudget = 32
+
 func vpProfiles() []config.Profile {
 	return []config.Profile{
 		{Name: "claude", Program: "claude"},
@@ -94,11 +111,39 @@ func TestVariantPicker_SelectedIncludesClaude(t *testing.T) {
 
 // A count change clears a stale batch error so the message does not linger after
 // the user reacts to it.
+//
+// The "too many" fixture is deliberately a short stand-in: this is a lifecycle test,
+// and it renders the label line at width 0. It is not width coverage — it renders the
+// very line #541 was cut on and was too short to reveal it. The budget lives in
+// TestVariantPicker_ErrorFillsTheLabelLine and the copy in app's
+// TestVariantRefusals_SurviveAn80ColRender.
 func TestVariantPicker_CountChangeClearsError(t *testing.T) {
 	vp := NewVariantPicker(vpProfiles())
 	vp.SetError("too many")
 	vp.HandleKeyPress(key("+"))
 	assert.NotContains(t, vp.Render(), "too many")
+}
+
+// A batch error of exactly variantErrorBudget cells fills the label line to the inner
+// width an 80-col terminal gives the form — no more, no less.
+//
+// The equality is the point. "Fits" alone would hold for any budget below the real one,
+// leaving the number free to drift low and the copy needlessly cramped; and it would not
+// notice the prefix shrinking. Asserting the composed line is *exactly* 42 pins both
+// halves at once — the 32-cell budget and the 10-cell "Variants" + two-space prefix — so
+// widening the label, changing the separator, or moving the budget fails here.
+//
+// This is the assertion the tui-drift-sites skill asks for when a comment states a
+// threshold. lipgloss.Width is the right oracle rather than a tautology: it is what
+// fitOverlay itself measures with when deciding to truncate.
+func TestVariantPicker_ErrorFillsTheLabelLine(t *testing.T) {
+	vp := NewVariantPicker(vpProfiles())
+	vp.SetWidth(claudeFieldInnerWidth)
+	vp.SetError(strings.Repeat("x", variantErrorBudget))
+
+	assert.Equal(t, claudeFieldInnerWidth, lipgloss.Width(firstLine(vp.Render())),
+		"the label line must be exactly the inner width: %d cells of budget plus a %d-cell prefix",
+		variantErrorBudget, claudeFieldInnerWidth-variantErrorBudget)
 }
 
 // A generous width renders every chip on one line with no ellipsis marker.
