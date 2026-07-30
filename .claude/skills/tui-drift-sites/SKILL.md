@@ -196,11 +196,17 @@ height budget cannot see.
   `hintLadders` (`ui/overlay/hints_test.go`), so it ships without the ordering
   guard — and `fitHint` returns the *first* rung that fits, so a mis-ordered ladder
   skips rungs invisibly at every width.
-- Prefer a bound you can *prove* over one you measured. #541's `max_sessions`
-  refusal became provably ≤32 cells only by dropping `sc.Limit`, the one
-  interpolated value with no ceiling; the two that remain are bounded by earlier
-  returns in the same function. A message whose width depends on unbounded input
-  has no worst case to assert.
+- Prefer a bound you can *prove* over one you measured, and **the way to prove one is
+  usually to drop the input, not to widen the fixture.** Two of #541's three refusals
+  became provably ≤32 cells only by deleting an interpolated value with no ceiling:
+  `sc.Limit` from the `max_sessions` message, and the batch total from the
+  over-the-limit message (it is `variantCountMax` × `len(profiles)`, and nothing caps
+  `config.Profiles`). What remains in each is either a compile-time constant or a count
+  an earlier return already bounds. A message whose width depends on unbounded input has
+  no worst case to assert — and, worse, no fixture can *reach* the width that breaks it,
+  so a render guard stays green over it. Note which half of the fact you are shedding:
+  keep the number the user has to act on, drop the one they can recover from the panel
+  or the row in front of them.
 - Pin any threshold you state in a comment as an **assertion**. A comment claiming
   "fits up to 11 characters" is unverified, and one off-by-one makes it a lie.
 - `git grep` the literal afterwards. A reworked sentence leaves stale copies in

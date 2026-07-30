@@ -1,6 +1,7 @@
 package app
 
 import (
+	"strconv"
 	"strings"
 	"testing"
 
@@ -65,16 +66,25 @@ func pressPlusToCap(h *home) {
 //     documents why total and error ride the label line).
 //   - It drives each refusal rather than pushing a string in via SetVariantError, which
 //     would test the renderer and leave a literal inlined at a call site unguarded.
-//   - Each row is *digit-maximal*, because these messages interpolate counts. That is
-//     the trap #541 names: TestVariantPicker_CountChangeClearsError already renders this
-//     very line, but with an 8-cell "too many" — a fixture too short to reveal the
-//     defect. A guard is only as wide as its widest fixture.
+//   - Each row is *digit-maximal* wherever a count is interpolated. That is the trap
+//     #541 names: TestVariantPicker_CountChangeClearsError already renders this very
+//     line, but with an 8-cell "too many" — a fixture too short to reveal the defect. A
+//     guard is only as wide as its widest fixture.
+//
+// Rendering at the widest *reachable* fixture is not the same as proving a bound,
+// though, and one case needs the difference spelled out: see the batch-limit case's
+// also hook, which pins that its message interpolates nothing config-derived. Rendering
+// alone would stay green through a reword that reintroduced an unbounded value, because
+// no fixture can configure the thousands of profiles it would take to overflow.
 func TestVariantRefusals_SurviveAn80ColRender(t *testing.T) {
 	for _, tc := range []struct {
 		name string
 		// arm builds the home and drives the form to the brink of the refusal: title
 		// typed, counts set. The shared body below resizes, submits, and measures.
 		arm func(t *testing.T) *home
+		// also is an optional per-case assertion on the message the app set, for a
+		// property the shared render check cannot see. Skipped when nil.
+		also func(t *testing.T, h *home, msg string)
 	}{
 		{
 			// A fan-out on a direct (non-git) target. No interpolation, so there is
@@ -92,11 +102,10 @@ func TestVariantRefusals_SurviveAn80ColRender(t *testing.T) {
 			// Over maxVariantBatch. This message is unreachable on a default install:
 			// GetProfiles synthesises a single profile, and ui/overlay's
 			// variantCountMax caps one profile's count at maxVariantBatch itself
-			// today — so crossing the batch limit takes at least two profiles. The
-			// total is then bounded only by variantCountMax x len(profiles), a *config*
-			// value rather than a constant, so six profiles at their cap give a
-			// three-digit total. The format costs 27 cells plus the digits of the
-			// total, so it still fits the 32-cell budget at a five-digit total.
+			// today — so crossing the batch limit takes at least two profiles, and six
+			// at their cap are what make the total three digits here. The message does
+			// not carry that total (see also below); the fixture still needs it to
+			// reach the refusal at all.
 			name: "over the batch limit",
 			arm: func(t *testing.T) *home {
 				repo := gitInitRepo(t)
@@ -119,6 +128,22 @@ func TestVariantRefusals_SurviveAn80ColRender(t *testing.T) {
 					rightKey(h)
 				}
 				return h
+			},
+			// The only value this refusal may interpolate is maxVariantBatch, a
+			// compile-time constant. The batch's own total is variantCountMax x
+			// len(profiles), and config.Profiles has no ceiling anywhere, so a message
+			// carrying it would be bounded only by a claim about realistic use — 27
+			// cells plus the digits, fitting up to a five-digit total and truncating
+			// silently past it. The render check above cannot defend that: it is green
+			// at every total a test can reach, so the property has to be asserted
+			// directly rather than measured.
+			also: func(t *testing.T, h *home, msg string) {
+				total := len(h.textInputOverlay.GetVariants())
+				require.Greater(t, total, maxVariantBatch,
+					"the fixture must be over the batch limit, or this proves nothing")
+				assert.NotContainsf(t, msg, strconv.Itoa(total),
+					"this refusal must not interpolate the batch total (%d): it is bounded by "+
+						"len(profiles), which nothing caps. Interpolate maxVariantBatch alone.", total)
 			},
 		},
 		{
@@ -162,6 +187,10 @@ func TestVariantRefusals_SurviveAn80ColRender(t *testing.T) {
 				"the refusal's reason is cut at 80 cols — fitOverlay trimmed it to fit.\n"+
 					"  message (%d cells): %q\n  frame row: %q",
 				len(msg), msg, strings.TrimSpace(row))
+
+			if tc.also != nil {
+				tc.also(t, h, msg)
+			}
 		})
 	}
 }
