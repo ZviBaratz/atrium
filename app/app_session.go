@@ -1473,14 +1473,21 @@ func (m *home) createSessionFromForm(prompt string) tea.Cmd {
 	}
 	if total > maxVariantBatch {
 		ov.Submitted = false
-		// 21 cells plus the digits of maxVariantBatch, a compile-time constant — so
-		// nothing here is derived from config and the width is provable. The batch's
-		// own total is deliberately not interpolated: it is variantCountMax x
-		// len(profiles), and len(profiles) has no ceiling anywhere, so a message
-		// carrying it would be bounded only by a claim about realistic use. Same trade
-		// as the max_sessions refusal below — the limit is the number the user has to
-		// get under, and the counts they have to lower are on the chip row.
-		ov.SetVariantError(fmt.Sprintf("batch over the %d limit", maxVariantBatch))
+		// 29 cells plus the digits of maxVariantBatch, a compile-time constant — 31 at
+		// today's 20. Nothing here is derived from config, so that is a fact about the
+		// code rather than a claim about realistic use. The batch's own total is
+		// deliberately not interpolated: it is variantCountMax x len(profiles), and
+		// len(profiles) has no ceiling anywhere, so a message carrying it would be
+		// bounded only by such a claim — and by one no fixture could ever test, since
+		// overflowing takes thousands of configured profiles. Same trade as the
+		// max_sessions refusal below: the limit is the number the user has to get
+		// under, and the counts they have to lower are on the chip row already.
+		//
+		// Spending 8 of those cells on "-session" is what dropping the total bought.
+		// It names what the 20 counts, which "the 20 limit" left to inference next to
+		// a max_sessions refusal that also ends in a number — but it leaves one cell
+		// spare, so this is the one message here that could not also carry a word.
+		ov.SetVariantError(fmt.Sprintf("batch over the %d-session limit", maxVariantBatch))
 		return nil
 	}
 	// Allocate one unique title per variant before spawning any (AC2). A single

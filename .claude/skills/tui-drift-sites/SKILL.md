@@ -204,9 +204,13 @@ height budget cannot see.
   `config.Profiles`). What remains in each is either a compile-time constant or a count
   an earlier return already bounds. A message whose width depends on unbounded input has
   no worst case to assert — and, worse, no fixture can *reach* the width that breaks it,
-  so a render guard stays green over it. Note which half of the fact you are shedding:
-  keep the number the user has to act on, drop the one they can recover from the panel
-  or the row in front of them.
+  so a render guard stays green over it — a reword that reintroduces the value can *fit*
+  at the total a fixture can build, which is why the absence has to be asserted and not
+  measured. Note which half of the fact you are shedding: keep the number the user has to
+  act on, drop the one they can recover from the panel or the row in front of them. The
+  deletion tends to pay for itself — dropping #541's total freed eight cells, which went
+  back into naming what the surviving number counts (`the 20-session limit`, not `the 20
+  limit`).
 - Pin any threshold you state in a comment as an **assertion**. A comment claiming
   "fits up to 11 characters" is unverified, and one off-by-one makes it a lie.
 - `git grep` the literal afterwards. A reworked sentence leaves stale copies in

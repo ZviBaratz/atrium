@@ -131,12 +131,16 @@ func TestVariantRefusals_SurviveAn80ColRender(t *testing.T) {
 			},
 			// The only value this refusal may interpolate is maxVariantBatch, a
 			// compile-time constant. The batch's own total is variantCountMax x
-			// len(profiles), and config.Profiles has no ceiling anywhere, so a message
-			// carrying it would be bounded only by a claim about realistic use — 27
-			// cells plus the digits, fitting up to a five-digit total and truncating
-			// silently past it. The render check above cannot defend that: it is green
-			// at every total a test can reach, so the property has to be asserted
-			// directly rather than measured.
+			// len(profiles), and config.Profiles has no ceiling anywhere, so any
+			// spelling that carries it is bounded only by a claim about realistic use.
+			//
+			// The render check above cannot defend that, and the reason is worth being
+			// exact about: a reword carrying the total can *fit* at the total a fixture
+			// can build. Mutating this call to "%d over the %d-session limit" is 29
+			// cells at this fixture's 120 — the row assertion stays green, and this one
+			// is what fails. Overflowing the render check that way would take thousands
+			// of configured profiles, which no test can arrange. So the property is
+			// asserted directly rather than measured.
 			also: func(t *testing.T, h *home, msg string) {
 				total := len(h.textInputOverlay.GetVariants())
 				require.Greater(t, total, maxVariantBatch,
