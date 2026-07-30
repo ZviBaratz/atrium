@@ -1,12 +1,16 @@
 package app
 
 import (
+	"context"
+	"reflect"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/ZviBaratz/atrium/config"
 	"github.com/ZviBaratz/atrium/ui/theme"
 
+	tea "charm.land/bubbletea/v2"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -35,6 +39,101 @@ func TestSpinnerReseededOnGlyphSetChange(t *testing.T) {
 		"applySettingChange must re-seed spinner frames for the new glyph set")
 	require.Equal(t, "|", h.spinner.Spinner.Frames[0],
 		"the ASCII rung's first spinner frame must be the classic '|'")
+}
+
+// --- The tmux bar band (#394 Stage A) -----------------------------------------
+
+// swapBarStyleApplier substitutes the tmux bar push for the duration of a test, so
+// the theme arm can be driven end to end without shelling to a real server.
+func swapBarStyleApplier(fn func(context.Context, bool)) (restore func()) {
+	prev := barStyleApplier
+	barStyleApplier = fn
+	return func() { barStyleApplier = prev }
+}
+
+// runCmdTree executes every leaf of a tea.Cmd tree, in order, discarding the
+// messages. tea.Batch's BatchMsg is exported but tea.Sequence's sequenceMsg is
+// not, so the recursion matches structurally on "a slice of tea.Cmd" instead of on
+// either type — both are ~[]Cmd. Same shape as clipboardPayload's walker, which
+// only had to handle the batch half.
+func runCmdTree(c tea.Cmd) {
+	if c == nil {
+		return
+	}
+	msg := c()
+	v := reflect.ValueOf(msg)
+	if v.IsValid() && v.Kind() == reflect.Slice && v.Type().Elem() == reflect.TypeOf(tea.Cmd(nil)) {
+		for i := range v.Len() {
+			runCmdTree(v.Index(i).Interface().(tea.Cmd))
+		}
+	}
+}
+
+// The helper's own gates, named for the helper — this does NOT prove the arm calls
+// it (TestApplySettingChange_ThemeArmBatchesTheBarPush below is what does; it caught
+// the plan's Step-9 test passing with the call deleted from the arm).
+//
+// glyph_set shares the theme arm's case but moves no colour, and the push costs a
+// conf rewrite plus validateConfig's probe server, so it must not fire.
+func TestApplyBarStyleCmd_GatesOnPaletteChangeAndContextBar(t *testing.T) {
+	m := newCreateFormHome(t)
+	m.appConfig.SessionContextBar = boolPtr(true)
+	m.appConfig.Theme = "catppuccin-mocha"
+
+	require.NotNil(t, m.applyBarStyleCmd("theme"),
+		"with the context bar on, a theme change must push the bar style")
+	require.Nil(t, m.applyBarStyleCmd("glyph_set"),
+		"glyph_set shares the arm but changes no colour: nothing to push")
+
+	m.appConfig.SessionContextBar = boolPtr(false)
+	require.Nil(t, m.applyBarStyleCmd("theme"),
+		"with the context bar off there is no band to restyle")
+}
+
+// The arm is shared between theme and glyph_set, so the gate above is only real if
+// driving the glyph_set arm end to end pushes nothing. Without the key check this
+// fails: the Cmd tree runs the applier once.
+func TestApplySettingChange_GlyphSetArmDoesNotPushTheBar(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Cleanup(theme.Set(theme.Current().Name))
+
+	m := newCreateFormHome(t)
+	m.appConfig.SessionContextBar = boolPtr(true)
+	m.appConfig.Theme = "catppuccin-mocha"
+
+	var pushed int32
+	defer swapBarStyleApplier(func(context.Context, bool) { atomic.AddInt32(&pushed, 1) })()
+
+	runCmdTree(m.applySettingChange("glyph_set"))
+
+	require.Equal(t, int32(0), atomic.LoadInt32(&pushed),
+		"a glyph-set change must not rewrite the tmux conf or restyle the band")
+}
+
+// The helper existing is not the same as the arm calling it. #391's finding: a
+// derived value passed as an argument is a wire nothing guards — and so is a Cmd
+// the ladder forgot to batch. So this drives applySettingChange itself and runs
+// what it returns; the test above passes with the call deleted from the arm, which
+// is exactly the mutation this one exists to catch.
+func TestApplySettingChange_ThemeArmBatchesTheBarPush(t *testing.T) {
+	t.Setenv("HOME", t.TempDir()) // applySettingChange persists the config first
+	// The arm calls theme.Set on a package global; restore it so -shuffle=on
+	// cannot leak catppuccin-mocha into a test that renders against the default.
+	t.Cleanup(theme.Set(theme.Current().Name))
+
+	m := newCreateFormHome(t)
+	m.appConfig.SessionContextBar = boolPtr(true)
+	m.appConfig.Theme = "catppuccin-mocha"
+
+	var pushed int32
+	defer swapBarStyleApplier(func(context.Context, bool) { atomic.AddInt32(&pushed, 1) })()
+
+	cmd := m.applySettingChange("theme")
+	require.NotNil(t, cmd, "the theme arm must return a repaint + push")
+	runCmdTree(cmd)
+
+	require.Equal(t, int32(1), atomic.LoadInt32(&pushed),
+		"the theme arm must batch the bar push, not merely have a helper that could")
 }
 
 // --- Project-scan rows (#399 item 5) ------------------------------------------

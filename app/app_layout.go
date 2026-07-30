@@ -3,8 +3,10 @@ package app
 // Layout, window-size, and live settings application for the home model.
 
 import (
+	"context"
 	"time"
 
+	"github.com/ZviBaratz/atrium/cmd"
 	"github.com/ZviBaratz/atrium/config"
 	"github.com/ZviBaratz/atrium/log"
 	"github.com/ZviBaratz/atrium/session/tmux"
@@ -276,7 +278,16 @@ func (m *home) applySettingChange(key string) tea.Cmd {
 			Frames: theme.Current().Glyphs.SpinnerFrames,
 			FPS:    theme.Current().Glyphs.SpinnerFPS,
 		}
-		return tea.Sequence(tea.ClearScreen, tea.RequestWindowSize)
+		// The in-session bar's BAND lives in tmux, not in this frame: its colours
+		// are a server option baked in when the server started, so restyling the
+		// TUI alone leaves every attached pane's header on the old band while its
+		// text (pushed per tick as #[fg=...] markup) moves. Push both halves.
+		//
+		// Only for a palette change: this case is shared with glyph_set, which moves
+		// no colour, and the push costs a conf rewrite plus validateConfig's probe
+		// server. applyBarStyleCmd returns nil for anything else, so the Batch below
+		// degrades to the repaint alone.
+		return tea.Sequence(tea.ClearScreen, tea.Batch(tea.RequestWindowSize, m.applyBarStyleCmd(key)))
 	case "model_indicator":
 		// Mirror the newHome seeding; the renderer takes the normalized mode
 		// string so ui needs no config import.
@@ -381,6 +392,56 @@ func (m *home) applySettingChange(key string) tea.Cmd {
 		}
 	}
 	return nil
+}
+
+// barStyleApplier is the tmux bar push, as a package var so tests can substitute
+// a recorder instead of shelling to a real server — the same seam idiom as
+// tmuxAvailable in app_session.go.
+//
+// Two writes, because they cover two different populations: RewriteManagedConfig
+// fixes the sessions started later, whose server will read the config file, and
+// ApplyBarStyle fixes the ones running right now (status-style is server-global,
+// so that is one subprocess for the fleet). Skipping either leaves the fleet's
+// bars disagreeing depending on when each session was created.
+//
+// Both failures are logged, not surfaced: the bar is cosmetic, the user just asked
+// for a theme, and the most common failure is simply that no tmux server is
+// running yet.
+//
+// This runs on a tea.Cmd goroutine, so every global it reaches has to be safe off
+// the update thread — RewriteManagedConfig republishes tmux's config state (atomic,
+// swapped by rename) and ApplyBarStyle reads theme.Current() (an atomic load). A
+// tea.Cmd is a goroutine: moving a startup-only call into one re-scopes everything
+// it touches, and the seam below is exactly what hides that from the race detector.
+var barStyleApplier = func(ctx context.Context, contextBar bool) {
+	if err := tmux.RewriteManagedConfig(contextBar); err != nil {
+		log.WarningLog.Printf("failed to rewrite managed tmux config after theme change: %v", err)
+	}
+	if err := tmux.ApplyBarStyle(ctx, cmd.MakeExecutor()); err != nil {
+		log.WarningLog.Printf("failed to restyle live session bars after theme change: %v", err)
+	}
+}
+
+// applyBarStyleCmd restyles every live session's in-pane status band for the
+// theme that is now active, off the update thread.
+//
+// Nil unless key is "theme": the caller's case also fires for glyph_set, which
+// changes no colour, and the push is not free (a conf rewrite plus validateConfig's
+// throwaway probe server).
+//
+// Nil when the context bar is off: there is no band to restyle, and the managed
+// conf that arm rewrites (see the "session_context_bar" case) carries the theme
+// anyway.
+func (m *home) applyBarStyleCmd(key string) tea.Cmd {
+	if key != "theme" || !m.appConfig.GetSessionContextBar() {
+		return nil
+	}
+	contextBar := m.appConfig.GetSessionContextBar()
+	ctx := m.ctx
+	return func() tea.Msg {
+		barStyleApplier(ctx, contextBar)
+		return nil
+	}
 }
 
 // listColStep is how many terminal columns each < / > press shifts the split.
