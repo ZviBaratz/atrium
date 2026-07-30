@@ -64,49 +64,65 @@ func TestCreateForm_ComposesWithinInnerWidth(t *testing.T) {
 	for _, fixture := range []struct {
 		name  string
 		build func() *TextInputOverlay
+		// after runs once the shared setup below has seeded branch results and sized
+		// the form. It exists for states that setup would otherwise undo — SetResults
+		// clears the errored flag, so a fixture that fails the branch search has to do
+		// it last (#557).
+		after func(*TextInputOverlay)
 	}{
 		{"bare claude form", func() *TextInputOverlay {
 			return NewSessionCreateOverlay(nil, nil, []string{"/repo/a"}, "claude")
-		}},
+		}, nil},
 		{"profiles", func() *TextInputOverlay {
 			return NewSessionCreateOverlay(mixedProfiles, nil, []string{"/repo/a"}, "")
-		}},
+		}, nil},
 		{"profiles and accounts", func() *TextInputOverlay {
 			return NewSessionCreateOverlay(mixedProfiles, twoAccounts, []string{"/repo/a"}, "")
-		}},
+		}, nil},
 		{"pinned overrides", func() *TextInputOverlay {
 			return NewSessionCreateOverlay(pinnedProfiles, nil, []string{"/repo/a"}, "")
-		}},
+		}, nil},
 		{"non-claude selected", func() *TextInputOverlay {
 			o := NewSessionCreateOverlay(mixedProfiles, nil, []string{"/repo/a"}, "")
 			selectOnlyNonClaude(o) // the claude fields go inert → claudeFieldNA
 			return o
-		}},
+		}, nil},
 		{"project hint", func() *TextInputOverlay {
 			o := NewSessionCreateOverlay(nil, nil, []string{"/repo/a"}, "claude")
 			o.SetProjectHint("detecting project…") // the widest smart-dispatch note
 			return o
-		}},
+		}, nil},
 		{"clear armed", func() *TextInputOverlay {
 			o := NewSessionCreateOverlay(nil, nil, []string{"/repo/a"}, "claude")
 			ctrlR(o) // arms the footer's "⌃R again" spelling
 			return o
-		}},
+		}, nil},
 		{"direct target", func() *TextInputOverlay {
 			o := NewSessionCreateOverlay(nil, nil, []string{"/repo/a"}, "claude")
 			o.SetTargetValidity(true, true, "") // a directory that is not a git repo
 			return o
-		}},
+		}, nil},
 		{"invalid target", func() *TextInputOverlay {
 			o := NewSessionCreateOverlay(nil, nil, []string{"/repo/a"}, "claude")
 			o.SetTargetValidity(false, false, "") // not a directory at all
 			return o
+		}, nil},
+		{"branch search failed", func() *TextInputOverlay {
+			// The last state that pushes copy into this form from outside (#557). The
+			// shared setup calls SetBranchResults, which clears the errored flag, so the
+			// failure is armed in `after` — a state is only covered if the fixture ends
+			// in it.
+			o := NewSessionCreateOverlay(nil, nil, []string{"/repo/a"}, "claude")
+			o.SetTargetValidity(true, false, "develop") // an ordinary branch name, not "main"
+			return o
+		}, func(o *TextInputOverlay) {
+			o.SetBranchSearchError(o.BranchFilterVersion())
 		}},
 		{"title verdict", func() *TextInputOverlay {
 			o := NewSessionCreateOverlay(nil, nil, []string{"/repo/a"}, "claude")
 			o.SetTitleError(strings.Repeat("x", titleVerdictBudget))
 			return o
-		}},
+		}, nil},
 		{"variant error", func() *TextInputOverlay {
 			// The batch-refusal state (#541), which no fixture entered until now — which
 			// is exactly why this sweep missed three cut messages. The message is a
@@ -117,7 +133,7 @@ func TestCreateForm_ComposesWithinInnerWidth(t *testing.T) {
 			o := NewSessionCreateOverlay(mixedProfiles, nil, []string{"/repo/a"}, "")
 			o.SetVariantError(strings.Repeat("x", variantErrorBudget))
 			return o
-		}},
+		}, nil},
 	} {
 		for _, mode := range []struct {
 			name  string
@@ -152,6 +168,9 @@ func TestCreateForm_ComposesWithinInnerWidth(t *testing.T) {
 					o := fixture.build()
 					o.SetBranchResults([]string{"main", "develop"}, o.BranchFilterVersion())
 					o.SetSize(createOverlayWidth, 24)
+					if fixture.after != nil {
+						fixture.after(o)
+					}
 					mode.enter(o)
 					o.focusStop(stop.kind) // a no-op for a stop this form does not have
 
