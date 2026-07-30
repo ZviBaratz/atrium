@@ -186,7 +186,31 @@ from them. Both wrapped at the *default* terminal size, and a wrap costs a row t
 height budget cannot see.
 
 - Bound the line the way the surrounding package already does (a fallback ladder,
-  not a shorter string — names vary).
+  not a shorter string — names vary). **Hints ladder; refusals do not.** A hint's
+  tail is optional detail, so `fitHint` dropping it on a narrow terminal is the
+  right trade. An error's tail is the *reason*, and a ladder hands the short rung
+  to the default 80-col terminal — the good spelling would exist only for the
+  developer with a wide window. #541's three batch refusals were therefore cut to
+  one spelling that fits everywhere, not laddered. A second, mechanical reason to
+  prefer shortening: a ladder built from `fmt.Sprintf` at a call site cannot join
+  `hintLadders` (`ui/overlay/hints_test.go`), so it ships without the ordering
+  guard — and `fitHint` returns the *first* rung that fits, so a mis-ordered ladder
+  skips rungs invisibly at every width.
+- Prefer a bound you can *prove* over one you measured, and **the way to prove one is
+  usually to drop the input, not to widen the fixture.** Two of #541's three refusals
+  became provably ≤32 cells only by deleting an interpolated value with no ceiling:
+  `sc.Limit` from the `max_sessions` message, and the batch total from the
+  over-the-limit message (it is `variantCountMax` × `len(profiles)`, and nothing caps
+  `config.Profiles`). What remains in each is either a compile-time constant or a count
+  an earlier return already bounds. A message whose width depends on unbounded input has
+  no worst case to assert — and, worse, no fixture can *reach* the width that breaks it,
+  so a render guard stays green over it — a reword that reintroduces the value can *fit*
+  at the total a fixture can build, which is why the absence has to be asserted and not
+  measured. Note which half of the fact you are shedding: keep the number the user has to
+  act on, drop the one they can recover from the panel or the row in front of them. The
+  deletion tends to pay for itself — dropping #541's total freed eight cells, which went
+  back into naming what the surviving number counts (`the 20-session limit`, not `the 20
+  limit`).
 - Pin any threshold you state in a comment as an **assertion**. A comment claiming
   "fits up to 11 characters" is unverified, and one off-by-one makes it a lie.
 - `git grep` the literal afterwards. A reworked sentence leaves stale copies in
