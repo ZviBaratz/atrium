@@ -38,6 +38,12 @@ var pinnedProfiles = []config.Profile{
 // every field shows while the program is not claude, and the custom-mode input
 // row, which bubbles renders one column past its Width for the end-of-line cursor
 // cell. All three truncated silently at 80 cols; none of them could fail a test.
+//
+// It then missed three more (#541) for the complementary reason: the sweep walks the
+// form's *focus* stops and its chip/custom modes, but a state only some other component
+// can push in was outside it — no fixture called SetVariantError, so the variant label
+// line was never measured carrying a batch refusal. Enumerate the senders of a
+// variable-length line, not only the states the form can reach on its own.
 func TestCreateForm_ComposesWithinInnerWidth(t *testing.T) {
 	// A 64-char value is the model input's CharLimit — the widest the field can
 	// hold, so the input row is measured full rather than nearly empty.
@@ -72,6 +78,17 @@ func TestCreateForm_ComposesWithinInnerWidth(t *testing.T) {
 		{"clear armed", func() *TextInputOverlay {
 			o := NewSessionCreateOverlay(nil, nil, []string{"/repo/a"}, "claude")
 			ctrlR(o) // arms the footer's "⌃R again" spelling
+			return o
+		}},
+		{"variant error", func() *TextInputOverlay {
+			// The batch-refusal state (#541), which no fixture entered until now — which
+			// is exactly why this sweep missed three cut messages. The message is a
+			// synthetic at the budget rather than a real refusal because overlay cannot
+			// import app, where the copy lives; the copy is held to this number by app's
+			// TestVariantRefusals_SurviveAn80ColRender, and the number itself by
+			// TestVariantPicker_ErrorFillsTheLabelLine.
+			o := NewSessionCreateOverlay(mixedProfiles, nil, []string{"/repo/a"}, "")
+			o.SetVariantError(strings.Repeat("x", variantErrorBudget))
 			return o
 		}},
 	} {
