@@ -1,0 +1,151 @@
+package overlay
+
+import (
+	"strings"
+	"testing"
+
+	"charm.land/lipgloss/v2"
+	"github.com/ZviBaratz/atrium/config"
+	"github.com/stretchr/testify/assert"
+)
+
+// createOverlayWidth is the width app_layout.go hands SetSize on the worst
+// realistic terminal: 80 cols → int(0.6*80) = 48. SetSize takes the *overlay's*
+// width, not the terminal's, which is the trap in the older tests that pass
+// SetSize(80, …) — that is a 133-col terminal, three sections wider than the one
+// the copy has to survive.
+const createOverlayWidth = 48
+
+// pinnedProfiles pin every claude override at its widest *nameable* value, so the
+// no-op-chip hints render "program pins accept-edits" rather than the short
+// unnamed form (see syncClaudeFieldsEnabled).
+var pinnedProfiles = []config.Profile{
+	{Name: "Claude", Program: "claude --model claude-opus-4-6 --effort xhigh --permission-mode acceptEdits"},
+}
+
+// TestCreateForm_ComposesWithinInnerWidth is the width guard for the *whole*
+// create form, and it states the invariant the per-field guards only sample:
+// fitOverlay is a safety net for content Atrium does not control — a deep project
+// path, a profile's command — not the layout mechanism for Atrium's own copy. So
+// it measures what the form *composes*, before fitOverlay's truncation pass, and
+// every fixture below uses short paths and branch names for exactly that reason:
+// a failure here is a copy or arithmetic defect, never unbounded user content.
+//
+// It exists because TestClaudeChipFields_FitInnerWidth renders standalone fields
+// that are enabled, focused and on the chip row, with width 0 — one corner of a
+// four-axis state space. Three overflows lived in the rest of it: the model
+// field's 61-cell custom-mode hint (#464), the 47-cell claudeFieldNA placeholder
+// every field shows while the program is not claude, and the custom-mode input
+// row, which bubbles renders one column past its Width for the end-of-line cursor
+// cell. All three truncated silently at 80 cols; none of them could fail a test.
+func TestCreateForm_ComposesWithinInnerWidth(t *testing.T) {
+	// A 64-char value is the model input's CharLimit — the widest the field can
+	// hold, so the input row is measured full rather than nearly empty.
+	longModel := strings.Repeat("a", 64)
+
+	for _, fixture := range []struct {
+		name  string
+		build func() *TextInputOverlay
+	}{
+		{"bare claude form", func() *TextInputOverlay {
+			return NewSessionCreateOverlay(nil, nil, []string{"/repo/a"}, "claude")
+		}},
+		{"profiles", func() *TextInputOverlay {
+			return NewSessionCreateOverlay(mixedProfiles, nil, []string{"/repo/a"}, "")
+		}},
+		{"profiles and accounts", func() *TextInputOverlay {
+			return NewSessionCreateOverlay(mixedProfiles, twoAccounts, []string{"/repo/a"}, "")
+		}},
+		{"pinned overrides", func() *TextInputOverlay {
+			return NewSessionCreateOverlay(pinnedProfiles, nil, []string{"/repo/a"}, "")
+		}},
+		{"non-claude selected", func() *TextInputOverlay {
+			o := NewSessionCreateOverlay(mixedProfiles, nil, []string{"/repo/a"}, "")
+			selectOnlyNonClaude(o) // the claude fields go inert → claudeFieldNA
+			return o
+		}},
+		{"project hint", func() *TextInputOverlay {
+			o := NewSessionCreateOverlay(nil, nil, []string{"/repo/a"}, "claude")
+			o.SetProjectHint("detecting project…") // the widest smart-dispatch note
+			return o
+		}},
+		{"clear armed", func() *TextInputOverlay {
+			o := NewSessionCreateOverlay(nil, nil, []string{"/repo/a"}, "claude")
+			ctrlR(o) // arms the footer's "⌃R again" spelling
+			return o
+		}},
+	} {
+		for _, mode := range []struct {
+			name  string
+			enter func(*TextInputOverlay)
+		}{
+			{"chips", func(*TextInputOverlay) {}},
+			{"custom model", func(o *TextInputOverlay) {
+				o.focusStop(stopModel)
+				o.HandleKeyPress(textMsg(longModel))
+			}},
+		} {
+			// Only the focused field renders its hint, so the sweep has to walk the
+			// stops rather than render one arrangement.
+			for _, stop := range []struct {
+				name string
+				kind focusStop
+			}{
+				{"title", stopTitle},
+				{"variants", stopVariants},
+				{"model", stopModel},
+				{"effort", stopEffort},
+				{"mode", stopMode},
+				{"account", stopAccount},
+				{"prompt", stopTextarea},
+				{"branch", stopBranch},
+			} {
+				t.Run(fixture.name+"/"+mode.name+"/"+stop.name, func(t *testing.T) {
+					o := fixture.build()
+					o.SetBranchResults([]string{"main", "develop"}, o.BranchFilterVersion())
+					o.SetSize(createOverlayWidth, 24)
+					mode.enter(o)
+					o.focusStop(stop.kind) // a no-op for a stop this form does not have
+
+					content, innerWidth, _ := o.compose()
+					assert.Equal(t, claudeFieldInnerWidth, innerWidth,
+						"the 80-col terminal must yield the budget the field guards assume")
+					assertComposesWithin(t, content, innerWidth)
+				})
+			}
+		}
+	}
+}
+
+// TestPromptOverlays_ComposeWithinInnerWidth is the same invariant for the plain
+// prompt overlays, which share compose and fitOverlay with the create form and so
+// share its failure mode. Their one hint fits today; this is what keeps the next
+// clause added to it from silently losing its tail — the audit the create form's
+// five overflows earned for every sibling of the same shape.
+func TestPromptOverlays_ComposeWithinInnerWidth(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		o    *TextInputOverlay
+	}{
+		{"quick send", NewQuickSendOverlay("Send to session")},
+		{"smart dispatch", NewSmartDispatchOverlay("New session")},
+		{"plain input", NewTextInputOverlay("Rename", "")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tc.o.SetSize(createOverlayWidth, 24)
+			content, innerWidth, _ := tc.o.compose()
+			assertComposesWithin(t, content, innerWidth)
+		})
+	}
+}
+
+// assertComposesWithin fails on any composed line wider than the overlay's inner
+// width — i.e. any line fitOverlay would have to cut. It reports the line itself,
+// because the defect is always a specific string rather than a number.
+func assertComposesWithin(t *testing.T, content string, innerWidth int) {
+	t.Helper()
+	for i, line := range strings.Split(content, "\n") {
+		assert.LessOrEqualf(t, lipgloss.Width(line), innerWidth,
+			"line %d needs fitOverlay to fit and so loses its tail: %q", i, line)
+	}
+}

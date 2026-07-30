@@ -108,3 +108,35 @@ func TestAccountPicker_HintGlossesPoolsOnly(t *testing.T) {
 	assert.Equal(t, "Account", strings.TrimRight(label, " "),
 		"with no pools the focused label carries no hint at all")
 }
+
+// TestCreateFormHelp_EveryRungKeepsTheNavKeys extends the rule above across width.
+// TestCreateFormHints_FooterOwnsTheNavKeys renders at one wide size, where fitHint
+// always returns the first rung, so it can only ever see createFormHelp[0]. The
+// narrow rungs exist precisely to shed cells, and "↑↓ select" is a tempting nine to
+// shed — but dropping it would leave the footer not owning the nav keys on exactly
+// the 80-col terminal where a per-field restatement is least affordable, and the
+// guard above would stay green throughout.
+func TestCreateFormHelp_EveryRungKeepsTheNavKeys(t *testing.T) {
+	for i, rung := range createFormHelp {
+		assert.Equalf(t, 1, strings.Count(rung, navKeys),
+			"rung %d must name the nav keys exactly once: %q", i, rung)
+	}
+}
+
+// TestPromptFocusHelp_NoRungNamesTheNavKeys is the same assertion from the other
+// side, and it exists because the count TestCreateFormHints_FooterOwnsTheNavKeys
+// pins for the prompt is *zero*: with the textarea focused the footer is swapped for
+// promptFocusHelp, which names no arrow keys, so a per-field hint has nothing to
+// restate. That zero is width-indexed too, and the wide render only ever reaches
+// rung 0.
+//
+// Guarding one ladder and not the other is the shape this repo has hit before (a
+// ladder extracted to stop one hint lying, leaving its sibling lying): a rung like
+// "↑↓ next · ⌃S create" is 20 cells, so it fits every width guard here and would
+// have broken #466's rule with the whole suite green.
+func TestPromptFocusHelp_NoRungNamesTheNavKeys(t *testing.T) {
+	for i, rung := range promptFocusHelp {
+		assert.NotContainsf(t, rung, navKeys,
+			"rung %d must leave the arrows to the fields that correct them: %q", i, rung)
+	}
+}

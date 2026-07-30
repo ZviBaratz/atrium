@@ -32,8 +32,13 @@ type chipField interface {
 // Atrium's enum, so these are genuine maxima rather than optimistic samples. The
 // "unnameable pin" state below is the other half of that contract — an unvalidated
 // --effort token arrives pinned with no label, and must fall back to the short
-// "program pins it" rather than being echoed. (Pre-existing gap, not covered here:
-// the model field's custom-mode hint is 61 cells and truncates at 80 cols.)
+// "program pins it" rather than being echoed.
+//
+// This is the cheap unit-level sweep, and it only ever sees one corner of the state
+// space: fields that are enabled, focused, on the chip row, and unsized. The states
+// it cannot reach — the model field's custom mode, the inert claudeFieldNA
+// placeholder — hid three more overflows until #464;
+// TestCreateForm_ComposesWithinInnerWidth covers them by driving the real overlay.
 func TestClaudeChipFields_FitInnerWidth(t *testing.T) {
 	for _, tc := range []struct {
 		name    string

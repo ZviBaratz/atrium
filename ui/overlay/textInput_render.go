@@ -31,10 +31,21 @@ func tiLabelStyle() lipgloss.Style { return overlayLabelStyle() }
 
 func tiHintStyle() lipgloss.Style { return theme.Current().OverlayHintStyle() }
 
-// createFormHelp is the footer shown for every create-form field except the prompt.
+// createFormHelp / promptFocusHelp are the footer's rungs, widest first, for every
+// create-form field except the prompt and for the prompt textarea respectively (see
+// fitHint; the trailing "⌃R clear" is appended by renderCreateForm, so these are
+// measured with it).
+//
 // Enter advances between fields (and submits from a filled title — the one-handed quick
 // create), so submission is surfaced as Ctrl+S, which works from any field, rather than an
-// ambiguous "Enter create".
+// ambiguous "Enter create". That makes ⌃S the clause that must survive the narrowest
+// rung: it is the only way to submit without tabbing to the button. The prompt's
+// Shift+Enter goes first because it needs a Claude-Code-style terminal setup that Ctrl+J
+// does not, so it is the least universally true half of that pair.
+//
+// The full rungs are 73 and 53 cells against the 42 an 80-col terminal gives, i.e. the
+// footer used to be cut at "↵ create from n…" — losing ⌃S and ⌃R outright — on the
+// narrowest terminal Atrium supports.
 //
 // THE RULE (#466): this footer owns the navigation keys. A per-field hint earns its
 // place on a label line only by saying something the footer does not — the form has
@@ -47,20 +58,33 @@ func tiHintStyle() lipgloss.Style { return theme.Current().OverlayHintStyle() }
 // Two hints stay, on the merits, and both are asserted by that test so a later
 // consistency pass has to argue with them rather than delete them:
 //
-//   - Variants ("←→ profile · ↑↓ count") — the one field where this footer is wrong.
-//     There ↑↓ steps a count and ←→ moves between profiles, so the hint corrects the
-//     footer rather than restating it.
+//   - Variants (widest rung "←→ profile · ↑↓ count") — the one field where this footer
+//     is wrong. There ↑↓ steps a count and ←→ moves between profiles, so the hint
+//     corrects the footer rather than restating it.
 //   - Model ("type a name") — a custom-entry affordance. The chips are not the whole
 //     input surface for that field, and nothing else says so.
 //
 // Account keeps a pool gloss ("⇄ rotates the pool" / "pins this member") for the same
 // reason: it names a distinction the footer cannot.
-const createFormHelp = "Tab complete/move · ↑↓ select · ↵ create from name · ⌃S create"
+//
+// The ladder puts that rule under a width: if a rung dropped "↑↓" to save cells, the
+// footer would stop owning the nav keys on exactly the narrow terminal where the
+// per-field hints are least affordable, and #466's guard — which renders at one wide
+// size — could not see it. So every rung names "↑↓" exactly once, and that is what
+// TestCreateFormHelp_EveryRungKeepsTheNavKeys pins — with
+// TestPromptFocusHelp_NoRungNamesTheNavKeys holding the mirror image for the prompt,
+// whose count under that rule is zero at every width.
+var createFormHelp = []string{
+	"Tab complete/move · ↑↓ select · ↵ create from name · ⌃S create",
+	"Tab complete/move · ↑↓ select · ⌃S create",
+	"Tab/↑↓ move · ⌃S create",
+}
 
-// promptFocusHelp is the footer shown while the prompt textarea holds focus, where Enter
-// advances like Tab and the newline keys differ. Shift+Enter needs a Claude-Code-style
-// terminal setup; Ctrl+J always works.
-const promptFocusHelp = "⇧↵ / ⌃J newline · ↵ next field · ⌃S create"
+var promptFocusHelp = []string{
+	"⇧↵ / ⌃J newline · ↵ next field · ⌃S create",
+	"⌃J newline · ↵ next field · ⌃S create",
+	"⌃J newline · ⌃S create",
+}
 
 // renderPickerRows renders a list of pre-formatted labels windowed around the cursor,
 // always emitting exactly rows lines (padding with blanks) so the caller's height is
@@ -102,8 +126,19 @@ func renderPickerRows(labels []string, cursor, rows int, focused bool, placehold
 
 // Render renders the text input overlay.
 func (t *TextInputOverlay) Render() string {
+	content, innerWidth, divider := t.compose()
+	return t.fitOverlay(content, innerWidth, divider)
+}
+
+// compose assembles the overlay's inner content at the current width, and is
+// split out of Render for one reason: it is the only place a test can see the
+// lines the form *meant* to draw. fitOverlay runs after it and truncates
+// silently, so a measurement taken from Render() can never distinguish copy that
+// fits from copy that was cut to fit — which is how three overflows shipped (see
+// TestCreateForm_ComposesWithinInnerWidth).
+func (t *TextInputOverlay) compose() (content string, innerWidth int, divider string) {
 	// Inner content width (accounting for padding and borders)
-	innerWidth := t.width - 6
+	innerWidth = t.width - 6
 	if innerWidth < 1 {
 		innerWidth = 1
 	}
@@ -113,15 +148,14 @@ func (t *TextInputOverlay) Render() string {
 	t.textarea.SetWidth(innerWidth)
 
 	// Build a horizontal divider line
-	divider := tiDividerStyle().Render(strings.Repeat("─", innerWidth))
+	divider = tiDividerStyle().Render(strings.Repeat("─", innerWidth))
 
 	if t.isCreateForm {
-		return t.fitOverlay(t.renderCreateForm(divider), innerWidth, divider)
+		return t.renderCreateForm(divider), innerWidth, divider
 	}
 
 	// Plain prompt overlay (the `p` flow): no pickers — just a title, the prompt textarea,
 	// and the submit button.
-	var content string
 	content += tiTitleStyle().Render(t.Title) + "\n"
 	content += t.textarea.View() + "\n\n"
 	content += divider + "\n\n"
@@ -132,7 +166,7 @@ func (t *TextInputOverlay) Render() string {
 	}
 	content += t.renderEnterButton()
 
-	return t.fitOverlay(content, innerWidth, divider)
+	return content, innerWidth, divider
 }
 
 // fitOverlay constrains the assembled inner content to the overlay's terminal share
@@ -275,7 +309,14 @@ func (t *TextInputOverlay) renderCreateForm(divider string) string {
 	if t.clearArmed {
 		clearHint = "⌃R again"
 	}
-	b.WriteString(tiHintStyle().Render(help+" · "+clearHint) + "\n")
+	// The rungs are laddered composed — with the clear hint already on the end —
+	// because that suffix is what pushes each of them over, and both its spellings
+	// are the same width, so the choice cannot flip as the clear arms.
+	rungs := make([]string, len(help))
+	for i, h := range help {
+		rungs[i] = h + " · " + clearHint
+	}
+	b.WriteString(tiHintStyle().Render(fitHint(lipgloss.Width(divider), "", rungs...)) + "\n")
 	b.WriteString(t.renderEnterButton())
 
 	return b.String()

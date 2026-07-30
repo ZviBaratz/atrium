@@ -24,7 +24,9 @@ import (
 // UX path. The chip row is width-budgeted to 41 cells so it survives the
 // worst realistic overlay width (80-col terminal → 42 inner cells) without
 // truncation; fitOverlay truncates rather than wraps, so height is safe
-// regardless.
+// regardless. The custom-mode hint cannot be budgeted the same way — it needs
+// more cells than an 80-col terminal has — so it is the one part of this field
+// that reads the width and picks a rung (customModeHint).
 //
 // The field is disabled (dim, skipped in Tab order, Value() == "") while the
 // form's effective program does not resolve to claude — the only agent whose
@@ -60,10 +62,16 @@ func (mf *ModelField) Blur() {
 	mf.input.Blur()
 }
 
-// SetWidth sets the rendering width.
+// SetWidth sets the rendering width: w is the overlay's inner width, the budget
+// every line of this field has to fit.
+//
+// The input gets one cell less. Like the title input (see renderCreateForm), it
+// renders one column past its Width for the end-of-line cursor cell, so a text
+// input given the full 42 draws 43 and fitOverlay stamps an "…" over the last
+// column on every single render of custom mode.
 func (mf *ModelField) SetWidth(w int) {
 	mf.width = w
-	mf.input.SetWidth(w)
+	mf.input.SetWidth(max(1, w-1))
 }
 
 // HandleKeyPress routes a key by mode. Chips: arrows cycle (Up/Down accepted
@@ -179,13 +187,42 @@ func (mf *ModelField) Value() string {
 func mfLabelStyle() lipgloss.Style { return overlayLabelStyle() }
 func mfDimStyle() lipgloss.Style   { return overlayDimStyle() }
 
+// modelLabel is the field's label, and the prefix the hint shares its line with.
+const modelLabel = "Model"
+
+// modelCustomHelp are the custom-mode hint's rungs, widest first (see fitHint).
+//
+// The clause that gets dropped first is "checked at launch", which sets the
+// expectation that a mis-typed model name is not rejected here: the charset filter
+// above is the only local check, and whether the name names a real model is
+// answered by the launched session (the claude "model-error" matcher). Useful, but
+// it is the explanation; "← back" is the way out of a mode the user may have
+// entered by mistake, and Esc closes the whole form rather than the mode, so that
+// one has to survive every width.
+//
+// "← back" is approximate on purpose. The exact rule is Left with the text cursor
+// at position 0 (see HandleKeyPress), which is what holding ← does — walk to the
+// start, then out. The predecessor said "←/clear to go back", which was worse than
+// approximate: no path exits custom mode on an empty value, so "clear" named an
+// action that does nothing.
+var modelCustomHelp = []string{
+	"  ← back · Tab completes · checked at launch",
+	"  ← back · Tab completes",
+}
+
+// customModeHint is the hint shown while the field is in free-text mode, at the
+// widest rung this field's width affords.
+func (mf *ModelField) customModeHint() string {
+	return fitHint(mf.width, modelLabel, modelCustomHelp...)
+}
+
 // Render renders the field: label + a constant-height hint row, then the
 // single chip-or-input row, so the form never jumps as focus or mode changes.
 // Disabled renders a dim placeholder instead, mirroring the branch picker's
 // inert state.
 func (mf *ModelField) Render() string {
 	var s strings.Builder
-	s.WriteString(mfLabelStyle().Render("Model"))
+	s.WriteString(mfLabelStyle().Render(modelLabel))
 	if mf.disabled {
 		s.WriteString("\n\n")
 		s.WriteString(mfDimStyle().Render(claudeFieldNA))
@@ -193,7 +230,7 @@ func (mf *ModelField) Render() string {
 	}
 	if mf.focused {
 		if mf.custom {
-			s.WriteString(mfDimStyle().Render("  ←/clear to go back · Tab completes · checked at launch"))
+			s.WriteString(mfDimStyle().Render(mf.customModeHint()))
 		} else {
 			// "type a name" is the custom-entry affordance — not redundant with the
 			// form footer's "↑↓ select", so it stays on every chip. The no-op-chip
