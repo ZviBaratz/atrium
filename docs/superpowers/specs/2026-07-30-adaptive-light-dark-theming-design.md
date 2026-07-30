@@ -301,20 +301,39 @@ registered theme, plus the two `agent.go` brand colours, asserting:
   directly encodes "as readable as the dark one";
 - an absolute floor for the tokens that carry text.
 
-It already found a live defect while being designed. Measured on tokyo-night:
-`FgFaint` and `BarBg` are the *same* colour (`#414868`), i.e. 1.00:1, and
-`barState` renders Paused/default with `FgDim` on the `BarBg` band at **1.44:1**
-— while `ui/contextbar.go:63`'s own comment says "dim greys wash out" there.
-**Report it, exempt it with a reason, do not fix it in this issue.**
+It already found a live defect while being designed. `barState`
+(`ui/contextbar.go:31`) renders Paused and the default state with `FgDim` on the
+`BarBg` band: **1.44:1** on tokyo-night, **1.87:1** on catppuccin-mocha — while
+`ui/contextbar.go:59`'s own comment says "dim greys wash out" there.
+**Report it, exempt that one pair with a reason, do not fix it in this issue.**
 
-Reference ratios the light twin must reproduce (tokyo-night vs its `Bg`):
+`FgFaint == BarBg` in *both* themes (`#414868`, `#45475a`) is **not** a defect —
+it is a shared deliberate choice, the faint rule and the bar band being the same
+slate. Both floors below are set against it rather than against an assumption
+that faint text must be legible.
+
+Reference ratios the light twin must reproduce, measured on both shipped dark
+themes (tokyo-night / catppuccin-mocha, vs each one's own `Bg`):
 
 ```
-Fg 10.59  Pending/Cyan 9.96  Success 9.35  Attention 8.55  Purple 7.39
-Accent 6.79  Danger 6.46  SuccessDim 4.35  FgDim/Working 2.76
-AccentMuted 2.56  FgFaint/BarBg 1.91  BgElevated 1.17
-BadgeFg on BadgeBg 7.39   Bg on Accent 6.79   Bg on Attention 8.55
+Fg          10.59 / 11.34     Pending/Cyan   9.96 / 10.54
+Success      9.35 / 11.03     Attention      8.55 / 12.91
+Purple       7.39 /  8.07     Accent         6.79 /  7.79
+Danger       6.46 /  7.08     SuccessDim     4.35 /  4.60
+FgDim/Working 2.76 / 3.36     AccentMuted    2.56 /  8.69
+FgFaint/BarBg 1.91 / 1.80     BgElevated     1.17 /  1.30
+BadgeFg on BadgeBg  7.39 / 8.07    Bg on Accent      6.79 / 7.79
+Bg on Attention     8.55 /12.91    Fg on BgElevated  9.02 / 8.69
+Fg on BarBg         5.53 / 6.31
+agent claude #d97757  5.47 / 5.25   agent gemini #4285f4  4.80 / 4.60
 ```
+
+Floors are set from the **minimum across both themes** with margin, so the oracle
+lands green on what ships today: 4.5 for the text-and-status tokens, 3.0 for
+`SuccessDim`, 2.4 for `FgDim`/`Working`/`AccentMuted`, 1.6 for `FgFaint` and
+`BarBg`, 1.1 for `BgElevated`, and 4.5 for each pair above. `AccentMuted`'s
+2.56-vs-8.69 spread is why it gets its own low floor rather than sharing
+`Accent`'s.
 
 ### Gates
 
@@ -432,6 +451,7 @@ achievable, and saying so early was worth more than meeting them on paper.
 - fresco: a light luminance ramp (invert `splashLumHexAt`'s direction, or make
   `rainRampFloor` a parameter). Blocks a properly-shaded light splash.
 - Atrium: mode 2031, paired with #396's mode lifecycle.
-- Atrium: `FgDim` on `BarBg` at 1.44:1, and `FgFaint == BarBg` at 1.00:1 —
-  legibility defects on the *dark* themes, surfaced by Stage B.
+- Atrium: `barState`'s `FgDim` on the `BarBg` band — 1.44:1 on tokyo-night,
+  1.87:1 on catppuccin-mocha — a legibility defect on the *dark* themes,
+  surfaced by Stage B. (`FgFaint == BarBg` is deliberate, not a defect.)
 - Atrium: per-family adaptivity (`theme_mode`), only if asked for.
