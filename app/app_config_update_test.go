@@ -69,21 +69,45 @@ func runCmdTree(c tea.Cmd) {
 	}
 }
 
-// applySettingChange("theme") must return a Cmd that includes the tmux bar push.
-// This is the wire the ladder's own guards cannot see: theme.Set and the spinner
-// re-seed are both observable in-process, but the bar lives in another process,
-// so nothing else in the suite notices when the push is dropped.
-func TestApplySettingChange_ThemePushesTmuxBarStyle(t *testing.T) {
+// The helper's own gates, named for the helper — this does NOT prove the arm calls
+// it (TestApplySettingChange_ThemeArmBatchesTheBarPush below is what does; it caught
+// the plan's Step-9 test passing with the call deleted from the arm).
+//
+// glyph_set shares the theme arm's case but moves no colour, and the push costs a
+// conf rewrite plus validateConfig's probe server, so it must not fire.
+func TestApplyBarStyleCmd_GatesOnPaletteChangeAndContextBar(t *testing.T) {
 	m := newCreateFormHome(t)
 	m.appConfig.SessionContextBar = boolPtr(true)
 	m.appConfig.Theme = "catppuccin-mocha"
 
-	require.NotNil(t, m.applyBarStyleCmd(),
+	require.NotNil(t, m.applyBarStyleCmd("theme"),
 		"with the context bar on, a theme change must push the bar style")
+	require.Nil(t, m.applyBarStyleCmd("glyph_set"),
+		"glyph_set shares the arm but changes no colour: nothing to push")
 
 	m.appConfig.SessionContextBar = boolPtr(false)
-	require.Nil(t, m.applyBarStyleCmd(),
+	require.Nil(t, m.applyBarStyleCmd("theme"),
 		"with the context bar off there is no band to restyle")
+}
+
+// The arm is shared between theme and glyph_set, so the gate above is only real if
+// driving the glyph_set arm end to end pushes nothing. Without the key check this
+// fails: the Cmd tree runs the applier once.
+func TestApplySettingChange_GlyphSetArmDoesNotPushTheBar(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Cleanup(theme.Set(theme.Current().Name))
+
+	m := newCreateFormHome(t)
+	m.appConfig.SessionContextBar = boolPtr(true)
+	m.appConfig.Theme = "catppuccin-mocha"
+
+	var pushed int32
+	defer swapBarStyleApplier(func(context.Context, bool) { atomic.AddInt32(&pushed, 1) })()
+
+	runCmdTree(m.applySettingChange("glyph_set"))
+
+	require.Equal(t, int32(0), atomic.LoadInt32(&pushed),
+		"a glyph-set change must not rewrite the tmux conf or restyle the band")
 }
 
 // The helper existing is not the same as the arm calling it. #391's finding: a

@@ -282,7 +282,12 @@ func (m *home) applySettingChange(key string) tea.Cmd {
 		// are a server option baked in when the server started, so restyling the
 		// TUI alone leaves every attached pane's header on the old band while its
 		// text (pushed per tick as #[fg=...] markup) moves. Push both halves.
-		return tea.Sequence(tea.ClearScreen, tea.Batch(tea.RequestWindowSize, m.applyBarStyleCmd()))
+		//
+		// Only for a palette change: this case is shared with glyph_set, which moves
+		// no colour, and the push costs a conf rewrite plus validateConfig's probe
+		// server. applyBarStyleCmd returns nil for anything else, so the Batch below
+		// degrades to the repaint alone.
+		return tea.Sequence(tea.ClearScreen, tea.Batch(tea.RequestWindowSize, m.applyBarStyleCmd(key)))
 	case "model_indicator":
 		// Mirror the newHome seeding; the renderer takes the normalized mode
 		// string so ui needs no config import.
@@ -402,6 +407,12 @@ func (m *home) applySettingChange(key string) tea.Cmd {
 // Both failures are logged, not surfaced: the bar is cosmetic, the user just asked
 // for a theme, and the most common failure is simply that no tmux server is
 // running yet.
+//
+// This runs on a tea.Cmd goroutine, so every global it reaches has to be safe off
+// the update thread — RewriteManagedConfig republishes tmux's config state (atomic,
+// swapped by rename) and ApplyBarStyle reads theme.Current() (an atomic load). A
+// tea.Cmd is a goroutine: moving a startup-only call into one re-scopes everything
+// it touches, and the seam below is exactly what hides that from the race detector.
 var barStyleApplier = func(ctx context.Context, contextBar bool) {
 	if err := tmux.RewriteManagedConfig(contextBar); err != nil {
 		log.WarningLog.Printf("failed to rewrite managed tmux config after theme change: %v", err)
@@ -414,11 +425,15 @@ var barStyleApplier = func(ctx context.Context, contextBar bool) {
 // applyBarStyleCmd restyles every live session's in-pane status band for the
 // theme that is now active, off the update thread.
 //
+// Nil unless key is "theme": the caller's case also fires for glyph_set, which
+// changes no colour, and the push is not free (a conf rewrite plus validateConfig's
+// throwaway probe server).
+//
 // Nil when the context bar is off: there is no band to restyle, and the managed
 // conf that arm rewrites (see the "session_context_bar" case) carries the theme
 // anyway.
-func (m *home) applyBarStyleCmd() tea.Cmd {
-	if !m.appConfig.GetSessionContextBar() {
+func (m *home) applyBarStyleCmd(key string) tea.Cmd {
+	if key != "theme" || !m.appConfig.GetSessionContextBar() {
 		return nil
 	}
 	contextBar := m.appConfig.GetSessionContextBar()

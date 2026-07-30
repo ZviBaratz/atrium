@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"text/template"
 
 	"github.com/ZviBaratz/atrium/config"
@@ -37,13 +38,28 @@ var embeddedTmuxConfigTemplate string
 
 // configOverridePath, when non-empty and pointing at an existing file, is used as
 // the tmux config instead of the managed one. Set via Init from config.json.
-var configOverridePath string
+//
+// configOverridePath and managedConfigInvalid are atomic for the same reason
+// agentOOMMargin is (see oom.go): Init no longer runs only at startup. A live theme
+// change re-materializes the managed conf from a tea.Cmd goroutine
+// (RewriteManagedConfig, barstyle.go) while tmuxConfigPath reads both from whatever
+// goroutine is launching or polling a session — every tmux subprocess crosses
+// tmuxCommand, and the 500ms metadata sweep fans out one goroutine per instance.
+var configOverridePath atomic.Pointer[string]
 
 // managedConfigInvalid is set by Init when the config it just wrote fails to parse.
 // tmuxConfigPath then omits -f so sessions fall back to tmux defaults (degraded, but
 // usable) instead of being blocked: a config tmux refuses to load otherwise surfaces
 // only when a client attaches, locking the user out of the pane.
-var managedConfigInvalid bool
+var managedConfigInvalid atomic.Bool
+
+// overrideConfigPath returns the configured override, "" when none is set.
+func overrideConfigPath() string {
+	if p := configOverridePath.Load(); p != nil {
+		return *p
+	}
+	return ""
+}
 
 // WheelScrollLines is how many lines one mouse-wheel notch scrolls, in BOTH surfaces a
 // notch can land on: the tmux pane of an attached session (rendered into the managed
@@ -90,13 +106,18 @@ func renderManagedConfig(contextBar bool) ([]byte, error) {
 // Init records an optional user-supplied tmux config override and, when none is
 // set, materializes the bundled config into the config dir. contextBar toggles the
 // in-session status line (config session_context_bar). The managed file is
-// overwritten on every launch so it stays in sync with the binary. Call once at
-// startup; it is idempotent and safe to call from both the TUI and daemon
-// processes.
-func Init(overridePath string, contextBar bool) error {
-	configOverridePath = overridePath
-	managedConfigInvalid = false
-	if overridePath != "" {
+// overwritten on every launch so it stays in sync with the binary.
+//
+// Called at startup and again whenever a live setting invalidates the rendered conf
+// (session_context_bar, tmux_config_override, and a theme change via
+// RewriteManagedConfig). It is idempotent, safe to call from both the TUI and daemon
+// processes, and safe off the update thread: the state it publishes is atomic and the
+// file is swapped by rename, so a session launching concurrently reads either the old
+// conf or the new one, never a half-written one.
+func Init(override string, contextBar bool) error {
+	configOverridePath.Store(&override)
+	managedConfigInvalid.Store(false)
+	if override != "" {
 		return nil
 	}
 	dir, err := config.GetConfigDir()
@@ -111,15 +132,40 @@ func Init(overridePath string, contextBar bool) error {
 		return err
 	}
 	path := filepath.Join(dir, managedConfigFileName())
-	if err := os.WriteFile(path, rendered, 0o644); err != nil {
+	if err := writeFileAtomic(path, rendered); err != nil {
 		return err
 	}
 	if err := validateConfig(path); err != nil {
 		log.ErrorLog.Printf("managed tmux config did not parse; starting sessions without it "+
 			"(custom titles/mouse/clipboard/status bar disabled until fixed): %v", err)
-		managedConfigInvalid = true
+		managedConfigInvalid.Store(true)
 	}
 	return nil
+}
+
+// writeFileAtomic materializes content at path via a temp file in the same directory
+// plus a rename, which is atomic on POSIX. A plain os.WriteFile truncates in place, so
+// a session started mid-rewrite could hand `tmux -f` a partial config — a parse error
+// that only surfaces when the user attaches. Init runs off the update thread now, so
+// that window is reachable rather than theoretical.
+func writeFileAtomic(path string, content []byte) error {
+	tmp, err := os.CreateTemp(filepath.Dir(path), filepath.Base(path)+".tmp-*")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	defer func() { _ = os.Remove(tmpName) }() // no-op once the rename succeeds
+	if _, err := tmp.Write(content); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Chmod(tmpName, 0o644); err != nil {
+		return err
+	}
+	return os.Rename(tmpName, path)
 }
 
 // validateConfig asks a throwaway tmux server to parse path via source-file, the only
@@ -168,12 +214,12 @@ func validateConfig(path string) error {
 // alone. The existence check matters: `tmux -f <missing-file>` fails outright, so
 // we must never pass a path that isn't on disk (e.g. if Init failed to write it).
 func tmuxConfigPath() string {
-	if configOverridePath != "" {
-		if _, err := os.Stat(configOverridePath); err == nil {
-			return configOverridePath
+	if override := overrideConfigPath(); override != "" {
+		if _, err := os.Stat(override); err == nil {
+			return override
 		}
 	}
-	if managedConfigInvalid {
+	if managedConfigInvalid.Load() {
 		// Init found the managed config unparseable; omit -f and let sessions run on
 		// the isolated socket with tmux defaults rather than failing on attach.
 		return ""
