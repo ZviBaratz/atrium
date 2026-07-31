@@ -1502,21 +1502,21 @@ func TestApplyDiffStats(t *testing.T) {
 	t.Run("a generic compute error clears stale stats", func(t *testing.T) {
 		inst := newInst()
 		inst.SetDiffStats(&git.DiffStats{Added: 9})
-		applyDiffStats(inst, &git.DiffStats{Error: fmt.Errorf("boom")})
+		applyDiffStats(inst, &git.DiffStats{Error: fmt.Errorf("boom")}, false)
 		assert.Nil(t, inst.GetDiffStats(), "a diff error must drop stale numbers")
 	})
 
 	t.Run("the expected pre-baseline error also clears stats", func(t *testing.T) {
 		inst := newInst()
 		inst.SetDiffStats(&git.DiffStats{Added: 9})
-		applyDiffStats(inst, &git.DiffStats{Error: fmt.Errorf("base commit SHA not set")})
+		applyDiffStats(inst, &git.DiffStats{Error: fmt.Errorf("base commit SHA not set")}, false)
 		assert.Nil(t, inst.GetDiffStats(), "the expected pre-baseline error is silent but still clears stats")
 	})
 
 	t.Run("clean stats are stored", func(t *testing.T) {
 		inst := newInst()
 		stats := &git.DiffStats{Added: 3, Removed: 1}
-		applyDiffStats(inst, stats)
+		applyDiffStats(inst, stats, false)
 		assert.Same(t, stats, inst.GetDiffStats(), "valid stats must be stored as-is")
 	})
 }

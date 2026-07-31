@@ -100,6 +100,20 @@ func (d *DiffStats) IsEmpty() bool {
 // with stats.Error set and no repo stats; on success it fills the
 // commit/behind/dirty counters before returning.
 func (g *Worktree) diffWith(fill func(wt string, stats *DiffStats) error) *DiffStats {
+	return g.diffFrom(true, fill)
+}
+
+// diffFrom is diffWith with the intent-to-add step made optional.
+//
+// Staging untracked files is only there so `git diff <base>` can see them, so a
+// caller that computes no diff content has no reason to pay for it — and it is not
+// free: it walks the whole worktree with `git ls-files --others`, which on a repo
+// carrying node_modules or a build tree is the most expensive thing here.
+//
+// Skipping it does not change Dirty: computeRepoStats derives that from
+// `git status --porcelain`, which reports untracked files as `??` whether or not
+// they have been intent-added.
+func (g *Worktree) diffFrom(intentAdd bool, fill func(wt string, stats *DiffStats) error) *DiffStats {
 	stats := &DiffStats{}
 
 	if g.GetBaseCommitSHA() == "" {
@@ -108,7 +122,9 @@ func (g *Worktree) diffWith(fill func(wt string, stats *DiffStats) error) *DiffS
 	}
 
 	wt := g.snapshotWorktreePath()
-	g.intentAddUntracked(wt)
+	if intentAdd {
+		g.intentAddUntracked(wt)
+	}
 
 	if err := fill(wt, stats); err != nil {
 		stats.Error = err
@@ -117,6 +133,23 @@ func (g *Worktree) diffWith(fill func(wt string, stats *DiffStats) error) *DiffS
 
 	g.computeRepoStats(stats, wt)
 	return stats
+}
+
+// RepoStats returns only the branch-level counters — Commits, Behind, Unpushed and
+// Dirty — leaving Added/Removed/FilesChanged/Content zero.
+//
+// It is the cheap half of Diff: those four fields come from `git rev-list` and
+// `git status --porcelain`, both already TTL-cached here, so most calls fork
+// nothing at all. What it omits is the pair that is not cached and not cheap — the
+// untracked-file walk and `git diff` itself.
+//
+// The split exists because those four fields are the ones that reach a destructive
+// confirmation (the kill dialog's "uncommitted changes / N unpushed commits"),
+// while the omitted ones only reach a row's +/- chip and the diff pane. A caller
+// that wants to poll an idle session less often can therefore keep every number a
+// user acts on fresh, and let only the cosmetic ones age.
+func (g *Worktree) RepoStats() *DiffStats {
+	return g.diffFrom(false, func(string, *DiffStats) error { return nil })
 }
 
 // Diff returns the git diff between the worktree and the base branch along with statistics
