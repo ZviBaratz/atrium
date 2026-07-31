@@ -41,9 +41,10 @@ var scanFrame = zone.Scan
 
 // scanCached is scanFrame memoized on its input, because an idle Atrium hands it
 // the same frame over and over: Bubble Tea calls View() after every message
-// (tea.go:880) and three independent 10Hz loops plus the metadata tick produce ~32
-// of those a second. Measured, the scan is ~19% of a frame build's time and about
-// half its allocated bytes.
+// (tea.go:880), and the preview tick, the pane-capture chain and the metadata tick
+// produce ~22 of those a second with nothing spinning — ~32 once the spinner loop
+// joins them (armSpinnerTick). Measured, the scan is ~19% of a frame build's time
+// and about half its allocated bytes.
 //
 // Reusing the previous output is safe, and the reason is worth stating because it
 // is not obvious: a zone's ID lives INSIDE the pre-scan string, as the ANSI marker
@@ -797,10 +798,11 @@ func (m *home) viewContent() string {
 	//
 	// Indirected through a package var purely so it can be measured and counted:
 	// zone.Scan is a rune-by-rune walk of the whole frame that also pushes one
-	// ZoneInfo per zone across a channel to a lock-taking worker, and it runs on
-	// every one of the ~32 frames a second an idle Atrium builds (#546). A benchmark
-	// cannot isolate its share, and a test cannot assert it was skipped, without a
-	// seam. Production always uses zone.Scan.
+	// ZoneInfo per zone across a channel to a lock-taking worker, and it used to run
+	// on every one of the ~32 frames a second an idle Atrium built (#546) — hence
+	// scanCached, which now skips it for the identical ones. A benchmark cannot
+	// isolate its share, and a test cannot assert it was skipped, without a seam.
+	// Production always uses zone.Scan.
 	mainView = m.scanCached(mainView)
 
 	if m.state == statePrompt {

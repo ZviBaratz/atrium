@@ -405,8 +405,7 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// A window shrunk below the splash floor can't render the screensaver;
 		// wake up rather than draw a degenerate field.
 		if m.state == stateScreensaver && !ui.SplashFits(msg.Width, msg.Height) {
-			m.state = stateDefault
-			m.noteFrameTargetChange() // same wake-up restamp as the keypress path
+			m.dismissScreensaver()
 		}
 		m.updateHandleWindowSizeEvent(msg)
 		// First launch ever: show the interactive welcome once the size is known
@@ -883,13 +882,7 @@ func (m *home) handleKeyPress(msg tea.KeyPressMsg) (mod tea.Model, cmd tea.Cmd) 
 	// Runs before every other state handler; only ctrl+l above bypasses it, so
 	// a repaint doesn't tear the screensaver down.
 	if m.state == stateScreensaver {
-		m.state = stateDefault
-		// No capture ran while the splash owned the window, so the cached frame is
-		// as old as the screensaver was. Restamp freshness on the way out, exactly
-		// as a tab change does: the pane is about to be pointed at live content
-		// again, and reporting the age of the frame it left behind would be a real
-		// number about the wrong question.
-		m.noteFrameTargetChange()
+		m.dismissScreensaver()
 		return m, nil
 	}
 

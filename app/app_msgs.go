@@ -154,10 +154,14 @@ func (m *home) spinnerAnimating() bool {
 // per rebuild, so this was ~31% of an idle Atrium's render cost animating nothing
 // (#546).
 //
-// Called from the 100ms preview tick and from the tail of applyMetadataResults,
-// which are the two places a status can newly become Running or Loading. The tick
-// alone would bound the delay to 100ms; applyMetadataResults is where the poll
-// actually flips the status, so arming there makes it immediate.
+// Called from the 100ms preview tick and from the tail of applyMetadataResults.
+// The tick is the one that makes this correct: it fires unconditionally, so it
+// re-arms for *any* path that sets Running or Loading — and there are more than
+// the poll (app_session.go's new session, app_update.go's Loading→Running, the
+// optimistic flips in approveSelected and the suggestion handler), which is why
+// the general self-heal is the guarantee rather than an enumeration of writers.
+// applyMetadataResults is the fast path only: the poll is where a status flips
+// most often, and arming there makes it immediate instead of up to 100ms late.
 func (m *home) armSpinnerTick() tea.Cmd {
 	if m.spinnerTicking || !m.spinnerAnimating() {
 		return nil
@@ -309,7 +313,7 @@ func (m *home) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 				tea.MouseWheelLeft, tea.MouseWheelRight:
 				// Wheel deltas arrive as presses; not a deliberate wake.
 			default:
-				m.state = stateDefault
+				m.dismissScreensaver()
 			}
 		}
 		return m, nil

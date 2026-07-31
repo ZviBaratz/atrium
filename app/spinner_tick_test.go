@@ -4,9 +4,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ZviBaratz/atrium/internal/testutil"
 	"github.com/ZviBaratz/atrium/session"
 
 	"charm.land/bubbles/v2/spinner"
+	tea "charm.land/bubbletea/v2"
 	"github.com/stretchr/testify/require"
 )
 
@@ -133,20 +135,38 @@ func TestResolveFrameTarget_ScreensaverCapturesNothing(t *testing.T) {
 // of the frame the screensaver left behind — a real number about the wrong
 // question, and the same reason a tab change restamps.
 //
+// Every exit, not just the keyboard one. There are three ways out and they live in
+// three different files, so a per-exit table is the only shape that catches the one
+// that forgot: asserting this through the any-key path alone passed while a click
+// still flashed the screensaver's age (which is exactly what it did).
+//
 // The pane needs a real frame for this to mean anything: staleMarker stays silent
 // on a fallback pane, so a session without one would pass whatever the wake path
 // did.
 func TestScreensaverWake_RestampsPaneFreshness(t *testing.T) {
-	h, inst := newCaptureHome(t, newFrameSpy("pane"))
-	inst.SetPaneFrame("live pane content", time.Now().Add(-time.Hour))
-	require.NoError(t, h.tabbedWindow.UpdatePreview(inst))
-	require.Contains(t, h.tabbedWindow.String(), "stale",
-		"precondition: an hour-old frame reads as stale before the wake restamp")
+	for _, tc := range []struct {
+		name string
+		wake func(h *home)
+	}{
+		{"any key", func(h *home) { h.Update(keyMsg("a")) }},
+		{"click", func(h *home) { h.Update(testutil.MouseClick(0, 0, tea.MouseLeft)) }},
+		{"resized below the splash floor", func(h *home) {
+			h.Update(tea.WindowSizeMsg{Width: 20, Height: 8})
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h, inst := newCaptureHome(t, newFrameSpy("pane"))
+			inst.SetPaneFrame("live pane content", time.Now().Add(-time.Hour))
+			require.NoError(t, h.tabbedWindow.UpdatePreview(inst))
+			require.Contains(t, h.tabbedWindow.String(), "stale",
+				"precondition: an hour-old frame reads as stale before the wake restamp")
 
-	h.state = stateScreensaver
-	h.Update(keyMsg("a")) // any key dismisses the screensaver
+			h.state = stateScreensaver
+			tc.wake(h)
 
-	require.Equal(t, stateDefault, h.state, "precondition: the key woke it")
-	require.NotContains(t, h.tabbedWindow.String(), "stale",
-		"waking must restamp freshness, not flash the screensaver's age at the user")
+			require.Equal(t, stateDefault, h.state, "precondition: this path woke it")
+			require.NotContains(t, h.tabbedWindow.String(), "stale",
+				"waking must restamp freshness, not flash the screensaver's age at the user")
+		})
+	}
 }
