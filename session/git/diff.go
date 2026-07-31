@@ -143,11 +143,14 @@ func (g *Worktree) diffFrom(intentAdd bool, fill func(wt string, stats *DiffStat
 // nothing at all. What it omits is the pair that is not cached and not cheap — the
 // untracked-file walk and `git diff` itself.
 //
-// The split exists because those four fields are the ones that reach a destructive
-// confirmation (the kill dialog's "uncommitted changes / N unpushed commits"),
-// while the omitted ones only reach a row's +/- chip and the diff pane. A caller
-// that wants to poll an idle session less often can therefore keep every number a
-// user acts on fresh, and let only the cosmetic ones age.
+// The split is drawn here because every number that reaches a destructive
+// confirmation is on this side of it: the kill dialog's "uncommitted changes /
+// N unpushed commits" is built from Dirty and Unpushed alone (killDataWarning).
+// Commits and Behind are display-only, and are kept simply because the same two
+// commands already yield them. Nothing the diff computes — the +/- chip and the
+// diff pane — is ever read before deleting a branch. A caller that wants to poll
+// an idle session less often can therefore keep every number a user acts on
+// fresh, and let only the cosmetic ones age.
 func (g *Worktree) RepoStats() *DiffStats {
 	return g.diffFrom(false, func(string, *DiffStats) error { return nil })
 }

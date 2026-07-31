@@ -504,9 +504,11 @@ func pollTargets(active []*session.Instance, selected *session.Instance, fullSwe
 
 // collectMetadata polls each instance in poll on its own background goroutine and returns
 // the per-instance results, to be applied on the main thread by applyMetadataResults. The
-// selected instance gets a full diff (with Content) for the diff pane; the rest get a
-// lightweight numstat-only summary, keeping per-instance memory bounded. Shared by the
-// periodic metadata tick and the one-shot detach sweep.
+// diff work splits three ways (see the switch below): the selected instance gets a full
+// diff (with Content) for the diff pane; a background instance whose tree may have moved
+// gets a lightweight numstat-only summary, keeping per-instance memory bounded; and one
+// diffContentDue rules out gets the branch-level counters alone, skipping the diff
+// entirely. Shared by the periodic metadata tick and the one-shot detach sweep.
 //
 // fresh takes a face-value PollNow for the selected instance instead of the hysteresis
 // Poll: the detach sweep sets it because the tick stream was stalled while attached, so the
@@ -563,8 +565,8 @@ func collectMetadata(ctx context.Context, poll []*session.Instance, selected *se
 				r.diffStats = instance.ComputeDiffNumstat()
 			default:
 				// The tree cannot have changed: skip the untracked-file walk and the
-				// diff itself, but still refresh the branch-level counters, which are
-				// what a kill confirmation reads.
+				// diff itself, but still refresh the branch-level counters — Dirty and
+				// Unpushed among them, which are what a kill confirmation reads.
 				r.diffStats = instance.ComputeRepoStats()
 				r.diffContentSkipped = true
 			}
@@ -721,9 +723,10 @@ func applyDiffStats(inst *session.Instance, stats *git.DiffStats, contentSkipped
 // full sweep) — see metadataFullSweepEvery. Sessions left out of the returned results are
 // simply not updated this tick.
 //
-// Only the selected instance gets a full diff (with Content); the rest get a
-// lightweight numstat-only summary. This keeps per-instance memory bounded
-// since the diff pane only ever renders the selected one.
+// Only the selected instance gets a full diff (with Content), which keeps per-instance
+// memory bounded since the diff pane only ever renders the selected one. A background
+// instance gets a lightweight numstat-only summary, or — once diffContentDue rules out
+// that its tree moved — the branch-level counters alone. See collectMetadata.
 func tickUpdateMetadataCmd(ctx context.Context, active []*session.Instance, selected *session.Instance, fullSweep bool, attachGen uint64) tea.Cmd {
 	return func() tea.Msg {
 		// Honor ctx during the inter-tick wait so a shutdown mid-sleep doesn't leave
