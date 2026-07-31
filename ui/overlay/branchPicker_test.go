@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"charm.land/lipgloss/v2"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -88,7 +89,7 @@ func TestBranchPicker_SetErrorClearsLoadingAndShowsHint(t *testing.T) {
 	bp.SetError(version)
 	out := bp.Render()
 	assert.NotContains(t, out, "searching", "error must clear the loading state")
-	assert.Contains(t, out, "couldn't list branches")
+	assert.Contains(t, out, strings.TrimSpace(searchFailedNote))
 }
 
 // The error hint must survive losing focus: a search that fails while (or before) the
@@ -101,7 +102,7 @@ func TestBranchPicker_ErrorHintVisibleWhenUnfocused(t *testing.T) {
 
 	bp.SetError(bp.Invalidate())
 	out := bp.Render()
-	assert.Contains(t, out, "couldn't list branches", "the unfocused header must surface the error")
+	assert.Contains(t, out, strings.TrimSpace(searchFailedNote), "the unfocused header must surface the error")
 	assert.Equal(t, unfocusedHeight, strings.Count(out, "\n"), "the hint must not change the picker height")
 }
 
@@ -126,11 +127,11 @@ func TestBranchPicker_FilterEditClearsError(t *testing.T) {
 	bp := NewBranchPicker()
 	bp.Focus()
 	bp.SetError(bp.Invalidate())
-	require.Contains(t, bp.Render(), "couldn't list branches")
+	require.Contains(t, bp.Render(), strings.TrimSpace(searchFailedNote))
 
 	bp.HandleKeyPress(runes("ma"))
 	out := bp.Render()
-	assert.NotContains(t, out, "couldn't list branches")
+	assert.NotContains(t, out, strings.TrimSpace(searchFailedNote))
 	assert.Contains(t, out, "searching")
 }
 
@@ -144,8 +145,71 @@ func TestBranchPicker_ResultsClearError(t *testing.T) {
 	version = bp.Invalidate()
 	bp.SetResults([]string{"main"}, version)
 	out := bp.Render()
-	assert.NotContains(t, out, "couldn't list branches")
+	assert.NotContains(t, out, strings.TrimSpace(searchFailedNote))
 	assert.Contains(t, out, "main")
+}
+
+// The search-error note's cells are carved out of the header's variable middle, so an
+// unbounded base label or a long typed filter truncates and the note always survives.
+//
+// This is the defect #557 reported, and the reason the tests above could not see it: they
+// assert the note is *present*, at width 0, so they render the very line and never measure
+// it. The focused case needs no user content at all — "Base branch (filter: ▌)" is 23 of
+// the 42 cells, and the old 24-cell note put the header at 47 before a keystroke.
+func TestBranchPicker_SearchErrorNoteSurvivesAnUnboundedHeader(t *testing.T) {
+	const width = claudeFieldInnerWidth
+	note := strings.TrimSpace(searchFailedNote)
+
+	t.Run("focused, empty filter", func(t *testing.T) {
+		bp := NewBranchPicker()
+		bp.SetWidth(width)
+		bp.Focus()
+		bp.SetError(bp.GetFilterVersion())
+
+		header := firstLine(bp.Render())
+		assert.LessOrEqual(t, lipgloss.Width(header), width, "the header must fit: %q", header)
+		assert.Contains(t, header, note, "with nothing typed there is nothing to truncate but the note")
+	})
+
+	t.Run("focused, long filter", func(t *testing.T) {
+		bp := NewBranchPicker()
+		bp.SetWidth(width)
+		bp.Focus()
+		bp.HandleKeyPress(runes("feature/a-very-long-branch-name"))
+		bp.SetError(bp.GetFilterVersion())
+
+		header := firstLine(bp.Render())
+		assert.LessOrEqual(t, lipgloss.Width(header), width, "the header must fit: %q", header)
+		assert.Contains(t, header, note, "the filter truncates, never the note")
+	})
+
+	t.Run("blurred, long base label", func(t *testing.T) {
+		bp := NewBranchPicker()
+		bp.SetWidth(width)
+		bp.SetHeadLabel("feature/adaptive-light-dark-theming")
+		bp.SetResults(nil, bp.GetFilterVersion())
+		bp.SetError(bp.GetFilterVersion())
+
+		header := firstLine(bp.Render())
+		assert.LessOrEqual(t, lipgloss.Width(header), width, "the header must fit: %q", header)
+		assert.Contains(t, header, note, "the base label truncates, never the note")
+		assert.Contains(t, header, "…", "and the cut is marked")
+	})
+
+	// "develop" is the regression the sweep's fixture pins: every branch name but one
+	// literally called "main" pushed the old note off the row.
+	t.Run("blurred, an ordinary branch name", func(t *testing.T) {
+		bp := NewBranchPicker()
+		bp.SetWidth(width)
+		bp.SetHeadLabel("develop")
+		bp.SetResults(nil, bp.GetFilterVersion())
+		bp.SetError(bp.GetFilterVersion())
+
+		header := firstLine(bp.Render())
+		assert.LessOrEqual(t, lipgloss.Width(header), width, "the header must fit: %q", header)
+		assert.Contains(t, header, "HEAD (develop)", "an ordinary branch name must not need truncating")
+		assert.Contains(t, header, note)
+	})
 }
 
 // An inert picker renders an explanatory placeholder instead of the filter/list UI, at

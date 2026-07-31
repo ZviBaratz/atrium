@@ -1188,7 +1188,7 @@ func TestBranchSearchErrorClearsSpinner(t *testing.T) {
 
 	out := ov.Render()
 	assert.NotContains(t, out, "searching", "an error result must clear the loading state")
-	assert.Contains(t, out, "couldn't list branches")
+	assert.Contains(t, out, "couldn't list")
 }
 
 // TestTargetValidityResultDropsStalePath verifies a result for a path the user has
