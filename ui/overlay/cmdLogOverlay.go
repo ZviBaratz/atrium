@@ -155,7 +155,7 @@ func (c *CmdLogOverlay) Render() string {
 
 	var b strings.Builder
 	b.WriteString(th.OverlayTitleStyle().Render("Command Log — "+mode) + "\n")
-	b.WriteString(overlayDimStyle().Render(fmt.Sprintf("%d commands", len(recs))) + "\n\n")
+	b.WriteString(overlayDimStyle().Render(truncate.StringWithTail(summaryLine(recs), uint(inner), "…")) + "\n\n")
 
 	if len(recs) == 0 {
 		b.WriteString(overlayDimStyle().Render("no commands recorded yet") + "\n\n")
@@ -188,6 +188,51 @@ func (c *CmdLogOverlay) Render() string {
 
 	b.WriteString(th.OverlayHintStyle().Render("tab filter · ↵ expand failure · j/k move · esc close"))
 	return box.Render(b.String())
+}
+
+// summaryTopVerbs is how many verbs the summary names. Three fits the line at the
+// overlay's narrowest useful width and is enough to see a dominant cost centre;
+// the rest are one keypress away in the rows themselves.
+const summaryTopVerbs = 3
+
+// summaryLine reports how many commands are shown and where their CPU went.
+//
+// The per-verb split is the point. Atrium is blocked in wait4 for the whole time a
+// child runs, so this cost is invisible to a Go profiler — measured at 19.4% of a
+// core against 37.2% in-process on a 14-session fleet (#546) — and without a
+// breakdown "subprocesses cost something" is not a finding anyone can act on.
+//
+// CPU is reported beside the count rather than per row because a row already
+// carries wall duration, and the two answer different questions: a `gh` call that
+// waits on the network has a large duration and no CPU, and only CPU belongs in a
+// "what is heating this laptop" total.
+func summaryLine(recs []cmdlog.Record) string {
+	var cpu time.Duration
+	for _, r := range recs {
+		cpu += r.CPU
+	}
+	line := fmt.Sprintf("%d commands · %s cpu", len(recs), cpu.Round(time.Millisecond))
+	totals := cmdlog.TotalsOf(recs)
+	if len(totals) > summaryTopVerbs {
+		totals = totals[:summaryTopVerbs]
+	}
+	var parts []string
+	for _, t := range totals {
+		// Round first, then test: the rule is about what reaches the reader, so it has
+		// to be enforced on the printed value. Guarding the raw duration instead would
+		// let a sub-millisecond verb through to render as the "0s" this omits — a verb
+		// with no measured CPU says nothing about where time went, and a parenthesised
+		// list of zeroes would imply the work was free.
+		cpu := t.CPU.Round(time.Millisecond)
+		if cpu <= 0 {
+			continue
+		}
+		parts = append(parts, fmt.Sprintf("%s %s", t.Verb, cpu))
+	}
+	if len(parts) > 0 {
+		line += "  (" + strings.Join(parts, " · ") + ")"
+	}
+	return line
 }
 
 func (c *CmdLogOverlay) clampScroll(n, visible int) {

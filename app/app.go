@@ -33,6 +33,12 @@ import (
 // no native double-click event, so it is detected by timing here.
 const doubleClickWindow = 400 * time.Millisecond
 
+// scanFrame registers each marked zone's bounds and strips the marker escapes from
+// a finished frame. A package var rather than a direct zone.Scan call so a
+// benchmark can isolate its cost and a test can count how often it runs; see the
+// call site in viewContent. Production is always zone.Scan.
+var scanFrame = zone.Scan
+
 // Run is the main entrypoint into the application. version is the build-stamped
 // binary version ("dev" when unstamped); it gates the startup update check and
 // names the current release in hints. binName is the invoked binary's basename,
@@ -749,12 +755,19 @@ func (m *home) viewContent() string {
 		parts = append(parts, m.errBox.String())
 	}
 	mainView := lipgloss.JoinVertical(lipgloss.Left, parts...)
-	// Scan the frame here, before any overlay composites on top. zone.Scan strips
+	// Scan the frame here, before any overlay composites on top. scanFrame strips
 	// the (zero-width) Mark escapes and records each zone's bounds. Doing it now
 	// keeps marker sequences out of overlay.PlaceOverlay, whose column-by-column
 	// line splicing could otherwise cut a row's start/end marker pair; bounds stay
 	// correct because overlays render at origin and don't shift the content below.
-	mainView = zone.Scan(mainView)
+	//
+	// Indirected through a package var purely so it can be measured and counted:
+	// zone.Scan is a rune-by-rune walk of the whole frame that also pushes one
+	// ZoneInfo per zone across a channel to a lock-taking worker, and it runs on
+	// every one of the ~32 frames a second an idle Atrium builds (#546). A benchmark
+	// cannot isolate its share, and a future test cannot assert it was skipped,
+	// without a seam. Production always uses zone.Scan.
+	mainView = scanFrame(mainView)
 
 	if m.state == statePrompt {
 		if m.textInputOverlay == nil {

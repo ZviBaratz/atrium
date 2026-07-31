@@ -46,6 +46,16 @@ test:
 test-race:
     {{go}} test -race ./...
 
+# NOT part of `test`/`ci`: `go test` skips benchmarks unless -bench is passed, so
+# they cost the gate nothing and cannot flake it. They exist to attribute Atrium's
+# idle cost — the frame build, the pane classifier (#546) — so a change claiming to
+# make idling cheaper has a baseline to beat. Narrow with
+# `just bench BenchmarkView ./app/...`. Keep the summary on the last comment line —
+# that is the only one `just --list` shows.
+# Run the benchmarks (opt-in; never part of the gate).
+bench pattern='.' *pkgs='./...':
+    {{go}} test -run '^$' -bench '{{pattern}}' -benchmem {{pkgs}}
+
 # End-to-end TUI smoke test (issue #148 spike): drives the real binary through
 # vhs to prove the live create→attach→detach layer renders deterministically.
 # Opt-in only — NOT part of `test`/`ci`: needs non-Go deps (vhs, ttyd, ffmpeg,

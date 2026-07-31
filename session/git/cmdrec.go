@@ -14,5 +14,5 @@ import (
 // hold only a repo path). out is any captured output used as the failure tail;
 // recording never alters the caller's return values.
 func recordCmd(cmd *exec.Cmd, session string, start time.Time, out []byte, err error) {
-	cmdlog.RecordCmd(cmd.Args, session, start, out, err)
+	cmdlog.RecordCmd(cmd, session, start, out, err)
 }

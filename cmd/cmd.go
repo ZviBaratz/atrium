@@ -28,7 +28,7 @@ type Exec struct{}
 func (e Exec) Run(cmd *exec.Cmd) error {
 	start := time.Now()
 	err := cmd.Run()
-	cmdlog.RecordCmd(cmd.Args, "", start, nil, err)
+	cmdlog.RecordCmd(cmd, "", start, nil, err)
 	return err
 }
 
@@ -37,7 +37,7 @@ func (e Exec) Run(cmd *exec.Cmd) error {
 func (e Exec) Output(cmd *exec.Cmd) ([]byte, error) {
 	start := time.Now()
 	out, err := cmd.Output()
-	cmdlog.RecordCmd(cmd.Args, "", start, nil, err)
+	cmdlog.RecordCmd(cmd, "", start, nil, err)
 	return out, err
 }
 
