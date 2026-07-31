@@ -78,6 +78,33 @@ func (bp *BranchPicker) SetTarget(k targetKind) {
 	bp.disabled = k != targetGit
 }
 
+// searchFailedNote is the header's marker for a branch search that failed, and it is
+// short because the focused header has almost no room for it: "Base branch (filter: ▌)"
+// is 23 of the 42 cells an 80-col terminal gives the form even before a character is
+// typed, leaving 19. It read "  couldn't list branches" (24), so the focused header was
+// 47 cells and the note was cut in that state *always* — no user content required (#557).
+//
+// It drops "branches" rather than the verb: the label two cells to its left already says
+// what is being listed, and "couldn't" is the half that distinguishes a failed search
+// from an empty result.
+const searchFailedNote = "  couldn't list"
+
+// searchingNote is the in-flight marker. It always fitted, but it shares the
+// header with the same unbounded filter, so it is carved out the same way.
+const searchingNote = "  searching…"
+
+// fitHeaderLabel bounds the header's variable middle — the typed filter when focused,
+// the selected base when not — to what is left after the fixed chrome and a trailing
+// note. It is DirectoryPicker.fitHeaderBody's counterpart, and exists for the same
+// reason: a note appended past the row's budget lands beyond fitOverlay's edge and is
+// never seen, so its columns are carved out up front. Width 0 (unsized) bounds nothing.
+func (bp *BranchPicker) fitHeaderLabel(label string, chrome, note int) string {
+	if bp.width <= 0 {
+		return label
+	}
+	return truncTail(label, bp.width-chrome-note)
+}
+
 // inertNote explains why there is no base to choose. Both spellings are constants
 // bounded well inside the row's budget; "Base: " plus the longer one is 41 of the 42
 // cells an 80-col terminal gives the form.
@@ -264,29 +291,47 @@ func (bp *BranchPicker) Render() string {
 	}
 
 	if !bp.focused {
-		s.WriteString(bpLabelStyle().Render("Base: "))
+		const prefix = "Base: "
+		// A failure that lands while blurred must still be visible — the selection
+		// (typically the HEAD-base default) stays usable, but the list behind it isn't.
+		// Its cells come out of the base label, which is unbounded: a branch name is the
+		// user's to choose, and "Base: HEAD (develop)  couldn't list branches" was 44
+		// cells, so every branch but one named "main" pushed the note off the row (#557).
+		note := 0
+		if bp.errored {
+			note = lipgloss.Width(searchFailedNote)
+		}
+		s.WriteString(bpLabelStyle().Render(prefix))
 		if sel := bp.selectedLabel(); sel != "" {
-			s.WriteString(sel)
+			s.WriteString(bp.fitHeaderLabel(sel, lipgloss.Width(prefix), note))
 		} else {
 			s.WriteString(bpDimStyle().Render("(none)"))
 		}
 		if bp.errored {
-			// A failure that lands while blurred must still be visible — the selection
-			// (typically the HEAD-base default) stays usable, but the list behind it isn't.
-			s.WriteString(bpDimStyle().Render("  couldn't list branches"))
+			s.WriteString(bpDimStyle().Render(searchFailedNote))
 		}
 		s.WriteString("\n\n")
 		s.WriteString(renderPickerRows(nil, 0, bp.visibleRows, false, "", bpSelectedStyle(), bpDimStyle()))
 		return s.String()
 	}
 
-	s.WriteString(bpLabelStyle().Render("Base branch"))
-	s.WriteString(bpFilterStyle().Render(" (filter: " + bp.filter + theme.Current().Glyphs.TextCursor + ")"))
+	const label, filterOpen, filterClose = "Base branch", " (filter: ", ")"
+	note := 0
 	switch {
 	case bp.loading:
-		s.WriteString(bpDimStyle().Render("  searching…"))
+		note = lipgloss.Width(searchingNote)
 	case bp.errored:
-		s.WriteString(bpDimStyle().Render("  couldn't list branches"))
+		note = lipgloss.Width(searchFailedNote)
+	}
+	chrome := lipgloss.Width(label + filterOpen + filterClose + theme.Current().Glyphs.TextCursor)
+	s.WriteString(bpLabelStyle().Render(label))
+	s.WriteString(bpFilterStyle().Render(
+		filterOpen + bp.fitHeaderLabel(bp.filter, chrome, note) + theme.Current().Glyphs.TextCursor + filterClose))
+	switch {
+	case bp.loading:
+		s.WriteString(bpDimStyle().Render(searchingNote))
+	case bp.errored:
+		s.WriteString(bpDimStyle().Render(searchFailedNote))
 	}
 	s.WriteString("\n\n")
 
