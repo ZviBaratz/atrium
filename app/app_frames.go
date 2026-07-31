@@ -78,6 +78,16 @@ func (m *home) resolveFrameTarget() frameTarget {
 	if selected == nil || selected.Paused() || !selected.Started() {
 		return frameTarget{}
 	}
+	// The screensaver draws the full-window splash and returns from viewContent
+	// before the panes are reached, so every capture taken under it is discarded on
+	// arrival. It is also the one such state that lasts: hint and scroll mode
+	// discard the frame too, but both are transient and holding a capture back
+	// through them would freeze frameAt and flash a false staleness marker on exit
+	// for no idle saving at all. The chain keeps ticking here and re-arms with no
+	// delay on the frame after wake-up, because the target stops matching.
+	if m.state == stateScreensaver {
+		return frameTarget{}
+	}
 	switch {
 	case m.tabbedWindow.IsInPreviewTab():
 		return frameTarget{instance: selected}

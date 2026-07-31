@@ -70,6 +70,30 @@ func BenchmarkViewContent(b *testing.B) {
 			b.ReportAllocs()
 			b.ResetTimer()
 			for b.Loop() {
+				// Drop the zone-scan memo so this stays a COLD build, comparable with
+				// the numbers taken before the memo existed. Without this the loop
+				// renders an unchanging model and every iteration after the first is a
+				// memo hit — the benchmark would report the cache, not the frame.
+				h.lastScanIn = ""
+				sink = h.viewContent()
+			}
+		})
+	}
+}
+
+// BenchmarkViewContentRepeat measures the frame an IDLE Atrium actually builds:
+// the same model rendered again, memo warm. That is the steady state — Bubble Tea
+// calls View() after every message and three 10Hz loops plus the metadata tick
+// produce ~32 of them a second, almost all identical — so the gap against
+// BenchmarkViewContent is what the memo is worth in practice.
+func BenchmarkViewContentRepeat(b *testing.B) {
+	for _, n := range benchFleetSizes {
+		b.Run(fmt.Sprintf("sessions=%d", n), func(b *testing.B) {
+			h := newBenchHome(b, n)
+			sink = h.viewContent() // warm the memo
+			b.ReportAllocs()
+			b.ResetTimer()
+			for b.Loop() {
 				sink = h.viewContent()
 			}
 		})
@@ -106,6 +130,7 @@ func BenchmarkViewContentNoZoneScan(b *testing.B) {
 			b.ReportAllocs()
 			b.ResetTimer()
 			for b.Loop() {
+				h.lastScanIn = "" // cold, like BenchmarkViewContent
 				sink = h.viewContent()
 			}
 		})

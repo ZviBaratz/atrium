@@ -658,6 +658,12 @@ func (m *home) applyMetadataResults(results []instanceMetaResult, emit bool) []t
 	if push := m.pushSessionContexts(); push != nil {
 		cmds = append(cmds, push)
 	}
+	// This sweep is where a row's status actually becomes Running or Loading, so it
+	// is where the spinner loop must be revived — the 100ms tick would get there
+	// too, but a beat later. No-op while one is already running or nothing spins.
+	if spin := m.armSpinnerTick(); spin != nil {
+		cmds = append(cmds, spin)
+	}
 	return cmds
 }
 

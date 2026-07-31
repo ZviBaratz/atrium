@@ -39,6 +39,31 @@ const doubleClickWindow = 400 * time.Millisecond
 // call site in viewContent. Production is always zone.Scan.
 var scanFrame = zone.Scan
 
+// scanCached is scanFrame memoized on its input, because an idle Atrium hands it
+// the same frame over and over: Bubble Tea calls View() after every message
+// (tea.go:880) and three independent 10Hz loops plus the metadata tick produce ~32
+// of those a second. Measured, the scan is ~19% of a frame build's time and about
+// half its allocated bytes.
+//
+// Reusing the previous output is safe, and the reason is worth stating because it
+// is not obvious: a zone's ID lives INSIDE the pre-scan string, as the ANSI marker
+// pair zone.Mark wrote. So two frames that compare equal here carry the same
+// markers at the same offsets, and the bounds the previous scan registered still
+// describe them exactly. A different zone, or a moved one, is necessarily a
+// different input string and misses the memo. bubblezone's own doc for Scan blesses
+// this ("some users may cache generated views").
+//
+// What the memo deliberately does NOT do is skip the scan for a frame that merely
+// looks similar. Equality is byte equality on the whole frame.
+func (m *home) scanCached(pre string) string {
+	if pre == m.lastScanIn {
+		return m.lastScanOut
+	}
+	out := scanFrame(pre)
+	m.lastScanIn, m.lastScanOut = pre, out
+	return out
+}
+
 // Run is the main entrypoint into the application. version is the build-stamped
 // binary version ("dev" when unstamped); it gates the startup update check and
 // names the current release in hints. binName is the invoked binary's basename,
@@ -306,6 +331,14 @@ type home struct {
 	// (which re-arms the animation whenever the idle splash is on screen)
 	// never starts a second one. The loop clears it as it dies.
 	splashTicking bool
+	// lastScanIn / lastScanOut memoize the bubblezone scan across identical frames
+	// (see scanCached). Main-thread only, like the rest of the render path.
+	lastScanIn  string
+	lastScanOut string
+	// spinnerTicking marks a live spinner tick loop, mirroring splashTicking: the
+	// 100ms preview tick and the metadata apply both re-arm it whenever a row starts
+	// spinning, and neither may start a second loop. The handler clears it as it dies.
+	spinnerTicking bool
 	// attachGen counts terminal attaches. It is bumped by attachCommand.Run — on the
 	// suspended event-loop goroutine, so it is still main-thread state — once an
 	// attach succeeds. Pane-state capture cmds (metadata tick, detach sweep,
@@ -643,10 +676,11 @@ func newHome(ctx context.Context, program string, autoYes bool, version, binName
 }
 
 func (m *home) Init() tea.Cmd {
-	// Upon starting, we want to start the spinner. Whenever we get a spinner.TickMsg, we
-	// update the spinner, which sends a new spinner.TickMsg. I think this lasts forever lol.
+	// The spinner loop self-chains: each spinner.TickMsg advances the frame and
+	// returns the next one. It runs only while some row is actually drawing a spinner
+	// (armSpinnerTick), because every message it delivers costs a full frame rebuild.
 	return tea.Batch(
-		m.spinner.Tick,
+		m.armSpinnerTick(), // only if a row is already Running/Loading; revived by the tick
 		func() tea.Msg {
 			time.Sleep(100 * time.Millisecond)
 			return previewTickMsg{}
@@ -765,9 +799,9 @@ func (m *home) viewContent() string {
 	// zone.Scan is a rune-by-rune walk of the whole frame that also pushes one
 	// ZoneInfo per zone across a channel to a lock-taking worker, and it runs on
 	// every one of the ~32 frames a second an idle Atrium builds (#546). A benchmark
-	// cannot isolate its share, and a future test cannot assert it was skipped,
-	// without a seam. Production always uses zone.Scan.
-	mainView = scanFrame(mainView)
+	// cannot isolate its share, and a test cannot assert it was skipped, without a
+	// seam. Production always uses zone.Scan.
+	mainView = m.scanCached(mainView)
 
 	if m.state == statePrompt {
 		if m.textInputOverlay == nil {

@@ -406,6 +406,7 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// wake up rather than draw a degenerate field.
 		if m.state == stateScreensaver && !ui.SplashFits(msg.Width, msg.Height) {
 			m.state = stateDefault
+			m.noteFrameTargetChange() // same wake-up restamp as the keypress path
 		}
 		m.updateHandleWindowSizeEvent(msg)
 		// First launch ever: show the interactive welcome once the size is known
@@ -576,6 +577,14 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case instanceStartedMsg:
 		return m.handleInstanceStarted(msg)
 	case spinner.TickMsg:
+		// Let the loop die when no row is drawing a spinner frame; armSpinnerTick
+		// revives it within a tick of one starting. Dropping the re-arm Cmd is what
+		// stops the loop — the spinner model has no other off switch — so the flag
+		// must be cleared in the same breath or nothing will ever restart it.
+		if !m.spinnerAnimating() {
+			m.spinnerTicking = false
+			return m, nil
+		}
 		var cmd tea.Cmd
 		m.spinner, cmd = m.spinner.Update(msg)
 		return m, cmd
@@ -875,6 +884,12 @@ func (m *home) handleKeyPress(msg tea.KeyPressMsg) (mod tea.Model, cmd tea.Cmd) 
 	// a repaint doesn't tear the screensaver down.
 	if m.state == stateScreensaver {
 		m.state = stateDefault
+		// No capture ran while the splash owned the window, so the cached frame is
+		// as old as the screensaver was. Restamp freshness on the way out, exactly
+		// as a tab change does: the pane is about to be pointed at live content
+		// again, and reporting the age of the frame it left behind would be a real
+		// number about the wrong question.
+		m.noteFrameTargetChange()
 		return m, nil
 	}
 
