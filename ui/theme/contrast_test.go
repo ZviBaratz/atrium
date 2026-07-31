@@ -48,10 +48,11 @@ func contrastRatio(a, b Color) float64 {
 // 4.5. SuccessDim gets its own 3.0: it is a status colour, but the dimming that
 // marks a Ready session as already seen costs it the 4.5 tier by a hair — 4.35 on
 // tokyo-night against 4.60 on mocha — so it holds WCAG's large-text/non-text
-// threshold instead of a floor one shipped theme already misses. The three tokens
-// Atrium deliberately recedes (FgDim, Working, and AccentMuted, whose
-// 2.56-on-tokyo-night to 8.69-on-mocha spread is why it cannot share Accent's
-// floor) get 2.4. FgFaint and BarBg are the faint slate — in both shipped themes
+// threshold instead of a floor three of the four distinct palettes already miss
+// (4.35 tokyo-night, 4.04 tokyo-night-day, 3.13 catppuccin-latte). The three
+// tokens Atrium deliberately recedes (FgDim, Working, and AccentMuted, whose
+// 2.55-on-tokyo-night-day to 8.69-on-mocha spread is why it cannot share Accent's
+// floor) get 2.4. FgFaint and BarBg are the faint slate — in every shipped palette
 // they are literally the SAME colour, a deliberate choice, not a defect — so they
 // get 1.6. BgElevated is a selection fill that must merely be distinguishable, so
 // 1.1.
@@ -110,10 +111,10 @@ var pairFloors = []struct {
 // Iterating Names() rather than a hand-listed table is deliberate: a theme
 // registered later is covered without anyone remembering to add it here.
 //
-// Three names register today but only two palettes are distinct — unicode reuses
-// tokyo-night's and varies only its borders — which is why the header counts three
-// themes while the tier note says "both", and why breaking a tokyo-night token
-// reports two failing subtests rather than one.
+// Five names register today but only four palettes are distinct — unicode reuses
+// tokyo-night's and varies only its borders — which is why the header counts five
+// themes while the tier note counts four palettes, and why breaking a tokyo-night
+// token reports two failing subtests rather than one.
 func TestPaletteContrastFloors(t *testing.T) {
 	names := Names()
 	require.NotEmpty(t, names)

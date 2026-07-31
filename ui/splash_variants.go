@@ -102,15 +102,20 @@ func lookupSplashVariant(s string) (fresco.Variant, bool) {
 	return splashDefaultVariant, false
 }
 
-// splashLumRange is the dev-only ATRIUM_SPLASH_LUMRANGE override: it replaces
-// every variant's shipped lumRange, so a screenshot round can sweep the knob
-// without a rebuild per value. Unset (the shipped path) leaves each variant's own.
+// These two carry the dev-only ATRIUM_SPLASH_LUMRANGE override, read through
+// splashLumRangeOverride: it replaces every variant's shipped lumRange, so a
+// screenshot round can sweep the knob without a rebuild per value. Unset (the
+// shipped path) leaves each variant's own.
 //
-// It applies to every variant, rain included, and on rain a low value is a
-// deliberate absurdity rather than a bug: rain's glyphs have constant weight, so
-// taking brightness off the colour leaves it nowhere to go and the pane fills with
-// white katakana. That is the whole thesis of this file, rendered. Pin the variant
-// you mean to look at (ATRIUM_SPLASH_VARIANT) when sweeping.
+// Not to be confused with ui/splash.go's splashLumRange, the ladder that CONSUMES
+// this. The override is that ladder's first rung and outranks every later one,
+// including the light-palette rung — so the override does apply to every variant,
+// rain included, and on rain a low value is a deliberate absurdity rather than a
+// bug: rain's glyphs have constant weight, so taking brightness off the colour
+// leaves it nowhere to go and the pane fills with white katakana. That is the whole
+// thesis of this file, rendered, and it is precisely why splashLumRange exempts
+// rain from the light rung instead of shipping that. Pin the variant you mean to
+// look at (ATRIUM_SPLASH_VARIANT) when sweeping.
 //
 // A plain var behind splashSelMu rather than a sync.OnceValue, for two reasons.
 // The benchmarks have to drive the shaded path, and a OnceValue cannot be driven

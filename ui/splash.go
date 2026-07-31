@@ -130,10 +130,10 @@ func splashScene(width, height, frame int, message string) string {
 // that brightness onto density gives it nowhere to go and the pane fills solid.
 // Measured at 120x40 on tokyo-night-day: 95% of cells inked and an edge:core ratio
 // of 83:100, i.e. no vignette at all, against 31% and 16:45 when it is left alone.
-// That is the absurdity splashLumRange's sibling comment in splash_variants.go
-// already predicts for a low override on rain ("the pane fills with white
-// katakana"); the light rung would have made it the shipped path rather than a
-// dev-only footgun. Leaving rain on the ramp is merely inverted, which is the
+// That is the absurdity the ATRIUM_SPLASH_LUMRANGE override's own comment in
+// splash_variants.go already predicts for a low override on rain ("the pane fills
+// with white katakana"); the light rung would have made it the shipped path rather
+// than a dev-only footgun. Leaving rain on the ramp is merely inverted, which is the
 // lesser harm and is fresco#82's to fix properly.
 //
 // The other four all read better at 0 than on the ramp, because a density vignette
