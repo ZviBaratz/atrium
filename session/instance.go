@@ -178,6 +178,15 @@ type Instance struct {
 	// DiffStats stores the current git diff statistics
 	diffStats *git.DiffStats
 
+	// diffContentAt is when the CONTENT half of diffStats (line counts, patch text)
+	// was last actually computed. The branch-level half — Commits/Behind/Unpushed/
+	// Dirty — is refreshed on every sweep and is not covered by this clock.
+	//
+	// Guarded by mu, unlike diffStats: the metadata poll reads it from its
+	// per-instance background goroutine to decide whether to recompute, while the
+	// main loop writes it when a result lands.
+	diffContentAt time.Time
+
 	// prStatus stores the last fetched pull-request snapshot (number, CI, review
 	// state). nil until first computed; transient and never persisted. Read in
 	// View and written from the metadata loop, like diffStats.

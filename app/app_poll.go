@@ -115,7 +115,12 @@ type instanceMetaResult struct {
 	// exists. The main thread recovers it to Paused (see recoverLostInstances).
 	sessionLost bool
 	diffStats   *git.DiffStats
-	prStatus    *git.PRStatus
+	// diffContentSkipped marks a diffStats computed by ComputeRepoStats: its
+	// branch-level counters are fresh but its line counts and patch text are zero
+	// because they were never asked for. The main thread carries the previous ones
+	// forward rather than storing the zeroes (see applyMetadataResults).
+	diffContentSkipped bool
+	prStatus           *git.PRStatus
 	// model / modelStamp carry a transcript model extraction; modelOK marks a
 	// result worth applying (ComputeModel returns ok=false for non-claude,
 	// unavailable, or unchanged transcripts).
@@ -436,6 +441,50 @@ func (m *home) snapshotActiveInstances() []*session.Instance {
 // which is imperceptible for a background session.
 const metadataFullSweepEvery = 4
 
+// diffContentFloor bounds how stale a background row's +/- chip may get. It is the
+// backstop for every writer the agent's own status cannot see: the terminal tab
+// runs a shell inside the worktree, the agent may run `git commit` in its own pane,
+// the user may edit the worktree from an editor, and a sibling session sharing a
+// link_path mutates the same tree — none of which moves a status. A var so tests
+// can shrink it.
+var diffContentFloor = 15 * time.Second
+
+// diffContentDue reports whether a non-selected session needs its diff CONTENT —
+// the line counts and patch text — recomputed this sweep.
+//
+// The branch-level counters are never gated: the caller refreshes those every
+// sweep either way, so the numbers a kill confirmation reads (Dirty, Unpushed) stay
+// exactly as fresh as before. Only the row's +/- chip can age here.
+//
+// Content is due when the agent could plausibly have written since it was last
+// computed:
+//
+//   - never computed — there is no number to preserve;
+//   - a writing status — Running, Loading and Pending all mean the agent may have
+//     the tree open right now. Pending is deliberately in that set: the main turn
+//     ended but a background sub-agent is still working (#290);
+//   - the status changed since the last computation — this is the Running→Ready
+//     edge, the moment the agent's final write lands and the chip matters most;
+//   - the floor has lapsed, covering the writers no status can see.
+//
+// The zero StatusChangedAt is treated as "changed just now", not as 2000 years
+// ago: a restored instance assigns its status directly rather than through
+// SetStatus, so the stamp stays zero until the first poll, and a naive comparison
+// would read every freshly launched session as indefinitely idle.
+func diffContentDue(status session.Status, statusChangedAt, contentAt, now time.Time) bool {
+	if contentAt.IsZero() {
+		return true
+	}
+	switch status {
+	case session.Running, session.Loading, session.Pending:
+		return true
+	}
+	if statusChangedAt.IsZero() || statusChangedAt.After(contentAt) {
+		return true
+	}
+	return now.Sub(contentAt) >= diffContentFloor
+}
+
 // pollTargets selects which active sessions to poll this tick. A full sweep polls all of
 // them; a light tick polls only the selected session and any session with a queued
 // prompt (whose delivery needs a responsive readiness probe). Sessions left out keep
@@ -455,9 +504,11 @@ func pollTargets(active []*session.Instance, selected *session.Instance, fullSwe
 
 // collectMetadata polls each instance in poll on its own background goroutine and returns
 // the per-instance results, to be applied on the main thread by applyMetadataResults. The
-// selected instance gets a full diff (with Content) for the diff pane; the rest get a
-// lightweight numstat-only summary, keeping per-instance memory bounded. Shared by the
-// periodic metadata tick and the one-shot detach sweep.
+// diff work splits three ways (see the switch below): the selected instance gets a full
+// diff (with Content) for the diff pane; a background instance whose tree may have moved
+// gets a lightweight numstat-only summary, keeping per-instance memory bounded; and one
+// diffContentDue rules out gets the branch-level counters alone, skipping the diff
+// entirely. Shared by the periodic metadata tick and the one-shot detach sweep.
 //
 // fresh takes a face-value PollNow for the selected instance instead of the hysteresis
 // Poll: the detach sweep sets it because the tick stream was stalled while attached, so the
@@ -506,10 +557,18 @@ func collectMetadata(ctx context.Context, poll []*session.Instance, selected *se
 					r.state, instance.AwaitingInput(),
 					instance.PromptQueuedAt(), time.Now())
 			}
-			if instance == selected {
+			switch {
+			case instance == selected:
 				r.diffStats = instance.ComputeDiff()
-			} else {
+			case diffContentDue(instance.GetStatus(), instance.StatusChangedAt(),
+				instance.DiffContentAt(), time.Now()):
 				r.diffStats = instance.ComputeDiffNumstat()
+			default:
+				// The tree cannot have changed: skip the untracked-file walk and the
+				// diff itself, but still refresh the branch-level counters — Dirty and
+				// Unpushed among them, which are what a kill confirmation reads.
+				r.diffStats = instance.ComputeRepoStats()
+				r.diffContentSkipped = true
 			}
 			// PR status is network-bound but TTL-cached, so most ticks return
 			// instantly with no I/O; the selected session refreshes eagerly.
@@ -569,7 +628,7 @@ func (m *home) applyMetadataResults(results []instanceMetaResult, emit bool) []t
 		if notifyOn {
 			m.maybeNotify(r.instance, old, prevUnreadAt, mode)
 		}
-		applyDiffStats(r.instance, r.diffStats)
+		applyDiffStats(r.instance, r.diffStats, r.diffContentSkipped)
 		r.instance.SetPRStatus(r.prStatus)
 		if r.modelOK {
 			r.instance.SetModelMeta(r.model, r.modelStamp)
@@ -621,13 +680,24 @@ func applyHarvestedFrame(r instanceMetaResult) {
 // applyDiffStats stores freshly computed diff stats on an instance (main thread only),
 // dropping the result to nil on a real error so the row shows no stale numbers. The
 // "base commit SHA not set" case is an expected pre-baseline state, not worth logging.
-func applyDiffStats(inst *session.Instance, stats *git.DiffStats) {
+//
+// contentSkipped marks a repo-stats-only result. Storing one verbatim would blank
+// the row's +/- chip to zero on every gated tick — the numbers are absent because
+// they were never asked for, not because the tree is clean — so the previous ones
+// are carried forward and the content clock is left where it was. A result that DID
+// carry content stamps that clock, which is what the gate reads next sweep.
+func applyDiffStats(inst *session.Instance, stats *git.DiffStats, contentSkipped bool) {
 	if stats != nil && stats.Error != nil {
 		if !strings.Contains(stats.Error.Error(), "base commit SHA not set") {
 			log.WarningLog.Printf("could not update diff stats: %v", stats.Error)
 		}
 		inst.SetDiffStats(nil)
 		return
+	}
+	if contentSkipped {
+		inst.CarryDiffContent(stats)
+	} else if stats != nil {
+		inst.NoteDiffContentComputed(time.Now())
 	}
 	inst.SetDiffStats(stats)
 }
@@ -653,9 +723,10 @@ func applyDiffStats(inst *session.Instance, stats *git.DiffStats) {
 // full sweep) — see metadataFullSweepEvery. Sessions left out of the returned results are
 // simply not updated this tick.
 //
-// Only the selected instance gets a full diff (with Content); the rest get a
-// lightweight numstat-only summary. This keeps per-instance memory bounded
-// since the diff pane only ever renders the selected one.
+// Only the selected instance gets a full diff (with Content), which keeps per-instance
+// memory bounded since the diff pane only ever renders the selected one. A background
+// instance gets a lightweight numstat-only summary, or — once diffContentDue rules out
+// that its tree moved — the branch-level counters alone. See collectMetadata.
 func tickUpdateMetadataCmd(ctx context.Context, active []*session.Instance, selected *session.Instance, fullSweep bool, attachGen uint64) tea.Cmd {
 	return func() tea.Msg {
 		// Honor ctx during the inter-tick wait so a shutdown mid-sleep doesn't leave

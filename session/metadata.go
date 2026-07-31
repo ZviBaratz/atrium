@@ -3,6 +3,7 @@ package session
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/ZviBaratz/atrium/session/git"
 )
@@ -67,10 +68,58 @@ func (i *Instance) ComputeDiffNumstat() *git.DiffStats {
 	return i.worktree().DiffNumstat()
 }
 
+// ComputeRepoStats runs only the branch-level half of the diff — Commits, Behind,
+// Unpushed, Dirty — leaving the line counts and content zero. Safe to call from a
+// background goroutine. Use this for an instance whose tree cannot have changed
+// since the last full computation: it keeps every number a confirmation dialog
+// reads fresh while skipping the untracked-file walk and `git diff`.
+func (i *Instance) ComputeRepoStats() *git.DiffStats {
+	if !i.operableGitSession() {
+		return nil
+	}
+	return i.worktree().RepoStats()
+}
+
+// DiffContentAt reports when this instance's diff CONTENT (line counts and patch
+// text) was last computed, or the zero time if it never has been. Read from the
+// metadata poll's background goroutines, hence the lock — unlike diffStats itself,
+// which only the main loop touches.
+func (i *Instance) DiffContentAt() time.Time {
+	i.mu.RLock()
+	defer i.mu.RUnlock()
+	return i.diffContentAt
+}
+
+// NoteDiffContentComputed stamps the content clock. Called on the main loop when a
+// result carrying real content is applied, so the next poll can tell how stale the
+// line counts are.
+func (i *Instance) NoteDiffContentComputed(at time.Time) {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	i.diffContentAt = at
+}
+
 // SetDiffStats sets the diff statistics on the instance. Should be called from
 // the main event loop to avoid data races with View.
 func (i *Instance) SetDiffStats(stats *git.DiffStats) {
 	i.diffStats = stats
+}
+
+// CarryDiffContent copies the line counts and patch text from the cached stats onto
+// fresh repo-only stats, so a tick that deliberately skipped the diff leaves the
+// row's +/- chip showing its last known value instead of blanking it to zero.
+//
+// Main-loop only, like SetDiffStats: it reads the cached stats directly. A no-op
+// when nothing is cached — a session whose content was never computed has no
+// number to preserve, and zeroes are the honest answer there.
+func (i *Instance) CarryDiffContent(into *git.DiffStats) {
+	if into == nil || i.diffStats == nil {
+		return
+	}
+	into.Added = i.diffStats.Added
+	into.Removed = i.diffStats.Removed
+	into.FilesChanged = i.diffStats.FilesChanged
+	into.Content = i.diffStats.Content
 }
 
 // GetDiffStats returns the current git diff statistics

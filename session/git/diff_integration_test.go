@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/ZviBaratz/atrium/cmdlog"
 )
 
 // TestDiff_UntrackedFilesAppearInDiff is the core behavior-preservation test: a brand
@@ -360,5 +362,108 @@ func TestDiff_UnpushedWithoutRemoteDegradesToCommits(t *testing.T) {
 	}
 	if stats.Unpushed != 1 {
 		t.Errorf("no remote: Unpushed = %d, want 1 (the session commit only, not the whole history)", stats.Unpushed)
+	}
+}
+
+// RepoStats reports Dirty for an UNTRACKED file even though it never runs the
+// intent-to-add step.
+//
+// This is the claim the whole split rests on. Diff() makes untracked files visible
+// by running `git add -N` first; RepoStats deliberately skips that walk, so the
+// question is whether the Dirty flag — which a kill confirmation turns into "has
+// uncommitted changes" before deleting a branch — survives without it. It does,
+// because computeRepoStats derives Dirty from `git status --porcelain`, which lists
+// untracked files as `??` regardless of the index. If that ever stopped being true,
+// the gate would start hiding real work behind a destructive prompt.
+func TestRepoStats_ReportsDirtyForUntrackedWithoutIntentAdd(t *testing.T) {
+	repoPath := newTestRepo(t)
+	wt := setupSessionWorktree(t, repoPath, "sess")
+	wtPath := wt.GetWorktreePath()
+
+	if err := os.WriteFile(filepath.Join(wtPath, "untracked.txt"), []byte("new\n"), 0644); err != nil {
+		t.Fatalf("write untracked.txt: %v", err)
+	}
+
+	stats := wt.RepoStats()
+	if stats.Error != nil {
+		t.Fatalf("RepoStats error: %v", stats.Error)
+	}
+	if !stats.Dirty {
+		t.Error("RepoStats Dirty = false with an untracked file present, want true")
+	}
+	// The counterpart claim: it really did skip the content half, so a caller must
+	// carry the previous numbers forward rather than store these.
+	if stats.Added != 0 || stats.Removed != 0 || stats.FilesChanged != 0 || stats.Content != "" {
+		t.Errorf("RepoStats returned content (%d/%d files=%d content=%dB), want the cheap half only",
+			stats.Added, stats.Removed, stats.FilesChanged, len(stats.Content))
+	}
+}
+
+// RepoStats does not fork the untracked-file walk. This is its whole reason to
+// exist, and it needs a direct assertion: an index-residue check cannot see the
+// walk, because `git ls-files --others` only reads — the `git add -N` that would
+// leave residue is skipped whenever the listing comes back empty. Counting the
+// subprocesses names the cost itself.
+func TestRepoStats_ForksNoUntrackedWalk(t *testing.T) {
+	repoPath := newTestRepo(t)
+	wt := setupSessionWorktree(t, repoPath, "sess")
+	if err := os.WriteFile(filepath.Join(wt.GetWorktreePath(), "untracked.txt"), []byte("new\n"), 0644); err != nil {
+		t.Fatalf("write untracked.txt: %v", err)
+	}
+
+	// Baseline: the full diff DOES walk, so a zero count below cannot be an artifact
+	// of the seam missing these subprocesses entirely.
+	cmdlog.Reset()
+	wt.Diff()
+	if n := countArgv(t, "ls-files"); n == 0 {
+		t.Fatal("Diff ran no ls-files — the counting seam is not seeing these commands")
+	}
+
+	wt.invalidateStatsCache()
+	cmdlog.Reset()
+	wt.RepoStats()
+	if n := countArgv(t, "ls-files"); n != 0 {
+		t.Errorf("RepoStats ran %d ls-files, want 0 — the untracked walk is the cost it exists to skip", n)
+	}
+	if n := countArgv(t, "diff"); n != 0 {
+		t.Errorf("RepoStats ran %d git diff, want 0", n)
+	}
+}
+
+// countArgv counts recorded subprocesses whose argv contains verb.
+func countArgv(t *testing.T, verb string) int {
+	t.Helper()
+	n := 0
+	for _, r := range cmdlog.Snapshot() {
+		if strings.Contains(r.Argv, verb) {
+			n++
+		}
+	}
+	return n
+}
+
+// RepoStats counts commits and unpushed work — the other number a kill dialog
+// reads — so gating the diff cannot make a branch look safe to delete.
+func TestRepoStats_CountsCommitsAndUnpushed(t *testing.T) {
+	repoPath := newTestRepo(t)
+	wt := setupSessionWorktree(t, repoPath, "sess")
+	wtPath := wt.GetWorktreePath()
+
+	if err := os.WriteFile(filepath.Join(wtPath, "tracked.txt"), []byte("v1\n"), 0644); err != nil {
+		t.Fatalf("write tracked.txt: %v", err)
+	}
+	mustRunGit(t, wtPath, "add", "tracked.txt")
+	mustRunGit(t, wtPath, "commit", "-m", "add tracked")
+
+	stats := wt.RepoStats()
+	if stats.Error != nil {
+		t.Fatalf("RepoStats error: %v", stats.Error)
+	}
+	if stats.Commits != 1 {
+		t.Errorf("RepoStats Commits = %d, want 1", stats.Commits)
+	}
+	// No remote in the fixture, so every commit is at risk.
+	if stats.Unpushed != 1 {
+		t.Errorf("RepoStats Unpushed = %d, want 1 — this is what the kill dialog warns on", stats.Unpushed)
 	}
 }
