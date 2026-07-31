@@ -19,11 +19,34 @@ var agentGlyphs = map[string]string{
 }
 
 // agentColors carries the brand accents that identify an agent at a glance.
-// They are brand colors, not palette colors, so they are theme-independent;
-// agents without a strong brand accent ride the theme foreground instead.
+// They are brand colors, not palette colors, so they do not vary by palette
+// FAMILY; agents without a strong brand accent ride the theme foreground instead.
+// They do vary by palette POLARITY — see agentColorsLight.
 var agentColors = map[string]Color{
 	"claude": lipgloss.Color("#d97757"),
 	"gemini": lipgloss.Color("#4285f4"),
+}
+
+// agentColorsLight is the same two brands on a light background: the identical
+// hues, darkened only as far as legibility requires.
+//
+// This exists because the brands as shipped cannot be read on paper, and no
+// palette tuning fixes it. Claude's #d97757 peaks at 3.12:1 against pure white — it
+// would need a background lighter than #fcfcfc to clear the 3.0 floor
+// TestAgentBrandColoursStayLegible sets, and lands at 2.41 on tokyo-night-day and
+// 2.76 on catppuccin-latte. The colour is simply too light to be a mark on a light
+// field, which is a property of the brand rather than of any palette Atrium could
+// pick.
+//
+// Darkening rather than substituting is the point: hue and saturation are
+// preserved, so #cc552e is still recognisably the same clay and #2774f2 still
+// recognisably the same blue. These are not different brands, they are the brand
+// with enough ink behind it to be a glyph. Every theme shipping before #394 renders
+// byte-identically — this table is only ever reached by a palette that did not
+// exist then.
+var agentColorsLight = map[string]Color{
+	"claude": lipgloss.Color("#cc552e"), // #d97757 darkened: 2.41 -> 3.31 on tokyo-night-day
+	"gemini": lipgloss.Color("#2774f2"), // #4285f4 darkened: 2.75 -> 3.34 on tokyo-night-day
 }
 
 // AgentGlyph returns the identity glyph and color for an agent key (unknown
@@ -32,6 +55,13 @@ func (t *Theme) AgentGlyph(key string) (string, Color) {
 	g, ok := agentGlyphs[key]
 	if !ok {
 		key, g = "generic", agentGlyphs["generic"]
+	}
+	// Polarity first: a brand accent that has a light form must use it on a light
+	// palette, or the mark it exists to make is one nobody can see.
+	if IsLight(t.Palette) {
+		if c, ok := agentColorsLight[key]; ok {
+			return g, c
+		}
 	}
 	if c, ok := agentColors[key]; ok {
 		return g, c

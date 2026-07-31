@@ -92,17 +92,11 @@ func splashScene(width, height, frame int, message string) string {
 		msgY = wordY + wordH + gap
 	}
 
-	// splashLumRange resolves the dev-only ATRIUM_SPLASH_LUMRANGE override here,
-	// in ui, and passes it in — the splash engine reads no environment itself.
-	var lum *float64
-	if r, ok := splashLumRangeOverride(); ok {
-		lum = &r
-	}
 	field := fresco.Render(width, height, frame, fresco.Options{
 		Palette:  splashPalette(theme.Current().Palette),
 		Variant:  variant,
 		FocalRow: focalRow,
-		LumRange: lum,
+		LumRange: splashLumRange(variant),
 		Profile:  splashProfile(),
 	})
 	scene := overlayAt(field, word, wordX, wordY)
@@ -110,6 +104,60 @@ func splashScene(width, height, frame int, message string) string {
 		scene = overlayAt(scene, msg, msgX, msgY)
 	}
 	return lipgloss.NewStyle().MaxWidth(width).MaxHeight(height).Render(scene)
+}
+
+// splashLumRange resolves how the splash field splits brightness between glyph
+// density and colour luminance: the dev override if set, else 0 on a light palette
+// (except for rain), else nil (fresco's per-variant default).
+//
+// It also owns the ui-side half of the ATRIUM_SPLASH_LUMRANGE plumbing, because the
+// splash engine reads no environment itself — see splashLumRangeOverride.
+//
+// The light rung is not a taste choice. fresco's luminance ramp walks L* from a
+// near-black floor up to the hue (shade.go's splashLumHexAt), and shadeAt's own
+// comment says the consequence out loud: "stop 0 is near-black ink on a dark pane
+// and never worth emitting." Correct on a dark pane, inverted on a light one, where
+// "barely there" would render as the heaviest ink on screen and a field's fading
+// edge would come out as a dark halo. Atrium supplies hues, not the ramp, and
+// rainRampFloor is not a parameter, so no amount of retuning the five splash tokens
+// reaches it. lumRange 0 is fresco's documented endpoint where the ramp is never
+// consulted at all and density carries everything, which is the only direction that
+// works on both polarities without a fresco change. Filed upstream as
+// ZviBaratz/fresco#82 for a real light ramp.
+//
+// RAIN IS EXEMPT, and it is the one variant that had to be looked at to know so.
+// Its brightness is ENTIRELY luminance — fresco ships it at lumRange 1 — so moving
+// that brightness onto density gives it nowhere to go and the pane fills solid.
+// Measured at 120x40 on tokyo-night-day: 95% of cells inked and an edge:core ratio
+// of 83:100, i.e. no vignette at all, against 31% and 16:45 when it is left alone.
+// That is the absurdity the ATRIUM_SPLASH_LUMRANGE override's own comment in
+// splash_variants.go already predicts for a low override on rain ("the pane fills
+// with white katakana"); the light rung would have made it the shipped path rather
+// than a dev-only footgun. Leaving rain on the ramp is merely inverted, which is the
+// lesser harm and is fresco#82's to fix properly.
+//
+// The other four all read better at 0 than on the ramp, because a density vignette
+// survives the polarity flip and a luminance one does not: ripple's edge:core goes
+// 25:43 to 13:33, galaxy's 65:94 to 32:71.
+//
+// A monochrome render will take the same rung for the mirror-image reason: with
+// colour stripped, a colour-borne brightness channel carries nothing, so the field
+// would flatten. See theme.Mono (#394 Stage D). Rain's exemption will need
+// revisiting there — with no colour at all it has neither channel.
+//
+// The variant is a parameter rather than another splashActiveVariant() call so the
+// rung is a pure function of what the caller is actually about to render. The
+// process-wide pick is latched, so a second call would agree today; taking it as an
+// argument means the rule cannot drift from the field it describes.
+func splashLumRange(variant fresco.Variant) *float64 {
+	if r, ok := splashLumRangeOverride(); ok {
+		return &r
+	}
+	if theme.IsLight(theme.Current().Palette) && variant != fresco.Rain {
+		zero := 0.0
+		return &zero
+	}
+	return nil
 }
 
 // splashProfile is the colour depth the splash field emits at: full fidelity,

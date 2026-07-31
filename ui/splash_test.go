@@ -12,6 +12,107 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// pinSplashLumRange drives the package's own ATRIUM_SPLASH_LUMRANGE state directly,
+// restoring it when the test ends.
+//
+// t.Setenv cannot reach this knob: splash_variants.go resolves the variable in
+// init(), so by the time any test body runs the read has already happened and
+// setting the variable afterwards changes nothing. That is the same constraint
+// TestLumRangeEnvReachesRender answers by spawning a subprocess — correct there,
+// because its subject IS the env plumbing. Here the subject is the ladder that
+// consumes the resolved value, so writing the resolved value is both cheaper and
+// more direct. The vars are package-private and this is the same package; nothing
+// is added to production for it.
+//
+// The lock is not ceremony: splashLumRangeOverride reads both vars under
+// splashSelMu, and -race runs this package.
+func pinSplashLumRange(t *testing.T, v float64, set bool) {
+	t.Helper()
+	splashSelMu.Lock()
+	prevVal, prevSet := splashLumRangeVal, splashLumRangeSet
+	splashLumRangeVal, splashLumRangeSet = v, set
+	splashSelMu.Unlock()
+	t.Cleanup(func() {
+		splashSelMu.Lock()
+		defer splashSelMu.Unlock()
+		splashLumRangeVal, splashLumRangeSet = prevVal, prevSet
+	})
+}
+
+// On a light palette the splash must not use fresco's luminance channel. Its ramp
+// walks L* from a near-black floor UP to the hue (fresco's shade.go), so on a light
+// field the dim cells come out as the darkest ink on screen — the vignette edge
+// inverts into a halo. lumRange 0 short-circuits that ramp entirely and puts all
+// brightness back on glyph density, which is directionally correct on either
+// polarity.
+//
+// This asserts the resolved LumRange rather than the rendered field, because the
+// rendered field is fresco's business and the decision is Atrium's.
+func TestSplashLumRangeIsZeroOnALightPalette(t *testing.T) {
+	pinSplashLumRange(t, 0, false) // no dev override: this is the shipped path
+
+	t.Cleanup(theme.Set("tokyo-night"))
+	require.Nil(t, splashLumRange(fresco.Tunnel),
+		"on a dark palette Atrium must not override the variant's shipped lumRange")
+
+	t.Cleanup(theme.Set("tokyo-night-day"))
+	light := splashLumRange(fresco.Tunnel)
+	require.NotNil(t, light, "a light palette must pin lumRange")
+	require.Equal(t, 0.0, *light, "lumRange 0 is the endpoint that skips the ramp")
+
+	// Both light palettes, not just the one: the rung keys on IsLight, so a
+	// hardcoded theme name would pass this while covering half the case.
+	t.Cleanup(theme.Set("catppuccin-latte"))
+	latte := splashLumRange(fresco.Tunnel)
+	require.NotNil(t, latte, "every light palette takes the same rung")
+	require.Equal(t, 0.0, *latte)
+}
+
+// Rain is exempt from the light rung, and this is the guard that says so out loud.
+//
+// Rain's brightness is entirely luminance (fresco ships it at lumRange 1), so
+// moving it to density leaves it nowhere to go: measured at 120x40 on
+// tokyo-night-day, lumRange 0 inks 95% of cells with an edge:core ratio of 83:100 —
+// a solid pane, no vignette — where leaving it alone gives 31% and 16:45. The light
+// rung would otherwise have promoted a documented dev-only footgun into the shipped
+// path for one launch in five. See fresco#82.
+//
+// Every OTHER variant must still take the rung, or an over-broad exemption would
+// pass a test that only checked rain.
+func TestSplashLumRangeExemptsRainOnALightPalette(t *testing.T) {
+	pinSplashLumRange(t, 0, false)
+	t.Cleanup(theme.Set("tokyo-night-day"))
+
+	require.Nil(t, splashLumRange(fresco.Rain),
+		"rain must keep its shipped lumRange on a light palette: at 0 the pane fills solid")
+
+	for _, v := range fresco.Variants() {
+		if v == fresco.Rain {
+			continue
+		}
+		got := splashLumRange(v)
+		require.NotNilf(t, got, "%v must still take the light rung", v)
+		require.Equalf(t, 0.0, *got, "%v must still take the light rung", v)
+	}
+}
+
+// The dev override still wins, rain included. It is the knob used to tune a variant
+// by eye, so a palette-derived default that silently ignored it would make the
+// tuning loop lie — and rain is precisely the variant whose exemption someone would
+// want to sweep past by hand.
+func TestSplashLumRangeOverrideBeatsThePaletteDefault(t *testing.T) {
+	t.Cleanup(theme.Set("tokyo-night-day"))
+	pinSplashLumRange(t, 0.75, true)
+
+	got := splashLumRange(fresco.Tunnel)
+	require.NotNil(t, got)
+	require.Equal(t, 0.75, *got, "the explicit override must beat the light-palette default")
+
+	rain := splashLumRange(fresco.Rain)
+	require.NotNil(t, rain, "the override must reach rain too, exemption notwithstanding")
+	require.Equal(t, 0.75, *rain)
+}
+
 // TestSplashPalettesAreCanonicalHex validates that every registered theme maps to
 // a fresco.Palette of canonical hex anchors, via fresco.Palette.Validate (the
 // opt-in check added in the fresco #15–#19 API cluster). Atrium's palettes are

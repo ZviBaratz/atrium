@@ -245,8 +245,10 @@ type Config struct {
 	// nil means use the default (on), so configs written before it existed keep it.
 	KillDoubleTapConfirm *bool `json:"kill_double_tap_confirm,omitempty"`
 	// Theme selects the UI color palette and border style by name (see ui/theme
-	// registry: "tokyo-night", "catppuccin-mocha", "unicode"). Empty falls back
-	// to the default. Glyphs are a separate axis — see NerdFont; the "unicode"
+	// registry: "tokyo-night", "catppuccin-mocha", "tokyo-night-day",
+	// "catppuccin-latte", "unicode"). Empty falls back to the default. The two
+	// -day/-latte palettes are tuned for a light-background terminal; the rest
+	// assume a dark one. Glyphs are a separate axis — see NerdFont; the "unicode"
 	// theme differs only by using square borders.
 	Theme string `json:"theme,omitempty"`
 	// Splash selects the animated empty-state splash pattern by name (see

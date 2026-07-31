@@ -307,6 +307,57 @@ func TestFrameColourFingerprint(t *testing.T) {
 	compareGolden(t, filepath.Join("testdata", "colours.txt"), b.String())
 }
 
+// newParityHomeThemed is newParityHome pinned to a named theme instead of the
+// config default. Split out rather than parameterizing every call site, because
+// the default-theme path is what eighteen goldens depend on and it should not grow
+// an argument that could be passed wrong.
+//
+// The ORDERING is the whole helper. newParityHome runs t.Cleanup(theme.Set(...))
+// itself, and theme.Set applies immediately — it is the returned restore that is
+// deferred — so a pin registered by the caller BEFORE newParityHome would be
+// overwritten by it and the frame would render in the default theme while the test
+// name claimed otherwise. Setting the theme here, after, is what makes the pin
+// take. Styles read theme.Current() lazily at render time, so restyling the model
+// after it is built is enough; the caller's View() sees the named theme.
+func newParityHomeThemed(t *testing.T, fs frameState, w, h int, themeName string) *home {
+	t.Helper()
+	m := newParityHome(t, fs, w, h)
+	t.Cleanup(theme.Set(themeName))
+	return m
+}
+
+// TestLightFrameColourFingerprint is TestFrameColourFingerprint under the light
+// palette. It exists because colours.txt is generated at the DEFAULT theme and must
+// never move (that immovability is what proves `theme: auto` with no detection is a
+// no-op), which would otherwise leave the light palette with no rendering guard at
+// all — only its hex values checked, never what the frame actually emits.
+//
+// Regenerate with:
+//
+//	CS_UPDATE_GOLDEN=1 go test ./app/ -run TestLightFrameColourFingerprint
+func TestLightFrameColourFingerprint(t *testing.T) {
+	const w, h = 120, 40
+	var b strings.Builder
+	for _, fs := range frameStates() {
+		counts := map[string]int{}
+		m := newParityHomeThemed(t, fs, w, h, "tokyo-night-day")
+		for _, seq := range sgrRE.FindAllString(m.View().Content, -1) {
+			counts[seq]++
+		}
+		seqs := make([]string, 0, len(counts))
+		for seq := range counts {
+			seqs = append(seqs, seq)
+		}
+		sort.Strings(seqs)
+
+		fmt.Fprintf(&b, "## %s (%d distinct)\n", fs.name, len(seqs))
+		for _, seq := range seqs {
+			fmt.Fprintf(&b, "  %-24s %d\n", strings.ReplaceAll(seq, "\x1b", "ESC"), counts[seq])
+		}
+	}
+	compareGolden(t, filepath.Join("testdata", "colours-light.txt"), b.String())
+}
+
 // TestViewFitsTerminalBoundsEveryState sweeps the box contract — no more rows
 // than the terminal has, every row exactly its width — across every state and a
 // wide spread of sizes.

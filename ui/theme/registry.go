@@ -228,9 +228,22 @@ var unicodeFallback = &Theme{
 }
 
 // registry maps theme names to themes. Adding a theme is one var + one entry.
+//
+// It stays that cheap because nothing counts this map. Names() has exactly one
+// production consumer — ui/overlay/settings_schema.go's theme row, which sorts and
+// returns whatever is here — and every other caller is a test that iterates it or
+// indexes by len. So a new entry inherits the existing guards instead of needing
+// new ones: canonical hex, glyph widths, the settings picker's cycle, and the
+// contrast oracle.
+//
+// Deliberately not a count. An earlier draft of this comment said "both Names()
+// consumers", which was already wrong by five when it was written — the same
+// under-counting that made the tier note in contrast_test.go stale.
 var registry = map[string]*Theme{
 	"tokyo-night":      tokyoNight,
 	"catppuccin-mocha": catppuccinMocha,
+	"tokyo-night-day":  tokyoNightDay,
+	"catppuccin-latte": catppuccinLatte,
 	"unicode":          unicodeFallback,
 }
 
