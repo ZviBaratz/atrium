@@ -8,6 +8,12 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// Note on relLuminanceOf: it started here and now lives in scheme.go, because
+// IsLight needs the same arithmetic and production code cannot call a test file.
+// Deliberately moved rather than copied — two implementations of "how bright is
+// this" would let the contrast oracle and the splash's polarity decision disagree
+// about a palette in the middle, silently.
+
 // contrast_test.go is the oracle for the one property a rendering test cannot
 // see: whether the palette is READABLE. Every other theme guard here asks about
 // width, shape or vocabulary; none of them would notice a foreground that
@@ -25,25 +31,10 @@ import (
 // require would abort at the first one and turn tuning a new palette into one
 // round per token.
 
-// relLuminance is WCAG 2.1's relative luminance. color.Color reports 16-bit
-// alpha-premultiplied components, which for the opaque palette colours Atrium
-// ships is the 8-bit value repeated (0xNN * 0x101), so >>8 recovers the byte.
-func relLuminance(c Color) float64 {
-	r16, g16, b16, _ := c.RGBA()
-	lin := func(v uint32) float64 {
-		s := float64(v>>8&0xff) / 255
-		if s <= 0.03928 {
-			return s / 12.92
-		}
-		return math.Pow((s+0.055)/1.055, 2.4)
-	}
-	return 0.2126*lin(r16) + 0.7152*lin(g16) + 0.0722*lin(b16)
-}
-
 // contrastRatio is WCAG 2.1's contrast ratio: 1.0 for two identical colours,
 // 21.0 for black on white. Order-independent.
 func contrastRatio(a, b Color) float64 {
-	la, lb := relLuminance(a), relLuminance(b)
+	la, lb := relLuminanceOf(a), relLuminanceOf(b)
 	hi, lo := math.Max(la, lb), math.Min(la, lb)
 	return (hi + 0.05) / (lo + 0.05)
 }
@@ -148,20 +139,85 @@ func TestPaletteContrastFloors(t *testing.T) {
 
 // TestAgentBrandColoursStayLegible covers the only two colours in the whole app
 // that are NOT palette tokens: ui/theme/agent.go's Claude and Gemini brand
-// accents, documented there as theme-independent. Theme-independent means every
-// palette has to carry them, so a palette they vanish against is the palette's
-// problem — and without this they would be the one pair of colours no oracle
-// looks at.
+// accents. Every palette has to carry them, so a palette they vanish against is the
+// palette's problem — and without this they would be the one pair of colours no
+// oracle looks at.
+//
+// It resolves through AgentGlyph rather than reading agentColors directly, which is
+// the difference between testing a table and testing what renders. The tables are
+// now two — the brand hex and its light-background form — and only AgentGlyph knows
+// which one a given palette gets, so a check that read either map alone would pass
+// while the wrong one shipped. Reading the resolved colour also means the light
+// table is covered here with no second assertion.
 func TestAgentBrandColoursStayLegible(t *testing.T) {
 	const brandFloor = 3.0 // glyphs, not prose: a single mark at width 1
 	require.NotEmpty(t, agentColors)
+	require.NotEmpty(t, agentColorsLight)
 	for _, name := range Names() {
-		p := Get(name).Palette
-		for key, c := range agentColors {
-			got := contrastRatio(c, p.Bg)
+		th := Get(name)
+		for key := range agentColors {
+			_, c := th.AgentGlyph(key)
+			got := contrastRatio(c, th.Palette.Bg)
 			assert.GreaterOrEqualf(t, got, brandFloor,
 				"%s: the %s brand glyph is %.2f against Bg, below the %.2f floor",
 				name, key, got, brandFloor)
 		}
+	}
+}
+
+// TestIsLightAgreesWithTheRegistry pins which shipped palettes are light. The
+// predicate exists because three consumers outside this file need the same answer —
+// the agent brand accents, the splash's brightness channel, and the scheme axis to
+// come — and independent luminance thresholds would eventually disagree about a
+// palette in the middle.
+func TestIsLightAgreesWithTheRegistry(t *testing.T) {
+	for _, name := range []string{"tokyo-night", "catppuccin-mocha", "unicode"} {
+		assert.Falsef(t, IsLight(Get(name).Palette), "%s is a dark palette", name)
+	}
+	for _, name := range []string{"tokyo-night-day", "catppuccin-latte"} {
+		assert.Truef(t, IsLight(Get(name).Palette), "%s is a light palette", name)
+	}
+}
+
+// TestLightPaletteMatchesItsDarkTwin is the relative half of the oracle: rather
+// than asserting a light palette hits absolute numbers someone picked, it asserts
+// each light theme is AS READABLE AS the dark theme it twins. That removes the
+// taste constant from the interesting direction — the dark themes are the ones
+// people have actually read for months, so their ratios are the specification.
+//
+// The tolerance is wide on purpose. Matching a dark palette's contrast exactly on a
+// light background is not achievable (light backgrounds compress the available
+// range at the bright end), and a narrow band would make the test a colour-picker
+// rather than a guard. What it catches is a token that is off by a FACTOR — the
+// pastel that looked fine on slate and vanishes on paper. Both upstream light
+// palettes fail it as published, which is why light.go's values are derived from
+// upstream rather than copied from it.
+//
+// assert, not require, inside the loop, matching this file's other per-theme
+// checks: a mis-tuned palette should report every token it misses in one run rather
+// than one round per token.
+func TestLightPaletteMatchesItsDarkTwin(t *testing.T) {
+	require.NotEmpty(t, lightTwin, "no pairs to check")
+
+	// A light token may hold between 55% and 210% of its dark twin's ratio.
+	const lo, hi = 0.55, 2.10
+
+	for dark, light := range lightTwin {
+		t.Run(dark+"->"+light, func(t *testing.T) {
+			require.Equal(t, light, Get(light).Name,
+				"lightTwin names a theme that is not registered under that name")
+			require.Equal(t, dark, Get(dark).Name,
+				"lightTwin is keyed by a theme that is not registered under that name")
+
+			dp, lp := Get(dark).Palette, Get(light).Palette
+			for token, spec := range tokenFloors {
+				dr := contrastRatio(spec.get(dp), dp.Bg)
+				lr := contrastRatio(spec.get(lp), lp.Bg)
+				ratio := lr / dr
+				assert.Truef(t, ratio >= lo && ratio <= hi,
+					"%s: %s holds %.2f contrast where %s holds %.2f (%.0f%% of it, outside %.0f-%.0f%%)",
+					light, token, lr, dark, dr, ratio*100, lo*100, hi*100)
+			}
+		})
 	}
 }

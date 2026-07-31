@@ -228,9 +228,16 @@ var unicodeFallback = &Theme{
 }
 
 // registry maps theme names to themes. Adding a theme is one var + one entry.
+//
+// Both Names() consumers are length-agnostic — ui/overlay/settings_schema.go's
+// theme row sorts and returns whatever is here, and the settings picker's cycle
+// test indexes by len — so registering a theme costs exactly these two lines and
+// inherits every existing guard: canonical hex, glyph widths, the contrast oracle.
 var registry = map[string]*Theme{
 	"tokyo-night":      tokyoNight,
 	"catppuccin-mocha": catppuccinMocha,
+	"tokyo-night-day":  tokyoNightDay,
+	"catppuccin-latte": catppuccinLatte,
 	"unicode":          unicodeFallback,
 }
 
