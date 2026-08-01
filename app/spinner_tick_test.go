@@ -114,7 +114,9 @@ func TestSpinnerAnimating_NilListIsNotSpinning(t *testing.T) {
 // It draws the full-window splash and returns from viewContent before the panes are
 // reached, so every capture taken under it is discarded on arrival — and unlike
 // hint or scroll mode it can be left up indefinitely, which makes it the one
-// discard state worth gating. The chain still ticks; only the tmux work stops.
+// discard state worth gating. And the tmux work is not all that stops: armFrameCapture
+// declines to arm on the zero target, so the chain itself ends here and the preview
+// tick revives it after wake-up (TestFrameChain_DiesOnAnEmptyTargetAndRevivesFromThePreviewTick).
 //
 // Built with newCaptureHome because the instance must actually be STARTED:
 // resolveFrameTarget returns the zero target for an unstarted session anyway, so a

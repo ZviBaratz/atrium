@@ -551,6 +551,12 @@ func (m *home) handleResumeDone(msg resumeDoneMsg) tea.Cmd {
 		if serr := m.persistInstances(); serr != nil {
 			log.WarningLog.Printf("failed to persist resumed instance %s: %v", msg.instance.Title, serr)
 		}
+		// A resume re-points the preview at a brand-new pane behind the same
+		// *Instance, so instanceChanged cannot see it — the pointer did not move. Say
+		// so explicitly, or a quiet run built before the pause would still be settled
+		// afterwards and the freshly resumed pane would never be captured at the frame
+		// cadence (framegate.go).
+		m.noteFrameTargetChange()
 		return tea.RequestWindowSize
 	}
 	if !msg.recoverable {

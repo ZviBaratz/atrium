@@ -97,9 +97,10 @@ func TestQuietRun_Settled(t *testing.T) {
 		{"exactly the threshold has settled", quietRun{target: a, text: "x", seen: 5}, a, true},
 		{"past the threshold stays settled", quietRun{target: a, text: "x", seen: 500}, a, true},
 		{
-			// The run outlives a tab switch and is fed at two different rates, so a
-			// caller can ask about a target it has never described. Answering from
-			// seen alone would gate one pane on another pane's stillness.
+			// Both writers key the run on the frame's own target, not on the live
+			// resolution — a capture can land for a session the user has left — so a
+			// caller can ask about a target the run has never described. Answering
+			// from seen alone would gate one pane on another pane's stillness.
 			"a long run about another target says nothing about this one",
 			quietRun{target: b, text: "x", seen: 500}, a, false,
 		},
@@ -331,21 +332,35 @@ func TestQuietPane_NeverGoesStale(t *testing.T) {
 	// The marker is silent on a fallback pane, so prove it can speak at all here
 	// before asserting that it does not.
 	cached, _, _ := inst.PaneFrame()
-	inst.SetPaneFrame(cached, time.Now().Add(-time.Hour))
+	agedAt := time.Now().Add(-time.Hour)
+	inst.SetPaneFrame(cached, agedAt)
 	require.NoError(t, h.tabbedWindow.UpdatePreview(inst))
 	require.Contains(t, h.tabbedWindow.String(), "stale",
 		"precondition: this pane does render a staleness marker when a frame ages out")
 
-	// Now the sweeps the gate relies on, each carrying the same bytes and a fresh
-	// stamp — a session that has not moved for two seconds of wall clock.
-	at := time.Now().Add(-time.Hour)
-	for range 4 {
-		at = at.Add(500 * time.Millisecond)
+	// Now the sweeps the gate relies on: four harvests 500ms apart carrying the same
+	// bytes, the last of them landing now — a session that has not moved for two
+	// seconds of wall clock but is still being restamped at 2Hz. Nothing else may
+	// touch the frame between here and the assertion, or the harvest stops being
+	// what the assertion is about.
+	base := time.Now().Add(-2 * time.Second)
+	for i := range 4 {
 		h.applyMetadataResults([]instanceMetaResult{{
-			instance: inst, paneFrame: cached, paneFrameAt: at, paneFrameOK: true,
+			instance:    inst,
+			paneFrame:   cached,
+			paneFrameAt: base.Add(time.Duration(i+1) * 500 * time.Millisecond),
+			paneFrameOK: true,
 		}}, false)
 	}
-	inst.SetPaneFrame(cached, time.Now())
+
+	// The harvest must have been STORED, not dropped as a rewind: a fixture whose
+	// stamps lose to the cached one would leave the frame aged and the assertion
+	// below would be about whatever last wrote it instead.
+	_, freshAt, ok := inst.PaneFrame()
+	require.True(t, ok)
+	require.True(t, freshAt.After(agedAt),
+		"precondition: the harvests were stored — otherwise this proves nothing about them")
+
 	require.NoError(t, h.tabbedWindow.UpdatePreview(inst))
 	require.NotContains(t, h.tabbedWindow.String(), "stale",
 		"the 2Hz harvest must keep the frame fresh while the chain is gated")
@@ -425,18 +440,25 @@ func TestFrameChain_DiesOnAnEmptyTargetAndRevivesFromThePreviewTick(t *testing.T
 //
 // A run describing the pane the user just looked away from must not decide whether
 // the new one is captured. The reset lives in noteFrameTargetChange, which is
-// already the shared tail of all three paths — so this is also the guard that a
-// fourth exit inherits it.
+// already the shared tail of all four paths — so this is also the guard that a
+// fifth exit inherits it.
 func TestNoteFrameTargetChange_ResetsTheQuietRun(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
-		repoint func(h *home)
+		repoint func(t *testing.T, h *home, inst *session.Instance)
 	}{
-		{"a tab switch", func(h *home) { h.tabChanged() }},
-		{"a screensaver wake", func(h *home) { h.state = stateScreensaver; h.dismissScreensaver() }},
-		{"a selection change", func(h *home) {
+		{"a tab switch", func(_ *testing.T, h *home, _ *session.Instance) { h.tabChanged() }},
+		{"a screensaver wake", func(_ *testing.T, h *home, _ *session.Instance) {
+			h.state = stateScreensaver
+			h.dismissScreensaver()
+		}},
+		{"a selection change", func(_ *testing.T, h *home, _ *session.Instance) {
 			h.lastStatusPollSelection = nil
 			h.instanceChanged()
+		}},
+		{"a resume, which swaps the pane under an unchanged selection", func(t *testing.T, h *home, inst *session.Instance) {
+			withStorage(t, h)
+			h.handleResumeDone(resumeDoneMsg{instance: inst})
 		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -445,11 +467,37 @@ func TestNoteFrameTargetChange_ResetsTheQuietRun(t *testing.T) {
 			settleFrames(h, target, "agent output", frameQuietRuns)
 			require.True(t, h.frameQuiet.settled(target, frameQuietRuns), "precondition: the run is settled")
 
-			tc.repoint(h)
+			tc.repoint(t, h, inst)
 
 			require.Zero(t, h.frameQuiet.seen, "pointing the preview somewhere new must drop the run")
 		})
 	}
+}
+
+// Why the resume needs its own call, and is not covered by the other three.
+//
+// The negative control is the whole test. instanceChanged compares POINTERS, and
+// a resume does not move one — the same *Instance stays selected while the pane
+// behind it is recreated — so the periodic path cannot see a resume at all. Assert
+// that it cannot BEFORE asserting that handleResumeDone can, or "the run was
+// dropped" proves nothing about which call dropped it.
+func TestResume_DropsAQuietRunNothingElseCanSee(t *testing.T) {
+	h, inst := newCaptureHome(t, newFrameSpy("agent output"))
+	withStorage(t, h)
+	target := frameTarget{instance: inst}
+
+	h.instanceChanged() // record the selection, the way production has long before a pane settles
+	settleFrames(h, target, "agent output", frameQuietRuns)
+	require.True(t, h.frameQuiet.settled(target, frameQuietRuns), "precondition: the run is settled")
+
+	h.instanceChanged()
+	require.True(t, h.frameQuiet.settled(target, frameQuietRuns),
+		"negative control: the selection did not move, so nothing else drops the run")
+
+	h.handleResumeDone(resumeDoneMsg{instance: inst})
+
+	require.Zero(t, h.frameQuiet.seen, "a resumed pane must be watched at the frame cadence again")
+	require.Equal(t, target, h.resolveFrameTarget(), "and the chain must resolve a real target for it")
 }
 
 // Both writers of the pane cache feed the run.

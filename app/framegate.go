@@ -60,10 +60,14 @@ func noteQuietFrame(prev quietRun, target frameTarget, text string) quietRun {
 // settled reports whether target has produced a long enough run to stop being
 // captured at the frame cadence.
 //
-// The target check is not redundant with noteQuietFrame's. The run is fed by two
-// writers at different rates and survives across a tab switch, so a caller can
-// ask about a target the run has never described; answering from `seen` alone
-// would gate a pane on another pane's stillness.
+// The target check is not redundant with noteQuietFrame's. Both writers key the
+// run on the frame's OWN target rather than on whatever resolveFrameTarget would
+// answer now: handlePaneFrame notes the instance its capture was taken from,
+// which may be one the user has already moved off, and the sweep's harvest notes
+// the selected session whichever tab is showing. So a caller can ask about a
+// target the run has never described, and answering from `seen` alone would gate
+// a pane on another pane's stillness. noteFrameTargetChange's resets do not cover
+// this: they fire on the deliberate re-points, not on a frame that lands late.
 func (q quietRun) settled(target frameTarget, runs int) bool {
 	return q.target == target && q.seen >= runs
 }

@@ -201,9 +201,10 @@ type terminalEnsurer func(*session.Instance) (string, error)
 // is nothing to capture.
 //
 // The in-flight flag is the no-overlap guarantee: arming sets it, the message
-// clears it, and handlePaneFrame is the only place the chain re-arms. So the loop
-// cannot fork — a second arm is a no-op — and a wedged tmux parks one goroutine
-// rather than a growing pile of them.
+// clears it, and every arm goes through here — handlePaneFrame continues a live
+// chain, the preview tick revives a dead one (below). So the loop cannot fork —
+// a second arm is a no-op — and a wedged tmux parks one goroutine rather than a
+// growing pile of them.
 //
 // It CAN die, deliberately. A zero target used to be dispatched anyway, so a
 // paused selection, the diff tab, the screensaver and now a still pane each cost
@@ -291,9 +292,15 @@ func (m *home) refreshPanes() tea.Cmd {
 //
 // It drops the quiet run for the same reason, and it lives here rather than at
 // each caller because this is already the shared tail of every deliberate
-// re-point: a selection change (instanceChanged), a tab switch (tabChanged) and
-// a screensaver wake (dismissScreensaver). A run describing the pane the user
-// just looked away from must not decide whether the new one is captured.
+// re-point: a selection change (instanceChanged), a tab switch (tabChanged), a
+// screensaver wake (dismissScreensaver) and a resume (handleResumeDone). A run
+// describing the pane the user just looked away from must not decide whether the
+// new one is captured.
+//
+// The resume is the one that does not announce itself. The other three change
+// what the preview points AT; a resume leaves the same *Instance selected and
+// swaps the pane underneath it, so instanceChanged's pointer comparison sees
+// nothing and only an explicit call gets the run dropped.
 func (m *home) noteFrameTargetChange() {
 	m.tabbedWindow.NoteFrameTargetChange(time.Now())
 	m.frameQuiet = quietRun{}
