@@ -683,7 +683,7 @@ Data only. No `auto`, no detection, no change at the 152 `theme.Current()` call 
 **Interfaces:**
 - Consumes: `theme.Palette`, `theme.Borders`, `plainGlyphs()`, `lipgloss.RoundedBorder()`.
 - Produces:
-  - `theme.lightTwin` — `map[string]string`, dark theme name → light theme name. Package-private; Stage E's `compose()` is its only consumer.
+  - `theme.lightTwin` — `map[string]string`, dark theme name → light theme name. Package-private. Read by `TestLightPaletteMatchesItsDarkTwin` from Step 4 onwards, which is what makes the pairing an assertion rather than a comment, and by Stage E's `compose()` once `auto` exists. (An earlier draft called Stage E its *only* consumer, which was wrong by one before Stage C had even finished — the same under-counting this branch is correcting elsewhere. State what reads it, not how many things do.)
   - Registry names `"tokyo-night-day"` and `"catppuccin-latte"`.
 
 - [x] **Step 1: Write `ui/theme/light.go`**
