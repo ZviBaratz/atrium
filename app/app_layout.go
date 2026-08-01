@@ -410,7 +410,9 @@ func (m *home) applySettingChange(key string) tea.Cmd {
 //
 // This runs on a tea.Cmd goroutine, so every global it reaches has to be safe off
 // the update thread — RewriteManagedConfig republishes tmux's config state (atomic,
-// swapped by rename) and ApplyBarStyle reads theme.Current() (an atomic load). A
+// swapped by rename), and both calls resolve the band's colours through
+// barStyleColours, which reads theme.Current() and theme.Mono() (both atomic
+// loads). Adding a global to that resolution means adding it to this list. A
 // tea.Cmd is a goroutine: moving a startup-only call into one re-scopes everything
 // it touches, and the seam below is exactly what hides that from the race detector.
 var barStyleApplier = func(ctx context.Context, contextBar bool) {

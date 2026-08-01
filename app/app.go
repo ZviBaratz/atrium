@@ -25,6 +25,7 @@ import (
 	"charm.land/bubbles/v2/spinner"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/colorprofile"
 	zone "github.com/lrstanley/bubblezone/v2"
 )
 
@@ -66,6 +67,41 @@ func (m *home) scanCached(pre string) string {
 	return out
 }
 
+// noColorProfile is the colour profile NO_COLOR selects. Named rather than
+// inlined so the choice between Ascii and NoTTY — which is the difference between
+// a monochrome UI and a flat one — is one identifier a test can pin.
+//
+// Ascii drops every colour form, including escapes Atrium hand-wrote into the
+// frame (the overlay fade's SGR rewrite), while leaving bold, italic and
+// underline intact. NoTTY strips those too: measured through colorprofile.Writer
+// and again through ultraviolet's ConvertStyle, which is the path the renderer
+// actually takes.
+//
+// One hazard if this is ever revisited: tea.go's CapabilityMsg handler upgrades
+// the profile to TrueColor on an "RGB"/"Tc" reply WITHOUT checking whether it was
+// pinned here. That is dormant only because Atrium never calls
+// tea.RequestCapability. Anything that starts calling it has to gate on
+// theme.Mono() as well.
+func noColorProfile() colorprofile.Profile { return colorprofile.Ascii }
+
+// programOptions builds the Bubble Tea program options.
+//
+// tea.WithContext ties the program to the lifecycle context so a SIGTERM (which
+// cancels ctx in main) also stops the TUI loop, not just the subprocesses.
+//
+// The colour profile is pinned only under NO_COLOR, and it reads theme.Mono()
+// rather than the environment: main.go resolves the variable once, before
+// tmux.Init, because the managed tmux config is rendered there and tmux — not
+// Bubble Tea — draws the in-session status band. Reading the variable here
+// instead would leave that band coloured for every session started this run.
+func programOptions(ctx context.Context) []tea.ProgramOption {
+	opts := []tea.ProgramOption{tea.WithContext(ctx)}
+	if theme.Mono() {
+		opts = append(opts, tea.WithColorProfile(noColorProfile()))
+	}
+	return opts
+}
+
 // Run is the main entrypoint into the application. version is the build-stamped
 // binary version ("dev" when unstamped); it gates the startup update check and
 // names the current release in hints. binName is the invoked binary's basename,
@@ -86,9 +122,7 @@ func Run(ctx context.Context, program string, autoYes bool, version, binName str
 	// SS3 Home/End input shim is gone too — v2's decoder reads ESC O H/F natively,
 	// which is the whole of what that wrapper existed to work around.
 	//
-	// Tie the program to the lifecycle context so a SIGTERM (which cancels ctx in
-	// main) also stops the TUI loop, not just the subprocesses.
-	p := tea.NewProgram(h, tea.WithContext(ctx))
+	p := tea.NewProgram(h, programOptions(ctx)...)
 	_, err = p.Run()
 	// The event loop has exited. On signal shutdown it returned on ctx.Done()
 	// without dispatching Update, and the force-quit escape exits with a session

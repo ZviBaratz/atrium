@@ -108,7 +108,8 @@ func splashScene(width, height, frame int, message string) string {
 
 // splashLumRange resolves how the splash field splits brightness between glyph
 // density and colour luminance: the dev override if set, else 0 on a light palette
-// (except for rain), else nil (fresco's per-variant default).
+// or under NO_COLOR (except for rain, exempt from both), else nil (fresco's
+// per-variant default).
 //
 // It also owns the ui-side half of the ATRIUM_SPLASH_LUMRANGE plumbing, because the
 // splash engine reads no environment itself — see splashLumRangeOverride.
@@ -125,25 +126,34 @@ func splashScene(width, height, frame int, message string) string {
 // works on both polarities without a fresco change. Filed upstream as
 // ZviBaratz/fresco#82 for a real light ramp.
 //
-// RAIN IS EXEMPT, and it is the one variant that had to be looked at to know so.
-// Its brightness is ENTIRELY luminance — fresco ships it at lumRange 1 — so moving
-// that brightness onto density gives it nowhere to go and the pane fills solid.
-// Measured at 120x40 on tokyo-night-day: 95% of cells inked and an edge:core ratio
-// of 83:100, i.e. no vignette at all, against 31% and 16:45 when it is left alone.
-// That is the absurdity the ATRIUM_SPLASH_LUMRANGE override's own comment in
+// The mono rung is the mirror image, and it is the same rung on purpose: with
+// colour stripped at the renderer (theme.Mono, #394 Stage D), a colour-borne
+// brightness channel carries nothing at all, so the field flattens to a uniform
+// wash. lumRange 0 puts brightness back on glyph density, which is the one channel
+// that survives having no colour.
+//
+// RAIN IS EXEMPT FROM BOTH, and it is the one variant that had to be looked at to
+// know so. Its brightness is ENTIRELY luminance — fresco ships it at lumRange 1 —
+// so moving that brightness onto density gives it nowhere to go and the pane fills
+// solid. Measured at 120x40 on tokyo-night-day: 95% of cells inked and an edge:core
+// ratio of 83:100, i.e. no vignette at all, against 31% and 16:45 when it is left
+// alone. That is the absurdity the ATRIUM_SPLASH_LUMRANGE override's own comment in
 // splash_variants.go already predicts for a low override on rain ("the pane fills
 // with white katakana"); the light rung would have made it the shipped path rather
 // than a dev-only footgun. Leaving rain on the ramp is merely inverted, which is the
 // lesser harm and is fresco#82's to fix properly.
 //
+// Under mono rain has neither channel, so neither rung helps it — but lumRange 0
+// makes it WORSE (solid) rather than merely flat, so the exemption holds for the
+// same measured reason it holds on light. That is why the two conditions are
+// bracketed together rather than or'd in front: `Mono() || IsLight(…) && variant !=
+// Rain` parses as `Mono || (IsLight && …)` in Go, which hands rain lumRange 0
+// whenever NO_COLOR is set. TestSplashLumRangeExemptsRainUnderMono is the guard for
+// exactly that, and it is the only thing in the suite that can see it.
+//
 // The other four all read better at 0 than on the ramp, because a density vignette
 // survives the polarity flip and a luminance one does not: ripple's edge:core goes
 // 25:43 to 13:33, galaxy's 65:94 to 32:71.
-//
-// A monochrome render will take the same rung for the mirror-image reason: with
-// colour stripped, a colour-borne brightness channel carries nothing, so the field
-// would flatten. See theme.Mono (#394 Stage D). Rain's exemption will need
-// revisiting there — with no colour at all it has neither channel.
 //
 // The variant is a parameter rather than another splashActiveVariant() call so the
 // rung is a pure function of what the caller is actually about to render. The
@@ -153,7 +163,7 @@ func splashLumRange(variant fresco.Variant) *float64 {
 	if r, ok := splashLumRangeOverride(); ok {
 		return &r
 	}
-	if theme.IsLight(theme.Current().Palette) && variant != fresco.Rain {
+	if (theme.Mono() || theme.IsLight(theme.Current().Palette)) && variant != fresco.Rain {
 		zero := 0.0
 		return &zero
 	}

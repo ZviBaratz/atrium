@@ -5,6 +5,10 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+
+	"github.com/ZviBaratz/atrium/ui/theme"
+
+	"github.com/stretchr/testify/require"
 )
 
 var wsRun = regexp.MustCompile(`[ \t]+`)
@@ -72,6 +76,35 @@ func TestRenderManagedConfig(t *testing.T) {
 			t.Errorf("disabled config missing %q (clipboard fix is unconditional)\n---\n%s", want, offStr)
 		}
 	}
+}
+
+// The managed config's status-style must carry no colours under NO_COLOR. tmux
+// reads this file, not Bubble Tea, so the renderer's colour profile cannot help
+// here — the values have to be absent from what is written to disk.
+//
+// "bg=default,fg=default", not empty values. `status-style "bg=,fg="` is rejected
+// by tmux 3.6 as `invalid style`, and it fails through source-file too — which is
+// exactly how validateConfig would see it, and it disables the WHOLE managed config
+// on a parse error. Dropping the line altogether is no better: it would fall back
+// to whatever tmux's built-in default happens to be for the user's version, which
+// is a colour on tmux 3.3 and earlier. Measured on 3.6.
+//
+// The negative controls already exist and are not repeated here:
+// TestRenderManagedConfig above asserts `status-style "bg=#`, and
+// TestRenderManagedConfig_FollowsTheCurrentTheme in barstyle_test.go pins the exact
+// hex per theme.
+func TestRenderManagedConfigDropsColourUnderMono(t *testing.T) {
+	defer theme.SetMono(true)()
+
+	out, err := renderManagedConfig(true)
+	require.NoError(t, err)
+	conf := collapseWS(string(out))
+
+	require.NotContains(t, conf, "bg=#", "no hex background under NO_COLOR")
+	require.NotContains(t, conf, "fg=#", "no hex foreground under NO_COLOR")
+	require.Contains(t, conf, `status-style "bg=default,fg=default"`,
+		"the band must be set explicitly, not left to tmux's version-dependent default")
+	require.Contains(t, conf, "status on", "the bar itself is still configured")
 }
 
 // TestRenderManagedConfigScrollKeys pins the prefix-free scrollback chords. The

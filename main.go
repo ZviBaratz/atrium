@@ -19,6 +19,7 @@ import (
 	"github.com/ZviBaratz/atrium/internal/update"
 	"github.com/ZviBaratz/atrium/log"
 	"github.com/ZviBaratz/atrium/session/tmux"
+	"github.com/ZviBaratz/atrium/ui/theme"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -83,6 +84,20 @@ var (
 			// over the terminal. It costs one parked goroutine; see internal/profile for
 			// why the trigger is a signal rather than a flag.
 			defer profile.Install(ctx)()
+
+			// Resolve NO_COLOR here, above BOTH tmux.Init calls below, because the
+			// managed tmux config is rendered by those and tmux — not Bubble Tea —
+			// draws the in-session status band. Deciding this any later (inside
+			// app.Run, say) writes the band's colours into the config first and
+			// leaves every session started this run tinted, on the one surface the
+			// renderer's colour profile cannot reach.
+			//
+			// Atrium tests the variable itself rather than relying on
+			// colorprofile.Detect, which parses it through strconv.ParseBool and so
+			// ignores NO_COLOR=yes, =x, =0 and =2 — all four of which the spec says
+			// mean off. The restore function is discarded: this is process startup,
+			// the same way theme.Set's is in app.Run.
+			theme.SetMono(theme.NoColorRequested(os.Environ()))
 
 			if daemonFlag {
 				cfg := config.LoadConfig()

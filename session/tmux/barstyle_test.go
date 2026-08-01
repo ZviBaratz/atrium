@@ -99,6 +99,32 @@ func TestInitAndTmuxConfigPath_AreRaceFree(t *testing.T) {
 	wg.Wait()
 }
 
+// Under NO_COLOR the live push must carry no colour either. This is the same
+// status-style option renderManagedConfig writes, reached by the other route: the
+// conf covers servers that start LATER, this one covers the servers running right
+// now. Honouring only one leaves the fleet's bars disagreeing after a theme change
+// — which is the split this file exists to prevent, and it would reappear under
+// NO_COLOR alone.
+//
+// "bg=default,fg=default" rather than empty values: `set-option -g status-style
+// "bg=,fg="` is rejected by tmux 3.6 as `invalid style` (exit 1), and through
+// source-file that is what validateConfig would catch — disabling the whole managed
+// config over a colour preference. Measured.
+func TestApplyBarStyleDropsColourUnderMono(t *testing.T) {
+	defer theme.SetMono(true)()
+
+	ran := recordRuns(t, nil)
+	require.NoError(t, ApplyBarStyle(context.Background(), ran.exec))
+	require.Len(t, *ran.cmds, 2, "the push still happens; only its colours are gone")
+
+	push := (*ran.cmds)[0]
+	require.NotContains(t, push, "bg=#", "no hex background under NO_COLOR")
+	require.NotContains(t, push, "fg=#", "no hex foreground under NO_COLOR")
+	require.Contains(t, push, "bg=default,fg=default",
+		"the band must be set to the terminal's own colours, not left to tmux's built-in default")
+	require.Contains(t, push, "status-style", "the option is still the one being set")
+}
+
 // runRecorder captures the commands an Executor was asked to run.
 type runRecorder struct {
 	exec cmd2.Executor
