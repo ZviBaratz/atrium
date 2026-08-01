@@ -134,7 +134,13 @@ atrium ls --json | jq -r '.[] | select(.status == "needs-input") | .title'
 
 Status, diff figures and queue depth are **last-known** values recorded by the
 running TUI, not live probes. Each entry carries `updated_at` so a consumer can
-judge how stale they are; with no Atrium running they stop advancing.
+judge how stale they are; with no Atrium running they stop advancing. A running
+TUI records every status change as it happens, so `status` is current to within
+seconds; diff figures refresh on a slower sweep.
+
+To ask how long a session has held its status, subtract `status_changed_at` — not
+`updated_at`, which is one shared instant dating the whole snapshot, nor
+`created_at`, which is the age of the worktree.
 
 | Field | Notes |
 |-------|-------|
@@ -147,6 +153,7 @@ judge how stale they are; with no Atrium running they stop advancing.
 | `queued_prompts` | Prompts waiting to be delivered |
 | `auto_yes`, `direct`, `unread`, `muted`, `note` | Session flags and annotation |
 | `created_at`, `updated_at` | RFC 3339, or `null` when unrecorded |
+| `status_changed_at` | When `status` last changed, RFC 3339; `null` for a session not yet observed by a build that records it |
 | `diff` | `added`, `removed`, `files_changed`, `commits`, `behind`, `dirty`, and `unpushed` (`null` when not yet computed) |
 
 The schema evolves additively: fields may be added, never removed or repurposed.

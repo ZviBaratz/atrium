@@ -37,7 +37,7 @@ func newTestHomeWithInstances(t *testing.T, paths ...string) *home {
 func newCreateFormHome(t *testing.T) *home {
 	t.Helper()
 	s := spinner.New()
-	return &home{
+	h := &home{
 		ctx:          context.Background(),
 		state:        stateDefault,
 		list:         ui.NewList(&s),
@@ -48,6 +48,10 @@ func newCreateFormHome(t *testing.T) *home {
 		appState:     config.DefaultState(),
 		program:      "echo",
 	}
+	// Any home that runs a metadata sweep persists on a status edge, so the general
+	// test home carries storage. A capturing store keeps it off the filesystem.
+	withCapturingStore(t, h)
+	return h
 }
 
 // Opening the form on a non-git default target must not kick any open-time branch

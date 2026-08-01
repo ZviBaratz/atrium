@@ -351,8 +351,22 @@ type Instance struct {
 	// statusChangedAt records when status last actually changed (or was first
 	// observed via the initial SetStatus). It lets the UI show how long a session
 	// has held a state and gives a future reconciliation watchdog a per-status
-	// wall-clock to cap against (#290). In-memory only. Guarded by mu.
+	// wall-clock to cap against (#290). Persisted, unlike its neighbours here: it
+	// round-trips through state.json (see InstanceData.StatusChangedAt), because a
+	// session that has been waiting on the user for six hours must still say so
+	// after a restart. Guarded by mu.
 	statusChangedAt time.Time
+	// statusDirty marks a statusChangedAt write that has not reached state.json yet.
+	// Set by recordStatusChange — i.e. by whichever goroutine observed the change —
+	// and cleared once a save carrying it succeeds (see StatusDirty). In-memory only.
+	// Guarded by mu.
+	statusDirty bool
+	// awaitingReattachSettle / reattachSavedStatus carry the status a session was
+	// saved in across the synthetic write reattach makes, so the first real
+	// observation is measured against what the agent was doing rather than against
+	// our placeholder (see setStatusReattached). In-memory only. Guarded by mu.
+	awaitingReattachSettle bool
+	reattachSavedStatus    Status
 	// statusHistory is a bounded ring buffer of recent status transitions (newest
 	// last), so a transient mislabel can be diagnosed after the fact rather than
 	// lost between polls (#290 observability). In-memory only. Guarded by mu.
@@ -407,11 +421,14 @@ func (i *Instance) ToInstanceData() InstanceData {
 		Width:       i.Width,
 		CreatedAt:   i.CreatedAt,
 		UpdatedAt:   time.Now(),
-		Program:     i.Program,
-		AutoYes:     i.AutoYes,
-		Unread:      i.Unread(),
-		Muted:       i.Muted(),
-		Direct:      i.direct,
+		// Takes i.mu, like the GetStatus above it — safe here because
+		// ToInstanceData is never called with the instance lock held.
+		StatusChangedAt: i.StatusChangedAt(),
+		Program:         i.Program,
+		AutoYes:         i.AutoYes,
+		Unread:          i.Unread(),
+		Muted:           i.Muted(),
+		Direct:          i.direct,
 
 		ClaudeAccount:        i.claudeAccount,
 		ClaudeConfigDir:      i.claudeConfigDir,
@@ -484,14 +501,19 @@ func FromInstanceData(ctx context.Context, data InstanceData, branchPrefix strin
 		Path:        data.Path,
 		Branch:      data.Branch,
 		status:      data.Status,
-		unread:      data.Unread,
-		muted:       data.Muted,
-		Height:      data.Height,
-		Width:       data.Width,
-		CreatedAt:   data.CreatedAt,
-		UpdatedAt:   data.UpdatedAt,
-		Program:     data.Program,
-		direct:      data.Direct,
+		// Restored, not re-derived: a session that has been waiting on the user
+		// for six hours must still say so after a restart. A zero value (a state
+		// file predating the field) is exactly the case recordStatusChange
+		// already covers, by stamping on first observation.
+		statusChangedAt: data.StatusChangedAt,
+		unread:          data.Unread,
+		muted:           data.Muted,
+		Height:          data.Height,
+		Width:           data.Width,
+		CreatedAt:       data.CreatedAt,
+		UpdatedAt:       data.UpdatedAt,
+		Program:         data.Program,
+		direct:          data.Direct,
 
 		claudeAccount:        data.ClaudeAccount,
 		claudeConfigDir:      data.ClaudeConfigDir,
@@ -634,12 +656,16 @@ func (i *Instance) reattach() {
 			}
 			i.recoverInPlace()
 		} else {
-			i.SetStatus(Running)
-			// The Running just written is synthetic (the session was reattached, not
-			// observed working), so the first poll's settle to Ready must not flag
-			// unread when the session was already idle at save time. A persisted
-			// Running means the agent was genuinely working when the app closed — its
-			// first Ready is a real completion, so don't arm.
+			// The Running written here is synthetic — the session was reattached, not
+			// observed working — so it goes through setStatusReattached, which records
+			// no transition. Two things ride on that. The first poll's settle to Ready
+			// must not flag unread when the session was already idle at save time
+			// (hence the arm below; a persisted Running means the agent was genuinely
+			// working when the app closed, so its first Ready is a real completion and
+			// must not be armed). And statusChangedAt, just restored from state.json,
+			// must survive until that first poll says what the session is really
+			// doing — otherwise a six-hour wait reads as having started at launch.
+			i.setStatusReattached(Running)
 			if savedStatus == Ready {
 				i.ArmReadySuppression()
 			}

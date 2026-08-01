@@ -98,19 +98,24 @@ func TestNotifyStateThrottle(t *testing.T) {
 
 // newNotifyHome builds a home with a bell notifier writing to buf, a real list, and an
 // empty seen map. Bell mode never touches the executor, so the real one is safe here.
-func newNotifyHome(buf *bytes.Buffer) (*home, *ui.List) {
+func newNotifyHome(t *testing.T, buf *bytes.Buffer) (*home, *ui.List) {
+	t.Helper()
 	spin := spinner.New(spinner.WithSpinner(spinner.MiniDot))
 	list := ui.NewList(&spin)
 	cfg := config.DefaultConfig()
 	cfg.Notifications = config.NotificationsBell
-	return &home{
+	h := &home{
 		ctx:        context.Background(),
 		state:      stateDefault,
 		appConfig:  cfg,
 		list:       list,
 		notifier:   notify.New(buf, cmd.MakeExecutor()),
 		notifySeen: make(map[*session.Instance]*notifyState),
-	}, list
+	}
+	// applyMetadataResults persists on a status edge, which is the whole point of
+	// the edges these tests drive — so a home used with it needs storage.
+	withCapturingStore(t, h)
+	return h, list
 }
 
 func newNotifyInstance(t *testing.T) *session.Instance {
@@ -134,7 +139,7 @@ func TestMaybeNotifyNilNotifierIsNoOp(t *testing.T) {
 
 func TestMaybeNotifyFirstObservationIsSilent(t *testing.T) {
 	var buf bytes.Buffer
-	h, _ := newNotifyHome(&buf)
+	h, _ := newNotifyHome(t, &buf)
 	inst := newNotifyInstance(t)
 	inst.SetStatus(session.Ready) // a genuine finish edge is pending...
 	// ...but the very first observation of the instance never notifies (startup gate).
@@ -146,7 +151,7 @@ func TestMaybeNotifyFirstObservationIsSilent(t *testing.T) {
 
 func TestMaybeNotifyEmitsFinishForSeenNonSelected(t *testing.T) {
 	var buf bytes.Buffer
-	h, list := newNotifyHome(&buf)
+	h, list := newNotifyHome(t, &buf)
 	a := newNotifyInstance(t)
 	b := newNotifyInstance(t)
 	list.AddInstance(a)()
@@ -168,7 +173,7 @@ func TestMaybeNotifyEmitsFinishForSeenNonSelected(t *testing.T) {
 
 func TestMaybeNotifySelectedSessionStaysSilent(t *testing.T) {
 	var buf bytes.Buffer
-	h, list := newNotifyHome(&buf)
+	h, list := newNotifyHome(t, &buf)
 	inst := newNotifyInstance(t)
 	list.AddInstance(inst)() // the sole instance is the selected one
 	require.Same(t, inst, list.GetSelectedInstance())
@@ -191,7 +196,7 @@ func finishOnce(h *home, target *session.Instance) {
 // notification fires — even a genuine finish on a background session.
 func TestMaybeNotifyFocusedStaysSilent(t *testing.T) {
 	var buf bytes.Buffer
-	h, list := newNotifyHome(&buf)
+	h, list := newNotifyHome(t, &buf)
 	h.focused = true
 	finishOnce(h, notifyTarget(t, list))
 	require.Empty(t, buf.String(), "a focused terminal notifies nothing")
@@ -201,7 +206,7 @@ func TestMaybeNotifyFocusedStaysSilent(t *testing.T) {
 // once the terminal is blurred.
 func TestMaybeNotifyNotifiesAfterBlur(t *testing.T) {
 	var buf bytes.Buffer
-	h, list := newNotifyHome(&buf)
+	h, list := newNotifyHome(t, &buf)
 	target := notifyTarget(t, list)
 
 	h.focused = true
@@ -220,7 +225,7 @@ func TestMaybeNotifyNotifiesAfterBlur(t *testing.T) {
 // focus (focused is never set true) behaves exactly like today — it notifies.
 func TestMaybeNotifyUnknownFocusNotifies(t *testing.T) {
 	var buf bytes.Buffer
-	h, list := newNotifyHome(&buf)
+	h, list := newNotifyHome(t, &buf)
 	// h.focused is left at its zero value (false) — "no focus event yet" is never
 	// treated as focused, so notifications are never permanently silenced.
 	finishOnce(h, notifyTarget(t, list))
@@ -231,7 +236,7 @@ func TestMaybeNotifyUnknownFocusNotifies(t *testing.T) {
 // notify_when_focused on, a focused terminal still notifies.
 func TestMaybeNotifyFocusedWithNotifyWhenFocusedNotifies(t *testing.T) {
 	var buf bytes.Buffer
-	h, list := newNotifyHome(&buf)
+	h, list := newNotifyHome(t, &buf)
 	h.focused = true
 	h.appConfig.NotifyWhenFocused = true
 	finishOnce(h, notifyTarget(t, list))
@@ -242,7 +247,7 @@ func TestMaybeNotifyFocusedWithNotifyWhenFocusedNotifies(t *testing.T) {
 // on a genuine background finish edge.
 func TestMaybeNotifyMutedStaysSilent(t *testing.T) {
 	var buf bytes.Buffer
-	h, list := newNotifyHome(&buf)
+	h, list := newNotifyHome(t, &buf)
 	target := notifyTarget(t, list)
 	target.SetMuted(true)
 	finishOnce(h, target)
@@ -264,7 +269,7 @@ func blockEdge(h *home, target *session.Instance, mode string) {
 // blocking on input still signals at the configured mode.
 func TestMaybeNotifyFinishedRungOffStaysSilent(t *testing.T) {
 	var buf bytes.Buffer
-	h, list := newNotifyHome(&buf)
+	h, list := newNotifyHome(t, &buf)
 	h.appConfig.NotificationsFinished = config.NotificationsOff
 	target := notifyTarget(t, list)
 
@@ -281,7 +286,7 @@ func TestMaybeNotifyFinishedRungOffStaysSilent(t *testing.T) {
 // demonstrably chosen per event rather than per batch.
 func TestMaybeNotifyFinishedRungQuieterThanBase(t *testing.T) {
 	var buf bytes.Buffer
-	h, list := newNotifyHome(&buf)
+	h, list := newNotifyHome(t, &buf)
 	h.appConfig.Notifications = config.NotificationsOSC
 	h.appConfig.NotificationsFinished = config.NotificationsBell
 	target := notifyTarget(t, list)
@@ -302,7 +307,7 @@ func TestMaybeNotifyFinishedRungQuieterThanBase(t *testing.T) {
 // edge the ladder exists to protect.
 func TestMaybeNotifyThrottleStaysKeyedOnEvent(t *testing.T) {
 	var buf bytes.Buffer
-	h, list := newNotifyHome(&buf)
+	h, list := newNotifyHome(t, &buf)
 	target := notifyTarget(t, list)
 
 	finishOnce(h, target)
@@ -317,7 +322,7 @@ func TestMaybeNotifyThrottleStaysKeyedOnEvent(t *testing.T) {
 // clear m.focused.
 func TestFocusBlurMsgTogglesFocused(t *testing.T) {
 	var buf bytes.Buffer
-	h, _ := newNotifyHome(&buf)
+	h, _ := newNotifyHome(t, &buf)
 	require.False(t, h.focused, "starts unknown (not focused)")
 
 	h.Update(tea.FocusMsg{})
@@ -347,7 +352,7 @@ func notifyTarget(t *testing.T, list *ui.List) *session.Instance {
 // → ApplyPaneState/SetStatus → maybeNotify → notifier bell).
 func TestApplyMetadataResultsEmitsBellOnFinish(t *testing.T) {
 	var buf bytes.Buffer
-	h, list := newNotifyHome(&buf)
+	h, list := newNotifyHome(t, &buf)
 	target := notifyTarget(t, list)
 
 	// Tick 1: the session is working — first observation, silent (startup gate).
@@ -368,7 +373,7 @@ func TestApplyMetadataResultsEmitsBellOnFinish(t *testing.T) {
 // TestApplyMetadataResultsEmitsBellOnNeedsInput covers the block edge.
 func TestApplyMetadataResultsEmitsBellOnNeedsInput(t *testing.T) {
 	var buf bytes.Buffer
-	h, list := newNotifyHome(&buf)
+	h, list := newNotifyHome(t, &buf)
 	target := notifyTarget(t, list)
 
 	h.applyMetadataResults([]instanceMetaResult{{instance: target, state: tmux.PaneWorking}}, true)
@@ -383,7 +388,7 @@ func TestApplyMetadataResultsEmitsBellOnNeedsInput(t *testing.T) {
 // applies state but never notifies, so returning to the list replays no burst.
 func TestApplyMetadataResultsSweepDoesNotEmit(t *testing.T) {
 	var buf bytes.Buffer
-	h, list := newNotifyHome(&buf)
+	h, list := newNotifyHome(t, &buf)
 	target := notifyTarget(t, list)
 
 	// Seed the instance as observed via a normal emit=true working tick.
@@ -398,7 +403,7 @@ func TestApplyMetadataResultsSweepDoesNotEmit(t *testing.T) {
 // a real finish edge.
 func TestApplyMetadataResultsOffIsSilent(t *testing.T) {
 	var buf bytes.Buffer
-	h, list := newNotifyHome(&buf)
+	h, list := newNotifyHome(t, &buf)
 	h.appConfig.Notifications = config.NotificationsOff
 	target := notifyTarget(t, list)
 
@@ -413,7 +418,7 @@ func TestApplyMetadataResultsOffIsSilent(t *testing.T) {
 // drains, the next finishing turn does ring.
 func TestApplyMetadataResultsFinishSuppressedWithQueuedPrompt(t *testing.T) {
 	var buf bytes.Buffer
-	h, list := newNotifyHome(&buf)
+	h, list := newNotifyHome(t, &buf)
 	target := notifyTarget(t, list)
 	target.QueuePrompt("next step")
 
@@ -436,7 +441,7 @@ func TestApplyMetadataResultsFinishSuppressedWithQueuedPrompt(t *testing.T) {
 // blocks on a prompt still rings even with a follow-up queued.
 func TestApplyMetadataResultsBlockNotSuppressedWithQueuedPrompt(t *testing.T) {
 	var buf bytes.Buffer
-	h, list := newNotifyHome(&buf)
+	h, list := newNotifyHome(t, &buf)
 	target := notifyTarget(t, list)
 	target.QueuePrompt("next step")
 
@@ -451,7 +456,7 @@ func TestApplyMetadataResultsBlockNotSuppressedWithQueuedPrompt(t *testing.T) {
 // while the same session blocking on input still rings.
 func TestApplyMetadataResultsFinishedRungOff(t *testing.T) {
 	var buf bytes.Buffer
-	h, list := newNotifyHome(&buf)
+	h, list := newNotifyHome(t, &buf)
 	h.appConfig.NotificationsFinished = config.NotificationsOff
 	target := notifyTarget(t, list)
 
@@ -470,7 +475,7 @@ func TestApplyMetadataResultsFinishedRungOff(t *testing.T) {
 // rung can never revive a disabled feature.
 func TestApplyMetadataResultsMasterOffIgnoresFinishedRung(t *testing.T) {
 	var buf bytes.Buffer
-	h, list := newNotifyHome(&buf)
+	h, list := newNotifyHome(t, &buf)
 	h.appConfig.Notifications = config.NotificationsOff
 	h.appConfig.NotificationsFinished = config.NotificationsBell
 	target := notifyTarget(t, list)

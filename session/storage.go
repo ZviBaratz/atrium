@@ -23,7 +23,24 @@ type InstanceData struct {
 	Width     int       `json:"width"`
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
-	AutoYes   bool      `json:"auto_yes"`
+
+	// StatusChangedAt is when Status last actually changed. It is the only
+	// timestamp here that dates the SESSION rather than the snapshot: CreatedAt
+	// is the worktree's age and UpdatedAt is stamped at serialization, so
+	// neither can answer "how long has this been waiting on me". Persisting it
+	// is what lets the answer survive a restart — without it the restored
+	// instance re-stamps from now on its first observed status, and the whole
+	// fleet reads as having just changed.
+	//
+	// No omitempty, deliberately: encoding/json only omits empty values for
+	// basic types, so the tag is silently inert on a time.Time (see
+	// PromptQueuedAt below, which carries it and emits anyway). Absence in a
+	// state file written before this field decodes to the zero time, which
+	// recordStatusChange re-stamps on first observation and cli_ls publishes as
+	// null rather than as the year 1.
+	StatusChangedAt time.Time `json:"status_changed_at"`
+
+	AutoYes bool `json:"auto_yes"`
 
 	// PromptQueue is the FIFO of prompts queued but not yet delivered to the agent.
 	// Persisting it lets pending prompts survive a restart before delivery and be

@@ -82,26 +82,28 @@ func TestLsJSONFields(t *testing.T) {
 	sandboxDataDir(t)
 	created := time.Date(2026, 7, 20, 9, 0, 0, 0, time.UTC)
 	updated := time.Date(2026, 7, 20, 9, 30, 0, 0, time.UTC)
+	statusChanged := time.Date(2026, 7, 20, 9, 12, 0, 0, time.UTC)
 	unpushed := 2
 
 	d := session.InstanceData{
-		Title:       "fix-auth",
-		DisplayName: "the auth fix",
-		Note:        "waiting on review",
-		Path:        "/repo/web",
-		Branch:      "zvi/fix-auth",
-		Status:      session.Running,
-		Program:     "claude",
-		TmuxName:    "atrium_web_fix-auth",
-		Model:       "opus",
-		Effort:      "high",
-		AutoYes:     true,
-		Unread:      true,
-		Muted:       true,
-		CreatedAt:   created,
-		UpdatedAt:   updated,
-		PromptQueue: []session.QueuedPromptData{{Text: "one"}, {Text: "two"}},
-		Worktree:    session.GitWorktreeData{WorktreePath: "/data/worktrees/fix-auth"},
+		Title:           "fix-auth",
+		DisplayName:     "the auth fix",
+		Note:            "waiting on review",
+		Path:            "/repo/web",
+		Branch:          "zvi/fix-auth",
+		Status:          session.Running,
+		Program:         "claude",
+		TmuxName:        "atrium_web_fix-auth",
+		Model:           "opus",
+		Effort:          "high",
+		AutoYes:         true,
+		Unread:          true,
+		Muted:           true,
+		CreatedAt:       created,
+		UpdatedAt:       updated,
+		StatusChangedAt: statusChanged,
+		PromptQueue:     []session.QueuedPromptData{{Text: "one"}, {Text: "two"}},
+		Worktree:        session.GitWorktreeData{WorktreePath: "/data/worktrees/fix-auth"},
 		DiffStats: session.DiffStatsData{
 			Added: 12, Removed: 3, FilesChanged: 2, Commits: 1, Behind: 4, Unpushed: &unpushed, Dirty: true,
 		},
@@ -129,6 +131,11 @@ func TestLsJSONFields(t *testing.T) {
 	assert.Equal(t, float64(2), s["queued_prompts"])
 	assert.Equal(t, created.Format(time.RFC3339), s["created_at"])
 	assert.Equal(t, updated.Format(time.RFC3339), s["updated_at"])
+	// The three timestamps answer three different questions, and only this one
+	// answers "how long has it been like this". created_at is the worktree's age;
+	// updated_at is one instant shared by every row of the listing.
+	assert.Equal(t, statusChanged.Format(time.RFC3339), s["status_changed_at"])
+	assert.NotEqual(t, s["updated_at"], s["status_changed_at"])
 
 	diff, ok := s["diff"].(map[string]any)
 	require.True(t, ok, "diff should be a nested object")
@@ -176,6 +183,9 @@ func TestLsJSONZeroTimesAreNull(t *testing.T) {
 	require.Len(t, got, 1)
 	assert.Nil(t, got[0]["created_at"])
 	assert.Nil(t, got[0]["updated_at"])
+	// A session stored before status_changed_at existed publishes null rather than
+	// the year 1, which a consumer would otherwise render as a 2025-year duration.
+	assert.Nil(t, got[0]["status_changed_at"])
 }
 
 // TestLsJSONPreservesStoredOrder: the list order is the user's manual ordering,

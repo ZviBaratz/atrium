@@ -22,7 +22,13 @@ var (
 		Short: "List sessions (add --json for a machine-readable snapshot)",
 		Long: "Lists every stored session without attaching to tmux or starting the TUI.\n\n" +
 			"Status and diff figures are last-known values recorded by the running TUI, not\n" +
-			"live probes — use the updated_at field to judge how fresh they are.",
+			"live probes — use the updated_at field to judge how fresh they are. A running\n" +
+			"TUI records every status change as it happens, so status is current to within\n" +
+			"seconds; diff figures refresh on a slower sweep, and nothing refreshes at all\n" +
+			"while no TUI is running.\n\n" +
+			"For how long a session has held its status, subtract status_changed_at — not\n" +
+			"updated_at, which is one shared instant dating the snapshot, nor created_at,\n" +
+			"which is the age of the worktree.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			log.Initialize(false)
@@ -66,7 +72,14 @@ type sessionJSON struct {
 	QueuedPrompts int        `json:"queued_prompts"`
 	CreatedAt     *time.Time `json:"created_at"`
 	UpdatedAt     *time.Time `json:"updated_at"`
-	Diff          diffJSON   `json:"diff"`
+	// StatusChangedAt is when Status last actually changed — the field to
+	// subtract from now() for "how long has it been like this". Distinct from
+	// UpdatedAt in the way that matters to a consumer: UpdatedAt is one instant
+	// shared by every row of a listing (it dates the snapshot), whereas this one
+	// is per-session and dates the session. Null for a session stored by a build
+	// predating the field and not yet observed since.
+	StatusChangedAt *time.Time `json:"status_changed_at"`
+	Diff            diffJSON   `json:"diff"`
 }
 
 type diffJSON struct {
@@ -117,27 +130,28 @@ func toSessionJSON(d session.InstanceData) sessionJSON {
 		displayName = d.Title // mirrors Instance.DisplayName's fallback
 	}
 	return sessionJSON{
-		Title:          d.Title,
-		DisplayName:    displayName,
-		Note:           d.Note,
-		Path:           d.Path,
-		Worktree:       d.Worktree.WorktreePath,
-		Branch:         d.Branch,
-		Status:         d.Status.String(),
-		Program:        d.Program,
-		TmuxName:       d.TmuxName,
-		Model:          d.Model,
-		PermissionMode: d.PermissionMode,
-		Effort:         d.Effort,
-		Account:        d.ClaudeAccount,
-		Pool:           d.ClaudeAccountPool,
-		AutoYes:        d.AutoYes,
-		Direct:         d.Direct,
-		Unread:         d.Unread,
-		Muted:          d.Muted,
-		QueuedPrompts:  len(d.PromptQueue),
-		CreatedAt:      nilIfZero(d.CreatedAt),
-		UpdatedAt:      nilIfZero(d.UpdatedAt),
+		Title:           d.Title,
+		DisplayName:     displayName,
+		Note:            d.Note,
+		Path:            d.Path,
+		Worktree:        d.Worktree.WorktreePath,
+		Branch:          d.Branch,
+		Status:          d.Status.String(),
+		Program:         d.Program,
+		TmuxName:        d.TmuxName,
+		Model:           d.Model,
+		PermissionMode:  d.PermissionMode,
+		Effort:          d.Effort,
+		Account:         d.ClaudeAccount,
+		Pool:            d.ClaudeAccountPool,
+		AutoYes:         d.AutoYes,
+		Direct:          d.Direct,
+		Unread:          d.Unread,
+		Muted:           d.Muted,
+		QueuedPrompts:   len(d.PromptQueue),
+		CreatedAt:       nilIfZero(d.CreatedAt),
+		UpdatedAt:       nilIfZero(d.UpdatedAt),
+		StatusChangedAt: nilIfZero(d.StatusChangedAt),
 		Diff: diffJSON{
 			Added:        d.DiffStats.Added,
 			Removed:      d.DiffStats.Removed,
