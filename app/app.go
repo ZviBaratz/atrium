@@ -727,6 +727,10 @@ func newHome(ctx context.Context, program string, autoYes bool, version, binName
 	// independent axes.
 	theme.Set(appConfig.GetTheme())
 	theme.SetGlyphSet(appConfig.GetGlyphSet())
+	// The detection ladder's lower rung, read once, for terminals that will never
+	// answer the OSC 11 query Init also sends. It sits here so the ladder's order is
+	// visible in one place: Init's query outranks this if an answer arrives.
+	theme.SetScheme(initialScheme())
 
 	// Load application state
 	appState := config.LoadState()
@@ -771,6 +775,7 @@ func (m *home) Init() tea.Cmd {
 		m.releaseNotesCmd(),  // nil (inert) is fine: tea.Batch skips nil cmds
 		m.startProjectScan(), // nil (disabled) is likewise skipped
 		m.sweepUndoCmd(),     // release undo records past their horizon
+		m.requestSchemeCmd(), // OSC 11: nil unless theme: auto, and nil is fine here
 	)
 }
 
