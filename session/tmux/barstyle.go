@@ -54,6 +54,12 @@ func barStyleColours() (bg, fg string) {
 // reaches are atomic loads — theme.Current() and theme.Mono() (see
 // ui/theme/current.go and ui/theme/mono.go).
 //
+// Still both, after the scheme axis: a detected dark->light flip changes the band,
+// but it reaches this function only through theme.Current(), because compose() folds
+// the scheme in on the update thread and publishes one already-composed pointer.
+// theme.CurrentScheme() is not read here and must not become so without joining the
+// list above.
+//
 // No-ops when the user supplied their own tmux config: status-style is then theirs
 // to set, and stomping it server-globally would contradict tmux_config_override,
 // which RewriteManagedConfig already honours by leaving the file alone.

@@ -4,7 +4,6 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"sort"
 	"strconv"
 	"strings"
 	"testing"
@@ -256,8 +255,9 @@ func TestSettingsOverlay_CycleThemeWraps(t *testing.T) {
 	o := NewSettingsOverlay(cfg)
 	settingsAt(t, o, "theme")
 
-	names := theme.Names()
-	sort.Strings(names)
+	// SelectableNames, not Names: the picker offers the reserved `auto` value too,
+	// so a cycle of len(Names()) would no longer close.
+	names := theme.SelectableNames()
 	start := cfg.Theme
 
 	_, changed := o.HandleKeyPress(keyMsg("right"))

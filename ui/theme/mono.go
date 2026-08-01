@@ -49,6 +49,13 @@ import (
 // update thread. curName/curGlyphSet get to stay plain vars because nothing reads
 // them off the loop; mono does not qualify for that exemption.
 //
+// curScheme (current.go) is atomic without qualifying either. Nothing reaches it off
+// the loop, so the curName exemption was available and was declined: its getter
+// CurrentScheme() is exported directly beside Current(), and two neighbouring
+// getters with opposite concurrency contracts is a footgun. The rule this file
+// argues — that safety resting on an invariant of the CALL SITE is one feature away
+// from being false — is why it was declined rather than a reason it had to be.
+//
 // Today a race is unreachable anyway: SetMono is called once, from main, before any
 // goroutine that reads it exists, so the write happens-before every read. That is an
 // invariant of the CALL SITE, not of this type, and it is one live-toggling colour

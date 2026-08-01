@@ -1,6 +1,7 @@
 package theme
 
 import (
+	"sort"
 	"strings"
 	"time"
 
@@ -9,6 +10,12 @@ import (
 
 // DefaultThemeName is used when the configured theme is empty or unknown.
 const DefaultThemeName = "tokyo-night"
+
+// AutoThemeName is the reserved theme value that follows the terminal's detected
+// background polarity, selecting the default family's dark palette or its light
+// twin. It is deliberately NOT a registry entry: Get must return a concrete
+// palette, and `auto` has none. See compose() in current.go.
+const AutoThemeName = "auto"
 
 // Nerd-Font codepoints, expressed numerically so the source stays ASCII-clean.
 // All are private-use-area glyphs that render at width 1 in a Nerd-Font
@@ -263,4 +270,18 @@ func Names() []string {
 		names = append(names, n)
 	}
 	return names
+}
+
+// SelectableNames returns what a user may set `theme` to: AutoThemeName first (it
+// is the recommended value), then every registered theme, sorted.
+//
+// It lives here rather than in the settings overlay so theme vocabulary has one
+// home. Names() deliberately still returns only the registry, because every
+// existing caller that iterates it — the splash's canonical-hex check, the glyph
+// width sweep, the contrast oracle — wants real palettes, and would test `auto`
+// vacuously.
+func SelectableNames() []string {
+	names := Names()
+	sort.Strings(names)
+	return append([]string{AutoThemeName}, names...)
 }

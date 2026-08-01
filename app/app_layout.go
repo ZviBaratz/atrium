@@ -268,7 +268,7 @@ func (m *home) applySettingChange(key string) tea.Cmd {
 	case "theme", "glyph_set":
 		// Styles read theme.Current() lazily at render time, so swapping the
 		// palette / glyph set plus a forced repaint restyles the whole UI in place.
-		theme.Set(m.appConfig.Theme)
+		theme.Set(m.appConfig.GetTheme())
 		theme.SetGlyphSet(m.appConfig.GetGlyphSet())
 		// The spinner snapshots its frames at construction (assembleHome), so a
 		// rung change that alters them (ascii's |/-\ vs the Braille dots) would not
@@ -415,6 +415,12 @@ func (m *home) applySettingChange(key string) tea.Cmd {
 // loads). Adding a global to that resolution means adding it to this list. A
 // tea.Cmd is a goroutine: moving a startup-only call into one re-scopes everything
 // it touches, and the seam below is exactly what hides that from the race detector.
+//
+// #394 Stage E's theme.CurrentScheme() is deliberately NOT on that list: a detected
+// flip reaches the band through theme.Current(), which compose() has already folded
+// the scheme into on the update thread. Detection widened who calls this — the
+// scheme handler now does, alongside the settings panel — without widening what it
+// reads.
 var barStyleApplier = func(ctx context.Context, contextBar bool) {
 	if err := tmux.RewriteManagedConfig(contextBar); err != nil {
 		log.WarningLog.Printf("failed to rewrite managed tmux config after theme change: %v", err)

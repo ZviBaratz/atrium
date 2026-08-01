@@ -725,7 +725,7 @@ func newHome(ctx context.Context, program string, autoYes bool, version, binName
 	// theme.Current() is correct everywhere it's read (assembleHome's spinner
 	// included). The palette and the glyph set (plain vs Nerd-Font) are
 	// independent axes.
-	theme.Set(appConfig.Theme)
+	theme.Set(appConfig.GetTheme())
 	theme.SetGlyphSet(appConfig.GetGlyphSet())
 
 	// Load application state

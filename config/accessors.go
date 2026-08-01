@@ -4,7 +4,10 @@ package config
 // and a nil/absent field (an older config.json predating the key) and returns the
 // documented default, so callers never branch on config presence.
 
-import "slices"
+import (
+	"slices"
+	"strings"
+)
 
 // ModelIndicator modes (see Config.ModelIndicator).
 const (
@@ -215,6 +218,28 @@ func (c *Config) GetNerdFont() bool {
 		return false
 	}
 	return boolOr(c.NerdFont, false)
+}
+
+// DefaultTheme is the theme a config with no `theme` set resolves to.
+//
+// A constant rather than a read of DefaultConfig(), because the settings schema's
+// row builder reaches these getters and must stay pure — DefaultConfig resolves the
+// OS user to derive branch_prefix. Spelled out rather than imported from ui/theme
+// for the same reason GlyphSet* below are: config's vocabulary is the on-disk one,
+// and ui/theme is deliberately a leaf that no atrium package appears in.
+const DefaultTheme = "tokyo-night"
+
+// GetTheme returns the configured theme name, normalizing empty to DefaultTheme.
+//
+// Every consumer goes through this rather than reading c.Theme, so "unset" has one
+// meaning. It matters more than the usual accessor: the theme layer resolves the
+// reserved value `auto` specially, and an empty string reaching theme.Set would
+// miss that branch and render the dark default on a light terminal.
+func (c *Config) GetTheme() string {
+	if c == nil || strings.TrimSpace(c.Theme) == "" {
+		return DefaultTheme
+	}
+	return c.Theme
 }
 
 // GlyphSet fidelity rungs (see Config.GlyphSet). These mirror the theme package's
