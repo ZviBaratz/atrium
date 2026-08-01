@@ -405,7 +405,7 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// A window shrunk below the splash floor can't render the screensaver;
 		// wake up rather than draw a degenerate field.
 		if m.state == stateScreensaver && !ui.SplashFits(msg.Width, msg.Height) {
-			m.state = stateDefault
+			m.dismissScreensaver()
 		}
 		m.updateHandleWindowSizeEvent(msg)
 		// First launch ever: show the interactive welcome once the size is known
@@ -576,6 +576,14 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case instanceStartedMsg:
 		return m.handleInstanceStarted(msg)
 	case spinner.TickMsg:
+		// Let the loop die when no row is drawing a spinner frame; armSpinnerTick
+		// revives it within a tick of one starting. Dropping the re-arm Cmd is what
+		// stops the loop — the spinner model has no other off switch — so the flag
+		// must be cleared in the same breath or nothing will ever restart it.
+		if !m.spinnerAnimating() {
+			m.spinnerTicking = false
+			return m, nil
+		}
 		var cmd tea.Cmd
 		m.spinner, cmd = m.spinner.Update(msg)
 		return m, cmd
@@ -874,7 +882,7 @@ func (m *home) handleKeyPress(msg tea.KeyPressMsg) (mod tea.Model, cmd tea.Cmd) 
 	// Runs before every other state handler; only ctrl+l above bypasses it, so
 	// a repaint doesn't tear the screensaver down.
 	if m.state == stateScreensaver {
-		m.state = stateDefault
+		m.dismissScreensaver()
 		return m, nil
 	}
 

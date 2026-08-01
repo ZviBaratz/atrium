@@ -70,12 +70,23 @@ type paneFrameMsg struct {
 //
 // It returns the zero target — costing no subprocess at all — whenever a capture
 // would be pointless or actively unwanted: nothing selected, a paused session
-// (the pane renders its own fallback), or a tab that does not show pane content.
-// The attached case is skipped inside CapturePaneFrame rather than here, because
-// an attach can begin after the target is resolved.
+// (the pane renders its own fallback), the screensaver (which replaces the whole
+// frame, so every capture under it is discarded on arrival), or a tab that does
+// not show pane content. The attached case is skipped inside CapturePaneFrame
+// rather than here, because an attach can begin after the target is resolved.
 func (m *home) resolveFrameTarget() frameTarget {
 	selected := m.list.GetSelectedInstance()
 	if selected == nil || selected.Paused() || !selected.Started() {
+		return frameTarget{}
+	}
+	// The screensaver draws the full-window splash and returns from viewContent
+	// before the panes are reached, so every capture taken under it is discarded on
+	// arrival. It is also the one such state that lasts: hint and scroll mode
+	// discard the frame too, but both are transient and holding a capture back
+	// through them would freeze frameAt and flash a false staleness marker on exit
+	// for no idle saving at all. The chain keeps ticking here and re-arms with no
+	// delay on the frame after wake-up, because the target stops matching.
+	if m.state == stateScreensaver {
 		return frameTarget{}
 	}
 	switch {
@@ -244,4 +255,21 @@ func (m *home) tabChanged() tea.Cmd {
 	m.menu.SetActiveTab(m.tabbedWindow.GetActiveTab())
 	m.noteFrameTargetChange()
 	return m.instanceChanged()
+}
+
+// dismissScreensaver is the shared tail of every screensaver exit, for the same
+// reason tabChanged is one for tab switches: waking is arriving at a new frame
+// source. resolveFrameTarget zero-targets under the splash, so no capture ran
+// while it owned the window and the cached frame is as old as the screensaver
+// was; without the restamp the first frame back reports that age, which is a real
+// number about the wrong question.
+//
+// It is a helper rather than a line repeated at each exit because the exits live
+// in different files (a key and a resize in app_update.go, a click in
+// app_msgs.go) and a bare `m.state = stateDefault` reads as complete on its own —
+// so the restamp is the half that gets forgotten. Waking anywhere means going
+// through here; grep stateScreensaver before adding a fourth way out.
+func (m *home) dismissScreensaver() {
+	m.state = stateDefault
+	m.noteFrameTargetChange()
 }

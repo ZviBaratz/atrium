@@ -14,12 +14,18 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// The frame is rebuilt from scratch ~32 times a second at idle — three
-// independent 10Hz loops plus the 2Hz metadata tick — because Bubble Tea calls
-// View() after every message and offers no hook to skip it (#546). Nothing in
-// app/ or ui/ memoizes any part of that. These benchmarks exist to put a number
-// on what one rebuild costs and how it scales with the fleet, so a later change
-// that claims to make idle cheaper has something to be measured against.
+// The frame is rebuilt from scratch after every message, because Bubble Tea calls
+// View() and offers no hook to skip it (#546). That was ~32 times a second at idle
+// — three independent 10Hz loops plus the 2Hz metadata tick — until the spinner
+// loop learned to stop when no row is spinning (armSpinnerTick), which leaves the
+// preview tick, the pane-capture chain and the metadata tick: ~22/s idle, ~32/s
+// once something is Running or Loading.
+//
+// One part of the rebuild is now memoized: scanCached skips zone.Scan for a frame
+// byte-identical to the last. That is why the benchmarks below come in cold and
+// warm pairs — see BenchmarkViewContentRepeat. These exist to put a number on what
+// one rebuild costs and how it scales with the fleet, so a later change that claims
+// to make idle cheaper has something to be measured against.
 //
 // Run with `just bench`. They are not part of `just ci`: `go test` ignores
 // benchmarks unless -bench is passed, so they add no gate time and cannot flake.
@@ -70,6 +76,31 @@ func BenchmarkViewContent(b *testing.B) {
 			b.ReportAllocs()
 			b.ResetTimer()
 			for b.Loop() {
+				// Drop the zone-scan memo so this stays a COLD build, comparable with
+				// the numbers taken before the memo existed. Without this the loop
+				// renders an unchanging model and every iteration after the first is a
+				// memo hit — the benchmark would report the cache, not the frame.
+				h.lastScanIn = ""
+				sink = h.viewContent()
+			}
+		})
+	}
+}
+
+// BenchmarkViewContentRepeat measures the frame an IDLE Atrium actually builds:
+// the same model rendered again, memo warm. That is the steady state — Bubble Tea
+// calls View() after every message, and the preview tick, the pane-capture chain
+// and the metadata tick produce ~22 of them a second with nothing spinning, almost
+// all identical — so the gap against BenchmarkViewContent is what the memo is worth
+// in practice.
+func BenchmarkViewContentRepeat(b *testing.B) {
+	for _, n := range benchFleetSizes {
+		b.Run(fmt.Sprintf("sessions=%d", n), func(b *testing.B) {
+			h := newBenchHome(b, n)
+			sink = h.viewContent() // warm the memo
+			b.ReportAllocs()
+			b.ResetTimer()
+			for b.Loop() {
 				sink = h.viewContent()
 			}
 		})
@@ -106,6 +137,7 @@ func BenchmarkViewContentNoZoneScan(b *testing.B) {
 			b.ReportAllocs()
 			b.ResetTimer()
 			for b.Loop() {
+				h.lastScanIn = "" // cold, like BenchmarkViewContent
 				sink = h.viewContent()
 			}
 		})
