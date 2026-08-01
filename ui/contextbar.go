@@ -24,6 +24,21 @@ func RepoKey(i *session.Instance) string { return repoKey(i) }
 // format directive (#[...] / #{...}).
 func tmuxEsc(s string) string { return strings.ReplaceAll(s, "#", "##") }
 
+// tmuxFg wraps s in tmux foreground markup, or returns it uncoloured under
+// NO_COLOR. tmux renders the status line itself, so Bubble Tea's colour profile
+// never sees this string — this is one of the surfaces that has to opt out by hand
+// (see ui/theme/mono.go for the rest).
+//
+// #[default] is emitted either way, and that is not an oversight: it resets
+// attributes as well as colour, and the format below relies on it to close each
+// field back to the bar's own status-style.
+func tmuxFg(colour, s string) string {
+	if theme.Mono() {
+		return s + "#[default]"
+	}
+	return "#[fg=" + colour + "]" + s + "#[default]"
+}
+
 // barState returns a session's status glyph and tmux color. Unlike the list — which
 // animates a spinner for Running/Loading — the pushed header is static, so working
 // states get a steady filled marker. The glyph's color is the only state signal in
@@ -73,8 +88,8 @@ func ComposeSessionContext(current *session.Instance, repo string) (name, left s
 	// #[default] after each glyph resets fg AND attributes back to the bar's
 	// status-style, so repo/separator render in the bar's bright default foreground.
 	var b strings.Builder
-	fmt.Fprintf(&b, "#[fg=%s]%s#[default] ", theme.Hex(agentColor), agentIcon)
-	fmt.Fprintf(&b, "#[fg=%s]%s#[default]", color, glyph)
+	fmt.Fprintf(&b, "%s ", tmuxFg(theme.Hex(agentColor), agentIcon))
+	b.WriteString(tmuxFg(color, glyph))
 	if repo != "" {
 		fmt.Fprintf(&b, " %s ·", tmuxEsc(repo))
 	}

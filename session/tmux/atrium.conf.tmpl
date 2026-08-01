@@ -112,6 +112,10 @@ set-option -ga terminal-overrides ",*:Ms=\033]52;%p1%s;%p2%s\007"
 # header reads as a distinct band, not text floating over the agent's pane. The
 # @atrium_left markup only sets foregrounds, so #[default] resets back to this band
 # background, keeping the fill unbroken across every field.
+#
+# Under NO_COLOR both values are "default" instead — the terminal's own colours, so
+# there is no band, just the header text. tmux draws this line itself, so Atrium's
+# renderer cannot strip the colour on its way out; it has to be absent from here.
 set-option -g  status              on
 set-option -g  status-position     top
 set-option -g  status-interval     0

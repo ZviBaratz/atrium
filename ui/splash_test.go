@@ -96,6 +96,60 @@ func TestSplashLumRangeExemptsRainOnALightPalette(t *testing.T) {
 	}
 }
 
+// Under NO_COLOR the splash takes the same rung a light palette does, for the
+// mirror-image reason: with colour stripped, a brightness channel that spends
+// itself on colour spends it on nothing, and the field flattens to a uniform wash.
+// lumRange 0 puts brightness back on glyph density, which survives monochrome.
+//
+// The palette is pinned DARK so that only Mono can be the cause — on a light one
+// the rung would fire anyway and the assertion would prove nothing.
+func TestSplashLumRangeIsZeroUnderMono(t *testing.T) {
+	pinSplashLumRange(t, 0, false) // no dev override: this is the shipped path
+	t.Cleanup(theme.Set("tokyo-night"))
+
+	require.Nil(t, splashLumRange(fresco.Tunnel),
+		"with colour on, a dark palette must not override the variant's shipped lumRange")
+
+	t.Cleanup(theme.SetMono(true))
+	got := splashLumRange(fresco.Tunnel)
+	require.NotNil(t, got, "NO_COLOR must pin lumRange even on a dark palette")
+	require.Equal(t, 0.0, *got)
+}
+
+// Rain keeps its exemption under Mono, for the reason Stage C measured on light:
+// its brightness is entirely luminance, so lumRange 0 leaves it nowhere to go and
+// the pane fills solid (95% of cells inked, edge:core 83:100 — no vignette). That
+// is true of rain whatever stripped the colour. A flat field is the lesser harm
+// against a solid one, and fresco#82 is where it gets fixed properly.
+//
+// This is a NEGATIVE CONTROL, not a failing-first test: rain returns nil on a dark
+// palette whether or not the Mono rung exists, so it is green before the change and
+// green after the correct one. It goes red for exactly one edit — writing the rung
+// as `Mono() || IsLight(…) && variant != Rain`, which Go parses as
+// `Mono || (IsLight && …)` and puts rain back on lumRange 0 whenever NO_COLOR is
+// set. The goldens cannot see that either: with Mono false both forms are
+// identical. It was written wrong first and watched go red.
+//
+// Every OTHER variant must still take the rung, or an over-broad exemption would
+// pass a test that only checked rain.
+func TestSplashLumRangeExemptsRainUnderMono(t *testing.T) {
+	pinSplashLumRange(t, 0, false)
+	t.Cleanup(theme.Set("tokyo-night"))
+	t.Cleanup(theme.SetMono(true))
+
+	require.Nil(t, splashLumRange(fresco.Rain),
+		"rain must keep its shipped lumRange under NO_COLOR: at 0 the pane fills solid")
+
+	for _, v := range fresco.Variants() {
+		if v == fresco.Rain {
+			continue
+		}
+		got := splashLumRange(v)
+		require.NotNilf(t, got, "%v must still take the mono rung", v)
+		require.Equalf(t, 0.0, *got, "%v must still take the mono rung", v)
+	}
+}
+
 // The dev override still wins, rain included. It is the knob used to tune a variant
 // by eye, so a palette-derived default that silently ignored it would make the
 // tuning loop lie — and rain is precisely the variant whose exemption someone would

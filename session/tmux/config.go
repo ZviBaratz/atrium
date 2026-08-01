@@ -14,7 +14,6 @@ import (
 
 	"github.com/ZviBaratz/atrium/config"
 	"github.com/ZviBaratz/atrium/log"
-	"github.com/ZviBaratz/atrium/ui/theme"
 )
 
 // socketName is the dedicated tmux socket Atrium runs all of its sessions on.
@@ -75,25 +74,27 @@ func overrideConfigPath() string {
 const WheelScrollLines = 3
 
 // renderManagedConfig renders the embedded template. ContextBar toggles the header
-// strip; BarBg/BarFg fill that strip's full-width background from the active theme's
-// dedicated header-bar token (a slate a clear step above BgElevated) so the header
-// reads as a distinct band over the agent's near-black pane. WheelScrollLines is
-// interpolated rather than written into the template so it cannot drift from the
-// preview pane's notch distance.
+// strip; BarBg/BarFg fill that strip's full-width background so the header reads as
+// a distinct band over the agent's near-black pane. Those two come from
+// barStyleColours rather than being read here, because the live push in barstyle.go
+// sets the same tmux option and the two must not drift — normally the theme's
+// dedicated header-bar token (a slate a clear step above BgElevated), and "default"
+// under NO_COLOR. WheelScrollLines is interpolated rather than written into the
+// template so it cannot drift from the preview pane's notch distance.
 func renderManagedConfig(contextBar bool) ([]byte, error) {
 	tmpl, err := template.New("atrium.conf").Parse(embeddedTmuxConfigTemplate)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse managed tmux config template: %w", err)
 	}
-	th := theme.Current()
+	barBg, barFg := barStyleColours()
 	data := struct {
 		ContextBar       bool
 		BarBg, BarFg     string
 		WheelScrollLines int
 	}{
 		ContextBar:       contextBar,
-		BarBg:            theme.Hex(th.Palette.BarBg),
-		BarFg:            theme.Hex(th.Palette.Fg),
+		BarBg:            barBg,
+		BarFg:            barFg,
 		WheelScrollLines: WheelScrollLines,
 	}
 	var buf bytes.Buffer

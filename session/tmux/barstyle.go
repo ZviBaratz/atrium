@@ -23,6 +23,27 @@ import (
 // Executor rather than a Session method: there is nothing per-session about it,
 // and a per-session push would be N subprocesses on the update thread (#380).
 
+// barStyleColours resolves the band's bg and fg for the theme active right now,
+// as tmux style values. It lives here because the two routes that set
+// status-style — this file's live push and renderManagedConfig's file — must
+// resolve it identically or the fleet's bars disagree, which is the whole subject
+// of this file.
+//
+// Under NO_COLOR both become "default", the terminal's own colours. Not the empty
+// string: `status-style "bg=,fg="` is rejected by tmux 3.6 as `invalid style`, and
+// it fails through source-file too — which is how validateConfig sees it, and a
+// parse error there disables the ENTIRE managed config. Trading a coloured bar for
+// no scrollback bindings, no clipboard fix and no terminal title is not a trade
+// anyone asked for. Omitting the option instead is no better: the fallback is
+// tmux's built-in default, which is a real colour on tmux 3.3 and earlier.
+func barStyleColours() (bg, fg string) {
+	if theme.Mono() {
+		return "default", "default"
+	}
+	th := theme.Current()
+	return theme.Hex(th.Palette.BarBg), theme.Hex(th.Palette.Fg)
+}
+
 // ApplyBarStyle pushes the active theme's status-bar band colours to the live
 // tmux server. One set-option for the whole fleet, then a best-effort repaint.
 //
@@ -52,8 +73,8 @@ func ApplyBarStyle(ctx context.Context, cmdExec cmd.Executor) error {
 	if overrideConfigPath() != "" {
 		return nil
 	}
-	th := theme.Current()
-	style := fmt.Sprintf("bg=%s,fg=%s", theme.Hex(th.Palette.BarBg), theme.Hex(th.Palette.Fg))
+	bg, fg := barStyleColours()
+	style := fmt.Sprintf("bg=%s,fg=%s", bg, fg)
 
 	opCtx, cancel := context.WithTimeout(ctx, tmuxOpTimeout)
 	defer cancel()
