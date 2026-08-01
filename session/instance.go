@@ -407,11 +407,14 @@ func (i *Instance) ToInstanceData() InstanceData {
 		Width:       i.Width,
 		CreatedAt:   i.CreatedAt,
 		UpdatedAt:   time.Now(),
-		Program:     i.Program,
-		AutoYes:     i.AutoYes,
-		Unread:      i.Unread(),
-		Muted:       i.Muted(),
-		Direct:      i.direct,
+		// Takes i.mu, like the GetStatus above it — safe here because
+		// ToInstanceData is never called with the instance lock held.
+		StatusChangedAt: i.StatusChangedAt(),
+		Program:         i.Program,
+		AutoYes:         i.AutoYes,
+		Unread:          i.Unread(),
+		Muted:           i.Muted(),
+		Direct:          i.direct,
 
 		ClaudeAccount:        i.claudeAccount,
 		ClaudeConfigDir:      i.claudeConfigDir,
@@ -484,14 +487,19 @@ func FromInstanceData(ctx context.Context, data InstanceData, branchPrefix strin
 		Path:        data.Path,
 		Branch:      data.Branch,
 		status:      data.Status,
-		unread:      data.Unread,
-		muted:       data.Muted,
-		Height:      data.Height,
-		Width:       data.Width,
-		CreatedAt:   data.CreatedAt,
-		UpdatedAt:   data.UpdatedAt,
-		Program:     data.Program,
-		direct:      data.Direct,
+		// Restored, not re-derived: a session that has been waiting on the user
+		// for six hours must still say so after a restart. A zero value (a state
+		// file predating the field) is exactly the case recordStatusChange
+		// already covers, by stamping on first observation.
+		statusChangedAt: data.StatusChangedAt,
+		unread:          data.Unread,
+		muted:           data.Muted,
+		Height:          data.Height,
+		Width:           data.Width,
+		CreatedAt:       data.CreatedAt,
+		UpdatedAt:       data.UpdatedAt,
+		Program:         data.Program,
+		direct:          data.Direct,
 
 		claudeAccount:        data.ClaudeAccount,
 		claudeConfigDir:      data.ClaudeConfigDir,

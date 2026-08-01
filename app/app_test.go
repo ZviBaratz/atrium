@@ -1408,12 +1408,15 @@ func TestApplyMetadataResults(t *testing.T) {
 	newHome := func() (*home, *ui.List) {
 		spin := spinner.New(spinner.WithSpinner(spinner.MiniDot))
 		list := ui.NewList(&spin)
-		return &home{
+		h := &home{
 			ctx:       context.Background(),
 			state:     stateDefault,
 			appConfig: config.DefaultConfig(),
 			list:      list,
-		}, list
+		}
+		// A status edge in this sweep persists, so this home needs storage.
+		withCapturingStore(t, h)
+		return h, list
 	}
 	newInst := func() *session.Instance {
 		inst, err := session.NewInstance(session.InstanceOptions{
@@ -1536,14 +1539,17 @@ func TestMetadataUpdateDoneMsg(t *testing.T) {
 		require.NoError(t, err)
 		inst.SetStatus(session.Running)
 		_ = list.AddInstance(inst)
-		return &home{
+		h := &home{
 			ctx:          ctx,
 			state:        stateDefault,
 			appConfig:    config.DefaultConfig(),
 			list:         list,
 			metadataTick: 7,
 			lostStrikes:  map[*session.Instance]int{},
-		}, inst
+		}
+		// The sweep this drives flips a status, which persists.
+		withCapturingStore(t, h)
+		return h, inst
 	}
 
 	t.Run("a live context advances the phase counter and re-arms the tick", func(t *testing.T) {
@@ -1587,6 +1593,8 @@ func TestMetadataSweepDoneMsgDoesNotRescheduleTick(t *testing.T) {
 		list:         list,
 		metadataTick: 7,
 	}
+	// The sweep this drives flips a status, which persists.
+	withCapturingStore(t, h)
 
 	_, cmd := h.Update(metadataSweepDoneMsg{results: []instanceMetaResult{
 		{instance: inst, state: tmux.PaneIdle},
@@ -1612,14 +1620,17 @@ func TestStalePaneCapturesDroppedAfterAttach(t *testing.T) {
 		require.NoError(t, err)
 		inst.SetStatus(session.Running)
 		_ = list.AddInstance(inst)
-		return &home{
+		h := &home{
 			ctx:         context.Background(),
 			state:       stateDefault,
 			appConfig:   config.DefaultConfig(),
 			list:        list,
 			lostStrikes: map[*session.Instance]int{},
 			attachGen:   1, // an attach ran since the captures below were created (gen 0)
-		}, inst
+		}
+		// The current-generation case below flips a status, which persists.
+		withCapturingStore(t, h)
+		return h, inst
 	}
 
 	t.Run("periodic tick: results dropped, tick still re-arms", func(t *testing.T) {
