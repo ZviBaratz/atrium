@@ -126,6 +126,50 @@ var splashTickAdvance = sync.OnceValue(func() float64 {
 	return float64(splashTickInterval()) / float64(time.Second/splashDefaultFPS)
 })
 
+// spinnerAnimating reports whether any row is currently drawing a spinner frame.
+//
+// Running and Loading are the only two statuses whose glyph is the animated
+// spinner (ui.stateGlyph); every other status draws a still theme glyph, and the
+// menu's busy row is plain text. So when no session holds either, the 10Hz tick is
+// advancing a frame counter nothing reads.
+func (m *home) spinnerAnimating() bool {
+	if m.list == nil {
+		return false
+	}
+	for _, inst := range m.list.GetInstances() {
+		switch inst.GetStatus() {
+		case session.Running, session.Loading:
+			return true
+		}
+	}
+	return false
+}
+
+// armSpinnerTick starts the spinner loop when a row needs it, and is a no-op while
+// one is already running or nothing is spinning.
+//
+// Same shape as armSplashTick, for the same reason: with nothing to animate, the
+// loop was still delivering 10 messages a second, and Bubble Tea rebuilds the
+// entire frame after every message (tea.go:880) — measured at 6-9ms and 1.2-2.3MB
+// per rebuild, so this was ~31% of an idle Atrium's render cost animating nothing
+// (#546).
+//
+// Called from the 100ms preview tick and from the tail of applyMetadataResults.
+// The tick is the one that makes this correct: it fires unconditionally, so it
+// re-arms for *any* path that sets Running or Loading — and there are more than
+// the poll (app_session.go's new session, app_update.go's Loading→Running, the
+// optimistic flips in approveSelected and the suggestion handler), which is why
+// the general self-heal is the guarantee rather than an enumeration of writers.
+// applyMetadataResults is the fast path only: the poll is where a status flips
+// most often, and arming there makes it immediate instead of up to 100ms late.
+func (m *home) armSpinnerTick() tea.Cmd {
+	if m.spinnerTicking || !m.spinnerAnimating() {
+		return nil
+	}
+	m.spinnerTicking = true
+	return m.spinner.Tick
+}
+
 // handleSplashTick advances the splash clock one tick's worth of nominal
 // frames and re-arms itself — or dies (clearing splashTicking) as soon as
 // the splash leaves the screen, so a parked session view or a modal never
@@ -155,6 +199,10 @@ func (m *home) handlePreviewTick(msg previewTickMsg) (tea.Model, tea.Cmd) {
 		// Revive the splash animation loop when the idle splash is (back) on
 		// screen; no-op while one is already running.
 		m.armSplashTick(),
+		// Likewise for the row spinner, which dies whenever nothing is Running or
+		// Loading. This is the self-heal: a status that starts spinning between
+		// metadata sweeps lights up within one tick.
+		m.armSpinnerTick(),
 		// An update notice that arrived while an overlay owned the screen
 		// is buffered; deliver it as soon as the hint bar is back.
 		m.flushPendingUpdateNotice(),
@@ -265,7 +313,7 @@ func (m *home) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 				tea.MouseWheelLeft, tea.MouseWheelRight:
 				// Wheel deltas arrive as presses; not a deliberate wake.
 			default:
-				m.state = stateDefault
+				m.dismissScreensaver()
 			}
 		}
 		return m, nil
