@@ -1017,6 +1017,20 @@ Advanced — shown in the Category column below. The four keys with no panel row
 | `notify_command` | Notifications | string | built-in | shell command for `desktop` notifications ([Notifications](#notifications)) |
 | `notify_when_focused` | Notifications | bool | `false` | keep notifying while Atrium's terminal is focused; `false` stays silent while you're watching ([Notifications](#notifications)) |
 
+##### `NO_COLOR`
+
+Atrium follows [no-color.org](https://no-color.org): setting `NO_COLOR` to **any
+non-empty value** — `1`, `true`, `yes`, even `0` — renders the whole UI without
+colour, `theme` notwithstanding. Setting it to nothing (`NO_COLOR=`) is not a
+request and leaves colour on.
+
+Bold, italic and underline are kept, so the hierarchy that colour was carrying
+survives. The thin tmux status band inside attached sessions goes monochrome too;
+tmux draws that itself, so it is handled separately rather than by the renderer.
+
+Note that many tools read `NO_COLOR` as a boolean and so ignore `NO_COLOR=yes`.
+Atrium does not.
+
 ### FAQs
 
 #### Failed to start new session
