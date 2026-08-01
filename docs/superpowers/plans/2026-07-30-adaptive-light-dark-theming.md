@@ -33,8 +33,8 @@ Design doc: `docs/superpowers/specs/2026-07-30-adaptive-light-dark-theming-desig
 | Path | Responsibility |
 |---|---|
 | `ui/theme/contrast_test.go` | WCAG contrast oracle over every registered palette + the two brand colours. Test-only; no production symbol. |
-| `ui/theme/light.go` | The light palettes (`tokyoNightDay`, `catppuccinLatte`) and the dark→light twin table. Data only. |
-| `ui/theme/scheme.go` | The scheme axis: `Scheme` enum, the pure `ResolveScheme` ladder, `SetScheme`. No bubbletea import — `theme` stays a leaf. |
+| `ui/theme/light.go` | The light palettes (`tokyoNightDay`, `catppuccinLatte`) and the dark→light twin table. Data only — but derived from upstream, not copied; see Task 3 Step 1. |
+| `ui/theme/scheme.go` | The dark/light axis. **Created in Stage C** (`IsLight` + `relLuminanceOf`, moved out of the test file), extended in Stage E with the `Scheme` enum, the pure `ResolveScheme` ladder and `SetScheme`. No bubbletea import — `theme` stays a leaf. |
 | `ui/theme/scheme_test.go` | Table tests for `ResolveScheme` and the twin/`auto` composition. |
 | `ui/theme/mono.go` | `Mono()`/`SetMono()` — the one predicate the *non-lipgloss* emitters consult under `NO_COLOR`. |
 | `session/tmux/barstyle.go` | `ApplyBarStyle` — pushes `status-style` to the live server, fleet-wide, in one batched subprocess. |
@@ -49,10 +49,11 @@ Design doc: `docs/superpowers/specs/2026-07-30-adaptive-light-dark-theming-desig
 | Path | Change |
 |---|---|
 | `ui/theme/registry.go` | Register the two light themes; `SelectableNames()`; `AutoThemeName`. |
+| `ui/theme/agent.go` | `agentColorsLight` — the two brand accents darkened to clear the 3.0 floor — and `AgentGlyph` selecting between the tables on `IsLight`. Added in Stage C, Task 3 Step 2b; the plan had no such step. |
 | `ui/theme/current.go` | Third axis (`curScheme`) and `auto` resolution in `compose()`. |
 | `session/tmux/config.go` | `renderManagedConfig` honours `theme.Mono()`. |
 | `ui/contextbar.go` | Omit `#[fg=…]` under `theme.Mono()`, keep `#[bold]`. |
-| `ui/splash.go` | `LumRange: 0` on a light palette and under `theme.Mono()`. |
+| `ui/splash.go` | `LumRange: 0` on a light palette and under `theme.Mono()` — **rain exempt from both** (see Task 4 Step 9 for the measurement, Task 6 Step 5 for the Mono half). `splashLumRange` takes the variant so it can say so. |
 | `app/app.go` | `tea.WithColorProfile(colorprofile.Ascii)` under `NO_COLOR`; `RequestBackgroundColor` in `Init`. |
 | `app/app_update.go` | `tea.BackgroundColorMsg` case; focus re-query on `tea.FocusMsg`. |
 | `app/app_layout.go` | `applySettingChange("theme")` pushes the bar style; `repaintAfterAttach` re-queries. |
@@ -67,7 +68,7 @@ Design doc: `docs/superpowers/specs/2026-07-30-adaptive-light-dark-theming-desig
 
 ---
 
-## Stage A — the tmux bar follows a live theme change
+## Stage A — the tmux bar follows a live theme change ✅ SHIPPED (`161fe81`)
 
 A pre-existing bug, fixed ahead of any light-mode work. `session/tmux/config.go:79-80` bakes `status-style` into the managed conf, which tmux reads **only when the server starts**, while `ComposeSessionContext` pushes `#[fg=…]` markup every metadata tick. So a live theme change already leaves every session's bar half-diverged: new text colours on the launch-time band. An automatic dark→light flip would make that visible across the whole fleet at once.
 
@@ -88,7 +89,7 @@ A pre-existing bug, fixed ahead of any light-mode work. `session/tmux/config.go:
   - `func tmux.RewriteManagedConfig(contextBar bool) error` — re-materializes the managed conf from the *current* theme, for a server that starts later.
   - `func (m *home) applyBarStyleCmd() tea.Cmd` — the `tea.Cmd` wrapper; nil when the context bar is off.
 
-- [ ] **Step 1: Write the failing test for the batched argv**
+- [x] **Step 1: Write the failing test for the batched argv**
 
 Create `session/tmux/barstyle_test.go`. Modelled on `session/tmux/context_test.go`, which is the precedent for a fake-executor argv assertion in this package.
 
@@ -168,12 +169,12 @@ func TestApplyBarStyle_ReadsTheThemeAtCallTime(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run the test to verify it fails**
+- [x] **Step 2: Run the test to verify it fails**
 
 Run: `go test ./session/tmux/ -run TestApplyBarStyle -v`
 Expected: FAIL to compile — `undefined: ApplyBarStyle`.
 
-- [ ] **Step 3: Write `session/tmux/barstyle.go`**
+- [x] **Step 3: Write `session/tmux/barstyle.go`**
 
 ```go
 package tmux
@@ -243,12 +244,12 @@ func RewriteManagedConfig(contextBar bool) error {
 
 **Note on `RewriteManagedConfig`:** it delegates to `Init` deliberately, passing the *stored* `configOverridePath` back in so an override the user set at launch is preserved. `Init` already returns early for an override, writes atomically enough for this purpose (a full `os.WriteFile`), and re-runs `validateConfig` — which is what we want, since a theme whose hex somehow broke the file should fall back rather than lock the user out of the pane.
 
-- [ ] **Step 4: Run the test to verify it passes**
+- [x] **Step 4: Run the test to verify it passes**
 
 Run: `go test ./session/tmux/ -run 'TestApplyBarStyle' -v`
 Expected: PASS, both tests.
 
-- [ ] **Step 5: Wire it into the live theme change**
+- [x] **Step 5: Wire it into the live theme change**
 
 Modify `app/app_layout.go`. The existing arm is at `app/app_layout.go:266`; add the bar push to what it returns.
 
@@ -308,7 +309,7 @@ func (m *home) applyBarStyleCmd() tea.Cmd {
 
 Add `"github.com/ZviBaratz/atrium/cmd"` to `app/app_layout.go`'s imports. `log`, `tmux` and `tea` are already imported by the package; check `app/app_layout.go`'s own import block and add what is missing there specifically.
 
-- [ ] **Step 6: Write the failing test that the theme arm returns the push**
+- [x] **Step 6: Write the failing test that the theme arm returns the push**
 
 Add to `app/app_layout_test.go` (or the file where `applySettingChange` is already tested — `grep -rn "applySettingChange" app/*_test.go` first and put it beside its siblings).
 
@@ -333,17 +334,17 @@ func TestApplySettingChange_ThemePushesTmuxBarStyle(t *testing.T) {
 
 Both helpers already exist and are verified: `newCreateFormHome` at `app/newsession_test.go:37` (there is no `newTestHome`), `boolPtr` at `app/frames_test.go:552`, and `Config.SessionContextBar` is a `*bool` (`config/types.go:279`). Use them; do not add duplicates.
 
-- [ ] **Step 7: Run the app tests**
+- [x] **Step 7: Run the app tests**
 
 Run: `go test ./app/ -run 'TestApplySettingChange_ThemePushesTmuxBarStyle' -v`
 Expected: PASS.
 
-- [ ] **Step 8: Verify no golden moved**
+- [x] **Step 8: Verify no golden moved**
 
 Run: `go test ./app/ -run 'TestFrameParity|TestFrameColourFingerprint' -count=1`
 Expected: PASS with no golden regenerated. This task changes no rendering.
 
-- [ ] **Step 9: Mutation-verify the guard**
+- [x] **Step 9: Mutation-verify the guard**
 
 Temporarily delete `m.applyBarStyleCmd()` from the `tea.Batch` in the theme arm and confirm `TestApplySettingChange_ThemePushesTmuxBarStyle` still passes (it tests the helper, not the wiring) — then **strengthen it** so it does not. Assert on the Cmd the arm returns, not just on the helper:
 
@@ -387,12 +388,12 @@ and have `applyBarStyleCmd` call `barStyleApplier(ctx, contextBar)` inside its c
 
 Re-run: `go test ./app/ -run 'TestApplySettingChange_Theme' -v` — expected PASS. Then delete `m.applyBarStyleCmd()` from the `tea.Batch` again and confirm the *new* test **fails**. Restore.
 
-- [ ] **Step 10: Run the full gate**
+- [x] **Step 10: Run the full gate**
 
 Run: `PATH=$PATH:$HOME/go/bin just ci && go test -race -shuffle=on ./...`
 Expected: all green.
 
-- [ ] **Step 11: Commit**
+- [x] **Step 11: Commit**
 
 ```bash
 git add session/tmux/barstyle.go session/tmux/barstyle_test.go app/app_layout.go app/app_layout_test.go
@@ -410,7 +411,7 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 
 ---
 
-## Stage B — the contrast oracle
+## Stage B — the contrast oracle ✅ SHIPPED (`8ce6d85`)
 
 Nothing in the suite today can see "unreadable". This is the gate the light palette must pass, so it exists before the palette. Test-only, zero behaviour change.
 
@@ -423,7 +424,7 @@ Nothing in the suite today can see "unreadable". This is the gate the light pale
 - Consumes: `theme.Palette` fields, `theme.Names()`, `theme.Get()`, `theme.Color` (= `image/color.Color`), `agentColors` (package-private, `ui/theme/agent.go:24`).
 - Produces: nothing exported. Later tasks rely on the *test names* `TestPaletteContrastFloors` and `TestLightPaletteMatchesItsDarkTwin`, and on the fact that a new registered theme is picked up automatically by iterating `Names()`.
 
-- [ ] **Step 1: Write the test**
+- [x] **Step 1: Write the test**
 
 Create `ui/theme/contrast_test.go`. Note it is in package `theme` (not `theme_test`) so it can read `agentColors`.
 
@@ -579,14 +580,14 @@ func TestAgentBrandColoursStayLegible(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run it**
+- [x] **Step 2: Run it**
 
 Run: `go test ./ui/theme/ -run 'TestPaletteContrastFloors|TestAgentBrandColoursStayLegible' -v`
 Expected: **PASS** on all three registered themes. The floors were computed from the shipped values with margin.
 
 If anything fails, do **not** loosen the floor and do not change a shipped colour — report the number and stop. The measured baselines are in the design doc's reference table; a mismatch means either the arithmetic or the table is wrong, and both are worth knowing before a palette is built on top.
 
-- [ ] **Step 3: Mutation-verify the oracle**
+- [x] **Step 3: Mutation-verify the oracle**
 
 Three mutations, each must turn the test red:
 
@@ -596,12 +597,12 @@ Three mutations, each must turn the test red:
 
 If a mutation passes, the oracle is not reading what it claims — suspect the mutation first (`grep` that the value you edited is the one the test reads), then the test.
 
-- [ ] **Step 4: Run the gate**
+- [x] **Step 4: Run the gate**
 
 Run: `PATH=$PATH:$HOME/go/bin just lint ./ui/... && go test ./ui/... -count=1`
 Expected: green. `just lint` matters here specifically because `tokenFloors`/`pairFloors` are the kind of table `unused` complains about if a field is declared and never read.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add ui/theme/contrast_test.go
@@ -620,7 +621,7 @@ contextbar.go's own comment predicts. Deliberately not asserted.
 Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 ```
 
-- [ ] **Step 6: File the barState follow-up**
+- [x] **Step 6: File the barState follow-up**
 
 ```bash
 gh issue create --title "barState renders Paused in FgDim on the bar band at 1.44:1" \
@@ -646,9 +647,30 @@ EOF
 
 ---
 
-## Stage C — the light palettes
+## Stage C — the light palettes ✅ SHIPPED (#560, `1e3d268`)
 
 Data only. No `auto`, no detection, no change at the 152 `theme.Current()` call sites. Immediately usable via `theme: tokyo-night-day`, which is what makes a real light-terminal eyeball round possible this early.
+
+> **Corrected after the fact.** Three things below were written before the work and
+> falsified by it. They are rewritten in place rather than annotated, because Stage D
+> is executed from this file and a struck-through step is still a step someone types.
+> What changed, and why it matters beyond Stage C:
+>
+> 1. **The palette hex was recalled, not sourced, and did not survive the oracle.**
+>    Task 3 Step 1's original table missed eight token floors and all five pair floors
+>    on `day`, six and three on `latte`. Replaced with what shipped. The general lesson
+>    for any later palette: upstream light themes are tuned for editor prose and do not
+>    clear floors derived from dark palettes.
+> 2. **Task 3 needed a step nobody planned: the agent brand accents.** Claude's
+>    `#d97757` peaks at 3.12:1 against *pure white*, so it cannot clear the 3.0 brand
+>    floor on any real light background. No palette tuning reaches it. Added as Step 2b,
+>    numbered to leave the existing Step 3 onwards where other prose already cites them.
+> 3. **Task 4 Step 5's `t.Setenv` test could not work**, and Task 4 Step 9's
+>    "if confetti → splash-off" fork was resolved differently. Both rewritten.
+>
+> **Stage D inherits (2) and (3)'s shape.** `theme.SetMono` is another package global
+> with a restore, and `NoColorRequested` takes `environ` as a parameter precisely
+> because env reads resist testing — see the warning on Task 5 Step 1.
 
 ### Task 3: Register `tokyo-night-day` and `catppuccin-latte`
 
@@ -661,12 +683,18 @@ Data only. No `auto`, no detection, no change at the 152 `theme.Current()` call 
 **Interfaces:**
 - Consumes: `theme.Palette`, `theme.Borders`, `plainGlyphs()`, `lipgloss.RoundedBorder()`.
 - Produces:
-  - `theme.lightTwin` — `map[string]string`, dark theme name → light theme name. Package-private; Stage E's `compose()` is its only consumer.
+  - `theme.lightTwin` — `map[string]string`, dark theme name → light theme name. Package-private. Read by `TestLightPaletteMatchesItsDarkTwin` from Step 4 onwards, which is what makes the pairing an assertion rather than a comment, and by Stage E's `compose()` once `auto` exists. (An earlier draft called Stage E its *only* consumer, which was wrong by one before Stage C had even finished — the same under-counting this branch is correcting elsewhere. State what reads it, not how many things do.)
   - Registry names `"tokyo-night-day"` and `"catppuccin-latte"`.
 
-- [ ] **Step 1: Write `ui/theme/light.go`**
+- [x] **Step 1: Write `ui/theme/light.go`**
 
-Values are the canonical upstream light palettes: folke/tokyonight.nvim's `day` and catppuccin's `latte`. **Verify each hex against upstream before committing** — do not trust the values below, trust the contrast oracle and the upstream source. If a token has no obvious upstream counterpart (Atrium's `BarBg`, `SuccessDim`, `Working`, `Pending`, `BadgeBg`/`BadgeFg` are Atrium's own semantics, not upstream tokens), derive it to hold the same *role* and let `TestLightPaletteMatchesItsDarkTwin` (Step 4) judge it.
+These are the values that shipped. They are **derived from** the canonical upstream light palettes, not copied from them.
+
+Upstream is the source of *hue identity* only. Neither `day` nor `latte` clears the contrast oracle as published — both are tuned for editor prose, not for floors set from two dark palettes people have read for months. The rule that produced the table below: keep the verbatim upstream token wherever one passes, else take the same colour with its HSL lightness lowered (hue and saturation preserved) to the minimum that clears the binding constraint, and name the origin in a comment.
+
+Two sourcing traps worth carrying forward. **tokyonight's `day` is computed, not authored** — `lua/tokyonight/colors/day.lua` loads `night` and runs `Util.invert`, so there is no table to copy; the resolved values live in the generated extras (`extras/lua/tokyonight_day.lua`, `extras/kitty/tokyonight_day.conf`). Catppuccin is straightforward: `catppuccin/palette`'s `palette.json`.
+
+And **the binding constraint is usually the twin band, not the floor.** "A light token holds ≥55% of its dark twin's ratio" asks for more than 4.5 whenever the dark twin is strong: `latte`'s Attention answers mocha's 12.91, so it needs 7.10 and a cheerful yellow lands as a dark amber. Deriving against the floor alone yields a palette the band then rejects.
 
 ```go
 package theme
@@ -689,61 +717,41 @@ import "charm.land/lipgloss/v2"
 // AND the Accent and Attention it sits on have to be saturated enough to carry
 // it — which is what pairFloors in contrast_test.go asserts.
 
-// tokyoNightDay is the light twin of tokyoNight: folke/tokyonight.nvim's "day"
-// palette, mapped onto Atrium's semantic tokens.
-var tokyoNightDay = &Theme{
-	Name: "tokyo-night-day",
-	Palette: Palette{
-		Bg:          lipgloss.Color("#e1e2e7"),
-		BgElevated:  lipgloss.Color("#c4c8da"),
-		BarBg:       lipgloss.Color("#a8aecb"),
-		Fg:          lipgloss.Color("#3760bf"),
-		FgDim:       lipgloss.Color("#6172b0"),
-		FgFaint:     lipgloss.Color("#a8aecb"), // == BarBg, as in both dark themes
-		Accent:      lipgloss.Color("#2e7de9"),
-		AccentMuted: lipgloss.Color("#7086b5"),
-		Purple:      lipgloss.Color("#9854f1"),
-		Success:     lipgloss.Color("#587539"),
-		SuccessDim:  lipgloss.Color("#7a9460"),
-		Working:     lipgloss.Color("#6172b0"), // matches FgDim: working rows recede
-		Pending:     lipgloss.Color("#007197"), // calm cyan, distinct from Working/Success/Attention
-		Attention:   lipgloss.Color("#8c6c3e"),
-		Danger:      lipgloss.Color("#c64343"),
-		Cyan:        lipgloss.Color("#007197"),
-		BadgeBg:     lipgloss.Color("#9854f1"),
-		BadgeFg:     lipgloss.Color("#e1e2e7"),
-	},
-	Glyphs:  plainGlyphs(),
-	Borders: Borders{Style: lipgloss.RoundedBorder()},
-}
-
-// catppuccinLatte is the light twin of catppuccinMocha: catppuccin's "latte"
-// flavour, mapped onto Atrium's semantic tokens.
-var catppuccinLatte = &Theme{
-	Name: "catppuccin-latte",
-	Palette: Palette{
-		Bg:          lipgloss.Color("#eff1f5"),
-		BgElevated:  lipgloss.Color("#dce0e8"),
-		BarBg:       lipgloss.Color("#bcc0cc"),
-		Fg:          lipgloss.Color("#4c4f69"),
-		FgDim:       lipgloss.Color("#6c6f85"),
-		FgFaint:     lipgloss.Color("#bcc0cc"), // == BarBg, as in both dark themes
-		Accent:      lipgloss.Color("#1e66f5"),
-		AccentMuted: lipgloss.Color("#7287fd"),
-		Purple:      lipgloss.Color("#8839ef"),
-		Success:     lipgloss.Color("#40a02b"),
-		SuccessDim:  lipgloss.Color("#6a9b5c"),
-		Working:     lipgloss.Color("#6c6f85"), // matches FgDim: working rows recede
-		Pending:     lipgloss.Color("#04a5e5"),
-		Attention:   lipgloss.Color("#df8e1d"),
-		Danger:      lipgloss.Color("#d20f39"),
-		Cyan:        lipgloss.Color("#04a5e5"),
-		BadgeBg:     lipgloss.Color("#8839ef"),
-		BadgeFg:     lipgloss.Color("#eff1f5"),
-	},
-	Glyphs:  plainGlyphs(),
-	Borders: Borders{Style: lipgloss.RoundedBorder()},
-}
+// See ui/theme/light.go for the shipped file, whose comments carry each token's
+// upstream origin. The values:
+//
+//   tokyo-night-day (Bg #e1e2e7)          catppuccin-latte (Bg #eff1f5)
+//     Bg          #e1e2e7  bg               Bg          #eff1f5  base
+//     BgElevated  #c4c8da  bg_highlight     BgElevated  #ccd0da  surface0
+//     BarBg       #a8aecb  fg_gutter        BarBg       #bcc0cc  surface1
+//     Fg          #243f7e  fg, darkened     Fg          #494c65  text, darkened
+//     FgDim       #6172b0  fg_dark          FgDim       #6c6f85  subtext0 (NOT overlay0)
+//     FgFaint     #a8aecb  == BarBg         FgFaint     #bcc0cc  == BarBg
+//     Accent      #155fc4  blue, darkened   Accent      #125ef4  blue, darkened
+//     AccentMuted #718adb  blue0, darkened  AccentMuted #177181  sapphire, darkened
+//     Purple      #7847bd  purple VERBATIM  Purple      #8839ef  mauve VERBATIM
+//     Success     #49612f  green, darkened  Success     #28641b  green, darkened
+//     SuccessDim  #587539  green VERBATIM   SuccessDim  #3e9b2a  green, darkened
+//     Working     #6172b0  == FgDim         Working     #6c6f85  == FgDim
+//     Pending     #005c7c  cyan, darkened   Pending     #026187  sky, darkened
+//     Attention   #8a4800  orange, darkened Attention   #6d450e  yellow, darkened
+//     Danger      #b13636  red1, darkened   Danger      #d20f39  red VERBATIM
+//     Cyan        #005c7c  == Pending       Cyan        #026187  == Pending
+//     BadgeBg     #7847bd  == Purple        BadgeBg     #8839ef  == Purple
+//     BadgeFg     #e1e2e7  == Bg            BadgeFg     #eff1f5  == Bg
+//
+// Three judgement calls the table cannot show. day's Purple takes upstream `purple`
+// rather than deriving from `magenta` (the role-faithful source), because a real
+// upstream colour beats a derived one and `purple` passes verbatim at 4.73. day's
+// Attention derives from `orange`, not `yellow`, whose derivation reads as khaki at
+// 0.25 over the floor. latte's FgDim is `subtext0` because mocha's role-mate
+// `overlay0` is 2.30 on latte, under its 2.40 floor.
+//
+// And one inherited oddity to leave alone: latte's AccentMuted ends up HIGHER
+// contrast than its Accent (5.00 vs 4.72), inverting the name. That comes from
+// mocha's own outlier (sapphire at 8.69 against tokyo-night's 2.56, the spread
+// contrast_test.go's tier note already calls out) reaching latte through the twin
+// band. Say so rather than hide it.
 
 // lightTwin maps a dark theme to its light counterpart. It is what `theme: auto`
 // walks once detection exists (#394 Stage E); until then it is the statement of
@@ -760,7 +768,7 @@ var lightTwin = map[string]string{
 }
 ```
 
-- [ ] **Step 2: Register them**
+- [x] **Step 2: Register them**
 
 In `ui/theme/registry.go`, extend the map:
 
@@ -775,14 +783,31 @@ var registry = map[string]*Theme{
 }
 ```
 
-- [ ] **Step 3: Run the existing guards — they now cover the new palettes for free**
+- [x] **Step 2b: Give the agent brand accents a light form** *(added after the fact — the plan had no such step and Task 3 cannot go green without it)*
+
+`TestAgentBrandColoursStayLegible` holds the two hardcoded `agent.go` brand accents to 3.0 against **every** registered theme's `Bg`. Registering a light palette turns it red, and no palette value fixes it: claude's `#d97757` peaks at **3.12:1 against pure white**, needing a background lighter than `#fcfcfc` to clear 3.0. It measures 2.41 on tokyo-night-day and 2.76 on catppuccin-latte; gemini's `#4285f4` measures 2.75 and 3.15.
+
+The fix is a second table of the *same hues*, darkened only as far as the floor requires, selected by polarity in `AgentGlyph`:
+
+```go
+var agentColorsLight = map[string]Color{
+	"claude": lipgloss.Color("#cc552e"), // #d97757 darkened: 2.41 -> 3.31 on tokyo-night-day
+	"gemini": lipgloss.Color("#2774f2"), // #4285f4 darkened: 2.75 -> 3.34 on tokyo-night-day
+}
+```
+
+Two consequences for the rest of the plan. **`theme.IsLight` moves from Task 4 Step 3 into Task 3**, since `AgentGlyph` needs it — create `ui/theme/scheme.go` here. And **the brand oracle must resolve through `AgentGlyph`** rather than reading `agentColors` directly: with two tables, a test that reads either map alone passes while the wrong one ships. Resolving the colour that renders covers both with no second assertion.
+
+Generalise before Stage E adds more palettes: *compute a colour's ceiling against pure white before assuming it can be made to work.* A hue with a high L\* has no legible form on paper, and that is a property of the brand, not of the palette.
+
+- [x] **Step 3: Run the existing guards — they now cover the new palettes for free**
 
 Run: `go test ./ui/theme/ ./ui/ ./ui/overlay/ -count=1`
 Expected: PASS. Specifically these now iterate five themes instead of three, with no edit: `TestPaletteContrastFloors`, `TestAgentBrandColoursStayLegible`, `TestGlyphWidths`, `TestSplashPalettesAreCanonicalHex` (`ui/splash_test.go:24`), `TestSettingsOverlay_CycleThemeWraps` (`ui/overlay/settings_test.go:253` — length-agnostic, so it still passes).
 
 If `TestPaletteContrastFloors` fails on a light theme, **that is the oracle doing its job** — adjust the *palette value*, never the floor. If `TestSplashPalettesAreCanonicalHex` fails, a splash anchor (`Danger`, `Purple`, `Accent`, `Cyan`, `Fg`) is not canonical `#rrggbb`.
 
-- [ ] **Step 4: Write the twin-parity test**
+- [x] **Step 4: Write the twin-parity test**
 
 Add to `ui/theme/contrast_test.go`:
 
@@ -823,17 +848,17 @@ func TestLightPaletteMatchesItsDarkTwin(t *testing.T) {
 }
 ```
 
-- [ ] **Step 5: Run it**
+- [x] **Step 5: Run it**
 
 Run: `go test ./ui/theme/ -run TestLightPaletteMatchesItsDarkTwin -v`
 Expected: PASS. If a token is outside the band, retune that token in `light.go` — the band is the specification, and a token 3× off is the bug this catches.
 
-- [ ] **Step 6: Verify the default's goldens did not move**
+- [x] **Step 6: Verify the default's goldens did not move**
 
 Run: `go test ./app/ -run 'TestFrameParity|TestFrameColourFingerprint' -count=1`
 Expected: PASS, nothing regenerated. Nothing renders in the new palettes yet, so **if either moves, something leaked** — most likely a package-global theme mutation escaping a test's `restore()`.
 
-- [ ] **Step 7: Add the light colour fingerprint**
+- [x] **Step 7: Add the light colour fingerprint**
 
 Add to `app/frameparity_test.go`, directly after `TestFrameColourFingerprint`:
 
@@ -893,7 +918,7 @@ func newParityHomeThemed(t *testing.T, fs frameState, w, h int, themeName string
 
 and call `newParityHomeThemed(t, fs, w, h, "tokyo-night-day")` in the test above.
 
-- [ ] **Step 8: Verify the pin actually took, then baseline**
+- [x] **Step 8: Verify the pin actually took, then baseline**
 
 This is the step that catches the trap above. First run **without** a golden and read the output:
 
@@ -907,15 +932,19 @@ Then diff it against the dark one:
 diff app/testdata/colours.txt app/testdata/colours-light.txt | head -30
 ```
 
-Expected: **substantially different colour values**, e.g. `38;2;55;96;191` (light `Fg` `#3760bf`) present in the light file and absent from the dark one. If the two files are identical, the theme pin did not take — the guard is vacuous and the golden is a lie. Fix the ordering before proceeding.
+Expected: **substantially different colour values**, e.g. `38;2;36;63;126` (light `Fg` `#243f7e`) present in the light file and absent from the dark one. If the two files are identical, the theme pin did not take — the guard is vacuous and the golden is a lie. Fix the ordering before proceeding.
 
-- [ ] **Step 9: Mutation-verify the light fingerprint**
+Take the sentinel from the *shipped* `light.go`, not from this plan's memory of it: an earlier draft of this step named `#3760bf`, the recalled `Fg` that never survived the oracle, and a sentinel that is absent from a *correct* golden sends the reader to debug the pin instead of the step.
 
-Change `tokyoNightDay.Palette.Accent` to `lipgloss.Color("#2e7de8")` (one bit). Run `go test ./app/ -run TestLightFrameColourFingerprint`. Expected: **FAIL** with a colour-count diff. Revert.
+- [x] **Step 9: Mutation-verify the light fingerprint**
+
+Change `tokyoNightDay.Palette.Accent` from its shipped `#155fc4` to `lipgloss.Color("#155fc5")` (one bit). Run `go test ./app/ -run TestLightFrameColourFingerprint`. Expected: **FAIL** with a colour-count diff. Revert.
+
+The mutation has to be one bit off *what is in the file*. `#2e7de9` — upstream's `blue`, which this step used to name — is the value the darkening rule replaced, so mutating to it would be a whole-colour change and would prove less than it looks: a guard can catch a large perturbation while missing the small one that a real edit looks like.
 
 Then confirm the separation still holds: with that same mutation in place, `go test ./app/ -run TestFrameParity` must **PASS** — a colour change must not reach a layout golden. That is #393's mutation-proved separation, re-verified for the new file.
 
-- [ ] **Step 10: Document the new themes**
+- [x] **Step 10: Document the new themes**
 
 `README.md`'s `theme` row (line ~986) currently reads:
 
@@ -925,12 +954,12 @@ Then confirm the separation still holds: with that same mutation in place, `go t
 
 Update the description to name the light options. `TestReadmeDocumentsEveryConfigField` only checks the field's presence, so this is not guarded — `git grep tokyo-night README.md` afterwards to catch other mentions.
 
-- [ ] **Step 11: Run the full gate**
+- [x] **Step 11: Run the full gate**
 
 Run: `PATH=$PATH:$HOME/go/bin just ci && go test -race -shuffle=on ./...`
 Expected: green. `-shuffle=on` matters here: two theme-mutating tests now exist in `app/`, and shuffle is what finds a `restore()` that leaks.
 
-- [ ] **Step 12: Commit**
+- [x] **Step 12: Commit**
 
 ```bash
 git add ui/theme/light.go ui/theme/registry.go ui/theme/contrast_test.go \
@@ -960,19 +989,19 @@ The escape hatch is one Atrium already wires: `fresco.Options.LumRange`. At `lum
 - Modify: `ui/splash_test.go`
 
 **Interfaces:**
-- Consumes: `fresco.Options.LumRange *float64`, `theme.Current()`, `splashLumRangeOverride()` (existing, `ui/splash.go:97`).
-- Produces: `func paletteIsLight(p theme.Palette) bool` in `ui/theme` — exported as `theme.IsLight(p Palette) bool`, since Task 5 and Stage E both need the same predicate.
+- Consumes: `fresco.Options.LumRange *float64`, `theme.Current()`, `splashLumRangeOverride()` (existing, `ui/splash.go:97`), and `theme.IsLight` — **already created in Task 3 Step 2b**, which needed it for the agent brand accents. Task 4 is its second consumer, not its author.
+- Produces: no new exported symbols in `ui/theme`. (An earlier draft had `IsLight` produced here; Step 2b moved it one task earlier and Steps 1–4 below are kept as its guard, not its introduction.)
 
-- [ ] **Step 1: Write the failing test for the light-palette predicate**
+- [x] **Step 1: Write the failing test for the light-palette predicate**
 
 Add to `ui/theme/contrast_test.go` (it already has `relLuminance`):
 
 ```go
 // TestIsLightAgreesWithTheRegistry pins which shipped palettes are light. The
-// predicate exists because two consumers outside this package need the same
-// answer — the splash's brightness channel and the scheme axis — and two
-// independent luminance thresholds would eventually disagree about a palette in
-// the middle.
+// predicate exists because three consumers need the same answer — the agent
+// brand accents (agent.go), the splash's brightness channel (ui/splash.go) and
+// the scheme axis — and independent luminance thresholds would eventually
+// disagree about a palette in the middle.
 func TestIsLightAgreesWithTheRegistry(t *testing.T) {
 	for _, name := range []string{"tokyo-night", "catppuccin-mocha", "unicode"} {
 		require.Falsef(t, IsLight(Get(name).Palette), "%s is a dark palette", name)
@@ -983,14 +1012,14 @@ func TestIsLightAgreesWithTheRegistry(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run it to verify it fails**
+- [x] **Step 2: Run it to verify it fails**
 
 Run: `go test ./ui/theme/ -run TestIsLightAgreesWithTheRegistry -v`
-Expected: FAIL to compile — `undefined: IsLight`.
+Expected: FAIL to compile — `undefined: IsLight` — **but only if you are running this plan in its original order.** Task 3 Step 2b now creates `IsLight` and `ui/theme/scheme.go`, because the agent brand accents needed the predicate before the splash did. If Step 2b is already done, this step compiles and passes on the first run, and that is correct, not a missed red.
 
-- [ ] **Step 3: Implement `IsLight`**
+- [x] **Step 3: Confirm `IsLight`**
 
-Add to `ui/theme/scheme.go` — create the file now, since Stage E extends it:
+`ui/theme/scheme.go` already exists from Task 3 Step 2b. Check that it holds this, and write it there if Step 2b was skipped:
 
 ```go
 package theme
@@ -1004,10 +1033,11 @@ package theme
 // right token to ask because Atrium never paints a full-screen background — Bg is
 // its statement about what the terminal itself is showing.
 //
-// One predicate, two consumers: the splash's brightness channel (ui/splash.go)
-// and the scheme axis below. Two independent thresholds would eventually disagree
-// about a palette in the middle, and the disagreement would show up as a splash
-// tuned for the wrong polarity.
+// One predicate, three consumers: the agent brand accents (agent.go), the
+// splash's brightness channel (ui/splash.go) and the scheme axis below. Two
+// independent thresholds would eventually disagree about a palette in the
+// middle, and the disagreement would show up as a splash tuned for the wrong
+// polarity.
 func IsLight(p Palette) bool {
 	return relLuminanceOf(p.Bg) > 0.35
 }
@@ -1017,12 +1047,12 @@ func IsLight(p Palette) bool {
 
 The threshold is 0.35, not 0.5: `#e1e2e7` has relative luminance ≈ 0.77 and `#1a1b26` ≈ 0.011, so the gap is enormous and the exact cut is not load-bearing — 0.35 leaves room for a genuinely mid-tone palette to be classed light, which is the safer error (a light-tuned splash on a mid background reads; a dark-tuned one on a mid background inverts).
 
-- [ ] **Step 4: Run it to verify it passes**
+- [x] **Step 4: Run it to verify it passes**
 
 Run: `go test ./ui/theme/ -count=1`
 Expected: PASS, including the moved `relLuminanceOf`.
 
-- [ ] **Step 5: Write the failing test for the splash's light path**
+- [x] **Step 5: Write the failing test for the splash's light path**
 
 Add to `ui/splash_test.go`:
 
@@ -1038,35 +1068,61 @@ Add to `ui/splash_test.go`:
 // rendered field is fresco's business and the decision is Atrium's.
 func TestSplashLumRangeIsZeroOnALightPalette(t *testing.T) {
 	defer theme.Set("tokyo-night")()
-	dark := splashLumRange()
+	dark := splashLumRange(fresco.Tunnel)
 	require.Nil(t, dark, "on a dark palette Atrium must not override the variant's shipped lumRange")
 
 	defer theme.Set("tokyo-night-day")()
-	light := splashLumRange()
+	light := splashLumRange(fresco.Tunnel)
 	require.NotNil(t, light, "a light palette must pin lumRange")
 	require.Equal(t, 0.0, *light, "lumRange 0 is the endpoint that skips the ramp")
 }
 
-// The dev override still wins. It is the knob used to tune a variant by eye, so a
-// palette-derived default that silently ignored it would make the tuning loop lie.
+// The dev override still wins, rain included. It is the knob used to tune a variant
+// by eye, so a palette-derived default that silently ignored it would make the
+// tuning loop lie.
 func TestSplashLumRangeOverrideBeatsThePaletteDefault(t *testing.T) {
-	defer theme.Set("tokyo-night-day")()
-	t.Setenv("ATRIUM_SPLASH_LUMRANGE", "0.75")
+	t.Cleanup(theme.Set("tokyo-night-day"))
+	pinSplashLumRange(t, 0.75, true)
 
-	got := splashLumRange()
+	got := splashLumRange(fresco.Tunnel)
 	require.NotNil(t, got)
 	require.Equal(t, 0.75, *got, "the explicit override must beat the light-palette default")
 }
+
+// pinSplashLumRange drives the package's own override state directly, restoring it
+// when the test ends. NOT t.Setenv: splash_variants.go resolves
+// ATRIUM_SPLASH_LUMRANGE in init(), so by the time a test body runs the read has
+// already happened and setting the variable changes nothing. That is the same
+// constraint TestLumRangeEnvReachesRender answers by spawning a subprocess —
+// correct there, because its subject IS the env plumbing. Here the subject is the
+// ladder consuming the resolved value, so writing that value is more direct. Same
+// package, so no production seam is added; the lock matters because
+// splashLumRangeOverride reads both vars under splashSelMu and -race runs this
+// package.
+func pinSplashLumRange(t *testing.T, v float64, set bool) {
+	t.Helper()
+	splashSelMu.Lock()
+	prevVal, prevSet := splashLumRangeVal, splashLumRangeSet
+	splashLumRangeVal, splashLumRangeSet = v, set
+	splashSelMu.Unlock()
+	t.Cleanup(func() {
+		splashSelMu.Lock()
+		defer splashSelMu.Unlock()
+		splashLumRangeVal, splashLumRangeSet = prevVal, prevSet
+	})
+}
 ```
 
-Before writing this, read `ui/splash.go:95-99` and `splashLumRangeOverride`'s real signature; the env var name above must match what that function actually reads (`grep -n ATRIUM_SPLASH_LUMRANGE ui/*.go`). Use the real name.
+**The trap this step hides**, and the reason the helper above exists: the first draft of this test used `t.Setenv("ATRIUM_SPLASH_LUMRANGE", "0.75")` and could never have passed. `ui/splash_variants.go`'s `init()` resolves that variable at package load, before any test body runs — which is exactly why the pre-existing `TestLumRangeEnvReachesRender` drives it through a subprocess. A value read in `init()` is unreachable from `t.Setenv`, and the failure looks like a broken ladder rather than a broken test.
 
-- [ ] **Step 6: Run it to verify it fails**
+Before writing this, read `ui/splash.go`'s override handling and `splashLumRangeOverride`'s real signature (`grep -n ATRIUM_SPLASH_LUMRANGE ui/*.go`).
+
+- [x] **Step 6: Run it to verify it fails**
 
 Run: `go test ./ui/ -run TestSplashLumRange -v`
 Expected: FAIL to compile — `undefined: splashLumRange`.
 
-- [ ] **Step 7: Extract the ladder in `ui/splash.go`**
+- [x] **Step 7: Extract the ladder in `ui/splash.go`**
 
 Replace the inline override handling at `ui/splash.go:95-99` with a named ladder, and call it from `splashScene`:
 
@@ -1085,17 +1141,24 @@ Replace the inline override handling at `ui/splash.go:95-99` with a named ladder
 // A monochrome render takes the same rung for the mirror-image reason: with
 // colour stripped, a colour-borne brightness channel carries nothing, so the
 // field would flatten. See theme.Mono (#394 Stage D).
-func splashLumRange() *float64 {
+//
+// The variant is a parameter rather than another splashActiveVariant() call so
+// the rung is a pure function of what the caller is about to render. The
+// process-wide pick is latched, so a second call would agree today; taking it
+// as an argument means the rule cannot drift from the field it describes.
+func splashLumRange(variant fresco.Variant) *float64 {
 	if r, ok := splashLumRangeOverride(); ok {
 		return &r
 	}
-	if theme.IsLight(theme.Current().Palette) {
+	if theme.IsLight(theme.Current().Palette) && variant != fresco.Rain {
 		zero := 0.0
 		return &zero
 	}
 	return nil
 }
 ```
+
+The `variant` parameter and the `!= fresco.Rain` clause are **Step 9's findings, folded back into this step** so the file has one signature rather than two. Write them here; Step 9 is where the measurement that justifies them is recorded, and it is the step that would have discovered them if you were running this plan cold. The doc comment above is abridged — the shipped one in `ui/splash.go` carries the full measured numbers.
 
 and at the `fresco.Render` call:
 
@@ -1104,19 +1167,19 @@ and at the `fresco.Render` call:
 		Palette:  splashPalette(theme.Current().Palette),
 		Variant:  variant,
 		FocalRow: focalRow,
-		LumRange: splashLumRange(),
+		LumRange: splashLumRange(variant),
 		Profile:  splashProfile(),
 	})
 ```
 
 Delete the now-dead `var lum *float64` block above it.
 
-- [ ] **Step 8: Run it to verify it passes**
+- [x] **Step 8: Run it to verify it passes**
 
 Run: `go test ./ui/ -count=1`
 Expected: PASS.
 
-- [ ] **Step 9: Look at it — the step no test can do**
+- [x] **Step 9: Look at it — the step no test can do**
 
 Build and drive the splash on a **real light terminal**:
 
@@ -1131,12 +1194,35 @@ mkdir -p "$TMUX_TMPDIR" "$HOME"
 
 Set the terminal to a light background, then in Atrium: `s` for settings, cycle `theme` to `tokyo-night-day`, and view the empty-state splash (kill or pause all sessions, or start in the fresh `HOME` which has none). Cycle `splash` through all five variants.
 
-**The question to answer:** does `lumRange 0` read, or is it confetti? fresco's own notes call that endpoint *"a scatter of dots is confetti rather than dimming"* on dark. Judge it on light.
+**ANSWERED. It reads — for four of five variants — and the fifth is why this step existed.**
 
-- If it reads: done. Note the verdict in the commit message.
-- If it is confetti: switch the light rung to **splash-off**, by returning `false` from `ui.SplashEnabled`-equivalent when the palette is light. Implement that instead of `lumRange 0`, keep the same test structure (assert the enabled-ness rather than the LumRange), and file the fresco follow-up.
+Method, recorded because it is reusable and beats a headless tmux run: dump `SplashScreensaver(120, 40, frame)` per variant and setting from a tiny Go harness in its own module (`replace` to the worktree), then rasterize the ANSI to PNG with PIL and a monospace font on the palette's own `Bg`, and look at the images. Then back the eyeball with a number — **ink coverage and the edge:core ratio *is* the vignette**, which is what turns "this looks wrong" into a measurement someone can act on.
 
-Either way, file the fresco issue:
+Measured at 120×40 under tokyo-night-day:
+
+| variant | ink @ lumRange 0 | edge:core, ramp | edge:core, lumRange 0 |
+|---|---|---|---|
+| tunnel | 82.6% | 77:96 | 59:93 |
+| ripple | 26.5% | 25:43 | 13:33 |
+| galaxy | 63.3% | 65:94 | 32:71 |
+| aurora | 19.5% | 4:42 | 0:38 |
+| **rain** | **95.0%** | 16:45 | **83:100 — no vignette** |
+
+`lumRange 0` is **not** confetti on light. Four variants read *better* at 0 than on the ramp, because a density vignette survives the polarity flip and a luminance one does not.
+
+**Rain is exempt, and no test could have predicted it.** Rain's brightness is entirely luminance — fresco ships it at `lumRange: 1` — so moving that onto density leaves it nowhere to go and the pane fills solid. `ui/splash_variants.go`'s own comment already called that out as the absurdity of a low override on rain ("the pane fills with white katakana"); the light rung would have promoted a documented dev-only footgun into the shipped path for one launch in five, rain being both a rotation member *and* `splashDefaultVariant`. Leaving rain on the ramp is merely inverted, which is the lesser harm. So the ladder takes the variant as a parameter:
+
+```go
+if theme.IsLight(theme.Current().Palette) && variant != fresco.Rain {
+```
+
+That is the signature Step 7 above already writes — folded back there so the plan states it once, rather than shipping a no-argument version in Step 7 and amending it here. This step is where the measurement that earns it lives.
+
+Splash-off on a light palette — the fallback this step originally named — was **rejected on the evidence**: it would discard four working variants to avoid one broken one.
+
+Note for Stage D: rain's exemption carries over to `theme.Mono` unchanged, and Stage D's Task 6 Step 5 is where that is written down. The reasoning is not "it has neither channel" — that is true but does not decide anything — it is that `lumRange 0` fills rain's pane *solid*, and what causes that is rain's own luminance-only brightness, not whatever stripped the colour.
+
+Either way, file the fresco issue — **filed as ZviBaratz/fresco#82**:
 
 ```bash
 gh issue create --repo ZviBaratz/fresco \
@@ -1164,7 +1250,7 @@ EOF
 )"
 ```
 
-- [ ] **Step 10: Verify no golden moved, then gate**
+- [x] **Step 10: Verify no golden moved, then gate**
 
 Run: `go test ./app/ -run 'TestFrameParity|TestFrameColourFingerprint|TestLightFrameColourFingerprint' -count=1`
 
@@ -1172,7 +1258,7 @@ Expected: `TestFrameParity` and `TestFrameColourFingerprint` PASS unchanged. `Te
 
 Run: `PATH=$PATH:$HOME/go/bin just ci && go test -race -shuffle=on ./...`
 
-- [ ] **Step 11: Commit**
+- [x] **Step 11: Commit**
 
 ```bash
 git add ui/splash.go ui/splash_test.go ui/theme/scheme.go ui/theme/contrast_test.go
@@ -1214,6 +1300,8 @@ Measured, not assumed: Bubble Tea already runs `colorprofile.Detect(p.output, p.
   - `func theme.NoColorRequested(environ []string) bool` — the spec-compliant env test, taking `environ` so it is testable without `t.Setenv`.
 
 - [ ] **Step 1: Write the failing test for the env predicate**
+
+> **Carry Stage C's trap in.** `NoColorRequested` taking `environ` as a parameter is what makes it testable at all — keep that, and resist "simplifying" it to read `os.Environ()` internally. Stage C lost time to the mirror image: a test used `t.Setenv` against a value another package resolved in `init()`, which no amount of setting could reach. Any predicate whose input is read at package load needs either a parameter (this) or a subprocess (`TestLumRangeEnvReachesRender`). `SetMono` is the other half of the same shape — a package global with a restore, so it must be exercised under `-shuffle=on`, which is what finds a `restore()` that leaks.
 
 Create `ui/theme/mono_test.go`:
 
@@ -1619,16 +1707,29 @@ func TestSplashLumRangeIsZeroUnderMono(t *testing.T) {
 	defer theme.Set("tokyo-night")() // a DARK palette, so only Mono can be the cause
 	defer theme.SetMono(true)()
 
-	got := splashLumRange()
+	got := splashLumRange(fresco.Tunnel)
 	require.NotNil(t, got)
 	require.Equal(t, 0.0, *got)
+}
+
+// Rain keeps its exemption under Mono, for the reason Stage C measured on light:
+// its brightness is entirely luminance, so lumRange 0 leaves it nowhere to go and
+// the pane fills solid (95% of cells inked, edge:core 83:100 — no vignette). That
+// is true of rain whatever stripped the colour. A flat field is the lesser harm
+// against a solid one, and fresco#82 is where it gets fixed properly.
+func TestSplashLumRangeExemptsRainUnderMono(t *testing.T) {
+	defer theme.Set("tokyo-night")()
+	defer theme.SetMono(true)()
+
+	require.Nil(t, splashLumRange(fresco.Rain),
+		"rain must keep its shipped lumRange under NO_COLOR: at 0 the pane fills solid")
 }
 ```
 
 - [ ] **Step 2: Run them to verify they fail**
 
 Run: `go test ./ui/ ./session/tmux/ -run 'Mono|ColourByDefault|ColoursByDefault' -v`
-Expected: the three Mono tests FAIL; the two negative controls PASS.
+Expected: the three Mono tests FAIL; the two negative controls PASS — and so does `TestSplashLumRangeExemptsRainUnderMono`, which is a third negative control rather than a fourth failing test (see Step 5 for why, and for how to prove it can fail at all).
 
 - [ ] **Step 3: Implement the `ui/contextbar.go` change**
 
@@ -1676,16 +1777,22 @@ If it errors, guard the whole `status-style` line in the template with `{{if .Ba
 
 - [ ] **Step 5: Implement the `ui/splash.go` change**
 
-Extend `splashLumRange`'s light rung:
+Extend `splashLumRange`'s light rung. The shipped rung is `if theme.IsLight(theme.Current().Palette) && variant != fresco.Rain` — **read it in `ui/splash.go` before editing**, because Mono joins the left side of that `&&` and must not be allowed to escape the rain exemption on the right:
 
 ```go
-	if theme.Mono() || theme.IsLight(theme.Current().Palette) {
+	if (theme.Mono() || theme.IsLight(theme.Current().Palette)) && variant != fresco.Rain {
 		zero := 0.0
 		return &zero
 	}
 ```
 
-Update the function's doc comment so the `theme.Mono` sentence it already mentions is now a condition it actually reads, not a forward reference.
+The parenthesisation is the whole point. `theme.Mono() || theme.IsLight(…) && variant != fresco.Rain` parses as `Mono || (IsLight && …)` in Go, which puts rain back on lumRange 0 whenever `NO_COLOR` is set — the solid-pane failure Stage C measured, reintroduced through the one variant that is both a rotation member and `splashDefaultVariant`.
+
+`TestSplashLumRangeExemptsRainUnderMono` is the guard for exactly that, and note what kind of guard it is: it is **green before this step and green after it**, because rain returns `nil` on a dark palette either way. It is not a failing-first test — it is the negative control that only the wrong parenthesisation can break. Prove it can: write the unparenthesised version first, watch it go red, then fix it. A guard never seen red is a guard nobody has checked.
+
+Rain's exemption is answered here rather than revisited: this is the "Note for Stage D" Stage C left. With colour stripped rain has neither channel, so neither rung helps it — but lumRange 0 makes it *worse* (solid) rather than merely flat, so the exemption holds for the same measured reason it holds on light. fresco#82 remains the real fix.
+
+Update the function's doc comment so the `theme.Mono` sentence it already mentions is now a condition it actually reads, not a forward reference, and so the rain paragraph names both rungs rather than only the light one.
 
 - [ ] **Step 6: Run the tests to verify they pass**
 
@@ -1746,7 +1853,7 @@ Mode 2031 is deliberately **not** used. It is decodable in the pinned stack (`x/
 No bubbletea, no I/O. `ui/theme` stays a leaf package.
 
 **Files:**
-- Modify: `ui/theme/scheme.go` (created in Task 4)
+- Modify: `ui/theme/scheme.go` (created in Task 3 Step 2b)
 - Create: `ui/theme/scheme_test.go`
 - Modify: `ui/theme/current.go`
 - Modify: `ui/theme/registry.go` — add `AutoThemeName`, `SelectableNames()`
@@ -2808,6 +2915,6 @@ Then update the issue with the matrix results and close it, ticking #394 in epic
 
 **Type consistency.** `theme.Scheme`/`SchemeUnknown`/`SchemeDark`/`SchemeLight`, `ResolveScheme(*bool, string) Scheme`, `SetScheme(Scheme) func()`, `CurrentScheme() Scheme`, `IsLight(Palette) bool`, `Mono() bool`, `SetMono(bool) func()`, `NoColorRequested([]string) bool`, `AutoThemeName`, `SelectableNames() []string`, `lightTwin map[string]string`, `relLuminanceOf(Color) float64`, `tmux.ApplyBarStyle(context.Context, cmd.Executor) error`, `tmux.RewriteManagedConfig(bool) error`, `config.DefaultTheme`, `(*Config).GetTheme() string`, `(*home).applyBarStyleCmd() tea.Cmd`, `(*home).requestSchemeCmd() tea.Cmd`, `(*home).applyDetectedScheme(theme.Scheme) tea.Cmd`, `doctor.CheckScheme([]string) SchemeResult`, `doctor.RenderScheme(SchemeResult) string`, `barStyleApplier` — each is defined in exactly one task and used with that spelling and signature everywhere after.
 
-Two deliberate cross-task couplings, called out where they bite: `relLuminance` is written in `contrast_test.go` (Task 2) and **moved** to `scheme.go` as `relLuminanceOf` in Task 4 Step 3, with the test-file copy deleted rather than duplicated. And `barStyleApplier` is introduced in Task 1 Step 9 as a test seam, then relied on by Task 8's tests — so Task 1's Step 5 code must be restructured to that shape rather than leaving both versions, which Step 9 says explicitly.
+Two deliberate cross-task couplings, called out where they bite: `relLuminance` is written in `contrast_test.go` (Task 2) and **moved** to `scheme.go` as `relLuminanceOf` in Task 3 Step 2b — the step that creates `scheme.go`, because `IsLight` has to exist before `AgentGlyph` can call it — with the test-file copy deleted rather than duplicated. And `barStyleApplier` is introduced in Task 1 Step 9 as a test seam, then relied on by Task 8's tests — so Task 1's Step 5 code must be restructured to that shape rather than leaving both versions, which Step 9 says explicitly.
 
 **Three places the plan tells the implementer to verify rather than trust.** `tea.BackgroundColorMsg`'s construction (embedded field, so `{Color: c}` may not compile), `drainCmd`'s adequacy against `tea.Sequence`/`tea.Batch`, and whether tmux accepts `status-style "bg=,fg="` without a parse error. Each has a named fallback, because guessing any of them wrong produces a green test that guards nothing.

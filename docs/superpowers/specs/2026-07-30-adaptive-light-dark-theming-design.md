@@ -26,11 +26,22 @@ thing for free — provided the light `Accent` and `Attention` are saturated eno
 to carry near-white text.
 
 **Two hardcoded colours exist in the entire app**, both deliberate:
-`ui/theme/agent.go:25-26`, `#d97757` (Claude) and `#4285f4` (Gemini), documented
+`ui/theme/agent.go`, `#d97757` (Claude) and `#4285f4` (Gemini), documented
 as brand colours and therefore theme-independent. Measured contrast against
-tokyo-night's `Bg`: 5.47 and 4.80. Both survive a light background as glyphs, so
-they stay — but the contrast oracle must cover them, or it exempts the only two
-colours the palette does not own.
+tokyo-night's `Bg`: 5.47 and 4.80. The contrast oracle must cover them, or it
+exempts the only two colours the palette does not own.
+
+**Falsified by Stage C, and left corrected here rather than as-written:** this
+paragraph used to say both survive a light background as glyphs, so they stay.
+They do not. `#d97757` peaks at **3.12:1 against pure white**, so it cannot clear
+the 3.0 brand floor on any real light background — it measures 2.41 on
+tokyo-night-day and 2.76 on catppuccin-latte, and no palette tuning reaches it,
+because the colour is not the palette's to tune. Stage C shipped a second table,
+`agentColorsLight`, holding the same two hues darkened only as far as the floor
+requires, selected by polarity inside `AgentGlyph`. The general rule that falls
+out: **compute a colour's ceiling against pure white before assuming it has a
+legible form on paper** — a hue with a high L\* does not, and that is a property
+of the brand, not of the palette.
 
 **Palette tokens have few direct consumers.** 152 `theme.Current()` call sites,
 but most route through the `*Style()` helpers; direct `Palette.X` reads run 1–26
@@ -174,8 +185,18 @@ know detection was blind.
 
 ### H4 — the splash
 
-See correction 4. In scope via `LumRange: 0`; fallback is splash-off on a light
-palette; a proper fresco light ramp is a follow-up in that repo.
+See correction 4. In scope via `LumRange: 0`; a proper fresco light ramp is a
+follow-up in that repo, filed as ZviBaratz/fresco#82.
+
+**Resolved in Stage C.** The fallback this section used to name — splash-off on a
+light palette — was rejected on the evidence. `LumRange: 0` reads on light for
+four of the five variants, measurably better than the ramp does (a density
+vignette survives the polarity flip; a luminance one does not). Only **rain**
+fails, and it fails hard: its brightness is entirely luminance, so at 0 the pane
+fills solid — 95% of cells inked, edge:core 83:100, no vignette at all. Rain is
+therefore exempt from the rung and stays on the ramp, which is merely inverted.
+Turning the splash off would have discarded four working variants to avoid one
+broken one.
 
 ### H5 — mode 2031 leaks (new)
 
@@ -396,14 +417,18 @@ picker cycling (both existing `theme.Names()` consumers are length-agnostic).
 default still renders what it rendered, so if either moves, something leaked.
 `colours-light.txt` is added here, baselined once with the diff read.
 
-Splash: evaluate `LumRange: 0` on a real light terminal. If it reads as
-confetti, splash-off-on-light lands here instead, and the fresco light-ramp
-follow-up is filed.
+Splash: evaluate `LumRange: 0` on a real light terminal. **Done — it reads**, for
+four variants of five; rain is exempt and stays on the ramp (see H4). The
+splash-off-on-light fallback this paragraph used to hold in reserve was rejected
+rather than taken. The fresco light-ramp follow-up is filed as
+ZviBaratz/fresco#82.
 
 ### Stage D — `NO_COLOR`
 
 Spec-compliant check (present and non-empty) forcing `colorprofile.Ascii`; tmux
-markup and `status-style` decolourised; splash `LumRange: 0`; the writer-based
+markup and `status-style` decolourised; splash `LumRange: 0` — **rain exempt
+here too**, since what makes 0 fill its pane solid is the variant's own
+luminance-only brightness, not what stripped the colour; the writer-based
 oracle. Independent of theming.
 
 ### Stage E — detection, `theme: auto`, live re-theme
