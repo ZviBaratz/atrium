@@ -78,12 +78,21 @@ and it is the same class the original spec over-weighted — right target, wrong
 reason. Not because claim drift dominates the output, but because it is what the
 default reviewer systematically misses.
 
-**Consequences for the design.** If review and triage both run inside the
-implementer's session, the multi-session handoff this document was written to
-orchestrate does not exist. Human touchpoints drop from four to two — consult at
-the start, merge at the end — with no engine, no run state, no tracker interface
-and no second session. Everything the original spec proposed to build to sequence
-those sessions is cut.
+**What this measures, and what it does not.** All of the above scores the built-in
+reviewer as a **finder**. It says nothing about it as a **fixer**, and in the
+manual flow the review session does both — it finds *and* implements the fixes,
+which is why its commits carry mutation kill counts, verification against the real
+binary, and measured ratios. An edit pass applied after a review is not
+demonstrably the same work. Any claim that `/code-review --fix` substitutes for a
+review session is therefore unevidenced and is not made here.
+
+**Consequences for the design.** The finder moves in-session on measured evidence,
+which removes the round trip that exists purely to *obtain* findings. The fixer's
+location stays open. What is cut regardless is the machinery the original spec
+proposed for sequencing sessions — the `pipeline/` engine, run state, resume, the
+tracker interface, the run tab and the report — because at most one handoff
+survives, and a single handoff does not need a state machine to drive it. Human
+touchpoints drop from four to two: consult at the start, merge at the end.
 
 ## What remains a real problem
 
@@ -115,29 +124,45 @@ review found the cited precedent pointed the other way. Nothing in the product �
 
 ## The recipe
 
-One session, two human bookends. There is no second session and no engine.
+Four stages between two human bookends. At most one session handoff, and no
+engine.
 
 | # | Stage | Prompt's job | Done when |
 |---|-------|--------------|-----------|
 | 0 | **consult** | Judge the premise, then enumerate the decisions this work forces — approach, depth, UX direction, non-goals — each with options and a recommendation. Stop. | the human has answered |
 | 1 | **implement** | Implement to the answers. `just ci`. Commit, push, open the PR. | an open PR |
-| 2 | **review** | `/code-review` against the branch. Findings arrive in the session. | findings reported |
-| 3 | **triage** | Verdict *every* finding with a reason, including sub-threshold ones. Apply what survives. Push. | every finding has a verdict |
-| 4 | **recheck** | Re-run `/code-review`; Claude Code marks each earlier finding fixed, skipped or no-change-needed. Verify the fix diff with the rigour the original got — recompute stated numbers, mutation-test new assertions. | fix diff verified |
+| 2 | **review and fix** | An independent reader finds, verdicts *every* finding including sub-threshold ones, and applies what survives. Whoever fixes must verify to the standard the original got — `just ci`, re-render, recompute stated numbers, mutation-test new assertions. Push. | findings verdicted and fixes pushed |
+| 3 | **adjudicate** | **A different context from the fixer** reads only the fix diff: is each change correct, aligned with the stage-0 decisions, and beneficial? Cite the record where it collides. | every fix carries a verdict |
 | — | **merge** | human | a keypress |
 
 **Stage 0 always stops.** It fires when the human is present; everything after runs
 unattended. A zero-junction consult still stops — it is a one-key ack.
 
-**Stage 3 is not "do you agree?"** That question's answer is predictable and
-therefore carries almost no information. Its two real jobs are the contradiction
-check — does a finding collide with a decision recorded at stage 0, a rejected
-alternative, or a constraint from the issue? (on #541 a review agent argued for a
-spelling the human had already declined, and only the implementer held that fact)
-— and verifying the review's own diff, per #544/#545.
+**The load-bearing invariant is that the fixer and the adjudicator are different
+contexts.** The review's fix commits are the least-reviewed code in the PR — they
+land after the implementer's rigour and before merge — and both known defects of
+that shape live exactly there: on #544 the review introduced a wrong number into
+the comment it was correcting, and on #545/#552 an accepted finding was fixed at
+two of five sites. A context that applied a fix cannot audit it; that is the one
+thing the self-correction literature is unambiguous about. Either arrangement
+satisfies the invariant — a separate review session that finds and fixes with the
+implementer adjudicating (the current manual flow), or an in-session
+`/code-review --fix` with a fresh context adjudicating — so long as the two roles
+never collapse into one.
 
-**Stage 4 earns its place on the fix-commit evidence**, and is now mostly a
-built-in affordance rather than a stage to build.
+**Stage 3 is not "do you agree?"** That question's answer is predictable and
+therefore carries almost no information. Its real job is the contradiction check:
+does a change collide with a decision recorded at stage 0, a rejected alternative,
+or a constraint from the issue? On #541 a review agent argued for a spelling the
+human had already declined, and only the implementer's session held that fact.
+
+**Who should fix is an open question, deliberately left open.** The measurement
+below scored the built-in reviewer as a *finder* and says nothing about it as a
+*fixer*. The manual flow's review sessions demonstrably fix to a high standard —
+mutation kill counts, verification against the real binary, measured ratios — and
+an edit pass applied after a review is not obviously the same thing. Moving the
+finder in-session is evidenced; moving the fixer is not, and should not be done
+until it is.
 
 **Escalation is the human's call, not a gate.** `/code-review ultra <PR#>` costs
 $5–25 in usage credits after three free runs. At ~8 PRs/day, running it
@@ -160,8 +185,8 @@ grant than one that opens a PR the human will read anyway.
 ## Deliverable 1 — the recipe as checked-in configuration
 
 **No Go. No product change.** A skill beside `.claude/skills/tui-drift-sites/`
-encoding the five stages, the decision-record format, the two-jobs triage framing,
-and the review instructions.
+encoding the four stages, the decision-record format, the fixer-is-not-the-
+adjudicator rule, and the review instructions.
 
 The review instructions target the measured miss profile, not a guess:
 
@@ -177,12 +202,15 @@ The review instructions target the measured miss profile, not a guess:
 belong in `CLAUDE.md` or the skill, and a `REVIEW.md` is only worth writing if
 managed Code Review is enabled for this repo — which requires a Team or Enterprise
 Claude organisation and a GitHub App install. **Checking that is the first
-action**, because if it is available, stages 2 and 4 fire automatically on push
-with thread auto-resolution and no CLI step at all.
+action**, because if it is available, stage 2's finding half fires automatically on
+push, with thread auto-resolution as fixes land and no CLI step at all.
 
 Run by hand for roughly ten PRs before any Go is written. That window produces the
-first honest numbers on junction rate, on whether the finding rate moves, and on
-whether stage 4 ever fires — and is allowed to change what follows.
+first honest numbers on junction rate, on whether the finding rate moves, and — the
+question this design most needs answered — **whether a fix applied by
+`/code-review --fix` survives adjudication as often as one written by a review
+session.** That is the one comparison the measurement did not make, and it decides
+whether the remaining handoff goes away.
 
 ## Deliverable 2 — the awaiting-decision signal
 
@@ -253,9 +281,12 @@ because it needs me?" is a question about every session in the fleet.
 
 - **A pipeline engine** — `pipeline/` package, `State.Pipelines`, per-run state
   machine, resume, run tab, `atrium pipeline report`. Cut: with review and triage
-  in one session there is no multi-session sequence to drive.
-- **A second Atrium session to review a PR.** Superseded by `/code-review`,
-  `/review <pr>` and `claude ultrareview <PR#>`.
+  at most one handoff there is no multi-stage sequence to drive.
+- **Building a way to spawn a review session on a PR head.** Superseded for
+  *finding* by `/code-review`, `/review <pr>` and `claude ultrareview <PR#>`, none
+  of which touch the local worktree. If a separate session keeps the *fixing*
+  role, it is started the way any session is started today; nothing new is needed
+  for one handoff.
 - **Auto-merge.** A green-checks predicate would have merged #544.
 - **A tracker abstraction.** GitHub via `gh`, in the prompt, until a second tracker
   actually appears.
