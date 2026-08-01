@@ -47,9 +47,11 @@ func (m *home) instanceChanged() tea.Cmd {
 		m.lastStatusPollSelection = selected
 		m.selectedSince = time.Now()
 		// The new selection's frame is whatever was last captured for it, which may be
-		// nothing at all — either way it is new, not stale, so restamp freshness. The
-		// capture chain notices the changed target when its in-flight capture lands and
-		// re-arms without waiting out another interval (see handlePaneFrame).
+		// nothing at all — either way it is new, not stale, so restamp freshness (which
+		// also drops the quiet run, so the new pane is watched at full rate until it
+		// settles on its own). The capture chain notices the changed target when its
+		// in-flight capture lands and re-arms without waiting out another interval (see
+		// handlePaneFrame); if it had already ended, the preview tick revives it.
 		m.noteFrameTargetChange()
 		return pollSelectedCmd(selected, m.attachGen)
 	}
@@ -609,6 +611,9 @@ func (m *home) applyMetadataResults(results []instanceMetaResult, emit bool) []t
 		mode = m.notificationsMode()
 	}
 	notifyOn := mode != config.NotificationsOff
+	// The quiet-pane gate only ever asks about the selected session's preview, so
+	// only its harvest is worth folding into the run below.
+	selected := m.list.GetSelectedInstance()
 	for _, r := range results {
 		// Skip instances that were paused while metadata was being computed, or that
 		// were just recovered to Paused because their session died.
@@ -646,7 +651,15 @@ func (m *home) applyMetadataResults(results []instanceMetaResult, emit bool) []t
 		if r.state != tmux.PaneUnknown {
 			r.instance.SetPaneLive(r.state != tmux.PaneDead)
 		}
-		applyHarvestedFrame(r)
+		// Note the harvest into the quiet run only when it was actually stored. While
+		// the capture chain is alive its frames are always fresher, so the harvest is
+		// dropped and contributes nothing — which is right, because the chain is
+		// already feeding the run at 10Hz. Once the gate closes the chain stops, the
+		// harvest becomes the newest frame every sweep, and this is the only thing
+		// still watching the pane for a change.
+		if text, stored := applyHarvestedFrame(r); stored && r.instance == selected {
+			m.noteFrameSeen(frameTarget{instance: r.instance}, text)
+		}
 	}
 	// Re-apply the status sort now that pane states are fresh, so urgent sessions keep
 	// floating to the top of their group. No-op in creation mode; the selected session
@@ -669,19 +682,26 @@ func (m *home) applyMetadataResults(results []instanceMetaResult, emit bool) []t
 }
 
 // applyHarvestedFrame stores the pane capture the poll already paid for, but only
-// when it is newer than the cached one. The order matters: the 100ms capture chain
-// and this 500ms sweep both feed the same cache, and the chain's frames are fresher
-// for the selected session — an unconditional write here would rewind the watched
-// pane by up to half a second, ten times a second. Main thread only, like the
-// Set*Meta calls it sits beside.
-func applyHarvestedFrame(r instanceMetaResult) {
+// when it is newer than the cached one, and reports the text it stored. The order
+// matters: the 100ms capture chain and this 500ms sweep both feed the same cache,
+// and the chain's frames are fresher for the selected session — an unconditional
+// write here would rewind the watched pane by up to half a second, ten times a
+// second. Main thread only, like the Set*Meta calls it sits beside.
+//
+// It returns the stored text rather than letting the caller re-derive it because
+// the quiet-pane gate compares frames byte for byte, and sanitizing the same
+// capture twice to feed two consumers is both wasted work and a chance for the
+// two copies to drift.
+func applyHarvestedFrame(r instanceMetaResult) (string, bool) {
 	if !r.paneFrameOK {
-		return
+		return "", false
 	}
 	if _, cachedAt, cached := r.instance.PaneFrame(); cached && !r.paneFrameAt.After(cachedAt) {
-		return
+		return "", false
 	}
-	r.instance.SetPaneFrame(theme.SanitizeWidth(r.paneFrame), r.paneFrameAt)
+	text := theme.SanitizeWidth(r.paneFrame)
+	r.instance.SetPaneFrame(text, r.paneFrameAt)
+	return text, true
 }
 
 // applyDiffStats stores freshly computed diff stats on an instance (main thread only),

@@ -24,8 +24,13 @@ import (
 // → collectMetadata → applyMetadataResults): sleep and do I/O in a tea.Cmd, apply
 // the result on the main thread. It is a separate chain rather than another job in
 // that pass because the cadences are irreconcilable — metadata runs at 500ms and
-// throttles non-selected sessions to a ~2s sweep, while the watched pane needs
-// ~10fps.
+// throttles non-selected sessions to a ~2s sweep, while a watched pane that is
+// moving needs ~10fps.
+//
+// A pane that is NOT moving needs none of that, which is the second thing this
+// file does: the chain ends whenever there is nothing worth capturing, including a
+// preview pane that keeps returning byte-identical frames, and the metadata pass's
+// free harvest carries it at 2Hz until it moves again (framegate.go, #546).
 
 // paneFrameInterval is the pane-capture cadence. It matches the preview tick's
 // 100ms, but runs on its own chain: the tick must keep firing — dwell marking,
@@ -35,8 +40,10 @@ const paneFrameInterval = 100 * time.Millisecond
 
 // frameTarget names what a capture was launched for. It is resolved on the main
 // thread at arm time so the background goroutine never reads live selection
-// state. The zero target means "no I/O this round"; the chain still ticks, so it
-// self-heals the moment something worth capturing is selected.
+// state. The zero target means "nothing to capture", and the chain does not run
+// on one at all — armFrameCapture declines to arm and the loop ends, to be
+// revived by the 100ms preview tick as soon as there is something to capture
+// again.
 type frameTarget struct {
 	// instance is the session whose agent pane to capture (preview tab).
 	instance *session.Instance
@@ -68,12 +75,14 @@ type paneFrameMsg struct {
 
 // resolveFrameTarget picks what to capture, on the main thread.
 //
-// It returns the zero target — costing no subprocess at all — whenever a capture
-// would be pointless or actively unwanted: nothing selected, a paused session
-// (the pane renders its own fallback), the screensaver (which replaces the whole
-// frame, so every capture under it is discarded on arrival), or a tab that does
-// not show pane content. The attached case is skipped inside CapturePaneFrame
-// rather than here, because an attach can begin after the target is resolved.
+// It returns the zero target — costing no subprocess and, since armFrameCapture
+// declines to arm on one, no message either — whenever a capture would be
+// pointless or actively unwanted: nothing selected, a paused session (the pane
+// renders its own fallback), the screensaver (which replaces the whole frame, so
+// every capture under it is discarded on arrival), a tab that does not show pane
+// content, or a preview pane that has stopped moving. The attached case is
+// skipped inside CapturePaneFrame rather than here, because an attach can begin
+// after the target is resolved.
 func (m *home) resolveFrameTarget() frameTarget {
 	selected := m.list.GetSelectedInstance()
 	if selected == nil || selected.Paused() || !selected.Started() {
@@ -84,14 +93,29 @@ func (m *home) resolveFrameTarget() frameTarget {
 	// arrival. It is also the one such state that lasts: hint and scroll mode
 	// discard the frame too, but both are transient and holding a capture back
 	// through them would freeze frameAt and flash a false staleness marker on exit
-	// for no idle saving at all. The chain keeps ticking here and re-arms with no
-	// delay on the frame after wake-up, because the target stops matching.
+	// for no idle saving at all. dismissScreensaver restamps freshness on the way
+	// out, and the preview tick revives the chain on the frame after wake-up.
 	if m.state == stateScreensaver {
 		return frameTarget{}
 	}
 	switch {
 	case m.tabbedWindow.IsInPreviewTab():
-		return frameTarget{instance: selected}
+		target := frameTarget{instance: selected}
+		// A pane that has returned frameQuietRuns identical captures in a row has
+		// stopped moving, so stop paying for it. Nothing is lost: the 500ms metadata
+		// sweep polls the selected session on every tick and hands over the bytes it
+		// already captured (applyHarvestedFrame), so the preview keeps updating at
+		// 2Hz — comfortably inside previewStaleAfter's 1.2s, which is why the marker
+		// stays silent and why this gate skips the capture rather than slowing it.
+		// That harvest is also what re-opens the gate: the first frame that differs
+		// resets the run, so the very next tick resolves a real target again.
+		//
+		// Preview tab only. The terminal tab has no harvest to fall back on, so a
+		// gate there would freeze its pane rather than slow it down.
+		if m.frameQuiet.settled(target, frameQuietRuns) {
+			return frameTarget{}
+		}
+		return target
 	case m.tabbedWindow.IsInTerminalTab():
 		// A missing shell is not a reason to skip: creating one is tmux work too,
 		// and doing it here on the main thread is what this change removes.
@@ -106,9 +130,11 @@ func (m *home) resolveFrameTarget() frameTarget {
 // captureFrameCmd sleeps for delay, then captures off the update thread.
 //
 // Sanitization runs here too (theme.SanitizeWidth is pure), so the main thread
-// only ever assigns a finished string. An empty target still returns a message
-// after the sleep, without touching tmux: that is what keeps the chain alive
-// across a paused selection or a stint on the diff tab.
+// only ever assigns a finished string. The empty-target branch is unreachable
+// from armFrameCapture, which declines to arm on one; it stays because every
+// path here must return a message rather than nothing — a dispatched command
+// that produced no paneFrameMsg would leave frameInFlight set forever, and the
+// chain would be wedged rather than merely dead.
 func captureFrameCmd(ctx context.Context, target frameTarget, delay time.Duration, ensure terminalEnsurer) tea.Cmd {
 	return func() tea.Msg {
 		if delay > 0 {
@@ -171,19 +197,34 @@ func captureTerminalFrame(target frameTarget, ensure terminalEnsurer) paneFrameM
 // the ui type — and so a test can drive the create path without a pane.
 type terminalEnsurer func(*session.Instance) (string, error)
 
-// armFrameCapture dispatches the next capture.
+// armFrameCapture dispatches the next capture, or lets the chain end when there
+// is nothing to capture.
 //
-// The in-flight flag is the whole no-overlap guarantee: arming sets it, the
-// message clears it, and the message handler is the only place the chain re-arms.
-// So the loop can neither fork (a second arm is a no-op) nor die (every dispatch
-// returns a message, even the ones that do no I/O), and a wedged tmux parks one
-// goroutine rather than a growing pile of them.
+// The in-flight flag is the no-overlap guarantee: arming sets it, the message
+// clears it, and every arm goes through here — handlePaneFrame continues a live
+// chain, the preview tick revives a dead one (below). So the loop cannot fork —
+// a second arm is a no-op — and a wedged tmux parks one goroutine rather than a
+// growing pile of them.
+//
+// It CAN die, deliberately. A zero target used to be dispatched anyway, so a
+// paused selection, the diff tab, the screensaver and now a still pane each cost
+// ten messages a second that captured nothing and applied nothing — and Bubble
+// Tea rebuilds the whole frame after every message (tea.go:880), measured at
+// 6-9ms and 1.2-2.3MB a rebuild. Declining to arm is what turns that into zero.
+// The unconditional 100ms preview tick is the revive (handlePreviewTick), in the
+// shape armSplashTick and armSpinnerTick already use: a general self-heal rather
+// than an enumeration of the ways a target can become interesting again, so a
+// future zero-target case gets its revive for free.
 func (m *home) armFrameCapture(delay time.Duration) tea.Cmd {
 	if m.frameInFlight || m.ctx.Err() != nil {
 		return nil
 	}
+	target := m.resolveFrameTarget()
+	if target.empty() {
+		return nil
+	}
 	m.frameInFlight = true
-	return captureFrameCmd(m.ctx, m.resolveFrameTarget(), delay, m.tabbedWindow.EnsureTerminalSession)
+	return captureFrameCmd(m.ctx, target, delay, m.tabbedWindow.EnsureTerminalSession)
 }
 
 // handlePaneFrame applies a captured frame and re-arms the chain.
@@ -202,9 +243,14 @@ func (m *home) handlePaneFrame(msg paneFrameMsg) (tea.Model, tea.Cmd) {
 			// ten times a second, through instanceChanged's handleError — while the
 			// pane it was describing kept rendering fine. The frame and its stamp stay
 			// put; the pane reports the growing age itself.
+			// A failure deliberately notes nothing into the quiet run either: it is
+			// not evidence that the pane stopped moving, only that we could not see
+			// it. Leaving the run where it is means a run of failures neither closes
+			// the gate nor re-opens it.
 			msg.target.instance.NotePaneFrameFailure(msg.err, msg.at)
 		} else {
 			msg.target.instance.SetPaneFrame(msg.text, msg.at)
+			m.noteFrameSeen(msg.target, msg.text)
 		}
 	case msg.target.termKey != "":
 		m.tabbedWindow.ApplyTerminalFrame(msg.target.termKey, msg.text, msg.err, msg.at)
@@ -243,8 +289,21 @@ func (m *home) refreshPanes() tea.Cmd {
 // it somewhere new. Without it, returning from a tab that captures nothing would
 // briefly show the age of the frame the pane had left behind — a real number
 // answering the wrong question.
+//
+// It drops the quiet run for the same reason, and it lives here rather than at
+// each caller because this is already the shared tail of every deliberate
+// re-point: a selection change (instanceChanged), a tab switch (tabChanged), a
+// screensaver wake (dismissScreensaver) and a resume (handleResumeDone). A run
+// describing the pane the user just looked away from must not decide whether the
+// new one is captured.
+//
+// The resume is the one that does not announce itself. The other three change
+// what the preview points AT; a resume leaves the same *Instance selected and
+// swaps the pane underneath it, so instanceChanged's pointer comparison sees
+// nothing and only an explicit call gets the run dropped.
 func (m *home) noteFrameTargetChange() {
 	m.tabbedWindow.NoteFrameTargetChange(time.Now())
+	m.frameQuiet = quietRun{}
 }
 
 // tabChanged is the shared tail of every tab switch: sync the hint bar's tab

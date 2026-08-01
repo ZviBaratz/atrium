@@ -561,11 +561,17 @@ func countVerb(calls []string, verb string) int {
 	return n
 }
 
-// TestFrameChain_NeverForksAndNeverDies pins the two failure modes of a
-// self-chaining loop: a second arm while one is in flight would double the tmux
-// load every tick, and an arm that returns no Cmd would leave the pane frozen
-// forever with no way back.
-func TestFrameChain_NeverForksAndNeverDies(t *testing.T) {
+// TestFrameChain_NeverForksAndNeverDiesWhileThereIsSomethingToCapture pins the
+// two failure modes of a self-chaining loop: a second arm while one is in flight
+// would double the tmux load every tick, and dropping the re-arm while a real
+// target is still resolved would leave the pane frozen forever with no way back.
+//
+// The qualifier is load-bearing. The chain deliberately DOES die on an empty
+// target — that is the point of #546's last stage, since a dispatch that captures
+// nothing still costs a full frame rebuild ten times a second. What replaces the
+// old "always re-arms" guarantee is the preview tick's revive, which
+// TestFrameChain_DiesOnAnEmptyTargetAndRevivesFromThePreviewTick covers per path.
+func TestFrameChain_NeverForksAndNeverDiesWhileThereIsSomethingToCapture(t *testing.T) {
 	spy := newFrameSpy("agent output")
 	h, _ := newCaptureHome(t, spy)
 
@@ -577,23 +583,17 @@ func TestFrameChain_NeverForksAndNeverDies(t *testing.T) {
 	require.NotNil(t, next, "handling a frame must re-arm the chain, or the pane freezes forever")
 	require.True(t, h.frameInFlight, "the re-arm claims the slot again — exactly one capture is ever in flight")
 
-	// Even with nothing to capture, the chain must keep ticking — otherwise a
-	// session paused while selected would freeze the loop and the preview would
-	// never come back when it resumes.
+	// With nothing to capture the chain ends instead: no Cmd, no message, and — the
+	// half that matters — no claim on the in-flight slot, or the preview tick's
+	// revive would find it taken and never restart the loop.
 	paused := newFrameSpy("unused")
 	ph, pinst := newCaptureHome(t, paused)
 	pinst.SetStatus(session.Paused)
 
-	cmd := ph.armFrameCapture(0)
-	require.NotNil(t, cmd, "the chain must arm even when there is nothing to capture")
-	msg, ok := cmd().(paneFrameMsg)
-	require.True(t, ok)
-	require.True(t, msg.target.empty(), "a paused selection must resolve to a no-I/O target")
-	require.NotContains(t, paused.seen()[len(paused.seen())-1:], "capture-pane",
-		"an empty target must not reach tmux at all")
-
-	_, again := ph.Update(msg)
-	require.NotNil(t, again, "and the chain must still re-arm from that empty round")
+	before := paused.count()
+	require.Nil(t, ph.armFrameCapture(0), "a paused selection has nothing to capture, so the chain ends")
+	require.False(t, ph.frameInFlight, "an arm that declined must not hold the slot, or the revive can never take it")
+	require.Equal(t, before, paused.count(), "and it must not reach tmux at all; saw %v", paused.seen()[before:])
 }
 
 // TestFrameChain_ReArmsImmediatelyWhenTheTargetMoved: a frame that lands for a

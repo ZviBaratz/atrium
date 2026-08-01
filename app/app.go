@@ -41,10 +41,11 @@ var scanFrame = zone.Scan
 
 // scanCached is scanFrame memoized on its input, because an idle Atrium hands it
 // the same frame over and over: Bubble Tea calls View() after every message
-// (tea.go:880), and the preview tick, the pane-capture chain and the metadata tick
-// produce ~22 of those a second with nothing spinning — ~32 once the spinner loop
-// joins them (armSpinnerTick). Measured, the scan is ~19% of a frame build's time
-// and about half its allocated bytes.
+// (tea.go:880), and at idle the preview tick and the metadata tick produce ~12 of
+// those a second — ~22 once the pane-capture chain has something to capture
+// (armFrameCapture), ~32 once the spinner loop joins them too (armSpinnerTick).
+// Measured, the scan is ~19% of a frame build's time and about half its allocated
+// bytes.
 //
 // Reusing the previous output is safe, and the reason is worth stating because it
 // is not obvious: a zone's ID lives INSIDE the pre-scan string, as the ANSI marker
@@ -368,6 +369,10 @@ type home struct {
 	// one is ever in flight, so an unresponsive tmux server parks one goroutine
 	// instead of accumulating a new one every 100ms. See app_frames.go.
 	frameInFlight bool
+	// frameQuiet is the run of identical captures observed for the pane being
+	// watched, which is what lets resolveFrameTarget stop paying for a pane that
+	// has stopped moving. Main-thread only, like frameInFlight. See framegate.go.
+	frameQuiet quietRun
 	// appConfig stores persistent application configuration
 	appConfig *config.Config
 	// appState stores persistent application state like seen help screens

@@ -12,11 +12,11 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// The spinner loop was self-chaining forever. It is one of three independent 10Hz
-// loops, and Bubble Tea rebuilds the whole frame after every message — measured at
-// 6-9ms and 1.2-2.3MB a rebuild — so with nothing on screen actually spinning, that
-// was ~31% of an idle Atrium's render cost animating a counter nothing reads
-// (#546).
+// The spinner loop was self-chaining forever. It was one of three independent 10Hz
+// loops — the pane-capture chain has since learned to stop too (armFrameCapture) —
+// and Bubble Tea rebuilds the whole frame after every message, measured at 6-9ms
+// and 1.2-2.3MB a rebuild, so with nothing on screen actually spinning that was
+// ~31% of an idle Atrium's render cost animating a counter nothing reads (#546).
 //
 // These are structural claims about whether the loop arms, in the shape
 // app_splash_test.go established. Nothing here measures time.
@@ -114,7 +114,9 @@ func TestSpinnerAnimating_NilListIsNotSpinning(t *testing.T) {
 // It draws the full-window splash and returns from viewContent before the panes are
 // reached, so every capture taken under it is discarded on arrival — and unlike
 // hint or scroll mode it can be left up indefinitely, which makes it the one
-// discard state worth gating. The chain still ticks; only the tmux work stops.
+// discard state worth gating. And the tmux work is not all that stops: armFrameCapture
+// declines to arm on the zero target, so the chain itself ends here and the preview
+// tick revives it after wake-up (TestFrameChain_DiesOnAnEmptyTargetAndRevivesFromThePreviewTick).
 //
 // Built with newCaptureHome because the instance must actually be STARTED:
 // resolveFrameTarget returns the zero target for an unstarted session anyway, so a
