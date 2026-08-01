@@ -1,6 +1,7 @@
 package cmdlog
 
 import (
+	"os/exec"
 	"testing"
 	"time"
 )
@@ -86,5 +87,53 @@ func TestTotals_ZeroCPUIsStillTotallyOrdered(t *testing.T) {
 	// Count breaks the CPU tie, then name breaks a count tie.
 	if got[0].Verb != "git status" || got[1].Verb != "tmux has-session" {
 		t.Errorf("order = %q, %q; want git status, tmux has-session", got[0].Verb, got[1].Verb)
+	}
+}
+
+// A prelude flag's value is arbitrary text, and Atrium passes real paths through
+// two of them — `git -C <worktree>` and `tmux -f <conf>`. A repository under a
+// directory with a space in its name used to bucket as "git repo", one verb per
+// repository, which is precisely the scattering preludeFlagsWithValues exists to
+// prevent and which its own comment claims it does.
+//
+// The fix is that RecordCmd resolves the verb from the argv the OS has, before
+// Redact joins it into log text. This drives the real capture path rather than
+// calling verbOf directly, because the defect was never in verbOf's logic — it
+// was in which of the two argvs reached it.
+func TestRecordCmd_ResolvesTheVerbBeforeArgvBecomesText(t *testing.T) {
+	Reset()
+	cmd := exec.CommandContext(t.Context(), "git", "-C", "/home/u/my repo", "status", "--porcelain")
+	RecordCmd(cmd, "", time.Now(), nil, nil)
+
+	recs := Snapshot()
+	if len(recs) != 1 {
+		t.Fatalf("Snapshot() has %d records, want 1", len(recs))
+	}
+	if got, want := recs[0].Verb, "git status"; got != want {
+		t.Errorf("Verb = %q, want %q", got, want)
+	}
+	// Argv stays the joined display text the overlay renders; the point is that the
+	// verb no longer depends on being able to split it back apart.
+	if got, want := recs[0].Argv, "git -C /home/u/my repo status --porcelain"; got != want {
+		t.Errorf("Argv = %q, want %q", got, want)
+	}
+	if got := Totals(); len(got) != 1 || got[0].Verb != "git status" {
+		t.Errorf("Totals() = %+v, want a single \"git status\" bucket", got)
+	}
+}
+
+// A record that arrives with no Verb — built from argv text rather than by
+// RecordCmd — is still bucketed, so a hand-built record cannot silently land in
+// an empty-named bucket alongside every other one.
+func TestAdd_FillsAMissingVerbFromArgvText(t *testing.T) {
+	Reset()
+	Add(Record{Argv: "tmux -L atrium capture-pane -p", Start: time.Now()})
+
+	recs := Snapshot()
+	if len(recs) != 1 {
+		t.Fatalf("Snapshot() has %d records, want 1", len(recs))
+	}
+	if got, want := recs[0].Verb, "tmux capture-pane"; got != want {
+		t.Errorf("Verb = %q, want %q", got, want)
 	}
 }
