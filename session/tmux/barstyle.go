@@ -47,11 +47,12 @@ func barStyleColours() (bg, fg string) {
 // ApplyBarStyle pushes the active theme's status-bar band colours to the live
 // tmux server. One set-option for the whole fleet, then a best-effort repaint.
 //
-// It reads theme.Current() at call time rather than taking colours as arguments:
-// the value being fixed too early is precisely the bug this exists to fix, and a
-// colour passed in as an argument is a wire no test guards. That read is off the
-// bubbletea loop, which is why theme.Current() is an atomic load (see
-// ui/theme/current.go).
+// It resolves the colours at call time, through barStyleColours, rather than
+// taking them as arguments: the value being fixed too early is precisely the bug
+// this exists to fix, and a colour passed in as an argument is a wire no test
+// guards. That resolution runs off the bubbletea loop, which is why both globals it
+// reaches are atomic loads — theme.Current() and theme.Mono() (see
+// ui/theme/current.go and ui/theme/mono.go).
 //
 // No-ops when the user supplied their own tmux config: status-style is then theirs
 // to set, and stomping it server-globally would contradict tmux_config_override,

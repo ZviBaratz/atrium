@@ -52,3 +52,30 @@ func TestSetMonoRestores(t *testing.T) {
 	restore()
 	require.False(t, Mono())
 }
+
+// Mono() is read OFF the bubbletea loop: barStyleColours reaches it from the
+// tea.Cmd that restyles the fleet after a theme change, and app_layout.go's
+// barStyleApplier requires every global that Cmd touches be safe there.
+//
+// This is the guard for that, and it only means anything under -race (CI runs the
+// race detector as its own job; `just test-race` locally). Swap mono back to a
+// plain bool and this goes red with a WRITE/READ data race on ui/theme/mono.go —
+// which is the whole point, because with a plain bool every OTHER test in the
+// package still passes, including TestSetMonoRestores.
+func TestMonoIsSafeToReadOffTheUpdateThread(t *testing.T) {
+	defer SetMono(false)()
+
+	const reads = 1000
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for range reads {
+			_ = Mono()
+		}
+	}()
+	for range reads {
+		SetMono(true)
+		SetMono(false)
+	}
+	<-done
+}
