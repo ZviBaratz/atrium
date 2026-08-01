@@ -113,7 +113,7 @@ func TestRenderMemos_ASpinningListDoesNotRecomposeTheRightPane(t *testing.T) {
 
 		require.Equal(t, i+2, h.frameMemo.Runs(), "a moving spinner must restack the frame")
 		require.Equal(t, 1, h.tabbedWindow.ComposeRuns(),
-			"but it must not recompose the right pane, which is 40%% of the build")
+			"but it must not recompose the right pane, which is 40% of the build")
 	}
 }
 
@@ -142,6 +142,7 @@ func TestViewContent_ComposesTheRightPaneOncePerFrame(t *testing.T) {
 				for i, p := range layoutPresets {
 					if p.listHidden {
 						h.layoutIndex = i
+						break // the FIRST hidden-list preset; without this a second one would silently take over
 					}
 				}
 			}
@@ -160,9 +161,14 @@ func TestViewContent_ComposesTheRightPaneOncePerFrame(t *testing.T) {
 // without them, across every mutation the model can make between two renders.
 //
 // The per-key-field tests in ui/ prove each enumerated input invalidates. This
-// proves the enumeration is COMPLETE — an input nobody thought of shows up here as
-// two frames that differ, and it does so through the real Update path rather than
-// through a key a test author remembered to change.
+// covers the other direction — that a key does not have to be remembered to be
+// exercised — by driving real model changes and requiring byte equality.
+//
+// It proves the enumeration covers THESE mutations, and nothing stronger. An input
+// no row below touches is invisible to it: the terminal tab is never selected, the
+// splash variant and splash_enabled are never flipped, and the list's sort and
+// group modes never move. Growing the table is how that gap closes; do not read a
+// green run as "the keys are complete".
 func TestRenderMemos_MemoizedFrameMatchesUnmemoized(t *testing.T) {
 	cases := []struct {
 		name string
@@ -170,36 +176,48 @@ func TestRenderMemos_MemoizedFrameMatchesUnmemoized(t *testing.T) {
 		// control for the control. Every other row must, or it is comparing two
 		// renders of a model nothing happened to and would pass against any memo
 		// at all.
-		inert  bool
+		inert bool
+		// arm puts the model into the state the row is ABOUT, before the baseline
+		// frame is captured. Setup done inside mutate instead moves the frame on its
+		// own, which satisfies the inert check for free and lets the actual mutation
+		// be deleted with the row still green — the defect that hid in the splash
+		// row until it was checked by deleting SetSplashFrame.
+		arm    func(t *testing.T, h *home)
 		mutate func(t *testing.T, h *home)
 	}{
 		{name: "nothing", inert: true, mutate: func(_ *testing.T, _ *home) {}},
 		{name: "selection moves", mutate: func(_ *testing.T, h *home) { h.list.SetSelectedInstance(2) }},
 		{name: "tab toggles", mutate: func(_ *testing.T, h *home) { h.tabbedWindow.Toggle() }},
-		{name: "preview content changes", mutate: func(_ *testing.T, h *home) {
+		{name: "preview enters scroll mode", mutate: func(_ *testing.T, h *home) {
 			h.tabbedWindow.SetPreviewScrollContent(h.list.GetInstances()[0], "scrolled text")
 		}},
-		// A round trip, and inert on purpose: leaving scroll mode must restore the
-		// live view exactly, so the frame has to come back to where it started. The
-		// memo has to notice twice — once entering, once leaving — and its single
-		// entry means the return is a recompose, not a resurrected first frame.
-		{name: "preview scroll round trip", inert: true, mutate: func(t *testing.T, h *home) {
-			inst := h.list.GetInstances()[0]
-			h.tabbedWindow.SetPreviewScrollContent(inst, "scrolled text")
-			require.NotEqual(t, "", h.viewContent())
-			require.NoError(t, h.tabbedWindow.ResetPreviewToNormalMode(inst))
-		}},
+		// The exit is its own row rather than the tail of a round trip. As a round
+		// trip the frame returned to where it started, so the inert check passed
+		// whether or not scroll mode was ever entered; armed instead, the baseline is
+		// the scrolled frame and leaving has to visibly change it.
+		{
+			name: "preview leaves scroll mode",
+			arm: func(_ *testing.T, h *home) {
+				h.tabbedWindow.SetPreviewScrollContent(h.list.GetInstances()[0], "scrolled text")
+			},
+			mutate: func(t *testing.T, h *home) {
+				require.NoError(t, h.tabbedWindow.ResetPreviewToNormalMode(h.list.GetInstances()[0]))
+			},
+		},
 		{name: "hint overlay opens", mutate: func(_ *testing.T, h *home) {
 			h.tabbedWindow.SetPreviewHintOverlay(h.list.GetInstances()[0], "hinted frame")
 		}},
 		// The splash clock only reaches the frame while the idle splash is the thing
-		// on screen, so the pane is pointed at no instance first — without that the
-		// row sets a field nothing reads and proves nothing about the memo.
-		{name: "splash frame advances", mutate: func(t *testing.T, h *home) {
-			require.NoError(t, h.tabbedWindow.UpdatePreview(nil))
-			h.viewContent()
-			h.tabbedWindow.SetSplashFrame(42)
-		}},
+		// on screen, so pointing the pane at no instance is ARMING, not mutating. Done
+		// inside mutate it moved the frame by itself and SetSplashFrame could be
+		// deleted with the row still green — the one axis it exists to cover.
+		{
+			name: "splash frame advances",
+			arm:  func(t *testing.T, h *home) { require.NoError(t, h.tabbedWindow.UpdatePreview(nil)) },
+			mutate: func(_ *testing.T, h *home) {
+				h.tabbedWindow.SetSplashFrame(42)
+			},
+		},
 		{name: "a status flips", mutate: func(_ *testing.T, h *home) { h.list.GetInstances()[0].SetStatus(session.Running) }},
 		{name: "a badge appears", mutate: func(_ *testing.T, h *home) { h.list.SetUpdateBadge("v9.9.9") }},
 		{name: "a drift badge appears", mutate: func(_ *testing.T, h *home) { h.list.SetDriftBadge("stale") }},
@@ -221,16 +239,23 @@ func TestRenderMemos_MemoizedFrameMatchesUnmemoized(t *testing.T) {
 			// newBenchHome gives each instance its own TempDir and the repo-group
 			// header is the directory's name.
 			h := newBenchHome(t, 3)
+			if tc.arm != nil {
+				tc.arm(t, h)
+			}
 			before := h.viewContent() // fill every memo, so the frame under test can be a hit
 
 			tc.mutate(t, h)
 			got := h.viewContent()
 
 			// The same model state, rebuilt from nothing with the memos off.
-			restore := memo.SetEnabled(false)
-			h.resetRenderMemos()
-			want := h.viewContent()
-			restore()
+			// Deferred, not called inline: a panic in viewContent would otherwise
+			// leave memoization off process-wide and fail every later test in the
+			// package with wrong run counts, burying the real failure.
+			want := func() string {
+				defer memo.SetEnabled(false)()
+				h.resetRenderMemos()
+				return h.viewContent()
+			}()
 
 			require.Equal(t, want, got,
 				"a memoized frame must be byte-identical to an unmemoized one after: %s", tc.name)

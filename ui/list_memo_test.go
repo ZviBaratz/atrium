@@ -117,15 +117,22 @@ func TestListPanelMemo_DisabledDrawsEveryTime(t *testing.T) {
 	require.Equal(t, 2, l.PanelComposeRuns())
 }
 
+// ResetMemo drops the entry, not just the count.
+//
+// The zero has to be asserted BEFORE the next render. Written as "reset, render,
+// expect 1" the test passes against a ResetMemo that does nothing at all: the
+// render is then a memo hit, the count stays at the 1 it already held, and a test
+// named ForcesARedraw is green while nothing was redrawn.
 func TestListPanelMemo_ResetForcesARedraw(t *testing.T) {
 	l := newMemoList(t, 3)
 
 	_ = l.String()
 	_ = l.String()
-	require.Equal(t, 1, l.PanelComposeRuns())
+	require.Equal(t, 1, l.PanelComposeRuns(), "precondition: the second render hits")
 
 	l.ResetMemo()
-	_ = l.String()
+	require.Zero(t, l.PanelComposeRuns(), "Reset must zero the count")
 
-	require.Equal(t, 1, l.PanelComposeRuns(), "Reset zeroes the count, so the redraw reads as the first")
+	_ = l.String()
+	require.Equal(t, 1, l.PanelComposeRuns(), "and the next render must actually redraw")
 }

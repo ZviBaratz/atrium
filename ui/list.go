@@ -3,11 +3,12 @@ package ui
 import (
 	"errors"
 	"fmt"
+	"strings"
+
 	"github.com/ZviBaratz/atrium/internal/memo"
 	"github.com/ZviBaratz/atrium/log"
 	"github.com/ZviBaratz/atrium/session"
 	"github.com/ZviBaratz/atrium/ui/theme"
-	"strings"
 
 	"charm.land/bubbles/v2/spinner"
 	tea "charm.land/bubbletea/v2"

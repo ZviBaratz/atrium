@@ -117,6 +117,49 @@ func TestTabbedWindowMemo_EveryKeyedScalarInvalidates(t *testing.T) {
 	}
 }
 
+// compose renders with k.theme and never reads the global.
+//
+// This is the property that makes the key's theme entry a data dependency rather
+// than a bare invalidation token, and no other test here can see it: in a
+// synchronous test k.theme and theme.Current() are always the same pointer, so
+// reverting any one style call to theme.Current() survives every assertion above.
+// Pinning k.theme and moving the global underneath it is what separates them —
+// two composes of one key must agree whatever the global says.
+//
+// It matters because compose is reachable with a theme that is not the current one
+// the moment anything composes off the update loop, and because the cached frame is
+// filed under k.theme: a body reading the global would cache a frame drawn in one
+// palette under another palette's key, and serve it until some unrelated input moved.
+func TestTabbedWindowMemo_ComposeRendersWithTheKeyedThemeNotTheGlobal(t *testing.T) {
+	w := newMemoWindow(t)
+	k := tabbedKey{
+		content:   w.activePaneContent(),
+		width:     w.width,
+		height:    w.height,
+		activeTab: w.activeTab,
+		theme:     theme.Get("catppuccin-mocha"),
+	}
+
+	restore := theme.Set("unicode")
+	underUnicode := w.compose(k)
+	restore()
+
+	restore = theme.Set("catppuccin-latte")
+	underLatte := w.compose(k)
+	restore()
+
+	require.Equal(t, underUnicode, underLatte,
+		"compose must build the frame from k.theme alone; a theme.Current() left in its "+
+			"body makes the same key render differently as the global moves")
+}
+
+// Mutation note for the test above: reverting windowStyle, activeTabStyle or
+// inactiveTabStyle in compose to theme.Current() fails it. The fourth call —
+// activeTabStyle(k.theme, false) for tabHeight — does not, and cannot: it reads
+// only GetVerticalFrameSize(), which is 2 for every palette in the registry, so
+// that mutant is equivalent rather than uncaught. It is threaded for consistency
+// with the other three, not because a test could tell.
+
 // tabStrip is the pane's top three rows: the tab border, the labels, and the
 // border that closes under the inactive tabs. It is what carries which tab is
 // selected, and it is independent of the body below it.
@@ -198,15 +241,19 @@ func TestTabbedWindowMemo_DisabledComposesEveryTime(t *testing.T) {
 
 // ResetMemo forces the next render to compose. It is what keeps the cold
 // benchmarks cold, so it is asserted rather than assumed.
+// ResetMemo drops the entry, not just the count. See the note on the List twin:
+// asserting only "reset, render, expect 1" passes against an inert ResetMemo,
+// because the render is then a hit and the count never moves.
 func TestTabbedWindowMemo_ResetForcesARecompose(t *testing.T) {
 	w := newMemoWindow(t)
 
 	_ = w.String()
 	_ = w.String()
-	require.Equal(t, 1, w.ComposeRuns())
+	require.Equal(t, 1, w.ComposeRuns(), "precondition: the second render hits")
 
 	w.ResetMemo()
-	_ = w.String()
+	require.Zero(t, w.ComposeRuns(), "Reset must zero the count")
 
-	require.Equal(t, 1, w.ComposeRuns(), "Reset zeroes the count, so the recompose reads as the first")
+	_ = w.String()
+	require.Equal(t, 1, w.ComposeRuns(), "and the next render must actually recompose")
 }

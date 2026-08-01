@@ -543,10 +543,19 @@ func (l *List) String() string {
 		height:      l.height,
 		theme:       theme.Current(),
 	}
-	return zone.Mark(listPanelZoneID, l.panelMemo.Get(k, func() string {
-		return k.theme.PanelWithBadges("Sessions", []string{k.updateBadge, k.driftBadge},
-			k.content, k.width, k.height, true)
-	}))
+	// zone.Mark sits INSIDE the memo, so a hit returns the already-marked bytes.
+	// Outside it, every hit would still concatenate gid + panel + gid — a fresh
+	// allocation the size of the whole panel, which is most of what the memo was
+	// added to avoid. It is safe in the key for the same reason the tabbed window
+	// marks inside its compose: Mark is `gid + v + gid` for an id already in the
+	// manager's map, and the gid is stable for the process lifetime.
+	//
+	// The "outside Panel" note above is about PanelWithBadges' internal clipping,
+	// not about the memo, and still holds — Mark wraps the panel either way.
+	return l.panelMemo.Get(k, func() string {
+		return zone.Mark(listPanelZoneID, k.theme.PanelWithBadges("Sessions",
+			[]string{k.updateBadge, k.driftBadge}, k.content, k.width, k.height, true))
+	})
 }
 
 // PanelComposeRuns reports how many times the panel chrome has actually been

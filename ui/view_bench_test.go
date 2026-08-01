@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/ZviBaratz/atrium/session"
+	"github.com/ZviBaratz/atrium/ui/theme"
 
 	"charm.land/bubbles/v2/spinner"
 	"github.com/stretchr/testify/require"
@@ -26,6 +27,12 @@ import (
 // since every line of agent output carries box-drawing runes.
 func benchWindow(tb testing.TB) *TabbedWindow {
 	tb.Helper()
+	// Pin the theme, as the memo fixtures do. The glyph set drives rune widths and
+	// the palette drives how many ANSI sequences each styled segment emits, and both
+	// move allocs/op — the number this file tells the reader to trust. Unpinned, a
+	// run after a test that left GlyphSetASCII selected is not comparable with one
+	// from a clean start, and nothing in the output says which happened.
+	tb.Cleanup(theme.Set("unicode"))
 	w := NewTabbedWindow(NewPreviewPane(), NewDiffPane(), NewTerminalPane(context.Background()))
 	w.SetSize(100, 40)
 	var text string
@@ -38,6 +45,7 @@ func benchWindow(tb testing.TB) *TabbedWindow {
 
 func benchList(tb testing.TB, n int) *List {
 	tb.Helper()
+	tb.Cleanup(theme.Set("unicode")) // see benchWindow
 	s := spinner.New()
 	l := NewList(&s)
 	for i := range n {

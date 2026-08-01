@@ -21,8 +21,16 @@ package memo
 //
 // A package var rather than a Config field: this is a test seam, not a setting
 // (the diffContentFloor idiom in app/app_poll.go). It is read on the render path,
-// which is main-thread only, so flip it around a synchronous render and restore
-// it with the returned function; nothing in app or ui runs tests in parallel.
+// which is main-thread only, so flip it around a synchronous render and restore it
+// with the returned function.
+//
+// Deliberately an unsynchronized bool. Making it atomic would BURY the constraint
+// rather than remove it: a flip that races a render is a wrong frame whichever way
+// the load is spelled, and the race detector reporting it is the useful outcome.
+// What that costs is a rule — no t.Parallel() in a test that flips this — and a
+// rule stated only in a comment is a rule that decays, so TestEnabled_HasNoParallelFlippers
+// walks the app and ui test sources and fails if any file both flips the seam and
+// calls t.Parallel().
 var Enabled = true
 
 // SetEnabled sets Enabled and returns a function restoring the previous value,

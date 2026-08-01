@@ -24,53 +24,54 @@ func tabZoneID(i int) string { return fmt.Sprintf("tab-%d", i) }
 // scroll the active tab's content.
 const tabbedWindowZoneID = "tabbed-window"
 
-func tabBorderWithBottom(left, middle, right string) lipgloss.Border {
+func tabBorderWithBottom(th *theme.Theme, left, middle, right string) lipgloss.Border {
 	// Start from the theme's box style so a fallback theme's square corners
 	// apply to the tab strip too, not just the panels.
-	border := theme.Current().Borders.Style
+	border := th.Borders.Style
 	border.BottomLeft = left
 	border.Bottom = middle
 	border.BottomRight = right
 	return border
 }
 
-// Tab/window styles read the active theme at render time. Border color carries
-// focus: the right pane's chrome is faint by default (the list panel, which owns
-// the selection, keeps the accent border) and lights up accent only while a pane
-// is in scroll mode — the one state where keyboard input is captured by this
-// pane. focused is that scroll-mode flag; frame metrics are identical either
-// way, so size computations may pass false.
-func inactiveTabStyle() lipgloss.Style {
+// Tab/window styles take the theme rather than reading theme.Current(), so the
+// one that composed a frame is the one the memo keyed on — see tabbedKey. Border
+// color carries focus: the right pane's chrome is faint by default (the list
+// panel, which owns the selection, keeps the accent border) and lights up accent
+// only while a pane is in scroll mode — the one state where keyboard input is
+// captured by this pane. focused is that scroll-mode flag; frame metrics are
+// identical either way, so size computations may pass false.
+func inactiveTabStyle(th *theme.Theme) lipgloss.Style {
 	return lipgloss.NewStyle().
-		Border(tabBorderWithBottom("┴", "─", "┴"), true).
-		BorderForeground(theme.Current().Palette.FgFaint).
-		Foreground(theme.Current().Palette.FgDim).
+		Border(tabBorderWithBottom(th, "┴", "─", "┴"), true).
+		BorderForeground(th.Palette.FgFaint).
+		Foreground(th.Palette.FgDim).
 		AlignHorizontal(lipgloss.Center)
 }
 
-func activeTabStyle(focused bool) lipgloss.Style {
-	border := theme.Current().Palette.FgFaint
-	label := theme.Current().Palette.AccentMuted
+func activeTabStyle(th *theme.Theme, focused bool) lipgloss.Style {
+	border := th.Palette.FgFaint
+	label := th.Palette.AccentMuted
 	if focused {
-		border = theme.Current().Palette.Accent
-		label = theme.Current().Palette.Accent
+		border = th.Palette.Accent
+		label = th.Palette.Accent
 	}
 	return lipgloss.NewStyle().
-		Border(tabBorderWithBottom("┘", " ", "└"), true).
+		Border(tabBorderWithBottom(th, "┘", " ", "└"), true).
 		BorderForeground(border).
 		Foreground(label).
 		Bold(true).
 		AlignHorizontal(lipgloss.Center)
 }
 
-func windowStyle(focused bool) lipgloss.Style {
-	color := theme.Current().Palette.FgFaint
+func windowStyle(th *theme.Theme, focused bool) lipgloss.Style {
+	color := th.Palette.FgFaint
 	if focused {
-		color = theme.Current().Palette.Accent
+		color = th.Palette.Accent
 	}
 	return lipgloss.NewStyle().
 		BorderForeground(color).
-		Border(theme.Current().Borders.Style, false, true, true, true)
+		Border(th.Borders.Style, false, true, true, true)
 }
 
 // Indices of the right pane's tabs, in display order.
@@ -122,9 +123,10 @@ type TabbedWindow struct {
 // The rest are the scalars compose reads directly. theme is the *Theme pointer
 // rather than a name because theme.compose allocates a fresh one on every Set /
 // SetGlyphSet, so the pointer IS the theme generation — a new palette or glyph
-// rung cannot slip past the key. The style helpers (activeTabStyle, windowStyle)
-// call theme.Current() themselves; within one String() call that is this same
-// pointer, since the selection only moves on the update loop.
+// rung cannot slip past the key. It is also the theme compose actually renders
+// with: the style helpers take it as a parameter rather than reading
+// theme.Current() themselves, so the frame in the cache was built by the theme
+// the cache is filed under, and not merely invalidated by it.
 //
 // w.tabs is deliberately absent: it is set once in NewTabbedWindow and has no
 // setter, so keying on it would claim a guard that guards nothing.
@@ -163,7 +165,8 @@ func (w *TabbedWindow) SetSize(width, height int) {
 	// w.width is the inner (pre-border) width; the window border adds its
 	// horizontal frame back, so the pane's total rendered width equals the given
 	// width and the right pane fills its column exactly.
-	w.width = width - windowStyle(false).GetHorizontalFrameSize()
+	th := theme.Current()
+	w.width = width - windowStyle(th, false).GetHorizontalFrameSize()
 	w.height = height
 
 	// Calculate the content height by subtracting:
@@ -171,9 +174,9 @@ func (w *TabbedWindow) SetSize(width, height int) {
 	// 2. Window style vertical frame size (bottom border)
 	// The tab strip's top border is the pane's visual top edge, so it aligns
 	// with the list panel's top border at row 0 — no leading blank rows.
-	tabHeight := activeTabStyle(false).GetVerticalFrameSize() + 1
-	contentHeight := height - tabHeight - windowStyle(false).GetVerticalFrameSize()
-	contentWidth := w.width - windowStyle(false).GetHorizontalFrameSize()
+	tabHeight := activeTabStyle(th, false).GetVerticalFrameSize() + 1
+	contentHeight := height - tabHeight - windowStyle(th, false).GetVerticalFrameSize()
+	contentWidth := w.width - windowStyle(th, false).GetHorizontalFrameSize()
 
 	w.preview.SetSize(contentWidth, contentHeight)
 	w.diff.SetSize(contentWidth, contentHeight)
@@ -511,8 +514,13 @@ func (w *TabbedWindow) String() string {
 	if w.width == 0 || w.height == 0 {
 		return ""
 	}
-	// Render the active pane first — it is ~1% of what this method costs — so the
-	// memo can key on its output bytes instead of on the pane state behind them.
+	// Render the active pane first, so the memo can key on its output bytes instead
+	// of on the pane state behind them. That render is the one part of this method
+	// no hit can skip, and its cost depends on which tab is showing: ~1% of the
+	// method on the preview tab (where the 40%-of-a-frame-build figure was measured),
+	// materially more on the other two, since DiffPane re-colours the whole diff and
+	// TerminalPane takes a lock and rebuilds from its session map. The memo is worth
+	// most on the tab Atrium sits on by default, and less on the other two.
 	k := tabbedKey{
 		content:   w.activePaneContent(),
 		width:     w.width,
@@ -552,17 +560,24 @@ func (w *TabbedWindow) ResetMemo() { w.memo.Reset() }
 
 // compose builds the window from k and nothing else — bar w.tabs, which is fixed
 // at construction. That is the property the memo rests on, and it is meant to be
-// checkable by reading this body: a `w.` here that is not w.tabs is an input the
-// key does not cover, and therefore a frame that can be served stale.
+// checkable by reading this body.
+//
+// Two things make an input escape the key, and the second is the one that is easy
+// to miss: a `w.` selector that is not w.tabs, and a call that reads mutable
+// PACKAGE state. theme.Current() is the live example — it is not a `w.` anything,
+// and an earlier draft of this comment named only the first rule, so it would have
+// audited clean over four style helpers all reading the global theme. They take
+// *theme.Theme now for exactly that reason. Any new global read here needs the
+// same treatment or a line in tabbedKey.
 func (w *TabbedWindow) compose(k tabbedKey) string {
 	var renderedTabs []string
 
 	focused := k.focused
 
-	totalTabWidth := k.width + windowStyle(false).GetHorizontalFrameSize()
+	totalTabWidth := k.width + windowStyle(k.theme, false).GetHorizontalFrameSize()
 	tabWidth := totalTabWidth / len(w.tabs)
 	lastTabWidth := totalTabWidth - tabWidth*(len(w.tabs)-1)
-	tabHeight := activeTabStyle(false).GetVerticalFrameSize() + 1 // get padding border margin size + 1 for character height
+	tabHeight := activeTabStyle(k.theme, false).GetVerticalFrameSize() + 1 // get padding border margin size + 1 for character height
 
 	for i, t := range w.tabs {
 		width := tabWidth
@@ -573,9 +588,9 @@ func (w *TabbedWindow) compose(k tabbedKey) string {
 		var style lipgloss.Style
 		isFirst, isLast, isActive := i == 0, i == len(w.tabs)-1, i == k.activeTab
 		if isActive {
-			style = activeTabStyle(focused)
+			style = activeTabStyle(k.theme, focused)
 		} else {
-			style = inactiveTabStyle()
+			style = inactiveTabStyle(k.theme)
 		}
 		border, _, _, _, _ := style.GetBorder()
 		if isFirst && isActive {
@@ -595,9 +610,9 @@ func (w *TabbedWindow) compose(k tabbedKey) string {
 	}
 
 	row := lipgloss.JoinHorizontal(lipgloss.Top, renderedTabs...)
-	window := windowStyle(focused).Render(
+	window := windowStyle(k.theme, focused).Render(
 		lipgloss.Place(
-			k.width, k.height-windowStyle(false).GetVerticalFrameSize()-tabHeight,
+			k.width, k.height-windowStyle(k.theme, false).GetVerticalFrameSize()-tabHeight,
 			lipgloss.Left, lipgloss.Top, k.content))
 
 	// Defensive height cap: lipgloss.Place aligns content but does not truncate, so
