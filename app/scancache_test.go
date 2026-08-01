@@ -28,9 +28,9 @@ func countingScan(t *testing.T) *int {
 // An unchanged frame is scanned once, not once per render.
 //
 // This is the whole point: Bubble Tea calls View() after every message, and an idle
-// Atrium produces ~22 of those a second (~32 before the spinner loop learned to
-// stop), so without the memo the scan ran on every one of them over a frame that
-// never changed.
+// Atrium produces ~12 of those a second (~32 before the spinner loop and the
+// capture chain learned to stop), so without the memo the scan ran on every one of
+// them over a frame that never changed.
 func TestScanCached_IdenticalFrameScansOnce(t *testing.T) {
 	h := newBenchHome(t, 3)
 	n := countingScan(t)

@@ -203,6 +203,12 @@ func (m *home) handlePreviewTick(msg previewTickMsg) (tea.Model, tea.Cmd) {
 		// Loading. This is the self-heal: a status that starts spinning between
 		// metadata sweeps lights up within one tick.
 		m.armSpinnerTick(),
+		// Likewise for the pane-capture chain, which dies whenever there is nothing
+		// to capture — a paused or unstarted selection, the diff tab, the
+		// screensaver, or a preview pane that has stopped moving. Arming with no
+		// delay so the first frame back arrives within a tick rather than two; a
+		// no-op while a capture is already in flight or the target is still empty.
+		m.armFrameCapture(0),
 		// An update notice that arrived while an overlay owned the screen
 		// is buffered; deliver it as soon as the hint bar is back.
 		m.flushPendingUpdateNotice(),
