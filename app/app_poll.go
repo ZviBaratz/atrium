@@ -597,14 +597,16 @@ func collectMetadata(ctx context.Context, poll []*session.Instance, selected *se
 
 // applyMetadataResults applies a batch of metadata results to their instances on the main
 // thread (pane state, diff, PR, model, mode, effort), re-floats urgent rows, refreshes the session
-// context bars, and returns any queued-prompt delivery commands. Shared by the periodic
+// context bars, writes state.json when any session's status has moved (see
+// flushStatusPersist), and returns any queued-prompt delivery commands. Shared by the periodic
 // metadata tick and the one-shot detach sweep. It deliberately does NOT recover lost
 // sessions or reschedule the tick — those stay with the periodic handler (recovery's
 // strike debounce must not be shortened by a same-resume double observation).
 func (m *home) applyMetadataResults(results []instanceMetaResult, emit bool) []tea.Cmd {
-	// Read the notification mode once per batch. The detach sweep passes emit=false,
-	// so returning to the list never replays a burst of edges that fired silently
-	// while the event loop was suspended by an attach.
+	// Read the notification mode once per batch: when off (the default) the per-instance
+	// status snapshots below are skipped entirely, so a disabled feature adds no work.
+	// The detach sweep passes emit=false, so returning to the list never replays a burst
+	// of edges that fired silently while the event loop was suspended by an attach.
 	mode := config.NotificationsOff
 	if emit {
 		mode = m.notificationsMode()
@@ -613,28 +615,24 @@ func (m *home) applyMetadataResults(results []instanceMetaResult, emit bool) []t
 	// The quiet-pane gate only ever asks about the selected session's preview, so
 	// only its harvest is worth folding into the run below.
 	selected := m.list.GetSelectedInstance()
-	statusChanged := false
 	for _, r := range results {
 		// Skip instances that were paused while metadata was being computed, or that
 		// were just recovered to Paused because their session died.
 		if r.sessionLost || r.instance.Paused() {
 			continue
 		}
-		// Snapshot the status just before ApplyPaneState, which calls SetStatus and
-		// overwrites it. Two consumers now: maybeNotify detects the edge it rings on,
-		// and the persist below detects that state.json is out of date. Taken
-		// unconditionally for the second — it is one RLock read, and gating it on
-		// notifications (as it once was) would have made a durable record of session
-		// status depend on whether the user had turned the bell on.
-		old := r.instance.GetStatus()
+		// Snapshot the status and unread stamp just before ApplyPaneState so maybeNotify
+		// can detect the transition it drives (ApplyPaneState calls SetStatus, which
+		// overwrites both). Only taken when notifications are on. The persist below
+		// deliberately does NOT read it: it asks the instances what changed, so a
+		// transition applied by some other observer is not missed here.
+		var old session.Status
 		var prevUnreadAt time.Time
 		if notifyOn {
+			old = r.instance.GetStatus()
 			prevUnreadAt = r.instance.UnreadAt()
 		}
 		r.instance.ApplyPaneState(r.state)
-		if r.instance.GetStatus() != old {
-			statusChanged = true
-		}
 		if notifyOn {
 			m.maybeNotify(r.instance, old, prevUnreadAt, mode)
 		}
@@ -666,9 +664,10 @@ func (m *home) applyMetadataResults(results []instanceMetaResult, emit bool) []t
 			m.noteFrameSeen(frameTarget{instance: r.instance}, text)
 		}
 	}
-	// Called every sweep, not only on a change, so a write deferred by the interval
-	// below still lands on a later quiet tick.
-	m.flushStatusPersist(statusChanged, time.Now())
+	// Called every sweep, not only when this sweep moved something, so a write deferred
+	// by the interval — or by a failure, or applied by an observer other than this one
+	// — still lands on a later quiet tick.
+	m.flushStatusPersist(time.Now())
 	// Re-apply the status sort now that pane states are fresh, so urgent sessions keep
 	// floating to the top of their group. No-op in creation mode; the selected session
 	// stays under the cursor (preserved by identity).
@@ -690,7 +689,8 @@ func (m *home) applyMetadataResults(results []instanceMetaResult, emit bool) []t
 }
 
 // statusPersistInterval is the shortest gap between two saves triggered by a status
-// change. A var, not a const, so tests can shrink it.
+// change. A var, not a const, so tests can shrink it (see
+// TestStatusPersistHonoursTheInterval).
 //
 // Transitions arrive in bursts — a fleet resuming after a lull logs a dozen inside one
 // second — and each save marshals and atomically rewrites the whole state file (~100KB
@@ -700,8 +700,8 @@ func (m *home) applyMetadataResults(results []instanceMetaResult, emit bool) []t
 // consumer of `atrium ls` samples at.
 var statusPersistInterval = time.Second
 
-// flushStatusPersist writes state.json after a status change, at most once per
-// statusPersistInterval.
+// flushStatusPersist writes state.json when any session's status has changed since the
+// last successful write, at most once per statusPersistInterval.
 //
 // WHY THIS EXISTS AT ALL. Until it did, state.json was written only by user and
 // lifecycle events — roughly twenty handlers, none of them a status change — so the
@@ -711,31 +711,63 @@ var statusPersistInterval = time.Second
 // every consumer of it — the TUI's own restart path included — was being served a
 // status that had been true at an arbitrary past moment, with no way to tell which.
 //
-// The trailing `pending` flag is the part worth not losing. A burst's LAST transition
-// is usually the interesting one (running→needs-input is what the fleet settles on),
-// and it is exactly the one the interval suppresses. Without a pending flag it would
-// wait for the next unrelated change — reintroducing the same unbounded staleness this
-// function exists to remove, just at a smaller scale. So a suppressed change is
-// remembered and written by the next sweep that clears the interval, change or not.
+// WHY IT ASKS THE INSTANCES. The dirty bit is set by recordStatusChange, so whichever
+// observer sees a transition marks it: the metadata sweep, the off-cadence selection
+// poll, and the attach keeper all apply pane states, on different cadences and (for the
+// keeper) a different goroutine. Comparing each instance's status before and after this
+// sweep's own ApplyPaneState would catch only the transitions this sweep applied — a
+// change the selection poll had already applied in memory reads as no change here,
+// because the "before" it snapshots is already the new value. That is the original
+// staleness bug in miniature, so the detection belongs with the writer.
 //
-// A failure is logged rather than surfaced: this runs on the metadata tick, several
-// times a second, and a modal for a transient write error would be worse than the
-// staleness it reports. The user-driven persists keep their m.handleError path.
-func (m *home) flushStatusPersist(changed bool, now time.Time) {
-	if changed {
-		m.statusPersistPending = true
-	}
-	if !m.statusPersistPending {
+// A suppressed change stays dirty, which is the part worth not losing. A burst's LAST
+// transition is usually the interesting one (running→needs-input is what a fleet settles
+// on), and it is exactly the one the interval suppresses; leaving the bit set means the
+// next sweep to clear the interval writes it, change or not. A failed write leaves the
+// bits set for the same reason — the next sweep retries instead of dropping the change
+// — while lastStatusPersist still advances, so a failing disk is retried once a second
+// rather than on every tick.
+//
+// A failure is logged rather than surfaced: this runs on the metadata tick, twice a
+// second, and a modal for a transient write error would be worse than the staleness it
+// reports. Silence is affordable here only because the dirty bits make the failure
+// self-healing — a save that never succeeded is never marked done.
+func (m *home) flushStatusPersist(now time.Time) {
+	// Snapshot before the write, and clear only these: the attach keeper marks
+	// instances from its own goroutine, so one that goes dirty while the save is in
+	// flight must stay dirty rather than be cleared by a write that predates it.
+	dirty := m.dirtyStatusInstances()
+	if len(dirty) == 0 {
 		return
 	}
 	if !m.lastStatusPersist.IsZero() && now.Sub(m.lastStatusPersist) < statusPersistInterval {
 		return
 	}
-	m.statusPersistPending = false
 	m.lastStatusPersist = now
 	if err := m.persistInstances(); err != nil {
 		log.ErrorLog.Printf("failed to persist instances after status change: %v", err)
+		return
 	}
+	for _, inst := range dirty {
+		inst.ClearStatusDirty()
+	}
+}
+
+// dirtyStatusInstances returns the sessions whose status has moved since the last save
+// that carried it.
+//
+// Unstarted sessions count too. SaveInstances filters them out of the payload, so the
+// write does not actually carry them — but they are cleared along with it, because a
+// bit no save can ever discharge would re-arm this write every interval for the life
+// of the process.
+func (m *home) dirtyStatusInstances() []*session.Instance {
+	var dirty []*session.Instance
+	for _, inst := range m.list.GetInstances() {
+		if inst.StatusDirty() {
+			dirty = append(dirty, inst)
+		}
+	}
+	return dirty
 }
 
 // applyHarvestedFrame stores the pane capture the poll already paid for, but only

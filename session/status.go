@@ -17,12 +17,12 @@ func (i *Instance) GetStatus() Status {
 	return i.status
 }
 
-// SetStatus updates the instance status under the write lock. It also edge-detects
-// transitions into Ready to maintain the unread bit: a non-Ready→Ready transition
-// flags unread (the agent finished a turn) unless a one-shot suppression is armed
-// (a synthetic lifecycle transition — see suppressNextUnread); any non-Ready write
-// clears a pending suppression, since an observed working phase means the next
-// completion is genuine.
+// SetStatus updates the instance status under the write lock, recording the change
+// (see recordStatusChange). It also edge-detects transitions into Ready to maintain
+// the unread bit: a non-Ready→Ready transition flags unread (the agent finished a
+// turn) unless a one-shot suppression is armed (a synthetic lifecycle transition —
+// see suppressNextUnread); any non-Ready write clears a pending suppression, since an
+// observed working phase means the next completion is genuine.
 //
 // It edge-detects Paused the same way, to drop the cached pane frame. That belongs
 // on the edge rather than in pause(): parking does its git I/O while the session is
@@ -34,6 +34,32 @@ func (i *Instance) GetStatus() Status {
 func (i *Instance) SetStatus(status Status) {
 	i.mu.Lock()
 	defer i.mu.Unlock()
+	i.setStatusLocked(status, true)
+}
+
+// setStatusReattached writes the synthetic status reattach uses to mark a
+// successfully-reattached session live. It keeps SetStatus's unread and pane-frame
+// edges but deliberately skips recordStatusChange, because this write is our
+// bookkeeping rather than anything the agent did: statusChangedAt has to survive it,
+// or the stamp FromInstanceData just restored from state.json is destroyed before the
+// first poll ever runs, and a session that has been waiting on the user for six hours
+// reads as having changed at startup.
+//
+// It arms awaitingReattachSettle so the first real observation knows the status it is
+// replacing was ours — see recordStatusChange, which measures that observation against
+// the saved status rather than against the synthetic one.
+func (i *Instance) setStatusReattached(status Status) {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	i.reattachSavedStatus = i.status
+	i.awaitingReattachSettle = true
+	i.setStatusLocked(status, false)
+}
+
+// setStatusLocked is the shared body of SetStatus and setStatusReattached. observed
+// says whether this write is an observation of the agent, and so whether it counts as
+// a status change; only a caller that is writing a synthetic status passes false.
+func (i *Instance) setStatusLocked(status Status, observed bool) {
 	if status == Ready && i.status != Ready {
 		if i.suppressNextUnread {
 			i.suppressNextUnread = false
@@ -47,22 +73,36 @@ func (i *Instance) SetStatus(status Status) {
 	if status == Paused {
 		i.clearPaneFrameLocked()
 	}
-	i.recordStatusChange(status)
+	if observed {
+		i.recordStatusChange(status)
+	}
 	i.status = status
 }
 
-// recordStatusChange stamps statusChangedAt and appends a transition entry when the
-// status actually changes (or on the first observation), and emits a durable trace
-// line to the atrium log. It must be called under i.mu with i.status still holding the
-// prior value — SetStatus overwrites i.status immediately after.
+// recordStatusChange stamps statusChangedAt, marks the instance dirty for the next
+// state.json write, and appends a transition entry when the status actually changes
+// (or on the first observation), emitting a durable trace line to the atrium log. It
+// must be called under i.mu with i.status still holding the prior value —
+// setStatusLocked overwrites i.status immediately after.
 func (i *Instance) recordStatusChange(to Status) {
 	from := i.status
 	now := time.Now()
+	if i.awaitingReattachSettle {
+		// The status this observation replaces was written by reattach, not by the
+		// agent, so measure against what the session was doing at save time instead.
+		// Settling back to it is then correctly no transition at all — the session
+		// never left that state, and it keeps the persisted stamp — while anything
+		// else is recorded as the change it really is. Spent on the first observation
+		// either way.
+		i.awaitingReattachSettle = false
+		from = i.reattachSavedStatus
+	}
 	if from == to {
 		// No transition. Still stamp the clock the first time we ever see a status so
 		// StatusChangedAt is meaningful from launch rather than reading as the zero time.
 		if i.statusChangedAt.IsZero() {
 			i.statusChangedAt = now
+			i.statusDirty = true
 		}
 		return
 	}
@@ -71,6 +111,7 @@ func (i *Instance) recordStatusChange(to Status) {
 		held = now.Sub(i.statusChangedAt)
 	}
 	i.statusChangedAt = now
+	i.statusDirty = true
 	i.statusHistory = append(i.statusHistory, StatusTransition{From: from, To: to, At: now})
 	if len(i.statusHistory) > statusHistoryMax {
 		// Drop the oldest entries, keeping the newest statusHistoryMax. A fresh backing
@@ -80,8 +121,33 @@ func (i *Instance) recordStatusChange(to Status) {
 	log.InfoLog.Printf("status-change %q %s→%s (held %s)", i.Title, from, to, held.Round(time.Millisecond))
 }
 
+// StatusDirty reports whether this instance's status or its stamp has changed since
+// the last time it was written to state.json, under the read lock.
+//
+// The bit lives on the instance, not on the observer, because the observers are
+// plural: the metadata sweep, the off-cadence selection poll and the attach keeper all
+// apply pane states, on different goroutines and different cadences. A before/after
+// comparison made by any one of them sees only its own transitions, and misses the
+// ones another had already applied in memory — silently, because by then the "old"
+// status it snapshots is already the new one.
+func (i *Instance) StatusDirty() bool {
+	i.mu.RLock()
+	defer i.mu.RUnlock()
+	return i.statusDirty
+}
+
+// ClearStatusDirty records that this instance's status has reached state.json. Called
+// only after a save succeeds, so a failed write leaves the bit set and the next sweep
+// retries rather than dropping the change.
+func (i *Instance) ClearStatusDirty() {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	i.statusDirty = false
+}
+
 // StatusChangedAt returns when the instance's status last actually changed, or was
-// first observed, under the read lock. Zero only before the very first SetStatus.
+// first observed, under the read lock. Zero only before the first observed status —
+// reattach's synthetic write is not one, and deliberately leaves this alone.
 func (i *Instance) StatusChangedAt() time.Time {
 	i.mu.RLock()
 	defer i.mu.RUnlock()

@@ -34,7 +34,7 @@ type InstanceData struct {
 	//
 	// No omitempty, deliberately: encoding/json only omits empty values for
 	// basic types, so the tag is silently inert on a time.Time (see
-	// PromptQueuedAt above, which carries it and emits anyway). Absence in a
+	// PromptQueuedAt below, which carries it and emits anyway). Absence in a
 	// state file written before this field decodes to the zero time, which
 	// recordStatusChange re-stamps on first observation and cli_ls publishes as
 	// null rather than as the year 1.

@@ -319,11 +319,11 @@ type home struct {
 
 	// storage is the interface for saving/loading data to/from the app's state
 	storage *session.Storage
-	// lastStatusPersist and statusPersistPending coalesce the save that follows a
-	// status change (see flushStatusPersist). Zero lastStatusPersist means no such
-	// save has happened yet, so the first change writes immediately.
-	lastStatusPersist    time.Time
-	statusPersistPending bool
+	// lastStatusPersist coalesces the saves that follow status changes (see
+	// flushStatusPersist). Zero means no such save has happened yet, so the first
+	// change writes immediately. What is still owed is held by the instances
+	// themselves, as a dirty bit — see session.Instance.StatusDirty.
+	lastStatusPersist time.Time
 	// lostStrikes counts consecutive ticks each instance has been seen with a dead
 	// tmux session, debouncing auto-recovery to Paused (see recoverLostInstances).
 	lostStrikes map[*session.Instance]int

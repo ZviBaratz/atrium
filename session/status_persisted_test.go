@@ -10,14 +10,21 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestStatusChangedAtRoundTrip is the guarantee that makes the field worth having:
-// a session that has been waiting on the user for hours must still say so after the
-// TUI restarts. StatusChangedAt lives in memory, stamped by recordStatusChange, and
-// before it was persisted every restore re-derived it from the first observed status
-// — so the whole fleet read as having just changed, which is indistinguishable from
-// a correct answer and wrong for every row.
+// TestStatusChangedAtRoundTrip covers the serialization half of the guarantee that
+// makes the field worth having: a session that has been waiting on the user for hours
+// must still say so after the TUI restarts. StatusChangedAt lives in memory, stamped
+// by recordStatusChange, and before it was persisted every restore re-derived it from
+// the first observed status — so the whole fleet read as having just changed, which is
+// indistinguishable from a correct answer and wrong for every row.
+//
+// This half stops at FromInstanceData. It is NOT the whole promise, and reading it as
+// such is how the promise gets broken: LoadInstances calls FromInstanceData and then
+// reattach, which writes a synthetic status over the one just restored. That half is
+// TestReattach_PreservesRestoredStatusChangedAt — and a session parked as Paused, the
+// obvious fixture to reach for here, is exactly the one reattach returns early on, so
+// it cannot stand in for it.
 func TestStatusChangedAtRoundTrip(t *testing.T) {
-	inst := &Instance{Title: "d", status: Paused, started: true, direct: true, Path: t.TempDir(), Program: "claude"}
+	inst := &Instance{Title: "d", status: NeedsInput, started: true, direct: true, Path: t.TempDir(), Program: "claude"}
 	changed := time.Date(2026, 8, 1, 9, 33, 16, 0, time.UTC)
 	inst.statusChangedAt = changed
 
