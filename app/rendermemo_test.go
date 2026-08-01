@@ -224,6 +224,20 @@ func TestRenderMemos_MemoizedFrameMatchesUnmemoized(t *testing.T) {
 		{name: "the filter opens", mutate: func(_ *testing.T, h *home) { h.list.SetFilterActive(true); h.list.SetFilter("bench") }},
 		{name: "a group collapses", mutate: func(_ *testing.T, h *home) { h.list.ClickHeader(h.list.GetInstances()[0].GroupKey()) }},
 		{name: "the palette switches", mutate: func(t *testing.T, _ *home) { t.Cleanup(theme.Set("catppuccin-latte")) }},
+		// NO_COLOR (#394 Stage D) added theme.Mono(), a package global that is NOT in
+		// any memo key — deliberately, because no memoized layer reads it. Its one
+		// reader inside their scope is the splash (ui/splash.go), which renders inside
+		// PreviewPane.String(), and that is the tabbed window's key INPUT rather than
+		// part of its compose, so it re-runs every frame and the bytes carry the
+		// change. Armed onto the splash for exactly that reason: without it the
+		// reader is never reached and the row asserts nothing.
+		{
+			name: "colour is suppressed",
+			arm:  func(t *testing.T, h *home) { require.NoError(t, h.tabbedWindow.UpdatePreview(nil)) },
+			mutate: func(t *testing.T, _ *home) {
+				t.Cleanup(theme.SetMono(true))
+			},
+		},
 		{name: "the glyph set switches", mutate: func(t *testing.T, _ *home) { t.Cleanup(theme.SetGlyphSet(theme.GlyphSetASCII)) }},
 		{name: "the banner arms", mutate: func(_ *testing.T, h *home) { h.autoYes = true }},
 		{name: "a notice shows", mutate: func(_ *testing.T, h *home) { h.errBox.SetNotice("saved", ui.NoticeInfo) }},
