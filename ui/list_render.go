@@ -535,8 +535,29 @@ func (l *List) String() string {
 	// active (accent border). A dynamic focus model can flip this later.
 	// The panel zone wraps outside Panel so its internal clipping cannot
 	// truncate the end marker.
-	return zone.Mark(listPanelZoneID, theme.Current().PanelWithBadges("Sessions", []string{l.updateBadge, l.driftBadge}, content, l.width, l.height, true))
+	k := panelKey{
+		content:     content,
+		updateBadge: l.updateBadge,
+		driftBadge:  l.driftBadge,
+		width:       l.width,
+		height:      l.height,
+		theme:       theme.Current(),
+	}
+	return zone.Mark(listPanelZoneID, l.panelMemo.Get(k, func() string {
+		return k.theme.PanelWithBadges("Sessions", []string{k.updateBadge, k.driftBadge},
+			k.content, k.width, k.height, true)
+	}))
 }
+
+// PanelComposeRuns reports how many times the panel chrome has actually been
+// drawn, and ResetMemo drops the cached panel. Exported for the same reason
+// TabbedWindow.ComposeRuns is: a test that renders twice and compares the two
+// strings passes identically against a memo that never ran, so the assertion that
+// carries weight is the count.
+func (l *List) PanelComposeRuns() int { return l.panelMemo.Runs() }
+
+// ResetMemo drops the memoized panel and the compose count. See PanelComposeRuns.
+func (l *List) ResetMemo() { l.panelMemo.Reset() }
 
 // windowLines clips lines to the list height, scrolling so the selected block
 // ([selStart, selStart+selH)) stays visible with a one-line margin from either

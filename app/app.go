@@ -14,6 +14,7 @@ import (
 
 	"github.com/ZviBaratz/atrium/config"
 	"github.com/ZviBaratz/atrium/hints"
+	"github.com/ZviBaratz/atrium/internal/memo"
 	"github.com/ZviBaratz/atrium/log"
 	"github.com/ZviBaratz/atrium/notify"
 	"github.com/ZviBaratz/atrium/session"
@@ -40,31 +41,63 @@ const doubleClickWindow = 400 * time.Millisecond
 // call site in viewContent. Production is always zone.Scan.
 var scanFrame = zone.Scan
 
-// scanCached is scanFrame memoized on its input, because an idle Atrium hands it
-// the same frame over and over: Bubble Tea calls View() after every message
-// (tea.go:880), and at idle the preview tick and the metadata tick produce ~12 of
-// those a second — ~22 once the pane-capture chain has something to capture
-// (armFrameCapture), ~32 once the spinner loop joins them too (armSpinnerTick).
-// Measured, the scan is ~19% of a frame build's time and about half its allocated
-// bytes.
+// frameKey is the finished frame's components, before they are stacked. Each part
+// carries a presence flag beside it because an ABSENT component and an EMPTY one
+// are different frames: JoinVertical renders "" as a blank line, so the hint bar
+// reserving a quiet row (#438) must not compare equal to no hint bar at all.
+type frameKey struct {
+	banner    string
+	hasBanner bool
+	body      string
+	menu      string
+	hasMenu   bool
+	errBox    string
+	hasErr    bool
+}
+
+// joinFrame stacks the components into the frame. A pure function of the key —
+// which is what lets frameCached memoize the join and the scan together.
+func joinFrame(k frameKey) string {
+	parts := make([]string, 0, 4)
+	if k.hasBanner {
+		parts = append(parts, k.banner)
+	}
+	parts = append(parts, k.body)
+	if k.hasMenu {
+		parts = append(parts, k.menu)
+	}
+	if k.hasErr {
+		parts = append(parts, k.errBox)
+	}
+	return lipgloss.JoinVertical(lipgloss.Left, parts...)
+}
+
+// frameCached stacks the frame and scans it, memoized on the components, because
+// an idle Atrium hands it the same ones over and over: Bubble Tea calls View()
+// after every message (tea.go:880), and at idle the preview tick and the metadata
+// tick produce ~12 of those a second — ~22 once the pane-capture chain has
+// something to capture (armFrameCapture), ~32 once the spinner loop joins them too
+// (armSpinnerTick). Measured on a cold 14-session build, the stack and the scan
+// together are ~21% of its time — 13 points the join, 8 the scan — and the scan
+// alone is over half its allocated bytes.
 //
 // Reusing the previous output is safe, and the reason is worth stating because it
 // is not obvious: a zone's ID lives INSIDE the pre-scan string, as the ANSI marker
 // pair zone.Mark wrote. So two frames that compare equal here carry the same
 // markers at the same offsets, and the bounds the previous scan registered still
 // describe them exactly. A different zone, or a moved one, is necessarily a
-// different input string and misses the memo. bubblezone's own doc for Scan blesses
-// this ("some users may cache generated views").
+// different component string and misses the memo. bubblezone's own doc for Scan
+// blesses this ("some users may cache generated views").
+//
+// It covers the join rather than only the scan (#565) because equal components
+// necessarily join to an equal frame: a separate memo over the joined string would
+// hit exactly when this one does, leaving the inner one unreachable on its own
+// terms while its tests went on claiming to exercise it.
 //
 // What the memo deliberately does NOT do is skip the scan for a frame that merely
-// looks similar. Equality is byte equality on the whole frame.
-func (m *home) scanCached(pre string) string {
-	if pre == m.lastScanIn {
-		return m.lastScanOut
-	}
-	out := scanFrame(pre)
-	m.lastScanIn, m.lastScanOut = pre, out
-	return out
+// looks similar. Equality is byte equality on every component.
+func (m *home) frameCached(k frameKey) string {
+	return m.frameMemo.Get(k, func() string { return scanFrame(joinFrame(k)) })
 }
 
 // noColorProfile is the colour profile NO_COLOR selects. Named rather than
@@ -372,10 +405,9 @@ type home struct {
 	// (which re-arms the animation whenever the idle splash is on screen)
 	// never starts a second one. The loop clears it as it dies.
 	splashTicking bool
-	// lastScanIn / lastScanOut memoize the bubblezone scan across identical frames
-	// (see scanCached). Main-thread only, like the rest of the render path.
-	lastScanIn  string
-	lastScanOut string
+	// frameMemo memoizes the frame stack and the bubblezone scan across identical
+	// frames (see frameCached). Main-thread only, like the rest of the render path.
+	frameMemo memo.Cache[frameKey]
 	// spinnerTicking marks a live spinner tick loop, mirroring splashTicking: the
 	// 100ms preview tick and the metadata apply both re-arm it whenever a row starts
 	// spinning, and neither may start a second loop. The handler clears it as it dies.
@@ -806,48 +838,51 @@ func (m *home) viewContent() string {
 	// Omit the list entirely (rather than render it at zero width) so no sliver of
 	// panel border remains — updateHandleWindowSizeEvent already gave the tabbed
 	// window the whole width to match.
-	listAndPreview := m.tabbedWindow.String()
+	// Rendered once and reused: this is the single most expensive thing Atrium
+	// builds (#565), and the two branches below used to call it twice, the second
+	// call discarding the first's frame in every layout but focus mode.
+	tabbed := m.tabbedWindow.String()
+	listAndPreview := tabbed
 	if !m.listHidden() {
-		listAndPreview = lipgloss.JoinHorizontal(lipgloss.Top, m.list.String(), m.tabbedWindow.String())
+		listAndPreview = lipgloss.JoinHorizontal(lipgloss.Top, m.list.String(), tabbed)
 	}
 
 	// The auto-accept safety banner pins the top row while armed (#378); its row is
 	// reserved by topBannerHeight in the layout budget, so prepending it here keeps
 	// the frame exactly windowHeight tall.
-	var parts []string
+	k := frameKey{body: listAndPreview}
 	if m.autoYesArmed() {
-		parts = append(parts, m.autoYesBanner(m.windowWidth))
+		k.banner, k.hasBanner = m.autoYesBanner(m.windowWidth), true
 	}
-	parts = append(parts, listAndPreview)
 	// The hint bar claims a row whenever menuVisible (in plain navigation, always —
 	// blank when the bar is off, #438); the error box claims one only while a notice is
 	// showing. A component that claims no row is omitted entirely: JoinVertical treats
 	// an empty string as a blank line, so an unused component must be dropped, not
 	// rendered empty — whereas the reserved-but-quiet menu row renders a real blank
-	// line on purpose. menuVisible and menuHeight in updateHandleWindowSizeEvent stay
-	// in lockstep so the row the menu occupies here is exactly the row the layout
-	// reserved for it.
+	// line on purpose. That is why each component carries a presence flag into
+	// frameKey rather than relying on "" to mean absent. menuVisible and menuHeight in
+	// updateHandleWindowSizeEvent stay in lockstep so the row the menu occupies here
+	// is exactly the row the layout reserved for it.
 	if m.menuVisible() {
-		parts = append(parts, m.menu.String())
+		k.menu, k.hasMenu = m.menu.String(), true
 	}
 	if m.errBox.HasContent() {
-		parts = append(parts, m.errBox.String())
+		k.errBox, k.hasErr = m.errBox.String(), true
 	}
-	mainView := lipgloss.JoinVertical(lipgloss.Left, parts...)
-	// Scan the frame here, before any overlay composites on top. scanFrame strips
-	// the (zero-width) Mark escapes and records each zone's bounds. Doing it now
-	// keeps marker sequences out of overlay.PlaceOverlay, whose column-by-column
+	// Stack and scan the frame here, before any overlay composites on top. scanFrame
+	// strips the (zero-width) Mark escapes and records each zone's bounds. Doing it
+	// now keeps marker sequences out of overlay.PlaceOverlay, whose column-by-column
 	// line splicing could otherwise cut a row's start/end marker pair; bounds stay
 	// correct because overlays render at origin and don't shift the content below.
 	//
-	// Indirected through a package var purely so it can be measured and counted:
-	// zone.Scan is a rune-by-rune walk of the whole frame that also pushes one
-	// ZoneInfo per zone across a channel to a lock-taking worker, and it used to run
-	// on every one of the ~32 frames a second an idle Atrium built (#546) — hence
-	// scanCached, which now skips it for the identical ones. A benchmark cannot
-	// isolate its share, and a test cannot assert it was skipped, without a seam.
-	// Production always uses zone.Scan.
-	mainView = m.scanCached(mainView)
+	// The scan is indirected through a package var purely so it can be measured and
+	// counted: zone.Scan is a rune-by-rune walk of the whole frame that also pushes
+	// one ZoneInfo per zone across a channel to a lock-taking worker, and it used to
+	// run on every one of the ~32 frames a second an idle Atrium built (#546) — hence
+	// frameCached, which now skips it, and the join, for the identical ones. A
+	// benchmark cannot isolate its share, and a test cannot assert it was skipped,
+	// without a seam. Production always uses zone.Scan.
+	mainView := m.frameCached(k)
 
 	if m.state == statePrompt {
 		if m.textInputOverlay == nil {
