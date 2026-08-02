@@ -42,7 +42,7 @@ the "Reviewing a change here" section added to `CLAUDE.md` in this commit.
 | #551 bar restyle | 3 | 2 — the data race, the `status-style` clobber under `tmux_config_override` | 2 — same two |
 | #556 idle profiling | 3 | 1 — the unstopped CPU profile | **3** — plus the README's `/tmp` vs `os.TempDir()`, and the sub-millisecond verb rendering as `0s` |
 | #560 light palettes | 2 | 2 | 2, with the cause traced (`IsLight`'s doc names a consumer that does not exist yet) |
-| **Recall** | **9** | **5 + 1 partial ≈ 57%** | **8 ≈ 89%** |
+| **Recall** | **9** | **5 + 1 partial — 56%, or 61% crediting the partial half** | **8 ≈ 89%** |
 
 Arm A missed one finding for a reason guidance could not fix: `refresh-client -S`
 batched behind a `;`, which needs tmux-specific semantics. Arm B missed the same
