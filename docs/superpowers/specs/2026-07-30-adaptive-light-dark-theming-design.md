@@ -469,6 +469,15 @@ default change is inert on dark terminals. Add the explicit `SetScheme(dark)` pi
 to `newParityHome`. If any terminal in the matrix misbehaves, the fix ships and
 the default does not.
 
+*(Shipped differently in three ways. **Neither named site needed editing:** Task 7's
+`config.DefaultTheme` became the single source both derive from, so `config.go:92` is
+already `Theme: DefaultTheme` and the settings row's `defaultDisplay` is already
+`(&config.Config{}).GetTheme()` — the flip is one line in `config/accessors.go`. The
+`SetScheme(dark)` pin landed a stage early, in E. And **"not one golden byte moves" is
+true but is not the proof it reads as**: reverting the flip leaves the goldens
+byte-identical too, so what makes the default observable is a test pinning
+`config.DefaultTheme` to `theme.AutoThemeName`, not the oracle.)*
+
 ## Acceptance criteria: verdicts
 
 Stated plainly rather than satisfied nominally — #393 found two ACs that were not

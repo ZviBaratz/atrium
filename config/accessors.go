@@ -220,14 +220,22 @@ func (c *Config) GetNerdFont() bool {
 	return boolOr(c.NerdFont, false)
 }
 
-// DefaultTheme is the theme a config with no `theme` set resolves to.
+// DefaultTheme is the theme a config with no `theme` set resolves to: `auto`,
+// which follows the terminal's detected background polarity and resolves to the
+// shipped dark palette when nothing answers.
 //
 // A constant rather than a read of DefaultConfig(), because the settings schema's
 // row builder reaches these getters and must stay pure — DefaultConfig resolves the
 // OS user to derive branch_prefix. Spelled out rather than imported from ui/theme
 // for the same reason GlyphSet* below are: config's vocabulary is the on-disk one,
 // and ui/theme is deliberately a leaf that no atrium package appears in.
-const DefaultTheme = "tokyo-night"
+//
+// Because it is spelled rather than imported, nothing but a test holds it to
+// theme.AutoThemeName — and a typo would not fail to build, since Get() falls back
+// for an unrecognised name. It would resolve as an unknown palette and silently ship
+// the dark default forever, on exactly the terminals #394 is about. The two
+// spellings are pinned together by app.TestDefaultThemeMatchesTheReservedAutoName.
+const DefaultTheme = "auto"
 
 // GetTheme returns the configured theme name, normalizing empty to DefaultTheme and
 // folding case and surrounding space.

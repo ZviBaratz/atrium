@@ -246,16 +246,19 @@ type Config struct {
 	KillDoubleTapConfirm *bool `json:"kill_double_tap_confirm,omitempty"`
 	// Theme selects the UI color palette and border style by name (see ui/theme
 	// registry: "tokyo-night", "catppuccin-mocha", "tokyo-night-day",
-	// "catppuccin-latte", "unicode"). Empty falls back to the default. The two
-	// -day/-latte palettes are tuned for a light-background terminal; the rest
-	// assume a dark one. Glyphs are a separate axis — see NerdFont; the "unicode"
-	// theme differs only by using square borders.
+	// "catppuccin-latte", "unicode"). The two -day/-latte palettes are tuned for a
+	// light-background terminal; the rest assume a dark one. Glyphs are a separate
+	// axis — see NerdFont; the "unicode" theme differs only by using square borders.
 	//
 	// The reserved value "auto" is not a palette: it follows the terminal's
 	// detected background, rendering "tokyo-night" on a dark one and
 	// "tokyo-night-day" on a light one, and staying dark when nothing answers. A
 	// theme named explicitly NEVER auto-switches — detection is read only for
 	// "auto" — so naming a palette is how you pin one.
+	//
+	// Empty falls back to the default, which IS "auto" (see DefaultTheme). So an
+	// unconfigured install adapts, and naming any palette here is the opt-OUT rather
+	// than the opt-in.
 	Theme string `json:"theme,omitempty"`
 	// Splash selects the animated empty-state splash pattern by name (see
 	// SplashVariants for the pinnable names). Empty, "random", or an unknown
