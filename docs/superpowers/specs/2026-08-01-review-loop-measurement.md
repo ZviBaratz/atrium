@@ -10,7 +10,8 @@ that stays useful.
 
 ## 1. What review actually finds here
 
-Population: the 51 PRs merged 2026-07-27..2026-08-01 (#489–#562), 168 commits. Of
+Population: 51 PRs (#489–#562), merged 2026-07-27..2026-08-01, 168 commits. The
+number range is the filter, not the dates — 56 PRs merged in that window. Of
 98 follow-up commits, 30 are staged implementation steps and 68 are reactive.
 Excluding 9 planning/bookkeeping docs, the 59 that fix a defect split:
 

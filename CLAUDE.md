@@ -113,7 +113,7 @@ so it targets that same socket, not tmux's default one.
 
 ## Reviewing a change here
 
-Measured over the 51 PRs merged 2026-07-27..2026-08-01 (#489–#562), the defects
+Measured over 51 PRs (#489–#562), merged 2026-07-27..2026-08-01, the defects
 that survive into review split 29 behaviour / 21 claim / 9 test. `go vet`, lint
 and the suite catch none of the middle class, and a review that only hunts for
 bugs reports about half of what this repo actually ships wrong. Three rules, aimed

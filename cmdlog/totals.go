@@ -86,12 +86,13 @@ var preludeFlagsWithValues = map[string]bool{"-L": true, "-f": true, "-C": true,
 // prevent. See verb for the recovery path and what it cannot do.
 //
 // The token it returns goes through redactArg, because this reads the raw argv
-// rather than Redact's output and so is the second path from an argv to displayed
-// log text. Today no secret can reach the returned token — every `-e NAME=<token>`
-// Atrium injects is appended after the subcommand this stops at — but that is an
-// ordering accident in another file (session/tmux/tmux.go), not a property of this
-// function. Scrubbing here keeps "a secret is never recorded verbatim" true by
-// construction, the way it was when Redact was the only such path.
+// rather than Redact's output and so is one of the three paths from an argv to
+// displayed text (Redact and cmd.ToString are the others; all scrub). Today no
+// secret can reach the returned token — every `-e NAME=<token>` Atrium injects is
+// appended after the subcommand this stops at — but that is an ordering accident
+// in another file (session/tmux/tmux.go), not a property of this function.
+// Scrubbing here keeps "a secret is never recorded verbatim" true by construction,
+// the way it was when Redact was the only such path.
 func verbOf(argv []string) string {
 	if len(argv) == 0 {
 		return "?"
