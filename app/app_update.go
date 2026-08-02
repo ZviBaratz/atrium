@@ -14,6 +14,7 @@ import (
 	"github.com/ZviBaratz/atrium/session/tmux"
 	"github.com/ZviBaratz/atrium/ui"
 	"github.com/ZviBaratz/atrium/ui/overlay"
+	"github.com/ZviBaratz/atrium/ui/theme"
 
 	"charm.land/bubbles/v2/spinner"
 	tea "charm.land/bubbletea/v2"
@@ -383,11 +384,40 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		return m, m.runBranchSearch(m.textInputOverlay.BranchFilter(), m.textInputOverlay.BranchFilterVersion())
+	case tea.BackgroundColorMsg:
+		// The terminal answered the OSC 11 query (from Init, a refocus, or a detach).
+		//
+		// A reply whose colour did not PARSE is fed to the ladder as a NON-REPLY —
+		// literally the nil that ResolveScheme's *bool means — rather than
+		// short-circuited here. That is not a stylistic choice: it keeps one latch
+		// instead of two, and the one it keeps is the one applyDetectedScheme already
+		// has to have for every other caller.
+		//
+		// The case is easy to miss and fails the dangerous way. ultraviolet builds
+		// this message from ansi.XParseColor, which returns nil for anything it
+		// cannot read, and its isDarkColor(nil) answers TRUE — so a garbled reply
+		// arrives looking like a confident "dark" and would flip a correctly detected
+		// light terminal. Absence of evidence has to be spelled as absence.
+		var bgIsDark *bool
+		if msg.Color != nil {
+			// IsDark is Bubble Tea's own luminance test on the reported colour, so
+			// Atrium does not second-guess it.
+			bgIsDark = boolPtrOf(msg.IsDark())
+		}
+		// COLORFGBG is passed as "" deliberately, even on the no-reply branch: this
+		// is the OSC 11 rung, the startup rung already read the variable once, and
+		// re-reading it here would let a stale value answer for a live query.
+		return m, m.applyDetectedScheme(theme.ResolveScheme(bgIsDark, ""))
 	case tea.FocusMsg:
 		// The terminal regained focus: while focused, background sessions stay silent
 		// (the user is watching the fleet). See maybeNotify.
 		m.focused = true
-		return m, nil
+		// Refocus is also when to re-ask the terminal's background colour. Atrium does
+		// not enable mode 2031 (see app/scheme.go), so a scheme change while blurred —
+		// which is when an OS-level dark/light switch usually happens — is invisible
+		// until something asks. Nil unless theme: auto; m.focused is untouched either
+		// way, so the notification gate is unaffected.
+		return m, m.requestSchemeCmd()
 	case tea.BlurMsg:
 		// The terminal lost focus: edges may notify again.
 		m.focused = false

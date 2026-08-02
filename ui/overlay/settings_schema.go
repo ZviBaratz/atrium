@@ -5,7 +5,6 @@ import (
 	"path/filepath"
 	"runtime"
 	"slices"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -510,24 +509,17 @@ func newSettingRows(cfg *config.Config) []settingRow {
 			key: "theme", category: catAppearance, label: "Theme", kind: kindEnum,
 			scope:          scopeGlobal,
 			timing:         timingLive,
-			defaultDisplay: func() string { return theme.DefaultThemeName },
+			defaultDisplay: func() string { return (&config.Config{}).GetTheme() },
 			reset:          func(c *config.Config) { c.Theme = "" },
-			summary:        "Colour palette and border style.",
-			get: func(c *config.Config) string {
-				if c.Theme == "" {
-					return theme.DefaultThemeName
-				}
-				return c.Theme
-			},
+			summary:        "Colour palette and border style. `auto` follows the terminal background.",
+			get:            func(c *config.Config) string { return c.GetTheme() },
 			set: func(c *config.Config, v string) error {
 				c.Theme = v
 				return nil
 			},
-			options: func(c *config.Config) []string {
-				names := theme.Names()
-				sort.Strings(names)
-				return names
-			},
+			// auto first, then the registry sorted — SelectableNames owns that order
+			// so the picker's vocabulary and the theme package's cannot drift.
+			options: func(c *config.Config) []string { return theme.SelectableNames() },
 		},
 		{
 			key: "splash", category: catAppearance, label: "Splash", kind: kindEnum,

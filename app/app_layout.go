@@ -268,7 +268,7 @@ func (m *home) applySettingChange(key string) tea.Cmd {
 	case "theme", "glyph_set":
 		// Styles read theme.Current() lazily at render time, so swapping the
 		// palette / glyph set plus a forced repaint restyles the whole UI in place.
-		theme.Set(m.appConfig.Theme)
+		theme.Set(m.appConfig.GetTheme())
 		theme.SetGlyphSet(m.appConfig.GetGlyphSet())
 		// The spinner snapshots its frames at construction (assembleHome), so a
 		// rung change that alters them (ascii's |/-\ vs the Braille dots) would not
@@ -287,7 +287,16 @@ func (m *home) applySettingChange(key string) tea.Cmd {
 		// no colour, and the push costs a conf rewrite plus validateConfig's probe
 		// server. applyBarStyleCmd returns nil for anything else, so the Batch below
 		// degrades to the repaint alone.
-		return tea.Sequence(tea.ClearScreen, tea.Batch(tea.RequestWindowSize, m.applyBarStyleCmd(key)))
+		//
+		// applySchemeQueryCmd is the same shape for the same reason, and it is the
+		// fourth query point: the palette selection may have just BECOME `auto`, and
+		// this is the only site where the gate that suppressed every earlier query is
+		// itself what changed. See scheme.go.
+		return tea.Sequence(tea.ClearScreen, tea.Batch(
+			tea.RequestWindowSize,
+			m.applyBarStyleCmd(key),
+			m.applySchemeQueryCmd(key),
+		))
 	case "model_indicator":
 		// Mirror the newHome seeding; the renderer takes the normalized mode
 		// string so ui needs no config import.
@@ -415,6 +424,12 @@ func (m *home) applySettingChange(key string) tea.Cmd {
 // loads). Adding a global to that resolution means adding it to this list. A
 // tea.Cmd is a goroutine: moving a startup-only call into one re-scopes everything
 // it touches, and the seam below is exactly what hides that from the race detector.
+//
+// #394 Stage E's theme.CurrentScheme() is deliberately NOT on that list: a detected
+// flip reaches the band through theme.Current(), which compose() has already folded
+// the scheme into on the update thread. Detection widened who calls this — the
+// scheme handler now does, alongside the settings panel — without widening what it
+// reads.
 var barStyleApplier = func(ctx context.Context, contextBar bool) {
 	if err := tmux.RewriteManagedConfig(contextBar); err != nil {
 		log.WarningLog.Printf("failed to rewrite managed tmux config after theme change: %v", err)
@@ -435,7 +450,23 @@ var barStyleApplier = func(ctx context.Context, contextBar bool) {
 // conf that arm rewrites (see the "session_context_bar" case) carries the theme
 // anyway.
 func (m *home) applyBarStyleCmd(key string) tea.Cmd {
-	if key != "theme" || !m.appConfig.GetSessionContextBar() {
+	if key != "theme" {
+		return nil
+	}
+	return m.barStylePushCmd()
+}
+
+// barStylePushCmd is the push itself, carrying only the gate both callers share: no
+// context bar means no band to restyle, and the managed conf the "session_context_bar"
+// arm rewrites carries the theme anyway.
+//
+// Split from applyBarStyleCmd because detection reaches it too (applyDetectedScheme
+// in scheme.go), and a detected dark->light flip is not a settings row. Passing the
+// literal "theme" from there would have satisfied the gate while making the doc
+// comment above — which explains that gate purely as "the caller's case also fires
+// for glyph_set" — false about one of its two callers.
+func (m *home) barStylePushCmd() tea.Cmd {
+	if !m.appConfig.GetSessionContextBar() {
 		return nil
 	}
 	contextBar := m.appConfig.GetSessionContextBar()
@@ -489,11 +520,19 @@ func (m *home) adjustListCols(delta int) tea.Cmd {
 // issues a tea.ClearScreen to flush the diff cache, then re-emits a WindowSizeMsg
 // so components reflow and re-render completely. Any additional cmds are batched
 // with the repaint.
+//
+// It also re-asks the terminal for its background colour. Detection was blind for the
+// whole attach — tea.Exec suspended the loop and tmux owned the terminal, so neither
+// an OSC 11 reply nor a focus event could reach us — and this is the one moment we
+// know that. Nil unless theme: auto.
 func (m *home) repaintAfterAttach(cmds ...tea.Cmd) tea.Cmd {
 	return tea.Sequence(
 		tea.ClearScreen,
-		tea.Batch(append(cmds, func() tea.Msg {
-			return tea.WindowSizeMsg{Width: m.windowWidth, Height: m.windowHeight}
-		})...),
+		tea.Batch(append(cmds,
+			func() tea.Msg {
+				return tea.WindowSizeMsg{Width: m.windowWidth, Height: m.windowHeight}
+			},
+			m.requestSchemeCmd(),
+		)...),
 	)
 }

@@ -168,8 +168,16 @@ func newParityHome(t *testing.T, fs frameState, w, h int) *home {
 	t.Helper()
 
 	cfg := config.DefaultConfig()
-	t.Cleanup(theme.Set(cfg.Theme))
+	t.Cleanup(theme.Set(cfg.GetTheme()))
 	t.Cleanup(theme.SetGlyphSet(cfg.GetGlyphSet()))
+	// The scheme axis, pinned for exactly the reason the other two are: it is a
+	// package global other tests in this package mutate, so under -shuffle the frame
+	// would otherwise inherit whichever detection state ran last. Inert while the
+	// shipped default names a palette — compose() reads the scheme only for `auto` —
+	// which is what makes it safe to land with the axis rather than with the default
+	// flip that will need it. Dark is what a terminal that does not answer gets, and
+	// what these goldens are baselined at.
+	t.Cleanup(theme.SetScheme(theme.SchemeDark))
 
 	m := newCreateFormHome(t)
 	m.spinner = spinner.New()
