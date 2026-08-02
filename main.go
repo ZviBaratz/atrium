@@ -169,7 +169,7 @@ var (
 
 	debugCmd = &cobra.Command{
 		Use:   "debug",
-		Short: "Print debug information like config paths",
+		Short: "Print debug information like config and log paths",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			log.Initialize(logDir(), false)
 			defer log.Close()
@@ -182,7 +182,18 @@ var (
 			}
 			configJSON, _ := json.MarshalIndent(cfg, "", "  ")
 
-			fmt.Printf("Config: %s\n%s\n", filepath.Join(configDir, config.ConfigFileName), configJSON)
+			out := cmd.OutOrStdout()
+			_, _ = fmt.Fprintf(out, "Config: %s\n", filepath.Join(configDir, config.ConfigFileName))
+			// The log path is the answer to "where do I look?", and since it moved
+			// out of the temp dir this is the only place that reports it on demand.
+			// Both paths go above the config JSON so neither is buried under it.
+			logPath, logErr := log.Destination()
+			if logErr != nil {
+				_, _ = fmt.Fprintf(out, "Log: %s (unavailable: %v)\n", logPath, logErr)
+			} else {
+				_, _ = fmt.Fprintf(out, "Log: %s\n", logPath)
+			}
+			_, _ = fmt.Fprintf(out, "%s\n", configJSON)
 
 			return nil
 		},

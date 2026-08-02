@@ -87,14 +87,15 @@ func NewDumper(dir string, window time.Duration) *Dumper {
 	return &Dumper{dir: dir, window: window}
 }
 
-// Dir is the directory profiles are written to: the OS temp dir, beside
-// atrium.log.
+// Dir is the directory profiles are written to: the OS temp dir.
 //
-// Deliberately not the data dir. That directory holds live state a running TUI
-// owns (state.json, the worktrees tree), `atrium doctor` is under standing orders
-// not to mutate it, and `atrium reset` does not clear it — so a stray profiles
-// directory there would accumulate forever with nothing to remove it. Debug
-// artifacts belong where the debug log already is.
+// Deliberately not the data dir, even though the log moved there in #566. That
+// directory holds live state a running TUI owns (state.json, the worktrees tree),
+// `atrium doctor` is under standing orders not to mutate it, and `atrium reset`
+// does not clear it — so a stray profiles directory there would accumulate
+// forever with nothing to remove it. The log can live there because it is capped
+// and rolls itself over; profiles are not, and nothing prunes them. That
+// asymmetry is the whole reason the two artifacts sit in different places.
 func Dir() string { return os.TempDir() }
 
 // Running reports whether a CPU profile is currently open.

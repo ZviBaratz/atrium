@@ -11,23 +11,29 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// moduleFile reads a file from the module root, walking up from the test's
-// working directory until it finds go.mod. Mirrors the same helper in
-// config/readme_config_test.go and keys/readme_drift_test.go.
-func moduleFile(t *testing.T, name string) string {
+// moduleRoot returns the module root, walking up from the test's working
+// directory until it finds go.mod.
+func moduleRoot(t *testing.T) string {
 	t.Helper()
 	dir, err := os.Getwd()
 	require.NoError(t, err)
 	for {
 		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
-			data, err := os.ReadFile(filepath.Join(dir, name))
-			require.NoError(t, err)
-			return string(data)
+			return dir
 		}
 		parent := filepath.Dir(dir)
 		require.NotEqual(t, dir, parent, "walked to the filesystem root without finding go.mod")
 		dir = parent
 	}
+}
+
+// moduleFile reads a file from the module root. Mirrors the same helper in
+// config/readme_config_test.go and keys/readme_drift_test.go.
+func moduleFile(t *testing.T, name string) string {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(moduleRoot(t), name))
+	require.NoError(t, err)
+	return string(data)
 }
 
 // TestReadmeDocumentsEveryCommand is the third README drift guard, alongside

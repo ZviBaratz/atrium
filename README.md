@@ -89,7 +89,7 @@ if one is missing from this table.
 | `send` | Queue a prompt for a session |
 | `doctor` | Check core dependencies (tmux, git, gh) and agent CLI heuristic versions |
 | `profiles` | Manage agent profiles (e.g. `profiles detect`) |
-| `debug` | Print debug information like config paths |
+| `debug` | Print debug information like config and log paths |
 | `update` | Download, verify, and install the latest release |
 | `reset` | Reset all stored instances |
 | `version` | Print the version number of atrium |
@@ -348,6 +348,8 @@ Set `mouse` to `false` to turn mouse capture off completely, handing every mouse
 ### Configuration
 
 Atrium stores its configuration in `~/.atrium/config.json`. You can find the exact path by running `atrium debug`. Installs that predate the rename keep using their existing `~/.claude-squad` directory automatically.
+
+The diagnostic log sits beside it, at `~/.atrium/atrium.log` — `atrium debug` prints that path too. It is capped at 16 MiB and keeps one previous generation as `atrium.log.1`, so it costs at most 32 MiB. Atrium starts normally when it cannot write the log; it says so on exit and `atrium debug` reports why.
 
 #### Mouse
 
@@ -1051,8 +1053,10 @@ Atrium's cost has two halves, and they need different tools.
 
 **Its own work** — rebuilding the frame, classifying panes — is captured with a
 signal. Send `SIGUSR1` to a running `atrium` and it writes CPU, heap and goroutine
-profiles into the temp directory, beside `atrium.log` — that is `$TMPDIR` when it is
-set, which on macOS is a per-user path like `/var/folders/…/T/`, not `/tmp`:
+profiles into the temp directory — that is `$TMPDIR` when it is set, which on
+macOS is a per-user path like `/var/folders/…/T/`, not `/tmp`. (The log itself
+lives in the data dir, not here: it is capped and rolls itself over, while nothing
+prunes a profile.)
 
 ```bash
 kill -USR1 "$(pgrep -x atrium)"     # start sampling (30s, then it stops itself)
@@ -1060,8 +1064,10 @@ kill -USR1 "$(pgrep -x atrium)"     # optional: stop early
 go tool pprof "$(ls -t "${TMPDIR:-/tmp}"/atrium-cpu-*.pprof | head -1)"
 ```
 
-Each finished run logs the exact path it wrote to, so `grep pprof "${TMPDIR:-/tmp}"/atrium.log`
-is the authoritative answer if the glob above finds nothing.
+Each finished run logs the exact path it wrote to, so `grep pprof ~/.atrium/atrium.log`
+is the authoritative answer if the glob above finds nothing. Run `atrium debug` if
+you are not sure where the log is — an install predating the rename keeps using
+`~/.claude-squad`.
 
 Set `ATRIUM_PPROF_SECONDS` (1–300, default 30) to change the sampling window. The
 trigger is always armed — no flag, no restart — because the instance worth

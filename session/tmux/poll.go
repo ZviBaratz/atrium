@@ -117,7 +117,8 @@ func newStatusMonitor(program string) *statusMonitor {
 
 // logSignal records which signal path decided the pane state, but only when it changes from
 // the last decision — so a steady session emits one line, not one per tick. name is the tmux
-// session name. Output goes to the atrium log (os.TempDir()/atrium.log).
+// session name. Output goes to the atrium log in the data dir; `atrium debug`
+// prints its path.
 func (m *statusMonitor) logSignal(name, signal string) {
 	if m.lastSignal == signal {
 		return
