@@ -25,13 +25,17 @@ func countingScan(t *testing.T) *int {
 	return &n
 }
 
-// An unchanged frame is scanned once, not once per render.
+// An unchanged frame is stacked and scanned once, not once per render.
 //
 // This is the whole point: Bubble Tea calls View() after every message, and an idle
 // Atrium produces ~12 of those a second (~32 before the spinner loop and the
 // capture chain learned to stop), so without the memo the scan ran on every one of
 // them over a frame that never changed.
-func TestScanCached_IdenticalFrameScansOnce(t *testing.T) {
+//
+// The scan and the join are counted separately — scanFrame through the package var,
+// the join through the memo's own run count — because they are memoized together
+// (#565) and a single number could not tell a skipped scan from a skipped stack.
+func TestFrameCached_IdenticalFrameScansOnce(t *testing.T) {
 	h := newBenchHome(t, 3)
 	n := countingScan(t)
 
@@ -41,12 +45,13 @@ func TestScanCached_IdenticalFrameScansOnce(t *testing.T) {
 	}
 
 	require.Equal(t, 1, *n, "10 renders of an unchanged frame must cost exactly one scan")
+	require.Equal(t, 1, h.frameMemo.Runs(), "and exactly one frame stack")
 }
 
 // A changed frame is rescanned — the negative control. Without it, the test above
 // passes on a memo that never invalidates, which would freeze every click target
 // at its first-frame position.
-func TestScanCached_ChangedFrameRescans(t *testing.T) {
+func TestFrameCached_ChangedFrameRescans(t *testing.T) {
 	h := newBenchHome(t, 3)
 	n := countingScan(t)
 
@@ -58,6 +63,7 @@ func TestScanCached_ChangedFrameRescans(t *testing.T) {
 	h.viewContent()
 
 	require.Equal(t, 2, *n, "a changed frame must be scanned again")
+	require.Equal(t, 2, h.frameMemo.Runs(), "and stacked again")
 }
 
 // A click still lands on the right row after a memoized render.
@@ -69,7 +75,7 @@ func TestScanCached_ChangedFrameRescans(t *testing.T) {
 // registration still describes them. If that reasoning were wrong, the symptom
 // would be exactly this: a click routed to the wrong session — the failure mode
 // bubblezone bounds have produced here before (#434).
-func TestScanCached_ClickStillRoutesToTheRightRowAfterAMemoizedRender(t *testing.T) {
+func TestFrameCached_ClickStillRoutesToTheRightRowAfterAMemoizedRender(t *testing.T) {
 	h := newBenchHome(t, 4)
 	want := h.list.GetInstances()[2]
 
