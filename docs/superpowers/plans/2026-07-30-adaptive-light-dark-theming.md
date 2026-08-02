@@ -39,7 +39,7 @@ Design doc: `docs/superpowers/specs/2026-07-30-adaptive-light-dark-theming-desig
 | `ui/theme/mono.go` | `Mono()`/`SetMono()` — the one predicate the *non-lipgloss* emitters consult under `NO_COLOR`. |
 | `session/tmux/barstyle.go` | `ApplyBarStyle` — pushes `status-style` to the live server, fleet-wide, in one batched subprocess. |
 | `session/tmux/barstyle_test.go` | Fake-executor guard on the batched argv. |
-| `app/scheme.go` | The Bubble Tea wiring: OSC 11 request Cmds, `BackgroundColorMsg` handling, `COLORFGBG` read, and the flip that re-themes. |
+| `app/scheme.go` | The Bubble Tea wiring: OSC 11 request Cmds, `BackgroundColorMsg` handling, `COLORFGBG` read, the flip that re-themes, and `applySchemeQueryCmd` — the fourth query point, found in review after the other three were green. |
 | `app/scheme_test.go` | Guards on the wiring: latching, the flip's bar push, AC#5's no-input equivalence, and each of the four query points independently. |
 | `internal/doctor/scheme.go` | `CheckScheme`/`RenderScheme` — the rungs doctor can read, and the one it must name but cannot probe. |
 | `internal/doctor/scheme_test.go` | Environ injection, the later-entry-wins tie-break, and the section's formatting convention. |
@@ -59,14 +59,13 @@ Design doc: `docs/superpowers/specs/2026-07-30-adaptive-light-dark-theming-desig
 | `ui/splash.go` | `LumRange: 0` on a light palette and under `theme.Mono()` — **rain exempt from both** (see Task 4 Step 9 for the measurement, Task 6 Step 5 for the Mono half). `splashLumRange` takes the variant so it can say so. |
 | `app/app.go` | `tea.WithColorProfile(colorprofile.Ascii)` under `NO_COLOR`; `RequestBackgroundColor` in `Init`. |
 | `app/app_update.go` | `tea.BackgroundColorMsg` case; focus re-query on `tea.FocusMsg`. |
-| `app/app_layout.go` | `applySettingChange("theme")` pushes the bar style; `repaintAfterAttach` re-queries. |
+| `app/app_layout.go` | `applySettingChange("theme")` pushes the bar style and, via `applySchemeQueryCmd(key)`, is the fourth query point; `repaintAfterAttach` re-queries. Stage E also split `applyBarStyleCmd(key)` into a keyless `barStylePushCmd()`, so detection can push the band without passing a settings-row key it is not. |
 | `app/frameparity_test.go` | Pin `SetScheme` in `newParityHome`; the light fingerprint test. |
 | `ui/overlay/settings_schema.go` | The `theme` row's `options` uses `SelectableNames()`; `summary`; `defaultDisplay`. |
 | `ui/overlay/settings_test.go` | `TestSettingsOverlay_CycleThemeWraps` cycles `SelectableNames()`. |
 | `config/accessors.go` | `DefaultTheme` const + `GetTheme()`, normalizing empty → the default **and folding case**: `auto` is not a registry entry, so unlike a palette name it is not saved by `Get()`'s own lowercasing. |
-| `app/app_layout.go` | Stage E also split `applyBarStyleCmd(key)` into a keyless `barStylePushCmd()`, so detection can push the band without passing a settings-row key it is not. |
 | `config/types.go` | `Theme` doc comment gains `auto`. |
-| `config/config.go` | Stage F only: `Theme: "auto"`. |
+| `config/config.go` | **No change in any stage.** Task 7 pointed `DefaultConfig()` at the `DefaultTheme` const (`config/config.go:92` is `Theme: DefaultTheme`), which is what makes Stage F a one-line edit to `config/accessors.go` alone. |
 | `internal/doctor/*.go` | Report the detected scheme and which rung answered. |
 | `README.md` | The `theme` config row; a `NO_COLOR` note. |
 
@@ -2142,7 +2141,7 @@ func compose() *Theme {
 	name := curName
 	if name == AutoThemeName {
 		name = DefaultThemeName
-		if curScheme == SchemeLight {
+		if Scheme(curScheme.Load()) == SchemeLight {
 			if twin, ok := lightTwin[name]; ok {
 				name = twin
 			}
@@ -2158,14 +2157,14 @@ func compose() *Theme {
 // previous scheme. It has no effect on the rendered theme unless the palette
 // selection is AutoThemeName.
 func SetScheme(s Scheme) (restore func()) {
-	prev := curScheme
-	curScheme = s
-	current = compose()
-	return func() { curScheme = prev; current = compose() }
+	prev := curScheme.Swap(int32(s))
+	current.Store(compose())
+	return func() { curScheme.Store(prev); current.Store(compose()) }
 }
 
-// CurrentScheme reports the scheme most recently recorded by SetScheme.
-func CurrentScheme() Scheme { return curScheme }
+// CurrentScheme reports the scheme most recently recorded by SetScheme. Safe to
+// call from any goroutine, like Current(); see the note on curScheme above.
+func CurrentScheme() Scheme { return Scheme(curScheme.Load()) }
 ```
 
 `Set` and `SetGlyphSet` already snapshot and restore both of their own axes; leave them alone — a scheme change is not theirs to undo, and having three functions each restore three axes is how a restore starts clobbering a sibling.
@@ -2273,8 +2272,8 @@ Run: `PATH=$PATH:$HOME/go/bin just ci && go test -race -shuffle=on ./...`
 - [x] **Step 12: Mutation-verify the AC#4 and AC#5 guards**
 
 1. In `compose()`, delete the `if name == AutoThemeName` guard so *every* theme follows the scheme. Expected: `TestNamedThemesNeverFollowTheScheme` **fails** for `tokyo-night` and `catppuccin-mocha`. Revert.
-2. In `compose()`, change the `curScheme == SchemeLight` test to `curScheme != SchemeLight`. Expected: `TestAutoWithoutDetectionIsTheDefaultTheme` **fails** (unknown now picks the twin) — the AC#5 guard catching an inverted default. Revert.
-3. Change `curScheme`'s initializer to `SchemeLight`. Expected: `TestAutoWithoutDetectionIsTheDefaultTheme` still passes (it sets the scheme itself) but `TestSetSchemeRestoresWithoutTouchingTheName` **fails** on the restored value. If neither fails, the zero-value guarantee is unguarded — add `require.Equal(t, SchemeUnknown, CurrentScheme())` as the first line of a fresh test that runs before any `SetScheme`. Revert.
+2. In `compose()`, change the `Scheme(curScheme.Load()) == SchemeLight` test to `!=`. Expected: `TestAutoWithoutDetectionIsTheDefaultTheme` **fails** (unknown now picks the twin) — the AC#5 guard catching an inverted default. Revert.
+3. Give `curScheme` a non-zero starting value — `curScheme.Store(int32(SchemeLight))` in an `init()`, since an `atomic.Int32` has no initializer to edit. Expected: `TestAutoWithoutDetectionIsTheDefaultTheme` still passes (it sets the scheme itself) but `TestSetSchemeRestoresWithoutTouchingTheName` **fails** on the restored value. If neither fails, the zero-value guarantee is unguarded — add `require.Equal(t, SchemeUnknown, CurrentScheme())` as the first line of a fresh test that runs before any `SetScheme`. Revert.
 
 - [x] **Step 13: Commit**
 
@@ -2310,7 +2309,7 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 - Modify: `app/app_layout.go` — `repaintAfterAttach` (`app/app_layout.go:429`)
 
 **Interfaces:**
-- Consumes: `tea.RequestBackgroundColor` (a `func() Msg`, so it **is** a `tea.Cmd` — pass it unparenthesised, like `tea.RequestWindowSize`), `tea.BackgroundColorMsg` with `IsDark() bool` (`color.go:75`), `theme.ResolveScheme`, `theme.SetScheme`, `theme.CurrentScheme`, `theme.AutoThemeName`, `m.applyBarStyleCmd()` from Task 1.
+- Consumes: `tea.RequestBackgroundColor` (a `func() Msg`, so it **is** a `tea.Cmd` — pass it unparenthesised, like `tea.RequestWindowSize`), `tea.BackgroundColorMsg` with `IsDark() bool` (`color.go:75`), `theme.ResolveScheme`, `theme.SetScheme`, `theme.CurrentScheme`, `theme.AutoThemeName`, and the bar push from Task 1 — which by the time this runs is `m.barStylePushCmd()`, the keyless half Stage E split out of `applyBarStyleCmd(key)`.
 - Produces: `func (m *home) requestSchemeCmd() tea.Cmd`, `func (m *home) applyDetectedScheme(s theme.Scheme) tea.Cmd`.
 
 - [x] **Step 1: Write the failing tests**
@@ -2340,17 +2339,17 @@ func TestBackgroundColorMsgLightRethemesAndPushesTheBar(t *testing.T) {
 	t.Cleanup(theme.Set(theme.AutoThemeName))
 	t.Cleanup(theme.SetScheme(theme.SchemeUnknown))
 
-	var pushed int
-	defer swapBarStyleApplier(func() { pushed++ })()
+	var pushed int32
+	defer swapBarStyleApplier(func(context.Context, bool) { atomic.AddInt32(&pushed, 1) })()
 
 	_, cmd := m.Update(tea.BackgroundColorMsg{Color: lightBackground()})
 	require.NotNil(t, cmd, "a scheme change must command a repaint and a bar push")
-	drainCmd(t, cmd)
+	runCmdTree(cmd)
 
 	require.Equal(t, theme.SchemeLight, theme.CurrentScheme())
 	require.True(t, theme.IsLight(theme.Current().Palette),
 		"auto plus a light terminal must render the light palette")
-	require.Equal(t, 1, pushed, "the in-pane bar must follow the flip")
+	require.Equal(t, int32(1), atomic.LoadInt32(&pushed), "the in-pane bar must follow the flip")
 }
 
 // An unchanged answer must be a no-op. Without this, every refocus would clear
@@ -2362,12 +2361,12 @@ func TestBackgroundColorMsgUnchangedIsANoOp(t *testing.T) {
 	t.Cleanup(theme.Set(theme.AutoThemeName))
 	t.Cleanup(theme.SetScheme(theme.SchemeDark))
 
-	var pushed int
-	defer swapBarStyleApplier(func() { pushed++ })()
+	var pushed int32
+	defer swapBarStyleApplier(func(context.Context, bool) { atomic.AddInt32(&pushed, 1) })()
 
 	_, cmd := m.Update(tea.BackgroundColorMsg{Color: darkBackground()})
 	require.Nil(t, cmd, "re-reporting the same scheme must command nothing")
-	require.Equal(t, 0, pushed)
+	require.Equal(t, int32(0), atomic.LoadInt32(&pushed))
 }
 
 // AC#4 through the live path: a named theme ignores a detected flip entirely.
@@ -2379,13 +2378,13 @@ func TestBackgroundColorMsgIgnoredForANamedTheme(t *testing.T) {
 	t.Cleanup(theme.Set("catppuccin-mocha"))
 	t.Cleanup(theme.SetScheme(theme.SchemeUnknown))
 
-	var pushed int
-	defer swapBarStyleApplier(func() { pushed++ })()
+	var pushed int32
+	defer swapBarStyleApplier(func(context.Context, bool) { atomic.AddInt32(&pushed, 1) })()
 
 	_, cmd := m.Update(tea.BackgroundColorMsg{Color: lightBackground()})
 	require.Nil(t, cmd)
 	require.Equal(t, "catppuccin-mocha", theme.Current().Name)
-	require.Equal(t, 0, pushed)
+	require.Equal(t, int32(0), atomic.LoadInt32(&pushed))
 }
 
 // Refocus re-queries. This is the whole of AC#2 on terminals without mode 2031,
@@ -2410,7 +2409,7 @@ func TestFocusMsgDoesNotQueryForANamedTheme(t *testing.T) {
 }
 ```
 
-`lightBackground()`, `darkBackground()` and `drainCmd()` are helpers this file needs; write them at the bottom of `app/scheme_test.go`:
+`lightBackground()` and `darkBackground()` are the only helpers this file needs; write them at the bottom of `app/scheme_test.go`:
 
 ```go
 // lightBackground and darkBackground are colours whose IsDark() answers are
@@ -2418,22 +2417,11 @@ func TestFocusMsgDoesNotQueryForANamedTheme(t *testing.T) {
 // it, so the test drives the real predicate rather than a bool.
 func lightBackground() color.Color { return color.RGBA{0xe1, 0xe2, 0xe7, 0xff} }
 func darkBackground() color.Color  { return color.RGBA{0x1a, 0x1b, 0x26, 0xff} }
-
-// drainCmd runs a Cmd (and any Batch under it) to completion, discarding the
-// messages. Enough for these tests, whose subject is the side effects the Cmd
-// performs, not what it returns.
-func drainCmd(t *testing.T, cmd tea.Cmd) {
-	t.Helper()
-	if cmd == nil {
-		return
-	}
-	_ = cmd()
-}
 ```
 
-**Do not write `drainCmd` — `runCmdTree` already exists** (`app/app_config_update_test.go:59`, added by Stage A) and already recurses structurally through both `tea.Batch` and `tea.Sequence`, matching on "a slice of `tea.Cmd`" because `sequenceMsg` is unexported. A second walker would be a duplicate of a helper the same package already proves against `tea.Sequence(tea.ClearScreen, tea.Batch(...))`.
+**Do not write a `drainCmd` — `runCmdTree` already exists** (`app/app_config_update_test.go:59`, added by Stage A) and already recurses structurally through both `tea.Batch` and `tea.Sequence`, matching on "a slice of `tea.Cmd`" because `sequenceMsg` is unexported. A second walker would be a duplicate of a helper the same package already proves against `tea.Sequence(tea.ClearScreen, tea.Batch(...))`. The blocks above call `runCmdTree(cmd)` for that reason — an earlier draft of this step defined and called a `drainCmd`, and a one-level `_ = cmd()` would not have reached the bar push under `tea.Sequence`.
 
-Two more signatures in the block above are not the tree's: `swapBarStyleApplier` takes `func(context.Context, bool)`, not `func()`, and its existing callers count with `atomic.AddInt32`. `applyBarStyleCmd` takes a `key string`.
+The blocks above are also written against the tree's signatures rather than this plan's first draft: `swapBarStyleApplier` takes `func(context.Context, bool)`, not `func()`, so the counters are `int32` incremented with `atomic.AddInt32`; and the bar push inside `applyDetectedScheme` is `barStylePushCmd()`, since `applyBarStyleCmd` takes a `key string` this path has none of.
 
 `tea.BackgroundColorMsg`'s field **is** embedded (`struct{ color.Color }`, `color.go:67`, `image/color`), so the embedded field is named `Color` and `tea.BackgroundColorMsg{Color: c}` compiles. Verified on v2.0.8.
 
@@ -2524,7 +2512,7 @@ func (m *home) applyDetectedScheme(s theme.Scheme) tea.Cmd {
 	theme.SetScheme(s)
 	return tea.Sequence(
 		tea.ClearScreen,
-		tea.Batch(tea.RequestWindowSize, m.applyBarStyleCmd()),
+		tea.Batch(tea.RequestWindowSize, m.barStylePushCmd()),
 	)
 }
 
@@ -2610,16 +2598,61 @@ func (m *home) repaintAfterAttach(cmds ...tea.Cmd) tea.Cmd {
 }
 ```
 
+**The fourth query point, and the reason it is not a fourth copy of the same call.**
+The three above all ask on behalf of a selection that was *already* `auto`. The
+settings panel is the one site where the **gate itself** is what changed: the user
+picks `auto`, and a session launched on a named palette has spent no query at
+`Init` — because `requestSchemeCmd`'s gate read the theme this change is replacing.
+So `curScheme` is still whatever `COLORFGBG` said at startup (usually nothing), and
+composing `auto` against it renders the shipped dark default. On a light terminal
+that is the wrong palette, and nothing corrects it until the user happens to blur
+and refocus. The row is `timingLive`, whose `footerNote()` is `""` — the panel
+promises the change applies immediately.
+
+In `app/scheme.go`, beside `requestSchemeCmd`:
+
+```go
+// applySchemeQueryCmd is requestSchemeCmd for the settings panel's theme arm.
+//
+// Keyed like applyBarStyleCmd, and for the same reason: the arm is shared with
+// glyph_set, which cannot change the palette selection, so it has nothing to
+// re-detect. Gating on the key rather than on requestSchemeCmd's config check
+// alone is what keeps a rung change from spending a query — that check passes
+// under `auto` no matter which row moved.
+func (m *home) applySchemeQueryCmd(key string) tea.Cmd {
+	if key != "theme" {
+		return nil
+	}
+	return m.requestSchemeCmd()
+}
+```
+
+and wire it into `applySettingChange`'s theme arm in `app/app_layout.go`, beside the
+bar push that is already keyed the same way:
+
+```go
+		return tea.Sequence(tea.ClearScreen, tea.Batch(
+			tea.RequestWindowSize,
+			m.applyBarStyleCmd(key),
+			m.applySchemeQueryCmd(key),
+		))
+```
+
+**Generalise the miss.** The first three points were found by asking where the
+*gate is read*. This one is only visible from where the *gated value is written*.
+When a feature is gated on a config value, enumerate the **write** sites of that
+value, not just the read sites of the gate.
+
 - [x] **Step 5: Run to verify the tests pass**
 
 Run: `go test ./app/ -run 'TestBackgroundColorMsg|TestFocusMsg' -v`
-Expected: PASS. If `TestBackgroundColorMsgLightRethemesAndPushesTheBar` shows `pushed == 0`, it is the `drainCmd` limitation flagged in Step 1 — fix it there, not by weakening the assertion.
+Expected: PASS. If `TestBackgroundColorMsgLightRethemesAndPushesTheBar` shows `pushed == 0`, the Cmd walker is not reaching the push under `tea.Sequence` — that is the trap Step 1 flags, and `runCmdTree` is the fix. Correct it there, not by weakening the assertion.
 
 - [x] **Step 6: Verify AC#5 at the frame level**
 
 Run: `go test ./app/ -run 'TestFrameParity|TestFrameColourFingerprint|TestLightFrameColourFingerprint' -count=1`
 
-Expected: PASS, **byte-identical**. This is AC#5's real proof: the whole detection mechanism is now live, and with no detection input the 18-state colour fingerprint has not moved a byte. `newParityHome` pins `cfg.Theme` (still `tokyo-night`), so `auto` is not even exercised — which is why Stage F adds the explicit `SetScheme` pin.
+Expected: PASS, **byte-identical**. This is AC#5's real proof: the whole detection mechanism is now live, and with no detection input the 18-state colour fingerprint has not moved a byte. `newParityHome` pins the configured theme (still `tokyo-night`), so `auto` is not even exercised — which is why the explicit `SetScheme` pin is inert here, and why it was safe to land it in this stage rather than in Stage F. It is Task 10 Steps 1–2, pulled forward: the pin guards the goldens against the *axis* this stage introduces, not only against the default Stage F flips.
 
 - [x] **Step 7: Drive it live — the matrix**
 
@@ -2861,19 +2894,27 @@ kept for the record; start at Step 3.
 
 - [x] **Step 1: Add the scheme pin to `newParityHome` FIRST** — *done in Stage E, `c0c9810`.*
 
-Before changing the default, make the fixture immune to it. In `app/frameparity_test.go`, beside the existing pins (now at lines 171-173):
+Before changing the default, make the fixture immune to it. This is what shipped, beside the existing pins in `app/frameparity_test.go` (`theme.Set` and `theme.SetGlyphSet`, now at lines 171-172):
 
 ```go
 	cfg := config.DefaultConfig()
 	t.Cleanup(theme.Set(cfg.GetTheme())) // GetTheme, not cfg.Theme, since Task 7
 	t.Cleanup(theme.SetGlyphSet(cfg.GetGlyphSet()))
-	// The scheme axis, pinned for the same reason as the other two: the shipped
-	// default is `auto`, so without this the goldens would resolve their palette
-	// from whatever detection state another test left behind — and under -shuffle
-	// that is a different palette per run. Dark is what a terminal that does not
-	// answer gets, which is what these goldens are baselined at.
+	// The scheme axis, pinned for exactly the reason the other two are: it is a
+	// package global other tests in this package mutate, so under -shuffle the frame
+	// would otherwise inherit whichever detection state ran last. Inert while the
+	// shipped default names a palette — compose() reads the scheme only for `auto` —
+	// which is what makes it safe to land with the axis rather than with the default
+	// flip that will need it. Dark is what a terminal that does not answer gets, and
+	// what these goldens are baselined at.
 	t.Cleanup(theme.SetScheme(theme.SchemeDark))
 ```
+
+The rationale as drafted here said the pin was needed *because* the shipped default
+was `auto`. It landed a stage early, while the default is still `tokyo-night`, so the
+reason that survived contact is the `-shuffle` one — the axis is a package global
+regardless of what the default names. Step 2 below is the check that made the
+difference visible.
 
 - [x] **Step 2: Verify the pin changes nothing yet** — *done in Stage E; all three checksums unmoved.*
 
@@ -2897,7 +2938,8 @@ In `config/accessors.go`, change only the value and the first sentence:
 // DefaultTheme is the theme a config with no `theme` set resolves to: `auto`,
 // which follows the terminal's detected background polarity and resolves to the
 // shipped dark palette when nothing answers.
-// ... (keep the existing two paragraphs on purity and on the leaf convention)
+// ... (keep the existing second paragraph, which covers both the purity argument
+// and the leaf convention)
 const DefaultTheme = "auto"
 ```
 
@@ -3006,11 +3048,23 @@ Then update the issue with the matrix results and close it, ticking #394 in epic
 
 **Spec coverage.** Every section of the design doc maps to a task: the tmux bar gap → Task 1; the contrast oracle → Task 2; the light palettes and `colours-light.txt` → Task 3; the splash's luminance ramp → Task 4; `NO_COLOR` at the renderer plus its oracle → Task 5; the tmux/splash surfaces the profile cannot reach → Task 6; the scheme axis, `auto`, and `SelectableNames` → Task 7; the detection wiring and its query points → Task 8 (which enumerated three; a fourth, the settings panel selecting `auto`, was found in review); the doctor report → Task 9; the default flip → Task 10. The design's H2 (the fade) has **no task**, deliberately: it is an eyeball item, and it is covered by Task 3 Step 11's live round and Task 4 Step 9's, both of which render a modal over a light backdrop. The two follow-ups the design defers (fresco's light ramp, `barState`'s 1.44:1) are filed by Task 4 Step 9 and Task 2 Step 6 respectively.
 
-**Type consistency.** `theme.Scheme`/`SchemeUnknown`/`SchemeDark`/`SchemeLight`, `ResolveScheme(*bool, string) Scheme`, `SetScheme(Scheme) func()`, `CurrentScheme() Scheme`, `IsLight(Palette) bool`, `Mono() bool`, `SetMono(bool) func()`, `NoColorRequested([]string) bool`, `AutoThemeName`, `SelectableNames() []string`, `lightTwin map[string]string`, `relLuminanceOf(Color) float64`, `tmux.ApplyBarStyle(context.Context, cmd.Executor) error`, `tmux.RewriteManagedConfig(bool) error`, `config.DefaultTheme`, `(*Config).GetTheme() string`, `(*home).applyBarStyleCmd() tea.Cmd`, `(*home).requestSchemeCmd() tea.Cmd`, `(*home).applyDetectedScheme(theme.Scheme) tea.Cmd`, `doctor.CheckScheme([]string) SchemeResult`, `doctor.RenderScheme(SchemeResult) string`, `barStyleApplier` — each is defined in exactly one task and used with that spelling and signature everywhere after.
+**Type consistency.** `theme.Scheme`/`SchemeUnknown`/`SchemeDark`/`SchemeLight`, `ResolveScheme(*bool, string) Scheme`, `SetScheme(Scheme) func()`, `CurrentScheme() Scheme`, `IsLight(Palette) bool`, `Mono() bool`, `SetMono(bool) func()`, `NoColorRequested([]string) bool`, `AutoThemeName`, `SelectableNames() []string`, `lightTwin map[string]string`, `relLuminanceOf(Color) float64`, `tmux.ApplyBarStyle(context.Context, cmd.Executor) error`, `tmux.RewriteManagedConfig(bool) error`, `config.DefaultTheme`, `(*Config).GetTheme() string`, `(*home).requestSchemeCmd() tea.Cmd`, `(*home).applyDetectedScheme(theme.Scheme) tea.Cmd`, `doctor.CheckScheme([]string) SchemeResult`, `doctor.RenderScheme(SchemeResult) string`, `barStyleApplier` — each is defined in exactly one task and used with that spelling and signature everywhere after.
+
+**One symbol broke that rule, and it is the one to check first when reading an
+un-run step.** `applyBarStyleCmd` was written argument-less in Task 1 and shipped
+that way; Stage E gave it a `key string` and split the keyless half out as
+`barStylePushCmd()` (`app/app_layout.go:452` and `:468`). Task 8's steps were
+written against the Task 1 spelling and have been corrected to the tree's, but the
+lesson generalises past this plan: **a signature is not a fact a plan can state
+once.** The others above held because nothing later re-opened them.
+
+`(*home).applySchemeQueryCmd(key string) tea.Cmd` (`app/scheme.go:84`) is the one
+symbol in Stage E that no task defines, because the need for it was found in review
+rather than in planning — see Task 8 Step 4's fourth query point.
 
 Two deliberate cross-task couplings, called out where they bite: `relLuminance` is written in `contrast_test.go` (Task 2) and **moved** to `scheme.go` as `relLuminanceOf` in Task 3 Step 2b — the step that creates `scheme.go`, because `IsLight` has to exist before `AgentGlyph` can call it — with the test-file copy deleted rather than duplicated. And `barStyleApplier` is introduced in Task 1 Step 9 as a test seam, then relied on by Task 8's tests — so Task 1's Step 5 code must be restructured to that shape rather than leaving both versions, which Step 9 says explicitly.
 
-**Three places the plan tells the implementer to verify rather than trust.** `tea.BackgroundColorMsg`'s construction (embedded field, so `{Color: c}` may not compile), `drainCmd`'s adequacy against `tea.Sequence`/`tea.Batch`, and whether tmux accepts `status-style "bg=,fg="` without a parse error. Each has a named fallback, because guessing any of them wrong produces a green test that guards nothing.
+**Three places the plan tells the implementer to verify rather than trust.** `tea.BackgroundColorMsg`'s construction (embedded field, so `{Color: c}` may not compile), the Cmd walker's adequacy against `tea.Sequence`/`tea.Batch`, and whether tmux accepts `status-style "bg=,fg="` without a parse error. Each has a named fallback, because guessing any of them wrong produces a green test that guards nothing.
 
 **All three came back, and two came back differently than the fallbacks anticipated.**
 `{Color: c}` compiles (the embedded field is named `Color`). `drainCmd` was never
