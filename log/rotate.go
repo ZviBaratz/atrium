@@ -1,6 +1,8 @@
 package log
 
 import (
+	"errors"
+	"io/fs"
 	"os"
 	"sync"
 )
@@ -85,10 +87,24 @@ func (r *rotatingFile) Close() error {
 // place and the next write tries again. The rename happens before the old
 // descriptor is closed — POSIX allows renaming an open file — so a failed rename
 // can never strand this writer holding a closed file.
+//
+// "The next write tries again" only holds because of the missing-path case
+// below. Retrying through the rename alone would be retrying a rename whose
+// source does not exist, which fails identically every time.
 func (r *rotatingFile) rotate() {
 	mine, errMine := r.f.Stat()
 	onDisk, errDisk := os.Stat(r.path)
-	if errMine == nil && errDisk == nil && !os.SameFile(mine, onDisk) {
+	switch {
+	case errors.Is(errDisk, fs.ErrNotExist):
+		// Nothing at the live path. Either an earlier rotation renamed the file
+		// aside and could not reopen it — a full disk or an exhausted descriptor
+		// table, the conditions this package exists to survive (#567) — or
+		// something outside Atrium removed the log. Our descriptor is writing to a
+		// file the path no longer names, so create the path afresh rather than
+		// renaming a source that is not there.
+		r.replace()
+		return
+	case errMine == nil && errDisk == nil && !os.SameFile(mine, onDisk):
 		// Another process already rotated this file: our descriptor now points at
 		// their rolled-aside generation, which their next rotation would replace
 		// with our lines still going into it. Take the path back rather than

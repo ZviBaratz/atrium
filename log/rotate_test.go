@@ -160,6 +160,39 @@ func TestRotatingFile_ReopensWhenAnotherProcessRotatedTheFile(t *testing.T) {
 	}
 }
 
+// A rotation that renames the file aside and then cannot reopen the path leaves
+// this writer holding the rolled-aside generation with nothing at the live path.
+// The next write must take the path back. Without that, every later rotation
+// attempt renames a source that no longer exists and fails: the writer appends to
+// the rollover for the rest of the process's life, the cap stops binding the file
+// actually being written, and the path `atrium debug` reports stays empty.
+//
+// The same state is reachable without a failed reopen — anything that removes the
+// live log out from under a running Atrium — so this is the general recovery.
+func TestRotatingFile_TakesThePathBackWhenNothingIsThere(t *testing.T) {
+	r, path := newTestRotator(t, 20)
+	mustWrite(t, r, "before-the-strand\n")
+
+	// The state left behind by a rotation whose rename succeeded and whose reopen
+	// did not: our descriptor followed the rename, and the path is now empty.
+	if err := os.Rename(path, path+rotationSuffix); err != nil {
+		t.Fatalf("simulating a rotation that could not reopen the path: %v", err)
+	}
+
+	// Big enough to trip the cap, so the rotation path runs.
+	mustWrite(t, r, strings.Repeat("z", 18)+"\n")
+
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("the live path was never taken back: %v", err)
+	}
+	if got := read(t, path); !strings.Contains(got, "zzzz") {
+		t.Errorf("live file = %q, want the write that followed the strand", got)
+	}
+	if got := read(t, path+rotationSuffix); !strings.Contains(got, "before-the-strand") {
+		t.Errorf("%s = %q, want the stranded generation left intact", rotationSuffix, got)
+	}
+}
+
 // Three loggers share one writer, so writes are concurrent by construction.
 // Guards the mutex under -race.
 func TestRotatingFile_ConcurrentWritesAreSerialised(t *testing.T) {
