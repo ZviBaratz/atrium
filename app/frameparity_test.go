@@ -170,13 +170,20 @@ func newParityHome(t *testing.T, fs frameState, w, h int) *home {
 	cfg := config.DefaultConfig()
 	t.Cleanup(theme.Set(cfg.GetTheme()))
 	t.Cleanup(theme.SetGlyphSet(cfg.GetGlyphSet()))
-	// The scheme axis, pinned for exactly the reason the other two are: it is a
-	// package global other tests in this package mutate, so under -shuffle the frame
-	// would otherwise inherit whichever detection state ran last. Inert while the
-	// shipped default names a palette — compose() reads the scheme only for `auto` —
-	// which is what makes it safe to land with the axis rather than with the default
-	// flip that will need it. Dark is what a terminal that does not answer gets, and
-	// what these goldens are baselined at.
+	// The scheme axis. Since Stage F this line SELECTS the palette every golden is
+	// rendered in, rather than merely guarding it: the shipped default is `auto`, so
+	// cfg.GetTheme() above resolves through the scheme instead of around it. Dark is
+	// what a terminal that does not answer gets, and what these goldens are baselined
+	// at. Set it to SchemeLight and both colours.txt and frames/screensaver.txt move —
+	// the latter because the splash encodes luminance as ASCII density, so for that
+	// one state the palette is layout.
+	//
+	// What it does NOT do today is catch a leak, and the distinction is worth keeping
+	// straight because the line reads like a -shuffle guard. Deleting it entirely was
+	// measured: nothing fails, even with -shuffle over the whole package, because every
+	// SetScheme in app is paired with its restore. So this is defence-in-depth against
+	// a dirty global that no test currently creates — do not upgrade that to a claim
+	// the suite would disprove.
 	t.Cleanup(theme.SetScheme(theme.SchemeDark))
 
 	m := newCreateFormHome(t)

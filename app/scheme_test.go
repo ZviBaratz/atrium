@@ -7,11 +7,27 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/ZviBaratz/atrium/config"
 	"github.com/ZviBaratz/atrium/ui/theme"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/stretchr/testify/require"
 )
+
+// TestDefaultThemeMatchesTheReservedAutoName pins config's spelling of the reserved
+// value to theme's. config spells the literal rather than importing the constant, to
+// keep ui/theme a leaf that no atrium package appears in — the same trade GlyphSet*
+// makes — so the two strings are held together here instead of by the compiler.
+//
+// This test is what makes that trade safe, and it is load-bearing rather than
+// decorative: a typo would NOT fail to build. Get() falls back to the default
+// palette for any unrecognised name, so `atuo` would resolve as an unknown theme,
+// never match the AutoThemeName gate in requestSchemeCmd, and silently ship the dark
+// default forever — on exactly the light terminals #394 is about, with no error
+// anywhere. It lives in app because app is a package that may import both.
+func TestDefaultThemeMatchesTheReservedAutoName(t *testing.T) {
+	require.Equal(t, theme.AutoThemeName, config.DefaultTheme)
+}
 
 // lightBackground and darkBackground are colours whose IsDark() answers are
 // unambiguous. tea.BackgroundColorMsg embeds image/color.Color and derives IsDark
@@ -162,13 +178,21 @@ func TestRequestSchemeCmdGatesOnConfigNotTheRenderedTheme(t *testing.T) {
 		"auto must keep querying even while it renders the same palette a named theme would")
 }
 
-// An empty theme is unset, which means the default, which is not auto. The gate goes
-// through GetTheme so "unset" has one meaning here and at startup.
+// An empty theme is unset, which means the default — and since Stage F the default
+// IS auto, so an unconfigured install must query. This is the whole point of the
+// flip: the user who never opened a config file is the one #394 is about, and an
+// opt-in fix never reaches them.
+//
+// The gate goes through GetTheme rather than reading c.Theme, so "unset" has one
+// meaning here and at startup. That indirection is what makes this test track the
+// default instead of restating it: flip DefaultTheme back and this fails, which is
+// the assertion that the shipped default is observable at all.
 func TestRequestSchemeCmdTreatsUnsetAsTheDefault(t *testing.T) {
 	m := newCreateFormHome(t)
 	m.appConfig.Theme = ""
 
-	require.Nil(t, m.requestSchemeCmd())
+	require.NotNil(t, m.requestSchemeCmd(),
+		"a config with no theme key must detect: the shipped default is auto")
 }
 
 // The gate compares against the literal "auto", so it depends on GetTheme having

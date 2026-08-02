@@ -42,6 +42,14 @@ func newSettingsTestHome() *home {
 // settings tests mutate, so sibling tests in the package see defaults.
 func resetSettingsTestState(t *testing.T) {
 	t.Helper()
+	// Pin the scheme axis, because since Stage F the default theme is `auto` and these
+	// tests assert on what it RESOLVES to. compose() reads the scheme for `auto`, so
+	// "r restores the default palette" is now a claim about curScheme as much as about
+	// the reset. It holds today only because every SetScheme in this package is wrapped
+	// in a t.Cleanup — an invariant of the sibling tests, not of this one, and exactly
+	// the kind that -shuffle turns into a mystery. Dark is what a terminal that does
+	// not answer gets, and what these assertions are written against.
+	t.Cleanup(theme.SetScheme(theme.SchemeDark))
 	t.Cleanup(func() {
 		_ = config.SaveConfig(config.DefaultConfig())
 		theme.Set(theme.DefaultThemeName)
@@ -87,6 +95,15 @@ func TestSettingsPanel_ThemeChangeAppliesLive(t *testing.T) {
 	require.True(t, h.settingsOverlay.OpenAt("theme"))
 
 	_, cmd := h.handleKeyPress(keyMsg("right"))
+	// Since Stage F the default is `auto`, which is a selection rather than a palette:
+	// h.appConfig.Theme is what the user PICKED and theme.Current().Name is what that
+	// RESOLVED to, and the two are equal only for a named palette. One Right off auto
+	// happens to land on one (SelectableNames is auto-then-registry-sorted), which is
+	// arithmetic on the option list rather than a property of this test — so say so,
+	// or a reordering of SelectableNames breaks the equality below with a baffling
+	// message about a theme this test never mentions.
+	require.NotEqual(t, theme.AutoThemeName, h.appConfig.Theme,
+		"precondition: one Right off the default lands on a named palette, so selection and resolved palette coincide")
 	assert.NotEqual(t, theme.DefaultThemeName, h.appConfig.Theme)
 	assert.Equal(t, h.appConfig.Theme, theme.Current().Name,
 		"the active theme must follow the config change without a restart")
@@ -414,6 +431,9 @@ func TestSettingsPanel_ResetPersistsAndLiveApplies(t *testing.T) {
 
 	_, cmd := h.handleKeyPress(textMsg("r"))
 
+	// The two halves say different things since Stage F: the selection is cleared to
+	// unset (which now means `auto`), and that resolves — against the scheme this
+	// fixture pins — to the default palette. Before the flip they were the same claim.
 	assert.Empty(t, h.appConfig.Theme, "r cleared the explicit theme")
 	assert.Empty(t, config.LoadConfig().Theme, "r persisted, like an edit")
 	assert.Equal(t, theme.DefaultThemeName, theme.Current().Name,

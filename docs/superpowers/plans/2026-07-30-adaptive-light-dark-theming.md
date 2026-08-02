@@ -2929,7 +2929,7 @@ difference visible.
 Run: `go test ./app/ -run 'TestFrameParity|TestFrameColourFingerprint|TestLightFrameColourFingerprint' -count=1 -shuffle=on`
 Expected: PASS byte-identical. The default is still `tokyo-night`, so the pin is inert — which is what makes it safe to land before the flip.
 
-- [ ] **Step 3: Flip the default**
+- [x] **Step 3: Flip the default**
 
 **The two options below have swapped places since this was written.** Task 7 shipped
 `DefaultTheme` with a doc comment that commits to the literal *on purpose*: "Spelled
@@ -2976,13 +2976,30 @@ Put that test in a package that may import both — `app` is safe.
 standing between a typo and a silent no-op, because `Get()` falls back for any
 unrecognised name rather than erroring.
 
-- [ ] **Step 4: Run every golden**
+*Shipped as written, in `app/scheme_test.go` beside the other `auto`-vocabulary
+tests. Mutation testing confirmed the necessity rather than assuming it: with
+`DefaultTheme = "atuo"` the tree still **builds**, and three tests catch it — this
+one, `TestRequestSchemeCmdTreatsUnsetAsTheDefault`, and
+`ui/overlay`'s `TestSettingsOverlay_CycleThemeWraps`.*
+
+- [x] **Step 4: Run every golden**
 
 Run: `go test ./app/ -run 'TestFrameParity|TestFrameColourFingerprint|TestLightFrameColourFingerprint' -count=1 -shuffle=on`
 
 Expected: **PASS byte-identical.** This is the self-proof: `auto` with `SchemeDark` resolves to `tokyo-night`, so the shipped default renders exactly what it rendered before. **If a golden moves, do not regenerate it** — it means `compose()`'s `auto` branch does not resolve to the default, and the flip is not safe.
 
-- [ ] **Step 5: Run the whole suite**
+*Held. All three unmoved on `190e1a8`: `colours.txt` `3e75579b…`, `colours-light.txt`
+`fdc3373f…`, `cat frames/*.txt` `c04a0730…`. Note the second differs from the value
+quoted in Stage F's kickoff, which was read on `4a45d33`: `190e1a8` (#572) moved
+`colours-light.txt` legitimately with the `confirmationOverlay` fix. The two that
+carry the self-proof were unaffected by that commit.*
+
+*The goldens cannot see the flip on their own, and that is worth stating plainly
+because it is easy to read "byte-identical" as "verified". Mutation 2 — reverting
+`DefaultTheme` to `tokyo-night` — leaves every golden byte-identical too. What makes
+the flip observable is Step 3's pinning test and the Step 5 test below, not this step.*
+
+- [x] **Step 5: Run the whole suite**
 
 Run: `go test ./... -count=1` then `PATH=$PATH:$HOME/go/bin just ci && go test -race -shuffle=on ./...`
 
@@ -3009,17 +3026,66 @@ The rule to apply: after the flip, `Theme` is what the user *selected* and
 and unequal for `auto`. Any assertion that conflates them needs to say which one it
 means.
 
-- [ ] **Step 6: Verify the settings panel shows it**
+*Both sweeps run. The `"tokyo-night"` grep found nothing that breaks — every hit
+names the **palette**, which did not change. Exactly one test failed, and it is in the
+second sweep only: `TestRequestSchemeCmdTreatsUnsetAsTheDefault`, which set `Theme = ""`
+and required no query. Its docstring — "unset, which means the default, which is not
+auto" — was falsified by the same line that broke the assertion, so both were
+inverted: an unconfigured install now **must** detect, which is the point of the flip.*
+
+*Two more survive but changed meaning, and were made to say so rather than left to
+arithmetic. `app/settings_test.go:88-93` compares selection against resolved palette;
+it holds only because one `Right` off `auto` lands on a named one, so that is now an
+explicit precondition. And `TestSettingsPanel_ResetPersistsAndLiveApplies` asserts what
+`r` **resolves** to, which since the flip depends on `curScheme` — an unpinned global
+that happens to be clean only because every sibling `SetScheme` restores. `resetSettingsTestState`
+now pins the axis, as `newParityHome` does.*
+
+- [x] **Step 6: Verify the settings panel shows it**
 
 Run `just build && ./bin/atrium` with a fresh `HOME`, open settings (`s`), and confirm the `theme` row reads `auto` and that the `Modified` dot is **absent** — the value equals the default, so a dot would be a lie. Cycle right once and back and confirm the dot appears and clears.
 
-- [ ] **Step 7: Update the docs**
+*This step already had a guard, which is a better answer than the eyeball it asks for:
+`ui/overlay`'s `TestResetRestoresTheDefaultAndReportsTheKey` (`settings_nav_test.go:455`)
+runs exactly this sequence **on the theme row** — fresh `DefaultConfig()` is
+unmodified, `right` marks it modified, `r` clears it — and is green after the flip.
+The dot needs no change because both sides of `isModified` route through `GetTheme`:
+`row.get` and `defaultDisplay` return `"auto"` together.*
+
+*The live eyeball was attempted and abandoned after three tries: driving the two-pane
+rail blind through an injected key stream is not a measurement, and the existing test
+asserts the same property with a citation. What the live runs did confirm is the
+row's **value**, since `get` is `GetTheme()`.*
+
+- [x] **Step 7: Update the docs**
 
 `README.md`'s `theme` row default column: `` `"tokyo-night"` `` → `` `"auto"` ``, with the description explaining that `auto` follows the terminal and falls back to `tokyo-night`. `config/types.go`'s `Theme` doc comment likewise.
 
-- [ ] **Step 8: Drive it live one more time, both polarities**
+*Both done. `config/config.go` (drift site 2) and the settings row's `defaultDisplay`
+(site 4) needed no edit after all — each already derives from `DefaultTheme`, which is
+what kept the flip to one line. The design doc's Stage F paragraph, which instructs
+otherwise, is annotated there.*
+
+- [x] **Step 8: Drive it live one more time, both polarities**
 
 Fresh `HOME` (so no `theme` key is set at all), on a light terminal and a dark one. Confirm the right palette appears with no configuration. This is the acceptance test for the issue's actual title.
+
+*Run on alacritty 0.16.1 under GNOME/Wayland, and it is the first evidence in this
+programme from a terminal that **volunteered** an OSC 11 answer rather than having one
+injected. Both polarities pass with no config file at all: light `#ffffff` renders
+`tokyo-night-day`, dark `#1a1a1a` renders `tokyo-night`. Named `theme: tokyo-night` on
+the light terminal stays dark and sends **zero** queries — AC#4, live. And `COLORFGBG=0;15`
+on a dark terminal starts light and is then corrected by OSC 11, which is the first live
+witness for the lower rung and for the ladder's ordering; Stage E had neither.*
+
+***The instrument lied twice before it told the truth, and both failures read as a
+working feature being broken.*** *`tmux pipe-pane` cannot see OSC 11 from inside the
+alt screen — the Stage E note. Then `script(1)` appeared to swallow the terminal's
+reply, and it does not: the harness had `>/dev/null` on it, so the query never reached
+the terminal and there was nothing to answer. **A redirect that silences the query is
+indistinguishable from a terminal that does not reply.** What separated them was
+feeding a known positive through the identical path — a plain `printf '\033]11;?'`
+whose reply was read back — before trusting any zero. Do that first, always.*
 
 - [ ] **Step 9: Commit**
 
