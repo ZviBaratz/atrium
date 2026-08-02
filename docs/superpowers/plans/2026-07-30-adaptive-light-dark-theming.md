@@ -40,7 +40,10 @@ Design doc: `docs/superpowers/specs/2026-07-30-adaptive-light-dark-theming-desig
 | `session/tmux/barstyle.go` | `ApplyBarStyle` — pushes `status-style` to the live server, fleet-wide, in one batched subprocess. |
 | `session/tmux/barstyle_test.go` | Fake-executor guard on the batched argv. |
 | `app/scheme.go` | The Bubble Tea wiring: OSC 11 request Cmds, `BackgroundColorMsg` handling, `COLORFGBG` read, and the flip that re-themes. |
-| `app/scheme_test.go` | Guards on the wiring: latching, the flip's bar push, AC#5's no-input equivalence. |
+| `app/scheme_test.go` | Guards on the wiring: latching, the flip's bar push, AC#5's no-input equivalence, and each of the four query points independently. |
+| `internal/doctor/scheme.go` | `CheckScheme`/`RenderScheme` — the rungs doctor can read, and the one it must name but cannot probe. |
+| `internal/doctor/scheme_test.go` | Environ injection, the later-entry-wins tie-break, and the section's formatting convention. |
+| `config/theme_test.go` | `TestGetTheme`: empty → default, and the case folding `auto` depends on. |
 | `app/testdata/colours-light.txt` | Colour fingerprint of all 18 states under `tokyo-night-day`. |
 | `app/nocolour_test.go` | The `NO_COLOR` oracle: frames through a `colorprofile.Ascii` writer. |
 
@@ -60,7 +63,8 @@ Design doc: `docs/superpowers/specs/2026-07-30-adaptive-light-dark-theming-desig
 | `app/frameparity_test.go` | Pin `SetScheme` in `newParityHome`; the light fingerprint test. |
 | `ui/overlay/settings_schema.go` | The `theme` row's `options` uses `SelectableNames()`; `summary`; `defaultDisplay`. |
 | `ui/overlay/settings_test.go` | `TestSettingsOverlay_CycleThemeWraps` cycles `SelectableNames()`. |
-| `config/accessors.go` | `GetTheme()` normalizing empty → the default. |
+| `config/accessors.go` | `DefaultTheme` const + `GetTheme()`, normalizing empty → the default **and folding case**: `auto` is not a registry entry, so unlike a palette name it is not saved by `Get()`'s own lowercasing. |
+| `app/app_layout.go` | Stage E also split `applyBarStyleCmd(key)` into a keyless `barStylePushCmd()`, so detection can push the band without passing a settings-row key it is not. |
 | `config/types.go` | `Theme` doc comment gains `auto`. |
 | `config/config.go` | Stage F only: `Theme: "auto"`. |
 | `internal/doctor/*.go` | Report the detected scheme and which rung answered. |
@@ -1280,7 +1284,7 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 
 ---
 
-## Stage D — `NO_COLOR`
+## Stage D — `NO_COLOR` ✅ SHIPPED (#568, `1609261`)
 
 Measured, not assumed: Bubble Tea already runs `colorprofile.Detect(p.output, p.environ)` (`tea.go:1083`) and colorprofile does consult `NO_COLOR` — but through `strconv.ParseBool`, so `NO_COLOR=yes` / `x` / `0` / `2` are all ignored while no-color.org mandates off for **any non-empty value**. And `colorprofile.Ascii` is the right target, not `NoTTY`: measured through `colorprofile.Writer`, `Ascii` drops every colour form (including hand-written SGR like the overlay fade's) and keeps bold/italic/underline, where `NoTTY` strips those too and flattens the hierarchy that makes monochrome navigable.
 
@@ -1299,7 +1303,7 @@ Measured, not assumed: Bubble Tea already runs `colorprofile.Detect(p.output, p.
   - `func theme.SetMono(on bool)` and `func theme.Mono() bool` — the predicate the **non-lipgloss** emitters consult. Task 6's only dependency.
   - `func theme.NoColorRequested(environ []string) bool` — the spec-compliant env test, taking `environ` so it is testable without `t.Setenv`.
 
-- [ ] **Step 1: Write the failing test for the env predicate**
+- [x] **Step 1: Write the failing test for the env predicate**
 
 > **Carry Stage C's trap in.** `NoColorRequested` taking `environ` as a parameter is what makes it testable at all — keep that, and resist "simplifying" it to read `os.Environ()` internally. Stage C lost time to the mirror image: a test used `t.Setenv` against a value another package resolved in `init()`, which no amount of setting could reach. Any predicate whose input is read at package load needs either a parameter (this) or a subprocess (`TestLumRangeEnvReachesRender`). `SetMono` is the other half of the same shape — a package global with a restore, so it must be exercised under `-shuffle=on`, which is what finds a `restore()` that leaks.
 
@@ -1356,12 +1360,12 @@ func TestSetMonoRestores(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run it to verify it fails**
+- [x] **Step 2: Run it to verify it fails**
 
 Run: `go test ./ui/theme/ -run 'TestNoColorRequested|TestSetMonoRestores' -v`
 Expected: FAIL to compile — `undefined: NoColorRequested`, `undefined: Mono`.
 
-- [ ] **Step 3: Implement `ui/theme/mono.go`**
+- [x] **Step 3: Implement `ui/theme/mono.go`**
 
 ```go
 package theme
@@ -1432,12 +1436,12 @@ func NoColorRequested(environ []string) bool {
 }
 ```
 
-- [ ] **Step 4: Run it to verify it passes**
+- [x] **Step 4: Run it to verify it passes**
 
 Run: `go test ./ui/theme/ -count=1`
 Expected: PASS.
 
-- [ ] **Step 5: Write the failing `NO_COLOR` frame oracle**
+- [x] **Step 5: Write the failing `NO_COLOR` frame oracle**
 
 Create `app/nocolour_test.go`. This is a **separate** oracle because `TestFrameColourFingerprint` reads `View().Content`, which is *pre-writer* — the profile route is invisible to it.
 
@@ -1518,7 +1522,7 @@ func TestNoColorFramePreservesAttributes(t *testing.T) {
 }
 ```
 
-- [ ] **Step 6: Run it to verify the colour half fails and the attribute half passes**
+- [x] **Step 6: Run it to verify the colour half fails and the attribute half passes**
 
 Run: `go test ./app/ -run 'TestNoColorFrame' -v`
 
@@ -1526,7 +1530,7 @@ Expected: `TestNoColorFramePreservesAttributes` **PASS** (the profile already st
 
 **If `TestNoColorFrameCarriesNoColour` fails**, read the reported sequence. Either `colourSGRRE` is over- or under-matching (test it against the strings in the design doc's measured `Ascii` output), or a frame carries colour by a path the writer does not convert — which would be a real finding worth stopping on.
 
-- [ ] **Step 7: Wire the profile in `app.Run`**
+- [x] **Step 7: Wire the profile in `app.Run`**
 
 Modify `app/app.go:58`:
 
@@ -1554,7 +1558,7 @@ Add imports: `"os"` and `"github.com/charmbracelet/colorprofile"`. `theme` and `
 
 The `SetMono` restore function is deliberately discarded here — this is process startup, the same way `theme.Set`'s return is discarded at startup.
 
-- [ ] **Step 8: Promote the dependency and verify**
+- [x] **Step 8: Promote the dependency and verify**
 
 ```bash
 go mod tidy
@@ -1563,14 +1567,14 @@ git diff go.mod
 
 Expected: `github.com/charmbracelet/colorprofile v0.4.3` moves out of the `// indirect` block. No version change — it is already in the graph at that version via Bubble Tea.
 
-- [ ] **Step 9: Verify the goldens did not move and the gate is green**
+- [x] **Step 9: Verify the goldens did not move and the gate is green**
 
 Run: `go test ./app/ -run 'TestFrameParity|TestFrameColourFingerprint|TestLightFrameColourFingerprint' -count=1`
 Expected: PASS unchanged. `View().Content` is untouched by a profile change, which is exactly why the new oracle was needed.
 
 Run: `PATH=$PATH:$HOME/go/bin just ci && go test -race -shuffle=on ./...`
 
-- [ ] **Step 10: Mutation-verify both halves of the oracle**
+- [x] **Step 10: Mutation-verify both halves of the oracle**
 
 1. Change `colorprofile.Ascii` to `colorprofile.TrueColor` in `app.Run`. Neither new test notices — they construct their own writer. **That is a real gap**: nothing asserts `Run` picks the right profile. Close it with a third test that does not need a live program:
 
@@ -1598,11 +1602,11 @@ and use `noColorProfile()` at the call site. Re-run; then mutate it to `colorpro
 
 2. In `colourSGRRE`, delete the `[34]8[;:]` alternative. Confirm `TestNoColorFrameCarriesNoColour` still passes with a *deliberately* colourful writer (temporarily set `Profile: colorprofile.TrueColor` in `asciiProfileFrame`) — it should **fail** with the full regex and **pass** with the mutated one, proving the truecolor branch is load-bearing. Revert both.
 
-- [ ] **Step 11: Document it**
+- [x] **Step 11: Document it**
 
 Add a `NO_COLOR` line to `README.md`, in the section that covers environment variables (`grep -n "^#### \|^### " README.md | grep -i "environ\|config"` to find it; if there is no such section, put it beside the `theme` row's table with a sentence). State that any non-empty value disables colour and that bold/italic/underline are kept.
 
-- [ ] **Step 12: Commit**
+- [x] **Step 12: Commit**
 
 ```bash
 git add ui/theme/mono.go ui/theme/mono_test.go app/app.go app/nocolour_test.go go.mod go.sum README.md
@@ -1637,7 +1641,7 @@ tmux renders its own status line, so Bubble Tea's profile never touches it. Left
 - Consumes: `theme.Mono()` from Task 5.
 - Produces: no new exported symbols.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Add to `ui/contextbar_test.go` (check the real file name first: `ls ui/contextbar*_test.go`; if absent, create `ui/contextbar_test.go` in package `ui`):
 
@@ -1726,12 +1730,12 @@ func TestSplashLumRangeExemptsRainUnderMono(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run them to verify they fail**
+- [x] **Step 2: Run them to verify they fail**
 
 Run: `go test ./ui/ ./session/tmux/ -run 'Mono|ColourByDefault|ColoursByDefault' -v`
 Expected: the three Mono tests FAIL; the two negative controls PASS — and so does `TestSplashLumRangeExemptsRainUnderMono`, which is a third negative control rather than a fourth failing test (see Step 5 for why, and for how to prove it can fail at all).
 
-- [ ] **Step 3: Implement the `ui/contextbar.go` change**
+- [x] **Step 3: Implement the `ui/contextbar.go` change**
 
 ```go
 // tmuxFg wraps s in tmux foreground markup, or returns it unchanged under
@@ -1749,7 +1753,7 @@ func tmuxFg(colour, s string) string {
 
 and rewrite the three `fmt.Fprintf` colour sites in `ComposeSessionContext` to route through it. Read `ui/contextbar.go:74-82` carefully first: the `#[default]` placement is load-bearing (its comment explains that it resets fg *and* attributes back to `status-style`), and the trailing space after the agent glyph must be preserved exactly, or the bar's spacing shifts.
 
-- [ ] **Step 4: Implement the `session/tmux/config.go` change**
+- [x] **Step 4: Implement the `session/tmux/config.go` change**
 
 In `renderManagedConfig`, leave the template alone and empty the values instead:
 
@@ -1775,7 +1779,7 @@ tmux -L atr-probe kill-server
 
 If it errors, guard the whole `status-style` line in the template with `{{if .BarBg}}` instead of interpolating empties, and assert in the test that the line is absent rather than that it holds no hex. Adjust `TestRenderManagedConfigDropsColourUnderMono` to match whichever shape is correct.
 
-- [ ] **Step 5: Implement the `ui/splash.go` change**
+- [x] **Step 5: Implement the `ui/splash.go` change**
 
 Extend `splashLumRange`'s light rung. The shipped rung is `if theme.IsLight(theme.Current().Palette) && variant != fresco.Rain` — **read it in `ui/splash.go` before editing**, because Mono joins the left side of that `&&` and must not be allowed to escape the rain exemption on the right:
 
@@ -1794,12 +1798,12 @@ Rain's exemption is answered here rather than revisited: this is the "Note for S
 
 Update the function's doc comment so the `theme.Mono` sentence it already mentions is now a condition it actually reads, not a forward reference, and so the rain paragraph names both rungs rather than only the light one.
 
-- [ ] **Step 6: Run the tests to verify they pass**
+- [x] **Step 6: Run the tests to verify they pass**
 
 Run: `go test ./ui/ ./session/tmux/ -count=1`
 Expected: PASS, including both negative controls.
 
-- [ ] **Step 7: Drive it live**
+- [x] **Step 7: Drive it live**
 
 ```bash
 just build
@@ -1810,7 +1814,7 @@ NO_COLOR=yes ./bin/atrium
 
 `NO_COLOR=yes` specifically — that is the value the dependency ignores, so it is the one that proves Atrium's own check is live. Create a session, attach, and confirm: the TUI is monochrome with bold still visible; the in-pane header band carries no tint. Then repeat with `NO_COLOR=1` and confirm no difference. Then run with `NO_COLOR=` (empty) and confirm colour returns.
 
-- [ ] **Step 8: Verify goldens and gate**
+- [x] **Step 8: Verify goldens and gate**
 
 Run: `go test ./app/ -run 'TestFrameParity|TestFrameColourFingerprint|TestLightFrameColourFingerprint|TestNoColorFrame' -count=1`
 Expected: PASS unchanged — none of these render the tmux bar or set Mono.
@@ -1819,7 +1823,7 @@ Run: `PATH=$PATH:$HOME/go/bin just ci && go test -race -shuffle=on ./...`
 
 `-shuffle=on` is important: `SetMono` is a new package global, and a leaked `restore()` would make later tests monochrome. If a `session/tmux` or `ui` test fails only under shuffle, look for a missing `defer`.
 
-- [ ] **Step 9: Commit**
+- [x] **Step 9: Commit**
 
 ```bash
 git add ui/contextbar.go ui/contextbar_test.go session/tmux/config.go \
@@ -1844,7 +1848,25 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 
 ---
 
-## Stage E — detection, `theme: auto`, live re-theme
+## Stage E — detection, `theme: auto`, live re-theme ✅ SHIPPED (#573, `c0c9810`)
+
+**What the steps below got wrong, corrected in place but summarised here because
+Stage F inherits the same files.** Four code blocks would not have compiled or would
+have undone shipped work: Task 7 Step 4's var block reverts Stage D's
+`atomic.Pointer`; `Scheme` has to be `int32`, not `int`, or `gosec` G115 fails the
+gate on every `Swap`; Task 8's `drainCmd` duplicates `runCmdTree`, which already
+existed; and `applyBarStyleCmd` takes a `key string`, so Task 8's argument-less call
+was not the signature.
+
+Two things the plan did not have at all. **Detection has a FOURTH query point** — the
+settings panel selecting `auto`, which is the one site where the gate that suppressed
+every earlier query is itself what changed. And **an unparseable OSC 11 reply reports
+"dark" with confidence** (`isDarkColor(nil)` is `true`), so it has to be fed to the
+ladder as a non-reply rather than trusted.
+
+The live matrix Stage F is gated on is recorded on issue #394, comment 5156554261.
+**It is thin**: no real light terminal was available, and `COLORFGBG` was unset on both
+terminals tested, so every OSC 11 case was injected into the pty rather than witnessed.
 
 Mode 2031 is deliberately **not** used. It is decodable in the pinned stack (`x/ansi@v0.11.7` has `SetLightDarkMode`; ultraviolet decodes `CSI ? 997 ; N n` at `decoder.go:432`; `translateInputEvent` ends in `return e` so the events reach `Update`; `tea.RawMsg` can emit the DECSET) — but it is a *persistent mode* and Bubble Tea unwinds only the modes it owns declaratively. `restoreTerminalState` (`tty.go:33`) restores termios and nothing else, so an unmatched `\x1b[?2031h` leaks past quit, past the signal path (`app.Run` returns on `ctx.Done()` without dispatching `Update`), and past every `tea.Exec` attach — where the terminal keeps emitting `CSI?997;Nn` into a stream tmux owns, **injecting stray bytes into the agent pane**. OSC 11 is a stateless query with nothing to unwind. Filed as a follow-up paired with #396.
 
@@ -1873,7 +1895,7 @@ No bubbletea, no I/O. `ui/theme` stays a leaf package.
   - `func theme.SelectableNames() []string` — `auto` first, then the registry sorted
   - `func (c *config.Config) GetTheme() string`
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Create `ui/theme/scheme_test.go`:
 
@@ -1999,18 +2021,23 @@ func TestSelectableNames(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run to verify it fails**
+- [x] **Step 2: Run to verify it fails**
 
 Run: `go test ./ui/theme/ -run 'TestResolveScheme|TestAuto|TestNamedThemes|TestSetScheme|TestSelectableNames' -v`
 Expected: FAIL to compile — `undefined: ResolveScheme`, `SchemeDark`, `AutoThemeName`, `SelectableNames`, `CurrentScheme`.
 
-- [ ] **Step 3: Implement the scheme axis**
+- [x] **Step 3: Implement the scheme axis**
 
 Append to `ui/theme/scheme.go`:
 
 ```go
 // Scheme is the detected polarity of the terminal's background.
-type Scheme int
+//
+// int32, NOT int: it is stored in an atomic.Int32 (curScheme), and a narrowing
+// conversion on every Set is a gosec G115 that fails `just lint` — which is the
+// only check that sees it. Matching the type to its storage removes the conversion
+// instead of silencing the linter.
+type Scheme int32
 
 const (
 	// SchemeUnknown means detection has produced no answer — either it has not run
@@ -2078,21 +2105,27 @@ func schemeFromColorFGBG(v string) Scheme {
 
 Add `"strconv"` and `"strings"` to the file's imports.
 
-- [ ] **Step 4: Add the third axis to `ui/theme/current.go`**
+- [x] **Step 4: Add the third axis to `ui/theme/current.go`**
+
+**The block below is written against a pre-Stage-D `current.go` and would REVERT
+shipped work — read the file before editing it.** `current` is an
+`atomic.Pointer[Theme]` initialised in an `init()`, not a plain var: every write is
+`current.Store(compose())`, never `current = compose()`. The "no locking is needed"
+sentence is likewise no longer true of the file this would land in.
+
+`curScheme` shipped as an `atomic.Int32`, not the plain var below. Nothing reads it
+off the update loop — `barStyleColours` reaches `Current()` and `Mono()` and never
+this — so the `curName`/`curGlyphSet` exemption was available and was DECLINED:
+`CurrentScheme()` is exported directly beside `Current()`, which promises any
+goroutine, and two neighbouring getters with opposite concurrency contracts is a
+footgun one word closes. `mono` went through this exact transition in Stage D review.
 
 ```go
-// The active theme is composed from three orthogonal axes: the color palette (a
-// named registry theme), the glyph set (a fidelity rung: nerd / plain / ascii),
-// and the scheme (the detected terminal polarity, consulted only when the palette
-// selection is AutoThemeName). They are tracked separately so any palette can
-// pair with any glyph set, and so the scheme cannot move a palette the user named
-// explicitly. Rendering is single-threaded on the bubbletea loop, so no locking
-// is needed.
 var (
 	curName     = DefaultThemeName
 	curGlyphSet = GlyphSetPlain // safe default: plain glyphs, never tofu on a bare terminal
-	curScheme   = SchemeUnknown // no detection yet: resolves to the dark default
-	current     = compose()
+	curScheme   atomic.Int32    // a Scheme; the zero value is SchemeUnknown, on purpose
+	current     atomic.Pointer[Theme]
 )
 
 // compose builds the active theme from the current palette + glyph-set + scheme
@@ -2137,7 +2170,7 @@ func CurrentScheme() Scheme { return curScheme }
 
 `Set` and `SetGlyphSet` already snapshot and restore both of their own axes; leave them alone — a scheme change is not theirs to undo, and having three functions each restore three axes is how a restore starts clobbering a sibling.
 
-- [ ] **Step 5: Add `AutoThemeName` and `SelectableNames` to `ui/theme/registry.go`**
+- [x] **Step 5: Add `AutoThemeName` and `SelectableNames` to `ui/theme/registry.go`**
 
 ```go
 // AutoThemeName is the reserved theme value that follows the terminal's detected
@@ -2163,12 +2196,12 @@ func SelectableNames() []string {
 
 Add `"sort"` to `ui/theme/registry.go`'s imports.
 
-- [ ] **Step 6: Run to verify the theme tests pass**
+- [x] **Step 6: Run to verify the theme tests pass**
 
 Run: `go test ./ui/theme/ -count=1 -v`
 Expected: PASS, all of them.
 
-- [ ] **Step 7: Add `config.GetTheme()`**
+- [x] **Step 7: Add `config.GetTheme()`**
 
 In `config/accessors.go`, following the `GetGlyphSet` pattern at `config/accessors.go:236`:
 
@@ -2199,7 +2232,7 @@ and have both `GetTheme()` and `DefaultConfig()` (`config/config.go:92`) use it.
 
 Then replace `theme.Set(m.appConfig.Theme)` at `app/app_layout.go:269` with `theme.Set(m.appConfig.GetTheme())`, and check for other raw reads: `grep -rn "appConfig.Theme\|cfg.Theme\|\.Theme\b" --include='*.go' . | grep -v _test | grep -v ui/theme`.
 
-- [ ] **Step 8: Wire the settings row**
+- [x] **Step 8: Wire the settings row**
 
 In `ui/overlay/settings_schema.go`, the `theme` row (`ui/overlay/settings_schema.go:510-530`):
 
@@ -2214,7 +2247,7 @@ In `ui/overlay/settings_schema.go`, the `theme` row (`ui/overlay/settings_schema
 			options: func(c *config.Config) []string { return theme.SelectableNames() },
 ```
 
-- [ ] **Step 9: Fix the cycle test, which this breaks**
+- [x] **Step 9: Fix the cycle test, which this breaks**
 
 `TestSettingsOverlay_CycleThemeWraps` (`ui/overlay/settings_test.go:253`) builds `names := theme.Names()` and asserts a full cycle of `len(names)` returns to the start. The picker now offers `len(Names())+1` options, so **the cycle will no longer close and this test will fail**. That is the drift guard working; update it:
 
@@ -2224,26 +2257,26 @@ In `ui/overlay/settings_schema.go`, the `theme` row (`ui/overlay/settings_schema
 
 and delete the now-redundant `sort.Strings(names)` (`SelectableNames` returns them ordered). Remove `"sort"` from the file's imports if nothing else there uses it — `unused` will fail CI otherwise.
 
-- [ ] **Step 10: Document the `auto` value**
+- [x] **Step 10: Document the `auto` value**
 
 `config/types.go:247-251` — extend the `Theme` doc comment to name `auto` and say that a named theme never auto-switches.
 
 `README.md`'s `theme` row — add `auto` to the description. `TestReadmeDocumentsEveryConfigField` only checks presence, so this is unguarded; `git grep -n 'theme' README.md` afterwards.
 
-- [ ] **Step 11: Verify the goldens are still immovable and gate**
+- [x] **Step 11: Verify the goldens are still immovable and gate**
 
 Run: `go test ./app/ -run 'TestFrameParity|TestFrameColourFingerprint|TestLightFrameColourFingerprint' -count=1`
 Expected: PASS unchanged. `curScheme` starts `SchemeUnknown` and the default theme is still `tokyo-night`, so nothing renders differently.
 
 Run: `PATH=$PATH:$HOME/go/bin just ci && go test -race -shuffle=on ./...`
 
-- [ ] **Step 12: Mutation-verify the AC#4 and AC#5 guards**
+- [x] **Step 12: Mutation-verify the AC#4 and AC#5 guards**
 
 1. In `compose()`, delete the `if name == AutoThemeName` guard so *every* theme follows the scheme. Expected: `TestNamedThemesNeverFollowTheScheme` **fails** for `tokyo-night` and `catppuccin-mocha`. Revert.
 2. In `compose()`, change the `curScheme == SchemeLight` test to `curScheme != SchemeLight`. Expected: `TestAutoWithoutDetectionIsTheDefaultTheme` **fails** (unknown now picks the twin) — the AC#5 guard catching an inverted default. Revert.
 3. Change `curScheme`'s initializer to `SchemeLight`. Expected: `TestAutoWithoutDetectionIsTheDefaultTheme` still passes (it sets the scheme itself) but `TestSetSchemeRestoresWithoutTouchingTheName` **fails** on the restored value. If neither fails, the zero-value guarantee is unguarded — add `require.Equal(t, SchemeUnknown, CurrentScheme())` as the first line of a fresh test that runs before any `SetScheme`. Revert.
 
-- [ ] **Step 13: Commit**
+- [x] **Step 13: Commit**
 
 ```bash
 git add ui/theme/scheme.go ui/theme/scheme_test.go ui/theme/current.go ui/theme/registry.go \
@@ -2280,7 +2313,7 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 - Consumes: `tea.RequestBackgroundColor` (a `func() Msg`, so it **is** a `tea.Cmd` — pass it unparenthesised, like `tea.RequestWindowSize`), `tea.BackgroundColorMsg` with `IsDark() bool` (`color.go:75`), `theme.ResolveScheme`, `theme.SetScheme`, `theme.CurrentScheme`, `theme.AutoThemeName`, `m.applyBarStyleCmd()` from Task 1.
 - Produces: `func (m *home) requestSchemeCmd() tea.Cmd`, `func (m *home) applyDetectedScheme(s theme.Scheme) tea.Cmd`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Create `app/scheme_test.go`:
 
@@ -2398,14 +2431,18 @@ func drainCmd(t *testing.T, cmd tea.Cmd) {
 }
 ```
 
-**Verify `drainCmd` is sufficient before relying on it.** `tea.Sequence` and `tea.Batch` return a Cmd whose invocation yields an internal message rather than running the children, so calling it once may not reach `barStyleApplier`. Check by running the first test: if `pushed` stays 0, restructure `applyDetectedScheme` to return the bar Cmd where the test can reach it, or have `drainCmd` recurse through `tea.BatchMsg`/`tea.SequenceMsg`. Prefer making the production code's Cmd shape testable over making the helper clever. Also confirm `tea.BackgroundColorMsg`'s field is embedded (`struct{ color.Color }` at `color.go:67`) — construct it as `tea.BackgroundColorMsg{Color: c}` only if that compiles; otherwise it is `tea.BackgroundColorMsg{c}` positionally.
+**Do not write `drainCmd` — `runCmdTree` already exists** (`app/app_config_update_test.go:59`, added by Stage A) and already recurses structurally through both `tea.Batch` and `tea.Sequence`, matching on "a slice of `tea.Cmd`" because `sequenceMsg` is unexported. A second walker would be a duplicate of a helper the same package already proves against `tea.Sequence(tea.ClearScreen, tea.Batch(...))`.
 
-- [ ] **Step 2: Run to verify it fails**
+Two more signatures in the block above are not the tree's: `swapBarStyleApplier` takes `func(context.Context, bool)`, not `func()`, and its existing callers count with `atomic.AddInt32`. `applyBarStyleCmd` takes a `key string`.
+
+`tea.BackgroundColorMsg`'s field **is** embedded (`struct{ color.Color }`, `color.go:67`, `image/color`), so the embedded field is named `Color` and `tea.BackgroundColorMsg{Color: c}` compiles. Verified on v2.0.8.
+
+- [x] **Step 2: Run to verify it fails**
 
 Run: `go test ./app/ -run 'TestBackgroundColorMsg|TestFocusMsg' -v`
 Expected: FAIL — no `BackgroundColorMsg` case exists, so `Update` returns nil and the theme never moves.
 
-- [ ] **Step 3: Implement `app/scheme.go`**
+- [x] **Step 3: Implement `app/scheme.go`**
 
 ```go
 package app
@@ -2437,8 +2474,10 @@ import (
 // real work, and #396 has to build it anyway for the kitty keyboard protocol.
 //
 // OSC 11 is a query: stateless, nothing to unwind, answered by nearly everything.
-// So Atrium asks — at startup, on refocus, and after an attach — rather than
-// being told.
+// So Atrium asks — at startup, on refocus, after a detach, and when the settings
+// panel selects `auto` — rather than being told. The first three re-ask on behalf
+// of a selection that was ALREADY `auto`; the fourth is the one where it just
+// became so, and it was missing from this plan entirely.
 
 // requestSchemeCmd asks the terminal for its background colour, or nil when the
 // answer could not be acted on.
@@ -2502,7 +2541,7 @@ func initialScheme() theme.Scheme {
 }
 ```
 
-- [ ] **Step 4: Wire the three query points and the handler**
+- [x] **Step 4: Wire the query points and the handler (there are FOUR — see below)**
 
 In `app/app.go`'s `Init()` (`app/app.go:642`), add to the `tea.Batch`:
 
@@ -2571,18 +2610,18 @@ func (m *home) repaintAfterAttach(cmds ...tea.Cmd) tea.Cmd {
 }
 ```
 
-- [ ] **Step 5: Run to verify the tests pass**
+- [x] **Step 5: Run to verify the tests pass**
 
 Run: `go test ./app/ -run 'TestBackgroundColorMsg|TestFocusMsg' -v`
 Expected: PASS. If `TestBackgroundColorMsgLightRethemesAndPushesTheBar` shows `pushed == 0`, it is the `drainCmd` limitation flagged in Step 1 — fix it there, not by weakening the assertion.
 
-- [ ] **Step 6: Verify AC#5 at the frame level**
+- [x] **Step 6: Verify AC#5 at the frame level**
 
 Run: `go test ./app/ -run 'TestFrameParity|TestFrameColourFingerprint|TestLightFrameColourFingerprint' -count=1`
 
 Expected: PASS, **byte-identical**. This is AC#5's real proof: the whole detection mechanism is now live, and with no detection input the 18-state colour fingerprint has not moved a byte. `newParityHome` pins `cfg.Theme` (still `tokyo-night`), so `auto` is not even exercised — which is why Stage F adds the explicit `SetScheme` pin.
 
-- [ ] **Step 7: Drive it live — the matrix**
+- [x] **Step 7: Drive it live — the matrix**
 
 This is the part no test can do. Build once and run the same binary on a light and a dark terminal:
 
@@ -2604,13 +2643,13 @@ For each terminal available (at minimum one light and one dark; note which):
 
 Record which terminals answered OSC 11 and which fell to `COLORFGBG` or to unknown. **Stage F is gated on this list.**
 
-- [ ] **Step 8: Gate**
+- [x] **Step 8: Gate**
 
 Run: `PATH=$PATH:$HOME/go/bin just ci && go test -race -shuffle=on ./...`
 
 `-race` matters here specifically: `theme.SetScheme` writes a package global from a message handler while `barStyleApplier`'s goroutine reads `theme.Current()`. Rendering is single-threaded on the Bubble Tea loop, but `applyBarStyleCmd`'s closure is not — check that `ApplyBarStyle` reading `theme.Current()` off the update thread does not race the `SetScheme` that scheduled it. If `-race` reports it, capture the two hex strings on the update thread and pass them in as arguments. **That contradicts Task 1's "read the theme at call time" design**, so if it comes to that, update `ApplyBarStyle`'s doc comment and its `TestApplyBarStyle_ReadsTheThemeAtCallTime` test rather than leaving a comment that describes the old shape.
 
-- [ ] **Step 9: Commit**
+- [x] **Step 9: Commit**
 
 ```bash
 git add app/scheme.go app/scheme_test.go app/app.go app/app_update.go app/app_layout.go
@@ -2645,7 +2684,7 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 - Consumes: `theme.ResolveScheme`, `theme.Scheme`, `os.Getenv("COLORFGBG")`.
 - Produces: `func doctor.CheckScheme(environ []string) SchemeResult` and `func doctor.RenderScheme(SchemeResult) string`, matching the `CheckDeps`/`RenderDeps` pair at `internal/doctor/deps.go:90` and `internal/doctor/render.go`.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `internal/doctor/scheme_test.go`:
 
@@ -2689,12 +2728,12 @@ func TestRenderSchemeSaysItCannotProbeOSC11(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run to verify it fails**
+- [x] **Step 2: Run to verify it fails**
 
 Run: `go test ./internal/doctor/ -run TestCheckScheme -v`
 Expected: FAIL to compile — `undefined: CheckScheme`.
 
-- [ ] **Step 3: Implement it**
+- [x] **Step 3: Implement it**
 
 Read `internal/doctor/render.go` and match its section formatting exactly (header style, indentation, the two-space `%-18s` convention used in `oom.go:190`). Then:
 
@@ -2759,7 +2798,7 @@ func RenderScheme(r SchemeResult) string {
 }
 ```
 
-- [ ] **Step 4: Wire it into `main.go`**
+- [x] **Step 4: Wire it into `main.go`**
 
 In `doctorCmd`'s `RunE`, after the capacity section (`main.go:344`):
 
@@ -2767,12 +2806,12 @@ In `doctorCmd`'s `RunE`, after the capacity section (`main.go:344`):
 			fmt.Print(doctor.RenderScheme(doctor.CheckScheme(os.Environ())))
 ```
 
-- [ ] **Step 5: Run and eyeball**
+- [x] **Step 5: Run and eyeball**
 
 Run: `go test ./internal/doctor/ -count=1` — expected PASS.
 Run: `just build && ./bin/atrium doctor` and `COLORFGBG=0;15 ./bin/atrium doctor` — read both. The section must be legible beside the existing ones and must not claim to have probed OSC 11.
 
-- [ ] **Step 6: Gate and commit**
+- [x] **Step 6: Gate and commit**
 
 ```bash
 PATH=$PATH:$HOME/go/bin just ci && go test -race -shuffle=on ./...
@@ -2793,7 +2832,22 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 
 ## Stage F — make `auto` the default
 
-**Gated on Task 8 Step 7's live matrix.** Do not start this until that list exists and every terminal on it behaved. If any misbehaved, stop: the fix ships (Stages A–E) and the default does not.
+**Gated on Task 8 Step 7's live matrix, which exists and is recorded on issue #394
+(comment 5156554261).** Read it before starting: every case behaved, but the list is
+**thin**. No genuinely light terminal was available, so every OSC 11 case was an
+answer injected into the pty rather than one a terminal volunteered; and `COLORFGBG`
+was unset on both terminals tested, so that rung has no live witness at all.
+
+**That is not the same as "every terminal on it behaved", which is what this gate
+asks for.** Run `theme: auto` on a real light terminal before flipping the default —
+that is the acceptance test for the issue's actual title, and it is the one thing the
+matrix does not yet cover. If it misbehaves, stop: the fix ships (Stages A–E) and the
+default does not.
+
+**Steps 1 and 2 are already done** — they landed in Stage E (`c0c9810`) rather than
+here, because the pin guards the goldens against the axis Stage E introduced, not
+only against the default Stage F flips. They are ticked below and their reasoning is
+kept for the record; start at Step 3.
 
 ### Task 10: Flip the shipped default to `auto`
 
@@ -2805,13 +2859,13 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 **Interfaces:**
 - Consumes: everything from Stages A–E. Produces nothing new.
 
-- [ ] **Step 1: Add the scheme pin to `newParityHome` FIRST**
+- [x] **Step 1: Add the scheme pin to `newParityHome` FIRST** — *done in Stage E, `c0c9810`.*
 
-Before changing the default, make the fixture immune to it. In `app/frameparity_test.go`, beside the existing pins at line 165:
+Before changing the default, make the fixture immune to it. In `app/frameparity_test.go`, beside the existing pins (now at lines 171-173):
 
 ```go
 	cfg := config.DefaultConfig()
-	t.Cleanup(theme.Set(cfg.Theme))
+	t.Cleanup(theme.Set(cfg.GetTheme())) // GetTheme, not cfg.Theme, since Task 7
 	t.Cleanup(theme.SetGlyphSet(cfg.GetGlyphSet()))
 	// The scheme axis, pinned for the same reason as the other two: the shipped
 	// default is `auto`, so without this the goldens would resolve their palette
@@ -2821,38 +2875,56 @@ Before changing the default, make the fixture immune to it. In `app/frameparity_
 	t.Cleanup(theme.SetScheme(theme.SchemeDark))
 ```
 
-- [ ] **Step 2: Verify the pin changes nothing yet**
+- [x] **Step 2: Verify the pin changes nothing yet** — *done in Stage E; all three checksums unmoved.*
 
 Run: `go test ./app/ -run 'TestFrameParity|TestFrameColourFingerprint|TestLightFrameColourFingerprint' -count=1 -shuffle=on`
 Expected: PASS byte-identical. The default is still `tokyo-night`, so the pin is inert — which is what makes it safe to land before the flip.
 
 - [ ] **Step 3: Flip the default**
 
-In `config/accessors.go`:
+**The two options below have swapped places since this was written.** Task 7 shipped
+`DefaultTheme` with a doc comment that commits to the literal *on purpose*: "Spelled
+out rather than imported from ui/theme for the same reason GlyphSet* below are:
+config's vocabulary is the on-disk one, and ui/theme is deliberately a leaf that no
+atrium package appears in." Importing `theme` here would falsify the comment on the
+line above the change, and break a convention `ui/theme/registry.go` documents from
+the other side. So **spell the literal and pin it with a test** — the "fallback"
+below is now the primary path.
+
+In `config/accessors.go`, change only the value and the first sentence:
 
 ```go
 // DefaultTheme is the theme a config with no `theme` set resolves to: `auto`,
 // which follows the terminal's detected background polarity and resolves to the
-// shipped dark palette when nothing answers. A constant rather than a read of
-// DefaultConfig(), because the settings schema's row builder must stay pure and
-// DefaultConfig resolves the OS user.
-const DefaultTheme = theme.AutoThemeName
+// shipped dark palette when nothing answers.
+// ... (keep the existing two paragraphs on purity and on the leaf convention)
+const DefaultTheme = "auto"
 ```
 
-**Verified cycle-free:** `ui/theme` imports no Atrium package at all (only `charm.land/lipgloss/v2`, `image/color`, and stdlib), so `config` → `ui/theme` is a legal edge. Confirm it still holds before relying on it — `grep -rn "ZviBaratz/atrium" ui/theme/*.go | grep -v _test` must print nothing.
-
-If a cycle *has* appeared since, spell the literal `"auto"` instead and add a test pinning the two together:
+**The import edge is legal but unwanted, and both halves of that were re-verified on
+`c0c9810`:** `git grep -n "ZviBaratz/atrium" -- 'ui/theme/*.go'` prints nothing, so
+`config` → `ui/theme` would not cycle; and `config/*.go` imports no `ui/theme` today,
+so Step 3 would be introducing the first such edge rather than following one. Prefer
+the literal, and pin the two spellings together so a typo cannot silently ship the
+dark default forever:
 
 ```go
 // TestDefaultThemeMatchesTheReservedAutoName pins config's spelling of the
-// reserved value to theme's, since an import cycle keeps config from referencing
-// the constant. A typo here would silently ship the dark default forever.
+// reserved value to theme's. config spells it rather than importing the constant,
+// to keep ui/theme a leaf — the same trade GlyphSet* makes — so the two strings
+// are held together here instead of by the compiler. A typo would not fail to
+// build: it would resolve as an unknown palette and silently ship the dark
+// default forever, on exactly the terminals this issue is about.
 func TestDefaultThemeMatchesTheReservedAutoName(t *testing.T) {
 	require.Equal(t, theme.AutoThemeName, config.DefaultTheme)
 }
 ```
 
 Put that test in a package that may import both — `app` is safe.
+
+**This test is not optional under the literal-spelling path.** It is the only thing
+standing between a typo and a silent no-op, because `Get()` falls back for any
+unrecognised name rather than erroring.
 
 - [ ] **Step 4: Run every golden**
 
@@ -2864,7 +2936,28 @@ Expected: **PASS byte-identical.** This is the self-proof: `auto` with `SchemeDa
 
 Run: `go test ./... -count=1` then `PATH=$PATH:$HOME/go/bin just ci && go test -race -shuffle=on ./...`
 
-Expect failures in tests that assert the default theme *name* — `grep -rn '"tokyo-night"' --include='*_test.go' .` and read each. A test asserting the default palette should keep asserting the palette; a test asserting the string `"tokyo-night"` as *the default* now asserts `"auto"`. Fix each on its merits, and do not blanket-replace: `ui/theme`'s own `TestGetFallback` is about `Get`'s behaviour for unknown names and must keep naming `tokyo-night`, because `DefaultThemeName` did not change.
+Expect failures in tests that assert the default theme *name* — `git grep -n '"tokyo-night"' -- '*_test.go'` and read each. A test asserting the default palette should keep asserting the palette; a test asserting the string `"tokyo-night"` as *the default* now asserts `"auto"`. Fix each on its merits, and do not blanket-replace: `ui/theme`'s own `TestGetFallback` is about `Get`'s behaviour for unknown names and must keep naming `tokyo-night`, because `DefaultThemeName` did not change.
+
+**That grep is not sufficient, and the assertions it misses are the dangerous ones.**
+`auto` is the first theme value that is not the name of a palette, so
+`cfg.Theme != theme.Current().Name` becomes possible for the first time — and a test
+comparing those two *expressions* contains no `"tokyo-night"` literal to grep for.
+`app/settings_test.go:90-91` does exactly that (`h.appConfig.Theme` against
+`theme.DefaultThemeName`, then against `theme.Current().Name`) and does **not** appear
+in the grep above. It happens to survive the flip, because one `Right` from `auto`
+lands on a real palette — but it survives by arithmetic on the sorted option list, not
+by design, and a reordering of `SelectableNames()` would break it silently.
+
+So run the second sweep too, and read every hit:
+
+```sh
+git grep -n 'appConfig\.Theme\|cfg\.Theme' -- '*_test.go'
+```
+
+The rule to apply: after the flip, `Theme` is what the user *selected* and
+`Current().Name` is what that *resolved to*. They are equal for every named palette
+and unequal for `auto`. Any assertion that conflates them needs to say which one it
+means.
 
 - [ ] **Step 6: Verify the settings panel shows it**
 
@@ -2911,10 +3004,25 @@ Then update the issue with the matrix results and close it, ticking #394 in epic
 
 ## Self-review
 
-**Spec coverage.** Every section of the design doc maps to a task: the tmux bar gap → Task 1; the contrast oracle → Task 2; the light palettes and `colours-light.txt` → Task 3; the splash's luminance ramp → Task 4; `NO_COLOR` at the renderer plus its oracle → Task 5; the tmux/splash surfaces the profile cannot reach → Task 6; the scheme axis, `auto`, and `SelectableNames` → Task 7; the detection wiring and all three query points → Task 8; the doctor report → Task 9; the default flip → Task 10. The design's H2 (the fade) has **no task**, deliberately: it is an eyeball item, and it is covered by Task 3 Step 11's live round and Task 4 Step 9's, both of which render a modal over a light backdrop. The two follow-ups the design defers (fresco's light ramp, `barState`'s 1.44:1) are filed by Task 4 Step 9 and Task 2 Step 6 respectively.
+**Spec coverage.** Every section of the design doc maps to a task: the tmux bar gap → Task 1; the contrast oracle → Task 2; the light palettes and `colours-light.txt` → Task 3; the splash's luminance ramp → Task 4; `NO_COLOR` at the renderer plus its oracle → Task 5; the tmux/splash surfaces the profile cannot reach → Task 6; the scheme axis, `auto`, and `SelectableNames` → Task 7; the detection wiring and its query points → Task 8 (which enumerated three; a fourth, the settings panel selecting `auto`, was found in review); the doctor report → Task 9; the default flip → Task 10. The design's H2 (the fade) has **no task**, deliberately: it is an eyeball item, and it is covered by Task 3 Step 11's live round and Task 4 Step 9's, both of which render a modal over a light backdrop. The two follow-ups the design defers (fresco's light ramp, `barState`'s 1.44:1) are filed by Task 4 Step 9 and Task 2 Step 6 respectively.
 
 **Type consistency.** `theme.Scheme`/`SchemeUnknown`/`SchemeDark`/`SchemeLight`, `ResolveScheme(*bool, string) Scheme`, `SetScheme(Scheme) func()`, `CurrentScheme() Scheme`, `IsLight(Palette) bool`, `Mono() bool`, `SetMono(bool) func()`, `NoColorRequested([]string) bool`, `AutoThemeName`, `SelectableNames() []string`, `lightTwin map[string]string`, `relLuminanceOf(Color) float64`, `tmux.ApplyBarStyle(context.Context, cmd.Executor) error`, `tmux.RewriteManagedConfig(bool) error`, `config.DefaultTheme`, `(*Config).GetTheme() string`, `(*home).applyBarStyleCmd() tea.Cmd`, `(*home).requestSchemeCmd() tea.Cmd`, `(*home).applyDetectedScheme(theme.Scheme) tea.Cmd`, `doctor.CheckScheme([]string) SchemeResult`, `doctor.RenderScheme(SchemeResult) string`, `barStyleApplier` — each is defined in exactly one task and used with that spelling and signature everywhere after.
 
 Two deliberate cross-task couplings, called out where they bite: `relLuminance` is written in `contrast_test.go` (Task 2) and **moved** to `scheme.go` as `relLuminanceOf` in Task 3 Step 2b — the step that creates `scheme.go`, because `IsLight` has to exist before `AgentGlyph` can call it — with the test-file copy deleted rather than duplicated. And `barStyleApplier` is introduced in Task 1 Step 9 as a test seam, then relied on by Task 8's tests — so Task 1's Step 5 code must be restructured to that shape rather than leaving both versions, which Step 9 says explicitly.
 
 **Three places the plan tells the implementer to verify rather than trust.** `tea.BackgroundColorMsg`'s construction (embedded field, so `{Color: c}` may not compile), `drainCmd`'s adequacy against `tea.Sequence`/`tea.Batch`, and whether tmux accepts `status-style "bg=,fg="` without a parse error. Each has a named fallback, because guessing any of them wrong produces a green test that guards nothing.
+
+**All three came back, and two came back differently than the fallbacks anticipated.**
+`{Color: c}` compiles (the embedded field is named `Color`). `drainCmd` was never
+needed — `runCmdTree` already existed and already recursed correctly. And tmux 3.6
+*rejects* `bg=,fg=` as `invalid style`, through `source-file` as well, which disables
+the entire managed config — so Stage D uses `"default"` rather than the empty string.
+Instructing "verify this" worked; the value came from the measurement each time, not
+from the fallback the plan guessed.
+
+**A fourth thing was verifiable and nobody thought to ask.** Detection has four query
+points, not the three the plan enumerated: the settings panel selecting `auto` is one,
+and it is the only site where the gate that suppressed every earlier query is itself
+what changed. It was found by review, after the three listed points were all wired and
+green. The lesson for a plan of this shape: when a feature is gated on a config value,
+enumerate the WRITE sites of that value, not only the read sites of the gate.
