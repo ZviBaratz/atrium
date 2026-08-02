@@ -239,13 +239,18 @@ const DefaultTheme = "tokyo-night"
 //
 // The case folding is here for the same reason, one step further. ui/theme's Get()
 // already lowercases and trims before indexing the registry, so a hand-edited
-// "Tokyo-Night" has always resolved — but `auto` is NOT a registry entry, and the two
-// sites that recognize it (compose() in ui/theme/current.go, and requestSchemeCmd's
-// gate in app/scheme.go) compare against the literal. Left unnormalized, "Auto" would
-// be the one value in this field that fails silently in both directions at once: the
-// dark default rendered, and no detection query ever sent. Normalizing at the single
-// accessor both sites read is what keeps that one fact in one place, rather than two
-// string comparisons that must remember to agree.
+// "Tokyo-Night" has always resolved — but `auto` is NOT a registry entry, and every
+// site that recognizes it compares against the literal. Left unnormalized, "Auto"
+// would be the one value in this field that fails silently in both directions at
+// once: the dark default rendered, and no detection query ever sent.
+//
+// Three sites compare, and that is the argument for doing it here rather than at any
+// of them: compose() in ui/theme/current.go (which reads curName, set from this
+// accessor), and both requestSchemeCmd and applyDetectedScheme in app/scheme.go.
+// Recount rather than trust the number — `git grep -n 'AutoThemeName' -- '*.go'`,
+// which must be git grep because `-- '<glob>'` is a pathspec and plain grep exits 2
+// having searched nothing. Normalizing at the single accessor all three reach keeps
+// it one fact instead of three string comparisons that have to remember to agree.
 func (c *Config) GetTheme() string {
 	if c == nil || strings.TrimSpace(c.Theme) == "" {
 		return DefaultTheme
