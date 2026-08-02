@@ -214,13 +214,18 @@ already composes the active theme from two orthogonal axes (`curName`,
 
 - Light twins register as **ordinary named themes** — `tokyo-night-day`,
   `catppuccin-latte`. They are independently selectable, appear in the settings
-  picker for free (its `options` closure returns `theme.Names()` sorted), and
-  inherit every existing palette guard.
+  picker for free, and inherit every existing palette guard. *(Shipped: the
+  `options` closure returns `theme.SelectableNames()`, not `theme.Names()` — see
+  the `auto` note below.)*
 - A `dark → light` pair link, plus `theme.SetScheme(dark bool)` alongside `Set`
   and `SetGlyphSet`, returning a `restore func()` like its siblings.
 - `auto` is a **reserved name** resolved in `compose()`, never a registry entry.
-  It means "the default family's pair, per detection". `Names()` returns it so
-  the picker offers it; note in the test that
+  It means "the default family's pair, per detection". *(Shipped differently:
+  `Names()` deliberately still returns only the registry, and
+  `SelectableNames()` — `auto` first, then the sorted registry — is what the
+  picker reads. Putting `auto` in `Names()` would have made every
+  registry-wide palette guard iterate a name with no palette, passing
+  vacuously.)* Note in the test that
   `TestSplashPalettesAreCanonicalHex` passes *vacuously* for `auto` (because
   `Get("auto")` yields the default) and is not coverage of it.
 - **AC#4 becomes structural**: only the literal `auto` consults the scheme axis,
@@ -268,7 +273,11 @@ Rungs, highest first: OSC 11 reply (`tea.BackgroundColorMsg.IsDark()`) →
   *below* OSC 11 and consulted only when OSC 11 was silent.
 
 Query points: `Init` (startup), `tea.FocusMsg` (refocus), and
-`repaintAfterAttach` (detach). `app/app_update.go:386` currently sets
+`repaintAfterAttach` (detach). *(Shipped with a fourth, found in review: the
+settings panel's theme arm, via `applySchemeQueryCmd`. The three here all ask on
+behalf of a selection that was already `auto`; selecting `auto` is the one site
+where the gate that suppressed every earlier query is itself what changed.)*
+`app/app_update.go:386` currently sets
 `m.focused = true` and returns nil; adding a Cmd is purely additive and does not
 touch `m.focused`, so there is no interference with the notification gating in
 `app_notify`. The query itself is a ~5-byte write.
@@ -307,10 +316,12 @@ Two subtleties that decide where guards go:
   oracle: pipe each state's frame through `colorprofile.Writer{Profile: Ascii}`,
   assert zero colour SGR **and** that bold/italic/underline survive. The second
   half is what stops a later "fix" using `NoTTY`.
-- **`newParityHome` pins `cfg.Theme`** (`app/frameparity_test.go:165`). Once
-  `auto` is the default (Stage F) that fixture depends on the scheme axis, so it
-  must pin `SetScheme(dark)` explicitly or the goldens become detection-sensitive
-  under `-shuffle`.
+- **`newParityHome` pins the configured theme** (`cfg.GetTheme()` since Task 7,
+  `app/frameparity_test.go:171`). Once `auto` is the default (Stage F) that
+  fixture depends on the scheme axis, so it must pin `SetScheme(dark)` explicitly
+  or the goldens become detection-sensitive under `-shuffle`. *(Shipped in Stage
+  E rather than Stage F: the axis is a package global other tests mutate, so the
+  pin was needed as soon as the axis existed, not as late as the default flip.)*
 
 ### The contrast oracle
 
@@ -412,7 +423,8 @@ sites. Immediately usable via `theme: tokyo-night-day`, which is what makes the
 light eyeball round possible this early.
 
 Guards for free: canonical-hex validation, contrast, glyph widths, settings
-picker cycling (both existing `theme.Names()` consumers are length-agnostic).
+picker cycling (both existing `theme.Names()` consumers are length-agnostic; the
+picker itself moved to `SelectableNames()`).
 **The frame goldens and `colours.txt` must both stay byte-identical** — the
 default still renders what it rendered, so if either moves, something leaked.
 `colours-light.txt` is added here, baselined once with the diff read.
