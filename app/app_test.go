@@ -279,6 +279,7 @@ func TestPromptDeliveryReady(t *testing.T) {
 		name          string
 		state         tmux.PaneState
 		awaitingInput bool
+		asked         bool
 		queuedAt      time.Time
 		want          bool
 	}{
@@ -363,11 +364,55 @@ func TestPromptDeliveryReady(t *testing.T) {
 			queuedAt:      stale,
 			want:          true,
 		},
+		{
+			// #571: a turn that ended with a prose question satisfies every other clause
+			// here — the turn ended, the box is up, nothing is working — so without the
+			// hold the queue answers a question the user never saw.
+			name:          "an unanswered question holds a follow-up on an idle pane",
+			state:         tmux.PaneIdle,
+			awaitingInput: true,
+			asked:         true,
+			queuedAt:      time.Time{},
+			want:          false,
+		},
+		{
+			// The hold sits ABOVE the busy check, so the 60s valve cannot bypass it. This
+			// is the case that separates "held" from "delayed": a stale clock force-
+			// delivers past PaneWorking (asserted above) but must not force past a question.
+			name:          "the 60s valve does not bypass an unanswered question",
+			state:         tmux.PaneWorking,
+			awaitingInput: true,
+			asked:         true,
+			queuedAt:      stale,
+			want:          false,
+		},
+		{
+			// The hold applies to a live-clock (boot/restored) head too, not only a
+			// zero-clock follow-up — newInstanceFromStorage re-stamps a restored follow-up
+			// with a live clock, so keying on the clock would leak across a TUI restart.
+			name:          "an unanswered question holds a live-clock head too",
+			state:         tmux.PaneIdle,
+			awaitingInput: true,
+			asked:         true,
+			queuedAt:      queued,
+			want:          false,
+		},
+		{
+			// The release: once the caller stops reporting the question unanswered (the
+			// user dwelled on the row and markSeenAfterDwell cleared Unread), the same
+			// prompt delivers on the very next tick.
+			name:          "a seen question releases the follow-up",
+			state:         tmux.PaneIdle,
+			awaitingInput: true,
+			asked:         false,
+			queuedAt:      time.Time{},
+			want:          true,
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := promptDeliveryReady(tt.state, tt.awaitingInput, tt.queuedAt, now)
+			got := promptDeliveryReady(tt.state, tt.awaitingInput, tt.asked, tt.queuedAt, now)
 			require.Equal(t, tt.want, got)
 		})
 	}

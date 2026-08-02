@@ -181,7 +181,13 @@ func (k *attachKeeper) service(inst *session.Instance) {
 	if prompt == "" {
 		return // only probe readiness while a prompt is queued, like collectMetadata
 	}
-	if !promptDeliveryReady(state, inst.AwaitingInput(), inst.PromptQueuedAt(), time.Now()) {
+	// The #571 hold applies here too: the keeper services the sessions the user is NOT
+	// attached to, so a background session that stopped to ask must not have its queued
+	// follow-up delivered as the answer. Unlike the metadata tick this does not memoize
+	// the result — see endedAskingNow for why.
+	asked, _, _ := endedAskingNow(inst, state)
+	if !promptDeliveryReady(state, inst.AwaitingInput(), questionHoldsPrompt(inst, asked),
+		inst.PromptQueuedAt(), time.Now()) {
 		return
 	}
 	prompt, ok := inst.ClaimPrompt()

@@ -129,6 +129,13 @@ type instanceMetaResult struct {
 	model      string
 	modelStamp transcript.Stamp
 	modelOK    bool
+	// asked / askedStamp carry the #571 question check — whether the turn that just
+	// ended did so by asking the user something; askedOK marks a result worth applying
+	// (ComputeAsked returns ok=false for non-claude, unavailable, or unchanged
+	// transcripts). Only re-read on a pane that has actually settled.
+	asked      bool
+	askedStamp transcript.Stamp
+	askedOK    bool
 	// mode carries the live permission mode detected from the footer; modeOK marks
 	// a result worth applying (ComputeMode returns ok=false when unchanged or none).
 	mode   string
@@ -284,6 +291,44 @@ func deliverReadyPrompts(results []instanceMetaResult) []tea.Cmd {
 	return cmds
 }
 
+// endedAskingNow resolves the #571 question flag for an instance whose pane currently
+// reads state: did its last turn end by asking the user something?
+//
+// The transcript is re-read only on a SETTLED pane, so this costs about one read per
+// turn-end rather than one per tick; every other state, and an unchanged transcript,
+// answers from the instance's memo. A mid-turn pane cannot have a question to answer yet,
+// and re-reading one would only race the turn it is still writing.
+//
+// The (value, stamp, ok) triple is returned rather than stored so the CALLER decides
+// whether to memoize. The metadata tick does, on the main thread. The attach keeper
+// deliberately does not: askedStamp carries the same "written on the main thread only"
+// contract as modelStamp, whose own comment says a second extraction call site would need
+// a lock. The keeper pays a re-read per cycle instead — bounded, and only for a session
+// that has a prompt queued while the user is attached elsewhere.
+func endedAskingNow(inst *session.Instance, state tmux.PaneState) (bool, transcript.Stamp, bool) {
+	if state != tmux.PaneIdle {
+		return inst.EndedAsking(), transcript.Stamp{}, false
+	}
+	asked, stamp, ok := inst.ComputeAsked()
+	if !ok {
+		return inst.EndedAsking(), transcript.Stamp{}, false
+	}
+	return asked, stamp, true
+}
+
+// questionHoldsPrompt turns the #571 verdict into the delivery gate: a question holds a
+// queued prompt only until the user has demonstrably SEEN it. markSeenAfterDwell clears
+// Unread once the row has been selected long enough for the preview to show the question,
+// which is the whole release valve — it needs no new key and no new UI state, and it
+// makes a misfired classification cost a delay rather than a prompt stuck forever.
+//
+// It exists as a function rather than an `asked && inst.Unread()` at each call site
+// because there are TWO dispatchers (the metadata tick and the attach keeper) and a hold
+// applied by only one of them is not a hold.
+func questionHoldsPrompt(inst *session.Instance, asked bool) bool {
+	return asked && inst.Unread()
+}
+
 // promptDeliveryTimeout bounds how long a queued startup prompt waits for the pane
 // to fall idle before it is delivered anyway. It is comfortably longer than a typical
 // agent boot (including slow MCP server init) yet short enough that a genuinely stalled
@@ -303,6 +348,23 @@ const promptDeliveryTimeout = 60 * time.Second
 // (A menu-style gate that has painted still reads as a box, so it is the gate/prompt checks
 // inside AwaitingInput, not the box check, that keep its "❯ 1. …" selector out.)
 //
+// unansweredQuestion is the #571 gate: the last turn ended by asking the user something
+// and they have not seen it yet. A pane that stopped to ask satisfies every other clause
+// here — the turn ended, the box is up, nothing is working — so without this the queue
+// answers a question the user never read, and the agent proceeds on an answer to
+// something else. It sits beside awaitingInput as a hard precondition rather than below
+// the busy check ON PURPOSE: the timeout must never bypass it.
+//
+// It applies to EVERY queued prompt, not only zero-clock follow-ups, even though a boot
+// prompt is conceptually the first message of a session and has no prior turn to answer.
+// Keying it on queuedAt.IsZero() looks equivalent and is not: newInstanceFromStorage
+// re-stamps the restored head with a LIVE clock (session/instance.go), so after a TUI
+// restart a prompt that was queued as a follow-up would arm the 60s valve and be
+// delivered into the question anyway. Holding unconditionally closes that, and costs a
+// genuine boot prompt nothing — a session with no prior turn has no assistant message, so
+// the flag is false. It is also right across pause→resume, where `claude --continue`
+// keeps the transcript and the pre-pause question is still unanswered.
+//
 // Normally we also wait for the pane to leave PaneWorking to avoid the post-trust
 // "loading" transition window. PanePending is held the same as PaneWorking: the main turn
 // has ended but a background sub-agent is still in flight (#290), so although the input box
@@ -312,8 +374,11 @@ const promptDeliveryTimeout = 60 * time.Second
 // forever; once the prompt has been queued longer than promptDeliveryTimeout we drop only
 // that busy check. A zero queuedAt disables the timeout (the prompt was queued without a
 // timestamp), falling back to the strict idle-pane requirement.
-func promptDeliveryReady(state tmux.PaneState, awaitingInput bool, queuedAt, now time.Time) bool {
+func promptDeliveryReady(state tmux.PaneState, awaitingInput, unansweredQuestion bool, queuedAt, now time.Time) bool {
 	if !awaitingInput {
+		return false
+	}
+	if unansweredQuestion {
 		return false
 	}
 	if state != tmux.PaneWorking && state != tmux.PanePending {
@@ -552,11 +617,19 @@ func collectMetadata(ctx context.Context, poll []*session.Instance, selected *se
 				r.sessionLost = true
 				return
 			}
+			// Re-derive the #571 question flag. It must come BEFORE the delivery probe
+			// below, which reads the value it produces — otherwise the first tick after
+			// a question would still deliver into it. The main thread memoizes the
+			// result (applyMetadataResults), which is what keeps this to about one
+			// transcript read per turn-end rather than one per tick.
+			var asked bool
+			asked, r.askedStamp, r.askedOK = endedAskingNow(instance, r.state)
+			r.asked = asked
 			// Only probe readiness while a prompt is actually queued (a brief
 			// window after a new session), so the extra pane capture is rare.
 			if instance.Prompt() != "" {
 				r.readyForPrompt = promptDeliveryReady(
-					r.state, instance.AwaitingInput(),
+					r.state, instance.AwaitingInput(), questionHoldsPrompt(instance, asked),
 					instance.PromptQueuedAt(), time.Now())
 			}
 			switch {
@@ -640,6 +713,9 @@ func (m *home) applyMetadataResults(results []instanceMetaResult, emit bool) []t
 		r.instance.SetPRStatus(r.prStatus)
 		if r.modelOK {
 			r.instance.SetModelMeta(r.model, r.modelStamp)
+		}
+		if r.askedOK {
+			r.instance.SetAskedMeta(r.asked, r.askedStamp)
 		}
 		if r.modeOK {
 			r.instance.SetModeMeta(r.mode)
