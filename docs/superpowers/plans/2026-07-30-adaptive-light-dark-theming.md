@@ -349,6 +349,14 @@ Expected: PASS with no golden regenerated. This task changes no rendering.
 
 - [x] **Step 9: Mutation-verify the guard**
 
+> **Shipped with a different signature than every block in this task shows.** The arm
+> is shared with `glyph_set`, which moves no colour, so the gate had to live
+> somewhere: `applyBarStyleCmd` took a `key string` and returns nil for anything but
+> `"theme"`, and `swapBarStyleApplier` takes `func(context.Context, bool)`. Stage E
+> later split the keyless half out as `barStylePushCmd()`. The blocks below are the
+> record of what was planned; the tree is `app/app_layout.go:452` and `:468`. This is
+> the one signature in the plan that drifted, and it drifted here — see Self-review.
+
 Temporarily delete `m.applyBarStyleCmd()` from the `tea.Batch` in the theme arm and confirm `TestApplySettingChange_ThemePushesTmuxBarStyle` still passes (it tests the helper, not the wiring) — then **strengthen it** so it does not. Assert on the Cmd the arm returns, not just on the helper:
 
 ```go
@@ -3051,12 +3059,20 @@ Then update the issue with the matrix results and close it, ticking #394 in epic
 **Type consistency.** `theme.Scheme`/`SchemeUnknown`/`SchemeDark`/`SchemeLight`, `ResolveScheme(*bool, string) Scheme`, `SetScheme(Scheme) func()`, `CurrentScheme() Scheme`, `IsLight(Palette) bool`, `Mono() bool`, `SetMono(bool) func()`, `NoColorRequested([]string) bool`, `AutoThemeName`, `SelectableNames() []string`, `lightTwin map[string]string`, `relLuminanceOf(Color) float64`, `tmux.ApplyBarStyle(context.Context, cmd.Executor) error`, `tmux.RewriteManagedConfig(bool) error`, `config.DefaultTheme`, `(*Config).GetTheme() string`, `(*home).requestSchemeCmd() tea.Cmd`, `(*home).applyDetectedScheme(theme.Scheme) tea.Cmd`, `doctor.CheckScheme([]string) SchemeResult`, `doctor.RenderScheme(SchemeResult) string`, `barStyleApplier` — each is defined in exactly one task and used with that spelling and signature everywhere after.
 
 **One symbol broke that rule, and it is the one to check first when reading an
-un-run step.** `applyBarStyleCmd` was written argument-less in Task 1 and shipped
-that way; Stage E gave it a `key string` and split the keyless half out as
-`barStylePushCmd()` (`app/app_layout.go:452` and `:468`). Task 8's steps were
-written against the Task 1 spelling and have been corrected to the tree's, but the
-lesson generalises past this plan: **a signature is not a fact a plan can state
-once.** The others above held because nothing later re-opened them.
+un-run step.** `applyBarStyleCmd` is written argument-less in Task 1 — but it never
+shipped that way. Stage A's *implementation* gave it a `key string`, because the arm
+is shared with `glyph_set` and the gate had to live somewhere; Stage A's own test
+calls `applyBarStyleCmd("theme")`. Stage E then split the keyless half out as
+`barStylePushCmd()` so detection could push the band without inventing a settings-row
+key (`app/app_layout.go:452` and `:468`).
+
+So the drift did not start four stages later — **it started at the step that
+introduced the symbol, and no stage in between noticed.** Task 1's blocks are left as
+the record of what was planned, annotated at its Step 9; Task 8's steps have been
+corrected to the tree's spelling. The lesson generalises past this plan: **a signature is not a
+fact a plan can state once**, and the first place to check for drift is the task that
+declared it, not the task that last touched it. The others above held because nothing
+later re-opened them.
 
 `(*home).applySchemeQueryCmd(key string) tea.Cmd` (`app/scheme.go:84`) is the one
 symbol in Stage E that no task defines, because the need for it was found in review
