@@ -84,6 +84,14 @@ var preludeFlagsWithValues = map[string]bool{"-L": true, "-f": true, "-C": true,
 // five words, the skip eats half the path, and the verb becomes "git repo" — one
 // bucket per repository, which is the scattering preludeFlagsWithValues exists to
 // prevent. See verb for the recovery path and what it cannot do.
+//
+// The token it returns goes through redactArg, because this reads the raw argv
+// rather than Redact's output and so is the second path from an argv to displayed
+// log text. Today no secret can reach the returned token — every `-e NAME=<token>`
+// Atrium injects is appended after the subcommand this stops at — but that is an
+// ordering accident in another file (session/tmux/tmux.go), not a property of this
+// function. Scrubbing here keeps "a secret is never recorded verbatim" true by
+// construction, the way it was when Redact was the only such path.
 func verbOf(argv []string) string {
 	if len(argv) == 0 {
 		return "?"
@@ -97,7 +105,7 @@ func verbOf(argv []string) string {
 			}
 			continue
 		}
-		return bin + " " + f
+		return bin + " " + redactArg(f)
 	}
 	return bin
 }

@@ -15,8 +15,11 @@ var sensitiveEnvNames = []string{
 }
 
 // Redact renders argv as a single space-joined string with the value of any
-// secret-bearing NAME=VALUE token replaced by "***". It is the ONLY function that
-// turns an argv into log text, so a secret can never be recorded verbatim.
+// secret-bearing NAME=VALUE token replaced by "***". It is the only function that
+// turns a whole argv into log text; verbOf turns one into the shorter Verb, and
+// scrubs the one token it keeps through redactArg for this reason. Between them a
+// secret can never be recorded verbatim — add a third path and it goes through
+// redactArg too.
 func Redact(argv []string) string {
 	out := make([]string, len(argv))
 	for i, a := range argv {
