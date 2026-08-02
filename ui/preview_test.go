@@ -40,8 +40,9 @@ func setupTestEnvironment(t *testing.T, cmdExec cmd_test.MockCmdExec) *testSetup
 func setupTestEnvironmentWithProgram(t *testing.T, cmdExec cmd_test.MockCmdExec, program string) *testSetup {
 	t.Helper()
 
-	// Initialize logging
-	log.Initialize(false)
+	// Initialize logging into a throwaway directory: the suite must never write
+	// to the real log.
+	t.Cleanup(log.Initialize(t.TempDir(), false))
 
 	// Set up a temp working directory
 	workdir := t.TempDir()
@@ -84,7 +85,6 @@ func setupTestEnvironmentWithProgram(t *testing.T, cmdExec cmd_test.MockCmdExec,
 		if instance != nil {
 			_ = instance.Kill() // Ignore errors during cleanup
 		}
-		log.Close()
 	}
 
 	return &testSetup{

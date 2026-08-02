@@ -76,7 +76,7 @@ var (
 			// event handled by Bubble Tea, not a signal.)
 			ctx, stop := signal.NotifyContext(context.Background(), quitSignals...)
 			defer stop()
-			log.Initialize(daemonFlag)
+			log.Initialize(logDir(), daemonFlag)
 			defer log.Close()
 
 			// Arm the profiling trigger for both the TUI and the daemon, after the log
@@ -171,7 +171,7 @@ var (
 		Use:   "debug",
 		Short: "Print debug information like config paths",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			log.Initialize(false)
+			log.Initialize(logDir(), false)
 			defer log.Close()
 
 			cfg := config.LoadConfig()
@@ -200,7 +200,7 @@ var (
 			"profile for each newly found one. Existing profiles and the default program are never\n" +
 			"modified, so hand-edited entries always survive a re-detect.",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			log.Initialize(false)
+			log.Initialize(logDir(), false)
 			defer log.Close()
 
 			cfg := config.LoadConfig()
@@ -239,7 +239,7 @@ var (
 			"verifies its checksum, and atomically replaces the current binary. Running\n" +
 			"sessions are not disturbed; the new version takes effect on the next launch.",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			log.Initialize(false)
+			log.Initialize(logDir(), false)
 			defer log.Close()
 
 			if !update.IsUpdatableVersion(version) {
@@ -340,7 +340,7 @@ var (
 			"rung that outranks it but cannot be probed from a one-shot command — that query needs the\n" +
 			"running TUI, which sends it at startup, on refocus and after a detach.",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			log.Initialize(false)
+			log.Initialize(logDir(), false)
 			defer log.Close()
 
 			// Give each section its own probe budget off a fresh context: the core-dep

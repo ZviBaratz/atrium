@@ -1005,7 +1005,8 @@ func TestPollFallbackNormalization(t *testing.T) {
 }
 
 func TestPollCaptureErrorIsUnknown(t *testing.T) {
-	log.Initialize(false) // Poll logs on capture error; ErrorLog is otherwise nil in tests
+	// Poll logs on capture error; ErrorLog is otherwise nil in tests.
+	t.Cleanup(log.Initialize(t.TempDir(), false))
 	c := "anything"
 	fail := false
 	s := pollSession(t, "claude", &c, &fail)

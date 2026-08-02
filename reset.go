@@ -23,7 +23,7 @@ var resetCmd = &cobra.Command{
 		// One-shot CLI command; a plain Background context is enough (the
 		// per-operation timeouts still bound every subprocess).
 		ctx := context.Background()
-		log.Initialize(false)
+		log.Initialize(logDir(), false)
 		defer log.Close()
 		return runReset(ctx, cmd2.MakeExecutor())
 	},
