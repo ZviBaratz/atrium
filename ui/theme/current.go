@@ -40,8 +40,16 @@ func init() { current.Store(compose()) }
 // must return a concrete eighteen-token palette and `auto` has none — an `auto`
 // entry would have to hold a fiction, which the canonical-hex and contrast oracles
 // would then dutifully validate. Resolving it here is also what makes AC#4
-// structural: this is the ONLY place curScheme is read, so a named theme cannot
-// follow the terminal no matter what detection reports.
+// structural: this is the only place curScheme is read TO SELECT A PALETTE, and the
+// read sits behind the AutoThemeName branch, so a named theme cannot follow the
+// terminal no matter what detection reports.
+//
+// Not the only read of curScheme, which is the distinction that matters if you are
+// checking the claim: CurrentScheme() reads it too, and app/scheme.go's
+// applyDetectedScheme calls that to answer "has the polarity changed since last
+// time". That read chooses nothing — it decides whether to re-theme at all — so it
+// cannot route a named palette anywhere. A future read that DOES pick a colour
+// belongs in here, beside this branch, or AC#4 stops being structural.
 func compose() *Theme {
 	name := curName
 	if name == AutoThemeName {

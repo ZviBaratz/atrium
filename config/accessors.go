@@ -229,17 +229,28 @@ func (c *Config) GetNerdFont() bool {
 // and ui/theme is deliberately a leaf that no atrium package appears in.
 const DefaultTheme = "tokyo-night"
 
-// GetTheme returns the configured theme name, normalizing empty to DefaultTheme.
+// GetTheme returns the configured theme name, normalizing empty to DefaultTheme and
+// folding case and surrounding space.
 //
 // Every consumer goes through this rather than reading c.Theme, so "unset" has one
 // meaning. It matters more than the usual accessor: the theme layer resolves the
-// reserved value `auto` specially, and an empty string reaching theme.Set would
-// miss that branch and render the dark default on a light terminal.
+// reserved value `auto` specially, and an empty string reaching theme.Set would miss
+// that branch and render the dark default on a light terminal.
+//
+// The case folding is here for the same reason, one step further. ui/theme's Get()
+// already lowercases and trims before indexing the registry, so a hand-edited
+// "Tokyo-Night" has always resolved — but `auto` is NOT a registry entry, and the two
+// sites that recognize it (compose() in ui/theme/current.go, and requestSchemeCmd's
+// gate in app/scheme.go) compare against the literal. Left unnormalized, "Auto" would
+// be the one value in this field that fails silently in both directions at once: the
+// dark default rendered, and no detection query ever sent. Normalizing at the single
+// accessor both sites read is what keeps that one fact in one place, rather than two
+// string comparisons that must remember to agree.
 func (c *Config) GetTheme() string {
 	if c == nil || strings.TrimSpace(c.Theme) == "" {
 		return DefaultTheme
 	}
-	return c.Theme
+	return strings.ToLower(strings.TrimSpace(c.Theme))
 }
 
 // GlyphSet fidelity rungs (see Config.GlyphSet). These mirror the theme package's

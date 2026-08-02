@@ -171,6 +171,20 @@ func TestRequestSchemeCmdTreatsUnsetAsTheDefault(t *testing.T) {
 	require.Nil(t, m.requestSchemeCmd())
 }
 
+// The gate compares against the literal "auto", so it depends on GetTheme having
+// folded the case first. config.TestGetTheme pins the folding; this pins the WIRE,
+// because a gate that read c.Theme directly would pass that test and still leave a
+// hand-edited "Auto" silently undetected.
+func TestRequestSchemeCmdAcceptsAutoInAnyCase(t *testing.T) {
+	m := newCreateFormHome(t)
+
+	for _, written := range []string{"auto", "Auto", "AUTO", "  auto  "} {
+		m.appConfig.Theme = written
+		require.NotNil(t, m.requestSchemeCmd(),
+			"theme %q must be the reserved auto value, not an unknown palette", written)
+	}
+}
+
 // collectCmdTree is runCmdTree returning the leaf messages instead of discarding
 // them, so a test can assert that a particular Cmd is IN a batch. Same structural
 // recursion, and for the same reason: tea.Sequence's message type is unexported, so
@@ -261,4 +275,54 @@ func TestInitialSchemeReadsCOLORFGBG(t *testing.T) {
 	t.Setenv("COLORFGBG", "")
 	require.Equal(t, theme.SchemeUnknown, initialScheme(),
 		"no COLORFGBG must be no answer, so startup latches on the default")
+}
+
+// Selecting `auto` in the settings panel is the fourth query point, and the only one
+// where the gate that suppressed every earlier query is the very thing being changed.
+// A user who launched on a named theme was never queried — requestSchemeCmd returned
+// nil at Init — so curScheme is whatever COLORFGBG said, usually nothing. Without a
+// query here, picking `auto` on a light terminal renders the dark default until the
+// user happens to blur and refocus the window.
+//
+// The row is timingLive, whose footerNote() is "": the panel promises this applies
+// immediately, and "immediately" cannot mean "at the next unrelated focus event".
+func TestApplySettingChangeThemeArmQueriesWhenAutoIsSelected(t *testing.T) {
+	t.Setenv("HOME", t.TempDir()) // applySettingChange persists the config first
+	t.Cleanup(theme.Set(theme.Current().Name))
+	t.Cleanup(theme.SetScheme(theme.CurrentScheme()))
+	defer swapBarStyleApplier(func(context.Context, bool) {})()
+
+	m := newCreateFormHome(t)
+	m.appConfig.Theme = "catppuccin-mocha"
+	require.Zero(t, countSchemeQueries(m.Init()),
+		"precondition: launching on a named theme spends no query, so nothing has been detected")
+
+	m.appConfig.Theme = theme.AutoThemeName
+	require.Equal(t, 1, countSchemeQueries(m.applySettingChange("theme")),
+		"selecting auto must ask the terminal now, not leave it to the next refocus")
+}
+
+// The same wire, negatively at both of its gates. Switching BETWEEN named palettes
+// must not query — the gate is on the new config value, not on "the theme row moved"
+// — and glyph_set, which shares this arm and cannot change the palette selection,
+// must not query even while auto is configured.
+//
+// The second half is what makes the key check real rather than incidental:
+// requestSchemeCmd's own gate passes under auto, so without it the glyph_set arm
+// would spend a query per rung change.
+func TestApplySettingChangeThemeArmDoesNotQueryOtherwise(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Cleanup(theme.Set(theme.Current().Name))
+	t.Cleanup(theme.SetScheme(theme.CurrentScheme()))
+	defer swapBarStyleApplier(func(context.Context, bool) {})()
+
+	m := newCreateFormHome(t)
+
+	m.appConfig.Theme = "catppuccin-mocha"
+	require.Zero(t, countSchemeQueries(m.applySettingChange("theme")),
+		"a named palette never follows the terminal, so it must not ask about it")
+
+	m.appConfig.Theme = theme.AutoThemeName
+	require.Zero(t, countSchemeQueries(m.applySettingChange("glyph_set")),
+		"glyph_set shares the arm but moves no palette: nothing to re-detect")
 }

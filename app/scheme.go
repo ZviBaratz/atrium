@@ -38,7 +38,9 @@ import (
 //
 // OSC 11 asks for the background colour itself, is answered by nearly everything,
 // has nothing to unwind, and stays inside Bubble Tea's stable public API. So Atrium
-// asks: at startup, on refocus, and after an attach.
+// asks at four points: at startup, on refocus, after a detach, and when the settings
+// panel selects `auto`. The first three re-ask on behalf of a selection that was
+// already `auto`; the fourth is the one where it just became so.
 
 // requestSchemeCmd asks the terminal for its background colour, or nil when the
 // answer could not be acted on.
@@ -57,6 +59,33 @@ func (m *home) requestSchemeCmd() tea.Cmd {
 		return nil
 	}
 	return tea.RequestBackgroundColor
+}
+
+// applySchemeQueryCmd is requestSchemeCmd for the settings panel's theme arm, which
+// is the fourth query point and the one the other three cannot stand in for.
+//
+// Startup, refocus and detach all ask on behalf of a selection that was ALREADY
+// `auto`. Here the selection may have just become it — and a session that launched
+// on a named palette spent no query at Init, because requestSchemeCmd's gate read
+// the theme this change is replacing. So curScheme is still whatever COLORFGBG said
+// at startup, usually nothing, and composing `auto` against it renders the shipped
+// dark default. On a light terminal that is the wrong palette, and nothing would
+// correct it until the user happened to blur and refocus the window.
+//
+// The row is timingLive, whose footerNote() is "" — the panel promises the change
+// applies immediately, and a promise the next unrelated focus event has to keep is
+// not that.
+//
+// Keyed like applyBarStyleCmd, and for the same reason: the arm is shared with
+// glyph_set, which cannot change the palette selection, so it has nothing to
+// re-detect. Gating on the key rather than on requestSchemeCmd's config check alone
+// is what keeps a rung change from spending a query — that check passes under
+// `auto` no matter which row moved.
+func (m *home) applySchemeQueryCmd(key string) tea.Cmd {
+	if key != "theme" {
+		return nil
+	}
+	return m.requestSchemeCmd()
 }
 
 // applyDetectedScheme records a detected polarity and, if it changed anything,

@@ -287,7 +287,16 @@ func (m *home) applySettingChange(key string) tea.Cmd {
 		// no colour, and the push costs a conf rewrite plus validateConfig's probe
 		// server. applyBarStyleCmd returns nil for anything else, so the Batch below
 		// degrades to the repaint alone.
-		return tea.Sequence(tea.ClearScreen, tea.Batch(tea.RequestWindowSize, m.applyBarStyleCmd(key)))
+		//
+		// applySchemeQueryCmd is the same shape for the same reason, and it is the
+		// fourth query point: the palette selection may have just BECOME `auto`, and
+		// this is the only site where the gate that suppressed every earlier query is
+		// itself what changed. See scheme.go.
+		return tea.Sequence(tea.ClearScreen, tea.Batch(
+			tea.RequestWindowSize,
+			m.applyBarStyleCmd(key),
+			m.applySchemeQueryCmd(key),
+		))
 	case "model_indicator":
 		// Mirror the newHome seeding; the renderer takes the normalized mode
 		// string so ui needs no config import.
