@@ -5,7 +5,6 @@ package cmd
 
 import (
 	"os/exec"
-	"strings"
 	"time"
 
 	"github.com/ZviBaratz/atrium/cmdlog"
@@ -48,9 +47,16 @@ func MakeExecutor() Executor {
 
 // ToString renders a command as its space-joined argv, for logging and error
 // messages.
+//
+// It goes through cmdlog.Redact rather than joining the argv itself, because
+// "logging and error messages" is exactly the destination a secret must not reach
+// verbatim. Nothing routes a token-bearing argv here today — the one command
+// carrying one is started on a pty and this has a single caller (notify's failed
+// desktop command) — but that is a fact about the caller set, not about this
+// function, and a caller set is what the next call site changes.
 func ToString(cmd *exec.Cmd) string {
 	if cmd == nil {
 		return "<nil>"
 	}
-	return strings.Join(cmd.Args, " ")
+	return cmdlog.Redact(cmd.Args)
 }

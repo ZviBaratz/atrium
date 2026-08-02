@@ -111,6 +111,32 @@ commands on Atrium's dedicated socket (`tmux -L <socket>`) — if you add a test
 shells out to tmux directly, route it through the package's `tmuxCommand()` helper
 so it targets that same socket, not tmux's default one.
 
+## Reviewing a change here
+
+Measured over 51 PRs (#489–#562), merged 2026-07-27..2026-08-01, the defects
+that survive into review split 29 behaviour / 21 claim / 9 test. `go vet`, lint
+and the suite catch none of the middle class, and a review that only hunts for
+bugs reports about half of what this repo actually ships wrong. Three rules, aimed
+at what is missed rather than at what is already caught:
+
+- **A claim about behaviour needs a citation, not an inference from naming.** When
+  a comment, docstring, README line, plan step or hint states what the code does —
+  a count, a cell width, a path, a flag, a command, "both cases", "the only caller"
+  — open the code and check it. A statement that was true when written and is false
+  now is a defect, and it is the one nothing else here can see.
+- **Check a claim against the artifact it names, across file boundaries.** The
+  README naming `/tmp` while the code calls `os.TempDir()`, a test docstring
+  promising a guard the assertion does not make, a comment counting consumers of a
+  symbol that has since grown one. These live in a different file from the code
+  they describe, which is why they survive.
+- **Follow a found mechanism to its worst consequence before writing it up.** A
+  collision reported as "a paste beginning with a space is mishandled" and a
+  collision reported as "pasting `q` quits the app without confirmation" are the
+  same finding; only the second gets prioritised correctly.
+
+Prefer `file:line` evidence over reasoning about what a name implies. A finding
+you cannot cite is a hypothesis.
+
 ## Conventions
 
 - **Commits:** Conventional Commits, lowercase (`feat: …`, `fix: …`).
