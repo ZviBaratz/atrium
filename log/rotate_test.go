@@ -193,6 +193,45 @@ func TestRotatingFile_TakesThePathBackWhenNothingIsThere(t *testing.T) {
 	}
 }
 
+// replace opens the new descriptor before closing the old one, so an open that
+// fails leaves a writer that still works rather than one holding a closed file.
+// Nothing tested that ordering: reversing the two statements passed every other
+// case here, because in all of them the open succeeds.
+//
+// It matters for the same reason the missing-path branch above does. log.Logger
+// discards write errors, so a writer stranded on a closed descriptor does not
+// report anything — it just stops recording, which is the failure #567 exists to
+// prevent, arrived at from inside the rotation instead of at startup.
+func TestRotatingFile_AFailedReplaceKeepsAWorkingWriter(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root writes to a read-only directory, so the replace cannot fail")
+	}
+	dir := t.TempDir()
+	path := filepath.Join(dir, fileName)
+	r, err := openRotating(path, 20)
+	if err != nil {
+		t.Fatalf("openRotating: %v", err)
+	}
+	t.Cleanup(func() { _ = r.Close() })
+	mustWrite(t, r, "before\n")
+
+	// Reach replace with no way to create the path: remove the live log, then take
+	// away the directory's write permission.
+	if err := os.Remove(path); err != nil {
+		t.Fatalf("removing the live log: %v", err)
+	}
+	if err := os.Chmod(dir, 0o555); err != nil {
+		t.Fatalf("making the directory read-only: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o755) }) // else TempDir cannot clean up
+
+	// Big enough to trip the cap, so the rotation — and the failing replace — runs.
+	if _, err := r.Write([]byte(strings.Repeat("w", 18) + "\n")); err != nil {
+		t.Errorf("write after a replace that could not open the path: %v — the writer "+
+			"was left holding a closed descriptor and has stopped recording", err)
+	}
+}
+
 // Three loggers share one writer, so writes are concurrent by construction.
 // Guards the mutex under -race.
 func TestRotatingFile_ConcurrentWritesAreSerialised(t *testing.T) {

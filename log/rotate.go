@@ -102,6 +102,12 @@ func (r *rotatingFile) rotate() {
 		// something outside Atrium removed the log. Our descriptor is writing to a
 		// file the path no longer names, so create the path afresh rather than
 		// renaming a source that is not there.
+		//
+		// Recovery lands here, at the next rotation, not at the write after the
+		// file went missing: only the cap check reaches this code, so a deleted log
+		// stays missing until the descriptor behind it crosses maxBytes. Checking
+		// the path on every write would cost a second syscall per line to shorten a
+		// window that only opens when something outside Atrium deletes the file.
 		r.replace()
 		return
 	case errMine == nil && errDisk == nil && !os.SameFile(mine, onDisk):
