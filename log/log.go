@@ -46,7 +46,7 @@ const (
 
 // The destination state Initialize replaces and its restore func puts back.
 var (
-	globalLogFile *os.File
+	globalLogFile *rotatingFile
 	logPath       string
 	initErr       error
 )
@@ -119,12 +119,12 @@ func Initialize(dir string, daemon bool) (restore func()) {
 	return restore
 }
 
-// openDestination creates dir and opens the log inside it for appending.
-func openDestination(dir, path string) (*os.File, error) {
+// openDestination creates dir and opens the rotating log inside it.
+func openDestination(dir, path string) (*rotatingFile, error) {
 	if err := os.MkdirAll(dir, dirMode); err != nil {
 		return nil, err
 	}
-	return os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, fileMode)
+	return openRotating(path, maxLogBytes)
 }
 
 // Close closes the log file opened by Initialize and reports what became of it.
