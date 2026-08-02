@@ -3,10 +3,12 @@ package ui
 import (
 	"errors"
 	"fmt"
+	"strings"
+
+	"github.com/ZviBaratz/atrium/internal/memo"
 	"github.com/ZviBaratz/atrium/log"
 	"github.com/ZviBaratz/atrium/session"
 	"github.com/ZviBaratz/atrium/ui/theme"
-	"strings"
 
 	"charm.land/bubbles/v2/spinner"
 	tea "charm.land/bubbletea/v2"
@@ -303,6 +305,37 @@ type List struct {
 	// stale pointer (instance removed while marked) is harmless: every read
 	// intersects with items, so it simply drops out. See MarkedInstancesInView.
 	marked map[*session.Instance]bool
+
+	// panelMemo skips the panel chrome for an unchanged list body. Drawing the
+	// bordered, badge-inset panel around the rows costs nearly twice what rendering
+	// the rows does — 18% of a cold 14-session frame build against 9% — because
+	// every lipgloss layer re-measures every line of what it wraps (#565). See
+	// panelKey.
+	panelMemo memo.Cache[panelKey]
+}
+
+// panelKey is everything PanelWithBadges reads at the one call site in String().
+// content is the already-composed list body, so the memo is keyed on the bytes the
+// panel wraps rather than on the items, selection, filter, collapse map, sort mode
+// or spinner frame that produced them — none of which need enumerating as a result.
+//
+// The title ("Sessions") and the active flag (true) are literals at that call site,
+// so they are deliberately absent: keying on a constant would claim a guard that
+// guards nothing. theme is the *Theme pointer, which theme.compose reallocates on
+// every palette or glyph-set change — see tabbedKey.
+//
+// Note where this memo does NOT help. ui.stateGlyph draws the animated spinner for
+// Running and Loading, and the spinner ticks at 10Hz whenever any row holds either
+// (theme.SpinnerFPS, armSpinnerTick) — so on a busy fleet the body changes ten
+// times a second and every one of those frames misses here. This is the quiet-fleet
+// saving; the tabbed window's memo is the one that survives a spinning list.
+type panelKey struct {
+	content     string
+	updateBadge string
+	driftBadge  string
+	width       int
+	height      int
+	theme       *theme.Theme
 }
 
 // NewList returns an empty List.

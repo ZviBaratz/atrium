@@ -23,11 +23,14 @@ import (
 // the preview tick and the metadata tick: ~12/s — rising to ~22/s while the watched
 // pane is repainting, and ~32/s once something is Running or Loading.
 //
-// One part of the rebuild is now memoized: scanCached skips zone.Scan for a frame
-// byte-identical to the last. That is why the benchmarks below come in cold and
-// warm pairs — see BenchmarkViewContentRepeat. These exist to put a number on what
-// one rebuild costs and how it scales with the fleet, so a later change that claims
-// to make idle cheaper has something to be measured against.
+// Three layers of the rebuild are now memoized, each on the bytes it composes:
+// frameCached skips the frame stack and zone.Scan, TabbedWindow skips the right
+// pane, and List skips its panel chrome (#561, #565). That is why the benchmarks
+// below come in cold and warm pairs — see BenchmarkViewContentRepeat — and why the
+// cold ones drop all three through resetRenderMemos rather than clearing one field
+// by hand. These exist to put a number on what one rebuild costs and how it scales
+// with the fleet, so a later change that claims to make idle cheaper has something
+// to be measured against.
 //
 // Run with `just bench`. They are not part of `just ci`: `go test` ignores
 // benchmarks unless -bench is passed, so they add no gate time and cannot flake.
@@ -40,19 +43,21 @@ var benchFleetSizes = []int{1, 5, 14}
 // state on the preview tab — the shape an idle Atrium actually renders.
 func newBenchHome(tb testing.TB, n int) *home {
 	tb.Helper()
-	s := spinner.New()
 	h := &home{
 		ctx:          context.Background(),
 		state:        stateDefault,
-		list:         ui.NewList(&s),
 		menu:         ui.NewMenu(),
 		tabbedWindow: ui.NewTabbedWindow(ui.NewPreviewPane(), ui.NewDiffPane(), ui.NewTerminalPane(context.Background())),
 		errBox:       ui.NewErrBox(),
 		appConfig:    config.DefaultConfig(),
 		appState:     config.DefaultState(),
 		program:      "echo",
-		spinner:      s,
+		spinner:      spinner.New(),
 	}
+	// The list must borrow THIS home's spinner, as newHome does — not a local copy.
+	// With a copy the rows animate off a model the update loop never advances, so a
+	// fixture could never reproduce a spinning frame at all.
+	h.list = ui.NewList(&h.spinner)
 	for i := range n {
 		inst, err := session.NewInstance(session.InstanceOptions{
 			Title:   fmt.Sprintf("bench-%02d", i),
@@ -78,11 +83,11 @@ func BenchmarkViewContent(b *testing.B) {
 			b.ReportAllocs()
 			b.ResetTimer()
 			for b.Loop() {
-				// Drop the zone-scan memo so this stays a COLD build, comparable with
-				// the numbers taken before the memo existed. Without this the loop
-				// renders an unchanging model and every iteration after the first is a
-				// memo hit — the benchmark would report the cache, not the frame.
-				h.lastScanIn = ""
+				// Drop every render memo so this stays a COLD build, comparable with
+				// the numbers taken before they existed. Without this the loop renders
+				// an unchanging model and every iteration after the first is a memo
+				// hit — the benchmark would report the caches, not the frame.
+				h.resetRenderMemos()
 				sink = h.viewContent()
 			}
 		})
@@ -138,7 +143,7 @@ func BenchmarkViewContentNoZoneScan(b *testing.B) {
 			b.ReportAllocs()
 			b.ResetTimer()
 			for b.Loop() {
-				h.lastScanIn = "" // cold, like BenchmarkViewContent
+				h.resetRenderMemos() // cold, like BenchmarkViewContent
 				sink = h.viewContent()
 			}
 		})
@@ -148,3 +153,19 @@ func BenchmarkViewContentNoZoneScan(b *testing.B) {
 // sink defeats dead-store elimination, so the compiler cannot delete the work
 // being measured.
 var sink string
+
+// resetRenderMemos drops every memo the frame build consults, so the next
+// viewContent is a COLD build.
+//
+// It exists because a cache silently converts its own benchmark into a
+// measurement of itself: BenchmarkViewContent dropped the zone-scan memo by hand
+// from the day #561 landed, and the first run after #565 added the tabbed window's
+// reported a 62% fall in allocs/op that was entirely the new cache answering. One
+// helper rather than a line per memo at each of the two cold call sites, so the
+// next memo has exactly one place to join and cannot be forgotten at one of them.
+// TestResetRenderMemos_ForcesEveryLayerToRecompose is what enforces that it joins.
+func (m *home) resetRenderMemos() {
+	m.frameMemo.Reset()
+	m.tabbedWindow.ResetMemo()
+	m.list.ResetMemo()
+}
