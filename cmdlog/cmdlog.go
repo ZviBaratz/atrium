@@ -29,7 +29,13 @@ const stderrTailCap = 4096
 // CPU it burned, its exit status, and — on failure — a bounded tail of its
 // stderr/output.
 type Record struct {
-	Argv    string
+	Argv string
+	// Verb is the "binary subcommand" pair Argv aggregates under, resolved when the
+	// record is built rather than re-derived from Argv on every read. Argv is
+	// rendered log text and joining has already thrown away where each token ended,
+	// so a prelude flag value containing a space cannot be recovered from it — see
+	// verbOf. Add fills this from Argv for a record that arrives without one.
+	Verb    string
 	Session string
 	Start   time.Time
 	Dur     time.Duration
@@ -99,7 +105,12 @@ func (r *ring) snapshot(keep func(Record) bool) []Record {
 var defaultRing = &ring{}
 
 // Add records rec into the process-wide log.
-func Add(rec Record) { defaultRing.add(rec) }
+func Add(rec Record) {
+	if rec.Verb == "" {
+		rec.Verb = verb(rec.Argv)
+	}
+	defaultRing.add(rec)
+}
 
 // Snapshot returns every recorded command, newest first.
 func Snapshot() []Record { return defaultRing.snapshot(nil) }
@@ -134,6 +145,7 @@ func RecordCmd(cmd *exec.Cmd, session string, start time.Time, failTail []byte, 
 	}
 	rec := Record{
 		Argv:    Redact(cmd.Args),
+		Verb:    verbOf(cmd.Args),
 		Session: session,
 		Start:   start,
 		Dur:     time.Since(start),

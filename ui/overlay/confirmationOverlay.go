@@ -28,22 +28,27 @@ type ConfirmationOverlay struct {
 	// confirmLabel names what confirming does ("pause 3 sessions"), replacing the
 	// generic "confirm" in the key hint. Empty keeps "confirm" — see SetConfirmLabel.
 	confirmLabel string
-	// Custom styling options
-	borderColor theme.Color
+	// destructive selects which palette role paints the border. It stores the
+	// *role*, not a resolved colour: a colour captured here would be the palette in
+	// force when the overlay was built, and a theme change while a confirmation is
+	// open would leave this one dialog on the old palette after everything else had
+	// restyled. Same reasoning ApplyBarStyle gives for reading theme.Current() at
+	// call time — a colour fixed too early is the bug, and a colour passed in as an
+	// argument is a wire no test guards.
+	destructive bool
 }
 
 // NewConfirmationOverlay creates a new confirmation dialog overlay with the given
-// message. The default border is the accent color; destructive confirmations
-// (kill) opt into the danger color via SetBorderColor, so red keeps meaning
-// "destructive" instead of "any confirmation".
+// message. The border is the accent color; destructive confirmations (kill) opt
+// into the danger color via SetDestructive, so red keeps meaning "destructive"
+// instead of "any confirmation".
 func NewConfirmationOverlay(message string) *ConfirmationOverlay {
 	return &ConfirmationOverlay{
-		Dismissed:   false,
-		message:     message,
-		width:       50, // Default width
-		ConfirmKey:  "y",
-		CancelKey:   "n",
-		borderColor: theme.Current().Palette.Accent,
+		Dismissed:  false,
+		message:    message,
+		width:      50, // Default width
+		ConfirmKey: "y",
+		CancelKey:  "n",
 	}
 }
 
@@ -69,7 +74,7 @@ func (c *ConfirmationOverlay) HandleKeyPress(msg tea.KeyPressMsg) bool {
 func (c *ConfirmationOverlay) Render() string {
 	style := lipgloss.NewStyle().
 		Border(theme.Current().Borders.Style).
-		BorderForeground(c.borderColor).
+		BorderForeground(c.BorderColor()).
 		Padding(1, 2).
 		// +2 for the left/right border: Lip Gloss v2 counts the border inside
 		// Width, where v1 added it outside. Same silent semantic change as in
@@ -104,15 +109,20 @@ func (c *ConfirmationOverlay) SetWidth(width int) {
 	c.width = width
 }
 
-// SetBorderColor sets the border color of the confirmation overlay
-func (c *ConfirmationOverlay) SetBorderColor(color theme.Color) {
-	c.borderColor = color
+// SetDestructive paints the border with the danger role instead of accent, for a
+// confirmation that destroys work (kill).
+func (c *ConfirmationOverlay) SetDestructive() {
+	c.destructive = true
 }
 
-// BorderColor returns the overlay's current border color (accent by default,
-// danger after SetBorderColor on a destructive confirmation).
+// BorderColor resolves the border color against the live palette: danger for a
+// destructive confirmation, accent otherwise. Resolved on every call rather than
+// stored, so an open dialog follows a theme change like the rest of the frame.
 func (c *ConfirmationOverlay) BorderColor() theme.Color {
-	return c.borderColor
+	if c.destructive {
+		return theme.Current().Palette.Danger
+	}
+	return theme.Current().Palette.Accent
 }
 
 // SetConfirmKey sets the key used to confirm the action

@@ -1447,6 +1447,13 @@ func stubGitHubToken(t *testing.T, fn func(ctx context.Context, ghConfigDir stri
 	t.Cleanup(func() { resolveGitHubToken = orig })
 }
 
+// rawArgv joins a command's argv without cmd.ToString's redaction, for the two
+// tests that assert an injected token's VALUE. ToString scrubs secret-bearing
+// NAME=VALUE tokens because it feeds logs and error messages, which is exactly
+// what those assertions need to see through. Every other test here inspects
+// non-secret content and keeps using ToString.
+func rawArgv(c *exec.Cmd) string { return strings.Join(c.Args, " ") }
+
 func TestStartSessionInjectsGitHubToken(t *testing.T) {
 	stubGitHubToken(t, func(_ context.Context, ghConfigDir string) (string, error) {
 		require.Equal(t, "/home/tester/.config/gh-quantivly", ghConfigDir)
@@ -1458,7 +1465,7 @@ func TestStartSessionInjectsGitHubToken(t *testing.T) {
 	session.SetGitHubTokenEnv([]string{"GITHUB_PERSONAL_ACCESS_TOKEN"})
 	require.NoError(t, session.Start(t.TempDir()))
 
-	newSessionCmd := cmd2.ToString(ptyFactory.cmds[0])
+	newSessionCmd := rawArgv(ptyFactory.cmds[0])
 	require.Contains(t, newSessionCmd, "-e GITHUB_PERSONAL_ACCESS_TOKEN=gho_testtoken")
 	// The token -e flag must precede the program word.
 	require.Less(t, strings.Index(newSessionCmd, "GITHUB_PERSONAL_ACCESS_TOKEN"),
@@ -1473,7 +1480,7 @@ func TestStartSessionMultipleTokenEnv(t *testing.T) {
 	session.SetGitHubTokenEnv([]string{"GITHUB_PERSONAL_ACCESS_TOKEN", "GH_TOKEN"})
 	require.NoError(t, session.Start(t.TempDir()))
 
-	newSessionCmd := cmd2.ToString(ptyFactory.cmds[0])
+	newSessionCmd := rawArgv(ptyFactory.cmds[0])
 	require.Contains(t, newSessionCmd, "-e GITHUB_PERSONAL_ACCESS_TOKEN=tok123")
 	require.Contains(t, newSessionCmd, "-e GH_TOKEN=tok123")
 }

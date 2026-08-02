@@ -35,7 +35,7 @@ func Totals() []Total { return TotalsOf(Snapshot()) }
 func TotalsOf(recs []Record) []Total {
 	byVerb := map[string]*Total{}
 	for _, r := range recs {
-		v := verb(r.Argv)
+		v := r.Verb
 		t := byVerb[v]
 		if t == nil {
 			t = &Total{Verb: v}
@@ -70,28 +70,50 @@ func TotalsOf(recs []Record) []Total {
 // name reads as the subcommand and every session gets its own verb.
 var preludeFlagsWithValues = map[string]bool{"-L": true, "-f": true, "-C": true, "-c": true}
 
-// verb reduces a redacted argv to the "binary subcommand" pair that names what
-// ran — `git diff`, `tmux capture-pane`, `gh pr`.
+// verbOf reduces an argv to the "binary subcommand" pair that names what ran —
+// `git diff`, `tmux capture-pane`, `gh pr`.
 //
 // It stops at the first subcommand rather than keeping the full argv because the
 // point is aggregation: `git diff --numstat <sha>` and `git diff <other-sha>` are
 // the same cost centre, and keeping their arguments would scatter one hot verb
 // across as many buckets as there are sessions.
-func verb(argv string) string {
-	fields := strings.Fields(argv)
-	if len(fields) == 0 {
+//
+// It takes the argv as the OS has it, one element per token, because a prelude
+// flag's value is arbitrary text. `git -C "/home/u/my repo" status` is four
+// elements here and the value is skipped whole; recovered from log text it is
+// five words, the skip eats half the path, and the verb becomes "git repo" — one
+// bucket per repository, which is the scattering preludeFlagsWithValues exists to
+// prevent. See verb for the recovery path and what it cannot do.
+//
+// The token it returns goes through redactArg, because this reads the raw argv
+// rather than Redact's output and so is one of the three paths from an argv to
+// displayed text (Redact and cmd.ToString are the others; all scrub). Today no
+// secret can reach the returned token — every `-e NAME=<token>` Atrium injects is
+// appended after the subcommand this stops at — but that is an ordering accident
+// in another file (session/tmux/tmux.go), not a property of this function.
+// Scrubbing here keeps "a secret is never recorded verbatim" true by construction,
+// the way it was when Redact was the only such path.
+func verbOf(argv []string) string {
+	if len(argv) == 0 {
 		return "?"
 	}
-	bin := filepath.Base(fields[0])
-	for i := 1; i < len(fields); i++ {
-		f := fields[i]
+	bin := filepath.Base(argv[0])
+	for i := 1; i < len(argv); i++ {
+		f := argv[i]
 		if strings.HasPrefix(f, "-") {
 			if preludeFlagsWithValues[f] {
 				i++ // skip its value too
 			}
 			continue
 		}
-		return bin + " " + f
+		return bin + " " + redactArg(f)
 	}
 	return bin
 }
+
+// verb recovers a verb from rendered log text, for a Record built from an argv
+// string rather than by RecordCmd. It is a fallback: whitespace splitting cannot
+// tell one token containing a space from two tokens, so a prelude flag whose
+// value contains a space still mis-parses here. Anything capturing a real
+// subprocess has the structured argv and must use verbOf.
+func verb(argv string) string { return verbOf(strings.Fields(argv)) }

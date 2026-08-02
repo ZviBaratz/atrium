@@ -21,7 +21,6 @@ import (
 	"github.com/ZviBaratz/atrium/session/tmux"
 	"github.com/ZviBaratz/atrium/ui"
 	"github.com/ZviBaratz/atrium/ui/overlay"
-	"github.com/ZviBaratz/atrium/ui/theme"
 
 	tea "charm.land/bubbletea/v2"
 )
@@ -1007,7 +1006,7 @@ func (m *home) killInstances(insts []*session.Instance, message string, altConfi
 	m.armOnConfirm(arm)
 	// Kill is destructive, so it wears the danger border (confirmAction created
 	// m.confirmationOverlay synchronously above).
-	m.confirmationOverlay.SetBorderColor(theme.Current().Palette.Danger)
+	m.confirmationOverlay.SetDestructive()
 	// Mirror confirmKill's double-tap shortcut: with kill_double_tap_confirm on,
 	// pressing the opening key again confirms the batch dialog, matching single-kill
 	// muscle memory (x x, or Ctrl+X Ctrl+X).
@@ -2113,7 +2112,7 @@ func (m *home) confirmKill(inst *session.Instance) tea.Cmd {
 	// Kill is the one destructive confirmation, so it alone wears the danger
 	// border (the default is accent); confirmAction created m.confirmationOverlay
 	// synchronously above.
-	m.confirmationOverlay.SetBorderColor(theme.Current().Palette.Danger)
+	m.confirmationOverlay.SetDestructive()
 	// Opt-in: a second press of the kill key confirms the dialog, so Ctrl+X Ctrl+X
 	// kills in one motion. Scoped to the kill dialog (other confirmations still
 	// require 'y').

@@ -15,8 +15,13 @@ var sensitiveEnvNames = []string{
 }
 
 // Redact renders argv as a single space-joined string with the value of any
-// secret-bearing NAME=VALUE token replaced by "***". It is the ONLY function that
-// turns an argv into log text, so a secret can never be recorded verbatim.
+// secret-bearing NAME=VALUE token replaced by "***".
+//
+// Three functions turn a raw argv into text a human reads, and all three scrub:
+// this one and cmd.ToString render the whole argv, and verbOf renders the shorter
+// Verb, passing the one token it keeps through redactArg. That is what makes "a
+// secret is never recorded verbatim" true by construction rather than by which
+// call sites happen to exist — add a fourth path and it scrubs too.
 func Redact(argv []string) string {
 	out := make([]string, len(argv))
 	for i, a := range argv {

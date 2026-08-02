@@ -42,6 +42,30 @@ func TestRedact_ScrubsSecretsKeepsSafe(t *testing.T) {
 	}
 }
 
+// Verb is the second path from a raw argv to text the overlay renders: verbOf
+// reads cmd.Args, not Redact's output. No caller today puts a secret ahead of the
+// subcommand — every `-e NAME=<token>` Atrium injects is appended after it, so
+// verbOf returns "tmux new-session" long before reaching one. This drives verbOf
+// with the ordering that WOULD leak, because a guard that only covers the orderings
+// callers happen to produce today cannot catch the call site that changes them.
+//
+// The second case is the negative control: the scrub must not fire on an ordinary
+// subcommand, or "no secret in the verb" would hold for the trivial reason that no
+// verb survives intact.
+func TestVerbOf_ScrubsASecretItWouldOtherwiseKeep(t *testing.T) {
+	got := verbOf([]string{"tmux", "-e", "GITHUB_PERSONAL_ACCESS_TOKEN=ghp_supersecretvalue", "new-session"})
+	if strings.Contains(got, "ghp_supersecretvalue") {
+		t.Errorf("verb leaked the token verbatim: %q", got)
+	}
+	if want := "tmux GITHUB_PERSONAL_ACCESS_TOKEN=***"; got != want {
+		t.Errorf("verbOf = %q, want %q", got, want)
+	}
+
+	if got, want := verbOf([]string{"tmux", "-L", "sock", "new-session"}), "tmux new-session"; got != want {
+		t.Errorf("verbOf = %q, want %q — an ordinary subcommand must pass through", got, want)
+	}
+}
+
 // Assorted sensitive name shapes are all caught; plain args are never touched.
 func TestRedact_NameShapes(t *testing.T) {
 	cases := map[string]bool{ // input token -> should be redacted
