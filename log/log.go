@@ -68,7 +68,8 @@ func SetVerbose(v bool) (restore func()) {
 // Destination reports where Initialize sent the loggers and, if it could not open
 // that file, why. A nil error with a non-empty path means the log is live; a
 // non-nil error means the loggers are still discarding and nothing is being
-// recorded. Both are zero before Initialize runs.
+// recorded. Both are zero before Initialize runs and again after Close, so read
+// them while the log is live — every caller does.
 //
 // The two are returned together so a caller cannot print the path as though the
 // log were being written when it is not.
@@ -128,7 +129,8 @@ func openDestination(dir, path string) (*rotatingFile, error) {
 }
 
 // Close closes the log file opened by Initialize and reports what became of it.
-// Closing twice is safe: the second call closes nothing.
+// Closing twice is safe and silent: the second call closes nothing and repeats
+// neither report below, because Close clears the destination it read them from.
 //
 // A failed open is reported here rather than at Initialize, unconditionally and
 // on stderr, because this is the only point that reaches the user in every
@@ -155,6 +157,10 @@ func Close() {
 	case verbose && logPath != "":
 		fmt.Println("wrote logs to " + logPath)
 	}
+	// Clearing the destination is what makes the second call silent as well as
+	// harmless: both reports above are driven by this state, not by the descriptor
+	// already set to nil, so leaving it in place would repeat them verbatim.
+	logPath, initErr = "", nil
 }
 
 // Every is used to log at most once every timeout duration.

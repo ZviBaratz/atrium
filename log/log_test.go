@@ -236,6 +236,48 @@ func TestClose_IsIdempotent(t *testing.T) {
 	}
 }
 
+// Idempotency is about what the second call does, not only about the descriptor
+// it declines to close twice. TestClose_IsIdempotent cannot see this: it opens
+// its log successfully and leaves verbose off, so both calls are silent whether
+// or not Close finishes the lifecycle it started. These two cover the branches
+// that actually print — a user told twice that their diagnostics were dropped
+// would reasonably read it as two separate failures.
+func TestClose_ReportsAFailedOpenOnlyOnce(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores the file mode, so the destination is openable")
+	}
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, fileName), nil, 0o444); err != nil {
+		t.Fatalf("seeding an unwritable log: %v", err)
+	}
+
+	t.Cleanup(SetVerbose(false))
+	SetVerbose(false)
+	t.Cleanup(Initialize(dir, false))
+
+	if got := capture(t, &os.Stderr, Close); !strings.Contains(got, "could not open log file") {
+		t.Fatalf("first Close() stderr = %q, want the failure notice", got)
+	}
+	if got := capture(t, &os.Stderr, Close); got != "" {
+		t.Errorf("second Close() stderr = %q, want nothing — the notice is not repeatable", got)
+	}
+}
+
+func TestClose_PrintsTheVerbosePathOnlyOnce(t *testing.T) {
+	dir := t.TempDir()
+
+	t.Cleanup(SetVerbose(false))
+	t.Cleanup(Initialize(dir, false))
+	SetVerbose(true)
+
+	if got := capture(t, &os.Stdout, Close); !strings.Contains(got, "wrote logs to") {
+		t.Fatalf("first Close() stdout = %q, want the verbose path line", got)
+	}
+	if got := capture(t, &os.Stdout, Close); got != "" {
+		t.Errorf("second Close() stdout = %q, want nothing — the log was already closed", got)
+	}
+}
+
 // SetVerbose returns its own undo, mirroring theme.Set.
 func TestSetVerbose_RestoresPreviousValue(t *testing.T) {
 	t.Cleanup(SetVerbose(false))
