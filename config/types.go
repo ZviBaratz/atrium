@@ -250,6 +250,12 @@ type Config struct {
 	// -day/-latte palettes are tuned for a light-background terminal; the rest
 	// assume a dark one. Glyphs are a separate axis — see NerdFont; the "unicode"
 	// theme differs only by using square borders.
+	//
+	// The reserved value "auto" is not a palette: it follows the terminal's
+	// detected background, rendering "tokyo-night" on a dark one and
+	// "tokyo-night-day" on a light one, and staying dark when nothing answers. A
+	// theme named explicitly NEVER auto-switches — detection is read only for
+	// "auto" — so naming a palette is how you pin one.
 	Theme string `json:"theme,omitempty"`
 	// Splash selects the animated empty-state splash pattern by name (see
 	// SplashVariants for the pinnable names). Empty, "random", or an unknown

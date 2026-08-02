@@ -1,6 +1,7 @@
 package theme
 
 import (
+	"sort"
 	"strings"
 	"time"
 
@@ -9,6 +10,12 @@ import (
 
 // DefaultThemeName is used when the configured theme is empty or unknown.
 const DefaultThemeName = "tokyo-night"
+
+// AutoThemeName is the reserved theme value that follows the terminal's detected
+// background polarity, selecting the default family's dark palette or its light
+// twin. It is deliberately NOT a registry entry: Get must return a concrete
+// palette, and `auto` has none. See compose() in current.go.
+const AutoThemeName = "auto"
 
 // Nerd-Font codepoints, expressed numerically so the source stays ASCII-clean.
 // All are private-use-area glyphs that render at width 1 in a Nerd-Font
@@ -230,11 +237,15 @@ var unicodeFallback = &Theme{
 // registry maps theme names to themes. Adding a theme is one var + one entry.
 //
 // It stays that cheap because nothing counts this map. Names() has exactly one
-// production consumer — ui/overlay/settings_schema.go's theme row, which sorts and
-// returns whatever is here — and every other caller is a test that iterates it or
-// indexes by len. So a new entry inherits the existing guards instead of needing
-// new ones: canonical hex, glyph widths, the settings picker's cycle, and the
-// contrast oracle.
+// production consumer — SelectableNames() below, which sorts it and prepends the
+// reserved AutoThemeName for the settings picker — and every other caller is a test
+// that iterates it or indexes by len. So a new entry inherits the existing guards
+// instead of needing new ones: canonical hex, glyph widths, the settings picker's
+// cycle, and the contrast oracle.
+//
+// That consumer used to be ui/overlay/settings_schema.go's theme row directly, which
+// did its own sorting; #394 Stage E moved both the sort and the vocabulary in here so
+// the picker's list and the theme package's could not drift apart.
 //
 // Deliberately not a count. An earlier draft of this comment said "both Names()
 // consumers", which was already wrong by five when it was written — the same
@@ -263,4 +274,18 @@ func Names() []string {
 		names = append(names, n)
 	}
 	return names
+}
+
+// SelectableNames returns what a user may set `theme` to: AutoThemeName first (it
+// is the recommended value), then every registered theme, sorted.
+//
+// It lives here rather than in the settings overlay so theme vocabulary has one
+// home. Names() deliberately still returns only the registry, because every
+// existing caller that iterates it — the splash's canonical-hex check, the glyph
+// width sweep, the contrast oracle — wants real palettes, and would test `auto`
+// vacuously.
+func SelectableNames() []string {
+	names := Names()
+	sort.Strings(names)
+	return append([]string{AutoThemeName}, names...)
 }

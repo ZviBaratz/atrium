@@ -1,6 +1,10 @@
 package theme
 
-import "math"
+import (
+	"math"
+	"strconv"
+	"strings"
+)
 
 // scheme.go owns the dark/light axis: what makes a palette light, and (from #394
 // Stage E) how a detected terminal background selects one.
@@ -45,4 +49,81 @@ func relLuminanceOf(c Color) float64 {
 // disagreement would show up as a UI tuned for the wrong polarity.
 func IsLight(p Palette) bool {
 	return relLuminanceOf(p.Bg) > 0.35
+}
+
+// Scheme is the detected polarity of the terminal's background.
+//
+// int32 rather than int so it is exactly the width of the atomic that stores it
+// (curScheme, current.go). A narrowing conversion on every Set would be an overflow
+// gosec flags, and silencing that would be silencing it about the one thing the
+// pairing should make impossible.
+type Scheme int32
+
+const (
+	// SchemeUnknown means detection has produced no answer — either it has not run
+	// yet, or nothing answered. It is the zero value on purpose: absence of
+	// evidence resolves to the shipped dark default, which is what makes
+	// introducing detection a no-op for anyone it cannot reach.
+	SchemeUnknown Scheme = iota
+	// SchemeDark means the terminal reported a dark background.
+	SchemeDark
+	// SchemeLight means the terminal reported a light background.
+	SchemeLight
+)
+
+// ResolveScheme runs the detection ladder over its inputs and returns the
+// polarity, or SchemeUnknown when nothing answered.
+//
+// bgIsDark is an OSC 11 answer (nil when the terminal did not reply);
+// colorfgbg is the raw COLORFGBG environment value ("" when unset).
+//
+// Two properties are load-bearing:
+//
+//   - It LATCHES at the caller. "No answer" is SchemeUnknown, never a flip to a
+//     default — a terminal that stays quiet must leave the current scheme alone
+//     rather than be treated as having reported dark. This function reports the
+//     absence; the caller is responsible for not acting on it.
+//
+//   - COLORFGBG can never correct an OSC 11 answer. The variable is inherited by
+//     child processes and is not updated when the terminal's theme changes, so it
+//     is routinely stale. It is a hint for terminals that do not answer OSC 11,
+//     and nothing more.
+func ResolveScheme(bgIsDark *bool, colorfgbg string) Scheme {
+	if bgIsDark != nil {
+		if *bgIsDark {
+			return SchemeDark
+		}
+		return SchemeLight
+	}
+	return schemeFromColorFGBG(colorfgbg)
+}
+
+// schemeFromColorFGBG reads the background half of COLORFGBG, which rxvt and
+// friends set as "fg;bg" (sometimes "fg;bold;bg"). The last field is the
+// background, as an ANSI palette index 0-15; "default" means the terminal
+// declined to say, which is no answer rather than a dark one.
+//
+// Indices 0-6 and 8 are the dark half of the 16-colour palette, 7 and 9-15 the
+// light half. That is the same split every other consumer of this variable uses;
+// it is crude, which is exactly why this rung sits below OSC 11.
+//
+// Written against the convention rather than against a measurement: nothing in the
+// pinned stack reads COLORFGBG (bubbletea, ultraviolet, colorprofile and lipgloss
+// were all searched and none mentions it), and neither terminal available while
+// this was written sets it. A rung nobody could observe answering is a second
+// reason to keep it below one that replies for itself.
+func schemeFromColorFGBG(v string) Scheme {
+	if v == "" {
+		return SchemeUnknown
+	}
+	fields := strings.Split(v, ";")
+	bg := strings.TrimSpace(fields[len(fields)-1])
+	n, err := strconv.Atoi(bg)
+	if err != nil || n < 0 || n > 15 {
+		return SchemeUnknown
+	}
+	if n == 7 || n >= 9 {
+		return SchemeLight
+	}
+	return SchemeDark
 }

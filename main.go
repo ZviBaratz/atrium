@@ -334,7 +334,11 @@ var (
 			"every session) instead of a single recoverable agent. Claude account identities reports\n" +
 			"which login each configured account's config_dir is actually signed in as, checks it\n" +
 			"against that account's expect_account, and flags separate accounts that turn out to share\n" +
-			"one login — the state in which sessions silently bill an account nobody routed them to.",
+			"one login — the state in which sessions silently bill an account nobody routed them to.\n" +
+			"Terminal background detection reports which rung of the light/dark ladder can answer here,\n" +
+			"for anyone whose theme: auto did not adapt: it reads COLORFGBG, and names OSC 11 as the\n" +
+			"rung that outranks it but cannot be probed from a one-shot command — that query needs the\n" +
+			"running TUI, which sends it at startup, on refocus and after a detach.",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			log.Initialize(false)
 			defer log.Close()
@@ -364,6 +368,12 @@ var (
 			// no config/tmux access, so it is safe beside a live TUI and needs no budget.
 			fmt.Println()
 			fmt.Print(doctor.RenderCapacity(doctor.CheckCapacity()))
+
+			// Terminal background detection: a pure read of the environment, so it needs
+			// no budget either. It reports the rungs it can reach and names the one it
+			// cannot — OSC 11 needs the running TUI to send the query and wait.
+			fmt.Println()
+			fmt.Print(doctor.RenderScheme(doctor.CheckScheme(os.Environ())))
 
 			// OOM ranking: on Linux, compares the shared tmux server's oom_score against
 			// each agent pane's so a single kill is shown to shed one recoverable session

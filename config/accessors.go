@@ -4,7 +4,10 @@ package config
 // and a nil/absent field (an older config.json predating the key) and returns the
 // documented default, so callers never branch on config presence.
 
-import "slices"
+import (
+	"slices"
+	"strings"
+)
 
 // ModelIndicator modes (see Config.ModelIndicator).
 const (
@@ -215,6 +218,44 @@ func (c *Config) GetNerdFont() bool {
 		return false
 	}
 	return boolOr(c.NerdFont, false)
+}
+
+// DefaultTheme is the theme a config with no `theme` set resolves to.
+//
+// A constant rather than a read of DefaultConfig(), because the settings schema's
+// row builder reaches these getters and must stay pure — DefaultConfig resolves the
+// OS user to derive branch_prefix. Spelled out rather than imported from ui/theme
+// for the same reason GlyphSet* below are: config's vocabulary is the on-disk one,
+// and ui/theme is deliberately a leaf that no atrium package appears in.
+const DefaultTheme = "tokyo-night"
+
+// GetTheme returns the configured theme name, normalizing empty to DefaultTheme and
+// folding case and surrounding space.
+//
+// Every consumer goes through this rather than reading c.Theme, so "unset" has one
+// meaning. It matters more than the usual accessor: the theme layer resolves the
+// reserved value `auto` specially, and an empty string reaching theme.Set would miss
+// that branch and render the dark default on a light terminal.
+//
+// The case folding is here for the same reason, one step further. ui/theme's Get()
+// already lowercases and trims before indexing the registry, so a hand-edited
+// "Tokyo-Night" has always resolved — but `auto` is NOT a registry entry, and every
+// site that recognizes it compares against the literal. Left unnormalized, "Auto"
+// would be the one value in this field that fails silently in both directions at
+// once: the dark default rendered, and no detection query ever sent.
+//
+// Three sites compare, and that is the argument for doing it here rather than at any
+// of them: compose() in ui/theme/current.go (which reads curName, set from this
+// accessor), and both requestSchemeCmd and applyDetectedScheme in app/scheme.go.
+// Recount rather than trust the number — `git grep -n 'AutoThemeName' -- '*.go'`,
+// which must be git grep because `-- '<glob>'` is a pathspec and plain grep exits 2
+// having searched nothing. Normalizing at the single accessor all three reach keeps
+// it one fact instead of three string comparisons that have to remember to agree.
+func (c *Config) GetTheme() string {
+	if c == nil || strings.TrimSpace(c.Theme) == "" {
+		return DefaultTheme
+	}
+	return strings.ToLower(strings.TrimSpace(c.Theme))
 }
 
 // GlyphSet fidelity rungs (see Config.GlyphSet). These mirror the theme package's

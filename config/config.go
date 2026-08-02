@@ -89,7 +89,7 @@ func DefaultConfig() *Config {
 		DefaultProgram:      defaultProgram,
 		AutoYes:             false,
 		DaemonPollInterval:  DefaultDaemonPollIntervalMs,
-		Theme:               "tokyo-night",
+		Theme:               DefaultTheme,
 		SessionContextBar:   &sessionContextBar,
 		HintBar:             &hintBar,
 		Mouse:               &mouse,
