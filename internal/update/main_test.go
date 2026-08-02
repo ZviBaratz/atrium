@@ -15,7 +15,8 @@ func TestMain(m *testing.M) {
 	if err == nil {
 		_ = os.Setenv("HOME", tmpHome)
 	}
-	log.Initialize(false)
+	// The log lands in the sandboxed HOME rather than the developer's real one.
+	log.Initialize(tmpHome, false)
 	code := m.Run()
 	log.Close()
 	if tmpHome != "" {

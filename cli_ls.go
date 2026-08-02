@@ -31,7 +31,7 @@ var (
 			"which is the age of the worktree.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			log.Initialize(false)
+			log.Initialize(logDir(), false)
 			defer log.Close()
 			return runLs(cmd.OutOrStdout(), lsJSONFlag)
 		},

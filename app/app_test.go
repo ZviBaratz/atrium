@@ -28,8 +28,16 @@ import (
 // or overwrite the real Atrium state/config — config.GetConfigDir resolves
 // under $HOME, and LoadConfig writes a default config.json on first run.
 func TestMain(m *testing.M) {
-	// Initialize the logger before any tests run
-	log.Initialize(false)
+	// Initialize the logger before any tests run, into a throwaway directory of
+	// its own: this runs before HOME is sandboxed, so any other destination would
+	// write to the developer's real log. os.Exit below skips defers, hence the
+	// explicit teardown after m.Run.
+	logDir, err := os.MkdirTemp("", "atrium-app-test-log-")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "could not create a log directory for the test run: %v\n", err)
+		os.Exit(1)
+	}
+	log.Initialize(logDir, false)
 
 	// Pin the new-session tmux pre-flight to "present" for the whole app suite so
 	// create-form tests don't depend on whether the CI host has tmux on PATH. The
@@ -44,6 +52,7 @@ func TestMain(m *testing.M) {
 	exitCode := testutil.SandboxHomeMain(m)
 
 	log.Close()
+	_ = os.RemoveAll(logDir)
 	os.Exit(exitCode)
 }
 

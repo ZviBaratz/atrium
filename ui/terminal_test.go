@@ -144,8 +144,7 @@ func showTerminal(t *testing.T, tp *TerminalPane, inst *session.Instance) {
 }
 
 func TestTerminalUpdateContent(t *testing.T) {
-	log.Initialize(false)
-	defer log.Close()
+	t.Cleanup(log.Initialize(t.TempDir(), false))
 
 	expectedContent := "$ whoami\nuser\n$ ls\nfile1.txt  file2.txt"
 
@@ -176,8 +175,7 @@ func TestTerminalUpdateContent(t *testing.T) {
 }
 
 func TestTerminalFallbackStates(t *testing.T) {
-	log.Initialize(false)
-	defer log.Close()
+	t.Cleanup(log.Initialize(t.TempDir(), false))
 
 	tp := NewTerminalPane(context.Background())
 	tp.SetSize(80, 30)
@@ -240,8 +238,7 @@ func TestTerminalFallbackStates(t *testing.T) {
 // banner rendered height-7 lines tall and sat high. This test fails on that old
 // output and passes once the fallback centers via centerInBox.
 func TestTerminalFallbackCentered(t *testing.T) {
-	log.Initialize(false)
-	defer log.Close()
+	t.Cleanup(log.Initialize(t.TempDir(), false))
 
 	// Width below the splash floor (minSplashW) so the nil idle state renders the
 	// plain centered fallback this test locks — the animated splash is covered by
@@ -279,8 +276,7 @@ func TestTerminalFallbackCentered(t *testing.T) {
 // cannot render at all there. Fixing one pane and not the other would have left
 // the same misrender one tab over on the same paused session.
 func TestTerminalFallbackReadableOnNarrowPane(t *testing.T) {
-	log.Initialize(false)
-	defer log.Close()
+	t.Cleanup(log.Initialize(t.TempDir(), false))
 
 	tp := NewTerminalPane(context.Background())
 	tp.SetSize(28, 13)
@@ -305,8 +301,7 @@ func TestTerminalFallbackReadableOnNarrowPane(t *testing.T) {
 // fallbackBlock) — so the below-floor case asserts the field is gone rather than
 // that the wordmark is present.
 func TestTerminalSplashParity(t *testing.T) {
-	log.Initialize(false)
-	defer log.Close()
+	t.Cleanup(log.Initialize(t.TempDir(), false))
 
 	tp := NewTerminalPane(context.Background())
 	tp.SetSize(80, 30)
@@ -340,8 +335,7 @@ func TestTerminalSplashParity(t *testing.T) {
 // and nothing in TestTerminalSplashParity would notice, since it never turns the
 // setting off.
 func TestTerminalSplashDisabled(t *testing.T) {
-	log.Initialize(false)
-	defer log.Close()
+	t.Cleanup(log.Initialize(t.TempDir(), false))
 
 	disableSplash(t)
 
@@ -358,8 +352,7 @@ func TestTerminalSplashDisabled(t *testing.T) {
 }
 
 func TestTerminalSessionCaching(t *testing.T) {
-	log.Initialize(false)
-	defer log.Close()
+	t.Cleanup(log.Initialize(t.TempDir(), false))
 
 	tp := NewTerminalPane(context.Background())
 	tp.SetSize(80, 30)
@@ -421,8 +414,7 @@ func TestTerminalSessionCaching(t *testing.T) {
 }
 
 func TestTerminalScrolling(t *testing.T) {
-	log.Initialize(false)
-	defer log.Close()
+	t.Cleanup(log.Initialize(t.TempDir(), false))
 
 	// Create content with many lines for scrolling
 	const numLines = 100
@@ -484,8 +476,7 @@ func TestTerminalScrolling(t *testing.T) {
 // mode (the next UpdateContent tick repaints the live shell); a wheel-down anywhere
 // above the bottom must scroll and stay in the mode.
 func TestTerminalScrollDownAtBottomExitsToLive(t *testing.T) {
-	log.Initialize(false)
-	defer log.Close()
+	t.Cleanup(log.Initialize(t.TempDir(), false))
 
 	// More lines than the 30-row viewport so "off the bottom" is reachable.
 	const numLines = 100
@@ -537,8 +528,7 @@ func TestTerminalScrollDownAtBottomExitsToLive(t *testing.T) {
 }
 
 func TestTerminalScrollSnapshotUnpinsOnInstanceSwitch(t *testing.T) {
-	log.Initialize(false)
-	defer log.Close()
+	t.Cleanup(log.Initialize(t.TempDir(), false))
 
 	contentA := "shell A scrollback"
 	contentB := "shell B live output"
@@ -573,8 +563,7 @@ func TestTerminalScrollSnapshotUnpinsOnInstanceSwitch(t *testing.T) {
 // dropped when the displayed instance can no longer back it (paused here) — otherwise
 // the frozen capture outranks the "Session is paused" message.
 func TestTerminalScrollSnapshotDropsWhenInstancePauses(t *testing.T) {
-	log.Initialize(false)
-	defer log.Close()
+	t.Cleanup(log.Initialize(t.TempDir(), false))
 
 	content := "shell scrollback"
 	instance := makeStartedInstance(t, "scroll-pause")
@@ -600,8 +589,7 @@ func TestTerminalScrollSnapshotDropsWhenInstancePauses(t *testing.T) {
 // Drives a real tmux server on the dedicated socket (self-skips without tmux).
 func TestEnsureSessionReapsLegacyTermSession(t *testing.T) {
 	testutil.RequireTmux(t)
-	log.Initialize(false)
-	defer log.Close()
+	t.Cleanup(log.Initialize(t.TempDir(), false))
 
 	instance := makeStartedInstance(t, "legacy-reap")
 	defer func() { _ = instance.Kill() }()
@@ -629,8 +617,7 @@ func TestEnsureSessionReapsLegacyTermSession(t *testing.T) {
 }
 
 func TestTerminalCloseForInstance(t *testing.T) {
-	log.Initialize(false)
-	defer log.Close()
+	t.Cleanup(log.Initialize(t.TempDir(), false))
 
 	tp := NewTerminalPane(context.Background())
 	tp.SetSize(80, 30)

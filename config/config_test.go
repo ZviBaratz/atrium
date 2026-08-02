@@ -24,13 +24,22 @@ import (
 // not sandboxed, so LoadConfig's seeded fallbacks would otherwise pick up
 // whatever agent CLIs this machine happens to have. Detection tests install
 // their own stubs (see stubDetect).
+// The log gets a throwaway directory of its own because this runs before HOME is
+// sandboxed, so any other destination would write to the developer's real log.
+// os.Exit below skips defers, hence the explicit teardown.
 func TestMain(m *testing.M) {
-	log.Initialize(false)
+	logDir, err := os.MkdirTemp("", "atrium-config-test-log-")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "could not create a log directory for the test run: %v\n", err)
+		os.Exit(1)
+	}
+	log.Initialize(logDir, false)
 	detectAgentCommand = func(bin string) (string, error) {
 		return "", fmt.Errorf("hermetic tests: %s not detectable", bin)
 	}
 	code := testutil.SandboxHomeMain(m)
 	log.Close()
+	_ = os.RemoveAll(logDir)
 	os.Exit(code)
 }
 

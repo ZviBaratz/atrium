@@ -32,8 +32,10 @@ func TestParseSeconds(t *testing.T) {
 	}
 }
 
-// Profiles land in the OS temp directory, beside atrium.log — never in the data
-// dir, which a live TUI owns and `atrium reset` does not clear.
+// Profiles land in the OS temp directory — never in the data dir, which a live
+// TUI owns and `atrium reset` does not clear. The log moved into the data dir in
+// #566 and these did not follow it: the log is capped and rolls itself over,
+// while nothing prunes a profile.
 func TestDirIsTheTempDirNotTheDataDir(t *testing.T) {
 	if got := Dir(); got != os.TempDir() {
 		t.Errorf("Dir() = %q, want %q", got, os.TempDir())

@@ -36,7 +36,7 @@ var (
 			"With no message argument, or with \"-\", the prompt is read from stdin.",
 		Args: cobra.RangeArgs(1, 2),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			log.Initialize(false)
+			log.Initialize(logDir(), false)
 			defer log.Close()
 
 			text, err := messageText(args, cmd.InOrStdin())

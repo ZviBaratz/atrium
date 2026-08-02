@@ -76,7 +76,7 @@ var (
 			// event handled by Bubble Tea, not a signal.)
 			ctx, stop := signal.NotifyContext(context.Background(), quitSignals...)
 			defer stop()
-			log.Initialize(daemonFlag)
+			log.Initialize(logDir(), daemonFlag)
 			defer log.Close()
 
 			// Arm the profiling trigger for both the TUI and the daemon, after the log
@@ -169,9 +169,9 @@ var (
 
 	debugCmd = &cobra.Command{
 		Use:   "debug",
-		Short: "Print debug information like config paths",
+		Short: "Print debug information like config and log paths",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			log.Initialize(false)
+			log.Initialize(logDir(), false)
 			defer log.Close()
 
 			cfg := config.LoadConfig()
@@ -182,7 +182,18 @@ var (
 			}
 			configJSON, _ := json.MarshalIndent(cfg, "", "  ")
 
-			fmt.Printf("Config: %s\n%s\n", filepath.Join(configDir, config.ConfigFileName), configJSON)
+			out := cmd.OutOrStdout()
+			_, _ = fmt.Fprintf(out, "Config: %s\n", filepath.Join(configDir, config.ConfigFileName))
+			// The log path is the answer to "where do I look?", and since it moved
+			// out of the temp dir this is the only place that reports it on demand.
+			// Both paths go above the config JSON so neither is buried under it.
+			logPath, logErr := log.Destination()
+			if logErr != nil {
+				_, _ = fmt.Fprintf(out, "Log: %s (unavailable: %v)\n", logPath, logErr)
+			} else {
+				_, _ = fmt.Fprintf(out, "Log: %s\n", logPath)
+			}
+			_, _ = fmt.Fprintf(out, "%s\n", configJSON)
 
 			return nil
 		},
@@ -200,7 +211,7 @@ var (
 			"profile for each newly found one. Existing profiles and the default program are never\n" +
 			"modified, so hand-edited entries always survive a re-detect.",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			log.Initialize(false)
+			log.Initialize(logDir(), false)
 			defer log.Close()
 
 			cfg := config.LoadConfig()
@@ -239,7 +250,7 @@ var (
 			"verifies its checksum, and atomically replaces the current binary. Running\n" +
 			"sessions are not disturbed; the new version takes effect on the next launch.",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			log.Initialize(false)
+			log.Initialize(logDir(), false)
 			defer log.Close()
 
 			if !update.IsUpdatableVersion(version) {
@@ -340,7 +351,7 @@ var (
 			"rung that outranks it but cannot be probed from a one-shot command — that query needs the\n" +
 			"running TUI, which sends it at startup, on refocus and after a detach.",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			log.Initialize(false)
+			log.Initialize(logDir(), false)
 			defer log.Close()
 
 			// Give each section its own probe budget off a fresh context: the core-dep

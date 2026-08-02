@@ -27,7 +27,7 @@ var (
 			"shows which are running.",
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			log.Initialize(false)
+			log.Initialize(logDir(), false)
 			defer log.Close()
 			// One-shot CLI command; a plain Background context is enough (the
 			// per-operation timeouts still bound every subprocess).
