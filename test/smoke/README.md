@@ -102,10 +102,12 @@ Two real gotchas surfaced and are handled, worth knowing for any future tape:
 - **Speed**: ~8 s for a single full run (build + seed + tape + extract + compare);
   ~6 s of that is the tape's deliberate `Sleep`/`Wait` budget. RUNS=3 ≈ 20 s.
   Acceptable for a dedicated job, not for the inner loop.
-- **Dependencies**: a CI job needs `vhs`, `ttyd`, `ffmpeg`, `tmux`, `jq`. Today's
-  CI installs **none** of these and doesn't even install tmux (it `-skip`s the one
-  real-tmux test). [`charmbracelet/vhs-action`](https://github.com/charmbracelet/vhs-action)
-  bundles vhs+ttyd+ffmpeg; tmux+jq are a one-line `apt-get`.
+- **Dependencies**: a CI job needs `vhs`, `ttyd`, `ffmpeg`, `tmux`, `jq`. Today's CI
+  installs tmux (the `test`, `race` and `tmux-floor` jobs all do, under
+  `ATRIUM_CI_REQUIRE_TMUX=1`) but none of the rest, and it `-skip`s the one
+  environment-sensitive real-tmux test.
+  [`charmbracelet/vhs-action`](https://github.com/charmbracelet/vhs-action)
+  bundles vhs+ttyd+ffmpeg; jq is a one-line `apt-get`.
 - **Headless**: vhs runs headless via ttyd (no X / browser) — confirmed locally.
 
 ### 4. Recommendation: **adopt vhs for the e2e layer, local-first**

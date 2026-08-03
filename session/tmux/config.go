@@ -116,6 +116,18 @@ func renderManagedConfig(contextBar bool) ([]byte, error) {
 // file is swapped by rename, so a session launching concurrently reads either the old
 // conf or the new one, never a half-written one.
 func Init(override string, contextBar bool) error {
+	// Record whether tmux is too old for `new-session -e` (see MinVersion). Done here
+	// because Init already runs once at startup, off the update thread, and already
+	// shells out; Available then stays a pure atomic read. The verdict is *stored, never
+	// returned*: main.go only logs Init's error, but app_layout.go routes it to
+	// handleError, so returning too-old here would fire a modal on an unrelated
+	// session_context_bar toggle.
+	//
+	// It must not short-circuit the rest of Init either. The managed conf is still
+	// written and validated on a too-old tmux — the two failures are independent, and
+	// skipping the conf would disable titles/mouse/clipboard on exactly the host whose
+	// log is already confusing enough.
+	probeVersionOnce()
 	configOverridePath.Store(&override)
 	managedConfigInvalid.Store(false)
 	if override != "" {
@@ -176,6 +188,13 @@ func writeFileAtomic(path string, content []byte) error {
 // it returns nil so a usable config is never disabled over an unrelated hiccup. The
 // check runs on a dedicated "-precheck" socket so it never touches the live server or
 // its sessions.
+//
+// The probe deliberately omits -e: it is checking the *config*, not the tmux version, so
+// on a tmux below MinVersion it succeeds and -f is still passed — and only the real
+// `new-session -e` (tmux.go) fails. This asymmetry is intentional. The managed conf is
+// cosmetic and recoverable, so it fails open (managedConfigInvalid, above); -e is
+// load-bearing and unrecoverable, so the version floor fails closed in Available.
+// A passing precheck is therefore not evidence that a real session start will work.
 func validateConfig(path string) error {
 	if _, err := exec.LookPath("tmux"); err != nil {
 		// No tmux on PATH: the real session start fails identically with or without

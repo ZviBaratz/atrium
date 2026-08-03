@@ -64,8 +64,12 @@ checkouts) report a dev version and never self-update.
 
 ### Prerequisites
 
-- [tmux](https://github.com/tmux/tmux/wiki/Installing)
-- [gh](https://cli.github.com/)
+- [tmux](https://github.com/tmux/tmux/wiki/Installing) 3.2 or newer — Atrium starts
+  every session with `tmux new-session -e`, which older versions reject
+- [git](https://git-scm.com/downloads)
+- [gh](https://cli.github.com/) — optional, for pushing branches and opening PRs
+
+Run `atrium doctor` to check them.
 
 ### Usage
 
@@ -1055,8 +1059,13 @@ Atrium does not.
 
 #### Failed to start new session
 
-If you get an error like `failed to start new session: timed out waiting for tmux session`, update the
-underlying program (ex. `claude`) to the latest version.
+If you get an error like `failed to start new session: timed out waiting for tmux session`,
+check tmux first: Atrium starts every session with `tmux new-session -e`, and a tmux older
+than 3.2 rejects that flag inside the pty, so the only symptom is this timeout. Run
+`atrium doctor` — it reports a too-old tmux explicitly. (Creating a session is refused up
+front with a clearer message; resuming an existing one still reaches this timeout.)
+
+If tmux is fine, update the underlying program (ex. `claude`) to the latest version.
 
 #### Atrium is using a lot of CPU
 

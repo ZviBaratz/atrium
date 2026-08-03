@@ -42,6 +42,11 @@ func TestMain(m *testing.M) {
 	// Pin the new-session tmux pre-flight to "present" for the whole app suite so
 	// create-form tests don't depend on whether the CI host has tmux on PATH. The
 	// guard's own test overrides this seam to simulate a missing tmux.
+	//
+	// Record what it was bound to first: this override is process-wide and permanent,
+	// so it is the only moment in the suite at which the production wiring is still
+	// observable (see TestTmuxAvailableIsWiredToTheRealProbe).
+	productionTmuxAvailable = tmuxAvailable
 	tmuxAvailable = func() error { return nil }
 
 	// Pin the splash variant: with no override the splash rotates per launch

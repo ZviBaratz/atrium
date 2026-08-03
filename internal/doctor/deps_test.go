@@ -74,8 +74,8 @@ func TestCheckDepsClassifies(t *testing.T) {
 		if !strings.Contains(d.Hint, "brew install tmux") {
 			t.Errorf("tmux Hint = %q, want a brew hint", d.Hint)
 		}
-		if !MissingRequired(got) {
-			t.Error("MissingRequired = false, want true when tmux missing")
+		if !RequiredUnmet(got) {
+			t.Error("RequiredUnmet = false, want true when tmux missing")
 		}
 	})
 
@@ -96,8 +96,8 @@ func TestCheckDepsClassifies(t *testing.T) {
 			t.Errorf("gh Hint = %q, must not advise a reinstall when gh is present", d.Hint)
 		}
 		// gh is optional, so an unauthenticated gh must not fail doctor.
-		if MissingRequired(got) {
-			t.Error("MissingRequired = true, want false when only gh is unauthenticated")
+		if RequiredUnmet(got) {
+			t.Error("RequiredUnmet = true, want false when only gh is unauthenticated")
 		}
 	})
 
@@ -111,8 +111,8 @@ func TestCheckDepsClassifies(t *testing.T) {
 			t.Fatalf("tmux State = %v, want DepPresentUnknown", d.State)
 		}
 		// Present-but-unknown is not missing, so it must not fail doctor.
-		if MissingRequired(got) {
-			t.Error("MissingRequired = true, want false when tmux is present with an odd version")
+		if RequiredUnmet(got) {
+			t.Error("RequiredUnmet = true, want false when tmux is present with an odd version")
 		}
 	})
 
@@ -148,25 +148,9 @@ func TestInstallHint(t *testing.T) {
 	}
 }
 
-// installHint must not tell a user to reinstall a binary that is already present:
-// an unauthenticated gh only needs `gh auth login`, and a present-but-unparseable
-// binary has nothing to install.
-func TestInstallHint_PresentStatesDoNotAdviseReinstall(t *testing.T) {
-	gh := depSpec{name: "gh", bin: "gh"}
-	tmux := depSpec{name: "tmux", bin: "tmux"}
-
-	unauth := installHint("darwin", gh, DepPresentUnauth)
-	if strings.Contains(unauth, "install:") {
-		t.Errorf("unauthenticated gh hint advises a reinstall: %q", unauth)
-	}
-	if !strings.Contains(unauth, "gh auth login") {
-		t.Errorf("unauthenticated gh hint = %q, want it to point at gh auth login", unauth)
-	}
-
-	if unknown := installHint("linux", tmux, DepPresentUnknown); strings.Contains(unknown, "install:") {
-		t.Errorf("present-but-unknown tmux hint advises a reinstall: %q", unknown)
-	}
-}
+// The "never advise a reinstall for a present binary" guard now lives in
+// deps_floor_test.go, table-driven over every present state — this hand-enumerated
+// version could not see DepTooOld, which falls through to the install branch.
 
 func TestRenderDeps(t *testing.T) {
 	out := RenderDeps([]DepResult{
@@ -220,7 +204,7 @@ func TestRenderDeps_MissingRowNotContradictory(t *testing.T) {
 // That path is distinct from ErrNotInstalled (binary absent) and from an unparseable
 // version output (successful exit, garbage output): the probe itself errors, but the
 // binary IS present — so the result is DepPresentUnknown, never DepMissing, and
-// MissingRequired stays false.
+// RequiredUnmet stays false.
 //
 // tmux's canned output is parseable and paired with the error on purpose: an
 // erroring probe that returns "" also lands on DepPresentUnknown via the default
@@ -246,18 +230,23 @@ func TestCheckDeps_ProbeErrorIsDepPresentUnknown(t *testing.T) {
 	if d.Version != "" {
 		t.Errorf("tmux Version = %q, want empty: output from a failed probe must not be reported", d.Version)
 	}
-	if MissingRequired(got) {
-		t.Error("MissingRequired = true, want false when tmux probe errors (binary present, just unreportable)")
+	if RequiredUnmet(got) {
+		t.Error("RequiredUnmet = true, want false when tmux probe errors (binary present, just unreportable)")
 	}
 	if strings.Contains(d.Hint, "install:") {
 		t.Errorf("tmux Hint = %q, must not advise reinstall for a present binary", d.Hint)
 	}
 }
 
-// TestRenderDeps_PresentUnknownVersion pins the DepState.label() default case
-// ("⚠ unknown version"), reached when a binary is on PATH but its version
-// is unreadable. The label is the user-visible signal that the tool exists
-// but its version could not be parsed.
+// TestRenderDeps_PresentUnknownVersion pins DepPresentUnknown's rendered label
+// ("⚠ unknown version"), reached when a binary is on PATH but its version is
+// unreadable. The label is the user-visible signal that the tool exists but its
+// version could not be parsed.
+//
+// It used to describe this as the label() *default* case. That stopped being true when
+// DepTooOld arrived and every state got an explicit case — the default now returns a
+// deliberately distinct sentinel that no real state maps to (see
+// TestDepStateLabels_AllStatesExplicit).
 func TestRenderDeps_PresentUnknownVersion(t *testing.T) {
 	out := RenderDeps([]DepResult{
 		{Name: "tmux", Kind: DepRequired, State: DepPresentUnknown},
