@@ -66,6 +66,20 @@ var sandboxTmuxRoot string
 // and leaves sandboxTmuxRoot empty. Neither path panics: that keeps every tmux-free
 // package running, while requireSandboxedTmux still fails any test that would have
 // driven a real tmux server unisolated.
+//
+// Nothing reaps a root whose run never reached the teardown — a signal, a -timeout
+// abort — and for a run that had started a server that costs more than the directory:
+// ui's terminal panes run $SHELL (ui/terminal.go), which never exits, and every -L
+// lookup (`tmux ls`, and `atrium reset` via CleanupSessions) resolves against the
+// *current* TMUX_TMPDIR rather than that dead run's, so the survivor is invisible to
+// both. Reap it by path instead:
+//
+//	for s in /tmp/atrium-tmux-*/tmux-*/*; do tmux -S "$s" kill-server; done
+//
+// Doing that automatically is what this package tried and reverted: the glob that
+// finds those roots is one wrong prefix away from /tmp/tmux-<uid>/atrium, and that
+// prefix going missing during a mutation test is what killed the developer's live
+// fleet. Reaping by hand is rare; a sweep is a standing hazard.
 func installSandboxTmuxTmpdir() func() {
 	root, err := os.MkdirTemp(tmuxRootParent, tmuxRootPrefix)
 	if err != nil {

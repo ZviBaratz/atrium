@@ -25,9 +25,11 @@ import (
 // (testing.(*M).startAlarm) and so unwinds that stack rather than TestMain's. Cleaning
 // up after those would mean a sweep — a recursive delete over a glob of /tmp — and one
 // wrong prefix in exactly that took this developer's live tmux socket with it, which is
-// why there isn't one. A stray directory is the accepted cost. This guard covers the
-// remaining kind, the one that is purely a choice, which was also all of the leak that
-// was ever measured here.
+// why there isn't one. What that accepts is a stray directory and, when the crashed run
+// had started a real tmux server, the live server under it — see
+// installSandboxTmuxTmpdir for why that one has to be reaped by hand. This guard covers
+// the remaining kind, the one that is purely a choice, which was also all of the leak
+// that was ever measured here.
 //
 // The fix at the call site is always `return`: a re-exec child that returns still
 // exits 0, still prints what it printed, and lets TestMain finish. A child that
