@@ -37,4 +37,13 @@ func TestRealSessionsBindTheSandboxSocket(t *testing.T) {
 			"shared socket dir, where the developer's live Atrium fleet lives (#581)",
 			socketName(), root)
 	}
+	// The socket file alone is not this test's property: every other real-tmux test in
+	// the package binds the same name, so under -shuffle=on one of theirs may already
+	// have created it. has-session goes through tmuxCommand's `-L socketName()` too,
+	// so a session found there is a session on the socket just located under root.
+	if !session.DoesSessionExist() {
+		t.Fatalf("session %q is not on socket %q: the socket under the sandbox root belongs "+
+			"to some other session, so this proves nothing about where NewSession/Start landed",
+			name, socketName())
+	}
 }

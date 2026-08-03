@@ -87,11 +87,13 @@ func TestApplyBarStyle_NoOpsUnderAConfigOverride(t *testing.T) {
 // goroutine while session launches and the 500ms metadata sweep read the same state
 // through tmuxConfigPath. Fails under -race if either global loses its atomic.
 //
-// Init reaches real tmux even though nothing here says so: validateConfig starts a
-// `-precheck` server (config.go:187) on every call, so this drives eight of them.
-// It needs no RequireTmux — validateConfig no-ops when tmux is absent — but it is a
-// real-tmux site, and the sandbox TMUX_TMPDIR is what keeps those probe sockets out
-// of the shared socket dir, where they used to pile up next to the live one (#581).
+// Init reaches real tmux even though nothing here says so: every call runs
+// validateConfig, which starts a probe server and kills it again (config.go:187), so
+// the eight Init calls below drive eight new-session/kill-server pairs. They share
+// one socket name — socketName()+"-precheck" — rather than taking eight of their
+// own. It needs no RequireTmux — validateConfig no-ops when tmux is absent — but it
+// is a real-tmux site, and the sandbox TMUX_TMPDIR is what keeps that probe socket
+// out of the shared socket dir, where it used to sit next to the live one (#581).
 func TestInitAndTmuxConfigPath_AreRaceFree(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	restoreOverride(t, "")

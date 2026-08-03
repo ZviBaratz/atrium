@@ -2,6 +2,8 @@ package testutil
 
 import (
 	"context"
+	"errors"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -30,15 +32,26 @@ const (
 	// tmuxRootPIDFile records which process owns a root, so a later run can tell an
 	// orphan from a sibling package's live root.
 	tmuxRootPIDFile = "owner.pid"
-	// tmuxRootGrace is how long a root is presumed live regardless of its marker.
-	// It covers the window between MkdirTemp returning and the marker being
-	// written, during which a concurrently starting package must not mistake a
-	// brand-new root for an orphan. `go test ./...` runs package binaries in
-	// parallel, so that window is genuinely raced.
+	// tmuxRootGrace is how long a root with no owner marker is presumed live. It
+	// covers the window between MkdirTemp returning and the marker being written,
+	// during which a concurrently starting package must not mistake a brand-new root
+	// for an orphan. `go test ./...` runs package binaries in parallel, so that
+	// window is genuinely raced. A root that *has* a marker is judged by it alone —
+	// see tmuxRootIsStale for why age must not override one.
 	tmuxRootGrace = 5 * time.Minute
 	// tmuxKillTimeout bounds one teardown `kill-server`, so a wedged tmux server
 	// cannot hang the test binary's exit.
 	tmuxKillTimeout = 5 * time.Second
+	// tmuxDialTimeout bounds the liveness probe that decides whether a socket file
+	// still has a server behind it. A connect to a local unix socket either lands
+	// or is refused immediately; the timeout only covers a full listen backlog.
+	tmuxDialTimeout = time.Second
+	// tmuxReapTimeout is how long a killed server is given to close its socket before
+	// it counts as one that outlasted the kill. Only a server that is genuinely stuck
+	// spends it: a healthy one is gone in a poll or two.
+	tmuxReapTimeout = 2 * time.Second
+	// tmuxReapPoll is the gap between liveness probes while waiting out tmuxReapTimeout.
+	tmuxReapPoll = 10 * time.Millisecond
 )
 
 // sandboxTmuxRoot is the private TMUX_TMPDIR that SandboxHomeMain mints for this
@@ -60,18 +73,23 @@ var sandboxTmuxRoot string
 // that at somewhere short is not an option either. /tmp is where tmux would have
 // put the socket anyway; this only makes the directory unique and removable.
 //
-// If /tmp is unusable — Windows, or a host with no writable /tmp — it installs
-// nothing and leaves sandboxTmuxRoot empty. That is deliberately not a panic: it
-// keeps every tmux-free package running, while requireSandboxedTmux still fails
-// any test that would have driven a real tmux server unisolated.
+// If the sandbox cannot be installed — /tmp unusable on Windows or a host with no
+// writable one, or the TMUX_TMPDIR assignment itself refused — it installs nothing
+// and leaves sandboxTmuxRoot empty. Neither path panics: that keeps every tmux-free
+// package running, while requireSandboxedTmux still fails any test that would have
+// driven a real tmux server unisolated.
 func installSandboxTmuxTmpdir() func() {
 	root, err := os.MkdirTemp(tmuxRootParent, tmuxRootPrefix)
 	if err != nil {
 		return func() {}
 	}
 	if err := os.Setenv("TMUX_TMPDIR", root); err != nil {
+		// Not a panic, for the reason SandboxHomeMain documents: an uninstallable
+		// socket sandbox must leave sandboxTmuxRoot empty so requireSandboxedTmux
+		// fails exactly the tests that needed it, rather than taking the whole
+		// package's run down with it.
 		_ = os.RemoveAll(root)
-		panic("testutil: failed to set sandbox TMUX_TMPDIR: " + err.Error())
+		return func() {}
 	}
 	_ = os.WriteFile(filepath.Join(root, tmuxRootPIDFile),
 		[]byte(strconv.Itoa(os.Getpid())), 0o600)
@@ -89,15 +107,20 @@ func installSandboxTmuxTmpdir() func() {
 	sweepStaleTmuxRoots(root)
 
 	return func() {
-		// Kill first, empty second. A TMUX_TMPDIR root removed while its server
-		// still lives produces a server no tooling can reach — the socket it is
-		// listening on no longer has a path (#547).
-		killTmuxServers(root)
+		// Kill first, empty second, and only empty when the kill is confirmed. A
+		// TMUX_TMPDIR root emptied while a server still lives produces a server no
+		// tooling can reach — the socket it is listening on no longer has a path
+		// (#547) — so a server that outlasted the kill keeps its socket, and the next
+		// run's sweep gets another attempt at it.
+		if !killTmuxServers(root) {
+			return
+		}
 		// The root itself outlives the contents on purpose: TMUX_TMPDIR still names
 		// it, and tmux reads an empty *or missing* TMUX_TMPDIR as /tmp. Deleting the
 		// directory here would leave every later `-L` call in this process — a stray
 		// goroutine, a helper in the caller's TestMain — pointed at the developer's
-		// live socket. The next run's sweep removes the empty shell.
+		// live socket. The next run's sweep removes the empty shell once it ages past
+		// tmuxRootGrace.
 		removeContents(root)
 	}
 }
@@ -124,25 +147,38 @@ func sweepStaleTmuxRoots(self string) {
 		if root == self || !tmuxRootIsStale(root) {
 			continue
 		}
-		killTmuxServers(root)
+		// Same rule as the teardown: a root whose server survived the kill keeps its
+		// socket, because removing the directory out from under a live server is the
+		// unreachable orphan (#547), not the cure for it.
+		if !killTmuxServers(root) {
+			continue
+		}
 		_ = os.RemoveAll(root)
 	}
 }
 
-// tmuxRootIsStale reports whether root belongs to a process that is gone. It
-// answers "no" for anything younger than tmuxRootGrace whatever its marker says,
-// which is what makes the sweep safe to run while sibling package binaries are
-// starting up.
+// tmuxRootIsStale reports whether root belongs to a process that is gone.
+//
+// The owner marker is consulted first and, when it is there, it is the whole
+// answer: a root naming a dead pid is stale however recently it was touched. Age is
+// the fallback for a root with no marker, which is the only state the grace window
+// was ever for — the sliver between MkdirTemp returning and the marker landing.
+// Gating on age first instead would make the grace mean something else entirely,
+// because the teardown's own removeContents bumps the root's mtime on the way out:
+// a crashed run's root, holding the immortal $SHELL server this sweep exists to
+// reap, would go unreaped for another tmuxRootGrace after every attempt.
 func tmuxRootIsStale(root string) bool {
 	info, err := os.Stat(root)
-	if err != nil || !info.IsDir() || time.Since(info.ModTime()) < tmuxRootGrace {
+	if err != nil || !info.IsDir() {
 		return false
 	}
 	raw, err := os.ReadFile(filepath.Join(root, tmuxRootPIDFile))
 	if err != nil {
-		// Older than the grace window with no owner recorded: either a teardown
-		// already emptied it, or the marker never got written.
-		return true
+		// No owner recorded: either a teardown already emptied it, or the marker never
+		// got written — but it is also how a root a sibling package binary created a
+		// microsecond ago looks, so only age separates them. `go test ./...` runs those
+		// binaries in parallel, so that window is genuinely raced.
+		return time.Since(info.ModTime()) >= tmuxRootGrace
 	}
 	pid, err := strconv.Atoi(strings.TrimSpace(string(raw)))
 	if err != nil || pid <= 0 {
@@ -153,12 +189,17 @@ func tmuxRootIsStale(root string) bool {
 
 // processAlive reports whether pid names a running process. Signal 0 performs the
 // permission and existence checks without delivering anything.
+//
+// EPERM counts as alive, not dead: it means the process is there but owned by
+// another user. Reading it as "gone" would let this user's sweep decide another
+// user's live root is an orphan to kill and delete.
 func processAlive(pid int) bool {
 	proc, err := os.FindProcess(pid)
 	if err != nil {
 		return false
 	}
-	return proc.Signal(syscall.Signal(0)) == nil
+	err = proc.Signal(syscall.Signal(0))
+	return err == nil || errors.Is(err, syscall.EPERM)
 }
 
 // TmuxRoot returns the private tmux socket directory this test binary's sandbox
@@ -168,6 +209,18 @@ func TmuxRoot(t *testing.T) string {
 	t.Helper()
 	requireSandboxedTmux(t)
 	return sandboxTmuxRoot
+}
+
+// RequireSandboxedTmux fails the test unless this package's tmux socket directory
+// is sandboxed. RequireTmux already calls it, so use this only where RequireTmux
+// cannot be: a real-tmux test that must keep a plain skip when tmux is missing (see
+// session/tmux's TestSessionDeathStopsProbing, which CI -skips by name and so must
+// never hard-fail under ATRIUM_CI_REQUIRE_TMUX=1). Isolation is not the same gate —
+// a test that does drive a real server has to be isolated whatever its skip policy,
+// or it drives the developer's live fleet (#581).
+func RequireSandboxedTmux(t *testing.T) {
+	t.Helper()
+	requireSandboxedTmux(t)
 }
 
 // requireSandboxedTmux fails the test unless TMUX_TMPDIR still points at the root
@@ -229,7 +282,12 @@ func tmuxSocketsUnder(root string) []string {
 	return socks
 }
 
-// killTmuxServers reaps every tmux server whose socket lives under root.
+// killTmuxServers reaps every tmux server whose socket lives under root, and
+// reports whether every one of them is confirmed gone. A false answer means
+// something is still listening — a wedged server that outlasted tmuxKillTimeout, or
+// no tmux on PATH to send the kill at all — and the caller must then leave root's
+// contents in place: unlinking a live server's socket is what produces a server no
+// tooling can address, which is #547 rather than a fix for it.
 //
 // It addresses each server by absolute socket path (`tmux -S`), never by name
 // (`tmux -L`). -L resolves against TMUX_TMPDIR, and tmux silently falls back to
@@ -240,15 +298,63 @@ func tmuxSocketsUnder(root string) []string {
 // fallback. With tmuxSocketsUnder refusing every root but a sandbox one, and
 // reading only that directory, no argument to this function reaches
 // /tmp/tmux-<uid>/atrium.
-func killTmuxServers(root string) {
+func killTmuxServers(root string) bool {
+	reaped := true
 	for _, sock := range tmuxSocketsUnder(root) {
 		ctx, cancel := context.WithTimeout(context.Background(), tmuxKillTimeout)
 		_ = exec.CommandContext(ctx, "tmux", "-S", sock, "kill-server").Run()
 		cancel()
+		// The exit status is not the answer: `kill-server` fails identically for "the
+		// server was already gone" (the stale socket file below) and "the kill did not
+		// land", and only the second must stop the unlink. Ask the socket instead.
+		if !awaitTmuxServerGone(sock) {
+			reaped = false
+			continue
+		}
 		// tmux never unlinks a socket when its server dies, so the file outlives the
 		// kill; drop it here rather than leaving it for the caller to trip over.
 		_ = os.Remove(sock)
 	}
+	return reaped
+}
+
+// awaitTmuxServerGone reports whether nothing is listening on sock, waiting up to
+// tmuxReapTimeout for a server that has been told to die to finish dying.
+//
+// The wait is what makes the answer usable rather than a coin flip. `kill-server`
+// returns once the server has acknowledged the command, not once it has closed its
+// listening socket, so a single probe immediately after it frequently still
+// connects — measured here as a flaky "reported an unreaped server after killing the
+// only one there". Reading that as "still alive" would leave every reaped root
+// un-emptied.
+func awaitTmuxServerGone(sock string) bool {
+	deadline := time.Now().Add(tmuxReapTimeout)
+	for {
+		if !tmuxServerAlive(sock) {
+			return true
+		}
+		if time.Now().After(deadline) {
+			return false
+		}
+		time.Sleep(tmuxReapPoll)
+	}
+}
+
+// tmuxServerAlive reports whether a server is still listening on sock. The file's
+// existence proves nothing — tmux leaves it behind when the server dies — so this
+// connects: a refused or absent socket is a dead server, a completed connect is a
+// live one. The connection is closed immediately and speaks no protocol, which tmux
+// handles the same way it handles any client that hangs up.
+func tmuxServerAlive(sock string) bool {
+	ctx, cancel := context.WithTimeout(context.Background(), tmuxDialTimeout)
+	defer cancel()
+	var d net.Dialer
+	conn, err := d.DialContext(ctx, "unix", sock)
+	if err != nil {
+		return false
+	}
+	_ = conn.Close()
+	return true
 }
 
 // RequireTmux gates a real-tmux integration test on tmux being available, and on

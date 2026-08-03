@@ -186,10 +186,15 @@ which returns `atrium` for a sandbox `HOME` *and* for every non-legacy install â
 a `HOME`-only sandbox binds the exact socket a running Atrium is on. Only the
 socket *directory* separates them, which is why `RequireTmux` hard-fails (never
 skips) when `TMUX_TMPDIR` is not the sandbox root: an unisolated real-tmux test
-injects panes into the developer's live sessions (#581). Anything killing a tmux
-server in a teardown must address it by absolute path (`tmux -S`), never by name â€”
-`-L` with an empty or missing `TMUX_TMPDIR` silently resolves to `/tmp`, the live
-socket.
+injects panes into the developer's live sessions (#581). And a teardown that kills
+a tmux server must never name one the live fleet could answer to: `-L` resolves
+against `TMUX_TMPDIR`, which tmux reads as `/tmp` when it is empty *or* names a
+missing directory, so `tmux -L atrium kill-server` in a teardown whose root had gone
+destroys every running agent. `internal/testutil` reaps by absolute socket path
+(`tmux -S`), which cannot resolve anywhere but the path given;
+`config_parse_test.go` keeps `-L` because its socket name is a per-run
+`cfgparse-<rand>` that no live server ever binds. Address it by path unless the name
+is unmistakably yours.
 
 ## Facts with more than one home
 
