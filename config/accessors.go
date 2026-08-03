@@ -453,8 +453,9 @@ func (c *Config) GetNotifications() string {
 // value, or anything unrecognized. It does not reach a turn that ended by asking the user
 // a question (#571), which stays on GetNotifications like a block. "desktop" and "osc"
 // fall into that last group on purpose — the finished rung may only ever be quieter than
-// the mode a blocked session uses, and admitting either would require ranking two peers. NotificationsSame defers to
-// GetNotifications, which is what makes an unset field behave exactly as before the ladder.
+// the mode a blocked session uses, and admitting either would require ranking two peers.
+// NotificationsSame defers to GetNotifications, which is what makes an unset field behave
+// exactly as before the ladder.
 func (c *Config) GetNotificationsFinished() string {
 	if c == nil {
 		return NotificationsSame

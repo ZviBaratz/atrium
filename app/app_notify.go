@@ -120,12 +120,15 @@ func (m *home) maybeNotify(inst *session.Instance, old session.Status, prevUnrea
 	// about to consume them:
 	//   - NeedsInput: a blocked pane can't consume its queue (delivery needs an idle input
 	//     box), so it stays genuinely actionable.
-	//   - Asked (#571): promptDeliveryReady now HOLDS the queue on an unanswered question,
-	//     so the premise of this suppression is false for it. This comment used to concede
-	//     that such a turn "can't be told apart from a real finish that awaits them" —
-	//     that was true when it was written and is not any more, which is exactly why the
-	//     suppression had to stop covering it. Suppressing here would silence the one
-	//     event the user must act on, and would do it *because* they queued work.
+	//   - Asked (#571): questionHoldsPrompt now HOLDS the queue on an unanswered question,
+	//     applied by deliverReadyPrompts later in this same pass (the attach keeper hands
+	//     the same predicate to promptDeliveryReady instead — same hold, different
+	//     dispatcher), so the premise of this suppression is false for it. This comment
+	//     used to concede that such a turn "can't be told apart from a real finish that
+	//     awaits them" — that was true when it was written and is not any more, which is
+	//     exactly why the suppression had to stop covering it. Suppressing here would
+	//     silence the one event the user must act on, and would do it *because* they
+	//     queued work.
 	// The final finish, once the queue has drained, still rings.
 	if ev == notify.EventFinished && (inst.Prompt() != "" || inst.PromptSending()) {
 		return

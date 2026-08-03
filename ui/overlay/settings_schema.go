@@ -722,11 +722,12 @@ func newSettingRows(cfg *config.Config) []settingRow {
 			},
 			defaultDisplay: func() string { return (&config.Config{}).GetNotificationsFinished() },
 			reset:          func(c *config.Config) { c.NotificationsFinished = "" },
-			summary:        "A quieter signal for a finished turn than for a blocked session.",
-			detail: "Only rungs quieter than Notifications are offered, so a finished turn can " +
-				"never out-shout a session blocked on you.",
+			summary:        "A quieter signal for a finished turn that did not stop to ask you.",
+			detail: "Applies to a plain finished turn only: a blocked session, or one that " +
+				"ended by asking you a question, stays on Notifications. Only quieter rungs " +
+				"are offered, so a finished turn can never out-shout either.",
 			gloss: map[string]string{
-				config.NotificationsSame: "use the Notifications mode for both",
+				config.NotificationsSame: "use the Notifications mode for all three",
 				config.NotificationsOff:  "leave it to the list's unread marker",
 				config.NotificationsBell: "ring the terminal",
 			},

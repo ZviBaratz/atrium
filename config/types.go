@@ -78,11 +78,12 @@ const (
 // is deliberately a *subset* of the notification modes: a plain finished turn is the only
 // event the user need not act on — a session blocking on input, and one that ended by
 // asking a question (#571), both stay on Config.Notifications — so a finished turn may be
-// signalled more quietly than those, never more loudly. Only NotificationsSame, NotificationsOff and
-// NotificationsBell are admitted — the rungs that sit at or below every mode above them —
-// which makes an inverted ladder unrepresentable without ever ranking the modes: "quieter
-// than bell" would be silence, and desktop and osc are peers that cannot be ordered against
-// each other at all. See GetNotificationsFinished for normalization.
+// signalled more quietly than those, never more loudly. Only NotificationsSame,
+// NotificationsOff and NotificationsBell are admitted — the rungs that sit at or below
+// every mode above them — which makes an inverted ladder unrepresentable without ever
+// ranking the modes: "quieter than bell" would be silence, and desktop and osc are peers
+// that cannot be ordered against each other at all. See GetNotificationsFinished for
+// normalization.
 const (
 	// NotificationsSame leaves a finished turn on Config.Notifications, the same rung a
 	// block uses. The default, and what reproduces the pre-ladder behavior exactly.
@@ -478,9 +479,11 @@ type Config struct {
 	NotificationsFinished string `json:"notifications_finished,omitempty"`
 	// NotifyCommand is an optional shell command run for each "desktop" notification.
 	// It runs via `sh -c` with $ATRIUM_SESSION (display name), $ATRIUM_STATUS
-	// ("Ready"/"NeedsInput"), and $ATRIUM_EVENT ("finished"/"needs_input") in the
-	// environment — the session name is passed as env, never interpolated, so it can
+	// ("Ready"/"NeedsInput"), and $ATRIUM_EVENT ("finished"/"needs_input"/"asked") in
+	// the environment — the session name is passed as env, never interpolated, so it can
 	// never break argument parsing. Empty falls back to a built-in per-OS default.
+	// The two are separate axes — a turn that ended by asking (#571) reports status
+	// "Ready" — and notify.Event.status/token are the source of truth for both.
 	NotifyCommand string `json:"notify_command,omitempty"`
 	// NotifyWhenFocused, when true, still fires notifications while Atrium's terminal
 	// is focused. Default false: Atrium stays silent while you are watching the fleet
