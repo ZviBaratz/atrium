@@ -56,6 +56,38 @@ func widestFooterRow(t *testing.T) string {
 	return key
 }
 
+// worstExpandedHelpRow returns the key of the row whose `?` view wraps to the most lines at
+// w×h, for the same reason widestFooterRow exists: a key that was the worst case when a test
+// was written stops being it, and the test then guards nothing while still passing.
+//
+// It measures expandedHelpWrapped — what the renderer itself windows — under
+// config.DefaultConfig(), so the callers do not restate the composition. The answer varies with
+// the WIDTH (that is what innerWidth wraps against; boxWidth ignores the height), and the
+// callers differ on which size they care about — at 60x20 it is not the row with the longest
+// detail literal. h is taken so a caller passes its own size rather than a width alone, and so
+// the helper keeps working if the box's height ever reaches the wrap.
+//
+// Unlike widestFooterRow it does NOT assert its answer overflows, because at one caller's size
+// it legitimately does not: at 100x32 the tallest ? view is splash's 21 lines against a 25-line
+// budget, and TestExpandedHelpDoesNotChangeTheBoxHeight wants that non-overflowing case to
+// exercise the padding half of expandedHelpLines. A caller that needs overflow asserts it
+// itself — TestExpandedHelpScrolls requires a positive maxHelpScroll before it scrolls.
+func worstExpandedHelpRow(t *testing.T, w, h int) string {
+	t.Helper()
+	o := NewSettingsOverlay(config.DefaultConfig())
+	o.SetSize(w, h)
+	key, tallest := "", -1
+	for i, r := range o.rows {
+		o.cursor = i
+		if n := len(o.expandedHelpWrapped()); n > tallest {
+			key, tallest = r.key, n
+		}
+	}
+	require.NotEmpty(t, key, "the schema must declare at least one row")
+	require.Positive(t, tallest, "the tallest ? view must have lines, or the callers prove nothing")
+	return key
+}
+
 // TestFooterTextFitsTwoLines caps the whole footer composition, not just the summary.
 //
 // TestSummaryFitsOneLine already holds summary to 74 cells, but the footer appends a
