@@ -38,18 +38,18 @@ func TestSandboxInstallsAPrivateTmuxRoot(t *testing.T) {
 	}
 
 	// The marker is not bookkeeping, it is what stops a sibling run's sweep reaping
-	// this root while it is in use: without one, tmuxRootIsStale falls through to age
-	// alone and a root outliving tmuxRootGrace is an orphan by that measure. So a root
+	// this root while it is in use: without one, rootIsStale falls through to age
+	// alone and a root outliving rootGrace is an orphan by that measure. So a root
 	// that exists must carry it — which is why installSandboxTmuxTmpdir writes it
 	// before it publishes TMUX_TMPDIR, and gives up on the whole sandbox if it cannot.
-	raw, err := os.ReadFile(filepath.Join(root, tmuxRootPIDFile))
+	raw, err := os.ReadFile(filepath.Join(root, ownerMarkerFile))
 	if err != nil {
 		t.Fatalf("sandbox root %q carries no %s: an unmarked root is swept by age alone, "+
-			"so a sibling `go test ./...` package would reap this one mid-run", root, tmuxRootPIDFile)
+			"so a sibling `go test ./...` package would reap this one mid-run", root, ownerMarkerFile)
 	}
 	if got := strings.TrimSpace(string(raw)); got != strconv.Itoa(os.Getpid()) {
 		t.Fatalf("%s names %q, want this process (%d): a marker naming anything else is read as "+
-			"an owner that has exited", tmuxRootPIDFile, got, os.Getpid())
+			"an owner that has exited", ownerMarkerFile, got, os.Getpid())
 	}
 }
 
@@ -212,7 +212,7 @@ func TestKillTmuxServersKeepsTheSocketOfAServerItCouldNotReap(t *testing.T) {
 // sweepable: several of them are built to look stale — backdated, or marked with an
 // exited pid — and a concurrent package's startup sweep globs exactly that namespace.
 // One landing between the fixture and the assertion would delete it and invert the
-// answer. tmuxRootIsStale never looks at the prefix (only sweepStaleTmuxRoots does,
+// answer. rootIsStale never looks at the prefix (only sweepStaleTmuxRoots does,
 // before calling it), so the shorter path costs the coverage nothing.
 func TestTmuxRootIsStale(t *testing.T) {
 	unswept := func(t *testing.T) string {
@@ -223,11 +223,11 @@ func TestTmuxRootIsStale(t *testing.T) {
 		t.Helper()
 		root := unswept(t)
 		if pid != "" {
-			if err := os.WriteFile(filepath.Join(root, tmuxRootPIDFile), []byte(pid), 0o600); err != nil {
+			if err := os.WriteFile(filepath.Join(root, ownerMarkerFile), []byte(pid), 0o600); err != nil {
 				t.Fatalf("write marker: %v", err)
 			}
 		}
-		old := time.Now().Add(-2 * tmuxRootGrace)
+		old := time.Now().Add(-2 * rootGrace)
 		if err := os.Chtimes(root, old, old); err != nil {
 			t.Fatalf("chtimes: %v", err)
 		}
@@ -238,7 +238,7 @@ func TestTmuxRootIsStale(t *testing.T) {
 		// The race the grace window exists for, and the only state it is for: MkdirTemp
 		// has returned but the marker is not written yet, and a sibling binary is
 		// sweeping right now.
-		if tmuxRootIsStale(unswept(t)) {
+		if rootIsStale(unswept(t)) {
 			t.Fatal("a just-created root with no marker was swept: a concurrent `go test ./...` " +
 				"package would lose its socket root mid-run")
 		}
@@ -250,11 +250,11 @@ func TestTmuxRootIsStale(t *testing.T) {
 		// creating tmux-<uid> — so gating on age first would keep the immortal $SHELL
 		// server this sweep exists for alive through every attempt at it.
 		root := unswept(t)
-		if err := os.WriteFile(filepath.Join(root, tmuxRootPIDFile),
+		if err := os.WriteFile(filepath.Join(root, ownerMarkerFile),
 			[]byte(strconv.Itoa(deadPID(t))), 0o600); err != nil {
 			t.Fatalf("write marker: %v", err)
 		}
-		if !tmuxRootIsStale(root) {
+		if !rootIsStale(root) {
 			t.Fatal("a freshly touched root whose owner has exited was not reported stale: " +
 				"a marker naming a dead pid is proof, and no amount of recent mtime unmakes it")
 		}
@@ -269,14 +269,14 @@ func TestTmuxRootIsStale(t *testing.T) {
 				"not that it is gone")
 		}
 		root := unswept(t)
-		if err := os.WriteFile(filepath.Join(root, tmuxRootPIDFile), []byte("1"), 0o600); err != nil {
+		if err := os.WriteFile(filepath.Join(root, ownerMarkerFile), []byte("1"), 0o600); err != nil {
 			t.Fatalf("write marker: %v", err)
 		}
-		old := time.Now().Add(-2 * tmuxRootGrace)
+		old := time.Now().Add(-2 * rootGrace)
 		if err := os.Chtimes(root, old, old); err != nil {
 			t.Fatalf("chtimes: %v", err)
 		}
-		if tmuxRootIsStale(root) {
+		if rootIsStale(root) {
 			t.Fatal("a root owned by a live process this user cannot signal was reported stale")
 		}
 	})
@@ -289,33 +289,33 @@ func TestTmuxRootIsStale(t *testing.T) {
 		// read identically for every user including root; a chmod-000 file would not,
 		// since root can read it and the assertion would invert in a root container.
 		root := unswept(t)
-		if err := os.Mkdir(filepath.Join(root, tmuxRootPIDFile), 0o700); err != nil {
+		if err := os.Mkdir(filepath.Join(root, ownerMarkerFile), 0o700); err != nil {
 			t.Fatalf("mkdir marker: %v", err)
 		}
-		old := time.Now().Add(-2 * tmuxRootGrace)
+		old := time.Now().Add(-2 * rootGrace)
 		if err := os.Chtimes(root, old, old); err != nil {
 			t.Fatalf("chtimes: %v", err)
 		}
-		if tmuxRootIsStale(root) {
+		if rootIsStale(root) {
 			t.Fatal("a root whose owner marker could not be read was reported stale on age " +
 				"alone: that is how one user's sweep decides another user's live root is an orphan")
 		}
 	})
 
 	t.Run("an aged root owned by a live process is not stale", func(t *testing.T) {
-		if tmuxRootIsStale(aged(t, strconv.Itoa(os.Getpid()))) {
+		if rootIsStale(aged(t, strconv.Itoa(os.Getpid()))) {
 			t.Fatal("a root owned by this very process was reported stale")
 		}
 	})
 
 	t.Run("an aged root with no marker is stale", func(t *testing.T) {
-		if !tmuxRootIsStale(aged(t, "")) {
+		if !rootIsStale(aged(t, "")) {
 			t.Fatal("an aged root with no owner recorded was not reported stale")
 		}
 	})
 
 	t.Run("an aged root owned by a dead process is stale", func(t *testing.T) {
-		if !tmuxRootIsStale(aged(t, strconv.Itoa(deadPID(t)))) {
+		if !rootIsStale(aged(t, strconv.Itoa(deadPID(t)))) {
 			t.Fatal("a root owned by an exited process was not reported stale")
 		}
 	})
@@ -323,7 +323,7 @@ func TestTmuxRootIsStale(t *testing.T) {
 	t.Run("a missing root is not stale", func(t *testing.T) {
 		// Nothing to reap, and reporting true would send killTmuxServers at a path
 		// that no longer exists.
-		if tmuxRootIsStale(filepath.Join(tmuxRootParent, tmuxRootPrefix+"gone")) {
+		if rootIsStale(filepath.Join(tmuxRootParent, tmuxRootPrefix+"gone")) {
 			t.Fatal("a missing root was reported stale")
 		}
 	})

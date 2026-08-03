@@ -6,6 +6,14 @@ import (
 	"testing"
 )
 
+// homeRootPrefix names a sandbox HOME root. Like tmuxRootPrefix it is doing safety
+// work: sweepStaleRoots deletes directories matching it, so it has to be
+// distinctive enough that it cannot match anything a developer put in $TMPDIR
+// themselves. Deliberately not shared with internal/update's own
+// "atrium-update-test-home-" roots — that TestMain sandboxes by hand and is not
+// swept, so the prefixes must not overlap.
+const homeRootPrefix = "atrium-test-home-"
+
 // SandboxHomeMain isolates a package's tests from the developer's live Atrium for
 // their whole run, then runs them. It sandboxes two independent things:
 //
@@ -43,11 +51,24 @@ import (
 // validateConfig). A site that relies on this TestMain alone is a site where a failed
 // install is silent, which is the state #581 describes.
 func SandboxHomeMain(m *testing.M) int {
-	tmp, err := os.MkdirTemp("", "atrium-test-home-")
+	tmp, err := os.MkdirTemp("", homeRootPrefix)
 	if err != nil {
 		panic("testutil: failed to create sandbox HOME: " + err.Error())
 	}
+	// Marked before anything else can look at it, and a failure is fatal for the same
+	// reason the rest of this function's failures are: an unmarked root is judged by
+	// age alone, so a sibling package binary's sweep would delete this run's HOME out
+	// from under it once it aged past rootGrace.
+	if err := markRootOwner(tmp); err != nil {
+		_ = os.RemoveAll(tmp)
+		panic("testutil: failed to mark sandbox HOME: " + err.Error())
+	}
 	defer func() { _ = os.RemoveAll(tmp) }()
+	// Reap the HOME roots of runs that never reached that defer. Every abort skips it
+	// — a signal, a -timeout kill, an os.Exit from inside a test — and unlike the tmux
+	// root there is no server to strand, only a directory. It still added up to 633 of
+	// them over five days before this existed.
+	sweepStaleRoots(os.TempDir(), homeRootPrefix, tmp, nil)
 	if err := os.Setenv("HOME", tmp); err != nil {
 		panic("testutil: failed to set sandbox HOME: " + err.Error())
 	}
