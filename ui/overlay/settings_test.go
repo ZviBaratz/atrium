@@ -61,10 +61,11 @@ func widestFooterRow(t *testing.T) string {
 // was written stops being it, and the test then guards nothing while still passing.
 //
 // It measures expandedHelpWrapped — what the renderer itself windows — under
-// config.DefaultConfig(), so the callers do not restate the composition. The worst row is
-// size-dependent and the callers differ on which size they care about, which is why w and h
-// are parameters rather than the 80x24 floor: at 60x20 the answer is not the row with the
-// longest detail literal.
+// config.DefaultConfig(), so the callers do not restate the composition. The answer varies with
+// the WIDTH (that is what innerWidth wraps against; boxWidth ignores the height), and the
+// callers differ on which size they care about — at 60x20 it is not the row with the longest
+// detail literal. h is taken so a caller passes its own size rather than a width alone, and so
+// the helper keeps working if the box's height ever reaches the wrap.
 func worstExpandedHelpRow(t *testing.T, w, h int) string {
 	t.Helper()
 	o := NewSettingsOverlay(config.DefaultConfig())

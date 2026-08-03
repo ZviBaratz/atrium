@@ -1046,14 +1046,20 @@ func TestExpandedHelpNamesTheApplyTimingForEveryRow(t *testing.T) {
 // A reason, not a line count. Pinning today's `maxHelpScroll` per row would rot exactly the
 // way the sentence it replaces did.
 var helpOverflowAllowed = map[string]string{
-	"splash": "its option list is 8 of the 17 lines on its own — random, five variant names " +
-		"and off — and glossExemptRows keeps it unglossed precisely because it grows with " +
-		"every variant added to the engine",
+	"splash": "its Options block is 8 of the 17 lines on its own — the header, plus random, " +
+		"five variant names and off — and glossExemptRows keeps the five variant names " +
+		"unglossed (only random and off carry a gloss) precisely because that vocabulary " +
+		"grows with every variant added to the engine",
 	"notifications_finished": "fits at exactly 17 lines while live; over only in its inert " +
 		"rendering, which is the DEFAULT one, because Notifications ships off",
 	"group_mode": "fits at exactly 17 lines while live; over only in its inert rendering, " +
 		"when clustering is on and the live list has nothing to cluster",
 }
+
+// defaultRegime names the stock rendering in expandedHelpRegimes. It is a constant rather than
+// a literal because the anti-vacuity check in TestExpandedHelpFitsTheFloor compares against it:
+// a rename that left the two spellings apart would make that check pass while measuring nothing.
+const defaultRegime = "default"
 
 // expandedHelpRegime is one reachable rendering of the same schema: a config, plus the
 // account-clustering answer home injects (nil when it has not answered yet).
@@ -1093,8 +1099,10 @@ func expandedHelpRegimes() []expandedHelpRegime {
 
 	return []expandedHelpRegime{
 		// Notifications ship off, so the default rendering is already the inert one for
-		// notifications_finished, notify_when_focused, notify_command and daemon_poll_interval.
-		{name: "default", cfg: config.DefaultConfig()},
+		// notifications_finished, notify_when_focused and notify_command. daemon_poll_interval
+		// is inert by default too, but on its own gate — auto-yes, not notifications — so no
+		// regime here makes it live.
+		{name: defaultRegime, cfg: config.DefaultConfig()},
 		{name: "update_base_on_create off", cfg: updateBaseOff},
 		{name: "clustering on, nothing to cluster", cfg: clustering, cluster: &noClusters},
 		{name: "notifications on", cfg: notificationsOn},
@@ -1161,8 +1169,8 @@ func TestExpandedHelpFitsTheFloor(t *testing.T) {
 				"row %q's ? view wraps to %d lines against the %d-line budget at 80x24 "+
 					"(inner %d, %s rendering), so `Current value` starts below the fold. Trim "+
 					"its detail, or add it to helpOverflowAllowed with a reason. The bound is "+
-					"the panel's own copy under config.DefaultConfig() — a user's own long "+
-					"value can push any row over, and that is what ? scrolls for.",
+					"the panel's own copy over the renderings in expandedHelpRegimes — a "+
+					"user's own long value can push any row over, and that is what ? scrolls for.",
 				key, w.lines, budget, inner, w.regime)
 			continue
 		}
@@ -1179,13 +1187,15 @@ func TestExpandedHelpFitsTheFloor(t *testing.T) {
 	// Anti-vacuity for the regimes themselves: at least one row must carry a chip somewhere
 	// the default rendering never shows it, or the extra regimes are decoration and this is a
 	// default-config sweep wearing a table.
+	require.Contains(t, inert, defaultRegime,
+		"the sweep must include the %s rendering, or there is nothing to compare against", defaultRegime)
 	extra := 0
 	for name, keys := range inert {
-		if name == "default" {
+		if name == defaultRegime {
 			continue
 		}
 		for key := range keys {
-			if !inert["default"][key] {
+			if !inert[defaultRegime][key] {
 				extra++
 			}
 		}
@@ -1234,7 +1244,7 @@ func TestQuestionMarkOpensAndClosesExpandedHelp(t *testing.T) {
 // that does not fit is exactly the content `?` exists to show.
 //
 // The SIZE is chosen to guarantee overflow rather than to be representative. 60x20 gives a
-// 13-line budget against inner 54, where most of the schema needs more. The floor is a
+// 13-line budget against inner 54, where a large minority of the schema needs more. The floor is a
 // different question and a different test: at 80x24 the budget is paneHeight(13) +
 // helpBlock(4) = 17 against inner 74, three rows exceed it, and which three is recorded in
 // helpOverflowAllowed and asserted by TestExpandedHelpFitsTheFloor. This comment used to
