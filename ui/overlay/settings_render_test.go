@@ -1252,7 +1252,7 @@ func TestQuestionMarkOpensAndClosesExpandedHelp(t *testing.T) {
 // because the claim was prose (#583).
 //
 // The row is derived rather than named. It was `max_sessions`, on the reasoning that it has
-// the longest detail literal — which is true (345 characters) and still the wrong row: at
+// the longest detail literal — which is true (343 cells) and still the wrong row: at
 // 60x20 the tallest ? view is notifications_finished's, because an option list and a reason
 // chip cost lines that no detail literal is measured by.
 func TestExpandedHelpScrolls(t *testing.T) {
