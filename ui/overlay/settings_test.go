@@ -56,6 +56,31 @@ func widestFooterRow(t *testing.T) string {
 	return key
 }
 
+// worstExpandedHelpRow returns the key of the row whose `?` view wraps to the most lines at
+// w×h, for the same reason widestFooterRow exists: a key that was the worst case when a test
+// was written stops being it, and the test then guards nothing while still passing.
+//
+// It measures expandedHelpWrapped — what the renderer itself windows — under
+// config.DefaultConfig(), so the callers do not restate the composition. The worst row is
+// size-dependent and the callers differ on which size they care about, which is why w and h
+// are parameters rather than the 80x24 floor: at 60x20 the answer is not the row with the
+// longest detail literal.
+func worstExpandedHelpRow(t *testing.T, w, h int) string {
+	t.Helper()
+	o := NewSettingsOverlay(config.DefaultConfig())
+	o.SetSize(w, h)
+	key, tallest := "", -1
+	for i, r := range o.rows {
+		o.cursor = i
+		if n := len(o.expandedHelpWrapped()); n > tallest {
+			key, tallest = r.key, n
+		}
+	}
+	require.NotEmpty(t, key, "the schema must declare at least one row")
+	require.Positive(t, tallest, "the tallest ? view must have lines, or the callers prove nothing")
+	return key
+}
+
 // TestFooterTextFitsTwoLines caps the whole footer composition, not just the summary.
 //
 // TestSummaryFitsOneLine already holds summary to 74 cells, but the footer appends a

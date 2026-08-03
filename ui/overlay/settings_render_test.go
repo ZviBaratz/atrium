@@ -1033,6 +1033,168 @@ func TestExpandedHelpNamesTheApplyTimingForEveryRow(t *testing.T) {
 	}
 }
 
+// helpOverflowAllowed names the rows whose `?` view may begin below the fold at the 80x24
+// floor, each with the reason it earns that. Every other row must fit — see
+// TestExpandedHelpFitsTheFloor.
+//
+// Overflow is a supported state, not a defect: expandedHelpLines scrolls with ↑/↓ and renders
+// a position readout. What was missing was any record of WHICH rows may be over. The number
+// this list holds down is not the overflow, it is the count of rows that got there without
+// anyone deciding — all three entries below were found by measuring, after the comment on
+// TestExpandedHelpScrolls had asserted in prose that no row was over (#583).
+//
+// A reason, not a line count. Pinning today's `maxHelpScroll` per row would rot exactly the
+// way the sentence it replaces did.
+var helpOverflowAllowed = map[string]string{
+	"splash": "its option list is 8 of the 17 lines on its own — random, five variant names " +
+		"and off — and glossExemptRows keeps it unglossed precisely because it grows with " +
+		"every variant added to the engine",
+	"notifications_finished": "fits at exactly 17 lines while live; over only in its inert " +
+		"rendering, which is the DEFAULT one, because Notifications ships off",
+	"group_mode": "fits at exactly 17 lines while live; over only in its inert rendering, " +
+		"when clustering is on and the live list has nothing to cluster",
+}
+
+// expandedHelpRegime is one reachable rendering of the same schema: a config, plus the
+// account-clustering answer home injects (nil when it has not answered yet).
+type expandedHelpRegime struct {
+	name    string
+	cfg     *config.Config
+	cluster *bool
+}
+
+// expandedHelpRegimes are the panel's own renderings of the schema, not a sample of user data.
+//
+// The distinction is what makes the sweep below provable. A row's `?` content ends with
+// "Current value: " + row.get(cfg), which is unbounded — one long notify_command pushes any
+// row over, and that is what scrolling is for. But the inert reason chip is panel copy, it
+// costs 3 of the 17 lines, and which rows carry it is decided by config the user actually
+// has. A row measured only while its parent setting is on has not been measured.
+//
+// That is not hypothetical. group_mode is 17 of 17 live and 20 with "nothing to cluster";
+// it would have passed a default-config-only sweep while already being over.
+//
+// agent_oom_margin's chip is gated on runtime.GOOS rather than on config, so its inert
+// rendering is exercised by CI's macOS job rather than by anything here.
+func expandedHelpRegimes() []expandedHelpRegime {
+	noClusters := false
+
+	updateBaseOff := config.DefaultConfig()
+	off := false
+	updateBaseOff.UpdateBaseOnCreate = &off // makes fast_forward_local_base inert
+
+	clustering := config.DefaultConfig()
+	clustering.GroupMode = config.GroupModeAccount // inert once the list says there is nothing to cluster
+
+	notificationsOn := config.DefaultConfig()
+	// Makes notifications_finished and notify_when_focused live. NOT notify_command, whose
+	// parent is desktop mode specifically.
+	notificationsOn.Notifications = config.NotificationsBell
+
+	return []expandedHelpRegime{
+		// Notifications ship off, so the default rendering is already the inert one for
+		// notifications_finished, notify_when_focused, notify_command and daemon_poll_interval.
+		{name: "default", cfg: config.DefaultConfig()},
+		{name: "update_base_on_create off", cfg: updateBaseOff},
+		{name: "clustering on, nothing to cluster", cfg: clustering, cluster: &noClusters},
+		{name: "notifications on", cfg: notificationsOn},
+	}
+}
+
+// TestExpandedHelpFitsTheFloor is the guard the comment on TestExpandedHelpScrolls used to be.
+//
+// It asserts, at the 80x24 degradation floor, that a row's `?` view fits the budget the
+// renderer gives it — so `Current value`, which expandedHelpContent puts last, is on screen
+// without scrolling. Rows that may exceed it are listed in helpOverflowAllowed with a reason,
+// and the check runs in BOTH directions: a listed row that starts fitting has to leave the
+// list, and an entry naming no live row fails, so the list cannot outlive the rows it names or
+// silently excuse a future row that reuses a retired key.
+//
+// This is the property that was asserted only in prose. Two rows were over the budget in the
+// default rendering, and a third only in an inert one, while the sentence claiming none were
+// sat in this file — because a `detail` edit's cost to the `?` view is invisible to every
+// other guard here: TestSummaryFitsOneLine measures the summary, TestFooterTextFitsTwoLines
+// measures the footer, and neither looks at detail at all.
+func TestExpandedHelpFitsTheFloor(t *testing.T) {
+	regimes := expandedHelpRegimes()
+	require.Greater(t, len(regimes), 1, "the sweep needs more than the default rendering")
+
+	type tallest struct {
+		lines  int
+		scroll int
+		regime string
+	}
+	worst := map[string]tallest{}
+	inert := map[string]map[string]bool{} // regime name -> row keys carrying a chip
+	var budget, inner int
+
+	for _, reg := range regimes {
+		o := NewSettingsOverlay(reg.cfg)
+		o.SetSize(80, 24) // the project's degradation floor
+		if reg.cluster != nil {
+			o.SetAccountClusteringVisible(*reg.cluster)
+		}
+		budget, inner = o.expandedHelpHeight(), o.innerWidth()
+		require.Positive(t, budget, "the %s rendering affords no ? view at all", reg.name)
+		inert[reg.name] = map[string]bool{}
+
+		for i, r := range o.rows {
+			o.cursor, o.helpScroll = i, 0
+			if o.inertReason(i) != "" {
+				inert[reg.name][r.key] = true
+			}
+			// The unscrolled view fills the box exactly, overflowing or not — that is what
+			// keeps `?` from re-centering the overlay under the user's cursor.
+			assert.Lenf(t, o.expandedHelpLines(), budget,
+				"row %q's ? view is not %d lines in the %s rendering", r.key, budget, reg.name)
+			if n := len(o.expandedHelpWrapped()); n > worst[r.key].lines {
+				worst[r.key] = tallest{lines: n, scroll: o.maxHelpScroll(), regime: reg.name}
+			}
+		}
+	}
+	require.NotEmpty(t, worst, "the schema must declare rows")
+
+	for key, w := range worst {
+		reason, allowed := helpOverflowAllowed[key]
+		if !allowed {
+			assert.Zerof(t, w.scroll,
+				"row %q's ? view wraps to %d lines against the %d-line budget at 80x24 "+
+					"(inner %d, %s rendering), so `Current value` starts below the fold. Trim "+
+					"its detail, or add it to helpOverflowAllowed with a reason. The bound is "+
+					"the panel's own copy under config.DefaultConfig() — a user's own long "+
+					"value can push any row over, and that is what ? scrolls for.",
+				key, w.lines, budget, inner, w.regime)
+			continue
+		}
+		assert.Positivef(t, w.scroll,
+			"row %q is in helpOverflowAllowed (%s) but now fits the %d-line budget in every "+
+				"rendering — its tallest is %d lines. Delete the entry.",
+			key, reason, budget, w.lines)
+	}
+	for key := range helpOverflowAllowed {
+		assert.Containsf(t, worst, key,
+			"helpOverflowAllowed names %q, which is no longer a settings row", key)
+	}
+
+	// Anti-vacuity for the regimes themselves: at least one row must carry a chip somewhere
+	// the default rendering never shows it, or the extra regimes are decoration and this is a
+	// default-config sweep wearing a table.
+	extra := 0
+	for name, keys := range inert {
+		if name == "default" {
+			continue
+		}
+		for key := range keys {
+			if !inert["default"][key] {
+				extra++
+			}
+		}
+	}
+	require.Positive(t, extra,
+		"no regime switches on a chip the default rendering lacks (%v), so the inert "+
+			"rendering of every row is going unmeasured", inert)
+}
+
 // TestQuestionMarkOpensAndClosesExpandedHelp pins the key grammar of spec §8: `?` opens from the
 // rows pane, esc or a second `?` returns to whatever was focused, and an unrecognized key does
 // NOT dismiss — the panel is a working surface, and closing on a stray keystroke would lose the
@@ -1071,14 +1233,22 @@ func TestQuestionMarkOpensAndClosesExpandedHelp(t *testing.T) {
 // TestExpandedHelpScrolls pins that long detail is reachable rather than clipped — the content
 // that does not fit is exactly the content `?` exists to show.
 //
-// The SIZE is chosen to guarantee overflow rather than to be representative. At 80x24 the budget
-// is paneHeight(13) + helpBlock(4) = 17 lines against inner 74, and no row in the schema wraps
-// past 17 there. 60x20 gives a smaller budget against inner 54, where max_sessions' 343-character
-// detail alone needs several lines.
+// The SIZE is chosen to guarantee overflow rather than to be representative. 60x20 gives a
+// 13-line budget against inner 54, where most of the schema needs more. The floor is a
+// different question and a different test: at 80x24 the budget is paneHeight(13) +
+// helpBlock(4) = 17 against inner 74, three rows exceed it, and which three is recorded in
+// helpOverflowAllowed and asserted by TestExpandedHelpFitsTheFloor. This comment used to
+// claim no row wrapped past 17 there; it was false when written, and nothing could tell,
+// because the claim was prose (#583).
+//
+// The row is derived rather than named. It was `max_sessions`, on the reasoning that it has
+// the longest detail literal — which is true (345 characters) and still the wrong row: at
+// 60x20 the tallest ? view is notifications_finished's, because an option list and a reason
+// chip cost lines that no detail literal is measured by.
 func TestExpandedHelpScrolls(t *testing.T) {
 	o := NewSettingsOverlay(config.DefaultConfig())
 	o.SetSize(60, 20)
-	settingsAt(t, o, "max_sessions") // the longest detail literal in the schema
+	settingsAt(t, o, worstExpandedHelpRow(t, 60, 20))
 	o.HandleKeyPress(keyRunes("?"))
 	require.Positive(t, o.maxHelpScroll(),
 		"this row's help must overflow a %d-line budget at inner %d, or scrolling is untested",
@@ -1105,12 +1275,17 @@ func TestExpandedHelpScrolls(t *testing.T) {
 // TestExpandedHelpDoesNotChangeTheBoxHeight pins that opening `?` cannot resize the panel.
 // PlaceOverlay centers the box, so a height change would re-center it under the user's cursor
 // the instant they press `?`.
+//
+// The row is the tallest ? view at each size rather than one key for all four, so the
+// clamping half of expandedHelpLines is what gets tested wherever a row overflows. It was
+// `agent_oom_margin`, which is 14 lines against 17 at the floor — so the size that matters
+// most exercised only the padding half, and the clamp was reached at 60x20 by luck.
 func TestExpandedHelpDoesNotChangeTheBoxHeight(t *testing.T) {
 	for _, size := range []struct{ w, h int }{{100, 32}, {80, 24}, {60, 20}, {80, 12}} {
 		t.Run(fmt.Sprintf("%dx%d", size.w, size.h), func(t *testing.T) {
 			o := NewSettingsOverlay(config.DefaultConfig())
 			o.SetSize(size.w, size.h)
-			settingsAt(t, o, "agent_oom_margin")
+			settingsAt(t, o, worstExpandedHelpRow(t, size.w, size.h))
 			closed := lipgloss.Height(o.Render())
 			o.HandleKeyPress(keyRunes("?"))
 			require.True(t, o.helpOpen)
