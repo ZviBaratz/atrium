@@ -6,10 +6,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"testing"
-	"time"
 )
 
 // TestSandboxInstallsAPrivateTmuxRoot pins the two properties every real-tmux test
@@ -35,21 +33,6 @@ func TestSandboxInstallsAPrivateTmuxRoot(t *testing.T) {
 	if longest := len(filepath.Join(root, "tmux-4294967295", "claudesquad-precheck")); longest >= 104 {
 		t.Fatalf("worst-case socket path under %q is %d bytes, which will not fit sun_path (104 on darwin)",
 			root, longest)
-	}
-
-	// The marker is not bookkeeping, it is what stops a sibling run's sweep reaping
-	// this root while it is in use: without one, tmuxRootIsStale falls through to age
-	// alone and a root outliving tmuxRootGrace is an orphan by that measure. So a root
-	// that exists must carry it — which is why installSandboxTmuxTmpdir writes it
-	// before it publishes TMUX_TMPDIR, and gives up on the whole sandbox if it cannot.
-	raw, err := os.ReadFile(filepath.Join(root, tmuxRootPIDFile))
-	if err != nil {
-		t.Fatalf("sandbox root %q carries no %s: an unmarked root is swept by age alone, "+
-			"so a sibling `go test ./...` package would reap this one mid-run", root, tmuxRootPIDFile)
-	}
-	if got := strings.TrimSpace(string(raw)); got != strconv.Itoa(os.Getpid()) {
-		t.Fatalf("%s names %q, want this process (%d): a marker naming anything else is read as "+
-			"an owner that has exited", tmuxRootPIDFile, got, os.Getpid())
 	}
 }
 
@@ -162,9 +145,10 @@ func TestKillTmuxServersReapsOnlyItsOwnRoot(t *testing.T) {
 
 // TestKillTmuxServersKeepsTheSocketOfAServerItCouldNotReap is the other half of the
 // #547 guarantee, and the half a passing teardown hides. Unlinking the socket of a
-// server that is still listening leaves a server nothing can address — not `tmux
-// ls`, not `atrium reset`, not the next run's sweep — so the kill's *outcome*, never
-// its exit status, has to decide whether the file goes.
+// server that is still listening leaves a server nothing can address — not `tmux ls`,
+// not `atrium reset`, and, with no sweep in this package to reap it later, nothing on
+// any subsequent run either — so the kill's *outcome*, never its exit status, has to
+// decide whether the file goes.
 //
 // The failure is forced with no tmux on PATH at all: the kill cannot be sent, the
 // server keeps running, and a teardown that removed the socket anyway would strand
@@ -201,144 +185,6 @@ func TestKillTmuxServersKeepsTheSocketOfAServerItCouldNotReap(t *testing.T) {
 		t.Fatalf("probe server on %q is gone: with no tmux to send the kill it should have "+
 			"survived, so this is not exercising the unreaped path", sock)
 	}
-}
-
-// TestTmuxRootIsStale covers the sweep's decision. It is the difference between
-// reaping a dead run's immortal $SHELL server and deleting the root out from under
-// a sibling package that `go test ./...` started a moment ago.
-//
-// Its fixtures deliberately live under t.TempDir() rather than shortTempRoot's
-// /tmp/atrium-tmux-*, because they are the one thing in this file that must NOT be
-// sweepable: several of them are built to look stale — backdated, or marked with an
-// exited pid — and a concurrent package's startup sweep globs exactly that namespace.
-// One landing between the fixture and the assertion would delete it and invert the
-// answer. tmuxRootIsStale never looks at the prefix (only sweepStaleTmuxRoots does,
-// before calling it), so the shorter path costs the coverage nothing.
-func TestTmuxRootIsStale(t *testing.T) {
-	unswept := func(t *testing.T) string {
-		t.Helper()
-		return t.TempDir()
-	}
-	aged := func(t *testing.T, pid string) string {
-		t.Helper()
-		root := unswept(t)
-		if pid != "" {
-			if err := os.WriteFile(filepath.Join(root, tmuxRootPIDFile), []byte(pid), 0o600); err != nil {
-				t.Fatalf("write marker: %v", err)
-			}
-		}
-		old := time.Now().Add(-2 * tmuxRootGrace)
-		if err := os.Chtimes(root, old, old); err != nil {
-			t.Fatalf("chtimes: %v", err)
-		}
-		return root
-	}
-
-	t.Run("a fresh root with no marker is not stale", func(t *testing.T) {
-		// The race the grace window exists for, and the only state it is for: MkdirTemp
-		// has returned but the marker is not written yet, and a sibling binary is
-		// sweeping right now.
-		if tmuxRootIsStale(unswept(t)) {
-			t.Fatal("a just-created root with no marker was swept: a concurrent `go test ./...` " +
-				"package would lose its socket root mid-run")
-		}
-	})
-
-	t.Run("a fresh root owned by a dead process is stale", func(t *testing.T) {
-		// Age must not outrank a marker. A crashed run's root gets its mtime bumped by
-		// whatever touched it last — its own teardown's removeContents, a tmux server
-		// creating tmux-<uid> — so gating on age first would keep the immortal $SHELL
-		// server this sweep exists for alive through every attempt at it.
-		root := unswept(t)
-		if err := os.WriteFile(filepath.Join(root, tmuxRootPIDFile),
-			[]byte(strconv.Itoa(deadPID(t))), 0o600); err != nil {
-			t.Fatalf("write marker: %v", err)
-		}
-		if !tmuxRootIsStale(root) {
-			t.Fatal("a freshly touched root whose owner has exited was not reported stale: " +
-				"a marker naming a dead pid is proof, and no amount of recent mtime unmakes it")
-		}
-	})
-
-	t.Run("a marker naming another user's live process is not stale", func(t *testing.T) {
-		// pid 1 always exists and (unless this runs as root) signal 0 to it returns
-		// EPERM — "there, but not yours". Reading that as "gone" would let one user's
-		// sweep kill and delete another user's live root.
-		if !processAlive(1) {
-			t.Fatal("processAlive(1) is false: EPERM from signal 0 means the process exists, " +
-				"not that it is gone")
-		}
-		root := unswept(t)
-		if err := os.WriteFile(filepath.Join(root, tmuxRootPIDFile), []byte("1"), 0o600); err != nil {
-			t.Fatalf("write marker: %v", err)
-		}
-		old := time.Now().Add(-2 * tmuxRootGrace)
-		if err := os.Chtimes(root, old, old); err != nil {
-			t.Fatalf("chtimes: %v", err)
-		}
-		if tmuxRootIsStale(root) {
-			t.Fatal("a root owned by a live process this user cannot signal was reported stale")
-		}
-	})
-
-	t.Run("an aged root whose marker cannot be read is not stale", func(t *testing.T) {
-		// The other-user case, and the one an age-only fallback gets wrong. Another
-		// user's root is 0700, so the read fails with EACCES rather than ENOENT — and
-		// "unreadable" is not evidence of anything, least of all that the owner is gone.
-		// Forced here with a directory in the marker's place (EISDIR), which fails the
-		// read identically for every user including root; a chmod-000 file would not,
-		// since root can read it and the assertion would invert in a root container.
-		root := unswept(t)
-		if err := os.Mkdir(filepath.Join(root, tmuxRootPIDFile), 0o700); err != nil {
-			t.Fatalf("mkdir marker: %v", err)
-		}
-		old := time.Now().Add(-2 * tmuxRootGrace)
-		if err := os.Chtimes(root, old, old); err != nil {
-			t.Fatalf("chtimes: %v", err)
-		}
-		if tmuxRootIsStale(root) {
-			t.Fatal("a root whose owner marker could not be read was reported stale on age " +
-				"alone: that is how one user's sweep decides another user's live root is an orphan")
-		}
-	})
-
-	t.Run("an aged root owned by a live process is not stale", func(t *testing.T) {
-		if tmuxRootIsStale(aged(t, strconv.Itoa(os.Getpid()))) {
-			t.Fatal("a root owned by this very process was reported stale")
-		}
-	})
-
-	t.Run("an aged root with no marker is stale", func(t *testing.T) {
-		if !tmuxRootIsStale(aged(t, "")) {
-			t.Fatal("an aged root with no owner recorded was not reported stale")
-		}
-	})
-
-	t.Run("an aged root owned by a dead process is stale", func(t *testing.T) {
-		if !tmuxRootIsStale(aged(t, strconv.Itoa(deadPID(t)))) {
-			t.Fatal("a root owned by an exited process was not reported stale")
-		}
-	})
-
-	t.Run("a missing root is not stale", func(t *testing.T) {
-		// Nothing to reap, and reporting true would send killTmuxServers at a path
-		// that no longer exists.
-		if tmuxRootIsStale(filepath.Join(tmuxRootParent, tmuxRootPrefix+"gone")) {
-			t.Fatal("a missing root was reported stale")
-		}
-	})
-}
-
-// deadPID returns the pid of a process that has exited, so processAlive has a
-// definite negative to answer. Reusing a random number would risk hitting a live
-// pid and inverting the assertion.
-func deadPID(t *testing.T) int {
-	t.Helper()
-	cmd := exec.CommandContext(context.Background(), "true")
-	if err := cmd.Run(); err != nil {
-		t.Fatalf("run true: %v", err)
-	}
-	return cmd.Process.Pid
 }
 
 // shortTempRoot mints a socket root the same way the sandbox does, rather than via

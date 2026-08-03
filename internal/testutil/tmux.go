@@ -2,14 +2,11 @@ package testutil
 
 import (
 	"context"
-	"errors"
 	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strconv"
 	"strings"
-	"syscall"
 	"testing"
 	"time"
 )
@@ -24,21 +21,12 @@ const (
 	// os.TempDir() because the socket path has a hard length budget — see
 	// installSandboxTmuxTmpdir.
 	tmuxRootParent = "/tmp"
-	// tmuxRootPrefix names a sandbox socket root. It has to be distinctive enough
-	// to sweep by: sweepStaleTmuxRoots deletes directories matching it, so a prefix
-	// short enough to collide with a developer's own scratch dir (/tmp/atr*, which
-	// this machine has) would delete their work.
+	// tmuxRootPrefix names a sandbox socket root. It is doing safety work, not just
+	// naming: tmuxSocketsUnder refuses any root whose basename lacks it, which is what
+	// stops a stray "/tmp" from resolving to /tmp/tmux-<uid>/atrium — the socket a
+	// running Atrium is on. It is also long enough not to collide with a developer's
+	// own scratch dirs (this machine had /tmp/atr*).
 	tmuxRootPrefix = "atrium-tmux-"
-	// tmuxRootPIDFile records which process owns a root, so a later run can tell an
-	// orphan from a sibling package's live root.
-	tmuxRootPIDFile = "owner.pid"
-	// tmuxRootGrace is how long a root with no owner marker is presumed live. It
-	// covers the window between MkdirTemp returning and the marker being written,
-	// during which a concurrently starting package must not mistake a brand-new root
-	// for an orphan. `go test ./...` runs package binaries in parallel, so that
-	// window is genuinely raced. A root that *has* a marker is judged by it alone —
-	// see tmuxRootIsStale for why age must not override one.
-	tmuxRootGrace = 5 * time.Minute
 	// tmuxKillTimeout bounds one teardown `kill-server`, so a wedged tmux server
 	// cannot hang the test binary's exit.
 	tmuxKillTimeout = 5 * time.Second
@@ -78,21 +66,23 @@ var sandboxTmuxRoot string
 // and leaves sandboxTmuxRoot empty. Neither path panics: that keeps every tmux-free
 // package running, while requireSandboxedTmux still fails any test that would have
 // driven a real tmux server unisolated.
+//
+// Nothing reaps a root whose run never reached the teardown — a signal, a -timeout
+// abort — and for a run that had started a server that costs more than the directory:
+// ui's terminal panes run $SHELL (ui/terminal.go), which never exits, and every -L
+// lookup (`tmux ls`, and `atrium reset` via CleanupSessions) resolves against the
+// *current* TMUX_TMPDIR rather than that dead run's, so the survivor is invisible to
+// both. Reap it by path instead:
+//
+//	for s in /tmp/atrium-tmux-*/tmux-*/*; do tmux -S "$s" kill-server; done
+//
+// Doing that automatically is what this package tried and reverted: the glob that
+// finds those roots is one wrong prefix away from /tmp/tmux-<uid>/atrium, and that
+// prefix going missing during a mutation test is what killed the developer's live
+// fleet. Reaping by hand is rare; a sweep is a standing hazard.
 func installSandboxTmuxTmpdir() func() {
 	root, err := os.MkdirTemp(tmuxRootParent, tmuxRootPrefix)
 	if err != nil {
-		return func() {}
-	}
-	// The owner marker goes down before TMUX_TMPDIR names the root, and a root that
-	// cannot be marked is not a sandbox at all: unmarked, tmuxRootIsStale judges it by
-	// age alone, so a sibling package's sweep reaps it out from under this binary —
-	// live server and all — once it ages past tmuxRootGrace. Writing it first is also
-	// what keeps this failure path from having to undo a TMUX_TMPDIR it had already
-	// installed, and a variable naming a directory that no longer exists is the one
-	// state worse than no sandbox: tmux reads it as /tmp.
-	if err := os.WriteFile(filepath.Join(root, tmuxRootPIDFile),
-		[]byte(strconv.Itoa(os.Getpid())), 0o600); err != nil {
-		_ = os.RemoveAll(root)
 		return func() {}
 	}
 	if err := os.Setenv("TMUX_TMPDIR", root); err != nil {
@@ -105,121 +95,26 @@ func installSandboxTmuxTmpdir() func() {
 	}
 	sandboxTmuxRoot = root
 
-	// Reap what earlier runs could not. A test binary killed mid-run (Ctrl-C, a
-	// -timeout abort, a panicking process) never reaches the teardown below, and
-	// what it strands here is worse than a stray directory: ui's terminal panes run
-	// $SHELL (ui/terminal.go:303), which never exits, so the orphaned server lives
-	// forever — and being under a private root, it is invisible to `tmux ls`,
-	// `atrium` and `atrium reset`, all of which resolve -L against the *current*
-	// TMUX_TMPDIR. The sandbox HOME beside it has leaked ~550 directories on this
-	// developer's machine since July, so this is the expected case, not the
-	// unlucky one.
-	sweepStaleTmuxRoots(root)
-
 	return func() {
-		// Kill first, empty second, and only empty when the kill is confirmed. A
-		// TMUX_TMPDIR root emptied while a server still lives produces a server no
+		// Kill first, remove second, and only remove when the kill is confirmed. A
+		// TMUX_TMPDIR root removed while a server still lives produces a server no
 		// tooling can reach — the socket it is listening on no longer has a path
-		// (#547) — so a server that outlasted the kill keeps its socket, and the next
-		// run's sweep gets another attempt at it.
+		// (#547) — so a server that outlasted the kill keeps its socket and its root.
+		// That leaves a directory behind, which is the right way round: a stray
+		// directory is litter, a server nothing can address is not.
 		if !killTmuxServers(root) {
 			return
 		}
-		// The root itself outlives the contents on purpose: TMUX_TMPDIR still names
-		// it, and tmux reads an empty *or missing* TMUX_TMPDIR as /tmp. Deleting the
-		// directory here would leave every later `-L` call in this process — a stray
-		// goroutine, a helper in the caller's TestMain — pointed at the developer's
-		// live socket. The next run's sweep removes the empty shell once it ages past
-		// tmuxRootGrace.
-		removeContents(root)
-	}
-}
-
-// removeContents empties dir without removing dir itself.
-func removeContents(dir string) {
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return
-	}
-	for _, entry := range entries {
-		_ = os.RemoveAll(filepath.Join(dir, entry.Name()))
-	}
-}
-
-// sweepStaleTmuxRoots reaps the socket roots of test binaries that died before
-// their teardown, skipping self and anything a live process still owns.
-func sweepStaleTmuxRoots(self string) {
-	roots, err := filepath.Glob(filepath.Join(tmuxRootParent, tmuxRootPrefix+"*"))
-	if err != nil {
-		return
-	}
-	for _, root := range roots {
-		if root == self || !tmuxRootIsStale(root) {
-			continue
-		}
-		// Same rule as the teardown: a root whose server survived the kill keeps its
-		// socket, because removing the directory out from under a live server is the
-		// unreachable orphan (#547), not the cure for it.
-		if !killTmuxServers(root) {
-			continue
-		}
 		_ = os.RemoveAll(root)
+		// TMUX_TMPDIR now names a directory that is gone, and tmux reads that as /tmp
+		// — the developer's live socket. Nothing reaches it today: this runs after
+		// m.Run has returned, so every test and cleanup is finished, and no test in
+		// app, ui or session/tmux calls Attach (the only path with goroutines that
+		// outlive their caller). Clearing the recorded root is the belt: anything that
+		// does run later and goes through RequireTmux/RequireSandboxedTmux hard-fails
+		// instead of quietly binding /tmp.
+		sandboxTmuxRoot = ""
 	}
-}
-
-// tmuxRootIsStale reports whether root belongs to a process that is gone.
-//
-// The owner marker is consulted first and, when it is there, it is the whole
-// answer: a root naming a dead pid is stale however recently it was touched. Age is
-// the fallback for a root with no marker, which is the only state the grace window
-// was ever for — the sliver between MkdirTemp returning and the marker landing.
-// Gating on age first instead would make the grace mean something else entirely,
-// because the teardown's own removeContents bumps the root's mtime on the way out:
-// a crashed run's root, holding the immortal $SHELL server this sweep exists to
-// reap, would go unreaped for another tmuxRootGrace after every attempt.
-func tmuxRootIsStale(root string) bool {
-	info, err := os.Stat(root)
-	if err != nil || !info.IsDir() {
-		return false
-	}
-	raw, err := os.ReadFile(filepath.Join(root, tmuxRootPIDFile))
-	if err != nil && !os.IsNotExist(err) {
-		// Unreadable is not the same as absent, and only absent is evidence. A root
-		// another user owns is 0700, so this user's sweep reads EACCES here — and
-		// answering that with the age fallback would let one user's sweep call another
-		// user's live root an orphan. Same rule processAlive applies to EPERM one layer
-		// down: what you cannot inspect, you do not get to reap.
-		return false
-	}
-	if err != nil {
-		// No owner recorded: a teardown already emptied it — or a sibling package binary
-		// created it a microsecond ago and has not laid its marker down yet, which is the
-		// only other way this state is reachable now that a failed marker write aborts
-		// the install outright (installSandboxTmuxTmpdir). Only age separates them, and
-		// `go test ./...` runs those binaries in parallel, so that window is genuinely
-		// raced.
-		return time.Since(info.ModTime()) >= tmuxRootGrace
-	}
-	pid, err := strconv.Atoi(strings.TrimSpace(string(raw)))
-	if err != nil || pid <= 0 {
-		return true
-	}
-	return !processAlive(pid)
-}
-
-// processAlive reports whether pid names a running process. Signal 0 performs the
-// permission and existence checks without delivering anything.
-//
-// EPERM counts as alive, not dead: it means the process is there but owned by
-// another user. Reading it as "gone" would let this user's sweep decide another
-// user's live root is an orphan to kill and delete.
-func processAlive(pid int) bool {
-	proc, err := os.FindProcess(pid)
-	if err != nil {
-		return false
-	}
-	err = proc.Signal(syscall.Signal(0))
-	return err == nil || errors.Is(err, syscall.EPERM)
 }
 
 // TmuxRoot returns the private tmux socket directory this test binary's sandbox

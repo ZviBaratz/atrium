@@ -47,6 +47,12 @@ func SandboxHomeMain(m *testing.M) int {
 	if err != nil {
 		panic("testutil: failed to create sandbox HOME: " + err.Error())
 	}
+	// This defer is the whole cleanup, and an exit that skips it leaks the directory.
+	// The fix for that is at the source — nothing in a test may call os.Exit, which
+	// TestNoTestCallsOsExit enforces — deliberately not a sweep that deletes stale
+	// siblings. A recursive delete over a glob of $TMPDIR is one wrong prefix away
+	// from taking the developer's live tmux socket with it, which is precisely what
+	// it did here once.
 	defer func() { _ = os.RemoveAll(tmp) }()
 	if err := os.Setenv("HOME", tmp); err != nil {
 		panic("testutil: failed to set sandbox HOME: " + err.Error())

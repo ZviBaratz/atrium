@@ -27,7 +27,13 @@ func TestLumRangeEnvReachesRender(t *testing.T) {
 	if os.Getenv("ATRIUM_LUM_CHILD") == "1" {
 		sum := sha256.Sum256([]byte(SplashScreensaver(120, 40, 7)))
 		fmt.Printf("RENDERHASH:%s\n", hex.EncodeToString(sum[:]))
-		os.Exit(0)
+		// return, not os.Exit: the child runs this package's TestMain too, and
+		// exiting from inside a test skips every pending defer in the process —
+		// including the sandbox teardown, which then leaks its temp HOME. Two
+		// children per run made this the module's largest source of /tmp litter.
+		// Returning lets the run end normally; the parent scans for the prefix
+		// above, so the framework's own PASS/ok lines are just noise to it.
+		return
 	}
 
 	child := func(lum string) string {
