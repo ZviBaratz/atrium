@@ -212,3 +212,37 @@ func TestOsaQuote(t *testing.T) {
 	require.Equal(t, `"a b"`, osaQuote("a\nb"), "newline folds to a space")
 	require.Equal(t, `"a b c"`, osaQuote("a\tb\rc"), "tab and CR fold to spaces")
 }
+
+// TestEventVocabulary pins the three-way vocabulary handed to a notify command.
+//
+// ATRIUM_STATUS and ATRIUM_EVENT are deliberately different axes: status is what the row
+// shows, so a question reports "Ready" — the turn DID end — and an existing user script
+// keying on status keeps its meaning now that a third event exists. ATRIUM_EVENT is the
+// axis that distinguishes them.
+func TestEventVocabulary(t *testing.T) {
+	cases := []struct {
+		ev                  Event
+		status, token, want string
+	}{
+		{EventFinished, "Ready", "finished", "sess finished"},
+		{EventNeedsInput, "NeedsInput", "needs_input", "sess needs input"},
+		{EventAsked, "Ready", "asked", "sess asked a question"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.token, func(t *testing.T) {
+			require.Equal(t, tc.status, tc.ev.status())
+			require.Equal(t, tc.token, tc.ev.token())
+			require.Equal(t, tc.want, tc.ev.headline("sess"))
+		})
+	}
+}
+
+// TestDesktopCommandAskedCarriesEnv pins the asked event through the same env-building
+// path the other events use, so a user command can branch on ATRIUM_EVENT.
+func TestDesktopCommandAskedCarriesEnv(t *testing.T) {
+	n := New(&bytes.Buffer{}, &fakeExec{})
+	c := n.desktopCommand(context.Background(), "notify-send \"$ATRIUM_EVENT\"", "my sess", EventAsked)
+	require.Contains(t, c.Env, "ATRIUM_SESSION=my sess")
+	require.Contains(t, c.Env, "ATRIUM_STATUS=Ready")
+	require.Contains(t, c.Env, "ATRIUM_EVENT=asked")
+}

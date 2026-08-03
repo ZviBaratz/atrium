@@ -24,30 +24,37 @@ func TestNotifyEventFor(t *testing.T) {
 		name           string
 		old, current   session.Status
 		unreadAdvanced bool
+		asked          bool
 		wantEvent      notify.Event
 		wantOK         bool
 	}{
-		{"genuine finish (unread advanced)", session.Running, session.Ready, true, notify.EventFinished, true},
-		{"suppressed finish (unread not advanced)", session.Running, session.Ready, false, 0, false},
-		{"into needs-input", session.Running, session.NeedsInput, false, notify.EventNeedsInput, true},
-		{"gate into needs-input from loading", session.Loading, session.NeedsInput, false, notify.EventNeedsInput, true},
-		{"still needs-input (no edge)", session.NeedsInput, session.NeedsInput, false, 0, false},
-		{"finish outranks a coincident needs-input read", session.NeedsInput, session.Ready, true, notify.EventFinished, true},
-		{"running with nothing new", session.Ready, session.Running, false, 0, false},
-		{"needs-input cleared to ready without unread", session.NeedsInput, session.Ready, false, 0, false},
+		{"genuine finish (unread advanced)", session.Running, session.Ready, true, false, notify.EventFinished, true},
+		{"suppressed finish (unread not advanced)", session.Running, session.Ready, false, false, 0, false},
+		{"into needs-input", session.Running, session.NeedsInput, false, false, notify.EventNeedsInput, true},
+		{"gate into needs-input from loading", session.Loading, session.NeedsInput, false, false, notify.EventNeedsInput, true},
+		{"still needs-input (no edge)", session.NeedsInput, session.NeedsInput, false, false, 0, false},
+		{"finish outranks a coincident needs-input read", session.NeedsInput, session.Ready, true, false, notify.EventFinished, true},
+		{"running with nothing new", session.Ready, session.Running, false, false, 0, false},
+		{"needs-input cleared to ready without unread", session.NeedsInput, session.Ready, false, false, 0, false},
 		// Pending-origin transitions (#290): Pending is the "background sub-agent still
 		// in flight" state. A block surfaced from Pending should ring (the user can't
 		// auto-continue a blocked pane). A genuine completion from Pending (sub-agent
 		// done, unread advanced) should ring. A synthetic Pending hold (no unread change,
 		// no NeedsInput) should stay silent.
-		{"pending → needs-input rings (sub-agent blocks)", session.Pending, session.NeedsInput, false, notify.EventNeedsInput, true},
-		{"pending → genuine finish rings (unread advanced)", session.Pending, session.Ready, true, notify.EventFinished, true},
-		{"pending → suppressed finish (unread not advanced)", session.Pending, session.Ready, false, 0, false},
-		{"pending still pending (no edge)", session.Pending, session.Pending, false, 0, false},
+		{"pending → needs-input rings (sub-agent blocks)", session.Pending, session.NeedsInput, false, false, notify.EventNeedsInput, true},
+		{"pending → genuine finish rings (unread advanced)", session.Pending, session.Ready, true, false, notify.EventFinished, true},
+		{"pending → suppressed finish (unread not advanced)", session.Pending, session.Ready, false, false, 0, false},
+		{"pending still pending (no edge)", session.Pending, session.Pending, false, false, 0, false},
+		// #571: a question rides the SAME finish edge — the pane cannot tell one from a
+		// plain finish — so asked only renames the event, and everything the finish edge
+		// earns (unread stamp, synthetic-transition suppression) is inherited.
+		{"a question renames the finish edge", session.Running, session.Ready, true, true, notify.EventAsked, true},
+		{"asked without the finish edge is not an event", session.Running, session.Ready, false, true, 0, false},
+		{"asked never converts a block edge", session.Running, session.NeedsInput, false, true, notify.EventNeedsInput, true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			ev, ok := notifyEventFor(tc.old, tc.current, tc.unreadAdvanced)
+			ev, ok := notifyEventFor(tc.old, tc.current, tc.unreadAdvanced, tc.asked)
 			assert.Equal(t, tc.wantOK, ok)
 			if tc.wantOK {
 				assert.Equal(t, tc.wantEvent, ev)
@@ -74,6 +81,11 @@ func TestNotifyRungFor(t *testing.T) {
 		{"off silences the finish", config.NotificationsOSC, config.NotificationsOff, notify.EventFinished, config.NotificationsOff},
 		{"off never silences the block", config.NotificationsOSC, config.NotificationsOff, notify.EventNeedsInput, config.NotificationsOSC},
 		{"a bell base can still quiet its finish", config.NotificationsBell, config.NotificationsOff, notify.EventFinished, config.NotificationsOff},
+		// #571: a question is the most actionable thing an agent can do, so it uses the
+		// base mode like a block — notifications_finished must never reach it. That this
+		// needs no branch in notifyRungFor is the design: the ladder defaults to base.
+		{"a quieter finished rung never reaches a question", config.NotificationsDesktop, config.NotificationsBell, notify.EventAsked, config.NotificationsDesktop},
+		{"off never silences a question", config.NotificationsOSC, config.NotificationsOff, notify.EventAsked, config.NotificationsOSC},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -133,7 +145,7 @@ func TestMaybeNotifyNilNotifierIsNoOp(t *testing.T) {
 	inst := newNotifyInstance(t)
 	// No notifier and no list — must not panic or touch anything.
 	require.NotPanics(t, func() {
-		h.maybeNotify(inst, session.Running, time.Time{}, config.NotificationsBell)
+		h.maybeNotify(inst, session.Running, time.Time{}, false, config.NotificationsBell)
 	})
 }
 
@@ -143,7 +155,7 @@ func TestMaybeNotifyFirstObservationIsSilent(t *testing.T) {
 	inst := newNotifyInstance(t)
 	inst.SetStatus(session.Ready) // a genuine finish edge is pending...
 	// ...but the very first observation of the instance never notifies (startup gate).
-	h.maybeNotify(inst, session.Running, time.Time{}, config.NotificationsBell)
+	h.maybeNotify(inst, session.Running, time.Time{}, false, config.NotificationsBell)
 	require.Empty(t, buf.String(), "first observation must be silent")
 	_, seen := h.notifySeen[inst]
 	require.True(t, seen, "the instance is recorded as observed")
@@ -163,11 +175,11 @@ func TestMaybeNotifyEmitsFinishForSeenNonSelected(t *testing.T) {
 		target = b
 	}
 	// First call marks it observed (silent gate).
-	h.maybeNotify(target, session.Running, time.Time{}, config.NotificationsBell)
+	h.maybeNotify(target, session.Running, time.Time{}, false, config.NotificationsBell)
 	require.Empty(t, buf.String())
 	// A genuine finish: SetStatus(Ready) advances unreadAt past the zero snapshot.
 	target.SetStatus(session.Ready)
-	h.maybeNotify(target, session.Running, time.Time{}, config.NotificationsBell)
+	h.maybeNotify(target, session.Running, time.Time{}, false, config.NotificationsBell)
 	require.Equal(t, "\a", buf.String(), "a genuine finish on a seen, non-selected session rings once")
 }
 
@@ -178,18 +190,18 @@ func TestMaybeNotifySelectedSessionStaysSilent(t *testing.T) {
 	list.AddInstance(inst)() // the sole instance is the selected one
 	require.Same(t, inst, list.GetSelectedInstance())
 	// Observe it once (gate), then finish it — still silent because it's selected.
-	h.maybeNotify(inst, session.Running, time.Time{}, config.NotificationsBell)
+	h.maybeNotify(inst, session.Running, time.Time{}, false, config.NotificationsBell)
 	inst.SetStatus(session.Ready)
-	h.maybeNotify(inst, session.Running, time.Time{}, config.NotificationsBell)
+	h.maybeNotify(inst, session.Running, time.Time{}, false, config.NotificationsBell)
 	require.Empty(t, buf.String(), "the selected session the user is watching never notifies")
 }
 
 // finishOnce marks the background target observed, then drives a genuine finish edge
 // and reports whatever maybeNotify wrote. Shared by the focus/mute gate tests.
 func finishOnce(h *home, target *session.Instance) {
-	h.maybeNotify(target, session.Running, time.Time{}, config.NotificationsBell) // observe (gate)
-	target.SetStatus(session.Ready)                                               // genuine finish edge
-	h.maybeNotify(target, session.Running, time.Time{}, config.NotificationsBell)
+	h.maybeNotify(target, session.Running, time.Time{}, false, config.NotificationsBell) // observe (gate)
+	target.SetStatus(session.Ready)                                                      // genuine finish edge
+	h.maybeNotify(target, session.Running, time.Time{}, false, config.NotificationsBell)
 }
 
 // TestMaybeNotifyFocusedStaysSilent covers AC #1: with the terminal focused, no
@@ -217,7 +229,7 @@ func TestMaybeNotifyNotifiesAfterBlur(t *testing.T) {
 	h.focused = false
 	target.SetStatus(session.Running)
 	target.SetStatus(session.Ready)
-	h.maybeNotify(target, session.Running, time.Time{}, config.NotificationsBell)
+	h.maybeNotify(target, session.Running, time.Time{}, false, config.NotificationsBell)
 	require.Equal(t, "\a", buf.String(), "the edge notifies after blur")
 }
 
@@ -261,7 +273,7 @@ func blockEdge(h *home, target *session.Instance, mode string) {
 	old := target.GetStatus()
 	prevUnreadAt := target.UnreadAt()
 	target.SetStatus(session.NeedsInput)
-	h.maybeNotify(target, old, prevUnreadAt, mode)
+	h.maybeNotify(target, old, prevUnreadAt, false, mode)
 }
 
 // TestMaybeNotifyFinishedRungOffStaysSilent covers the quietest rung: with the finished
@@ -291,9 +303,9 @@ func TestMaybeNotifyFinishedRungQuieterThanBase(t *testing.T) {
 	h.appConfig.NotificationsFinished = config.NotificationsBell
 	target := notifyTarget(t, list)
 
-	h.maybeNotify(target, session.Running, time.Time{}, config.NotificationsOSC) // observe (gate)
+	h.maybeNotify(target, session.Running, time.Time{}, false, config.NotificationsOSC) // observe (gate)
 	target.SetStatus(session.Ready)
-	h.maybeNotify(target, session.Running, time.Time{}, config.NotificationsOSC)
+	h.maybeNotify(target, session.Running, time.Time{}, false, config.NotificationsOSC)
 	require.Equal(t, "\a", buf.String(), "the finish takes the quieter bell rung, not the configured osc")
 
 	buf.Reset()
@@ -499,4 +511,112 @@ func TestForgetInstanceDropsBookkeeping(t *testing.T) {
 	require.False(t, seen, "notifySeen entry is dropped so the killed instance can be GC'd")
 	_, striking := h.lostStrikes[inst]
 	require.False(t, striking, "lostStrikes entry is dropped too")
+}
+
+// finishEdge drives a genuine finish edge on target and reports whatever maybeNotify
+// wrote, mirroring blockEdge: the unread stamp is snapshotted before the status write,
+// exactly as applyMetadataResults does, so the transition reads as a finish.
+func finishEdge(h *home, target *session.Instance, asked bool, mode string) {
+	old := target.GetStatus()
+	prevUnreadAt := target.UnreadAt()
+	target.SetStatus(session.Ready)
+	h.maybeNotify(target, old, prevUnreadAt, asked, mode)
+}
+
+// TestMaybeNotifyQueuedPromptNeverSilencesAQuestion is the heart of #571's second half.
+//
+// A finished turn with a queued follow-up is suppressed on the reasoning that the queue
+// is about to auto-continue it, so ringing would ping the user for work they queued to
+// run unattended. That reasoning is FALSE for a turn that ended by asking: the queue is
+// held (promptDeliveryReady), nothing will auto-continue, and the user is the only one who
+// can resolve it. Suppressing there silences the one event they must act on — and does it
+// *because* they queued work.
+func TestMaybeNotifyQueuedPromptNeverSilencesAQuestion(t *testing.T) {
+	var buf bytes.Buffer
+	h, list := newNotifyHome(t, &buf)
+	target := newNotifyInstance(t)
+	other := newNotifyInstance(t)
+	list.AddInstance(target)()
+	list.AddInstance(other)()
+	list.SetSelectedInstance(1) // the target must not be the selected row
+
+	// Observe once so the first-observation gate is spent.
+	finishEdge(h, target, false, config.NotificationsBell)
+	buf.Reset()
+
+	target.QueueFollowupPrompt("and then deploy it")
+
+	// A plain finish with a queued follow-up stays silent — the existing behaviour.
+	target.SetStatus(session.Running)
+	finishEdge(h, target, false, config.NotificationsBell)
+	require.Empty(t, buf.String(), "a plain finish with a queued follow-up is still suppressed")
+
+	// The same edge, on a turn that ended asking, must ring.
+	target.SetStatus(session.Running)
+	finishEdge(h, target, true, config.NotificationsBell)
+	require.NotEmpty(t, buf.String(), "a question must ring even with a follow-up queued")
+}
+
+// TestMaybeNotifyQuestionIgnoresTheFinishedRung pins the ladder end to end: with
+// notifications_finished at off — a setting a user picks to stop finish spam — a plain
+// finish is silent and a question still rings at the base mode.
+func TestMaybeNotifyQuestionIgnoresTheFinishedRung(t *testing.T) {
+	var buf bytes.Buffer
+	h, list := newNotifyHome(t, &buf)
+	h.appConfig.NotificationsFinished = config.NotificationsOff
+	target := newNotifyInstance(t)
+	other := newNotifyInstance(t)
+	list.AddInstance(target)()
+	list.AddInstance(other)()
+	list.SetSelectedInstance(1)
+
+	finishEdge(h, target, false, config.NotificationsBell)
+	buf.Reset()
+
+	target.SetStatus(session.Running)
+	finishEdge(h, target, false, config.NotificationsBell)
+	require.Empty(t, buf.String(), "notifications_finished: off silences a plain finish")
+
+	target.SetStatus(session.Running)
+	finishEdge(h, target, true, config.NotificationsBell)
+	require.NotEmpty(t, buf.String(), "...but must never reach a question")
+}
+
+// TestMaybeNotifyQuestionHasItsOwnThrottleBudget pins that EventAsked throttles against
+// its own last-fired stamp, not the finish one.
+//
+// The edges share a status transition, so a finish moments before a question is the
+// common case, not a corner: an agent that finishes a turn, is asked to continue, and
+// then stops to ask would have its question swallowed by the finish's budget. The middle
+// step is a positive control — without it, the question ringing at the end could just
+// mean throttling never applies here.
+func TestMaybeNotifyQuestionHasItsOwnThrottleBudget(t *testing.T) {
+	var buf bytes.Buffer
+	h, list := newNotifyHome(t, &buf)
+	target := newNotifyInstance(t)
+	other := newNotifyInstance(t)
+	list.AddInstance(target)()
+	list.AddInstance(other)()
+	list.SetSelectedInstance(1)
+
+	finishEdge(h, target, false, config.NotificationsBell) // spend the first-observation gate
+	buf.Reset()
+
+	target.SetStatus(session.Running)
+	finishEdge(h, target, false, config.NotificationsBell)
+	require.NotEmpty(t, buf.String(), "the first finish rings and spends the finish budget")
+	buf.Reset()
+
+	// Positive control: a second finish inside notifyThrottle is swallowed, so the
+	// throttle demonstrably applies on this path.
+	target.SetStatus(session.Running)
+	finishEdge(h, target, false, config.NotificationsBell)
+	require.Empty(t, buf.String(), "a second finish inside the window is throttled")
+	buf.Reset()
+
+	// The question rides its own budget and must still ring.
+	target.SetStatus(session.Running)
+	finishEdge(h, target, true, config.NotificationsBell)
+	require.NotEmpty(t, buf.String(),
+		"a question must not be swallowed by a finish that spent its budget moments earlier")
 }

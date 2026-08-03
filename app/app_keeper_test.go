@@ -1,6 +1,7 @@
 package app
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"os"
@@ -12,8 +13,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ZviBaratz/atrium/cmd"
 	"github.com/ZviBaratz/atrium/cmd/cmd_test"
 	"github.com/ZviBaratz/atrium/config"
+	"github.com/ZviBaratz/atrium/notify"
 	"github.com/ZviBaratz/atrium/session"
 	"github.com/ZviBaratz/atrium/session/tmux"
 	"github.com/ZviBaratz/atrium/ui"
@@ -824,4 +827,90 @@ func TestTickPathHoldsPromptWhenQuestionFirstAppears(t *testing.T) {
 	typed, enters, _ = fake.snapshot()
 	require.Equal(t, []string{"go ahead"}, typed, "a seen question releases the follow-up")
 	require.Equal(t, 1, enters)
+}
+
+// TestTickPathNotifiesAsked is the wiring guard for #571's notification half.
+//
+// Every other notify test drives notifyEventFor or maybeNotify directly, handing in
+// `asked` as an argument — so all of them pass while the one place production computes
+// that argument passes a literal false. That is not hypothetical: this PR shipped exactly
+// that, with a comment above the call claiming it passed r.asked. Type-correct, vet-clean,
+// full suite green, and EventAsked silently retired in production.
+//
+// This drives the real tick — collectMetadata (off-thread verdict) → applyMetadataResults
+// (ApplyPaneState, then maybeNotify) — and asserts the question rings THROUGH that path.
+// The finished rung is set to off so a plain finish cannot produce the bell being asserted:
+// what rings here can only be EventAsked.
+func TestTickPathNotifiesAsked(t *testing.T) {
+	var buf bytes.Buffer
+	h := newCreateFormHome(t)
+	h.lostStrikes = map[*session.Instance]int{}
+	h.notifier = notify.New(&buf, cmd.MakeExecutor())
+	h.notifySeen = make(map[*session.Instance]*notifyState)
+	h.appConfig.Notifications = config.NotificationsBell
+	h.appConfig.NotificationsFinished = config.NotificationsOff
+
+	fake := &fakeKeeperPane{}
+	inst := newKeeperInstance(t, "ticknotify", fake)
+	startKeeperInstance(t, inst)
+	writeKeeperTranscript(t, inst, inst.WorkingDir(), "Want me to open the PR, or will you?")
+	h.list.AddInstance(inst)()
+
+	// A second row is selected: maybeNotify stays silent on the selected instance.
+	other := newNotifyInstance(t)
+	h.list.AddInstance(other)()
+	h.list.SetSelectedInstance(1)
+
+	// Spend the first-observation gate without letting the edge itself ring.
+	h.notifySeen[inst] = &notifyState{}
+	inst.SetStatus(session.Running)
+	buf.Reset()
+
+	results := collectMetadata(h.ctx, []*session.Instance{inst}, nil, false)
+	require.True(t, results[0].asked, "precondition: the question was detected off-thread")
+	h.applyMetadataResults(results, true)
+
+	require.NotEmpty(t, buf.String(),
+		"the tick must notify for a question; with notifications_finished=off only EventAsked can ring here")
+}
+
+// TestTickPathPlainFinishStaysQuiet is TestTickPathNotifiesAsked's negative control, and
+// it guards the opposite miswiring: passing a constant true where r.asked belongs.
+//
+// That direction is worse than it looks. It would classify EVERY finished turn as a
+// question, routing all of them through the base mode and out of reach of
+// notifications_finished — the "just raise the EventFinished rung" mistake #571 explicitly
+// warns against, arrived at by accident. Without this test the constant passes: the
+// asked-side test only gets louder.
+//
+// Same wiring as its sibling, one difference: the turn ends on a statement.
+func TestTickPathPlainFinishStaysQuiet(t *testing.T) {
+	var buf bytes.Buffer
+	h := newCreateFormHome(t)
+	h.lostStrikes = map[*session.Instance]int{}
+	h.notifier = notify.New(&buf, cmd.MakeExecutor())
+	h.notifySeen = make(map[*session.Instance]*notifyState)
+	h.appConfig.Notifications = config.NotificationsBell
+	h.appConfig.NotificationsFinished = config.NotificationsOff
+
+	fake := &fakeKeeperPane{}
+	inst := newKeeperInstance(t, "tickquiet", fake)
+	startKeeperInstance(t, inst)
+	writeKeeperTranscript(t, inst, inst.WorkingDir(), "Done. The PR is open and CI is green.")
+	h.list.AddInstance(inst)()
+
+	other := newNotifyInstance(t)
+	h.list.AddInstance(other)()
+	h.list.SetSelectedInstance(1)
+
+	h.notifySeen[inst] = &notifyState{}
+	inst.SetStatus(session.Running)
+	buf.Reset()
+
+	results := collectMetadata(h.ctx, []*session.Instance{inst}, nil, false)
+	require.False(t, results[0].asked, "precondition: a statement is not a question")
+	h.applyMetadataResults(results, true)
+
+	require.Empty(t, buf.String(),
+		"a plain finish must stay on the finished rung (off), not be reported as a question")
 }
