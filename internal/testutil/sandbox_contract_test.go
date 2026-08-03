@@ -92,10 +92,9 @@ func TestNoTestCallsOsExit(t *testing.T) {
 		"only %d test files parsed — the walk is not reaching the module", checked)
 }
 
-// The sandbox HOME must carry its owner marker. Without one, rootIsStale falls
-// through to age alone, so a root outliving rootGrace reads as an orphan and the
-// next package binary's sweep deletes it — mid-run, taking this run's state.json and
-// any worktrees underneath it.
+// The sandbox HOME must carry its owner marker. An unmarked root is never swept, so
+// a missing marker does not endanger this run — it strands the directory instead,
+// permanently, since no later run can identify it as an orphan to reclaim.
 func TestSandboxHomeCarriesItsOwnerMarker(t *testing.T) {
 	home, err := os.UserHomeDir()
 	require.NoError(t, err)
@@ -112,52 +111,90 @@ func TestSandboxHomeCarriesItsOwnerMarker(t *testing.T) {
 		"%s names another process, which reads as an owner that has exited", ownerMarkerFile)
 }
 
+// staleRoot builds a directory that rootIsStale answers "yes" to: named like ours
+// and marked with a pid that has exited. Every fixture below is built this way on
+// purpose — a directory that is spared for some *other* reason proves nothing about
+// the refusal under test, which is how the self-skip assertion here was vacuous in
+// its first form.
+func staleRoot(t *testing.T, parent, name string) string {
+	t.Helper()
+	root := filepath.Join(parent, name)
+	require.NoError(t, os.Mkdir(root, 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(root, ownerMarkerFile),
+		[]byte(strconv.Itoa(deadPID(t))), 0o600))
+	require.Truef(t, rootIsStale(root), "fixture %s is not stale, so sparing it proves nothing", name)
+	return root
+}
+
 // sweepStaleRoots is what deletes directories, so its refusals are the safety
-// surface. A prefix that matched nothing of ours, or a self it failed to skip, is
-// how a sweep reaps the run that started it.
+// surface — each one is asserted against a fixture that would otherwise be reaped.
 func TestSweepStaleRootsSpares(t *testing.T) {
 	parent := t.TempDir()
 
-	// Named like ours and provably stale — but it is self. The marker names an exited
-	// process on purpose: an owner that is alive would be spared by rootIsStale, and
-	// the self-skip this exists to assert would never be reached. That was this test's
-	// first shape, and deleting the self-skip did not fail it.
-	self := filepath.Join(parent, homeRootPrefix+"self")
-	require.NoError(t, os.Mkdir(self, 0o700))
-	require.NoError(t, os.WriteFile(filepath.Join(self, ownerMarkerFile),
-		[]byte(strconv.Itoa(deadPID(t))), 0o600))
-	old := time.Now().Add(-2 * rootGrace)
-	require.NoError(t, os.Chtimes(self, old, old))
-	require.True(t, rootIsStale(self),
-		"the self fixture is not stale, so sparing it would prove nothing about the self-skip")
-
-	// Stale by every measure, but not named like ours.
-	foreign := filepath.Join(parent, "someone-elses-scratch")
-	require.NoError(t, os.Mkdir(foreign, 0o700))
-	require.NoError(t, os.Chtimes(foreign, old, old))
-
-	// Ours, stale, and reapable — the control, without which "nothing was deleted"
-	// would hold because the sweep never ran.
-	doomed := filepath.Join(parent, homeRootPrefix+"doomed")
-	require.NoError(t, os.Mkdir(doomed, 0o700))
-	require.NoError(t, os.Chtimes(doomed, old, old))
+	self := staleRoot(t, parent, homeRootPrefix+"self")
+	foreign := staleRoot(t, parent, "someone-elses-scratch")
+	doomed := staleRoot(t, parent, homeRootPrefix+"doomed")
 
 	sweepStaleRoots(parent, homeRootPrefix, self, nil)
 
 	require.DirExists(t, self, "the sweep deleted the root of the run that started it")
 	require.DirExists(t, foreign, "the sweep deleted a directory it did not create — the prefix "+
-		"is the only thing bounding what this removes")
-	require.NoDirExists(t, doomed, "the sweep removed nothing at all, so the two assertions above prove nothing")
+		"is what bounds what this removes")
+	require.NoDirExists(t, doomed,
+		"the sweep removed nothing at all, so the two assertions above prove nothing")
+}
+
+// An unmarked directory is never swept, whatever it looks like. This is the guard
+// that decides how bad a wrong prefix can get: /tmp/tmux-<uid>, and everything else
+// in /tmp, carries no owner marker.
+func TestSweepStaleRootsSparesTheUnmarked(t *testing.T) {
+	parent := t.TempDir()
+
+	// Named exactly like ours, and old — everything the previous age-based rule
+	// needed to delete it.
+	unmarked := filepath.Join(parent, homeRootPrefix+"unmarked")
+	require.NoError(t, os.Mkdir(unmarked, 0o700))
+	old := time.Now().Add(-90 * 24 * time.Hour)
+	require.NoError(t, os.Chtimes(unmarked, old, old))
+	require.False(t, rootIsStale(unmarked), "an unmarked root must never be stale, at any age")
+
+	// A stand-in for the live socket directory this once destroyed: no marker, and
+	// holding something that matters.
+	live := filepath.Join(parent, homeRootPrefix+"live-socket-dir")
+	require.NoError(t, os.Mkdir(live, 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(live, "atrium"), nil, 0o600))
+	require.NoError(t, os.Chtimes(live, old, old))
+
+	doomed := staleRoot(t, parent, homeRootPrefix+"doomed")
+
+	sweepStaleRoots(parent, homeRootPrefix, "", nil)
+
+	require.DirExists(t, unmarked, "an unmarked directory was deleted on age alone")
+	require.FileExists(t, filepath.Join(live, "atrium"),
+		"the sweep emptied an unmarked directory it did not create")
+	require.NoDirExists(t, doomed, "the sweep removed nothing, so the assertions above are vacuous")
+}
+
+// A prefix too short to be distinctive is refused outright, before the glob. An
+// empty one is what a bad edit produces, and it would make the glob "everything in
+// parent".
+func TestSweepStaleRootsRefusesAWeakPrefix(t *testing.T) {
+	for _, prefix := range []string{"", "a", "atr", "atriu"} {
+		parent := t.TempDir()
+		doomed := staleRoot(t, parent, prefix+"doomed")
+
+		sweepStaleRoots(parent, prefix, "", nil)
+
+		require.DirExistsf(t, doomed, "prefix %q was accepted: anything this short can match "+
+			"a directory the sweep did not create", prefix)
+	}
 }
 
 // A release veto must stop the removal, not just the reaping. This is how the tmux
 // sweep keeps a socket whose server it could not kill.
 func TestSweepStaleRootsHonoursAReleaseVeto(t *testing.T) {
 	parent := t.TempDir()
-	root := filepath.Join(parent, homeRootPrefix+"vetoed")
-	require.NoError(t, os.Mkdir(root, 0o700))
-	old := time.Now().Add(-2 * rootGrace)
-	require.NoError(t, os.Chtimes(root, old, old))
+	root := staleRoot(t, parent, homeRootPrefix+"vetoed")
 
 	sweepStaleRoots(parent, homeRootPrefix, "", func(string) bool { return false })
 	require.DirExists(t, root, "a vetoed root was removed anyway: the tmux sweep relies on this "+

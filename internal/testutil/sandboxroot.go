@@ -7,7 +7,6 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
-	"time"
 )
 
 // A sandbox root is a temp directory a test binary owns for the length of its run:
@@ -21,25 +20,19 @@ import (
 // That makes the leak self-healing rather than permanent, which matters most for the
 // tmux root, where the orphan is not a directory but a running server holding a
 // never-exiting $SHELL.
-const (
-	// ownerMarkerFile records which process owns a root, so a later run can tell an
-	// orphan from a sibling package's live root.
-	ownerMarkerFile = "owner.pid"
-	// rootGrace is how long a root with no owner marker is presumed live. It covers
-	// the window between MkdirTemp returning and the marker being written, during
-	// which a concurrently starting package must not mistake a brand-new root for an
-	// orphan. `go test ./...` runs package binaries in parallel, so that window is
-	// genuinely raced. A root that *has* a marker is judged by it alone — see
-	// rootIsStale for why age must not override one.
-	rootGrace = 5 * time.Minute
-)
+
+// ownerMarkerFile records which process owns a root, so a later run can tell an
+// orphan from a sibling package's live root. Its presence is also the sweep's only
+// licence to delete anything: see rootIsStale.
+const ownerMarkerFile = "owner.pid"
 
 // markRootOwner stamps root with this process's pid.
 //
-// Its error is worth acting on rather than discarding: an unmarked root is judged
-// by age alone, so a root that outlives rootGrace unmarked is an orphan by that
-// measure — and a sibling package's sweep will delete it out from under the run
-// that is still using it. A root that cannot be marked is not a sandbox.
+// Its error is worth acting on rather than discarding, though not for the reason
+// you might expect: an unmarked root is never swept, so failing to write this
+// cannot get the root deleted. It means the opposite — the root becomes permanent
+// litter no later run can identify or reclaim. A root that cannot be marked is not
+// a sandbox, so the callers give up on it rather than leave one behind.
 func markRootOwner(root string) error {
 	return os.WriteFile(filepath.Join(root, ownerMarkerFile),
 		[]byte(strconv.Itoa(os.Getpid())), 0o600)
@@ -47,14 +40,10 @@ func markRootOwner(root string) error {
 
 // rootIsStale reports whether root belongs to a process that is gone.
 //
-// The owner marker is consulted first and, when it is there, it is the whole
-// answer: a root naming a dead pid is stale however recently it was touched. Age is
-// the fallback for a root with no marker, which is the only state the grace window
-// was ever for — the sliver between MkdirTemp returning and the marker landing.
-// Gating on age first instead would make the grace mean something else entirely,
-// because a teardown's own cleanup bumps the root's mtime on the way out: a crashed
-// run's root, holding the immortal $SHELL server the tmux sweep exists to reap,
-// would go unreaped for another rootGrace after every attempt.
+// The owner marker is the whole answer, and its absence is never an answer. A root
+// naming a dead pid is stale however recently it was touched; a root with no marker,
+// or one this process cannot read, is not stale at any age. Age plays no part —
+// deliberately, see the unmarked branch below.
 func rootIsStale(root string) bool {
 	info, err := os.Stat(root)
 	if err != nil || !info.IsDir() {
@@ -70,12 +59,24 @@ func rootIsStale(root string) bool {
 		return false
 	}
 	if err != nil {
-		// No owner recorded: a teardown already emptied it — or a sibling package binary
-		// created it a microsecond ago and has not laid its marker down yet, which is the
-		// only other way this state is reachable now that a failed marker write aborts
-		// the install outright. Only age separates them, and `go test ./...` runs those
-		// binaries in parallel, so that window is genuinely raced.
-		return time.Since(info.ModTime()) >= rootGrace
+		// No owner recorded: never stale, at any age. Absence of evidence is not
+		// permission to delete — and this is the guard that decides how bad a bug
+		// elsewhere can get, because it is the last thing standing between
+		// os.RemoveAll and a directory nothing here created.
+		//
+		// It replaces an age fallback ("unmarked and older than a grace window ⇒
+		// orphan"), which was written for the sliver between MkdirTemp returning and
+		// the marker landing. That reasoning was sound and the blast radius was not:
+		// with the fallback in place, the only thing keeping this sweep away from the
+		// rest of /tmp was its glob prefix, and a one-line change to that prefix
+		// deleted the developer's live tmux socket directory, their scratch dirs, and
+		// most of /tmp. Requiring positive evidence makes a wrong prefix merely wrong
+		// instead of catastrophic: /tmp/tmux-<uid> carries no owner.pid, so no glob
+		// can make it reapable.
+		//
+		// The cost is one permanently-leaked empty directory if a process dies inside
+		// that microsecond window. That is the right trade against a recursive delete.
+		return false
 	}
 	pid, err := strconv.Atoi(strings.TrimSpace(string(raw)))
 	if err != nil || pid <= 0 {
@@ -112,11 +113,25 @@ func processAlive(pid int) bool {
 // Globbing bounds the blast radius to parent's immediate children whose names start
 // with it, which is why parent itself can never be a candidate.
 func sweepStaleRoots(parent, prefix, self string, release func(string) bool) {
+	// A prefix short enough to be wrong is a prefix that can match anything, so this
+	// refuses rather than trusting its caller. `atrium-` is 7 characters; nothing
+	// legitimate here is shorter, and the empty string — what a bad edit produces —
+	// would turn the glob below into "every entry in parent".
+	if len(prefix) < 7 || parent == "" {
+		return
+	}
 	roots, err := filepath.Glob(filepath.Join(parent, prefix+"*"))
 	if err != nil {
 		return
 	}
 	for _, root := range roots {
+		// Re-checked here rather than trusted from the glob. The glob is one
+		// expression away from matching the whole parent, and when it did, this loop
+		// deleted the developer's live tmux socket directory along with most of /tmp.
+		// A guard that only exists in the pattern is a guard one edit can remove.
+		if !strings.HasPrefix(filepath.Base(root), prefix) {
+			continue
+		}
 		if root == self || !rootIsStale(root) {
 			continue
 		}

@@ -72,12 +72,12 @@ func installSandboxTmuxTmpdir() func() {
 		return func() {}
 	}
 	// The owner marker goes down before TMUX_TMPDIR names the root, and a root that
-	// cannot be marked is not a sandbox at all: unmarked, rootIsStale judges it by
-	// age alone, so a sibling package's sweep reaps it out from under this binary —
-	// live server and all — once it ages past rootGrace. Writing it first is also
-	// what keeps this failure path from having to undo a TMUX_TMPDIR it had already
-	// installed, and a variable naming a directory that no longer exists is the one
-	// state worse than no sandbox: tmux reads it as /tmp.
+	// cannot be marked is not a sandbox at all: unmarked, no future sweep can ever
+	// identify it, so it and any server it holds outlive every run that might have
+	// reclaimed them. Writing it first is also what keeps this failure path from
+	// having to undo a TMUX_TMPDIR it had already installed, and a variable naming a
+	// directory that no longer exists is the one state worse than no sandbox: tmux
+	// reads it as /tmp.
 	if err := os.WriteFile(filepath.Join(root, ownerMarkerFile),
 		[]byte(strconv.Itoa(os.Getpid())), 0o600); err != nil {
 		_ = os.RemoveAll(root)
@@ -117,19 +117,30 @@ func installSandboxTmuxTmpdir() func() {
 		// it, and tmux reads an empty *or missing* TMUX_TMPDIR as /tmp. Deleting the
 		// directory here would leave every later `-L` call in this process — a stray
 		// goroutine, a helper in the caller's TestMain — pointed at the developer's
-		// live socket. The next run's sweep removes the empty shell once it ages past
-		// rootGrace.
-		removeContents(root)
+		// live socket. The next run's sweep removes the shell, recognising it by the
+		// owner marker this deliberately leaves behind.
+		removeContentsExceptMarker(root)
 	}
 }
 
-// removeContents empties dir without removing dir itself.
-func removeContents(dir string) {
+// removeContentsExceptMarker empties dir without removing dir itself, and without
+// removing its owner marker.
+//
+// Keeping the marker is load-bearing, not tidiness. rootIsStale reaps only roots
+// whose marker names a dead process; a root stripped of its marker is one no sweep
+// will ever touch again. This teardown is the normal end of every sandboxed test
+// binary, so stripping it here would leak one directory per package per run — which
+// is exactly what an age-based fallback used to paper over, at the cost of making
+// every unmarked directory in the parent look reapable.
+func removeContentsExceptMarker(dir string) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return
 	}
 	for _, entry := range entries {
+		if entry.Name() == ownerMarkerFile {
+			continue
+		}
 		_ = os.RemoveAll(filepath.Join(dir, entry.Name()))
 	}
 }

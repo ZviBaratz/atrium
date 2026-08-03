@@ -56,9 +56,9 @@ func SandboxHomeMain(m *testing.M) int {
 		panic("testutil: failed to create sandbox HOME: " + err.Error())
 	}
 	// Marked before anything else can look at it, and a failure is fatal for the same
-	// reason the rest of this function's failures are: an unmarked root is judged by
-	// age alone, so a sibling package binary's sweep would delete this run's HOME out
-	// from under it once it aged past rootGrace.
+	// reason the rest of this function's failures are: the marker is what lets a later
+	// run recognise this directory as an orphan, so an unmarked root is one nothing
+	// will ever reclaim — the leak this whole file exists to stop, made permanent.
 	if err := markRootOwner(tmp); err != nil {
 		_ = os.RemoveAll(tmp)
 		panic("testutil: failed to mark sandbox HOME: " + err.Error())

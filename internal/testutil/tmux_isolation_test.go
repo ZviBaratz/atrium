@@ -37,15 +37,14 @@ func TestSandboxInstallsAPrivateTmuxRoot(t *testing.T) {
 			root, longest)
 	}
 
-	// The marker is not bookkeeping, it is what stops a sibling run's sweep reaping
-	// this root while it is in use: without one, rootIsStale falls through to age
-	// alone and a root outliving rootGrace is an orphan by that measure. So a root
-	// that exists must carry it — which is why installSandboxTmuxTmpdir writes it
-	// before it publishes TMUX_TMPDIR, and gives up on the whole sandbox if it cannot.
+	// The marker is not bookkeeping: it is the only thing that ever makes a directory
+	// reapable, so a root without one is litter no later run can reclaim. That is why
+	// installSandboxTmuxTmpdir writes it before it publishes TMUX_TMPDIR and gives up
+	// on the whole sandbox if it cannot.
 	raw, err := os.ReadFile(filepath.Join(root, ownerMarkerFile))
 	if err != nil {
-		t.Fatalf("sandbox root %q carries no %s: an unmarked root is swept by age alone, "+
-			"so a sibling `go test ./...` package would reap this one mid-run", root, ownerMarkerFile)
+		t.Fatalf("sandbox root %q carries no %s: nothing can ever identify it as an orphan, "+
+			"so it outlives every future sweep", root, ownerMarkerFile)
 	}
 	if got := strings.TrimSpace(string(raw)); got != strconv.Itoa(os.Getpid()) {
 		t.Fatalf("%s names %q, want this process (%d): a marker naming anything else is read as "+
@@ -227,7 +226,7 @@ func TestTmuxRootIsStale(t *testing.T) {
 				t.Fatalf("write marker: %v", err)
 			}
 		}
-		old := time.Now().Add(-2 * rootGrace)
+		old := time.Now().Add(-90 * 24 * time.Hour)
 		if err := os.Chtimes(root, old, old); err != nil {
 			t.Fatalf("chtimes: %v", err)
 		}
@@ -235,9 +234,9 @@ func TestTmuxRootIsStale(t *testing.T) {
 	}
 
 	t.Run("a fresh root with no marker is not stale", func(t *testing.T) {
-		// The race the grace window exists for, and the only state it is for: MkdirTemp
-		// has returned but the marker is not written yet, and a sibling binary is
-		// sweeping right now.
+		// MkdirTemp has returned but the marker is not written yet, and a sibling binary
+		// is sweeping right now. Unmarked means untouchable, so the race is closed by
+		// construction rather than by a timing window.
 		if rootIsStale(unswept(t)) {
 			t.Fatal("a just-created root with no marker was swept: a concurrent `go test ./...` " +
 				"package would lose its socket root mid-run")
@@ -272,7 +271,7 @@ func TestTmuxRootIsStale(t *testing.T) {
 		if err := os.WriteFile(filepath.Join(root, ownerMarkerFile), []byte("1"), 0o600); err != nil {
 			t.Fatalf("write marker: %v", err)
 		}
-		old := time.Now().Add(-2 * rootGrace)
+		old := time.Now().Add(-90 * 24 * time.Hour)
 		if err := os.Chtimes(root, old, old); err != nil {
 			t.Fatalf("chtimes: %v", err)
 		}
@@ -292,7 +291,7 @@ func TestTmuxRootIsStale(t *testing.T) {
 		if err := os.Mkdir(filepath.Join(root, ownerMarkerFile), 0o700); err != nil {
 			t.Fatalf("mkdir marker: %v", err)
 		}
-		old := time.Now().Add(-2 * rootGrace)
+		old := time.Now().Add(-90 * 24 * time.Hour)
 		if err := os.Chtimes(root, old, old); err != nil {
 			t.Fatalf("chtimes: %v", err)
 		}
@@ -308,9 +307,14 @@ func TestTmuxRootIsStale(t *testing.T) {
 		}
 	})
 
-	t.Run("an aged root with no marker is stale", func(t *testing.T) {
-		if !rootIsStale(aged(t, "")) {
-			t.Fatal("an aged root with no owner recorded was not reported stale")
+	t.Run("an aged root with no marker is never stale", func(t *testing.T) {
+		// This asserted the opposite until an unprefixed glob, paired with the age
+		// fallback it relied on, deleted the developer's live tmux socket directory and
+		// most of /tmp. Absence of a marker is now never permission: it is the guard
+		// that keeps a wrong prefix merely wrong.
+		if rootIsStale(aged(t, "")) {
+			t.Fatal("an unmarked root was reported stale on age alone — every directory in " +
+				"/tmp is unmarked, and this sweep calls os.RemoveAll")
 		}
 	})
 
