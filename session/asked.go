@@ -11,8 +11,9 @@ import (
 
 // EndedAsking reports whether the session's last turn ended with a question the user has
 // not answered. It is the gate that keeps a queued follow-up from being delivered as the
-// answer (see app.promptDeliveryReady) and, once the notification ladder grows its own
-// rung, what tells a question apart from a plain finish.
+// answer (see app.questionHoldsPrompt, which both dispatchers apply) and what tells a
+// question apart from a plain finish on the notification ladder, which grew its own rung
+// for it in #571 (notify.EventAsked).
 //
 // Always false for a non-claude agent: only claude has a transcript adapter, so codex,
 // gemini and aider keep their existing behaviour untouched.

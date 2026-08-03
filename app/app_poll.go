@@ -734,7 +734,18 @@ func (m *home) applyMetadataResults(results []instanceMetaResult, emit bool) []t
 		}
 		r.instance.ApplyPaneState(r.state)
 		if notifyOn {
-			m.maybeNotify(r.instance, old, prevUnreadAt, mode)
+			// r.asked is the verdict endedAskingNow resolved for this tick (fresh read
+			// or memo), and it is the SAME value deliverReadyPrompts gates the hold on
+			// below — so the notification and the hold can never disagree about whether
+			// the turn ended asking. They act at different points in the tick (here,
+			// inside the loop; the hold after it, once ApplyPaneState has raised
+			// Unread), but both read this one immutable field.
+			//
+			// Passing a literal false here instead is not a compile error and not a test
+			// failure — every notify test drives notifyEventFor/maybeNotify directly — it
+			// just silently retires EventAsked in production. TestTickPathNotifiesAsked
+			// exists because that is not a hypothetical.
+			m.maybeNotify(r.instance, old, prevUnreadAt, r.asked, mode)
 		}
 		applyDiffStats(r.instance, r.diffStats, r.diffContentSkipped)
 		r.instance.SetPRStatus(r.prStatus)

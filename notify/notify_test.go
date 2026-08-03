@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
 	"sync"
@@ -211,4 +212,119 @@ func TestOsaQuote(t *testing.T) {
 	// user-editable via rename) fold to spaces so the one-line script stays valid.
 	require.Equal(t, `"a b"`, osaQuote("a\nb"), "newline folds to a space")
 	require.Equal(t, `"a b c"`, osaQuote("a\tb\rc"), "tab and CR fold to spaces")
+}
+
+// TestEventVocabulary pins the three-way vocabulary handed to a notify command.
+//
+// ATRIUM_STATUS and ATRIUM_EVENT are deliberately different axes: status is what the row
+// shows, so a question reports "Ready" — the turn DID end — and an existing user script
+// keying on status keeps its meaning now that a third event exists. ATRIUM_EVENT is the
+// axis that distinguishes them.
+func TestEventVocabulary(t *testing.T) {
+	cases := []struct {
+		ev                  Event
+		status, token, want string
+	}{
+		{EventFinished, "Ready", "finished", "sess finished"},
+		{EventNeedsInput, "NeedsInput", "needs_input", "sess needs input"},
+		{EventAsked, "Ready", "asked", "sess asked a question"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.token, func(t *testing.T) {
+			require.Equal(t, tc.status, tc.ev.status())
+			require.Equal(t, tc.token, tc.ev.token())
+			require.Equal(t, tc.want, tc.ev.headline("sess"))
+		})
+	}
+}
+
+// TestDesktopCommandAskedCarriesEnv pins the asked event through the same env-building
+// path the other events use, so a user command can branch on ATRIUM_EVENT.
+func TestDesktopCommandAskedCarriesEnv(t *testing.T) {
+	n := New(&bytes.Buffer{}, &fakeExec{})
+	c := n.desktopCommand(context.Background(), "notify-send \"$ATRIUM_EVENT\"", "my sess", EventAsked)
+	require.Contains(t, c.Env, "ATRIUM_SESSION=my sess")
+	require.Contains(t, c.Env, "ATRIUM_STATUS=Ready")
+	require.Contains(t, c.Env, "ATRIUM_EVENT=asked")
+}
+
+// moduleFile walks up from the test's working directory to the module root and reads the
+// named file (see the identical helper in packages config, keys and ui/overlay).
+func moduleFile(t *testing.T, name string) string {
+	t.Helper()
+	dir, err := os.Getwd()
+	require.NoError(t, err)
+	for {
+		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
+			b, err := os.ReadFile(filepath.Join(dir, name))
+			require.NoError(t, err)
+			return string(b)
+		}
+		parent := filepath.Dir(dir)
+		require.NotEqualf(t, parent, dir,
+			"reached filesystem root without finding go.mod (looking for %s)", name)
+		dir = parent
+	}
+}
+
+// eventConstNames reads the Event const block out of notify.go rather than trusting a list
+// written by hand. It is what makes the table in TestEveryEventTokenIsDocumented a claim
+// the suite can falsify: a fourth event added to the enum shows up here immediately, and
+// the table that does not mention it fails before any documentation is even consulted.
+func eventConstNames(t *testing.T) []string {
+	t.Helper()
+	src := moduleFile(t, "notify/notify.go")
+	start := strings.Index(src, "\tEventFinished Event = iota")
+	require.GreaterOrEqual(t, start, 0, "notify.go must declare the Event enum with iota")
+	end := strings.Index(src[start:], "\n)")
+	require.Greater(t, end, 0, "the Event const block must be terminated")
+	decl := regexp.MustCompile(`^\tEvent[A-Za-z]+`)
+	var names []string
+	for _, line := range strings.Split(src[start:start+end], "\n") {
+		if m := decl.FindString(line); m != "" {
+			names = append(names, strings.TrimSpace(m))
+		}
+	}
+	return names
+}
+
+// TestEveryEventTokenIsDocumented pins the $ATRIUM_EVENT vocabulary to the prose that
+// enumerates it, in both directions.
+//
+// This guard exists because that vocabulary drifted the moment it grew a third value:
+// EventAsked shipped with README updated and Config.NotifyCommand's doc comment still
+// promising a two-value world, three lines below a comment the same change had rewritten.
+// Nothing caught it — `token()` is exercised by TestEventVocabulary, but no test had ever
+// read the sentences that tell a user what to branch on, so a green suite proved only that
+// the code was right about itself.
+//
+// The enum is read out of the source (eventConstNames), so a fourth event cannot satisfy
+// this by being absent from the table too.
+func TestEveryEventTokenIsDocumented(t *testing.T) {
+	tokens := map[string]Event{
+		"EventFinished":   EventFinished,
+		"EventNeedsInput": EventNeedsInput,
+		"EventAsked":      EventAsked,
+	}
+	named := make([]string, 0, len(tokens))
+	for name := range tokens {
+		named = append(named, name)
+	}
+	require.ElementsMatch(t, eventConstNames(t), named,
+		"the Event enum and this test's table have diverged — a new event needs a token "+
+			"here and a mention in every doc site below")
+
+	// Each doc site enumerates the vocabulary in one sentence, so the window after the
+	// first $ATRIUM_EVENT mention is where every token has to appear.
+	for _, site := range []string{"README.md", "config/types.go"} {
+		body := moduleFile(t, site)
+		at := strings.Index(body, "ATRIUM_EVENT")
+		require.GreaterOrEqualf(t, at, 0, "%s must document $ATRIUM_EVENT", site)
+		window := body[at:min(at+220, len(body))]
+		for name, ev := range tokens {
+			require.Containsf(t, window, ev.token(),
+				"%s does not list the %s token %q where it enumerates $ATRIUM_EVENT:\n%s",
+				site, name, ev.token(), window)
+		}
+	}
 }

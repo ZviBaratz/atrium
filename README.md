@@ -479,9 +479,10 @@ session finishes a turn or blocks on a prompt. `notifications` selects how:
   notifier binary. Supported by iTerm2, kitty, WezTerm, Ghostty, ConEmu, and foot;
   terminals that don't recognize it simply show nothing.
 
-Both events — a turn finishing, and a session blocking on you — use that one mode
-by default. `notifications_finished` splits them into an **attention ladder**, so
-the agent that actually needs you is never out-shouted by one that merely stopped:
+All three events — a turn finishing, a session blocking on you, and an agent that
+ended its turn by **asking you a question** — use that one mode by default.
+`notifications_finished` splits them into an **attention ladder**, so the agent
+that actually needs you is never out-shouted by one that merely stopped:
 
 - `"same"` (default) — a finished turn uses the `notifications` mode too, exactly
   as before.
@@ -490,12 +491,22 @@ the agent that actually needs you is never out-shouted by one that merely stoppe
 - `"bell"` — a finished turn just rings the terminal, while a session blocking on
   you gets the fuller `notifications` mode (and `b` jumps to it).
 
-A blocked session always uses `notifications` itself, and only rungs quieter than
-every mode are offered, so a finished turn can never outrank a blocked one.
+The rung applies to a **plain** finished turn only. A blocked session and a session
+that stopped to ask both always use `notifications` itself, and only rungs quieter
+than every mode are offered, so a finished turn can never outrank either.
 `"desktop"` and `"osc"` are deliberately not accepted here — they are peers of each
 other, so neither is "one rung quieter" than the other; anything unrecognized reads
-as `"same"`. `notifications: "off"` remains the master switch: it silences both
-events whatever `notifications_finished` says.
+as `"same"`. `notifications: "off"` remains the master switch: it silences all
+three events whatever `notifications_finished` says.
+
+**A question is never silenced by a queued prompt.** A finished turn on a session
+with a follow-up queued stays quiet — it is about to be auto-continued, and ringing
+would ping you for work you queued to run unattended. But a turn that ended by
+asking is not auto-continued: Atrium holds the queue rather than answering the
+question for you (the prompt goes out once you've looked at the row), so that turn
+notifies like any other session waiting on you. Detection is claude-only, and reads
+the last thing the agent wrote; an agent that asks by saying "let me know" rather
+than with a question mark is not detected, and behaves as a plain finished turn.
 
 The session you're currently on — the selected row, or one you're attached to —
 never notifies, so only agents you've navigated away from can interrupt you.
@@ -519,7 +530,7 @@ one merely finished its turn.
 
 `notify_command`, when set, runs via `sh -c` for each desktop notification with
 `$ATRIUM_SESSION` (the session's display name), `$ATRIUM_STATUS`
-(`Ready`/`NeedsInput`), and `$ATRIUM_EVENT` (`finished`/`needs_input`) in its
+(`Ready`/`NeedsInput`), and `$ATRIUM_EVENT` (`finished`/`needs_input`/`asked`) in its
 environment — the session name rides in the environment, never interpolated into
 the command, so it can't break argument parsing. Use it for `terminal-notifier`,
 webhooks (`curl`), or any custom notifier. A failing command is logged, never
@@ -1022,7 +1033,7 @@ Advanced — shown in the Category column below. The four keys with no panel row
 | `group_mode` | Session list | string | `"repo"` | list grouping: `repo` / `account` |
 | `smart_dispatch_auto` | Automation | bool | `false` | let a confident `i` match create the session without the form |
 | `notifications` | Notifications | string | `"off"` | background-session signal: `off` / `bell` / `desktop` / `osc` (SSH-friendly OSC 9) ([Notifications](#notifications)) |
-| `notifications_finished` | Notifications | string | `"same"` | quieter rung for a *finished turn* only, so a blocked session is never out-shouted: `same` / `off` / `bell` ([Notifications](#notifications)) |
+| `notifications_finished` | Notifications | string | `"same"` | quieter rung for a *plain finished turn* only, so a blocked session — or one that stopped to ask — is never out-shouted: `same` / `off` / `bell` ([Notifications](#notifications)) |
 | `notify_command` | Notifications | string | built-in | shell command for `desktop` notifications ([Notifications](#notifications)) |
 | `notify_when_focused` | Notifications | bool | `false` | keep notifying while Atrium's terminal is focused; `false` stays silent while you're watching ([Notifications](#notifications)) |
 

@@ -20,6 +20,7 @@ const notifyThrottle = 3 * time.Second
 type notifyState struct {
 	lastFinished   time.Time
 	lastNeedsInput time.Time
+	lastAsked      time.Time
 }
 
 // notifyEventFor maps a status transition to the notification event it warrants, if
@@ -29,8 +30,16 @@ type notifyState struct {
 // of synthetic restore/resume/recover transitions is inherited for free. The
 // NeedsInput edge is a plain status diff — synthetic lifecycle writes only ever go to
 // Running, never NeedsInput, so no suppression is needed there.
-func notifyEventFor(old, current session.Status, unreadAdvanced bool) (notify.Event, bool) {
+//
+// asked splits that finish edge in two (#571). It is the same transition on the same
+// tick — a question does not have an edge of its own, because the pane cannot tell one
+// from a plain finish — so it is tested FIRST and simply renames the event. Everything
+// the finish edge already earns (the unread stamp, the synthetic-transition
+// suppression) is inherited unchanged; only the routing downstream differs.
+func notifyEventFor(old, current session.Status, unreadAdvanced, asked bool) (notify.Event, bool) {
 	switch {
+	case unreadAdvanced && asked:
+		return notify.EventAsked, true
 	case unreadAdvanced:
 		return notify.EventFinished, true
 	case old != session.NeedsInput && current == session.NeedsInput:
@@ -40,14 +49,20 @@ func notifyEventFor(old, current session.Status, unreadAdvanced bool) (notify.Ev
 	}
 }
 
-// notifyRungFor resolves which notification mode delivers ev — the attention ladder. A
-// session blocking on input always uses base (the configured mode), so it can never be
-// out-shouted by an agent that merely finished a turn; a finished turn may use a quieter
-// rung when the user configured one. The two rungs are named by *event* and never compared
-// with each other, so the ladder needs no ordering over the modes — which is what lets it
-// exist at all, since "one rung quieter than bell" would be silence and desktop and osc are
-// peers. finished is the normalized selector from config.GetNotificationsFinished, whose
-// restricted vocabulary is what keeps the finished rung from outranking base.
+// notifyRungFor resolves which notification mode delivers ev — the attention ladder.
+//
+// Only ONE event has a rung of its own: a plain finished turn, which may use a quieter
+// mode when the user configured one. Everything else — a session blocking on input, and a
+// turn that ended by asking a question (#571) — uses base, so neither can be out-shouted
+// by an agent that merely finished, and neither can be silenced by a setting chosen for an
+// unrelated reason. That EventAsked needs no branch here is the point: the ladder is keyed
+// by event and defaults to base, so a new event is loud until something opts it out.
+//
+// The rungs are named by *event* and never compared with each other, so the ladder needs
+// no ordering over the modes — which is what lets it exist at all, since "one rung quieter
+// than bell" would be silence and desktop and osc are peers. finished is the normalized
+// selector from config.GetNotificationsFinished, whose restricted vocabulary is what keeps
+// the finished rung from outranking base.
 func notifyRungFor(base, finished string, ev notify.Event) string {
 	if ev != notify.EventFinished || finished == config.NotificationsSame {
 		return base
@@ -61,11 +76,13 @@ func notifyRungFor(base, finished string, ev notify.Event) string {
 // silent; a finished turn stays silent when a follow-up prompt is queued or when the
 // attention ladder puts its rung at off; and repeats of the same edge are throttled.
 // old/prevUnreadAt are snapshots taken immediately before ApplyPaneState in
-// applyMetadataResults; mode is the live configured mode (never off — the caller gates on
-// that), from which the ladder derives the rung actually emitted. Runs on the main Update
-// thread, so it never fires while attached (the event loop is suspended) and never races
-// the bell write with the renderer beyond the documented single-BEL window.
-func (m *home) maybeNotify(inst *session.Instance, old session.Status, prevUnreadAt time.Time, mode string) {
+// applyMetadataResults; asked is the #571 question verdict resolved for this same tick,
+// which splits the finish edge into "finished" and "asked"; mode is the live configured
+// mode (never off — the caller gates on that), from which the ladder derives the rung
+// actually emitted. Runs on the main Update thread, so it never fires while attached (the
+// event loop is suspended) and never races the bell write with the renderer beyond the
+// documented single-BEL window.
+func (m *home) maybeNotify(inst *session.Instance, old session.Status, prevUnreadAt time.Time, asked bool, mode string) {
 	if m.notifier == nil {
 		return // hand-built test home without a notifier
 	}
@@ -92,17 +109,27 @@ func (m *home) maybeNotify(inst *session.Instance, old session.Status, prevUnrea
 	if inst == m.list.GetSelectedInstance() {
 		return // the user is already looking at this row
 	}
-	ev, ok := notifyEventFor(old, inst.GetStatus(), inst.UnreadAt().After(prevUnreadAt))
+	ev, ok := notifyEventFor(old, inst.GetStatus(), inst.UnreadAt().After(prevUnreadAt), asked)
 	if !ok {
 		return
 	}
 	// A finished turn on a session with a queued or in-flight follow-up prompt is about
 	// to be auto-continued by deliverReadyPrompts in this same applyMetadataResults pass,
 	// so ringing "finished" would ping the user for work they explicitly queued to run
-	// unattended (and can't be told apart from a real finish that awaits them). The block
-	// edge is exempt: a blocked pane can't consume its queue — delivery needs an idle
-	// input box — so a NeedsInput session stays genuinely actionable. The final finish,
-	// once the queue has drained, still rings.
+	// unattended. Two edges are exempt, for the same underlying reason — the queue is not
+	// about to consume them:
+	//   - NeedsInput: a blocked pane can't consume its queue (delivery needs an idle input
+	//     box), so it stays genuinely actionable.
+	//   - Asked (#571): questionHoldsPrompt now HOLDS the queue on an unanswered question,
+	//     applied by deliverReadyPrompts later in this same pass (the attach keeper hands
+	//     the same predicate to promptDeliveryReady instead — same hold, different
+	//     dispatcher), so the premise of this suppression is false for it. This comment
+	//     used to concede that such a turn "can't be told apart from a real finish that
+	//     awaits them" — that was true when it was written and is not any more, which is
+	//     exactly why the suppression had to stop covering it. Suppressing here would
+	//     silence the one event the user must act on, and would do it *because* they
+	//     queued work.
+	// The final finish, once the queue has drained, still rings.
 	if ev == notify.EventFinished && (inst.Prompt() != "" || inst.PromptSending()) {
 		return
 	}
@@ -124,12 +151,16 @@ func (m *home) maybeNotify(inst *session.Instance, old session.Status, prevUnrea
 }
 
 // throttled reports whether an edge of type ev fired too recently to signal again,
-// stamping the current time when it permits the notification.
+// stamping the current time when it permits the notification. Each event carries its own
+// budget — a question must not be swallowed because a finish moments earlier spent one.
 func (st *notifyState) throttled(ev notify.Event) bool {
 	now := time.Now()
 	last := &st.lastFinished
-	if ev == notify.EventNeedsInput {
+	switch ev {
+	case notify.EventNeedsInput:
 		last = &st.lastNeedsInput
+	case notify.EventAsked:
+		last = &st.lastAsked
 	}
 	if now.Sub(*last) < notifyThrottle {
 		return true

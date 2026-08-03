@@ -448,12 +448,14 @@ func (c *Config) GetNotifications() string {
 	}
 }
 
-// GetNotificationsFinished returns the normalized rung a finished turn is signalled at:
-// NotificationsOff, NotificationsBell, or NotificationsSame for a nil Config, an empty
-// value, or anything unrecognized. "desktop" and "osc" fall into that last group on
-// purpose — the finished rung may only ever be quieter than the mode a blocked session
-// uses, and admitting either would require ranking two peers. NotificationsSame defers to
-// GetNotifications, which is what makes an unset field behave exactly as before the ladder.
+// GetNotificationsFinished returns the normalized rung a PLAIN finished turn is signalled
+// at: NotificationsOff, NotificationsBell, or NotificationsSame for a nil Config, an empty
+// value, or anything unrecognized. It does not reach a turn that ended by asking the user
+// a question (#571), which stays on GetNotifications like a block. "desktop" and "osc"
+// fall into that last group on purpose — the finished rung may only ever be quieter than
+// the mode a blocked session uses, and admitting either would require ranking two peers.
+// NotificationsSame defers to GetNotifications, which is what makes an unset field behave
+// exactly as before the ladder.
 func (c *Config) GetNotificationsFinished() string {
 	if c == nil {
 		return NotificationsSame

@@ -39,30 +39,52 @@ const (
 	// EventNeedsInput is the transition into NeedsInput: the agent is blocked on a
 	// prompt or sitting on a startup/trust gate.
 	EventNeedsInput
+	// EventAsked is the same non-Ready→Ready edge as EventFinished, on a turn that
+	// ended by asking the user a question in PROSE (#571). It is a distinct event
+	// rather than a flavour of finished because the two want opposite handling: a
+	// finished turn may be auto-continued from the queue and may be signalled at a
+	// quieter rung, while a question must interrupt — it is the one thing an agent
+	// does that nothing else can resolve.
+	EventAsked
 )
 
 // status is the ATRIUM_STATUS value handed to a notify command.
+//
+// EventAsked reports "Ready" because that IS the session's status — the turn ended,
+// and a script keying on status must keep seeing what the row shows. The event token
+// below is what distinguishes it; keeping the two axes separate is why an existing
+// notify_command does not change meaning when this event was added.
 func (e Event) status() string {
-	if e == EventNeedsInput {
+	switch e {
+	case EventNeedsInput:
 		return "NeedsInput"
+	default:
+		return "Ready"
 	}
-	return "Ready"
 }
 
 // token is the ATRIUM_EVENT value handed to a notify command.
 func (e Event) token() string {
-	if e == EventNeedsInput {
+	switch e {
+	case EventNeedsInput:
 		return "needs_input"
+	case EventAsked:
+		return "asked"
+	default:
+		return "finished"
 	}
-	return "finished"
 }
 
 // headline is the human-readable body of a built-in desktop notification.
 func (e Event) headline(session string) string {
-	if e == EventNeedsInput {
+	switch e {
+	case EventNeedsInput:
 		return fmt.Sprintf("%s needs input", session)
+	case EventAsked:
+		return fmt.Sprintf("%s asked a question", session)
+	default:
+		return fmt.Sprintf("%s finished", session)
 	}
-	return fmt.Sprintf("%s finished", session)
 }
 
 // Notifier emits notifications. It writes the bell to out (the TUI's own stdout)
