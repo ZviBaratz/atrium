@@ -986,14 +986,15 @@ are also editable live from the Settings panel (`,`). The exceptions are the thr
 account lists — `claude_accounts`, `gh_accounts`, `agy_accounts` — which the
 one-value-per-row panel cannot express and which are managed from the Accounts
 overlay instead, and the deprecated `nerd_font`, which `glyph_set` supersedes.
-`profiles` is a list of records too, but the panel gives it a record editor of
-its own under Profiles rather than a row. A test
+`profiles` and `custom_commands` are lists of records too: the panel gives
+`profiles` a record editor of its own under Profiles rather than a row, and
+`custom_commands` is edited in `config.json` directly. A test
 (`config.TestReadmeDocumentsEveryConfigField`) fails the build if a new field is
 added without a row here.
 
 The panel groups these keys into ten categories — Sessions, Worktrees & git,
 Appearance, Session list, Notifications, Automation, Input, Projects, Updates, and
-Advanced — shown in the Category column below. The four keys with no panel row carry
+Advanced — shown in the Category column below. The five keys with no panel row carry
 `—` instead; `profiles` names its editor.
 
 | Key | Category | Type | Default | Notes |
@@ -1003,6 +1004,7 @@ Advanced — shown in the Category column below. The four keys with no panel row
 | `daemon_poll_interval` | Automation | int | `1000` | autoyes daemon poll interval, milliseconds |
 | `branch_prefix` | Worktrees & git | string | `"<user>/"` | prefix for created git branches |
 | `profiles` | Profiles | array | detected | named program configs ([Profiles](#profiles)) |
+| `custom_commands` | — | array | `[]` | your own verbs over the selected session: a key, a shell template, and where it runs. `atrium doctor` reports a malformed entry |
 | `tmux_config_override` | Advanced | string | `""` | path to a custom tmux config for sessions |
 | `auto_attach` | Sessions | bool | `true` | attach to a new session as soon as it starts ([Auto-attach](#auto-attach)) |
 | `show_release_notes_after_update` | Updates | bool | `true` | "what's new" overlay once after an update |

@@ -1053,6 +1053,35 @@ func TestConfig_AccountsRoundTrip(t *testing.T) {
 	assert.Equal(t, []string{"GH_TOKEN", "GITHUB_TOKEN"}, got.GHAccounts[0].TokenEnv)
 }
 
+// TestCustomCommandsRoundTrip pins the wire shape of the #375 custom_commands
+// section: it survives a save/load cycle intact, the optional keys stay out of the
+// JSON when unset (omitempty), and "output" is written even when empty — it is a
+// required field, so a config missing it must decode to "" and be rejected by
+// validation rather than silently defaulting.
+func TestCustomCommandsRoundTrip(t *testing.T) {
+	cfg := DefaultConfig()
+	require.Nil(t, cfg.CustomCommands, "DefaultConfig must not invent custom commands")
+
+	cfg.CustomCommands = []CustomCommand{
+		{Key: "g", Description: "lazygit here", Context: "session", Command: "lazygit", Output: "terminal"},
+		{Key: "c", Description: "just ci", Command: "just ci", Output: "background", Confirm: true},
+	}
+	require.NoError(t, SaveConfig(cfg))
+
+	got := LoadConfig()
+	require.Len(t, got.CustomCommands, 2)
+	assert.Equal(t, "session", got.CustomCommands[0].Context)
+	assert.False(t, got.CustomCommands[0].Confirm)
+	assert.Equal(t, "", got.CustomCommands[1].Context, "an omitted context decodes empty; the default is applied by validation, not by the wire")
+	assert.True(t, got.CustomCommands[1].Confirm)
+
+	data, err := json.Marshal(Config{CustomCommands: []CustomCommand{{Key: "g", Description: "d", Command: "c"}}})
+	require.NoError(t, err)
+	assert.Contains(t, string(data), `"output":""`, "output is required, so it must marshal even when empty")
+	assert.NotContains(t, string(data), `"context"`)
+	assert.NotContains(t, string(data), `"confirm"`)
+}
+
 func TestClaudeAccountPoolRoundTrip(t *testing.T) {
 	t.Setenv("HOME", "/home/tester")
 

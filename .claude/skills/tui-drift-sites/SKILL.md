@@ -160,8 +160,15 @@ lie. Don't "fix" them.
   the test that actually holds a state to 80×24 — it asserts the *composed frame*,
   so it is the only one that sees an overlay whose own tests measured lines
   lipgloss had already padded to a uniform width. `SetSize` semantics are the
-  usual defect here: lipgloss sizes the content box and draws the border *outside*
-  it, so a style given `Width(w)` renders `w+2` columns.
+  usual defect here — but check which way round before "fixing" one: **lipgloss
+  v2 counts the border and padding INSIDE `Width`**, so `Width(w)` renders exactly
+  `w` columns (`style.go`: `width -= horizontalBorderSize`). That inverted the v1
+  behaviour this line used to describe, and it inverted silently; the in-tree
+  statement of it is `ui/theme/panel.go`'s comment ("Width and Height are the
+  box's TOTAL size, borders included … the upgrade guide does not mention it"),
+  and `cmdLogOverlay.go`'s `Width(c.width + 2)` is *correct* for that reason. The
+  live defect is now the opposite one: hand-subtracting the frame a second time
+  and rendering every box two columns narrow.
 - Add it to `app/frame_restore_test.go` if it hides the hint bar (`menuVisible`),
   or exempt it there with a reason — the walk over `numStates` fails otherwise.
   Hiding the bar hands its row to the panes; closing without recomputing the
