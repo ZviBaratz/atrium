@@ -38,7 +38,8 @@ build:
 run *args: build
     ./bin/atrium {{args}}
 
-# Run the full test suite. Tests sandbox HOME, so this never touches real state.
+# Run the full test suite. Tests sandbox HOME *and* the tmux socket dir, so this
+# touches neither the real data dir nor a running Atrium's sessions.
 test:
     {{go}} test ./...
 

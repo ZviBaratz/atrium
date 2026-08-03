@@ -16,8 +16,10 @@ import (
 // tmux session on the dedicated socket; rebinding to a context.WithoutCancel
 // context lets Close actually terminate it.
 //
-// Drives a REAL tmux server, so it self-skips when tmux is unavailable (mirrors
-// TestSessionDeathStopsProbing; also -skip'd by name in CI).
+// Drives a REAL tmux server, so it self-skips when tmux is unavailable. Unlike
+// TestSessionDeathStopsProbing it runs in CI — only that one is -skip'd by name
+// (.github/workflows/build.yml:75, :125) — so RequireTmux's hard failure under
+// ATRIUM_CI_REQUIRE_TMUX=1 applies here.
 func TestCloseSucceedsAfterRebindFromCancelledContext(t *testing.T) {
 	testutil.RequireTmux(t)
 

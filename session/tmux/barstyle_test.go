@@ -86,6 +86,12 @@ func TestApplyBarStyle_NoOpsUnderAConfigOverride(t *testing.T) {
 // Init is no longer startup-only: a live theme change calls it from a tea.Cmd
 // goroutine while session launches and the 500ms metadata sweep read the same state
 // through tmuxConfigPath. Fails under -race if either global loses its atomic.
+//
+// Init reaches real tmux even though nothing here says so: validateConfig starts a
+// `-precheck` server (config.go:187) on every call, so this drives eight of them.
+// It needs no RequireTmux — validateConfig no-ops when tmux is absent — but it is a
+// real-tmux site, and the sandbox TMUX_TMPDIR is what keeps those probe sockets out
+// of the shared socket dir, where they used to pile up next to the live one (#581).
 func TestInitAndTmuxConfigPath_AreRaceFree(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	restoreOverride(t, "")

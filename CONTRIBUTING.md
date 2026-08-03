@@ -25,7 +25,7 @@ just lint       # golangci-lint
 ### Testing
 
 ```bash
-just test       # full suite (sandboxes HOME — safe to run anywhere)
+just test       # full suite (sandboxes HOME and the tmux socket dir — safe with Atrium running)
 just test-race  # with the race detector
 just cover      # with coverage
 ```

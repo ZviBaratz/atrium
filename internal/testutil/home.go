@@ -6,21 +6,33 @@ import (
 	"testing"
 )
 
-// SandboxHomeMain points HOME at a throwaway temp directory (and unsets
-// CLAUDE_CONFIG_DIR, which outranks HOME in transcript-root resolution) for the
-// duration of a package's tests, then runs them. This keeps tests from reading
-// or writing the developer's real Atrium data directory (~/.atrium or a legacy
-// ~/.claude-squad) or Claude Code config, and — because the tmux socket name
-// derives from config.RuntimeName, which is resolved from HOME — keeps
-// real-tmux tests on an isolated "atrium" socket instead of the user's live
-// "claudesquad" sessions.
+// SandboxHomeMain isolates a package's tests from the developer's live Atrium for
+// their whole run, then runs them. It sandboxes two independent things:
+//
+//   - The data directory, by pointing HOME at a throwaway temp directory (and
+//     unsetting CLAUDE_CONFIG_DIR and XDG_CONFIG_HOME, which outrank it). This
+//     keeps tests from reading or writing ~/.atrium, a legacy ~/.claude-squad, or
+//     Claude Code config.
+//   - The tmux socket directory, by pointing TMUX_TMPDIR at a private root and
+//     reaping every server under it afterwards.
+//
+// The second is not implied by the first, which is the trap this helper used to
+// document the wrong way round. tmux resolves `-L <name>` to
+// $TMUX_TMPDIR/tmux-<uid>/<name>, and Atrium's name comes from
+// config.RuntimeName: that returns "atrium" for a sandbox HOME *and* for every
+// non-legacy install, so a sandboxed HOME leaves real-tmux tests binding the exact
+// socket the developer's running Atrium is on. Only the directory separates them
+// (#581). RequireTmux enforces that this ran.
 //
 // Use it from a package's TestMain:
 //
 //	func TestMain(m *testing.M) { os.Exit(testutil.SandboxHomeMain(m)) }
 //
 // It panics rather than falling back to the real HOME, so a setup failure can
-// never silently run tests against live state.
+// never silently run tests against live state. The socket sandbox fails the other
+// way — if it cannot be installed it is simply absent, and RequireTmux fails the
+// individual tests that needed it. Same guarantee, smaller blast radius: a host
+// without a usable /tmp still runs every test that never touches tmux.
 func SandboxHomeMain(m *testing.M) int {
 	tmp, err := os.MkdirTemp("", "atrium-test-home-")
 	if err != nil {
@@ -46,5 +58,11 @@ func SandboxHomeMain(m *testing.M) int {
 	if err := os.Unsetenv("XDG_CONFIG_HOME"); err != nil {
 		panic("testutil: failed to unset XDG_CONFIG_HOME: " + err.Error())
 	}
+	// Armed here, before m.Run, so the reaper exists before any test can start a
+	// server — a server started under a root nothing is committed to killing is
+	// exactly the orphan #547 is about. Registered after the HOME cleanup above so
+	// LIFO reaps tmux while the sandbox HOME it may be sitting in still exists.
+	teardownTmux := installSandboxTmuxTmpdir()
+	defer teardownTmux()
 	return m.Run()
 }

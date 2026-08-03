@@ -109,7 +109,12 @@ Some `session/tmux` tests (e.g. `TestSessionDeathStopsProbing`) drive a **real**
 tmux server, so they self-skip when `tmux` is not on `PATH`. They run all tmux
 commands on Atrium's dedicated socket (`tmux -L <socket>`) — if you add a test that
 shells out to tmux directly, route it through the package's `tmuxCommand()` helper
-so it targets that same socket, not tmux's default one.
+so it targets that same socket, not tmux's default one. That helper is about *which
+socket*, not about isolation: what keeps a raw `exec.Command("tmux", "-L", …)` off
+the live fleet is the inherited `TMUX_TMPDIR` (see "Tests must stay hermetic"), which
+is why `config_parse_test.go` can safely bypass `tmuxCommand()` for its own probe
+socket. A test that sets its own `TMUX_TMPDIR` opts out of the teardown that reaps
+what it leaves behind.
 
 ## Reviewing a change here
 
@@ -170,10 +175,21 @@ hardcode either name.
 
 ## Tests must stay hermetic
 
-Tests must never read or write the user's real data dir. Packages that resolve the
-config dir, save state, or touch tmux set `HOME` to a temp dir (see
-`config/config_test.go` and `app/app_test.go` `TestMain`). Any new test that can
-reach `config`/`state`/`tmux` writes must do the same.
+Tests must never read or write the user's real data dir, or its live tmux fleet.
+Those are two separate isolations, and `testutil.SandboxHomeMain` (called from a
+package's `TestMain`) installs both: `HOME` at a temp dir for the data dir, and
+`TMUX_TMPDIR` at a private socket root for tmux. Any new test that can reach
+`config`/`state`/`tmux` writes must go through it.
+
+**`HOME` alone does not isolate tmux.** The socket name is `config.RuntimeName()`,
+which returns `atrium` for a sandbox `HOME` *and* for every non-legacy install — so
+a `HOME`-only sandbox binds the exact socket a running Atrium is on. Only the
+socket *directory* separates them, which is why `RequireTmux` hard-fails (never
+skips) when `TMUX_TMPDIR` is not the sandbox root: an unisolated real-tmux test
+injects panes into the developer's live sessions (#581). Anything killing a tmux
+server in a teardown must address it by absolute path (`tmux -S`), never by name —
+`-L` with an empty or missing `TMUX_TMPDIR` silently resolves to `/tmp`, the live
+socket.
 
 ## Facts with more than one home
 
