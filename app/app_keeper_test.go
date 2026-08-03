@@ -645,3 +645,183 @@ func mustConfigDir(t *testing.T) string {
 	require.NoError(t, err)
 	return dir
 }
+
+// writeKeeperTranscript plants a claude transcript whose last assistant turn ends with
+// text, and points inst's transcript root at it — the wiring the poll path uses.
+func writeKeeperTranscript(t *testing.T, inst *session.Instance, workDir, text string) {
+	t.Helper()
+	root := t.TempDir()
+	sanitized := strings.Map(func(r rune) rune {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') {
+			return r
+		}
+		return '-'
+	}, workDir)
+	dest := filepath.Join(root, "projects", sanitized, "s.jsonl")
+	require.NoError(t, os.MkdirAll(filepath.Dir(dest), 0o755))
+	line := `{"type":"assistant","isSidechain":false,"message":{"model":"claude-opus-4-7",` +
+		`"content":[{"type":"text","text":"` + text + `"}]}}` + "\n"
+	require.NoError(t, os.WriteFile(dest, []byte(line), 0o644))
+	inst.SetClaudeAccount("work", root, false)
+}
+
+// TestKeeperServiceHoldsPromptOnUnansweredQuestion covers the #571 hold on the OTHER
+// dispatcher. The attach keeper services every session the user is not attached to, so
+// without its own gate a background session that stopped to ask still has its queued
+// follow-up delivered as the answer — the tick-path guard cannot see this path at all.
+//
+// It also drives the release end to end: once MarkSeen clears unread (what
+// markSeenAfterDwell does when the user dwells on the row), the same prompt delivers.
+func TestKeeperServiceHoldsPromptOnUnansweredQuestion(t *testing.T) {
+	fake := &fakeKeeperPane{}
+	inst := newKeeperInstance(t, "asked", fake)
+	startKeeperInstance(t, inst)
+	writeKeeperTranscript(t, inst, inst.WorkingDir(), "Want me to open the PR, or will you?")
+	inst.QueueFollowupPrompt("go ahead")
+
+	// A finished turn the user has not visited: Running→Ready is the edge that flags
+	// unread, exactly as the poll loop's ApplyPaneState would.
+	inst.SetStatus(session.Running)
+	inst.SetStatus(session.Ready)
+	require.True(t, inst.Unread())
+
+	k := newAttachKeeper(context.Background(), []*session.Instance{inst}, nil)
+	k.service(inst)
+
+	typed, enters, _ := fake.snapshot()
+	require.Empty(t, typed, "a follow-up must not be typed as the answer to an unread question")
+	require.Zero(t, enters)
+	require.Equal(t, "go ahead", inst.Prompt(), "the prompt stays queued, not dropped")
+	require.False(t, k.delivered)
+
+	// The user looks at the row: the hold releases and the same prompt goes out.
+	inst.MarkSeen()
+	k.service(inst)
+
+	typed, enters, _ = fake.snapshot()
+	require.Equal(t, []string{"go ahead"}, typed, "a seen question releases the queued follow-up")
+	require.Equal(t, 1, enters)
+	require.Empty(t, inst.Prompt())
+	require.True(t, k.delivered)
+}
+
+// TestEndedAskingNow_MemoFallback pins the two paths that must answer from the memo
+// rather than re-reading, and the one that must not.
+//
+// The fallback is load-bearing, not an optimisation: the transcript is only re-read on a
+// settled pane and only when its stamp moved, so returning a bare false whenever
+// ComputeAsked declines would drop the hold on every tick in between — the prompt would
+// go out one tick after the question, not never. Returning false there passes every other
+// test in this package, which is why it needs its own.
+func TestEndedAskingNow_MemoFallback(t *testing.T) {
+	fake := &fakeKeeperPane{}
+	inst := newKeeperInstance(t, "memo", fake)
+	startKeeperInstance(t, inst)
+	writeKeeperTranscript(t, inst, inst.WorkingDir(), "Want me to open the PR?")
+
+	// First settled look: reads the transcript and reports a fresh verdict to memoize.
+	asked, stamp, ok := endedAskingNow(inst, tmux.PaneIdle)
+	require.True(t, ok, "a settled pane with a changed transcript yields a memoizable result")
+	require.True(t, asked)
+	inst.SetAskedMeta(asked, stamp)
+
+	// Same pane, unchanged transcript: no re-read, but the hold must survive.
+	asked, _, ok = endedAskingNow(inst, tmux.PaneIdle)
+	require.False(t, ok, "an unchanged transcript has nothing to apply")
+	require.True(t, asked, "...but the memo must still report the outstanding question")
+
+	// Mid-turn: never re-read (the turn is still being written), still hold. The
+	// transcript is REPLACED with question-free prose first, so this also proves the
+	// idle gate: without it the read would happen here, see no question, and report a
+	// fresh false — the assertion below would then fail on `asked`, not just on `ok`.
+	writeKeeperTranscript(t, inst, inst.WorkingDir(), "Working on it now.")
+	asked, _, ok = endedAskingNow(inst, tmux.PaneWorking)
+	require.False(t, ok, "a working pane must not re-read the transcript it is still writing")
+	require.True(t, asked, "a working pane must answer from the memo, not report 'no question'")
+}
+
+// TestMetadataTick_MemoizesTheQuestionFlag covers the wiring between the two halves of
+// the #571 signal on the TICK path: collectMetadata derives the flag off-thread and
+// applyMetadataResults must store it on the instance.
+//
+// Dropping the store leaves the delivery hold working — each tick still gates on its own
+// fresh read — so every other test here passes. What breaks is everything that reads the
+// memo afterwards: the once-per-turn read budget, and the notification rung that reads
+// EndedAsking() rather than re-deriving it.
+func TestMetadataTick_MemoizesTheQuestionFlag(t *testing.T) {
+	h := newCreateFormHome(t)
+	h.lostStrikes = map[*session.Instance]int{}
+	fake := &fakeKeeperPane{}
+	inst := newKeeperInstance(t, "ticked", fake)
+	startKeeperInstance(t, inst)
+	writeKeeperTranscript(t, inst, inst.WorkingDir(), "Want me to open the PR?")
+	h.list.AddInstance(inst)()
+
+	require.False(t, inst.EndedAsking(), "precondition: nothing derived yet")
+
+	results := collectMetadata(h.ctx, []*session.Instance{inst}, nil, false)
+	require.Len(t, results, 1)
+	require.Equal(t, tmux.PaneIdle, results[0].state, "precondition: the fake pane reads settled")
+	require.True(t, results[0].askedOK, "a settled pane with a fresh transcript yields a result to apply")
+
+	h.applyMetadataResults(results, false)
+
+	require.True(t, inst.EndedAsking(), "the tick must memoize the question flag on the instance")
+}
+
+// TestTickPathHoldsPromptWhenQuestionFirstAppears is the regression test for the ordering
+// the hold depends on. It drives the whole tick pipeline — collectMetadata (off-thread)
+// → applyMetadataResults (ApplyPaneState, main thread) → the returned send commands —
+// with Unread() FALSE going in, which is the ordinary case: the user was watching the row
+// when they queued the follow-up, so nothing is unread until this very tick's Running→Ready
+// edge raises it.
+//
+// That precondition is the whole test. Seeding Unread() true first (the obvious way, and
+// what the keeper test does) passes even when the hold is evaluated a step too early,
+// because the value it reads is then already correct. Verified by moving the check back
+// into collectMetadata: this test fails and every other test in the package still passes.
+func TestTickPathHoldsPromptWhenQuestionFirstAppears(t *testing.T) {
+	h := newCreateFormHome(t)
+	h.lostStrikes = map[*session.Instance]int{}
+	fake := &fakeKeeperPane{}
+	inst := newKeeperInstance(t, "tickhold", fake)
+	startKeeperInstance(t, inst)
+	writeKeeperTranscript(t, inst, inst.WorkingDir(), "Want me to open the PR, or will you?")
+	h.list.AddInstance(inst)()
+
+	// The agent is mid-turn and the user is looking at the row: nothing unread yet.
+	inst.SetStatus(session.Running)
+	require.False(t, inst.Unread(), "precondition: the row has been seen, nothing is unread")
+
+	inst.QueueFollowupPrompt("go ahead")
+
+	results := collectMetadata(h.ctx, []*session.Instance{inst}, nil, false)
+	require.Len(t, results, 1)
+	require.Equal(t, tmux.PaneIdle, results[0].state, "precondition: the turn ended")
+	require.True(t, results[0].asked, "precondition: the question was detected off-thread")
+
+	for _, cmd := range h.applyMetadataResults(results, false) {
+		if cmd != nil {
+			cmd()
+		}
+	}
+
+	typed, enters, _ := fake.snapshot()
+	require.Empty(t, typed, "the follow-up must not be delivered into the unanswered question")
+	require.Zero(t, enters)
+	require.Equal(t, "go ahead", inst.Prompt(), "the prompt stays queued, not dropped")
+	require.True(t, inst.Unread(), "the same tick flagged the finished turn unread")
+
+	// The release valve still works through the same path: once the user dwells on the
+	// row, the very next tick delivers.
+	inst.MarkSeen()
+	results = collectMetadata(h.ctx, []*session.Instance{inst}, nil, false)
+	for _, cmd := range h.applyMetadataResults(results, false) {
+		if cmd != nil {
+			cmd()
+		}
+	}
+	typed, enters, _ = fake.snapshot()
+	require.Equal(t, []string{"go ahead"}, typed, "a seen question releases the follow-up")
+	require.Equal(t, 1, enters)
+}

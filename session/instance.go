@@ -256,6 +256,20 @@ type Instance struct {
 	// In-memory only: the first post-restore tick re-extracts once.
 	modelStamp transcript.Stamp
 
+	// endedAsking records that the last turn ended by asking the user something
+	// (#571), so a queued follow-up is not delivered as the answer to a question
+	// they never saw. Written only on the main thread (SetAskedMeta), like modelID.
+	// Deliberately NOT persisted: it is a claim about a live transcript, and a
+	// restored session re-derives it on its first post-restore tick that finds the
+	// pane SETTLED (endedAskingNow only re-reads there) — which is also what keeps a
+	// stale true from outliving the turn that earned it. Starting false is why the
+	// gap before that tick is safe: it can only under-hold, never over-hold.
+	endedAsking bool
+	// askedStamp memoizes the transcript state endedAsking was derived from, with the
+	// same cross-thread contract as modelStamp: read in the poll goroutine, written
+	// on the main thread, serialized by the non-overlapping tick chain.
+	askedStamp transcript.Stamp
+
 	// runtimeMode is the permission mode the poll last resolved — the live pane footer,
 	// else the hook record where the footer is silent (ComputeMode → SetModeMeta; see
 	// tmux.Session.RuntimePermissionMode) — e.g. "auto" after a plan-launched session is

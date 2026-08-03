@@ -34,8 +34,12 @@ var attachKeeperInterval = 500 * time.Millisecond
 // parked capture can't replay an auto-yes tap onto a dialog the keeper advanced.)
 //
 // Scope is deliberately minimal: it writes only instance status (mu-guarded) and the
-// promptMu-guarded prompt state. It never touches diff/PR/model/mode metadata
-// (modelStamp forbids a second extraction site), never recovers lost sessions (the
+// promptMu-guarded prompt state. It never WRITES diff/PR/model/mode/asked metadata —
+// those stamps are main-thread-only, and modelStamp's comment spells out that a second
+// extraction site would need a lock. The one transcript read it does make is the #571
+// question check (endedAskingNow, below), which is deliberately non-memoizing for exactly
+// that reason: it reads to gate a delivery it is about to make and throws the stamp away,
+// so no second writer of askedStamp exists. It never recovers lost sessions (the
 // strike debounce is main-loop state), never writes AutoYes, and never persists —
 // the detach handler persists when delivered is set. An instance whose pre-attach
 // sendPromptCmd is still in flight keeps its guard raised for the whole attach (the
@@ -181,7 +185,13 @@ func (k *attachKeeper) service(inst *session.Instance) {
 	if prompt == "" {
 		return // only probe readiness while a prompt is queued, like collectMetadata
 	}
-	if !promptDeliveryReady(state, inst.AwaitingInput(), inst.PromptQueuedAt(), time.Now()) {
+	// The #571 hold applies here too: the keeper services the sessions the user is NOT
+	// attached to, so a background session that stopped to ask must not have its queued
+	// follow-up delivered as the answer. Unlike the metadata tick this does not memoize
+	// the result — see endedAskingNow for why.
+	asked, _, _ := endedAskingNow(inst, state)
+	if !promptDeliveryReady(state, inst.AwaitingInput(), questionHoldsPrompt(inst, asked),
+		inst.PromptQueuedAt(), time.Now()) {
 		return
 	}
 	prompt, ok := inst.ClaimPrompt()
