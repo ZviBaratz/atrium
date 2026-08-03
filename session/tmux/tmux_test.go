@@ -331,6 +331,11 @@ func TestSessionDeathStopsProbing(t *testing.T) {
 	if _, err := exec.LookPath("tmux"); err != nil {
 		t.Skip("tmux not available")
 	}
+	// The skip policy is about *tmux being present*; isolation is a separate gate and
+	// this test does not get to opt out of it. It starts a real session on
+	// `-L socketName()` and then kills a pane out from under it — unsandboxed, that is
+	// the developer's live fleet (#581).
+	testutil.RequireSandboxedTmux(t)
 
 	name := fmt.Sprintf("death-%s-%d", t.Name(), rand.Int31())
 	session := NewSession(context.Background(), name, "sleep 300")

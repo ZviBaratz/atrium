@@ -1020,7 +1020,8 @@ func (t *Session) CapturePaneContentWithOptions(start, end string) (string, erro
 	return string(output), nil
 }
 
-// CleanupSessions kills all tmux sessions that start with "session-"
+// CleanupSessions kills every tmux session on Atrium's socket whose name starts
+// with Prefix() ("atrium_", or "claudesquad_" on a legacy install).
 func CleanupSessions(ctx context.Context, cmdExec cmd.Executor) error {
 	// This is the `reset` path: wipe the entire status-hooks tree alongside the sessions.
 	cleanupAllHookSessions()
