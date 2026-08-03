@@ -15,8 +15,8 @@ func TestAvailable(t *testing.T) {
 	// Pin the version verdict to "no answer" rather than inheriting whatever the host's
 	// tmux is. Init probes the real binary (barstyle_test calls Init), so without this
 	// the "present tmux returns nil" case below would depend on the developer's tmux
-	// version and on test order — and would fail outright on a below-floor host, which
-	// includes the CI job pinned one release under the floor.
+	// version and on test order — and would fail outright on any host whose tmux is
+	// below MinVersion, which a distro-packaged 3.1c still is.
 	resetVersionVerdict(t)
 
 	t.Run("missing tmux returns ErrNotInstalled", func(t *testing.T) {

@@ -191,11 +191,20 @@ func installHint(goos string, s depSpec, state DepState) string {
 		// Present, so the fix is an upgrade. An install line would be wrong twice: it
 		// advises reinstalling a binary that is already there, and on Linux the distro
 		// package that produced the old version will produce it again.
-		if goos == "darwin" {
+		//
+		// Three branches, matching the install ladder below rather than collapsing to
+		// darwin/everything-else: "your distro package may be too old" is Linux-specific
+		// advice, and a Windows user has no distro package to blame.
+		switch goos {
+		case "darwin":
 			return fmt.Sprintf("upgrade: brew upgrade %s (needs %s or newer)", s.bin, s.minVersion)
+		case "linux":
+			return fmt.Sprintf("upgrade %s to %s or newer (your distro package may be too old; "+
+				"see the %s project's install docs)", s.bin, s.minVersion, s.bin)
+		default:
+			return fmt.Sprintf("upgrade %s to %s or newer (see the %s project's install docs)",
+				s.bin, s.minVersion, s.bin)
 		}
-		return fmt.Sprintf("upgrade %s to %s or newer (your distro package may be too old; "+
-			"see the %s project's install docs)", s.bin, s.minVersion, s.bin)
 	}
 	if s.bin == "gh" {
 		switch goos {

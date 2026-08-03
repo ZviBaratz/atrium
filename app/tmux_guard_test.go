@@ -1,12 +1,30 @@
 package app
 
 import (
+	"reflect"
 	"testing"
 
 	"github.com/ZviBaratz/atrium/session/tmux"
 
 	"github.com/stretchr/testify/assert"
 )
+
+// productionTmuxAvailable is what the tmuxAvailable seam was bound to before TestMain
+// pinned it to "present" for the whole suite. Captured there because that override is
+// permanent: by the time any test body runs, the production binding is gone.
+var productionTmuxAvailable func() error
+
+// Every guard below injects a verdict through the tmuxAvailable seam, so none of them
+// ever runs the line that decides what the seam is bound to. Rebinding it to something
+// that always returns nil — or to a presence-only check that predates the version
+// floor — leaves the whole file green while the real app stops refusing anything. This
+// is the one assertion that reads the wiring itself.
+func TestTmuxAvailableIsWiredToTheRealProbe(t *testing.T) {
+	assert.Equal(t,
+		reflect.ValueOf(tmux.Available).Pointer(),
+		reflect.ValueOf(productionTmuxAvailable).Pointer(),
+		"tmuxAvailable must default to tmux.Available, the probe that reports both a missing and a too-old tmux")
+}
 
 // When tmux is not installed, pressing n must NOT open the create form. Instead
 // the friendly sentinel is surfaced (routed to the persistent info modal), so the

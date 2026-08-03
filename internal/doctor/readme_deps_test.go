@@ -10,9 +10,13 @@ import (
 )
 
 // moduleFile reads a file from the module root, walking up from the test's working
-// directory until it finds go.mod. Mirrors the identical helpers in
-// readme_commands_test.go, config/readme_config_test.go and keys/readme_drift_test.go —
-// each README guard carries its own copy because they live in different packages.
+// directory until it finds go.mod.
+//
+// Several packages carry their own copy, because a test helper cannot be shared across
+// packages without promoting it to non-test code — a worse trade than a few short
+// copies. Deliberately neither counted nor enumerated here: every existing copy states
+// a list, each list is different, and all of them are now short by at least one
+// (`grep -rn "^func moduleFile"` is the answer that cannot go stale).
 func moduleFile(t *testing.T, name string) string {
 	t.Helper()
 	dir, err := os.Getwd()
@@ -50,7 +54,8 @@ func TestReadmeDocumentsEveryCoreDependency(t *testing.T) {
 
 	require.NotEmpty(t, coreDeps, "coreDeps is empty; the guard would pass vacuously")
 
-	checked := 0
+	// No `continue` in the loop below, so the NotEmpty above is the whole
+	// vacuous-pass guard: every spec in coreDeps is asserted on.
 	for _, s := range coreDeps {
 		// Match the markdown link, not a bare substring: "tmux" also appears inside the
 		// install URL, so Contains alone would stay green after the bullet was deleted.
@@ -64,9 +69,7 @@ func TestReadmeDocumentsEveryCoreDependency(t *testing.T) {
 			require.True(t, lineWith(section, link, s.minVersion),
 				"the README %s bullet does not state the required version %s", link, s.minVersion)
 		}
-		checked++
 	}
-	require.NotZero(t, checked, "every dependency was skipped; the guard would pass vacuously")
 }
 
 // The installer is the thing that produces a too-old tmux in the first place (it installs

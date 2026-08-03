@@ -191,7 +191,7 @@ MIN_TMUX_VERSION="3.2"
 check_tmux_version() {
     command -v tmux > /dev/null 2>&1 || return 0
 
-    local raw major minor want_major want_minor
+    local raw found major minor want_major want_minor
     # Derive the threshold from MIN_TMUX_VERSION rather than repeating its digits in the
     # comparison below: a hardcoded "3"/"2" here would keep testing the old floor after
     # MIN_TMUX_VERSION was raised, while the warning text claimed the new one.
@@ -199,7 +199,10 @@ check_tmux_version() {
     want_minor="${MIN_TMUX_VERSION#*.}"
 
     raw="$(tmux -V 2>/dev/null)"
-    # Strip the "tmux " prefix and an optional "next-", then keep MAJOR.MINOR only.
+    # Strip the "tmux " prefix and an optional "next-", then keep MAJOR.MINOR only. Keep
+    # the un-stripped token for the warning so it is not a second `tmux -V` — a second
+    # exec could report a different binary than the one this verdict was computed from.
+    found="${raw#tmux }"
     raw="${raw#tmux }"
     raw="${raw#next-}"
     case "$raw" in
@@ -213,7 +216,7 @@ check_tmux_version() {
 
     if [ "$major" -lt "$want_major" ] || { [ "$major" -eq "$want_major" ] && [ "$minor" -lt "$want_minor" ]; }; then
         echo ""
-        echo "WARNING: tmux $(tmux -V | sed 's/^tmux //') is too old for Atrium."
+        echo "WARNING: tmux $found is too old for Atrium."
         echo "         Atrium needs tmux $MIN_TMUX_VERSION or newer — every session is started with"
         echo "         'tmux new-session -e', which older versions reject, so no session will start."
         echo "         Your distribution's package is likely too old; see"
@@ -270,7 +273,7 @@ check_and_install_dependencies() {
     # Checked after the branch above, not inside it, because the common case is a host
     # that ALREADY has an old tmux: that path installs nothing and would otherwise report
     # success. The distro package is exactly what ships an old one — RHEL/CentOS 7's yum
-    # gives tmux 1.8, nine major versions below the floor.
+    # gives tmux 1.8, and Debian 11's apt gives 3.1c, the newest release without -e.
     #
     # A warning, not a failure: Atrium itself installs fine, and the user can upgrade
     # tmux afterwards.

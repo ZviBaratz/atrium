@@ -54,11 +54,17 @@ var ErrTooOld = errors.New("tmux is too old")
 // modal only when it does not fit the one-line toast (ui/err.go Fits is a pure width
 // test), so a terse message would be silently truncated. Only the parsed version token is
 // interpolated — never raw `tmux -V` output, whose width is unbounded.
+//
+// It names the restart because the verdict is probed once per process
+// (probeVersionOnce): a user who upgrades tmux in another terminal and presses n again
+// is refused with this same message, and without the restart clause there is nothing in
+// it to explain why the fix it just recommended appeared not to work.
 func ErrTooOldFor(found string) error {
 	return fmt.Errorf("%w: found %s, but Atrium needs %s or newer. "+
 		"Every session is started with `tmux new-session -e`, which older tmux rejects. "+
 		"Upgrade tmux (macOS: brew upgrade tmux; Linux: your distro package may be too old, "+
-		"see https://github.com/tmux/tmux/wiki/Installing). "+
+		"see https://github.com/tmux/tmux/wiki/Installing), then restart Atrium — the "+
+		"version is read once at launch. "+
 		"Run `atrium doctor` to check dependencies", ErrTooOld, found, MinVersion)
 }
 

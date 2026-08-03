@@ -145,7 +145,10 @@ jobs:
           esac
 
       # Only the packages that actually touch tmux — this job is about the tmux
-      # version, not a second full suite.
+      # version, not a second full suite. TestSessionDeathStopsProbing is skipped for
+      # the same reason the `test` job skips it (see the comment there): it drives a
+      # real tmux server through a PTY and is environment-sensitive, and the
+      # death-probing logic has mocked coverage that runs here regardless.
       - name: Test the tmux-facing packages
         run: go test -skip TestSessionDeathStopsProbing ./session/tmux/... ./internal/testutil/... ./internal/doctor/...
 

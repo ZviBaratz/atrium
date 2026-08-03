@@ -1145,7 +1145,16 @@ func (m *home) openCreateFormSeeded(seedPath string, focusTitle bool, prefill *P
 	// a worktree was built and rolled back. Bailing here (all create paths route
 	// through this function) shows one actionable message up front; the wide sentinel
 	// routes through handleError to the persistent info modal.
+	//
+	// Reset to stateDefault (and drop any live overlay) FIRST, exactly as
+	// handleSmartDispatchSubmit does. The n/N and palette entries are already there so
+	// it is a no-op for them, but the Ctrl+R rebuild (app_keys.go) re-enters from
+	// statePrompt with the old form still mounted: without this the refusal is a
+	// truncated toast — handleError only reaches the info modal from stateDefault —
+	// and the user is left staring at the stale form it just refused to rebuild.
 	if err := tmuxAvailable(); err != nil {
+		m.textInputOverlay = nil
+		m.state = stateDefault
 		return m.handleError(err)
 	}
 

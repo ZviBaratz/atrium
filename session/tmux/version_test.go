@@ -91,10 +91,18 @@ func TestBelowFloorRejectsMalformedFloor(t *testing.T) {
 func resetVersionVerdict(t *testing.T) {
 	t.Helper()
 	origProbe := versionProbe
+	origVerdict := tooOldVersion.Load()
 	t.Cleanup(func() {
 		versionProbe = origProbe
+		// Leave the once *spent* rather than fresh, and put back whatever verdict was
+		// there before. A fresh sync.Once would let the next Init() anywhere in this
+		// binary (barstyle_test calls it) re-exec the host's real `tmux -V` and install
+		// a genuine below-floor verdict — making a later test's outcome depend on the
+		// developer's tmux and on test order, the exact coupling this helper exists to
+		// remove.
 		versionProbeOnce = sync.Once{}
-		tooOldVersion.Store(nil)
+		versionProbeOnce.Do(func() {})
+		tooOldVersion.Store(origVerdict)
 	})
 	versionProbeOnce = sync.Once{}
 	tooOldVersion.Store(nil)
