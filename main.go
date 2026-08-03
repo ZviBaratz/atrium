@@ -331,7 +331,8 @@ var (
 		Use:   "doctor",
 		Short: "Check Atrium's core dependencies (tmux, git, gh) and agent CLI heuristic versions",
 		Long: "Core dependencies probes tmux, git, and gh: tmux and git are\n" +
-			"required (a missing one exits nonzero so scripts/CI can gate); gh is optional, needed\n" +
+			"required, and one that is missing — or present but older than the version Atrium\n" +
+			"needs — exits nonzero so scripts/CI can gate; gh is optional, needed\n" +
 			"only for push/PR flows, and its authentication is reported but never fatal. Agent\n" +
 			"heuristics probes installed agent CLIs (claude, codex, gemini, aider) and reports whether\n" +
 			"each one's version has drifted past the version Atrium's pane-classification heuristics\n" +
@@ -430,11 +431,14 @@ var (
 				fmt.Print(keys)
 			}
 
-			if doctor.MissingRequired(deps) {
+			if doctor.RequiredUnmet(deps) {
 				// Nonzero exit for CI/scripts. The root command already sets
 				// SilenceErrors/SilenceUsage, so main() prints just this message to
 				// stderr (no "Error:"/usage noise over the report rendered above).
-				return fmt.Errorf("missing required dependency (see the hints above; run `atrium doctor` after installing)")
+				// Deliberately covers both causes without naming which: the table
+				// rendered directly above already says, and repeating it here would be a
+				// second copy to keep in sync.
+				return fmt.Errorf("a required dependency is missing or too old (see the hints above; run `atrium doctor` again after fixing it)")
 			}
 			return nil
 		},
