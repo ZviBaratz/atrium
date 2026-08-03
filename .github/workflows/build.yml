@@ -96,6 +96,59 @@ jobs:
           path: coverage.out
           retention-days: 7
 
+  # Exercise the real-tmux suite against the OLDEST tmux Atrium claims to support
+  # (session/tmux.MinVersion). The `test` job above runs whatever the runner image
+  # ships — 3.4 on ubuntu-latest today — so it can never notice a change that needs a
+  # newer tmux than the declared floor. That is the claim which rots: someone adds a
+  # conf directive or a flag introduced in 3.5, every job stays green, and the README,
+  # the doctor gate and the installer all keep promising 3.2.
+  #
+  # Ubuntu 22.04 ships tmux 3.2a straight from apt — a patch release of the floor
+  # itself — so this needs a container but no source build. Pinned to the image rather
+  # than to a tmux version because the image is what makes the version reproducible.
+  tmux-floor:
+    name: Test at the tmux floor (3.2)
+    runs-on: ubuntu-latest
+    container: ubuntu:22.04
+    # As in `test`: a missing tmux must hard-fail rather than let RequireTmux skip the
+    # very guards this job exists to run.
+    env:
+      ATRIUM_CI_REQUIRE_TMUX: '1'
+    steps:
+      # git and ca-certificates are for actions/checkout; the bare image has neither.
+      - name: Install tmux and checkout deps
+        run: |
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends tmux git ca-certificates
+          tmux -V
+
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+
+      - name: Set up Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff  # v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # Fail loudly if the image ever stops shipping a tmux at the floor: silently
+      # testing against something newer would make this whole job decorative.
+      - name: Assert the image ships the declared floor
+        run: |
+          # Read the one home of the number rather than repeating it here.
+          floor="$(sed -n 's/^const MinVersion = "\(.*\)"$/\1/p' session/tmux/version.go)"
+          [ -n "$floor" ] || { echo "::error::could not read MinVersion from session/tmux/version.go"; exit 1; }
+          have="$(tmux -V | sed 's/^tmux //')"
+          echo "declared floor: $floor; image tmux: $have"
+          case "$have" in
+            "$floor"|"$floor"[a-z]) ;;
+            *) echo "::error::this job must run at exactly the declared floor ($floor), but the image ships $have"; exit 1 ;;
+          esac
+
+      # Only the packages that actually touch tmux — this job is about the tmux
+      # version, not a second full suite.
+      - name: Test the tmux-facing packages
+        run: go test -skip TestSessionDeathStopsProbing ./session/tmux/... ./internal/testutil/... ./internal/doctor/...
+
   race:
     name: Race detector
     runs-on: ubuntu-latest

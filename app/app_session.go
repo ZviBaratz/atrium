@@ -25,10 +25,10 @@ import (
 	tea "charm.land/bubbletea/v2"
 )
 
-// tmuxAvailable is the tmux-presence seam for the new-session pre-flight guards
-// (the create-form gate and the smart-dispatch auto-create path). A package var
-// (matching the detectAgents/checkDrift idiom) so tests inject a missing-tmux
-// verdict without touching PATH.
+// tmuxAvailable is the tmux-usability seam for the new-session pre-flight guards
+// (the create-form gate and the smart-dispatch auto-create path). It reports a tmux
+// that is missing *or* older than tmux.MinVersion. A package var (matching the
+// detectAgents/checkDrift idiom) so tests inject a verdict without touching PATH.
 var tmuxAvailable = tmux.Available
 
 // cycleTarget returns the sibling to re-attach when an in-session cycle key
@@ -275,8 +275,9 @@ func (m *home) handleSmartDispatchSubmit(line string) tea.Cmd {
 			fmt.Errorf("you can't create more than %d sessions (max_sessions in config.json)", sc.Limit))
 	}
 
-	// Refuse before routing when tmux is missing: no session can be created without
-	// it, so neither auto-dispatch nor the seeded form should proceed. This path
+	// Refuse before routing when tmux is unusable — missing, or too old for the
+	// `new-session -e` every launch passes: no session can be created either way, so
+	// neither auto-dispatch nor the seeded form should proceed. This path
 	// enters at statePrompt with the dispatch overlay open, so reset to stateDefault
 	// first — that clears the stale overlay and lets handleError route the wide
 	// sentinel to the persistent info modal (it only does so from stateDefault)
@@ -1138,8 +1139,9 @@ func (m *home) openCreateFormSeeded(seedPath string, focusTitle bool, prefill *P
 			fmt.Errorf("you can't create more than %d sessions (max_sessions in config.json)", sc.Limit))
 	}
 
-	// Refuse to open the form when tmux is missing: every session runs inside tmux,
-	// so creation would fail anyway — but only after the user filled in the form and
+	// Refuse to open the form when tmux is unusable (missing, or too old for the
+	// `new-session -e` every launch passes): every session runs inside tmux, so
+	// creation would fail anyway — but only after the user filled in the form and
 	// a worktree was built and rolled back. Bailing here (all create paths route
 	// through this function) shows one actionable message up front; the wide sentinel
 	// routes through handleError to the persistent info modal.

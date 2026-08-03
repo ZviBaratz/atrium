@@ -64,8 +64,12 @@ checkouts) report a dev version and never self-update.
 
 ### Prerequisites
 
-- [tmux](https://github.com/tmux/tmux/wiki/Installing)
-- [gh](https://cli.github.com/)
+- [tmux](https://github.com/tmux/tmux/wiki/Installing) 3.2 or newer — Atrium starts
+  every session with `tmux new-session -e`, which older versions reject
+- [git](https://git-scm.com/downloads)
+- [gh](https://cli.github.com/) — optional, for pushing branches and opening PRs
+
+Run `atrium doctor` to check them.
 
 ### Usage
 

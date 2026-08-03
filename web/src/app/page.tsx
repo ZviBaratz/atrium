@@ -58,7 +58,7 @@ export default function Home() {
             <CopyButton textToCopy="go install github.com/ZviBaratz/atrium@latest" />
           </div>
           <p className={styles.prerequisites}>
-            Prerequisites: tmux, gh (GitHub CLI)
+            Prerequisites: tmux 3.2+, git, gh (GitHub CLI, optional)
           </p>
         </div>
         
