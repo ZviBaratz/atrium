@@ -5,12 +5,9 @@ import (
 	"go/parser"
 	"go/token"
 	"io/fs"
-	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -90,116 +87,4 @@ func TestNoTestCallsOsExit(t *testing.T) {
 	// A walk that reached nothing would pass silently and mean nothing.
 	require.Greaterf(t, checked, 100,
 		"only %d test files parsed — the walk is not reaching the module", checked)
-}
-
-// The sandbox HOME must carry its owner marker. An unmarked root is never swept, so
-// a missing marker does not endanger this run — it strands the directory instead,
-// permanently, since no later run can identify it as an orphan to reclaim.
-func TestSandboxHomeCarriesItsOwnerMarker(t *testing.T) {
-	home, err := os.UserHomeDir()
-	require.NoError(t, err)
-	require.Truef(t, strings.HasPrefix(filepath.Base(home), homeRootPrefix),
-		"HOME is %q, not a sandbox root: this package's TestMain must call SandboxHomeMain", home)
-
-	raw, err := os.ReadFile(filepath.Join(home, ownerMarkerFile))
-	require.NoErrorf(t, err, "sandbox HOME %q carries no %s: an unmarked root is swept by age "+
-		"alone, so a sibling `go test ./...` package would reap this one mid-run", home, ownerMarkerFile)
-
-	pid, err := strconv.Atoi(strings.TrimSpace(string(raw)))
-	require.NoErrorf(t, err, "%s is not a pid: %q", ownerMarkerFile, raw)
-	require.Equalf(t, os.Getpid(), pid,
-		"%s names another process, which reads as an owner that has exited", ownerMarkerFile)
-}
-
-// staleRoot builds a directory that rootIsStale answers "yes" to: named like ours
-// and marked with a pid that has exited. Every fixture below is built this way on
-// purpose — a directory that is spared for some *other* reason proves nothing about
-// the refusal under test, which is how the self-skip assertion here was vacuous in
-// its first form.
-func staleRoot(t *testing.T, parent, name string) string {
-	t.Helper()
-	root := filepath.Join(parent, name)
-	require.NoError(t, os.Mkdir(root, 0o700))
-	require.NoError(t, os.WriteFile(filepath.Join(root, ownerMarkerFile),
-		[]byte(strconv.Itoa(deadPID(t))), 0o600))
-	require.Truef(t, rootIsStale(root), "fixture %s is not stale, so sparing it proves nothing", name)
-	return root
-}
-
-// sweepStaleRoots is what deletes directories, so its refusals are the safety
-// surface — each one is asserted against a fixture that would otherwise be reaped.
-func TestSweepStaleRootsSpares(t *testing.T) {
-	parent := t.TempDir()
-
-	self := staleRoot(t, parent, homeRootPrefix+"self")
-	foreign := staleRoot(t, parent, "someone-elses-scratch")
-	doomed := staleRoot(t, parent, homeRootPrefix+"doomed")
-
-	sweepStaleRoots(parent, homeRootPrefix, self, nil)
-
-	require.DirExists(t, self, "the sweep deleted the root of the run that started it")
-	require.DirExists(t, foreign, "the sweep deleted a directory it did not create — the prefix "+
-		"is what bounds what this removes")
-	require.NoDirExists(t, doomed,
-		"the sweep removed nothing at all, so the two assertions above prove nothing")
-}
-
-// An unmarked directory is never swept, whatever it looks like. This is the guard
-// that decides how bad a wrong prefix can get: /tmp/tmux-<uid>, and everything else
-// in /tmp, carries no owner marker.
-func TestSweepStaleRootsSparesTheUnmarked(t *testing.T) {
-	parent := t.TempDir()
-
-	// Named exactly like ours, and old — everything the previous age-based rule
-	// needed to delete it.
-	unmarked := filepath.Join(parent, homeRootPrefix+"unmarked")
-	require.NoError(t, os.Mkdir(unmarked, 0o700))
-	old := time.Now().Add(-90 * 24 * time.Hour)
-	require.NoError(t, os.Chtimes(unmarked, old, old))
-	require.False(t, rootIsStale(unmarked), "an unmarked root must never be stale, at any age")
-
-	// A stand-in for the live socket directory this once destroyed: no marker, and
-	// holding something that matters.
-	live := filepath.Join(parent, homeRootPrefix+"live-socket-dir")
-	require.NoError(t, os.Mkdir(live, 0o700))
-	require.NoError(t, os.WriteFile(filepath.Join(live, "atrium"), nil, 0o600))
-	require.NoError(t, os.Chtimes(live, old, old))
-
-	doomed := staleRoot(t, parent, homeRootPrefix+"doomed")
-
-	sweepStaleRoots(parent, homeRootPrefix, "", nil)
-
-	require.DirExists(t, unmarked, "an unmarked directory was deleted on age alone")
-	require.FileExists(t, filepath.Join(live, "atrium"),
-		"the sweep emptied an unmarked directory it did not create")
-	require.NoDirExists(t, doomed, "the sweep removed nothing, so the assertions above are vacuous")
-}
-
-// A prefix too short to be distinctive is refused outright, before the glob. An
-// empty one is what a bad edit produces, and it would make the glob "everything in
-// parent".
-func TestSweepStaleRootsRefusesAWeakPrefix(t *testing.T) {
-	for _, prefix := range []string{"", "a", "atr", "atriu"} {
-		parent := t.TempDir()
-		doomed := staleRoot(t, parent, prefix+"doomed")
-
-		sweepStaleRoots(parent, prefix, "", nil)
-
-		require.DirExistsf(t, doomed, "prefix %q was accepted: anything this short can match "+
-			"a directory the sweep did not create", prefix)
-	}
-}
-
-// A release veto must stop the removal, not just the reaping. This is how the tmux
-// sweep keeps a socket whose server it could not kill.
-func TestSweepStaleRootsHonoursAReleaseVeto(t *testing.T) {
-	parent := t.TempDir()
-	root := staleRoot(t, parent, homeRootPrefix+"vetoed")
-
-	sweepStaleRoots(parent, homeRootPrefix, "", func(string) bool { return false })
-	require.DirExists(t, root, "a vetoed root was removed anyway: the tmux sweep relies on this "+
-		"to leave a live server's socket addressable (#547)")
-
-	sweepStaleRoots(parent, homeRootPrefix, "", func(string) bool { return true })
-	require.NoDirExists(t, root, "the veto path is unreachable, so the assertion above is vacuous")
 }

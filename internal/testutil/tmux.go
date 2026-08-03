@@ -6,7 +6,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -22,10 +21,11 @@ const (
 	// os.TempDir() because the socket path has a hard length budget — see
 	// installSandboxTmuxTmpdir.
 	tmuxRootParent = "/tmp"
-	// tmuxRootPrefix names a sandbox socket root. It has to be distinctive enough
-	// to sweep by: sweepStaleTmuxRoots deletes directories matching it, so a prefix
-	// short enough to collide with a developer's own scratch dir (/tmp/atr*, which
-	// this machine has) would delete their work.
+	// tmuxRootPrefix names a sandbox socket root. It is doing safety work, not just
+	// naming: tmuxSocketsUnder refuses any root whose basename lacks it, which is what
+	// stops a stray "/tmp" from resolving to /tmp/tmux-<uid>/atrium — the socket a
+	// running Atrium is on. It is also long enough not to collide with a developer's
+	// own scratch dirs (this machine had /tmp/atr*).
 	tmuxRootPrefix = "atrium-tmux-"
 	// tmuxKillTimeout bounds one teardown `kill-server`, so a wedged tmux server
 	// cannot hang the test binary's exit.
@@ -71,18 +71,6 @@ func installSandboxTmuxTmpdir() func() {
 	if err != nil {
 		return func() {}
 	}
-	// The owner marker goes down before TMUX_TMPDIR names the root, and a root that
-	// cannot be marked is not a sandbox at all: unmarked, no future sweep can ever
-	// identify it, so it and any server it holds outlive every run that might have
-	// reclaimed them. Writing it first is also what keeps this failure path from
-	// having to undo a TMUX_TMPDIR it had already installed, and a variable naming a
-	// directory that no longer exists is the one state worse than no sandbox: tmux
-	// reads it as /tmp.
-	if err := os.WriteFile(filepath.Join(root, ownerMarkerFile),
-		[]byte(strconv.Itoa(os.Getpid())), 0o600); err != nil {
-		_ = os.RemoveAll(root)
-		return func() {}
-	}
 	if err := os.Setenv("TMUX_TMPDIR", root); err != nil {
 		// Not a panic, for the reason SandboxHomeMain documents: an uninstallable
 		// socket sandbox must leave sandboxTmuxRoot empty so requireSandboxedTmux
@@ -93,65 +81,26 @@ func installSandboxTmuxTmpdir() func() {
 	}
 	sandboxTmuxRoot = root
 
-	// Reap what earlier runs could not. A test binary killed mid-run (Ctrl-C, a
-	// -timeout abort, a panicking process) never reaches the teardown below, and
-	// what it strands here is worse than a stray directory: ui's terminal panes run
-	// $SHELL (ui/terminal.go:303), which never exits, so the orphaned server lives
-	// forever — and being under a private root, it is invisible to `tmux ls`,
-	// `atrium` and `atrium reset`, all of which resolve -L against the *current*
-	// TMUX_TMPDIR. The sandbox HOME beside it has leaked ~550 directories on this
-	// developer's machine since July, so this is the expected case, not the
-	// unlucky one.
-	sweepStaleTmuxRoots(root)
-
 	return func() {
-		// Kill first, empty second, and only empty when the kill is confirmed. A
-		// TMUX_TMPDIR root emptied while a server still lives produces a server no
+		// Kill first, remove second, and only remove when the kill is confirmed. A
+		// TMUX_TMPDIR root removed while a server still lives produces a server no
 		// tooling can reach — the socket it is listening on no longer has a path
-		// (#547) — so a server that outlasted the kill keeps its socket, and the next
-		// run's sweep gets another attempt at it.
+		// (#547) — so a server that outlasted the kill keeps its socket and its root.
+		// That leaves a directory behind, which is the right way round: a stray
+		// directory is litter, a server nothing can address is not.
 		if !killTmuxServers(root) {
 			return
 		}
-		// The root itself outlives the contents on purpose: TMUX_TMPDIR still names
-		// it, and tmux reads an empty *or missing* TMUX_TMPDIR as /tmp. Deleting the
-		// directory here would leave every later `-L` call in this process — a stray
-		// goroutine, a helper in the caller's TestMain — pointed at the developer's
-		// live socket. The next run's sweep removes the shell, recognising it by the
-		// owner marker this deliberately leaves behind.
-		removeContentsExceptMarker(root)
+		_ = os.RemoveAll(root)
+		// TMUX_TMPDIR now names a directory that is gone, and tmux reads that as /tmp
+		// — the developer's live socket. Nothing reaches it today: this runs after
+		// m.Run has returned, so every test and cleanup is finished, and no test in
+		// app, ui or session/tmux calls Attach (the only path with goroutines that
+		// outlive their caller). Clearing the recorded root is the belt: anything that
+		// does run later and goes through RequireTmux/RequireSandboxedTmux hard-fails
+		// instead of quietly binding /tmp.
+		sandboxTmuxRoot = ""
 	}
-}
-
-// removeContentsExceptMarker empties dir without removing dir itself, and without
-// removing its owner marker.
-//
-// Keeping the marker is load-bearing, not tidiness. rootIsStale reaps only roots
-// whose marker names a dead process; a root stripped of its marker is one no sweep
-// will ever touch again. This teardown is the normal end of every sandboxed test
-// binary, so stripping it here would leak one directory per package per run — which
-// is exactly what an age-based fallback used to paper over, at the cost of making
-// every unmarked directory in the parent look reapable.
-func removeContentsExceptMarker(dir string) {
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return
-	}
-	for _, entry := range entries {
-		if entry.Name() == ownerMarkerFile {
-			continue
-		}
-		_ = os.RemoveAll(filepath.Join(dir, entry.Name()))
-	}
-}
-
-// sweepStaleTmuxRoots reaps the socket roots of test binaries that died before
-// their teardown. The release callback is what makes it different from the HOME
-// sweep: a root whose server survived the kill keeps its socket, because removing
-// the directory out from under a live server is the unreachable orphan (#547), not
-// the cure for it.
-func sweepStaleTmuxRoots(self string) {
-	sweepStaleRoots(tmuxRootParent, tmuxRootPrefix, self, killTmuxServers)
 }
 
 // TmuxRoot returns the private tmux socket directory this test binary's sandbox
