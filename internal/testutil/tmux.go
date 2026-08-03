@@ -83,6 +83,18 @@ func installSandboxTmuxTmpdir() func() {
 	if err != nil {
 		return func() {}
 	}
+	// The owner marker goes down before TMUX_TMPDIR names the root, and a root that
+	// cannot be marked is not a sandbox at all: unmarked, tmuxRootIsStale judges it by
+	// age alone, so a sibling package's sweep reaps it out from under this binary —
+	// live server and all — once it ages past tmuxRootGrace. Writing it first is also
+	// what keeps this failure path from having to undo a TMUX_TMPDIR it had already
+	// installed, and a variable naming a directory that no longer exists is the one
+	// state worse than no sandbox: tmux reads it as /tmp.
+	if err := os.WriteFile(filepath.Join(root, tmuxRootPIDFile),
+		[]byte(strconv.Itoa(os.Getpid())), 0o600); err != nil {
+		_ = os.RemoveAll(root)
+		return func() {}
+	}
 	if err := os.Setenv("TMUX_TMPDIR", root); err != nil {
 		// Not a panic, for the reason SandboxHomeMain documents: an uninstallable
 		// socket sandbox must leave sandboxTmuxRoot empty so requireSandboxedTmux
@@ -91,8 +103,6 @@ func installSandboxTmuxTmpdir() func() {
 		_ = os.RemoveAll(root)
 		return func() {}
 	}
-	_ = os.WriteFile(filepath.Join(root, tmuxRootPIDFile),
-		[]byte(strconv.Itoa(os.Getpid())), 0o600)
 	sandboxTmuxRoot = root
 
 	// Reap what earlier runs could not. A test binary killed mid-run (Ctrl-C, a
@@ -173,11 +183,21 @@ func tmuxRootIsStale(root string) bool {
 		return false
 	}
 	raw, err := os.ReadFile(filepath.Join(root, tmuxRootPIDFile))
+	if err != nil && !os.IsNotExist(err) {
+		// Unreadable is not the same as absent, and only absent is evidence. A root
+		// another user owns is 0700, so this user's sweep reads EACCES here — and
+		// answering that with the age fallback would let one user's sweep call another
+		// user's live root an orphan. Same rule processAlive applies to EPERM one layer
+		// down: what you cannot inspect, you do not get to reap.
+		return false
+	}
 	if err != nil {
-		// No owner recorded: either a teardown already emptied it, or the marker never
-		// got written — but it is also how a root a sibling package binary created a
-		// microsecond ago looks, so only age separates them. `go test ./...` runs those
-		// binaries in parallel, so that window is genuinely raced.
+		// No owner recorded: a teardown already emptied it — or a sibling package binary
+		// created it a microsecond ago and has not laid its marker down yet, which is the
+		// only other way this state is reachable now that a failed marker write aborts
+		// the install outright (installSandboxTmuxTmpdir). Only age separates them, and
+		// `go test ./...` runs those binaries in parallel, so that window is genuinely
+		// raced.
 		return time.Since(info.ModTime()) >= tmuxRootGrace
 	}
 	pid, err := strconv.Atoi(strings.TrimSpace(string(raw)))

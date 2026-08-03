@@ -12,6 +12,7 @@ import (
 
 	cmd2 "github.com/ZviBaratz/atrium/cmd"
 	"github.com/ZviBaratz/atrium/cmd/cmd_test"
+	"github.com/ZviBaratz/atrium/internal/testutil"
 	"github.com/ZviBaratz/atrium/ui/theme"
 
 	"github.com/stretchr/testify/require"
@@ -91,10 +92,23 @@ func TestApplyBarStyle_NoOpsUnderAConfigOverride(t *testing.T) {
 // validateConfig, which starts a probe server and kills it again (config.go:187), so
 // the eight Init calls below drive eight new-session/kill-server pairs. They share
 // one socket name — socketName()+"-precheck" — rather than taking eight of their
-// own. It needs no RequireTmux — validateConfig no-ops when tmux is absent — but it
-// is a real-tmux site, and the sandbox TMUX_TMPDIR is what keeps that probe socket
-// out of the shared socket dir, where it used to sit next to the live one (#581).
+// own. The sandbox TMUX_TMPDIR is what keeps that probe socket out of the shared
+// socket dir, where it used to sit next to the live one (#581).
+//
+// So it gates on isolation, and only on isolation: RequireTmux would be wrong here,
+// because what this test is actually for — that Init and tmuxConfigPath race-freely
+// share their globals — holds with or without tmux, and skipping it on a tmux-less
+// machine would take that coverage away for an unrelated reason. But the gate has to
+// exist. Isolation is the standing promise that a real-tmux site fails loudly rather
+// than quietly writing into the developer's fleet, and a site that leaves it to its
+// TestMain is a site where a failed sandbox install goes undetected. Conditioned on
+// tmux being present for the same reason RequireTmux is not used: with no tmux,
+// validateConfig returns before it starts anything (config.go:180) and there is no
+// socket to misplace.
 func TestInitAndTmuxConfigPath_AreRaceFree(t *testing.T) {
+	if _, err := exec.LookPath("tmux"); err == nil {
+		testutil.RequireSandboxedTmux(t)
+	}
 	t.Setenv("HOME", t.TempDir())
 	restoreOverride(t, "")
 

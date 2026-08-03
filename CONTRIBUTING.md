@@ -31,7 +31,8 @@ just cover      # with coverage
 ```
 
 Please include tests for new features or bug fixes. Tests must not read or write
-the real Atrium data directory — see `internal/testutil.SandboxHomeMain`.
+the real Atrium data directory, or the tmux fleet a running Atrium is on — see
+`internal/testutil.SandboxHomeMain`, which sandboxes both.
 
 ### Git hooks (recommended)
 

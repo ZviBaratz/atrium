@@ -30,9 +30,18 @@ import (
 //
 // It panics rather than falling back to the real HOME, so a setup failure can
 // never silently run tests against live state. The socket sandbox fails the other
-// way — if it cannot be installed it is simply absent, and RequireTmux fails the
-// individual tests that needed it. Same guarantee, smaller blast radius: a host
-// without a usable /tmp still runs every test that never touches tmux.
+// way — if it cannot be installed it is simply absent, and the per-test gates fail
+// the tests that needed it. Same guarantee, smaller blast radius: a host without a
+// usable /tmp still runs every test that never touches tmux.
+//
+// That second guarantee is only as good as the gates' coverage, and it is the half
+// worth checking when a real-tmux site is added. Every site that can reach a real
+// server carries RequireTmux or, where a plain skip has to be kept, the bare
+// RequireSandboxedTmux — including the two that do not look like real-tmux sites at
+// all: session/tmux's TestSessionDeathStopsProbing (its own LookPath skip) and
+// TestInitAndTmuxConfigPath_AreRaceFree (Init starts a probe server via
+// validateConfig). A site that relies on this TestMain alone is a site where a failed
+// install is silent, which is the state #581 describes.
 func SandboxHomeMain(m *testing.M) int {
 	tmp, err := os.MkdirTemp("", "atrium-test-home-")
 	if err != nil {
@@ -61,7 +70,10 @@ func SandboxHomeMain(m *testing.M) int {
 	// Armed here, before m.Run, so the reaper exists before any test can start a
 	// server — a server started under a root nothing is committed to killing is
 	// exactly the orphan #547 is about. Registered after the HOME cleanup above so
-	// LIFO reaps tmux while the sandbox HOME it may be sitting in still exists.
+	// LIFO reaps the servers first: the socket root is a sibling of the sandbox HOME,
+	// not a child of it, but the servers themselves are the other way round — their
+	// panes' working directories and the atrium.conf they sourced live under that
+	// HOME, so it has to outlast the kill.
 	teardownTmux := installSandboxTmuxTmpdir()
 	defer teardownTmux()
 	return m.Run()
