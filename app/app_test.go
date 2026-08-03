@@ -388,7 +388,7 @@ func TestPromptDeliveryReady(t *testing.T) {
 		},
 		{
 			// The hold applies to a live-clock (boot/restored) head too, not only a
-			// zero-clock follow-up — newInstanceFromStorage re-stamps a restored follow-up
+			// zero-clock follow-up — FromInstanceData re-stamps a restored follow-up
 			// with a live clock, so keying on the clock would leak across a TUI restart.
 			name:          "an unanswered question holds a live-clock head too",
 			state:         tmux.PaneIdle,

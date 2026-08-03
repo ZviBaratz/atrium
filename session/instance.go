@@ -260,8 +260,10 @@ type Instance struct {
 	// (#571), so a queued follow-up is not delivered as the answer to a question
 	// they never saw. Written only on the main thread (SetAskedMeta), like modelID.
 	// Deliberately NOT persisted: it is a claim about a live transcript, and a
-	// restored session re-derives it on its first post-restore tick — which is also
-	// what keeps a stale true from outliving the turn that earned it.
+	// restored session re-derives it on its first post-restore tick that finds the
+	// pane SETTLED (endedAskingNow only re-reads there) — which is also what keeps a
+	// stale true from outliving the turn that earned it. Starting false is why the
+	// gap before that tick is safe: it can only under-hold, never over-hold.
 	endedAsking bool
 	// askedStamp memoizes the transcript state endedAsking was derived from, with the
 	// same cross-thread contract as modelStamp: read in the poll goroutine, written

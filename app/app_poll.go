@@ -278,10 +278,19 @@ func sendPromptCmd(instance *session.Instance, prompt string) tea.Cmd {
 // retried by a later tick rather than lost. ClaimPrompt's atomic in-flight guard ensures
 // only one send is outstanding per instance, so overlapping dispatchers (a later tick, or
 // the attach keeper) cannot send the same prompt twice.
+//
+// The #571 question hold is applied HERE rather than folded into r.readyForPrompt, and the
+// placement is the whole point: applyMetadataResults calls this after its ApplyPaneState
+// loop, so questionHoldsPrompt reads an Unread() that already reflects the turn that just
+// ended. Evaluated in collectMetadata's goroutine it would instead read the value from
+// before this tick — false for a row the user was watching — and open the gate on the one
+// tick a question ever gets delivered into. r.asked carries the verdict from that goroutine
+// (the transcript read is what had to happen off-thread); only the cheap Unread() re-read
+// belongs on the main thread.
 func deliverReadyPrompts(results []instanceMetaResult) []tea.Cmd {
 	var cmds []tea.Cmd
 	for _, r := range results {
-		if !r.readyForPrompt {
+		if !r.readyForPrompt || questionHoldsPrompt(r.instance, r.asked) {
 			continue
 		}
 		if prompt, ok := r.instance.ClaimPrompt(); ok {
@@ -325,6 +334,12 @@ func endedAskingNow(inst *session.Instance, state tmux.PaneState) (bool, transcr
 // It exists as a function rather than an `asked && inst.Unread()` at each call site
 // because there are TWO dispatchers (the metadata tick and the attach keeper) and a hold
 // applied by only one of them is not a hold.
+//
+// Both must also call it AFTER the ApplyPaneState that ends the turn, because Unread() is
+// what that call raises: attachKeeper.service applies the pane state on the line above its
+// check, and the tick path defers to deliverReadyPrompts for the same reason. Sharing the
+// predicate is not enough — it has a precondition, and reading it one step too early
+// silently disables the hold rather than failing.
 func questionHoldsPrompt(inst *session.Instance, asked bool) bool {
 	return asked && inst.Unread()
 }
@@ -355,9 +370,14 @@ const promptDeliveryTimeout = 60 * time.Second
 // something else. It sits beside awaitingInput as a hard precondition rather than below
 // the busy check ON PURPOSE: the timeout must never bypass it.
 //
+// Only attachKeeper.service passes it live, because it has already applied the pane state
+// that raises Unread(). The metadata tick passes false here and applies the same hold in
+// deliverReadyPrompts instead — see questionHoldsPrompt for why the ordering, not the
+// predicate, is what makes it work.
+//
 // It applies to EVERY queued prompt, not only zero-clock follow-ups, even though a boot
 // prompt is conceptually the first message of a session and has no prior turn to answer.
-// Keying it on queuedAt.IsZero() looks equivalent and is not: newInstanceFromStorage
+// Keying it on queuedAt.IsZero() looks equivalent and is not: FromInstanceData
 // re-stamps the restored head with a LIVE clock (session/instance.go), so after a TUI
 // restart a prompt that was queued as a follow-up would arm the 60s valve and be
 // delivered into the question anyway. Holding unconditionally closes that, and costs a
@@ -627,9 +647,16 @@ func collectMetadata(ctx context.Context, poll []*session.Instance, selected *se
 			r.asked = asked
 			// Only probe readiness while a prompt is actually queued (a brief
 			// window after a new session), so the extra pane capture is rare.
+			//
+			// The #571 hold is deliberately NOT folded in here: questionHoldsPrompt
+			// reads Unread(), and the Running→Ready edge that raises it for a finished
+			// turn is applied by THIS tick's ApplyPaneState — which runs later, on the
+			// main thread. Asking here reads the pre-turn value, so the hold would miss
+			// exactly the tick it exists for. deliverReadyPrompts applies it after that
+			// loop; r.asked, set just above, is what carries the verdict there.
 			if instance.Prompt() != "" {
 				r.readyForPrompt = promptDeliveryReady(
-					r.state, instance.AwaitingInput(), questionHoldsPrompt(instance, asked),
+					r.state, instance.AwaitingInput(), false,
 					instance.PromptQueuedAt(), time.Now())
 			}
 			switch {

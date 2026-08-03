@@ -768,3 +768,60 @@ func TestMetadataTick_MemoizesTheQuestionFlag(t *testing.T) {
 
 	require.True(t, inst.EndedAsking(), "the tick must memoize the question flag on the instance")
 }
+
+// TestTickPathHoldsPromptWhenQuestionFirstAppears is the regression test for the ordering
+// the hold depends on. It drives the whole tick pipeline — collectMetadata (off-thread)
+// → applyMetadataResults (ApplyPaneState, main thread) → the returned send commands —
+// with Unread() FALSE going in, which is the ordinary case: the user was watching the row
+// when they queued the follow-up, so nothing is unread until this very tick's Running→Ready
+// edge raises it.
+//
+// That precondition is the whole test. Seeding Unread() true first (the obvious way, and
+// what the keeper test does) passes even when the hold is evaluated a step too early,
+// because the value it reads is then already correct. Verified by moving the check back
+// into collectMetadata: this test fails and every other test in the package still passes.
+func TestTickPathHoldsPromptWhenQuestionFirstAppears(t *testing.T) {
+	h := newCreateFormHome(t)
+	h.lostStrikes = map[*session.Instance]int{}
+	fake := &fakeKeeperPane{}
+	inst := newKeeperInstance(t, "tickhold", fake)
+	startKeeperInstance(t, inst)
+	writeKeeperTranscript(t, inst, inst.WorkingDir(), "Want me to open the PR, or will you?")
+	h.list.AddInstance(inst)()
+
+	// The agent is mid-turn and the user is looking at the row: nothing unread yet.
+	inst.SetStatus(session.Running)
+	require.False(t, inst.Unread(), "precondition: the row has been seen, nothing is unread")
+
+	inst.QueueFollowupPrompt("go ahead")
+
+	results := collectMetadata(h.ctx, []*session.Instance{inst}, nil, false)
+	require.Len(t, results, 1)
+	require.Equal(t, tmux.PaneIdle, results[0].state, "precondition: the turn ended")
+	require.True(t, results[0].asked, "precondition: the question was detected off-thread")
+
+	for _, cmd := range h.applyMetadataResults(results, false) {
+		if cmd != nil {
+			cmd()
+		}
+	}
+
+	typed, enters, _ := fake.snapshot()
+	require.Empty(t, typed, "the follow-up must not be delivered into the unanswered question")
+	require.Zero(t, enters)
+	require.Equal(t, "go ahead", inst.Prompt(), "the prompt stays queued, not dropped")
+	require.True(t, inst.Unread(), "the same tick flagged the finished turn unread")
+
+	// The release valve still works through the same path: once the user dwells on the
+	// row, the very next tick delivers.
+	inst.MarkSeen()
+	results = collectMetadata(h.ctx, []*session.Instance{inst}, nil, false)
+	for _, cmd := range h.applyMetadataResults(results, false) {
+		if cmd != nil {
+			cmd()
+		}
+	}
+	typed, enters, _ = fake.snapshot()
+	require.Equal(t, []string{"go ahead"}, typed, "a seen question releases the follow-up")
+	require.Equal(t, 1, enters)
+}

@@ -33,10 +33,10 @@ import (
 // Measured over 789 transcripts / 5,735 turns, across every live CLAUDE_CONFIG_DIR root
 // (2026-08-02). Four candidate rules were scored and this one won on evidence:
 //
-//	last line ENDS WITH '?'          687 hits (12.14%)  <- the obvious rule
-//	last line CONTAINS '?'           956 hits (16.67%)
-//	the rule below (contains, masked) 941 hits (16.63%)  <- shipped
-//	raw 300-char tail contains '?'  1007 hits (17.56%)
+//	last line ENDS WITH '?'            687 hits (11.98%)  <- the obvious rule
+//	last line CONTAINS '?'             956 hits (16.67%)
+//	the rule below (contains, masked)  941 hits (16.41%)  <- shipped
+//	raw 300-char tail contains '?'    1007 hits (17.56%)
 //
 // The ends-with rule is a STRICT SUBSET of this one (|ends-with \ this| = 0 over the
 // whole corpus), so widening costs nothing and recovers 254 more real asks. What it was
@@ -50,10 +50,10 @@ import (
 // is factually wrong?", a literal `??`, and a `?format=json` — and zero true positives.
 // Sampled precision overall was 91/91.
 //
-// The tail rule was rejected: its 67 extra hits are almost all plain sign-offs that
+// The tail rule was rejected: its 66 extra hits are almost all plain sign-offs that
 // merely have a '?' somewhere in the last 300 bytes ("Otherwise, we're done.").
 //
-// The limit this rule structurally cannot reach: 415 turns (7.33%) end with an
+// The limit this rule structurally cannot reach: 415 turns (7.24%) end with an
 // IMPERATIVE ask — "say the word", "let me know", "tell me whether" — and carry no
 // question mark at all. Real recall is therefore ~69%, not ~100%. That is an acceptable
 // trade only because of which way it fails: a miss is exactly today's behaviour, while a
@@ -109,7 +109,7 @@ func EndedAsking(ctx context.Context, program, workingDir string, prev Stamp, op
 
 	// Last qualifying entry wins, like decodeModel. Non-message entry types (mode,
 	// file-history-snapshot, ai-title, …) and sidechain entries are skipped by
-	// decodeAssistantText, so a sub-agent's question can never be mistaken for the main
+	// decodeAssistantBlocks, so a sub-agent's question can never be mistaken for the main
 	// turn's.
 	var last []block
 	if _, err := scanTail(ctx, path, opts.MaxBytes, func(line []byte) {
@@ -147,13 +147,18 @@ func decodeAssistantBlocks(line []byte) ([]block, bool) {
 // blocksEndAsking applies the measured rule to ONE assistant entry's blocks.
 //
 // Taking blocks from a single entry — the caller's last — is what stops a question from
-// the middle of a turn holding a prompt after the agent moved past it. An entry whose
-// final act was a tool call therefore contributes no prose and reads as false, rather
-// than borrowing an earlier entry's text; empty text falls through the same path and
+// an EARLIER entry holding a prompt after the agent moved past it. An entry carrying no
+// text at all (a bare tool call) therefore contributes nothing and reads as false rather
+// than borrowing the previous entry's prose; empty text falls through the same path and
 // yields false without a special case.
 //
-// The LAST text block wins within the entry, because claude interleaves prose and tool
-// calls inside one turn and it is the closing prose the user is looking at.
+// The LAST text block wins WITHIN the entry, because claude interleaves prose and tool
+// calls inside one turn and it is the closing prose the user is looking at. Note what
+// that does and does not say: blocks after the last text block are ignored, so an entry
+// shaped [text("…?"), tool_use] reads as true even though its final block is a call.
+// That is deliberate — on an idle pane such an entry means the tool never produced a
+// result, and holding is the safe direction — but it is not "the entry's final act was a
+// tool call, so false". Pinned by TestEndedAsking_TrailingToolUseKeepsTheProse.
 func blocksEndAsking(blocks []block) bool {
 	text := ""
 	for _, b := range blocks {

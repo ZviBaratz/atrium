@@ -235,3 +235,28 @@ func TestEndedAsking_ContextCancelled(t *testing.T) {
 		t.Errorf("err = %v, want context.Canceled", err)
 	}
 }
+
+// TestEndedAsking_TrailingToolUseKeepsTheProse pins the shape blocksEndAsking's doc used
+// to describe backwards: within ONE entry, blocks after the last text block are ignored,
+// so [text(question), tool_use] reads as true. TestEndedAsking_NoTextBlockFailsSafe covers
+// a separate trailing entry with no prose at all, and TestEndedAsking_LastTextBlockWins
+// ends on text — neither reaches this case, which is why the doc drifted unnoticed.
+//
+// True is the wanted answer, not merely the observed one: on an idle pane a trailing
+// tool_use means the call never produced a result, and holding a queued prompt is the
+// safe direction.
+func TestEndedAsking_TrailingToolUseKeepsTheProse(t *testing.T) {
+	const cwd = "/home/zvi/work"
+	root := askedRoot(t, cwd,
+		`{"isSidechain":false,"type":"assistant","message":{"model":"claude-opus-4-7","content":[`+
+			`{"type":"text","text":"Should I remove the file now?"},`+
+			`{"type":"tool_use","name":"Bash","input":{}}]}}`+"\n")
+
+	asked, _, err := EndedAsking(context.Background(), "claude", cwd, Stamp{}, Options{Root: root})
+	if err != nil {
+		t.Fatalf("EndedAsking: %v", err)
+	}
+	if !asked {
+		t.Error("asked = false, want true — the last TEXT block still carries the question")
+	}
+}
