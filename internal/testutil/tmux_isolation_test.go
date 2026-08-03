@@ -145,9 +145,10 @@ func TestKillTmuxServersReapsOnlyItsOwnRoot(t *testing.T) {
 
 // TestKillTmuxServersKeepsTheSocketOfAServerItCouldNotReap is the other half of the
 // #547 guarantee, and the half a passing teardown hides. Unlinking the socket of a
-// server that is still listening leaves a server nothing can address — not `tmux
-// ls`, not `atrium reset`, not the next run's sweep — so the kill's *outcome*, never
-// its exit status, has to decide whether the file goes.
+// server that is still listening leaves a server nothing can address — not `tmux ls`,
+// not `atrium reset`, and, with no sweep in this package to reap it later, nothing on
+// any subsequent run either — so the kill's *outcome*, never its exit status, has to
+// decide whether the file goes.
 //
 // The failure is forced with no tmux on PATH at all: the kill cannot be sent, the
 // server keeps running, and a teardown that removed the socket anyway would strand

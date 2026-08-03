@@ -20,8 +20,14 @@ import (
 // and because it spawns two children per run it leaked two HOME directories on every
 // clean `go test ./ui/` — 633 of them had piled up in /tmp over five days, and the
 // same skip in a package that starts a real tmux session strands the server too.
-// The startup sweep in sandboxroot.go cleans up after the exits nobody can prevent
-// (signals, -timeout aborts); this covers the one kind that is purely a choice.
+// The exits nobody can prevent still leak, and nothing here reaps them: a signal, or
+// a -timeout abort, whose panic fires on time.AfterFunc's own goroutine
+// (testing.(*M).startAlarm) and so unwinds that stack rather than TestMain's. Cleaning
+// up after those would mean a sweep — a recursive delete over a glob of /tmp — and one
+// wrong prefix in exactly that took this developer's live tmux socket with it, which is
+// why there isn't one. A stray directory is the accepted cost. This guard covers the
+// remaining kind, the one that is purely a choice, which was also all of the leak that
+// was ever measured here.
 //
 // The fix at the call site is always `return`: a re-exec child that returns still
 // exits 0, still prints what it printed, and lets TestMain finish. A child that
