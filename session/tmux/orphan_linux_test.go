@@ -96,6 +96,47 @@ func mustListeningSockets(t *testing.T) map[uint64]string {
 	return socks
 }
 
+// TestCandidatesInReportsAnUnreadableSocketTable is the other half of what
+// mustListeningSockets above only asserts as a premise: that the ok result is acted on.
+//
+// The bug was that an unreadable /proc/net/unix rendered as a clean host, and the fix
+// is one assignment — gaps.SocketTableUnread = !ok. Nothing proved that assignment ran:
+// every other test for this flag builds the ScanGaps struct itself, so deleting the
+// line left the suite green. It cannot be driven against the real host either, since it
+// needs a candidate process to exist *and* the table read to fail at the same moment,
+// hence the injected table.
+//
+// The second case is the reason the flag is not simply set at the top of the scan: with
+// no candidate, the table was never needed, and "no tmux process here" is a complete
+// answer rather than a blind one.
+func TestCandidatesInReportsAnUnreadableSocketTable(t *testing.T) {
+	unreadable := func() (map[uint64]string, bool) { return nil, false }
+	// One own-uid process whose comm passes the tmux prefilter — the minimum that makes
+	// the socket table matter at all.
+	uid := uint32(os.Getuid())
+	server := map[int]procEntry{
+		4242: {stat: procStat{Comm: "tmux: server", State: "S", PPid: 1, StartTicks: 100}, uid: uid},
+	}
+
+	cands, gaps := candidatesIn(server, uid, unreadable)
+	require.True(t, gaps.SocketTableUnread,
+		"a socket table that could not be read must be reported, not rendered as a host with no servers")
+	require.False(t, gaps.ProcTableTruncated, "the walk itself was fine; only the socket table was not")
+	for _, c := range cands {
+		require.Empty(t, c.SocketPath,
+			"with no table there is no path to attach, which is why this gap suppresses every row")
+	}
+
+	// A host with no tmux process at all: the table is never consulted, so its
+	// readability is not a gap in the answer.
+	other := map[int]procEntry{
+		4242: {stat: procStat{Comm: "bash", State: "S", PPid: 1, StartTicks: 100}, uid: uid},
+	}
+	_, gaps = candidatesIn(other, uid, unreadable)
+	require.False(t, gaps.Any(),
+		"with nothing to identify, an unread socket table cannot make the answer incomplete")
+}
+
 // TestParseStatHandlesACommContainingASpace is the pure-function half of the
 // start-time guard.
 //

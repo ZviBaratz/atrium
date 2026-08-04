@@ -292,13 +292,27 @@ type procEntry struct {
 // uid test is a hard one: another user's server is unkillable anyway, and listing it
 // is the privacy concern #445 raised.
 func inventoryCandidates(ctx context.Context) ([]candidate, ScanGaps) {
-	var gaps ScanGaps
 	procs, whole := readProcTable(ctx)
+	uid := uint32(os.Getuid()) //nolint:gosec // a uid is never negative and always fits.
+	cands, gaps := candidatesIn(procs, uid, listeningSockets)
 	gaps.ProcTableTruncated = !whole
+	return cands, gaps
+}
+
+// candidatesIn is inventoryCandidates over an already-read process table, with the
+// listening-socket table injected.
+//
+// Split out for one reason: it is where a failed socket-table read turns into
+// gaps.SocketTableUnread, and that assignment is the whole of the fix for a scan that
+// reported "none" on an unreadable /proc/net/unix. Against the real host it cannot be
+// exercised — it needs a candidate process to exist *and* the table read to fail —
+// so the seam is the only way to prove the flag is set by the code that decides it
+// rather than by a test's own struct literal.
+func candidatesIn(procs map[int]procEntry, uid uint32, sockets func() (map[uint64]string, bool)) ([]candidate, ScanGaps) {
+	var gaps ScanGaps
 	if len(procs) == 0 {
 		return nil, gaps
 	}
-	uid := uint32(os.Getuid()) //nolint:gosec // a uid is never negative and always fits.
 
 	// Which pids are candidates, decided before the children pass so that pass can
 	// attribute a child to its parent in one sweep.
@@ -327,8 +341,11 @@ func inventoryCandidates(ctx context.Context) ([]candidate, ScanGaps) {
 		sort.Slice(kids[ppid], func(i, j int) bool { return kids[ppid][i].PID < kids[ppid][j].PID })
 	}
 
-	// One read of /proc/net/unix serves every candidate's socket lookup.
-	listening, ok := listeningSockets()
+	// One read of /proc/net/unix serves every candidate's socket lookup. It is read
+	// here rather than at the top because with no candidate there is nothing to
+	// identify, and a table that was never needed is not a gap: "no tmux process on
+	// this host" is a complete answer whatever /proc/net/unix says.
+	listening, ok := sockets()
 	gaps.SocketTableUnread = !ok
 
 	cands := make([]candidate, 0, len(isCandidate))

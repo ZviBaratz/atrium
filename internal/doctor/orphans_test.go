@@ -36,21 +36,32 @@ func TestRenderOrphansSaysNoneWhenClean(t *testing.T) {
 // direction: not an empty section, but a positive claim of health manufactured out of
 // having seen nothing. Both gaps are asserted to break the "none" fast path, since each
 // reaches it by a different route.
+//
+// The "both" case names both sentences rather than either one: two gaps have two
+// different consequences and two remedies, so a renderer that printed only the first it
+// matched would drop half of what the user has to act on — and asserting one substring
+// there would not notice.
 func TestRenderOrphansNeverSaysNoneOnABlindScan(t *testing.T) {
+	const (
+		blind      = "/proc/net/unix could not be read"
+		incomplete = "did not finish"
+	)
 	for _, tc := range []struct {
 		name string
 		gaps tmux.ScanGaps
-		want string
+		want []string
 	}{
-		{"socket table unreadable", tmux.ScanGaps{SocketTableUnread: true}, "/proc/net/unix could not be read"},
-		{"proc walk truncated", tmux.ScanGaps{ProcTableTruncated: true}, "did not finish"},
-		{"both", tmux.ScanGaps{SocketTableUnread: true, ProcTableTruncated: true}, "did not finish"},
+		{"socket table unreadable", tmux.ScanGaps{SocketTableUnread: true}, []string{blind}},
+		{"proc walk truncated", tmux.ScanGaps{ProcTableTruncated: true}, []string{incomplete}},
+		{"both", tmux.ScanGaps{SocketTableUnread: true, ProcTableTruncated: true}, []string{blind, incomplete}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			out := RenderOrphans(OrphanResult{Supported: true, Gaps: tc.gaps, Now: now})
 			require.NotContains(t, out, "  none\n",
 				"a scan that could not see must never render as a clean host: %q", out)
-			require.Contains(t, out, tc.want)
+			for _, want := range tc.want {
+				require.Contains(t, out, want)
+			}
 			require.Contains(t, out, "refuses to act",
 				"the row must say the reap will decline, because it does")
 		})

@@ -57,6 +57,22 @@ func stubSocketOwner(t *testing.T, owner func(context.Context, string) (int, boo
 	socketOwner = owner
 }
 
+// stubAmbientPID and stubScanCandidates swap the other two seams, with the same
+// no-parallel rule: they are package-level shared state.
+func stubAmbientPID(t *testing.T, probe func(context.Context) (int, bool)) {
+	t.Helper()
+	orig := ambientPID
+	t.Cleanup(func() { ambientPID = orig })
+	ambientPID = probe
+}
+
+func stubScanCandidates(t *testing.T, scan func(context.Context) ([]candidate, ScanGaps)) {
+	t.Helper()
+	orig := scanCandidates
+	t.Cleanup(func() { scanCandidates = orig })
+	scanCandidates = scan
+}
+
 // unreachableOwner is a socket probe that ran and found nothing listening.
 func unreachableOwner(context.Context, string) (int, bool) { return 0, true }
 
@@ -228,4 +244,64 @@ func TestScanGapsAny(t *testing.T) {
 	require.True(t, ScanGaps{SocketTableUnread: true}.Any())
 	require.True(t, ScanGaps{ProcTableTruncated: true}.Any())
 	require.True(t, ScanGaps{SocketTableUnread: true, ProcTableTruncated: true}.Any())
+}
+
+// TestScanServersWalksProcBeforeAnyTmuxProbe pins the order the gap reporting depends
+// on.
+//
+// A tmux probe against a wedged server spends the entire scan budget; the /proc walk
+// spends milliseconds. With the probe first, the walk found ctx.Err() already set on
+// its first entry and reported a truncated table — so a wedged live server blanked the
+// report and made `reap --kill` refuse, which is precisely the host that needed
+// reaping. Order is asserted rather than timed because the property is structural: no
+// budget is large enough to make probing-first safe.
+func TestScanServersWalksProcBeforeAnyTmuxProbe(t *testing.T) {
+	if !orphanScanSupported {
+		t.Skip("ScanServers returns early off Linux, so there is no order to assert")
+	}
+	var order []string
+	stubScanCandidates(t, func(context.Context) ([]candidate, ScanGaps) {
+		order = append(order, "walk /proc")
+		return nil, ScanGaps{}
+	})
+	stubAmbientPID(t, func(context.Context) (int, bool) {
+		order = append(order, "probe tmux")
+		return 0, false
+	})
+
+	_, _, gaps := ScanServers(context.Background())
+	require.Equal(t, []string{"walk /proc", "probe tmux"}, order,
+		"the /proc walk must run before anything that can hang, or a hung probe fabricates a gap")
+	require.False(t, gaps.Any())
+}
+
+// TestEveryTmuxProbeGetsItsOwnBudget: a probe must never inherit the whole scan's
+// deadline, or the first wedged socket spends every other probe's time — and, before
+// the walk was reordered, the walk's.
+//
+// The assertion is on the deadline handed *to* the probe, because that is the only
+// observable difference at this seam: both probes ran with the caller's context
+// verbatim before, so a parent with no deadline handed them none at all.
+func TestEveryTmuxProbeGetsItsOwnBudget(t *testing.T) {
+	// No deadline on the parent, which is the case that separates the two behaviours.
+	parent := context.Background()
+
+	var ownerDeadline, ambientDeadline time.Time
+	var ownerOK, ambientOK bool
+	stubSocketOwner(t, func(ctx context.Context, _ string) (int, bool) {
+		ownerDeadline, ownerOK = ctx.Deadline()
+		return 0, true
+	})
+	stubAmbientPID(t, func(ctx context.Context) (int, bool) {
+		ambientDeadline, ambientOK = ctx.Deadline()
+		return 0, false
+	})
+
+	probeAmbient(parent)
+	require.True(t, ambientOK, "the ambient probe must be bounded even when the caller's context is not")
+	require.LessOrEqual(t, time.Until(ambientDeadline), orphanProbeBudget)
+
+	assembleServers(parent, []candidate{{PID: 10, SocketPath: "/tmp/tmux-1000/atrium"}}, 0, false)
+	require.True(t, ownerOK, "an owner probe must be bounded even when the caller's context is not")
+	require.LessOrEqual(t, time.Until(ownerDeadline), orphanProbeBudget)
 }
