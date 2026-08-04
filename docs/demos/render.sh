@@ -24,7 +24,37 @@ done
 command -v "$GO" >/dev/null 2>&1 || { echo "demos: missing dependency: go (set GO=...)" >&2; exit 127; }
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/atrium-demos.XXXXXX")"
-trap 'rm -rf "$WORK"' EXIT
+# cleanup — see test/smoke/run.sh's for the full reasoning. Short version: kill by
+# absolute socket path, never by name, because tmux reads an empty or missing
+# TMUX_TMPDIR as /tmp and `tmux -L atrium kill-server` would then take the developer's
+# live fleet with it. The glob names only sockets under $WORK, matches nothing when
+# $WORK is empty or gone, and the `rm -rf` is unchanged. `|| true` keeps a kill against
+# an already-dead server from aborting cleanup before that `rm -rf` under `set -e`.
+#
+# Unlike run.sh this script has one socket root ($WORK/tmux) rather than one per run,
+# hence the flatter glob. On the normal path it kills nothing, though it still matches:
+# a tmux socket file outlives its server, so the per-tape traps below leave theirs behind
+# for the failing kill-server above to shrug off. The headless seed run's precheck server
+# is torn down and its socket unlinked from inside validateConfig
+# (session/tmux/config.go). What is left for this loop is the abnormal path — a run
+# killed between those teardowns.
+#
+# Being a function also retires an ordering trap: the old trap was installed on this
+# line, before tmux_dir existed. The glob is evaluated when cleanup runs, so that
+# assignment order no longer matters.
+cleanup() {
+	for sock in "$WORK"/tmux/tmux-"$(id -u)"/*; do
+		[[ -S "$sock" ]] || continue
+		tmux -S "$sock" kill-server >/dev/null 2>&1 || true
+	done
+	rm -rf "$WORK"
+}
+# Signals exit rather than cleaning up themselves, so cleanup runs exactly once, from
+# EXIT, whichever way the script ends.
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+trap 'exit 129' HUP
 
 ATR_BIN="$WORK/atrium"
 ( cd "$REPO_ROOT" && "$GO" build -o "$ATR_BIN" . )

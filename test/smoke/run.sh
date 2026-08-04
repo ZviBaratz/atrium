@@ -30,14 +30,49 @@ GO="${GO:-go}"
 command -v "$GO" >/dev/null 2>&1 || { echo "smoke: missing dependency: go (set GO=...)" >&2; exit 127; }
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/atrium-smoke.XXXXXX")"
+# cleanup reaps the tmux servers this run started, then disposes of $WORK.
+#
+# Kill by absolute socket path (`tmux -S`), never by name (`tmux -L`): -L resolves
+# against TMUX_TMPDIR, and tmux silently reads an empty or missing one as /tmp — so a
+# `tmux -L atrium kill-server` here would destroy the developer's live fleet. The glob
+# can only ever name a socket a run under $WORK created, and it matches nothing when
+# $WORK is empty or already gone. Note what it enumerates: sockets to kill, not
+# directories to delete. The removal below stays the single `rm -rf` over the one path
+# mktemp -d returned.
+#
+# `|| true` on the kill is load-bearing under `set -e`. kill-server exits non-zero for
+# a socket whose server has already gone — the normal case here, since run_once's
+# subshell trap reaps first and tmux leaves the socket file behind — and as the last
+# command of an `&&` list that status is not errexit-exempt, so it would abort cleanup
+# before the `rm -rf` and leak $WORK on every successful run.
+#
+# This is defense in depth, not a bug fix: on the normal path it kills nothing. It still
+# *matches*, though — a tmux socket file outlives its server, so the sockets of the
+# already-reaped per-run servers are what the failing kill-server above is about.
+# run_once's subshell trap fires on every subshell exit including success, so those
+# servers are already gone; and the headless seed run in setup_env — which starts a
+# precheck server outside every subshell — tears that server down and unlinks its socket
+# from inside validateConfig (session/tmux/config.go). What is left for this loop is the
+# abnormal path: a run killed between those teardowns, or one that died with a probe
+# server half-started.
 cleanup() {
+	for sock in "$WORK"/run-*/tmux/tmux-"$(id -u)"/*; do
+		[[ -S "$sock" ]] || continue
+		tmux -S "$sock" kill-server >/dev/null 2>&1 || true
+	done
 	if [[ "${KEEP:-0}" == "1" ]]; then
 		echo "smoke: kept scratch dir: $WORK" >&2
 	else
 		rm -rf "$WORK"
 	fi
 }
+# The signal traps exit rather than running cleanup themselves, so cleanup runs exactly
+# once, from EXIT, whichever way the script ends. A bare `trap cleanup INT` would run
+# the cleanup and then let the script carry on past the Ctrl-C.
 trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+trap 'exit 129' HUP
 
 chmod +x "$FAKE"
 ATR_BIN="$WORK/atrium"

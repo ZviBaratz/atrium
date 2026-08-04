@@ -27,10 +27,18 @@ func TestSandboxInstallsAPrivateTmuxRoot(t *testing.T) {
 		t.Fatalf("sandbox root %q is not under %s: darwin's $TMPDIR is ~56 chars on its own, "+
 			"which does not leave room for tmux-<uid>/<socket> inside sun_path", root, tmuxRootParent)
 	}
-	// Worst case Atrium can produce: the longest uid, and the longest socket name
-	// (a legacy install's "-precheck" probe, session/tmux/config.go:187). 104 is
+	// Worst case Atrium can produce: the longest uid, and the longest socket name —
+	// a legacy install's config-parse probe, session/tmux's probeSocketName, which is
+	// "<brand>-precheck-<pid>-<n>". The name is spelled out rather than imported
+	// because session/tmux imports this package.
+	//
+	// The two numbers are deliberately past anything reachable: 4194304 is linux's
+	// largest pid_max, and a six-digit counter means a million validateConfig calls in
+	// one process (it advances once per Init, i.e. per user config change). Both are
+	// upper bounds, not observations — the point is that even they fit. 104 is
 	// darwin's sun_path, the tighter of the two platforms.
-	if longest := len(filepath.Join(root, "tmux-4294967295", "claudesquad-precheck")); longest >= 104 {
+	worstSocket := "claudesquad-precheck-4194304-999999"
+	if longest := len(filepath.Join(root, "tmux-4294967295", worstSocket)); longest >= 104 {
 		t.Fatalf("worst-case socket path under %q is %d bytes, which will not fit sun_path (104 on darwin)",
 			root, longest)
 	}

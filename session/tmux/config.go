@@ -181,13 +181,38 @@ func writeFileAtomic(path string, content []byte) error {
 	return os.Rename(tmpName, path)
 }
 
+// probeSocketCounter distinguishes two probe sockets minted by the same process.
+// Init is documented safe to call off the update thread and fires on every live
+// session_context_bar / tmux_config_override / theme change, so two validateConfig
+// calls can be in flight at once (barstyle_test.go drives eight); the PID alone would
+// give every one of them the same name.
+var probeSocketCounter atomic.Uint64
+
+// probeSocketName returns a tmux socket name no other validateConfig call — in this
+// process or any other — can mint. That uniqueness is what makes the teardown in
+// validateConfig safe to arm before the server starts and safe to unlink after it
+// dies: both act on a socket only this invocation can name.
+//
+// A shared name was not merely untidy. Two concurrent Inits landed on one probe
+// server; whichever finished first killed it, the other's source-file then failed with
+// "no server running", and Init records that as a parse error — silently launching
+// every later session with no custom titles, mouse, clipboard or status bar.
+//
+// Length is bounded and small: the longest form is a legacy install's
+// "claudesquad-precheck-<pid>-<n>", which still fits sockaddr_un's sun_path (104 on
+// darwin, 108 on linux) under the socket roots internal/testutil mints. That budget is
+// asserted in testutil's TestSandboxInstallsAPrivateTmuxRoot.
+func probeSocketName() string {
+	return fmt.Sprintf("%s-precheck-%d-%d", socketName(), os.Getpid(), probeSocketCounter.Add(1))
+}
+
 // validateConfig asks a throwaway tmux server to parse path via source-file, the only
 // way to surface a tmux config parse error synchronously: a detached `new-session -d`
 // returns success and defers the error until a client attaches. It is best-effort —
 // if tmux is absent or a probe server can't be started (reasons unrelated to parsing),
 // it returns nil so a usable config is never disabled over an unrelated hiccup. The
-// check runs on a dedicated "-precheck" socket so it never touches the live server or
-// its sessions.
+// check runs on a "-precheck-<pid>-<n>" socket of its own (probeSocketName) so it
+// never touches the live server or its sessions, and never a concurrent probe either.
 //
 // The probe deliberately omits -e: it is checking the *config*, not the tmux version, so
 // on a tmux below MinVersion it succeeds and -f is still passed — and only the real
@@ -203,20 +228,62 @@ func validateConfig(path string) error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), tmuxOpTimeout)
 	defer cancel()
-	sock := socketName() + "-precheck"
-	// Start a clean server (no -f) and keep it alive with a session so source-file has
-	// a server to run against.
-	start := exec.CommandContext(ctx, "tmux", "-L", sock, "new-session", "-d", "sleep 60")
-	if err := start.Run(); err != nil {
-		return nil
-	}
+	sock := probeSocketName()
+	// The socket file tmux binds, filled in once the server is up. tmux never unlinks
+	// it when the server dies, so without the removal below every probe leaves a file
+	// behind — in the very directory that holds the live socket (#331, and #547's
+	// class (a): /tmp/tmux-<uid>/atrium-precheck was sitting next to the live socket in
+	// production).
+	var probePath string
+	// Armed before the server starts, not after: a new-session that half-succeeds —
+	// server up, command failed — used to leave nothing to tear it down. Arming it this
+	// early is safe only because sock is unique; under the old shared name this
+	// kill-server would have reached a concurrent Init's live probe.
 	defer func() {
 		// Always tear the probe server down, even if ctx already expired — so use a
 		// fresh short-lived context rather than the (possibly cancelled) parent.
 		killCtx, killCancel := context.WithTimeout(context.Background(), tmuxOpTimeout)
 		defer killCancel()
 		_ = exec.CommandContext(killCtx, "tmux", "-L", sock, "kill-server").Run()
+		// Unlinked unconditionally after the kill, unlike internal/testutil's teardown,
+		// which confirms the server is gone first. The difference is what the socket
+		// fronts: there a $SHELL that never exits, so unlinking a survivor strands it
+		// forever (#547); here `sleep 60` on a server whose exit-empty is tmux's
+		// default `on`, so the worst case is a socket-less server that retires itself
+		// within a minute holding nothing. That default is what `-f os.DevNull` below
+		// guarantees: with no -f at all the probe reads the user's ~/.tmux.conf, and
+		// `set -g exit-empty off` there (measured on tmux 3.6: the option is inherited)
+		// would turn this unlink into exactly the stranded server #547 is about.
+		if probePath != "" && filepath.Base(probePath) == sock {
+			_ = os.Remove(probePath)
+		}
 	}()
+	// Start a clean server and keep it alive with a session so source-file has a server
+	// to run against. `-f os.DevNull`, not "no -f": tmux without -f sources the user's
+	// ~/.tmux.conf, which a real Atrium session never sees (tmuxConfigPath always passes
+	// its own -f) and which the unlink above depends on the absence of.
+	start := exec.CommandContext(ctx, "tmux", "-L", sock, "-f", os.DevNull,
+		"new-session", "-d", "sleep 60")
+	startErr := start.Run()
+	// Ask tmux where it put the socket rather than reconstructing
+	// $TMUX_TMPDIR/tmux-<uid>/<sock> — that layout is tmux's to change, not ours (#331).
+	// #{socket_path} is tmux 2.2+ and MinVersion is 3.2 (enforced before any session
+	// starts), so it is present wherever this code can run. A failure here costs one
+	// stale socket file, never a wrong unlink: probePath stays empty and the guard
+	// above skips.
+	//
+	// Asked before startErr is acted on, for the same reason the teardown is armed
+	// before the start: a new-session that half-succeeds — server up, command failed —
+	// has already bound a socket, and the teardown can only unlink a path it knows.
+	// Returning first would leak that file, and since the name is now unique per
+	// invocation those leaks accumulate rather than reusing one entry.
+	if out, err := exec.CommandContext(ctx, "tmux", "-L", sock,
+		"display-message", "-p", "#{socket_path}").Output(); err == nil {
+		probePath = strings.TrimSpace(string(out))
+	}
+	if startErr != nil {
+		return nil
+	}
 	out, err := exec.CommandContext(ctx, "tmux", "-L", sock, "source-file", path).CombinedOutput()
 	if err != nil {
 		msg := strings.TrimSpace(string(out))
