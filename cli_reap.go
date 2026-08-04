@@ -266,7 +266,14 @@ func stillTheScannedProcess(pid int, scanned time.Time) bool {
 }
 
 // terminate sends SIGTERM, waits, then SIGKILL, and reports whether the process is
-// gone. SIGTERM goes first so a tmux server can exit cleanly and run its hooks.
+// gone.
+//
+// SIGTERM goes first so a server that will exit cleanly gets to, and runs its hooks
+// on the way out. The SIGKILL rung is not a formality: a tmux server with a live
+// session was measured still running five seconds after SIGTERM on the tmux 3.2 CI
+// job, while the same test passed on 3.6 — so on some of the versions Atrium
+// supports, escalation is the path every reap takes, and reapTermGrace is a cost
+// paid per server rather than an unlikely branch.
 func terminate(pid int) bool {
 	if !reapAlive(pid) {
 		return true

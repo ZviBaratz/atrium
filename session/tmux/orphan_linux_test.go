@@ -324,9 +324,7 @@ func TestOrphanedServerIsFoundAndKillableAfterItsSocketRootIsDeleted(t *testing.
 	require.True(t, ok)
 	require.Equal(t, found.Started, reRead)
 
-	require.NoError(t, syscall.Kill(serverPID, syscall.SIGTERM))
-	require.Eventually(t, func() bool { return !processAliveForTest(serverPID) },
-		5*time.Second, 20*time.Millisecond, "the orphan did not die on SIGTERM")
+	terminateLikeProduction(t, serverPID)
 
 	// Killing the server takes its children down via the kernel's pty hangup, but
 	// that is checked rather than assumed — the same reason `atrium reap` re-verifies
@@ -340,6 +338,40 @@ func TestOrphanedServerIsFoundAndKillableAfterItsSocketRootIsDeleted(t *testing.
 	after, _ := ScanServers(t.Context())
 	_, stillThere := findServer(after, serverPID)
 	require.False(t, stillThere, "a killed orphan must stop being reported")
+}
+
+// terminateLikeProduction mirrors cli_reap.go's signal ladder: SIGTERM, a bounded
+// wait, then SIGKILL.
+//
+// The escalation is load-bearing rather than belt-and-braces, and this test is how
+// that was established. An earlier version sent only SIGTERM and required the server
+// to be gone within five seconds; it passed against tmux 3.6 locally and failed on
+// the tmux 3.2 floor job, where a server with a live session was still running when
+// the budget expired. So "tmux exits on SIGTERM" is not a property to rely on across
+// the versions Atrium supports — which is consistent with the design doc's finding
+// that SIGTERM's role here was overstated in the first place.
+func terminateLikeProduction(t *testing.T, pid int) {
+	t.Helper()
+	require.NoError(t, syscall.Kill(pid, syscall.SIGTERM))
+	if waitGone(pid, 5*time.Second) {
+		return
+	}
+	require.NoError(t, syscall.Kill(pid, syscall.SIGKILL))
+	require.True(t, waitGone(pid, 2*time.Second), "pid %d survived SIGTERM and SIGKILL", pid)
+}
+
+// waitGone polls until pid is gone or the budget expires.
+func waitGone(pid int, budget time.Duration) bool {
+	deadline := time.Now().Add(budget)
+	for {
+		if !processAliveForTest(pid) {
+			return true
+		}
+		if time.Now().After(deadline) {
+			return false
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
 }
 
 // runWithEnv runs a command with an explicit environment and returns its stdout.
