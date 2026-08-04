@@ -52,12 +52,16 @@ func TestManagedConfigParsesUnderRealTmux(t *testing.T) {
 			// would point at a missing dir.
 			sock := fmt.Sprintf("cfgparse-%d", rand.Int31())
 			ctx := context.Background()
+			// Armed before the server starts, so a new-session that half-succeeds —
+			// server up, command failed — still has something to tear it down. Nothing
+			// asserts this ordering; it only pays out on a path the test cannot force,
+			// and the rule it follows is CLAUDE.md's rather than a guard's.
+			defer func() { _ = exec.CommandContext(ctx, "tmux", "-L", sock, "kill-server").Run() }()
 			// Clean probe server (no -f) kept alive by a session so source-file has a
 			// target. Never the live socket.
 			if out, err := exec.CommandContext(ctx, "tmux", "-L", sock, "new-session", "-d", "sleep 60").CombinedOutput(); err != nil {
 				t.Fatalf("start probe tmux server: %v: %s", err, out)
 			}
-			defer func() { _ = exec.CommandContext(ctx, "tmux", "-L", sock, "kill-server").Run() }()
 
 			// Prove TMUX_TMPDIR took effect rather than being silently ignored: the
 			// live server's socket must sit somewhere under the sandbox root.

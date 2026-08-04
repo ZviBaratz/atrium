@@ -89,11 +89,15 @@ func TestApplyBarStyle_NoOpsUnderAConfigOverride(t *testing.T) {
 // through tmuxConfigPath. Fails under -race if either global loses its atomic.
 //
 // Init reaches real tmux even though nothing here says so: every call runs
-// validateConfig, which starts a probe server and kills it again (config.go:187), so
-// the eight Init calls below drive eight new-session/kill-server pairs. They share
-// one socket name — socketName()+"-precheck" — rather than taking eight of their
-// own. The sandbox TMUX_TMPDIR is what keeps that probe socket out of the shared
-// socket dir, where it used to sit next to the live one (#581).
+// validateConfig, which starts a probe server and kills it again, so the eight Init
+// calls below drive eight new-session/kill-server pairs. Each takes a socket of its
+// own (probeSocketName), which is what this test needs and did not used to get: when
+// they shared one name, the first teardown killed the server the others were still
+// using, and their source-file failed with "no server running" — recorded as a parse
+// error, silently disabling the managed conf. Nothing here asserts that (the Init
+// errors are discarded on purpose, this being a race test), so the guard for it lives
+// in config_probe_test.go. The sandbox TMUX_TMPDIR is what keeps those probe sockets
+// out of the shared socket dir, where they used to sit next to the live one (#581).
 //
 // So it gates on isolation, and only on isolation: RequireTmux would be wrong here,
 // because what this test is actually for — that Init and tmuxConfigPath race-freely
