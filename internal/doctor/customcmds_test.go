@@ -19,6 +19,15 @@ func TestCheckCustomCommands_SilentWhenEveryEntryIsValid(t *testing.T) {
 	assert.Equal(t, "", RenderCustomCommands(nil))
 }
 
+// TestCheckCustomCommands_SurvivesAConfiglessCall covers the nil guard. doctor's
+// sections are called with whatever config.LoadConfig returned, and this check must
+// report nothing rather than panic a command whose whole job is diagnosing a broken
+// install.
+func TestCheckCustomCommands_SurvivesAConfiglessCall(t *testing.T) {
+	assert.Empty(t, CheckCustomCommands(nil))
+	assert.Empty(t, CheckCustomCommands(&config.Config{}))
+}
+
 // TestCheckCustomCommands_ReportsEachRejectedEntry is the CLI half of "rejected at
 // load with a message naming both parties": doctor is where a user checks why the
 // command they configured is not in the menu.

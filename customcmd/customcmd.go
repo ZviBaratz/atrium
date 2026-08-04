@@ -11,9 +11,9 @@
 //
 // A rejected entry is DROPPED, not bound. config.LoadConfig cannot fail — "a missing
 // file is created with defaults, and any read/parse error logs a warning and falls
-// back to DefaultConfig" — and it is called from 17 non-test sites, most of them
-// outside the TUI, so a config problem must never be an error return that ripples out
-// to them. Validate reports problems alongside the entries that survived, and the
+// back to DefaultConfig" — and it is called from a dozen-odd non-test sites, most of
+// them outside the TUI, so a config problem must never be an error return that ripples
+// out to them. Validate reports problems alongside the entries that survived, and the
 // caller decides how loudly to say so.
 //
 // A template is validated by RENDERING it, not by parsing it. Parsing accepts
@@ -185,7 +185,11 @@ func Validate(entries []config.CustomCommand) ([]Command, []Problem) {
 			continue
 		}
 
-		tmpl, err := template.New(e.Key).Funcs(funcs).Option("missingkey=error").Parse(e.Command)
+		// No missingkey option: it governs map indexing only, and Ctx is a struct of
+		// structs (TestFieldAccessCoversEveryContextLeaf enforces that shape), so an
+		// unknown field is already an execution error. Setting it here would read as
+		// load-bearing while doing nothing.
+		tmpl, err := template.New(e.Key).Funcs(funcs).Parse(e.Command)
 		if err != nil {
 			reject("template does not parse: %v", err)
 			continue
@@ -244,6 +248,17 @@ func checkKey(key string) error {
 	}
 	if !unicode.IsPrint(r) {
 		return fmt.Errorf("key must be a printable character")
+	}
+	// A combining mark is printable and one rune wide, so it clears every rule above
+	// — and lands in the same place U+FFFD does: bound to something no keypress can
+	// produce. U+0301 (combining acute) and U+FE0F (variation selector) are both Mn.
+	// Only the non-spacing and enclosing categories are refused: a spacing mark (Mc)
+	// is a character an Indic keyboard really does emit on its own.
+	if unicode.In(r, unicode.Mn, unicode.Me) {
+		// The codepoint, not just the character: a combining mark has no glyph of its
+		// own, so %q prints it onto the closing quote and the user sees an empty pair.
+		// U+0301 is something they can search their config for.
+		return fmt.Errorf("key U+%04X is a combining mark, not a character a keypress can produce", r)
 	}
 	return nil
 }
@@ -309,6 +324,10 @@ func render(t *template.Template, ctx Ctx) (string, error) {
 // as using it. That over-reports, dimming a row that would have run; a false dim is
 // visible and carries its reason, where a false pass runs a command with a hole in it.
 //
+// What keeps the failure on that side is the shape of the sentinel, not the search:
+// the value passes through whatever the template does to it before landing in the
+// output, so a sentinel a function can re-encode goes undetected. See sentinelFor.
+//
 // A render error reports nothing missing. Only validated templates get here, so an
 // error means the command is broken outright — which its own run-time render
 // surfaces as an error, rather than as a dimmed row.
@@ -338,9 +357,24 @@ func (c Command) MissingFields(ctx Ctx) []string {
 	return missing
 }
 
-// sentinelFor is the stand-in substituted for an empty field. The NUL delimiters
-// keep it from colliding with anything a real template could produce.
-func sentinelFor(path string) string { return "\x00atrium-missing:" + path + "\x00" }
+// sentinelFor is the stand-in substituted for an empty field.
+//
+// It is deliberately plain letters — no NUL delimiters, no punctuation. The obvious
+// choice reads safer and is not: MissingFields finds a sentinel by substring, but the
+// value reaches the output through whatever the template does to it first, and every
+// escaping builtin re-encodes a NUL. `{{ printf "%q" .Session.Branch }}` — the way a
+// user who never finds quote reaches for shell quoting — renders a NUL as the four
+// characters backslash-x-0-0, so the search misses, MissingFields reports nothing,
+// and the command runs with an empty --head. `js` (to a unicode escape) and
+// `urlquery` (to %00) defeat it the same way. Letters survive all three untouched,
+// which is what keeps the over-reporting case documented above the ONLY limit.
+//
+// The cost is that a template echoing this exact string literally would report a
+// field it does not use. That over-reports — the safe direction — and the string is
+// distinctive enough that it is a theoretical cost, not a practical one.
+func sentinelFor(path string) string {
+	return "atriumMissingField" + strings.ReplaceAll(path, ".", "")
+}
 
 // fieldAccess is the leaf-by-leaf view of Ctx that MissingFields substitutes
 // through. It is a hand-written table because Ctx is a fixed, tiny shape and

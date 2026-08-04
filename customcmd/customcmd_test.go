@@ -44,6 +44,33 @@ func TestValidate_AcceptsAWellFormedEntry(t *testing.T) {
 	assert.Equal(t, "lazygit here", got[0].Description)
 	assert.Equal(t, ContextSession, got[0].Context, "an omitted context defaults to session")
 	assert.Equal(t, OutputBackground, got[0].Output)
+	assert.Equal(t, "lazygit", got[0].Source(), "Source is the template as configured, unrendered")
+}
+
+// TestValidate_AcceptsEveryContext covers the accepting half of parseContext. `repo`
+// is the one worth pinning: it is the context whose whole purpose is outliving a
+// pause, so a rule that silently stopped accepting it would strand exactly the
+// commands that are supposed to keep working on a paused session.
+func TestValidate_AcceptsEveryContext(t *testing.T) {
+	for _, tc := range []struct {
+		configured string
+		want       Context
+	}{
+		{"", ContextSession},
+		{"session", ContextSession},
+		{"repo", ContextRepo},
+	} {
+		t.Run("context="+tc.configured, func(t *testing.T) {
+			entry := ok()
+			entry.Context = tc.configured
+
+			got, problems := Validate([]config.CustomCommand{entry})
+
+			require.Empty(t, problems)
+			require.Len(t, got, 1)
+			assert.Equal(t, tc.want, got[0].Context)
+		})
+	}
 }
 
 func TestValidate_RejectsMalformedEntries(t *testing.T) {
@@ -69,6 +96,12 @@ func TestValidate_RejectsMalformedEntries(t *testing.T) {
 		// so this one pins the check ORDER: reversed, it is reported as being too
 		// long rather than as not being text.
 		{"undecodable multibyte key", func(c *config.CustomCommand) { c.Key = "\xff\xfe" }, "not usable text"},
+		// The same outcome as U+FFFD, one rung up: a combining mark is a single rune,
+		// is printable, and is not a space, so it clears every rule above and binds a
+		// key no keypress produces. U+0301 is the combining acute; U+FE0F is the
+		// variation selector a copied emoji drags along.
+		{"combining mark as key", func(c *config.CustomCommand) { c.Key = "\u0301" }, "key U+0301 is a combining mark"},
+		{"variation selector as key", func(c *config.CustomCommand) { c.Key = "\ufe0f" }, "key U+FE0F is a combining mark"},
 		{"empty description", func(c *config.CustomCommand) { c.Description = "" }, "description is required"},
 		{"empty command", func(c *config.CustomCommand) { c.Command = "" }, "command is required"},
 		{"unknown context", func(c *config.CustomCommand) { c.Context = "worktree" }, `context "worktree"`},
@@ -90,6 +123,26 @@ func TestValidate_RejectsMalformedEntries(t *testing.T) {
 			require.Len(t, problems, 1)
 			assert.Equal(t, 0, problems[0].Index)
 			assert.Contains(t, problems[0].Error(), tc.wantMsg)
+		})
+	}
+}
+
+// TestValidate_AcceptsTheKeysAKeyboardProduces is the over-rejection guard for the
+// key rules, which are all refusals and therefore all capable of taking a key the
+// user wanted. The precomposed accent is the one at risk: it is a letter, not a
+// combining mark, and a rule written against "accents" instead of the mark
+// categories would refuse it.
+func TestValidate_AcceptsTheKeysAKeyboardProduces(t *testing.T) {
+	for _, key := range []string{"g", "G", "1", "?", "/", "!", "é", "λ", "🔥"} {
+		t.Run("key="+key, func(t *testing.T) {
+			entry := ok()
+			entry.Key = key
+
+			got, problems := Validate([]config.CustomCommand{entry})
+
+			assert.Empty(t, problems)
+			require.Len(t, got, 1)
+			assert.Equal(t, key, got[0].Key)
 		})
 	}
 }
@@ -254,6 +307,21 @@ func TestMissingFields(t *testing.T) {
 		// would have run, which is the safe direction — a false dim is visible and
 		// explains itself, where a false pass runs a command with a hole in it.
 		{"guards on the field it is missing", "{{if .Session.Branch}}git log {{.Session.Branch}}{{end}}", []string{"Session.Branch"}},
+		// The value reaches the output through whatever the template does to it, so a
+		// sentinel any of these can re-encode is a sentinel the substring search
+		// misses — and a miss here is a FALSE PASS: the row runs with `--head ""`
+		// and nothing dims it. printf %q is the one a real user writes, being the
+		// obvious way to shell-quote without discovering `quote`. These four are why
+		// sentinelFor is plain letters rather than the NUL-delimited string it reads
+		// more safely as.
+		{"survives printf %q", `gh pr create --head {{ printf "%q" .Session.Branch }}`, []string{"Session.Branch"}},
+		{"survives quote", "gh pr create --head {{ quote .Session.Branch }}", []string{"Session.Branch"}},
+		{"survives js", "gh pr create --head {{ js .Session.Branch }}", []string{"Session.Branch"}},
+		{"survives urlquery", "gh pr create --head {{ urlquery .Session.Branch }}", []string{"Session.Branch"}},
+		// The complement, and the reason the rule is "does the VALUE reach the
+		// command" rather than "is the field mentioned": len puts a number in the
+		// command, never the empty branch, so there is no hole to dim for.
+		{"a field consumed without being emitted is not missing", "echo {{ len .Session.Branch }}", nil},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

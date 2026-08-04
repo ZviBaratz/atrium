@@ -1004,7 +1004,7 @@ Advanced — shown in the Category column below. The five keys with no panel row
 | `daemon_poll_interval` | Automation | int | `1000` | autoyes daemon poll interval, milliseconds |
 | `branch_prefix` | Worktrees & git | string | `"<user>/"` | prefix for created git branches |
 | `profiles` | Profiles | array | detected | named program configs ([Profiles](#profiles)) |
-| `custom_commands` | — | array | `[]` | your own verbs over the selected session: a key, a shell template, and where it runs. `atrium doctor` reports a malformed entry |
+| `custom_commands` | — | array | `[]` | your own verbs over the selected session: a key, a shell template, and where it runs. Declared and validated today — `atrium doctor` reports a malformed entry — but nothing runs them yet; the menu that does arrives in a later release, with the reference for the record's fields |
 | `tmux_config_override` | Advanced | string | `""` | path to a custom tmux config for sessions |
 | `auto_attach` | Sessions | bool | `true` | attach to a new session as soon as it starts ([Auto-attach](#auto-attach)) |
 | `show_release_notes_after_update` | Updates | bool | `true` | "what's new" overlay once after an update |
