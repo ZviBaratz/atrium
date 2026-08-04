@@ -46,11 +46,15 @@ WORK="$(mktemp -d "${TMPDIR:-/tmp}/atrium-smoke.XXXXXX")"
 # command of an `&&` list that status is not errexit-exempt, so it would abort cleanup
 # before the `rm -rf` and leak $WORK on every successful run.
 #
-# This is defense in depth, not a bug fix: run_once's subshell trap already fires on
-# every subshell exit including success, so per-run servers are reaped on the normal
-# path and this finds nothing. What it covers is what that trap cannot — the headless
-# seed run in setup_env, which starts a precheck server outside every subshell, and a
-# signal arriving between the two.
+# This is defense in depth, not a bug fix: on the normal path it kills nothing. It still
+# *matches*, though — a tmux socket file outlives its server, so the sockets of the
+# already-reaped per-run servers are what the failing kill-server above is about.
+# run_once's subshell trap fires on every subshell exit including success, so those
+# servers are already gone; and the headless seed run in setup_env — which starts a
+# precheck server outside every subshell — tears that server down and unlinks its socket
+# from inside validateConfig (session/tmux/config.go). What is left for this loop is the
+# abnormal path: a run killed between those teardowns, or one that died with a probe
+# server half-started.
 cleanup() {
 	for sock in "$WORK"/run-*/tmux/tmux-"$(id -u)"/*; do
 		[[ -S "$sock" ]] || continue

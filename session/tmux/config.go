@@ -248,28 +248,41 @@ func validateConfig(path string) error {
 		// Unlinked unconditionally after the kill, unlike internal/testutil's teardown,
 		// which confirms the server is gone first. The difference is what the socket
 		// fronts: there a $SHELL that never exits, so unlinking a survivor strands it
-		// forever (#547); here `sleep 60` under tmux's default exit-empty, so the worst
-		// case is a socket-less server that retires itself within a minute holding
-		// nothing.
+		// forever (#547); here `sleep 60` on a server whose exit-empty is tmux's
+		// default `on`, so the worst case is a socket-less server that retires itself
+		// within a minute holding nothing. That default is what `-f os.DevNull` below
+		// guarantees: with no -f at all the probe reads the user's ~/.tmux.conf, and
+		// `set -g exit-empty off` there (measured on tmux 3.6: the option is inherited)
+		// would turn this unlink into exactly the stranded server #547 is about.
 		if probePath != "" && filepath.Base(probePath) == sock {
 			_ = os.Remove(probePath)
 		}
 	}()
-	// Start a clean server (no -f) and keep it alive with a session so source-file has
-	// a server to run against.
-	start := exec.CommandContext(ctx, "tmux", "-L", sock, "new-session", "-d", "sleep 60")
-	if err := start.Run(); err != nil {
-		return nil
-	}
+	// Start a clean server and keep it alive with a session so source-file has a server
+	// to run against. `-f os.DevNull`, not "no -f": tmux without -f sources the user's
+	// ~/.tmux.conf, which a real Atrium session never sees (tmuxConfigPath always passes
+	// its own -f) and which the unlink above depends on the absence of.
+	start := exec.CommandContext(ctx, "tmux", "-L", sock, "-f", os.DevNull,
+		"new-session", "-d", "sleep 60")
+	startErr := start.Run()
 	// Ask tmux where it put the socket rather than reconstructing
 	// $TMUX_TMPDIR/tmux-<uid>/<sock> — that layout is tmux's to change, not ours (#331).
 	// #{socket_path} is tmux 2.2+ and MinVersion is 3.2 (enforced before any session
 	// starts), so it is present wherever this code can run. A failure here costs one
 	// stale socket file, never a wrong unlink: probePath stays empty and the guard
 	// above skips.
+	//
+	// Asked before startErr is acted on, for the same reason the teardown is armed
+	// before the start: a new-session that half-succeeds — server up, command failed —
+	// has already bound a socket, and the teardown can only unlink a path it knows.
+	// Returning first would leak that file, and since the name is now unique per
+	// invocation those leaks accumulate rather than reusing one entry.
 	if out, err := exec.CommandContext(ctx, "tmux", "-L", sock,
 		"display-message", "-p", "#{socket_path}").Output(); err == nil {
 		probePath = strings.TrimSpace(string(out))
+	}
+	if startErr != nil {
+		return nil
 	}
 	out, err := exec.CommandContext(ctx, "tmux", "-L", sock, "source-file", path).CombinedOutput()
 	if err != nil {

@@ -32,8 +32,12 @@ WORK="$(mktemp -d "${TMPDIR:-/tmp}/atrium-demos.XXXXXX")"
 # an already-dead server from aborting cleanup before that `rm -rf` under `set -e`.
 #
 # Unlike run.sh this script has one socket root ($WORK/tmux) rather than one per run,
-# hence the flatter glob. What it covers beyond the per-tape traps below is the
-# headless seed run, which starts a precheck server outside all of them.
+# hence the flatter glob. On the normal path it kills nothing, though it still matches:
+# a tmux socket file outlives its server, so the per-tape traps below leave theirs behind
+# for the failing kill-server above to shrug off. The headless seed run's precheck server
+# is torn down and its socket unlinked from inside validateConfig
+# (session/tmux/config.go). What is left for this loop is the abnormal path — a run
+# killed between those teardowns.
 #
 # Being a function also retires an ordering trap: the old trap was installed on this
 # line, before tmux_dir existed. The glob is evaluated when cleanup runs, so that

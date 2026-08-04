@@ -77,6 +77,20 @@ func TestValidateConfigLeavesNoProbeSocket(t *testing.T) {
 		t.Fatalf("validateConfig rejected a valid config: %v", err)
 	}
 
+	// Negative control, and the reason the leak assertion below is not vacuous.
+	// validateConfig is best-effort: it returns nil both when the probe ran and found
+	// nothing wrong *and* when the probe server never started at all — and a probe that
+	// never started binds no socket, so "nothing leaked" would hold for the wrong
+	// reason. A config tmux must reject can only be rejected by a probe that really ran.
+	bad := filepath.Join(t.TempDir(), "bad.conf")
+	if err := os.WriteFile(bad, []byte("this-is-not-a-tmux-command\n"), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	if err := validateConfig(bad); err == nil {
+		t.Fatal("validateConfig accepted a config tmux cannot parse: the probe server never " +
+			"ran, so the socket assertion below would pass without exercising the teardown")
+	}
+
 	if leaked := socketsMatching(t, root, "-precheck"); len(leaked) > 0 {
 		t.Fatalf("validateConfig left %v under the socket root %q: tmux does not unlink a "+
 			"probe socket when its server dies, so the teardown has to (#547 class (a))",
