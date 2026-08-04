@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -109,11 +110,20 @@ func runReap(ctx context.Context, w io.Writer, in io.Reader, opts reapOpts) erro
 		return fmt.Errorf("--all and --yes only apply to --kill; without it %s reap just reports", binName)
 	}
 
-	res := reapCheck(ctx)
+	// The same probe budget the doctor section gets, and for the same reason: the
+	// scan runs one `tmux -S <path> display-message` per candidate, and a wedged
+	// server must not hang the command. Without it reap inherits Cobra's context,
+	// which has no deadline at all.
+	scanCtx, cancelScan := context.WithTimeout(ctx, doctor.ProbeTimeout)
+	defer cancelScan()
+	res := reapCheck(scanCtx)
 	reapf(w, "%s", doctor.RenderOrphans(res))
 
 	if !opts.kill {
-		if len(res.Servers) > 0 {
+		// Keyed on what `--kill` would actually act on, not on the row count: a
+		// listing of only reachable or unknown servers has nothing for --kill to do,
+		// and pointing the user at it would send them to "nothing to kill."
+		if len(reapTargets(res.Servers, false)) > 0 {
 			reapf(w, "\nnothing was killed. Run `%s reap --kill` to stop the unreachable ones.\n", binName)
 		}
 		return nil
@@ -152,7 +162,10 @@ func runReap(ctx context.Context, w io.Writer, in io.Reader, opts reapOpts) erro
 
 	reapf(w, "\n%d killed, %d skipped, %d survived\n", killed, skipped, survived)
 	if survived > 0 {
-		return fmt.Errorf("%d server(s) survived SIGKILL", survived)
+		// "left a process that" rather than "server(s) survived": reapSurvived also
+		// covers the server dying and one of its agents outliving it, which is the
+		// half-reaped state the verify step exists to surface.
+		return fmt.Errorf("%d target(s) left a process that survived SIGKILL", survived)
 	}
 	return nil
 }
@@ -203,7 +216,10 @@ func confirmReap(w io.Writer, in *bufio.Reader, s tmux.OrphanServer) bool {
 	reapf(w, "kill? [y/N]: ")
 
 	line, err := in.ReadString('\n')
-	if err != nil && line == "" {
+	// Only a clean EOF may still carry an answer — a terminal closed after "y" with
+	// no newline. Any other read error is not consent: a partially-read buffer that
+	// happens to say "y" must not be what kills an agent's unpushed work.
+	if err != nil && (line == "" || !errors.Is(err, io.EOF)) {
 		return false
 	}
 	answer := strings.ToLower(strings.TrimSpace(line))
@@ -223,13 +239,13 @@ func reapServer(w io.Writer, s tmux.OrphanServer) reapOutcome {
 		reapf(w, "  skipped pid %d: no longer the process that was scanned — it exited, and the pid may have been reused\n", s.PID)
 		return reapSkipped
 	}
-	if !terminate(s.PID) {
+	if !terminate(s.PID, s.Started) {
 		reapf(w, "  ⚠ pid %d survived SIGTERM and SIGKILL\n", s.PID)
 		return reapSurvived
 	}
 	reapf(w, "  killed pid %d\n", s.PID)
 
-	var survivors int
+	var survivors, leftAlone int
 	for _, kid := range s.Children {
 		if !reapAlive(kid.PID) {
 			continue
@@ -238,9 +254,10 @@ func reapServer(w io.Writer, s tmux.OrphanServer) reapOutcome {
 		// that much, so it gets the same guard — a recycled pid is just as alive.
 		if !stillTheScannedProcess(kid.PID, kid.Started) {
 			reapf(w, "    left pid %d alone: no longer the process that was scanned\n", kid.PID)
+			leftAlone++
 			continue
 		}
-		if !terminate(kid.PID) {
+		if !terminate(kid.PID, kid.Started) {
 			reapf(w, "    ⚠ child pid %d (%s) survived SIGTERM and SIGKILL\n", kid.PID, kid.Comm)
 			survivors++
 			continue
@@ -250,7 +267,13 @@ func reapServer(w io.Writer, s tmux.OrphanServer) reapOutcome {
 	if survivors > 0 {
 		return reapSurvived
 	}
-	if len(s.Children) > 0 {
+	switch {
+	case leftAlone > 0:
+		// "none left" would be a lie here: a pid that failed the reuse guard is still
+		// running, deliberately unsignalled. Say so rather than reporting a clean tree.
+		reapf(w, "  verified %d child process(es); %d still running, left alone by the pid-reuse guard\n",
+			len(s.Children), leftAlone)
+	case len(s.Children) > 0:
 		reapf(w, "  verified %d child process(es); none left\n", len(s.Children))
 	}
 	return reapKilled
@@ -274,23 +297,39 @@ func stillTheScannedProcess(pid int, scanned time.Time) bool {
 // job, while the same test passed on 3.6 — so on some of the versions Atrium
 // supports, escalation is the path every reap takes, and reapTermGrace is a cost
 // paid per server rather than an unlikely branch.
-func terminate(pid int) bool {
-	if !reapAlive(pid) {
+//
+// The PID-reuse guard runs for the whole ladder, not once at the top. Up to seven
+// seconds pass between the first signal and the last, and a pid freed inside that
+// window can be recycled onto an unrelated process — which then answers the liveness
+// poll and takes the SIGKILL. Identity is therefore re-checked on every poll, so the
+// escalation can only ever land on the process that was scanned.
+func terminate(pid int, scanned time.Time) bool {
+	if scannedProcessGone(pid, scanned) {
 		return true
 	}
 	_ = reapSignal(pid, syscall.SIGTERM)
-	if awaitGone(pid, reapTermGrace) {
+	if awaitGone(pid, scanned, reapTermGrace) {
 		return true
 	}
 	_ = reapSignal(pid, syscall.SIGKILL)
-	return awaitGone(pid, reapKillGrace)
+	return awaitGone(pid, scanned, reapKillGrace)
 }
 
-// awaitGone polls until pid is gone or the budget runs out. It checks before it ever
-// sleeps, so a process that died on the first signal costs nothing.
-func awaitGone(pid int, budget time.Duration) bool {
+// scannedProcessGone reports that the process the scan recorded is no longer running:
+// either the pid is unused, or it now belongs to something else. Both mean the target
+// is gone, and both mean it must not be signalled again.
+func scannedProcessGone(pid int, scanned time.Time) bool {
+	if !reapAlive(pid) {
+		return true
+	}
+	return !stillTheScannedProcess(pid, scanned)
+}
+
+// awaitGone polls until the scanned process is gone or the budget runs out. It checks
+// before it ever sleeps, so a process that died on the first signal costs nothing.
+func awaitGone(pid int, scanned time.Time, budget time.Duration) bool {
 	for waited := time.Duration(0); ; waited += reapPoll {
-		if !reapAlive(pid) {
+		if scannedProcessGone(pid, scanned) {
 			return true
 		}
 		if waited >= budget {

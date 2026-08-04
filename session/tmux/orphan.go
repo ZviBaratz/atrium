@@ -21,6 +21,11 @@ import (
 // "claudesquad" orphans. clean.sh already handles both this way.
 var orphanBrands = []string{"atrium", "claudesquad"}
 
+// tmuxDefaultTmpdir is where tmux puts its socket directory when TMUX_TMPDIR is
+// empty or names a directory that is not there. tmux hardcodes /tmp for that case
+// and consults no other variable, so reconstructing its layout must hardcode it too.
+const tmuxDefaultTmpdir = "/tmp"
+
 // ChildProc is one process an orphaned tmux server is the parent of — in practice
 // the agent's shell and the agent itself. Started is captured so the reaper can
 // apply the same PID-reuse guard to a child that it applies to the server; a child's
@@ -220,7 +225,11 @@ func socketDir(ctx context.Context) string {
 	}
 	root := os.Getenv("TMUX_TMPDIR")
 	if info, err := os.Stat(root); root == "" || err != nil || !info.IsDir() {
-		root = os.TempDir()
+		// Literally "/tmp", not os.TempDir(): os.TempDir() honours $TMPDIR and tmux
+		// does not, so on any host with TMPDIR set — every macOS one, where it is a
+		// per-user /var/folders/… path — os.TempDir() names a directory tmux never
+		// binds in, and the stale-socket list would report "none in <wrong dir>".
+		root = tmuxDefaultTmpdir
 	}
 	return filepath.Join(root, fmt.Sprintf("tmux-%d", os.Getuid()))
 }
