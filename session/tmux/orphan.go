@@ -3,6 +3,8 @@ package tmux
 import (
 	"context"
 	"errors"
+	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"sort"
@@ -137,6 +139,84 @@ func assembleServers(ctx context.Context, cands []candidate, live int, liveKnown
 	}
 	sort.Slice(servers, func(i, j int) bool { return servers[i].PID < servers[j].PID })
 	return servers
+}
+
+// StaleSocket is a socket file in Atrium's socket directory that no server answers —
+// the cosmetic half of #547. tmux never unlinks a socket when its server dies, so
+// every killed probe and every crashed run leaves one behind, in the directory that
+// also holds the live socket.
+//
+// ModTime dates the file, which is when its server bound it.
+type StaleSocket struct {
+	Path    string
+	ModTime time.Time
+}
+
+// ScanStaleSockets lists the socket files in Atrium's socket directory that nothing
+// is listening on, and the directory it looked in.
+//
+// It is read-only and stays that way: it removes nothing, and neither does any
+// caller. A sweep over this directory is what #584 shipped and #586 removed after it
+// took the live socket and thirteen running sessions with it; the whole remedy here
+// is to name the files and let the user decide.
+//
+// A file is reported only when it passes ownsSocketName *and* the probe positively
+// answers that nothing is there. A probe that could not run leaves the file
+// unreported: absence of an answer is not evidence.
+func ScanStaleSockets(ctx context.Context) (stale []StaleSocket, dir string) {
+	dir = socketDir(ctx)
+	return staleSocketsIn(ctx, dir), dir
+}
+
+// staleSocketsIn is ScanStaleSockets over an explicit directory, split out so the
+// filtering is testable without depending on where this host keeps its sockets.
+func staleSocketsIn(ctx context.Context, dir string) []StaleSocket {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil
+	}
+	var stale []StaleSocket
+	for _, e := range entries {
+		if !ownsSocketName(e.Name()) {
+			continue
+		}
+		info, err := e.Info()
+		if err != nil || info.Mode()&os.ModeSocket == 0 {
+			continue
+		}
+		path := filepath.Join(dir, e.Name())
+		// Stale means the probe ran *and* found nothing listening. A server that
+		// answered owns its file, and a probe that could not run is not evidence
+		// about anything — both leave the file unreported.
+		owner, known := socketOwner(ctx, path)
+		if !known || owner != 0 {
+			continue
+		}
+		stale = append(stale, StaleSocket{Path: path, ModTime: info.ModTime()})
+	}
+	sort.Slice(stale, func(i, j int) bool { return stale[i].Path < stale[j].Path })
+	return stale
+}
+
+// socketDir returns the directory Atrium's tmux socket lives in.
+//
+// It asks the live server first — `#{socket_path}` is the server's own answer, so it
+// assumes nothing about tmux's layout. Only with no server running does it fall back
+// to reconstructing $TMUX_TMPDIR/tmux-<uid>, mirroring tmux's own rule that an empty
+// *or missing* TMUX_TMPDIR means /tmp. Getting that fallback wrong could only ever
+// make this report list the wrong directory's files, never delete anything — but it
+// is also what the printed remedy names, so it follows tmux rather than guessing.
+func socketDir(ctx context.Context) string {
+	if out, err := tmuxCommand(ctx, "display-message", "-p", "#{socket_path}").Output(); err == nil {
+		if path := strings.TrimSpace(string(out)); path != "" {
+			return filepath.Dir(path)
+		}
+	}
+	root := os.Getenv("TMUX_TMPDIR")
+	if info, err := os.Stat(root); root == "" || err != nil || !info.IsDir() {
+		root = os.TempDir()
+	}
+	return filepath.Join(root, fmt.Sprintf("tmux-%d", os.Getuid()))
 }
 
 // ownsSocketName reports whether base is a socket name Atrium binds: either brand
