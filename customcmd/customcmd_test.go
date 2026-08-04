@@ -129,11 +129,14 @@ func TestValidate_RejectsMalformedEntries(t *testing.T) {
 
 // TestValidate_AcceptsTheKeysAKeyboardProduces is the over-rejection guard for the
 // key rules, which are all refusals and therefore all capable of taking a key the
-// user wanted. The precomposed accent is the one at risk: it is a letter, not a
-// combining mark, and a rule written against "accents" instead of the mark
-// categories would refuse it.
+// user wanted. Two are at risk. The precomposed accent is a letter, not a combining
+// mark, so a rule written against "accents" instead of the mark categories would
+// refuse it. U+093E is a SPACING mark (Mc), the category the mark check deliberately
+// leaves alone because an Inscript keyboard emits it from one keystroke — without
+// this case, widening that check to Mc passes every test while taking the key away
+// from every Indic-keyboard user.
 func TestValidate_AcceptsTheKeysAKeyboardProduces(t *testing.T) {
-	for _, key := range []string{"g", "G", "1", "?", "/", "!", "é", "λ", "🔥"} {
+	for _, key := range []string{"g", "G", "1", "?", "/", "!", "é", "λ", "🔥", "ा"} {
 		t.Run("key="+key, func(t *testing.T) {
 			entry := ok()
 			entry.Key = key
