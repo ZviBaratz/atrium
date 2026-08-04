@@ -11,11 +11,11 @@ import (
 // CheckCustomCommands reports the custom_commands entries validation refuses to
 // bind (#375).
 //
-// A rejected entry is silently absent from the menu — that is the correct runtime
-// behaviour, since one typo must not cost the user their other commands — which
-// leaves "why is my command not there?" with no answer at the terminal. This is that
-// answer, and it is deliberately the same list the TUI surfaces at startup: one
-// validation pass, two places to read it.
+// A rejected entry is dropped rather than bound — the correct runtime behaviour,
+// since one typo must not cost the user their other commands — which leaves "why is
+// my command not there?" with no answer anywhere. This is that answer. It is the
+// only consumer of customcmd today; the UI stage adds a startup surface reading the
+// same validation pass, so the two can never disagree about what is valid.
 func CheckCustomCommands(cfg *config.Config) []customcmd.Problem {
 	if cfg == nil {
 		return nil

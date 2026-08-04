@@ -1,6 +1,7 @@
 package customcmd
 
 import (
+	"reflect"
 	"testing"
 
 	"github.com/ZviBaratz/atrium/config"
@@ -8,6 +9,25 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// contextLeavesByReflection enumerates Ctx's leaf string fields as dotted paths,
+// derived from the type rather than restated, so the drift guard cannot go stale
+// alongside the thing it guards.
+func contextLeavesByReflection(t *testing.T) []string {
+	t.Helper()
+	var out []string
+	outer := reflect.TypeOf(Ctx{})
+	for i := 0; i < outer.NumField(); i++ {
+		group := outer.Field(i)
+		require.Equalf(t, reflect.Struct, group.Type.Kind(), "Ctx.%s must be a struct of string leaves", group.Name)
+		for j := 0; j < group.Type.NumField(); j++ {
+			leaf := group.Type.Field(j)
+			require.Equalf(t, reflect.String, leaf.Type.Kind(), "Ctx.%s.%s must be a string", group.Name, leaf.Name)
+			out = append(out, group.Name+"."+leaf.Name)
+		}
+	}
+	return out
+}
 
 // ok is a minimal valid entry the rule tests mutate one field of at a time, so a
 // failure names the rule under test rather than an unrelated omission.
@@ -36,6 +56,19 @@ func TestValidate_RejectsMalformedEntries(t *testing.T) {
 		{"multi-rune key", func(c *config.CustomCommand) { c.Key = "gg" }, "must be a single character"},
 		{"space key", func(c *config.CustomCommand) { c.Key = " " }, "cannot be the space bar"},
 		{"esc key", func(c *config.CustomCommand) { c.Key = "\x1b" }, "must be a printable character"},
+		// A lone continuation byte decodes to U+FFFD with size 1 — which equals
+		// len(key), and U+FFFD is printable — so it passes every other rule here and
+		// binds a key no keypress can ever produce.
+		{"undecodable byte as key", func(c *config.CustomCommand) { c.Key = "\xff" }, "not usable text"},
+		// The case that actually reaches a user: encoding/json replaces invalid UTF-8
+		// with U+FFFD, so binary garbage in config.json arrives here already valid and
+		// three bytes wide. A size-based check waves this through; it is the one a
+		// real config produces.
+		{"replacement char as key", func(c *config.CustomCommand) { c.Key = "�" }, "not usable text"},
+		// Two bad bytes decode the same way but fail the single-character test too,
+		// so this one pins the check ORDER: reversed, it is reported as being too
+		// long rather than as not being text.
+		{"undecodable multibyte key", func(c *config.CustomCommand) { c.Key = "\xff\xfe" }, "not usable text"},
 		{"empty description", func(c *config.CustomCommand) { c.Description = "" }, "description is required"},
 		{"empty command", func(c *config.CustomCommand) { c.Command = "" }, "command is required"},
 		{"unknown context", func(c *config.CustomCommand) { c.Context = "worktree" }, `context "worktree"`},
@@ -78,6 +111,38 @@ func TestValidate_DuplicateKeyNamesBothParties(t *testing.T) {
 	msg := problems[0].Error()
 	assert.Contains(t, msg, "just ci", "names the rejected entry")
 	assert.Contains(t, msg, "lazygit here", "names the entry it collides with")
+}
+
+// TestValidate_AnEntryTooBrokenToNameIsRejectedOnItsOwnTerms keeps the
+// duplicate-key message honest. The whole point of that message is naming both
+// parties, so it must not run before the check that guarantees this entry HAS a
+// name — otherwise the collision reports `so "" is ignored`.
+func TestValidate_AnEntryTooBrokenToNameIsRejectedOnItsOwnTerms(t *testing.T) {
+	first := ok()
+	nameless := ok()
+	nameless.Description = ""
+
+	got, problems := Validate([]config.CustomCommand{first, nameless})
+
+	require.Len(t, got, 1)
+	require.Len(t, problems, 1)
+	assert.Contains(t, problems[0].Error(), "description is required")
+	assert.NotContains(t, problems[0].Error(), `""`, "a nameless entry is rejected for being nameless, not reported as an anonymous collision")
+}
+
+// TestFieldAccessCoversEveryContextLeaf is the drift guard for the accessor table
+// MissingFields substitutes through: a leaf added to Ctx without a matching entry
+// would silently never be reported empty.
+func TestFieldAccessCoversEveryContextLeaf(t *testing.T) {
+	covered := map[string]bool{}
+	for _, f := range fieldAccess {
+		covered[f.path] = true
+	}
+
+	for _, leaf := range contextLeavesByReflection(t) {
+		assert.Truef(t, covered[leaf], "Ctx leaf %s has no fieldAccess entry", leaf)
+	}
+	assert.Len(t, fieldAccess, len(contextLeavesByReflection(t)), "fieldAccess must not name a leaf Ctx does not have")
 }
 
 // TestValidate_OneBadEntryDoesNotSinkTheRest pins "dropped, not bound": a config
@@ -170,10 +235,25 @@ func TestMissingFields(t *testing.T) {
 		{"references the empty branch", "gh pr create --head {{.Session.Branch}}", []string{"Session.Branch"}},
 		{"references it twice, reported once", "git log {{.Session.Branch}}..{{.Session.Branch}}", []string{"Session.Branch"}},
 		{"references no fields at all", "just ci", nil},
-		// A whole-struct reference renders (Go prints the struct) and is legal, but
-		// it names no leaf, so there is nothing to call empty. Reporting it missing
-		// would dim a row that runs perfectly well.
-		{"references a struct rather than a leaf", "echo {{.Session}}", nil},
+		// The template engine has more than one way to reach a field, and a check
+		// that reimplements its name resolution will miss whichever forms it forgot.
+		// These two reach Session.Branch without ever spelling it as one path.
+		{"reaches the branch through with", "{{with .Session}}gh pr create --head {{.Branch}}{{end}}", []string{"Session.Branch"}},
+		{"reaches the branch through a chain", "gh pr create --head {{(.Session).Branch}}", []string{"Session.Branch"}},
+		// Printing the whole struct puts every field in the command line, empty ones
+		// included — so the empty branch really does reach the shell here, and saying
+		// so is right even though no path is spelled out.
+		{"prints a struct containing an empty field", "echo {{.Session}}", []string{"Session.Branch"}},
+		// A field behind a branch the render does not take never reaches the command,
+		// so it is not missing. This is the payoff of asking the renderer instead of
+		// the parse tree: "unused on this path" and "used" stop being the same answer.
+		{"references the branch only in an untaken branch", "{{if .Session.Name}}just ci{{else}}git log {{.Session.Branch}}{{end}}", nil},
+		// The known limit of substitution: a sentinel is non-empty, so a template
+		// that tests the field's OWN emptiness takes the opposite branch under
+		// probing and the field reads as used. That errs toward dimming a row that
+		// would have run, which is the safe direction — a false dim is visible and
+		// explains itself, where a false pass runs a command with a hole in it.
+		{"guards on the field it is missing", "{{if .Session.Branch}}git log {{.Session.Branch}}{{end}}", []string{"Session.Branch"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

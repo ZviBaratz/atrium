@@ -11,22 +11,26 @@
 //
 // A rejected entry is DROPPED, not bound. config.LoadConfig cannot fail — "a missing
 // file is created with defaults, and any read/parse error logs a warning and falls
-// back to DefaultConfig" — and it is called from a dozen non-TUI sites, so a config
-// problem must never be an error return that ripples out to them. Validate reports
-// problems alongside the entries that survived, and the caller decides how loudly to
-// say so.
+// back to DefaultConfig" — and it is called from 17 non-test sites, most of them
+// outside the TUI, so a config problem must never be an error return that ripples out
+// to them. Validate reports problems alongside the entries that survived, and the
+// caller decides how loudly to say so.
 //
 // A template is validated by RENDERING it, not by parsing it. Parsing accepts
 // {{.Session.Wortree}} happily; only execution against a populated context reports
 // the typo. Doing that at load time is what turns a placeholder typo into a message
-// the user can act on instead of an empty string handed to a shell.
+// the user can act on instead of an empty string handed to a shell. The limit of that
+// technique is worth knowing: one render takes one path, so a placeholder inside a
+// conditional the probe does not enter escapes to run time.
+//
+// Only `atrium doctor` consumes this today. The menu that runs these commands, and
+// the startup surface that reports these problems, arrive with the UI stage.
 package customcmd
 
 import (
 	"fmt"
 	"strings"
 	"text/template"
-	"text/template/parse"
 	"unicode"
 	"unicode/utf8"
 
@@ -37,9 +41,10 @@ import (
 type Context string
 
 const (
-	// ContextSession runs in the agent's working directory. It is the default, and
-	// the app gates it on a started, unpaused session — before Start, an instance's
-	// working directory is still the user's origin checkout.
+	// ContextSession runs in the agent's working directory. It is the default. The
+	// UI stage will gate it on a started, unpaused session, because before Start an
+	// instance's working directory is still the user's origin checkout — running
+	// there is the one outcome this context must never produce.
 	ContextSession Context = "session"
 	// ContextRepo runs in the repository root, which outlives a pause.
 	ContextRepo Context = "repo"
@@ -98,10 +103,6 @@ type Command struct {
 
 	tmpl   *template.Template
 	source string
-	// fields lists the context fields this template references, in "Session.Branch"
-	// form, deduplicated and in first-appearance order. Collected at validation time
-	// so MissingFields costs nothing per keypress.
-	fields []string
 }
 
 // Problem is one rejected entry: which one, and why. Index is the entry's position
@@ -153,19 +154,23 @@ func Validate(entries []config.CustomCommand) ([]Command, []Problem) {
 			reject("%s", err)
 			continue
 		}
-		if owner, taken := claimed[e.Key]; taken {
-			// Name both parties: the incumbent AND this entry. A message that
-			// reports only the key leaves the user grepping their config for which
-			// of two identical-looking rows lost.
-			reject("key %q is already bound to %q, so %q is ignored", e.Key, owner, e.Description)
-			continue
-		}
+		// Description comes before the collision check, not after: the collision
+		// message's whole job is naming both parties, and an entry with no
+		// description cannot be one. Reversed, two nameless duplicates report
+		// `so "" is ignored`, which names nobody.
 		if strings.TrimSpace(e.Description) == "" {
 			reject("description is required — it is all the menu and the ? screen can show")
 			continue
 		}
 		if strings.TrimSpace(e.Command) == "" {
 			reject("command is required")
+			continue
+		}
+		if owner, taken := claimed[e.Key]; taken {
+			// Name both parties: the incumbent AND this entry. A message that
+			// reports only the key leaves the user grepping their config for which
+			// of two identical-looking rows lost.
+			reject("key %q is already bound to %q, so %q is ignored", e.Key, owner, e.Description)
 			continue
 		}
 
@@ -201,7 +206,6 @@ func Validate(entries []config.CustomCommand) ([]Command, []Problem) {
 			Confirm:     e.Confirm,
 			tmpl:        tmpl,
 			source:      e.Command,
-			fields:      referencedFields(tmpl),
 		})
 	}
 	return out, problems
@@ -215,6 +219,23 @@ func checkKey(key string) error {
 		return fmt.Errorf("key is required")
 	}
 	r, size := utf8.DecodeRuneInString(key)
+	// U+FFFD is rejected however it got here, and the size is deliberately not
+	// consulted. Undecodable bytes handed straight to this package decode to
+	// RuneError with size 1 — which satisfies size == len(key), and RuneError is
+	// printable, so they would pass every other rule below. But the path that
+	// actually reaches a user is the other one: encoding/json silently replaces
+	// invalid UTF-8 in a string with U+FFFD, so binary garbage in config.json
+	// arrives here already valid, three bytes wide, and a size-based test waves it
+	// through. Either way the result is a key bound to something no keypress can
+	// produce — a command silently missing from the menu with nothing to explain it.
+	// Nobody loses a key they wanted: U+FFFD is not typeable.
+	//
+	// This runs before the single-character test so the message names the real
+	// problem; reversed, two bad bytes are reported as being too long, which sends
+	// the user counting characters instead of fixing their encoding.
+	if r == utf8.RuneError {
+		return fmt.Errorf("key %q is not usable text — a keypress can never produce it", key)
+	}
 	if size != len(key) {
 		return fmt.Errorf("key %q must be a single character", key)
 	}
@@ -262,21 +283,81 @@ func render(t *template.Template, ctx Ctx) (string, error) {
 	return b.String(), nil
 }
 
-// MissingFields reports the context fields this command's template references that
-// are empty for ctx, in "Session.Branch" form.
+// MissingFields reports which empty context fields actually reach the rendered
+// command, in "Session.Branch" form.
 //
-// Validation proves a placeholder EXISTS; only this proves it has a value for the
-// session in hand. A direct (non-git) session has no branch, so without this
+// Validation proves a placeholder EXISTS; only this proves it carries a value for
+// the session in hand. A direct (non-git) session has no branch, so without this
 // `gh pr create --head {{.Session.Branch}}` renders to a trailing space and acts on
 // whatever happens to be checked out.
+//
+// It works by re-rendering with each empty field replaced by a unique sentinel and
+// looking for those sentinels in the output — asking the template engine which
+// fields reached the command, rather than reimplementing its name resolution by
+// walking the parse tree. That distinction is the whole correctness argument: a
+// tree walk has to know every syntax that can reach a field, and the two it is
+// easiest to forget — `{{with .Session}}…{{.Branch}}` and `{{(.Session).Branch}}` —
+// both reach one without ever spelling it as a path, so a walk silently reports
+// nothing missing and the guard reads as passing.
+//
+// It is also more precise in the other direction: a field behind a conditional the
+// render does not take never reaches the command, so it is correctly not reported.
+//
+// The technique has one known limit, and it errs the safe way. A sentinel is
+// non-empty, so a template that tests the emptiness of the very field being probed —
+// {{if .Session.Branch}}…{{end}} — takes the opposite branch while probing and reads
+// as using it. That over-reports, dimming a row that would have run; a false dim is
+// visible and carries its reason, where a false pass runs a command with a hole in it.
+//
+// A render error reports nothing missing. Only validated templates get here, so an
+// error means the command is broken outright — which its own run-time render
+// surfaces as an error, rather than as a dimmed row.
 func (c Command) MissingFields(ctx Ctx) []string {
+	probeCtx := ctx
+	var empty []string
+	for _, f := range fieldAccess {
+		if f.get(ctx) != "" {
+			continue
+		}
+		empty = append(empty, f.path)
+		f.set(&probeCtx, sentinelFor(f.path))
+	}
+	if len(empty) == 0 {
+		return nil
+	}
+	out, err := render(c.tmpl, probeCtx)
+	if err != nil {
+		return nil
+	}
 	var missing []string
-	for _, f := range c.fields {
-		if fieldValue(ctx, f) == "" {
-			missing = append(missing, f)
+	for _, path := range empty {
+		if strings.Contains(out, sentinelFor(path)) {
+			missing = append(missing, path)
 		}
 	}
 	return missing
+}
+
+// sentinelFor is the stand-in substituted for an empty field. The NUL delimiters
+// keep it from colliding with anything a real template could produce.
+func sentinelFor(path string) string { return "\x00atrium-missing:" + path + "\x00" }
+
+// fieldAccess is the leaf-by-leaf view of Ctx that MissingFields substitutes
+// through. It is a hand-written table because Ctx is a fixed, tiny shape and
+// reflection here would buy nothing but indirection —
+// TestFieldAccessCoversEveryContextLeaf is what keeps it honest, in both
+// directions.
+var fieldAccess = []struct {
+	path string
+	get  func(Ctx) string
+	set  func(*Ctx, string)
+}{
+	{"Session.Title", func(c Ctx) string { return c.Session.Title }, func(c *Ctx, v string) { c.Session.Title = v }},
+	{"Session.Name", func(c Ctx) string { return c.Session.Name }, func(c *Ctx, v string) { c.Session.Name = v }},
+	{"Session.Branch", func(c Ctx) string { return c.Session.Branch }, func(c *Ctx, v string) { c.Session.Branch = v }},
+	{"Session.Worktree", func(c Ctx) string { return c.Session.Worktree }, func(c *Ctx, v string) { c.Session.Worktree = v }},
+	{"Repo.Path", func(c Ctx) string { return c.Repo.Path }, func(c *Ctx, v string) { c.Repo.Path = v }},
+	{"Repo.Name", func(c Ctx) string { return c.Repo.Name }, func(c *Ctx, v string) { c.Repo.Name = v }},
 }
 
 // LogArgv is the argv recorded in the command log for this command.
@@ -299,8 +380,11 @@ func (c Command) Source() string { return c.source }
 //
 // It exists alongside the template so a user need never interpolate a path into a
 // shell string: `lazygit -p "$ATRIUM_WORKTREE"` cannot break argument parsing however
-// odd the path is. ATRIUM_SESSION carries the display name, matching what it already
-// means to a notify command and inside an agent's tmux session.
+// odd the path is. ATRIUM_SESSION carries the display name, matching what it means to
+// a notify command. Note it does NOT match the ATRIUM_SESSION seen from inside an
+// agent's pane, which tmux sets to the sanitized session handle
+// (atrium_<group>_<title>, derived from the immutable Title) — a script written
+// against one surface cannot assume the other.
 func Env(ctx Ctx) []string {
 	return []string{
 		"ATRIUM_TITLE=" + ctx.Session.Title,
@@ -309,97 +393,5 @@ func Env(ctx Ctx) []string {
 		"ATRIUM_WORKTREE=" + ctx.Session.Worktree,
 		"ATRIUM_REPO=" + ctx.Repo.Path,
 		"ATRIUM_REPO_NAME=" + ctx.Repo.Name,
-	}
-}
-
-// fieldValue reads a "Session.Branch"-form path out of ctx. An unknown path reports
-// a non-empty sentinel rather than "": only validated templates reach here, so an
-// unrecognised path means this function has fallen behind Ctx, and reporting it as
-// missing would dim a row for a field that is actually fine.
-func fieldValue(ctx Ctx, path string) string {
-	switch path {
-	case "Session.Title":
-		return ctx.Session.Title
-	case "Session.Name":
-		return ctx.Session.Name
-	case "Session.Branch":
-		return ctx.Session.Branch
-	case "Session.Worktree":
-		return ctx.Session.Worktree
-	case "Repo.Path":
-		return ctx.Repo.Path
-	case "Repo.Name":
-		return ctx.Repo.Name
-	}
-	return "unknown"
-}
-
-// referencedFields walks the parsed template for field references, returning them in
-// "Session.Branch" form, deduplicated and in first-appearance order.
-func referencedFields(t *template.Template) []string {
-	seen := map[string]bool{}
-	var out []string
-	for _, tree := range t.Templates() {
-		// tree.Tree is the embedded *parse.Tree and must be nil-checked by its own
-		// name; Root then reads through the embedding.
-		if tree.Tree == nil || tree.Root == nil {
-			continue
-		}
-		walkFields(tree.Root, func(path string) {
-			if seen[path] {
-				return
-			}
-			seen[path] = true
-			out = append(out, path)
-		})
-	}
-	return out
-}
-
-// walkFields visits every parse.FieldNode under n. A FieldNode's Ident is already
-// the dotted path split into segments ({{.Session.Branch}} -> ["Session","Branch"]),
-// which is why this needs no name resolution of its own.
-func walkFields(n parse.Node, visit func(string)) {
-	switch node := n.(type) {
-	case nil:
-		return
-	case *parse.FieldNode:
-		visit(strings.Join(node.Ident, "."))
-	case *parse.ListNode:
-		if node == nil {
-			return
-		}
-		for _, child := range node.Nodes {
-			walkFields(child, visit)
-		}
-	case *parse.ActionNode:
-		walkFields(node.Pipe, visit)
-	case *parse.PipeNode:
-		if node == nil {
-			return
-		}
-		for _, cmd := range node.Cmds {
-			walkFields(cmd, visit)
-		}
-	case *parse.CommandNode:
-		for _, arg := range node.Args {
-			walkFields(arg, visit)
-		}
-	case *parse.IfNode:
-		walkBranch(node.BranchNode, visit)
-	case *parse.RangeNode:
-		walkBranch(node.BranchNode, visit)
-	case *parse.WithNode:
-		walkBranch(node.BranchNode, visit)
-	}
-}
-
-func walkBranch(b parse.BranchNode, visit func(string)) {
-	walkFields(b.Pipe, visit)
-	if b.List != nil {
-		walkFields(b.List, visit)
-	}
-	if b.ElseList != nil {
-		walkFields(b.ElseList, visit)
 	}
 }
