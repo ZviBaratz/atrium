@@ -187,6 +187,6 @@ func TestHumanAge(t *testing.T) {
 		{14*time.Hour + 2*time.Minute, "14h2m"},
 		{50 * time.Hour, "2d2h"},
 	} {
-		require.Equal(t, tc.want, humanAge(tc.d), "humanAge(%s)", tc.d)
+		require.Equal(t, tc.want, HumanAge(tc.d), "HumanAge(%s)", tc.d)
 	}
 }

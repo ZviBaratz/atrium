@@ -93,6 +93,16 @@ func readBootTime() (time.Time, bool) {
 	return time.Time{}, false
 }
 
+// ProcessStartTime returns when the process started, or ok == false when it is gone
+// or unreadable.
+//
+// It is the PID-reuse guard's second reading: a reaper captures a server's start
+// time at scan time and re-reads it immediately before signalling, so a pid that has
+// been recycled onto an unrelated process in between fails the comparison instead of
+// being killed. That is why "unreadable" must never resolve to a zero time — a
+// caller comparing two zero times would find them equal.
+func ProcessStartTime(pid int) (started time.Time, ok bool) { return procStartTime(pid) }
+
 // procStartTime returns when the process started, from /proc/<pid>/stat's starttime
 // plus the boot time. ok is false when the process is gone or either read fails —
 // never a zero time passed off as an answer, because callers turn this into a

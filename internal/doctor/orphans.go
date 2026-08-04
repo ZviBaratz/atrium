@@ -91,16 +91,16 @@ func renderOrphanServer(b *strings.Builder, s tmux.OrphanServer, now time.Time) 
 	switch {
 	case !s.ReachableKnown:
 		fmt.Fprintf(b, "  pid %d  socket %s  up %s  reachability unknown  %s\n",
-			s.PID, s.Socket, humanAge(now.Sub(s.Started)), childSummary(s.Children))
+			s.PID, s.Socket, HumanAge(now.Sub(s.Started)), childSummary(s.Children))
 		b.WriteString("      → tmux could not be run, so nothing here is proven; `atrium reap` lists\n")
 		b.WriteString("        these and never kills them\n")
 	case s.Reachable:
 		fmt.Fprintf(b, "  pid %d  socket %s  up %s  reachable  %s\n",
-			s.PID, s.Socket, humanAge(now.Sub(s.Started)), childSummary(s.Children))
+			s.PID, s.Socket, HumanAge(now.Sub(s.Started)), childSummary(s.Children))
 		fmt.Fprintf(b, "      → tmux -S %s kill-server\n", s.SocketPath)
 	default:
 		fmt.Fprintf(b, "  ⚠ pid %d  socket %s  up %s  UNREACHABLE  %s\n",
-			s.PID, s.Socket, humanAge(now.Sub(s.Started)), childSummary(s.Children))
+			s.PID, s.Socket, HumanAge(now.Sub(s.Started)), childSummary(s.Children))
 		fmt.Fprintf(b, "      → no tmux command can name this server: %s does not answer for it.\n", s.SocketPath)
 		b.WriteString("        `atrium reap --kill` is the only thing that can stop it\n")
 	}
@@ -161,10 +161,14 @@ func childSummary(kids []tmux.ChildProc) string {
 	return fmt.Sprintf("holds %d %s (%s)", len(kids), unit, strings.Join(comms, ", "))
 }
 
-// humanAge renders a duration in the largest two units that stay readable. A
+// HumanAge renders a duration in the largest two units that stay readable. A
 // negative age — clock skew, or a start time from another machine — clamps to zero
 // rather than printing a negative uptime.
-func humanAge(d time.Duration) string {
+//
+// Exported so `atrium reap`'s confirmation prompt dates a server exactly the way the
+// doctor row does: the user reads one and then the other about the same process, and
+// two spellings of the same uptime read as two different facts.
+func HumanAge(d time.Duration) string {
 	if d < 0 {
 		d = 0
 	}

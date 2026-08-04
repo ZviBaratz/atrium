@@ -624,6 +624,7 @@ func init() {
 	rootCmd.AddCommand(resetCmd)
 	rootCmd.AddCommand(profilesCmd)
 	rootCmd.AddCommand(doctorCmd)
+	rootCmd.AddCommand(reapCmd)
 	rootCmd.AddCommand(hookEventCmd)
 }
 
