@@ -88,7 +88,7 @@ func RenderOrphans(r OrphanResult) string {
 	}
 
 	for _, s := range r.Servers {
-		renderOrphanServer(&b, s, r.Now)
+		renderOrphanServer(&b, s, r.Now, !r.Gaps.LiveServerUnknown)
 	}
 	renderStaleSockets(&b, r)
 	return b.String()
@@ -120,13 +120,29 @@ func renderScanGaps(b *strings.Builder, g tmux.ScanGaps) {
 // renderOrphanServer writes one server's row plus the remedy that fits its class.
 // The remedy is the point of the row: an unreachable server has no tmux command that
 // can name it, and saying so is the difference between a report and a dead end.
-func renderOrphanServer(b *strings.Builder, s tmux.OrphanServer, now time.Time) {
+//
+// liveIdentified is whether the scan established which server this Atrium is running
+// on. When it did not, the live server could not be excluded by pid and may be one of
+// these rows — and it would arrive here Reachable, since it answers its own socket. The
+// remedy for a reachable server is a `kill-server` naming its exact path, so printing
+// one unconditionally is how this report becomes an instruction to kill the live fleet.
+// That is the #584 shape, arrived at through the report rather than through a glob.
+func renderOrphanServer(b *strings.Builder, s tmux.OrphanServer, now time.Time, liveIdentified bool) {
 	switch {
 	case !s.ReachableKnown:
 		fmt.Fprintf(b, "  pid %d  socket %s  up %s  reachability unknown  %s\n",
 			s.PID, s.Socket, HumanAge(now.Sub(s.Started)), childSummary(s.Children))
 		b.WriteString("      → tmux could not be run, so nothing here is proven; `atrium reap` lists\n")
 		b.WriteString("        these and never kills them\n")
+	case s.Reachable && !liveIdentified:
+		// No command is printed at all here. The honest remedy is to re-run once the
+		// probe works, because the one command that would stop this server is also the
+		// one that would stop the fleet if this row is the fleet.
+		fmt.Fprintf(b, "  pid %d  socket %s  up %s  reachable  %s\n",
+			s.PID, s.Socket, HumanAge(now.Sub(s.Started)), childSummary(s.Children))
+		b.WriteString("      → no remedy offered: this Atrium's own server could not be identified,\n")
+		b.WriteString("        so this row may be it — and the command that would stop it is the\n")
+		b.WriteString("        command that would stop your live sessions. Re-run first\n")
 	case s.Reachable:
 		fmt.Fprintf(b, "  pid %d  socket %s  up %s  reachable  %s\n",
 			s.PID, s.Socket, HumanAge(now.Sub(s.Started)), childSummary(s.Children))

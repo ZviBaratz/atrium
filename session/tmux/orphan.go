@@ -69,15 +69,18 @@ type OrphanServer struct {
 	Children   []ChildProc
 }
 
-// ScanGaps records the ways one inventory pass failed to be exhaustive. It exists for
-// the same reason ReachableKnown does: this scan reports a class of failure that is
+// ScanGaps records the questions one scan pass could not answer. It exists for the
+// same reason ReachableKnown does: this scan reports a class of failure that is
 // invisible by construction, so "the inventory ran and found no servers" and "the
 // inventory could not see" must not render as the same sentence. Without it a read
 // error on either source below produces an empty list, which is indistinguishable
 // from a clean host.
 //
-// The fields are independent rather than one bool because the two gaps have different
-// consequences and therefore different remedies — see the renderer.
+// The fields are independent bools rather than one because each unanswered question
+// has its own consequence and therefore its own remedy — see the renderer. They are
+// also not all of a kind: the first two are gaps in the *inventory* and are what
+// Any() reports, while LiveServerUnknown leaves the inventory complete and constrains
+// only what may be done with it. Any()'s doc comment is where that split is argued.
 type ScanGaps struct {
 	// SocketTableUnread: /proc/net/unix could not be read. A server is identified by
 	// the socket it is listening on, so with this table missing every candidate loses
@@ -89,10 +92,29 @@ type ScanGaps struct {
 	// undercounted Children list, since children are attributed from the same partial
 	// table.
 	ProcTableTruncated bool
+	// LiveServerUnknown: the ambient probe could not establish which server this Atrium
+	// is running on — not "there is no live server", which is a determined answer and
+	// safe (see ambientServerPID). Nothing can then be excluded by pid, so the live
+	// server may itself be one of the rows below. It answers its own socket, so it
+	// arrives classified Reachable: never a default kill target, but `--all` targets
+	// reachable servers by design, and the report's remedy for a reachable server is a
+	// `kill-server` aimed straight at it.
+	//
+	// Deliberately NOT counted by Any(). See that method.
+	LiveServerUnknown bool
 }
 
-// Any reports whether the pass left anything unseen, and so whether an empty or short
-// result is allowed to be read as proof.
+// Any reports whether the *inventory* left anything unseen, and so whether an empty or
+// short result is allowed to be read as proof. Callers use it to refuse to kill at all.
+//
+// LiveServerUnknown is excluded on purpose, and the exclusion is load-bearing rather
+// than an oversight. It does not make the inventory incomplete: every candidate was
+// still seen and still classified, and a live server that could not be identified by
+// pid is still positively Reachable, which the default target set already excludes. The
+// last regression on this code came from refusing too eagerly — a self-inflicted gap
+// became a self-inflicted refusal on exactly the host that needed reaping — so the
+// remedy for this one is scoped to the decision it actually affects: `--all`, plus the
+// report's remedy line. TestScanGapsAny pins it.
 func (g ScanGaps) Any() bool { return g.SocketTableUnread || g.ProcTableTruncated }
 
 // candidate is one process the platform inventory judged worth classifying: owned by
@@ -152,14 +174,18 @@ func ScanServers(ctx context.Context) (servers []OrphanServer, supported bool, g
 	// Probing first let a hung tmux manufacture a gap out of a walk that never ran.
 	cands, gaps := scanCandidates(ctx)
 	live, liveKnown := probeAmbient(ctx)
+	gaps.LiveServerUnknown = !liveKnown
 	return assembleServers(ctx, cands, live, liveKnown), true, gaps
 }
 
 // probeAmbient asks which server is on the ambient socket, under one probe's share of
 // the budget. A wedged live server then costs this scan one probe rather than all of
-// it, and "could not be determined" is what the caller already treats as nothing to
-// exclude.
-func probeAmbient(ctx context.Context) (pid int, found bool) {
+// it, and spending that budget is one of the ways the answer comes back unknown.
+//
+// known, not found: the distinction ambientServerPID draws is the whole point of it,
+// and a wrapper that renamed the result back would put the discarded word in front of
+// every reader who arrives here first.
+func probeAmbient(ctx context.Context) (pid int, known bool) {
 	probeCtx, cancel := context.WithTimeout(ctx, orphanProbeBudget)
 	defer cancel()
 	return ambientPID(probeCtx)
@@ -323,15 +349,46 @@ func ownsSocketName(base string) bool {
 
 // ambientServerPID returns the pid of the tmux server on Atrium's socket under the
 // ambient environment — the one this Atrium is running on, which is never an orphan.
-// found is false when no server is running there, which is the empty-fleet case
-// rather than an error: there is then simply nothing to exclude.
-func ambientServerPID(ctx context.Context) (pid int, found bool) {
+//
+// known carries the same distinction probeSocketOwner draws, and for the same reason:
+// "tmux ran and there is no server on that socket" and "tmux could not be asked" are
+// different facts with opposite safety consequences, and this function used to return
+// false for both. The empty fleet is a *determined* answer — pid 0 with known true —
+// and it is safe, because a fleet with no live server has nothing that needs excluding.
+// Only known == false means the live server might be among the candidates below,
+// answering its own socket and therefore classified Reachable.
+//
+// A non-zero exit means tmux ran and made a determination ("no server running on …");
+// anything else — tmux absent, the probe's budget spent — leaves the question open.
+func ambientServerPID(ctx context.Context) (pid int, known bool) {
 	out, err := tmuxCommand(ctx, "display-message", "-p", "#{pid}").Output()
-	if err != nil {
+	return classifyPIDProbe(ctx, out, err)
+}
+
+// classifyPIDProbe turns the result of a `display-message -p '#{pid}'` probe into a pid
+// and whether the question was answered at all. Both probes here go through it, so the
+// rule exists once: they had identical copies, and a rule about what counts as evidence
+// is the last thing that should be able to drift between two call sites.
+//
+// A non-zero exit means tmux ran and made a determination — "no server running on …",
+// "error connecting to …" — which is evidence, and answers pid 0. Anything else means
+// tmux never got to answer: it is absent, or the probe's budget was spent. That is not
+// evidence, and known is false.
+func classifyPIDProbe(ctx context.Context, out []byte, err error) (pid int, known bool) {
+	// Checked first: a killed-by-deadline process also surfaces as an ExitError, which
+	// would otherwise be read as tmux having reported an empty socket.
+	if ctx.Err() != nil {
 		return 0, false
 	}
-	pid, err = strconv.Atoi(strings.TrimSpace(string(out)))
 	if err != nil {
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) {
+			return 0, true
+		}
+		return 0, false
+	}
+	pid, convErr := strconv.Atoi(strings.TrimSpace(string(out)))
+	if convErr != nil {
 		return 0, false
 	}
 	return pid, true
@@ -355,19 +412,5 @@ func ambientServerPID(ctx context.Context) (pid int, found bool) {
 // else — tmux absent, the context expired — leaves the question open.
 func probeSocketOwner(ctx context.Context, path string) (pid int, known bool) {
 	out, err := exec.CommandContext(ctx, "tmux", "-S", path, "display-message", "-p", "#{pid}").Output()
-	if ctx.Err() != nil {
-		return 0, false
-	}
-	if err != nil {
-		var exitErr *exec.ExitError
-		if errors.As(err, &exitErr) {
-			return 0, true
-		}
-		return 0, false
-	}
-	pid, err = strconv.Atoi(strings.TrimSpace(string(out)))
-	if err != nil {
-		return 0, false
-	}
-	return pid, true
+	return classifyPIDProbe(ctx, out, err)
 }
