@@ -92,6 +92,7 @@ if one is missing from this table.
 | `peek` | Print what a session's pane is showing, without attaching |
 | `send` | Queue a prompt for a session |
 | `doctor` | Check core dependencies (tmux, git, gh) and agent CLI heuristic versions |
+| `reap` | List tmux servers Atrium left behind, and stop them on request |
 | `profiles` | Manage agent profiles (e.g. `profiles detect`) |
 | `debug` | Print debug information like config and log paths |
 | `update` | Download, verify, and install the latest release |
