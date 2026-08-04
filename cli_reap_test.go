@@ -371,3 +371,38 @@ func TestReapKillWithNothingToKillSaysSo(t *testing.T) {
 	require.Contains(t, out.String(), "nothing to kill")
 	require.Empty(t, procs.sent)
 }
+
+// TestReapKillRefusesAnIncompleteScan applies "positive proof only" to the inventory
+// itself.
+//
+// A truncated /proc walk attributes children from a partial table, so a server's
+// Children list can be short — and that list is exactly what the prompt shows before
+// the user consents. Killing on it would take consent obtained against an
+// understatement of what dies: the user agrees to lose one shell and loses thirteen
+// agents. The fixture drives it with --yes and a stdin full of "y" on purpose, so a
+// pass cannot come from the prompt merely defaulting to no; the refusal has to happen
+// before anything is asked.
+func TestReapKillRefusesAnIncompleteScan(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		gaps tmux.ScanGaps
+	}{
+		{"socket table unreadable", tmux.ScanGaps{SocketTableUnread: true}},
+		{"proc walk truncated", tmux.ScanGaps{ProcTableTruncated: true}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			procs := newFakeProcs().add(1499239, 1499240).install(t)
+			res := result(orphan(1499239, kid(1499240)))
+			res.Gaps = tc.gaps
+			stubReapCheck(t, res)
+
+			var out bytes.Buffer
+			err := runReap(t.Context(), &out, strings.NewReader("y\ny\ny\n"),
+				reapOpts{kill: true, yes: true})
+			require.Error(t, err, "an incomplete inventory must not be killed on")
+			require.Contains(t, err.Error(), "incomplete scan")
+			require.Empty(t, procs.sent,
+				"nothing may be signalled when the scan could not see what it would destroy")
+		})
+	}
+}

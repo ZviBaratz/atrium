@@ -131,6 +131,15 @@ func runReap(ctx context.Context, w io.Writer, in io.Reader, opts reapOpts) erro
 	if !res.Supported {
 		return fmt.Errorf("cannot reap on this platform: finding a server whose socket no longer resolves needs a process inventory (Linux only)")
 	}
+	// Positive proof only, applied to the inventory itself. A truncated /proc walk
+	// attributes children from a partial table, so a server's Children list can be
+	// short — and that list is exactly what the confirmation prompt shows the user
+	// before they consent. Killing on it would be consent obtained against an
+	// understatement of what dies. An unreadable socket table is the milder case (it
+	// yields no targets at all), but the same rule covers both.
+	if res.Gaps.Any() {
+		return fmt.Errorf("refusing to kill on an incomplete scan: the process inventory could not see everything, so what a kill would destroy is not fully known — re-run %s reap", binName)
+	}
 
 	targets := reapTargets(res.Servers, opts.all)
 	if len(targets) == 0 {

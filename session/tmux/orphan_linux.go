@@ -200,10 +200,16 @@ func parseStat(raw string) (procStat, bool) {
 // can still be named (#547). Abstract sockets (paths starting with "@") are skipped:
 // they have no file, so nothing downstream — the socket-name predicate, `tmux -S` —
 // can use one.
-func listeningSockets() map[uint64]string {
+//
+// ok is false when the table could not be read at all, and the caller must propagate
+// that rather than treat it as an empty host. This is the one source every candidate's
+// identity depends on: with it missing, socketPathFor returns "" for every pid,
+// assembleServers drops all of them, and the report would otherwise print a confident
+// "none" built on having seen nothing.
+func listeningSockets() (map[uint64]string, bool) {
 	raw, err := os.ReadFile(filepath.Join(procRoot, "net", "unix"))
 	if err != nil {
-		return nil
+		return nil, false
 	}
 	socks := map[uint64]string{}
 	for _, line := range strings.Split(string(raw), "\n") {
@@ -225,7 +231,7 @@ func listeningSockets() map[uint64]string {
 		}
 		socks[inode] = path
 	}
-	return socks
+	return socks, true
 }
 
 // fieldsTail returns what remains of line after n whitespace-separated fields, with
@@ -285,10 +291,12 @@ type procEntry struct {
 // The comm test here is a cost filter that fails open (see tmuxCommMarker), and the
 // uid test is a hard one: another user's server is unkillable anyway, and listing it
 // is the privacy concern #445 raised.
-func inventoryCandidates(ctx context.Context) []candidate {
-	procs := readProcTable(ctx)
+func inventoryCandidates(ctx context.Context) ([]candidate, ScanGaps) {
+	var gaps ScanGaps
+	procs, whole := readProcTable(ctx)
+	gaps.ProcTableTruncated = !whole
 	if len(procs) == 0 {
-		return nil
+		return nil, gaps
 	}
 	uid := uint32(os.Getuid()) //nolint:gosec // a uid is never negative and always fits.
 
@@ -301,7 +309,7 @@ func inventoryCandidates(ctx context.Context) []candidate {
 		}
 	}
 	if len(isCandidate) == 0 {
-		return nil
+		return nil, gaps
 	}
 
 	kids := map[int][]ChildProc{}
@@ -320,7 +328,8 @@ func inventoryCandidates(ctx context.Context) []candidate {
 	}
 
 	// One read of /proc/net/unix serves every candidate's socket lookup.
-	listening := listeningSockets()
+	listening, ok := listeningSockets()
+	gaps.SocketTableUnread = !ok
 
 	cands := make([]candidate, 0, len(isCandidate))
 	for pid := range isCandidate {
@@ -337,22 +346,30 @@ func inventoryCandidates(ctx context.Context) []candidate {
 		})
 	}
 	sort.Slice(cands, func(i, j int) bool { return cands[i].PID < cands[j].PID })
-	return cands
+	return cands, gaps
 }
 
 // readProcTable walks /proc once, recording each live process's stat line and owning
-// uid. Processes that exit mid-walk simply drop out: every read that fails is
+// uid. Processes that exit mid-walk simply drop out: every per-pid read that fails is
 // skipped rather than reported, because a scan of a moving target has no consistent
 // snapshot to promise.
-func readProcTable(ctx context.Context) map[int]procEntry {
+//
+// whole distinguishes that expected churn from the two cases where the walk itself did
+// not cover /proc: the directory could not be listed, or the context expired part-way.
+// Both return a table that is short by an unknown amount, and the difference matters
+// twice over — a server can be missing outright, and a server that *is* reported can
+// carry an undercounted Children list, since children are attributed from this same
+// table. An undercount there understates what a kill would destroy, which is the one
+// number the confirmation prompt exists to get right.
+func readProcTable(ctx context.Context) (procs map[int]procEntry, whole bool) {
 	entries, err := os.ReadDir(procRoot)
 	if err != nil {
-		return nil
+		return nil, false
 	}
-	procs := make(map[int]procEntry, len(entries))
+	procs = make(map[int]procEntry, len(entries))
 	for _, e := range entries {
 		if ctx.Err() != nil {
-			return procs
+			return procs, false
 		}
 		pid, err := strconv.Atoi(e.Name())
 		if err != nil {
@@ -378,7 +395,7 @@ func readProcTable(ctx context.Context) map[int]procEntry {
 		}
 		procs[pid] = procEntry{stat: st, uid: sys.Uid}
 	}
-	return procs
+	return procs, true
 }
 
 // cwdDeleted reports whether the process's working directory has been removed. The

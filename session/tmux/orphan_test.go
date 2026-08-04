@@ -215,3 +215,17 @@ func TestAssembleServersCarriesTheFieldsTheReaperArmsWith(t *testing.T) {
 	require.True(t, got[0].CWDDeleted)
 	require.Equal(t, []ChildProc{{PID: 11, Comm: "claude", Started: kidStarted}}, got[0].Children)
 }
+
+// TestScanGapsAny pins the predicate the report and the reaper both branch on.
+//
+// It is asserted directly rather than by mutating the refusal in cli_reap.go, per the
+// project rule about destructive guards: the way to show a kill guard is load-bearing
+// is to extract its predicate and test that, not to delete the guard and watch what
+// happens. Any() is that predicate, and "no gaps" is the only value that lets a caller
+// read an empty result as proof.
+func TestScanGapsAny(t *testing.T) {
+	require.False(t, ScanGaps{}.Any(), "a complete scan must not claim a gap")
+	require.True(t, ScanGaps{SocketTableUnread: true}.Any())
+	require.True(t, ScanGaps{ProcTableTruncated: true}.Any())
+	require.True(t, ScanGaps{SocketTableUnread: true, ProcTableTruncated: true}.Any())
+}

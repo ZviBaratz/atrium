@@ -69,6 +69,31 @@ type OrphanServer struct {
 	Children   []ChildProc
 }
 
+// ScanGaps records the ways one inventory pass failed to be exhaustive. It exists for
+// the same reason ReachableKnown does: this scan reports a class of failure that is
+// invisible by construction, so "the inventory ran and found no servers" and "the
+// inventory could not see" must not render as the same sentence. Without it a read
+// error on either source below produces an empty list, which is indistinguishable
+// from a clean host.
+//
+// The fields are independent rather than one bool because the two gaps have different
+// consequences and therefore different remedies — see the renderer.
+type ScanGaps struct {
+	// SocketTableUnread: /proc/net/unix could not be read. A server is identified by
+	// the socket it is listening on, so with this table missing every candidate loses
+	// its path and is dropped — the scan reports nothing at all, not merely less.
+	SocketTableUnread bool
+	// ProcTableTruncated: the walk over /proc did not finish, because the context
+	// expired part-way. Servers may be absent from the result, and a server that *is*
+	// reported may carry an undercounted Children list, since children are attributed
+	// from the same partial table.
+	ProcTableTruncated bool
+}
+
+// Any reports whether the pass left anything unseen, and so whether an empty or short
+// result is allowed to be read as proof.
+func (g ScanGaps) Any() bool { return g.SocketTableUnread || g.ProcTableTruncated }
+
 // candidate is one process the platform inventory judged worth classifying: owned by
 // this uid and plausibly a tmux server. Ownership is decided from these fields by
 // assembleServers, not by the inventory.
@@ -94,14 +119,21 @@ var (
 // Linux, where there is no /proc to inventory and the callers render the section as
 // unavailable.
 //
+// gaps reports whether the inventory could actually see everything. An empty servers
+// slice means "none found" only when gaps.Any() is false; otherwise the scan was
+// blind, and callers must not read the emptiness as a clean host. gaps is always zero
+// when supported is false, so the unsupported branch is the only thing a caller has to
+// explain there.
+//
 // It is read-only: it reads /proc and issues `tmux -S … display-message`, which
 // cannot mutate a session. Nothing here signals, unlinks or deletes anything.
-func ScanServers(ctx context.Context) (servers []OrphanServer, supported bool) {
+func ScanServers(ctx context.Context) (servers []OrphanServer, supported bool, gaps ScanGaps) {
 	if !orphanScanSupported {
-		return nil, false
+		return nil, false, ScanGaps{}
 	}
 	live, liveKnown := ambientPID(ctx)
-	return assembleServers(ctx, scanCandidates(ctx), live, liveKnown), true
+	cands, gaps := scanCandidates(ctx)
+	return assembleServers(ctx, cands, live, liveKnown), true, gaps
 }
 
 // assembleServers turns platform candidates into classified servers: it drops the
