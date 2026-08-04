@@ -20,15 +20,23 @@ import (
 //
 // Now is the instant the snapshot was taken, carried so that rendering an age is a
 // pure function of the result rather than of when it happens to be printed.
-// Gaps records whether the server scan could see everything it was asked about. An
-// empty Servers slice is evidence of a clean host only when Gaps.Any() is false.
+//
+// Each half carries its own account of what it could not see, and neither is evidence
+// without it: an empty Servers slice means a clean host only when Gaps.Any() is false,
+// and an empty Stale means a clean directory only when StaleGaps.Any() is false.
 type OrphanResult struct {
 	Supported bool
 	Servers   []tmux.OrphanServer
 	Gaps      tmux.ScanGaps
 	SocketDir string
-	Stale     []tmux.StaleSocket
-	Now       time.Time
+	// SocketDirFromServer reports that SocketDir came from the live server rather than
+	// from reconstructing tmux's layout. It is not a gap — the scan of SocketDir was
+	// complete — but it decides what "none in SocketDir" is a statement *about*, so the
+	// renderer words the sentence around it (#598).
+	SocketDirFromServer bool
+	Stale               []tmux.StaleSocket
+	StaleGaps           tmux.StaleGaps
+	Now                 time.Time
 }
 
 // orphanScan and staleScan are seams so CheckOrphans' assembly is testable without a
@@ -44,14 +52,16 @@ var (
 // signals nothing — every remedy it can offer is printed for the user to run.
 func CheckOrphans(ctx context.Context) OrphanResult {
 	servers, supported, gaps := orphanScan(ctx)
-	stale, dir := staleScan(ctx)
+	stale := staleScan(ctx)
 	return OrphanResult{
-		Supported: supported,
-		Servers:   servers,
-		Gaps:      gaps,
-		SocketDir: dir,
-		Stale:     stale,
-		Now:       time.Now(),
+		Supported:           supported,
+		Servers:             servers,
+		Gaps:                gaps,
+		SocketDir:           stale.Dir,
+		SocketDirFromServer: stale.DirFromServer,
+		Stale:               stale.Stale,
+		StaleGaps:           stale.Gaps,
+		Now:                 time.Now(),
 	}
 }
 
@@ -82,7 +92,12 @@ func RenderOrphans(r OrphanResult) string {
 		// the one case where "none" would be a fabrication rather than a finding, and
 		// any rows that did survive still print below.
 		renderScanGaps(&b, r.Gaps)
-	case len(r.Servers) == 0 && len(r.Stale) == 0:
+	// The stale half's gaps have to be tested *here*, in the server half's fast path,
+	// even though renderStaleSockets is what reports them. This case writes "none" and
+	// returns, so an empty host whose stale probes all failed lands on it and never
+	// reaches the renderer below — a gap wired in anywhere further down renders as
+	// nothing at all.
+	case len(r.Servers) == 0 && len(r.Stale) == 0 && !r.StaleGaps.Any():
 		b.WriteString("  none\n")
 		return b.String()
 	}
@@ -167,20 +182,114 @@ func renderOrphanServer(b *strings.Builder, s tmux.OrphanServer, now time.Time, 
 // one, which lives in this same directory. #584 shipped a glob delete over this
 // directory and it cost thirteen running sessions; naming verified paths cannot do
 // that. Atrium prints the command and never runs it.
+//
+// "none in <dir>" prints only when the scan established it. A pass that could not list
+// the directory, or could not probe the files in it, produced the same empty list a
+// clean directory does, so claiming "none" off that emptiness is a fabrication rather
+// than a finding (#598) — the same rule RenderGates' doc comment states, and the same
+// one the server half above now follows. A gap note prints in addition to whatever
+// files were found, never instead of them: the files that were classified are real
+// whatever else went unseen.
 func renderStaleSockets(b *strings.Builder, r OrphanResult) {
-	if len(r.Stale) == 0 {
-		if r.SocketDir != "" {
-			fmt.Fprintf(b, "  stale socket files: none in %s\n", r.SocketDir)
+	switch {
+	case len(r.Stale) > 0:
+		fmt.Fprintf(b, "  stale socket files: %d in %s — files only, no server behind them\n",
+			len(r.Stale), r.SocketDir)
+	case r.StaleGaps.Any():
+		// Deliberately no count and no "none": the pass established neither. The gap
+		// sentences below carry the whole of what is known.
+		fmt.Fprintf(b, "  stale socket files: not established%s\n", inDir(r.SocketDir))
+	case r.SocketDir != "":
+		fmt.Fprintf(b, "  stale socket files: none in %s\n", r.SocketDir)
+		if !r.SocketDirFromServer {
+			// Which directory this is, is the whole content of the sentence above. With
+			// no server's answer to use, it is where tmux *would* bind rather than where
+			// one is bound — a true "none" about a directory nothing need ever have used.
+			//
+			// "no server answered", not "no server is running": the query comes back
+			// empty when tmux is off PATH or the probe's budget was spent just as it does
+			// on an empty fleet, and a server may well be running in those first two.
+			// That is the distinction #599 drew for the pid probe, and claiming the
+			// stronger fact here would be the same error one sentence over.
+			b.WriteString("      note: no server answered for Atrium's socket, so that is where tmux\n")
+			b.WriteString("        would bind rather than where a server is bound — one started under\n")
+			b.WriteString("        another TMUX_TMPDIR left its files somewhere else\n")
 		}
+	default:
+		// A zero-value result: no directory, nothing found, nothing unseen. Saying
+		// "none in " would name no subject at all.
 		return
 	}
-	fmt.Fprintf(b, "  stale socket files: %d in %s — files only, no server behind them\n",
-		len(r.Stale), r.SocketDir)
-	paths := make([]string, 0, len(r.Stale))
-	for _, s := range r.Stale {
-		paths = append(paths, s.Path)
+	renderStaleGaps(b, r.StaleGaps, len(r.Stale) > 0)
+	if len(r.Stale) > 0 {
+		paths := make([]string, 0, len(r.Stale))
+		for _, s := range r.Stale {
+			paths = append(paths, s.Path)
+		}
+		fmt.Fprintf(b, "      → rm -- %s\n", strings.Join(paths, " "))
 	}
-	fmt.Fprintf(b, "      → rm -- %s\n", strings.Join(paths, " "))
+}
+
+// renderStaleGaps says what the stale-socket pass could not establish. Each gap gets
+// its own sentence and its own remedy because the two differ in kind: an unlistable
+// directory is an existence or permission problem, while an unrunnable probe means
+// tmux itself could not be executed.
+//
+// Neither prints renderScanGaps' "`atrium reap --kill` refuses to act" line, and that
+// asymmetry is deliberate. That refusal is real for the server inventory, where a short
+// Children list would buy consent against an understatement of what dies. Nothing acts
+// on this list at all — reap prints it and the remedy is an `rm --` line the user runs —
+// so promising a refusal here would be a false claim of its own, in the renderer whose
+// subject is false claims.
+//
+// found says whether files were listed above, which is the difference between "these
+// are the only files there and none could be read" and "the list you just read may be
+// short by this many".
+func renderStaleGaps(b *strings.Builder, g tmux.StaleGaps, found bool) {
+	if g.DirUnread {
+		b.WriteString("      ⚠ the directory could not be listed, so nothing about its contents is\n")
+		b.WriteString("        known: tmux leaves a socket file behind for every server that dies,\n")
+		b.WriteString("        and none of them can be named until this directory can be read\n")
+		b.WriteString("        → check that it exists and is readable, then re-run\n")
+	}
+	if g.Unprobed > 0 {
+		// Two pre-wrapped sentences rather than one with a clause spliced into it: the
+		// consequence genuinely differs between the two cases, and a variable-length
+		// insert wraps at an unpredictable column — which on a real host ran this line
+		// well past the width every other line here keeps to.
+		if found {
+			fmt.Fprintf(b, "      ⚠ %d further socket %s there could not be classified: tmux could\n",
+				g.Unprobed, plural(g.Unprobed, "file", "files"))
+			fmt.Fprintf(b, "        not be run against %s, so the list above may be short\n",
+				plural(g.Unprobed, "it", "them"))
+		} else {
+			fmt.Fprintf(b, "      ⚠ %d socket %s there could not be classified: tmux could not be\n",
+				g.Unprobed, plural(g.Unprobed, "file", "files"))
+			fmt.Fprintf(b, "        run against %s, so the list above is empty for want of an\n",
+				plural(g.Unprobed, "it", "them"))
+			b.WriteString("        answer, not for want of files\n")
+		}
+		b.WriteString("        → check that tmux is on PATH, then re-run\n")
+	}
+}
+
+// plural picks a word for n. Spelled out rather than appending "s", so a caller reading
+// the format string sees both forms where they are used.
+func plural(n int, one, many string) string {
+	if n == 1 {
+		return one
+	}
+	return many
+}
+
+// inDir renders the " in <dir>" clause, or nothing when there is no directory to name.
+// A dangling "in " names no subject, which is the failure mode this whole section is
+// about.
+func inDir(dir string) string {
+	if dir == "" {
+		return ""
+	}
+	return " in " + dir
 }
 
 // childSummary describes what a server is holding, which is what makes killing it a
