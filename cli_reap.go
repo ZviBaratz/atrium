@@ -40,6 +40,11 @@ var (
 			"prompt, for scripts). A server whose reachability could not be determined — tmux\n" +
 			"missing, a probe that could not run — is never killed, with or without --all,\n" +
 			"because nothing about it has been established.\n\n" +
+			"One case suspends what is said above about reachable servers. When the probe that\n" +
+			"identifies this Atrium's own tmux server cannot answer, a reachable server listed\n" +
+			"here may be that server. Its row is then printed with no tmux command beside it,\n" +
+			"and --all refuses rather than target it. Re-run once the probe works, or drop\n" +
+			"--all: the servers proven unreachable are still proven, and still killable.\n\n" +
 			"It deletes nothing. A killed server's socket file is inert; `atrium doctor` lists\n" +
 			"the leftover files and prints the command to remove them.\n\n" +
 			"Linux only: finding a server whose socket no longer resolves needs a process\n" +
@@ -145,17 +150,24 @@ func runReap(ctx context.Context, w io.Writer, in io.Reader, opts reapOpts) erro
 		return fmt.Errorf("refusing to kill on an incomplete scan: the process inventory could not see everything, so what a kill would destroy is not fully known — re-run %s reap --kill once the scan comes back complete", binName)
 	}
 
+	targets := reapTargets(res.Servers, opts.all)
 	// --all is the one mode that kills a *reachable* server, and the only thing keeping
 	// it off this Atrium's own is the pid exclusion in assembleServers. With the live
 	// server unidentified there is no exclusion, and the live server answers its own
 	// socket — so it arrives Reachable and --all would target it, taking the fleet and
 	// every agent in it. The default set needs no such guard: it is unreachable-only,
 	// and a server that answered is proof it is not that.
-	if opts.all && res.Gaps.LiveServerUnknown {
+	//
+	// Keyed on the selected targets rather than on the flag, and that scoping matters:
+	// with nothing reachable to select, --all picks exactly what the default picks, and
+	// refusing there would repeat #593's shape — a probe that could not answer becoming
+	// a refusal to reap on the very host that needed it. Placed below reapTargets for
+	// that reason, and still above the only reapServer call, which is what makes it a
+	// guard.
+	if opts.all && res.Gaps.LiveServerUnknown && anyReachable(targets) {
 		return fmt.Errorf("refusing --all: this %s's own tmux server could not be identified, so a reachable server here may be it — re-run once the probe works, or drop --all to kill only the unreachable ones", binName)
 	}
 
-	targets := reapTargets(res.Servers, opts.all)
 	if len(targets) == 0 {
 		reapf(w, "\nnothing to kill.\n")
 		return nil
@@ -217,6 +229,19 @@ func reapTargets(servers []tmux.OrphanServer, all bool) []tmux.OrphanServer {
 		targets = append(targets, s)
 	}
 	return targets
+}
+
+// anyReachable reports whether the selected targets include a server that answered its
+// own socket. Only --all can put one there — reapTargets drops reachable servers
+// otherwise — which is what makes this the precise test for "would this run kill
+// something that might be the live fleet".
+func anyReachable(servers []tmux.OrphanServer) bool {
+	for _, s := range servers {
+		if s.Reachable {
+			return true
+		}
+	}
+	return false
 }
 
 // confirmReap names everything that dies with this server and asks. Defaults to no:

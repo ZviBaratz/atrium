@@ -456,6 +456,49 @@ func TestReapKillAllRefusesWhenTheLiveServerIsUnknown(t *testing.T) {
 		require.True(t, procs.alive[1952486],
 			"the reachable server is not a default target, so it is untouched")
 	})
+
+	// The refusal is keyed on the selected targets, not on the flag. With nothing
+	// reachable to select, `--all` picks exactly what the default picks — every target
+	// proven unreachable — so there is no reachable row that might be the live server,
+	// and nothing to refuse. Refusing anyway would be #593's shape a second time: a
+	// probe that could not answer turning into a declined reap on the host that needed
+	// one.
+	t.Run("--all proceeds when no target is reachable", func(t *testing.T) {
+		procs := newFakeProcs().add(1499239, 1499240).install(t)
+		res := result(unreachable)
+		res.Gaps = tmux.ScanGaps{LiveServerUnknown: true}
+		stubReapCheck(t, res)
+
+		var out bytes.Buffer
+		require.NoError(t, runReap(t.Context(), &out, strings.NewReader(""),
+			reapOpts{kill: true, all: true, yes: true}))
+		require.False(t, procs.alive[1499239],
+			"an unidentified live server must not block a kill every target is proven safe for")
+	})
+}
+
+// TestReapKillAllKillsAReachableServerWhenTheLiveOneIsIdentified is the happy path the
+// guard above must not have taken away.
+//
+// `--all` exists to stop a reachable server, and an identified live server is what
+// makes that safe: it was excluded by pid before classification, so a reachable row is
+// provably not the fleet. Without this, a "tightening" that refused `--all` outright —
+// or one that keyed the refusal on the flag rather than on the targets — would leave
+// the whole suite green while the flag did nothing but error.
+func TestReapKillAllKillsAReachableServerWhenTheLiveOneIsIdentified(t *testing.T) {
+	reachable := orphan(20)
+	reachable.Reachable = true
+
+	procs := newFakeProcs().add(20).install(t)
+	stubReapCheck(t, result(reachable))
+
+	var out bytes.Buffer
+	require.NoError(t, runReap(t.Context(), &out, strings.NewReader(""),
+		reapOpts{kill: true, all: true, yes: true}))
+
+	require.False(t, procs.alive[20], "--all must still stop a reachable server")
+	require.Contains(t, procs.sent, "SIGTERM->20")
+	require.Contains(t, out.String(), "1 killed")
 }
 
 // TestReapKillRefusesAnIncompleteScan applies "positive proof only" to the inventory

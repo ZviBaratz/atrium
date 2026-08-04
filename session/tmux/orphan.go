@@ -69,15 +69,18 @@ type OrphanServer struct {
 	Children   []ChildProc
 }
 
-// ScanGaps records the ways one inventory pass failed to be exhaustive. It exists for
-// the same reason ReachableKnown does: this scan reports a class of failure that is
+// ScanGaps records the questions one scan pass could not answer. It exists for the
+// same reason ReachableKnown does: this scan reports a class of failure that is
 // invisible by construction, so "the inventory ran and found no servers" and "the
 // inventory could not see" must not render as the same sentence. Without it a read
 // error on either source below produces an empty list, which is indistinguishable
 // from a clean host.
 //
-// The fields are independent rather than one bool because the two gaps have different
-// consequences and therefore different remedies — see the renderer.
+// The fields are independent bools rather than one because each unanswered question
+// has its own consequence and therefore its own remedy — see the renderer. They are
+// also not all of a kind: the first two are gaps in the *inventory* and are what
+// Any() reports, while LiveServerUnknown leaves the inventory complete and constrains
+// only what may be done with it. Any()'s doc comment is where that split is argued.
 type ScanGaps struct {
 	// SocketTableUnread: /proc/net/unix could not be read. A server is identified by
 	// the socket it is listening on, so with this table missing every candidate loses
@@ -177,9 +180,12 @@ func ScanServers(ctx context.Context) (servers []OrphanServer, supported bool, g
 
 // probeAmbient asks which server is on the ambient socket, under one probe's share of
 // the budget. A wedged live server then costs this scan one probe rather than all of
-// it, and "could not be determined" is what the caller already treats as nothing to
-// exclude.
-func probeAmbient(ctx context.Context) (pid int, found bool) {
+// it, and spending that budget is one of the ways the answer comes back unknown.
+//
+// known, not found: the distinction ambientServerPID draws is the whole point of it,
+// and a wrapper that renamed the result back would put the discarded word in front of
+// every reader who arrives here first.
+func probeAmbient(ctx context.Context) (pid int, known bool) {
 	probeCtx, cancel := context.WithTimeout(ctx, orphanProbeBudget)
 	defer cancel()
 	return ambientPID(probeCtx)
