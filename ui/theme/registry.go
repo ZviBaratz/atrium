@@ -93,6 +93,10 @@ func plainGlyphs() Glyphs {
 		DiffAdd:       "+",
 		DiffDel:       "-",
 		TextCursor:    "▌",
+		// Lower-block elements U+2581..U+2588, low→full: eight legible levels in
+		// one column. Same Unicode block as SelectionMark (▎), TextCursor (▌) and
+		// the plain-rung spinner bars, so a font that renders those renders these.
+		ContextRamp: []string{"▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"},
 	}
 }
 
@@ -154,6 +158,11 @@ func asciiGlyphs() Glyphs {
 	g.Handoff = ">"
 	g.AcctAvailable = "*"
 	g.AcctLimited = "x"
+	// The block ramp is the one glyph here with no 7-bit equivalent in kind, so
+	// the ascii rung substitutes a density ramp instead of a height one: the
+	// marks get visually heavier left to right rather than taller. Eight rungs,
+	// same order, so the index math is identical across all three rungs.
+	g.ContextRamp = []string{".", ":", "-", "=", "+", "*", "%", "#"}
 	// AutoBadge, DiffAdd, DiffDel are already ASCII/empty in plainGlyphs — inherited.
 	return g
 }

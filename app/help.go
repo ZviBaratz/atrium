@@ -152,9 +152,28 @@ func legendGroups() []legendGroup {
 			{glyph: g.Note, style: t.PurpleStyle(), label: "note"},
 			{glyph: g.Muted, style: t.DimStyle(), label: "muted"},
 			{glyph: g.Warn, style: t.AttentionStyle(), label: "stale"},
+			// The context meter, shown by its full rung. One sample rather than the
+			// whole eight-rung ladder: the legend answers "what is this mark on my
+			// row", and the ramp is self-explaining once you know it is a meter —
+			// eight glyphs here would cost 16 cells on a line already near the
+			// overlay width. It renders only in the opt-in `bar` mode, but the
+			// legend is a projection of the glyph table, not of the active config.
+			{glyph: contextRampSample(g), style: t.DimStyle(), label: "context"},
 			{glyph: g.AutoBadge, rendered: t.BadgeStyle().Render(" " + g.AutoBadge + "AUTO "), label: "auto-accepting"},
 		}},
 	}
+}
+
+// contextRampSample returns the ramp rung the legend stands the meter in for —
+// the full one, which is both the most recognizable and the one whose meaning
+// ("this session is nearly out of context") most needs a legend entry. Guarded
+// against an empty table so the legend degrades to a blank cell rather than
+// panicking; the table's length is pinned in ui/theme's own tests.
+func contextRampSample(g theme.Glyphs) string {
+	if len(g.ContextRamp) == 0 {
+		return " "
+	}
+	return g.ContextRamp[len(g.ContextRamp)-1]
 }
 
 // legendLines renders the legend groups, one line per group: a padded group title

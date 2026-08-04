@@ -256,6 +256,20 @@ type Instance struct {
 	// In-memory only: the first post-restore tick re-extracts once.
 	modelStamp transcript.Stamp
 
+	// contextUsage is how many tokens the session's conversation occupied at its
+	// newest real assistant turn, plus the model of that same entry (#596).
+	// Written only on the main thread (SetUsageMeta), like modelID. Deliberately
+	// NOT persisted: unlike the model, a token count is a claim about a live
+	// transcript that goes stale the moment the session takes another turn, and a
+	// restored session re-derives it on its first post-restore tick. Zero tokens
+	// = no reading, and the chip is absent rather than showing a 0.
+	contextUsage transcript.Usage
+	// usageStamp memoizes the transcript state contextUsage was extracted from,
+	// with the same cross-thread contract as modelStamp: read in the poll
+	// goroutine (ComputeUsage), written on the main thread, serialized by the
+	// non-overlapping tick chain.
+	usageStamp transcript.Stamp
+
 	// endedAsking records that the last turn ended by asking the user something
 	// (#571), so a queued follow-up is not delivered as the answer to a question
 	// they never saw. Written only on the main thread (SetAskedMeta), like modelID.

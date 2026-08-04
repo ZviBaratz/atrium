@@ -481,6 +481,17 @@ type Config struct {
 	// before the first turn, hook-reported truth after), "off" hides it.
 	// Everything else normalizes to "on" (GetEffortIndicator).
 	EffortIndicator string `json:"effort_indicator,omitempty"`
+	// ContextIndicator controls the per-session context-window chip in the list
+	// (#596): "percent" (default) shows how full the window is, "count" shows a
+	// raw token count, "bar" shows a one-cell block meter, "off" hides it.
+	// Everything else — empty, unknown — normalizes to "percent"
+	// (GetContextIndicator).
+	//
+	// Count-fallback is a property of the renderer, not a fifth mode: any non-off
+	// mode falls back to a count when the model's window is unknown, so a stale
+	// window table degrades visibly instead of guessing. "count" is for a user who
+	// wants that fallback unconditionally.
+	ContextIndicator string `json:"context_indicator,omitempty"`
 	// SessionSort selects how sessions are ordered within each repo group:
 	// "creation" (default — manual/creation order, reorderable with J/K) or
 	// "status" (action-priority: NeedsInput, unread Ready, Ready, Running,

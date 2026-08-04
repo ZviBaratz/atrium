@@ -129,6 +129,14 @@ type instanceMetaResult struct {
 	model      string
 	modelStamp transcript.Stamp
 	modelOK    bool
+	// usage / usageStamp carry a transcript context-window extraction (#596);
+	// usageOK marks a result worth applying (ComputeUsage returns ok=false for
+	// non-claude, unavailable, or unchanged transcripts). Its own stamp, beside
+	// modelStamp rather than sharing it: the two readers scan independently, so
+	// one memo must not gate the other.
+	usage      transcript.Usage
+	usageStamp transcript.Stamp
+	usageOK    bool
 	// asked / askedStamp carry the #571 question check — whether the turn that just
 	// ended did so by asking the user something; askedOK marks a result worth applying
 	// (ComputeAsked returns ok=false for non-claude, unavailable, or unchanged
@@ -678,6 +686,10 @@ func collectMetadata(ctx context.Context, poll []*session.Instance, selected *se
 			// Transcript model is stamp-gated: an idle claude session costs one
 			// ReadDir + Stat per tick, a streaming one a ≤128KB tail parse.
 			r.model, r.modelStamp, r.modelOK = instance.ComputeModel()
+			// Context occupancy is stamp-gated the same way, over the same file: an
+			// idle claude session costs one more ReadDir + Stat per tick and no file
+			// open, a streaming one a second ≤128KB tail parse.
+			r.usage, r.usageStamp, r.usageOK = instance.ComputeUsage()
 			// Live permission mode reads the value Poll just detected from the
 			// footer — no extra capture; only applied when it changed.
 			r.mode, r.modeOK = instance.ComputeMode()
@@ -751,6 +763,9 @@ func (m *home) applyMetadataResults(results []instanceMetaResult, emit bool) []t
 		r.instance.SetPRStatus(r.prStatus)
 		if r.modelOK {
 			r.instance.SetModelMeta(r.model, r.modelStamp)
+		}
+		if r.usageOK {
+			r.instance.SetUsageMeta(r.usage, r.usageStamp)
 		}
 		if r.askedOK {
 			r.instance.SetAskedMeta(r.asked, r.askedStamp)

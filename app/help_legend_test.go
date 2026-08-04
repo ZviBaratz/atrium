@@ -47,6 +47,11 @@ func TestLegendCoversRowVocabulary(t *testing.T) {
 		// too — which is exactly why they are categorized here instead.
 		"AcctAvailable": "accounts-panel availability mark (panel chrome, not a row status)",
 		"AcctLimited":   "accounts-panel availability mark (panel chrome, not a row status)",
+		// A []string, so the loop's string branch cannot measure it — the same
+		// reason SpinnerFrames is here. It IS row vocabulary and it IS in the
+		// legend: the badges group carries its full rung, asserted explicitly
+		// below rather than by the reflection loop.
+		"ContextRamp": "a []string ramp, represented in the badges group by its full rung (asserted below)",
 	}
 
 	g := theme.Current().Glyphs
@@ -66,4 +71,12 @@ func TestLegendCoversRowVocabulary(t *testing.T) {
 
 	// The working spinner's first frame stands in for the SpinnerFrames field.
 	require.Contains(t, content, g.SpinnerFrames[0], "the working spinner frame must appear in the legend")
+
+	// The context meter's full rung stands in for the ContextRamp field. Asserted
+	// on the rung the legend actually renders, not on any rung: the entry exists
+	// so a user who turns on `bar` mode can identify the mark, and a legend
+	// showing a different rung than the row draws at 100% would not do that.
+	require.Contains(t, content, g.ContextRamp[len(g.ContextRamp)-1],
+		"the context meter's full rung must appear in the legend")
+	require.Contains(t, content, "context", "the context meter's legend entry must be labelled")
 }

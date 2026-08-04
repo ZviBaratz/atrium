@@ -388,6 +388,13 @@ func (l *List) SetEffortIndicator(mode string) {
 	l.renderer.effortIndicator = mode
 }
 
+// SetContextIndicator sets the context-chip mode (see
+// InstanceRenderer.contextIndicator). The app passes the normalized
+// config.GetContextIndicator value at startup and on settings changes.
+func (l *List) SetContextIndicator(mode string) {
+	l.renderer.contextIndicator = mode
+}
+
 // SetFilter updates the incremental filter query and clamps the selection to the
 // nearest still-visible item. Pass an empty string to disable filtering.
 func (l *List) SetFilter(query string) {
