@@ -1,7 +1,9 @@
 # Orphaned tmux servers no cleanup path can reach (#547)
 
 Status: PR 1 (prevention) merged 2026-08-04 as `2e8b4da` (#589). PR 2 (the reaper)
-open — see `docs/superpowers/plans/2026-08-04-orphaned-tmux-servers.md`.
+implemented — `session/tmux/orphan*.go`, `internal/doctor/orphans.go`, `cli_reap.go`.
+Two design changes fell out of running the scan against a real host; both are in the
+falsified-claims table below.
 
 This is revision 4. Revisions 1–3 are not reproduced; what they got wrong is, because
 each wrong answer here was expensive and two of them would have destroyed live work.
@@ -114,6 +116,9 @@ them is the reason this design is not the one that shipped.
 | The precheck / `cfgparse` probes are a "textbook class (c) orphan" | **Overstated.** Both run `new-session -d 'sleep 60'`; when the sleep exits the session dies and `exit-empty` retires the server. Any orphan is bounded at ≤60 s and holds nothing. The durable artifact is the socket *file* — class (a). |
 | `comm == "tmux: server"` is a stable identity | **Fragile.** tmux's Linux `setproctitle` shim builds `"<progname>: server (<socket>)"`, truncates to 16 bytes, then trims at the last space — `"tmux: server"` falls out only because `getprogname()` is 4 chars. Keep it as a cheap prefilter that **fails open**, never as the gate. |
 | SIGTERM matters because "tmux tears its panes down on it" | **Unsupported.** `server_destroy_pane()` only `close()`s the pty master; there is no `kill()` of the child. Children die from the kernel's pty hangup, which a SIGKILL of the server produces identically. Keep SIGTERM-first for a clean exit and hooks — but the verify-then-signal-survivors step is what carries the correctness. |
+| The argv `-L <name>` fallback names a server whose socket path could not be read | **False in practice, and dangerous.** Measured on the development host: the scan returned 15 candidates and 14 were `tmux: client` attach proxies for *live* sessions. A client passes the comm prefilter and has a socket fd, but that fd is a connected endpoint rather than a listening one — so it has no bound path, which is exactly the condition the fallback triggers on, and its argv carries `-L atrium`. Under the reachability model this document originally specified (one `Reachable bool`) all 14 would have been `Reachable == false` and therefore in the default `reap --kill` set. Dropped entirely: a process that is not listening is not a server. That also removes argv reading from the codebase, so the secret-hygiene rule is structural rather than a discipline. |
+| One `Reachable bool` is enough | **Unsafe.** Reachability is computed by running tmux, so "the probe found nothing" and "the probe could not run" are different facts — and with tmux off `PATH` the *ambient* lookup that excludes the live server fails too, so every live session's server arrives looking like an unreachable orphan. Split into `Reachable` + `ReachableKnown`; only `ReachableKnown && !Reachable` is a kill candidate, with or without `--all`. |
+| `ChildProc` needs only `PID` and `Comm` | **Incomplete.** The plan requires the PID-reuse guard to be applied per child, and there was nothing captured to compare against. `Started` added. |
 | `#{socket_path}` needs a reconstructed-path fallback | **Obsolete.** #587 set `tmux.MinVersion = "3.2"` and enforces it before any session starts; `#{socket_path}` is 2.2+, so it is present wherever this code can run. |
 
 ## PR 1 — prevention (merged, `2e8b4da`)
