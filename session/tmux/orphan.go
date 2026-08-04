@@ -69,6 +69,32 @@ type OrphanServer struct {
 	Children   []ChildProc
 }
 
+// ScanGaps records the ways one inventory pass failed to be exhaustive. It exists for
+// the same reason ReachableKnown does: this scan reports a class of failure that is
+// invisible by construction, so "the inventory ran and found no servers" and "the
+// inventory could not see" must not render as the same sentence. Without it a read
+// error on either source below produces an empty list, which is indistinguishable
+// from a clean host.
+//
+// The fields are independent rather than one bool because the two gaps have different
+// consequences and therefore different remedies — see the renderer.
+type ScanGaps struct {
+	// SocketTableUnread: /proc/net/unix could not be read. A server is identified by
+	// the socket it is listening on, so with this table missing every candidate loses
+	// its path and is dropped — the scan reports nothing at all, not merely less.
+	SocketTableUnread bool
+	// ProcTableTruncated: the walk over /proc did not cover it — either the directory
+	// could not be listed at all, or the context expired part-way. Servers may be
+	// absent from the result, and a server that *is* reported may carry an
+	// undercounted Children list, since children are attributed from the same partial
+	// table.
+	ProcTableTruncated bool
+}
+
+// Any reports whether the pass left anything unseen, and so whether an empty or short
+// result is allowed to be read as proof.
+func (g ScanGaps) Any() bool { return g.SocketTableUnread || g.ProcTableTruncated }
+
 // candidate is one process the platform inventory judged worth classifying: owned by
 // this uid and plausibly a tmux server. Ownership is decided from these fields by
 // assembleServers, not by the inventory.
@@ -89,19 +115,63 @@ var (
 	socketOwner    = probeSocketOwner
 )
 
+// orphanProbeBudget is the share of a scan any single `tmux … display-message` probe
+// may take. The scan-wide budget its callers set (doctor.ProbeTimeout) is still the
+// ceiling; this bounds what one socket can spend of it.
+//
+// Without it one wedged server consumed the whole scan, and with a short walk now
+// reported as a gap that became a blank report: the ambient probe could burn every
+// millisecond of the budget, the /proc walk then found ctx.Err() already set on its
+// first entry, and the scan reported a truncation it had inflicted on itself. Since
+// `reap --kill` refuses on a gap, a wedged live server made the reaper decline — in
+// exactly the situation it exists for. A probe that does not answer inside this window
+// leaves that server's reachability unknown, which is the honest answer and one every
+// caller already handles.
+const orphanProbeBudget = 3 * time.Second
+
 // ScanServers returns the Atrium-owned tmux servers running under this uid, other
 // than the live one on the ambient socket, ordered by pid. supported is false off
 // Linux, where there is no /proc to inventory and the callers render the section as
 // unavailable.
 //
+// gaps reports whether the inventory could actually see everything. An empty servers
+// slice means "none found" only when gaps.Any() is false; otherwise the scan was
+// blind, and callers must not read the emptiness as a clean host. gaps is always zero
+// when supported is false, so the unsupported branch is the only thing a caller has to
+// explain there.
+//
 // It is read-only: it reads /proc and issues `tmux -S … display-message`, which
 // cannot mutate a session. Nothing here signals, unlinks or deletes anything.
-func ScanServers(ctx context.Context) (servers []OrphanServer, supported bool) {
+func ScanServers(ctx context.Context) (servers []OrphanServer, supported bool, gaps ScanGaps) {
 	if !orphanScanSupported {
-		return nil, false
+		return nil, false, ScanGaps{}
 	}
-	live, liveKnown := ambientPID(ctx)
-	return assembleServers(ctx, scanCandidates(ctx), live, liveKnown), true
+	// The /proc walk goes before any tmux command, and that order is load-bearing now
+	// that a short walk is reported as a gap: the walk is local reads costing
+	// milliseconds, while a probe against a wedged server costs its whole budget.
+	// Probing first let a hung tmux manufacture a gap out of a walk that never ran.
+	cands, gaps := scanCandidates(ctx)
+	live, liveKnown := probeAmbient(ctx)
+	return assembleServers(ctx, cands, live, liveKnown), true, gaps
+}
+
+// probeAmbient asks which server is on the ambient socket, under one probe's share of
+// the budget. A wedged live server then costs this scan one probe rather than all of
+// it, and "could not be determined" is what the caller already treats as nothing to
+// exclude.
+func probeAmbient(ctx context.Context) (pid int, found bool) {
+	probeCtx, cancel := context.WithTimeout(ctx, orphanProbeBudget)
+	defer cancel()
+	return ambientPID(probeCtx)
+}
+
+// probeOwner asks which server is listening on path, under one probe's share of the
+// budget. Every owner probe here goes through it, so a socket that never answers costs
+// this scan one probe rather than all the others' time.
+func probeOwner(ctx context.Context, path string) (pid int, known bool) {
+	probeCtx, cancel := context.WithTimeout(ctx, orphanProbeBudget)
+	defer cancel()
+	return socketOwner(probeCtx, path)
 }
 
 // assembleServers turns platform candidates into classified servers: it drops the
@@ -136,7 +206,7 @@ func assembleServers(ctx context.Context, cands []candidate, live int, liveKnown
 		if !ownsSocketName(socket) {
 			continue
 		}
-		owner, known := socketOwner(ctx, c.SocketPath)
+		owner, known := probeOwner(ctx, c.SocketPath)
 		servers = append(servers, OrphanServer{
 			PID:            c.PID,
 			Socket:         socket,
@@ -199,7 +269,7 @@ func staleSocketsIn(ctx context.Context, dir string) []StaleSocket {
 		// Stale means the probe ran *and* found nothing listening. A server that
 		// answered owns its file, and a probe that could not run is not evidence
 		// about anything — both leave the file unreported.
-		owner, known := socketOwner(ctx, path)
+		owner, known := probeOwner(ctx, path)
 		if !known || owner != 0 {
 			continue
 		}

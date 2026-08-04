@@ -371,3 +371,76 @@ func TestReapKillWithNothingToKillSaysSo(t *testing.T) {
 	require.Contains(t, out.String(), "nothing to kill")
 	require.Empty(t, procs.sent)
 }
+
+// TestReapWithoutKillNeverPointsAtAKillItWouldRefuse: one invocation must not both
+// promise a kill and decline it.
+//
+// The report-only path ends by naming `reap --kill` when there is something for it to
+// do. With a gap in the scan that command now refuses — and the section printed four
+// lines above already says so — so naming it anyway puts two contradictory statements
+// about the same command in one output. The complete-scan case is asserted alongside,
+// because a hint that was simply deleted would satisfy the first assertion too.
+func TestReapWithoutKillNeverPointsAtAKillItWouldRefuse(t *testing.T) {
+	const hint = "reap --kill` to stop the unreachable ones"
+
+	for _, tc := range []struct {
+		name     string
+		gaps     tmux.ScanGaps
+		wantHint bool
+	}{
+		{"scan incomplete", tmux.ScanGaps{ProcTableTruncated: true}, false},
+		{"socket table unread", tmux.ScanGaps{SocketTableUnread: true}, false},
+		{"complete scan", tmux.ScanGaps{}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			res := result(orphan(1499239, kid(1499240)))
+			res.Gaps = tc.gaps
+			stubReapCheck(t, res)
+
+			var out bytes.Buffer
+			require.NoError(t, runReap(t.Context(), &out, strings.NewReader(""), reapOpts{}))
+			if tc.wantHint {
+				require.Contains(t, out.String(), hint,
+					"a complete scan with a killable row must still say how to kill it")
+				return
+			}
+			require.NotContains(t, out.String(), hint,
+				"the scan said --kill would refuse; this output must not send the user to it: %q", out.String())
+		})
+	}
+}
+
+// TestReapKillRefusesAnIncompleteScan applies "positive proof only" to the inventory
+// itself.
+//
+// A truncated /proc walk attributes children from a partial table, so a server's
+// Children list can be short — and that list is exactly what the prompt shows before
+// the user consents. Killing on it would take consent obtained against an
+// understatement of what dies: the user agrees to lose one shell and loses thirteen
+// agents. The fixture drives it with --yes and a stdin full of "y" on purpose, so a
+// pass cannot come from the prompt merely defaulting to no; the refusal has to happen
+// before anything is asked.
+func TestReapKillRefusesAnIncompleteScan(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		gaps tmux.ScanGaps
+	}{
+		{"socket table unreadable", tmux.ScanGaps{SocketTableUnread: true}},
+		{"proc walk truncated", tmux.ScanGaps{ProcTableTruncated: true}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			procs := newFakeProcs().add(1499239, 1499240).install(t)
+			res := result(orphan(1499239, kid(1499240)))
+			res.Gaps = tc.gaps
+			stubReapCheck(t, res)
+
+			var out bytes.Buffer
+			err := runReap(t.Context(), &out, strings.NewReader("y\ny\ny\n"),
+				reapOpts{kill: true, yes: true})
+			require.Error(t, err, "an incomplete inventory must not be killed on")
+			require.Contains(t, err.Error(), "incomplete scan")
+			require.Empty(t, procs.sent,
+				"nothing may be signalled when the scan could not see what it would destroy")
+		})
+	}
+}

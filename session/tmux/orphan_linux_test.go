@@ -40,14 +40,14 @@ func TestSocketPathSurvivesUnlink(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = ln.Close() })
 
-	require.Equal(t, path, socketPathFor(os.Getpid(), listeningSockets()),
+	require.Equal(t, path, socketPathFor(os.Getpid(), mustListeningSockets(t)),
 		"a listening socket must be locatable by pid while its file exists")
 
 	// The incident: the socket's directory tree is removed while the server lives.
 	require.NoError(t, os.Remove(path))
 	require.NoFileExists(t, path)
 
-	require.Equal(t, path, socketPathFor(os.Getpid(), listeningSockets()),
+	require.Equal(t, path, socketPathFor(os.Getpid(), mustListeningSockets(t)),
 		"the kernel must still report the bound path after the file is unlinked — "+
 			"without this, an unreachable orphan cannot be named at all")
 }
@@ -74,12 +74,67 @@ func TestListeningSocketsExcludesConnectedPeers(t *testing.T) {
 	// Exactly one row survives the filter: the listener. The dialer and the accepted
 	// endpoint are connected, not listening.
 	var seen int
-	for _, p := range listeningSockets() {
+	for _, p := range mustListeningSockets(t) {
 		if p == path {
 			seen++
 		}
 	}
 	require.Equal(t, 1, seen, "only the listening socket may be reported for %q", path)
+}
+
+// mustListeningSockets reads the listening-socket table and fails the test unless the
+// read itself succeeded.
+//
+// The ok result is load-bearing: listeningSockets used to return a nil map on a read
+// error, which every caller then treated as "this host has no listening sockets" — so
+// an unreadable /proc/net/unix made the whole scan report a clean host. A test that
+// discarded ok would pass identically against that bug and against the fix.
+func mustListeningSockets(t *testing.T) map[uint64]string {
+	t.Helper()
+	socks, ok := listeningSockets()
+	require.True(t, ok, "/proc/net/unix must be readable for this assertion to mean anything")
+	return socks
+}
+
+// TestCandidatesInReportsAnUnreadableSocketTable is the other half of what
+// mustListeningSockets above only asserts as a premise: that the ok result is acted on.
+//
+// The bug was that an unreadable /proc/net/unix rendered as a clean host, and the fix
+// is one assignment — gaps.SocketTableUnread = !ok. Nothing proved that assignment ran:
+// every other test for this flag builds the ScanGaps struct itself, so deleting the
+// line left the suite green. It cannot be driven against the real host either, since it
+// needs a candidate process to exist *and* the table read to fail at the same moment,
+// hence the injected table.
+//
+// The second case is the reason the flag is not simply set at the top of the scan: with
+// no candidate, the table was never needed, and "no tmux process here" is a complete
+// answer rather than a blind one.
+func TestCandidatesInReportsAnUnreadableSocketTable(t *testing.T) {
+	unreadable := func() (map[uint64]string, bool) { return nil, false }
+	// One own-uid process whose comm passes the tmux prefilter — the minimum that makes
+	// the socket table matter at all.
+	uid := uint32(os.Getuid())
+	server := map[int]procEntry{
+		4242: {stat: procStat{Comm: "tmux: server", State: "S", PPid: 1, StartTicks: 100}, uid: uid},
+	}
+
+	cands, gaps := candidatesIn(server, uid, unreadable)
+	require.True(t, gaps.SocketTableUnread,
+		"a socket table that could not be read must be reported, not rendered as a host with no servers")
+	require.False(t, gaps.ProcTableTruncated, "the walk itself was fine; only the socket table was not")
+	for _, c := range cands {
+		require.Empty(t, c.SocketPath,
+			"with no table there is no path to attach, which is why this gap suppresses every row")
+	}
+
+	// A host with no tmux process at all: the table is never consulted, so its
+	// readability is not a gap in the answer.
+	other := map[int]procEntry{
+		4242: {stat: procStat{Comm: "bash", State: "S", PPid: 1, StartTicks: 100}, uid: uid},
+	}
+	_, gaps = candidatesIn(other, uid, unreadable)
+	require.False(t, gaps.Any(),
+		"with nothing to identify, an unread socket table cannot make the answer incomplete")
 }
 
 // TestParseStatHandlesACommContainingASpace is the pure-function half of the
@@ -211,8 +266,11 @@ func TestProcessIsZombieSeesAKilledButUnreapedProcess(t *testing.T) {
 // to each other at all — the assembly tests stub the seams, so nothing else here
 // would notice inventoryCandidates returning garbage.
 func TestScanServersOnThisHostReportsOnlyOwnedSockets(t *testing.T) {
-	servers, supported := ScanServers(t.Context())
+	servers, supported, gaps := ScanServers(t.Context())
 	require.True(t, supported, "Linux must support the scan")
+	// A readable /proc is the premise of every assertion below: with a gap, an empty
+	// servers slice would satisfy the loop vacuously.
+	require.False(t, gaps.Any(), "the scan must be able to see /proc on the test host: %+v", gaps)
 
 	for _, s := range servers {
 		require.True(t, ownsSocketName(s.Socket),
@@ -230,7 +288,7 @@ func TestScanServersOnThisHostReportsOnlyOwnedSockets(t *testing.T) {
 // host were launched with. The report and the reap prompt render only these fields,
 // so proving it here covers both.
 func TestScanServersNeverReportsArgv(t *testing.T) {
-	servers, _ := ScanServers(t.Context())
+	servers, _, _ := ScanServers(t.Context())
 	for _, s := range servers {
 		rendered := fmt.Sprintf("%+v", s)
 		for _, secret := range []string{"GH_TOKEN", "GITHUB_PERSONAL_ACCESS_TOKEN", "gho_", "ghp_", "github_pat_"} {
@@ -333,8 +391,9 @@ func TestOrphanedServerIsFoundAndKillableAfterItsSocketRootIsDeleted(t *testing.
 		"the orphan survived everything the existing toolbox can aim at it")
 
 	// ---- the scan finds what nothing else can ----
-	servers, supported := ScanServers(t.Context())
+	servers, supported, gaps := ScanServers(t.Context())
 	require.True(t, supported)
+	require.False(t, gaps.Any(), "a gap here would make the find below unprovable: %+v", gaps)
 
 	found, ok := findServer(servers, serverPID)
 	require.True(t, ok, "ScanServers did not find the orphan (pid %d); it found %v", serverPID, pidsOf(servers))
@@ -368,7 +427,7 @@ func TestOrphanedServerIsFoundAndKillableAfterItsSocketRootIsDeleted(t *testing.
 	}
 
 	// And it is gone from the scan, which is the property the user actually gets.
-	after, _ := ScanServers(t.Context())
+	after, _, _ := ScanServers(t.Context())
 	_, stillThere := findServer(after, serverPID)
 	require.False(t, stillThere, "a killed orphan must stop being reported")
 }
@@ -493,4 +552,27 @@ func spawnNamed(t *testing.T, comm string) int {
 	})
 	require.NoError(t, cmd.Start())
 	return cmd.Process.Pid
+}
+
+// TestScanServersReportsATruncatedProcWalk drives the real /proc reader with an
+// already-cancelled context, which is the condition the 10 s reap budget can produce on
+// a loaded host.
+//
+// It asserts against the production functions rather than a stubbed seam on purpose: the
+// bug being fixed was that readProcTable returned its partial table with no way to say
+// so, and every layer above then presented it as the whole host. Proving the flag is set
+// by the code that actually walks /proc is the only version of this test that would have
+// failed before the fix.
+func TestScanServersReportsATruncatedProcWalk(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+
+	servers, supported, gaps := ScanServers(ctx)
+	require.True(t, supported, "Linux still supports the scan; it just could not finish it")
+	require.True(t, gaps.ProcTableTruncated,
+		"a /proc walk cut short by the context must be reported as incomplete, not as a clean host")
+	require.Empty(t, servers, "the walk never got far enough to classify anything")
+
+	// The consequence that matters: this result must never render as "none".
+	require.True(t, gaps.Any())
 }
