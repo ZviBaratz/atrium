@@ -271,7 +271,7 @@ type StaleSocket struct {
 // answers that nothing is there. A probe that could not run leaves the file
 // unreported: absence of an answer is not evidence.
 func ScanStaleSockets(ctx context.Context) (stale []StaleSocket, dir string) {
-	dir = socketDir(ctx)
+	dir = SocketDir(ctx)
 	return staleSocketsIn(ctx, dir), dir
 }
 
@@ -305,7 +305,7 @@ func staleSocketsIn(ctx context.Context, dir string) []StaleSocket {
 	return stale
 }
 
-// socketDir returns the directory Atrium's tmux socket lives in.
+// SocketDir returns the directory Atrium's tmux socket lives in.
 //
 // It asks the live server first — `#{socket_path}` is the server's own answer, so it
 // assumes nothing about tmux's layout. Only with no server running does it fall back
@@ -313,7 +313,11 @@ func staleSocketsIn(ctx context.Context, dir string) []StaleSocket {
 // *or missing* TMUX_TMPDIR means /tmp. Getting that fallback wrong could only ever
 // make this report list the wrong directory's files, never delete anything — but it
 // is also what the printed remedy names, so it follows tmux rather than guessing.
-func socketDir(ctx context.Context) string {
+//
+// Exported because the doctor's host-pressure section needs the filesystem this
+// directory sits on (#594), and reconstructing the path a second time there is how
+// the two answers drift. It runs a tmux subprocess, so callers pass a bounded context.
+func SocketDir(ctx context.Context) string {
 	if out, err := tmuxCommand(ctx, "display-message", "-p", "#{socket_path}").Output(); err == nil {
 		if path := strings.TrimSpace(string(out)); path != "" {
 			return filepath.Dir(path)
