@@ -2,6 +2,8 @@ package tmux
 
 import (
 	"context"
+	"errors"
+	"os/exec"
 	"testing"
 	"time"
 
@@ -57,6 +59,22 @@ func stubSocketOwner(t *testing.T, owner func(context.Context, string) (int, boo
 	socketOwner = owner
 }
 
+// stubAmbientPID and stubScanCandidates swap the other two seams, with the same
+// no-parallel rule: they are package-level shared state.
+func stubAmbientPID(t *testing.T, probe func(context.Context) (int, bool)) {
+	t.Helper()
+	orig := ambientPID
+	t.Cleanup(func() { ambientPID = orig })
+	ambientPID = probe
+}
+
+func stubScanCandidates(t *testing.T, scan func(context.Context) ([]candidate, ScanGaps)) {
+	t.Helper()
+	orig := scanCandidates
+	t.Cleanup(func() { scanCandidates = orig })
+	scanCandidates = scan
+}
+
 // unreachableOwner is a socket probe that ran and found nothing listening.
 func unreachableOwner(context.Context, string) (int, bool) { return 0, true }
 
@@ -93,9 +111,14 @@ func TestAssembleServersExcludesTheLiveServer(t *testing.T) {
 	require.Len(t, got, 1)
 	require.Equal(t, 20, got[0].PID, "the ambient live server must not be reported as an orphan")
 
-	// When the ambient lookup could not answer, there is nothing to exclude — the
-	// no-server case. Both rows come back, and the reachability guard below is what
-	// keeps that from being dangerous.
+	// When the ambient lookup could not answer, nothing can be excluded by pid, so both
+	// rows come back — including, potentially, this Atrium's own server. That is not
+	// safe on its own: it is safe because such a server answers its own socket and
+	// arrives Reachable, which the default target set excludes, and because
+	// ScanGaps.LiveServerUnknown then blocks `--all` and suppresses the report's
+	// kill-server remedy. This assertion is the "both rows" half; the guards are
+	// asserted in TestReapKillAllRefusesWhenTheLiveServerIsUnknown and the doctor
+	// render tests.
 	got = assembleServers(context.Background(), cands, 0, false)
 	require.Len(t, got, 2)
 }
@@ -214,4 +237,148 @@ func TestAssembleServersCarriesTheFieldsTheReaperArmsWith(t *testing.T) {
 	require.Equal(t, started, got[0].Started)
 	require.True(t, got[0].CWDDeleted)
 	require.Equal(t, []ChildProc{{PID: 11, Comm: "claude", Started: kidStarted}}, got[0].Children)
+}
+
+// TestScanGapsAny pins the predicate the report and the reaper both branch on.
+//
+// It is asserted directly rather than by mutating the refusal in cli_reap.go, per the
+// project rule about destructive guards: the way to show a kill guard is load-bearing
+// is to extract its predicate and test that, not to delete the guard and watch what
+// happens. Any() is that predicate, and "no gaps" is the only value that lets a caller
+// read an empty result as proof.
+func TestScanGapsAny(t *testing.T) {
+	require.False(t, ScanGaps{}.Any(), "a complete scan must not claim a gap")
+	require.True(t, ScanGaps{SocketTableUnread: true}.Any())
+	require.True(t, ScanGaps{ProcTableTruncated: true}.Any())
+	require.True(t, ScanGaps{SocketTableUnread: true, ProcTableTruncated: true}.Any())
+
+	// LiveServerUnknown is excluded on purpose, and this is the assertion that says so
+	// out loud. Folding it in would read as a tightening but would refuse every kill on
+	// a host where tmux merely could not be probed — the over-refusal that blanked the
+	// report and stopped the reaper once already. Its consequences are handled where
+	// they apply: `--all`, and the report's remedy line.
+	require.False(t, ScanGaps{LiveServerUnknown: true}.Any(),
+		"an unidentified live server does not make the inventory incomplete; "+
+			"it must not block a kill the default target set already proves safe")
+	require.True(t, ScanGaps{LiveServerUnknown: true, ProcTableTruncated: true}.Any(),
+		"a real inventory gap alongside it must still count")
+}
+
+// TestClassifyPIDProbeSeparatesAnEmptySocketFromAnUnaskedQuestion is the rule both tmux
+// probes now share.
+//
+// The distinction is the whole point: a non-zero exit is tmux *reporting* that nothing
+// is on the socket, which is evidence and safe to act on, while tmux being absent or
+// out of budget is no answer at all. ambientServerPID returned false for both, so an
+// unaskable probe was indistinguishable from an empty fleet — and an empty fleet has
+// nothing to exclude, whereas an unanswered probe means the live server may be in the
+// candidate list.
+func TestClassifyPIDProbeSeparatesAnEmptySocketFromAnUnaskedQuestion(t *testing.T) {
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	for _, tc := range []struct {
+		name      string
+		ctx       context.Context
+		out       string
+		err       error
+		wantPID   int
+		wantKnown bool
+	}{
+		{"a server answered", context.Background(), "1499239\n", nil, 1499239, true},
+		{"tmux said no server is there", context.Background(), "", &exec.ExitError{}, 0, true},
+		{"tmux could not be run", context.Background(), "", errors.New("exec: \"tmux\": not found"), 0, false},
+		{"unparseable answer", context.Background(), "not a pid", nil, 0, false},
+		// The deadline check must come first: a process killed by the context also
+		// surfaces as an ExitError, which would otherwise be read as evidence.
+		{"budget spent", cancelled, "", &exec.ExitError{}, 0, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			pid, known := classifyPIDProbe(tc.ctx, []byte(tc.out), tc.err)
+			require.Equal(t, tc.wantKnown, known)
+			require.Equal(t, tc.wantPID, pid)
+		})
+	}
+}
+
+// TestScanServersReportsAnUnidentifiedLiveServer: the flag has to be set by the scan,
+// not merely exist. With the ambient probe unable to answer, nothing was excluded by
+// pid, and every consumer downstream keys on this one field to know that.
+func TestScanServersReportsAnUnidentifiedLiveServer(t *testing.T) {
+	if !orphanScanSupported {
+		t.Skip("ScanServers returns early off Linux")
+	}
+	stubScanCandidates(t, func(context.Context) ([]candidate, ScanGaps) { return nil, ScanGaps{} })
+
+	stubAmbientPID(t, func(context.Context) (int, bool) { return 0, false })
+	_, _, gaps := ScanServers(context.Background())
+	require.True(t, gaps.LiveServerUnknown, "an unanswered ambient probe must be reported")
+	require.False(t, gaps.Any(), "but it is not an inventory gap")
+
+	// The determined empty fleet: tmux answered that nothing is on the socket. There is
+	// no live server to protect, so this must not raise the flag.
+	stubAmbientPID(t, func(context.Context) (int, bool) { return 0, true })
+	_, _, gaps = ScanServers(context.Background())
+	require.False(t, gaps.LiveServerUnknown,
+		"an empty fleet is a determined answer, not an unidentified live server")
+}
+
+// TestScanServersWalksProcBeforeAnyTmuxProbe pins the order the gap reporting depends
+// on.
+//
+// A tmux probe against a wedged server spends the entire scan budget; the /proc walk
+// spends milliseconds. With the probe first, the walk found ctx.Err() already set on
+// its first entry and reported a truncated table — so a wedged live server blanked the
+// report and made `reap --kill` refuse, which is precisely the host that needed
+// reaping. Order is asserted rather than timed because the property is structural: no
+// budget is large enough to make probing-first safe.
+func TestScanServersWalksProcBeforeAnyTmuxProbe(t *testing.T) {
+	if !orphanScanSupported {
+		t.Skip("ScanServers returns early off Linux, so there is no order to assert")
+	}
+	var order []string
+	stubScanCandidates(t, func(context.Context) ([]candidate, ScanGaps) {
+		order = append(order, "walk /proc")
+		return nil, ScanGaps{}
+	})
+	stubAmbientPID(t, func(context.Context) (int, bool) {
+		order = append(order, "probe tmux")
+		return 0, false
+	})
+
+	_, _, gaps := ScanServers(context.Background())
+	require.Equal(t, []string{"walk /proc", "probe tmux"}, order,
+		"the /proc walk must run before anything that can hang, or a hung probe fabricates a gap")
+	require.False(t, gaps.Any())
+}
+
+// TestEveryTmuxProbeGetsItsOwnBudget: a probe must never inherit the whole scan's
+// deadline, or the first wedged socket spends every other probe's time — and, before
+// the walk was reordered, the walk's.
+//
+// The assertion is on the deadline handed *to* the probe, because that is the only
+// observable difference at this seam: both probes ran with the caller's context
+// verbatim before, so a parent with no deadline handed them none at all.
+func TestEveryTmuxProbeGetsItsOwnBudget(t *testing.T) {
+	// No deadline on the parent, which is the case that separates the two behaviours.
+	parent := context.Background()
+
+	var ownerDeadline, ambientDeadline time.Time
+	var ownerOK, ambientOK bool
+	stubSocketOwner(t, func(ctx context.Context, _ string) (int, bool) {
+		ownerDeadline, ownerOK = ctx.Deadline()
+		return 0, true
+	})
+	stubAmbientPID(t, func(ctx context.Context) (int, bool) {
+		ambientDeadline, ambientOK = ctx.Deadline()
+		return 0, false
+	})
+
+	probeAmbient(parent)
+	require.True(t, ambientOK, "the ambient probe must be bounded even when the caller's context is not")
+	require.LessOrEqual(t, time.Until(ambientDeadline), orphanProbeBudget)
+
+	assembleServers(parent, []candidate{{PID: 10, SocketPath: "/tmp/tmux-1000/atrium"}}, 0, false)
+	require.True(t, ownerOK, "an owner probe must be bounded even when the caller's context is not")
+	require.LessOrEqual(t, time.Until(ownerDeadline), orphanProbeBudget)
 }

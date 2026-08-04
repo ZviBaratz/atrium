@@ -27,6 +27,100 @@ func TestRenderOrphansSaysNoneWhenClean(t *testing.T) {
 	require.Equal(t, "Orphaned tmux servers:\n  none\n", out)
 }
 
+// TestRenderOrphansNeverSaysNoneOnABlindScan is the follow-up to the rule above, for
+// the case that rule did not originally cover.
+//
+// A clean host and a host whose scan could not read /proc/net/unix produced byte-
+// identical output — "none" — because an unreadable socket table dropped every
+// candidate. That is the same conflation RenderGates forbids, arrived at from the other
+// direction: not an empty section, but a positive claim of health manufactured out of
+// having seen nothing. Both gaps are asserted to break the "none" fast path, since each
+// reaches it by a different route.
+//
+// The "both" case names both sentences rather than either one: two gaps have two
+// different consequences and two remedies, so a renderer that printed only the first it
+// matched would drop half of what the user has to act on — and asserting one substring
+// there would not notice.
+func TestRenderOrphansNeverSaysNoneOnABlindScan(t *testing.T) {
+	const (
+		blind      = "/proc/net/unix could not be read"
+		incomplete = "did not finish"
+	)
+	for _, tc := range []struct {
+		name string
+		gaps tmux.ScanGaps
+		want []string
+	}{
+		{"socket table unreadable", tmux.ScanGaps{SocketTableUnread: true}, []string{blind}},
+		{"proc walk truncated", tmux.ScanGaps{ProcTableTruncated: true}, []string{incomplete}},
+		{"both", tmux.ScanGaps{SocketTableUnread: true, ProcTableTruncated: true}, []string{blind, incomplete}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			out := RenderOrphans(OrphanResult{Supported: true, Gaps: tc.gaps, Now: now})
+			require.NotContains(t, out, "  none\n",
+				"a scan that could not see must never render as a clean host: %q", out)
+			for _, want := range tc.want {
+				require.Contains(t, out, want)
+			}
+			require.Contains(t, out, "refuses to act",
+				"the row must say the reap will decline, because it does")
+		})
+	}
+}
+
+// TestRenderOrphansStillListsRowsFoundDespiteAGap: a truncated /proc walk understates
+// what is out there, but what it did find is still real. The gap note is printed in
+// addition to those rows, not instead of them — reporting the gap by suppressing the
+// evidence would trade one blind spot for another.
+func TestRenderOrphansStillListsRowsFoundDespiteAGap(t *testing.T) {
+	out := RenderOrphans(OrphanResult{
+		Supported: true,
+		Now:       now,
+		Gaps:      tmux.ScanGaps{ProcTableTruncated: true},
+		Servers: []tmux.OrphanServer{{
+			PID: 1499239, Socket: "atrium", SocketPath: "/tmp/tmux-1000/atrium",
+			Reachable: false, ReachableKnown: true, Started: startedAgo(time.Hour),
+		}},
+	})
+	require.Contains(t, out, "did not finish", "the gap must be stated")
+	require.Contains(t, out, "pid 1499239", "and the server it did find must still be listed")
+	require.Contains(t, out, "UNREACHABLE")
+}
+
+// TestRenderOrphansWithholdsAKillServerItCannotVouchFor is the report-side half of the
+// unidentified-live-server guard.
+//
+// A reachable server's remedy is `tmux -S <path> kill-server`, naming an exact path.
+// That is safe only because the live server was excluded by pid before classification —
+// and when the ambient probe cannot answer, it was not. The live server answers its own
+// socket, so it arrives here Reachable, and the report would hand the user a verified
+// command for killing their own fleet. This is the #584 shape reached through the report
+// rather than through a glob, which is why the assertion is on the *absence* of the
+// command and not merely on the presence of a warning: a caution printed beside a
+// working kill-server is still a working kill-server.
+func TestRenderOrphansWithholdsAKillServerItCannotVouchFor(t *testing.T) {
+	reachable := []tmux.OrphanServer{{
+		PID: 1952486, Socket: "atrium", SocketPath: "/tmp/tmux-1000/atrium",
+		Reachable: true, ReachableKnown: true, Started: startedAgo(time.Hour),
+	}}
+
+	unknown := RenderOrphans(OrphanResult{
+		Supported: true, Now: now, Servers: reachable,
+		Gaps: tmux.ScanGaps{LiveServerUnknown: true},
+	})
+	require.NotContains(t, unknown, "kill-server",
+		"with the live server unidentified this row may be the live server; no kill command may be printed: %q", unknown)
+	require.Contains(t, unknown, "pid 1952486", "the row itself must still be reported")
+	require.Contains(t, unknown, "could not be identified")
+
+	// The control: with the live server identified, the exclusion happened and the
+	// remedy is exactly what makes the row useful. A fix that simply stopped printing
+	// kill-server would pass the assertions above.
+	known := RenderOrphans(OrphanResult{Supported: true, Now: now, Servers: reachable})
+	require.Contains(t, known, "tmux -S /tmp/tmux-1000/atrium kill-server",
+		"an identified live server means this row is provably not it, and the remedy is the point of the row")
+}
+
 // TestRenderOrphansHeadingNamesTmuxServers: doctor already uses "orphan" for a Claude
 // login the account list no longer names, so this section must not claim the bare
 // word.
@@ -160,8 +254,9 @@ func TestCheckOrphansAssemblesBothHalves(t *testing.T) {
 	origServers, origStale := orphanScan, staleScan
 	t.Cleanup(func() { orphanScan, staleScan = origServers, origStale })
 
-	orphanScan = func(context.Context) ([]tmux.OrphanServer, bool) {
-		return []tmux.OrphanServer{{PID: 42, Socket: "atrium"}}, true
+	orphanScan = func(context.Context) ([]tmux.OrphanServer, bool, tmux.ScanGaps) {
+		return []tmux.OrphanServer{{PID: 42, Socket: "atrium"}}, true,
+			tmux.ScanGaps{ProcTableTruncated: true}
 	}
 	staleScan = func(context.Context) ([]tmux.StaleSocket, string) {
 		return []tmux.StaleSocket{{Path: "/tmp/tmux-1000/atrium-old"}}, "/tmp/tmux-1000"
@@ -174,6 +269,9 @@ func TestCheckOrphansAssemblesBothHalves(t *testing.T) {
 	require.Len(t, got.Stale, 1)
 	require.Equal(t, "/tmp/tmux-1000", got.SocketDir)
 	require.False(t, got.Now.IsZero(), "Now must be stamped, or every age renders as time since the epoch")
+	// Carried, not dropped: the gap is the scan's own statement about how much of the
+	// host it saw, and CheckOrphans is the only thing between the scan and the renderer.
+	require.True(t, got.Gaps.ProcTableTruncated, "the scan's gaps must reach the result")
 }
 
 func TestHumanAge(t *testing.T) {

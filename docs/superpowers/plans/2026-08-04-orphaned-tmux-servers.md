@@ -75,6 +75,15 @@ type OrphanServer struct {
 func ScanServers(ctx context.Context) (servers []OrphanServer, supported bool)
 ```
 
+> **As shipped, this sketch is out of date in three ways** — `session/tmux/orphan.go` is
+> the current surface. `OrphanServer` carries `ReachableKnown` beside `Reachable`,
+> because "the probe said nothing is there" and "the probe could not run" have opposite
+> safety consequences. `Socket` and `SocketPath` never fall back to argv, which carries
+> injected `GH_TOKEN`s and, worse, claimed live `tmux: client` attach proxies as reap
+> candidates. And `ScanServers` returns a third result, `gaps ScanGaps`, so that an
+> inventory which could not read `/proc/net/unix` or could not finish its `/proc` walk
+> stops being indistinguishable from a clean host.
+
 Seams mirroring `internal/doctor/oom.go`'s `var (…)` block: package-level `var`s for the process scan and the ambient lookup, so assembly is testable without a live server.
 
 It lives in `session/tmux` because socket naming is tmux-domain knowledge (`socketName()` → `config.RuntimeName()`); `internal/doctor` and `main` both import it with no cycle.

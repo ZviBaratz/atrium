@@ -371,3 +371,167 @@ func TestReapKillWithNothingToKillSaysSo(t *testing.T) {
 	require.Contains(t, out.String(), "nothing to kill")
 	require.Empty(t, procs.sent)
 }
+
+// TestReapWithoutKillNeverPointsAtAKillItWouldRefuse: one invocation must not both
+// promise a kill and decline it.
+//
+// The report-only path ends by naming `reap --kill` when there is something for it to
+// do. With a gap in the scan that command now refuses — and the section printed four
+// lines above already says so — so naming it anyway puts two contradictory statements
+// about the same command in one output. The complete-scan case is asserted alongside,
+// because a hint that was simply deleted would satisfy the first assertion too.
+func TestReapWithoutKillNeverPointsAtAKillItWouldRefuse(t *testing.T) {
+	const hint = "reap --kill` to stop the unreachable ones"
+
+	for _, tc := range []struct {
+		name     string
+		gaps     tmux.ScanGaps
+		wantHint bool
+	}{
+		{"scan incomplete", tmux.ScanGaps{ProcTableTruncated: true}, false},
+		{"socket table unread", tmux.ScanGaps{SocketTableUnread: true}, false},
+		{"complete scan", tmux.ScanGaps{}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			res := result(orphan(1499239, kid(1499240)))
+			res.Gaps = tc.gaps
+			stubReapCheck(t, res)
+
+			var out bytes.Buffer
+			require.NoError(t, runReap(t.Context(), &out, strings.NewReader(""), reapOpts{}))
+			if tc.wantHint {
+				require.Contains(t, out.String(), hint,
+					"a complete scan with a killable row must still say how to kill it")
+				return
+			}
+			require.NotContains(t, out.String(), hint,
+				"the scan said --kill would refuse; this output must not send the user to it: %q", out.String())
+		})
+	}
+}
+
+// TestReapKillAllRefusesWhenTheLiveServerIsUnknown guards the one mode that kills a
+// *reachable* server.
+//
+// The only thing keeping `--all` off this Atrium's own server is the pid exclusion in
+// assembleServers, and that needs the ambient probe to have answered. When it has not,
+// the live server is still in the list, still answering its own socket, and therefore
+// still classified Reachable — so `--all` would target the fleet and every agent in it.
+//
+// The default path is asserted alongside as the control, and it must keep working: it is
+// unreachable-only, and a server that answered is positive proof it is not that. A fix
+// that refused every kill on this flag would pass the first case and fail the second —
+// which is the whole reason LiveServerUnknown is not counted by ScanGaps.Any().
+func TestReapKillAllRefusesWhenTheLiveServerIsUnknown(t *testing.T) {
+	live := orphan(1952486)
+	live.Reachable = true // it answered its own socket, because it is the live server
+	unreachable := orphan(1499239, kid(1499240))
+
+	t.Run("--all refuses", func(t *testing.T) {
+		procs := newFakeProcs().add(1952486, 1499239, 1499240).install(t)
+		res := result(unreachable, live)
+		res.Gaps = tmux.ScanGaps{LiveServerUnknown: true}
+		stubReapCheck(t, res)
+
+		var out bytes.Buffer
+		err := runReap(t.Context(), &out, strings.NewReader("y\ny\ny\n"),
+			reapOpts{kill: true, all: true, yes: true})
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "refusing --all")
+		require.Empty(t, procs.sent,
+			"--all must signal nothing when the live server could not be told apart from these rows")
+		require.True(t, procs.alive[1952486], "the live server must survive")
+	})
+
+	t.Run("the default path still kills the unreachable one", func(t *testing.T) {
+		procs := newFakeProcs().add(1952486, 1499239, 1499240).install(t)
+		res := result(unreachable, live)
+		res.Gaps = tmux.ScanGaps{LiveServerUnknown: true}
+		stubReapCheck(t, res)
+
+		var out bytes.Buffer
+		require.NoError(t, runReap(t.Context(), &out, strings.NewReader(""),
+			reapOpts{kill: true, yes: true}))
+		require.False(t, procs.alive[1499239], "the proven-unreachable server is still killable")
+		require.True(t, procs.alive[1952486],
+			"the reachable server is not a default target, so it is untouched")
+	})
+
+	// The refusal is keyed on the selected targets, not on the flag. With nothing
+	// reachable to select, `--all` picks exactly what the default picks — every target
+	// proven unreachable — so there is no reachable row that might be the live server,
+	// and nothing to refuse. Refusing anyway would be #593's shape a second time: a
+	// probe that could not answer turning into a declined reap on the host that needed
+	// one.
+	t.Run("--all proceeds when no target is reachable", func(t *testing.T) {
+		procs := newFakeProcs().add(1499239, 1499240).install(t)
+		res := result(unreachable)
+		res.Gaps = tmux.ScanGaps{LiveServerUnknown: true}
+		stubReapCheck(t, res)
+
+		var out bytes.Buffer
+		require.NoError(t, runReap(t.Context(), &out, strings.NewReader(""),
+			reapOpts{kill: true, all: true, yes: true}))
+		require.False(t, procs.alive[1499239],
+			"an unidentified live server must not block a kill every target is proven safe for")
+	})
+}
+
+// TestReapKillAllKillsAReachableServerWhenTheLiveOneIsIdentified is the happy path the
+// guard above must not have taken away.
+//
+// `--all` exists to stop a reachable server, and an identified live server is what
+// makes that safe: it was excluded by pid before classification, so a reachable row is
+// provably not the fleet. Without this, a "tightening" that refused `--all` outright —
+// or one that keyed the refusal on the flag rather than on the targets — would leave
+// the whole suite green while the flag did nothing but error.
+func TestReapKillAllKillsAReachableServerWhenTheLiveOneIsIdentified(t *testing.T) {
+	reachable := orphan(20)
+	reachable.Reachable = true
+
+	procs := newFakeProcs().add(20).install(t)
+	stubReapCheck(t, result(reachable))
+
+	var out bytes.Buffer
+	require.NoError(t, runReap(t.Context(), &out, strings.NewReader(""),
+		reapOpts{kill: true, all: true, yes: true}))
+
+	require.False(t, procs.alive[20], "--all must still stop a reachable server")
+	require.Contains(t, procs.sent, "SIGTERM->20")
+	require.Contains(t, out.String(), "1 killed")
+}
+
+// TestReapKillRefusesAnIncompleteScan applies "positive proof only" to the inventory
+// itself.
+//
+// A truncated /proc walk attributes children from a partial table, so a server's
+// Children list can be short — and that list is exactly what the prompt shows before
+// the user consents. Killing on it would take consent obtained against an
+// understatement of what dies: the user agrees to lose one shell and loses thirteen
+// agents. The fixture drives it with --yes and a stdin full of "y" on purpose, so a
+// pass cannot come from the prompt merely defaulting to no; the refusal has to happen
+// before anything is asked.
+func TestReapKillRefusesAnIncompleteScan(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		gaps tmux.ScanGaps
+	}{
+		{"socket table unreadable", tmux.ScanGaps{SocketTableUnread: true}},
+		{"proc walk truncated", tmux.ScanGaps{ProcTableTruncated: true}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			procs := newFakeProcs().add(1499239, 1499240).install(t)
+			res := result(orphan(1499239, kid(1499240)))
+			res.Gaps = tc.gaps
+			stubReapCheck(t, res)
+
+			var out bytes.Buffer
+			err := runReap(t.Context(), &out, strings.NewReader("y\ny\ny\n"),
+				reapOpts{kill: true, yes: true})
+			require.Error(t, err, "an incomplete inventory must not be killed on")
+			require.Contains(t, err.Error(), "incomplete scan")
+			require.Empty(t, procs.sent,
+				"nothing may be signalled when the scan could not see what it would destroy")
+		})
+	}
+}

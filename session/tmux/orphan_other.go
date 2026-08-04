@@ -18,7 +18,11 @@ const orphanScanSupported = false
 
 // inventoryCandidates finds nothing off Linux; ScanServers never calls it, since it
 // returns early on orphanScanSupported. The stub keeps the shared code compiling.
-func inventoryCandidates(context.Context) []candidate { return nil }
+//
+// It reports no gaps rather than a gap: a gap means "this platform can see and did
+// not", which would render as a scan that failed. Off Linux there is nothing to see
+// through in the first place, and orphanScanSupported already says so.
+func inventoryCandidates(context.Context) ([]candidate, ScanGaps) { return nil, ScanGaps{} }
 
 // ProcessStartTime is unavailable off Linux. Nothing reaps there — ScanServers
 // reports the platform unsupported — so no caller can reach a state where this
