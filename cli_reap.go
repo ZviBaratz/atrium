@@ -145,6 +145,16 @@ func runReap(ctx context.Context, w io.Writer, in io.Reader, opts reapOpts) erro
 		return fmt.Errorf("refusing to kill on an incomplete scan: the process inventory could not see everything, so what a kill would destroy is not fully known — re-run %s reap --kill once the scan comes back complete", binName)
 	}
 
+	// --all is the one mode that kills a *reachable* server, and the only thing keeping
+	// it off this Atrium's own is the pid exclusion in assembleServers. With the live
+	// server unidentified there is no exclusion, and the live server answers its own
+	// socket — so it arrives Reachable and --all would target it, taking the fleet and
+	// every agent in it. The default set needs no such guard: it is unreachable-only,
+	// and a server that answered is proof it is not that.
+	if opts.all && res.Gaps.LiveServerUnknown {
+		return fmt.Errorf("refusing --all: this %s's own tmux server could not be identified, so a reachable server here may be it — re-run once the probe works, or drop --all to kill only the unreachable ones", binName)
+	}
+
 	targets := reapTargets(res.Servers, opts.all)
 	if len(targets) == 0 {
 		reapf(w, "\nnothing to kill.\n")

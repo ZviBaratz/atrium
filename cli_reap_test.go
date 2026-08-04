@@ -410,6 +410,54 @@ func TestReapWithoutKillNeverPointsAtAKillItWouldRefuse(t *testing.T) {
 	}
 }
 
+// TestReapKillAllRefusesWhenTheLiveServerIsUnknown guards the one mode that kills a
+// *reachable* server.
+//
+// The only thing keeping `--all` off this Atrium's own server is the pid exclusion in
+// assembleServers, and that needs the ambient probe to have answered. When it has not,
+// the live server is still in the list, still answering its own socket, and therefore
+// still classified Reachable — so `--all` would target the fleet and every agent in it.
+//
+// The default path is asserted alongside as the control, and it must keep working: it is
+// unreachable-only, and a server that answered is positive proof it is not that. A fix
+// that refused every kill on this flag would pass the first case and fail the second —
+// which is the whole reason LiveServerUnknown is not counted by ScanGaps.Any().
+func TestReapKillAllRefusesWhenTheLiveServerIsUnknown(t *testing.T) {
+	live := orphan(1952486)
+	live.Reachable = true // it answered its own socket, because it is the live server
+	unreachable := orphan(1499239, kid(1499240))
+
+	t.Run("--all refuses", func(t *testing.T) {
+		procs := newFakeProcs().add(1952486, 1499239, 1499240).install(t)
+		res := result(unreachable, live)
+		res.Gaps = tmux.ScanGaps{LiveServerUnknown: true}
+		stubReapCheck(t, res)
+
+		var out bytes.Buffer
+		err := runReap(t.Context(), &out, strings.NewReader("y\ny\ny\n"),
+			reapOpts{kill: true, all: true, yes: true})
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "refusing --all")
+		require.Empty(t, procs.sent,
+			"--all must signal nothing when the live server could not be told apart from these rows")
+		require.True(t, procs.alive[1952486], "the live server must survive")
+	})
+
+	t.Run("the default path still kills the unreachable one", func(t *testing.T) {
+		procs := newFakeProcs().add(1952486, 1499239, 1499240).install(t)
+		res := result(unreachable, live)
+		res.Gaps = tmux.ScanGaps{LiveServerUnknown: true}
+		stubReapCheck(t, res)
+
+		var out bytes.Buffer
+		require.NoError(t, runReap(t.Context(), &out, strings.NewReader(""),
+			reapOpts{kill: true, yes: true}))
+		require.False(t, procs.alive[1499239], "the proven-unreachable server is still killable")
+		require.True(t, procs.alive[1952486],
+			"the reachable server is not a default target, so it is untouched")
+	})
+}
+
 // TestReapKillRefusesAnIncompleteScan applies "positive proof only" to the inventory
 // itself.
 //

@@ -87,6 +87,40 @@ func TestRenderOrphansStillListsRowsFoundDespiteAGap(t *testing.T) {
 	require.Contains(t, out, "UNREACHABLE")
 }
 
+// TestRenderOrphansWithholdsAKillServerItCannotVouchFor is the report-side half of the
+// unidentified-live-server guard.
+//
+// A reachable server's remedy is `tmux -S <path> kill-server`, naming an exact path.
+// That is safe only because the live server was excluded by pid before classification —
+// and when the ambient probe cannot answer, it was not. The live server answers its own
+// socket, so it arrives here Reachable, and the report would hand the user a verified
+// command for killing their own fleet. This is the #584 shape reached through the report
+// rather than through a glob, which is why the assertion is on the *absence* of the
+// command and not merely on the presence of a warning: a caution printed beside a
+// working kill-server is still a working kill-server.
+func TestRenderOrphansWithholdsAKillServerItCannotVouchFor(t *testing.T) {
+	reachable := []tmux.OrphanServer{{
+		PID: 1952486, Socket: "atrium", SocketPath: "/tmp/tmux-1000/atrium",
+		Reachable: true, ReachableKnown: true, Started: startedAgo(time.Hour),
+	}}
+
+	unknown := RenderOrphans(OrphanResult{
+		Supported: true, Now: now, Servers: reachable,
+		Gaps: tmux.ScanGaps{LiveServerUnknown: true},
+	})
+	require.NotContains(t, unknown, "kill-server",
+		"with the live server unidentified this row may be the live server; no kill command may be printed: %q", unknown)
+	require.Contains(t, unknown, "pid 1952486", "the row itself must still be reported")
+	require.Contains(t, unknown, "could not be identified")
+
+	// The control: with the live server identified, the exclusion happened and the
+	// remedy is exactly what makes the row useful. A fix that simply stopped printing
+	// kill-server would pass the assertions above.
+	known := RenderOrphans(OrphanResult{Supported: true, Now: now, Servers: reachable})
+	require.Contains(t, known, "tmux -S /tmp/tmux-1000/atrium kill-server",
+		"an identified live server means this row is provably not it, and the remedy is the point of the row")
+}
+
 // TestRenderOrphansHeadingNamesTmuxServers: doctor already uses "orphan" for a Claude
 // login the account list no longer names, so this section must not claim the bare
 // word.
