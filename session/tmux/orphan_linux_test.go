@@ -110,13 +110,15 @@ func TestParseStatHandlesACommContainingASpace(t *testing.T) {
 		ok   bool
 	}{
 		{name: "plain comm", raw: "1234 (sleep)" + tail,
-			want: procStat{Comm: "sleep", PPid: 1, StartTicks: 19}, ok: true},
+			want: procStat{Comm: "sleep", State: "S", PPid: 1, StartTicks: 19}, ok: true},
 		{name: "comm with a space", raw: "1234 (tmux: server)" + tail,
-			want: procStat{Comm: "tmux: server", PPid: 1, StartTicks: 19}, ok: true},
+			want: procStat{Comm: "tmux: server", State: "S", PPid: 1, StartTicks: 19}, ok: true},
 		{name: "comm with a close paren and a space", raw: "1234 (f) g)" + tail,
-			want: procStat{Comm: "f) g", PPid: 1, StartTicks: 19}, ok: true},
+			want: procStat{Comm: "f) g", State: "S", PPid: 1, StartTicks: 19}, ok: true},
 		{name: "comm with a trailing paren", raw: "1234 (weird))" + tail,
-			want: procStat{Comm: "weird)", PPid: 1, StartTicks: 19}, ok: true},
+			want: procStat{Comm: "weird)", State: "S", PPid: 1, StartTicks: 19}, ok: true},
+		{name: "a zombie", raw: "1234 (sleep) Z 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22",
+			want: procStat{Comm: "sleep", State: "Z", PPid: 1, StartTicks: 19}, ok: true},
 		{name: "no comm terminator", raw: "1234 (unterminated" + tail, ok: false},
 		{name: "truncated after comm", raw: "1234 (sleep) S 1 2 3", ok: false},
 		{name: "empty", raw: "", ok: false},
@@ -167,6 +169,37 @@ func TestStartTimeOfADeadProcessFails(t *testing.T) {
 
 	_, ok := procStartTime(pid)
 	require.False(t, ok, "a reaped pid must not yield a start time")
+}
+
+// TestProcessIsZombieSeesAKilledButUnreapedProcess.
+//
+// A zombie is why a liveness test cannot be signal 0 alone: the process has exited,
+// but it keeps its pid until its parent collects it, so kill(pid, 0) succeeds
+// indefinitely. Normally the window is microseconds; on the tmux 3.2 CI job an
+// orphaned server re-parented to a container init that never wait()s stayed visible
+// for the reaper's whole SIGTERM-then-SIGKILL budget, and the reaper concluded it had
+// survived SIGKILL. Nothing survives SIGKILL.
+//
+// The fixture is exact: Start without Wait leaves the child unreaped by construction,
+// so this is a real zombie rather than a simulated one.
+func TestProcessIsZombieSeesAKilledButUnreapedProcess(t *testing.T) {
+	cmd := exec.CommandContext(t.Context(), "sleep", "60")
+	require.NoError(t, cmd.Start())
+	pid := cmd.Process.Pid
+	// Reaped at the end, so the test leaves no zombie of its own behind.
+	t.Cleanup(func() { _, _ = cmd.Process.Wait() })
+
+	require.False(t, ProcessIsZombie(pid), "a running process is not a zombie")
+	require.NoError(t, cmd.Process.Kill())
+
+	require.Eventually(t, func() bool { return ProcessIsZombie(pid) },
+		5*time.Second, 10*time.Millisecond,
+		"a killed but unreaped child must be recognised as a zombie")
+
+	// The property that actually matters, stated against the thing the reaper calls.
+	require.False(t, errors.Is(syscall.Kill(pid, 0), syscall.ESRCH),
+		"signal 0 still finds a zombie — which is exactly why it cannot be the whole test")
+	require.False(t, processAliveForTest(pid), "a zombie must not read as alive")
 }
 
 // TestScanServersOnThisHostReportsOnlyOwnedSockets runs the real scan against the
@@ -383,9 +416,15 @@ func runWithEnv(t *testing.T, env []string, name string, args ...string) (string
 	return string(out), err
 }
 
-// processAliveForTest reports whether pid still exists. Signal 0 delivers nothing.
+// processAliveForTest mirrors cli_reap.go's liveness test, zombie check included.
+// Signal 0 alone succeeds for a process that has exited and not yet been reaped, so
+// a test using it would wait out both signal budgets and then report that something
+// survived SIGKILL.
 func processAliveForTest(pid int) bool {
-	return !errors.Is(syscall.Kill(pid, 0), syscall.ESRCH)
+	if errors.Is(syscall.Kill(pid, 0), syscall.ESRCH) {
+		return false
+	}
+	return !ProcessIsZombie(pid)
 }
 
 func findServer(servers []OrphanServer, pid int) (OrphanServer, bool) {

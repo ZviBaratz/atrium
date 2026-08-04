@@ -24,3 +24,7 @@ func inventoryCandidates(context.Context) []candidate { return nil }
 // reports the platform unsupported — so no caller can reach a state where this
 // answering "unknown" hides a live process.
 func ProcessStartTime(int) (time.Time, bool) { return time.Time{}, false }
+
+// ProcessIsZombie is answered conservatively off Linux: with no /proc there is no
+// way to tell a zombie from a live process, and nothing reaps off Linux anyway.
+func ProcessIsZombie(int) bool { return false }

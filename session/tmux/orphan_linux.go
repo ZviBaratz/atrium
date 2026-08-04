@@ -65,6 +65,7 @@ const (
 // instead of wrapping, and no real uptime comes close.
 type procStat struct {
 	Comm       string
+	State      string
 	PPid       int
 	StartTicks int64
 }
@@ -102,6 +103,25 @@ func readBootTime() (time.Time, bool) {
 // being killed. That is why "unreadable" must never resolve to a zero time — a
 // caller comparing two zero times would find them equal.
 func ProcessStartTime(pid int) (started time.Time, ok bool) { return procStartTime(pid) }
+
+// ProcessIsZombie reports whether pid has exited but not yet been reaped by its
+// parent.
+//
+// A zombie holds its pid, so kill(pid, 0) succeeds for one indefinitely and a
+// liveness check built on that alone reports a process that is definitively dead as
+// alive. Normally the window is microseconds — init reaps orphans immediately — but
+// it is not always: measured on the tmux 3.2 CI job, where an orphaned tmux server
+// re-parented to a container init that never wait()s stayed visible to kill(pid, 0)
+// for the full SIGTERM and SIGKILL budgets, and the reaper concluded it had
+// "survived SIGKILL". Nothing survives SIGKILL; the liveness test was wrong.
+func ProcessIsZombie(pid int) bool {
+	raw, err := os.ReadFile(filepath.Join(procRoot, strconv.Itoa(pid), "stat"))
+	if err != nil {
+		return false
+	}
+	st, ok := parseStat(string(raw))
+	return ok && st.State == "Z"
+}
 
 // procStartTime returns when the process started, from /proc/<pid>/stat's starttime
 // plus the boot time. ok is false when the process is gone or either read fails —
@@ -150,6 +170,7 @@ func parseStat(raw string) (procStat, bool) {
 		return procStat{}, false
 	}
 	fields := strings.Fields(raw[closed+len(") "):])
+	stateIdx := 0
 	ppidIdx := statPPidField - statStateField
 	startIdx := statStartTimeField - statStateField
 	if len(fields) <= startIdx {
@@ -163,7 +184,12 @@ func parseStat(raw string) (procStat, bool) {
 	if err != nil {
 		return procStat{}, false
 	}
-	return procStat{Comm: raw[open+1 : closed], PPid: ppid, StartTicks: ticks}, true
+	return procStat{
+		Comm:       raw[open+1 : closed],
+		State:      fields[stateIdx],
+		PPid:       ppid,
+		StartTicks: ticks,
+	}, true
 }
 
 // listeningSockets maps inode to filesystem path for every listening unix socket on
