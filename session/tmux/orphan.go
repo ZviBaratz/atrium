@@ -118,6 +118,12 @@ func assembleServers(ctx context.Context, cands []candidate, live int, liveKnown
 		if liveKnown && c.PID == live {
 			continue
 		}
+		// Defence in depth, not the only line holding this: with the argv fallback
+		// gone, an empty path would also fail ownsSocketName below, since
+		// filepath.Base("") is ".". Mutating this check away leaves the suite green.
+		// It stays because it states the rule — a process that is not listening is
+		// not a server — where a reader looking for that rule will find it, rather
+		// than leaving it as an emergent property of two unrelated functions.
 		if c.SocketPath == "" {
 			continue
 		}

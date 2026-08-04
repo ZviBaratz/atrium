@@ -116,6 +116,11 @@ func TestAssembleServersExcludesTheLiveServer(t *testing.T) {
 // A process that is not listening is not a server. That is positive proof, and it is
 // also what keeps argv — which carries injected GH_TOKEN values — out of the scan
 // entirely rather than by discipline.
+//
+// What this pins is the property, not a particular line: deleting assembleServers'
+// explicit empty-path check leaves this green, because filepath.Base("") is "." and
+// that fails the ownership predicate anyway. Re-introducing an argv fallback is what
+// it would actually catch, which is the regression worth catching.
 func TestAssembleServersRefusesAProcessWithNoListeningSocket(t *testing.T) {
 	stubSocketOwner(t, func(_ context.Context, path string) (int, bool) {
 		t.Fatalf("a candidate with no bound socket was probed at %q", path)
