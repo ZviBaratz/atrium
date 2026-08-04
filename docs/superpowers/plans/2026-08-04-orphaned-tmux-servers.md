@@ -86,7 +86,7 @@ It lives in `session/tmux` because socket naming is tmux-domain knowledge (`sock
 3. **Socket name from the socket path**, `filepath.Base(socketPath)`. Accept `atrium`, `claudesquad`, or either plus a `-` suffix — **both brands unconditionally**, the way `clean.sh` already does. `RuntimeName()` resolves from the *reaper's own* HOME, so keying on it alone would make a legacy install blind to `atrium` orphans and vice versa. Fall back to argv (`-L <name>` / `-S <path>`) **only** when the path could not be read, which keeps the common path from touching argv at all.
 4. Exclude the pid that `tmux -L <RuntimeName()> display-message -p '#{pid}'` reports under the ambient environment. When it fails there is nothing to exclude — the no-server case, not an error.
 
-- [ ] **Step 1: Tier-1 test — a bound socket path survives unlink**
+- [x] **Step 1: Tier-1 test — a bound socket path survives unlink**
 
 The mechanism the whole design rests on. Hermetic, no tmux, runs on every Linux CI job.
 
@@ -105,7 +105,7 @@ func TestSocketPathSurvivesUnlink(t *testing.T) {
 
 Verified by hand 2026-08-04: the `/proc/net/unix` row keeps the exact original path after `os.Remove`, with Flags `00010000` (`SO_ACCEPTCON`).
 
-- [ ] **Step 2: Tier-1 test — the start-time parser survives a comm with a space**
+- [x] **Step 2: Tier-1 test — the start-time parser survives a comm with a space**
 
 ```go
 // /proc/<pid>/stat's comm field is "(tmux: server)". Its embedded space shifts every
@@ -117,17 +117,17 @@ func TestStartTimeParsesACommContainingASpace(t *testing.T) { … }
 
 Assert the parser agrees with a known value for `os.Getpid()`, **and** feed it a synthetic stat line whose comm contains a space and a `)`. Demonstrated on a live tmux server 2026-08-04: naive → boot time, correct → matches `ps -o lstart` to the second.
 
-- [ ] **Step 3: Implement `orphan_linux.go`**
+- [x] **Step 3: Implement `orphan_linux.go`**
 
 Socket path: collect `socket:[N]` fd inodes from `/proc/<pid>/fd`, read `/proc/net/unix` **once**, take the row whose inode matches and whose Flags are `00010000`.
 
 Children: one pass over `/proc/*/status` reading `PPid:` — which parses cleanly, unlike `/proc/<pid>/stat` — collecting `comm` and pid per child.
 
-- [ ] **Step 4: Reachability is an identity test, not a file test**
+- [x] **Step 4: Reachability is an identity test, not a file test**
 
 `os.Stat(SocketPath)` answers "is there a file here now", which is the wrong question: a restarted Atrium re-binds `/tmp/tmux-1000/atrium`, so a stale orphan carrying that path would stat true, be classified reachable, and doctor would print `tmux -L atrium kill-server` as the remedy — **aimed at the new, live server.** Run `tmux -S <SocketPath> display-message -p '#{pid}'` and require the answer to equal the candidate pid. Verified 2026-08-04: returns the pid for the live path, `no server running on …` for a dead one.
 
-- [ ] **Step 5: `orphan_other.go` and `just ci`**
+- [x] **Step 5: `orphan_other.go` and `just ci`**
 
 ---
 
@@ -137,23 +137,23 @@ Children: one pass over `/proc/*/status` reading `PPid:` — which parses cleanl
 
 **Interfaces:** `CheckOrphans(ctx) OrphanResult` / `RenderOrphans(OrphanResult) string`, wired into `doctorCmd.RunE` after the OOM section with its own `doctor.ProbeTimeout` context.
 
-- [ ] **Step 1: Render against hand-built structs**
+- [x] **Step 1: Render against hand-built structs**
 
 `internal/doctor` already tests platform primitives against the test process's own `/proc` and `Render*` against hand-built structs (`oom_test.go`) — do both, so `RenderOrphans` is covered on every platform.
 
-- [ ] **Step 2: "checked and clean" must not look like "nothing to say"**
+- [x] **Step 2: "checked and clean" must not look like "nothing to say"**
 
 Print `none` rather than rendering empty, per the principle stated in `RenderGates`'s doc comment (`internal/doctor/render.go`): *"the gate was checked and matches" and "the check silently found nothing to say" must not look identical.* Off Linux, render an unavailable/Linux-only note, as the OOM section already does.
 
-- [ ] **Step 3: Heading**
+- [x] **Step 3: Heading**
 
 **"Orphaned tmux servers:"**, never bare "orphans" — doctor already uses that word for a Claude login the account list no longer names (`ui/overlay/accounts.go:309`).
 
-- [ ] **Step 4: Also report class (a)**
+- [x] **Step 4: Also report class (a)**
 
 Socket files in the ambient socket dir matching either brand's prefix that no live server owns — free from data already gathered. This is the home for the `atrium-barstyle-test*` sockets left by ad-hoc #394 verification runs (not `session/tmux/barstyle_test.go`, which starts no server); unlike the old `atrium-precheck` their names were unique, so they accumulate without bound. **Report them; never delete them.** Print the `find … -delete` line for the user to run.
 
-- [ ] **Step 5: Confirm the report never prints argv**
+- [x] **Step 5: Confirm the report never prints argv**
 
 Run with a `GH_TOKEN`-injected session live and grep the output for `gho_`. This is a test *and* a manual check.
 
@@ -172,31 +172,31 @@ atrium reap --kill --all    # include reachable ones (class b)
 atrium reap --kill --yes    # no prompt, for scripts
 ```
 
-- [ ] **Step 1: No TUI lock, with a comment saying why**
+- [x] **Step 1: No TUI lock, with a comment saying why**
 
 An orphan is unrelated to the live server, so requiring a closed TUI would make the command useless in the situation it exists for.
 
-- [ ] **Step 2: Unreachable-only by default**
+- [x] **Step 2: Unreachable-only by default**
 
 This is the answer to "how do you avoid killing a legitimate second Atrium": a smoke run in flight, or a second Atrium under its own `TMUX_TMPDIR`, answers its own socket and is class (b) — reported with the exact command, never killed unless `--all`. (Another *user's* server never gets this far; the uid filter drops it.) With reachability an identity test rather than `os.Stat`, this default is sound.
 
-- [ ] **Step 3: SIGTERM, then SIGKILL after a bounded wait, then verify**
+- [x] **Step 3: SIGTERM, then SIGKILL after a bounded wait, then verify**
 
 Poll `syscall.Kill(pid, 0)` / `ESRCH` — the technique `session/tmux/pty_reap_unix_test.go` uses. SIGTERM first so tmux exits cleanly; do **not** claim it is what reaps the children (it is not — the pty hangup is). **Then verify:** re-check every captured child pid and signal survivors directly, applying the start-time guard to each child, whose pid is staler than the server's. Verifying rather than trusting the mechanism is the difference between reaping the orphan and quietly halving it.
 
-- [ ] **Step 4: PID-reuse guard**
+- [x] **Step 4: PID-reuse guard**
 
 Re-read `/proc/<pid>/stat` start time immediately before signalling and compare to the value captured at scan time; skip with a message on mismatch. **A confirmation must carry the target it armed with** — the #502 lesson.
 
-- [ ] **Step 5: The prompt names what dies**
+- [x] **Step 5: The prompt names what dies**
 
 #267's precedent: `pid 2989219  16h32m  holds a live 'claude'  — kill? [y/N]`. Never automatic, never from the TUI, never from `atr reset`.
 
-- [ ] **Step 6: It deletes nothing**
+- [x] **Step 6: It deletes nothing**
 
 No `os.Remove` of socket files, no `RemoveAll` of roots. A killed server's socket file is inert; leaving it costs a zero-byte inode, and the doctor's class-(a) list already names it. Revision 2 had `reap --kill` unlink verified-stale sockets; that is dropped entirely.
 
-- [ ] **Step 7: The three drift guards a new subcommand trips**
+- [x] **Step 7: The three drift guards a new subcommand trips**
 
 All in `readme_commands_test.go`:
 
@@ -212,21 +212,21 @@ All in `readme_commands_test.go`:
 
 This is the test the issue asks for: reproduce the incident, then prove the reaper reaches it.
 
-- [ ] **Step 1: Build the orphan**
+- [x] **Step 1: Build the orphan**
 
 1. `os.MkdirTemp("/tmp", "atr")` — a short root, per the `sun_path` budget reasoning in `config_parse_test.go` and `internal/testutil`'s `installSandboxTmuxTmpdir`.
 2. Socket `atrium-reaptest-<rand>` — matches the *production* predicate, so the test exercises the real classifier rather than an injected one.
 3. Start `tmux -L <sock> new-session -d "sleep 60"` with `TMUX_TMPDIR` on `cmd.Env` (not `os.Setenv` — that would disturb the sandbox the rest of the binary runs in). **Arm teardown before starting**; once the pid is known, register a `t.Cleanup` that SIGKILLs it. The test must never be the thing that leaks.
 
-- [ ] **Step 2: The negative control**
+- [x] **Step 2: The negative control**
 
 `os.RemoveAll(tmuxTmp)`, then assert `tmux -L <sock> list-sessions` **fails** — proving existing tooling cannot reach it. This must run with an explicitly isolated, *existing* `TMUX_TMPDIR` (or `-S`), or the fallback-to-`/tmp` behaviour makes the negative control lie: with an empty or missing one, `-L` would answer from the developer's live fleet and the assertion would pass for the wrong reason.
 
-- [ ] **Step 3: The assertion**
+- [x] **Step 3: The assertion**
 
 `ScanServers` returns a row with that pid, `Reachable == false`, `Socket == <sock>`, `SocketPath` equal to the now-deleted path, and a `Started` matching `ps`.
 
-- [ ] **Step 4: Reap and confirm**
+- [x] **Step 4: Reap and confirm**
 
 Assert `syscall.Kill(pid, 0)` → `ESRCH`, and that the `sleep` child is gone.
 

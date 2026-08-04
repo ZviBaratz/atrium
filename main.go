@@ -350,7 +350,14 @@ var (
 			"Terminal background detection reports which rung of the light/dark ladder can answer here,\n" +
 			"for anyone whose theme: auto did not adapt: it reads COLORFGBG, and names OSC 11 as the\n" +
 			"rung that outranks it but cannot be probed from a one-shot command — that query needs the\n" +
-			"running TUI, which sends it at startup, on refocus and after a detach.",
+			"running TUI, which sends it at startup, on refocus and after a detach. On Linux, Orphaned\n" +
+			"tmux servers finds tmux servers Atrium started that are still running but are not the live\n" +
+			"one — including the case no socket lookup can reach, where the socket file was deleted along\n" +
+			"with the temp directory holding it, so neither `tmux ls` nor `atrium reset` can name the\n" +
+			"server and only a process scan finds it. It also lists socket files left behind by servers\n" +
+			"that already died. That whole section is read-only: it prints the command for each case and\n" +
+			"runs none of them, because these servers hold live agents with unpushed work (see\n" +
+			"`atrium reap`).",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			log.Initialize(logDir(), false)
 			defer log.Close()
@@ -396,6 +403,18 @@ var (
 			defer cancelOOM()
 			fmt.Println()
 			fmt.Print(doctor.RenderOOM(doctor.CheckOOM(oomCtx)))
+
+			// Orphaned tmux servers: servers Atrium started that outlived their run,
+			// including the ones no socket lookup can reach because the socket file went
+			// with a deleted temp root (#547). Read-only — a /proc inventory plus
+			// `tmux -S … display-message` probes — and it kills and deletes nothing: the
+			// processes here hold live agents with unpushed work, so every remedy is
+			// printed for the user to run. Its own probe budget, for the same reason the
+			// OOM section has one.
+			orphanCtx, cancelOrphans := context.WithTimeout(context.Background(), doctor.ProbeTimeout)
+			defer cancelOrphans()
+			fmt.Println()
+			fmt.Print(doctor.RenderOrphans(doctor.CheckOrphans(orphanCtx)))
 
 			// Claude account identities: reads the login recorded in each account's
 			// config dir and compares it against that account's expect_account. No
@@ -614,6 +633,7 @@ func init() {
 	rootCmd.AddCommand(resetCmd)
 	rootCmd.AddCommand(profilesCmd)
 	rootCmd.AddCommand(doctorCmd)
+	rootCmd.AddCommand(reapCmd)
 	rootCmd.AddCommand(hookEventCmd)
 }
 

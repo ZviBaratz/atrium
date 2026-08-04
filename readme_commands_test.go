@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ZviBaratz/atrium/internal/doctor"
 	"github.com/stretchr/testify/require"
 )
 
@@ -90,9 +91,14 @@ func TestEveryCommandHasAShortDescription(t *testing.T) {
 }
 
 // TestHeadlessCommandsTakeNoTUILock pins the property that makes the headless
-// surface usable at all: `ls`, `peek` and `send` must run while the TUI is up.
-// Only the bare atrium and reset may take tui.lock, so a subcommand that started
+// surface usable at all: `ls`, `peek`, `send` and `reap` must run while the TUI is
+// up. Only the bare atrium and reset may take tui.lock, so a subcommand that started
 // acquiring it would refuse exactly when a user most wants it.
+//
+// `reap` is the sharpest case rather than one more of the same. It exists for a tmux
+// server that outlived its run and is eating memory now, which is a thing a user
+// discovers *while* mid-session — a lock would make it refuse in precisely the
+// situation it was written for.
 func TestHeadlessCommandsTakeNoTUILock(t *testing.T) {
 	sandboxDataDir(t)
 
@@ -113,6 +119,14 @@ func TestHeadlessCommandsTakeNoTUILock(t *testing.T) {
 	f := &fakeTmux{content: "pane\n"}
 	require.NoError(t, runPeek(context.Background(), io.Discard, f.exec(), "fix-auth", "", 0, false),
 		"peek must work while a TUI holds the lock")
+
+	// Stubbed rather than left to the real scan: it probes the ambient tmux socket,
+	// and package main has no TestMain sandboxing TMUX_TMPDIR, so an unstubbed call
+	// would reach the developer's live fleet. The lock is taken (or not) by the
+	// command, not by the scan, so nothing about this property is stubbed away.
+	stubReapCheck(t, doctor.OrphanResult{Supported: true})
+	require.NoError(t, runReap(context.Background(), io.Discard, strings.NewReader(""), reapOpts{}),
+		"reap must work while a TUI holds the lock")
 }
 
 // hasCommandRow reports whether the section contains a markdown table row whose
