@@ -84,6 +84,7 @@ var HelpGroups = []HelpGroup{
 	{Title: "Other", Rows: []HelpRow{
 		{Keys: []KeyName{KeyHelp}, Desc: "toggle this cheatsheet"},
 		{Keys: []KeyName{KeyCommandPalette}, Desc: "command palette: find any action by name and run it"},
+		{Keys: []KeyName{KeyCustomCommands}, Desc: "custom commands: your own verbs over the selected session"},
 		{Keys: []KeyName{KeySettings}, Desc: "settings"},
 		{Keys: []KeyName{KeyAccounts}, Desc: "accounts (Claude / GitHub)"},
 		{Keys: []KeyName{KeyCmdLog}, Desc: "command log: the tmux/git/gh commands Atrium ran (filter all / session / failures)"},

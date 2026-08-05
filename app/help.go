@@ -3,6 +3,7 @@ package app
 import (
 	"strings"
 
+	"github.com/ZviBaratz/atrium/customcmd"
 	"github.com/ZviBaratz/atrium/keys"
 	"github.com/ZviBaratz/atrium/ui"
 	"github.com/ZviBaratz/atrium/ui/overlay"
@@ -26,7 +27,18 @@ type helpText interface {
 }
 
 // helpTypeGeneral is the on-demand cheatsheet (opened with '?').
-type helpTypeGeneral struct{}
+type helpTypeGeneral struct {
+	// commands are the validated custom_commands entries, listed in their own
+	// section so the keys behind `!` are documented where every other key is
+	// (#375). Empty omits the section entirely.
+	//
+	// It is populated only at the open site in dispatchAction. Every other
+	// construction of this type is the bare literal helpTypeGeneral{}, which leaves
+	// this nil — so any test built that way renders no custom rows and can say
+	// nothing about them. TestHelpCustomSectionTruncatesLongDescriptions is the
+	// guard that actually populates it.
+	commands []customcmd.Command
+}
 
 // helpTypeWelcome is the one-time welcome shown on first launch ever.
 type helpTypeWelcome struct{}
@@ -37,6 +49,19 @@ func helpHeaderStyle() lipgloss.Style { return theme.Current().CyanStyle().Bold(
 func helpKeyStyle() lipgloss.Style    { return theme.Current().AttentionStyle().Bold(true) }
 func helpDescStyle() lipgloss.Style   { return theme.Current().FgStyle() }
 func helpDimStyle() lipgloss.Style    { return theme.Current().DimStyle() }
+
+// helpCustomDescWidth bounds a custom command's description in the cheatsheet.
+//
+// Chosen so a row fits the narrowest terminal the app supports: helpRow's key column
+// is 12 cells, the help overlay's box costs 4 more for its border and padding plus a
+// column of margin each side, and " (repo)" can follow the description — which leaves
+// 12 + 55 + 7 = 74 against 80. TestHelpCustomSectionTruncatesLongDescriptions pins
+// that arithmetic rather than trusting it.
+const helpCustomDescWidth = 55
+
+// helpCustomHeading titles the custom-commands section. It names the leader as well
+// as the section, because the keys it lists do nothing on their own.
+const helpCustomHeading = "Custom (! opens the menu)"
 
 // helpRow formats a "key   description" line with the key column padded to a
 // fixed width so descriptions align.
@@ -61,6 +86,7 @@ func (h helpTypeGeneral) toContent() string {
 			lines = append(lines, helpRow(rowKeyLabel(row), rowDesc(row)))
 		}
 	}
+	lines = append(lines, h.customLines()...)
 	lines = append(lines, "", helpHeaderStyle().Render("Mouse"))
 	for _, row := range mouseHelpRows {
 		lines = append(lines, helpRow(row[0], row[1]))
@@ -193,6 +219,31 @@ func rowDesc(row keys.HelpRow) string {
 		}
 	}
 	return "in a session: " + row.Desc
+}
+
+// customLines renders the user's own verbs as a cheatsheet section, or nothing when
+// none are configured.
+//
+// The description is truncated rather than left to wrap. helpRow does no bounding of
+// its own, and the help overlay hard-wraps its content — so an over-long line does
+// not overflow the frame, but it does spill one description across several rows and
+// push the rest of the cheatsheet off the end of a short terminal. The bound is
+// asserted, not assumed: see helpCustomDescWidth.
+func (h helpTypeGeneral) customLines() []string {
+	if len(h.commands) == 0 {
+		return nil
+	}
+	lines := []string{"", helpHeaderStyle().Render(helpCustomHeading)}
+	for _, c := range h.commands {
+		// By display width, not rune count: a CJK description is two cells per rune,
+		// so a rune bound would let it render at twice the width it was checked at.
+		desc := runewidth.Truncate(c.Description, helpCustomDescWidth, "…")
+		if c.Context == customcmd.ContextRepo {
+			desc += " (repo)"
+		}
+		lines = append(lines, helpRow("! "+c.Key, desc))
+	}
+	return lines
 }
 
 func (h helpTypeGeneral) hint() string { return "press any key to close" }

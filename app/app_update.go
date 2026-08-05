@@ -521,6 +521,15 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.recomputeLayout()
 		result := msg.result
 		return m, func() tea.Msg { return result }
+
+	case runCustomCommandMsg:
+		// A confirmation approved this. The work starts here rather than in the
+		// confirmed closure because that closure runs synchronously on the update
+		// thread — see runCustomCommandMsg.
+		return m, m.startCustomCommand(msg.spec)
+
+	case customCommandDoneMsg:
+		return m.handleCustomCommandDone(msg)
 	case renameDoneMsg:
 		if msg.err != nil {
 			// The rename failed partway (tmux renamed but git did not, say). Reopen
@@ -961,6 +970,13 @@ func (m *home) handleKeyPress(msg tea.KeyPressMsg) (mod tea.Model, cmd tea.Cmd) 
 		return m.handleCommandPaletteState(msg)
 	}
 
+	// The custom-commands menu must run before the global quit handling for the same
+	// reason, and more sharply: its rows are keyed by whatever the user configured,
+	// so q really can be a command key here.
+	if m.state == stateCustomCommands {
+		return m.handleCustomCommandsState(msg)
+	}
+
 	// Settings, like the other overlay states, must run before the global quit
 	// handling so q/esc and printable keys reach the panel.
 	if m.state == stateSettings {
@@ -1080,7 +1096,10 @@ func (m *home) handleKeyPress(msg tea.KeyPressMsg) (mod tea.Model, cmd tea.Cmd) 
 func (m *home) dispatchAction(name keys.KeyName) (tea.Model, tea.Cmd) {
 	switch name {
 	case keys.KeyHelp:
-		return m.showHelpScreen(helpTypeGeneral{}, nil)
+		// The cheatsheet is the only site that populates commands: the user's own
+		// verbs are config, so they cannot come from the keys registry the rest of
+		// the screen is projected from.
+		return m.showHelpScreen(helpTypeGeneral{commands: m.customCommands}, nil)
 	case keys.KeySettings:
 		if key := m.noticeSettingKey; key != "" {
 			m.noticeSettingKey = ""
@@ -1129,6 +1148,8 @@ func (m *home) dispatchAction(name keys.KeyName) (tea.Model, tea.Cmd) {
 		return m.openCmdLog()
 	case keys.KeyCommandPalette:
 		return m.openCommandPalette()
+	case keys.KeyCustomCommands:
+		return m.openCustomCommands()
 	case keys.KeyApprove:
 		return m.approveSelected()
 	case keys.KeyCopyContent:

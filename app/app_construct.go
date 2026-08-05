@@ -6,6 +6,7 @@ import (
 
 	"github.com/ZviBaratz/atrium/cmd"
 	"github.com/ZviBaratz/atrium/config"
+	"github.com/ZviBaratz/atrium/customcmd"
 	"github.com/ZviBaratz/atrium/notify"
 	"github.com/ZviBaratz/atrium/session"
 	"github.com/ZviBaratz/atrium/ui"
@@ -120,6 +121,13 @@ func assembleHome(
 	// Apply the persisted top-level grouping after the full list is in place, so its
 	// canonical-order snapshot is the real creation order.
 	h.list.SetGroupMode(appConfig.GetGroupMode())
+
+	// Validate the user's own verbs once, here, rather than on every open of the menu
+	// (#375). config.LoadConfig cannot fail by design, so a malformed entry is
+	// reported rather than returned: the good entries bind and the refused ones are
+	// buffered for the startup modal, which the preview tick flushes once no overlay
+	// owns the screen. `atrium doctor` runs the same pass, so the two cannot disagree.
+	h.customCommands, h.pendingCustomCommandProblems = customcmd.Validate(appConfig.CustomCommands)
 
 	return h
 }

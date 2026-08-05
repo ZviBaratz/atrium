@@ -7,8 +7,10 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/ZviBaratz/atrium/config"
+	"github.com/ZviBaratz/atrium/customcmd"
 	"github.com/ZviBaratz/atrium/ui/overlay"
 	"github.com/muesli/ansi"
+	"github.com/stretchr/testify/require"
 )
 
 // The composed View() must never exceed the terminal it was given: if it emits
@@ -50,6 +52,23 @@ func TestViewFitsTerminalBounds(t *testing.T) {
 		// to be the thing that truncates — this is what proves it is.
 		"command palette": func(_ *testing.T, h *home) {
 			h.openCommandPalette()
+		},
+		// A fixture the generic per-state sweep cannot produce: descriptions are
+		// user-authored, so unlike every other overlay in the app there is no upper
+		// bound on this box's content but the one its own truncation imposes. Ten
+		// rows of 200 characters is what proves the truncation is doing the work.
+		"custom commands": func(t *testing.T, h *home) {
+			long := strings.Repeat("an unbounded user-authored description ", 5)
+			var entries []config.CustomCommand
+			for _, k := range strings.Split("abcdefghij", "") {
+				entries = append(entries, config.CustomCommand{
+					Key: k, Description: long, Context: "repo", Command: "true", Output: "background",
+				})
+			}
+			cmds, problems := customcmd.Validate(entries)
+			require.Empty(t, problems)
+			h.customCommands = cmds
+			h.openCustomCommands()
 		},
 		"accounts": func(_ *testing.T, h *home) {
 			for i := 0; i < 30; i++ {

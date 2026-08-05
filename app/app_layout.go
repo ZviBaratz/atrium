@@ -141,6 +141,25 @@ func (m *home) updateHandleWindowSizeEvent(msg tea.WindowSizeMsg) {
 		}
 		m.commandPaletteOverlay.SetSize(w, h)
 	}
+	if m.customCommandsOverlay != nil {
+		// Narrower than the palette: two columns (key, description) of user-authored
+		// prose, where the palette has three of generated text. Capped for the same
+		// reason — a very wide terminal should not stretch a one-line description
+		// across the screen. The share is of the box, border and padding included.
+		w := int(float32(msg.Width) * 0.7)
+		if w > 80 {
+			w = 80
+		}
+		// No `h > msg.Height` clamp, unlike the palette above: a 0.7 share capped at 30
+		// cannot exceed the height it was taken from. That guard is necessary there
+		// because of the palette's `+3`, and copying it here would read as load-bearing
+		// while doing nothing.
+		h := int(float32(msg.Height) * 0.7)
+		if h > 30 {
+			h = 30
+		}
+		m.customCommandsOverlay.SetSize(w, h)
+	}
 
 	previewWidth, previewHeight := m.tabbedWindow.GetPreviewSize()
 	if err := m.list.SetSessionPreviewSize(previewWidth, previewHeight); err != nil {
@@ -163,7 +182,7 @@ func (m *home) menuVisible() bool {
 		// These inline interactions teach their gestures on the bar, so it stays
 		// even when the always-on hint bar is turned off.
 		return true
-	case statePrompt, stateRename, stateQueue, stateCmdLog, stateCommandPalette, stateConfirm, stateHelp, stateInfo, stateSettings, stateWelcome, stateAccounts, stateHistory:
+	case statePrompt, stateRename, stateQueue, stateCmdLog, stateCommandPalette, stateCustomCommands, stateConfirm, stateHelp, stateInfo, stateSettings, stateWelcome, stateAccounts, stateHistory:
 		return false
 	default: // stateDefault (and the empty list)
 		// The bottom row is always reserved during plain navigation, so a transient

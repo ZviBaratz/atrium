@@ -274,6 +274,10 @@ var Registry = []Entry{
 		key.WithKeys("ctrl+k"),
 		key.WithHelp("ctrl-k", "command palette"),
 	)},
+	{Name: KeyCustomCommands, Binding: key.NewBinding(
+		key.WithKeys("!"),
+		key.WithHelp("!", "custom commands"),
+	)},
 	{Name: KeyAttachToggle, Layer: LayerBoth, Binding: key.NewBinding(
 		key.WithKeys("ctrl+q"),
 		key.WithHelp("ctrl-q", "attach/detach"),

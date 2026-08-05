@@ -43,6 +43,15 @@ func TestEveryBarHidingStateRestoresTheFrame(t *testing.T) {
 		stateQueue:          {"queue", func(h *home) { h.Update(runeKey("Q")) }},
 		stateCmdLog:         {"command log", func(h *home) { h.Update(runeKey("L")) }},
 		stateCommandPalette: {"command palette", func(h *home) { h.Update(keyMsg("ctrl+k")) }},
+		// The one test in the tree that actually PRESSES `!` and asserts the state
+		// changed. TestEveryRegistryActionHasADispatchCase reads case labels out of
+		// the AST, so it cannot tell a working dispatch from one wired to nothing.
+		//
+		// Note the fixture has no custom commands configured — newCreateFormHome never
+		// runs assembleHome — so this also pins that the empty list still OPENS the
+		// menu rather than refusing. That is deliberate: the empty state is the only
+		// place the app says where custom commands come from.
+		stateCustomCommands: {"custom commands", func(h *home) { h.Update(runeKey("!")) }},
 		stateConfirm:        {"confirmation", func(h *home) { h.Update(keyMsg("ctrl+x")) }},
 		stateHelp:           {"cheatsheet", func(h *home) { h.Update(runeKey("?")) }},
 		stateSettings:       {"settings", func(h *home) { h.Update(runeKey(",")) }},

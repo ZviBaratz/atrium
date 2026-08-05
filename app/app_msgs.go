@@ -218,6 +218,8 @@ func (m *home) handlePreviewTick(msg previewTickMsg) (tea.Model, tea.Cmd) {
 		m.flushPendingReleaseNotes(),
 		// Likewise for a crash-at-launch modal buffered behind another overlay.
 		m.flushPendingLaunchCrash(),
+		// Likewise for the custom_commands entries validation refused at startup.
+		m.flushCustomCommandProblems(),
 		func() tea.Msg {
 			time.Sleep(100 * time.Millisecond)
 			return previewTickMsg{}
