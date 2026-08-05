@@ -74,7 +74,7 @@ func loadStamped(t *testing.T, st *config.State, rows []session.InstanceData) (*
 
 	storage, err := session.NewStorage(st)
 	require.NoError(t, err)
-	instances, err := storage.LoadInstances(context.Background())
+	instances, _, err := storage.LoadInstances(context.Background())
 	require.NoError(t, err)
 	require.Len(t, instances, len(rows))
 	return storage, instances

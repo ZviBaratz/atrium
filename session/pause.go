@@ -15,8 +15,8 @@ import (
 // remove the worktree, keep the branch) and bringing it back, plus the
 // auto-commit markers Resume unwinds so a pause/resume round-trips transparently.
 
-// Paused reports whether the instance is paused (worktree removed, branch
-// preserved).
+// Paused reports whether the instance is parked: no agent process, branch preserved.
+// See the Status constant for why the worktree is usually — but not always — gone.
 func (i *Instance) Paused() bool {
 	return i.GetStatus() == Paused
 }
@@ -204,12 +204,14 @@ func (i *Instance) Resume() error {
 		return nil
 	}
 
-	// If our own worktree is still materialized on disk, a commit-failure pause left
-	// it in place to preserve uncommitted WIP (see pause). Reuse it as-is: running
-	// Setup would clearStaleWorktree and re-add from the branch, discarding that WIP
-	// — and BranchCheckoutPath would see our own worktree as a foreign checkout and
-	// refuse the resume outright. A valid worktree here can only be that degraded
-	// park (a normal pause removed the worktree), so there is no auto-pause commit to
+	// If our own worktree is still materialized on disk, something parked this session
+	// without removing it. Reuse it as-is: running Setup would clearStaleWorktree and
+	// re-add from the branch, discarding any uncommitted work — and BranchCheckoutPath
+	// would see our own worktree as a foreign checkout and refuse the resume outright.
+	// A normal pause removes the worktree, so a valid one here means one of the two
+	// parks that deliberately leave it: a commit-failure pause preserving WIP it could
+	// not commit (see pause), or a startup recovery deferred by the host session budget
+	// (parkOverBudget). Neither wrote an auto-pause commit, so there is nothing to
 	// unwind. Otherwise materialize it fresh, first guarding against the branch being
 	// checked out elsewhere (base repo or a sibling worktree).
 	if valid, err := wt.IsValidWorktree(); err != nil {

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/ZviBaratz/atrium/log"
+	"github.com/ZviBaratz/atrium/session"
 	"github.com/ZviBaratz/atrium/ui"
 	"github.com/ZviBaratz/atrium/ui/overlay"
 
@@ -225,6 +226,24 @@ func (m *home) surfaceLostRecoveries(recoveries []lostRecovery) tea.Cmd {
 	default:
 		return nil
 	}
+}
+
+// flushDeferredRecovery toasts the startup recoveries the host session budget
+// deferred, once there is a frame to show it on. Nil when there was none or an
+// overlay owns the screen, and the buffer is cleared as it fires so the 100ms
+// preview tick cannot re-toast it forever (the shape flushCustomCommandProblems
+// uses).
+//
+// Unlike the background update notice this is not suppressed with hint_bar off: it
+// reports a consequence of the launch the user just performed, so it rides the
+// reserved row the same way surfaceLostRecoveries' own park toast does (#438).
+func (m *home) flushDeferredRecovery() tea.Cmd {
+	text := startupParkNotice(m.pendingDeferredRecovery)
+	if text == "" || m.state != stateDefault {
+		return nil
+	}
+	m.pendingDeferredRecovery = session.DeferredRecovery{}
+	return m.handleInfoNotice(text)
 }
 
 // showLaunchCrash surfaces a crash-at-launch recovery as a persistent modal

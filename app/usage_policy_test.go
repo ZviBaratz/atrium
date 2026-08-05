@@ -84,7 +84,7 @@ func startedFixture(t *testing.T, specs ...fixtureSpec) []*session.Instance {
 
 	storage, err := session.NewStorage(&memInstanceStore{data: raw})
 	require.NoError(t, err)
-	loaded, err := storage.LoadInstances(context.Background())
+	loaded, _, err := storage.LoadInstances(context.Background())
 	require.NoError(t, err)
 	require.Len(t, loaded, len(specs))
 	for _, inst := range loaded {

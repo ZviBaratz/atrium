@@ -131,7 +131,16 @@ func RunDaemon(ctx context.Context, cfg *config.Config) error {
 	// from this startup snapshot) — by prevention, making both hazards impossible,
 	// rather than by a concurrency-sensitive in-daemon refresh that would not have
 	// made the write side safe anyway.
-	instances, err := storage.LoadInstances(ctx)
+	//
+	// This load relaunches the agent of any session whose tmux session is gone, so it
+	// is rationed by the host session budget the same way the TUI's is — and it has to
+	// be: the daemon reaches the identical path (a tmux server that died around TUI
+	// exit leaves every persisted-live session needing recovery), and it then sets
+	// AutoYes on all of them, so an unrationed fleet here would be auto-answered as
+	// well as oversubscribed. The gate lives inside LoadInstances, which is why there
+	// is nothing to do here but discard its report: the daemon has no UI to surface a
+	// deferral on, and the parks it makes reach the TUI through the SaveInstances below.
+	instances, _, err := storage.LoadInstances(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to load instances: %w", err)
 	}

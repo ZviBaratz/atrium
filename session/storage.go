@@ -229,31 +229,49 @@ func (s *Storage) SaveInstances(instances []*Instance) error {
 	return s.state.SaveInstances(jsonData)
 }
 
-// LoadInstances loads the list of instances from disk. ctx is the lifecycle
-// context reconstructed instances derive their subprocess contexts from.
-func (s *Storage) LoadInstances(ctx context.Context) ([]*Instance, error) {
+// bringInstancesOnline is the seam LoadInstances brings its rehydrated instances
+// online through. A package var — matching the package's own test-seam idiom
+// (worktreeCleanup, repoGroupKey) — so a test can pin what the loader is itself
+// responsible for: handing over the whole fleet, in stored order, under the cap it
+// resolved from config, and returning the report unchanged. Production always uses
+// bringOnline, whose rationing is tested directly against injected tmux deps.
+var bringInstancesOnline = bringOnline
+
+// LoadInstances loads the list of instances from disk and brings each one online.
+// ctx is the lifecycle context reconstructed instances derive their subprocess
+// contexts from.
+//
+// Bringing a session online is not always free: one whose tmux session survived is
+// reattached and adds no load, but one whose session is gone is *relaunched* (see
+// recovery.go). So the load is rationed by the host session budget, and returns the
+// sessions it left parked for want of it — the report a caller may surface, and the
+// zero value when nothing was refused. Survivors are counted before any relaunch is
+// granted; see recoveryBudget for why that ordering is load-bearing.
+func (s *Storage) LoadInstances(ctx context.Context) ([]*Instance, DeferredRecovery, error) {
 	instancesData, err := s.loadInstanceData()
 	if err != nil {
-		return nil, err
+		return nil, DeferredRecovery{}, err
 	}
 
-	// Load config once for the whole batch; FromInstanceData only needs BranchPrefix.
+	// Load config once for the whole batch: FromInstanceData needs BranchPrefix, and
+	// the recovery budget needs the session cap.
 	cfg := config.LoadConfig()
 	instances := make([]*Instance, len(instancesData))
 	for i, data := range instancesData {
 		instance, err := FromInstanceData(ctx, data, cfg.BranchPrefix)
 		if err != nil {
-			return nil, fmt.Errorf("failed to create instance %s: %w", data.Title, err)
+			return nil, DeferredRecovery{}, fmt.Errorf("failed to create instance %s: %w", data.Title, err)
 		}
-		// FromInstanceData is now pure rehydration; reattach to the live tmux session
-		// (or recover in place) as the separate IO step. Safe to call here: the
-		// instance is not published until the returned slice reaches the poll loop,
-		// satisfying reattach's pre-publication precondition.
-		instance.reattach()
 		instances[i] = instance
 	}
 
-	return instances, nil
+	// FromInstanceData is now pure rehydration; bringing the fleet online (reattach,
+	// or recover in place where the budget allows) is the separate IO step. Safe to
+	// call here: no instance is published until the returned slice reaches the poll
+	// loop, satisfying reattach's pre-publication precondition. Done for the whole
+	// fleet at once rather than per instance above, because the budget has to count
+	// every surviving session before it grants the first relaunch.
+	return instances, bringInstancesOnline(instances, cfg.SessionCap()), nil
 }
 
 // loadInstanceData reads the persisted instances as raw serialized data, without

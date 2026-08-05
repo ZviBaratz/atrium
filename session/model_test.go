@@ -120,7 +120,7 @@ func TestStorageRoundTrip_Model(t *testing.T) {
 	b := newPausedInstance(t, "beta")
 	require.NoError(t, store.SaveInstances([]*Instance{a, b}))
 
-	got, err := store.LoadInstances(context.Background())
+	got, _, err := store.LoadInstances(context.Background())
 	require.NoError(t, err)
 	require.Len(t, got, 2)
 	assert.Equal(t, "claude-opus-4-7", got[0].ModelInfo(), "persisted model must survive the round-trip")

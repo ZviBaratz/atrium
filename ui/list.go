@@ -463,10 +463,15 @@ func (l *List) NumInstances() int {
 }
 
 // NumActiveInstances returns the number of live (non-Paused) sessions, ignoring
-// filtering and collapsed groups (like NumInstances). A Paused session has no
-// worktree and no agent process, so it imposes no host load; the host-aware soft
-// session cap counts only these live sessions. Loading and direct sessions do
-// count — both are already running (or starting) an agent.
+// filtering and collapsed groups (like NumInstances). A Paused session has no agent
+// process, so it imposes no host load; the host-aware soft session cap counts only
+// these live sessions. Loading and direct sessions do count — both are already
+// running (or starting) an agent.
+//
+// Load, not disk: whether the worktree is still materialized does not enter into it.
+// Usually it is gone (pause removes it), but two parks deliberately leave it in
+// place — a pause whose WIP commit failed, and a startup recovery the host budget
+// deferred — and neither is running an agent either.
 func (l *List) NumActiveInstances() int {
 	n := 0
 	for _, it := range l.items {
