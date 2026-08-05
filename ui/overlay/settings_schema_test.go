@@ -67,6 +67,7 @@ func TestApplyTimingProjections(t *testing.T) {
 func TestEveryScalarConfigFieldHasARow(t *testing.T) {
 	exempt := map[string]string{
 		"profiles":        "list of records — Profiles editor (PR D), not a settingRow",
+		"custom_commands": "list of records — edited in config.json; the one-value-per-row panel cannot express a key+template+mode (#375)",
 		"claude_accounts": "list of records — Accounts overlay",
 		"gh_accounts":     "list of records — Accounts overlay",
 		"agy_accounts":    "list of records — Accounts overlay",

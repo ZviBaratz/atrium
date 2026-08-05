@@ -96,6 +96,46 @@ type Profile struct {
 	Program string `json:"program"`
 }
 
+// CustomCommand is one user-defined verb over the selected session (#375): a key
+// that runs a shell template against that session's context. Entries will be reached
+// through a custom-commands menu rather than bound at the top level, so Key only has
+// to be unique among custom commands — it can never shadow a built-in. That menu
+// arrives with the UI stage; today the only consumer is `atrium doctor`.
+//
+// This type is deliberately dumb: it is the wire shape and nothing else. Every rule
+// about what a valid entry looks like — and the template rendering itself — lives in
+// package customcmd, which is where the load-time validation pass reports its
+// problems from. An entry that fails those rules is dropped, never bound.
+//
+// Output has no omitempty and no default: the two modes differ enough (one suspends
+// the whole event loop) that leaving it implicit would make "it took over my
+// terminal" a surprise. A config without it decodes to "" and validation rejects it.
+type CustomCommand struct {
+	// Key is the single rune that runs this command from inside the menu.
+	Key string `json:"key"`
+	// Description is what the menu and the ? cheatsheet show. It is the only prose
+	// the user ever sees for the entry, so validation requires it.
+	Description string `json:"description"`
+	// Context selects the working directory: "session" (the agent's working dir,
+	// available only while the session is started and unpaused) or "repo" (the
+	// repository root, which outlives a pause). Empty means "session".
+	Context string `json:"context,omitempty"`
+	// Command is a Go template rendered against the session context and then run
+	// through `sh -c`. The same values are also exported as $ATRIUM_* so a template
+	// need not interpolate a path into the shell string at all.
+	Command string `json:"command"`
+	// Output is how the run is presented. "background" — detached, reporting its
+	// exit status when it finishes — is the only accepted value today; "terminal",
+	// which suspends Atrium and hands the terminal over, arrives with the stage that
+	// can suspend the event loop safely. Required, with no default: the two modes
+	// differ enough that an implicit one would make "it took over my terminal" a
+	// surprise, and requiring it now means adding the second mode never has to
+	// change what an existing config means.
+	Output string `json:"output"`
+	// Confirm arms the y/n dialog before the command runs.
+	Confirm bool `json:"confirm,omitempty"`
+}
+
 // ClaudeAccount maps a named Claude Code account to a CLAUDE_CONFIG_DIR and the
 // route rules that auto-select it: git-remote substrings (RemoteMatches) and/or
 // target-directory-path substrings (PathMatches, the routing signal for
@@ -230,6 +270,10 @@ type Config struct {
 	BranchPrefix string `json:"branch_prefix"`
 	// Profiles is a list of named program profiles.
 	Profiles []Profile `json:"profiles,omitempty"`
+	// CustomCommands is a list of user-defined verbs over the selected session,
+	// reached through the custom-commands menu (#375). Nil by default: Atrium ships
+	// no opinion about what you want to run against a worktree.
+	CustomCommands []CustomCommand `json:"custom_commands,omitempty"`
 	// TmuxConfigOverride, when set to an existing file path, is used as the tmux
 	// config for cs sessions instead of the bundled managed config. When empty,
 	// cs materializes and uses its own config.

@@ -438,6 +438,15 @@ var (
 				fmt.Print(pools)
 			}
 
+			// Custom commands: an entry that fails validation is dropped rather than
+			// bound, so the only symptom in the TUI is a command that isn't in the
+			// menu. This section is where that silence gets a reason.
+			if cmds := doctor.RenderCustomCommands(
+				doctor.CheckCustomCommands(config.LoadConfig())); cmds != "" {
+				fmt.Println()
+				fmt.Print(cmds)
+			}
+
 			// Account state keys: state.json indexes the cluster order, the rate-limit
 			// flags and the rotation cursors by account/pool NAME, so a rename can leave
 			// entries naming something config no longer has. Harmless (unknown names are
