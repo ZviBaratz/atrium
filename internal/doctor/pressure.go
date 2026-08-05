@@ -101,9 +101,15 @@ type PressureResult struct {
 	Filesystems []Filesystem
 }
 
-// Seams so CheckPressure's assembly and every threshold decision are exercisable on
+// Seams so gatherPressure's assembly and every threshold decision are exercisable on
 // any platform with hand-built data, mirroring oom.go's. Production wires the
 // platform readers and the real socket-directory lookup.
+//
+// gatherPressure, not CheckPressure: CheckPressure returns before reading any seam on
+// an unsupported platform, so a test driving it there gets an empty result however the
+// seams are set. That is what makes the split below worth having rather than a
+// stylistic preference — this comment claimed "any platform" while the macOS job proved
+// otherwise.
 var (
 	readSwap     = hostSwap
 	readAvailRAM = availRAMBytes
@@ -119,11 +125,25 @@ var (
 // to locate the socket directory. Safe to run beside a live TUI.
 //
 // The context bounds only that tmux probe; nothing else here can block.
+//
+// The platform gate lives here and the readings live in gatherPressure, so that an
+// unsupported platform consults no reader — not even a stub — and in particular never
+// spawns the tmux probe. Splitting them also keeps the assembly reachable in a test on
+// every platform, which the gate would otherwise make impossible.
 func CheckPressure(ctx context.Context) PressureResult {
-	r := PressureResult{Supported: pressureSupported}
 	if !pressureSupported {
-		return r
+		return PressureResult{Supported: false}
 	}
+	return gatherPressure(ctx)
+}
+
+// gatherPressure takes every reading and applies the thresholds.
+//
+// Supported is true here because it describes the readings this function took, not the
+// platform it ran on — CheckPressure owns that question. A test may therefore call this
+// directly on any platform to exercise the assembly against hand-built data.
+func gatherPressure(ctx context.Context) PressureResult {
+	r := PressureResult{Supported: true}
 
 	r.RAMBytes, r.RAMKnown = readMem()
 	r.AvailRAMBytes, r.AvailRAMKnown = readAvailRAM()

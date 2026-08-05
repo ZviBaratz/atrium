@@ -134,7 +134,7 @@ func TestPressureWarnsAtTheIncidentReadings(t *testing.T) {
 				},
 			})
 
-			r := CheckPressure(context.Background())
+			r := gatherPressure(context.Background())
 			require.Equal(t, tc.wantSwap, r.SwapWarn, "swap headroom verdict")
 
 			fs := findFS(t, r, "tmux socket dir")
@@ -238,7 +238,7 @@ func TestPressureDedupesByDevice(t *testing.T) {
 		},
 	})
 
-	r := CheckPressure(context.Background())
+	r := gatherPressure(context.Background())
 	var withNumbers, deduped int
 	for _, fs := range r.Filesystems {
 		if fs.SameAs != "" {
@@ -315,7 +315,7 @@ func TestRenderPressureMatchesTheSectionConvention(t *testing.T) {
 	})
 
 	for _, out := range []string{
-		RenderPressure(CheckPressure(context.Background())),
+		RenderPressure(gatherPressure(context.Background())),
 		RenderPressure(PressureResult{}), // the unsupported branch keeps the shape too
 	} {
 		require.False(t, strings.HasPrefix(out, "\n"), "the blank separator is main.go's job")
