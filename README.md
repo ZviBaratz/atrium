@@ -1040,6 +1040,10 @@ parsing however odd the path is. A template renders into a shell string, so quot
 value that might contain a space with the `quote` function —
 `lazygit -p {{ quote .Session.Worktree }}`.
 
+Each row says what it will do before you press it: `(terminal)` for a command that takes
+the screen, `(repo)` for one that runs in the repository root rather than the worktree.
+`?` lists the same markers.
+
 A row that cannot run is dimmed with the reason rather than hidden, and pressing its key
 says the same thing in the menu's footer: a `session`-context row on a paused session, or
 any command that reads a value this session does not have (`gh pr checks
@@ -1051,10 +1055,12 @@ in a comment, still counts.
 
 One custom command runs at a time, whichever mode it is in; a second gets a notice.
 
-A `terminal` command owns the screen while it runs, so `Ctrl+C` interrupts *it* and
-leaves Atrium running. Your other sessions keep being serviced in the meantime — queued
-prompts are still delivered and auto-yes still answers — but the session list is not
-redrawn until the command exits, and it is swept fresh on return.
+A `terminal` command owns the screen while it runs, so `Ctrl+C` interrupts *it* and leaves
+Atrium running — as does `Ctrl+\`, which the shell would otherwise use to kill Atrium
+outright. `Ctrl+Z` still suspends the pair, and `fg` brings both back. Your other sessions
+keep being serviced throughout — queued prompts are still delivered and auto-yes still
+answers — but the session list is not redrawn until the command exits, and it is swept
+fresh on return.
 
 Every run is recorded in the command log (`L`), under its key and description rather
 than its rendered text — so a token in a command never lands in the log. A failure

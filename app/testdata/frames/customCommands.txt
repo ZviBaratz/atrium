@@ -9,7 +9,7 @@
 │           │                                                      │           │
 │           │  Custom commands                                     │           │
 │           │                                                      │           │
-│           │    g   lazygit in this worktree      still starting  │           │
+│           │    g   lazygit in this …  (terminal) still starting  │           │
 │           │    c   just ci                       still starting  │           │
 │           │    f   git fetch --all                       (repo)  │           │
 │           │    b   gh pr checks on this branch   still starting  │           │
@@ -42,7 +42,7 @@
 │                   │                                                                              │                   │
 │                   │  Custom commands                                                             │                   │
 │                   │                                                                              │                   │
-│                   │    g   lazygit in this worktree                              still starting  │                   │
+│                   │    g   lazygit in this worktree                   (terminal) still starting  │                   │
 │                   │    c   just ci                                               still starting  │                   │
 │                   │    f   git fetch --all                                               (repo)  │                   │
 │                   │    b   gh pr checks on this branch                           still starting  │                   │

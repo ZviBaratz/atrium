@@ -470,25 +470,23 @@ func TestEnvNamesMatchTheFieldTable(t *testing.T) {
 // compared as strings, so "Terminal" is a typo — and a typo that validated would take
 // over the user's terminal from an entry they wrote expecting a background run.
 func TestParseOutput_AcceptsEveryDeclaredMode(t *testing.T) {
-	for _, tc := range []struct {
-		in   string
-		want Output
-	}{
-		{"background", OutputBackground},
-		{"terminal", OutputTerminal},
-	} {
-		t.Run(tc.in, func(t *testing.T) {
-			got, err := parseOutput(tc.in)
+	// Derived from Outputs(), which parseOutput itself is built from, so a third mode
+	// joins this guard by existing rather than by someone remembering it here.
+	modes := Outputs()
+	require.Len(t, modes, 2, "update this count deliberately when a mode is added or removed")
+	for _, want := range modes {
+		t.Run(string(want), func(t *testing.T) {
+			got, err := parseOutput(string(want))
 			require.NoError(t, err)
-			assert.Equal(t, tc.want, got)
+			assert.Equal(t, want, got)
 
 			// And through the whole validator, since that is what binds it.
 			entry := ok()
-			entry.Output = tc.in
+			entry.Output = string(want)
 			cmds, problems := Validate([]config.CustomCommand{entry})
 			require.Empty(t, problems)
 			require.Len(t, cmds, 1)
-			assert.Equal(t, tc.want, cmds[0].Output)
+			assert.Equal(t, want, cmds[0].Output)
 		})
 	}
 
@@ -509,8 +507,11 @@ func TestParseOutput_AcceptsEveryDeclaredMode(t *testing.T) {
 // exist. A message that is a stale enumeration of a set that has grown is exactly the
 // claim defect nothing else here can see.
 func TestParseOutput_MessagesNameEveryMode(t *testing.T) {
-	// Derived from the type, so a third mode joins this guard by existing.
-	modes := []Output{OutputBackground, OutputTerminal}
+	// Derived from the same table parseOutput builds its messages from, which is what
+	// makes this claim true rather than aspirational: a hand-written literal here would
+	// let a third mode ship with both messages still naming only the first two.
+	modes := Outputs()
+	require.Len(t, modes, 2, "update this count deliberately when a mode is added or removed")
 
 	_, missing := parseOutput("")
 	require.Error(t, missing)

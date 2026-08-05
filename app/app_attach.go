@@ -32,7 +32,7 @@ var (
 	isTerminal       = term.IsTerminal
 	makeRaw          = term.MakeRaw
 	restoreTerm      = term.Restore
-	suspendInterrupt = lifecycle.SuspendInterrupt
+	suspendInterrupt = lifecycle.SuspendTerminalSignals
 )
 
 // attachCommand adapts a blocking terminal takeover into a tea.ExecCommand so Bubble
@@ -98,17 +98,22 @@ func (a *attachCommand) Run() error {
 			log.WarningLog.Printf("failed to set raw mode for attach; Ctrl+Q detach may not work: %v", err)
 		}
 	}
-	// A cooked child owns Ctrl+C. Cooked mode leaves ISIG on and the child is in our
-	// process group, so the kernel delivers that SIGINT to Atrium as well — where the
-	// root context is wired to it and passed to tea.WithContext, so it would shut the
-	// app down. Borrowing SIGINT for the duration leaves the interrupt to the child,
-	// which is what the user meant by it. SIGTERM and SIGHUP are never borrowed.
+	// A child that asked for the terminal in cooked mode owns Ctrl+C. Cooked mode leaves
+	// ISIG on and the child is in our process group, so the kernel delivers that SIGINT to
+	// Atrium as well — where the root context is wired to it and passed to
+	// tea.WithContext, so it would shut the app down. Borrowing the terminal's signals for
+	// the duration leaves the interrupt to the child, which is what the user meant by it.
+	// SIGTERM and SIGHUP are never borrowed.
 	//
-	// The condition covers BOTH cooked cases, which is why it is not simply !a.raw: an
-	// attach that asked for raw mode and could not get it is also running with ISIG on,
-	// and its Ctrl+C has always quit the app. Placed after the attempt above so
-	// rawModeFailed is already known.
-	if cooked := !a.raw || a.rawModeFailed; cooked {
+	// Keyed on the REQUEST (!a.raw), not on the outcome, and deliberately NOT extended to
+	// `|| a.rawModeFailed`. An attach that asked for raw mode and could not get it is
+	// running cooked too, so extending it looks strictly safer and is strictly worse:
+	// tmux sets SIGINT to SIG_IGN in both client and server, so Ctrl+C would reach nobody
+	// at all — and that attach is the one where Ctrl+Q is swallowed by IXON, keys are
+	// line-buffered, and handleAttachFinished's own modal concedes tmux's prefix "may not
+	// register on its own". Ctrl+C quitting Atrium is that user's last way out of a
+	// session they cannot detach from, and it must stay.
+	if cooked := !a.raw; cooked {
 		defer suspendInterrupt()()
 	}
 	ch, err := a.attach()

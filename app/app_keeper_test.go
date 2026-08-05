@@ -40,6 +40,11 @@ type fakeKeeperPane struct {
 	pending      string // text staged by set-buffer, applied on paste-buffer
 	failSendKeys bool   // hard-fail typing/tapping (exec error), for the hard-failure budget
 	noLand       bool   // drop typed text on the floor (a soft not-landed outcome)
+	// signalSendKeys fails a send the way a Ctrl+C does: the subprocess is killed by a
+	// signal rather than running and refusing. Reachable since `output: terminal` (#375),
+	// where a cooked takeover puts the keeper's tmux children in the interrupted
+	// foreground process group.
+	signalSendKeys error
 
 	typed  []string // recorded send-keys -l payloads
 	enters int      // recorded submitting Enter taps
@@ -95,12 +100,18 @@ func (f *fakeKeeperPane) exec() cmd_test.MockCmdExec {
 					return fmt.Errorf("no session")
 				}
 			case slices.Contains(args, "send-keys") && slices.Contains(args, "Enter"):
+				if f.signalSendKeys != nil {
+					return f.signalSendKeys
+				}
 				if f.failSendKeys {
 					return fmt.Errorf("send-keys failed")
 				}
 				f.enters++
 				f.box = "" // a submitting Enter clears the composer
 			case slices.Contains(args, "send-keys") && slices.Contains(args, "-l"):
+				if f.signalSendKeys != nil {
+					return f.signalSendKeys
+				}
 				if f.failSendKeys {
 					return fmt.Errorf("send-keys failed")
 				}
@@ -913,4 +924,71 @@ func TestTickPathPlainFinishStaysQuiet(t *testing.T) {
 
 	require.Empty(t, buf.String(),
 		"a plain finish must stay on the finished rung (off), not be reported as a question")
+}
+
+// TestKeeperSignalledSendNeverRetiresThePrompt is the fix for what Ctrl+C does to the
+// keeper during a cooked terminal takeover.
+//
+// `output: terminal` runs the user's command cooked precisely so Ctrl+C reaches it — and
+// that SIGINT goes to the whole foreground process group, which includes the
+// `tmux send-keys` children the keeper shells out to while the loop is suspended. Counted
+// as hard failures, a few impatient presses exhaust promptSendAttempts and retire the
+// prompt for good: handleCustomCommandTerminalDone then PERSISTS the cleared prompt, so it
+// leaves state.json and is never delivered — for a keypress aimed at the user's own build.
+//
+// A signalled send says nothing about whether the pane would have accepted the prompt, so
+// the truthful reading is "try again next cycle".
+func TestKeeperSignalledSendNeverRetiresThePrompt(t *testing.T) {
+	fake := &fakeKeeperPane{}
+	inst := newKeeperInstance(t, "interrupted", fake)
+	startKeeperInstance(t, inst)
+	fake.mu.Lock()
+	fake.signalSendKeys = signalDeathError(t)
+	fake.mu.Unlock()
+	inst.QueuePrompt("do the thing")
+
+	k := newAttachKeeper(context.Background(), []*session.Instance{inst}, nil)
+	// Well past the budget a hard failure would have spent.
+	for i := 0; i < promptSendAttempts+2; i++ {
+		k.service(inst)
+		require.Equalf(t, "do the thing", inst.Prompt(),
+			"an interrupted send must keep the prompt queued (cycle %d)", i+1)
+		require.False(t, inst.PromptSending(),
+			"the guard must be released so the next cycle can retry")
+	}
+	assert.Empty(t, k.errs,
+		"a Ctrl+C aimed at the user's own command must not be reported as a lost prompt")
+	assert.False(t, k.delivered)
+	assert.Empty(t, k.hardFails, "and it must not accumulate against the retire budget")
+
+	// And once the interruptions stop, the same prompt still delivers.
+	fake.mu.Lock()
+	fake.signalSendKeys = nil
+	fake.mu.Unlock()
+	k.service(inst)
+	assert.Equal(t, "", inst.Prompt(), "the prompt survives to be delivered")
+	assert.True(t, k.delivered)
+}
+
+// The other side of the same discrimination: a send that RAN and exited non-zero is a hard
+// failure and must still retire the prompt on budget. Without this, "signalled" could be
+// spelled as "any non-zero exit" and a genuinely dead pane would be retried forever — the
+// keeper spinning on it for the whole takeover with nothing surfaced at the end.
+func TestKeeperNonZeroExitIsStillAHardFailure(t *testing.T) {
+	fake := &fakeKeeperPane{}
+	inst := newKeeperInstance(t, "exited", fake)
+	startKeeperInstance(t, inst)
+	fake.mu.Lock()
+	fake.signalSendKeys = exitErrorWithCode(t, 1) // ran and refused, ExitCode 1 — not a signal
+	fake.mu.Unlock()
+	inst.QueuePrompt("do the thing")
+
+	k := newAttachKeeper(context.Background(), []*session.Instance{inst}, nil)
+	for range promptSendAttempts {
+		k.service(inst)
+	}
+	assert.Equal(t, "", inst.Prompt(),
+		"a send that ran and failed must still exhaust the budget and retire the prompt")
+	require.Len(t, k.errs, 1, "and the loss must be surfaced")
+	assert.Contains(t, k.errs[0], "exited")
 }

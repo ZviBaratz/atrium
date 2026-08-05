@@ -171,10 +171,15 @@ func TestAttachCommandRun_RawAttachDoesNotBorrowInterrupt(t *testing.T) {
 	assert.Zero(t, borrowed, "raw mode makes Ctrl+C a byte; there is no signal to borrow")
 }
 
-// The case the condition is written for rather than stumbled into: an attach that ASKED
-// for raw mode and could not get it is running cooked, with ISIG on, so its Ctrl+C
-// reaches Atrium exactly as a custom command's does. One condition covers both.
-func TestAttachCommandRun_FailedRawModeBorrowsInterrupt(t *testing.T) {
+// The case that looks like it should borrow and must not.
+//
+// An attach whose MakeRaw failed IS running cooked, with ISIG on, so extending the borrow
+// to it reads as closing a gap. It is the opposite: tmux sets SIGINT to SIG_IGN in both
+// client and server, so a borrowed Ctrl+C there reaches nobody — and this is precisely the
+// attach where Ctrl+Q is swallowed by IXON, input is line-buffered, and the post-detach
+// modal admits tmux's own prefix may not register. Ctrl+C quitting Atrium is that user's
+// last escape from a session they cannot detach from, and it stays theirs.
+func TestAttachCommandRun_FailedRawModeKeepsInterruptQuittable(t *testing.T) {
 	origIsTerminal, origMakeRaw := isTerminal, makeRaw
 	t.Cleanup(func() { isTerminal, makeRaw = origIsTerminal, origMakeRaw })
 	isTerminal = func(int) bool { return true }
@@ -190,9 +195,10 @@ func TestAttachCommandRun_FailedRawModeBorrowsInterrupt(t *testing.T) {
 
 	require.NoError(t, cmd.Run())
 	require.True(t, cmd.rawModeFailed, "the fixture must have failed at raw mode")
-	assert.Equal(t, 1, borrowed,
-		"an attach that fell back to cooked mode has ISIG on, so it borrows SIGINT too")
-	assert.Equal(t, 1, resumed)
+	assert.Zero(t, borrowed,
+		"a raw attach that fell back to cooked must NOT borrow SIGINT: tmux ignores it, so "+
+			"the borrow would leave the user with no key that quits and no key that detaches")
+	assert.Zero(t, resumed)
 }
 
 // stubSuspendInterrupt replaces the lifecycle seam and counts borrows and returns, so

@@ -5,7 +5,9 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"os/exec"
 	"sync"
 	"time"
 
@@ -17,6 +19,17 @@ import (
 // attachKeeperInterval is the keeper's polling cadence, matching the metadata tick.
 // A var, not a const, so tests can shrink it.
 var attachKeeperInterval = 500 * time.Millisecond
+
+// signalledSend reports whether err is a subprocess that was killed by a signal rather
+// than one that ran and refused.
+//
+// ExitCode() is -1 for exactly that case (os.ProcessState.ExitCode: "-1 if the process
+// was terminated by a signal"), which is also why the terminal-mode exit notice has a
+// no-status fallback — the same distinction, surfaced instead of retried.
+func signalledSend(err error) bool {
+	var exitErr *exec.ExitError
+	return errors.As(err, &exitErr) && exitErr.ExitCode() == -1
+}
 
 // attachKeeper keeps background sessions serviced while a tea.Exec attach suspends
 // the event loop — and with it the metadata tick that delivers queued prompts
@@ -212,6 +225,20 @@ func (k *attachKeeper) service(inst *session.Instance) {
 		// soft outcome also resets the hard budget so it matches the tick path,
 		// where each dispatch runs a fresh sendWithRetry — only consecutive-cycle
 		// hard failures should retire a prompt.
+		delete(k.hardFails, inst)
+		inst.ClearPromptSending()
+	case signalledSend(err):
+		// The send's own subprocess was killed by a signal, which says nothing about the
+		// pane. It became reachable with `output: terminal` (#375): a cooked takeover runs
+		// the user's command in Atrium's foreground process group, and the keeper's
+		// `tmux send-keys` children are in it too — so a Ctrl+C aimed at a stubborn build
+		// is delivered to them as well.
+		//
+		// Counted as a hard failure, a few impatient presses exhaust promptSendAttempts and
+		// retire the prompt for good: the return path persists the cleared prompt, so it
+		// leaves state.json and is never delivered. Treated as soft, the keeper simply
+		// sends it again on its next cycle, which is the truthful reading — nothing was
+		// learned about whether the pane would have accepted it.
 		delete(k.hardFails, inst)
 		inst.ClearPromptSending()
 	default:

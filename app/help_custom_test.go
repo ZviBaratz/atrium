@@ -38,6 +38,12 @@ func TestHelpCustomSectionTruncatesLongDescriptions(t *testing.T) {
 		config.CustomCommand{Key: "g", Description: long, Command: "true", Output: "background"},
 		config.CustomCommand{Key: "f", Description: long, Context: "repo", Command: "true", Output: "background"},
 		config.CustomCommand{Key: "w", Description: wide, Command: "true", Output: "background"},
+		// The widest row a config can produce: a long description AND both markers. It
+		// belongs here because helpCustomDescWidth's budget is stated in terms of it —
+		// the fixtures were all `background`, so the terminal marker's 11 cells were
+		// unmeasured and a description bound left at 55 pushed this row two cells over.
+		config.CustomCommand{Key: "t", Description: long, Context: "repo", Command: "true", Output: "terminal"},
+		config.CustomCommand{Key: "T", Description: wide, Context: "repo", Command: "true", Output: "terminal"},
 	)
 	content := xansi.Strip(helpTypeGeneral{commands: cmds}.toContent())
 
@@ -52,7 +58,7 @@ func TestHelpCustomSectionTruncatesLongDescriptions(t *testing.T) {
 			custom = append(custom, line)
 		}
 	}
-	require.Len(t, custom, 3, "every command must be listed")
+	require.Len(t, custom, 5, "every command must be listed")
 
 	for _, line := range custom {
 		// Trailing spaces trimmed: lipgloss.JoinVertical pads every line out to the
@@ -64,6 +70,21 @@ func TestHelpCustomSectionTruncatesLongDescriptions(t *testing.T) {
 	}
 	assert.Contains(t, custom[1], "(repo)",
 		"the repo marker must survive truncation — it is what says which directory")
+	// Both markers, on the widest row, in the order the menu shows them: what it will do
+	// to the screen before where it will run.
+	for _, i := range []int{3, 4} {
+		assert.Containsf(t, custom[i], "(terminal)",
+			"the terminal marker must survive truncation — it is what says the row takes "+
+				"the screen, which is why `output` is a required key: %q", custom[i])
+		assert.Containsf(t, custom[i], "(repo)", "and the repo marker with it: %q", custom[i])
+		assert.Lessf(t, strings.Index(custom[i], "(terminal)"), strings.Index(custom[i], "(repo)"),
+			"markers must read screen-effect first, matching the menu: %q", custom[i])
+	}
+	// The background rows must NOT claim the terminal, or the marker means nothing.
+	for _, i := range []int{0, 1, 2} {
+		assert.NotContainsf(t, custom[i], "(terminal)",
+			"a background row must not be marked as taking the terminal: %q", custom[i])
+	}
 }
 
 // TestHelpCustomSectionListsTheKeysAndOmitsItselfWhenEmpty is the auto-listing AC:

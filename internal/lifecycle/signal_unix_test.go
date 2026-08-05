@@ -52,7 +52,8 @@ func TestWatchSwallowsInterruptWhileSuspended(t *testing.T) {
 	ctx, stop := Watch(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	resume := SuspendInterrupt()
+	shortGrace(t)
+	resume := SuspendTerminalSignals()
 	require.NoError(t, syscall.Kill(syscall.Getpid(), syscall.SIGINT))
 
 	select {
@@ -66,6 +67,7 @@ func TestWatchSwallowsInterruptWhileSuspended(t *testing.T) {
 	// why this is not that function: one suspended Ctrl+C would leave the process
 	// unable to shut down on any later signal for the rest of its life.
 	resume()
+	released(t)
 	require.NoError(t, syscall.Kill(syscall.Getpid(), syscall.SIGINT))
 	select {
 	case <-ctx.Done():
@@ -81,7 +83,8 @@ func TestWatchStillCancelsOnTermWhileSuspended(t *testing.T) {
 	ctx, stop := Watch(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	defer SuspendInterrupt()()
+	shortGrace(t)
+	defer SuspendTerminalSignals()()
 	require.NoError(t, syscall.Kill(syscall.Getpid(), syscall.SIGTERM))
 
 	select {
@@ -120,4 +123,55 @@ func TestWatchHonoursACancelledParent(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("a cancelled parent must cancel the lifecycle context")
 	}
+}
+
+// TestSuspendedInterruptStormCannotCostTheShutdownSignal is the fix for the dropped-signal
+// defect, driven with real signals because the buffer is the whole subject.
+//
+// os/signal DROPS a signal delivered to a full channel. When SIGINT shared one cap-1
+// channel with SIGTERM/SIGHUP, a user holding Ctrl+C against a stubborn build queued a
+// swallowed SIGINT into the only slot — and the SIGHUP from the closing window was then
+// discarded outright, leaving the process alive with its terminal gone and main.go's
+// deferred autoyes-daemon handoff never run. signal.NotifyContext could not lose this way
+// because its goroutine returned on the first signal; keeping the watcher alive is what
+// made the buffering load-bearing.
+func TestSuspendedInterruptStormCannotCostTheShutdownSignal(t *testing.T) {
+	keepSignalsCaught(t)
+	shortGrace(t)
+	ctx, stop := Watch(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	defer SuspendTerminalSignals()()
+	// Enough SIGINTs to overrun any single shared buffer, all of them swallowed.
+	for range 20 {
+		require.NoError(t, syscall.Kill(syscall.Getpid(), syscall.SIGINT))
+	}
+	select {
+	case <-ctx.Done():
+		t.Fatal("a suspended SIGINT storm must not cancel the lifecycle context")
+	case <-time.After(150 * time.Millisecond):
+	}
+
+	// The signal that must survive it.
+	require.NoError(t, syscall.Kill(syscall.Getpid(), syscall.SIGTERM))
+	select {
+	case <-ctx.Done():
+	case <-time.After(2 * time.Second):
+		t.Fatal("SIGTERM was dropped behind a queue of swallowed SIGINTs — the SIGHUP " +
+			"case of this loses the autoyes-daemon handoff")
+	}
+}
+
+// Delivered for real: with a takeover held, a SIGQUIT at this process must not kill it.
+// Only this direction is raiseable — a SIGQUIT after the registration is handed back dumps
+// stacks and exits(2), which is why stopSignals is seamed and asserted through the seam.
+func TestSuspendedSIGQUITDoesNotKillTheProcess(t *testing.T) {
+	keepSignalsCaught(t)
+	shortGrace(t)
+	defer SuspendTerminalSignals()()
+
+	require.NoError(t, syscall.Kill(syscall.Getpid(), syscall.SIGQUIT))
+	// Reaching the next statement at all is the assertion: an unignored SIGQUIT would have
+	// taken the test binary down with a stack dump before it ran.
+	time.Sleep(50 * time.Millisecond)
 }

@@ -48,9 +48,12 @@ import (
 // window for the same reason attachFinishedMsg does: the keeper cannot persist, because
 // persistence is main-loop-owned.
 type customCommandTerminalDoneMsg struct {
-	key             string
-	desc            string
-	err             error
+	key  string
+	desc string
+	err  error
+	// restoreErr is bubbletea's failure to reclaim the terminal after the command, which
+	// is a fact about the terminal rather than about the command — see restoreErrOf.
+	restoreErr      error
 	keeperDelivered bool
 	keeperErrs      []string
 }
@@ -102,18 +105,49 @@ func (m *home) terminalCustomCommandExec(spec customCommandSpec) (*attachCommand
 		// every parked message the resumed loop processes.
 		onAttached: func() { m.attachGen++ },
 	}
-	return cmd, func(err error) tea.Msg {
-		// err is a failure to START (Run returns the attach error unchanged); the exit
-		// status comes from outcome, which exists only once the process was launched.
-		if err == nil && outcome != nil {
+	return cmd, func(teaErr error) tea.Msg {
+		// teaErr is NOT simply "the error Run returned". bubbletea's Program.exec ends its
+		// success path with `err := p.RestoreTerminal(); go p.Send(fn(err))` — so on a
+		// command that ran to completion this argument carries the RESTORE error, and it
+		// can also arrive from a releaseTerminal failure before Run was ever called.
+		//
+		// So `outcome`, not teaErr, is what discriminates. It is set only once the child
+		// was launched, which makes its nilness the exact test for "did this ever start":
+		//
+		//   outcome != nil → it ran; its own result is the command's outcome, whatever
+		//                    the terminal did afterwards.
+		//   outcome == nil → it never started; teaErr is the launch failure.
+		//
+		// Reading teaErr as authoritative discarded a real exit status every time restore
+		// reported a problem — reporting "did not finish" for a build that exited 4, which
+		// is the one thing this message exists to say.
+		var err error
+		if outcome != nil {
 			err = outcome()
+		} else {
+			err = teaErr
 		}
 		return customCommandTerminalDoneMsg{
 			key: spec.key, desc: spec.desc, err: err,
+			// Carried separately because it is a fact about the TERMINAL, not about the
+			// command: a failed restore can leave the frame wedged in a way the hard
+			// repaint on return may not fix, and attributing it to the user's command
+			// would be a lie in both directions.
+			restoreErr:      restoreErrOf(teaErr, outcome),
 			keeperDelivered: keeper.delivered,
 			keeperErrs:      keeper.errs,
 		}
 	}
+}
+
+// restoreErrOf isolates the terminal-restore error from the callback's single argument.
+// It is teaErr exactly when the command ran (so teaErr cannot be a launch failure) and
+// nil otherwise — the launch-failure case reports through err instead.
+func restoreErrOf(teaErr error, outcome func() error) error {
+	if outcome == nil {
+		return nil
+	}
+	return teaErr
 }
 
 // execTerminalCustomCommand starts the script on the terminal Bubble Tea just released.
@@ -202,6 +236,17 @@ func customCommandTerminalError(msg customCommandTerminalDoneMsg) error {
 		// the log.
 		log.ErrorLog.Printf("custom command %q (%s) failed: %v", msg.key, msg.desc, msg.err)
 		parts = append(parts, errors.New(customCommandExitNotice(msg.desc, msg.err)))
+	}
+	if msg.restoreErr != nil {
+		// Surfaced rather than logged only, because the repaint on return may not be
+		// enough: if Bubble Tea could not reclaim stdin, the app is drawing into a
+		// terminal it no longer controls and no amount of redrawing fixes that. It is
+		// its own sentence because it is not the command's fault.
+		log.ErrorLog.Printf("failed to reclaim the terminal after custom command %q: %v",
+			msg.key, msg.restoreErr)
+		// customCommandLabel already quotes and bounds the description.
+		parts = append(parts, fmt.Errorf("the terminal could not be fully reclaimed after "+
+			"%s: %w", customCommandLabel(msg.desc), msg.restoreErr))
 	}
 	if len(msg.keeperErrs) > 0 {
 		parts = append(parts, errors.New(strings.Join(msg.keeperErrs, "\n")))

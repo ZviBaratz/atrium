@@ -34,7 +34,7 @@ func namedKeyMsg(name string) tea.KeyPressMsg {
 
 func threeRows() []CustomCommandRow {
 	return []CustomCommandRow{
-		{Key: "g", Description: "lazygit in this worktree"},
+		{Key: "g", Description: "lazygit in this worktree", Terminal: true},
 		{Key: "c", Description: "just ci"},
 		{Key: "f", Description: "git fetch --all", Repo: true},
 	}
@@ -58,6 +58,47 @@ func TestCustomCommands_RowsShowKeyDescriptionAndRepoMarker(t *testing.T) {
 	}
 	assert.Contains(t, out, customCmdRepoMarker,
 		"a repo-context row must say so — it is the difference between two directories")
+	assert.Contains(t, out, customCmdTerminalMarker,
+		"a terminal row must say so — it is the difference between losing the screen for "+
+			"minutes and not, which is why `output` is a required config key")
+	// And the marker must not be claimed by rows that do not take the terminal, or it
+	// says nothing at all.
+	assert.Equal(t, 1, strings.Count(out, customCmdTerminalMarker),
+		"only the terminal row may carry the marker")
+}
+
+// TestCustomCommands_MarkersFitTheNarrowestBox measures the widest tail a config can
+// produce: BOTH markers plus a refusal, against a wide description that competes for the
+// same columns. The terminal marker is 11 cells, so it moved this budget; a row that
+// overshoots costs the box its border to the composer.
+func TestCustomCommands_MarkersFitTheNarrowestBox(t *testing.T) {
+	rows := []CustomCommandRow{
+		{Key: "t", Description: strings.Repeat("日本語", 20), Repo: true, Terminal: true},
+		{Key: "u", Description: strings.Repeat("ascii desc ", 8), Repo: true, Terminal: true,
+			Inert: "worktree freed — resume first"},
+		{Key: "v", Description: "short", Repo: true, Terminal: true},
+	}
+	for _, w := range []int{60, 80, 120} {
+		out := xansi.Strip(sizedCustomCommands(t, rows, w, 20).Render())
+		for _, l := range strings.Split(out, "\n") {
+			assert.Equalf(t, w, xansi.StringWidth(l), "width=%d: line is the wrong width: %q", w, l)
+		}
+		assert.Containsf(t, out, customCmdTerminalMarker,
+			"width=%d: the marker must survive a competing wide description", w)
+		// The reason still outranks both markers — clipped to width/3 at the narrow end
+		// by the existing fallback, which drops the markers whole rather than shortening
+		// the reason. Asserted on its head, not the full string, because that clip is
+		// the designed behaviour and predates this marker.
+		assert.Containsf(t, out, "worktree freed",
+			"width=%d: and the reason still outranks both markers", w)
+		// Order: what it does to the screen before where it runs, matching the cheatsheet.
+		// Two surfaces render these independently, so each needs its own assertion.
+		ti, ri := strings.Index(out, customCmdTerminalMarker), strings.Index(out, customCmdRepoMarker)
+		require.NotEqual(t, -1, ti)
+		require.NotEqual(t, -1, ri)
+		assert.Lessf(t, ti, ri,
+			"width=%d: markers must read screen-effect first, matching the ? cheatsheet", w)
+	}
 }
 
 // TestCustomCommands_InertRowIsDimmedNotHidden is the rule the palette established:

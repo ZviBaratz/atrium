@@ -18,9 +18,10 @@
 // SIGINT handler stays quiet for the duration of a tea.Exec — and this is Atrium's half
 // of the same idea, in the same shape.
 //
-// Two properties are deliberate:
+// Three properties are deliberate:
 //
-// The suspension is SIGINT-SCOPED. SIGTERM and SIGHUP always cancel. SIGHUP especially:
+// The suspension never touches a signal that means "shut down". SIGTERM and SIGHUP always
+// cancel. SIGHUP especially:
 // main.go registers it to override Go's "terminate without running defers" disposition,
 // so losing the terminal cancels the context and lets the deferred autoyes-daemon
 // handoff run. Swallowing that would leave the process alive with its terminal gone and
@@ -29,6 +30,10 @@
 // A suspended SIGINT is DROPPED, not replayed on resume. The user aimed it at the child,
 // which already received it; re-raising it as a shutdown once the command finishes would
 // quit the app for a keypress that did exactly what was intended.
+//
+// Nothing is IGNORED at the OS level. An ignored signal is inherited across exec, so
+// ignoring SIGQUIT would have made Ctrl+\ kill neither Atrium nor the command — the two
+// signals are declined by Atrium and left to the child. See SuspendTerminalSignals.
 package lifecycle
 
 import (
@@ -37,6 +42,8 @@ import (
 	"os/signal"
 	"sync"
 	"sync/atomic"
+	"syscall"
+	"time"
 )
 
 // interruptSuspended is the number of terminal takeovers currently asking for SIGINT to
@@ -58,10 +65,39 @@ var interruptSuspended atomic.Int64
 // signal it sees, so a swallowed one would retire the watcher and leave the process
 // unable to shut down on any later signal. This keeps waiting until a signal actually
 // cancels.
+//
+// Hence TWO channels, a split that is load-bearing rather than tidy. os/signal DROPS a
+// signal that arrives on a full channel, and a borrowable SIGINT sharing one buffer with
+// the fatal signals can therefore cost the SIGHUP that runs the daemon handoff: the user
+// holds Ctrl+C against a stubborn build, each SIGINT is swallowed, and the SIGHUP from
+// the closing window lands on a buffer that has no room. signal.NotifyContext could
+// never lose that way because its goroutine returns on the first signal it sees, so
+// nothing was ever queued behind a swallowed one. Keeping the watcher alive is precisely
+// what makes buffering matter, so the borrowable signal gets its own queue.
 func Watch(parent context.Context, sigs ...os.Signal) (context.Context, context.CancelFunc) {
 	ctx, cancel := context.WithCancel(parent)
-	ch := make(chan os.Signal, 1)
-	signal.Notify(ch, sigs...)
+
+	var borrowable, fatal []os.Signal
+	for _, s := range sigs {
+		if s == os.Interrupt {
+			borrowable = append(borrowable, s)
+			continue
+		}
+		fatal = append(fatal, s)
+	}
+
+	// The SPLIT above is the guarantee; the buffer below is only politeness. A held Ctrl+C
+	// repeats, and dropping some of those repeats costs nothing because every one of them
+	// is swallowed anyway — what must never be dropped is the first fatal signal, and it
+	// now has a queue no SIGINT can occupy.
+	intCh := make(chan os.Signal, 8)
+	fatalCh := make(chan os.Signal, len(fatal)+1)
+	if len(borrowable) > 0 {
+		signal.Notify(intCh, borrowable...)
+	}
+	if len(fatal) > 0 {
+		signal.Notify(fatalCh, fatal...)
+	}
 
 	done := make(chan struct{})
 	go func() {
@@ -70,7 +106,11 @@ func Watch(parent context.Context, sigs ...os.Signal) (context.Context, context.
 			select {
 			case <-ctx.Done():
 				return
-			case s := <-ch:
+			case <-fatalCh:
+				// SIGTERM and SIGHUP are never borrowed, so there is nothing to consult.
+				cancel()
+				return
+			case s := <-intCh:
 				if !cancels(s) {
 					continue
 				}
@@ -81,7 +121,8 @@ func Watch(parent context.Context, sigs ...os.Signal) (context.Context, context.
 	}()
 
 	return ctx, func() {
-		signal.Stop(ch)
+		signal.Stop(intCh)
+		signal.Stop(fatalCh)
 		cancel()
 		<-done // join, so a stopped watcher cannot outlive the call that stopped it
 	}
@@ -93,8 +134,69 @@ func cancels(s os.Signal) bool {
 	return s != os.Interrupt || interruptSuspended.Load() == 0
 }
 
-// SuspendInterrupt hands SIGINT to a child that owns the terminal, until the returned
-// function is called. Call it as `defer SuspendInterrupt()()` around the takeover.
+// interruptGrace is how long a borrow outlives the child it was taken for. A var so
+// tests can shrink it.
+//
+// It exists because a signal has no arrival time we can read. cancels() runs when the
+// watcher goroutine OBSERVES the SIGINT, not when the kernel delivered it, and the two
+// can straddle the resume: a Ctrl+C aimed at `sh -c "sleep 60"` kills the child at once,
+// so Wait returns, Run's deferred resume fires, and the watcher may only then dequeue a
+// signal that was queued while the borrow was still held. Reading the depth at that point
+// sees zero and quits the TUI — the exact outcome this package exists to prevent, on the
+// keypress it exists to make survivable.
+//
+// A short grace resolves it in the safe direction. The cost is bounded and statable: a
+// Ctrl+C meant for Atrium itself, pressed within the grace of a command finishing, is
+// swallowed and must be pressed again. That is strictly better than a coin flip on
+// whether the app survives.
+var interruptGrace = 500 * time.Millisecond
+
+// swallowedDuringTakeover are the signals a cooked takeover registers a handler for and
+// then discards, as opposed to SIGINT, which the lifecycle watcher already receives and
+// merely declines to act on.
+//
+// REGISTERING is the mechanism, not ignoring, and the difference is the whole behaviour.
+// POSIX resets a CAUGHT signal to SIG_DFL across exec but leaves an IGNORED one ignored —
+// so signal.Ignore(SIGQUIT) is inherited by the `sh -c` child and Ctrl+\ then does nothing
+// at all, killing neither Atrium nor the command the user was trying to stop. Registering
+// it instead demotes it from Go's default for Atrium while leaving the child's default
+// intact, which is exactly the split SIGINT already gets: the keypress reaches the command
+// and not the app.
+//
+// SIGQUIT is the whole list, and it is here because `output: terminal` is
+// the first Atrium state that runs with ISIG ON — every other takeover is raw, and so is
+// the TUI — which arms Ctrl+\ for the first time. Its Go default is dump-every-goroutine
+// -stack and exit(2), skipping main.go's deferred autoyes-daemon handoff, so a user who
+// tries Ctrl+C, sees the build ignore it, and escalates one key to the left would kill
+// Atrium in the one way that leaves the whole fleet unanswered (#264's symptom) with
+// goroutine traces where their screen used to be.
+//
+// SIGTSTP (Ctrl+Z) is deliberately NOT here. It is armed the same way, but it stops the
+// entire foreground process group — Atrium and the child together — and `fg` resumes
+// both. That is coherent job control rather than a defect, and swallowing it would take
+// away a shell feature the user asked for.
+var swallowedDuringTakeover = []os.Signal{syscall.SIGQUIT}
+
+// notifySignals and stopSignals seam os/signal's registration calls, for the reason
+// app/app_attach.go seams term's tty calls: the deregistration half cannot be driven by
+// raising the signal — a SIGQUIT delivered after a correct stop dumps stacks and exits(2),
+// taking the test binary with it — so without a seam "we hand it back afterwards" is
+// unassertable, and an unassertable claim here leaves Go's stack-dump aid disabled for the
+// rest of the process.
+var (
+	notifySignals = signal.Notify
+	stopSignals   = signal.Stop
+)
+
+// SuspendTerminalSignals hands the terminal's signals to a child that owns the terminal,
+// until the returned function is called. Call it as
+// `defer SuspendTerminalSignals()()` around the takeover.
+//
+// Neither signal is ignored at the OS level, and that is deliberate: an ignored signal is
+// INHERITED across exec, so the child would stop receiving the keypress the user aimed at
+// it. SIGINT is swallowed by the watcher (see cancels); SIGQUIT is registered here for the
+// duration and handed back afterwards. Either way Atrium declines the signal and the
+// child still gets it.
 //
 // It is inert when no Watch is active, which is what lets attachCommand.Run call it
 // unconditionally: unit tests drive Run directly, with no watcher anywhere.
@@ -102,8 +204,23 @@ func cancels(s os.Signal) bool {
 // The returned function is idempotent. A resume that could run twice would drive the
 // depth negative and leave SIGINT suppressed for the rest of the process — a TUI that
 // silently stops answering Ctrl+C, with nothing to explain it.
-func SuspendInterrupt() func() {
+func SuspendTerminalSignals() func() {
 	interruptSuspended.Add(1)
+	// Buffered, with no reader on purpose: the registration itself is the effect, and a
+	// signal that arrives simply lands in the buffer and is discarded. Nothing needs to
+	// observe it — Atrium's job is only to stop dying from it.
+	quitCh := make(chan os.Signal, 4)
+	notifySignals(quitCh, swallowedDuringTakeover...)
+
 	var once sync.Once
-	return func() { once.Do(func() { interruptSuspended.Add(-1) }) }
+	return func() {
+		once.Do(func() {
+			// Hands SIGQUIT back to Go's default. The stack dump is a debugging aid outside
+			// a takeover and must not be disabled process-wide.
+			stopSignals(quitCh)
+			// Released on a timer, not here — see interruptGrace. AfterFunc rather than a
+			// parked goroutine so a takeover costs nothing once the grace has elapsed.
+			time.AfterFunc(interruptGrace, func() { interruptSuspended.Add(-1) })
+		})
+	}
 }

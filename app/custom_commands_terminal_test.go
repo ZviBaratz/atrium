@@ -466,3 +466,83 @@ func signalDeathError(t *testing.T) *exec.ExitError {
 	require.ErrorAs(t, err, &exitErr)
 	return exitErr
 }
+
+// TestCustomCommandTerminalExitStatusSurvivesARestoreError is the guard for the premise
+// this mode was originally built on and got wrong.
+//
+// bubbletea's Program.exec ends its SUCCESS path with
+// `err := p.RestoreTerminal(); go p.Send(fn(err))`, so the callback's argument is the
+// RESTORE error for a command that ran to completion — not "nil on a clean run". Reading
+// it as authoritative discarded the exit status of every command whose restore reported a
+// problem, which is the one fact this notice exists to carry, and misattributed a terminal
+// failure to the user's command.
+func TestCustomCommandTerminalExitStatusSurvivesARestoreError(t *testing.T) {
+	h, _ := newCustomCommandHome(t, nil)
+	stubTerminalRunner(t, exitErrorWithCode(t, 4))
+
+	cmd, callback := h.terminalCustomCommandExec(customCommandSpec{
+		key: "c", desc: "just ci", script: "false", dir: t.TempDir(),
+	})
+	require.NoError(t, cmd.Run())
+
+	// What bubbletea hands back when the command ran but the terminal could not be
+	// reclaimed cleanly.
+	done, ok := callback(errors.New("open /dev/tty: no such device")).(customCommandTerminalDoneMsg)
+	require.True(t, ok)
+
+	var exitErr *exec.ExitError
+	require.ErrorAs(t, done.err, &exitErr,
+		"the command's own outcome must win: it ran, and its status is what the user asked about")
+	assert.Equal(t, 4, exitErr.ExitCode())
+	require.Error(t, done.restoreErr, "and the terminal's failure must be carried, not dropped")
+
+	_, _ = h.Update(done)
+	surfaced := xansi.Strip(h.menu.String())
+	if h.textOverlay != nil {
+		surfaced += xansi.Strip(h.textOverlay.Render())
+	}
+	assert.Contains(t, surfaced, "exited 4", "the exit status must reach the user")
+	assert.Contains(t, surfaced, "could not be fully reclaimed",
+		"and so must the terminal failure — the repaint may not fix a stdin it cannot reclaim")
+}
+
+// The other side of the same discriminator: a command that never started has no outcome,
+// so the callback's argument IS the launch failure and must be reported as one.
+func TestCustomCommandTerminalReportsALaunchFailure(t *testing.T) {
+	h, _ := newCustomCommandHome(t, nil)
+	prev := runTerminalCustomCommand
+	runTerminalCustomCommand = func(context.Context, customCommandSpec) (chan struct{}, func() error, error) {
+		return nil, nil, errors.New("fork/exec /bin/sh: permission denied")
+	}
+	t.Cleanup(func() { runTerminalCustomCommand = prev })
+
+	cmd, callback := h.terminalCustomCommandExec(customCommandSpec{
+		key: "c", desc: "just ci", script: "true", dir: t.TempDir(),
+	})
+	err := cmd.Run()
+	require.Error(t, err)
+
+	done, ok := callback(err).(customCommandTerminalDoneMsg)
+	require.True(t, ok)
+	require.Error(t, done.err, "a command that never started is a failure")
+	assert.NoError(t, done.restoreErr,
+		"and it is a LAUNCH failure, not a terminal one — reporting both would double-count it")
+}
+
+// A clean run whose terminal restored cleanly stays quiet, which is what makes the two
+// tests above assertions about a real distinction rather than about noise.
+func TestCustomCommandTerminalCleanRunStaysQuiet(t *testing.T) {
+	h, _ := newCustomCommandHome(t, nil)
+	stubTerminalRunner(t, nil)
+
+	cmd, callback := h.terminalCustomCommandExec(customCommandSpec{
+		key: "t", desc: "lazygit", script: "true", dir: t.TempDir(),
+	})
+	require.NoError(t, cmd.Run())
+
+	done := callback(nil).(customCommandTerminalDoneMsg)
+	assert.NoError(t, done.err)
+	assert.NoError(t, done.restoreErr)
+	_, _ = h.Update(done)
+	assert.False(t, h.menu.HasNotice(), "a clean run says nothing")
+}

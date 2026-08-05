@@ -106,6 +106,7 @@ func (m *home) openCustomCommands() (tea.Model, tea.Cmd) {
 			Key:         c.Key,
 			Description: c.Description,
 			Repo:        c.Context == customcmd.ContextRepo,
+			Terminal:    c.Output == customcmd.OutputTerminal,
 			Inert:       inert,
 		})
 	}
