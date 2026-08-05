@@ -226,7 +226,7 @@ func (o *CustomCommandsOverlay) renderRow(row CustomCommandRow, selected bool, w
 		tail = customCmdRepoMarker
 	}
 
-	prefix := fmt.Sprintf("  %-*s  ", customCmdKeyCol, row.Key)
+	prefix := "  " + padCells(row.Key, customCmdKeyCol) + "  "
 	// The gap is charged only when there is something to separate, so a row with no
 	// tail spends those columns on its description instead of on padding.
 	gap := 0
@@ -247,19 +247,14 @@ func (o *CustomCommandsOverlay) renderRow(row CustomCommandRow, selected bool, w
 	if descWidth < 1 {
 		tail, gap, descWidth = "", 0, width-lipgloss.Width(prefix)
 	}
-	desc := clipLine(row.Description, descWidth)
-
-	body := prefix + fmt.Sprintf("%-*s", max(descWidth, 0), desc)
+	body := prefix + padCells(clipLine(row.Description, descWidth), descWidth)
 	if tail != "" {
 		body += strings.Repeat(" ", gap) + tail
 	}
 	// Padded to the full inner width, not merely clipped to it: the selected row is
 	// rendered on a background, and a short body would leave the highlight ending
 	// mid-row with plain cells beside it.
-	body = clipLine(body, width)
-	if pad := width - lipgloss.Width(body); pad > 0 {
-		body += strings.Repeat(" ", pad)
-	}
+	body = padCells(clipLine(body, width), width)
 
 	if selected {
 		return overlaySelectedStyle().Render(body)
@@ -275,6 +270,20 @@ func (o *CustomCommandsOverlay) renderRow(row CustomCommandRow, selected bool, w
 // bottom border.
 func fit(style lipgloss.Style, s string, width int) string {
 	return style.Render(clipLine(s, width))
+}
+
+// padCells right-pads s to width DISPLAY CELLS.
+//
+// It replaces fmt's %-*s, which pads to a width counted in runes. Mixing the two is how
+// a CJK description destroyed the `(repo)` marker: clipped to N cells it is ~N/2 runes,
+// so %-*s added ~N/2 spaces too many, the row overshot the box, and the final clip ate
+// the tail — leaving the marker as a lone ellipsis. Nothing caught it, because the
+// pad-then-clip kept every line exactly the right width and the fixtures were ASCII.
+func padCells(s string, width int) string {
+	if pad := width - lipgloss.Width(s); pad > 0 {
+		return s + strings.Repeat(" ", pad)
+	}
+	return s
 }
 
 // clipLine truncates s to width, and only when it is genuinely wider.
@@ -311,8 +320,11 @@ const (
 	// customCmdChrome is every row of the box that is not a list row: the border
 	// (2) and vertical padding (2) lipgloss draws around the content, the title and
 	// its blank (2), the blank above the footer and the footer itself (2), and the
-	// "… N more" line the list grows when it is windowed (1). Charged in full so
-	// the box occupies exactly the height SetSize was given.
+	// "… N more" line the list grows when it is windowed (1). Charged in full so the
+	// box occupies AT MOST the height SetSize was given — at most, not exactly: the
+	// "… N more" row is charged whether or not the list is windowed, so a short list
+	// renders a shorter box. Under-counting is the failure that matters, since a box
+	// taller than its budget loses its bottom border to the composer.
 	//
 	// A refusal is NOT charged here because it takes the footer's row rather than
 	// adding one. That is the whole reason it is placed there.
@@ -328,9 +340,11 @@ const (
 	// cannot go negative if the floor is ever lowered.
 	customCmdMinInner = customCmdMinWidth - 6
 
-	// customCmdKeyCol is the key column's width: one character, since that is what
-	// validation accepts, plus nothing — the gap is separate.
-	customCmdKeyCol = 1
+	// customCmdKeyCol is the key column's width in CELLS. Two, not one: validation
+	// accepts any single printable rune, and a CJK or emoji key is one rune two cells
+	// wide — so a one-cell column would let such a row push its description a cell
+	// right of every other row's.
+	customCmdKeyCol = 2
 	// customCmdGap separates the description from its tail.
 	customCmdGap = 2
 	// customCmdMinDescWidth is the point below which the tail is dropped rather

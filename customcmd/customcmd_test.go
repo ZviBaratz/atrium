@@ -2,6 +2,7 @@ package customcmd
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/ZviBaratz/atrium/config"
@@ -358,4 +359,105 @@ func TestLogArgv(t *testing.T) {
 	assert.NotContains(t, joined, "ghp_realsecret", "the rendered script must never reach the log")
 	assert.Contains(t, joined, "lazygit here", "the log names the command by its description")
 	assert.Contains(t, joined, "g", "and by its key")
+}
+
+// MissingEnv closes the half of AC1 that MissingFields structurally cannot see.
+//
+// The two forms this package documents as interchangeable were not: MissingFields asks
+// the template renderer which fields reached the output, so a $ATRIUM_* name the SHELL
+// expands is invisible to it. `rm -rf {{ quote .Session.Worktree }}/build` was refused on
+// a session with no worktree while `rm -rf "$ATRIUM_WORKTREE"/build` ran — as
+// `rm -rf /build`.
+func TestMissingEnv(t *testing.T) {
+	// Every field populated except the worktree, which is what a session before Start
+	// (or after a pause) looks like.
+	ctx := Ctx{
+		Session: SessionCtx{Title: "t", Name: "n", Branch: "b"},
+		Repo:    RepoCtx{Path: "/repo", Name: "atrium"},
+	}
+
+	for _, tc := range []struct {
+		name    string
+		command string
+		want    []string
+	}{
+		{"bare reference", `rm -rf "$ATRIUM_WORKTREE"/build`, []string{"Session.Worktree"}},
+		{"braced reference", `rm -rf "${ATRIUM_WORKTREE}/build"`, []string{"Session.Worktree"}},
+		{"at end of script", `cd $ATRIUM_WORKTREE`, []string{"Session.Worktree"}},
+		{"unquoted", `ls $ATRIUM_WORKTREE`, []string{"Session.Worktree"}},
+		{"populated fields are not reported", `git -C "$ATRIUM_REPO" log "$ATRIUM_BRANCH"`, nil},
+		{"a name it does not carry", `echo "$HOME $PATH"`, nil},
+		{"no variables at all", `just ci`, nil},
+		// The prefix collision this is not strings.Contains for: ATRIUM_REPO is a prefix
+		// of ATRIUM_REPO_NAME. Reported against an empty Repo.Path, a substring check
+		// would refuse this command AND name the wrong field.
+		{"a longer name that starts with a shorter one", `echo "$ATRIUM_REPO_NAME"`, nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := ok()
+			e.Command = tc.command
+			cmds, problems := Validate([]config.CustomCommand{e})
+			require.Empty(t, problems)
+			require.Len(t, cmds, 1)
+
+			assert.ElementsMatch(t, tc.want, cmds[0].MissingEnv(ctx))
+		})
+	}
+}
+
+// TestMissingEnv_ReportsTheRightFieldOnAPrefixCollision is the other direction of the
+// same trap: $ATRIUM_REPO_NAME must be reported when Repo.NAME is the empty one.
+func TestMissingEnv_ReportsTheRightFieldOnAPrefixCollision(t *testing.T) {
+	e := ok()
+	e.Command = `echo "$ATRIUM_REPO_NAME" > "$ATRIUM_REPO/out"`
+	cmds, problems := Validate([]config.CustomCommand{e})
+	require.Empty(t, problems)
+
+	// Only the name is empty.
+	ctx := Ctx{Session: SessionCtx{Title: "t", Name: "n", Branch: "b", Worktree: "/wt"},
+		Repo: RepoCtx{Path: "/repo"}}
+	assert.Equal(t, []string{"Repo.Name"}, cmds[0].MissingEnv(ctx))
+
+	// Only the path is empty.
+	ctx = Ctx{Session: SessionCtx{Title: "t", Name: "n", Branch: "b", Worktree: "/wt"},
+		Repo: RepoCtx{Name: "atrium"}}
+	assert.Equal(t, []string{"Repo.Path"}, cmds[0].MissingEnv(ctx))
+}
+
+// TestMissingEnv_OverReportsRatherThanUnderReports documents the known limit, in the
+// direction that is safe. A name the shell would never expand — single-quoted, or in a
+// comment — still counts, because the alternative is implementing shell quoting and
+// being wrong about it runs the command.
+func TestMissingEnv_OverReportsRatherThanUnderReports(t *testing.T) {
+	e := ok()
+	e.Command = `echo '$ATRIUM_WORKTREE is not expanded here'`
+	cmds, problems := Validate([]config.CustomCommand{e})
+	require.Empty(t, problems)
+
+	assert.Equal(t, []string{"Session.Worktree"},
+		cmds[0].MissingEnv(Ctx{Session: SessionCtx{Title: "t", Name: "n", Branch: "b"},
+			Repo: RepoCtx{Path: "/repo", Name: "atrium"}}),
+		"a single-quoted name is over-reported on purpose: a false dim is visible and "+
+			"carries its reason, where a false pass runs the command")
+}
+
+// TestEnvNamesMatchTheFieldTable is what keeps Env and MissingEnv from drifting: they
+// must agree about which variable carries which field, or the emptiness gate covers a
+// name the command never reads and misses the one it does.
+func TestEnvNamesMatchTheFieldTable(t *testing.T) {
+	// A context whose every value is its own path, so each exported pair is traceable.
+	var ctx Ctx
+	for _, f := range fieldAccess {
+		f.set(&ctx, f.path)
+	}
+
+	got := Env(ctx)
+	require.Len(t, got, len(fieldAccess))
+	for _, f := range fieldAccess {
+		assert.Containsf(t, got, f.env+"="+f.path,
+			"Env must export %s for %s", f.env, f.path)
+		assert.NotEmptyf(t, f.env, "%s has no environment variable", f.path)
+		assert.Truef(t, strings.HasPrefix(f.env, "ATRIUM_"),
+			"%s must be namespaced: %q", f.path, f.env)
+	}
 }

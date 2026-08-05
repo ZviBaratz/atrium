@@ -150,12 +150,13 @@ func (m *home) updateHandleWindowSizeEvent(msg tea.WindowSizeMsg) {
 		if w > 80 {
 			w = 80
 		}
+		// No `h > msg.Height` clamp, unlike the palette above: a 0.7 share capped at 30
+		// cannot exceed the height it was taken from. That guard is necessary there
+		// because of the palette's `+3`, and copying it here would read as load-bearing
+		// while doing nothing.
 		h := int(float32(msg.Height) * 0.7)
 		if h > 30 {
 			h = 30
-		}
-		if h > msg.Height {
-			h = msg.Height
 		}
 		m.customCommandsOverlay.SetSize(w, h)
 	}

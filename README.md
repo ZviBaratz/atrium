@@ -1041,10 +1041,15 @@ value that might contain a space with the `quote` function —
 `lazygit -p {{ quote .Session.Worktree }}`.
 
 A row that cannot run is dimmed with the reason rather than hidden, and pressing its key
-says the same thing in the menu's footer: a `session`-context row on a paused session,
-or any command whose placeholders this session leaves empty (`gh pr checks
-{{ .Session.Branch }}` on a session with no branch). One custom command runs at a time;
-a second gets a notice.
+says the same thing in the menu's footer: a `session`-context row on a paused session, or
+any command that reads a value this session does not have (`gh pr checks
+{{ .Session.Branch }}`, or `gh pr checks "$ATRIUM_BRANCH"`, on a session with no branch).
+Both forms are covered — a command is refused whether it names the value as a placeholder
+or as a variable — because an empty expansion is how `rm -rf "$ATRIUM_WORKTREE"/build`
+becomes `rm -rf /build`. The check errs toward refusing: a name inside single quotes, or
+in a comment, still counts.
+
+One custom command runs at a time; a second gets a notice.
 
 Every run is recorded in the command log (`L`), under its key and description rather
 than its rendered text — so a token in a command never lands in the log. A failure

@@ -228,6 +228,59 @@ func TestCustomCommands_FitsItsSize(t *testing.T) {
 	}
 }
 
+// TestCustomCommands_WideRunesDoNotEatTheTail is the case TestCustomCommands_FitsItsSize
+// is structurally blind to.
+//
+// The row was clipped by display width and then padded to a width counted in RUNES, so a
+// CJK description — half as many runes as cells — overshot the box by ~half the column,
+// and the final clip took it out of the tail. Every line stayed exactly the right width,
+// which is all the size guard measures, while `(repo)` rendered as a lone `…`.
+//
+// The marker is what the overlay's own comment calls load-bearing — it is the only thing
+// saying which directory the row runs in — so a marker reduced to an ellipsis is worse
+// than one omitted.
+func TestCustomCommands_WideRunesDoNotEatTheTail(t *testing.T) {
+	wide := strings.Repeat("日本語", 20)
+	rows := []CustomCommandRow{
+		{Key: "f", Description: wide, Repo: true},
+		{Key: "g", Description: strings.Repeat("ascii desc ", 6), Repo: true},
+		{Key: "h", Description: wide, Inert: "worktree freed — resume first"},
+		// A 2-cell key: validation accepts any printable rune, and the key column was
+		// padded by rune count too, which shifted this row's description by a cell.
+		{Key: "日", Description: "a two-cell key", Repo: true},
+	}
+
+	for _, w := range []int{60, 80, 120} {
+		o := sizedCustomCommands(t, rows, w, 20)
+		out := xansi.Strip(o.Render())
+		lines := strings.Split(out, "\n")
+
+		assert.Equalf(t, 3, strings.Count(out, customCmdRepoMarker),
+			"width=%d: every runnable repo row must keep a whole marker, not an ellipsis:\n%s", w, out)
+		assert.Containsf(t, out, "worktree freed — resume first",
+			"width=%d: the inert row's reason must survive a wide description whole", w)
+
+		for _, l := range lines {
+			assert.Equalf(t, w, xansi.StringWidth(l), "width=%d: line is the wrong width: %q", w, l)
+		}
+
+		// The description column lines up across rows, including the two-cell key. A
+		// column measured in runes would put that row's description one cell right.
+		var starts []int
+		for _, l := range lines {
+			if i := strings.Index(l, "a two-cell key"); i >= 0 {
+				starts = append(starts, xansi.StringWidth(l[:i]))
+			}
+			if i := strings.Index(l, "ascii desc"); i >= 0 {
+				starts = append(starts, xansi.StringWidth(l[:i]))
+			}
+		}
+		require.Lenf(t, starts, 2, "width=%d: both marker rows must be present", w)
+		assert.Equalf(t, starts[0], starts[1],
+			"width=%d: a two-cell key must not shift its description column", w)
+	}
+}
+
 // TestCustomCommands_WindowsTheListAroundTheCursor proves the height budget windows
 // rather than truncates: a cursor driven past the visible rows must stay on screen.
 func TestCustomCommands_WindowsTheListAroundTheCursor(t *testing.T) {

@@ -163,7 +163,11 @@ func (m *home) launchCustomCommand(c customcmd.Command) (tea.Model, tea.Cmd) {
 	}
 	if c.Confirm {
 		cmd := m.confirmAction(
-			fmt.Sprintf("Run %s in %s?", quoteDesc(c.Description), filepath.Base(spec.dir)),
+			// The full description, not the bounded label: this is the one surface with
+			// room for it. A confirmation dialog wraps, and the user is being asked to
+			// approve exactly this command — where the one-row surfaces have to choose
+			// between the description and their own reason, this does not.
+			fmt.Sprintf("Run '%s' in %s?", c.Description, filepath.Base(spec.dir)),
 			// instantAction, and it must stay one: the closure returns a message and
 			// nothing else, so the work it names starts from Update.
 			instantAction,
@@ -194,7 +198,7 @@ func (m *home) startCustomCommand(spec customCommandSpec) tea.Cmd {
 	m.runningCustomCommand = spec.key
 	// Captured here, not read from m inside the goroutine.
 	ctx := m.ctx
-	return m.beginBackgroundAction(fmt.Sprintf("running %s…", quoteDesc(spec.desc)), func() tea.Msg {
+	return m.beginBackgroundAction(fmt.Sprintf("running %s…", customCommandLabel(spec.desc)), func() tea.Msg {
 		if msg := runCustomCommand(ctx, spec); msg != nil {
 			return msg
 		}
@@ -242,15 +246,18 @@ func customCommandFailureNotice(desc string) string {
 	return customCommandLabel(desc) + customCommandFailedTail
 }
 
-// customCommandLabel quotes a user-authored description for a one-line message, bounded
-// to customCommandNoticeDescWidth display cells.
+// customCommandLabel quotes a user-authored description for a message that gets ONE ROW,
+// bounded to customCommandNoticeDescWidth display cells.
 //
-// Every refusal and every report about a custom command goes through it, because the
-// description is the only unbounded value any of them carry — and a message whose width
-// depends on unbounded input has no worst case to assert. The corollary is the ordering
-// rule those messages follow: the reason comes AFTER the label and nothing comes after
-// the reason. The hint bar truncates from the right, so an unbounded tail does not
-// shorten the message, it deletes the reason.
+// Every such surface goes through it — the three refusal tails and the progress row —
+// because the description is the only unbounded value any of them carries, and a message
+// whose width depends on unbounded input has no worst case to assert. The confirmation
+// dialog deliberately does not: it wraps, so it can afford the whole description, and
+// that is stated at the call site rather than left to a reader to notice.
+//
+// The corollary is the ordering rule the one-row messages follow: the reason comes AFTER
+// the label and nothing comes after the reason. The bar truncates from the right, so an
+// unbounded tail does not shorten the message, it deletes the reason.
 func customCommandLabel(desc string) string {
 	return "'" + runewidth.Truncate(desc, customCommandNoticeDescWidth, "…") + "'"
 }
@@ -333,7 +340,14 @@ func customCommandInertReason(c customcmd.Command, inst *session.Instance, ctx c
 	if customCommandDir(c, ctx) == "" {
 		return noDirectoryReason
 	}
-	if missing := c.MissingFields(ctx); len(missing) > 0 {
+	// Both ways a context field can reach the command, because they are separate
+	// detections and only one of them is about the template. MissingFields asks the
+	// renderer which placeholders reached the output; MissingEnv scans the script for
+	// the $ATRIUM_* names the shell expands. Checking only the first is what made the
+	// two forms the README calls interchangeable behave differently: the template form
+	// was refused on a worktree-less session and the environment form ran, as
+	// `rm -rf /build`.
+	if missing := append(c.MissingFields(ctx), c.MissingEnv(ctx)...); len(missing) > 0 {
 		return customCommandMissingReason(missing[0])
 	}
 	return ""
@@ -522,9 +536,10 @@ func (m *home) flushCustomCommandProblems() tea.Cmd {
 	return m.showInfo(customCommandProblemsReport(problems))
 }
 
-// quoteDesc quotes a user-authored description for a one-line message, matching the
-// kill dialog's 'name' style.
-func quoteDesc(s string) string { return "'" + s + "'" }
+// Deliberately no unbounded quoting helper here. There was one, beside
+// customCommandLabel and named almost the same, and the pair is how the next author
+// reaches for the wrong guarantee — so the one surface that wants the full description
+// spells it out at its call site instead.
 
 const (
 	// customCommandOutputCap is how much of a command's output is kept for the log's
@@ -548,6 +563,13 @@ const (
 	// plus the longest tail. Counting that by eye is how the bound shipped one cell
 	// short the first time, so TestCustomCommandRefusalsFitARow measures the literals
 	// and fails if this number stops being their maximum.
+	//
+	// It is a constant where the real constraint is the live terminal width:
+	// ErrBox.Fits wants width(msg) <= terminal-3, so below ~71 columns a refusal falls
+	// back to the info modal this bound exists to avoid. That is accepted rather than
+	// solved — 80 columns is the documented floor, every other overlay assumes it, and
+	// sizing the description to the frame would make the message's width a function of
+	// the window, which is precisely what makes a bound unassertable.
 	customCommandNoticeWidth = customCommandNoticeDescWidth + customCommandNoticeChrome
 	// customCommandNoticeChrome is the two quotes plus the longest tail above.
 	customCommandNoticeChrome = 38

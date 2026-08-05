@@ -377,21 +377,95 @@ func sentinelFor(path string) string {
 }
 
 // fieldAccess is the leaf-by-leaf view of Ctx that MissingFields substitutes
-// through. It is a hand-written table because Ctx is a fixed, tiny shape and
-// reflection here would buy nothing but indirection —
-// TestFieldAccessCoversEveryContextLeaf is what keeps it honest, in both
-// directions.
+// through, and the single source of truth for the two ways a context field reaches a
+// command: its template path and its environment variable.
+//
+// The env name lives here rather than in Env for one reason — the two consumers must
+// never disagree about which variable carries which field. MissingEnv decides whether
+// to refuse a command by looking for a name in its script; Env decides what that name
+// is worth. Spelling them separately is how the emptiness gate came to cover the
+// template form and not the environment form of the same value.
+//
+// It is a hand-written table because Ctx is a fixed, tiny shape and reflection here
+// would buy nothing but indirection — TestFieldAccessCoversEveryContextLeaf is what
+// keeps it honest, in both directions.
 var fieldAccess = []struct {
 	path string
+	env  string
 	get  func(Ctx) string
 	set  func(*Ctx, string)
 }{
-	{"Session.Title", func(c Ctx) string { return c.Session.Title }, func(c *Ctx, v string) { c.Session.Title = v }},
-	{"Session.Name", func(c Ctx) string { return c.Session.Name }, func(c *Ctx, v string) { c.Session.Name = v }},
-	{"Session.Branch", func(c Ctx) string { return c.Session.Branch }, func(c *Ctx, v string) { c.Session.Branch = v }},
-	{"Session.Worktree", func(c Ctx) string { return c.Session.Worktree }, func(c *Ctx, v string) { c.Session.Worktree = v }},
-	{"Repo.Path", func(c Ctx) string { return c.Repo.Path }, func(c *Ctx, v string) { c.Repo.Path = v }},
-	{"Repo.Name", func(c Ctx) string { return c.Repo.Name }, func(c *Ctx, v string) { c.Repo.Name = v }},
+	{"Session.Title", "ATRIUM_TITLE", func(c Ctx) string { return c.Session.Title }, func(c *Ctx, v string) { c.Session.Title = v }},
+	{"Session.Name", "ATRIUM_SESSION", func(c Ctx) string { return c.Session.Name }, func(c *Ctx, v string) { c.Session.Name = v }},
+	{"Session.Branch", "ATRIUM_BRANCH", func(c Ctx) string { return c.Session.Branch }, func(c *Ctx, v string) { c.Session.Branch = v }},
+	{"Session.Worktree", "ATRIUM_WORKTREE", func(c Ctx) string { return c.Session.Worktree }, func(c *Ctx, v string) { c.Session.Worktree = v }},
+	{"Repo.Path", "ATRIUM_REPO", func(c Ctx) string { return c.Repo.Path }, func(c *Ctx, v string) { c.Repo.Path = v }},
+	{"Repo.Name", "ATRIUM_REPO_NAME", func(c Ctx) string { return c.Repo.Name }, func(c *Ctx, v string) { c.Repo.Name = v }},
+}
+
+// MissingEnv reports which empty context fields the command's script may read through
+// the $ATRIUM_* environment, in the same "Session.Branch" form as MissingFields.
+//
+// It exists because MissingFields cannot see this. That function asks the template
+// renderer which fields reached the output, which is exactly right for a placeholder
+// and blind to a variable the SHELL expands — so the two forms this package documents
+// as interchangeable were not: `rm -rf {{ quote .Session.Worktree }}/build` was refused
+// on a session with no worktree, and `rm -rf "$ATRIUM_WORKTREE"/build` ran, as
+// `rm -rf /build`. Worse, `cd "$ATRIUM_WORKTREE" && rm -rf *` — `cd ""` succeeds and
+// stays put — runs in the command's working directory, which for repo context is the
+// repository root.
+//
+// It is a scan of the unrendered script, not an expansion of it, so it is deliberately
+// approximate in the same direction MissingFields is: a name inside single quotes, or
+// in a comment, or in a here-doc the shell never reaches, still counts. That
+// over-refuses, which is visible and carries its reason. The alternative — deciding
+// which occurrences a shell would actually expand — means implementing shell quoting,
+// and being wrong there runs the command.
+func (c Command) MissingEnv(ctx Ctx) []string {
+	var missing []string
+	for _, f := range fieldAccess {
+		if f.get(ctx) == "" && mentionsVar(c.source, f.env) {
+			missing = append(missing, f.path)
+		}
+	}
+	return missing
+}
+
+// mentionsVar reports whether script references the shell variable name: `$NAME` or
+// `${NAME}`, and not a longer name that merely starts with it.
+//
+// That last clause is the whole reason this is not strings.Contains: ATRIUM_REPO is a
+// prefix of ATRIUM_REPO_NAME, so a naive check would refuse every command using
+// $ATRIUM_REPO_NAME whenever Repo.Path happened to be empty, and report the wrong field
+// while doing it.
+func mentionsVar(script, name string) bool {
+	for i := 0; ; {
+		idx := strings.Index(script[i:], "$")
+		if idx < 0 {
+			return false
+		}
+		rest := script[i+idx+1:]
+		i += idx + 1
+		rest = strings.TrimPrefix(rest, "{")
+		if !strings.HasPrefix(rest, name) {
+			continue
+		}
+		// A name ends where a character that cannot be part of one begins. End of
+		// string counts, so a script ending in the bare variable matches.
+		after := rest[len(name):]
+		if after == "" || !isNameByte(after[0]) {
+			return true
+		}
+	}
+}
+
+// isNameByte reports whether b can appear inside a shell variable name. Only ASCII
+// matters: the names are ours, and they are all ATRIUM_[A-Z_]+.
+func isNameByte(b byte) bool {
+	return b == '_' ||
+		(b >= '0' && b <= '9') ||
+		(b >= 'a' && b <= 'z') ||
+		(b >= 'A' && b <= 'Z')
 }
 
 // LogArgv is the argv recorded in the command log for this command.
@@ -419,13 +493,12 @@ func (c Command) Source() string { return c.source }
 // agent's pane, which tmux sets to the sanitized session handle
 // (atrium_<group>_<title>, derived from the immutable Title) — a script written
 // against one surface cannot assume the other.
+// Built from fieldAccess rather than spelled out, so the names MissingEnv looks for in
+// a script and the names this exports cannot drift apart.
 func Env(ctx Ctx) []string {
-	return []string{
-		"ATRIUM_TITLE=" + ctx.Session.Title,
-		"ATRIUM_SESSION=" + ctx.Session.Name,
-		"ATRIUM_BRANCH=" + ctx.Session.Branch,
-		"ATRIUM_WORKTREE=" + ctx.Session.Worktree,
-		"ATRIUM_REPO=" + ctx.Repo.Path,
-		"ATRIUM_REPO_NAME=" + ctx.Repo.Name,
+	out := make([]string, 0, len(fieldAccess))
+	for _, f := range fieldAccess {
+		out = append(out, f.env+"="+f.get(ctx))
 	}
+	return out
 }

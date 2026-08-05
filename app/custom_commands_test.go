@@ -316,6 +316,74 @@ func TestCustomCommandRunsWithTheResolvedContext(t *testing.T) {
 	assert.Contains(t, spec.env, "ATRIUM_TITLE=live")
 }
 
+// TestCustomCommandGatesBothFormsOfEveryField is the guard for the hazard's second
+// door.
+//
+// The README calls the template and the environment forms interchangeable, and
+// recommends the environment one. But MissingFields asks the template renderer which
+// placeholders reached the output, so a `$ATRIUM_*` name the SHELL expands is invisible
+// to it — and a repo-context row is gated on having a selection and nothing else. So the
+// two forms of the same value behaved differently, and the recommended one was the
+// unguarded one.
+//
+// The consequence is the one the withheld worktree exists to prevent, arriving the other
+// way: `rm -rf "$ATRIUM_WORKTREE"/build` becomes `rm -rf /build`, and
+// `cd "$ATRIUM_WORKTREE" && rm -rf *` runs in the working directory — which for a repo
+// row is the repository root — because `cd ""` succeeds and stays put.
+func TestCustomCommandGatesBothFormsOfEveryField(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		command string
+	}{
+		{"template form", `rm -rf {{ quote .Session.Worktree }}/build`},
+		{"environment form", `rm -rf "$ATRIUM_WORKTREE"/build`},
+		{"braced environment form", `rm -rf "${ATRIUM_WORKTREE}/build"`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cmds := validCommands(t, config.CustomCommand{
+				Key: "r", Description: "clean the build dir", Context: "repo",
+				Command: tc.command, Output: "background",
+			})
+			// A repo-context row on a session with no worktree: gated on the selection
+			// alone, so nothing but the emptiness check can refuse it.
+			h, inst := newCustomCommandHome(t, cmds)
+			require.False(t, inst.Started())
+			calls := stubRunner(t, nil)
+
+			assert.Equal(t, noWorktreeReason,
+				customCommandInertReason(cmds[0], inst, customCommandCtx(inst)),
+				"both forms of the same empty field must dim the row")
+
+			_, _ = h.handleKeyPress(runeKey("!"))
+			_, _ = h.handleKeyPress(runeKey("r"))
+			assert.Empty(t, *calls,
+				"and neither form may reach a shell — an empty expansion makes this "+
+					"`rm -rf /build`")
+		})
+	}
+}
+
+// TestCustomCommandEnvGateDoesNotOverReachAPopulatedField keeps the new refusal from
+// becoming a blanket one: a command reading variables this selection DOES carry must
+// still run.
+func TestCustomCommandEnvGateDoesNotOverReachAPopulatedField(t *testing.T) {
+	cmds := validCommands(t, config.CustomCommand{
+		Key: "r", Description: "log the repo", Context: "repo",
+		Command: `git -C "$ATRIUM_REPO" log --oneline "$ATRIUM_BRANCH"`, Output: "background",
+	})
+	h, inst := newCustomCommandHome(t, cmds)
+	require.NotEmpty(t, inst.Branch, "the fixture must carry a branch for this to test anything")
+	calls := stubRunner(t, nil)
+
+	assert.Empty(t, customCommandInertReason(cmds[0], inst, customCommandCtx(inst)))
+
+	_, _ = h.handleKeyPress(runeKey("!"))
+	_, cmd := h.handleKeyPress(runeKey("r"))
+	require.NotNil(t, cmd)
+	drain(t, h, cmd)
+	assert.Len(t, *calls, 1, "a command whose variables are all populated must run")
+}
+
 // TestCustomCommandRefusalsFitARow covers EVERY refusal a run can produce, not just
 // the failure toast.
 //

@@ -51,8 +51,15 @@ cannot install it. Once per machine:
 
 ## Adding a keybinding — 7 sites, all guarded
 
-At last count: **60 registry entries, 50 dispatch-case lines, 12 drift guards** in
-`keys/*_test.go` plus **4** in `app/dispatch_coverage_test.go`.
+At last count: **61 registry entries** and **51 dispatch-case lines**, with a dozen-odd
+drift guards in `keys/*_test.go` and **4** in `app/dispatch_coverage_test.go`.
+
+Those two numbers, and the `Config` field count below, are checked against the tree by
+`TestSkillCountsMatchTheTree` (`keys/skill_counts_test.go`), so they cannot rot the way
+they had. It exists because they were wrong twice in one PR: 58 when the tree held 60,
+then "corrected" to 60 by adding 2 to the stale number instead of counting. **Recount;
+never adjust.** The guard-counts either side of it are deliberately approximate — pinning
+a number no decision hangs on just taxes every unrelated test someone adds.
 
 | # | Site | Guarded by |
 |---|---|---|
@@ -69,7 +76,7 @@ friends) if the key should appear in the bar — guarded in the reverse directio
 only, by `ui/menu_scan_test.go`.
 
 **Site 4 was the gap until #374 closed it.** The count mismatch is why nobody had
-written the obvious assertion: 60 entries against 50 case *lines* is not 10
+written the obvious assertion: 61 entries against 51 case *lines* is not 10
 missing cases, because several cases carry two or three names at once, 3 entries
 are `DocOnly`, the screensaver is deliberately absent from the registry, and
 `space` is consumed by the multi-select handler rather than the switch — so
