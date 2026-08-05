@@ -133,7 +133,7 @@ func TestCandidatesInReportsAnUnreadableSocketTable(t *testing.T) {
 		4242: {stat: procStat{Comm: "bash", State: "S", PPid: 1, StartTicks: 100}, uid: uid},
 	}
 	_, gaps = candidatesIn(other, uid, unreadable)
-	require.False(t, gaps.Any(),
+	require.False(t, gaps.IncompleteInventory(),
 		"with nothing to identify, an unread socket table cannot make the answer incomplete")
 }
 
@@ -270,7 +270,7 @@ func TestScanServersOnThisHostReportsOnlyOwnedSockets(t *testing.T) {
 	require.True(t, supported, "Linux must support the scan")
 	// A readable /proc is the premise of every assertion below: with a gap, an empty
 	// servers slice would satisfy the loop vacuously.
-	require.False(t, gaps.Any(), "the scan must be able to see /proc on the test host: %+v", gaps)
+	require.False(t, gaps.IncompleteInventory(), "the scan must be able to see /proc on the test host: %+v", gaps)
 
 	for _, s := range servers {
 		require.True(t, ownsSocketName(s.Socket),
@@ -393,7 +393,7 @@ func TestOrphanedServerIsFoundAndKillableAfterItsSocketRootIsDeleted(t *testing.
 	// ---- the scan finds what nothing else can ----
 	servers, supported, gaps := ScanServers(t.Context())
 	require.True(t, supported)
-	require.False(t, gaps.Any(), "a gap here would make the find below unprovable: %+v", gaps)
+	require.False(t, gaps.IncompleteInventory(), "a gap here would make the find below unprovable: %+v", gaps)
 
 	found, ok := findServer(servers, serverPID)
 	require.True(t, ok, "ScanServers did not find the orphan (pid %d); it found %v", serverPID, pidsOf(servers))
@@ -574,5 +574,5 @@ func TestScanServersReportsATruncatedProcWalk(t *testing.T) {
 	require.Empty(t, servers, "the walk never got far enough to classify anything")
 
 	// The consequence that matters: this result must never render as "none".
-	require.True(t, gaps.Any())
+	require.True(t, gaps.IncompleteInventory())
 }

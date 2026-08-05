@@ -79,9 +79,9 @@ type OrphanServer struct {
 // The fields are independent bools rather than one because each unanswered question
 // has its own consequence and therefore its own remedy — see the renderer. They are
 // also not all of a kind: the first two are gaps in the *inventory* and are what
-// Any() reports, while the last two leave the inventory complete and constrain only
-// what may be done with it. Any()'s doc comment is where that split is argued, and
-// LiveServerUnidentified() is the one predicate those two share.
+// IncompleteInventory() reports, while the last two leave the inventory complete and
+// constrain only what may be done with it. IncompleteInventory()'s doc comment is where
+// that split is argued, and LiveServerUnidentified() is the one predicate those two share.
 type ScanGaps struct {
 	// SocketTableUnread: /proc/net/unix could not be read. A server is identified by
 	// the socket it is listening on, so with this table missing every candidate loses
@@ -100,7 +100,9 @@ type ScanGaps struct {
 	// a default kill target, but `--all` targets reachable servers by design, and the
 	// report's remedy for a reachable server is a `kill-server` aimed straight at it.
 	//
-	// Deliberately NOT counted by Any(). See that method.
+	// Not an inventory gap, so IncompleteInventory does not count it. Its consequences
+	// are handled where they apply: the `--all` guard in cli_reap.go, and the remedy
+	// renderOrphanServer withholds.
 	LiveServerUnknown bool
 	// EmptyFleetUnproven: the ambient probe *did* answer — "no server on the socket it
 	// asked about" — and this scan's own inventory contradicts reading that as "no live
@@ -133,18 +135,30 @@ type ScanGaps struct {
 	EmptyFleetUnproven bool
 }
 
-// Any reports whether the *inventory* left anything unseen, and so whether an empty or
-// short result is allowed to be read as proof. Callers use it to refuse to kill at all.
+// IncompleteInventory reports whether the inventory left anything unseen, and so
+// whether an empty or short result is allowed to be read as proof. Callers use it to
+// refuse to kill at all.
 //
-// LiveServerUnknown and EmptyFleetUnproven are both excluded on purpose, and the
-// exclusion is load-bearing rather than an oversight. Neither makes the inventory
-// incomplete: every candidate was still seen and still classified, and a live server that
+// The name carries the argument that used to be a paragraph here. As Any() this predicate
+// had to explain why it ignored two of its own four fields, and that explanation was the
+// only thing keeping the exclusion correct. Scoped to the *inventory*, the exclusion
+// follows from the question instead: neither an unidentified live server nor an unproven
+// empty fleet is a gap in an inventory where every candidate was still seen and still
+// classified.
+//
+// What a name cannot carry is why excluding them is load-bearing rather than an oversight,
+// so: folding either in would read as a tightening, and it would refuse every kill on a
+// host where tmux merely could not be probed — the over-refusal that blanked the report
+// and stopped the reaper in exactly the situation it exists for (#593). A live server that
 // could not be identified by pid is still positively Reachable, which the default target
-// set already excludes. The last regression on this code came from refusing too eagerly —
-// a self-inflicted gap became a self-inflicted refusal on exactly the host that needed
-// reaping — so the remedy for those two is scoped to the decisions they actually affect:
-// `--all`, plus the report's remedy line. TestScanGapsAny pins it.
-func (g ScanGaps) Any() bool { return g.SocketTableUnread || g.ProcTableTruncated }
+// set already excludes.
+//
+// LiveServerUnidentified() answers the other question — has anything been proven not to be
+// this Atrium's own server — and the two predicates are deliberately distinct rather than
+// one flag count. This one gates whether the inventory may be believed at all; that one
+// scopes `--all` and the report's remedy line. TestScanGapsIncompleteInventory pins the
+// split.
+func (g ScanGaps) IncompleteInventory() bool { return g.SocketTableUnread || g.ProcTableTruncated }
 
 // LiveServerUnidentified reports that no row this scan produced has been proven not to be
 // this Atrium's own tmux server. It exists so that "identified" means one thing — a live pid
@@ -152,7 +166,7 @@ func (g ScanGaps) Any() bool { return g.SocketTableUnread || g.ProcTableTruncate
 //
 // Its two causes reach an identical state: the exclusion in assembleServers matched
 // nothing, while a live server answers its own socket and so arrives Reachable. Neither is
-// an inventory gap, which is why Any() counts neither.
+// an inventory gap, which is why IncompleteInventory() counts neither.
 //
 // Which callers use this, and which do not, follows from what each one has to say. The
 // `--all` guard asks only whether it may act, so it keys on this (cli_reap.go). The report
@@ -208,8 +222,8 @@ const orphanProbeBudget = 3 * time.Second
 // unavailable.
 //
 // gaps reports whether the inventory could actually see everything. An empty servers
-// slice means "none found" only when gaps.Any() is false; otherwise the scan was
-// blind, and callers must not read the emptiness as a clean host. gaps is always zero
+// slice means "none found" only when gaps.IncompleteInventory() is false; otherwise the
+// scan was blind, and callers must not read the emptiness as a clean host. gaps is zero
 // when supported is false, so the unsupported branch is the only thing a caller has to
 // explain there.
 //
@@ -450,7 +464,8 @@ type StaleScan struct {
 // A file is reported only when it passes ownsSocketName *and* the probe positively
 // answers that nothing is there. A probe that could not run leaves the file unreported
 // and counted in Gaps.Unprobed: absence of an answer is not evidence, and an empty
-// Stale is a clean directory only when Gaps.Any() is false.
+// Stale is a clean directory only when Gaps.Any() is false — StaleGaps' own predicate,
+// which keeps its name because it holds nothing back from it.
 func ScanStaleSockets(ctx context.Context) StaleScan {
 	dir, fromServer := SocketDir(ctx)
 	stale, gaps := staleSocketsIn(ctx, dir)

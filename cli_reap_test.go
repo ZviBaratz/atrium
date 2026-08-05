@@ -421,7 +421,7 @@ func TestReapWithoutKillNeverPointsAtAKillItWouldRefuse(t *testing.T) {
 // The default path is asserted alongside as the control, and it must keep working: it is
 // unreachable-only, and a server that answered is positive proof it is not that. A fix
 // that refused every kill on this flag would pass the first case and fail the second —
-// which is the whole reason LiveServerUnknown is not counted by ScanGaps.Any().
+// which is the whole reason LiveServerUnknown is not counted by ScanGaps.IncompleteInventory().
 func TestReapKillAllRefusesWhenTheLiveServerIsUnknown(t *testing.T) {
 	live := orphan(1952486)
 	live.Reachable = true // it answered its own socket, because it is the live server

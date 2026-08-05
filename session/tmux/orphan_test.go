@@ -251,38 +251,39 @@ func TestAssembleServersCarriesTheFieldsTheReaperArmsWith(t *testing.T) {
 	require.Equal(t, []ChildProc{{PID: 11, Comm: "claude", Started: kidStarted}}, got[0].Children)
 }
 
-// TestScanGapsAny pins the predicate the report and the reaper both branch on.
+// TestScanGapsIncompleteInventory pins the predicate the report and the reaper both
+// branch on.
 //
 // It is asserted directly rather than by mutating the refusal in cli_reap.go, per the
 // project rule about destructive guards: the way to show a kill guard is load-bearing
 // is to extract its predicate and test that, not to delete the guard and watch what
-// happens. Any() is that predicate, and "no gaps" is the only value that lets a caller
-// read an empty result as proof.
-func TestScanGapsAny(t *testing.T) {
-	require.False(t, ScanGaps{}.Any(), "a complete scan must not claim a gap")
-	require.True(t, ScanGaps{SocketTableUnread: true}.Any())
-	require.True(t, ScanGaps{ProcTableTruncated: true}.Any())
-	require.True(t, ScanGaps{SocketTableUnread: true, ProcTableTruncated: true}.Any())
+// happens. IncompleteInventory() is that predicate, and "no gaps" is the only value that
+// lets a caller read an empty result as proof.
+func TestScanGapsIncompleteInventory(t *testing.T) {
+	require.False(t, ScanGaps{}.IncompleteInventory(), "a complete scan must not claim a gap")
+	require.True(t, ScanGaps{SocketTableUnread: true}.IncompleteInventory())
+	require.True(t, ScanGaps{ProcTableTruncated: true}.IncompleteInventory())
+	require.True(t, ScanGaps{SocketTableUnread: true, ProcTableTruncated: true}.IncompleteInventory())
 
 	// LiveServerUnknown is excluded on purpose, and this is the assertion that says so
 	// out loud. Folding it in would read as a tightening but would refuse every kill on
 	// a host where tmux merely could not be probed — the over-refusal that blanked the
 	// report and stopped the reaper once already. Its consequences are handled where
 	// they apply: `--all`, and the report's remedy line.
-	require.False(t, ScanGaps{LiveServerUnknown: true}.Any(),
+	require.False(t, ScanGaps{LiveServerUnknown: true}.IncompleteInventory(),
 		"an unidentified live server does not make the inventory incomplete; "+
 			"it must not block a kill the default target set already proves safe")
-	require.True(t, ScanGaps{LiveServerUnknown: true, ProcTableTruncated: true}.Any(),
+	require.True(t, ScanGaps{LiveServerUnknown: true, ProcTableTruncated: true}.IncompleteInventory(),
 		"a real inventory gap alongside it must still count")
 
 	// EmptyFleetUnproven is the same kind of fact as LiveServerUnknown — an unexcluded
 	// live server, not an unseen inventory — so it is excluded for the same reason. The
 	// obvious one-line fix for #603 was to make Any() count it, which would have turned
 	// a wrong-place probe into a blanket refusal to reap anything at all.
-	require.False(t, ScanGaps{EmptyFleetUnproven: true}.Any(),
+	require.False(t, ScanGaps{EmptyFleetUnproven: true}.IncompleteInventory(),
 		"an unverified empty-fleet answer does not make the inventory incomplete; "+
 			"the unreachable servers this host needs reaped are still proven unreachable")
-	require.True(t, ScanGaps{EmptyFleetUnproven: true, SocketTableUnread: true}.Any(),
+	require.True(t, ScanGaps{EmptyFleetUnproven: true, SocketTableUnread: true}.IncompleteInventory(),
 		"a real inventory gap alongside it must still count")
 }
 
@@ -295,7 +296,7 @@ func TestScanGapsAny(t *testing.T) {
 // LiveServerUnknown alone is #603 — a probe that answered about the socket the reaper
 // computed from its own environment reports no gap at all, while excluding no process.
 func TestScanGapsLiveServerUnidentified(t *testing.T) {
-	require.False(t, ScanGaps{}.Any())
+	require.False(t, ScanGaps{}.IncompleteInventory())
 	require.False(t, ScanGaps{}.LiveServerUnidentified(),
 		"a scan that identified the live server has proven every row is not it")
 	require.True(t, ScanGaps{LiveServerUnknown: true}.LiveServerUnidentified(),
@@ -360,7 +361,7 @@ func TestScanServersReportsAnUnidentifiedLiveServer(t *testing.T) {
 	_, _, gaps := ScanServers(context.Background())
 	require.True(t, gaps.LiveServerUnknown, "an unanswered ambient probe must be reported")
 	require.True(t, gaps.LiveServerUnidentified(), "and nothing may be read as proven not to be it")
-	require.False(t, gaps.Any(), "but it is not an inventory gap")
+	require.False(t, gaps.IncompleteInventory(), "but it is not an inventory gap")
 
 	// The determined empty fleet, with an inventory that has nothing to contradict it:
 	// tmux answered that nothing is on the socket, and no candidate answers for a server
@@ -425,7 +426,7 @@ func TestScanServersChecksADeterminedEmptyFleetAgainstTheInventory(t *testing.T)
 			"the probe did answer; conflating the two would misword every remedy that follows")
 		require.True(t, gaps.LiveServerUnidentified(),
 			"so no row here is proven not to be the live server")
-		require.False(t, gaps.Any(), "and none of this makes the inventory incomplete")
+		require.False(t, gaps.IncompleteInventory(), "and none of this makes the inventory incomplete")
 	})
 
 	// The host the reaper exists for: a server whose socket no longer resolves, and nothing
@@ -611,7 +612,7 @@ func TestScanServersWalksProcBeforeAnyTmuxProbe(t *testing.T) {
 	_, _, gaps := ScanServers(context.Background())
 	require.Equal(t, []string{"walk /proc", "probe tmux"}, order,
 		"the /proc walk must run before anything that can hang, or a hung probe fabricates a gap")
-	require.False(t, gaps.Any())
+	require.False(t, gaps.IncompleteInventory())
 }
 
 // TestEveryTmuxProbeGetsItsOwnBudget: a probe must never inherit the whole scan's
