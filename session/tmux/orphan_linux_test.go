@@ -240,7 +240,7 @@ func TestCandidatesInCarriesTheClientCount(t *testing.T) {
 	}
 	narrowed := tableFor(t, path)
 	cands, gaps := candidatesIn(procs, uid, func() (map[uint64]unixSocket, bool) { return narrowed, true })
-	require.False(t, gaps.Any(), "nothing about this fixture is unseen: %+v", gaps)
+	require.False(t, gaps.IncompleteInventory(), "nothing about this fixture is unseen: %+v", gaps)
 	require.Len(t, cands, 1)
 	require.Equal(t, path, cands[0].SocketPath)
 	require.Equal(t, want, cands[0].ConnectedClients,
@@ -670,7 +670,7 @@ func TestAServerWhoseSocketFileIsGoneStillReportsItsAttachedClient(t *testing.T)
 
 	servers, supported, gaps := ScanServers(t.Context())
 	require.True(t, supported)
-	require.False(t, gaps.Any(), "a gap would make the assertions below unprovable: %+v", gaps)
+	require.False(t, gaps.IncompleteInventory(), "a gap would make the assertions below unprovable: %+v", gaps)
 
 	found, ok := findServer(servers, serverPID)
 	require.True(t, ok, "ScanServers did not find pid %d; it found %v", serverPID, pidsOf(servers))
