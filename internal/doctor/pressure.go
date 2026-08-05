@@ -116,7 +116,12 @@ var (
 	readZram     = zramSwapBytes
 	readFS       = statfsPath
 	readMem      = hostMemBytes
-	socketDirOf  = tmux.SocketDir
+	// tmux.SocketDir also reports whether it got that path from the live server or
+	// reconstructed it (#598). This section wants only the path, because its question is
+	// how much headroom the filesystem underneath has, and that is the same filesystem
+	// either way. Adapted here rather than by widening the seam, so a stub stays a
+	// one-line func returning a path.
+	socketDirOf = func(ctx context.Context) string { dir, _ := tmux.SocketDir(ctx); return dir }
 )
 
 // CheckPressure gathers the live host-pressure snapshot. Like the other doctor checks

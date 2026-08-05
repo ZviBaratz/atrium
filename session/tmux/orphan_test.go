@@ -3,7 +3,10 @@ package tmux
 import (
 	"context"
 	"errors"
+	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -66,6 +69,13 @@ func stubAmbientPID(t *testing.T, probe func(context.Context) (int, bool)) {
 	orig := ambientPID
 	t.Cleanup(func() { ambientPID = orig })
 	ambientPID = probe
+}
+
+func stubSocketPathQuery(t *testing.T, query func(context.Context) (string, bool)) {
+	t.Helper()
+	orig := socketPathQuery
+	t.Cleanup(func() { socketPathQuery = orig })
+	socketPathQuery = query
 }
 
 func stubScanCandidates(t *testing.T, scan func(context.Context) ([]candidate, ScanGaps)) {
@@ -363,8 +373,8 @@ func TestEveryTmuxProbeGetsItsOwnBudget(t *testing.T) {
 	// No deadline on the parent, which is the case that separates the two behaviours.
 	parent := context.Background()
 
-	var ownerDeadline, ambientDeadline time.Time
-	var ownerOK, ambientOK bool
+	var ownerDeadline, ambientDeadline, socketPathDeadline time.Time
+	var ownerOK, ambientOK, socketPathOK bool
 	stubSocketOwner(t, func(ctx context.Context, _ string) (int, bool) {
 		ownerDeadline, ownerOK = ctx.Deadline()
 		return 0, true
@@ -373,6 +383,21 @@ func TestEveryTmuxProbeGetsItsOwnBudget(t *testing.T) {
 		ambientDeadline, ambientOK = ctx.Deadline()
 		return 0, false
 	})
+	stubSocketPathQuery(t, func(ctx context.Context) (string, bool) {
+		socketPathDeadline, socketPathOK = ctx.Deadline()
+		return "", false
+	})
+
+	// The socket-path probe is bounded for a consequence the other two do not have: it
+	// runs before every per-file owner probe of the same scan, so unbounded it spends the
+	// whole shared budget against a wedged server and leaves each of those probes to fail
+	// on an expired context — reporting a directory of unclassifiable files that nothing
+	// was wrong with. "Every" in this test's name is the claim, and it was false for this
+	// probe when it was extracted.
+	SocketDir(parent)
+	require.True(t, socketPathOK,
+		"the socket-path probe must be bounded even when the caller's context is not")
+	require.LessOrEqual(t, time.Until(socketPathDeadline), orphanProbeBudget)
 
 	probeAmbient(parent)
 	require.True(t, ambientOK, "the ambient probe must be bounded even when the caller's context is not")
@@ -381,4 +406,56 @@ func TestEveryTmuxProbeGetsItsOwnBudget(t *testing.T) {
 	assembleServers(parent, []candidate{{PID: 10, SocketPath: "/tmp/tmux-1000/atrium"}}, 0, false)
 	require.True(t, ownerOK, "an owner probe must be bounded even when the caller's context is not")
 	require.LessOrEqual(t, time.Until(ownerDeadline), orphanProbeBudget)
+}
+
+// TestSocketDirNamesWhetherAServerAnsweredIt covers both branches of the provenance
+// #598 added, because each one is an assignment nothing else pins: a fromServer
+// hardcoded either way passes half of this test and fails the other half.
+//
+// It matters because fromServer decides what "stale socket files: none in <dir>" is a
+// statement *about*. With a server to ask, the directory is one a socket is demonstrably
+// bound in. Without one it is a reconstruction of tmux's layout — where tmux *would*
+// bind — so the report can be entirely true about a directory no server has ever used.
+func TestSocketDirNamesWhetherAServerAnsweredIt(t *testing.T) {
+	t.Run("the live server answers", func(t *testing.T) {
+		stubSocketPathQuery(t, func(context.Context) (string, bool) {
+			return "/tmp/atr9/tmux-1000/atrium", true
+		})
+
+		dir, fromServer := SocketDir(t.Context())
+		require.Equal(t, "/tmp/atr9/tmux-1000", dir,
+			"the server's own answer for where its socket is, not a guess at tmux's layout")
+		require.True(t, fromServer)
+	})
+
+	t.Run("no server to ask", func(t *testing.T) {
+		stubSocketPathQuery(t, func(context.Context) (string, bool) { return "", false })
+		root := t.TempDir()
+		t.Setenv("TMUX_TMPDIR", root)
+
+		dir, fromServer := SocketDir(t.Context())
+		require.Equal(t, filepath.Join(root, fmt.Sprintf("tmux-%d", os.Getuid())), dir)
+		require.False(t, fromServer,
+			"a reconstruction is not the server's answer, and the report has to be able to say so")
+	})
+
+	// tmux reads a TMUX_TMPDIR naming a missing directory exactly as it reads an empty
+	// one, and hardcodes /tmp for both. os.TempDir() would honour $TMPDIR instead —
+	// which on macOS is a per-user /var/folders/… path tmux never binds in, so the whole
+	// section would report about a directory holding no sockets at all. SocketDir's
+	// comment claims this rule and nothing asserted it.
+	for _, tc := range []struct{ name, root string }{
+		{"empty", ""},
+		{"a directory that is not there", "/nonexistent-tmux-tmpdir-598"},
+	} {
+		t.Run("TMUX_TMPDIR is "+tc.name, func(t *testing.T) {
+			stubSocketPathQuery(t, func(context.Context) (string, bool) { return "", false })
+			t.Setenv("TMUX_TMPDIR", tc.root)
+
+			dir, fromServer := SocketDir(t.Context())
+			require.Equal(t, filepath.Join("/tmp", fmt.Sprintf("tmux-%d", os.Getuid())), dir,
+				"literally /tmp, which is what tmux itself falls back to")
+			require.False(t, fromServer)
+		})
+	}
 }

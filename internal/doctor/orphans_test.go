@@ -134,11 +134,156 @@ func TestRenderOrphansHeadingNamesTmuxServers(t *testing.T) {
 // the section is not wholly unavailable off Linux — only the process scan is, and
 // saying "unavailable" flatly would misreport the half that still ran.
 func TestRenderOrphansOffLinuxNamesWhatIsMissing(t *testing.T) {
-	out := RenderOrphans(OrphanResult{Supported: false, SocketDir: "/tmp/tmux-1000", Now: now})
+	out := RenderOrphans(OrphanResult{
+		Supported: false, SocketDir: "/tmp/tmux-1000", SocketDirFromServer: true, Now: now,
+	})
 	require.Contains(t, out, "server scan unavailable")
 	require.Contains(t, out, "Linux-only")
 	require.Contains(t, out, "stale socket files: none in /tmp/tmux-1000",
 		"the portable half of the check still ran and must still report")
+}
+
+// TestRenderOrphansNeverSaysNoneOnAStaleScanThatEstablishedNothing is #598: the same
+// conflation TestRenderOrphansNeverSaysNoneOnABlindScan fixed for servers, in the stale
+// half beside it.
+//
+// A file reaches the list only when a probe positively answered that nothing holds it,
+// so a directory that could not be listed and a directory whose every probe failed both
+// produce the empty list a genuinely clean directory produces — and the section printed
+// "none in <dir>" off it, having established nothing at all.
+//
+// The result here is otherwise empty on purpose, because that is where the trap is:
+// RenderOrphans' switch has a `len(Servers) == 0 && len(Stale) == 0` case that writes
+// "none" and *returns* before renderStaleSockets runs. A gap wired in below it renders
+// as nothing whatsoever, so this asserts on the one input that reaches that case.
+//
+// It also asserts what must *not* appear. Unlike the server inventory, nothing acts on
+// this list — reap prints it and the remedy is an `rm --` line the user runs — so
+// borrowing the server gaps' "refuses to act" line would promise a refusal that never
+// happens, in the renderer whose whole subject is claims that are not true.
+func TestRenderOrphansNeverSaysNoneOnAStaleScanThatEstablishedNothing(t *testing.T) {
+	const (
+		unlistable = "could not be listed"
+		unprobed   = "could not be classified"
+	)
+	for _, tc := range []struct {
+		name string
+		gaps tmux.StaleGaps
+		want []string
+	}{
+		{"directory unlistable", tmux.StaleGaps{DirUnread: true}, []string{unlistable}},
+		{"every probe failed", tmux.StaleGaps{Unprobed: 3}, []string{unprobed}},
+		{"both", tmux.StaleGaps{DirUnread: true, Unprobed: 3}, []string{unlistable, unprobed}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			out := RenderOrphans(OrphanResult{
+				Supported: true, SocketDir: "/tmp/tmux-1000", SocketDirFromServer: true,
+				StaleGaps: tc.gaps, Now: now,
+			})
+
+			require.NotContains(t, out, "  none\n",
+				"a stale scan that established nothing must not render as a clean host: %q", out)
+			require.NotContains(t, out, "none in ",
+				"nor as a clean directory: %q", out)
+			for _, want := range tc.want {
+				require.Contains(t, out, want)
+			}
+			require.NotContains(t, out, "refuses to act",
+				"nothing acts on the stale list, so this must not promise a refusal that never happens")
+		})
+	}
+}
+
+// TestRenderOrphansStaleGapCountsWhatCouldNotBeRead: the count is in the sentence
+// because "one file here is unproven" and "every file here is unproven" are different
+// facts about the same empty list, and a user deciding whether to trust it needs which.
+func TestRenderOrphansStaleGapCountsWhatCouldNotBeRead(t *testing.T) {
+	out := RenderOrphans(OrphanResult{
+		Supported: true, SocketDir: "/tmp/tmux-1000", SocketDirFromServer: true,
+		StaleGaps: tmux.StaleGaps{Unprobed: 1}, Now: now,
+	})
+	require.Contains(t, out, "1 socket file there could not be classified",
+		"one file reads as one file, not as a plural hedge")
+	require.Contains(t, out, "empty for want of an answer",
+		"with nothing listed, the unprobed files are the whole reason the list is empty")
+
+	// The remedy must not name PATH as the only cause. A probe also fails to run when the
+	// scan's budget was spent, and "check that tmux is on PATH" is wrong advice on a host
+	// whose PATH is fine — it sends the user to inspect the one thing that is not broken
+	// and never names the cause a re-run fixes. So the re-run leads.
+	require.Regexp(t, `re-run to get a complete answer[\s\S]*is on PATH`, out,
+		"the re-run must come first: it is the remedy for the cause checking PATH cannot explain")
+}
+
+// TestRenderOrphansStaleGapPrintsBesideFilesFound: a gap note goes *in addition to* the
+// files that were classified, never instead of them. Those files are real whatever else
+// went unseen, and suppressing them to report the gap would trade one blind spot for
+// another — the same rule the server half follows for a truncated /proc walk.
+func TestRenderOrphansStaleGapPrintsBesideFilesFound(t *testing.T) {
+	out := RenderOrphans(OrphanResult{
+		Supported: true, Now: now,
+		SocketDir: "/tmp/tmux-1000", SocketDirFromServer: true,
+		Stale:     []tmux.StaleSocket{{Path: "/tmp/tmux-1000/atrium-precheck-991-1"}},
+		StaleGaps: tmux.StaleGaps{Unprobed: 2},
+	})
+
+	require.Contains(t, out, "stale socket files: 1 in /tmp/tmux-1000",
+		"what was found is still stated as found")
+	require.Contains(t, out, "2 further socket files there could not be classified")
+	require.Contains(t, out, "list above may be short")
+	require.Contains(t, out, "rm -- /tmp/tmux-1000/atrium-precheck-991-1",
+		"and the remedy for the verified files still prints")
+}
+
+// TestRenderOrphansNoneNamesHowItKnowsTheDirectory covers #598's fourth flavour, which
+// is a wrong *subject* rather than an unproven claim — hence wording, not a gap flag.
+//
+// With no server to ask, SocketDir reconstructs $TMUX_TMPDIR/tmux-<uid>: where tmux
+// *would* bind. "none in <dir>" is then perfectly true about a directory no server need
+// ever have bound in, which is not the question the user is asking.
+//
+// Both fixtures carry a server row, because that is what makes the stale line render at
+// all: on a wholly clean host the switch above collapses the section to a bare "none"
+// and neither wording appears. The combination is #547's own scenario rather than a
+// contrivance — an orphan found by /proc while nothing answers the ambient socket is
+// exactly when SocketDir has no server to ask.
+func TestRenderOrphansNoneNamesHowItKnowsTheDirectory(t *testing.T) {
+	// Scoped to the stale half: the server row above it carries a ⚠ of its own, and the
+	// assertion below is about whether *this* sentence is flagged as a gap.
+	render := func(fromServer bool) string {
+		out := RenderOrphans(OrphanResult{
+			Supported: true, Now: now,
+			SocketDir: "/tmp/tmux-1000", SocketDirFromServer: fromServer,
+			Servers: []tmux.OrphanServer{{
+				PID: 7, Socket: "atrium", SocketPath: "/tmp/gone/tmux-1000/atrium",
+				ReachableKnown: true, Started: startedAgo(time.Hour),
+			}},
+		})
+		_, stale, ok := strings.Cut(out, "stale socket files:")
+		require.True(t, ok, "the stale half must render at all: %q", out)
+		return stale
+	}
+
+	answered := render(true)
+	require.Contains(t, answered, "none in /tmp/tmux-1000")
+	require.NotContains(t, answered, "would bind",
+		"a directory a live server named needs no hedge about where tmux would bind")
+
+	reconstructed := render(false)
+	require.Contains(t, reconstructed, "none in /tmp/tmux-1000")
+	require.Contains(t, reconstructed, "would bind",
+		"with no server's answer to use, the sentence must say which directory it is about")
+	require.NotContains(t, reconstructed, "⚠",
+		"the pass over that directory was complete: this is a wrong subject, not a gap")
+
+	// The note may claim only what SocketDir actually established. Its query comes back
+	// empty when tmux is off PATH or the probe's budget was spent exactly as it does on
+	// an empty fleet, and a server may well be running in the first two — so "no server
+	// answered" is the fact, and "no server is running" would be #599's conflation
+	// reintroduced one sentence away from where it was fixed.
+	require.Contains(t, reconstructed, "no server answered")
+	require.NotContains(t, reconstructed, "no tmux server is running",
+		"an unanswered probe does not establish that nothing is running")
 }
 
 // TestRenderOrphansUnreachableServerSaysNoTmuxCommandCanReachIt is the row that
@@ -258,8 +403,13 @@ func TestCheckOrphansAssemblesBothHalves(t *testing.T) {
 		return []tmux.OrphanServer{{PID: 42, Socket: "atrium"}}, true,
 			tmux.ScanGaps{ProcTableTruncated: true}
 	}
-	staleScan = func(context.Context) ([]tmux.StaleSocket, string) {
-		return []tmux.StaleSocket{{Path: "/tmp/tmux-1000/atrium-old"}}, "/tmp/tmux-1000"
+	staleScan = func(context.Context) tmux.StaleScan {
+		return tmux.StaleScan{
+			Stale:         []tmux.StaleSocket{{Path: "/tmp/tmux-1000/atrium-old"}},
+			Dir:           "/tmp/tmux-1000",
+			DirFromServer: true,
+			Gaps:          tmux.StaleGaps{Unprobed: 2},
+		}
 	}
 
 	got := CheckOrphans(t.Context())
@@ -272,6 +422,10 @@ func TestCheckOrphansAssemblesBothHalves(t *testing.T) {
 	// Carried, not dropped: the gap is the scan's own statement about how much of the
 	// host it saw, and CheckOrphans is the only thing between the scan and the renderer.
 	require.True(t, got.Gaps.ProcTableTruncated, "the scan's gaps must reach the result")
+	// The stale half's own two facts, for the same reason. Dropping either here would
+	// leave the renderer with a bare empty list and no way to know what it means.
+	require.Equal(t, 2, got.StaleGaps.Unprobed, "the stale scan's gaps must reach the result")
+	require.True(t, got.SocketDirFromServer, "and so must how it knows which directory it read")
 }
 
 func TestHumanAge(t *testing.T) {

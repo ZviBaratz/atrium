@@ -135,6 +135,11 @@ var (
 	scanCandidates = inventoryCandidates
 	ambientPID     = ambientServerPID
 	socketOwner    = probeSocketOwner
+	// socketPathQuery is the live server's answer for where its own socket is. It is a
+	// seam for the same reason candidatesIn's injected table is one (#593): both
+	// branches of SocketDir set a fact the report words itself around, and a fact no
+	// test can drive is one a deleted assignment keeps green.
+	socketPathQuery = liveSocketPath
 )
 
 // orphanProbeBudget is the share of a scan any single `tmux … display-message` probe
@@ -259,8 +264,68 @@ type StaleSocket struct {
 	ModTime time.Time
 }
 
-// ScanStaleSockets lists the socket files in Atrium's socket directory that nothing
-// is listening on, and the directory it looked in.
+// StaleGaps records the ways one stale-socket pass failed to establish what it
+// reports. It exists for the same reason ScanGaps does: a file reaches the list only
+// when a probe positively answered that nothing holds it, so a pass that could not
+// read the directory and a pass whose every probe failed both produce an empty list —
+// which is byte-identical to a directory that really is clean. "none in <dir>" is then
+// a claim of health manufactured out of having seen nothing (#598).
+//
+// The two fields are independent because the remedies differ: an unlistable directory
+// is an existence or permission problem, while unrunnable probes mean tmux could not be
+// executed. Unlike ScanGaps neither makes any caller refuse to act, because nothing
+// acts on this list — reap only prints it, and the remedy is an `rm --` line the user
+// runs. These gaps cost the accuracy of a report and nothing else.
+type StaleGaps struct {
+	// DirUnread: the socket directory could not be listed at all, so nothing about its
+	// contents is known — not "no stale files" but "no answer".
+	DirUnread bool
+	// Unprobed counts the socket files that were listed and belong to Atrium but could
+	// not be classified: the owner probe did not run, because tmux is off PATH or the
+	// scan's budget expired. Absence of an answer is not evidence of an absent server,
+	// so those files stay off the list. Renderers must not name one of those causes as
+	// though it were the only one — a remedy that says "check PATH" is wrong advice on a
+	// host whose PATH is fine and whose budget ran out.
+	//
+	// A count rather than a bool so a caller can tell a directory whose every file is
+	// unproven from a list that is merely one file short; a bool has to hedge both the
+	// same way.
+	//
+	// A file the pass *understood* is never counted, and the exemptions are exemptions
+	// because each is an answer rather than an open question: a foreign socket name and a
+	// regular file are both positively identified as not-ours, and an entry whose Info()
+	// fails has been removed between the listing and the stat — a socket that is gone is
+	// not a stale socket being concealed. None of the three can manufacture a gap about a
+	// directory that is in fact fully understood.
+	Unprobed int
+}
+
+// Any reports whether the pass left anything unestablished, and so whether an empty
+// list is allowed to be read as a clean directory.
+func (g StaleGaps) Any() bool { return g.DirUnread || g.Unprobed > 0 }
+
+// StaleScan is one stale-socket pass: what it found, where it looked, how it knows
+// where that is, and what it could not see there.
+type StaleScan struct {
+	Stale []StaleSocket
+	// Dir is the directory the pass listed, and the one a printed remedy names.
+	Dir string
+	// DirFromServer reports that Dir is the live server's own answer for where its
+	// socket is, rather than a reconstruction of tmux's layout. When false there was no
+	// server to ask, so Dir is where tmux *would* bind — which makes "none in Dir" a
+	// true statement about a directory no server need ever have bound in.
+	//
+	// That is a wrong subject rather than an unproven claim, which is why it is a plain
+	// fact here and not a StaleGaps field: the pass over Dir was complete and its
+	// result is proven, so a caller words the sentence differently instead of hedging
+	// it (#598).
+	DirFromServer bool
+	Gaps          StaleGaps
+}
+
+// ScanStaleSockets lists the socket files in Atrium's socket directory that nothing is
+// listening on, alongside the directory it looked in and what it could not establish
+// there.
 //
 // It is read-only and stays that way: it removes nothing, and neither does any
 // caller. A sweep over this directory is what #584 shipped and #586 removed after it
@@ -268,20 +333,26 @@ type StaleSocket struct {
 // is to name the files and let the user decide.
 //
 // A file is reported only when it passes ownsSocketName *and* the probe positively
-// answers that nothing is there. A probe that could not run leaves the file
-// unreported: absence of an answer is not evidence.
-func ScanStaleSockets(ctx context.Context) (stale []StaleSocket, dir string) {
-	dir = SocketDir(ctx)
-	return staleSocketsIn(ctx, dir), dir
+// answers that nothing is there. A probe that could not run leaves the file unreported
+// and counted in Gaps.Unprobed: absence of an answer is not evidence, and an empty
+// Stale is a clean directory only when Gaps.Any() is false.
+func ScanStaleSockets(ctx context.Context) StaleScan {
+	dir, fromServer := SocketDir(ctx)
+	stale, gaps := staleSocketsIn(ctx, dir)
+	return StaleScan{Stale: stale, Dir: dir, DirFromServer: fromServer, Gaps: gaps}
 }
 
 // staleSocketsIn is ScanStaleSockets over an explicit directory, split out so the
-// filtering is testable without depending on where this host keeps its sockets.
-func staleSocketsIn(ctx context.Context, dir string) []StaleSocket {
+// filtering — and the gaps it reports — are testable without depending on where this
+// host keeps its sockets.
+func staleSocketsIn(ctx context.Context, dir string) ([]StaleSocket, StaleGaps) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		return nil
+		// Not "no stale sockets here": nothing here was seen at all. Reporting this as
+		// an empty list is the conflation #598 fixed.
+		return nil, StaleGaps{DirUnread: true}
 	}
+	var gaps StaleGaps
 	var stale []StaleSocket
 	for _, e := range entries {
 		if !ownsSocketName(e.Name()) {
@@ -293,21 +364,58 @@ func staleSocketsIn(ctx context.Context, dir string) []StaleSocket {
 		}
 		path := filepath.Join(dir, e.Name())
 		// Stale means the probe ran *and* found nothing listening. A server that
-		// answered owns its file, and a probe that could not run is not evidence
-		// about anything — both leave the file unreported.
+		// answered owns its file, and a probe that could not run is not evidence about
+		// anything — both leave the file unreported, but only the second one leaves a
+		// hole in the answer, so only it is counted.
 		owner, known := probeOwner(ctx, path)
-		if !known || owner != 0 {
+		if !known {
+			gaps.Unprobed++
+			continue
+		}
+		if owner != 0 {
 			continue
 		}
 		stale = append(stale, StaleSocket{Path: path, ModTime: info.ModTime()})
 	}
 	sort.Slice(stale, func(i, j int) bool { return stale[i].Path < stale[j].Path })
-	return stale
+	return stale, gaps
 }
 
-// SocketDir returns the directory Atrium's tmux socket lives in.
+// probeSocketPath asks the live server for its socket path under one probe's share of
+// the budget, exactly as probeAmbient and probeOwner do.
 //
-// It asks the live server first — `#{socket_path}` is the server's own answer, so it
+// The bound is not symmetry for its own sake. This probe runs before every per-file
+// owner probe of the same scan, under one shared deadline, so unbounded it can spend the
+// entire budget against a wedged server and leave every later probe to fail on an
+// expired context. The stale section would then report a directory full of files it
+// could not classify with nothing actually wrong with them — the self-inflicted gap
+// orphanProbeBudget was introduced for, reached from the stale half instead of the
+// ambient one.
+func probeSocketPath(ctx context.Context) (path string, ok bool) {
+	probeCtx, cancel := context.WithTimeout(ctx, orphanProbeBudget)
+	defer cancel()
+	return socketPathQuery(probeCtx)
+}
+
+// liveSocketPath asks the server on Atrium's socket where that socket is. ok is false
+// when there is no server to ask and when tmux could not be run at all: both mean the
+// same thing to SocketDir, which is that there is no server's answer to use. The two
+// are worth no more than this because neither says anything about the *directory* —
+// only about whether a server was there to name it. What the *caller* may then claim is
+// narrower than "nothing is running", and renderStaleSockets says so.
+func liveSocketPath(ctx context.Context) (path string, ok bool) {
+	out, err := tmuxCommand(ctx, "display-message", "-p", "#{socket_path}").Output()
+	if err != nil {
+		return "", false
+	}
+	path = strings.TrimSpace(string(out))
+	return path, path != ""
+}
+
+// SocketDir returns the directory Atrium's tmux socket lives in, and whether that is
+// the live server's own answer for it.
+//
+// It asks the server first — `#{socket_path}` is the server's own answer, so it
 // assumes nothing about tmux's layout. Only with no server running does it fall back
 // to reconstructing $TMUX_TMPDIR/tmux-<uid>, mirroring tmux's own rule that an empty
 // *or missing* TMUX_TMPDIR means /tmp. Getting that fallback wrong could only ever
@@ -316,12 +424,17 @@ func staleSocketsIn(ctx context.Context, dir string) []StaleSocket {
 //
 // Exported because the doctor's host-pressure section needs the filesystem this
 // directory sits on (#594), and reconstructing the path a second time there is how
-// the two answers drift. It runs a tmux subprocess, so callers pass a bounded context.
-func SocketDir(ctx context.Context) string {
-	if out, err := tmuxCommand(ctx, "display-message", "-p", "#{socket_path}").Output(); err == nil {
-		if path := strings.TrimSpace(string(out)); path != "" {
-			return filepath.Dir(path)
-		}
+// the two answers drift. It runs a tmux subprocess, so callers pass a bounded context;
+// the probe itself then takes no more than orphanProbeBudget of whatever that allows.
+//
+// fromServer separates the two, because the fallback names where tmux *would* bind
+// rather than where a server is bound. A caller can then say so, instead of asserting
+// "none in <dir>" about a directory nothing has ever bound in (#598). A caller that
+// only needs the path — the pressure section asks which filesystem this sits on — is
+// free to discard it.
+func SocketDir(ctx context.Context) (dir string, fromServer bool) {
+	if path, ok := probeSocketPath(ctx); ok {
+		return filepath.Dir(path), true
 	}
 	root := os.Getenv("TMUX_TMPDIR")
 	if info, err := os.Stat(root); root == "" || err != nil || !info.IsDir() {
@@ -331,7 +444,7 @@ func SocketDir(ctx context.Context) string {
 		// binds in, and the stale-socket list would report "none in <wrong dir>".
 		root = tmuxDefaultTmpdir
 	}
-	return filepath.Join(root, fmt.Sprintf("tmux-%d", os.Getuid()))
+	return filepath.Join(root, fmt.Sprintf("tmux-%d", os.Getuid())), false
 }
 
 // ownsSocketName reports whether base is a socket name Atrium binds: either brand
