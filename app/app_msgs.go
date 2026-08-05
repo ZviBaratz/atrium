@@ -682,28 +682,44 @@ func (m *home) handleAttachFinished(msg attachFinishedMsg) (tea.Model, tea.Cmd) 
 			"terminal/SSH/Docker session provides a real TTY; `stty -ixon` can also stop " +
 			"Ctrl+Q being swallowed.")
 	}
-	// Polling stalled for the whole list while attached (the keeper services only
-	// prompt-delivery and auto-yes work), so every row is stale on return. Sweep
-	// every active session immediately instead of waiting up to a full ~2s sweep
-	// cycle: the selected row is polled face-value (PollNow) so a stale "running" on
-	// a now-idle agent doesn't linger — and re-runs through the hysteresis from
-	// there — while background rows keep the hysteresis Poll so a mid-turn agent
-	// isn't falsely flagged done. Pin the poll tracker to the current selection first so
-	// instanceChanged's own (hysteresis) poll doesn't also fire for the same instance.
-	selected := m.list.GetSelectedInstance()
-	m.lastStatusPollSelection = selected
-	cmds := []tea.Cmd{m.instanceChanged(),
-		sweepMetadataNowCmd(m.ctx, m.snapshotActiveInstances(), selected, m.attachGen, m.usagePolicy())}
 	// Prompts the keeper definitively failed to deliver mid-attach: surface the loss
 	// like promptSendErrorMsg would, rather than leaving sessions silently
 	// Ready-but-idle. The sibling-cycle branch carries its errs forward to the next
 	// keeper, so they land here at the chain's end; only the kill and
 	// AttachExitError paths remain log-only (each opens its own modal that a second
 	// notice would fight).
+	var cmds []tea.Cmd
 	if len(msg.keeperErrs) > 0 {
 		cmds = append(cmds, m.handleError(errors.New(strings.Join(msg.keeperErrs, "\n"))))
 	}
-	return m, m.repaintAfterAttach(cmds...)
+	return m, m.resumeAfterSuspendedLoop(cmds...)
+}
+
+// resumeAfterSuspendedLoop is the tail every return from a tea.Exec suspension shares,
+// whichever one suspended the loop — a tmux attach or a custom command in terminal mode.
+//
+// Polling stalled for the whole list while the loop was suspended (the keeper services
+// only prompt-delivery and auto-yes work), so every row is stale on return. Sweep
+// every active session immediately instead of waiting up to a full ~2s sweep
+// cycle: the selected row is polled face-value (PollNow) so a stale "running" on
+// a now-idle agent doesn't linger — and re-runs through the hysteresis from
+// there — while background rows keep the hysteresis Poll so a mid-turn agent
+// isn't falsely flagged done. Pin the poll tracker to the current selection first so
+// instanceChanged's own (hysteresis) poll doesn't also fire for the same instance.
+//
+// Then hard-repaint: tea.Exec's RestoreTerminal only does a soft (diff-cache) repaint,
+// which leaves the reclaimed frame stale or blank after a full-screen child hands the
+// terminal back (see repaintAfterAttach).
+//
+// Callers compose their own error surfacing and pass it in, rather than this deciding:
+// handleError writes ONE notice, so two calls in the same batch would have the second
+// silently overwrite the first, and which error wins differs per caller.
+func (m *home) resumeAfterSuspendedLoop(extra ...tea.Cmd) tea.Cmd {
+	selected := m.list.GetSelectedInstance()
+	m.lastStatusPollSelection = selected
+	cmds := []tea.Cmd{m.instanceChanged(),
+		sweepMetadataNowCmd(m.ctx, m.snapshotActiveInstances(), selected, m.attachGen, m.usagePolicy())}
+	return m.repaintAfterAttach(append(cmds, extra...)...)
 }
 
 func (m *home) handleInstanceStarted(msg instanceStartedMsg) (tea.Model, tea.Cmd) {

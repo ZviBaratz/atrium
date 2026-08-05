@@ -51,14 +51,21 @@ func helpKeyStyle() lipgloss.Style    { return theme.Current().AttentionStyle().
 func helpDescStyle() lipgloss.Style   { return theme.Current().FgStyle() }
 func helpDimStyle() lipgloss.Style    { return theme.Current().DimStyle() }
 
-// helpCustomDescWidth bounds a custom command's description in the cheatsheet.
+// helpCustomRowWidth is what one custom row may occupy in the cheatsheet, markers included.
 //
-// Chosen so a row fits the narrowest terminal the app supports: helpRow's key column
-// is 12 cells, the help overlay's box costs 4 more for its border and padding plus a
-// column of margin each side, and " (repo)" can follow the description — which leaves
-// 12 + 55 + 7 = 74 against 80. TestHelpCustomSectionTruncatesLongDescriptions pins
-// that arithmetic rather than trusting it.
-const helpCustomDescWidth = 55
+// Derived from the narrowest terminal the app supports: helpRow's key column is 12 cells and
+// the help overlay's box costs 4 more for its border and padding plus a column of margin
+// each side, which leaves 12 + 62 = 74 against 80.
+const helpCustomRowWidth = 62
+
+// helpCustomDescWidth is the NARROWEST description budget a row can get today: the
+// both-markers case, helpCustomRowWidth less " (terminal) (repo)".
+//
+// It is a consequence of customDescWidth rather than an input to it. Markers are spent out
+// of the row's budget instead of being added on top of it, so a row carrying one marker
+// gets more than this and an unmarked row gets the whole helpCustomRowWidth.
+// TestHelpCustomSectionTruncatesLongDescriptions pins it rather than trusting it.
+const helpCustomDescWidth = helpCustomRowWidth - len(" (terminal) (repo)")
 
 // helpCustomHeading titles the custom-commands section. It names the leader as well
 // as the section, because the keys it lists do nothing on their own.
@@ -284,22 +291,45 @@ func rowDesc(row keys.HelpRow) string {
 // its own, and the help overlay hard-wraps its content — so an over-long line does
 // not overflow the frame, but it does spill one description across several rows and
 // push the rest of the cheatsheet off the end of a short terminal. The bound is
-// asserted, not assumed: see helpCustomDescWidth.
+// asserted, not assumed: see customDescWidth.
 func (h helpTypeGeneral) customLines() []string {
 	if len(h.commands) == 0 {
 		return nil
 	}
 	lines := []string{"", helpHeaderStyle().Render(helpCustomHeading)}
 	for _, c := range h.commands {
-		// By display width, not rune count: a CJK description is two cells per rune,
-		// so a rune bound would let it render at twice the width it was checked at.
-		desc := runewidth.Truncate(c.Description, helpCustomDescWidth, "…")
-		if c.Context == customcmd.ContextRepo {
-			desc += " (repo)"
+		// Same markers the `!` menu shows, in the same order, because this screen is where a
+		// user goes to find out what their keys do — and which of them will take the
+		// terminal is exactly the thing `output` is required in order not to surprise them
+		// with.
+		markers := ""
+		if c.Output == customcmd.OutputTerminal {
+			markers += " (terminal)"
 		}
-		lines = append(lines, helpRow("! "+c.Key, desc))
+		if c.Context == customcmd.ContextRepo {
+			markers += " (repo)"
+		}
+		// By display width, not rune count: a CJK description is two cells per rune, so a
+		// rune bound would let it render at twice the width it was checked at. Charged
+		// PER ROW rather than against the worst case, so the common unmarked row keeps the
+		// columns a marked one needs instead of paying for markers it does not carry.
+		desc := runewidth.Truncate(c.Description, customDescWidth(markers), "…")
+		lines = append(lines, helpRow("! "+c.Key, desc+markers))
 	}
 	return lines
+}
+
+// customDescWidth is the description budget for a row carrying markers: whatever the row's
+// width leaves once they are subtracted.
+//
+// Plain subtraction, with NO floor, and that is a decision. A floor can only bind by
+// returning more columns than the markers left — which overflows the row rather than
+// protecting it, so a third marker added later shrinks the description here and the row
+// still fits. At or below zero runewidth.Truncate collapses the description to "…", so the
+// line stays bounded by the markers themselves; a marker set wide enough to reach that is a
+// marker problem, and no budget arithmetic here can answer it.
+func customDescWidth(markers string) int {
+	return helpCustomRowWidth - runewidth.StringWidth(markers)
 }
 
 func (h helpTypeGeneral) hint() string { return "press any key to close" }

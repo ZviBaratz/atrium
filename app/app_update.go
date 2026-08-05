@@ -530,6 +530,8 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case customCommandDoneMsg:
 		return m.handleCustomCommandDone(msg)
+	case customCommandTerminalDoneMsg:
+		return m.handleCustomCommandTerminalDone(msg)
 	case renameDoneMsg:
 		if msg.err != nil {
 			// The rename failed partway (tmux renamed but git did not, say). Reopen

@@ -13,9 +13,9 @@ import (
 //
 // A rejected entry is dropped rather than bound — the correct runtime behaviour,
 // since one typo must not cost the user their other commands — which leaves "why is
-// my command not there?" with no answer anywhere. This is that answer. It is the
-// only consumer of customcmd today; the UI stage adds a startup surface reading the
-// same validation pass, so the two can never disagree about what is valid.
+// my command not there?" with no answer anywhere. This is that answer outside the TUI;
+// the startup modal is the same answer inside it. Both read the same validation pass, so
+// the two can never disagree about what is valid.
 func CheckCustomCommands(cfg *config.Config) []customcmd.Problem {
 	if cfg == nil {
 		return nil

@@ -5,8 +5,11 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"os/exec"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/ZviBaratz/atrium/log"
@@ -17,6 +20,36 @@ import (
 // attachKeeperInterval is the keeper's polling cadence, matching the metadata tick.
 // A var, not a const, so tests can shrink it.
 var attachKeeperInterval = 500 * time.Millisecond
+
+// killedByTerminalSignal reports whether err is a subprocess killed by one of the signals a
+// cooked terminal takeover exposes this process group to — and NOT by anything else.
+//
+// The narrowness is the whole point, and `ExitCode() == -1` is not narrow enough. Every
+// tmux op runs under exec.CommandContext with a tmuxOpTimeout (session/tmux/command.go), and
+// a context kill is SIGKILL, which reports the same -1. Keyed on the code alone, this
+// predicate quietly reclassified a genuinely wedged tmux from a hard failure — retired after
+// promptSendAttempts, with the loss surfaced on return — into a soft one retried forever
+// and reported nowhere. Measured, not assumed: a ctx kill reports Signal()=killed and a
+// Ctrl+C reports Signal()=interrupt, both with ExitCode()=-1.
+//
+// So it asks which signal. SIGINT and SIGQUIT are the two a cooked takeover hands to the
+// foreground process group (see internal/lifecycle), so they are the two that say nothing
+// about the pane; every other death still means what it always did.
+func killedByTerminalSignal(err error) bool {
+	var exitErr *exec.ExitError
+	if !errors.As(err, &exitErr) {
+		return false
+	}
+	status, ok := exitErr.Sys().(syscall.WaitStatus)
+	if !ok || !status.Signaled() {
+		return false
+	}
+	switch status.Signal() {
+	case syscall.SIGINT, syscall.SIGQUIT:
+		return true
+	}
+	return false
+}
 
 // attachKeeper keeps background sessions serviced while a tea.Exec attach suspends
 // the event loop — and with it the metadata tick that delivers queued prompts
@@ -212,6 +245,20 @@ func (k *attachKeeper) service(inst *session.Instance) {
 		// soft outcome also resets the hard budget so it matches the tick path,
 		// where each dispatch runs a fresh sendWithRetry — only consecutive-cycle
 		// hard failures should retire a prompt.
+		delete(k.hardFails, inst)
+		inst.ClearPromptSending()
+	case killedByTerminalSignal(err):
+		// The send's own subprocess was killed by the terminal's interrupt, which says
+		// nothing about the pane. It became reachable with `output: terminal` (#375): a
+		// cooked takeover runs the user's command in Atrium's foreground process group,
+		// and the keeper's `tmux send-keys` children are in it too — so a Ctrl+C aimed at
+		// a stubborn build is delivered to them as well.
+		//
+		// Counted as a hard failure, a few impatient presses exhaust promptSendAttempts and
+		// retire the prompt for good: the return path persists the cleared prompt, so it
+		// leaves state.json and is never delivered. Treated as soft, the keeper simply
+		// sends it again on its next cycle, which is the truthful reading — nothing was
+		// learned about whether the pane would have accepted it.
 		delete(k.hardFails, inst)
 		inst.ClearPromptSending()
 	default:

@@ -56,6 +56,10 @@ type customCommandSpec struct {
 	dir     string
 	session string
 	env     []string
+	// output is the mode this command declared. Resolved into the spec rather than read
+	// back off the Command at the start site, so the confirmation path — which stages a
+	// spec and starts the work a message later — cannot lose it.
+	output customcmd.Output
 	// argv is what the command log records — see customcmd.Command.LogArgv, and the
 	// comment at the swap in execCustomCommand.
 	argv []string
@@ -102,6 +106,7 @@ func (m *home) openCustomCommands() (tea.Model, tea.Cmd) {
 			Key:         c.Key,
 			Description: c.Description,
 			Repo:        c.Context == customcmd.ContextRepo,
+			Terminal:    c.Output == customcmd.OutputTerminal,
 			Inert:       inert,
 		})
 	}
@@ -183,14 +188,18 @@ func (m *home) launchCustomCommand(c customcmd.Command) (tea.Model, tea.Cmd) {
 	return m, m.startCustomCommand(spec)
 }
 
-// startCustomCommand puts a resolved command on the progress row and runs it off the
-// UI thread.
+// startCustomCommand claims the single-flight slot and starts the command in the mode
+// it declared.
 //
-// beginBackgroundAction, never beginAsyncAction: a user's own verb must not gate
-// every other key for as long as it runs. The cost of that choice is that nothing
-// else serializes the runs, which is what runningCustomCommand is for —
-// ui.BusyBackground is a single shared slot, so a second concurrent run would have
-// the row name one command while a shorter one finishes and clears it.
+// BOTH modes share the slot, and that is what makes it a promise rather than an
+// implementation detail — the README says "one custom command runs at a time". The
+// original reason was ui.BusyBackground, a single shared progress-row slot that a second
+// concurrent background run would make lie. Terminal mode has no progress row at all, so
+// that argument does not reach it; two others do. A background run's row naming a
+// command while the screen belongs to a different one is worse than a refusal, and
+// sharing the slot is what makes the two modes non-interleavable: the slot is released
+// only by a done handler, so no terminal run can begin while a background one is live,
+// and therefore no background done message can arrive holding a terminal run's key.
 func (m *home) startCustomCommand(spec customCommandSpec) tea.Cmd {
 	if m.runningCustomCommand != "" {
 		// Named the way the user invoked it — "! g" — rather than quoted like a
@@ -200,6 +209,18 @@ func (m *home) startCustomCommand(spec customCommandSpec) tea.Cmd {
 			"! %s is still running — one custom command at a time", m.runningCustomCommand))
 	}
 	m.runningCustomCommand = spec.key
+	if spec.output == customcmd.OutputTerminal {
+		return m.startTerminalCustomCommand(spec)
+	}
+	return m.startBackgroundCustomCommand(spec)
+}
+
+// startBackgroundCustomCommand puts a resolved command on the progress row and runs it
+// off the UI thread.
+//
+// beginBackgroundAction, never beginAsyncAction: a user's own verb must not gate
+// every other key for as long as it runs.
+func (m *home) startBackgroundCustomCommand(spec customCommandSpec) tea.Cmd {
 	// Captured here, not read from m inside the goroutine.
 	ctx := m.ctx
 	return m.beginBackgroundAction(fmt.Sprintf("running %s…", customCommandLabel(spec.desc)), func() tea.Msg {
@@ -427,6 +448,7 @@ func (m *home) customCommandSpec(c customcmd.Command) (customCommandSpec, string
 		session: sessionName,
 		env:     customcmd.Env(ctx),
 		argv:    c.LogArgv(),
+		output:  c.Output,
 	}, ""
 }
 

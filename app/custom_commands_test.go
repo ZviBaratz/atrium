@@ -248,12 +248,29 @@ func TestCustomCommandMissingReasonsCoverEveryField(t *testing.T) {
 // refuse — and refuse without spawning a process. The last clause is the one that
 // needs the seam: a gate that suppressed the notice while still running `sh -c` would
 // pass every assertion about the screen.
+//
+// Which layer this actually exercises, since the name invites a stronger reading: TWO
+// independent refusals stand between a dimmed row and a subprocess, and the row never
+// reaches the second here. The overlay declines an inert row itself
+// (CustomCommandsOverlay.HandleKeyPress returns shouldClose=false, so launchCustomCommand
+// is never called), and customCommandSpec re-gates on the live selection for the case the
+// selection moved under an open menu — which is TestCustomCommandStaleSelectionIsRegated's
+// job, and disabling that re-gate leaves THIS test green. So the process witnesses below
+// assert the composed end-to-end invariant, not either layer on its own: whatever leaks,
+// nothing spawns.
 func TestCustomCommandGatesAgreeWithDispatch(t *testing.T) {
 	cmds := validCommands(t,
 		config.CustomCommand{Key: "s", Description: "session ctx", Command: "true", Output: "background"},
 		config.CustomCommand{Key: "r", Description: "repo ctx", Context: "repo", Command: "true", Output: "background"},
 		config.CustomCommand{Key: "b", Description: "needs a branch", Command: "echo {{.Session.Branch}}", Output: "background"},
 		config.CustomCommand{Key: "w", Description: "needs a worktree", Context: "repo", Command: "echo {{.Session.Worktree}}", Output: "background"},
+		// The same shapes in terminal mode, because the gate is only proven for the modes
+		// it is driven through — and terminal mode's refusal has strictly more to get
+		// wrong: it suspends the whole event loop, so a row that ran when it should have
+		// been refused takes the screen away as well as running the command.
+		config.CustomCommand{Key: "S", Description: "session ctx, terminal", Command: "true", Output: "terminal"},
+		config.CustomCommand{Key: "W", Description: "needs a worktree, terminal", Context: "repo",
+			Command: "echo {{.Session.Worktree}}", Output: "terminal"},
 	)
 
 	checked := 0
@@ -263,6 +280,10 @@ func TestCustomCommandGatesAgreeWithDispatch(t *testing.T) {
 				h, inst := newGateHome(t, sc)
 				h.customCommands = cmds
 				calls := stubRunner(t, nil)
+				// Both seams, so a refusal that leaked past either one is visible. A
+				// terminal command spawns from inside attachCommand.Run, which is a
+				// different path from the background goroutine and needs its own witness.
+				terminalCalls := stubTerminalRunner(t, nil)
 
 				if customCommandInertReason(c, inst, customCommandCtx(inst)) == "" {
 					t.Skip("runnable in this scenario — the agreement being checked is about refusals")
@@ -271,10 +292,18 @@ func TestCustomCommandGatesAgreeWithDispatch(t *testing.T) {
 
 				_, _ = h.handleKeyPress(runeKey("!"))
 				require.Equal(t, stateCustomCommands, h.state, "! must open the menu")
-				_, _ = h.handleKeyPress(runeKey(c.Key))
+				_, cmd := h.handleKeyPress(runeKey(c.Key))
+				// DRAINED, which is what makes the terminal witness below able to fail at
+				// all. A terminal command's cmd is a tea.Exec that spawns nothing until the
+				// runtime processes it, so an undrained one leaves *terminalCalls empty
+				// whether the gate held or leaked. (A refusal returns no run cmd, so on the
+				// passing path there is nothing to drain — that is the point.)
+				drain(t, h, cmd)
 
 				assert.Empty(t, *calls,
 					"a dimmed row must not run — the refusal has to stop the process, not just the toast")
+				assert.Empty(t, *terminalCalls,
+					"nor may it take the terminal — a suspended loop is worse than a stray subprocess")
 				assert.Equal(t, stateCustomCommands, h.state,
 					"the menu stays up to hold its own answer")
 				assert.Contains(t, xansi.Strip(h.customCommandsOverlay.Render()), c.Key+" —",
@@ -406,6 +435,12 @@ func TestCustomCommandRefusalsFitARow(t *testing.T) {
 		"failed":             customCommandFailedTail,
 		"vanished directory": customCommandNoDirTail,
 		"unrenderable":       customCommandUnrenderableTail,
+		// Terminal mode's two. The formatted one joins as its WIDEST instantiation, not
+		// as the format string: a wait status is 0-255, and measuring "%d" would count
+		// two cells where three can appear.
+		"exited":      fmt.Sprintf(customCommandExitedTailFmt, 255),
+		"interrupted": customCommandInterruptedTail,
+		"died":        customCommandDiedTail,
 	}
 
 	widest := 0

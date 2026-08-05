@@ -99,8 +99,9 @@ type Profile struct {
 // CustomCommand is one user-defined verb over the selected session (#375): a key
 // that runs a shell template against that session's context. Entries will be reached
 // through a custom-commands menu rather than bound at the top level, so Key only has
-// to be unique among custom commands — it can never shadow a built-in. That menu
-// arrives with the UI stage; today the only consumer is `atrium doctor`.
+// to be unique among custom commands — it can never shadow a built-in. `!` opens that
+// menu; `?` lists the entries; `atrium doctor` and a startup modal report the ones
+// validation refused.
 //
 // This type is deliberately dumb: it is the wire shape and nothing else. Every rule
 // about what a valid entry looks like — and the template rendering itself — lives in
@@ -124,13 +125,12 @@ type CustomCommand struct {
 	// through `sh -c`. The same values are also exported as $ATRIUM_* so a template
 	// need not interpolate a path into the shell string at all.
 	Command string `json:"command"`
-	// Output is how the run is presented. "background" — detached, reporting its
-	// exit status when it finishes — is the only accepted value today; "terminal",
-	// which suspends Atrium and hands the terminal over, arrives with the stage that
-	// can suspend the event loop safely. Required, with no default: the two modes
-	// differ enough that an implicit one would make "it took over my terminal" a
-	// surprise, and requiring it now means adding the second mode never has to
-	// change what an existing config means.
+	// Output is how the run is presented: "background" — detached, reporting its exit
+	// status when it finishes — or "terminal", which suspends Atrium's event loop and
+	// hands the terminal over until the command exits. Required, with no default: the
+	// two modes differ enough that an implicit one would make "it took over my
+	// terminal" a surprise. customcmd.parseOutput is the authority on the accepted
+	// set; this comment is a projection of it, not a second copy.
 	Output string `json:"output"`
 	// Confirm arms the y/n dialog before the command runs.
 	Confirm bool `json:"confirm,omitempty"`

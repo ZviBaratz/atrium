@@ -132,7 +132,10 @@ func frameStates() []frameState {
 // nil-panic on first use.
 func parityCustomCommands() []customcmd.Command {
 	cmds, problems := customcmd.Validate([]config.CustomCommand{
-		{Key: "g", Description: "lazygit in this worktree", Command: "lazygit -p {{ quote .Session.Worktree }}", Output: "background"},
+		// `terminal`, matching the README's own worked example — and so the mode's row
+		// marker is covered by every size sweep and both colour fingerprints below. Left
+		// all-`background`, the fixture rendered a frame no user of the mode ever sees.
+		{Key: "g", Description: "lazygit in this worktree", Command: "lazygit -p {{ quote .Session.Worktree }}", Output: "terminal"},
 		{Key: "c", Description: "just ci", Command: "just ci", Output: "background"},
 		{Key: "f", Description: "git fetch --all", Context: "repo", Command: "git fetch --all", Output: "background"},
 		{Key: "b", Description: "gh pr checks on this branch", Command: "gh pr checks {{ .Session.Branch }}", Output: "background"},

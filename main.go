@@ -15,6 +15,7 @@ import (
 	"github.com/ZviBaratz/atrium/config"
 	"github.com/ZviBaratz/atrium/daemon"
 	"github.com/ZviBaratz/atrium/internal/doctor"
+	"github.com/ZviBaratz/atrium/internal/lifecycle"
 	"github.com/ZviBaratz/atrium/internal/profile"
 	"github.com/ZviBaratz/atrium/internal/update"
 	"github.com/ZviBaratz/atrium/log"
@@ -74,7 +75,13 @@ var (
 			// deferred autoyes-daemon handoff below runs instead of the process being
 			// hard-killed with its defers skipped. (Inside the TUI, Ctrl+C is a key
 			// event handled by Bubble Tea, not a signal.)
-			ctx, stop := signal.NotifyContext(context.Background(), quitSignals...)
+			//
+			// lifecycle.Watch, not signal.NotifyContext, for one case where that stops
+			// being true: a custom command in `output: terminal` mode runs a cooked
+			// `sh -c` child in this process group, so its Ctrl+C IS a signal and reaches
+			// us as well as the child. Watch lets that one takeover borrow SIGINT.
+			// SIGTERM and SIGHUP are never borrowed, so everything above still holds.
+			ctx, stop := lifecycle.Watch(context.Background(), quitSignals...)
 			defer stop()
 			log.Initialize(logDir(), daemonFlag)
 			defer log.Close()
@@ -256,9 +263,11 @@ var (
 			if !update.IsUpdatableVersion(version) {
 				return fmt.Errorf("this is a dev build (version %q); self-update only works on release builds — see install.sh", version)
 			}
-			// Same signal-driven lifecycle as the root command: Ctrl+C (or a
-			// terminal close, via SIGHUP) aborts a download cleanly instead of
-			// leaving the HTTP transfer orphaned.
+			// The same quitSignals set as the root command: Ctrl+C (or a terminal close,
+			// via SIGHUP) aborts a download cleanly instead of leaving the HTTP transfer
+			// orphaned. Plain signal.NotifyContext, and deliberately not lifecycle.Watch —
+			// that exists so a terminal takeover can borrow SIGINT, and this command has
+			// none. Here Ctrl+C should always mean stop.
 			ctx, stop := signal.NotifyContext(context.Background(), quitSignals...)
 			defer stop()
 

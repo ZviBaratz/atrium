@@ -7,6 +7,7 @@ import (
 	"os"
 	"slices"
 
+	"github.com/ZviBaratz/atrium/internal/lifecycle"
 	"github.com/ZviBaratz/atrium/log"
 	"github.com/ZviBaratz/atrium/session"
 
@@ -14,25 +15,43 @@ import (
 	"golang.org/x/term"
 )
 
-// isTerminal and makeRaw seam term's tty calls so Run's raw-mode-failure branch is
-// testable: CI has no controlling TTY, so the real term.IsTerminal returns false and
-// the branch is otherwise unreachable. term.Restore needs no seam — it is only
-// reached on the success path, which the failure tests don't exercise.
+// isTerminal, makeRaw and restoreTerm seam term's tty calls so Run's raw-mode branches
+// are testable: CI has no controlling TTY, so the real term.IsTerminal returns false and
+// the branches are otherwise unreachable.
+//
+// restoreTerm is seamed because #375 stage C added the first test to drive the raw-mode
+// SUCCESS path (asserting a raw takeover does NOT borrow SIGINT), and a fake makeRaw has
+// no real *term.State to hand back. Unseamed, that test either nil-derefs inside
+// term.Restore or fabricates a zeroed State — and `go test` run from a terminal has that
+// terminal on stdin, so the fabricated one applies a zeroed termios to the developer's
+// own tty. The seam is the only spelling that is safe wherever the suite runs.
+//
+// suspendInterrupt is seamed for the same reason one rung up: the alternative is a test
+// that raises a process-global SIGINT at the test binary.
 var (
-	isTerminal = term.IsTerminal
-	makeRaw    = term.MakeRaw
+	isTerminal       = term.IsTerminal
+	makeRaw          = term.MakeRaw
+	restoreTerm      = term.Restore
+	suspendInterrupt = lifecycle.SuspendTerminalSignals
 )
 
-// attachCommand adapts a blocking tmux attach into a tea.ExecCommand so Bubble
-// Tea releases the terminal before the attach and restores+repaints it after —
+// attachCommand adapts a blocking terminal takeover into a tea.ExecCommand so Bubble
+// Tea releases the terminal before it and restores+repaints it after —
 // on the event loop, via execMsg, which is the framework's supported path for a
 // blocking terminal takeover. (Calling ReleaseTerminal/RestoreTerminal directly
 // from inside Update blocks the event loop for the whole attach and leaves the
-// renderer/input reader wedged.) Run also puts stdin in raw mode for the
-// duration: ReleaseTerminal restores cooked mode, where Ctrl+Q (ASCII 17 = XON)
+// renderer/input reader wedged.) For a tmux attach Run also puts stdin in raw mode for
+// the duration: ReleaseTerminal restores cooked mode, where Ctrl+Q (ASCII 17 = XON)
 // is swallowed by IXON flow control and never reaches the detach reader. The
-// Set* methods are no-ops because the attach copies os.Stdin/os.Stdout directly
+// Set* methods are no-ops because the takeover copies os.Stdin/os.Stdout directly
 // rather than through the streams Bubble Tea would inject.
+//
+// It serves two callers, and "attach" in the names below is the older of the two rather
+// than the whole set: a tmux attach (attachExecCarry) and a custom command in
+// `output: terminal` mode (startTerminalCustomCommand, #375). What they share is the
+// suspension and everything it owes — the keeper, the attachGen bump, the hard repaint
+// on return — which is exactly why the second one reuses this rather than reaching for
+// tea.ExecProcess.
 //
 // Methods take a pointer receiver so Run's rawModeFailed write survives: tea.Exec
 // holds the value as an interface and invokes Run on it after releasing the
@@ -41,6 +60,16 @@ var (
 // writes, so attachExec can pass a *attachCommand and read the flags back there.
 type attachCommand struct {
 	attach func() (chan struct{}, error)
+	// raw asks Run to put stdin in raw mode for the duration. True for a tmux attach,
+	// whose Ctrl+Q detach reader needs single-byte reads with IXON off.
+	//
+	// FALSE for a custom command's `sh -c` child, and that is a decision rather than an
+	// omission: term.MakeRaw also clears OPOST/ONLCR, so a command that prints newlines
+	// would staircase its output down the screen, and a child that wants raw mode
+	// (lazygit, an editor) sets its own termios. The positive test is
+	// TestAttachCommandRun_CookedNeverAttemptsRawMode — a decision with no test is a
+	// comment.
+	raw bool
 	// keeper services non-attached sessions (prompt delivery, auto-yes taps) while
 	// the event loop is suspended. Run starts it once the attach succeeds and joins
 	// it before returning; nil is tolerated for tests that only exercise Run.
@@ -57,9 +86,9 @@ type attachCommand struct {
 }
 
 func (a *attachCommand) Run() error {
-	if fd := int(os.Stdin.Fd()); isTerminal(fd) {
+	if fd := int(os.Stdin.Fd()); a.raw && isTerminal(fd) {
 		if oldState, err := makeRaw(fd); err == nil {
-			defer func() { _ = term.Restore(fd, oldState) }()
+			defer func() { _ = restoreTerm(fd, oldState) }()
 		} else {
 			// Stay in cooked mode where IXON swallows Ctrl+Q, so detach won't work and
 			// the attach looks like a hang. Record it so attachFinishedMsg can surface a
@@ -68,6 +97,24 @@ func (a *attachCommand) Run() error {
 			a.rawModeFailed = true
 			log.WarningLog.Printf("failed to set raw mode for attach; Ctrl+Q detach may not work: %v", err)
 		}
+	}
+	// A child that asked for the terminal in cooked mode owns Ctrl+C. Cooked mode leaves
+	// ISIG on and the child is in our process group, so the kernel delivers that SIGINT to
+	// Atrium as well — where the root context is wired to it and passed to
+	// tea.WithContext, so it would shut the app down. Borrowing the terminal's signals for
+	// the duration leaves the interrupt to the child, which is what the user meant by it.
+	// SIGTERM and SIGHUP are never borrowed.
+	//
+	// Keyed on the REQUEST (!a.raw), not on the outcome, and deliberately NOT extended to
+	// `|| a.rawModeFailed`. An attach that asked for raw mode and could not get it is
+	// running cooked too, so extending it looks strictly safer and is strictly worse:
+	// tmux sets SIGINT to SIG_IGN in both client and server, so Ctrl+C would reach nobody
+	// at all — and that attach is the one where Ctrl+Q is swallowed by IXON, keys are
+	// line-buffered, and handleAttachFinished's own modal concedes tmux's prefix "may not
+	// register on its own". Ctrl+C quitting Atrium is that user's last way out of a
+	// session they cannot detach from, and it must stay.
+	if cooked := !a.raw; cooked {
+		defer suspendInterrupt()()
 	}
 	ch, err := a.attach()
 	if err != nil {
@@ -122,7 +169,10 @@ func (m *home) attachExecCarry(attach func() (chan struct{}, error), killTarget 
 	// keeper re-checks Started/Paused per cycle.
 	keeper := newAttachKeeper(m.ctx, slices.Clone(m.list.GetInstances()), killTarget)
 	keeper.errs = slices.Clone(carriedErrs) // pre-start seed, ordered before the goroutine's appends
-	cmd := &attachCommand{attach: attach, keeper: keeper,
+	// raw: true — tmux's in-session keys (Ctrl+Q detach, Ctrl+X kill, the sibling-cycle
+	// keys) are read as single bytes, which cooked mode's line buffering and IXON cannot
+	// deliver. A custom command passes false; see attachCommand.raw.
+	cmd := &attachCommand{attach: attach, raw: true, keeper: keeper,
 		// Runs on the suspended event-loop goroutine (see attachCommand.onAttached),
 		// so the bump is ordered before every parked message the resumed loop
 		// processes — pre-attach captures always compare against the new generation.

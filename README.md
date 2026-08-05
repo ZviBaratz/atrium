@@ -996,7 +996,7 @@ you configure are documented where every built-in key is.
     "key": "g",                                       // one printable character
     "description": "lazygit in this worktree",         // shown in the menu and in ?
     "command": "lazygit -p {{ quote .Session.Worktree }}",
-    "output": "background"                            // required
+    "output": "terminal"                              // required; takes the screen
   },
   {
     "key": "c",
@@ -1020,7 +1020,7 @@ you configure are documented where every built-in key is.
 | `key` | yes | one printable character | what runs it from inside the menu. Any character is available, including `q` — the menu handles keys before the global quit. The space bar is not (it arrives as `space`), nor is a combining mark. |
 | `description` | yes | string | all the menu and `?` can show, so it is what identifies the command. |
 | `command` | yes | Go template | run as `sh -c`. See the placeholders below. |
-| `output` | yes | `background` | runs detached, naming itself on the progress row, and reports the exit status when it finishes. There is deliberately no default: the modes behave differently enough that an implicit one would be a surprise. `terminal` — taking over the screen for the command's duration — is planned and currently rejected. |
+| `output` | yes | `background`, `terminal` | `background` runs it detached, naming itself on the progress row, and reports the exit status when it finishes. `terminal` gives it the screen until it exits, the way attaching to a session does — for lazygit, an editor, a pager, or a build you mean to watch. There is deliberately no default: the modes behave differently enough that an implicit one would be a surprise. |
 | `context` | no | `session` (default), `repo` | `session` runs in the agent's working directory and needs a started, unpaused session. `repo` runs in the repository root, which is available whatever the session is doing. |
 | `confirm` | no | bool | ask before running. The dialog names the command and the directory. |
 
@@ -1040,6 +1040,10 @@ parsing however odd the path is. A template renders into a shell string, so quot
 value that might contain a space with the `quote` function —
 `lazygit -p {{ quote .Session.Worktree }}`.
 
+Each row says what it will do before you press it: `(terminal)` for a command that takes
+the screen, `(repo)` for one that runs in the repository root rather than the worktree.
+`?` lists the same markers.
+
 A row that cannot run is dimmed with the reason rather than hidden, and pressing its key
 says the same thing in the menu's footer: a `session`-context row on a paused session, or
 any command that reads a value this session does not have (`gh pr checks
@@ -1049,11 +1053,23 @@ or as a variable — because an empty expansion is how `rm -rf "$ATRIUM_WORKTREE
 becomes `rm -rf /build`. The check errs toward refusing: a name inside single quotes, or
 in a comment, still counts.
 
-One custom command runs at a time; a second gets a notice.
+One custom command runs at a time, whichever mode it is in; a second gets a notice.
+
+A `terminal` command owns the screen while it runs, so `Ctrl+C` stops the command and leaves
+Atrium running — as does `Ctrl+\`. `Ctrl+Z` still suspends the pair, and `fg` brings both
+back. One caveat, because the shell sends those keys to every process Atrium started, not
+only to your command: if something else was already working in the background — an
+auto-name, an open-PR — interrupting your command interrupts that too, and you may see it
+report a failure you did not cause. Nothing is lost; run it again. Your other sessions
+keep being serviced throughout — queued prompts are still delivered and auto-yes still
+answers — but the session list is not redrawn until the command exits, and it is swept
+fresh on return.
 
 Every run is recorded in the command log (`L`), under its key and description rather
 than its rendered text — so a token in a command never lands in the log. A failure
-raises a notice and its output is in that record.
+raises a notice: a `background` command's output is in its record, and a `terminal`
+command's went to the screen you were watching, so its record carries the exit status
+alone.
 
 A malformed entry is **dropped, not bound**: the rest still work. Atrium reports the
 ones it refused in a modal at startup, and `atrium doctor` prints the same list, so a

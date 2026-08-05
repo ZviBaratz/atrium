@@ -25,6 +25,14 @@ type CustomCommandRow struct {
 	// than the session's working directory. Shown, because it is the difference
 	// between two directories and the user cannot otherwise tell which they get.
 	Repo bool
+	// Terminal marks a row that takes the whole terminal until it exits, rather than
+	// running detached. Shown for the same reason `output` is a required config key
+	// and has no default: the modes behave differently enough that finding out by
+	// pressing is the surprise the requirement exists to prevent. Without it a
+	// terminal lazygit and a background build are two identical rows, and picking
+	// wrong either blacks out the app for minutes or silently detaches something the
+	// user meant to sit and watch.
+	Terminal bool
 	// Inert is empty when the row can run against the current selection, and
 	// otherwise says why it cannot. An inert row is dimmed and carries its reason —
 	// never hidden, and never silently ignored.
@@ -33,6 +41,23 @@ type CustomCommandRow struct {
 
 // runnable reports whether the row can run right now.
 func (r CustomCommandRow) runnable() bool { return r.Inert == "" }
+
+// markers is the row's non-default properties, in the order they matter to someone about
+// to press the key: what it will do to their screen first, then where it will run.
+//
+// Both are omitted when they are the default, so the common row stays uncluttered and the
+// marked one is what draws the eye. TestCustomCommands_MarkersFitTheNarrowestBox pins the
+// combined width, because two markers plus a reason is the widest tail a row can carry.
+func (r CustomCommandRow) markers() string {
+	var out []string
+	if r.Terminal {
+		out = append(out, customCmdTerminalMarker)
+	}
+	if r.Repo {
+		out = append(out, customCmdRepoMarker)
+	}
+	return strings.Join(out, " ")
+}
 
 // CustomCommandsOverlay is the leader-key menu over the configured custom commands:
 // `!` opens it, and each row's own key runs it.
@@ -207,23 +232,24 @@ func (o *CustomCommandsOverlay) Render() string {
 	return box.Render(b.String())
 }
 
-// renderRow lays out one command: its key, its description, and a tail carrying the
-// repo marker, the reason it cannot run, or both when they fit.
+// renderRow lays out one command: its key, its description, and a tail carrying its
+// markers, the reason it cannot run, or both when they fit.
 func (o *CustomCommandsOverlay) renderRow(row CustomCommandRow, selected bool, width int) string {
 	th := theme.Current()
 
-	// The reason outranks the marker, following the palette's rule that a row which
+	// The reason outranks the markers, following the palette's rule that a row which
 	// cannot run owes the user why rather than what it would have done. Both fit
-	// often enough to be worth trying, because "(repo)" is half of why the reason
+	// often enough to be worth trying, because the markers are half of why the reason
 	// differs from the row above it.
+	markers := row.markers()
 	tail := ""
 	switch {
-	case !row.runnable() && row.Repo:
-		tail = customCmdRepoMarker + " " + row.Inert
+	case !row.runnable() && markers != "":
+		tail = markers + " " + row.Inert
 	case !row.runnable():
 		tail = row.Inert
-	case row.Repo:
-		tail = customCmdRepoMarker
+	default:
+		tail = markers
 	}
 
 	prefix := "  " + padCells(row.Key, customCmdKeyCol) + "  "
@@ -316,6 +342,10 @@ const (
 
 	// customCmdRepoMarker marks a row that runs in the repository root.
 	customCmdRepoMarker = "(repo)"
+	// customCmdTerminalMarker marks a row that takes over the terminal. Spelled as a
+	// word rather than a glyph: the glyph tables are a guarded drift site of their own,
+	// and this has to read unambiguously in a row the user is deciding about.
+	customCmdTerminalMarker = "(terminal)"
 
 	// customCmdChrome is every row of the box that is not a list row: the border
 	// (2) and vertical padding (2) lipgloss draws around the content, the title and
