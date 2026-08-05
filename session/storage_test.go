@@ -466,7 +466,7 @@ func TestLoadInstances_RationsRecoveryByTheConfiguredCap(t *testing.T) {
 			for _, inst := range insts {
 				gotTitles = append(gotTitles, inst.Title)
 			}
-			return DeferredRecovery{Titles: []string{"gamma"}, Limit: sc.Limit}
+			return DeferredRecovery{Sessions: []ParkedSession{{Title: "gamma", Path: "/repo/web"}}, Limit: sc.Limit}
 		})
 		defer restore()
 
@@ -477,7 +477,7 @@ func TestLoadInstances_RationsRecoveryByTheConfiguredCap(t *testing.T) {
 		require.Equal(t, []string{"alpha", "beta", "gamma"}, gotTitles,
 			"every loaded session is offered, in the stored (user-arranged) order")
 		require.Len(t, got, 3, "and every one is still returned to the caller")
-		require.Equal(t, DeferredRecovery{Titles: []string{"gamma"}, Limit: gotCap.Limit},
+		require.Equal(t, DeferredRecovery{Sessions: []ParkedSession{{Title: "gamma", Path: "/repo/web"}}, Limit: gotCap.Limit},
 			deferred, "the report is passed through, not re-derived")
 	})
 

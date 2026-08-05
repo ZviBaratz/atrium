@@ -741,7 +741,7 @@ func (i *Instance) reattach(paneAlive bool, budget *recoveryBudget) {
 	// cs's dedicated socket. Don't crash on the failed attach (which previously
 	// aborted startup); recover in place, which relaunches the agent — so it needs a
 	// slot from the budget first, and hands one back that did not end up live.
-	if !budget.spend(i.Title) {
+	if !budget.spend(i) {
 		i.parkOverBudget()
 		return
 	}

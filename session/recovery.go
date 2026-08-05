@@ -50,6 +50,17 @@ func bringOnline(insts []*Instance, sc config.SessionCap) DeferredRecovery {
 	return budget.result()
 }
 
+// ParkedSession identifies one session a load parked: the (Title, Path) pair, which
+// is what Storage matches instances on (see DeleteInstance). The title alone is not
+// enough — titles are unique only within a repo group, so a same-titled session in
+// another repo could answer for this one. That matters because a report can outlive
+// the process that made it (internal/parkreport): a reader reconciling it against a
+// later fleet needs to know which row it is talking about.
+type ParkedSession struct {
+	Title string
+	Path  string
+}
+
 // DeferredRecovery reports the sessions a load left parked because relaunching
 // their agents would have exceeded the host session budget, together with the
 // budget it measured them against — so a caller can explain the park in the
@@ -58,15 +69,15 @@ func bringOnline(insts []*Instance, sc config.SessionCap) DeferredRecovery {
 //
 // The zero value means nothing was deferred. That covers both the fleet that fit
 // and the load that rationed nothing at all (an explicit max_sessions — see
-// newRecoveryBudget), which is why callers test len(Titles) rather than Limit.
+// newRecoveryBudget), which is why callers test len(Sessions) rather than Limit.
 //
-// It carries no live count, deliberately. The one consumer — the startup toast — has
-// no room for a second number on a row that truncates its tail, and what is running is
-// on the rows in front of the user. A field held for a future caller is a field nothing
-// keeps honest.
+// It carries no live count, deliberately. Neither consumer — the startup toast, and
+// the spool that carries the report across processes — has room for a second number on
+// a row that truncates its tail, and what is running is on the rows in front of the
+// user. A field held for a future caller is a field nothing keeps honest.
 type DeferredRecovery struct {
-	// Titles are the parked sessions, in stored order.
-	Titles []string
+	// Sessions are the parked sessions, in stored order.
+	Sessions []ParkedSession
 	// Limit is the cap that was applied.
 	Limit int
 }
@@ -85,9 +96,9 @@ type DeferredRecovery struct {
 // A nil *recoveryBudget is unlimited. That is the shape an unrationed load takes,
 // and it lets every caller that is not about the cap pass nil.
 type recoveryBudget struct {
-	limit    int      // slots available; spending stops once live reaches it
-	live     int      // slots taken, by reserved survivors and granted relaunches alike
-	deferred []string // titles refused, in the order they were met
+	limit    int             // slots available; spending stops once live reaches it
+	live     int             // slots taken, by reserved survivors and granted relaunches alike
+	deferred []ParkedSession // sessions refused, in the order they were met
 }
 
 // newRecoveryBudget resolves the cap that rations one load's relaunches, or nil for
@@ -118,14 +129,18 @@ func (b *recoveryBudget) reserve() {
 	b.live++
 }
 
-// spend grants title a relaunch if the budget has room, recording the refusal
+// spend grants inst a relaunch if the budget has room, recording the refusal
 // otherwise. An unrationed load (nil) grants everything.
-func (b *recoveryBudget) spend(title string) bool {
+//
+// It takes the instance rather than its title so a refusal is recorded as the
+// (Title, Path) pair — see ParkedSession for why a title alone cannot identify the row
+// a report is about.
+func (b *recoveryBudget) spend(inst *Instance) bool {
 	if b == nil {
 		return true
 	}
 	if b.live >= b.limit {
-		b.deferred = append(b.deferred, title)
+		b.deferred = append(b.deferred, ParkedSession{Title: inst.Title, Path: inst.Path})
 		return false
 	}
 	b.live++
@@ -149,5 +164,5 @@ func (b *recoveryBudget) result() DeferredRecovery {
 	if b == nil || len(b.deferred) == 0 {
 		return DeferredRecovery{}
 	}
-	return DeferredRecovery{Titles: b.deferred, Limit: b.limit}
+	return DeferredRecovery{Sessions: b.deferred, Limit: b.limit}
 }

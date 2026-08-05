@@ -586,6 +586,14 @@ type home struct {
 	// frame to toast on. Zeroed once it has been shown, in the shape
 	// pendingCustomCommandProblems uses, so the preview tick cannot re-toast it forever.
 	pendingDeferredRecovery session.DeferredRecovery
+	// pendingEarlierRecovery is the same report for a park an EARLIER process made —
+	// the autoyes daemon's, arriving through internal/parkreport and already reconciled
+	// against this load's fleet (#622). Held separately because it is toasted in
+	// different words (earlierParkNotice: a park made hours ago must not be reported in
+	// the present tense) and its delivery unlinks the spool file. Never non-empty at the
+	// same time as the field above — pendingParkReports, which fills both, reads the
+	// spool only when this load deferred nothing.
+	pendingEarlierRecovery session.DeferredRecovery
 	// runningCustomCommand is the key of the custom command currently running in the
 	// background, or "". It serializes them: ui.BusyBackground is a single shared
 	// slot, so a second concurrent run would make the progress row name one command
@@ -783,7 +791,10 @@ func newHome(ctx context.Context, program string, autoYes bool, version, binName
 	// there is no frame to toast on yet. The preview tick flushes it, in the shape
 	// every other startup notice uses. Set after assembleHome so that constructor
 	// keeps its IO-free, fixed-argument shape.
-	h.pendingDeferredRecovery = deferred
+	// A park an earlier process made reaches us only through the spool, because it is
+	// already persisted as an ordinary Paused row and this load therefore refuses nothing
+	// on its account (#622). pendingParkReports owns which of the two buffers is filled.
+	h.pendingDeferredRecovery, h.pendingEarlierRecovery = pendingParkReports(deferred, instances, time.Now())
 	// Write back any account identities assembleHome healed (#470). Doing it here
 	// keeps that constructor IO-free, and persisting eagerly is what lets `atrium ls`
 	// and the daemon — separate processes that read the stored rows raw — agree with
