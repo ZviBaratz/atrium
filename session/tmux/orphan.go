@@ -150,7 +150,10 @@ type ScanGaps struct {
 	// Atrium. The guard protects the fleet the reaper cannot see past its own environment, not
 	// every fleet on the host.
 	//
-	// Deliberately NOT counted by Any() either. See that method.
+	// Not an inventory gap either, so IncompleteInventory does not count it — same as the
+	// field above, and for the same reason. Its consequences are handled where they apply:
+	// the `--all` guard in cli_reap.go, and the caution renderOrphanServer prints beside a
+	// remedy it keeps.
 	EmptyFleetUnproven bool
 }
 
