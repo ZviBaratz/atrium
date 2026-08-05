@@ -39,7 +39,7 @@ func TestRenderGatesFlipped(t *testing.T) {
 
 	for _, want := range []string{
 		"personal", "⚠ flipped (pinned false, resolved true)",
-		"work", "unknown (no resolved value on disk)",
+		"work", "unknown (no comparable value could be read)",
 		"→ heuristics were verified on the other branch", "session/agent/registry.go",
 	} {
 		if !strings.Contains(out, want) {
@@ -67,6 +67,41 @@ func TestRender(t *testing.T) {
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("Render() output missing %q\n--- got ---\n%s", want, out)
+		}
+	}
+}
+
+// TestGateUnknownLabelClaimsOnlyWhatWasEstablished guards the wording, because the wording
+// is the whole content of an unknown row.
+//
+// The label read "unknown (no resolved value on disk)", which is a claim about the disk
+// this code has not earned on two of the five paths to GateUnknown, for two different
+// reasons. A relative or empty config dir is refused before any file is opened
+// (TestFileGateReaderRejectsRelativeDir), so nothing about the disk was established; a
+// malformed .claude.json is read and then fails at the parse (TestFileGateReaderUnreadable),
+// so a resolved value may well be sitting in it. Reporting a failed read as a determined
+// absence is the conflation RenderGates' own doc comment forbids — in the label of the
+// section that states the rule.
+//
+// It also has to stay an unknown rather than drifting into a verdict: a gate check is a
+// report, and GatesFlipped deliberately ignores this state.
+func TestGateUnknownLabelClaimsOnlyWhatWasEstablished(t *testing.T) {
+	got := GateResult{State: GateUnknown, Pinned: true}.label()
+
+	if strings.Contains(got, "on disk") {
+		t.Errorf("label = %q, want no claim about the disk: nothing was read on two of the "+
+			"five paths that reach GateUnknown", got)
+	}
+	if !strings.Contains(got, "unknown") {
+		t.Errorf("label = %q, want it to still read as unknown", got)
+	}
+	if !strings.Contains(got, "could be read") {
+		t.Errorf("label = %q, want it to name what was established — GateUnknown's own "+
+			"doc comment says \"no comparable value could be read\"", got)
+	}
+	for _, verdict := range []string{"ok", "flipped", "⚠"} {
+		if strings.Contains(got, verdict) {
+			t.Errorf("label = %q, want no verdict %q: an unread gate is not a finding", got, verdict)
 		}
 	}
 }

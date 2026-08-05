@@ -20,6 +20,15 @@ func (s Status) label() string {
 
 // label renders one gate's outcome, carrying both values on a flip so the row is
 // actionable without cross-referencing the registry.
+//
+// The unknown label says what was established and no more, which is GateUnknown's own
+// wording (gates.go). It read "no resolved value on disk", a claim this code has not
+// earned on two of the five paths that reach here — and not earned for different reasons,
+// which is why the label cannot name one of them. A relative or empty config dir is
+// refused before any file is opened, so nothing about the disk was established at all; a
+// malformed .claude.json was read but could not be parsed, so a resolved value may well be
+// sitting in it. Reporting a failed read as a determined absence is the conflation
+// RenderGates' own doc comment forbids, in the label of the section that states the rule.
 func (r GateResult) label() string {
 	switch r.State {
 	case GateMatchesPin:
@@ -27,7 +36,7 @@ func (r GateResult) label() string {
 	case GateFlipped:
 		return fmt.Sprintf("⚠ flipped (pinned %t, resolved %t)", r.Pinned, r.Actual)
 	default:
-		return "unknown (no resolved value on disk)"
+		return "unknown (no comparable value could be read)"
 	}
 }
 
