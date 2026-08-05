@@ -316,6 +316,61 @@ func TestCustomCommandRunsWithTheResolvedContext(t *testing.T) {
 	assert.Contains(t, spec.env, "ATRIUM_TITLE=live")
 }
 
+// TestCustomCommandRefusalsFitARow covers EVERY refusal a run can produce, not just
+// the failure toast.
+//
+// The rule it enforces has two halves, and macOS CI found the case that needed both: the
+// message must be bounded, and the reason must come last. The vanished-directory refusal
+// interpolated the resolved path AFTER the reason — so on a runner whose temp paths are
+// long, the hint bar (which truncates from the right) deleted "is gone" and left a
+// refusal that named a path and no reason. Bounding alone would not have caught it;
+// asserting the reason survives is what does.
+func TestCustomCommandRefusalsFitARow(t *testing.T) {
+	long := strings.Repeat("an unbounded user-authored description ", 20)
+	wide := strings.Repeat("日本語", 200)
+	// A path as long as a macOS temp dir, which is what exposed this.
+	longDir := "/var/folders/df/djsxfhc17x95674wsm_g8s980000gn/T/" +
+		strings.Repeat("TestSomethingWithAVeryLongName", 3)
+
+	// Iterated from the source's own tails, so a new message shape has to join the set
+	// rather than quietly escaping the rule.
+	tails := map[string]string{
+		"failed":             customCommandFailedTail,
+		"vanished directory": customCommandNoDirTail,
+		"unrenderable":       customCommandUnrenderableTail,
+	}
+
+	widest := 0
+	for name, tail := range tails {
+		t.Run(name, func(t *testing.T) {
+			for _, desc := range []string{"short", long, wide, longDir} {
+				msg := customCommandLabel(desc) + tail
+				assert.LessOrEqualf(t, ansi.PrintableRuneWidth(msg), customCommandNoticeWidth,
+					"the refusal must fit its declared bound: %q", msg)
+				// The half a bound alone does not give: the reason has to be the part
+				// that survives, so nothing unbounded may follow it.
+				assert.Truef(t, strings.HasSuffix(msg, tail),
+					"the reason must come last, so truncation from the right cannot delete "+
+						"it: %q", msg)
+			}
+		})
+		if w := ansi.PrintableRuneWidth("''" + tail); w > widest {
+			widest = w
+		}
+	}
+
+	// The chrome is derived from the literals, never counted. Hand-counting it is how
+	// the bound shipped one cell short on the first pass, and a bound stated one cell
+	// short is a bound that does not hold.
+	assert.Equal(t, customCommandNoticeChrome, widest,
+		"customCommandNoticeChrome must be the widest tail plus its quotes")
+
+	// And the one message built through the helper rather than by appending a tail.
+	assert.Equal(t, customCommandLabel("x")+customCommandFailedTail,
+		customCommandFailureNotice("x"),
+		"the failure notice must go through the same bounded label")
+}
+
 // TestCustomCommandRefusesAVanishedDirectory covers the stat behind the gate.
 //
 // The gate proves the session SHOULD have a directory; only this proves it is there.
@@ -342,7 +397,11 @@ func TestCustomCommandRefusesAVanishedDirectory(t *testing.T) {
 		"a command whose directory has vanished must not run — sh -c would fall back to "+
 			"whatever cwd the process happens to have")
 	assert.True(t, h.menu.HasNotice(), "and must say so")
-	assert.Contains(t, xansi.Strip(h.menu.String()), "is gone")
+	// The reason, not the path: the bar truncates from the right, and a temp dir long
+	// enough (macOS CI) deleted the reason entirely when the path came after it.
+	assert.Contains(t, xansi.Strip(h.menu.String()), "its directory is gone")
+	assert.NotContains(t, xansi.Strip(h.menu.String()), inst.Path,
+		"the unbounded path belongs in the log, not in a one-line refusal")
 }
 
 // TestCustomCommandSerializesRuns pins the reason serialization exists:
@@ -369,6 +428,11 @@ func TestCustomCommandSerializesRuns(t *testing.T) {
 	_, _ = h.handleKeyPress(runeKey("b"))
 	assert.Len(t, *calls, 1, "the second command must not start while the first is running")
 	assert.True(t, h.menu.HasNotice(), "and the user must be told why nothing happened")
+	// Named the way it was invoked. The latch holds the KEY, so quoting it like a
+	// description ("'a' is still running") reads as a name the user has to map back to a
+	// row — and "! a" is exactly what the ? screen lists.
+	assert.Contains(t, xansi.Strip(h.menu.String()), "! a is still running",
+		"the refusal must name the running command as the user typed it")
 	assert.Equal(t, "a", h.runningCustomCommand, "the slot still belongs to the first")
 }
 
@@ -570,13 +634,6 @@ func TestCustomCommandFailureIsSurfaced(t *testing.T) {
 // makes every background failure steal the screen. The description is user-authored and
 // has no ceiling, so the message has to impose one.
 func TestCustomCommandFailureNoticeFitsARow(t *testing.T) {
-	// The chrome is measured, not counted. Hand-counting it is how the bound shipped
-	// one cell short on the first pass, and a bound stated one cell short is a bound
-	// that does not hold.
-	assert.Equal(t, customCommandFailureChrome,
-		ansi.PrintableRuneWidth("'"+customCommandFailureSuffix),
-		"customCommandFailureChrome must match the literal it describes")
-
 	for _, desc := range []string{
 		"short",
 		strings.Repeat("an unbounded user-authored description ", 20),

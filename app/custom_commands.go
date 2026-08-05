@@ -185,8 +185,11 @@ func (m *home) launchCustomCommand(c customcmd.Command) (tea.Model, tea.Cmd) {
 // the row name one command while a shorter one finishes and clears it.
 func (m *home) startCustomCommand(spec customCommandSpec) tea.Cmd {
 	if m.runningCustomCommand != "" {
+		// Named the way the user invoked it — "! g" — rather than quoted like a
+		// description. runningCustomCommand holds the KEY, and 'g' reads as a name the
+		// user then has to map back to a row.
 		return m.handleInfoNotice(fmt.Sprintf(
-			"%s is still running — one custom command at a time", quoteDesc(m.runningCustomCommand)))
+			"! %s is still running — one custom command at a time", m.runningCustomCommand))
 	}
 	m.runningCustomCommand = spec.key
 	// Captured here, not read from m inside the goroutine.
@@ -228,23 +231,38 @@ func (m *home) handleCustomCommandDone(msg customCommandDoneMsg) (tea.Model, tea
 	return m, m.handleError(errors.New(customCommandFailureNotice(msg.desc)))
 }
 
-// customCommandFailureNotice is the failure toast, provably no wider than
+// customCommandFailureNotice is the failure toast, no wider than
 // customCommandNoticeWidth cells. TestCustomCommandFailureNoticeFitsARow asserts that
 // against a pathological description rather than trusting the arithmetic.
+//
 // Truncated by DISPLAY WIDTH, not by rune count: a description in CJK is two cells per
 // rune, so a rune-count bound lets a 30-rune description render 60 cells wide and land
 // back in the modal it was written to avoid.
 func customCommandFailureNotice(desc string) string {
-	// Built from the opening quote and the suffix rather than through quoteDesc, so the
-	// closing quote is counted once, by the constant that bounds it.
-	return "'" + runewidth.Truncate(desc, customCommandNoticeDescWidth, "…") +
-		customCommandFailureSuffix
+	return customCommandLabel(desc) + customCommandFailedTail
+}
+
+// customCommandLabel quotes a user-authored description for a one-line message, bounded
+// to customCommandNoticeDescWidth display cells.
+//
+// Every refusal and every report about a custom command goes through it, because the
+// description is the only unbounded value any of them carry — and a message whose width
+// depends on unbounded input has no worst case to assert. The corollary is the ordering
+// rule those messages follow: the reason comes AFTER the label and nothing comes after
+// the reason. The hint bar truncates from the right, so an unbounded tail does not
+// shorten the message, it deletes the reason.
+func customCommandLabel(desc string) string {
+	return "'" + runewidth.Truncate(desc, customCommandNoticeDescWidth, "…") + "'"
 }
 
 // customCommandCtx is the template and environment context for the selected session.
 //
-// Session.Worktree is empty unless the session's worktree directory actually exists,
-// and that is the single most load-bearing line here. WorkingDir() falls back to
+// Session.Worktree is empty unless the session is started and not paused — the two
+// states in which its worktree directory is on disk. It does not prove the directory is
+// still there (nothing but a stat can, and customCommandSpec does one); it proves the
+// path is the session's own worktree rather than a fallback.
+//
+// That is the single most load-bearing line here. WorkingDir() falls back to
 // Instance.Path whenever the worktree pointer is nil — which it is before Start —
 // and Path is the user's ORIGIN CHECKOUT. A repo-context row is gated on having a
 // selection and nothing more, so `git -C {{.Session.Worktree}} clean -xfd` fired at
@@ -358,8 +376,11 @@ func (m *home) customCommandSpec(c customcmd.Command) (customCommandSpec, string
 	script, err := c.Render(ctx)
 	if err != nil {
 		// Validation rendered this template against a fully-populated probe, so an
-		// error here is about this selection, not the template.
-		return customCommandSpec{}, fmt.Sprintf("%s could not be rendered: %v", quoteDesc(c.Description), err)
+		// error here is about this selection, not the template. The error text itself
+		// goes to the log: it names a template position and a type, which is neither
+		// short nor bounded.
+		log.ErrorLog.Printf("custom command %q failed to render: %v", c.Key, err)
+		return customCommandSpec{}, customCommandLabel(c.Description) + customCommandUnrenderableTail
 	}
 
 	dir := customCommandDir(c, ctx)
@@ -367,7 +388,13 @@ func (m *home) customCommandSpec(c customcmd.Command) (customCommandSpec, string
 	// directory; this proves the directory is there, which a pause, an external `rm`
 	// or a half-finished teardown can all falsify between the two.
 	if st, statErr := os.Stat(dir); statErr != nil || !st.IsDir() {
-		return customCommandSpec{}, fmt.Sprintf("%s: %s is gone", quoteDesc(c.Description), dir)
+		// The path is logged, not shown. It is the one value here with no ceiling, and
+		// putting it in the message costs the reason: the hint bar truncates from the
+		// right, so a long temp path ate "is gone" entirely on macOS CI. The user can
+		// see which row they pressed; what they cannot see is that its directory went
+		// away.
+		log.ErrorLog.Printf("custom command %q: %s is gone", c.Key, dir)
+		return customCommandSpec{}, customCommandLabel(c.Description) + customCommandNoDirTail
 	}
 
 	var sessionName string
@@ -509,13 +536,19 @@ const (
 	// customCommandNoticeDescWidth bounds the description inside the failure toast, in
 	// display cells.
 	customCommandNoticeDescWidth = 30
-	// customCommandFailureSuffix closes the failure toast.
-	customCommandFailureSuffix = "' failed — press L for the output"
-	// customCommandNoticeWidth is the toast's worst case: the clipped description plus
-	// customCommandFailureChrome. Counting the chrome by eye is how this shipped one
-	// cell short the first time, so TestCustomCommandFailureNoticeFitsARow measures the
-	// literal instead of trusting the number.
-	customCommandNoticeWidth = customCommandNoticeDescWidth + customCommandFailureChrome
-	// customCommandFailureChrome is the opening quote plus the suffix above.
-	customCommandFailureChrome = 34
+	// The tails every one-line message about a custom command ends with. Named rather
+	// than inlined so the width guard can iterate them: the rule is that the reason is
+	// last and nothing unbounded follows it, and a rule about a SET has to be asserted
+	// over the set.
+	customCommandFailedTail       = " failed — press L for the output"
+	customCommandNoDirTail        = " — its directory is gone"
+	customCommandUnrenderableTail = " could not be rendered — see the log"
+
+	// customCommandNoticeWidth is the worst case for all of them: the bounded label
+	// plus the longest tail. Counting that by eye is how the bound shipped one cell
+	// short the first time, so TestCustomCommandRefusalsFitARow measures the literals
+	// and fails if this number stops being their maximum.
+	customCommandNoticeWidth = customCommandNoticeDescWidth + customCommandNoticeChrome
+	// customCommandNoticeChrome is the two quotes plus the longest tail above.
+	customCommandNoticeChrome = 38
 )
