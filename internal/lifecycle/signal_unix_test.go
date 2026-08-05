@@ -31,6 +31,7 @@ func keepSignalsCaught(t *testing.T) {
 // a Watch context.
 func TestWatchCancelsOnInterrupt(t *testing.T) {
 	keepSignalsCaught(t)
+	requireNotSuspended(t)
 	ctx, stop := Watch(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
@@ -53,6 +54,7 @@ func TestWatchSwallowsInterruptWhileSuspended(t *testing.T) {
 	defer stop()
 
 	shortGrace(t)
+	requireNotSuspended(t)
 	resume := SuspendTerminalSignals()
 	require.NoError(t, syscall.Kill(syscall.Getpid(), syscall.SIGINT))
 
@@ -84,7 +86,7 @@ func TestWatchStillCancelsOnTermWhileSuspended(t *testing.T) {
 	defer stop()
 
 	shortGrace(t)
-	defer SuspendTerminalSignals()()
+	suspendForTest(t)
 	require.NoError(t, syscall.Kill(syscall.Getpid(), syscall.SIGTERM))
 
 	select {
@@ -141,7 +143,7 @@ func TestSuspendedInterruptStormCannotCostTheShutdownSignal(t *testing.T) {
 	ctx, stop := Watch(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	defer SuspendTerminalSignals()()
+	suspendForTest(t)
 	// Enough SIGINTs to overrun any single shared buffer, all of them swallowed.
 	for range 20 {
 		require.NoError(t, syscall.Kill(syscall.Getpid(), syscall.SIGINT))
@@ -168,7 +170,7 @@ func TestSuspendedInterruptStormCannotCostTheShutdownSignal(t *testing.T) {
 func TestSuspendedSIGQUITDoesNotKillTheProcess(t *testing.T) {
 	keepSignalsCaught(t)
 	shortGrace(t)
-	defer SuspendTerminalSignals()()
+	suspendForTest(t)
 
 	require.NoError(t, syscall.Kill(syscall.Getpid(), syscall.SIGQUIT))
 	// Reaching the next statement at all is the assertion: an unignored SIGQUIT would have

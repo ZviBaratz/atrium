@@ -27,6 +27,34 @@ func released(t *testing.T) {
 		2*time.Second, time.Millisecond, "the borrow must be released after the grace")
 }
 
+// suspendForTest holds a takeover for the test's duration and guarantees the borrow is
+// fully released — grace timer included — before the next test runs.
+//
+// It exists because `defer SuspendTerminalSignals()()` is NOT enough here, and CI's race
+// detector is what proved it. The release is scheduled on a timer (interruptGrace), so a
+// deferred resume returns with the depth still raised; the next test then starts against a
+// suspended process and its first `cancels(os.Interrupt)` is false, or its real SIGINT is
+// swallowed. Locally the timing hid it; under -race it failed two tests at once.
+//
+// The state is package-global by design (see interruptSuspended), so isolating it is the
+// test's job and every suspension in this package must go through here.
+func suspendForTest(t *testing.T) {
+	t.Helper()
+	resume := SuspendTerminalSignals()
+	t.Cleanup(func() {
+		resume()
+		released(t)
+	})
+}
+
+// requireNotSuspended asserts the precondition every test here depends on, so a leak from
+// a neighbour is reported as a leak rather than as a failure of whatever this test asserts.
+func requireNotSuspended(t *testing.T) {
+	t.Helper()
+	require.Zero(t, interruptSuspended.Load(),
+		"a previous test leaked a suspension — every one must go through suspendForTest")
+}
+
 // TestCancelsNeverTouchesAShutdownSignal is the whole scope argument, asserted rather than
 // commented.
 //
@@ -37,6 +65,7 @@ func released(t *testing.T) {
 // and the handoff would never happen.
 func TestCancelsNeverTouchesAShutdownSignal(t *testing.T) {
 	shortGrace(t)
+	requireNotSuspended(t)
 	require.True(t, cancels(os.Interrupt), "SIGINT cancels when nothing is suspended")
 
 	resume := SuspendTerminalSignals()
@@ -56,6 +85,7 @@ func TestCancelsNeverTouchesAShutdownSignal(t *testing.T) {
 // TUI that no longer answers Ctrl+C from a non-TTY parent, with nothing to explain it.
 func TestSuspendNestsAndResumesOnce(t *testing.T) {
 	shortGrace(t)
+	requireNotSuspended(t)
 	outer := SuspendTerminalSignals()
 	inner := SuspendTerminalSignals()
 	require.False(t, cancels(os.Interrupt))
@@ -82,6 +112,7 @@ func TestBorrowOutlivesTheChildByTheGrace(t *testing.T) {
 	interruptGrace = 300 * time.Millisecond
 	t.Cleanup(func() { interruptGrace = prev })
 
+	requireNotSuspended(t)
 	resume := SuspendTerminalSignals()
 	resume() // the child exited and Run returned
 
