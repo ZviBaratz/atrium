@@ -12,6 +12,7 @@ import (
 
 	"github.com/ZviBaratz/atrium/cmdlog"
 	"github.com/ZviBaratz/atrium/config"
+	"github.com/ZviBaratz/atrium/customcmd"
 	"github.com/ZviBaratz/atrium/session"
 	"github.com/ZviBaratz/atrium/ui/overlay"
 	"github.com/ZviBaratz/atrium/ui/theme"
@@ -108,7 +109,38 @@ func frameStates() []frameState {
 			h.openCommandPalette()
 		}},
 		{"screensaver", stateScreensaver, nil},
+		// Appended last on purpose: the two colour fingerprints iterate this slice in
+		// order and write one block per state, so a new entry at the end appends a
+		// trailing block where one inserted mid-slice rewrites every block after it.
+		{"customCommands", stateCustomCommands, func(h *home, _ *session.Instance) {
+			h.customCommands = parityCustomCommands()
+			// Through the opener, like the palette: the overlay and customCommandRows
+			// must stay in step, and the per-row gating only exists on that path.
+			h.openCustomCommands()
+		}},
 	}
+}
+
+// parityCustomCommands is a POPULATED command list, and that is the whole point of
+// its existence. Left empty, every size sweep and both colour fingerprints would
+// render the menu's one-line empty state — so the width guards would hold nothing,
+// the golden would pin a frame no user with custom commands ever sees, and a row
+// wide enough to break the box would sail through.
+//
+// Built through customcmd.Validate rather than by hand: Command's template and source
+// are unexported, so a composite literal is a Command whose Render and MissingFields
+// nil-panic on first use.
+func parityCustomCommands() []customcmd.Command {
+	cmds, problems := customcmd.Validate([]config.CustomCommand{
+		{Key: "g", Description: "lazygit in this worktree", Command: "lazygit -p {{ quote .Session.Worktree }}", Output: "background"},
+		{Key: "c", Description: "just ci", Command: "just ci", Output: "background"},
+		{Key: "f", Description: "git fetch --all", Context: "repo", Command: "git fetch --all", Output: "background"},
+		{Key: "b", Description: "gh pr checks on this branch", Command: "gh pr checks {{ .Session.Branch }}", Output: "background"},
+	})
+	if len(problems) > 0 || len(cmds) != 4 {
+		panic(fmt.Sprintf("parity fixture must validate cleanly: %v", problems))
+	}
+	return cmds
 }
 
 // seedCmdLog replaces the process-global command ring with two fixed records.

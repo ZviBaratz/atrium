@@ -51,6 +51,11 @@ const (
 	noPRReason           = "no PR yet"
 	deadPaneReason       = "terminal has exited"
 	pausedWorktreeReason = "worktree freed — resume first"
+	// The two below are used by the custom-commands menu rather than the palette, but
+	// they live here so every chip-sized refusal in the app is written in one place
+	// and in one voice.
+	noWorktreeReason  = "no worktree yet"
+	noDirectoryReason = "no directory to run in"
 )
 
 // paletteGate says whether an action can run against the current selection. A
@@ -132,6 +137,12 @@ var paletteGates = map[keys.KeyName]paletteGate{
 	keys.KeyAccounts:       global(),
 	keys.KeyCmdLog:         global(),
 	keys.KeyCommandPalette: global(),
+	// The leader opens with or without a selection: its rows carry their own
+	// per-command reasons, and an empty list still has a pointer at the docs to
+	// show. This must stay global() — TestPaletteGatesAgreeWithDispatch skips rows
+	// with no reason, so a gate that dimmed the leader would have that test dispatch
+	// it and then fail on the state openCustomCommands sets unconditionally.
+	keys.KeyCustomCommands: global(),
 	keys.KeyQuit:           global(),
 
 	// Batch and reorder actions act on the view, not the selection. Their own

@@ -149,6 +149,18 @@ const (
 	// pause-all.
 	KeyCommandPalette
 
+	// KeyCustomCommands opens the menu of user-defined verbs from config.json's
+	// custom_commands section (#375), where each entry's own key runs it.
+	//
+	// It is a leader key rather than a set of top-level bindings, and that is
+	// structural rather than a matter of taste: GlobalKeyBindings, the layer tables
+	// and GlobalKeyStringsMap are all built by package-level initialisers in
+	// registry.go, so an Entry appended at config-load time would reach neither
+	// dispatch nor the help labels. One ordinary entry standing in for the whole
+	// user-defined set also makes shadowing a built-in structurally impossible.
+	// `!` is the vi/ranger/lf/mc idiom for shelling out.
+	KeyCustomCommands
+
 	// KeyScreensaver shows the configured splash pattern full-window until any
 	// key (or click) dismisses it. A deliberate easter egg: it has no Registry
 	// entry (and therefore no GlobalKeyBindings entry), so it never appears in

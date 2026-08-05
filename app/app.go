@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/ZviBaratz/atrium/config"
+	"github.com/ZviBaratz/atrium/customcmd"
 	"github.com/ZviBaratz/atrium/hints"
 	"github.com/ZviBaratz/atrium/internal/memo"
 	"github.com/ZviBaratz/atrium/log"
@@ -301,6 +302,9 @@ const (
 	// stateCommandPalette is the fuzzy-over-every-action picker (#374): type what
 	// you want to do, enter runs it against the current selection.
 	stateCommandPalette
+	// stateCustomCommands is the leader-key menu over the user's own verbs from
+	// config.json's custom_commands section (#375): each row's own key runs it.
+	stateCustomCommands
 
 	// numStates counts the states above and must stay last. It exists so a test can
 	// walk the enum rather than hand-listing it: TestEveryBarHidingStateRestoresTheFrame
@@ -562,6 +566,26 @@ type home struct {
 	// open (an action's availability is a function of the moment) and dropped on
 	// close, so a stale index can never resolve to an action.
 	paletteRows []paletteRow
+	// customCommandsOverlay is the leader-key menu over custom_commands (#375).
+	customCommandsOverlay *overlay.CustomCommandsOverlay
+	// customCommandRows is what the open menu's row indices mean, in the same
+	// rebuilt-per-open / dropped-on-close shape as paletteRows: a row's
+	// availability is a function of the moment, so a stale index must not resolve.
+	customCommandRows []customCommandRow
+	// customCommands are the validated custom commands, and customCommandProblems
+	// the entries validation refused. Both are computed once at construction — the
+	// config cannot change under a running TUI, and a menu that revalidated on every
+	// open would report a problem at a moment the user cannot connect to a cause.
+	customCommands []customcmd.Command
+	// pendingCustomCommandProblems buffers the startup report for the problems
+	// above until the screen is free, in the shape pendingLaunchCrash uses. Nil once
+	// it has been shown, so the 100ms preview tick cannot reopen it forever.
+	pendingCustomCommandProblems []customcmd.Problem
+	// runningCustomCommand is the key of the custom command currently running in the
+	// background, or "". It serializes them: ui.BusyBackground is a single shared
+	// slot, so a second concurrent run would make the progress row name one command
+	// while another finishes and clears it.
+	runningCustomCommand string
 	// queueTarget is the instance the queue overlay was opened for; a cancel acts
 	// on it even if the selection moves (mirrors renameTarget).
 	queueTarget *session.Instance
@@ -929,6 +953,11 @@ func (m *home) viewContent() string {
 			log.ErrorLog.Printf("command palette overlay is nil")
 		}
 		return overlay.PlaceOverlay(0, 0, m.commandPaletteOverlay.Render(), mainView, true)
+	} else if m.state == stateCustomCommands {
+		if m.customCommandsOverlay == nil {
+			log.ErrorLog.Printf("custom commands overlay is nil")
+		}
+		return overlay.PlaceOverlay(0, 0, m.customCommandsOverlay.Render(), mainView, true)
 	} else if m.state == stateSettings {
 		if m.settingsOverlay == nil {
 			log.ErrorLog.Printf("settings overlay is nil")

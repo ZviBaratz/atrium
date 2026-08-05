@@ -292,6 +292,7 @@ in-app keymap and this section ever drift apart, so it stays complete.
 |-----|--------|
 | `?` | toggle this cheatsheet |
 | `ctrl-k` | command palette — find any action by name and run it |
+| `!` | custom commands — your own verbs over the selected session ([Custom commands](#custom-commands)) |
 | `,` | settings |
 | `@` | accounts (Claude / GitHub / Antigravity) |
 | `L` | command log — the tmux / git / gh commands Atrium runs |
@@ -980,6 +981,80 @@ list:
 - Omitting `agy_accounts` (or a non-matching session with no catch-all) leaves `agy`
   on its ambient config, exactly as before.
 
+#### Custom commands
+
+Your own verbs over the selected session. Atrium knows the worktree, the branch, the
+title and the repo; `custom_commands` is how you spend that on a shell command without
+attaching or copy-pasting a path.
+
+`!` opens the menu, and each entry's own key runs it. `?` lists them too, so the keys
+you configure are documented where every built-in key is.
+
+```jsonc
+"custom_commands": [
+  {
+    "key": "g",                                       // one printable character
+    "description": "lazygit in this worktree",         // shown in the menu and in ?
+    "command": "lazygit -p {{ quote .Session.Worktree }}",
+    "output": "background"                            // required
+  },
+  {
+    "key": "c",
+    "description": "just ci",
+    "command": "just ci",
+    "output": "background",
+    "confirm": true                                   // ask y/n first
+  },
+  {
+    "key": "f",
+    "description": "git fetch --all",
+    "context": "repo",                                // the repository, not the worktree
+    "command": "git fetch --all",
+    "output": "background"
+  }
+]
+```
+
+| Field | Required | Values | Notes |
+|-------|----------|--------|-------|
+| `key` | yes | one printable character | what runs it from inside the menu. Any character is available, including `q` — the menu handles keys before the global quit. The space bar is not (it arrives as `space`), nor is a combining mark. |
+| `description` | yes | string | all the menu and `?` can show, so it is what identifies the command. |
+| `command` | yes | Go template | run as `sh -c`. See the placeholders below. |
+| `output` | yes | `background` | runs detached, naming itself on the progress row, and reports the exit status when it finishes. There is deliberately no default: the modes behave differently enough that an implicit one would be a surprise. `terminal` — taking over the screen for the command's duration — is planned and currently rejected. |
+| `context` | no | `session` (default), `repo` | `session` runs in the agent's working directory and needs a started, unpaused session. `repo` runs in the repository root, which is available whatever the session is doing. |
+| `confirm` | no | bool | ask before running. The dialog names the command and the directory. |
+
+The context reaches your command two ways, and either is fine:
+
+| Template | Environment | What it is |
+|----------|-------------|------------|
+| `{{ .Session.Title }}` | `$ATRIUM_TITLE` | the immutable title the branch and tmux session are named from |
+| `{{ .Session.Name }}` | `$ATRIUM_SESSION` | the display label (the one `R` renames) |
+| `{{ .Session.Branch }}` | `$ATRIUM_BRANCH` | the session's branch; empty for a direct session |
+| `{{ .Session.Worktree }}` | `$ATRIUM_WORKTREE` | the isolated worktree, once the session has started |
+| `{{ .Repo.Path }}` | `$ATRIUM_REPO` | the repository root |
+| `{{ .Repo.Name }}` | `$ATRIUM_REPO_NAME` | the repository's name, as the session list groups by |
+
+The environment needs no quoting: `lazygit -p "$ATRIUM_WORKTREE"` cannot break argument
+parsing however odd the path is. A template renders into a shell string, so quote a
+value that might contain a space with the `quote` function —
+`lazygit -p {{ quote .Session.Worktree }}`.
+
+A row that cannot run is dimmed with the reason rather than hidden, and pressing its key
+says the same thing in the menu's footer: a `session`-context row on a paused session,
+or any command whose placeholders this session leaves empty (`gh pr checks
+{{ .Session.Branch }}` on a session with no branch). One custom command runs at a time;
+a second gets a notice.
+
+Every run is recorded in the command log (`L`), under its key and description rather
+than its rendered text — so a token in a command never lands in the log. A failure
+raises a notice and its output is in that record.
+
+A malformed entry is **dropped, not bound**: the rest still work. Atrium reports the
+ones it refused in a modal at startup, and `atrium doctor` prints the same list, so a
+placeholder typo or two entries claiming the same key is a message rather than a
+command silently missing from the menu.
+
 #### Configuration reference
 
 Every `config.json` key, its default, and where it is documented above. Nearly all
@@ -1005,7 +1080,7 @@ Advanced — shown in the Category column below. The five keys with no panel row
 | `daemon_poll_interval` | Automation | int | `1000` | autoyes daemon poll interval, milliseconds |
 | `branch_prefix` | Worktrees & git | string | `"<user>/"` | prefix for created git branches |
 | `profiles` | Profiles | array | detected | named program configs ([Profiles](#profiles)) |
-| `custom_commands` | — | array | `[]` | your own verbs over the selected session: a key, a shell template, and where it runs. Declared and validated today — `atrium doctor` reports a malformed entry — but nothing runs them yet; the menu that does arrives in a later release, with the reference for the record's fields |
+| `custom_commands` | — | array | `[]` | your own verbs over the selected session: a key, a shell template, and where it runs. `!` opens the menu ([Custom commands](#custom-commands) documents every field) |
 | `tmux_config_override` | Advanced | string | `""` | path to a custom tmux config for sessions |
 | `auto_attach` | Sessions | bool | `true` | attach to a new session as soon as it starts ([Auto-attach](#auto-attach)) |
 | `show_release_notes_after_update` | Updates | bool | `true` | "what's new" overlay once after an update |

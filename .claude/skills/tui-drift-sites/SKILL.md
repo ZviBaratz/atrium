@@ -51,7 +51,7 @@ cannot install it. Once per machine:
 
 ## Adding a keybinding — 7 sites, all guarded
 
-At last count: **58 registry entries, 48 dispatch-case lines, 12 drift guards** in
+At last count: **60 registry entries, 50 dispatch-case lines, 12 drift guards** in
 `keys/*_test.go` plus **4** in `app/dispatch_coverage_test.go`.
 
 | # | Site | Guarded by |
@@ -69,7 +69,7 @@ friends) if the key should appear in the bar — guarded in the reverse directio
 only, by `ui/menu_scan_test.go`.
 
 **Site 4 was the gap until #374 closed it.** The count mismatch is why nobody had
-written the obvious assertion: 58 entries against 48 case *lines* is not 10
+written the obvious assertion: 60 entries against 50 case *lines* is not 10
 missing cases, because several cases carry two or three names at once, 3 entries
 are `DocOnly`, the screensaver is deliberately absent from the registry, and
 `space` is consumed by the multi-select handler rather than the switch — so
@@ -97,7 +97,7 @@ Two cross-layer pins worth knowing exist, because they fail in surprising places
 
 ## Adding a `Config` field — 4 sites, 3 guarded bidirectionally
 
-42 json-tagged fields on `Config` itself at last count.
+43 json-tagged fields on `Config` itself at last count.
 
 | # | Site | Guarded by |
 |---|---|---|
@@ -146,32 +146,80 @@ lie. Don't "fix" them.
    for a patched font; the three-rung ladder (`nerd`/`plain`/`ascii`) in
    `ui/theme/registry.go` is the answer, not detection.
 
-## Adding a UI state
+## Adding a UI state — 7 sites, three of them fixture files
 
-`app/app.go`'s state enum, plus a nullable overlay pointer field. Then:
+`app/app.go`'s state enum (which bumps `numStates`), plus a nullable overlay pointer
+field. Then six more, and the count is the thing to get right: adding the enum and
+stopping at `statemachine_test.go` is a hard CI fail, not an omission you find later.
 
-- Add it to `app/statemachine_test.go`'s `states[]` **with a `wire` func** that
-  arms the overlay production would keep, or the state is swept in a
-  half-constructed shape and the interesting dereference never happens. Prefer
-  wiring through the real opener over assigning the overlay field by hand: an
-  overlay that comes with sibling state (the palette's row table) is only
-  half-armed otherwise, which is the dereference the sweep exists to find.
-- Add it to `app/view_bounds_test.go`'s overlay map if it renders a box. That is
-  the test that actually holds a state to 80×24 — it asserts the *composed frame*,
-  so it is the only one that sees an overlay whose own tests measured lines
-  lipgloss had already padded to a uniform width. `SetSize` semantics are the
-  usual defect here — but check which way round before "fixing" one: **lipgloss
-  v2 counts the border and padding INSIDE `Width`**, so `Width(w)` renders exactly
-  `w` columns (`style.go`: `width -= horizontalBorderSize`). That inverted the v1
-  behaviour this line used to describe, and it inverted silently; the in-tree
-  statement of it is `ui/theme/panel.go`'s comment ("Width and Height are the
-  box's TOTAL size, borders included … the upgrade guide does not mention it"),
-  and `cmdLogOverlay.go`'s `Width(c.width + 2)` is *correct* for that reason. The
-  live defect is now the opposite one: hand-subtracting the frame a second time
-  and rendering every box two columns narrow.
+1. **`frameStates()`, in `app/frameparity_test.go`** — *not* `app/statemachine_test.go`,
+   which only *consumes* it. `TestFrameStatesCoverEveryState` requires
+   `len(frameStates()) == numStates`, so bumping the enum fails there immediately.
+   Seven tests fan out from that one entry (frame parity, both colour fingerprints,
+   the bounds sweep, the background-message state machine, both no-colour checks).
+
+   Give it a **`wire` func** that arms the overlay production would keep, or the state
+   is swept half-constructed and the interesting dereference never happens. Prefer the
+   real opener over assigning the overlay field by hand: an overlay that comes with
+   sibling state (the palette's row table, the custom-commands row table) is only
+   half-armed otherwise, which is the dereference the sweep exists to find. And seed it
+   with **real content** — an overlay wired empty renders its one-line empty state, so
+   every width and height guard downstream holds nothing.
+2. **A new golden under `app/testdata/frames/<name>.txt`.** `compareGolden` hard-fails
+   on a missing file, and creates it for you: `CS_UPDATE_GOLDEN=1` is an env var, not a
+   flag.
+3. + 4. **Re-baseline `app/testdata/colours.txt` and `colours-light.txt`**, each under
+   its own `-run` target. They iterate `frameStates()` in *slice* order and write one
+   block per state, so **append your entry last**: inserted mid-slice it rewrites every
+   block after it and the diff becomes unreadable.
+   ```
+   CS_UPDATE_GOLDEN=1 go test ./app/ -run TestFrameParity
+   CS_UPDATE_GOLDEN=1 go test ./app/ -run TestFrameColourFingerprint
+   CS_UPDATE_GOLDEN=1 go test ./app/ -run TestLightFrameColourFingerprint
+   ```
+5. `app/app_layout.go` — `menuVisible()`'s case list if the state hides the hint bar,
+   and a `SetSize` block so the overlay is sized responsively.
+6. `app/frame_restore_test.go` — see below.
+7. The `View()` arm in `app/app.go`, and a router in `app/app_update.go`'s
+   `handleKeyPress` prelude.
+
+Situational, and worth knowing which: **`app/view_bounds_test.go`'s overlay map has no
+tripwire** and is deliberately fixture-specific — `TestViewFitsTerminalBoundsEveryState`
+(which lives in `frameparity_test.go`, not here) carries the breadth. Add an entry only
+when your state needs a pathological fixture the generic sweep cannot produce — an
+unbounded list, user-authored text with no natural width.
+
+- `SetSize` semantics are the usual defect — but check which way round before "fixing"
+  one. **lipgloss v2 counts the border and padding INSIDE `Width`**, so `Width(w)`
+  renders exactly `w` columns (`style.go`: `width -= horizontalBorderSize`). That
+  inverted the v1 behaviour this line used to describe, and it inverted silently; the
+  in-tree statement of it is `ui/theme/panel.go`'s comment ("Width and Height are the
+  box's TOTAL size, borders included … the upgrade guide does not mention it").
+  **Copy `commandPalette.go`** — `Width(p.width)` beside `inner := p.width - 6` is the
+  self-consistent pair. `cmdLogOverlay.go` carries that same comment over
+  `Width(c.width + 2)` *and* the same `inner := c.width - 6`, which cannot both be
+  right: it renders two columns wider than its declared width while truncating content
+  two columns narrow. It does not overflow, so nothing fails — but it is not the form
+  to copy. (`textOverlay.go`'s `+2` is fine: its `boxWidth()` is *defined*
+  border-exclusive and capped against the terminal.) The live defect class is the
+  opposite one: hand-subtracting the frame a second time and rendering every box two
+  columns narrow.
+- Charge **every** non-list row to the height budget, including the conditional ones
+  (`paletteChrome`'s trailing `+1` for "… N more"). A row that appears only sometimes is
+  a row no golden and no bounds sweep renders — `frameStates()`' wire only *opens* an
+  overlay — so the overflow costs the bottom border invisibly. Better still, give a
+  conditional line an existing row to take over rather than one of its own.
+- **Truncate the footer**, never let it wrap. `commandPalette.go` does; `cmdLogOverlay.go`
+  does not. A wrap costs a row the height budget never counted, and `PlaceOverlay` takes
+  it off the bottom border.
+- `truncate.StringWithTail(s, w, "…")` replaces a character at **exactly** `w`, not only
+  above it. Guard it with a `lipgloss.Width(s) <= w` check, or a fixed marker built to
+  fit its budget reads back as `(repo…`.
 - Add it to `app/frame_restore_test.go` if it hides the hint bar (`menuVisible`),
   or exempt it there with a reason — the walk over `numStates` fails otherwise.
-  Hiding the bar hands its row to the panes; closing without recomputing the
+  Its `opens` entry is also the **only** place in the tree that presses an opener key
+  and asserts the state changed, which is what site 4 above cannot prove. Hiding the
+  bar hands its row to the panes; closing without recomputing the
   layout leaves the frame a line taller than the terminal, and the alt-screen
   renderer never erases it. `view_bounds_test` cannot see this: it only measures
   a *freshly armed* overlay, never one that has been closed. The recompute itself
@@ -181,8 +229,10 @@ lie. Don't "fix" them.
 - Overlay states must be handled **before** the global quit/esc keys in
   `app/app_update.go`'s prelude, or `q` quits while the user is typing. Each
   branch there carries its ordering constraint as a comment; keep that up.
-- `ui/menu_scan_test.go` has an enum-count tripwire that fails on purpose so you
-  classify whether the new state's bar carries key hints or progress text.
+- `ui/menu_scan_test.go`'s enum-count tripwire (`require.Equal(t, 5, int(StateVisual))`)
+  pins **`ui.MenuState`**, not `app.state` — so an app state does *not* trip it, whatever
+  the neighbouring prose implies. It fires only if the new surface also needs its own
+  hint-bar variant, which a modal overlay does not: those hide the bar entirely.
 
 ## Changing user-visible copy
 
