@@ -13,6 +13,7 @@ import (
 
 	"github.com/ZviBaratz/atrium/cmdlog"
 	"github.com/ZviBaratz/atrium/config"
+	"github.com/ZviBaratz/atrium/customcmd"
 
 	tea "charm.land/bubbletea/v2"
 	xansi "github.com/charmbracelet/x/ansi"
@@ -129,9 +130,10 @@ func TestCustomCommandTerminalBumpsGenerationOnlyOnAStartedRun(t *testing.T) {
 }
 
 // The exit code is the whole of AC5 for this mode. stderr went to the tty, but the status
-// did not: bubbletea hands Run's error to the callback verbatim, so a non-zero exit
-// arrives as an *exec.ExitError that the user — who watched a screenful scroll past —
-// has no other way to learn.
+// did not: a non-zero exit is an *exec.ExitError the user — who watched a screenful scroll
+// past — has no other way to learn. It is taken from the run's recorded outcome, never
+// from the ExecCallback's argument; TestCustomCommandTerminalExitStatusSurvivesARestoreError
+// is why that distinction exists.
 func TestCustomCommandTerminalSurfacesTheExitCode(t *testing.T) {
 	h, _ := newCustomCommandHome(t, nil)
 
@@ -175,11 +177,14 @@ func TestCustomCommandExitTailNamesWhatItCanAndNothingElse(t *testing.T) {
 
 	killed := signalDeathError(t)
 	require.Equal(t, -1, killed.ExitCode(), "the fixture must be a signal death for this to test anything")
-	assert.Equal(t, customCommandDiedTail, customCommandExitTail(killed),
+	assert.Equal(t, customCommandInterruptedTail, customCommandExitTail(killed),
 		`a signal death has no exit code; " exited -1" reads as a bug`)
+	assert.NotContains(t, customCommandInterruptedTail, "log",
+		"an interrupted run must not point at a record that holds no output — this mode "+
+			"captures none, so there is nothing there to read")
 
 	assert.Equal(t, customCommandDiedTail, customCommandExitTail(errors.New("fork/exec: no such file")),
-		"a failure to start has no status either")
+		"a command that never ran is a different event, and the log does carry its reason")
 }
 
 // TestCustomCommandTerminalNoticeFitsARow: terminal mode's notice obeys the same two
@@ -457,11 +462,14 @@ func exitErrorWithCode(t *testing.T, code int) *exec.ExitError {
 	return exitErr
 }
 
-// signalDeathError produces a real *exec.ExitError for a process killed by a signal,
-// which is what makes ExitCode() report -1.
+// signalDeathError produces a real *exec.ExitError for a process killed by SIGINT — the
+// signal a Ctrl+C during a cooked takeover actually delivers, and what makes ExitCode()
+// report -1. SIGINT specifically, not just any signal: killedByTerminalSignal asks WHICH
+// signal, so a fixture using SIGTERM would test the predicate's exclusion rather than the
+// interrupt case its callers are about.
 func signalDeathError(t *testing.T) *exec.ExitError {
 	t.Helper()
-	err := exec.CommandContext(t.Context(), "sh", "-c", "kill -TERM $$").Run()
+	err := exec.CommandContext(t.Context(), "sh", "-c", "kill -INT $$").Run()
 	var exitErr *exec.ExitError
 	require.ErrorAs(t, err, &exitErr)
 	return exitErr
@@ -545,4 +553,104 @@ func TestCustomCommandTerminalCleanRunStaysQuiet(t *testing.T) {
 	assert.NoError(t, done.restoreErr)
 	_, _ = h.Update(done)
 	assert.False(t, h.menu.HasNotice(), "a clean run says nothing")
+}
+
+// contextKilledError produces a real *exec.ExitError for a process reaped by its context's
+// deadline — SIGKILL, which reports the same ExitCode() == -1 as a Ctrl+C and is the reason
+// killedByTerminalSignal asks which signal rather than trusting the code.
+func contextKilledError(t *testing.T) *exec.ExitError {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
+	defer cancel()
+	err := exec.CommandContext(ctx, "sh", "-c", "sleep 5").Run()
+	var exitErr *exec.ExitError
+	require.ErrorAs(t, err, &exitErr)
+	require.Equal(t, -1, exitErr.ExitCode(), "a context kill must look like a signal death")
+	return exitErr
+}
+
+// TestCustomCommandTerminalConfirmReachesTheTerminalSeam closes the combination
+// customCommandSpec.output exists for.
+//
+// A confirmed command is staged as a spec and started a MESSAGE later, which is the one path
+// where the mode could be lost between the keypress and the run — and every Confirm fixture
+// in the suite was `background`, so the whole reason that field is on the spec went
+// unexercised. Losing it here would run a screen-owning command into a buffer nobody reads.
+func TestCustomCommandTerminalConfirmReachesTheTerminalSeam(t *testing.T) {
+	cmds := validCommands(t, config.CustomCommand{
+		Key: "t", Description: "lazygit here", Context: "repo",
+		Command: "true", Output: "terminal", Confirm: true,
+	})
+	h, _ := newCustomCommandHome(t, cmds)
+	background := stubRunner(t, nil)
+	terminal := stubTerminalRunner(t, nil)
+
+	_, _ = h.handleKeyPress(runeKey("!"))
+	_, _ = h.handleKeyPress(runeKey("t"))
+	require.Equal(t, stateConfirm, h.state, "a confirm row must ask first")
+	require.Empty(t, *terminal, "and nothing may run before the answer")
+
+	// Answering yes returns a marker message; Update starts the real work from there.
+	_, cmd := h.handleKeyPress(runeKey("y"))
+	require.NotNil(t, cmd)
+	msg := cmd()
+	staged, ok := msg.(runCustomCommandMsg)
+	require.True(t, ok, "the confirmed action must return the marker, not run inline")
+	assert.Equal(t, customcmd.OutputTerminal, staged.spec.output,
+		"the staged spec must still carry its mode — it is the only thing that routes the run")
+
+	_, cmd = h.Update(msg)
+	require.NotNil(t, cmd)
+	require.Equal(t, "t", h.runningCustomCommand, "and it claims the slot")
+	drain(t, h, cmd)
+	assert.Empty(t, *background, "a confirmed terminal command must not run detached")
+
+	// And the suspension it builds is the real one, with its obligations.
+	execCmd, callback := h.terminalCustomCommandExec(staged.spec)
+	require.NoError(t, execCmd.Run())
+	require.Len(t, *terminal, 1, "the terminal seam is what spawns a confirmed terminal row")
+	assert.False(t, execCmd.raw)
+	require.NotNil(t, execCmd.keeper)
+	_, _ = h.Update(callback(nil))
+	assert.Empty(t, h.runningCustomCommand)
+}
+
+// Declining a confirmed terminal row must take the terminal from nobody.
+func TestCustomCommandTerminalConfirmDeclinedRunsNothing(t *testing.T) {
+	cmds := validCommands(t, config.CustomCommand{
+		Key: "t", Description: "lazygit here", Context: "repo",
+		Command: "true", Output: "terminal", Confirm: true,
+	})
+	h, _ := newCustomCommandHome(t, cmds)
+	terminal := stubTerminalRunner(t, nil)
+
+	_, _ = h.handleKeyPress(runeKey("!"))
+	_, _ = h.handleKeyPress(runeKey("t"))
+	require.Equal(t, stateConfirm, h.state)
+	_, cmd := h.handleKeyPress(runeKey("n"))
+
+	drain(t, h, cmd)
+	assert.Empty(t, *terminal, "declining must not suspend the loop")
+	assert.Empty(t, h.runningCustomCommand, "and must claim no slot")
+	assert.Equal(t, stateDefault, h.state)
+}
+
+// quitDeathError produces a real *exec.ExitError for a process killed by SIGQUIT — the other
+// signal a cooked takeover hands to the foreground process group (Ctrl+\).
+func quitDeathError(t *testing.T) *exec.ExitError {
+	t.Helper()
+	err := exec.CommandContext(t.Context(), "sh", "-c", "kill -QUIT $$").Run()
+	var exitErr *exec.ExitError
+	require.ErrorAs(t, err, &exitErr)
+	return exitErr
+}
+
+// termDeathError produces a real *exec.ExitError for a process killed by SIGTERM — a signal
+// death that is NOT the terminal's, so it must stay a hard failure.
+func termDeathError(t *testing.T) *exec.ExitError {
+	t.Helper()
+	err := exec.CommandContext(t.Context(), "sh", "-c", "kill -TERM $$").Run()
+	var exitErr *exec.ExitError
+	require.ErrorAs(t, err, &exitErr)
+	return exitErr
 }

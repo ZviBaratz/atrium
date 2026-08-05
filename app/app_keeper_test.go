@@ -3,6 +3,7 @@ package app
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -974,6 +975,35 @@ func TestKeeperSignalledSendNeverRetiresThePrompt(t *testing.T) {
 // failure and must still retire the prompt on budget. Without this, "signalled" could be
 // spelled as "any non-zero exit" and a genuinely dead pane would be retried forever — the
 // keeper spinning on it for the whole takeover with nothing surfaced at the end.
+// TestKeeperContextKilledSendIsStillAHardFailure is the case the predicate's first
+// spelling silently reclassified.
+//
+// Every tmux op runs under exec.CommandContext with a 10s tmuxOpTimeout, and a context kill
+// is SIGKILL — which reports ExitCode() == -1, exactly like the Ctrl+C this softening exists
+// for. Keyed on the code alone, a genuinely wedged tmux stopped being a hard failure: the
+// keeper re-sent every cycle for the whole takeover and the return path reported nothing,
+// so a prompt that could never be delivered looked fine. Only the SIGNAL distinguishes them.
+func TestKeeperContextKilledSendIsStillAHardFailure(t *testing.T) {
+	fake := &fakeKeeperPane{}
+	inst := newKeeperInstance(t, "wedged", fake)
+	startKeeperInstance(t, inst)
+	fake.mu.Lock()
+	fake.signalSendKeys = contextKilledError(t) // a hung tmux reaped by its op timeout
+	fake.mu.Unlock()
+	inst.QueuePrompt("do the thing")
+
+	require.False(t, killedByTerminalSignal(contextKilledError(t)),
+		"a timeout kill is SIGKILL, not the terminal's interrupt — the code alone cannot tell")
+
+	k := newAttachKeeper(context.Background(), []*session.Instance{inst}, nil)
+	for range promptSendAttempts {
+		k.service(inst)
+	}
+	assert.Equal(t, "", inst.Prompt(),
+		"a wedged tmux must still exhaust the budget and retire the prompt")
+	require.Len(t, k.errs, 1, "and the loss must be surfaced on return, not retried in silence")
+}
+
 func TestKeeperNonZeroExitIsStillAHardFailure(t *testing.T) {
 	fake := &fakeKeeperPane{}
 	inst := newKeeperInstance(t, "exited", fake)
@@ -991,4 +1021,30 @@ func TestKeeperNonZeroExitIsStillAHardFailure(t *testing.T) {
 		"a send that ran and failed must still exhaust the budget and retire the prompt")
 	require.Len(t, k.errs, 1, "and the loss must be surfaced")
 	assert.Contains(t, k.errs[0], "exited")
+}
+
+// TestKilledByTerminalSignalBoundaries pins the predicate directly, at both edges.
+//
+// It is the discrimination the keeper's classification rests on, and `ExitCode() == -1`
+// cannot make it: a context kill (SIGKILL, from tmuxOpTimeout) and a Ctrl+C (SIGINT) report
+// the same code. Too broad and a wedged tmux is retried in silence forever; too narrow and
+// an impatient Ctrl+C retires a queued prompt for good.
+func TestKilledByTerminalSignalBoundaries(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"SIGINT — the Ctrl+C a cooked takeover delivers", signalDeathError(t), true},
+		{"SIGQUIT — the Ctrl+\\ a cooked takeover also delivers", quitDeathError(t), true},
+		{"SIGKILL — a tmux op reaped by its own timeout", contextKilledError(t), false},
+		{"SIGTERM — an outside `kill`, which is not the terminal's", termDeathError(t), false},
+		{"exited non-zero — ran and refused", exitErrorWithCode(t, 1), false},
+		{"exited zero-ish plain error — not a subprocess outcome at all",
+			errors.New("send-keys failed"), false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, killedByTerminalSignal(tc.err))
+		})
+	}
 }

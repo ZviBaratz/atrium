@@ -263,9 +263,11 @@ var (
 			if !update.IsUpdatableVersion(version) {
 				return fmt.Errorf("this is a dev build (version %q); self-update only works on release builds — see install.sh", version)
 			}
-			// Same signal-driven lifecycle as the root command: Ctrl+C (or a
-			// terminal close, via SIGHUP) aborts a download cleanly instead of
-			// leaving the HTTP transfer orphaned.
+			// The same quitSignals set as the root command: Ctrl+C (or a terminal close,
+			// via SIGHUP) aborts a download cleanly instead of leaving the HTTP transfer
+			// orphaned. Plain signal.NotifyContext, and deliberately not lifecycle.Watch —
+			// that exists so a terminal takeover can borrow SIGINT, and this command has
+			// none. Here Ctrl+C should always mean stop.
 			ctx, stop := signal.NotifyContext(context.Background(), quitSignals...)
 			defer stop()
 

@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os/exec"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/ZviBaratz/atrium/log"
@@ -20,15 +21,34 @@ import (
 // A var, not a const, so tests can shrink it.
 var attachKeeperInterval = 500 * time.Millisecond
 
-// signalledSend reports whether err is a subprocess that was killed by a signal rather
-// than one that ran and refused.
+// killedByTerminalSignal reports whether err is a subprocess killed by one of the signals a
+// cooked terminal takeover exposes this process group to — and NOT by anything else.
 //
-// ExitCode() is -1 for exactly that case (os.ProcessState.ExitCode: "-1 if the process
-// was terminated by a signal"), which is also why the terminal-mode exit notice has a
-// no-status fallback — the same distinction, surfaced instead of retried.
-func signalledSend(err error) bool {
+// The narrowness is the whole point, and `ExitCode() == -1` is not narrow enough. Every
+// tmux op runs under exec.CommandContext with a tmuxOpTimeout (session/tmux/command.go), and
+// a context kill is SIGKILL, which reports the same -1. Keyed on the code alone, this
+// predicate quietly reclassified a genuinely wedged tmux from a hard failure — retired after
+// promptSendAttempts, with the loss surfaced on return — into a soft one retried forever
+// and reported nowhere. Measured, not assumed: a ctx kill reports Signal()=killed and a
+// Ctrl+C reports Signal()=interrupt, both with ExitCode()=-1.
+//
+// So it asks which signal. SIGINT and SIGQUIT are the two a cooked takeover hands to the
+// foreground process group (see internal/lifecycle), so they are the two that say nothing
+// about the pane; every other death still means what it always did.
+func killedByTerminalSignal(err error) bool {
 	var exitErr *exec.ExitError
-	return errors.As(err, &exitErr) && exitErr.ExitCode() == -1
+	if !errors.As(err, &exitErr) {
+		return false
+	}
+	status, ok := exitErr.Sys().(syscall.WaitStatus)
+	if !ok || !status.Signaled() {
+		return false
+	}
+	switch status.Signal() {
+	case syscall.SIGINT, syscall.SIGQUIT:
+		return true
+	}
+	return false
 }
 
 // attachKeeper keeps background sessions serviced while a tea.Exec attach suspends
@@ -227,9 +247,10 @@ func (k *attachKeeper) service(inst *session.Instance) {
 		// hard failures should retire a prompt.
 		delete(k.hardFails, inst)
 		inst.ClearPromptSending()
-	case signalledSend(err):
-		// The send's own subprocess was killed by a signal, which says nothing about the
-		// pane. It became reachable with `output: terminal` (#375): a cooked takeover runs
+	case killedByTerminalSignal(err):
+		// The send's own subprocess was killed by the terminal's interrupt, which says
+		// nothing about the pane. It became reachable with `output: terminal` (#375): a
+		// cooked takeover runs
 		// the user's command in Atrium's foreground process group, and the keeper's
 		// `tmux send-keys` children are in it too — so a Ctrl+C aimed at a stubborn build
 		// is delivered to them as well.

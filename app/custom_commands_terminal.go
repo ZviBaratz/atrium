@@ -257,26 +257,36 @@ func customCommandTerminalError(msg customCommandTerminalDoneMsg) error {
 // customCommandExitNotice is the terminal-mode failure toast, bounded exactly as the
 // background one is: through customCommandLabel, with the reason LAST.
 //
-// It exists because terminal mode's stderr went to the tty but its exit code did not.
-// bubbletea hands Run's error to the ExecCallback verbatim, so a non-zero exit arrives
-// as an *exec.ExitError — visible to us, invisible to a user who watched a screenful of
-// output scroll past and cannot now tell whether it ended well.
+// It exists because terminal mode's stderr went to the tty but its exit code did not: a
+// non-zero exit is an *exec.ExitError visible to us and invisible to a user who watched a
+// screenful of output scroll past and cannot now tell whether it ended well.
+//
+// Note where that error comes from, because the obvious answer is wrong and shipped a bug:
+// NOT from the ExecCallback's argument, which on a command that ran to completion carries
+// bubbletea's terminal-RESTORE error instead. It comes from the run's own recorded outcome
+// — see terminalCustomCommandExec.
 func customCommandExitNotice(desc string, err error) string {
 	return customCommandLabel(desc) + customCommandExitTail(err)
 }
 
 // customCommandExitTail names the outcome in a bounded way.
 //
-// The fallback is not defensive padding. ExitError.ExitCode() returns -1 when the process
-// was killed by a signal — which is the ordinary outcome here, since Ctrl+C is how a user
-// stops a command that owns their terminal — and " exited -1" reads as a bug rather than
-// as "you stopped it". A failure to start has no code at all.
+// Three cases, because the two that ExitCode() cannot number are not the same event and
+// reading as though they were is what makes a message unhelpful:
+//
+//   - a status: " exited 2".
+//   - a signal: ExitCode() is -1, and the ORDINARY way to get here is the user's own
+//     Ctrl+C. " exited -1" reads as a bug in Atrium, and "see the log" sends them to a
+//     record holding exit -1 and — by this mode's design — no output at all. So it names
+//     the interruption and points nowhere.
+//   - anything else: the command never ran, and the log genuinely has the reason.
 func customCommandExitTail(err error) string {
 	var exitErr *exec.ExitError
 	if errors.As(err, &exitErr) {
 		if code := exitErr.ExitCode(); code >= 0 {
 			return fmt.Sprintf(customCommandExitedTailFmt, code)
 		}
+		return customCommandInterruptedTail
 	}
 	return customCommandDiedTail
 }
@@ -286,7 +296,11 @@ const (
 	// A wait status is 0-255, so three digits is the widest instantiation — which is
 	// what TestCustomCommandRefusalsFitARow measures, never the format string.
 	customCommandExitedTailFmt = " exited %d"
-	// customCommandDiedTail covers every outcome no exit code names: a signal death and
-	// a failure to start.
-	customCommandDiedTail = " did not finish — see the log"
+	// customCommandInterruptedTail covers a signal death — overwhelmingly the user's own
+	// Ctrl+C. It deliberately points at no log record: this mode captures no output, so the
+	// record it would name holds an exit of -1 and nothing to read.
+	customCommandInterruptedTail = " was interrupted"
+	// customCommandDiedTail covers a command that never ran at all, where the log does
+	// carry the reason.
+	customCommandDiedTail = " could not run — see the log"
 )

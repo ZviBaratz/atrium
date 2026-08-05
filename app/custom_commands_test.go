@@ -248,6 +248,16 @@ func TestCustomCommandMissingReasonsCoverEveryField(t *testing.T) {
 // refuse — and refuse without spawning a process. The last clause is the one that
 // needs the seam: a gate that suppressed the notice while still running `sh -c` would
 // pass every assertion about the screen.
+//
+// Which layer this actually exercises, since the name invites a stronger reading: TWO
+// independent refusals stand between a dimmed row and a subprocess, and the row never
+// reaches the second here. The overlay declines an inert row itself
+// (CustomCommandsOverlay.HandleKeyPress returns shouldClose=false, so launchCustomCommand
+// is never called), and customCommandSpec re-gates on the live selection for the case the
+// selection moved under an open menu — which is TestCustomCommandStaleSelectionIsRegated's
+// job, and disabling that re-gate leaves THIS test green. So the process witnesses below
+// assert the composed end-to-end invariant, not either layer on its own: whatever leaks,
+// nothing spawns.
 func TestCustomCommandGatesAgreeWithDispatch(t *testing.T) {
 	cmds := validCommands(t,
 		config.CustomCommand{Key: "s", Description: "session ctx", Command: "true", Output: "background"},
@@ -282,7 +292,13 @@ func TestCustomCommandGatesAgreeWithDispatch(t *testing.T) {
 
 				_, _ = h.handleKeyPress(runeKey("!"))
 				require.Equal(t, stateCustomCommands, h.state, "! must open the menu")
-				_, _ = h.handleKeyPress(runeKey(c.Key))
+				_, cmd := h.handleKeyPress(runeKey(c.Key))
+				// DRAINED, which is what makes the terminal witness below able to fail at
+				// all. A terminal command's cmd is a tea.Exec that spawns nothing until the
+				// runtime processes it, so an undrained one leaves *terminalCalls empty
+				// whether the gate held or leaked. (A refusal returns no run cmd, so on the
+				// passing path there is nothing to drain — that is the point.)
+				drain(t, h, cmd)
 
 				assert.Empty(t, *calls,
 					"a dimmed row must not run — the refusal has to stop the process, not just the toast")
@@ -422,8 +438,9 @@ func TestCustomCommandRefusalsFitARow(t *testing.T) {
 		// Terminal mode's two. The formatted one joins as its WIDEST instantiation, not
 		// as the format string: a wait status is 0-255, and measuring "%d" would count
 		// two cells where three can appear.
-		"exited": fmt.Sprintf(customCommandExitedTailFmt, 255),
-		"died":   customCommandDiedTail,
+		"exited":      fmt.Sprintf(customCommandExitedTailFmt, 255),
+		"interrupted": customCommandInterruptedTail,
+		"died":        customCommandDiedTail,
 	}
 
 	widest := 0

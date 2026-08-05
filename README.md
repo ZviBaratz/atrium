@@ -1055,9 +1055,12 @@ in a comment, still counts.
 
 One custom command runs at a time, whichever mode it is in; a second gets a notice.
 
-A `terminal` command owns the screen while it runs, so `Ctrl+C` interrupts *it* and leaves
-Atrium running — as does `Ctrl+\`, which the shell would otherwise use to kill Atrium
-outright. `Ctrl+Z` still suspends the pair, and `fg` brings both back. Your other sessions
+A `terminal` command owns the screen while it runs, so `Ctrl+C` stops the command and leaves
+Atrium running — as does `Ctrl+\`. `Ctrl+Z` still suspends the pair, and `fg` brings both
+back. One caveat, because the shell sends those keys to every process Atrium started, not
+only to your command: if something else was already working in the background — an
+auto-name, an open-PR — interrupting your command interrupts that too, and you may see it
+report a failure you did not cause. Nothing is lost; run it again. Your other sessions
 keep being serviced throughout — queued prompts are still delivered and auto-yes still
 answers — but the session list is not redrawn until the command exits, and it is swept
 fresh on return.

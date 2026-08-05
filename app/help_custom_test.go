@@ -68,6 +68,15 @@ func TestHelpCustomSectionTruncatesLongDescriptions(t *testing.T) {
 			"a custom row must fit an 80-column terminal's help box: %q", line)
 		assert.Containsf(t, line, "…", "a long description must be truncated: %q", line)
 	}
+
+	// The budget is charged PER ROW: an unmarked row must be WIDER than the both-markers
+	// row, not truncated to the same worst case. Without this the marker's 18 cells were
+	// taken off every row in the list, including the ones that carry none.
+	unmarked := ansi.PrintableRuneWidth(strings.TrimRight(custom[0], " "))
+	bothMarkers := ansi.PrintableRuneWidth(strings.TrimRight(custom[3], " "))
+	assert.Greaterf(t, unmarked, bothMarkers-len(" (terminal) (repo)"),
+		"an unmarked row must not pay for markers it does not carry: %q vs %q",
+		custom[0], custom[3])
 	assert.Contains(t, custom[1], "(repo)",
 		"the repo marker must survive truncation — it is what says which directory")
 	// Both markers, on the widest row, in the order the menu shows them: what it will do

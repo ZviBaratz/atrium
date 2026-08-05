@@ -14,6 +14,15 @@
 // result without this package is that pressing Ctrl+C to stop a three-minute `just ci`
 // exits the TUI.
 //
+// What this package does NOT do, so the next reader does not assume otherwise: the group
+// holds more than Atrium and the command. Any subprocess in flight when the takeover starts
+// is in it too — the keeper's `tmux send-keys` children (which app.killedByTerminalSignal
+// handles), a metadata sweep's git/tmux children (harmless; they are re-polled), and a
+// background action's child such as auto-naming or open-PR, which is NOT serialised against
+// a custom command and will surface a spurious failure the user did not cause. Confining the
+// signal properly means real job control — Setpgid, tcsetpgrp and SIGTTOU handling — which
+// is deliberately out of scope here — see #619.
+//
 // Bubble Tea already solves its half — releaseTerminal sets ignoreSignals, so its own
 // SIGINT handler stays quiet for the duration of a tea.Exec — and this is Atrium's half
 // of the same idea, in the same shape.

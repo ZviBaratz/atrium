@@ -46,7 +46,7 @@ func (r CustomCommandRow) runnable() bool { return r.Inert == "" }
 // to press the key: what it will do to their screen first, then where it will run.
 //
 // Both are omitted when they are the default, so the common row stays uncluttered and the
-// marked one is what draws the eye. TestCustomCommandRowMarkersFitTheNarrowBox pins the
+// marked one is what draws the eye. TestCustomCommands_MarkersFitTheNarrowestBox pins the
 // combined width, because two markers plus a reason is the widest tail a row can carry.
 func (r CustomCommandRow) markers() string {
 	var out []string
