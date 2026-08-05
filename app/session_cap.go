@@ -175,15 +175,32 @@ func (m *home) resumeCapNotice(n int) string {
 //
 // It deliberately does not teach ',': the create dialog owns the max_sessions escape
 // hatch (see resumeCapClause), and this line has room for exactly one key.
+//
+// That key is ctrl+r even for a single session, where r looks like the friendlier
+// advice. r acts on the SELECTED row (resumeSelectedKey) and a parked session is by
+// construction the one that came after the budget ran out in stored order, so it is
+// never the startup selection — following "press r" would just earn the "only paused
+// sessions resume" refusal. Naming the row instead is not open either: a title is
+// unbounded input on a row that truncates. So the advice is the key that needs no
+// selection, and it says "resumes paused" rather than "resumes them" because resumeAll
+// takes every paused row in view, which may include sessions the user parked
+// deliberately; its confirmation states the real count.
+//
+// The tail is that terse because the width bound is real and both interpolated numbers
+// can reach three digits: the count is bounded only by the fleet, and the capacity is
+// DefaultSessionCap(), which is half the host's threads — 128 on a 256-thread machine.
+// The fuller "(ctrl+r resumes paused sessions)" measured 82 cells at that worst case and
+// would have had "paused sessions" truncated off an 80-column bar. The bound is asserted
+// at three digits for both, which is why the overflow was caught rather than shipped.
 func startupParkNotice(d session.DeferredRecovery) string {
 	n := len(d.Titles)
 	if n == 0 {
 		return ""
 	}
 	if n == 1 {
-		return fmt.Sprintf("1 session stayed paused — host capacity is %d; press r to resume", d.Limit)
+		return fmt.Sprintf("1 session stayed paused — host capacity is %d (ctrl+r resumes paused)", d.Limit)
 	}
-	return fmt.Sprintf("%d sessions stayed paused — host capacity is %d; ctrl+r resumes them", n, d.Limit)
+	return fmt.Sprintf("%d sessions stayed paused — host capacity is %d (ctrl+r resumes paused)", n, d.Limit)
 }
 
 // startupParkNoticeMaxWidth is the widest either startupParkNotice spelling may

@@ -190,11 +190,11 @@ func (i *Instance) Resume() error {
 				if closeErr := ts.Close(); closeErr != nil {
 					log.ErrorLog.Printf("failed to close stale session %s: %v", i.Title, closeErr)
 				}
-				if err := i.recreateSession(); err != nil {
+				if err := i.recreateSession(false); err != nil {
 					return err
 				}
 			}
-		} else if err := i.recreateSession(); err != nil {
+		} else if err := i.recreateSession(false); err != nil {
 			return err
 		}
 		i.SetStatus(Running)
@@ -208,16 +208,24 @@ func (i *Instance) Resume() error {
 	// without removing it. Reuse it as-is: running Setup would clearStaleWorktree and
 	// re-add from the branch, discarding any uncommitted work — and BranchCheckoutPath
 	// would see our own worktree as a foreign checkout and refuse the resume outright.
-	// A normal pause removes the worktree, so a valid one here means one of the two
-	// parks that deliberately leave it: a commit-failure pause preserving WIP it could
-	// not commit (see pause), or a startup recovery deferred by the host session budget
-	// (parkOverBudget). Neither wrote an auto-pause commit, so there is nothing to
-	// unwind. Otherwise materialize it fresh, first guarding against the branch being
-	// checked out elsewhere (base repo or a sibling worktree).
-	if valid, err := wt.IsValidWorktree(); err != nil {
+	// A normal pause removes the worktree, so a valid one here means a park that left it
+	// on disk. Several do — a pause whose WIP commit failed (see pause), a startup
+	// recovery whose relaunch failed after the worktree validated (recoverInPlace), one
+	// the host session budget deferred (parkOverBudget) — so the test is the property,
+	// not a list: none of them ran pause's auto-commit, so a materialized worktree here
+	// never has one to unwind. Otherwise materialize it fresh, first guarding against
+	// the branch being checked out elsewhere (base repo or a sibling worktree).
+	valid, err := wt.IsValidWorktree()
+	if err != nil {
 		log.ErrorLog.Print(err)
 		return fmt.Errorf("failed to validate worktree: %w", err)
-	} else if !valid {
+	}
+	// Whether this call is the one that put the worktree on disk. It decides whether a
+	// failed launch below may tear it down: rolling back our own Setup is safe, while
+	// tearing down a worktree we merely found would destroy work we did not create and
+	// delete the branch holding it (see recreateSession).
+	materializedHere := !valid
+	if !valid {
 		// Naming the holding path makes the error actionable and lets the app layer
 		// offer to detach the base repo automatically.
 		if heldBy, err := wt.BranchCheckoutPath(); err != nil {
@@ -257,14 +265,15 @@ func (i *Instance) Resume() error {
 			if closeErr := ts.Close(); closeErr != nil {
 				log.ErrorLog.Printf("failed to close stale session %s: %v", i.Title, closeErr)
 			}
-			if err := i.recreateSession(); err != nil {
+			if err := i.recreateSession(materializedHere); err != nil {
 				return err
 			}
 		}
 	} else {
 		// The tmux session is gone, so the agent process died with it; recreate
-		// it, resuming the prior conversation rather than starting blank.
-		if err := i.recreateSession(); err != nil {
+		// it, resuming the prior conversation rather than starting blank. This is the
+		// path every budget-parked session takes, materializedHere false.
+		if err := i.recreateSession(materializedHere); err != nil {
 			return err
 		}
 	}

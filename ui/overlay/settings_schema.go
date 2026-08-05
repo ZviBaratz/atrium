@@ -350,9 +350,10 @@ func newSettingRows(cfg *config.Config) []settingRow {
 			summary:        "How many sessions Atrium will hold. Empty auto-derives from this host.",
 			detail: "Empty is a soft cap of half your CPU threads (minimum 2), counting only " +
 				"live sessions — a create or resume past it asks for confirmation rather than " +
-				"refusing. A number is a hard cap on every session, paused ones included, and a " +
-				"create past it is refused. 0 means unlimited, with no confirmation. " +
-				"`atrium doctor` reports the same host capacity.",
+				"refusing, and a startup that would relaunch past it leaves the overflow paused " +
+				"for you to resume. A number is a hard cap on every session, paused ones " +
+				"included, and a create past it is refused. 0 means unlimited, with no " +
+				"confirmation. `atrium doctor` reports the same host capacity.",
 			get: func(c *config.Config) string {
 				switch {
 				case c.MaxSessions == nil:

@@ -469,9 +469,9 @@ func (l *List) NumInstances() int {
 // running (or starting) an agent.
 //
 // Load, not disk: whether the worktree is still materialized does not enter into it.
-// Usually it is gone (pause removes it), but two parks deliberately leave it in
-// place — a pause whose WIP commit failed, and a startup recovery the host budget
-// deferred — and neither is running an agent either.
+// Usually it is gone, because that is what pause does, but several parks leave one in
+// place on purpose (see session.Instance.Resume) and none of them is running an agent
+// either.
 func (l *List) NumActiveInstances() int {
 	n := 0
 	for _, it := range l.items {

@@ -54,10 +54,18 @@ func softCap(limit int) config.SessionCap { return config.SessionCap{Limit: limi
 // command succeeds.
 func recoverableInstance(t *testing.T, title string) (*Instance, *recordingPtyFactory) {
 	t.Helper()
+	return recoverableInstanceLaunching(t, title, nil)
+}
+
+// recoverableInstanceLaunching is recoverableInstance with control over whether the
+// launch succeeds: a non-nil startErr fails every pty Start, driving the paths that
+// have to survive an agent that will not come back.
+func recoverableInstanceLaunching(t *testing.T, title string, startErr error) (*Instance, *recordingPtyFactory) {
+	t.Helper()
 	wt := newTestWorktree(t)
 	cfgDir := t.TempDir()
 	writeClaudeTranscript(t, cfgDir, wt.GetWorktreePath())
-	pty := newRecordingPtyFactory(t, nil)
+	pty := newRecordingPtyFactory(t, startErr)
 	relaunchExec := cmd_test.MockCmdExec{
 		RunFunc: func(c *exec.Cmd) error {
 			if slices.Contains(c.Args, "has-session") && len(pty.commands()) == 0 {
@@ -300,4 +308,44 @@ func TestNilRecoveryBudgetGrantsEverything(t *testing.T) {
 	b.reserve()
 	b.refund()
 	require.Equal(t, DeferredRecovery{}, b.result())
+}
+
+// TestParkedOverflowSurvivesAFailedResume is the counterpart to the test above, and it
+// covers the half that matters more: what happens when the way back FAILS.
+//
+// Leaving the worktree materialized is what makes the park safe, so nothing downstream
+// may treat it as scratch. Resume reaches recreateSession for a budget-parked session
+// every time — its tmux session is gone by construction, which is why it was being
+// recovered at all — and recreateSession's failure path tears the worktree down through
+// Worktree.Cleanup: `git worktree remove -f` AND `git branch -D`. That teardown is a
+// rollback of the Setup a normal resume just ran, where the worktree came from the
+// branch and nothing is lost. Here Resume materialized nothing, so the same teardown
+// would destroy uncommitted work it did not create, and delete the branch holding the
+// session's history — turning a load-shedding measure into the most destructive path in
+// the program.
+func TestParkedOverflowSurvivesAFailedResume(t *testing.T) {
+	// A survivor reserves the only slot without launching anything, so the second
+	// session is parked for want of budget.
+	holder, _ := survivingInstance(t, "holder")
+	parked, _ := recoverableInstanceLaunching(t, "bravo", fmt.Errorf("pty boom"))
+
+	wt := parked.worktree()
+	wip := filepath.Join(wt.GetWorktreePath(), "wip.txt")
+	require.NoError(t, os.WriteFile(wip, []byte("half-finished\n"), 0o644))
+	branch := wt.GetBranchName()
+	repo := wt.GetRepoPath()
+
+	require.Equal(t, []string{"bravo"}, bringOnline([]*Instance{holder, parked}, softCap(1)).Titles)
+	require.True(t, parked.Paused())
+
+	require.Error(t, parked.Resume(), "the agent cannot be relaunched in this fixture")
+
+	valid, err := wt.IsValidWorktree()
+	require.NoError(t, err)
+	require.True(t, valid, "a failed resume must not remove a worktree it did not materialize")
+	onDisk, err := os.ReadFile(wip)
+	require.NoError(t, err, "the uncommitted work must still be there to retry or rescue")
+	require.Equal(t, "half-finished\n", string(onDisk))
+	require.Equal(t, branch, gitOutput(t, repo, "rev-parse", "--abbrev-ref", branch),
+		"and the branch must survive: Cleanup would have branch -D'd the session's history")
 }

@@ -39,12 +39,11 @@ const (
 	Ready
 	// Loading is if the instance is loading (if we are starting it up or something).
 	Loading
-	// Paused is if the instance is parked: no agent process, branch preserved. Its
-	// worktree is usually removed too — that is what Pause does — but not always: a
-	// pause whose WIP commit failed and a startup recovery the host budget deferred
-	// (parkOverBudget) both leave it materialized on purpose, and Resume reuses it.
-	// The invariant is "no agent", which is what the poll loop and the session cap
-	// read this state for.
+	// Paused is if the instance is parked: no agent process, branch preserved. The
+	// invariant is "no agent" — that is what the poll loop and the session cap read this
+	// state for. Its worktree is usually removed too, because that is what Pause does,
+	// but several parks leave one materialized on purpose (see Resume), so nothing may
+	// infer from Paused that the directory is gone or that its contents are expendable.
 	Paused
 	// NeedsInput is if the agent is blocked on a prompt awaiting the user's answer
 	// (a tool-permission y/n prompt with AutoYes off). Appended last so previously
@@ -881,17 +880,28 @@ var worktreeCleanup = (*git.Worktree).Cleanup
 
 // recreateSession starts a fresh tmux session for an already-set-up worktree,
 // resuming the agent's prior conversation when one exists (startResuming; a fresh
-// start otherwise). On failure it tears down the worktree and returns a wrapped
-// error. Callers must ensure no session with the same name still exists — Start
-// guards against duplicates — so a stale session has to be closed first.
-func (i *Instance) recreateSession() error {
+// start otherwise). Callers must ensure no session with the same name still exists —
+// Start guards against duplicates — so a stale session has to be closed first.
+//
+// rollbackWorktree says whether a failed launch should tear the worktree down, and it
+// is emphatically not "clean up after yourself": Worktree.Cleanup is the KILL
+// teardown — `git worktree remove -f` and `git branch -D`. Pass true only when the
+// caller materialized this worktree in the same operation, where the teardown undoes
+// its own Setup and the contents came from the branch, so nothing is lost. Pass false
+// when the worktree pre-existed the call: it may hold uncommitted work this operation
+// did not create, and the branch holds the session's history. A budget-parked session
+// (parkOverBudget) is exactly that case, and reaches here on every Resume because its
+// tmux session is gone by construction — so getting this wrong would make the load
+// shedding introduced for #474 the most destructive path in the program.
+func (i *Instance) recreateSession(rollbackWorktree bool) error {
 	ts := i.tmux()
 	wt := i.worktree()
 	if err := i.startResuming(ts, i.WorkingDir()); err != nil {
 		log.ErrorLog.Print(err)
-		// Cleanup git worktree if tmux session creation fails. A direct session has no
-		// worktree (wt == nil) and nothing to clean up.
-		if wt != nil {
+		// Undo the worktree this same operation set up, so a failed launch does not
+		// leak one. Skipped when we did not create it (see rollbackWorktree) and when
+		// there is none at all — a direct session runs in the user's real directory.
+		if wt != nil && rollbackWorktree {
 			if cleanupErr := worktreeCleanup(wt); cleanupErr != nil {
 				err = fmt.Errorf("%w (cleanup error: %w)", err, cleanupErr)
 				log.ErrorLog.Print(err)

@@ -18,14 +18,25 @@ func TestStartupParkNotice(t *testing.T) {
 		require.Empty(t, startupParkNotice(session.DeferredRecovery{}))
 	})
 
-	t.Run("one session names the single-session key", func(t *testing.T) {
+	t.Run("one session", func(t *testing.T) {
 		got := startupParkNotice(session.DeferredRecovery{Titles: []string{"alpha"}, Limit: 2})
-		require.Equal(t, "1 session stayed paused — host capacity is 2; press r to resume", got)
+		require.Equal(t, "1 session stayed paused — host capacity is 2 (ctrl+r resumes paused)", got)
 	})
 
-	t.Run("several batch into one count and name the batch key", func(t *testing.T) {
+	t.Run("several batch into one count", func(t *testing.T) {
 		got := startupParkNotice(session.DeferredRecovery{Titles: []string{"a", "b", "c"}, Limit: 2})
-		require.Equal(t, "3 sessions stayed paused — host capacity is 2; ctrl+r resumes them", got)
+		require.Equal(t, "3 sessions stayed paused — host capacity is 2 (ctrl+r resumes paused)", got)
+	})
+
+	// r is deliberately NOT advertised, at either count: it acts on the selected row,
+	// and a parked session is never the startup selection, so the advice would earn a
+	// refusal notice instead of a resume.
+	t.Run("never advertises the selection-dependent key", func(t *testing.T) {
+		for _, n := range []int{1, 2, 7} {
+			got := startupParkNotice(session.DeferredRecovery{Titles: make([]string, n), Limit: 2})
+			require.NotContains(t, got, "press r")
+			require.Contains(t, got, "ctrl+r")
+		}
 	})
 
 	// The titles are deliberately absent, unlike surfaceLostRecoveries' park toast: a
@@ -47,8 +58,10 @@ func TestStartupParkNotice(t *testing.T) {
 func TestStartupParkNoticeFitsNarrowBar(t *testing.T) {
 	for _, d := range []session.DeferredRecovery{
 		{Titles: []string{"a"}, Limit: 2},
-		// Three digits of count and capacity: the only unbounded inputs left, and this
-		// is far past any real fleet.
+		// Three digits in both interpolations, the worst case each can actually reach:
+		// the count is bounded only by the fleet, and the capacity is DefaultSessionCap()
+		// — half the host's threads, so 128 on a 256-thread machine. This is the case
+		// that caught the first spelling at 82 cells.
 		{Titles: make([]string, 128), Limit: 128},
 	} {
 		got := startupParkNotice(d)

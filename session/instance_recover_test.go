@@ -265,8 +265,11 @@ func TestRecoverInPlace_FailedRestartDegradesToPaused(t *testing.T) {
 }
 
 // TestRecreateSession_ResumesConversationAndCleansUpOnFailure asserts the Resume
-// fallback helper resumes the conversation (StartContinue) and, when the launch
-// fails, tears down the worktree and returns an error rather than leaking it.
+// fallback helper resumes the conversation (StartContinue) and, when the launch fails
+// on a worktree this same operation materialized, tears it down and returns an error
+// rather than leaking it. The teardown is a rollback of that Setup, which is why it is
+// safe here and refused when the worktree pre-existed the call (see
+// TestRecreateSession_KeepsAWorktreeItDidNotMaterialize).
 func TestRecreateSession_ResumesConversationAndCleansUpOnFailure(t *testing.T) {
 	wt := newTestWorktree(t)
 	cfgDir := t.TempDir()
@@ -275,7 +278,7 @@ func TestRecreateSession_ResumesConversationAndCleansUpOnFailure(t *testing.T) {
 	ts := tmux.NewSessionWithDeps(context.Background(), "sess", "claude", pty, deadExec())
 	inst := &Instance{Title: "sess", started: true, Program: "claude", claudeConfigDir: cfgDir, gitWorktree: wt, tmuxSession: ts}
 
-	err := inst.recreateSession()
+	err := inst.recreateSession(true)
 
 	require.Error(t, err, "a failed launch must surface an error to Resume's caller")
 	require.Contains(t, pty.commands()[0], "--continue",
@@ -295,7 +298,7 @@ func TestRecreateSession_StartsBlankWhenNoConversation(t *testing.T) {
 	ts := tmux.NewSessionWithDeps(context.Background(), "sess", "claude", pty, deadExec())
 	inst := &Instance{Title: "sess", started: true, Program: "claude", claudeConfigDir: cfgDir, gitWorktree: wt, tmuxSession: ts}
 
-	err := inst.recreateSession()
+	err := inst.recreateSession(true)
 
 	require.Error(t, err, "a failed launch must still surface an error")
 	require.NotContains(t, pty.commands()[0], "--continue",
@@ -318,7 +321,7 @@ func TestRecreateSession_PropagatesCleanupFailure(t *testing.T) {
 	defer func(orig func(*git.Worktree) error) { worktreeCleanup = orig }(worktreeCleanup)
 	worktreeCleanup = func(*git.Worktree) error { return boom }
 
-	err := inst.recreateSession()
+	err := inst.recreateSession(true)
 
 	require.Error(t, err, "a failed launch must surface an error")
 	require.ErrorIs(t, err, boom, "the cleanup failure must be wrapped into the returned error")
@@ -373,4 +376,35 @@ func TestResume_BranchCheckedOutReturnsTypedError(t *testing.T) {
 	var busy *git.BranchCheckedOutError
 	require.ErrorAs(t, err, &busy, "Resume must return a *git.BranchCheckedOutError")
 	require.NotEmpty(t, busy.Path, "the error should name the holding worktree")
+}
+
+// TestRecreateSession_KeepsAWorktreeItDidNotMaterialize is the guard on the other side
+// of that flag, and the reason it exists at all.
+//
+// Worktree.Cleanup is the KILL teardown — `git worktree remove -f` plus `git branch
+// -D`. Running it as a launch-failure rollback is only sound when this call put the
+// worktree there; when it merely found one, the same teardown destroys uncommitted work
+// it did not create and deletes the branch holding the session's history. Resume reaches
+// here with a pre-existing worktree for every park that leaves one materialized, and a
+// budget-parked session takes that path on every single resume, its tmux session having
+// died with the server.
+func TestRecreateSession_KeepsAWorktreeItDidNotMaterialize(t *testing.T) {
+	wt := newTestWorktree(t)
+	cfgDir := t.TempDir()
+	writeClaudeTranscript(t, cfgDir, wt.GetWorktreePath())
+	wip := filepath.Join(wt.GetWorktreePath(), "wip.txt")
+	require.NoError(t, os.WriteFile(wip, []byte("half-finished\n"), 0o644))
+
+	pty := newRecordingPtyFactory(t, fmt.Errorf("pty boom"))
+	ts := tmux.NewSessionWithDeps(context.Background(), "sess", "claude", pty, deadExec())
+	inst := &Instance{Title: "sess", started: true, Program: "claude", claudeConfigDir: cfgDir, gitWorktree: wt, tmuxSession: ts}
+
+	require.Error(t, inst.recreateSession(false), "the failed launch must still surface")
+
+	valid, vErr := wt.IsValidWorktree()
+	require.NoError(t, vErr)
+	require.True(t, valid, "a worktree this call did not materialize must survive the failure")
+	onDisk, rErr := os.ReadFile(wip)
+	require.NoError(t, rErr)
+	require.Equal(t, "half-finished\n", string(onDisk), "and so must the work it holds")
 }

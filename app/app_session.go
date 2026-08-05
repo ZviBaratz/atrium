@@ -645,9 +645,8 @@ func (m *home) resumeAll() tea.Cmd {
 // parks it when its pane dies, and PausedInstancesInView takes every Paused row, where
 // ActiveInstancesInView (pause's scope) filters IsDirect out, so the two batch scopes
 // are not mirror images — and a park that left the worktree materialized has one Resume
-// reuses rather than re-adding over the work it holds. Two parks do that: a
-// commit-failure pause, and a startup recovery the host session budget deferred
-// (session.Instance.parkOverBudget). Reattaching the agent is the half true of every
+// reuses rather than re-adding over the work it holds, which several parks do (see
+// session.Instance.Resume for which). Reattaching the agent is the half true of every
 // path, so that half carries no qualifier.
 //
 // It says *reattaches* because pause detaches tmux rather than closing it
