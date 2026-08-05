@@ -31,10 +31,10 @@ import (
 // are acceptable here: `atrium ls` in a watch loop is the advertised usage, so
 // this runs concurrently with a TUI's saves as a matter of routine.
 //
-// It also does not go through session.Storage.LoadInstances, which calls
-// reattach() on every instance and so probes the live tmux server. The cost of
-// reading the file directly is that everything here is last-known state, which
-// is why `ls` publishes updated_at.
+// It also does not go through session.Storage.LoadInstances, which probes the live
+// tmux server for every non-paused instance and reattaches or relaunches each one.
+// The cost of reading the file directly is that everything here is last-known state,
+// which is why `ls` publishes updated_at.
 //
 // Reading unsynchronised is safe because every write commits by rename, so a
 // reader sees the previous file or the new one, never a torn mix.

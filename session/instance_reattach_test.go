@@ -2,6 +2,7 @@ package session
 
 import (
 	"context"
+	"fmt"
 	"os/exec"
 	"testing"
 	"time"
@@ -12,6 +13,14 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// reattachUnbudgeted runs the two steps the production load runs — classify the pane,
+// then bring the instance online — with no cap applied, which is what
+// Storage.LoadInstances does for a fleet that fits its budget. Going through
+// paneSurvived rather than passing a hand-picked bool keeps these tests exercising the
+// real liveness classification against their own exec mock, as they did when reattach
+// probed for itself.
+func reattachUnbudgeted(inst *Instance) { inst.reattach(inst.paneSurvived(), nil) }
 
 // reattachableInstance builds an instance whose injected tmux session reports as
 // existing (has-session succeeds) and whose Restore (attach) succeeds, so reattach
@@ -39,7 +48,7 @@ func TestReattach_ArmsSuppressionOnlyWhenSavedReady(t *testing.T) {
 	t.Run("saved Ready arms suppression", func(t *testing.T) {
 		inst := reattachableInstance(t, Ready)
 
-		inst.reattach()
+		reattachUnbudgeted(inst)
 		require.True(t, inst.started, "a reattached session is marked started")
 		require.Equal(t, Running, inst.GetStatus(), "a surviving session reattaches to Running")
 
@@ -50,7 +59,7 @@ func TestReattach_ArmsSuppressionOnlyWhenSavedReady(t *testing.T) {
 	t.Run("saved non-Ready does not arm", func(t *testing.T) {
 		inst := reattachableInstance(t, Running)
 
-		inst.reattach()
+		reattachUnbudgeted(inst)
 		require.True(t, inst.started)
 		require.Equal(t, Running, inst.GetStatus())
 
@@ -66,27 +75,42 @@ func TestReattach_ArmsSuppressionOnlyWhenSavedReady(t *testing.T) {
 func TestReattach_SessionGoneRecoversInPlace(t *testing.T) {
 	inst, pty := orphanedWorktreeInstance(t)
 
-	inst.reattach()
+	reattachUnbudgeted(inst)
 
 	require.True(t, inst.started, "a recovered instance must be marked started")
 	require.True(t, inst.Paused(), "a gone session with an orphaned worktree must degrade to Paused")
 	require.Empty(t, pty.cmds, "no session should be relaunched when the worktree is gone")
 }
 
-// TestReattach_PausedDoesNoIO asserts a paused instance is only marked started —
-// reattach must not probe or launch any tmux session (it has one constructed for a
+// TestReattach_PausedDoesNoIO asserts a paused instance is only marked started — the
+// load must not probe or launch any tmux session for it (it has one constructed for a
 // later Resume, but no live session to reattach).
+//
+// The probe half is asserted here rather than assumed. It used to rest on `pty.cmds`
+// being empty, which catches a launch but not a `tmux has-session` — that goes through
+// the executor, not the pty — so a paused instance could have been probed on every load
+// with this test still green. Now that the probe is its own step (paneSurvived, so the
+// loader can reserve survivors before rationing relaunches) the executor counts calls
+// and the claim is real.
 func TestReattach_PausedDoesNoIO(t *testing.T) {
 	pty := newRecordingPtyFactory(t, nil)
-	// deadExec would error if reattach touched the session; a paused one must not.
-	ts := tmux.NewSessionWithDeps(context.Background(), "sess", "claude", pty, deadExec())
+	execCalls := 0
+	countingExec := cmd_test.MockCmdExec{
+		RunFunc:    func(*exec.Cmd) error { execCalls++; return fmt.Errorf("no such session") },
+		OutputFunc: func(*exec.Cmd) ([]byte, error) { execCalls++; return nil, fmt.Errorf("dead") },
+	}
+	ts := tmux.NewSessionWithDeps(context.Background(), "sess", "claude", pty, countingExec)
 	inst := &Instance{Title: "sess", status: Paused, Program: "claude", tmuxSession: ts}
 
-	inst.reattach()
+	require.False(t, inst.paneSurvived(), "a paused instance has no live pane to reserve a slot for")
+	require.Zero(t, execCalls, "and answering that must not cost a tmux call")
+
+	reattachUnbudgeted(inst)
 
 	require.True(t, inst.started, "a paused instance is marked started")
 	require.True(t, inst.Paused(), "a paused instance stays Paused — no reattach")
 	require.Empty(t, pty.cmds, "a paused instance must not launch or attach any tmux session")
+	require.Zero(t, execCalls, "nor run any tmux command at all")
 }
 
 // TestReattach_PreservesRestoredStatusChangedAt is the guarantee that makes persisting
@@ -108,7 +132,7 @@ func TestReattach_PreservesRestoredStatusChangedAt(t *testing.T) {
 		inst := reattachableInstance(t, NeedsInput)
 		inst.statusChangedAt = sixHoursAgo
 
-		inst.reattach()
+		reattachUnbudgeted(inst)
 		require.Equal(t, Running, inst.GetStatus(), "a surviving session reattaches to Running")
 		require.True(t, inst.StatusChangedAt().Equal(sixHoursAgo),
 			"the synthetic Running is our bookkeeping, not a transition — it must not restamp")
@@ -125,7 +149,7 @@ func TestReattach_PreservesRestoredStatusChangedAt(t *testing.T) {
 		inst := reattachableInstance(t, NeedsInput)
 		inst.statusChangedAt = sixHoursAgo
 
-		inst.reattach()
+		reattachUnbudgeted(inst)
 		before := time.Now()
 		inst.ApplyPaneState(tmux.PaneIdle) // the first poll: it finished while we were away
 
@@ -142,7 +166,7 @@ func TestReattach_PreservesRestoredStatusChangedAt(t *testing.T) {
 	t.Run("a state file predating the stamp gets one on first observation", func(t *testing.T) {
 		inst := reattachableInstance(t, NeedsInput) // statusChangedAt left zero
 
-		inst.reattach()
+		reattachUnbudgeted(inst)
 		before := time.Now()
 		inst.ApplyPaneState(tmux.PanePrompt) // settles back, so no transition — but zero is not an answer
 
@@ -158,7 +182,7 @@ func TestReattach_SyntheticWriteOwesNoSave(t *testing.T) {
 	inst := reattachableInstance(t, NeedsInput)
 	inst.statusChangedAt = time.Now().Add(-6 * time.Hour)
 
-	inst.reattach()
+	reattachUnbudgeted(inst)
 	assert.False(t, inst.StatusDirty(), "the placeholder Running is not a change to persist")
 
 	inst.ApplyPaneState(tmux.PaneIdle) // a real change, though

@@ -220,6 +220,8 @@ func (m *home) handlePreviewTick(msg previewTickMsg) (tea.Model, tea.Cmd) {
 		m.flushPendingLaunchCrash(),
 		// Likewise for the custom_commands entries validation refused at startup.
 		m.flushCustomCommandProblems(),
+		// Likewise for the startup recoveries the host session budget deferred.
+		m.flushDeferredRecovery(),
 		func() tea.Msg {
 			time.Sleep(100 * time.Millisecond)
 			return previewTickMsg{}

@@ -54,7 +54,7 @@ func addPersistedInstance(t *testing.T, h *home, title, path string) *session.In
 	require.NoError(t, err)
 	h.storage = st
 
-	loaded, err := st.LoadInstances(context.Background())
+	loaded, _, err := st.LoadInstances(context.Background())
 	require.NoError(t, err)
 	require.Len(t, loaded, 1)
 	require.True(t, loaded[0].Started(), "only a started instance is persisted")

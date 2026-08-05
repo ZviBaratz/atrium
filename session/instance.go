@@ -39,7 +39,11 @@ const (
 	Ready
 	// Loading is if the instance is loading (if we are starting it up or something).
 	Loading
-	// Paused is if the instance is paused (worktree removed but branch preserved).
+	// Paused is if the instance is parked: no agent process, branch preserved. The
+	// invariant is "no agent" — that is what the poll loop and the session cap read this
+	// state for. Its worktree is usually removed too, because that is what Pause does,
+	// but several parks leave one materialized on purpose (see Resume), so nothing may
+	// infer from Paused that the directory is gone or that its contents are expendable.
 	Paused
 	// NeedsInput is if the agent is blocked on a prompt awaiting the user's answer
 	// (a tool-permission y/n prompt with AutoYes off). Appended last so previously
@@ -656,6 +660,17 @@ func FromInstanceData(ctx context.Context, data InstanceData, branchPrefix strin
 	return instance, nil
 }
 
+// paneSurvived reports whether the instance's tmux session is still alive, so the
+// loader can reserve a slot for every survivor before rationing relaunches (see
+// Storage.LoadInstances and recoveryBudget). A paused instance is never probed: it
+// has no live session, only one constructed for a later Resume.
+//
+// Same pre-publication precondition as reattach — it reads tmuxSession without
+// holding i.mu.
+func (i *Instance) paneSurvived() bool {
+	return !i.Paused() && i.tmuxSession.DoesSessionExist()
+}
+
 // reattach brings a rehydrated instance online: it reattaches to a surviving tmux
 // session, or recovers in place when that session is wedged or gone. This is the
 // live tmux/git IO deliberately kept out of FromInstanceData, so a caller can
@@ -664,11 +679,19 @@ func FromInstanceData(ctx context.Context, data InstanceData, branchPrefix strin
 // session to reattach — its Session was constructed for a later Resume — so it is
 // only marked started.
 //
+// paneAlive is the caller's paneSurvived() answer, passed in rather than asked again
+// here so the caller can count the whole surviving fleet first. budget rations the
+// relaunches recovery would perform; nil is unlimited. Recovering a session whose
+// pane is gone starts a fresh agent, so past the budget it is parked as Paused
+// instead — the way back is r / ctrl+r, itself cap-gated (#463), so the overflow
+// cannot be quietly re-oversubscribed. A surviving pane is never refused; it is
+// already running.
+//
 // Precondition: reattach must run during load, before the instance is published to
-// the poll loop. It reads tmuxSession and — via the paused branch and
-// recoverInPlace — writes started without holding i.mu, which is safe only in that
-// single-threaded, pre-publication window.
-func (i *Instance) reattach() {
+// the poll loop. It reads tmuxSession and — via the paused branch, parkOverBudget
+// and recoverInPlace — writes started without holding i.mu, which is safe only in
+// that single-threaded, pre-publication window.
+func (i *Instance) reattach(paneAlive bool, budget *recoveryBudget) {
 	if i.Paused() {
 		i.started = true
 		return
@@ -678,20 +701,24 @@ func (i *Instance) reattach() {
 	// it since, so it still reflects the status at save time here.
 	savedStatus := i.GetStatus()
 	sess := i.tmuxSession
-	switch {
-	case sess.DoesSessionExist():
+	if paneAlive {
 		// Normal case: the session survived (cs detaches, it doesn't kill), so
 		// reattach to it. If the attach (Restore) fails the session is wedged — kill
 		// it and recover in place rather than aborting the load of every other
-		// session. Start() no longer sets Running itself (that is owned by the
-		// caller), so mark a successfully-reattached session Running here;
-		// recoverInPlace sets its own status otherwise.
+		// session. That relaunch spends the slot the caller already reserved for this
+		// live pane, so it is not asked to spend again — but a recovery that ends
+		// Paused never became load, so the slot goes back. Start() no longer sets
+		// Running itself (that is owned by the caller), so mark a
+		// successfully-reattached session Running here; recoverInPlace sets its own
+		// status otherwise.
 		if err := i.Start(false); err != nil {
 			log.ErrorLog.Printf("failed to restore session %s, recovering: %v", i.Title, err)
 			if closeErr := sess.Close(); closeErr != nil {
 				log.ErrorLog.Printf("failed to close stale session %s: %v", i.Title, closeErr)
 			}
-			i.recoverInPlace()
+			if !i.recoverInPlace() {
+				budget.refund()
+			}
 		} else {
 			// The Running written here is synthetic — the session was reattached, not
 			// observed working — so it goes through setStatusReattached, which records
@@ -707,12 +734,39 @@ func (i *Instance) reattach() {
 				i.ArmReadySuppression()
 			}
 		}
-	default:
-		// The tmux session is gone — e.g. after a reboot, or the one-time migration
-		// to cs's dedicated socket. Don't crash on the failed attach (which
-		// previously aborted startup); recover in place.
-		i.recoverInPlace()
+		return
 	}
+
+	// The tmux session is gone — e.g. after a reboot, or the one-time migration to
+	// cs's dedicated socket. Don't crash on the failed attach (which previously
+	// aborted startup); recover in place, which relaunches the agent — so it needs a
+	// slot from the budget first, and hands one back that did not end up live.
+	if !budget.spend(i.Title) {
+		i.parkOverBudget()
+		return
+	}
+	if !i.recoverInPlace() {
+		budget.refund()
+	}
+}
+
+// parkOverBudget parks a session whose agent the host budget cannot afford to
+// relaunch, so the user restores it deliberately (r, or ctrl+r for the batch) rather
+// than the fleet oversubscribing the host at launch.
+//
+// The park is a bare status flip, exactly as recoverInPlace's own degradations are —
+// deliberately NOT Instance.pause(), which would commit the worktree's uncommitted
+// work and remove it. That is what makes this safe for WIP: the worktree stays
+// materialized, and Resume reuses a materialized worktree as-is rather than
+// re-adding it from the branch (see Resume).
+//
+// startedAt is deliberately left alone: nothing was launched, so stamping it would
+// make DiedAtLaunch report a crash-at-launch for a session that never launched. A
+// zero startedAt is the value that predicate is written for.
+func (i *Instance) parkOverBudget() {
+	i.started = true
+	log.InfoLog.Printf("recovery deferred for %q: host session budget reached; parked as paused", i.Title)
+	i.SetStatus(Paused)
 }
 
 // startResuming relaunches the dead agent in workDir, resuming its prior conversation
@@ -767,9 +821,18 @@ func (i *Instance) ResumedConversation() (resumed, known bool) {
 // degrades to Paused so the branch is preserved and Resume can recover it
 // later — a single bad session must never abort loading the rest.
 //
+// Returns whether the instance ended up live (Running). False means it degraded to
+// Paused and started no agent, which is what lets the caller hand its recovery slot
+// back to the budget (see reattach).
+//
 // Recreating in place (rather than via Resume) deliberately preserves any
-// uncommitted work: Resume would force-recreate the worktree and lose it.
-func (i *Instance) recoverInPlace() {
+// uncommitted work — but note *why*, because the reason is narrower than "Resume
+// loses WIP": Resume force-recreates only a worktree that is no longer valid on
+// disk, and a normal pause has removed it by then. Here the worktree is still
+// materialized, and re-adding it from the branch (Setup → clearStaleWorktree) would
+// discard the WIP; Resume takes the same care for the same reason when it meets a
+// still-materialized worktree.
+func (i *Instance) recoverInPlace() bool {
 	i.started = true
 	i.startedAt = time.Now()
 
@@ -780,13 +843,13 @@ func (i *Instance) recoverInPlace() {
 		if err := i.startResuming(i.tmuxSession, i.Path); err != nil {
 			log.ErrorLog.Printf("failed to restart direct session %s in place, leaving paused: %v", i.Title, err)
 			i.SetStatus(Paused)
-			return
+			return false
 		}
 		i.SetStatus(Running)
 		// The restarted agent's post-boot idle is a boot artifact, not new output;
 		// don't let the first poll's settle to Ready flag unread.
 		i.ArmReadySuppression()
-		return
+		return true
 	}
 
 	valid, err := wt.IsValidWorktree()
@@ -795,17 +858,18 @@ func (i *Instance) recoverInPlace() {
 	}
 	if err != nil || !valid {
 		i.SetStatus(Paused)
-		return
+		return false
 	}
 
 	if err := i.startResuming(i.tmuxSession, wt.GetWorktreePath()); err != nil {
 		log.ErrorLog.Printf("failed to restart session %s in place, leaving paused: %v", i.Title, err)
 		i.SetStatus(Paused)
-		return
+		return false
 	}
 	i.SetStatus(Running)
 	// As above: the post-boot idle settle is not a genuine completion.
 	i.ArmReadySuppression()
+	return true
 }
 
 // worktreeCleanup is the seam recreateSession tears the worktree down through on a
@@ -816,17 +880,28 @@ var worktreeCleanup = (*git.Worktree).Cleanup
 
 // recreateSession starts a fresh tmux session for an already-set-up worktree,
 // resuming the agent's prior conversation when one exists (startResuming; a fresh
-// start otherwise). On failure it tears down the worktree and returns a wrapped
-// error. Callers must ensure no session with the same name still exists — Start
-// guards against duplicates — so a stale session has to be closed first.
-func (i *Instance) recreateSession() error {
+// start otherwise). Callers must ensure no session with the same name still exists —
+// Start guards against duplicates — so a stale session has to be closed first.
+//
+// rollbackWorktree says whether a failed launch should tear the worktree down, and it
+// is emphatically not "clean up after yourself": Worktree.Cleanup is the KILL
+// teardown — `git worktree remove -f` and `git branch -D`. Pass true only when the
+// caller materialized this worktree in the same operation, where the teardown undoes
+// its own Setup and the contents came from the branch, so nothing is lost. Pass false
+// when the worktree pre-existed the call: it may hold uncommitted work this operation
+// did not create, and the branch holds the session's history. A budget-parked session
+// (parkOverBudget) is exactly that case, and reaches here on every Resume because its
+// tmux session is gone by construction — so getting this wrong would make the load
+// shedding introduced for #474 the most destructive path in the program.
+func (i *Instance) recreateSession(rollbackWorktree bool) error {
 	ts := i.tmux()
 	wt := i.worktree()
 	if err := i.startResuming(ts, i.WorkingDir()); err != nil {
 		log.ErrorLog.Print(err)
-		// Cleanup git worktree if tmux session creation fails. A direct session has no
-		// worktree (wt == nil) and nothing to clean up.
-		if wt != nil {
+		// Undo the worktree this same operation set up, so a failed launch does not
+		// leak one. Skipped when we did not create it (see rollbackWorktree) and when
+		// there is none at all — a direct session runs in the user's real directory.
+		if wt != nil && rollbackWorktree {
 			if cleanupErr := worktreeCleanup(wt); cleanupErr != nil {
 				err = fmt.Errorf("%w (cleanup error: %w)", err, cleanupErr)
 				log.ErrorLog.Print(err)

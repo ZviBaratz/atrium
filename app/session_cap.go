@@ -5,6 +5,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/ZviBaratz/atrium/config"
+	"github.com/ZviBaratz/atrium/session"
 	"github.com/ZviBaratz/atrium/ui"
 	"github.com/ZviBaratz/atrium/ui/overlay"
 )
@@ -150,6 +151,64 @@ func (m *home) resumeCapNotice(n int) string {
 	}
 	return resumeCapClause(sc.Limit, live, n)
 }
+
+// startupParkNotice is the toast for sessions a startup recovery left paused because
+// relaunching their agents would have exceeded the host budget (#474). "" when
+// nothing was deferred.
+//
+// A silent Running→Paused is indistinguishable from a user pause — the finding #270
+// made and lostRecovery exists for — so this park owes the same batched toast, in the
+// same voice as surfaceLostRecoveries: state what happened, then the key that undoes
+// it. Not a modal — showInfo is for what the user must read and act on, and nothing
+// here blocks them; the parked rows are visible and r brings any of them back whenever
+// they get to it. What the rows cannot say is *why* they are paused, which is the one
+// thing this line exists to carry (and the atrium log keeps, per session, for a user
+// who missed the toast).
+//
+// It states the capacity rather than reusing hostCapacityLine, and it names no
+// session. Both are width: the hint-bar notice TRUNCATES ITS TAIL at width-2
+// (ui.Menu.String), so on an 80-column terminal a longer line would drop the very key
+// it is here to teach. hostCapacityLine's live count and a session title (unbounded
+// user input) are the two halves that had to go; the capacity is the number the user
+// acts on, while what is running is on the rows in front of them. Both spellings
+// below are asserted against a width bound rather than eyeballed.
+//
+// It deliberately does not teach ',': the create dialog owns the max_sessions escape
+// hatch (see resumeCapClause), and this line has room for exactly one key.
+//
+// That key is ctrl+r even for a single session, where r looks like the friendlier
+// advice. r acts on the SELECTED row (resumeSelectedKey) and a parked session is by
+// construction the one that came after the budget ran out in stored order, so it is
+// never the startup selection — following "press r" would just earn the "only paused
+// sessions resume" refusal. Naming the row instead is not open either: a title is
+// unbounded input on a row that truncates. So the advice is the key that needs no
+// selection, and it says "resumes paused" rather than "resumes them" because resumeAll
+// takes every paused row in view, which may include sessions the user parked
+// deliberately; its confirmation states the real count.
+//
+// The tail is that terse because the width bound is real and both interpolated numbers
+// can reach three digits: the count is bounded only by the fleet, and the capacity is
+// DefaultSessionCap(), which is half the host's threads — 128 on a 256-thread machine.
+// The fuller "(ctrl+r resumes paused sessions)" measured 82 cells at that worst case and
+// would have had "paused sessions" truncated off an 80-column bar. The bound is asserted
+// at three digits for both, which is why the overflow was caught rather than shipped.
+func startupParkNotice(d session.DeferredRecovery) string {
+	n := len(d.Titles)
+	if n == 0 {
+		return ""
+	}
+	if n == 1 {
+		return fmt.Sprintf("1 session stayed paused — host capacity is %d (ctrl+r resumes paused)", d.Limit)
+	}
+	return fmt.Sprintf("%d sessions stayed paused — host capacity is %d (ctrl+r resumes paused)", n, d.Limit)
+}
+
+// startupParkNoticeMaxWidth is the widest either startupParkNotice spelling may
+// render, in cells, and it is a *bound to keep* rather than a measurement: the
+// notice row truncates its tail, so a spelling that outgrows the narrowest supported
+// terminal loses the key it advertises. 78 is the room an 80-column terminal leaves
+// (ui.Menu.String truncates at width-2). Pinned by TestStartupParkNoticeFitsNarrowBar.
+const startupParkNoticeMaxWidth = 78
 
 // spawnPlan is a fully-validated, ready-to-spawn creation: title conflicts,
 // program flags, cap, and target have all passed. It is captured before a

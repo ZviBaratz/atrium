@@ -150,7 +150,7 @@ func TestStorageRoundTrip(t *testing.T) {
 	b := newPausedInstance(t, "beta")
 	require.NoError(t, store.SaveInstances([]*Instance{a, b}))
 
-	got, err := store.LoadInstances(context.Background())
+	got, _, err := store.LoadInstances(context.Background())
 	require.NoError(t, err)
 	require.Len(t, got, 2)
 	assert.Equal(t, "alpha", got[0].Title)
@@ -168,7 +168,7 @@ func TestStorageRoundTrip_Unread(t *testing.T) {
 	b := newPausedInstance(t, "beta")
 	require.NoError(t, store.SaveInstances([]*Instance{a, b}))
 
-	got, err := store.LoadInstances(context.Background())
+	got, _, err := store.LoadInstances(context.Background())
 	require.NoError(t, err)
 	require.Len(t, got, 2)
 	assert.True(t, got[0].Unread(), "a persisted unread bit must survive the round-trip")
@@ -186,7 +186,7 @@ func TestUpdateInstance_UpdatesField(t *testing.T) {
 	a.SetDisplayName("Alpha New Label")
 	require.NoError(t, store.UpdateInstance(a))
 
-	got, err := store.LoadInstances(context.Background())
+	got, _, err := store.LoadInstances(context.Background())
 	require.NoError(t, err)
 	require.Len(t, got, 2)
 
@@ -222,7 +222,7 @@ func TestDeleteAllInstances_ClearsEverything(t *testing.T) {
 
 	require.NoError(t, store.DeleteAllInstances())
 
-	got, err := store.LoadInstances(context.Background())
+	got, _, err := store.LoadInstances(context.Background())
 	require.NoError(t, err)
 	assert.Empty(t, got)
 }
@@ -434,4 +434,75 @@ func TestPromptQueueWinsOverLegacyPrompt(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 1, restored.QueueLen(), "the legacy field must not be appended on top of the queue")
 	require.Equal(t, "queued", restored.Prompt(), "prompt_queue is authoritative when both are present")
+}
+
+// TestLoadInstances_RationsRecoveryByTheConfiguredCap pins what the loader itself is
+// responsible for, which is everything around bringOnline rather than the rationing
+// inside it: it must hand over the WHOLE fleet, in the stored order the budget is spent
+// in, under the cap resolved from config, and return the report untouched.
+//
+// bringOnline is stubbed here because the real one relaunches agents for sessions whose
+// tmux server is gone — the production sessions FromInstanceData builds cannot be given
+// a fake pty, so an unstubbed test at this level would be the one thing these tests may
+// never do. The rationing itself is covered against injected deps in recovery_test.go.
+func TestLoadInstances_RationsRecoveryByTheConfiguredCap(t *testing.T) {
+	seed := func(t *testing.T) *Storage {
+		t.Helper()
+		store := newTestStorage(t)
+		require.NoError(t, store.SaveInstances([]*Instance{
+			newPausedInstance(t, "alpha"), newPausedInstance(t, "beta"), newPausedInstance(t, "gamma"),
+		}))
+		return store
+	}
+
+	t.Run("the whole fleet goes through the budget, in stored order", func(t *testing.T) {
+		store := seed(t)
+		var gotTitles []string
+		var gotCap config.SessionCap
+		calls := 0
+		restore := stubBringOnline(t, func(insts []*Instance, sc config.SessionCap) DeferredRecovery {
+			calls++
+			gotCap = sc
+			for _, inst := range insts {
+				gotTitles = append(gotTitles, inst.Title)
+			}
+			return DeferredRecovery{Titles: []string{"gamma"}, Limit: sc.Limit}
+		})
+		defer restore()
+
+		got, deferred, err := store.LoadInstances(context.Background())
+		require.NoError(t, err)
+
+		require.Equal(t, 1, calls, "the fleet is rationed once, not per instance")
+		require.Equal(t, []string{"alpha", "beta", "gamma"}, gotTitles,
+			"every loaded session is offered, in the stored (user-arranged) order")
+		require.Len(t, got, 3, "and every one is still returned to the caller")
+		require.Equal(t, DeferredRecovery{Titles: []string{"gamma"}, Limit: gotCap.Limit},
+			deferred, "the report is passed through, not re-derived")
+	})
+
+	t.Run("with max_sessions unset the cap is the host-derived soft one", func(t *testing.T) {
+		store := seed(t)
+		var gotCap config.SessionCap
+		restore := stubBringOnline(t, func(_ []*Instance, sc config.SessionCap) DeferredRecovery {
+			gotCap = sc
+			return DeferredRecovery{}
+		})
+		defer restore()
+
+		_, _, err := store.LoadInstances(context.Background())
+		require.NoError(t, err)
+		require.Equal(t, config.SessionCap{Limit: config.DefaultSessionCap(), Soft: true}, gotCap,
+			"an unset max_sessions must reach the budget as the soft host cap, which is the only shape that rations")
+	})
+}
+
+// stubBringOnline swaps the loader's bring-online seam for the duration of a test,
+// returning the restore. A helper rather than a t.Cleanup so a subtest cannot leave the
+// stub installed for its siblings.
+func stubBringOnline(t *testing.T, fn func([]*Instance, config.SessionCap) DeferredRecovery) func() {
+	t.Helper()
+	prev := bringInstancesOnline
+	bringInstancesOnline = fn
+	return func() { bringInstancesOnline = prev }
 }

@@ -363,9 +363,13 @@ type Config struct {
 	// resolves to a host-derived soft cap — max(2, CPU threads/2) — over the *live*
 	// sessions, which warns with a single confirmation when a create or a resume
 	// crosses it but does not block, so a fresh install degrades gracefully instead
-	// of oversubscribing the host. An explicit positive value is a hard cap over
-	// *every* session, paused ones included: creating beyond it is refused in the UI
-	// (resuming cannot cross it, since the sessions it restores already count). An
+	// of oversubscribing the host. Startup is the one crossing it does not merely
+	// warn about: a load that would relaunch dead agents past the cap leaves the
+	// overflow paused instead, because it happens before there is anyone to ask (and
+	// in the daemon, no one at all) — see session.DeferredRecovery. An explicit
+	// positive value is a hard cap over *every* session, paused ones included:
+	// creating beyond it is refused in the UI, while resuming and startup recovery
+	// cannot cross it at all, since the sessions they restore already count. An
 	// explicit non-positive value (0) is "unlimited" — no cap and, being explicit,
 	// no warning (the escape hatch). See Config.SessionCap.
 	MaxSessions *int `json:"max_sessions,omitempty"`

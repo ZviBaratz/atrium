@@ -233,7 +233,7 @@ func TestPendingPromptSurvivesRoundTrip(t *testing.T) {
 	a.promptQueue = []queuedPrompt{{text: "finish the migration", queuedAt: time.Unix(1000, 0)}}
 
 	require.NoError(t, store.SaveInstances([]*Instance{a}))
-	got, err := store.LoadInstances(context.Background())
+	got, _, err := store.LoadInstances(context.Background())
 	require.NoError(t, err)
 	require.Len(t, got, 1)
 

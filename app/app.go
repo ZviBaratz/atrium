@@ -581,6 +581,11 @@ type home struct {
 	// above until the screen is free, in the shape pendingLaunchCrash uses. Nil once
 	// it has been shown, so the 100ms preview tick cannot reopen it forever.
 	pendingCustomCommandProblems []customcmd.Problem
+	// pendingDeferredRecovery buffers the startup report for sessions whose agent the
+	// host session budget would not let the load relaunch (#474), until there is a
+	// frame to toast on. Zeroed once it has been shown, in the shape
+	// pendingCustomCommandProblems uses, so the preview tick cannot re-toast it forever.
+	pendingDeferredRecovery session.DeferredRecovery
 	// runningCustomCommand is the key of the custom command currently running in the
 	// background, or "". It serializes them: ui.BusyBackground is a single shared
 	// slot, so a second concurrent run would make the progress row name one command
@@ -765,13 +770,20 @@ func newHome(ctx context.Context, program string, autoYes bool, version, binName
 		return nil, fmt.Errorf("failed to initialize storage: %w", err)
 	}
 
-	// Load saved instances
-	instances, err := storage.LoadInstances(ctx)
+	// Load saved instances. A session whose tmux session is gone is *relaunched* by
+	// this call, so it is rationed by the host session budget; deferred names the
+	// sessions it left parked rather than oversubscribing the host at launch (#474).
+	instances, deferred, err := storage.LoadInstances(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load instances: %w", err)
 	}
 
 	h := assembleHome(ctx, program, autoYes, version, binName, appConfig, appState, storage, instances)
+	// Buffered rather than surfaced here: newHome runs before the program starts, so
+	// there is no frame to toast on yet. The preview tick flushes it, in the shape
+	// every other startup notice uses. Set after assembleHome so that constructor
+	// keeps its IO-free, fixed-argument shape.
+	h.pendingDeferredRecovery = deferred
 	// Write back any account identities assembleHome healed (#470). Doing it here
 	// keeps that constructor IO-free, and persisting eagerly is what lets `atrium ls`
 	// and the daemon — separate processes that read the stored rows raw — agree with
