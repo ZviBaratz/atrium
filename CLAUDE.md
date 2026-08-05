@@ -193,8 +193,19 @@ missing directory, so `tmux -L atrium kill-server` in a teardown whose root had 
 destroys every running agent. `internal/testutil` reaps by absolute socket path
 (`tmux -S`), which cannot resolve anywhere but the path given;
 `config_parse_test.go` keeps `-L` because its socket name is a per-run
-`cfgparse-<rand>` that no live server ever binds. Address it by path unless the name
-is unmistakably yours.
+`<brand>-cfgparse-<rand>` that no live server ever binds. Address it by path unless
+the name is unmistakably yours.
+
+Note which half of that name does which job. The brand prefix is there so
+`ownsSocketName` claims the socket and a *live* server left on it shows up in
+`atrium doctor` and `atrium reap` (#602) — it buys visibility, not safety, and only
+via `ScanServers`, which finds a server through `/proc` wherever its socket sits.
+The leftover socket *file* is out of reach of the stale-socket list whatever it is
+called, because `ScanStaleSockets` reads only `SocketDir`. What keeps `-L` safe is
+the **random suffix**, and only that: with the brand prefix in place the name now
+looks like one the live fleet could answer to, so shortening it to a fixed
+`atrium-cfgparse` would put a `kill-server` one missing `TMUX_TMPDIR` away from a
+name a real server binds.
 
 ## Facts with more than one home
 

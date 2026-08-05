@@ -50,7 +50,39 @@ func TestManagedConfigParsesUnderRealTmux(t *testing.T) {
 			// No '/' in the socket name: tmux reads -L as a path under
 			// $TMUX_TMPDIR/tmux-<uid>, and a slash (t.Name carries the subtest path)
 			// would point at a missing dir.
-			sock := fmt.Sprintf("cfgparse-%d", rand.Int31())
+			//
+			// Brand-prefixed so ownsSocketName claims it, which is what puts a *live*
+			// server left on this socket inside `atrium doctor` and `atrium reap` (#602):
+			// both read the /proc-based ScanServers, which finds a server by its socket
+			// path wherever that path is. The bare "cfgparse-" it used to be matched
+			// neither brand exactly nor a brand followed by "-", so such a server was
+			// invisible to the very tooling #547 built to find strays. Note the limit of
+			// what this buys: the leftover socket *file* stays out of the stale-socket
+			// list whatever it is called, since ScanStaleSockets reads only SocketDir and
+			// never this sandbox root. So the exposure closed is bounded by the server's
+			// life — `sleep 60` under tmux's default exit-empty, holding nothing. Small,
+			// but a test socket Atrium's own predicate disowns is a gap in the predicate's
+			// coverage, not a property worth keeping. The cost is the mirror image, and
+			// intended: a `reap` run concurrent with this suite can now claim this probe,
+			// which fails the test run rather than damaging anything.
+			//
+			// Derived from socketName() rather than a literal "atrium-", per CLAUDE.md's
+			// rule for anything naming the socket, and matching probeSocketName's
+			// "<brand>-precheck-<pid>-<n>" next door. Under a sandbox HOME that resolves
+			// to "atrium"; a legacy brand only lengthens it, and ownsSocketName claims
+			// both unconditionally.
+			//
+			// The per-run random suffix is what still makes `-L` safe here, and it has
+			// to stay: the prefix is now one a live server could answer to, so the
+			// randomness is the whole of the separation. See CLAUDE.md.
+			sock := fmt.Sprintf("%s-cfgparse-%d", socketName(), rand.Int31())
+			// Pins the prefix rather than trusting the comment above it. Dropping it
+			// leaves every other assertion in this file passing, which is how the socket
+			// came to be disowned in the first place.
+			if !ownsSocketName(sock) {
+				t.Fatalf("socket name %q is not one ownsSocketName claims, so a server left "+
+					"on it would be invisible to `atrium doctor` and `atrium reap` (#602)", sock)
+			}
 			ctx := context.Background()
 			// Armed before the server starts, so a new-session that half-succeeds —
 			// server up, command failed — still has something to tear it down. Nothing
