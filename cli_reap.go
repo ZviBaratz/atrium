@@ -40,6 +40,14 @@ var (
 			"prompt, for scripts). A server whose reachability could not be determined — tmux\n" +
 			"missing, a probe that could not run — is never killed, with or without --all,\n" +
 			"because nothing about it has been established.\n\n" +
+			"An unreachable server can also be a live fleet whose socket file was deleted, and\n" +
+			"the scan counts the clients connected to each one to tell those apart: once the\n" +
+			"file is gone nothing can connect, so a client still on it was there before, while\n" +
+			"an orphan's clients died with the run that made it. That count is printed with the\n" +
+			"confirmation, for you to judge. Under --yes there is nobody to judge, so such a\n" +
+			"server is left alone and the command exits non-zero; drop --yes to decide per\n" +
+			"server. A fleet with no client left on it is indistinguishable from an orphan, and\n" +
+			"the list of processes that die with it is what stands in for this.\n\n" +
 			"Two cases suspend what is said above about reachable servers, both of them the\n" +
 			"same fact: this Atrium's own tmux server was not identified, so a reachable server\n" +
 			"listed here may be that server, and --all refuses rather than target it. Either\n" +
@@ -196,8 +204,20 @@ func runReap(ctx context.Context, w io.Writer, in io.Reader, opts reapOpts) erro
 
 	reapf(w, "\n")
 	reader := bufio.NewReader(in)
-	var killed, skipped, survived int
+	var killed, skipped, survived, refused int
 	for _, s := range targets {
+		// --yes waives the confirmation, so on this path there is nobody to show a
+		// connected client to — and a client connected to an unreachable server is the
+		// one thing in the scan that says this row is a live fleet whose socket file was
+		// deleted rather than an abandoned server (#614). Refused per row rather than up
+		// front: one such row must not block the reaping of real orphans beside it.
+		if opts.yes && s.ConnectedClients > 0 {
+			reapf(w, "  left pid %d alone: %s, and --yes has no one to ask\n",
+				s.PID, connectedClientSummary(s.ConnectedClients))
+			skipped++
+			refused++
+			continue
+		}
 		// The confirmation carries the target it armed with: everything below acts on
 		// this copy — its pid, its start time, its children — not on a fresh scan
 		// (#502). What the user was shown is what gets signalled, or nothing does.
@@ -217,13 +237,34 @@ func runReap(ctx context.Context, w io.Writer, in io.Reader, opts reapOpts) erro
 	}
 
 	reapf(w, "\n%d killed, %d skipped, %d survived\n", killed, skipped, survived)
+	var errs []error
 	if survived > 0 {
 		// "left a process that" rather than "server(s) survived": reapSurvived also
 		// covers the server dying and one of its agents outliving it, which is the
 		// half-reaped state the verify step exists to surface.
-		return fmt.Errorf("%d target(s) left a process that survived SIGKILL", survived)
+		errs = append(errs, fmt.Errorf("%d target(s) left a process that survived SIGKILL", survived))
 	}
-	return nil
+	if refused > 0 {
+		// Non-zero, not a line in the output: the caller passed --yes, which means no one
+		// is reading. A script that asked for a kill and did not get one has to be able to
+		// notice, exactly as it does for a survivor.
+		errs = append(errs, fmt.Errorf("%d target(s) left alone: a client is connected, so the server may be "+
+			"a live fleet whose socket file was deleted rather than an orphan — re-run without --yes to see "+
+			"what each one holds and decide", refused))
+	}
+	// Joined rather than first-wins: a run can both leave a survivor and refuse a
+	// connected server, and each is a separate thing the caller has to act on.
+	return errors.Join(errs...)
+}
+
+// connectedClientSummary words how many clients a server is holding a connection to,
+// for the two places that have to say it: the confirmation and the --yes refusal.
+//
+// "connected", never "attached": what the scan counts is the sockets the server accepted
+// on its path (OrphanServer.ConnectedClients), and a `tmux -S <path> ls` holds one of
+// those without attaching to anything.
+func connectedClientSummary(n int) string {
+	return fmt.Sprintf("%d client%s connected to it", n, plural(n))
 }
 
 // reapTargets narrows the scan to what may be killed.
@@ -270,6 +311,12 @@ func unidentifiedLiveServerReason(g tmux.ScanGaps) string {
 
 // confirmReap names everything that dies with this server and asks. Defaults to no:
 // anything but an explicit yes leaves the server alone.
+//
+// A connected client is stated alongside the children, because the two answer different
+// questions. The child list says how much dies; the client count says what this server
+// *is* — an unreachable row nothing can connect to any more, yet with a client still on
+// it, is a live fleet whose socket file was deleted rather than an abandoned one (#614).
+// Under --yes this is a refusal instead, since there is nobody here to read it.
 func confirmReap(w io.Writer, in *bufio.Reader, s tmux.OrphanServer) bool {
 	reach := "unreachable"
 	if s.Reachable {
@@ -277,6 +324,11 @@ func confirmReap(w io.Writer, in *bufio.Reader, s tmux.OrphanServer) bool {
 	}
 	reapf(w, "pid %d  socket %s  up %s  %s\n",
 		s.PID, s.Socket, humanAgeSince(s.Started), reach)
+	if s.ConnectedClients > 0 {
+		reapf(w, "  %s, so something is using it right now — an unreachable server with a\n"+
+			"  client still on it is a live fleet whose socket file was deleted rather than\n"+
+			"  an abandoned one\n", connectedClientSummary(s.ConnectedClients))
+	}
 	if len(s.Children) == 0 {
 		reapf(w, "  holds no child processes\n")
 	} else {
@@ -434,5 +486,5 @@ func init() {
 	reapCmd.Flags().BoolVar(&reapAllFlag, "all", false,
 		"also stop servers that are still reachable, which existing tmux commands can already stop")
 	reapCmd.Flags().BoolVar(&reapYesFlag, "yes", false,
-		"skip the per-server confirmation, for scripts")
+		"skip the per-server confirmation, for scripts; a server a client is still connected to is then left alone")
 }

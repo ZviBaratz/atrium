@@ -460,6 +460,53 @@ func TestRenderOrphansMarksADeletedWorkingDirectory(t *testing.T) {
 	require.Contains(t, out, "working directory has been deleted")
 }
 
+// TestRenderOrphansSaysWhenAClientIsConnected is #614's report half.
+//
+// An UNREACHABLE row already carries the strongest sentence in this section — no tmux
+// command can name it, `reap --kill` is the only thing that can stop it — and that is
+// right for an orphan and wrong for a live fleet whose socket file was deleted, which is
+// classified identically. A connected client is the only thing in the scan that tells them
+// apart, so the row has to say so before the user acts on the remedy above it.
+//
+// The negative case is asserted alongside because a note printed on every row is not
+// evidence of anything, and would be read as boilerplate on the rows where it is the
+// point.
+func TestRenderOrphansSaysWhenAClientIsConnected(t *testing.T) {
+	row := func(clients int) tmux.OrphanServer {
+		return tmux.OrphanServer{
+			PID: 7, Socket: "atrium", SocketPath: "/tmp/gone/tmux-1000/atrium",
+			ReachableKnown: true, ConnectedClients: clients, Started: startedAgo(time.Hour),
+		}
+	}
+
+	out := RenderOrphans(OrphanResult{Supported: true, Now: now, Servers: []tmux.OrphanServer{row(4)}})
+	require.Contains(t, out, "UNREACHABLE", "the classification is unchanged; only what is said about it grows")
+	require.Contains(t, out, "4 clients are connected to it")
+	require.Contains(t, out, "live fleet whose socket was deleted")
+
+	// The plural is built at runtime, and this section's whole subject is sentences that
+	// are false in one of their forms.
+	one := RenderOrphans(OrphanResult{Supported: true, Now: now, Servers: []tmux.OrphanServer{row(1)}})
+	require.Contains(t, one, "1 client is connected to it")
+
+	none := RenderOrphans(OrphanResult{Supported: true, Now: now, Servers: []tmux.OrphanServer{row(0)}})
+	require.NotContains(t, none, "connected to it",
+		"with no client on it there is nothing to report, and a note on every row is not evidence")
+
+	// The deleted-socket clause is scoped to the row it is true of. A reachable server's
+	// socket file is answering probes, so nothing about it was deleted — and that row's
+	// remedy is a `kill-server` that works, not "reap is the only thing that can stop it".
+	// Measured on this host: a leaked server under another TMUX_TMPDIR, reachable, with two
+	// clients on it, was told its socket file had been deleted.
+	reachable := row(2)
+	reachable.Reachable = true
+	live := RenderOrphans(OrphanResult{Supported: true, Now: now, Servers: []tmux.OrphanServer{reachable}})
+	require.Contains(t, live, "2 clients are connected to it",
+		"a reachable server in use still says so — --yes leaves it alone under --all too")
+	require.NotContains(t, live, "socket was deleted",
+		"its socket answers, so this clause would be a false claim about it")
+}
+
 // TestCheckOrphansAssemblesBothHalves covers the wiring, which the render tests
 // cannot see: a check that returned an empty result would render a perfectly good
 // "none".

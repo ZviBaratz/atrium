@@ -115,8 +115,8 @@ func runReset(ctx context.Context, cmdExec cmd2.Executor) error {
 	return nil
 }
 
-// plural is the "s" suffix for a count. app has its own; reset.go is package main
-// and cannot borrow it.
+// plural is the "s" suffix for a count, shared by package main's commands (reset here,
+// reap's connected-client lines). app has its own, which this cannot borrow.
 func plural(n int) string {
 	if n == 1 {
 		return ""

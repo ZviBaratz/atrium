@@ -149,6 +149,11 @@ func renderScanGaps(b *strings.Builder, g tmux.ScanGaps) {
 // The whole gaps value rather than one "identified" bool, because the two ways it can be
 // unidentified need different sentences: one is an unrunnable probe and one is a probe that
 // answered about the wrong socket, and only the first leaves the row uninspectable (#603).
+//
+// The connected-client note goes below the switch rather than into a case of it, because it
+// is orthogonal to reachability: it says what the server *is* — something is using it — where
+// the cases say what can be aimed at it. Its subject on an unreachable row is #614, the one
+// shape this report could otherwise present as an abandoned server.
 func renderOrphanServer(b *strings.Builder, s tmux.OrphanServer, now time.Time, gaps tmux.ScanGaps) {
 	switch {
 	case !s.ReachableKnown:
@@ -195,6 +200,18 @@ func renderOrphanServer(b *strings.Builder, s tmux.OrphanServer, now time.Time, 
 			s.PID, s.Socket, HumanAge(now.Sub(s.Started)), childSummary(s.Children))
 		fmt.Fprintf(b, "      → no tmux command can name this server: %s does not answer for it.\n", s.SocketPath)
 		b.WriteString("        `atrium reap --kill` is the only thing that can stop it\n")
+	}
+	if s.ConnectedClients > 0 {
+		fmt.Fprintf(b, "        %d %s connected to it, so something is using it right now;\n",
+			s.ConnectedClients, plural(s.ConnectedClients, "client is", "clients are"))
+		b.WriteString("        `atrium reap --kill --yes` leaves it alone for that reason\n")
+		if !s.Reachable {
+			// Only on this row, because only here is the clause true and only here does the
+			// remedy above it read "reap --kill is the only thing that can stop it". A
+			// reachable server's socket file is answering, so nothing about it was deleted.
+			b.WriteString("        a client stays on a server when its socket file goes, so this may be a\n")
+			b.WriteString("        live fleet whose socket was deleted rather than an abandoned server\n")
+		}
 	}
 	if s.CWDDeleted {
 		b.WriteString("        its working directory has been deleted, so its run is long gone\n")

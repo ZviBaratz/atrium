@@ -60,6 +60,25 @@ type OrphanServer struct {
 	// pid. Meaningful only when ReachableKnown.
 	Reachable      bool
 	ReachableKnown bool
+	// ConnectedClients counts the clients holding a connection to this server right now,
+	// from the sockets it accepted on SocketPath (serverSocket). It is the one thing in
+	// this inventory that separates a live fleet whose socket file was deleted from the
+	// #547 orphan it is otherwise identical to — both are alive, both hold agents, and
+	// both answer nothing when probed by path (#614).
+	//
+	// It is positive evidence rather than absence of proof, which is what makes acting on
+	// it safe in the direction that matters: an unreachable row's socket file is gone, and
+	// connect(2) needs that path, so no connection can be *made* to one — every connection
+	// counted on an unreachable server necessarily predates the unlink, and a real orphan,
+	// whose clients died with the run that made them, counts zero. Asserted against a real
+	// tmux server in TestOrphanedServerIsFoundAndKillableAfterItsSocketRootIsDeleted.
+	//
+	// What it counts is connections, not attachments: a `tmux -S <path> ls` holds one for
+	// as long as it runs, so a reachable row can in principle be counted while nobody is
+	// attached to it. That cannot be this scan's own probe — ScanServers reads
+	// /proc/net/unix in scanCandidates, before it issues any — and it errs towards leaving
+	// a server alone, which a re-run clears.
+	ConnectedClients int
 	// Started is when the server process started, and doubles as the PID-reuse guard:
 	// the reaper re-reads it immediately before signalling and refuses on a mismatch.
 	Started time.Time
@@ -181,11 +200,12 @@ func (g ScanGaps) LiveServerUnidentified() bool {
 // this uid and plausibly a tmux server. Ownership is decided from these fields by
 // assembleServers, not by the inventory.
 type candidate struct {
-	PID        int
-	SocketPath string
-	Started    time.Time
-	CWDDeleted bool
-	Children   []ChildProc
+	PID              int
+	SocketPath       string
+	ConnectedClients int
+	Started          time.Time
+	CWDDeleted       bool
+	Children         []ChildProc
 }
 
 // Seams, mirroring internal/doctor/oom.go's, so the assembly below is testable
@@ -336,14 +356,15 @@ func assembleServers(ctx context.Context, cands []candidate, live int, liveKnown
 		}
 		owner, known := probeOwner(ctx, c.SocketPath)
 		servers = append(servers, OrphanServer{
-			PID:            c.PID,
-			Socket:         socket,
-			SocketPath:     c.SocketPath,
-			Reachable:      known && owner == c.PID,
-			ReachableKnown: known,
-			Started:        c.Started,
-			CWDDeleted:     c.CWDDeleted,
-			Children:       c.Children,
+			PID:              c.PID,
+			Socket:           socket,
+			SocketPath:       c.SocketPath,
+			Reachable:        known && owner == c.PID,
+			ReachableKnown:   known,
+			ConnectedClients: c.ConnectedClients,
+			Started:          c.Started,
+			CWDDeleted:       c.CWDDeleted,
+			Children:         c.Children,
 		})
 	}
 	sort.Slice(servers, func(i, j int) bool { return servers[i].PID < servers[j].PID })

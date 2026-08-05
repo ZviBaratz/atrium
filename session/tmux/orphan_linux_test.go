@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/ZviBaratz/atrium/internal/testutil"
+	"github.com/creack/pty"
 	"github.com/stretchr/testify/require"
 )
 
@@ -40,60 +41,209 @@ func TestSocketPathSurvivesUnlink(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = ln.Close() })
 
-	require.Equal(t, path, socketPathFor(os.Getpid(), mustListeningSockets(t)),
+	gotPath, _ := serverSocket(os.Getpid(), mustPathBoundSockets(t))
+	require.Equal(t, path, gotPath,
 		"a listening socket must be locatable by pid while its file exists")
 
 	// The incident: the socket's directory tree is removed while the server lives.
 	require.NoError(t, os.Remove(path))
 	require.NoFileExists(t, path)
 
-	require.Equal(t, path, socketPathFor(os.Getpid(), mustListeningSockets(t)),
+	gotPath, _ = serverSocket(os.Getpid(), mustPathBoundSockets(t))
+	require.Equal(t, path, gotPath,
 		"the kernel must still report the bound path after the file is unlinked — "+
 			"without this, an unreachable orphan cannot be named at all")
 }
 
-// TestListeningSocketsExcludesConnectedPeers guards the Flags filter. /proc/net/unix
-// lists every unix socket, and a *connected* endpoint of a path-bound socket can
-// carry that same path — so without the SO_ACCEPTCON (00010000) filter, a client's
-// pid would resolve to the server's socket path and be reported as owning it.
-func TestListeningSocketsExcludesConnectedPeers(t *testing.T) {
+// TestPathBoundSocketsSeparatesAListenerFromWhatItAccepted pins which side of a
+// connection carries the duplicate path, which is what both halves of serverSocket
+// stand on: the listener's row names the server's socket, and the rows that are *not*
+// listening on that same path are the connections it accepted — one per client (#614).
+//
+// The comment on listeningFlags used to say the duplicate belonged to the *client*,
+// and that a missing filter would let a client's pid be reported as owning the
+// server's socket. Measured on the development host, it is the other way round: all 13
+// rows for /tmp/tmux-1000/atrium resolved to the server pid and none of the twelve
+// `tmux: client` processes held one. A stream client's socket is never bound; the
+// socket accept() returns inherits the listener's address. The last assertion here is
+// that claim, stated so a regression cannot restore the old reading: with one dialer
+// per accepted connection in this same process, the path is carried N+1 times, not
+// 2N+1.
+func TestPathBoundSocketsSeparatesAListenerFromWhatItAccepted(t *testing.T) {
+	const conns = 3
 	path := filepath.Join(t.TempDir(), "probe.sock")
 	var lc net.ListenConfig
 	ln, err := lc.Listen(t.Context(), "unix", path)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = ln.Close() })
 
-	var d net.Dialer
-	conn, err := d.DialContext(t.Context(), "unix", path)
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = conn.Close() })
-	accepted, err := ln.Accept()
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = accepted.Close() })
-
-	// Exactly one row survives the filter: the listener. The dialer and the accepted
-	// endpoint are connected, not listening.
-	var seen int
-	for _, p := range mustListeningSockets(t) {
-		if p == path {
-			seen++
-		}
+	for range conns {
+		var d net.Dialer
+		conn, err := d.DialContext(t.Context(), "unix", path)
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = conn.Close() })
+		accepted, err := ln.Accept()
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = accepted.Close() })
 	}
-	require.Equal(t, 1, seen, "only the listening socket may be reported for %q", path)
+
+	var listening, connected int
+	for _, sock := range mustPathBoundSockets(t) {
+		if sock.Path != path {
+			continue
+		}
+		if sock.Listening {
+			listening++
+			continue
+		}
+		connected++
+	}
+	require.Equal(t, 1, listening, "exactly one socket is listening on %q", path)
+	require.Equal(t, conns, connected,
+		"the accepted sockets carry the listener's path, one per connection — and the dialers, "+
+			"which are unbound, carry none; %d rows would mean both sides do", 2*conns)
 }
 
-// mustListeningSockets reads the listening-socket table and fails the test unless the
-// read itself succeeded.
+// mustPathBoundSockets reads the socket table and fails the test unless the read itself
+// succeeded.
 //
-// The ok result is load-bearing: listeningSockets used to return a nil map on a read
+// The ok result is load-bearing: pathBoundSockets used to return a nil map on a read
 // error, which every caller then treated as "this host has no listening sockets" — so
 // an unreadable /proc/net/unix made the whole scan report a clean host. A test that
 // discarded ok would pass identically against that bug and against the fix.
-func mustListeningSockets(t *testing.T) map[uint64]string {
+func mustPathBoundSockets(t *testing.T) map[uint64]unixSocket {
 	t.Helper()
-	socks, ok := listeningSockets()
+	socks, ok := pathBoundSockets()
 	require.True(t, ok, "/proc/net/unix must be readable for this assertion to mean anything")
 	return socks
+}
+
+// TestServerSocketCountsTheClientsConnectedToIt drives the fact `reap --kill --yes`
+// now refuses on, in the state it has to be right in: a server whose socket file is
+// gone (#614).
+//
+// This is the discriminator the #614 inventory previously had nothing to offer. A live
+// fleet whose socket file was deleted and a #547 orphan are both alive, both hold
+// agents, and both answer nothing when probed by path; the difference is that the fleet
+// still has clients on it, and the orphan's died with the run that made it. The count
+// has to survive the unlink to be usable, since that is the only state either can be in
+// — hence the second half.
+//
+// A connection to a *different* path in the same process is included so the count is
+// shown to be per-socket rather than "how many connections does this pid hold".
+func TestServerSocketCountsTheClientsConnectedToIt(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "probe.sock")
+	var lc net.ListenConfig
+	ln, err := lc.Listen(t.Context(), "unix", path)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = ln.Close() })
+
+	other := filepath.Join(dir, "other.sock")
+	otherLn, err := lc.Listen(t.Context(), "unix", other)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = otherLn.Close() })
+
+	gotPath, clients := serverSocket(os.Getpid(), mustPathBoundSockets(t))
+	require.Contains(t, []string{path, other}, gotPath, "one of this process's listeners must be found")
+	require.Zero(t, clients, "a listener nothing has connected to holds no clients")
+
+	dial := func(to string) {
+		t.Helper()
+		var d net.Dialer
+		conn, err := d.DialContext(t.Context(), "unix", to)
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = conn.Close() })
+	}
+	dial(other)
+	accepted, err := otherLn.Accept()
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = accepted.Close() })
+
+	const want = 2
+	for range want {
+		dial(path)
+		accepted, err := ln.Accept()
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = accepted.Close() })
+	}
+
+	// Asked about this listener by path, so the assertion is not at the mercy of which
+	// of the two fds the walk reaches first.
+	require.Equal(t, want, clientsOn(t, path),
+		"every client connected to %q must be counted, and the one on the other socket must not", path)
+
+	// ---- the #614 state: the socket file goes, the server and its clients do not ----
+	require.NoError(t, os.Remove(path))
+	require.NoFileExists(t, path)
+	require.Equal(t, want, clientsOn(t, path),
+		"the clients already on a server survive the unlink of its socket file — that is what "+
+			"tells a live fleet from an orphan, and it is the only state either can be found in")
+}
+
+// tableFor reads the socket table and keeps only the rows naming path.
+//
+// serverSocket answers about the first listener it happens to reach in the fd walk, and
+// the test binary holds listeners this test did not create. Narrowing the table is what
+// makes the answer be about the socket the caller means. Only this process can appear in
+// the result: path is under the test's own t.TempDir(), so no other process is bound to it.
+func tableFor(t *testing.T, path string) map[uint64]unixSocket {
+	t.Helper()
+	only := map[uint64]unixSocket{}
+	for inode, sock := range mustPathBoundSockets(t) {
+		if sock.Path == path {
+			only[inode] = sock
+		}
+	}
+	return only
+}
+
+// clientsOn reports how many clients this process holds on the listener bound to path,
+// checking the path serverSocket answered with so a miscount cannot pass as a count.
+func clientsOn(t *testing.T, path string) int {
+	t.Helper()
+	got, clients := serverSocket(os.Getpid(), tableFor(t, path))
+	require.Equal(t, path, got)
+	return clients
+}
+
+// TestCandidatesInCarriesTheClientCount is the wiring assertion: the count reaches a
+// candidate from the code that builds one, not only from serverSocket in isolation.
+//
+// It is the same shape as TestCandidatesInReportsAnUnreadableSocketTable and exists for
+// the same reason — an assignment inside candidatesIn that no test drives is one a
+// deletion leaves green (#593). The process it describes is this test binary, with a comm
+// that passes the tmux prefilter, so the fd walk reads a real /proc entry.
+func TestCandidatesInCarriesTheClientCount(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "probe.sock")
+	var lc net.ListenConfig
+	ln, err := lc.Listen(t.Context(), "unix", path)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = ln.Close() })
+
+	const want = 2
+	for range want {
+		var d net.Dialer
+		conn, err := d.DialContext(t.Context(), "unix", path)
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = conn.Close() })
+		accepted, err := ln.Accept()
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = accepted.Close() })
+	}
+
+	uid := uint32(os.Getuid())
+	self := os.Getpid()
+	procs := map[int]procEntry{
+		self: {stat: procStat{Comm: "tmux: server", State: "S", PPid: 1, StartTicks: 100}, uid: uid},
+	}
+	narrowed := tableFor(t, path)
+	cands, gaps := candidatesIn(procs, uid, func() (map[uint64]unixSocket, bool) { return narrowed, true })
+	require.False(t, gaps.Any(), "nothing about this fixture is unseen: %+v", gaps)
+	require.Len(t, cands, 1)
+	require.Equal(t, path, cands[0].SocketPath)
+	require.Equal(t, want, cands[0].ConnectedClients,
+		"candidatesIn must carry the client count, not just the path")
 }
 
 // TestCandidatesInReportsAnUnreadableSocketTable is the other half of what
@@ -110,7 +260,7 @@ func mustListeningSockets(t *testing.T) map[uint64]string {
 // no candidate, the table was never needed, and "no tmux process here" is a complete
 // answer rather than a blind one.
 func TestCandidatesInReportsAnUnreadableSocketTable(t *testing.T) {
-	unreadable := func() (map[uint64]string, bool) { return nil, false }
+	unreadable := func() (map[uint64]unixSocket, bool) { return nil, false }
 	// One own-uid process whose comm passes the tmux prefilter — the minimum that makes
 	// the socket table matter at all.
 	uid := uint32(os.Getuid())
@@ -405,6 +555,13 @@ func TestOrphanedServerIsFoundAndKillableAfterItsSocketRootIsDeleted(t *testing.
 	require.WithinRange(t, found.Started, startedBefore, startedAfter)
 	requireMatchesPS(t, serverPID, found.Started)
 	require.NotEmpty(t, found.Children, "the server holds the process it was started with")
+	// The other side of #614's discriminator, against the real thing: a genuine class-(c)
+	// orphan has no client on it — `new-session -d` left none, and once the socket file is
+	// gone nothing can connect. That is why counting clients can protect a live fleet
+	// without refusing this, the case the whole command exists for: `reap --kill --yes`
+	// still takes this server.
+	require.Zero(t, found.ConnectedClients,
+		"a real orphan holds no client, so the --yes refusal must not reach it")
 
 	// ---- reap it, and verify rather than trust ----
 	for _, kid := range found.Children {
@@ -430,6 +587,111 @@ func TestOrphanedServerIsFoundAndKillableAfterItsSocketRootIsDeleted(t *testing.
 	after, _, _ := ScanServers(t.Context())
 	_, stillThere := findServer(after, serverPID)
 	require.False(t, stillThere, "a killed orphan must stop being reported")
+}
+
+// TestAServerWhoseSocketFileIsGoneStillReportsItsAttachedClient reproduces #614 against
+// a real tmux server, which is the only place the whole chain can be checked at once:
+// tmux's own accept()ed sockets, the /proc/net/unix rows they produce, and the count
+// ScanServers puts on the row.
+//
+// The shape is the sibling test's, with one thing added and it is the thing that matters:
+// a client is attached before the socket file goes. Everything the inventory can see is
+// then identical to that test's orphan — alive, holding a child, answering nothing when
+// probed by path, so ReachableKnown && !Reachable and a default `reap --kill` target — and
+// the only difference between "an abandoned server" and "somebody's live session" is the
+// client. The sibling asserts the count is 0 there; this asserts it is not 0 here, and
+// between them the discriminator is shown to discriminate rather than merely to exist.
+//
+// The client is a genuine `tmux attach` in a pty, not a `tmux ls`: the fixture has to
+// produce the connection tmux itself holds open for a session someone is looking at.
+func TestAServerWhoseSocketFileIsGoneStillReportsItsAttachedClient(t *testing.T) {
+	testutil.RequireTmux(t)
+
+	// Short root under /tmp for sun_path's budget, and a per-run random socket *name* so
+	// that no `-L` anywhere — here or in a later edit of this file — can resolve to a
+	// socket the live fleet binds. Same reasoning as the sibling test and
+	// config_parse_test.go.
+	tmuxTmp, err := os.MkdirTemp("/tmp", "atr")
+	require.NoError(t, err)
+	sock := fmt.Sprintf("atrium-clienttest-%d", rand.Int31())
+	sockPath := filepath.Join(tmuxTmp, fmt.Sprintf("tmux-%d", os.Getuid()), sock)
+
+	// Teardown armed before anything starts, and by absolute path: `-L` resolves against
+	// TMUX_TMPDIR, which tmux reads as /tmp when that root has gone — which by this test's
+	// end it has.
+	var serverPID int
+	t.Cleanup(func() {
+		_ = exec.CommandContext(context.Background(), "tmux", "-S", sockPath, "kill-server").Run()
+		if serverPID > 0 {
+			_ = syscall.Kill(serverPID, syscall.SIGKILL)
+		}
+		_ = os.RemoveAll(tmuxTmp)
+	})
+
+	env := append(os.Environ(), "TMUX_TMPDIR="+tmuxTmp)
+	start := exec.CommandContext(t.Context(), "tmux", "-L", sock, "new-session", "-d", "sleep 600")
+	start.Env = env
+	out, err := start.CombinedOutput()
+	require.NoError(t, err, "start the server: %s", out)
+
+	pidOut, err := runWithEnv(t, env, "tmux", "-L", sock, "display-message", "-p", "#{pid}")
+	require.NoError(t, err)
+	serverPID, err = strconv.Atoi(strings.TrimSpace(pidOut))
+	require.NoError(t, err)
+
+	// ---- a real client, attached ----
+	//
+	// TMUX is dropped from the environment because the test binary may itself be running
+	// inside tmux — this repo is developed in Atrium — and `attach` refuses to nest.
+	attach := exec.CommandContext(t.Context(), "tmux", "-S", sockPath, "attach", "-t", "0")
+	attach.Env = append(withoutTmuxVar(os.Environ()), "TMUX_TMPDIR="+tmuxTmp, "TERM=xterm")
+	ptmx, err := pty.Start(attach)
+	require.NoError(t, err, "attach a client in a pty")
+	t.Cleanup(func() {
+		_ = ptmx.Close()
+		if attach.Process != nil {
+			_ = attach.Process.Kill()
+			_, _ = attach.Process.Wait()
+		}
+	})
+
+	// tmux's own account of the client, so the premise is established before the socket
+	// file goes: after that nothing can ask tmux anything about this server.
+	require.Eventually(t, func() bool {
+		out, err := runWithEnv(t, env, "tmux", "-L", sock, "list-clients")
+		return err == nil && strings.Contains(out, "attached")
+	}, 10*time.Second, 100*time.Millisecond, "no client attached, so this fixture is not #614's")
+
+	// ---- the incident ----
+	require.NoError(t, os.RemoveAll(tmuxTmp))
+	require.NoFileExists(t, sockPath)
+	require.True(t, processAliveForTest(serverPID), "the server outlives its socket file")
+
+	servers, supported, gaps := ScanServers(t.Context())
+	require.True(t, supported)
+	require.False(t, gaps.Any(), "a gap would make the assertions below unprovable: %+v", gaps)
+
+	found, ok := findServer(servers, serverPID)
+	require.True(t, ok, "ScanServers did not find pid %d; it found %v", serverPID, pidsOf(servers))
+	require.True(t, found.ReachableKnown)
+	require.False(t, found.Reachable,
+		"nothing answers the deleted socket — which is what makes this a default kill target and #614 a hazard")
+	require.GreaterOrEqual(t, found.ConnectedClients, 1,
+		"the client attached before the unlink is still connected, and counting it is the only thing "+
+			"separating this row from the orphan the sibling test builds")
+}
+
+// withoutTmuxVar returns env with TMUX removed, so a `tmux attach` started from inside
+// tmux is not refused as a nested session.
+func withoutTmuxVar(env []string) []string {
+	kept := make([]string, 0, len(env))
+	for _, kv := range env {
+		if strings.HasPrefix(kv, "TMUX=") {
+			continue
+		}
+		kept = append(kept, kv)
+	}
+	return kept
 }
 
 // terminateLikeProduction mirrors cli_reap.go's signal ladder: SIGTERM, a bounded

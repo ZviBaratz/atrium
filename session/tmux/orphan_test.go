@@ -238,17 +238,21 @@ func TestAssembleServersCarriesTheFieldsTheReaperArmsWith(t *testing.T) {
 	started := time.Date(2026, 8, 4, 9, 0, 0, 0, time.UTC)
 	kidStarted := started.Add(time.Second)
 	got := assembleServers(context.Background(), []candidate{{
-		PID:        10,
-		SocketPath: "/tmp/gone/tmux-1000/atrium",
-		Started:    started,
-		CWDDeleted: true,
-		Children:   []ChildProc{{PID: 11, Comm: "claude", Started: kidStarted}},
+		PID:              10,
+		SocketPath:       "/tmp/gone/tmux-1000/atrium",
+		ConnectedClients: 3,
+		Started:          started,
+		CWDDeleted:       true,
+		Children:         []ChildProc{{PID: 11, Comm: "claude", Started: kidStarted}},
 	}}, 0, false)
 
 	require.Len(t, got, 1)
 	require.Equal(t, started, got[0].Started)
 	require.True(t, got[0].CWDDeleted)
 	require.Equal(t, []ChildProc{{PID: 11, Comm: "claude", Started: kidStarted}}, got[0].Children)
+	// The count the --yes refusal keys on has to survive classification, or the guard
+	// reads 0 on every row and the fixture that proves it never runs (#614).
+	require.Equal(t, 3, got[0].ConnectedClients)
 }
 
 // TestScanGapsIncompleteInventory pins the predicate the report and the reaper both

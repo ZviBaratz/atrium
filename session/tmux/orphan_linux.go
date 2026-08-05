@@ -38,10 +38,19 @@ const (
 	deletedSuffix = " (deleted)"
 
 	// listeningFlags is the /proc/net/unix Flags column of a socket that has been
-	// listen()ed on — SO_ACCEPTCON. It is the filter that separates a server's bound
-	// socket from a client endpoint connected to it: both rows can carry the same
-	// path, so without it a client's pid resolves to the server's socket and is
-	// reported as owning it.
+	// listen()ed on — SO_ACCEPTCON. It separates a server's *bound* socket from the
+	// per-client sockets it accepted on that same path, which is what makes both
+	// SocketPath and ConnectedClients readable from one table.
+	//
+	// Which side carries the duplicate path was measured on the development host, and
+	// it is not the side an earlier comment here named: `/tmp/tmux-1000/atrium` had 13
+	// rows, one listening and twelve not, and every one of the 13 inodes resolved
+	// through /proc/<pid>/fd to the *server* pid — none of the twelve `tmux: client`
+	// processes held a path-carrying row at all. A stream client's socket stays unbound
+	// (`connect(2)` names the peer, it does not bind), while the socket the kernel hands
+	// back from accept() inherits the listener's address. So the rows this filter holds
+	// back belong to the server itself, and each one is a client currently connected to
+	// it — twelve, against the twelve clients `tmux list-clients` reported.
 	listeningFlags = "00010000"
 
 	// userHZ is the tick rate /proc/<pid>/stat's starttime is expressed in. The
@@ -192,8 +201,18 @@ func parseStat(raw string) (procStat, bool) {
 	}, true
 }
 
-// listeningSockets maps inode to filesystem path for every listening unix socket on
-// the host, from a single read of /proc/net/unix.
+// unixSocket is one path-carrying row of /proc/net/unix: the filesystem path the
+// socket's address names, and whether the row is a listener rather than one of the
+// connections accepted on it. Both kinds carry the same path — see listeningFlags for
+// which side of a connection that is — so the flag is the only thing telling them
+// apart once they are in the map.
+type unixSocket struct {
+	Path      string
+	Listening bool
+}
+
+// pathBoundSockets maps inode to address for every unix socket on the host whose
+// address names a file, from a single read of /proc/net/unix.
 //
 // The kernel keeps the path it was bound to even after that file is unlinked, which
 // is the entire reason an orphaned tmux server whose TMUX_TMPDIR root was deleted
@@ -201,22 +220,28 @@ func parseStat(raw string) (procStat, bool) {
 // they have no file, so nothing downstream — the socket-name predicate, `tmux -S` —
 // can use one.
 //
+// It keeps the non-listening rows rather than filtering them out here, because a
+// server's accepted sockets are the only evidence in /proc that a client is connected
+// to it (#614). Which row is which is recorded rather than decided: serverSocket is
+// where a pid's own listener and its own accepted connections are told apart, and it
+// has to see both.
+//
 // ok is false when the table could not be read at all, and the caller must propagate
 // that rather than treat it as an empty host. This is the one source every candidate's
-// identity depends on: with it missing, socketPathFor returns "" for every pid,
+// identity depends on: with it missing, serverSocket returns "" for every pid,
 // assembleServers drops all of them, and the report would otherwise print a confident
 // "none" built on having seen nothing.
-func listeningSockets() (map[uint64]string, bool) {
+func pathBoundSockets() (map[uint64]unixSocket, bool) {
 	raw, err := os.ReadFile(filepath.Join(procRoot, "net", "unix"))
 	if err != nil {
 		return nil, false
 	}
-	socks := map[uint64]string{}
+	socks := map[uint64]unixSocket{}
 	for _, line := range strings.Split(string(raw), "\n") {
 		// Columns: Num RefCount Protocol Flags Type St Inode Path. The header line
 		// and any path-less row fall out of the field count or the parses below.
 		fields := strings.Fields(line)
-		if len(fields) < 8 || fields[3] != listeningFlags {
+		if len(fields) < 8 {
 			continue
 		}
 		inode, err := strconv.ParseUint(fields[6], 10, 64)
@@ -229,7 +254,7 @@ func listeningSockets() (map[uint64]string, bool) {
 		if path == "" || strings.HasPrefix(path, "@") {
 			continue
 		}
-		socks[inode] = path
+		socks[inode] = unixSocket{Path: path, Listening: fields[3] == listeningFlags}
 	}
 	return socks, true
 }
@@ -249,18 +274,32 @@ func fieldsTail(line string, n int) string {
 	return strings.TrimSpace(s)
 }
 
-// socketPathFor returns the path of the listening unix socket pid has bound, or ""
-// when it has none. listening is the map from listeningSockets, read once by the
-// caller so a scan over many pids does not re-read /proc/net/unix per candidate.
-func socketPathFor(pid int, listening map[uint64]string) string {
-	if len(listening) == 0 {
-		return ""
+// serverSocket returns the path of the listening unix socket pid has bound — "" when
+// it has none — and how many connections it currently holds on that path, which is how
+// many clients are connected to it. table is the map from pathBoundSockets, read once
+// by the caller so a scan over many pids does not re-read /proc/net/unix per candidate.
+//
+// Both answers come out of one walk of /proc/<pid>/fd, so counting the clients costs
+// nothing the path lookup was not already paying.
+//
+// Attribution is by fd ownership and never by path alone, and that is the load-bearing
+// part: a #547 orphan can be bound to the exact path this run's own tmux would bind,
+// since the file it was unlinked from is the file a restarted Atrium re-creates. Two
+// servers can therefore hold rows carrying one path, and counting rows by path would
+// credit each with the other's clients.
+func serverSocket(pid int, table map[uint64]unixSocket) (path string, clients int) {
+	if len(table) == 0 {
+		return "", 0
 	}
 	entries, err := os.ReadDir(filepath.Join(procRoot, strconv.Itoa(pid), "fd"))
 	if err != nil {
 		// Not our uid, or the process exited between listing and reading.
-		return ""
+		return "", 0
 	}
+	// Two passes over the fds this pid holds, because the listener can appear after
+	// some of the connections it accepted: the path is not known until it is found, and
+	// a connection only counts once it can be compared against that path.
+	var connected []string
 	for _, e := range entries {
 		target, err := os.Readlink(filepath.Join(procRoot, strconv.Itoa(pid), "fd", e.Name()))
 		if err != nil {
@@ -270,11 +309,27 @@ func socketPathFor(pid int, listening map[uint64]string) string {
 		if !ok {
 			continue
 		}
-		if path, ok := listening[inode]; ok {
-			return path
+		sock, ok := table[inode]
+		if !ok {
+			continue
+		}
+		if sock.Listening {
+			if path == "" {
+				path = sock.Path
+			}
+			continue
+		}
+		connected = append(connected, sock.Path)
+	}
+	if path == "" {
+		return "", 0
+	}
+	for _, p := range connected {
+		if p == path {
+			clients++
 		}
 	}
-	return ""
+	return path, clients
 }
 
 // procEntry is one live process as the single /proc pass recorded it.
@@ -294,7 +349,7 @@ type procEntry struct {
 func inventoryCandidates(ctx context.Context) ([]candidate, ScanGaps) {
 	procs, whole := readProcTable(ctx)
 	uid := uint32(os.Getuid()) //nolint:gosec // a uid is never negative and always fits.
-	cands, gaps := candidatesIn(procs, uid, listeningSockets)
+	cands, gaps := candidatesIn(procs, uid, pathBoundSockets)
 	gaps.ProcTableTruncated = !whole
 	return cands, gaps
 }
@@ -308,7 +363,7 @@ func inventoryCandidates(ctx context.Context) ([]candidate, ScanGaps) {
 // exercised — it needs a candidate process to exist *and* the table read to fail —
 // so the seam is the only way to prove the flag is set by the code that decides it
 // rather than by a test's own struct literal.
-func candidatesIn(procs map[int]procEntry, uid uint32, sockets func() (map[uint64]string, bool)) ([]candidate, ScanGaps) {
+func candidatesIn(procs map[int]procEntry, uid uint32, sockets func() (map[uint64]unixSocket, bool)) ([]candidate, ScanGaps) {
 	var gaps ScanGaps
 	if len(procs) == 0 {
 		return nil, gaps
@@ -345,7 +400,7 @@ func candidatesIn(procs map[int]procEntry, uid uint32, sockets func() (map[uint6
 	// here rather than at the top because with no candidate there is nothing to
 	// identify, and a table that was never needed is not a gap: "no tmux process on
 	// this host" is a complete answer whatever /proc/net/unix says.
-	listening, ok := sockets()
+	table, ok := sockets()
 	gaps.SocketTableUnread = !ok
 
 	cands := make([]candidate, 0, len(isCandidate))
@@ -354,12 +409,14 @@ func candidatesIn(procs map[int]procEntry, uid uint32, sockets func() (map[uint6
 		if !ok {
 			continue
 		}
+		path, clients := serverSocket(pid, table)
 		cands = append(cands, candidate{
-			PID:        pid,
-			SocketPath: socketPathFor(pid, listening),
-			Started:    started,
-			CWDDeleted: cwdDeleted(pid),
-			Children:   kids[pid],
+			PID:              pid,
+			SocketPath:       path,
+			ConnectedClients: clients,
+			Started:          started,
+			CWDDeleted:       cwdDeleted(pid),
+			Children:         kids[pid],
 		})
 	}
 	sort.Slice(cands, func(i, j int) bool { return cands[i].PID < cands[j].PID })
