@@ -238,3 +238,23 @@ func TestSuppressedSessionLosesItsStoredReading(t *testing.T) {
 	assert.Zero(t, pair[0].UsageInfo().ContextTokens,
 		"a suppressed session must hold no reading, or killing the neighbour resurrects it")
 }
+
+// TestUsagePolicyCountsPausedNeighbours pins that a paused session still
+// participates in the collision. Its worktree is gone, but WorkingDir() keeps
+// returning that path across a pause, and — more to the point — the transcripts
+// it wrote are still on disk and still as likely as not to be the newest-mtime
+// file in the directory. Excluding it would restore the exact wrong reading the
+// guard exists to prevent.
+func TestUsagePolicyCountsPausedNeighbours(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	dir := t.TempDir()
+	pair := startedFixture(t,
+		fixtureSpec{title: "running", path: dir},
+		fixtureSpec{title: "paused", path: dir})
+	require.True(t, pair[1].Paused(), "the fixture must be paused for this test to mean anything")
+	require.NotEmpty(t, pair[1].ContextSourceKey(),
+		"a paused session still names a transcript directory")
+
+	assert.False(t, newUsagePolicy(true, pair).allows(pair[0]),
+		"a paused neighbour still spoils the shared project dir")
+}

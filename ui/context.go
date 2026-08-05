@@ -131,12 +131,13 @@ func contextColor(th *theme.Theme, u transcript.Usage) theme.Color {
 // millions ("1.0M").
 //
 // Width: four cells for every reading this chip can actually carry, and five is
-// the budget the layout is sized against. Four holds up to 9.9M; "10.0M" is the
-// first five-cell value, and it is unreachable in practice because the widest
-// window in the table (agent.ClaudeContextWindow) is 1M — a reading ten times
-// that would mean the transcript, not the formatter, had gone wrong. The chip
-// tests assert the five-cell ceiling rather than four so the bound holds for
-// any input, not just the plausible ones.
+// the budget the layout is sized against. Four holds through 9,950,000 ("9.9M");
+// one token past that is "10.0M", five cells — unreachable in practice, since
+// the widest window in the table (agent.ClaudeContextWindow) is 1M and a reading
+// ten times that would mean the transcript, not the formatter, had gone wrong.
+// Both sides of that boundary are pinned in TestHumanizeTokens; the chip tests
+// assert the five-cell ceiling rather than four so the bound holds for any
+// input, not just the plausible ones.
 //
 // Deliberately not humanizeCount (row.go), which shares the "k" idea but keeps
 // a decimal place throughout: it renders 999,323 as "999.3k", six cells. Six is

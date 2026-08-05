@@ -64,12 +64,12 @@ func (i *Instance) ClearUsage() {
 // non-claude program, or no resolvable working directory — so it can neither
 // hold a reading nor spoil anyone else's.
 //
-// Paused sessions deliberately still report a key when they have one: a paused
-// session's transcript stays on disk in the shared directory and is as likely
-// as not to be the newest-mtime file there, so it spoils a running neighbour's
-// reading exactly as a running one would. (A worktree-backed paused session has
-// no working directory to resolve — its worktree is gone — and so reports "",
-// which is the one collision this cannot see.)
+// Paused sessions deliberately still report a key: a paused session's
+// transcript stays on disk and is as likely as not to be the newest-mtime file
+// in its directory, so it spoils a running neighbour's reading exactly as a
+// running one would. WorkingDir() keeps returning the worktree path across a
+// pause even though pause removes the tree, which is what makes that possible —
+// the directory is gone, the transcripts it produced are not.
 func (i *Instance) ContextSourceKey() string {
 	if !i.Started() {
 		return ""

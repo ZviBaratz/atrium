@@ -163,8 +163,19 @@ func TestHumanizeTokens(t *testing.T) {
 		{999_500, "1.0M"},
 		{1_048_576, "1.0M"},
 		{1_500_000, "1.5M"},
+		// The four-cell ceiling the doc comment claims, and the first value past
+		// it. Pinned because the placement arithmetic is stated in cells: the
+		// budget asserted below is five, and this is where the fifth is spent.
+		{9_950_000, "9.9M"},
+		{9_950_001, "10.0M"},
 	} {
 		assert.Equalf(t, tc.want, humanizeTokens(tc.in), "humanizeTokens(%d)", tc.in)
+	}
+
+	for _, n := range []int{1, 999, 1_000, 283_000, 999_499, 999_500, 9_950_000} {
+		assert.LessOrEqualf(t, runewidth.StringWidth(humanizeTokens(n)), 4,
+			"humanizeTokens(%d) = %q must fit four cells — every reading a 1M window can produce does",
+			n, humanizeTokens(n))
 	}
 }
 
