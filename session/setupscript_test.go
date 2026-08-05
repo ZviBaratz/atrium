@@ -24,6 +24,16 @@ func stubSetupExec(fn func(context.Context, setupRun) (string, error)) func() {
 	return func() { execSetup = prev }
 }
 
+// realPath resolves every symlink in p, so a path Go reported and a path a shell
+// reported can be compared on a platform where the two spell the same directory
+// differently.
+func realPath(t *testing.T, p string) string {
+	t.Helper()
+	resolved, err := filepath.EvalSymlinks(p)
+	require.NoError(t, err)
+	return resolved
+}
+
 // writeRepoScriptConfig installs a config.json holding one catch-all repo_scripts
 // entry and returns the worktree directory the script should run in.
 func writeRepoScriptConfig(t *testing.T, entry config.RepoScript) string {
@@ -45,7 +55,11 @@ func TestRunSetupScript_RunsTheScriptInTheWorktree(t *testing.T) {
 
 	got, err := os.ReadFile(filepath.Join(dir, "ran.txt"))
 	require.NoError(t, err, "the script must run with the worktree as its working directory")
-	assert.Equal(t, dir, strings.TrimSpace(string(got)))
+	// Compared through EvalSymlinks on both sides. On macOS t.TempDir() hands back a
+	// path under /var, which is a symlink to /private/var, and `pwd` reports the
+	// resolved one — so a literal comparison fails there and only there, for a reason
+	// that has nothing to do with which directory the script ran in.
+	assert.Equal(t, realPath(t, dir), realPath(t, strings.TrimSpace(string(got))))
 	assert.NoError(t, inst.SetupError())
 }
 
