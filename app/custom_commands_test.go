@@ -585,6 +585,44 @@ func TestCustomCommandConfirmAsksFirstAndStartsFromUpdate(t *testing.T) {
 	assert.Equal(t, "d", (*calls)[0].spec.key)
 }
 
+// TestCustomCommandConfirmDialogFitsTheFrame is the dialog's half of the bounding rule.
+//
+// It is the one surface deliberately given more than the one-row bound, on the grounds
+// that it wraps — and "it wraps" turned out to be true only up to a point. The dialog
+// grows a row per wrapped line, PlaceOverlay clips what does not fit, and past roughly
+// 900 characters the composed frame loses the "Press y to run" line: a modal the user
+// can see and cannot answer. Nothing caps a description in config, so this asserts the
+// outcome at the 80-column floor rather than trusting the chosen width.
+func TestCustomCommandConfirmDialogFitsTheFrame(t *testing.T) {
+	for _, desc := range []string{
+		"short",
+		strings.Repeat("an unbounded user-authored description ", 60), // ~2300 cells
+		strings.Repeat("日本語", 400),                                    // wide runes, 2400 cells
+	} {
+		cmds := validCommands(t, config.CustomCommand{
+			Key: "d", Description: desc, Context: "repo",
+			Command: "true", Output: "background", Confirm: true,
+		})
+		h, _ := newCustomCommandHome(t, cmds)
+		h.updateHandleWindowSizeEvent(tea.WindowSizeMsg{Width: 80, Height: 24})
+
+		_, _ = h.handleKeyPress(runeKey("!"))
+		_, _ = h.handleKeyPress(runeKey("d"))
+		require.Equal(t, stateConfirm, h.state)
+
+		view := xansi.Strip(h.View().Content)
+		assert.Containsf(t, view, "Press y to run",
+			"a confirmation the user cannot answer is worse than none (desc %d cells)",
+			len([]rune(desc)))
+
+		lines := strings.Split(view, "\n")
+		assert.LessOrEqual(t, len(lines), 24)
+		for i, l := range lines {
+			assert.Equalf(t, 80, ansi.PrintableRuneWidth(l), "line %d is the wrong width", i)
+		}
+	}
+}
+
 func TestCustomCommandConfirmDeclinedRunsNothing(t *testing.T) {
 	cmds := validCommands(t, config.CustomCommand{
 		Key: "d", Description: "dangerous", Context: "repo", Command: "true", Output: "background", Confirm: true,

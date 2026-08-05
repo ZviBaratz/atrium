@@ -18,7 +18,8 @@ them** — one `grep -c` is cheaper than a wrong claim:
 
 ```sh
 grep -cE '^\t\{Name:' keys/registry.go        # registry entries
-grep -c 'case keys.Key' app/app_update.go      # dispatch-case LINES, not names
+# dispatch-case LINES, not names — scoped to dispatchAction, see below
+awk '/^func \(m \*home\) dispatchAction/,/^}/' app/app_update.go | grep -c 'case keys.Key'
 grep -c '^func Test' app/dispatch_coverage_test.go   # the site-4 guards
 awk '/^type Config struct/,/^}/' config/types.go | grep -cE '`json:'   # Config fields
 ```
@@ -27,10 +28,17 @@ The dispatch count is *lines*, and several cases carry two or three names
 (`case keys.KeyMoveUp, keys.KeyMoveDown:`), so it is always below the number of
 actions — that is expected, not a shortfall.
 
-That last one has to be scoped to the struct. Counting json tags across the whole
-file gives 59, because `Profile`, `ClaudeAccount`, `AgyAccount` and `GHAccount` live
-there too and carry their own — and a recount recipe that answers a different
-question than the claim above it is how the wrong number got here in the first place.
+**Two of these must be scoped, and both were wrong here before they were fixed.** The
+dispatch recipe used to grep the whole of `app/app_update.go`, which returns 51 rather
+than 50 because `keyAllowedWhileBusy` — site **7** — switches over key names too; the
+number therefore summed two different switches. Counting json tags across the whole of
+`config/types.go` gives 59, because `Profile`, `ClaudeAccount`, `AgyAccount` and
+`GHAccount` live there and carry their own.
+
+A recount recipe that answers a different question than the claim above it is how the
+wrong number got here in the first place — twice — so if you change a recipe, change the
+guard (`keys/skill_counts_test.go`) with it. They are checked against each other only in
+the sense that both must equal the tree.
 
 Verification, hermeticity, and the `just lint` / `golangci-lint` traps are in
 `CLAUDE.md` — not repeated here. The gate is `just ci`.
@@ -51,7 +59,7 @@ cannot install it. Once per machine:
 
 ## Adding a keybinding — 7 sites, all guarded
 
-At last count: **61 registry entries** and **51 dispatch-case lines**, with a dozen-odd
+At last count: **61 registry entries** and **50 dispatch-case lines**, with a dozen-odd
 drift guards in `keys/*_test.go` and **4** in `app/dispatch_coverage_test.go`.
 
 Those two numbers, and the `Config` field count below, are checked against the tree by
@@ -76,7 +84,7 @@ friends) if the key should appear in the bar — guarded in the reverse directio
 only, by `ui/menu_scan_test.go`.
 
 **Site 4 was the gap until #374 closed it.** The count mismatch is why nobody had
-written the obvious assertion: 61 entries against 51 case *lines* is not 10
+written the obvious assertion: 61 entries against 50 case *lines* is not 10
 missing cases, because several cases carry two or three names at once, 3 entries
 are `DocOnly`, the screensaver is deliberately absent from the registry, and
 `space` is consumed by the multi-select handler rather than the switch — so

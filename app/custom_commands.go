@@ -163,11 +163,15 @@ func (m *home) launchCustomCommand(c customcmd.Command) (tea.Model, tea.Cmd) {
 	}
 	if c.Confirm {
 		cmd := m.confirmAction(
-			// The full description, not the bounded label: this is the one surface with
-			// room for it. A confirmation dialog wraps, and the user is being asked to
-			// approve exactly this command — where the one-row surfaces have to choose
-			// between the description and their own reason, this does not.
-			fmt.Sprintf("Run '%s' in %s?", c.Description, filepath.Base(spec.dir)),
+			// A far more generous bound than the one-row surfaces get, because this one
+			// wraps — but a bound, not the raw description. The dialog grows a row per
+			// wrapped line and PlaceOverlay clips what will not fit, so past roughly 900
+			// characters the composed frame loses the "Press y to run" line: a modal with
+			// no visible way to answer it. Measured, not assumed. Nothing caps a
+			// description in config, so the ceiling has to be here.
+			fmt.Sprintf("Run '%s' in %s?",
+				runewidth.Truncate(c.Description, customCommandDialogDescWidth, "…"),
+				filepath.Base(spec.dir)),
 			// instantAction, and it must stay one: the closure returns a message and
 			// nothing else, so the work it names starts from Update.
 			instantAction,
@@ -551,6 +555,12 @@ const (
 	// customCommandNoticeDescWidth bounds the description inside the failure toast, in
 	// display cells.
 	customCommandNoticeDescWidth = 30
+	// customCommandDialogDescWidth bounds it inside the confirmation dialog, which wraps
+	// and can afford far more. Chosen for headroom rather than measured to the edge: at
+	// the 80-column floor this renders an 11-row dialog against a 24-row terminal, where
+	// the frame starts losing the dialog's answer line somewhere past 900 characters.
+	// TestCustomCommandConfirmDialogFitsTheFrame pins the outcome, not the arithmetic.
+	customCommandDialogDescWidth = 200
 	// The tails every one-line message about a custom command ends with. Named rather
 	// than inlined so the width guard can iterate them: the rule is that the reason is
 	// last and nothing unbounded follows it, and a rule about a SET has to be asserted
