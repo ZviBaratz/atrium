@@ -571,6 +571,159 @@ func TestReapKillAllKillsAReachableServerWhenTheLiveOneIsIdentified(t *testing.T
 	require.Contains(t, out.String(), "1 killed")
 }
 
+// TestReapKillYesLeavesAServerAClientIsConnectedTo is #614.
+//
+// A live fleet whose socket file was deleted is classified exactly as a #547 orphan is —
+// alive, holding agents, answering nothing when probed by path — so it is a *default*
+// `reap --kill` target, no --all needed. Interactively that is survivable, because
+// confirmReap names every process that dies and defaults to no. --yes removes that, and
+// then nothing stood between `reap --kill --yes` and a fleet's worth of unpushed work.
+//
+// The discriminator is a connected client: once the socket file is gone nothing can
+// connect, so a client still on the server was there before the unlink, while an orphan's
+// clients died with the run that made them (asserted against a real tmux server in
+// TestOrphanedServerIsFoundAndKillableAfterItsSocketRootIsDeleted). The refusal is
+// asserted on the recorded signals first — an error printed after the fleet was signalled
+// is not a guard — and the orphan beside it must still die, since a per-row refusal that
+// aborted the run would let one attached server shield every real orphan on the host.
+func TestReapKillYesLeavesAServerAClientIsConnectedTo(t *testing.T) {
+	withClient := orphan(1952486, kid(1952487))
+	withClient.ConnectedClients = 2
+	plain := orphan(1499239, kid(1499240))
+
+	t.Run("--yes refuses it and reaps the orphan beside it", func(t *testing.T) {
+		procs := newFakeProcs().add(1952486, 1952487, 1499239, 1499240).install(t)
+		stubReapCheck(t, result(plain, withClient))
+
+		var out bytes.Buffer
+		err := runReap(t.Context(), &out, strings.NewReader(""), reapOpts{kill: true, yes: true})
+
+		require.Error(t, err, "a script must be able to notice that a target was left alone")
+		require.Contains(t, err.Error(), "a client is connected")
+		require.NotContains(t, procs.sent, "SIGTERM->1952486",
+			"--yes must not signal a server something is still connected to")
+		require.True(t, procs.alive[1952486], "the server a client is on must survive")
+		require.True(t, procs.alive[1952487], "and so must what it holds")
+		require.False(t, procs.alive[1499239],
+			"the orphan with no client on it is what --yes exists for and must still die")
+		require.Contains(t, out.String(), "left pid 1952486 alone: 2 clients connected to it")
+		// A refusal is a skip, but under --yes nobody declined anything, so a bare "2
+		// skipped" reads as two decisions someone made. The count is broken out.
+		require.Contains(t, out.String(), "of those, 1 left alone with a client connected")
+	})
+
+	// The control that keeps this guard about the absent human rather than about the
+	// server: with a human at the prompt the fact is stated and the answer is theirs. A
+	// fix that put the exclusion in reapTargets instead would pass the case above and
+	// fail this one — and it would be trap 1, excluding from the default set the very
+	// rows `reap --kill` was written for.
+	t.Run("without --yes an informed yes still kills it", func(t *testing.T) {
+		procs := newFakeProcs().add(1952486, 1952487, 1499239, 1499240).install(t)
+		stubReapCheck(t, result(plain, withClient))
+
+		var out bytes.Buffer
+		require.NoError(t, runReap(t.Context(), &out, strings.NewReader("y\ny\n"), reapOpts{kill: true}))
+
+		require.False(t, procs.alive[1952486], "a human who was told and said yes gets what they asked for")
+		require.False(t, procs.alive[1499239])
+		require.Contains(t, promptFor(t, out.String(), 1952486), "2 clients connected to it",
+			"and they were told before they were asked")
+	})
+
+	// One client, so the sentence is checked in both its forms — the plural is built at
+	// runtime and a bare "%d clients" would be wrong exactly where the report is trying
+	// to be believed.
+	t.Run("a single client reads as one", func(t *testing.T) {
+		single := orphan(10)
+		single.ConnectedClients = 1
+		procs := newFakeProcs().add(10).install(t)
+		stubReapCheck(t, result(single))
+
+		var out bytes.Buffer
+		require.Error(t, runReap(t.Context(), &out, strings.NewReader(""), reapOpts{kill: true, yes: true}))
+		require.Contains(t, out.String(), "left pid 10 alone: 1 client connected to it")
+		require.Empty(t, procs.sent)
+	})
+}
+
+// promptFor returns the part of reap's output from this server's confirmation onwards.
+//
+// It exists because `runReap` prints the doctor listing above the prompts, and that
+// listing now carries a connected-client note of its own — so a bare Contains on the whole
+// buffer is satisfied by the report even when the prompt says nothing at all. That was
+// measured: deleting confirmReap's line left the first assertion of
+// TestReapKillPromptStatesAConnectedClient passing.
+//
+// The confirmation's first line is unindented where the report's row is indented, which is
+// what makes the boundary findable.
+func promptFor(t *testing.T, out string, pid int) string {
+	t.Helper()
+	head := fmt.Sprintf("\npid %d  socket ", pid)
+	idx := strings.Index(out, head)
+	require.GreaterOrEqual(t, idx, 0, "no confirmation for pid %d in:\n%s", pid, out)
+	return out[idx:]
+}
+
+// TestReapKillPromptStatesAConnectedClient. The confirmation is the whole protection on
+// the interactive path, and it is only protection if it says the thing the user cannot
+// otherwise know: that an unreachable server with a client on it is a live fleet whose
+// socket file was deleted, not an abandoned one. The child list does not carry that — a
+// real orphan holds children too.
+func TestReapKillPromptStatesAConnectedClient(t *testing.T) {
+	withClient := orphan(10, kid(11))
+	withClient.ConnectedClients = 3
+	newFakeProcs().add(10, 11).install(t)
+	stubReapCheck(t, result(withClient))
+
+	var out bytes.Buffer
+	require.NoError(t, runReap(t.Context(), &out, strings.NewReader("n\n"), reapOpts{kill: true}))
+
+	// Scoped to the prompt: the report above it carries a note of its own, and a Contains
+	// over the whole buffer passes on that one while the prompt says nothing.
+	prompt := promptFor(t, out.String(), 10)
+	require.Contains(t, prompt, "3 clients connected to it")
+	require.Contains(t, prompt, "live fleet whose socket was deleted")
+	require.Contains(t, prompt, "kill? [y/N]", "the fact is added to the prompt, not put in place of it")
+}
+
+// TestReapKillPromptKeepsTheDeletedSocketClauseOffAReachableRow.
+//
+// `--all` is the one mode that confirms a reachable server, and a reachable server's socket
+// file is answering probes — so telling that row its socket file was deleted is a false claim
+// about it. The doctor report scopes the clause for exactly this reason; the prompt has to
+// scope it the same way, or the row the report declines to say it about is told it one screen
+// later. The count itself still prints: something is using the server whether or not its
+// socket resolves, and that is what --yes acts on.
+func TestReapKillPromptKeepsTheDeletedSocketClauseOffAReachableRow(t *testing.T) {
+	reachable := orphan(20)
+	reachable.Reachable = true
+	reachable.ConnectedClients = 2
+	newFakeProcs().add(20).install(t)
+	stubReapCheck(t, result(reachable))
+
+	var out bytes.Buffer
+	require.NoError(t, runReap(t.Context(), &out, strings.NewReader("n\n"),
+		reapOpts{kill: true, all: true}))
+
+	prompt := promptFor(t, out.String(), 20)
+	require.Contains(t, prompt, "2 clients connected to it",
+		"something is using it, which is true whether or not its socket answers")
+	require.NotContains(t, prompt, "socket was deleted",
+		"its socket answers, so this clause would be a false claim about the row being confirmed")
+}
+
+// TestReapKillPromptSaysNothingAboutClientsWhenThereAreNone: the note is evidence, so it
+// prints only when there is some. A row with no client on it is the ordinary orphan, and a
+// line hedging every one of those would train the reader to skip the line that matters.
+func TestReapKillPromptSaysNothingAboutClientsWhenThereAreNone(t *testing.T) {
+	newFakeProcs().add(10, 11).install(t)
+	stubReapCheck(t, result(orphan(10, kid(11))))
+
+	var out bytes.Buffer
+	require.NoError(t, runReap(t.Context(), &out, strings.NewReader("n\n"), reapOpts{kill: true}))
+	require.NotContains(t, promptFor(t, out.String(), 10), "connected to it")
+}
+
 // TestReapKillRefusesAnIncompleteScan applies "positive proof only" to the inventory
 // itself.
 //

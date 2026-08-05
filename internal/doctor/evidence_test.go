@@ -103,9 +103,17 @@ var evidenceOutOfScope = map[string]string{}
 // A number per type rather than a whole-struct golden: the failure message can name the
 // type that grew, and the diff when one changes is one line.
 var evidenceTypeFields = map[string]int{
-	"tmux.ScanGaps":         4,
-	"tmux.StaleGaps":        2,
-	"tmux.OrphanServer":     8,
+	"tmux.ScanGaps":  4,
+	"tmux.StaleGaps": 2,
+	// 9 since #614 added OrphanServer.ConnectedClients, which is deliberately not a
+	// completeness channel and so has no row in evidenceCases. Every flag on this list
+	// records what a source failed to establish, and this records what one established:
+	// the count of clients holding a connection to the server, read from /proc/net/unix.
+	// A failed read cannot fabricate it — an unreadable table sets ScanGaps.SocketTableUnread
+	// and the row is dropped entirely, which is the channel already covered here — and no
+	// caller reads it to decide whether the report may claim health. What it does gate is a
+	// kill: `reap --kill --yes` refuses a target holding one.
+	"tmux.OrphanServer":     9,
 	"doctor.OOMResult":      9,
 	"doctor.OOMAgent":       5,
 	"doctor.PressureResult": 12,
