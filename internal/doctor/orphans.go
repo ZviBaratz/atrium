@@ -258,18 +258,20 @@ func renderStaleGaps(b *strings.Builder, g tmux.StaleGaps, found bool) {
 		// insert wraps at an unpredictable column — which on a real host ran this line
 		// well past the width every other line here keeps to.
 		if found {
-			fmt.Fprintf(b, "      ⚠ %d further socket %s there could not be classified: tmux could\n",
+			fmt.Fprintf(b, "      ⚠ %d further socket %s there could not be classified, so the\n",
 				g.Unprobed, plural(g.Unprobed, "file", "files"))
-			fmt.Fprintf(b, "        not be run against %s, so the list above may be short\n",
-				plural(g.Unprobed, "it", "them"))
+			b.WriteString("        list above may be short\n")
 		} else {
-			fmt.Fprintf(b, "      ⚠ %d socket %s there could not be classified: tmux could not be\n",
+			fmt.Fprintf(b, "      ⚠ %d socket %s there could not be classified, so the list above\n",
 				g.Unprobed, plural(g.Unprobed, "file", "files"))
-			fmt.Fprintf(b, "        run against %s, so the list above is empty for want of an\n",
-				plural(g.Unprobed, "it", "them"))
-			b.WriteString("        answer, not for want of files\n")
+			b.WriteString("        is empty for want of an answer, not for want of files\n")
 		}
-		b.WriteString("        → check that tmux is on PATH, then re-run\n")
+		// The remedy leads with the re-run and offers PATH second, because the sentence
+		// above has more than one cause: the probe fails when tmux is off PATH *and* when
+		// the scan's budget was spent. Naming only PATH — as this did — sends a user whose
+		// PATH is fine to check it, and never names the cause that a re-run fixes.
+		b.WriteString("        → re-run to get a complete answer; if it persists, check that tmux\n")
+		b.WriteString("          is on PATH\n")
 	}
 }
 

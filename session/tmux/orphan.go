@@ -137,7 +137,7 @@ var (
 	socketOwner    = probeSocketOwner
 	// socketPathQuery is the live server's answer for where its own socket is. It is a
 	// seam for the same reason candidatesIn's injected table is one (#593): both
-	// branches of socketDir set a fact the report words itself around, and a fact no
+	// branches of SocketDir set a fact the report words itself around, and a fact no
 	// test can drive is one a deleted assignment keeps green.
 	socketPathQuery = liveSocketPath
 )
@@ -283,12 +283,20 @@ type StaleGaps struct {
 	// Unprobed counts the socket files that were listed and belong to Atrium but could
 	// not be classified: the owner probe did not run, because tmux is off PATH or the
 	// scan's budget expired. Absence of an answer is not evidence of an absent server,
-	// so those files stay off the list.
+	// so those files stay off the list. Renderers must not name one of those causes as
+	// though it were the only one — a remedy that says "check PATH" is wrong advice on a
+	// host whose PATH is fine and whose budget ran out.
 	//
 	// A count rather than a bool so a caller can tell a directory whose every file is
 	// unproven from a list that is merely one file short; a bool has to hedge both the
-	// same way. Only a file that reached a probe is counted, so a foreign socket name
-	// or a regular file cannot manufacture a gap about a directory that is in fact fine.
+	// same way.
+	//
+	// A file the pass *understood* is never counted, and the exemptions are exemptions
+	// because each is an answer rather than an open question: a foreign socket name and a
+	// regular file are both positively identified as not-ours, and an entry whose Info()
+	// fails has been removed between the listing and the stat — a socket that is gone is
+	// not a stale socket being concealed. None of the three can manufacture a gap about a
+	// directory that is in fact fully understood.
 	Unprobed int
 }
 
@@ -373,11 +381,28 @@ func staleSocketsIn(ctx context.Context, dir string) ([]StaleSocket, StaleGaps) 
 	return stale, gaps
 }
 
+// probeSocketPath asks the live server for its socket path under one probe's share of
+// the budget, exactly as probeAmbient and probeOwner do.
+//
+// The bound is not symmetry for its own sake. This probe runs before every per-file
+// owner probe of the same scan, under one shared deadline, so unbounded it can spend the
+// entire budget against a wedged server and leave every later probe to fail on an
+// expired context. The stale section would then report a directory full of files it
+// could not classify with nothing actually wrong with them — the self-inflicted gap
+// orphanProbeBudget was introduced for, reached from the stale half instead of the
+// ambient one.
+func probeSocketPath(ctx context.Context) (path string, ok bool) {
+	probeCtx, cancel := context.WithTimeout(ctx, orphanProbeBudget)
+	defer cancel()
+	return socketPathQuery(probeCtx)
+}
+
 // liveSocketPath asks the server on Atrium's socket where that socket is. ok is false
 // when there is no server to ask and when tmux could not be run at all: both mean the
 // same thing to SocketDir, which is that there is no server's answer to use. The two
 // are worth no more than this because neither says anything about the *directory* —
-// only about whether a server was there to name it.
+// only about whether a server was there to name it. What the *caller* may then claim is
+// narrower than "nothing is running", and renderStaleSockets says so.
 func liveSocketPath(ctx context.Context) (path string, ok bool) {
 	out, err := tmuxCommand(ctx, "display-message", "-p", "#{socket_path}").Output()
 	if err != nil {
@@ -399,7 +424,8 @@ func liveSocketPath(ctx context.Context) (path string, ok bool) {
 //
 // Exported because the doctor's host-pressure section needs the filesystem this
 // directory sits on (#594), and reconstructing the path a second time there is how
-// the two answers drift. It runs a tmux subprocess, so callers pass a bounded context.
+// the two answers drift. It runs a tmux subprocess, so callers pass a bounded context;
+// the probe itself then takes no more than orphanProbeBudget of whatever that allows.
 //
 // fromServer separates the two, because the fallback names where tmux *would* bind
 // rather than where a server is bound. A caller can then say so, instead of asserting
@@ -407,7 +433,7 @@ func liveSocketPath(ctx context.Context) (path string, ok bool) {
 // only needs the path — the pressure section asks which filesystem this sits on — is
 // free to discard it.
 func SocketDir(ctx context.Context) (dir string, fromServer bool) {
-	if path, ok := socketPathQuery(ctx); ok {
+	if path, ok := probeSocketPath(ctx); ok {
 		return filepath.Dir(path), true
 	}
 	root := os.Getenv("TMUX_TMPDIR")

@@ -373,8 +373,8 @@ func TestEveryTmuxProbeGetsItsOwnBudget(t *testing.T) {
 	// No deadline on the parent, which is the case that separates the two behaviours.
 	parent := context.Background()
 
-	var ownerDeadline, ambientDeadline time.Time
-	var ownerOK, ambientOK bool
+	var ownerDeadline, ambientDeadline, socketPathDeadline time.Time
+	var ownerOK, ambientOK, socketPathOK bool
 	stubSocketOwner(t, func(ctx context.Context, _ string) (int, bool) {
 		ownerDeadline, ownerOK = ctx.Deadline()
 		return 0, true
@@ -383,6 +383,21 @@ func TestEveryTmuxProbeGetsItsOwnBudget(t *testing.T) {
 		ambientDeadline, ambientOK = ctx.Deadline()
 		return 0, false
 	})
+	stubSocketPathQuery(t, func(ctx context.Context) (string, bool) {
+		socketPathDeadline, socketPathOK = ctx.Deadline()
+		return "", false
+	})
+
+	// The socket-path probe is bounded for a consequence the other two do not have: it
+	// runs before every per-file owner probe of the same scan, so unbounded it spends the
+	// whole shared budget against a wedged server and leaves each of those probes to fail
+	// on an expired context — reporting a directory of unclassifiable files that nothing
+	// was wrong with. "Every" in this test's name is the claim, and it was false for this
+	// probe when it was extracted.
+	SocketDir(parent)
+	require.True(t, socketPathOK,
+		"the socket-path probe must be bounded even when the caller's context is not")
+	require.LessOrEqual(t, time.Until(socketPathDeadline), orphanProbeBudget)
 
 	probeAmbient(parent)
 	require.True(t, ambientOK, "the ambient probe must be bounded even when the caller's context is not")
@@ -427,7 +442,7 @@ func TestSocketDirNamesWhetherAServerAnsweredIt(t *testing.T) {
 	// tmux reads a TMUX_TMPDIR naming a missing directory exactly as it reads an empty
 	// one, and hardcodes /tmp for both. os.TempDir() would honour $TMPDIR instead —
 	// which on macOS is a per-user /var/folders/… path tmux never binds in, so the whole
-	// section would report about a directory holding no sockets at all. socketDir's
+	// section would report about a directory holding no sockets at all. SocketDir's
 	// comment claims this rule and nothing asserted it.
 	for _, tc := range []struct{ name, root string }{
 		{"empty", ""},

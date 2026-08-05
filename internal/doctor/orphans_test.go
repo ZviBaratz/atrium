@@ -204,8 +204,15 @@ func TestRenderOrphansStaleGapCountsWhatCouldNotBeRead(t *testing.T) {
 	})
 	require.Contains(t, out, "1 socket file there could not be classified",
 		"one file reads as one file, not as a plural hedge")
-	require.Contains(t, out, "empty for want of an",
+	require.Contains(t, out, "empty for want of an answer",
 		"with nothing listed, the unprobed files are the whole reason the list is empty")
+
+	// The remedy must not name PATH as the only cause. A probe also fails to run when the
+	// scan's budget was spent, and "check that tmux is on PATH" is wrong advice on a host
+	// whose PATH is fine — it sends the user to inspect the one thing that is not broken
+	// and never names the cause a re-run fixes. So the re-run leads.
+	require.Regexp(t, `re-run to get a complete answer[\s\S]*is on PATH`, out,
+		"the re-run must come first: it is the remedy for the cause checking PATH cannot explain")
 }
 
 // TestRenderOrphansStaleGapPrintsBesideFilesFound: a gap note goes *in addition to* the
@@ -223,7 +230,7 @@ func TestRenderOrphansStaleGapPrintsBesideFilesFound(t *testing.T) {
 	require.Contains(t, out, "stale socket files: 1 in /tmp/tmux-1000",
 		"what was found is still stated as found")
 	require.Contains(t, out, "2 further socket files there could not be classified")
-	require.Contains(t, out, "the list above may be short")
+	require.Contains(t, out, "list above may be short")
 	require.Contains(t, out, "rm -- /tmp/tmux-1000/atrium-precheck-991-1",
 		"and the remedy for the verified files still prints")
 }
@@ -231,7 +238,7 @@ func TestRenderOrphansStaleGapPrintsBesideFilesFound(t *testing.T) {
 // TestRenderOrphansNoneNamesHowItKnowsTheDirectory covers #598's fourth flavour, which
 // is a wrong *subject* rather than an unproven claim — hence wording, not a gap flag.
 //
-// With no server to ask, socketDir reconstructs $TMUX_TMPDIR/tmux-<uid>: where tmux
+// With no server to ask, SocketDir reconstructs $TMUX_TMPDIR/tmux-<uid>: where tmux
 // *would* bind. "none in <dir>" is then perfectly true about a directory no server need
 // ever have bound in, which is not the question the user is asking.
 //
@@ -239,7 +246,7 @@ func TestRenderOrphansStaleGapPrintsBesideFilesFound(t *testing.T) {
 // all: on a wholly clean host the switch above collapses the section to a bare "none"
 // and neither wording appears. The combination is #547's own scenario rather than a
 // contrivance — an orphan found by /proc while nothing answers the ambient socket is
-// exactly when socketDir has no server to ask.
+// exactly when SocketDir has no server to ask.
 func TestRenderOrphansNoneNamesHowItKnowsTheDirectory(t *testing.T) {
 	// Scoped to the stale half: the server row above it carries a ⚠ of its own, and the
 	// assertion below is about whether *this* sentence is flagged as a gap.
@@ -269,7 +276,7 @@ func TestRenderOrphansNoneNamesHowItKnowsTheDirectory(t *testing.T) {
 	require.NotContains(t, reconstructed, "⚠",
 		"the pass over that directory was complete: this is a wrong subject, not a gap")
 
-	// The note may claim only what socketDir actually established. Its query comes back
+	// The note may claim only what SocketDir actually established. Its query comes back
 	// empty when tmux is off PATH or the probe's budget was spent exactly as it does on
 	// an empty fleet, and a server may well be running in the first two — so "no server
 	// answered" is the fact, and "no server is running" would be #599's conflation
