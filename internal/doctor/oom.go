@@ -58,11 +58,25 @@ var (
 // fails: off Linux it reports "unsupported"; with no live server it reports the
 // configured margin only. It reads config.json read-only and issues only read-only
 // tmux queries (bounded by ctx), so it is safe to run beside a live TUI.
+//
+// The platform gate lives here and every reading lives in gatherOOM, mirroring
+// CheckPressure/gatherPressure. The split is what keeps the assembly reachable off Linux:
+// this function returns before consulting a single seam, so a test driving it on an
+// unsupported platform gets the "unavailable" render however the seams are set.
 func CheckOOM(ctx context.Context) OOMResult {
-	r := OOMResult{Supported: oomScoreSupported, Margin: configuredOOMMargin()}
-	if !r.Supported {
-		return r
+	if !oomScoreSupported {
+		return OOMResult{Supported: false, Margin: configuredOOMMargin()}
 	}
+	return gatherOOM(ctx)
+}
+
+// gatherOOM takes every reading and assembles the snapshot.
+//
+// Supported is true here because it describes the readings this function took, not the
+// platform it ran on — CheckOOM owns that question. A test may therefore call it directly
+// anywhere to exercise the assembly against stubbed seams.
+func gatherOOM(ctx context.Context) OOMResult {
+	r := OOMResult{Supported: true, Margin: configuredOOMMargin()}
 	serverPID, panes, ok := oomDiscover(ctx)
 	if !ok {
 		return r
