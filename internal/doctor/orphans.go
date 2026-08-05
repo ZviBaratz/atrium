@@ -150,14 +150,21 @@ func renderScanGaps(b *strings.Builder, g tmux.ScanGaps) {
 // unidentified need different sentences: one is an unrunnable probe and one is a probe that
 // answered about the wrong socket, and only the first leaves the row uninspectable (#603).
 //
-// The connected-client note goes below the switch rather than into a case of it, because its
-// first half is orthogonal to reachability: that something is using this server is true of
-// every class, where the cases say what can be aimed at one. Its second half is not, and
-// branches on Reachable inline — a server whose socket is answering probes has had nothing
-// deleted, so the sentence about a deleted socket file would be a false claim about that row.
-// Measured: a reachable leaked server under another TMUX_TMPDIR was told its socket file had
-// been deleted. Its subject on an unreachable row is #614, the one shape this report could
-// otherwise present as an abandoned server.
+// The connected-client note goes below the switch rather than into a case of it because only
+// its first line is orthogonal to reachability: that something is using this server is true of
+// every class, where the cases say what can be aimed at one. What follows that line is not
+// orthogonal at all, so it re-branches on the same three classes — each sentence printed only
+// where it is established, which for this note means three different things:
+//
+//   - Unknown reachability: nothing but the count. reapTargets drops the row whatever the
+//     flags, so the count is not why reap spares it, and a deleted-socket claim would rest on
+//     a probe that never ran (Reachable is meaningless without ReachableKnown).
+//   - Reachable: `--all` is the invocation the count changes, since that is what selects the
+//     row; and its socket answers probes, so nothing about it was deleted. Measured: a
+//     reachable leaked server under another TMUX_TMPDIR was told its socket file had been
+//     deleted, which is why that clause is scoped rather than general.
+//   - Unreachable: #614's row, a default target, and the only class the deleted-socket
+//     sentence is true of — the one shape this report could otherwise present as abandoned.
 func renderOrphanServer(b *strings.Builder, s tmux.OrphanServer, now time.Time, gaps tmux.ScanGaps) {
 	switch {
 	case !s.ReachableKnown:
@@ -206,13 +213,26 @@ func renderOrphanServer(b *strings.Builder, s tmux.OrphanServer, now time.Time, 
 		b.WriteString("        `atrium reap --kill` is the only thing that can stop it\n")
 	}
 	if s.ConnectedClients > 0 {
-		fmt.Fprintf(b, "        %d %s connected to it, so something is using it right now;\n",
+		fmt.Fprintf(b, "        %d %s connected to it, so something is using it right now\n",
 			s.ConnectedClients, plural(s.ConnectedClients, "client is", "clients are"))
-		b.WriteString("        `atrium reap --kill --yes` leaves it alone for that reason\n")
-		if !s.Reachable {
-			// Only on this row, because only here is the clause true and only here does the
-			// remedy above it read "reap --kill is the only thing that can stop it". A
-			// reachable server's socket file is answering, so nothing about it was deleted.
+		switch {
+		case !s.ReachableKnown:
+			// Neither sentence below is established for this row, so it gets the count and
+			// nothing else. reapTargets drops a row that is not ReachableKnown whatever the
+			// flags, so the client count is not why reap will leave this one alone — the case
+			// above already gave the reason. And Reachable is meaningless without
+			// ReachableKnown (OrphanServer's doc), so a deleted-socket claim here would rest
+			// on a probe that never ran, two lines under "nothing here is proven".
+		case s.Reachable:
+			// `--all` is what puts a reachable row in the target set, so that is the
+			// invocation this count changes. Plain `--kill` spares it for being reachable,
+			// which the remedy above already says, and naming that one here would credit the
+			// sparing to the wrong fact.
+			b.WriteString("        `atrium reap --kill --all --yes` leaves it alone for that reason\n")
+		default:
+			// The #614 row: a default target, and the only class the deleted-socket sentence
+			// is true of.
+			b.WriteString("        `atrium reap --kill --yes` leaves it alone for that reason\n")
 			b.WriteString("        a client stays on a server when its socket file goes, so this may be a\n")
 			b.WriteString("        live fleet whose socket was deleted rather than an abandoned server\n")
 		}

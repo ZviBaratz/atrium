@@ -607,6 +607,9 @@ func TestReapKillYesLeavesAServerAClientIsConnectedTo(t *testing.T) {
 		require.False(t, procs.alive[1499239],
 			"the orphan with no client on it is what --yes exists for and must still die")
 		require.Contains(t, out.String(), "left pid 1952486 alone: 2 clients connected to it")
+		// A refusal is a skip, but under --yes nobody declined anything, so a bare "2
+		// skipped" reads as two decisions someone made. The count is broken out.
+		require.Contains(t, out.String(), "of those, 1 left alone with a client connected")
 	})
 
 	// The control that keeps this guard about the absent human rather than about the
@@ -679,8 +682,34 @@ func TestReapKillPromptStatesAConnectedClient(t *testing.T) {
 	// over the whole buffer passes on that one while the prompt says nothing.
 	prompt := promptFor(t, out.String(), 10)
 	require.Contains(t, prompt, "3 clients connected to it")
-	require.Contains(t, prompt, "live fleet whose socket file was deleted")
+	require.Contains(t, prompt, "live fleet whose socket was deleted")
 	require.Contains(t, prompt, "kill? [y/N]", "the fact is added to the prompt, not put in place of it")
+}
+
+// TestReapKillPromptKeepsTheDeletedSocketClauseOffAReachableRow.
+//
+// `--all` is the one mode that confirms a reachable server, and a reachable server's socket
+// file is answering probes — so telling that row its socket file was deleted is a false claim
+// about it. The doctor report scopes the clause for exactly this reason; the prompt has to
+// scope it the same way, or the row the report declines to say it about is told it one screen
+// later. The count itself still prints: something is using the server whether or not its
+// socket resolves, and that is what --yes acts on.
+func TestReapKillPromptKeepsTheDeletedSocketClauseOffAReachableRow(t *testing.T) {
+	reachable := orphan(20)
+	reachable.Reachable = true
+	reachable.ConnectedClients = 2
+	newFakeProcs().add(20).install(t)
+	stubReapCheck(t, result(reachable))
+
+	var out bytes.Buffer
+	require.NoError(t, runReap(t.Context(), &out, strings.NewReader("n\n"),
+		reapOpts{kill: true, all: true}))
+
+	prompt := promptFor(t, out.String(), 20)
+	require.Contains(t, prompt, "2 clients connected to it",
+		"something is using it, which is true whether or not its socket answers")
+	require.NotContains(t, prompt, "socket was deleted",
+		"its socket answers, so this clause would be a false claim about the row being confirmed")
 }
 
 // TestReapKillPromptSaysNothingAboutClientsWhenThereAreNone: the note is evidence, so it

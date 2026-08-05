@@ -292,6 +292,13 @@ func fieldsTail(line string, n int) string {
 // since the file it was unlinked from is the file a restarted Atrium re-creates. Two
 // servers can therefore hold rows carrying one path, and counting rows by path would
 // credit each with the other's clients.
+//
+// One listener per pid is assumed, and it is the first the walk meets that is reported: a
+// tmux server binds exactly one socket, and the caller only ever asks about processes whose
+// comm passed the tmux prefilter. A pid holding two listeners would be named by one of them
+// and have the other's connections counted as zero — an undercount, so it can only leave a
+// server alone rather than kill the wrong one, which is the safe direction for both callers
+// (ownership in assembleServers, the --yes refusal in reap).
 func serverSocket(pid int, table map[uint64]unixSocket) (path string, clients int) {
 	if len(table) == 0 {
 		return "", 0

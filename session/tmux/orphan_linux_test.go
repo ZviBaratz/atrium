@@ -144,9 +144,10 @@ func TestServerSocketCountsTheClientsConnectedToIt(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = otherLn.Close() })
 
-	gotPath, clients := serverSocket(os.Getpid(), mustPathBoundSockets(t))
-	require.Contains(t, []string{path, other}, gotPath, "one of this process's listeners must be found")
-	require.Zero(t, clients, "a listener nothing has connected to holds no clients")
+	// Narrowed like every other call here, and for the reason tableFor gives: asked about the
+	// whole table, this would be answered by whichever listener the fd walk reached first —
+	// including one another test opened, whose own connections would then fail this.
+	require.Zero(t, clientsOn(t, path), "a listener nothing has connected to holds no clients")
 
 	dial := func(to string) {
 		t.Helper()
@@ -247,7 +248,7 @@ func TestCandidatesInCarriesTheClientCount(t *testing.T) {
 }
 
 // TestCandidatesInReportsAnUnreadableSocketTable is the other half of what
-// mustListeningSockets above only asserts as a premise: that the ok result is acted on.
+// mustPathBoundSockets above only asserts as a premise: that the ok result is acted on.
 //
 // The bug was that an unreadable /proc/net/unix rendered as a clean host, and the fix
 // is one assignment — gaps.SocketTableUnread = !ok. Nothing proved that assignment ran:

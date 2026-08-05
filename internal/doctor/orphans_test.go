@@ -483,6 +483,8 @@ func TestRenderOrphansSaysWhenAClientIsConnected(t *testing.T) {
 	require.Contains(t, out, "UNREACHABLE", "the classification is unchanged; only what is said about it grows")
 	require.Contains(t, out, "4 clients are connected to it")
 	require.Contains(t, out, "live fleet whose socket was deleted")
+	require.Contains(t, out, "`atrium reap --kill --yes` leaves it alone",
+		"this row is a default target, so plain --kill --yes is the invocation the count changes")
 
 	// The plural is built at runtime, and this section's whole subject is sentences that
 	// are false in one of their forms.
@@ -505,6 +507,26 @@ func TestRenderOrphansSaysWhenAClientIsConnected(t *testing.T) {
 		"a reachable server in use still says so — --yes leaves it alone under --all too")
 	require.NotContains(t, live, "socket was deleted",
 		"its socket answers, so this clause would be a false claim about it")
+	// And the invocation named has to be the one that would have taken it. Plain `--kill`
+	// spares a reachable row for being reachable, which the remedy above already says, so
+	// naming that one here would credit the sparing to the client count instead.
+	require.Contains(t, live, "`atrium reap --kill --all --yes` leaves it alone",
+		"--all is what selects a reachable row, so --all is what the count changes")
+
+	// A row whose reachability was never established gets the count and nothing else.
+	// reapTargets drops it whatever the flags, so the count is not why reap spares it — the
+	// row's own remedy line already gives the reason — and Reachable is documented meaningless
+	// without ReachableKnown, so a deleted-socket claim would rest on a probe that never ran.
+	// It would print two lines under "nothing here is proven".
+	unknown := row(3)
+	unknown.ReachableKnown = false
+	blind := RenderOrphans(OrphanResult{Supported: true, Now: now, Servers: []tmux.OrphanServer{unknown}})
+	require.Contains(t, blind, "3 clients are connected to it",
+		"the count itself is read from /proc and is established whatever tmux could do")
+	require.NotContains(t, blind, "socket was deleted",
+		"no probe ran, so nothing is known about whether this socket answers")
+	require.NotContains(t, blind, "leaves it alone for that reason",
+		"reap never kills this row at all, so the client count is not the reason it survives")
 }
 
 // TestCheckOrphansAssemblesBothHalves covers the wiring, which the render tests
