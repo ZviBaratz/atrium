@@ -79,8 +79,9 @@ type OrphanServer struct {
 // The fields are independent bools rather than one because each unanswered question
 // has its own consequence and therefore its own remedy — see the renderer. They are
 // also not all of a kind: the first two are gaps in the *inventory* and are what
-// Any() reports, while LiveServerUnknown leaves the inventory complete and constrains
-// only what may be done with it. Any()'s doc comment is where that split is argued.
+// Any() reports, while the last two leave the inventory complete and constrain only
+// what may be done with it. Any()'s doc comment is where that split is argued, and
+// LiveServerUnidentified() is the one predicate those two share.
 type ScanGaps struct {
 	// SocketTableUnread: /proc/net/unix could not be read. A server is identified by
 	// the socket it is listening on, so with this table missing every candidate loses
@@ -92,30 +93,75 @@ type ScanGaps struct {
 	// undercounted Children list, since children are attributed from the same partial
 	// table.
 	ProcTableTruncated bool
-	// LiveServerUnknown: the ambient probe could not establish which server this Atrium
-	// is running on — not "there is no live server", which is a determined answer and
-	// safe (see ambientServerPID). Nothing can then be excluded by pid, so the live
-	// server may itself be one of the rows below. It answers its own socket, so it
-	// arrives classified Reachable: never a default kill target, but `--all` targets
-	// reachable servers by design, and the report's remedy for a reachable server is a
-	// `kill-server` aimed straight at it.
+	// LiveServerUnknown: the ambient probe was never answered — tmux absent, or its share
+	// of the budget spent — so which server this Atrium is running on was not established
+	// at all. Nothing can then be excluded by pid, so the live server may itself be one of
+	// the rows below. It answers its own socket, so it arrives classified Reachable: never
+	// a default kill target, but `--all` targets reachable servers by design, and the
+	// report's remedy for a reachable server is a `kill-server` aimed straight at it.
 	//
 	// Deliberately NOT counted by Any(). See that method.
 	LiveServerUnknown bool
+	// EmptyFleetUnproven: the ambient probe *did* answer — "no server on the socket it
+	// asked about" — and this scan's own inventory contradicts reading that as "no live
+	// server on this host", because a reachable Atrium-owned server is listed below.
+	//
+	// The probe addresses `-L socketName()` (see ambientServerPID), a socket resolved from
+	// *this* process's HOME against *this* process's TMUX_TMPDIR, so its determination is
+	// about the place it looked and nothing wider. A reachable server it says is not there
+	// means it looked elsewhere: another TMUX_TMPDIR, a deleted one (tmux then resolves -L
+	// against /tmp), the other brand, or a managed config that failed to parse. The
+	// consequence is precisely LiveServerUnknown's — a live pid of 0 excludes no process in
+	// assembleServers, so the live server may be one of these Reachable rows — which is why
+	// the two share LiveServerUnidentified() (#603).
+	//
+	// A separate field rather than folded into LiveServerUnknown, and mutually exclusive
+	// with it by construction (that one needs !liveKnown, this one liveKnown), because the
+	// remedies diverge: an unanswered probe is fixed by re-running, while this one re-runs
+	// to the same answer about the same wrong socket — and here tmux demonstrably works, so
+	// the row can be inspected with `tmux -S <path> ls` instead of merely feared.
+	//
+	// Its subject is *this run's own* server, and that bound is deliberate rather than an
+	// oversight. When the ambient probe does name a pid, this stays false even though a second
+	// fleet may be running under another TMUX_TMPDIR or the other brand: that fleet arrives
+	// Reachable, keeps its verified `kill-server`, and is a target under `--all` — which is
+	// what `--all` is for, and what reapTargets' doc comment already says about a second
+	// Atrium. The guard protects the fleet the reaper cannot see past its own environment, not
+	// every fleet on the host.
+	//
+	// Deliberately NOT counted by Any() either. See that method.
+	EmptyFleetUnproven bool
 }
 
 // Any reports whether the *inventory* left anything unseen, and so whether an empty or
 // short result is allowed to be read as proof. Callers use it to refuse to kill at all.
 //
-// LiveServerUnknown is excluded on purpose, and the exclusion is load-bearing rather
-// than an oversight. It does not make the inventory incomplete: every candidate was
-// still seen and still classified, and a live server that could not be identified by
-// pid is still positively Reachable, which the default target set already excludes. The
-// last regression on this code came from refusing too eagerly — a self-inflicted gap
-// became a self-inflicted refusal on exactly the host that needed reaping — so the
-// remedy for this one is scoped to the decision it actually affects: `--all`, plus the
-// report's remedy line. TestScanGapsAny pins it.
+// LiveServerUnknown and EmptyFleetUnproven are both excluded on purpose, and the
+// exclusion is load-bearing rather than an oversight. Neither makes the inventory
+// incomplete: every candidate was still seen and still classified, and a live server that
+// could not be identified by pid is still positively Reachable, which the default target
+// set already excludes. The last regression on this code came from refusing too eagerly —
+// a self-inflicted gap became a self-inflicted refusal on exactly the host that needed
+// reaping — so the remedy for those two is scoped to the decisions they actually affect:
+// `--all`, plus the report's remedy line. TestScanGapsAny pins it.
 func (g ScanGaps) Any() bool { return g.SocketTableUnread || g.ProcTableTruncated }
+
+// LiveServerUnidentified reports that no row this scan produced has been proven not to be
+// this Atrium's own tmux server. It exists so that "identified" means one thing — a live pid
+// was positively determined, and so excluded — wherever that question is asked.
+//
+// Its two causes reach an identical state: the exclusion in assembleServers matched
+// nothing, while a live server answers its own socket and so arrives Reachable. Neither is
+// an inventory gap, which is why Any() counts neither.
+//
+// Which callers use this, and which do not, follows from what each one has to say. The
+// `--all` guard asks only whether it may act, so it keys on this (cli_reap.go). The report
+// has to word a remedy, and the two causes take different ones — a re-run fixes an
+// unanswered probe and cannot fix a wrong-place answer — so renderOrphanServer branches on
+// the fields themselves instead.
+func (g ScanGaps) LiveServerUnidentified() bool {
+	return g.LiveServerUnknown || g.EmptyFleetUnproven
+}
 
 // candidate is one process the platform inventory judged worth classifying: owned by
 // this uid and plausibly a tmux server. Ownership is decided from these fields by
@@ -180,7 +226,28 @@ func ScanServers(ctx context.Context) (servers []OrphanServer, supported bool, g
 	cands, gaps := scanCandidates(ctx)
 	live, liveKnown := probeAmbient(ctx)
 	gaps.LiveServerUnknown = !liveKnown
-	return assembleServers(ctx, cands, live, liveKnown), true, gaps
+	servers = assembleServers(ctx, cands, live, liveKnown)
+	// The empty-fleet answer, verified instead of assumed. `pid 0, known true` is tmux
+	// reporting that nothing is on the socket *this process* addressed, which is only "this
+	// host has no live Atrium server" when nothing else answers for one — and this scan has
+	// just asked every candidate by absolute path, which resolves where -L may not. A
+	// reachable Atrium-owned server that the ambient probe says is not there is that
+	// contradiction, and it leaves the live server unexcluded exactly as an unanswered probe
+	// does (#603).
+	//
+	// Unreachable rows are not counted. An unreachable candidate is what an orphan looks like
+	// and is no evidence of a live fleet, so counting those would raise this on every host the
+	// reaper exists for — #593's over-refusal, rebuilt.
+	//
+	// Neither are rows on a socket name no ambient probe could have been asking about, which
+	// is what onAnAmbientSocket decides. Without that narrowing the cost was paid on the
+	// ordinary host rather than the rare one: `live == 0` is the answer whenever no TUI is up,
+	// so a single leaked `-precheck-` or verification socket server withheld `--all` for the
+	// whole run, and re-running never cleared it. What still withholds it is a bare-brand row
+	// — the shape a fleet under another TMUX_TMPDIR or the other brand has, which is #603's
+	// case exactly.
+	gaps.EmptyFleetUnproven = liveKnown && live == 0 && anyReachableAmbientCandidate(servers)
+	return servers, true, gaps
 }
 
 // probeAmbient asks which server is on the ambient socket, under one probe's share of
@@ -251,6 +318,38 @@ func assembleServers(ctx context.Context, cands []candidate, live int, liveKnown
 	}
 	sort.Slice(servers, func(i, j int) bool { return servers[i].PID < servers[j].PID })
 	return servers
+}
+
+// AnyReachable reports whether any of these servers answered its own socket. The reaper asks
+// it of its selected targets, to decide whether an unidentified live server may be among them:
+// only --all can put a reachable row there, which makes it the precise test for "would this
+// run kill something that might be the live fleet".
+//
+// Exported for that caller, and deliberately *not* what ScanServers checks its empty-fleet
+// answer with — that one narrows further, to a row on a socket name an ambient probe could
+// have been asking about. Two questions close enough that the difference is worth naming where
+// both are defined (#603).
+func AnyReachable(servers []OrphanServer) bool {
+	for _, s := range servers {
+		if s.Reachable {
+			return true
+		}
+	}
+	return false
+}
+
+// anyReachableAmbientCandidate reports whether any of these servers both answered its own
+// socket and sits on a socket name some Atrium run addresses as its own. Together those are
+// what make a row a candidate for the live server a determined-empty ambient answer failed to
+// identify: it has to be running — it answered — and it has to be the kind of server that
+// answer was about.
+func anyReachableAmbientCandidate(servers []OrphanServer) bool {
+	for _, s := range servers {
+		if s.Reachable && s.OnAnAmbientSocket() {
+			return true
+		}
+	}
+	return false
 }
 
 // StaleSocket is a socket file in Atrium's socket directory that no server answers —
@@ -464,16 +563,52 @@ func ownsSocketName(base string) bool {
 	return false
 }
 
+// OnAnAmbientSocket reports whether this server sits on a socket name some Atrium run
+// addresses as its own: a bare brand, with no suffix.
+//
+// It is the narrower half of the pair above. ownsSocketName decides what the reaper may
+// consider at all, and accepts the suffixed forms because they are Atrium's litter; this
+// decides which of those rows could be the server an *ambient* probe was asking about, and
+// rejects them. Every Atrium addresses its own server as `-L socketName()` (tmuxCommand), and
+// socketName() is config.RuntimeName() — never suffixed — so a row on
+// "atrium-precheck-991-1" or "atrium-cfgparse-x7" is not the server any such probe could have
+// found or missed, whatever directory it sits in. Those names belong to throwaway probes
+// (probeSocketName), which hold a `sleep` and no sessions.
+//
+// Both brands rather than socketName() alone, for the reason orphanBrands exists: #603's
+// brand-mismatch route is a live claudesquad fleet with this run installed as atrium, and
+// keying on the local brand would leave exactly that case unguarded.
+//
+// This decides how much a caller may claim about a row, never whether it may be killed —
+// nothing here is evidence that a bare-brand server *is* the live one, only that a suffixed
+// one is not.
+func (s OrphanServer) OnAnAmbientSocket() bool {
+	for _, brand := range orphanBrands {
+		if s.Socket == brand {
+			return true
+		}
+	}
+	return false
+}
+
 // ambientServerPID returns the pid of the tmux server on Atrium's socket under the
 // ambient environment — the one this Atrium is running on, which is never an orphan.
 //
 // known carries the same distinction probeSocketOwner draws, and for the same reason:
 // "tmux ran and there is no server on that socket" and "tmux could not be asked" are
 // different facts with opposite safety consequences, and this function used to return
-// false for both. The empty fleet is a *determined* answer — pid 0 with known true —
-// and it is safe, because a fleet with no live server has nothing that needs excluding.
-// Only known == false means the live server might be among the candidates below,
-// answering its own socket and therefore classified Reachable.
+// false for both. Only known == false means the question was never answered at all.
+//
+// What a determined pid 0 establishes is narrower than "the fleet is empty", and the gap
+// between the two was worth a guard. The socket asked about is `-L socketName()`
+// (tmuxCommand), resolved from *this* process's HOME against *this* process's TMUX_TMPDIR,
+// with this run's managed config appended — so pid 0 says "nothing answered where I
+// looked". Wherever that is not where the fleet is (another TMUX_TMPDIR, a deleted one,
+// which tmux resolves against /tmp, the other brand, a config that fails to parse), the
+// live server is still in the candidate list, still unexcluded, and still answering its own
+// socket. ScanServers is where that claim is checked against the inventory, and
+// ScanGaps.EmptyFleetUnproven is what the check reports: nothing downstream may read pid 0
+// as an empty fleet without it (#603).
 //
 // A non-zero exit means tmux ran and made a determination ("no server running on …");
 // anything else — tmux absent, the probe's budget spent — leaves the question open.

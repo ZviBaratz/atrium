@@ -119,6 +119,74 @@ func TestRenderOrphansWithholdsAKillServerItCannotVouchFor(t *testing.T) {
 	known := RenderOrphans(OrphanResult{Supported: true, Now: now, Servers: reachable})
 	require.Contains(t, known, "tmux -S /tmp/tmux-1000/atrium kill-server",
 		"an identified live server means this row is provably not it, and the remedy is the point of the row")
+	require.NotContains(t, known, "caution:",
+		"an identified live server needs no hedge; the row is proven not to be the fleet")
+}
+
+// TestRenderOrphansCautionsAKillServerItCannotVouchFor is the report side of #603, and it
+// deliberately reaches the opposite conclusion from the test above.
+//
+// There the ambient probe could not be run, so nothing about the row is established and
+// there is no way for the user to establish it either — the only honest move is to print no
+// command. Here the probe ran and answered "nothing on the socket I asked about", while this
+// row answers its own socket by absolute path: the probe looked somewhere else (another
+// TMUX_TMPDIR, the other brand, a config that would not parse), and re-running it asks the
+// same wrong socket again. tmux demonstrably works, so the user can look at the server with
+// `tmux -S <path> ls` before stopping it. Withholding the command would leave a verified
+// remedy unnamed and print advice that cannot help, so the row keeps its command and loses
+// the claim it used to carry with it. The refusal that needs no per-row judgement lives in
+// `reap --kill --all`.
+func TestRenderOrphansCautionsAKillServerItCannotVouchFor(t *testing.T) {
+	out := RenderOrphans(OrphanResult{
+		Supported: true, Now: now,
+		Servers: []tmux.OrphanServer{{
+			PID: 1952486, Socket: "atrium", SocketPath: "/tmp/atr-other/tmux-1000/atrium",
+			Reachable: true, ReachableKnown: true, Started: startedAgo(time.Hour),
+		}},
+		Gaps: tmux.ScanGaps{EmptyFleetUnproven: true},
+	})
+
+	require.Contains(t, out, "pid 1952486", "the row itself must still be reported")
+	require.Contains(t, out, "tmux -S /tmp/atr-other/tmux-1000/atrium kill-server",
+		"the command is verified and stays: this server answers, and nothing else can stop it by name")
+	require.Contains(t, out, "caution:",
+		"but the claim that it is not this Atrium's own fleet has to be withdrawn beside it")
+	require.Contains(t, out, "another\n        TMUX_TMPDIR or brand",
+		"and the caution has to name the reason, which is where the probe looked")
+	require.NotContains(t, out, "Re-run first",
+		"re-running asks the same wrong socket; that advice belongs to the unanswered-probe case")
+}
+
+// TestRenderOrphansKeepsTheHedgeOffAProbeSocket: the caution says a row may be a live fleet,
+// and for a `-precheck-` socket that is a claim the scan can already disprove — no Atrium
+// addresses its own server by a suffixed name, so no ambient probe was asking about this one.
+//
+// Both rows are rendered from one result, because the flag is a property of the scan rather
+// than of a row: the bare-brand row is why it is set, and the probe row must not inherit its
+// hedge. Asserting on one row alone would pass with the branch keyed on the flag only.
+func TestRenderOrphansKeepsTheHedgeOffAProbeSocket(t *testing.T) {
+	out := RenderOrphans(OrphanResult{
+		Supported: true, Now: now,
+		Servers: []tmux.OrphanServer{
+			{
+				PID: 7777, Socket: "atrium-precheck-991-1",
+				SocketPath: "/tmp/tmux-1000/atrium-precheck-991-1",
+				Reachable:  true, ReachableKnown: true, Started: startedAgo(time.Minute),
+			},
+			{
+				PID: 1952486, Socket: "atrium", SocketPath: "/tmp/atr-other/tmux-1000/atrium",
+				Reachable: true, ReachableKnown: true, Started: startedAgo(time.Hour),
+			},
+		},
+		Gaps: tmux.ScanGaps{EmptyFleetUnproven: true},
+	})
+
+	require.Contains(t, out, "tmux -S /tmp/tmux-1000/atrium-precheck-991-1 kill-server",
+		"the probe socket keeps its plain remedy")
+	require.Equal(t, 1, strings.Count(out, "caution:"),
+		"exactly one row may carry the hedge — the bare-brand one that raised the flag: %q", out)
+	require.Contains(t, out, "tmux -S /tmp/atr-other/tmux-1000/atrium kill-server",
+		"and that row keeps its command too, cautioned")
 }
 
 // TestRenderOrphansHeadingNamesTmuxServers: doctor already uses "orphan" for a Claude

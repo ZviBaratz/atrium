@@ -40,11 +40,18 @@ var (
 			"prompt, for scripts). A server whose reachability could not be determined — tmux\n" +
 			"missing, a probe that could not run — is never killed, with or without --all,\n" +
 			"because nothing about it has been established.\n\n" +
-			"One case suspends what is said above about reachable servers. When the probe that\n" +
-			"identifies this Atrium's own tmux server cannot answer, a reachable server listed\n" +
-			"here may be that server. Its row is then printed with no tmux command beside it,\n" +
-			"and --all refuses rather than target it. Re-run once the probe works, or drop\n" +
-			"--all: the servers proven unreachable are still proven, and still killable.\n\n" +
+			"Two cases suspend what is said above about reachable servers, both of them the\n" +
+			"same fact: this Atrium's own tmux server was not identified, so a reachable server\n" +
+			"listed here may be that server, and --all refuses rather than target it. Either\n" +
+			"way, dropping --all still works — the servers proven unreachable are still proven,\n" +
+			"and still killable.\n\n" +
+			"When the probe could not answer at all, nothing tells the row apart from the live\n" +
+			"server, so it is printed with no tmux command beside it; re-run once the probe\n" +
+			"works. When it answered that nothing is on the socket this run computed from its\n" +
+			"own environment, while a reachable server answers its own, that answer was not\n" +
+			"about the fleet — another TMUX_TMPDIR, the other brand, or a config it could not\n" +
+			"parse. Re-running asks the same socket again, so the row keeps its kill-server\n" +
+			"command with a caution beside it: check the server with `tmux -S <path> ls` first.\n\n" +
 			"It deletes nothing. A killed server's socket file is inert; `atrium doctor` lists\n" +
 			"the leftover files and prints the command to remove them.\n\n" +
 			"Linux only: finding a server whose socket no longer resolves needs a process\n" +
@@ -158,14 +165,28 @@ func runReap(ctx context.Context, w io.Writer, in io.Reader, opts reapOpts) erro
 	// every agent in it. The default set needs no such guard: it is unreachable-only,
 	// and a server that answered is proof it is not that.
 	//
+	// Keyed on LiveServerUnidentified() rather than on LiveServerUnknown alone, because
+	// "identified" has to mean a pid was positively determined. A probe that answered
+	// about the socket this process computed from its own HOME and TMUX_TMPDIR excluded
+	// nothing when it answered pid 0, and the flag for an unanswered probe stays low —
+	// so keying on that one left this guard silent in exactly the case where a reachable
+	// row is the live fleet (#603).
+	//
 	// Keyed on the selected targets rather than on the flag, and that scoping matters:
 	// with nothing reachable to select, --all picks exactly what the default picks, and
 	// refusing there would repeat #593's shape — a probe that could not answer becoming
 	// a refusal to reap on the very host that needed it. Placed below reapTargets for
 	// that reason, and still above the only reapServer call, which is what makes it a
 	// guard.
-	if opts.all && res.Gaps.LiveServerUnknown && anyReachable(targets) {
-		return fmt.Errorf("refusing --all: this %s's own tmux server could not be identified, so a reachable server here may be it — re-run once the probe works, or drop --all to kill only the unreachable ones", binName)
+	//
+	// That scoping does its work for LiveServerUnknown only. EmptyFleetUnproven is set
+	// *because* a reachable server on a bare-brand socket is in the inventory, and a
+	// Reachable row is always ReachableKnown and so always selected under --all — so for
+	// that cause the conjunct cannot be false and the two spellings coincide. It stays
+	// because the other cause needs it, and because a reader is entitled to see the
+	// condition state the whole rule rather than the half that currently bites.
+	if opts.all && res.Gaps.LiveServerUnidentified() && tmux.AnyReachable(targets) {
+		return fmt.Errorf("refusing --all: %s", unidentifiedLiveServerReason(res.Gaps))
 	}
 
 	if len(targets) == 0 {
@@ -231,17 +252,20 @@ func reapTargets(servers []tmux.OrphanServer, all bool) []tmux.OrphanServer {
 	return targets
 }
 
-// anyReachable reports whether the selected targets include a server that answered its
-// own socket. Only --all can put one there — reapTargets drops reachable servers
-// otherwise — which is what makes this the precise test for "would this run kill
-// something that might be the live fleet".
-func anyReachable(servers []tmux.OrphanServer) bool {
-	for _, s := range servers {
-		if s.Reachable {
-			return true
-		}
+// unidentifiedLiveServerReason words the --all refusal for the cause at hand.
+//
+// The two causes leave the *reaper* in one position — no selected row is proven not to be
+// the live fleet — but not the user. An unanswered probe is fixed by re-running. A probe
+// that answered about the wrong socket answers the same way every time, so "re-run once the
+// probe works" would send a user whose tmux works fine to re-run until they stopped
+// reading; what fits that case is the reachable row itself, which can be inspected and
+// stopped by name. LiveServerUnknown is tested first: when nothing was established, the
+// weaker claim is the true one.
+func unidentifiedLiveServerReason(g tmux.ScanGaps) string {
+	if g.LiveServerUnknown {
+		return fmt.Sprintf("this %s's own tmux server could not be identified, so a reachable server here may be it — re-run once the probe works, or drop --all to kill only the unreachable ones", binName)
 	}
-	return false
+	return fmt.Sprintf("nothing answered on this run's own %s socket, yet a reachable server here answers its own — so the fleet may be running under another TMUX_TMPDIR or brand, and this row may be it. Check it with `tmux -S <path> ls` and stop it with the kill-server the listing above prints, or drop --all to kill only the unreachable ones", binName)
 }
 
 // confirmReap names everything that dies with this server and asks. Defaults to no:

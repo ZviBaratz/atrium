@@ -103,7 +103,7 @@ func RenderOrphans(r OrphanResult) string {
 	}
 
 	for _, s := range r.Servers {
-		renderOrphanServer(&b, s, r.Now, !r.Gaps.LiveServerUnknown)
+		renderOrphanServer(&b, s, r.Now, r.Gaps)
 	}
 	renderStaleSockets(&b, r)
 	return b.String()
@@ -136,20 +136,24 @@ func renderScanGaps(b *strings.Builder, g tmux.ScanGaps) {
 // The remedy is the point of the row: an unreachable server has no tmux command that
 // can name it, and saying so is the difference between a report and a dead end.
 //
-// liveIdentified is whether the scan established which server this Atrium is running
-// on. When it did not, the live server could not be excluded by pid and may be one of
-// these rows — and it would arrive here Reachable, since it answers its own socket. The
-// remedy for a reachable server is a `kill-server` naming its exact path, so printing
-// one unconditionally is how this report becomes an instruction to kill the live fleet.
-// That is the #584 shape, arrived at through the report rather than through a glob.
-func renderOrphanServer(b *strings.Builder, s tmux.OrphanServer, now time.Time, liveIdentified bool) {
+// gaps decides what a reachable row may be told to do. When the scan did not establish
+// which server this Atrium is running on, the live server could not be excluded by pid and
+// may be one of these rows — and it would arrive here Reachable, since it answers its own
+// socket. The remedy for a reachable server is a `kill-server` naming its exact path, so
+// printing one unconditionally is how this report becomes an instruction to kill the live
+// fleet. That is the #584 shape, arrived at through the report rather than through a glob.
+//
+// The whole gaps value rather than one "identified" bool, because the two ways it can be
+// unidentified need different sentences: one is an unrunnable probe and one is a probe that
+// answered about the wrong socket, and only the first leaves the row uninspectable (#603).
+func renderOrphanServer(b *strings.Builder, s tmux.OrphanServer, now time.Time, gaps tmux.ScanGaps) {
 	switch {
 	case !s.ReachableKnown:
 		fmt.Fprintf(b, "  pid %d  socket %s  up %s  reachability unknown  %s\n",
 			s.PID, s.Socket, HumanAge(now.Sub(s.Started)), childSummary(s.Children))
 		b.WriteString("      → tmux could not be run, so nothing here is proven; `atrium reap` lists\n")
 		b.WriteString("        these and never kills them\n")
-	case s.Reachable && !liveIdentified:
+	case s.Reachable && gaps.LiveServerUnknown:
 		// No command is printed at all here. The honest remedy is to re-run once the
 		// probe works, because the one command that would stop this server is also the
 		// one that would stop the fleet if this row is the fleet.
@@ -158,6 +162,27 @@ func renderOrphanServer(b *strings.Builder, s tmux.OrphanServer, now time.Time, 
 		b.WriteString("      → no remedy offered: this Atrium's own server could not be identified,\n")
 		b.WriteString("        so this row may be it — and the command that would stop it is the\n")
 		b.WriteString("        command that would stop your live sessions. Re-run first\n")
+	case s.Reachable && gaps.EmptyFleetUnproven && s.OnAnAmbientSocket():
+		// The command stays, with the claim it used to carry retracted beside it. This is
+		// the opposite call from the case above, and the difference is what a user can do
+		// next: there tmux could not be run, so the row cannot be inspected and a re-run
+		// is the only move; here tmux demonstrably runs, this server answers, and the
+		// probe will keep answering about the same wrong socket however often it is
+		// re-run. Withholding would leave a real and verified remedy unnamed and offer
+		// advice that cannot help — so the row is annotated rather than blanked, and it is
+		// `--all`, which needs no per-row judgement, that refuses (#603).
+		//
+		// OnAnAmbientSocket keeps the hedge off rows it would be false about. The caution
+		// says this may be a live fleet, and a `-precheck-` or verification socket cannot
+		// be one — no Atrium addresses its own server by a suffixed name — so such a row
+		// falls through to the plain reachable case and keeps its unqualified remedy.
+		fmt.Fprintf(b, "  pid %d  socket %s  up %s  reachable  %s\n",
+			s.PID, s.Socket, HumanAge(now.Sub(s.Started)), childSummary(s.Children))
+		fmt.Fprintf(b, "      → tmux -S %s kill-server\n", s.SocketPath)
+		b.WriteString("        caution: nothing answered on this run's own Atrium socket, yet this\n")
+		b.WriteString("        server answers its own — it may be a live fleet started under another\n")
+		b.WriteString("        TMUX_TMPDIR or brand rather than an orphan. `tmux -S <path> ls` first;\n")
+		b.WriteString("        `atrium reap --kill --all` refuses to take it\n")
 	case s.Reachable:
 		fmt.Fprintf(b, "  pid %d  socket %s  up %s  reachable  %s\n",
 			s.PID, s.Socket, HumanAge(now.Sub(s.Started)), childSummary(s.Children))
