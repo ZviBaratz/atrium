@@ -1,7 +1,9 @@
 package app
 
 import (
+	"encoding/json"
 	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -17,6 +19,24 @@ import (
 func spoolReport(t *testing.T, limit int, sessions ...parkreport.Session) {
 	t.Helper()
 	require.NoError(t, parkreport.Write(parkreport.Report{Sessions: sessions, Limit: limit}))
+}
+
+// writeRawReport plants a report body Write itself would not produce — here, one with no
+// created_at — so the reader's permissiveness about it can be driven.
+func writeRawReport(t *testing.T, body string) {
+	t.Helper()
+	path, err := parkreport.Path()
+	require.NoError(t, err)
+	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+	require.NoError(t, os.WriteFile(path, []byte(body), 0o644))
+}
+
+func quote(s string) string {
+	q, err := json.Marshal(s)
+	if err != nil {
+		panic(err)
+	}
+	return string(q)
 }
 
 // spooledExists reports whether the spool file is still on disk. It stats the path rather
@@ -63,6 +83,74 @@ func TestEarlierParkReportDropsAParkThatDidNotStick(t *testing.T) {
 
 	assert.Empty(t, got.Sessions, "a park that did not stick is not reported")
 	assert.False(t, spooledExists(t), "and the report is cleared rather than retried forever")
+}
+
+// TestEarlierParkReportDropsAPauseTheUserMadeSince is the attribution guard, and the case
+// "still paused" cannot see on its own.
+//
+// A report outlives the launch that read it whenever delivery did not happen — a quit
+// before the first preview tick, or an unlink that failed — so a whole session can pass
+// before it is delivered. In it the user can resume a named row and pause it again
+// themselves. That row is paused, and its title and path still match, but the pause is
+// theirs: reporting it would claim host capacity did something the user did, which is the
+// same false claim the failed-save case is guarded against.
+func TestEarlierParkReportDropsAPauseTheUserMadeSince(t *testing.T) {
+	h := drainHome(t)
+	inst := addPersistedInstance(t, h, "alpha", t.TempDir())
+	spoolReport(t, 3, parkreport.Session{Title: "alpha", Path: inst.Path})
+
+	// The user's own resume-and-re-pause, which is what moves StatusChangedAt past the
+	// report's timestamp.
+	inst.SetStatus(session.Running)
+	inst.SetStatus(session.Paused)
+	require.True(t, inst.Paused(), "the row is paused again — by the user, not by capacity")
+
+	got := earlierParkReport(h.list.GetInstances(), time.Now())
+
+	assert.Empty(t, got.Sessions, "a pause the user made is not reported as a capacity park")
+	assert.False(t, spooledExists(t), "and the report is cleared rather than re-offered forever")
+}
+
+// The faithful positive: the row was parked, its stamp predates the report, and nothing has
+// touched it since — so the park is exactly what the report says it is.
+func TestEarlierParkReportKeepsASessionUntouchedSinceTheReport(t *testing.T) {
+	h := drainHome(t)
+	inst := addPersistedInstance(t, h, "alpha", t.TempDir())
+	inst.SetStatus(session.Running)
+	inst.SetStatus(session.Paused) // the park, stamped before the report is written
+	spoolReport(t, 3, parkreport.Session{Title: "alpha", Path: inst.Path})
+
+	got := earlierParkReport(h.list.GetInstances(), time.Now())
+
+	assert.Equal(t, []session.ParkedSession{{Title: "alpha", Path: inst.Path}}, got.Sessions)
+}
+
+// Both zero-time cases stay permissive, matching Report.Expired: a report that cannot date
+// itself does not get to reject anything, and a session whose stamp is absent — a state
+// file predating StatusChangedAt — is not evidence of a change.
+func TestEarlierParkReportIsPermissiveAboutMissingTimestamps(t *testing.T) {
+	t.Run("the report carries no timestamp", func(t *testing.T) {
+		h := drainHome(t)
+		inst := addPersistedInstance(t, h, "alpha", t.TempDir())
+		inst.SetStatus(session.Running)
+		inst.SetStatus(session.Paused)
+		writeRawReport(t, `{"version":1,"sessions":[{"title":"alpha","path":`+quote(inst.Path)+`}],"limit":3}`)
+
+		got := earlierParkReport(h.list.GetInstances(), time.Now())
+
+		assert.Len(t, got.Sessions, 1, "an undatable report is still delivered")
+	})
+
+	t.Run("the session carries no timestamp", func(t *testing.T) {
+		h := drainHome(t)
+		inst := addPersistedInstance(t, h, "alpha", t.TempDir())
+		require.True(t, inst.StatusChangedAt().IsZero(), "loaded from a state file without the field")
+		spoolReport(t, 3, parkreport.Session{Title: "alpha", Path: inst.Path})
+
+		got := earlierParkReport(h.list.GetInstances(), time.Now())
+
+		assert.Len(t, got.Sessions, 1)
+	})
 }
 
 // A session the user killed between the park and this launch is gone from the fleet, so
@@ -154,7 +242,7 @@ func TestPendingParkReports(t *testing.T) {
 		h := drainHome(t)
 		inst := addPersistedInstance(t, h, "alpha", t.TempDir())
 		spoolReport(t, 3, parkreport.Session{Title: "alpha", Path: inst.Path})
-		mine := session.DeferredRecovery{Sessions: parked("bravo"), Limit: 3}
+		mine := session.DeferredRecovery{Sessions: parkedSessions("bravo"), Limit: 3}
 
 		own, earlier := pendingParkReports(mine, h.list.GetInstances(), time.Now())
 
@@ -215,7 +303,7 @@ func TestFlushEarlierRecovery(t *testing.T) {
 	t.Run("this load's own park wins and the spool is left alone", func(t *testing.T) {
 		h := drainHome(t)
 		spoolReport(t, 4, parkreport.Session{Title: "alpha", Path: "/repo/web"})
-		h.pendingDeferredRecovery = session.DeferredRecovery{Sessions: parked("bravo"), Limit: 4}
+		h.pendingDeferredRecovery = session.DeferredRecovery{Sessions: parkedSessions("bravo"), Limit: 4}
 		h.pendingEarlierRecovery = session.DeferredRecovery{
 			Sessions: []session.ParkedSession{{Title: "alpha", Path: "/repo/web"}}, Limit: 4,
 		}

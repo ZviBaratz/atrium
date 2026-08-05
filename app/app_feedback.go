@@ -262,8 +262,12 @@ func (m *home) flushDeferredRecovery() tea.Cmd {
 	}
 	m.pendingEarlierRecovery = session.DeferredRecovery{}
 	if err := parkreport.Remove(); err != nil {
-		// Logged, not surfaced: the notice the user needed is already on screen, and
-		// the only cost of a file left behind is one repeat toast next launch.
+		// Logged, not surfaced: the notice the user needed is already on screen. A
+		// persistent failure (a read-only data dir, an immutable file) repeats the toast on
+		// every later launch until the TTL expires or the rows stop reconciling — no
+		// poisoning set like the outbox drain's, because re-delivery here costs a duplicate
+		// notice rather than a duplicate prompt injected into a session, and the notice it
+		// repeats is still true of rows that are still parked.
 		log.ErrorLog.Printf("could not remove a delivered deferred-recovery report: %v", err)
 	}
 	return m.handleInfoNotice(text)

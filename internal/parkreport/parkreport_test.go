@@ -136,6 +136,10 @@ func TestReadDiscardsUnusableReports(t *testing.T) {
 		"from another atrium": `{"version":99,"sessions":[{"title":"alpha"}],"limit":2}`,
 		"names no session":    `{"version":1,"sessions":[],"limit":2}`,
 		"empty file":          "",
+		// Write refuses these, so they can only arrive hand-edited or from a foreign
+		// writer — where a zero would reach the user as "host capacity is 0".
+		"zero limit":     `{"version":1,"sessions":[{"title":"alpha"}],"limit":0}`,
+		"negative limit": `{"version":1,"sessions":[{"title":"alpha"}],"limit":-3}`,
 	} {
 		t.Run(name, func(t *testing.T) {
 			path := sandbox(t)
@@ -149,12 +153,23 @@ func TestReadDiscardsUnusableReports(t *testing.T) {
 	}
 }
 
-// Write refuses an empty report rather than spooling a file that says nothing: a reader
-// would drop it anyway, and the file would outlive the condition it fails to describe.
-func TestWriteRefusesAnEmptyReport(t *testing.T) {
-	path := sandbox(t)
-	require.Error(t, Write(Report{Limit: 2}))
-	assert.NoFileExists(t, path)
+// Write refuses a report a reader could not use rather than spooling a file that says
+// nothing, or one that says something false: the limit reaches the user as "host capacity
+// is N", and only the host-derived soft cap rations recovery — its floor is 2
+// (config.deriveSessionCap), so a non-positive limit has measured nothing.
+func TestWriteRefusesAnUnusableReport(t *testing.T) {
+	for name, r := range map[string]Report{
+		"no sessions":     {Limit: 2},
+		"zero limit":      {Sessions: []Session{{Title: "alpha"}}},
+		"negative limit":  {Sessions: []Session{{Title: "alpha"}}, Limit: -1},
+		"neither of them": {},
+	} {
+		t.Run(name, func(t *testing.T) {
+			path := sandbox(t)
+			require.Error(t, Write(r))
+			assert.NoFileExists(t, path)
+		})
+	}
 }
 
 // Remove is what the delivering caller runs, and it must tolerate a file that is already

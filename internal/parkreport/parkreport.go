@@ -19,11 +19,21 @@
 // addressed prompt whose text gets typed into a session, while this is one fleet-level
 // report with no target and nothing to inject.
 //
-// It is a single latest-wins file rather than a queue because at most one undrained
-// report can exist. The daemon loads once for its whole lifetime, and the TUI stops
-// any daemon before it starts and launches one only on exit (main.go), so two reports
-// never overlap; if a second one is ever written it describes the newer state and
-// should win.
+// It is a single latest-wins file rather than a queue. Two reports cannot be PRODUCED
+// concurrently: the daemon loads once for its whole lifetime, and the TUI stops any
+// daemon before it starts and launches one only on exit (main.go). What can happen is a
+// report going undelivered — the reader unlinks it only once the notice has actually been
+// shown, so a quit before that leaves it for a later launch — and a daemon run in between
+// then overwrites it.
+//
+// That is accepted rather than fixed, and the cost is bounded: the newer report is the one
+// whose parks are most recent, the overwritten one's rows stay visibly paused, and every
+// park is also in the log (session/instance.go's parkOverBudget). Merging instead would
+// put two parks made at different times under one CreatedAt, and that timestamp does two
+// jobs the merge pulls apart — the TTL horizon wants the newest (or a stale entry expires
+// fresh parks with it) while the reader's attribution check wants the oldest (or a pause
+// the user made in between is reported as a park). Per-session timestamps would settle it,
+// which is a schema this corner does not earn.
 package parkreport
 
 import (
@@ -110,6 +120,12 @@ func Write(r Report) error {
 	if len(r.Sessions) == 0 {
 		return errors.New("parkreport: a report needs at least one parked session")
 	}
+	if r.Limit <= 0 {
+		// The reader renders this as "host capacity is N". Only the host-derived soft cap
+		// rations recovery and its floor is 2 (config.deriveSessionCap), so a caller with
+		// a non-positive limit has not measured anything the user can act on.
+		return fmt.Errorf("parkreport: a report needs a positive limit, got %d", r.Limit)
+	}
 	if r.CreatedAt.IsZero() {
 		r.CreatedAt = time.Now()
 	}
@@ -168,6 +184,10 @@ func Read(now time.Time) (Report, bool) {
 		return discard(path, fmt.Sprintf("report has version %d, this atrium understands %d", r.Version, currentVersion))
 	case len(r.Sessions) == 0:
 		return discard(path, "report names no parked session")
+	case r.Limit <= 0:
+		// Unreachable from Write, which refuses the same shape; this is the hand-edited or
+		// foreign file, where a zero would reach the user as "host capacity is 0".
+		return discard(path, fmt.Sprintf("report carries a non-positive limit (%d)", r.Limit))
 	case r.Expired(now):
 		return discard(path, fmt.Sprintf("report was spooled %s ago, past the %s horizon",
 			now.Sub(r.CreatedAt).Round(time.Minute), TTL))

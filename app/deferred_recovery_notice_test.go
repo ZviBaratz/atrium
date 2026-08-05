@@ -9,11 +9,11 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// parked builds the report payload for the given titles. The notices are counts, so the
+// parkedSessions builds the report payload for the given titles. The notices are counts, so the
 // paths are irrelevant here — the pair is asserted where identity actually matters
 // (session/recovery_test.go for what the budget records, park_report_test.go for how a
 // spooled report is reconciled).
-func parked(titles ...string) []session.ParkedSession {
+func parkedSessions(titles ...string) []session.ParkedSession {
 	out := make([]session.ParkedSession, 0, len(titles))
 	for _, title := range titles {
 		out = append(out, session.ParkedSession{Title: title, Path: "/repo"})
@@ -31,12 +31,12 @@ func TestStartupParkNotice(t *testing.T) {
 	})
 
 	t.Run("one session", func(t *testing.T) {
-		got := startupParkNotice(session.DeferredRecovery{Sessions: parked("alpha"), Limit: 2})
+		got := startupParkNotice(session.DeferredRecovery{Sessions: parkedSessions("alpha"), Limit: 2})
 		require.Equal(t, "1 session stayed paused — host capacity is 2 (ctrl+r resumes paused)", got)
 	})
 
 	t.Run("several batch into one count", func(t *testing.T) {
-		got := startupParkNotice(session.DeferredRecovery{Sessions: parked("a", "b", "c"), Limit: 2})
+		got := startupParkNotice(session.DeferredRecovery{Sessions: parkedSessions("a", "b", "c"), Limit: 2})
 		require.Equal(t, "3 sessions stayed paused — host capacity is 2 (ctrl+r resumes paused)", got)
 	})
 
@@ -56,7 +56,7 @@ func TestStartupParkNotice(t *testing.T) {
 	// one would drop the key the line exists to teach.
 	t.Run("no session title is interpolated", func(t *testing.T) {
 		got := startupParkNotice(session.DeferredRecovery{
-			Sessions: parked("a-very-long-session-title-the-user-typed"), Limit: 2,
+			Sessions: parkedSessions("a-very-long-session-title-the-user-typed"), Limit: 2,
 		})
 		require.NotContains(t, got, "a-very-long-session-title")
 	})
@@ -72,12 +72,12 @@ func TestEarlierParkNotice(t *testing.T) {
 	})
 
 	t.Run("one session", func(t *testing.T) {
-		got := earlierParkNotice(session.DeferredRecovery{Sessions: parked("alpha"), Limit: 2})
+		got := earlierParkNotice(session.DeferredRecovery{Sessions: parkedSessions("alpha"), Limit: 2})
 		require.Equal(t, "1 session parked earlier — host capacity is 2 (ctrl+r resumes paused)", got)
 	})
 
 	t.Run("several batch into one count", func(t *testing.T) {
-		got := earlierParkNotice(session.DeferredRecovery{Sessions: parked("a", "b", "c"), Limit: 2})
+		got := earlierParkNotice(session.DeferredRecovery{Sessions: parkedSessions("a", "b", "c"), Limit: 2})
 		require.Equal(t, "3 sessions parked earlier — host capacity is 2 (ctrl+r resumes paused)", got)
 	})
 
@@ -85,7 +85,7 @@ func TestEarlierParkNotice(t *testing.T) {
 	// spellings at all: "stayed" is present-tense about a load the user just performed,
 	// and this report describes a decision another process took hours ago.
 	t.Run("does not date the park to this launch", func(t *testing.T) {
-		got := earlierParkNotice(session.DeferredRecovery{Sessions: parked("a"), Limit: 2})
+		got := earlierParkNotice(session.DeferredRecovery{Sessions: parkedSessions("a"), Limit: 2})
 		require.NotContains(t, got, "stayed")
 		require.Contains(t, got, "earlier")
 	})
@@ -94,7 +94,7 @@ func TestEarlierParkNotice(t *testing.T) {
 	// truncates, and r acts on a selection a parked row is never part of.
 	t.Run("names no session and advertises only ctrl+r", func(t *testing.T) {
 		got := earlierParkNotice(session.DeferredRecovery{
-			Sessions: parked("a-very-long-session-title-the-user-typed"), Limit: 2,
+			Sessions: parkedSessions("a-very-long-session-title-the-user-typed"), Limit: 2,
 		})
 		require.NotContains(t, got, "a-very-long-session-title")
 		require.NotContains(t, got, "press r")
@@ -116,7 +116,7 @@ func TestStartupParkNoticeFitsNarrowBar(t *testing.T) {
 		"a park made earlier":  earlierParkNotice,
 	} {
 		for _, d := range []session.DeferredRecovery{
-			{Sessions: parked("a"), Limit: 2},
+			{Sessions: parkedSessions("a"), Limit: 2},
 			// Three digits in both interpolations, the worst case each can actually reach:
 			// the count is bounded only by the fleet, and the capacity is DefaultSessionCap()
 			// — half the host's threads, so 128 on a 256-thread machine. This is the case
@@ -136,7 +136,7 @@ func TestStartupParkNoticeFitsNarrowBar(t *testing.T) {
 func TestFlushDeferredRecovery(t *testing.T) {
 	t.Run("flushes onto the hint bar and clears the buffer", func(t *testing.T) {
 		h := newCreateFormHome(t)
-		h.pendingDeferredRecovery = session.DeferredRecovery{Sessions: parked("a", "b"), Limit: 2}
+		h.pendingDeferredRecovery = session.DeferredRecovery{Sessions: parkedSessions("a", "b"), Limit: 2}
 
 		cmd := h.flushDeferredRecovery()
 
@@ -156,7 +156,7 @@ func TestFlushDeferredRecovery(t *testing.T) {
 
 	t.Run("waits rather than clobbering an overlay", func(t *testing.T) {
 		h := newCreateFormHome(t)
-		h.pendingDeferredRecovery = session.DeferredRecovery{Sessions: parked("a"), Limit: 2}
+		h.pendingDeferredRecovery = session.DeferredRecovery{Sessions: parkedSessions("a"), Limit: 2}
 		h.state = statePrompt // an overlay owns the screen
 
 		require.Nil(t, h.flushDeferredRecovery(), "no toast while an overlay is up")

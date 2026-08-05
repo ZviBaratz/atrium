@@ -40,11 +40,26 @@ func pendingParkReports(deferred session.DeferredRecovery, instances []*session.
 //
 // Reconciliation is not tidying: a report describes what SOME EARLIER PROCESS decided,
 // and the rows it names may have moved since. A session is kept only if it is still
-// loaded and still paused. That is what covers the park that did not stick — a daemon
-// killed before its save (see daemon.saveAndReport) persists no park, so the row loads
-// as Running and gets recovered, and reporting it would tell the user capacity parked a
-// session that is running in front of them. It equally drops one the user has since
-// killed or resumed.
+// loaded, still paused, and has not changed status since the report was written.
+//
+// Still paused covers the park that did not stick — a daemon killed before its save (see
+// daemon.saveAndReport) persists no park, so the row loads as Running and gets recovered,
+// and reporting it would tell the user capacity parked a session that is running in front
+// of them. It equally drops one the user has since killed or resumed.
+//
+// Unchanged-since is what makes the attribution honest rather than merely plausible, and
+// it is needed because a report can outlive the launch that read it: delivery unlinks the
+// file, so a quit inside the window before the first preview tick — or an unlink that
+// failed — leaves it for a later launch, with a whole session in between. In that session
+// the user can resume a named row and pause it again themselves. Paused alone would then
+// toast "parked earlier — host capacity is N" about a pause they made, which is the same
+// false claim the failed-save case is guarded against. StatusChangedAt is persisted for
+// exactly this kind of question (session/storage.go), and the paused branch of reattach
+// leaves it alone, so it still dates the park itself.
+//
+// Both zero-time cases stay permissive, matching Report.Expired: a report with no
+// timestamp cannot date anything, so it does not get to reject; a session whose stamp is
+// absent (a state file predating the field) is not evidence of a change.
 //
 // Matching is the (Title, Path) pair, never the title alone, for the reason the outbox
 // drain matches that way too: titles are unique only within a repo group, so a
@@ -64,14 +79,19 @@ func earlierParkReport(instances []*session.Instance, now time.Time) session.Def
 	var kept []session.ParkedSession
 	for _, spooled := range report.Sessions {
 		for _, inst := range instances {
-			if inst.Title == spooled.Title && inst.Path == spooled.Path && inst.Paused() {
-				kept = append(kept, session.ParkedSession{Title: spooled.Title, Path: spooled.Path})
-				break
+			if inst.Title != spooled.Title || inst.Path != spooled.Path {
+				continue
 			}
+			if inst.Paused() && !changedSince(inst, report.CreatedAt) {
+				kept = append(kept, session.ParkedSession{Title: spooled.Title, Path: spooled.Path})
+			}
+			break // the pair is unique, so this was the row the report meant
 		}
 	}
 	if len(kept) == 0 {
-		log.InfoLog.Printf("discarding a deferred-recovery report for %d session(s): none of them is still parked",
+		// Deliberately not "none is still paused": a row can also be dropped because it is
+		// paused for a newer reason than this report, which is a different fact about it.
+		log.InfoLog.Printf("discarding a deferred-recovery report for %d session(s): none of them is still parked by it",
 			len(report.Sessions))
 		if err := parkreport.Remove(); err != nil {
 			log.WarningLog.Printf("could not remove a reconciled-away deferred-recovery report: %v", err)
@@ -79,4 +99,19 @@ func earlierParkReport(instances []*session.Instance, now time.Time) session.Def
 		return session.DeferredRecovery{}
 	}
 	return session.DeferredRecovery{Sessions: kept, Limit: report.Limit}
+}
+
+// changedSince reports whether inst's status has moved since a report written at
+// reportedAt — i.e. whether the pause on this row is a later one than the park the report
+// describes.
+//
+// Either timestamp being zero answers false: neither absence is evidence of a change, and
+// treating it as one would empty a report from a version that omits the field, or one
+// naming a session whose state file predates StatusChangedAt.
+func changedSince(inst *session.Instance, reportedAt time.Time) bool {
+	changedAt := inst.StatusChangedAt()
+	if reportedAt.IsZero() || changedAt.IsZero() {
+		return false
+	}
+	return changedAt.After(reportedAt)
 }
