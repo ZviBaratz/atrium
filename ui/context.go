@@ -30,7 +30,11 @@ const (
 )
 
 // Attention thresholds for the chip's colour, as percentages of the window.
-// Only reachable when the ceiling is known — a count is always dim.
+// Reachable whenever the ceiling is KNOWN, in every mode — a `count`-mode chip
+// on a known model tints too, and should: "900k" is as urgent as "90%", and the
+// mode chooses how the number reads, not whether the urgency is real. What
+// stays dim unconditionally is a count from an UNKNOWN model, which has no
+// ceiling to be near (see contextColor).
 const (
 	contextWarnPct   = 75
 	contextDangerPct = 90
@@ -122,9 +126,17 @@ func contextColor(th *theme.Theme, u transcript.Usage) theme.Color {
 	}
 }
 
-// humanizeTokens renders a context token count in at most 4 cells: exact below
-// 1000, whole thousands to just under a million ("283k"), then one decimal of
+// humanizeTokens renders a context token count compactly: exact below 1000,
+// whole thousands to just under a million ("283k"), then one decimal of
 // millions ("1.0M").
+//
+// Width: four cells for every reading this chip can actually carry, and five is
+// the budget the layout is sized against. Four holds up to 9.9M; "10.0M" is the
+// first five-cell value, and it is unreachable in practice because the widest
+// window in the table (agent.ClaudeContextWindow) is 1M — a reading ten times
+// that would mean the transcript, not the formatter, had gone wrong. The chip
+// tests assert the five-cell ceiling rather than four so the bound holds for
+// any input, not just the plausible ones.
 //
 // Deliberately not humanizeCount (row.go), which shares the "k" idea but keeps
 // a decimal place throughout: it renders 999,323 as "999.3k", six cells. Six is

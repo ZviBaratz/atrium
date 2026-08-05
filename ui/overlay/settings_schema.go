@@ -699,7 +699,7 @@ func newSettingRows(cfg *config.Config) []settingRow {
 			// count, and one that is missing — not the reasoning behind either;
 			// that lives in ui/context.go and session/agent/window.go.
 			detail: "Shows a token count instead when the model's context window is " +
-				"unknown. Hidden when two started sessions share a working directory.",
+				"unknown. Hidden when two sessions read one transcript directory.",
 			gloss: map[string]string{
 				config.ContextIndicatorOff:     "no chip",
 				config.ContextIndicatorCount:   "tokens used, e.g. 283k",

@@ -11,6 +11,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/mattn/go-runewidth"
 )
 
@@ -155,9 +156,9 @@ func legendGroups() []legendGroup {
 			// The context meter, shown by its full rung. One sample rather than the
 			// whole eight-rung ladder: the legend answers "what is this mark on my
 			// row", and the ramp is self-explaining once you know it is a meter —
-			// eight glyphs here would cost 16 cells on a line already near the
-			// overlay width. It renders only in the opt-in `bar` mode, but the
-			// legend is a projection of the glyph table, not of the active config.
+			// eight glyphs here would cost 16 cells and push this group onto a third
+			// line. It renders only in the opt-in `bar` mode, but the legend is a
+			// projection of the glyph table, not of the active config.
 			{glyph: contextRampSample(g), style: t.DimStyle(), label: "context"},
 			{glyph: g.AutoBadge, rendered: t.BadgeStyle().Render(" " + g.AutoBadge + "AUTO "), label: "auto-accepting"},
 		}},
@@ -176,27 +177,55 @@ func contextRampSample(g theme.Glyphs) string {
 	return g.ContextRamp[len(g.ContextRamp)-1]
 }
 
-// legendLines renders the legend groups, one line per group: a padded group title
-// followed by "<glyph> <label>" entries. The text overlay wraps a long line to the
-// box width, so a narrow terminal reflows rather than overflows.
+// legendTitleCol is the width of the group-title column: two leading spaces plus
+// a title padded to eight. Continuation lines indent by the same amount, so a
+// wrapped group's entries stay in one column.
+const legendTitleCol = 10
+
+// legendMaxWidth is the widest a legend line may be. It is the ? overlay's inner
+// width at an 80-column terminal: TextOverlay.boxWidth() caps at width-4 (border
+// and margin), and wrappedLines subtracts Padding(1,2)'s four more columns.
+//
+// The overlay does wrap a longer line, but it wraps to the box, not to the
+// legend's grammar — it breaks mid-label, so "AUTO auto-accepting" lands as
+// "AUTO auto-" over "accepting" with no indent. Packing here instead keeps a
+// group's entries whole and hanging-indented, and means the next glyph added to
+// a full group reflows rather than shipping a broken line. TestLegendLinesFit
+// holds the bound.
+const legendMaxWidth = 72
+
+// legendLines renders the legend groups: a padded group title followed by
+// "<glyph> <label>" entries, packed into lines no wider than legendMaxWidth. A
+// group whose entries do not fit continues on further lines under a blank title.
 func legendLines() []string {
 	var lines []string
 	for _, grp := range legendGroups() {
 		title := grp.title
-		for len(title) < 8 {
+		for len(title) < legendTitleCol-2 {
 			title += " "
 		}
 		var b strings.Builder
 		b.WriteString(helpDimStyle().Render("  " + title))
+		width := legendTitleCol
 		for i, e := range grp.entries {
-			if i > 0 {
-				b.WriteString("  ")
-			}
 			glyph := e.rendered
 			if glyph == "" {
 				glyph = e.style.Render(e.glyph)
 			}
-			b.WriteString(glyph + " " + helpDimStyle().Render(e.label))
+			entry := glyph + " " + helpDimStyle().Render(e.label)
+			entryW := ansi.StringWidth(entry)
+			sepW := 2
+			if i == 0 {
+				sepW = 0
+			}
+			if i > 0 && width+sepW+entryW > legendMaxWidth {
+				lines = append(lines, b.String())
+				b.Reset()
+				b.WriteString(strings.Repeat(" ", legendTitleCol))
+				width, sepW = legendTitleCol, 0
+			}
+			b.WriteString(strings.Repeat(" ", sepW) + entry)
+			width += sepW + entryW
 		}
 		lines = append(lines, b.String())
 	}

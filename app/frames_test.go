@@ -467,7 +467,7 @@ func TestMetadataPoll_WarmsTheFrameCacheForFree(t *testing.T) {
 	require.False(t, captured, "precondition: no frame yet")
 
 	before := countVerb(spy.seen(), "capture-pane")
-	results := collectMetadata(h.ctx, []*session.Instance{inst}, nil, false)
+	results := collectMetadata(h.ctx, []*session.Instance{inst}, nil, false, h.usagePolicy())
 	afterPoll := countVerb(spy.seen(), "capture-pane")
 	h.applyMetadataResults(results, false)
 
@@ -513,7 +513,7 @@ func TestMetadataApply_LaunchesNoSubprocessOnTheUpdateThread(t *testing.T) {
 	h, inst := newCaptureHome(t, spy)
 	h.appConfig.SessionContextBar = boolPtr(true)
 
-	results := collectMetadata(h.ctx, []*session.Instance{inst}, inst, false)
+	results := collectMetadata(h.ctx, []*session.Instance{inst}, inst, false, h.usagePolicy())
 
 	before := spy.count()
 	cmds := h.applyMetadataResults(results, false)

@@ -26,8 +26,20 @@ func (claudeAdapter) supports(program string) bool {
 	return agent.Resolve(program).Key == agent.KeyClaude
 }
 
+// claudeProjectDir returns the directory Claude Code keeps workingDir's
+// transcripts in. Every caller in this package derives its path from here
+// rather than joining the parts itself, because the mapping is many-to-one:
+// sanitizeCWD flattens every non-alphanumeric rune to '-', so /home/z/proj-a
+// and /home/z/proj/a name the SAME directory. Anything that reasons about which
+// sessions read the same transcripts (transcript.ProjectDir → the #596
+// collision guard) has to collapse those two the same way the reader does, and
+// the only way to guarantee that is to call the same function.
+func claudeProjectDir(root, workingDir string) string {
+	return filepath.Join(root, "projects", sanitizeCWD(workingDir))
+}
+
 func (claudeAdapter) render(workingDir string, opts Options) (string, error) {
-	dir := filepath.Join(opts.Root, "projects", sanitizeCWD(workingDir))
+	dir := claudeProjectDir(opts.Root, workingDir)
 	path, err := newestTranscript(dir)
 	if err != nil {
 		return "", err
@@ -51,7 +63,7 @@ func (claudeAdapter) render(workingDir string, opts Options) (string, error) {
 // under <root>/projects/<sanitized-cwd>. newestTranscript returns an error for a
 // missing/empty dir or an empty newest file, so err == nil ⇔ there is something to resume.
 func (claudeAdapter) hasSession(workingDir string, opts Options) bool {
-	dir := filepath.Join(opts.Root, "projects", sanitizeCWD(workingDir))
+	dir := claudeProjectDir(opts.Root, workingDir)
 	_, err := newestTranscript(dir)
 	return err == nil
 }

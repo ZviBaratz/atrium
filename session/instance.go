@@ -260,9 +260,18 @@ type Instance struct {
 	// newest real assistant turn, plus the model of that same entry (#596).
 	// Written only on the main thread (SetUsageMeta), like modelID. Deliberately
 	// NOT persisted: unlike the model, a token count is a claim about a live
-	// transcript that goes stale the moment the session takes another turn, and a
-	// restored session re-derives it on its first post-restore tick. Zero tokens
-	// = no reading, and the chip is absent rather than showing a 0.
+	// transcript that goes stale the moment the session takes another turn. Zero
+	// tokens = no reading, and the chip is absent rather than showing a 0.
+	//
+	// What "not persisted" costs, stated rather than glossed: a RUNNING session
+	// re-derives it on its first post-restore tick, but a PAUSED one never does
+	// — ComputeUsage refuses paused sessions, and a paused worktree session has
+	// no working directory left to read from anyway — so after an Atrium restart
+	// a paused row carries no context chip even though it still carries a model
+	// chip, which modelID's persistence does buy. That asymmetry is the accepted
+	// trade: a paused session is burning no context, so the number it would show
+	// is one nobody can act on, and the alternative is persisting a token count
+	// that could be days old and reads as current.
 	contextUsage transcript.Usage
 	// usageStamp memoizes the transcript state contextUsage was extracted from,
 	// with the same cross-thread contract as modelStamp: read in the poll

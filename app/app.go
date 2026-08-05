@@ -792,7 +792,7 @@ func (m *home) Init() tea.Cmd {
 		},
 		m.armFrameCapture(0), // pane-capture chain: the only place tmux content is read
 		m.armSplashTick(),    // idle splash animation, live from the first frame
-		tickUpdateMetadataCmd(m.ctx, m.snapshotActiveInstances(), m.list.GetSelectedInstance(), true, m.attachGen), // first tick: full sweep
+		tickUpdateMetadataCmd(m.ctx, m.snapshotActiveInstances(), m.list.GetSelectedInstance(), true, m.attachGen, m.usagePolicy()), // first tick: full sweep
 		m.updateCheckCmd(),   // nil (inert) is fine: tea.Batch skips nil cmds
 		m.driftCheckCmd(),    // agent-heuristic drift hint
 		m.agentCheckCmd(),    // background agent CLI detection

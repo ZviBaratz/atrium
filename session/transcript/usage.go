@@ -22,7 +22,6 @@ import (
 	"context"
 	"encoding/json"
 	"os"
-	"path/filepath"
 )
 
 // usageMaxBytes caps the tail parsed for the context reading. Usage rides every
@@ -81,7 +80,7 @@ func LatestUsage(ctx context.Context, program, workingDir string, prev Stamp, op
 	}
 	opts = applyDefaults(opts)
 
-	path, err := newestTranscript(filepath.Join(opts.Root, "projects", sanitizeCWD(workingDir)))
+	path, err := newestTranscript(claudeProjectDir(opts.Root, workingDir))
 	if err != nil {
 		return Usage{}, prev, err
 	}
