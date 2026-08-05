@@ -139,7 +139,7 @@ func runReap(ctx context.Context, w io.Writer, in io.Reader, opts reapOpts) erro
 		// A gap silences it for the same reason at one remove: --kill refuses on an
 		// incomplete inventory, the section above has already said so, and naming the
 		// command anyway would have one output both promise a kill and decline it.
-		if !res.Gaps.Any() && len(reapTargets(res.Servers, false)) > 0 {
+		if !res.Gaps.IncompleteInventory() && len(reapTargets(res.Servers, false)) > 0 {
 			reapf(w, "\nnothing was killed. Run `%s reap --kill` to stop the unreachable ones.\n", binName)
 		}
 		return nil
@@ -153,7 +153,7 @@ func runReap(ctx context.Context, w io.Writer, in io.Reader, opts reapOpts) erro
 	// before they consent. Killing on it would be consent obtained against an
 	// understatement of what dies. An unreadable socket table is the milder case (it
 	// yields no targets at all), but the same rule covers both.
-	if res.Gaps.Any() {
+	if res.Gaps.IncompleteInventory() {
 		return fmt.Errorf("refusing to kill on an incomplete scan: the process inventory could not see everything, so what a kill would destroy is not fully known — re-run %s reap --kill once the scan comes back complete", binName)
 	}
 

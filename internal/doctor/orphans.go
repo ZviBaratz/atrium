@@ -22,8 +22,11 @@ import (
 // pure function of the result rather than of when it happens to be printed.
 //
 // Each half carries its own account of what it could not see, and neither is evidence
-// without it: an empty Servers slice means a clean host only when Gaps.Any() is false,
-// and an empty Stale means a clean directory only when StaleGaps.Any() is false.
+// without it: an empty Servers slice means a clean host only when
+// Gaps.IncompleteInventory() is false, and an empty Stale means a clean directory only
+// when StaleGaps.Any() is false. The two predicates are named differently because they
+// are not the same kind of thing — StaleGaps has no field held back from its Any(),
+// while ScanGaps does, and the name says which.
 type OrphanResult struct {
 	Supported bool
 	Servers   []tmux.OrphanServer
@@ -87,7 +90,7 @@ func RenderOrphans(r OrphanResult) string {
 		// missing rather than declaring the whole section unavailable.
 		b.WriteString("  server scan unavailable — finding a server whose socket no longer resolves\n")
 		b.WriteString("  needs a process inventory, which is Linux-only\n")
-	case r.Gaps.Any():
+	case r.Gaps.IncompleteInventory():
 		// Before the emptiness test, never instead of it: a scan that could not see is
 		// the one case where "none" would be a fabrication rather than a finding, and
 		// any rows that did survive still print below.
