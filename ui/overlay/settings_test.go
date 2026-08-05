@@ -1176,3 +1176,35 @@ func TestSettingsOverlay_NewProfileBecomesACycleOption(t *testing.T) {
 	assert.Contains(t, o.rows[o.cursor].options(cfg), "gemini",
 		"the enum reads cfg.Profiles live, so a new record is cyclable at once")
 }
+
+// TestSettingsOverlay_CycleContextIndicator pins the context-chip enum. Unlike
+// the three on/off chip rows above it has four modes, so the cycle is worth
+// walking in full: an options list that silently dropped a mode would still pass
+// a "cycles and wraps" check that only looked at the first and last entry.
+//
+// The offered order leads with the default rather than with "off", so a user who
+// arrows one step from a fresh config lands on a different *shape* of the chip
+// instead of turning it off by accident.
+func TestSettingsOverlay_CycleContextIndicator(t *testing.T) {
+	cfg := config.DefaultConfig()
+	o := NewSettingsOverlay(cfg)
+	settingsAt(t, o, "context_indicator")
+
+	require.Equal(t, config.ContextIndicatorPercent, cfg.GetContextIndicator(), "chip defaults to percent")
+
+	_, changed := o.HandleKeyPress(keyMsg("right"))
+	assert.Equal(t, "context_indicator", changed, "the cycle must report its row key so home can persist")
+	assert.Equal(t, config.ContextIndicatorCount, cfg.GetContextIndicator())
+
+	o.HandleKeyPress(keyMsg("right"))
+	assert.Equal(t, config.ContextIndicatorBar, cfg.GetContextIndicator())
+
+	o.HandleKeyPress(keyMsg("right"))
+	assert.Equal(t, config.ContextIndicatorOff, cfg.GetContextIndicator())
+
+	o.HandleKeyPress(keyMsg("right"))
+	assert.Equal(t, config.ContextIndicatorPercent, cfg.GetContextIndicator(), "the enum wraps")
+
+	o.HandleKeyPress(keyMsg("left"))
+	assert.Equal(t, config.ContextIndicatorOff, cfg.GetContextIndicator(), "left wraps backwards too")
+}

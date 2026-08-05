@@ -762,7 +762,7 @@ func TestMetadataTick_MemoizesTheQuestionFlag(t *testing.T) {
 
 	require.False(t, inst.EndedAsking(), "precondition: nothing derived yet")
 
-	results := collectMetadata(h.ctx, []*session.Instance{inst}, nil, false)
+	results := collectMetadata(h.ctx, []*session.Instance{inst}, nil, false, h.usagePolicy())
 	require.Len(t, results, 1)
 	require.Equal(t, tmux.PaneIdle, results[0].state, "precondition: the fake pane reads settled")
 	require.True(t, results[0].askedOK, "a settled pane with a fresh transcript yields a result to apply")
@@ -798,7 +798,7 @@ func TestTickPathHoldsPromptWhenQuestionFirstAppears(t *testing.T) {
 
 	inst.QueueFollowupPrompt("go ahead")
 
-	results := collectMetadata(h.ctx, []*session.Instance{inst}, nil, false)
+	results := collectMetadata(h.ctx, []*session.Instance{inst}, nil, false, h.usagePolicy())
 	require.Len(t, results, 1)
 	require.Equal(t, tmux.PaneIdle, results[0].state, "precondition: the turn ended")
 	require.True(t, results[0].asked, "precondition: the question was detected off-thread")
@@ -818,7 +818,7 @@ func TestTickPathHoldsPromptWhenQuestionFirstAppears(t *testing.T) {
 	// The release valve still works through the same path: once the user dwells on the
 	// row, the very next tick delivers.
 	inst.MarkSeen()
-	results = collectMetadata(h.ctx, []*session.Instance{inst}, nil, false)
+	results = collectMetadata(h.ctx, []*session.Instance{inst}, nil, false, h.usagePolicy())
 	for _, cmd := range h.applyMetadataResults(results, false) {
 		if cmd != nil {
 			cmd()
@@ -866,7 +866,7 @@ func TestTickPathNotifiesAsked(t *testing.T) {
 	inst.SetStatus(session.Running)
 	buf.Reset()
 
-	results := collectMetadata(h.ctx, []*session.Instance{inst}, nil, false)
+	results := collectMetadata(h.ctx, []*session.Instance{inst}, nil, false, h.usagePolicy())
 	require.True(t, results[0].asked, "precondition: the question was detected off-thread")
 	h.applyMetadataResults(results, true)
 
@@ -907,7 +907,7 @@ func TestTickPathPlainFinishStaysQuiet(t *testing.T) {
 	inst.SetStatus(session.Running)
 	buf.Reset()
 
-	results := collectMetadata(h.ctx, []*session.Instance{inst}, nil, false)
+	results := collectMetadata(h.ctx, []*session.Instance{inst}, nil, false, h.usagePolicy())
 	require.False(t, results[0].asked, "precondition: a statement is not a question")
 	h.applyMetadataResults(results, true)
 

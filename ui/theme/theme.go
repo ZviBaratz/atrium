@@ -64,6 +64,14 @@ type Glyphs struct {
 	DiffAdd       string // "+" in diff stats
 	DiffDel       string // "-" in diff stats
 	TextCursor    string // hand-rolled "you are typing here" cursor (list filter, picker filters)
+	// ContextRamp is the one-cell context meter (#596): 8 rungs, low→full, of
+	// which exactly one is ever drawn. A single column is the whole point — line
+	// 1's right cluster already carries eight items, and a multi-cell bar plus a
+	// number is 8+ columns it does not have. Each rung is width 1 like every
+	// glyph above; being a slice it is exempt from the reflection sweep in
+	// theme_test.go's assertGlyphWidths and measured element-by-element there
+	// instead, the same way SpinnerFrames is.
+	ContextRamp []string
 }
 
 // Borders carries the box-drawing style so a fallback theme can use square

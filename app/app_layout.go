@@ -330,6 +330,10 @@ func (m *home) applySettingChange(key string) tea.Cmd {
 		if m.list != nil {
 			m.list.SetPermissionIndicator(m.appConfig.GetPermissionIndicator())
 		}
+	case "context_indicator":
+		if m.list != nil {
+			m.list.SetContextIndicator(m.appConfig.GetContextIndicator())
+		}
 	case "os_chrome":
 		// Recompute now rather than waiting a tick: enabling shows the current fleet
 		// on the next frame, and disabling zeroes the title and bar, which the

@@ -687,6 +687,41 @@ func newSettingRows(cfg *config.Config) []settingRow {
 				return []string{config.PermissionIndicatorOn, config.PermissionIndicatorOff}
 			},
 		},
+		{
+			key: "context_indicator", category: catSessionList, label: "Context chip", kind: kindEnum,
+			scope:          scopeGlobal,
+			timing:         timingLive,
+			defaultDisplay: func() string { return (&config.Config{}).GetContextIndicator() },
+			reset:          func(c *config.Config) { c.ContextIndicator = "" },
+			summary:        "Per-session context-window usage; claude only.",
+			// Two lines, because the ? view's budget is 17 and the Options block
+			// takes six of them. It buys the two surprises — a chip that reads as a
+			// count, and one that is missing — not the reasoning behind either;
+			// that lives in ui/context.go and session/agent/window.go.
+			detail: "Shows a token count instead when the model's context window is " +
+				"unknown. Hidden when two sessions read one transcript directory.",
+			gloss: map[string]string{
+				config.ContextIndicatorOff:     "no chip",
+				config.ContextIndicatorCount:   "tokens used, e.g. 283k",
+				config.ContextIndicatorPercent: "share of the model's window, e.g. 28%",
+				config.ContextIndicatorBar:     "a one-cell meter",
+			},
+			get: func(c *config.Config) string {
+				return c.GetContextIndicator()
+			},
+			set: func(c *config.Config, v string) error {
+				c.ContextIndicator = v
+				return nil
+			},
+			options: func(c *config.Config) []string {
+				return []string{
+					config.ContextIndicatorPercent,
+					config.ContextIndicatorCount,
+					config.ContextIndicatorBar,
+					config.ContextIndicatorOff,
+				}
+			},
+		},
 
 		// ── Notifications ─────────────────────────────────────────────────────
 		{

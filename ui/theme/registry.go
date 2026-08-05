@@ -93,6 +93,10 @@ func plainGlyphs() Glyphs {
 		DiffAdd:       "+",
 		DiffDel:       "-",
 		TextCursor:    "▌",
+		// Lower-block elements U+2581..U+2588, low→full: eight legible levels in
+		// one column. Same Unicode block as SelectionMark (▎), TextCursor (▌) and
+		// the plain-rung spinner bars, so a font that renders those renders these.
+		ContextRamp: []string{"▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"},
 	}
 }
 
@@ -154,6 +158,20 @@ func asciiGlyphs() Glyphs {
 	g.Handoff = ">"
 	g.AcctAvailable = "*"
 	g.AcctLimited = "x"
+	// The block ramp is the one glyph here with no 7-bit equivalent in kind, and
+	// the obvious substitute — a density ramp like `. : - = + * % #` — cannot be
+	// used: `-` is a spinner frame, `=` is Paused, `*` is Ready, `%` is Dirty and
+	// `#` is Note, all of which a session row can paint in the SAME frame as the
+	// meter. That is not a tolerable collision like the four above; those pairs
+	// were chosen because no screen shows both meanings, and these appear side by
+	// side on one line, with the legend printing `#` for both "note" and
+	// "context".
+	//
+	// So the ascii rung shows the rung NUMBER instead of a mark whose weight has
+	// to be read. Eight digits, same order and same length, so the index math is
+	// identical across all three rungs; no other ascii glyph is a digit, which
+	// TestASCIIContextRampDoesNotCollide holds to.
+	g.ContextRamp = []string{"1", "2", "3", "4", "5", "6", "7", "8"}
 	// AutoBadge, DiffAdd, DiffDel are already ASCII/empty in plainGlyphs — inherited.
 	return g
 }

@@ -2,6 +2,7 @@ package app
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/ZviBaratz/atrium/ui/theme"
@@ -47,6 +48,11 @@ func TestLegendCoversRowVocabulary(t *testing.T) {
 		// too — which is exactly why they are categorized here instead.
 		"AcctAvailable": "accounts-panel availability mark (panel chrome, not a row status)",
 		"AcctLimited":   "accounts-panel availability mark (panel chrome, not a row status)",
+		// A []string, so the loop's string branch cannot measure it — the same
+		// reason SpinnerFrames is here. It IS row vocabulary and it IS in the
+		// legend: the badges group carries its full rung, asserted explicitly
+		// below rather than by the reflection loop.
+		"ContextRamp": "a []string ramp, represented in the badges group by its full rung (asserted below)",
 	}
 
 	g := theme.Current().Glyphs
@@ -66,4 +72,71 @@ func TestLegendCoversRowVocabulary(t *testing.T) {
 
 	// The working spinner's first frame stands in for the SpinnerFrames field.
 	require.Contains(t, content, g.SpinnerFrames[0], "the working spinner frame must appear in the legend")
+
+	// The context meter's full rung stands in for the ContextRamp field. Asserted
+	// on the rung the legend actually renders, not on any rung: the entry exists
+	// so a user who turns on `bar` mode can identify the mark, and a legend
+	// showing a different rung than the row draws at 100% would not do that.
+	require.Contains(t, content, g.ContextRamp[len(g.ContextRamp)-1],
+		"the context meter's full rung must appear in the legend")
+	require.Contains(t, content, "context", "the context meter's legend entry must be labelled")
+}
+
+// TestLegendLinesFit is the width invariant nothing used to check, and the
+// reason a fifth badges entry shipped as a mid-word wrap.
+//
+// The legend is a columnar table, not prose: the ? overlay will happily reflow
+// an over-long line to its box, but it breaks between words, so "AUTO
+// auto-accepting" lands as "AUTO auto-" over an unindented "accepting". The
+// group is also the one part of the help that GROWS — every glyph added to the
+// row vocabulary must appear here (TestLegendCoversRowVocabulary above), so a
+// hand-checked "it fits today" is a claim with a short shelf life.
+//
+// Measured across all three fidelity rungs because the widths differ: nerd's
+// icons are the same one cell but its labels ride different glyphs, and the
+// ascii rung is the one a terminal without a font falls back to.
+func TestLegendLinesFit(t *testing.T) {
+	for _, set := range []string{theme.GlyphSetPlain, theme.GlyphSetNerd, theme.GlyphSetASCII} {
+		restore := theme.SetGlyphSet(set)
+		for i, line := range legendLines() {
+			require.LessOrEqualf(t, ansi.StringWidth(line), legendMaxWidth,
+				"legend line %d under %q is %d cells, past the ? overlay's %d-cell inner width at 80 columns:\n%s",
+				i, set, ansi.StringWidth(line), legendMaxWidth, ansi.Strip(line))
+		}
+		restore()
+	}
+}
+
+// TestLegendWrapsUnderABlankTitle pins the shape of the overflow, not just the
+// bound: a group too wide for one line continues under a blank title column, so
+// its entries stay in one column instead of restarting at the left margin.
+//
+// Driven on the badges group, which is over the limit today — if a future edit
+// brings it back under, this test stops proving anything, so it asserts the
+// premise first.
+func TestLegendWrapsUnderABlankTitle(t *testing.T) {
+	defer theme.SetGlyphSet(theme.GlyphSetPlain)()
+
+	var badges []string
+	found := false
+	for _, line := range legendLines() {
+		plain := ansi.Strip(line)
+		switch {
+		case strings.HasPrefix(plain, "  badges"):
+			found = true
+			badges = append(badges, plain)
+		case found && strings.HasPrefix(plain, strings.Repeat(" ", legendTitleCol)):
+			badges = append(badges, plain)
+		case found:
+			found = false
+		}
+	}
+	require.Greater(t, len(badges), 1,
+		"the badges group must still overflow one line, or this test proves nothing")
+	require.Equal(t, strings.Repeat(" ", legendTitleCol), badges[1][:legendTitleCol],
+		"a continuation line must be indented to the entry column, not to the margin")
+	require.NotContains(t, badges[0], "auto-accepting",
+		"the entry that did not fit must move whole")
+	require.Contains(t, badges[1], "auto-accepting",
+		"…and land intact on the continuation line, not split across the break")
 }

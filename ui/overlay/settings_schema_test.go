@@ -157,9 +157,12 @@ func TestEveryRowHasAKnownCategoryAndScope(t *testing.T) {
 // variant is added, so an exhaustive map would rot silently), or it is a bare on/off
 // pair that glosses itself and whose meaning is already in the row's summary.
 //
-// Spec §6 supplies glosses for the five enums whose options are a fixed, non-obvious
-// vocabulary — those are exactly where the 300-443-char run-on descriptions lived, so
-// the guard below stays strict where it earns its keep.
+// Spec §6 supplies glosses for the enums whose options are a fixed, non-obvious
+// vocabulary — five at the time it was written, six since context_indicator
+// (off/count/percent/bar) landed. Those are exactly where the 300-443-char run-on
+// descriptions lived, so the guard below stays strict where it earns its keep. The
+// count is not asserted anywhere on purpose: it is the exemption list below that has
+// to stay honest, and TestEnumRowsGlossEveryOption fails for any row missing from both.
 var glossExemptRows = map[string]string{
 	"default_program":      "dynamic: option list is the user's profile names",
 	"theme":                "dynamic: grows with every theme added to the registry (plus the reserved `auto`, glossed by the summary)",
@@ -206,7 +209,7 @@ func TestCategoryRowCounts(t *testing.T) {
 		catSessions:      4,
 		catWorktrees:     6,
 		catAppearance:    5,
-		catSessionList:   5,
+		catSessionList:   6,
 		catNotifications: 4,
 		catAutomation:    4,
 		catInput:         3,
@@ -220,7 +223,7 @@ func TestCategoryRowCounts(t *testing.T) {
 		got[r.category]++
 		total++
 	}
-	assert.Equal(t, 38, total, "37 config rows plus the read-only config-file row")
+	assert.Equal(t, 39, total, "38 config rows plus the read-only config-file row")
 	for _, c := range allCategories() {
 		assert.Equalf(t, want[c], got[c], "category %q row count", c.label())
 	}

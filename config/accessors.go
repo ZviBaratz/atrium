@@ -55,6 +55,37 @@ func (c *Config) GetEffortIndicator() string {
 	return EffortIndicatorOn
 }
 
+// ContextIndicator modes (see Config.ContextIndicator).
+const (
+	ContextIndicatorOff     = "off"
+	ContextIndicatorCount   = "count"
+	ContextIndicatorPercent = "percent"
+	ContextIndicatorBar     = "bar"
+)
+
+// GetContextIndicator returns the normalized context-chip mode: a recognized
+// mode passes through, everything else — including a nil Config, the empty
+// default, and a hand-edited typo — normalizes to ContextIndicatorPercent.
+//
+// Note the shape: a switch with a default, like GetNotifications, NOT the
+// "off only when set explicitly" form the three on/off indicators above use.
+// The difference matters. With four modes, folding unknown values into the
+// first constant would make a typo silently disable the chip, and a feature
+// that vanishes without explanation is the one failure mode a settings typo
+// must not have. Defaulting to the documented mode instead means a bad value
+// costs the user their preference, not the feature.
+func (c *Config) GetContextIndicator() string {
+	if c == nil {
+		return ContextIndicatorPercent
+	}
+	switch c.ContextIndicator {
+	case ContextIndicatorOff, ContextIndicatorCount, ContextIndicatorBar:
+		return c.ContextIndicator
+	default:
+		return ContextIndicatorPercent
+	}
+}
+
 // SplashRandom is the Splash mode that picks a fresh pattern each launch —
 // the default (see Config.Splash).
 const SplashRandom = "random"

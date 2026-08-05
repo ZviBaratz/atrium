@@ -115,6 +115,76 @@ func TestGlyphsForFidelityRungs(t *testing.T) {
 	require.Equal(t, plainGlyphs().Branch, Current().Glyphs.Branch, "an unknown rung falls back to plain")
 }
 
+// TestContextRampRungs pins the context meter's ladder across all three rungs:
+// the plain/nerd sets use block elements, and the ascii set must swap in a 7-bit
+// ladder rather than inheriting them — a block element is exactly the kind of
+// glyph the ascii floor exists for. Width is guarded by assertGlyphWidths across
+// every palette; this test pins the *content*, which that sweep cannot see.
+func TestContextRampRungs(t *testing.T) {
+	t.Cleanup(SetGlyphSet(GlyphSetPlain))
+
+	SetGlyphSet(GlyphSetPlain)
+	require.Equal(t, []string{"▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"}, Current().Glyphs.ContextRamp,
+		"plain rung uses the block ramp")
+	require.Len(t, Current().Glyphs.ContextRamp, contextRampRungs,
+		"the literal above must stay the length every other assertion assumes")
+
+	SetGlyphSet(GlyphSetNerd)
+	require.Equal(t, plainGlyphs().ContextRamp, Current().Glyphs.ContextRamp,
+		"nerd rung inherits the block ramp — no vendor icon needed")
+
+	SetGlyphSet(GlyphSetASCII)
+	ascii := Current().Glyphs.ContextRamp
+	require.Len(t, ascii, contextRampRungs)
+	require.NotEqual(t, plainGlyphs().ContextRamp, ascii,
+		"ascii rung must override the block ramp, not inherit it")
+	for i, r := range ascii {
+		for _, c := range r {
+			require.Lessf(t, c, rune(0x80), "ascii rung rung %d = %q is not 7-bit", i, r)
+		}
+	}
+}
+
+// TestASCIIContextRampDoesNotCollide is the invariant asciiGlyphs' own comment
+// claims and nothing used to check: the four deliberate collisions in that set
+// are safe only because no screen paints both meanings, so a new glyph may not
+// reuse a mark that shares a frame with it.
+//
+// The context meter is the worst case for that rule. It renders on line 1 of a
+// session row, next to Ready/Paused/Dirty/Note/Queued and above the diff stats,
+// and it appears in the ? legend on the same line as the badges — which is where
+// the original `. : - = + * % #` ramp printed `#` for both "note" and "context".
+// A meter rung is also the one glyph a user cannot look up by shape, since its
+// whole job is to be read as a position on a ladder.
+//
+// Asserting against the whole ascii table rather than the row subset is
+// deliberate: it is the check that stays right when a glyph moves to a screen
+// the meter also reaches.
+func TestASCIIContextRampDoesNotCollide(t *testing.T) {
+	g := asciiGlyphs()
+	taken := map[string]string{}
+	rv := reflect.ValueOf(g)
+	rt := rv.Type()
+	for i := 0; i < rt.NumField(); i++ {
+		f := rt.Field(i)
+		if f.Name == "ContextRamp" || f.Type.Kind() != reflect.String {
+			continue
+		}
+		if s := rv.Field(i).String(); s != "" {
+			taken[s] = f.Name
+		}
+	}
+	for _, frame := range g.SpinnerFrames {
+		taken[frame] = "SpinnerFrames"
+	}
+	for i, rung := range g.ContextRamp {
+		if owner, clash := taken[rung]; clash {
+			t.Errorf("ascii context ramp rung %d = %q collides with %s, which paints on the same row",
+				i, rung, owner)
+		}
+	}
+}
+
 // exemptFromWidth1 names the Glyphs fields that assertGlyphWidths must not hold
 // to the width-1 rule, each with the reason it is exempt. Everything absent from
 // this map is measured, so a newly added glyph is guarded the day it lands rather
@@ -124,6 +194,7 @@ var exemptFromWidth1 = map[string]string{
 	"SpinnerFrames": "a []string, measured frame-by-frame below",
 	"SpinnerFPS":    "a duration, not a glyph",
 	"AutoBadge":     "an optional leading icon: empty (0) or a single cell, checked below",
+	"ContextRamp":   "a []string, measured rung-by-rung below (and pinned to 8 rungs)",
 }
 
 // assertGlyphWidths checks the width-1 invariant for one resolved glyph set.
@@ -152,7 +223,25 @@ func assertGlyphWidths(t *testing.T, name string, g Glyphs) {
 			t.Errorf("%s: spinner frame %d = %q has width %d, want 1", name, i, f, w)
 		}
 	}
+	// The context meter draws exactly one rung, so every rung carries the same
+	// width-1 obligation as any other cell glyph. The length is asserted here too
+	// rather than only in TestGlyphsForFidelityRungs: contextChip indexes this
+	// slice by a level derived from a percentage, so a short ramp is an
+	// out-of-range panic in the render path, not a cosmetic defect.
+	if n := len(g.ContextRamp); n != contextRampRungs {
+		t.Errorf("%s: ContextRamp has %d rungs, want %d", name, n, contextRampRungs)
+	}
+	for i, r := range g.ContextRamp {
+		if w := runewidth.StringWidth(r); w != 1 {
+			t.Errorf("%s: context ramp rung %d = %q has width %d, want 1", name, i, r, w)
+		}
+	}
 }
+
+// contextRampRungs is the fixed length of Glyphs.ContextRamp. Spelled once here
+// rather than as a literal in each assertion, so the two places that care —
+// the width sweep above and the fidelity-rung test — cannot disagree about it.
+const contextRampRungs = 8
 
 // TestAgentGlyphWidths extends the same invariant to the agent identity glyphs:
 // each must be a single cell so the list's column math holds, and every entry

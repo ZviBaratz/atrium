@@ -69,6 +69,27 @@ func HasResumable(program, workingDir string, opts Options) (resumable, supporte
 	return false, false
 }
 
+// ProjectDir returns the directory the transcript readers would look in for
+// (program, workingDir) — the identity two sessions collide on. Two sessions
+// with the same ProjectDir read the same set of files, so newest-mtime picks
+// arbitrarily between their conversations and neither one's reading can be
+// trusted (#596's acceptance criterion 4). "" means there is nothing to
+// collide on: no adapter handles program, or workingDir is unknown.
+//
+// It is deliberately the *resolved directory* rather than the working dir
+// itself. Two distinct working dirs can map to one project dir — sanitizeCWD
+// flattens every non-alphanumeric rune to '-', so /home/z/proj-a and
+// /home/z/proj/a land in the same place — while two sessions on the same
+// working dir under different CLAUDE_CONFIG_DIR roots (separate accounts) do
+// NOT collide at all. Comparing working dirs gets both of those backwards; this
+// is the value the reader actually opens.
+func ProjectDir(program, workingDir string, opts Options) string {
+	if workingDir == "" || !(claudeAdapter{}).supports(program) {
+		return ""
+	}
+	return claudeProjectDir(applyDefaults(opts).Root, workingDir)
+}
+
 func applyDefaults(opts Options) Options {
 	if opts.Root == "" {
 		// Claude Code relocates its whole data dir (incl. projects/) when

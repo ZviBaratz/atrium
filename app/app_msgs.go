@@ -691,7 +691,7 @@ func (m *home) handleAttachFinished(msg attachFinishedMsg) (tea.Model, tea.Cmd) 
 	selected := m.list.GetSelectedInstance()
 	m.lastStatusPollSelection = selected
 	cmds := []tea.Cmd{m.instanceChanged(),
-		sweepMetadataNowCmd(m.ctx, m.snapshotActiveInstances(), selected, m.attachGen)}
+		sweepMetadataNowCmd(m.ctx, m.snapshotActiveInstances(), selected, m.attachGen, m.usagePolicy())}
 	// Prompts the keeper definitively failed to deliver mid-attach: surface the loss
 	// like promptSendErrorMsg would, rather than leaving sessions silently
 	// Ready-but-idle. The sibling-cycle branch carries its errs forward to the next

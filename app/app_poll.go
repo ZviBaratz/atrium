@@ -129,6 +129,19 @@ type instanceMetaResult struct {
 	model      string
 	modelStamp transcript.Stamp
 	modelOK    bool
+	// usage / usageStamp carry a transcript context-window extraction (#596);
+	// usageOK marks a result worth applying (ComputeUsage returns ok=false for
+	// non-claude, unavailable, or unchanged transcripts). Its own stamp, beside
+	// modelStamp rather than sharing it: the two readers scan independently, so
+	// one memo must not gate the other.
+	usage      transcript.Usage
+	usageStamp transcript.Stamp
+	usageOK    bool
+	// usageClear is the other verdict usagePolicy can reach: this session must
+	// not hold a reading at all (an ambiguous transcript source, or the chip
+	// switched off). It is not the same as usageOK == false, which only means
+	// "nothing new" — the main thread drops the stored value for it.
+	usageClear bool
 	// asked / askedStamp carry the #571 question check — whether the turn that just
 	// ended did so by asking the user something; askedOK marks a result worth applying
 	// (ComputeAsked returns ok=false for non-claude, unavailable, or unchanged
@@ -497,12 +510,12 @@ type metadataSweepDoneMsg struct {
 // so a stale "running" on a now-idle agent doesn't linger; background rows keep the
 // hysteresis Poll so a mid-turn agent isn't falsely flagged done (see collectMetadata's
 // fresh argument). Returns nil when there are no active sessions to refresh.
-func sweepMetadataNowCmd(ctx context.Context, active []*session.Instance, selected *session.Instance, attachGen uint64) tea.Cmd {
+func sweepMetadataNowCmd(ctx context.Context, active []*session.Instance, selected *session.Instance, attachGen uint64, usage usagePolicy) tea.Cmd {
 	if len(active) == 0 {
 		return nil
 	}
 	return func() tea.Msg {
-		return metadataSweepDoneMsg{results: collectMetadata(ctx, active, selected, true), attachGen: attachGen}
+		return metadataSweepDoneMsg{results: collectMetadata(ctx, active, selected, true, usage), attachGen: attachGen}
 	}
 }
 
@@ -604,7 +617,7 @@ func pollTargets(active []*session.Instance, selected *session.Instance, fullSwe
 // use the hysteresis Poll — they carry no ready-suppression, so a single marker-absent
 // sample of a mid-turn agent must not be allowed to flag a false completion. The periodic
 // tick passes fresh=false, so every row uses the hysteresis Poll there.
-func collectMetadata(ctx context.Context, poll []*session.Instance, selected *session.Instance, fresh bool) []instanceMetaResult {
+func collectMetadata(ctx context.Context, poll []*session.Instance, selected *session.Instance, fresh bool, usage usagePolicy) []instanceMetaResult {
 	results := make([]instanceMetaResult, len(poll))
 	var wg sync.WaitGroup
 	for idx, inst := range poll {
@@ -678,6 +691,16 @@ func collectMetadata(ctx context.Context, poll []*session.Instance, selected *se
 			// Transcript model is stamp-gated: an idle claude session costs one
 			// ReadDir + Stat per tick, a streaming one a ≤128KB tail parse.
 			r.model, r.modelStamp, r.modelOK = instance.ComputeModel()
+			// Context occupancy is stamp-gated the same way, over the same file: an
+			// idle claude session costs one more ReadDir + Stat per tick and no file
+			// open, a streaming one a second ≤128KB tail parse. usagePolicy decides
+			// whether it is read AT ALL — a chip switched off does no work, and an
+			// ambiguous transcript source is not merely hidden but never stored.
+			if usage.allows(instance) {
+				r.usage, r.usageStamp, r.usageOK = instance.ComputeUsage()
+			} else {
+				r.usageClear = true
+			}
 			// Live permission mode reads the value Poll just detected from the
 			// footer — no extra capture; only applied when it changed.
 			r.mode, r.modeOK = instance.ComputeMode()
@@ -751,6 +774,12 @@ func (m *home) applyMetadataResults(results []instanceMetaResult, emit bool) []t
 		r.instance.SetPRStatus(r.prStatus)
 		if r.modelOK {
 			r.instance.SetModelMeta(r.model, r.modelStamp)
+		}
+		switch {
+		case r.usageClear:
+			r.instance.ClearUsage()
+		case r.usageOK:
+			r.instance.SetUsageMeta(r.usage, r.usageStamp)
 		}
 		if r.askedOK {
 			r.instance.SetAskedMeta(r.asked, r.askedStamp)
@@ -957,7 +986,7 @@ func applyDiffStats(inst *session.Instance, stats *git.DiffStats, contentSkipped
 // memory bounded since the diff pane only ever renders the selected one. A background
 // instance gets a lightweight numstat-only summary, or — once diffContentDue rules out
 // that its tree moved — the branch-level counters alone. See collectMetadata.
-func tickUpdateMetadataCmd(ctx context.Context, active []*session.Instance, selected *session.Instance, fullSweep bool, attachGen uint64) tea.Cmd {
+func tickUpdateMetadataCmd(ctx context.Context, active []*session.Instance, selected *session.Instance, fullSweep bool, attachGen uint64, usage usagePolicy) tea.Cmd {
 	return func() tea.Msg {
 		// Honor ctx during the inter-tick wait so a shutdown mid-sleep doesn't leave
 		// this goroutine parked for up to 500ms.
@@ -976,6 +1005,6 @@ func tickUpdateMetadataCmd(ctx context.Context, active []*session.Instance, sele
 			return metadataUpdateDoneMsg{attachGen: attachGen}
 		}
 
-		return metadataUpdateDoneMsg{results: collectMetadata(ctx, poll, selected, false), attachGen: attachGen}
+		return metadataUpdateDoneMsg{results: collectMetadata(ctx, poll, selected, false, usage), attachGen: attachGen}
 	}
 }

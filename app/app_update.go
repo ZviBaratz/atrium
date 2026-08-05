@@ -262,7 +262,7 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Stop the self-chaining tick once the app context is cancelled (shutdown):
 		// re-arming would only spawn a Cmd that immediately returns on ctx.Done().
 		if m.ctx.Err() == nil {
-			cmds = append(cmds, tickUpdateMetadataCmd(m.ctx, m.snapshotActiveInstances(), m.list.GetSelectedInstance(), fullSweep, m.attachGen))
+			cmds = append(cmds, tickUpdateMetadataCmd(m.ctx, m.snapshotActiveInstances(), m.list.GetSelectedInstance(), fullSweep, m.attachGen, m.usagePolicy()))
 		}
 		return m, tea.Batch(cmds...)
 	case metadataSweepDoneMsg:

@@ -38,6 +38,22 @@ type rawEntry struct {
 type rawMessage struct {
 	Content json.RawMessage `json:"content"`
 	Model   string          `json:"model"` // assistant entries only; see LatestModel
+	// Usage rides the same assistant entry as Model — extracting it costs no
+	// extra I/O beyond the tail scan LatestUsage already performs. A pointer, so
+	// "the entry carried no usage object" stays distinguishable from "it carried
+	// an all-zero one"; the latter is what a <synthetic> API-error entry looks
+	// like, and conflating them would report 0 tokens right after an error.
+	Usage *rawUsage `json:"usage"`
+}
+
+// rawUsage is the token accounting Claude Code writes on every assistant entry.
+// Only the three input-side fields are decoded: their sum is the conversation's
+// context occupancy at that turn (see LatestUsage). output_tokens is excluded
+// deliberately — it is this turn's generation, not context the next turn carries.
+type rawUsage struct {
+	InputTokens              int `json:"input_tokens"`
+	CacheReadInputTokens     int `json:"cache_read_input_tokens"`
+	CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
 }
 
 type rawBlock struct {

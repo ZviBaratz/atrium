@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"os"
-	"path/filepath"
 	"strings"
 )
 
@@ -94,7 +93,7 @@ func EndedAsking(ctx context.Context, program, workingDir string, prev Stamp, op
 	}
 	opts = applyDefaults(opts)
 
-	path, err := newestTranscript(filepath.Join(opts.Root, "projects", sanitizeCWD(workingDir)))
+	path, err := newestTranscript(claudeProjectDir(opts.Root, workingDir))
 	if err != nil {
 		return false, prev, err
 	}
