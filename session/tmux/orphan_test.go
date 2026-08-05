@@ -282,8 +282,8 @@ func TestScanGapsIncompleteInventory(t *testing.T) {
 
 	// EmptyFleetUnproven is the same kind of fact as LiveServerUnknown — an unexcluded
 	// live server, not an unseen inventory — so it is excluded for the same reason. The
-	// obvious one-line fix for #603 was to make Any() count it, which would have turned
-	// a wrong-place probe into a blanket refusal to reap anything at all.
+	// obvious one-line fix for #603 was to make this predicate count it, which would have
+	// turned a wrong-place probe into a blanket refusal to reap anything at all.
 	require.False(t, ScanGaps{EmptyFleetUnproven: true}.IncompleteInventory(),
 		"an unverified empty-fleet answer does not make the inventory incomplete; "+
 			"the unreachable servers this host needs reaped are still proven unreachable")
@@ -295,8 +295,9 @@ func TestScanGapsIncompleteInventory(t *testing.T) {
 // kill a *reachable* server. The report reaches for the two fields directly instead, because
 // its remedy sentence differs by cause; this predicate is the act-or-not question alone.
 //
-// It is the "may I act?" half of what ScanGaps carries, kept apart from Any()'s "is the
-// inventory complete?" half. Both causes have to count: keying the guard on
+// It is the "may I act?" half of what ScanGaps carries, kept apart from
+// IncompleteInventory()'s "is the inventory complete?" half. Both causes have to count:
+// keying the guard on
 // LiveServerUnknown alone is #603 — a probe that answered about the socket the reaper
 // computed from its own environment reports no gap at all, while excluding no process.
 func TestScanGapsLiveServerUnidentified(t *testing.T) {
@@ -309,8 +310,8 @@ func TestScanGapsLiveServerUnidentified(t *testing.T) {
 		"an empty-fleet answer the inventory contradicts identified nothing either")
 
 	// An inventory gap is a different question and must not answer this one: it makes
-	// `reap --kill` refuse outright via Any(), and conflating the two here would put the
-	// report's reachable-row remedy behind a flag about /proc.
+	// `reap --kill` refuse outright via IncompleteInventory(), and conflating the two
+	// here would put the report's reachable-row remedy behind a flag about /proc.
 	require.False(t, ScanGaps{SocketTableUnread: true, ProcTableTruncated: true}.LiveServerUnidentified(),
 		"an incomplete inventory says nothing about which server is the live one")
 }
