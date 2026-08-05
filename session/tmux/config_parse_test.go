@@ -50,7 +50,27 @@ func TestManagedConfigParsesUnderRealTmux(t *testing.T) {
 			// No '/' in the socket name: tmux reads -L as a path under
 			// $TMUX_TMPDIR/tmux-<uid>, and a slash (t.Name carries the subtest path)
 			// would point at a missing dir.
-			sock := fmt.Sprintf("cfgparse-%d", rand.Int31())
+			//
+			// Brand-prefixed so ownsSocketName claims it, which is what puts a server
+			// left on this socket inside `atrium doctor` and `atrium reap` (#602). The
+			// bare "cfgparse-" it used to be matched neither brand exactly nor a brand
+			// followed by "-", so a leftover was invisible to the very tooling #547
+			// built to find strays. The practical exposure was small — this server runs
+			// `sleep 60` under tmux's default exit-empty, so it retires itself and holds
+			// nothing — but a test socket that Atrium's own predicate disowns is a gap
+			// in the predicate's coverage, not a property worth keeping.
+			//
+			// The per-run random suffix is what still makes `-L` safe here, and it has
+			// to stay: the prefix is now one a live server could answer to, so the
+			// randomness is the whole of the separation. See CLAUDE.md.
+			sock := fmt.Sprintf("atrium-cfgparse-%d", rand.Int31())
+			// Pins the prefix rather than trusting the comment above it. Dropping it
+			// leaves every other assertion in this file passing, which is how the socket
+			// came to be disowned in the first place.
+			if !ownsSocketName(sock) {
+				t.Fatalf("socket name %q is not one ownsSocketName claims, so a server left "+
+					"on it would be invisible to `atrium doctor` and `atrium reap` (#602)", sock)
+			}
 			ctx := context.Background()
 			// Armed before the server starts, so a new-session that half-succeeds —
 			// server up, command failed — still has something to tear it down. Nothing
