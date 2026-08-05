@@ -37,7 +37,9 @@ func released(t *testing.T) {
 // swallowed. Locally the timing hid it; under -race it failed two tests at once.
 //
 // The state is package-global by design (see interruptSuspended), so isolating it is the
-// test's job and every suspension in this package must go through here.
+// test's job. Use this whenever a test holds the takeover for its whole body. The tests
+// that resume mid-body — because resuming is what they assert — cannot, and each ends with
+// its own released(t) instead; that is the obligation, not this helper specifically.
 func suspendForTest(t *testing.T) {
 	t.Helper()
 	resume := SuspendTerminalSignals()
@@ -52,7 +54,8 @@ func suspendForTest(t *testing.T) {
 func requireNotSuspended(t *testing.T) {
 	t.Helper()
 	require.Zero(t, interruptSuspended.Load(),
-		"a previous test leaked a suspension — every one must go through suspendForTest")
+		"a previous test leaked a suspension — it must end through suspendForTest or its "+
+			"own released(t)")
 }
 
 // TestCancelsNeverTouchesAShutdownSignal is the whole scope argument, asserted rather than

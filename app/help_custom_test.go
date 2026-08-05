@@ -23,7 +23,7 @@ import (
 // says anything.
 
 // TestHelpCustomSectionTruncatesLongDescriptions pins the width arithmetic
-// helpCustomDescWidth's comment claims.
+// helpCustomRowWidth and customDescWidth claim.
 //
 // Asserted on toContent() rather than on the composed frame, and that is the point:
 // TextOverlay hard-wraps its content to the box's inner width, so a per-line width
@@ -39,9 +39,9 @@ func TestHelpCustomSectionTruncatesLongDescriptions(t *testing.T) {
 		config.CustomCommand{Key: "f", Description: long, Context: "repo", Command: "true", Output: "background"},
 		config.CustomCommand{Key: "w", Description: wide, Command: "true", Output: "background"},
 		// The widest row a config can produce: a long description AND both markers. It
-		// belongs here because helpCustomDescWidth's budget is stated in terms of it —
-		// the fixtures were all `background`, so the terminal marker's 11 cells were
-		// unmeasured and a description bound left at 55 pushed this row two cells over.
+		// belongs here because helpCustomDescWidth is defined as this row's budget — the
+		// fixtures were all `background`, so the terminal marker's 11 cells were unmeasured
+		// and a description bound left at 55 pushed this row two cells over.
 		config.CustomCommand{Key: "t", Description: long, Context: "repo", Command: "true", Output: "terminal"},
 		config.CustomCommand{Key: "T", Description: wide, Context: "repo", Command: "true", Output: "terminal"},
 	)
@@ -69,12 +69,15 @@ func TestHelpCustomSectionTruncatesLongDescriptions(t *testing.T) {
 		assert.Containsf(t, line, "…", "a long description must be truncated: %q", line)
 	}
 
-	// The budget is charged PER ROW: an unmarked row must be WIDER than the both-markers
-	// row, not truncated to the same worst case. Without this the marker's 18 cells were
-	// taken off every row in the list, including the ones that carry none.
+	// The budget is charged PER ROW: an unmarked row's DESCRIPTION must be wider than the
+	// both-markers row's, not truncated to the same worst case. Without this the markers'
+	// 18 cells came off every row in the list, including the ones that carry none.
+	// Derived from the constants rather than restating 18, so a new marker cannot leave
+	// this measuring a width nothing charges any more.
+	markerCells := helpCustomRowWidth - helpCustomDescWidth
 	unmarked := ansi.PrintableRuneWidth(strings.TrimRight(custom[0], " "))
 	bothMarkers := ansi.PrintableRuneWidth(strings.TrimRight(custom[3], " "))
-	assert.Greaterf(t, unmarked, bothMarkers-len(" (terminal) (repo)"),
+	assert.Greaterf(t, unmarked, bothMarkers-markerCells,
 		"an unmarked row must not pay for markers it does not carry: %q vs %q",
 		custom[0], custom[3])
 	assert.Contains(t, custom[1], "(repo)",

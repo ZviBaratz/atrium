@@ -927,7 +927,7 @@ func TestTickPathPlainFinishStaysQuiet(t *testing.T) {
 		"a plain finish must stay on the finished rung (off), not be reported as a question")
 }
 
-// TestKeeperSignalledSendNeverRetiresThePrompt is the fix for what Ctrl+C does to the
+// TestKeeperInterruptedSendNeverRetiresThePrompt is the fix for what Ctrl+C does to the
 // keeper during a cooked terminal takeover.
 //
 // `output: terminal` runs the user's command cooked precisely so Ctrl+C reaches it — and
@@ -937,9 +937,9 @@ func TestTickPathPlainFinishStaysQuiet(t *testing.T) {
 // prompt for good: handleCustomCommandTerminalDone then PERSISTS the cleared prompt, so it
 // leaves state.json and is never delivered — for a keypress aimed at the user's own build.
 //
-// A signalled send says nothing about whether the pane would have accepted the prompt, so
-// the truthful reading is "try again next cycle".
-func TestKeeperSignalledSendNeverRetiresThePrompt(t *testing.T) {
+// An interrupted send says nothing about whether the pane would have accepted the prompt,
+// so the truthful reading is "try again next cycle".
+func TestKeeperInterruptedSendNeverRetiresThePrompt(t *testing.T) {
 	fake := &fakeKeeperPane{}
 	inst := newKeeperInstance(t, "interrupted", fake)
 	startKeeperInstance(t, inst)

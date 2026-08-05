@@ -250,10 +250,9 @@ func (k *attachKeeper) service(inst *session.Instance) {
 	case killedByTerminalSignal(err):
 		// The send's own subprocess was killed by the terminal's interrupt, which says
 		// nothing about the pane. It became reachable with `output: terminal` (#375): a
-		// cooked takeover runs
-		// the user's command in Atrium's foreground process group, and the keeper's
-		// `tmux send-keys` children are in it too — so a Ctrl+C aimed at a stubborn build
-		// is delivered to them as well.
+		// cooked takeover runs the user's command in Atrium's foreground process group,
+		// and the keeper's `tmux send-keys` children are in it too — so a Ctrl+C aimed at
+		// a stubborn build is delivered to them as well.
 		//
 		// Counted as a hard failure, a few impatient presses exhaust promptSendAttempts and
 		// retire the prompt for good: the return path persists the cleared prompt, so it
