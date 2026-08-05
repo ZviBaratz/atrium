@@ -190,7 +190,10 @@ func TestRender_ContextChipFullyLoadedRow(t *testing.T) {
 	t.Cleanup(theme.SetGlyphSet(theme.GlyphSetPlain))
 	theme.SetGlyphSet(theme.GlyphSetPlain)
 
-	const loadedBudget = 21 // 28 minus muted + queue (3 cells + a gap) and the wider model/effort labels (4)
+	// 28 (the AC-7 budget) − 3 for muted + the queue badge (1 + 2 cells, and no
+	// separator: the account segment carries its own leading space) − 4 for the
+	// wider labels (`opus 4.8` over `opus 5`, `xhigh` over `max`, 2 each).
+	const loadedBudget = 21
 
 	atBudget := strings.Repeat("n", loadedBudget)
 	row := fullyBadgedRow(t, 80, atBudget, true)

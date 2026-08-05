@@ -5,21 +5,30 @@ package agent
 //
 // The denominator is not in the transcript — every file was probed for
 // context_window, max_tokens, exceeds_200k and any compaction threshold, and
-// none exists. A survey of 839 transcripts across all five account config roots
-// established that the model's *declared* window is the right denominator and
-// that sessions genuinely run to it: the peak reading observed was 999,323
-// tokens on claude-opus-4-8, or 99.93% of 1M, on a single entry whose
-// cache_read_input_tokens alone was 994,891.
+// none exists. Surveying the local corpus — every transcript under all five
+// account config roots — established that the model's *declared* window is the
+// right denominator and that sessions genuinely run to it: the peak reading
+// observed was 999,323 tokens on claude-opus-4-8, or 99.93% of 1M, on a single
+// entry whose cache_read_input_tokens alone was 994,891.
 //
-// The compaction threshold is deliberately NOT used. 79 compaction boundaries
-// in that corpus put claude-opus-4-8 anywhere from 81.7k to 735.5k, median
-// 323.5k — no consistent fraction of the window, consistent with compaction
-// being mostly user-driven (/compact). A "% until auto-compact" figure is not
-// derivable locally, and is not what this claims.
+// That corpus grows, so every count in this file names its run rather than
+// implying one census: 839 files when #596's research established the approach,
+// 857 when it was re-run for the per-model table further down. The peak above is
+// from both — it did not move between them.
 //
-// max_input_tokens from the Models API (GET /v1/models) is the authoritative
-// source and would retire this table entirely, but it needs an API key Atrium
-// does not have — Claude Code is OAuth. Worth revisiting if that changes.
+// The compaction threshold is deliberately NOT used. The 79 compaction
+// boundaries in the 839-file run put claude-opus-4-8 anywhere from 81.7k to
+// 735.5k, median 323.5k — no consistent fraction of the window, consistent with
+// compaction being mostly user-driven (/compact). A "% until auto-compact"
+// figure is not derivable locally, and is not what this claims.
+//
+// Two sources, and they are not interchangeable. max_input_tokens from the
+// Models API (GET /v1/models) is the MACHINE-READABLE authority: it would retire
+// this table entirely rather than just fill it, but it needs an API key Atrium
+// does not have — Claude Code is OAuth. Worth revisiting if that changes. Until
+// then the values below are transcribed from Anthropic's PUBLISHED CATALOG, and
+// "verified" in this file means verified against that (see the provenance block
+// on claudeContextWindows).
 
 // Context-window sizes, named rather than repeated as digit soup.
 const (
@@ -45,35 +54,35 @@ const (
 //
 // For the same reason the table is conservative about what it admits. Older
 // models (Opus 4.5/4.1, Sonnet 4.5/4.0) are absent because their windows were
-// not verified against an authoritative source, and an absent entry degrades
+// never checked against the published catalog, and an absent entry degrades
 // exactly the way the design intends.
 //
-// Provenance, since "verified" is the load-bearing word. Every value here comes
-// from Anthropic's published model catalog, which states 1M as both the default
-// AND the maximum for the Opus 4.6+/Sonnet 4.6+/Fable/Mythos generation — not a
-// tier-gated or beta-header variant, which is what it was for the Sonnet 4.x
-// generation those rows are deliberately absent for.
+// Provenance, since "verified" is the load-bearing word. Every value here is
+// transcribed from Anthropic's published catalog, which states 1M as both the
+// default AND the maximum for the Opus 4.6+/Sonnet 4.6+/Fable/Mythos generation
+// — not a tier-gated or beta-header variant, which is what it was for the Sonnet
+// 4.x generation those rows are deliberately absent for.
 //
-// A subset is independently confirmed by Atrium's own corpus (857 transcripts,
-// ~212k assistant entries), by the only evidence a transcript can give: the peak
-// reading observed, which is a floor on the true window.
+// A subset is independently confirmed by the local corpus (857 files, ~212k
+// assistant entries, re-surveyed for this table), by the only evidence a
+// transcript can give: the peak reading observed, which is a floor on the true
+// window and can therefore rule a smaller window out but never in.
 //
-//	claude-opus-4-8    peak   999,323  → 99.93% of 1M; confirms 1M outright
-//	claude-opus-5      peak   822,147  → rules out anything at or below 822K
-//	claude-fable-5     peak   786,952  → rules out anything at or below 787K
-//	claude-sonnet-5    peak   129,097  → catalog only (199 entries, none large)
-//	claude-sonnet-4-6      no entries  → catalog only
-//	claude-mythos-5        no entries  → catalog only
-//	claude-haiku-4-5    peak 37,932    → catalog only
+//	claude-opus-4-8    peak 999,323  → 99.93% of 1M; confirms 1M outright
+//	claude-opus-5      peak 822,147  → rules out anything at or below 822K
+//	claude-fable-5     peak 786,952  → rules out anything at or below 787K
+//	claude-sonnet-5    peak 129,097  → catalog only (199 entries, none large)
+//	claude-haiku-4-5   peak  37,932  → catalog only (6 entries, all dated-form id)
+//	claude-sonnet-4-6    no entries  → catalog only
+//	claude-mythos-5      no entries  → catalog only
 //
-// The catalog-only rows are kept rather than dropped: the catalog is the
-// authoritative source this table's standard names, it is unambiguous for them,
-// and where the corpus can speak it agrees with the catalog every time. Dropping
-// a correct entry is not free either — it costs every Sonnet user the percentage
-// permanently to hedge against a discrepancy nothing has shown. The failure that
-// would matter is a row whose window is too LARGE, which under-reports (a 1M
-// entry on a 200K model reads 5× low), so re-check these against the catalog
-// before adding a model rather than after.
+// The catalog-only rows are kept rather than dropped: the catalog is unambiguous
+// for them, and wherever the corpus can check it, it agrees. Dropping a correct
+// entry is not free either — it costs every Sonnet user the percentage
+// permanently, to hedge against a discrepancy nothing has shown. The failure
+// that would matter is a row whose window is too LARGE, which under-reports (a
+// 1M entry on a 200K model reads 5× low), so re-check against the catalog before
+// adding a model rather than after.
 //
 // Model ids appear in both alias and dated forms. Among current models only
 // Haiku 4.5 has a dated form in circulation, so it carries both keys; the rest
