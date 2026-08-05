@@ -8,15 +8,31 @@ package transcript
 //	input_tokens + cache_read_input_tokens + cache_creation_input_tokens
 //
 // The formula was validated against Claude Code's own rotating idle hint
-// ("new task? /clear to save <N>k tokens"), which is a free oracle for it:
-// measured on three live sessions the transcript sum and the hint agreed to
-// within ~1%, with both-signed deltas — consistent with the hint being computed
-// a beat later than the last assistant entry, not with a systematic offset.
+// ("new task? /clear to save <N>k tokens"), which is a free oracle for it.
+// Measured across six live panes, the transcript sum came in at −0.06%, −0.20%,
+// −0.21%, −0.32%, −0.36% and −2.68% against the hint.
+//
+// Every delta is NEGATIVE, and that is structural rather than noise: this reads
+// the newest assistant entry's usage, while the hint counts what will be in the
+// *next* request. Anything appended after that turn — an attachment, a system
+// entry — carries no usage object and so cannot appear here. (The 2.68% outlier
+// is exactly that at larger amplitude: three such entries after the last
+// assistant turn.) So the reading is a LOWER BOUND on occupancy, tightest
+// mid-turn and loosest right after a large paste. That is the right direction
+// for a chip whose job is to warn: it can be late, never early.
 //
 // The hint is only an oracle, never a data source. It was measured and rejected
 // as one: it is a transient entry in a rotating carousel (present in 6 of 18
 // live panes, and observed being replaced minutes later), and it sits above the
 // input box, outside footerBelowBox's region.
+//
+// One staleness edge the reading cannot see, and neither can the fleet-level
+// ambiguity guard above it (session.Instance.ContextSourceKey): a plain `claude`
+// run OUTSIDE Atrium in the same checkout — or one under a second Atrium data
+// dir — writes into this same project directory. newest-mtime can then hand a
+// row that conversation's number. Inherited from LatestModel, which has always
+// had it; it matters more here only because this value is quantitative and
+// colour-coded rather than a name that would look plausible either way.
 
 import (
 	"context"

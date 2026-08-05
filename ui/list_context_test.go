@@ -72,10 +72,11 @@ func TestRender_ContextChipUnknownModelDegradesOnTheRow(t *testing.T) {
 	assert.NotContains(t, out, "%", "…and never a percentage")
 }
 
-// fullyBadgedRow renders one row at `width` columns carrying every line-1 badge
-// the right cluster can hold — account, AUTO, model, effort, permission and the
-// context chip — under the given title, and returns it ANSI-stripped.
-func fullyBadgedRow(t *testing.T, width int, title string) string {
+// fullyBadgedRow renders one row at `width` columns carrying the AC-7 badge set —
+// account, AUTO, model, effort, permission and the context chip — under the given
+// title, and returns it ANSI-stripped. `loaded` adds the two badges that only some
+// sessions carry (muted, and a queue of two), for the worst-case cluster.
+func fullyBadgedRow(t *testing.T, width int, title string, loaded bool) string {
 	t.Helper()
 	s := spinner.New()
 	r := &InstanceRenderer{spinner: &s}
@@ -85,11 +86,19 @@ func fullyBadgedRow(t *testing.T, width int, title string) string {
 	require.NoError(t, err)
 	inst.SetClaudeAccount("quantivly", "/home/x/.claude-quantivly", false)
 	inst.AutoYes = true
-	inst.SetModelMeta("claude-opus-5", transcript.Stamp{Path: "m", Size: 1})
-	inst.SetEffortMeta("max")
 	inst.SetModeMeta("acceptEdits")
 	inst.SetUsageMeta(transcript.Usage{ContextTokens: 283_000, Model: "claude-opus-5"},
 		transcript.Stamp{Path: "u", Size: 1})
+	if loaded {
+		inst.SetModelMeta("claude-opus-4-8", transcript.Stamp{Path: "m", Size: 1})
+		inst.SetEffortMeta("xhigh")
+		inst.SetMuted(true)
+		inst.QueuePrompt("first")
+		inst.QueuePrompt("second")
+	} else {
+		inst.SetModelMeta("claude-opus-5", transcript.Stamp{Path: "m", Size: 1})
+		inst.SetEffortMeta("max")
+	}
 	return ansi.Strip(r.Render(inst, 1, false, false))
 }
 
@@ -117,7 +126,7 @@ func TestRender_ContextChipFitsTheEightyColumnRow(t *testing.T) {
 		name  = "context-window-chip"
 	)
 
-	plain := fullyBadgedRow(t, width, name)
+	plain := fullyBadgedRow(t, width, name, false)
 	t.Logf("AC-7 row at %d columns (ANSI stripped):\n%s", width, plain)
 
 	for i, line := range strings.Split(plain, "\n") {
@@ -157,12 +166,46 @@ func TestRender_ContextChipCostsSlackNotTheName(t *testing.T) {
 	const nameBudget = 28 // 79 usable - gutter(1) - space(1) - right cluster(48) - 1
 
 	atBudget := strings.Repeat("n", nameBudget)
-	row := fullyBadgedRow(t, 80, atBudget)
+	row := fullyBadgedRow(t, 80, atBudget, false)
 	require.Contains(t, strings.Split(row, "\n")[0], atBudget,
 		"a name at the documented budget must survive whole")
 	require.Contains(t, row, "28%", "…with the chip still on the row")
 
 	overBudget := strings.Repeat("n", nameBudget+1)
-	require.NotContains(t, strings.Split(fullyBadgedRow(t, 80, overBudget), "\n")[0], overBudget,
+	require.NotContains(t, strings.Split(fullyBadgedRow(t, 80, overBudget, false), "\n")[0], overBudget,
 		"one cell past the budget must truncate — otherwise the budget above is not the real boundary")
+}
+
+// TestRender_ContextChipFullyLoadedRow is the case that actually risks eating the
+// name, and the second number the placement argument quotes.
+//
+// The AC-7 row above carries the badges a typical session has. This one adds the
+// two a loaded session also carries — muted, plus a queue of two — which is the
+// widest the right cluster gets. The claim is that the name column still holds 21
+// cells there, and it is asserted the same at-and-over-budget way, because "the
+// row fits" is satisfied by truncating the name to nothing and 21 is the number
+// that says it wasn't.
+func TestRender_ContextChipFullyLoadedRow(t *testing.T) {
+	t.Cleanup(theme.Set("unicode"))
+	t.Cleanup(theme.SetGlyphSet(theme.GlyphSetPlain))
+	theme.SetGlyphSet(theme.GlyphSetPlain)
+
+	const loadedBudget = 21 // 28 minus muted + queue (3 cells + a gap) and the wider model/effort labels (4)
+
+	atBudget := strings.Repeat("n", loadedBudget)
+	row := fullyBadgedRow(t, 80, atBudget, true)
+	line1 := strings.Split(row, "\n")[0]
+	t.Logf("fully-loaded row at 80 columns (ANSI stripped):\n%s", row)
+
+	for i, line := range strings.Split(row, "\n") {
+		require.Equalf(t, 80, ansi.StringWidth(line), "line %d must be exactly 80 cells", i)
+	}
+	for _, want := range []string{"quantivly", "AUTO", "opus 4.8", "xhigh", "accept-edits", "28%"} {
+		require.Containsf(t, line1, want, "the fully-loaded line 1 must still carry %q", want)
+	}
+	require.Contains(t, line1, atBudget, "a 21-cell name must survive the widest cluster whole")
+
+	overBudget := strings.Repeat("n", loadedBudget+1)
+	require.NotContains(t, strings.Split(fullyBadgedRow(t, 80, overBudget, true), "\n")[0], overBudget,
+		"one cell past 21 must truncate — otherwise 21 is not the real fully-loaded budget")
 }

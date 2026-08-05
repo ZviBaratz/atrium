@@ -182,9 +182,9 @@ func contextRampSample(g theme.Glyphs) string {
 // wrapped group's entries stay in one column.
 const legendTitleCol = 10
 
-// legendMaxWidth is the widest a legend line may be. It is the ? overlay's inner
-// width at an 80-column terminal: TextOverlay.boxWidth() caps at width-4 (border
-// and margin), and wrappedLines subtracts Padding(1,2)'s four more columns.
+// legendMaxWidth is the widest a legend line may be: the ? overlay's inner width
+// at an 80-column terminal. TextOverlay.boxWidth() caps at width-4 (border and
+// margin) and wrappedLines subtracts Padding(1,2)'s four more columns.
 //
 // The overlay does wrap a longer line, but it wraps to the box, not to the
 // legend's grammar — it breaks mid-label, so "AUTO auto-accepting" lands as
@@ -192,6 +192,14 @@ const legendTitleCol = 10
 // group's entries whole and hanging-indented, and means the next glyph added to
 // a full group reflows rather than shipping a broken line. TestLegendLinesFit
 // holds the bound.
+//
+// It is a fixed 80-column figure, not the live box width, and that is a real
+// limit rather than an oversight to read past: below 80 columns the overlay's
+// own mid-label wrap takes over again. Fixing that properly means threading the
+// terminal width into helpText.toContent(), which is built before the overlay is
+// sized — a change to that interface, not to this constant. Everything else in
+// the help (the mouse rows, the Shift+drag paragraph) already reflows there, so
+// the legend is no worse than its neighbours; 80 is where it is guaranteed.
 const legendMaxWidth = 72
 
 // legendLines renders the legend groups: a padded group title followed by

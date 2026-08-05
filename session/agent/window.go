@@ -48,6 +48,33 @@ const (
 // not verified against an authoritative source, and an absent entry degrades
 // exactly the way the design intends.
 //
+// Provenance, since "verified" is the load-bearing word. Every value here comes
+// from Anthropic's published model catalog, which states 1M as both the default
+// AND the maximum for the Opus 4.6+/Sonnet 4.6+/Fable/Mythos generation — not a
+// tier-gated or beta-header variant, which is what it was for the Sonnet 4.x
+// generation those rows are deliberately absent for.
+//
+// A subset is independently confirmed by Atrium's own corpus (857 transcripts,
+// ~212k assistant entries), by the only evidence a transcript can give: the peak
+// reading observed, which is a floor on the true window.
+//
+//	claude-opus-4-8    peak   999,323  → 99.93% of 1M; confirms 1M outright
+//	claude-opus-5      peak   822,147  → rules out anything at or below 822K
+//	claude-fable-5     peak   786,952  → rules out anything at or below 787K
+//	claude-sonnet-5    peak   129,097  → catalog only (199 entries, none large)
+//	claude-sonnet-4-6      no entries  → catalog only
+//	claude-mythos-5        no entries  → catalog only
+//	claude-haiku-4-5    peak 37,932    → catalog only
+//
+// The catalog-only rows are kept rather than dropped: the catalog is the
+// authoritative source this table's standard names, it is unambiguous for them,
+// and where the corpus can speak it agrees with the catalog every time. Dropping
+// a correct entry is not free either — it costs every Sonnet user the percentage
+// permanently to hedge against a discrepancy nothing has shown. The failure that
+// would matter is a row whose window is too LARGE, which under-reports (a 1M
+// entry on a 200K model reads 5× low), so re-check these against the catalog
+// before adding a model rather than after.
+//
 // Model ids appear in both alias and dated forms. Among current models only
 // Haiku 4.5 has a dated form in circulation, so it carries both keys; the rest
 // are complete as written and must never be given a date suffix.

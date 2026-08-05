@@ -86,6 +86,22 @@ func (i *Instance) ContextSourceKey() string {
 // Like ComputeModel it derives its lifecycle context from i.baseContext() (= the
 // app ctx) rather than taking a ctx parameter, so app shutdown cancels an
 // in-flight transcript read.
+//
+// Two staleness edges it cannot close, both inherited from the "newest file in
+// the project dir" rule and both left open deliberately:
+//
+//   - Kill a session and create a new one with the same title: the worktree path
+//     is reused, so the first tick reads the PREVIOUS conversation's transcript
+//     and stores a real, positive, wrong number. SetUsageMeta's new-file rule
+//     cannot help — the path is the old file, so nothing looks new. Ignoring
+//     transcripts older than startedAt would fix it and break resume, where
+//     reading the prior conversation is the correct answer. It self-corrects on
+//     the new session's first turn.
+//   - A read error leaves the last value standing rather than clearing it, so a
+//     project dir that disappears freezes the chip instead of retiring it. Same
+//     contract as ComputeModel, and for the same reason: errors here are
+//     dominated by "no transcript yet", where clearing is a no-op, and by
+//     transient mid-write states, where clearing would flicker the row.
 func (i *Instance) ComputeUsage() (usage transcript.Usage, stamp transcript.Stamp, ok bool) {
 	if !i.isStarted() || i.Paused() {
 		return transcript.Usage{}, transcript.Stamp{}, false

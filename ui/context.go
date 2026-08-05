@@ -61,6 +61,16 @@ func contextChip(u transcript.Usage, mode string, ramp []string) (string, bool) 
 	}
 	pct := contextPercent(u.ContextTokens, window)
 	if mode == contextModeBar {
+		// An empty ramp collapses to a count for the same reason an unknown
+		// ceiling does: there is no meter to draw. Not reachable today — every
+		// theme takes its Glyphs from plainGlyphs() and assertGlyphWidths pins the
+		// length at 8 across every palette — but contextLevel already returns 0
+		// for a zero-length ramp, so without this the "safe" guard hands an index
+		// straight to a panic. A guard that implies safety it does not provide is
+		// worse than no guard.
+		if len(ramp) == 0 {
+			return humanizeTokens(u.ContextTokens), true
+		}
 		return ramp[contextLevel(pct, len(ramp))], true
 	}
 	return fmt.Sprintf("%d%%", pct), true

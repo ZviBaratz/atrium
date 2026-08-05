@@ -114,9 +114,37 @@ func TestContextLevel_CoversEveryRung(t *testing.T) {
 		require.GreaterOrEqualf(t, idx, 0, "pct %d", pct)
 		require.Lessf(t, idx, rungs, "pct %d", pct)
 	}
-	assert.Equal(t, 0, contextLevel(0, rungs), "a nonzero reading below one rung still shows the lowest rung")
 	assert.Equal(t, 7, contextLevel(100, rungs))
 	assert.Equal(t, 0, contextLevel(50, 0), "a missing ramp must not divide by zero")
+}
+
+// TestContextChip_BarFloorAndEmptyRamp covers the two ends contextLevel's unit
+// test cannot reach, both through contextChip — which is the only caller, and
+// the only place the index is actually used.
+//
+// The floor: "a nonzero reading below one rung still shows the lowest rung" is a
+// claim about a READING, and asserting it as contextLevel(0, 8) == 0 restates
+// the index math instead. Driven with 4,000 tokens against a 1M window, it goes
+// through contextPercent's integer division flooring a 0.4% reading to 0 — the
+// step that makes the claim true — and out to the glyph a user would see.
+//
+// The empty ramp: contextLevel returns 0 for a zero-length ramp, so a caller
+// that trusted that guard would index [0] on an empty slice and panic. Nothing
+// reaches it today, which is exactly why it needs a test rather than a comment.
+func TestContextChip_BarFloorAndEmptyRamp(t *testing.T) {
+	ramp := []string{"a", "b", "c", "d", "e", "f", "g", "h"}
+	u := transcript.Usage{ContextTokens: 4_000, Model: "claude-opus-5"} // 0.4% of 1M
+
+	chip, ok := contextChip(u, contextModeBar, ramp)
+	require.True(t, ok)
+	assert.Equal(t, "a", chip,
+		"a session with context in it must show the lowest rung, never nothing")
+
+	require.NotPanics(t, func() {
+		chip, ok = contextChip(u, contextModeBar, nil)
+	})
+	assert.True(t, ok)
+	assert.Equal(t, "4k", chip, "no meter to draw falls back to a count, like an unknown ceiling")
 }
 
 // TestContextColor_Thresholds pins where the chip changes colour. The number

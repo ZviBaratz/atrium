@@ -5,9 +5,13 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"testing"
 
+	"github.com/ZviBaratz/atrium/config"
 	"github.com/ZviBaratz/atrium/session"
+	"github.com/ZviBaratz/atrium/session/tmux"
 	"github.com/ZviBaratz/atrium/session/transcript"
 
 	"github.com/stretchr/testify/assert"
@@ -257,4 +261,119 @@ func TestUsagePolicyCountsPausedNeighbours(t *testing.T) {
 
 	assert.False(t, newUsagePolicy(true, pair).allows(pair[0]),
 		"a paused neighbour still spoils the shared project dir")
+}
+
+// usageFleetInstance builds a STARTED direct session on `path` whose transcripts
+// resolve under `root`, driven by a fake pane so Poll() answers without tmux.
+// Same shape as newKeeperInstance, but the caller supplies the path and the root
+// because the whole point of these tests is two sessions sharing them.
+func usageFleetInstance(t *testing.T, name, path, root string) *session.Instance {
+	t.Helper()
+	fake := &fakeKeeperPane{}
+	inst, err := session.NewInstance(session.InstanceOptions{
+		Title: name, Path: path, Program: "claude", Direct: true,
+	})
+	require.NoError(t, err)
+	inst.SetTmuxSession(tmux.NewSessionWithDeps(
+		context.Background(), name, "claude", &keeperPtyFactory{t: t, exec: fake.exec()}, fake.exec()))
+	require.NoError(t, inst.Start(true))
+	inst.SetClaudeAccount("work", root, false)
+	return inst
+}
+
+// writeUsageTranscript puts one usage-bearing assistant entry in the Claude
+// project directory for workDir under root.
+func writeUsageTranscript(t *testing.T, root, workDir string, tokens int) {
+	t.Helper()
+	sanitized := strings.Map(func(r rune) rune {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') {
+			return r
+		}
+		return '-'
+	}, workDir)
+	dest := filepath.Join(root, "projects", sanitized, "s.jsonl")
+	require.NoError(t, os.MkdirAll(filepath.Dir(dest), 0o755))
+	line := `{"type":"assistant","isSidechain":false,"message":{"model":"claude-opus-5",` +
+		`"usage":{"input_tokens":` + strconv.Itoa(tokens) + `,"cache_read_input_tokens":0,` +
+		`"cache_creation_input_tokens":0},"content":[{"type":"text","text":"hi"}]}}` + "\n"
+	require.NoError(t, os.WriteFile(dest, []byte(line), 0o644))
+}
+
+// TestMetadataTick_ReadsThenSuppressesTheContextChip is the end-to-end assertion
+// the unit tests around it cannot make: the real tick path, collectMetadata
+// off-thread into applyMetadataResults on the main thread, with a real transcript
+// on disk and a real fleet in the list.
+//
+// It exists because every piece of this was individually correct in the first
+// draft and the composition was still wrong — the suppression lived in the row
+// renderer, so the reading was computed, stored, and merely hidden. Asserting
+// newUsagePolicy in isolation, or calling ClearUsage by hand, would both have
+// passed against that. Only driving the two halves together says whether the
+// instance ends the tick holding a number.
+//
+// Both directions are asserted, and the first is load-bearing: a policy that
+// suppressed everything would satisfy the second on its own.
+func TestMetadataTick_ReadsThenSuppressesTheContextChip(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	h := newCreateFormHome(t)
+	h.lostStrikes = map[*session.Instance]int{}
+
+	root, dir := t.TempDir(), t.TempDir()
+	writeUsageTranscript(t, root, dir, 283_000)
+
+	solo := usageFleetInstance(t, "solo", dir, root)
+	h.list.AddInstance(solo)()
+
+	// Alone on the directory: the tick reads, and the instance ends up holding it.
+	results := collectMetadata(h.ctx, []*session.Instance{solo}, nil, false, h.usagePolicy())
+	require.Len(t, results, 1)
+	require.NotEqual(t, tmux.PaneDead, results[0].state, "precondition: the fake pane must be alive")
+	require.True(t, results[0].usageOK, "a readable transcript must yield a result to apply")
+	require.False(t, results[0].usageClear)
+	h.applyMetadataResults(results, false)
+	require.Equal(t, 283_000, solo.UsageInfo().ContextTokens,
+		"the tick must store the reading on the instance, not merely compute it")
+
+	// A second started session lands on the same directory. Same tick path, and
+	// this time the survivor must come out of it holding nothing.
+	neighbour := usageFleetInstance(t, "neighbour", dir, root)
+	h.list.AddInstance(neighbour)()
+	require.Equal(t, solo.ContextSourceKey(), neighbour.ContextSourceKey(),
+		"the fixtures must actually collide for this test to mean anything")
+
+	results = collectMetadata(h.ctx, []*session.Instance{solo, neighbour}, nil, false, h.usagePolicy())
+	require.Len(t, results, 2)
+	for i, r := range results {
+		require.Truef(t, r.usageClear, "result %d must carry the clear verdict, not just a skipped read", i)
+		require.Falsef(t, r.usageOK, "result %d must not also carry a reading", i)
+	}
+	h.applyMetadataResults(results, false)
+
+	assert.Zero(t, solo.UsageInfo().ContextTokens,
+		"an ambiguous source must leave the instance holding nothing — hiding it in the renderer "+
+			"is what let a killed neighbour's number resurface")
+	assert.Zero(t, neighbour.UsageInfo().ContextTokens)
+}
+
+// TestMetadataTick_ChipOffReadsNothing carries the efficiency half through the
+// same real path: with the chip switched off the tick must not merely skip the
+// render, it must not take the reading at all.
+func TestMetadataTick_ChipOffReadsNothing(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	h := newCreateFormHome(t)
+	h.lostStrikes = map[*session.Instance]int{}
+	h.appConfig.ContextIndicator = config.ContextIndicatorOff
+
+	root, dir := t.TempDir(), t.TempDir()
+	writeUsageTranscript(t, root, dir, 283_000)
+	inst := usageFleetInstance(t, "quiet", dir, root)
+	h.list.AddInstance(inst)()
+
+	results := collectMetadata(h.ctx, []*session.Instance{inst}, nil, false, h.usagePolicy())
+	require.Len(t, results, 1)
+	require.True(t, results[0].usageClear)
+	require.False(t, results[0].usageOK, "a transcript that is readable must still go unread")
+
+	h.applyMetadataResults(results, false)
+	assert.Zero(t, inst.UsageInfo().ContextTokens)
 }
