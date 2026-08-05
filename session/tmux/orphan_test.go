@@ -125,8 +125,10 @@ func TestAssembleServersExcludesTheLiveServer(t *testing.T) {
 	// rows come back — including, potentially, this Atrium's own server. That is not
 	// safe on its own: it is safe because such a server answers its own socket and
 	// arrives Reachable, which the default target set excludes, and because
-	// ScanGaps.LiveServerUnknown then blocks `--all` and suppresses the report's
-	// kill-server remedy. This assertion is the "both rows" half; the guards are
+	// ScanGaps.LiveServerUnidentified() then blocks `--all`, and the report withholds the
+	// kill-server remedy for this cause — an unanswered probe, where nothing can be
+	// inspected — rather than cautioning it as it does for a wrong-place answer (#603).
+	// This assertion is the "both rows" half; the guards are
 	// asserted in TestReapKillAllRefusesWhenTheLiveServerIsUnknown and the doctor
 	// render tests.
 	got = assembleServers(context.Background(), cands, 0, false)
@@ -272,6 +274,40 @@ func TestScanGapsAny(t *testing.T) {
 			"it must not block a kill the default target set already proves safe")
 	require.True(t, ScanGaps{LiveServerUnknown: true, ProcTableTruncated: true}.Any(),
 		"a real inventory gap alongside it must still count")
+
+	// EmptyFleetUnproven is the same kind of fact as LiveServerUnknown — an unexcluded
+	// live server, not an unseen inventory — so it is excluded for the same reason. The
+	// obvious one-line fix for #603 was to make Any() count it, which would have turned
+	// a wrong-place probe into a blanket refusal to reap anything at all.
+	require.False(t, ScanGaps{EmptyFleetUnproven: true}.Any(),
+		"an unverified empty-fleet answer does not make the inventory incomplete; "+
+			"the unreachable servers this host needs reaped are still proven unreachable")
+	require.True(t, ScanGaps{EmptyFleetUnproven: true, SocketTableUnread: true}.Any(),
+		"a real inventory gap alongside it must still count")
+}
+
+// TestScanGapsLiveServerUnidentified pins the predicate that decides whether the reaper may
+// kill a *reachable* server. The report reaches for the two fields directly instead, because
+// its remedy sentence differs by cause; this predicate is the act-or-not question alone.
+//
+// It is the "may I act?" half of what ScanGaps carries, kept apart from Any()'s "is the
+// inventory complete?" half. Both causes have to count: keying the guard on
+// LiveServerUnknown alone is #603 — a probe that answered about the socket the reaper
+// computed from its own environment reports no gap at all, while excluding no process.
+func TestScanGapsLiveServerUnidentified(t *testing.T) {
+	require.False(t, ScanGaps{}.Any())
+	require.False(t, ScanGaps{}.LiveServerUnidentified(),
+		"a scan that identified the live server has proven every row is not it")
+	require.True(t, ScanGaps{LiveServerUnknown: true}.LiveServerUnidentified(),
+		"a probe that could not answer identified nothing")
+	require.True(t, ScanGaps{EmptyFleetUnproven: true}.LiveServerUnidentified(),
+		"an empty-fleet answer the inventory contradicts identified nothing either")
+
+	// An inventory gap is a different question and must not answer this one: it makes
+	// `reap --kill` refuse outright via Any(), and conflating the two here would put the
+	// report's reachable-row remedy behind a flag about /proc.
+	require.False(t, ScanGaps{SocketTableUnread: true, ProcTableTruncated: true}.LiveServerUnidentified(),
+		"an incomplete inventory says nothing about which server is the live one")
 }
 
 // TestClassifyPIDProbeSeparatesAnEmptySocketFromAnUnaskedQuestion is the rule both tmux
@@ -323,14 +359,230 @@ func TestScanServersReportsAnUnidentifiedLiveServer(t *testing.T) {
 	stubAmbientPID(t, func(context.Context) (int, bool) { return 0, false })
 	_, _, gaps := ScanServers(context.Background())
 	require.True(t, gaps.LiveServerUnknown, "an unanswered ambient probe must be reported")
+	require.True(t, gaps.LiveServerUnidentified(), "and nothing may be read as proven not to be it")
 	require.False(t, gaps.Any(), "but it is not an inventory gap")
 
-	// The determined empty fleet: tmux answered that nothing is on the socket. There is
-	// no live server to protect, so this must not raise the flag.
+	// The determined empty fleet, with an inventory that has nothing to contradict it:
+	// tmux answered that nothing is on the socket, and no candidate answers for a server
+	// either. Neither flag may rise here — this is the host with genuinely nothing running,
+	// and refusing on it is the over-refusal this whole area keeps relapsing into.
 	stubAmbientPID(t, func(context.Context) (int, bool) { return 0, true })
 	_, _, gaps = ScanServers(context.Background())
 	require.False(t, gaps.LiveServerUnknown,
-		"an empty fleet is a determined answer, not an unidentified live server")
+		"an empty fleet is a determined answer, not an unanswered probe")
+	require.False(t, gaps.EmptyFleetUnproven,
+		"and with nothing reachable in the inventory, nothing contradicts it")
+	require.False(t, gaps.LiveServerUnidentified())
+}
+
+// TestScanServersChecksADeterminedEmptyFleetAgainstTheInventory is #603.
+//
+// `pid 0, known true` from the ambient probe is tmux reporting that nothing is on the
+// socket *this process* addressed: `-L socketName()`, resolved from its own HOME against
+// its own TMUX_TMPDIR, with its own managed config. That is not the fact "this host has no
+// live Atrium server", and every way the two come apart — another TMUX_TMPDIR, a deleted
+// one (tmux then resolves -L against /tmp), the other brand, a config that will not parse —
+// produces the same determined answer. The exclusion in assembleServers then runs with
+// live == 0 and excludes nothing, while the live server answers its own socket by absolute
+// path and arrives Reachable: `--all` targeted it and the report printed a kill-server
+// naming it, with no flag raised anywhere.
+//
+// The scan is in a position to check its own claim, because it has just asked every
+// candidate by path — a form of address that resolves where -L may not. These cases drive
+// ScanServers, not a hand-built ScanGaps: the assignment that sets the flag is what has to
+// be pinned, since deleting it is what #593 taught this family leaves the suite green.
+func TestScanServersChecksADeterminedEmptyFleetAgainstTheInventory(t *testing.T) {
+	if !orphanScanSupported {
+		t.Skip("ScanServers returns early off Linux")
+	}
+	// The live fleet, bound under a TMUX_TMPDIR this run's own environment does not name.
+	const livePID = 1952486
+	const livePath = "/tmp/atr-other/tmux-1000/atrium"
+
+	// answersFor is a socket probe where only these paths have a server on them, each
+	// answering with its own pid — which is what Reachable means.
+	answersFor := func(owners map[string]int) func(context.Context, string) (int, bool) {
+		return func(_ context.Context, path string) (int, bool) {
+			return owners[path], true
+		}
+	}
+
+	t.Run("a reachable server contradicts the empty answer", func(t *testing.T) {
+		stubScanCandidates(t, func(context.Context) ([]candidate, ScanGaps) {
+			return []candidate{{PID: livePID, SocketPath: livePath}}, ScanGaps{}
+		})
+		stubSocketOwner(t, answersFor(map[string]int{livePath: livePID}))
+		stubAmbientPID(t, func(context.Context) (int, bool) { return 0, true })
+
+		servers, supported, gaps := ScanServers(context.Background())
+		require.True(t, supported)
+		require.Len(t, servers, 1, "the inventory is unchanged — this row is still reported")
+		require.True(t, servers[0].Reachable, "it answered its own socket, which is the contradiction")
+		require.True(t, gaps.EmptyFleetUnproven,
+			"a reachable Atrium-owned server the ambient probe says is not there means the probe "+
+				"looked somewhere else, and the scan has to report that")
+		require.False(t, gaps.LiveServerUnknown,
+			"the probe did answer; conflating the two would misword every remedy that follows")
+		require.True(t, gaps.LiveServerUnidentified(),
+			"so no row here is proven not to be the live server")
+		require.False(t, gaps.Any(), "and none of this makes the inventory incomplete")
+	})
+
+	// The host the reaper exists for: a server whose socket no longer resolves, and nothing
+	// answering anywhere. An empty-fleet answer has nothing to contradict it, so the flag
+	// stays down and the default `--kill` path is untouched. A cross-check that counted
+	// unreachable rows would raise it on every one of these hosts — #593's shape again.
+	t.Run("an unreachable inventory does not contradict it", func(t *testing.T) {
+		stubScanCandidates(t, func(context.Context) ([]candidate, ScanGaps) {
+			return []candidate{{PID: 1499239, SocketPath: "/tmp/gone/tmux-1000/atrium"}}, ScanGaps{}
+		})
+		stubSocketOwner(t, answersFor(nil))
+		stubAmbientPID(t, func(context.Context) (int, bool) { return 0, true })
+
+		servers, _, gaps := ScanServers(context.Background())
+		require.Len(t, servers, 1)
+		require.True(t, servers[0].ReachableKnown)
+		require.False(t, servers[0].Reachable)
+		require.False(t, gaps.EmptyFleetUnproven,
+			"an unreachable server is what an orphan looks like, not evidence of a live fleet")
+		require.False(t, gaps.LiveServerUnidentified(),
+			"and blocking --all here would decline a reap on the host that needs one")
+	})
+
+	// The happy path the cross-check must not take away: the probe answered with a pid, that
+	// pid was excluded, and a reachable row left over is provably not the live server — so
+	// `--all` may take it and the report may vouch for its kill-server.
+	t.Run("an identified live server leaves the other rows clean", func(t *testing.T) {
+		const otherPath = "/tmp/tmux-1000/atrium-smoke"
+		stubScanCandidates(t, func(context.Context) ([]candidate, ScanGaps) {
+			return []candidate{
+				{PID: livePID, SocketPath: livePath},
+				{PID: 4242, SocketPath: otherPath},
+			}, ScanGaps{}
+		})
+		stubSocketOwner(t, answersFor(map[string]int{livePath: livePID, otherPath: 4242}))
+		stubAmbientPID(t, func(context.Context) (int, bool) { return livePID, true })
+
+		servers, _, gaps := ScanServers(context.Background())
+		require.Len(t, servers, 1, "the live server was identified and excluded")
+		require.Equal(t, 4242, servers[0].PID)
+		require.True(t, servers[0].Reachable)
+		require.False(t, gaps.EmptyFleetUnproven,
+			"an answer naming a pid is not the empty-fleet answer, and there is nothing to verify")
+		require.False(t, gaps.LiveServerUnidentified())
+	})
+
+	// A reachable row on a throwaway probe socket is not a candidate for the server the
+	// ambient probe missed: every Atrium addresses its own server as `-L socketName()`, which
+	// is never suffixed, so no probe could have been asking about this one. Counting it made
+	// the ordinary host pay — `live == 0` is the answer whenever no TUI is up, so one leaked
+	// precheck server withheld `--all` for the whole run, and re-running never cleared it.
+	t.Run("a reachable probe socket is not a candidate", func(t *testing.T) {
+		const probePath = "/tmp/tmux-1000/atrium-precheck-991-1"
+		stubScanCandidates(t, func(context.Context) ([]candidate, ScanGaps) {
+			return []candidate{{PID: 7777, SocketPath: probePath}}, ScanGaps{}
+		})
+		stubSocketOwner(t, answersFor(map[string]int{probePath: 7777}))
+		stubAmbientPID(t, func(context.Context) (int, bool) { return 0, true })
+
+		servers, _, gaps := ScanServers(context.Background())
+		require.Len(t, servers, 1, "it is still Atrium's litter and still reported")
+		require.True(t, servers[0].Reachable)
+		require.False(t, gaps.EmptyFleetUnproven,
+			"a suffixed socket is not a socket any ambient probe addresses, so it contradicts nothing")
+		require.False(t, gaps.LiveServerUnidentified(),
+			"and it must not withhold --all from the rows that need reaping")
+	})
+
+	// The brand-mismatch route from #603, and the reason the predicate keys on both brands
+	// rather than on socketName(): a legacy claudesquad fleet with this run installed as
+	// atrium is precisely a live fleet the ambient probe cannot see, and keying on the local
+	// brand would leave that case unguarded — the bug, one predicate over.
+	t.Run("the other brand's bare socket is a candidate", func(t *testing.T) {
+		const legacyPath = "/tmp/tmux-1000/claudesquad"
+		stubScanCandidates(t, func(context.Context) ([]candidate, ScanGaps) {
+			return []candidate{
+				{PID: 7777, SocketPath: "/tmp/tmux-1000/atrium-precheck-991-1"},
+				{PID: 4041, SocketPath: legacyPath},
+			}, ScanGaps{}
+		})
+		stubSocketOwner(t, answersFor(map[string]int{
+			"/tmp/tmux-1000/atrium-precheck-991-1": 7777,
+			legacyPath:                             4041,
+		}))
+		stubAmbientPID(t, func(context.Context) (int, bool) { return 0, true })
+
+		_, _, gaps := ScanServers(context.Background())
+		require.True(t, gaps.EmptyFleetUnproven,
+			"a bare claudesquad server is the shape a fleet under the other brand has")
+	})
+
+	// The two flags are mutually exclusive by construction, and it matters that they are:
+	// each one's remedy is wrong advice for the other's cause.
+	t.Run("an unanswered probe stays the unanswered case", func(t *testing.T) {
+		stubScanCandidates(t, func(context.Context) ([]candidate, ScanGaps) {
+			return []candidate{{PID: livePID, SocketPath: livePath}}, ScanGaps{}
+		})
+		stubSocketOwner(t, answersFor(map[string]int{livePath: livePID}))
+		stubAmbientPID(t, func(context.Context) (int, bool) { return 0, false })
+
+		_, _, gaps := ScanServers(context.Background())
+		require.True(t, gaps.LiveServerUnknown)
+		require.False(t, gaps.EmptyFleetUnproven,
+			"nothing was determined, so there is no determination to contradict")
+	})
+}
+
+// TestOnAnAmbientSocket pins the narrower of the two socket-name rules: which rows could be
+// the server an ambient probe was asking about.
+//
+// ownsSocketName accepts the suffixed forms because they are Atrium's litter and the reaper
+// should list them. This one rejects them, because no Atrium addresses its own server by a
+// suffixed name — `-L socketName()` is config.RuntimeName(), never suffixed — so such a row
+// cannot be the server a determined-empty answer failed to find. Both brands count: the
+// brand-mismatch route in #603 is a live claudesquad fleet with this run installed as atrium,
+// and a predicate keyed on the local brand alone would answer no for exactly that fleet.
+func TestOnAnAmbientSocket(t *testing.T) {
+	for _, tc := range []struct {
+		socket string
+		want   bool
+	}{
+		{"atrium", true},
+		{"claudesquad", true},
+
+		// Atrium's own litter, and never a server any ambient probe addressed: the
+		// managed-config precheck (config.go's probeSocketName), the config-parse probe
+		// socket (#605), the ad-hoc verification sockets.
+		{"atrium-precheck-991-1", false},
+		{"claudesquad-precheck-12-0", false},
+		{"atrium-cfgparse-1902348", false},
+		{"atrium-barstyle-test-4471", false},
+
+		// Not ours at all — ownsSocketName already refuses these, and this must not be the
+		// predicate that lets one back in.
+		{"atriumfoo", false},
+		{"default", false},
+		{"", false},
+	} {
+		t.Run(tc.socket, func(t *testing.T) {
+			require.Equal(t, tc.want, OrphanServer{Socket: tc.socket}.OnAnAmbientSocket())
+		})
+	}
+}
+
+// TestAnyReachable pins the predicate the reaper checks its selected targets with. The scan
+// narrows further — anyReachableAmbientCandidate — and that difference is asserted by
+// TestScanServersChecksADeterminedEmptyFleetAgainstTheInventory's probe-socket case.
+func TestAnyReachable(t *testing.T) {
+	require.False(t, AnyReachable(nil))
+	require.False(t, AnyReachable([]OrphanServer{{PID: 1, ReachableKnown: true}}),
+		"a server proven unreachable is not a server that answered")
+	require.False(t, AnyReachable([]OrphanServer{{PID: 1}}),
+		"neither is one nothing is known about")
+	require.True(t, AnyReachable([]OrphanServer{
+		{PID: 1, ReachableKnown: true},
+		{PID: 2, Reachable: true, ReachableKnown: true},
+	}), "one row that answered is enough — it may be the live fleet")
 }
 
 // TestScanServersWalksProcBeforeAnyTmuxProbe pins the order the gap reporting depends

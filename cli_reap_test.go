@@ -441,6 +441,10 @@ func TestReapKillAllRefusesWhenTheLiveServerIsUnknown(t *testing.T) {
 		require.Empty(t, procs.sent,
 			"--all must signal nothing when the live server could not be told apart from these rows")
 		require.True(t, procs.alive[1952486], "the live server must survive")
+		// This cause, and only this one, is the one a re-run fixes: the probe was never
+		// answered. Pinned here because the sibling test pins the opposite for the other
+		// cause, and one message serving both would be wrong advice for one of them.
+		require.Contains(t, err.Error(), "re-run once the probe works")
 	})
 
 	t.Run("the default path still kills the unreachable one", func(t *testing.T) {
@@ -475,6 +479,72 @@ func TestReapKillAllRefusesWhenTheLiveServerIsUnknown(t *testing.T) {
 		require.False(t, procs.alive[1499239],
 			"an unidentified live server must not block a kill every target is proven safe for")
 	})
+}
+
+// TestReapKillAllRefusesWhenTheEmptyFleetAnswerIsUnproven is #603: the same guard, reached
+// through the answer that *was* determined.
+//
+// The ambient probe asks `-L <socket>`, resolved from the reap process's own HOME against
+// its own TMUX_TMPDIR, so "no server running on that socket" is a determination about the
+// place it looked. A fleet under another TMUX_TMPDIR or the other brand is found by the
+// /proc inventory, probed successfully by absolute path, and classified Reachable — while
+// LiveServerUnknown stays false, because the probe answered. Keyed on that flag alone, the
+// guard was silent in exactly the case where a reachable row is the live fleet, and
+// `--kill --all --yes` took it and every agent in it.
+//
+// The refusal is asserted on the recorded signals first, not only on the message: an error
+// printed after the fleet was signalled is not a guard. The message is then asserted too,
+// for the remedy it names — which differs by cause, and is wrong advice if it does not.
+func TestReapKillAllRefusesWhenTheEmptyFleetAnswerIsUnproven(t *testing.T) {
+	live := orphan(1952486)
+	live.Reachable = true // it answered its own socket, by path, because it is the live server
+	unreachable := orphan(1499239, kid(1499240))
+
+	t.Run("--all refuses", func(t *testing.T) {
+		procs := newFakeProcs().add(1952486, 1499239, 1499240).install(t)
+		res := result(unreachable, live)
+		res.Gaps = tmux.ScanGaps{EmptyFleetUnproven: true}
+		stubReapCheck(t, res)
+
+		var out bytes.Buffer
+		err := runReap(t.Context(), &out, strings.NewReader("y\ny\ny\n"),
+			reapOpts{kill: true, all: true, yes: true})
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "refusing --all")
+		require.Empty(t, procs.sent,
+			"--all must signal nothing when a reachable row may be a fleet the probe never saw")
+		require.True(t, procs.alive[1952486], "the live server must survive")
+
+		// The remedy has to fit the cause. This probe answered, and re-running it asks the
+		// same wrong socket again, so "re-run once the probe works" would be advice that
+		// cannot work — the row is reachable and can be inspected instead.
+		require.NotContains(t, err.Error(), "re-run once the probe works")
+		require.Contains(t, err.Error(), "tmux -S <path> ls")
+	})
+
+	t.Run("the default path still kills the unreachable one", func(t *testing.T) {
+		procs := newFakeProcs().add(1952486, 1499239, 1499240).install(t)
+		res := result(unreachable, live)
+		res.Gaps = tmux.ScanGaps{EmptyFleetUnproven: true}
+		stubReapCheck(t, res)
+
+		var out bytes.Buffer
+		require.NoError(t, runReap(t.Context(), &out, strings.NewReader(""),
+			reapOpts{kill: true, yes: true}))
+		require.False(t, procs.alive[1499239], "the proven-unreachable server is still killable")
+		require.True(t, procs.alive[1952486],
+			"the reachable server is not a default target, so it is untouched")
+	})
+
+	// There is deliberately no "--all proceeds when no target is reachable" case here, the
+	// way there is for the unanswered probe. This flag is set *because* the inventory holds a
+	// reachable server, and a Reachable row is always ReachableKnown and so always selected
+	// under --all, so the combination is one ScanServers cannot produce: a subtest asserting
+	// it would pass without exercising anything and read as coverage of a scoping rule that
+	// this cause cannot reach. What actually needs pinning is that the scan does not raise
+	// the flag on an unreachable-only inventory, and that is asserted where the scan decides
+	// it — TestScanServersChecksADeterminedEmptyFleetAgainstTheInventory, "an unreachable
+	// inventory does not contradict it".
 }
 
 // TestReapKillAllKillsAReachableServerWhenTheLiveOneIsIdentified is the happy path the
