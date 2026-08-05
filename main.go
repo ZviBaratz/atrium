@@ -350,7 +350,14 @@ var (
 			"Terminal background detection reports which rung of the light/dark ladder can answer here,\n" +
 			"for anyone whose theme: auto did not adapt: it reads COLORFGBG, and names OSC 11 as the\n" +
 			"rung that outranks it but cannot be probed from a one-shot command — that query needs the\n" +
-			"running TUI, which sends it at startup, on refocus and after a detach. On Linux, Orphaned\n" +
+			"running TUI, which sends it at startup, on refocus and after a detach. On Linux, Host\n" +
+			"pressure is the live counterpart to Host capacity: swap headroom, and space and inode\n" +
+			"headroom for the data dir, the tmux socket directory and the temp directory. It flags a\n" +
+			"path that is a tmpfs, because a tmpfs's contents are charged against RAM rather than to a\n" +
+			"disk — so filling one costs memory, and once swap is exhausted as well, writes there fail\n" +
+			"with ENOSPC, which surfaces as every command exiting 1 with no output rather than as\n" +
+			"anything naming a full filesystem. Available memory is reported for context and never\n" +
+			"warns: a host in exactly that state can still report memory available. On Linux, Orphaned\n" +
 			"tmux servers finds tmux servers Atrium started that are still running but are not the live\n" +
 			"one — including the case no socket lookup can reach, where the socket file was deleted along\n" +
 			"with the temp directory holding it, so neither `tmux ls` nor `atrium reset` can name the\n" +
@@ -387,6 +394,17 @@ var (
 			// no config/tmux access, so it is safe beside a live TUI and needs no budget.
 			fmt.Println()
 			fmt.Print(doctor.RenderCapacity(doctor.CheckCapacity()))
+
+			// Host pressure: the live counterpart to the static section above — swap
+			// headroom, filesystem and inode headroom for the data dir, the tmux socket
+			// dir and the temp dir, and whether any of those is a tmpfs (whose contents
+			// are charged against RAM). Read-only: two kernel counters, two small /proc
+			// files, one statfs per filesystem. It gets a probe budget because locating
+			// the socket directory asks the live server (#594).
+			pressureCtx, cancelPressure := context.WithTimeout(context.Background(), doctor.ProbeTimeout)
+			defer cancelPressure()
+			fmt.Println()
+			fmt.Print(doctor.RenderPressure(doctor.CheckPressure(pressureCtx)))
 
 			// Terminal background detection: a pure read of the environment, so it needs
 			// no budget either. It reports the rungs it can reach and names the one it
