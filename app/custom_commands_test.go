@@ -254,6 +254,13 @@ func TestCustomCommandGatesAgreeWithDispatch(t *testing.T) {
 		config.CustomCommand{Key: "r", Description: "repo ctx", Context: "repo", Command: "true", Output: "background"},
 		config.CustomCommand{Key: "b", Description: "needs a branch", Command: "echo {{.Session.Branch}}", Output: "background"},
 		config.CustomCommand{Key: "w", Description: "needs a worktree", Context: "repo", Command: "echo {{.Session.Worktree}}", Output: "background"},
+		// The same shapes in terminal mode, because the gate is only proven for the modes
+		// it is driven through — and terminal mode's refusal has strictly more to get
+		// wrong: it suspends the whole event loop, so a row that ran when it should have
+		// been refused takes the screen away as well as running the command.
+		config.CustomCommand{Key: "S", Description: "session ctx, terminal", Command: "true", Output: "terminal"},
+		config.CustomCommand{Key: "W", Description: "needs a worktree, terminal", Context: "repo",
+			Command: "echo {{.Session.Worktree}}", Output: "terminal"},
 	)
 
 	checked := 0
@@ -263,6 +270,10 @@ func TestCustomCommandGatesAgreeWithDispatch(t *testing.T) {
 				h, inst := newGateHome(t, sc)
 				h.customCommands = cmds
 				calls := stubRunner(t, nil)
+				// Both seams, so a refusal that leaked past either one is visible. A
+				// terminal command spawns from inside attachCommand.Run, which is a
+				// different path from the background goroutine and needs its own witness.
+				terminalCalls := stubTerminalRunner(t, nil)
 
 				if customCommandInertReason(c, inst, customCommandCtx(inst)) == "" {
 					t.Skip("runnable in this scenario — the agreement being checked is about refusals")
@@ -275,6 +286,8 @@ func TestCustomCommandGatesAgreeWithDispatch(t *testing.T) {
 
 				assert.Empty(t, *calls,
 					"a dimmed row must not run — the refusal has to stop the process, not just the toast")
+				assert.Empty(t, *terminalCalls,
+					"nor may it take the terminal — a suspended loop is worse than a stray subprocess")
 				assert.Equal(t, stateCustomCommands, h.state,
 					"the menu stays up to hold its own answer")
 				assert.Contains(t, xansi.Strip(h.customCommandsOverlay.Render()), c.Key+" —",
@@ -406,6 +419,11 @@ func TestCustomCommandRefusalsFitARow(t *testing.T) {
 		"failed":             customCommandFailedTail,
 		"vanished directory": customCommandNoDirTail,
 		"unrenderable":       customCommandUnrenderableTail,
+		// Terminal mode's two. The formatted one joins as its WIDEST instantiation, not
+		// as the format string: a wait status is 0-255, and measuring "%d" would count
+		// two cells where three can appear.
+		"exited": fmt.Sprintf(customCommandExitedTailFmt, 255),
+		"died":   customCommandDiedTail,
 	}
 
 	widest := 0

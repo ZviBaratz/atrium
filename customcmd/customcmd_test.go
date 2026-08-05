@@ -461,3 +461,67 @@ func TestEnvNamesMatchTheFieldTable(t *testing.T) {
 			"%s must be namespaced: %q", f.path, f.env)
 	}
 }
+
+// TestParseOutput_AcceptsEveryDeclaredMode is the over-rejection guard the refusal
+// table cannot be: every case there proves something is refused, and a mode that is
+// silently refused ships as a feature nobody can reach.
+//
+// Case sensitivity is asserted rather than left implicit. The values are a closed set
+// compared as strings, so "Terminal" is a typo — and a typo that validated would take
+// over the user's terminal from an entry they wrote expecting a background run.
+func TestParseOutput_AcceptsEveryDeclaredMode(t *testing.T) {
+	for _, tc := range []struct {
+		in   string
+		want Output
+	}{
+		{"background", OutputBackground},
+		{"terminal", OutputTerminal},
+	} {
+		t.Run(tc.in, func(t *testing.T) {
+			got, err := parseOutput(tc.in)
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, got)
+
+			// And through the whole validator, since that is what binds it.
+			entry := ok()
+			entry.Output = tc.in
+			cmds, problems := Validate([]config.CustomCommand{entry})
+			require.Empty(t, problems)
+			require.Len(t, cmds, 1)
+			assert.Equal(t, tc.want, cmds[0].Output)
+		})
+	}
+
+	for _, bad := range []string{"Terminal", "BACKGROUND", "term", "tty", "popup"} {
+		t.Run("rejects "+bad, func(t *testing.T) {
+			_, err := parseOutput(bad)
+			assert.Error(t, err, "output is a closed set compared as a string")
+		})
+	}
+}
+
+// TestParseOutput_MessagesNameEveryMode is a claim guard, not a behaviour one.
+//
+// These two messages are the ONLY place a user is told what `output` may be — there is
+// no default to fall back on, by design. Both were written when `background` was the
+// only mode and named it as the whole set, so a user adding `terminal` correctly would
+// have been told, by the required-field message, that the value they wanted did not
+// exist. A message that is a stale enumeration of a set that has grown is exactly the
+// claim defect nothing else here can see.
+func TestParseOutput_MessagesNameEveryMode(t *testing.T) {
+	// Derived from the type, so a third mode joins this guard by existing.
+	modes := []Output{OutputBackground, OutputTerminal}
+
+	_, missing := parseOutput("")
+	require.Error(t, missing)
+	_, unknown := parseOutput("popup")
+	require.Error(t, unknown)
+
+	for _, m := range modes {
+		assert.Containsf(t, missing.Error(), string(m),
+			"the required-output message must name %q — it is the only place the legal "+
+				"values appear", m)
+		assert.Containsf(t, unknown.Error(), string(m),
+			"the unknown-output message must name %q", m)
+	}
+}

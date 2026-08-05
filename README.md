@@ -996,7 +996,7 @@ you configure are documented where every built-in key is.
     "key": "g",                                       // one printable character
     "description": "lazygit in this worktree",         // shown in the menu and in ?
     "command": "lazygit -p {{ quote .Session.Worktree }}",
-    "output": "background"                            // required
+    "output": "terminal"                              // required; takes the screen
   },
   {
     "key": "c",
@@ -1020,7 +1020,7 @@ you configure are documented where every built-in key is.
 | `key` | yes | one printable character | what runs it from inside the menu. Any character is available, including `q` — the menu handles keys before the global quit. The space bar is not (it arrives as `space`), nor is a combining mark. |
 | `description` | yes | string | all the menu and `?` can show, so it is what identifies the command. |
 | `command` | yes | Go template | run as `sh -c`. See the placeholders below. |
-| `output` | yes | `background` | runs detached, naming itself on the progress row, and reports the exit status when it finishes. There is deliberately no default: the modes behave differently enough that an implicit one would be a surprise. `terminal` — taking over the screen for the command's duration — is planned and currently rejected. |
+| `output` | yes | `background`, `terminal` | `background` runs it detached, naming itself on the progress row, and reports the exit status when it finishes. `terminal` gives it the screen until it exits, the way attaching to a session does — for lazygit, an editor, a pager, or a build you mean to watch. There is deliberately no default: the modes behave differently enough that an implicit one would be a surprise. |
 | `context` | no | `session` (default), `repo` | `session` runs in the agent's working directory and needs a started, unpaused session. `repo` runs in the repository root, which is available whatever the session is doing. |
 | `confirm` | no | bool | ask before running. The dialog names the command and the directory. |
 
@@ -1049,11 +1049,18 @@ or as a variable — because an empty expansion is how `rm -rf "$ATRIUM_WORKTREE
 becomes `rm -rf /build`. The check errs toward refusing: a name inside single quotes, or
 in a comment, still counts.
 
-One custom command runs at a time; a second gets a notice.
+One custom command runs at a time, whichever mode it is in; a second gets a notice.
+
+A `terminal` command owns the screen while it runs, so `Ctrl+C` interrupts *it* and
+leaves Atrium running. Your other sessions keep being serviced in the meantime — queued
+prompts are still delivered and auto-yes still answers — but the session list is not
+redrawn until the command exits, and it is swept fresh on return.
 
 Every run is recorded in the command log (`L`), under its key and description rather
 than its rendered text — so a token in a command never lands in the log. A failure
-raises a notice and its output is in that record.
+raises a notice: a `background` command's output is in its record, and a `terminal`
+command's went to the screen you were watching, so its record carries the exit status
+alone.
 
 A malformed entry is **dropped, not bound**: the rest still work. Atrium reports the
 ones it refused in a modal at startup, and `atrium doctor` prints the same list, so a

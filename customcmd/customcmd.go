@@ -23,8 +23,9 @@
 // technique is worth knowing: one render takes one path, so a placeholder inside a
 // conditional the probe does not enter escapes to run time.
 //
-// Only `atrium doctor` consumes this today. The menu that runs these commands, and
-// the startup surface that reports these problems, arrive with the UI stage.
+// Three surfaces consume this, and they must never disagree about what is valid because
+// they all read the same pass: the `!` menu that runs these commands, the startup modal
+// that reports the refused ones, and `atrium doctor`.
 package customcmd
 
 import (
@@ -41,10 +42,10 @@ import (
 type Context string
 
 const (
-	// ContextSession runs in the agent's working directory. It is the default. The
-	// UI stage will gate it on a started, unpaused session, because before Start an
-	// instance's working directory is still the user's origin checkout — running
-	// there is the one outcome this context must never produce.
+	// ContextSession runs in the agent's working directory. It is the default, and the
+	// app gates it on a started, unpaused session (customCommandInertReason), because
+	// before Start an instance's working directory is still the user's origin checkout —
+	// running there is the one outcome this context must never produce.
 	ContextSession Context = "session"
 	// ContextRepo runs in the repository root, which outlives a pause.
 	ContextRepo Context = "repo"
@@ -57,6 +58,15 @@ const (
 	// OutputBackground runs the command detached, reporting its exit status when it
 	// finishes.
 	OutputBackground Output = "background"
+	// OutputTerminal gives the command the terminal for its whole duration, the way an
+	// attach does, and returns to the list when it exits. It is for a command the user
+	// means to watch or interact with — lazygit, an editor, a pager — where a captured
+	// buffer would be useless.
+	//
+	// The cost is real and is why `output` has no default: the Bubble Tea event loop is
+	// suspended for the duration, so the app services the fleet from a keeper goroutine
+	// rather than from its tick (see app.attachKeeper).
+	OutputTerminal Output = "terminal"
 )
 
 // SessionCtx is the selected session's half of the template context.
@@ -277,14 +287,22 @@ func parseContext(s string) (Context, error) {
 // parseOutput resolves the output mode. Unlike context it has no default: the modes
 // differ enough that an implicit one would make "it took over my terminal" a
 // surprise.
+//
+// Both messages enumerate the whole set, because with no default they are the only
+// place a user learns what the values are. TestParseOutput_MessagesNameEveryMode keeps
+// them from going stale the way they did when `terminal` landed.
 func parseOutput(s string) (Output, error) {
 	if s == "" {
-		return "", fmt.Errorf("output is required — %q runs it detached and reports the exit status", OutputBackground)
+		return "", fmt.Errorf("output is required — %q runs it detached and reports the exit status, "+
+			"%q gives it the terminal until it exits", OutputBackground, OutputTerminal)
 	}
-	if Output(s) == OutputBackground {
+	switch Output(s) {
+	case OutputBackground:
 		return OutputBackground, nil
+	case OutputTerminal:
+		return OutputTerminal, nil
 	}
-	return "", fmt.Errorf("output %q is not %q", s, OutputBackground)
+	return "", fmt.Errorf("output %q is not %q or %q", s, OutputBackground, OutputTerminal)
 }
 
 // Render resolves the command's template against ctx.
