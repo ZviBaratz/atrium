@@ -48,9 +48,12 @@ const (
 	// through /proc/<pid>/fd to the *server* pid — none of the twelve `tmux: client`
 	// processes held a path-carrying row at all. A stream client's socket stays unbound
 	// (`connect(2)` names the peer, it does not bind), while the socket the kernel hands
-	// back from accept() inherits the listener's address. So the rows this filter holds
-	// back belong to the server itself, and each one is a client currently connected to
+	// back from accept() inherits the listener's address. So the rows this flag is false
+	// for belong to the server itself, and each one is a client currently connected to
 	// it — twelve, against the twelve clients `tmux list-clients` reported.
+	//
+	// "False for", not "filtered out by": pathBoundSockets keeps those rows and labels
+	// them, because the count needs them. This is a discriminator now, not a filter.
 	listeningFlags = "00010000"
 
 	// userHZ is the tick rate /proc/<pid>/stat's starttime is expressed in. The
@@ -221,10 +224,12 @@ type unixSocket struct {
 // can use one.
 //
 // It keeps the non-listening rows rather than filtering them out here, because a
-// server's accepted sockets are the only evidence in /proc that a client is connected
-// to it (#614). Which row is which is recorded rather than decided: serverSocket is
-// where a pid's own listener and its own accepted connections are told apart, and it
-// has to see both.
+// server's accepted sockets are the only evidence a client is connected to it that this
+// scan is willing to read (#614): a client's own argv carries `-S <path>`, and argv is
+// deliberately never read here, since it also carries injected GH_TOKEN /
+// GITHUB_PERSONAL_ACCESS_TOKEN values. Which row is which is recorded rather than
+// decided: serverSocket is where a pid's own listener and its own accepted connections
+// are told apart, and it has to see both.
 //
 // ok is false when the table could not be read at all, and the caller must propagate
 // that rather than treat it as an empty host. This is the one source every candidate's
@@ -296,9 +301,11 @@ func serverSocket(pid int, table map[uint64]unixSocket) (path string, clients in
 		// Not our uid, or the process exited between listing and reading.
 		return "", 0
 	}
-	// Two passes over the fds this pid holds, because the listener can appear after
-	// some of the connections it accepted: the path is not known until it is found, and
-	// a connection only counts once it can be compared against that path.
+	// The connections are collected and counted afterwards, rather than counted as they
+	// are met, because the listener can be reached after some of them: the path is not
+	// known until its row turns up, and a connection only counts once there is a path to
+	// compare it against. Still one walk of the directory — the second pass is over this
+	// slice.
 	var connected []string
 	for _, e := range entries {
 		target, err := os.Readlink(filepath.Join(procRoot, strconv.Itoa(pid), "fd", e.Name()))

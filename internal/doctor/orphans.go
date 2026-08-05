@@ -150,10 +150,14 @@ func renderScanGaps(b *strings.Builder, g tmux.ScanGaps) {
 // unidentified need different sentences: one is an unrunnable probe and one is a probe that
 // answered about the wrong socket, and only the first leaves the row uninspectable (#603).
 //
-// The connected-client note goes below the switch rather than into a case of it, because it
-// is orthogonal to reachability: it says what the server *is* — something is using it — where
-// the cases say what can be aimed at it. Its subject on an unreachable row is #614, the one
-// shape this report could otherwise present as an abandoned server.
+// The connected-client note goes below the switch rather than into a case of it, because its
+// first half is orthogonal to reachability: that something is using this server is true of
+// every class, where the cases say what can be aimed at one. Its second half is not, and
+// branches on Reachable inline — a server whose socket is answering probes has had nothing
+// deleted, so the sentence about a deleted socket file would be a false claim about that row.
+// Measured: a reachable leaked server under another TMUX_TMPDIR was told its socket file had
+// been deleted. Its subject on an unreachable row is #614, the one shape this report could
+// otherwise present as an abandoned server.
 func renderOrphanServer(b *strings.Builder, s tmux.OrphanServer, now time.Time, gaps tmux.ScanGaps) {
 	switch {
 	case !s.ReachableKnown:
