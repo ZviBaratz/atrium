@@ -263,6 +263,22 @@ func probeAmbient(ctx context.Context) (pid int, known bool) {
 	return ambientPID(probeCtx)
 }
 
+// AmbientServerPID reports which tmux server is on Atrium's socket — the one this
+// Atrium runs on — under one probe's share of the scan budget.
+//
+// known is the whole reason this is exported rather than reimplemented. "tmux ran and
+// there is no server on that socket" is a determined answer and a safe one; "tmux could
+// not be asked" — the binary absent, the probe's budget spent, a fork that failed under
+// memory pressure — establishes nothing. A caller that collapses the two reports an
+// empty fleet on a host that has a live one. That was #599 here, and it was still true
+// in internal/doctor's OOM section afterwards, which ran its own copy of this probe with
+// the classification left out.
+//
+// One home for the rule is the point: classifyPIDProbe's doc comment argues that a rule
+// about what counts as evidence is the last thing that should be able to drift between
+// two call sites, and a second caller is exactly how that drift happens.
+func AmbientServerPID(ctx context.Context) (pid int, known bool) { return probeAmbient(ctx) }
+
 // probeOwner asks which server is listening on path, under one probe's share of the
 // budget. Every owner probe here goes through it, so a socket that never answers costs
 // this scan one probe rather than all the others' time.

@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/ZviBaratz/atrium/config"
+	"github.com/ZviBaratz/atrium/session/tmux"
 )
 
 // OOMAgent is one agent pane's OOM standing: its session, pid, current badness
@@ -28,10 +29,26 @@ type OOMAgent struct {
 // margin, and — on Linux with a live server — the shared tmux server's badness
 // versus each agent pane's, so the user can see whether an OOM kill would shed one
 // recoverable session or the whole server (every session). Supported is false off
-// Linux; ServerFound is false when no server runs on the socket.
+// Linux.
+//
+// ServerFound and LiveServerUnknown are separate, and reading ServerFound alone is the
+// bug this pair exists to prevent: it is false both when tmux reported that no server is
+// on Atrium's socket and — before LiveServerUnknown existed — when tmux could not be run
+// at all. Only LiveServerUnknown == false makes !ServerFound evidence of an empty fleet.
 type OOMResult struct {
-	Supported   bool
-	Margin      int
+	Supported bool
+	Margin    int
+	// LiveServerUnknown reports that the probe for which server is on Atrium's socket
+	// was never answered: tmux absent, or the probe's budget spent. It is not "no server
+	// is running", which is a determined answer and safe.
+	//
+	// Named for the same fact as tmux.ScanGaps.LiveServerUnknown on purpose — one
+	// spelling for one question, so a reader who met it in the orphan section does not
+	// have to work out whether this is the same thing. It is a different question from
+	// ServerKnown below, which is about the /proc read of a server already located.
+	LiveServerUnknown bool
+	// ServerFound reports that a server is on Atrium's socket. Meaningful only when
+	// LiveServerUnknown is false.
 	ServerFound bool
 	ServerPID   int
 	ServerScore int
@@ -77,8 +94,9 @@ func CheckOOM(ctx context.Context) OOMResult {
 // anywhere to exercise the assembly against stubbed seams.
 func gatherOOM(ctx context.Context) OOMResult {
 	r := OOMResult{Supported: true, Margin: configuredOOMMargin()}
-	serverPID, panes, ok := oomDiscover(ctx)
-	if !ok {
+	serverPID, panes, found, known := oomDiscover(ctx)
+	r.LiveServerUnknown = !known
+	if !found {
 		return r
 	}
 	r.ServerFound = true
@@ -94,23 +112,35 @@ func gatherOOM(ctx context.Context) OOMResult {
 
 // discoverTmuxOOM locates the live Atrium tmux server and its agent panes with
 // read-only tmux queries (display-message / list-panes), which never mutate a
-// session and are safe beside a live TUI. ok is false when tmux is absent or no
-// server is running on Atrium's socket.
-func discoverTmuxOOM(ctx context.Context) (serverPID int, panes []paneRef, ok bool) {
-	socket := config.RuntimeName()
-	out, err := exec.CommandContext(ctx, "tmux", "-L", socket, "display-message", "-p", "#{pid}").Output()
-	if err != nil {
-		return 0, nil, false
+// session and are safe beside a live TUI.
+//
+// found reports that a server is there; known reports that the question was answered at
+// all, and found is meaningful only when it is true. The pid probe goes through
+// tmux.AmbientServerPID rather than a copy of it built here, which is what supplies that
+// second bool: this function used to run its own `display-message -p '#{pid}'` and treat
+// every failure as "no server", so tmux off PATH — or a fork that failed under the very
+// memory pressure this section exists to diagnose — rendered as an empty fleet on a host
+// running eighteen agents. That is the conflation #599 fixed one package over, reached
+// from here instead.
+//
+// list-panes keeps its own command: it is not a pid probe, it has no evidence rule to
+// share, and a failure of it is already distinguishable — a live server always hosts at
+// least one pane, so an empty list against found == true is the unreadable case.
+func discoverTmuxOOM(ctx context.Context) (serverPID int, panes []paneRef, found, known bool) {
+	serverPID, known = tmux.AmbientServerPID(ctx)
+	if !known {
+		return 0, nil, false, false
 	}
-	serverPID, err = strconv.Atoi(strings.TrimSpace(string(out)))
-	if err != nil {
-		return 0, nil, false
+	if serverPID == 0 {
+		// tmux ran and determined there is no server on Atrium's socket. An empty fleet
+		// is a real answer, and a safe one.
+		return 0, nil, false, true
 	}
-	paneOut, err := exec.CommandContext(ctx, "tmux", "-L", socket, "list-panes", "-a", "-F", "#{pane_id} #{pane_pid} #{session_name}").Output()
+	paneOut, err := exec.CommandContext(ctx, "tmux", "-L", config.RuntimeName(), "list-panes", "-a", "-F", "#{pane_id} #{pane_pid} #{session_name}").Output()
 	if err != nil {
-		return serverPID, nil, true // server found; panes just unreadable
+		return serverPID, nil, true, true // server found; panes just unreadable
 	}
-	return serverPID, agentPanes(paneOut), true
+	return serverPID, agentPanes(paneOut), true, true
 }
 
 // agentPanes reduces `list-panes -a` output to one pane per session: the agent's.
@@ -206,6 +236,21 @@ func RenderOOM(r OOMResult) string {
 		fmt.Fprintf(&b, "  %-18s off (agents share the server's oom_score)\n", "agent margin")
 	}
 
+	// Before the emptiness test, never instead of it — the same order RenderOrphans uses
+	// for its scan gaps. "no live atrium tmux server" is not merely a wrong label here:
+	// it is an instruction, and it tells a user whose fleet is running to start a
+	// session. The margin above still prints, because it is read from config and was
+	// established.
+	if r.LiveServerUnknown {
+		b.WriteString("  live server not established — tmux could not be asked which server is on\n")
+		b.WriteString("  Atrium's socket, so this is not an empty fleet, only an unanswered question\n")
+		// The re-run leads and PATH comes second, as in renderStaleGaps: the probe fails
+		// when tmux is off PATH *and* when its budget was spent, and naming only PATH
+		// sends a user whose PATH is fine to check it.
+		b.WriteString("         → re-run to get the live ranking; if it persists, check that tmux is\n")
+		b.WriteString("           on PATH\n")
+		return b.String()
+	}
 	if !r.ServerFound {
 		b.WriteString("  no live atrium tmux server — start a session to see the live ranking\n")
 		return b.String()
