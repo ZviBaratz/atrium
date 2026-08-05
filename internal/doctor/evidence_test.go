@@ -106,7 +106,7 @@ var evidenceTypeFields = map[string]int{
 	"tmux.ScanGaps":         4,
 	"tmux.StaleGaps":        2,
 	"tmux.OrphanServer":     8,
-	"doctor.OOMResult":      8,
+	"doctor.OOMResult":      9,
 	"doctor.OOMAgent":       5,
 	"doctor.PressureResult": 12,
 	"doctor.Filesystem":     13,
@@ -172,13 +172,31 @@ func orphanSectionWith(t *testing.T, servers []tmux.OrphanServer, gaps tmux.Scan
 	return RenderOrphans(CheckOrphans(context.Background()))
 }
 
-// oomSectionWith renders the OOM section from stubbed discovery and /proc readers.
+// oomSectionWith renders the OOM section from stubbed discovery and /proc readers, with
+// the live server located.
 func oomSectionWith(t *testing.T, panes []paneRef, scores map[int][2]int) string {
+	t.Helper()
+	return oomSection(t, func(context.Context) (int, []paneRef, bool, bool) {
+		return 4242, panes, true, true
+	}, scores)
+}
+
+// oomSectionUnasked renders the OOM section with the live-server probe never answered —
+// tmux absent, or its budget spent. Distinct from an empty fleet, which answers
+// (0, nil, false, true).
+func oomSectionUnasked(t *testing.T) string {
+	t.Helper()
+	return oomSection(t, func(context.Context) (int, []paneRef, bool, bool) {
+		return 0, nil, false, false
+	}, nil)
+}
+
+func oomSection(t *testing.T, discover func(context.Context) (int, []paneRef, bool, bool), scores map[int][2]int) string {
 	t.Helper()
 	prevDiscover, prevRead := oomDiscover, oomRead
 	t.Cleanup(func() { oomDiscover, oomRead = prevDiscover, prevRead })
 
-	oomDiscover = func(context.Context) (int, []paneRef, bool) { return 4242, panes, true }
+	oomDiscover = discover
 	oomRead = func(pid int) (int, int, bool) {
 		v, ok := scores[pid]
 		return v[0], v[1], ok
@@ -320,6 +338,16 @@ func evidenceCases() []evidenceCase {
 			forbids: []string{"none in", "  none\n"},
 			names:   []string{"could not be classified", "2 socket files"},
 			why:     "absence of a probe answer is not evidence of an absent server, so those files stay off the list",
+		},
+		{
+			name:   "the live-server probe was never answered",
+			covers: []string{"OOMResult.LiveServerUnknown"},
+			render: func(t *testing.T) string { return oomSectionUnasked(t) },
+			// Not merely a wrong label: "start a session" is an instruction, and this is
+			// the branch that used to hand it to a user whose fleet was already running.
+			forbids: []string{"no live atrium tmux server", "start a session"},
+			names:   []string{"not established"},
+			why:     "tmux could not be asked, which says nothing about whether a server is on Atrium's socket",
 		},
 		{
 			name:   "the server's own oom_score unreadable",
@@ -509,7 +537,7 @@ func TestEveryEvidenceChannelIsCovered(t *testing.T) {
 // evidenceFlagCount is how many completeness flags evidenceTypes holds. Stated rather
 // than derived: a number computed from the same reflection it checks would agree with
 // itself no matter what was deleted.
-const evidenceFlagCount = 15
+const evidenceFlagCount = 16
 
 // TestAuditedTypesHaveNotGrownAField is the backstop for the flag-word convention.
 //

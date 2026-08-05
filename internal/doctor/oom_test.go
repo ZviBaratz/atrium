@@ -3,6 +3,7 @@ package doctor
 import (
 	"context"
 	"os"
+	"os/exec"
 	"reflect"
 	"runtime"
 	"strings"
@@ -35,6 +36,9 @@ func TestRenderOOM_UnsupportedSaysLinuxOnly(t *testing.T) {
 	}
 }
 
+// The determined empty fleet: tmux answered, and answered that nothing is on Atrium's
+// socket. LiveServerUnknown false is what makes "no live" a finding here rather than a
+// fabrication — see TestRenderOOM_UnaskedLiveServerIsNotAnEmptyFleet for the other half.
 func TestRenderOOM_NoServerStillShowsMargin(t *testing.T) {
 	out := RenderOOM(OOMResult{Supported: true, Margin: 300, ServerFound: false})
 	if !strings.Contains(out, "+300") {
@@ -42,6 +46,25 @@ func TestRenderOOM_NoServerStillShowsMargin(t *testing.T) {
 	}
 	if !strings.Contains(out, "no live") {
 		t.Errorf("render = %q, want a 'no live server' note", out)
+	}
+}
+
+// TestRenderOOM_UnaskedLiveServerIsNotAnEmptyFleet: the two states above and below this
+// line rendered identically until LiveServerUnknown existed, and the shared sentence was
+// the wrong one of the two — "no live atrium tmux server — start a session to see the
+// live ranking", printed on a host with eighteen running agents.
+//
+// The margin still prints: it comes from config.json, which was read.
+func TestRenderOOM_UnaskedLiveServerIsNotAnEmptyFleet(t *testing.T) {
+	out := RenderOOM(OOMResult{Supported: true, Margin: 300, LiveServerUnknown: true})
+	if strings.Contains(out, "no live atrium tmux server") || strings.Contains(out, "start a session") {
+		t.Errorf("render = %q, want no claim of an empty fleet from an unanswered probe", out)
+	}
+	if !strings.Contains(out, "not established") {
+		t.Errorf("render = %q, want the gap named", out)
+	}
+	if !strings.Contains(out, "+300") {
+		t.Errorf("render = %q, want the configured margin still shown", out)
 	}
 }
 
@@ -154,8 +177,8 @@ func TestCheckOOM_AssemblesFromSeams(t *testing.T) {
 	prevDiscover, prevRead := oomDiscover, oomRead
 	t.Cleanup(func() { oomDiscover, oomRead = prevDiscover, prevRead })
 
-	oomDiscover = func(context.Context) (int, []paneRef, bool) {
-		return 12589, []paneRef{{PID: 111, Session: "repo_A"}, {PID: 222, Session: "repo_B"}}, true
+	oomDiscover = func(context.Context) (int, []paneRef, bool, bool) {
+		return 12589, []paneRef{{PID: 111, Session: "repo_A"}, {PID: 222, Session: "repo_B"}}, true, true
 	}
 	scores := map[int][2]int{12589: {800, 200}, 111: {1090, 500}, 222: {1050, 500}}
 	oomRead = func(pid int) (int, int, bool) {
@@ -169,5 +192,50 @@ func TestCheckOOM_AssemblesFromSeams(t *testing.T) {
 	}
 	if len(r.Agents) != 2 || r.Agents[0].Score != 1090 || !r.Agents[1].Known {
 		t.Fatalf("agents not assembled: %+v", r.Agents)
+	}
+}
+
+// TestDiscoverTmuxOOM_UnrunnableTmuxIsNotAnEmptyFleet drives the real discovery function
+// — not the seam — with tmux unreachable, and is the test whose absence let this ship.
+//
+// Every other test here stubs oomDiscover, so the classification inside it was never
+// exercised: its `ok` collapsed a failed exec into "no server on Atrium's socket" and no
+// assertion could tell the two apart, because the signature had no way to express the
+// difference. That is the shape of all seven instances of this class — the gap was in the
+// source, and the suite only ever saw the seam.
+//
+// PATH is emptied rather than TMUX_TMPDIR repointed, because those exercise the two
+// different branches: an empty PATH makes exec.LookPath fail, which is the "could not be
+// asked" case, while a sandbox socket root with no server is the determined empty fleet
+// asserted below it.
+func TestDiscoverTmuxOOM_UnrunnableTmuxIsNotAnEmptyFleet(t *testing.T) {
+	t.Setenv("PATH", "")
+
+	pid, panes, found, known := discoverTmuxOOM(context.Background())
+	if known {
+		t.Errorf("known = true with tmux off PATH; a question that could not be asked was not answered")
+	}
+	if found {
+		t.Errorf("found = true with tmux off PATH, want no claim about a server that was never probed")
+	}
+	if pid != 0 || panes != nil {
+		t.Errorf("discoverTmuxOOM = (%d, %v), want no data from a probe that never ran", pid, panes)
+	}
+}
+
+// TestDiscoverTmuxOOM_EmptySocketIsADeterminedAnswer is the other half: tmux runs, finds
+// nothing on Atrium's socket, and that is evidence. testutil.SandboxHomeMain points
+// TMUX_TMPDIR at a private root, so the socket this probes is the sandbox's and never the
+// developer's live fleet.
+func TestDiscoverTmuxOOM_EmptySocketIsADeterminedAnswer(t *testing.T) {
+	if _, err := exec.LookPath("tmux"); err != nil {
+		t.Skip("tmux not on PATH")
+	}
+	pid, panes, found, known := discoverTmuxOOM(context.Background())
+	if !known {
+		t.Errorf("known = false with tmux runnable and a sandbox socket root, want a determined answer")
+	}
+	if found {
+		t.Errorf("found = true on an empty sandbox socket, want no server: pid %d panes %v", pid, panes)
 	}
 }
