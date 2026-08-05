@@ -276,6 +276,33 @@ func (m *home) flushPendingLaunchCrash() tea.Cmd {
 	return m.showLaunchCrash(lr)
 }
 
+// flushSetupFailures opens the report for a session whose per-repo setup script
+// failed (#389), once the screen is free.
+//
+// It reads the fleet rather than a buffered message, which is what lets one call site
+// cover every way a script can run: a fresh session's Start and a resume's
+// re-materialization both record onto the instance, and neither has a completion
+// message the app could hang this off. The recorded failure IS the buffer, and
+// clearing it as the modal opens is what keeps the 100ms preview tick from reopening
+// the same report forever — the shape flushCustomCommandProblems uses.
+//
+// One at a time on purpose: each report carries a tail of script output, and two
+// stacked into one overlay would be unreadable. The next tick shows the next.
+func (m *home) flushSetupFailures() tea.Cmd {
+	if m.state != stateDefault {
+		return nil
+	}
+	for _, inst := range m.list.GetInstances() {
+		report := inst.SetupFailureReport()
+		if report == "" {
+			continue
+		}
+		inst.ClearSetupError()
+		return m.showInfo(report)
+	}
+	return nil
+}
+
 // scheduleNoticeHide stamps the just-shown toast with a fresh generation and
 // returns the command that clears it after errToastDuration. The generation
 // keeps an older toast's timer from clearing a newer toast early.

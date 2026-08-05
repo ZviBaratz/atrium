@@ -136,6 +136,55 @@ type CustomCommand struct {
 	Confirm bool `json:"confirm,omitempty"`
 }
 
+// RepoScript is the per-repository half of a session's environment (#389): what to
+// run once a worktree has been materialized, and what to export into it. A worktree
+// holds only tracked files, so carry_files and link_paths revive local *config* —
+// this revives the *processes and generated state* that files alone cannot.
+//
+// It is routed rather than keyed. The route rules are ClaudeAccount's, evaluated by
+// the same matcher (see Config.ResolveRepoScript): remote substrings first, then
+// target-path substrings, first match wins, and the first entry with no rules at all
+// is the catch-all. A map keyed by repo would need a repo identity this codebase does
+// not have — the repo group key is a bare basename and collides across checkouts
+// (git.RepoGroupKey), and the stored project paths are never normalized.
+//
+// Like CustomCommand this type is deliberately dumb: it is the wire shape and nothing
+// else. Every rule about what a valid entry looks like lives in package repocfg, and
+// an entry that fails those rules is dropped rather than applied.
+type RepoScript struct {
+	// Name is an optional label for the entry, used only to name it in a validation
+	// problem or a doctor report. Unlike an account's name nothing routes on it.
+	Name string `json:"name,omitempty"`
+	// RemoteMatches and PathMatches are the route rules: case-insensitive substrings
+	// of the repository's origin remote and of the target directory path. An entry
+	// with neither is the catch-all.
+	RemoteMatches []string `json:"remote_matches,omitempty"`
+	PathMatches   []string `json:"path_matches,omitempty"`
+	// SetupScript is a Go template rendered against the session context and then run
+	// through `sh -c` in the freshly materialized worktree, after carry_files and
+	// link_paths have been seeded. It runs before the agent program launches, so an
+	// agent never starts in a tree whose dependencies are still installing.
+	//
+	// It runs once per worktree MATERIALIZATION, not once per session: pause removes
+	// the worktree and resume recreates it empty of every gitignored path, so a
+	// resumed session needs it again. Write it to be idempotent.
+	SetupScript string `json:"setup_script,omitempty"`
+	// SessionEnv is exported into the setup script and into the agent's own pane, as
+	// NAME=VALUE. Values are Go templates over the same context, which is what makes
+	// a per-session value expressible at all — a cache directory that must not be
+	// shared between concurrent sessions being the motivating case.
+	//
+	// The values land in the tmux client's argv, so they are visible to any process
+	// that can read it. Do not put secrets here.
+	SessionEnv map[string]string `json:"session_env,omitempty"`
+}
+
+// IsCatchAll reports whether the entry has no routing rules, making it the fallback
+// used when no remote or path route matches.
+func (r RepoScript) IsCatchAll() bool {
+	return len(r.RemoteMatches) == 0 && len(r.PathMatches) == 0
+}
+
 // ClaudeAccount maps a named Claude Code account to a CLAUDE_CONFIG_DIR and the
 // route rules that auto-select it: git-remote substrings (RemoteMatches) and/or
 // target-directory-path substrings (PathMatches, the routing signal for
@@ -274,6 +323,10 @@ type Config struct {
 	// reached through the custom-commands menu (#375). Nil by default: Atrium ships
 	// no opinion about what you want to run against a worktree.
 	CustomCommands []CustomCommand `json:"custom_commands,omitempty"`
+	// RepoScripts is the per-repository environment layer (#389): what to run once a
+	// session's worktree exists, and what to export into it. Nil by default — a repo
+	// with no entry behaves exactly as it did before the feature existed.
+	RepoScripts []RepoScript `json:"repo_scripts,omitempty"`
 	// TmuxConfigOverride, when set to an existing file path, is used as the tmux
 	// config for cs sessions instead of the bundled managed config. When empty,
 	// cs materializes and uses its own config.

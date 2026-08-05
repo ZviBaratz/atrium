@@ -289,7 +289,17 @@ func (r *InstanceRenderer) Render(i *session.Instance, idx int, selected, marked
 	indentW := left1[0].width() + left1[1].width()
 
 	var line2 string
-	if i.AwaitingSetup() {
+	if phase := i.SetupPhase(); phase != "" {
+		// The per-repo setup script is running (#389). It takes the line before every
+		// other case because it is the only one that answers "why has this been Loading
+		// for two minutes" — and because while it runs there is nothing else worth
+		// showing: the worktree exists but is not yet the environment it will be.
+		// A phase rather than a session.Status, deliberately: Status values are
+		// persisted in state.json and read by a dozen-odd sites, and this is a phase OF
+		// Loading, not a state beside it.
+		left2 := []rowSeg{p.flexSeg(phase, th.Palette.FgDim, false)}
+		line2 = p.composeLine(W, left2, nil)
+	} else if i.AwaitingSetup() {
 		// Blocked on a one-time startup/trust screen (PaneGate). Replace the
 		// version-control line with a dim hint so the block is legible on every row —
 		// only the selected row's preview shows the screen itself, and the status glyph

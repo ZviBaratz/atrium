@@ -465,6 +465,15 @@ var (
 				fmt.Print(cmds)
 			}
 
+			// Repo scripts: same silence, one layer out. An entry that fails validation
+			// is dropped rather than applied, so a session just quietly comes up with a
+			// cold worktree.
+			if scripts := doctor.RenderRepoScripts(
+				doctor.CheckRepoScripts(config.LoadConfig())); scripts != "" {
+				fmt.Println()
+				fmt.Print(scripts)
+			}
+
 			// Account state keys: state.json indexes the cluster order, the rate-limit
 			// flags and the rotation cursors by account/pool NAME, so a rename can leave
 			// entries naming something config no longer has. Harmless (unknown names are

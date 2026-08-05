@@ -308,7 +308,15 @@ func (p *PreviewPane) UpdateContent(instance *session.Instance) error {
 		// Still coming up, or its pane has never yielded a readable frame: show the
 		// setup splash. "No capture has ever succeeded" is the same statement the old
 		// TmuxAlive() probe made here, without spending a subprocess to make it.
-		p.setFallbackState("Setting up workspace...")
+		// Named when the per-repo setup script is what the wait is actually spent on
+		// (#389). "Setting up workspace..." is true of every pre-agent session and so
+		// says nothing about the one that will sit here for two minutes installing
+		// dependencies; the phase is the only thing that distinguishes them.
+		if phase := instance.SetupPhase(); phase != "" {
+			p.setFallbackState(phase)
+		} else {
+			p.setFallbackState("Setting up workspace...")
+		}
 		logPreviewFallback(instance, "empty pane, not ready", nil)
 	default:
 		// Started, live, but the pane is momentarily blank — render it blank rather than

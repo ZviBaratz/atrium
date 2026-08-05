@@ -253,6 +253,14 @@ func (i *Instance) Resume() error {
 			// resume (durably if the session is re-paused before the next poll).
 			i.noteAutoPauseUnwind(n)
 		}
+
+		// The worktree is new, so the per-repo setup script runs again (#389). Pause
+		// removed the directory and with it every gitignored path the last run
+		// installed — node_modules, a built binary, a generated .env — so "once per new
+		// worktree" is the rule, and this IS a new worktree. Deliberately inside the
+		// !valid branch: a park that left its worktree materialized skips Setup, and
+		// re-running `npm ci` for it would be a cost with nothing to buy.
+		i.RunSetupScript(wt.GetWorktreePath())
 	}
 
 	// Check if tmux session still exists from pause, otherwise create new one
