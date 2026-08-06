@@ -300,6 +300,88 @@ in-app keymap and this section ever drift apart, so it stays complete.
 | `ctrl-l` | force a full redraw of the screen |
 | `q` | quit |
 
+#### Remapping keys
+
+Atrium's keys are not entirely its own. It runs inside and around tmux, so every
+chord it takes is one your terminal, your multiplexer or your shell might already
+want — and two of them are read as raw bytes while you are attached to an agent:
+`ctrl-q` (which is XOFF unless you have run `stty -ixon`) and `ctrl-x` (an
+ordinary editing key in any shell). The `keybindings` section in `config.json` is
+the way out:
+
+```json
+{
+  "keybindings": {
+    "attach_toggle": "ctrl+g",
+    "up": ["up", "w"],
+    "pause_all": "disabled"
+  }
+}
+```
+
+A value is one key, a list of keys, or `"disabled"` to unbind the action
+entirely. An unbound action leaves the hint bar and the `?` cheatsheet but stays
+runnable from the command palette (`ctrl-k`), which is what makes unbinding safe.
+Every surface — hint bar, cheatsheet, palette, and any message that names a key —
+is generated from the keymap, so a remap shows up everywhere at once. No
+`keybindings` section means today's keys, unchanged.
+
+Keys are spelled the way a terminal reports them: `+` joins a chord (`ctrl+g`,
+`alt+enter`, `shift+tab`), a shifted letter is just the capital (`K`, not
+`shift+k`), and the space bar is `space`. Note that the cheatsheet *displays* a
+chord with a hyphen (`ctrl-x`) but a binding is written with a plus (`ctrl+x`).
+An override replaces an action's keys rather than adding to them, so rebinding
+`up` to `w` drops the arrow too unless you list both.
+
+A mistake is reported, never fatal: the offending line is skipped, that action
+keeps its default key, every other override still applies, and the reason is
+shown at startup and by `atrium doctor`. Names both sides where it can — a
+collision with a key another action still holds tells you to rebind that one too.
+
+Some keys are refused. `ctrl+c`, `esc` and `ctrl+l` are handled before the keymap
+and are the way out when a remap goes wrong; `` ` `` belongs to the screensaver;
+`ctrl+[` *is* `esc` on most terminals; and `ctrl+pgup` / `ctrl+pgdown` are the
+attach layer's session cycling. `attach_toggle` and `kill` must be `ctrl` plus a
+single letter, because the attach layer reads them as one byte, and
+`attach_toggle` cannot be disabled — it would leave you with no way out of a pane
+but tmux's own prefix.
+
+##### Action names
+
+| Action | Default | Action | Default |
+|--------|---------|--------|---------|
+| `accounts` | `@` | `move_up` | `K` |
+| `approve` | `a` | `multi_select` | `v` |
+| `attach_toggle` | `ctrl-q` | `mute` | `M` |
+| `auto_name` | `A` | `new` | `n` |
+| `collapse_all` | `Z` | `new_pick_project` | `N` |
+| `collapse_group` | `←` | `next_blocked` | `b` |
+| `command_log` | `L` | `next_tab` | `tab` |
+| `command_palette` | `ctrl-k` | `next_unread` | `u` |
+| `copy_branch` | `y` | `open` | `↵/o` |
+| `copy_content` | `Y` | `open_pr` | `w` |
+| `create_pr` | `c` | `pause` | `p` |
+| `custom_commands` | `!` | `pause_all` | `ctrl-p` |
+| `diff_comment` | `C` | `prev_tab` | `shift-tab` |
+| `down` | `↓/j` | `push_branch` | `P` |
+| `expand_group` | `→` | `queue` | `Q` |
+| `filter` | `/` | `quit` | `q` |
+| `grow_list` | `>` | `rename` | `R` |
+| `help` | `?` | `resume` | `r` |
+| `hints` | `f` | `resume_all` | `ctrl-r` |
+| `kill` | `ctrl-x` | `run_command` | `d` |
+| `layout_preset` | `\` | `scroll_down` | `shift-↓` |
+| `merge_pr` | `m` | `scroll_up` | `shift-↑` |
+| `move_account_down` | `]` | `send` | `s` |
+| `move_account_up` | `[` | `settings` | `,` |
+| `move_down` | `J` | `shrink_list` | `<` |
+| `move_group_down` | `}` | `smart_new` | `i` |
+| `move_group_up` | `{` | `tab_diff` | `2` |
+| `multi_select` | `v` | `tab_preview` | `1` |
+| `next_tab` | `tab` | `tab_terminal` | `3` |
+| `toggle_mark` | `space` | `undo_kill` | `U` |
+| `up` | `↑/k` | | |
+
 #### Filtering
 
 Press `/` to filter the session list incrementally. A query is split on
@@ -1265,13 +1347,15 @@ one-value-per-row panel cannot express and which are managed from the Accounts
 overlay instead, and the deprecated `nerd_font`, which `glyph_set` supersedes.
 `profiles`, `custom_commands` and `repo_scripts` are lists of records too: the panel
 gives `profiles` a record editor of its own under Profiles rather than a row, and the
-other two are edited in `config.json` directly. A test
+other two are edited in `config.json` directly. `keybindings` is the same case one
+step further — a whole keymap, and one a bad row would cost you the key you were
+editing with. A test
 (`config.TestReadmeDocumentsEveryConfigField`) fails the build if a new field is
 added without a row here.
 
 The panel groups these keys into ten categories — Sessions, Worktrees & git,
 Appearance, Session list, Notifications, Automation, Input, Projects, Updates, and
-Advanced — shown in the Category column below. The six keys with no panel row carry
+Advanced — shown in the Category column below. The seven keys with no panel row carry
 `—` instead; `profiles` names its editor.
 
 | Key | Category | Type | Default | Notes |
@@ -1282,6 +1366,7 @@ Advanced — shown in the Category column below. The six keys with no panel row 
 | `branch_prefix` | Worktrees & git | string | `"<user>/"` | prefix for created git branches |
 | `profiles` | Profiles | array | detected | named program configs ([Profiles](#profiles)) |
 | `custom_commands` | — | array | `[]` | your own verbs over the selected session: a key, a shell template, and where it runs. `!` opens the menu ([Custom commands](#custom-commands) documents every field) |
+| `keybindings` | — | object | `{}` | remap the keymap: action name → key, list of keys, or `"disabled"` ([Remapping keys](#remapping-keys)) |
 | `tmux_config_override` | Advanced | string | `""` | path to a custom tmux config for sessions |
 | `auto_attach` | Sessions | bool | `true` | attach to a new session as soon as it starts ([Auto-attach](#auto-attach)) |
 | `show_release_notes_after_update` | Updates | bool | `true` | "what's new" overlay once after an update |

@@ -46,6 +46,12 @@ const maxKeysPerAction = 3
 type Spec struct {
 	Keys     []string
 	Disabled bool
+	// Malformed carries the reason the config value could not be read as a spec at
+	// all. It travels as data rather than as an unmarshalling error because
+	// config.LoadConfig cannot fail; validation turns it back into a Problem here,
+	// so a value Atrium could not even parse is reported in the same list and the
+	// same voice as one it parsed and refused.
+	Malformed string
 }
 
 // Problem is one rejected override: which action, and why. The action keeps its
@@ -196,6 +202,11 @@ func resolve(overrides map[string]Spec) ([]Problem, map[KeyName]resolved) {
 			continue
 		}
 
+		if spec.Malformed != "" {
+			reject(action, "%s", spec.Malformed)
+			continue
+		}
+
 		if spec.Disabled {
 			if action == "attach_toggle" {
 				reject(action, "cannot be unbound — it is the only way out of an attached "+
@@ -288,8 +299,8 @@ func checkKeys(action string, list []string) ([]string, error) {
 		seen[k] = true
 		if _, attached := attachedLayerActions[action]; attached {
 			if _, err := ControlByte(k); err != nil {
-				return nil, fmt.Errorf("%w — %q is also honored inside a session, where "+
-					"Atrium reads it as a single control byte", err, action)
+				return nil, fmt.Errorf("%w. %q is also honored inside a session, where "+
+					"Atrium reads it as one raw byte", err, action)
 			}
 		}
 	}
@@ -354,20 +365,31 @@ func Apply(overrides map[string]Spec) ([]Problem, func()) {
 // nearestActionHint helps a user who typed an action name that does not exist,
 // by naming the closest one when there is an obvious candidate and pointing at
 // the documentation when there is not.
+//
+// Closest is the longest shared prefix, with ties broken by whichever candidate
+// is nearest in length. The tie-break is what makes it useful rather than merely
+// present: "pauze_all" shares exactly three characters with both "pause" and
+// "pause_all", and suggesting the short one to somebody who plainly meant the
+// long one is a worse answer than none.
 func nearestActionHint(action string, byAction map[string]*Entry) string {
-	best, bestShared := "", 2
 	names := make([]string, 0, len(byAction))
 	for name := range byAction {
 		names = append(names, name)
 	}
 	sort.Strings(names) // deterministic pick among equally close names
+
+	best, bestShared, bestGap := "", 2, 0
 	for _, name := range names {
 		shared := 0
 		for shared < len(name) && shared < len(action) && name[shared] == action[shared] {
 			shared++
 		}
-		if shared > bestShared {
-			best, bestShared = name, shared
+		gap := len(name) - len(action)
+		if gap < 0 {
+			gap = -gap
+		}
+		if shared > bestShared || (shared == bestShared && best != "" && gap < bestGap) {
+			best, bestShared, bestGap = name, shared, gap
 		}
 	}
 	if best != "" {

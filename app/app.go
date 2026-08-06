@@ -16,6 +16,7 @@ import (
 	"github.com/ZviBaratz/atrium/customcmd"
 	"github.com/ZviBaratz/atrium/hints"
 	"github.com/ZviBaratz/atrium/internal/memo"
+	"github.com/ZviBaratz/atrium/keys"
 	"github.com/ZviBaratz/atrium/log"
 	"github.com/ZviBaratz/atrium/notify"
 	"github.com/ZviBaratz/atrium/repocfg"
@@ -587,6 +588,10 @@ type home struct {
 	// refused entry is dropped rather than applied, so without this the whole symptom
 	// is a setup script that silently never runs.
 	pendingRepoScriptProblems []repocfg.Problem
+	// pendingKeybindingProblems is the same buffer for the keybindings overrides
+	// validation refused (#376). A refused override leaves its action on the default
+	// key, which looks exactly like the config file not having been read at all.
+	pendingKeybindingProblems []keys.Problem
 	// pendingDeferredRecovery buffers the startup report for sessions whose agent the
 	// host session budget would not let the load relaunch (#474), until there is a
 	// frame to toast on. Zeroed once it has been shown, in the shape

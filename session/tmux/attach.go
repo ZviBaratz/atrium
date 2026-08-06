@@ -60,6 +60,14 @@ func SetAttachChords(detach, kill byte) {
 	attachChords.Store(&attachChordSet{detach: detach, kill: kill})
 }
 
+// AttachChords reports the bytes this layer currently detaches and kills on. The
+// read side of SetAttachChords, for anything that has to state what the attach
+// layer will actually honor rather than assume the defaults.
+func AttachChords() (detach, kill byte) {
+	c := chords()
+	return c.detach, c.kill
+}
+
 // chords returns the effective bytes, falling back to the defaults when nothing
 // has been installed — the daemon and every test that never calls Apply.
 func chords() attachChordSet {

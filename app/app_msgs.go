@@ -223,6 +223,8 @@ func (m *home) handlePreviewTick(msg previewTickMsg) (tea.Model, tea.Cmd) {
 		m.flushCustomCommandProblems(),
 		// Likewise for the repo_scripts entries it refused (#389).
 		m.flushRepoScriptProblems(),
+		// Likewise for the keybindings overrides it refused (#376).
+		m.flushKeybindingProblems(),
 		// Likewise for a per-repo setup script that failed. Unlike the others this
 		// reads the fleet rather than a buffer — see flushSetupFailures.
 		m.flushSetupFailures(),
