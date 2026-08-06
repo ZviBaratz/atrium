@@ -797,8 +797,10 @@ says which and why: a modal at startup, and `atrium doctor` under **Repo scripts
 
 Quitting while a script is running ends it. Atrium kills the script's whole process
 group rather than just the `sh` it started, so a half-finished `npm ci && npm run build`
-does not keep running after the app is gone. A process the script deliberately
-*backgrounds* is left alone — it does not hold up the session either way.
+does not keep running after the app is gone — and anything that script had backgrounded
+goes with it. A process left behind by a script that already *finished* is not touched:
+Atrium stops waiting on it after a moment and launches the agent, so a
+`dev-server &` never holds the session up.
 
 #### Claude accounts
 
