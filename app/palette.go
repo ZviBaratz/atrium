@@ -43,7 +43,7 @@ type paletteRow struct {
 func paletteRows() []paletteRow {
 	var rows []paletteRow
 	seen := map[keys.KeyName]bool{}
-	for _, group := range keys.HelpGroups {
+	for _, group := range keys.HelpGroups() {
 		for _, row := range group.Rows {
 			// Mentions as well as Keys: a key taught inside another row's prose
 			// (space, in the multi-select row) is still an action, and skipping

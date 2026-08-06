@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/ZviBaratz/atrium/internal/parkreport"
+	"github.com/ZviBaratz/atrium/keys"
 	"github.com/ZviBaratz/atrium/log"
 	"github.com/ZviBaratz/atrium/repocfg"
 	"github.com/ZviBaratz/atrium/session"
@@ -218,14 +219,14 @@ func (m *home) surfaceLostRecoveries(recoveries []lostRecovery) tea.Cmd {
 	}
 	switch {
 	case failed != nil:
-		return m.handleError(fmt.Errorf("session %q could not be parked cleanly: %w — press r to resume or k to kill",
-			failed.title, failed.err))
+		return m.handleError(fmt.Errorf("session %q could not be parked cleanly: %w — press %s to resume or %s to kill",
+			failed.title, failed.err, keys.LabelOf(keys.KeyResume), keys.LabelOf(keys.KeyKill)))
 	case launchCrash != nil:
 		return m.showLaunchCrash(launchCrash)
 	case len(parked) == 1:
-		return m.handleInfoNotice(fmt.Sprintf("session %q terminal exited — parked as paused; press r to resume", parked[0]))
+		return m.handleInfoNotice(fmt.Sprintf("session %q terminal exited — parked as paused; %s", parked[0], pressToResume()))
 	case len(parked) > 1:
-		return m.handleInfoNotice(fmt.Sprintf("%d sessions' terminals exited — parked as paused; press r to resume", len(parked)))
+		return m.handleInfoNotice(fmt.Sprintf("%d sessions' terminals exited — parked as paused; %s", len(parked), pressToResume()))
 	default:
 		return nil
 	}
@@ -289,8 +290,8 @@ func (m *home) showLaunchCrash(lr *lostRecovery) tea.Cmd {
 		return nil
 	}
 	return m.showInfo(fmt.Sprintf(
-		"session %q exited moments after launch — parked as paused.\ncommand: %s\nfix the command, then press r to resume.",
-		lr.title, lr.launchCmd))
+		"session %q exited moments after launch — parked as paused.\ncommand: %s\nfix the command, then %s.",
+		lr.title, lr.launchCmd, pressToResume()))
 }
 
 // flushPendingLaunchCrash opens a crash-at-launch modal that arrived while

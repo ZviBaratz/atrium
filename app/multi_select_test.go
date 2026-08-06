@@ -225,7 +225,7 @@ func TestMultiSelect_KillDoubleTapEchoesTheOpeningKey(t *testing.T) {
 	t.Run("the ctrl+x chord confirms on a second ctrl+x", func(t *testing.T) {
 		h := openWith(t, func(h *home) { _, _ = h.handleKeyPress(keyMsg("ctrl+x")) })
 
-		assert.Equal(t, keys.KillKey, h.confirmationOverlay.ConfirmAltKey)
+		assert.Equal(t, keys.KillKey(), h.confirmationOverlay.ConfirmAltKey)
 		require.True(t, h.confirmationOverlay.HandleKeyPress(keyMsg("ctrl+x")))
 		assert.True(t, h.confirmationOverlay.Confirmed)
 	})

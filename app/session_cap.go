@@ -5,6 +5,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/ZviBaratz/atrium/config"
+	"github.com/ZviBaratz/atrium/keys"
 	"github.com/ZviBaratz/atrium/session"
 	"github.com/ZviBaratz/atrium/ui"
 	"github.com/ZviBaratz/atrium/ui/overlay"
@@ -89,13 +90,13 @@ func overCapMessage(limit, active, adding int) string {
 	if adding > 1 {
 		return fmt.Sprintf(
 			"%s.\nSpawning %d more will queue, not parallelize, and drive up load.\n"+
-				"Create them anyway? (, to change the limit)",
-			hostCapacityLine(limit, active), adding)
+				"Create them anyway? (%s to change the limit)",
+			hostCapacityLine(limit, active), adding, keys.LabelOf(keys.KeySettings))
 	}
 	return fmt.Sprintf(
 		"%s.\nAnother will queue, not parallelize, and drive up load.\n"+
-			"Create it anyway? (, to change the limit)",
-		hostCapacityLine(limit, active))
+			"Create it anyway? (%s to change the limit)",
+		hostCapacityLine(limit, active), keys.LabelOf(keys.KeySettings))
 }
 
 // resumeCapConfirm reports whether resuming n paused sessions must ask the user

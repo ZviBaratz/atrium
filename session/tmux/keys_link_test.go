@@ -13,8 +13,8 @@ import (
 func TestAttachControlBytes_MatchRegistryChords(t *testing.T) {
 	chordByte := func(chord string) byte { return chord[len(chord)-1] & 0x1f }
 
-	if got := chordByte(keys.KillKey); got != ctrlX {
-		t.Errorf("keys.KillKey %q encodes byte %d; the attach layer kills on %d", keys.KillKey, got, ctrlX)
+	if got := chordByte(keys.KillKey()); got != ctrlX {
+		t.Errorf("keys.KillKey() %q encodes byte %d; the attach layer kills on %d", keys.KillKey(), got, ctrlX)
 	}
 	detach := keys.GlobalKeyBindings[keys.KeyAttachToggle].Keys()[0]
 	if got := chordByte(detach); got != ctrlQ {

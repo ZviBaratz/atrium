@@ -68,8 +68,11 @@ const helpCustomRowWidth = 62
 const helpCustomDescWidth = helpCustomRowWidth - len(" (terminal) (repo)")
 
 // helpCustomHeading titles the custom-commands section. It names the leader as well
-// as the section, because the keys it lists do nothing on their own.
-const helpCustomHeading = "Custom (! opens the menu)"
+// as the section, because the keys it lists do nothing on their own — and it reads
+// the leader from the registry, so a rebind renames the heading with it.
+func helpCustomHeading() string {
+	return "Custom (" + keys.LabelOf(keys.KeyCustomCommands) + " opens the menu)"
+}
 
 // helpRow formats a "key   description" line with the key column padded to a
 // fixed width so descriptions align.
@@ -88,7 +91,7 @@ func helpRow(key, desc string) string {
 // likewise a projection of the active Glyphs table (see legendGroups).
 func (h helpTypeGeneral) toContent() string {
 	lines := []string{helpTitleStyle().Render("Atrium — Keys")}
-	for _, group := range keys.HelpGroups {
+	for _, group := range keys.HelpGroups() {
 		lines = append(lines, "", helpHeaderStyle().Render(group.Title))
 		for _, row := range group.Rows {
 			lines = append(lines, helpRow(rowKeyLabel(row), rowDesc(row)))
@@ -101,7 +104,7 @@ func (h helpTypeGeneral) toContent() string {
 	}
 	lines = append(lines, helpDimStyle().Render(
 		"Shift+drag selects text for your terminal's own copy, bypassing capture; "+
-			"turn the mouse off entirely in settings (,)."))
+			"turn the mouse off entirely in settings ("+keys.LabelOf(keys.KeySettings)+")."))
 	lines = append(lines, "", helpHeaderStyle().Render("Legend"))
 	lines = append(lines, legendLines()...)
 	return lipgloss.JoinVertical(lipgloss.Left, lines...)
@@ -296,7 +299,7 @@ func (h helpTypeGeneral) customLines() []string {
 	if len(h.commands) == 0 {
 		return nil
 	}
-	lines := []string{"", helpHeaderStyle().Render(helpCustomHeading)}
+	lines := []string{"", helpHeaderStyle().Render(helpCustomHeading())}
 	for _, c := range h.commands {
 		// Same markers the `!` menu shows, in the same order, because this screen is where a
 		// user goes to find out what their keys do — and which of them will take the
@@ -314,7 +317,7 @@ func (h helpTypeGeneral) customLines() []string {
 		// PER ROW rather than against the worst case, so the common unmarked row keeps the
 		// columns a marked one needs instead of paying for markers it does not carry.
 		desc := runewidth.Truncate(c.Description, customDescWidth(markers), "…")
-		lines = append(lines, helpRow("! "+c.Key, desc+markers))
+		lines = append(lines, helpRow(keys.LabelOf(keys.KeyCustomCommands)+" "+c.Key, desc+markers))
 	}
 	return lines
 }

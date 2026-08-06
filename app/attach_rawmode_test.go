@@ -4,6 +4,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/ZviBaratz/atrium/keys"
 	"github.com/ZviBaratz/atrium/ui"
 
 	tea "charm.land/bubbletea/v2"
@@ -13,8 +14,8 @@ import (
 	"golang.org/x/term"
 )
 
-// When raw mode couldn't be set, the attach ran cooked (Ctrl+Q detach disabled), so
-// the post-detach handler must surface the persistent info modal explaining it.
+// When raw mode couldn't be set, the attach ran cooked (the detach key disabled),
+// so the post-detach handler must surface the persistent info modal explaining it.
 func TestAttachFinished_RawModeFailureOpensInfoModal(t *testing.T) {
 	h, inst := newUnreadHome(t)
 	h.errBox = ui.NewErrBox()
@@ -26,8 +27,14 @@ func TestAttachFinished_RawModeFailureOpensInfoModal(t *testing.T) {
 	require.NotNil(t, h.textOverlay)
 	plain := xansi.Strip(h.textOverlay.Render())
 	// Assert on no-space tokens so word-wrap can't split the match.
-	assert.Contains(t, plain, "Ctrl+Q", "the modal must name the broken detach key")
-	assert.Contains(t, plain, "Ctrl-B", "the modal must offer tmux's own detach as the escape")
+	// Read from the registry, not spelled here: the modal names whichever key
+	// currently detaches, and a literal would pass while the modal told the user
+	// to press a key they had rebound away.
+	assert.Contains(t, plain, keys.LabelOf(keys.KeyAttachToggle),
+		"the modal must name the broken detach key")
+	assert.Contains(t, plain, "Ctrl-B",
+		"the modal must offer tmux's own detach as the escape — a literal on purpose, "+
+			"since the tmux prefix is not Atrium's to rebind")
 	assert.Contains(t, plain, "Enter", "cooked mode line-buffers input, so the escape must tell the user to press Enter")
 
 	// Any key dismisses the modal back to the default screen.

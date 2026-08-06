@@ -198,8 +198,3 @@ const (
 	// unreferenced until #374 went looking; this is what stops the next pair.
 	NumKeyNames
 )
-
-// KillKey is the chord that triggers a kill from the session list. It mirrors the
-// in-session kill byte (ctrlX, session/tmux/tmux.go) so the same key tears a session
-// down whether you're on the list or attached to it.
-const KillKey = "ctrl+x"

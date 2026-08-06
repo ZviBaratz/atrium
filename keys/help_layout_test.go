@@ -11,7 +11,7 @@ import (
 // without a row fails here, structurally, before any rendering happens.
 func TestHelpGroups_CoverEveryBinding(t *testing.T) {
 	covered := map[KeyName]bool{}
-	for _, g := range HelpGroups {
+	for _, g := range HelpGroups() {
 		for _, r := range g.Rows {
 			for _, k := range r.Keys {
 				covered[k] = true
@@ -34,7 +34,7 @@ func TestHelpGroups_CoverEveryBinding(t *testing.T) {
 // KeyScreensaver, whose absence from the registry is the easter egg's
 // exclusion contract, fails here if someone tries to document it.
 func TestHelpGroups_RefsResolve(t *testing.T) {
-	for _, g := range HelpGroups {
+	for _, g := range HelpGroups() {
 		for _, r := range g.Rows {
 			if len(r.Keys) == 0 {
 				t.Errorf("group %q: row %q has no Keys — desc-only rows can't be "+
@@ -55,7 +55,7 @@ func TestHelpGroups_RefsResolve(t *testing.T) {
 // actually names the key — delete the words and this fails, which is what
 // keeps Mentions from becoming a silent exclusion list.
 func TestHelpGroups_MentionsAreRendered(t *testing.T) {
-	for _, g := range HelpGroups {
+	for _, g := range HelpGroups() {
 		for _, r := range g.Rows {
 			for _, k := range r.Mentions {
 				label := GlobalKeyBindings[k].Help().Key
@@ -90,7 +90,7 @@ func TestHelpGroups_LayerBothStateAttachedSide(t *testing.T) {
 			}
 		}
 	}
-	for _, g := range HelpGroups {
+	for _, g := range HelpGroups() {
 		for _, r := range g.Rows {
 			for _, k := range r.Keys {
 				phrase, ok := wantPhrase[k]
@@ -119,7 +119,7 @@ func TestHelpGroups_ReorderRowDescs(t *testing.T) {
 		KeyMoveGroupUp:   "move a whole group up / down",
 		KeyMoveAccountUp: "move an account cluster up / down",
 	}
-	for _, g := range HelpGroups {
+	for _, g := range HelpGroups() {
 		for _, r := range g.Rows {
 			for _, k := range r.Keys {
 				if desc, ok := want[k]; ok {

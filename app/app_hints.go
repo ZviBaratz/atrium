@@ -45,7 +45,7 @@ func (m *home) enterHintMode() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	if selected.Paused() {
-		return m, m.handleInfoNotice("session is paused — press r to resume")
+		return m, m.handleInfoNotice(pausedResumeNotice(""))
 	}
 	// Scroll mode: hint over the visible viewport snapshot. The scroll state
 	// is preserved — exitHintMode clears only hintContent, so String() falls

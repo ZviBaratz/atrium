@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ZviBaratz/atrium/internal/testutil"
 	"github.com/ZviBaratz/atrium/keys"
 
 	"github.com/stretchr/testify/assert"
@@ -88,10 +89,13 @@ func TestKeyNames_AllRegisteredOrDeliberatelyAbsent(t *testing.T) {
 			"egg's exclusion contract (TestRegistry_OmitsScreensaver)")
 }
 
-// Quit is the one action whose key never reaches dispatchAction — handleKeyPress
-// matches "q" in its prelude so quitting stays live inside every mode. Both arms
-// must hold: the key still quits, and the action is reachable by name for the
-// callers (the palette) that never press a key.
+// Quit's key used to be matched literally in handleKeyPress's prelude, never
+// reaching dispatchAction. It now resolves through the dispatch map like every
+// other action, so that a rebind moves the key and the surfaces naming it
+// together. Three arms must hold: the key still quits, the action is still
+// reachable by name for the callers (the palette) that never press a key, and
+// the key still works while an action is in flight — the prelude used to give
+// that for free, and the busy allowlist is what replaces it.
 func TestQuit_ReachableByKeyAndByName(t *testing.T) {
 	byKey := newQuitTestHome(t)
 	assert.True(t, isQuit(pressQ(t, byKey)), "q must still quit from the list")
@@ -99,6 +103,24 @@ func TestQuit_ReachableByKeyAndByName(t *testing.T) {
 	byName := newQuitTestHome(t)
 	_, cmd := byName.dispatchAction(keys.KeyQuit)
 	assert.True(t, isQuit(cmd), "quit must be dispatchable by name, not only by its key")
+
+	busy := newQuitTestHome(t)
+	busy.actionInFlight = true
+	assert.True(t, isQuit(pressQ(t, busy)),
+		"q must still quit while an action is in flight, or a wedged action has no way out")
+}
+
+// ctrl+c stays matched literally, ahead of the dispatch map: it is the terminal's
+// universal abort and the escape hatch when a rebind has gone wrong, so it must
+// not depend on the keymap being sane.
+func TestQuit_CtrlCBypassesTheKeymap(t *testing.T) {
+	h := newQuitTestHome(t)
+	_, cmd := h.handleKeyPress(testutil.Key("ctrl+c"))
+	assert.True(t, isQuit(cmd), "ctrl+c must quit without consulting the dispatch map")
+
+	assert.NotContains(t, keys.GlobalKeyStringsMap, "ctrl+c",
+		"no registry entry may claim ctrl+c — it is matched before the lookup, so a "+
+			"binding on it would be dead")
 }
 
 // keyNameConstants returns the KeyName constants in iota order, so index i is

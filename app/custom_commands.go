@@ -12,6 +12,7 @@ import (
 
 	"github.com/ZviBaratz/atrium/cmdlog"
 	"github.com/ZviBaratz/atrium/customcmd"
+	"github.com/ZviBaratz/atrium/keys"
 	"github.com/ZviBaratz/atrium/log"
 	"github.com/ZviBaratz/atrium/session"
 	"github.com/ZviBaratz/atrium/ui"
@@ -268,7 +269,7 @@ func (m *home) handleCustomCommandDone(msg customCommandDoneMsg) (tea.Model, tea
 // rune, so a rune-count bound lets a 30-rune description render 60 cells wide and land
 // back in the modal it was written to avoid.
 func customCommandFailureNotice(desc string) string {
-	return customCommandLabel(desc) + customCommandFailedTail
+	return customCommandLabel(desc) + customCommandFailedTail()
 }
 
 // customCommandLabel quotes a user-authored description for a message that gets ONE ROW,
@@ -592,7 +593,6 @@ const (
 	// than inlined so the width guard can iterate them: the rule is that the reason is
 	// last and nothing unbounded follows it, and a rule about a SET has to be asserted
 	// over the set.
-	customCommandFailedTail       = " failed — press L for the output"
 	customCommandNoDirTail        = " — its directory is gone"
 	customCommandUnrenderableTail = " could not be rendered — see the log"
 
@@ -609,5 +609,19 @@ const (
 	// the window, which is precisely what makes a bound unassertable.
 	customCommandNoticeWidth = customCommandNoticeDescWidth + customCommandNoticeChrome
 	// customCommandNoticeChrome is the two quotes plus the longest tail above.
+	//
+	// "Above" means at the default keymap: customCommandFailedTail names the
+	// command-log key, and a user who rebinds it to a longer chord widens that
+	// tail past this bound. The consequence is the one already accepted below 71
+	// columns — the refusal falls back to the info modal instead of the error row
+	// — so it degrades rather than overflows, and the guard measures the live
+	// tails rather than trusting this number.
 	customCommandNoticeChrome = 38
 )
+
+// customCommandFailedTail is the tail of the "that command failed" notice. It
+// names the command-log key through the registry, so the notice cannot go on
+// pointing at L once the user has bound the log somewhere else.
+func customCommandFailedTail() string {
+	return " failed — press " + keys.LabelOf(keys.KeyCmdLog) + " for the output"
+}
