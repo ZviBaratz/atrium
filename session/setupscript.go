@@ -225,9 +225,14 @@ func (i *Instance) resolveSetupRun(dir string) (setupRun, bool) {
 		env: append(customcmd.Env(ctx), env...),
 		// The tmux half carries the port explicitly, because customcmd.Env is not in
 		// it: only the repo's own values and the ones Atrium must set per session go
-		// through `new-session -e`. Omitted entirely when there is no port — an empty
-		// ATRIUM_PORT in the agent's pane would read as "set but blank" to a script
-		// testing for it, where an absent one reads as what it is.
+		// through `new-session -e`. A session with no port injects nothing at all, so
+		// the pane inherits whatever launched Atrium — deliberately, since tmux's
+		// session environment is frozen at birth and a placeholder set there could
+		// never be corrected. Note this is NOT how the setup script sees it: its
+		// environment is customcmd.Env's, which exports every $ATRIUM_* name whether or
+		// not it has a value (ATRIUM_BRANCH does the same for a direct session), so
+		// `${ATRIUM_PORT+x}` is set-and-empty in the script and absent in the pane. Test
+		// the value, not its existence.
 		sessionEnv: withPortEnv(i.PortText(), env),
 		session:    i.Title,
 	}, true

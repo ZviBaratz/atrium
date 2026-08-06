@@ -357,3 +357,41 @@ func (p rowPaint) ageSeg(i *session.Instance) (rowSeg, bool) {
 	}
 	return p.seg(age, p.th.Palette.FgDim), true
 }
+
+// line2Fits reports whether one more chip can be appended to line 2's groups without
+// pushing the line past width.
+//
+// It measures rather than asking composeLine to cope, because composeLine cannot: it
+// makes room by truncating the single flex segment, and line 2 has one only for a
+// renamed session. Everything else there is fixed width, so a line that does not fit is
+// rendered too long rather than shortened — and a row wider than the pane wraps.
+//
+// A flex segment counts as zero, because that is what composeLine can shrink it to: on a
+// renamed session the branch absorbs the chip's cost, which is the behaviour the width
+// test asserts. Everything else counts in full.
+//
+// The separator is counted whenever there is already a group to be separated from, which
+// is what makes this the width of the line as it would actually be composed rather than
+// of its parts.
+func line2Fits(p rowPaint, indentW int, groups [][]rowSeg, right []rowSeg, add rowSeg, width int) bool {
+	used := indentW
+	for gi, grp := range groups {
+		if gi > 0 {
+			used += p.sepSeg().width()
+		}
+		for _, s := range grp {
+			if s.flex {
+				continue
+			}
+			used += s.width()
+		}
+	}
+	for _, s := range right {
+		used += s.width()
+	}
+	if len(groups) > 0 {
+		used += p.sepSeg().width()
+	}
+	// One column of gap, the minimum composeLine keeps between the two sides.
+	return used+add.width()+1 <= width
+}

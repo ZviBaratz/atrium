@@ -281,9 +281,10 @@ func (s Script) Ports() (PortRange, bool) {
 // works or does not depending on a detail nothing here controls. Refusing says so at
 // load time, where the message can be read.
 //
-// The whole ATRIUM_ prefix is reserved, not just the names in use today: the set grows
-// (a managed port is next), and a rule that listed them one by one would silently
-// start colliding with a config that was valid when it was written.
+// The whole ATRIUM_ prefix is reserved, not just the names in use today — which are
+// ATRIUM_SESSION, the marker, and ATRIUM_PORT. The set grows, and a rule that listed its
+// members one by one would silently start colliding with a config that was valid when it
+// was written.
 func reservedEnvName(name string) bool {
 	if strings.HasPrefix(name, "ATRIUM_") || name == "ATRIUM" {
 		return true

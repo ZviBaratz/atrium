@@ -2,6 +2,7 @@ package session
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -18,6 +19,20 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// isolatePorts gives the test its own registry.
+//
+// livePorts is process-wide by design, and a test that allocates through an Instance
+// leaves an owner in it — a session only gives its port back when it is killed. The
+// numbers come from freePort, which draws from the ephemeral range the OS re-hands out
+// freely, so one test's leftover owner can refuse the very port a later test was just
+// told is free. That failed roughly one run in ten, in whichever test drew the collision.
+func isolatePorts(t *testing.T) {
+	t.Helper()
+	restore := livePorts
+	livePorts = newPortRegistry()
+	t.Cleanup(func() { livePorts = restore })
+}
 
 // freePort returns a port nothing was listening on a moment ago, which is the best any
 // caller can have: a port is only truly held while a socket holds it.
@@ -174,6 +189,7 @@ func TestPortRegistry_ReserveClaimsAPortForARestoredSession(t *testing.T) {
 // The port reaches the setup script as $ATRIUM_PORT, which is the form a script can use
 // without interpolating anything into a shell string.
 func TestRunSetupScript_ExportsTheAllocatedPortToTheScript(t *testing.T) {
+	isolatePorts(t)
 	base := freePort(t)
 	dir := writeRepoScriptConfig(t, config.RepoScript{
 		Name:        "web",
@@ -194,6 +210,7 @@ func TestRunSetupScript_ExportsTheAllocatedPortToTheScript(t *testing.T) {
 // And as {{.Session.Port}}, the template form, which is what a command spelling
 // `--port` needs.
 func TestRunSetupScript_RendersThePortIntoTheTemplate(t *testing.T) {
+	isolatePorts(t)
 	base := freePort(t)
 	dir := writeRepoScriptConfig(t, config.RepoScript{
 		SetupScript: `echo {{.Session.Port}} > port.txt`,
@@ -211,6 +228,7 @@ func TestRunSetupScript_RendersThePortIntoTheTemplate(t *testing.T) {
 // The agent's own pane gets it through the same `new-session -e` channel session_env
 // rides, because that is the only per-session environment tmux has.
 func TestResolveSetupRun_CarriesThePortInTheSessionEnvironment(t *testing.T) {
+	isolatePorts(t)
 	base := freePort(t)
 	dir := writeRepoScriptConfig(t, config.RepoScript{
 		SetupScript: "true",
@@ -230,6 +248,7 @@ func TestResolveSetupRun_CarriesThePortInTheSessionEnvironment(t *testing.T) {
 // ATRIUM_PORT at all — an empty one would read as "the port is unset" to a script that
 // tests for it.
 func TestResolveSetupRun_LeavesAPortlessRepoWithout(t *testing.T) {
+	isolatePorts(t)
 	dir := writeRepoScriptConfig(t, config.RepoScript{SetupScript: "true", SessionEnv: map[string]string{"CACHE": "/tmp/c"}})
 	inst := &Instance{Title: "web", Path: dir}
 
@@ -246,6 +265,7 @@ func TestResolveSetupRun_LeavesAPortlessRepoWithout(t *testing.T) {
 // that number, and a resume that renumbered it would leave the server unreachable at
 // the port the row advertises.
 func TestReservePort_KeepsThePortASessionAlreadyHolds(t *testing.T) {
+	isolatePorts(t)
 	base := freePort(t)
 	dir := writeRepoScriptConfig(t, config.RepoScript{
 		SetupScript: "true",
@@ -266,6 +286,7 @@ func TestReservePort_KeepsThePortASessionAlreadyHolds(t *testing.T) {
 // A range with nothing free does not stop the session — it comes up without a port, and
 // says why.
 func TestReservePort_ReportsAnExhaustedRangeWithoutStoppingTheSession(t *testing.T) {
+	isolatePorts(t)
 	var lc net.ListenConfig
 	l, err := lc.Listen(context.Background(), "tcp", "127.0.0.1:0")
 	require.NoError(t, err)
@@ -288,6 +309,7 @@ func TestReservePort_ReportsAnExhaustedRangeWithoutStoppingTheSession(t *testing
 // Releasing returns the port to the range for the next session, which is what pause and
 // kill do with it.
 func TestReleasePort_ReturnsThePortToTheRange(t *testing.T) {
+	isolatePorts(t)
 	base := freePort(t)
 	dir := writeRepoScriptConfig(t, config.RepoScript{
 		SetupScript: "true",
@@ -307,13 +329,19 @@ func TestReleasePort_ReturnsThePortToTheRange(t *testing.T) {
 	assert.Equal(t, base, second.Port(), "the freed port is the next session's")
 }
 
-// Pause releases the port, and resume takes one again. The pairing is the point: a
-// paused session has no worktree to run a server in, and a range of two would be
-// permanently full after two sessions were parked.
-func TestPauseResume_ReleasesThePortAndTakesOneAgain(t *testing.T) {
+// A pause must NOT renumber the session, because the agent's pane cannot be
+// renumbered with it: tmux freezes $ATRIUM_PORT at `new-session -e` and a resume
+// re-attaches (tmux.Session.Restore is attach-session, nothing more), so the shell the
+// user types in keeps the number it was born with for the life of that pane.
+//
+// Releasing on pause and re-allocating on resume produced exactly the collision the
+// port exists to prevent: park A (holding 3000), create C — which is handed 3000,
+// lowest-free — then resume A onto 3002. A's row, templates and setup script all say
+// 3002 while its pane still exports 3000, so `npm run dev -- --port $ATRIUM_PORT` in A
+// binds the port C's server owns.
+func TestPauseResume_KeepsThePortWhileThePaneLives(t *testing.T) {
+	isolatePorts(t)
 	base := freePort(t)
-	// After the worktree, not before: newTestWorktree points HOME at a fresh temp dir
-	// of its own, which would take the config with it.
 	wt := newTestWorktree(t)
 	writeRepoScriptConfig(t, config.RepoScript{Name: "any", PortRange: fmt.Sprintf("%d-%d", base, base)})
 	aliveExec := cmd_test.MockCmdExec{
@@ -328,21 +356,47 @@ func TestPauseResume_ReleasesThePortAndTakesOneAgain(t *testing.T) {
 
 	require.NoError(t, inst.Pause())
 
-	assert.Zero(t, inst.Port(), "a paused session holds no port")
+	assert.Equal(t, base, inst.Port(), "a parked session still owns the port its pane exports")
 	other := &Instance{Title: "other", Path: wt.GetRepoPath()}
 	_, ok = other.resolveSetupRun(wt.GetWorktreePath())
 	require.True(t, ok)
-	assert.Equal(t, base, other.Port(), "the freed port is available while the session is parked")
-	other.releasePort()
+	assert.Zero(t, other.Port(), "and no other session may be handed it")
 
 	require.NoError(t, inst.Resume())
 
-	assert.Equal(t, base, inst.Port(), "a resumed session takes a port again")
+	assert.Equal(t, base, inst.Port(), "so a resume finds the number its pane already has")
+}
+
+// When the pane is gone the port goes with it: there is no frozen environment left to
+// contradict, and the next launch is a `new-session -e` that will carry whatever it is
+// given. This is the path RecoverLostSession takes when tmux died under a session.
+func TestPause_ReleasesThePortWhenThePaneIsGone(t *testing.T) {
+	isolatePorts(t)
+	base := freePort(t)
+	dir := writeRepoScriptConfig(t, config.RepoScript{Name: "any", PortRange: fmt.Sprintf("%d-%d", base, base)})
+	goneExec := cmd_test.MockCmdExec{
+		RunFunc:    func(*exec.Cmd) error { return errors.New("no server running on /tmp/none") },
+		OutputFunc: func(*exec.Cmd) ([]byte, error) { return nil, errors.New("no server running on /tmp/none") },
+	}
+	ts := tmux.NewSessionWithDeps(context.Background(), "sess", "claude", newRecordingPtyFactory(t, nil), goneExec)
+	inst := &Instance{Title: "sess", Path: dir, status: Running, started: true, direct: true, tmuxSession: ts}
+	_, ok := inst.resolveSetupRun(dir)
+	require.True(t, ok)
+	require.Equal(t, base, inst.Port())
+
+	_ = inst.RecoverLostSession()
+
+	assert.Zero(t, inst.Port(), "a session with no pane holds no port")
+	next := &Instance{Title: "next", Path: dir}
+	_, ok = next.resolveSetupRun(dir)
+	require.True(t, ok)
+	assert.Equal(t, base, next.Port())
 }
 
 // Kill releases it too, so a killed session's number is immediately reusable rather
 // than held by a registry entry nothing will ever clear.
 func TestKill_ReleasesThePort(t *testing.T) {
+	isolatePorts(t)
 	base := freePort(t)
 	dir := writeRepoScriptConfig(t, config.RepoScript{Name: "any", PortRange: fmt.Sprintf("%d-%d", base, base)})
 	inst := &Instance{Title: "web", Path: dir}
@@ -375,6 +429,7 @@ func TestInstanceData_CarriesThePortAcrossARestart(t *testing.T) {
 // And a restored session re-claims it, so a session created later in the same run
 // cannot be handed the port an already-running server is on.
 func TestFromInstanceData_ReclaimsThePersistedPort(t *testing.T) {
+	isolatePorts(t)
 	base := freePort(t)
 	dir := writeRepoScriptConfig(t, config.RepoScript{Name: "any", PortRange: fmt.Sprintf("%d-%d", base, base)})
 	data := (&Instance{Title: "restored", Path: dir, direct: true, port: base}).ToInstanceData()
@@ -394,6 +449,7 @@ func TestFromInstanceData_ReclaimsThePersistedPort(t *testing.T) {
 // owner key cannot be the title alone: with one, the second session's reservation reads
 // as the first re-reserving its own port and both come up on it.
 func TestPortRegistry_TwoReposWithTheSameSessionNameGetDifferentPorts(t *testing.T) {
+	isolatePorts(t)
 	rng := synthetic(t)
 	one := &Instance{Title: "web", Path: "/projects/alpha"}
 	two := &Instance{Title: "web", Path: "/projects/beta"}

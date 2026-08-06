@@ -19,6 +19,7 @@ import (
 
 	"github.com/ZviBaratz/atrium/log"
 	"github.com/ZviBaratz/atrium/repocfg"
+	"github.com/ZviBaratz/atrium/session/tmux"
 )
 
 // portRegistry is the set of ports Atrium's own sessions hold.
@@ -196,8 +197,25 @@ func (i *Instance) reservePort(s repocfg.Script) {
 	i.setPort(port)
 }
 
+// releasePortIfPaneGone gives up the port only when the session's tmux pane is already
+// gone — the one condition under which no frozen $ATRIUM_PORT is left to contradict.
+//
+// It is the pause-time test. A pause detaches rather than closes, so the usual answer
+// is "the pane lives, keep the port"; the exception is RecoverLostSession, which parks a
+// session precisely because tmux died under it, and whose next launch will be a
+// `new-session -e` carrying whatever it is given.
+func (i *Instance) releasePortIfPaneGone(ts *tmux.Session) {
+	if i.Port() == 0 {
+		return
+	}
+	if ts != nil && ts.DoesSessionExist() {
+		return
+	}
+	i.releasePort()
+}
+
 // releasePort gives up the session's port, and does nothing when it holds none. Called
-// wherever the worktree goes away: pause, and kill.
+// where the pane goes away: kill, and a pause that finds it already gone.
 func (i *Instance) releasePort() {
 	i.mu.Lock()
 	port := i.port

@@ -336,19 +336,6 @@ func (r *InstanceRenderer) Render(i *session.Instance, idx int, selected, marked
 		if seg, ok := prSeg(p, i.GetPRStatus()); ok {
 			groups = append(groups, []rowSeg{seg})
 		}
-		// The managed dev-server port (#389), last so it is the first thing the width
-		// budget drops on a narrow list: it is an identifier to look up, where the git
-		// chips beside it are state that changes under the user.
-		if seg, ok := portSeg(p, i.Port()); ok {
-			groups = append(groups, []rowSeg{seg})
-		}
-		for gi, grp := range groups {
-			if gi > 0 {
-				left2 = append(left2, p.sepSeg())
-			}
-			left2 = append(left2, grp...)
-		}
-
 		// Age is omitted from a populated version-control line (the weakest signal
 		// there), but used as a fallback when line 2 would otherwise be empty — a
 		// fresh, unchanged session with no decoupled branch — so every row keeps two
@@ -359,6 +346,28 @@ func (r *InstanceRenderer) Render(i *session.Instance, idx int, selected, marked
 				right2 = append(right2, age)
 			}
 		}
+
+		// The managed dev-server port (#389) goes last, and only if the row can still
+		// hold it. Dropped rather than squeezed, and measured rather than trusted to
+		// the width budget, because composeLine has nothing to spend here: it shrinks
+		// the single flex segment, and line 2's only flex is the branch — which is
+		// itself present only for a renamed session (above). On every other row the
+		// content is all fixed, so an overlong line is not truncated but RENDERED
+		// overlong, wrapping into the ghost row the drift-sites skill warns about.
+		//
+		// The port is the right thing to drop: it is an identifier to go look up, where
+		// the git chips beside it are state changing under the user — and a list pane
+		// this narrow is one the user widens to read anything at all.
+		if seg, ok := portSeg(p, i.Port()); ok && line2Fits(p, indentW, groups, right2, seg, W) {
+			groups = append(groups, []rowSeg{seg})
+		}
+		for gi, grp := range groups {
+			if gi > 0 {
+				left2 = append(left2, p.sepSeg())
+			}
+			left2 = append(left2, grp...)
+		}
+
 		line2 = p.composeLine(W, left2, right2)
 	}
 

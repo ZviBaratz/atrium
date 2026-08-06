@@ -1,6 +1,8 @@
 package customcmd
 
 import (
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -563,4 +565,47 @@ func TestPort_IsGatedThroughTheEnvironmentToo(t *testing.T) {
 
 	assert.Equal(t, []string{"Session.Port"}, cmds[0].MissingEnv(without))
 	assert.Contains(t, Env(Ctx{Session: SessionCtx{Port: "3001"}}), "ATRIUM_PORT=3001")
+}
+
+// moduleFile walks up from the test's working directory to the module root and reads
+// the named file (the identical helper in packages config and keys).
+func moduleFile(t *testing.T, name string) string {
+	t.Helper()
+	dir, err := os.Getwd()
+	require.NoError(t, err)
+	for {
+		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
+			b, err := os.ReadFile(filepath.Join(dir, name))
+			require.NoError(t, err)
+			return string(b)
+		}
+		parent := filepath.Dir(dir)
+		require.NotEqualf(t, parent, dir, "reached filesystem root without finding go.mod (looking for %s)", name)
+		dir = parent
+	}
+}
+
+// TestReadmeDocumentsEveryContextField is the drift guard the custom-commands table did
+// not have. It is the only place a user is told what a command may interpolate, and it
+// lives in a different file from the table it describes — so a new leaf (the managed
+// port, #389) shipped rendering, gated and undocumented, with a green suite.
+//
+// Both spellings, because the README presents them as interchangeable and the emptiness
+// gate treats them so: a row naming only the template form would leave a user with no
+// way to learn the variable.
+func TestReadmeDocumentsEveryContextField(t *testing.T) {
+	readme := moduleFile(t, "README.md")
+	start := strings.Index(readme, "#### Custom commands")
+	require.GreaterOrEqual(t, start, 0, "README must have a #### Custom commands section")
+	section := readme[start:]
+	if end := strings.Index(section, "\n#### "); end > 0 {
+		section = section[:end]
+	}
+
+	for _, f := range fieldAccess {
+		assert.Containsf(t, section, "{{ ."+f.path+" }}",
+			"the custom-commands table must document the %s placeholder", f.path)
+		assert.Containsf(t, section, "$"+f.env,
+			"the custom-commands table must document $%s", f.env)
+	}
 }

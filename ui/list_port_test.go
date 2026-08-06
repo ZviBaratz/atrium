@@ -48,6 +48,13 @@ func portedInstance(t *testing.T) (*session.Instance, int) {
 	// No setup_script in the config above, so this allocates the port and runs nothing.
 	inst.RunSetupScript(dir)
 	require.Equal(t, port, inst.Port(), "the fixture must hold the port it configured")
+	// Give it back when the test ends. The allocator's registry is process-wide and a
+	// session only releases on kill, so without this each test here leaves an owner
+	// behind — and the ephemeral range these numbers come from is re-handed out freely
+	// enough that a later fixture can be refused the port it was just told was free.
+	// Kill is the production release path; with no worktree and no tmux session it does
+	// nothing else.
+	t.Cleanup(func() { require.NoError(t, inst.Kill()) })
 	return inst, port
 }
 
@@ -148,5 +155,32 @@ func TestRender_PortChipWidthBudget(t *testing.T) {
 	assert.Contains(t, ansi.Strip(row), fmt.Sprintf(":%d", port), "the port survives at the expense of the branch")
 	for _, ln := range strings.Split(row, "\n") {
 		assert.LessOrEqual(t, ansi.StringWidth(ln), width, "row must fit width with a port chip present")
+	}
+}
+
+// A narrow list drops the chip rather than overflowing the row.
+//
+// Line 2 has a flex segment only for a RENAMED session — the branch — so on an ordinary
+// row every segment is fixed width and composeLine has nothing to shrink: an overlong
+// line is not truncated but rendered overlong, wrapping into a ghost row that desyncs
+// the renderer. Measured at a width where the same row without a port fits exactly, so
+// the assertion is about the chip and not about the rest of the line.
+func TestRender_PortChipIsDroppedWhenTheRowCannotHoldIt(t *testing.T) {
+	t.Cleanup(theme.Set("unicode"))
+	inst, port := portedInstance(t)
+	require.Equal(t, inst.DisplayName(), inst.Title, "an un-renamed session: line 2 has no flex segment")
+	inst.SetDiffStats(&git.DiffStats{Added: 12, Removed: 3, Commits: 2, Behind: 1})
+	inst.SetPRStatus(&git.PRStatus{HasPR: true, Number: 1234, CI: git.CIFailing})
+
+	s := spinner.New()
+	r := &InstanceRenderer{spinner: &s}
+	const width = 30
+	r.setWidth(width)
+
+	row := r.Render(inst, 1, false, false)
+
+	assert.NotContains(t, ansi.Strip(row), fmt.Sprintf(":%d", port), "the chip is dropped, not squeezed")
+	for _, ln := range strings.Split(row, "\n") {
+		assert.LessOrEqual(t, ansi.StringWidth(ln), width, "no line may exceed the row width")
 	}
 }

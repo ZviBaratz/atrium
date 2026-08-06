@@ -808,11 +808,18 @@ So `npm run dev -- --port $ATRIUM_PORT` in the agent's own shell does the right 
 for whichever session it is typed in, and the row shows `:3001` — a link, on a terminal
 that supports them, to `http://localhost:3001`.
 
-A session holds its port for exactly as long as it holds its worktree: allocated when
-the worktree is materialized (create, and again on resume), released on pause and on
-kill. So a parked session does not sit on a port, and the number a session gets is not
-stable across a pause — the row is where you read the current one. It *is* stable
-across an Atrium restart, because the server you started is still bound to it.
+A session keeps its port for as long as its pane lives: allocated when the worktree is
+materialized, kept across a pause, released on kill. It survives an Atrium restart too,
+so a server you started stays reachable at the number the row shows.
+
+That a *paused* session still holds its port is deliberate, and it is the one place the
+design costs you something. tmux fixes a session's environment when the pane is created
+and a resume re-attaches rather than relaunching, so the shell you type in exports the
+port it was born with, whatever Atrium decides later. Handing that number to the next
+session created — which is what releasing it on pause would do — leaves two sessions
+aimed at one port, and the parked one finds out when you resume it. So a parked session
+occupies a port until it is killed. Size the range for the sessions you park as well as
+the ones you run.
 
 Two sessions are never handed the same port: Atrium tracks what its own sessions hold
 and, separately, refuses a port anything else is already listening on. That second check
@@ -1152,6 +1159,7 @@ The context reaches your command two ways, and either is fine:
 | `{{ .Session.Name }}` | `$ATRIUM_SESSION` | the display label (the one `R` renames) |
 | `{{ .Session.Branch }}` | `$ATRIUM_BRANCH` | the session's branch; empty for a direct session |
 | `{{ .Session.Worktree }}` | `$ATRIUM_WORKTREE` | the isolated worktree, once the session has started |
+| `{{ .Session.Port }}` | `$ATRIUM_PORT` | the session's [managed port](#managed-ports); empty unless its repo declares a `port_range` |
 | `{{ .Repo.Path }}` | `$ATRIUM_REPO` | the repository root |
 | `{{ .Repo.Name }}` | `$ATRIUM_REPO_NAME` | the repository's name, as the session list groups by |
 
