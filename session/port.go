@@ -14,6 +14,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"strconv"
 	"sync"
 
 	"github.com/ZviBaratz/atrium/log"
@@ -109,20 +110,34 @@ var probePort = portIsFree
 
 // portIsFree reports whether a listener can take the port right now.
 //
-// The wildcard address, not 127.0.0.1: a dev server started with --host, a container
-// publishing a port, and a plain localhost server all conflict with each other, and
-// only the wildcard bind fails for all three. Probing the loopback alone would call a
-// port free that `next dev --hostname 0.0.0.0` is already serving on.
+// BOTH the wildcard address and the loopback, because neither alone is conclusive on
+// every platform Atrium runs on. Go sets SO_REUSEADDR on its listeners, and BSD reads
+// that as permission to bind the same port on a DIFFERENT local address — so on macOS a
+// wildcard probe succeeds against a server already serving 127.0.0.1:3000, and a
+// loopback probe succeeds against one on 0.0.0.0:3000. Linux refuses both overlaps, so
+// there one probe would have done; the pair is what makes the answer mean the same
+// thing on both.
+//
+// This is the only socket Atrium binds, and it is opt-in: nothing here runs for a repo
+// with no port_range. On macOS the wildcard half can raise the application firewall's
+// "accept incoming connections?" prompt the first time — the price of detecting a
+// server on 0.0.0.0, which the loopback probe cannot see there.
+//
+// Either bind failing is enough to call the port taken. That errs toward skipping a
+// port, which costs one number out of a range; the other direction hands two servers
+// the same port and shows up as a dev server that will not start.
 func portIsFree(port int) bool {
 	// context.Background(), and a ListenConfig only because the linter asks for one: a
-	// wildcard bind is a single syscall with nothing to resolve and nothing to wait on,
-	// so there is no operation here for a deadline to bound.
-	var lc net.ListenConfig
-	l, err := lc.Listen(context.Background(), "tcp", fmt.Sprintf(":%d", port))
-	if err != nil {
-		return false
+	// bind is a single syscall with nothing to resolve and nothing to wait on, so there
+	// is no operation here for a deadline to bound.
+	for _, host := range []string{"", "127.0.0.1"} {
+		var lc net.ListenConfig
+		l, err := lc.Listen(context.Background(), "tcp", net.JoinHostPort(host, strconv.Itoa(port)))
+		if err != nil {
+			return false
+		}
+		_ = l.Close()
 	}
-	_ = l.Close()
 	return true
 }
 

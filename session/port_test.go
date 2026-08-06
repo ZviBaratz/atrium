@@ -71,17 +71,31 @@ func TestPortRegistry_NeverHandsOutAPortAnotherSessionHolds(t *testing.T) {
 // And the half the registry cannot know: a port some unrelated process is listening on
 // — the user's own server, or a session of a repo whose range overlaps this one. This
 // is the probe's own test, so it uses a real listener and the real probe.
+//
+// Both addresses a dev server is reachable at, because neither probe alone answers on
+// every platform: Go sets SO_REUSEADDR, which BSD reads as permission to bind the same
+// port on a different local address, so on macOS a wildcard-only probe called a
+// loopback server's port free — and that is a collision the user meets as "port 3000 is
+// already in use" from a server Atrium told the session to run.
 func TestPortRegistry_WillNotHandOutAPortSomethingIsListeningOn(t *testing.T) {
-	var lc net.ListenConfig
-	l, err := lc.Listen(context.Background(), "tcp", "127.0.0.1:0")
-	require.NoError(t, err)
-	defer func() { _ = l.Close() }()
-	taken := l.Addr().(*net.TCPAddr).Port
-	r := newPortRegistry()
+	for _, host := range []string{"127.0.0.1", ""} {
+		name := host
+		if name == "" {
+			name = "wildcard"
+		}
+		t.Run(name, func(t *testing.T) {
+			var lc net.ListenConfig
+			l, err := lc.Listen(context.Background(), "tcp", net.JoinHostPort(host, "0"))
+			require.NoError(t, err)
+			defer func() { _ = l.Close() }()
+			taken := l.Addr().(*net.TCPAddr).Port
+			r := newPortRegistry()
 
-	_, ok := r.allocate(repocfg.PortRange{Lo: taken, Hi: taken}, "web")
+			_, ok := r.allocate(repocfg.PortRange{Lo: taken, Hi: taken}, "web")
 
-	assert.False(t, ok, "the only port in the range is in use")
+			assert.False(t, ok, "the only port in the range is in use")
+		})
+	}
 }
 
 // A refused port is not burned for the life of the process: whatever was listening may
