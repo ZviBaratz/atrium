@@ -389,11 +389,21 @@ func (m *Menu) renderModeLine(bindings []key.Binding) string {
 // by TestMenuBars_KeysExistInRegistry).
 func (m *Menu) renderHintLine(names []keys.KeyName) string {
 	var s strings.Builder
-	for i, name := range names {
-		if i > 0 {
+	first := true
+	for _, name := range names {
+		b := keys.GlobalKeyBindings[name]
+		// An action the user unbound has no key to teach. Skipping the whole
+		// segment rather than rendering it keyless is the point of the check: the
+		// bar's shape is "key desc", so a blank key would leave a leading space and
+		// a description promising an action with no way to reach it — and the
+		// separator would still be drawn around the gap.
+		if len(b.Keys()) == 0 {
+			continue
+		}
+		if !first {
 			s.WriteString(sepStyle().Render(separator))
 		}
-		b := keys.GlobalKeyBindings[name]
+		first = false
 		s.WriteString(m.markHint(primaryDispatchKey(b), renderEntry(b)))
 	}
 	return s.String()

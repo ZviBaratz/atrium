@@ -18,11 +18,25 @@ func TestHelpScreen_CoversEveryBinding(t *testing.T) {
 	content := ansi.Strip(helpTypeGeneral{}.toContent())
 	content = strings.ReplaceAll(content, "-", "+")
 
+	checked := 0
 	for name, binding := range keys.GlobalKeyBindings {
+		// An unbound action has no key to find, and Contains(content, "") is true
+		// for any content — so without this the assertion would silently stop
+		// meaning anything for exactly the bindings a user's config had touched.
+		// The default keymap binds everything, so at defaults nothing is skipped;
+		// TestHelpScreen_OmitsAnUnboundActionsKey covers the other case.
+		if binding.Help().Key == "" {
+			continue
+		}
+		checked++
 		k := strings.ReplaceAll(binding.Help().Key, "-", "+")
 		if !strings.Contains(content, k) {
 			t.Errorf("binding %v (%q) is missing from the help cheatsheet", name, binding.Help().Key)
 		}
+	}
+	if checked != len(keys.GlobalKeyBindings) {
+		t.Errorf("checked %d of %d bindings — the default keymap must bind them all",
+			checked, len(keys.GlobalKeyBindings))
 	}
 }
 

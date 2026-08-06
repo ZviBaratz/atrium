@@ -268,9 +268,14 @@ func rowKeyLabel(row keys.HelpRow) string {
 	if row.Compact {
 		sep = " "
 	}
-	labels := make([]string, len(row.Keys))
-	for i, k := range row.Keys {
-		labels[i] = keys.GlobalKeyBindings[k].Help().Key
+	// Unbound actions contribute nothing rather than an empty label: joining an
+	// empty string would leave a dangling separator ("↑/k / ") in the key column,
+	// which reads as a key the row forgot to name.
+	labels := make([]string, 0, len(row.Keys))
+	for _, k := range row.Keys {
+		if label := keys.GlobalKeyBindings[k].Help().Key; label != "" {
+			labels = append(labels, label)
+		}
 	}
 	return strings.Join(labels, sep)
 }

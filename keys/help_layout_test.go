@@ -54,17 +54,32 @@ func TestHelpGroups_RefsResolve(t *testing.T) {
 // multi-select row). The mention only counts as documentation if the prose
 // actually names the key — delete the words and this fails, which is what
 // keeps Mentions from becoming a silent exclusion list.
+//
+// The empty-label guard is not defensive padding: strings.Contains(desc, "") is
+// true for every desc, so an unbound action — which is exactly what a user's
+// "disabled" override produces — would turn this whole assertion into a
+// tautology rather than failing. Requiring a label first is what keeps it real.
 func TestHelpGroups_MentionsAreRendered(t *testing.T) {
+	checked := 0
 	for _, g := range HelpGroups() {
 		for _, r := range g.Rows {
 			for _, k := range r.Mentions {
 				label := GlobalKeyBindings[k].Help().Key
+				if label == "" {
+					t.Errorf("group %q: row %q mentions %v, which has no key label — the "+
+						"prose cannot name it and Contains would pass vacuously", g.Title, r.Desc, k)
+					continue
+				}
+				checked++
 				if !strings.Contains(r.Desc, label) {
 					t.Errorf("group %q: row %q mentions %v but its desc does not "+
 						"contain %q", g.Title, r.Desc, k, label)
 				}
 			}
 		}
+	}
+	if checked == 0 {
+		t.Error("no mention was checked — the layout has stopped using Mentions, or the walk is broken")
 	}
 }
 

@@ -324,8 +324,13 @@ var Registry = []Entry{
 }
 
 // GlobalKeyBindings maps every registered action to its binding — the source
-// of the hint bar's and the cheatsheet's key labels and help text. Derived
-// from Registry; immutable after init.
+// of the hint bar's and the cheatsheet's key labels and help text. Derived from
+// Registry.
+//
+// Written once by Apply (override.go), before tea.NewProgram; read-only
+// thereafter. That is the contract the readers depend on: every one of them is
+// on the render or update path and takes no lock, which is safe only because
+// nothing writes this map while the program is running.
 var GlobalKeyBindings = func() map[KeyName]key.Binding {
 	m := make(map[KeyName]key.Binding, len(Registry))
 	for _, e := range Registry {
@@ -335,7 +340,8 @@ var GlobalKeyBindings = func() map[KeyName]key.Binding {
 }()
 
 // layers maps each registered action to its Layer, for LayerOf. Derived from
-// Registry; immutable after init.
+// Registry, and genuinely immutable: an override moves an action's keys, never
+// which input layer honors it.
 var layers = func() map[KeyName]Layer {
 	m := make(map[KeyName]Layer, len(Registry))
 	for _, e := range Registry {
@@ -351,8 +357,11 @@ func LayerOf(name KeyName) Layer {
 }
 
 // GlobalKeyStringsMap maps terminal key strings to actions for the Update
-// loop's dispatch. Derived from the Registry entries' WithKeys (documented-
-// only entries excluded); immutable after init.
+// loop's dispatch. Derived from the Registry entries' WithKeys (documented-only
+// entries excluded).
+//
+// Written once by Apply (override.go), before tea.NewProgram; read-only
+// thereafter — see GlobalKeyBindings for why that matters.
 var GlobalKeyStringsMap = func() map[string]KeyName {
 	m := make(map[string]KeyName, len(Registry))
 	for _, e := range Registry {
