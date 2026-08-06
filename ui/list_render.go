@@ -347,7 +347,7 @@ func (r *InstanceRenderer) Render(i *session.Instance, idx int, selected, marked
 			}
 		}
 
-		// The managed dev-server port (#389) goes last, and only if the row can still
+		// The managed dev-server chip (#389) goes last, and only if the row can still
 		// hold it. Dropped rather than squeezed, and measured rather than trusted to
 		// the width budget, because composeLine has nothing to spend here: it shrinks
 		// the single flex segment, and line 2's only flex is the branch — which is
@@ -355,10 +355,11 @@ func (r *InstanceRenderer) Render(i *session.Instance, idx int, selected, marked
 		// content is all fixed, so an overlong line is not truncated but RENDERED
 		// overlong, wrapping into the ghost row the drift-sites skill warns about.
 		//
-		// The port is the right thing to drop: it is an identifier to go look up, where
-		// the git chips beside it are state changing under the user — and a list pane
-		// this narrow is one the user widens to read anything at all.
-		if seg, ok := portSeg(p, i.Port()); ok && line2Fits(p, indentW, groups, right2, seg, W) {
+		// It is the right thing to drop even carrying the run-command state: the port is
+		// an identifier to go look up and the server is one keypress from being checked,
+		// where the git chips beside it are state changing under the user — and a list
+		// pane this narrow is one the user widens to read anything at all.
+		if seg, ok := portSeg(p, i.Port(), i.RunLive()); ok && line2Fits(p, indentW, groups, right2, seg, W) {
 			groups = append(groups, []rowSeg{seg})
 		}
 		for gi, grp := range groups {

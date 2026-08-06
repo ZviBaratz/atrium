@@ -92,6 +92,14 @@ func (i *Instance) pause() error {
 	// return early and park a session just as thoroughly.
 	defer i.releasePortIfPaneGone(ts)
 
+	// The run command does NOT survive, and for the opposite reason to the port: the
+	// worktree below is about to be removed, and that worktree is the command's working
+	// directory — a dev server left running there is running in a deleted tree (#389).
+	// The wanted flag is kept, so Resume restarts it, on the port this pause just kept.
+	// Before the removal, not deferred: the server should be gone by the time its
+	// directory is.
+	i.pauseRunCommand()
+
 	// Direct session: no worktree to commit/remove. User-initiated Pause is refused
 	// for direct sessions (see Pause), so this branch is only reached via
 	// RecoverLostSession when the pane has died — park it so the poll loop stops and
@@ -213,6 +221,7 @@ func (i *Instance) Resume() error {
 		// The resumed agent boots back into its old conversation — the first
 		// poll's settle to Ready is not new output, so don't flag unread.
 		i.ArmReadySuppression()
+		i.resumeRunCommand()
 		return nil
 	}
 
@@ -301,6 +310,15 @@ func (i *Instance) Resume() error {
 	i.SetStatus(Running)
 	// As above: the resumed agent's post-boot idle is not a genuine completion.
 	i.ArmReadySuppression()
+
+	// The worktree is back and the agent is launched, so the run command the pause
+	// stopped can have its directory again (#389). It restarts on the port the pause
+	// kept, so nothing renumbers underneath a browser tab.
+	//
+	// Last, and specifically AFTER the flip out of Paused: StartRunCommand refuses a
+	// paused session — rightly, since a parked one has no worktree to run in — so a
+	// call placed before this line silently restarts nothing at all.
+	i.resumeRunCommand()
 	return nil
 }
 

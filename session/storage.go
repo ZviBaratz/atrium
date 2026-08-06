@@ -150,6 +150,17 @@ type InstanceData struct {
 	// state.json predating the field decodes to exactly that.
 	Port int `json:"port,omitempty"`
 
+	// RunStarted records that the user had this session's run_command running (#389).
+	// Persisted rather than re-derived because the `_run` tmux session outlives Atrium:
+	// it is what tells a restarted TUI to probe for the server at all — a session that
+	// never started one never pays for a has-session — and what tells Resume that the
+	// pause it is undoing had stopped a server it should bring back.
+	//
+	// A plain bool, not a pointer: false and absent mean the same thing here, so
+	// omitempty loses nothing and a state.json predating the field decodes to exactly
+	// the right answer. (Compare DiffStatsData.Unpushed, where the two genuinely differ.)
+	RunStarted bool `json:"run_command_started,omitempty"`
+
 	Worktree  GitWorktreeData `json:"worktree"`
 	DiffStats DiffStatsData   `json:"diff_stats"`
 }

@@ -266,6 +266,7 @@ in-app keymap and this section ever drift apart, so it stays complete.
 | `C` | diff tab: comment on a line or range → queue it to the agent (↑↓/j/k move, shift+↑↓/J/K extend, enter comment, esc exit) |
 | `Q` | manage queued prompts (list / cancel) |
 | `a` | approve the agent's prompt (`↵` picks its default); on idle claude, accept the suggested prompt |
+| `d` | start / stop the repo's `run_command` (dev server) on this session's port (see [Run commands](#run-commands)) |
 | `p` | pause: commit changes + free the worktree |
 | `ctrl-p` | pause all active sessions in the current view |
 | `P` | commit & push branch |
@@ -721,7 +722,8 @@ isolated: link paths whose contents you are content to share, and prefer
 dependencies, apply a migration, or generate an `.env` — so an agent asked to build or
 run the project starts by doing that itself, in a tree where nothing is installed.
 `repo_scripts` is the step that can: a shell script Atrium runs once the worktree
-exists and **before the agent program launches into it**.
+exists and **before the agent program launches into it**. The same entry also declares
+the repo's [managed port range](#managed-ports) and its [run command](#run-commands).
 
 Configuration is per repository, but it lives in your own `config.json` rather than in
 the repo. Entries are routed by the matcher [Claude accounts](#claude-accounts) use —
@@ -841,6 +843,50 @@ does not keep running after the app is gone — and anything that script had bac
 goes with it. A process left behind by a script that already *finished* is not touched:
 Atrium stops waiting on it after a moment and launches the agent, so a
 `dev-server &` never holds the session up.
+
+#### Run commands
+
+`setup_script` is a step to *wait for*. `run_command` is a process to *keep*: the dev
+server, the watcher, the thing that binds the port above. Add it to the same
+`repo_scripts` entry:
+
+```json
+{
+  "repo_scripts": [{
+    "remote_matches": ["acme/web"],
+    "port_range": "3000-3099",
+    "run_command": "npm run dev -- --port $ATRIUM_PORT"
+  }]
+}
+```
+
+Press <kbd>d</kbd> on a session to start it, and <kbd>d</kbd> again to stop it. Nothing
+starts on its own: a session is not always one you want a server for, and one server per
+session would mean one port per session too.
+
+It runs in a **tmux session of its own**, named after the session's with a `_run` suffix,
+beside the agent's and the terminal tab's. That is what buys the properties a background
+goroutine could not: it survives an Atrium restart, you can `tmux -L atrium attach -t
+<name>_run` to read its full scrollback, and it is torn down with the session it belongs
+to. It gets the worktree as its working directory and the same environment the agent's
+pane does — `$ATRIUM_PORT` and every `session_env` value — so a server that reads a port
+from the environment and one that takes it as a flag both work.
+
+The row says which state it is in, on the same chip as the port: `:3001` for a session
+holding a port with nothing running, `▸:3001` once the server is up. A repo that declares
+a `run_command` with no `port_range` shows `▸dev` instead — a state worth showing even
+with no number to show with it.
+
+Pausing stops it, because pausing removes the worktree the server is running in. Resuming
+starts it again, on the same port — the number is kept across a pause precisely so that
+nothing renumbers underneath a browser tab you left open.
+
+One thing to know: if the command exits on its own — a crash, a typo, a port that turned
+out to be taken — its tmux session goes with it, and so does its output. A command that
+dies *at once* is reported as an error the moment you press <kbd>d</kbd>, quoting what
+was run; one that dies later just returns the chip to its idle state, with nothing left
+to read. Either way the place to find out why is the terminal tab, where you can run it
+by hand in the same worktree with the same `$ATRIUM_PORT`.
 
 #### Claude accounts
 
@@ -1248,7 +1294,7 @@ Advanced — shown in the Category column below. The six keys with no panel row 
 | `trust_worktrees_root` | Automation | bool | `false` | pre-accept Claude's workspace-trust for the worktrees root |
 | `carry_files` | Worktrees & git | array | `[".claude/settings.local.json"]` | gitignored files copied into each worktree ([Carried files](#carried-files)) |
 | `link_paths` | Worktrees & git | array | `[]` | gitignored paths symlinked into each worktree, e.g. `node_modules` ([Linked paths](#linked-paths)) |
-| `repo_scripts` | — | array | `[]` | per-repository setup script and session environment, routed by remote/path ([Setup scripts](#setup-scripts)) |
+| `repo_scripts` | — | array | `[]` | per-repository setup script, run command, port range and session environment, routed by remote/path ([Setup scripts](#setup-scripts)) |
 | `pr_create_draft` | Worktrees & git | bool | `true` | `c` opens a draft PR |
 | `update_base_on_create` | Worktrees & git | bool | `true` | branch off the freshest remote base tip |
 | `fast_forward_local_base` | Worktrees & git | bool | `false` | also fast-forward the local base branch on create |

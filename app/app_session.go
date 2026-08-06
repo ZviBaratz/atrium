@@ -114,7 +114,8 @@ func (m *home) pushOneContext(inst *session.Instance) {
 // The check stays on the main thread because it reads the whole instance list. It
 // rejects an empty title or one already used in the instance's repo group — comparing
 // derived names (tmux segment, branch slug), not raw titles, and also reserving the
-// qualified tmux name the rename would mint (plus its "_term" terminal-shell sibling)
+// qualified tmux name the rename would mint (plus its derived siblings — the "_term"
+// terminal shell and the "_run" run command, see session.DerivedTmuxNameCollides)
 // against every session. Same-titled sessions in other groups are fine: their qualified
 // tmux names differ.
 func (m *home) validateDeepRename(selected *session.Instance, value string) error {
@@ -130,10 +131,8 @@ func (m *home) validateDeepRename(selected *session.Instance, value string) erro
 		if inst.GroupKey() == group && session.DerivedNamesCollide(m.appConfig.BranchPrefix, inst.Title, value) {
 			return fmt.Errorf("a session named %q already exists in %s", value, group)
 		}
-		if name := inst.TmuxSessionName(); name != "" {
-			if cand == name || cand == name+"_term" || cand+"_term" == name {
-				return fmt.Errorf("renaming to %q collides with session %q", value, inst.Title)
-			}
+		if session.DerivedTmuxNameCollides(cand, inst.TmuxSessionName()) {
+			return fmt.Errorf("renaming to %q collides with session %q", value, inst.Title)
 		}
 	}
 	return nil
@@ -1289,8 +1288,9 @@ const (
 // still owns its branch and tmux name):
 //   - same group + colliding tmux segment or branch slug → duplicate;
 //   - any instance whose tmux name equals the qualified name the title would
-//     mint (a legacy unqualified name can shadow a qualified one), or its
-//     "_term" sibling — the terminal-shell session derived from it;
+//     mint (a legacy unqualified name can shadow a qualified one), or either of
+//     its derived siblings — the "_term" terminal shell and the "_run" run
+//     command (session.DerivedTmuxNameCollides);
 //   - the latest async verdict that the title's branch already exists in the
 //     target repo (an orphan from a killed session would make Start fail late).
 func (m *home) titleConflict(title string) string {
@@ -1304,10 +1304,8 @@ func (m *home) titleConflict(title string) string {
 		if inst.GroupKey() == group && session.DerivedNamesCollide(prefix, inst.Title, title) {
 			return titleErrAlreadyUsed
 		}
-		if name := inst.TmuxSessionName(); name != "" {
-			if cand == name || cand == name+"_term" || cand+"_term" == name {
-				return titleErrNameTaken
-			}
+		if session.DerivedTmuxNameCollides(cand, inst.TmuxSessionName()) {
+			return titleErrNameTaken
 		}
 	}
 	if m.titleBranchExists && m.titleBranchName == git.BranchNameForSession(prefix, title) {

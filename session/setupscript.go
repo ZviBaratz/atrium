@@ -73,7 +73,12 @@ const setupWaitDelay = 2 * time.Second
 // exec seam, so nothing there reads an Instance field that a rename could be writing.
 type setupRun struct {
 	script string
-	dir    string
+	// run is the rendered run_command — the repo's long-running process (#389).
+	// Resolved here rather than by a path of its own because it needs exactly what the
+	// script needs: the routed entry, the rendered context, and the session
+	// environment. "" when the repo declares none.
+	run string
+	dir string
 	// env is the script's whole environment: Atrium's $ATRIUM_* set plus the repo's
 	// own session_env.
 	env []string
@@ -210,6 +215,11 @@ func (i *Instance) resolveSetupRun(dir string) (setupRun, bool) {
 		log.ErrorLog.Printf("setup script for %q (repo_scripts entry %q) failed to render: %v", i.Title, compiled.Name, err)
 		return setupRun{}, false
 	}
+	runCmd, err := compiled.RenderRun(ctx)
+	if err != nil {
+		log.ErrorLog.Printf("run_command for %q (repo_scripts entry %q) failed to render: %v", i.Title, compiled.Name, err)
+		return setupRun{}, false
+	}
 	env, err := compiled.RenderEnv(ctx)
 	if err != nil {
 		log.ErrorLog.Printf("session_env for %q (repo_scripts entry %q) failed to render: %v", i.Title, compiled.Name, err)
@@ -218,6 +228,7 @@ func (i *Instance) resolveSetupRun(dir string) (setupRun, bool) {
 
 	return setupRun{
 		script: script,
+		run:    runCmd,
 		dir:    dir,
 		// The $ATRIUM_* set plus the repo's own. They cannot collide: every name
 		// customcmd.Env exports starts with ATRIUM_, and repocfg refuses that prefix.

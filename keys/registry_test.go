@@ -76,6 +76,7 @@ func TestGlobalKeyStringsMap_GoldenInventory(t *testing.T) {
 		"ctrl+q":     KeyAttachToggle,
 		"f":          KeyHints,
 		"a":          KeyApprove,
+		"d":          KeyRunCommand,
 		"v":          KeyMultiSelect,
 		// "space": Bubble Tea v2 names the space bar, where v1 reported a literal
 		// space. The registry moved with it — see the note on KeyToggleMark.

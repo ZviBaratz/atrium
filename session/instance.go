@@ -384,6 +384,29 @@ type Instance struct {
 	// Guarded by mu.
 	portProblem string
 
+	// runSession is the sibling tmux session hosting the repo's run_command (#389),
+	// built lazily and cached because Close is what releases the attach pty Start
+	// opened. nil means "not built in this process", which is not the same as "not
+	// running" — the `_run` session outlives the Atrium that started it. Guarded by mu;
+	// see session/runcmd.go.
+	runSession *tmux.Session
+	// runWanted records that the user has a run command started. It IS persisted
+	// (InstanceData.RunStarted), because it is what tells a restarted Atrium whether to
+	// probe at all, and what tells Resume whether the pause it is undoing had stopped a
+	// server. Guarded by mu.
+	runWanted bool
+	// runLive is the last observed liveness of that session, refreshed by the metadata
+	// poll and never persisted — a claim about a process, which a restart cannot inherit.
+	// Guarded by mu, unlike paneLive, because the start and stop actions write it from
+	// their own goroutine while the renderer reads it.
+	runLive bool
+	// runConfigured memoizes whether this session's repository declares a run_command at
+	// all, with runConfiguredKnown distinguishing "no" from "not looked yet". Memoized
+	// for the life of the process because answering costs a config read and an uncached
+	// git fork; see ComputeRunState for what that trades away. Guarded by mu.
+	runConfigured      bool
+	runConfiguredKnown bool
+
 	// conversationResumed / conversationKnown record which way the last relaunch
 	// went: whether the agent came back into its prior conversation, and whether
 	// startResuming could tell at all. Only that function knows — it asks the
@@ -515,6 +538,7 @@ func (i *Instance) ToInstanceData() InstanceData {
 		TmuxName:             i.TmuxSessionName(),
 		HookName:             i.hookSessionName(),
 		Port:                 i.Port(),
+		RunStarted:           i.RunWanted(),
 
 		// Persist the undelivered prompt queue so it survives a restart and is re-delivered
 		// in order on reload (delivered prompts have already been popped, so this is usually
@@ -599,6 +623,7 @@ func FromInstanceData(ctx context.Context, data InstanceData, branchPrefix strin
 		runtimeMode:          data.PermissionMode,
 		runtimeEffort:        data.Effort,
 		port:                 data.Port,
+		runWanted:            data.RunStarted,
 	}
 
 	// Re-reserve the port this session was running on before anything created later in
@@ -1400,6 +1425,11 @@ func (i *Instance) Kill() error {
 	if ts := i.tmux(); ts != nil {
 		tc.Wrap("close tmux session", ts.Close())
 	}
+
+	// The run command's sibling session goes with it (#389). Here rather than in the app
+	// layer so that every retire path is covered by construction — single kill, batch
+	// kill, the post-merge cleanup offer, and Start's own error unwind all end here.
+	tc.Wrap("stop run command", i.StopRunCommand())
 
 	// Then clean up git worktree
 	if wt := i.worktree(); wt != nil {

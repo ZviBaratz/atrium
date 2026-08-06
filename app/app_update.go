@@ -483,6 +483,9 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.finishBatch(msg.pausedInstances, len(msg.failures) > 0,
 			fmt.Sprintf("paused %d session%s", msg.paused, plural(msg.paused)),
 			msg.summary())
+	case runCommandDoneMsg:
+		// A dev command started or stopped (#389); persist the flag and report.
+		return m, m.applyRunCommandDone(msg)
 	case killDoneMsg:
 		// A single kill finished its I/O; apply the model half here.
 		return m, m.applyKillDone(msg)
@@ -1181,6 +1184,8 @@ func (m *home) dispatchAction(name keys.KeyName) (tea.Model, tea.Cmd) {
 		return m.openCustomCommands()
 	case keys.KeyApprove:
 		return m.approveSelected()
+	case keys.KeyRunCommand:
+		return m.toggleRunCommand()
 	case keys.KeyCopyContent:
 		return m.copyPaneContent()
 	case keys.KeyCopyBranch:

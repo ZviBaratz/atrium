@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"charm.land/lipgloss/v2"
+	"github.com/ZviBaratz/atrium/keys"
 	"github.com/ZviBaratz/atrium/session"
 	"github.com/ZviBaratz/atrium/session/git"
 	xansi "github.com/charmbracelet/x/ansi"
@@ -104,6 +105,64 @@ func TestMenu_PausedDirectHintLineOmitsCopyBranch(t *testing.T) {
 	out := m.String()
 	require.Contains(t, out, "resume", "a parked direct session can still be resumed")
 	require.NotContains(t, out, "copy branch", "a direct session has no branch to copy")
+}
+
+// The dev-command key is advertised only for a session whose repo actually declares a
+// run_command. The bar's whole rule is that it never names an action the selection
+// cannot take, and `d` on an unconfigured repo is a refusal notice.
+func TestMenu_DevCommandHintOnlyWhenConfigured(t *testing.T) {
+	inst, err := session.NewInstance(session.InstanceOptions{Title: "t", Path: t.TempDir(), Program: "echo"})
+	require.NoError(t, err)
+	inst.SetStatus(session.Running)
+
+	m := NewMenu()
+	m.SetSize(200, 3)
+
+	m.SetInstance(inst)
+	require.NotContains(t, m.String(), "dev command",
+		"nothing has said this repo has one — under-advertise rather than offer a refusal")
+
+	inst.ApplyRunState(session.RunState{Configured: true, ConfiguredKnown: true})
+	m.SetInstance(inst)
+	require.Contains(t, m.String(), "dev command")
+
+	// Parked: the worktree it would run in is gone, so the key drops off the bar the
+	// way open and send do.
+	inst.SetStatus(session.Paused)
+	m.SetInstance(inst)
+	require.NotContains(t, m.String(), "dev command")
+}
+
+// The help entry stays last whatever is inserted before it: it is the one that teaches
+// where the rest of the keys are.
+func TestMenu_DevCommandHintKeepsHelpLast(t *testing.T) {
+	inst, err := session.NewInstance(session.InstanceOptions{Title: "t", Path: t.TempDir(), Program: "echo"})
+	require.NoError(t, err)
+	inst.SetStatus(session.Running)
+	inst.ApplyRunState(session.RunState{Configured: true, ConfiguredKnown: true})
+
+	m := NewMenu()
+	m.SetSize(200, 3)
+	m.SetInstance(inst)
+
+	out := m.String()
+	require.Greater(t, strings.Index(out, "help"), strings.Index(out, "dev command"))
+}
+
+// The hint sets are package-level slices shared by every render, so adding the
+// conditional entry must copy rather than append in place — otherwise one configured
+// session grows the set (or aliases its neighbour's backing array) for every session
+// after it.
+func TestMenu_DevCommandHintDoesNotMutateTheSharedSet(t *testing.T) {
+	before := append([]keys.KeyName(nil), defaultHintKeys...)
+
+	inst, err := session.NewInstance(session.InstanceOptions{Title: "t", Path: t.TempDir(), Program: "echo"})
+	require.NoError(t, err)
+	inst.SetStatus(session.Running)
+	inst.ApplyRunState(session.RunState{Configured: true, ConfiguredKnown: true})
+
+	require.Contains(t, hintsFor(inst), keys.KeyRunCommand)
+	require.Equal(t, before, defaultHintKeys, "the shared set must come back unchanged")
 }
 
 // A session with work on its branch surfaces the pause/push pair; a clean one

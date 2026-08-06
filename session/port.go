@@ -2,11 +2,16 @@
 // repo declares, so two sessions of one repo can run the same server at once.
 //
 // The port is exported as $ATRIUM_PORT and {{.Session.Port}} through the same channel
-// session_env rides, and is held for exactly as long as the session's WORKTREE is:
-// allocated where the worktree is materialized (create, and again on resume), released
-// on pause and on kill. That pairing is deliberate — a paused session has no directory
-// to run a server in, and holding its port would starve a range in the one situation
-// (many parked sessions, few ports) where a user is likeliest to hit the bottom of it.
+// session_env rides, and is held for exactly as long as the session's PANE is:
+// allocated where the worktree is materialized (create, and again on resume), KEPT
+// across a pause, and released on kill — or on a park that finds the pane already gone
+// (releasePortIfPaneGone).
+//
+// The pane, not the worktree, is the thing it is tied to, and that was learned the hard
+// way. tmux fixes a session's environment at `new-session -e` and a resume only
+// re-attaches, so a parked session's shell still exports the number it was born with;
+// releasing on pause handed that number to the next create, and the parked session found
+// out on resume. The cost is that a parked session occupies a port until it is killed.
 
 package session
 

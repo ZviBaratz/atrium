@@ -19,3 +19,34 @@ func DerivedNamesCollide(branchPrefix, a, b string) bool {
 	return strings.EqualFold(tmux.SanitizeNameSegment(a), tmux.SanitizeNameSegment(b)) ||
 		git.BranchNameForSession(branchPrefix, a) == git.BranchNameForSession(branchPrefix, b)
 }
+
+// reservedTmuxSuffixes are the sibling tmux sessions Atrium derives from a session's own
+// name: the terminal tab's shell (ui/terminal.go) and the run command's host
+// (session/runcmd.go). Each is `<tmux name><suffix>`, so a session TITLE that sanitizes
+// to another session's derived name would have two owners on one socket.
+var reservedTmuxSuffixes = []string{"_term", runSessionSuffix}
+
+// DerivedTmuxNameCollides reports whether a candidate qualified tmux name can coexist
+// with an existing session's: they must differ, and neither may be the other's derived
+// sibling.
+//
+// Both directions matter, and the second is the one that is easy to miss.
+// QualifiedSessionName maps a dot to an underscore, so a session titled "web.run" mints
+// the exact name session "web" hosts its dev server under — the candidate is the
+// SIBLING here, not the parent. A guard that only checked cand+suffix == name would let
+// that through, and the loser is a session whose dev server is killed by an unrelated
+// teardown.
+func DerivedTmuxNameCollides(cand, name string) bool {
+	if name == "" {
+		return false
+	}
+	if cand == name {
+		return true
+	}
+	for _, suffix := range reservedTmuxSuffixes {
+		if cand == name+suffix || cand+suffix == name {
+			return true
+		}
+	}
+	return false
+}

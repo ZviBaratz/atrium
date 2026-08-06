@@ -236,6 +236,37 @@ func (m *Menu) SetInstance(instance *session.Instance) {
 // track state: a bar that advertises "open" and "send" on a paused session is
 // advertising no-ops.
 func hintsFor(instance *session.Instance) []keys.KeyName {
+	return withRunHint(instance, baseHintsFor(instance))
+}
+
+// withRunHint adds the dev-command key to a hint set, but only for a running session
+// whose repository actually declares a run_command (#389) — the bar's whole rule is that
+// it never advertises an action the selection cannot take, and `d` on an unconfigured
+// repo is a refusal notice.
+//
+// It copies rather than appending in place. Every set above is a package-level slice
+// shared by every render, and appending to one would either alias into its neighbour's
+// backing array or grow it permanently for sessions that never earned the hint. The
+// scroll hint in String() takes the same precaution for the same reason.
+//
+// A paused session is excluded: its worktree is gone, so there is nothing to run in.
+// RunConfigured is false until the first poll has looked, so the bar under-advertises
+// briefly rather than promising something that might refuse — and the cheatsheet and the
+// command palette carry the key regardless.
+func withRunHint(instance *session.Instance, base []keys.KeyName) []keys.KeyName {
+	if instance == nil || len(base) == 0 || instance.Paused() || !instance.RunConfigured() {
+		return base
+	}
+	// Second from the end. Every set hintsFor can return closes on `?`, and the entry
+	// that teaches where the rest of the keys are belongs last whatever precedes it.
+	out := make([]keys.KeyName, 0, len(base)+1)
+	out = append(out, base[:len(base)-1]...)
+	out = append(out, keys.KeyRunCommand, base[len(base)-1])
+	return out
+}
+
+// baseHintsFor is hintsFor's status ladder, before the conditional dev-command entry.
+func baseHintsFor(instance *session.Instance) []keys.KeyName {
 	if instance == nil {
 		return nil
 	}

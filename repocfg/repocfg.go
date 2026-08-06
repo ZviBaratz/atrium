@@ -68,6 +68,7 @@ type Script struct {
 	Name string
 
 	setup *template.Template
+	run   *template.Template
 	env   []envEntry
 	ports PortRange
 }
@@ -160,8 +161,9 @@ func compile(e config.RepoScript) (Script, error) {
 	// no-op. Its route rules still MATCH, so keeping it would shadow a later entry
 	// that does configure something — a silent "my setup script never ran" with
 	// nothing to point at.
-	if strings.TrimSpace(e.SetupScript) == "" && len(e.SessionEnv) == 0 && strings.TrimSpace(e.PortRange) == "" {
-		return Script{}, fmt.Errorf("entry configures nothing — set setup_script, session_env or port_range")
+	if strings.TrimSpace(e.SetupScript) == "" && strings.TrimSpace(e.RunCommand) == "" &&
+		len(e.SessionEnv) == 0 && strings.TrimSpace(e.PortRange) == "" {
+		return Script{}, fmt.Errorf("entry configures nothing — set setup_script, run_command, session_env or port_range")
 	}
 
 	script := Script{Name: e.Name}
@@ -178,6 +180,13 @@ func compile(e config.RepoScript) (Script, error) {
 			return Script{}, err
 		}
 		script.setup = tmpl
+	}
+	if strings.TrimSpace(e.RunCommand) != "" {
+		tmpl, err := compileTemplate("run_command", e.RunCommand)
+		if err != nil {
+			return Script{}, err
+		}
+		script.run = tmpl
 	}
 
 	names := make([]string, 0, len(e.SessionEnv))
@@ -330,6 +339,19 @@ func (s Script) RenderSetup(ctx Ctx) (string, error) {
 		return "", nil
 	}
 	return render(s.setup, ctx)
+}
+
+// HasRunCommand reports whether the entry declares a long-running command to host.
+func (s Script) HasRunCommand() bool { return s.run != nil }
+
+// RenderRun resolves the run command against ctx. It returns "" when the entry declares
+// none, which callers must treat as "there is nothing to run" rather than as an empty
+// command handed to a shell.
+func (s Script) RenderRun(ctx Ctx) (string, error) {
+	if s.run == nil {
+		return "", nil
+	}
+	return render(s.run, ctx)
 }
 
 // RenderEnv resolves session_env against ctx, as NAME=VALUE in name order.

@@ -62,6 +62,7 @@ var HelpGroups = []HelpGroup{
 		{Keys: []KeyName{KeyDiffComment}, Desc: "diff tab: comment on a line or range → queue it to the agent (↑↓/j/k move, shift+↑↓/J/K extend, enter comment, esc exit)"},
 		{Keys: []KeyName{KeyQueue}, Desc: "manage queued prompts (list / cancel)"},
 		{Keys: []KeyName{KeyApprove}, Desc: "approve the agent's prompt (enter picks its default); on idle claude, accept the suggested prompt"},
+		{Keys: []KeyName{KeyRunCommand}, Desc: "start / stop the repo's run_command (dev server) on this session's port"},
 		{Keys: []KeyName{KeyPause}, Desc: "pause: commit changes + free the worktree"},
 		{Keys: []KeyName{KeyPauseAll}, Desc: "pause all active sessions in the current view"},
 		{Keys: []KeyName{KeySubmit}, Desc: "commit & push branch"},

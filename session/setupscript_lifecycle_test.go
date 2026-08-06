@@ -48,6 +48,9 @@ type fakeTmux struct {
 	markerAtLaunch bool
 	launched       bool
 	launches       [][]string
+	// dieAtAttach makes the session vanish when the attach client connects — see
+	// dieOnAttach.
+	dieAtAttach bool
 }
 
 // newSessionArgv is the `tmux new-session` command line the agent was created with.
@@ -78,6 +81,11 @@ func (f *fakeTmux) Start(cmd *exec.Cmd) (*os.File, error) {
 	f.launched = true
 	f.exists = true
 	f.launches = append(f.launches, append([]string(nil), cmd.Args...))
+	for _, arg := range cmd.Args {
+		if arg == "attach-session" && f.dieAtAttach {
+			f.exists = false
+		}
+	}
 	file, err := os.CreateTemp("", "pty-stub")
 	if err != nil {
 		return nil, err
@@ -96,19 +104,59 @@ func (f *fakeTmux) Close() {
 	}
 }
 
+// sessionExists reports whether the fake server currently holds a session — true from
+// the first new-session until a kill-session takes it away.
+func (f *fakeTmux) sessionExists() bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.exists
+}
+
+// dieOnAttach makes the session vanish the moment the attach client connects, which is
+// the last thing tmux.Session.Start does. It stands in for a command that cannot run at
+// all: tmux creates the session, the existence poll inside Start catches it, and the
+// shell exits 127 immediately after.
+//
+// Deterministic on purpose. Expressing the same thing as "kill it from another goroutine
+// after a millisecond" leaves it a coin flip whether the death lands before Start's own
+// poll (a different failure) or after the settle check (no failure at all), and that
+// flake reached the gate once already.
+func (f *fakeTmux) dieOnAttach() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.dieAtAttach = true
+}
+
+// reset forgets the recorded launches, leaving the server's state alone, so a test can
+// assert about what a SECOND phase launched rather than about everything since the
+// fixture was built.
+func (f *fakeTmux) reset() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.launches = nil
+	f.launched = false
+}
+
 // exec answers tmux commands: has-session tracks whether the pty was launched,
-// everything else succeeds.
+// kill-session takes the session away again (so a teardown is observable, not just
+// unrefused), everything else succeeds.
 func (f *fakeTmux) exec() cmd_test.MockCmdExec {
 	return cmd_test.MockCmdExec{
 		RunFunc: func(c *exec.Cmd) error {
 			for _, arg := range c.Args {
-				if arg == "has-session" {
+				switch arg {
+				case "has-session":
 					f.mu.Lock()
 					defer f.mu.Unlock()
 					if f.exists {
 						return nil
 					}
 					return errors.New("no server running on /tmp/tmux-test")
+				case "kill-session":
+					f.mu.Lock()
+					defer f.mu.Unlock()
+					f.exists = false
+					return nil
 				}
 			}
 			return nil

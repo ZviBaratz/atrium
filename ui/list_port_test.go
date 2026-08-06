@@ -121,6 +121,88 @@ func TestRender_NoChipWithoutAManagedPort(t *testing.T) {
 	assert.NotContains(t, out, ":")
 }
 
+// A running dev command turns the port chip into a state signal, and it says so by
+// SHAPE rather than by colour alone: the row is read under NO_COLOR and under the
+// desaturation guard, where an accent-vs-dim distinction is no distinction at all.
+func TestRender_PortChipMarksARunningDevCommand(t *testing.T) {
+	t.Cleanup(theme.Set("unicode"))
+	inst, port := portedInstance(t)
+
+	s := spinner.New()
+	r := &InstanceRenderer{spinner: &s, width: 60}
+
+	idle := ansi.Strip(r.Render(inst, 0, false, false))
+	require.Contains(t, idle, fmt.Sprintf(":%d", port))
+	assert.NotContains(t, idle, runGlyph, "an idle session's chip is the port alone")
+
+	inst.SetRunLive(true)
+	running := ansi.Strip(r.Render(inst, 0, false, false))
+
+	assert.Contains(t, running, runGlyph+fmt.Sprintf(":%d", port))
+}
+
+// A repo can declare a run_command with no port_range, and that session still has to be
+// able to say its server is up — so the chip falls back to a bare "dev" rather than
+// disappearing along with the number.
+func TestRender_DevChipWithoutAManagedPort(t *testing.T) {
+	t.Cleanup(theme.Set("unicode"))
+	dir := t.TempDir()
+	inst, err := session.NewInstance(session.InstanceOptions{Title: "web", Path: dir, Program: "echo"})
+	require.NoError(t, err)
+	require.Zero(t, inst.Port())
+
+	s := spinner.New()
+	r := &InstanceRenderer{spinner: &s, width: 60}
+
+	require.NotContains(t, ansi.Strip(r.Render(inst, 0, false, false)), "dev",
+		"a session with neither a port nor a server spends no columns on either")
+
+	inst.SetRunLive(true)
+
+	assert.Contains(t, ansi.Strip(r.Render(inst, 0, false, false)), runGlyph+"dev")
+}
+
+// The running chip is one column wider than the idle one, so it has to face the same
+// width fold — measured at a width where the idle chip fits exactly, which is what makes
+// this an assertion about the glyph rather than about the rest of the line.
+func TestRender_RunningChipIsDroppedWhenTheRowCannotHoldIt(t *testing.T) {
+	t.Cleanup(theme.Set("unicode"))
+	inst, port := portedInstance(t)
+	require.Equal(t, inst.DisplayName(), inst.Title, "an un-renamed session: line 2 has no flex segment")
+	inst.SetDiffStats(&git.DiffStats{Added: 12, Removed: 3, Commits: 2, Behind: 1})
+
+	s := spinner.New()
+	r := &InstanceRenderer{spinner: &s}
+
+	// The narrowest width at which the idle chip still fits.
+	width := 0
+	for w := 20; w <= 80; w++ {
+		r.setWidth(w)
+		if strings.Contains(ansi.Strip(r.Render(inst, 1, false, false)), fmt.Sprintf(":%d", port)) {
+			width = w
+			break
+		}
+	}
+	require.NotZero(t, width, "the idle chip must fit at some width in range")
+
+	inst.SetRunLive(true)
+	r.setWidth(width)
+	row := r.Render(inst, 1, false, false)
+
+	assert.NotContains(t, ansi.Strip(row), fmt.Sprintf(":%d", port),
+		"one column wider than the idle chip, so at the idle chip's exact width it is dropped")
+	for _, ln := range strings.Split(row, "\n") {
+		assert.LessOrEqual(t, ansi.StringWidth(ln), width, "no line may exceed the row width")
+	}
+}
+
+// The run glyph shares prCheckGlyph's contract: an inline literal, outside the Glyphs
+// table and therefore outside the `?` legend, which makes width the one thing nothing
+// else checks. A two-cell glyph breaks the column math line2Fits does and wraps the row.
+func TestRunGlyphIsSingleCell(t *testing.T) {
+	assert.Equal(t, 1, ansi.StringWidth(runGlyph))
+}
+
 // splitRowLines splits a rendered row into its two lines.
 func splitRowLines(t *testing.T, out string) []string {
 	t.Helper()
