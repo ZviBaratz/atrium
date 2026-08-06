@@ -319,6 +319,23 @@ func prSeg(p rowPaint, pr *git.PRStatus) (rowSeg, bool) {
 	return linkSeg(seg, pr.URL), true
 }
 
+// portSeg returns the managed dev-server port chip (#389) and whether the session has
+// one. Spelled ":3001" — the port alone, in the form a URL suffix takes — because the
+// host is always localhost and spelling it out would cost eleven columns on a line that
+// already carries a branch and the git chips.
+//
+// It is a link to that server, which costs nothing: linkSeg overrides only the rendered
+// bytes, so the OSC 8 sequence adds no display width. Dim, like the branch and the age:
+// the port is an identifier the user reads when they go looking for it, not a state
+// change demanding attention.
+func portSeg(p rowPaint, port int) (rowSeg, bool) {
+	if port == 0 {
+		return rowSeg{}, false
+	}
+	seg := p.seg(fmt.Sprintf(":%d", port), p.th.Palette.FgDim)
+	return linkSeg(seg, fmt.Sprintf("http://localhost:%d", port)), true
+}
+
 // linkSeg turns s into an OSC 8 hyperlink to url, overriding only its rendered
 // bytes: width() still reads s.plain (the visible text, escape-free), so the
 // link adds no columns and layout is unchanged. An empty url leaves s untouched.

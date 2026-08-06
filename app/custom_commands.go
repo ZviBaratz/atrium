@@ -313,6 +313,10 @@ func customCommandCtx(inst *session.Instance) customcmd.Ctx {
 			Title:  inst.Title,
 			Name:   inst.DisplayName(),
 			Branch: inst.Branch,
+			// The managed port (#389), empty for a session whose repo declares no
+			// port_range — which is what dims a `curl localhost:{{.Session.Port}}` row
+			// rather than running it against a port nothing is serving.
+			Port: inst.PortText(),
 		},
 		Repo: customcmd.RepoCtx{
 			Path: inst.GetRepoPath(),
@@ -395,6 +399,7 @@ var customCommandMissingReasons = map[string]string{
 	"Session.Name":     "no name yet",
 	"Session.Branch":   noBranchReason,
 	"Session.Worktree": noWorktreeReason,
+	"Session.Port":     "no managed port",
 	"Repo.Path":        "no repo path",
 	"Repo.Name":        "no repo name",
 }

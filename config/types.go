@@ -184,6 +184,16 @@ type RepoScript struct {
 	// The values land in the tmux client's argv, so they are visible to any process
 	// that can read it. Do not put secrets here.
 	SessionEnv map[string]string `json:"session_env,omitempty"`
+	// PortRange is the inclusive span, spelled "lo-hi", that each session in this repo
+	// draws one TCP port from: exported as $ATRIUM_PORT and {{.Session.Port}}, so two
+	// sessions can run the same dev server at once without a collision to resolve by
+	// hand.
+	//
+	// A port is held for as long as the session's worktree is: allocated when the
+	// worktree is materialized (create, and again on resume), released on pause and on
+	// kill. Empty means this repo has no managed port, which is the pre-feature
+	// behavior and what every unconfigured repo gets.
+	PortRange string `json:"port_range,omitempty"`
 }
 
 // IsCatchAll reports whether the entry has no routing rules, making it the fallback

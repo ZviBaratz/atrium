@@ -735,6 +735,7 @@ and an entry with no rules at all is the catch-all:
     "remote_matches": ["acme/web"],
     "path_matches": ["projects/web"],
     "setup_script": "npm ci && npm run db:migrate",
+    "port_range": "3000-3099",
     "session_env": { "GOLANGCI_LINT_CACHE": "/tmp/lint-{{.Session.Title}}" }
   }]
 }
@@ -788,6 +789,38 @@ rather than failing.
 One interaction to know about: a script that runs `npm install` under a path listed in
 [`link_paths`](#linked-paths) is writing into your own checkout's tree, shared by every
 other session at once. Linking and installing are alternatives, not a pair.
+
+#### Managed ports
+
+`port_range` hands each session of that repo one TCP port of its own, so two sessions
+can run the same dev server at once without you resolving the collision by hand. It is
+spelled `lo-hi`, inclusive, and both ends must be 1024 or above.
+
+The port reaches a session three ways, all carrying the same number:
+
+| Where | Spelling |
+|-------|----------|
+| The agent's pane, and the setup script | `$ATRIUM_PORT` |
+| `setup_script` and `session_env` templates | `{{.Session.Port}}` |
+| [Custom commands](#custom-commands) | either |
+
+So `npm run dev -- --port $ATRIUM_PORT` in the agent's own shell does the right thing
+for whichever session it is typed in, and the row shows `:3001` — a link, on a terminal
+that supports them, to `http://localhost:3001`.
+
+A session holds its port for exactly as long as it holds its worktree: allocated when
+the worktree is materialized (create, and again on resume), released on pause and on
+kill. So a parked session does not sit on a port, and the number a session gets is not
+stable across a pause — the row is where you read the current one. It *is* stable
+across an Atrium restart, because the server you started is still bound to it.
+
+Two sessions are never handed the same port: Atrium tracks what its own sessions hold
+and, separately, refuses a port anything else is already listening on. That second check
+is a snapshot — a port free when the session is created can be taken before your server
+binds it — so it is a filter against what is already running, not a reservation.
+
+If nothing in the range is free the session still starts, without `$ATRIUM_PORT`, and
+says so in a modal. Widen the range or free a port by pausing another session.
 
 While the script runs the session's row says so, and the preview names it in place of
 the generic "Setting up workspace…" it shows for every other session that has not come

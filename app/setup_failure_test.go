@@ -1,6 +1,9 @@
 package app
 
 import (
+	"context"
+	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"testing"
@@ -81,4 +84,56 @@ func TestFlushSetupFailures_SaysNothingOnACleanFleet(t *testing.T) {
 	assert.Nil(t, h.flushSetupFailures())
 	assert.Equal(t, stateDefault, h.state)
 	assert.Nil(t, h.textOverlay)
+}
+
+// exhaustedRangeHome builds a home whose one instance asked for a port and could not
+// have one, by pointing port_range at a single port a live listener already holds. The
+// real allocator runs; nothing here is stubbed.
+func exhaustedRangeHome(t *testing.T) (*home, *session.Instance) {
+	t.Helper()
+	var lc net.ListenConfig
+	l, err := lc.Listen(context.Background(), "tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = l.Close() })
+	taken := l.Addr().(*net.TCPAddr).Port
+
+	require.NoError(t, os.MkdirAll(filepath.Join(os.Getenv("HOME"), ".atrium"), 0o755))
+	cfg := config.DefaultConfig()
+	cfg.RepoScripts = []config.RepoScript{{Name: "web", PortRange: fmt.Sprintf("%d-%d", taken, taken)}}
+	require.NoError(t, config.SaveConfig(cfg))
+
+	dir := t.TempDir()
+	h := newTestHomeWithInstances(t, dir)
+	h.state = stateDefault
+	inst := h.list.GetInstances()[0]
+	inst.RunSetupScript(dir)
+	require.NotEmpty(t, inst.PortProblem(), "fixture must actually have run out of ports")
+	return h, inst
+}
+
+// The other way a repo environment can come up short of its config: the session starts,
+// but without the port it was promised. Silent, that is a dev-server command running
+// with an empty --port and a user reading the row wondering which session owns 3000.
+func TestFlushSetupFailures_ReportsAnExhaustedPortRange(t *testing.T) {
+	h, _ := exhaustedRangeHome(t)
+
+	assert.Nil(t, h.flushSetupFailures())
+
+	require.Equal(t, stateInfo, h.state)
+	require.NotNil(t, h.textOverlay)
+	assert.Contains(t, h.textOverlay.Render(), "port")
+}
+
+// And once, like every other report on this tick.
+func TestFlushSetupFailures_ReportsAnExhaustedRangeOnce(t *testing.T) {
+	h, inst := exhaustedRangeHome(t)
+
+	h.flushSetupFailures()
+	h.state = stateDefault
+	h.textOverlay = nil
+
+	h.flushSetupFailures()
+
+	assert.Nil(t, h.textOverlay)
+	assert.Empty(t, inst.PortProblem())
 }

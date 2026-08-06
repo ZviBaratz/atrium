@@ -162,6 +162,11 @@ func (i *Instance) pause() error {
 		// commit failed above we deliberately leave it set (the WIP is real and
 		// still on disk) so the kill dialog keeps warning before branch -D.
 		i.clearCachedDirty()
+		// And the managed port goes back to its range (#389), for the same reason and
+		// under the same condition: a session with no worktree has nowhere to run the
+		// server that port was for. A park that kept its worktree (the commit failed
+		// above) keeps its port too — resume will find both still there.
+		i.releasePort()
 	}
 
 	i.SetStatus(Paused)

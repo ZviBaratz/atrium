@@ -220,7 +220,7 @@ func TestCustomCommandMissingReasonsCoverEveryField(t *testing.T) {
 	c := oneCommand(t, config.CustomCommand{
 		Key: "a", Description: "names every field", Output: "background",
 		Command: "echo {{.Session.Title}} {{.Session.Name}} {{.Session.Branch}} " +
-			"{{.Session.Worktree}} {{.Repo.Path}} {{.Repo.Name}}",
+			"{{.Session.Worktree}} {{.Session.Port}} {{.Repo.Path}} {{.Repo.Name}}",
 	})
 	missing := c.MissingFields(customcmd.Ctx{})
 	require.NotEmpty(t, missing, "an empty context must report missing fields")
