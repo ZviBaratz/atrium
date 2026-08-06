@@ -33,7 +33,14 @@ func RenderKeybindings(problems []keys.Problem) string {
 	var b strings.Builder
 	b.WriteString("Keybindings:\n")
 	for _, p := range problems {
-		fmt.Fprintf(&b, "  ⚠ %s\n", p.Error())
+		// A warning was applied and a refusal was not, so they cannot share a
+		// marker: printing both as ⚠ under a heading about what was refused told
+		// the user their key had been ignored when it was in fact live.
+		marker := "⚠"
+		if p.Warning {
+			marker = "·"
+		}
+		fmt.Fprintf(&b, "  %s %s\n", marker, p.Error())
 	}
 	return b.String()
 }

@@ -54,10 +54,21 @@ func labelOne(k string) string {
 // Read it, never a literal: a literal is correct only until the user rebinds
 // the action, and then it is a sentence telling them to press a key that does
 // something else. Two of those shipped ("press k to kill", where k moves the
-// selection); ui/key_prose_test.go is what now catches the next one.
+// selection); app/prose_keys_test.go's TestNoProseNamesAKeyLiterally is what
+// now catches the next one, by scanning for the shape rather than pinning a list.
 func LabelOf(name KeyName) string {
-	return GlobalKeyBindings[name].Help().Key
+	if label := GlobalKeyBindings[name].Help().Key; label != "" {
+		return label
+	}
+	// An unbound action has no key to name, and a sentence built around one still
+	// has a hole in it: "Session is paused. Press '' to resume." The hint bar and
+	// the cheatsheet drop the whole entry instead, but prose has no entry to drop,
+	// so it says the true thing — there is no key — and the palette is still there.
+	return unboundLabel
 }
+
+// unboundLabel stands in for the key of an action the user has unbound.
+const unboundLabel = "(unbound)"
 
 // PrimaryKey is the dispatch spelling of the key an action fires on: its first
 // bound key, since an action with aliases (KeyEnter's "enter" and "o") is still

@@ -59,6 +59,11 @@ type Spec struct {
 type Problem struct {
 	Action string
 	Msg    string
+	// Warning marks a problem the override survived: it was applied, with a
+	// caveat worth saying out loud. A refusal and a caveat read identically in a
+	// list, and reporting the second as the first tells the user their key did not
+	// take effect when it did — so the surfaces split on this.
+	Warning bool
 }
 
 // Error renders the problem as the user sees it.
@@ -175,6 +180,9 @@ func resolve(overrides map[string]Spec) ([]Problem, map[KeyName]resolved) {
 	reject := func(action, format string, args ...any) {
 		problems = append(problems, Problem{Action: action, Msg: fmt.Sprintf(format, args...)})
 	}
+	warn := func(action, format string, args ...any) {
+		problems = append(problems, Problem{Action: action, Warning: true, Msg: fmt.Sprintf(format, args...)})
+	}
 
 	actions := make([]string, 0, len(overrides))
 	for action := range overrides {
@@ -182,18 +190,26 @@ func resolve(overrides map[string]Spec) ([]Problem, map[KeyName]resolved) {
 	}
 	sort.Strings(actions)
 
-	// Two passes, because the keys an override wants may be the keys another
-	// override is giving up. Pass one accepts the well-formed overrides and
-	// releases the defaults they replace; pass two claims what they asked for.
-	// Collapsing the two would reject the commonest thing a user actually wants —
-	// swapping a pair of keys — since the second half of the swap would still see
-	// the first half's default in the way.
+	// Resolution runs to a fixpoint rather than in one pass, because rejecting an
+	// override puts its default keys back — and those may be the very keys another
+	// override was accepted for. Settling that by restoring into a half-built claim
+	// map is order-dependent, and order-dependent here means a coin flip: with
+	// {"down": "k", "up": "y"} (y being copy_branch's), one pass left both "up" and
+	// "down" claiming "k", and 200 runs dispatched it to each of them almost exactly
+	// half the time. A user would get a different keymap on each launch.
+	//
+	// So instead: assume every well-formed override applies, rebuild the claim map
+	// from scratch, and drop the first one (in sorted order) that wants a key
+	// something else holds. Repeat until nothing is dropped. Rejections only ever
+	// grow, so it terminates, and the sorted walk makes the outcome independent of
+	// the config file's map order.
 	type accepted struct {
 		action string
 		entry  *Entry
 		keys   []string
 	}
 	var accepts []accepted
+	disabled := map[KeyName]bool{}
 	for _, action := range actions {
 		spec := overrides[action]
 		entry, known := byAction[action]
@@ -201,12 +217,10 @@ func resolve(overrides map[string]Spec) ([]Problem, map[KeyName]resolved) {
 			reject(action, "no such action — %s", nearestActionHint(action, byAction))
 			continue
 		}
-
 		if spec.Malformed != "" {
 			reject(action, "%s", spec.Malformed)
 			continue
 		}
-
 		if spec.Disabled {
 			if action == "attach_toggle" {
 				reject(action, "cannot be unbound — it is the only way out of an attached "+
@@ -214,52 +228,67 @@ func resolve(overrides map[string]Spec) ([]Problem, map[KeyName]resolved) {
 					"inside a pane. Rebind it instead")
 				continue
 			}
-			for _, k := range out[entry.Name].keys {
-				delete(claimed, k)
-			}
-			out[entry.Name] = resolved{name: entry.Name, desc: out[entry.Name].desc}
+			disabled[entry.Name] = true
 			continue
 		}
-
 		keys, err := checkKeys(action, spec.Keys)
 		if err != nil {
 			reject(action, "%s", err)
 			continue
 		}
-		for _, k := range out[entry.Name].keys {
-			delete(claimed, k)
-		}
 		accepts = append(accepts, accepted{action: action, entry: entry, keys: keys})
 	}
 
-	for _, a := range accepts {
-		// An override must never evict a key still held by an action the user did
-		// not rebind. Whichever action lost would be silently unreachable while
-		// every surface went on advertising its key, and over a map the loser would
-		// be whichever entry happened to be visited last — so the override loses,
-		// deterministically, and the message says how to get what was wanted.
-		conflict := false
-		for _, k := range a.keys {
-			if owner, taken := claimed[k]; taken && owner != a.action {
-				reject(a.action, "key %q is held by %q — rebind %q too, or %q is ignored",
-					k, owner, owner, a.action)
-				conflict = true
-				break
-			}
+	for {
+		// Rebuild from the defaults each round: an action whose override was dropped
+		// on the previous round is back to holding its own keys, and that has to be
+		// visible to everyone still standing.
+		claimed = map[string]string{}
+		overridden := map[KeyName]bool{}
+		for _, a := range accepts {
+			overridden[a.entry.Name] = true
 		}
-		if conflict {
-			// It gave up its defaults in pass one; put them back, since the override
-			// it was giving them up for is not happening.
-			for _, k := range out[a.entry.Name].keys {
-				claimed[k] = a.action
+		for _, e := range Registry {
+			if e.DocOnly || overridden[e.Name] || disabled[e.Name] {
+				continue
 			}
-			continue
+			for _, k := range e.Binding.Keys() {
+				claimed[k] = e.Action
+			}
 		}
 
+		dropped := -1
+		for i, a := range accepts {
+			conflict := ""
+			for _, k := range a.keys {
+				if owner, taken := claimed[k]; taken && owner != a.action {
+					reject(a.action, "key %q is held by %q — rebind %q too, or %q is ignored",
+						k, owner, owner, a.action)
+					conflict = k
+					break
+				}
+			}
+			if conflict != "" {
+				dropped = i
+				break
+			}
+			for _, k := range a.keys {
+				claimed[k] = a.action
+			}
+		}
+		if dropped < 0 {
+			break
+		}
+		accepts = append(accepts[:dropped], accepts[dropped+1:]...)
+	}
+
+	for name := range disabled {
+		out[name] = resolved{name: name, desc: out[name].desc}
+	}
+	for _, a := range accepts {
 		for _, k := range a.keys {
-			claimed[k] = a.action
 			if mode, shadow := shadowed[k]; shadow {
-				reject(a.action, "key %q is consumed by %s before dispatch, so %q will not "+
+				warn(a.action, "key %q is consumed by %s before dispatch, so %q will not "+
 					"fire there — it still works everywhere else", k, mode, a.action)
 			}
 		}
@@ -298,28 +327,51 @@ func checkKeys(action string, list []string) ([]string, error) {
 		}
 		seen[k] = true
 		if _, attached := attachedLayerActions[action]; attached {
+			// Returned as-is: ControlByte's messages already explain that this action
+			// is honored inside a session and why that constrains the chord, so
+			// wrapping them repeated the same sentence twice in one line.
 			if _, err := ControlByte(k); err != nil {
-				return nil, fmt.Errorf("%w. %q is also honored inside a session, where "+
-					"Atrium reads it as one raw byte", err, action)
+				return nil, err
 			}
 		}
 	}
 	return slices.Clone(list), nil
 }
 
+// wireAmbiguousCtrl are the ctrl chords whose control code is also what a
+// terminal sends for an ordinary key, and what that key is.
+//
+// The TUI can tell them apart on a terminal that speaks the kitty keyboard
+// protocol (see the README), but the attach layer cannot: it reads raw bytes off
+// a pty, where ctrl+m and enter are both 0x0d and nothing distinguishes them. So
+// binding detach to ctrl+m would detach the user every time they pressed Enter
+// inside an agent pane — an unusable session, from a config line that looks
+// perfectly reasonable.
+var wireAmbiguousCtrl = map[byte]string{
+	'm': "enter",
+	'i': "tab",
+	'j': "a newline",
+	'h': "backspace",
+}
+
 // ControlByte is the byte a terminal sends for a ctrl+<letter> chord, which is
 // how the attach layer recognises the detach and kill keys while it is pumping
 // raw stdin (session/tmux/attach.go).
 //
-// It refuses everything else rather than computing it, because the obvious
-// derivation is quietly wrong for the rest: the mask is over the chord's last
-// byte, so "ctrl+space" would encode as ctrl+E, "ctrl+up" as ctrl+P and
-// "ctrl+pgdown" as ctrl+N — three chords that would silently detach on a key the
-// user never bound.
+// It refuses everything it cannot encode unambiguously rather than computing it.
+// The obvious derivation is quietly wrong twice over: the mask is over the
+// chord's last byte, so "ctrl+space" would encode as ctrl+E, "ctrl+up" as ctrl+P
+// and "ctrl+pgdown" as ctrl+N; and four of the letters it does encode correctly
+// land on a byte an ordinary keypress also produces.
 func ControlByte(chord string) (byte, error) {
 	base, ok := strings.CutPrefix(chord, "ctrl+")
 	if !ok || len(base) != 1 || base[0] < 'a' || base[0] > 'z' {
-		return 0, fmt.Errorf("key %q cannot be a control byte — use ctrl+ and a single letter", chord)
+		return 0, fmt.Errorf("key %q cannot be read as a single control byte — inside a "+
+			"session Atrium reads raw stdin, so this action needs ctrl+ and a single letter", chord)
+	}
+	if other, ambiguous := wireAmbiguousCtrl[base[0]]; ambiguous {
+		return 0, fmt.Errorf("key %q is indistinguishable from %s inside a session, where "+
+			"Atrium reads raw stdin — pick another letter", chord, other)
 	}
 	return base[0] & 0x1f, nil
 }

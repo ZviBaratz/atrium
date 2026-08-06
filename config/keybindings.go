@@ -39,6 +39,12 @@ type KeySpec struct {
 	// wasArray records which of the two shapes the value was written in, so
 	// marshalling can put it back the way the user wrote it.
 	wasArray bool
+	// raw is the bytes a malformed value was written as, kept verbatim so the
+	// next save puts back exactly what the user typed. Without it a value Atrium
+	// could not parse marshalled as [], so the first settings keystroke destroyed
+	// the line and the doctor message naming it lost its evidence — the same
+	// failure the unknown-action case is careful to avoid, one level down.
+	raw json.RawMessage
 }
 
 // DisabledSpec is the sentinel value that unbinds an action.
@@ -70,12 +76,15 @@ func (k *KeySpec) UnmarshalJSON(b []byte) error {
 
 	k.Malformed = fmt.Sprintf("value %s is neither a key, a list of keys, nor %q",
 		string(b), DisabledSpec)
+	k.raw = append(json.RawMessage(nil), b...)
 	return nil
 }
 
 // MarshalJSON writes the spec back in the shape it was read in.
 func (k KeySpec) MarshalJSON() ([]byte, error) {
 	switch {
+	case k.raw != nil:
+		return k.raw, nil
 	case k.Disabled:
 		return json.Marshal(DisabledSpec)
 	case !k.wasArray && len(k.Keys) == 1:

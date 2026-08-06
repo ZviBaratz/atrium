@@ -350,37 +350,36 @@ but tmux's own prefix.
 
 | Action | Default | Action | Default |
 |--------|---------|--------|---------|
-| `accounts` | `@` | `move_up` | `K` |
-| `approve` | `a` | `multi_select` | `v` |
-| `attach_toggle` | `ctrl-q` | `mute` | `M` |
-| `auto_name` | `A` | `new` | `n` |
-| `collapse_all` | `Z` | `new_pick_project` | `N` |
-| `collapse_group` | `←` | `next_blocked` | `b` |
-| `command_log` | `L` | `next_tab` | `tab` |
-| `command_palette` | `ctrl-k` | `next_unread` | `u` |
-| `copy_branch` | `y` | `open` | `↵/o` |
-| `copy_content` | `Y` | `open_pr` | `w` |
-| `create_pr` | `c` | `pause` | `p` |
-| `custom_commands` | `!` | `pause_all` | `ctrl-p` |
-| `diff_comment` | `C` | `prev_tab` | `shift-tab` |
-| `down` | `↓/j` | `push_branch` | `P` |
-| `expand_group` | `→` | `queue` | `Q` |
-| `filter` | `/` | `quit` | `q` |
-| `grow_list` | `>` | `rename` | `R` |
-| `help` | `?` | `resume` | `r` |
-| `hints` | `f` | `resume_all` | `ctrl-r` |
-| `kill` | `ctrl-x` | `run_command` | `d` |
-| `layout_preset` | `\` | `scroll_down` | `shift-↓` |
-| `merge_pr` | `m` | `scroll_up` | `shift-↑` |
-| `move_account_down` | `]` | `send` | `s` |
-| `move_account_up` | `[` | `settings` | `,` |
-| `move_down` | `J` | `shrink_list` | `<` |
-| `move_group_down` | `}` | `smart_new` | `i` |
-| `move_group_up` | `{` | `tab_diff` | `2` |
-| `multi_select` | `v` | `tab_preview` | `1` |
-| `next_tab` | `tab` | `tab_terminal` | `3` |
-| `toggle_mark` | `space` | `undo_kill` | `U` |
-| `up` | `↑/k` | | |
+| `accounts` | `@` | `new` | `n` |
+| `approve` | `a` | `new_pick_project` | `N` |
+| `attach_toggle` | `ctrl-q` | `next_blocked` | `b` |
+| `auto_name` | `A` | `next_tab` | `tab` |
+| `collapse_all` | `Z` | `next_unread` | `u` |
+| `collapse_group` | `←` | `open` | `↵/o` |
+| `command_log` | `L` | `open_pr` | `w` |
+| `command_palette` | `ctrl-k` | `pause` | `p` |
+| `copy_branch` | `y` | `pause_all` | `ctrl-p` |
+| `copy_content` | `Y` | `prev_tab` | `shift-tab` |
+| `create_pr` | `c` | `push_branch` | `P` |
+| `custom_commands` | `!` | `queue` | `Q` |
+| `diff_comment` | `C` | `quit` | `q` |
+| `down` | `↓/j` | `rename` | `R` |
+| `expand_group` | `→` | `resume` | `r` |
+| `filter` | `/` | `resume_all` | `ctrl-r` |
+| `grow_list` | `>` | `run_command` | `d` |
+| `help` | `?` | `scroll_down` | `shift-↓` |
+| `hints` | `f` | `scroll_up` | `shift-↑` |
+| `kill` | `ctrl-x` | `send` | `s` |
+| `layout_preset` | `\` | `settings` | `,` |
+| `merge_pr` | `m` | `shrink_list` | `<` |
+| `move_account_down` | `]` | `smart_new` | `i` |
+| `move_account_up` | `[` | `tab_diff` | `2` |
+| `move_down` | `J` | `tab_preview` | `1` |
+| `move_group_down` | `}` | `tab_terminal` | `3` |
+| `move_group_up` | `{` | `toggle_mark` | `space` |
+| `move_up` | `K` | `undo_kill` | `U` |
+| `multi_select` | `v` | `up` | `↑/k` |
+| `mute` | `M` |  |
 
 #### Filtering
 

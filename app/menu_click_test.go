@@ -124,8 +124,8 @@ func TestEveryBarKeyIsSynthesizable(t *testing.T) {
 	// cannot see them. Entries carrying no key are label-only ranges like
 	// "a–z" that map to no single action and stay inert by design.
 	for _, table := range [][]key.Binding{
-		keys.FilterModeHints, keys.HintModeHints,
-		keys.VisualModeHints, keys.DiffCommentModeHints,
+		keys.FilterModeHints(), keys.HintModeHints(),
+		keys.VisualModeHints(), keys.DiffCommentModeHints(),
 	} {
 		for _, b := range table {
 			for _, k := range b.Keys() {

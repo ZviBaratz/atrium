@@ -478,18 +478,18 @@ func (m *Menu) String() string {
 		// While an operation runs off the UI thread, the bar names it.
 		line = progressStyle().Render(m.busyText())
 	case StateFilter:
-		// Actions first (see keys.FilterModeHints) so that on a narrow terminal
+		// Actions first (see keys.FilterModeHints()) so that on a narrow terminal
 		// the width truncation below drops the predicate vocabulary tail, never
 		// the accept/clear actions.
-		line = m.renderModeLine(keys.FilterModeHints) +
+		line = m.renderModeLine(keys.FilterModeHints()) +
 			sepStyle().Render(separator) +
 			descStyle().Render(filterSyntaxHint)
 	case StateHints:
-		line = m.renderModeLine(keys.HintModeHints)
+		line = m.renderModeLine(keys.HintModeHints())
 	case StateVisual:
-		line = m.renderModeLine(keys.VisualModeHints)
+		line = m.renderModeLine(keys.VisualModeHints())
 	case StateDiffComment:
-		line = m.renderModeLine(keys.DiffCommentModeHints)
+		line = m.renderModeLine(keys.DiffCommentModeHints())
 	case StateEmpty:
 		line = m.renderHintLine(emptyHintKeys)
 	default: // StateDefault

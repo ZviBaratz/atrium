@@ -77,8 +77,12 @@ func HelpGroups() []HelpGroup {
 			{Keys: []KeyName{KeyQuickSend}, Desc: "send a message (without attaching)"},
 			{Keys: []KeyName{KeyDiffComment}, Desc: "diff tab: comment on a line or range → queue it to the agent (↑↓/j/k move, shift+↑↓/J/K extend, enter comment, esc exit)"},
 			{Keys: []KeyName{KeyQueue}, Desc: "manage queued prompts (list / cancel)"},
-			{Keys: []KeyName{KeyApprove}, Desc: "approve the agent's prompt (" + PrimaryKey(KeyEnter) +
-				" picks its default); on idle claude, accept the suggested prompt"},
+			// "enter" is a literal here on purpose, and is the one key in this table
+			// that has to stay one: approve sends Enter into the agent's own pane
+			// (ApprovePrompt), so the parenthetical describes the agent's UI rather
+			// than Atrium's keymap. Reading it from KeyEnter would make rebinding
+			// Atrium's open key rewrite advice about a key the agent never sees.
+			{Keys: []KeyName{KeyApprove}, Desc: "approve the agent's prompt (enter picks its default); on idle claude, accept the suggested prompt"},
 			{Keys: []KeyName{KeyRunCommand}, Desc: "start / stop the repo's run_command (dev server) on this session's port"},
 			{Keys: []KeyName{KeyPause}, Desc: "pause: commit changes + free the worktree"},
 			{Keys: []KeyName{KeyPauseAll}, Desc: "pause all active sessions in the current view"},

@@ -54,7 +54,7 @@ func TestAttachControlBytes_FollowARebind(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ControlByte: %v", err)
 	}
-	SetAttachChords(detach, kill)
+	SetAttachChords(detach, kill, true)
 
 	if got := classifyAttachInput([]byte{detach}, true); got != attachDetach {
 		t.Errorf("the rebound chord ctrl+g classified as %v, want a detach", got)

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/ZviBaratz/atrium/config"
@@ -28,7 +29,7 @@ func newHomeWithKeybindings(t *testing.T, section map[string]config.KeySpec) *ho
 	t.Cleanup(func() {
 		_, restore := keys.Apply(nil)
 		restore()
-		tmux.SetAttachChords(17, 24)
+		tmux.SetAttachChords(17, 24, true)
 	})
 
 	t.Setenv("HOME", t.TempDir())
@@ -76,9 +77,10 @@ func TestConstruct_InstallsTheAttachChords(t *testing.T) {
 	})
 	require.Empty(t, h.pendingKeybindingProblems)
 
-	detach, kill := tmux.AttachChords()
+	detach, kill, killBound := tmux.AttachChords()
 	assert.Equal(t, byte('g'&0x1f), detach, "the attach layer must detach on the rebound chord")
 	assert.Equal(t, byte('x'&0x1f), kill, "and still kill on the unchanged one")
+	assert.True(t, killBound)
 }
 
 // No section is the case almost every user is in, and it must leave the keymap
@@ -89,9 +91,10 @@ func TestConstruct_NoKeybindingsSectionLeavesTheDefaults(t *testing.T) {
 	assert.Empty(t, h.pendingKeybindingProblems)
 	assert.Equal(t, keys.KeyNew, keys.GlobalKeyStringsMap["n"])
 	assert.Equal(t, "n", keys.LabelOf(keys.KeyNew))
-	detach, kill := tmux.AttachChords()
+	detach, kill, killBound := tmux.AttachChords()
 	assert.Equal(t, byte(17), detach)
 	assert.Equal(t, byte(24), kill)
+	assert.True(t, killBound)
 }
 
 // The report's shape, and the consequence line that distinguishes it from the
@@ -125,4 +128,48 @@ func TestKeybindingProblemsFlushWaitsForTheScreen(t *testing.T) {
 
 	h.state = stateDefault
 	assert.Nil(t, h.flushKeybindingProblems(), "a second tick must find nothing to do")
+}
+
+// A refusal and a caveat are opposite outcomes, so the report cannot list them
+// together: an applied-with-a-caveat override under a heading saying "not
+// applied … those actions keep their default keys" tells the user their key is
+// dead when it is live.
+func TestKeybindingProblemsReport_SeparatesWarningsFromRefusals(t *testing.T) {
+	report := keybindingProblemsReport([]keys.Problem{
+		{Action: "pauze", Msg: "no such action"},
+		{Action: "new", Msg: `key "x" is consumed by multi-select mode`, Warning: true},
+	})
+
+	assert.Contains(t, report, "1 keybinding in config.json was not applied:")
+	assert.Contains(t, report, "1 keybinding was applied with a caveat:")
+
+	refusedAt := strings.Index(report, "not applied")
+	caveatAt := strings.Index(report, "applied with a caveat")
+	defaultsAt := strings.Index(report, "keep their default keys")
+	assert.Less(t, refusedAt, defaultsAt)
+	assert.Less(t, defaultsAt, caveatAt,
+		`"those actions keep their default keys" must belong to the refusals, not trail the caveats`)
+
+	only := keybindingProblemsReport([]keys.Problem{
+		{Action: "new", Msg: "shadowed", Warning: true},
+	})
+	assert.NotContains(t, only, "not applied",
+		"a report with nothing refused must not claim anything was")
+	assert.NotContains(t, only, "keep their default keys")
+}
+
+// An unbound kill has to reach the attach layer, or the user who removed the
+// kill key can still destroy a session with it from inside the pane.
+func TestConstruct_UnbindingKillDisarmsTheAttachLayer(t *testing.T) {
+	h := newHomeWithKeybindings(t, map[string]config.KeySpec{
+		"kill":          {Disabled: true},
+		"attach_toggle": {Keys: []string{"ctrl+g"}},
+	})
+	require.Empty(t, h.pendingKeybindingProblems)
+
+	detach, _, killBound := tmux.AttachChords()
+	assert.False(t, killBound, "with kill unbound the attach layer must have no kill byte")
+	assert.Equal(t, byte('g'&0x1f), detach,
+		"and the detach rebind must still be installed — bailing on the kill lookup used to "+
+			"skip it, leaving the pane detaching on ctrl+q while the list used ctrl+g")
 }

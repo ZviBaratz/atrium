@@ -66,8 +66,16 @@ func TestApply_DisabledLeavesNoKeyAndNoLabel(t *testing.T) {
 	if _, ok := GlobalKeyStringsMap["ctrl+p"]; ok {
 		t.Error("ctrl+p still dispatches after pause_all was unbound")
 	}
-	if got := LabelOf(KeyPauseAll); got != "" {
-		t.Errorf("LabelOf(pause_all) = %q, want empty so no surface can render it", got)
+	// The two generated surfaces read Help().Key directly and drop the entry when
+	// it is empty; prose goes through LabelOf, which cannot drop anything and so
+	// says there is no key rather than leaving a hole in the sentence.
+	if got := GlobalKeyBindings[KeyPauseAll].Help().Key; got != "" {
+		t.Errorf("an unbound action's help label = %q, want empty so the bar and the "+
+			"cheatsheet drop its entry", got)
+	}
+	if got := LabelOf(KeyPauseAll); got != unboundLabel {
+		t.Errorf("LabelOf(pause_all) = %q, want %q — prose must not render an empty key",
+			got, unboundLabel)
 	}
 	if got := GlobalKeyBindings[KeyPauseAll].Help().Desc; got == "" {
 		t.Error("an unbound action must keep its description — the palette still lists it")
@@ -156,6 +164,7 @@ func TestValidate_RejectsWithAnActionableMessage(t *testing.T) {
 		{"detach unbound", map[string]Spec{"attach_toggle": {Disabled: true}}, []string{"strand", "Rebind it instead"}},
 		{"detach not a control chord", map[string]Spec{"attach_toggle": spec("z")}, []string{"control byte", "inside a session"}},
 		{"kill not a control chord", map[string]Spec{"kill": spec("ctrl+up")}, []string{"control byte"}},
+		{"detach on a wire-ambiguous chord", map[string]Spec{"attach_toggle": spec("ctrl+m")}, []string{"indistinguishable from enter"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			problems := Validate(tc.overrides)
@@ -241,4 +250,128 @@ func renderProblems(ps []Problem) string {
 		b.WriteString("\n")
 	}
 	return b.String()
+}
+
+// The review case, and the reason resolution runs to a fixpoint. "down" wants
+// "k", which "up" holds; "up" wants "y", which copy_branch holds. One pass
+// rejected "up" and handed its defaults back — including the "k" it had just
+// given to "down" — leaving both claiming it. Two hundred runs then dispatched
+// "k" to each of them almost exactly half the time, so the user's keymap changed
+// between launches.
+func TestValidate_ARejectedOverrideCannotLeaveADuplicateClaim(t *testing.T) {
+	overrides := map[string]Spec{
+		"down": spec("k"),
+		"up":   spec("y"), // y is copy_branch's
+	}
+	seen := map[KeyName]int{}
+	for i := 0; i < 200; i++ {
+		_, restore := Apply(overrides)
+		seen[GlobalKeyStringsMap["k"]]++
+		for name, b := range GlobalKeyBindings {
+			for _, k := range b.Keys() {
+				if k != "k" {
+					continue
+				}
+				if got := GlobalKeyStringsMap[k]; got != name {
+					t.Fatalf("%v still lists key %q, but dispatch sends it to %v — "+
+						"two actions claiming one key is a coin flip at every launch", name, k, got)
+				}
+			}
+		}
+		restore()
+	}
+	if len(seen) != 1 {
+		t.Fatalf("key %q dispatched to more than one action across 200 runs: %v", "k", seen)
+	}
+}
+
+// The rejections a cascade produces must be as stable as the acceptances.
+func TestValidate_CascadingRejectionsAreDeterministic(t *testing.T) {
+	overrides := map[string]Spec{
+		"down": spec("k"),
+		"up":   spec("y"),
+		"new":  spec("j"),
+	}
+	first := renderProblems(Validate(overrides))
+	for i := 0; i < 100; i++ {
+		if got := renderProblems(Validate(overrides)); got != first {
+			t.Fatalf("run %d disagreed:\n got: %s\nwant: %s", i, got, first)
+		}
+	}
+}
+
+// Four ctrl chords encode to a byte an ordinary keypress also sends. The TUI can
+// tell them apart where the kitty protocol is available; the attach layer, which
+// reads raw bytes off a pty, never can — so binding detach to ctrl+m would
+// detach the user on every Enter pressed inside an agent pane.
+func TestControlByte_RejectsTheWireAmbiguousChords(t *testing.T) {
+	for chord, other := range map[string]string{
+		"ctrl+m": "enter", "ctrl+i": "tab", "ctrl+j": "a newline", "ctrl+h": "backspace",
+	} {
+		if _, err := ControlByte(chord); err == nil {
+			t.Errorf("ControlByte(%q) succeeded; it is %s on the wire", chord, other)
+			continue
+		}
+		for _, action := range []string{"attach_toggle", "kill"} {
+			problems := Validate(map[string]Spec{action: spec(chord)})
+			if len(problems) != 1 {
+				t.Errorf("%s = %q must be refused, got %v", action, chord, problems)
+				continue
+			}
+			if !strings.Contains(problems[0].Error(), other) {
+				t.Errorf("refusing %s = %q must say it collides with %s: %v",
+					action, chord, other, problems[0])
+			}
+		}
+	}
+}
+
+// Unbinding kill is legitimate, and has to reach the attach layer: otherwise the
+// user who removed the kill key can still tear a session down from inside its
+// own pane with the key they just removed.
+func TestValidate_KillMayBeUnbound(t *testing.T) {
+	problems, restore := Apply(map[string]Spec{"kill": {Disabled: true}})
+	defer restore()
+
+	if len(problems) != 0 {
+		t.Fatalf("unbinding kill must be allowed: %v", problems)
+	}
+	if got := KillKey(); got != "" {
+		t.Errorf("KillKey() = %q after being unbound, want empty", got)
+	}
+}
+
+// A warning is not a refusal, and the surfaces split on the flag rather than on
+// the wording, so the flag has to be set.
+func TestValidate_ShadowWarningsAreFlagged(t *testing.T) {
+	problems := Validate(map[string]Spec{"new": spec("x")})
+	if len(problems) != 1 {
+		t.Fatalf("want one problem, got %v", problems)
+	}
+	if !problems[0].Warning {
+		t.Error("a shadowed key is applied, so its problem must be marked a warning")
+	}
+
+	refusals := Validate(map[string]Spec{"new": spec("esc")})
+	if len(refusals) != 1 || refusals[0].Warning {
+		t.Errorf("a reserved key is refused, so it must not be marked a warning: %v", refusals)
+	}
+}
+
+// The mode bars resolve their keys through the registry, so their labels have to
+// follow a rebind — multi-select advertised the literal "p/r/x" while its
+// handler looked pause and resume up, so rebinding pause left the bar teaching a
+// key that did nothing.
+func TestModeHints_FollowARebind(t *testing.T) {
+	before := VisualModeHints()[1].Help().Key
+	if before != "p/r/x" {
+		t.Fatalf("multi-select's marked-set label = %q, want the default %q", before, "p/r/x")
+	}
+
+	_, restore := Apply(map[string]Spec{"pause": spec("z")})
+	defer restore()
+
+	if got := VisualModeHints()[1].Help().Key; got != "z/r/x" {
+		t.Errorf("after rebinding pause to z the bar teaches %q, want %q", got, "z/r/x")
+	}
 }

@@ -379,39 +379,78 @@ var GlobalKeyStringsMap = func() map[string]KeyName {
 	return m
 }()
 
-// The mode hint tables are the modal gesture vocabularies the bar teaches
-// while a mode owns the keyboard (filter / hint / multi-select). They are part
-// of the registry — the bar's reverse drift guard walks them — but never enter
-// dispatch: each mode's handler routes its own keys, and a label here may be a
-// range ("a–z") or a compound ("p/r/x") that no single dispatch string could
-// carry. Order within each table is deliberate: actions first, so a narrow
-// terminal's truncation drops the tail cue, never the verbs.
-var (
-	// FilterModeHints teaches the incremental-filter bar (StateFilter).
-	FilterModeHints = []key.Binding{
+// The mode hint tables are the modal gesture vocabularies the bar teaches while
+// a mode owns the keyboard (filter / hint / multi-select / diff-comment). They
+// are part of the registry — the bar's reverse drift guard walks them — but never
+// enter dispatch: each mode's handler routes its own keys, and a label here may
+// be a range ("a–z") that no single dispatch string could carry.
+//
+// Functions rather than vars, for the reason HelpGroups is: the modes resolve
+// their lifecycle and movement keys through GlobalKeyStringsMap, so a rebind
+// moves what the mode does — and a table frozen at package-init time would go on
+// teaching the old letters. That is not hypothetical: multi-select's label was
+// the literal "p/r/x" while its handler looked pause and resume up in the
+// registry, so rebinding pause left the bar advertising a key that did nothing.
+//
+// Order within each table is deliberate: actions first, so a narrow terminal's
+// truncation drops the tail cue, never the verbs.
+
+// FilterModeHints teaches the incremental-filter bar (StateFilter). Its two keys
+// are reserved, so they need no lookup.
+func FilterModeHints() []key.Binding {
+	return []key.Binding{
 		key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "accept")),
 		key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "clear")),
 	}
-	// HintModeHints teaches hint (fingers) mode's three gestures (StateHints).
-	HintModeHints = []key.Binding{
+}
+
+// HintModeHints teaches hint (fingers) mode's three gestures (StateHints). The
+// two ranges are hints/assign.go's alphabet, not keymap actions.
+func HintModeHints() []key.Binding {
+	return []key.Binding{
 		key.NewBinding(key.WithHelp("a–z", "copy")),
 		key.NewBinding(key.WithHelp("A–Z", "copy + open")),
 		key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "cancel")),
 	}
-	// VisualModeHints teaches multi-select mode's mark/act/exit gestures
-	// (StateVisual).
-	VisualModeHints = []key.Binding{
-		key.NewBinding(key.WithKeys("space"), key.WithHelp("space", "mark")),
-		key.NewBinding(key.WithKeys("p", "r", "x"), key.WithHelp("p/r/x", "pause/resume/kill marked")),
+}
+
+// VisualModeHints teaches multi-select mode's mark/act/exit gestures
+// (StateVisual).
+//
+// x is a literal because it is the mode's own key: handleMultiSelectState
+// answers it before the dispatch lookup, so no Registry entry owns it and no
+// override moves it. pause and resume are looked up, because they are.
+func VisualModeHints() []key.Binding {
+	marked := PrimaryKey(KeyPause) + "/" + PrimaryKey(KeyResume) + "/x"
+	return []key.Binding{
+		key.NewBinding(key.WithKeys(PrimaryKey(KeyToggleMark)),
+			key.WithHelp(LabelOf(KeyToggleMark), "mark")),
+		key.NewBinding(key.WithKeys(PrimaryKey(KeyPause), PrimaryKey(KeyResume), "x"),
+			key.WithHelp(marked, "pause/resume/kill marked")),
 		key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "exit")),
 	}
-	// DiffCommentModeHints teaches diff-comment mode's move/comment/exit gestures
-	// (StateDiffComment): the line cursor steps code lines, enter composes the
-	// comment, esc leaves.
-	DiffCommentModeHints = []key.Binding{
-		key.NewBinding(key.WithHelp("↑↓/jk", "move")),
-		key.NewBinding(key.WithHelp("shift+↑↓/JK", "extend")),
+}
+
+// DiffCommentModeHints teaches diff-comment mode's move/comment/exit gestures
+// (StateDiffComment): the line cursor steps code lines, enter composes the
+// comment, esc leaves.
+//
+// The move and extend labels name the keys the handler actually resolves
+// (app/app_diffcomment.go). Extend also accepts the shift arrows as aliases; the
+// bar names the letter pair only, because a bar that lists every alias is a bar
+// that truncates on an 80-column terminal.
+func DiffCommentModeHints() []key.Binding {
+	move := Label(append(keysOf(KeyUp), keysOf(KeyDown)...))
+	extend := Label(append(keysOf(KeyMoveUp), keysOf(KeyMoveDown)...))
+	return []key.Binding{
+		key.NewBinding(key.WithHelp(move, "move")),
+		key.NewBinding(key.WithHelp(extend, "extend")),
 		key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "comment")),
 		key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "exit")),
 	}
-)
+}
+
+// keysOf is an action's bound key strings, empty when the user unbound it.
+func keysOf(name KeyName) []string {
+	return GlobalKeyBindings[name].Keys()
+}

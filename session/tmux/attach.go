@@ -48,7 +48,17 @@ var attachChords atomic.Pointer[attachChordSet]
 
 // attachChordSet is the pair, stored together so a read can never see a detach
 // byte from one keymap beside a kill byte from another.
-type attachChordSet struct{ detach, kill byte }
+//
+// killBound is separate from kill rather than encoded as a sentinel byte,
+// because every byte value is a real chord — 0 is ctrl+@ — so there is no value
+// left to mean "none". A user who unbinds the kill action must stop being able
+// to tear a session down from inside its own pane, which a sentinel would get
+// exactly backwards on the one byte it picked.
+type attachChordSet struct {
+	detach    byte
+	kill      byte
+	killBound bool
+}
 
 // SetAttachChords installs the bytes this layer detaches and kills on, derived
 // from the applied keymap. Call it once at startup, after keys.Apply.
@@ -56,16 +66,16 @@ type attachChordSet struct{ detach, kill byte }
 // The caller does the chord → byte conversion (keys.ControlByte), because
 // refusing an unencodable chord is a validation decision that belongs with the
 // rest of them: by the time a byte arrives here there is nothing left to reject.
-func SetAttachChords(detach, kill byte) {
-	attachChords.Store(&attachChordSet{detach: detach, kill: kill})
+func SetAttachChords(detach, kill byte, killBound bool) {
+	attachChords.Store(&attachChordSet{detach: detach, kill: kill, killBound: killBound})
 }
 
 // AttachChords reports the bytes this layer currently detaches and kills on. The
 // read side of SetAttachChords, for anything that has to state what the attach
 // layer will actually honor rather than assume the defaults.
-func AttachChords() (detach, kill byte) {
+func AttachChords() (detach, kill byte, killBound bool) {
 	c := chords()
-	return c.detach, c.kill
+	return c.detach, c.kill, c.killBound
 }
 
 // chords returns the effective bytes, falling back to the defaults when nothing
@@ -74,7 +84,7 @@ func chords() attachChordSet {
 	if c := attachChords.Load(); c != nil {
 		return *c
 	}
-	return attachChordSet{detach: ctrlQ, kill: ctrlX}
+	return attachChordSet{detach: ctrlQ, kill: ctrlX, killBound: true}
 }
 
 // classifyAttachInput decides what a single stdin read means while attached.
@@ -90,7 +100,10 @@ func classifyAttachInput(in []byte, allowKill bool) attachInputAction {
 		case c.detach:
 			return attachDetach
 		case c.kill:
-			if allowKill {
+			// killBound as well as allowKill: the first is whether the user still
+			// has a kill key at all, the second whether this pane is one it may be
+			// used on (agent sessions, not the Terminal-tab shell).
+			if allowKill && c.killBound {
 				return attachKill
 			}
 		}

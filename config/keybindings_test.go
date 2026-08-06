@@ -103,3 +103,23 @@ func TestKeybindingOverrides_CarriesEveryShapeThrough(t *testing.T) {
 	assert.Nil(t, (&Config{}).KeybindingOverrides(), "no section means no overrides")
 	assert.Nil(t, (*Config)(nil).KeybindingOverrides(), "a nil config must not panic")
 }
+
+// A value Atrium could not parse must come back out of a save byte for byte.
+//
+// Without the raw bytes it re-marshalled as [], so the first settings keystroke
+// destroyed the line the user wrote — and turned the diagnostic from "value 5 is
+// neither a key…" into "no key given", which points at nothing.
+func TestKeySpec_MalformedValueSurvivesASaveVerbatim(t *testing.T) {
+	var cfg Config
+	require.NoError(t, json.Unmarshal([]byte(`{"keybindings":{"up":5,"new":"ctrl+n"}}`), &cfg))
+
+	back, err := json.Marshal(cfg.Keybindings)
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"up":5,"new":"ctrl+n"}`, string(back),
+		"a value Atrium cannot read must still be the value it writes back")
+
+	var again map[string]KeySpec
+	require.NoError(t, json.Unmarshal(back, &again))
+	assert.NotEmpty(t, again["up"].Malformed,
+		"and must still be diagnosable after the round trip")
+}
