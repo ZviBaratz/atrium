@@ -879,7 +879,13 @@ with no number to show with it.
 
 Pausing stops it, because pausing removes the worktree the server is running in. Resuming
 starts it again, on the same port — the number is kept across a pause precisely so that
-nothing renumbers underneath a browser tab you left open.
+nothing renumbers underneath a browser tab you left open. Renaming a session leaves the
+server alone: it keeps the tmux name it was started under, so it stays attachable and
+stays torn down with the session.
+
+A **direct** (non-git) session never hosts one, for the same reason it never runs
+`setup_script`: its directory is your own checkout, and a second dev server writing over
+the build you are already running there is not Atrium's to start.
 
 One thing to know: if the command exits on its own — a crash, a typo, a port that turned
 out to be taken — its tmux session goes with it, and so does its output. A command that

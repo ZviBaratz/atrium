@@ -51,6 +51,12 @@ func runInstance(t *testing.T, entry config.RepoScript) (*Instance, *fakeTmux) {
 		Title: "runner", status: Running, started: true,
 		gitWorktree: wt, tmuxSession: ts, tmuxName: "runner",
 	}
+	// The port is allocated where the worktree is materialized, which in production is
+	// Start/Resume and here is this call. StartRunCommand deliberately does NOT reserve
+	// one — it reads the config, it does not reconcile port state — so a fixture that
+	// skipped this would be testing a session that production never produces.
+	inst.RunSetupScript(inst.WorkingDir())
+	t.Cleanup(func() { inst.releasePort() })
 	return inst, fake
 }
 
@@ -107,6 +113,48 @@ func TestStartRunCommand_RefusesACommandThatExitsImmediately(t *testing.T) {
 	assert.Contains(t, err.Error(), "not-a-real-binary", "the report quotes what was run")
 	assert.False(t, inst.RunLive(), "and must not claim a server that is not there")
 	assert.False(t, inst.RunWanted(), "nor arm a resume to bring one back")
+}
+
+// The `_run` name is reserved against titles created or renamed from now on, but a fleet
+// that predates the feature can already hold a session whose own qualified tmux name IS
+// `<us>_run` — a session titled "foo.run" sanitizes to exactly that. Nothing this session
+// has started may be assumed to live there, so a teardown must not touch it and a start
+// must refuse rather than adopt it.
+func TestRunCommand_NeverTouchesASessionItDoesNotOwn(t *testing.T) {
+	inst, fake := runInstance(t, config.RepoScript{Name: "any", RunCommand: "serve"})
+	require.Empty(t, inst.RunSessionName(), "this session has never hosted one")
+	// A stranger is already sitting on the name a first start would mint.
+	fake.adopt()
+
+	// Teardown leaves it alone: there is nothing owned to tear down.
+	require.NoError(t, inst.StopRunCommand())
+	assert.True(t, fake.sessionExists(), "another session's agent must survive our teardown")
+	require.NoError(t, inst.Kill())
+	assert.True(t, fake.sessionExists(), "a kill must not take a session it never created")
+
+	// And a start refuses rather than attaching to it.
+	err := inst.StartRunCommand()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "already exists")
+	assert.False(t, inst.RunLive())
+}
+
+// The run session's name is OWNED, not derived, so a deep rename cannot strand it. A
+// derived name stopped resolving the moment the agent session was renamed, leaving the
+// dev server running, unkillable, and still bound to a port the next session was handed.
+func TestRunCommand_SurvivesARenameOfTheAgentSession(t *testing.T) {
+	inst, fake := runInstance(t, config.RepoScript{Name: "any", RunCommand: "serve"})
+	require.NoError(t, inst.StartRunCommand())
+	owned := inst.RunSessionName()
+	require.Equal(t, "runner_run", owned)
+
+	// What AdoptRename does to the identity: a new title and a new tmux name.
+	inst.AdoptRename(RenamedIdentity{Title: "webui", Branch: inst.Branch, TmuxName: "webui"})
+
+	assert.Equal(t, owned, inst.RunSessionName(),
+		"the server keeps the name it was started under, not one derived from the new title")
+	require.NoError(t, inst.StopRunCommand())
+	assert.False(t, fake.sessionExists(), "and is therefore still reachable by the teardown")
 }
 
 // A repo that declares no run command refuses by name, rather than launching a session
@@ -180,26 +228,29 @@ func TestKill_ClosesTheRunSession(t *testing.T) {
 	assert.False(t, fake.sessionExists(), "the dev server must not outlive the session it belongs to")
 }
 
-// A probe that finds the session gone clears the wanted flag as well as the live one.
-// Without that a crashed server leaves the session probing for it forever, and a resume
-// restarting a server nobody asked to have back.
-func TestApplyRunState_ADeadProbeForgetsTheServer(t *testing.T) {
+// A probe that finds the session gone clears the LIVE flag and nothing else. The wanted
+// flag is the user's intent — they pressed the key — and a probe is in no position to
+// revoke it: pause stops the server seconds before it flips the session to Paused, so a
+// probe landing in that window used to convert "restart this on resume" into "never
+// wanted", and the resume brought nothing back.
+func TestApplyRunState_ADeadProbeClearsLivenessButKeepsIntent(t *testing.T) {
 	inst, _ := runInstance(t, config.RepoScript{Name: "any", RunCommand: "serve"})
 	require.NoError(t, inst.StartRunCommand())
 
-	inst.ApplyRunState(RunState{LiveKnown: true, Live: false})
+	dead := inst.ComputeRunState()
+	dead.Live, dead.LiveKnown = false, true
+	inst.ApplyRunState(dead)
 
 	assert.False(t, inst.RunLive())
-	assert.False(t, inst.RunWanted(), "a server that died is not one to bring back")
+	assert.True(t, inst.RunWanted(), "the user asked for a server; only they unask")
 }
 
 // A tick that answered neither question must not erase the answers an earlier one gave.
-// Both questions are skipped on most ticks — the config answer is memoized, the probe is
-// only run for a session that started a server — so a zero RunState is the common case.
+// A light tick polls only the selected session, so a zero RunState is the common case.
 func TestApplyRunState_AnEmptyObservationChangesNothing(t *testing.T) {
 	inst, _ := runInstance(t, config.RepoScript{Name: "any", RunCommand: "serve"})
 	require.NoError(t, inst.StartRunCommand())
-	inst.ApplyRunState(RunState{Configured: true, ConfiguredKnown: true})
+	inst.ApplyRunState(inst.ComputeRunState())
 
 	inst.ApplyRunState(RunState{})
 
@@ -208,18 +259,45 @@ func TestApplyRunState_AnEmptyObservationChangesNothing(t *testing.T) {
 	assert.False(t, inst.RunCommandUnavailable())
 }
 
-// The configured answer is asked once and then memoized, which is what keeps a repo with
-// no repo_scripts from paying a git fork per session per tick.
-func TestComputeRunState_AsksTheConfigOnceAndThenSaysNothing(t *testing.T) {
+// An observation taken before a local write is discarded whole. The metadata sweep waits
+// on its slowest member, so a batch can land long after the keypress it predates —
+// re-asserting a server the user has just stopped, permanently, because the probe that
+// would correct it only runs while the session wants one.
+func TestApplyRunState_DiscardsAnObservationOlderThanTheLastWrite(t *testing.T) {
 	inst, _ := runInstance(t, config.RepoScript{Name: "any", RunCommand: "serve"})
+	require.NoError(t, inst.StartRunCommand())
+
+	// Taken while the server was up, and still in flight when the user pressed stop.
+	inFlight := inst.ComputeRunState()
+	require.True(t, inFlight.Live)
+	require.NoError(t, inst.StopRunCommand())
+
+	inst.ApplyRunState(inFlight)
+
+	assert.False(t, inst.RunLive(), "a stale batch must not resurrect a stopped server")
+	assert.False(t, inst.RunWanted())
+}
+
+// The configured answer is re-resolved on every observation, so a config edit that adds a
+// run_command reaches a running session. Memoizing it for the process left the `d` key
+// permanently refusing for any session whose first tick answered "no" — including one
+// whose first tick simply raced a config save.
+func TestComputeRunState_ReResolvesTheConfigSoAnEditLands(t *testing.T) {
+	inst, _ := runInstance(t, config.RepoScript{Name: "any", SetupScript: "true"})
 
 	first := inst.ComputeRunState()
 	require.True(t, first.ConfiguredKnown)
-	assert.True(t, first.Configured)
+	require.False(t, first.Configured)
 	inst.ApplyRunState(first)
+	require.True(t, inst.RunCommandUnavailable())
 
-	assert.False(t, inst.ComputeRunState().ConfiguredKnown,
-		"a second tick must not re-resolve the config")
+	installRepoScript(t, config.RepoScript{Name: "any", RunCommand: "serve"})
+
+	second := inst.ComputeRunState()
+	require.True(t, second.ConfiguredKnown, "a later tick must ask again")
+	assert.True(t, second.Configured)
+	inst.ApplyRunState(second)
+	assert.False(t, inst.RunCommandUnavailable(), "the key must come back to life without a restart")
 }
 
 // RunCommandUnavailable is "known to have none", not "not known to have one". The
@@ -236,19 +314,24 @@ func TestRunCommandUnavailable_IsSilentUntilTheConfigHasBeenRead(t *testing.T) {
 	assert.False(t, inst.RunConfigured())
 }
 
-// The persisted half round-trips, so a restarted Atrium knows to look for the server
-// that is still running on the socket.
-func TestInstanceData_RoundTripsTheRunStartedFlag(t *testing.T) {
+// Both persisted halves round-trip: the flag, so a restarted Atrium knows to look for a
+// server still on the socket, and the NAME, so it looks under the one the server was
+// actually started with rather than one re-derived from a title that may have changed.
+func TestInstanceData_RoundTripsTheRunCommandState(t *testing.T) {
 	dir := t.TempDir()
 	require.NoError(t, os.MkdirAll(filepath.Join(dir, ".git"), 0o755))
 	inst, err := NewInstance(InstanceOptions{Title: "web", Path: dir, Program: "echo"})
 	require.NoError(t, err)
-	inst.setRunWanted(true)
+	inst.mu.Lock()
+	inst.runWanted, inst.runName = true, "atrium_grp_web_run"
+	inst.mu.Unlock()
 
 	data := inst.ToInstanceData()
 	require.True(t, data.RunStarted)
+	require.Equal(t, "atrium_grp_web_run", data.RunSession)
 
 	restored, err := FromInstanceData(context.Background(), data, "zvi/")
 	require.NoError(t, err)
 	assert.True(t, restored.RunWanted())
+	assert.Equal(t, "atrium_grp_web_run", restored.RunSessionName())
 }

@@ -13,9 +13,18 @@ package session
 // agent's own. session/tmux/pane.go says why: capture-pane and send-keys resolve to a
 // session's ACTIVE pane, and paneTarget() falls back to the session name when pane-id
 // resolution fails — so a second window in the agent's session is a pane the poll can
-// read by mistake and, through the autoyes daemon, TYPE INTO by mistake. The terminal
-// tab already solved this the same way with `_term` (ui/terminal.go), and `_run` copies
-// it: same derivation, same collision guards, same prefix sweep in CleanupSessions.
+// read by mistake and, through the autoyes daemon, TYPE INTO by mistake. The terminal tab
+// already solved this the same way with `_term` (ui/terminal.go): same suffix convention,
+// same collision guards, same prefix sweep in CleanupSessions.
+//
+// The name is MINTED from that convention and then OWNED — persisted on the instance, not
+// re-derived on each use. Deriving it is wrong twice over, and both cost a running
+// server. A deep rename moves the agent's session and leaves the sibling where it is, so
+// the derived name stops resolving and the dev server is orphaned, still holding its
+// port. And an empty owned name is the only thing that distinguishes "we host one" from
+// "something else happens to sit on the name we would mint" — a pre-existing session
+// titled "foo.run" sanitizes to exactly session "foo"'s run-session name, and a teardown
+// that trusted the derivation would kill that user's live agent.
 //
 // Three lifecycle rules, each for its own reason:
 //
@@ -66,10 +75,22 @@ var runSettleDelay = 500 * time.Millisecond
 // without a tmux server to do it to.
 var newRunSession = tmux.NewSessionWithName
 
-// runSessionName is the tmux name of this session's run command, or "" when the instance
-// has no tmux name yet — an instance built but never started, which has nothing to
-// derive from and nothing to host.
-func (i *Instance) runSessionName() string {
+// RunSessionName is the tmux name of the run command this session OWNS, or "" when it has
+// never started one. See Instance.runName for why it is stored rather than derived.
+func (i *Instance) RunSessionName() string {
+	i.mu.RLock()
+	defer i.mu.RUnlock()
+	return i.runName
+}
+
+// mintRunSessionName is the name a first start would claim: the session's own tmux name
+// plus the reserved suffix. "" when the instance has no tmux name yet — built but never
+// started, so there is nothing to derive from and nothing to host.
+//
+// Only ever consulted by a start, and only when this session owns no run session already.
+// Every other caller reads RunSessionName, which is why a rename cannot strand a running
+// server: the name it was started under is the name it is torn down under.
+func (i *Instance) mintRunSessionName() string {
 	name := i.TmuxSessionName()
 	if name == "" {
 		return ""
@@ -77,33 +98,69 @@ func (i *Instance) runSessionName() string {
 	return name + runSessionSuffix
 }
 
-// runTmux returns the tmux Session for this instance's run command, building and caching
-// it on first use.
+// ownedRunTmux returns the cached Session for the run command this session owns, or nil.
 //
-// Cached, unlike the throwaway Sessions a probe could get away with, because Close is
-// what releases the attach pty Start opened: a Session dropped after Start leaks that
-// pty for the life of the process. program is used only when the object is built — a
-// later call with a different one reuses what is there, which is right, since the only
-// caller that has a real program is the one that is about to Start it.
-func (i *Instance) runTmux(program string) *tmux.Session {
-	name := i.runSessionName()
-	if name == "" {
-		return nil
-	}
-	i.mu.Lock()
-	defer i.mu.Unlock()
-	if i.runSession == nil {
-		i.runSession = newRunSession(i.baseContext(), name, "run: "+i.Title, program)
-	}
+// Cached rather than rebuilt because Close is what releases the attach pty Start opened:
+// a Session dropped without it leaks that pty and its `tmux attach-session` client, and
+// enough of those exhaust the process's descriptors.
+func (i *Instance) ownedRunTmux() *tmux.Session {
+	i.mu.RLock()
+	defer i.mu.RUnlock()
 	return i.runSession
 }
 
-// dropRunTmux forgets the cached run Session, so the next use rebuilds it. Called where
-// the tmux session it points at is gone for good.
-func (i *Instance) dropRunTmux() {
+// probeRunTmux builds a THROWAWAY Session for a has-session or a kill against name.
+//
+// Deliberately never cached. Neither operation opens a pty, so there is nothing to leak;
+// and a cached probe object carries runProbeProgram, which a later Start would reuse —
+// launching a bare `sh` under the dev server's name and reporting it as running. Keeping
+// the probe out of the cache is what makes "the cached Session is one we started" true
+// rather than merely usually true.
+func (i *Instance) probeRunTmux(name string) *tmux.Session {
+	if name == "" {
+		return nil
+	}
+	return newRunSession(i.baseContext(), name, "run: "+i.Title, runProbeProgram)
+}
+
+// runSessionExists answers the has-session for the run command this session owns.
+func (i *Instance) runSessionExists() bool {
+	name := i.RunSessionName()
+	if name == "" {
+		return false
+	}
+	if ts := i.ownedRunTmux(); ts != nil {
+		return ts.DoesSessionExist()
+	}
+	return i.probeRunTmux(name).DoesSessionExist()
+}
+
+// releaseRunTmux closes the cached Session — releasing its attach pty and, with it, the
+// client process — and forgets both it and the owned name.
+//
+// Close rather than a bare drop, on every path where the run session is gone for good.
+// tmux's kill-session against an already-dead session is the teardown goal already met
+// (sessionAlreadyGone), so this is safe to call on a command that exited on its own; what
+// it must not do is skip the pty, which is exactly how a user retrying a broken
+// run_command accumulated descriptors until unrelated launches failed with "error opening
+// PTY".
+func (i *Instance) releaseRunTmux() error {
 	i.mu.Lock()
-	i.runSession = nil
+	ts, name := i.runSession, i.runName
+	i.runSession, i.runName = nil, ""
+	i.runGen++
 	i.mu.Unlock()
+
+	if ts == nil {
+		if name == "" {
+			return nil
+		}
+		ts = i.probeRunTmux(name)
+		if !ts.DoesSessionExist() {
+			return nil
+		}
+	}
+	return ts.Close()
 }
 
 // StartRunCommand launches the repo's run_command in this session's `_run` tmux session,
@@ -115,8 +172,14 @@ func (i *Instance) StartRunCommand() error {
 	if i.Paused() {
 		return fmt.Errorf("%q is paused — resume it before starting its run command", i.DisplayName())
 	}
-	name := i.runSessionName()
-	if name == "" {
+	// A direct session's working directory IS the user's own checkout, which is the same
+	// reason the setup script refuses one (see setupscript.go): starting a dev server
+	// there means a second one writing over the build the user is already running, in a
+	// tree Atrium does not own and cannot roll back.
+	if i.IsDirect() {
+		return fmt.Errorf("%q is a direct session — its directory is your own checkout, not an isolated worktree, so Atrium will not start a server in it", i.DisplayName())
+	}
+	if i.TmuxSessionName() == "" {
 		return fmt.Errorf("%q has not started yet", i.DisplayName())
 	}
 	dir := i.WorkingDir()
@@ -124,43 +187,55 @@ func (i *Instance) StartRunCommand() error {
 		return fmt.Errorf("%q has no working directory to run in", i.DisplayName())
 	}
 
-	run, ok := i.resolveSetupRun(dir)
+	// resolveRunOnly, never resolveSetupRun: this reads the config, and must not
+	// reconcile the managed port on its way to doing so.
+	run, ok := i.resolveRunOnly(dir)
 	if !ok || run.run == "" {
 		return fmt.Errorf("no run_command is configured for this repository — add one to a repo_scripts entry in config.json")
 	}
 
-	ts := i.runTmux(run.run)
+	// Adopt a run session this instance already owns, before considering a fresh one.
+	if ts := i.adoptOwnedRunSession(); ts != nil {
+		i.noteRunStarted()
+		return nil
+	}
+
+	name := i.RunSessionName()
+	if name == "" {
+		// Nothing owned, so this is a first start and the name has to be claimed. A
+		// session already sitting on it is NOT ours — this instance has never started
+		// one — so it belongs to somebody else, and the only safe move is to say so.
+		// Killing it or attaching to it would, for a pre-existing session titled
+		// "foo.run", mean tearing down or reporting on another agent's live pane.
+		name = i.mintRunSessionName()
+		if name == "" {
+			return fmt.Errorf("%q has not started yet", i.DisplayName())
+		}
+		if i.probeRunTmux(name).DoesSessionExist() {
+			return fmt.Errorf("cannot host the run command for %q: a tmux session named %q already exists and is not this session's — rename one of them",
+				i.DisplayName(), name)
+		}
+	}
+
+	ts := newRunSession(i.baseContext(), name, "run: "+i.Title, run.run)
 	// The command's own environment, on the same `new-session -e` channel the agent's
 	// pane uses: $ATRIUM_PORT plus the repo's session_env. It has to be set before the
 	// launch, because a tmux session's environment can only be set as it is born — the
 	// whole reason session_env exists rather than the server's own env.
 	ts.SetSessionEnv(run.sessionEnv)
 
-	if ts.DoesSessionExist() {
-		// Already up — from an earlier press, or from the Atrium that ran before this
-		// one. Re-attach rather than relaunch: a second server on the same port is
-		// exactly what the managed port exists to prevent, and the running one is the
-		// one the user's browser is pointed at.
-		if err := ts.Restore(); err == nil {
-			i.setRunWanted(true)
-			i.SetRunLive(true)
-			return nil
-		}
-		// It exists but cannot be attached to — wedged. Kill it and start clean, the
-		// same recovery the terminal pane makes for its own shell.
-		if err := ts.Close(); err != nil {
-			log.WarningLog.Printf("run command for %q: failed to close a wedged session: %v", i.Title, err)
-		}
-		i.dropRunTmux()
-		ts = i.runTmux(run.run)
-		ts.SetSessionEnv(run.sessionEnv)
-	}
-
 	if err := ts.Start(dir); err != nil {
 		// Say what was run — the user's own template, not a stack of tmux wrapping.
-		i.dropRunTmux()
+		// Close first: Start may have opened a pty before failing.
+		_ = ts.Close()
 		return fmt.Errorf("run command for %q did not start (%s): %w", i.DisplayName(), run.run, err)
 	}
+
+	// Own it from here on, so every teardown path can find it even if the start below is
+	// judged a failure — a session that exists is one somebody has to be able to kill.
+	i.mu.Lock()
+	i.runSession, i.runName = ts, name
+	i.mu.Unlock()
 
 	// Start returning nil is NOT enough to claim the command is running, and this was a
 	// live-drive finding rather than a theoretical one: a command that cannot run at all
@@ -176,39 +251,88 @@ func (i *Instance) StartRunCommand() error {
 		time.Sleep(runSettleDelay)
 	}
 	if !ts.DoesSessionExist() {
-		i.dropRunTmux()
+		// releaseRunTmux, not a bare drop: Start's Restore left an attach pty open.
+		_ = i.releaseRunTmux()
 		return fmt.Errorf("run command for %q exited immediately (%s) — run it in the terminal tab to see why",
 			i.DisplayName(), run.run)
 	}
 
-	i.setRunWanted(true)
-	i.SetRunLive(true)
+	i.noteRunStarted()
 	return nil
+}
+
+// adoptOwnedRunSession re-attaches to a run session this instance already owns and
+// returns it, or nil when there is nothing of ours up.
+//
+// Adopting rather than relaunching is what keeps a restart from starting a second server
+// on a port the first is still bound to — the collision the managed port exists to
+// prevent, reached by way of "helpfully" restarting. It is gated on OWNERSHIP: only a
+// name this instance minted and persisted can be adopted, so a session that merely
+// occupies the derived name is never attached to.
+func (i *Instance) adoptOwnedRunSession() *tmux.Session {
+	name := i.RunSessionName()
+	if name == "" {
+		return nil
+	}
+	ts := i.ownedRunTmux()
+	if ts == nil {
+		// Owned across a restart: the tmux session outlived the Atrium that made it, so
+		// rebuild the object. The program is the placeholder — the process is already
+		// running and nothing here will Start it.
+		ts = i.probeRunTmux(name)
+	}
+	if !ts.DoesSessionExist() {
+		// Owned but gone — it died while we were not looking. Release rather than return
+		// bare: a cached object here holds the attach pty this process opened, and the
+		// caller is about to overwrite the field with a fresh Session, which would drop
+		// that pty on the floor.
+		_ = i.releaseRunTmux()
+		return nil
+	}
+	if err := ts.Restore(); err != nil {
+		// Up but unattachable — wedged. Kill it and let the caller start clean, the same
+		// recovery the terminal pane makes for its own shell.
+		log.WarningLog.Printf("run command for %q: session %q is wedged, recreating: %v", i.Title, name, err)
+		_ = i.releaseRunTmux()
+		return nil
+	}
+	i.mu.Lock()
+	i.runSession, i.runName = ts, name
+	i.mu.Unlock()
+	return ts
+}
+
+// noteRunStarted records a successful start or adoption as one local write.
+func (i *Instance) noteRunStarted() {
+	i.mu.Lock()
+	i.runWanted, i.runLive = true, true
+	i.runGen++
+	i.mu.Unlock()
 }
 
 // StopRunCommand kills the run session, and is a no-op when there is none. It clears the
 // wanted flag: this is the user saying stop, so a later resume must not bring it back.
 func (i *Instance) StopRunCommand() error {
-	i.setRunWanted(false)
+	i.mu.Lock()
+	i.runWanted, i.runLive = false, false
+	i.runGen++
+	i.mu.Unlock()
 	return i.closeRunSession()
 }
 
-// closeRunSession tears the run session down WITHOUT touching the wanted flag. It is the
+// closeRunSession tears the run session down WITHOUT clearing the wanted flag. It is the
 // half pause needs: the server has to stop because its worktree is about to be deleted,
 // but the fact that the user wanted one has to survive so resume can restart it.
+//
+// It does clear the OWNED NAME (releaseRunTmux does), which is right in both cases: the
+// tmux session is gone, so nothing is left to own, and a resume mints a fresh name from
+// whatever the session is called by then.
 func (i *Instance) closeRunSession() error {
-	i.SetRunLive(false)
-	if i.runSessionName() == "" {
-		return nil
-	}
-	ts := i.runTmux(runProbeProgram)
-	if ts == nil || !ts.DoesSessionExist() {
-		i.dropRunTmux()
-		return nil
-	}
-	err := ts.Close()
-	i.dropRunTmux()
-	if err != nil {
+	i.mu.Lock()
+	i.runLive = false
+	i.runGen++
+	i.mu.Unlock()
+	if err := i.releaseRunTmux(); err != nil {
 		return fmt.Errorf("failed to stop the run command for %q: %w", i.DisplayName(), err)
 	}
 	return nil
@@ -243,14 +367,19 @@ func (i *Instance) resumeRunCommand() {
 // its repository declares one at all, and whether one is running.
 //
 // The two *Known flags are what let a tick say nothing rather than say "no". Neither
-// question is asked every tick — the first is memoized, the second is skipped for a
-// session that has never started a server — so a zero value must not be applied as an
-// observation, or every skipped tick would erase the last real one.
+// question is asked every tick — a light tick polls only the selected session, and the
+// probe is skipped for a session that has never started a server — so a zero value must
+// not be applied as an observation, or every skipped tick would erase the last real one.
 type RunState struct {
 	Configured      bool
 	ConfiguredKnown bool
 	Live            bool
 	LiveKnown       bool
+	// gen is the instance's run-state generation when this observation was taken. Every
+	// local write (start, stop, pause) bumps it, so ApplyRunState can tell an
+	// observation that describes the current state from one taken before a keypress it
+	// knows nothing about. Unexported: only the Compute/Apply pair may set or read it.
+	gen uint64
 }
 
 // ComputeRunState is the poll-goroutine half of the run-command refresh, paired with
@@ -265,66 +394,87 @@ type RunState struct {
 // Both halves are priced to cost nothing for the vast majority of sessions, whose config
 // has no repo_scripts at all:
 //
-//   - "configured" is answered once per process — a second tick sees ConfiguredKnown and
-//     skips — and its first answer early-outs on an empty repo_scripts before forking git
-//     (GetRemoteURL is an uncached fork). A config edit that adds a run_command therefore
-//     reaches the hint bar at the next resume or restart; the key itself re-resolves the
-//     config on every press, so the action is never stale, only its advertisement.
+//   - "configured" is re-resolved every time this runs, so a config edit that adds a
+//     run_command reaches the hint bar within a sweep. It is affordable because the
+//     expensive half is memoized elsewhere: an empty repo_scripts early-outs before
+//     anything forks, and the origin remote — the one subprocess — is remembered per
+//     instance (originRemote). What is left is one small JSON read per polled session.
+//     It is deliberately NOT memoized here: the answer gates the `d` key, and a memo that
+//     never expired left the key permanently dead for any session whose first tick
+//     happened to answer "no".
 //   - "live" is one has-session, and only for a session that has actually started a run
 //     command. A session that never has never probes.
 func (i *Instance) ComputeRunState() (r RunState) {
 	if i.Paused() || !i.Started() {
 		return
 	}
+	// Read before the probes, so a local write that lands DURING them is detected as
+	// making this observation stale rather than being overwritten by it.
 	i.mu.RLock()
-	known := i.runConfiguredKnown
+	r.gen = i.runGen
 	i.mu.RUnlock()
-	if !known {
-		r.ConfiguredKnown = true
-		if dir := i.WorkingDir(); dir != "" {
-			if compiled, _, ok := i.routeRepoScript(dir); ok {
-				r.Configured = compiled.HasRunCommand()
-			}
+
+	r.ConfiguredKnown = true
+	if dir := i.WorkingDir(); dir != "" && !i.IsDirect() {
+		if compiled, _, ok := i.routeRepoScript(dir); ok {
+			r.Configured = compiled.HasRunCommand()
 		}
 	}
 	if i.RunWanted() {
 		r.LiveKnown = true
-		ts := i.runTmux(runProbeProgram)
-		r.Live = ts != nil && ts.DoesSessionExist()
+		r.Live = i.runSessionExists()
 	}
 	return r
 }
 
 // ApplyRunState lands one tick's observation. Main thread only.
 //
-// A probe that finds the session gone clears the WANTED flag too, not just the live one.
-// That is the self-correction the whole arrangement rests on: a server that crashed, or
-// was killed from outside, otherwise leaves a session probing for it forever and a
-// resume restarting a server the user never asked to have back.
+// A probe reports LIVENESS and nothing else — see the body for why it may not revoke the
+// user's intent. A dead one does release the tmux object, so the next start builds a
+// fresh Session rather than reusing a handle to something that is gone.
+//
+// A STALE observation is discarded whole. The metadata sweep fans out and then waits on
+// its slowest member, so an observation can be minutes older than the keypress it lands
+// after; applying one unconditionally let a batch taken before a stop re-assert a dead
+// server on the row, indefinitely. The generation makes "older than the current state"
+// answerable rather than guessed at.
 func (i *Instance) ApplyRunState(r RunState) {
+	if !r.ConfiguredKnown && !r.LiveKnown {
+		return
+	}
 	i.mu.Lock()
+	if r.gen != i.runGen {
+		i.mu.Unlock()
+		return
+	}
 	if r.ConfiguredKnown {
 		i.runConfigured, i.runConfiguredKnown = r.Configured, true
 	}
+	drop := false
 	if r.LiveKnown {
 		i.runLive = r.Live
+		// Only liveness. The WANTED flag is the user's intent — they pressed `d` — and a
+		// probe is in no position to revoke it. It used to: a probe that found the
+		// session gone cleared both, which meant a poll landing in the seconds a pause
+		// spends committing and removing the worktree (pause stops the server first, and
+		// only reaches SetStatus(Paused) at the end) silently converted "restart this on
+		// resume" into "the user never wanted one", and the resume brought nothing back.
+		//
+		// Keeping it costs one has-session per full sweep for a session whose server
+		// died, and buys a state that means what it says: wanted is intent, live is fact,
+		// and the row already renders the second.
 		if !r.Live {
-			i.runWanted = false
+			drop = true
 		}
 	}
-	drop := r.LiveKnown && !r.Live
 	i.mu.Unlock()
 	if drop {
-		i.dropRunTmux()
+		// releaseRunTmux, not a bare drop: the cached Session may hold the attach pty
+		// this process opened, and Close is the only thing that gives it back.
+		if err := i.releaseRunTmux(); err != nil {
+			log.WarningLog.Printf("run command for %q: %v", i.Title, err)
+		}
 	}
-}
-
-// SetRunLive records the run command's liveness directly, for the paths that know it
-// without probing: the start and stop actions, which have just made it true or false.
-func (i *Instance) SetRunLive(live bool) {
-	i.mu.Lock()
-	i.runLive = live
-	i.mu.Unlock()
 }
 
 // RunConfigured reports whether this session's repository is known to declare a run
@@ -366,10 +516,4 @@ func (i *Instance) RunWanted() bool {
 	i.mu.RLock()
 	defer i.mu.RUnlock()
 	return i.runWanted
-}
-
-func (i *Instance) setRunWanted(wanted bool) {
-	i.mu.Lock()
-	i.runWanted = wanted
-	i.mu.Unlock()
 }

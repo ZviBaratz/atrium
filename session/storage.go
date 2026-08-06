@@ -161,6 +161,17 @@ type InstanceData struct {
 	// the right answer. (Compare DiffStatsData.Unpushed, where the two genuinely differ.)
 	RunStarted bool `json:"run_command_started,omitempty"`
 
+	// RunSession is the tmux name of the sibling session hosting that run command, as
+	// this session MINTED it — not as it would be derived today.
+	//
+	// Persisting the name rather than re-deriving it is what survives a deep rename: the
+	// rename moves the agent's tmux session and leaves the `_run` sibling where it is, so
+	// a derived name stops resolving and the running dev server is orphaned — still bound
+	// to a port Atrium then hands to the next session. An empty value also carries real
+	// meaning, and the safety-critical half of it: this session has never hosted a run
+	// command, so nothing sitting on the name it WOULD mint is ours to attach to or kill.
+	RunSession string `json:"run_session,omitempty"`
+
 	Worktree  GitWorktreeData `json:"worktree"`
 	DiffStats DiffStatsData   `json:"diff_stats"`
 }

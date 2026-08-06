@@ -46,6 +46,12 @@ func (m *home) toggleRunCommand() (tea.Model, tea.Cmd) {
 	if selected.Paused() {
 		return m, m.handleInfoNotice("session is paused — press r to resume before starting its dev command")
 	}
+	// A direct session's directory is the user's own checkout, not an isolated worktree.
+	// Refused for the same reason the setup script is, and stated as a notice rather than
+	// an error because there is nothing here to fix.
+	if selected.IsDirect() {
+		return m, m.handleInfoNotice("direct sessions run in your own checkout — Atrium will not start a dev command there")
+	}
 	// The same predicate the palette dims this action on, so the two can never
 	// disagree about whether pressing it would do anything (TestPaletteGatesAgreeWith
 	// Dispatch pins that). It is deliberately "known to have none", not "not known to

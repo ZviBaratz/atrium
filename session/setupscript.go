@@ -207,6 +207,29 @@ func (i *Instance) resolveSetupRun(dir string) (setupRun, bool) {
 	// what this call decides (#389).
 	i.reservePort(compiled)
 
+	return i.renderSetupRun(compiled, repoPath, dir)
+}
+
+// resolveRunOnly is resolveSetupRun for a caller that only wants to READ the config: it
+// routes and renders, and touches no port.
+//
+// The split is not cosmetic. resolveSetupRun reconciles the managed port as a side
+// effect — reserving one the config now asks for, releasing one it no longer does — which
+// is correct where a worktree has just been materialized and wrong everywhere else. The
+// `d` key ran through it and so could hand a live session's port back to the allocator on
+// its way to reporting that no run_command is configured, while the pane's frozen
+// $ATRIUM_PORT and the server bound to it carried on.
+func (i *Instance) resolveRunOnly(dir string) (setupRun, bool) {
+	compiled, repoPath, ok := i.routeRepoScript(dir)
+	if !ok {
+		return setupRun{}, false
+	}
+	return i.renderSetupRun(compiled, repoPath, dir)
+}
+
+// renderSetupRun renders an already-routed entry against this session. Pure: no port, no
+// tmux, no process.
+func (i *Instance) renderSetupRun(compiled repocfg.Script, repoPath, dir string) (setupRun, bool) {
 	ctx := i.repoScriptCtx(dir, repoPath)
 	script, err := compiled.RenderSetup(ctx)
 	if err != nil {
@@ -215,10 +238,18 @@ func (i *Instance) resolveSetupRun(dir string) (setupRun, bool) {
 		log.ErrorLog.Printf("setup script for %q (repo_scripts entry %q) failed to render: %v", i.Title, compiled.Name, err)
 		return setupRun{}, false
 	}
+	// A run_command that will not render is reported, and then STEPPED OVER rather than
+	// failing the whole resolution. It is the one field here nothing else depends on: the
+	// setup script still has to run and the session environment still has to be injected,
+	// and validation cannot catch every case — repocfg renders each template once against
+	// a probe, so a placeholder inside a conditional the probe does not enter escapes to
+	// here. Failing outward would let a typo in an on-demand dev-server command silently
+	// leave every new session in that repo with an uninstalled worktree and no
+	// $ATRIUM_PORT, for a feature the user may never press.
 	runCmd, err := compiled.RenderRun(ctx)
 	if err != nil {
 		log.ErrorLog.Printf("run_command for %q (repo_scripts entry %q) failed to render: %v", i.Title, compiled.Name, err)
-		return setupRun{}, false
+		runCmd = ""
 	}
 	env, err := compiled.RenderEnv(ctx)
 	if err != nil {
@@ -280,7 +311,7 @@ func (i *Instance) routeRepoScript(dir string) (repocfg.Script, string, bool) {
 	if repoPath == "" {
 		repoPath = i.Path
 	}
-	entry, index, ok := cfg.ResolveRepoScript(git.GetRemoteURL(i.baseContext(), repoPath), repoPath)
+	entry, index, ok := cfg.ResolveRepoScript(i.originRemote(repoPath), repoPath)
 	if !ok {
 		return repocfg.Script{}, "", false
 	}
@@ -295,6 +326,32 @@ func (i *Instance) routeRepoScript(dir string) (repocfg.Script, string, bool) {
 		return repocfg.Script{}, "", false
 	}
 	return compiled, repoPath, true
+}
+
+// originRemote is the repository's origin remote URL, forked once per instance and then
+// remembered.
+//
+// Memoized because it is the only expensive half of routing — `git config --get
+// remote.origin.url` is an uncached subprocess (git.GetRemoteURL) — and because it cannot
+// go stale in a way that matters: a session's repo path is fixed at creation, and a user
+// who re-points origin mid-session is re-pointing the repository this session was made
+// from. The CONFIG half is deliberately not memoized with it, so an edit to repo_scripts
+// reaches a running session on the next poll rather than at the next restart.
+//
+// The empty answer is memoized too (a repo with no origin routes on its path alone), so a
+// non-git or remote-less session forks once rather than every sweep.
+func (i *Instance) originRemote(repoPath string) string {
+	i.mu.RLock()
+	url, known := i.originURL, i.originURLKnown
+	i.mu.RUnlock()
+	if known {
+		return url
+	}
+	url = git.GetRemoteURL(i.baseContext(), repoPath)
+	i.mu.Lock()
+	i.originURL, i.originURLKnown = url, true
+	i.mu.Unlock()
+	return url
 }
 
 // repoScriptCtx is the template and environment context for this session. dir is the

@@ -254,7 +254,7 @@ func hintsFor(instance *session.Instance) []keys.KeyName {
 // briefly rather than promising something that might refuse — and the cheatsheet and the
 // command palette carry the key regardless.
 func withRunHint(instance *session.Instance, base []keys.KeyName) []keys.KeyName {
-	if instance == nil || len(base) == 0 || instance.Paused() || !instance.RunConfigured() {
+	if instance == nil || len(base) == 0 || instance.Paused() || instance.IsDirect() || !instance.RunConfigured() {
 		return base
 	}
 	// Second from the end. Every set hintsFor can return closes on `?`, and the entry

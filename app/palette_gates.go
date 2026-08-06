@@ -211,6 +211,12 @@ var paletteGates = map[keys.KeyName]paletteGate{
 		if inst.RunLive() {
 			return ""
 		}
+		// A direct session runs in the user's own checkout, so it never hosts one — the
+		// same refusal setup_script makes, and checked before the config, since it holds
+		// however the repo is configured.
+		if inst.IsDirect() {
+			return directReason
+		}
 		if inst.Paused() {
 			return pausedWorktreeReason
 		}

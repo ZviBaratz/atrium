@@ -135,7 +135,7 @@ func TestRender_PortChipMarksARunningDevCommand(t *testing.T) {
 	require.Contains(t, idle, fmt.Sprintf(":%d", port))
 	assert.NotContains(t, idle, runGlyph, "an idle session's chip is the port alone")
 
-	inst.SetRunLive(true)
+	inst.ApplyRunState(session.RunState{Live: true, LiveKnown: true})
 	running := ansi.Strip(r.Render(inst, 0, false, false))
 
 	assert.Contains(t, running, runGlyph+fmt.Sprintf(":%d", port))
@@ -157,7 +157,7 @@ func TestRender_DevChipWithoutAManagedPort(t *testing.T) {
 	require.NotContains(t, ansi.Strip(r.Render(inst, 0, false, false)), "dev",
 		"a session with neither a port nor a server spends no columns on either")
 
-	inst.SetRunLive(true)
+	inst.ApplyRunState(session.RunState{Live: true, LiveKnown: true})
 
 	assert.Contains(t, ansi.Strip(r.Render(inst, 0, false, false)), runGlyph+"dev")
 }
@@ -185,7 +185,7 @@ func TestRender_RunningChipIsDroppedWhenTheRowCannotHoldIt(t *testing.T) {
 	}
 	require.NotZero(t, width, "the idle chip must fit at some width in range")
 
-	inst.SetRunLive(true)
+	inst.ApplyRunState(session.RunState{Live: true, LiveKnown: true})
 	r.setWidth(width)
 	row := r.Render(inst, 1, false, false)
 

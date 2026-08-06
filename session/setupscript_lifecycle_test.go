@@ -127,6 +127,15 @@ func (f *fakeTmux) dieOnAttach() {
 	f.dieAtAttach = true
 }
 
+// adopt marks the fake server as already holding a session nobody here created — a
+// stranger sitting on a name, which is what a pre-existing session titled "foo.run" is to
+// session "foo".
+func (f *fakeTmux) adopt() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.exists = true
+}
+
 // reset forgets the recorded launches, leaving the server's state alone, so a test can
 // assert about what a SECOND phase launched rather than about everything since the
 // fixture was built.
