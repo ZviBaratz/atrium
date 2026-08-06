@@ -97,8 +97,9 @@ type Session struct {
 	// agyConfigDir, when non-empty, isolates the Antigravity CLI's configuration
 	// directory using bwrap at session launch.
 	agyConfigDir string
-	// sessionEnv holds already-rendered NAME=VALUE pairs from the repo's session_env
-	// (#389), injected through the same `new-session -e` mechanism as the dirs above.
+	// sessionEnv holds already-rendered NAME=VALUE pairs for this session (#389): the
+	// repo's session_env and its managed ATRIUM_PORT, injected through the same
+	// `new-session -e` mechanism as the dirs above.
 	// It is the general form of what CLAUDE_CONFIG_DIR and GH_CONFIG_DIR are special
 	// cases of: a value that must differ per session and that the tmux SERVER env
 	// cannot carry, because that is frozen when the server starts. Set before each
@@ -513,10 +514,12 @@ func (t *Session) start(workDir string, program string) error {
 	// session; -e values are single argv elements, so a sanitizedName is safe as a
 	// value (only the trailing program word is handed to `sh -c`).
 	args = append(args, "-e", atriumMarkerEnv, "-e", "ATRIUM_SESSION="+t.sanitizedName)
-	// The repo's own session_env (#389). Placed after Atrium's fixed names, though the
-	// ordering is not what keeps them apart: repocfg refuses a session_env entry named
-	// ATRIUM_*, CLAUDE_CONFIG_DIR or GH_CONFIG_DIR, so which of two assignments tmux
-	// keeps never has to be reasoned about for those. The gh token names below are the
+	// The per-session environment (#389): the repo's own session_env, plus ATRIUM_PORT
+	// when the session holds a managed port. Placed after Atrium's fixed names, though
+	// the ordering is not what keeps them apart: repocfg refuses a session_env entry
+	// named ATRIUM_*, CLAUDE_CONFIG_DIR or GH_CONFIG_DIR, so which of two assignments
+	// tmux keeps never has to be reasoned about for those — including the port, whose
+	// name is reserved by that same rule. The gh token names below are the
 	// exception it cannot cover — they come from the user's own gh_accounts.token_env,
 	// so a config that spells the same name in both sections gets whichever tmux
 	// resolves. Values are single argv elements, so nothing here is re-parsed by a

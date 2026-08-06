@@ -271,6 +271,10 @@ func TestEnv(t *testing.T) {
 		"ATRIUM_SESSION=Issue #375",
 		"ATRIUM_BRANCH=zvi/issue-375",
 		"ATRIUM_WORKTREE=/wt/a",
+		// Exported even when empty, like every other name here: a script reading
+		// $ATRIUM_PORT on a repo with no port_range sees an empty value rather than one
+		// inherited from whatever launched Atrium.
+		"ATRIUM_PORT=",
 		"ATRIUM_REPO=/repo",
 		"ATRIUM_REPO_NAME=atrium",
 	}, got)
@@ -300,7 +304,7 @@ func TestMissingFields(t *testing.T) {
 		// Printing the whole struct puts every field in the command line, empty ones
 		// included — so the empty branch really does reach the shell here, and saying
 		// so is right even though no path is spelled out.
-		{"prints a struct containing an empty field", "echo {{.Session}}", []string{"Session.Branch"}},
+		{"prints a struct containing an empty field", "echo {{.Session}}", []string{"Session.Branch", "Session.Port"}},
 		// A field behind a branch the render does not take never reaches the command,
 		// so it is not missing. This is the payoff of asking the renderer instead of
 		// the parse tree: "unused on this path" and "used" stop being the same answer.
@@ -460,4 +464,38 @@ func TestEnvNamesMatchTheFieldTable(t *testing.T) {
 		assert.Truef(t, strings.HasPrefix(f.env, "ATRIUM_"),
 			"%s must be namespaced: %q", f.path, f.env)
 	}
+}
+
+// The managed port (#389) is a context leaf like any other, which is the whole reason
+// it is a string: a session whose repo declares no port_range has none, and a command
+// that interpolates one must be refused there rather than run against `--port `.
+func TestPort_IsGatedLikeEveryOtherField(t *testing.T) {
+	withPort := Ctx{Session: SessionCtx{Title: "web", Name: "web", Branch: "b", Worktree: "/wt", Port: "3001"}, Repo: RepoCtx{Path: "/repo", Name: "web"}}
+	without := withPort
+	without.Session.Port = ""
+
+	entry := ok()
+	entry.Command = "curl localhost:{{.Session.Port}}"
+	cmds, problems := Validate([]config.CustomCommand{entry})
+	require.Empty(t, problems, "the placeholder must exist for a command to be written against it")
+
+	rendered, err := cmds[0].Render(withPort)
+	require.NoError(t, err)
+	assert.Equal(t, "curl localhost:3001", rendered)
+	assert.Empty(t, cmds[0].MissingFields(withPort))
+	assert.Equal(t, []string{"Session.Port"}, cmds[0].MissingFields(without),
+		"a session with no managed port must not run a command that names one")
+}
+
+// And through the environment, which the template renderer cannot see.
+func TestPort_IsGatedThroughTheEnvironmentToo(t *testing.T) {
+	without := Ctx{Session: SessionCtx{Title: "web", Name: "web", Branch: "b", Worktree: "/wt"}, Repo: RepoCtx{Path: "/repo", Name: "web"}}
+
+	entry := ok()
+	entry.Command = `curl "localhost:$ATRIUM_PORT"`
+	cmds, problems := Validate([]config.CustomCommand{entry})
+	require.Empty(t, problems)
+
+	assert.Equal(t, []string{"Session.Port"}, cmds[0].MissingEnv(without))
+	assert.Contains(t, Env(Ctx{Session: SessionCtx{Port: "3001"}}), "ATRIUM_PORT=3001")
 }

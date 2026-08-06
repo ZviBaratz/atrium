@@ -373,6 +373,17 @@ type Instance struct {
 	setupErr    error
 	setupOutput string
 
+	// port is the session's managed dev-server port (#389), or 0 when its repo declares
+	// no port_range — or declares one that had nothing free. Unlike the setup fields
+	// above it IS persisted (InstanceData.Port): a running session's server is bound to
+	// this number, so a TUI restart has to re-claim it rather than hand it out again.
+	// Guarded by mu; see session/port.go for the lifecycle it is tied to.
+	port int
+	// portProblem is the report for a session whose range had nothing free, held until
+	// the app has a frame to show it on. In-memory only, and cleared as it is shown.
+	// Guarded by mu.
+	portProblem string
+
 	// conversationResumed / conversationKnown record which way the last relaunch
 	// went: whether the agent came back into its prior conversation, and whether
 	// startResuming could tell at all. Only that function knows — it asks the
@@ -503,6 +514,7 @@ func (i *Instance) ToInstanceData() InstanceData {
 		Effort:               i.runtimeEffort,
 		TmuxName:             i.TmuxSessionName(),
 		HookName:             i.hookSessionName(),
+		Port:                 i.Port(),
 
 		// Persist the undelivered prompt queue so it survives a restart and is re-delivered
 		// in order on reload (delivered prompts have already been popped, so this is usually
@@ -586,7 +598,14 @@ func FromInstanceData(ctx context.Context, data InstanceData, branchPrefix strin
 		modelID:              data.Model,
 		runtimeMode:          data.PermissionMode,
 		runtimeEffort:        data.Effort,
+		port:                 data.Port,
 	}
+
+	// Re-reserve the port this session was running on before anything created later in
+	// this run can be allocated one. Restoration is the only place that can do it: the
+	// registry is process-wide state and starts empty, so a session whose dev server is
+	// still bound would otherwise have its port handed straight to the next create.
+	instance.claimPersistedPort()
 
 	// Pending prompts restored from disk re-enter tick-driven delivery on reload. The
 	// head gets a live clock from now (the agent re-boots on resume, so it needs the 60s
@@ -1386,6 +1405,12 @@ func (i *Instance) Kill() error {
 	if wt := i.worktree(); wt != nil {
 		tc.Wrap("cleanup git worktree", wt.Cleanup())
 	}
+
+	// The worktree is gone, so the managed port goes back to its range (#389).
+	// Unconditional, and after the teardown above rather than gated on it: a kill whose
+	// worktree removal failed still ends the session, and a port held by a registry
+	// entry nothing will ever clear is off the range for the life of the process.
+	i.releasePort()
 
 	return tc.Err()
 }

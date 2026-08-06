@@ -142,6 +142,14 @@ type InstanceData struct {
 	// rename cannot move the read path off a pre-upgrade agent's directory.
 	HookName string `json:"hook_name,omitempty"`
 
+	// Port is the session's managed dev-server port (#389), or absent when its repo
+	// declares no port_range. Persisted because a running session's server is bound to
+	// this number: a restart that re-allocated would renumber the row while the server
+	// stayed where it was, and would hand the same port to the next session created.
+	// omitempty: 0 is not a port, so absence and "no port" are the same thing and a
+	// state.json predating the field decodes to exactly that.
+	Port int `json:"port,omitempty"`
+
 	Worktree  GitWorktreeData `json:"worktree"`
 	DiffStats DiffStatsData   `json:"diff_stats"`
 }

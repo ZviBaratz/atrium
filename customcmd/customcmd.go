@@ -65,6 +65,13 @@ type SessionCtx struct {
 	Name     string
 	Branch   string
 	Worktree string
+	// Port is the session's managed dev-server port (#389), as decimal text. A string
+	// like every other leaf, and not an int, for two reasons that point the same way:
+	// the emptiness gate is what refuses `--port {{.Session.Port}}` on a session whose
+	// repo declares no port_range, and it works by substituting a sentinel through
+	// these fields — so an int would render an absent port as the literal 0 and hand a
+	// command a port nothing is listening on.
+	Port string
 }
 
 // RepoCtx is the selected session's repository half of the template context.
@@ -89,7 +96,7 @@ type Ctx struct {
 // placeholder does not exist", never "this session happens to have no branch" —
 // that second question is MissingFields', and it is asked per selection at run time.
 var probe = Ctx{
-	Session: SessionCtx{Title: "probe", Name: "probe", Branch: "probe", Worktree: "/probe"},
+	Session: SessionCtx{Title: "probe", Name: "probe", Branch: "probe", Worktree: "/probe", Port: "3000"},
 	Repo:    RepoCtx{Path: "/probe", Name: "probe"},
 }
 
@@ -409,6 +416,7 @@ var fieldAccess = []struct {
 	{"Session.Name", "ATRIUM_SESSION", func(c Ctx) string { return c.Session.Name }, func(c *Ctx, v string) { c.Session.Name = v }},
 	{"Session.Branch", "ATRIUM_BRANCH", func(c Ctx) string { return c.Session.Branch }, func(c *Ctx, v string) { c.Session.Branch = v }},
 	{"Session.Worktree", "ATRIUM_WORKTREE", func(c Ctx) string { return c.Session.Worktree }, func(c *Ctx, v string) { c.Session.Worktree = v }},
+	{"Session.Port", "ATRIUM_PORT", func(c Ctx) string { return c.Session.Port }, func(c *Ctx, v string) { c.Session.Port = v }},
 	{"Repo.Path", "ATRIUM_REPO", func(c Ctx) string { return c.Repo.Path }, func(c *Ctx, v string) { c.Repo.Path = v }},
 	{"Repo.Name", "ATRIUM_REPO_NAME", func(c Ctx) string { return c.Repo.Name }, func(c *Ctx, v string) { c.Repo.Name = v }},
 }

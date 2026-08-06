@@ -336,6 +336,12 @@ func (r *InstanceRenderer) Render(i *session.Instance, idx int, selected, marked
 		if seg, ok := prSeg(p, i.GetPRStatus()); ok {
 			groups = append(groups, []rowSeg{seg})
 		}
+		// The managed dev-server port (#389), last so it is the first thing the width
+		// budget drops on a narrow list: it is an identifier to look up, where the git
+		// chips beside it are state that changes under the user.
+		if seg, ok := portSeg(p, i.Port()); ok {
+			groups = append(groups, []rowSeg{seg})
+		}
 		for gi, grp := range groups {
 			if gi > 0 {
 				left2 = append(left2, p.sepSeg())
