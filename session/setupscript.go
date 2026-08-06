@@ -25,6 +25,7 @@ package session
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -46,6 +47,23 @@ const setupOutputCap = 8 << 10
 // deliberately not the script itself: the script is user-authored and unbounded, and
 // this shares a row with a branch name and diff stats.
 const setupPhaseLabel = "running setup script…"
+
+// setupWaitDelay bounds the two waits os/exec would otherwise make unbounded, both of
+// which begin only once the script's own shell is done with: a child that outlived a
+// cancel, and output pipes a surviving DESCENDANT still holds open.
+//
+// The second is the one that matters, and it has nothing to do with cancellation. A
+// script that backgrounds anything (`ollama serve &`, `npm run dev &`, anything that
+// daemonizes) exits immediately while its child keeps the inherited pipe, and Wait
+// blocks on that pipe — not on the process — for as long as the child lives. Without
+// this the shell exits, the script "succeeds", and the session stays pinned on
+// `running setup script…` forever with no agent ever launched and no timeout to
+// recover it.
+//
+// Short, because it is spent AFTER the work is done: the timer starts when the shell
+// exits, so the only thing it buys is time for output already written to be copied
+// into the tail.
+const setupWaitDelay = 2 * time.Second
 
 // setupRun is everything a run needs, resolved to strings.
 //
@@ -182,34 +200,32 @@ func (i *Instance) resolveSetupRun(dir string) (setupRun, bool) {
 	if repoPath == "" {
 		repoPath = i.Path
 	}
-	entry, ok := cfg.ResolveRepoScript(git.GetRemoteURL(i.baseContext(), repoPath), repoPath)
+	entry, index, ok := cfg.ResolveRepoScript(git.GetRemoteURL(i.baseContext(), repoPath), repoPath)
 	if !ok {
 		return setupRun{}, false
 	}
 
-	// Validated one entry at a time, so a broken sibling entry cannot stop this one.
-	// The problems reported here are the same ones the startup report and `atrium
-	// doctor` show; logging is enough at this point, because by now the user has
-	// already been told.
-	scripts, problems := repocfg.Validate([]config.RepoScript{entry})
-	for _, p := range problems {
-		log.WarningLog.Printf("repo_scripts entry for %q: %s", i.Title, p.Error())
-	}
-	if len(scripts) == 0 {
+	// Validated one entry at a time, so a broken sibling entry cannot stop this one —
+	// carrying the entry's real position, because that is what a message about it is
+	// found by. The same problem is what the startup report and `atrium doctor` show, so
+	// logging is enough at this point: by now the user has already been told.
+	compiled, problem := repocfg.ValidateOne(index, entry)
+	if problem != nil {
+		log.WarningLog.Printf("setup script for %q not run: %s", i.Title, problem.Error())
 		return setupRun{}, false
 	}
 
 	ctx := i.repoScriptCtx(dir, repoPath)
-	script, err := scripts[0].RenderSetup(ctx)
+	script, err := compiled.RenderSetup(ctx)
 	if err != nil {
 		// Validation rendered this template against a fully-populated probe, so an
 		// error here is about this session, not the template.
-		log.ErrorLog.Printf("setup script for %q (repo_scripts entry %q) failed to render: %v", i.Title, scripts[0].Name, err)
+		log.ErrorLog.Printf("setup script for %q (repo_scripts entry %q) failed to render: %v", i.Title, compiled.Name, err)
 		return setupRun{}, false
 	}
-	env, err := scripts[0].RenderEnv(ctx)
+	env, err := compiled.RenderEnv(ctx)
 	if err != nil {
-		log.ErrorLog.Printf("session_env for %q (repo_scripts entry %q) failed to render: %v", i.Title, scripts[0].Name, err)
+		log.ErrorLog.Printf("session_env for %q (repo_scripts entry %q) failed to render: %v", i.Title, compiled.Name, err)
 		return setupRun{}, false
 	}
 
@@ -226,6 +242,15 @@ func (i *Instance) resolveSetupRun(dir string) (setupRun, bool) {
 
 // repoScriptCtx is the template and environment context for this session. dir is the
 // worktree the caller proved is materialized; repoPath is the origin checkout.
+//
+// No empty-leaf guard here, unlike customcmd's MissingFields, because on this path
+// there is nothing to guard: a setup script runs only for a git session that has just
+// materialized a worktree, and every leaf is non-empty there — Title is required,
+// DisplayName falls back to it, Branch is what the worktree was created on, dir is
+// checked by resolveSetupRun, and repoPath falls back to i.Path. The one leaf that CAN
+// render empty is Session.Branch for a direct session, which gets session_env and never
+// a script (see Instance.Start). If a leaf that can be absent is ever added, the
+// `rm -rf {{.Session.X}}/build` case comes back and that guard has to come with it.
 func (i *Instance) repoScriptCtx(dir, repoPath string) repocfg.Ctx {
 	return repocfg.Ctx{
 		Session: repocfg.SessionCtx{
@@ -242,8 +267,11 @@ func (i *Instance) repoScriptCtx(dir, repoPath string) repocfg.Ctx {
 // combined output.
 //
 // Bound to ctx, which is the instance's lifecycle context, so quitting cancels a
-// runaway. There is no wall-clock timeout on purpose: `npm ci` on a cold cache
-// legitimately runs for minutes, and this feature exists to run exactly that.
+// runaway. There is no wall-clock timeout on the SCRIPT on purpose: `npm ci` on a cold
+// cache legitimately runs for minutes, and this feature exists to run exactly that.
+// Everything after the script is bounded, though — see setupWaitDelay and
+// isolateProcessGroup, which together are what keep "no timeout" from meaning "no way
+// out".
 func runSetupProcess(ctx context.Context, run setupRun) (string, error) {
 	c := exec.CommandContext(ctx, "sh", "-c", run.script)
 	c.Dir = run.dir
@@ -252,9 +280,23 @@ func runSetupProcess(ctx context.Context, run setupRun) (string, error) {
 	// a time when Stdout and Stderr are the same comparable value, which a pointer is.
 	out := &setupTail{limit: setupOutputCap}
 	c.Stdout, c.Stderr = out, out
+	// Neither stream is an *os.File, so os/exec plumbs both through PIPES — which is
+	// what makes a descendant able to hold Wait open, and why both bounds below are
+	// needed rather than one.
+	c.WaitDelay = setupWaitDelay
+	isolateProcessGroup(c)
 
 	start := time.Now()
 	err := c.Run()
+	if errors.Is(err, exec.ErrWaitDelay) {
+		// The shell exited 0 and something it left behind kept the output pipe open, so
+		// os/exec closed the pipes after setupWaitDelay and reported this in place of
+		// nil. The script itself succeeded — leaving a dev server running is a
+		// legitimate thing for one to do — so this must not become a failure modal that
+		// says otherwise. The only real consequence is a tail that may be short.
+		log.WarningLog.Printf("setup script for %q left a process holding its output open; recorded output may be truncated", run.session)
+		err = nil
+	}
 
 	// Record a synthetic argv, NEVER the rendered script. cmdlog.Redact models one
 	// NAME=VALUE per argv token, and a whole shell script in a single token defeats it
@@ -305,12 +347,18 @@ func (i *Instance) setSetupPhase(phase string, cancel context.CancelFunc) {
 // AbortSetupScript ends a setup script that is currently running, and does nothing
 // when none is.
 //
-// Shutdown reconciliation calls it for every still-Loading session before draining
-// their Start goroutines. A script deliberately has no timeout, so on the force-quit
-// path — where the lifecycle context stays live — this is the only thing that ends
-// one, and without it the drain times out, the session is "left as-is" with a worktree
-// and branch never written to state.json, and the script keeps running with no app
-// left to report it.
+// Shutdown reconciliation calls it for every session before draining the Start
+// goroutines — every session, not only the Loading ones, because Resume runs a script
+// too and does it while the instance is still Paused. A script deliberately has no
+// timeout, so on the force-quit path — where the lifecycle context stays live — this is
+// the only thing that ends one, and without it the drain times out, the session is
+// "left as-is" with a worktree and branch never written to state.json, and the script
+// keeps running with no app left to report it.
+//
+// It ends the script's whole process GROUP, not just the shell: see
+// isolateProcessGroup, without which cancelling a `npm ci && npm run build` kills the
+// `sh` and leaves the build holding the output pipe for its full remaining duration —
+// the drain timing out exactly as if nothing had been cancelled at all.
 func (i *Instance) AbortSetupScript() {
 	i.mu.RLock()
 	cancel := i.setupCancel

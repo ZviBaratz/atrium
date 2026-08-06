@@ -4,9 +4,11 @@ package app
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/ZviBaratz/atrium/log"
+	"github.com/ZviBaratz/atrium/repocfg"
 	"github.com/ZviBaratz/atrium/session"
 	"github.com/ZviBaratz/atrium/ui"
 	"github.com/ZviBaratz/atrium/ui/overlay"
@@ -274,6 +276,57 @@ func (m *home) flushPendingLaunchCrash() tea.Cmd {
 	lr := m.pendingLaunchCrash
 	m.pendingLaunchCrash = nil
 	return m.showLaunchCrash(lr)
+}
+
+// flushRepoScriptProblems opens the startup report for the repo_scripts entries
+// validation refused (#389), once the screen is free. Nil while an overlay owns the
+// screen, and the buffer is cleared as it fires so the preview tick cannot reopen it
+// forever — the shape flushCustomCommandProblems uses.
+//
+// Separate from that one rather than merged into a single "your config has problems"
+// modal: the two sections fail for unrelated reasons, and showInfo switches to
+// stateInfo as it builds, so the second flush in the same tick defers itself to the
+// next one rather than clobbering the first.
+func (m *home) flushRepoScriptProblems() tea.Cmd {
+	if len(m.pendingRepoScriptProblems) == 0 || m.state != stateDefault {
+		return nil
+	}
+	problems := m.pendingRepoScriptProblems
+	m.pendingRepoScriptProblems = nil
+	return m.showInfo(repoScriptProblemsReport(problems))
+}
+
+// repoScriptProblemsReport is that modal's text, bounded on both axes for the reason
+// customCommandProblemsReport is: a config can hold any number of broken entries, and
+// two of the three fields in a Problem are user-authored.
+func repoScriptProblemsReport(problems []repocfg.Problem) string {
+	if len(problems) == 0 {
+		return ""
+	}
+	noun := "entries"
+	if len(problems) == 1 {
+		noun = "entry"
+	}
+	lines := []string{fmt.Sprintf(
+		"%d repo_scripts %s in config.json %s ignored:",
+		len(problems), noun, wereOrWas(len(problems)))}
+	shown := problems
+	if len(shown) > customCommandProblemsShown {
+		shown = shown[:customCommandProblemsShown]
+	}
+	for _, p := range shown {
+		lines = append(lines, "  "+clipReportLine(p.Error()))
+	}
+	if len(problems) > len(shown) {
+		lines = append(lines, fmt.Sprintf("  … and %d more", len(problems)-len(shown)))
+	}
+	// Naming the consequence, not just the refusal: a dropped entry means no setup
+	// script and no session_env for every repo it routed, which is a silent symptom
+	// ("my dependencies aren't installed") the user would not otherwise connect to this.
+	lines = append(lines, "",
+		"Sessions in those repos get no setup script and no session_env.",
+		"The rest still work. `atrium doctor` reports the same list.")
+	return strings.Join(lines, "\n")
 }
 
 // flushSetupFailures opens the report for a session whose per-repo setup script

@@ -25,10 +25,10 @@ func runningSetupInstance(t *testing.T) (*session.Instance, func()) {
 	t.Setenv("HOME", home)
 	require.NoError(t, os.MkdirAll(filepath.Join(home, ".atrium"), 0o755))
 	cfg := config.DefaultConfig()
-	// `exec` so the shell BECOMES sleep: without it a shell that forks leaves the
-	// grandchild holding the output pipe, and cancelling the context kills the shell
-	// while Run blocks for the full 30 seconds waiting on the pipe.
-	cfg.RepoScripts = []config.RepoScript{{Name: "any", SetupScript: "exec sleep 30 >/dev/null 2>&1"}}
+	// The ordinary forking shape, not an `exec`-ed one: cancelling the context kills the
+	// script's whole process group (session.isolateProcessGroup), so the shell and the
+	// sleep it forked both end and the stop func below returns promptly.
+	cfg.RepoScripts = []config.RepoScript{{Name: "any", SetupScript: "sleep 30; echo done"}}
 	require.NoError(t, config.SaveConfig(cfg))
 
 	dir := t.TempDir()
@@ -96,4 +96,24 @@ func TestPreview_SetupPhaseNamesWhatIsRunning(t *testing.T) {
 	require.NoError(t, p.UpdateContent(inst))
 
 	require.Contains(t, ansi.Strip(p.String()), "setup script")
+}
+
+// The same pane, on a resume. Resume re-materializes the worktree and runs the script
+// while the instance is STILL Paused — SetStatus(Running) comes after — so the paused
+// arm reached first and the pane spent the whole `npm ci` telling the user to press the
+// key they had just pressed.
+func TestPreview_SetupPhaseWinsOverThePausedHint(t *testing.T) {
+	t.Cleanup(theme.Set("unicode"))
+	inst, stop := runningSetupInstance(t)
+	defer stop()
+	inst.SetStatus(session.Paused)
+	require.True(t, inst.Paused(), "the state a resume runs its script in")
+
+	p := NewPreviewPane()
+	p.SetSize(60, 10)
+	require.NoError(t, p.UpdateContent(inst))
+
+	out := ansi.Strip(p.String())
+	require.Contains(t, out, "setup script")
+	require.NotContains(t, out, "Press 'r' to resume")
 }

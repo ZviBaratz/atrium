@@ -18,6 +18,7 @@ import (
 	"github.com/ZviBaratz/atrium/internal/memo"
 	"github.com/ZviBaratz/atrium/log"
 	"github.com/ZviBaratz/atrium/notify"
+	"github.com/ZviBaratz/atrium/repocfg"
 	"github.com/ZviBaratz/atrium/session"
 	"github.com/ZviBaratz/atrium/session/tmux"
 	"github.com/ZviBaratz/atrium/ui"
@@ -581,6 +582,11 @@ type home struct {
 	// above until the screen is free, in the shape pendingLaunchCrash uses. Nil once
 	// it has been shown, so the 100ms preview tick cannot reopen it forever.
 	pendingCustomCommandProblems []customcmd.Problem
+	// pendingRepoScriptProblems is the same buffer for the repo_scripts entries
+	// validation refused (#389), in the same shape and flushed by the same tick. A
+	// refused entry is dropped rather than applied, so without this the whole symptom
+	// is a setup script that silently never runs.
+	pendingRepoScriptProblems []repocfg.Problem
 	// pendingDeferredRecovery buffers the startup report for sessions whose agent the
 	// host session budget would not let the load relaunch (#474), until there is a
 	// frame to toast on. Zeroed once it has been shown, in the shape

@@ -167,3 +167,59 @@ func TestScript_RendersSessionEnvInAStableOrder(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, []string{"A=1", "B=2", "C=3"}, env)
 }
+
+// The `quote` helper the README points a user at, which is also the only escaping this
+// section has: {{.Session.Name}} is the freely-mutable display name, so a session
+// renamed to `x; rm -rf ~` is a shell injection into the user's own setup script
+// wherever it is interpolated bare. Without the FuncMap the template does not even
+// parse, and the entry is dropped for a reason the user is told to write.
+func TestScript_QuoteEscapesAValueForTheShell(t *testing.T) {
+	entry := ok()
+	entry.SetupScript = "mkdir -p /tmp/c-{{ quote .Session.Name }}"
+
+	got, problems := Validate([]config.RepoScript{entry})
+	require.Empty(t, problems, "the function the docs name must exist")
+	require.Len(t, got, 1)
+
+	script, err := got[0].RenderSetup(Ctx{Session: SessionCtx{Name: "x; rm -rf ~"}})
+
+	require.NoError(t, err)
+	assert.Equal(t, `mkdir -p /tmp/c-'x; rm -rf ~'`, script)
+}
+
+// session_env values render through the same helper set, so a value carrying a quote is
+// escapable there too.
+func TestScript_QuoteIsAvailableInSessionEnv(t *testing.T) {
+	entry := ok()
+	entry.SessionEnv = map[string]string{"LABEL": "{{ quote .Session.Name }}"}
+
+	got, problems := Validate([]config.RepoScript{entry})
+	require.Empty(t, problems)
+	require.Len(t, got, 1)
+
+	env, err := got[0].RenderEnv(Ctx{Session: SessionCtx{Name: "it's fine"}})
+
+	require.NoError(t, err)
+	assert.Equal(t, []string{`LABEL='it'"'"'s fine'`}, env)
+}
+
+// ValidateOne carries the entry's real position, which is the only handle a message
+// about an unnamed entry has. Validating a one-element slice instead reported every
+// problem as repo_scripts[0] and pointed the user at whichever entry came first.
+func TestValidateOne_ReportsTheEntrysRealPosition(t *testing.T) {
+	broken := config.RepoScript{SetupScript: "npm ci {{.Session.Wortree}}"}
+
+	script, problem := ValidateOne(3, broken)
+
+	require.NotNil(t, problem)
+	assert.False(t, script.HasSetupScript())
+	assert.Contains(t, problem.Error(), "repo_scripts[3]")
+}
+
+// And nothing to report for a good entry, whatever its position.
+func TestValidateOne_ReportsNothingForAValidEntry(t *testing.T) {
+	script, problem := ValidateOne(2, ok())
+
+	assert.Nil(t, problem)
+	assert.True(t, script.HasSetupScript())
+}

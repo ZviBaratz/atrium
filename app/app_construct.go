@@ -8,6 +8,7 @@ import (
 	"github.com/ZviBaratz/atrium/config"
 	"github.com/ZviBaratz/atrium/customcmd"
 	"github.com/ZviBaratz/atrium/notify"
+	"github.com/ZviBaratz/atrium/repocfg"
 	"github.com/ZviBaratz/atrium/session"
 	"github.com/ZviBaratz/atrium/ui"
 	"github.com/ZviBaratz/atrium/ui/theme"
@@ -131,6 +132,13 @@ func assembleHome(
 	// buffered for the startup modal, which the preview tick flushes once no overlay
 	// owns the screen. `atrium doctor` runs the same pass, so the two cannot disagree.
 	h.customCommands, h.pendingCustomCommandProblems = customcmd.Validate(appConfig.CustomCommands)
+
+	// The same pass for repo_scripts (#389). Only the problems are kept: a session
+	// re-reads the config and revalidates its own entry when it runs, deliberately, so
+	// that an edit reaches a session resumed later in the same run. What cannot wait is
+	// the report — a refused entry is dropped, and its whole symptom otherwise is a
+	// setup script that never runs and says nothing about why.
+	_, h.pendingRepoScriptProblems = repocfg.Validate(appConfig.RepoScripts)
 
 	return h
 }

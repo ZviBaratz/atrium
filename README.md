@@ -756,8 +756,11 @@ a clone of it.
 `setup_script` runs through `sh -c` with the worktree as its working directory, after
 carried files and linked paths are in place. It gets the same `$ATRIUM_*` environment
 as a [custom command](#custom-commands) — `$ATRIUM_WORKTREE`, `$ATRIUM_BRANCH`,
-`$ATRIUM_REPO`, and the rest — and the same `{{.Session.Worktree}}` template
-placeholders, so a path never has to be interpolated into a shell string by hand.
+`$ATRIUM_REPO`, and the rest — and the same template placeholders and `quote` helper,
+so a path never has to be interpolated into a shell string by hand. Prefer the
+environment: `$ATRIUM_WORKTREE` needs no escaping at all, while a bare
+`{{.Session.Name}}` is the session's *renameable* label going straight into a shell
+command — wrap it in `{{ quote .Session.Name }}` if you interpolate it.
 
 A non-zero exit does **not** destroy the session. The worktree, the branch and the
 agent all survive; the failure opens a modal carrying the tail of what the script
@@ -788,9 +791,14 @@ other session at once. Linking and installing are alternatives, not a pair.
 
 While the script runs the session's row says so, and the preview names it in place of
 the generic "Setting up workspace…" it shows for every other session that has not come
-up yet. Entries the validator refuses are dropped rather than applied — one bad
-template does not cost you the others — and `atrium doctor` lists them under
-**Repo scripts**.
+up yet — on a resume as well as on a first start. Entries the validator refuses are
+dropped rather than applied — one bad template does not cost you the others — and it
+says which and why: a modal at startup, and `atrium doctor` under **Repo scripts**.
+
+Quitting while a script is running ends it. Atrium kills the script's whole process
+group rather than just the `sh` it started, so a half-finished `npm ci && npm run build`
+does not keep running after the app is gone. A process the script deliberately
+*backgrounds* is left alone — it does not hold up the session either way.
 
 #### Claude accounts
 

@@ -250,6 +250,16 @@ func (p *PreviewPane) UpdateContent(instance *session.Instance) error {
 		p.setSplashState("No agents running yet. Spin up a new session with 'n' to get started!")
 		return nil
 	case instance.Paused():
+		// Before every paused hint below, because a resume runs the setup script while
+		// the instance is STILL Paused: Resume re-materializes the worktree, runs the
+		// script, and only then flips to Running (session/pause.go). Without this the
+		// pane says "press 'r' to resume" for the two minutes an `npm ci` is running,
+		// having just been pressed — the one moment the phase is the only thing worth
+		// saying.
+		if phase := instance.SetupPhase(); phase != "" {
+			p.setFallbackState(phase)
+			return nil
+		}
 		// A direct (non-git) session has no branch to check out — show a plain resume hint.
 		if instance.IsDirect() {
 			p.setFallbackState("Session is paused. Press 'r' to resume.")

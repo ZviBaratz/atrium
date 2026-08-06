@@ -26,27 +26,33 @@ func TestResolveRepoScript(t *testing.T) {
 		remote  string
 		path    string
 		want    string // the resolved entry's Name, "" for no entry
+		wantIdx int    // its position in the configured list; -1 when nothing resolved
 	}{
-		{"unconfigured", nil, "https://github.com/acme/web.git", "/projects/web/x", ""},
-		{"remote match", []RepoScript{web, fallback}, "https://github.com/acme/web.git", "", "web"},
-		{"case-insensitive remote", []RepoScript{web, fallback}, "https://github.com/ACME/Web.git", "", "web"},
-		{"path match for a direct session", []RepoScript{web, fallback}, "", "/home/z/projects/web/app", "web"},
-		{"no match falls to the rule-less entry", []RepoScript{web, fallback}, "https://github.com/other/x.git", "/tmp/x", "fallback"},
-		{"no match and no catch-all", []RepoScript{web}, "https://github.com/other/x.git", "/tmp/x", ""},
-		{"empty remote and path take the catch-all", []RepoScript{web, fallback}, "", "", "fallback"},
+		{"unconfigured", nil, "https://github.com/acme/web.git", "/projects/web/x", "", -1},
+		{"remote match", []RepoScript{web, fallback}, "https://github.com/acme/web.git", "", "web", 0},
+		{"case-insensitive remote", []RepoScript{web, fallback}, "https://github.com/ACME/Web.git", "", "web", 0},
+		{"path match for a direct session", []RepoScript{web, fallback}, "", "/home/z/projects/web/app", "web", 0},
+		{"no match falls to the rule-less entry", []RepoScript{web, fallback}, "https://github.com/other/x.git", "/tmp/x", "fallback", 1},
+		{"no match and no catch-all", []RepoScript{web}, "https://github.com/other/x.git", "/tmp/x", "", -1},
+		{"empty remote and path take the catch-all", []RepoScript{web, fallback}, "", "", "fallback", 1},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			c := &Config{RepoScripts: tc.entries}
 
-			got, ok := c.ResolveRepoScript(tc.remote, tc.path)
+			got, idx, ok := c.ResolveRepoScript(tc.remote, tc.path)
 
 			if tc.want == "" {
 				assert.False(t, ok, "expected no entry, got %q", got.Name)
+				assert.Equal(t, -1, idx, "a resolution that found nothing must not report a position")
 				return
 			}
 			require.True(t, ok)
 			assert.Equal(t, tc.want, got.Name)
+			// The index is what a message about this entry is found by: a problem
+			// reported as repo_scripts[0] when the broken entry is the second points the
+			// user at an innocent one.
+			assert.Equal(t, tc.wantIdx, idx)
 		})
 	}
 }
@@ -56,10 +62,11 @@ func TestResolveRepoScript_FirstMatchWins(t *testing.T) {
 	a := RepoScript{Name: "a", SetupScript: "x", RemoteMatches: []string{"acme"}}
 	b := RepoScript{Name: "b", SetupScript: "y", RemoteMatches: []string{"acme"}}
 
-	got, ok := (&Config{RepoScripts: []RepoScript{a, b}}).ResolveRepoScript("https://x/acme/r.git", "")
+	got, idx, ok := (&Config{RepoScripts: []RepoScript{a, b}}).ResolveRepoScript("https://x/acme/r.git", "")
 
 	require.True(t, ok)
 	assert.Equal(t, "a", got.Name)
+	assert.Equal(t, 0, idx)
 }
 
 func TestRepoScript_IsCatchAll(t *testing.T) {
@@ -103,7 +110,7 @@ func TestRepoScriptsAbsentDecodesToNil(t *testing.T) {
 	got := LoadConfig()
 
 	assert.Nil(t, got.RepoScripts)
-	_, ok := got.ResolveRepoScript("https://github.com/acme/web.git", "/projects/web")
+	_, _, ok := got.ResolveRepoScript("https://github.com/acme/web.git", "/projects/web")
 	assert.False(t, ok)
 }
 

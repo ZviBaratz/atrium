@@ -102,14 +102,30 @@ func Validate(entries []config.RepoScript) ([]Script, []Problem) {
 	var problems []Problem
 
 	for i, e := range entries {
-		script, err := compile(e)
-		if err != nil {
-			problems = append(problems, Problem{Index: i, Name: e.Name, Msg: err.Error()})
+		script, problem := ValidateOne(i, e)
+		if problem != nil {
+			problems = append(problems, *problem)
 			continue
 		}
 		out = append(out, script)
 	}
 	return out, problems
+}
+
+// ValidateOne validates the single entry sitting at position index of the configured
+// list, which is what the session does: routing has already picked one entry, and a
+// broken sibling must not stop it.
+//
+// index is passed rather than assumed because it is the only thing a reported problem
+// can be found by — an entry need not be named, and Problem.Error() prints
+// `repo_scripts[N]`. Validating a one-element slice instead would report every problem
+// as entry 0 and point the user at whichever entry happens to be first.
+func ValidateOne(index int, e config.RepoScript) (Script, *Problem) {
+	script, err := compile(e)
+	if err != nil {
+		return Script{}, &Problem{Index: index, Name: e.Name, Msg: err.Error()}
+	}
+	return script, nil
 }
 
 // compile applies every rule to one entry, returning the first failure.
@@ -159,8 +175,16 @@ func compile(e config.RepoScript) (Script, error) {
 
 // compileTemplate parses one template and proves it renders, naming the field it came
 // from so a problem with three templates in it says which one broke.
+//
+// customcmd's helper set, not a set of its own. A repo script renders into a shell
+// string exactly as a custom command does, and the README points a user with a value
+// that might contain a space at the same `quote` function — which, without this, parses
+// as `function "quote" not defined` and silently drops the entry. It is also the only
+// escaping there is: {{.Session.Name}} is the freely-mutable display name, so a session
+// renamed to `x; rm -rf ~` is a shell injection into the user's own setup script
+// wherever it is interpolated bare.
 func compileTemplate(field, text string) (*template.Template, error) {
-	tmpl, err := template.New(field).Parse(text)
+	tmpl, err := template.New(field).Funcs(customcmd.Funcs()).Parse(text)
 	if err != nil {
 		return nil, fmt.Errorf("%s: template does not parse: %w", field, err)
 	}

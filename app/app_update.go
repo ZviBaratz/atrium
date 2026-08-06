@@ -738,8 +738,8 @@ func (m *home) anyLoading() bool {
 // capped at gitLocalTimeout (30s), and 5s comfortably covers a warm-repo worktree
 // add plus tmux new-session while capping worst-case exit delay. The one thing in
 // that goroutine with no bound of its own is the per-repo setup script (#389), which
-// is why reconcileInFlightStarts cancels it before waiting rather than trusting this
-// number to outlast an `npm ci`. A Start still
+// is why abortSetupScripts runs before this wait rather than trusting this number to
+// outlast an `npm ci`. A Start still
 // running past this is treated as wedged and left as-is (the orphan #281 already
 // produced) rather than risking a data race by touching a live start. A var, not
 // a const, so tests can shrink the wait.
@@ -760,6 +760,29 @@ func (m *home) drainStarts(timeout time.Duration) bool {
 		return true
 	case <-time.After(timeout):
 		return false
+	}
+}
+
+// abortSetupScripts ends every per-repo setup script still running as the app exits
+// (#389).
+//
+// A script deliberately has no timeout — `npm ci` on a cold cache legitimately runs for
+// minutes. On a signal shutdown the cancelled lifecycle context has already ended it and
+// this is a no-op; on the force-quit path that context is still live, so this is the
+// only thing that does. Without it a create-path script holds the Start goroutine past
+// drainStarts, so the session is "left as-is" with a worktree and branch that never
+// reached state.json — and either way the script outlives the app that started it.
+//
+// Every instance, with no status filter, and called before the anyLoading() gate.
+// Loading is the create path only: Resume runs a script too, and does it while the
+// instance is still Paused (session/pause.go) from a goroutine startWG never learns
+// about — so a status gate here quietly excluded the whole resume half of the feature,
+// including a "resume all" running one script per session. AbortSetupScript is a no-op
+// when nothing is running, which is what makes the unfiltered sweep the cheap option
+// rather than the thorough one.
+func (m *home) abortSetupScripts() {
+	for _, inst := range m.list.GetInstances() {
+		inst.AbortSetupScript()
 	}
 }
 
@@ -785,21 +808,9 @@ func (m *home) drainStarts(timeout time.Duration) bool {
 // goroutine, so it is left as-is — the same orphan the force-quit path produced
 // before this fix (no regression, and no hang).
 func (m *home) reconcileInFlightStarts(ctx context.Context) {
+	m.abortSetupScripts()
 	if !m.anyLoading() {
 		return
-	}
-	// End any per-repo setup script first (#389). A script deliberately has no
-	// timeout — `npm ci` on a cold cache legitimately runs for minutes — and it runs
-	// inside the very goroutine drainStarts is about to wait on. On a signal shutdown
-	// the cancelled lifecycle context has already killed it and this is a no-op; on
-	// the force-quit path that context is still live, so without this the drain always
-	// times out and the session is "left as-is" with a worktree and branch that never
-	// reached state.json, and the script outlives the app that started it. Safe to
-	// call on every instance: it does nothing when no script is running.
-	for _, inst := range m.list.GetInstances() {
-		if inst.GetStatus() == session.Loading {
-			inst.AbortSetupScript()
-		}
 	}
 	if !m.drainStarts(drainTimeout) {
 		log.WarningLog.Printf("shutdown: in-flight session start did not settle within %s; left as-is", drainTimeout)
