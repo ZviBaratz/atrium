@@ -1,6 +1,8 @@
 package customcmd
 
 import (
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -271,6 +273,10 @@ func TestEnv(t *testing.T) {
 		"ATRIUM_SESSION=Issue #375",
 		"ATRIUM_BRANCH=zvi/issue-375",
 		"ATRIUM_WORKTREE=/wt/a",
+		// Exported even when empty, like every other name here: a script reading
+		// $ATRIUM_PORT on a repo with no port_range sees an empty value rather than one
+		// inherited from whatever launched Atrium.
+		"ATRIUM_PORT=",
 		"ATRIUM_REPO=/repo",
 		"ATRIUM_REPO_NAME=atrium",
 	}, got)
@@ -300,7 +306,7 @@ func TestMissingFields(t *testing.T) {
 		// Printing the whole struct puts every field in the command line, empty ones
 		// included — so the empty branch really does reach the shell here, and saying
 		// so is right even though no path is spelled out.
-		{"prints a struct containing an empty field", "echo {{.Session}}", []string{"Session.Branch"}},
+		{"prints a struct containing an empty field", "echo {{.Session}}", []string{"Session.Branch", "Session.Port"}},
 		// A field behind a branch the render does not take never reaches the command,
 		// so it is not missing. This is the payoff of asking the renderer instead of
 		// the parse tree: "unused on this path" and "used" stop being the same answer.
@@ -524,5 +530,82 @@ func TestParseOutput_MessagesNameEveryMode(t *testing.T) {
 				"values appear", m)
 		assert.Containsf(t, unknown.Error(), string(m),
 			"the unknown-output message must name %q", m)
+	}
+}
+
+// The managed port (#389) is a context leaf like any other, which is the whole reason
+// it is a string: a session whose repo declares no port_range has none, and a command
+// that interpolates one must be refused there rather than run against `--port `.
+func TestPort_IsGatedLikeEveryOtherField(t *testing.T) {
+	withPort := Ctx{Session: SessionCtx{Title: "web", Name: "web", Branch: "b", Worktree: "/wt", Port: "3001"}, Repo: RepoCtx{Path: "/repo", Name: "web"}}
+	without := withPort
+	without.Session.Port = ""
+
+	entry := ok()
+	entry.Command = "curl localhost:{{.Session.Port}}"
+	cmds, problems := Validate([]config.CustomCommand{entry})
+	require.Empty(t, problems, "the placeholder must exist for a command to be written against it")
+
+	rendered, err := cmds[0].Render(withPort)
+	require.NoError(t, err)
+	assert.Equal(t, "curl localhost:3001", rendered)
+	assert.Empty(t, cmds[0].MissingFields(withPort))
+	assert.Equal(t, []string{"Session.Port"}, cmds[0].MissingFields(without),
+		"a session with no managed port must not run a command that names one")
+}
+
+// And through the environment, which the template renderer cannot see.
+func TestPort_IsGatedThroughTheEnvironmentToo(t *testing.T) {
+	without := Ctx{Session: SessionCtx{Title: "web", Name: "web", Branch: "b", Worktree: "/wt"}, Repo: RepoCtx{Path: "/repo", Name: "web"}}
+
+	entry := ok()
+	entry.Command = `curl "localhost:$ATRIUM_PORT"`
+	cmds, problems := Validate([]config.CustomCommand{entry})
+	require.Empty(t, problems)
+
+	assert.Equal(t, []string{"Session.Port"}, cmds[0].MissingEnv(without))
+	assert.Contains(t, Env(Ctx{Session: SessionCtx{Port: "3001"}}), "ATRIUM_PORT=3001")
+}
+
+// moduleFile walks up from the test's working directory to the module root and reads
+// the named file (the identical helper in packages config and keys).
+func moduleFile(t *testing.T, name string) string {
+	t.Helper()
+	dir, err := os.Getwd()
+	require.NoError(t, err)
+	for {
+		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
+			b, err := os.ReadFile(filepath.Join(dir, name))
+			require.NoError(t, err)
+			return string(b)
+		}
+		parent := filepath.Dir(dir)
+		require.NotEqualf(t, parent, dir, "reached filesystem root without finding go.mod (looking for %s)", name)
+		dir = parent
+	}
+}
+
+// TestReadmeDocumentsEveryContextField is the drift guard the custom-commands table did
+// not have. It is the only place a user is told what a command may interpolate, and it
+// lives in a different file from the table it describes — so a new leaf (the managed
+// port, #389) shipped rendering, gated and undocumented, with a green suite.
+//
+// Both spellings, because the README presents them as interchangeable and the emptiness
+// gate treats them so: a row naming only the template form would leave a user with no
+// way to learn the variable.
+func TestReadmeDocumentsEveryContextField(t *testing.T) {
+	readme := moduleFile(t, "README.md")
+	start := strings.Index(readme, "#### Custom commands")
+	require.GreaterOrEqual(t, start, 0, "README must have a #### Custom commands section")
+	section := readme[start:]
+	if end := strings.Index(section, "\n#### "); end > 0 {
+		section = section[:end]
+	}
+
+	for _, f := range fieldAccess {
+		assert.Containsf(t, section, "{{ ."+f.path+" }}",
+			"the custom-commands table must document the %s placeholder", f.path)
+		assert.Containsf(t, section, "$"+f.env,
+			"the custom-commands table must document $%s", f.env)
 	}
 }

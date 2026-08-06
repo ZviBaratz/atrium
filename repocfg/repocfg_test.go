@@ -223,3 +223,81 @@ func TestValidateOne_ReportsNothingForAValidEntry(t *testing.T) {
 	assert.Nil(t, problem)
 	assert.True(t, script.HasSetupScript())
 }
+
+// A range on its own configures something. The "configures nothing" rule is about an
+// entry that shadows a later one while doing no work, and an entry that hands its
+// sessions a port does work — a user whose dev server reads $ATRIUM_PORT and whose
+// dependencies are already installed needs no script at all.
+func TestValidate_AcceptsAnEntryThatOnlyConfiguresAPortRange(t *testing.T) {
+	entry := config.RepoScript{Name: "web", PortRange: "3000-3099"}
+
+	got, problems := Validate([]config.RepoScript{entry})
+
+	require.Empty(t, problems)
+	require.Len(t, got, 1)
+	assert.False(t, got[0].HasSetupScript())
+	rng, ok := got[0].Ports()
+	require.True(t, ok)
+	assert.Equal(t, PortRange{Lo: 3000, Hi: 3099}, rng)
+}
+
+// An entry with no range reports none, which is what keeps "no port_range configured"
+// from being spelled as some sentinel range.
+func TestScript_ReportsNoRangeWhenNoneIsConfigured(t *testing.T) {
+	got, problems := Validate([]config.RepoScript{ok()})
+	require.Empty(t, problems)
+	require.Len(t, got, 1)
+
+	_, ok := got[0].Ports()
+
+	assert.False(t, ok)
+}
+
+// Every way a range can be wrong is refused at load time rather than at allocation
+// time, where the only surface is a session that quietly came up without a port.
+func TestValidate_RejectsAMalformedPortRange(t *testing.T) {
+	cases := []struct {
+		name    string
+		value   string
+		wantMsg string
+	}{
+		{"a bare port", "3000", "lo-hi"},
+		{"a missing high end", "3000-", "lo-hi"},
+		{"a missing low end", "-3099", "lo-hi"},
+		{"words", "three-thousand", "lo-hi"},
+		{"three parts", "3000-3010-3020", "lo-hi"},
+		{"inverted", "3099-3000", "the low end comes first"},
+		{"privileged", "80-8080", "1024"},
+		{"above the port space", "60000-70000", "65535"},
+		{"zero", "0-0", "1024"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			entry := ok()
+			entry.PortRange = tc.value
+
+			got, problems := Validate([]config.RepoScript{entry})
+
+			require.Empty(t, got, "a rejected entry must be dropped, not applied")
+			require.Len(t, problems, 1)
+			assert.Contains(t, problems[0].Error(), "port_range")
+			assert.Contains(t, problems[0].Error(), tc.wantMsg)
+		})
+	}
+}
+
+// A single-port range is spelled as a range, so there is one syntax to know rather
+// than two.
+func TestValidate_AcceptsASinglePortRange(t *testing.T) {
+	entry := ok()
+	entry.PortRange = "3000-3000"
+
+	got, problems := Validate([]config.RepoScript{entry})
+
+	require.Empty(t, problems)
+	require.Len(t, got, 1)
+	rng, ok := got[0].Ports()
+	require.True(t, ok)
+	assert.Equal(t, 1, rng.Count())
+}

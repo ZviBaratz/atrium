@@ -32,6 +32,7 @@ package repocfg
 import (
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 	"text/template"
 
@@ -56,7 +57,7 @@ type (
 // placeholder does not exist", never "this session happens to have no branch".
 // TestProbePopulatesEveryContextLeaf keeps that true as the context grows.
 var probe = Ctx{
-	Session: SessionCtx{Title: "probe", Name: "probe", Branch: "probe", Worktree: "/probe"},
+	Session: SessionCtx{Title: "probe", Name: "probe", Branch: "probe", Worktree: "/probe", Port: "3000"},
 	Repo:    RepoCtx{Path: "/probe", Name: "probe"},
 }
 
@@ -68,7 +69,32 @@ type Script struct {
 
 	setup *template.Template
 	env   []envEntry
+	ports PortRange
 }
+
+// PortRange is the inclusive span a session's managed port is drawn from.
+//
+// A zero value means the entry declares no range, which is not the same as a range
+// that happens to be exhausted: the first is "this repo has no managed port" and the
+// second is a condition to report. Ports() is what tells them apart.
+type PortRange struct {
+	Lo int
+	Hi int
+}
+
+// Count is how many ports the range holds, which is the ceiling on how many sessions
+// of this repo can hold one at once.
+func (r PortRange) Count() int {
+	// The zero value counts zero, not one: Lo == Hi == 0 is "no range declared", and a
+	// range of one is spelled with a real port on both ends.
+	if r.Lo <= 0 || r.Hi < r.Lo {
+		return 0
+	}
+	return r.Hi - r.Lo + 1
+}
+
+// String renders the range the way it is spelled in config.json.
+func (r PortRange) String() string { return fmt.Sprintf("%d-%d", r.Lo, r.Hi) }
 
 // envEntry is one session_env pair, kept as a slice rather than a map so the rendered
 // environment has a stable order.
@@ -134,11 +160,18 @@ func compile(e config.RepoScript) (Script, error) {
 	// no-op. Its route rules still MATCH, so keeping it would shadow a later entry
 	// that does configure something — a silent "my setup script never ran" with
 	// nothing to point at.
-	if strings.TrimSpace(e.SetupScript) == "" && len(e.SessionEnv) == 0 {
-		return Script{}, fmt.Errorf("entry configures nothing — set setup_script or session_env")
+	if strings.TrimSpace(e.SetupScript) == "" && len(e.SessionEnv) == 0 && strings.TrimSpace(e.PortRange) == "" {
+		return Script{}, fmt.Errorf("entry configures nothing — set setup_script, session_env or port_range")
 	}
 
 	script := Script{Name: e.Name}
+	if raw := strings.TrimSpace(e.PortRange); raw != "" {
+		rng, err := parsePortRange(raw)
+		if err != nil {
+			return Script{}, err
+		}
+		script.ports = rng
+	}
 	if strings.TrimSpace(e.SetupScript) != "" {
 		tmpl, err := compileTemplate("setup_script", e.SetupScript)
 		if err != nil {
@@ -194,6 +227,51 @@ func compileTemplate(field, text string) (*template.Template, error) {
 	return tmpl, nil
 }
 
+// minManagedPort is the bottom of the range a port_range may draw from. Below 1024 a
+// listener needs root on every platform Atrium runs on, so a dev server started from
+// an agent's pane could not bind one — refusing at load time says so where the message
+// can be read, rather than handing out a port every allocation then fails to prove free.
+const minManagedPort = 1024
+
+// maxPort is the top of the TCP port space.
+const maxPort = 65535
+
+// parsePortRange resolves the "lo-hi" spelling, refusing every way it can be wrong.
+//
+// One syntax, deliberately: a bare "3000" is refused rather than read as a range of
+// one, because the two spellings would differ in what happens when a second session
+// asks for a port — and a user who wrote the short form is likelier to have meant "the
+// dev server port" than "exactly one session may run".
+func parsePortRange(raw string) (PortRange, error) {
+	lo, hi, ok := strings.Cut(raw, "-")
+	if !ok {
+		return PortRange{}, fmt.Errorf("port_range %q is not a range — spell it lo-hi, e.g. 3000-3099", raw)
+	}
+	loN, loErr := strconv.Atoi(strings.TrimSpace(lo))
+	hiN, hiErr := strconv.Atoi(strings.TrimSpace(hi))
+	if loErr != nil || hiErr != nil {
+		return PortRange{}, fmt.Errorf("port_range %q is not a range of two numbers — spell it lo-hi, e.g. 3000-3099", raw)
+	}
+	if loN < minManagedPort || hiN < minManagedPort {
+		return PortRange{}, fmt.Errorf("port_range %q reaches below %d, where binding needs root", raw, minManagedPort)
+	}
+	if loN > maxPort || hiN > maxPort {
+		return PortRange{}, fmt.Errorf("port_range %q reaches above %d, the highest TCP port", raw, maxPort)
+	}
+	if hiN < loN {
+		return PortRange{}, fmt.Errorf("port_range %q ends below where it starts — the low end comes first", raw)
+	}
+	return PortRange{Lo: loN, Hi: hiN}, nil
+}
+
+// Ports reports the configured range, and false when the entry declares none.
+func (s Script) Ports() (PortRange, bool) {
+	if s.ports.Count() == 0 {
+		return PortRange{}, false
+	}
+	return s.ports, true
+}
+
 // reservedEnvName reports whether Atrium injects name itself.
 //
 // These are refused rather than allowed to win or lose. Every one of them is set on
@@ -203,9 +281,10 @@ func compileTemplate(field, text string) (*template.Template, error) {
 // works or does not depending on a detail nothing here controls. Refusing says so at
 // load time, where the message can be read.
 //
-// The whole ATRIUM_ prefix is reserved, not just the names in use today: the set grows
-// (a managed port is next), and a rule that listed them one by one would silently
-// start colliding with a config that was valid when it was written.
+// The whole ATRIUM_ prefix is reserved, not just the names in use today — which are
+// ATRIUM_SESSION, the marker, and ATRIUM_PORT. The set grows, and a rule that listed its
+// members one by one would silently start colliding with a config that was valid when it
+// was written.
 func reservedEnvName(name string) bool {
 	if strings.HasPrefix(name, "ATRIUM_") || name == "ATRIUM" {
 		return true

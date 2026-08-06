@@ -77,11 +77,12 @@ type setupRun struct {
 	// env is the script's whole environment: Atrium's $ATRIUM_* set plus the repo's
 	// own session_env.
 	env []string
-	// sessionEnv is only the repo's half. It is what tmux injects into the agent's
-	// pane, where the $ATRIUM_* set is not repeated: tmux sets its own ATRIUM_SESSION
-	// there, to the sanitized session handle rather than to the display name, and
-	// exporting a second spelling of the same name is how the two would come to
-	// disagree.
+	// sessionEnv is what tmux injects into the agent's pane: the repo's own values,
+	// plus ATRIUM_PORT when the session holds one. The rest of the $ATRIUM_* set is
+	// deliberately not repeated here — tmux sets its own ATRIUM_SESSION, to the
+	// sanitized session handle rather than to the display name, and exporting a second
+	// spelling of the same name is how the two would come to disagree. The port has no
+	// such second spelling: one number, one meaning, in both places.
 	sessionEnv []string
 	session    string
 }
@@ -188,32 +189,18 @@ func (i *Instance) runResolvedSetupScript(run setupRun) {
 // them, so a captured entry would freeze whatever the config said when the app
 // launched and an edit would never reach a resumed session.
 func (i *Instance) resolveSetupRun(dir string) (setupRun, bool) {
-	if dir == "" {
-		return setupRun{}, false
-	}
-	cfg := config.LoadConfig()
-	if len(cfg.RepoScripts) == 0 {
-		return setupRun{}, false
-	}
-
-	repoPath := i.GetRepoPath()
-	if repoPath == "" {
-		repoPath = i.Path
-	}
-	entry, index, ok := cfg.ResolveRepoScript(git.GetRemoteURL(i.baseContext(), repoPath), repoPath)
+	compiled, repoPath, ok := i.routeRepoScript(dir)
 	if !ok {
+		// Nothing routes here any more, so a port this session was holding under an
+		// older config goes back to whoever asks next.
+		i.releasePort()
 		return setupRun{}, false
 	}
 
-	// Validated one entry at a time, so a broken sibling entry cannot stop this one —
-	// carrying the entry's real position, because that is what a message about it is
-	// found by. The same problem is what the startup report and `atrium doctor` show, so
-	// logging is enough at this point: by now the user has already been told.
-	compiled, problem := repocfg.ValidateOne(index, entry)
-	if problem != nil {
-		log.WarningLog.Printf("setup script for %q not run: %s", i.Title, problem.Error())
-		return setupRun{}, false
-	}
+	// Before the context is built, because the port is one of its leaves: a template
+	// spelling {{.Session.Port}} and a script reading $ATRIUM_PORT both resolve from
+	// what this call decides (#389).
+	i.reservePort(compiled)
 
 	ctx := i.repoScriptCtx(dir, repoPath)
 	script, err := compiled.RenderSetup(ctx)
@@ -234,10 +221,69 @@ func (i *Instance) resolveSetupRun(dir string) (setupRun, bool) {
 		dir:    dir,
 		// The $ATRIUM_* set plus the repo's own. They cannot collide: every name
 		// customcmd.Env exports starts with ATRIUM_, and repocfg refuses that prefix.
-		env:        append(customcmd.Env(ctx), env...),
-		sessionEnv: env,
+		// ATRIUM_PORT rides the first half, since the port is a context leaf.
+		env: append(customcmd.Env(ctx), env...),
+		// The tmux half carries the port explicitly, because customcmd.Env is not in
+		// it: only the repo's own values and the ones Atrium must set per session go
+		// through `new-session -e`. A session with no port injects nothing at all, so
+		// the pane inherits whatever launched Atrium — deliberately, since tmux's
+		// session environment is frozen at birth and a placeholder set there could
+		// never be corrected. Note this is NOT how the setup script sees it: its
+		// environment is customcmd.Env's, which exports every $ATRIUM_* name whether or
+		// not it has a value (ATRIUM_BRANCH does the same for a direct session), so
+		// `${ATRIUM_PORT+x}` is set-and-empty in the script and absent in the pane. Test
+		// the value, not its existence.
+		sessionEnv: withPortEnv(i.PortText(), env),
 		session:    i.Title,
 	}, true
+}
+
+// withPortEnv prepends ATRIUM_PORT to the repo's own rendered pairs, or returns them
+// unchanged when the session holds no port. It copies rather than appending in place:
+// env is the slice the setup script's environment is also built from.
+func withPortEnv(port string, env []string) []string {
+	if port == "" {
+		return env
+	}
+	return append([]string{"ATRIUM_PORT=" + port}, env...)
+}
+
+// routeRepoScript loads the config and resolves the entry that governs this session's
+// repository, validated and ready to render. ok is false when the section is empty,
+// when nothing routes here, or when the routed entry is one the validator refuses.
+//
+// The config is read here rather than captured on the Instance for the reason carry.go
+// gives for the same choice: instances are rebuilt once at startup and Resume reuses
+// them, so a captured entry would freeze whatever the config said when the app launched
+// and an edit would never reach a resumed session.
+func (i *Instance) routeRepoScript(dir string) (repocfg.Script, string, bool) {
+	if dir == "" {
+		return repocfg.Script{}, "", false
+	}
+	cfg := config.LoadConfig()
+	if len(cfg.RepoScripts) == 0 {
+		return repocfg.Script{}, "", false
+	}
+
+	repoPath := i.GetRepoPath()
+	if repoPath == "" {
+		repoPath = i.Path
+	}
+	entry, index, ok := cfg.ResolveRepoScript(git.GetRemoteURL(i.baseContext(), repoPath), repoPath)
+	if !ok {
+		return repocfg.Script{}, "", false
+	}
+
+	// Validated one entry at a time, so a broken sibling entry cannot stop this one —
+	// carrying the entry's real position, because that is what a message about it is
+	// found by. The same problem is what the startup report and `atrium doctor` show, so
+	// logging is enough at this point: by now the user has already been told.
+	compiled, problem := repocfg.ValidateOne(index, entry)
+	if problem != nil {
+		log.WarningLog.Printf("setup script for %q not run: %s", i.Title, problem.Error())
+		return repocfg.Script{}, "", false
+	}
+	return compiled, repoPath, true
 }
 
 // repoScriptCtx is the template and environment context for this session. dir is the
@@ -254,6 +300,7 @@ func (i *Instance) resolveSetupRun(dir string) (setupRun, bool) {
 func (i *Instance) repoScriptCtx(dir, repoPath string) repocfg.Ctx {
 	return repocfg.Ctx{
 		Session: repocfg.SessionCtx{
+			Port:     i.PortText(),
 			Title:    i.Title,
 			Name:     i.DisplayName(),
 			Branch:   i.Branch,

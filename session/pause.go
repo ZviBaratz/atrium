@@ -80,6 +80,18 @@ func (i *Instance) pause() error {
 	ts := i.tmux()
 	wt := i.worktree()
 
+	// The managed port (#389) survives a pause whenever the pane does — which is every
+	// path below, since all of them detach rather than close. tmux freezes
+	// $ATRIUM_PORT at `new-session -e` and a resume re-attaches (Session.Restore is
+	// attach-session and nothing more), so the shell the user types in keeps the number
+	// it was born with. Releasing it here would let the next session created be handed
+	// that number while the parked pane still exports it — the collision the port
+	// exists to prevent, arrived at by way of freeing it.
+	//
+	// Deferred, so it covers the orphaned-worktree and direct branches below, which
+	// return early and park a session just as thoroughly.
+	defer i.releasePortIfPaneGone(ts)
+
 	// Direct session: no worktree to commit/remove. User-initiated Pause is refused
 	// for direct sessions (see Pause), so this branch is only reached via
 	// RecoverLostSession when the pane has died — park it so the poll loop stops and

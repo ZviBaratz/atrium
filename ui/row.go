@@ -319,6 +319,23 @@ func prSeg(p rowPaint, pr *git.PRStatus) (rowSeg, bool) {
 	return linkSeg(seg, pr.URL), true
 }
 
+// portSeg returns the managed dev-server port chip (#389) and whether the session has
+// one. Spelled ":3001" — the port alone, in the form a URL suffix takes — because the
+// host is always localhost and spelling it out would cost eleven columns on a line that
+// already carries a branch and the git chips.
+//
+// It is a link to that server, which costs nothing: linkSeg overrides only the rendered
+// bytes, so the OSC 8 sequence adds no display width. Dim, like the branch and the age:
+// the port is an identifier the user reads when they go looking for it, not a state
+// change demanding attention.
+func portSeg(p rowPaint, port int) (rowSeg, bool) {
+	if port == 0 {
+		return rowSeg{}, false
+	}
+	seg := p.seg(fmt.Sprintf(":%d", port), p.th.Palette.FgDim)
+	return linkSeg(seg, fmt.Sprintf("http://localhost:%d", port)), true
+}
+
 // linkSeg turns s into an OSC 8 hyperlink to url, overriding only its rendered
 // bytes: width() still reads s.plain (the visible text, escape-free), so the
 // link adds no columns and layout is unchanged. An empty url leaves s untouched.
@@ -339,4 +356,42 @@ func (p rowPaint) ageSeg(i *session.Instance) (rowSeg, bool) {
 		return rowSeg{}, false
 	}
 	return p.seg(age, p.th.Palette.FgDim), true
+}
+
+// line2Fits reports whether one more chip can be appended to line 2's groups without
+// pushing the line past width.
+//
+// It measures rather than asking composeLine to cope, because composeLine cannot: it
+// makes room by truncating the single flex segment, and line 2 has one only for a
+// renamed session. Everything else there is fixed width, so a line that does not fit is
+// rendered too long rather than shortened — and a row wider than the pane wraps.
+//
+// A flex segment counts as zero, because that is what composeLine can shrink it to: on a
+// renamed session the branch absorbs the chip's cost, which is the behaviour the width
+// test asserts. Everything else counts in full.
+//
+// The separator is counted whenever there is already a group to be separated from, which
+// is what makes this the width of the line as it would actually be composed rather than
+// of its parts.
+func line2Fits(p rowPaint, indentW int, groups [][]rowSeg, right []rowSeg, add rowSeg, width int) bool {
+	used := indentW
+	for gi, grp := range groups {
+		if gi > 0 {
+			used += p.sepSeg().width()
+		}
+		for _, s := range grp {
+			if s.flex {
+				continue
+			}
+			used += s.width()
+		}
+	}
+	for _, s := range right {
+		used += s.width()
+	}
+	if len(groups) > 0 {
+		used += p.sepSeg().width()
+	}
+	// One column of gap, the minimum composeLine keeps between the two sides.
+	return used+add.width()+1 <= width
 }

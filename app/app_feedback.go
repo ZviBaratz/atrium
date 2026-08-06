@@ -356,8 +356,9 @@ func repoScriptProblemsReport(problems []repocfg.Problem) string {
 	return strings.Join(lines, "\n")
 }
 
-// flushSetupFailures opens the report for a session whose per-repo setup script
-// failed (#389), once the screen is free.
+// flushSetupFailures opens the report for a session whose repo environment came up
+// short of what config.json asked for (#389): a setup script that failed, or a
+// port_range with nothing free. Once the screen is free.
 //
 // It reads the fleet rather than a buffered message, which is what lets one call site
 // cover every way a script can run: a fresh session's Start and a resume's
@@ -378,6 +379,18 @@ func (m *home) flushSetupFailures() tea.Cmd {
 			continue
 		}
 		inst.ClearSetupError()
+		return m.showInfo(report)
+	}
+	// The other way a repo's environment can come up short of what it configured: a
+	// port_range with nothing free (#389). Same channel, because it is the same
+	// question — "why is this session missing something its config promised" — and the
+	// same clear-as-you-show rule keeps the tick from reopening it.
+	for _, inst := range m.list.GetInstances() {
+		report := inst.PortProblem()
+		if report == "" {
+			continue
+		}
+		inst.ClearPortProblem()
 		return m.showInfo(report)
 	}
 	return nil

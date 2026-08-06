@@ -735,6 +735,7 @@ and an entry with no rules at all is the catch-all:
     "remote_matches": ["acme/web"],
     "path_matches": ["projects/web"],
     "setup_script": "npm ci && npm run db:migrate",
+    "port_range": "3000-3099",
     "session_env": { "GOLANGCI_LINT_CACHE": "/tmp/lint-{{.Session.Title}}" }
   }]
 }
@@ -788,6 +789,45 @@ rather than failing.
 One interaction to know about: a script that runs `npm install` under a path listed in
 [`link_paths`](#linked-paths) is writing into your own checkout's tree, shared by every
 other session at once. Linking and installing are alternatives, not a pair.
+
+#### Managed ports
+
+`port_range` hands each session of that repo one TCP port of its own, so two sessions
+can run the same dev server at once without you resolving the collision by hand. It is
+spelled `lo-hi`, inclusive, and both ends must be 1024 or above.
+
+The port reaches a session three ways, all carrying the same number:
+
+| Where | Spelling |
+|-------|----------|
+| The agent's pane, and the setup script | `$ATRIUM_PORT` |
+| `setup_script` and `session_env` templates | `{{.Session.Port}}` |
+| [Custom commands](#custom-commands) | either |
+
+So `npm run dev -- --port $ATRIUM_PORT` in the agent's own shell does the right thing
+for whichever session it is typed in, and the row shows `:3001` — a link, on a terminal
+that supports them, to `http://localhost:3001`.
+
+A session keeps its port for as long as its pane lives: allocated when the worktree is
+materialized, kept across a pause, released on kill. It survives an Atrium restart too,
+so a server you started stays reachable at the number the row shows.
+
+That a *paused* session still holds its port is deliberate, and it is the one place the
+design costs you something. tmux fixes a session's environment when the pane is created
+and a resume re-attaches rather than relaunching, so the shell you type in exports the
+port it was born with, whatever Atrium decides later. Handing that number to the next
+session created — which is what releasing it on pause would do — leaves two sessions
+aimed at one port, and the parked one finds out when you resume it. So a parked session
+occupies a port until it is killed. Size the range for the sessions you park as well as
+the ones you run.
+
+Two sessions are never handed the same port: Atrium tracks what its own sessions hold
+and, separately, refuses a port anything else is already listening on. That second check
+is a snapshot — a port free when the session is created can be taken before your server
+binds it — so it is a filter against what is already running, not a reservation.
+
+If nothing in the range is free the session still starts, without `$ATRIUM_PORT`, and
+says so in a modal. Widen the range or free a port by pausing another session.
 
 While the script runs the session's row says so, and the preview names it in place of
 the generic "Setting up workspace…" it shows for every other session that has not come
@@ -1119,6 +1159,7 @@ The context reaches your command two ways, and either is fine:
 | `{{ .Session.Name }}` | `$ATRIUM_SESSION` | the display label (the one `R` renames) |
 | `{{ .Session.Branch }}` | `$ATRIUM_BRANCH` | the session's branch; empty for a direct session |
 | `{{ .Session.Worktree }}` | `$ATRIUM_WORKTREE` | the isolated worktree, once the session has started |
+| `{{ .Session.Port }}` | `$ATRIUM_PORT` | the session's [managed port](#managed-ports); empty unless its repo declares a `port_range` |
 | `{{ .Repo.Path }}` | `$ATRIUM_REPO` | the repository root |
 | `{{ .Repo.Name }}` | `$ATRIUM_REPO_NAME` | the repository's name, as the session list groups by |
 
