@@ -21,7 +21,6 @@ import (
 	"github.com/ZviBaratz/atrium/repocfg"
 	"github.com/ZviBaratz/atrium/session"
 	"github.com/ZviBaratz/atrium/session/tmux"
-	"github.com/ZviBaratz/atrium/session/transcript"
 	"github.com/ZviBaratz/atrium/ui"
 	"github.com/ZviBaratz/atrium/ui/overlay"
 	"github.com/ZviBaratz/atrium/ui/theme"
@@ -571,10 +570,6 @@ type home struct {
 	// not the live selection, so an arriving load result can be matched against the
 	// session that asked for it and a result for any other one dropped.
 	checkpointTarget *session.Instance
-	// checkpointRows is what the open timeline's row indices mean, held in the same
-	// order the overlay was given so SelectedIndex maps straight through
-	// (the paletteRows / customCommandRows shape).
-	checkpointRows []transcript.Checkpoint
 	// commandPaletteOverlay is the fuzzy-over-every-action picker (#374).
 	commandPaletteOverlay *overlay.CommandPaletteOverlay
 	// paletteRows is what the open palette's row indices mean: the overlay reports

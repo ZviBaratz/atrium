@@ -11,8 +11,6 @@ package app
 // rewind the conversation along with the code. The findings are on the issue.
 
 import (
-	"fmt"
-
 	"github.com/ZviBaratz/atrium/log"
 	"github.com/ZviBaratz/atrium/session"
 	"github.com/ZviBaratz/atrium/session/transcript"
@@ -48,7 +46,6 @@ func (m *home) openCheckpoints() (tea.Model, tea.Cmd) {
 	}
 
 	m.checkpointTarget = selected
-	m.checkpointRows = nil
 	m.checkpointOverlay = overlay.NewCheckpointOverlay(selected.DisplayName())
 	m.state = stateCheckpoints
 	// Sized here rather than by returning tea.RequestWindowSize, for the reason
@@ -79,12 +76,10 @@ func (m *home) handleCheckpointsLoaded(msg checkpointsLoadedMsg) (tea.Model, tea
 		// A missing transcript is the common case here (a session that has not had a
 		// turn yet), not a fault worth an error line — the box states it instead.
 		log.WarningLog.Printf("checkpoints for %q: %v", msg.target.DisplayName(), msg.err)
-		m.checkpointRows = nil
 		m.checkpointOverlay.SetUnavailable("no transcript for this session yet")
 		return m, nil
 	}
 	if len(msg.result.List) == 0 {
-		m.checkpointRows = nil
 		// Also how an older Claude, or one with checkpointing switched off, reads:
 		// the records simply are not in the transcript, and there is nothing to
 		// probe for. An empty list is a legitimate answer, not a degraded one.
@@ -92,11 +87,16 @@ func (m *home) handleCheckpointsLoaded(msg checkpointsLoadedMsg) (tea.Model, tea
 		return m, nil
 	}
 
-	// Newest first — the checkpoint a user wants is nearly always a recent one — and
-	// the app's row table is stored in the same order, so SelectedIndex maps through.
-	m.checkpointRows = reverseCheckpoints(msg.result.List)
-	rows := make([]overlay.CheckpointRow, 0, len(m.checkpointRows))
-	for _, cp := range m.checkpointRows {
+	// Newest first — the checkpoint a user wants is nearly always a recent one, and
+	// the cursor opens on it. The reader returns file order, so reverse here, once.
+	//
+	// No parallel row table is kept, unlike the palette's: v1's only action is
+	// "attach to this session", which the cursor position does not affect. When a
+	// per-checkpoint action arrives it will need one, and the read-once intent flags
+	// are the seam for it.
+	rows := make([]overlay.CheckpointRow, 0, len(msg.result.List))
+	for i := len(msg.result.List) - 1; i >= 0; i-- {
+		cp := msg.result.List[i]
 		rows = append(rows, overlay.CheckpointRow{
 			When:    cp.At,
 			Label:   cp.Label,
@@ -120,16 +120,6 @@ func checkpointNote(result transcript.Checkpoints) string {
 	return ""
 }
 
-// reverseCheckpoints returns the list newest-first. The reversal happens exactly
-// once, here, so the overlay's indices and m.checkpointRows can never disagree.
-func reverseCheckpoints(list []transcript.Checkpoint) []transcript.Checkpoint {
-	out := make([]transcript.Checkpoint, len(list))
-	for i, cp := range list {
-		out[len(list)-1-i] = cp
-	}
-	return out
-}
-
 // handleCheckpointsState routes a key to the timeline and acts on what it armed.
 func (m *home) handleCheckpointsState(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	shouldClose := m.checkpointOverlay.HandleKeyPress(msg)
@@ -144,19 +134,25 @@ func (m *home) handleCheckpointsState(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) 
 		if target == nil {
 			return m, nil
 		}
-		selected := m.checkpointSelection()
 		// Dismiss before attaching: attachExec suspends the event loop, and a box
 		// still on screen when the terminal is handed to tmux would be repainted
 		// over an attached session.
 		m.dismissCheckpointOverlay()
+		// Refusals speak, a successful attach does not — the same split
+		// attachSelected makes, and for a sharper reason here: the next thing that
+		// happens is tmux taking the terminal, so a notice would be painted for one
+		// frame and then buried. The footer carries the Esc-Esc reminder instead,
+		// where it is read before the keypress rather than after it.
 		if target.Paused() {
 			return m, m.handleInfoNotice("session is paused — press r to resume, then Esc Esc in the agent")
 		}
-		notice := "attached — press Esc Esc in claude to rewind"
-		if selected != nil {
-			notice = fmt.Sprintf("attached — press Esc Esc in claude and pick %s", checkpointStamp(*selected))
+		if target.GetStatus() == session.Loading {
+			return m, m.handleInfoNotice(stillStartingNotice)
 		}
-		return m, tea.Sequence(m.handleInfoNotice(notice), m.attachExec(target.Attach, target))
+		if !target.TmuxAlive() {
+			return m, m.handleInfoNotice("session terminal has exited — nothing to attach to")
+		}
+		return m, m.attachExec(target.Attach, target)
 	}
 
 	if shouldClose {
@@ -166,31 +162,9 @@ func (m *home) handleCheckpointsState(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) 
 	return m, nil
 }
 
-// checkpointSelection is the checkpoint under the cursor, or nil when the list is
-// empty (loading, unavailable, or nothing recorded).
-func (m *home) checkpointSelection() *transcript.Checkpoint {
-	idx := m.checkpointOverlay.SelectedIndex()
-	if idx < 0 || idx >= len(m.checkpointRows) {
-		return nil
-	}
-	cp := m.checkpointRows[idx]
-	return &cp
-}
-
-// checkpointStamp names a checkpoint the way the user will have to recognize it in
-// Claude's own rewind list — by its time, which is all both surfaces show.
-func checkpointStamp(cp transcript.Checkpoint) string {
-	if cp.At.IsZero() {
-		return "the checkpoint you were looking at"
-	}
-	return "the one from " + cp.At.Format("15:04")
-}
-
-// dismissCheckpointOverlay tears the timeline down and returns to the list. The row
-// table goes with it, so a stale index can never resolve to a checkpoint.
+// dismissCheckpointOverlay tears the timeline down and returns to the list.
 func (m *home) dismissCheckpointOverlay() {
 	m.checkpointOverlay = nil
 	m.checkpointTarget = nil
-	m.checkpointRows = nil
 	m.state = stateDefault
 }
