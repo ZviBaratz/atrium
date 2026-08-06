@@ -42,6 +42,17 @@ func launchedAgent(pty *recordingPtyFactory) bool {
 // it is the only shape that rations recovery.
 func softCap(limit int) config.SessionCap { return config.SessionCap{Limit: limit, Soft: true} }
 
+// parkedTitles is the titles a report names, for the assertions that are about WHICH
+// sessions were parked rather than about how they are identified. The pair itself is
+// asserted where it matters — see TestBringOnline_ParksRecoveryPastTheHostBudget.
+func parkedTitles(d DeferredRecovery) []string {
+	titles := make([]string, 0, len(d.Sessions))
+	for _, parked := range d.Sessions {
+		titles = append(titles, parked.Title)
+	}
+	return titles
+}
+
 // recoverableInstance builds an instance whose tmux session is gone but whose
 // worktree is real and valid, so recovery relaunches its agent and reaches Running.
 // It returns the pty factory so the caller can tell a launch from a park.
@@ -105,6 +116,7 @@ func TestBringOnline_ParksRecoveryPastTheHostBudget(t *testing.T) {
 	a, ptyA := recoverableInstance(t, "alpha")
 	b, ptyB := recoverableInstance(t, "bravo")
 	c, ptyC := recoverableInstance(t, "charlie")
+	c.Path = "/repo/web"
 
 	deferred := bringOnline([]*Instance{a, b, c}, softCap(2))
 
@@ -118,7 +130,12 @@ func TestBringOnline_ParksRecoveryPastTheHostBudget(t *testing.T) {
 	require.Empty(t, ptyC.cmds, "nor is its pane touched at all")
 	require.True(t, c.started, "a parked session is still started, so its row renders")
 
-	require.Equal(t, []string{"charlie"}, deferred.Titles, "the park is reported, not silent")
+	// Reported as the (Title, Path) pair, not a bare title: the report can outlive the
+	// process that made it (internal/parkreport), and a reader reconciling it against a
+	// later fleet has to know which row it names — a title is unique only within a repo
+	// group.
+	require.Equal(t, []ParkedSession{{Title: "charlie", Path: "/repo/web"}}, deferred.Sessions,
+		"the park is reported, not silent, and identified the way storage matches instances")
 	require.Equal(t, 2, deferred.Limit, "in the number the loader actually applied")
 
 	// The park must be a bare status flip: routing it through pause() would commit the
@@ -152,7 +169,7 @@ func TestBringOnline_SurvivorsReserveTheBudgetBeforeRelaunches(t *testing.T) {
 
 	require.True(t, b.Paused(), "the second relaunch does not: the survivor already took a slot")
 	require.False(t, launchedAgent(ptyB), "a single-pass budget would have launched this agent")
-	require.Equal(t, []string{"bravo"}, deferred.Titles)
+	require.Equal(t, []string{"bravo"}, parkedTitles(deferred))
 }
 
 // TestBringOnline_SurvivingFleetIsNeverParked pins the case that must stay silent: a
@@ -173,7 +190,7 @@ func TestBringOnline_SurvivingFleetIsNeverParked(t *testing.T) {
 	for _, pty := range []*recordingPtyFactory{ptyA, ptyB, ptyC} {
 		require.False(t, launchedAgent(pty), "and none of them launches an agent")
 	}
-	require.Empty(t, deferred.Titles, "so there is nothing to report and no toast to show")
+	require.Empty(t, deferred.Sessions, "so there is nothing to report and no toast to show")
 }
 
 // TestBringOnline_PausedSessionsCostNothing asserts a stored-Paused session neither
@@ -194,7 +211,7 @@ func TestBringOnline_PausedSessionsCostNothing(t *testing.T) {
 	require.True(t, parked.started, "and is marked started")
 	require.Equal(t, Running, live.GetStatus(), "the paused row did not spend the only slot")
 	require.True(t, launchedAgent(ptyLive))
-	require.Empty(t, deferred.Titles, "and nothing is reported as newly parked")
+	require.Empty(t, deferred.Sessions, "and nothing is reported as newly parked")
 }
 
 // TestBringOnline_FailedRecoveryReturnsItsSlot asserts a relaunch that fails hands its
@@ -212,7 +229,7 @@ func TestBringOnline_FailedRecoveryReturnsItsSlot(t *testing.T) {
 	require.False(t, launchedAgent(ptyDoomed), "having started nothing")
 	require.Equal(t, Running, healthy.GetStatus(), "so the slot it took is available again")
 	require.True(t, launchedAgent(ptyHealthy))
-	require.Empty(t, deferred.Titles, "and the healthy session is not reported as parked")
+	require.Empty(t, deferred.Sessions, "and the healthy session is not reported as parked")
 }
 
 // TestBringOnline_ExplicitMaxSessionsDoesNotRation is the answer to whether a hard cap
@@ -242,7 +259,7 @@ func TestBringOnline_ExplicitMaxSessionsDoesNotRation(t *testing.T) {
 			require.True(t, launchedAgent(ptyA))
 			require.Equal(t, Running, b.GetStatus(), "an explicit cap does not park recovery")
 			require.True(t, launchedAgent(ptyB))
-			require.Empty(t, deferred.Titles)
+			require.Empty(t, deferred.Sessions)
 		})
 	}
 }
@@ -263,7 +280,7 @@ func TestParkedOverflowResumesWithoutLosingUncommittedWork(t *testing.T) {
 	wip := filepath.Join(parked.worktree().GetWorktreePath(), "wip.txt")
 	require.NoError(t, os.WriteFile(wip, []byte("half-finished\n"), 0o644))
 
-	require.Equal(t, []string{"bravo"}, bringOnline([]*Instance{a, parked}, softCap(1)).Titles)
+	require.Equal(t, []string{"bravo"}, parkedTitles(bringOnline([]*Instance{a, parked}, softCap(1))))
 	require.True(t, parked.Paused())
 
 	// The park itself must not have touched the file — a pause()-routed park would
@@ -304,7 +321,7 @@ func TestNewRecoveryBudget_OnlyTheSoftCapRations(t *testing.T) {
 // the first session it meets.
 func TestNilRecoveryBudgetGrantsEverything(t *testing.T) {
 	var b *recoveryBudget
-	require.True(t, b.spend("anything"))
+	require.True(t, b.spend(&Instance{Title: "anything"}))
 	b.reserve()
 	b.refund()
 	require.Equal(t, DeferredRecovery{}, b.result())
@@ -335,7 +352,7 @@ func TestParkedOverflowSurvivesAFailedResume(t *testing.T) {
 	branch := wt.GetBranchName()
 	repo := wt.GetRepoPath()
 
-	require.Equal(t, []string{"bravo"}, bringOnline([]*Instance{holder, parked}, softCap(1)).Titles)
+	require.Equal(t, []string{"bravo"}, parkedTitles(bringOnline([]*Instance{holder, parked}, softCap(1))))
 	require.True(t, parked.Paused())
 
 	require.Error(t, parked.Resume(), "the agent cannot be relaunched in this fixture")

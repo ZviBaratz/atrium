@@ -18,6 +18,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/ZviBaratz/atrium/config"
+	"github.com/ZviBaratz/atrium/internal/parkreport"
 	"github.com/ZviBaratz/atrium/log"
 	"github.com/ZviBaratz/atrium/session"
 	"os"
@@ -137,10 +138,11 @@ func RunDaemon(ctx context.Context, cfg *config.Config) error {
 	// be: the daemon reaches the identical path (a tmux server that died around TUI
 	// exit leaves every persisted-live session needing recovery), and it then sets
 	// AutoYes on all of them, so an unrationed fleet here would be auto-answered as
-	// well as oversubscribed. The gate lives inside LoadInstances, which is why there
-	// is nothing to do here but discard its report: the daemon has no UI to surface a
-	// deferral on, and the parks it makes reach the TUI through the SaveInstances below.
-	instances, _, err := storage.LoadInstances(ctx)
+	// well as oversubscribed. The gate lives inside LoadInstances; the report it
+	// returns is held for saveAndReport below, because the daemon has no UI to toast it
+	// on and the parks themselves reach the TUI as ordinary Paused rows — which is
+	// exactly why discarding it made a fleet-wide park unexplainable (#622).
+	instances, deferred, err := storage.LoadInstances(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to load instances: %w", err)
 	}
@@ -214,10 +216,40 @@ func RunDaemon(ctx context.Context, cfg *config.Config) error {
 	close(stopCh)
 	wg.Wait()
 
+	saveAndReport(storage, instances, deferred)
+	return nil
+}
+
+// saveAndReport persists the daemon's instances and then spools the startup-recovery
+// deferral report for the next TUI, which is the only process with a surface to show it
+// on (#622).
+//
+// The order is the invariant: the explanation is written only if the park it explains
+// is durable. A park lives in state.json as an ordinary Paused row, so a save that
+// failed leaves those sessions recorded as Running — the next TUI recovers them, and a
+// report claiming they were parked would name sessions that came back. A daemon killed
+// before either write (StopDaemon escalates to SIGKILL after gracefulStopTimeout) loses
+// both together, which is the same consistent state.
+func saveAndReport(storage *session.Storage, instances []*session.Instance, deferred session.DeferredRecovery) {
 	if err := storage.SaveInstances(instances); err != nil {
 		log.ErrorLog.Printf("failed to save instances when terminating daemon: %v", err)
+		return
 	}
-	return nil
+	if len(deferred.Sessions) == 0 {
+		return
+	}
+	report := parkreport.Report{Limit: deferred.Limit}
+	for _, parked := range deferred.Sessions {
+		report.Sessions = append(report.Sessions, parkreport.Session{Title: parked.Title, Path: parked.Path})
+	}
+	if err := parkreport.Write(report); err != nil {
+		// Non-fatal: the parks are already persisted, and the per-session log line
+		// parkOverBudget writes remains the fallback record.
+		log.WarningLog.Printf("could not spool the deferred-recovery report: %v", err)
+		return
+	}
+	log.InfoLog.Printf("spooled a deferred-recovery report for %d session(s) parked at the host budget of %d",
+		len(deferred.Sessions), deferred.Limit)
 }
 
 // selfPath is the binary's path resolved once at process start. LaunchDaemon

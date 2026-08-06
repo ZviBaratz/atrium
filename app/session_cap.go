@@ -193,7 +193,7 @@ func (m *home) resumeCapNotice(n int) string {
 // would have had "paused sessions" truncated off an 80-column bar. The bound is asserted
 // at three digits for both, which is why the overflow was caught rather than shipped.
 func startupParkNotice(d session.DeferredRecovery) string {
-	n := len(d.Titles)
+	n := len(d.Sessions)
 	if n == 0 {
 		return ""
 	}
@@ -203,11 +203,38 @@ func startupParkNotice(d session.DeferredRecovery) string {
 	return fmt.Sprintf("%d sessions stayed paused — host capacity is %d (ctrl+r resumes paused)", n, d.Limit)
 }
 
-// startupParkNoticeMaxWidth is the widest either startupParkNotice spelling may
-// render, in cells, and it is a *bound to keep* rather than a measurement: the
-// notice row truncates its tail, so a spelling that outgrows the narrowest supported
-// terminal loses the key it advertises. 78 is the room an 80-column terminal leaves
-// (ui.Menu.String truncates at width-2). Pinned by TestStartupParkNoticeFitsNarrowBar.
+// earlierParkNotice is startupParkNotice for a park a DIFFERENT process made while the
+// user was away — the autoyes daemon's, arriving through the spool (#622). "" when
+// nothing survived reconciliation.
+//
+// Only the tense differs, and it has to. "stayed paused" is present-tense about the
+// load the user just triggered; a spooled report describes a decision taken hours ago,
+// by a process they never saw, so the same words would misdate it. Everything else is
+// deliberately identical — the capacity rather than a live count, no session title, and
+// ctrl+r rather than r — for the reasons startupParkNotice argues above.
+//
+// "earlier" is also what the width budget affords. It costs one cell more than "stayed
+// paused" (74 against 73 at the worst case both interpolations can reach), where
+// "parked while away" would leave a single cell of headroom on an 80-column bar; both
+// spellings are held to startupParkNoticeMaxWidth by
+// TestStartupParkNoticeFitsNarrowBar rather than by this arithmetic.
+func earlierParkNotice(d session.DeferredRecovery) string {
+	n := len(d.Sessions)
+	if n == 0 {
+		return ""
+	}
+	if n == 1 {
+		return fmt.Sprintf("1 session parked earlier — host capacity is %d (ctrl+r resumes paused)", d.Limit)
+	}
+	return fmt.Sprintf("%d sessions parked earlier — host capacity is %d (ctrl+r resumes paused)", n, d.Limit)
+}
+
+// startupParkNoticeMaxWidth is the widest any park-notice spelling may render, in
+// cells — both startupParkNotice's and earlierParkNotice's — and it is a *bound to
+// keep* rather than a measurement: the notice row truncates its tail, so a spelling
+// that outgrows the narrowest supported terminal loses the key it advertises. 78 is the
+// room an 80-column terminal leaves (ui.Menu.String truncates at width-2). Pinned by
+// TestStartupParkNoticeFitsNarrowBar.
 const startupParkNoticeMaxWidth = 78
 
 // spawnPlan is a fully-validated, ready-to-spawn creation: title conflicts,

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/ZviBaratz/atrium/internal/parkreport"
 	"github.com/ZviBaratz/atrium/log"
 	"github.com/ZviBaratz/atrium/session"
 	"github.com/ZviBaratz/atrium/ui"
@@ -237,12 +238,38 @@ func (m *home) surfaceLostRecoveries(recoveries []lostRecovery) tea.Cmd {
 // Unlike the background update notice this is not suppressed with hint_bar off: it
 // reports a consequence of the launch the user just performed, so it rides the
 // reserved row the same way surfaceLostRecoveries' own park toast does (#438).
+//
+// It flushes either of two buffers: this load's own report, and one an earlier process
+// spooled (#622). They are mutually exclusive by construction — pendingParkReports reads
+// the spool only when this load deferred nothing — so the "either" never arbitrates; the
+// in-process report is checked first anyway, because a park the user's own launch just
+// made is the more urgent of the two and the other is bounded by the spool's TTL.
+//
+// The spool file is unlinked here rather than at the read, so a quit inside the window
+// before the first preview tick leaves the explanation on disk for the next launch
+// instead of erasing it — which is the whole failure this path was added for.
 func (m *home) flushDeferredRecovery() tea.Cmd {
-	text := startupParkNotice(m.pendingDeferredRecovery)
-	if text == "" || m.state != stateDefault {
+	if m.state != stateDefault {
 		return nil
 	}
-	m.pendingDeferredRecovery = session.DeferredRecovery{}
+	if text := startupParkNotice(m.pendingDeferredRecovery); text != "" {
+		m.pendingDeferredRecovery = session.DeferredRecovery{}
+		return m.handleInfoNotice(text)
+	}
+	text := earlierParkNotice(m.pendingEarlierRecovery)
+	if text == "" {
+		return nil
+	}
+	m.pendingEarlierRecovery = session.DeferredRecovery{}
+	if err := parkreport.Remove(); err != nil {
+		// Logged, not surfaced: the notice the user needed is already on screen. A
+		// persistent failure (a read-only data dir, an immutable file) repeats the toast on
+		// every later launch until the TTL expires or the rows stop reconciling — no
+		// poisoning set like the outbox drain's, because re-delivery here costs a duplicate
+		// notice rather than a duplicate prompt injected into a session, and the notice it
+		// repeats is still true of rows that are still parked.
+		log.ErrorLog.Printf("could not remove a delivered deferred-recovery report: %v", err)
+	}
 	return m.handleInfoNotice(text)
 }
 
