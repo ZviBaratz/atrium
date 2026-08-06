@@ -58,7 +58,7 @@ cannot install it. Once per machine:
 
 `enabledPlugins` does the rest. Until you run it the skill simply will not resolve.
 
-## Adding a keybinding — 7 sites, all guarded
+## Adding a keybinding — 8 sites, all but one guarded
 
 At last count: **63 registry entries** and **52 dispatch-case lines**, with a dozen-odd
 drift guards in `keys/*_test.go` and **4** in `app/dispatch_coverage_test.go`.
@@ -78,11 +78,22 @@ a number no decision hangs on just taxes every unrelated test someone adds.
 | 4 | `app/app_update.go` — `case keys.KeyX:` in `dispatchAction` | `TestEveryRegistryActionHasADispatchCase` — see below |
 | 5 | `keys/registry_test.go` — the string→action pair in the golden inventory | itself (`TestGlobalKeyStringsMap_GoldenInventory`) |
 | 6 | `README.md` `#### Keybindings` — backtick-wrapped, in that section | `TestReadmeDocumentsEveryBinding` |
-| 7 | `app/app_update.go` `keyAllowedWhileBusy` — *only if* it must work during an async action | manual |
+| 7 | `app/palette_gates.go` — a `paletteGates` entry (`global()` / `needsSelection` / `perSession`) | `TestEveryPaletteActionHasAGate` **and** `TestPaletteGatesAgreeWithDispatch` (both directions) |
+| 8 | `app/app_update.go` `keyAllowedWhileBusy` — *only if* it must work during an async action | manual |
 
 Plus, situationally: `ui/menu.go`'s context hint sets (`defaultHintKeys` and
 friends) if the key should appear in the bar — guarded in the reverse direction
 only, by `ui/menu_scan_test.go`.
+
+Site 7 is mandatory for every *dispatchable* action, and it is the one that fails
+in a file you were not editing — the palette reaches every action, so an un-gated
+one defaults into "always fine" by omission. Two things to get right, both of which
+`TestPaletteGatesAgreeWithDispatch` will tell you about: the gate must not be
+*stricter* than the handler (a false dim makes the action unreachable from the
+palette for a reason that is simply wrong), and where the handler checks several
+preconditions the gate should check them **in the handler's order**, or the row
+explains itself with the wrong one. A new chip-sized reason also belongs in
+`TestPaletteGateReasonsFitTheRow`'s list, which is hand-maintained.
 
 **Site 4 was the gap until #374 closed it.** The count mismatch is why nobody had
 written the obvious assertion: 63 entries against 52 case *lines* is not 11

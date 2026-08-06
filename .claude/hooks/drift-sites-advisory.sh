@@ -27,7 +27,7 @@ fi
 case "$path" in
 *keys/registry.go)
 	cat >&2 <<-'EOF'
-		keys/registry.go touched — a keybinding has 7 sites, and all 7 are now guarded.
+		keys/registry.go touched — a keybinding has 8 sites, all but one guarded.
 
 		  1 keys/keys.go            KeyName const + doc comment
 		  2 keys/registry.go        the Entry                      <- you are here
@@ -35,7 +35,8 @@ case "$path" in
 		  4 app/app_update.go       case keys.KeyX: in dispatchAction
 		  5 keys/registry_test.go   the golden inventory pair
 		  6 README.md               `#### Keybindings`, backticked
-		  7 app/app_update.go       keyAllowedWhileBusy, if it must work mid-action
+		  7 app/palette_gates.go    a paletteGates entry, for any dispatchable action
+		  8 app/app_update.go       keyAllowedWhileBusy, if it must work mid-action
 
 		Site 4 used to be the hole — a key could ship registered, documented,
 		README'd and dead. TestEveryRegistryActionHasADispatchCase closes it by
@@ -43,6 +44,10 @@ case "$path" in
 
 		It proves the case exists, not that it does the right thing. Still press the
 		key, or drive it through handleKeyPress in a test.
+
+		Site 7 fails in a file you were not editing: the palette reaches every action,
+		so an un-gated one defaults into "always fine". Keep the gate no stricter than
+		the handler, and check the preconditions in the handler's order.
 		See .claude/skills/tui-drift-sites/SKILL.md.
 	EOF
 	exit 2
