@@ -736,7 +736,10 @@ func (m *home) anyLoading() bool {
 // already SIGKILLed by the cancelled context and it unwinds in well under a
 // second; on force-quit a genuinely in-progress `git worktree add` is itself
 // capped at gitLocalTimeout (30s), and 5s comfortably covers a warm-repo worktree
-// add plus tmux new-session while capping worst-case exit delay. A Start still
+// add plus tmux new-session while capping worst-case exit delay. The one thing in
+// that goroutine with no bound of its own is the per-repo setup script (#389), which
+// is why reconcileInFlightStarts cancels it before waiting rather than trusting this
+// number to outlast an `npm ci`. A Start still
 // running past this is treated as wedged and left as-is (the orphan #281 already
 // produced) rather than risking a data race by touching a live start. A var, not
 // a const, so tests can shrink the wait.
@@ -784,6 +787,19 @@ func (m *home) drainStarts(timeout time.Duration) bool {
 func (m *home) reconcileInFlightStarts(ctx context.Context) {
 	if !m.anyLoading() {
 		return
+	}
+	// End any per-repo setup script first (#389). A script deliberately has no
+	// timeout — `npm ci` on a cold cache legitimately runs for minutes — and it runs
+	// inside the very goroutine drainStarts is about to wait on. On a signal shutdown
+	// the cancelled lifecycle context has already killed it and this is a no-op; on
+	// the force-quit path that context is still live, so without this the drain always
+	// times out and the session is "left as-is" with a worktree and branch that never
+	// reached state.json, and the script outlives the app that started it. Safe to
+	// call on every instance: it does nothing when no script is running.
+	for _, inst := range m.list.GetInstances() {
+		if inst.GetStatus() == session.Loading {
+			inst.AbortSetupScript()
+		}
 	}
 	if !m.drainStarts(drainTimeout) {
 		log.WarningLog.Printf("shutdown: in-flight session start did not settle within %s; left as-is", drainTimeout)

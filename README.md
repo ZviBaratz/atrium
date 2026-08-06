@@ -724,21 +724,30 @@ run the project starts by doing that itself, in a tree where nothing is installe
 exists and **before the agent program launches into it**.
 
 Configuration is per repository, but it lives in your own `config.json` rather than in
-the repo. Entries are routed exactly like [Claude accounts](#claude-accounts) — git
-`origin` substrings first, then target-directory substrings, first match wins, and an
-entry with no rules at all is the catch-all:
+the repo. Entries are routed by the matcher [Claude accounts](#claude-accounts) use —
+case-insensitive substrings, `origin` remote first and then a path, first match wins,
+and an entry with no rules at all is the catch-all:
 
 ```json
 {
   "repo_scripts": [{
     "name": "web",
     "remote_matches": ["acme/web"],
-    "path_matches": ["/projects/web/"],
+    "path_matches": ["projects/web"],
     "setup_script": "npm ci && npm run db:migrate",
     "session_env": { "GOLANGCI_LINT_CACHE": "/tmp/lint-{{.Session.Title}}" }
   }]
 }
 ```
+
+One difference from the account sections is worth knowing, because it decides what you
+write in `path_matches`: the path tested here is the **repository root** (a direct
+session's own directory, when there is no repo), not the session's worktree and not the
+directory you happened to start from. A worktree lives under
+`~/.atrium/worktrees/<branch>_<nonce>` and carries none of your project's path, so
+matching on it is not something you can usefully do — and a trailing slash on a rule
+that spells the root exactly (`/projects/web/`) will never match, because the root has
+none.
 
 Nothing here is read from the repository itself. That is deliberate: a setup script
 committed alongside a project would run whatever its author wrote the moment you opened
@@ -766,6 +775,12 @@ Names are refused if Atrium already injects them (anything starting with `ATRIUM
 `CLAUDE_CONFIG_DIR` and `GH_CONFIG_DIR`). Values are Go templates over the same session
 context. They reach the pane as `tmux new-session -e` arguments, briefly visible to
 `ps` — do not put secrets there.
+
+A **direct** (non-git) session is the one asymmetric case. It has no worktree of its
+own — it runs in your real directory — so it gets `session_env` but never runs
+`setup_script`: installing into your own checkout is not Atrium's to do. It also has no
+branch, so a `session_env` value spelling `{{.Session.Branch}}` renders empty there
+rather than failing.
 
 One interaction to know about: a script that runs `npm install` under a path listed in
 [`link_paths`](#linked-paths) is writing into your own checkout's tree, shared by every

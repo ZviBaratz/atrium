@@ -361,6 +361,11 @@ type Instance struct {
 	// own. In-memory only. Guarded by mu, because Start's goroutine writes it while the
 	// renderer reads it.
 	setupPhase string
+	// setupCancel ends the setup script currently running, or is nil when none is.
+	// Published alongside setupPhase and cleared with it, because the two describe the
+	// same run. Guarded by mu. See AbortSetupScript for why a script needs a cancel of
+	// its own rather than riding the lifecycle context alone.
+	setupCancel context.CancelFunc
 	// setupErr / setupOutput hold the last setup script's outcome: the error, and the
 	// bounded tail of what it printed. Deliberately NOT routed through Start's error
 	// return, which would tear the session down (see setupscript.go). In-memory only —
@@ -1323,23 +1328,20 @@ func (i *Instance) Start(firstTimeSetup bool) error {
 				setupErr = fmt.Errorf("failed to setup git worktree: %w", err)
 				return setupErr
 			}
-			// The per-repo setup script (#389), between the worktree existing and the
-			// agent seeing it. Here rather than inside Setup for two reasons: the git
-			// package has no business running user scripts, and Setup's contract is that
-			// anything it returns tears the whole worktree down — which a script that
-			// merely could not reach npm must never do. It records its own failure
-			// instead; see setupscript.go.
-			//
-			// Direct sessions never reach this branch, and that is deliberate: their
-			// working directory is the user's own checkout, already warm and not
-			// Atrium's to install into.
-			i.RunSetupScript(i.WorkingDir())
+			// The per-repo setup script and session environment (#389), between the
+			// worktree existing and the agent seeing it. Here rather than inside Setup
+			// for two reasons: the git package has no business running user scripts, and
+			// Setup's contract is that anything it returns tears the whole worktree down
+			// — which a script that merely could not reach npm must never do. It records
+			// its own failure instead; see setupscript.go.
+			i.StartRepoEnvironment(i.WorkingDir())
+		} else {
+			// A direct session has no worktree to install into — its directory is the
+			// user's own checkout, already warm and not Atrium's to run `npm ci` in — but
+			// it does run somewhere the config can route on, so it still gets the
+			// environment.
+			i.applySessionEnv(i.WorkingDir())
 		}
-
-		// The repo's session_env, onto the session about to be born. Outside the wt
-		// check: a direct session has no worktree to install into but still runs in a
-		// directory the config can route on, so it gets the environment.
-		i.applySessionEnv(i.WorkingDir())
 
 		// Create new session
 		if err := tmuxSession.Start(i.WorkingDir()); err != nil {

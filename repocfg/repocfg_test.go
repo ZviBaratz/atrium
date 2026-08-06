@@ -152,8 +152,9 @@ func TestScript_RendersSessionEnvAsNameEqualsValue(t *testing.T) {
 	assert.Equal(t, []string{"CACHE=/tmp/web-1"}, env)
 }
 
-// Rendered env is sorted by name so the value handed to tmux (and recorded in the
-// command log) does not reshuffle between runs of an identical config.
+// Rendered env is sorted by name, so the environment a session gets and the
+// `new-session -e` argv it is launched with are the same on every run of one config
+// rather than following Go's map iteration order.
 func TestScript_RendersSessionEnvInAStableOrder(t *testing.T) {
 	entry := ok()
 	entry.SessionEnv = map[string]string{"B": "2", "A": "1", "C": "3"}

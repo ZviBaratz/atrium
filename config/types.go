@@ -156,8 +156,15 @@ type RepoScript struct {
 	// problem or a doctor report. Unlike an account's name nothing routes on it.
 	Name string `json:"name,omitempty"`
 	// RemoteMatches and PathMatches are the route rules: case-insensitive substrings
-	// of the repository's origin remote and of the target directory path. An entry
-	// with neither is the catch-all.
+	// of the repository's origin remote and of its ROOT directory. An entry with
+	// neither is the catch-all.
+	//
+	// The root, not the session's worktree and not the directory a session was created
+	// from — which is where this differs from the account sections, whose caller hands
+	// them the create form's target path. A worktree sits under the data dir and
+	// carries none of the project's own path, so routing on it would make every
+	// user-written rule miss; and two sessions on one repo created from different
+	// directories must not route differently, since the config is per REPOSITORY.
 	RemoteMatches []string `json:"remote_matches,omitempty"`
 	PathMatches   []string `json:"path_matches,omitempty"`
 	// SetupScript is a Go template rendered against the session context and then run

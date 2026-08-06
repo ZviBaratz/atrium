@@ -268,3 +268,63 @@ func TestStart_UnconfiguredRepoAddsNoEnv(t *testing.T) {
 		assert.NotContains(t, arg, "CACHE_DIR")
 	}
 }
+
+// path_matches is tested against the REPOSITORY ROOT, not the session's worktree.
+// That distinction is the whole usability of the rule: a worktree lives under
+// ~/.atrium/worktrees/<branch>_<nonce> and contains none of the project's own path, so
+// a rule naming the project directory — the only spelling a user would think to write
+// — would never match if the worktree path were the input.
+func TestRunSetupScript_PathMatchesTestsTheRepositoryRoot(t *testing.T) {
+	wt := newTestWorktree(t)
+	repoPath := wt.GetRepoPath()
+	installRepoScript(t, config.RepoScript{
+		Name:        "by-path",
+		PathMatches: []string{filepath.Base(repoPath)},
+		SetupScript: "touch MATCHED",
+	})
+	inst := &Instance{Title: "web", gitWorktree: wt}
+
+	inst.RunSetupScript(wt.GetWorktreePath())
+
+	assert.FileExists(t, filepath.Join(wt.GetWorktreePath(), "MATCHED"),
+		"a rule naming the project directory must match")
+}
+
+// The mirror: a rule naming the worktree's own location does NOT match, which is what
+// makes the rule above the only one worth documenting.
+func TestRunSetupScript_PathMatchesDoesNotTestTheWorktreePath(t *testing.T) {
+	wt := newTestWorktree(t)
+	installRepoScript(t, config.RepoScript{
+		Name:        "by-worktree",
+		PathMatches: []string{"/worktrees/"},
+		SetupScript: "touch MATCHED",
+	})
+	inst := &Instance{Title: "web", gitWorktree: wt}
+
+	inst.RunSetupScript(wt.GetWorktreePath())
+
+	assert.NoFileExists(t, filepath.Join(wt.GetWorktreePath(), "MATCHED"))
+}
+
+// A direct (non-git) session gets session_env but never a setup script: it runs in the
+// user's own checkout, which is already warm and is not Atrium's to install into. The
+// asymmetry is documented in the README, and this is what keeps it true.
+func TestStart_DirectSessionGetsTheEnvironmentButNotTheScript(t *testing.T) {
+	t.Setenv("HOME", t.TempDir()) // no repo needed: a direct session has no worktree
+	dir := t.TempDir()
+	installRepoScript(t, config.RepoScript{
+		Name:        "any",
+		SetupScript: "touch SETUP_RAN",
+		SessionEnv:  map[string]string{"ONLY": "env"},
+	})
+
+	fake := newFakeTmux(t, "")
+	ts := tmux.NewSessionWithDeps(context.Background(), "plainrepo", "claude", fake, fake.exec())
+	inst := &Instance{Title: "plainrepo", Path: dir, direct: true, tmuxSession: ts}
+
+	require.NoError(t, inst.Start(true))
+	t.Cleanup(func() { _ = inst.Kill() })
+
+	assert.NoFileExists(t, filepath.Join(dir, "SETUP_RAN"), "a direct session has no worktree to install into")
+	assert.Contains(t, fake.newSessionArgv(t), "ONLY=env", "but it still gets the environment")
+}

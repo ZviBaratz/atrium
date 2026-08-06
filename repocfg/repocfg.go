@@ -142,8 +142,10 @@ func compile(e config.RepoScript) (Script, error) {
 		names = append(names, name)
 	}
 	// Sorted here rather than at render time: the order is a property of the compiled
-	// script, and sorting once keeps every render — and every recorded command — in
-	// the same order for the same config.
+	// script, so one config always yields the same environment and the same
+	// `new-session -e` argv, however Go happened to iterate the map. (Nothing records
+	// either: cmdlog stores argv, and the setup script's argv is synthetic while the
+	// tmux launch goes through the pty factory rather than the recording executor.)
 	sort.Strings(names)
 	for _, name := range names {
 		tmpl, err := compileTemplate("session_env["+name+"]", e.SessionEnv[name])

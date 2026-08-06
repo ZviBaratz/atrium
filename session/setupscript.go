@@ -84,16 +84,41 @@ var execSetup = runSetupProcess
 // environment is about a tmux session that is about to be born, and a resume can do
 // the second without the first.
 func (i *Instance) applySessionEnv(dir string) {
+	run, _ := i.resolveSetupRun(dir)
+	i.applyResolvedSessionEnv(run)
+}
+
+// applyResolvedSessionEnv is applySessionEnv over an already-resolved run, for the
+// caller that is about to do both halves and should not resolve twice — resolution
+// reads config.json and, when repo_scripts is non-empty, shells out to git for the
+// origin remote, both on the session-creation critical path.
+func (i *Instance) applyResolvedSessionEnv(run setupRun) {
 	ts := i.tmux()
 	if ts == nil {
 		return
 	}
-	// Set unconditionally, including to nil when nothing resolves. A Session object
+	// Set unconditionally, including to nil when nothing resolved. A Session object
 	// outlives its tmux session — a pause and resume relaunch through this same one —
 	// so leaving the previous value in place would relaunch with an environment the
 	// config no longer asks for.
-	run, _ := i.resolveSetupRun(dir)
 	ts.SetSessionEnv(run.sessionEnv)
+}
+
+// StartRepoEnvironment runs the setup script and applies the session environment for a
+// worktree that has just been materialized, resolving the config once for both.
+//
+// The two halves are separately reachable (a resume can apply the environment without
+// re-running the script), but a first-time start always does both, and doing them
+// through their own entry points made the session-creation path load the config twice
+// and fork git twice for one answer.
+func (i *Instance) StartRepoEnvironment(dir string) {
+	run, ok := i.resolveSetupRun(dir)
+	if !ok {
+		i.applyResolvedSessionEnv(setupRun{})
+		return
+	}
+	i.runResolvedSetupScript(run)
+	i.applyResolvedSessionEnv(run)
 }
 
 // RunSetupScript runs the configured setup script in dir, recording the outcome on the
@@ -106,14 +131,30 @@ func (i *Instance) applySessionEnv(dir string) {
 // checkout, which is already warm and is not Atrium's to install into.
 func (i *Instance) RunSetupScript(dir string) {
 	run, ok := i.resolveSetupRun(dir)
-	if !ok || run.script == "" {
+	if !ok {
+		return
+	}
+	i.runResolvedSetupScript(run)
+}
+
+// runResolvedSetupScript is RunSetupScript over an already-resolved run.
+func (i *Instance) runResolvedSetupScript(run setupRun) {
+	if run.script == "" {
 		return
 	}
 
-	i.setSetupPhase(setupPhaseLabel)
-	defer i.setSetupPhase("")
+	// A cancel of its own, published so shutdown can end a script that would
+	// otherwise outlast the app. The lifecycle context covers a signal shutdown, but
+	// NOT the force-quit path — there ctx is still live, and a script with no timeout
+	// would hold Start's goroutine past the reconciliation drain, orphaning the
+	// worktree and branch it had already created and leaving an `npm ci` running after
+	// Atrium exited. See AbortSetupScript.
+	ctx, cancel := context.WithCancel(i.baseContext())
+	defer cancel()
+	i.setSetupPhase(setupPhaseLabel, cancel)
+	defer i.setSetupPhase("", nil)
 
-	output, err := execSetup(i.baseContext(), run)
+	output, err := execSetup(ctx, run)
 	i.setSetupResult(output, err)
 	if err != nil {
 		log.ErrorLog.Printf("setup script for %q failed: %v", i.Title, err)
@@ -251,10 +292,32 @@ func (i *Instance) SetupPhase() string {
 	return i.setupPhase
 }
 
-func (i *Instance) setSetupPhase(phase string) {
+// setSetupPhase publishes the phase and, with it, the cancel that ends the process
+// producing it. The two move together because they describe the same run: a phase with
+// no cancel is a script nothing can stop, and a cancel outliving its phase would end
+// the NEXT run.
+func (i *Instance) setSetupPhase(phase string, cancel context.CancelFunc) {
 	i.mu.Lock()
 	defer i.mu.Unlock()
-	i.setupPhase = phase
+	i.setupPhase, i.setupCancel = phase, cancel
+}
+
+// AbortSetupScript ends a setup script that is currently running, and does nothing
+// when none is.
+//
+// Shutdown reconciliation calls it for every still-Loading session before draining
+// their Start goroutines. A script deliberately has no timeout, so on the force-quit
+// path — where the lifecycle context stays live — this is the only thing that ends
+// one, and without it the drain times out, the session is "left as-is" with a worktree
+// and branch never written to state.json, and the script keeps running with no app
+// left to report it.
+func (i *Instance) AbortSetupScript() {
+	i.mu.RLock()
+	cancel := i.setupCancel
+	i.mu.RUnlock()
+	if cancel != nil {
+		cancel()
+	}
 }
 
 // SetupError is the last setup script's failure, or nil. It is not persisted: a
