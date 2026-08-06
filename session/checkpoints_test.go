@@ -58,12 +58,22 @@ func TestLoadCheckpoints_DirectSession(t *testing.T) {
 	assert.Equal(t, "tidy the parser", got.List[0].Label)
 	assert.Equal(t, 1, got.List[0].Files)
 
-	// Paused sessions deliberately still list: pause removes the worktree, not
-	// the transcripts it produced, and WorkingDir keeps returning the same path.
+	// Paused sessions deliberately still list, unlike ComputeModel/ComputeUsage/
+	// ComputeAsked, which all bail on Paused. What this pins is only that gate —
+	// LoadCheckpoints does not refuse a paused status.
+	//
+	// It does NOT prove the property that makes the reading correct for a real
+	// paused session: that WorkingDir() keeps returning the worktree path after
+	// pause has removed the tree, so the project dir it resolves is still the one
+	// that produced the transcript. This fixture is Direct, so it has no worktree to
+	// lose. That property lives in Instance.pause (which keeps i.gitWorktree) and is
+	// stated in ContextSourceKey's comment; nothing here would fail if a future
+	// change nilled it, which would silently re-point this read at the parent
+	// checkout's project dir.
 	inst.status = Paused
 	paused, err := inst.LoadCheckpoints(context.Background())
 	require.NoError(t, err)
-	assert.Len(t, paused.List, 1, "a paused session's checkpoints are still on disk")
+	assert.Len(t, paused.List, 1, "a paused status must not gate the read")
 }
 
 // TestLoadCheckpoints_Unstarted keeps an unstarted session from doing any I/O:

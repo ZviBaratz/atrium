@@ -265,12 +265,51 @@ func TestLoadCheckpoints_Unsupported(t *testing.T) {
 	}
 }
 
-// TestLoadCheckpoints_MissingTranscript reports an error rather than an empty
-// list, so the caller can say "no transcript" instead of "no checkpoints".
+// TestLoadCheckpoints_MissingTranscript reports ErrNoTranscript rather than an
+// empty list, so the caller can say "no transcript yet" — and, crucially, can tell
+// that apart from a read that genuinely failed. Without the sentinel every failure
+// looks like an absent file, and the UI tells the user a transcript it just failed
+// to parse does not exist.
 func TestLoadCheckpoints_MissingTranscript(t *testing.T) {
-	_, err := LoadCheckpoints(context.Background(), "claude", "/home/zvi/work", Options{Root: t.TempDir()})
+	for _, tc := range []struct {
+		name  string
+		setup func(t *testing.T) string // returns the root
+	}{
+		{"no project dir", func(t *testing.T) string { return t.TempDir() }},
+		{"project dir with no jsonl", func(t *testing.T) string {
+			root := t.TempDir()
+			if err := os.MkdirAll(filepath.Join(root, "projects", sanitizeCWD("/home/zvi/work")), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			return root
+		}},
+		{"empty transcript", func(t *testing.T) string { return checkpointRoot(t, "/home/zvi/work", "") }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := LoadCheckpoints(context.Background(), "claude", "/home/zvi/work", Options{Root: tc.setup(t)})
+			if !errors.Is(err, ErrNoTranscript) {
+				t.Errorf("err = %v, want it to wrap ErrNoTranscript", err)
+			}
+		})
+	}
+}
+
+// A read that fails for any other reason must NOT wrap ErrNoTranscript, or the UI
+// reports an absent file over one that is plainly there. A single line past the
+// scanner's 4MB ceiling is the failure this reader is most exposed to, being the
+// only one that scans the whole file rather than a bounded tail.
+func TestLoadCheckpoints_ScanFailureIsNotMistakenForAbsence(t *testing.T) {
+	const cwd = "/home/zvi/work"
+	oversized := `{"type":"user","uuid":"aaaa","message":{"role":"user","content":"` +
+		strings.Repeat("x", scannerBufMax+1) + `"}}` + "\n"
+	root := checkpointRoot(t, cwd, oversized)
+
+	_, err := LoadCheckpoints(context.Background(), "claude", cwd, Options{Root: root})
 	if err == nil {
-		t.Error("err = nil for a missing transcript, want an error")
+		t.Fatal("err = nil for a transcript line past the scanner ceiling")
+	}
+	if errors.Is(err, ErrNoTranscript) {
+		t.Errorf("err = %v wraps ErrNoTranscript — a scan failure is not an absent transcript", err)
 	}
 }
 

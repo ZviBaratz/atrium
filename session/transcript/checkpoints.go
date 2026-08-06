@@ -4,12 +4,21 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
 )
+
+// ErrNoTranscript means the session has no conversation on disk to enumerate —
+// no project directory, no *.jsonl in it, or a newest one that is empty. It is
+// the ordinary state of a session that has not had a turn yet, and it is what
+// lets a caller distinguish that from a read that genuinely failed (a permission
+// error, an I/O error, a line past the scanner's ceiling).
+var ErrNoTranscript = errors.New("transcript: no transcript for this working directory")
 
 // Checkpoint is one native Claude Code file-history checkpoint: the snapshot
 // Claude takes of every file it has touched, immediately before a user prompt.
@@ -95,7 +104,11 @@ func LoadCheckpoints(ctx context.Context, program, workingDir string, opts Optio
 
 	path, err := newestTranscript(claudeProjectDir(root, workingDir))
 	if err != nil {
-		return Checkpoints{}, err
+		// Wrapped so a caller can tell "this session has no conversation on disk"
+		// — the ordinary case for a session that has not had a turn — from a read
+		// that failed for any other reason. Everything below returns the raw error,
+		// and those are the ones a caller must not describe as an absent transcript.
+		return Checkpoints{}, fmt.Errorf("%w: %w", ErrNoTranscript, err)
 	}
 
 	var (

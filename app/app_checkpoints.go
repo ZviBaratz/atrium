@@ -11,6 +11,8 @@ package app
 // rewind the conversation along with the code. The findings are on the issue.
 
 import (
+	"errors"
+
 	"github.com/ZviBaratz/atrium/log"
 	"github.com/ZviBaratz/atrium/session"
 	"github.com/ZviBaratz/atrium/session/transcript"
@@ -73,10 +75,18 @@ func (m *home) handleCheckpointsLoaded(msg checkpointsLoadedMsg) (tea.Model, tea
 		return m, nil // the timeline closed, or moved to another session, while this read ran
 	}
 	if msg.err != nil {
-		// A missing transcript is the common case here (a session that has not had a
-		// turn yet), not a fault worth an error line — the box states it instead.
 		log.WarningLog.Printf("checkpoints for %q: %v", msg.target.DisplayName(), msg.err)
-		m.checkpointOverlay.SetUnavailable("no transcript for this session yet")
+		// A session that has not had a turn has no transcript, which is the common
+		// case here and not a fault worth an error line — the box states it. Anything
+		// else did fail (a permission error, an I/O error, a transcript line past the
+		// scanner's ceiling) and must not be described as an absent transcript: the
+		// user would be told the file does not exist while it plainly does, and `r`
+		// would repeat the same wrong sentence.
+		if errors.Is(msg.err, transcript.ErrNoTranscript) {
+			m.checkpointOverlay.SetUnavailable("no transcript for this session yet")
+		} else {
+			m.checkpointOverlay.SetUnavailable("could not read this session's transcript — see the log")
+		}
 		return m, nil
 	}
 	if len(msg.result.List) == 0 {

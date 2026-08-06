@@ -124,7 +124,7 @@ func frameStates() []frameState {
 			// opener would refuse with a notice and never build the overlay.
 			inst.Program = "claude"
 			// Through the opener, like the palette: it is what pairs the overlay with
-			// checkpointTarget and checkpointRows.
+			// checkpointTarget, which the load handler below is matched against.
 			h.openCheckpoints()
 			// The opener leaves the box in its loading state — the read is async and
 			// nothing here runs the returned command — so feed it the result a real

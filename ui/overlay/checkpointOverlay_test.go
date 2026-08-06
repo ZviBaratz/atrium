@@ -115,10 +115,9 @@ func TestCheckpointOverlay_FitsItsBox(t *testing.T) {
 			{"unavailable", func(o *CheckpointOverlay) { o.SetUnavailable("no checkpoints for this session") }},
 			{"few rows", func(o *CheckpointOverlay) { o.SetRows(checkpointRows(2)) }},
 			{"overflowing", func(o *CheckpointOverlay) { o.SetRows(checkpointRows(60)) }},
-			{"with note and message", func(o *CheckpointOverlay) {
+			{"with a note", func(o *CheckpointOverlay) {
 				o.SetRows(checkpointRows(60))
 				o.SetNote("claude has swept this session's file backups")
-				o.SetMessage("this session is still starting")
 			}},
 			{"long label", func(o *CheckpointOverlay) {
 				o.SetRows([]CheckpointRow{{
@@ -204,15 +203,62 @@ func TestCheckpointOverlay_RowsAlignTheSummaryColumn(t *testing.T) {
 	}
 }
 
-// An overflowing list reports how much it is hiding, so the timeline never
-// implies it is complete.
-func TestCheckpointOverlay_ReportsHiddenRows(t *testing.T) {
+// An overflowing list reports how much it is hiding wherever the window sits, so
+// the timeline never implies it is complete — and it costs the same line at every
+// scroll position, because a box that grows a row at the end is a box PlaceOverlay
+// re-centres, i.e. one that visibly jumps as the cursor crosses into the last
+// window.
+func TestCheckpointOverlay_ReportsHiddenRowsAtEveryScrollPosition(t *testing.T) {
 	o := NewCheckpointOverlay("alpha")
 	o.SetSize(80, 14)
 	o.SetRows(checkpointRows(40))
-	out := stripANSI(o.Render())
-	if !strings.Contains(out, "more") {
-		t.Errorf("an overflowing list must say how many rows are hidden:\n%s", out)
+
+	top := stripANSI(o.Render())
+	if !strings.Contains(top, "more") {
+		t.Errorf("an overflowing list must say how many rows are hidden:\n%s", top)
+	}
+	topHeight := lipgloss.Height(o.Render())
+
+	// Walk to the very last row: the window is now at the end of the list, with
+	// everything hidden ABOVE it and nothing below.
+	for i := 0; i < 60; i++ {
+		o.HandleKeyPress(keyMsg("down"))
+	}
+	bottom := stripANSI(o.Render())
+	if !strings.Contains(bottom, "above") {
+		t.Errorf("scrolled to the end, the box must still report the rows hidden above it:\n%s", bottom)
+	}
+	if got := lipgloss.Height(o.Render()); got != topHeight {
+		t.Errorf("box is %d lines at the end and %d at the top — a changing height makes the overlay jump", got, topHeight)
+	}
+
+	// And somewhere in the middle, both sides are named.
+	for i := 0; i < 20; i++ {
+		o.HandleKeyPress(keyMsg("up"))
+	}
+	mid := stripANSI(o.Render())
+	if !strings.Contains(mid, "above") || !strings.Contains(mid, "below") {
+		t.Errorf("mid-list, the box should name both sides:\n%s", mid)
+	}
+	if got := lipgloss.Height(o.Render()); got != topHeight {
+		t.Errorf("box is %d lines mid-list and %d at the top", got, topHeight)
+	}
+}
+
+func TestHiddenRowSummary(t *testing.T) {
+	cases := []struct {
+		above, below int
+		want         string
+	}{
+		{0, 13, "… 13 more"},
+		{7, 0, "… 7 above"},
+		{7, 13, "… 7 above, 13 below"},
+		{0, 0, "…"},
+	}
+	for _, tc := range cases {
+		if got := hiddenRowSummary(tc.above, tc.below); got != tc.want {
+			t.Errorf("hiddenRowSummary(%d, %d) = %q, want %q", tc.above, tc.below, got, tc.want)
+		}
 	}
 }
 
@@ -270,23 +316,19 @@ func TestCheckpointOverlay_UnknownTime(t *testing.T) {
 	}
 }
 
-// In a box too short for rows plus both optional lines, the standing note gives
-// way — the rows and the transient message are what the user is looking at. The
-// alternative is an overflowing box, which is what the height accounting exists
-// to prevent.
+// In a box too short for the rows plus the note, the note gives way: it is a
+// caveat about the rows, and a box with no rows in it has nothing to caveat. The
+// alternative is an overflowing box, which is what the height accounting exists to
+// prevent.
 func TestCheckpointOverlay_TightBoxDropsTheNoteNotTheRows(t *testing.T) {
 	o := NewCheckpointOverlay("alpha")
-	o.SetSize(60, checkpointChrome+4)
+	o.SetSize(60, checkpointChrome+2)
 	o.SetRows(checkpointRows(20))
 	o.SetNote("claude has swept this session's file backups")
-	o.SetMessage("this session is still starting")
 
 	lay := o.layout()
 	if lay.showNote {
 		t.Error("the note should give way in a box this short")
-	}
-	if !lay.showMessage {
-		t.Error("the transient message should be kept")
 	}
 	if lay.visible < 1 {
 		t.Errorf("visible = %d, want at least one row", lay.visible)
@@ -295,35 +337,35 @@ func TestCheckpointOverlay_TightBoxDropsTheNoteNotTheRows(t *testing.T) {
 	if strings.Contains(out, "swept") {
 		t.Errorf("the dropped note must not be drawn:\n%s", out)
 	}
-	if !strings.Contains(out, "still starting") {
-		t.Errorf("the message must be drawn:\n%s", out)
+	if lipgloss.Height(o.Render()) > checkpointChrome+2 {
+		t.Errorf("the box overflowed the height it was given:\n%s", out)
 	}
 
-	// At the very floor neither optional line fits, and the rows still win.
-	o.SetSize(60, checkpointChrome+2)
-	floor := o.layout()
-	if floor.showNote || floor.showMessage {
-		t.Error("at the height floor both optional lines must give way to the rows")
-	}
-	if floor.visible < 1 {
-		t.Errorf("visible = %d at the height floor, want at least one row", floor.visible)
+	// Given room for both, it keeps both.
+	o.SetSize(60, 24)
+	roomy := o.layout()
+	if !roomy.showNote {
+		t.Error("with room to spare the note must be drawn")
 	}
 }
 
-// The note is a property of the data and survives a reload; the message is
-// transient and does not.
-func TestCheckpointOverlay_NoteSurvivesReloadMessageDoesNot(t *testing.T) {
+// The note describes the rows, so it survives a reload that returns rows and is
+// dropped by one that finds none — otherwise a caveat about backups would stand
+// under a box that has just said there is no transcript to have backups for.
+func TestCheckpointOverlay_NoteSurvivesRowsAndDiesWithThem(t *testing.T) {
 	o := NewCheckpointOverlay("alpha")
 	o.SetSize(80, 24)
 	o.SetNote("claude has swept this session's file backups")
-	o.SetMessage("transient")
 	o.SetRows(checkpointRows(2))
 
 	out := stripANSI(o.Render())
 	if !strings.Contains(out, "swept") {
 		t.Errorf("the note should survive SetRows:\n%s", out)
 	}
-	if strings.Contains(out, "transient") {
-		t.Errorf("the message should be cleared by SetRows:\n%s", out)
+
+	o.SetUnavailable("no transcript for this session yet")
+	gone := stripANSI(o.Render())
+	if strings.Contains(gone, "swept") {
+		t.Errorf("the note must not outlive the rows it describes:\n%s", gone)
 	}
 }

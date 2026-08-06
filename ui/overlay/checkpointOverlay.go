@@ -33,8 +33,8 @@ type CheckpointRow struct {
 // the single action, attach.
 //
 // Like the QueueOverlay it is a dumb view: the app pushes a snapshot in via
-// SetRows and reads intent back out (AttachRequested/RefreshRequested/
-// SelectedIndex). It holds no session type.
+// SetRows and reads intent back out (AttachRequested/RefreshRequested). It holds
+// no session type.
 type CheckpointOverlay struct {
 	title      string
 	rows       []CheckpointRow
@@ -43,7 +43,6 @@ type CheckpointOverlay struct {
 	loading    bool
 	unavailure string // why there is nothing to list ("" = there is)
 	note       string // standing caveat, e.g. the backups having been swept
-	message    string // transient note; cleared by SetRows
 	width      int
 	height     int
 	attachReq  bool
@@ -85,13 +84,12 @@ func (c *CheckpointOverlay) SetSize(width, height int) {
 // SetWidth mirrors the other overlays' responsive-width setter.
 func (c *CheckpointOverlay) SetWidth(width int) { c.SetSize(width, c.height) }
 
-// SetRows replaces the list (newest first), leaves the loading state, clamps the
-// cursor, and clears the transient message so a reload starts clean.
+// SetRows replaces the list (newest first), leaves the loading state, and clamps
+// the cursor so a reload that returns fewer rows cannot strand it past the end.
 func (c *CheckpointOverlay) SetRows(rows []CheckpointRow) {
 	c.rows = rows
 	c.loading = false
 	c.unavailure = ""
-	c.message = ""
 	if c.cursor >= len(c.rows) {
 		c.cursor = len(c.rows) - 1
 	}
@@ -103,28 +101,28 @@ func (c *CheckpointOverlay) SetRows(rows []CheckpointRow) {
 // SetLoading puts the overlay back into its loading state, for a reload.
 func (c *CheckpointOverlay) SetLoading() {
 	c.loading = true
-	c.message = ""
 }
 
 // SetUnavailable explains why there is nothing to list — no checkpoints yet, no
 // transcript, an older Claude that does not record them. It is a statement, not
 // an error: the empty timeline is a legitimate reading.
+//
+// It drops the note as well as the rows, because the note describes the rows: a
+// reload that fails after a successful read would otherwise leave "claude has
+// already swept this session's file backups" standing under "no transcript for
+// this session yet", a caveat about data the box has just said is not there.
 func (c *CheckpointOverlay) SetUnavailable(reason string) {
 	c.loading = false
 	c.rows = nil
+	c.note = ""
 	c.unavailure = reason
 }
 
 // SetNote sets a standing caveat shown above the footer (cleared by passing "").
-// Unlike SetMessage it survives SetRows, because what it reports — Claude having
-// swept this session's file backups — is a property of the data, not of an action.
+// It survives SetRows, because what it reports — Claude having swept this
+// session's file backups — is a property of the data rather than of an action, and
+// every successful read sets it afresh.
 func (c *CheckpointOverlay) SetNote(text string) { c.note = text }
-
-// SetMessage sets a transient note rendered above the footer, cleared by the next
-// SetRows. It is written inside the box rather than to the app's error line
-// because this state hides the hint bar: surfacing a notice out there would
-// recompute the height budget under a live overlay.
-func (c *CheckpointOverlay) SetMessage(text string) { c.message = text }
 
 // HandleKeyPress moves the cursor, arms an attach or a reload, or closes. It
 // returns true only when the overlay should close (esc/ctrl+c); an attach arms
@@ -170,8 +168,12 @@ func (c *CheckpointOverlay) RefreshRequested() bool {
 	return r
 }
 
-// SelectedIndex is the 0-based cursor position in the row order the app pushed
-// in, so the app's parallel row table indexes identically.
+// SelectedIndex is the 0-based cursor position in the row order the app pushed in.
+//
+// No action consumes it yet — the timeline's one action attaches to the session,
+// which the cursor does not affect — so today it exists to make the cursor's own
+// behaviour assertable. A per-checkpoint action would read it against a row table
+// held in the same order the app pushed.
 func (c *CheckpointOverlay) SelectedIndex() int { return c.cursor }
 
 // Render draws the bordered list.
@@ -216,8 +218,15 @@ func (c *CheckpointOverlay) Render() string {
 			}
 			b.WriteString("\n")
 		}
-		if hidden := len(c.rows) - end; hidden > 0 {
-			b.WriteString(overlayDimStyle().Render(fmt.Sprintf("  … %d more", hidden)) + "\n")
+		// Drawn whenever the list overflows at all, not only when rows sit below the
+		// window. Two reasons, and the second is the one that bites: a list scrolled
+		// to its end would otherwise claim to be complete, and — since layout() has
+		// already charged this line — the box would render a row shorter down there,
+		// which PlaceOverlay re-centres, so the whole overlay jumps as the cursor
+		// crosses into the last window.
+		if len(c.rows) > lay.visible {
+			b.WriteString(overlayDimStyle().Render(
+				"  "+hiddenRowSummary(c.scroll, len(c.rows)-end)) + "\n")
 		}
 		b.WriteString("\n")
 	}
@@ -225,14 +234,29 @@ func (c *CheckpointOverlay) Render() string {
 	if lay.showNote {
 		b.WriteString(overlayDimStyle().Render(truncate.StringWithTail(c.note, uint(inner), "…")) + "\n\n")
 	}
-	if lay.showMessage {
-		b.WriteString(th.AttentionStyle().Render(truncate.StringWithTail(c.message, uint(inner), "…")) + "\n\n")
-	}
 	// Truncated, never wrapped: a wrapped footer would silently claim a row the
 	// height budget already spent.
 	b.WriteString(th.OverlayHintStyle().Render(truncate.StringWithTail(
 		"j/k move · enter attach (then Esc Esc to rewind) · r reload · esc close", uint(inner), "…")))
 	return box.Render(b.String())
+}
+
+// hiddenRowSummary names what the window is not showing, in one line, whichever
+// side it is on.
+func hiddenRowSummary(above, below int) string {
+	switch {
+	case above > 0 && below > 0:
+		return fmt.Sprintf("… %d above, %d below", above, below)
+	case above > 0:
+		return fmt.Sprintf("… %d above", above)
+	case below > 0:
+		return fmt.Sprintf("… %d more", below)
+	default:
+		// Reached only if the list overflows the window yet nothing is outside it,
+		// which the caller's own condition rules out. Kept honest rather than
+		// silently drawing an empty line.
+		return "…"
+	}
 }
 
 // renderRow lays out one checkpoint in exactly width cells: a fixed-width time
@@ -303,44 +327,36 @@ const checkpointChrome = 8
 // checkpointLayout is one render's line budget, decided in a single place so the
 // accounting and the drawing cannot disagree — the way a box silently overflows.
 type checkpointLayout struct {
-	visible     int
-	showNote    bool
-	showMessage bool
+	visible  int
+	showNote bool
 }
 
 // layout allocates the available height. Rows come first: in a box too short for
-// the row list plus both optional lines, the standing note is dropped before the
-// transient message, because the message is the response to what the user just
-// did and the note is a caveat that returns as soon as the message clears.
+// the list plus the note, the note gives way, because it is a caveat about the rows
+// and a box with no rows in it has nothing to caveat.
 func (c *CheckpointOverlay) layout() checkpointLayout {
-	lay := checkpointLayout{showNote: c.note != "", showMessage: c.message != ""}
+	lay := checkpointLayout{showNote: c.note != ""}
 	for {
 		extra := 0
 		if lay.showNote {
 			extra += 2 // the note and its trailing blank
 		}
-		if lay.showMessage {
-			extra += 2
-		}
 		budget := c.height - checkpointChrome - extra
 		if len(c.rows) > budget {
-			budget-- // the "… N more" row
+			budget-- // the hidden-rows line
 		}
 		if budget >= 1 {
 			lay.visible = budget
 			return lay
 		}
-		switch {
-		case lay.showNote:
+		if lay.showNote {
 			lay.showNote = false
-		case lay.showMessage:
-			lay.showMessage = false
-		default:
-			// Unreachable while SetSize floors the height at checkpointChrome+2,
-			// but a floor is not a proof — never return a budget below one row.
-			lay.visible = 1
-			return lay
+			continue
 		}
+		// Unreachable while SetSize floors the height at checkpointChrome+2, but a
+		// floor is not a proof — never return a budget below one row.
+		lay.visible = 1
+		return lay
 	}
 }
 
