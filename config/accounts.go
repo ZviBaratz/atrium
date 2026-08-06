@@ -221,6 +221,34 @@ func (c *Config) ResolveGHAccount(remoteURL, targetPath string) (configDir strin
 	return a.ResolvedConfigDir(), a.TokenEnv
 }
 
+// ResolveRepoScript picks the repo_scripts entry for a repository whose origin
+// remote is remoteURL and whose directory is targetPath (#389). ok is false when the
+// section is empty, or when nothing matches and no rule-less catch-all is declared —
+// which means "this repo has no setup script", the pre-feature behavior.
+//
+// index is the entry's position in the configured list. It is returned alongside the
+// entry because the caller validates that one entry on its own, and the position is the
+// only handle a message about it has: an entry need not be named, and a problem
+// reported as `repo_scripts[0]` when the broken entry is the fourth points the user at
+// an innocent one.
+//
+// Routing is the accounts' matcher, unchanged: remote substrings first, then the
+// target path (the only signal a direct, non-git session has), evaluated per entry in
+// config order. Unlike ResolveClaudeAccount there is no synthetic default to fall back
+// to — a script that was never configured must never be invented.
+func (c *Config) ResolveRepoScript(remoteURL, targetPath string) (entry RepoScript, index int, ok bool) {
+	if len(c.RepoScripts) == 0 {
+		return RepoScript{}, -1, false
+	}
+	idx, _ := matchRouteIndex(len(c.RepoScripts), strings.ToLower(remoteURL), strings.ToLower(targetPath),
+		func(i int) []string { return c.RepoScripts[i].RemoteMatches },
+		func(i int) []string { return c.RepoScripts[i].PathMatches })
+	if idx < 0 {
+		return RepoScript{}, -1, false
+	}
+	return c.RepoScripts[idx], idx, true
+}
+
 // matchRouteIndex runs the shared per-account routing for an account section of
 // length n: in config order it returns the first account whose remote_matches hit
 // lowerRemote (tried first) or whose path_matches hit lowerPath, with

@@ -166,7 +166,17 @@ func (p Problem) Error() string {
 // It is opt-in rather than automatic because a template renders into a shell string
 // and Go templates have no notion of the context a value lands in — the alternative
 // to opting in is the $ATRIUM_* environment, which needs no escaping at all.
-var funcs = template.FuncMap{"quote": shellQuote}
+var funcs = Funcs()
+
+// Funcs returns the helper set a template rendering against Ctx may call.
+//
+// Exported because repo_scripts renders the same context through its own templates
+// (repocfg), and a value the user is told to wrap in `quote` there has to have the
+// function to wrap it with. A fresh map per call, so a caller cannot reach in and add
+// to the set this package validates against.
+func Funcs() template.FuncMap {
+	return template.FuncMap{"quote": shellQuote}
+}
 
 // shellQuote wraps s in single quotes, escaping any single quote it contains, which
 // is the one form POSIX sh treats as fully literal.

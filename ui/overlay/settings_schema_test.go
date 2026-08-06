@@ -60,7 +60,7 @@ func TestApplyTimingProjections(t *testing.T) {
 // reachable only by hand-editing config.json, because that makes it invisible to
 // every user who configures Atrium through the panel.
 //
-// Exempt are the four list-of-record keys, which a one-value-per-row panel cannot
+// Exempt are the list-of-record keys, which a one-value-per-row panel cannot
 // express (accounts are managed from the Accounts overlay; profiles get their own
 // editor in PR D, which is not a settingRow either), and the deprecated nerd_font,
 // superseded by glyph_set.
@@ -71,6 +71,7 @@ func TestEveryScalarConfigFieldHasARow(t *testing.T) {
 		"claude_accounts": "list of records — Accounts overlay",
 		"gh_accounts":     "list of records — Accounts overlay",
 		"agy_accounts":    "list of records — Accounts overlay",
+		"repo_scripts":    "list of records — edited in config.json; the one-value-per-row panel cannot express route rules + a script + an env map (#389)",
 		"nerd_font":       "deprecated, superseded by glyph_set",
 	}
 

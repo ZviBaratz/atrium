@@ -1053,16 +1053,16 @@ func settingRowByKey(t *testing.T, cfg *config.Config, key string) settingRow {
 // the README table either has a row, or is one of the documented exceptions, and
 // the exception list itself must not name a key that does have a row.
 func TestReadmeSettingsExceptionsMatchTheRowSchema(t *testing.T) {
-	// Keys with no settingRow: five lists *of records* — `profiles`, the three
-	// account lists, and `custom_commands` — which one value per row cannot
-	// express, plus the deprecated `nerd_font` that `glyph_set` supersedes. Not
+	// Keys with no settingRow: six lists *of records* — `profiles`, the three
+	// account lists, `custom_commands` and `repo_scripts` — which one value per row
+	// cannot express, plus the deprecated `nerd_font` that `glyph_set` supersedes. Not
 	// all are unreachable: `profiles` has its own record editor on the rail, and
-	// the account lists have the Accounts overlay. Only `custom_commands` is
-	// config.json-only. Keep in sync with the legend under "#### Configuration
+	// the account lists have the Accounts overlay. `custom_commands` and `repo_scripts`
+	// are config.json-only. Keep in sync with the legend under "#### Configuration
 	// reference".
 	exceptions := map[string]bool{
 		"profiles": true, "claude_accounts": true, "gh_accounts": true, "agy_accounts": true,
-		"custom_commands": true, "nerd_font": true,
+		"custom_commands": true, "repo_scripts": true, "nerd_font": true,
 	}
 
 	rows := map[string]bool{}

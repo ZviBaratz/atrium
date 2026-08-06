@@ -354,6 +354,25 @@ type Instance struct {
 	// so it is in-memory only and never serialized. Guarded by mu.
 	awaitingSetup bool
 
+	// setupPhase names what the per-repo setup script is doing right now, or "" when
+	// nothing is (#389). It is the row's answer to "why has this been Loading for two
+	// minutes" — a string rather than a new Status because Status values are persisted
+	// and read by ~15 sites, and this describes a phase of Loading, not a state of its
+	// own. In-memory only. Guarded by mu, because Start's goroutine writes it while the
+	// renderer reads it.
+	setupPhase string
+	// setupCancel ends the setup script currently running, or is nil when none is.
+	// Published alongside setupPhase and cleared with it, because the two describe the
+	// same run. Guarded by mu. See AbortSetupScript for why a script needs a cancel of
+	// its own rather than riding the lifecycle context alone.
+	setupCancel context.CancelFunc
+	// setupErr / setupOutput hold the last setup script's outcome: the error, and the
+	// bounded tail of what it printed. Deliberately NOT routed through Start's error
+	// return, which would tear the session down (see setupscript.go). In-memory only —
+	// a failure describes one run against one materialized worktree. Guarded by mu.
+	setupErr    error
+	setupOutput string
+
 	// conversationResumed / conversationKnown record which way the last relaunch
 	// went: whether the agent came back into its prior conversation, and whether
 	// startResuming could tell at all. Only that function knows — it asks the
@@ -777,6 +796,10 @@ func (i *Instance) parkOverBudget() {
 // adapter (codex/gemini) report supported == false and defer to their own resume probe in
 // tmux.resumeCommand, so their behavior is unchanged.
 func (i *Instance) startResuming(ts *tmux.Session, workDir string) error {
+	// Both branches below create a tmux session, and a session's environment can only
+	// be set as it is born — so a relaunch (resume, or an in-place recovery) has to
+	// re-apply the repo's session_env here or come back without it.
+	i.applySessionEnv(workDir)
 	resumable, supported := transcript.HasResumable(i.Program, workDir, transcript.Options{Root: i.claudeConfigDir})
 	// Record which way this went before acting on it: undo's post-restore notice
 	// has to tell the user whether the conversation came back, and this is the only
@@ -1305,6 +1328,19 @@ func (i *Instance) Start(firstTimeSetup bool) error {
 				setupErr = fmt.Errorf("failed to setup git worktree: %w", err)
 				return setupErr
 			}
+			// The per-repo setup script and session environment (#389), between the
+			// worktree existing and the agent seeing it. Here rather than inside Setup
+			// for two reasons: the git package has no business running user scripts, and
+			// Setup's contract is that anything it returns tears the whole worktree down
+			// — which a script that merely could not reach npm must never do. It records
+			// its own failure instead; see setupscript.go.
+			i.StartRepoEnvironment(i.WorkingDir())
+		} else {
+			// A direct session has no worktree to install into — its directory is the
+			// user's own checkout, already warm and not Atrium's to run `npm ci` in — but
+			// it does run somewhere the config can route on, so it still gets the
+			// environment.
+			i.applySessionEnv(i.WorkingDir())
 		}
 
 		// Create new session

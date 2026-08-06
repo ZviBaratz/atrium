@@ -715,6 +715,93 @@ copying for a large tree, but it is the one place a session is deliberately not
 isolated: link paths whose contents you are content to share, and prefer
 `carry_files` when a session needs its own copy.
 
+#### Setup scripts
+
+`carry_files` and `link_paths` move *files* into a new worktree. Neither can install
+dependencies, apply a migration, or generate an `.env` — so an agent asked to build or
+run the project starts by doing that itself, in a tree where nothing is installed.
+`repo_scripts` is the step that can: a shell script Atrium runs once the worktree
+exists and **before the agent program launches into it**.
+
+Configuration is per repository, but it lives in your own `config.json` rather than in
+the repo. Entries are routed by the matcher [Claude accounts](#claude-accounts) use —
+case-insensitive substrings, `origin` remote first and then a path, first match wins,
+and an entry with no rules at all is the catch-all:
+
+```json
+{
+  "repo_scripts": [{
+    "name": "web",
+    "remote_matches": ["acme/web"],
+    "path_matches": ["projects/web"],
+    "setup_script": "npm ci && npm run db:migrate",
+    "session_env": { "GOLANGCI_LINT_CACHE": "/tmp/lint-{{.Session.Title}}" }
+  }]
+}
+```
+
+One difference from the account sections is worth knowing, because it decides what you
+write in `path_matches`: the path tested here is the **repository root** (a direct
+session's own directory, when there is no repo), not the session's worktree and not the
+directory you happened to start from. A worktree lives under
+`~/.atrium/worktrees/<branch>_<nonce>` and carries none of your project's path, so
+matching on it is not something you can usefully do — and a trailing slash on a rule
+that spells the root exactly (`/projects/web/`) will never match, because the root has
+none.
+
+Nothing here is read from the repository itself. That is deliberate: a setup script
+committed alongside a project would run whatever its author wrote the moment you opened
+a clone of it.
+
+`setup_script` runs through `sh -c` with the worktree as its working directory, after
+carried files and linked paths are in place. It gets the same `$ATRIUM_*` environment
+as a [custom command](#custom-commands) — `$ATRIUM_WORKTREE`, `$ATRIUM_BRANCH`,
+`$ATRIUM_REPO`, and the rest — and the same template placeholders and `quote` helper,
+so a path never has to be interpolated into a shell string by hand. Prefer the
+environment: `$ATRIUM_WORKTREE` needs no escaping at all, while a bare
+`{{.Session.Name}}` is the session's *renameable* label going straight into a shell
+command — wrap it in `{{ quote .Session.Name }}` if you interpolate it.
+
+A non-zero exit does **not** destroy the session. The worktree, the branch and the
+agent all survive; the failure opens a modal carrying the tail of what the script
+printed, and the run is recorded in the command log (`L`). What you lose is whatever
+the script installs, so the session comes up cold rather than not at all.
+
+It runs once per **worktree**, not once per session. Pausing removes the worktree and
+resuming recreates it — empty of `node_modules`, of generated files, of everything
+gitignored — so the script runs again on resume. Write it to be idempotent. (A park
+that left its worktree on disk skips both the recreation and the script.)
+
+`session_env` is exported into the setup script *and* into the agent's own pane, which
+is the point: a per-session value only some steps can see is not a per-session value.
+Names are refused if Atrium already injects them (anything starting with `ATRIUM_`, plus
+`CLAUDE_CONFIG_DIR` and `GH_CONFIG_DIR`). Values are Go templates over the same session
+context. They reach the pane as `tmux new-session -e` arguments, briefly visible to
+`ps` — do not put secrets there.
+
+A **direct** (non-git) session is the one asymmetric case. It has no worktree of its
+own — it runs in your real directory — so it gets `session_env` but never runs
+`setup_script`: installing into your own checkout is not Atrium's to do. It also has no
+branch, so a `session_env` value spelling `{{.Session.Branch}}` renders empty there
+rather than failing.
+
+One interaction to know about: a script that runs `npm install` under a path listed in
+[`link_paths`](#linked-paths) is writing into your own checkout's tree, shared by every
+other session at once. Linking and installing are alternatives, not a pair.
+
+While the script runs the session's row says so, and the preview names it in place of
+the generic "Setting up workspace…" it shows for every other session that has not come
+up yet — on a resume as well as on a first start. Entries the validator refuses are
+dropped rather than applied — one bad template does not cost you the others — and it
+says which and why: a modal at startup, and `atrium doctor` under **Repo scripts**.
+
+Quitting while a script is running ends it. Atrium kills the script's whole process
+group rather than just the `sh` it started, so a half-finished `npm ci && npm run build`
+does not keep running after the app is gone — and anything that script had backgrounded
+goes with it. A process left behind by a script that already *finished* is not touched:
+Atrium stops waiting on it after a moment and launches the agent, so a
+`dev-server &` never holds the session up.
+
 #### Claude accounts
 
 Route each session to a specific Claude Code account by injecting a per-session
@@ -1083,15 +1170,15 @@ are also editable live from the Settings panel (`,`). The exceptions are the thr
 account lists — `claude_accounts`, `gh_accounts`, `agy_accounts` — which the
 one-value-per-row panel cannot express and which are managed from the Accounts
 overlay instead, and the deprecated `nerd_font`, which `glyph_set` supersedes.
-`profiles` and `custom_commands` are lists of records too: the panel gives
-`profiles` a record editor of its own under Profiles rather than a row, and
-`custom_commands` is edited in `config.json` directly. A test
+`profiles`, `custom_commands` and `repo_scripts` are lists of records too: the panel
+gives `profiles` a record editor of its own under Profiles rather than a row, and the
+other two are edited in `config.json` directly. A test
 (`config.TestReadmeDocumentsEveryConfigField`) fails the build if a new field is
 added without a row here.
 
 The panel groups these keys into ten categories — Sessions, Worktrees & git,
 Appearance, Session list, Notifications, Automation, Input, Projects, Updates, and
-Advanced — shown in the Category column below. The five keys with no panel row carry
+Advanced — shown in the Category column below. The six keys with no panel row carry
 `—` instead; `profiles` names its editor.
 
 | Key | Category | Type | Default | Notes |
@@ -1120,6 +1207,7 @@ Advanced — shown in the Category column below. The five keys with no panel row
 | `trust_worktrees_root` | Automation | bool | `false` | pre-accept Claude's workspace-trust for the worktrees root |
 | `carry_files` | Worktrees & git | array | `[".claude/settings.local.json"]` | gitignored files copied into each worktree ([Carried files](#carried-files)) |
 | `link_paths` | Worktrees & git | array | `[]` | gitignored paths symlinked into each worktree, e.g. `node_modules` ([Linked paths](#linked-paths)) |
+| `repo_scripts` | — | array | `[]` | per-repository setup script and session environment, routed by remote/path ([Setup scripts](#setup-scripts)) |
 | `pr_create_draft` | Worktrees & git | bool | `true` | `c` opens a draft PR |
 | `update_base_on_create` | Worktrees & git | bool | `true` | branch off the freshest remote base tip |
 | `fast_forward_local_base` | Worktrees & git | bool | `false` | also fast-forward the local base branch on create |

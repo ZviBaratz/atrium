@@ -97,6 +97,15 @@ type Session struct {
 	// agyConfigDir, when non-empty, isolates the Antigravity CLI's configuration
 	// directory using bwrap at session launch.
 	agyConfigDir string
+	// sessionEnv holds already-rendered NAME=VALUE pairs from the repo's session_env
+	// (#389), injected through the same `new-session -e` mechanism as the dirs above.
+	// It is the general form of what CLAUDE_CONFIG_DIR and GH_CONFIG_DIR are special
+	// cases of: a value that must differ per session and that the tmux SERVER env
+	// cannot carry, because that is frozen when the server starts. Set before each
+	// launch (SetSessionEnv) rather than once at construction: unlike an account dir
+	// these are rendered from config the user can edit while the session is parked,
+	// and a resume relaunches through this same object.
+	sessionEnv []string
 	// sessionBriefFn yields the per-session facts the injected SessionStart context brief is
 	// rendered from (#485). Unlike the creation-fixed values above this is a PROVIDER, not a
 	// value: a Session object outlives its tmux session (pause→resume and recover-in-place
@@ -300,6 +309,17 @@ func (t *Session) SetAgyConfigDir(dir string) {
 	t.agyConfigDir = dir
 }
 
+// SetSessionEnv sets the already-rendered NAME=VALUE pairs from the repo's
+// session_env, injected at the next launch. Call before Start/StartContinue; tmux can
+// only set a session's environment when the session is born, so a call afterwards
+// affects the next relaunch (a resume or an in-place recovery), not the live pane.
+//
+// The values are taken as given: rendering them, and refusing the names Atrium injects
+// itself, are package repocfg's job.
+func (t *Session) SetSessionEnv(env []string) {
+	t.sessionEnv = env
+}
+
 // SetSessionBriefFunc binds the source of the facts the injected SessionStart context brief is
 // rendered from (#485). It takes a provider rather than a value on purpose: every launch calls
 // it afresh, so a session renamed between two launches describes itself correctly on the second
@@ -493,6 +513,17 @@ func (t *Session) start(workDir string, program string) error {
 	// session; -e values are single argv elements, so a sanitizedName is safe as a
 	// value (only the trailing program word is handed to `sh -c`).
 	args = append(args, "-e", atriumMarkerEnv, "-e", "ATRIUM_SESSION="+t.sanitizedName)
+	// The repo's own session_env (#389). Placed after Atrium's fixed names, though the
+	// ordering is not what keeps them apart: repocfg refuses a session_env entry named
+	// ATRIUM_*, CLAUDE_CONFIG_DIR or GH_CONFIG_DIR, so which of two assignments tmux
+	// keeps never has to be reasoned about for those. The gh token names below are the
+	// exception it cannot cover — they come from the user's own gh_accounts.token_env,
+	// so a config that spells the same name in both sections gets whichever tmux
+	// resolves. Values are single argv elements, so nothing here is re-parsed by a
+	// shell.
+	for _, pair := range t.sessionEnv {
+		args = append(args, "-e", pair)
+	}
 	// Resolve the routed account's gh token and inject it under each configured env
 	// name (e.g. GITHUB_PERSONAL_ACCESS_TOKEN, which the github MCP reads). The
 	// value is a start() local — never stored on the session nor persisted. A
