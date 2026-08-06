@@ -531,6 +531,9 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// thread — see runCustomCommandMsg.
 		return m, m.startCustomCommand(msg.spec)
 
+	case checkpointsLoadedMsg:
+		return m.handleCheckpointsLoaded(msg)
+
 	case customCommandDoneMsg:
 		return m.handleCustomCommandDone(msg)
 	case customCommandTerminalDoneMsg:
@@ -995,6 +998,14 @@ func (m *home) handleKeyPress(msg tea.KeyPressMsg) (mod tea.Model, cmd tea.Cmd) 
 		return m.handleCmdLogState(msg)
 	}
 
+	// The checkpoint timeline must run before the global quit handling too: r
+	// reloads it here rather than resuming a paused session, and q must be swallowed
+	// rather than quit the app out from under an open box (as in the queue overlay,
+	// esc is what closes).
+	if m.state == stateCheckpoints {
+		return m.handleCheckpointsState(msg)
+	}
+
 	// The palette, like the other overlay states, must run before the global quit
 	// handling so that q and every other printable key narrows the filter instead
 	// of quitting the app mid-query.
@@ -1178,6 +1189,8 @@ func (m *home) dispatchAction(name keys.KeyName) (tea.Model, tea.Cmd) {
 		return m.openQueue()
 	case keys.KeyCmdLog:
 		return m.openCmdLog()
+	case keys.KeyCheckpoints:
+		return m.openCheckpoints()
 	case keys.KeyCommandPalette:
 		return m.openCommandPalette()
 	case keys.KeyCustomCommands:

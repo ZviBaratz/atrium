@@ -79,6 +79,12 @@ const (
 
 	KeyCmdLog // Open the command-log overlay (tmux/git/gh subprocesses Atrium ran)
 
+	// KeyCheckpoints opens the checkpoint timeline for the selected session: the
+	// native file-history checkpoints Claude Code records before each prompt,
+	// read straight off its transcript. Claude-only, and read-only — restoring one
+	// is Claude's own Esc-Esc, which the overlay's attach action hands you to.
+	KeyCheckpoints
+
 	KeyAutoName // Auto-generate a display name for the selected session via claude
 
 	KeyMute // Toggle notification mute for the selected session

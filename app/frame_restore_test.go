@@ -52,12 +52,22 @@ func TestEveryBarHidingStateRestoresTheFrame(t *testing.T) {
 		// menu rather than refusing. That is deliberate: the empty state is the only
 		// place the app says where custom commands come from.
 		stateCustomCommands: {"custom commands", func(h *home) { h.Update(runeKey("!")) }},
-		stateConfirm:        {"confirmation", func(h *home) { h.Update(keyMsg("ctrl+x")) }},
-		stateHelp:           {"cheatsheet", func(h *home) { h.Update(runeKey("?")) }},
-		stateSettings:       {"settings", func(h *home) { h.Update(runeKey(",")) }},
-		stateAccounts:       {"accounts", func(h *home) { h.Update(runeKey("@")) }},
-		stateInfo:           {"info modal", func(h *home) { h.showInfo("something worth reading") }},
-		stateWelcome:        {"welcome", func(h *home) { h.maybeShowWelcome() }},
+		// The one test in the tree that actually PRESSES `H`. The fixture session runs
+		// "echo", and the surface is claude-only, so it has to look like a claude
+		// session first or the press only produces a notice — which is itself the
+		// behaviour openCheckpoints' first guard promises.
+		stateCheckpoints: {"checkpoints", func(h *home) {
+			if inst := h.list.GetSelectedInstance(); inst != nil {
+				inst.Program = "claude"
+			}
+			h.Update(runeKey("H"))
+		}},
+		stateConfirm:  {"confirmation", func(h *home) { h.Update(keyMsg("ctrl+x")) }},
+		stateHelp:     {"cheatsheet", func(h *home) { h.Update(runeKey("?")) }},
+		stateSettings: {"settings", func(h *home) { h.Update(runeKey(",")) }},
+		stateAccounts: {"accounts", func(h *home) { h.Update(runeKey("@")) }},
+		stateInfo:     {"info modal", func(h *home) { h.showInfo("something worth reading") }},
+		stateWelcome:  {"welcome", func(h *home) { h.maybeShowWelcome() }},
 	}
 
 	// A bar-hiding state left out of the table above needs a reason, not silence.

@@ -265,6 +265,7 @@ in-app keymap and this section ever drift apart, so it stays complete.
 | `s` | send a message (without attaching) |
 | `C` | diff tab: comment on a line or range → queue it to the agent (↑↓/j/k move, shift+↑↓/J/K extend, enter comment, esc exit) |
 | `Q` | manage queued prompts (list / cancel) |
+| `H` | claude sessions: list the checkpoints it took before each prompt, then attach to rewind one (`Esc Esc`) — see [Checkpoints](#checkpoints) |
 | `a` | approve the agent's prompt (`↵` picks its default); on idle claude, accept the suggested prompt |
 | `d` | start / stop the repo's `run_command` (dev server) on this session's port (see [Run commands](#run-commands)) |
 | `p` | pause: commit changes + free the worktree |
@@ -448,6 +449,40 @@ already created a session with the same name, if the branch has been recreated
 pointing somewhere else, or if the project directory is gone. Every refusal names
 the ref that still holds the commits, so `git branch <name> <ref>` recovers them
 by hand.
+
+#### Checkpoints
+
+Claude Code snapshots every file it is about to edit, just before each of your
+prompts, and lets you roll back to one from inside the session with `/rewind` or
+`Esc Esc`. From the session list you cannot normally see any of that without
+attaching. Press `H` on a Claude session and Atrium lists those checkpoints: when
+each was taken, the prompt it precedes, and how many files the session had touched
+by that point.
+
+It reads them straight out of Claude's own transcript — the same file the model and
+context chips come from — so there is nothing to enable and no extra process to
+run. `r` re-reads it, `↵` attaches to the session so you can press `Esc Esc` and
+pick a checkpoint, `esc` closes.
+
+**Atrium lists; Claude restores.** The rewind itself stays inside the session on
+purpose. Claude's checkpoint covers every file the session has touched *wherever it
+lives*, not only the ones under the worktree — its own plan and memory files, a
+scratch directory in `/tmp`, occasionally another checkout entirely — and rolling
+back deletes files created since. Doing that from the fleet view, one keypress away
+from the wrong row, is a worse trade than walking you to the surface that shows you
+the changes first and can rewind the conversation along with the code. A row that
+reads `12 files, 3 outside` is telling you exactly that: three of them are not in
+this worktree.
+
+Two things the list cannot promise. Claude keeps the last **100** checkpoints per
+session and sweeps a session's file backups on its own retention schedule
+(`cleanupPeriodDays`, 30 by default) while leaving the transcript records in place,
+so an old row can outlive the copies it would restore from — the overlay says so
+when the backups are already gone. And checkpoints only cover Claude's own file
+edits: changes made by a `bash` command it ran, by a subagent, or by you in another
+window are not in them. Git remains the permanent history; this is local undo.
+
+Non-Claude sessions have no equivalent surface, so `H` there just says so.
 
 #### Auto-attach
 

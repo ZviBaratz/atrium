@@ -120,6 +120,21 @@ func (m *home) updateHandleWindowSizeEvent(msg tea.WindowSizeMsg) {
 		}
 		m.cmdLogOverlay.SetSize(w, h)
 	}
+	if m.checkpointOverlay != nil {
+		// One row per checkpoint: a time column, the prompt line, and what the
+		// checkpoint covers. Wants height more than width — a long session has
+		// dozens of checkpoints — so it takes the command log's height share and a
+		// narrower width, capped so the prompt column stays readable.
+		w := int(float32(msg.Width) * 0.7)
+		if w > 96 {
+			w = 96
+		}
+		h := int(float32(msg.Height) * 0.85)
+		if h > 40 {
+			h = 40
+		}
+		m.checkpointOverlay.SetSize(w, h)
+	}
 	if m.commandPaletteOverlay != nil {
 		// Three columns wide (key, verb, prose) and as many rows as it can get:
 		// the palette's whole value is seeing a lot of the keymap at once. Capped
@@ -182,7 +197,7 @@ func (m *home) menuVisible() bool {
 		// These inline interactions teach their gestures on the bar, so it stays
 		// even when the always-on hint bar is turned off.
 		return true
-	case statePrompt, stateRename, stateQueue, stateCmdLog, stateCommandPalette, stateCustomCommands, stateConfirm, stateHelp, stateInfo, stateSettings, stateWelcome, stateAccounts, stateHistory:
+	case statePrompt, stateRename, stateQueue, stateCmdLog, stateCommandPalette, stateCustomCommands, stateCheckpoints, stateConfirm, stateHelp, stateInfo, stateSettings, stateWelcome, stateAccounts, stateHistory:
 		return false
 	default: // stateDefault (and the empty list)
 		// The bottom row is always reserved during plain navigation, so a transient

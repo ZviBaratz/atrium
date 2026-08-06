@@ -60,7 +60,7 @@ cannot install it. Once per machine:
 
 ## Adding a keybinding — 7 sites, all guarded
 
-At last count: **62 registry entries** and **51 dispatch-case lines**, with a dozen-odd
+At last count: **63 registry entries** and **52 dispatch-case lines**, with a dozen-odd
 drift guards in `keys/*_test.go` and **4** in `app/dispatch_coverage_test.go`.
 
 Those two numbers, and the `Config` field count below, are checked against the tree by
@@ -85,7 +85,7 @@ friends) if the key should appear in the bar — guarded in the reverse directio
 only, by `ui/menu_scan_test.go`.
 
 **Site 4 was the gap until #374 closed it.** The count mismatch is why nobody had
-written the obvious assertion: 62 entries against 51 case *lines* is not 11
+written the obvious assertion: 63 entries against 52 case *lines* is not 11
 missing cases, because several cases carry two or three names at once, 3 entries
 are `DocOnly`, the screensaver is deliberately absent from the registry, and
 `space` is consumed by the multi-select handler rather than the switch — so

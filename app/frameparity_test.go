@@ -14,6 +14,7 @@ import (
 	"github.com/ZviBaratz/atrium/config"
 	"github.com/ZviBaratz/atrium/customcmd"
 	"github.com/ZviBaratz/atrium/session"
+	"github.com/ZviBaratz/atrium/session/transcript"
 	"github.com/ZviBaratz/atrium/ui/overlay"
 	"github.com/ZviBaratz/atrium/ui/theme"
 
@@ -118,6 +119,48 @@ func frameStates() []frameState {
 			// must stay in step, and the per-row gating only exists on that path.
 			h.openCustomCommands()
 		}},
+		{"checkpoints", stateCheckpoints, func(h *home, inst *session.Instance) {
+			// The surface is claude-only, and the fixture session runs "echo", so the
+			// opener would refuse with a notice and never build the overlay.
+			inst.Program = "claude"
+			// Through the opener, like the palette: it is what pairs the overlay with
+			// checkpointTarget and checkpointRows.
+			h.openCheckpoints()
+			// The opener leaves the box in its loading state — the read is async and
+			// nothing here runs the returned command — so feed it the result a real
+			// session produces. Left loading, this golden would hold a one-line box
+			// and every width and height guard downstream would prove nothing.
+			h.handleCheckpointsLoaded(checkpointsLoadedMsg{
+				target: inst,
+				result: parityCheckpoints(),
+			})
+		}},
+	}
+}
+
+// parityCheckpoints is a POPULATED enumeration, for the reason
+// parityCustomCommands is: an empty one renders the "nothing recorded" line and
+// leaves the row layout, the time column, the file summary and the overflow
+// marker unrendered by every golden and every bounds sweep.
+//
+// Fixed timestamps, and deliberately so: a relative "3h ago" column — or anything
+// derived from time.Now() — would make these goldens re-baseline themselves daily.
+// It also covers the three row shapes that differ: a checkpoint reaching outside
+// the worktree, one that tracked nothing, and one with no extractable prompt.
+func parityCheckpoints() transcript.Checkpoints {
+	at := func(minute int) time.Time {
+		return time.Date(2026, 8, 5, 10, minute, 0, 0, time.UTC)
+	}
+	return transcript.Checkpoints{
+		SessionID: "abcdabcd-1234-4123-8123-abcdabcdabcd",
+		Path:      "/fixture/projects/parity/abcdabcd-1234-4123-8123-abcdabcdabcd.jsonl",
+		Blobs:     true,
+		List: []transcript.Checkpoint{
+			{MessageID: "cp-1", At: at(0), Label: "start on the parser", Files: 0},
+			{MessageID: "cp-2", At: at(12), Label: "extract the tail reader", Files: 4},
+			{MessageID: "cp-3", At: at(31), Label: "/simplify", Files: 9, Outside: 2},
+			{MessageID: "cp-4", At: at(47), Files: 11, Outside: 2},
+		},
 	}
 }
 

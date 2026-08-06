@@ -47,6 +47,7 @@ func TestGlobalKeyStringsMap_GoldenInventory(t *testing.T) {
 		"C":          KeyDiffComment,
 		"Q":          KeyQueue,
 		"L":          KeyCmdLog,
+		"H":          KeyCheckpoints,
 		"y":          KeyCopyBranch,
 		"Y":          KeyCopyContent,
 		"q":          KeyQuit,
