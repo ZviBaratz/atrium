@@ -164,6 +164,10 @@ type instanceMetaResult struct {
 	paneFrame   string
 	paneFrameAt time.Time
 	paneFrameOK bool
+	// runState carries what this tick observed about the session's dev command (#389).
+	// It has its own *Known flags rather than an OK beside it, because it answers two
+	// questions on independent schedules — see session.RunState.
+	runState session.RunState
 }
 
 // instancePolledMsg carries the result of an off-cadence status poll of a single instance,
@@ -707,6 +711,10 @@ func collectMetadata(ctx context.Context, poll []*session.Instance, selected *se
 			// Effort reads the value Poll just lifted off the hook record — no extra
 			// I/O; only applied when it changed.
 			r.effort, r.effortOK = instance.ComputeEffort()
+			// The dev-server sibling session (#389): whether this repo declares a run
+			// command, and whether one is up. Priced to cost nothing for a session whose
+			// repo declares none — see ComputeRunState.
+			r.runState = instance.ComputeRunState()
 			// Take the frame Poll just captured. It costs nothing — Poll captured the
 			// pane to classify it and used to throw the bytes away — and it means a
 			// session the user has not selected this run still has a frame to paint
@@ -790,6 +798,7 @@ func (m *home) applyMetadataResults(results []instanceMetaResult, emit bool) []t
 		if r.effortOK {
 			r.instance.SetEffortMeta(r.effort)
 		}
+		r.instance.ApplyRunState(r.runState)
 		// Record the liveness this poll already established, so the context-bar push
 		// below reads a memo instead of forking its own has-session per session. A
 		// PaneUnknown result is inconclusive (attached, unstarted, a transient probe

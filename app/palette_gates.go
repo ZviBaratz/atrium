@@ -49,6 +49,7 @@ const (
 	noBranchReason       = "no branch yet"
 	noQueueReason        = "nothing queued"
 	noPRReason           = "no PR yet"
+	noRunCommandReason   = "no run_command for this repo"
 	deadPaneReason       = "terminal has exited"
 	pausedWorktreeReason = "worktree freed — resume first"
 	// The two below are used by the custom-commands menu rather than the palette, but
@@ -197,6 +198,30 @@ var paletteGates = map[keys.KeyName]paletteGate{
 	keys.KeyResume: perSession(func(inst *session.Instance) string {
 		if !inst.Paused() {
 			return notPausedReason
+		}
+		return ""
+	}),
+
+	// The dev command (#389). Stopping one is always available while it runs, so the
+	// configured check is only asked of the start direction — and it is
+	// RunCommandUnavailable rather than !RunConfigured, so a session the poll has not
+	// yet looked at is offered rather than dimmed. toggleRunCommand refuses on exactly
+	// this predicate, which is what keeps this row's claim and the key in step.
+	keys.KeyRunCommand: perSession(func(inst *session.Instance) string {
+		if inst.RunLive() {
+			return ""
+		}
+		// A direct session runs in the user's own checkout, so it never hosts one — the
+		// same refusal setup_script makes, and checked before the config, since it holds
+		// however the repo is configured.
+		if inst.IsDirect() {
+			return directReason
+		}
+		if inst.Paused() {
+			return pausedWorktreeReason
+		}
+		if inst.RunCommandUnavailable() {
+			return noRunCommandReason
 		}
 		return ""
 	}),

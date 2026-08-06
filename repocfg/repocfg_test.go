@@ -79,6 +79,8 @@ func TestValidate_RejectsMalformedEntries(t *testing.T) {
 		{"reserved atrium prefix", func(r *config.RepoScript) { r.SessionEnv = map[string]string{"ATRIUM_ANYTHING": "x"} }, "reserved"},
 		{"reserved claude config dir", func(r *config.RepoScript) { r.SessionEnv = map[string]string{"CLAUDE_CONFIG_DIR": "x"} }, "reserved"},
 		{"reserved gh config dir", func(r *config.RepoScript) { r.SessionEnv = map[string]string{"GH_CONFIG_DIR": "x"} }, "reserved"},
+		{"unparsable run template", func(r *config.RepoScript) { r.RunCommand = "npm run dev {{ .Session" }, "run_command"},
+		{"unknown placeholder in run", func(r *config.RepoScript) { r.RunCommand = "npm run dev -- --port {{.Session.Prot}}" }, "Prot"},
 		{"unparsable env template", func(r *config.RepoScript) { r.SessionEnv = map[string]string{"CACHE": "{{ .Session"} }, "template"},
 		{"unknown placeholder in env", func(r *config.RepoScript) { r.SessionEnv = map[string]string{"CACHE": "{{.Session.Wortree}}"} }, "Wortree"},
 	}
@@ -137,6 +139,48 @@ func TestScript_RendersTheSetupScriptAgainstTheSession(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.Equal(t, "install /wt", script)
+}
+
+func TestScript_RendersTheRunCommandAgainstTheSession(t *testing.T) {
+	entry := ok()
+	entry.RunCommand = "npm run dev -- --port {{.Session.Port}}"
+	got, problems := Validate([]config.RepoScript{entry})
+	require.Empty(t, problems)
+	require.Len(t, got, 1)
+
+	cmd, err := got[0].RenderRun(Ctx{Session: SessionCtx{Port: "3001"}})
+
+	require.NoError(t, err)
+	assert.Equal(t, "npm run dev -- --port 3001", cmd)
+}
+
+// A run command on its own configures something, for the same reason a port range does:
+// a repo whose dependencies are committed needs no setup script, only a server. The
+// "configures nothing" rule is about an entry that shadows a later one while doing no
+// work, and this one does work.
+func TestValidate_AcceptsAnEntryThatOnlyConfiguresARunCommand(t *testing.T) {
+	entry := config.RepoScript{Name: "web", RunCommand: "npm run dev"}
+
+	got, problems := Validate([]config.RepoScript{entry})
+
+	require.Empty(t, problems)
+	require.Len(t, got, 1)
+	assert.False(t, got[0].HasSetupScript())
+	assert.True(t, got[0].HasRunCommand())
+}
+
+// An entry with no run_command reports none, and renders the empty string rather than
+// some sentinel — callers must read that as "there is nothing to run", never as a
+// command to hand a shell.
+func TestScript_ReportsNoRunCommandWhenNoneIsConfigured(t *testing.T) {
+	got, problems := Validate([]config.RepoScript{ok()})
+	require.Empty(t, problems)
+	require.Len(t, got, 1)
+
+	assert.False(t, got[0].HasRunCommand())
+	cmd, err := got[0].RenderRun(probe)
+	require.NoError(t, err)
+	assert.Empty(t, cmd)
 }
 
 func TestScript_RendersSessionEnvAsNameEqualsValue(t *testing.T) {

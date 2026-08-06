@@ -176,6 +176,16 @@ type RepoScript struct {
 	// the worktree and resume recreates it empty of every gitignored path, so a
 	// resumed session needs it again. Write it to be idempotent.
 	SetupScript string `json:"setup_script,omitempty"`
+	// RunCommand is the repo's long-running process — a dev server, a watcher — as a
+	// Go template over the same context, run through `sh -c` in the worktree. Unlike
+	// SetupScript it is hosted rather than awaited: it lives in a tmux session of its
+	// own beside the agent's, so it survives an Atrium restart, can be attached to and
+	// read, and is torn down with the session.
+	//
+	// It is started on demand (the `d` key), never automatically on create — the whole
+	// point of a session is not always a running server, and a fleet that starts one
+	// per session would bind a port per session too.
+	RunCommand string `json:"run_command,omitempty"`
 	// SessionEnv is exported into the setup script and into the agent's own pane, as
 	// NAME=VALUE. Values are Go templates over the same context, which is what makes
 	// a per-session value expressible at all — a cache directory that must not be
@@ -189,10 +199,12 @@ type RepoScript struct {
 	// sessions can run the same dev server at once without a collision to resolve by
 	// hand.
 	//
-	// A port is held for as long as the session's worktree is: allocated when the
-	// worktree is materialized (create, and again on resume), released on pause and on
-	// kill. Empty means this repo has no managed port, which is the pre-feature
-	// behavior and what every unconfigured repo gets.
+	// A port is held for as long as the session's PANE is: allocated when the worktree
+	// is materialized (create, and again on resume), kept across a pause — tmux freezes
+	// a session's environment at birth and a resume only re-attaches, so the parked
+	// shell still exports the number — and released on kill. Empty means this repo has
+	// no managed port, which is the pre-feature behavior and what every unconfigured
+	// repo gets.
 	PortRange string `json:"port_range,omitempty"`
 }
 

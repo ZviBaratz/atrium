@@ -319,20 +319,47 @@ func prSeg(p rowPaint, pr *git.PRStatus) (rowSeg, bool) {
 	return linkSeg(seg, pr.URL), true
 }
 
-// portSeg returns the managed dev-server port chip (#389) and whether the session has
-// one. Spelled ":3001" — the port alone, in the form a URL suffix takes — because the
-// host is always localhost and spelling it out would cost eleven columns on a line that
-// already carries a branch and the git chips.
+// runGlyph marks a chip whose dev command is running (#389). It carries the state by
+// SHAPE as well as by colour, which is the same rule prCheckGlyph follows and for the
+// same reason: an accent-vs-dim distinction alone vanishes under NO_COLOR and under the
+// desaturation guard. Like those glyphs it is an inline literal rather than a
+// theme.Glyphs field, so it needs no `?`-legend entry and no per-glyph-set spelling —
+// and, like those, it must measure one cell (TestRunGlyphIsSingleCell).
+const runGlyph = "▸"
+
+// portSeg returns the managed dev-server chip (#389) and whether the session has one to
+// show. It carries two facts at once, which is why it is one chip rather than two on a
+// line that already holds a branch and the git chips:
 //
-// It is a link to that server, which costs nothing: linkSeg overrides only the rendered
-// bytes, so the OSC 8 sequence adds no display width. Dim, like the branch and the age:
-// the port is an identifier the user reads when they go looking for it, not a state
-// change demanding attention.
-func portSeg(p rowPaint, port int) (rowSeg, bool) {
-	if port == 0 {
+//	:3001   a managed port, nothing running on it     (dim)
+//	▸:3001  the repo's run_command running on it      (accent)
+//	▸dev    a run_command running, no managed port    (accent)
+//
+// and nothing at all for a session with neither. The port is spelled bare — the host is
+// always localhost, and spelling it out would cost eleven columns — and is a link to
+// that server, which costs nothing: linkSeg overrides only the rendered bytes, so the
+// OSC 8 sequence adds no display width.
+//
+// Dim when idle, because a port is an identifier the user reads when they go looking for
+// it; accent when running, because that one IS a state the user is tracking. The
+// no-port-and-not-running case shows nothing rather than advertising an available
+// action: the hint bar and the cheatsheet do that job, and every column here is spent
+// against a branch name.
+func portSeg(p rowPaint, port int, running bool) (rowSeg, bool) {
+	if port == 0 && !running {
 		return rowSeg{}, false
 	}
-	seg := p.seg(fmt.Sprintf(":%d", port), p.th.Palette.FgDim)
+	label, color := fmt.Sprintf(":%d", port), p.th.Palette.FgDim
+	if port == 0 {
+		label = "dev"
+	}
+	if running {
+		label, color = runGlyph+label, p.th.Palette.Accent
+	}
+	seg := p.seg(label, color)
+	if port == 0 {
+		return seg, true
+	}
 	return linkSeg(seg, fmt.Sprintf("http://localhost:%d", port)), true
 }
 

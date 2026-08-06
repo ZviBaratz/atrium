@@ -26,3 +26,30 @@ func TestDerivedNamesCollide(t *testing.T) {
 		}
 	}
 }
+
+// Every derived sibling is reserved in BOTH directions. Only one suffix was covered
+// before the run command existed, and the direction that is easy to lose is the second:
+// the candidate can be the sibling rather than the parent, because
+// QualifiedSessionName maps a dot to an underscore.
+func TestDerivedTmuxNameCollides(t *testing.T) {
+	cases := []struct {
+		cand, name string
+		want       bool
+		why        string
+	}{
+		{"atrium_g_foo", "atrium_g_foo", true, "the same name"},
+		{"atrium_g_foo_term", "atrium_g_foo", true, "candidate is the terminal shell of an existing session"},
+		{"atrium_g_foo_run", "atrium_g_foo", true, "candidate is the run command of an existing session"},
+		{"atrium_g_foo", "atrium_g_foo_term", true, "an existing session IS a terminal-shell name"},
+		{"atrium_g_foo", "atrium_g_foo_run", true, "an existing session IS a run-command name"},
+		{"atrium_g_foo", "atrium_g_bar", false, "unrelated sessions"},
+		{"atrium_g_foo", "atrium_g_foo2", false, "a prefix is not a derived sibling"},
+		{"atrium_g_foo_runner", "atrium_g_foo", false, "a suffix must be the whole suffix"},
+		{"atrium_g_foo", "", false, "an instance with no tmux name yet reserves nothing"},
+	}
+	for _, c := range cases {
+		if got := DerivedTmuxNameCollides(c.cand, c.name); got != c.want {
+			t.Errorf("DerivedTmuxNameCollides(%q, %q) = %v, want %v (%s)", c.cand, c.name, got, c.want, c.why)
+		}
+	}
+}

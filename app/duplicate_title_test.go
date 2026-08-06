@@ -103,18 +103,47 @@ func TestTitleConflict_IncludesPausedSessions(t *testing.T) {
 	assert.NotEmpty(t, h.titleConflict("parked"))
 }
 
-// A title whose qualified tmux name would equal another session's terminal-shell
-// name (<name>_term) — or vice versa — is reserved: the shell session would
-// collide even though the agent sessions differ.
-func TestTitleConflict_TermReservation(t *testing.T) {
+// A title whose qualified tmux name would equal one of another session's DERIVED
+// sibling sessions — the terminal shell (<name>_term) or the run command
+// (<name>_run) — is reserved: the sibling would collide even though the agent
+// sessions differ. QualifiedSessionName maps a dot to an underscore, which is how
+// an innocuous title reaches another session's derived name.
+func TestTitleConflict_DerivedSiblingReservation(t *testing.T) {
+	for _, title := range []string{"foo.term", "foo.run"} {
+		t.Run(title, func(t *testing.T) {
+			t.Setenv("HOME", t.TempDir())
+			h := newCreateFormHome(t)
+			data := session.InstanceData{
+				Title: "foo", Path: "/nonexistent/grp", Status: session.Paused, Program: "echo",
+				TmuxName: tmux.QualifiedSessionName("grp", "foo"),
+				Worktree: session.GitWorktreeData{
+					RepoPath: "/nonexistent/grp", WorktreePath: "/nonexistent/wt",
+					SessionName: "foo", BranchName: "zvi/foo",
+				},
+			}
+			inst, err := session.FromInstanceData(context.Background(), data, "zvi/")
+			require.NoError(t, err)
+			h.list.AddInstance(inst)
+
+			h.newSessionGroup = "grp"
+			assert.NotEmpty(t, h.titleConflict(title),
+				"sanitizes to one of session foo's derived sibling session names")
+		})
+	}
+}
+
+// And the other direction: an EXISTING session whose own tmux name is the derived
+// sibling of the name a new title would mint. Here the candidate is the parent,
+// which is the half a `cand+suffix == name` check alone would miss.
+func TestTitleConflict_DerivedSiblingReservationBothDirections(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	h := newCreateFormHome(t)
 	data := session.InstanceData{
-		Title: "foo", Path: "/nonexistent/grp", Status: session.Paused, Program: "echo",
-		TmuxName: tmux.QualifiedSessionName("grp", "foo"),
+		Title: "foo.run", Path: "/nonexistent/grp", Status: session.Paused, Program: "echo",
+		TmuxName: tmux.QualifiedSessionName("grp", "foo.run"),
 		Worktree: session.GitWorktreeData{
 			RepoPath: "/nonexistent/grp", WorktreePath: "/nonexistent/wt",
-			SessionName: "foo", BranchName: "zvi/foo",
+			SessionName: "foo-run", BranchName: "zvi/foo-run",
 		},
 	}
 	inst, err := session.FromInstanceData(context.Background(), data, "zvi/")
@@ -122,8 +151,8 @@ func TestTitleConflict_TermReservation(t *testing.T) {
 	h.list.AddInstance(inst)
 
 	h.newSessionGroup = "grp"
-	assert.NotEmpty(t, h.titleConflict("foo.term"),
-		"sanitizes to foo_term — exactly session foo's terminal-shell name")
+	assert.NotEmpty(t, h.titleConflict("foo"),
+		"session foo would host its run command at foo_run, which is foo.run's own name")
 }
 
 // The async branch-existence verdict surfaces as the same inline error, and a

@@ -290,6 +290,10 @@ var Registry = []Entry{
 		key.WithKeys("a"),
 		key.WithHelp("a", "approve"),
 	)},
+	{Name: KeyRunCommand, Binding: key.NewBinding(
+		key.WithKeys("d"),
+		key.WithHelp("d", "run/stop dev command"),
+	)},
 
 	// Documented-only keys: real keys the TUI's dispatch map never sees, kept
 	// here so generated help can reference them (see keys.go for each one's

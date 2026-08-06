@@ -126,6 +126,13 @@ const (
 	// description and Atrium routes it to a project and pre-fills the new-session form.
 	KeySmartDispatch
 
+	// KeyRunCommand starts — or stops — the repo's configured run_command for the
+	// selected session (#389): a dev server or watcher, hosted in a tmux session of
+	// its own beside the agent's, on the session's own managed port. One key for both
+	// directions because the two are never both available, and the row says which one
+	// this press will do.
+	KeyRunCommand
+
 	// KeyMultiSelect enters multi-select ("visual") mode from the list, where
 	// space marks/unmarks rows and a lifecycle action (pause/resume/kill) applies
 	// to the marked set behind a single confirmation.
