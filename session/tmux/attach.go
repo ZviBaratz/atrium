@@ -25,25 +25,85 @@ const (
 	attachPrev
 )
 
-// Control bytes intercepted while attached.
+// The control bytes intercepted while attached, at the default keymap.
+//
+// They are defaults rather than the last word: detach and kill are ordinary
+// registry actions a user may rebind (#376), and SetAttachChords replaces these
+// with whatever the applied keymap resolved to. That matters most for exactly
+// these two — ctrl+q is XOFF on a terminal that has not had `stty -ixon`, and
+// ctrl+x is a normal editing key in any shell — which is why they are the pair
+// the config layer was built for.
 const (
 	ctrlQ = 17 // detach
 	ctrlX = 24 // kill (detach + request teardown)
 )
 
+// attachChords holds the effective detach and kill bytes.
+//
+// atomic, and for the same reason configOverridePath is (see config.go): the
+// stdin classifier runs on the attach goroutine while SetAttachChords is called
+// from the startup path, and Attach itself is reached from a tea.Cmd goroutine.
+// A plain pair of vars would be a data race the detector finds.
+var attachChords atomic.Pointer[attachChordSet]
+
+// attachChordSet is the pair, stored together so a read can never see a detach
+// byte from one keymap beside a kill byte from another.
+//
+// killBound is separate from kill rather than encoded as a sentinel byte,
+// because every byte value is a real chord — 0 is ctrl+@ — so there is no value
+// left to mean "none". A user who unbinds the kill action must stop being able
+// to tear a session down from inside its own pane, which a sentinel would get
+// exactly backwards on the one byte it picked.
+type attachChordSet struct {
+	detach    byte
+	kill      byte
+	killBound bool
+}
+
+// SetAttachChords installs the bytes this layer detaches and kills on, derived
+// from the applied keymap. Call it once at startup, after keys.Apply.
+//
+// The caller does the chord → byte conversion (keys.ControlByte), because
+// refusing an unencodable chord is a validation decision that belongs with the
+// rest of them: by the time a byte arrives here there is nothing left to reject.
+func SetAttachChords(detach, kill byte, killBound bool) {
+	attachChords.Store(&attachChordSet{detach: detach, kill: kill, killBound: killBound})
+}
+
+// AttachChords reports the bytes this layer currently detaches and kills on. The
+// read side of SetAttachChords, for anything that has to state what the attach
+// layer will actually honor rather than assume the defaults.
+func AttachChords() (detach, kill byte, killBound bool) {
+	c := chords()
+	return c.detach, c.kill, c.killBound
+}
+
+// chords returns the effective bytes, falling back to the defaults when nothing
+// has been installed — the daemon and every test that never calls Apply.
+func chords() attachChordSet {
+	if c := attachChords.Load(); c != nil {
+		return *c
+	}
+	return attachChordSet{detach: ctrlQ, kill: ctrlX, killBound: true}
+}
+
 // classifyAttachInput decides what a single stdin read means while attached.
-// Ctrl+Q detaches; Ctrl+X requests a kill but only when allowKill is set (agent
-// sessions, not the Terminal-tab shell, where Ctrl+X is a normal editing key).
-// A control byte is only honored when it arrives alone (a single-byte read) so
-// it isn't mistaken for part of a longer escape sequence or paste. Everything
-// else is forwarded to the pty unchanged.
+// The detach chord detaches; the kill chord requests a kill but only when
+// allowKill is set (agent sessions, not the Terminal-tab shell, where ctrl+x is
+// a normal editing key). A control byte is only honored when it arrives alone (a
+// single-byte read) so it isn't mistaken for part of a longer escape sequence or
+// paste. Everything else is forwarded to the pty unchanged.
 func classifyAttachInput(in []byte, allowKill bool) attachInputAction {
+	c := chords()
 	if len(in) == 1 {
 		switch in[0] {
-		case ctrlQ:
+		case c.detach:
 			return attachDetach
-		case ctrlX:
-			if allowKill {
+		case c.kill:
+			// killBound as well as allowKill: the first is whether the user still
+			// has a kill key at all, the second whether this pane is one it may be
+			// used on (agent sessions, not the Terminal-tab shell).
+			if allowKill && c.killBound {
 				return attachKill
 			}
 		}

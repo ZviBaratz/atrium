@@ -298,10 +298,15 @@ func TestANewNoticeReplacesTheSettingsJump(t *testing.T) {
 	assert.NotEqual(t, "session_sort", h.settingsOverlay.SelectedRowKey())
 }
 
-// Every notice that advertises ',' must go through settingNotice, so the key it teaches
-// lands on the setting the notice is about. flashNotice and handleInfoNotice are the generic
-// paths and actively DISARM a jump, so a ','-advertising notice built on one of them is the
-// bug this catches — five such notices exist today and they read identically at a glance.
+// Every notice that advertises the settings key must go through settingNotice, so the key
+// it teaches lands on the setting the notice is about. flashNotice and handleInfoNotice are
+// the generic paths and actively DISARM a jump, so such a notice built on one of them is the
+// bug this catches — five exist today and they read identically at a glance.
+//
+// The detector matches a keys.KeySettings reference as well as the old ',' literals, and the
+// reference is now the one that matters: the notices stopped spelling ',' when their prose
+// moved to keys.LabelOf, so a literal-only detector would have gone on passing over a tree it
+// could no longer see into. TestCommaNoticeDetectorSeesBothSpellings pins both arms.
 //
 // The scope is the call plus, when its text argument is a bare identifier, the literals
 // assigned to that identifier in the same function. Both narrower and wider rules were tried
@@ -315,21 +320,8 @@ func TestANewNoticeReplacesTheSettingsJump(t *testing.T) {
 // notice path at all — its ',' is armed by pendingConfirmSettingKey at the confirmAction site
 // instead — so it never trips this.
 func TestEveryCommaNoticeGoesThroughSettingNotice(t *testing.T) {
-	advertises := func(lit *ast.BasicLit) bool {
-		return lit.Kind == token.STRING &&
-			(strings.Contains(lit.Value, "press ,") || strings.Contains(lit.Value, "(, to"))
-	}
-	hasCommaLiteral := func(n ast.Node) bool {
-		found := false
-		ast.Inspect(n, func(x ast.Node) bool {
-			if lit, ok := x.(*ast.BasicLit); ok && advertises(lit) {
-				found = true
-			}
-			return true
-		})
-		return found
-	}
-	// assignsCommaLiteral reports whether fn assigns a ','-advertising literal to name.
+	hasCommaLiteral := advertisesSettingsKey
+	// assignsCommaLiteral reports whether fn assigns a settings-key-advertising expression to name.
 	assignsCommaLiteral := func(fn *ast.FuncDecl, name string) bool {
 		found := false
 		ast.Inspect(fn.Body, func(x ast.Node) bool {
@@ -407,4 +399,49 @@ func TestEveryCommaNoticeGoesThroughSettingNotice(t *testing.T) {
 	require.Positive(t, checked, "the walk must actually visit the generic notice paths")
 	assert.Empty(t, offenders,
 		"a notice advertising ',' must use settingNotice so the key lands on its setting")
+}
+
+// advertisesSettingsKey reports whether n teaches the settings key, in either
+// spelling: the ',' literals the notices used to carry, or a keys.KeySettings
+// reference, which is what generated prose looks like.
+func advertisesSettingsKey(n ast.Node) bool {
+	found := false
+	ast.Inspect(n, func(x ast.Node) bool {
+		switch v := x.(type) {
+		case *ast.BasicLit:
+			if v.Kind == token.STRING &&
+				(strings.Contains(v.Value, "press ,") || strings.Contains(v.Value, "(, to")) {
+				found = true
+			}
+		case *ast.SelectorExpr:
+			if pkg, ok := v.X.(*ast.Ident); ok && pkg.Name == "keys" && v.Sel.Name == "KeySettings" {
+				found = true
+			}
+		}
+		return true
+	})
+	return found
+}
+
+// The positive control. A source-scanning guard whose detector has stopped
+// matching passes silently and forever, and this one has already outlived one
+// spelling of what it looks for — so assert it still fires on both, and does not
+// fire on an ordinary notice.
+func TestCommaNoticeDetectorSeesBothSpellings(t *testing.T) {
+	for _, tc := range []struct {
+		name, src string
+		want      bool
+	}{
+		{"literal", `package p; func f() { g("press , to change the limit") }`, true},
+		{"dialog literal", `package p; func f() { g("Create it anyway? (, to change the limit)") }`, true},
+		{"registry reference", `package p; func f() { g(keys.LabelOf(keys.KeySettings)) }`, true},
+		{"unrelated notice", `package p; func f() { g("session is paused") }`, false},
+		{"another registry key", `package p; func f() { g(keys.LabelOf(keys.KeyResume)) }`, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f, err := parser.ParseFile(token.NewFileSet(), "x.go", tc.src, 0)
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, advertisesSettingsKey(f))
+		})
+	}
 }

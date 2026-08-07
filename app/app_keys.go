@@ -39,6 +39,29 @@ const quitAfterStartupNotice = "finishing session startup before quitting… (q 
 // ladder ("folding") and the key that lifts it, like the sibling reorder refusals (#346).
 const filterFoldNotice = "folding is off while a filter is live (esc to clear)"
 
+// pressToResume is the "how do I get this back" clause every paused refusal ends
+// with, naming the resume key through the registry rather than as a literal.
+//
+// It is a function and not a const for that reason: a const would be correct
+// only until someone rebinds resume, and then a dozen notices would be telling
+// them to press a key that does something else. That is not hypothetical — two
+// of these notices shipped saying "press k to kill", where k moves the
+// selection; the kill key is ctrl-x.
+func pressToResume() string {
+	return "press " + keys.LabelOf(keys.KeyResume) + " to resume"
+}
+
+// pausedResumeNotice is the standing refusal for a per-session action pressed on
+// a paused session. tail, when set, says what the resume would unblock ("before
+// sending"); the bare form is the general case.
+func pausedResumeNotice(tail string) string {
+	notice := "session is paused — " + pressToResume()
+	if tail != "" {
+		notice += " " + tail
+	}
+	return notice
+}
+
 // selectedActionable returns the selected instance when a per-session action may
 // run against it. The bool is false (with the command to return) when there is no
 // selection or it is still starting — the two guards almost every session action
@@ -207,10 +230,23 @@ func (m *home) afterPromptEdit(prevTitle string, branchFilterChanged bool) (tea.
 // Either way only the resulting message flows back through the runtime, so a
 // returned error reaches the error box.
 func (m *home) handleConfirmState(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
-	// A dialog whose copy promises ',' opens the setting it named. It is a cancel: nothing
-	// staged is run, and the stashed create form stays restorable exactly as declining leaves
-	// it. Armed per-dialog (confirmOverCap), so ',' stays inert in every other confirmation.
-	if key := m.pendingConfirmSettingKey; key != "" && msg.String() == "," {
+	// A dialog whose copy promises the settings key opens the setting it named. It is a
+	// cancel: nothing staged is run, and the stashed create form stays restorable exactly as
+	// declining leaves it. Armed per-dialog (confirmOverCap), so the key stays inert in every
+	// other confirmation.
+	//
+	// Matched through the registry rather than as ',' so that the key the dialog's copy
+	// promises and the key it honors are the same one — the copy is generated from the same
+	// binding (settingNotice), so a literal here would let the two drift apart.
+	//
+	// The dialog's own keys win the tie. Reading the settings key from the registry means
+	// an override can land it on y or n, which nothing reserves, and this branch runs
+	// before the overlay sees the press: rebinding settings onto y made the advertised
+	// "Create it anyway? y/n" open the settings panel and silently discard the staged
+	// session. Deferring to Answers keeps the dialog answering for the keys it prints.
+	settingsKey := keys.PrimaryKey(keys.KeySettings)
+	if key := m.pendingConfirmSettingKey; key != "" && settingsKey != "" &&
+		msg.String() == settingsKey && !m.confirmationOverlay.Answers(settingsKey) {
 		m.pendingConfirmSettingKey = ""
 		m.pendingConfirmAction = nil
 		m.pendingConfirmBusyLabel = ""
@@ -509,7 +545,7 @@ func (m *home) handleMultiSelectState(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) 
 	case keys.KeyResume:
 		return m, m.resumeMarked()
 	case keys.KeyKill:
-		return m, m.killMarked(keys.KillKey)
+		return m, m.killMarked(keys.KillKey())
 	default:
 		return m, nil
 	}
@@ -572,7 +608,7 @@ func (m *home) openQuickSend() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	if selected.Paused() {
-		return m, m.handleInfoNotice("session is paused — press r to resume before sending")
+		return m, m.handleInfoNotice(pausedResumeNotice("before sending"))
 	}
 	if !selected.Started() || selected.GetStatus() == session.Loading {
 		return m, m.handleInfoNotice(stillStartingNotice)
@@ -979,7 +1015,7 @@ func (m *home) pauseSelected() (tea.Model, tea.Cmd) {
 	// guard, and the command palette (#374) reaches every action regardless of
 	// which cues are showing. Mirrors resume's "already running" refusal.
 	if selected.Paused() {
-		return m, m.handleInfoNotice("session is already paused — press r to resume")
+		return m, m.handleInfoNotice("session is already paused — " + pressToResume())
 	}
 
 	// Pause off the UI thread: Pause() commits any dirty work and removes the
@@ -1024,7 +1060,7 @@ func (m *home) attachSelected() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	if selected.Paused() {
-		return m, m.handleInfoNotice("session is paused — press r to resume")
+		return m, m.handleInfoNotice(pausedResumeNotice(""))
 	}
 	if selected.GetStatus() == session.Loading {
 		return m, m.handleInfoNotice(stillStartingNotice)
@@ -1033,7 +1069,9 @@ func (m *home) attachSelected() (tea.Model, tea.Cmd) {
 		// Don't say "resume it": r refuses a non-paused session (resumeSelectedKey).
 		// A dead terminal is parked as paused within a couple of poll ticks (the
 		// lost-session recovery), after which r works; until then kill is the action.
-		return m, m.handleInfoNotice("session terminal has exited — it will be parked as paused shortly (then press r), or press k to kill")
+		return m, m.handleInfoNotice(fmt.Sprintf(
+			"session terminal has exited — it will be parked as paused shortly (then press %s), or press %s to kill",
+			keys.LabelOf(keys.KeyResume), keys.LabelOf(keys.KeyKill)))
 	}
 	// Attach to the session (or its terminal tab) via tea.Exec, which hands the
 	// terminal to tmux and repaints on detach; the hint bar carries the ctrl-q

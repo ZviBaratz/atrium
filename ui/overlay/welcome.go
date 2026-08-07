@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/ZviBaratz/atrium/config"
+	"github.com/ZviBaratz/atrium/keys"
 	"github.com/ZviBaratz/atrium/ui/theme"
 
 	tea "charm.land/bubbletea/v2"
@@ -121,7 +122,9 @@ func (w *WelcomeOverlay) Render() string {
 		hint = "esc skip"
 	case len(w.detected) == 0:
 		b.WriteString("⚠ No supported agent CLIs found on PATH.\n")
-		b.WriteString(overlayDimStyle().Render("Install claude, codex, gemini, or aider (or press , later)."))
+		b.WriteString(overlayDimStyle().Render(fmt.Sprintf(
+			"Install claude, codex, gemini, or aider (or press %s later).",
+			keys.LabelOf(keys.KeySettings))))
 		hint = "enter continue · esc skip"
 	default:
 		b.WriteString("Choose your default agent:\n\n")

@@ -948,7 +948,7 @@ func (m *home) forgetInstance(inst *session.Instance) {
 // land mid-flight and the costliest to leave un-joined at quit.
 //
 // altConfirmKey is the key that opened the dialog, which double-taps to confirm when
-// kill_double_tap_confirm is on. It is a parameter rather than keys.KillKey because
+// kill_double_tap_confirm is on. It is a parameter rather than keys.KillKey() because
 // visual mode advertises plain "x" and accepts ctrl+x too, so the key the dialog must
 // echo is the one the user pressed — hard-coding the chord would print "(or ctrl+x)"
 // at someone who never pressed it.
@@ -2127,7 +2127,7 @@ func (m *home) confirmKill(inst *session.Instance) tea.Cmd {
 	// kills in one motion. Scoped to the kill dialog (other confirmations still
 	// require 'y').
 	if m.appConfig.GetKillDoubleTapConfirm() {
-		m.confirmationOverlay.SetConfirmAltKey(keys.KillKey)
+		m.confirmationOverlay.SetConfirmAltKey(keys.KillKey())
 	}
 	return cmd
 }

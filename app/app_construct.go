@@ -7,6 +7,7 @@ import (
 	"github.com/ZviBaratz/atrium/cmd"
 	"github.com/ZviBaratz/atrium/config"
 	"github.com/ZviBaratz/atrium/customcmd"
+	"github.com/ZviBaratz/atrium/keys"
 	"github.com/ZviBaratz/atrium/notify"
 	"github.com/ZviBaratz/atrium/repocfg"
 	"github.com/ZviBaratz/atrium/session"
@@ -139,6 +140,17 @@ func assembleHome(
 	// the report — a refused entry is dropped, and its whole symptom otherwise is a
 	// setup script that never runs and says nothing about why.
 	_, h.pendingRepoScriptProblems = repocfg.Validate(appConfig.RepoScripts)
+
+	// And the keymap (#376). Here rather than in main.go for three reasons: the
+	// daemon loads the same config and must not install a keymap it never renders;
+	// the problems have to reach the buffer above to be shown; and this runs before
+	// tea.NewProgram, which is the contract keys.Apply's readers depend on.
+	//
+	// The restore func is dropped deliberately. The keymap is process-wide and
+	// lasts as long as the program does — there is nothing to restore it for
+	// outside a test, and holding it would only invite someone to call it.
+	h.pendingKeybindingProblems, _ = keys.Apply(appConfig.KeybindingOverrides())
+	installAttachChords()
 
 	return h
 }

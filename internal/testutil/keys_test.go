@@ -17,7 +17,11 @@ import (
 // encoding is exactly what Bubble Tea v2 changes, and this assertion survives that
 // change unaltered.
 func TestKeySpecsRoundTripThroughString(t *testing.T) {
-	for spec := range specialKeys {
+	for _, spec := range []string{
+		"enter", "tab", "esc", "space", "backspace", "delete", "insert",
+		"up", "down", "left", "right", "home", "end", "pgup", "pgdown",
+		"ctrl+s", "alt+enter", "shift+tab", "shift+up", "ctrl+shift+left",
+	} {
 		require.Equal(t, spec, Key(spec).String(),
 			"Key(%q) must stringify back to %q", spec, spec)
 	}
@@ -44,9 +48,15 @@ func TestKeyAppliesTheAltModifier(t *testing.T) {
 
 // TestKeyPanicsOnAnUnknownSpec pins the deliberate loudness: a typo'd keystroke
 // must not degrade into a zero-valued message that quietly matches nothing.
+//
+// The message names the whole spec rather than the unresolved tail, and comes
+// from keys.ParseKey — the vocabulary moved there, so advice to "add it to
+// specialKeys" would now point at a table this package no longer owns.
 func TestKeyPanicsOnAnUnknownSpec(t *testing.T) {
 	require.PanicsWithValue(t,
-		`testutil.Key: unknown key spec "nope" — add it to specialKeys, or use Runes for literal text`,
+		`testutil.Key: key "ctrl+shift+nope" is not a key name — use a single `+
+			`character like "?", or a key name like "enter" or "ctrl+s" `+
+			`(Runes builds literal text)`,
 		func() { Key("ctrl+shift+nope") })
 }
 

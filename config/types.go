@@ -356,6 +356,17 @@ type Config struct {
 	// session's worktree exists, and what to export into it. Nil by default — a repo
 	// with no entry behaves exactly as it did before the feature existed.
 	RepoScripts []RepoScript `json:"repo_scripts,omitempty"`
+	// Keybindings remaps the keymap: action name → the key(s) it should answer to,
+	// or "disabled" to unbind it (#376). Nil by default, and a nil map is the
+	// shipped keymap byte for byte.
+	//
+	// It exists because Atrium's keys are not its own to choose. A TUI that lives
+	// inside and around tmux competes for the same keyboard as the user's terminal,
+	// multiplexer and shell — and two of these keys are raw control bytes read
+	// while the user is inside an agent pane, one of which (ctrl+q) is XOFF. The
+	// action names are the Action field of the keys registry; keys.Validate is the
+	// authority on what is accepted, and this comment is a projection of it.
+	Keybindings map[string]KeySpec `json:"keybindings,omitempty"`
 	// TmuxConfigOverride, when set to an existing file path, is used as the tmux
 	// config for cs sessions instead of the bundled managed config. When empty,
 	// cs materializes and uses its own config.

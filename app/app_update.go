@@ -1082,8 +1082,14 @@ func (m *home) handleKeyPress(msg tea.KeyPressMsg) (mod tea.Model, cmd tea.Cmd) 
 		}
 	}
 
-	// Handle quit commands first
-	if msg.String() == "ctrl+c" || msg.String() == "q" {
+	// ctrl+c quits from anywhere the overlay states above have not already
+	// claimed it. It is matched literally, and stays that way: no Registry entry
+	// claims it, it is the terminal's universal abort, and it is the escape hatch
+	// that must keep working when a rebind has gone wrong. The quit *key* is a
+	// registered action and resolves through the dispatch map below like any
+	// other, so rebinding it moves the key and every surface that names it
+	// together.
+	if msg.String() == "ctrl+c" {
 		return m.handleQuit()
 	}
 
@@ -1097,8 +1103,9 @@ func (m *home) handleKeyPress(msg tea.KeyPressMsg) (mod tea.Model, cmd tea.Cmd) 
 	// every per-session mutating key and overlay-opener with a busy notice. This
 	// closes two windows the freeze used to cover: driving tmux/git on the very
 	// instance an in-flight Pause is tearing down (e.g. attach), and opening an
-	// overlay that a completion handler (pause → rename) would then clobber. Quit
-	// and ctrl+l are handled above, so a wedged action stays escapable.
+	// overlay that a completion handler (pause → rename) would then clobber.
+	// ctrl+c and ctrl+l are handled above, and quit is on the allowlist below, so
+	// a wedged action stays escapable.
 	if m.actionInFlight && !keyAllowedWhileBusy(name) {
 		// Fix the SENTENCE for a missing label rather than inventing copy for it:
 		// "busy — " only parses because the label is a gerund, so with no label the
@@ -1357,11 +1364,13 @@ func (m *home) dispatchAction(name keys.KeyName) (tea.Model, tea.Cmd) {
 	case keys.KeyEnter, keys.KeyAttachToggle:
 		return m.attachSelected()
 	case keys.KeyQuit:
-		// Unreachable from a keypress: handleKeyPress matches "q" (and ctrl+c,
-		// which no Registry entry claims) before it ever resolves a name, so that
-		// the quit path stays live inside every mode. This case exists for the
-		// callers that arrive by name instead — the command palette — and is what
-		// keeps quit from being the one registered action with nowhere to land.
+		// Reached both ways: by the quit key, which now resolves through the
+		// dispatch map like every other action so a rebind moves it, and by name
+		// from the command palette. It used to be palette-only, with "q" matched
+		// literally in handleKeyPress's prelude — which meant the one action whose
+		// key a user is most likely to want back was the one the registry did not
+		// actually own. ctrl+c is still matched there, and is the escape hatch if
+		// this key is ever bound somewhere unreachable.
 		return m.handleQuit()
 	default:
 		return m, nil
@@ -1388,9 +1397,15 @@ var dispatchExempt = map[keys.KeyName]string{
 // only thing making an undo single-flight. Two presses before the restore returns
 // would run the same record twice, and the second run would recreate a branch and
 // a worktree the first one has already claimed.
+//
+// KeyQuit is here for the opposite reason. It used to bypass the gate by being
+// matched literally before the dispatch lookup; now that it resolves like every
+// other action, swallowing it with a "busy" notice would leave a wedged action
+// with no way out but ctrl+c.
 func keyAllowedWhileBusy(name keys.KeyName) bool {
 	switch name {
-	case keys.KeyHelp,
+	case keys.KeyQuit,
+		keys.KeyHelp,
 		keys.KeyUp, keys.KeyDown, keys.KeyNextUnread, keys.KeyNextNeedsInput,
 		keys.KeyShiftUp, keys.KeyShiftDown, keys.KeyShrinkList, keys.KeyGrowList,
 		keys.KeyLayoutPreset,

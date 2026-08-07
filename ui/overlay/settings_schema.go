@@ -10,6 +10,7 @@ import (
 	"sync"
 
 	"github.com/ZviBaratz/atrium/config"
+	"github.com/ZviBaratz/atrium/keys"
 	"github.com/ZviBaratz/atrium/ui/theme"
 )
 
@@ -499,7 +500,7 @@ func newSettingRows(cfg *config.Config) []settingRow {
 			},
 		},
 		boolRow("pr_create_draft", catWorktrees, "Create PRs as draft",
-			"Open PRs as drafts. Turn off to merge them with m in-app.",
+			"Open PRs as drafts. Turn off to merge them with "+keys.LabelOf(keys.KeyMerge)+" in-app.",
 			"",
 			timingLive, true,
 			(*config.Config).GetPRCreateDraft,
@@ -595,10 +596,12 @@ func newSettingRows(cfg *config.Config) []settingRow {
 			defaultDisplay: func() string { return (&config.Config{}).GetSessionSort() },
 			reset:          func(c *config.Config) { c.SessionSort = "" },
 			summary:        "Row order inside each repo group.",
-			detail:         "Group order stays manual either way (`{` / `}`).",
+			detail: "Group order stays manual either way (`" + keys.LabelOf(keys.KeyMoveGroupUp) +
+				"` / `" + keys.LabelOf(keys.KeyMoveGroupDown) + "`).",
 			gloss: map[string]string{
-				config.SessionSortCreation: "the manual order you set with J/K",
-				config.SessionSortStatus:   "floats blocked and unread sessions to the top",
+				config.SessionSortCreation: "the manual order you set with " +
+					keys.LabelOf(keys.KeyMoveDown) + "/" + keys.LabelOf(keys.KeyMoveUp),
+				config.SessionSortStatus: "floats blocked and unread sessions to the top",
 			},
 			get: func(c *config.Config) string { return c.GetSessionSort() },
 			set: func(c *config.Config, v string) error {
@@ -868,7 +871,11 @@ func newSettingRows(cfg *config.Config) []settingRow {
 			(*config.Config).GetMouse,
 			func(c *config.Config, v bool) { c.Mouse = &v }),
 		boolRow("kill_double_tap_confirm", catInput, "Kill double-tap",
-			"Let a second Ctrl+X confirm the kill dialog in one motion.",
+			// The key is read, not spelled: this PR made the double-tap follow a rebind
+			// (SetConfirmAltKey takes keys.KillKey()), so a literal "Ctrl+X" would teach the
+			// one key the dialog stops answering to — in front of the user who rebound kill
+			// precisely because ctrl+x is their shell's editing key.
+			"Let a second "+keys.LabelOf(keys.KeyKill)+" confirm the kill dialog in one motion.",
 			"",
 			timingLive, true,
 			(*config.Config).GetKillDoubleTapConfirm,

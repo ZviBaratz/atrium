@@ -810,7 +810,7 @@ func TestConfirmKillDoubleTapAltKey(t *testing.T) {
 		h, inst := newHomeWithInstance(t, config.DefaultConfig())
 		h.confirmKill(inst)
 		require.NotNil(t, h.confirmationOverlay)
-		assert.Equal(t, keys.KillKey, h.confirmationOverlay.ConfirmAltKey)
+		assert.Equal(t, keys.KillKey(), h.confirmationOverlay.ConfirmAltKey)
 	})
 
 	t.Run("toggle off leaves the alt key unset", func(t *testing.T) {

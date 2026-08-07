@@ -5,6 +5,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ZviBaratz/atrium/keys"
 	"github.com/ZviBaratz/atrium/log"
 	"github.com/ZviBaratz/atrium/session"
 	"github.com/ZviBaratz/atrium/session/transcript"
@@ -207,6 +208,14 @@ func (p *PreviewPane) setFallbackState(lines ...string) {
 	p.previewState = previewState{fallback: true, lines: lines}
 }
 
+// pausedResumeHint is the paused pane's one-line "how do I get this back"
+// sentence. Both paused branches render it, and it names the resume key through
+// the registry: a literal would be a sentence telling the user to press a key
+// that, once they have rebound resume, moves the selection instead.
+func pausedResumeHint() string {
+	return fmt.Sprintf("Session is paused. Press '%s' to resume.", keys.LabelOf(keys.KeyResume))
+}
+
 // setSplashState is setFallbackState for the idle empty screen (no agents),
 // additionally flagging the splash so String() renders the animated splash
 // field behind the wordmark. Every other empty state keeps the plain fallback.
@@ -247,7 +256,9 @@ func (p *PreviewPane) UpdateContent(instance *session.Instance) error {
 	}
 	switch {
 	case instance == nil:
-		p.setSplashState("No agents running yet. Spin up a new session with 'n' to get started!")
+		p.setSplashState(fmt.Sprintf(
+			"No agents running yet. Spin up a new session with '%s' to get started!",
+			keys.LabelOf(keys.KeyNew)))
 		return nil
 	case instance.Paused():
 		// Before every paused hint below, because a resume runs the setup script while
@@ -262,7 +273,7 @@ func (p *PreviewPane) UpdateContent(instance *session.Instance) error {
 		}
 		// A direct (non-git) session has no branch to check out — show a plain resume hint.
 		if instance.IsDirect() {
-			p.setFallbackState("Session is paused. Press 'r' to resume.")
+			p.setFallbackState(pausedResumeHint())
 			return nil
 		}
 		// Nothing copies on pause (#173 dropped that unsolicited write), so the branch
@@ -272,7 +283,7 @@ func (p *PreviewPane) UpdateContent(instance *session.Instance) error {
 		// text already outruns the wordmark on its own ("Switch your main repo off
 		// this branch before resuming." is 54 cols against a 48-col banner).
 		p.setFallbackState(
-			"Session is paused. Press 'r' to resume.",
+			pausedResumeHint(),
 			"",
 			theme.Current().AttentionStyle().
 				Render(fmt.Sprintf(
@@ -280,7 +291,7 @@ func (p *PreviewPane) UpdateContent(instance *session.Instance) error {
 					instance.Branch,
 				)),
 			theme.Current().AttentionStyle().
-				Render("(press 'y' to copy)"),
+				Render(fmt.Sprintf("(press '%s' to copy)", keys.LabelOf(keys.KeyCopyBranch))),
 			theme.Current().AttentionStyle().
 				Render("Switch your main repo off this branch before resuming."),
 		)

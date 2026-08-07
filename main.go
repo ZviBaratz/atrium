@@ -483,6 +483,14 @@ var (
 				fmt.Print(scripts)
 			}
 
+			// Keybindings: same silence again. A refused override leaves the action on
+			// its default key, which looks exactly like the config not having been read.
+			if kb := doctor.RenderKeybindings(
+				doctor.CheckKeybindings(config.LoadConfig())); kb != "" {
+				fmt.Println()
+				fmt.Print(kb)
+			}
+
 			// Account state keys: state.json indexes the cluster order, the rate-limit
 			// flags and the rotation cursors by account/pool NAME, so a rename can leave
 			// entries naming something config no longer has. Harmless (unknown names are

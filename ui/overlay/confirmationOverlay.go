@@ -70,6 +70,26 @@ func (c *ConfirmationOverlay) HandleKeyPress(msg tea.KeyPressMsg) bool {
 	}
 }
 
+// Answers reports whether the overlay itself acts on a key — the y/n/esc set it
+// renders in its own hint line, plus any alt-confirm chord.
+//
+// It exists for the callers that intercept a key ahead of HandleKeyPress (the
+// over-capacity dialog's settings deep link, app/app_keys.go). Those run first by
+// construction, so without asking here a settings key rebound onto y would take
+// the dialog's own answer away from it: the user presses the y the dialog is
+// advertising, the interceptor opens the settings panel, and the staged action is
+// discarded with nothing said.
+func (c *ConfirmationOverlay) Answers(key string) bool {
+	if key == "" {
+		return false
+	}
+	switch key {
+	case c.ConfirmKey, c.CancelKey, "esc":
+		return true
+	}
+	return c.ConfirmAltKey != "" && key == c.ConfirmAltKey
+}
+
 // Render renders the confirmation overlay
 func (c *ConfirmationOverlay) Render() string {
 	style := lipgloss.NewStyle().
