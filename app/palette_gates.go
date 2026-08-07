@@ -52,6 +52,7 @@ const (
 	noRunCommandReason   = "no run_command for this repo"
 	deadPaneReason       = "terminal has exited"
 	pausedWorktreeReason = "worktree freed — resume first"
+	notClaudeReason      = "not a claude session"
 	// The two below are used by the custom-commands menu rather than the palette, but
 	// they live here so every chip-sized refusal in the app is written in one place
 	// and in one voice.
@@ -276,6 +277,21 @@ var paletteGates = map[keys.KeyName]paletteGate{
 	keys.KeyQueue: needsSelection(func(inst *session.Instance) string {
 		if !inst.HasQueuedPrompt() {
 			return noQueueReason
+		}
+		return ""
+	}),
+
+	// Deliberately needsSelection rather than perSession, even though the handler
+	// does guard on Loading: perSession would report the still-starting reason
+	// first, and for a non-claude session that is the wrong half of the truth —
+	// openCheckpoints answers "different agent" whatever the status. The order here
+	// is the handler's order.
+	keys.KeyCheckpoints: needsSelection(func(inst *session.Instance) string {
+		if !inst.SupportsCheckpoints() {
+			return notClaudeReason
+		}
+		if inst.GetStatus() == session.Loading {
+			return stillStartingReason
 		}
 		return ""
 	}),

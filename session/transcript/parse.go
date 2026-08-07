@@ -95,6 +95,10 @@ func parseTail(path string, maxBytes int64) (entries []entry, truncated bool, er
 // the shared tail-reading core under parseTail (render) and LatestModel. It
 // honors ctx: an already-cancelled context is reported before any I/O, and a
 // cancellation mid-scan aborts with ctx.Err() rather than reading to the end.
+//
+// A line past scannerBufMax is chopped into buffer-sized pieces rather than
+// aborting the scan (see scanLinesSkipOverlong): none of the pieces decodes, so
+// the oversized line is dropped, and every line after it is still delivered.
 func scanTail(ctx context.Context, path string, maxBytes int64, fn func(line []byte)) (truncated bool, err error) {
 	if err := ctx.Err(); err != nil {
 		return false, err
@@ -119,6 +123,7 @@ func scanTail(ctx context.Context, path string, maxBytes int64, fn func(line []b
 
 	sc := bufio.NewScanner(f)
 	sc.Buffer(make([]byte, 64*1024), scannerBufMax)
+	sc.Split(scanLinesSkipOverlong)
 	skipFirst := truncated
 	for sc.Scan() {
 		if err := ctx.Err(); err != nil {
@@ -134,6 +139,30 @@ func scanTail(ctx context.Context, path string, maxBytes int64, fn func(line []b
 		return false, err
 	}
 	return truncated, nil
+}
+
+// scanLinesSkipOverlong is bufio.ScanLines with one difference: a line that fills
+// the scanner's whole buffer without a newline is emitted as a token of its own
+// instead of being left to grow past scannerBufMax, where bufio.Scanner would set
+// ErrTooLong and stop permanently.
+//
+// Stopping is the wrong answer for a transcript. The tail readers never met this
+// ceiling — their window is smaller than it — but LoadCheckpoints reads the whole
+// file, so one pasted blob or one oversized tool_result would otherwise discard
+// every checkpoint in the transcript, including the hundreds before it. Chopping
+// the line into buffer-sized pieces costs nothing: no piece is valid JSON, so
+// every decoder here drops them, and the scan continues into the lines that follow.
+func scanLinesSkipOverlong(data []byte, atEOF bool) (advance int, token []byte, err error) {
+	advance, token, err = bufio.ScanLines(data, atEOF)
+	if err != nil || token != nil || atEOF {
+		return advance, token, err
+	}
+	// Asking for more data with the buffer already at its ceiling is exactly the
+	// state bufio.Scanner turns into ErrTooLong on the next pass.
+	if len(data) >= scannerBufMax {
+		return len(data), data, nil
+	}
+	return advance, token, err
 }
 
 // decodeLine decodes one JSONL line into a normalized entry. ok is false for

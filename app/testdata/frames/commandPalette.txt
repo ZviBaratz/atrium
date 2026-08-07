@@ -2,7 +2,7 @@
 ╭─ Ses╭──────────────────────────────────────────────────────────────────╮─────╮
 │ FIXT│                                                                  │     │
 │▎○ pa│  Command Palette                                                 │─────┤
-│▎    │  ▏  58 actions                                                   │     │
+│▎    │  ▏  59 actions                                                   │     │
 │     │                                                                  │     │
 │     │    Navigate                                                      │     │
 │     │  ▸ ↑/k        up                    move selection               │     │
@@ -17,7 +17,7 @@
 │     │    shift-↑    scroll                scroll the active pane       │     │
 │     │    shift-↓    scroll                scroll the active pane       │     │
 │     │    <          shrink list           shrink / grow the session …  │     │
-│     │    … 50 more                                                     │     │
+│     │    … 51 more                                                     │     │
 │     │                                                                  │     │
 │     │  type to filter · ↑↓ move · ↵ run · esc close                    │     │
 │     │                                                                  │     │
@@ -28,7 +28,7 @@
 │ FIXTURE ╭──────────────────────────────────────────────────────────────────────────────────────────────────╮         │
 │▎○ parity│                                                                                                  │─────────┤
 │▎        │  Command Palette                                                                                 │         │
-│         │  ▏  58 actions                                                                                   │         │
+│         │  ▏  59 actions                                                                                   │         │
 │         │                                                                                                  │         │
 │         │    Navigate                                                                                      │         │
 │         │  ▸ ↑/k        up                         move selection                                          │         │
@@ -57,7 +57,7 @@
 │         │    Handoff                                                                                       │         │
 │         │    ↵/o        open                       terminal has exited                                     │         │
 │         │    ctrl-q     attach/detach              terminal has exited                                     │         │
-│         │    … 36 more                                                                                     │         │
+│         │    … 37 more                                                                                     │         │
 │         │                                                                                                  │         │
 │         │  type to filter · ↑↓ move · ↵ run · esc close                                                    │         │
 │         │                                                                                                  │         │

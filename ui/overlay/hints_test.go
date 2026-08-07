@@ -13,10 +13,11 @@ import (
 // holds it. Listing them as data is what lets the two contract tests below hold for
 // all of them at once rather than for whichever one someone remembered.
 var hintLadders = map[string][]string{
-	"createFormHelp":   createFormHelp,
-	"promptFocusHelp":  promptFocusHelp,
-	"modelCustomHelp":  modelCustomHelp,
-	"variantFocusHelp": variantFocusHelp,
+	"createFormHelp":        createFormHelp,
+	"promptFocusHelp":       promptFocusHelp,
+	"modelCustomHelp":       modelCustomHelp,
+	"variantFocusHelp":      variantFocusHelp,
+	"checkpointFooterHints": checkpointFooterHints,
 }
 
 // TestFitHint_PicksWidestThatFits pins the helper's contract at its edges, because

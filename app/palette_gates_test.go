@@ -138,7 +138,7 @@ func TestPaletteGateReasonsFitTheRow(t *testing.T) {
 	for _, reason := range []string{
 		noSelectionReason, stillStartingReason, pausedReason, alreadyPausedReason,
 		notPausedReason, directReason, noBranchReason, noQueueReason, noPRReason,
-		deadPaneReason, pausedWorktreeReason,
+		deadPaneReason, pausedWorktreeReason, notClaudeReason,
 	} {
 		assert.NotEmpty(t, reason)
 		assert.LessOrEqualf(t, len([]rune(reason)), tailBudget,

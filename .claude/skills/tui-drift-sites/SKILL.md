@@ -58,9 +58,9 @@ cannot install it. Once per machine:
 
 `enabledPlugins` does the rest. Until you run it the skill simply will not resolve.
 
-## Adding a keybinding — 8 sites, all guarded
+## Adding a keybinding — 9 sites, all but one guarded
 
-At last count: **62 registry entries** and **51 dispatch-case lines**, with a dozen-odd
+At last count: **63 registry entries** and **52 dispatch-case lines**, with a dozen-odd
 drift guards in `keys/*_test.go` and **4** in `app/dispatch_coverage_test.go`.
 
 Those two numbers, and the `Config` field count below, are checked against the tree by
@@ -78,13 +78,20 @@ a number no decision hangs on just taxes every unrelated test someone adds.
 | 3 | `keys/help_layout.go` — a `HelpRow` in `HelpGroups`, or a `Mentions` entry | `TestHelpGroups_CoverEveryBinding` (fails structurally, before any rendering) |
 | 4 | `app/app_update.go` — `case keys.KeyX:` in `dispatchAction` | `TestEveryRegistryActionHasADispatchCase` — see below |
 | 5 | `keys/registry_test.go` — the string→action pair in the golden inventory | itself (`TestGlobalKeyStringsMap_GoldenInventory`) |
-| 6 | `README.md` `#### Keybindings` — backtick-wrapped, in that section | `TestReadmeDocumentsEveryBinding` |
-| 7 | `app/app_update.go` `keyAllowedWhileBusy` — *only if* it must work during an async action | manual |
+| 6 | `README.md` — **two** tables: `#### Keybindings` and `##### Action names`, backtick-wrapped, each in its own section | `TestReadmeDocumentsEveryBinding` **and** `TestReadmeDocumentsEveryAction` |
+| 7 | `app/palette_gates.go` — a `paletteGates` entry (`global()` / `needsSelection` / `perSession`) | `TestEveryPaletteActionHasAGate` **and** `TestPaletteGatesAgreeWithDispatch` (both directions) |
+| 8 | `app/app_update.go` `keyAllowedWhileBusy` — *only if* it must work during an async action | manual |
 
 Site 2b is the newest and the one with the longest memory: an `Action` is the name a
 user's `config.json` binds to, so unlike every other identifier here it can be added to
 but never renamed. `TestActionVocabulary_Golden` is what makes a rename fail rather than
 silently stop honoring an override that used to work.
+
+Site 6's second table is the one that surprises: `##### Action names` is a **two-column**
+split of the whole vocabulary, so adding one action reflows every row after the midpoint
+rather than appending. Regenerate it from the existing pairs, and sort on the action name
+with the backticks stripped — `` `new_pick_project` `` sorts before `` `new` `` otherwise,
+because `_` precedes a backtick.
 
 **Prose that names the key is not on this list, because it should not exist.** A sentence
 like "press r to resume" reads the label from the registry (`keys.LabelOf`), and
@@ -96,8 +103,18 @@ Plus, situationally: `ui/menu.go`'s context hint sets (`defaultHintKeys` and
 friends) if the key should appear in the bar — guarded in the reverse direction
 only, by `ui/menu_scan_test.go`.
 
+Site 7 is mandatory for every *dispatchable* action, and it is the one that fails
+in a file you were not editing — the palette reaches every action, so an un-gated
+one defaults into "always fine" by omission. Two things to get right, both of which
+`TestPaletteGatesAgreeWithDispatch` will tell you about: the gate must not be
+*stricter* than the handler (a false dim makes the action unreachable from the
+palette for a reason that is simply wrong), and where the handler checks several
+preconditions the gate should check them **in the handler's order**, or the row
+explains itself with the wrong one. A new chip-sized reason also belongs in
+`TestPaletteGateReasonsFitTheRow`'s list, which is hand-maintained.
+
 **Site 4 was the gap until #374 closed it.** The count mismatch is why nobody had
-written the obvious assertion: 62 entries against 51 case *lines* is not 11
+written the obvious assertion: 63 entries against 52 case *lines* is not 11
 missing cases, because several cases carry two or three names at once, 3 entries
 are `DocOnly`, the screensaver is deliberately absent from the registry, and
 `space` is consumed by the multi-select handler rather than the switch — so

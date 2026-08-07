@@ -49,6 +49,7 @@ func TestGlobalKeyStringsMap_GoldenInventory(t *testing.T) {
 		"C":          KeyDiffComment,
 		"Q":          KeyQueue,
 		"L":          KeyCmdLog,
+		"H":          KeyCheckpoints,
 		"y":          KeyCopyBranch,
 		"Y":          KeyCopyContent,
 		"q":          KeyQuit,
@@ -245,7 +246,8 @@ func TestRegistry_DocumentedOnlyEntries(t *testing.T) {
 // land, but the vocabulary it is replaced by must not.
 func TestActionVocabulary_Golden(t *testing.T) {
 	want := []string{
-		"accounts", "approve", "attach_toggle", "auto_name", "collapse_all",
+		"accounts", "approve", "attach_toggle", "auto_name", "checkpoints",
+		"collapse_all",
 		"collapse_group", "command_log", "command_palette", "copy_branch",
 		"copy_content", "create_pr", "custom_commands", "diff_comment", "down",
 		"expand_group", "filter", "grow_list", "help", "hints", "kill",

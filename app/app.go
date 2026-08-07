@@ -307,6 +307,10 @@ const (
 	// stateCustomCommands is the leader-key menu over the user's own verbs from
 	// config.json's custom_commands section (#375): each row's own key runs it.
 	stateCustomCommands
+	// stateCheckpoints is the checkpoint timeline for a Claude session (#385): the
+	// native file-history checkpoints read off Claude's transcript. Read-only — its
+	// one action attaches, because only Claude's own Esc-Esc can rewind.
+	stateCheckpoints
 
 	// numStates counts the states above and must stay last. It exists so a test can
 	// walk the enum rather than hand-listing it: TestEveryBarHidingStateRestoresTheFrame
@@ -561,6 +565,17 @@ type home struct {
 	queueOverlay *overlay.QueueOverlay
 	// cmdLogOverlay shows the recorded tmux/git/gh subprocesses (#372).
 	cmdLogOverlay *overlay.CmdLogOverlay
+	// checkpointOverlay lists a Claude session's native checkpoints (#385).
+	checkpointOverlay *overlay.CheckpointOverlay
+	// checkpointTarget is the session the open timeline belongs to — deliberately
+	// not the live selection, so an arriving load result can be matched against the
+	// session that asked for it and a result for any other one dropped.
+	checkpointTarget *session.Instance
+	// checkpointCancel stops the in-flight enumeration. The read is an unbounded
+	// whole-file scan, so its lifetime belongs to the overlay that asked for it, not
+	// to the process: closing the box, or reloading over it, must not leave a
+	// goroutine decoding JSON for a result nothing will use.
+	checkpointCancel context.CancelFunc
 	// commandPaletteOverlay is the fuzzy-over-every-action picker (#374).
 	commandPaletteOverlay *overlay.CommandPaletteOverlay
 	// paletteRows is what the open palette's row indices mean: the overlay reports
@@ -982,6 +997,11 @@ func (m *home) viewContent() string {
 			log.ErrorLog.Printf("command-log overlay is nil")
 		}
 		return overlay.PlaceOverlay(0, 0, m.cmdLogOverlay.Render(), mainView, true)
+	} else if m.state == stateCheckpoints {
+		if m.checkpointOverlay == nil {
+			log.ErrorLog.Printf("checkpoint overlay is nil")
+		}
+		return overlay.PlaceOverlay(0, 0, m.checkpointOverlay.Render(), mainView, true)
 	} else if m.state == stateCommandPalette {
 		if m.commandPaletteOverlay == nil {
 			log.ErrorLog.Printf("command palette overlay is nil")

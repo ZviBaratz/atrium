@@ -77,6 +77,11 @@ func HelpGroups() []HelpGroup {
 			{Keys: []KeyName{KeyQuickSend}, Desc: "send a message (without attaching)"},
 			{Keys: []KeyName{KeyDiffComment}, Desc: "diff tab: comment on a line or range → queue it to the agent (↑↓/j/k move, shift+↑↓/J/K extend, enter comment, esc exit)"},
 			{Keys: []KeyName{KeyQueue}, Desc: "manage queued prompts (list / cancel)"},
+			// "Esc Esc" is a literal for the same reason the row below spells "enter":
+			// it is Claude's own rewind chord, pressed inside the agent's pane after
+			// attaching, so it is not in Atrium's keymap and no override can move it.
+			// Reading it from the registry would be reading the wrong keymap.
+			{Keys: []KeyName{KeyCheckpoints}, Desc: "claude sessions: list the checkpoints it took before each prompt, then attach to rewind one (Esc Esc)"},
 			// "enter" is a literal here on purpose, and is the one key in this table
 			// that has to stay one: approve sends Enter into the agent's own pane
 			// (ApprovePrompt), so the parenthetical describes the agent's UI rather

@@ -126,6 +126,10 @@ var Registry = []Entry{
 		key.WithKeys("L"),
 		key.WithHelp("L", "command log"),
 	)},
+	{Name: KeyCheckpoints, Action: "checkpoints", Binding: key.NewBinding(
+		key.WithKeys("H"),
+		key.WithHelp("H", "checkpoints"),
+	)},
 	{Name: KeyHelp, Action: "help", Binding: key.NewBinding(
 		key.WithKeys("?"),
 		key.WithHelp("?", "help"),
