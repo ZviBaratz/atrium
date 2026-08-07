@@ -170,14 +170,19 @@ func contextColor(th *theme.Theme, u transcript.Usage, mode string) theme.Color 
 	}
 }
 
-// Cost-chip bounds. Both exist to keep the chip inside the same five cells the
-// occupancy modes fit in, because it shares their column.
+// Cost-chip bounds. They are not a pair despite sitting together: the ceiling is
+// a width bound, keeping the chip inside the same five cells the occupancy modes
+// fit in, and the floor is a legibility one.
 const (
-	// costFloorUSD is the smallest estimate worth a chip. Below half a cent there
-	// is no two-decimal figure to print that is not "$.00", and a chip that reads
-	// as zero is worse than no chip — absent already means "nothing to see here",
-	// and it means it without looking broken. Unreachable in practice: a single
-	// opening turn on Opus 5 costs several cents.
+	// costFloorUSD is the smallest COMPLETE estimate worth a chip. Below half a
+	// cent there is no two-decimal figure to print that is not "$.00", and a chip
+	// that reads as zero is worse than no chip — absent already means "nothing to
+	// see here", and it means it without looking broken. Rarely reached on its own
+	// terms: a single opening turn on Opus 5 costs several cents.
+	//
+	// It does NOT apply to a partial reading, and costChip says why at length —
+	// an all-unpriced session totals zero, so an unconditional floor would hide
+	// the chip precisely when the price table has failed.
 	costFloorUSD = 0.005
 	// costCeilingUSD is where the ladder saturates. "99k" plus a prefix is the
 	// widest thing that fits, so above this the chip stops being an estimate and
