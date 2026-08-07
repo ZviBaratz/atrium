@@ -93,6 +93,39 @@ func TestPromptFocusHelpLegacy_IsDerivedFromTheOptimisticLadder(t *testing.T) {
 	}
 }
 
+// TestComposerFooters_AtTheEightyColumnFloor is what `atrium doctor` is allowed to
+// promise, pinned.
+//
+// The doctor section tells a user to look at a composer footer to find out whether
+// their terminal disambiguates. That instruction is only honest if it names a
+// surface that actually shows the clause at the width people run: the create form's
+// footer is a WIDTH ladder, and ⇧↵ rides its widest rung, so on an 80-column
+// terminal it is dropped for width even when the terminal does support the
+// protocol. A Ghostty user on a default window would have concluded the opposite of
+// the truth — the exact misreading the doctor section exists to prevent.
+//
+// So the quick-send box is the surface doctor names, and this is what makes that
+// true rather than lucky. The create-form half is asserted too, as documentation:
+// it is not a bug, it is the ladder working, and anyone who changes either the
+// rungs or the doctor copy has to come through here.
+func TestComposerFooters_AtTheEightyColumnFloor(t *testing.T) {
+	t.Cleanup(keys.SetTerminalDisambiguates(true))
+
+	// 0.6 × 80, the share app_layout.go gives an overlay on the narrowest terminal
+	// Atrium supports.
+	const floorOverlayWidth = 48
+
+	q := NewQuickSendOverlay("Send to foo")
+	q.SetSize(floorOverlayWidth, 24)
+	assert.Contains(t, xansi.Strip(q.Render()), shiftEnterGlyph,
+		"the quick-send footer must name ⇧↵ at the 80-column floor — doctor points at it")
+
+	f := promptFocusedForm(t)
+	f.SetSize(floorOverlayWidth, 24)
+	assert.NotContains(t, xansi.Strip(f.Render()), shiftEnterGlyph,
+		"the create form drops ⇧↵ for width at the floor; doctor must not claim otherwise")
+}
+
 // TestQuickSendFooter_FitsTheFloor gives that one-line footer the width bound the
 // laddered ones get from TestHintLadders_NarrowestRungFitsTheFloor. It never goes
 // through fitHint — it is a bare string — so until now nothing measured it at all,

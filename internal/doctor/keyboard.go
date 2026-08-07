@@ -3,6 +3,8 @@ package doctor
 import (
 	"fmt"
 	"strings"
+
+	"github.com/ZviBaratz/atrium/keys"
 )
 
 // KeyboardResult is what doctor can determine about key disambiguation — the
@@ -66,8 +68,14 @@ func RenderKeyboard(r KeyboardResult) string {
 		// The wrapped half aligns under the value column because it continues a VALUE;
 		// the actionable lines below are hints, and hints are the 9-space arrow form
 		// every other section uses (capacity.go, deps.go, scheme.go).
-		fmt.Fprintf(&b, "  %-18s not probed here — Atrium asks the terminal at startup and\n", "disambiguation")
-		fmt.Fprintf(&b, "  %-18s the composer footer shows the answer: ⇧↵ means yes\n", "")
+		fmt.Fprintf(&b, "  %-18s not probed here — Atrium asks the terminal at startup, and\n", "disambiguation")
+		// The key is read from the keymap, never spelled here — a rebind has to reach
+		// this line too (#376), and TestNoProseNamesAKeyLiterally is the rule's guard
+		// in the packages it scans.
+		fmt.Fprintf(&b, "  %-18s the quick-send box (%s) names ⇧↵ in its footer once it answers\n",
+			"", keys.LabelOf(keys.KeyQuickSend))
+		fmt.Fprintf(&b, "  %-18s the new-session form names it too, but drops it to fit a\n", "")
+		fmt.Fprintf(&b, "  %-18s narrow terminal, so its silence there is about width, not support\n", "")
 	}
 
 	if r.InTmux {

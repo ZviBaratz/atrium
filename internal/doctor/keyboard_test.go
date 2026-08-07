@@ -4,6 +4,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ZviBaratz/atrium/keys"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -47,6 +49,17 @@ func TestRenderKeyboardSaysNotProbed(t *testing.T) {
 		"an unreachable rung must be named as unreachable, not omitted")
 	require.Contains(t, out, "⇧↵",
 		"and the report must point at the surface that does have the answer")
+	// The surface it points at has to be one that actually shows the clause at the
+	// width people run. The create form's footer is a width ladder that drops ⇧↵ on
+	// an 80-column terminal even where the protocol works, so naming it would send a
+	// supported user to exactly the wrong conclusion; the quick-send box fits at the
+	// floor, which ui/overlay's TestComposerFooters_AtTheEightyColumnFloor pins.
+	require.Contains(t, out, "quick-send box",
+		"doctor must name the composer whose footer fits an 80-column terminal")
+	require.Contains(t, out, "narrow terminal",
+		"and must say that the other one's silence is about width, not support")
+	// The key is read from the keymap, so a rebind reaches this line (#376).
+	require.Contains(t, out, keys.LabelOf(keys.KeyQuickSend))
 	assert.Contains(t, out, "⌃J",
 		"the universally-working key is the actionable half for anyone this fails for")
 	assert.Contains(t, out, "xterm-256color", "the raw TERM is what a bug report needs")

@@ -234,11 +234,13 @@ in-app keymap and this section ever drift apart, so it stays complete.
 > quick-send box, with no terminal reconfiguration, while <kbd>enter</kbd> keeps
 > sending or advancing. <kbd>ctrl+j</kbd> does the same everywhere and always
 > will, and <kbd>alt+enter</kbd> — what a Claude-Code-style `/terminal-setup`
-> remap makes <kbd>shift+enter</kbd> send — still works too. The footer names
+> remap makes <kbd>shift+enter</kbd> send — still works too. A footer names
 > <kbd>⇧↵</kbd> only once the terminal has actually answered the capability
 > query, so it errs towards <kbd>⌃J</kbd>: under tmux, or on an xterm that speaks
 > only `modifyOtherKeys`, <kbd>shift+enter</kbd> may work while the hint stays
-> quiet about it. `atrium doctor` reports what can be told from outside the app.
+> quiet about it. The new-session form's footer also drops the clause to fit a
+> narrow terminal, so the quick-send box is the one to read the answer off.
+> `atrium doctor` reports what can be told from outside the app.
 
 ##### Navigate
 | Key | Action |
@@ -342,8 +344,8 @@ as one raw byte.
 
 Some keys are worth avoiding: `ctrl+m`, `ctrl+i`, `ctrl+j` and `ctrl+h` are the
 ones the disambiguation note above lists as historically conflated with `enter`,
-`tab`, a newline and `backspace`, and `shift+enter` and `ctrl+enter` are `enter`
-on the same terminals. Atrium can tell them apart only on one that speaks the
+`tab`, a newline and `backspace`, and `shift+enter`, `ctrl+enter` and
+`ctrl+shift+enter` are `enter` on the same terminals. Atrium can tell them apart only on one that speaks the
 protocol; on any other the chord never arrives and the action is simply dead, so
 an override onto one is applied with a warning. For `attach_toggle` and `kill` it
 is refused outright — a session pane reads raw bytes and cannot distinguish them

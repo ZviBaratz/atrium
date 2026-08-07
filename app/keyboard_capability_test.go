@@ -23,12 +23,12 @@ import (
 // are added. (The other half, kitty-only chords, is audited in keys by
 // TestRegistry_NoDefaultBindingNeedsDisambiguation.)
 //
-// The stakes are wider than that criterion, which is why this is a whole-struct
-// equality rather than a check on ReportEventTypes alone. ReportAssociatedText
-// would make the terminal report the text of each keypress, ultraviolet appends it
-// to Key.Text, and Key.String() returns Text whenever it is non-empty — so
-// enabling it would change the strings that GlobalKeyStringsMap and every overlay
-// switch dispatch on, silently, app-wide.
+// It is a whole-struct equality rather than a check on ReportEventTypes alone
+// because the other three fields change how ordinary keys are delivered — as
+// escape codes, with alternate codes, with associated text — and this app
+// dispatches on msg.String() end to end. None of them has been measured against
+// that vocabulary, and the point of the guard is that none of them needs to be:
+// the zero value keeps the unmeasured path out of the app entirely.
 func TestView_RequestsNoKeyboardEnhancements(t *testing.T) {
 	h := newCreateFormHome(t)
 	h.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
