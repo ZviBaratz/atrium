@@ -1,12 +1,14 @@
 package app
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/ZviBaratz/atrium/internal/testutil"
 	"github.com/ZviBaratz/atrium/session"
 	"github.com/ZviBaratz/atrium/session/transcript"
 
@@ -183,6 +185,77 @@ func TestHandleCheckpointsState_RReloads(t *testing.T) {
 	require.NotNil(t, cmd, "r must start another read")
 	assert.Contains(t, xansi.Strip(h.checkpointOverlay.Render()), "reading transcript",
 		"and put the box back into its loading state")
+}
+
+// startedClaudeSession adds a session to the list that Started() reports true for,
+// which needs a real tmux session: NewInstance alone cannot reach it, and
+// ContextSourceKey — the whole basis of the ambiguity check — returns "" until it
+// does, so an unstarted fixture makes that check a no-op rather than a test of it.
+//
+// It starts a harmless program and relabels it claude afterwards, the same trick
+// checkpointHome uses: the checkpoint surface reads Program (for the claude gate and
+// for the project-dir derivation) and never runs it, so launching a real agent would
+// buy nothing and cost a billable turn.
+func startedClaudeSession(t *testing.T, h *home, title, path string) *session.Instance {
+	t.Helper()
+	inst, err := session.NewInstance(session.InstanceOptions{
+		Title: title, Path: path, Program: "sleep 300", Direct: true,
+	})
+	require.NoError(t, err)
+	inst.SetBaseContext(context.Background())
+	require.NoError(t, inst.Start(true))
+	t.Cleanup(func() {
+		inst.RebindBaseContext(context.Background())
+		_ = inst.Kill()
+	})
+	require.True(t, inst.Started(), "the fixture must be started for ContextSourceKey to resolve")
+	inst.Program = "claude"
+	h.list.AddInstance(inst)()
+	return inst
+}
+
+// Two sessions whose claude project directory is the same one cannot have their
+// checkpoints told apart: the enumeration resolves by newest mtime within that
+// directory, so the timeline would head one session's name over another's history —
+// and its one action walks the user into that session to rewind files off the list.
+//
+// This is the only test that exercises the check at all. ContextSourceKey is empty
+// for an unstarted instance, so every cheaper fixture in this file takes the
+// early return and never reaches the fleet scan.
+func TestOpenCheckpoints_RefusesAnAmbiguousProjectDirectory(t *testing.T) {
+	testutil.RequireTmux(t)
+	h := newFrameHome(t, 120, 40)
+	shared := t.TempDir()
+
+	first := startedClaudeSession(t, h, "shared-one", shared)
+	startedClaudeSession(t, h, "shared-two", shared)
+	require.Equal(t, first.ContextSourceKey(), h.list.GetInstances()[2].ContextSourceKey(),
+		"the fixture must actually collide, or this asserts nothing")
+	h.list.SetSelectedInstance(1)
+	require.Same(t, first, h.list.GetSelectedInstance())
+
+	_, cmd := h.openCheckpoints()
+
+	assert.Equal(t, stateDefault, h.state, "an ambiguous source must not open a timeline")
+	assert.Nil(t, h.checkpointOverlay)
+	assert.Nil(t, h.checkpointTarget)
+	require.NotNil(t, cmd, "and it must say why rather than dying quietly")
+	require.True(t, h.menu.HasNotice())
+	assert.Contains(t, xansi.Strip(h.menu.String()), "shares this one's claude project directory")
+
+	// The control, and the reason the check is a fleet scan of keys rather than a
+	// count of sessions: a session on its own directory opens as normal even with
+	// the colliding pair still in the list.
+	own := startedClaudeSession(t, h, "alone", t.TempDir())
+	h.list.SetSelectedInstance(3)
+	require.Same(t, own, h.list.GetSelectedInstance())
+
+	_, cmd = h.openCheckpoints()
+
+	assert.Equal(t, stateCheckpoints, h.state, "an unshared source must still open")
+	require.NotNil(t, h.checkpointOverlay)
+	assert.Same(t, own, h.checkpointTarget)
+	require.NotNil(t, cmd)
 }
 
 // Blobs is the existence of the file-history directory, and Claude creates it on

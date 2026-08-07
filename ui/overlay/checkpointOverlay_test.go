@@ -150,9 +150,12 @@ func TestCheckpointOverlay_FitsItsBox(t *testing.T) {
 // spent — and it always names the keys that leave the overlay.
 //
 // The second half is the part a fixed string got wrong: stateCheckpoints hides the
-// hint bar, and the full hint line is 71 cells against an inner width of 70 on an
-// 80-column terminal, so truncation dropped exactly `r reload · esc close` and left
-// nothing on screen saying how to close or reload the box.
+// hint bar, and the full hint line is 71 cells against an inner width of 50 on an
+// 80-column terminal (0.7 × 80 = a 56-cell box), so truncation cut it at `enter
+// attach (then Esc…` and left nothing on screen saying how to close or reload.
+//
+// The widths below are box widths, not terminal widths — the app derives one from
+// the other — so 56 is the 80-column case and 80 is a 114-column terminal.
 func TestCheckpointOverlay_FooterFitsAndKeepsTheExitKeys(t *testing.T) {
 	for _, width := range []int{40, 56, 72, 76, 80, 120} {
 		t.Run(fmt.Sprintf("w%d", width), func(t *testing.T) {
@@ -428,15 +431,103 @@ func TestCheckpointOverlay_ScrollFollowsTheListBackUp(t *testing.T) {
 // window for one line, and PlaceOverlay re-centres on every height change, so a
 // full-height timeline would jump up and shrink on every `r` and jump back when
 // the result landed.
+//
+// Swept over row counts either side of the window, because padding the loading
+// branch to the *window* height fixes only the full case and makes the short one
+// worse — a 3-row list in an 18-line box draws 3 rows, and padding to 10 grows the
+// box on reload rather than holding it. Short lists are the common case: a session
+// has far fewer checkpoints than a terminal has rows.
 func TestCheckpointOverlay_ReloadDoesNotResizeTheBox(t *testing.T) {
-	o := NewCheckpointOverlay("alpha")
-	o.SetSize(76, 18)
-	o.SetRows(checkpointRows(40))
-	loaded := lipgloss.Height(o.Render())
+	for _, rows := range []int{1, 3, 9, 10, 11, 40} {
+		t.Run(fmt.Sprintf("rows%d", rows), func(t *testing.T) {
+			o := NewCheckpointOverlay("alpha")
+			o.SetSize(76, 18)
+			o.SetRows(checkpointRows(rows))
+			loaded := lipgloss.Height(o.Render())
 
-	o.SetLoading()
-	if got := lipgloss.Height(o.Render()); got != loaded {
-		t.Errorf("box is %d lines while reloading and %d with rows — the overlay jumps", got, loaded)
+			o.SetLoading()
+			if got := lipgloss.Height(o.Render()); got != loaded {
+				t.Errorf("box is %d lines while reloading and %d with %d rows — the overlay jumps",
+					got, loaded, rows)
+			}
+		})
+	}
+}
+
+// The footer sheds clauses in one direction only. A ladder is a promise that a
+// narrower box shows a subset of what a wider one showed; a rung that hands back a
+// clause a wider rung had already dropped breaks that, and it breaks it invisibly,
+// because every rung still fits its width and the whole thing still renders on one
+// line.
+//
+// That is exactly how the 46-cell rung `j/k move · enter attach · r reload · esc
+// close` shipped: it sat below the 53-cell rung that had already shed `j/k move`,
+// so a box between 46 and 52 cells inner showed `j/k move` again and lost the
+// Esc-Esc reminder instead — and 50 is what an 80-column terminal gives, so the
+// band it broke was the default one, which the frame golden renders.
+func TestCheckpointFooter_ShedsMonotonically(t *testing.T) {
+	clauses := []string{"j/k move", "Esc Esc", "r reload", "esc close"}
+	shedAt := map[string]int{}
+
+	// Down to the narrowest budget the overlay can hand it, and no further: SetSize
+	// floors the box at checkpointMinWidth, so Render's `inner` cannot go below this.
+	// Sweeping past it would assert the ladder over widths no caller can produce, and
+	// the ladder would have to grow a rung to satisfy it — dead copy, justified by
+	// nothing but the test.
+	const narrowest = checkpointMinWidth - 6
+
+	for inner := 90; inner >= narrowest; inner-- {
+		got := checkpointFooter(inner)
+		if w := lipgloss.Width(got); w > inner {
+			t.Fatalf("footer is %d cells at inner=%d: %q", w, inner, got)
+		}
+		for _, clause := range clauses {
+			switch {
+			case !strings.Contains(got, clause):
+				if _, gone := shedAt[clause]; !gone {
+					shedAt[clause] = inner
+				}
+			case shedAt[clause] != 0:
+				t.Errorf("%q is back at inner=%d after being shed at inner=%d: %q",
+					clause, inner, shedAt[clause], got)
+			}
+		}
+	}
+
+	// The order the ladder's doc comment states, asserted rather than described:
+	// the reminder outlives both hints, and `esc close` outlives everything.
+	if shedAt["esc close"] != 0 {
+		t.Errorf("`esc close` was shed at inner=%d; it is the only key out of a state "+
+			"that hides the hint bar", shedAt["esc close"])
+	}
+	for _, earlier := range []string{"j/k move", "r reload"} {
+		if shedAt[earlier] <= shedAt["Esc Esc"] {
+			t.Errorf("%q survives to inner=%d but the Esc-Esc reminder only to %d — the "+
+				"reminder is the one thing here nothing else teaches",
+				earlier, shedAt[earlier], shedAt["Esc Esc"])
+		}
+	}
+}
+
+// The rewind reminder must survive the 80×24 floor, which is the width the ladder
+// exists for and the one the frame goldens render.
+//
+// The negative control is the point: at inner 50 a fixed truncated line, and the
+// 46-cell rung that replaced it, both produce a footer that fits on one line and
+// names keys — so every other assertion in this file passes over a footer that has
+// silently dropped the only instruction the timeline cannot work without.
+func TestCheckpointFooter_KeepsTheRewindReminderAtTheFloor(t *testing.T) {
+	const inner = 50 // 0.7 × 80 columns = a 56-cell box, less border and padding
+
+	got := checkpointFooter(inner)
+
+	for _, want := range []string{"Esc Esc", "esc close"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("the 80-column footer does not name %q: %q", want, got)
+		}
+	}
+	if w := lipgloss.Width(got); w > inner {
+		t.Errorf("the 80-column footer is %d cells against an inner width of %d: %q", w, inner, got)
 	}
 }
 

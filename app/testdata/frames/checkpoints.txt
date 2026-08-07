@@ -14,7 +14,7 @@
 │           │    Aug  5 10:12 extract the tail reader     4 files  │           │
 │           │    Aug  5 10:00 start on the parser        no files  │           │
 │           │                                                      │           │
-│           │  j/k move · enter attach · r reload · esc close      │           │
+│           │  enter attach (Esc Esc rewinds) · esc close          │           │
 │           │                                                      │           │
 │           ╰──────────────────────────────────────────────────────╯           │
 │                      ││                                                      │

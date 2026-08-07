@@ -65,14 +65,19 @@ func NewCheckpointOverlay(name string) *CheckpointOverlay {
 	return &CheckpointOverlay{title: name, width: 76, height: 24, loading: true}
 }
 
+// checkpointMinWidth is the narrowest box the overlay will accept. Named because
+// the footer ladder's budget is derived from it (minus the 6 cells of border and
+// padding), so the two cannot be reasoned about apart.
+const checkpointMinWidth = 40
+
 // SetSize sets the box dimensions; the list windows to the available height.
 //
 // The height floor is checkpointChrome + 2: the box's own furniture costs
 // checkpointChrome lines, so anything shorter could not hold even a single row
 // without overflowing the height it was handed.
 func (c *CheckpointOverlay) SetSize(width, height int) {
-	if width < 40 {
-		width = 40
+	if width < checkpointMinWidth {
+		width = checkpointMinWidth
 	}
 	if height < checkpointChrome+2 {
 		height = checkpointChrome + 2
@@ -208,12 +213,20 @@ func (c *CheckpointOverlay) Render() string {
 	switch {
 	case c.loading:
 		b.WriteString(overlayDimStyle().Render("reading transcript…") + "\n")
-		// Padded to exactly the height the row window would occupy. A reload keeps
-		// the rows, so without this `r` would drop a full-height box to a single line
-		// and back — and PlaceOverlay re-centres on every height change, so the whole
-		// overlay jumps twice per press. Same reason the hidden-rows line is drawn
-		// unconditionally below; this is that accounting applied to the other branch.
-		for i := 1; i < lay.visible; i++ {
+		// Padded to exactly the height the rows it is replacing occupy, so a reload
+		// holds the box still: PlaceOverlay re-centres on every height change, so any
+		// difference makes `r` jump the whole overlay twice per press. Same reason the
+		// hidden-rows line is drawn unconditionally below; this is that accounting
+		// applied to the other branch.
+		//
+		// The window height is the wrong number to pad to, and wrong in the direction
+		// that bites hardest: a session with three checkpoints in a forty-line terminal
+		// draws three rows, so padding to the window's thirty grows the box on reload
+		// instead of holding it — a bigger jump than the one this replaced, and the
+		// common case, since most sessions have far fewer checkpoints than rows. On
+		// first open there are no rows yet and nothing to match; the box is small and
+		// grows once, which no padding here can avoid.
+		for i := 1; i < min(len(c.rows), lay.visible); i++ {
 			b.WriteString("\n")
 		}
 		if len(c.rows) > lay.visible {
@@ -259,31 +272,52 @@ func (c *CheckpointOverlay) Render() string {
 	return box.Render(b.String())
 }
 
-// checkpointFooter is the widest hint line that fits in inner cells.
+// checkpointFooterHints is the footer's ladder, widest first (71, 64, 53, 42, 24
+// cells). One fixed string truncated would not do: on an 80-column terminal — the
+// 80×24 floor the frame goldens capture — the app sizes the box to 0.7×80 = 56, so
+// inner is 50 and truncating the full line dropped everything from `(then Esc Esc`
+// on, including `esc close`, the only key out of a state that hides the hint bar.
 //
-// One fixed string truncated would not do. The full line is 71 cells, and on an
-// 80-column terminal — the common case — the app sizes the box to 0.7×80 = 56, so
-// inner is 50 and truncation dropped everything from `(then Esc Esc` on: both the
-// rewind reminder and `r reload · esc close`, the only two keys that leave the
-// overlay, on a state that hides the hint bar.
+// It sheds in order of what a user can find without being told, and the order is
+// the whole point rather than a detail: `j/k move` first, because arrows work too
+// and the cursor is visible; then `r reload`, because closing and reopening does
+// the same job; then the Esc-Esc reminder, last, because it is the one thing on
+// this surface nothing else teaches — the timeline is read-only, so an attach the
+// user does not know to follow with Esc Esc leads nowhere. `esc close` never goes.
 //
-// The ladder sheds in order of what a user can find without being told. `j/k move`
-// goes before the Esc-Esc reminder because arrows work too and the cursor is
-// visible; the reminder is the one thing here nothing else on screen teaches, and
-// it is the whole reason the footer mentions attaching at all.
+// Shedding `r reload` at 50 cells rather than compressing the reminder to buy room
+// for it is deliberate: the reminder only fits as a parenthetical on `enter attach`,
+// because that is what says *once you are in there, press Esc Esc*. Freestanding —
+// `· Esc Esc rewinds ·` — it reads as a key Atrium itself honours, which is the one
+// idea this whole surface exists to correct.
+//
+// Which rung a width lands on is therefore load-bearing, not cosmetic: a rung that
+// restores a clause a wider rung had already shed reads as a ladder while
+// behaving like a shuffle. TestCheckpointFooter_ShedsMonotonically is that
+// invariant; the 80×24 golden is where it shows.
+var checkpointFooterHints = []string{
+	"j/k move · enter attach (then Esc Esc to rewind) · r reload · esc close",
+	"j/k move · enter attach (Esc Esc rewinds) · r reload · esc close",
+	"enter attach (Esc Esc rewinds) · r reload · esc close",
+	"enter attach (Esc Esc rewinds) · esc close",
+	"enter attach · esc close",
+}
+
+// checkpointFooter is the widest rung of checkpointFooterHints that fits in inner
+// cells.
 func checkpointFooter(inner int) string {
-	for _, hints := range []string{
-		"j/k move · enter attach (then Esc Esc to rewind) · r reload · esc close",
-		"j/k move · enter attach (Esc Esc rewinds) · r reload · esc close",
-		"enter attach (Esc Esc rewinds) · r reload · esc close",
-		"j/k move · enter attach · r reload · esc close",
-		"enter attach · r reload · esc close",
-	} {
-		if lipgloss.Width(hints) <= inner {
-			return hints
-		}
+	hints := fitHint(inner, "", checkpointFooterHints...)
+	// fitHint hands back the narrowest rung when none fits, which is not a promise
+	// that one does. SetSize floors the width at checkpointMinWidth, so inner is at
+	// least 34 against a 24-cell narrowest rung — but a floor is not a proof, the same
+	// reason layout() refuses to trust it. The width test is not redundant either:
+	// StringWithTail
+	// replaces a character at *exactly* its budget, so calling it unconditionally
+	// would corrupt the rung fitHint chose precisely because it fits.
+	if lipgloss.Width(hints) > inner {
+		return truncate.StringWithTail(hints, uint(inner), "…")
 	}
-	return truncate.StringWithTail("r reload · esc close", uint(inner), "…")
+	return hints
 }
 
 // hiddenRowSummary names what the window is not showing, in one line, whichever
