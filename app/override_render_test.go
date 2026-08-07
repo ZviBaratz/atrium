@@ -6,7 +6,9 @@ import (
 
 	"github.com/ZviBaratz/atrium/keys"
 	"github.com/ZviBaratz/atrium/ui"
+	"github.com/ZviBaratz/atrium/ui/overlay"
 
+	tea "charm.land/bubbletea/v2"
 	ansi "github.com/charmbracelet/x/ansi"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -72,4 +74,70 @@ func TestHelpScreen_OmitsAnUnboundActionsKey(t *testing.T) {
 				"the row must not still name the key the user unbound: %q", line)
 		}
 	}
+}
+
+// A rebindable key is a key an override can land on y or n, and the
+// over-capacity dialog answers on both. handleConfirmState reads the settings
+// key ahead of the overlay, so `{"settings": "y"}` — legal, warned about by
+// nothing — turned the dialog's own "Create it anyway? y/n" into a settings
+// jump that discarded the staged session without a word. The dialog answers for
+// the keys it prints.
+func TestConfirmDialog_KeepsItsOwnKeysFromARebind(t *testing.T) {
+	problems, restore := keys.Apply(map[string]keys.Spec{
+		"copy_branch": {Disabled: true}, // y's default owner, or the override collides
+		"settings":    {Keys: []string{"y"}},
+	})
+	defer restore()
+	require.Empty(t, problems, "the override is legal, which is what makes this reachable")
+
+	h := newCreateFormHome(t)
+	ran := false
+	h.pendingConfirmSettingKey = "max_sessions"
+	h.confirmationOverlay = overlay.NewConfirmationOverlay("Create it anyway?")
+	h.pendingConfirmAction = func() tea.Msg { ran = true; return nil }
+	h.state = stateConfirm
+
+	_, cmd := h.handleConfirmState(textMsg("y"))
+	require.NotNil(t, cmd, "y must still confirm the dialog")
+	cmd()
+	assert.True(t, ran, "y is the dialog's confirm key — it must run the staged action, not open settings")
+	assert.NotEqual(t, stateSettings, h.state, "the settings panel must not steal the confirmation")
+}
+
+// The over-capacity dialog's tail is an offer, not a description: with settings
+// unbound there is no key to press, and handleConfirmState's deep link is inert
+// too. Interpolating the label unconditionally advertised "(unbound)".
+func TestOverCapMessage_DropsTheTailWhenSettingsIsUnbound(t *testing.T) {
+	problems, restore := keys.Apply(map[string]keys.Spec{"settings": {Disabled: true}})
+	defer restore()
+	require.Empty(t, problems)
+
+	for _, msg := range []string{overCapMessage(2, 1, 1), overCapMessage(2, 1, 3)} {
+		assert.NotContains(t, msg, "(unbound)", "a dialog must not offer a key that does not exist")
+		assert.NotContains(t, msg, "to change the limit")
+		assert.Contains(t, msg, "anyway?", "the question itself still has to be asked")
+	}
+}
+
+// Prose that reads Help().Key directly loses its key entirely when the action is
+// unbound, leaving a sentence with a hole in it. LabelOf is what says the true
+// thing instead — and these two are the sites the prose guard's single-literal
+// regex cannot see, because the sentence is built by concatenation.
+func TestUnboundAction_LeavesNoHoleInProse(t *testing.T) {
+	problems, restore := keys.Apply(map[string]keys.Spec{
+		"new":       {Disabled: true},
+		"undo_kill": {Disabled: true},
+	})
+	defer restore()
+	require.Empty(t, problems)
+
+	assert.Contains(t, killedNotice("doomed", true), "(unbound)",
+		"the undo advert must name the truth, not render 'killed x ·  to undo'")
+
+	l := ui.NewList(nil)
+	l.SetSize(60, 20)
+	cta := ansi.Strip(l.String())
+	require.Contains(t, cta, "start your first agent", "this is the empty-list CTA")
+	assert.Contains(t, cta, "(unbound)",
+		"the only call to action on a fresh screen must not read 'Press  to start your first agent'")
 }

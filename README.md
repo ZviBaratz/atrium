@@ -320,8 +320,22 @@ the way out:
 ```
 
 A value is one key, a list of keys, or `"disabled"` to unbind the action
-entirely. An unbound action leaves the hint bar and the `?` cheatsheet but stays
-runnable from the command palette (`ctrl-k`), which is what makes unbinding safe.
+entirely. An unbound action leaves the hint bar; it keeps its `?` cheatsheet row,
+with the key column blank, so you can still see the action exists. Either way it
+stays runnable from the command palette (`ctrl-k`), which is what makes unbinding
+safe. `attach_toggle` is the one action that cannot be unbound — it is the only
+way out of an attached pane other than tmux's own prefix — and it and `kill` take
+a single `ctrl+<letter>` key rather than a list, because a session pane reads them
+as one raw byte.
+
+Four chords are worth avoiding: `ctrl+m`, `ctrl+i`, `ctrl+j` and `ctrl+h` are the
+ones the disambiguation note above lists as historically conflated with `enter`,
+`tab`, a newline and `backspace`. Atrium can tell them apart only on a terminal
+that speaks the protocol; on any other one the chord never arrives and the action
+is simply dead, so an override onto one is applied with a warning. For
+`attach_toggle` and `kill` it is refused outright — a session pane reads raw bytes
+and cannot distinguish them at all.
+
 Every surface — hint bar, cheatsheet, palette, and any message that names a key —
 is generated from the keymap, so a remap shows up everywhere at once. No
 `keybindings` section means today's keys, unchanged.

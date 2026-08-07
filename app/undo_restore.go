@@ -253,8 +253,12 @@ func (m *home) handleUndoDone(msg undoDoneMsg) tea.Cmd {
 // it, so a rebinding can never leave the prose lying.
 
 // undoKeyLabel is the undo key as the user sees it on the cheatsheet.
+//
+// LabelOf rather than the raw Help().Key, because these strings are sentences:
+// an unbound undo has no label, and the notice would read "killed 'x' ·  to
+// undo" — a hole where the key belongs — instead of naming the truth.
 func undoKeyLabel() string {
-	return keys.GlobalKeyBindings[keys.KeyUndoKill].Help().Key
+	return keys.LabelOf(keys.KeyUndoKill)
 }
 
 // killedNotice acknowledges a kill and, when there is something to come back to,

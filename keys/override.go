@@ -31,9 +31,12 @@ import (
 // reported at startup and by `atrium doctor`.
 
 // Disabled is the spec value that unbinds an action: it answers to no key, and
-// disappears from the hint bar and the cheatsheet. It stays reachable from the
-// command palette, which is the point — the palette is what makes unbinding a
-// key safe rather than a way to lose an action.
+// disappears from the hint bar. The cheatsheet keeps its row and blanks the key
+// column instead (app/help.go, pinned by TestHelpScreen_OmitsAnUnboundActionsKey)
+// — dropping the row too would take away the one place a user can see the action
+// still exists. It stays reachable from the command palette, which is the point:
+// the palette is what makes unbinding a key safe rather than a way to lose an
+// action.
 const Disabled = "disabled"
 
 // maxKeysPerAction caps how many keys one action may answer to. The default
@@ -291,6 +294,18 @@ func resolve(overrides map[string]Spec) ([]Problem, map[KeyName]resolved) {
 				warn(a.action, "key %q is consumed by %s before dispatch, so %q will not "+
 					"fire there — it still works everywhere else", k, mode, a.action)
 			}
+			// A wire-ambiguous chord is refused outright for the attach-layer actions
+			// (checkKeys, via ControlByte) because the pane cannot tell it from the
+			// ordinary key. Everywhere else it is a warning rather than a rejection: the
+			// TUI *can* separate them, but only on a terminal speaking the kitty
+			// keyboard protocol or modifyOtherKeys. On the common terminal the chord is
+			// simply never delivered — the action is silently dead while the cheatsheet
+			// goes on printing the key — so the config that asked for it says so.
+			if other, ambiguous := wireAmbiguousCtrlChord(k); ambiguous {
+				warn(a.action, "key %q reaches Atrium as %s on a terminal that does not "+
+					"disambiguate modified keys, so %q will not fire there — see the README "+
+					"on remapping keys", k, other, a.action)
+			}
 		}
 		out[a.entry.Name] = resolved{
 			name:  a.entry.Name,
@@ -305,7 +320,7 @@ func resolve(overrides map[string]Spec) ([]Problem, map[KeyName]resolved) {
 
 // checkKeys validates one override's key list: every key legal and canonically
 // spelled, none reserved, no repeats, and — for the two actions the attach layer
-// mirrors as raw bytes — encodable as a single control byte.
+// mirrors as raw bytes — exactly one key, encodable as a single control byte.
 func checkKeys(action string, list []string) ([]string, error) {
 	if len(list) == 0 {
 		return nil, fmt.Errorf("no key given — set a key, or %q to unbind it", Disabled)
@@ -313,6 +328,17 @@ func checkKeys(action string, list []string) ([]string, error) {
 	if len(list) > maxKeysPerAction {
 		return nil, fmt.Errorf("%d keys is more than the %d an action may answer to",
 			len(list), maxKeysPerAction)
+	}
+	// One key only for the two the attach layer mirrors. SetAttachChords takes a
+	// single byte per action and installAttachChords derives it from the primary
+	// key, so a second alias would be live on the list and dead inside a pane —
+	// where it is not inert but forwarded, typing its control byte into the agent.
+	// Validating every key in the list while installing only the first is what made
+	// that reachable; refusing the list keeps the two layers describing one key.
+	if _, attached := attachedLayerActions[action]; attached && len(list) > 1 {
+		return nil, fmt.Errorf("%q answers to one key only — inside a session Atrium reads "+
+			"it as a single raw byte, so a second key would work on the list and type "+
+			"into the agent's pane", action)
 	}
 	seen := map[string]bool{}
 	for _, k := range list {
@@ -352,6 +378,17 @@ var wireAmbiguousCtrl = map[byte]string{
 	'i': "tab",
 	'j': "a newline",
 	'h': "backspace",
+}
+
+// wireAmbiguousCtrlChord reports whether a key string is one of the ctrl chords
+// wireAmbiguousCtrl lists, and what an ordinary keypress sends the same code for.
+func wireAmbiguousCtrlChord(chord string) (string, bool) {
+	base, ok := strings.CutPrefix(chord, "ctrl+")
+	if !ok || len(base) != 1 {
+		return "", false
+	}
+	other, ambiguous := wireAmbiguousCtrl[base[0]]
+	return other, ambiguous
 }
 
 // ControlByte is the byte a terminal sends for a ctrl+<letter> chord, which is

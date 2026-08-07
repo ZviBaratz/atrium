@@ -3,6 +3,7 @@ package app
 import (
 	"testing"
 
+	"github.com/ZviBaratz/atrium/keys"
 	"github.com/ZviBaratz/atrium/session"
 
 	"github.com/charmbracelet/x/ansi"
@@ -32,12 +33,12 @@ func TestStartupParkNotice(t *testing.T) {
 
 	t.Run("one session", func(t *testing.T) {
 		got := startupParkNotice(session.DeferredRecovery{Sessions: parkedSessions("alpha"), Limit: 2})
-		require.Equal(t, "1 session stayed paused — host capacity is 2 (ctrl+r resumes paused)", got)
+		require.Equal(t, "1 session stayed paused — host capacity is 2 (ctrl-r resumes paused)", got)
 	})
 
 	t.Run("several batch into one count", func(t *testing.T) {
 		got := startupParkNotice(session.DeferredRecovery{Sessions: parkedSessions("a", "b", "c"), Limit: 2})
-		require.Equal(t, "3 sessions stayed paused — host capacity is 2 (ctrl+r resumes paused)", got)
+		require.Equal(t, "3 sessions stayed paused — host capacity is 2 (ctrl-r resumes paused)", got)
 	})
 
 	// r is deliberately NOT advertised, at either count: it acts on the selected row,
@@ -47,7 +48,7 @@ func TestStartupParkNotice(t *testing.T) {
 		for _, n := range []int{1, 2, 7} {
 			got := startupParkNotice(session.DeferredRecovery{Sessions: make([]session.ParkedSession, n), Limit: 2})
 			require.NotContains(t, got, "press r")
-			require.Contains(t, got, "ctrl+r")
+			require.Contains(t, got, "ctrl-r")
 		}
 	})
 
@@ -73,12 +74,12 @@ func TestEarlierParkNotice(t *testing.T) {
 
 	t.Run("one session", func(t *testing.T) {
 		got := earlierParkNotice(session.DeferredRecovery{Sessions: parkedSessions("alpha"), Limit: 2})
-		require.Equal(t, "1 session parked earlier — host capacity is 2 (ctrl+r resumes paused)", got)
+		require.Equal(t, "1 session parked earlier — host capacity is 2 (ctrl-r resumes paused)", got)
 	})
 
 	t.Run("several batch into one count", func(t *testing.T) {
 		got := earlierParkNotice(session.DeferredRecovery{Sessions: parkedSessions("a", "b", "c"), Limit: 2})
-		require.Equal(t, "3 sessions parked earlier — host capacity is 2 (ctrl+r resumes paused)", got)
+		require.Equal(t, "3 sessions parked earlier — host capacity is 2 (ctrl-r resumes paused)", got)
 	})
 
 	// The one substantive difference from startupParkNotice, and the reason there are two
@@ -92,13 +93,13 @@ func TestEarlierParkNotice(t *testing.T) {
 
 	// Same reasons as the in-process spelling: a title is unbounded input on a row that
 	// truncates, and r acts on a selection a parked row is never part of.
-	t.Run("names no session and advertises only ctrl+r", func(t *testing.T) {
+	t.Run("names no session and advertises only the bulk-resume key", func(t *testing.T) {
 		got := earlierParkNotice(session.DeferredRecovery{
 			Sessions: parkedSessions("a-very-long-session-title-the-user-typed"), Limit: 2,
 		})
 		require.NotContains(t, got, "a-very-long-session-title")
 		require.NotContains(t, got, "press r")
-		require.Contains(t, got, "ctrl+r")
+		require.Contains(t, got, "ctrl-r")
 	})
 }
 
@@ -143,7 +144,7 @@ func TestFlushDeferredRecovery(t *testing.T) {
 		require.NotNil(t, cmd, "the toast schedules its own auto-hide")
 		require.Equal(t, stateDefault, h.state, "a startup park must not pop a modal")
 		require.Contains(t, h.menu.NoticeText(), "2 sessions stayed paused")
-		require.Contains(t, h.menu.NoticeText(), "ctrl+r")
+		require.Contains(t, h.menu.NoticeText(), "ctrl-r")
 		require.Empty(t, h.pendingDeferredRecovery.Sessions, "flushing clears the buffer")
 		require.Nil(t, h.flushDeferredRecovery(), "so the 100ms preview tick cannot re-toast it forever")
 	})
@@ -167,4 +168,23 @@ func TestFlushDeferredRecovery(t *testing.T) {
 		require.NotNil(t, h.flushDeferredRecovery(), "and lands once the screen is free")
 		require.Contains(t, h.menu.NoticeText(), "stayed paused")
 	})
+}
+
+// The notice teaches a key, so it has to read one. Four spellings of "ctrl+r"
+// survived in this file while the dialog copy beside them moved to the registry:
+// swap the two bulk keys — a swap the resolver accepts — and the notice offered a
+// key that paused the fleet it was promising to resume.
+func TestParkNotices_FollowARebind(t *testing.T) {
+	problems, restore := keys.Apply(map[string]keys.Spec{
+		"pause_all":  {Keys: []string{"ctrl+r"}},
+		"resume_all": {Keys: []string{"ctrl+p"}},
+	})
+	defer restore()
+	require.Empty(t, problems, "a swap resolves cleanly, which is what makes this reachable")
+
+	d := session.DeferredRecovery{Sessions: make([]session.ParkedSession, 2), Limit: 2}
+	for _, got := range []string{startupParkNotice(d), earlierParkNotice(d)} {
+		require.Contains(t, got, "ctrl-p resumes paused", "the notice must name the resume key")
+		require.NotContains(t, got, "ctrl-r", "ctrl-r now pauses — advertising it inverts the advice")
+	}
 }

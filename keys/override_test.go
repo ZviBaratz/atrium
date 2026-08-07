@@ -375,3 +375,79 @@ func TestModeHints_FollowARebind(t *testing.T) {
 		t.Errorf("after rebinding pause to z the bar teaches %q, want %q", got, "z/r/x")
 	}
 }
+
+// The multi-select bar's label is a DISPLAY spelling, so it has to be generated
+// the way every other one is: through Label. Concatenating PrimaryKey printed the
+// dispatch spelling instead, so a chord came out "alt+p/r/x" on the bar while the
+// cheatsheet's own multi-select row said "alt-p/r/x" for the same three keys.
+func TestModeHints_UseTheDisplaySpelling(t *testing.T) {
+	_, restore := Apply(map[string]Spec{"pause": spec("alt+p")})
+	defer restore()
+
+	if got := VisualModeHints()[1].Help().Key; got != "alt-p/r/x" {
+		t.Errorf("multi-select's marked-set label = %q, want the hyphenated %q", got, "alt-p/r/x")
+	}
+}
+
+// An unbound action has no key to contribute, and a label that joins it anyway
+// renders a leading slash where a key should be ("/r/x") — plus a binding whose
+// key list holds an empty string, which dispatches on nothing.
+func TestModeHints_UnboundActionLeavesNoEmptySegment(t *testing.T) {
+	_, restore := Apply(map[string]Spec{"pause": {Disabled: true}})
+	defer restore()
+
+	marked := VisualModeHints()[1]
+	if got := marked.Help().Key; got != "r/x" {
+		t.Errorf("with pause unbound the bar teaches %q, want %q", got, "r/x")
+	}
+	for _, k := range marked.Keys() {
+		if k == "" {
+			t.Errorf("the marked-set binding kept an empty key: %q", marked.Keys())
+		}
+	}
+}
+
+// checkKeys validated every key in an attach-layer action's list, but
+// installAttachChords installs only the primary one — so a second alias was live
+// on the list and, inside a pane, forwarded to the agent as its raw control byte
+// instead of doing what the user bound it to. One key, or the two layers describe
+// different keys.
+func TestValidate_AttachLayerActionTakesOneKeyOnly(t *testing.T) {
+	for _, action := range []string{"kill", "attach_toggle"} {
+		problems := Validate(map[string]Spec{action: {Keys: []string{"ctrl+g", "ctrl+y"}}})
+		if len(problems) != 1 || problems[0].Warning {
+			t.Errorf("%s with two keys must be refused, got %v", action, problems)
+			continue
+		}
+		if msg := problems[0].Error(); !strings.Contains(msg, "one key only") {
+			t.Errorf("refusing %s must say why one key is the limit: %q", action, msg)
+		}
+		// The single-key form of the same chord still applies.
+		if got := Validate(map[string]Spec{action: spec("ctrl+g")}); len(got) != 0 {
+			t.Errorf("%s = ctrl+g must still be accepted, got %v", action, got)
+		}
+	}
+}
+
+// The wire-ambiguous chords are refused outright for the two actions the attach
+// layer reads as raw bytes. Everywhere else they were accepted in silence: the
+// TUI can separate ctrl+m from enter only on a terminal that disambiguates
+// modified keys, so on the common one the action was simply dead while the
+// cheatsheet went on printing the key. Applied, but said out loud.
+func TestValidate_WireAmbiguousChordWarnsOnAnOrdinaryAction(t *testing.T) {
+	problems, restore := Apply(map[string]Spec{"settings": spec("ctrl+m")})
+	defer restore()
+
+	if len(problems) != 1 {
+		t.Fatalf("want one warning, got %v", problems)
+	}
+	if !problems[0].Warning {
+		t.Error("the override is applied, so its problem must be marked a warning")
+	}
+	if msg := problems[0].Error(); !strings.Contains(msg, "enter") {
+		t.Errorf("the warning must name the key it collides with: %q", msg)
+	}
+	if got := GlobalKeyStringsMap["ctrl+m"]; got != KeySettings {
+		t.Errorf("ctrl+m dispatches %v — a warning must not drop the override", got)
+	}
+}

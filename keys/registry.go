@@ -420,13 +420,25 @@ func HintModeHints() []key.Binding {
 // x is a literal because it is the mode's own key: handleMultiSelectState
 // answers it before the dispatch lookup, so no Registry entry owns it and no
 // override moves it. pause and resume are looked up, because they are.
+//
+// The label goes through Label, not through the dispatch spellings: WithHelp is
+// the display slot (see label.go), so concatenating PrimaryKey printed "alt+p/r/x"
+// on the bar while the cheatsheet's own multi-select row printed "alt-p/r/x" for
+// the same keys. An unbound action drops out of both slots rather than joining as
+// an empty segment, which rendered a leading slash where a key should be.
 func VisualModeHints() []key.Binding {
-	marked := PrimaryKey(KeyPause) + "/" + PrimaryKey(KeyResume) + "/x"
+	marked := make([]string, 0, 3)
+	for _, name := range []KeyName{KeyPause, KeyResume} {
+		if k := PrimaryKey(name); k != "" {
+			marked = append(marked, k)
+		}
+	}
+	marked = append(marked, "x")
 	return []key.Binding{
 		key.NewBinding(key.WithKeys(PrimaryKey(KeyToggleMark)),
 			key.WithHelp(LabelOf(KeyToggleMark), "mark")),
-		key.NewBinding(key.WithKeys(PrimaryKey(KeyPause), PrimaryKey(KeyResume), "x"),
-			key.WithHelp(marked, "pause/resume/kill marked")),
+		key.NewBinding(key.WithKeys(marked...),
+			key.WithHelp(Label(marked), "pause/resume/kill marked")),
 		key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "exit")),
 	}
 }

@@ -238,7 +238,15 @@ func (m *home) handleConfirmState(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	// Matched through the registry rather than as ',' so that the key the dialog's copy
 	// promises and the key it honors are the same one — the copy is generated from the same
 	// binding (settingNotice), so a literal here would let the two drift apart.
-	if key := m.pendingConfirmSettingKey; key != "" && msg.String() == keys.PrimaryKey(keys.KeySettings) {
+	//
+	// The dialog's own keys win the tie. Reading the settings key from the registry means
+	// an override can land it on y or n, which nothing reserves, and this branch runs
+	// before the overlay sees the press: rebinding settings onto y made the advertised
+	// "Create it anyway? y/n" open the settings panel and silently discard the staged
+	// session. Deferring to Answers keeps the dialog answering for the keys it prints.
+	settingsKey := keys.PrimaryKey(keys.KeySettings)
+	if key := m.pendingConfirmSettingKey; key != "" && settingsKey != "" &&
+		msg.String() == settingsKey && !m.confirmationOverlay.Answers(settingsKey) {
 		m.pendingConfirmSettingKey = ""
 		m.pendingConfirmAction = nil
 		m.pendingConfirmBusyLabel = ""

@@ -684,8 +684,14 @@ func (m *home) handleAttachFinished(msg attachFinishedMsg) (tea.Model, tea.Cmd) 
 			"Detach instead with tmux's own keys: press the prefix (Ctrl-B by default), " +
 			"then d — then Enter, since cooked mode buffers input until a newline, so the " +
 			"prefix may not register on its own. If this keeps happening, check that the " +
-			"terminal/SSH/Docker session provides a real TTY; `stty -ixon` can also stop " +
-			detach + " being swallowed.")
+			// Ctrl+Q is a literal here on purpose, and is the one key in this modal that
+			// has to stay one: `stty -ixon` disables XOFF, which is Ctrl+Q specifically.
+			// Reading the detach binding would make the advice follow a rebind onto a
+			// chord flow control never touches — telling a user whose detach is ctrl+g to
+			// run a command that cannot affect it, and deleting the one true fact the
+			// sentence carried.
+			"terminal/SSH/Docker session provides a real TTY; if detach is still Ctrl+Q, " +
+			"`stty -ixon` can also stop it being swallowed.")
 	}
 	// Prompts the keeper definitively failed to deliver mid-attach: surface the loss
 	// like promptSendErrorMsg would, rather than leaving sessions silently
