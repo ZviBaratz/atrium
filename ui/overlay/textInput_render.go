@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"charm.land/lipgloss/v2"
+	"github.com/ZviBaratz/atrium/keys"
 	"github.com/ZviBaratz/atrium/ui/theme"
 	"github.com/muesli/reflow/truncate"
 )
@@ -40,8 +41,11 @@ func tiHintStyle() lipgloss.Style { return theme.Current().OverlayHintStyle() }
 // create), so submission is surfaced as Ctrl+S, which works from any field, rather than an
 // ambiguous "Enter create". That makes ⌃S the clause that must survive the narrowest
 // rung: it is the only way to submit without tabbing to the button. The prompt's
-// Shift+Enter goes first because it needs a Claude-Code-style terminal setup that Ctrl+J
-// does not, so it is the least universally true half of that pair.
+// Shift+Enter goes first because it is the half of that pair that is not universally
+// true — it needs a terminal that disambiguates modified keys, which Ctrl+J does not —
+// so it is both the first rung a narrow terminal drops and the rung
+// promptFocusHelpLegacy drops on capability grounds. Those two reasons are separate
+// and the ordering serves both.
 //
 // The full rungs are 73 and 53 cells against the 42 an 80-col terminal gives, i.e. the
 // footer used to be cut at "↵ create from n…" — losing ⌃S and ⌃R outright — on the
@@ -84,6 +88,52 @@ var promptFocusHelp = []string{
 	"⇧↵ / ⌃J newline · ↵ next field · ⌃S create",
 	"⌃J newline · ↵ next field · ⌃S create",
 	"⌃J newline · ⌃S create",
+}
+
+// promptFocusHelpLegacy is promptFocusHelp without its ⇧↵ rung — the ladder for a
+// terminal that never told Atrium it disambiguates modified keys, where Shift+Enter
+// is byte-identical to Enter and ⌃J is the only newline key Atrium can promise.
+//
+// Derived from promptFocusHelp rather than re-authored, so an edit to a shared rung
+// cannot land on one ladder and miss the other, and so the two can never disagree
+// about anything except the clause that is actually in question. That the honest
+// ladder is exactly the tail of the optimistic one is not a coincidence — it is why
+// the ⇧↵ clause was put on its own rung.
+var promptFocusHelpLegacy = promptFocusHelp[1:]
+
+// promptHelpFor picks the ladder the terminal has earned. Read the capability, not
+// the keystroke: the handler for Shift+Enter is unconditional (it costs nothing on a
+// terminal that never sends it), and only what Atrium PROMISES has to be gated.
+//
+// It understates on two terminals, deliberately. An xterm honouring modifyOtherKeys
+// delivers shift+enter without answering the kitty query, as does tmux configured
+// with `extended-keys always`; both get the ⌃J ladder while ⇧↵ quietly works. That
+// is the safe direction to be wrong in — a user who tries the key and finds it works
+// has lost nothing, which is the opposite of the failure this ladder exists to fix.
+// Inferring support from an arriving shift+enter would fix it at the cost of a footer
+// that changes after the user already found the key, and of two identical terminals
+// rendering different frames.
+func promptHelpFor(disambiguates bool) []string {
+	if disambiguates {
+		return promptFocusHelp
+	}
+	return promptFocusHelpLegacy
+}
+
+// quickSendHelp / quickSendHelpLegacy are the same choice for the quick-send,
+// smart-dispatch and diff-comment box, whose footer is one line rather than a width
+// ladder. Same clause, same gate, same asymmetry.
+const (
+	quickSendHelp       = "↵ send · ⇧↵ / ⌃J newline · esc cancel"
+	quickSendHelpLegacy = "↵ send · ⌃J newline · esc cancel"
+)
+
+// quickSendHelpFor is promptHelpFor for that footer.
+func quickSendHelpFor(disambiguates bool) string {
+	if disambiguates {
+		return quickSendHelp
+	}
+	return quickSendHelpLegacy
 }
 
 // renderPickerRows renders a list of pre-formatted labels windowed around the cursor,
@@ -154,15 +204,16 @@ func (t *TextInputOverlay) compose() (content string, innerWidth int, divider st
 		return t.renderCreateForm(divider), innerWidth, divider
 	}
 
-	// Plain prompt overlay (the `p` flow): no pickers — just a title, the prompt textarea,
-	// and the submit button.
+	// Everything that is not the create form — quick send, the diff-comment composer,
+	// smart dispatch: no pickers, just a title, the textarea, and the submit button.
 	content += tiTitleStyle().Render(t.Title) + "\n"
 	content += t.textarea.View() + "\n\n"
 	content += divider + "\n\n"
 	if t.submitOnEnter {
-		// Mirror the create form's newline vocabulary: Shift+Enter (alt+enter on the
-		// wire, needs a configured terminal) or the universal Ctrl+J — see newTextarea.
-		content += tiHintStyle().Render("↵ send · ⇧↵ / ⌃J newline · esc cancel") + "\n"
+		// Mirror the create form's newline vocabulary, and its honesty about it: ⇧↵
+		// only where the terminal disambiguates modified keys, the universal ⌃J
+		// everywhere — see quickSendHelpFor and newTextarea.
+		content += tiHintStyle().Render(quickSendHelpFor(keys.TerminalDisambiguates())) + "\n"
 	}
 	content += t.renderEnterButton()
 
@@ -303,7 +354,7 @@ func (t *TextInputOverlay) renderCreateForm(divider string) string {
 
 	help := createFormHelp
 	if t.isTextarea() {
-		help = promptFocusHelp
+		help = promptHelpFor(keys.TerminalDisambiguates())
 	}
 	clearHint := "⌃R clear"
 	if t.clearArmed {

@@ -880,6 +880,30 @@ func (m *home) View() tea.View {
 	// terminal that ignores 1004 simply never sends them, and an unknown focus is
 	// treated as "not focused" — never permanent silence.
 	v.ReportFocus = true
+	// v.KeyboardEnhancements is deliberately left at its zero value, and the omission
+	// is a decision rather than an oversight (#396) — TestView_RequestsNoKeyboardEnhancements
+	// pins it.
+	//
+	// The enhancement Atrium actually wants, key disambiguation, is not in this struct:
+	// Bubble Tea requests it unconditionally and cannot be talked out of it, so
+	// shift+enter already arrives on a terminal that speaks the protocol. Every field
+	// here only ADDS flags on top of that, and Atrium needs none of them.
+	//
+	// ReportEventTypes is the one with a concrete hazard. It makes the terminal report
+	// releases and repeats; every handler here matches the concrete tea.KeyPressMsg, so
+	// today a release would be silently DROPPED rather than double-dispatched. The
+	// hazard is that it is latent: tea.KeyMsg is an interface both KeyPressMsg and
+	// KeyReleaseMsg satisfy, with identical String(), so the first handler written
+	// against it turns one physical keystroke into two dispatches — and nothing about
+	// writing that handler would look wrong.
+	//
+	// The other three change how ordinary keys are DELIVERED — as escape codes, with
+	// alternate codes, with associated text — and this app dispatches on msg.String()
+	// end to end. Nothing here has measured them against that, and requesting an
+	// unmeasured input path buys nothing, so the zero value is the whole argument.
+	// (ReportAssociatedText is inert on its own; Bubble Tea's own field doc says it
+	// only has an effect with ReportAllKeysAsEscapeCodes.)
+	//
 	// Mouse capture is opt-out (config `mouse`, default on). With it off we never
 	// enable cell-motion reporting, so every mouse event stays with the terminal and
 	// its native select-to-copy works unmodified — the fix for terminals whose

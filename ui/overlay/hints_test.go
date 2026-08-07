@@ -13,8 +13,15 @@ import (
 // holds it. Listing them as data is what lets the two contract tests below hold for
 // all of them at once rather than for whichever one someone remembered.
 var hintLadders = map[string][]string{
-	"createFormHelp":        createFormHelp,
-	"promptFocusHelp":       promptFocusHelp,
+	"createFormHelp":  createFormHelp,
+	"promptFocusHelp": promptFocusHelp,
+	// promptFocusHelpLegacy adds no coverage today — it is promptFocusHelp[1:], so
+	// every rung in it is already swept above through its parent. It is listed for
+	// the day that stops being true: the derivation is what
+	// TestPromptFocusHelpLegacy_IsDerivedFromTheOptimisticLadder holds, and if a
+	// later change re-authors this ladder as its own literal, this entry is what
+	// makes it a guarded one from the first commit rather than the second.
+	"promptFocusHelpLegacy": promptFocusHelpLegacy,
 	"modelCustomHelp":       modelCustomHelp,
 	"variantFocusHelp":      variantFocusHelp,
 	"checkpointFooterHints": checkpointFooterHints,

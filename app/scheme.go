@@ -26,8 +26,14 @@ import (
 // therefore outlives Atrium on every exit path — quit, ctx.Done()/SIGTERM, and panic
 // alike — and past every tea.Exec attach, where the terminal keeps emitting
 // CSI?997;Nn into an input stream tmux now owns, injecting stray bytes into the
-// agent's pane. Owning that lifecycle is real work, and #396 has to build it anyway
-// for the kitty keyboard protocol.
+// agent's pane. Owning that lifecycle would be real work.
+//
+// The kitty keyboard protocol is the contrast that makes the rule sharp rather than
+// a counterexample to it. It is just as persistent a mode, and it costs Atrium
+// nothing (#396) — because tea.View DOES model it, so close() writes the disable
+// unconditionally and the renderer re-negotiates it across every alt-screen switch.
+// The difference is not "keyboard modes are cheaper"; it is that one mode is inside
+// the declarative set Bubble Tea unwinds and the other is not.
 //
 // ansi.RequestLightDarkReport (ESC[?996n) is the one-shot version, with no mode to
 // unwind, so "persistent" is not by itself the whole argument. It loses on two other

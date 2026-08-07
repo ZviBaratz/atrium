@@ -134,9 +134,20 @@ func TestCreateFormHelp_EveryRungKeepsTheNavKeys(t *testing.T) {
 // ladder extracted to stop one hint lying, leaving its sibling lying): a rung like
 // "↑↓ next · ⌃S create" is 20 cells, so it fits every width guard here and would
 // have broken #466's rule with the whole suite green.
+// Both ladders are swept, though the second is redundant while
+// promptFocusHelpLegacy is promptFocusHelp[1:] — every legacy rung is already a
+// rung of its parent. It is named anyway so the sweep keeps covering what is
+// rendered rather than what happens to be a slice of what is rendered, which is
+// the property that would quietly lapse if the two ladders ever stopped sharing a
+// literal.
 func TestPromptFocusHelp_NoRungNamesTheNavKeys(t *testing.T) {
-	for i, rung := range promptFocusHelp {
-		assert.NotContainsf(t, rung, navKeys,
-			"rung %d must leave the arrows to the fields that correct them: %q", i, rung)
+	for name, ladder := range map[string][]string{
+		"promptFocusHelp":       promptFocusHelp,
+		"promptFocusHelpLegacy": promptFocusHelpLegacy,
+	} {
+		for i, rung := range ladder {
+			assert.NotContainsf(t, rung, navKeys,
+				"%s rung %d must leave the arrows to the fields that correct them: %q", name, i, rung)
+		}
 	}
 }

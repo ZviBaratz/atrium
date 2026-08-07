@@ -228,6 +228,19 @@ in-app keymap and this section ever drift apart, so it stays complete.
 > wait to see whether an escape sequence follows. No binding below relies on the
 > old conflation, so nothing here changes; a terminal without the protocol simply
 > never enables it and behaves exactly as before.
+>
+> The one thing it *adds* is in the composers: on such a terminal
+> <kbd>shift+enter</kbd> inserts a newline in the new-session prompt and the
+> quick-send box, with no terminal reconfiguration, while <kbd>enter</kbd> keeps
+> sending or advancing. <kbd>ctrl+j</kbd> does the same everywhere and always
+> will, and <kbd>alt+enter</kbd> — what a Claude-Code-style `/terminal-setup`
+> remap makes <kbd>shift+enter</kbd> send — still works too. A footer names
+> <kbd>⇧↵</kbd> only once the terminal has actually answered the capability
+> query, so it errs towards <kbd>⌃J</kbd>: under tmux, or on an xterm that speaks
+> only `modifyOtherKeys`, <kbd>shift+enter</kbd> may work while the hint stays
+> quiet about it. The new-session form's footer also drops the clause to fit a
+> narrow terminal, so the quick-send box is the one to read the answer off.
+> `atrium doctor` reports what can be told from outside the app.
 
 ##### Navigate
 | Key | Action |
@@ -329,13 +342,16 @@ way out of an attached pane other than tmux's own prefix — and it and `kill` t
 a single `ctrl+<letter>` key rather than a list, because a session pane reads them
 as one raw byte.
 
-Four chords are worth avoiding: `ctrl+m`, `ctrl+i`, `ctrl+j` and `ctrl+h` are the
+Some keys are worth avoiding: `ctrl+m`, `ctrl+i`, `ctrl+j` and `ctrl+h` are the
 ones the disambiguation note above lists as historically conflated with `enter`,
-`tab`, a newline and `backspace`. Atrium can tell them apart only on a terminal
-that speaks the protocol; on any other one the chord never arrives and the action
-is simply dead, so an override onto one is applied with a warning. For
-`attach_toggle` and `kill` it is refused outright — a session pane reads raw bytes
-and cannot distinguish them at all.
+`tab`, a newline and `backspace`, and `shift+enter`, `ctrl+enter` and
+`ctrl+shift+enter` are `enter` on the same terminals. Atrium can tell them apart only on one that speaks the
+protocol; on any other the chord never arrives and the action is simply dead, so
+an override onto one is applied with a warning. For `attach_toggle` and `kill` it
+is refused outright — a session pane reads raw bytes and cannot distinguish them
+at all. The warning covers the keys Atrium has had reason to name, so treat its
+silence as "not on that list" rather than as a guarantee: `alt+enter` and
+`shift+tab` do have their own legacy encodings, but plenty of other chords do not.
 
 Every surface — hint bar, cheatsheet, palette, and any message that names a key —
 is generated from the keymap, so a remap shows up everywhere at once. No

@@ -408,6 +408,23 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// is the OSC 11 rung, the startup rung already read the variable once, and
 		// re-reading it here would let a stale value answer for a live query.
 		return m, m.applyDetectedScheme(theme.ResolveScheme(bgIsDark, ""))
+	case tea.KeyboardEnhancementsMsg:
+		// The terminal answered the kitty keyboard query Bubble Tea sends on its first
+		// frame. An answer means it disambiguates modified keys, so shift+enter arrives
+		// as itself rather than as enter — which is what the composer footers are
+		// allowed to promise (#396).
+		//
+		// Atrium requests nothing to make this happen (see View), and reads the answer
+		// only to decide what to ADVERTISE. The shift+enter handler itself is
+		// unconditional: a key the terminal cannot send never arrives, so gating the
+		// handler would buy nothing and add a way for the two halves to disagree.
+		//
+		// There is no negative form of this message. A terminal without the protocol
+		// never replies, so this case simply never runs for it and the latch keeps the
+		// false it was born with — which is why keys.TerminalDisambiguates defaults to
+		// the pre-protocol behaviour rather than being corrected into it.
+		keys.SetTerminalDisambiguates(msg.SupportsKeyDisambiguation())
+		return m, nil
 	case tea.FocusMsg:
 		// The terminal regained focus: while focused, background sessions stay silent
 		// (the user is watching the fleet). See maybeNotify.
