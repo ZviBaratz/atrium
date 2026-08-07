@@ -25,10 +25,17 @@ func newHomeWithKeybindings(t *testing.T, section map[string]config.KeySpec) *ho
 	t.Helper()
 	// newHome mutates process-global state: the theme, the keymap and the attach
 	// layer's chords. Put all three back.
+	//
+	// Apply(nil) IS the reset — it resolves an empty override set, which is the
+	// default keymap — so its restore func is deliberately discarded. Calling it
+	// would undo the reset and reinstall this test's override for every test that
+	// ran afterwards. That is not a hypothetical tidiness point: it shipped, and
+	// because the package's tests run in file order locally it was invisible until
+	// CI's `-shuffle=on` put a draft test after this one, where pressing the
+	// now-unbound "n" never opened the create form and the nil overlay panicked.
 	t.Cleanup(theme.Set(config.DefaultConfig().Theme))
 	t.Cleanup(func() {
-		_, restore := keys.Apply(nil)
-		restore()
+		keys.Apply(nil)
 		tmux.SetAttachChords(17, 24, true)
 	})
 
