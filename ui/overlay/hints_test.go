@@ -15,9 +15,12 @@ import (
 var hintLadders = map[string][]string{
 	"createFormHelp":  createFormHelp,
 	"promptFocusHelp": promptFocusHelp,
-	// The legacy ladder is the one most terminals actually render (it is what a
-	// terminal that never answered the disambiguation query gets), so leaving it out
-	// would mean the widely-seen ladder was the unguarded one.
+	// promptFocusHelpLegacy adds no coverage today — it is promptFocusHelp[1:], so
+	// every rung in it is already swept above through its parent. It is listed for
+	// the day that stops being true: the derivation is what
+	// TestPromptFocusHelpLegacy_IsDerivedFromTheOptimisticLadder holds, and if a
+	// later change re-authors this ladder as its own literal, this entry is what
+	// makes it a guarded one from the first commit rather than the second.
 	"promptFocusHelpLegacy": promptFocusHelpLegacy,
 	"modelCustomHelp":       modelCustomHelp,
 	"variantFocusHelp":      variantFocusHelp,

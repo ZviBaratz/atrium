@@ -340,13 +340,16 @@ way out of an attached pane other than tmux's own prefix — and it and `kill` t
 a single `ctrl+<letter>` key rather than a list, because a session pane reads them
 as one raw byte.
 
-Four chords are worth avoiding: `ctrl+m`, `ctrl+i`, `ctrl+j` and `ctrl+h` are the
+Some keys are worth avoiding: `ctrl+m`, `ctrl+i`, `ctrl+j` and `ctrl+h` are the
 ones the disambiguation note above lists as historically conflated with `enter`,
-`tab`, a newline and `backspace`. Atrium can tell them apart only on a terminal
-that speaks the protocol; on any other one the chord never arrives and the action
-is simply dead, so an override onto one is applied with a warning. For
-`attach_toggle` and `kill` it is refused outright — a session pane reads raw bytes
-and cannot distinguish them at all.
+`tab`, a newline and `backspace`, and `shift+enter` and `ctrl+enter` are `enter`
+on the same terminals. Atrium can tell them apart only on one that speaks the
+protocol; on any other the chord never arrives and the action is simply dead, so
+an override onto one is applied with a warning. For `attach_toggle` and `kill` it
+is refused outright — a session pane reads raw bytes and cannot distinguish them
+at all. The warning covers the keys Atrium has had reason to name, so treat its
+silence as "not on that list" rather than as a guarantee: `alt+enter` and
+`shift+tab` do have their own legacy encodings, but plenty of other chords do not.
 
 Every surface — hint bar, cheatsheet, palette, and any message that names a key —
 is generated from the keymap, so a remap shows up everywhere at once. No

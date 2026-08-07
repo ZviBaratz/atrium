@@ -22,9 +22,10 @@ import "sync/atomic"
 //
 // The fact belongs in this package because this package already reasons about
 // what a terminal can and cannot send: ParseKey rejects shift+<printable> because
-// no terminal sends it, and wireAmbiguousCtrl (override.go) is the existing
+// no terminal sends it, and needsDisambiguation (override.go) is the existing
 // vocabulary for chords a terminal cannot tell apart. This is the other half of
-// that same question.
+// that same question — those name the keys that need the capability, this records
+// whether the capability is there.
 
 // disambiguates is atomic rather than a plain var, and the distinction from its
 // neighbours is the point.

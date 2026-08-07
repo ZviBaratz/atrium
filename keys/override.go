@@ -301,7 +301,7 @@ func resolve(overrides map[string]Spec) ([]Problem, map[KeyName]resolved) {
 			// keyboard protocol or modifyOtherKeys. On the common terminal the chord is
 			// simply never delivered — the action is silently dead while the cheatsheet
 			// goes on printing the key — so the config that asked for it says so.
-			if other, ambiguous := wireAmbiguousCtrlChord(k); ambiguous {
+			if other, ambiguous := needsDisambiguation(k); ambiguous {
 				warn(a.action, "key %q reaches Atrium as %s on a terminal that does not "+
 					"disambiguate modified keys, so %q will not fire there — see the README "+
 					"on remapping keys", k, other, a.action)
@@ -389,6 +389,51 @@ func wireAmbiguousCtrlChord(chord string) (string, bool) {
 	}
 	other, ambiguous := wireAmbiguousCtrl[base[0]]
 	return other, ambiguous
+}
+
+// modifiedEnterChord reports whether a key string is Enter under a modifier that
+// no legacy terminal encodes — the same collapse wireAmbiguousCtrl describes,
+// approached from the other side.
+//
+// Ctrl and Shift over Enter both arrive as a bare CR, so on a terminal without
+// disambiguation "shift+enter" IS "enter"; that is exactly why #396's newline had
+// to wait for the protocol. Alt is the exception and must not be listed: alt+enter
+// has a real legacy encoding, ESC CR, which is what has made it the portable
+// stand-in all along (ultraviolet key_table.go).
+//
+// Deliberately scoped to Enter rather than generalised over every special key.
+// The obvious generalisation is wrong in both directions — shift+tab has a legacy
+// encoding (CSI Z) while ctrl+tab does not — and a rule that is wrong about which
+// keys survive is worse than a short list that is right. See needsDisambiguation
+// on what that costs.
+// The modifier list is the whole decision — "alt+" is absent rather than
+// excluded, so there is exactly one place to read the answer off.
+func modifiedEnterChord(chord string) (string, bool) {
+	base, ok := strings.CutSuffix(chord, "enter")
+	if !ok {
+		return "", false
+	}
+	switch base {
+	case "ctrl+", "shift+", "ctrl+shift+":
+		return "enter", true
+	}
+	return "", false
+}
+
+// needsDisambiguation reports whether a keystroke reaches Atrium only on a
+// terminal that disambiguates modified keys, and what an ordinary keypress sends
+// in its place everywhere else.
+//
+// This is a FLOOR over the chords this package knows about, not a decision
+// procedure. Proving the general case would mean owning a model of every legacy
+// encoding — the thing terminfo exists for and still gets wrong — so a chord that
+// is not listed here is "not known to be ambiguous", never "known to be safe".
+// Treat a false answer as the absence of a warning, not as a guarantee.
+func needsDisambiguation(chord string) (string, bool) {
+	if other, ambiguous := wireAmbiguousCtrlChord(chord); ambiguous {
+		return other, true
+	}
+	return modifiedEnterChord(chord)
 }
 
 // ControlByte is the byte a terminal sends for a ctrl+<letter> chord, which is
