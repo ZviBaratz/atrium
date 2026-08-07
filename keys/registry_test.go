@@ -2,6 +2,8 @@ package keys
 
 import (
 	"maps"
+	"regexp"
+	"slices"
 	"testing"
 )
 
@@ -233,5 +235,84 @@ func TestRegistry_DocumentedOnlyEntries(t *testing.T) {
 	}
 	for name := range wantDocOnly {
 		t.Errorf("registry has no entry for documented-only %v", name)
+	}
+}
+
+// The action vocabulary is what a user's config.json names, so unlike every
+// other identifier here it can be added to but never renamed: a rename silently
+// stops honoring an override that used to work. This golden is the pin that
+// makes a rename fail loudly, and it is the guard that pays for retiring the
+// dispatch-string inventory above — that map stops being static once overrides
+// land, but the vocabulary it is replaced by must not.
+func TestActionVocabulary_Golden(t *testing.T) {
+	want := []string{
+		"accounts", "approve", "attach_toggle", "auto_name", "checkpoints",
+		"collapse_all",
+		"collapse_group", "command_log", "command_palette", "copy_branch",
+		"copy_content", "create_pr", "custom_commands", "diff_comment", "down",
+		"expand_group", "filter", "grow_list", "help", "hints", "kill",
+		"layout_preset", "merge_pr", "move_account_down", "move_account_up",
+		"move_down", "move_group_down", "move_group_up", "move_up",
+		"multi_select", "mute", "new", "new_pick_project", "next_blocked",
+		"next_tab", "next_unread", "open", "open_pr", "pause", "pause_all",
+		"prev_tab", "push_branch", "queue", "quit", "rename", "resume",
+		"resume_all", "run_command", "scroll_down", "scroll_up", "send",
+		"settings", "shrink_list", "smart_new", "tab_diff", "tab_preview",
+		"tab_terminal", "toggle_mark", "undo_kill", "up",
+	}
+	var got []string
+	for _, e := range Registry {
+		if e.Action != "" {
+			got = append(got, e.Action)
+		}
+	}
+	slices.Sort(got)
+	if !slices.Equal(got, want) {
+		t.Errorf("action vocabulary drifted\n got: %q\nwant: %q", got, want)
+	}
+}
+
+// Remappable is exactly Action != "", so the equivalence has to hold in both
+// directions or the remap namespace stops matching the dispatch map. A
+// dispatched entry with no action is unreachable from config; a DocOnly entry
+// with one advertises an override that could never take effect, because its key
+// is consumed before the GlobalKeyStringsMap lookup (esc, ctrl+l) or by the
+// attach layer (ctrl+pgup/pgdn) and no override reaches either.
+func TestRegistry_EveryDispatchedEntryHasAnAction(t *testing.T) {
+	for _, e := range Registry {
+		switch {
+		case e.DocOnly && e.Action != "":
+			t.Errorf("documented-only %q carries action %q, but an override could "+
+				"never reach it", e.Binding.Help().Desc, e.Action)
+		case !e.DocOnly && e.Action == "":
+			t.Errorf("dispatched entry %q has no action name, so config can never "+
+				"rebind it", e.Binding.Help().Desc)
+		}
+	}
+}
+
+// Two entries sharing an action name would make one of them silently
+// unaddressable — which of the two wins is whichever the resolver visits last.
+func TestRegistry_NoDuplicateActions(t *testing.T) {
+	claimed := map[string]string{}
+	for _, e := range Registry {
+		if e.Action == "" {
+			continue
+		}
+		if prev, ok := claimed[e.Action]; ok {
+			t.Errorf("action %q claimed by both %q and %q", e.Action, prev, e.Binding.Help().Desc)
+		}
+		claimed[e.Action] = e.Binding.Help().Desc
+	}
+}
+
+// One spelling, so a user never has to guess between move_up, moveUp and
+// move-up. Lowercase letters and underscores, never leading or trailing.
+func TestRegistry_ActionNamesAreSnakeCase(t *testing.T) {
+	ok := regexp.MustCompile(`^[a-z]+(_[a-z]+)*$`)
+	for _, e := range Registry {
+		if e.Action != "" && !ok.MatchString(e.Action) {
+			t.Errorf("action %q is not snake_case", e.Action)
+		}
 	}
 }

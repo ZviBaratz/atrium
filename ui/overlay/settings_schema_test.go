@@ -72,6 +72,7 @@ func TestEveryScalarConfigFieldHasARow(t *testing.T) {
 		"gh_accounts":     "list of records — Accounts overlay",
 		"agy_accounts":    "list of records — Accounts overlay",
 		"repo_scripts":    "list of records — edited in config.json; the one-value-per-row panel cannot express route rules + a script + an env map (#389)",
+		"keybindings":     "map of action → key(s) — edited in config.json; a one-value-per-row panel cannot express a keymap, and a bad row here would cost the user the key they were editing with (#376)",
 		"nerd_font":       "deprecated, superseded by glyph_set",
 	}
 

@@ -2,9 +2,10 @@ package testutil
 
 import (
 	"fmt"
-	"strings"
 
 	tea "charm.land/bubbletea/v2"
+
+	"github.com/ZviBaratz/atrium/keys"
 )
 
 // Key and Runes are the single place the whole suite builds a key message.
@@ -21,36 +22,10 @@ import (
 // test presses the same string the dispatch matches. It is deliberately unchanged
 // across the migration: every call site reads identically on both sides of the cut.
 
-// modifiers maps a spec prefix onto its v2 modifier bit.
-//
-// v1 had no such table: it encoded modified keys as distinct KeyTypes
-// (KeyShiftTab, KeyCtrlLeft, KeyShiftUp, …) and carried only Alt as a bool. v2
-// drops that whole parallel vocabulary for a Code plus a Mod bitmask, which is why
-// this table exists at all and why specialKeys shrank to the unmodified keys.
-var modifiers = map[string]tea.KeyMod{
-	"ctrl":  tea.ModCtrl,
-	"alt":   tea.ModAlt,
-	"shift": tea.ModShift,
-}
-
-// specialKeys maps a keystroke spec onto the v2 key code that produces it.
-//
-// Built by asking Bubble Tea rather than by asserting: each entry's name is
-// derived from tea.KeyPressMsg{Code: c}.String(), so the table cannot claim a name
-// Bubble Tea does not use. TestKeySpecsRoundTripThroughString pins that.
-var specialKeys = func() map[string]rune {
-	codes := []rune{
-		tea.KeyEnter, tea.KeyTab, tea.KeyEsc, tea.KeySpace,
-		tea.KeyBackspace, tea.KeyDelete, tea.KeyInsert,
-		tea.KeyUp, tea.KeyDown, tea.KeyLeft, tea.KeyRight,
-		tea.KeyHome, tea.KeyEnd, tea.KeyPgUp, tea.KeyPgDown,
-	}
-	m := make(map[string]rune, len(codes))
-	for _, c := range codes {
-		m[tea.KeyPressMsg{Code: c}.String()] = c
-	}
-	return m
-}()
+// The spec vocabulary itself now lives in keys.ParseKey — the same table
+// production code validates a user's config.json against, so a test can only
+// press a keystroke a binding could legally name, and the two can never drift
+// into disagreeing about how a chord is spelled.
 
 // keyAliases holds specs whose spelling differs between Bubble Tea versions, so a
 // call site can use either and the helper absorbs the difference.
@@ -81,39 +56,11 @@ func Key(spec string) tea.KeyPressMsg {
 	if canonical, ok := keyAliases[spec]; ok {
 		spec = canonical
 	}
-
-	// Peel modifiers off the front. Order is not significant to the bitmask, but
-	// String() emits them in a fixed order, so only the canonical spelling
-	// round-trips.
-	var mod tea.KeyMod
-	for {
-		prefix, rest, ok := strings.Cut(spec, "+")
-		if !ok || rest == "" {
-			break
-		}
-		bit, known := modifiers[prefix]
-		if !known {
-			break
-		}
-		mod |= bit
-		spec = rest
+	msg, err := keys.ParseKey(spec)
+	if err != nil {
+		panic(fmt.Sprintf("testutil.Key: %v (Runes builds literal text)", err))
 	}
-
-	if code, ok := specialKeys[spec]; ok {
-		return tea.KeyPressMsg{Code: code, Mod: mod}
-	}
-	if r := []rune(spec); len(r) == 1 {
-		// Text is what a terminal reports for a printable key, and String() falls
-		// back to it — but only for an unmodified press. A modified one names the
-		// key, and carrying Text alongside a ctrl bit would describe a keystroke no
-		// terminal sends.
-		key := tea.KeyPressMsg{Code: r[0], Mod: mod}
-		if mod == 0 {
-			key.Text = spec
-		}
-		return key
-	}
-	panic(fmt.Sprintf("testutil.Key: unknown key spec %q — add it to specialKeys, or use Runes for literal text", spec))
+	return msg
 }
 
 // Runes builds a text key message carrying exactly s, with no keystroke-name

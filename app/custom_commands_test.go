@@ -432,7 +432,7 @@ func TestCustomCommandRefusalsFitARow(t *testing.T) {
 	// Iterated from the source's own tails, so a new message shape has to join the set
 	// rather than quietly escaping the rule.
 	tails := map[string]string{
-		"failed":             customCommandFailedTail,
+		"failed":             customCommandFailedTail(),
 		"vanished directory": customCommandNoDirTail,
 		"unrenderable":       customCommandUnrenderableTail,
 		// Terminal mode's two. The formatted one joins as its WIDEST instantiation, not
@@ -469,7 +469,7 @@ func TestCustomCommandRefusalsFitARow(t *testing.T) {
 		"customCommandNoticeChrome must be the widest tail plus its quotes")
 
 	// And the one message built through the helper rather than by appending a tail.
-	assert.Equal(t, customCommandLabel("x")+customCommandFailedTail,
+	assert.Equal(t, customCommandLabel("x")+customCommandFailedTail(),
 		customCommandFailureNotice("x"),
 		"the failure notice must go through the same bounded label")
 }

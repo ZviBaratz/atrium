@@ -44,7 +44,7 @@ func (m *home) toggleRunCommand() (tea.Model, tea.Cmd) {
 	// Refused here rather than inside StartRunCommand's own paused check so the message
 	// names the key that fixes it, the way the pause/resume refusals do.
 	if selected.Paused() {
-		return m, m.handleInfoNotice("session is paused — press r to resume before starting its dev command")
+		return m, m.handleInfoNotice(pausedResumeNotice("before starting its dev command"))
 	}
 	// A direct session's directory is the user's own checkout, not an isolated worktree.
 	// Refused for the same reason the setup script is, and stated as a notice rather than

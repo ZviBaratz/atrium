@@ -214,7 +214,12 @@ func (m *home) handleCheckpointsState(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) 
 		// where it is read before the keypress rather than after it. The notice rides
 		// the error row, which the centred box does not cover.
 		if target.Paused() {
-			return m, m.handleInfoNotice("session is paused — press r to resume, then Esc Esc in the agent")
+			// Through pausedResumeNotice so the resume key is read from the registry
+			// rather than spelled: an override can move it, and a notice telling the
+			// user to press a key that now does something else is worse than silence.
+			// "Esc Esc" stays a literal — it is Claude's chord inside the agent's pane,
+			// not an Atrium binding, so no override reaches it.
+			return m, m.handleInfoNotice(pausedResumeNotice("before Esc Esc in the agent"))
 		}
 		if target.GetStatus() == session.Loading {
 			return m, m.handleInfoNotice(stillStartingNotice)

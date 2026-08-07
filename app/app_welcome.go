@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/ZviBaratz/atrium/config"
+	"github.com/ZviBaratz/atrium/keys"
 	"github.com/ZviBaratz/atrium/log"
 	"github.com/ZviBaratz/atrium/ui"
 
@@ -71,7 +72,9 @@ func (m *home) handleWelcomeState(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.markWelcomeSeen()
 		return m, tea.Batch(
 			tea.RequestWindowSize,
-			m.settingNotice("Setup skipped — press , to pick a default agent, or n to start a session",
+			m.settingNotice(fmt.Sprintf(
+				"Setup skipped — press %s to pick a default agent, or %s to start a session",
+				keys.LabelOf(keys.KeySettings), keys.LabelOf(keys.KeyNew)),
 				ui.NoticeInfo, "default_program"),
 		)
 	}
@@ -115,9 +118,10 @@ func (m *home) warnMissingProgram(program string) tea.Cmd {
 	m.pathWarned = true
 	var text string
 	if cmd := config.ProgramCommand(program); cmd != "" {
-		text = fmt.Sprintf("%s not found on PATH — press , to change the default program", cmd)
+		text = fmt.Sprintf("%s not found on PATH — press %s to change the default program",
+			cmd, keys.LabelOf(keys.KeySettings))
 	} else {
-		text = "no default program set — press , to choose one"
+		text = fmt.Sprintf("no default program set — press %s to choose one", keys.LabelOf(keys.KeySettings))
 	}
 	// Both branches name the default-program setting in their own copy, so ',' opens it.
 	return m.settingNotice(text, ui.NoticeError, "default_program")

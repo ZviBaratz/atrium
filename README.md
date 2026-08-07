@@ -301,6 +301,103 @@ in-app keymap and this section ever drift apart, so it stays complete.
 | `ctrl-l` | force a full redraw of the screen |
 | `q` | quit |
 
+#### Remapping keys
+
+Atrium's keys are not entirely its own. It runs inside and around tmux, so every
+chord it takes is one your terminal, your multiplexer or your shell might already
+want — and two of them are read as raw bytes while you are attached to an agent:
+`ctrl-q` (which is XOFF unless you have run `stty -ixon`) and `ctrl-x` (an
+ordinary editing key in any shell). The `keybindings` section in `config.json` is
+the way out:
+
+```json
+{
+  "keybindings": {
+    "attach_toggle": "ctrl+g",
+    "up": ["up", "w"],
+    "pause_all": "disabled"
+  }
+}
+```
+
+A value is one key, a list of keys, or `"disabled"` to unbind the action
+entirely. An unbound action leaves the hint bar; it keeps its `?` cheatsheet row,
+with the key column blank, so you can still see the action exists. Either way it
+stays runnable from the command palette (`ctrl-k`), which is what makes unbinding
+safe. `attach_toggle` is the one action that cannot be unbound — it is the only
+way out of an attached pane other than tmux's own prefix — and it and `kill` take
+a single `ctrl+<letter>` key rather than a list, because a session pane reads them
+as one raw byte.
+
+Four chords are worth avoiding: `ctrl+m`, `ctrl+i`, `ctrl+j` and `ctrl+h` are the
+ones the disambiguation note above lists as historically conflated with `enter`,
+`tab`, a newline and `backspace`. Atrium can tell them apart only on a terminal
+that speaks the protocol; on any other one the chord never arrives and the action
+is simply dead, so an override onto one is applied with a warning. For
+`attach_toggle` and `kill` it is refused outright — a session pane reads raw bytes
+and cannot distinguish them at all.
+
+Every surface — hint bar, cheatsheet, palette, and any message that names a key —
+is generated from the keymap, so a remap shows up everywhere at once. No
+`keybindings` section means today's keys, unchanged.
+
+Keys are spelled the way a terminal reports them: `+` joins a chord (`ctrl+g`,
+`alt+enter`, `shift+tab`), a shifted letter is just the capital (`K`, not
+`shift+k`), and the space bar is `space`. Note that the cheatsheet *displays* a
+chord with a hyphen (`ctrl-x`) but a binding is written with a plus (`ctrl+x`).
+An override replaces an action's keys rather than adding to them, so rebinding
+`up` to `w` drops the arrow too unless you list both.
+
+A mistake is reported, never fatal: the offending line is skipped, that action
+keeps its default key, every other override still applies, and the reason is
+shown at startup and by `atrium doctor`. Names both sides where it can — a
+collision with a key another action still holds tells you to rebind that one too.
+
+Some keys are refused. `ctrl+c`, `esc` and `ctrl+l` are handled before the keymap
+and are the way out when a remap goes wrong; `` ` `` belongs to the screensaver;
+`ctrl+[` *is* `esc` on most terminals; and `ctrl+pgup` / `ctrl+pgdown` are the
+attach layer's session cycling. `attach_toggle` and `kill` must be `ctrl` plus a
+single letter, because the attach layer reads them as one byte, and
+`attach_toggle` cannot be disabled — it would leave you with no way out of a pane
+but tmux's own prefix.
+
+##### Action names
+
+| Action | Default | Action | Default |
+|--------|---------|--------|---------|
+| `accounts` | `@` | `mute` | `M` |
+| `approve` | `a` | `new` | `n` |
+| `attach_toggle` | `ctrl-q` | `new_pick_project` | `N` |
+| `auto_name` | `A` | `next_blocked` | `b` |
+| `checkpoints` | `H` | `next_tab` | `tab` |
+| `collapse_all` | `Z` | `next_unread` | `u` |
+| `collapse_group` | `←` | `open` | `↵/o` |
+| `command_log` | `L` | `open_pr` | `w` |
+| `command_palette` | `ctrl-k` | `pause` | `p` |
+| `copy_branch` | `y` | `pause_all` | `ctrl-p` |
+| `copy_content` | `Y` | `prev_tab` | `shift-tab` |
+| `create_pr` | `c` | `push_branch` | `P` |
+| `custom_commands` | `!` | `queue` | `Q` |
+| `diff_comment` | `C` | `quit` | `q` |
+| `down` | `↓/j` | `rename` | `R` |
+| `expand_group` | `→` | `resume` | `r` |
+| `filter` | `/` | `resume_all` | `ctrl-r` |
+| `grow_list` | `>` | `run_command` | `d` |
+| `help` | `?` | `scroll_down` | `shift-↓` |
+| `hints` | `f` | `scroll_up` | `shift-↑` |
+| `kill` | `ctrl-x` | `send` | `s` |
+| `layout_preset` | `\` | `settings` | `,` |
+| `merge_pr` | `m` | `shrink_list` | `<` |
+| `move_account_down` | `]` | `smart_new` | `i` |
+| `move_account_up` | `[` | `tab_diff` | `2` |
+| `move_down` | `J` | `tab_preview` | `1` |
+| `move_group_down` | `}` | `tab_terminal` | `3` |
+| `move_group_up` | `{` | `toggle_mark` | `space` |
+| `move_up` | `K` | `undo_kill` | `U` |
+| `multi_select` | `v` | `up` | `↑/k` |
+
+
+
 #### Filtering
 
 Press `/` to filter the session list incrementally. A query is split on
@@ -1300,13 +1397,15 @@ one-value-per-row panel cannot express and which are managed from the Accounts
 overlay instead, and the deprecated `nerd_font`, which `glyph_set` supersedes.
 `profiles`, `custom_commands` and `repo_scripts` are lists of records too: the panel
 gives `profiles` a record editor of its own under Profiles rather than a row, and the
-other two are edited in `config.json` directly. A test
+other two are edited in `config.json` directly. `keybindings` is the same case one
+step further — a whole keymap, and one a bad row would cost you the key you were
+editing with. A test
 (`config.TestReadmeDocumentsEveryConfigField`) fails the build if a new field is
 added without a row here.
 
 The panel groups these keys into ten categories — Sessions, Worktrees & git,
 Appearance, Session list, Notifications, Automation, Input, Projects, Updates, and
-Advanced — shown in the Category column below. The six keys with no panel row carry
+Advanced — shown in the Category column below. The seven keys with no panel row carry
 `—` instead; `profiles` names its editor.
 
 | Key | Category | Type | Default | Notes |
@@ -1317,6 +1416,7 @@ Advanced — shown in the Category column below. The six keys with no panel row 
 | `branch_prefix` | Worktrees & git | string | `"<user>/"` | prefix for created git branches |
 | `profiles` | Profiles | array | detected | named program configs ([Profiles](#profiles)) |
 | `custom_commands` | — | array | `[]` | your own verbs over the selected session: a key, a shell template, and where it runs. `!` opens the menu ([Custom commands](#custom-commands) documents every field) |
+| `keybindings` | — | object | `{}` | remap the keymap: action name → key, list of keys, or `"disabled"` ([Remapping keys](#remapping-keys)) |
 | `tmux_config_override` | Advanced | string | `""` | path to a custom tmux config for sessions |
 | `auto_attach` | Sessions | bool | `true` | attach to a new session as soon as it starts ([Auto-attach](#auto-attach)) |
 | `show_release_notes_after_update` | Updates | bool | `true` | "what's new" overlay once after an update |

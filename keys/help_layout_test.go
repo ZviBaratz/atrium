@@ -11,7 +11,7 @@ import (
 // without a row fails here, structurally, before any rendering happens.
 func TestHelpGroups_CoverEveryBinding(t *testing.T) {
 	covered := map[KeyName]bool{}
-	for _, g := range HelpGroups {
+	for _, g := range HelpGroups() {
 		for _, r := range g.Rows {
 			for _, k := range r.Keys {
 				covered[k] = true
@@ -34,7 +34,7 @@ func TestHelpGroups_CoverEveryBinding(t *testing.T) {
 // KeyScreensaver, whose absence from the registry is the easter egg's
 // exclusion contract, fails here if someone tries to document it.
 func TestHelpGroups_RefsResolve(t *testing.T) {
-	for _, g := range HelpGroups {
+	for _, g := range HelpGroups() {
 		for _, r := range g.Rows {
 			if len(r.Keys) == 0 {
 				t.Errorf("group %q: row %q has no Keys — desc-only rows can't be "+
@@ -54,17 +54,32 @@ func TestHelpGroups_RefsResolve(t *testing.T) {
 // multi-select row). The mention only counts as documentation if the prose
 // actually names the key — delete the words and this fails, which is what
 // keeps Mentions from becoming a silent exclusion list.
+//
+// The empty-label guard is not defensive padding: strings.Contains(desc, "") is
+// true for every desc, so an unbound action — which is exactly what a user's
+// "disabled" override produces — would turn this whole assertion into a
+// tautology rather than failing. Requiring a label first is what keeps it real.
 func TestHelpGroups_MentionsAreRendered(t *testing.T) {
-	for _, g := range HelpGroups {
+	checked := 0
+	for _, g := range HelpGroups() {
 		for _, r := range g.Rows {
 			for _, k := range r.Mentions {
 				label := GlobalKeyBindings[k].Help().Key
+				if label == "" {
+					t.Errorf("group %q: row %q mentions %v, which has no key label — the "+
+						"prose cannot name it and Contains would pass vacuously", g.Title, r.Desc, k)
+					continue
+				}
+				checked++
 				if !strings.Contains(r.Desc, label) {
 					t.Errorf("group %q: row %q mentions %v but its desc does not "+
 						"contain %q", g.Title, r.Desc, k, label)
 				}
 			}
 		}
+	}
+	if checked == 0 {
+		t.Error("no mention was checked — the layout has stopped using Mentions, or the walk is broken")
 	}
 }
 
@@ -90,7 +105,7 @@ func TestHelpGroups_LayerBothStateAttachedSide(t *testing.T) {
 			}
 		}
 	}
-	for _, g := range HelpGroups {
+	for _, g := range HelpGroups() {
 		for _, r := range g.Rows {
 			for _, k := range r.Keys {
 				phrase, ok := wantPhrase[k]
@@ -119,7 +134,7 @@ func TestHelpGroups_ReorderRowDescs(t *testing.T) {
 		KeyMoveGroupUp:   "move a whole group up / down",
 		KeyMoveAccountUp: "move an account cluster up / down",
 	}
-	for _, g := range HelpGroups {
+	for _, g := range HelpGroups() {
 		for _, r := range g.Rows {
 			for _, k := range r.Keys {
 				if desc, ok := want[k]; ok {

@@ -551,7 +551,9 @@ func (l *List) String() string {
 	// is empty, plus the single next action. This is *content*, not a duplicate of
 	// the bottom hint bar's keys, so it renders regardless of the hint_bar setting
 	// (#381) — a fresh user is never stranded on a silent screen. The `n` glyph
-	// comes from the registry so a rebind can't strand the call to action. Guard on
+	// comes from the registry through LabelOf, so a rebind can't strand the call to
+	// action and an unbound new says "(unbound)" rather than rendering "Press  to
+	// start your first agent" — a sentence with a hole where its key belongs. Guard on
 	// filterActive too: an empty-query filter still shows its filter bar above, and
 	// a no-match filter renders its own "no matches" line, so the CTA stays out of
 	// both filtered states.
@@ -561,7 +563,7 @@ func (l *List) String() string {
 		if innerW < 1 {
 			innerW = 1
 		}
-		nKey := keys.GlobalKeyBindings[keys.KeyNew].Help().Key
+		nKey := keys.LabelOf(keys.KeyNew)
 		title := lipgloss.NewStyle().Width(innerW).Align(lipgloss.Center).
 			Render(th.BoldStyle().Render("No sessions yet"))
 		action := lipgloss.NewStyle().Width(innerW).Align(lipgloss.Center).Render(

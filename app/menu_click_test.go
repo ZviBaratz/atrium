@@ -1,10 +1,13 @@
 package app
 
 import (
-	"github.com/ZviBaratz/atrium/internal/testutil"
 	"testing"
 	"time"
 
+	"github.com/ZviBaratz/atrium/internal/testutil"
+	"github.com/ZviBaratz/atrium/keys"
+
+	"charm.land/bubbles/v2/key"
 	tea "charm.land/bubbletea/v2"
 	zone "github.com/lrstanley/bubblezone/v2"
 	"github.com/stretchr/testify/require"
@@ -12,7 +15,8 @@ import (
 
 // synthKeyMsg must produce a message that stringifies back to the key it was
 // given: the dispatch path keys off msg.String(), so a mismatch would fire the
-// wrong action (or none). Covers every special key a bar can show, plus a rune.
+// wrong action (or none). A hand-picked spot check on the shapes that differ
+// most; TestEveryBarKeyIsSynthesizable below is the exhaustive one.
 func TestSynthKeyMsg_RoundTrips(t *testing.T) {
 	for _, k := range []string{"enter", "esc", "space", "ctrl+x", "shift+up", "shift+down", "n", "?", "q", "s"} {
 		msg, ok := synthKeyMsg(k)
@@ -83,4 +87,50 @@ func TestHintBarClick_MissIsInert(t *testing.T) {
 
 	h.Update(testutil.MouseClick(0, 0, tea.MouseLeft))
 	require.Equal(t, stateDefault, h.state, "a click off every hint entry must not open an overlay")
+}
+
+// Every key a bar can click through must be synthesizable, and this is the
+// direction nothing used to assert.
+//
+// A hint-bar click does not dispatch the action directly: it re-injects the
+// entry's key string and lets handleKeyPress route it (ui/menu.go's
+// primaryDispatchKey picks the string, app_msgs.go's synthKeyMsg builds the
+// message). So a key synthKeyMsg cannot spell is a bar entry that renders live
+// and does nothing when clicked — silent, and invisible to every other guard
+// here, because TestMenuBars_KeysExistInRegistry only checks the reverse
+// direction: that a bar names a key the registry has.
+//
+// Sourcing the set from the dispatch map rather than from a list is the point.
+// The bars can only name registry keys, so this covers them by construction and
+// keeps covering them when the keymap changes — including when a user's config
+// rebinds one, since the dispatch map is what an override rewrites.
+func TestEveryBarKeyIsSynthesizable(t *testing.T) {
+	check := func(k string) {
+		t.Helper()
+		msg, ok := synthKeyMsg(k)
+		if !ok {
+			t.Errorf("synthKeyMsg(%q) failed — a bar entry on that key would click dead", k)
+			return
+		}
+		if got := msg.String(); got != k {
+			t.Errorf("synthKeyMsg(%q) stringifies as %q — a click would fire the wrong action", k, got)
+		}
+	}
+	for k := range keys.GlobalKeyStringsMap {
+		check(k)
+	}
+	// The mode bars (filter / hints / multi-select / diff-comment) render from
+	// their own tables and never enter the dispatch map, so the loop above
+	// cannot see them. Entries carrying no key are label-only ranges like
+	// "a–z" that map to no single action and stay inert by design.
+	for _, table := range [][]key.Binding{
+		keys.FilterModeHints(), keys.HintModeHints(),
+		keys.VisualModeHints(), keys.DiffCommentModeHints(),
+	} {
+		for _, b := range table {
+			for _, k := range b.Keys() {
+				check(k)
+			}
+		}
+	}
 }

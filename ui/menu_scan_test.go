@@ -28,7 +28,7 @@ func TestMenuBars_KeysExistInRegistry(t *testing.T) {
 	for _, b := range keys.GlobalKeyBindings {
 		known[b.Help().Key] = true
 	}
-	for _, table := range [][]key.Binding{keys.FilterModeHints, keys.HintModeHints, keys.VisualModeHints} {
+	for _, table := range [][]key.Binding{keys.FilterModeHints(), keys.HintModeHints(), keys.VisualModeHints()} {
 		for _, b := range table {
 			known[b.Help().Key] = true
 		}

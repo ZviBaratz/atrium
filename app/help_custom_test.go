@@ -50,7 +50,7 @@ func TestHelpCustomSectionTruncatesLongDescriptions(t *testing.T) {
 	// Sliced at the section heading rather than filtered on a "! " prefix: the
 	// leader's own cheatsheet row in the Other group starts the same way, and
 	// counting it would make the assertion below pass on the wrong lines.
-	_, section, ok := strings.Cut(content, helpCustomHeading)
+	_, section, ok := strings.Cut(content, helpCustomHeading())
 	require.True(t, ok, "the custom section must be present")
 	var custom []string
 	for _, line := range strings.Split(section, "\n") {
@@ -102,7 +102,7 @@ func TestHelpCustomSectionTruncatesLongDescriptions(t *testing.T) {
 // TestHelpCustomSectionListsTheKeysAndOmitsItselfWhenEmpty is the auto-listing AC:
 // every configured command is documented where every other key is.
 func TestHelpCustomSectionListsTheKeysAndOmitsItselfWhenEmpty(t *testing.T) {
-	assert.NotContains(t, xansi.Strip(helpTypeGeneral{}.toContent()), helpCustomHeading,
+	assert.NotContains(t, xansi.Strip(helpTypeGeneral{}.toContent()), helpCustomHeading(),
 		"no commands configured, no section — an empty heading teaches nothing")
 
 	cmds := validCommands(t,
@@ -111,7 +111,7 @@ func TestHelpCustomSectionListsTheKeysAndOmitsItselfWhenEmpty(t *testing.T) {
 	)
 	content := xansi.Strip(helpTypeGeneral{commands: cmds}.toContent())
 
-	assert.Contains(t, content, helpCustomHeading,
+	assert.Contains(t, content, helpCustomHeading(),
 		"the section must say how to reach the keys it lists")
 	assert.Contains(t, content, "! g")
 	assert.Contains(t, content, "lazygit in this worktree")

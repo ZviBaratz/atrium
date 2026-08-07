@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/ZviBaratz/atrium/config"
+	"github.com/ZviBaratz/atrium/keys"
 	"github.com/ZviBaratz/atrium/log"
 	"github.com/ZviBaratz/atrium/session"
 	"github.com/ZviBaratz/atrium/ui"
@@ -222,6 +223,8 @@ func (m *home) handlePreviewTick(msg previewTickMsg) (tea.Model, tea.Cmd) {
 		m.flushCustomCommandProblems(),
 		// Likewise for the repo_scripts entries it refused (#389).
 		m.flushRepoScriptProblems(),
+		// Likewise for the keybindings overrides it refused (#376).
+		m.flushKeybindingProblems(),
 		// Likewise for a per-repo setup script that failed. Unlike the others this
 		// reads the fleet rather than a buffer — see flushSetupFailures.
 		m.flushSetupFailures(),
@@ -538,33 +541,29 @@ func (m *home) hintBarClickState() bool {
 
 // synthKeyMsg builds the tea.KeyMsg a hint-bar click re-injects to fire the
 // clicked entry's key. The dispatch path keys off msg.String(), so the returned
-// message must stringify back to k: the special keys the bars can show (enter,
-// esc, space, ctrl+x, the shift arrows) map to their KeyType, and every other
-// bar key is a single rune whose KeyRunes message stringifies to that rune. A
-// key it can't represent reports false, so an unrecognized entry is a no-op
-// rather than a wrong action.
+// message must stringify back to k — which is precisely keys.ParseKey's
+// contract, so the whole job is that call.
+//
+// It used to be a hand-written table of the chords the bars happened to show
+// (enter, esc, space, ctrl+x, the shift arrows). That covered every bar key by
+// luck rather than by construction, and nothing asserted it: a key the table did
+// not spell reported false, and the click silently did nothing. Deriving it from
+// the vocabulary instead makes the coverage total, and
+// TestEveryBarKeyIsSynthesizable now asserts it.
+//
+// A key it can't represent still reports false, so an unrecognized entry is a
+// no-op rather than a wrong action.
 func synthKeyMsg(k string) (tea.KeyPressMsg, bool) {
-	switch k {
-	case "enter":
-		return tea.KeyPressMsg{Code: tea.KeyEnter}, true
-	case "esc":
-		return tea.KeyPressMsg{Code: tea.KeyEsc}, true
-	case "space", " ":
-		// Both spellings: v2 reports the space bar as "space" where v1 said " ",
-		// and a stale bar entry must still resolve rather than silently no-op.
-		return tea.KeyPressMsg{Code: tea.KeySpace}, true
-	case "ctrl+x":
-		return tea.KeyPressMsg{Code: 'x', Mod: tea.ModCtrl}, true
-	case "shift+up":
-		return tea.KeyPressMsg{Code: tea.KeyUp, Mod: tea.ModShift}, true
-	case "shift+down":
-		return tea.KeyPressMsg{Code: tea.KeyDown, Mod: tea.ModShift}, true
-	default:
-		if r := []rune(k); len(r) == 1 {
-			return tea.KeyPressMsg{Code: r[0], Text: k}, true
-		}
+	// v2 reports the space bar as "space" where v1 said " ", and a stale bar
+	// entry must still resolve rather than silently no-op.
+	if k == " " {
+		k = "space"
+	}
+	msg, err := keys.ParseKey(k)
+	if err != nil {
 		return tea.KeyPressMsg{}, false
 	}
+	return msg, true
 }
 
 func (m *home) handleTargetValidityResult(msg targetValidityResultMsg) (tea.Model, tea.Cmd) {
@@ -679,13 +678,20 @@ func (m *home) handleAttachFinished(msg attachFinishedMsg) (tea.Model, tea.Cmd) 
 		// itself is fine, so still run the normal post-detach refresh below. (Safe to
 		// land here: the kill/cycle branches above need single-byte control reads that
 		// cooked mode can't deliver, so they're unreachable when rawModeFailed.)
-		m.showInfo("Raw mode couldn't be set for this attach, so Ctrl+Q detach (and " +
+		detach := keys.LabelOf(keys.KeyAttachToggle)
+		m.showInfo("Raw mode couldn't be set for this attach, so " + detach + " detach (and " +
 			"other in-session keys) didn't work — the attach may have looked stuck. " +
 			"Detach instead with tmux's own keys: press the prefix (Ctrl-B by default), " +
 			"then d — then Enter, since cooked mode buffers input until a newline, so the " +
 			"prefix may not register on its own. If this keeps happening, check that the " +
-			"terminal/SSH/Docker session provides a real TTY; `stty -ixon` can also stop " +
-			"Ctrl+Q being swallowed.")
+			// Ctrl+Q is a literal here on purpose, and is the one key in this modal that
+			// has to stay one: `stty -ixon` disables XOFF, which is Ctrl+Q specifically.
+			// Reading the detach binding would make the advice follow a rebind onto a
+			// chord flow control never touches — telling a user whose detach is ctrl+g to
+			// run a command that cannot affect it, and deleting the one true fact the
+			// sentence carried.
+			"terminal/SSH/Docker session provides a real TTY; if detach is still Ctrl+Q, " +
+			"`stty -ixon` can also stop it being swallowed.")
 	}
 	// Prompts the keeper definitively failed to deliver mid-attach: surface the loss
 	// like promptSendErrorMsg would, rather than leaving sessions silently

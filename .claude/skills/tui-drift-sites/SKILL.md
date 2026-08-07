@@ -58,7 +58,7 @@ cannot install it. Once per machine:
 
 `enabledPlugins` does the rest. Until you run it the skill simply will not resolve.
 
-## Adding a keybinding — 8 sites, all but one guarded
+## Adding a keybinding — 9 sites, all but one guarded
 
 At last count: **63 registry entries** and **52 dispatch-case lines**, with a dozen-odd
 drift guards in `keys/*_test.go` and **4** in `app/dispatch_coverage_test.go`.
@@ -74,12 +74,30 @@ a number no decision hangs on just taxes every unrelated test someone adds.
 |---|---|---|
 | 1 | `keys/keys.go` — the `KeyName` const, with a doc comment | `revive:exported` via `just lint`; `TestKeyNames_AllRegisteredOrDeliberatelyAbsent` |
 | 2 | `keys/registry.go` — the `Entry` (`WithKeys` + `WithHelp`, plus `Layer`/`DocOnly`) | `TestRegistry_NoDuplicateKeyStrings`, `TestRegistry_LayerTags`, `TestRegistry_DocumentedOnlyEntries` |
+| 2b | `keys/registry.go` — the `Entry`'s `Action`, its name in `config.json` (empty for a `DocOnly` entry) | `TestRegistry_EveryDispatchedEntryHasAnAction`, `TestRegistry_NoDuplicateActions`, `TestRegistry_ActionNamesAreSnakeCase`, `TestActionVocabulary_Golden` |
 | 3 | `keys/help_layout.go` — a `HelpRow` in `HelpGroups`, or a `Mentions` entry | `TestHelpGroups_CoverEveryBinding` (fails structurally, before any rendering) |
 | 4 | `app/app_update.go` — `case keys.KeyX:` in `dispatchAction` | `TestEveryRegistryActionHasADispatchCase` — see below |
 | 5 | `keys/registry_test.go` — the string→action pair in the golden inventory | itself (`TestGlobalKeyStringsMap_GoldenInventory`) |
-| 6 | `README.md` `#### Keybindings` — backtick-wrapped, in that section | `TestReadmeDocumentsEveryBinding` |
+| 6 | `README.md` — **two** tables: `#### Keybindings` and `##### Action names`, backtick-wrapped, each in its own section | `TestReadmeDocumentsEveryBinding` **and** `TestReadmeDocumentsEveryAction` |
 | 7 | `app/palette_gates.go` — a `paletteGates` entry (`global()` / `needsSelection` / `perSession`) | `TestEveryPaletteActionHasAGate` **and** `TestPaletteGatesAgreeWithDispatch` (both directions) |
 | 8 | `app/app_update.go` `keyAllowedWhileBusy` — *only if* it must work during an async action | manual |
+
+Site 2b is the newest and the one with the longest memory: an `Action` is the name a
+user's `config.json` binds to, so unlike every other identifier here it can be added to
+but never renamed. `TestActionVocabulary_Golden` is what makes a rename fail rather than
+silently stop honoring an override that used to work.
+
+Site 6's second table is the one that surprises: `##### Action names` is a **two-column**
+split of the whole vocabulary, so adding one action reflows every row after the midpoint
+rather than appending. Regenerate it from the existing pairs, and sort on the action name
+with the backticks stripped — `` `new_pick_project` `` sorts before `` `new` `` otherwise,
+because `_` precedes a backtick.
+
+**Prose that names the key is not on this list, because it should not exist.** A sentence
+like "press r to resume" reads the label from the registry (`keys.LabelOf`), and
+`TestNoProseNamesAKeyLiterally` (`app/prose_keys_test.go`) scans `app/`, `ui/` and
+`ui/overlay/` for the literal form. Its allowlist is only for an overlay's own keys, which
+no `Entry` owns and no override can move.
 
 Plus, situationally: `ui/menu.go`'s context hint sets (`defaultHintKeys` and
 friends) if the key should appear in the bar — guarded in the reverse direction
@@ -124,7 +142,7 @@ Two cross-layer pins worth knowing exist, because they fail in surprising places
 
 ## Adding a `Config` field — 4 sites, 3 guarded bidirectionally
 
-45 json-tagged fields on `Config` itself at last count.
+46 json-tagged fields on `Config` itself at last count.
 
 | # | Site | Guarded by |
 |---|---|---|

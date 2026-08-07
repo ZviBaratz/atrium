@@ -274,7 +274,7 @@ func TestFlushEarlierRecovery(t *testing.T) {
 		require.NotNil(t, cmd, "the toast schedules its own auto-hide")
 		assert.Equal(t, stateDefault, h.state, "a park must not pop a modal")
 		assert.Contains(t, h.menu.NoticeText(), "1 session parked earlier")
-		assert.Contains(t, h.menu.NoticeText(), "ctrl+r")
+		assert.Contains(t, h.menu.NoticeText(), "ctrl-r")
 		assert.NotContains(t, h.menu.NoticeText(), "stayed paused", "it was not this load that parked it")
 		assert.Empty(t, h.pendingEarlierRecovery.Sessions, "flushing clears the buffer")
 		assert.Nil(t, h.flushDeferredRecovery(), "so the 100ms preview tick cannot re-toast it forever")

@@ -5,6 +5,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/ZviBaratz/atrium/config"
+	"github.com/ZviBaratz/atrium/keys"
 	"github.com/ZviBaratz/atrium/session"
 	"github.com/ZviBaratz/atrium/ui"
 	"github.com/ZviBaratz/atrium/ui/overlay"
@@ -89,13 +90,29 @@ func overCapMessage(limit, active, adding int) string {
 	if adding > 1 {
 		return fmt.Sprintf(
 			"%s.\nSpawning %d more will queue, not parallelize, and drive up load.\n"+
-				"Create them anyway? (, to change the limit)",
-			hostCapacityLine(limit, active), adding)
+				"Create them anyway?%s",
+			hostCapacityLine(limit, active), adding, settingsLimitTail())
 	}
 	return fmt.Sprintf(
 		"%s.\nAnother will queue, not parallelize, and drive up load.\n"+
-			"Create it anyway? (, to change the limit)",
-		hostCapacityLine(limit, active))
+			"Create it anyway?%s",
+		hostCapacityLine(limit, active), settingsLimitTail())
+}
+
+// settingsLimitTail is the dialog's "(<key> to change the limit)" clause, and it
+// is empty when the settings action is unbound.
+//
+// The clause is an offer, not a description: it promises a key to press, and
+// handleConfirmState's deep link is armed on the same lookup, so with no key
+// there is nothing to press and nothing to honor. Interpolating LabelOf
+// unconditionally printed the placeholder instead — "Create it anyway?
+// ((unbound) to change the limit)", a dialog advertising a key that does not
+// exist.
+func settingsLimitTail() string {
+	if keys.PrimaryKey(keys.KeySettings) == "" {
+		return ""
+	}
+	return " (" + keys.LabelOf(keys.KeySettings) + " to change the limit)"
 }
 
 // resumeCapConfirm reports whether resuming n paused sessions must ask the user
@@ -176,8 +193,11 @@ func (m *home) resumeCapNotice(n int) string {
 // It deliberately does not teach ',': the create dialog owns the max_sessions escape
 // hatch (see resumeCapClause), and this line has room for exactly one key.
 //
-// That key is ctrl+r even for a single session, where r looks like the friendlier
-// advice. r acts on the SELECTED row (resumeSelectedKey) and a parked session is by
+// That key is resume_all (ctrl-r by default) even for a single session, where r looks
+// like the friendlier advice — and it is read from the registry rather than spelled, so
+// a rebind cannot leave the notice advertising a key that now does something else (a
+// swap of the two bulk keys would have had it pause the fleet it offered to resume).
+// r acts on the SELECTED row (resumeSelectedKey) and a parked session is by
 // construction the one that came after the budget ran out in stored order, so it is
 // never the startup selection — following "press r" would just earn the "only paused
 // sessions resume" refusal. Naming the row instead is not open either: a title is
@@ -189,7 +209,7 @@ func (m *home) resumeCapNotice(n int) string {
 // The tail is that terse because the width bound is real and both interpolated numbers
 // can reach three digits: the count is bounded only by the fleet, and the capacity is
 // DefaultSessionCap(), which is half the host's threads — 128 on a 256-thread machine.
-// The fuller "(ctrl+r resumes paused sessions)" measured 82 cells at that worst case and
+// The fuller "(ctrl-r resumes paused sessions)" measured 82 cells at that worst case and
 // would have had "paused sessions" truncated off an 80-column bar. The bound is asserted
 // at three digits for both, which is why the overflow was caught rather than shipped.
 func startupParkNotice(d session.DeferredRecovery) string {
@@ -198,9 +218,11 @@ func startupParkNotice(d session.DeferredRecovery) string {
 		return ""
 	}
 	if n == 1 {
-		return fmt.Sprintf("1 session stayed paused — host capacity is %d (ctrl+r resumes paused)", d.Limit)
+		return fmt.Sprintf("1 session stayed paused — host capacity is %d (%s resumes paused)",
+			d.Limit, keys.LabelOf(keys.KeyResumeAll))
 	}
-	return fmt.Sprintf("%d sessions stayed paused — host capacity is %d (ctrl+r resumes paused)", n, d.Limit)
+	return fmt.Sprintf("%d sessions stayed paused — host capacity is %d (%s resumes paused)",
+		n, d.Limit, keys.LabelOf(keys.KeyResumeAll))
 }
 
 // earlierParkNotice is startupParkNotice for a park a DIFFERENT process made while the
@@ -211,7 +233,7 @@ func startupParkNotice(d session.DeferredRecovery) string {
 // load the user just triggered; a spooled report describes a decision taken hours ago,
 // by a process they never saw, so the same words would misdate it. Everything else is
 // deliberately identical — the capacity rather than a live count, no session title, and
-// ctrl+r rather than r — for the reasons startupParkNotice argues above.
+// resume_all rather than resume — for the reasons startupParkNotice argues above.
 //
 // "earlier" is also what the width budget affords. It costs one cell more than "stayed
 // paused" (74 against 73 at the worst case both interpolations can reach), where
@@ -224,9 +246,11 @@ func earlierParkNotice(d session.DeferredRecovery) string {
 		return ""
 	}
 	if n == 1 {
-		return fmt.Sprintf("1 session parked earlier — host capacity is %d (ctrl+r resumes paused)", d.Limit)
+		return fmt.Sprintf("1 session parked earlier — host capacity is %d (%s resumes paused)",
+			d.Limit, keys.LabelOf(keys.KeyResumeAll))
 	}
-	return fmt.Sprintf("%d sessions parked earlier — host capacity is %d (ctrl+r resumes paused)", n, d.Limit)
+	return fmt.Sprintf("%d sessions parked earlier — host capacity is %d (%s resumes paused)",
+		n, d.Limit, keys.LabelOf(keys.KeyResumeAll))
 }
 
 // startupParkNoticeMaxWidth is the widest any park-notice spelling may render, in

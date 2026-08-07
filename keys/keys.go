@@ -165,13 +165,20 @@ const (
 	// KeyCustomCommands opens the menu of user-defined verbs from config.json's
 	// custom_commands section (#375), where each entry's own key runs it.
 	//
-	// It is a leader key rather than a set of top-level bindings, and that is
-	// structural rather than a matter of taste: GlobalKeyBindings, the layer tables
-	// and GlobalKeyStringsMap are all built by package-level initialisers in
-	// registry.go, so an Entry appended at config-load time would reach neither
-	// dispatch nor the help labels. One ordinary entry standing in for the whole
-	// user-defined set also makes shadowing a built-in structurally impossible.
-	// `!` is the vi/ranger/lf/mc idiom for shelling out.
+	// It is a leader key rather than a set of top-level bindings, and it stays one
+	// now for a narrower reason than it was introduced with. The original argument
+	// was that the derived maps are built by package-level initialisers, so an
+	// Entry appended at config-load time would reach neither dispatch nor the help
+	// labels — Apply (override.go) rewrites those maps before the program starts,
+	// so that half no longer holds.
+	//
+	// What does hold is the other half: one ordinary entry standing in for the
+	// whole user-defined set makes shadowing a built-in structurally impossible.
+	// Custom commands are validated on their own (customcmd.Validate) and know
+	// nothing about the keymap, so promoting them to top-level bindings would mean
+	// teaching them the reserved keys, the collision rules and the attach layer —
+	// the whole of override.go, for a second key namespace. `!` is the
+	// vi/ranger/lf/mc idiom for shelling out.
 	KeyCustomCommands
 
 	// KeyScreensaver shows the configured splash pattern full-window until any
@@ -204,8 +211,3 @@ const (
 	// unreferenced until #374 went looking; this is what stops the next pair.
 	NumKeyNames
 )
-
-// KillKey is the chord that triggers a kill from the session list. It mirrors the
-// in-session kill byte (ctrlX, session/tmux/tmux.go) so the same key tears a session
-// down whether you're on the list or attached to it.
-const KillKey = "ctrl+x"
