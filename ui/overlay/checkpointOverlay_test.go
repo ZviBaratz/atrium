@@ -509,19 +509,41 @@ func TestCheckpointFooter_ShedsMonotonically(t *testing.T) {
 	}
 }
 
-// The rewind reminder must survive the 80×24 floor, which is the width the ladder
-// exists for and the one the frame goldens render.
+// The rung widths the ladder's doc comment states, asserted rather than described.
+// A comment carrying six numbers is six chances to be a lie after the next reword,
+// and the 50 is the load-bearing one: it is exactly what an 80-column terminal
+// gives, so a rung that drifts a cell wider drops the whole default frame to the
+// rung below it. Ordering is pinned separately, for every ladder at once, by
+// TestHintLadders_OrderedWidestFirst.
+func TestCheckpointFooterHints_RungWidths(t *testing.T) {
+	want := []int{71, 64, 53, 50, 42, 24}
+	if len(checkpointFooterHints) != len(want) {
+		t.Fatalf("ladder has %d rungs, want %d — update the doc comment with it",
+			len(checkpointFooterHints), len(want))
+	}
+	for i, rung := range checkpointFooterHints {
+		if got := lipgloss.Width(rung); got != want[i] {
+			t.Errorf("rung %d is %d cells, want %d: %q", i, got, want[i], rung)
+		}
+	}
+}
+
+// Every clause must survive the 80×24 floor, which is the width the ladder exists
+// for and the one the frame goldens render. There is a rung that fits all of them
+// in exactly 50 cells, so nothing has to be shed at the default terminal size —
+// which matters most for `r reload`, since the alternative route to a re-read is
+// esc and a fresh `H`, and that pays another whole-transcript scan.
 //
-// The negative control is the point: at inner 50 a fixed truncated line, and the
-// 46-cell rung that replaced it, both produce a footer that fits on one line and
-// names keys — so every other assertion in this file passes over a footer that has
-// silently dropped the only instruction the timeline cannot work without.
-func TestCheckpointFooter_KeepsTheRewindReminderAtTheFloor(t *testing.T) {
+// The negative control is the point: at inner 50 a fixed truncated line, the
+// 46-cell rung that replaced it, and the 42-cell rung after that all produce a
+// footer that fits on one line and names keys — so every other assertion in this
+// file passes over a footer that has silently dropped an instruction.
+func TestCheckpointFooter_KeepsEveryClauseAtTheFloor(t *testing.T) {
 	const inner = 50 // 0.7 × 80 columns = a 56-cell box, less border and padding
 
 	got := checkpointFooter(inner)
 
-	for _, want := range []string{"Esc Esc", "esc close"} {
+	for _, want := range []string{"Esc Esc", "r reload", "esc close"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("the 80-column footer does not name %q: %q", want, got)
 		}

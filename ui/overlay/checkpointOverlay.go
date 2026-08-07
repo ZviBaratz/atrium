@@ -272,24 +272,27 @@ func (c *CheckpointOverlay) Render() string {
 	return box.Render(b.String())
 }
 
-// checkpointFooterHints is the footer's ladder, widest first (71, 64, 53, 42, 24
-// cells). One fixed string truncated would not do: on an 80-column terminal — the
-// 80×24 floor the frame goldens capture — the app sizes the box to 0.7×80 = 56, so
-// inner is 50 and truncating the full line dropped everything from `(then Esc Esc`
-// on, including `esc close`, the only key out of a state that hides the hint bar.
+// checkpointFooterHints is the footer's ladder, widest first (71, 64, 53, 50, 42,
+// 24 cells). One fixed string truncated would not do: on an 80-column terminal —
+// the 80×24 floor the frame goldens capture — the app sizes the box to 0.7×80 = 56,
+// so inner is 50 and truncating the full line dropped everything from `(then Esc
+// Esc` on, including `esc close`, the only key out of a state that hides the hint
+// bar.
 //
 // It sheds in order of what a user can find without being told, and the order is
 // the whole point rather than a detail: `j/k move` first, because arrows work too
-// and the cursor is visible; then `r reload`, because closing and reopening does
-// the same job; then the Esc-Esc reminder, last, because it is the one thing on
-// this surface nothing else teaches — the timeline is read-only, so an attach the
-// user does not know to follow with Esc Esc leads nowhere. `esc close` never goes.
+// and the cursor is visible; then `r reload`, because esc and a fresh `H` reach the
+// same place; then the Esc-Esc reminder, last, because it is the one thing on this
+// surface nothing else teaches — the timeline is read-only, so an attach the user
+// does not know to follow with Esc Esc leads nowhere. `esc close` never goes.
 //
-// Shedding `r reload` at 50 cells rather than compressing the reminder to buy room
-// for it is deliberate: the reminder only fits as a parenthetical on `enter attach`,
-// because that is what says *once you are in there, press Esc Esc*. Freestanding —
-// `· Esc Esc rewinds ·` — it reads as a key Atrium itself honours, which is the one
-// idea this whole surface exists to correct.
+// Wording compresses before a clause is shed, but only while the reminder stays a
+// parenthetical on `enter attach` — that is what says *once you are in there, press
+// Esc Esc*. Freestanding, `· Esc Esc rewinds ·` reads as a key Atrium itself
+// honours, which is the one idea this whole surface exists to correct. The 50-cell
+// rung exists because 50 is exactly what the default terminal gives, and dropping
+// `r reload` there is not free: re-opening pays another whole-transcript scan,
+// which is the same cost the attach path is careful not to charge twice.
 //
 // Which rung a width lands on is therefore load-bearing, not cosmetic: a rung that
 // restores a clause a wider rung had already shed reads as a ladder while
@@ -299,6 +302,7 @@ var checkpointFooterHints = []string{
 	"j/k move · enter attach (then Esc Esc to rewind) · r reload · esc close",
 	"j/k move · enter attach (Esc Esc rewinds) · r reload · esc close",
 	"enter attach (Esc Esc rewinds) · r reload · esc close",
+	"enter attach (then Esc Esc) · r reload · esc close",
 	"enter attach (Esc Esc rewinds) · esc close",
 	"enter attach · esc close",
 }
@@ -311,9 +315,8 @@ func checkpointFooter(inner int) string {
 	// that one does. SetSize floors the width at checkpointMinWidth, so inner is at
 	// least 34 against a 24-cell narrowest rung — but a floor is not a proof, the same
 	// reason layout() refuses to trust it. The width test is not redundant either:
-	// StringWithTail
-	// replaces a character at *exactly* its budget, so calling it unconditionally
-	// would corrupt the rung fitHint chose precisely because it fits.
+	// StringWithTail replaces a character at *exactly* its budget, so calling it
+	// unconditionally would corrupt the rung fitHint chose precisely because it fits.
 	if lipgloss.Width(hints) > inner {
 		return truncate.StringWithTail(hints, uint(inner), "…")
 	}

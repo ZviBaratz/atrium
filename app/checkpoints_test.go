@@ -229,6 +229,10 @@ func TestOpenCheckpoints_RefusesAnAmbiguousProjectDirectory(t *testing.T) {
 
 	first := startedClaudeSession(t, h, "shared-one", shared)
 	startedClaudeSession(t, h, "shared-two", shared)
+	// NotEmpty as well as Equal: two unstarted instances both key "" and compare
+	// equal, which is exactly the vacuous fixture this test exists to avoid. Without
+	// it the collision assertion would pass while the guard was never reached.
+	require.NotEmpty(t, first.ContextSourceKey(), "the fixture must resolve a project dir")
 	require.Equal(t, first.ContextSourceKey(), h.list.GetInstances()[2].ContextSourceKey(),
 		"the fixture must actually collide, or this asserts nothing")
 	h.list.SetSelectedInstance(1)
