@@ -283,6 +283,24 @@ type Instance struct {
 	// non-overlapping tick chain.
 	usageStamp transcript.Stamp
 
+	// cost is the session's estimated spend across every transcript in its
+	// project directory (#392), and costCursor is where its incremental reader
+	// resumes. Same cross-thread contract as the pair above: written on the main
+	// thread (SetCostMeta), read in the poll goroutine (ComputeCost).
+	//
+	// Also NOT persisted, but for the opposite reason to contextUsage. A
+	// cumulative total does not go stale — it is a fact about bytes on disk, and
+	// re-reading them reproduces it exactly — so the argument that retires an old
+	// occupancy reading does not apply. What is not persisted is the CURSOR, and
+	// the cost of that is one full re-read per session on the first tick after an
+	// Atrium restart: 315ms for the largest project directory in the development
+	// corpus (64.2MB), on its own poll goroutine, once. Persisting a map of byte
+	// offsets to buy that back would put a correctness-critical resume point in
+	// state.json, where a stale entry survives every restart; re-deriving it is
+	// cheap and cannot be wrong. Revisit if the fleet ever makes the burst visible.
+	cost       transcript.Cost
+	costCursor transcript.CostCursor
+
 	// endedAsking records that the last turn ended by asking the user something
 	// (#571), so a queued follow-up is not delivered as the answer to a question
 	// they never saw. Written only on the main thread (SetAskedMeta), like modelID.

@@ -1448,7 +1448,7 @@ Advanced — shown in the Category column below. The seven keys with no panel ro
 | `model_indicator` | Session list | string | `"on"` | per-session model chip: `on` / `off` |
 | `permission_indicator` | Session list | string | `"on"` | per-session permission-mode chip: `on` / `off` |
 | `effort_indicator` | Session list | string | `"on"` | per-session reasoning-effort chip: `on` / `off` |
-| `context_indicator` | Session list | string | `"percent"` | per-session context-window chip: `percent` / `count` / `bar` / `off` (any non-`off` mode falls back to a count when the model's window is unknown) |
+| `context_indicator` | Session list | string | `"percent"` | per-session transcript chip: `percent` / `count` / `bar` / `cost` / `off` (the occupancy modes fall back to a count when the model's window is unknown; `cost` is a list-rate estimate, not a bill) |
 | `session_sort` | Session list | string | `"creation"` | within-group order: `creation` / `status` |
 | `group_mode` | Session list | string | `"repo"` | list grouping: `repo` / `account` |
 | `smart_dispatch_auto` | Automation | bool | `false` | let a confident `i` match create the session without the form |

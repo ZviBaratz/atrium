@@ -692,23 +692,31 @@ func newSettingRows(cfg *config.Config) []settingRow {
 			},
 		},
 		{
-			key: "context_indicator", category: catSessionList, label: "Context chip", kind: kindEnum,
+			key: "context_indicator", category: catSessionList, label: "Session chip", kind: kindEnum,
 			scope:          scopeGlobal,
 			timing:         timingLive,
 			defaultDisplay: func() string { return (&config.Config{}).GetContextIndicator() },
 			reset:          func(c *config.Config) { c.ContextIndicator = "" },
-			summary:        "Per-session context-window usage; claude only.",
-			// Two lines, because the ? view's budget is 17 and the Options block
-			// takes six of them. It buys the two surprises — a chip that reads as a
-			// count, and one that is missing — not the reasoning behind either;
-			// that lives in ui/context.go and session/agent/window.go.
-			detail: "Shows a token count instead when the model's context window is " +
-				"unknown. Hidden when two sessions read one transcript directory.",
+			summary:        "What the per-session transcript chip shows; claude only.",
+			// ONE line, and the fifth option is why. The ? view's budget is 17 lines
+			// and this row sat exactly on it with four options and a two-line detail,
+			// so "cost" costs two: its own option row, and the detail line that had
+			// to go with it.
+			//
+			// What survived is the fact no gloss can carry — a chip that is missing
+			// entirely, which reads as a bug rather than as a rule. The two
+			// per-mode surprises moved into the glosses beside the modes they
+			// belong to: that occupancy degrades to a count, and that a dollar
+			// figure is an estimate rather than a bill. The reasoning behind all
+			// three lives in ui/context.go, session/agent/window.go and
+			// session/agent/pricing.go.
+			detail: "Hidden when two sessions read one transcript directory.",
 			gloss: map[string]string{
 				config.ContextIndicatorOff:     "no chip",
 				config.ContextIndicatorCount:   "tokens used, e.g. 283k",
-				config.ContextIndicatorPercent: "share of the model's window, e.g. 28%",
-				config.ContextIndicatorBar:     "a one-cell meter",
+				config.ContextIndicatorPercent: "window share, e.g. 28%; a count if unknown",
+				config.ContextIndicatorBar:     "a one-cell meter; a count if unknown",
+				config.ContextIndicatorCost:    "spend at list rates, e.g. ~$4.1 — not a bill",
 			},
 			get: func(c *config.Config) string {
 				return c.GetContextIndicator()
@@ -722,6 +730,7 @@ func newSettingRows(cfg *config.Config) []settingRow {
 					config.ContextIndicatorPercent,
 					config.ContextIndicatorCount,
 					config.ContextIndicatorBar,
+					config.ContextIndicatorCost,
 					config.ContextIndicatorOff,
 				}
 			},

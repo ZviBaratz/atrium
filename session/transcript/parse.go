@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"os"
 	"strings"
@@ -33,11 +34,25 @@ type rawEntry struct {
 	IsSidechain      bool            `json:"isSidechain"`
 	IsCompactSummary bool            `json:"isCompactSummary"`
 	Message          json.RawMessage `json:"message"`
+	// RequestID and Timestamp are read only by the cost reader (#392).
+	// RequestID is half the deduplication key — Claude Code writes one line per
+	// content block of a single API response, each carrying a full copy of the
+	// same usage object, so a sum over lines is a sum over content blocks.
+	// Timestamp picks the list rate in effect when the request was made, which
+	// matters because a model's price can change under a fixed id.
+	RequestID string `json:"requestId"`
+	Timestamp string `json:"timestamp"`
 }
 
 type rawMessage struct {
 	Content json.RawMessage `json:"content"`
 	Model   string          `json:"model"` // assistant entries only; see LatestModel
+	// ID is the other half of the cost reader's dedup key (see rawEntry.RequestID).
+	// The two agree exactly on every transcript measured — 983 distinct values of
+	// each across 1837 assistant lines, with no id spanning two requests — so
+	// either alone would do; both are used because the pair is the key #298's
+	// implementation notes specify and the cost of carrying it is one string.
+	ID string `json:"id"`
 	// Usage rides the same assistant entry as Model — extracting it costs no
 	// extra I/O beyond the tail scan LatestUsage already performs. A pointer, so
 	// "the entry carried no usage object" stays distinguishable from "it carried
@@ -47,13 +62,61 @@ type rawMessage struct {
 }
 
 // rawUsage is the token accounting Claude Code writes on every assistant entry.
-// Only the three input-side fields are decoded: their sum is the conversation's
-// context occupancy at that turn (see LatestUsage). output_tokens is excluded
-// deliberately — it is this turn's generation, not context the next turn carries.
+//
+// The three input-side fields are what LatestUsage sums for context occupancy;
+// output_tokens is excluded from THAT sum deliberately — it is this turn's
+// generation, not context the next turn carries — but it is decoded here because
+// the cost reader does need it, and at $25/MTok against $0.50/MTok for a cache
+// hit it is not a term anything can afford to drop.
+//
+// Everything below OutputTokens exists only for pricing (#392), and every one of
+// them may be absent: Claude Code builds older than ~2.1.19x omit CacheCreation,
+// ServerToolUse and Speed entirely, and the live fields are written as JSON null
+// on an API-error entry. All of them therefore zero-default into "no modifier",
+// which is the same path a value we do not recognize takes.
+//
+// service_tier is deliberately NOT decoded. It would select the Batch API's 50%
+// discount, and Claude Code never batches — it was "standard" on 24,711 of
+// 24,720 sampled entries and null on the rest, all of them API errors.
 type rawUsage struct {
 	InputTokens              int `json:"input_tokens"`
 	CacheReadInputTokens     int `json:"cache_read_input_tokens"`
 	CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
+	OutputTokens             int `json:"output_tokens"`
+
+	// CacheCreation splits CacheCreationInputTokens into its two priced tiers.
+	// The split is the whole reason to decode it: a 1-hour write costs 2x base
+	// input and a 5-minute write 1.25x, and Claude Code's subscription cache
+	// lifetime is the expensive one — 90.2% of cache-write tokens in the
+	// development corpus were 1h. Absent (an older build) means the reader falls
+	// back to the aggregate, which it prices at the 5m rate; see costTokens.
+	CacheCreation *rawCacheCreation `json:"cache_creation"`
+	// ServerToolUse carries the server-side tool charges that are billed per
+	// request rather than per token. Only web search costs money ($10 per 1,000);
+	// web fetch is free and is not decoded.
+	ServerToolUse *rawServerToolUse `json:"server_tool_use"`
+	// InferenceGeo is "us" on a request pinned to US-only inference, which costs
+	// 1.1x across every token category. Every entry in the development corpus
+	// recorded "not_available".
+	InferenceGeo string `json:"inference_geo"`
+	// Speed is "fast" on a fast-mode request, which is priced at double rates on
+	// the models that support it. Every entry in the development corpus recorded
+	// "standard", so this path is honored rather than observed.
+	Speed string `json:"speed"`
+}
+
+// rawCacheCreation is usage.cache_creation, the per-tier breakdown of
+// cache_creation_input_tokens. The two fields sum to the aggregate exactly —
+// 257,560,969 of 257,560,969 tokens across the sampled corpus.
+type rawCacheCreation struct {
+	Ephemeral5mInputTokens int `json:"ephemeral_5m_input_tokens"`
+	Ephemeral1hInputTokens int `json:"ephemeral_1h_input_tokens"`
+}
+
+// rawServerToolUse is usage.server_tool_use. web_fetch_requests is omitted
+// because the web fetch tool carries no charge beyond the tokens it produces.
+type rawServerToolUse struct {
+	WebSearchRequests int `json:"web_search_requests"`
 }
 
 type rawBlock struct {
@@ -139,6 +202,101 @@ func scanTail(ctx context.Context, path string, maxBytes int64, fn func(line []b
 		return false, err
 	}
 	return truncated, nil
+}
+
+// scanReadBuf is the read buffer scanFrom hands bufio.Reader. It matches the
+// starting buffer scanTail gives its Scanner; a longer line is assembled from
+// however many buffer-fulls it takes.
+const scanReadBuf = 64 * 1024
+
+// scanFrom streams the COMPLETE lines between offset and EOF to fn, and returns
+// the offset of the first byte it did not consume. It is the incremental sibling
+// of scanTail: where scanTail re-reads a fixed window from the end on every call,
+// scanFrom resumes where the last call stopped, which is what lets a cumulative
+// sum over an append-only file cost O(what was appended) rather than O(the file).
+//
+// The returned offset is the load-bearing part, and it is why this cannot be
+// written with bufio.Scanner. A transcript is appended to WHILE it is read, so
+// the last thing in the file is routinely half a JSON object. Scanner hands that
+// half back as a token at EOF, indistinguishable from a complete line; consuming
+// it would advance the offset past a line the reader never decoded, and the
+// remainder would never be seen again — a request silently missing from the
+// total, permanently. So the offset advances only across bytes that ended in a
+// newline, and a partial tail is simply left for the next call.
+//
+// A line past scannerBufMax is dropped rather than assembled — the same rule
+// scanLinesSkipOverlong applies for the same reason — but its bytes are still
+// counted, so the scan resumes cleanly after it.
+func scanFrom(ctx context.Context, path string, offset int64, fn func(line []byte)) (consumed int64, err error) {
+	if err := ctx.Err(); err != nil {
+		return offset, err
+	}
+
+	f, err := os.Open(path)
+	if err != nil {
+		return offset, err
+	}
+	defer func() { _ = f.Close() }()
+
+	if offset > 0 {
+		if _, err := f.Seek(offset, io.SeekStart); err != nil {
+			return offset, err
+		}
+	}
+
+	r := bufio.NewReaderSize(f, scanReadBuf)
+	consumed = offset
+
+	var (
+		line    []byte // fragments of the current line, when it spans buffers
+		pending int64  // bytes of the current line, complete or not
+		dropped bool   // the current line is past scannerBufMax
+	)
+	for {
+		if err := ctx.Err(); err != nil {
+			return consumed, err
+		}
+
+		frag, readErr := r.ReadSlice('\n')
+		pending += int64(len(frag))
+
+		if errors.Is(readErr, bufio.ErrBufferFull) {
+			// More of this line is coming. frag points into the reader's buffer and
+			// dies on the next read, so it has to be copied to survive.
+			if !dropped && int64(len(line)+len(frag)) > scannerBufMax {
+				dropped, line = true, nil
+			}
+			if !dropped {
+				line = append(line, frag...)
+			}
+			continue
+		}
+		if readErr != nil {
+			// EOF, or a real read failure. Either way the bytes accumulated since
+			// the last newline are an incomplete line: leave them unconsumed so the
+			// next call re-reads them once the writer has finished the line.
+			if errors.Is(readErr, io.EOF) {
+				readErr = nil
+			}
+			return consumed, readErr
+		}
+
+		// frag ends in '\n', so the line is complete and safe to consume.
+		consumed += pending
+		pending = 0
+		if !dropped {
+			body := frag[:len(frag)-1]
+			if len(line) == 0 {
+				// The common case: the whole line fit in one buffer, so fn can read it
+				// in place. fn must not retain it past the call, which every decoder
+				// here honors by unmarshalling into its own structs.
+				fn(body)
+			} else {
+				fn(append(line, body...))
+			}
+		}
+		line, dropped = line[:0], false
+	}
 }
 
 // scanLinesSkipOverlong is bufio.ScanLines with one difference: a line that fills

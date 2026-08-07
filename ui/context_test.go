@@ -35,12 +35,12 @@ func TestContextChip_Modes(t *testing.T) {
 		{contextModeBar, "▃"}, // 28% → rung 2 of 8
 		{"", "28%"},           // the zero value must behave like the documented default
 	} {
-		got, ok := contextChip(u, tc.mode, ramp)
+		got, ok := contextChip(u, transcript.Cost{}, tc.mode, ramp)
 		require.Truef(t, ok, "mode %q must render a chip", tc.mode)
 		assert.Equalf(t, tc.want, got, "mode %q", tc.mode)
 	}
 
-	got, ok := contextChip(u, contextModeOff, ramp)
+	got, ok := contextChip(u, transcript.Cost{}, contextModeOff, ramp)
 	assert.False(t, ok, "off must render nothing")
 	assert.Empty(t, got)
 }
@@ -59,7 +59,7 @@ func TestContextChip_UnknownModelDegradesToACount(t *testing.T) {
 	invented := transcript.Usage{ContextTokens: 283_000, Model: "claude-opus-99"}
 
 	for _, mode := range []string{contextModePercent, contextModeBar, contextModeCount, ""} {
-		got, ok := contextChip(invented, mode, ramp)
+		got, ok := contextChip(invented, transcript.Cost{}, mode, ramp)
 		require.Truef(t, ok, "mode %q must still render something for an unknown model", mode)
 		assert.Equalf(t, "283k", got,
 			"mode %q on an unknown model must degrade to a count, never to a percentage or a meter", mode)
@@ -68,7 +68,7 @@ func TestContextChip_UnknownModelDegradesToACount(t *testing.T) {
 	// And the colour must not claim urgency it cannot know about: 283k could be
 	// 28% of 1M or 141% of 200K, so an unknown ceiling stays dim at any count.
 	th := theme.Current()
-	assert.Equal(t, th.Palette.FgDim, contextColor(th, transcript.Usage{ContextTokens: 990_000, Model: "claude-opus-99"}),
+	assert.Equal(t, th.Palette.FgDim, contextColor(th, transcript.Usage{ContextTokens: 990_000, Model: "claude-opus-99"}, contextModePercent),
 		"an unknown ceiling must stay dim however large the count")
 }
 
@@ -84,7 +84,7 @@ func TestContextChip_AbsentWithoutAReading(t *testing.T) {
 		{ContextTokens: 0, Model: "<synthetic>"},     // an API-error entry that slipped through
 	} {
 		for _, mode := range []string{contextModePercent, contextModeCount, contextModeBar, ""} {
-			got, ok := contextChip(u, mode, ramp)
+			got, ok := contextChip(u, transcript.Cost{}, mode, ramp)
 			assert.Falsef(t, ok, "usage %+v mode %q must render no chip", u, mode)
 			assert.Empty(t, got)
 		}
@@ -135,13 +135,13 @@ func TestContextChip_BarFloorAndEmptyRamp(t *testing.T) {
 	ramp := []string{"a", "b", "c", "d", "e", "f", "g", "h"}
 	u := transcript.Usage{ContextTokens: 4_000, Model: "claude-opus-5"} // 0.4% of 1M
 
-	chip, ok := contextChip(u, contextModeBar, ramp)
+	chip, ok := contextChip(u, transcript.Cost{}, contextModeBar, ramp)
 	require.True(t, ok)
 	assert.Equal(t, "a", chip,
 		"a session with context in it must show the lowest rung, never nothing")
 
 	require.NotPanics(t, func() {
-		chip, ok = contextChip(u, contextModeBar, nil)
+		chip, ok = contextChip(u, transcript.Cost{}, contextModeBar, nil)
 	})
 	assert.True(t, ok)
 	assert.Equal(t, "4k", chip, "no meter to draw falls back to a count, like an unknown ceiling")
@@ -164,7 +164,7 @@ func TestContextColor_Thresholds(t *testing.T) {
 		{900_000, th.Palette.Danger, "at the danger threshold"},
 		{999_323, th.Palette.Danger, "the corpus peak"},
 	} {
-		assert.Equalf(t, tc.want, contextColor(th, opusUsage(tc.tokens)), tc.label)
+		assert.Equalf(t, tc.want, contextColor(th, opusUsage(tc.tokens), contextModePercent), tc.label)
 	}
 }
 
@@ -225,7 +225,7 @@ func TestContextChipWidthCeiling(t *testing.T) {
 			for _, tokens := range []int{1, 999, 1_000, 199_999, 283_000, 999_323, 1_000_000, 5_000_000} {
 				u := transcript.Usage{ContextTokens: tokens, Model: model}
 				for _, mode := range []string{contextModePercent, contextModeCount, contextModeBar, ""} {
-					chip, ok := contextChip(u, mode, ramp)
+					chip, ok := contextChip(u, transcript.Cost{}, mode, ramp)
 					if !ok {
 						continue
 					}
@@ -236,5 +236,203 @@ func TestContextChipWidthCeiling(t *testing.T) {
 			}
 		}
 		restore()
+	}
+}
+
+// TestCostChipWidthCeiling is the cost mode's half of the budget above, and it
+// is a genuine proof rather than a sample: the ladder saturates, so there IS a
+// widest output and it can be asserted over every rung, every boundary, and the
+// unreachable ends.
+//
+// The five cells are not this chip's own budget to spend. It shares the
+// occupancy chip's column, and the claim that #596's name budgets (28 typical,
+// 21 fully loaded) survive #392 unchanged is exactly the claim that no cost
+// figure is wider than the occupancy figure it replaces. This test is that claim.
+func TestCostChipWidthCeiling(t *testing.T) {
+	const maxChipCells = 5
+
+	// Both sides of every rung boundary, plus the ends. A rendering that grew a
+	// cell on its way between two rungs would show up here and nowhere else.
+	amounts := []float64{
+		costFloorUSD, 0.01, 0.42, 0.99, 0.994, 0.995, 1.0, 9.94, 9.95, 10.0,
+		99.9, 100.0, 999.4, 999.5, 1000.0, 4123.0, 99_499, costCeilingUSD,
+		1e6, 1e12,
+	}
+	for _, partial := range []bool{false, true} {
+		for _, usd := range amounts {
+			c := transcript.Cost{USD: usd}
+			if partial {
+				c.Unpriced = 1
+			}
+			chip, ok := costChip(c)
+			if !assert.Truef(t, ok, "costChip($%v) must render", usd) {
+				continue
+			}
+			assert.LessOrEqualf(t, runewidth.StringWidth(chip), maxChipCells,
+				"chip %q ($%v, partial=%v) exceeds the %d-cell budget", chip, usd, partial, maxChipCells)
+		}
+	}
+}
+
+// TestCostChipLadder pins what each rung actually renders, because the width
+// ceiling alone is satisfied by a chip that says nothing useful.
+//
+// The boundary pairs are the point. Each rung hands over at the value where the
+// next rung's rendering becomes the shorter one — 9.95 rounds to "10", not to
+// "10.0" — so the ladder never widens mid-range. Getting one of those wrong
+// costs a cell on a row that has none.
+func TestCostChipLadder(t *testing.T) {
+	for _, tc := range []struct {
+		usd  float64
+		want string
+	}{
+		{costFloorUSD, "~$.01"}, // the smallest chip there is
+		{0.42, "~$.42"},
+		{0.994, "~$.99"},
+		{0.995, "~$1.0"}, // hands over rather than rendering "1.00"
+		{4.1, "~$4.1"},
+		{9.94, "~$9.9"},
+		{9.95, "~$10"}, // hands over rather than rendering "10.0"
+		{263.335, "~$263"},
+		{999.4, "~$999"},
+		{999.5, "~$1k"}, // hands over rather than rendering "1000"
+		{4123, "~$4k"},
+		{99_499, "~$99k"},
+	} {
+		chip, ok := costChip(transcript.Cost{USD: tc.usd})
+		if !assert.Truef(t, ok, "costChip($%v)", tc.usd) {
+			continue
+		}
+		assert.Equalf(t, tc.want, chip, "costChip($%v)", tc.usd)
+	}
+}
+
+// TestCostChipMarksALowerBoundRatherThanGuessing covers the two ways an estimate
+// stops being one, and the single marker that covers both.
+//
+// This is the visible half of the exact-match price table's safety property. A
+// model the table does not carry contributes nothing to the total, so the figure
+// is too low — and the whole point of refusing to guess a rate is that the user
+// can SEE that, which is what ">" says and "~" would not. Saturation gets the
+// same marker because it makes the same statement: the truth is at least this.
+func TestCostChipMarksALowerBoundRatherThanGuessing(t *testing.T) {
+	complete, ok := costChip(transcript.Cost{USD: 4.1, Requests: 3})
+	assert.True(t, ok)
+	assert.Equal(t, "~$4.1", complete, "a fully priced total is an estimate")
+
+	partial, ok := costChip(transcript.Cost{USD: 4.1, Requests: 3, Unpriced: 1})
+	assert.True(t, ok)
+	assert.Equal(t, ">$4.1", partial,
+		"one unpriceable request makes the whole figure a floor, and it must say so")
+
+	saturated, ok := costChip(transcript.Cost{USD: 250_000, Requests: 3})
+	assert.True(t, ok)
+	assert.Equal(t, ">$99k", saturated,
+		"a figure too wide to print must become a true bound, not a rounded lie")
+
+	// Both at once compose into the same marker rather than needing a third.
+	both, ok := costChip(transcript.Cost{USD: 250_000, Unpriced: 5})
+	assert.True(t, ok)
+	assert.Equal(t, ">$99k", both)
+}
+
+// TestCostChipIsAbsentRatherThanZero pins the floor. A session that has spent
+// less than half a cent has no two-decimal figure to show that is not "$.00",
+// and a chip reading zero looks like a bug in a way an absent chip does not.
+func TestCostChipIsAbsentRatherThanZero(t *testing.T) {
+	for _, usd := range []float64{0, 0.0001, 0.004} {
+		chip, ok := costChip(transcript.Cost{USD: usd})
+		assert.Falsef(t, ok, "costChip($%v) rendered %q, want no chip", usd, chip)
+	}
+	// And the first amount that does clear it renders the smallest real figure.
+	chip, ok := costChip(transcript.Cost{USD: costFloorUSD})
+	assert.True(t, ok)
+	assert.Equal(t, "~$.01", chip)
+}
+
+// TestCostChipShowsABoundWhenNothingCouldBePriced is the floor's one exception,
+// and the case the whole ">" mechanism exists for.
+//
+// When EVERY request in a transcript is unpriceable the total is 0, so the floor
+// would suppress the chip — and a suppressed chip is indistinguishable from a
+// codex session or one that has not taken a turn. That is precisely the "the
+// feature looks broken" outcome the visible-degradation design is meant to
+// prevent, and it is the shape a model shipping ahead of the price table takes:
+// not a few odd entries among priced ones, but nothing priced at all.
+//
+// The partial case with a real total is asserted elsewhere; what is new here is
+// that a partial reading survives the floor rather than being filtered by it.
+func TestCostChipShowsABoundWhenNothingCouldBePriced(t *testing.T) {
+	chip, ok := costChip(transcript.Cost{USD: 0, Unpriced: 7})
+	require.True(t, ok,
+		"a session whose every request was unpriceable must still carry a chip — "+
+			"absent would read as \"no data\" when the truth is \"no prices\"")
+	assert.Equal(t, ">$.00", chip)
+
+	// A trace of priced spend under the floor takes the same path, for the same
+	// reason: the reading is a bound, not an estimate of nothing.
+	chip, ok = costChip(transcript.Cost{USD: 0.001, Unpriced: 1})
+	require.True(t, ok)
+	assert.Equal(t, ">$.00", chip)
+
+	// The floor still applies when there is nothing unpriced to disclose.
+	_, ok = costChip(transcript.Cost{USD: 0.001})
+	assert.False(t, ok, "a complete reading below the floor is still absent")
+}
+
+// TestContextChipModesReadTheirOwnValue is the guard on the shared column: each
+// mode must read the reading it is about and ignore the other, so a session
+// holding one and not the other renders correctly rather than falling back to
+// whichever field happens to be populated.
+//
+// It matters because the poll layer only ever fills ONE of them — the mode picks
+// which read is taken — so the other is always zero. A renderer that consulted
+// the wrong one would show no chip at all, and a test that passed both non-zero
+// values would never notice.
+func TestContextChipModesReadTheirOwnValue(t *testing.T) {
+	ramp := theme.Current().Glyphs.ContextRamp
+	occupancy := transcript.Usage{ContextTokens: 280_000, Model: "claude-opus-5"}
+	spend := transcript.Cost{USD: 4.1, Requests: 2}
+
+	t.Run("cost mode ignores an occupancy reading", func(t *testing.T) {
+		_, ok := contextChip(occupancy, transcript.Cost{}, contextModeCost, ramp)
+		assert.False(t, ok, "no spend recorded means no chip, whatever the context reading says")
+
+		chip, ok := contextChip(transcript.Usage{}, spend, contextModeCost, ramp)
+		assert.True(t, ok)
+		assert.Equal(t, "~$4.1", chip)
+	})
+
+	t.Run("occupancy modes ignore a cost reading", func(t *testing.T) {
+		for _, mode := range []string{contextModePercent, contextModeCount, contextModeBar, ""} {
+			_, ok := contextChip(transcript.Usage{}, spend, mode, ramp)
+			assert.Falsef(t, ok, "mode %q must not render a chip from a cost reading", mode)
+		}
+		chip, ok := contextChip(occupancy, transcript.Cost{}, contextModePercent, ramp)
+		assert.True(t, ok)
+		assert.Equal(t, "28%", chip)
+	})
+
+	t.Run("off renders nothing whatever is held", func(t *testing.T) {
+		_, ok := contextChip(occupancy, spend, contextModeOff, ramp)
+		assert.False(t, ok)
+	})
+}
+
+// TestContextColorCostIsAlwaysDim pins the deliberate absence of an attention
+// ladder on the cost chip.
+//
+// Occupancy has a ceiling, so 90% is a fact about the session. Spend has none —
+// $5 is alarming on one plan and rounding on another — so any threshold Atrium
+// picked would be a guess rendered as a warning. The fixture drives amounts that
+// WOULD be alarming to make the absence deliberate rather than untested.
+func TestContextColorCostIsAlwaysDim(t *testing.T) {
+	th := theme.Current()
+	for _, usd := range []float64{0.01, 4.1, 50, 500, 5000, 250_000} {
+		// The occupancy reading is deliberately one that would paint Danger, so
+		// this fails if the cost branch ever falls through to the percentage ladder.
+		u := transcript.Usage{ContextTokens: 999_000, Model: "claude-opus-5"}
+		assert.Equalf(t, th.Palette.FgDim, contextColor(th, u, contextModeCost),
+			"a $%v cost chip must stay dim", usd)
 	}
 }

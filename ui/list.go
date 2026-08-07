@@ -388,7 +388,7 @@ func (l *List) SetEffortIndicator(mode string) {
 	l.renderer.effortIndicator = mode
 }
 
-// SetContextIndicator sets the context-chip mode (see
+// SetContextIndicator sets the session chip mode (see
 // InstanceRenderer.contextIndicator). The app passes the normalized
 // config.GetContextIndicator value at startup and on settings changes.
 func (l *List) SetContextIndicator(mode string) {

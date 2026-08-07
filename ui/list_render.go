@@ -43,11 +43,13 @@ type InstanceRenderer struct {
 	// flag), so it tracks an in-session /effort switch and knows the level a session
 	// with no flag inherited; it is drawn whenever an effort is known.
 	effortIndicator string
-	// contextIndicator is the context-window chip mode
-	// (config.GetContextIndicator): "off" hides the chip, "count" / "percent" /
-	// "bar" pick its shape, and the zero value means "percent" so the renderer's
-	// default matches the config accessor's. The chip reflects the transcript
-	// reading (Instance.UsageInfo) and is absent whenever there is none.
+	// contextIndicator is the session chip mode (config.GetContextIndicator):
+	// "off" hides the chip, "count" / "percent" / "bar" pick the shape of a
+	// context-occupancy reading, "cost" swaps it for a spend estimate, and the
+	// zero value means "percent" so the renderer's default matches the config
+	// accessor's. The chip reflects a transcript reading — Instance.UsageInfo in
+	// the occupancy modes, Instance.CostInfo in "cost" — and is absent whenever
+	// there is none.
 	contextIndicator string
 	// hideAccountBadge suppresses the per-row Claude-account badge. Set by List.String
 	// when account grouping is visually active (mode == account and >1 account), so the
@@ -256,22 +258,33 @@ func (r *InstanceRenderer) Render(i *session.Instance, idx int, selected, marked
 			right1 = append(right1, p.seg(" "+permissionModeLabel(mode), p.agentColor(i)))
 		}
 	}
-	// Per-session context-window chip: how full the agent's context is, parsed
-	// from the transcript (Instance.UsageInfo). It comes LAST in the cluster,
-	// after the brand-coloured model/effort/permission phrase and just inside the
-	// agent icon, for two reasons: it keeps that phrase ("opus 5 max plan")
-	// reading as one unit, and this is the one chip whose colour tracks urgency
-	// (see contextColor), so it belongs at the edge the eye scans. Absent
-	// whenever there is no reading, so a non-claude session's row is unchanged.
+	// Per-session transcript chip: how full the agent's context is
+	// (Instance.UsageInfo), or what it has spent (Instance.CostInfo), depending
+	// on the configured mode. It comes LAST in the cluster, after the
+	// brand-coloured model/effort/permission phrase and just inside the agent
+	// icon, for two reasons: it keeps that phrase ("opus 5 max plan") reading as
+	// one unit, and in its occupancy modes this is the one chip whose colour
+	// tracks urgency (see contextColor), so it belongs at the edge the eye scans.
+	// Absent whenever there is no reading, so a non-claude session's row is
+	// unchanged.
+	//
+	// One column for both readings rather than two, because a ninth item in this
+	// cluster would take a further six cells out of the flex name segment on a
+	// row that has 21 to give. Sharing is not free either — the widest cost
+	// figure is 5 cells against an occupancy chip's 4 — but it is bounded by the
+	// budget the layout was already sized against, and it is paid only in the
+	// mode that asks for it. Measured: the name column holds 26 cells in cost
+	// mode against 28 in percent, and 19 against 21 on a fully loaded row. All
+	// four are asserted in ui/list_context_test.go.
 	//
 	// There is no suppression rule here. A reading that must not be shown —
 	// two sessions sharing one transcript directory, most of all — is one that
 	// must not be HELD either, so the poll layer refuses to take it (app's
-	// usagePolicy) and UsageInfo simply reports nothing. Hiding it at this level
-	// instead would leave the poisoned value in the instance, to reappear the
-	// moment the neighbour that poisoned it went away.
-	if chip, ok := contextChip(i.UsageInfo(), r.contextIndicator, th.Glyphs.ContextRamp); ok {
-		right1 = append(right1, p.seg(" "+chip, contextColor(th, i.UsageInfo())))
+	// usagePolicy) and UsageInfo/CostInfo simply report nothing. Hiding it at this
+	// level instead would leave the poisoned value in the instance, to reappear
+	// the moment the neighbour that poisoned it went away.
+	if chip, ok := contextChip(i.UsageInfo(), i.CostInfo(), r.contextIndicator, th.Glyphs.ContextRamp); ok {
+		right1 = append(right1, p.seg(" "+chip, contextColor(th, i.UsageInfo(), r.contextIndicator)))
 	}
 	// Agent-identity icon (which CLI the session runs), pinned to the far right so
 	// it sits in a fixed column — a right-edge counterpart to the left status

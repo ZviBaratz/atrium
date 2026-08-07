@@ -1199,6 +1199,12 @@ func TestSettingsOverlay_CycleContextIndicator(t *testing.T) {
 	o.HandleKeyPress(keyMsg("right"))
 	assert.Equal(t, config.ContextIndicatorBar, cfg.GetContextIndicator())
 
+	// The occupancy modes come first and cost sits between them and "off": it is
+	// the one mode that answers a different question, so it is not something a
+	// user arrows onto while comparing chip shapes.
+	o.HandleKeyPress(keyMsg("right"))
+	assert.Equal(t, config.ContextIndicatorCost, cfg.GetContextIndicator())
+
 	o.HandleKeyPress(keyMsg("right"))
 	assert.Equal(t, config.ContextIndicatorOff, cfg.GetContextIndicator())
 
