@@ -209,7 +209,26 @@ func LatestCost(ctx context.Context, program, workingDir string, prev CostCursor
 			state = costFileState{}
 			fallthrough
 		default:
-			if state, err = accumulate(ctx, path, state); err != nil {
+			state, err = accumulate(ctx, path, state)
+			if errors.Is(err, fs.ErrNotExist) {
+				// The same race the Stat above catches, one line later: the file went
+				// away between being listed and being opened. Skipping it there and
+				// aborting here would mean a transcript deleted mid-pass threw away
+				// every subtotal already gathered, so the next tick redid the whole
+				// cold read for a file that was simply gone.
+				//
+				// Uncovered by design rather than by omission: reaching this needs a
+				// deletion in the window between two syscalls, which no fixture can
+				// schedule. Its two neighbours ARE tested — a file absent at Stat time
+				// (skipped) and a file present but unreadable (fails the pass) — so
+				// what is untested here is the branch, not the policy it implements.
+				continue
+			}
+			if err != nil {
+				// Anything else — EACCES, EIO, a stale mount — is a failure to read
+				// something that may well be there. Skipping it would silently
+				// under-report the session's spend, which is worse than losing a pass:
+				// the caller keeps its previous total and the next tick retries.
 				return Cost{}, prev, err
 			}
 			state.Size, state.ModTime = info.Size(), info.ModTime().UnixNano()
@@ -345,7 +364,18 @@ func decodeCost(line []byte) (key string, req agent.Request, ok bool) {
 		return "", agent.Request{}, false
 	}
 
-	return msg.ID + "\x00" + raw.RequestID, agent.Request{
+	// An entry with neither identifier gets an EMPTY key, not a key made of two
+	// empty halves. The difference is not cosmetic: "\x00" is a perfectly good
+	// map-of-one key, so two consecutive id-less entries would compare equal and
+	// the second would be silently dropped as a duplicate. Over-counting one
+	// malformed entry beats losing a real request, and the empty key is what
+	// tells accumulate not to compare at all.
+	key = msg.ID + "\x00" + raw.RequestID
+	if msg.ID == "" && raw.RequestID == "" {
+		key = ""
+	}
+
+	return key, agent.Request{
 		Model:        msg.Model,
 		At:           parseStamp(raw.Timestamp),
 		Speed:        msg.Usage.Speed,

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"math"
 	"os"
 	"path/filepath"
@@ -484,5 +485,94 @@ func appendTo(t *testing.T, path, more string) {
 	}
 	if err := f.Close(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// TestLatestCost_CountsEntriesThatCarryNoIdentifiers is the dedup guard's other
+// direction, and it exists because the obvious implementation gets it backwards.
+//
+// The key is built as `message.id + "\x00" + requestId`. With both absent that is
+// "\x00" — a perfectly good key that two consecutive id-less entries would SHARE,
+// so the second would be discarded as a duplicate of the first and its spend
+// would vanish. The rule is the opposite: an entry with nothing to identify it is
+// counted, because over-counting one malformed entry beats losing a real request.
+//
+// Two entries, identical in every field including their absent ids. Both must
+// count.
+func TestLatestCost_CountsEntriesThatCarryNoIdentifiers(t *testing.T) {
+	const cwd = "/home/zvi/work"
+	anonymous := `{"type":"assistant","timestamp":"2026-08-07T12:00:00Z",` +
+		`"message":{"model":"claude-opus-5","content":[],` +
+		`"usage":{"input_tokens":0,"output_tokens":1000000,"cache_read_input_tokens":0,` +
+		`"cache_creation_input_tokens":0}}}` + "\n"
+	root, _ := costRoot(t, cwd, anonymous+anonymous)
+
+	got := readCost(t, cwd, root)
+	if got.Requests != 2 {
+		t.Errorf("Requests = %d, want 2 — two unidentifiable entries are two requests, "+
+			"not one deduplicated against an empty key", got.Requests)
+	}
+	if want := 50.0; !closeEnough(got.USD, want) {
+		t.Errorf("USD = %v, want %v", got.USD, want)
+	}
+}
+
+// TestLatestCost_AVanishedTranscriptDoesNotCostThePass covers the walk/Stat
+// race: costFiles lists a transcript that is gone by the time it is Stat'ed.
+//
+// The reader skips it, and the assertion that matters is that the SURVIVING
+// transcript's subtotal comes back on this pass rather than the next one —
+// aborting would discard everything gathered so far and force a full cold re-read
+// (up to 315ms on a large directory) because one file was deleted.
+func TestLatestCost_AVanishedTranscriptDoesNotCostThePass(t *testing.T) {
+	const cwd = "/home/zvi/work"
+	root := t.TempDir()
+	dir := filepath.Join(root, "projects", sanitizeCWD(cwd))
+	now := time.Now()
+	writeFileWithMtime(t, filepath.Join(dir, "keeper.jsonl"),
+		costLine("msg_k", "req_k", "claude-opus-5", 0, 1_000_000, 0, 0, 0), now)
+
+	ghost := filepath.Join(dir, "ghost.jsonl")
+	writeFileWithMtime(t, ghost, costLine("msg_g", "req_g", "claude-opus-5", 0, 1_000_000, 0, 0, 0), now)
+	if err := os.Remove(ghost); err != nil {
+		t.Fatal(err)
+	}
+
+	got := readCost(t, cwd, root)
+	if got.Requests != 1 || !closeEnough(got.USD, 25.0) {
+		t.Errorf("got %+v, want 1 request / $25 — a vanished transcript must not "+
+			"cost the pass every other transcript's subtotal", got)
+	}
+}
+
+// TestLatestCost_AnUnreadableTranscriptFailsThePass is the deliberate opposite of
+// the test above, and the pair is the whole policy: absent is skipped, unreadable
+// is not.
+//
+// A file that is there but cannot be read — EACCES, EIO, a stale mount — has
+// spend in it. Skipping it would return a total that is silently too low and
+// indistinguishable from a correct one, which is the worst outcome available.
+// Failing the pass instead leaves the caller holding its previous total (see
+// Instance.ComputeCost's ok=false) and the next tick retries.
+//
+// Note what is NOT tested here: the third case, where the file vanishes between
+// the Stat and the Open. LatestCost skips that one, matching the first test
+// rather than this one, but it is a genuine race with no deterministic fixture —
+// documented at its branch rather than covered.
+func TestLatestCost_AnUnreadableTranscriptFailsThePass(t *testing.T) {
+	const cwd = "/home/zvi/work"
+	root, path := costRoot(t, cwd, costLine("msg_1", "req_1", "claude-opus-5", 0, 1_000_000, 0, 0, 0))
+
+	if err := os.Chmod(path, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(path, 0o644) })
+
+	_, _, err := LatestCost(context.Background(), "claude", cwd, CostCursor{}, Options{Root: root})
+	if err == nil {
+		t.Fatal("an unreadable transcript must fail the pass, not be silently omitted from the total")
+	}
+	if errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("err = %v, want a permission error rather than a not-exist one", err)
 	}
 }

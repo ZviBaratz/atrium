@@ -74,11 +74,16 @@ const (
 //
 // Note the shape: a switch with a default, like GetNotifications, NOT the
 // "off only when set explicitly" form the three on/off indicators above use.
-// The difference matters. With four modes, folding unknown values into the
+// The difference matters. With five modes, folding unknown values into the
 // first constant would make a typo silently disable the chip, and a feature
 // that vanishes without explanation is the one failure mode a settings typo
 // must not have. Defaulting to the documented mode instead means a bad value
 // costs the user their preference, not the feature.
+//
+// Every mode in the case list is pinned by TestGetContextIndicator, because a
+// mode missing from it normalizes to "percent" and becomes unreachable from
+// config.json — a whole feature switched off by one absent constant, with a
+// green suite.
 func (c *Config) GetContextIndicator() string {
 	if c == nil {
 		return ContextIndicatorPercent

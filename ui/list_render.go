@@ -268,9 +268,14 @@ func (r *InstanceRenderer) Render(i *session.Instance, idx int, selected, marked
 	// Absent whenever there is no reading, so a non-claude session's row is
 	// unchanged.
 	//
-	// One column for both readings, which is what keeps the name budget where
-	// #596 left it: a ninth item in this cluster would take six more cells out of
-	// the flex name segment, and the fully-loaded row has 21 to give.
+	// One column for both readings rather than two, because a ninth item in this
+	// cluster would take a further six cells out of the flex name segment on a
+	// row that has 21 to give. Sharing is not free either — the widest cost
+	// figure is 5 cells against an occupancy chip's 4 — but it is bounded by the
+	// budget the layout was already sized against, and it is paid only in the
+	// mode that asks for it. Measured: the name column holds 26 cells in cost
+	// mode against 28 in percent, and 19 against 21 on a fully loaded row. All
+	// four are asserted in ui/list_context_test.go.
 	//
 	// There is no suppression rule here. A reading that must not be shown —
 	// two sessions sharing one transcript directory, most of all — is one that

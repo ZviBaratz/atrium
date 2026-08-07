@@ -28,7 +28,10 @@ import (
 //
 // One column for both is a width decision, and the reason is in list_render.go:
 // a ninth chip on line 1 would come straight out of the flex name segment, which
-// has 21 cells on a fully loaded row.
+// has 21 cells on a fully loaded row. Sharing still costs the name two of them
+// in cost mode — 5 cells for "~$4.1" where "28%" needs 3 — which is within the
+// 5-cell ceiling the layout was sized against but is NOT free, so both budgets
+// are measured and asserted rather than assumed equal.
 
 // Context-chip modes. These mirror config.ContextIndicator* verbatim so the app
 // can pass GetContextIndicator's normalized value straight through and ui needs
@@ -202,8 +205,18 @@ const (
 
 // costChip renders a spend estimate, and reports false when there is nothing
 // worth showing. See contextChip for why absent beats a zero.
+//
+// The floor does NOT apply to a partial reading, and that exception is the whole
+// point rather than an edge case. When every request in a transcript is
+// unpriceable — which is exactly what a model shipping ahead of the price table
+// looks like — the total is 0 and the floor would suppress the chip entirely,
+// leaving a session indistinguishable from one running codex or one that has not
+// taken a turn. That is the failure the ">" exists to prevent, so it must
+// survive the case that causes it: ">$.00" says "there is spend here and Atrium
+// could not price any of it", which is both true and visibly different from
+// nothing at all.
 func costChip(c transcript.Cost) (string, bool) {
-	if c.USD < costFloorUSD {
+	if c.USD < costFloorUSD && !c.Partial() {
 		return "", false
 	}
 	prefix := costEstimate

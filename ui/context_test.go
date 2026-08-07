@@ -350,6 +350,36 @@ func TestCostChipIsAbsentRatherThanZero(t *testing.T) {
 	assert.Equal(t, "~$.01", chip)
 }
 
+// TestCostChipShowsABoundWhenNothingCouldBePriced is the floor's one exception,
+// and the case the whole ">" mechanism exists for.
+//
+// When EVERY request in a transcript is unpriceable the total is 0, so the floor
+// would suppress the chip — and a suppressed chip is indistinguishable from a
+// codex session or one that has not taken a turn. That is precisely the "the
+// feature looks broken" outcome the visible-degradation design is meant to
+// prevent, and it is the shape a model shipping ahead of the price table takes:
+// not a few odd entries among priced ones, but nothing priced at all.
+//
+// The partial case with a real total is asserted elsewhere; what is new here is
+// that a partial reading survives the floor rather than being filtered by it.
+func TestCostChipShowsABoundWhenNothingCouldBePriced(t *testing.T) {
+	chip, ok := costChip(transcript.Cost{USD: 0, Unpriced: 7})
+	require.True(t, ok,
+		"a session whose every request was unpriceable must still carry a chip — "+
+			"absent would read as \"no data\" when the truth is \"no prices\"")
+	assert.Equal(t, ">$.00", chip)
+
+	// A trace of priced spend under the floor takes the same path, for the same
+	// reason: the reading is a bound, not an estimate of nothing.
+	chip, ok = costChip(transcript.Cost{USD: 0.001, Unpriced: 1})
+	require.True(t, ok)
+	assert.Equal(t, ">$.00", chip)
+
+	// The floor still applies when there is nothing unpriced to disclose.
+	_, ok = costChip(transcript.Cost{USD: 0.001})
+	assert.False(t, ok, "a complete reading below the floor is still absent")
+}
+
 // TestContextChipModesReadTheirOwnValue is the guard on the shared column: each
 // mode must read the reading it is about and ignore the other, so a session
 // holding one and not the other renders correctly rather than falling back to

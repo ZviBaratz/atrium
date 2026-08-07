@@ -23,12 +23,14 @@ func TestGetContextIndicator(t *testing.T) {
 		{ContextIndicatorPercent, ContextIndicatorPercent},
 		{ContextIndicatorCount, ContextIndicatorCount},
 		{ContextIndicatorBar, ContextIndicatorBar},
+		{ContextIndicatorCost, ContextIndicatorCost},
 		{ContextIndicatorOff, ContextIndicatorOff},
 		// Near-misses a hand edit actually produces: none may resolve to "off".
 		{"Off", ContextIndicatorPercent},
 		{"on", ContextIndicatorPercent},
 		{"percentage", ContextIndicatorPercent},
 		{" off", ContextIndicatorPercent},
+		{"spend", ContextIndicatorPercent},
 	} {
 		c := &Config{ContextIndicator: tc.value}
 		assert.Equal(t, tc.want, c.GetContextIndicator(), "ContextIndicator=%q", tc.value)
