@@ -142,6 +142,19 @@ type instanceMetaResult struct {
 	// switched off). It is not the same as usageOK == false, which only means
 	// "nothing new" — the main thread drops the stored value for it.
 	usageClear bool
+	// cost / costCursor carry a transcript spend estimate (#392), with costOK and
+	// costClear as the exact analogues of the pair above. Its own cursor rather
+	// than a stamp, because it resumes from a byte offset per file instead of
+	// re-reading a window: see transcript.CostCursor.
+	//
+	// Exactly one of the usage/cost pairs is ever populated on a tick — the chip
+	// mode decides which read is taken — so the other arrives clear. That is why
+	// they are two independent quartets and not one tagged union: the CLEAR verdict
+	// has to be expressible for whichever reading is not being taken.
+	cost       transcript.Cost
+	costCursor transcript.CostCursor
+	costOK     bool
+	costClear  bool
 	// asked / askedStamp carry the #571 question check — whether the turn that just
 	// ended did so by asking the user something; askedOK marks a result worth applying
 	// (ComputeAsked returns ok=false for non-claude, unavailable, or unchanged
@@ -700,10 +713,21 @@ func collectMetadata(ctx context.Context, poll []*session.Instance, selected *se
 			// open, a streaming one a second ≤128KB tail parse. usagePolicy decides
 			// whether it is read AT ALL — a chip switched off does no work, and an
 			// ambiguous transcript source is not merely hidden but never stored.
-			if usage.allows(instance) {
+			if usage.allowsContext(instance) {
 				r.usage, r.usageStamp, r.usageOK = instance.ComputeUsage()
 			} else {
 				r.usageClear = true
+			}
+			// Spend is cursor-gated rather than stamp-gated, because it sums the
+			// whole project directory instead of reading one file's tail: an idle
+			// session costs one ReadDir plus one Stat per transcript and opens
+			// nothing, and a growing one reads only the bytes that were appended.
+			// Same policy gate, and it is mutually exclusive with the reading above
+			// — the two chips share a column, so only one of them is ever paid for.
+			if usage.allowsCost(instance) {
+				r.cost, r.costCursor, r.costOK = instance.ComputeCost()
+			} else {
+				r.costClear = true
 			}
 			// Live permission mode reads the value Poll just detected from the
 			// footer — no extra capture; only applied when it changed.
@@ -788,6 +812,12 @@ func (m *home) applyMetadataResults(results []instanceMetaResult, emit bool) []t
 			r.instance.ClearUsage()
 		case r.usageOK:
 			r.instance.SetUsageMeta(r.usage, r.usageStamp)
+		}
+		switch {
+		case r.costClear:
+			r.instance.ClearCost()
+		case r.costOK:
+			r.instance.SetCostMeta(r.cost, r.costCursor)
 		}
 		if r.askedOK {
 			r.instance.SetAskedMeta(r.asked, r.askedStamp)

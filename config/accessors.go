@@ -61,6 +61,11 @@ const (
 	ContextIndicatorCount   = "count"
 	ContextIndicatorPercent = "percent"
 	ContextIndicatorBar     = "bar"
+	// ContextIndicatorCost shows estimated spend instead of context occupancy
+	// (#392). It shares the chip's one column rather than claiming a ninth item
+	// on a row that has none to give, which is why it is a mode here and not a
+	// Config field of its own.
+	ContextIndicatorCost = "cost"
 )
 
 // GetContextIndicator returns the normalized context-chip mode: a recognized
@@ -79,7 +84,7 @@ func (c *Config) GetContextIndicator() string {
 		return ContextIndicatorPercent
 	}
 	switch c.ContextIndicator {
-	case ContextIndicatorOff, ContextIndicatorCount, ContextIndicatorBar:
+	case ContextIndicatorOff, ContextIndicatorCount, ContextIndicatorBar, ContextIndicatorCost:
 		return c.ContextIndicator
 	default:
 		return ContextIndicatorPercent

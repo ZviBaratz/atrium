@@ -256,22 +256,28 @@ func (r *InstanceRenderer) Render(i *session.Instance, idx int, selected, marked
 			right1 = append(right1, p.seg(" "+permissionModeLabel(mode), p.agentColor(i)))
 		}
 	}
-	// Per-session context-window chip: how full the agent's context is, parsed
-	// from the transcript (Instance.UsageInfo). It comes LAST in the cluster,
-	// after the brand-coloured model/effort/permission phrase and just inside the
-	// agent icon, for two reasons: it keeps that phrase ("opus 5 max plan")
-	// reading as one unit, and this is the one chip whose colour tracks urgency
-	// (see contextColor), so it belongs at the edge the eye scans. Absent
-	// whenever there is no reading, so a non-claude session's row is unchanged.
+	// Per-session transcript chip: how full the agent's context is
+	// (Instance.UsageInfo), or what it has spent (Instance.CostInfo), depending
+	// on the configured mode. It comes LAST in the cluster, after the
+	// brand-coloured model/effort/permission phrase and just inside the agent
+	// icon, for two reasons: it keeps that phrase ("opus 5 max plan") reading as
+	// one unit, and in its occupancy modes this is the one chip whose colour
+	// tracks urgency (see contextColor), so it belongs at the edge the eye scans.
+	// Absent whenever there is no reading, so a non-claude session's row is
+	// unchanged.
+	//
+	// One column for both readings, which is what keeps the name budget where
+	// #596 left it: a ninth item in this cluster would take six more cells out of
+	// the flex name segment, and the fully-loaded row has 21 to give.
 	//
 	// There is no suppression rule here. A reading that must not be shown —
 	// two sessions sharing one transcript directory, most of all — is one that
 	// must not be HELD either, so the poll layer refuses to take it (app's
-	// usagePolicy) and UsageInfo simply reports nothing. Hiding it at this level
-	// instead would leave the poisoned value in the instance, to reappear the
-	// moment the neighbour that poisoned it went away.
-	if chip, ok := contextChip(i.UsageInfo(), r.contextIndicator, th.Glyphs.ContextRamp); ok {
-		right1 = append(right1, p.seg(" "+chip, contextColor(th, i.UsageInfo())))
+	// usagePolicy) and UsageInfo/CostInfo simply report nothing. Hiding it at this
+	// level instead would leave the poisoned value in the instance, to reappear
+	// the moment the neighbour that poisoned it went away.
+	if chip, ok := contextChip(i.UsageInfo(), i.CostInfo(), r.contextIndicator, th.Glyphs.ContextRamp); ok {
+		right1 = append(right1, p.seg(" "+chip, contextColor(th, i.UsageInfo(), r.contextIndicator)))
 	}
 	// Agent-identity icon (which CLI the session runs), pinned to the far right so
 	// it sits in a fixed column — a right-edge counterpart to the left status

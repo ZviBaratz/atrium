@@ -27,6 +27,7 @@ const (
 	contextModeCount   = "count"
 	contextModePercent = "percent"
 	contextModeBar     = "bar"
+	contextModeCost    = "cost"
 )
 
 // Attention thresholds for the chip's colour, as percentages of the window.
@@ -40,15 +41,26 @@ const (
 	contextDangerPct = 90
 )
 
-// contextChip returns the chip text for one reading under mode, and whether
+// contextChip returns the chip text for one session under mode, and whether
 // there is anything to draw at all. It never returns a zero: absent is the
 // answer for a session with no reading, so a non-Claude profile, an unparsable
 // transcript, or a session that has not taken a turn simply carries no chip
-// rather than a misleading "0%".
+// rather than a misleading "0%" or "$0.00".
+//
+// It takes both readings because the modes share one column. Only one of them is
+// ever populated on a given tick — the poll layer reads whichever the mode calls
+// for and clears the other — so the unused argument is the zero value, not a
+// stale value being ignored.
 //
 // ramp supplies the one-cell meter for `bar` mode (theme.Glyphs.ContextRamp).
-func contextChip(u transcript.Usage, mode string, ramp []string) (string, bool) {
-	if u.ContextTokens <= 0 || mode == contextModeOff {
+func contextChip(u transcript.Usage, c transcript.Cost, mode string, ramp []string) (string, bool) {
+	if mode == contextModeOff {
+		return "", false
+	}
+	if mode == contextModeCost {
+		return costChip(c)
+	}
+	if u.ContextTokens <= 0 {
 		return "", false
 	}
 	window, known := agent.ClaudeContextWindow(u.Model)
@@ -121,7 +133,15 @@ func contextLevel(pct, rungs int) int {
 //
 // A count (unknown model) always stays dim: without a ceiling there is nothing
 // to be near, and a raw number must not imply urgency it cannot know about.
-func contextColor(th *theme.Theme, u transcript.Usage) theme.Color {
+//
+// So does every cost chip, for the same reason written larger. Occupancy has a
+// ceiling, so "three quarters gone" is a fact about the session. Spend has none:
+// $5 is alarming on one plan and rounding on another, and any threshold Atrium
+// picked would be a guess dressed as a warning. The number is the whole signal.
+func contextColor(th *theme.Theme, u transcript.Usage, mode string) theme.Color {
+	if mode == contextModeCost {
+		return th.Palette.FgDim
+	}
 	window, known := agent.ClaudeContextWindow(u.Model)
 	if !known {
 		return th.Palette.FgDim
@@ -133,6 +153,76 @@ func contextColor(th *theme.Theme, u transcript.Usage) theme.Color {
 		return th.Palette.Attention
 	default:
 		return th.Palette.FgDim
+	}
+}
+
+// Cost-chip bounds. Both exist to keep the chip inside the same five cells the
+// occupancy modes fit in, because it shares their column.
+const (
+	// costFloorUSD is the smallest estimate worth a chip. Below half a cent there
+	// is no two-decimal figure to print that is not "$.00", and a chip that reads
+	// as zero is worse than no chip — absent already means "nothing to see here",
+	// and it means it without looking broken. Unreachable in practice: a single
+	// opening turn on Opus 5 costs several cents.
+	costFloorUSD = 0.005
+	// costCeilingUSD is where the ladder saturates. "99k" plus a prefix is the
+	// widest thing that fits, so above this the chip stops being an estimate and
+	// becomes a bound — which is why saturation forces the ">" prefix rather than
+	// printing a rounded number that would be false. Reaching it would take on the
+	// order of 200 billion cache-read tokens in one session.
+	costCeilingUSD = 99_500
+)
+
+// Cost-chip prefixes, one cell each and both plain ASCII, so the chip needs no
+// Glyphs entry and no nerd/plain/ascii ladder.
+const (
+	// costEstimate marks a figure priced from a complete transcript: everything
+	// was recognized, and the arithmetic is Claude Code's own /usage arithmetic.
+	// It is never "the" cost — list rates are not a subscription's bill and may
+	// not be an API account's either — hence a tilde on every single one.
+	costEstimate = "~"
+	// costAtLeast marks a figure that is a LOWER BOUND, for either of two
+	// reasons: something in the transcript could not be priced (an unrecognized
+	// model, fast mode on a model with no published fast rate), or the true figure
+	// is past costCeilingUSD and would not fit. Both make ">" true, which is why
+	// one marker covers both and why they compose without a third case.
+	costAtLeast = ">"
+)
+
+// costChip renders a spend estimate, and reports false when there is nothing
+// worth showing. See contextChip for why absent beats a zero.
+func costChip(c transcript.Cost) (string, bool) {
+	if c.USD < costFloorUSD {
+		return "", false
+	}
+	prefix := costEstimate
+	if c.Partial() || c.USD >= costCeilingUSD {
+		prefix = costAtLeast
+	}
+	return prefix + "$" + costFigure(c.USD), true
+}
+
+// costFigure renders a dollar amount in AT MOST three cells, which is the whole
+// budget once the prefix and the "$" have taken one each.
+//
+// The rungs are chosen so each one keeps the digits that can change a decision at
+// its magnitude and drops the ones that cannot: cents matter under a dollar,
+// tenths under ten, and nothing below the dollar matters above that. Every
+// boundary is stated as the value at which the NEXT rung's rendering becomes the
+// shorter one (9.95 rounds to "10", not "10.0"), so the ladder is continuous —
+// no amount renders wider than three cells on its way between two rungs.
+func costFigure(usd float64) string {
+	switch {
+	case usd >= costCeilingUSD:
+		return "99k"
+	case usd < 0.995:
+		return fmt.Sprintf(".%02d", int(usd*100+0.5))
+	case usd < 9.95:
+		return strconv.FormatFloat(usd, 'f', 1, 64)
+	case usd < 999.5:
+		return strconv.Itoa(int(usd + 0.5))
+	default:
+		return strconv.Itoa(int(usd/1000+0.5)) + "k"
 	}
 }
 

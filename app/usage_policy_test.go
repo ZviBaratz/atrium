@@ -93,13 +93,13 @@ func startedFixture(t *testing.T, specs ...fixtureSpec) []*session.Instance {
 	return loaded
 }
 
-// allow is newUsagePolicy(enabled) + allows, for the common "does this session
-// get to read?" question.
+// allow is newUsagePolicy(an occupancy mode) + allowsContext, for the common
+// "does this session get to read?" question.
 func allow(instances []*session.Instance) []bool {
-	p := newUsagePolicy(true, instances)
+	p := newUsagePolicy(config.ContextIndicatorPercent, instances)
 	out := make([]bool, len(instances))
 	for i, inst := range instances {
-		out[i] = p.allows(inst)
+		out[i] = p.allowsContext(inst)
 	}
 	return out
 }
@@ -190,9 +190,9 @@ func TestUsagePolicyIgnoresUnstartedSessions(t *testing.T) {
 	require.Equal(t, started[0].WorkingDir(), unstarted.WorkingDir(),
 		"the two must share a directory, or this test would pass for the wrong reason")
 
-	p := newUsagePolicy(true, []*session.Instance{started[0], unstarted})
-	assert.True(t, p.allows(started[0]))
-	assert.False(t, p.allows(unstarted), "an unstarted session has nothing to read")
+	p := newUsagePolicy(config.ContextIndicatorPercent, []*session.Instance{started[0], unstarted})
+	assert.True(t, p.allowsContext(started[0]))
+	assert.False(t, p.allowsContext(unstarted), "an unstarted session has nothing to read")
 }
 
 // TestUsagePolicyOffReadsNothing is the efficiency half. UsageInfo has exactly
@@ -201,8 +201,8 @@ func TestUsagePolicyIgnoresUnstartedSessions(t *testing.T) {
 func TestUsagePolicyOffReadsNothing(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	fleet := startedFixture(t, fixtureSpec{title: "a", path: t.TempDir()})
-	assert.False(t, newUsagePolicy(false, fleet).allows(fleet[0]))
-	assert.True(t, newUsagePolicy(true, fleet).allows(fleet[0]),
+	assert.False(t, newUsagePolicy(config.ContextIndicatorOff, fleet).allowsContext(fleet[0]))
+	assert.True(t, newUsagePolicy(config.ContextIndicatorPercent, fleet).allowsContext(fleet[0]),
 		"…and the same session reads normally once the chip is on")
 }
 
@@ -211,7 +211,7 @@ func TestUsagePolicyOffReadsNothing(t *testing.T) {
 func TestUsagePolicyZeroValueAllowsNothing(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	fleet := startedFixture(t, fixtureSpec{title: "a", path: t.TempDir()})
-	assert.False(t, usagePolicy{}.allows(fleet[0]))
+	assert.False(t, usagePolicy{}.allowsContext(fleet[0]))
 }
 
 // TestSuppressedSessionLosesItsStoredReading is the difference between gating
@@ -236,7 +236,7 @@ func TestSuppressedSessionLosesItsStoredReading(t *testing.T) {
 	require.Equal(t, good, pair[0].UsageInfo())
 
 	// The neighbour arrives; the tick that notices refuses the reading.
-	require.False(t, newUsagePolicy(true, pair).allows(pair[0]))
+	require.False(t, newUsagePolicy(config.ContextIndicatorPercent, pair).allowsContext(pair[0]))
 	pair[0].ClearUsage()
 
 	assert.Zero(t, pair[0].UsageInfo().ContextTokens,
@@ -259,7 +259,7 @@ func TestUsagePolicyCountsPausedNeighbours(t *testing.T) {
 	require.NotEmpty(t, pair[1].ContextSourceKey(),
 		"a paused session still names a transcript directory")
 
-	assert.False(t, newUsagePolicy(true, pair).allows(pair[0]),
+	assert.False(t, newUsagePolicy(config.ContextIndicatorPercent, pair).allowsContext(pair[0]),
 		"a paused neighbour still spoils the shared project dir")
 }
 
@@ -376,4 +376,117 @@ func TestMetadataTick_ChipOffReadsNothing(t *testing.T) {
 
 	h.applyMetadataResults(results, false)
 	assert.Zero(t, inst.UsageInfo().ContextTokens)
+}
+
+// writeCostTranscript puts `requests` priceable assistant entries in the Claude
+// project directory for workDir under root. Each is 1M Opus 5 output tokens, so
+// the expected total is $25 per request.
+func writeCostTranscript(t *testing.T, root, workDir string, requests int) {
+	t.Helper()
+	sanitized := strings.Map(func(r rune) rune {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') {
+			return r
+		}
+		return '-'
+	}, workDir)
+	dest := filepath.Join(root, "projects", sanitized, "s.jsonl")
+	require.NoError(t, os.MkdirAll(filepath.Dir(dest), 0o755))
+	var content string
+	for n := range requests {
+		id := strconv.Itoa(n)
+		content += `{"type":"assistant","requestId":"req_` + id + `","timestamp":"2026-08-07T12:00:00Z",` +
+			`"message":{"id":"msg_` + id + `","model":"claude-opus-5","content":[],` +
+			`"usage":{"input_tokens":0,"output_tokens":1000000,"cache_read_input_tokens":0,` +
+			`"cache_creation_input_tokens":0}}}` + "\n"
+	}
+	require.NoError(t, os.WriteFile(dest, []byte(content), 0o644))
+}
+
+// TestMetadataTick_ReadsThenSuppressesTheCostChip is the cost mode's half of
+// TestMetadataTick_ReadsThenSuppressesTheContextChip, and it exists for the same
+// reason: every piece can be individually right while the composition stores
+// nothing, or stores something it must not.
+//
+// The suppression direction matters more here than it does for occupancy. A
+// wrong occupancy reading is a momentary misstatement that the next turn
+// corrects; a cumulative total attributed to the wrong session is wrong for that
+// session's whole life, because nothing later in the transcript contradicts it.
+func TestMetadataTick_ReadsThenSuppressesTheCostChip(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	h := newCreateFormHome(t)
+	h.lostStrikes = map[*session.Instance]int{}
+	h.appConfig.ContextIndicator = config.ContextIndicatorCost
+
+	root, dir := t.TempDir(), t.TempDir()
+	writeCostTranscript(t, root, dir, 2)
+
+	solo := usageFleetInstance(t, "solo", dir, root)
+	h.list.AddInstance(solo)()
+
+	results := collectMetadata(h.ctx, []*session.Instance{solo}, nil, false, h.usagePolicy())
+	require.Len(t, results, 1)
+	require.NotEqual(t, tmux.PaneDead, results[0].state, "precondition: the fake pane must be alive")
+	require.True(t, results[0].costOK, "a readable transcript must yield a result to apply")
+	require.False(t, results[0].costClear)
+	h.applyMetadataResults(results, false)
+	require.InDelta(t, 50.0, solo.CostInfo().USD, 1e-9,
+		"the tick must store the estimate on the instance, not merely compute it")
+
+	neighbour := usageFleetInstance(t, "neighbour", dir, root)
+	h.list.AddInstance(neighbour)()
+	require.Equal(t, solo.ContextSourceKey(), neighbour.ContextSourceKey(),
+		"the fixtures must actually collide for this test to mean anything")
+
+	results = collectMetadata(h.ctx, []*session.Instance{solo, neighbour}, nil, false, h.usagePolicy())
+	require.Len(t, results, 2)
+	for i, r := range results {
+		require.Truef(t, r.costClear, "result %d must carry the clear verdict, not just a skipped read", i)
+		require.Falsef(t, r.costOK, "result %d must not also carry an estimate", i)
+	}
+	h.applyMetadataResults(results, false)
+
+	assert.Zero(t, solo.CostInfo().USD,
+		"an ambiguous source must leave the instance holding nothing")
+	assert.Zero(t, neighbour.CostInfo().USD)
+}
+
+// TestMetadataTick_ChipModeReadsOneThingNotBoth is the efficiency claim the
+// shared column rests on, driven through the real tick path.
+//
+// The two readings are separate walks over the same directory, so a policy that
+// took both would double the per-tick I/O for a chip that can only display one
+// of them — and nothing on screen would ever show it. Asserting the CLEAR
+// verdict rather than merely a zero value is what distinguishes "was not read"
+// from "was read and came back empty".
+func TestMetadataTick_ChipModeReadsOneThingNotBoth(t *testing.T) {
+	for _, tc := range []struct {
+		mode                  string
+		wantContext, wantCost bool
+	}{
+		{config.ContextIndicatorPercent, true, false},
+		{config.ContextIndicatorCount, true, false},
+		{config.ContextIndicatorBar, true, false},
+		{config.ContextIndicatorCost, false, true},
+		{config.ContextIndicatorOff, false, false},
+	} {
+		t.Run(tc.mode, func(t *testing.T) {
+			t.Setenv("HOME", t.TempDir())
+			h := newCreateFormHome(t)
+			h.lostStrikes = map[*session.Instance]int{}
+			h.appConfig.ContextIndicator = tc.mode
+
+			root, dir := t.TempDir(), t.TempDir()
+			// Both readings are available on disk, so a mode that takes the wrong one
+			// succeeds rather than failing for want of data — which is exactly the
+			// bug this has to be able to see.
+			writeCostTranscript(t, root, dir, 2)
+			inst := usageFleetInstance(t, "one", dir, root)
+			h.list.AddInstance(inst)()
+
+			results := collectMetadata(h.ctx, []*session.Instance{inst}, nil, false, h.usagePolicy())
+			require.Len(t, results, 1)
+			assert.Equal(t, tc.wantContext, !results[0].usageClear, "context read taken")
+			assert.Equal(t, tc.wantCost, !results[0].costClear, "cost read taken")
+		})
+	}
 }

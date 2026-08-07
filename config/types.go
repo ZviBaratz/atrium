@@ -578,16 +578,23 @@ type Config struct {
 	// before the first turn, hook-reported truth after), "off" hides it.
 	// Everything else normalizes to "on" (GetEffortIndicator).
 	EffortIndicator string `json:"effort_indicator,omitempty"`
-	// ContextIndicator controls the per-session context-window chip in the list
-	// (#596): "percent" (default) shows how full the window is, "count" shows a
-	// raw token count, "bar" shows a one-cell block meter, "off" hides it.
-	// Everything else — empty, unknown — normalizes to "percent"
-	// (GetContextIndicator).
+	// ContextIndicator selects what the per-session transcript chip in the list
+	// shows: "percent" (default) how full the context window is, "count" a raw
+	// token count, "bar" a one-cell block meter (all #596), "cost" the session's
+	// estimated spend (#392), "off" nothing. Everything else — empty, unknown —
+	// normalizes to "percent" (GetContextIndicator).
 	//
-	// Count-fallback is a property of the renderer, not a fifth mode: any non-off
-	// mode falls back to a count when the model's window is unknown, so a stale
-	// window table degrades visibly instead of guessing. "count" is for a user who
-	// wants that fallback unconditionally.
+	// Count-fallback is a property of the renderer, not a sixth mode: any
+	// occupancy mode falls back to a count when the model's window is unknown, so
+	// a stale window table degrades visibly instead of guessing. "count" is for a
+	// user who wants that fallback unconditionally.
+	//
+	// "cost" is a MODE rather than a Config field of its own because line 1's
+	// right cluster has no room for a ninth chip — the name column is already
+	// down to 21 cells fully loaded — and one field means one setting, one row
+	// and one live-apply case instead of two of each. The json key still says
+	// "context" because renaming it would silently break every existing
+	// config.json, which is not a trade worth making for a more accurate noun.
 	ContextIndicator string `json:"context_indicator,omitempty"`
 	// SessionSort selects how sessions are ordered within each repo group:
 	// "creation" (default — manual/creation order, reorderable with J/K) or
