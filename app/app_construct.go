@@ -86,7 +86,7 @@ func assembleHome(
 	h.list.SetEffortIndicator(appConfig.GetEffortIndicator())
 	// Seed the permission-mode chip (on/off; see config.GetPermissionIndicator).
 	h.list.SetPermissionIndicator(appConfig.GetPermissionIndicator())
-	// Seed the context-window chip (off/count/percent/bar; see
+	// Seed the session chip (off/count/percent/bar/cost; see
 	// config.GetContextIndicator).
 	h.list.SetContextIndicator(appConfig.GetContextIndicator())
 	// Seed the hint bar's chrome-free flag: with hint_bar off the menu row stays

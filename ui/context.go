@@ -9,15 +9,26 @@ import (
 	"github.com/ZviBaratz/atrium/ui/theme"
 )
 
-// The per-session context-window chip (#596): how full the agent's context is,
-// as a percentage where the model's ceiling is known and a raw token count where
-// it isn't.
+// The per-session transcript chip: how full the agent's context is (#596), or
+// what the session has spent (#392), in one shared column.
 //
-// That split is the design's safety property rather than a convenience. Because
-// an unknown model falls back to a count, a window table that has gone stale
-// degrades VISIBLY — "28%" becomes "283k" — instead of quietly reporting a
-// confident wrong fraction. Every non-off mode honours the fallback, `bar`
-// included: a meter has no way to express an unknown ceiling.
+// The OCCUPANCY modes render a percentage where the model's ceiling is known and
+// a raw token count where it isn't. That split is the design's safety property
+// rather than a convenience: because an unknown model falls back to a count, a
+// window table that has gone stale degrades VISIBLY — "28%" becomes "283k" —
+// instead of quietly reporting a confident wrong fraction. All three honour the
+// fallback, `bar` included: a meter has no way to express an unknown ceiling.
+//
+// The COST mode is a different reading, so it does not share that fallback —
+// there is no count to fall back TO, since an unpriceable request contributes no
+// dollars rather than a wrong number of them. It keeps the same property by a
+// different route: the total becomes a lower bound and the chip's "~" becomes a
+// ">", so a stale price table is just as visible as a stale window table. See
+// costChip.
+//
+// One column for both is a width decision, and the reason is in list_render.go:
+// a ninth chip on line 1 would come straight out of the flex name segment, which
+// has 21 cells on a fully loaded row.
 
 // Context-chip modes. These mirror config.ContextIndicator* verbatim so the app
 // can pass GetContextIndicator's normalized value straight through and ui needs

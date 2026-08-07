@@ -68,7 +68,7 @@ const (
 	ContextIndicatorCost = "cost"
 )
 
-// GetContextIndicator returns the normalized context-chip mode: a recognized
+// GetContextIndicator returns the normalized session-chip mode: a recognized
 // mode passes through, everything else — including a nil Config, the empty
 // default, and a hand-edited typo — normalizes to ContextIndicatorPercent.
 //

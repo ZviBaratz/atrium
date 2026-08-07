@@ -43,11 +43,13 @@ type InstanceRenderer struct {
 	// flag), so it tracks an in-session /effort switch and knows the level a session
 	// with no flag inherited; it is drawn whenever an effort is known.
 	effortIndicator string
-	// contextIndicator is the context-window chip mode
-	// (config.GetContextIndicator): "off" hides the chip, "count" / "percent" /
-	// "bar" pick its shape, and the zero value means "percent" so the renderer's
-	// default matches the config accessor's. The chip reflects the transcript
-	// reading (Instance.UsageInfo) and is absent whenever there is none.
+	// contextIndicator is the session chip mode (config.GetContextIndicator):
+	// "off" hides the chip, "count" / "percent" / "bar" pick the shape of a
+	// context-occupancy reading, "cost" swaps it for a spend estimate, and the
+	// zero value means "percent" so the renderer's default matches the config
+	// accessor's. The chip reflects a transcript reading — Instance.UsageInfo in
+	// the occupancy modes, Instance.CostInfo in "cost" — and is absent whenever
+	// there is none.
 	contextIndicator string
 	// hideAccountBadge suppresses the per-row Claude-account badge. Set by List.String
 	// when account grouping is visually active (mode == account and >1 account), so the
