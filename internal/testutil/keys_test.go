@@ -21,6 +21,11 @@ func TestKeySpecsRoundTripThroughString(t *testing.T) {
 		"enter", "tab", "esc", "space", "backspace", "delete", "insert",
 		"up", "down", "left", "right", "home", "end", "pgup", "pgdown",
 		"ctrl+s", "alt+enter", "shift+tab", "shift+up", "ctrl+shift+left",
+		// shift+enter is the composers' newline on a terminal that disambiguates
+		// modified keys (#396). It is listed explicitly because the overlay tests that
+		// prove that behaviour press it through this helper, so a spelling that stopped
+		// round-tripping would make them assert against a message no terminal sends.
+		"shift+enter",
 	} {
 		require.Equal(t, spec, Key(spec).String(),
 			"Key(%q) must stringify back to %q", spec, spec)

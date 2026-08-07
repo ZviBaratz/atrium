@@ -228,6 +228,17 @@ in-app keymap and this section ever drift apart, so it stays complete.
 > wait to see whether an escape sequence follows. No binding below relies on the
 > old conflation, so nothing here changes; a terminal without the protocol simply
 > never enables it and behaves exactly as before.
+>
+> The one thing it *adds* is in the composers: on such a terminal
+> <kbd>shift+enter</kbd> inserts a newline in the new-session prompt and the
+> quick-send box, with no terminal reconfiguration, while <kbd>enter</kbd> keeps
+> sending or advancing. <kbd>ctrl+j</kbd> does the same everywhere and always
+> will, and <kbd>alt+enter</kbd> — what a Claude-Code-style `/terminal-setup`
+> remap makes <kbd>shift+enter</kbd> send — still works too. The footer names
+> <kbd>⇧↵</kbd> only once the terminal has actually answered the capability
+> query, so it errs towards <kbd>⌃J</kbd>: under tmux, or on an xterm that speaks
+> only `modifyOtherKeys`, <kbd>shift+enter</kbd> may work while the hint stays
+> quiet about it. `atrium doctor` reports what can be told from outside the app.
 
 ##### Navigate
 | Key | Action |

@@ -13,8 +13,12 @@ import (
 // holds it. Listing them as data is what lets the two contract tests below hold for
 // all of them at once rather than for whichever one someone remembered.
 var hintLadders = map[string][]string{
-	"createFormHelp":        createFormHelp,
-	"promptFocusHelp":       promptFocusHelp,
+	"createFormHelp":  createFormHelp,
+	"promptFocusHelp": promptFocusHelp,
+	// The legacy ladder is the one most terminals actually render (it is what a
+	// terminal that never answered the disambiguation query gets), so leaving it out
+	// would mean the widely-seen ladder was the unguarded one.
+	"promptFocusHelpLegacy": promptFocusHelpLegacy,
 	"modelCustomHelp":       modelCustomHelp,
 	"variantFocusHelp":      variantFocusHelp,
 	"checkpointFooterHints": checkpointFooterHints,

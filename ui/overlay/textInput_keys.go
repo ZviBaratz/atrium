@@ -74,6 +74,25 @@ func (t *TextInputOverlay) HandleKeyPress(msg tea.KeyPressMsg) (bool, bool) {
 	case "esc":
 		t.Canceled = true
 		return true, false
+	case "shift+enter":
+		// The newline key the footers advertise, and the only one that needs no
+		// terminal setup at all — but only where the terminal disambiguates modified
+		// keys. Anywhere else Shift+Enter is byte-identical to Enter, so this case
+		// simply never fires and Alt+Enter and Ctrl+J remain the routes. Handling it
+		// unconditionally is therefore free; what is NOT free is advertising it, which
+		// is why the footers gate on keys.TerminalDisambiguates and this does not.
+		//
+		// Newline-ONLY, deliberately not folded into the "enter" case below. That case
+		// submits from the Create button and from a filled title before it ever reaches
+		// the textarea, so sharing it would mean Shift+Enter creating a session from
+		// the field next door. A user pressing it is reaching for a newline; doing
+		// something irreversible instead is the same misfire as #396's silent no-op,
+		// pointed the other way. It does not advance a field either — it is not a
+		// navigation key and no footer claims it is.
+		if t.isTextarea() {
+			t.textarea.InsertRune('\n')
+		}
+		return false, false
 	case "ctrl+s":
 		// Submit from any field. Enter submits only on the Create button and a filled
 		// title (it advances to the next field everywhere else, including the prompt), so
@@ -105,10 +124,12 @@ func (t *TextInputOverlay) HandleKeyPress(msg tea.KeyPressMsg) (bool, bool) {
 			return true, false
 		}
 		if t.isTextarea() {
-			// Alt+Enter inserts a newline — and that is exactly what a Claude-Code-style
-			// terminal's Shift+Enter sends, so "shift+enter for a newline" works once the
-			// terminal is set up. The textarea's own newline binding matches the literal
-			// "enter", which is intercepted here, so insert the newline explicitly.
+			// Alt+Enter inserts a newline. It is the route that predates key
+			// disambiguation and still earns its place two ways: it is what a
+			// Claude-Code-style terminal remap makes Shift+Enter send, and unlike the
+			// real Shift+Enter it arrives on a legacy terminal too, as ESC CR. The
+			// textarea's own newline binding matches the literal "enter", which is
+			// intercepted here, so insert the newline explicitly.
 			if msg.Mod.Contains(tea.ModAlt) {
 				t.textarea.InsertRune('\n')
 				return false, false
@@ -122,7 +143,8 @@ func (t *TextInputOverlay) HandleKeyPress(msg tea.KeyPressMsg) (bool, bool) {
 				return true, false
 			}
 			// Create-form prompt: a bare Enter advances to the next field, like Tab
-			// (Shift+Enter / Ctrl+J make a newline). Fall through to the shared advance.
+			// (Shift+Enter, Alt+Enter and Ctrl+J are the newline keys, handled above).
+			// Fall through to the shared advance.
 		}
 		// Every other field (title, pickers) — and the prompt on a bare Enter — advances to
 		// the next enabled stop. Advancing by one — rather than jumping to the button — keeps

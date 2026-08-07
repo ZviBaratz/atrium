@@ -421,6 +421,12 @@ var (
 			fmt.Println()
 			fmt.Print(doctor.RenderScheme(doctor.CheckScheme(os.Environ())))
 
+			// Key disambiguation: the same shape and the same honesty — a pure read of
+			// the environment, naming the rung doctor cannot reach because establishing
+			// it needs the running TUI to query the terminal and wait for the reply.
+			fmt.Println()
+			fmt.Print(doctor.RenderKeyboard(doctor.CheckKeyboard(os.Environ())))
+
 			// OOM ranking: on Linux, compares the shared tmux server's oom_score against
 			// each agent pane's so a single kill is shown to shed one recoverable session
 			// rather than the server (every session). Read-only tmux queries + /proc, and

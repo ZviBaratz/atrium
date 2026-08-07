@@ -134,9 +134,17 @@ func TestCreateFormHelp_EveryRungKeepsTheNavKeys(t *testing.T) {
 // ladder extracted to stop one hint lying, leaving its sibling lying): a rung like
 // "↑↓ next · ⌃S create" is 20 cells, so it fits every width guard here and would
 // have broken #466's rule with the whole suite green.
+// Both ladders are swept, for the same reason: the rung a given terminal renders
+// depends on its keyboard capability as well as its width, so guarding only the
+// optimistic ladder would leave the one most terminals see unchecked.
 func TestPromptFocusHelp_NoRungNamesTheNavKeys(t *testing.T) {
-	for i, rung := range promptFocusHelp {
-		assert.NotContainsf(t, rung, navKeys,
-			"rung %d must leave the arrows to the fields that correct them: %q", i, rung)
+	for name, ladder := range map[string][]string{
+		"promptFocusHelp":       promptFocusHelp,
+		"promptFocusHelpLegacy": promptFocusHelpLegacy,
+	} {
+		for i, rung := range ladder {
+			assert.NotContainsf(t, rung, navKeys,
+				"%s rung %d must leave the arrows to the fields that correct them: %q", name, i, rung)
+		}
 	}
 }
