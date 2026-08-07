@@ -184,3 +184,57 @@ func TestHandleCheckpointsState_RReloads(t *testing.T) {
 	assert.Contains(t, xansi.Strip(h.checkpointOverlay.Render()), "reading transcript",
 		"and put the box back into its loading state")
 }
+
+// Blobs is the existence of the file-history directory, and Claude creates it on
+// the first file it backs up — so a session that has touched no files has no
+// directory and never had one. Reading that as a sweep would put a standing
+// data-loss warning on a session whose checkpointing is working fine.
+func TestHandleCheckpointsLoaded_NoSweepNoticeForASessionThatTouchedNoFiles(t *testing.T) {
+	h, inst := checkpointHome(t)
+	h.openCheckpoints()
+	h.handleCheckpointsLoaded(checkpointsLoadedMsg{target: inst, result: transcript.Checkpoints{
+		Blobs: false,
+		List:  []transcript.Checkpoint{{MessageID: "a", Label: "a prompt", Files: 0}},
+	}})
+
+	assert.NotContains(t, xansi.Strip(h.checkpointOverlay.Render()), "swept",
+		"nothing was backed up, so nothing was swept")
+}
+
+// A refused attach leaves the timeline standing. Tearing it down first would cost
+// the user the list they were reading — and a second whole-transcript scan to get
+// it back — for an action that never happened. attachSelected orders it the same
+// way: every precondition before anything irreversible.
+func TestHandleCheckpointsState_RefusedAttachKeepsTheTimeline(t *testing.T) {
+	h, inst := checkpointHome(t)
+	h.openCheckpoints()
+	h.handleCheckpointsLoaded(checkpointsLoadedMsg{target: inst, result: transcript.Checkpoints{
+		Blobs: true, List: []transcript.Checkpoint{{MessageID: "a", Label: "a prompt"}},
+	}})
+	// A session whose pane is gone: the attach cannot happen, and openCheckpoints
+	// deliberately admits it, since the transcript outlives the terminal.
+	inst.SetStatus(session.Paused)
+
+	h.handleCheckpointsState(keyMsg("enter"))
+
+	assert.Equal(t, stateCheckpoints, h.state, "a refused attach must not close the timeline")
+	require.NotNil(t, h.checkpointOverlay)
+	assert.Same(t, inst, h.checkpointTarget)
+	// Behind an overlay a notice falls back to the errBox row, which the centred
+	// box does not cover — so the refusal is both spoken and visible.
+	require.True(t, h.errBox.HasContent(), "and it must say why")
+	assert.Contains(t, xansi.Strip(h.errBox.String()), "paused")
+}
+
+// Closing the box cancels the read it started. The enumeration is an unbounded
+// whole-file scan, so its lifetime belongs to the overlay that asked for it — the
+// app context would keep it decoding JSON for a result nothing will ever use.
+func TestCheckpointRead_IsCancelledWithTheOverlay(t *testing.T) {
+	h, _ := checkpointHome(t)
+	h.openCheckpoints()
+	require.NotNil(t, h.checkpointCancel, "opening must own a cancellable read")
+
+	h.handleCheckpointsState(keyMsg("esc"))
+
+	assert.Nil(t, h.checkpointCancel, "dismissing must cancel and drop it")
+}

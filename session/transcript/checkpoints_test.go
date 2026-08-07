@@ -294,22 +294,60 @@ func TestLoadCheckpoints_MissingTranscript(t *testing.T) {
 	}
 }
 
-// A read that fails for any other reason must NOT wrap ErrNoTranscript, or the UI
-// reports an absent file over one that is plainly there. A single line past the
-// scanner's 4MB ceiling is the failure this reader is most exposed to, being the
-// only one that scans the whole file rather than a bounded tail.
-func TestLoadCheckpoints_ScanFailureIsNotMistakenForAbsence(t *testing.T) {
+// A line past the scanner's 4MB ceiling costs that line, not the transcript. This
+// reader is the only one that scans the whole file rather than a bounded tail, so
+// it is the only one the ceiling is reachable from — and bufio.Scanner's own answer
+// (ErrTooLong, and stop) would discard every checkpoint already read, including the
+// ones before the offending line.
+func TestLoadCheckpoints_OversizedLineDoesNotDiscardTheEnumeration(t *testing.T) {
 	const cwd = "/home/zvi/work"
 	oversized := `{"type":"user","uuid":"aaaa","message":{"role":"user","content":"` +
 		strings.Repeat("x", scannerBufMax+1) + `"}}` + "\n"
-	root := checkpointRoot(t, cwd, oversized)
+	lines := []string{
+		`{"type":"file-history-snapshot","messageId":"m1","snapshot":{"trackedFileBackups":{"a.go":{}},"timestamp":"2026-08-05T10:00:00Z"}}`,
+		`{"type":"user","uuid":"m1","timestamp":"2026-08-05T10:00:00Z","message":{"role":"user","content":"before the blob"}}`,
+		strings.TrimSuffix(oversized, "\n"),
+		`{"type":"file-history-snapshot","messageId":"m2","snapshot":{"trackedFileBackups":{"a.go":{},"b.go":{}},"timestamp":"2026-08-05T10:05:00Z"}}`,
+		`{"type":"user","uuid":"m2","timestamp":"2026-08-05T10:05:00Z","message":{"role":"user","content":"after the blob"}}`,
+	}
+	root := checkpointRoot(t, cwd, strings.Join(lines, "\n")+"\n")
+
+	got, err := LoadCheckpoints(context.Background(), "claude", cwd, Options{Root: root})
+	if err != nil {
+		t.Fatalf("err = %v, want the enumeration to survive an oversized line", err)
+	}
+	var labels []string
+	for _, cp := range got.List {
+		labels = append(labels, cp.Label)
+	}
+	want := []string{"before the blob", "after the blob"}
+	if fmt.Sprint(labels) != fmt.Sprint(want) {
+		t.Errorf("labels = %v, want %v", labels, want)
+	}
+}
+
+// A read that fails for any other reason must NOT wrap ErrNoTranscript, or the UI
+// reports an absent file over one that is plainly there — and `r` repeats the same
+// wrong sentence. An unreadable project directory is the reachable case: os.ReadDir
+// fails with EACCES, which is not an absence.
+func TestLoadCheckpoints_ReadFailureIsNotMistakenForAbsence(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores the directory mode this test relies on")
+	}
+	const cwd = "/home/zvi/work"
+	root := checkpointRoot(t, cwd, loadFixture(t, "checkpoints.jsonl"))
+	dir := filepath.Join(root, "projects", sanitizeCWD(cwd))
+	if err := os.Chmod(dir, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o755) })
 
 	_, err := LoadCheckpoints(context.Background(), "claude", cwd, Options{Root: root})
 	if err == nil {
-		t.Fatal("err = nil for a transcript line past the scanner ceiling")
+		t.Fatal("err = nil for an unreadable project directory")
 	}
 	if errors.Is(err, ErrNoTranscript) {
-		t.Errorf("err = %v wraps ErrNoTranscript — a scan failure is not an absent transcript", err)
+		t.Errorf("err = %v wraps ErrNoTranscript — a read failure is not an absent transcript", err)
 	}
 }
 

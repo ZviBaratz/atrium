@@ -1,6 +1,7 @@
 package overlay
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -144,25 +145,37 @@ func TestCheckpointOverlay_FitsItsBox(t *testing.T) {
 	}
 }
 
-// The footer is truncated, never wrapped: a wrapped footer would silently claim a
-// row the height budget already spent.
-func TestCheckpointOverlay_FooterTruncates(t *testing.T) {
-	o := NewCheckpointOverlay("alpha")
-	o.SetSize(40, 12)
-	o.SetRows(checkpointRows(3))
-	lines := strings.Split(stripANSI(o.Render()), "\n")
+// The footer is one line at every width — shortened or truncated, never wrapped,
+// since a wrapped footer would silently claim a row the height budget already
+// spent — and it always names the keys that leave the overlay.
+//
+// The second half is the part a fixed string got wrong: stateCheckpoints hides the
+// hint bar, and the full hint line is 71 cells against an inner width of 70 on an
+// 80-column terminal, so truncation dropped exactly `r reload · esc close` and left
+// nothing on screen saying how to close or reload the box.
+func TestCheckpointOverlay_FooterFitsAndKeepsTheExitKeys(t *testing.T) {
+	for _, width := range []int{40, 56, 72, 76, 80, 120} {
+		t.Run(fmt.Sprintf("w%d", width), func(t *testing.T) {
+			o := NewCheckpointOverlay("alpha")
+			o.SetSize(width, 12)
+			o.SetRows(checkpointRows(3))
+			out := o.Render()
+			lines := strings.Split(stripANSI(out), "\n")
 
-	var footers int
-	for _, line := range lines {
-		if strings.Contains(line, "j/k move") {
-			footers++
-		}
-		if strings.Contains(line, "esc close") {
-			t.Errorf("the footer wrapped instead of truncating at width 40:\n%s", strings.Join(lines, "\n"))
-		}
-	}
-	if footers != 1 {
-		t.Errorf("expected exactly one footer line, got %d", footers)
+			var footers int
+			for _, line := range lines {
+				if strings.Contains(line, "esc close") {
+					footers++
+				}
+			}
+			if footers != 1 {
+				t.Errorf("want exactly one footer line naming `esc close`, got %d:\n%s",
+					footers, strings.Join(lines, "\n"))
+			}
+			if w := lipgloss.Width(out); w > width {
+				t.Errorf("rendered %d cells wide, want <= %d", w, width)
+			}
+		})
 	}
 }
 
@@ -367,5 +380,79 @@ func TestCheckpointOverlay_NoteSurvivesRowsAndDiesWithThem(t *testing.T) {
 	gone := stripANSI(o.Render())
 	if strings.Contains(gone, "swept") {
 		t.Errorf("the note must not outlive the rows it describes:\n%s", gone)
+	}
+}
+
+// The window follows the list down AND back up. Only the first half was guarded:
+// clampScroll pushed the window forward for a cursor below it and reset to 0 for
+// one outside the list, but never pulled it back when the list shrank under it or
+// the box grew past it — and since the hidden-rows line is drawn only while the
+// list overflows, the rows it stranded above the window were reported nowhere.
+func TestCheckpointOverlay_ScrollFollowsTheListBackUp(t *testing.T) {
+	t.Run("a shorter reload", func(t *testing.T) {
+		o := NewCheckpointOverlay("alpha")
+		o.SetSize(76, 18)
+		o.SetRows(checkpointRows(40))
+		for i := 0; i < 60; i++ {
+			o.HandleKeyPress(keyMsg("down"))
+		}
+		o.Render() // the window only moves when the box is drawn
+		o.SetRows(checkpointRows(5))
+
+		out := stripANSI(o.Render())
+		for _, want := range []string{"prompt number a", "prompt number e"} {
+			if !strings.Contains(out, want) {
+				t.Errorf("row %q is missing — the window stayed near the old bottom:\n%s", want, out)
+			}
+		}
+	})
+
+	t.Run("a taller box", func(t *testing.T) {
+		o := NewCheckpointOverlay("alpha")
+		o.SetSize(76, 18)
+		o.SetRows(checkpointRows(20))
+		for i := 0; i < 30; i++ {
+			o.HandleKeyPress(keyMsg("down"))
+		}
+		o.Render()        // the window only moves when the box is drawn
+		o.SetSize(76, 34) // the terminal was maximised: room for every row
+
+		out := stripANSI(o.Render())
+		if !strings.Contains(out, "prompt number a") {
+			t.Errorf("the oldest row is hidden in a box with room for the whole list:\n%s", out)
+		}
+	})
+}
+
+// A reload holds the box at the height it already had. SetLoading swaps the row
+// window for one line, and PlaceOverlay re-centres on every height change, so a
+// full-height timeline would jump up and shrink on every `r` and jump back when
+// the result landed.
+func TestCheckpointOverlay_ReloadDoesNotResizeTheBox(t *testing.T) {
+	o := NewCheckpointOverlay("alpha")
+	o.SetSize(76, 18)
+	o.SetRows(checkpointRows(40))
+	loaded := lipgloss.Height(o.Render())
+
+	o.SetLoading()
+	if got := lipgloss.Height(o.Render()); got != loaded {
+		t.Errorf("box is %d lines while reloading and %d with rows — the overlay jumps", got, loaded)
+	}
+}
+
+// enter is dead while the read is in flight. A whole-transcript scan is not
+// instantaneous, and attaching hands the terminal to tmux — so a press in the gap
+// would throw the user into the agent instead of showing them the list they opened.
+func TestCheckpointOverlay_EnterIsInertWhileLoading(t *testing.T) {
+	o := NewCheckpointOverlay("alpha")
+	o.HandleKeyPress(keyMsg("enter"))
+	if o.AttachRequested() {
+		t.Error("enter armed an attach while the transcript was still being read")
+	}
+
+	o.SetRows(checkpointRows(3))
+	o.HandleKeyPress(keyMsg("enter"))
+	if !o.AttachRequested() {
+		t.Error("enter should arm an attach once the box has an answer")
 	}
 }

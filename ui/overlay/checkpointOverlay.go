@@ -142,7 +142,14 @@ func (c *CheckpointOverlay) HandleKeyPress(msg tea.KeyPressMsg) (shouldClose boo
 		}
 		return false
 	case "enter":
-		c.attachReq = true
+		// Not while the read is still running. A whole-transcript scan is not
+		// instantaneous, so enter pressed in the gap would hand the terminal to tmux
+		// for a timeline the user opened to look at and never got to see. Once the
+		// box has an answer — rows, or a statement of why there are none — the user
+		// has read it and the press is deliberate.
+		if !c.loading {
+			c.attachReq = true
+		}
 		return false
 	case "r":
 		c.refreshReq = true
@@ -200,7 +207,19 @@ func (c *CheckpointOverlay) Render() string {
 
 	switch {
 	case c.loading:
-		b.WriteString(overlayDimStyle().Render("reading transcript…") + "\n\n")
+		b.WriteString(overlayDimStyle().Render("reading transcript…") + "\n")
+		// Padded to exactly the height the row window would occupy. A reload keeps
+		// the rows, so without this `r` would drop a full-height box to a single line
+		// and back — and PlaceOverlay re-centres on every height change, so the whole
+		// overlay jumps twice per press. Same reason the hidden-rows line is drawn
+		// unconditionally below; this is that accounting applied to the other branch.
+		for i := 1; i < lay.visible; i++ {
+			b.WriteString("\n")
+		}
+		if len(c.rows) > lay.visible {
+			b.WriteString("\n")
+		}
+		b.WriteString("\n")
 	case c.unavailure != "":
 		b.WriteString(overlayDimStyle().Render(truncate.StringWithTail(c.unavailure, uint(inner), "…")) + "\n\n")
 	default:
@@ -236,9 +255,35 @@ func (c *CheckpointOverlay) Render() string {
 	}
 	// Truncated, never wrapped: a wrapped footer would silently claim a row the
 	// height budget already spent.
-	b.WriteString(th.OverlayHintStyle().Render(truncate.StringWithTail(
-		"j/k move · enter attach (then Esc Esc to rewind) · r reload · esc close", uint(inner), "…")))
+	b.WriteString(th.OverlayHintStyle().Render(checkpointFooter(inner)))
 	return box.Render(b.String())
+}
+
+// checkpointFooter is the widest hint line that fits in inner cells.
+//
+// One fixed string truncated would not do. The full line is 71 cells, and on an
+// 80-column terminal — the common case — the app sizes the box to 0.7×80 = 56, so
+// inner is 50 and truncation dropped everything from `(then Esc Esc` on: both the
+// rewind reminder and `r reload · esc close`, the only two keys that leave the
+// overlay, on a state that hides the hint bar.
+//
+// The ladder sheds in order of what a user can find without being told. `j/k move`
+// goes before the Esc-Esc reminder because arrows work too and the cursor is
+// visible; the reminder is the one thing here nothing else on screen teaches, and
+// it is the whole reason the footer mentions attaching at all.
+func checkpointFooter(inner int) string {
+	for _, hints := range []string{
+		"j/k move · enter attach (then Esc Esc to rewind) · r reload · esc close",
+		"j/k move · enter attach (Esc Esc rewinds) · r reload · esc close",
+		"enter attach (Esc Esc rewinds) · r reload · esc close",
+		"j/k move · enter attach · r reload · esc close",
+		"enter attach · r reload · esc close",
+	} {
+		if lipgloss.Width(hints) <= inner {
+			return hints
+		}
+	}
+	return truncate.StringWithTail("r reload · esc close", uint(inner), "…")
 }
 
 // hiddenRowSummary names what the window is not showing, in one line, whichever
@@ -360,7 +405,15 @@ func (c *CheckpointOverlay) layout() checkpointLayout {
 	}
 }
 
-// clampScroll keeps the cursor inside the visible window.
+// clampScroll keeps the cursor inside the visible window, and the window over the
+// rows.
+//
+// Both bounds matter, and the upper one is the easy one to leave out: it is what
+// pulls the window back when the list shrinks under it (a reload returning fewer
+// rows) or the window grows past it (a resize). Without it the box renders a
+// handful of rows in a space with room for many, and — since the hidden-rows line
+// is only drawn while the list overflows — says nothing about the ones it left
+// stranded above.
 func (c *CheckpointOverlay) clampScroll(n, visible int) {
 	if c.cursor < c.scroll {
 		c.scroll = c.cursor
@@ -368,7 +421,10 @@ func (c *CheckpointOverlay) clampScroll(n, visible int) {
 	if c.cursor >= c.scroll+visible {
 		c.scroll = c.cursor - visible + 1
 	}
-	if c.scroll < 0 || c.scroll > n-1 {
+	if c.scroll > n-visible {
+		c.scroll = n - visible
+	}
+	if c.scroll < 0 {
 		c.scroll = 0
 	}
 }

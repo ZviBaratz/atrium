@@ -6,7 +6,9 @@
 package transcript
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -106,10 +108,30 @@ func newestTranscript(dir string) (string, error) {
 		}
 	}
 	if newest == "" {
-		return "", fmt.Errorf("no transcript files in %s", dir)
+		return "", fmt.Errorf("%w in %s", errNoTranscriptFiles, dir)
 	}
 	if info, err := os.Stat(newest); err != nil || info.Size() == 0 {
-		return "", fmt.Errorf("transcript %s is empty", newest)
+		return "", fmt.Errorf("transcript %s %w", newest, errEmptyTranscript)
 	}
 	return newest, nil
+}
+
+// The two ways newestTranscript reports "there is nothing here to read", as
+// opposed to "the read failed". Callers that only ask err == nil (hasSession)
+// cannot tell them apart and do not need to; LoadCheckpoints does, because the
+// UI says one of two different sentences depending on the answer, and calling a
+// permission error an absent file is the wrong one.
+var (
+	errNoTranscriptFiles = errors.New("no transcript files")
+	errEmptyTranscript   = errors.New("is empty")
+)
+
+// isAbsentTranscript reports whether err from newestTranscript means the session
+// simply has no conversation on disk — a missing project directory, no *.jsonl in
+// it, or an empty newest one. Anything else (EACCES, an I/O error, a stale mount)
+// is a failure to read something that may well be there.
+func isAbsentTranscript(err error) bool {
+	return errors.Is(err, fs.ErrNotExist) ||
+		errors.Is(err, errNoTranscriptFiles) ||
+		errors.Is(err, errEmptyTranscript)
 }

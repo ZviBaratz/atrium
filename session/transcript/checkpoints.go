@@ -68,6 +68,11 @@ type Checkpoints struct {
 	// sweeps that directory on its own retention schedule while leaving the
 	// transcript records in place, so a listed checkpoint outlives the file
 	// copies it would restore from.
+	//
+	// It is existence, not history: Claude creates the directory on the first file
+	// it backs up, so a session that has never backed one up has no directory and
+	// never had one. Read false as "swept" only when the session tracked a file at
+	// all — the last row's Files is that test (see app.checkpointNote).
 	Blobs bool
 }
 
@@ -104,11 +109,16 @@ func LoadCheckpoints(ctx context.Context, program, workingDir string, opts Optio
 
 	path, err := newestTranscript(claudeProjectDir(root, workingDir))
 	if err != nil {
-		// Wrapped so a caller can tell "this session has no conversation on disk"
-		// — the ordinary case for a session that has not had a turn — from a read
-		// that failed for any other reason. Everything below returns the raw error,
-		// and those are the ones a caller must not describe as an absent transcript.
-		return Checkpoints{}, fmt.Errorf("%w: %w", ErrNoTranscript, err)
+		// Only an absence is wrapped, so a caller can tell "this session has no
+		// conversation on disk" — the ordinary case for a session that has not had a
+		// turn — from a read that failed for any other reason. newestTranscript
+		// returns os.ReadDir's raw error, so an unreadable project directory arrives
+		// here too, and wrapping that as well would have the UI tell the user a
+		// transcript it merely could not open does not exist.
+		if isAbsentTranscript(err) {
+			return Checkpoints{}, fmt.Errorf("%w: %w", ErrNoTranscript, err)
+		}
+		return Checkpoints{}, err
 	}
 
 	var (

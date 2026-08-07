@@ -570,6 +570,11 @@ type home struct {
 	// not the live selection, so an arriving load result can be matched against the
 	// session that asked for it and a result for any other one dropped.
 	checkpointTarget *session.Instance
+	// checkpointCancel stops the in-flight enumeration. The read is an unbounded
+	// whole-file scan, so its lifetime belongs to the overlay that asked for it, not
+	// to the process: closing the box, or reloading over it, must not leave a
+	// goroutine decoding JSON for a result nothing will use.
+	checkpointCancel context.CancelFunc
 	// commandPaletteOverlay is the fuzzy-over-every-action picker (#374).
 	commandPaletteOverlay *overlay.CommandPaletteOverlay
 	// paletteRows is what the open palette's row indices mean: the overlay reports

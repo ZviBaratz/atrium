@@ -11,6 +11,7 @@ package app
 // rewind the conversation along with the code. The findings are on the issue.
 
 import (
+	"context"
 	"errors"
 
 	"github.com/ZviBaratz/atrium/log"
@@ -46,6 +47,9 @@ func (m *home) openCheckpoints() (tea.Model, tea.Cmd) {
 	if selected.GetStatus() == session.Loading {
 		return m, m.handleInfoNotice(stillStartingNotice)
 	}
+	if m.checkpointSourceIsAmbiguous(selected) {
+		return m, m.handleInfoNotice("another session shares this one's claude project directory — its checkpoints cannot be told apart")
+	}
 
 	m.checkpointTarget = selected
 	m.checkpointOverlay = overlay.NewCheckpointOverlay(selected.DisplayName())
@@ -58,14 +62,58 @@ func (m *home) openCheckpoints() (tea.Model, tea.Cmd) {
 	return m, m.loadCheckpointsCmd(selected)
 }
 
+// checkpointSourceIsAmbiguous reports whether another session in the fleet reads
+// the same Claude project directory as this one.
+//
+// The enumeration resolves its transcript the way every reader here does — newest
+// mtime in <root>/projects/<sanitized-cwd> — and that mapping is many-to-one:
+// two direct sessions on one directory, or two paths sanitizeCWD flattens together,
+// share the whole set of files, so newest-mtime picks arbitrarily between their
+// conversations (transcript.ProjectDir, #596). The context indicator answers that
+// by declining the reading (usagePolicy: absent rather than wrong), and a timeline
+// has to decline harder — it is headed with the session's own name, and its one
+// action walks the user into that session to rewind files off the list.
+//
+// Deliberately not usagePolicy itself: that one is gated on the context-indicator
+// setting, and turning an indicator off must not make the timeline start lying.
+// The whole fleet is scanned, like newUsagePolicy, because a collision is a fact
+// about what is on disk — a filtered or scrolled-out session writes just the same.
+func (m *home) checkpointSourceIsAmbiguous(target *session.Instance) bool {
+	key := target.ContextSourceKey()
+	if key == "" {
+		return false // nothing resolved, so nothing to collide on
+	}
+	for _, inst := range m.list.GetInstances() {
+		if inst != target && inst.ContextSourceKey() == key {
+			return true
+		}
+	}
+	return false
+}
+
 // loadCheckpointsCmd reads the target's checkpoints off the UI thread. Everything
 // the closure needs is captured here, on the update thread — it never reaches back
 // into m or into unguarded Instance fields.
+//
+// The context is per-read, not the app's: a whole-transcript scan is unbounded, so
+// closing the box or reloading over it cancels the scan it supersedes rather than
+// stacking another one behind it. Cancelling the previous read here is what makes
+// repeated `r` cost one scan rather than one per press.
 func (m *home) loadCheckpointsCmd(target *session.Instance) tea.Cmd {
-	ctx := m.ctx
+	m.cancelCheckpointRead()
+	ctx, cancel := context.WithCancel(m.ctx)
+	m.checkpointCancel = cancel
 	return func() tea.Msg {
 		result, err := target.LoadCheckpoints(ctx)
 		return checkpointsLoadedMsg{target: target, result: result, err: err}
+	}
+}
+
+// cancelCheckpointRead stops whatever enumeration is in flight, if any.
+func (m *home) cancelCheckpointRead() {
+	if m.checkpointCancel != nil {
+		m.checkpointCancel()
+		m.checkpointCancel = nil
 	}
 }
 
@@ -123,11 +171,21 @@ func (m *home) handleCheckpointsLoaded(msg checkpointsLoadedMsg) (tea.Model, tea
 // none. Claude sweeps a session's file backups on its own retention schedule while
 // leaving the transcript records in place, so a listed checkpoint can outlive the
 // copies it would restore from — which the list must not imply away.
+//
+// Blobs is the existence of the file-history directory, and Claude creates that
+// directory on the first file it backs up: a session that has touched no files has
+// no directory and never had one, so its absence is not a sweep. Saying so anyway
+// would put a standing data-loss warning on a session whose checkpointing is
+// working normally. The last row's Files is the cumulative tracked count, so
+// Files == 0 there is exactly "there was never anything to sweep".
 func checkpointNote(result transcript.Checkpoints) string {
-	if !result.Blobs {
-		return "claude has already swept this session's file backups — these are a record, not a restore point"
+	if result.Blobs || len(result.List) == 0 {
+		return ""
 	}
-	return ""
+	if result.List[len(result.List)-1].Files == 0 {
+		return ""
+	}
+	return "claude has already swept this session's file backups — these are a record, not a restore point"
 }
 
 // handleCheckpointsState routes a key to the timeline and acts on what it armed.
@@ -144,15 +202,17 @@ func (m *home) handleCheckpointsState(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) 
 		if target == nil {
 			return m, nil
 		}
-		// Dismiss before attaching: attachExec suspends the event loop, and a box
-		// still on screen when the terminal is handed to tmux would be repainted
-		// over an attached session.
-		m.dismissCheckpointOverlay()
+		// Every precondition first, exactly as attachSelected orders them: a refused
+		// attach must leave the timeline standing. Tearing it down here and then
+		// declining would cost the user the list they were reading — and a second
+		// whole-transcript scan to get it back — for an action that never happened.
+		//
 		// Refusals speak, a successful attach does not — the same split
 		// attachSelected makes, and for a sharper reason here: the next thing that
 		// happens is tmux taking the terminal, so a notice would be painted for one
 		// frame and then buried. The footer carries the Esc-Esc reminder instead,
-		// where it is read before the keypress rather than after it.
+		// where it is read before the keypress rather than after it. The notice rides
+		// the error row, which the centred box does not cover.
 		if target.Paused() {
 			return m, m.handleInfoNotice("session is paused — press r to resume, then Esc Esc in the agent")
 		}
@@ -162,6 +222,10 @@ func (m *home) handleCheckpointsState(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) 
 		if !target.TmuxAlive() {
 			return m, m.handleInfoNotice("session terminal has exited — nothing to attach to")
 		}
+		// Dismiss before attaching: attachExec suspends the event loop, and a box
+		// still on screen when the terminal is handed to tmux would be repainted
+		// over an attached session.
+		m.dismissCheckpointOverlay()
 		return m, m.attachExec(target.Attach, target)
 	}
 
@@ -174,6 +238,7 @@ func (m *home) handleCheckpointsState(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) 
 
 // dismissCheckpointOverlay tears the timeline down and returns to the list.
 func (m *home) dismissCheckpointOverlay() {
+	m.cancelCheckpointRead()
 	m.checkpointOverlay = nil
 	m.checkpointTarget = nil
 	m.state = stateDefault
