@@ -236,6 +236,28 @@ func TestScan_Patterns(t *testing.T) {
 			kinds:    []Kind{KindPath},
 		},
 		{
+			// An image extension mid-name must NOT cut the path short. \b is
+			// satisfied by a following '.', so this used to match "/tmp/x.png" —
+			// a name no file has — and, because image-path outranks path, the
+			// real one was never offered.
+			name:     "an extension mid-name falls through to the path pattern",
+			line:     "backup at /tmp/x.png.bak done",
+			expected: []string{"/tmp/x.png.bak"},
+			kinds:    []Kind{KindPath},
+		},
+		{
+			name:     "a host containing an image extension stays one match",
+			line:     "visit foo.gif.example.com/x now",
+			expected: []string{"foo.gif.example.com/x"},
+			kinds:    []Kind{KindPath},
+		},
+		{
+			name:     "an image name at end of line still matches",
+			line:     "Screenshot saved to shot.png",
+			expected: []string{"shot.png"},
+			kinds:    []Kind{KindPath},
+		},
+		{
 			// A name a regex cannot recover: the space ends the run. Asserting
 			// what is NOT matched keeps the known gap honest instead of
 			// letting a later reader assume coverage.

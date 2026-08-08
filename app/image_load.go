@@ -98,11 +98,13 @@ func loadImage(path string) (img image.Image, srcW, srcH int, err error) {
 	if small == nil {
 		return nil, 0, 0, fmt.Errorf("%s has no pixels", filepath.Base(path))
 	}
-	// The DECODED bounds, not DecodeConfig's: they agree for every format here,
-	// and taking them from the image that was actually read means the caption
-	// cannot disagree with the thing it captions.
-	b := src.Bounds()
-	return small, b.Dx(), b.Dy(), nil
+	// DecodeConfig's dimensions, NOT the decoded image's — they disagree for GIF
+	// and the decoded ones are wrong. DecodeConfig reports a GIF's logical screen
+	// size; Decode returns frame 0, whose Rect may be a subrectangle of it.
+	// Measured: a GIF with a 100×80 screen and a first frame at (10,5)-(50,35)
+	// was captioned "40×30". The logical size is what an image viewer calls the
+	// image's size, and it is what the user is asking about.
+	return small, cfg.Width, cfg.Height, nil
 }
 
 // checkImageBudget refuses a file that is too big to be worth previewing, naming

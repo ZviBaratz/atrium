@@ -45,7 +45,7 @@ func newSizedImageOverlay(t *testing.T, w, h int) *ImageOverlay {
 // The box must occupy exactly the width it was given, borders included — the
 // invariant every overlay here shares and the one lipgloss v2 inverted.
 func TestImageOverlay_RendersToItsDeclaredWidth(t *testing.T) {
-	for _, size := range [][2]int{{80, 24}, {120, 40}, {60, 20}} {
+	for _, size := range [][2]int{{80, 24}, {120, 40}, {60, 20}, {31, 12}, {25, 12}, {20, 9}} {
 		o := newSizedImageOverlay(t, size[0], size[1])
 		out := o.Render()
 		for i, l := range strings.Split(out, "\n") {
@@ -58,7 +58,7 @@ func TestImageOverlay_RendersToItsDeclaredWidth(t *testing.T) {
 // The box must also not exceed the height it was given, or PlaceOverlay takes
 // the overflow off the bottom border.
 func TestImageOverlay_FitsItsDeclaredHeight(t *testing.T) {
-	for _, size := range [][2]int{{80, 24}, {120, 40}, {100, 12}, {60, 10}} {
+	for _, size := range [][2]int{{80, 24}, {120, 40}, {100, 12}, {60, 10}, {31, 12}, {25, 12}, {20, 9}, {12, 6}} {
 		o := newSizedImageOverlay(t, size[0], size[1])
 		rows := len(strings.Split(o.Render(), "\n"))
 		assert.LessOrEqual(t, rows, size[1], "size %v rendered %d rows", size, rows)

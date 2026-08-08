@@ -168,11 +168,20 @@ func (m *home) actHint(match hints.Match, open bool) tea.Cmd {
 
 // hintResolveRoot is the directory a relative path in the pane is relative to.
 //
-// The agent's cwd is its worktree, so that is what its output names things
-// against. GetRepoPath is the fallback for a direct session, which runs in the
-// repository itself and has no worktree; an empty string means neither is
-// available, and resolveImagePath then refuses relative names outright rather
-// than resolving them against Atrium's own working directory.
+// A started git session's agent runs in its worktree, so that is what its output
+// names things against. Everything else falls back to Instance.Path — the
+// directory the session was created for, which is where a DIRECT session's agent
+// actually runs (IsDirect, session/instance.go).
+//
+// GetRepoPath is deliberately NOT the fallback, though it reads like the obvious
+// one: it resolves through the same `worktree() == nil` guard as GetWorktreePath
+// (session/instance.go:1973), so for a direct session both return "" and the
+// fallback would be dead — relative image paths would silently degrade to copy in
+// exactly the sessions a folder of plots is most likely to be.
+//
+// An empty result means there is nothing to resolve against, and resolveImagePath
+// then refuses relative names rather than resolving them against Atrium's own
+// working directory.
 func (m *home) hintResolveRoot() string {
 	selected := m.list.GetSelectedInstance()
 	if selected == nil {
@@ -181,7 +190,7 @@ func (m *home) hintResolveRoot() string {
 	if wt := selected.GetWorktreePath(); wt != "" {
 		return wt
 	}
-	return selected.GetRepoPath()
+	return selected.Path
 }
 
 // truncateForNotice keeps toasts one line short; the menu row truncates too,

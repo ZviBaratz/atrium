@@ -108,12 +108,17 @@ func (o *ImageOverlay) pictureSize() (cols, rows int) {
 }
 
 // innerWidth is the content width inside border and padding.
+//
+// Floored at 1, NOT at a comfortable minimum. A floor above the box's real
+// content width is not a floor, it is an overflow: pictureSize takes this as the
+// picture's column count, so on a box narrower than the floor every picture row
+// is wider than the content area, lipgloss wraps all of them, and the box
+// overruns the height it declared — which PlaceOverlay then takes off the bottom
+// border. Measured before this was 1: a 25×12 box rendered 13 rows, and a 20×9
+// box rendered 10. A picture too narrow to be worth much is the correct outcome
+// on a 24-column terminal; a broken frame is not.
 func (o *ImageOverlay) innerWidth() int {
-	inner := o.width - 6 // border (2) + horizontal padding (2*2)
-	if inner < 20 {
-		inner = 20
-	}
-	return inner
+	return max(o.width-6, 1) // border (2) + horizontal padding (2*2)
 }
 
 // picture renders — or replays — the image at the current size.
@@ -160,7 +165,30 @@ func (o *ImageOverlay) Render() string {
 	}
 
 	b.WriteString(th.OverlayHintStyle().Render(imageFooter))
-	return box.Render(b.String())
+	return box.Render(fitLines(b.String(), o.height-4)) // border (2) + padding (2)
+}
+
+// fitLines hard-clips content to at most n lines.
+//
+// The last word on the height invariant, and it has to be unconditional rather
+// than a case: pictureSize floors the picture at one row, so a box shorter than
+// imageChrome renders more rows than it was given no matter what the picture
+// does — measured at 12×6, which produced ten rows. Reasoning about which rows
+// to shed at which height is how a box comes to overflow at some size nobody
+// listed; clipping the composed content bounds every size by construction, since
+// the box adds exactly its border and padding to whatever it is handed.
+//
+// A degenerate box loses its footer, and that is the right trade: a lost hint is
+// a hint, a lost bottom border is a frame PlaceOverlay never gets back.
+func fitLines(content string, n int) string {
+	if n < 1 {
+		n = 1
+	}
+	lines := strings.Split(content, "\n")
+	if len(lines) <= n {
+		return content
+	}
+	return strings.Join(lines[:n], "\n")
 }
 
 // title names the file and its pixel size, truncated to the box.

@@ -53,6 +53,20 @@ func TestLoadImage_DecodesAndShrinks(t *testing.T) {
 	assert.Equal(t, 1024, h)
 }
 
+// A GIF is captioned by its LOGICAL SCREEN size, not by frame 0's rectangle.
+//
+// The two disagree only for GIF, and only when the first frame is a
+// subrectangle — which is why the ordinary tiny.gif fixture cannot see this:
+// its frame fills its screen, so both readings give the same number and the
+// assertion would pass either way. offset-frame.gif is a 100×80 screen whose
+// first frame is (10,5)-(50,35); reading the decoded bounds captioned it 40×30.
+func TestLoadImage_GIFReportsItsLogicalScreenSize(t *testing.T) {
+	_, w, h, err := loadImage(fixture(t, "offset-frame.gif"))
+	require.NoError(t, err)
+	assert.Equal(t, 100, w, "a GIF's size is its logical screen, not frame 0's rect")
+	assert.Equal(t, 80, h)
+}
+
 // Every extension in imageExts must actually decode. The allowlist and the blank
 // imports in image_load.go are two separate lists and only one of them makes
 // decoding work; nothing but this test connects them.

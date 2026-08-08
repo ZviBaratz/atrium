@@ -155,7 +155,45 @@ func TestHintResolveRoot(t *testing.T) {
 	h = newHintsHome(t, newBranchInstance(t, "a", "b1"))
 	inst := h.list.GetSelectedInstance()
 	require.NotNil(t, inst)
-	// An unstarted session has no worktree yet, so the repository is what its
-	// output would be relative to.
-	assert.Equal(t, inst.GetRepoPath(), h.hintResolveRoot())
+	// A session with no worktree — direct, or git before Start — falls back to
+	// the directory it was created for.
+	//
+	// Asserted against inst.Path, NOT against inst.GetRepoPath(): that resolves
+	// through the same nil-worktree guard, so it returns "" here and comparing
+	// against it would compare "" to "" and pass however the fallback is written.
+	// That is exactly what the previous version of this assertion did.
+	require.Empty(t, inst.GetWorktreePath(), "fixture must have no worktree, or this proves nothing")
+	require.NotEmpty(t, inst.Path)
+	assert.Equal(t, inst.Path, h.hintResolveRoot())
+	assert.Empty(t, inst.GetRepoPath(), "GetRepoPath is dead here — that is why it is not the fallback")
+}
+
+// A decode that lands after the user has moved on is DROPPED, not applied.
+//
+// Opening unconditionally seizes whatever state the next keypress reached. The
+// hint-mode case is the damaging one: overwriting stateHints without
+// exitHintMode leaves the preview pane frozen on its dimmed snapshot, and the
+// tick's self-heal is gated on the state it just lost.
+func TestHandleImageLoaded_DroppedWhenTheUserMovedOn(t *testing.T) {
+	for _, st := range []state{stateHints, statePrompt, stateHelp, stateVisual} {
+		h := newHintsHome(t, newBranchInstance(t, "a", "b1"))
+		h.windowWidth, h.windowHeight = 100, 30
+		h.state = st
+
+		_, _ = h.handleImageLoaded(imageLoadedMsg{
+			path: "/tmp/x.png", img: parityImage(), width: 30, height: 20,
+		})
+
+		assert.Equalf(t, st, h.state, "a late load seized state %d", st)
+		assert.Nilf(t, h.imageOverlay, "a late load armed the overlay from state %d", st)
+	}
+
+	// Control: from the state the gesture actually leaves behind, it opens.
+	h := newHintsHome(t, newBranchInstance(t, "a", "b1"))
+	h.windowWidth, h.windowHeight = 100, 30
+	_, _ = h.handleImageLoaded(imageLoadedMsg{
+		path: "/tmp/x.png", img: parityImage(), width: 30, height: 20,
+	})
+	assert.Equal(t, stateImagePreview, h.state)
+	assert.NotNil(t, h.imageOverlay)
 }

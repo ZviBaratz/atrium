@@ -59,7 +59,25 @@ func (m *home) currentImageRenderMode() imageview.Mode {
 // that asked for it. That is deliberate — decoding on the loop would stall every
 // session's poll — and it is also why the overlay is opened by a message rather
 // than by a key.
+//
+// It is ALSO why the result has to be dropped when the user has moved on. A large
+// decode takes hundreds of milliseconds, which is long enough to press another
+// key, and opening unconditionally would seize whatever state that key reached:
+// a half-typed create form replaced by a picture (and discarded by the esc that
+// closes it), or — worse — stateHints overwritten without exitHintMode, which
+// leaves PreviewPane.hintContent set with nothing to clear it. The tick's
+// self-heal cannot recover that one: it is gated on `m.state == stateHints`
+// (app/app_msgs.go:192), which is no longer true, so the pane stays frozen on a
+// dimmed, hint-labelled snapshot until the selection changes.
+//
+// Dropping silently rather than notifying is the sibling loader's behaviour
+// (handleCheckpointsLoaded, app/app_checkpoints.go:122) and the right one here:
+// the user has already moved to something else, and a toast would interrupt that
+// too.
 func (m *home) handleImageLoaded(msg imageLoadedMsg) (tea.Model, tea.Cmd) {
+	if m.state != stateDefault {
+		return m, nil
+	}
 	if msg.err != nil {
 		return m, m.handleInfoNotice(truncateForNotice(msg.err.Error()))
 	}

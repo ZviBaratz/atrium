@@ -56,7 +56,14 @@ var builtinPatterns = []pattern{
 	// word "Saved". Requiring a name character immediately before the extension
 	// is what keeps "shot (1).png" from matching a stray ".png". No validate:
 	// the extension IS the filesystem signal pathLike goes looking for.
-	{name: "image-path", re: regexp.MustCompile(`(?P<match>[.\w\-@~/]*[\w\-@](:[\d.\w\-]*[\w\-])*\.(?i:png|jpe?g|gif))\b`), kind: KindPath},
+	//
+	// The trailing `[^\w.]|$` sits OUTSIDE the capture, and a plain `\b` there
+	// would be wrong: `\b` is satisfied by a following '.', so "/tmp/x.png.bak"
+	// matched "/tmp/x.png" — a name no file has — and, because this pattern
+	// outranks path, the real one was never offered. Excluding '.' as well makes
+	// the extension have to END the name; anything else falls through to path,
+	// which matches the whole thing as it did before.
+	{name: "image-path", re: regexp.MustCompile(`(?P<match>[.\w\-@~/]*[\w\-@](:[\d.\w\-]*[\w\-])*\.(?i:png|jpe?g|gif))(?:[^\w.]|$)`), kind: KindPath},
 	{name: "path", re: regexp.MustCompile(`(?P<match>([.\w\-@~]+)?(/[.\w\-@]+)+(:\d+(:\d+)?)?)`), kind: KindPath, validate: pathLike},
 	{name: "uuid", re: regexp.MustCompile(`[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}`), kind: KindText},
 	{name: "sha", re: regexp.MustCompile(`[0-9a-f]{7,64}`), kind: KindText, validate: shaLike},
