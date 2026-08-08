@@ -185,6 +185,87 @@ func TestScan_Patterns(t *testing.T) {
 			expected: nil,
 			kinds:    nil,
 		},
+		{
+			// The path pattern needs a slash, so the commonest thing an agent
+			// prints after taking a screenshot used to match nothing at all.
+			name:     "bare image filename is a path",
+			line:     "Screenshot saved to screenshot.png",
+			expected: []string{"screenshot.png"},
+			kinds:    []Kind{KindPath},
+		},
+		{
+			// A colon run inside the name is a timestamp, not a line:column
+			// suffix. The path pattern's suffix group ate it and left the
+			// extension behind, yielding a name no file has.
+			name:     "timestamped image name keeps its extension",
+			line:     "wrote /tmp/shot-2026-08-07T12:34:56.png ok",
+			expected: []string{"/tmp/shot-2026-08-07T12:34:56.png"},
+			kinds:    []Kind{KindPath},
+		},
+		{
+			// Bare, so the path pattern cannot answer for it: a slashed name
+			// like plots/Figure_1.JPG matches either way and would make this
+			// assertion pass whether the extension is folded or not.
+			name:     "image extension is matched case-insensitively",
+			line:     "saved Figure_1.JPG here",
+			expected: []string{"Figure_1.JPG"},
+			kinds:    []Kind{KindPath},
+		},
+		{
+			// The image pattern is scoped to image extensions precisely so it
+			// does not widen what hint mode labels in general.
+			name:     "a non-image bare filename still matches nothing",
+			line:     "see readme.md for details",
+			expected: nil,
+			kinds:    nil,
+		},
+		{
+			// An image inside a URL stays a URL: both patterns start at the
+			// same column and url is earlier in the table.
+			name:     "image url stays a url",
+			line:     "open https://example.com/a.png now",
+			expected: []string{"https://example.com/a.png"},
+			kinds:    []Kind{KindURL},
+		},
+		{
+			// The pattern must not start mid-prose. Its run stops at ':', so
+			// the label lands on the path rather than on the word before it.
+			name:     "prose prefix is not swallowed",
+			line:     "Saved:/tmp/x.png",
+			expected: []string{"/tmp/x.png"},
+			kinds:    []Kind{KindPath},
+		},
+		{
+			// An image extension mid-name must NOT cut the path short. \b is
+			// satisfied by a following '.', so this used to match "/tmp/x.png" —
+			// a name no file has — and, because image-path outranks path, the
+			// real one was never offered.
+			name:     "an extension mid-name falls through to the path pattern",
+			line:     "backup at /tmp/x.png.bak done",
+			expected: []string{"/tmp/x.png.bak"},
+			kinds:    []Kind{KindPath},
+		},
+		{
+			name:     "a host containing an image extension stays one match",
+			line:     "visit foo.gif.example.com/x now",
+			expected: []string{"foo.gif.example.com/x"},
+			kinds:    []Kind{KindPath},
+		},
+		{
+			name:     "an image name at end of line still matches",
+			line:     "Screenshot saved to shot.png",
+			expected: []string{"shot.png"},
+			kinds:    []Kind{KindPath},
+		},
+		{
+			// A name a regex cannot recover: the space ends the run. Asserting
+			// what is NOT matched keeps the known gap honest instead of
+			// letting a later reader assume coverage.
+			name:     "a parenthesised name yields nothing rather than a stray extension",
+			line:     "wrote shot (1).png",
+			expected: nil,
+			kinds:    nil,
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

@@ -68,6 +68,13 @@ func TestEveryBarHidingStateRestoresTheFrame(t *testing.T) {
 		stateAccounts: {"accounts", func(h *home) { h.Update(runeKey("@")) }},
 		stateInfo:     {"info modal", func(h *home) { h.showInfo("something worth reading") }},
 		stateWelcome:  {"welcome", func(h *home) { h.maybeShowWelcome() }},
+		// The only entry here that is not a keypress, because the box is not opened
+		// by one: the decode runs in a command and the overlay opens on the message
+		// it sends back. That is the "a state can also be left by a message" path
+		// this test's own doc comment names, driven through Update like the rest.
+		stateImagePreview: {"image preview", func(h *home) {
+			h.Update(imageLoadedMsg{path: "/fixture/shots/screenshot.png", img: parityImage()})
+		}},
 	}
 
 	// A bar-hiding state left out of the table above needs a reason, not silence.

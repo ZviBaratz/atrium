@@ -462,6 +462,9 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case error:
 		// Handle errors from confirmation actions
 		return m, m.handleError(msg)
+	case imageLoadedMsg:
+		// An image the user hint-opened finished decoding off the loop (#398).
+		return m.handleImageLoaded(msg)
 	case instanceChangedMsg:
 		// Handle instance changed after confirmation action. A carried notice (the
 		// kill teardown's "U to undo") flashes alongside the refresh, because a
@@ -1021,6 +1024,13 @@ func (m *home) handleKeyPress(msg tea.KeyPressMsg) (mod tea.Model, cmd tea.Cmd) 
 	// esc is what closes).
 	if m.state == stateCheckpoints {
 		return m.handleCheckpointsState(msg)
+	}
+
+	// The image preview, like the other overlay states, must run before the global
+	// quit handling: it is a read-only box with one gesture, so every other key —
+	// q included — is swallowed rather than acted on behind it.
+	if m.state == stateImagePreview {
+		return m.handleImagePreviewState(msg)
 	}
 
 	// The palette, like the other overlay states, must run before the global quit

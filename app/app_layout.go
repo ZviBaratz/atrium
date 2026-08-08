@@ -175,6 +175,22 @@ func (m *home) updateHandleWindowSizeEvent(msg tea.WindowSizeMsg) {
 		}
 		m.customCommandsOverlay.SetSize(w, h)
 	}
+	if m.imageOverlay != nil {
+		// The most generous share here, because resolution is the whole point:
+		// every cell the box gives up is two pixels of the picture. The caps are
+		// the same ones ImageOverlay enforces on the picture itself, plus its
+		// chrome — asking for more would only pad the box around a picture that
+		// cannot grow. The share is of the box, border and padding included.
+		w := int(float32(msg.Width) * 0.85)
+		if w > imagePreviewMaxWidth {
+			w = imagePreviewMaxWidth
+		}
+		h := int(float32(msg.Height) * 0.85)
+		if h > imagePreviewMaxHeight {
+			h = imagePreviewMaxHeight
+		}
+		m.imageOverlay.SetSize(w, h)
+	}
 
 	previewWidth, previewHeight := m.tabbedWindow.GetPreviewSize()
 	if err := m.list.SetSessionPreviewSize(previewWidth, previewHeight); err != nil {
@@ -197,7 +213,7 @@ func (m *home) menuVisible() bool {
 		// These inline interactions teach their gestures on the bar, so it stays
 		// even when the always-on hint bar is turned off.
 		return true
-	case statePrompt, stateRename, stateQueue, stateCmdLog, stateCommandPalette, stateCustomCommands, stateCheckpoints, stateConfirm, stateHelp, stateInfo, stateSettings, stateWelcome, stateAccounts, stateHistory:
+	case statePrompt, stateRename, stateQueue, stateCmdLog, stateCommandPalette, stateCustomCommands, stateCheckpoints, stateConfirm, stateHelp, stateInfo, stateSettings, stateWelcome, stateAccounts, stateHistory, stateImagePreview:
 		return false
 	default: // stateDefault (and the empty list)
 		// The bottom row is always reserved during plain navigation, so a transient

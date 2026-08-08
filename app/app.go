@@ -311,6 +311,10 @@ const (
 	// native file-history checkpoints read off Claude's transcript. Read-only — its
 	// one action attaches, because only Claude's own Esc-Esc can rewind.
 	stateCheckpoints
+	// stateImagePreview shows an agent-produced image — a screenshot, a plot — in
+	// a centred overlay, opened by uppercase-hinting its path (#398). Read-only;
+	// esc closes.
+	stateImagePreview
 
 	// numStates counts the states above and must stay last. It exists so a test can
 	// walk the enum rather than hand-listing it: TestEveryBarHidingStateRestoresTheFrame
@@ -567,6 +571,8 @@ type home struct {
 	cmdLogOverlay *overlay.CmdLogOverlay
 	// checkpointOverlay lists a Claude session's native checkpoints (#385).
 	checkpointOverlay *overlay.CheckpointOverlay
+	// imageOverlay shows an agent-produced image in Atrium's own chrome (#398).
+	imageOverlay *overlay.ImageOverlay
 	// checkpointTarget is the session the open timeline belongs to — deliberately
 	// not the live selection, so an arriving load result can be matched against the
 	// session that asked for it and a result for any other one dropped.
@@ -1051,6 +1057,11 @@ func (m *home) viewContent() string {
 			log.ErrorLog.Printf("accounts overlay is nil")
 		}
 		return overlay.PlaceOverlay(0, 0, m.accountsOverlay.Render(), mainView, true)
+	} else if m.state == stateImagePreview {
+		if m.imageOverlay == nil {
+			log.ErrorLog.Printf("image overlay is nil")
+		}
+		return overlay.PlaceOverlay(0, 0, m.imageOverlay.Render(), mainView, true)
 	}
 
 	return mainView

@@ -139,10 +139,21 @@ func (m *home) handleHintsState(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	return m, tea.Batch(m.actHint(selected, open), m.instanceChanged())
 }
 
-// actHint copies the match and, on the open variant, opens URLs in the
-// browser. Non-URL kinds degrade to plain copy in v1 (see the design doc).
+// actHint copies the match and, on the open variant, opens what can be opened:
+// an image path in Atrium's own overlay, a web URL in the browser. Every other
+// kind degrades to plain copy.
 func (m *home) actHint(match hints.Match, open bool) tea.Cmd {
 	copyCmd := m.copyToClipboard(match.Text)
+	// Images first, and in-app. An agent's screenshots and plots are the reason
+	// this branch exists (#398): handing the path to the OS opener instead would
+	// launch a viewer on the machine ATRIUM runs on, which over SSH is the wrong
+	// machine and locally takes the user out of the TUI. The decode runs in a
+	// command, so the overlay opens on a later message, not here.
+	if open && match.Kind == hints.KindPath {
+		if path, ok := resolveImagePath(match.Text, m.hintResolveRoot()); ok {
+			return tea.Batch(copyCmd, loadImageCmd(path))
+		}
+	}
 	if open && match.Kind == hints.KindURL && actions.OpenableURL(match.Text) {
 		if err := actions.OpenInBrowser(match.Text); err != nil {
 			// The copy still happened; report only the half that failed.
@@ -153,6 +164,33 @@ func (m *home) actHint(match hints.Match, open bool) tea.Cmd {
 	}
 	return tea.Batch(copyCmd,
 		m.handleInfoNotice(fmt.Sprintf("'%s' copied", truncateForNotice(match.Text))))
+}
+
+// hintResolveRoot is the directory a relative path in the pane is relative to.
+//
+// A started git session's agent runs in its worktree, so that is what its output
+// names things against. Everything else falls back to Instance.Path — the
+// directory the session was created for, which is where a DIRECT session's agent
+// actually runs (IsDirect, session/instance.go).
+//
+// GetRepoPath is deliberately NOT the fallback, though it reads like the obvious
+// one: it resolves through the same `worktree() == nil` guard as GetWorktreePath
+// (session/instance.go:1973), so for a direct session both return "" and the
+// fallback would be dead — relative image paths would silently degrade to copy in
+// exactly the sessions a folder of plots is most likely to be.
+//
+// An empty result means there is nothing to resolve against, and resolveImagePath
+// then refuses relative names rather than resolving them against Atrium's own
+// working directory.
+func (m *home) hintResolveRoot() string {
+	selected := m.list.GetSelectedInstance()
+	if selected == nil {
+		return ""
+	}
+	if wt := selected.GetWorktreePath(); wt != "" {
+		return wt
+	}
+	return selected.Path
 }
 
 // truncateForNotice keeps toasts one line short; the menu row truncates too,
