@@ -584,9 +584,9 @@ type home struct {
 	kittyID              uint32
 	kittyCols, kittyRows int
 	// kittyOutstanding counts transmissions that have not yet been answered. It
-	// is a count and not a flag because Ghostty's replies carry no image number,
-	// so an untagged answer can only be placed by ORDER: while more than one is
-	// outstanding, the next reply belongs to the oldest. See handleKittyGraphics.
+	// is a count and not a flag because a reply that echoes no image number can
+	// only be placed by ORDER: while more than one is outstanding, the next reply
+	// belongs to the oldest. See handleKittyGraphics.
 	kittyOutstanding int
 	// kittyEnviron is the environment the pixel-rung gate reads, or nil for the
 	// process's own. A field rather than an os.Environ() call at the point of

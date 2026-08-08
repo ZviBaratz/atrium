@@ -20,6 +20,7 @@ import (
 	"github.com/ZviBaratz/atrium/internal/update"
 	"github.com/ZviBaratz/atrium/log"
 	"github.com/ZviBaratz/atrium/session/tmux"
+	"github.com/ZviBaratz/atrium/ui/imageview"
 	"github.com/ZviBaratz/atrium/ui/theme"
 	"os"
 	"os/exec"
@@ -438,8 +439,12 @@ var (
 			// terminal answers mid-session, so doctor can say "eligible" and never
 			// "works".
 			fmt.Println()
+			// The width answer is MEASURED in this process, exactly as the TUI
+			// measures it in its own — it cannot be derived from the environment,
+			// which is the whole point of the predicate.
 			fmt.Print(doctor.RenderImagePreview(doctor.CheckImagePreview(
-				os.Environ(), config.LoadConfig().GetImagePreview())))
+				os.Environ(), config.LoadConfig().GetImagePreview(),
+				imageview.PlaceholdersMeasureOneCell())))
 
 			// OOM ranking: on Linux, compares the shared tmux server's oom_score against
 			// each agent pane's so a single kill is shown to shed one recoverable session

@@ -2,6 +2,7 @@ package app
 
 import (
 	"fmt"
+	"image"
 	"math"
 	"os"
 	"os/exec"
@@ -11,15 +12,47 @@ import (
 	"testing"
 
 	"github.com/ZviBaratz/atrium/config"
+	"github.com/ZviBaratz/atrium/internal/doctor"
 	"github.com/ZviBaratz/atrium/ui/overlay"
 	"github.com/ZviBaratz/atrium/ui/theme"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/colorprofile"
 	uv "github.com/charmbracelet/ultraviolet"
 	"github.com/charmbracelet/x/ansi/kitty"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// ack, refusal and placementRefusal are the three answers a terminal gives, and
+// every handler test builds its input through one of them.
+//
+// A struct literal per call site is what let twenty tests assert against a
+// message no terminal sends: when the payload check landed, every one of them
+// kept passing an implicit "this was an error" and none of them noticed. One
+// constructor per reply shape means the next field can only be forgotten once —
+// and TestKittyReply_DecodedFromRealTerminalBytes pins these against bytes
+// captured off a real kitty and a real Ghostty, so "what a terminal sends" is
+// measured rather than assumed. It has already caught one wrong assumption of
+// mine; see the correction in that test.
+func ack(number int, id uint32) kittyGraphicsConfirmed {
+	return kittyGraphicsConfirmed{number: number, id: id, ok: true}
+}
+
+// refusal is a transmission the terminal REJECTED. The id is non-zero on
+// purpose: kitty allocates one before it decodes, so `\e_Gi=2,I=22;EBADPNG` is
+// what a bad payload really comes back as, and an id is therefore no evidence at
+// all that an image exists.
+func refusal(number int, id uint32) kittyGraphicsConfirmed {
+	return kittyGraphicsConfirmed{number: number, id: id}
+}
+
+// placementRefusal is the answer to a rejected a=p. It carries p= and no I=,
+// which is what makes it a hazard: on number alone it is indistinguishable from
+// an untagged transmission reply, which the handler accepts.
+func placementRefusal(id uint32) kittyGraphicsConfirmed {
+	return kittyGraphicsConfirmed{id: id, placement: kittyPlacementID}
+}
 
 // rawString runs a command the runtime would and returns the string tea.Raw
 // queued, or "" when the command was nil.
@@ -89,6 +122,55 @@ func TestKittyEligible(t *testing.T) {
 	}
 }
 
+// doctor and the TUI must reach the same verdict for the same environment.
+//
+// They are two implementations of one rule, in two packages, and that is the
+// defect this guards: the first cut of doctor replicated only the NO_COLOR veto,
+// so it reported "eligible" to a user on kitty under an east-asian width rule or
+// a downsampling profile — the exact person the section exists for, told the
+// opposite of the truth about the exact surprise it exists to explain.
+//
+// The sweep is the whole cross-product rather than a few examples, because a
+// hand-picked list is how three vetoes came to be one: what is missing from the
+// implementation is missing from the examples too.
+func TestDoctorAgreesWithTheTUI(t *testing.T) {
+	environs := [][]string{
+		{"TERM=xterm-kitty"},
+		{"TERM=xterm-kitty", "TMUX=/tmp/s,1,0"},
+		{"TERM=xterm-256color", "TERM_PROGRAM=ghostty", "COLORTERM=truecolor"},
+		{"TERM=xterm-256color", "TERM_PROGRAM=ghostty"}, // no COLORTERM: not truecolor
+		{"TERM=xterm-256color"},
+		{"TERM=xterm-kitty", "NO_COLOR=1"},
+		{"GHOSTTY_BIN_DIR=/usr/bin"},
+		nil,
+	}
+	prefs := []string{
+		config.ImagePreviewAuto, config.ImagePreviewKitty,
+		config.ImagePreviewGlyph, config.ImagePreviewOff,
+	}
+
+	for _, env := range environs {
+		for _, pref := range prefs {
+			for _, oneCell := range []bool{true, false} {
+				name := fmt.Sprintf("%v/%s/oneCell=%v", env, pref, oneCell)
+				t.Run(name, func(t *testing.T) {
+					// mono and trueColor are resolved from the same environment the
+					// section reads, which is what production does — theme.Mono is set
+					// from NO_COLOR at startup, and the profile is read off the env.
+					tui := kittyEligible(env, pref,
+						theme.NoColorRequested(env),
+						colorprofile.Env(env) == colorprofile.TrueColor,
+						oneCell)
+					got := doctor.CheckImagePreview(env, pref, oneCell).Eligible
+
+					assert.Equalf(t, tui, got,
+						"doctor says %v where the TUI does %v", got, tui)
+				})
+			}
+		}
+	}
+}
+
 // An empty TMUX is not something tmux sets, so it must not trip the veto.
 func TestKittyEligible_EmptyTmuxIsNotTmux(t *testing.T) {
 	assert.True(t, kittyEligible(
@@ -134,7 +216,7 @@ func TestHandleKittyGraphics_UpgradesTheOverlayAndPlacesIt(t *testing.T) {
 	h := newHintsHome(t, newBranchInstance(t, "a", "b1"))
 	openKittyPreview(t, h)
 
-	_, cmd := h.handleKittyGraphics(kittyGraphicsConfirmed{number: h.kittyNumber, id: 0xAABBCC})
+	_, cmd := h.handleKittyGraphics(ack(h.kittyNumber, 0xAABBCC))
 	require.Equal(t, uint32(0xAABBCC), h.kittyID)
 
 	after := h.imageOverlay.Render()
@@ -165,7 +247,7 @@ func TestHandleKittyGraphics_UpgradeBeatsTheCachedGlyphs(t *testing.T) {
 	first := h.imageOverlay.Render()
 	require.NotContains(t, first, string(kitty.Placeholder), "glyphs while we wait")
 
-	h.handleKittyGraphics(kittyGraphicsConfirmed{number: h.kittyNumber, id: 0xAABBCC})
+	h.handleKittyGraphics(ack(h.kittyNumber, 0xAABBCC))
 
 	assert.Contains(t, h.imageOverlay.Render(), string(kitty.Placeholder),
 		"the cached glyph picture must not outlive the image ID that replaced it")
@@ -179,11 +261,11 @@ func TestHandleKittyGraphics_DropsForeignAndStaleReplies(t *testing.T) {
 		h := newHintsHome(t, newBranchInstance(t, "a", "b1"))
 		openKittyPreview(t, h)
 		// Answer the outstanding transmission, closing the window.
-		h.handleKittyGraphics(kittyGraphicsConfirmed{number: h.kittyNumber, id: 42})
+		h.handleKittyGraphics(ack(h.kittyNumber, 42))
 
 		// A second, unnumbered reply now belongs to some other program: there is
 		// nothing outstanding for it to be an answer to.
-		_, cmd := h.handleKittyGraphics(kittyGraphicsConfirmed{id: 99})
+		_, cmd := h.handleKittyGraphics(ack(0, 99))
 		assert.Equal(t, uint32(42), h.kittyID, "an untagged reply must not retarget a settled image")
 		assert.Nil(t, cmd)
 	})
@@ -192,27 +274,46 @@ func TestHandleKittyGraphics_DropsForeignAndStaleReplies(t *testing.T) {
 		h := newHintsHome(t, newBranchInstance(t, "a", "b1"))
 		openKittyPreview(t, h)
 
-		_, cmd := h.handleKittyGraphics(kittyGraphicsConfirmed{number: 99, id: 7})
+		_, cmd := h.handleKittyGraphics(ack(99, 7))
 		assert.Zero(t, h.kittyID)
 		assert.Nil(t, cmd)
 		assert.NotContains(t, h.imageOverlay.Render(), string(kitty.Placeholder))
 	})
 
-	// An error reply carries no ID. Asserting that from the un-upgraded state
-	// proves nothing — kittyID is zero whether the reply was refused or accepted
-	// as zero — so this drives it AFTER a success, where the two answers differ:
-	// refusing keeps the picture, accepting resets it to glyphs.
+	// An error reply after a success must not undo it. Driving it from the
+	// un-upgraded state would prove nothing — kittyID is zero whether the reply
+	// was refused or accepted as zero — so this runs AFTER a success, where the
+	// two answers differ: refusing keeps the picture, accepting resets it.
+	//
+	// Both id shapes are exercised, and the second is the one that matters. An
+	// earlier version of this test asserted only `id: 0` on the belief that "an
+	// error reply carries no ID"; kitty 0.45 answers a bad payload with
+	// `\e_Gi=2,I=22;EBADPNG`, so the id is real and names nothing. Under the
+	// id-only rule that reply read as a confirmation.
 	t.Run("an error reply after a success must not undo it", func(t *testing.T) {
-		h := newHintsHome(t, newBranchInstance(t, "a", "b1"))
-		openKittyPreview(t, h)
-		h.handleKittyGraphics(kittyGraphicsConfirmed{number: h.kittyNumber, id: 42})
-		require.Equal(t, uint32(42), h.kittyID)
+		for _, tc := range []struct {
+			name string
+			bad  kittyGraphicsConfirmed
+		}{
+			{"no id at all", refusal(2, 0)},
+			{"an id kitty allocated and then rejected", refusal(2, 99)},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				h := newHintsHome(t, newBranchInstance(t, "a", "b1"))
+				openKittyPreview(t, h)
+				h.handleKittyGraphics(ack(h.kittyNumber, 42))
+				require.Equal(t, uint32(42), h.kittyID)
 
-		_, cmd := h.handleKittyGraphics(kittyGraphicsConfirmed{number: h.kittyNumber, id: 0})
-		assert.Equal(t, uint32(42), h.kittyID, "a reply with no id must not clear a confirmed one")
-		assert.Nil(t, cmd)
-		assert.Contains(t, h.imageOverlay.Render(), string(kitty.Placeholder),
-			"the picture must survive an error reply that arrives late")
+				// A second transmission, so the refusal has something to answer.
+				h.transmitImageCmd(parityImage())
+				_, cmd := h.handleKittyGraphics(tc.bad)
+
+				assert.Equal(t, uint32(42), h.kittyID, "a refusal must not replace a confirmed image")
+				assert.Nil(t, cmd, "and must not free an image the terminal never stored")
+				assert.Contains(t, h.imageOverlay.Render(), string(kitty.Placeholder),
+					"the picture must survive an error reply that arrives late")
+			})
+		}
 	})
 
 	// A reply that lands after the user pressed esc has nothing to upgrade — and
@@ -224,7 +325,7 @@ func TestHandleKittyGraphics_DropsForeignAndStaleReplies(t *testing.T) {
 		number := h.kittyNumber
 		h.closeImagePreview()
 
-		_, cmd := h.handleKittyGraphics(kittyGraphicsConfirmed{number: number, id: 7})
+		_, cmd := h.handleKittyGraphics(ack(number, 7))
 		assert.Zero(t, h.kittyID, "nothing is on screen to upgrade")
 		assert.Contains(t, rawString(t, cmd), "d=I", "but the stored image is freed")
 	})
@@ -240,7 +341,7 @@ func TestCloseImagePreview_ReleasesOnlyAConfirmedImage(t *testing.T) {
 
 	h = newHintsHome(t, newBranchInstance(t, "a", "b1"))
 	openKittyPreview(t, h)
-	h.handleKittyGraphics(kittyGraphicsConfirmed{number: h.kittyNumber, id: 42})
+	h.handleKittyGraphics(ack(h.kittyNumber, 42))
 
 	got := rawString(t, h.closeImagePreview())
 	assert.Contains(t, got, "d=I", "the uppercase form is what frees the image data")
@@ -254,7 +355,7 @@ func TestCloseImagePreview_ReleasesOnlyAConfirmedImage(t *testing.T) {
 func TestPlaceKittyImage_SkipsARedundantResize(t *testing.T) {
 	h := newHintsHome(t, newBranchInstance(t, "a", "b1"))
 	openKittyPreview(t, h)
-	h.handleKittyGraphics(kittyGraphicsConfirmed{number: h.kittyNumber, id: 42})
+	h.handleKittyGraphics(ack(h.kittyNumber, 42))
 
 	assert.Nil(t, h.placeKittyImageCmd(), "the grid has not changed")
 
@@ -278,15 +379,42 @@ func TestPlaceKittyImage_SilentWithoutPixels(t *testing.T) {
 func TestKittyGraphicsEventFrom_ReadsTheReply(t *testing.T) {
 	got := kittyGraphicsEventFrom(uv.KittyGraphicsEvent{
 		Options: kitty.Options{ID: 987654, Number: 3},
+		Payload: []byte("OK"),
 	})
-	assert.Equal(t, kittyGraphicsConfirmed{number: 3, id: 987654}, got)
+	assert.Equal(t, ack(3, 987654), got)
 
 	// The largest ID the protocol allows must still survive; a bound that
 	// rejected it would refuse a legitimate reply.
 	got = kittyGraphicsEventFrom(uv.KittyGraphicsEvent{
 		Options: kitty.Options{ID: math.MaxUint32, Number: 1},
+		Payload: []byte("OK"),
 	})
 	assert.Equal(t, uint32(math.MaxUint32), got.id)
+}
+
+// The payload is the ONLY field that says whether the request succeeded, so the
+// converter's reading of it is worth its own guard. Every failure the protocol
+// defines is a named code, and none of them may pass for an acknowledgement.
+func TestKittyGraphicsEventFrom_ReadsTheOutcomeFromThePayload(t *testing.T) {
+	outcome := func(payload string) bool {
+		return kittyGraphicsEventFrom(uv.KittyGraphicsEvent{
+			Options: kitty.Options{ID: 1, Number: 1},
+			Payload: []byte(payload),
+		}).ok
+	}
+
+	assert.True(t, outcome("OK"))
+	assert.True(t, outcome("OK\r\n"), "a terminal may terminate the line")
+
+	for _, bad := range []string{
+		"EBADPNG:Not a PNG file",
+		"ENOENT:Put command refers to non-existent image with id: 987654 and number: 0",
+		"EINVAL:Image too large, width or height greater than 10000",
+		"ENOMEM:Out of memory",
+		"", // no payload at all is not a confirmation either
+	} {
+		assert.Falsef(t, outcome(bad), "%q is a refusal, not an acknowledgement", bad)
+	}
 }
 
 // Options.ID is an int parsed from bytes the terminal sent, and ultraviolet
@@ -307,7 +435,7 @@ func TestUpdate_RoutesTheGraphicsReply(t *testing.T) {
 	h := newHintsHome(t, newBranchInstance(t, "a", "b1"))
 	openKittyPreview(t, h)
 
-	h.Update(uv.KittyGraphicsEvent{Options: kitty.Options{ID: 5, Number: h.kittyNumber}})
+	h.Update(uv.KittyGraphicsEvent{Options: kitty.Options{ID: 5, Number: h.kittyNumber}, Payload: []byte("OK")})
 	assert.Equal(t, uint32(5), h.kittyID, "Update must have a case for the untranslated event")
 }
 
@@ -354,20 +482,17 @@ func TestOpenImagePreview_MonoNeverTransmits(t *testing.T) {
 	assert.Nil(t, cmd, "NO_COLOR strips the foreground the image ID rides in")
 }
 
-// Two terminals, two reply shapes, and the difference is not academic — it was
-// measured, and getting it wrong costs one of them the whole rung.
+// The handler must accept a reply whether or not it echoes the image number.
 //
-// The protocol says a transmission tagged I=<number> is answered
-// `i=<id>,I=<number>;OK`. kitty 0.45.0 does that. Ghostty 1.3.0 answers
-// `\x1b_Gi=2147483647;OK` — the assigned ID and no number at all. Every unit
-// test here synthesises its own replies, so nothing in this file could have
-// caught that; it came from sending Atrium's own bytes to both terminals and
-// reading what came back.
+// Both measured terminals DO echo it (see the correction in
+// TestKittyReply_DecodedFromRealTerminalBytes, which is where that was got
+// wrong). The untagged row stays because the echo is a courtesy no client can
+// require, and refusing one would cost such a terminal the rung in silence.
 //
-// Ghostty's ID is also over 24 bits, which is the only case that exercises the
-// third diacritic in production. That is why the assertion uses the real value
-// rather than a round number.
-func TestHandleKittyGraphics_AcceptsBothTerminalsReplyShapes(t *testing.T) {
+// The large ID is Ghostty's real one, and it is over 24 bits — the only case
+// that exercises the third diacritic in production, which is why it is the real
+// value rather than a round number.
+func TestHandleKittyGraphics_AcceptsEitherReplyShape(t *testing.T) {
 	for _, tc := range []struct {
 		name  string
 		reply func(number int) kittyGraphicsConfirmed
@@ -375,13 +500,14 @@ func TestHandleKittyGraphics_AcceptsBothTerminalsReplyShapes(t *testing.T) {
 	}{
 		{
 			name:  "kitty echoes the image number",
-			reply: func(n int) kittyGraphicsConfirmed { return kittyGraphicsConfirmed{number: n, id: 1} },
+			reply: func(n int) kittyGraphicsConfirmed { return ack(n, 1) },
 			want:  1,
 		},
 		{
-			// Measured on Ghostty 1.3.0: \x1b_Gi=2147483647;OK
-			name:  "ghostty omits it",
-			reply: func(int) kittyGraphicsConfirmed { return kittyGraphicsConfirmed{id: 2147483647} },
+			// Not a shape either terminal was measured sending; accepted so a
+			// terminal that does not echo I= keeps the rung.
+			name:  "a terminal that echoes no number",
+			reply: func(int) kittyGraphicsConfirmed { return ack(0, 2147483647) },
 			want:  2147483647,
 		},
 	} {
@@ -407,28 +533,188 @@ func TestHandleKittyGraphics_IgnoresRepliesWhenNothingWasSent(t *testing.T) {
 	h.openImagePreview(overlay.Image{Path: "/fixture/shot.png", Pixels: parityImage()})
 	require.Zero(t, h.kittyOutstanding)
 
-	_, cmd := h.handleKittyGraphics(kittyGraphicsConfirmed{id: 7})
+	_, cmd := h.handleKittyGraphics(ack(0, 7))
 	assert.Zero(t, h.kittyID, "a reply to a transmission we never sent is not ours")
 	assert.Nil(t, cmd)
+}
+
+// A rejected transmission must not become a picture.
+//
+// This is the defect an id-only rule shipped: kitty answers a bad payload with
+// `\e_Gi=2,I=22;EBADPNG`, so the reply names an image the terminal does not
+// hold. Upgrading on it swaps a correct glyph picture for cells addressing
+// nothing, and because SetKittyImage has no failure path the box stays blank for
+// the rest of its life — strictly worse than not having tried.
+func TestHandleKittyGraphics_ARefusedTransmissionKeepsTheGlyphs(t *testing.T) {
+	h := newHintsHome(t, newBranchInstance(t, "a", "b1"))
+	openKittyPreview(t, h)
+	glyphs := h.imageOverlay.Render()
+
+	_, cmd := h.handleKittyGraphics(refusal(h.kittyNumber, 2))
+
+	assert.Zero(t, h.kittyID, "an id on a refusal names no image the terminal holds")
+	assert.Nil(t, cmd, "and freeing it would delete whatever else now answers to 2")
+	assert.NotContains(t, h.imageOverlay.Render(), string(kitty.Placeholder))
+	assert.Equal(t, glyphs, h.imageOverlay.Render(), "the picture is untouched")
+}
+
+// A refusal still ANSWERS the transmission it names, so the outstanding count
+// has to come down with it. Leaving it up strands the count above zero forever,
+// which permanently disqualifies every untagged reply after it, and a terminal
+// that does not echo the number would lose the rung for the rest of the session.
+func TestHandleKittyGraphics_ARefusalStillClosesItsTransmission(t *testing.T) {
+	h := newHintsHome(t, newBranchInstance(t, "a", "b1"))
+	openKittyPreview(t, h)
+	require.Equal(t, 1, h.kittyOutstanding)
+
+	h.handleKittyGraphics(refusal(h.kittyNumber, 2))
+	assert.Zero(t, h.kittyOutstanding, "the transmission was answered, unsuccessfully")
+
+	// And the next picture is reachable: an untagged reply is accepted again.
+	h.transmitImageCmd(parityImage())
+	h.handleKittyGraphics(ack(0, 55))
+	assert.Equal(t, uint32(55), h.kittyID)
+}
+
+// A refused PLACEMENT drops the picture back to glyphs.
+//
+// q=1 suppresses the OK and leaves the error, so a placement that works says
+// nothing and one that fails answers — the opposite of the shape the rest of
+// this file deals in. Without the fallback the cells go on addressing a
+// placement that does not exist and the terminal draws nothing for them, from
+// the one code path that has a working picture in hand.
+func TestHandleKittyPlacement_RefusalFallsBackToGlyphs(t *testing.T) {
+	h := newHintsHome(t, newBranchInstance(t, "a", "b1"))
+	openKittyPreview(t, h)
+	h.handleKittyGraphics(ack(h.kittyNumber, 42))
+	require.Contains(t, h.imageOverlay.Render(), string(kitty.Placeholder))
+
+	_, cmd := h.handleKittyGraphics(placementRefusal(42))
+
+	assert.NotContains(t, h.imageOverlay.Render(), string(kitty.Placeholder),
+		"cells addressing a placement the terminal refused draw nothing at all")
+	assert.Nil(t, cmd)
+	assert.Equal(t, uint32(42), h.kittyID,
+		"the image is still stored terminal-side; only closing frees it")
+	assert.Contains(t, rawString(t, h.closeImagePreview()), "i=42",
+		"and closing must still free it")
+}
+
+// The hazard that makes p= worth reading at all: a placement error carries no
+// I=, so on number alone it IS the untagged shape. Counted as one, it
+// closes the window on the transmission actually in flight and retargets the
+// open overlay onto an image from the picture before it.
+func TestHandleKittyPlacement_RefusalIsNotATransmissionReply(t *testing.T) {
+	h := newHintsHome(t, newBranchInstance(t, "a", "b1"))
+	openKittyPreview(t, h)
+	h.handleKittyGraphics(ack(h.kittyNumber, 42))
+
+	// The user moves on. A new picture is in flight when the old placement's
+	// refusal finally arrives.
+	h.closeImagePreview()
+	h2 := newHintsHome(t, newBranchInstance(t, "a", "b1"))
+	openKittyPreview(t, h2)
+	h2.kittyNumber, h2.kittyOutstanding = 2, 1
+
+	_, cmd := h2.handleKittyGraphics(placementRefusal(42))
+
+	assert.Equal(t, 1, h2.kittyOutstanding, "a placement's answer closes no transmission")
+	assert.Zero(t, h2.kittyID, "and cannot hand this overlay the previous picture's image")
+	assert.Nil(t, cmd)
+
+	// The real reply is still accepted afterwards.
+	h2.handleKittyGraphics(ack(2, 77))
+	assert.Equal(t, uint32(77), h2.kittyID)
+}
+
+// A placement refusal naming somebody else's image must not touch our picture.
+func TestHandleKittyPlacement_RefusalForAForeignImageIsIgnored(t *testing.T) {
+	h := newHintsHome(t, newBranchInstance(t, "a", "b1"))
+	openKittyPreview(t, h)
+	h.handleKittyGraphics(ack(h.kittyNumber, 42))
+
+	h.handleKittyGraphics(placementRefusal(43))
+
+	assert.Contains(t, h.imageOverlay.Render(), string(kitty.Placeholder),
+		"another program's placement failing is not our picture's problem")
+}
+
+// An encode that fails must not advance the transmission number.
+//
+// The number and the outstanding count define the unanswered window
+// [number-outstanding+1, number]. Advancing one without the other slides that
+// window off the reply still in flight: it reads as another program's, so it is
+// neither counted nor freed — leaking the image — and the count never returns to
+// zero, which disqualifies every untagged reply for the rest of the session.
+func TestTransmitImageCmd_AFailedEncodeCostsNoNumber(t *testing.T) {
+	h := newHintsHome(t, newBranchInstance(t, "a", "b1"))
+	openKittyPreview(t, h)
+	require.Equal(t, 1, h.kittyNumber)
+	require.Equal(t, 1, h.kittyOutstanding)
+
+	// A zero-sized image is one TransmitPNG refuses.
+	assert.Nil(t, h.transmitImageCmd(image.NewRGBA(image.Rect(0, 0, 0, 0))))
+	assert.Equal(t, 1, h.kittyNumber, "a transmission that never went out consumed no number")
+	assert.Equal(t, 1, h.kittyOutstanding)
+
+	// The reply to the transmission that DID go out is still inside the window.
+	_, cmd := h.handleKittyGraphics(ack(1, 7))
+	assert.Equal(t, uint32(7), h.kittyID)
+	assert.NotNil(t, cmd)
 }
 
 // The bytes each terminal really sends, decoded by the parser that really
 // decodes them.
 //
-// Everything else in this file synthesises a uv.KittyGraphicsEvent, which tests
-// Atrium's half of the contract and assumes ultraviolet's. That assumption is
-// exactly where the Ghostty defect lived: the reply shape differs between
-// terminals, and no hand-written fixture would have shown it. These two strings
-// were captured from kitty 0.45.0 and Ghostty 1.3.0 by sending them Atrium's own
-// transmission and reading the tty.
+// Everything else in this file builds the message through ack/refusal/
+// placementRefusal, which tests Atrium's half of the contract and assumes the
+// constructors describe a real terminal. That assumption is exactly where the
+// Ghostty defect lived, and where the id-means-success defect lived after it —
+// so this is the test that pins the constructors to captured bytes. Every string
+// below came off a real terminal, by sending it Atrium's own escapes and reading
+// the tty; the failures were provoked with a deliberately corrupt payload and a
+// placement of an image that was never transmitted.
+//
+// The two refusals are the load-bearing rows. Both carry a NON-ZERO i=, which is
+// why "the reply names an image" cannot mean "the terminal has one".
 func TestKittyReply_DecodedFromRealTerminalBytes(t *testing.T) {
 	for _, tc := range []struct {
 		name  string
 		bytes string
 		want  kittyGraphicsConfirmed
 	}{
-		{"kitty 0.45.0", "\x1b_Gi=1,I=7;OK\x1b\\", kittyGraphicsConfirmed{number: 7, id: 1}},
-		{"ghostty 1.3.0", "\x1b_Gi=2147483647;OK\x1b\\", kittyGraphicsConfirmed{number: 0, id: 2147483647}},
+		{"kitty 0.45.0 accepts", "\x1b_Gi=1,I=11;OK\x1b\\", ack(11, 1)},
+		{"ghostty 1.3.0 accepts", "\x1b_Gi=2147483647,I=11;OK\x1b\\", ack(11, 2147483647)},
+		{
+			"kitty 0.45.0 rejects a bad payload — with an id that names nothing",
+			"\x1b_Gi=2,I=22;EBADPNG:Not a PNG file\x1b\\",
+			refusal(22, 2),
+		},
+		{
+			// Ghostty reports the same failure with NO i= at all, which is why the
+			// id==0 test cannot be the only refusal check and the payload has to be.
+			"ghostty 1.3.0 rejects a bad payload, with no id",
+			"\x1b_GI=22;EINVAL: invalid data\x1b\\",
+			refusal(22, 0),
+		},
+		{
+			"kitty 0.45.0 rejects a placement, despite q=1",
+			"\x1b_Gi=987654,p=1;ENOENT:Put command refers to non-existent image with id: 987654 and number: 0\x1b\\",
+			placementRefusal(987654),
+		},
+		{
+			"ghostty 1.3.0 rejects a placement too",
+			"\x1b_Gi=987654,p=1;ENOENT: image not found\x1b\\",
+			placementRefusal(987654),
+		},
+		{
+			// Not a shape either terminal was seen to send; accepted on purpose so a
+			// terminal that does not echo I= keeps the rung. See TestUpdate_Accepts-
+			// AnUntaggedReply.
+			"a terminal that echoes no number",
+			"\x1b_Gi=2147483647;OK\x1b\\",
+			ack(0, 2147483647),
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var dec uv.EventDecoder
@@ -442,9 +728,14 @@ func TestKittyReply_DecodedFromRealTerminalBytes(t *testing.T) {
 	}
 }
 
-// And the reply must survive the whole Update path, not just the converter —
-// which is the half that would have stayed green while Ghostty got nothing.
-func TestUpdate_AcceptsGhosttysUnnumberedReply(t *testing.T) {
+// An untagged reply must survive the whole Update path, not just the converter.
+//
+// No terminal measured sends this shape (see TestKittyReply_DecodedFromReal-
+// TerminalBytes for the correction), but the handler accepts it deliberately: a
+// terminal that does not echo I= would otherwise lose the rung silently, and
+// this is the half of the path where that would happen without a converter test
+// noticing.
+func TestUpdate_AcceptsAnUntaggedReply(t *testing.T) {
 	h := newHintsHome(t, newBranchInstance(t, "a", "b1"))
 	openKittyPreview(t, h)
 
@@ -453,7 +744,7 @@ func TestUpdate_AcceptsGhosttysUnnumberedReply(t *testing.T) {
 	h.Update(ev)
 
 	assert.Equal(t, uint32(2147483647), h.kittyID,
-		"Ghostty omits the image number; requiring it costs that terminal the rung")
+		"requiring the echo would cost a non-echoing terminal the rung, silently")
 	assert.Contains(t, h.imageOverlay.Render(), string(kitty.Placeholder))
 }
 
@@ -501,8 +792,8 @@ func TestOpenImagePreview_RefusesANonTrueColorEnvironment(t *testing.T) {
 // The sequence that made removing one line in closeImagePreview a real defect:
 // open, close before the reply, open again. A's reply must not land on B.
 //
-// It only bites because Ghostty's replies carry no image number — with a number
-// the mismatch would reject it. That is why this drives the unnumbered shape.
+// It only bites for a reply carrying no image number — with one, the mismatch
+// rejects it outright. That is why this drives the untagged shape.
 func TestHandleKittyGraphics_StaleReplyCannotRetargetTheNextImage(t *testing.T) {
 	h := newHintsHome(t, newBranchInstance(t, "a", "b1"))
 	openKittyPreview(t, h) // image A
@@ -510,7 +801,7 @@ func TestHandleKittyGraphics_StaleReplyCannotRetargetTheNextImage(t *testing.T) 
 	openKittyPreview(t, h) // image B, still awaiting its own reply
 
 	// A's answer, arriving late and untagged.
-	_, cmd := h.handleKittyGraphics(kittyGraphicsConfirmed{id: 111})
+	_, cmd := h.handleKittyGraphics(ack(0, 111))
 
 	assert.Zero(t, h.kittyID, "a reply for the previous image must not name this one")
 	assert.NotContains(t, h.imageOverlay.Render(), string(kitty.Placeholder))
@@ -520,7 +811,7 @@ func TestHandleKittyGraphics_StaleReplyCannotRetargetTheNextImage(t *testing.T) 
 
 	// And B's own reply still works, so the guard rejects the stale one without
 	// closing the door on the real one.
-	h.handleKittyGraphics(kittyGraphicsConfirmed{id: 222})
+	h.handleKittyGraphics(ack(0, 222))
 	assert.Equal(t, uint32(222), h.kittyID)
 }
 
@@ -537,7 +828,7 @@ func TestHandleKittyGraphics_LateReplyStillFreesTheImage(t *testing.T) {
 	number := h.kittyNumber
 	h.closeImagePreview()
 
-	_, cmd := h.handleKittyGraphics(kittyGraphicsConfirmed{number: number, id: 77})
+	_, cmd := h.handleKittyGraphics(ack(number, 77))
 
 	got := rawString(t, cmd)
 	assert.Contains(t, got, "d=I", "the image the terminal stored must be freed")
@@ -567,13 +858,13 @@ func TestHandleKittyGraphics_NeverDeletesAForeignImage(t *testing.T) {
 	openKittyPreview(t, h)
 	before := h.kittyOutstanding
 
-	_, cmd := h.handleKittyGraphics(kittyGraphicsConfirmed{number: 99, id: 7})
+	_, cmd := h.handleKittyGraphics(ack(99, 7))
 
 	assert.Nil(t, cmd, "another program's image must not be freed by us")
 	assert.Equal(t, before, h.kittyOutstanding, "and it does not answer our transmission")
 
 	// Our own reply still lands afterwards, so the guard did not consume it.
-	h.handleKittyGraphics(kittyGraphicsConfirmed{number: h.kittyNumber, id: 5})
+	h.handleKittyGraphics(ack(h.kittyNumber, 5))
 	assert.Equal(t, uint32(5), h.kittyID)
 }
 
@@ -586,7 +877,7 @@ func TestHandleKittyGraphics_FreesOurOwnSupersededImage(t *testing.T) {
 	openKittyPreview(t, h) // number 2
 	require.Equal(t, 2, h.kittyOutstanding)
 
-	_, cmd := h.handleKittyGraphics(kittyGraphicsConfirmed{number: 1, id: 111})
+	_, cmd := h.handleKittyGraphics(ack(1, 111))
 	assert.Contains(t, rawString(t, cmd), "i=111", "our own superseded image is freed")
 	assert.Zero(t, h.kittyID)
 }

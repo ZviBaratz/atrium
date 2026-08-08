@@ -6,6 +6,8 @@ import (
 
 	"github.com/ZviBaratz/atrium/config"
 	"github.com/ZviBaratz/atrium/ui/theme"
+
+	"github.com/charmbracelet/colorprofile"
 )
 
 // ImagePreviewResult is what doctor can determine about the image overlay's
@@ -25,7 +27,7 @@ import (
 // Unicode placeholder support is not probeable — the protocol's own query
 // answers for graphics as a whole — so any such table is a guess that goes stale
 // between releases, and it would read as authority. What is printed instead is
-// the two environment facts that explain a surprise.
+// the environment Atrium resolved and the first veto that stopped it.
 type ImagePreviewResult struct {
 	Preference  string // the resolved image_preview value, never empty
 	Term        string // $TERM, "" when unset
@@ -33,6 +35,8 @@ type ImagePreviewResult struct {
 	InTmux      bool   // $TMUX is set: this shell is inside a tmux client
 	Recognized  bool   // the environment names a terminal Atrium tested
 	Mono        bool   // NO_COLOR: the foreground the image ID rides in is stripped
+	TrueColor   bool   // the profile carries the 24-bit foreground that IS the image ID
+	OneCell     bool   // a placeholder measures the one column it occupies
 	Eligible    bool   // a transmission would be attempted
 	Confirmed   bool   // always false; see the type comment
 }
@@ -42,7 +46,20 @@ type ImagePreviewResult struct {
 // environ and pref are parameters rather than lookups so the rule is a pure
 // function of its input, matching CheckKeyboard and CheckScheme. Later entries
 // win, matching os.Environ semantics for a duplicated name.
-func CheckImagePreview(environ []string, pref string) ImagePreviewResult {
+//
+// placeholdersOneCell is a parameter for a different reason: it is MEASURED, not
+// read. Whether U+10EEEE occupies the column it measures cannot be derived from
+// the environment by any rule both of Atrium's width libraries agree on — that
+// divergence is the entire finding behind imageview.PlaceholdersMeasureOneCell —
+// so the caller measures and hands the answer in.
+//
+// All three drawability vetoes have to be replicated here, not just the one this
+// started with. A section that reports "eligible" where the TUI silently refuses
+// tells the exact user it exists for — on the list, still seeing glyphs — the
+// opposite of the truth, and sends them looking for a fault in their terminal.
+// TestDoctorAgreesWithTheTUI (app/image_kitty_test.go) sweeps the two rules
+// against each other so this cannot drift again.
+func CheckImagePreview(environ []string, pref string, placeholdersOneCell bool) ImagePreviewResult {
 	r := ImagePreviewResult{Preference: pref}
 	for _, kv := range environ {
 		name, value, ok := strings.Cut(kv, "=")
@@ -61,14 +78,18 @@ func CheckImagePreview(environ []string, pref string) ImagePreviewResult {
 	}
 	r.Recognized = r.Term == "xterm-kitty" || r.TermProgram == "ghostty" ||
 		hasNonEmpty(environ, "KITTY_WINDOW_ID", "GHOSTTY_RESOURCES_DIR", "GHOSTTY_BIN_DIR")
-	// NO_COLOR is a veto in app.kittyEligible, and it has to be one here too or
-	// this section tells the exact user it exists for the opposite of the truth:
-	// a kitty terminal with NO_COLOR set, reading "eligible" while the TUI never
-	// transmits. theme.NoColorRequested is the same rule the TUI resolves it with.
+	// The three drawability vetoes, in app.kittyEligible's own order.
+	// theme.NoColorRequested and colorprofile.Env are the same rules the TUI
+	// resolves these with.
 	r.Mono = theme.NoColorRequested(environ)
+	r.TrueColor = colorprofile.Env(environ) == colorprofile.TrueColor
+	r.OneCell = placeholdersOneCell
 
 	switch {
-	case r.Mono:
+	case r.Mono || !r.TrueColor || !r.OneCell:
+		// None of these is a preference, so image_preview: kitty does not override
+		// them: the opt-in says "this terminal is not on your list", never "draw it
+		// wrong".
 		r.Eligible = false
 	case pref == config.ImagePreviewKitty:
 		r.Eligible = true
@@ -108,6 +129,18 @@ func RenderImagePreview(r ImagePreviewResult) string {
 	case r.Mono:
 		fmt.Fprintf(&b, "  %-18s not attempted — NO_COLOR strips the foreground colour, and\n", "pixels")
 		fmt.Fprintf(&b, "  %-18s that colour is how a cell names the image it shows\n", "")
+	case !r.TrueColor:
+		fmt.Fprintf(&b, "  %-18s not attempted — this environment reports fewer than 24-bit\n", "pixels")
+		fmt.Fprintf(&b, "  %-18s colours, and the image ID rides in a 24-bit foreground\n", "")
+		b.WriteString("         → set COLORTERM=truecolor if your terminal supports it\n")
+	case !r.OneCell:
+		// Measured, not read off RUNEWIDTH_EASTASIAN — see the parameter's note on
+		// CheckImagePreview. Naming the variable anyway because it is the one a
+		// user can actually act on, and it is how this state is nearly always
+		// reached.
+		fmt.Fprintf(&b, "  %-18s not attempted — a placeholder cell measures two columns\n", "pixels")
+		fmt.Fprintf(&b, "  %-18s here, so every row of the picture would overflow the box\n", "")
+		b.WriteString("         → unset RUNEWIDTH_EASTASIAN, or use a non-east-asian locale\n")
 	case r.Preference == config.ImagePreviewOff:
 		fmt.Fprintf(&b, "  %-18s no overlay — hinting an image path only copies it\n", "pixels")
 	case r.Preference == config.ImagePreviewGlyph:
@@ -132,8 +165,17 @@ func RenderImagePreview(r ImagePreviewResult) string {
 	default:
 		fmt.Fprintf(&b, "  %-18s not attempted — this environment names no terminal Atrium\n", "pixels")
 		fmt.Fprintf(&b, "  %-18s has tested placeholder support in (kitty, Ghostty)\n", "")
-		b.WriteString("         → set image_preview: kitty to try anyway; an unsupported\n")
-		b.WriteString("           terminal simply never answers and the glyphs stay\n")
+		// NOT "an unsupported terminal simply never answers". That is true of a
+		// terminal with no graphics protocol and false of the ones this arrow is
+		// actually for: a terminal that implements kitty GRAPHICS but not Unicode
+		// PLACEHOLDERS answers the transmission, so the upgrade fires and then it
+		// draws the cells as tofu or as nothing. Placeholder support is not
+		// probeable, so there is no way to detect that and no way back from it
+		// except the setting — which is why the escape hatch is named here rather
+		// than a no-op promised.
+		b.WriteString("         → set image_preview: kitty to try anyway; if the picture goes\n")
+		b.WriteString("           blank or turns to boxes, that terminal has the graphics\n")
+		b.WriteString("           protocol but not placeholders — set image_preview: glyph\n")
 	}
 
 	b.WriteString("         → block glyphs are the fallback everywhere, including over SSH\n")

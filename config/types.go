@@ -426,7 +426,9 @@ type Config struct {
 	// terminal is known to support them, block glyphs everywhere else — the
 	// default), "kitty" (attempt pixels even where the environment does not name
 	// a supported terminal; this does NOT make tmux work — Atrium does not wrap
-	// the payload in tmux's passthrough envelope yet), "glyph" (never
+	// the payload in tmux's passthrough envelope yet, and on a terminal that has
+	// the graphics protocol but not Unicode placeholders it draws blanks or
+	// boxes, which nothing can detect and only "glyph" undoes), "glyph" (never
 	// attempt pixels), or "off" (no overlay at all: hinting an image path just
 	// copies it). Empty means auto (see GetImagePreview). Orthogonal to GlyphSet,
 	// which still picks WHICH glyph rung the non-pixel case draws with.

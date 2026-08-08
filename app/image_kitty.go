@@ -7,10 +7,11 @@ package app
 // The shape to keep in mind is that this is an UPGRADE, never a mode. The
 // overlay opens on a glyph rung and draws immediately; if a terminal answers the
 // transmission with an image ID, the same overlay swaps its cells for
-// placeholders. Nothing here has a timeout, a retry, or a failure path, because
-// "no answer" is not an error state — it is the ladder's lower rung, which is
-// already on screen. Two properties fall out of that and both are worth more
-// than the code they save:
+// placeholders. Nothing here has a timeout or a retry, because "no answer" is
+// not an error state — it is the ladder's lower rung, which is already on
+// screen. There is exactly one failure path, and it exists because a REFUSAL is
+// not silence: see handleKittyPlacementReply. Two properties fall out of the
+// upgrade shape and both are worth more than the code they save:
 //
 //   - A placeholder cell cannot exist before the IMAGE it addresses. #398's
 //     third acceptance criterion asks that Atrium never emit graphics payloads
@@ -27,8 +28,19 @@ package app
 //     that does not, and a terminal draws nothing for them. It costs a frame,
 //     not correctness — but it is why "ordering stops mattering" would be too
 //     strong a claim to hang a decision on.
+//
+// What the ladder does NOT cover, and no code here can: a terminal that
+// implements kitty GRAPHICS but not Unicode PLACEHOLDERS. It stores the image
+// and answers OK, so the upgrade fires, and then it draws U+10EEEE as tofu or as
+// nothing. The protocol has no query for placeholder support — a=q answers for
+// graphics as a whole — so there is no reply to gate on and no failure to detect;
+// the picture is simply wrong until the user sets image_preview: glyph. That is
+// the entire reason kittyTerminalEnv is an allowlist of what was TESTED rather
+// than a capability sniff, and it is why the override's documentation has to say
+// what it risks instead of promising a silent no-op.
 
 import (
+	"bytes"
 	"image"
 	"math"
 	"os"
@@ -168,15 +180,49 @@ func (m *home) graphicsEnviron() []string {
 	return os.Environ()
 }
 
-// kittyGraphicsConfirmed is the terminal's answer to a transmission: the image
-// number we sent, and the ID it assigned.
+// kittyGraphicsConfirmed is the terminal's answer to a request of ours.
 //
 // It exists as its own message so the handler below is reachable from a test
 // without an ultraviolet value — but production converts rather than
 // synthesising, so the conversion itself stays on the tested path.
+//
+// The last two fields are the ones the first version of this went without. Both
+// come from sending real escapes to real terminals and reading the tty back,
+// rather than from the spec or from inference:
+//
+//	kitty 0.45.0   a=t good  → \e_Gi=1,I=11;OK
+//	kitty 0.45.0   a=t bad   → \e_Gi=2,I=22;EBADPNG:Not a PNG file
+//	kitty 0.45.0   a=p bad   → \e_Gi=987654,p=1;ENOENT:Put command refers to …
+//	kitty 0.45.0   a=p good  → (silence)
+//	Ghostty 1.3.0  a=t good  → \e_Gi=2147483647,I=11;OK
+//	Ghostty 1.3.0  a=t bad   → \e_GI=22;EINVAL: invalid data      ← no i= at all
+//	Ghostty 1.3.0  a=p bad   → \e_Gi=987654,p=1;ENOENT: image not found
+//
+// Three things follow, and the first is the one that shipped wrong. An id is NOT
+// evidence of an image: kitty allocates one for a transmission it then rejects,
+// so a handler that reads i= as success points the overlay at an image the
+// terminal does not hold — a permanently blank box, strictly worse than the
+// glyphs it replaced. Only the payload says which happened. (Ghostty omits i= on
+// a refusal, so the id==0 test catches it there — but only there, which is why
+// it is not enough on its own.)
+//
+// Second, q=1 suppresses the OK but NOT the error, so a refused placement
+// answers while a successful one is silent. That reply carries p= and no I=,
+// which makes it indistinguishable from an untagged transmission reply on number
+// alone. p= is the discriminator, and without it a stale placement error
+// retargets the open overlay onto an image that has already been freed.
+//
+// Third — and this corrects something this file previously asserted — BOTH
+// terminals echo the I= we send, on success and on failure alike. No untagged
+// transmission reply was observed from either. The handler still accepts one
+// (see handleKittyGraphics) because the alternative is to lose the rung silently
+// on a terminal that does not echo, but that path is defensive: it is not there
+// because Ghostty needs it.
 type kittyGraphicsConfirmed struct {
-	number int
-	id     uint32
+	number    int    // I=, the transmission number we chose; 0 when untagged
+	id        uint32 // i=, the image the reply names
+	placement int    // p=, set only on the answer to a placement request
+	ok        bool   // the payload is OK rather than an error name
 }
 
 // transmitImageCmd sends the decoded image and asks the terminal to name it.
@@ -191,18 +237,22 @@ func (m *home) transmitImageCmd(pixels image.Image) tea.Cmd {
 	if pixels == nil {
 		return nil
 	}
-	m.kittyNumber++
-	payload, err := imageview.TransmitPNG(pixels, m.kittyNumber)
+	number := m.kittyNumber + 1
+	payload, err := imageview.TransmitPNG(pixels, number)
 	if err != nil {
 		// Nothing to tell the user: the picture they asked for is already on
 		// screen, drawn with glyphs. This only means it will not get sharper.
 		log.ErrorLog.Printf("kitty transmit: %v", err)
 		return nil
 	}
-	// Counted only once the payload is real. Counting beside a transmission that
-	// never went out would make the next stray graphics reply on this terminal
-	// look like an answer to nothing.
-	m.kittyOutstanding++
+	// BOTH counters move only once the payload is real, and they move together.
+	// handleKittyGraphics derives the unanswered range as
+	// [kittyNumber-kittyOutstanding+1, kittyNumber], so a number that advanced
+	// past a transmission which never went out slides that window off the reply
+	// still in flight: it reads as another program's, so it is neither counted nor
+	// freed — leaking the image — and kittyOutstanding never returns to zero,
+	// which permanently disqualifies every untagged reply after it.
+	m.kittyNumber, m.kittyOutstanding = number, m.kittyOutstanding+1
 	// tea.Raw takes an `any` and runs it through fmt.Sprint, so a []byte would
 	// print as "[27 95 71 …]" to the terminal. It must be handed a string.
 	return tea.Raw(payload)
@@ -211,11 +261,14 @@ func (m *home) transmitImageCmd(pixels image.Image) tea.Cmd {
 // handleKittyGraphics upgrades the open overlay to real pixels, or disposes of a
 // reply that answers something else.
 //
-// The hard part is that Ghostty's replies carry NO image number (see
-// kittyGraphicsConfirmed), so an untagged answer cannot be matched by tag. What
-// makes it tractable is that a terminal answers transmissions in the order it
-// received them, so an unanswered COUNT is enough: while more than one of ours is
-// outstanding, the next reply is for the OLDEST, whatever it says about itself.
+// The hard part is the reply that carries no image number. Neither terminal
+// measured actually sends one (see kittyGraphicsConfirmed — that table used to
+// say Ghostty did, and it was wrong), but the echo is a courtesy rather than
+// something a client can require, and refusing an untagged answer costs such a
+// terminal the whole rung in silence. So one is accepted, and what makes that
+// safe is that a terminal answers transmissions in the order it received them:
+// an unanswered COUNT is enough, because while more than one of ours is
+// outstanding the next reply is for the OLDEST, whatever it says about itself.
 //
 // A boolean "am I waiting" is NOT enough, and the sequence that proves it is
 // open A → esc before its reply → open B. The window closes and reopens, so a
@@ -228,6 +281,12 @@ func (m *home) transmitImageCmd(pixels image.Image) tea.Cmd {
 // which is the one case "closing the overlay deletes the image by construction"
 // does not cover, because those cells never existed.
 func (m *home) handleKittyGraphics(msg kittyGraphicsConfirmed) (tea.Model, tea.Cmd) {
+	if msg.placement != 0 {
+		// A placement's answer, not a transmission's. It must not be counted
+		// against the outstanding transmissions and must never be deleted — the
+		// image it names is one we are still showing.
+		return m, m.handleKittyPlacementReply(msg)
+	}
 	if m.kittyOutstanding == 0 {
 		// Nothing of ours is unanswered, so this belongs to another program
 		// sharing the terminal.
@@ -245,10 +304,13 @@ func (m *home) handleKittyGraphics(msg kittyGraphicsConfirmed) (tea.Model, tea.C
 	}
 	m.kittyOutstanding--
 
-	if msg.id == 0 {
-		// An error reply. It answers a transmission — which is why the count is
-		// still decremented — but it names no image, so there is nothing to show
-		// and nothing to free.
+	if !msg.ok || msg.id == 0 {
+		// A refusal. It answers a transmission — which is why the count is still
+		// decremented — but it names no image the terminal HOLDS, so there is
+		// nothing to show and nothing to free. The id it carries is real (kitty
+		// assigns one before it decodes) and addresses nothing, which is exactly
+		// why it must not be deleted either: the delete would be a no-op at best
+		// and, if the terminal recycles the number, someone else's image at worst.
 		return m, nil
 	}
 
@@ -267,6 +329,30 @@ func (m *home) handleKittyGraphics(msg kittyGraphicsConfirmed) (tea.Model, tea.C
 	m.kittyID = msg.id
 	m.imageOverlay.SetKittyImage(msg.id)
 	return m, m.placeKittyImageCmd()
+}
+
+// handleKittyPlacementReply drops the picture back to glyphs when the terminal
+// refuses the placement the cells were drawn against.
+//
+// This is the one failure path in the file, and it is here because a refusal is
+// not silence: q=1 suppresses the OK and leaves the error, so a successful
+// placement says nothing and a rejected one answers. Without this the cells go
+// on addressing a placement that does not exist and the terminal draws nothing
+// for them — a blank box, from the one code path that has a working picture in
+// hand and could simply put it back.
+//
+// The image itself is NOT freed and m.kittyID is left set, on purpose: the
+// terminal is still holding those pixels, and closeImagePreview's delete is what
+// releases them. Only the overlay is reverted.
+func (m *home) handleKittyPlacementReply(msg kittyGraphicsConfirmed) tea.Cmd {
+	if msg.ok || msg.id == 0 || msg.id != m.kittyID || m.imageOverlay == nil {
+		return nil
+	}
+	m.imageOverlay.SetKittyImage(0)
+	// The grid goes with it, so a later placement is not skipped as "unchanged"
+	// against a rectangle that was never established.
+	m.kittyCols, m.kittyRows = 0, 0
+	return nil
 }
 
 // placeKittyImageCmd creates or replaces the virtual placement the overlay's
@@ -318,9 +404,21 @@ func (m *home) releaseKittyImageCmd() tea.Cmd {
 // program. Anything outside a valid image ID is reported as zero, which is the
 // same "no pixels" the handler already drops.
 func kittyGraphicsEventFrom(ev uv.KittyGraphicsEvent) kittyGraphicsConfirmed {
+	got := kittyGraphicsConfirmed{
+		number:    ev.Options.Number,
+		placement: ev.Options.PlacementID,
+		// The protocol's success message is exactly "OK" and every failure is a
+		// named code (EBADPNG, ENOENT, EINVAL, …), so a prefix test separates them
+		// with room for a terminal that appends to the word. Erring towards "not a
+		// confirmation" is the safe direction: a rejected success costs the pixel
+		// rung and leaves a correct picture on screen, where an accepted failure
+		// leaves a blank box no later message clears.
+		ok: bytes.HasPrefix(bytes.TrimSpace(ev.Payload), []byte("OK")),
+	}
 	id := ev.Options.ID
 	if id <= 0 || id > math.MaxUint32 {
-		return kittyGraphicsConfirmed{number: ev.Options.Number}
+		return got
 	}
-	return kittyGraphicsConfirmed{number: ev.Options.Number, id: uint32(id)}
+	got.id = uint32(id)
+	return got
 }

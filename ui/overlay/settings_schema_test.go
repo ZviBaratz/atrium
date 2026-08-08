@@ -575,6 +575,14 @@ func TestDetailRetainsTheMovedProse(t *testing.T) {
 		"session_context_bar": {
 			"when a server starts", // why a running session keeps its old bar
 		},
+		"image_preview": {
+			// The kitty override's failure mode. It is undetectable — placeholder
+			// support has no query — so a user who picks it and gets a blank box
+			// has nothing else to go on, and "it simply never answers" (what this
+			// shipped saying) is the reassurance that would strand them there.
+			"Unicode placeholder",
+			"choose glyph",
+		},
 	}
 
 	rows := newSettingRows(config.DefaultConfig())
