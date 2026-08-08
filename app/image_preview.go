@@ -118,6 +118,10 @@ func (m *home) openImagePreview(src overlay.Image) tea.Cmd {
 // that an overlay left armed would pin for the rest of the session, and on the
 // pixel rung the terminal is holding a copy of its own that only an explicit
 // delete frees.
+// The awaiting window is deliberately NOT cleared here. A reply that arrives
+// after the box is gone is already rejected by the nil overlay, and a line whose
+// removal no test can notice is a line that only looks like a guard. The window
+// is re-armed by the next transmission either way.
 func (m *home) closeImagePreview() tea.Cmd {
 	m.state = stateDefault
 	m.imageOverlay = nil

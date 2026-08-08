@@ -163,6 +163,10 @@ func (m *home) transmitImageCmd(pixels image.Image) tea.Cmd {
 		log.ErrorLog.Printf("kitty transmit: %v", err)
 		return nil
 	}
+	// Armed only once the payload is real. An awaiting flag set beside a
+	// transmission that never went out would accept the next stray graphics reply
+	// on this terminal as an answer to nothing.
+	m.kittyAwaiting = true
 	// tea.Raw takes an `any` and runs it through fmt.Sprint, so a []byte would
 	// print as "[27 95 71 …]" to the terminal. It must be handed a string.
 	return tea.Raw(payload)
@@ -170,18 +174,34 @@ func (m *home) transmitImageCmd(pixels image.Image) tea.Cmd {
 
 // handleKittyGraphics upgrades the open overlay to real pixels.
 //
-// Three things have to hold, and each rejects a reply that is genuinely not
-// ours:
+// Four things have to hold, and each rejects a reply that is genuinely not ours:
 //
-//   - the number must match the transmission we are waiting on, because another
-//     program sharing this terminal can be mid-transmission too;
+//   - we must be waiting for one. Outside that window every graphics reply on
+//     this terminal belongs to somebody else.
+//   - the number must match, WHEN THE REPLY CARRIES ONE. The protocol says a
+//     transmission tagged I=<number> is answered `i=<id>,I=<number>;OK`, and
+//     kitty does exactly that. Ghostty 1.3.0 does not: it answers
+//     `\x1b_Gi=2147483647;OK` — the assigned ID and no number at all. Requiring
+//     the echo would therefore reject every Ghostty reply and quietly cost that
+//     terminal the whole rung, which is a defect no unit test could have found,
+//     because a synthesised reply is written by whoever writes the test. So an
+//     unnumbered reply is accepted while awaiting, and a numbered one still has
+//     to match. What that costs is stated below.
 //   - the terminal must have assigned an ID. An error reply carries none, and
 //     the case that makes this load-bearing rather than defensive is an error
-//     arriving AFTER a success for the same number: without the check it would
-//     reset a confirmed ID to zero and drop a working picture back to glyphs;
+//     arriving AFTER a success: without the check it would reset a confirmed ID
+//     to zero and drop a working picture back to glyphs.
 //   - the overlay must still be open. A transmission whose reply lands after the
 //     user pressed esc has nothing left to upgrade, and its image is already
 //     being deleted.
+//
+// The residual risk of accepting an unnumbered reply, stated rather than hidden:
+// if another graphics program transmits into the same terminal inside the window
+// between our transmission and its answer, we could adopt its ID and show its
+// image. The window is one round trip, it needs a second graphics program
+// sharing one terminal, and the protocol offers nothing better — an unnumbered
+// reply is untagged by construction. Narrowing the window is what kittyAwaiting
+// is for.
 //
 // The open check is the nil pointer alone, deliberately. state and imageOverlay
 // are set together by openImagePreview and cleared together by
@@ -189,12 +209,16 @@ func (m *home) transmitImageCmd(pixels image.Image) tea.Cmd {
 // of the same fact — and one no test could distinguish, which is how a condition
 // comes to look guarded without being.
 func (m *home) handleKittyGraphics(msg kittyGraphicsConfirmed) (tea.Model, tea.Cmd) {
-	if msg.number != m.kittyNumber || msg.id == 0 {
+	if !m.kittyAwaiting || msg.id == 0 {
+		return m, nil
+	}
+	if msg.number != 0 && msg.number != m.kittyNumber {
 		return m, nil
 	}
 	if m.imageOverlay == nil {
 		return m, nil
 	}
+	m.kittyAwaiting = false
 	m.kittyID = msg.id
 	m.imageOverlay.SetKittyImage(msg.id)
 	return m, m.placeKittyImageCmd()
@@ -232,6 +256,7 @@ func (m *home) releaseKittyImageCmd() tea.Cmd {
 	}
 	id := m.kittyID
 	m.kittyID, m.kittyCols, m.kittyRows = 0, 0, 0
+	m.kittyAwaiting = false
 	return tea.Raw(imageview.DeleteImage(int(id)))
 }
 

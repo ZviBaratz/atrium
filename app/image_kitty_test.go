@@ -172,6 +172,19 @@ func TestHandleKittyGraphics_UpgradeBeatsTheCachedGlyphs(t *testing.T) {
 // way for one to arrive: another program sharing the terminal mid-transmission,
 // an error reply that carries no ID, and a reply for the picture before this one.
 func TestHandleKittyGraphics_DropsForeignAndStaleReplies(t *testing.T) {
+	t.Run("an unnumbered reply outside the window", func(t *testing.T) {
+		h := newHintsHome(t, newBranchInstance(t, "a", "b1"))
+		openKittyPreview(t, h)
+		// Answer the outstanding transmission, closing the window.
+		h.handleKittyGraphics(kittyGraphicsConfirmed{number: h.kittyNumber, id: 42})
+
+		// A second, unnumbered reply now belongs to some other program: there is
+		// nothing outstanding for it to be an answer to.
+		_, cmd := h.handleKittyGraphics(kittyGraphicsConfirmed{id: 99})
+		assert.Equal(t, uint32(42), h.kittyID, "an untagged reply must not retarget a settled image")
+		assert.Nil(t, cmd)
+	})
+
 	t.Run("another program's number", func(t *testing.T) {
 		h := newHintsHome(t, newBranchInstance(t, "a", "b1"))
 		openKittyPreview(t, h)
@@ -335,4 +348,107 @@ func TestOpenImagePreview_MonoNeverTransmits(t *testing.T) {
 	defer restore()
 	cmd := h.openImagePreview(overlay.Image{Path: "/fixture/shot.png", Pixels: parityImage()})
 	assert.Nil(t, cmd, "NO_COLOR strips the foreground the image ID rides in")
+}
+
+// Two terminals, two reply shapes, and the difference is not academic — it was
+// measured, and getting it wrong costs one of them the whole rung.
+//
+// The protocol says a transmission tagged I=<number> is answered
+// `i=<id>,I=<number>;OK`. kitty 0.45.0 does that. Ghostty 1.3.0 answers
+// `\x1b_Gi=2147483647;OK` — the assigned ID and no number at all. Every unit
+// test here synthesises its own replies, so nothing in this file could have
+// caught that; it came from sending Atrium's own bytes to both terminals and
+// reading what came back.
+//
+// Ghostty's ID is also over 24 bits, which is the only case that exercises the
+// third diacritic in production. That is why the assertion uses the real value
+// rather than a round number.
+func TestHandleKittyGraphics_AcceptsBothTerminalsReplyShapes(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		reply func(number int) kittyGraphicsConfirmed
+		want  uint32
+	}{
+		{
+			name:  "kitty echoes the image number",
+			reply: func(n int) kittyGraphicsConfirmed { return kittyGraphicsConfirmed{number: n, id: 1} },
+			want:  1,
+		},
+		{
+			// Measured on Ghostty 1.3.0: \x1b_Gi=2147483647;OK
+			name:  "ghostty omits it",
+			reply: func(int) kittyGraphicsConfirmed { return kittyGraphicsConfirmed{id: 2147483647} },
+			want:  2147483647,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newHintsHome(t, newBranchInstance(t, "a", "b1"))
+			openKittyPreview(t, h)
+
+			_, cmd := h.handleKittyGraphics(tc.reply(h.kittyNumber))
+			assert.Equal(t, tc.want, h.kittyID)
+			assert.NotEmpty(t, rawString(t, cmd), "a confirmed image must be placed")
+			assert.Contains(t, h.imageOverlay.Render(), string(kitty.Placeholder))
+		})
+	}
+}
+
+// Nothing is awaited before a transmission, so a reply that arrives out of the
+// blue — another program's, or one for a preview that was never eligible — must
+// not upgrade anything.
+func TestHandleKittyGraphics_IgnoresRepliesWhenNothingWasSent(t *testing.T) {
+	h := newHintsHome(t, newBranchInstance(t, "a", "b1"))
+	h.windowWidth, h.windowHeight = 100, 30
+	h.kittyEnviron = []string{"TERM=xterm-256color"} // not eligible: nothing is transmitted
+	h.openImagePreview(overlay.Image{Path: "/fixture/shot.png", Pixels: parityImage()})
+	require.False(t, h.kittyAwaiting)
+
+	_, cmd := h.handleKittyGraphics(kittyGraphicsConfirmed{id: 7})
+	assert.Zero(t, h.kittyID, "a reply to a transmission we never sent is not ours")
+	assert.Nil(t, cmd)
+}
+
+// The bytes each terminal really sends, decoded by the parser that really
+// decodes them.
+//
+// Everything else in this file synthesises a uv.KittyGraphicsEvent, which tests
+// Atrium's half of the contract and assumes ultraviolet's. That assumption is
+// exactly where the Ghostty defect lived: the reply shape differs between
+// terminals, and no hand-written fixture would have shown it. These two strings
+// were captured from kitty 0.45.0 and Ghostty 1.3.0 by sending them Atrium's own
+// transmission and reading the tty.
+func TestKittyReply_DecodedFromRealTerminalBytes(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		bytes string
+		want  kittyGraphicsConfirmed
+	}{
+		{"kitty 0.45.0", "\x1b_Gi=1,I=7;OK\x1b\\", kittyGraphicsConfirmed{number: 7, id: 1}},
+		{"ghostty 1.3.0", "\x1b_Gi=2147483647;OK\x1b\\", kittyGraphicsConfirmed{number: 0, id: 2147483647}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var dec uv.EventDecoder
+			n, ev := dec.Decode([]byte(tc.bytes))
+			require.Equal(t, len(tc.bytes), n, "the whole sequence must be consumed")
+			gfx, ok := ev.(uv.KittyGraphicsEvent)
+			require.Truef(t, ok, "ultraviolet produced %T, not a KittyGraphicsEvent", ev)
+
+			assert.Equal(t, tc.want, kittyGraphicsEventFrom(gfx))
+		})
+	}
+}
+
+// And the reply must survive the whole Update path, not just the converter —
+// which is the half that would have stayed green while Ghostty got nothing.
+func TestUpdate_AcceptsGhosttysUnnumberedReply(t *testing.T) {
+	h := newHintsHome(t, newBranchInstance(t, "a", "b1"))
+	openKittyPreview(t, h)
+
+	var dec uv.EventDecoder
+	_, ev := dec.Decode([]byte("\x1b_Gi=2147483647;OK\x1b\\"))
+	h.Update(ev)
+
+	assert.Equal(t, uint32(2147483647), h.kittyID,
+		"Ghostty omits the image number; requiring it costs that terminal the rung")
+	assert.Contains(t, h.imageOverlay.Render(), string(kitty.Placeholder))
 }
