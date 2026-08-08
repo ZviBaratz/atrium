@@ -132,3 +132,43 @@ func TestRenderImagePreviewMatchesTheSectionConvention(t *testing.T) {
 		require.True(t, strings.HasPrefix(l, "  "), "row %q must be indented two spaces", l)
 	}
 }
+
+// NO_COLOR is a veto in app.kittyEligible, and doctor has to agree.
+//
+// Reporting "eligible" to a user on kitty with NO_COLOR set tells the exact
+// person this section exists for — on the list, still seeing glyphs — the
+// opposite of the truth, and sends them looking for a fault in their terminal.
+func TestCheckImagePreviewHonoursNoColor(t *testing.T) {
+	kittyMono := []string{"TERM=xterm-kitty", "NO_COLOR=1"}
+
+	got := CheckImagePreview(kittyMono, config.ImagePreviewAuto)
+	assert.True(t, got.Mono)
+	assert.True(t, got.Recognized, "the terminal is still recognised")
+	assert.False(t, got.Eligible, "but the foreground the image ID rides in is stripped")
+
+	// The explicit opt-in must not override it either — it is a drawability veto,
+	// not a preference.
+	assert.False(t, CheckImagePreview(kittyMono, config.ImagePreviewKitty).Eligible)
+
+	// The negative control: the same terminal without NO_COLOR.
+	assert.True(t, CheckImagePreview([]string{"TERM=xterm-kitty"}, config.ImagePreviewAuto).Eligible)
+
+	out := RenderImagePreview(CheckImagePreview(kittyMono, config.ImagePreviewAuto))
+	assert.Contains(t, out, "NO_COLOR")
+	assert.NotContains(t, out, "eligible —")
+}
+
+// The tmux branch must not tell the user to turn on allow-passthrough.
+//
+// Measured: with passthrough on, an unwrapped payload still draws no reply,
+// because tmux forwards only what is inside its own DCS envelope — which Atrium
+// does not emit. Printing it as an actionable arrow sends a user to change two
+// settings for no change at all.
+func TestRenderImagePreviewDoesNotPromiseTmuxPassthrough(t *testing.T) {
+	out := RenderImagePreview(CheckImagePreview(
+		[]string{"TERM=xterm-kitty", "TMUX=/tmp/s,1,0"}, config.ImagePreviewAuto))
+
+	assert.Contains(t, out, "inside tmux")
+	assert.NotContains(t, out, "allow-passthrough",
+		"Atrium does not wrap the payload, so passthrough changes nothing")
+}

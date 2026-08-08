@@ -1,7 +1,10 @@
 package app
 
 import (
+	"fmt"
 	"math"
+	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -43,7 +46,7 @@ func rawString(t *testing.T, cmd tea.Cmd) string {
 func openKittyPreview(t *testing.T, h *home) string {
 	t.Helper()
 	h.windowWidth, h.windowHeight = 100, 30
-	h.kittyEnviron = []string{"TERM=xterm-kitty"}
+	h.kittyEnviron = []string{"TERM=xterm-kitty", "COLORTERM=truecolor"}
 	cmd := h.openImagePreview(overlay.Image{
 		Path: "/fixture/shot.png", Pixels: parityImage(), Width: 30, Height: 20,
 	})
@@ -81,7 +84,7 @@ func TestKittyEligible(t *testing.T) {
 		{"mono vetoes auto on kitty", kittyTerm, config.ImagePreviewAuto, true, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			assert.Equal(t, tc.want, kittyEligible(tc.environ, tc.pref, tc.mono))
+			assert.Equal(t, tc.want, kittyEligible(tc.environ, tc.pref, tc.mono, true, true))
 		})
 	}
 }
@@ -89,7 +92,7 @@ func TestKittyEligible(t *testing.T) {
 // An empty TMUX is not something tmux sets, so it must not trip the veto.
 func TestKittyEligible_EmptyTmuxIsNotTmux(t *testing.T) {
 	assert.True(t, kittyEligible(
-		[]string{"TERM=xterm-kitty", "TMUX="}, config.ImagePreviewAuto, false))
+		[]string{"TERM=xterm-kitty", "TMUX="}, config.ImagePreviewAuto, false, true, true))
 }
 
 // Opening transmits only where the rung is eligible, and the payload is the
@@ -105,7 +108,7 @@ func TestOpenImagePreview_TransmitsOnlyWhenEligible(t *testing.T) {
 	// The same open on an unrecognised terminal must queue nothing at all.
 	h2 := newHintsHome(t, newBranchInstance(t, "a", "b1"))
 	h2.windowWidth, h2.windowHeight = 100, 30
-	h2.kittyEnviron = []string{"TERM=xterm-256color"}
+	h2.kittyEnviron = []string{"TERM=xterm-256color", "COLORTERM=truecolor"}
 	cmd := h2.openImagePreview(overlay.Image{Path: "/fixture/shot.png", Pixels: parityImage()})
 	assert.Nil(t, cmd, "an unrecognised terminal must not be written to")
 	assert.Equal(t, stateImagePreview, h2.state, "but the glyph rung still opens")
@@ -213,7 +216,8 @@ func TestHandleKittyGraphics_DropsForeignAndStaleReplies(t *testing.T) {
 	})
 
 	// A reply that lands after the user pressed esc has nothing to upgrade — and
-	// upgrading anyway would dereference an overlay that is gone.
+	// upgrading anyway would dereference an overlay that is gone. It is not simply
+	// dropped, though: see TestHandleKittyGraphics_LateReplyStillFreesTheImage.
 	t.Run("the overlay already closed", func(t *testing.T) {
 		h := newHintsHome(t, newBranchInstance(t, "a", "b1"))
 		openKittyPreview(t, h)
@@ -221,8 +225,8 @@ func TestHandleKittyGraphics_DropsForeignAndStaleReplies(t *testing.T) {
 		h.closeImagePreview()
 
 		_, cmd := h.handleKittyGraphics(kittyGraphicsConfirmed{number: number, id: 7})
-		assert.Zero(t, h.kittyID)
-		assert.Nil(t, cmd)
+		assert.Zero(t, h.kittyID, "nothing is on screen to upgrade")
+		assert.Contains(t, rawString(t, cmd), "d=I", "but the stored image is freed")
 	})
 }
 
@@ -342,7 +346,7 @@ func TestActHint_OffSkipsTheImageOverlay(t *testing.T) {
 func TestOpenImagePreview_MonoNeverTransmits(t *testing.T) {
 	h := newHintsHome(t, newBranchInstance(t, "a", "b1"))
 	h.windowWidth, h.windowHeight = 100, 30
-	h.kittyEnviron = []string{"TERM=xterm-kitty"}
+	h.kittyEnviron = []string{"TERM=xterm-kitty", "COLORTERM=truecolor"}
 
 	restore := theme.SetMono(true)
 	defer restore()
@@ -399,9 +403,9 @@ func TestHandleKittyGraphics_AcceptsBothTerminalsReplyShapes(t *testing.T) {
 func TestHandleKittyGraphics_IgnoresRepliesWhenNothingWasSent(t *testing.T) {
 	h := newHintsHome(t, newBranchInstance(t, "a", "b1"))
 	h.windowWidth, h.windowHeight = 100, 30
-	h.kittyEnviron = []string{"TERM=xterm-256color"} // not eligible: nothing is transmitted
+	h.kittyEnviron = []string{"TERM=xterm-256color", "COLORTERM=truecolor"} // not eligible: nothing is transmitted
 	h.openImagePreview(overlay.Image{Path: "/fixture/shot.png", Pixels: parityImage()})
-	require.False(t, h.kittyAwaiting)
+	require.Zero(t, h.kittyOutstanding)
 
 	_, cmd := h.handleKittyGraphics(kittyGraphicsConfirmed{id: 7})
 	assert.Zero(t, h.kittyID, "a reply to a transmission we never sent is not ours")
@@ -451,4 +455,176 @@ func TestUpdate_AcceptsGhosttysUnnumberedReply(t *testing.T) {
 	assert.Equal(t, uint32(2147483647), h.kittyID,
 		"Ghostty omits the image number; requiring it costs that terminal the rung")
 	assert.Contains(t, h.imageOverlay.Render(), string(kitty.Placeholder))
+}
+
+// The two drawability vetoes the first cut of this gate simply did not have.
+//
+// Both are silent failures: the transmission is confirmed, the overlay switches
+// to placeholders, and there is no way back — Placeholders succeeds, so the
+// overlay never reverts to glyphs. What the user gets is a wrapped, ghosting box
+// (a placeholder measuring two columns) or an empty one (a foreground the profile
+// rewrote, so the cells name an image that does not exist).
+//
+// The explicit opt-in must NOT override either: image_preview: kitty says "this
+// terminal is not on my list", not "draw it wrong".
+func TestKittyEligible_RefusesWhenTheCellsCannotBeDrawn(t *testing.T) {
+	env := []string{"TERM=xterm-kitty"}
+	for _, pref := range []string{config.ImagePreviewAuto, config.ImagePreviewKitty} {
+		t.Run(pref+"/placeholder measures two cells", func(t *testing.T) {
+			assert.False(t, kittyEligible(env, pref, false, true, false))
+		})
+		t.Run(pref+"/profile is not truecolor", func(t *testing.T) {
+			assert.False(t, kittyEligible(env, pref, false, false, true))
+		})
+		// The positive control: with both satisfied the same call is eligible, so
+		// the assertions above are about these axes and not about the preference.
+		t.Run(pref+"/both satisfied", func(t *testing.T) {
+			assert.True(t, kittyEligible(env, pref, false, true, true))
+		})
+	}
+}
+
+// The gate must read the LIVE width and profile, not assume them. This drives
+// openImagePreview rather than the pure rule, because the defect it guards was a
+// caller that never passed the inputs at all — the rule was right and unreachable.
+func TestOpenImagePreview_RefusesANonTrueColorEnvironment(t *testing.T) {
+	h := newHintsHome(t, newBranchInstance(t, "a", "b1"))
+	h.windowWidth, h.windowHeight = 100, 30
+	// kitty by name, but an environment that resolves to 256 colours.
+	h.kittyEnviron = []string{"TERM=xterm-256color", "KITTY_WINDOW_ID=1"}
+
+	cmd := h.openImagePreview(overlay.Image{Path: "/fixture/shot.png", Pixels: parityImage()})
+	assert.Nil(t, cmd, "a downsampling profile rewrites the ID the cells are addressed by")
+	assert.Equal(t, stateImagePreview, h.state, "the glyph rung still opens")
+}
+
+// The sequence that made removing one line in closeImagePreview a real defect:
+// open, close before the reply, open again. A's reply must not land on B.
+//
+// It only bites because Ghostty's replies carry no image number — with a number
+// the mismatch would reject it. That is why this drives the unnumbered shape.
+func TestHandleKittyGraphics_StaleReplyCannotRetargetTheNextImage(t *testing.T) {
+	h := newHintsHome(t, newBranchInstance(t, "a", "b1"))
+	openKittyPreview(t, h) // image A
+	h.closeImagePreview()  // esc before the terminal answers
+	openKittyPreview(t, h) // image B, still awaiting its own reply
+
+	// A's answer, arriving late and untagged.
+	_, cmd := h.handleKittyGraphics(kittyGraphicsConfirmed{id: 111})
+
+	assert.Zero(t, h.kittyID, "a reply for the previous image must not name this one")
+	assert.NotContains(t, h.imageOverlay.Render(), string(kitty.Placeholder))
+	// The abandoned image is still sitting in the terminal, so it is freed rather
+	// than forgotten.
+	assert.Contains(t, rawString(t, cmd), "i=111")
+
+	// And B's own reply still works, so the guard rejects the stale one without
+	// closing the door on the real one.
+	h.handleKittyGraphics(kittyGraphicsConfirmed{id: 222})
+	assert.Equal(t, uint32(222), h.kittyID)
+}
+
+// A confirmation that lands after the box closed still has to free the image.
+//
+// The terminal has decoded and stored the PNG by then, and only d=I releases it.
+// Dropping the reply — which the nil-overlay check does — leaks a megapixel per
+// open/esc cycle for the life of the terminal. This is the one case "closing the
+// overlay deletes the image by construction" does not cover, because the cells
+// never existed to be removed.
+func TestHandleKittyGraphics_LateReplyStillFreesTheImage(t *testing.T) {
+	h := newHintsHome(t, newBranchInstance(t, "a", "b1"))
+	openKittyPreview(t, h)
+	number := h.kittyNumber
+	h.closeImagePreview()
+
+	_, cmd := h.handleKittyGraphics(kittyGraphicsConfirmed{number: number, id: 77})
+
+	got := rawString(t, cmd)
+	assert.Contains(t, got, "d=I", "the image the terminal stored must be freed")
+	assert.Contains(t, got, "i=77")
+	assert.Zero(t, h.kittyID, "nothing is on screen, so nothing is placed")
+}
+
+// Duplicated environment names must resolve the same way here as in doctor, or
+// the two disagree about the same environment — and doctor's whole job in this
+// section is to explain a surprise.
+func TestKittyTerminalEnv_LastWinsLikeDoctor(t *testing.T) {
+	// A kitty TERM later overridden by a plain one is NOT kitty.
+	assert.False(t, kittyTerminalEnv([]string{"TERM=xterm-kitty", "TERM=xterm-256color"}))
+	// And the other way round.
+	assert.True(t, kittyTerminalEnv([]string{"TERM=xterm-256color", "TERM=xterm-kitty"}))
+}
+
+// A reply tagged with a number that is not ours must be left completely alone —
+// not counted, and above all not DELETED.
+//
+// Image numbers are client-chosen, so another graphics program sharing this
+// terminal can pick any of them. An earlier version of the disposal path deleted
+// the image named by any reply it decided was "stale", which for a foreign number
+// means freeing somebody else's picture out from under them.
+func TestHandleKittyGraphics_NeverDeletesAForeignImage(t *testing.T) {
+	h := newHintsHome(t, newBranchInstance(t, "a", "b1"))
+	openKittyPreview(t, h)
+	before := h.kittyOutstanding
+
+	_, cmd := h.handleKittyGraphics(kittyGraphicsConfirmed{number: 99, id: 7})
+
+	assert.Nil(t, cmd, "another program's image must not be freed by us")
+	assert.Equal(t, before, h.kittyOutstanding, "and it does not answer our transmission")
+
+	// Our own reply still lands afterwards, so the guard did not consume it.
+	h.handleKittyGraphics(kittyGraphicsConfirmed{number: h.kittyNumber, id: 5})
+	assert.Equal(t, uint32(5), h.kittyID)
+}
+
+// An abandoned transmission of OURS is freed, and the distinction from the test
+// above is the number: one of ours that is no longer the newest.
+func TestHandleKittyGraphics_FreesOurOwnSupersededImage(t *testing.T) {
+	h := newHintsHome(t, newBranchInstance(t, "a", "b1"))
+	openKittyPreview(t, h) // number 1
+	h.closeImagePreview()
+	openKittyPreview(t, h) // number 2
+	require.Equal(t, 2, h.kittyOutstanding)
+
+	_, cmd := h.handleKittyGraphics(kittyGraphicsConfirmed{number: 1, id: 111})
+	assert.Contains(t, rawString(t, cmd), "i=111", "our own superseded image is freed")
+	assert.Zero(t, h.kittyID)
+}
+
+// kittyWidthProbeVar marks the re-executed child of the probe below.
+const kittyWidthProbeVar = "ATRIUM_TEST_KITTY_WIDTH_PROBE"
+
+// The gate must MEASURE the placeholder's width, not assume it — and this is the
+// only test that can tell the difference.
+//
+// Every other test here runs where placeholders already measure one cell, so a
+// caller that hardcoded `true` would satisfy all of them; the mutation that does
+// exactly that survived the whole suite. The rule being right is not the
+// question — it was right and unreachable, which is how the pixel rung came to
+// ship ungated on the predicate written for it.
+//
+// A subprocess, because go-runewidth and x/ansi both decide at package init:
+// t.Setenv cannot reach a value read before the test started, and the go test
+// cache cannot see the variable at all.
+func TestOpenImagePreview_RefusesWhenPlaceholdersMeasureTwo(t *testing.T) {
+	if os.Getenv(kittyWidthProbeVar) == "1" {
+		h := newHintsHome(t, newBranchInstance(t, "a", "b1"))
+		h.windowWidth, h.windowHeight = 100, 30
+		h.kittyEnviron = []string{"TERM=xterm-kitty", "COLORTERM=truecolor"}
+		cmd := h.openImagePreview(overlay.Image{Path: "/fixture/shot.png", Pixels: parityImage()})
+		// The picture still opens; only the pixel rung is refused.
+		fmt.Printf("PROBE state=%v transmitted=%v\n", h.state == stateImagePreview, cmd != nil)
+		return
+	}
+	child := exec.CommandContext(t.Context(), os.Args[0],
+		"-test.run=^TestOpenImagePreview_RefusesWhenPlaceholdersMeasureTwo$")
+	// Later entries win, per exec.Cmd.Env. RUNEWIDTH_EASTASIAN=1 is the one
+	// environment both width libraries agree makes a placeholder two cells wide.
+	child.Env = append(append(os.Environ(), kittyWidthProbeVar+"=1"),
+		"RUNEWIDTH_EASTASIAN=1", "LC_ALL=C", "LC_CTYPE=C", "LANG=C")
+
+	out, err := child.CombinedOutput()
+	require.NoError(t, err, "probe failed: %s", out)
+	assert.Contains(t, string(out), "PROBE state=true transmitted=false",
+		"a placeholder that measures two cells must cost the pixel rung, not the picture")
 }

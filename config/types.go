@@ -424,8 +424,9 @@ type Config struct {
 	// ImagePreview selects how an agent-produced image opens in Atrium's chrome
 	// (#398): "auto" (real pixels via the kitty graphics protocol where the
 	// terminal is known to support them, block glyphs everywhere else — the
-	// default), "kitty" (attempt pixels even where the environment does not name a
-	// supported terminal, for tmux with allow-passthrough on), "glyph" (never
+	// default), "kitty" (attempt pixels even where the environment does not name
+	// a supported terminal; this does NOT make tmux work — Atrium does not wrap
+	// the payload in tmux's passthrough envelope yet), "glyph" (never
 	// attempt pixels), or "off" (no overlay at all: hinting an image path just
 	// copies it). Empty means auto (see GetImagePreview). Orthogonal to GlyphSet,
 	// which still picks WHICH glyph rung the non-pixel case draws with.

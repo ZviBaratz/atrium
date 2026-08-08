@@ -9,6 +9,7 @@ import (
 	"github.com/ZviBaratz/atrium/ui/theme"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/colorprofile"
 )
 
 // imagePreviewMaxWidth and imagePreviewMaxHeight cap the box. They are the
@@ -106,7 +107,20 @@ func (m *home) openImagePreview(src overlay.Image) tea.Cmd {
 	m.state = stateImagePreview
 	m.recomputeLayout() // the hint bar gives up its row while the box is open
 
-	if !kittyEligible(m.graphicsEnviron(), m.appConfig.GetImagePreview(), theme.Mono()) {
+	// The width input is MEASURED, never read off RUNEWIDTH_EASTASIAN, for the
+	// reason imageview.PlaceholdersMeasureOneCell sets out — and it is asked of
+	// the placeholder, not the half block, because the two rungs have different
+	// glyphs even though they turn out to share an answer.
+	//
+	// The profile is read from the environment rather than from the running
+	// program because Bubble Tea does not expose the one it resolved. That is a
+	// weaker source, and it is the safe direction to be wrong in: an environment
+	// that understates its colour depth costs the pixel rung, which falls back to
+	// a picture that works everywhere.
+	env := m.graphicsEnviron()
+	trueColor := colorprofile.Env(env) == colorprofile.TrueColor
+	if !kittyEligible(env, m.appConfig.GetImagePreview(), theme.Mono(),
+		trueColor, imageview.PlaceholdersMeasureOneCell()) {
 		return nil
 	}
 	return m.transmitImageCmd(src.Pixels)
@@ -118,10 +132,12 @@ func (m *home) openImagePreview(src overlay.Image) tea.Cmd {
 // that an overlay left armed would pin for the rest of the session, and on the
 // pixel rung the terminal is holding a copy of its own that only an explicit
 // delete frees.
-// The awaiting window is deliberately NOT cleared here. A reply that arrives
-// after the box is gone is already rejected by the nil overlay, and a line whose
-// removal no test can notice is a line that only looks like a guard. The window
-// is re-armed by the next transmission either way.
+//
+// It deliberately does NOT touch kittyOutstanding. A transmission stays
+// outstanding until it is ANSWERED, not until the box that asked for it closes —
+// the terminal is still going to reply, and that reply is what frees the image it
+// stored. Zeroing the count here would drop that reply and leak the image; see
+// handleKittyGraphics.
 func (m *home) closeImagePreview() tea.Cmd {
 	m.state = stateDefault
 	m.imageOverlay = nil

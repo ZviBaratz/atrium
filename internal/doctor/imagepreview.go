@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/ZviBaratz/atrium/config"
+	"github.com/ZviBaratz/atrium/ui/theme"
 )
 
 // ImagePreviewResult is what doctor can determine about the image overlay's
@@ -31,6 +32,7 @@ type ImagePreviewResult struct {
 	TermProgram string // $TERM_PROGRAM, "" when unset
 	InTmux      bool   // $TMUX is set: this shell is inside a tmux client
 	Recognized  bool   // the environment names a terminal Atrium tested
+	Mono        bool   // NO_COLOR: the foreground the image ID rides in is stripped
 	Eligible    bool   // a transmission would be attempted
 	Confirmed   bool   // always false; see the type comment
 }
@@ -59,11 +61,18 @@ func CheckImagePreview(environ []string, pref string) ImagePreviewResult {
 	}
 	r.Recognized = r.Term == "xterm-kitty" || r.TermProgram == "ghostty" ||
 		hasNonEmpty(environ, "KITTY_WINDOW_ID", "GHOSTTY_RESOURCES_DIR", "GHOSTTY_BIN_DIR")
+	// NO_COLOR is a veto in app.kittyEligible, and it has to be one here too or
+	// this section tells the exact user it exists for the opposite of the truth:
+	// a kitty terminal with NO_COLOR set, reading "eligible" while the TUI never
+	// transmits. theme.NoColorRequested is the same rule the TUI resolves it with.
+	r.Mono = theme.NoColorRequested(environ)
 
-	switch pref {
-	case config.ImagePreviewKitty:
+	switch {
+	case r.Mono:
+		r.Eligible = false
+	case pref == config.ImagePreviewKitty:
 		r.Eligible = true
-	case config.ImagePreviewAuto:
+	case pref == config.ImagePreviewAuto:
 		r.Eligible = !r.InTmux && r.Recognized
 	}
 	return r
@@ -96,14 +105,23 @@ func RenderImagePreview(r ImagePreviewResult) string {
 	fmt.Fprintf(&b, "  %-18s %s\n", "TERM_PROGRAM", orUnset(r.TermProgram))
 
 	switch {
+	case r.Mono:
+		fmt.Fprintf(&b, "  %-18s not attempted — NO_COLOR strips the foreground colour, and\n", "pixels")
+		fmt.Fprintf(&b, "  %-18s that colour is how a cell names the image it shows\n", "")
 	case r.Preference == config.ImagePreviewOff:
 		fmt.Fprintf(&b, "  %-18s no overlay — hinting an image path only copies it\n", "pixels")
 	case r.Preference == config.ImagePreviewGlyph:
 		fmt.Fprintf(&b, "  %-18s not attempted — image_preview is set to glyph\n", "pixels")
 	case r.InTmux && r.Preference == config.ImagePreviewAuto:
 		fmt.Fprintf(&b, "  %-18s not attempted — inside tmux, which does not forward the\n", "pixels")
-		fmt.Fprintf(&b, "  %-18s graphics protocol unless allow-passthrough is on\n", "")
-		b.WriteString("         → set -g allow-passthrough on and image_preview: kitty to try anyway\n")
+		fmt.Fprintf(&b, "  %-18s graphics protocol to the terminal underneath\n", "")
+		// Deliberately NOT "turn on allow-passthrough". Measured: with passthrough
+		// on, an unwrapped payload still draws no reply, because tmux forwards
+		// only what is inside its own DCS envelope — which Atrium does not emit
+		// yet. Printing that as an actionable arrow would send a user to change
+		// two settings for no change at all.
+		b.WriteString("         → detach and run Atrium directly for pixels; inside tmux the\n")
+		b.WriteString("           glyph rung is the whole feature\n")
 	case r.Eligible:
 		// Never "supported", never "working". The transmission is sent and the
 		// picture only becomes pixels if a terminal answers it; a terminal on the

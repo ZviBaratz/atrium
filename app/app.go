@@ -583,11 +583,11 @@ type home struct {
 	// answered one, which are deliberately the same state (#398).
 	kittyID              uint32
 	kittyCols, kittyRows int
-	// kittyAwaiting is true between a transmission and the reply that answers
-	// it. It is what lets an UNNUMBERED reply be recognised as ours: Ghostty
-	// answers with the assigned ID and no image number, so outside this window
-	// there is nothing to tell its reply from another program's.
-	kittyAwaiting bool
+	// kittyOutstanding counts transmissions that have not yet been answered. It
+	// is a count and not a flag because Ghostty's replies carry no image number,
+	// so an untagged answer can only be placed by ORDER: while more than one is
+	// outstanding, the next reply belongs to the oldest. See handleKittyGraphics.
+	kittyOutstanding int
 	// kittyEnviron is the environment the pixel-rung gate reads, or nil for the
 	// process's own. A field rather than an os.Environ() call at the point of
 	// decision, so a test can stand a terminal in front of the gate — under go

@@ -12,14 +12,21 @@ package app
 // already on screen. Two properties fall out of that and both are worth more
 // than the code they save:
 //
-//   - A placeholder cell cannot exist before the image it addresses. #398's
+//   - A placeholder cell cannot exist before the IMAGE it addresses. #398's
 //     third acceptance criterion asks that Atrium never emit graphics payloads
 //     blind; here the payload goes out first and the cells that reference it are
-//     only ever built from an ID a terminal handed back.
-//   - tea.Raw's ordering stops mattering. It queues into the program's output
-//     buffer via a full event-loop round trip, so the frame from the Update that
-//     asked for a transmission may flush first — which would be a real hazard if
-//     that frame could carry placeholders. It cannot.
+//     only ever built from an ID a terminal handed back. tea.Raw queues into the
+//     program's output buffer via a full event-loop round trip, so the frame
+//     from the Update that asked for a transmission may flush first — which
+//     would be a hazard if that frame could carry placeholders. It cannot.
+//   - The same is NOT true of the PLACEMENT, and the distinction is worth
+//     keeping straight. handleKittyGraphics upgrades the overlay before it
+//     returns placeKittyImageCmd, so the very next frame already carries
+//     placeholder cells while the a=p escape is still one Cmd round trip away.
+//     For that one frame the cells name an image that exists and a placement
+//     that does not, and a terminal draws nothing for them. It costs a frame,
+//     not correctness — but it is why "ordering stops mattering" would be too
+//     strong a claim to hang a decision on.
 
 import (
 	"image"
@@ -52,7 +59,14 @@ const kittyPlacementID = 1
 // the honest options are a short list plus a documented override, or a wide guess.
 // kitty and Ghostty are the two this was looked at in. Everyone else has
 // image_preview: kitty.
+//
+// Duplicated names resolve LAST-WINS, matching os.Environ semantics and
+// doctor.CheckImagePreview. Returning on the first match instead would let the
+// two disagree about the same environment, which for a section whose whole job
+// is to explain a surprise is the wrong way round.
 func kittyTerminalEnv(environ []string) bool {
+	var term, termProgram string
+	var ownVar bool
 	for _, kv := range environ {
 		name, value, ok := strings.Cut(kv, "=")
 		if !ok {
@@ -60,20 +74,16 @@ func kittyTerminalEnv(environ []string) bool {
 		}
 		switch name {
 		case "TERM":
-			if value == "xterm-kitty" {
-				return true
-			}
+			term = value
 		case "TERM_PROGRAM":
-			if value == "ghostty" {
-				return true
-			}
+			termProgram = value
 		case "KITTY_WINDOW_ID", "GHOSTTY_RESOURCES_DIR", "GHOSTTY_BIN_DIR":
 			if value != "" {
-				return true
+				ownVar = true
 			}
 		}
 	}
-	return false
+	return term == "xterm-kitty" || termProgram == "ghostty" || ownVar
 }
 
 // inTmux reports whether this process is inside a tmux client. Presence is the
@@ -90,30 +100,56 @@ func inTmux(environ []string) bool {
 
 // kittyEligible reports whether a transmission is worth attempting.
 //
-// environ and mono are parameters rather than reads so the rule is a pure
-// function of its inputs, matching doctor.CheckKeyboard and imageRenderMode.
+// Every input is a parameter rather than a read, so the rule is a pure function
+// of its inputs, matching doctor.CheckKeyboard and imageRenderMode.
 //
-// The tmux veto is the one that has to be here, and it is not made redundant by
-// the confirmation gate downstream. tmux inherits TERM_PROGRAM from the
-// environment at server start, so the sniff is TRUE inside tmux while tmux
-// neither implements the protocol nor forwards the payload unless
-// allow-passthrough is on. The confirmation would indeed never arrive and the
-// overlay would stay on glyphs — but we would have written kilobytes of APC at a
-// program that may print them. Users with passthrough on opt back in by naming
-// the rung.
+// Three of the four vetoes are about the cells being DRAWABLE, and each is a
+// silent failure if it is not checked here — the picture would render
+// "successfully" and be wrong:
 //
-// mono is a veto rather than a preference because the placeholder's foreground
-// IS the image ID: NO_COLOR pins the profile to Ascii, which strips the colour
-// and with it the address of the image, leaving cells that point at nothing.
-func kittyEligible(environ []string, pref string, mono bool) bool {
-	if mono {
+//   - placeholdersOneCell. U+10EEEE is East-Asian Ambiguous, so under an
+//     east-asian width rule a placeholder measures two columns while occupying
+//     one. Every row of the picture then overflows the box, lipgloss wraps it,
+//     and the frame accumulates the ghost rows theme.SanitizeWidth documents —
+//     at full scale, on every row at once. This is the same measured predicate
+//     the glyph rung ladders on, asked of this rung's own glyph.
+//   - trueColor. The placeholder's foreground IS the image ID, so a downsampling
+//     profile does not dim the picture, it rewrites the address: ultraviolet
+//     runs every cell through ConvertStyle, and on an ANSI256 profile the cells
+//     end up pointing at an image that does not exist. There is no fallback from
+//     that — Placeholders succeeds, so the overlay never reverts to glyphs — so
+//     it has to be refused up front.
+//   - mono. NO_COLOR pins the profile to ASCII, which strips the colour
+//     entirely. Kept beside trueColor rather than folded into it because Mono is
+//     the in-process answer (theme.SetMono) while the profile is read from the
+//     environment, and a test or a future caller can set one without the other.
+//
+// The fourth is the tmux veto, and it is not made redundant by the confirmation
+// gate downstream. tmux inherits TERM_PROGRAM from the environment at server
+// start, so the sniff is TRUE inside tmux while tmux neither implements the
+// protocol nor forwards the payload. The confirmation would indeed never arrive
+// and the overlay would stay on glyphs — but we would have written kilobytes of
+// APC at a program that may print them.
+//
+// image_preview: kitty overrides that veto, and what it buys inside tmux today
+// is NOTHING — measured, not assumed. tmux forwards a graphics payload only when
+// it is wrapped in tmux's own DCS passthrough envelope, and this code sends the
+// APC unwrapped (kitty.Options has a ChunkFormatter hook for exactly that, left
+// nil). Setting allow-passthrough on does not change the outcome: probed in a
+// real kitty with passthrough enabled, the transmission still drew no reply. So
+// the override is for a terminal Atrium has not TESTED, not for tmux. Wrapping
+// the payload is a real follow-up; until it lands, nothing here should tell a
+// user that passthrough makes this work.
+func kittyEligible(environ []string, pref string, mono, trueColor, placeholdersOneCell bool) bool {
+	if mono || !trueColor || !placeholdersOneCell {
 		return false
 	}
 	switch pref {
 	case config.ImagePreviewKitty:
 		// The explicit opt-in skips the terminal sniff and the tmux veto, which
-		// is the whole point of having it: it is what a terminal we did not test,
-		// or a tmux with allow-passthrough on, is set to.
+		// is the whole point of having it: it is for a terminal Atrium has not
+		// tested. It does NOT skip the three drawability vetoes above, because
+		// those are about whether the cells can be rendered at all.
 		return true
 	case config.ImagePreviewAuto:
 		return !inTmux(environ) && kittyTerminalEnv(environ)
@@ -163,62 +199,71 @@ func (m *home) transmitImageCmd(pixels image.Image) tea.Cmd {
 		log.ErrorLog.Printf("kitty transmit: %v", err)
 		return nil
 	}
-	// Armed only once the payload is real. An awaiting flag set beside a
-	// transmission that never went out would accept the next stray graphics reply
-	// on this terminal as an answer to nothing.
-	m.kittyAwaiting = true
+	// Counted only once the payload is real. Counting beside a transmission that
+	// never went out would make the next stray graphics reply on this terminal
+	// look like an answer to nothing.
+	m.kittyOutstanding++
 	// tea.Raw takes an `any` and runs it through fmt.Sprint, so a []byte would
 	// print as "[27 95 71 …]" to the terminal. It must be handed a string.
 	return tea.Raw(payload)
 }
 
-// handleKittyGraphics upgrades the open overlay to real pixels.
+// handleKittyGraphics upgrades the open overlay to real pixels, or disposes of a
+// reply that answers something else.
 //
-// Four things have to hold, and each rejects a reply that is genuinely not ours:
+// The hard part is that Ghostty's replies carry NO image number (see
+// kittyGraphicsConfirmed), so an untagged answer cannot be matched by tag. What
+// makes it tractable is that a terminal answers transmissions in the order it
+// received them, so an unanswered COUNT is enough: while more than one of ours is
+// outstanding, the next reply is for the OLDEST, whatever it says about itself.
 //
-//   - we must be waiting for one. Outside that window every graphics reply on
-//     this terminal belongs to somebody else.
-//   - the number must match, WHEN THE REPLY CARRIES ONE. The protocol says a
-//     transmission tagged I=<number> is answered `i=<id>,I=<number>;OK`, and
-//     kitty does exactly that. Ghostty 1.3.0 does not: it answers
-//     `\x1b_Gi=2147483647;OK` — the assigned ID and no number at all. Requiring
-//     the echo would therefore reject every Ghostty reply and quietly cost that
-//     terminal the whole rung, which is a defect no unit test could have found,
-//     because a synthesised reply is written by whoever writes the test. So an
-//     unnumbered reply is accepted while awaiting, and a numbered one still has
-//     to match. What that costs is stated below.
-//   - the terminal must have assigned an ID. An error reply carries none, and
-//     the case that makes this load-bearing rather than defensive is an error
-//     arriving AFTER a success: without the check it would reset a confirmed ID
-//     to zero and drop a working picture back to glyphs.
-//   - the overlay must still be open. A transmission whose reply lands after the
-//     user pressed esc has nothing left to upgrade, and its image is already
-//     being deleted.
+// A boolean "am I waiting" is NOT enough, and the sequence that proves it is
+// open A → esc before its reply → open B. The window closes and reopens, so a
+// flag is true again when A's late, untagged reply arrives, and B would show A's
+// pixels permanently. The count is 2 there, and that is what tells them apart.
 //
-// The residual risk of accepting an unnumbered reply, stated rather than hidden:
-// if another graphics program transmits into the same terminal inside the window
-// between our transmission and its answer, we could adopt its ID and show its
-// image. The window is one round trip, it needs a second graphics program
-// sharing one terminal, and the protocol offers nothing better — an unnumbered
-// reply is untagged by construction. Narrowing the window is what kittyAwaiting
-// is for.
-//
-// The open check is the nil pointer alone, deliberately. state and imageOverlay
-// are set together by openImagePreview and cleared together by
-// closeImagePreview, so a state comparison beside it would be a second spelling
-// of the same fact — and one no test could distinguish, which is how a condition
-// comes to look guarded without being.
+// Every reply that is not the current image's is still an image the terminal has
+// decoded and stored, so the disposal path FREES it. Dropping it on the floor
+// leaks a megapixel per abandoned transmission for the life of the terminal —
+// which is the one case "closing the overlay deletes the image by construction"
+// does not cover, because those cells never existed.
 func (m *home) handleKittyGraphics(msg kittyGraphicsConfirmed) (tea.Model, tea.Cmd) {
-	if !m.kittyAwaiting || msg.id == 0 {
+	if m.kittyOutstanding == 0 {
+		// Nothing of ours is unanswered, so this belongs to another program
+		// sharing the terminal.
 		return m, nil
 	}
-	if msg.number != 0 && msg.number != m.kittyNumber {
+	// Numbers increment by one per transmission, so the unanswered ones are
+	// exactly this range. A reply carrying a number outside it was tagged by
+	// somebody else — image numbers are CLIENT-chosen, so another program can
+	// pick any of them — and it must be left entirely alone: not counted against
+	// our outstanding transmissions, and above all not deleted, because the image
+	// it names is theirs.
+	oldest := m.kittyNumber - m.kittyOutstanding + 1
+	if msg.number != 0 && (msg.number < oldest || msg.number > m.kittyNumber) {
 		return m, nil
 	}
-	if m.imageOverlay == nil {
+	m.kittyOutstanding--
+
+	if msg.id == 0 {
+		// An error reply. It answers a transmission — which is why the count is
+		// still decremented — but it names no image, so there is nothing to show
+		// and nothing to free.
 		return m, nil
 	}
-	m.kittyAwaiting = false
+
+	// Is this the newest transmission, the one the open box is waiting for? A
+	// numbered reply says so directly. An untagged one can only be placed by
+	// ORDER: it answers the oldest unanswered transmission, so it is the newest
+	// only when it was also the only one left.
+	current := msg.number == m.kittyNumber || (msg.number == 0 && m.kittyOutstanding == 0)
+	if !current || m.imageOverlay == nil {
+		// Ours, but abandoned — a picture the user has already moved past, or one
+		// whose box closed while the terminal was decoding. The terminal is
+		// holding it either way and only an explicit delete frees it.
+		return m, tea.Raw(imageview.DeleteImage(int(msg.id)))
+	}
+
 	m.kittyID = msg.id
 	m.imageOverlay.SetKittyImage(msg.id)
 	return m, m.placeKittyImageCmd()
@@ -256,7 +301,6 @@ func (m *home) releaseKittyImageCmd() tea.Cmd {
 	}
 	id := m.kittyID
 	m.kittyID, m.kittyCols, m.kittyRows = 0, 0, 0
-	m.kittyAwaiting = false
 	return tea.Raw(imageview.DeleteImage(int(id)))
 }
 
