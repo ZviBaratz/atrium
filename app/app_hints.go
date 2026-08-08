@@ -139,10 +139,21 @@ func (m *home) handleHintsState(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	return m, tea.Batch(m.actHint(selected, open), m.instanceChanged())
 }
 
-// actHint copies the match and, on the open variant, opens URLs in the
-// browser. Non-URL kinds degrade to plain copy in v1 (see the design doc).
+// actHint copies the match and, on the open variant, opens what can be opened:
+// an image path in Atrium's own overlay, a web URL in the browser. Every other
+// kind degrades to plain copy.
 func (m *home) actHint(match hints.Match, open bool) tea.Cmd {
 	copyCmd := m.copyToClipboard(match.Text)
+	// Images first, and in-app. An agent's screenshots and plots are the reason
+	// this branch exists (#398): handing the path to the OS opener instead would
+	// launch a viewer on the machine ATRIUM runs on, which over SSH is the wrong
+	// machine and locally takes the user out of the TUI. The decode runs in a
+	// command, so the overlay opens on a later message, not here.
+	if open && match.Kind == hints.KindPath {
+		if path, ok := resolveImagePath(match.Text, m.hintResolveRoot()); ok {
+			return tea.Batch(copyCmd, loadImageCmd(path))
+		}
+	}
 	if open && match.Kind == hints.KindURL && actions.OpenableURL(match.Text) {
 		if err := actions.OpenInBrowser(match.Text); err != nil {
 			// The copy still happened; report only the half that failed.
@@ -153,6 +164,24 @@ func (m *home) actHint(match hints.Match, open bool) tea.Cmd {
 	}
 	return tea.Batch(copyCmd,
 		m.handleInfoNotice(fmt.Sprintf("'%s' copied", truncateForNotice(match.Text))))
+}
+
+// hintResolveRoot is the directory a relative path in the pane is relative to.
+//
+// The agent's cwd is its worktree, so that is what its output names things
+// against. GetRepoPath is the fallback for a direct session, which runs in the
+// repository itself and has no worktree; an empty string means neither is
+// available, and resolveImagePath then refuses relative names outright rather
+// than resolving them against Atrium's own working directory.
+func (m *home) hintResolveRoot() string {
+	selected := m.list.GetSelectedInstance()
+	if selected == nil {
+		return ""
+	}
+	if wt := selected.GetWorktreePath(); wt != "" {
+		return wt
+	}
+	return selected.GetRepoPath()
 }
 
 // truncateForNotice keeps toasts one line short; the menu row truncates too,

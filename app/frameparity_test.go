@@ -2,6 +2,8 @@ package app
 
 import (
 	"fmt"
+	"image"
+	"image/color"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -135,7 +137,50 @@ func frameStates() []frameState {
 				result: parityCheckpoints(),
 			})
 		}},
+		{"imagePreview", stateImagePreview, func(h *home, _ *session.Instance) {
+			// Through the opener, like the palette: it is what pairs the overlay
+			// with the render mode and the sizing, and assigning the field by hand
+			// would render a frame production never produces.
+			h.openImagePreview(overlay.Image{
+				Path: "/fixture/shots/screenshot.png", Pixels: parityImage(), Width: 30, Height: 20,
+			})
+		}},
 	}
+}
+
+// parityImage is a FOUR-COLOUR picture, and the count is the point.
+//
+// TestFrameColourFingerprint records every distinct SGR sequence with its count,
+// so a photographic fixture would put thousands of them into two goldens that are
+// 500 lines long today and make every future diff unreadable. Four quadrants keep
+// the fingerprint small while still proving the thing that matters: that the
+// picture's own colours reach the frame, per cell, rather than being flattened by
+// a box style.
+//
+// Sized so it does not divide evenly into the box, so the aspect fit and the
+// centring both do real work.
+func parityImage() *image.RGBA {
+	const w, h = 30, 20
+	img := image.NewRGBA(image.Rect(0, 0, w, h))
+	quadrant := []color.RGBA{
+		{R: 0xd0, G: 0x20, B: 0x30, A: 0xff},
+		{R: 0x20, G: 0xa0, B: 0x40, A: 0xff},
+		{R: 0x20, G: 0x40, B: 0xc0, A: 0xff},
+		{R: 0xe0, G: 0xd0, B: 0x30, A: 0xff},
+	}
+	for y := range h {
+		for x := range w {
+			i := 0
+			if x >= w/2 {
+				i |= 1
+			}
+			if y >= h/2 {
+				i |= 2
+			}
+			img.SetRGBA(x, y, quadrant[i])
+		}
+	}
+	return img
 }
 
 // parityCheckpoints is a POPULATED enumeration, for the reason

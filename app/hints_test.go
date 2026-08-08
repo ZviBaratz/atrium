@@ -4,6 +4,7 @@ package app
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -145,7 +146,80 @@ func TestHints_UppercaseNonWebURLJustCopies(t *testing.T) {
 	assert.False(t, fo.called, "non-web URL must not reach the opener")
 }
 
-// Uppercase on a non-URL degrades to plain copy (v1).
+// Uppercase on an image path copies it AND opens Atrium's own preview overlay.
+//
+// The overlay does not appear in this Update: actHint returns a command, the
+// decode runs off the loop, and the state changes when its message lands. So the
+// command is run here the way the runtime would, which is also what proves the
+// path was resolved rather than merely recognised.
+func TestHints_UppercaseImagePathOpensThePreview(t *testing.T) {
+	h := newHintsHome(t, newBranchInstance(t, "a", "b1"))
+	inst := h.list.GetSelectedInstance()
+	fc := withFakeClipboard(t, nil)
+	fo := withFakeOpener(t, nil)
+
+	// Absolute on purpose: it needs no worktree to resolve against, so this
+	// exercises the actHint branch without a test-only field on home. That
+	// relative names resolve against the worktree is TestResolveImagePath's job,
+	// and which root they use is TestHintResolveRoot's.
+	path := writeFixtureImage(t, filepath.Join(t.TempDir(), "screenshot.png"))
+
+	_, _ = h.startHints(inst, "Saved to "+path+" ok\n")
+	cmd := pressRunes(h, "A")
+
+	require.True(t, fc.called, "the copy still happens")
+	assert.Equal(t, path, fc.value)
+	assert.False(t, fo.called, "an image must never reach the OS opener")
+
+	require.NotNil(t, cmd)
+	runCmdInto(t, h, cmd)
+	assert.Equal(t, stateImagePreview, h.state)
+	require.NotNil(t, h.imageOverlay)
+	assert.Equal(t, path, h.imageOverlay.Path())
+}
+
+// A path that LOOKS like an image but is not on disk stays a plain copy. This is
+// the negative control for the branch above: without it, a resolver that always
+// said yes would pass every other assertion here.
+func TestHints_UppercaseMissingImageJustCopies(t *testing.T) {
+	h := newHintsHome(t, newBranchInstance(t, "a", "b1"))
+	inst := h.list.GetSelectedInstance()
+	fc := withFakeClipboard(t, nil)
+	missing := filepath.Join(t.TempDir(), "gone.png")
+
+	_, _ = h.startHints(inst, "Saved to "+missing+" ok\n")
+	cmd := pressRunes(h, "A")
+
+	require.True(t, fc.called)
+	assert.Equal(t, missing, fc.value)
+	if cmd != nil {
+		runCmdInto(t, h, cmd)
+	}
+	assert.Equal(t, stateDefault, h.state, "a missing image must not open a box")
+	assert.Nil(t, h.imageOverlay)
+}
+
+// Lowercase never opens anything, image or not — the copy/open split is the
+// whole grammar of hint mode.
+func TestHints_LowercaseImagePathOnlyCopies(t *testing.T) {
+	h := newHintsHome(t, newBranchInstance(t, "a", "b1"))
+	inst := h.list.GetSelectedInstance()
+	fc := withFakeClipboard(t, nil)
+	path := writeFixtureImage(t, filepath.Join(t.TempDir(), "shot.png"))
+
+	_, _ = h.startHints(inst, "Saved to "+path+" ok\n")
+	cmd := pressRunes(h, "a")
+
+	require.True(t, fc.called)
+	assert.Equal(t, path, fc.value)
+	if cmd != nil {
+		runCmdInto(t, h, cmd)
+	}
+	assert.Equal(t, stateDefault, h.state)
+	assert.Nil(t, h.imageOverlay)
+}
+
+// Uppercase on a non-image path degrades to plain copy.
 func TestHints_UppercaseNonURLJustCopies(t *testing.T) {
 	h := newHintsHome(t, newBranchInstance(t, "a", "b1"))
 	inst := h.list.GetSelectedInstance()

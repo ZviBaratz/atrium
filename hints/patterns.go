@@ -13,7 +13,11 @@ const (
 	KindText Kind = iota
 	// KindURL opens in the browser on the open variant.
 	KindURL
-	// KindPath is a filesystem path (open degrades to copy in v1).
+	// KindPath is a filesystem path. On the open variant an image opens in
+	// Atrium's own preview overlay (#398); every other path degrades to copy,
+	// because opening one would launch a viewer on the machine Atrium runs on.
+	// Which of the two it is, is decided in app — this package does no
+	// filesystem work.
 	KindPath
 )
 
@@ -39,6 +43,20 @@ var builtinPatterns = []pattern{
 	{name: "url", re: regexp.MustCompile(`(?P<match>(https?://|git://|ssh://|ftp://|file:///)[^\s()"'\x00-\x1f\x7f]+|git@[^\s()"'\x00-\x1f\x7f]+)`), kind: KindURL},
 	{name: "diff-path", re: regexp.MustCompile(`(---|\+\+\+) [ab]/(?P<match>.+)`), kind: KindPath},
 	{name: "git-status", re: regexp.MustCompile(`(modified|deleted|new file): +(?P<match>.+)`), kind: KindPath},
+	// An image name, ahead of "path" because it must win the ties it creates.
+	// Two shapes the path pattern cannot produce, and both are what agents
+	// actually print: a bare "screenshot.png" (path needs a slash) and
+	// "/tmp/shot-2026-08-07T12:34:56.png" (path's :line:column suffix eats the
+	// timestamp and drops the extension, naming a file that does not exist).
+	// Both start at the same column as path's own match, so table order is what
+	// decides them — keep this entry above it.
+	//
+	// The run stops at ':' and only resumes for a colon group that ends in a
+	// name character, which is what keeps "Saved:/tmp/x.png" from labelling the
+	// word "Saved". Requiring a name character immediately before the extension
+	// is what keeps "shot (1).png" from matching a stray ".png". No validate:
+	// the extension IS the filesystem signal pathLike goes looking for.
+	{name: "image-path", re: regexp.MustCompile(`(?P<match>[.\w\-@~/]*[\w\-@](:[\d.\w\-]*[\w\-])*\.(?i:png|jpe?g|gif))\b`), kind: KindPath},
 	{name: "path", re: regexp.MustCompile(`(?P<match>([.\w\-@~]+)?(/[.\w\-@]+)+(:\d+(:\d+)?)?)`), kind: KindPath, validate: pathLike},
 	{name: "uuid", re: regexp.MustCompile(`[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}`), kind: KindText},
 	{name: "sha", re: regexp.MustCompile(`[0-9a-f]{7,64}`), kind: KindText, validate: shaLike},

@@ -1,0 +1,161 @@
+package app
+
+import (
+	"errors"
+	"os"
+	"path/filepath"
+	"testing"
+
+	"github.com/ZviBaratz/atrium/ui/imageview"
+	"github.com/ZviBaratz/atrium/ui/overlay"
+	"github.com/ZviBaratz/atrium/ui/theme"
+
+	tea "charm.land/bubbletea/v2"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+// writeFixtureImage copies the committed tiny PNG to path, creating parents, and
+// returns path. Copied rather than encoded for the reason image_load_test.go's
+// header gives: encoding here would register the PNG decoder for the whole test
+// binary.
+func writeFixtureImage(t *testing.T, path string) string {
+	t.Helper()
+	b, err := os.ReadFile(filepath.Join("testdata", "images", "tiny.png"))
+	require.NoError(t, err)
+	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+	require.NoError(t, os.WriteFile(path, b, 0o644))
+	return path
+}
+
+// runCmdInto runs cmd the way the runtime would — flattening a batch — and feeds
+// every message it produces back through Update.
+//
+// Tests that stop at "a command was returned" prove only that a branch was
+// taken. What matters here is what the command's message does when it lands,
+// which is a different Update from the keypress that asked for it.
+func runCmdInto(t *testing.T, h *home, cmd tea.Cmd) {
+	t.Helper()
+	if cmd == nil {
+		return
+	}
+	msg := cmd()
+	if batch, ok := msg.(tea.BatchMsg); ok {
+		for _, c := range batch {
+			runCmdInto(t, h, c)
+		}
+		return
+	}
+	if msg != nil {
+		h.Update(msg)
+	}
+}
+
+// Half blocks are the default, and each of the three fallbacks is a case where
+// they would fail silently rather than loudly.
+func TestImageRenderMode(t *testing.T) {
+	cases := []struct {
+		name      string
+		glyphSet  string
+		mono      bool
+		eastAsian string
+		want      imageview.Mode
+	}{
+		{"default", theme.GlyphSetPlain, false, "", imageview.HalfBlock},
+		{"nerd fonts still use blocks", theme.GlyphSetNerd, false, "", imageview.HalfBlock},
+		{"ascii glyph rung", theme.GlyphSetASCII, false, "", imageview.ASCII},
+		// Without colour a half block is the same glyph in every cell: a solid
+		// rectangle that renders "successfully" and shows nothing.
+		{"NO_COLOR", theme.GlyphSetPlain, true, "", imageview.ASCII},
+		// Block Elements are East-Asian Ambiguous, so this makes them measure two
+		// cells while rendering one — the divergence that desyncs the alt-screen
+		// renderer into ghost rows, here on every row of the picture at once.
+		{"RUNEWIDTH_EASTASIAN", theme.GlyphSetPlain, false, "1", imageview.ASCII},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, imageRenderMode(tc.glyphSet, tc.mono, tc.eastAsian))
+		})
+	}
+}
+
+// The live resolver must read all three inputs, not just the one it was written
+// for. Each is flipped on its own against the same home.
+func TestCurrentImageRenderMode_ReadsTheLiveEnvironment(t *testing.T) {
+	h := newHintsHome(t, newBranchInstance(t, "a", "b1"))
+	// Controlled, not inherited: a developer with RUNEWIDTH_EASTASIAN set in
+	// their shell would otherwise see this baseline fail for the right reason
+	// and the wrong test.
+	t.Setenv("RUNEWIDTH_EASTASIAN", "")
+	require.Equal(t, imageview.HalfBlock, h.currentImageRenderMode())
+
+	restore := theme.SetMono(true)
+	assert.Equal(t, imageview.ASCII, h.currentImageRenderMode(), "NO_COLOR is not consulted")
+	restore()
+
+	h.appConfig.GlyphSet = theme.GlyphSetASCII
+	assert.Equal(t, imageview.ASCII, h.currentImageRenderMode(), "glyph_set is not consulted")
+	h.appConfig.GlyphSet = theme.GlyphSetPlain
+
+	t.Setenv("RUNEWIDTH_EASTASIAN", "1")
+	assert.Equal(t, imageview.ASCII, h.currentImageRenderMode(), "RUNEWIDTH_EASTASIAN is not consulted")
+}
+
+// A load that failed explains itself and leaves no box behind. A silent failure
+// here reads as "the key did nothing".
+func TestHandleImageLoaded_ErrorNoticesAndOpensNothing(t *testing.T) {
+	h := newHintsHome(t, newBranchInstance(t, "a", "b1"))
+
+	_, cmd := h.handleImageLoaded(imageLoadedMsg{path: "/tmp/x.png", err: errors.New("nope")})
+
+	assert.Equal(t, stateDefault, h.state)
+	assert.Nil(t, h.imageOverlay)
+	assert.NotNil(t, cmd, "a failed load must say so")
+}
+
+// The box swallows every key but esc. q in particular: falling through to the
+// global keys would quit the app out from under an open overlay.
+func TestImagePreviewState_SwallowsEverythingButEsc(t *testing.T) {
+	h := newHintsHome(t, newBranchInstance(t, "a", "b1"))
+	h.windowWidth, h.windowHeight = 100, 30
+	h.openImagePreview(overlay.Image{Path: "/tmp/x.png", Pixels: parityImage(), Width: 30, Height: 20})
+	require.Equal(t, stateImagePreview, h.state)
+
+	for _, key := range []string{"q", "j", "n", "?", "!"} {
+		_, _ = h.handleKeyPress(textMsg(key))
+		require.Equalf(t, stateImagePreview, h.state, "%q left the preview", key)
+	}
+	_, _ = h.handleKeyPress(keyMsg("ctrl+c"))
+	require.Equal(t, stateImagePreview, h.state, "ctrl+c left the preview")
+
+	_, _ = h.handleKeyPress(keyMsg("esc"))
+	assert.Equal(t, stateDefault, h.state)
+	assert.Nil(t, h.imageOverlay, "closing must drop the decoded image, not pin it")
+}
+
+// The box takes the hint bar's row, like every other modal.
+//
+// Pinned explicitly because the guard that would otherwise cover it — the
+// frame-restore walk — SKIPS any state whose bar is visible. Dropping this state
+// from menuVisible's list would therefore not fail a test; it would quietly stop
+// one from running, and leave a key hint stranded under a full-bleed picture.
+func TestImagePreview_HidesTheHintBar(t *testing.T) {
+	h := newHintsHome(t, newBranchInstance(t, "a", "b1"))
+	h.state = stateImagePreview
+	assert.False(t, h.menuVisible())
+}
+
+// The resolution root is the agent's own cwd. A session with no worktree — direct
+// or unstarted — falls back to the repository, and a selection-less list gives up
+// rather than resolving against Atrium's working directory.
+func TestHintResolveRoot(t *testing.T) {
+	h := newHintsHome(t)
+	assert.Equal(t, "", h.hintResolveRoot(), "no selection means no root")
+
+	h = newHintsHome(t, newBranchInstance(t, "a", "b1"))
+	inst := h.list.GetSelectedInstance()
+	require.NotNil(t, inst)
+	// An unstarted session has no worktree yet, so the repository is what its
+	// output would be relative to.
+	assert.Equal(t, inst.GetRepoPath(), h.hintResolveRoot())
+}
