@@ -134,8 +134,7 @@ func (c *CmdLogOverlay) Render() string {
 		Border(th.Borders.Style).
 		BorderForeground(th.Palette.Accent).
 		Padding(1, 2).
-		// +2 for the left/right border — v2 counts it inside Width. See theme.Panel.
-		Width(c.width + 2)
+		Width(c.width)
 
 	inner := c.width - 6 // borders (2) + horizontal padding (2*2)
 	if inner < 20 {

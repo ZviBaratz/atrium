@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/ZviBaratz/atrium/cmdlog"
+	xansi "github.com/charmbracelet/x/ansi"
 
 	"charm.land/lipgloss/v2"
 )
@@ -180,5 +181,35 @@ func TestCmdLogOverlay_SummaryStaysOneLineInTheNarrowestBox(t *testing.T) {
 	if attributed != bare {
 		t.Errorf("box height = %d with an attributed summary, %d without — the summary wrapped",
 			attributed, bare)
+	}
+}
+
+// TestCmdLogOverlay_FitsItsSize asserts the box occupies exactly the width SetSize
+// was given. This is the invariant the frame parity oracle depends on and the one
+// that Width(c.width + 2) violated: the box was two columns wider than requested
+// while inner-width truncated as if it were two columns narrower (#612).
+func TestCmdLogOverlay_FitsItsSize(t *testing.T) {
+	cmdlog.Reset()
+	cmdlog.Add(cmdlog.Record{
+		Argv: "git status --porcelain --ahead-behind origin/main", Session: "s", Start: time.Now(),
+	})
+	cmdlog.Add(cmdlog.Record{
+		Argv: "tmux -L atrium has-session -t atrium-s", Session: "s", Start: time.Now(),
+		Err: true, Exit: 1, Stderr: "session not found",
+	})
+
+	for _, dim := range [][2]int{{80, 24}, {60, 16}, {40, 8}, {120, 40}} {
+		w, h := dim[0], dim[1]
+		o := NewCmdLogOverlay("s")
+		o.SetSize(w, h)
+
+		lines := strings.Split(o.Render(), "\n")
+		for i, l := range lines {
+			got := xansi.StringWidth(l)
+			if got != w {
+				t.Errorf("size=%dx%d: line %d is %d columns wide, want %d\n%q",
+					w, h, i, got, w, l)
+			}
+		}
 	}
 }

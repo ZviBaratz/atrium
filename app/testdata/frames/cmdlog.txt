@@ -5,17 +5,17 @@
 │▎                     ││                                                      │
 │                      ││                                                      │
 │                      ││                                                      │
-│    ╭────────────────────────────────────────────────────────────────────╮    │
-│    │                                                                    │    │
-│    │  Command Log — all                                                 │    │
-│    │  2 commands · 9ms cpu  (git status 8ms · tmux has-session 1ms)     │    │
-│    │                                                                    │    │
-│    │  ▸ ✗   3h    4ms parity-sessio… tmux has-session -t atrium-par…    │    │
-│    │    ✓   2h   12ms parity-sessio… git status --porcelain             │    │
-│    │                                                                    │    │
-│    │  tab filter · ↵ expand failure · j/k move · esc close              │    │
-│    │                                                                    │    │
-│    ╰────────────────────────────────────────────────────────────────────╯    │
+│     ╭──────────────────────────────────────────────────────────────────╮     │
+│     │                                                                  │     │
+│     │  Command Log — all                                               │     │
+│     │  2 commands · 9ms cpu  (git status 8ms · tmux has-session 1ms)   │     │
+│     │                                                                  │     │
+│     │  ▸ ✗   3h    4ms parity-sessio… tmux has-session -t atrium-par…  │     │
+│     │    ✓   2h   12ms parity-sessio… git status --porcelain           │     │
+│     │                                                                  │     │
+│     │  tab filter · ↵ expand failure · j/k move · esc close            │     │
+│     │                                                                  │     │
+│     ╰──────────────────────────────────────────────────────────────────╯     │
 │                      ││                                                      │
 │                      ││                                                      │
 │                      ││                                                      │
@@ -38,17 +38,17 @@
 │                                  ││                                                                                  │
 │                                  ││                                                                                  │
 │                                  ││                                                                                  │
-│       ╭──────────────────────────────────────────────────────────────────────────────────────────────────────╮       │
-│       │                                                                                                      │       │
-│       │  Command Log — all                                                                                   │       │
-│       │  2 commands · 9ms cpu  (git status 8ms · tmux has-session 1ms)                                       │       │
-│       │                                                                                                      │       │
-│       │  ▸ ✗   3h    4ms parity-sessio… tmux has-session -t atrium-parity                                    │       │
-│       │    ✓   2h   12ms parity-sessio… git status --porcelain                                               │       │
-│       │                                                                                                      │       │
-│       │  tab filter · ↵ expand failure · j/k move · esc close                                                │       │
-│       │                                                                                                      │       │
-│       ╰──────────────────────────────────────────────────────────────────────────────────────────────────────╯       │
+│        ╭────────────────────────────────────────────────────────────────────────────────────────────────────╮        │
+│        │                                                                                                    │        │
+│        │  Command Log — all                                                                                 │        │
+│        │  2 commands · 9ms cpu  (git status 8ms · tmux has-session 1ms)                                     │        │
+│        │                                                                                                    │        │
+│        │  ▸ ✗   3h    4ms parity-sessio… tmux has-session -t atrium-parity                                  │        │
+│        │    ✓   2h   12ms parity-sessio… git status --porcelain                                             │        │
+│        │                                                                                                    │        │
+│        │  tab filter · ↵ expand failure · j/k move · esc close                                              │        │
+│        │                                                                                                    │        │
+│        ╰────────────────────────────────────────────────────────────────────────────────────────────────────╯        │
 │                                  ││                                                                                  │
 │                                  ││                                                                                  │
 │                                  ││                                                                                  │
