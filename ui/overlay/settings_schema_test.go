@@ -210,7 +210,7 @@ func TestCategoryRowCounts(t *testing.T) {
 	want := map[settingCategory]int{
 		catSessions:      4,
 		catWorktrees:     6,
-		catAppearance:    5,
+		catAppearance:    6,
 		catSessionList:   6,
 		catNotifications: 4,
 		catAutomation:    4,
@@ -225,7 +225,7 @@ func TestCategoryRowCounts(t *testing.T) {
 		got[r.category]++
 		total++
 	}
-	assert.Equal(t, 39, total, "38 config rows plus the read-only config-file row")
+	assert.Equal(t, 40, total, "39 config rows plus the read-only config-file row")
 	for _, c := range allCategories() {
 		assert.Equalf(t, want[c], got[c], "category %q row count", c.label())
 	}
@@ -574,6 +574,14 @@ func TestDetailRetainsTheMovedProse(t *testing.T) {
 		},
 		"session_context_bar": {
 			"when a server starts", // why a running session keeps its old bar
+		},
+		"image_preview": {
+			// The kitty override's failure mode. It is undetectable — placeholder
+			// support has no query — so a user who picks it and gets a blank box
+			// has nothing else to go on, and "it simply never answers" (what this
+			// shipped saying) is the reassurance that would strand them there.
+			"Unicode placeholder",
+			"choose glyph",
 		},
 	}
 

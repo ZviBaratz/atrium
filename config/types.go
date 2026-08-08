@@ -421,6 +421,20 @@ type Config struct {
 	// legacy NerdFont bool: true → nerd, else plain (see GetGlyphSet). When both
 	// are set, GlyphSet wins. Orthogonal to Theme (the color palette).
 	GlyphSet string `json:"glyph_set,omitempty"`
+	// ImagePreview selects how an agent-produced image opens in Atrium's chrome
+	// (#398): "auto" (real pixels via the kitty graphics protocol where the
+	// terminal is known to support them AND Atrium is not inside tmux, block
+	// glyphs everywhere else — the default; the tmux veto is worth stating
+	// because kitty-inside-tmux is a common setup and it draws glyphs on the
+	// default setting), "kitty" (attempt pixels even where the environment does not name
+	// a supported terminal; this does NOT make tmux work — Atrium does not wrap
+	// the payload in tmux's passthrough envelope yet, and on a terminal that has
+	// the graphics protocol but not Unicode placeholders it draws blanks or
+	// boxes, which nothing can detect and only "glyph" undoes), "glyph" (never
+	// attempt pixels), or "off" (no overlay at all: hinting an image path just
+	// copies it). Empty means auto (see GetImagePreview). Orthogonal to GlyphSet,
+	// which still picks WHICH glyph rung the non-pixel case draws with.
+	ImagePreview string `json:"image_preview,omitempty"`
 	// SessionContextBar, when true, renders a thin tmux status line inside each
 	// attached session (name · repo · branch · status + a strip of sibling
 	// sessions in the same repo group). nil means use the default (on), so the

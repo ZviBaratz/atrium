@@ -9,6 +9,7 @@ import (
 	"github.com/ZviBaratz/atrium/ui/theme"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/colorprofile"
 )
 
 // imagePreviewMaxWidth and imagePreviewMaxHeight cap the box. They are the
@@ -84,16 +85,20 @@ func (m *home) handleImageLoaded(msg imageLoadedMsg) (tea.Model, tea.Cmd) {
 	if msg.err != nil {
 		return m, m.handleInfoNotice(truncateForNotice(msg.err.Error()))
 	}
-	m.openImagePreview(overlay.Image{
+	return m, m.openImagePreview(overlay.Image{
 		Path: msg.path, Pixels: msg.img, Width: msg.width, Height: msg.height,
 	})
-	return m, nil
 }
 
 // openImagePreview arms the overlay and switches state. Split from
 // handleImageLoaded so a test can open the real overlay the way production does
 // rather than assigning the field by hand.
-func (m *home) openImagePreview(src overlay.Image) {
+//
+// The command it returns is the pixel rung's opening move, and it is returned
+// rather than run because the picture is already complete without it: the
+// overlay draws glyphs now, and a terminal that answers the transmission
+// upgrades it later. See image_kitty.go.
+func (m *home) openImagePreview(src overlay.Image) tea.Cmd {
 	m.imageOverlay = overlay.NewImageOverlay(src, m.currentImageRenderMode())
 	m.imageOverlay.SetSize(
 		min(int(float32(m.windowWidth)*0.85), imagePreviewMaxWidth),
@@ -101,16 +106,43 @@ func (m *home) openImagePreview(src overlay.Image) {
 	)
 	m.state = stateImagePreview
 	m.recomputeLayout() // the hint bar gives up its row while the box is open
+
+	// The width input is MEASURED, never read off RUNEWIDTH_EASTASIAN, for the
+	// reason imageview.PlaceholdersMeasureOneCell sets out — and it is asked of
+	// the placeholder, not the half block, because the two rungs have different
+	// glyphs even though they turn out to share an answer.
+	//
+	// The profile is read from the environment rather than from the running
+	// program because Bubble Tea does not expose the one it resolved. That is a
+	// weaker source, and it is the safe direction to be wrong in: an environment
+	// that understates its colour depth costs the pixel rung, which falls back to
+	// a picture that works everywhere.
+	env := m.graphicsEnviron()
+	trueColor := colorprofile.Env(env) == colorprofile.TrueColor
+	if !kittyEligible(env, m.appConfig.GetImagePreview(), theme.Mono(),
+		trueColor, imageview.PlaceholdersMeasureOneCell()) {
+		return nil
+	}
+	return m.transmitImageCmd(src.Pixels)
 }
 
 // closeImagePreview returns to the default state and drops the decoded image.
 //
-// Dropping it matters: the intermediate is up to a megapixel of RGBA, and an
-// overlay left armed would pin it for the rest of the session.
-func (m *home) closeImagePreview() {
+// Dropping it matters twice over: the intermediate is up to a megapixel of RGBA
+// that an overlay left armed would pin for the rest of the session, and on the
+// pixel rung the terminal is holding a copy of its own that only an explicit
+// delete frees.
+//
+// It deliberately does NOT touch kittyOutstanding. A transmission stays
+// outstanding until it is ANSWERED, not until the box that asked for it closes —
+// the terminal is still going to reply, and that reply is what frees the image it
+// stored. Zeroing the count here would drop that reply and leak the image; see
+// handleKittyGraphics.
+func (m *home) closeImagePreview() tea.Cmd {
 	m.state = stateDefault
 	m.imageOverlay = nil
 	m.recomputeLayout()
+	return m.releaseKittyImageCmd()
 }
 
 // handleImagePreviewState consumes every key while the box is up. It is a
@@ -119,8 +151,8 @@ func (m *home) closeImagePreview() {
 // particular, which would otherwise quit the app out from under an open box.
 func (m *home) handleImagePreviewState(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if msg.Code == tea.KeyEsc {
-		m.closeImagePreview()
-		return m, m.instanceChanged()
+		release := m.closeImagePreview()
+		return m, tea.Batch(release, m.instanceChanged())
 	}
 	return m, nil
 }

@@ -575,6 +575,48 @@ func newSettingRows(cfg *config.Config) []settingRow {
 				return []string{config.GlyphSetNerd, config.GlyphSetPlain, config.GlyphSetASCII}
 			},
 		},
+		{
+			key: "image_preview", category: catAppearance, label: "Image preview", kind: kindEnum,
+			scope: scopeGlobal,
+			// Live in the sense that matters: the rung is resolved when the box
+			// opens, so the next image obeys a change made now. Nothing has to be
+			// restyled or relaunched, which is why applySettingChange has no arm.
+			timing:         timingLive,
+			defaultDisplay: func() string { return (&config.Config{}).GetImagePreview() },
+			reset:          func(c *config.Config) { c.ImagePreview = "" },
+			summary:        "How a hinted image opens. Pixels need kitty or Ghostty.",
+			// What `kitty` risks, which is the one thing about this setting a user
+			// cannot find out by trying it: the failure is silent and permanent.
+			// Placeholder support has no query — the protocol's own answers for
+			// graphics as a whole — so a terminal that stores the image and cannot
+			// draw the cells looks exactly like one that works, right up until the
+			// picture is blank.
+			//
+			// The tmux limitation is deliberately NOT here. It costs a third line,
+			// which puts `Current value` below the fold at 80x24
+			// (TestExpandedHelpFitsTheFloor), and `atrium doctor` is the better home
+			// for it anyway: it has its own tmux arm and, unlike this panel, it
+			// knows whether the user is actually in one.
+			detail: "kitty tries pixels on an untested terminal: blank or boxes means " +
+				"no Unicode placeholder support — undetectable, so choose glyph.",
+			gloss: map[string]string{
+				config.ImagePreviewAuto:  "pixels where the terminal is known to show them, glyphs elsewhere",
+				config.ImagePreviewKitty: "try pixels anyway, for a terminal Atrium does not recognise",
+				config.ImagePreviewGlyph: "block glyphs always; works everywhere, including over SSH",
+				config.ImagePreviewOff:   "no overlay at all; hinting an image path just copies it",
+			},
+			get: func(c *config.Config) string { return c.GetImagePreview() },
+			set: func(c *config.Config, v string) error {
+				c.ImagePreview = v
+				return nil
+			},
+			options: func(c *config.Config) []string {
+				return []string{
+					config.ImagePreviewAuto, config.ImagePreviewKitty,
+					config.ImagePreviewGlyph, config.ImagePreviewOff,
+				}
+			},
+		},
 		boolRow("hint_bar", catAppearance, "Hint bar",
 			"Show key hints on the bottom row. Off leaves the row blank.",
 			"The row is reserved either way, so turning hints off does not resize the panes.",

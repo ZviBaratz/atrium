@@ -10,6 +10,7 @@ import (
 	"strings"
 	"unicode"
 
+	"github.com/ZviBaratz/atrium/config"
 	"github.com/ZviBaratz/atrium/hints"
 	"github.com/ZviBaratz/atrium/internal/actions"
 	"github.com/ZviBaratz/atrium/session"
@@ -149,7 +150,12 @@ func (m *home) actHint(match hints.Match, open bool) tea.Cmd {
 	// launch a viewer on the machine ATRIUM runs on, which over SSH is the wrong
 	// machine and locally takes the user out of the TUI. The decode runs in a
 	// command, so the overlay opens on a later message, not here.
-	if open && match.Kind == hints.KindPath {
+	//
+	// image_preview: off turns the branch back off, restoring the plain copy this
+	// gesture did for every path before #398. It is checked here rather than at
+	// the overlay because the cost the setting exists to refuse is the DECODE —
+	// refusing later would still read and decode the file to then throw it away.
+	if open && match.Kind == hints.KindPath && m.appConfig.GetImagePreview() != config.ImagePreviewOff {
 		if path, ok := resolveImagePath(match.Text, m.hintResolveRoot()); ok {
 			return tea.Batch(copyCmd, loadImageCmd(path))
 		}

@@ -9,6 +9,7 @@ import (
 	"github.com/ZviBaratz/atrium/ui/imageview"
 
 	xansi "github.com/charmbracelet/x/ansi"
+	"github.com/mattn/go-runewidth"
 	"github.com/muesli/ansi"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -230,4 +231,72 @@ func TestImageOverlay_TitleNamesTheFileNotTheIntermediate(t *testing.T) {
 	out := xansi.Strip(o.Render())
 	assert.Contains(t, out, "2048×1024")
 	assert.NotContains(t, out, "1024×512")
+}
+
+// The picture caps must stay inside what a placement can address.
+//
+// This is the guard the pixel rung's fallback branch cannot supply for itself.
+// Placeholders refuses a rectangle wider or taller than kitty's diacritic table
+// can address, and imageMaxCols/imageMaxRows are comfortably inside that today —
+// so the refusal is unreachable and its glyph fallback is untestable. The thing
+// worth pinning is the RELATIONSHIP: raise a cap past the bound and the pixel
+// rung silently stops being a pixel rung, because every placement is refused and
+// every picture quietly comes back as glyphs.
+func TestPictureCapsStayInsideAPlacement(t *testing.T) {
+	_, err := imageview.Placeholders(1, imageMaxCols, imageMaxRows)
+	assert.NoError(t, err,
+		"imageMaxCols=%d × imageMaxRows=%d is more than a kitty placement can address; "+
+			"either lower the cap or the pixel rung falls back to glyphs at every size",
+		imageMaxCols, imageMaxRows)
+}
+
+// With pixels on, the box still owes its declared width and height. The picture
+// is a different string entirely — placeholder cells whose diacritics are
+// invisible to a per-rune measurer — so the box math has to hold over content it
+// was not written against.
+//
+// Measured with go-runewidth's cluster-aware StringWidth rather than the per-rune
+// PrintableRuneWidth its sibling tests use, for the reason
+// TestPlaceholders_PerRuneMeasurersOvercount records: the latter counts 120 of
+// kitty's row/column diacritics as visible characters and would report every
+// picture row as far wider than it draws.
+func TestImageOverlay_KittyPlacementKeepsTheBox(t *testing.T) {
+	for _, size := range [][2]int{{80, 24}, {120, 40}, {60, 20}, {31, 12}, {20, 9}} {
+		o := newSizedImageOverlay(t, size[0], size[1])
+		o.SetKittyImage(0xAABBCC)
+		out := o.Render()
+
+		lines := strings.Split(out, "\n")
+		assert.LessOrEqual(t, len(lines), size[1], "size %v: too many rows", size)
+		require.Contains(t, out, string(rune(0x10EEEE)), "size %v: the picture must be placeholders", size)
+		for i, l := range lines {
+			assert.Equal(t, size[0], runewidth.StringWidth(xansi.Strip(l)),
+				"size %v row %d", size, i)
+		}
+	}
+}
+
+// A placement is only offered once an ID exists, and its cell rectangle is what
+// the app must declare the placement with. Both halves matter: KittyCells is the
+// single source both the cells and the placement command are built from.
+func TestImageOverlay_KittyCells(t *testing.T) {
+	o := newSizedImageOverlay(t, 80, 24)
+	_, _, ok := o.KittyCells()
+	assert.False(t, ok, "no ID yet, so there is nothing to place")
+
+	o.SetKittyImage(7)
+	cols, rows, ok := o.KittyCells()
+	require.True(t, ok)
+	maxCols, maxRows := o.pictureSize()
+	assert.LessOrEqual(t, cols, maxCols, "the placement must fit the box")
+	assert.LessOrEqual(t, rows, maxRows, "the placement must fit the box")
+	assert.Positive(t, cols)
+	assert.Positive(t, rows)
+
+	// An overlay with no pixels has nothing to place, whatever ID it was handed.
+	empty := NewImageOverlay(Image{Path: "/tmp/x.png"}, renderMode())
+	empty.SetSize(80, 24)
+	empty.SetKittyImage(7)
+	_, _, ok = empty.KittyCells()
+	assert.False(t, ok)
 }
