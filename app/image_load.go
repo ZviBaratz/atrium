@@ -108,7 +108,14 @@ func loadImage(path string) (img image.Image, srcW, srcH int, err error) {
 }
 
 // checkImageBudget refuses a file that is too big to be worth previewing, naming
-// the number the user has to act on.
+// both the number the user has to act on and the one they have to get under.
+//
+// Naming the limit is not decoration. Reporting the size alone leaves "too big"
+// unanswerable — under what? — and at the boundary it reads as a contradiction:
+// integer MB truncates, so a file one byte over the cap used to report "shot.png
+// is 24 MB, too big to preview", which is the cap itself, stated as the offence.
+// The tenth of a megabyte is there for the same reason, so a size that rounds to
+// the limit is not printed as if it equalled it.
 //
 // Split out from loadImage because it is the half worth asserting: the sizes
 // that trip it cannot be built as fixtures cheaply — a 50-megapixel image is
@@ -116,13 +123,15 @@ func loadImage(path string) (img image.Image, srcW, srcH int, err error) {
 // cover the cases that pass.
 func checkImageBudget(name string, size int64, w, h int) error {
 	if size > maxImageFileBytes {
-		return fmt.Errorf("%s is %d MB, too big to preview", name, size>>20)
+		return fmt.Errorf("%s is %.1f MB, over the %d MB preview limit",
+			name, float64(size)/(1<<20), maxImageFileBytes>>20)
 	}
 	if w <= 0 || h <= 0 {
 		return fmt.Errorf("%s has no pixels", name)
 	}
 	if int64(w)*int64(h) > maxImagePixels {
-		return fmt.Errorf("%s is %d×%d, too big to preview", name, w, h)
+		return fmt.Errorf("%s is %d×%d, over the %d megapixel preview limit",
+			name, w, h, maxImagePixels/1_000_000)
 	}
 	return nil
 }

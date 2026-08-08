@@ -4,13 +4,13 @@ package app
 // with, opening it when a load lands, and closing it (#398).
 
 import (
-	"os"
-
 	"github.com/ZviBaratz/atrium/ui/imageview"
 	"github.com/ZviBaratz/atrium/ui/overlay"
 	"github.com/ZviBaratz/atrium/ui/theme"
 
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
+	"github.com/mattn/go-runewidth"
 )
 
 // imagePreviewMaxWidth and imagePreviewMaxHeight cap the box. They are the
@@ -33,24 +33,64 @@ const (
 //     leaving an identical glyph in every cell — a solid rectangle, not a
 //     picture. This is the one that would ship broken without anyone noticing,
 //     because it renders "successfully".
-//   - RUNEWIDTH_EASTASIAN makes East-Asian Ambiguous characters — which Block
-//     Elements are — measure two cells while still rendering as one. That
-//     divergence is what desyncs the alt-screen renderer into accumulating ghost
-//     rows (see theme.SanitizeWidth), and a full-window picture of them would do
-//     it on every row at once.
+//   - a half block that does not MEASURE one cell. Block Elements are East-Asian
+//     Ambiguous, so under an east-asian width rule they measure two while still
+//     rendering as one. That divergence is what desyncs the alt-screen renderer
+//     into accumulating ghost rows (see theme.SanitizeWidth), and a full-window
+//     picture of them would do it on every row at once.
 //
-// Taking the environment as a parameter rather than reading it keeps the rule
+// Taking all three as parameters rather than reading them keeps the rule
 // testable, matching internal/doctor's convention.
-func imageRenderMode(glyphSet string, mono bool, eastAsian string) imageview.Mode {
-	if glyphSet == theme.GlyphSetASCII || mono || eastAsian != "" {
+func imageRenderMode(glyphSet string, mono, blocksMeasureOne bool) imageview.Mode {
+	if glyphSet == theme.GlyphSetASCII || mono || !blocksMeasureOne {
 		return imageview.ASCII
 	}
 	return imageview.HalfBlock
 }
 
+// halfBlocksMeasureOneCell reports whether every measurer in the render path
+// agrees that a half block occupies exactly one cell.
+//
+// This is measured rather than derived from RUNEWIDTH_EASTASIAN, and that is the
+// difference between a guard and a guess. Two libraries measure this frame —
+// go-runewidth for the list and the rows (ui/list.go, ui/row.go,
+// ui/theme/panel.go) and x/ansi for the overlay and the composite (lipgloss.Width
+// is a per-line ansi.StringWidth, and PlaceOverlay calls ansi.StringWidth
+// directly) — and they read that variable by DIFFERENT rules. go-runewidth falls
+// back to the LOCALE when it is empty and otherwise accepts only "1"
+// (runewidth.go handleEnv); x/ansi ignores the locale and parses the value with
+// strconv.ParseBool (method.go init). Measured on go-runewidth v0.0.24 and
+// x/ansi v0.11.7:
+//
+//	RUNEWIDTH_EASTASIAN   locale         go-runewidth   x/ansi
+//	unset                 C                    1           1
+//	"1"                   C                    2           2
+//	"0"                   C                    1           1
+//	unset                 ja_JP.UTF-8          2           1   ← disagree
+//	"true"                C                    1           2   ← disagree
+//
+// "Is the variable non-empty", which this used to ask, is wrong on the last three
+// rows: it refuses half blocks under the documented force-narrow value, and it
+// ships them in the two ordinary environments — a Japanese locale, and a spelling
+// ParseBool accepts — where the two libraries disagree WITH EACH OTHER. That last
+// case is the worse one, because the frame is then laid out by one measurer and
+// composited by the other, which is the ghost-row desync with no environment
+// variable to blame it on.
+//
+// Measuring closes all five rows without encoding either rule, and stays closed
+// if either library changes it.
+func halfBlocksMeasureOneCell() bool {
+	for _, g := range imageview.HalfBlockGlyphs() {
+		if runewidth.StringWidth(g) != 1 || lipgloss.Width(g) != 1 {
+			return false
+		}
+	}
+	return true
+}
+
 // currentImageRenderMode resolves imageRenderMode against the live environment.
 func (m *home) currentImageRenderMode() imageview.Mode {
-	return imageRenderMode(m.appConfig.GetGlyphSet(), theme.Mono(), os.Getenv("RUNEWIDTH_EASTASIAN"))
+	return imageRenderMode(m.appConfig.GetGlyphSet(), theme.Mono(), halfBlocksMeasureOneCell())
 }
 
 // handleImageLoaded opens the overlay on a decoded image, or explains why not.

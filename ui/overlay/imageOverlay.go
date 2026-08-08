@@ -34,10 +34,20 @@ const (
 	imageMaxRows = 40
 )
 
-// imageFooter teaches the only gesture. Deliberately not a fitHint ladder: at 9
-// cells it fits every width this box can be given (the inner floor is 20), so
-// there is a bound to prove rather than rungs to order.
-const imageFooter = "esc close"
+// imageFooter teaches the only gesture, and imageEmptyNotice stands in for a
+// picture there is none of.
+//
+// Deliberately not a fitHint ladder: there is one rung worth showing, so the
+// bound is enforced by truncation instead. It has to be enforced somewhere —
+// innerWidth floors at 1, so at nine and fifteen cells these are both wider than
+// the box on a narrow terminal, and a wrapped line is a row the height budget
+// never counted. (An earlier comment here claimed the nine cells "fits every
+// width this box can be given (the inner floor is 20)"; that floor became 1 in
+// the same change that documented it, and the claim outlived it.)
+const (
+	imageFooter      = "esc close"
+	imageEmptyNotice = "nothing to show"
+)
 
 // Image is a picture to show, and the split between its two size sources is the
 // point of the type.
@@ -149,12 +159,12 @@ func (o *ImageOverlay) Render() string {
 	b.WriteString(th.OverlayTitleStyle().Render(o.title(inner)) + "\n\n")
 
 	if o.src.Pixels == nil {
-		b.WriteString(overlayDimStyle().Render("nothing to show") + "\n\n")
+		b.WriteString(overlayDimStyle().Render(fitCells(imageEmptyNotice, inner)) + "\n\n")
 	} else {
 		cols, rows := o.pictureSize()
 		pic := o.picture(cols, rows)
 		if pic == "" {
-			b.WriteString(overlayDimStyle().Render("nothing to show") + "\n\n")
+			b.WriteString(overlayDimStyle().Render(fitCells(imageEmptyNotice, inner)) + "\n\n")
 		} else {
 			// Centred by padding each line, NOT by wrapping the block in a
 			// style: every cell already carries its own foreground and
@@ -164,8 +174,24 @@ func (o *ImageOverlay) Render() string {
 		}
 	}
 
-	b.WriteString(th.OverlayHintStyle().Render(imageFooter))
+	b.WriteString(th.OverlayHintStyle().Render(fitCells(imageFooter, inner)))
 	return box.Render(fitLines(b.String(), o.height-4)) // border (2) + padding (2)
+}
+
+// fitCells truncates s to at most width cells.
+//
+// Guarded by the width check rather than handed straight to the helper, because
+// truncate.StringWithTail replaces a character at EXACTLY the budget rather than
+// only above it — so a string that already fits comes back one character short
+// and an ellipsis long.
+func fitCells(s string, width int) string {
+	if width < 1 {
+		return ""
+	}
+	if lipgloss.Width(s) <= width {
+		return s
+	}
+	return truncate.StringWithTail(s, uint(width), "…")
 }
 
 // fitLines hard-clips content to at most n lines.
@@ -175,8 +201,16 @@ func (o *ImageOverlay) Render() string {
 // imageChrome renders more rows than it was given no matter what the picture
 // does — measured at 12×6, which produced ten rows. Reasoning about which rows
 // to shed at which height is how a box comes to overflow at some size nobody
-// listed; clipping the composed content bounds every size by construction, since
-// the box adds exactly its border and padding to whatever it is handed.
+// listed; clipping the composed content bounds every size instead.
+//
+// It bounds it only in company, though, and the missing half is the defect this
+// comment used to describe away. Clipping is exact "since the box adds exactly
+// its border and padding to whatever it is handed" — which is true right up
+// until a content line is wider than the box, because then lipgloss wraps it and
+// the box adds a row this function already counted. Every line handed to it is
+// therefore truncated to inner width first: the picture by construction (its
+// column count IS the inner width), the title, footer and notice by fitCells.
+// Measured before they were: a 14×14 box rendered 15 rows and a 10×14 box 16.
 //
 // A degenerate box loses its footer, and that is the right trade: a lost hint is
 // a hint, a lost bottom border is a frame PlaceOverlay never gets back.
@@ -191,21 +225,14 @@ func fitLines(content string, n int) string {
 	return strings.Join(lines[:n], "\n")
 }
 
-// title names the file and its pixel size, truncated to the box.
-//
-// The filename comes from an agent's output and has no ceiling, so it is cut to
-// the budget — and guarded, because truncate.StringWithTail replaces a character
-// at exactly the budget rather than only above it, which would eat the last
-// character of a title that already fit.
+// title names the file and its pixel size, truncated to the box. The filename
+// comes from an agent's output and has no ceiling.
 func (o *ImageOverlay) title(width int) string {
 	name := filepath.Base(o.src.Path)
 	if o.src.Width > 0 && o.src.Height > 0 {
 		name = fmt.Sprintf("%s · %d×%d", name, o.src.Width, o.src.Height)
 	}
-	if lipgloss.Width(name) <= width {
-		return name
-	}
-	return truncate.StringWithTail(name, uint(width), "…")
+	return fitCells(name, width)
 }
 
 // centreBlock pads each line of a rendered picture so the block sits in the

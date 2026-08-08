@@ -40,11 +40,30 @@ func requireBlocksMeasureOne(t *testing.T) {
 	}
 }
 
+// alpha builds a w×h image with NON-premultiplied colour, which is the only way
+// to write a fixture that is transparent and coloured at the same time: in
+// image.RGBA, "transparent white" and "transparent black" are the same four
+// zero bytes, so a fixture built there cannot tell the two apart and cannot show
+// that the colour was dropped.
+func alpha(w, h int, at func(x, y int) color.NRGBA) *image.NRGBA {
+	img := image.NewNRGBA(image.Rect(0, 0, w, h))
+	for y := range h {
+		for x := range w {
+			img.SetNRGBA(x, y, at(x, y))
+		}
+	}
+	return img
+}
+
 var (
 	red   = color.RGBA{R: 255, A: 255}
 	green = color.RGBA{G: 255, A: 255}
 	blue  = color.RGBA{B: 255, A: 255}
 	white = color.RGBA{R: 255, G: 255, B: 255, A: 255}
+
+	transparentWhite = color.NRGBA{R: 255, G: 255, B: 255} // white, zero alpha
+	opaqueRed        = color.NRGBA{R: 255, A: 255}
+	halfRed          = color.NRGBA{R: 255, A: 128}
 )
 
 // A 2×2 image in a 2×1 cell box is the exact case half blocks exist for: one
@@ -124,6 +143,90 @@ func TestRender_OddSampleRowsLeaveDefaultBackground(t *testing.T) {
 	require.Equal(t, 1, len(strings.Split(got, "\n")))
 	assert.Contains(t, got, "\x1b[49m")
 	assert.NotContains(t, got, "48;2;")
+}
+
+// A transparent sample is not a black one, and the difference is the whole of
+// what an alpha channel is for.
+//
+// color.Color.RGBA returns PREMULTIPLIED channels, so a fully transparent pixel
+// reports (0, 0, 0) whatever colour it nominally is. Averaging those directly and
+// stamping the result opaque — which this did — turns every transparent region
+// into a black rectangle: a matplotlib figure saved with transparent=True, or a
+// screenshot with rounded corners, drawn on a black card in the middle of the
+// overlay.
+func TestRender_TransparentSamplesShowWhatIsBehindThem(t *testing.T) {
+	requireBlocksMeasureOne(t)
+	// Top row transparent, bottom row red: the cell has to hand its TOP half
+	// back, which "▀" cannot do — that is why the lower half block exists.
+	img := alpha(2, 2, func(x, y int) color.NRGBA {
+		if y == 0 {
+			return transparentWhite
+		}
+		return opaqueRed
+	})
+
+	got := Render(img, 2, 1, HalfBlock)
+
+	assert.Equal(t, "\x1b[38;2;255;0;0m\x1b[49m▄▄\x1b[0m", got)
+	assert.NotContains(t, got, "38;2;0;0;0", "a transparent sample was painted black")
+	assert.NotContains(t, got, "48;2;", "a transparent half must take the default background")
+}
+
+// A fully transparent image paints nothing at all rather than a black card.
+func TestRender_FullyTransparentPaintsNothing(t *testing.T) {
+	img := alpha(4, 4, func(x, y int) color.NRGBA { return transparentWhite })
+
+	for _, mode := range []Mode{HalfBlock, ASCII} {
+		got := Render(img, 4, 2, mode)
+		assert.Equal(t, strings.TrimSpace(xansi.Strip(got)), "", "mode %v painted %q", mode, xansi.Strip(got))
+		assert.NotContains(t, got, "48;2;", "mode %v painted a background", mode)
+		assert.NotContains(t, got, "38;2;", "mode %v painted a foreground", mode)
+	}
+}
+
+// Partial coverage keeps the sample's own colour rather than a darkened one.
+//
+// 50% red premultiplies to (128, 0, 0); reading that as the colour renders a dark
+// red the image does not contain. Dividing the alpha back out recovers the red,
+// which is what a terminal — with no way to blend against an unknown backdrop —
+// should draw.
+func TestRender_PartialAlphaKeepsItsColour(t *testing.T) {
+	requireBlocksMeasureOne(t)
+	img := alpha(1, 2, func(x, y int) color.NRGBA { return halfRed })
+
+	got := Render(img, 1, 1, HalfBlock)
+
+	assert.Contains(t, got, "\x1b[38;2;255;0;0m", "half-covered red rendered as %q", got)
+	assert.NotContains(t, got, "38;2;128;0;0")
+}
+
+// Every glyph the renderer can emit must be one HalfBlockGlyphs names, because
+// that list is what app measures to decide the rung is safe at all. A glyph added
+// to the renderer and not to the list is one nothing checks the width of.
+func TestHalfBlockGlyphs_CoverEverythingTheRendererEmits(t *testing.T) {
+	// Exercises all four cells: opaque/opaque, opaque/transparent,
+	// transparent/opaque, and transparent/transparent.
+	img := alpha(2, 4, func(x, y int) color.NRGBA {
+		if (y/1+x)%2 == 0 {
+			return opaqueRed
+		}
+		return transparentWhite
+	})
+
+	got := xansi.Strip(Render(img, 2, 2, HalfBlock))
+
+	known := map[string]bool{" ": true, "\n": true}
+	for _, g := range HalfBlockGlyphs() {
+		known[g] = true
+	}
+	for _, r := range got {
+		assert.True(t, known[string(r)], "renderer emitted %q, which HalfBlockGlyphs does not list", string(r))
+	}
+	// …and the list must not be padded with glyphs it never emits, or the width
+	// probe refuses rungs for a glyph that is not on screen.
+	for _, g := range HalfBlockGlyphs() {
+		assert.Contains(t, got, g, "HalfBlockGlyphs lists %q, which the renderer never emits", g)
+	}
 }
 
 // ASCII maps luminance onto the ramp and keeps the colour. The darkest sample
@@ -226,6 +329,23 @@ func TestDownscale(t *testing.T) {
 
 	assert.Nil(t, Downscale(nil, 10, 10))
 	assert.Nil(t, Downscale(small, 0, 10))
+}
+
+// The intermediate carries alpha, because it is what the overlay renders from:
+// flattening transparency here would flatten it for every rung and every resize,
+// and no later stage could tell that it had happened.
+func TestDownscale_CarriesAlphaThrough(t *testing.T) {
+	img := alpha(4, 4, func(x, y int) color.NRGBA {
+		if y < 2 {
+			return transparentWhite
+		}
+		return opaqueRed
+	})
+
+	got := Downscale(img, 4, 4)
+	require.NotNil(t, got)
+	assert.Equal(t, uint8(0), got.RGBAAt(1, 0).A, "the transparent half came back opaque")
+	assert.Equal(t, color.RGBA{R: 255, A: 255}, got.RGBAAt(1, 3), "the opaque half lost its colour")
 }
 
 // The box filter averages every source pixel covering a sample, so downscaling a

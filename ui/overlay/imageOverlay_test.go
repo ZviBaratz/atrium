@@ -57,11 +57,43 @@ func TestImageOverlay_RendersToItsDeclaredWidth(t *testing.T) {
 
 // The box must also not exceed the height it was given, or PlaceOverlay takes
 // the overflow off the bottom border.
+//
+// Two picture shapes, because only one of them can see this. A 2:1 WIDE picture
+// is short at a narrow width, so it never fills the row budget and a stray extra
+// row still fits inside it — which is why this test passed while the box really
+// did overflow. A TALL picture fills the budget exactly, and then one wrapped
+// chrome line is one row too many. The wrapped line was the footer: innerWidth
+// floors at 1, so below 15 columns the inner width is under the nine cells "esc
+// close" needs and lipgloss took two rows for it, after fitLines had already
+// clipped. Measured before the fix: 14×14 rendered 15 rows, 10×14 rendered 16.
 func TestImageOverlay_FitsItsDeclaredHeight(t *testing.T) {
-	for _, size := range [][2]int{{80, 24}, {120, 40}, {100, 12}, {60, 10}, {31, 12}, {25, 12}, {20, 9}, {12, 6}} {
-		o := newSizedImageOverlay(t, size[0], size[1])
-		rows := len(strings.Split(o.Render(), "\n"))
-		assert.LessOrEqual(t, rows, size[1], "size %v rendered %d rows", size, rows)
+	sizes := [][2]int{
+		{80, 24}, {120, 40}, {100, 12}, {60, 10}, {31, 12}, {25, 12}, {20, 9},
+		// Below 15 columns, where the footer no longer fits the content area.
+		{16, 16}, {15, 15}, {14, 14}, {13, 13}, {14, 20}, {10, 14}, {12, 6}, {7, 7},
+	}
+	for _, shape := range []struct {
+		name string
+		pic  *image.RGBA
+	}{
+		{"wide", testImage(64, 32)},
+		{"tall", testImage(8, 100)},
+	} {
+		for _, size := range sizes {
+			o := NewImageOverlay(Image{
+				Path: "/tmp/shots/screenshot.png", Pixels: shape.pic,
+				Width: shape.pic.Bounds().Dx(), Height: shape.pic.Bounds().Dy(),
+			}, renderMode())
+			o.SetSize(size[0], size[1])
+
+			out := o.Render()
+			rows := len(strings.Split(out, "\n"))
+			assert.LessOrEqual(t, rows, size[1], "%s picture at %v rendered %d rows", shape.name, size, rows)
+			for i, l := range strings.Split(out, "\n") {
+				assert.Equal(t, size[0], ansi.PrintableRuneWidth(l),
+					"%s picture at %v row %d: %q", shape.name, size, i, l)
+			}
+		}
 	}
 }
 
@@ -152,11 +184,24 @@ func TestImageOverlay_NilImageExplainsItself(t *testing.T) {
 	o.SetSize(80, 24)
 
 	out := o.Render()
-	assert.Contains(t, xansi.Strip(out), "nothing to show")
+	assert.Contains(t, xansi.Strip(out), imageEmptyNotice)
 	for i, l := range strings.Split(out, "\n") {
 		assert.Equal(t, 80, ansi.PrintableRuneWidth(l), "row %d", i)
 	}
 	assert.LessOrEqual(t, len(strings.Split(out, "\n")), 24)
+
+	// The notice is fifteen cells, so it outgrows the content area before the
+	// footer does — a box under 21 columns wraps it, and a wrapped line is a row
+	// the height budget never counted.
+	for _, size := range [][2]int{{22, 12}, {20, 12}, {15, 12}, {12, 12}, {20, 8}, {14, 7}} {
+		o.SetSize(size[0], size[1])
+		out := o.Render()
+		lines := strings.Split(out, "\n")
+		assert.LessOrEqual(t, len(lines), size[1], "size %v rendered %d rows", size, len(lines))
+		for i, l := range lines {
+			assert.Equal(t, size[0], ansi.PrintableRuneWidth(l), "size %v row %d: %q", size, i, l)
+		}
+	}
 }
 
 // An unsized overlay — rendered before the first WindowSizeMsg — must not panic

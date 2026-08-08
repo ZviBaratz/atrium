@@ -131,9 +131,9 @@ func TestCheckImageBudget(t *testing.T) {
 	}{
 		{"ordinary screenshot", 2 << 20, 1920, 1080, ""},
 		{"exactly at the byte cap", maxImageFileBytes, 100, 100, ""},
-		{"one byte over the byte cap", maxImageFileBytes + 1, 100, 100, "too big to preview"},
+		{"one byte over the byte cap", maxImageFileBytes + 1, 100, 100, "over the 24 MB preview limit"},
 		{"exactly at the pixel cap", 1024, maxImagePixels / 1000, 1000, ""},
-		{"over the pixel cap", 1024, maxImagePixels/1000 + 1, 1000, "too big to preview"},
+		{"over the pixel cap", 1024, maxImagePixels/1000 + 1, 1000, "over the 50 megapixel preview limit"},
 		{"zero width", 1024, 0, 100, "no pixels"},
 		{"zero height", 1024, 100, 0, "no pixels"},
 	}
@@ -157,9 +157,29 @@ func TestCheckImageBudget(t *testing.T) {
 func TestCheckImageBudget_NamesTheNumber(t *testing.T) {
 	err := checkImageBudget("shot.png", 40<<20, 100, 100)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "40 MB")
+	assert.Contains(t, err.Error(), "40.0 MB")
 
 	err = checkImageBudget("shot.png", 1024, 90000, 90000)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "90000×90000")
+}
+
+// …and it has to say what to get under, which is the number the size alone
+// cannot imply.
+//
+// Pinned at the BOUNDARY because that is where naming only the size becomes
+// self-contradictory: integer megabytes truncate, so one byte over the cap
+// reported "shot.png is 24 MB, too big to preview" — naming the cap itself as
+// the offending size, with nothing to compare it against. Both numbers have to
+// survive, and the size has to be printed finely enough not to read as equal to
+// the limit it just exceeded.
+func TestCheckImageBudget_NamesTheLimitAtTheBoundary(t *testing.T) {
+	err := checkImageBudget("shot.png", maxImageFileBytes+1, 100, 100)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "over the 24 MB preview limit", "the limit is not stated")
+	assert.Contains(t, err.Error(), "24.0 MB,", "the size is stated too coarsely to tell from the limit")
+
+	err = checkImageBudget("shot.png", 1024, maxImagePixels/1000+1, 1000)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "over the 50 megapixel preview limit")
 }

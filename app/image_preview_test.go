@@ -2,8 +2,12 @@ package app
 
 import (
 	"errors"
+	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/ZviBaratz/atrium/ui/imageview"
@@ -55,39 +59,98 @@ func runCmdInto(t *testing.T, h *home, cmd tea.Cmd) {
 // they would fail silently rather than loudly.
 func TestImageRenderMode(t *testing.T) {
 	cases := []struct {
-		name      string
-		glyphSet  string
-		mono      bool
-		eastAsian string
-		want      imageview.Mode
+		name             string
+		glyphSet         string
+		mono             bool
+		blocksMeasureOne bool
+		want             imageview.Mode
 	}{
-		{"default", theme.GlyphSetPlain, false, "", imageview.HalfBlock},
-		{"nerd fonts still use blocks", theme.GlyphSetNerd, false, "", imageview.HalfBlock},
-		{"ascii glyph rung", theme.GlyphSetASCII, false, "", imageview.ASCII},
+		{"default", theme.GlyphSetPlain, false, true, imageview.HalfBlock},
+		{"nerd fonts still use blocks", theme.GlyphSetNerd, false, true, imageview.HalfBlock},
+		{"ascii glyph rung", theme.GlyphSetASCII, false, true, imageview.ASCII},
 		// Without colour a half block is the same glyph in every cell: a solid
 		// rectangle that renders "successfully" and shows nothing.
-		{"NO_COLOR", theme.GlyphSetPlain, true, "", imageview.ASCII},
-		// Block Elements are East-Asian Ambiguous, so this makes them measure two
-		// cells while rendering one — the divergence that desyncs the alt-screen
-		// renderer into ghost rows, here on every row of the picture at once.
-		{"RUNEWIDTH_EASTASIAN", theme.GlyphSetPlain, false, "1", imageview.ASCII},
+		{"NO_COLOR", theme.GlyphSetPlain, true, true, imageview.ASCII},
+		// A block that measures two cells while rendering one is the divergence
+		// that desyncs the alt-screen renderer into ghost rows — here on every
+		// row of the picture at once.
+		{"blocks measure two cells", theme.GlyphSetPlain, false, false, imageview.ASCII},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			assert.Equal(t, tc.want, imageRenderMode(tc.glyphSet, tc.mono, tc.eastAsian))
+			assert.Equal(t, tc.want, imageRenderMode(tc.glyphSet, tc.mono, tc.blocksMeasureOne))
+		})
+	}
+}
+
+// widthProbeVar marks the re-executed child of the width probe below.
+const widthProbeVar = "ATRIUM_TEST_WIDTH_PROBE"
+
+// The rung must follow what the width libraries MEASURE, not what
+// RUNEWIDTH_EASTASIAN says — the two are different questions, and the answer
+// differs in three of these five environments.
+//
+// This runs in a subprocess because both libraries decide at package init:
+// t.Setenv cannot reach a value that was read before the test started, and the
+// go test cache cannot see the variable at all, so an in-process version of this
+// replays a cached green. The test it replaces asserted
+// t.Setenv("RUNEWIDTH_EASTASIAN", "1") → ASCII and passed only because the code
+// under it parsed that same string; neither library agrees that this is the rule.
+func TestHalfBlocksMeasureOneCell_AcrossWidthEnvironments(t *testing.T) {
+	if os.Getenv(widthProbeVar) == "1" {
+		fmt.Println(halfBlocksMeasureOneCell())
+		return
+	}
+	cases := []struct {
+		name string
+		env  []string
+		want bool
+	}{
+		{"unset, non-CJK locale", []string{"RUNEWIDTH_EASTASIAN=", "LC_ALL=C", "LC_CTYPE=C", "LANG=C"}, true},
+		{"set to 1: both libraries measure two", []string{"RUNEWIDTH_EASTASIAN=1", "LC_ALL=C", "LC_CTYPE=C", "LANG=C"}, false},
+		// The documented way to force ambiguous-NARROW. Both libraries agree the
+		// block is one cell, so half blocks are safe; the old check read the
+		// variable as non-empty and dropped to the ASCII ramp, halving the
+		// picture's vertical resolution for nothing.
+		{"set to 0", []string{"RUNEWIDTH_EASTASIAN=0", "LC_ALL=C", "LC_CTYPE=C", "LANG=C"}, true},
+		// go-runewidth falls back to the locale when the variable is empty;
+		// x/ansi never consults it. They disagree, and the old check shipped half
+		// blocks straight into that.
+		{"unset, CJK locale", []string{"RUNEWIDTH_EASTASIAN=", "LC_ALL=", "LC_CTYPE=", "LANG=ja_JP.UTF-8"}, false},
+		// x/ansi parses with strconv.ParseBool, which accepts "true";
+		// go-runewidth accepts only "1". They disagree the other way round.
+		{"set to true", []string{"RUNEWIDTH_EASTASIAN=true", "LC_ALL=C", "LC_CTYPE=C", "LANG=C"}, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cmd := exec.CommandContext(t.Context(), os.Args[0],
+				"-test.run=^TestHalfBlocksMeasureOneCell_AcrossWidthEnvironments$")
+			// Later entries win for a duplicated name, per exec.Cmd.Env.
+			cmd.Env = append(append(os.Environ(), widthProbeVar+"=1"), tc.env...)
+
+			out, err := cmd.CombinedOutput()
+			require.NoError(t, err, "probe failed: %s", out)
+			answer, _, _ := strings.Cut(string(out), "\n")
+			assert.Equal(t, strconv.FormatBool(tc.want), answer, "env %v produced %q", tc.env, out)
 		})
 	}
 }
 
 // The live resolver must read all three inputs, not just the one it was written
 // for. Each is flipped on its own against the same home.
+//
+// The width input is the one that cannot be flipped from here — both libraries
+// decide at package init — so it is asserted against the measurement instead,
+// which is the same wire currentImageRenderMode passes on:
+// TestHalfBlocksMeasureOneCell_AcrossWidthEnvironments covers the environments
+// that change the answer.
 func TestCurrentImageRenderMode_ReadsTheLiveEnvironment(t *testing.T) {
 	h := newHintsHome(t, newBranchInstance(t, "a", "b1"))
-	// Controlled, not inherited: a developer with RUNEWIDTH_EASTASIAN set in
-	// their shell would otherwise see this baseline fail for the right reason
-	// and the wrong test.
-	t.Setenv("RUNEWIDTH_EASTASIAN", "")
-	require.Equal(t, imageview.HalfBlock, h.currentImageRenderMode())
+	baseline := imageview.HalfBlock
+	if !halfBlocksMeasureOneCell() {
+		baseline = imageview.ASCII // a developer whose shell asks for east-asian widths
+	}
+	require.Equal(t, baseline, h.currentImageRenderMode(), "the measured width is not consulted")
 
 	restore := theme.SetMono(true)
 	assert.Equal(t, imageview.ASCII, h.currentImageRenderMode(), "NO_COLOR is not consulted")
@@ -96,9 +159,6 @@ func TestCurrentImageRenderMode_ReadsTheLiveEnvironment(t *testing.T) {
 	h.appConfig.GlyphSet = theme.GlyphSetASCII
 	assert.Equal(t, imageview.ASCII, h.currentImageRenderMode(), "glyph_set is not consulted")
 	h.appConfig.GlyphSet = theme.GlyphSetPlain
-
-	t.Setenv("RUNEWIDTH_EASTASIAN", "1")
-	assert.Equal(t, imageview.ASCII, h.currentImageRenderMode(), "RUNEWIDTH_EASTASIAN is not consulted")
 }
 
 // A load that failed explains itself and leaves no box behind. A silent failure
