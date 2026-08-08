@@ -3,13 +3,16 @@ package app
 import (
 	"fmt"
 	"image"
+	"image/color"
 	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/ZviBaratz/atrium/config"
 	"github.com/ZviBaratz/atrium/internal/doctor"
@@ -646,13 +649,17 @@ func TestHandleKittyPlacement_RefusalForAForeignImageIsIgnored(t *testing.T) {
 // window off the reply still in flight: it reads as another program's, so it is
 // neither counted nor freed — leaking the image — and the count never returns to
 // zero, which disqualifies every untagged reply for the rest of the session.
-func TestTransmitImageCmd_AFailedEncodeCostsNoNumber(t *testing.T) {
+func TestTransmitImageCmd_AnEmptyImageCostsNoNumber(t *testing.T) {
 	h := newHintsHome(t, newBranchInstance(t, "a", "b1"))
 	openKittyPreview(t, h)
 	require.Equal(t, 1, h.kittyNumber)
 	require.Equal(t, 1, h.kittyOutstanding)
 
-	// A zero-sized image is one TransmitPNG refuses.
+	// A zero-sized image is the one input TransmitPNG refuses, and the guard for
+	// it runs BEFORE the counters move. That ordering is the whole point: the
+	// encode itself now happens inside the Cmd, off the loop, where a failure can
+	// no longer decline to spend a number — so the only failure that costs
+	// nothing is the one that can be seen without encoding.
 	assert.Nil(t, h.transmitImageCmd(image.NewRGBA(image.Rect(0, 0, 0, 0))))
 	assert.Equal(t, 1, h.kittyNumber, "a transmission that never went out consumed no number")
 	assert.Equal(t, 1, h.kittyOutstanding)
@@ -661,6 +668,78 @@ func TestTransmitImageCmd_AFailedEncodeCostsNoNumber(t *testing.T) {
 	_, cmd := h.handleKittyGraphics(ack(1, 7))
 	assert.Equal(t, uint32(7), h.kittyID)
 	assert.NotNil(t, cmd)
+}
+
+// blockingImage stalls the first pixel read until it is released.
+//
+// It is what makes "the encode does not run on the loop" provable instead of
+// timed. A duration assertion would only say the encode was fast today on this
+// machine; this says the loop never touches a pixel at all, which is the actual
+// property — and it fails as a clean assertion rather than as a deadlock,
+// because nothing releases it until after the check.
+type blockingImage struct {
+	image.Image
+	entered chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func (b *blockingImage) At(x, y int) color.Color {
+	b.once.Do(func() {
+		close(b.entered)
+		<-b.release
+	})
+	return b.Image.At(x, y)
+}
+
+// PNG-encoding the intermediate is the most expensive thing this feature does —
+// measured at 16ms for a chart, 58ms for a text-heavy screenshot and 218ms for
+// photographic noise at the 1024x1024 cap. Spent inside Update it is a stall
+// before the overlay's FIRST frame, so the box the user just asked for arrives
+// late by exactly that much, on every open.
+//
+// loadImageCmd already decodes in a Cmd for this reason; the encode sat on the
+// loop because the number had to be baked into the bytes and the counters could
+// not move from a goroutine. Bumping them before the encode instead resolves it,
+// and costs only an unanswerable slot on a failure this cannot reach.
+func TestTransmitImageCmd_EncodesInTheCommandNotOnTheLoop(t *testing.T) {
+	h := newHintsHome(t, newBranchInstance(t, "a", "b1"))
+	img := &blockingImage{
+		Image:   parityImage(),
+		entered: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+
+	cmd := h.transmitImageCmd(img)
+	require.NotNil(t, cmd)
+	select {
+	case <-img.entered:
+		t.Fatal("transmitImageCmd read a pixel in its own body: the PNG encode is " +
+			"back on the Bubble Tea loop, where it stalls the overlay's first frame")
+	default:
+	}
+
+	// The counters move anyway — the number is inside the bytes the Cmd will
+	// build, so it has to be chosen here. What matters is that BOTH moved, which
+	// is what keeps handleKittyGraphics' unanswered window contiguous.
+	assert.Equal(t, 1, h.kittyNumber)
+	assert.Equal(t, 1, h.kittyOutstanding)
+
+	msgs := make(chan tea.Msg, 1)
+	go func() { msgs <- cmd() }()
+	select {
+	case <-img.entered:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the Cmd never read a pixel, so this proved nothing about where the encode runs")
+	}
+	close(img.release)
+
+	msg := <-msgs
+	raw, ok := msg.(tea.RawMsg)
+	require.Truef(t, ok, "the Cmd must produce exactly what tea.Raw would, got %T", msg)
+	payload, ok := raw.Msg.(string)
+	require.Truef(t, ok, "RawMsg runs its field through fmt.Sprint, so it must be a string, got %T", raw.Msg)
+	assert.Contains(t, payload, "\x1b_G", "and it must carry the transmission")
 }
 
 // The bytes each terminal really sends, decoded by the parser that really
@@ -839,11 +918,39 @@ func TestHandleKittyGraphics_LateReplyStillFreesTheImage(t *testing.T) {
 // Duplicated environment names must resolve the same way here as in doctor, or
 // the two disagree about the same environment — and doctor's whole job in this
 // section is to explain a surprise.
-func TestKittyTerminalEnv_LastWinsLikeDoctor(t *testing.T) {
-	// A kitty TERM later overridden by a plain one is NOT kitty.
-	assert.False(t, kittyTerminalEnv([]string{"TERM=xterm-kitty", "TERM=xterm-256color"}))
-	// And the other way round.
-	assert.True(t, kittyTerminalEnv([]string{"TERM=xterm-256color", "TERM=xterm-kitty"}))
+// The two sides must agree about a duplicated name — not because os.Environ
+// ever produces one, but because the docstring on either side is what a future
+// editor consults, and for a section whose job is explaining a surprise, TUI and
+// doctor disagreeing about the same environment is the wrong kind of surprise.
+//
+// This covers BOTH halves of the rule, which is what it previously did not: it
+// asserted TERM only, so the claim that the terminal's own variables resolve the
+// same way was carried by a comment and nothing else. They do not resolve the
+// same way as TERM — they latch on any non-empty occurrence — and that asymmetry
+// is now pinned rather than described.
+func TestKittyTerminalEnv_ResolvesDuplicatesLikeDoctor(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		environ []string
+		want    bool
+	}{
+		// TERM is last-wins, matching os.Environ, in both directions.
+		{"a kitty TERM overridden by a plain one", []string{"TERM=xterm-kitty", "TERM=xterm-256color"}, false},
+		{"a plain TERM overridden by kitty", []string{"TERM=xterm-256color", "TERM=xterm-kitty"}, true},
+		{"TERM_PROGRAM overridden", []string{"TERM_PROGRAM=ghostty", "TERM_PROGRAM=Apple_Terminal"}, false},
+		// The terminal's own variables are NOT last-wins: an emptied one does not
+		// take back the recognition an earlier one gave.
+		{"an emptied KITTY_WINDOW_ID still counts", []string{"KITTY_WINDOW_ID=1", "KITTY_WINDOW_ID="}, true},
+		{"an empty one alone does not", []string{"KITTY_WINDOW_ID="}, false},
+		{"an emptied GHOSTTY_BIN_DIR still counts", []string{"GHOSTTY_BIN_DIR=/x", "GHOSTTY_BIN_DIR="}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, kittyTerminalEnv(tc.environ), "app.kittyTerminalEnv")
+			// doctor reaches the same verdict through a different implementation.
+			got := doctor.CheckImagePreview(tc.environ, config.ImagePreviewAuto, true)
+			assert.Equal(t, tc.want, got.Recognized, "doctor.CheckImagePreview must agree")
+		})
+	}
 }
 
 // A reply tagged with a number that is not ours must be left completely alone —

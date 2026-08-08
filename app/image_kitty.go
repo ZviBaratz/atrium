@@ -72,10 +72,15 @@ const kittyPlacementID = 1
 // kitty and Ghostty are the two this was looked at in. Everyone else has
 // image_preview: kitty.
 //
-// Duplicated names resolve LAST-WINS, matching os.Environ semantics and
-// doctor.CheckImagePreview. Returning on the first match instead would let the
-// two disagree about the same environment, which for a section whose whole job
-// is to explain a surprise is the wrong way round.
+// A duplicated name resolves differently depending on WHICH name, and both
+// halves are stated because the shorter claim ("last-wins") was here first and
+// was only true of the first half: TERM and TERM_PROGRAM are last-wins, matching
+// os.Environ; the terminal's own variables latch on ANY non-empty occurrence, so
+// a later empty one does not take it back. What has to hold either way is that
+// doctor.CheckImagePreview resolves both halves identically — it does, via
+// hasNonEmpty — because a section whose whole job is explaining a surprise must
+// not disagree with the TUI about the same environment. os.Environ does not hand
+// out duplicates, so neither rule is reachable outside a synthesized slice.
 func kittyTerminalEnv(environ []string) bool {
 	var term, termProgram string
 	var ownVar bool
@@ -228,34 +233,58 @@ type kittyGraphicsConfirmed struct {
 // transmitImageCmd sends the decoded image and asks the terminal to name it.
 //
 // pixels is the same bounded intermediate the glyph rung draws, so nothing is
-// decoded or scaled twice and the transmission inherits that budget.
+// decoded or scaled twice and the transmission inherits its MEMORY budget. It
+// inherits no CPU budget, and that is why the encode lives inside the returned
+// Cmd rather than in the body here. Measured on the intermediate's own 1024x1024
+// cap: 16ms for a chart, 58ms for a text-heavy screenshot, 218ms for
+// photographic noise. Spent on the loop that is a stall before the overlay's
+// FIRST frame — the box the user just asked for arrives late by exactly that —
+// which is the same reason loadImageCmd decodes in a Cmd instead of in Update.
 //
 // The number is bumped per transmission and is what makes a stale reply
 // harmless: an answer to the image the user was looking at before this one no
 // longer matches, so it cannot upgrade the overlay to somebody else's pixels.
+//
+// The counters move HERE, before the payload exists, because the number is baked
+// into the bytes at encode time and a Cmd runs off the loop where it must not
+// touch m. What has to hold is that they move TOGETHER: handleKittyGraphics
+// derives the unanswered range as [kittyNumber-kittyOutstanding+1, kittyNumber],
+// so a number that advanced alone would slide that window off a reply still in
+// flight — which would read as another program's, so it would be neither counted
+// nor freed, leaking the image. Moving both keeps the window contiguous. What is
+// left if the encode then fails is one slot that is never answered, costing only
+// the untagged-reply path; every failure a caller can actually produce is
+// refused below, before a number is spent.
 func (m *home) transmitImageCmd(pixels image.Image) tea.Cmd {
-	if pixels == nil {
+	// Empty is the one input TransmitPNG rejects. Refusing it here rather than
+	// inside the Cmd is what keeps "a transmission that never goes out costs no
+	// number" true for every reachable failure. Production cannot get here with
+	// one — loadImage turns an empty Downscale into an error before the overlay
+	// opens — so this is what makes that claim provable rather than lucky.
+	if pixels == nil || pixels.Bounds().Empty() {
 		return nil
 	}
 	number := m.kittyNumber + 1
-	payload, err := imageview.TransmitPNG(pixels, number)
-	if err != nil {
-		// Nothing to tell the user: the picture they asked for is already on
-		// screen, drawn with glyphs. This only means it will not get sharper.
-		log.ErrorLog.Printf("kitty transmit: %v", err)
-		return nil
-	}
-	// BOTH counters move only once the payload is real, and they move together.
-	// handleKittyGraphics derives the unanswered range as
-	// [kittyNumber-kittyOutstanding+1, kittyNumber], so a number that advanced
-	// past a transmission which never went out slides that window off the reply
-	// still in flight: it reads as another program's, so it is neither counted nor
-	// freed — leaking the image — and kittyOutstanding never returns to zero,
-	// which permanently disqualifies every untagged reply after it.
 	m.kittyNumber, m.kittyOutstanding = number, m.kittyOutstanding+1
-	// tea.Raw takes an `any` and runs it through fmt.Sprint, so a []byte would
-	// print as "[27 95 71 …]" to the terminal. It must be handed a string.
-	return tea.Raw(payload)
+	// The closure only READS pixels, and so does the overlay when it draws the
+	// glyph rung on the loop. Concurrent reads of one decoded image are safe;
+	// neither path writes to it.
+	return func() tea.Msg {
+		payload, err := imageview.TransmitPNG(pixels, number)
+		if err != nil {
+			// Nothing to tell the user: the picture they asked for is already on
+			// screen, drawn with glyphs. This only means it will not get sharper.
+			log.ErrorLog.Printf("kitty transmit: %v", err)
+			return nil
+		}
+		// This is the message tea.Raw builds. It is spelled out instead of called
+		// because tea.Raw takes the payload as an ARGUMENT and returns a Cmd, so
+		// using it would require the bytes to exist before the Cmd runs — the
+		// whole thing being avoided. RawMsg's field is an `any` run through
+		// fmt.Sprint, so a []byte would print as "[27 95 71 …]" to the terminal;
+		// it must be handed a string.
+		return tea.RawMsg{Msg: payload}
+	}
 }
 
 // handleKittyGraphics upgrades the open overlay to real pixels, or disposes of a

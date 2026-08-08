@@ -249,3 +249,51 @@ func TestRenderImagePreviewDoesNotPromiseTmuxPassthrough(t *testing.T) {
 	assert.NotContains(t, out, "allow-passthrough",
 		"Atrium does not wrap the payload, so passthrough changes nothing")
 }
+
+// image_preview: kitty inside tmux must still get the tmux answer.
+//
+// The opt-in skips the tmux veto in CheckImagePreview — that is what "try
+// anyway" means — so this configuration comes out Eligible and, before this was
+// gated correctly, fell through to the "eligible" arm and was told it might
+// work. It is the one configuration measured NOT to: tmux forwards only what is
+// inside its own DCS envelope, which Atrium does not emit.
+//
+// This is also the arm the settings panel defers to. ui/overlay's schema leaves
+// the tmux caveat out on the stated grounds that doctor "knows whether the user
+// is actually in one" — so an arm that answers for only one preference would
+// leave that reasoning with no home, and the user with neither explanation.
+func TestRenderImagePreviewNamesTmuxWhateverThePreference(t *testing.T) {
+	for _, pref := range []string{config.ImagePreviewAuto, config.ImagePreviewKitty} {
+		t.Run(pref, func(t *testing.T) {
+			env := []string{"TERM=xterm-kitty", "COLORTERM=truecolor", "TMUX=/tmp/s,1,0"}
+			out := RenderImagePreview(CheckImagePreview(env, pref, true))
+
+			assert.Contains(t, out, "inside tmux", "the reason has to be named")
+			assert.NotContains(t, out, "eligible —",
+				"tmux is measured not to work, so it must never be reported as eligible")
+		})
+	}
+}
+
+// The glyph-fallback line is not universal: under `off` there is no fallback.
+//
+// It sat outside the switch, so it printed under every arm — including the one
+// two rows above it saying that hinting an image path only copies it. A user
+// with image_preview: off read a promise of block glyphs that app_hints.go
+// returns before anything is decoded.
+func TestRenderImagePreviewPromisesNoFallbackWhenOff(t *testing.T) {
+	env := []string{"TERM=xterm-kitty", "COLORTERM=truecolor"}
+
+	off := RenderImagePreview(CheckImagePreview(env, config.ImagePreviewOff, true))
+	assert.Contains(t, off, "no overlay")
+	assert.NotContains(t, off, "block glyphs are the fallback",
+		"off has no glyph rung to fall back to")
+
+	// Every other preference still carries it, so this is a gate and not a delete.
+	for _, pref := range []string{
+		config.ImagePreviewAuto, config.ImagePreviewKitty, config.ImagePreviewGlyph,
+	} {
+		assert.Contains(t, RenderImagePreview(CheckImagePreview(env, pref, true)),
+			"block glyphs are the fallback", "pref %q still has the glyph rung", pref)
+	}
+}

@@ -423,8 +423,10 @@ type Config struct {
 	GlyphSet string `json:"glyph_set,omitempty"`
 	// ImagePreview selects how an agent-produced image opens in Atrium's chrome
 	// (#398): "auto" (real pixels via the kitty graphics protocol where the
-	// terminal is known to support them, block glyphs everywhere else — the
-	// default), "kitty" (attempt pixels even where the environment does not name
+	// terminal is known to support them AND Atrium is not inside tmux, block
+	// glyphs everywhere else — the default; the tmux veto is worth stating
+	// because kitty-inside-tmux is a common setup and it draws glyphs on the
+	// default setting), "kitty" (attempt pixels even where the environment does not name
 	// a supported terminal; this does NOT make tmux work — Atrium does not wrap
 	// the payload in tmux's passthrough envelope yet, and on a terminal that has
 	// the graphics protocol but not Unicode placeholders it draws blanks or

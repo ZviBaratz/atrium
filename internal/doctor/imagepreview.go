@@ -44,8 +44,16 @@ type ImagePreviewResult struct {
 // CheckImagePreview reads the rungs available outside the TUI.
 //
 // environ and pref are parameters rather than lookups so the rule is a pure
-// function of its input, matching CheckKeyboard and CheckScheme. Later entries
-// win, matching os.Environ semantics for a duplicated name.
+// function of its input, matching CheckKeyboard and CheckScheme.
+//
+// A duplicated name resolves differently depending on WHICH name, and the two
+// rules are worth stating because a reader assumes one of them: TERM,
+// TERM_PROGRAM and TMUX are last-wins, matching os.Environ; the terminal's own
+// variables are not, because hasNonEmpty answers "any occurrence is non-empty"
+// and a later empty one does not take it back. app.kittyTerminalEnv resolves
+// both halves the same way, which is the property that matters and the one
+// TestKittyTerminalEnv_LastWinsLikeDoctor pins. os.Environ does not hand out
+// duplicates, so the difference is reachable only from a synthesized slice.
 //
 // placeholdersOneCell is a parameter for a different reason: it is MEASURED, not
 // read. Whether U+10EEEE occupies the column it measures cannot be derived from
@@ -145,7 +153,14 @@ func RenderImagePreview(r ImagePreviewResult) string {
 		fmt.Fprintf(&b, "  %-18s no overlay — hinting an image path only copies it\n", "pixels")
 	case r.Preference == config.ImagePreviewGlyph:
 		fmt.Fprintf(&b, "  %-18s not attempted — image_preview is set to glyph\n", "pixels")
-	case r.InTmux && r.Preference == config.ImagePreviewAuto:
+	// NOT gated on auto. image_preview: kitty skips the tmux veto in
+	// CheckImagePreview, so a kitty user inside tmux who sets it comes out
+	// Eligible — and would otherwise fall to the "eligible" arm below and be told
+	// this configuration might work, when it is the one measured NOT to. The
+	// panel in ui/overlay leaves the tmux caveat to this section on the grounds
+	// that doctor knows whether the user is actually in tmux, so this arm has to
+	// answer for both preferences or that reasoning has no home.
+	case r.InTmux:
 		fmt.Fprintf(&b, "  %-18s not attempted — inside tmux, which does not forward the\n", "pixels")
 		fmt.Fprintf(&b, "  %-18s graphics protocol to the terminal underneath\n", "")
 		// Deliberately NOT "turn on allow-passthrough". Measured: with passthrough
@@ -178,6 +193,12 @@ func RenderImagePreview(r ImagePreviewResult) string {
 		b.WriteString("           protocol but not placeholders — set image_preview: glyph\n")
 	}
 
-	b.WriteString("         → block glyphs are the fallback everywhere, including over SSH\n")
+	// Every arm above leaves the glyph rung standing EXCEPT off, which has no
+	// rung to fall back to: hinting an image path there copies it and opens
+	// nothing (app/app_hints.go). Printing this line under off would answer a
+	// question the line two rows above has already answered the other way.
+	if r.Preference != config.ImagePreviewOff {
+		b.WriteString("         → block glyphs are the fallback everywhere, including over SSH\n")
+	}
 	return b.String()
 }
