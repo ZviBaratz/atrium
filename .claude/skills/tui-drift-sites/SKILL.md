@@ -142,7 +142,7 @@ Two cross-layer pins worth knowing exist, because they fail in surprising places
 
 ## Adding a `Config` field — 4 sites, 3 guarded bidirectionally
 
-46 json-tagged fields on `Config` itself at last count.
+47 json-tagged fields on `Config` itself at last count.
 
 | # | Site | Guarded by |
 |---|---|---|

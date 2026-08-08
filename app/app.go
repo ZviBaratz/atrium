@@ -573,6 +573,22 @@ type home struct {
 	checkpointOverlay *overlay.CheckpointOverlay
 	// imageOverlay shows an agent-produced image in Atrium's own chrome (#398).
 	imageOverlay *overlay.ImageOverlay
+	// kittyNumber tags the outstanding graphics transmission so its reply can be
+	// told from another program's, and from a reply to the image before this one.
+	// It only ever counts up; zero means nothing has been sent this session.
+	kittyNumber int
+	// kittyID is the terminal-assigned image ID, and kittyCols/kittyRows the grid
+	// it was last placed over. Zero ID means the open overlay is on a glyph rung —
+	// either because no transmission was attempted or because no terminal
+	// answered one, which are deliberately the same state (#398).
+	kittyID              uint32
+	kittyCols, kittyRows int
+	// kittyEnviron is the environment the pixel-rung gate reads, or nil for the
+	// process's own. A field rather than an os.Environ() call at the point of
+	// decision, so a test can stand a terminal in front of the gate — under go
+	// test the real environment names no graphics terminal, which would leave
+	// every branch of kittyEligible but one unreachable.
+	kittyEnviron []string
 	// checkpointTarget is the session the open timeline belongs to — deliberately
 	// not the live selection, so an arriving load result can be matched against the
 	// session that asked for it and a result for any other one dropped.

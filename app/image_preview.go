@@ -84,16 +84,20 @@ func (m *home) handleImageLoaded(msg imageLoadedMsg) (tea.Model, tea.Cmd) {
 	if msg.err != nil {
 		return m, m.handleInfoNotice(truncateForNotice(msg.err.Error()))
 	}
-	m.openImagePreview(overlay.Image{
+	return m, m.openImagePreview(overlay.Image{
 		Path: msg.path, Pixels: msg.img, Width: msg.width, Height: msg.height,
 	})
-	return m, nil
 }
 
 // openImagePreview arms the overlay and switches state. Split from
 // handleImageLoaded so a test can open the real overlay the way production does
 // rather than assigning the field by hand.
-func (m *home) openImagePreview(src overlay.Image) {
+//
+// The command it returns is the pixel rung's opening move, and it is returned
+// rather than run because the picture is already complete without it: the
+// overlay draws glyphs now, and a terminal that answers the transmission
+// upgrades it later. See image_kitty.go.
+func (m *home) openImagePreview(src overlay.Image) tea.Cmd {
 	m.imageOverlay = overlay.NewImageOverlay(src, m.currentImageRenderMode())
 	m.imageOverlay.SetSize(
 		min(int(float32(m.windowWidth)*0.85), imagePreviewMaxWidth),
@@ -101,16 +105,24 @@ func (m *home) openImagePreview(src overlay.Image) {
 	)
 	m.state = stateImagePreview
 	m.recomputeLayout() // the hint bar gives up its row while the box is open
+
+	if !kittyEligible(m.graphicsEnviron(), m.appConfig.GetImagePreview(), theme.Mono()) {
+		return nil
+	}
+	return m.transmitImageCmd(src.Pixels)
 }
 
 // closeImagePreview returns to the default state and drops the decoded image.
 //
-// Dropping it matters: the intermediate is up to a megapixel of RGBA, and an
-// overlay left armed would pin it for the rest of the session.
-func (m *home) closeImagePreview() {
+// Dropping it matters twice over: the intermediate is up to a megapixel of RGBA
+// that an overlay left armed would pin for the rest of the session, and on the
+// pixel rung the terminal is holding a copy of its own that only an explicit
+// delete frees.
+func (m *home) closeImagePreview() tea.Cmd {
 	m.state = stateDefault
 	m.imageOverlay = nil
 	m.recomputeLayout()
+	return m.releaseKittyImageCmd()
 }
 
 // handleImagePreviewState consumes every key while the box is up. It is a
@@ -119,8 +131,8 @@ func (m *home) closeImagePreview() {
 // particular, which would otherwise quit the app out from under an open box.
 func (m *home) handleImagePreviewState(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if msg.Code == tea.KeyEsc {
-		m.closeImagePreview()
-		return m, m.instanceChanged()
+		release := m.closeImagePreview()
+		return m, tea.Batch(release, m.instanceChanged())
 	}
 	return m, nil
 }

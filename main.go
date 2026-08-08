@@ -359,7 +359,12 @@ var (
 			"Terminal background detection reports which rung of the light/dark ladder can answer here,\n" +
 			"for anyone whose theme: auto did not adapt: it reads COLORFGBG, and names OSC 11 as the\n" +
 			"rung that outranks it but cannot be probed from a one-shot command — that query needs the\n" +
-			"running TUI, which sends it at startup, on refocus and after a detach. On Linux, Host\n" +
+			"running TUI, which sends it at startup, on refocus and after a detach. Image preview\n" +
+			"reports whether an agent-produced image would open as real pixels or as block glyphs, and\n" +
+			"why: it resolves image_preview against the terminal the environment names and against\n" +
+			"tmux, and reports eligibility only — confirming the pixel rung means transmitting the\n" +
+			"image and waiting for the terminal to hand back an ID, which the running TUI does when a\n" +
+			"picture opens. On Linux, Host\n" +
 			"pressure is the live counterpart to Host capacity: swap headroom, and space and inode\n" +
 			"headroom for the data dir, the tmux socket directory and the temp directory. It flags a\n" +
 			"path that is a tmpfs, because a tmpfs's contents are charged against RAM rather than to a\n" +
@@ -426,6 +431,15 @@ var (
 			// it needs the running TUI to query the terminal and wait for the reply.
 			fmt.Println()
 			fmt.Print(doctor.RenderKeyboard(doctor.CheckKeyboard(os.Environ())))
+
+			// Image preview: the third section with the same shape and the same
+			// honesty. It reads the environment and the config, and names the rung it
+			// cannot reach — the pixel rung is established by a transmission the
+			// terminal answers mid-session, so doctor can say "eligible" and never
+			// "works".
+			fmt.Println()
+			fmt.Print(doctor.RenderImagePreview(doctor.CheckImagePreview(
+				os.Environ(), config.LoadConfig().GetImagePreview())))
 
 			// OOM ranking: on Linux, compares the shared tmux server's oom_score against
 			// each agent pane's so a single kill is shown to shed one recoverable session

@@ -575,6 +575,34 @@ func newSettingRows(cfg *config.Config) []settingRow {
 				return []string{config.GlyphSetNerd, config.GlyphSetPlain, config.GlyphSetASCII}
 			},
 		},
+		{
+			key: "image_preview", category: catAppearance, label: "Image preview", kind: kindEnum,
+			scope: scopeGlobal,
+			// Live in the sense that matters: the rung is resolved when the box
+			// opens, so the next image obeys a change made now. Nothing has to be
+			// restyled or relaunched, which is why applySettingChange has no arm.
+			timing:         timingLive,
+			defaultDisplay: func() string { return (&config.Config{}).GetImagePreview() },
+			reset:          func(c *config.Config) { c.ImagePreview = "" },
+			summary:        "How a hinted image opens. Pixels need kitty or Ghostty.",
+			gloss: map[string]string{
+				config.ImagePreviewAuto:  "pixels where the terminal is known to show them, glyphs elsewhere",
+				config.ImagePreviewKitty: "try pixels anyway, for a terminal Atrium does not recognise",
+				config.ImagePreviewGlyph: "block glyphs always; works everywhere, including over SSH",
+				config.ImagePreviewOff:   "no overlay at all; hinting an image path just copies it",
+			},
+			get: func(c *config.Config) string { return c.GetImagePreview() },
+			set: func(c *config.Config, v string) error {
+				c.ImagePreview = v
+				return nil
+			},
+			options: func(c *config.Config) []string {
+				return []string{
+					config.ImagePreviewAuto, config.ImagePreviewKitty,
+					config.ImagePreviewGlyph, config.ImagePreviewOff,
+				}
+			},
+		},
 		boolRow("hint_bar", catAppearance, "Hint bar",
 			"Show key hints on the bottom row. Off leaves the row blank.",
 			"The row is reserved either way, so turning hints off does not resize the panes.",

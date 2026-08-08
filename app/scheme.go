@@ -36,11 +36,19 @@ import (
 // the declarative set Bubble Tea unwinds and the other is not.
 //
 // ansi.RequestLightDarkReport (ESC[?996n) is the one-shot version, with no mode to
-// unwind, so "persistent" is not by itself the whole argument. It loses on two other
-// counts: it reports the OS colour-scheme PREFERENCE rather than the terminal's
-// background, which is what Atrium actually renders against, and Bubble Tea does not
-// translate its reply — consuming it would mean importing ultraviolet directly,
-// promoting an indirect dependency pinned at an untagged pseudo-version.
+// unwind, so "persistent" is not by itself the whole argument. It loses on the count
+// that survives: it reports the OS colour-scheme PREFERENCE rather than the
+// terminal's background, which is what Atrium actually renders against.
+//
+// It used to lose on a second count — that Bubble Tea does not translate its reply,
+// so consuming it would mean importing ultraviolet directly and promoting an indirect
+// dependency pinned at an untagged pseudo-version. That price has since been paid, by
+// the image overlay's pixel rung (#398, app/image_kitty.go), which needs the terminal's
+// graphics reply for the image ID every placeholder cell is addressed by — and gets
+// positive capability confirmation in the same round trip. So the import is no longer
+// a cost this decision can charge for; ultraviolet is in the direct require block and
+// a 996 reply would cost only its own case. The PREFERENCE-versus-background argument
+// is what still decides it, and it is the one to re-examine if this is revisited.
 //
 // OSC 11 asks for the background colour itself, is answered by nearly everything,
 // has nothing to unwind, and stays inside Bubble Tea's stable public API. So Atrium
