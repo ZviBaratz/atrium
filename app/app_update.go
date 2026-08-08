@@ -18,6 +18,7 @@ import (
 
 	"charm.land/bubbles/v2/spinner"
 	tea "charm.land/bubbletea/v2"
+	uv "github.com/charmbracelet/ultraviolet"
 )
 
 // wheelScrollLines is how many lines one mouse-wheel notch scrolls the preview
@@ -458,13 +459,26 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// First launch ever: show the interactive welcome once the size is known
 		// (its async detection cmd is returned); returning users get the
 		// always-on missing-program check instead.
-		return m, m.maybeShowWelcome()
+		//
+		// The placement re-issue rides along because a resized image box is a
+		// different cell grid, and the placeholders address the grid the placement
+		// declares. It is a no-op unless pixels are actually on screen and the
+		// grid changed, and it never retransmits the image (#398).
+		return m, tea.Batch(m.maybeShowWelcome(), m.placeKittyImageCmd())
 	case error:
 		// Handle errors from confirmation actions
 		return m, m.handleError(msg)
 	case imageLoadedMsg:
 		// An image the user hint-opened finished decoding off the loop (#398).
 		return m.handleImageLoaded(msg)
+	case uv.KittyGraphicsEvent:
+		// The terminal answered a graphics transmission. Bubble Tea's translation
+		// table (input.go) does not know this event, so it arrives as
+		// ultraviolet's own type via the table's `return e` fallthrough — which is
+		// the whole reason ultraviolet is a direct dependency here. See
+		// app/scheme.go for the same cost being declined, and image_kitty.go for
+		// what this one buys.
+		return m.handleKittyGraphics(kittyGraphicsEventFrom(msg))
 	case instanceChangedMsg:
 		// Handle instance changed after confirmation action. A carried notice (the
 		// kill teardown's "U to undo") flashes alongside the refresh, because a

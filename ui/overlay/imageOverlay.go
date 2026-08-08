@@ -69,6 +69,12 @@ type Image struct {
 // ui/imageview — which is what lets it work in every terminal, over SSH, and
 // inside tmux. The caller picks the mode; this only places what comes back.
 //
+// On the kitty rung the picture is text too, and that is the trick rather than a
+// compromise: the cells are Unicode placeholders the terminal fills with real
+// pixels, so the cell differ handles them like any other content and closing the
+// overlay deletes the image by construction. The overlay never speaks the
+// protocol — it is handed a confirmed image ID and asked for cells.
+//
 // The rendered picture is CACHED. Render runs on every repaint, and re-walking
 // the pixels tens of times a second for a frame that has not changed is the
 // whole of this feature's performance risk. The cache key is everything the
@@ -77,6 +83,11 @@ type Image struct {
 type ImageOverlay struct {
 	src  Image
 	mode imageview.Mode
+
+	// kittyID is the terminal-assigned image ID, or 0 for "no pixels yet".
+	// Zero is the only honest default: the ID exists only once a terminal has
+	// answered, and every terminal that never will simply leaves it zero.
+	kittyID uint32
 
 	width  int
 	height int
@@ -90,6 +101,7 @@ type ImageOverlay struct {
 type imageCacheKey struct {
 	cols, rows int
 	mode       imageview.Mode
+	kittyID    uint32
 	valid      bool
 }
 
@@ -131,15 +143,72 @@ func (o *ImageOverlay) innerWidth() int {
 	return max(o.width-6, 1) // border (2) + horizontal padding (2*2)
 }
 
+// SetKittyImage upgrades the overlay to real pixels, once a terminal has
+// confirmed the transmission and assigned an image ID.
+//
+// It is an upgrade and never a mode: the overlay opens on a glyph rung and stays
+// there unless this is called, so a terminal that cannot do it, or answers late,
+// or never answers, needs no timeout and no fallback path — it simply keeps the
+// picture it already had. That is also what makes it impossible to emit a
+// placeholder cell before the image it refers to exists.
+func (o *ImageOverlay) SetKittyImage(id uint32) { o.kittyID = id }
+
+// KittyCells is the cell rectangle the placeholder block occupies, and the same
+// rectangle the virtual placement must be created with.
+//
+// One function answers it for both, on purpose. The placeholders address rows
+// and columns of the grid the placement declares, so a placement built from
+// different arithmetic than the cells would scale the image into a rectangle the
+// cells are not describing — every cell then shows the wrong slice, which is a
+// far stranger failure than a blank box.
+//
+// ok is false when there is nothing to place.
+func (o *ImageOverlay) KittyCells() (cols, rows int, ok bool) {
+	if o.kittyID == 0 || o.src.Pixels == nil {
+		return 0, 0, false
+	}
+	b := o.src.Pixels.Bounds()
+	if b.Dx() <= 0 || b.Dy() <= 0 {
+		return 0, 0, false
+	}
+	maxCols, maxRows := o.pictureSize()
+	// The INTERMEDIATE's aspect, not the file's: the intermediate is what was
+	// transmitted, so it is what the terminal scales into this rectangle. For a
+	// GIF the two genuinely differ — the file reports its logical screen and the
+	// decoded frame can be a subrectangle of it.
+	cols, rows = imageview.FitCells(b.Dx(), b.Dy(), maxCols, maxRows)
+	return cols, rows, true
+}
+
 // picture renders — or replays — the image at the current size.
 func (o *ImageOverlay) picture(cols, rows int) string {
-	key := imageCacheKey{cols: cols, rows: rows, mode: o.mode, valid: true}
+	key := imageCacheKey{cols: cols, rows: rows, mode: o.mode, kittyID: o.kittyID, valid: true}
 	if o.cacheKey == key {
 		return o.cache
 	}
-	o.cache = imageview.Render(o.src.Pixels, cols, rows, o.mode)
+	o.cache = o.render(cols, rows)
 	o.cacheKey = key
 	return o.cache
+}
+
+// render draws the picture on whichever rung is currently available.
+//
+// A refused placement falls back to the glyphs rather than to nothing, and the
+// honest note about that branch is that nothing can currently reach it:
+// Placeholders refuses a rectangle wider or taller than the diacritic table can
+// address, and imageMaxCols/imageMaxRows are both far inside that bound. It is
+// kept because those are independent constants that can drift apart, and pinned
+// by TestPictureCapsStayInsideAPlacement so raising a cap past the bound fails a
+// test instead of silently dropping the pixel rung back to glyphs.
+func (o *ImageOverlay) render(cols, rows int) string {
+	if o.kittyID != 0 {
+		if kCols, kRows, ok := o.KittyCells(); ok {
+			if cells, err := imageview.Placeholders(o.kittyID, kCols, kRows); err == nil {
+				return cells
+			}
+		}
+	}
+	return imageview.Render(o.src.Pixels, cols, rows, o.mode)
 }
 
 // Render draws the bordered box.

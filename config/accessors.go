@@ -337,6 +337,34 @@ func (c *Config) GetGlyphSet() string {
 	return GlyphSetPlain
 }
 
+// Image-preview rungs (see Config.ImagePreview).
+const (
+	ImagePreviewAuto  = "auto"
+	ImagePreviewKitty = "kitty"
+	ImagePreviewGlyph = "glyph"
+	ImagePreviewOff   = "off"
+)
+
+// GetImagePreview returns the normalized image-preview rung. A nil Config, an
+// empty value (a config predating this key), or any unrecognized value
+// normalizes to auto.
+//
+// Auto is the safe default here in a way the glyph-set default is not, and for a
+// different reason: "attempt pixels" is not a promise, it is the first rung of a
+// ladder whose second rung draws everywhere. A terminal that cannot show them
+// never confirms the transmission, so auto degrades to exactly what glyph would
+// have done — which is why a typo landing here costs nothing.
+func (c *Config) GetImagePreview() string {
+	if c == nil {
+		return ImagePreviewAuto
+	}
+	switch c.ImagePreview {
+	case ImagePreviewAuto, ImagePreviewKitty, ImagePreviewGlyph, ImagePreviewOff:
+		return c.ImagePreview
+	}
+	return ImagePreviewAuto
+}
+
 // GetHintBar reports whether the always-on bottom hint bar is enabled. A nil
 // HintBar (e.g. an older config file with no such key) — or a nil Config —
 // defaults to on.
