@@ -25,11 +25,13 @@ func testImage(w, h int) *image.RGBA {
 }
 
 // renderMode is the rung app.imageRenderMode would pick in this environment.
-// Under RUNEWIDTH_EASTASIAN, Block Elements measure two cells while rendering
-// one, so production draws the ASCII ramp — and a test that forced half blocks
-// there would assert a combination nothing renders.
+// Where half blocks do not measure one cell, production draws the ASCII ramp —
+// and a test that forced half blocks there would assert a combination nothing
+// renders. It asks the same predicate production does, rather than measuring
+// with one library of its own, which disagrees with production under
+// RUNEWIDTH_EASTASIAN=true.
 func renderMode() imageview.Mode {
-	if ansi.PrintableRuneWidth("▀") != 1 {
+	if !imageview.HalfBlocksMeasureOneCell() {
 		return imageview.ASCII
 	}
 	return imageview.HalfBlock

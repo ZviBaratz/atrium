@@ -16,6 +16,9 @@ import (
 	"image"
 	"image/color"
 	"strings"
+
+	"charm.land/lipgloss/v2"
+	"github.com/mattn/go-runewidth"
 )
 
 // Mode selects the glyph vocabulary.
@@ -29,9 +32,8 @@ const (
 	// ASCII draws each cell as a 7-bit luminance ramp rune, keeping the colour.
 	// It is the rung for terminals where even Block Elements show tofu
 	// (glyph_set: ascii), for NO_COLOR — where every half block would be an
-	// identical glyph carrying no information at all — and for
-	// RUNEWIDTH_EASTASIAN, which makes Block Elements measure two cells while
-	// rendering one.
+	// identical glyph carrying no information at all — and wherever the half
+	// blocks do not measure one cell, which HalfBlocksMeasureOneCell answers.
 	ASCII
 )
 
@@ -49,14 +51,53 @@ const (
 	lowerHalf = "▄"
 )
 
-// HalfBlockGlyphs returns every glyph the HalfBlock rung can emit.
+// halfBlockGlyphs returns every glyph the HalfBlock rung can emit.
+func halfBlockGlyphs() []string { return []string{upperHalf, lowerHalf} }
+
+// HalfBlocksMeasureOneCell reports whether every measurer in the render path
+// agrees that this package's half blocks occupy exactly one cell.
 //
-// Exported so a caller can measure the exact glyphs it is about to ship rather
-// than infer their width from an environment variable. Those two are not the
-// same question: go-runewidth and x/ansi read RUNEWIDTH_EASTASIAN by different
-// rules and disagree about these glyphs under ordinary environments — see
-// app.halfBlocksMeasureOneCell.
-func HalfBlockGlyphs() []string { return []string{upperHalf, lowerHalf} }
+// It lives here, beside the glyphs, because three packages need the answer and
+// they must not each derive their own: app picks the rung with it, and the
+// overlay's and this package's tests use it to avoid asserting a combination
+// production never renders.
+//
+// It MEASURES rather than reading RUNEWIDTH_EASTASIAN, and that is the
+// difference between a guard and a guess. Two libraries measure an Atrium frame
+// — go-runewidth for the list and the rows (ui/list.go, ui/row.go,
+// ui/theme/panel.go) and x/ansi for the overlay and the composite (lipgloss.Width
+// is a per-line ansi.StringWidth, and PlaceOverlay calls ansi.StringWidth
+// directly) — and they read that variable by DIFFERENT rules. go-runewidth falls
+// back to the LOCALE when it is empty and otherwise accepts only "1"
+// (runewidth.go handleEnv); x/ansi ignores the locale and parses the value with
+// strconv.ParseBool (method.go init). Measured on go-runewidth v0.0.24 and
+// x/ansi v0.11.7:
+//
+//	RUNEWIDTH_EASTASIAN   locale         go-runewidth   x/ansi
+//	unset                 C                    1           1
+//	"1"                   C                    2           2
+//	"0"                   C                    1           1
+//	unset                 ja_JP.UTF-8          2           1   ← disagree
+//	"true"                C                    1           2   ← disagree
+//
+// "Is the variable non-empty", which app used to ask, is wrong on three of those
+// rows: it refuses half blocks under the documented force-narrow value, and it
+// ships them in the two ordinary environments — a Japanese locale, and a spelling
+// ParseBool accepts — where the two libraries disagree WITH EACH OTHER. That last
+// case is the worse one, because the frame is then laid out by one measurer and
+// composited by the other: the ghost-row desync theme.SanitizeWidth describes,
+// with no environment variable to blame it on.
+//
+// Measuring closes all five rows without encoding either rule, and stays closed
+// if either library changes it.
+func HalfBlocksMeasureOneCell() bool {
+	for _, g := range halfBlockGlyphs() {
+		if runewidth.StringWidth(g) != 1 || lipgloss.Width(g) != 1 {
+			return false
+		}
+	}
+	return true
+}
 
 // alphaOpaque is the coverage at which a sample is painted rather than left to
 // the surface behind it.

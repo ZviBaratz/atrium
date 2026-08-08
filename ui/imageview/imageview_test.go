@@ -1,8 +1,12 @@
 package imageview
 
 import (
+	"fmt"
 	"image"
 	"image/color"
+	"os"
+	"os/exec"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -26,17 +30,17 @@ func solid(w, h int, at func(x, y int) color.RGBA) *image.RGBA {
 // requireBlocksMeasureOne skips a half-block assertion in an environment where
 // Block Elements do not measure one cell.
 //
-// RUNEWIDTH_EASTASIAN=1 makes East-Asian Ambiguous characters — which Block
-// Elements are — measure two. Half blocks really are broken there, which is why
-// app's imageRenderMode selects the ASCII rung instead; asserting the half-block
-// invariant anyway would be asserting a combination nothing renders. Verified by
-// running the suite with the variable set: without this guard these are the only
-// failures in the tree.
+// Half blocks really are broken there, which is why app's imageRenderMode selects
+// the ASCII rung instead; asserting the half-block invariant anyway would be
+// asserting a combination nothing renders. It defers to the SAME predicate
+// production picks the rung with, rather than measuring with one library of its
+// own — otherwise the two disagree under RUNEWIDTH_EASTASIAN=true, and the skip
+// stops tracking what is actually on screen.
 func requireBlocksMeasureOne(t *testing.T) {
 	t.Helper()
-	if ansi.PrintableRuneWidth("▀") != 1 {
-		t.Skip("Block Elements measure two cells here (RUNEWIDTH_EASTASIAN); " +
-			"production uses the ASCII rung in this environment — see app.imageRenderMode")
+	if !HalfBlocksMeasureOneCell() {
+		t.Skip("half blocks do not measure one cell here; production uses the " +
+			"ASCII rung in this environment — see HalfBlocksMeasureOneCell")
 	}
 }
 
@@ -200,9 +204,10 @@ func TestRender_PartialAlphaKeepsItsColour(t *testing.T) {
 	assert.NotContains(t, got, "38;2;128;0;0")
 }
 
-// Every glyph the renderer can emit must be one HalfBlockGlyphs names, because
-// that list is what app measures to decide the rung is safe at all. A glyph added
-// to the renderer and not to the list is one nothing checks the width of.
+// Every glyph the renderer can emit must be one halfBlockGlyphs names, because
+// that list is what HalfBlocksMeasureOneCell measures to decide the rung is safe
+// at all. A glyph added to the renderer and not to the list is one nothing checks
+// the width of.
 func TestHalfBlockGlyphs_CoverEverythingTheRendererEmits(t *testing.T) {
 	// Exercises all four cells: opaque/opaque, opaque/transparent,
 	// transparent/opaque, and transparent/transparent.
@@ -216,16 +221,16 @@ func TestHalfBlockGlyphs_CoverEverythingTheRendererEmits(t *testing.T) {
 	got := xansi.Strip(Render(img, 2, 2, HalfBlock))
 
 	known := map[string]bool{" ": true, "\n": true}
-	for _, g := range HalfBlockGlyphs() {
+	for _, g := range halfBlockGlyphs() {
 		known[g] = true
 	}
 	for _, r := range got {
-		assert.True(t, known[string(r)], "renderer emitted %q, which HalfBlockGlyphs does not list", string(r))
+		assert.True(t, known[string(r)], "renderer emitted %q, which halfBlockGlyphs does not list", string(r))
 	}
 	// …and the list must not be padded with glyphs it never emits, or the width
 	// probe refuses rungs for a glyph that is not on screen.
-	for _, g := range HalfBlockGlyphs() {
-		assert.Contains(t, got, g, "HalfBlockGlyphs lists %q, which the renderer never emits", g)
+	for _, g := range halfBlockGlyphs() {
+		assert.Contains(t, got, g, "halfBlockGlyphs lists %q, which the renderer never emits", g)
 	}
 }
 
@@ -260,7 +265,7 @@ func TestRender_EveryLineMeasuresItsColumns(t *testing.T) {
 	})
 
 	modes := []Mode{ASCII}
-	if ansi.PrintableRuneWidth("▀") == 1 {
+	if HalfBlocksMeasureOneCell() {
 		modes = append(modes, HalfBlock)
 	}
 	for _, mode := range modes {
@@ -363,4 +368,58 @@ func TestRender_BoxFilterAveragesSources(t *testing.T) {
 	// two black pixels.
 	got := Render(img, 1, 1, ASCII)
 	assert.Contains(t, got, "\x1b[38;2;127;127;127m")
+}
+
+// widthProbeVar marks the re-executed child of the width probe below.
+const widthProbeVar = "ATRIUM_TEST_WIDTH_PROBE"
+
+// The rung must follow what the width libraries MEASURE, not what
+// RUNEWIDTH_EASTASIAN says — the two are different questions, and the answer
+// differs in three of these five environments.
+//
+// This runs in a subprocess because both libraries decide at package init:
+// t.Setenv cannot reach a value that was read before the test started, and the
+// go test cache cannot see the variable at all, so an in-process version of this
+// replays a cached green. The assertion it replaces lived in app, set
+// RUNEWIDTH_EASTASIAN to "1" and expected the ASCII rung — and passed only
+// because the code under it parsed that same string. Neither library agrees that
+// this is the rule.
+func TestHalfBlocksMeasureOneCell_AcrossWidthEnvironments(t *testing.T) {
+	if os.Getenv(widthProbeVar) == "1" {
+		fmt.Println(HalfBlocksMeasureOneCell())
+		return
+	}
+	cases := []struct {
+		name string
+		env  []string
+		want bool
+	}{
+		{"unset, non-CJK locale", []string{"RUNEWIDTH_EASTASIAN=", "LC_ALL=C", "LC_CTYPE=C", "LANG=C"}, true},
+		{"set to 1: both libraries measure two", []string{"RUNEWIDTH_EASTASIAN=1", "LC_ALL=C", "LC_CTYPE=C", "LANG=C"}, false},
+		// The documented way to force ambiguous-NARROW. Both libraries agree the
+		// block is one cell, so half blocks are safe; reading the variable as
+		// non-empty dropped to the ASCII ramp, halving the picture's vertical
+		// resolution for nothing.
+		{"set to 0", []string{"RUNEWIDTH_EASTASIAN=0", "LC_ALL=C", "LC_CTYPE=C", "LANG=C"}, true},
+		// go-runewidth falls back to the locale when the variable is empty;
+		// x/ansi never consults it. They disagree, and reading the variable
+		// shipped half blocks straight into that.
+		{"unset, CJK locale", []string{"RUNEWIDTH_EASTASIAN=", "LC_ALL=", "LC_CTYPE=", "LANG=ja_JP.UTF-8"}, false},
+		// x/ansi parses with strconv.ParseBool, which accepts "true";
+		// go-runewidth accepts only "1". They disagree the other way round.
+		{"set to true", []string{"RUNEWIDTH_EASTASIAN=true", "LC_ALL=C", "LC_CTYPE=C", "LANG=C"}, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cmd := exec.CommandContext(t.Context(), os.Args[0],
+				"-test.run=^TestHalfBlocksMeasureOneCell_AcrossWidthEnvironments$")
+			// Later entries win for a duplicated name, per exec.Cmd.Env.
+			cmd.Env = append(append(os.Environ(), widthProbeVar+"=1"), tc.env...)
+
+			out, err := cmd.CombinedOutput()
+			require.NoError(t, err, "probe failed: %s", out)
+			answer, _, _ := strings.Cut(string(out), "\n")
+			assert.Equal(t, strconv.FormatBool(tc.want), answer, "env %v produced %q", tc.env, out)
+		})
+	}
 }

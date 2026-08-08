@@ -2,12 +2,8 @@ package app
 
 import (
 	"errors"
-	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"strconv"
-	"strings"
 	"testing"
 
 	"github.com/ZviBaratz/atrium/ui/imageview"
@@ -83,71 +79,18 @@ func TestImageRenderMode(t *testing.T) {
 	}
 }
 
-// widthProbeVar marks the re-executed child of the width probe below.
-const widthProbeVar = "ATRIUM_TEST_WIDTH_PROBE"
-
-// The rung must follow what the width libraries MEASURE, not what
-// RUNEWIDTH_EASTASIAN says — the two are different questions, and the answer
-// differs in three of these five environments.
-//
-// This runs in a subprocess because both libraries decide at package init:
-// t.Setenv cannot reach a value that was read before the test started, and the
-// go test cache cannot see the variable at all, so an in-process version of this
-// replays a cached green. The test it replaces asserted
-// t.Setenv("RUNEWIDTH_EASTASIAN", "1") → ASCII and passed only because the code
-// under it parsed that same string; neither library agrees that this is the rule.
-func TestHalfBlocksMeasureOneCell_AcrossWidthEnvironments(t *testing.T) {
-	if os.Getenv(widthProbeVar) == "1" {
-		fmt.Println(halfBlocksMeasureOneCell())
-		return
-	}
-	cases := []struct {
-		name string
-		env  []string
-		want bool
-	}{
-		{"unset, non-CJK locale", []string{"RUNEWIDTH_EASTASIAN=", "LC_ALL=C", "LC_CTYPE=C", "LANG=C"}, true},
-		{"set to 1: both libraries measure two", []string{"RUNEWIDTH_EASTASIAN=1", "LC_ALL=C", "LC_CTYPE=C", "LANG=C"}, false},
-		// The documented way to force ambiguous-NARROW. Both libraries agree the
-		// block is one cell, so half blocks are safe; the old check read the
-		// variable as non-empty and dropped to the ASCII ramp, halving the
-		// picture's vertical resolution for nothing.
-		{"set to 0", []string{"RUNEWIDTH_EASTASIAN=0", "LC_ALL=C", "LC_CTYPE=C", "LANG=C"}, true},
-		// go-runewidth falls back to the locale when the variable is empty;
-		// x/ansi never consults it. They disagree, and the old check shipped half
-		// blocks straight into that.
-		{"unset, CJK locale", []string{"RUNEWIDTH_EASTASIAN=", "LC_ALL=", "LC_CTYPE=", "LANG=ja_JP.UTF-8"}, false},
-		// x/ansi parses with strconv.ParseBool, which accepts "true";
-		// go-runewidth accepts only "1". They disagree the other way round.
-		{"set to true", []string{"RUNEWIDTH_EASTASIAN=true", "LC_ALL=C", "LC_CTYPE=C", "LANG=C"}, false},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			cmd := exec.CommandContext(t.Context(), os.Args[0],
-				"-test.run=^TestHalfBlocksMeasureOneCell_AcrossWidthEnvironments$")
-			// Later entries win for a duplicated name, per exec.Cmd.Env.
-			cmd.Env = append(append(os.Environ(), widthProbeVar+"=1"), tc.env...)
-
-			out, err := cmd.CombinedOutput()
-			require.NoError(t, err, "probe failed: %s", out)
-			answer, _, _ := strings.Cut(string(out), "\n")
-			assert.Equal(t, strconv.FormatBool(tc.want), answer, "env %v produced %q", tc.env, out)
-		})
-	}
-}
-
 // The live resolver must read all three inputs, not just the one it was written
 // for. Each is flipped on its own against the same home.
 //
 // The width input is the one that cannot be flipped from here — both libraries
 // decide at package init — so it is asserted against the measurement instead,
-// which is the same wire currentImageRenderMode passes on:
-// TestHalfBlocksMeasureOneCell_AcrossWidthEnvironments covers the environments
-// that change the answer.
+// which is the same wire currentImageRenderMode passes on. The environments that
+// change that answer are covered where the predicate lives, by
+// imageview's TestHalfBlocksMeasureOneCell_AcrossWidthEnvironments.
 func TestCurrentImageRenderMode_ReadsTheLiveEnvironment(t *testing.T) {
 	h := newHintsHome(t, newBranchInstance(t, "a", "b1"))
 	baseline := imageview.HalfBlock
-	if !halfBlocksMeasureOneCell() {
+	if !imageview.HalfBlocksMeasureOneCell() {
 		baseline = imageview.ASCII // a developer whose shell asks for east-asian widths
 	}
 	require.Equal(t, baseline, h.currentImageRenderMode(), "the measured width is not consulted")
