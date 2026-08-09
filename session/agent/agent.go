@@ -283,9 +283,11 @@ type Adapter struct {
 	// say the same thing: codex wraps its trust-gate body rather than truncating it, so
 	// at 20 columns the dialog occupies 18 non-empty lines and its headline — the only
 	// thing the gate is keyed on — is pushed out of a 15-line window while still plainly
-	// on screen. Measured, not inferred: GateUp returns false on the live width-20
-	// capture with the default budget and true at 24 (see
-	// TestCodexTrustGateDetectedAtEveryDrivenWidth, which pins both).
+	// on screen. Measured, not inferred, and the two halves are pinned by two tests:
+	// TestCodexTrustGateHeadlineFallsOutsideTheDefaultWindowAtWidth20 asserts GateUp is
+	// FALSE on the live width-20 capture under the default budget, and
+	// TestCodexTrustGateDetectedAtEveryDrivenWidth asserts it is true at every rung with
+	// this one.
 	//
 	// That miss is what makes this field load-bearing rather than cosmetic. GateUp is one
 	// of the two guards standing between a queued prompt and codex's trust gate, whose

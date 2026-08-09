@@ -789,14 +789,26 @@ func TestCodexApprovalDetectedAtEveryDrivenWidth(t *testing.T) {
 	}
 }
 
-// The transcript echo, stated as a fact rather than left as a surprise. It is why
+// The approval overlay reads as a box, stated as a fact rather than left as a surprise, and
+// it does so twice over: its own "› 1. Yes, proceed (y)" selector is composer-shaped, and
+// codex additionally echoes the submitted message into the transcript with the same glyph, so
+// even a frame whose selector were filtered would still carry one. That redundancy is why
 // Adapter.InputBoxVisible's doc says the box check cannot be made to tell a composer from a
-// keystroke-consuming screen, and why SelectorSharesPromptChar is described as covering the
-// gate rather than the overlay.
-func TestCodexApprovalStillReadsAsABoxViaTheTranscriptEcho(t *testing.T) {
+// keystroke-consuming screen — DetectPrompt is the guard here, and it is the only one.
+//
+// The readback on such a frame is therefore option text, not the user's input. Harmless
+// because it is unreachable: SendPrompt reads the box only after AwaitingInput, which
+// DetectPrompt has already turned false. inputBoxText's doc says the bottom-most anchor is a
+// heuristic and not a proof of liveness for exactly this reason.
+func TestCodexApprovalReadsAsABoxAndOnlyDetectPromptExcludesIt(t *testing.T) {
 	require.True(t, codex.InputBoxVisible(codexApprovalPane120),
-		"codex echoes the submitted message with \"›\", so the overlay frame still carries a "+
-			"line that reads as a composer — DetectPrompt is what excludes it, not this")
+		"the overlay frame carries composer-shaped lines — DetectPrompt is what excludes it, not this")
+
+	text, ok := codex.InputBoxText(codexApprovalPane120)
+	require.True(t, ok)
+	require.Contains(t, text, "Yes, proceed",
+		"the readback on an overlay frame is the option text; unreachable, since AwaitingInput "+
+			"is already false here — but it must not be mistaken for the user's composer input")
 }
 
 // Replacing the default set rather than extending it is load-bearing, and this is the
