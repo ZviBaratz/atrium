@@ -102,6 +102,158 @@ func TestAwaitingInputAgyDialogs(t *testing.T) {
 	})
 }
 
+// #510's consequence, at the level the bug was actually reported at, and the exact mirror
+// of #512 above. Codex draws its composer with "›" (U+203A), which isInputBoxLine did not
+// accept, so InputBoxVisible was permanently false for every codex session — and with it
+// AwaitingInput, and with that app/app_poll.go's promptDeliveryReady, whose awaitingInput
+// precondition its 60s valve never bypasses. A queued prompt was therefore never delivered
+// AND never expired. That failed CLOSED, where agy's failed open.
+//
+// app_test.go's TestPromptDeliveryReady cannot cover this: it passes awaitingInput in as a
+// bool, so it never runs the line that computes it. This does.
+//
+// Panes are verbatim tmux captures from a live codex-cli 0.147.0 (2026-08-09); the full
+// width ladder and the readback live in session/agent/codex_pane_test.go.
+func TestAwaitingInputCodex(t *testing.T) {
+	codexComposer := strings.Join([]string{
+		"╭─────────────────────────────────────────────╮",
+		"│ >_ OpenAI Codex (v0.147.0)                  │",
+		"│                                             │",
+		"│ model:     gpt-5.6-terra   /model to change │",
+		"│ directory: /tmp/cx510/repo                  │",
+		"╰─────────────────────────────────────────────╯",
+		"",
+		"  Tip: New For a limited time, Codex is included in your plan for free – let’s build together.",
+		"",
+		"",
+		"› Run this exact shell command and nothing else: rm -rf /tmp/cx510/repo/build",
+		"",
+		"",
+		"✔ You approved codex to run rm -rf /tmp/cx510/repo/build this time",
+		"",
+		"• Ran rm -rf /tmp/cx510/repo/build",
+		"  └ (no output)",
+		"",
+		"─ Worked for 1m 39s ────────────────────────────────────────────────────────────────────────────────────────────────────",
+		"",
+		"",
+		"› refactor the parser and add a regression test",
+		"",
+		"  gpt-5.6-terra default · /tmp/cx510/repo",
+	}, "\n")
+	codexGate := strings.Join([]string{
+		"> You are in /tmp/cx510/fresh",
+		"",
+		"  Do you trust the contents of this directory? Working with untrusted contents comes with higher risk of prompt",
+		"  injection. Trusting the directory allows project-local config, hooks, and exec policies to load.",
+		"",
+		"› 1. Yes, continue",
+		"  2. No, quit",
+		"",
+		"  Press enter to continue",
+	}, "\n")
+	codexGateAt20 := strings.Join([]string{
+		"> You are in /tmp/cx",
+		"",
+		"  Do you trust the",
+		"  contents of this",
+		"  directory? Working",
+		"  with untrusted",
+		"  contents comes",
+		"  with higher risk",
+		"  of prompt",
+		"  injection.",
+		"  Trusting the",
+		"  directory allows",
+		"  project-local",
+		"  config, hooks, and",
+		"  exec policies to",
+		"  load.",
+		"",
+		"› 1. Yes, continue",
+		"  2. No, quit",
+		"",
+		"  Press enter to con",
+	}, "\n")
+	codexApproval := strings.Join([]string{
+		"╭─────────────────────────────────────────────╮",
+		"│ >_ OpenAI Codex (v0.147.0)                  │",
+		"│                                             │",
+		"│ model:     gpt-5.6-terra   /model to change │",
+		"│ directory: /tmp/cx510/repo                  │",
+		"╰─────────────────────────────────────────────╯",
+		"",
+		"  Tip: New For a limited time, Codex is included in your plan for free – let’s build together.",
+		"",
+		"",
+		"› Run this exact shell command and nothing else: rm -rf /tmp/cx510/repo/build",
+		"",
+		"",
+		"• Running rm -rf /tmp/cx510/repo/build",
+		"",
+		"",
+		"  Would you like to run the following command?",
+		"",
+		"  Environment: local",
+		"",
+		"  $ rm -rf /tmp/cx510/repo/build",
+		"",
+		"› 1. Yes, proceed (y)",
+		"  2. Yes, and don't ask again for commands that start with `rm -rf /tmp/cx510/repo/build` (p)",
+		"  3. No, and tell Codex what to do differently (esc)",
+		"",
+		"  Press enter to confirm or esc to cancel",
+	}, "\n")
+
+	t.Run("true on the composer", func(t *testing.T) {
+		var sent [][]string
+		s := NewSessionWithDeps(context.Background(), "codex-idle", "codex", NewMockPtyFactory(t), captureExec(codexComposer, &sent))
+		require.True(t, s.AwaitingInput(),
+			"a real codex composer must receive queued prompts; while this was false no codex "+
+				"session could ever be handed one (#510)")
+	})
+
+	t.Run("the readback confirms a landing", func(t *testing.T) {
+		// AwaitingInput alone does not prove delivery COMPLETES: session/prompt.go types the
+		// prompt, then requires boxHoldsPrompt to read it back before submitting. That is a
+		// second consumer of the same predicate, and it needs the "›" stripped off.
+		var sent [][]string
+		s := NewSessionWithDeps(context.Background(), "codex-read", "codex", NewMockPtyFactory(t), captureExec(codexComposer, &sent))
+		text, ok := s.InputBoxText()
+		require.True(t, ok)
+		require.Equal(t, "refactor the parser and add a regression test", text)
+	})
+
+	t.Run("false while the trust gate is up", func(t *testing.T) {
+		var sent [][]string
+		s := NewSessionWithDeps(context.Background(), "codex-gate", "codex", NewMockPtyFactory(t), captureExec(codexGate, &sent))
+		require.False(t, s.AwaitingInput(), "a trust gate must never read as ready to receive a prompt")
+	})
+
+	t.Run("false on the trust gate at width 20, the rung that needs the widened gate window", func(t *testing.T) {
+		// The rung that justifies Adapter.GateWindow. Codex wraps the gate body rather than
+		// truncating it, so at 20 columns the dialog spans 18 non-empty lines and the headline
+		// GateUp is keyed on falls outside the default 15-line flatten budget — the literal is
+		// on screen and the window misses it. Nothing behind GateUp would catch this: the
+		// gate's "› 1. Yes, continue" is the only composer-shaped line on the pane, and it is
+		// indistinguishable from a composer holding a numbered-list prompt.
+		var sent [][]string
+		s := NewSessionWithDeps(context.Background(), "codex-gate-20", "codex", NewMockPtyFactory(t), captureExec(codexGateAt20, &sent))
+		require.False(t, s.AwaitingInput())
+	})
+
+	t.Run("false while an approval overlay is up", func(t *testing.T) {
+		// Excluded by DetectPrompt, not by the box check: codex echoes the submitted message
+		// into its transcript with the same "›", so this frame still carries a line that reads
+		// as a composer. Driving codex 0.147.0, typing "hey there" at this overlay approved the
+		// command outright — "y" is the accelerator for "1. Yes, proceed (y)" and confirms with
+		// no Enter — which is what the approval matcher is holding back (#347).
+		var sent [][]string
+		s := NewSessionWithDeps(context.Background(), "codex-approval", "codex", NewMockPtyFactory(t), captureExec(codexApproval, &sent))
+		require.False(t, s.AwaitingInput())
+	})
+}
+
 func TestSendPasted_UsesBracketedPasteBuffer(t *testing.T) {
 	var sent [][]string
 	s := NewSessionWithDeps(context.Background(), "paste", "claude", NewMockPtyFactory(t), captureExec(boxPane, &sent))

@@ -141,12 +141,16 @@ const aboveBoxBlockCap = 40
 // live), which isHorizontalRule rejects — the same reason suggestion.go locates the box
 // with the loose predicate. A spinner/task line never starts with a dash run, so the loose
 // predicate cannot mistake block content for a border.
+//
+// It anchors with defaultPrompts rather than an adapter's own set because its only caller
+// is claudeSpinnerWorking (spinner.go) — claude's own chrome. This is not a generic entry
+// point; an adapter-aware caller would have to pass its own set.
 func aboveBoxBlock(content string) (string, bool) {
 	lines := strings.Split(content, "\n")
 
 	box := -1
 	for i := len(lines) - 1; i >= 0; i-- {
-		if isInputBoxLine(lines[i]) {
+		if isInputBoxLine(lines[i], defaultPrompts) {
 			box = i
 			break
 		}
@@ -188,46 +192,92 @@ func aboveBoxBlock(content string) (string, bool) {
 	return strings.Join(lines[start:end+1], "\n"), true
 }
 
-// isInputBoxLine reports whether line is the interior of an agent's input box: the "❯" or
-// ">" prompt, optionally inside the box's "│" side borders, possibly followed by typed
-// text. The box is drawn only while no overlay is up, so reaching it while scanning upward
+// promptSet describes what one agent's composer interior line opens with. It is a type
+// rather than a package constant because the glyph is a per-agent fact, and getting it
+// wrong fails SILENTLY: an agent whose glyph is missing has no composer as far as
+// InputBoxVisible is concerned, so AwaitingInput is permanently false and its queued
+// prompts are neither delivered nor expired (#510 — codex draws "›" U+203A, which the
+// two-glyph predicate never accepted; the glyph sat in this package's own fixtures the
+// whole time and nothing ever fed it to the predicate).
+// A menu selector drawn with the same glyph is deliberately NOT excluded here. Codex draws
+// both its composer and its menu selector with "›", and the shapes are not separable: a
+// queued prompt that is a numbered list renders as "› 1. refactor the parser" / "  2. add a
+// regression test", which is byte-identical in shape to the trust gate's "› 1. Yes,
+// continue" / "  2. No, quit" (both captured live at 0.147.0, widths 120 and 20 — see
+// codexNumberedComposerPane*). Any rule that rejects the menu therefore also rejects a real
+// prompt, and rejecting a real prompt is worse than accepting the menu: the box check is not
+// the guard that keeps a queued prompt off a menu — GateUp and DetectPrompt are (see
+// Adapter.InputBoxVisible and Adapter.GateWindow).
+type promptSet []string
+
+// defaultPrompts is what an adapter that declares no set of its own resolves to: claude's
+// "❯" and the plain ASCII ">" that aider and agy draw. See Adapter.InputBoxPrompts for
+// why the zero value must resolve to this rather than to an empty set.
+var defaultPrompts = promptSet{"❯", ">"}
+
+// isInputBoxLine reports whether line is the interior of an agent's input box: one of
+// that agent's prompt glyphs (prompts — "❯" for claude, ">" for aider and agy, "›" for
+// codex), optionally inside the box's "│" side borders, possibly followed by typed text.
+// The box is drawn only while no overlay is up, so reaching it while scanning upward
 // proves everything above is scrolled-back transcript.
-func isInputBoxLine(line string) bool {
+//
+// The glyph set is a parameter, not a package constant, so that an agent whose menu
+// chrome collides with another's composer cannot inherit it. Callers that already know
+// the agent — the claude-only helpers in this package — pass defaultPrompts; the adapter
+// path passes a.inputBoxPrompts().
+func isInputBoxLine(line string, prompts promptSet) bool {
 	s := strings.TrimSpace(line)
 	s = strings.TrimSpace(strings.TrimPrefix(s, "│"))
-	return strings.HasPrefix(s, "❯") || strings.HasPrefix(s, ">")
+	for _, g := range prompts {
+		if strings.HasPrefix(s, g) {
+			return true
+		}
+	}
+	return false
 }
 
-// stripBoxInterior removes an input-box interior line's side borders, leading prompt
-// char ("❯"/">"), and surrounding whitespace, leaving just the typed text. Used to read
-// back what the user (or a queued-prompt send) has entered into the composer.
-func stripBoxInterior(line string) string {
+// stripBoxInterior removes an input-box interior line's side borders, its leading prompt
+// glyph (one of prompts), and surrounding whitespace, leaving just the typed text. Used
+// to read back what the user (or a queued-prompt send) has entered into the composer.
+// The glyph must come off: the readback is compared against the prompt's signature
+// (session/prompt.go boxHoldsPrompt), which does not carry it. At most one glyph is
+// removed — a composer line opens with exactly one, and stripping a second would eat
+// real text on an agent whose glyph is a legal first character of user input.
+func stripBoxInterior(line string, prompts promptSet) string {
 	s := strings.TrimSpace(line)
 	s = strings.TrimSpace(strings.TrimPrefix(s, "│")) // left border
 	s = strings.TrimSpace(strings.TrimSuffix(s, "│")) // right border
-	s = strings.TrimPrefix(s, "❯")
-	s = strings.TrimPrefix(s, ">")
+	for _, g := range prompts {
+		if rest, ok := strings.CutPrefix(s, g); ok {
+			return strings.TrimSpace(rest)
+		}
+	}
 	return strings.TrimSpace(s)
 }
 
 // inputBoxText returns the text currently entered in the agent's live input box and
 // whether a box is on screen at all. The box is the composer at the bottom of the pane: a
-// line opening with the "❯"/">" prompt char, optionally inside "│" side borders. Builds
+// line opening with one of the agent's prompt glyphs, optionally inside "│" side borders. Builds
 // differ — claude draws a borderless interior wrapped by "─" horizontal rules; others use
 // full "│"-bordered rows — so a long entry that wraps across several rows is read by joining
 // every interior line below the prompt char up to the box's bottom rule (or the next box
 // line), stripped of any borders and squashed to single spaces, making the readback
 // width- and border-style-independent. Detection is confined to the bottom WindowPrompt
-// non-empty lines (the same budget the prompt matchers use) so a ">" quoted in the
-// scrolled-back transcript never counts as the box.
+// non-empty lines (the same budget the prompt matchers use) so a prompt glyph quoted in
+// the scrolled-back transcript never counts as the box.
 //
 // found=false means no composer is on screen. found=true with empty text means the box is
 // genuinely blank; note that an otherwise-empty composer showing a placeholder/ghost
-// suggestion (claude's `Try "…"` hint) reads that hint back as the text, so callers must
-// not treat the readback as the user's input verbatim — they compare it against the prompt
-// signature with a substring check (see boxHoldsPrompt) precisely so ghost text and the
-// wrap point never cause a false match.
-func inputBoxText(content string) (string, bool) {
+// suggestion (claude's `Try "…"` hint, codex's `Summarize recent commits`) reads that hint
+// back as the text, so callers must not treat the readback as the user's input verbatim —
+// they compare it against the prompt signature with a substring check (see boxHoldsPrompt)
+// precisely so ghost text and the wrap point never cause a false match.
+//
+// The bottom-most anchor is a heuristic, not a proof of liveness: an agent that echoes the
+// user's own messages into the transcript with its composer glyph (codex does) still reads
+// as a box on a frame whose composer an overlay has replaced. That is why AwaitingInput
+// pairs this with GateUp and DetectPrompt rather than trusting it alone.
+func inputBoxText(content string, prompts promptSet) (string, bool) {
 	lines := strings.Split(content, "\n")
 
 	// Restrict to the bottom WindowPrompt non-empty lines.
@@ -245,10 +295,10 @@ func inputBoxText(content string) (string, bool) {
 	window := lines[start:]
 
 	// Anchor on the bottom-most prompt-char line; the box always sits below the
-	// transcript, so the lowest "❯"/">" is the live composer.
+	// transcript, so the lowest prompt-glyph line is the live composer.
 	anchor := -1
 	for i := len(window) - 1; i >= 0; i-- {
-		if isInputBoxLine(window[i]) {
+		if isInputBoxLine(window[i], prompts) {
 			anchor = i
 			break
 		}
@@ -261,13 +311,13 @@ func inputBoxText(content string) (string, bool) {
 	// borderless one both terminate the box with a horizontal rule (the bottom border), so
 	// reading until that rule — or a blank line, or a second prompt-char line (a new box) —
 	// captures the whole entry without swallowing the footer that lives below the box.
-	parts := []string{stripBoxInterior(window[anchor])}
+	parts := []string{stripBoxInterior(window[anchor], prompts)}
 	for i := anchor + 1; i < len(window); i++ {
 		line := window[i]
-		if strings.TrimSpace(line) == "" || isHorizontalRule(line) || isInputBoxLine(line) {
+		if strings.TrimSpace(line) == "" || isHorizontalRule(line) || isInputBoxLine(line, prompts) {
 			break
 		}
-		parts = append(parts, stripBoxInterior(line))
+		parts = append(parts, stripBoxInterior(line, prompts))
 	}
 	text := whiteSpaceRegex.ReplaceAllString(strings.Join(parts, " "), " ")
 	return strings.TrimSpace(text), true
@@ -294,9 +344,9 @@ func inputBoxText(content string) (string, bool) {
 //     text in neighboring segments from combining into a false footer.
 //   - The scan stops at the input box interior (isInputBoxLine as a segment's first
 //     non-empty line): the box and an overlay are mutually exclusive, and the live footer
-//     always sits below any "❯" option pointer, so a segment opening with the prompt char
+//     always sits below any "❯" option pointer, so a segment opening with the prompt glyph
 //     means everything above is transcript — where a quoted footer must not count. A
-//     statusLine segment that itself opens with "❯"/">" stops the scan early and hides a
+//     statusLine segment that itself opens with one of them stops the scan early and hides a
 //     footer above it; that residual miss needs a statusLine with both a divider and a
 //     prompt-char-initial line.
 //   - The scan is confined to the bottom WindowPrompt non-empty lines — the same budget
@@ -305,6 +355,8 @@ func inputBoxText(content string) (string, bool) {
 //     missing footers displaced by statusLines taller than that budget.
 //   - With no rule on screen there is no structure to segment by; fall back to the tight
 //     workChromeLines window, preserving the fixed-window behavior for minimal footers.
+//   - The scan-stop uses defaultPrompts, not a per-adapter set: both callers
+//     (claudeSelectionFooterVisible, claudeLocalPermissionVisible) are claude's.
 func footerVisibleInSegments(content string, tokens func(string) bool) bool {
 	lines := strings.Split(content, "\n")
 	nonEmpty := 0
@@ -342,7 +394,7 @@ func footerVisibleInSegments(content string, tokens func(string) bool) bool {
 			if strings.TrimSpace(line) == "" {
 				continue
 			}
-			if isInputBoxLine(line) {
+			if isInputBoxLine(line, defaultPrompts) {
 				return false
 			}
 			break

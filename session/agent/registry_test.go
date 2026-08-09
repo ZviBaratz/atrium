@@ -255,8 +255,11 @@ var claudeFetchPane = strings.Join([]string{
 }, "\n")
 
 // claudeFetchNarrowPane is the same dialog captured at width 28 (live 2.1.210, 2026-07-15)
-// — the narrowest reachable pane, since an agent's pane is atrium's PREVIEW pane and an
-// 80-column terminal at maxListRatio hands it 28 columns (#340).
+// — the narrowest pane this dialog was captured at, NOT a floor. An earlier draft called 28
+// "the narrowest reachable pane" on the arithmetic that an 80-column terminal at
+// maxListRatio hands the preview pane 28 columns (#340); that is one terminal size, not a
+// bound. There is no floor (see registry.go's agy block and the ladder at :1394), and #512
+// falsified two literals at 24 and shipped a fixture at 20.
 //
 // It pins two properties the matcher depends on. The title reflows across THREE physical
 // lines, so the match must run on the flattened region, not per-line. And the title sits 9
@@ -1194,6 +1197,23 @@ func TestCodexGateAndResume(t *testing.T) {
 	require.Equal(t, "codex --model o3", codex.Resume("codex --model o3"))
 }
 
+// geminiIdlePane is gemini's idle composer: a ">" prompt inside a "│"-bordered box.
+// Composed from the installed 0.27 package source (InputPrompt.js), NOT captured from a
+// live pane — gemini's free individual auth path closed, so it cannot be driven here
+// (#347/#645). Treated as evidence of the box SHAPE, which several tests already rely on;
+// it is deliberately not the basis for any new matcher.
+const geminiIdlePane = "✦ Done.\n\n╭───╮\n│ > │\n╰───╯\n~/project   no sandbox   gemini-2.5-pro"
+
+// aiderIdlePane is aider's idle pane, captured from the same live 0.86.2 session as the
+// confirm fixtures below: a startup banner and a bare ">" composer with no box drawn.
+var aiderIdlePane = strings.Join([]string{
+	"Aider v0.86.2",
+	"Main model: gpt-4o with diff edit format",
+	"Git repo: .git with 3 files",
+	"Repo-map: using 4096 tokens, auto refresh",
+	">",
+}, "\n")
+
 // --- Gemini fixtures. Strings verified against the installed 0.27 package
 // source: LoadingIndicator.js, ToolConfirmationMessage.js, FolderTrustDialog.js.
 
@@ -1211,7 +1231,7 @@ func TestGeminiBusyMarker(t *testing.T) {
 	require.True(t, gemini.HasBusyMarker(working),
 		"the loading row above the input box must be inside the marker window")
 
-	idle := "✦ Done.\n\n╭───╮\n│ > │\n╰───╯\n~/project   no sandbox   gemini-2.5-pro"
+	idle := geminiIdlePane
 	require.False(t, gemini.HasBusyMarker(idle))
 }
 
@@ -1232,7 +1252,7 @@ func TestGeminiPrompts(t *testing.T) {
 	_, ok = gemini.DetectPrompt("Do you want to proceed?\n  1. Yes, allow once")
 	require.False(t, ok, "stale pre-0.2x option text alone must not match")
 
-	idle := "✦ Done.\n\n╭───╮\n│ > │\n╰───╯\n~/project   no sandbox   gemini-2.5-pro"
+	idle := geminiIdlePane
 	_, ok = gemini.DetectPrompt(idle)
 	require.False(t, ok)
 
@@ -1340,13 +1360,7 @@ func TestAiderConfirmShapes(t *testing.T) {
 	// FP guards: an idle aider pane (startup banner + bare composer, captured
 	// from the same 0.86.2 session) and prose carrying only one of the tokens
 	// must stay non-prompts.
-	idle := strings.Join([]string{
-		"Aider v0.86.2",
-		"Main model: gpt-4o with diff edit format",
-		"Git repo: .git with 3 files",
-		"Repo-map: using 4096 tokens, auto refresh",
-		">",
-	}, "\n")
+	idle := aiderIdlePane
 	_, ok := aider.DetectPrompt(idle)
 	require.False(t, ok, "an idle aider pane must not read as a prompt")
 
@@ -1922,7 +1936,7 @@ func TestAgyTrustGateNarrowerThanTheOptionRow(t *testing.T) {
 
 	// The pointer half of the hazard: the truncated row still reads as an input box, so
 	// nothing but GateUp stands between a queued prompt and this dialog.
-	require.True(t, isInputBoxLine("> Yes, I trust this fold"),
+	require.True(t, isInputBoxLine("> Yes, I trust this fold", defaultPrompts),
 		"the truncated option row still looks like a composer to the box check")
 }
 

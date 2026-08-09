@@ -43,7 +43,7 @@ func TestCheckClassifies(t *testing.T) {
 		out: map[string]string{
 			"claude": "2.2.0 (Claude Code)\n", // past the pin, minor -> drifted
 			"gemini": "0.27.4\n",              // verified 0.27, minor -> ok
-			"codex":  "0.12.0\n",              // unversioned adapter -> unknown
+			"codex":  "0.148.0\n",             // past the 0.147.0 pin, minor -> drifted
 		},
 		err: map[string]error{},
 	}
@@ -55,11 +55,33 @@ func TestCheckClassifies(t *testing.T) {
 	if s := statusFor(got, agent.KeyGemini); s != StatusOK {
 		t.Errorf("gemini status = %v, want StatusOK", s)
 	}
-	if s := statusFor(got, agent.KeyCodex); s != StatusUnknown {
-		t.Errorf("codex status = %v, want StatusUnknown (unversioned)", s)
+	if s := statusFor(got, agent.KeyCodex); s != StatusDrifted {
+		t.Errorf("codex status = %v, want StatusDrifted", s)
 	}
 	if s := statusFor(got, agent.KeyAider); s != StatusNotInstalled {
 		t.Errorf("aider status = %v, want StatusNotInstalled", s)
+	}
+}
+
+// The unversioned path, kept on a synthetic adapter rather than on whichever registry
+// entry happens to be unpinned. It used to ride on codex, which meant #510's drive —
+// pinning codex at the version it drove — silently deleted this coverage instead of
+// failing. An adapter with no VerifiedVersion has nothing to compare against, so it
+// reports Unknown while still surfacing the version it found.
+func TestCheckUnversionedAdapterIsUnknown(t *testing.T) {
+	unpinned := &agent.Adapter{Key: "claude", DisplayName: "Unpinned"}
+	r := fakeRunner{out: map[string]string{"claude": "9.9.9\n"}}
+
+	got := Check(context.Background(), []*agent.Adapter{unpinned}, r)
+
+	if len(got) != 1 {
+		t.Fatalf("Check returned %d results, want 1", len(got))
+	}
+	if got[0].Status != StatusUnknown {
+		t.Errorf("status = %v, want StatusUnknown (no VerifiedVersion to compare against)", got[0].Status)
+	}
+	if got[0].Installed != "9.9.9" {
+		t.Errorf("installed = %q, want %q reported even when unversioned", got[0].Installed, "9.9.9")
 	}
 }
 

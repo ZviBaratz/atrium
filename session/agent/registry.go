@@ -244,7 +244,7 @@ var claude = &Adapter{
 		// keeps the undriven sibling DETECTED, which is not cosmetic: the fetch
 		// dialog renders NO footer, so permission-local cannot see this family, and
 		// DetectPrompt is the only thing standing between a queued prompt and a live
-		// dialog (session/tmux AwaitingInput — the dialog's "❯ 1. Yes" reads as an
+		// dialog (session/tmux AwaitingInput — claude's dialog "❯ 1. Yes" reads as an
 		// input box, so InputBoxVisible does not stop it). Undetected, a queued
 		// prompt would be typed into the dialog and retried every cycle.
 		//
@@ -491,9 +491,13 @@ var claudeNetworkDeclineOptions = []string{"No, and tell Claude what to do diffe
 // gate's literal is a dialog TITLE at the top of its dialog (hence 40, clearing the tallest
 // capture), while these key on the question and options at the BOTTOM, which flattenChrome
 // reaches first. Measured on the live 2.1.210 captures: the fetch title sits 9 non-empty
-// lines above the region's bottom at width 28 (claudeFetchNarrowPane — the narrowest
-// reachable pane, since an agent's pane is atrium's PREVIEW pane), so 20 clears every
+// lines above the region's bottom at width 28 (claudeFetchNarrowPane), so 20 clears every
 // captured shape with better than 2x margin while exposing half the surface 40 would.
+//
+// 28 is the narrowest width this dialog was CAPTURED at, not a floor — there is none (see
+// the agy block below, and #512's captures at 24 and 20). The margin above is therefore
+// measured only down to 28; a narrower pane reflows the body further and the headroom there
+// is unmeasured. That is a known gap, not a claim.
 const permissionRegionCap = 20
 
 // claudeLiveDialogRegion returns claude's live dialog region — the lines below the pane's
@@ -646,19 +650,46 @@ func claudePasteCollapsed(boxText string) bool {
 	return pasteChipRegex.MatchString(boxText)
 }
 
-// Codex CLI (openai/codex, Rust TUI). Strings verified against the repo at
-// main (2026-06): the status row renders "Working (0s • esc to interrupt)"
-// (status_indicator_widget.rs, pinned by its own test) *above* the composer,
-// and every approval overlay carries a "No, …" option (approval_overlay.rs).
+// Codex CLI (openai/codex, Rust TUI). Originally read off the repo at main (2026-06); every
+// matcher below has since been driven against a live codex-cli 0.147.0 in an isolated tmux
+// on 2026-08-09 (#510), at widths 120/60/40/28/24/20:
+//
+//   - BusyMarkers/MarkerWindow — "• Working (1s • esc to interrupt)" renders above the
+//     composer as expected. Worth stating because a strings(1) probe of the 0.147.0 binary
+//     does NOT contain "esc to interrupt" (the key label is interpolated at runtime), so the
+//     binary reads as drifted and is not: absence in a binary is not evidence.
+//   - InputBoxPrompts — "›" (U+203A), byte-verified with cat -A.
+//   - Gates/GateWindow — the trust dialog, at every rung (codexTrustGateLadder).
+//   - Prompts — the command-approval overlay, at every rung (codexApprovalLadder).
+//   - ResumeProbe — `codex --help` lists "  resume          Resume a previous interactive
+//     session", so the clap-listing needle still matches.
+//   - No PasteCollapsed: codex renders a bracketed paste verbatim rather than collapsing it
+//     into a chip the way claude does (codexNumberedListComposerPane120).
+//
+// That is the whole adapter, which is what VerifiedVersion claims — it was left empty
+// through 0.147.0 only because no one had driven it.
 var codex = &Adapter{
 	Key:         KeyCodex,
 	DisplayName: "Codex",
 	aliases:     []string{"codex"},
 
+	VerifiedVersion:  "0.147.0",
+	DriftGranularity: GranularityMinor,
+
 	BusyMarkers: []string{"esc to interrupt"},
 	// The status row sits above the composer and its footer hints, outside the
 	// below-the-box footer anchor; a window of 8 reaches over them.
 	MarkerWindow: 8,
+
+	// Codex draws its composer with "›" (U+203A), byte-verified with cat -A against a
+	// live 0.147.0 pane. The default set never accepted it, so InputBoxVisible — and
+	// therefore AwaitingInput, and therefore prompt delivery — was dead for every codex
+	// session (#510). Replacing rather than extending the default is load-bearing here:
+	// codex's own banner ("│ >_ OpenAI Codex (v0.147.0)") and its header ("> You are in
+	// <dir>") both open with ">", and under the default set the banner is what the
+	// readback actually returned on a 120-column pane — the composer's contents were
+	// never read at all, they were the startup banner's.
+	InputBoxPrompts: []string{"›"},
 
 	Prompts: []PromptMatcher{
 		// Decline options across the approval overlays: command/patch approvals
@@ -698,6 +729,17 @@ var codex = &Adapter{
 		// directory?" with "Yes, continue" pre-highlighted.
 		{Contains: []string{"Do you trust the contents of this directory"}},
 	},
+	// Codex WRAPS that body instead of truncating it (the opposite of agy, #512), so the
+	// dialog's line count grows as the pane narrows while its text stays intact: 9
+	// non-empty lines at 120 columns, 18 at 20 — past the default 15-line budget, which
+	// drops the headline the gate is keyed on and makes GateUp miss a gate that is fully
+	// on screen. 24 clears the widest driven rung with headroom; every rung of the
+	// captured ladder is asserted, so a future codex that wraps wider fails loudly rather
+	// than silently reopening the miss. This gate is one of the two guards keeping a
+	// queued prompt off the trust screen (DetectPrompt is the other), and it has to be,
+	// because the screen's "› 1. Yes, continue" selector is indistinguishable from a
+	// composer holding a numbered-list prompt — see promptSet.
+	GateWindow: 24,
 
 	// `codex resume --last` continues the most recent session. The subcommand
 	// must follow the binary, so resume is only applied to a bare program; a

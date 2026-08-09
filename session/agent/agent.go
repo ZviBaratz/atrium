@@ -150,6 +150,9 @@ func containsAny(flat string, lits []string) bool {
 // optional field means "no support": nil BusyMarkers falls back to the poller's
 // content-change hysteresis, no Prompts means prompts are never surfaced, no
 // Gates means no startup screen is detected, nil Resume relaunches without history.
+// The convention holds because for each of those "no support" is a graceful
+// degradation. InputBoxPrompts is the one exception — nil there means the package
+// default, not the empty set, and its own doc says why.
 type Adapter struct {
 	Key         Key
 	DisplayName string
@@ -158,8 +161,9 @@ type Adapter struct {
 	// been confirmed against a live pane — a ceiling, not a frozen pin. An
 	// installed version above it is unverified territory and triggers a drift
 	// warning. Bump it (after re-checking) whenever a matcher string is edited,
-	// and on a plain re-verification of a newer release. Empty = unversioned
-	// (codex/aider): shown in `atrium doctor`, never triggers a hint.
+	// and on a plain re-verification of a newer release. Empty = unversioned:
+	// shown in `atrium doctor`, never triggers a hint. Every registry adapter is
+	// pinned; only the Generic fallback, which has no matchers, is unversioned.
 	VerifiedVersion string
 	// DriftGranularity is the smallest semver component whose increase past
 	// VerifiedVersion counts as drift. Zero value (GranularityPatch) is the
@@ -248,8 +252,51 @@ type Adapter struct {
 	// mode in their footer; claude wires claudePermissionMode.
 	PermissionMode func(content string) (mode string, known bool)
 
+	// InputBoxPrompts REPLACES the default glyphs that open this agent's composer
+	// interior line ("❯" for claude, the plain ASCII ">" aider and agy draw). Codex
+	// draws "›" (U+203A). Not to be confused with Prompts above: those are
+	// blocking-dialog matchers, this is the composer's own glyph.
+	//
+	// This is the one optional field whose zero value does not mean "no support". Nil
+	// means "the package default" (defaultPrompts), because an empty set does not
+	// degrade a feature, it kills one: InputBoxVisible goes permanently false, so
+	// AwaitingInput does too, and a queued prompt is then neither delivered nor expired
+	// (#510). The convention the rest of this struct follows is justified by its failure
+	// mode — nil BusyMarkers falls back to content-change hysteresis, nil Prompts merely
+	// leaves prompts unsurfaced — and that justification does not extend to a field whose
+	// empty value silently breaks prompt delivery outright. Generic is a bare &Adapter{}
+	// and is deliberately NOT in registry, so no table test over Adapters() can catch a
+	// missing entry either; the default has to live in the resolver.
+	//
+	// It REPLACES rather than extends so that an agent with its own glyph fails CLOSED on
+	// the others'. Codex proves the point twice: its banner line "│ >_ OpenAI Codex" and
+	// its "> You are in <dir>" header both read as a composer under the default set.
+	InputBoxPrompts []string
+
 	// Gates are the startup screens this agent can show.
 	Gates []Gate
+	// GateWindow overrides how many non-empty lines from the bottom GateUp flattens
+	// before matching a Gate's Contains literals. 0 means WindowPrompt, the same budget
+	// the prompt matchers use.
+	//
+	// It exists because that budget is a LINE count and a wrapping TUI spends lines to
+	// say the same thing: codex wraps its trust-gate body rather than truncating it, so
+	// at 20 columns the dialog occupies 18 non-empty lines and its headline — the only
+	// thing the gate is keyed on — is pushed out of a 15-line window while still plainly
+	// on screen. Measured, not inferred, and the two halves are pinned by two tests:
+	// TestCodexTrustGateHeadlineFallsOutsideTheDefaultWindowAtWidth20 asserts GateUp is
+	// FALSE on the live width-20 capture under the default budget, and
+	// TestCodexTrustGateDetectedAtEveryDrivenWidth asserts it is true at every rung with
+	// this one.
+	//
+	// That miss is what makes this field load-bearing rather than cosmetic. GateUp is one
+	// of the two guards standing between a queued prompt and codex's trust gate, whose
+	// selector shares the composer's "›" glyph — and the box check cannot be the other
+	// one, because a numbered-list prompt in the composer is the same shape as the menu
+	// (see promptSet). A wider window trades a larger surface for a gate literal quoted
+	// in the transcript, which fails CLOSED (a prompt is held, never mis-delivered) and
+	// is the failure mode GateUp already documents as acceptable.
+	GateWindow int
 
 	// Resume rewrites the launch command so a relaunched session continues the
 	// prior conversation. Used only on resurrection (the agent process died),
@@ -373,7 +420,7 @@ func (a *Adapter) GateUp(content string) (Gate, bool) {
 			continue
 		}
 		if !flattened {
-			flat, flattened = flattenChrome(content, WindowPrompt), true
+			flat, flattened = flattenChrome(content, a.gateWindow()), true
 		}
 		if g.matches(flat) {
 			return g, true
@@ -382,22 +429,49 @@ func (a *Adapter) GateUp(content string) (Gate, bool) {
 	return Gate{}, false
 }
 
+// inputBoxPrompts resolves this adapter's composer glyph set. It never returns an empty
+// set — see InputBoxPrompts for why nil must mean the default rather than "none".
+func (a *Adapter) inputBoxPrompts() promptSet {
+	if len(a.InputBoxPrompts) == 0 {
+		return defaultPrompts
+	}
+	return a.InputBoxPrompts
+}
+
+// gateWindow resolves how many non-empty bottom lines GateUp flattens — see GateWindow.
+func (a *Adapter) gateWindow() int {
+	if a.GateWindow <= 0 {
+		return WindowPrompt
+	}
+	return a.GateWindow
+}
+
 // InputBoxText returns the text entered in the agent's live input box and whether a
 // box is on screen, reading the cleaned full pane. found=false means no composer is
 // rendered (a startup frame before the box, or an overlay covering it); found=true with
 // an empty string means the box is present but blank. It is the positive readback used to
-// confirm a queued prompt actually landed in the composer before it is submitted.
+// confirm a queued prompt actually landed in the composer before it is submitted. The
+// agent's own prompt glyph is stripped, since the signature it is compared against does
+// not carry one.
 func (a *Adapter) InputBoxText(content string) (string, bool) {
-	return inputBoxText(content)
+	return inputBoxText(content, a.inputBoxPrompts())
 }
 
 // InputBoxVisible reports whether the agent's live input box is on screen in the cleaned
 // full pane. It is the positive half of the prompt-delivery readiness check: a pre-box boot
 // frame or an overlay that has replaced the composer has no box, so keystrokes would be
-// lost. It does not by itself tell a composer from a menu-style gate — claude's trust/new-MCP
-// screens render a "❯ 1. …" selector that also reads as a box line — so the caller must pair
-// it with GateUp and DetectPrompt to exclude the screens that consume keystrokes.
+// lost.
+//
+// It does not by itself tell a composer from a screen that consumes keystrokes, and cannot
+// be made to. A menu-style gate drawn with the agent's own prompt glyph reads as a box line
+// (claude's "❯ 1. …" trust/new-MCP screens, agy's "> 1. Yes", codex's "› 1. Yes, continue"),
+// and no rule on that line's shape can reject it without also rejecting a queued prompt that
+// happens to be a numbered list — measured against live codex panes, see promptSet. An agent
+// which echoes the user's own messages into its transcript with the composer glyph — codex
+// does — additionally presents a box line on a frame whose composer an overlay has replaced.
+// So the caller must pair this with GateUp and DetectPrompt, which is what excludes those
+// screens; on codex's trust gate at narrow widths that pairing is what GateWindow protects.
 func (a *Adapter) InputBoxVisible(content string) bool {
-	_, ok := inputBoxText(content)
+	_, ok := inputBoxText(content, a.inputBoxPrompts())
 	return ok
 }
