@@ -1385,6 +1385,560 @@ func TestAiderConfirmShapes(t *testing.T) {
 	require.False(t, ok, "an answered confirm above later output must not re-read as a live prompt")
 }
 
+// --- Antigravity (agy) fixtures. Every pane below is a verbatim `tmux capture-pane -p`
+// of a live agy 1.1.11 driven in an isolated tmux on 2026-08-09 (#512), at the width named
+// in each const. Where a fixture starts mid-pane, the elided part is the startup splash —
+// it carries the signed-in account's email address, and nothing above the live chrome is
+// read by any matcher here.
+//
+// The narrow variants are not decoration. agy truncates its headline questions and wraps
+// its option rows, so a fixture captured only at 120 columns would assert a matcher that
+// the same dialog defeats at a width Atrium can actually render. There is no floor: the
+// agent session is resized to the PREVIEW pane (app/app_layout.go GetPreviewSize →
+// ui/list.go SetSessionPreviewSize → session/instance.go SetPreviewSize — NOT
+// ui/terminal.go, which sizes the per-instance SHELL sessions), the list may take
+// maxListRatio = 0.60 of the terminal (config/state.go), and the remainder is unclamped.
+// Both literals were falsified at 24 columns, below the 28 an earlier draft called a floor.
+
+// agyTrustGatePane is the startup folder-trust screen at width 120 — the whole pane.
+const agyTrustGatePane = `Accessing workspace:
+
+/tmp/agy512cap/repo
+
+Do you trust the contents of this project?
+
+Antigravity CLI requires permission to read, edit, and execute files here.
+
+> Yes, I trust this folder
+  No, exit
+
+  ↑/↓ Navigate · enter Confirm
+                                                                                                   Gemini 3.1 Pro · high`
+
+// agyTrustGateNarrowPane is the SAME screen at width 28, and it is the reason the gate
+// matcher keys on the option row. The question has been truncated to "Do you trust the
+// contents of" — not wrapped, so no space-join recovers the rest — while the option row
+// "> Yes, I trust this folder" is unchanged.
+const agyTrustGateNarrowPane = `Accessing workspace:
+
+/tmp/agy512cap/fresh28
+
+Do you trust the contents of
+
+Antigravity CLI requires per
+
+> Yes, I trust this folder
+  No, exit
+
+  ↑/↓ Navigate · enter Confi
+       Gemini 3.1 Pro · high`
+
+// agyIdlePane is the settled composer at width 120: a ">" prompt between two rules, with
+// "? for shortcuts" in the footer slot where a busy pane puts "esc to cancel".
+const agyIdlePane = `────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+>
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+? for shortcuts                                                                                    Gemini 3.1 Pro · high`
+
+// agyBusyPane is a working pane at width 120. Two things it pins: the composer box is
+// still on screen while agy works (so the footer marker sits below the box's bottom
+// border, which is what MarkerWindow 0 anchors to), and the spinner's verb is just one of
+// several — this frame says "Generating...", others in the same turn said "Running...".
+//
+// The three horizontal rules are deliberately not the same length, and that is verbatim:
+// agy draws the separator above an echoed user message at 60 columns regardless of the
+// pane, while the composer box's own rules span the full 120. Do not "fix" the short one
+// into a 120-column rule — it would stop being a capture.
+const agyBusyPane = `────────────────────────────────────────────────────────────
+> Run the shell command: echo HELLO512 . Then explain in about five sentences what that command does and why echo is
+  useful.
+⣻  Generating...
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+>
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+esc to cancel                                                                                      Gemini 3.1 Pro · high`
+
+// agyConfirmPane is the shell-execution confirmation at width 120.
+const agyConfirmPane = `● Bash(rm -f /tmp/agy512cap/repo/hello.txt && echo DELETED) (ctrl+o to expand)
+
+Command
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+Requesting permission for:
+   rm -f /tmp/agy512cap/repo/hello.txt && echo DELETED
+
+Do you want to proceed?
+> 1. Yes
+  2. Yes, and always allow in this conversation for commands that start with 'rm -f /tmp/agy512cap/repo/hello.txt'
+  3. Yes, and always allow for commands that start with 'rm -f /tmp/agy512cap/repo/hello.txt' (Persist to settings.json)
+  4. No
+
+  ↑/↓ Navigate · tab Amend · ctrl+g edit/expand command
+esc to cancel                                                                                      Gemini 3.1 Pro · high`
+
+// agyConfirmNarrowPane is the same dialog at width 40 for a LONG command, and it is the
+// fixture that rules out keying on "Do you want to proceed?". The wrapped options push
+// that question to 16 non-empty lines from the bottom — past WindowPrompt's 15 — while the
+// nav hint it is matched on instead stays two lines up.
+//
+// "Requesting permission for:" is intact at this width; it is agyConfirmNarrowestPane
+// below, at 28, that breaks it apart.
+const agyConfirmNarrowPane = `● Bash(rm -f /tmp/a...) (ctrl+o to
+expand)
+
+Command
+────────────────────────────────────────
+
+Requesting permission for:
+   rm -f
+/tmp/agy512cap/repo/very/deeply/ne
+sted/directory/structure/a-file-wi
+th-a-long-name.txt
+&& echo
+REMOVED_THE_DEEPLY_NESTED_FILE
+
+Do you want to proceed?
+> 1. Yes
+  2. Yes, and always allow in this
+conversation for commands that start
+with 'rm -f
+/tmp/agy512cap/repo/very/deeply/nested
+/directory/structure/a-file-with-a-
+l...'
+  3. Yes, and always allow for commands
+that start with 'rm -f
+/tmp/agy512cap/repo/very/deeply/nested
+/directory/structure/a-file-with-a-
+l...' (Persist to settings.json)
+  4. No
+
+  ↑/↓ Navigate · tab Amend · ctrl+g edit
+esc to cancel      Gemini 3.1 Pro · high`
+
+// agyConfirmNarrowestPane is the confirmation at width 28. It pins
+// the two things the wider captures cannot: the matched nav hint survives here (as the
+// prefix the matcher keys on, with the trailing "· ctrl+g …" cut off), and "Requesting
+// permission for:" is torn into "Requesting permiss"/"ion"/"for:". That tear looks
+// impossible from the string's own length — it is 26 columns in a 28-column pane — because
+// agy wraps inside its own content box rather than at the terminal edge. Reasoning from
+// the pane width alone would have called this literal safe.
+const agyConfirmNarrowestPane = `● Bash(rm -f vict...)
+(ctrl+o to expand)
+
+Command
+────────────────────────────
+
+Requesting permiss
+ion
+for:
+   rm -f victim.txt &&
+echo GONE
+
+Do you want to proceed?
+> 1. Yes
+  2. Yes, and always allow
+in this conversation for
+commands that start with
+'rm -f victim.txt'
+  3. Yes, and always allow
+for commands that start
+with 'rm -f victim.txt'
+(Persist to settings.json)
+  4. No
+
+  ↑/↓ Navigate · tab Amend ·
+esc to cancel`
+
+// agyAnsweredConfirmPane is the pane right after the confirmation above was answered with
+// Enter. agy REPLACES the dialog rather than leaving it in the scrollback, so neither the
+// nav hint nor the question survives into the transcript. That is what lets the matcher be
+// a bare flat-window substring with no liveness anchor of the kind aider's confirm needs
+// (its trailing "]:" suffix): there is nothing left on screen to re-match. Captured at 40.
+const agyAnsweredConfirmPane = `▸ Thought for 3s, 282 tokens
+  Prioritizing Tool Usage
+  The command has been successfully
+  executed, and it output
+  REMOVED_THE_DEEPLY_NESTED_FILE. Is
+  there anything else you'd like me
+  to run?
+
+────────────────────────────────────────
+>
+────────────────────────────────────────
+? for shortcuts    Gemini 3.1 Pro · high`
+
+// agySlashMenuPane is the slash-command menu, open over a LIVE composer at width 120. It
+// is the negative control that fixes how narrow the confirmation matcher has to be: this
+// pane renders "↑/↓ Navigate · enter Select · tab Complete", so the generic "↑/↓ Navigate"
+// prefix — the obvious way to cover every agy dialog at once — would make every user who
+// types "/" read as blocked, and #512's own mechanism would then withhold their queued
+// prompt. "tab Amend" is the half that belongs to the confirmation alone.
+const agySlashMenuPane = `────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+> /
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+> /add-dir             Add a directory to the workspace
+  /agents              List available custom agents
+  /artifact            View and review artifacts
+  /btw                 Ask a side question without interrupting the current task
+  /changelog           Show release notes and changes
+   ↓ 35 more
+
+  ↑/↓ Navigate · enter Select · tab Complete
+esc to cancel                                                                                      Gemini 3.1 Pro · high`
+
+// agyTrustGateSubOptionPane is the trust gate at width 24, where the OPTION row itself
+// truncates: "> Yes, I trust this fold". It is the fixture behind the gate literal being a
+// prefix rather than the whole row, and the failure it prevents is the sharpest one in
+// this adapter — the truncated row still opens with ">", so isInputBoxLine reports a
+// composer and AwaitingInput goes true while GateUp is false. That is #512 exactly,
+// reintroduced by a pane four columns narrower than the first capture went.
+//
+// 24 columns is reachable, not hypothetical: the agent session is resized to the preview
+// pane (app/app_layout.go → list.SetSessionPreviewSize → session/instance.go
+// SetPreviewSize), the list may take up to maxListRatio = 0.60 of the width
+// (config/state.go), and nothing clamps the remainder to a minimum.
+const agyTrustGateSubOptionPane = `Accessing workspace:
+
+/tmp/agy512cap/fx24
+
+Do you trust the content
+
+Antigravity CLI requires
+
+> Yes, I trust this fold
+  No, exit
+
+  ↑/↓ Navigate · enter C
+   Gemini 3.1 Pro · high`
+
+// agyConfirmSubHintPane is the confirmation at width 24, the prompt matcher's counterpart
+// to agyTrustGateSubOptionPane: the nav hint itself truncates to "↑/↓ Navigate · tab Ame",
+// so the full "tab Amend" no longer matches and only the shorter prefix does. Without this
+// fixture the literal's length is an untested claim — reverting it to "tab Amend" passes
+// every other test in this file, because the next-narrowest capture is 28 columns where
+// the full hint still fits.
+const agyConfirmSubHintPane = `● Bash(rm -f vict...)
+(ctrl+o to expand)
+
+Command
+────────────────────────
+
+Requesting
+permission for:
+   rm -f
+victim.txt && echo
+GONE
+
+Do you want to proceed?
+> 1. Yes
+  2. Yes, and always
+allow in this
+conversation for
+commands that start
+with 'rm -f
+victim.txt'
+  3. Yes, and always
+allow for commands
+that start with 'rm -f
+victim.txt' (Persist
+to settings.json)
+  4. No
+
+  ↑/↓ Navigate · tab Ame
+esc to cancel`
+
+// agyConfirmFloorPane is the confirmation at width 20, where the shipped prompt literal
+// fits with ZERO margin: the hint renders exactly "  ↑/↓ Navigate · tab". This is the
+// adapter's real floor, and it cannot be pushed lower by shortening the literal — agy
+// truncates from the right, so what binds is where "tab" ENDS in the line (18 cells of
+// content plus the 2-space indent), not how long the matched substring is. "Navigate · tab"
+// would need the same 20 columns. Going lower would mean abandoning the nav hint for an
+// anchor earlier in the line, and the only one there is the generic "↑/↓ Navigate ·" that
+// the slash-command menu also renders (see TestAgySlashMenuIsNotAPrompt).
+//
+// Note the question is gone at this width too — "Do you want to proceed?" has become
+// "Do you want to proce", which is a third independent reason it was never a candidate.
+const agyConfirmFloorPane = `● Bash(rm -f
+vict...) (ctrl+o to
+expand)
+
+Command
+────────────────────
+
+Requesting
+permission
+for:
+   rm -f
+victim.txt &&
+echo GONE
+
+Do you want to proce
+> 1. Yes
+  2. Yes, and always
+allow in this
+conversation for
+commands that
+start with 'rm -f
+victim.txt'
+  3. Yes, and always
+allow for commands
+that start with
+'rm -f victim.txt'
+(Persist to
+settings.json)
+  4. No
+
+  ↑/↓ Navigate · tab
+esc to cancel`
+
+// agyAcceptedGatePane is the pane immediately after "Yes, I trust this folder" is
+// selected — the gate's counterpart to agyAnsweredConfirmPane. agy replaces the trust
+// screen with its splash and composer rather than leaving it in the scrollback, so the
+// gate cannot keep matching after acceptance and withhold the queued FIRST prompt (the
+// moment a queued prompt is most likely to exist). The account line of the splash is
+// redacted; nothing here reads it.
+const agyAcceptedGatePane = `
+
+      ▄▀▀▄        Antigravity CLI 1.1.11
+     ▀▀▀▀▀▀       user@example.com (Google AI Pro)
+    ▀▀▀▀▀▀▀▀      Gemini 3.1 Pro (High)
+   ▄▀▀    ▀▀▄     /tmp/agy512cap/repo
+  ▄▀▀      ▀▀▄
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+>
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+? for shortcuts                                                                                    Gemini 3.1 Pro · high`
+
+func TestAgyBusyMarker(t *testing.T) {
+	require.True(t, agy.HasBusyMarker(agyBusyPane),
+		"the footer marker sits below the composer box's bottom border, where MarkerWindow 0 looks")
+	require.False(t, agy.HasBusyMarker(agyIdlePane),
+		"the idle pane puts \"? for shortcuts\" in the same footer slot")
+	require.False(t, agy.HasBusyMarker(agyTrustGatePane))
+
+	// The marker must not be read out of the scrolled-back transcript.
+	scrollback := "We key agy's busy state on \"esc to cancel\".\n" +
+		strings.Repeat("a normal line of build output\n", 10) + agyIdlePane
+	require.False(t, agy.HasBusyMarker(scrollback),
+		"the literal quoted deep in the transcript is not the live footer")
+}
+
+// The busy marker must survive a turn's whole arc, because that is what lets agy skip the
+// LiveSpinner claude needs. Sampling a live turn once a second showed the footer marker up
+// from the first frame after submit through the frames where the reply was streaming
+// mid-word — so the marker, not the spinner glyph, is the signal, and it must not be keyed
+// on the rotating verb.
+func TestAgyBusyMarkerIsVerbIndependent(t *testing.T) {
+	for _, verb := range []string{"Generating...", "Running...", "Working...", "Loading..."} {
+		pane := strings.Replace(agyBusyPane, "Generating...", verb, 1)
+		require.True(t, agy.HasBusyMarker(pane), "verb %q must not affect the marker", verb)
+	}
+	// A frame with no spinner glyph at all (the first frame after submit renders the verb
+	// bare) is still busy, because the footer marker is already up.
+	noGlyph := strings.Replace(agyBusyPane, "⣻  Generating...", "Generating...", 1)
+	require.True(t, agy.HasBusyMarker(noGlyph))
+}
+
+// MarkerWindow 0 restricts the marker to the footer BELOW the input box's bottom border,
+// and this is the case that makes that choice load-bearing rather than cosmetic: agy keeps
+// its composer on screen while working, so a bottom-N window (the geometry codex and gemini
+// need, because their status rows render above the box) would take the user's own typed
+// text for the footer. Asking agy how to cancel a turn would pin the row Working forever.
+func TestAgyBusyMarkerIgnoresTheComposerAndTranscript(t *testing.T) {
+	typedIntoComposer := `────────────────────────────────────────
+> how do I esc to cancel a turn?
+────────────────────────────────────────
+? for shortcuts                          Gemini 3.1 Pro · high`
+	require.False(t, agy.HasBusyMarker(typedIntoComposer),
+		"the marker literal typed into the composer is not the footer")
+
+	echoedInTranscript := `> explain the footer
+  The footer shows "esc to cancel" while a turn is running.
+────────────────────────────────────────
+>
+────────────────────────────────────────
+? for shortcuts                          Gemini 3.1 Pro · high`
+	require.False(t, agy.HasBusyMarker(echoedInTranscript),
+		"nor is the literal quoted in the reply just above the box")
+
+	// The control: the same literal in the footer slot IS the marker.
+	require.True(t, agy.HasBusyMarker(agyBusyPane))
+
+	// And the counterfactual that makes MarkerWindow 0 a choice rather than a default —
+	// the same adapter with a bottom-N window DOES take the typed text for the footer.
+	bottomN := &Adapter{BusyMarkers: agy.BusyMarkers, MarkerWindow: 8}
+	require.True(t, bottomN.HasBusyMarker(typedIntoComposer),
+		"a bottom-N window reads the composer, which is what the footer anchor avoids")
+	require.True(t, bottomN.HasBusyMarker(echoedInTranscript))
+}
+
+func TestAgyConfirmationPrompt(t *testing.T) {
+	for name, pane := range map[string]string{
+		"width 120":                       agyConfirmPane,
+		"width 40, wrapped long command":  agyConfirmNarrowPane,
+		"width 28":                        agyConfirmNarrowestPane,
+		"width 24, hint itself truncated": agyConfirmSubHintPane,
+		"width 20, the floor":             agyConfirmFloorPane,
+	} {
+		t.Run(name, func(t *testing.T) {
+			m, ok := agy.DetectPrompt(pane)
+			require.True(t, ok, "the shell-execution confirmation must surface as needs-input")
+			require.Equal(t, "confirmation", m.Name)
+			require.True(t, m.NoAutoTap,
+				"autoyes must never answer this: option 1 is Yes and it runs a shell command")
+		})
+	}
+
+	_, ok := agy.DetectPrompt(agyIdlePane)
+	require.False(t, ok, "an idle composer is not a prompt")
+	_, ok = agy.DetectPrompt(agyBusyPane)
+	require.False(t, ok, "a working pane is not a prompt")
+	_, ok = agy.DetectPrompt(agyTrustGatePane)
+	require.False(t, ok,
+		"the trust gate is a gate, not a confirmation — its nav hint reads \"enter Confirm\"")
+	_, ok = agy.DetectPrompt(agyAnsweredConfirmPane)
+	require.False(t, ok,
+		"an ANSWERED confirmation must not re-read as live: agy replaces the dialog rather "+
+			"than leaving it in the transcript, so no liveness anchor is needed to tell them apart")
+}
+
+// The matcher must be narrow enough to exclude agy's other ↑/↓ selection UI. This is the
+// guard that forbids the tempting generalisation — keying on "↑/↓ Navigate" so that any
+// future agy dialog is covered — because the slash-command menu renders that prefix over a
+// LIVE composer. A prompt match there would park the row on needs-input and withhold the
+// queued prompt from a session that is merely showing an autocomplete.
+func TestAgySlashMenuIsNotAPrompt(t *testing.T) {
+	require.Contains(t, agySlashMenuPane, "↑/↓ Navigate",
+		"the menu really does render the generic nav prefix — that is the whole hazard")
+
+	_, ok := agy.DetectPrompt(agySlashMenuPane)
+	require.False(t, ok, "the slash-command menu is not a blocking prompt")
+
+	generic := PromptMatcher{Window: WindowPrompt, All: []string{"↑/↓ Navigate"}}
+	require.True(t, generic.matches(agySlashMenuPane),
+		"and a matcher keyed on the generic prefix WOULD fire on it, which is why the "+
+			"shipped matcher keeps the confirmation-only \"tab\" half")
+}
+
+// The prompt literal is a prefix of the nav hint for the same reason the gate literal is a
+// prefix of its option row: below 26 columns the hint truncates. Asserted separately from
+// the width table above so the LENGTH of the literal — not merely the fact that it matches
+// somewhere — is what fails when someone "restores" the fuller wording.
+func TestAgyConfirmationHintTruncatesBelowTheFullWording(t *testing.T) {
+	require.NotContains(t, agyConfirmSubHintPane, "tab Amend",
+		"at 24 columns the hint is cut mid-word to \"tab Ame\"")
+
+	fullHint := PromptMatcher{Window: WindowPrompt, All: []string{"↑/↓ Navigate · tab Amend"}}
+	require.False(t, fullHint.matches(agyConfirmSubHintPane),
+		"so the fuller literal misses this dialog entirely")
+	require.True(t, fullHint.matches(agyConfirmNarrowestPane),
+		"while still matching at 28 — four columns is the whole margin, which is why the "+
+			"shipped literal stops at \"tab\"")
+}
+
+// 20 columns is the adapter's floor, and the reason it cannot be lowered is worth pinning
+// because the obvious remedy does not work. agy truncates from the RIGHT, so what binds is
+// where "tab" ends in the hint line, not how long the matched substring is — trimming the
+// literal's leading "↑/↓ " buys exactly nothing.
+func TestAgyConfirmationFloorCannotBeLoweredByShorteningTheLiteral(t *testing.T) {
+	hint := ""
+	for _, line := range strings.Split(agyConfirmFloorPane, "\n") {
+		if strings.Contains(line, "Navigate") {
+			hint = line
+		}
+	}
+	require.Equal(t, "  ↑/↓ Navigate · tab", hint,
+		"at 20 columns the hint ends exactly at the shipped literal — zero margin")
+
+	// Both the shipped literal and a shorter one that drops the arrow prefix match here...
+	for _, lit := range []string{"↑/↓ Navigate · tab", "Navigate · tab"} {
+		m := PromptMatcher{Window: WindowPrompt, All: []string{lit}}
+		require.True(t, m.matches(agyConfirmFloorPane), "%q matches at the floor", lit)
+	}
+	// ...and both end at the same column, so neither survives a narrower pane. Truncating
+	// the fixture's hint by one cell is what a 19-column pane would render.
+	narrower := strings.Replace(agyConfirmFloorPane, "  ↑/↓ Navigate · tab", "  ↑/↓ Navigate · ta", 1)
+	for _, lit := range []string{"↑/↓ Navigate · tab", "Navigate · tab"} {
+		m := PromptMatcher{Window: WindowPrompt, All: []string{lit}}
+		require.False(t, m.matches(narrower),
+			"%q is equally dead one column below the floor — shortening the literal is not "+
+				"the lever, the hint's own layout is", lit)
+	}
+}
+
+// The narrow fixture exists to falsify the obvious matcher, so state that in an assertion
+// rather than only in a comment: at width 40 with a long command the dialog's headline
+// question is outside the window the matcher reads, and a matcher keyed on it misses.
+func TestAgyConfirmationQuestionFallsOutOfWindowWhenNarrow(t *testing.T) {
+	require.Contains(t, agyConfirmNarrowPane, "Do you want to proceed?",
+		"the question IS on the pane — it is the window, not the render, that loses it")
+
+	keyedOnQuestion := PromptMatcher{Window: WindowPrompt, All: []string{"Do you want to proceed?"}}
+	require.False(t, keyedOnQuestion.matches(agyConfirmNarrowPane),
+		"a matcher keyed on the headline question misses this dialog, which is why the "+
+			"shipped matcher keys on the bottom-anchored nav hint instead")
+	require.True(t, keyedOnQuestion.matches(agyConfirmPane),
+		"and it works at 120 — the width is the whole difference, so a wide-only fixture "+
+			"would have passed this design straight through")
+}
+
+func TestAgyTrustGate(t *testing.T) {
+	_, ok := agy.GateUp(agyTrustGatePane)
+	require.True(t, ok, "the startup folder-trust screen must read as a gate")
+
+	_, ok = agy.GateUp(agyTrustGateNarrowPane)
+	require.True(t, ok, "and still at width 28, where the question has been truncated away")
+
+	_, ok = agy.GateUp(agyIdlePane)
+	require.False(t, ok)
+	_, ok = agy.GateUp(agyConfirmPane)
+	require.False(t, ok, "a tool confirmation is not the startup gate")
+
+	_, ok = agy.GateUp(agyAcceptedGatePane)
+	require.False(t, ok,
+		"an ACCEPTED gate must not keep matching: it would hold the queued first prompt "+
+			"forever, and PaneGate outranks everything else in Poll")
+}
+
+// The gate literal has to survive a pane narrower than the option row it comes from.
+// Below 26 columns agy truncates that row, and a gate miss here is not a missed
+// notification: the truncated row still starts with ">", so isInputBoxLine sees a
+// composer, AwaitingInput goes true, and the queued first prompt is typed into the trust
+// dialog. This is the width at which #512 would come back.
+func TestAgyTrustGateNarrowerThanTheOptionRow(t *testing.T) {
+	require.NotContains(t, agyTrustGateSubOptionPane, "Yes, I trust this folder",
+		"at 24 columns the option row itself is cut short")
+
+	_, ok := agy.GateUp(agyTrustGateSubOptionPane)
+	require.True(t, ok, "the gate must still be detected on the truncated row")
+
+	fullRow := Gate{Contains: []string{"Yes, I trust this folder"}}
+	require.False(t, fullRow.matches(flattenChrome(agyTrustGateSubOptionPane, WindowPrompt)),
+		"whereas the untruncated option row does NOT match here — that is why the shipped "+
+			"literal is a prefix of it")
+	require.True(t, fullRow.matches(flattenChrome(agyTrustGatePane, WindowPrompt)),
+		"and it matches fine at 120, so a wide-only fixture would have passed this through")
+
+	// The pointer half of the hazard: the truncated row still reads as an input box, so
+	// nothing but GateUp stands between a queued prompt and this dialog.
+	require.True(t, isInputBoxLine("> Yes, I trust this fold"),
+		"the truncated option row still looks like a composer to the box check")
+}
+
+// The counterpart to the confirmation's window test: the gate's headline question is not
+// merely pushed out of a window at 28 columns, it is truncated out of the PANE, so no
+// window size and no space-join could recover it.
+func TestAgyTrustGateQuestionIsTruncatedNotWrapped(t *testing.T) {
+	require.NotContains(t, agyTrustGateNarrowPane, "Do you trust the contents of this project?")
+	require.Contains(t, agyTrustGateNarrowPane, "Do you trust the contents of")
+
+	keyedOnQuestion := Gate{Contains: []string{"Do you trust the contents of this project"}}
+	require.False(t, keyedOnQuestion.matches(flattenChrome(agyTrustGateNarrowPane, WindowPrompt)),
+		"the obvious gate literal is gone at 28 columns, which is why the gate keys on "+
+			"its option row instead")
+}
+
 // NamerKeys pins which agents claim headless auto-naming and their preference
 // order — each entry must have a matching invocation branch in session/naming.go.
 func TestNamerKeys(t *testing.T) {

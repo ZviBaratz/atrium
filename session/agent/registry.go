@@ -834,11 +834,168 @@ var aider = &Adapter{
 	},
 }
 
-// Antigravity (agy).
+// Antigravity (agy). Every string below was driven against a live agy 1.1.11 in an
+// isolated tmux on 2026-08-09 (#512) and captured at widths 120/60/40/34/28/26/24/20. The width
+// ladder is load-bearing for this adapter in a way it is not for the others, because agy
+// renders its two dialogs with two DIFFERENT overflow behaviours:
+//
+//   - Headline questions are TRUNCATED, not wrapped. "Do you trust the contents of this
+//     project?" renders in full at 120/60, as "…of this projec" at 40, "…of this" at 34
+//     and "Do you trust the contents of" at 28. flattenChrome joins physical lines with a
+//     space, so it repairs a WRAP; nothing repairs a truncation — the tail is simply not
+//     in the pane. That rules the question out as the gate literal, which is why the gate
+//     keys on its option row instead (the reverse of the usual "key on the question, never
+//     the option text" rule, which still holds for the confirmation below).
+//   - Option rows and the permission preamble WRAP. "Requesting permission for:" arrives
+//     as "Requesting permiss"/"ion"/"for:" at 28 — a mid-WORD wrap that the space-join
+//     turns into "Requesting permiss ion for:" — and confirmation options 2 and 3 wrap
+//     mid-string at every width below 120. Neither is matchable.
+//
+// Sizes this narrow are reachable, and there is no floor: the agent's detached session is
+// resized to the preview pane (app/app_layout.go's GetPreviewSize → ui/list.go
+// SetSessionPreviewSize → session/instance.go SetPreviewSize), the session list may take up
+// to maxListRatio = 0.60 of the terminal width (config/state.go), and nothing clamps what
+// is left to a minimum. A 70-column terminal at that ratio leaves the agent about 24
+// columns. 28 is a width the UI elsewhere calls *reachable* (ui/terminal.go's fallback
+// centering, #355/#340) — it is not a bound, and the literals below are chosen to survive
+// well under it rather than to sit at it.
+//
+// (ui/terminal.go's own SetSize is a different pane — TerminalPane owns the per-instance
+// SHELL sessions, not the agent's. Do not cite it for the agent pane's width.)
+//
+// Both dialogs matter more than usual because until this adapter had them, agy's selection
+// pointer — plain ASCII ">" (U+003E), byte-verified with cat -A on both screens — made
+// isInputBoxLine report a composer on a live dialog while GateUp and DetectPrompt were
+// permanently false. AwaitingInput reduced to InputBoxVisible alone, so a queued prompt was
+// typed INTO the dialog whose highlighted row is "> 1. Yes" (#512). Populating Gates and
+// Prompts is what makes AwaitingInput false there; nothing in chrome.go needed to change.
 var agy = &Adapter{
-	Key:           KeyAgy,
-	DisplayName:   "Antigravity",
-	aliases:       []string{"agy", "antigravity"},
+	Key:         KeyAgy,
+	DisplayName: "Antigravity",
+	aliases:     []string{"agy", "antigravity"},
+
+	// Minor granularity, and unlike gemini's this is an empirical claim rather than a
+	// judgement about release cadence: 1.1.5 (driven 2026-08-08) and 1.1.11 (driven
+	// 2026-08-09) render every string matched here identically. agy ships patches at a
+	// rate that would make GranularityPatch a standing warning for chrome that demonstrably
+	// did not move across six of them.
+	VerifiedVersion:  "1.1.11",
+	DriftGranularity: GranularityMinor,
+
+	// The footer marker is present for the WHOLE turn, streaming included — sampled once a
+	// second across a complete turn, it is up on every frame from the one where the turn
+	// starts rendering through to the one where it settles back to "? for shortcuts",
+	// including the frames where the reply is arriving mid-word. That is the
+	// opposite of claude, whose footer hint is lit off its narrowest notion of busy and
+	// drops mid-turn, which is the only reason claude needs a LiveSpinner (spinner.go). agy
+	// needs none: the marker alone covers the turn.
+	//
+	// Do NOT key this on the spinner's verb. agy rotates it — "Generating…", "Running…"
+	// (1.1.11), "Working…", "Loading…" (1.1.5) — so any single verb misses the others.
+	//
+	// MarkerWindow 0 (the footer below the input box's bottom border) is correct because
+	// agy keeps the composer box on screen while it works: a busy pane is rule / ">" / rule
+	// / "esc to cancel", exactly claude's geometry. A settled pane puts "? for shortcuts"
+	// in that same slot. (That idle literal — "? for shortcuts", not the busy one — is the
+	// SAME string claude renders; never key a shared helper on it. agy's busy marker
+	// happens to match gemini's, which is a separate coincidence.)
+	//
+	// The footer is not a perfect idle/busy split: agy's slash-command menu also carries
+	// "esc to cancel" over a live composer, so typing "/" reads as Working until the menu
+	// closes. The state self-heals (the marker is a level signal, so it clears with the
+	// menu), but the closing edge is not free and it is worth naming rather than calling
+	// this cosmetic: Working→Ready is a real transition, so session/status.go
+	// setStatusLocked stamps the row unread, and app/app_notify.go notifyEventFor turns an
+	// advanced unread stamp into EventFinished. Browsing "/" and dismissing it can
+	// therefore leave an unread marker and fire a "finished" notification for a turn that
+	// never ran. Accepted, because the alternative — dropping the footer marker for a
+	// narrower signal — costs the whole-turn coverage that lets agy skip a LiveSpinner.
+	BusyMarkers:  []string{"esc to cancel"},
+	MarkerWindow: 0,
+
+	Prompts: []PromptMatcher{
+		// The tool-confirmation dialog (shell execution). Keyed on the dialog's own nav
+		// hint rather than on "Do you want to proceed?", for a reason the capture settled
+		// empirically: the question is the dialog's TOP line, so the wrapped options below
+		// it push it out of the window as the command string grows. At width 40 with a
+		// long command it sits 16 non-empty lines from the bottom — past WindowPrompt's 15
+		// — and the matcher misses. The nav hint is the dialog's BOTTOM row, two non-empty
+		// lines up at every width from 120 down to 20, so the window is never the binding
+		// constraint. It is also what distinguishes this dialog from the trust gate, whose
+		// hint reads "↑/↓ Navigate · enter Confirm", so it is the "tab" half that picks out
+		// the command-amendment dialog.
+		//
+		// The literal stops at "tab" rather than running on to "tab Amend" because the
+		// hint truncates: at 24 columns it renders "↑/↓ Navigate · tab Ame" and the fuller
+		// wording misses the dialog entirely (it still matches at 28, which is why the
+		// 28-column fixture alone could not catch this — see
+		// TestAgyConfirmationHintTruncatesBelowTheFullWording).
+		//
+		// The floor this leaves is 20 columns, where the hint renders exactly
+		// "  ↑/↓ Navigate · tab" with nothing to spare, and it CANNOT be lowered by
+		// shortening the literal further: agy truncates from the right, so what binds is
+		// where "tab" ends in the line (18 cells of content after the 2-space indent), not
+		// the substring's own length — "Navigate · tab" needs the same 20 columns. The only
+		// anchor earlier in the line is the generic "↑/↓ Navigate ·" the slash-command menu
+		// also renders, which is exactly what must not be matched. So below 20 columns the
+		// confirmation is missed, and per the note below that means the row latches Working
+		// rather than falling back to idle. agyConfirmFloorPane pins the boundary.
+		//
+		// "tab Amend" and not the generic "↑/↓ Navigate" prefix, deliberately, even though
+		// the generic one would cover any dialog agy grows later: the slash-command menu
+		// renders "↑/↓ Navigate · enter Select · tab Complete" over a LIVE composer, so the
+		// broader matcher would make typing "/" read as blocked and withhold the user's
+		// queued prompt — #512's own mechanism, pointed the other way. See
+		// TestAgySlashMenuIsNotAPrompt.
+		//
+		// The cost of that narrowness, stated because it is not the usual one: a dialog
+		// shape this misses does NOT fail safe to idle. agy's dialogs carry "esc to cancel"
+		// in their own footer, so an unmatched one satisfies the busy marker and the row
+		// reads Working indefinitely instead of needs-input. What bounds that risk is the
+		// dialog population, re-verified against 1.1.11 rather than assumed: after the
+		// trust gate is accepted, an in-workspace file write (Create) and a read OUTSIDE
+		// the workspace (/etc/hostname) both complete with no dialog at all. Shell
+		// execution is the only prompt observed, which is what the trust screen's own
+		// wording — "read, edit, and execute files here" — predicts.
+		//
+		// NoAutoTap, for the reason codex's approval and gemini's confirmation carry it
+		// (#347): this is a flat-window matcher, its literal lives verbatim in this file
+		// and is therefore quotable into an agy pane by an agent reading this repo, and
+		// option 1 is "Yes" — a false positive that autoyes ANSWERS runs a shell command.
+		// Surfacing needs-input costs one keystroke and cannot act.
+		{Name: "confirmation", Window: WindowPrompt, NoAutoTap: true,
+			All: []string{"↑/↓ Navigate · tab"}},
+	},
+
+	Gates: []Gate{
+		// The startup folder-trust screen. Keyed on the option row, NOT the question:
+		// per the overflow note above, the question truncates from 40 columns down and no
+		// prefix of it is both narrow enough to survive and specific enough to be worth
+		// matching ("Do you trust the contents of" is the whole 28-column line).
+		//
+		// Truncated to "Yes, I trust" rather than the full "Yes, I trust this folder",
+		// because the full row needs 26 columns (24 plus its "> " indent) and the pane can
+		// be narrower than that. This gate is the one place where a miss is not merely a
+		// missed notification: the truncated row still opens with ">", so isInputBoxLine
+		// reports a composer, AwaitingInput goes true, and the queued FIRST prompt is typed
+		// into the trust dialog — #512's own failure, resurfacing at a width the wide
+		// capture could not see. Driven live: at 26 the full row survives, at 24 it renders
+		// "> Yes, I trust this fold" and at 20 "> Yes, I trust this". The shorter literal
+		// holds at all three (it needs 14 columns) and stays distinctive enough to be worth
+		// matching. See TestAgyTrustGateNarrowerThanTheOptionRow.
+		//
+		// This is a flat bottom-window match, with the cost codex's and gemini's matchers
+		// carry and claude's no longer does: the literal lives verbatim in this file — in
+		// fact twice, since claudeGateTitles opens with the same string — so an agy session
+		// displaying registry.go or its fixtures inside the bottom WindowPrompt lines reads
+		// as gated. GateUp outranks the busy marker (session/tmux/poll.go), so that pane
+		// parks on needs-input with its queued prompt withheld: #342's direction, failing
+		// closed rather than acting. Anchoring it structurally the way claudeGateVisible
+		// does would need a live-chrome primitive this gate does not have — it renders
+		// before any composer exists, so there is no input box to anchor against.
+		{Contains: []string{"Yes, I trust"}},
+	},
+
 	Resume:        func(program string) string { return program + " --continue" },
 	ResumeProbe:   "--continue",
 	HeadlessNamer: true,
