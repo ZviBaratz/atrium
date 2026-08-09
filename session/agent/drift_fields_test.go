@@ -13,7 +13,7 @@ func TestAdaptersExposesSeededVersions(t *testing.T) {
 		// the ungated (hint-list) footer branch. #337.
 		KeyClaude: {"2.1.210", GranularityMinor, map[string]bool{"tengu_copper_thistle": false}},
 		KeyGemini: {"0.27", GranularityMinor, nil},
-		KeyCodex:  {"", GranularityPatch, nil},
+		KeyCodex:  {"0.147.0", GranularityMinor, nil},
 		KeyAider:  {"0.86.2", GranularityMinor, nil},
 		KeyAgy:    {"1.1.11", GranularityMinor, nil},
 	}

@@ -161,9 +161,9 @@ type Adapter struct {
 	// been confirmed against a live pane — a ceiling, not a frozen pin. An
 	// installed version above it is unverified territory and triggers a drift
 	// warning. Bump it (after re-checking) whenever a matcher string is edited,
-	// and on a plain re-verification of a newer release. Empty = unversioned
-	// (codex alone; aider is pinned at 0.86.2): shown in `atrium doctor`, never
-	// triggers a hint.
+	// and on a plain re-verification of a newer release. Empty = unversioned:
+	// shown in `atrium doctor`, never triggers a hint. Every registry adapter is
+	// pinned; only the Generic fallback, which has no matchers, is unversioned.
 	VerifiedVersion string
 	// DriftGranularity is the smallest semver component whose increase past
 	// VerifiedVersion counts as drift. Zero value (GranularityPatch) is the
@@ -272,22 +272,29 @@ type Adapter struct {
 	// the others'. Codex proves the point twice: its banner line "│ >_ OpenAI Codex" and
 	// its "> You are in <dir>" header both read as a composer under the default set.
 	InputBoxPrompts []string
-	// SelectorSharesPromptChar says this agent draws its menu selector with the SAME
-	// glyph as its composer, so a numbered option row ("› 1. Yes, continue") must not be
-	// read as one. Codex does, on both its approval overlay and its trust gate; claude
-	// and agy do too, but there the box check is deliberately not what excludes the
-	// dialog (see Adapter.InputBoxVisible), and several tests pin that, so this stays
-	// opt-in.
-	//
-	// It buys a real guarantee on codex's trust gate: at width 20 the wrapped body pushes
-	// the gate's headline out of flattenChrome's WindowPrompt budget and GateUp misses
-	// (measured, see TestCodexTrustGateBoxCheckHoldsWhereGateUpMisses), so without this
-	// the gate's "› 1. Yes, continue" would be the only thing on screen that reads as a
-	// composer and a queued prompt would be typed onto it.
-	SelectorSharesPromptChar bool
 
 	// Gates are the startup screens this agent can show.
 	Gates []Gate
+	// GateWindow overrides how many non-empty lines from the bottom GateUp flattens
+	// before matching a Gate's Contains literals. 0 means WindowPrompt, the same budget
+	// the prompt matchers use.
+	//
+	// It exists because that budget is a LINE count and a wrapping TUI spends lines to
+	// say the same thing: codex wraps its trust-gate body rather than truncating it, so
+	// at 20 columns the dialog occupies 18 non-empty lines and its headline — the only
+	// thing the gate is keyed on — is pushed out of a 15-line window while still plainly
+	// on screen. Measured, not inferred: GateUp returns false on the live width-20
+	// capture with the default budget and true at 24 (see
+	// TestCodexTrustGateDetectedAtEveryDrivenWidth, which pins both).
+	//
+	// That miss is what makes this field load-bearing rather than cosmetic. GateUp is one
+	// of the two guards standing between a queued prompt and codex's trust gate, whose
+	// selector shares the composer's "›" glyph — and the box check cannot be the other
+	// one, because a numbered-list prompt in the composer is the same shape as the menu
+	// (see promptSet). A wider window trades a larger surface for a gate literal quoted
+	// in the transcript, which fails CLOSED (a prompt is held, never mis-delivered) and
+	// is the failure mode GateUp already documents as acceptable.
+	GateWindow int
 
 	// Resume rewrites the launch command so a relaunched session continues the
 	// prior conversation. Used only on resurrection (the agent process died),
@@ -411,7 +418,7 @@ func (a *Adapter) GateUp(content string) (Gate, bool) {
 			continue
 		}
 		if !flattened {
-			flat, flattened = flattenChrome(content, WindowPrompt), true
+			flat, flattened = flattenChrome(content, a.gateWindow()), true
 		}
 		if g.matches(flat) {
 			return g, true
@@ -424,9 +431,17 @@ func (a *Adapter) GateUp(content string) (Gate, bool) {
 // set — see InputBoxPrompts for why nil must mean the default rather than "none".
 func (a *Adapter) inputBoxPrompts() promptSet {
 	if len(a.InputBoxPrompts) == 0 {
-		return promptSet{chars: defaultPrompts.chars, skipSelectorRows: a.SelectorSharesPromptChar}
+		return defaultPrompts
 	}
-	return promptSet{chars: a.InputBoxPrompts, skipSelectorRows: a.SelectorSharesPromptChar}
+	return a.InputBoxPrompts
+}
+
+// gateWindow resolves how many non-empty bottom lines GateUp flattens — see GateWindow.
+func (a *Adapter) gateWindow() int {
+	if a.GateWindow <= 0 {
+		return WindowPrompt
+	}
+	return a.GateWindow
 }
 
 // InputBoxText returns the text entered in the agent's live input box and whether a
@@ -447,11 +462,13 @@ func (a *Adapter) InputBoxText(content string) (string, bool) {
 //
 // It does not by itself tell a composer from a screen that consumes keystrokes, and cannot
 // be made to. A menu-style gate drawn with the agent's own prompt glyph reads as a box line
-// (claude's "❯ 1. …" trust/new-MCP screens, agy's "> 1. Yes"); SelectorSharesPromptChar
-// suppresses that shape for the agents that opt in, but even then an agent which echoes the
-// user's own messages into its transcript with the composer glyph — codex does — still
-// presents a box line on a frame whose composer an overlay has replaced. So the caller must
-// pair this with GateUp and DetectPrompt, which is what excludes those screens.
+// (claude's "❯ 1. …" trust/new-MCP screens, agy's "> 1. Yes", codex's "› 1. Yes, continue"),
+// and no rule on that line's shape can reject it without also rejecting a queued prompt that
+// happens to be a numbered list — measured against live codex panes, see promptSet. An agent
+// which echoes the user's own messages into its transcript with the composer glyph — codex
+// does — additionally presents a box line on a frame whose composer an overlay has replaced.
+// So the caller must pair this with GateUp and DetectPrompt, which is what excludes those
+// screens; on codex's trust gate at narrow widths that pairing is what GateWindow protects.
 func (a *Adapter) InputBoxVisible(content string) bool {
 	_, ok := inputBoxText(content, a.inputBoxPrompts())
 	return ok

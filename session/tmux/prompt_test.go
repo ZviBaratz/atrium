@@ -230,12 +230,13 @@ func TestAwaitingInputCodex(t *testing.T) {
 		require.False(t, s.AwaitingInput(), "a trust gate must never read as ready to receive a prompt")
 	})
 
-	t.Run("false on the trust gate at width 20, where GateUp itself misses", func(t *testing.T) {
-		// The rung that justifies Adapter.SelectorSharesPromptChar. Codex wraps the gate body
-		// rather than truncating it, so at 20 columns the body pushes the headline out of the
-		// flatten budget and GateUp returns false. The gate's "› 1. Yes, continue" is then the
-		// only composer-shaped line on screen, and the selector-row rule is all that stands
-		// between a queued prompt and a trust screen.
+	t.Run("false on the trust gate at width 20, the rung that needs the widened gate window", func(t *testing.T) {
+		// The rung that justifies Adapter.GateWindow. Codex wraps the gate body rather than
+		// truncating it, so at 20 columns the dialog spans 18 non-empty lines and the headline
+		// GateUp is keyed on falls outside the default 15-line flatten budget — the literal is
+		// on screen and the window misses it. Nothing behind GateUp would catch this: the
+		// gate's "› 1. Yes, continue" is the only composer-shaped line on the pane, and it is
+		// indistinguishable from a composer holding a numbered-list prompt.
 		var sent [][]string
 		s := NewSessionWithDeps(context.Background(), "codex-gate-20", "codex", NewMockPtyFactory(t), captureExec(codexGateAt20, &sent))
 		require.False(t, s.AwaitingInput())

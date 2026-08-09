@@ -509,16 +509,114 @@ var codexGhostComposerPane28 = strings.Join([]string{
 	"  gpt-5.6-terra default · /…",
 }, "\n")
 
+// A queued prompt that is a numbered list, typed into codex's live composer. Driven against
+// codex 0.147.0 on 2026-08-09 at widths 120 and 20, in an isolated tmux addressed by socket
+// path. These exist to pin the shape collision that decided the design: put the multi-line
+// capture beside codexTrustGatePane20 and the composer's rows
+//
+//	› 1. refactor the parser
+//	  2. add a regression test
+//
+// are the trust gate's
+//
+//	› 1. Yes, continue
+//	  2. No, quit
+//
+// with different words in them. Codex does not collapse a bracketed paste into a chip the way
+// claude does (captured, not assumed — see codexNumberedListComposerPane120), so the rows
+// reach the pane verbatim. No predicate over that line's shape can reject the menu and keep
+// the prompt, which is why the box check is not a guard here and GateWindow is.
+var codexNumberedComposerPane120 = strings.Join([]string{
+	"╭─────────────────────────────────────────────╮",
+	"│ >_ OpenAI Codex (v0.147.0)                  │",
+	"│                                             │",
+	"│ model:     gpt-5.6-terra   /model to change │",
+	"│ directory: /tmp/cx510b/repo                 │",
+	"╰─────────────────────────────────────────────╯",
+	"",
+	"  Tip: New For a limited time, Codex is included in your plan for free – let’s build together.",
+	"",
+	"",
+	"› 1. refactor the parser",
+	"",
+	"  gpt-5.6-terra default · /tmp/cx510b/repo",
+}, "\n")
+
+var codexNumberedComposerPane20 = strings.Join([]string{
+	"╭──────────────────╮",
+	"│ >_ OpenAI Codex… │",
+	"│                  │",
+	"│ model:     gpt-… │",
+	"│ directory: …repo │",
+	"╰──────────────────╯",
+	"",
+	"  Tip: New For a",
+	"  limited time,",
+	"  Codex is included",
+	"  in your plan for",
+	"  free – let’s build",
+	"  together.",
+	"",
+	"",
+	"› 1. refactor the",
+	"  parser",
+	"",
+	"  gpt-5.6-terra def…",
+}, "\n")
+
+var codexNumberedListComposerPane120 = strings.Join([]string{
+	"╭─────────────────────────────────────────────╮",
+	"│ >_ OpenAI Codex (v0.147.0)                  │",
+	"│                                             │",
+	"│ model:     gpt-5.6-terra   /model to change │",
+	"│ directory: /tmp/cx510b/repo                 │",
+	"╰─────────────────────────────────────────────╯",
+	"",
+	"  Tip: New For a limited time, Codex is included in your plan for free – let’s build together.",
+	"",
+	"",
+	"› 1. refactor the parser",
+	"  2. add a regression test",
+	"  3. run just ci",
+	"",
+	"  gpt-5.6-terra default · /tmp/cx510b/repo",
+}, "\n")
+
+var codexNumberedListComposerPane20 = strings.Join([]string{
+	"╭──────────────────╮",
+	"│ >_ OpenAI Codex… │",
+	"│                  │",
+	"│ model:     gpt-… │",
+	"│ directory: …repo │",
+	"╰──────────────────╯",
+	"",
+	"  Tip: New For a",
+	"  limited time,",
+	"  Codex is included",
+	"  in your plan for",
+	"  free – let’s build",
+	"  together.",
+	"",
+	"",
+	"› 1. refactor the",
+	"  parser",
+	"  2. add a",
+	"  regression test",
+	"  3. run just ci",
+	"",
+	"  gpt-5.6-terra def…",
+}, "\n")
+
 // codexDrivenWidths maps a rung's name to the pane captured at that width. Naming the rung
 // rather than numbering it keeps a failure legible: the subtest name says which width broke.
 var (
 	codexTrustGateLadder = map[string]string{
-		"width 120":                      codexTrustGatePane120,
-		"width 60":                       codexTrustGatePane60,
-		"width 40, headline wrapped":     codexTrustGatePane40,
-		"width 28":                       codexTrustGatePane28,
-		"width 24":                       codexTrustGatePane24,
-		"width 20, GateUp itself misses": codexTrustGatePane20,
+		"width 120":                    codexTrustGatePane120,
+		"width 60":                     codexTrustGatePane60,
+		"width 40, headline wrapped":   codexTrustGatePane40,
+		"width 28":                     codexTrustGatePane28,
+		"width 24":                     codexTrustGatePane24,
+		"width 20, 18 non-empty lines": codexTrustGatePane20,
 	}
 	codexApprovalLadder = map[string]string{
 		"width 120":                        codexApprovalPane120,
@@ -533,6 +631,14 @@ var (
 		"width 40, two rows":   codexTypedComposerPane40,
 		"width 20, three rows": codexTypedComposerPane20,
 	}
+	// Composers holding a numbered-list prompt — the shape a selector-row rule would
+	// have rejected. Kept as its own ladder so its count is guarded separately.
+	codexNumberedComposerLadder = map[string]string{
+		"single line, width 120": codexNumberedComposerPane120,
+		"single line, width 20":  codexNumberedComposerPane20,
+		"three items, width 120": codexNumberedListComposerPane120,
+		"three items, width 20":  codexNumberedListComposerPane20,
+	}
 )
 
 // A ladder that can lose a rung silently is not a ladder. Each map above is keyed by a
@@ -542,6 +648,8 @@ var (
 // means driving codex again and adding the capture; lowering one means deleting evidence,
 // and should be as loud as it is here.
 func TestCodexLaddersKeepEveryDrivenRung(t *testing.T) {
+	require.Len(t, codexNumberedComposerLadder, 4,
+		"a numbered-list prompt was driven single-line and three-item, at 120 and 20")
 	require.Len(t, codexTrustGateLadder, 6, "the trust gate was driven at 120/60/40/28/24/20")
 	require.Len(t, codexApprovalLadder, 6, "the approval overlay was driven at 120/60/40/28/24/20")
 	require.Len(t, codexComposerLadder, 3,
@@ -579,40 +687,85 @@ func TestCodexGhostSuggestionReadsBackAsText(t *testing.T) {
 	require.Equal(t, "Summarize recent commits", text)
 }
 
-// The trust gate must never read as a composer. This is the guarantee
-// SelectorSharesPromptChar buys, and it is not redundant with GateUp: at width 20 GateUp
-// MISSES (see below), so on that rung the box check is the only thing between a queued
-// prompt and a screen whose highlighted row is "› 1. Yes, continue".
-func TestCodexTrustGateIsNotAComposer(t *testing.T) {
+// The trust gate is excluded by GateUp at EVERY driven width, including the floor. That is
+// the whole guarantee: GateUp and DetectPrompt are the guards on codex, and the box check is
+// not one of them (see below), so a rung where GateUp misses is a rung where a queued prompt
+// lands on the trust screen — and codex's menus take number accelerators, so the first
+// character of a prompt beginning "1." would answer the dialog.
+func TestCodexTrustGateDetectedAtEveryDrivenWidth(t *testing.T) {
 	for name, pane := range codexTrustGateLadder {
 		t.Run(name, func(t *testing.T) {
-			require.False(t, codex.InputBoxVisible(pane),
-				"the gate's \"› 1. Yes, continue\" selector must not read as a live composer")
+			_, up := codex.GateUp(pane)
+			require.True(t, up, "the trust gate must be detected, or a queued prompt is typed into it")
 		})
 	}
 }
 
-// The measurement behind the claim above, pinned so it cannot rot into an assumption.
-// Codex wraps the gate's body instead of truncating it, so at width 20 the body alone spans
-// enough rows to push the headline out of flattenChrome's WindowPrompt budget — GateUp's
-// literal is intact on screen but outside the window it is matched in. Every wider rung
-// still matches, which is what makes 20 the interesting one rather than a blanket failure.
-func TestCodexTrustGateBoxCheckHoldsWhereGateUpMisses(t *testing.T) {
+// The measurement that makes GateWindow load-bearing rather than decorative, pinned so it
+// cannot rot into an assumption. Codex WRAPS the gate body instead of truncating it, so the
+// dialog spends more lines as the pane narrows while its text stays intact — 18 non-empty
+// lines at width 20, past the default 15-line budget, which drops the headline the gate is
+// keyed on. The literal is fully on screen; the window is what misses it.
+//
+// Asserted against a bare copy of the adapter rather than a mutated global: this must fail
+// when GateWindow is removed, and a test that patched codex.GateWindow in place would race
+// every other test in the package and restore the very field it is measuring.
+func TestCodexTrustGateHeadlineFallsOutsideTheDefaultWindowAtWidth20(t *testing.T) {
+	require.Equal(t, 24, codex.gateWindow(), "the widened budget is what the rest of this test measures against")
+
+	def := *codex
+	def.GateWindow = 0
+	require.Equal(t, WindowPrompt, def.gateWindow())
+
+	_, up := def.GateUp(codexTrustGatePane20)
+	require.False(t, up,
+		"with the default budget the width-20 gate must MISS — if this starts passing, codex "+
+			"stopped wrapping or the budget changed, and GateWindow's comment needs re-measuring")
+
 	for name, pane := range codexTrustGateLadder {
-		if name == "width 20, GateUp itself misses" {
+		if name == "width 20, 18 non-empty lines" {
 			continue
 		}
-		_, up := codex.GateUp(pane)
-		require.True(t, up, "%s: the gate literal must still match", name)
+		_, up := def.GateUp(pane)
+		require.True(t, up, "%s: only the floor rung is out of reach of the default budget", name)
 	}
+}
 
-	_, up := codex.GateUp(codexTrustGatePane20)
-	require.False(t, up,
-		"at width 20 the wrapped body pushes the gate headline out of the WindowPrompt "+
-			"flatten budget; if this ever starts passing, the budget or the wrap changed and "+
-			"the comment on Adapter.SelectorSharesPromptChar needs re-measuring")
-	require.False(t, codex.InputBoxVisible(codexTrustGatePane20),
-		"...so on this rung the box check is the ONLY guard, and it must hold")
+// Stated as a fact rather than left as a surprise: the gate's selector DOES read as a
+// composer, and deliberately so. Codex draws "› 1. Yes, continue" with the composer glyph,
+// and the sibling test below shows a real queued prompt drawing the identical shape — so a
+// predicate that rejected one would reject the other. AwaitingInput is where the exclusion
+// lives, which session/tmux's TestAwaitingInputCodex pins end to end.
+func TestCodexTrustGateReadsAsABoxSoGateUpIsTheGuard(t *testing.T) {
+	for name, pane := range codexTrustGateLadder {
+		t.Run(name, func(t *testing.T) {
+			require.True(t, codex.InputBoxVisible(pane),
+				"the gate's selector reads as a box; GateUp, not the box check, is what excludes it")
+		})
+	}
+}
+
+// The regression this design exists to avoid. A queued prompt that is a numbered list must
+// read as a composer and read BACK verbatim — otherwise InputBoxVisible goes false the moment
+// the prompt is typed (so it is never submitted and, because promptDeliveryReady requires
+// awaitingInput, never retried or expired), or the readback misses and boxHoldsPrompt returns
+// false on every tick, re-typing the prompt into the live composer forever. Both were
+// reachable with a numbered-selector rule in place; neither is with GateUp doing the work.
+func TestCodexNumberedPromptReadsAsAComposerAndReadsBackWhole(t *testing.T) {
+	want := map[string]string{
+		"single line, width 120": "1. refactor the parser",
+		"single line, width 20":  "1. refactor the parser",
+		"three items, width 120": "1. refactor the parser 2. add a regression test 3. run just ci",
+		"three items, width 20":  "1. refactor the parser 2. add a regression test 3. run just ci",
+	}
+	for name, pane := range codexNumberedComposerLadder {
+		t.Run(name, func(t *testing.T) {
+			text, ok := codex.InputBoxText(pane)
+			require.True(t, ok, "a numbered-list prompt is a prompt, not a menu")
+			require.Equal(t, want[name], text,
+				"the whole prompt must read back, or boxHoldsPrompt never confirms and it is re-typed every tick")
+		})
+	}
 }
 
 // The approval overlay is excluded by DetectPrompt, not by the box check — codex echoes the

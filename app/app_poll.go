@@ -390,9 +390,12 @@ const promptDeliveryTimeout = 60 * time.Second
 // by that screen, not the agent's input box, so the prompt would be lost. Requiring the
 // box's *presence* (not merely the absence of a known gate) closes the race where a startup
 // screen that has not painted yet — no box on screen — is briefly mistaken for readiness.
-// (A menu-style gate that has painted still reads as a box for most agents, so it is the
-// gate/prompt checks inside AwaitingInput, not the box check, that keep its selector out —
-// "❯ 1. …" for claude, "› 1. Yes, continue" for codex.)
+// (A menu-style gate that has painted still reads as a box for every agent that draws its
+// selector with the composer glyph — "❯ 1. …" for claude, "> 1. Yes" for agy, "› 1. Yes,
+// continue" for codex — so it is the gate/prompt checks inside AwaitingInput, never the box
+// check, that keep the selector out. Deliberately so: a queued prompt that is itself a
+// numbered list draws the same shape, so a box check strict enough to reject the menu would
+// reject the prompt too.)
 //
 // unansweredQuestion is the #571 gate: the last turn ended by asking the user something
 // and they have not seen it yet. A pane that stopped to ask satisfies every other clause

@@ -303,14 +303,14 @@ func TestInputBoxPromptsNeverResolveEmpty(t *testing.T) {
 	subjects := append([]*Adapter{}, Adapters()...)
 	subjects = append(subjects, Generic, &Adapter{})
 	for _, a := range subjects {
-		if len(a.inputBoxPrompts().chars) == 0 {
+		if len(a.inputBoxPrompts()) == 0 {
 			t.Errorf("adapter %q resolves to an empty prompt set: InputBoxVisible would be "+
 				"permanently false and its queued prompts never delivered (#510)", a.Key)
 		}
 	}
-	if got := (&Adapter{}).inputBoxPrompts().chars; !reflect.DeepEqual(got, defaultPrompts.chars) {
+	if got := (&Adapter{}).inputBoxPrompts(); !reflect.DeepEqual(got, defaultPrompts) {
 		t.Errorf("a newly drafted adapter resolves to %q, want the default %q",
-			got, defaultPrompts.chars)
+			got, defaultPrompts)
 	}
 }
 
@@ -323,7 +323,7 @@ func TestEveryAcceptedPromptGlyphIsAlsoStripped(t *testing.T) {
 	subjects = append(subjects, Generic)
 	for _, a := range subjects {
 		p := a.inputBoxPrompts()
-		for _, g := range p.chars {
+		for _, g := range p {
 			line := g + " hello world"
 			if !isInputBoxLine(line, p) {
 				t.Errorf("%s: %q is in the accepted set but %q does not read as a box line", a.Key, g, line)

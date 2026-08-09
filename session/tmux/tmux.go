@@ -634,12 +634,13 @@ func (t *Session) IsReadyForPrompt() bool {
 // no longer be mistaken for readiness and swallow the prompt. It does not, on its own,
 // distinguish a menu-style gate from the composer: an agent draws its selector with its own
 // prompt glyph (claude "❯ 1. …", agy "> 1. Yes", codex "› 1. Yes, continue"), so those
-// gates are still excluded by GateUp / DetectPrompt above, not by the box check. Codex opts
-// into Adapter.SelectorSharesPromptChar, which suppresses the numbered-selector shape for
-// that adapter — but even there the box check is not sufficient on its own, because codex
-// echoes submitted messages into its transcript with the same glyph. Readiness is therefore the conjunction:
-// no known gate or prompt AND a box on screen. It is a read-only check: it captures the pane
-// once and never sends keystrokes.
+// gates are still excluded by GateUp / DetectPrompt above, not by the box check — and cannot
+// be excluded by it, since a queued prompt that is a numbered list draws the same shape as a
+// numbered menu (measured on live codex panes; see agent.promptSet). That is why codex widens
+// its gate window rather than filtering the composer line: GateUp has to be right at every
+// pane width, because nothing behind it is. Readiness is therefore the conjunction: no known
+// gate or prompt AND a box on screen. It is a read-only check: it captures the pane once and
+// never sends keystrokes.
 func (t *Session) AwaitingInput() bool {
 	if !t.DoesSessionExist() {
 		return false

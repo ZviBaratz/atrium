@@ -199,27 +199,21 @@ func aboveBoxBlock(content string) (string, bool) {
 // prompts are neither delivered nor expired (#510 — codex draws "›" U+203A, which the
 // two-glyph predicate never accepted; the glyph sat in this package's own fixtures the
 // whole time and nothing ever fed it to the predicate).
-type promptSet struct {
-	// chars are the accepted leading glyphs, tried in order.
-	chars []string
-	// skipSelectorRows rejects a prompt-glyph line whose remaining text opens with a
-	// numbered option ("1. …"), for an agent that draws its menu selector with the SAME
-	// glyph as its composer. It is opt-in rather than global because claude's
-	// "❯ 1. Yes" trust screen is deliberately allowed to read as a box — GateUp, not the
-	// box check, is what excludes it (see TestTrustGateExcludedByGateNotBox), and
-	// footerVisibleInSegments' scan-stop is documented against that behaviour.
-	skipSelectorRows bool
-}
+// A menu selector drawn with the same glyph is deliberately NOT excluded here. Codex draws
+// both its composer and its menu selector with "›", and the shapes are not separable: a
+// queued prompt that is a numbered list renders as "› 1. refactor the parser" / "  2. add a
+// regression test", which is byte-identical in shape to the trust gate's "› 1. Yes,
+// continue" / "  2. No, quit" (both captured live at 0.147.0, widths 120 and 20 — see
+// codexNumberedComposerPane*). Any rule that rejects the menu therefore also rejects a real
+// prompt, and rejecting a real prompt is worse than accepting the menu: the box check is not
+// the guard that keeps a queued prompt off a menu — GateUp and DetectPrompt are (see
+// Adapter.InputBoxVisible and Adapter.GateWindow).
+type promptSet []string
 
 // defaultPrompts is what an adapter that declares no set of its own resolves to: claude's
 // "❯" and the plain ASCII ">" that aider and agy draw. See Adapter.InputBoxPrompts for
 // why the zero value must resolve to this rather than to an empty set.
-var defaultPrompts = promptSet{chars: []string{"❯", ">"}}
-
-// selectorRowRegex matches the text of a menu selector's numbered option ("1. Yes,
-// proceed"), the shape codex draws with its composer glyph on both its approval overlay
-// and its trust gate.
-var selectorRowRegex = regexp.MustCompile(`^\d+[.)]\s`)
+var defaultPrompts = promptSet{"❯", ">"}
 
 // isInputBoxLine reports whether line is the interior of an agent's input box: one of
 // that agent's prompt glyphs (prompts — "❯" for claude, ">" for aider and agy, "›" for
@@ -234,15 +228,10 @@ var selectorRowRegex = regexp.MustCompile(`^\d+[.)]\s`)
 func isInputBoxLine(line string, prompts promptSet) bool {
 	s := strings.TrimSpace(line)
 	s = strings.TrimSpace(strings.TrimPrefix(s, "│"))
-	for _, g := range prompts.chars {
-		rest, ok := strings.CutPrefix(s, g)
-		if !ok {
-			continue
+	for _, g := range prompts {
+		if strings.HasPrefix(s, g) {
+			return true
 		}
-		if prompts.skipSelectorRows && selectorRowRegex.MatchString(strings.TrimSpace(rest)) {
-			return false
-		}
-		return true
 	}
 	return false
 }
@@ -258,7 +247,7 @@ func stripBoxInterior(line string, prompts promptSet) string {
 	s := strings.TrimSpace(line)
 	s = strings.TrimSpace(strings.TrimPrefix(s, "│")) // left border
 	s = strings.TrimSpace(strings.TrimSuffix(s, "│")) // right border
-	for _, g := range prompts.chars {
+	for _, g := range prompts {
 		if rest, ok := strings.CutPrefix(s, g); ok {
 			return strings.TrimSpace(rest)
 		}
