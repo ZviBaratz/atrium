@@ -16,13 +16,27 @@ import (
 )
 
 // installRepoScripts writes config.json with the given repo_scripts section into the
-// sandboxed HOME.
+// sandboxed HOME, and puts the default config back when the test ends.
+//
+// The restore is load-bearing, not tidiness. testutil.SandboxHomeMain installs HOME
+// once per PACKAGE from TestMain, so config.json is shared by every test in app — a
+// repo_scripts entry written here is read by everything that runs afterwards, and with
+// -shuffle that is a different set on every run.
+//
+// The leak is not inert, because repo_scripts is exactly what flushSetupFailures
+// reports on: a leaked entry makes a later test's instance raise a setup or port
+// problem, showInfo puts the app in stateInfo, and the modal swallows the keys that
+// test was about to send. That is how a single-port range left here defeated
+// TestUpdateLoopSurvivesAWedgedCapture ("input must still be handled") under CI's
+// -shuffle, on a PR that touched neither file. app/settings_test.go already carries
+// this restore for the same reason.
 func installRepoScripts(t *testing.T, entries ...config.RepoScript) {
 	t.Helper()
 	require.NoError(t, os.MkdirAll(filepath.Join(os.Getenv("HOME"), ".atrium"), 0o755))
 	cfg := config.DefaultConfig()
 	cfg.RepoScripts = entries
 	require.NoError(t, config.SaveConfig(cfg))
+	t.Cleanup(func() { _ = config.SaveConfig(config.DefaultConfig()) })
 }
 
 // Shutdown must end a setup script a RESUME started, not only one a create started.
