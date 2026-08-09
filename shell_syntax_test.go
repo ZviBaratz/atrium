@@ -15,8 +15,10 @@ import (
 // TestShellScriptsParse runs `bash -n` over every committed shell script.
 //
 // Nothing else in the gate can see a shell mistake: `go build`, `go vet`, gofmt and
-// golangci-lint are all blind to these files, and CI has no shellcheck job — the only
-// shellcheck in the repo is an inline `# shellcheck disable` in a workflow step. The
+// golangci-lint are all blind to these files, and CI has no shellcheck job. What the
+// repo does carry is inline `# shellcheck disable` directives — in test/smoke/run.sh
+// and scripts/drive-agent.sh — and those SUPPRESS a checker rather than run one, so
+// they leave the gap exactly where it was (#652 tracks closing it). The
 // scripts are also the least-exercised code here: govulncheck.sh runs only in its own
 // workflow, run.sh and render.sh need vhs/ttyd/ffmpeg, and drive-agent.sh is driven by
 // hand when someone re-verifies an agent's heuristics — which may be months apart. A
