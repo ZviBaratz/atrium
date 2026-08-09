@@ -851,9 +851,17 @@ var aider = &Adapter{
 //     turns into "Requesting permiss ion for:" — and confirmation options 2 and 3 wrap
 //     mid-string at every width below 120. Neither is matchable.
 //
-// Sizes this narrow are reachable: ui/terminal.go SetSize resizes the detached session to
-// the preview pane's width, and 28 is the reachable floor that pane already sizes its own
-// placeholder copy against (ui/terminal.go's fallback centering, #355/#340).
+// Sizes this narrow are reachable, and there is no floor: the agent's detached session is
+// resized to the preview pane (app/app_layout.go's GetPreviewSize → ui/list.go
+// SetSessionPreviewSize → session/instance.go SetPreviewSize), the session list may take up
+// to maxListRatio = 0.60 of the terminal width (config/state.go), and nothing clamps what
+// is left to a minimum. A 70-column terminal at that ratio leaves the agent about 24
+// columns. 28 is a width the UI elsewhere calls *reachable* (ui/terminal.go's fallback
+// centering, #355/#340) — it is not a bound, and the literals below are chosen to survive
+// well under it rather than to sit at it.
+//
+// (ui/terminal.go's own SetSize is a different pane — TerminalPane owns the per-instance
+// SHELL sessions, not the agent's. Do not cite it for the agent pane's width.)
 //
 // Both dialogs matter more than usual because until this adapter had them, agy's selection
 // pointer — plain ASCII ">" (U+003E), byte-verified with cat -A on both screens — made
@@ -894,8 +902,14 @@ var agy = &Adapter{
 	//
 	// The footer is not a perfect idle/busy split: agy's slash-command menu also carries
 	// "esc to cancel" over a live composer, so typing "/" reads as Working until the menu
-	// closes. Cosmetic and self-healing — the marker is a level signal, so it clears with
-	// the menu — and the alternative (narrowing the marker further) costs more than it buys.
+	// closes. The state self-heals (the marker is a level signal, so it clears with the
+	// menu), but the closing edge is not free and it is worth naming rather than calling
+	// this cosmetic: Working→Ready is a real transition, so session/status.go
+	// setStatusLocked stamps the row unread, and app/app_notify.go notifyEventFor turns an
+	// advanced unread stamp into EventFinished. Browsing "/" and dismissing it can
+	// therefore leave an unread marker and fire a "finished" notification for a turn that
+	// never ran. Accepted, because the alternative — dropping the footer marker for a
+	// narrower signal — costs the whole-turn coverage that lets agy skip a LiveSpinner.
 	BusyMarkers:  []string{"esc to cancel"},
 	MarkerWindow: 0,
 
@@ -937,15 +951,25 @@ var agy = &Adapter{
 		// option 1 is "Yes" — a false positive that autoyes ANSWERS runs a shell command.
 		// Surfacing needs-input costs one keystroke and cannot act.
 		{Name: "confirmation", Window: WindowPrompt, NoAutoTap: true,
-			All: []string{"↑/↓ Navigate · tab Amend"}},
+			All: []string{"↑/↓ Navigate · tab"}},
 	},
 
 	Gates: []Gate{
 		// The startup folder-trust screen. Keyed on the option row, NOT the question:
 		// per the overflow note above, the question truncates from 40 columns down and no
-		// prefix of it is both narrow enough to survive 28 and specific enough to be worth
-		// matching ("Do you trust the contents of" is the whole 28-column line). The option
-		// row is 24 columns wide, so it survives intact at every width.
+		// prefix of it is both narrow enough to survive and specific enough to be worth
+		// matching ("Do you trust the contents of" is the whole 28-column line).
+		//
+		// Truncated to "Yes, I trust" rather than the full "Yes, I trust this folder",
+		// because the full row needs 26 columns (24 plus its "> " indent) and the pane can
+		// be narrower than that. This gate is the one place where a miss is not merely a
+		// missed notification: the truncated row still opens with ">", so isInputBoxLine
+		// reports a composer, AwaitingInput goes true, and the queued FIRST prompt is typed
+		// into the trust dialog — #512's own failure, resurfacing at a width the wide
+		// capture could not see. Driven live: at 26 the full row survives, at 24 it renders
+		// "> Yes, I trust this fold" and at 20 "> Yes, I trust this". The shorter literal
+		// holds at all three (it needs 14 columns) and stays distinctive enough to be worth
+		// matching. See TestAgyTrustGateNarrowerThanTheOptionRow.
 		//
 		// This is a flat bottom-window match, with the cost codex's and gemini's matchers
 		// carry and claude's no longer does: the literal lives verbatim in this file — in
@@ -956,7 +980,7 @@ var agy = &Adapter{
 		// closed rather than acting. Anchoring it structurally the way claudeGateVisible
 		// does would need a live-chrome primitive this gate does not have — it renders
 		// before any composer exists, so there is no input box to anchor against.
-		{Contains: []string{"Yes, I trust this folder"}},
+		{Contains: []string{"Yes, I trust"}},
 	},
 
 	Resume:        func(program string) string { return program + " --continue" },

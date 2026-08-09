@@ -1582,6 +1582,86 @@ const agySlashMenuPane = `──────────────────
   ↑/↓ Navigate · enter Select · tab Complete
 esc to cancel                                                                                      Gemini 3.1 Pro · high`
 
+// agyTrustGateSubOptionPane is the trust gate at width 24, where the OPTION row itself
+// truncates: "> Yes, I trust this fold". It is the fixture behind the gate literal being a
+// prefix rather than the whole row, and the failure it prevents is the sharpest one in
+// this adapter — the truncated row still opens with ">", so isInputBoxLine reports a
+// composer and AwaitingInput goes true while GateUp is false. That is #512 exactly,
+// reintroduced by a pane four columns narrower than the first capture went.
+//
+// 24 columns is reachable, not hypothetical: the agent session is resized to the preview
+// pane (app/app_layout.go → list.SetSessionPreviewSize → session/instance.go
+// SetPreviewSize), the list may take up to maxListRatio = 0.60 of the width
+// (config/state.go), and nothing clamps the remainder to a minimum.
+const agyTrustGateSubOptionPane = `Accessing workspace:
+
+/tmp/agy512cap/fx24
+
+Do you trust the content
+
+Antigravity CLI requires
+
+> Yes, I trust this fold
+  No, exit
+
+  ↑/↓ Navigate · enter C
+   Gemini 3.1 Pro · high`
+
+// agyConfirmSubHintPane is the confirmation at width 24, the prompt matcher's counterpart
+// to agyTrustGateSubOptionPane: the nav hint itself truncates to "↑/↓ Navigate · tab Ame",
+// so the full "tab Amend" no longer matches and only the shorter prefix does. Without this
+// fixture the literal's length is an untested claim — reverting it to "tab Amend" passes
+// every other test in this file, because the next-narrowest capture is 28 columns where
+// the full hint still fits.
+const agyConfirmSubHintPane = `● Bash(rm -f vict...)
+(ctrl+o to expand)
+
+Command
+────────────────────────
+
+Requesting
+permission for:
+   rm -f
+victim.txt && echo
+GONE
+
+Do you want to proceed?
+> 1. Yes
+  2. Yes, and always
+allow in this
+conversation for
+commands that start
+with 'rm -f
+victim.txt'
+  3. Yes, and always
+allow for commands
+that start with 'rm -f
+victim.txt' (Persist
+to settings.json)
+  4. No
+
+  ↑/↓ Navigate · tab Ame
+esc to cancel`
+
+// agyAcceptedGatePane is the pane immediately after "Yes, I trust this folder" is
+// selected — the gate's counterpart to agyAnsweredConfirmPane. agy replaces the trust
+// screen with its splash and composer rather than leaving it in the scrollback, so the
+// gate cannot keep matching after acceptance and withhold the queued FIRST prompt (the
+// moment a queued prompt is most likely to exist). The account line of the splash is
+// redacted; nothing here reads it.
+const agyAcceptedGatePane = `
+
+      ▄▀▀▄        Antigravity CLI 1.1.11
+     ▀▀▀▀▀▀       user@example.com (Google AI Pro)
+    ▀▀▀▀▀▀▀▀      Gemini 3.1 Pro (High)
+   ▄▀▀    ▀▀▄     /tmp/agy512cap/repo
+  ▄▀▀      ▀▀▄
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+>
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+? for shortcuts                                                                                    Gemini 3.1 Pro · high`
+
 func TestAgyBusyMarker(t *testing.T) {
 	require.True(t, agy.HasBusyMarker(agyBusyPane),
 		"the footer marker sits below the composer box's bottom border, where MarkerWindow 0 looks")
@@ -1636,13 +1716,21 @@ func TestAgyBusyMarkerIgnoresTheComposerAndTranscript(t *testing.T) {
 
 	// The control: the same literal in the footer slot IS the marker.
 	require.True(t, agy.HasBusyMarker(agyBusyPane))
+
+	// And the counterfactual that makes MarkerWindow 0 a choice rather than a default —
+	// the same adapter with a bottom-N window DOES take the typed text for the footer.
+	bottomN := &Adapter{BusyMarkers: agy.BusyMarkers, MarkerWindow: 8}
+	require.True(t, bottomN.HasBusyMarker(typedIntoComposer),
+		"a bottom-N window reads the composer, which is what the footer anchor avoids")
+	require.True(t, bottomN.HasBusyMarker(echoedInTranscript))
 }
 
 func TestAgyConfirmationPrompt(t *testing.T) {
 	for name, pane := range map[string]string{
-		"width 120":                      agyConfirmPane,
-		"width 40, wrapped long command": agyConfirmNarrowPane,
-		"width 28, the reachable floor":  agyConfirmNarrowestPane,
+		"width 120":                       agyConfirmPane,
+		"width 40, wrapped long command":  agyConfirmNarrowPane,
+		"width 28":                        agyConfirmNarrowestPane,
+		"width 24, hint itself truncated": agyConfirmSubHintPane,
 	} {
 		t.Run(name, func(t *testing.T) {
 			m, ok := agy.DetectPrompt(pane)
@@ -1681,7 +1769,23 @@ func TestAgySlashMenuIsNotAPrompt(t *testing.T) {
 	generic := PromptMatcher{Window: WindowPrompt, All: []string{"↑/↓ Navigate"}}
 	require.True(t, generic.matches(agySlashMenuPane),
 		"and a matcher keyed on the generic prefix WOULD fire on it, which is why the "+
-			"shipped matcher keeps the confirmation-only \"tab Amend\" half")
+			"shipped matcher keeps the confirmation-only \"tab\" half")
+}
+
+// The prompt literal is a prefix of the nav hint for the same reason the gate literal is a
+// prefix of its option row: below 26 columns the hint truncates. Asserted separately from
+// the width table above so the LENGTH of the literal — not merely the fact that it matches
+// somewhere — is what fails when someone "restores" the fuller wording.
+func TestAgyConfirmationHintTruncatesBelowTheFullWording(t *testing.T) {
+	require.NotContains(t, agyConfirmSubHintPane, "tab Amend",
+		"at 24 columns the hint is cut mid-word to \"tab Ame\"")
+
+	fullHint := PromptMatcher{Window: WindowPrompt, All: []string{"↑/↓ Navigate · tab Amend"}}
+	require.False(t, fullHint.matches(agyConfirmSubHintPane),
+		"so the fuller literal misses this dialog entirely")
+	require.True(t, fullHint.matches(agyConfirmNarrowestPane),
+		"while still matching at 28 — four columns is the whole margin, which is why the "+
+			"shipped literal stops at \"tab\"")
 }
 
 // The narrow fixture exists to falsify the obvious matcher, so state that in an assertion
@@ -1711,6 +1815,36 @@ func TestAgyTrustGate(t *testing.T) {
 	require.False(t, ok)
 	_, ok = agy.GateUp(agyConfirmPane)
 	require.False(t, ok, "a tool confirmation is not the startup gate")
+
+	_, ok = agy.GateUp(agyAcceptedGatePane)
+	require.False(t, ok,
+		"an ACCEPTED gate must not keep matching: it would hold the queued first prompt "+
+			"forever, and PaneGate outranks everything else in Poll")
+}
+
+// The gate literal has to survive a pane narrower than the option row it comes from.
+// Below 26 columns agy truncates that row, and a gate miss here is not a missed
+// notification: the truncated row still starts with ">", so isInputBoxLine sees a
+// composer, AwaitingInput goes true, and the queued first prompt is typed into the trust
+// dialog. This is the width at which #512 would come back.
+func TestAgyTrustGateNarrowerThanTheOptionRow(t *testing.T) {
+	require.NotContains(t, agyTrustGateSubOptionPane, "Yes, I trust this folder",
+		"at 24 columns the option row itself is cut short")
+
+	_, ok := agy.GateUp(agyTrustGateSubOptionPane)
+	require.True(t, ok, "the gate must still be detected on the truncated row")
+
+	fullRow := Gate{Contains: []string{"Yes, I trust this folder"}}
+	require.False(t, fullRow.matches(flattenChrome(agyTrustGateSubOptionPane, WindowPrompt)),
+		"whereas the untruncated option row does NOT match here — that is why the shipped "+
+			"literal is a prefix of it")
+	require.True(t, fullRow.matches(flattenChrome(agyTrustGatePane, WindowPrompt)),
+		"and it matches fine at 120, so a wide-only fixture would have passed this through")
+
+	// The pointer half of the hazard: the truncated row still reads as an input box, so
+	// nothing but GateUp stands between a queued prompt and this dialog.
+	require.True(t, isInputBoxLine("> Yes, I trust this fold"),
+		"the truncated option row still looks like a composer to the box check")
 }
 
 // The counterpart to the confirmation's window test: the gate's headline question is not
