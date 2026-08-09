@@ -63,6 +63,45 @@ func TestAwaitingInput(t *testing.T) {
 	})
 }
 
+// #512's consequence, at the level the bug was actually reported at. agy's selection
+// pointer is a plain ASCII ">", the same character its composer uses, so isInputBoxLine
+// reports a live input box on BOTH of its dialogs. While the adapter carried no Gates and
+// no Prompts, AwaitingInput reduced to that box check alone and returned true — and
+// app/app_poll.go's promptDeliveryReady then let a queued prompt be typed into a dialog
+// whose highlighted row is "> 1. Yes". That failed OPEN: Enter approves the command.
+//
+// So the matchers are only half the fix; this is the half that proves it. Each dialog must
+// read false, and — the control that keeps "fixed" from meaning "delivery broken outright"
+// — the real composer must still read true.
+func TestAwaitingInputAgyDialogs(t *testing.T) {
+	agyIdle := "────\n>\n────\n? for shortcuts                          Gemini 3.1 Pro · high"
+
+	t.Run("true on the composer", func(t *testing.T) {
+		var sent [][]string
+		s := NewSessionWithDeps(context.Background(), "agy-idle", "agy", NewMockPtyFactory(t), captureExec(agyIdle, &sent))
+		require.True(t, s.AwaitingInput(), "a real agy composer must still receive queued prompts")
+	})
+
+	t.Run("false while a tool confirmation is up", func(t *testing.T) {
+		pane := "Do you want to proceed?\n> 1. Yes\n  4. No\n\n" +
+			"  ↑/↓ Navigate · tab Amend · ctrl+g edit/expand command\nesc to cancel"
+		var sent [][]string
+		s := NewSessionWithDeps(context.Background(), "agy-confirm", "agy", NewMockPtyFactory(t), captureExec(pane, &sent))
+		require.False(t, s.AwaitingInput(),
+			"the dialog's \"> 1. Yes\" still reads as an input box, so only the prompt matcher "+
+				"keeps a queued prompt from being typed into it")
+	})
+
+	t.Run("false while the trust gate is up", func(t *testing.T) {
+		pane := "Do you trust the contents of this project?\n\n> Yes, I trust this folder\n" +
+			"  No, exit\n\n  ↑/↓ Navigate · enter Confirm"
+		var sent [][]string
+		s := NewSessionWithDeps(context.Background(), "agy-gate", "agy", NewMockPtyFactory(t), captureExec(pane, &sent))
+		require.False(t, s.AwaitingInput(),
+			"a trust gate must never read as ready to receive a prompt")
+	})
+}
+
 func TestSendPasted_UsesBracketedPasteBuffer(t *testing.T) {
 	var sent [][]string
 	s := NewSessionWithDeps(context.Background(), "paste", "claude", NewMockPtyFactory(t), captureExec(boxPane, &sent))

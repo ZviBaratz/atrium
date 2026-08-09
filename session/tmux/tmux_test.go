@@ -826,6 +826,45 @@ func TestPollGemini(t *testing.T) {
 	require.Equal(t, PaneWorking, s.PollNow(), "a live marker at face value is working")
 }
 
+// agy's panes, driven end to end through Poll. Before #512 the adapter carried no
+// heuristics at all, so a pane parked on a trust gate or a tool confirmation is exactly
+// the case that used to fall through to the content-change fallback and settle PaneIdle —
+// the row reading Ready while the agent was blocked. The fixtures live in
+// session/agent/registry_test.go (a live agy 1.1.11, 2026-08-09); these are the same
+// shapes, kept short here because Poll consumes only the match result.
+func TestPollAgy(t *testing.T) {
+	working := "> do the thing\n⣻  Generating...\n────\n>\n────\n" +
+		"esc to cancel                          Gemini 3.1 Pro · high"
+	c := working
+	s := pollSession(t, "agy", &c, nil)
+	require.Equal(t, PaneWorking, s.Poll())
+
+	// The verb rotates within a single turn; the footer marker is what holds the state.
+	c = "> do the thing\n⣽  Running...\n────\n>\n────\n" +
+		"esc to cancel                          Gemini 3.1 Pro · high"
+	require.Equal(t, PaneWorking, s.Poll(), "the spinner's verb changing does not flip the state")
+
+	c = "Do you want to proceed?\n> 1. Yes\n  4. No\n\n" +
+		"  ↑/↓ Navigate · tab Amend · ctrl+g edit/expand command\nesc to cancel"
+	require.Equal(t, PanePromptManual, s.Poll(),
+		"a tool confirmation is a needs-input state — manual, because the matcher reads a "+
+			"flat window and Enter here approves a shell command (#347)")
+
+	gate := "Do you trust the contents of this project?\n\n> Yes, I trust this folder\n" +
+		"  No, exit\n\n  ↑/↓ Navigate · enter Confirm"
+	c = gate
+	require.Equal(t, PaneGate, s.Poll(), "the startup trust screen is a gate, not a prompt")
+
+	c = "────\n>\n────\n? for shortcuts                          Gemini 3.1 Pro · high"
+	require.Equal(t, PaneIdle, s.Poll(), "marker gone after a prompt commits idle at face value")
+
+	// PollNow (the post-detach face-value refresh): agy is marker-bearing now, so — unlike
+	// aider's PaneUnknown — an absent marker reads as idle and a present one as working.
+	require.Equal(t, PaneIdle, s.PollNow(), "no marker at face value is idle")
+	c = working
+	require.Equal(t, PaneWorking, s.PollNow(), "a live marker at face value is working")
+}
+
 // A live aider confirm pane classifies PanePrompt — auto-tappable, NOT manual:
 // aider's confirms are permission-type prompts autoyes should answer, unlike
 // claude's judgment selections (#271). Aider has no busy marker, so without the

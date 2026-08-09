@@ -146,7 +146,7 @@ func (m *statusMonitor) logSignal(name, signal string) {
 // A churning turn-boundary gap never satisfies idleSettleTicks (the pane is moving), so it
 // holds "working" until the marker returns — no Ready→Running flicker. Prompts are surfaced
 // instantly via detectPrompt regardless of either threshold. Both also govern the
-// content-change fallback (aider/gemini): there "unchanged" is the same signal as "not
+// content-change fallback (aider, and Generic): there "unchanged" is the same signal as "not
 // working", so idleSettleTicks absorbs brief streaming pauses.
 const (
 	idleSettleTicks  = 2
@@ -529,9 +529,10 @@ func (t *Session) Poll() PaneState {
 // ticks ran — so the accumulated smoothing state is stale and a single live snapshot is the
 // most trustworthy signal. The resuming tick loop continues from the re-baselined state.
 //
-// Programs without a level marker (aider/gemini) can't be classified from one snapshot
-// (their "working" signal is content change across ticks), so PollNow returns PaneUnknown
-// for them — leaving the status untouched for the tick loop to resolve.
+// Programs without a level marker (aider, and Generic for an unrecognized program) can't
+// be classified from one snapshot (their "working" signal is content change across ticks),
+// so PollNow returns PaneUnknown for them — leaving the status untouched for the tick loop
+// to resolve.
 func (t *Session) PollNow() PaneState {
 	t.monitorMu.Lock()
 	defer t.monitorMu.Unlock()

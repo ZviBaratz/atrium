@@ -834,11 +834,99 @@ var aider = &Adapter{
 	},
 }
 
-// Antigravity (agy).
+// Antigravity (agy). Every string below was driven against a live agy 1.1.11 in an
+// isolated tmux on 2026-08-09 (#512) and captured at widths 120/60/40/34/28. The width
+// ladder is load-bearing for this adapter in a way it is not for the others, because agy
+// renders its two dialogs with two DIFFERENT overflow behaviours:
+//
+//   - Headline questions are TRUNCATED, not wrapped. "Do you trust the contents of this
+//     project?" renders in full at 120/60, as "…of this projec" at 40, "…of this" at 34
+//     and "Do you trust the contents of" at 28. flattenChrome joins physical lines with a
+//     space, so it repairs a WRAP; nothing repairs a truncation — the tail is simply not
+//     in the pane. That rules the question out as the gate literal, which is why the gate
+//     keys on its option row instead (the reverse of the usual "key on the question, never
+//     the option text" rule, which still holds for the confirmation below).
+//   - Option rows and the permission preamble WRAP. "Requesting permission for:" arrives
+//     as "Requesting permiss"/"ion"/"for:" at 28 — a mid-WORD wrap that the space-join
+//     turns into "Requesting permiss ion for:" — and confirmation options 2 and 3 wrap
+//     mid-string at every width below 120. Neither is matchable.
+//
+// Sizes this narrow are reachable: ui/terminal.go SetSize resizes the detached session to
+// the preview pane's width, and 28 is the reachable floor that pane already sizes its own
+// placeholder copy against (ui/terminal.go's fallback centering, #355/#340).
+//
+// Both dialogs matter more than usual because until this adapter had them, agy's selection
+// pointer — plain ASCII ">" (U+003E), byte-verified with cat -A on both screens — made
+// isInputBoxLine report a composer on a live dialog while GateUp and DetectPrompt were
+// permanently false. AwaitingInput reduced to InputBoxVisible alone, so a queued prompt was
+// typed INTO the dialog whose highlighted row is "> 1. Yes" (#512). Populating Gates and
+// Prompts is what makes AwaitingInput false there; nothing in chrome.go needed to change.
 var agy = &Adapter{
-	Key:           KeyAgy,
-	DisplayName:   "Antigravity",
-	aliases:       []string{"agy", "antigravity"},
+	Key:         KeyAgy,
+	DisplayName: "Antigravity",
+	aliases:     []string{"agy", "antigravity"},
+
+	// Minor granularity, and unlike gemini's this is an empirical claim rather than a
+	// judgement about release cadence: 1.1.5 (driven 2026-08-08) and 1.1.11 (driven
+	// 2026-08-09) render every string matched here identically. agy ships patches at a
+	// rate that would make GranularityPatch a standing warning for chrome that demonstrably
+	// did not move across six of them.
+	VerifiedVersion:  "1.1.11",
+	DriftGranularity: GranularityMinor,
+
+	// The footer marker is present for the WHOLE turn, streaming included — sampled once a
+	// second across a complete turn, it is up on every frame from the one where the turn
+	// starts rendering through to the one where it settles back to "? for shortcuts",
+	// including the frames where the reply is arriving mid-word. That is the
+	// opposite of claude, whose footer hint is lit off its narrowest notion of busy and
+	// drops mid-turn, which is the only reason claude needs a LiveSpinner (spinner.go). agy
+	// needs none: the marker alone covers the turn.
+	//
+	// Do NOT key this on the spinner's verb. agy rotates it — "Generating…", "Running…"
+	// (1.1.11), "Working…", "Loading…" (1.1.5) — so any single verb misses the others.
+	//
+	// MarkerWindow 0 (the footer below the input box's bottom border) is correct because
+	// agy keeps the composer box on screen while it works: a busy pane is rule / ">" / rule
+	// / "esc to cancel", exactly claude's geometry. The idle pane puts "? for shortcuts"
+	// in that same slot, so the footer separates idle from busy on its own. Note that
+	// literal is the SAME one claude renders — never key a shared helper on it.
+	BusyMarkers:  []string{"esc to cancel"},
+	MarkerWindow: 0,
+
+	Prompts: []PromptMatcher{
+		// The tool-confirmation dialog (shell execution). Keyed on the dialog's own nav
+		// hint rather than on "Do you want to proceed?", for a reason the capture settled
+		// empirically: the question is the dialog's TOP line, so the wrapped options below
+		// it push it out of the window as the command string grows. At width 40 with a
+		// long command it sits 16 non-empty lines from the bottom — past WindowPrompt's 15
+		// — and the matcher misses. The nav hint is the dialog's BOTTOM row, two non-empty
+		// lines up at every width from 120 down to 28, so the window is never the binding
+		// constraint. It is also what distinguishes this dialog from the trust gate, whose
+		// hint reads "↑/↓ Navigate · enter Confirm"; "tab Amend" is unique to the
+		// command-amendment dialog.
+		//
+		// Truncated at the point where 28 columns cut it, so the literal is a prefix that
+		// survives every width rather than one that only fits the wide pane.
+		//
+		// NoAutoTap, for the reason codex's approval and gemini's confirmation carry it
+		// (#347): this is a flat-window matcher, its literal lives verbatim in this file
+		// and is therefore quotable into an agy pane by an agent reading this repo, and
+		// option 1 is "Yes" — a false positive that autoyes ANSWERS runs a shell command.
+		// Surfacing needs-input costs one keystroke and cannot act.
+		{Name: "confirmation", Window: WindowPrompt, NoAutoTap: true,
+			All: []string{"↑/↓ Navigate · tab Amend"}},
+	},
+
+	Gates: []Gate{
+		// The startup folder-trust screen. Keyed on the option row, NOT the question:
+		// per the overflow note above, the question truncates from 40 columns down and no
+		// prefix of it is both narrow enough to survive 28 and specific enough to be worth
+		// matching ("Do you trust the contents of" is the whole 28-column line). The option
+		// row is 24 columns wide, so it survives intact everywhere, and its wording is far
+		// more distinctive than the truncated question's.
+		{Contains: []string{"Yes, I trust this folder"}},
+	},
+
 	Resume:        func(program string) string { return program + " --continue" },
 	ResumeProbe:   "--continue",
 	HeadlessNamer: true,

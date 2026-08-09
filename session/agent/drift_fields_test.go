@@ -15,7 +15,7 @@ func TestAdaptersExposesSeededVersions(t *testing.T) {
 		KeyGemini: {"0.27", GranularityMinor, nil},
 		KeyCodex:  {"", GranularityPatch, nil},
 		KeyAider:  {"0.86.2", GranularityMinor, nil},
-		KeyAgy:    {"", GranularityPatch, nil},
+		KeyAgy:    {"1.1.11", GranularityMinor, nil},
 	}
 	got := Adapters()
 	if len(got) != 5 {
