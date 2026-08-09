@@ -64,6 +64,15 @@ bench pattern='.' *pkgs='./...':
 smoke:
     GO={{go}} bash test/smoke/run.sh
 
+# Drive a real agent CLI at a width ladder and capture its panes, for re-verifying
+# session/agent/ heuristics (#647). Re-driving is the ONLY thing that detects
+# heuristic rot — VerifiedVersion is a record, not a tripwire (registry.go's header).
+# Opt-in only — NOT part of `test`/`ci`: it starts a real tmux server, drives a real
+# authenticated CLI and spends real API turns. Start with `just drive-agent help`.
+# Run `just drive-agent reap-all` if an interrupted ladder stranded a server.
+drive-agent *args:
+    bash scripts/drive-agent.sh {{args}}
+
 # Render the README demo GIFs from the committed tapes (docs/demos/*.tape).
 # Opt-in only — NOT part of `test`/`ci`: needs the same non-Go deps as `smoke`
 # (vhs, ttyd, ffmpeg, tmux). Writes *.gif next to the tapes.
