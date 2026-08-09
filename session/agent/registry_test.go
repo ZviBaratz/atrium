@@ -1440,6 +1440,11 @@ const agyIdlePane = `───────────────────�
 // still on screen while agy works (so the footer marker sits below the box's bottom
 // border, which is what MarkerWindow 0 anchors to), and the spinner's verb is just one of
 // several — this frame says "Generating...", others in the same turn said "Running...".
+//
+// The three horizontal rules are deliberately not the same length, and that is verbatim:
+// agy draws the separator above an echoed user message at 60 columns regardless of the
+// pane, while the composer box's own rules span the full 120. Do not "fix" the short one
+// into a 120-column rule — it would stop being a capture.
 const agyBusyPane = `────────────────────────────────────────────────────────────
 > Run the shell command: echo HELLO512 . Then explain in about five sentences what that command does and why echo is
   useful.
@@ -1470,9 +1475,10 @@ esc to cancel                                                                   
 // agyConfirmNarrowPane is the same dialog at width 40 for a LONG command, and it is the
 // fixture that rules out keying on "Do you want to proceed?". The wrapped options push
 // that question to 16 non-empty lines from the bottom — past WindowPrompt's 15 — while the
-// nav hint it is matched on instead stays two lines up. Also note "Requesting permission
-// for:" has wrapped mid-word here at 28 and is mangled at 40 too: another literal the
-// wide capture would have made look safe.
+// nav hint it is matched on instead stays two lines up.
+//
+// "Requesting permission for:" is intact at this width; it is agyConfirmNarrowestPane
+// below, at 28, that breaks it apart.
 const agyConfirmNarrowPane = `● Bash(rm -f /tmp/a...) (ctrl+o to
 expand)
 
@@ -1504,6 +1510,77 @@ l...' (Persist to settings.json)
 
   ↑/↓ Navigate · tab Amend · ctrl+g edit
 esc to cancel      Gemini 3.1 Pro · high`
+
+// agyConfirmNarrowestPane is the confirmation at width 28 — the reachable floor. It pins
+// the two things the wider captures cannot: the matched nav hint survives here (as the
+// prefix the matcher keys on, with the trailing "· ctrl+g …" cut off), and "Requesting
+// permission for:" is torn into "Requesting permiss"/"ion"/"for:". That tear looks
+// impossible from the string's own length — it is 26 columns in a 28-column pane — because
+// agy wraps inside its own content box rather than at the terminal edge. Reasoning from
+// the pane width alone would have called this literal safe.
+const agyConfirmNarrowestPane = `● Bash(rm -f vict...)
+(ctrl+o to expand)
+
+Command
+────────────────────────────
+
+Requesting permiss
+ion
+for:
+   rm -f victim.txt &&
+echo GONE
+
+Do you want to proceed?
+> 1. Yes
+  2. Yes, and always allow
+in this conversation for
+commands that start with
+'rm -f victim.txt'
+  3. Yes, and always allow
+for commands that start
+with 'rm -f victim.txt'
+(Persist to settings.json)
+  4. No
+
+  ↑/↓ Navigate · tab Amend ·
+esc to cancel`
+
+// agyAnsweredConfirmPane is the pane right after the confirmation above was answered with
+// Enter. agy REPLACES the dialog rather than leaving it in the scrollback, so neither the
+// nav hint nor the question survives into the transcript. That is what lets the matcher be
+// a bare flat-window substring with no liveness anchor of the kind aider's confirm needs
+// (its trailing "]:" suffix): there is nothing left on screen to re-match. Captured at 40.
+const agyAnsweredConfirmPane = `▸ Thought for 3s, 282 tokens
+  Prioritizing Tool Usage
+  The command has been successfully
+  executed, and it output
+  REMOVED_THE_DEEPLY_NESTED_FILE. Is
+  there anything else you'd like me
+  to run?
+
+────────────────────────────────────────
+>
+────────────────────────────────────────
+? for shortcuts    Gemini 3.1 Pro · high`
+
+// agySlashMenuPane is the slash-command menu, open over a LIVE composer at width 120. It
+// is the negative control that fixes how narrow the confirmation matcher has to be: this
+// pane renders "↑/↓ Navigate · enter Select · tab Complete", so the generic "↑/↓ Navigate"
+// prefix — the obvious way to cover every agy dialog at once — would make every user who
+// types "/" read as blocked, and #512's own mechanism would then withhold their queued
+// prompt. "tab Amend" is the half that belongs to the confirmation alone.
+const agySlashMenuPane = `────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+> /
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+> /add-dir             Add a directory to the workspace
+  /agents              List available custom agents
+  /artifact            View and review artifacts
+  /btw                 Ask a side question without interrupting the current task
+  /changelog           Show release notes and changes
+   ↓ 35 more
+
+  ↑/↓ Navigate · enter Select · tab Complete
+esc to cancel                                                                                      Gemini 3.1 Pro · high`
 
 func TestAgyBusyMarker(t *testing.T) {
 	require.True(t, agy.HasBusyMarker(agyBusyPane),
@@ -1565,6 +1642,7 @@ func TestAgyConfirmationPrompt(t *testing.T) {
 	for name, pane := range map[string]string{
 		"width 120":                      agyConfirmPane,
 		"width 40, wrapped long command": agyConfirmNarrowPane,
+		"width 28, the reachable floor":  agyConfirmNarrowestPane,
 	} {
 		t.Run(name, func(t *testing.T) {
 			m, ok := agy.DetectPrompt(pane)
@@ -1582,6 +1660,28 @@ func TestAgyConfirmationPrompt(t *testing.T) {
 	_, ok = agy.DetectPrompt(agyTrustGatePane)
 	require.False(t, ok,
 		"the trust gate is a gate, not a confirmation — its nav hint reads \"enter Confirm\"")
+	_, ok = agy.DetectPrompt(agyAnsweredConfirmPane)
+	require.False(t, ok,
+		"an ANSWERED confirmation must not re-read as live: agy replaces the dialog rather "+
+			"than leaving it in the transcript, so no liveness anchor is needed to tell them apart")
+}
+
+// The matcher must be narrow enough to exclude agy's other ↑/↓ selection UI. This is the
+// guard that forbids the tempting generalisation — keying on "↑/↓ Navigate" so that any
+// future agy dialog is covered — because the slash-command menu renders that prefix over a
+// LIVE composer. A prompt match there would park the row on needs-input and withhold the
+// queued prompt from a session that is merely showing an autocomplete.
+func TestAgySlashMenuIsNotAPrompt(t *testing.T) {
+	require.Contains(t, agySlashMenuPane, "↑/↓ Navigate",
+		"the menu really does render the generic nav prefix — that is the whole hazard")
+
+	_, ok := agy.DetectPrompt(agySlashMenuPane)
+	require.False(t, ok, "the slash-command menu is not a blocking prompt")
+
+	generic := PromptMatcher{Window: WindowPrompt, All: []string{"↑/↓ Navigate"}}
+	require.True(t, generic.matches(agySlashMenuPane),
+		"and a matcher keyed on the generic prefix WOULD fire on it, which is why the "+
+			"shipped matcher keeps the confirmation-only \"tab Amend\" half")
 }
 
 // The narrow fixture exists to falsify the obvious matcher, so state that in an assertion

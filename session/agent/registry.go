@@ -887,9 +887,15 @@ var agy = &Adapter{
 	//
 	// MarkerWindow 0 (the footer below the input box's bottom border) is correct because
 	// agy keeps the composer box on screen while it works: a busy pane is rule / ">" / rule
-	// / "esc to cancel", exactly claude's geometry. The idle pane puts "? for shortcuts"
-	// in that same slot, so the footer separates idle from busy on its own. Note that
-	// literal is the SAME one claude renders — never key a shared helper on it.
+	// / "esc to cancel", exactly claude's geometry. A settled pane puts "? for shortcuts"
+	// in that same slot. (That idle literal — "? for shortcuts", not the busy one — is the
+	// SAME string claude renders; never key a shared helper on it. agy's busy marker
+	// happens to match gemini's, which is a separate coincidence.)
+	//
+	// The footer is not a perfect idle/busy split: agy's slash-command menu also carries
+	// "esc to cancel" over a live composer, so typing "/" reads as Working until the menu
+	// closes. Cosmetic and self-healing — the marker is a level signal, so it clears with
+	// the menu — and the alternative (narrowing the marker further) costs more than it buys.
 	BusyMarkers:  []string{"esc to cancel"},
 	MarkerWindow: 0,
 
@@ -908,6 +914,23 @@ var agy = &Adapter{
 		// Truncated at the point where 28 columns cut it, so the literal is a prefix that
 		// survives every width rather than one that only fits the wide pane.
 		//
+		// "tab Amend" and not the generic "↑/↓ Navigate" prefix, deliberately, even though
+		// the generic one would cover any dialog agy grows later: the slash-command menu
+		// renders "↑/↓ Navigate · enter Select · tab Complete" over a LIVE composer, so the
+		// broader matcher would make typing "/" read as blocked and withhold the user's
+		// queued prompt — #512's own mechanism, pointed the other way. See
+		// TestAgySlashMenuIsNotAPrompt.
+		//
+		// The cost of that narrowness, stated because it is not the usual one: a dialog
+		// shape this misses does NOT fail safe to idle. agy's dialogs carry "esc to cancel"
+		// in their own footer, so an unmatched one satisfies the busy marker and the row
+		// reads Working indefinitely instead of needs-input. What bounds that risk is the
+		// dialog population, re-verified against 1.1.11 rather than assumed: after the
+		// trust gate is accepted, an in-workspace file write (Create) and a read OUTSIDE
+		// the workspace (/etc/hostname) both complete with no dialog at all. Shell
+		// execution is the only prompt observed, which is what the trust screen's own
+		// wording — "read, edit, and execute files here" — predicts.
+		//
 		// NoAutoTap, for the reason codex's approval and gemini's confirmation carry it
 		// (#347): this is a flat-window matcher, its literal lives verbatim in this file
 		// and is therefore quotable into an agy pane by an agent reading this repo, and
@@ -922,8 +945,17 @@ var agy = &Adapter{
 		// per the overflow note above, the question truncates from 40 columns down and no
 		// prefix of it is both narrow enough to survive 28 and specific enough to be worth
 		// matching ("Do you trust the contents of" is the whole 28-column line). The option
-		// row is 24 columns wide, so it survives intact everywhere, and its wording is far
-		// more distinctive than the truncated question's.
+		// row is 24 columns wide, so it survives intact at every width.
+		//
+		// This is a flat bottom-window match, with the cost codex's and gemini's matchers
+		// carry and claude's no longer does: the literal lives verbatim in this file — in
+		// fact twice, since claudeGateTitles opens with the same string — so an agy session
+		// displaying registry.go or its fixtures inside the bottom WindowPrompt lines reads
+		// as gated. GateUp outranks the busy marker (session/tmux/poll.go), so that pane
+		// parks on needs-input with its queued prompt withheld: #342's direction, failing
+		// closed rather than acting. Anchoring it structurally the way claudeGateVisible
+		// does would need a live-chrome primitive this gate does not have — it renders
+		// before any composer exists, so there is no input box to anchor against.
 		{Contains: []string{"Yes, I trust this folder"}},
 	},
 

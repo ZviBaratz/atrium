@@ -41,7 +41,7 @@ const (
 	// PaneDead session for lost-session recovery. Runtime-only, never persisted.
 	PaneDead
 	// PaneGate means a one-time startup/trust screen is up (claude's folder-trust or
-	// new-MCP prompt, codex/gemini folder-trust, aider's first-run docs prompt). It
+	// new-MCP prompt, codex/gemini/agy folder-trust, aider's first-run docs prompt). It
 	// consumes keystrokes until a human dismisses it, so a queued first prompt must be
 	// held; callers surface it as needs-input rather than tapping. Runtime-only, never
 	// persisted.
@@ -369,13 +369,14 @@ func (t *Session) Poll() PaneState {
 	// discussing claude's permission dialog read as a live prompt, and this matcher is the
 	// one autoyes answers, so it tapped Enter into the composer. Claude's permission
 	// matchers are anchored structurally now (agent/registry.go claudeLiveDialogRegion);
-	// codex and gemini still use the flat window, so for them the sentence remains
+	// codex, gemini and agy still use the flat window, so for them the sentence remains
 	// aspirational — they still false-fire on their own literals quoted in a transcript.
-	// What #347 removed is the second half: both carry NoAutoTap now, so such a quote
+	// What #347 removed is the second half: all three carry NoAutoTap, so such a quote
 	// surfaces as needs-input instead of Enter-approving a shell command. The remaining cost
 	// is a row parked on needs-input with its queued prompt undelivered, which is #342's
-	// direction; fixing that for codex needs its overlay captured and anchored, and for
-	// gemini it is accepted (deprecated CLI — see the matcher's own comment).
+	// direction; fixing that for codex needs its overlay captured and anchored, for gemini
+	// it is accepted (deprecated CLI — see the matcher's own comment), and for agy the
+	// dialog renders where no composer exists to anchor against (#512).
 	if matcher, ok := t.adapter.DetectPrompt(content); ok {
 		t.monitor.idleStreak = 0
 		state := PanePrompt
