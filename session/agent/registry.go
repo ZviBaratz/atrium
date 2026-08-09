@@ -244,7 +244,7 @@ var claude = &Adapter{
 		// keeps the undriven sibling DETECTED, which is not cosmetic: the fetch
 		// dialog renders NO footer, so permission-local cannot see this family, and
 		// DetectPrompt is the only thing standing between a queued prompt and a live
-		// dialog (session/tmux AwaitingInput — the dialog's "❯ 1. Yes" reads as an
+		// dialog (session/tmux AwaitingInput — claude's dialog "❯ 1. Yes" reads as an
 		// input box, so InputBoxVisible does not stop it). Undetected, a queued
 		// prompt would be typed into the dialog and retried every cycle.
 		//
@@ -491,9 +491,13 @@ var claudeNetworkDeclineOptions = []string{"No, and tell Claude what to do diffe
 // gate's literal is a dialog TITLE at the top of its dialog (hence 40, clearing the tallest
 // capture), while these key on the question and options at the BOTTOM, which flattenChrome
 // reaches first. Measured on the live 2.1.210 captures: the fetch title sits 9 non-empty
-// lines above the region's bottom at width 28 (claudeFetchNarrowPane — the narrowest
-// reachable pane, since an agent's pane is atrium's PREVIEW pane), so 20 clears every
+// lines above the region's bottom at width 28 (claudeFetchNarrowPane), so 20 clears every
 // captured shape with better than 2x margin while exposing half the surface 40 would.
+//
+// 28 is the narrowest width this dialog was CAPTURED at, not a floor — there is none (see
+// the agy block below, and #512's captures at 24 and 20). The margin above is therefore
+// measured only down to 28; a narrower pane reflows the body further and the headroom there
+// is unmeasured. That is a known gap, not a claim.
 const permissionRegionCap = 20
 
 // claudeLiveDialogRegion returns claude's live dialog region — the lines below the pane's
@@ -659,6 +663,19 @@ var codex = &Adapter{
 	// The status row sits above the composer and its footer hints, outside the
 	// below-the-box footer anchor; a window of 8 reaches over them.
 	MarkerWindow: 8,
+
+	// Codex draws its composer with "›" (U+203A), byte-verified with cat -A against a
+	// live 0.147.0 pane. The default set never accepted it, so InputBoxVisible — and
+	// therefore AwaitingInput, and therefore prompt delivery — was dead for every codex
+	// session (#510). Replacing rather than extending the default is load-bearing here:
+	// codex's own banner ("│ >_ OpenAI Codex (v0.147.0)") and its header ("> You are in
+	// <dir>") both open with ">", and under the default set the banner is what the
+	// readback actually returned on a 120-column pane — the composer's contents were
+	// never read at all, they were the startup banner's.
+	InputBoxPrompts: []string{"›"},
+	// The approval overlay and the trust gate both draw their selector with that same
+	// "›", so the glyph alone cannot tell either from a live composer.
+	SelectorSharesPromptChar: true,
 
 	Prompts: []PromptMatcher{
 		// Decline options across the approval overlays: command/patch approvals

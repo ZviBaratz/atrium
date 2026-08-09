@@ -55,7 +55,7 @@ func claudeSuggestionVisible(raw string) bool {
 			if cleaned[i] == "" {
 				continue
 			}
-			if !isInputBoxLine(cleaned[i]) {
+			if !isInputBoxLine(cleaned[i], defaultPrompts) {
 				// This rule pair brackets something else (a statusLine, a
 				// dialog); the box, if any, is in a pair further up.
 				break
@@ -116,7 +116,11 @@ func boxInteriorAllDim(rawLine, cleanedLine string) bool {
 	}
 
 	// Find the prompt char: "❯" wherever it is, or ">" as the first visible
-	// non-border char (matching isInputBoxLine's two accepted prompts).
+	// non-border char — claude's own two glyphs, hardcoded. This is deliberately NOT
+	// isInputBoxLine's set, which is per-adapter as of #510: this walk is claude-only
+	// (SuggestionVisible is wired on no other adapter), and it walks SGR cells rather than
+	// string prefixes, so it could not share a promptSet without a second representation
+	// of the same fact.
 	start := -1
 	for i, c := range cells {
 		if c.r == '❯' {

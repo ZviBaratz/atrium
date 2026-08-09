@@ -1,6 +1,9 @@
 package agent
 
-import "testing"
+import (
+	"reflect"
+	"testing"
+)
 
 // A realistic empty claude composer: rounded box with the "❯" prompt and the live footer
 // below it. No gate, no blocking prompt — keystrokes typed here land in the box.
@@ -85,7 +88,7 @@ const liveTrustGate = "" +
 
 func TestInputBoxText(t *testing.T) {
 	t.Run("empty box is found with no text", func(t *testing.T) {
-		text, ok := inputBoxText(emptyBox)
+		text, ok := inputBoxText(emptyBox, defaultPrompts)
 		if !ok {
 			t.Fatal("an on-screen composer must be detected as present")
 		}
@@ -95,7 +98,7 @@ func TestInputBoxText(t *testing.T) {
 	})
 
 	t.Run("typed text is read back across wrapped rows", func(t *testing.T) {
-		text, ok := inputBoxText(typedBox)
+		text, ok := inputBoxText(typedBox, defaultPrompts)
 		if !ok {
 			t.Fatal("a composer with text must be detected as present")
 		}
@@ -108,7 +111,7 @@ func TestInputBoxText(t *testing.T) {
 	})
 
 	t.Run("no composer on a pre-box startup frame", func(t *testing.T) {
-		if _, ok := inputBoxText(preBoxFrame); ok {
+		if _, ok := inputBoxText(preBoxFrame, defaultPrompts); ok {
 			t.Fatal("a frame without an input box must not be detected as a composer")
 		}
 	})
@@ -120,7 +123,7 @@ func TestInputBoxText(t *testing.T) {
 		for i := 0; i < WindowPrompt+5; i++ {
 			content += "  plain transcript line\n"
 		}
-		if _, ok := inputBoxText(content); ok {
+		if _, ok := inputBoxText(content, defaultPrompts); ok {
 			t.Fatal("a '>' outside the bottom window must not count as the input box")
 		}
 	})
@@ -129,7 +132,7 @@ func TestInputBoxText(t *testing.T) {
 		// A real empty composer is not literally blank — it shows claude's dim suggestion.
 		// found must be true (a box is on screen) and the readback is that hint, which the
 		// delivery check tolerates because it matches against the prompt signature, not "".
-		text, ok := inputBoxText(liveEmptyComposer)
+		text, ok := inputBoxText(liveEmptyComposer, defaultPrompts)
 		if !ok {
 			t.Fatal("a live composer must be detected even when it only shows ghost text")
 		}
@@ -139,7 +142,7 @@ func TestInputBoxText(t *testing.T) {
 	})
 
 	t.Run("live borderless multi-line prompt is joined across rule-wrapped rows", func(t *testing.T) {
-		text, ok := inputBoxText(liveTypedComposer)
+		text, ok := inputBoxText(liveTypedComposer, defaultPrompts)
 		if !ok {
 			t.Fatal("a live composer with text must be detected as present")
 		}
@@ -152,7 +155,7 @@ func TestInputBoxText(t *testing.T) {
 	t.Run("a menu-style gate's selector reads as a box (why GateUp, not the box, excludes it)", func(t *testing.T) {
 		// The trust gate's "❯ 1. …" line satisfies the box check on its own. This documents
 		// the limit AwaitingInput works around by also consulting GateUp/DetectPrompt.
-		if _, ok := inputBoxText(liveTrustGate); !ok {
+		if _, ok := inputBoxText(liveTrustGate, defaultPrompts); !ok {
 			t.Fatal("the menu selector reads as a box line; this test pins that known limit")
 		}
 	})
@@ -162,7 +165,7 @@ func TestClaudePasteCollapsed(t *testing.T) {
 	// The chip is read back through the same input-box parser the delivery check uses, so
 	// assert on inputBoxText's output — the exact string claudePasteCollapsed will see.
 	t.Run("inputBoxText reads back the collapsed-paste chip verbatim", func(t *testing.T) {
-		text, ok := inputBoxText(liveCollapsedPasteComposer)
+		text, ok := inputBoxText(liveCollapsedPasteComposer, defaultPrompts)
 		if !ok {
 			t.Fatal("a composer showing a collapsed paste must be detected as present")
 		}
@@ -174,7 +177,7 @@ func TestClaudePasteCollapsed(t *testing.T) {
 	t.Run("inputBoxText reads back accumulated chips from a re-pasted composer", func(t *testing.T) {
 		// The pre-fix retry loop could stack chips on one composer line; the parser must read
 		// the whole run back so the delivery check still recognizes it as a collapsed paste.
-		text, ok := inputBoxText(liveAccumulatedPasteComposer)
+		text, ok := inputBoxText(liveAccumulatedPasteComposer, defaultPrompts)
 		if !ok {
 			t.Fatal("a composer showing accumulated collapsed pastes must be detected as present")
 		}
@@ -224,14 +227,63 @@ func TestClaudePasteCollapsed(t *testing.T) {
 	} else if text, _ := claude.InputBoxText(liveCollapsedPasteComposer); !claude.PasteCollapsed(text) {
 		t.Error("the claude adapter must recognize its own collapsed-paste chip")
 	}
-	for _, name := range []string{"codex", "gemini", "aider"} {
-		if a := Resolve(name); a.PasteCollapsed != nil {
-			t.Errorf("%s renders pastes inline and must leave PasteCollapsed nil", name)
+	// Derived from Adapters(), not a hardcoded name list: the literal one this replaced
+	// read {"codex","gemini","aider"} and had silently skipped agy since #512 added it.
+	for _, a := range Adapters() {
+		if a.Key == KeyClaude {
+			continue
+		}
+		if a.PasteCollapsed != nil {
+			t.Errorf("%s renders pastes inline and must leave PasteCollapsed nil", a.Key)
 		}
 	}
 }
 
+// composerPanes is one on-screen composer per adapter. Every adapter in the registry must
+// have an entry: an adapter whose InputBoxVisible is unasserted is an adapter that can ship
+// with prompt delivery silently dead, which is exactly what #510 was. Codex's "› " had been
+// written into this package's own fixtures for as long as the adapter existed, and the only
+// test that exercised InputBoxVisible resolved "claude" and checked nothing else — so the
+// glyph was in the tree, in this very package, and never once fed to the predicate.
+//
+// Provenance differs per entry and is stated at each fixture's declaration; two of these
+// (gemini's, and claude's bordered pair) are composed from source rather than driven. The
+// table's job is not to certify each glyph — it is to make a missing assertion a build
+// failure instead of an absence nobody can see.
+var composerPanes = map[Key]string{
+	KeyClaude: liveEmptyComposer,
+	KeyCodex:  codexTypedComposerPane120,
+	KeyGemini: geminiIdlePane,
+	KeyAider:  aiderIdlePane,
+	KeyAgy:    agyIdlePane,
+}
+
 func TestAdapterInputBoxVisible(t *testing.T) {
+	adapters := Adapters()
+	if len(adapters) != len(composerPanes) {
+		t.Fatalf("Adapters() has %d entries, composerPanes has %d: a new adapter must bring a "+
+			"composer fixture, or its prompt delivery is unasserted (#510)",
+			len(adapters), len(composerPanes))
+	}
+	for _, a := range adapters {
+		pane, ok := composerPanes[a.Key]
+		if !ok {
+			t.Fatalf("adapter %q has no composer fixture", a.Key)
+		}
+		t.Run(string(a.Key), func(t *testing.T) {
+			if !a.InputBoxVisible(pane) {
+				t.Error("this agent's live composer must read as an input box; while it does " +
+					"not, AwaitingInput is permanently false and queued prompts are neither " +
+					"delivered nor expired (#510)")
+			}
+			if a.InputBoxVisible(preBoxFrame) {
+				t.Error("a startup frame carrying no prompt glyph at all must not read as a box")
+			}
+		})
+	}
+
+	// Claude's other supported box shape, kept from this test's claude-only original: the
+	// "│"-bordered build, empty and with typed text.
 	claude := Resolve("claude")
 	if !claude.InputBoxVisible(emptyBox) {
 		t.Error("the empty composer must be reported visible")
@@ -239,11 +291,49 @@ func TestAdapterInputBoxVisible(t *testing.T) {
 	if !claude.InputBoxVisible(typedBox) {
 		t.Error("the composer with typed text must be reported visible")
 	}
-	if !claude.InputBoxVisible(liveEmptyComposer) {
-		t.Error("a live borderless composer must be reported visible")
+}
+
+// The one optional Adapter field whose zero value must not mean "off". A per-adapter glyph
+// set that defaulted to empty would transplant #510 onto whichever adapter inherited it —
+// agy and aider both depend on ">" being accepted, and agy's dependence is new as of #512,
+// so the regression would land the same day. Generic is a bare &Adapter{} that is
+// deliberately NOT in registry, so Adapters() cannot see it; it and a freshly drafted
+// zero-value adapter are checked here for that reason.
+func TestInputBoxPromptsNeverResolveEmpty(t *testing.T) {
+	subjects := append([]*Adapter{}, Adapters()...)
+	subjects = append(subjects, Generic, &Adapter{})
+	for _, a := range subjects {
+		if len(a.inputBoxPrompts().chars) == 0 {
+			t.Errorf("adapter %q resolves to an empty prompt set: InputBoxVisible would be "+
+				"permanently false and its queued prompts never delivered (#510)", a.Key)
+		}
 	}
-	if claude.InputBoxVisible(preBoxFrame) {
-		t.Error("a pre-box startup frame must not be reported visible")
+	if got := (&Adapter{}).inputBoxPrompts().chars; !reflect.DeepEqual(got, defaultPrompts.chars) {
+		t.Errorf("a newly drafted adapter resolves to %q, want the default %q",
+			got, defaultPrompts.chars)
+	}
+}
+
+// Detection and stripping are two loops over the same set, and they were two independently
+// hardcoded literal pairs before #510. A glyph accepted but not stripped leaks into the
+// readback — and boxHoldsPrompt (session/prompt.go) compares by substring, so it would
+// still match and nothing downstream would notice. Only a parity check sees it.
+func TestEveryAcceptedPromptGlyphIsAlsoStripped(t *testing.T) {
+	subjects := append([]*Adapter{}, Adapters()...)
+	subjects = append(subjects, Generic)
+	for _, a := range subjects {
+		p := a.inputBoxPrompts()
+		for _, g := range p.chars {
+			line := g + " hello world"
+			if !isInputBoxLine(line, p) {
+				t.Errorf("%s: %q is in the accepted set but %q does not read as a box line", a.Key, g, line)
+				continue
+			}
+			if got := stripBoxInterior(line, p); got != "hello world" {
+				t.Errorf("%s: %q accepted but not stripped — readback %q, want %q",
+					a.Key, g, got, "hello world")
+			}
+		}
 	}
 }
 

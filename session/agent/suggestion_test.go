@@ -162,7 +162,12 @@ func TestClaudeSuggestion_SingleRuleFailsClosed(t *testing.T) {
 // that nil is what spares non-claude panes the capture in AcceptSuggestion.
 func TestSuggestionDetector_ClaudeOnly(t *testing.T) {
 	require.NotNil(t, claude.SuggestionVisible)
-	for _, a := range []*Adapter{codex, gemini, aider, Generic} {
+	// Derived from Adapters() plus Generic (which is not in the registry): the hardcoded
+	// list this replaced omitted agy, added by #512.
+	for _, a := range append(append([]*Adapter{}, Adapters()...), Generic) {
+		if a.Key == KeyClaude {
+			continue
+		}
 		require.Nil(t, a.SuggestionVisible, "adapter %s", a.Key)
 	}
 }

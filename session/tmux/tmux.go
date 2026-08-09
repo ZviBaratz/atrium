@@ -632,9 +632,12 @@ func (t *Session) IsReadyForPrompt() bool {
 // IsReadyForPrompt does — closes the timing race this fix targets: a pre-box boot frame or
 // a late-painting startup screen that is briefly idle-looking has no composer yet, so it can
 // no longer be mistaken for readiness and swallow the prompt. It does not, on its own,
-// distinguish a menu-style gate from the composer: claude renders its trust/new-MCP screens
-// as a "❯ 1. …" selector, which reads as a box line, so those gates are still excluded by
-// GateUp / DetectPrompt above, not by the box check. Readiness is therefore the conjunction:
+// distinguish a menu-style gate from the composer: an agent draws its selector with its own
+// prompt glyph (claude "❯ 1. …", agy "> 1. Yes", codex "› 1. Yes, continue"), so those
+// gates are still excluded by GateUp / DetectPrompt above, not by the box check. Codex opts
+// into Adapter.SelectorSharesPromptChar, which suppresses the numbered-selector shape for
+// that adapter — but even there the box check is not sufficient on its own, because codex
+// echoes submitted messages into its transcript with the same glyph. Readiness is therefore the conjunction:
 // no known gate or prompt AND a box on screen. It is a read-only check: it captures the pane
 // once and never sends keystrokes.
 func (t *Session) AwaitingInput() bool {
