@@ -978,28 +978,40 @@ func squash(s string) string { return strings.Join(strings.Fields(xansi.Strip(s)
 // pass on a render where MaxWidth has sheared the banner mid-glyph and chopped
 // the message to "Session is pau" — nothing overflows, and nothing is legible.
 // The branch is the whole point of this screen, and the "switch your main repo
-// off" line is a warning, so both must survive at the narrowest reachable pane.
+// off" line is a warning, so both must survive however narrow the pane gets.
 //
 // Note the branch name is not the only line that overflows here: "Switch your
 // main repo off this branch before resuming." is 54 cols with nothing
 // interpolated, against a 48-col banner. That is why truncating the branch (the
 // fix #355 originally proposed) cannot work — the prose wrapper alone is 35
 // cols, so this line overflows 28 even with an empty branch.
+//
+// The widths are a LADDER, and 28 is not the bottom of it. An earlier draft
+// called 28 "the narrowest reachable pane" on the arithmetic that an 80-column
+// terminal at maxListRatio hands the preview pane 28 columns; that is one
+// terminal size, not a bound. The pane is sized from the terminal minus the
+// session list, the list may take maxListRatio = 0.60 (config/state.go), and the
+// remainder is unclamped — a 70-column terminal leaves ~24. The same overstatement
+// was corrected in session/agent/registry_test.go (#512/#646) and survived here in
+// different words. Asserting the ladder is what keeps it corrected: a single-width
+// case makes "survives a narrow pane" an untested claim below that width.
 func TestPreviewPausedFallbackKeepsBranchAndWarningOnNarrowPane(t *testing.T) {
 	const branch = "zvi/a-rather-long-branch-name"
-	pane := NewPreviewPane()
-	pane.SetSize(28, 13)
-	require.NoError(t, pane.UpdateContent(pausedInstance(t, branch)))
+	for _, width := range []int{28, 24, 20} {
+		pane := NewPreviewPane()
+		pane.SetSize(width, 13)
+		require.NoError(t, pane.UpdateContent(pausedInstance(t, branch)))
 
-	out := pane.String()
-	require.Contains(t, squash(out), branch,
-		"the branch to check out must survive the narrow pane — wrapped is fine, truncated is not")
-	require.Contains(t, squash(out), squash("Switch your main repo off this branch before resuming."),
-		"the warning must survive: MaxHeight drops from the bottom, where it lives")
+		out := pane.String()
+		require.Containsf(t, squash(out), branch,
+			"w=%d: the branch to check out must survive the narrow pane — wrapped is fine, truncated is not", width)
+		require.Containsf(t, squash(out), squash("Switch your main repo off this branch before resuming."),
+			"w=%d: the warning must survive: MaxHeight drops from the bottom, where it lives", width)
 
-	for i, l := range strings.Split(out, "\n") {
-		require.LessOrEqualf(t, ansi.PrintableRuneWidth(l), 28,
-			"paused fallback line %d wider than the pane", i)
+		for i, l := range strings.Split(out, "\n") {
+			require.LessOrEqualf(t, ansi.PrintableRuneWidth(l), width,
+				"w=%d: paused fallback line %d wider than the pane", width, i)
+		}
 	}
 }
 
