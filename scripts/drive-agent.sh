@@ -196,13 +196,24 @@ assert_under_run_root() {
 	esac
 }
 
-load_run() {
+# run_dir prints the run directory the verbs should act on, having proved it is one
+# this script may own. It does NOT require the directory to exist — `down` has to be
+# able to act on a pointer whose run is already gone.
+run_dir() {
 	local dir="${ATR_CAP_RUN:-}"
 	if [[ -z "$dir" && -f "$RUN_ROOT/current" ]]; then
 		dir="$(cat "$RUN_ROOT/current")"
 	fi
 	[[ -n "$dir" ]] || die "no active run (run \`up <program>\` first, or set ATR_CAP_RUN)"
 	assert_under_run_root "$dir"
+	printf '%s' "$dir"
+}
+
+load_run() {
+	local dir
+	dir="$(run_dir)"
+	# The advice here has to be advice that WORKS: `down` clears a pointer whose run
+	# directory has gone rather than dying on it, which is why this can send you there.
 	[[ -d "$dir" ]] || die "run directory is gone: $dir (run \`down\` to clear the pointer)"
 	RUN="$dir"
 	SOCK="$RUN/tmux/sock"
@@ -217,13 +228,14 @@ load_run() {
 
 # ── tmux ─────────────────────────────────────────────────────────────────────────
 
-# tmux_boot is the only call allowed to START the capture server. -f /dev/null pins
-# tmux's built-in defaults so the host ~/.tmux.conf can never alter rendering (and,
-# as #547 found, a `set -g exit-empty off` there is inherited and keeps a dead server
-# alive). It is the tmux command's own flag and must sit BEFORE the subcommand —
-# new-session's own -f is client flags, an unrelated thing.
+# tmux_boot is the only call allowed to START the capture server. It passes -f with
+# THIS RUN'S generated config (write_capture_conf), never the host's ~/.tmux.conf,
+# which could otherwise alter rendering — and, as #547 found, a `set -g exit-empty
+# off` there is inherited and keeps a dead server alive. It is the tmux command's own
+# flag and must sit BEFORE the subcommand; new-session's own -f is client flags, an
+# unrelated thing.
 tmux_boot() {
-	tmux -f /dev/null -S "$SOCK" "$@"
+	tmux -f "$RUN/tmux/capture.conf" -S "$SOCK" "$@"
 }
 
 # t runs every other tmux command against the capture socket. -N means "do not start
@@ -235,11 +247,23 @@ t() {
 	tmux -N -f /dev/null -S "$SOCK" "$@"
 }
 
-# apply_render_options makes the capture server render the way Atrium's own sessions
-# do. -f /dev/null buys hermeticity but costs FIDELITY, and fidelity is the point: a
-# pane captured under a terminal production never uses pins the wrong glyphs, which
-# is the exact class of bug #512 was (its whole content was one byte, ">" vs "❯").
-# Every value below is the one session/tmux/atrium.conf.tmpl sets for real sessions.
+# write_capture_conf generates the config tmux_boot hands to -f, so the capture server
+# renders the way Atrium's own sessions do. Hermeticity alone (a bare -f /dev/null)
+# costs FIDELITY, and fidelity is the point: a pane captured under a terminal
+# production never uses pins the wrong glyphs, which is the exact class of bug #512
+# was (its whole content was one byte, ">" vs "❯"). Every value below is the one
+# session/tmux/atrium.conf.tmpl sets for real sessions.
+#
+# It is a FILE READ AT SERVER START rather than a run of `set-option` afterwards, and
+# that is the mechanism production uses too (session/tmux renders atrium.conf.tmpl and
+# passes it). The difference is measurable, not stylistic: some options are consumed
+# when a pane is created and a later global set never reaches the pane that already
+# exists. On tmux 3.6, `set-option -g history-limit 10000` after new-session leaves
+# the running pane reporting 2000; the same line in the -f config gives it 10000.
+# `default-terminal` is read at pane creation the same way — it happens to be a no-op
+# on 3.6, whose built-in default is already tmux-256color, but that is luck and not
+# something to rely on down at the 3.2 floor, where TERM decides which glyphs the CLI
+# draws at all.
 #
 # `status off` is not cosmetic, but note which way the row goes. Atrium's DEFAULT is
 # the context bar ON (config.GetSessionContextBar defaults true, accessors.go:251),
@@ -254,20 +278,34 @@ t() {
 # is not in capture-pane output either way.
 #
 # `automatic-rename off` matters for a second reason — see resolve_ids.
-apply_render_options() {
-	t set-option -g default-terminal "tmux-256color"
-	t set-option -ga terminal-overrides ",*:Tc"
-	t set-option -g status off
-	t set-option -g pane-border-status off
-	t set-option -g allow-rename off
-	t set-option -g automatic-rename off
-	t set-option -gw automatic-rename off
-	t set-option -g history-limit 10000
-	t set-option -sg escape-time 10
-	t set-option -g base-index 0
-	t set-option -gw pane-base-index 0
-	t set-option -g destroy-unattached off
-	t set-option -g remain-on-exit off
+write_capture_conf() {
+	cat >"$RUN/tmux/capture.conf" <<-'EOF'
+		set-option -g  default-terminal "tmux-256color"
+		set-option -ga terminal-overrides ",*:Tc"
+		set-option -g  status off
+		set-option -g  pane-border-status off
+		set-option -g  allow-rename off
+		set-option -g  automatic-rename off
+		set-window-option -g automatic-rename off
+		set-option -g  history-limit 10000
+		set-option -sg escape-time 10
+		set-option -g  base-index 0
+		set-window-option -g pane-base-index 0
+		set-option -g  destroy-unattached off
+		set-option -g  remain-on-exit off
+	EOF
+}
+
+# assert_render_conf_applied proves the config was actually read. A -f pointing at an
+# unreadable or mistyped file does not fail the boot — tmux carries on with its own
+# defaults — so the whole fidelity argument above would be silently untrue. Check one
+# value that differs from tmux's built-in default and would change what gets captured.
+assert_render_conf_applied() {
+	local limit status_
+	limit="$(t display-message -p -t "$SESSION" '#{history_limit}')"
+	status_="$(t show-option -gv status)"
+	[[ "$limit" == 10000 && "$status_" == off ]] ||
+		die "the capture config did not take effect (history-limit=$limit status=$status_) — captures would not match production"
 }
 
 # resolve_ids records the pane and window IDS of the capture session, and everything
@@ -421,9 +459,18 @@ probe_version() {
 		sleep 0.5
 	done
 	if kill -0 "$pid" 2>/dev/null; then
-		kill "$pid" 2>/dev/null || true
 		note "\`$bin --version\` did not exit within 10s — recording the version as unknown."
 		note "a fixture's whole provenance is the version, so fill it in by hand before committing one."
+		# SIGTERM, then SIGKILL if it is ignored. A TUI CLI installing a SIGTERM
+		# handler is ordinary, and the `wait` below is unbounded — so stopping at
+		# SIGTERM would hand the hang back to the very line this function exists to
+		# bound, with the capture server already running.
+		kill "$pid" 2>/dev/null || true
+		for _i in $(seq 1 10); do
+			kill -0 "$pid" 2>/dev/null || break
+			sleep 0.2
+		done
+		kill -0 "$pid" 2>/dev/null && kill -9 "$pid" 2>/dev/null || true
 	fi
 	wait "$pid" 2>/dev/null || true
 	first="$(head -1 "$out" 2>/dev/null || true)"
@@ -441,7 +488,7 @@ start_session() {
 	# worse than a failed one, because it becomes a committed fixture.
 	tmux_boot new-session -d -s "$SESSION" -x "$width" -y "$height" \
 		-c "$workdir" -n capture "$program"
-	apply_render_options
+	assert_render_conf_applied
 	# resize-window sets window-size to manual by itself once it runs, so this is not
 	# what makes the ladder stick. It is here for the attach hazard: until the first
 	# resize the window is window-size `latest`, so someone attaching to eyeball the
@@ -455,6 +502,15 @@ start_session() {
 		[[ -n "$(pane | tr -d '[:space:]')" ]] && break
 		sleep 0.5
 	done
+}
+
+# up_failed is cmd_up's EXIT trap, armed only while a half-created run exists. It
+# reads the globals rather than taking arguments, so nothing about the run's name can
+# change how this line parses. Both paths still go through assert_under_run_root.
+up_failed() {
+	reap "$SOCK" 2>/dev/null || true
+	assert_under_run_root "$RUN"
+	rm -rf "$RUN"
 }
 
 cmd_up() {
@@ -473,13 +529,20 @@ cmd_up() {
 		fi
 	fi
 
-	# A single directory NAME, not a path. A slash would pass assert_under_run_root
-	# (no ".." component, still under the root) and still land the run one level
-	# deeper than `reap-all`'s $RUN_ROOT/*/tmux/sock glob can see — an orphan server
-	# this script could no longer sweep.
-	case "${ATR_CAP_NAME:-}" in
-	*/*) die "ATR_CAP_NAME must be a single directory name, not a path: $ATR_CAP_NAME" ;;
-	esac
+	# A single directory NAME from a conservative character set. Two distinct hazards,
+	# both cheap to close here and awkward to close anywhere else:
+	#
+	# A slash passes assert_under_run_root — no ".." component, still under the root —
+	# and lands the run one level deeper than `reap-all`'s $RUN_ROOT/*/tmux/sock glob
+	# can see, leaving an orphan server this script can no longer sweep.
+	#
+	# And the name reaches $RUN, which reaches a `trap … EXIT` whose body is a string.
+	# Restricting the charset means no quoting question about that body can arise —
+	# the trap below reads globals rather than expanding them for the same reason, so
+	# this is the belt to that pair of braces.
+	if [[ -n "${ATR_CAP_NAME:-}" && ! "$ATR_CAP_NAME" =~ ^[A-Za-z0-9._-]+$ ]]; then
+		die "ATR_CAP_NAME must be a single directory name of [A-Za-z0-9._-], got: $ATR_CAP_NAME"
+	fi
 
 	local fleet_before
 	fleet_before="$(fleet_sessions)"
@@ -506,6 +569,9 @@ cmd_up() {
 	SOCK="$RUN/tmux/sock"
 	REPO="$RUN/repo"
 	mkdir -p "$RUN/tmux" "$RUN/captures/cat-A" "$RUN/captures/prod"
+	# Written before anything can boot a server: tmux_boot passes this to -f, and
+	# `fresh` boots again later from the same file.
+	write_capture_conf
 	# The fleet snapshot `down` will diff against. Guarded because $(…) strips trailing
 	# newlines: an unguarded printf would write one blank line for an empty fleet, and
 	# `comm` would then report a phantom "" session as missing.
@@ -517,8 +583,12 @@ cmd_up() {
 	# `up` exiting IS the success path, so a trap left armed would destroy the session
 	# it just created. ladder/send/wait/sample install no teardown trap at all,
 	# because they must leave the session alive — see `reap-all` for what that costs.
-	# shellcheck disable=SC2064  # $RUN/$SOCK are expanded now, on purpose.
-	trap "reap '$SOCK' 2>/dev/null || true; rm -rf '$RUN'" EXIT
+	#
+	# The trap runs a FUNCTION reading globals. The obvious spelling expands $SOCK and
+	# $RUN into the trap string at arm time, which makes the paths part of a command
+	# line that is re-parsed at exit — an apostrophe in the run name is then unbalanced
+	# quoting wrapped around an `rm -rf`. A function name has no such surface.
+	trap up_failed EXIT
 
 	new_workspace "$REPO"
 	start_session "$REPO" "$width" "$height" "$program"
@@ -557,9 +627,23 @@ EOF
 # agyTrustGateNarrowPane in ".../fresh28".
 cmd_fresh() {
 	local width="${1:-$DEFAULT_WIDTH}"
+	# Validated BEFORE anything is destroyed, and for two separate reasons.
+	#
+	# The width is interpolated into a path that is then `rm -rf`'d, so a value
+	# carrying ".." walks out of the run root: `fresh /../../../x` would build
+	# $RUN/fresh/../../../x and delete somebody else's directory. Digits cannot.
+	#
+	# And this verb reaps the live session before it hands the width to tmux, so
+	# without a check here a typo is answered by tmux's bare "width invalid" AFTER
+	# the session is gone — throwing away a dialog that cost an API turn to reach.
+	[[ "$width" =~ ^[0-9]+$ ]] || die "width must be a number, got: $width"
+	((width > 0)) || die "width must be greater than zero"
 	load_run
-	reap "$SOCK"
 	local workdir="$RUN/fresh$width"
+	# Belt as well as braces: the regex above already makes an escape impossible, so
+	# this asserts the property rather than trusting the derivation to preserve it.
+	assert_under_run_root "$workdir"
+	reap "$SOCK"
 	[[ -e "$workdir" ]] && rm -rf "$workdir"
 	new_workspace "$workdir"
 	start_session "$workdir" "$width" "$HEIGHT" "$PROGRAM"
@@ -575,28 +659,52 @@ cmd_fresh() {
 	note "fresh session at width $width in $workdir (pane $PANE)"
 }
 
+# sends_enter reports whether a list of tmux key names contains one that submits.
+#
+# Keying the guard on the literal string "Enter" was too narrow: tmux sends the same
+# byte for `C-m`, which is a spelling somebody reaching for a control key will
+# reasonably use, and it walked straight past a guard whose whole job is to stand
+# between a keystroke and the user's real config file. "Enter" as a substring already
+# covers KPEnter/S-Enter/M-Enter; C-m is the one that needs naming.
+sends_enter() {
+	local k
+	for k in "$@"; do
+		case "$k" in
+		*[Ee]nter* | C-m | C-M | c-m | c-M) return 0 ;;
+		esac
+	done
+	return 1
+}
+
+# guard_enter refuses to submit at a pane offering to persist a choice to the agent's
+# real config. It is a shared helper because `keys` is not the only verb that presses
+# Enter — `send` and `paste` both end in one, and a guard on one of three doors is
+# not a guard. This drives a REAL, authenticated CLI against your REAL config dir, so
+# an Enter on the wrong row edits it for good. FORCE=1 when you mean it.
+#
+# The probe is ONE SHORT WORD against the pane with all whitespace removed, and both
+# halves of that are this script's own #512 lesson turned on itself. A guard reading
+# `grep -i 'persist to settings'` line by line is dead at exactly the widths this tool
+# exists to drive: at 24 columns agy renders the option as "  2. Yes, allow (Persist"
+# / " to settings.json)" and a multi-word literal spanning two physical lines matches
+# nothing. Stripping whitespace repairs a wrap even one that fell mid-word, and a
+# single token cannot be split by one. It will fire on panes that merely mention the
+# word; that costs a FORCE=1, while a miss costs a permanent edit to the user's
+# config — refuse in the cheap direction.
+guard_enter() {
+	[[ "${FORCE:-0}" != "1" ]] || return 0
+	pane | tr -d '[:space:]' | grep -qi 'persist' || return 0
+	note "the pane offers a persist-to-settings option, and this CLI is running against your REAL config dir."
+	note "check which row is highlighted, then re-run with FORCE=1 if that is what you want."
+	die "refusing to submit at this pane"
+}
+
 cmd_keys() {
 	[[ $# -gt 0 ]] || die "usage: keys <tmux-key>... (e.g. \`keys Enter\`, \`keys Down Enter\`)"
 	load_run
 	require_live
 	# A confirmation dialog can offer "(Persist to settings.json)". This drives a
-	# REAL, authenticated CLI against your REAL config dir, so an Enter on the wrong
-	# row edits it for good. Refuse by default; FORCE=1 when you mean it.
-	#
-	# The probe is ONE SHORT WORD against the pane with all whitespace removed, and
-	# both halves of that are this script's own #512 lesson turned on itself. A guard
-	# reading `grep -i 'persist to settings'` line by line is dead at exactly the
-	# widths this tool exists to drive: at 24 columns agy renders the option as
-	# "  2. Yes, allow (Persist" / " to settings.json)" and a multi-word literal
-	# spanning two physical lines matches nothing. Stripping whitespace repairs a wrap
-	# even one that fell mid-word, and a single token cannot be split by one. It will
-	# fire on panes that merely mention the word; that costs a FORCE=1, while a miss
-	# costs a permanent edit to the user's config — refuse in the cheap direction.
-	if [[ "$*" == *Enter* && "${FORCE:-0}" != "1" ]] && pane | tr -d '[:space:]' | grep -qi 'persist'; then
-		note "the pane offers a persist-to-settings option, and this CLI is running against your REAL config dir."
-		note "check which row is highlighted, then re-run with FORCE=1 if that is what you want."
-		die "refusing to send Enter"
-	fi
+	sends_enter "$@" && guard_enter
 	t send-keys -t "$PANE" "$@"
 	settle
 }
@@ -610,7 +718,9 @@ cmd_send() {
 	# typed rather than interpreted as key names; `--` guards a leading dash. This
 	# mirrors session/tmux/tmux.go's SendKeys. Enter goes separately, after a settle:
 	# several CLIs debounce a fast burst into a collapsed paste chip, and submitting
-	# inside that window loses it.
+	# inside that window loses it — which is also why the guard runs BEFORE the text
+	# is typed: by the time Enter is due, the composer has redrawn over the dialog.
+	guard_enter
 	t send-keys -t "$PANE" -l -- "$text"
 	settle
 	t send-keys -t "$PANE" Enter
@@ -628,6 +738,7 @@ cmd_paste() {
 	# "[Pasted text #1]" chip rather than the literal characters (#319), so a fixture
 	# driven by `send` shows a composer production would never produce for that prompt.
 	# Use `paste` when the fixture is about the composer; `send` when it is not.
+	guard_enter
 	t set-buffer -b atrium-capture -- "$text"
 	t paste-buffer -d -p -b atrium-capture -t "$PANE"
 	settle
@@ -823,6 +934,27 @@ cmd_status() {
 }
 
 cmd_down() {
+	# A stale pointer is the one state `down` must handle before load_run does: when
+	# the run directory has gone (a manual rm, a KEEP=1 run cleaned up by hand), every
+	# other verb dies telling you to run `down`, so `down` dying too would leave no
+	# way out but editing $RUN_ROOT/current by hand.
+	local dir
+	dir="$(run_dir)"
+	if [[ ! -d "$dir" ]]; then
+		note "run directory is already gone: $dir"
+		rm -f "$RUN_ROOT/current"
+		note "cleared the pointer."
+		# Say what clearing the pointer does NOT do. Whoever removed that directory
+		# removed the socket file inside it, and a tmux server outlives its socket:
+		# the process is still there and is now addressable by NEITHER -S (the path
+		# is unlinked) NOR this script's reap-all (its glob looks under the run
+		# root). Verified by doing it. `atrium reap` finds a server through /proc
+		# wherever its socket sat (#602); otherwise it is `ps` and a PID.
+		note "NOTE: if a capture server was running, deleting its directory unlinked its socket."
+		note "      it cannot be reached by path any more — find it with \`atrium reap\` or ps."
+		return 0
+	fi
+
 	load_run
 	reap "$SOCK"
 

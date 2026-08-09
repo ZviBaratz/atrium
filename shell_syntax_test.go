@@ -34,25 +34,31 @@ func TestShellScriptsParse(t *testing.T) {
 	}
 
 	root := moduleRoot(t)
+
+	// The script list comes from git, not from a directory walk, because "committed"
+	// is exactly what this test means and a walk cannot express it. A walk pulls in
+	// whatever is lying in the tree — a half-written repro.sh left in the root
+	// mid-debug turns `just ci` red for a file that is not part of the repo — and it
+	// needs a skip list to keep out vendored trees, which then has to be maintained
+	// against guesses about what might appear under them.
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "git", "-C", root, "ls-files", "-z", "--", "*.sh").Output()
+	require.NoError(t, err, "git ls-files failed; this test reads the index, not the working tree")
+
 	var scripts []string
-	require.NoError(t, filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
-		if err != nil {
-			return err
+	for _, rel := range strings.Split(string(out), "\x00") {
+		if rel == "" {
+			continue
 		}
-		if d.IsDir() {
-			// Vendored JS and Go fixtures hold shell-shaped files that are not ours
-			// to parse, and .git holds sample hooks shipped by git itself.
-			switch d.Name() {
-			case ".git", "node_modules", "testdata":
-				return filepath.SkipDir
-			}
-			return nil
+		// A file can be in the index and absent from the tree mid-rebase; nothing is
+		// proved by trying to parse one that is not there.
+		abs := filepath.Join(root, rel)
+		if _, statErr := os.Stat(abs); statErr != nil {
+			continue
 		}
-		if strings.HasSuffix(path, ".sh") {
-			scripts = append(scripts, path)
-		}
-		return nil
-	}))
+		scripts = append(scripts, abs)
+	}
 
 	// A guard that silently matches nothing is worse than no guard: if the walk ever
 	// stops finding the scripts, this test would pass while checking zero files.

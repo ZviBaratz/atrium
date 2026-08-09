@@ -79,15 +79,22 @@ smoke:
 # authenticated CLI and spends real API turns. Start with `just drive-agent help`.
 # Run `just drive-agent reap-all` if an interrupted ladder stranded a server.
 #
-# "$@" rather than {{args}}, and that is load-bearing rather than style. just splices
-# {{args}} into the recipe line as raw text, so a quoted argument is re-split by the
-# shell: `just drive-agent send 'run: rm -f x'` would reach the script as five
+# ${@+"$@"} rather than {{args}}, and that is load-bearing rather than style. just
+# splices {{args}} into the recipe line as raw text, so a quoted argument is re-split
+# by the shell: `just drive-agent send 'run: rm -f x'` would reach the script as five
 # arguments and type only "run:". Every verb here takes prose — a prompt to send, a
 # regex to wait for — so the whole surface is affected, and the failure is silent
 # (a truncated prompt is still a prompt). `set positional-arguments` at the top of
 # this file is what makes "$@" the recipe's arguments.
+#
+# The ${@+…} wrapper is for the no-argument case. just runs recipes under `sh -cu`,
+# and in bash 3.2 — which is what /bin/sh is on macOS — `"$@"` with no positional
+# parameters is an "unbound variable" error under set -u (fixed in 4.4). So a bare
+# `just drive-agent`, the form the comment above sends people to, would be the one
+# invocation that dies there.
+# Drive a real agent CLI at a width ladder and capture its panes (#647).
 drive-agent *args:
-    bash scripts/drive-agent.sh "$@"
+    bash scripts/drive-agent.sh ${@+"$@"}
 
 # Render the README demo GIFs from the committed tapes (docs/demos/*.tape).
 # Opt-in only — NOT part of `test`/`ci`: needs the same non-Go deps as `smoke`
