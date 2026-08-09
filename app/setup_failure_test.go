@@ -4,8 +4,6 @@ import (
 	"context"
 	"fmt"
 	"net"
-	"os"
-	"path/filepath"
 	"testing"
 
 	"github.com/ZviBaratz/atrium/config"
@@ -21,10 +19,9 @@ import (
 // records one at all, are both part of what is under test.
 func failedSetupHome(t *testing.T) (*home, *session.Instance) {
 	t.Helper()
-	require.NoError(t, os.MkdirAll(filepath.Join(os.Getenv("HOME"), ".atrium"), 0o755))
-	cfg := config.DefaultConfig()
-	cfg.RepoScripts = []config.RepoScript{{Name: "web", SetupScript: "echo 'npm ERR! offline' >&2; exit 1"}}
-	require.NoError(t, config.SaveConfig(cfg))
+	installRepoScripts(t, config.RepoScript{
+		Name: "web", SetupScript: "echo 'npm ERR! offline' >&2; exit 1",
+	})
 
 	dir := t.TempDir()
 	h := newTestHomeWithInstances(t, dir)
@@ -97,10 +94,9 @@ func exhaustedRangeHome(t *testing.T) (*home, *session.Instance) {
 	t.Cleanup(func() { _ = l.Close() })
 	taken := l.Addr().(*net.TCPAddr).Port
 
-	require.NoError(t, os.MkdirAll(filepath.Join(os.Getenv("HOME"), ".atrium"), 0o755))
-	cfg := config.DefaultConfig()
-	cfg.RepoScripts = []config.RepoScript{{Name: "web", PortRange: fmt.Sprintf("%d-%d", taken, taken)}}
-	require.NoError(t, config.SaveConfig(cfg))
+	installRepoScripts(t, config.RepoScript{
+		Name: "web", PortRange: fmt.Sprintf("%d-%d", taken, taken),
+	})
 
 	dir := t.TempDir()
 	h := newTestHomeWithInstances(t, dir)
