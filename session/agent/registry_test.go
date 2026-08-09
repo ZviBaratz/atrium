@@ -1393,8 +1393,12 @@ func TestAiderConfirmShapes(t *testing.T) {
 //
 // The narrow variants are not decoration. agy truncates its headline questions and wraps
 // its option rows, so a fixture captured only at 120 columns would assert a matcher that
-// the same dialog defeats at a width Atrium can actually render (ui/terminal.go SetSize
-// resizes the detached session to the preview width; #340 puts the floor at 28).
+// the same dialog defeats at a width Atrium can actually render. There is no floor: the
+// agent session is resized to the PREVIEW pane (app/app_layout.go GetPreviewSize →
+// ui/list.go SetSessionPreviewSize → session/instance.go SetPreviewSize — NOT
+// ui/terminal.go, which sizes the per-instance SHELL sessions), the list may take
+// maxListRatio = 0.60 of the terminal (config/state.go), and the remainder is unclamped.
+// Both literals were falsified at 24 columns, below the 28 an earlier draft called a floor.
 
 // agyTrustGatePane is the startup folder-trust screen at width 120 — the whole pane.
 const agyTrustGatePane = `Accessing workspace:
@@ -1511,7 +1515,7 @@ l...' (Persist to settings.json)
   ↑/↓ Navigate · tab Amend · ctrl+g edit
 esc to cancel      Gemini 3.1 Pro · high`
 
-// agyConfirmNarrowestPane is the confirmation at width 28 — the reachable floor. It pins
+// agyConfirmNarrowestPane is the confirmation at width 28. It pins
 // the two things the wider captures cannot: the matched nav hint survives here (as the
 // prefix the matcher keys on, with the trailing "· ctrl+g …" cut off), and "Requesting
 // permission for:" is torn into "Requesting permiss"/"ion"/"for:". That tear looks
@@ -1643,6 +1647,50 @@ to settings.json)
   ↑/↓ Navigate · tab Ame
 esc to cancel`
 
+// agyConfirmFloorPane is the confirmation at width 20, where the shipped prompt literal
+// fits with ZERO margin: the hint renders exactly "  ↑/↓ Navigate · tab". This is the
+// adapter's real floor, and it cannot be pushed lower by shortening the literal — agy
+// truncates from the right, so what binds is where "tab" ENDS in the line (18 cells of
+// content plus the 2-space indent), not how long the matched substring is. "Navigate · tab"
+// would need the same 20 columns. Going lower would mean abandoning the nav hint for an
+// anchor earlier in the line, and the only one there is the generic "↑/↓ Navigate ·" that
+// the slash-command menu also renders (see TestAgySlashMenuIsNotAPrompt).
+//
+// Note the question is gone at this width too — "Do you want to proceed?" has become
+// "Do you want to proce", which is a third independent reason it was never a candidate.
+const agyConfirmFloorPane = `● Bash(rm -f
+vict...) (ctrl+o to
+expand)
+
+Command
+────────────────────
+
+Requesting
+permission
+for:
+   rm -f
+victim.txt &&
+echo GONE
+
+Do you want to proce
+> 1. Yes
+  2. Yes, and always
+allow in this
+conversation for
+commands that
+start with 'rm -f
+victim.txt'
+  3. Yes, and always
+allow for commands
+that start with
+'rm -f victim.txt'
+(Persist to
+settings.json)
+  4. No
+
+  ↑/↓ Navigate · tab
+esc to cancel`
+
 // agyAcceptedGatePane is the pane immediately after "Yes, I trust this folder" is
 // selected — the gate's counterpart to agyAnsweredConfirmPane. agy replaces the trust
 // screen with its splash and composer rather than leaving it in the scrollback, so the
@@ -1731,6 +1779,7 @@ func TestAgyConfirmationPrompt(t *testing.T) {
 		"width 40, wrapped long command":  agyConfirmNarrowPane,
 		"width 28":                        agyConfirmNarrowestPane,
 		"width 24, hint itself truncated": agyConfirmSubHintPane,
+		"width 20, the floor":             agyConfirmFloorPane,
 	} {
 		t.Run(name, func(t *testing.T) {
 			m, ok := agy.DetectPrompt(pane)
@@ -1786,6 +1835,36 @@ func TestAgyConfirmationHintTruncatesBelowTheFullWording(t *testing.T) {
 	require.True(t, fullHint.matches(agyConfirmNarrowestPane),
 		"while still matching at 28 — four columns is the whole margin, which is why the "+
 			"shipped literal stops at \"tab\"")
+}
+
+// 20 columns is the adapter's floor, and the reason it cannot be lowered is worth pinning
+// because the obvious remedy does not work. agy truncates from the RIGHT, so what binds is
+// where "tab" ends in the hint line, not how long the matched substring is — trimming the
+// literal's leading "↑/↓ " buys exactly nothing.
+func TestAgyConfirmationFloorCannotBeLoweredByShorteningTheLiteral(t *testing.T) {
+	hint := ""
+	for _, line := range strings.Split(agyConfirmFloorPane, "\n") {
+		if strings.Contains(line, "Navigate") {
+			hint = line
+		}
+	}
+	require.Equal(t, "  ↑/↓ Navigate · tab", hint,
+		"at 20 columns the hint ends exactly at the shipped literal — zero margin")
+
+	// Both the shipped literal and a shorter one that drops the arrow prefix match here...
+	for _, lit := range []string{"↑/↓ Navigate · tab", "Navigate · tab"} {
+		m := PromptMatcher{Window: WindowPrompt, All: []string{lit}}
+		require.True(t, m.matches(agyConfirmFloorPane), "%q matches at the floor", lit)
+	}
+	// ...and both end at the same column, so neither survives a narrower pane. Truncating
+	// the fixture's hint by one cell is what a 19-column pane would render.
+	narrower := strings.Replace(agyConfirmFloorPane, "  ↑/↓ Navigate · tab", "  ↑/↓ Navigate · ta", 1)
+	for _, lit := range []string{"↑/↓ Navigate · tab", "Navigate · tab"} {
+		m := PromptMatcher{Window: WindowPrompt, All: []string{lit}}
+		require.False(t, m.matches(narrower),
+			"%q is equally dead one column below the floor — shortening the literal is not "+
+				"the lever, the hint's own layout is", lit)
+	}
 }
 
 // The narrow fixture exists to falsify the obvious matcher, so state that in an assertion

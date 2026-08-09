@@ -835,7 +835,7 @@ var aider = &Adapter{
 }
 
 // Antigravity (agy). Every string below was driven against a live agy 1.1.11 in an
-// isolated tmux on 2026-08-09 (#512) and captured at widths 120/60/40/34/28. The width
+// isolated tmux on 2026-08-09 (#512) and captured at widths 120/60/40/34/28/26/24/20. The width
 // ladder is load-bearing for this adapter in a way it is not for the others, because agy
 // renders its two dialogs with two DIFFERENT overflow behaviours:
 //
@@ -920,13 +920,26 @@ var agy = &Adapter{
 		// it push it out of the window as the command string grows. At width 40 with a
 		// long command it sits 16 non-empty lines from the bottom — past WindowPrompt's 15
 		// — and the matcher misses. The nav hint is the dialog's BOTTOM row, two non-empty
-		// lines up at every width from 120 down to 28, so the window is never the binding
+		// lines up at every width from 120 down to 20, so the window is never the binding
 		// constraint. It is also what distinguishes this dialog from the trust gate, whose
-		// hint reads "↑/↓ Navigate · enter Confirm"; "tab Amend" is unique to the
-		// command-amendment dialog.
+		// hint reads "↑/↓ Navigate · enter Confirm", so it is the "tab" half that picks out
+		// the command-amendment dialog.
 		//
-		// Truncated at the point where 28 columns cut it, so the literal is a prefix that
-		// survives every width rather than one that only fits the wide pane.
+		// The literal stops at "tab" rather than running on to "tab Amend" because the
+		// hint truncates: at 24 columns it renders "↑/↓ Navigate · tab Ame" and the fuller
+		// wording misses the dialog entirely (it still matches at 28, which is why the
+		// 28-column fixture alone could not catch this — see
+		// TestAgyConfirmationHintTruncatesBelowTheFullWording).
+		//
+		// The floor this leaves is 20 columns, where the hint renders exactly
+		// "  ↑/↓ Navigate · tab" with nothing to spare, and it CANNOT be lowered by
+		// shortening the literal further: agy truncates from the right, so what binds is
+		// where "tab" ends in the line (18 cells of content after the 2-space indent), not
+		// the substring's own length — "Navigate · tab" needs the same 20 columns. The only
+		// anchor earlier in the line is the generic "↑/↓ Navigate ·" the slash-command menu
+		// also renders, which is exactly what must not be matched. So below 20 columns the
+		// confirmation is missed, and per the note below that means the row latches Working
+		// rather than falling back to idle. agyConfirmFloorPane pins the boundary.
 		//
 		// "tab Amend" and not the generic "↑/↓ Navigate" prefix, deliberately, even though
 		// the generic one would cover any dialog agy grows later: the slash-command menu
