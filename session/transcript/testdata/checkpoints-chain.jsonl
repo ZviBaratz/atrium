@@ -1,0 +1,13 @@
+{"type":"user","uuid":"c1c1c1c1-0001-4001-8001-000000000001","parentUuid":null,"timestamp":"2026-08-06T09:00:00.000Z","isSidechain":false,"promptSource":"typed","message":{"role":"user","content":"first prompt"}}
+{"type":"file-history-snapshot","messageId":"c1c1c1c1-0001-4001-8001-000000000001","snapshot":{"messageId":"c1c1c1c1-0001-4001-8001-000000000001","trackedFileBackups":{},"timestamp":"2026-08-06T09:00:00.000Z"},"isSnapshotUpdate":false}
+{"type":"assistant","uuid":"a5515747-0002-4002-8002-000000000002","parentUuid":"c1c1c1c1-0001-4001-8001-000000000001","timestamp":"2026-08-06T09:00:05.000Z","isSidechain":false,"message":{"role":"assistant","model":"claude-opus-5","content":[{"type":"text","text":"done"}]}}
+{"type":"queue-operation","operation":"enqueue","timestamp":"2026-08-06T09:00:06.000Z","content":"a queued message, recorded with no uuid of its own"}
+{"type":"attachment","timestamp":"2026-08-06T09:00:07.000Z","attachment":{"type":"file","path":"notes.md"}}
+{"type":"ai-title","timestamp":"2026-08-06T09:00:08.000Z","title":"a generated conversation title"}
+{"type":"last-prompt","timestamp":"2026-08-06T09:00:09.000Z","prompt":"first prompt"}
+{"type":"mode","timestamp":"2026-08-06T09:00:10.000Z","mode":"acceptEdits"}
+{"type":"summary","summary":"housekeeping entry whose only id is a leafUuid","leafUuid":"deadbeef-0009-4009-8009-000000000009"}
+{"type":"assistant","uuid":"51de0000-0003-4003-8003-000000000003","parentUuid":"a5515747-0002-4002-8002-000000000002","timestamp":"2026-08-06T09:00:11.000Z","isSidechain":true,"message":{"role":"assistant","model":"claude-opus-5","content":[{"type":"text","text":"subagent turn, off the main chain"}]}}
+{"type":"queue-operation","uuid":"5751e400-0005-4005-8005-000000000005","timestamp":"2026-08-06T09:00:12.000Z","operation":"enqueue","message":{"type":"user","role":"user","content":"a queued message, recorded as a nested entry"}}
+{"type":"user","uuid":"c2c2c2c2-0004-4004-8004-000000000004","parentUuid":"a5515747-0002-4002-8002-000000000002","timestamp":"2026-08-06T09:01:00.000Z","isSidechain":false,"promptSource":"typed","message":{"role":"user","content":"second prompt"}}
+{"type":"file-history-snapshot","messageId":"c2c2c2c2-0004-4004-8004-000000000004","snapshot":{"messageId":"c2c2c2c2-0004-4004-8004-000000000004","trackedFileBackups":{"src/main.go":{"backupFileName":"aaaa1111@v1"}},"timestamp":"2026-08-06T09:01:00.000Z"},"isSnapshotUpdate":false}

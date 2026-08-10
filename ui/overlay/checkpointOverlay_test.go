@@ -35,12 +35,12 @@ func TestCheckpointOverlay_StartsLoading(t *testing.T) {
 	}
 }
 
-// Both intents are read-once, so the app acts on each press exactly once.
+// Every intent is read-once, so the app acts on each press exactly once.
 func TestCheckpointOverlay_IntentsAreReadOnce(t *testing.T) {
 	o := NewCheckpointOverlay("alpha")
 	o.SetRows(checkpointRows(3))
 
-	if o.AttachRequested() || o.RefreshRequested() {
+	if o.AttachRequested() || o.ForkRequested() || o.RefreshRequested() {
 		t.Fatal("no intent should be armed before a keypress")
 	}
 	if closed := o.HandleKeyPress(keyMsg("enter")); closed {
@@ -53,12 +53,34 @@ func TestCheckpointOverlay_IntentsAreReadOnce(t *testing.T) {
 		t.Error("the attach flag must clear when read")
 	}
 
+	if closed := o.HandleKeyPress(keyMsg("f")); closed {
+		t.Error("f must not close the overlay — the app decides, and may have to refuse")
+	}
+	if !o.ForkRequested() {
+		t.Error("f should arm a fork")
+	}
+	if o.ForkRequested() {
+		t.Error("the fork flag must clear when read")
+	}
+
 	o.HandleKeyPress(keyMsg("r"))
 	if !o.RefreshRequested() {
 		t.Error("r should arm a reload")
 	}
 	if o.RefreshRequested() {
 		t.Error("the reload flag must clear when read")
+	}
+
+	// The three are independent: arming one must not arm another. Without this a
+	// single shared flag would satisfy every assertion above.
+	o.HandleKeyPress(keyMsg("f"))
+	if o.AttachRequested() || o.RefreshRequested() {
+		t.Error("f armed an attach or a reload as well as a fork")
+	}
+	o.ForkRequested()
+	o.HandleKeyPress(keyMsg("enter"))
+	if o.ForkRequested() {
+		t.Error("enter armed a fork as well as an attach")
 	}
 }
 
@@ -150,7 +172,7 @@ func TestCheckpointOverlay_FitsItsBox(t *testing.T) {
 // spent — and it always names the keys that leave the overlay.
 //
 // The second half is the part a fixed string got wrong: stateCheckpoints hides the
-// hint bar, and the full hint line is 71 cells against an inner width of 50 on an
+// hint bar, and the full hint line is 80 cells against an inner width of 50 on an
 // 80-column terminal (0.7 × 80 = a 56-cell box), so truncation cut it at `enter
 // attach (then Esc…` and left nothing on screen saying how to close or reload.
 //
@@ -466,7 +488,7 @@ func TestCheckpointOverlay_ReloadDoesNotResizeTheBox(t *testing.T) {
 // Esc-Esc reminder instead — and 50 is what an 80-column terminal gives, so the
 // band it broke was the default one, which the frame golden renders.
 func TestCheckpointFooter_ShedsMonotonically(t *testing.T) {
-	clauses := []string{"j/k move", "Esc Esc", "r reload", "esc close"}
+	clauses := []string{"j/k move", "Esc Esc", "r reload", "f fork", "esc close"}
 	shedAt := map[string]int{}
 
 	// Down to the narrowest budget the overlay can hand it, and no further: SetSize
@@ -500,6 +522,13 @@ func TestCheckpointFooter_ShedsMonotonically(t *testing.T) {
 		t.Errorf("`esc close` was shed at inner=%d; it is the only key out of a state "+
 			"that hides the hint bar", shedAt["esc close"])
 	}
+	// `f` is not in keys.Registry, so it gets no cheatsheet row, no palette entry
+	// and no README line — this footer is the only place it is written down. A rung
+	// that sheds it makes the whole fork feature unreachable by anyone who has not
+	// read the source.
+	if shedAt["f fork"] != 0 {
+		t.Errorf("`f fork` was shed at inner=%d; nothing else in the app names that key", shedAt["f fork"])
+	}
 	for _, earlier := range []string{"j/k move", "r reload"} {
 		if shedAt[earlier] <= shedAt["Esc Esc"] {
 			t.Errorf("%q survives to inner=%d but the Esc-Esc reminder only to %d — the "+
@@ -511,12 +540,12 @@ func TestCheckpointFooter_ShedsMonotonically(t *testing.T) {
 
 // The rung widths the ladder's doc comment states, asserted rather than described.
 // A comment carrying six numbers is six chances to be a lie after the next reword,
-// and the 50 is the load-bearing one: it is exactly what an 80-column terminal
-// gives, so a rung that drifts a cell wider drops the whole default frame to the
-// rung below it. Ordering is pinned separately, for every ladder at once, by
+// and the 48 is the load-bearing one: an 80-column terminal gives exactly 50, so a
+// rung that drifts three cells wider drops the whole default frame to the rung
+// below it. Ordering is pinned separately, for every ladder at once, by
 // TestHintLadders_OrderedWidestFirst.
 func TestCheckpointFooterHints_RungWidths(t *testing.T) {
-	want := []int{71, 64, 53, 50, 42, 24}
+	want := []int{80, 73, 62, 59, 48, 33}
 	if len(checkpointFooterHints) != len(want) {
 		t.Fatalf("ladder has %d rungs, want %d — update the doc comment with it",
 			len(checkpointFooterHints), len(want))
@@ -528,25 +557,34 @@ func TestCheckpointFooterHints_RungWidths(t *testing.T) {
 	}
 }
 
-// Every clause must survive the 80×24 floor, which is the width the ladder exists
-// for and the one the frame goldens render. There is a rung that fits all of them
-// in exactly 50 cells, so nothing has to be shed at the default terminal size —
-// which matters most for `r reload`, since the alternative route to a re-read is
-// esc and a fresh `H`, and that pays another whole-transcript scan.
+// What survives the 80×24 floor, which is the width the ladder exists for and the
+// one the frame goldens render. Both actions and the Esc-Esc reminder must be
+// there; `r reload` must not, and asserting its absence is not pedantry but the
+// record of a trade-off. Before #644 a rung fit all four clauses in exactly 50
+// cells. Adding `f fork` made the tightest four-clause line 54, so one had to go at
+// the default size, and `r reload` is the only one of the three with another route
+// to the same place (esc, then a fresh `H`) — at the cost of a second
+// whole-transcript scan. If a future reword frees up four cells, `r reload` is what
+// should come back, and this test failing is how that gets noticed.
 //
 // The negative control is the point: at inner 50 a fixed truncated line, the
-// 46-cell rung that replaced it, and the 42-cell rung after that all produce a
+// 46-cell rung that once replaced it, and the 42-cell rung after that all produce a
 // footer that fits on one line and names keys — so every other assertion in this
 // file passes over a footer that has silently dropped an instruction.
-func TestCheckpointFooter_KeepsEveryClauseAtTheFloor(t *testing.T) {
+func TestCheckpointFooter_KeepsBothActionsAndTheReminderAtTheFloor(t *testing.T) {
 	const inner = 50 // 0.7 × 80 columns = a 56-cell box, less border and padding
 
 	got := checkpointFooter(inner)
 
-	for _, want := range []string{"Esc Esc", "r reload", "esc close"} {
+	for _, want := range []string{"enter attach", "f fork", "Esc Esc", "esc close"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("the 80-column footer does not name %q: %q", want, got)
 		}
+	}
+	if strings.Contains(got, "r reload") {
+		t.Errorf("the 80-column footer names `r reload`, so a clause that should have "+
+			"survived was shed instead — the shed order is `j/k move`, then `r reload`, "+
+			"then the reminder: %q", got)
 	}
 	if w := lipgloss.Width(got); w > inner {
 		t.Errorf("the 80-column footer is %d cells against an inner width of %d: %q", w, inner, got)
@@ -567,5 +605,23 @@ func TestCheckpointOverlay_EnterIsInertWhileLoading(t *testing.T) {
 	o.HandleKeyPress(keyMsg("enter"))
 	if !o.AttachRequested() {
 		t.Error("enter should arm an attach once the box has an answer")
+	}
+}
+
+// f is dead while the read is in flight for the same reason enter is, one step
+// removed: there are no rows yet, so the cursor names nothing, and a fork armed in
+// the gap would spawn a whole session — worktree, branch, tmux — seeded from
+// whichever checkpoint later happened to land at index 0.
+func TestCheckpointOverlay_ForkIsInertWhileLoading(t *testing.T) {
+	o := NewCheckpointOverlay("alpha")
+	o.HandleKeyPress(keyMsg("f"))
+	if o.ForkRequested() {
+		t.Error("f armed a fork while the transcript was still being read")
+	}
+
+	o.SetRows(checkpointRows(3))
+	o.HandleKeyPress(keyMsg("f"))
+	if !o.ForkRequested() {
+		t.Error("f should arm a fork once the box has an answer")
 	}
 }

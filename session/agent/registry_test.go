@@ -1187,6 +1187,30 @@ func TestCodexPrompts(t *testing.T) {
 	require.True(t, m.NoAutoTap, "…so the quote must surface as needs-input, never tap Enter")
 }
 
+// TestClaudeResumeLeavesAPinnedConversationAlone covers both directions of the
+// claude adapter's resume rewrite. The ordinary session must still gain
+// --continue on resurrection — without that arm, making the rewrite a no-op
+// would pass — and a fork-from-checkpoint session, whose program pins the
+// conversation it was seeded with, must come back untouched. `claude --resume X
+// --continue` asks for two different conversations at once.
+func TestClaudeResumeLeavesAPinnedConversationAlone(t *testing.T) {
+	const forked = "claude --resume 5b1e9f6a-1111-4111-8111-111111111111"
+	for _, tc := range []struct{ name, program, want string }{
+		{"ordinary session", "claude", "claude --continue"},
+		{"with other flags", "claude --model opus", "claude --model opus --continue"},
+		{"forked session", forked, forked},
+		{"forked, combined form", "claude --resume=abc", "claude --resume=abc"},
+		{"forked, short form", "claude -r abc", "claude -r abc"},
+		// Whole-field, so a lookalike is not read as a pin — the same rule hasFlag
+		// applies to --model.
+		{"lookalike flag", "claude --resume-session-at abc", "claude --resume-session-at abc --continue"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.want, claude.Resume(tc.program))
+		})
+	}
+}
+
 func TestCodexGateAndResume(t *testing.T) {
 	_, ok := codex.GateUp("Do you trust the contents of this directory?\n› 1. Yes, continue\n  2. No, quit")
 	require.True(t, ok)
