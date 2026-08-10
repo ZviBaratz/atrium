@@ -1017,9 +1017,12 @@ cmd_emit() {
 		printf '// %s is the %s screen of %s %s at width %s, captured %s by\n' \
 			"$name" "$label" "$BIN" "$VERSION" "$width" "$CAPTURED"
 		printf '// scripts/drive-agent.sh (#647). RENAME ME: this file names fixtures\n'
-		printf '// semantically, not by width. FILE ME: the width above is prose, and prose\n'
-		printf '// is what #648 found rotting — add this capture to paneCoverage in\n'
-		printf '// pane_width_test.go so its width is a datum the invariant can read.%s\n' "$redacted"
+		printf '// semantically, not by width. FILE ME: the width above is prose, and prose is\n'
+		printf '// what #648 found rotting. If this pane is one its matcher must FIRE on, add it\n'
+		printf '// to paneCoverage in pane_width_test.go under "<agent>/gate", "<agent>/busy" or\n'
+		printf '// "<agent>/prompt/<matcher>" so the width becomes a datum. That table is\n'
+		printf '// positive-only: a composer, an idle screen or any other pane the matcher must\n'
+		printf '// NOT match belongs in a per-adapter test instead.%s\n' "$redacted"
 
 		# Two things break a Go raw string literal, per the spec. A backtick
 		# terminates it, and there is no escape for one. A CARRIAGE RETURN is silently

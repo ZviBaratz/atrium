@@ -45,12 +45,15 @@ import (
 // So every assertion here runs the PRODUCTION predicate (GateUp / DetectPrompt /
 // HasBusyMarker) against a VERBATIM captured pane. Nothing here reasons about lengths.
 //
-// What this file does NOT reach, stated so the tables are not read as fuller than they are:
-// literals living inside a Match func (claudeGateVisible, claudeLocalPermissionVisible,
-// aiderConfirmVisible and the token helpers they call) are invisible to any walk over the
-// registry, and the width-bearing surfaces outside Prompts/Gates/BusyMarkers —
-// PermissionMode's footer markers, LiveSpinner, SuggestionVisible, PasteCollapsed — have no
-// coverage here at all.
+// What this file does NOT reach, stated so the tables are not read as fuller than they are.
+// A Match matcher IS exercised at every width it has captures for, because fires() runs the
+// production predicate — claudeGateVisible holds at 40 and 28 here. What cannot be enumerated
+// is its individual literals: they live inside the func (claudeGateVisible,
+// claudeFetchPermissionVisible, claudeNetworkPermissionVisible, claudeSelectionFooterVisible,
+// claudeLocalPermissionVisible, aiderConfirmVisible and the token helpers they call), so the
+// alternatives ledger below skips them. Beyond that, the width-bearing surfaces outside
+// Prompts/Gates/BusyMarkers — PermissionMode's footer markers, LiveSpinner, SuggestionVisible,
+// PasteCollapsed — have no coverage here at all.
 
 // paneCapture is one verbatim capture plus the width it was driven at.
 type paneCapture struct {
@@ -100,12 +103,14 @@ var paneCoverage = map[string][]paneCapture{
 	// both MCP-approval shapes, so all five captures belong to the same key.
 	"claude/gate": {
 		{name: "claudeTrustPane", width: 0, note: "folder-trust, 2.1.185", pane: claudeTrustPane},
-		// The two MCP captures carry "110" in their provenance, and that number is not
-		// trustworthy: their widest line is 105 and the box rule spliced inside them is
-		// strings.Repeat("─", 56). A genuine 110-column capture would draw a ~110-cell
-		// rule. Recorded as unknown rather than propagated — restating a width the
-		// artifact contradicts is the defect class #648 exists to end. (Never infer a
-		// capture width from a box rule either; that is the same guess in reverse.)
+		// Neither MCP capture has a usable width. claudeMCPMultiPane's comment carries the
+		// only "110" in the file, in a per-width result table, and that number is not
+		// trustworthy: the pane's widest line is 105 and the box rule spliced inside it is
+		// strings.Repeat("─", 56), where a genuine 110-column capture would draw a
+		// ~110-cell rule. claudeMCPSinglePane records no width at all. Recorded as unknown
+		// rather than propagated — restating a width the artifact contradicts is the defect
+		// class #648 exists to end. (Never infer a capture width from a box rule either;
+		// that is the same guess in reverse.)
 		{name: "claudeMCPSinglePane", width: 0, note: "one server, width claim disputed", pane: claudeMCPSinglePane},
 		{name: "claudeMCPMultiPane", width: 0, note: "many servers, width claim disputed", pane: claudeMCPMultiPane},
 		{name: "claudeMCPWrappedPane", width: 40, note: "title wrapped", pane: claudeMCPWrappedPane},
@@ -140,9 +145,10 @@ var paneCoverage = map[string][]paneCapture{
 	},
 	// The confirmation ladder is busy evidence too, and that is not an accident of these
 	// captures: agy keeps "esc to cancel" in its dialogs' OWN footer, which is why an
-	// unmatched agy dialog latches the row Working rather than falling back to idle (the
-	// registry comment where agy's MarkerWindow is set says so). Listing the ladder here
-	// costs nothing and takes agy/busy from proven-at-120 to proven-at-20.
+	// unmatched agy dialog latches the row Working rather than falling back to idle — the
+	// agy "confirmation" matcher's own comment in registry.go is where that is written down,
+	// not the BusyMarkers block. Listing the ladder here costs nothing and takes agy/busy
+	// from proven-at-120 to proven-at-20.
 	"agy/busy": {
 		{name: "agyBusyPane", width: 120, note: "streaming turn", pane: agyBusyPane},
 		{name: "agyConfirmPane", width: 120, note: "dialog footer", pane: agyConfirmPane},
@@ -387,9 +393,20 @@ func TestPaneWidthMeasuresTheTerminalTheCapturesCameFrom(t *testing.T) {
 // the one direction that can lie: a capture LABELLED narrower than it renders would credit a
 // matcher with surviving a width it was never shown, and wantFloors would report that
 // invention as evidence.
+// It stays an inequality, deliberately. An earlier draft also held each key's NARROWEST
+// capture to equality, to close the relabel hole below — but that assertion is unsound rather
+// than merely strict: it forbids the one direction this file calls good news. A newly driven
+// narrow rung whose dialog does not happen to fill the pane measures under its label, is
+// labelled entirely correctly, and would be rejected with "its label must be the width it was
+// driven at". That every narrow rung is tight against its label today is an observation about
+// five keys, not a property of narrow captures.
+//
+// The relabel hole is real — mislabel a capture narrower than it was driven and this test
+// passes while the floor drops on no new evidence — but it is closed by wantFloors instead,
+// which is the right place: a relabel changes a computed floor, so it cannot land without a
+// second, deliberate edit to a pinned number in the same review.
 func TestCaptureWidthsAreNotOverstated(t *testing.T) {
 	for key, captures := range paneCoverage {
-		narrowest := paneCapture{}
 		for _, c := range captures {
 			if c.width == 0 {
 				continue // provenance records no width; nothing to contradict
@@ -398,27 +415,32 @@ func TestCaptureWidthsAreNotOverstated(t *testing.T) {
 				"%s: %s renders wider than the width %d it is filed under — either the label "+
 					"is wrong or the capture is not the pane it claims to be",
 				key, c.name, c.width)
-			if narrowest.width == 0 || c.width < narrowest.width {
-				narrowest = c
-			}
 		}
-		// The inequality above has a hole, and it is in the direction that matters: a
-		// capture RELABELLED narrower than it was driven passes it, and wantFloors then
-		// reports the invention as evidence. Relabel codexApprovalPane20 as 12 and every
-		// other assertion in this file still holds while codex's proven floor drops eight
-		// columns on nothing at all.
-		//
-		// It closes where it counts. A dialog need not reach its pane's edge, so a wide
-		// capture legitimately measures narrow. But the NARROWEST capture of a key is the
-		// one a floor is computed from, and every one of them is tight against its label
-		// today — the narrow rungs are exactly where a dialog fills the pane. So that
-		// single capture is held to equality.
-		if narrowest.width != 0 {
-			require.Equal(t, narrowest.width, paneWidth(narrowest.pane),
-				"%s: %s is the capture this key's floor is computed from, so its label must be "+
-					"the width it was driven at, not merely an upper bound — a narrower label "+
-					"here credits the matcher with surviving a pane it never saw",
-				key, narrowest.name)
+	}
+}
+
+// Nothing in Go binds a paneCapture's name or width to the pane it carries: the fields are
+// prose beside a symbol, and the compiler checks only the symbol. Swap one rung's pane for a
+// sibling's and every other assertion here still holds — the ladder still lists six rungs, the
+// widths still ascend, and the predicate still fires, because the sibling is a real capture of
+// the same dialog. The key would then report six driven widths while exercising five panes.
+//
+// Distinctness is what a test can actually check, and it catches that: a duplicated pane means
+// a rung's evidence was replaced by a copy of its neighbour's.
+func TestNoCoverageKeyListsThePaneOrTheNameTwice(t *testing.T) {
+	for key, captures := range paneCoverage {
+		panes := map[string]string{}
+		names := map[string]bool{}
+		for _, c := range captures {
+			if prev, dup := panes[c.pane]; dup {
+				require.Fail(t, "a coverage key lists the same pane twice",
+					"%s: %s and %s carry identical panes — one rung's evidence is a copy of "+
+						"the other's, so this key proves one fewer width than it lists",
+					key, prev, c.name)
+			}
+			panes[c.pane] = c.name
+			require.False(t, names[c.name], "%s lists the name %s twice", key, c.name)
+			names[c.name] = true
 		}
 	}
 }
@@ -430,7 +452,10 @@ func TestCaptureWidthsAreNotOverstated(t *testing.T) {
 func TestEveryDeclaredMatcherIsCoveredOrExempt(t *testing.T) {
 	required := requiredCoverageKeys(t)
 
-	var uncovered []string
+	// make, not a nil slice: require.Equal distinguishes []string{} from []string(nil), so a
+	// nil accumulator would redden this test on the day the last exemption is finally driven
+	// and paneCoverageExempt empties — punishing the only direction this file calls good news.
+	uncovered := make([]string, 0)
 	for _, key := range required {
 		if _, ok := paneCoverage[key]; ok {
 			continue
@@ -505,7 +530,7 @@ func TestEveryCoveredMatcherFiresAtEveryCapturedWidth(t *testing.T) {
 // deletion is the direction this test exists for.
 func TestProvenWidthFloorsAreComputedNotClaimed(t *testing.T) {
 	proven := map[string]int{}
-	var unrecorded []string
+	unrecorded := make([]string, 0) // see the nil-vs-empty note in the coverage test above
 	for key, captures := range paneCoverage {
 		floor := 0
 		for _, c := range captures {

@@ -647,14 +647,27 @@ var (
 	}
 )
 
-// ladderWidths is the rung list as data, for the guard below.
-func ladderWidths(ladder []paneCapture) []int {
-	widths := make([]int, 0, len(ladder))
-	for _, c := range ladder {
-		widths = append(widths, c.width)
+// ladderRungs is the rung list as data, narrowest first, for the guard below.
+//
+// It yields each rung's full label — width, identifier and note — not just its width. A width
+// alone is not a rung's identity: codexNumberedComposerLadder holds two rungs at 20 and two at
+// 120, separated only by which prompt was typed, so a width list reports "20 20 120 120" no
+// matter which four panes are present. The map this replaced could not be defeated that way
+// (duplicate keys in a map literal are a compile error), and dropping to widths quietly gave
+// that up — a ladder able to lose a rung in silence is the exact thing the guard forbids.
+func ladderRungs(ladder []paneCapture) []string {
+	sorted := append([]paneCapture(nil), ladder...)
+	sort.Slice(sorted, func(i, j int) bool {
+		if sorted[i].width != sorted[j].width {
+			return sorted[i].width < sorted[j].width
+		}
+		return sorted[i].name < sorted[j].name
+	})
+	rungs := make([]string, 0, len(sorted))
+	for _, c := range sorted {
+		rungs = append(rungs, c.label())
 	}
-	sort.Ints(widths)
-	return widths
+	return rungs
 }
 
 // A ladder that can lose a rung silently is not a ladder: a deleted entry changes nothing a
@@ -669,14 +682,40 @@ func ladderWidths(ladder []paneCapture) []int {
 // rung of the two ladders it consumes — deleting the 60 rung, or any rung of either composer
 // ladder, is invisible there and caught here.
 func TestCodexLaddersKeepEveryDrivenRung(t *testing.T) {
-	require.Equal(t, []int{20, 24, 28, 40, 60, 120}, ladderWidths(codexTrustGateLadder),
-		"the trust gate was driven at 120/60/40/28/24/20")
-	require.Equal(t, []int{20, 24, 28, 40, 60, 120}, ladderWidths(codexApprovalLadder),
-		"the approval overlay was driven at 120/60/40/28/24/20")
-	require.Equal(t, []int{20, 40, 120}, ladderWidths(codexComposerLadder),
+	require.Equal(t, []string{
+		"width 20 codexTrustGatePane20 (18 non-empty lines)",
+		"width 24 codexTrustGatePane24",
+		"width 28 codexTrustGatePane28",
+		"width 40 codexTrustGatePane40 (headline wrapped)",
+		"width 60 codexTrustGatePane60",
+		"width 120 codexTrustGatePane120",
+	}, ladderRungs(codexTrustGateLadder), "the trust gate was driven at 120/60/40/28/24/20")
+
+	require.Equal(t, []string{
+		"width 20 codexApprovalPane20 (decline wrapped 5 ways)",
+		"width 24 codexApprovalPane24",
+		"width 28 codexApprovalPane28",
+		"width 40 codexApprovalPane40 (decline option wrapped)",
+		"width 60 codexApprovalPane60",
+		"width 120 codexApprovalPane120",
+	}, ladderRungs(codexApprovalLadder), "the approval overlay was driven at 120/60/40/28/24/20")
+
+	require.Equal(t, []string{
+		"width 20 codexTypedComposerPane20 (three rows)",
+		"width 40 codexTypedComposerPane40 (two rows)",
+		"width 120 codexTypedComposerPane120 (one row)",
+	}, ladderRungs(codexComposerLadder),
 		"the composer was driven at 120/40/20 — the widths where the entry occupies one, two "+
 			"and three rows, which is what the readback join has to survive")
-	require.Equal(t, []int{20, 20, 120, 120}, ladderWidths(codexNumberedComposerLadder),
+
+	// The ladder that a width list could not guard: two rungs at 20 and two at 120,
+	// distinguished only by which prompt was typed.
+	require.Equal(t, []string{
+		"width 20 codexNumberedComposerPane20 (single line)",
+		"width 20 codexNumberedListComposerPane20 (three items)",
+		"width 120 codexNumberedComposerPane120 (single line)",
+		"width 120 codexNumberedListComposerPane120 (three items)",
+	}, ladderRungs(codexNumberedComposerLadder),
 		"a numbered-list prompt was driven single-line and three-item, at 120 and 20")
 }
 
