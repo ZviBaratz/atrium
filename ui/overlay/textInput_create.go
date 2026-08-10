@@ -19,7 +19,7 @@ import (
 func NewSessionCreateOverlay(profiles []config.Profile, accounts []config.ClaudeAccount, dirCandidates []string, defaultProgram string) *TextInputOverlay {
 	ti := newTextarea("")
 	// The prompt is optional and auto-sent to the agent once the session boots, so say so.
-	ti.Placeholder = "Optional — sent to the agent once it starts (Enter or Tab to skip)"
+	ti.Placeholder = PromptPlaceholderOptional
 	bp := NewBranchPicker()
 	dp := NewDirectoryPicker(dirCandidates)
 
@@ -258,6 +258,31 @@ func (t *TextInputOverlay) SelectPath(path string) bool {
 	}
 	return t.directoryPicker.SelectPath(path)
 }
+
+// PromptPlaceholderOptional and PromptPlaceholderFork are the two things the prompt
+// field can truthfully say about itself, and which one is showing is a fact about
+// the form rather than a decoration.
+//
+// An ordinary session's prompt really is optional: it is queued and typed into the
+// pane once the agent is up, and skipping it just leaves the agent idle. A fork's is
+// not. The print run that materializes the truncated conversation will not run
+// without one — claude exits 1 — so the submit is refused, and a field that says
+// "Optional" while the submit refuses an empty value is the form contradicting
+// itself at the moment the user is deciding whether to type.
+//
+// The field soft-wraps rather than truncating at 80 columns, so the leading word is
+// the one guaranteed to be read. Both start with it.
+const (
+	PromptPlaceholderOptional = "Optional — sent to the agent once it starts (Enter or Tab to skip)"
+	PromptPlaceholderFork     = "Required — the fork's first turn, asked as it is created"
+)
+
+// SetPromptPlaceholder replaces what the empty prompt field says about itself. Used
+// by the fork form, whose prompt is required (see PromptPlaceholderFork).
+func (t *TextInputOverlay) SetPromptPlaceholder(s string) { t.textarea.Placeholder = s }
+
+// PromptPlaceholder is what the empty prompt field currently says about itself.
+func (t *TextInputOverlay) PromptPlaceholder() string { return t.textarea.Placeholder }
 
 // SetProjectHint sets (or, with "", clears) the transient note rendered beside the
 // project picker — e.g. "detecting…" while smart dispatch routes in the background.

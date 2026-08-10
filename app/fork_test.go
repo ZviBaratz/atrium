@@ -368,3 +368,35 @@ func TestForkDoesNotAlsoQueueThePrompt(t *testing.T) {
 		})
 	}
 }
+
+// TestForkFormSaysThePromptIsRequired guards the form against contradicting its own
+// submit.
+//
+// Every other route into the create form leaves the prompt genuinely optional — it
+// is queued and typed into the pane, and skipping it just leaves the agent idle. A
+// fork's is not optional: the print run that materializes the truncated conversation
+// exits 1 without one, so createSessionFromForm refuses the submit. A field still
+// reading "Optional" at the moment the user decides whether to type is the form
+// telling them something the submit will then contradict.
+//
+// The ordinary-form arm is the control: without it, making every placeholder say
+// "Required" would pass.
+func TestForkFormSaysThePromptIsRequired(t *testing.T) {
+	h := openForkTimeline(t)
+	h.handleCheckpointsState(runeKey("f"))
+	require.NotNil(t, h.textInputOverlay)
+
+	forked := h.textInputOverlay.PromptPlaceholder()
+	assert.Equal(t, overlay.PromptPlaceholderFork, forked)
+	assert.Contains(t, forked, "Required")
+	assert.NotContains(t, forked, "Optional",
+		"the fork form still calls its prompt optional, but the submit refuses an empty one")
+
+	// The control: an ordinary create is unchanged.
+	h.textInputOverlay = nil
+	h.state = stateDefault
+	h.openCreateFormSeeded(t.TempDir(), false, nil)
+	require.NotNil(t, h.textInputOverlay)
+	assert.Equal(t, overlay.PromptPlaceholderOptional, h.textInputOverlay.PromptPlaceholder(),
+		"an ordinary session's prompt really is optional and must keep saying so")
+}

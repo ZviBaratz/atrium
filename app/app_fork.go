@@ -87,6 +87,12 @@ func (m *home) openForkForm(path string, pf *pendingFork) (tea.Model, tea.Cmd) {
 		// from a plain create, and a fork seeded from the wrong checkpoint is not
 		// visible again until the session is running.
 		m.textInputOverlay.Title = "Fork from checkpoint · " + pf.at.Format(overlay.CheckpointTimeFormat)
+		// The prompt field defaults to saying it is optional, which is true of every
+		// other route into this form and false here: the print run that materializes
+		// the fork will not run without one, so the submit refuses an empty value. A
+		// field that says "Optional" while the submit refuses it is the form
+		// contradicting itself at the moment the user decides whether to type.
+		m.textInputOverlay.SetPromptPlaceholder(overlay.PromptPlaceholderFork)
 	}
 	return m, cmd
 }
